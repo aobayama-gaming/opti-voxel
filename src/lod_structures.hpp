@@ -12,16 +12,20 @@ class LODHashSet : public HashSet<Vector3i> {
 
 public:
 
-    int get_max_lod(const Vector3i &p_chunk_pos,int max_lod) const {
+    uint32_t max_lod;
+
+    int get_max_lod(Vector3i &p_chunk_pos) const {
         // Get if a parent of the chunk is already in the HashSet, and return the LOD of the parent chunk. If no parent is found, return -1.
         
         int actual_lod = 0;
+        Vector3i parent_pos = p_chunk_pos;
 
         while (actual_lod < max_lod) {
 
-            Vector3i parent_pos = ChunkMath::get_parent_from_child(p_chunk_pos, actual_lod);
+            parent_pos = ChunkMath::get_parent_from_child(parent_pos, actual_lod);
 
             if (has(parent_pos)) {
+                p_chunk_pos=parent_pos;
                 return actual_lod;
             }
             actual_lod++;
@@ -38,19 +42,21 @@ public:
 
     uint32_t max_lod;
 
-    int get_max_lod(const Vector3i &p_chunk_pos) const {
+    int get_max_lod(Vector3i &p_chunk_pos) const {
         // Get if a parent of the chunk is already in the HashSet, and return the LOD of the parent chunk. If no parent is found, return -1.
         
         int actual_lod = 0;
 
+        Vector3i parent_pos = p_chunk_pos;
+
         while (actual_lod < max_lod) {
 
-            Vector3i parent_pos = ChunkMath::get_parent_from_child(p_chunk_pos, actual_lod);
+            parent_pos = ChunkMath::get_parent_from_child(parent_pos, actual_lod);
 
             if (has(parent_pos)) {
+                p_chunk_pos=parent_pos;
                 return actual_lod;
             }
-            actual_lod++;
         };
 
         return -1; // Not found

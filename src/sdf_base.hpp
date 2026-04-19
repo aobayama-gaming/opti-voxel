@@ -14,8 +14,8 @@ public:
     
     // Compute normal at position using central difference approximation
     // Default implementation uses alpha = VOXEL_SIZE / 10 should be suplented with mathematical formulation if possible/easy.
-    virtual Vector3 evaluate_normal(const Vector3 &p_world_pos) const {
-        const float alpha = 1e-3f;
+    virtual Vector3 evaluate_normal(const Vector3 &p_world_pos,float alpha=1e-4f) const {
+
         const Vector3 dx(alpha, 0.0f, 0.0f);
         const Vector3 dy(0.0f, alpha, 0.0f);
         const Vector3 dz(0.0f, 0.0f, alpha);

@@ -3,3 +3,10 @@
 [node name="Node3D" type="Node3D" unique_id=1494446098]
 
 [node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=969557005]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1291580129]
+transform = Transform3D(0.72543, 0.44462442, 0.5254145, -0.16589876, -0.62790155, 0.76040596, 0.6680037, -0.6387869, -0.38173598, 0.56378174, 52.11998, 0)
+light_energy = 0.365
+light_indirect_energy = 0.0
+light_volumetric_fog_energy = 0.0
+light_specular = 0.0

@@ -4,7 +4,7 @@
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/array_mesh.hpp>
 
-constexpr inline int BINARY_SEARCH_STEP = 7;
+constexpr inline int BINARY_SEARCH_STEP = 5;
 
 bool MeshEdgeUtils::edge_change(uint32_t edge_case)
 {
@@ -79,9 +79,9 @@ float CPUMesher::skirt_offset(float x,float y, float z, float value){
         const float dist_from_max = chunk_param.chunk_size - coord;
         const float nearest_edge_dist = MIN(dist_from_min, dist_from_max);
 
-        const float skirt_size = chunk_param.skirt_size*.5f;
-        const float extended_slope_limit = chunk_param.skirt_size* 1.f;
-        const float micro_slope_amplitude = 0.01f;
+        const float skirt_size = chunk_param.skirt_size*0.75f;
+        const float extended_slope_limit = chunk_param.skirt_size* 2.f;
+        const float micro_slope_amplitude = 0.05f;
 
         float offset = 0.0f;
 
@@ -100,17 +100,17 @@ float CPUMesher::skirt_offset(float x,float y, float z, float value){
 
     const float hash_offset = hash_scale_from_chunk_id(chunk_id);
 
-    float size= ChunkMath::get_lod_size(chunk_id)*chunk_param.voxel_size;
+    float size= ChunkMath::get_lod_size(chunk_id)*chunk_param.voxel_size*0.5f;
 
     float offset_x = calculate_offset(x,size,chunk_param);
     float offset_y = calculate_offset(y,size,chunk_param);
     float offset_z = calculate_offset(z,size,chunk_param);
 
     //float max_offset = fmax(offset_x,fmax( offset_y,offset_z));
-    float max_offset = offset_x+ offset_y + offset_z;
+    float max_offset = (offset_x+ offset_y + offset_z)/3;
     //max_offset *= hash_scale_from_chunk_id(chunk_id);
 
-    return value - max_offset + hash_offset*size*0.01f ;
+    return value - max_offset + hash_offset*size*0.03f ;
 }
 
 float CPUMesher::skirt_offset(Vector3 pos,float value){
@@ -254,9 +254,9 @@ void CPUMesher::first_pass(const int32_t p_y_edge,const int32_t p_z_edge){
                 }
                 vertices_data.metadata(p_y_edge,p_z_edge).counts.x_edge++;
 
-                if(!vertices_data.vertices_outside(x-1,p_y_edge,p_z_edge)){
-                    vertices_data.metadata(p_y_edge,p_z_edge).inner_counts.x_edge++;
-                }
+                // if(!vertices_data.vertices_outside(x-1,p_y_edge,p_z_edge)){
+                //     vertices_data.metadata(p_y_edge,p_z_edge).inner_counts.x_edge++;
+                // }
 
                 vertices_data.metadata(p_y_edge,p_z_edge).x_end_trim = x;
             }
@@ -409,14 +409,14 @@ void CPUMesher::second_pass(const int32_t p_y_cell,const int32_t p_z_cell){
         meta.counts.z_edge += front_left_changed;
 
 
-        const bool origin_inside =vertices_data.vertices_outside(x,p_y_cell,p_z_cell);
+        // const bool origin_inside =vertices_data.vertices_outside(x,p_y_cell,p_z_cell);
 
-        if(origin_inside||!vertices_data.vertices_outside(x,p_y_cell+1,p_z_cell)){
-            meta.inner_counts.y_edge += front_top_changed;
-        }
-        if(origin_inside||!vertices_data.vertices_outside(x,p_y_cell,p_z_cell+1)){
-            meta.inner_counts.z_edge += front_left_changed;
-        }
+        // if(origin_inside||!vertices_data.vertices_outside(x,p_y_cell+1,p_z_cell)){
+        //     meta.inner_counts.y_edge += front_top_changed;
+        // }
+        // if(origin_inside||!vertices_data.vertices_outside(x,p_y_cell,p_z_cell+1)){
+        //     meta.inner_counts.z_edge += front_left_changed;
+        // }
 
 
 
@@ -597,7 +597,7 @@ void _accumulate_qef(Vector3 normal, Vector3 position, Basis& a_total, Vector3& 
 }
 
 
-void CPUMesher::fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const float_t alpha=0.01f){
+void CPUMesher::fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const float_t alpha=0.05f){
 
     if( p_y_cell>=vertices_data.height-1 || p_z_cell>=vertices_data.depth-1 ){
         //in case we run an extra row colum, this pass is iterate on CELL.
@@ -714,26 +714,42 @@ void CPUMesher::fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const 
         if(num_vertices > 0){
 
             // // Tikhonov regularization in normalized space (dimensionless).
-            const float a = alpha;
-            
+            const float a = alpha*ChunkMath::get_lod_size(chunk_id);
+
+            Vector3 final_vertex_world;
+
+            mass_point/=num_vertices;
+
+            if(a<1.0f){
 
             // // QEF solve kept for later re-enable.
             A[0][0] +=a;
             A[1][1] +=a;
             A[2][2] +=a;
 
-            mass_point/=num_vertices;
+            
 
             b+= a*mass_point;
 
             Vector3 qef_solution;
             const bool solved = solve_linear_system_3x3(A, b, qef_solution);
-            const Vector3 final_vertex_world = ((solved ? qef_solution : mass_point) * cell_size) + mid_cell;
-            //Vector3 final_vertex = ChunkMath::world_to_vertices(chunk_id,final_vertex_world,chunk_param);
+            
+            final_vertex_world = ((solved ? qef_solution : mass_point) * cell_size) + mid_cell;
 
             if(!solved){
                 print_line("error generating chunk");
             }
+
+            }
+            else{
+
+                final_vertex_world = mass_point*cell_size+ mid_cell;
+            }
+
+
+            Vector3 final_vertex = final_vertex_world-ChunkMath::chunk_to_world(chunk_id,chunk_param);
+
+
             
             // Margin centering
             // const float margin = 0.1f;
@@ -742,13 +758,13 @@ void CPUMesher::fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const 
             // final_vertex = final_vertex.clamp(min_bound, max_bound);
 
             // Surface nets implementation
-            //const Vector3 final_vertex = ChunkMath::world_to_vertices(chunk_id,mass_point*cell_size+mid_cell);
+            //const Vector3 final_vertex = mass_point*cell_size+ mid_cell - ChunkMath::chunk_to_world(chunk_id,chunk_param);
 
-            vertices_data.points[vertices_counter]= final_vertex_world;
+            vertices_data.points[vertices_counter]= final_vertex;
 
             if(!per_face_normal){
-                vertices_data.output_points[vertices_counter] = final_vertex_world;
-                vertices_data.output_normals[vertices_counter] = sdf->evaluate_normal(final_vertex_world);
+                vertices_data.output_points[vertices_counter] = final_vertex;
+                vertices_data.output_normals[vertices_counter] = -sdf->evaluate_normal(final_vertex_world,cell_size);
             }
 
             vertices_counter--;
@@ -957,9 +973,9 @@ void CPUMesher::render_chunk_box(){
 
 void CPUMesher::render_chunk() {
 
-    // if (vertices_data.output_points.is_empty() || vertices_data.output_vertices.is_empty()) {
-    //     return;
-    // }
+    if (vertices_data.output_points.is_empty() || vertices_data.output_vertices.is_empty()) {
+        return;
+    }
 
     //real mesh
     Array arrays;
@@ -1004,10 +1020,10 @@ void CPUMesher::render_chunk() {
 
     rs->instance_set_scenario(chunk_output.mesh_rid, scenario);
     rs->instance_set_base(chunk_output.mesh_rid, mesh_rid);
-    // rs->instance_set_transform(
-    //     chunk_output.mesh_rid,
-    //     Transform3D(Basis(), ChunkMath::chunk_to_world(chunk_id, chunk_param))
-    // );
+    rs->instance_set_transform(
+        chunk_output.mesh_rid,
+        Transform3D(Basis(), ChunkMath::chunk_to_world(chunk_id, chunk_param))
+    );
 }
 
 void CPUMesher::start(

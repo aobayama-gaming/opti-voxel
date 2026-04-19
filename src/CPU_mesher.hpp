@@ -74,7 +74,7 @@ struct VerticesData {
 
         Counts counts;
 
-        Counts inner_counts;
+        //Counts inner_counts;
     };
 
     struct EdgeCompute {
@@ -92,7 +92,7 @@ struct VerticesData {
         int32_t depth = 0;
         std::vector<Metadata> values;
         std::vector<Metadata::Counts> cumulative_counts;
-        std::vector<Metadata::Counts> inner_cumulative_counts;
+        //std::vector<Metadata::Counts> inner_cumulative_counts;
         bool cache_valid = false;
 
         void resize(int32_t p_height, int32_t p_depth) {
@@ -100,7 +100,7 @@ struct VerticesData {
             depth = p_depth;
             values.assign(static_cast<size_t>(height) * static_cast<size_t>(depth), Metadata {});
             cumulative_counts.assign(values.size(), Metadata::Counts {});
-            inner_cumulative_counts.assign(values.size(), Metadata::Counts {});
+            //inner_cumulative_counts.assign(values.size(), Metadata::Counts {});
             cache_valid = false;
         }
 
@@ -120,13 +120,13 @@ struct VerticesData {
             return cumulative_counts[static_cast<size_t>(index(y, z))];
         }
 
-        const Metadata::Counts &int_cum(int32_t y, int32_t z) const {
-            return inner_cumulative_counts[static_cast<size_t>(index(y, z))];
-        }
+        // const Metadata::Counts &int_cum(int32_t y, int32_t z) const {
+        //     return inner_cumulative_counts[static_cast<size_t>(index(y, z))];
+        // }
 
         void cache() {
             cumulative_counts.resize(values.size());
-            inner_cumulative_counts.resize(values.size());
+            //inner_cumulative_counts.resize(values.size());
 
             if (depth <= 0 || height <= 0 || values.empty()) {
                 cache_valid = true;
@@ -134,7 +134,7 @@ struct VerticesData {
             }
 
             Metadata::Counts row_accumulator {};
-            Metadata::Counts inner_row_accumulator {};
+            //Metadata::Counts inner_row_accumulator {};
             
             for (int32_t z = 0; z < depth; ++z) {
                 
@@ -151,12 +151,12 @@ struct VerticesData {
                     cumulative_counts[i] = row_accumulator; // Stored after in order to have the total number directly, (we have last index of each y,z +1)
                     
 
-                    inner_row_accumulator.x_edge += source.inner_counts.x_edge;
-                    inner_row_accumulator.y_edge += source.inner_counts.y_edge;
-                    inner_row_accumulator.z_edge += source.inner_counts.z_edge;
-                    inner_row_accumulator.point += source.inner_counts.point;
+                    // inner_row_accumulator.x_edge += source.inner_counts.x_edge;
+                    // inner_row_accumulator.y_edge += source.inner_counts.y_edge;
+                    // inner_row_accumulator.z_edge += source.inner_counts.z_edge;
+                    // inner_row_accumulator.point += source.inner_counts.point;
 
-                    inner_cumulative_counts[i] = inner_row_accumulator; // Stored after in order to have the total number directly, (we have last index of each y,z +1)
+                    // inner_cumulative_counts[i] = inner_row_accumulator; // Stored after in order to have the total number directly, (we have last index of each y,z +1)
                     
 
                 }
@@ -191,9 +191,43 @@ struct VerticesData {
     PackedVector3Array output_normals;
     PackedInt32Array output_vertices;
 
+    void clear_all() {
+        width = 0;
+        height = 0;
+        depth = 0;
+
+        x_edge_cases.width = 0;
+        x_edge_cases.height = 0;
+        x_edge_cases.depth = 0;
+        x_edge_cases.values.clear();
+
+        metadata.height = 0;
+        metadata.depth = 0;
+        metadata.values.clear();
+        metadata.cumulative_counts.clear();
+        metadata.cache_valid = false;
+
+        x_edge.local_positions.clear();
+        x_edge.normals.clear();
+        y_edge.local_positions.clear();
+        y_edge.normals.clear();
+        z_edge.local_positions.clear();
+        z_edge.normals.clear();
+
+        edge_cache.clear();
+        points.clear();
+
+        output_points.clear();
+        output_normals.clear();
+        output_vertices.clear();
+    }
+
     bool cell_has_point(int32_t x, int32_t y, int32_t z);
 
     void configure(int32_t p_width, int32_t p_height, int32_t p_depth) { // The size of this should one unit bigger (difference between center and corner)
+        
+        clear_all();
+        
         width = p_width;
         height = p_height;
         depth = p_depth;
@@ -206,8 +240,6 @@ struct VerticesData {
         metadata.cache();
 
         auto& max_meta = metadata.cum(height-1,depth-1);
-        //auto& max_inner_meta = metadata.int_cum(height-1,depth-1);
-        auto& max_inner_meta = metadata.cum(height-1,depth-1);
 
         points.resize(max_meta.point);
         x_edge.configure(max_meta.x_edge);
@@ -216,12 +248,12 @@ struct VerticesData {
 
         // DEPRECATED : over-allocate (because on edge we don t create the quad, actually don't care ? ) 
 
-        output_vertices.resize((max_inner_meta.x_edge+max_inner_meta.y_edge+max_inner_meta.z_edge)*6);
+        output_vertices.resize((max_meta.x_edge+max_meta.y_edge+max_meta.z_edge)*6);
 
         if(per_face_normal){
 
-            output_points.resize((max_inner_meta.x_edge+max_inner_meta.y_edge+max_inner_meta.z_edge)*6);
-            output_normals.resize((max_inner_meta.x_edge+max_inner_meta.y_edge+max_inner_meta.z_edge)*6);
+            output_points.resize((max_meta.x_edge+max_meta.y_edge+max_meta.z_edge)*6);
+            output_normals.resize((max_meta.x_edge+max_meta.y_edge+max_meta.z_edge)*6);
 
         }
         else{

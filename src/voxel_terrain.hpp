@@ -35,7 +35,12 @@ private:
 
     Camera3D *camera;
 
-	ChunkParam chunk_param;
+	ChunkParam chunk_param{
+		32,     // chunk_size
+		0.5f,  // voxel_size
+		2,      // skirt_size
+		true    // use_skirt
+	};
 
     ChunkDiscoverer* chunk_discoverer;
 

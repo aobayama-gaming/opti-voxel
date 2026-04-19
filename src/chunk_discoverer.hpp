@@ -50,7 +50,7 @@ public:
 
     void setup_lod(
         int lod_levels = 4,
-        float target_pixel_error = 12.0f, 
+        float target_pixel_error = 10.0f, 
         float viewport_height = 1080.0f,
         float fov_rad = 75.0f * (3.14159265f / 180.0f));
 

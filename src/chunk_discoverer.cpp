@@ -17,9 +17,9 @@ bool ChunkDiscoverer::_chunk_is_outside_sdf(const Vector3i &chunk_pos){
 
     for (int corner = 0; corner < 8; ++corner) {
         const Vector3 corner_offset(
-            (corner & 1) ? half_size : -half_size,
-            (corner & 2) ? half_size : -half_size,
-            (corner & 4) ? half_size : -half_size
+            (corner & 1) ? 0 : chunk_size,
+            (corner & 2) ? 0 : chunk_size,
+            (corner & 4) ? 0 : chunk_size
         );
 
         const float corner_distance = std::abs(sdf->evaluate(chunk_center + corner_offset));

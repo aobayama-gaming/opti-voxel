@@ -32,8 +32,10 @@ void VoxelTerrain::_bind_methods() {
 
 void VoxelTerrain::_ready(){
 
-    const int lod_numbers = 1;
-    const int worker_pool = 5;
+    const int lod_numbers = 15;
+    const int worker_pool = 8;
+
+    visual_mesh_data.set_max_lod(lod_numbers);
 
     if(Engine::get_singleton()->is_editor_hint()) {
         camera = EditorInterface::get_singleton()->get_editor_viewport_3d()->get_camera_3d();
@@ -60,6 +62,8 @@ void VoxelTerrain::_ready(){
         chunk_param
     );
 
+    chunk_discoverer->set_camera_chunk(camera->get_global_position());
+
 }
 
 void VoxelTerrain::_process(double delta){
@@ -78,6 +82,7 @@ void VoxelTerrain::_process(double delta){
         visual_mesh->send_chunk(visual_mesh_data.dirty_chunk); //wrong for debug
     }
 
+    visual_mesh_data.update_destroy_from_scan();
     _destroy_chunk();
 
     // process the queue and launch worker
