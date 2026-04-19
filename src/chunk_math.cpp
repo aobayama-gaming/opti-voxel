@@ -169,3 +169,7 @@ bool ChunkMath::vertices_out_of_bound(Vector3 vertices_coord,ChunkParam chunk_pa
            vertices_coord.y < 0.0f || vertices_coord.y > chunk_param.chunk_world_dimension() ||
            vertices_coord.z < 0.0f || vertices_coord.z > chunk_param.chunk_world_dimension();
 }
+
+int32_t ChunkMath::get_lod_size(Vector3i coord){
+    return (1<<get_lod(coord));
+}

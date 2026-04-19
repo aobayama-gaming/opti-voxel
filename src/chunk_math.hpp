@@ -8,6 +8,7 @@ struct ChunkParam{
     int chunk_size = 32;
     float voxel_size = 0.5f;
     int skirt_size = 2;
+    bool use_skirt = true;
 
     int chunk_voxel_dimension() const noexcept {
         return (chunk_size-skirt_size*2);
@@ -29,6 +30,7 @@ namespace ChunkMath{
     Vector3i get_parent_from_child(Vector3i coord);
 
     int32_t get_lod(Vector3i coord);
+    int32_t get_lod_size(Vector3i coord);
 
     Vector3i get_parent_from_child_until(Vector3i coord, int target_lod);
 
