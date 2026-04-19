@@ -6,6 +6,7 @@
 #include <godot_cpp/classes/semaphore.hpp>
 #include "chunk_math.hpp"
 #include "lod_structures.hpp"
+#include "sdf_base.hpp"
 
 using namespace godot;
 
@@ -28,6 +29,10 @@ private:
     LODHashSet scanned_chunks;
     bool scanned_chunks_dirty = false;
 
+    SDFBase * sdf;
+
+    bool _chunk_is_outside_sdf(const Vector3i &chunk_pos);
+
 public:
 
     void start();
@@ -36,7 +41,10 @@ public:
     void set_camera_chunk(Vector3 camera_pos);
     bool get_scanned_chunks(LODHashSet &p_scanned_chunks);
 
-    void set_chunk_param(ChunkParam &p_chunk_param);
+    void set_config(
+        ChunkParam &p_chunk_param,
+        SDFBase * p_sdf
+    );
 
     void discovery_loop();
 

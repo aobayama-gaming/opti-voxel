@@ -17,6 +17,9 @@
 
 #include "chunk_memory.hpp"
 
+//debug
+#include "sdf_dummy.hpp"
+
 using namespace godot;
 
 
@@ -40,7 +43,7 @@ private:
 
 	MesherPool* visual_mesh;
 
-	SDFBase* sdf;
+	SDFBase* sdf = memnew(SDFDummy);
 
 	std::vector<ChunkOutput *> visual_mesh_storage;
 

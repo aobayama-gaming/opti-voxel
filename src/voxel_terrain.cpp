@@ -32,8 +32,8 @@ void VoxelTerrain::_bind_methods() {
 
 void VoxelTerrain::_ready(){
 
-    const int lod_numbers = 4;
-    const int worker_pool = 3;
+    const int lod_numbers = 1;
+    const int worker_pool = 5;
 
     if(Engine::get_singleton()->is_editor_hint()) {
         camera = EditorInterface::get_singleton()->get_editor_viewport_3d()->get_camera_3d();
@@ -41,7 +41,7 @@ void VoxelTerrain::_ready(){
 
     chunk_discoverer = memnew(ChunkDiscoverer);
 
-    chunk_discoverer->set_chunk_param(chunk_param);
+    chunk_discoverer->set_config(chunk_param,sdf);
 
     chunk_discoverer->setup_lod(lod_numbers); //use base args
 
@@ -71,17 +71,19 @@ void VoxelTerrain::_process(double delta){
     bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk);
 
     if(dirty_scan){
-        UtilityFunctions::print("Dirty scan checking");
+        //UtilityFunctions::print("Dirty scan checking");
 
         visual_mesh_data.add_scan_chunk(new_scanned_chunk);
 
         visual_mesh->send_chunk(visual_mesh_data.dirty_chunk); //wrong for debug
     }
 
+    _destroy_chunk();
+
     // process the queue and launch worker
     visual_mesh->process_queue();
 
-    visual_mesh->get_results(visual_mesh_data.loaded_chunk);
+    visual_mesh->get_results(visual_mesh_data);
 
 
 

@@ -206,7 +206,8 @@ struct VerticesData {
         metadata.cache();
 
         auto& max_meta = metadata.cum(height-1,depth-1);
-        auto& max_inner_meta = metadata.int_cum(height-1,depth-1);
+        //auto& max_inner_meta = metadata.int_cum(height-1,depth-1);
+        auto& max_inner_meta = metadata.cum(height-1,depth-1);
 
         points.resize(max_meta.point);
         x_edge.configure(max_meta.x_edge);
@@ -254,6 +255,7 @@ private:
 
     //worker availability
     Ref<Mutex> mutex;
+    Ref<Semaphore> semaphore;
     bool worker_available = true;
     bool result_available = false;
 
@@ -275,6 +277,8 @@ private:
     void fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const float_t alpha);
     void fifth_pass(const int32_t p_y_qcell,const int32_t p_z_qcell);
 
+    void execute_passes();
+
     void render_chunk();
 
     void render_chunk_box();
@@ -289,7 +293,7 @@ public :
         RID p_scenario
     );
 
-    bool get_result(Vector3i &out_chunk_id,ChunkOutput &out);
+    bool get_result(ChunkOutput &out);
 
     void launch_pipeline(Vector3i p_chunk_id);
 

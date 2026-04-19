@@ -1,6 +1,5 @@
 #include "mesher_pool.hpp"
 
-
 void MesherPool::start(
         int num_workers,
         int lod_numbers,
@@ -34,6 +33,12 @@ void MesherPool::start(
 
 void MesherPool::send_chunk(LODHashSet p_chunks){
 
+    for (LODHashSet *q : chunk_queue) {
+        if (q) {
+            q->clear();
+        }
+    }
+
     for (const Vector3i &chunk_pos : p_chunks) {
 
     const int lod = ChunkMath::get_lod(chunk_pos);
@@ -42,7 +47,7 @@ void MesherPool::send_chunk(LODHashSet p_chunks){
     }
 
     LODHashSet *q = chunk_queue[lod];
-    if (q) {
+    if (q && !working_generation.has(chunk_pos)) {
         q->insert(chunk_pos);
     }
 }
@@ -80,8 +85,8 @@ void MesherPool::process_queue(){
 
             if(_pop_queue(new_chunk)){
 
-                UtilityFunctions::print("launch worker");
-
+                //UtilityFunctions::print("launch worker");
+                working_generation.insert(new_chunk);
                 worker->launch_pipeline(new_chunk);
             }
 
@@ -91,7 +96,7 @@ void MesherPool::process_queue(){
 
 }
 
-bool MesherPool::get_results(ChunkHashMap &output) {
+bool MesherPool::get_results(VoxelState &output) {
 
     bool has_any_result = false;
 
@@ -101,10 +106,10 @@ bool MesherPool::get_results(ChunkHashMap &output) {
         }
 
         ChunkOutput result;
-        Vector3i chunk_id;
 
-        if (worker->get_result(chunk_id,result)) {
-            output.insert(chunk_id,result);
+        if (worker->get_result(result)) {
+            output.add_new_loaded(result);
+            working_generation.erase(result.chunk_id);
             has_any_result = true;
         }
     }

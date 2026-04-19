@@ -2,7 +2,7 @@
 
 #include "godot_cpp/templates/hash_set.hpp"
 #include "chunk_math.hpp"
-#include "chunk_memory.hpp"
+#include "chunk_output.hpp"
 
 using namespace godot;
 

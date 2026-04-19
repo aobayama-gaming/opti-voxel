@@ -10,6 +10,8 @@ void VoxelState::add_scan_chunk(LODHashSet &scanned_chunk){
         }
     }
 
+    dirty_chunk.clear();
+
     // Any scanned chunk not already loaded must be generated.
     for (const Vector3i &pos : scanned_chunk) {
         if (!loaded_chunk.has(pos)) {
@@ -17,4 +19,10 @@ void VoxelState::add_scan_chunk(LODHashSet &scanned_chunk){
         }
     }
 
+}
+
+void VoxelState::add_new_loaded(ChunkOutput &new_output) {
+
+    dirty_chunk.erase(new_output.chunk_id);
+    loaded_chunk[new_output.chunk_id] = new_output;
 }

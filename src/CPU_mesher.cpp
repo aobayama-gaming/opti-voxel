@@ -2,6 +2,7 @@
 
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/classes/array_mesh.hpp>
 
 constexpr inline int BINARY_SEARCH_STEP = 7;
 
@@ -407,6 +408,7 @@ void CPUMesher::second_pass(const int32_t p_y_cell,const int32_t p_z_cell){
         meta.counts.y_edge += front_top_changed;
         meta.counts.z_edge += front_left_changed;
 
+
         const bool origin_inside =vertices_data.vertices_outside(x,p_y_cell,p_z_cell);
 
         if(origin_inside||!vertices_data.vertices_outside(x,p_y_cell+1,p_z_cell)){
@@ -423,13 +425,16 @@ void CPUMesher::second_pass(const int32_t p_y_cell,const int32_t p_z_cell){
             meta.counts.y_edge += rear_top_changed;
             meta.counts.z_edge += rear_left_changed;
 
+
             if(y_max){ // Edge case for max height
                 vertices_data.metadata(p_y_cell+1,p_z_cell).counts.z_edge += rear_right_changed;
+
                 //if(rear_right_changed) vertices_data.metadata(p_y_cell+1,p_z_cell).end_trim = vertices_data.width;
 
             }
             if(z_max){ // Edge case for max depth
                 vertices_data.metadata(p_y_cell,p_z_cell+1).counts.y_edge += rear_bottom_changed;
+
                 //if(rear_bottom_changed) vertices_data.metadata(p_y_cell,p_z_cell+1).end_trim = vertices_data.width;
             }
 
@@ -724,7 +729,7 @@ void CPUMesher::fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const 
             Vector3 qef_solution;
             const bool solved = solve_linear_system_3x3(A, b, qef_solution);
             const Vector3 final_vertex_world = ((solved ? qef_solution : mass_point) * cell_size) + mid_cell;
-            Vector3 final_vertex = ChunkMath::world_to_vertices(chunk_id,final_vertex_world,chunk_param);
+            //Vector3 final_vertex = ChunkMath::world_to_vertices(chunk_id,final_vertex_world,chunk_param);
 
             if(!solved){
                 print_line("error generating chunk");
@@ -739,11 +744,11 @@ void CPUMesher::fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const 
             // Surface nets implementation
             //const Vector3 final_vertex = ChunkMath::world_to_vertices(chunk_id,mass_point*cell_size+mid_cell);
 
-            vertices_data.points[vertices_counter]= final_vertex;
+            vertices_data.points[vertices_counter]= final_vertex_world;
 
             if(!per_face_normal){
-                vertices_data.output_points[vertices_counter] = final_vertex;
-                vertices_data.output_normals[vertices_counter] = sdf->evaluate_normal(final_vertex);
+                vertices_data.output_points[vertices_counter] = final_vertex_world;
+                vertices_data.output_normals[vertices_counter] = sdf->evaluate_normal(final_vertex_world);
             }
 
             vertices_counter--;
@@ -784,17 +789,18 @@ void CPUMesher::fifth_pass(const int32_t p_y_qcell, const int32_t p_z_qcell) {
     uint32_t pt_11 = vertices_data.metadata.cum(y + 1, z + 1).point - 1;
 
     // Edge counters starting exactly where the previous pass left them
-    uint32_t x_edge_counter = vertices_data.metadata.int_cum(y + 1, z + 1).x_edge - 1;
-    uint32_t y_edge_counter = vertices_data.metadata.int_cum(y + 1, z + 1).y_edge - 1;
-    uint32_t z_edge_counter = vertices_data.metadata.int_cum(y + 1, z + 1).z_edge - 1;
-    uint32_t y_far_edge_counter = vertices_data.metadata.int_cum(y, z + 1).y_edge - 1;
-    uint32_t z_far_edge_counter = vertices_data.metadata.int_cum(y + 1, z).z_edge - 1;
+    uint32_t x_edge_counter = vertices_data.metadata.cum(y + 1, z + 1).x_edge - 1;
+    uint32_t y_edge_counter = vertices_data.metadata.cum(y + 1, z + 1).y_edge - 1;
+    uint32_t z_edge_counter = vertices_data.metadata.cum(y + 1, z + 1).z_edge - 1;
+    uint32_t y_far_edge_counter = vertices_data.metadata.cum(y, z + 1).y_edge - 1;
+    uint32_t z_far_edge_counter = vertices_data.metadata.cum(y + 1, z).z_edge - 1;
 
     // Memory buffer indexing for the previous iteration
     uint32_t prev_x_idx_00 = 0, prev_x_idx_10 = 0, prev_x_idx_01 = 0, prev_x_idx_11 = 0;
 
     // Pre-calculate cumulative offsets for vertex array partitioning 
     const auto& max_meta = vertices_data.metadata.cum(vertices_data.height - 1, vertices_data.depth - 1);
+    
     const uint32_t y_offset = max_meta.x_edge;
     const uint32_t z_offset = max_meta.x_edge + max_meta.y_edge;
 
@@ -949,6 +955,61 @@ void CPUMesher::render_chunk_box(){
 
 }
 
+void CPUMesher::render_chunk() {
+
+    // if (vertices_data.output_points.is_empty() || vertices_data.output_vertices.is_empty()) {
+    //     return;
+    // }
+
+    //real mesh
+    Array arrays;
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = vertices_data.output_points;
+    arrays[Mesh::ARRAY_INDEX] = vertices_data.output_vertices;
+    arrays[Mesh::ARRAY_NORMAL] = vertices_data.output_normals;
+
+
+    //debug triangle
+    // Array arrays;
+    // arrays.resize(Mesh::ARRAY_MAX);
+
+    // PackedVector3Array debug_vertices;
+    // debug_vertices.push_back(Vector3(-1.0f, 0.0f, 0.0f));
+    // debug_vertices.push_back(Vector3( 1.0f, 0.0f, 0.0f));
+    // debug_vertices.push_back(Vector3( 0.0f, 1.5f, 0.0f));
+
+    // PackedInt32Array debug_indices;
+    // debug_indices.push_back(0);
+    // debug_indices.push_back(1);
+    // debug_indices.push_back(2);
+
+    // PackedVector3Array debug_normals;
+    // debug_normals.push_back(Vector3(0.0f, 0.0f, 1.0f));
+    // debug_normals.push_back(Vector3(0.0f, 0.0f, 1.0f));
+    // debug_normals.push_back(Vector3(0.0f, 0.0f, 1.0f));
+
+    // arrays[Mesh::ARRAY_VERTEX] = debug_vertices;
+    // arrays[Mesh::ARRAY_INDEX] = debug_indices;
+    // arrays[Mesh::ARRAY_NORMAL] = debug_normals;
+
+    
+
+    RenderingServer *rs = RenderingServer::get_singleton();
+
+    RID mesh_rid = rs->mesh_create();
+
+    rs->mesh_add_surface_from_arrays(mesh_rid,RenderingServer::PRIMITIVE_TRIANGLES,arrays);
+
+    chunk_output.mesh_rid = rs->instance_create();
+
+    rs->instance_set_scenario(chunk_output.mesh_rid, scenario);
+    rs->instance_set_base(chunk_output.mesh_rid, mesh_rid);
+    // rs->instance_set_transform(
+    //     chunk_output.mesh_rid,
+    //     Transform3D(Basis(), ChunkMath::chunk_to_world(chunk_id, chunk_param))
+    // );
+}
+
 void CPUMesher::start(
         SDFBase* p_sdf,
         ChunkParam p_chunk_param,
@@ -960,26 +1021,36 @@ void CPUMesher::start(
 
     worker.instantiate();
     mutex.instantiate();
+    semaphore.instantiate();
+
+    worker->start(callable_mp(this,&CPUMesher::pipeline),Thread::PRIORITY_NORMAL);
 
 }
 
 void CPUMesher::pipeline(){
 
-    UtilityFunctions::print("CPUMesher : pipeline started");
+    while(true){
+    
+    semaphore->wait();
+    //UtilityFunctions::print("CPUMesher : pipeline started");
 
     mutex->lock();
     worker_available=false;
     mutex->unlock();
 
+    execute_passes();
+    render_chunk();
+
     //debug pipeline
-    render_chunk_box();
+    //render_chunk_box();
 
     mutex->lock();
     worker_available=true;
     result_available=true;
     mutex->unlock();
 
-    UtilityFunctions::print("CPUMesher : pipeline ended");
+    //UtilityFunctions::print("CPUMesher : pipeline ended");
+    }
 
 }
 
@@ -988,8 +1059,10 @@ void CPUMesher::launch_pipeline(Vector3i p_chunk_id){
     chunk_id=p_chunk_id;
 
     chunk_output= ChunkOutput();
+    chunk_output.chunk_id=chunk_id;
 
-    worker->start(callable_mp(this,&CPUMesher::pipeline),Thread::PRIORITY_NORMAL);
+    semaphore->post();
+
 
 }
 
@@ -999,14 +1072,14 @@ bool CPUMesher::is_available(){
 
     mutex->lock();
     available = worker_available;
-    available&=!result_available; // can't launch if the result is here
+    available &= !result_available; // can't launch if the result is here
     mutex->unlock();
 
     return available;
 
 }
 
-bool CPUMesher::get_result(Vector3i &out_chunk_id,ChunkOutput &out){
+bool CPUMesher::get_result(ChunkOutput &out){
 
     mutex->lock();
     const bool is_result_available=result_available; // can't launch if the result is here
@@ -1014,9 +1087,61 @@ bool CPUMesher::get_result(Vector3i &out_chunk_id,ChunkOutput &out){
     if(is_result_available){
         out = chunk_output;
         result_available=false;
-        out_chunk_id = chunk_id;
     }
     mutex->unlock();
 
     return is_result_available;
+}
+
+void CPUMesher::execute_passes(){
+
+    const int32_t size = chunk_param.chunk_size + 1; //Vertices
+	vertices_data.configure(size-1, size, size);
+
+        // First and third pass iterate on edges (y, z bounds depend on edge count)
+    for (int32_t z = 0; z < vertices_data.depth; ++z) {
+        for (int32_t y = 0; y < vertices_data.height; ++y) {
+            first_pass(y, z);
+        }
+    }
+
+    // Second and fourth pass iterate on cells (y, z bounds are height-1, depth-1)
+    for (int32_t z = 0; z < vertices_data.depth - 1; ++z) {
+        for (int32_t y = 0; y < vertices_data.height - 1; ++y) {
+            second_pass(y, z);
+        }
+    }
+
+    for (int32_t z = 0; z < vertices_data.depth - 1; ++z) {
+        for (int32_t y = 0; y < vertices_data.height - 1; ++y) {
+            second_half_pass(y, z);
+        }
+    }
+
+    // Cache metadata for cumulative counts
+    vertices_data.cache(per_face_normal);
+    // TODO: Allocate edge arrays and point vector based on cumulative counts
+
+    // Third pass: fill edge positions and normals
+    for (int32_t z = 0; z < vertices_data.depth; ++z) {
+        for (int32_t y = 0; y < vertices_data.height; ++y) {
+            third_pass(y, z);
+        }
+    }
+
+    // Fourth pass: generate vertices using QEF solver
+    for (int32_t z = 0; z < vertices_data.depth - 1; ++z) {
+        for (int32_t y = 0; y < vertices_data.height - 1; ++y) {
+            fourth_pass(y, z);
+        }
+    }
+
+    // Fifth pass: link the vertices to generate the mesh.
+    for (int32_t z = 0; z < vertices_data.depth - 2; ++z) {
+        for (int32_t y = 0; y < vertices_data.height - 2; ++y) {
+            fifth_pass(y, z);
+        }
+    }
+
+
 }

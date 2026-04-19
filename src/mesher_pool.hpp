@@ -4,6 +4,7 @@
 #include "CPU_mesher.hpp"
 #include <vector>
 #include "lod_structures.hpp"
+#include "chunk_memory.hpp"
 
 using namespace godot;
 
@@ -14,6 +15,8 @@ private:
     std::vector<CPUMesher *> workers;
 
     std::vector<LODHashSet *> chunk_queue;
+
+    LODHashSet working_generation;
 
 
     RID scenario;
@@ -36,7 +39,7 @@ public:
 
     void process_queue();
 
-    bool get_results(ChunkHashMap &output);
+    bool get_results(VoxelState &output);
 
 
 };

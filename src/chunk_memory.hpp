@@ -2,12 +2,9 @@
 
 #include "godot_cpp/variant/variant.hpp"
 #include "lod_structures.hpp"
+#include "chunk_output.hpp"
 
 using namespace godot;
-
-struct ChunkOutput{
-    RID mesh_rid;
-};
 
 struct VoxelState{
 
@@ -17,5 +14,5 @@ struct VoxelState{
 
 	void add_scan_chunk(LODHashSet &scanned_chunk);
 
-    
+    void add_new_loaded(ChunkOutput &new_output);
 };

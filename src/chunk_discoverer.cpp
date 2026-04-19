@@ -8,12 +8,36 @@
 
 using namespace godot;
 
+bool ChunkDiscoverer::_chunk_is_outside_sdf(const Vector3i &chunk_pos){
+
+    const float chunk_size = ChunkMath::world_chunk_size(chunk_pos,chunk_param);
+    const float half_size = chunk_size * 0.5f;
+    const float chunk_outer_radius = chunk_size*2 ; //0.8660254f // 2 is extra margin
+    const Vector3 chunk_center = ChunkMath::chunk_to_world(chunk_pos,chunk_param);
+
+    for (int corner = 0; corner < 8; ++corner) {
+        const Vector3 corner_offset(
+            (corner & 1) ? half_size : -half_size,
+            (corner & 2) ? half_size : -half_size,
+            (corner & 4) ? half_size : -half_size
+        );
+
+        const float corner_distance = std::abs(sdf->evaluate(chunk_center + corner_offset));
+        if (corner_distance <= chunk_outer_radius) {
+            return false;
+        }
+    }
+
+    return true;
+
+}
+
 void ChunkDiscoverer::start(){
     worker.instantiate();
     mutex.instantiate();
     semaphore.instantiate();
 
-    UtilityFunctions::print("ChunkDiscoverer : Start loop");
+    //UtilityFunctions::print("ChunkDiscoverer : Start loop");
 
     worker->start(callable_mp(this,&ChunkDiscoverer::discovery_loop),Thread::PRIORITY_NORMAL);
 }
@@ -35,7 +59,7 @@ void ChunkDiscoverer::stop(){
 
 void ChunkDiscoverer::discovery_loop() {
 
-    UtilityFunctions::print("ChunkDiscoverer : loop started");
+    //UtilityFunctions::print("ChunkDiscoverer : loop started");
 
     while(true){
 
@@ -60,7 +84,7 @@ void ChunkDiscoverer::discovery_loop() {
 
         const int max_lod_radius = 2 << (max_lod); // The radius of the largest LOD. This is the maximum distance at which chunks will be loaded, so it determines the size of the area to scan.
 
-        const int max_lod_number = ceil( lod_distances[lod_count-1] /max_lod_radius)+2; 
+        const int max_lod_number = MIN(ceil( lod_distances[lod_count-1] /max_lod_radius)+2,max_lod); 
 
         const Vector3i ancestor_chunk = ChunkMath::get_parent_from_child_until(actual_camera_chunk, max_lod);
 
@@ -88,7 +112,7 @@ void ChunkDiscoverer::discovery_loop() {
         mutex->unlock();
 
         
-        UtilityFunctions::print("scanned chunk count:", (int)new_scanned_chunk.size());
+        //UtilityFunctions::print("scanned chunk count:", (int)new_scanned_chunk.size());
 
         // print debug 
         // for (const Vector3i &chunk : new_scanned_chunk) {
@@ -99,7 +123,11 @@ void ChunkDiscoverer::discovery_loop() {
 
 }
 
-void ChunkDiscoverer::set_chunk_param(ChunkParam &p_chunk_param){
+void ChunkDiscoverer::set_config(
+    ChunkParam &p_chunk_param,
+    SDFBase* p_sdf
+){
+    sdf=p_sdf;
     chunk_param= p_chunk_param;
 }
 
@@ -159,6 +187,10 @@ void ChunkDiscoverer::setup_lod(
 void ChunkDiscoverer::_recursive_chunk_scan(const Vector3i &camera_chunk,const Vector3i &parent_chunk, LODHashSet &scanned_chunks)
 {
     const int current_lod = ChunkMath::get_lod(parent_chunk);
+
+    if(_chunk_is_outside_sdf(parent_chunk)){
+        return;
+    }
 
     if (current_lod ==0){
         scanned_chunks.insert(parent_chunk);
