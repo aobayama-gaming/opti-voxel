@@ -1,0 +1,1 @@
+This two attached file are the quickest implementation of the Simplex noise, however they are going to lead different result than the GPU version. In order to discover the same chunk as the gpu renderer I needed to convert this into a slower version. Maybe in the end I wlill also turn chunk discovery into a GPU pipeline erasing totally the issue of two paradigm/same algorithm.

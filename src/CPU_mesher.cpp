@@ -984,32 +984,6 @@ void CPUMesher::render_chunk() {
     arrays[Mesh::ARRAY_INDEX] = vertices_data.output_vertices;
     arrays[Mesh::ARRAY_NORMAL] = vertices_data.output_normals;
 
-
-    //debug triangle
-    // Array arrays;
-    // arrays.resize(Mesh::ARRAY_MAX);
-
-    // PackedVector3Array debug_vertices;
-    // debug_vertices.push_back(Vector3(-1.0f, 0.0f, 0.0f));
-    // debug_vertices.push_back(Vector3( 1.0f, 0.0f, 0.0f));
-    // debug_vertices.push_back(Vector3( 0.0f, 1.5f, 0.0f));
-
-    // PackedInt32Array debug_indices;
-    // debug_indices.push_back(0);
-    // debug_indices.push_back(1);
-    // debug_indices.push_back(2);
-
-    // PackedVector3Array debug_normals;
-    // debug_normals.push_back(Vector3(0.0f, 0.0f, 1.0f));
-    // debug_normals.push_back(Vector3(0.0f, 0.0f, 1.0f));
-    // debug_normals.push_back(Vector3(0.0f, 0.0f, 1.0f));
-
-    // arrays[Mesh::ARRAY_VERTEX] = debug_vertices;
-    // arrays[Mesh::ARRAY_INDEX] = debug_indices;
-    // arrays[Mesh::ARRAY_NORMAL] = debug_normals;
-
-    
-
     RenderingServer *rs = RenderingServer::get_singleton();
 
     RID mesh_rid = rs->mesh_create();
@@ -1158,6 +1132,5 @@ void CPUMesher::execute_passes(){
             fifth_pass(y, z);
         }
     }
-
 
 }

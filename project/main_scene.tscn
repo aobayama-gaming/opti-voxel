@@ -10,3 +10,8 @@ light_energy = 0.365
 light_indirect_energy = 0.0
 light_volumetric_fog_energy = 0.0
 light_specular = 0.0
+
+[node name="OmniLight3D" type="OmniLight3D" parent="." unique_id=1259110310]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -54.528503, 336.56223, -11.170034)
+light_energy = 4.685
+omni_range = 16.081
