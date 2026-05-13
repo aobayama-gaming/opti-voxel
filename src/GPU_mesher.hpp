@@ -2,9 +2,15 @@
 
 #include <godot_cpp/core/object.hpp>
 #include "chunk_math.hpp"
+
 #include <godot_cpp/classes/thread.hpp>
+#include <godot_cpp/classes/mutex.hpp>
+#include <godot_cpp/classes/semaphore.hpp>
+
 #include <godot_cpp/classes/rendering_server.hpp>
 #include"sdf_base.hpp"
+#include "lod_structures.hpp"
+#include "chunk_memory.hpp"
 
 using namespace godot;
 
@@ -15,9 +21,22 @@ class GPUMesher : public Object{
     // Constant between run
     SDFBase* sdf;
     ChunkParam chunk_param;
+
+    //worker
     Ref<Thread> worker;
 
+    //worker availability
+    Ref<Mutex> mutex;
+    Ref<Semaphore> semaphore;
+    bool worker_available = true;
+    bool result_available = false;
+
     uint32_t chunk_batch_number;
+
+    //input 
+    PackedInt32Array input_chunk_id;
+
+    // GPU stuff
 
     RenderingDevice *rd;
 
@@ -29,27 +48,49 @@ class GPUMesher : public Object{
     RID buffer_sdf_sample;
     RID buffer_edge_intersect;
 
-    RID buffer_output_point;
-
+    RID buffer_output_point;    
+    RID buffer_chunk_param;
     // Uniform set
 
-    RID uniform_set_input_chunk_id;
+    
+    RID uniform_set;
 
-    RID uniform_set_atomic_counter;
-    RID uniform_set_sdf_sample;
-    RID uniform_set_edge_intersect;
+    //no need this now we use all at once.
+    // RID uniform_set_input_chunk_id;
 
-    RID uniform_set_output_point;
+    // RID uniform_set_atomic_counter;
+    // RID uniform_set_sdf_sample;
+    // RID uniform_set_edge_intersect;
 
+    // RID uniform_set_output_point;
 
+    RID shader_first_pass;
 
-    void _execute_pipeline();
+    std::vector<LODHashSet *> chunk_queue;
+
+    LODHashSet working_generation;
+
+    RID compile_dynamic_shader(const String &custom_sdf_code);
+
+    void _execute_gpu_pipeline(PackedByteArray p_chunk_id);
+    void _execute_whole_pipeline();
+    void _initialize_gpu_compute();
+
+    bool _pop_queue(Vector3i &new_chunk);
+
+    bool _is_available();
 
     public : 
     
-    void initialize(SDFBase* p_sdf,ChunkParam p_chunk_param, uint32_t p_chunk_batch_number);
+    void initialize(SDFBase* p_sdf,ChunkParam p_chunk_param, uint32_t p_chunk_batch_number,int lod_numbers);
 
-    RID compile_dynamic_shader(const String &custom_sdf_code);
+    void process_queue();
+
+    void send_chunk(LODHashSet p_chunks);
+
+    bool get_results(VoxelState &output);
+
+    
 
 };
 

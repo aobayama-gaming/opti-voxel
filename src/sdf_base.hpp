@@ -28,6 +28,6 @@ public:
     }
     
     // GPU code: GLSL function that evaluates SDF
-    // Should return a function named "evaluate_sdf(vec3 pos) -> float"
+    // Should return a function named "vec4 terrain_sdf(vec3 pos)"
     virtual String get_glsl_code() const = 0;
 };

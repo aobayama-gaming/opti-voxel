@@ -64,9 +64,24 @@ void VoxelTerrain::_ready(){
 
     chunk_discoverer->set_camera_chunk(camera->get_global_position());
 
+    //start GPU mesher pool
+    gpu_mesher = memnew(GPUMesher);
+
+    gpu_mesher->initialize(
+        sdf,
+        chunk_param,
+        2, // chunk_batch
+        lod_numbers
+    );
+
 }
 
 void VoxelTerrain::_process(double delta){
+
+
+    //debug
+    
+    //end of debug
     
     chunk_discoverer->set_camera_chunk(camera->get_global_position());
 
@@ -80,6 +95,7 @@ void VoxelTerrain::_process(double delta){
         visual_mesh_data.add_scan_chunk(new_scanned_chunk);
 
         visual_mesh->send_chunk(visual_mesh_data.dirty_chunk); //wrong for debug
+        gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
     }
 
     visual_mesh_data.update_destroy_from_scan();
@@ -87,6 +103,7 @@ void VoxelTerrain::_process(double delta){
 
     // process the queue and launch worker
     visual_mesh->process_queue();
+    gpu_mesher->process_queue();
 
     visual_mesh->get_results(visual_mesh_data);
 

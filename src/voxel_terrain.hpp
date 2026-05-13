@@ -17,6 +17,8 @@
 
 #include "chunk_memory.hpp"
 
+#include "GPU_mesher.hpp"
+
 //debug
 #include "sdf_dummy.hpp"
 
@@ -47,6 +49,8 @@ private:
 	RID scenario;
 
 	MesherPool* visual_mesh;
+
+	GPUMesher* gpu_mesher;
 
 	SDFBase* sdf = memnew(SDFDummy);
 
