@@ -1,3 +1,20 @@
+/*
+ * TODO (Optimization): Replace slow uniform integer division operations.
+ * Currently, compute shaders use integer division and modulo (`/` and `%`) 
+ * with a uniform variable (`chunk_param.chunk_size`) to calculate batch offsets 
+ * and flatten 3D indices (e.g., `gl_GlobalInvocationID.y / chunk_param.chunk_size`). 
+ * GPU hardware lacks fast integer division, making uniform division quite slow.
+ *
+ * Once the meshing logic works perfectly, implement one of these fixes:
+ * 1. Compile-Time Injection (Best): Since shaders are compiled dynamically in 
+ *    `compile_dynamic_shader()`, inject the chunk size into the shader string as 
+ *    a `#define` macro. The GLSL compiler will then automatically optimize the 
+ *    math into 1-cycle instructions.
+ * 2. Power-of-Two Bitshifts: If `chunk_size` is guaranteed to be a power of two, 
+ *    pass shift and mask values as uniforms and replace divisions with bitwise 
+ *    shifts (`>>`) and modulos with bitwise ANDs (`&`).
+ */
+
 #include "GPU_mesher.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -192,6 +209,12 @@ layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
     ChunkParam chunk_param;
 };
 
+uint get_flat_index(uvec3 cell_coordinate) {
+    return cell_coordinate.x + (cell_coordinate.y * params.chunk_size) + (cell_coordinate.z * params.chunk_size * params.chunk_size);
+}
+
+
+
 )glsl";
 
 RID GPUMesher::compile_dynamic_shader(const String &algorithm_pass) {
@@ -220,16 +243,15 @@ vec4 evaluate_sdf(vec3 pos) {
 
 void main() {
 
+
+
     ivec3 chunk_id = input_chunk[gl_GlobalInvocationID.z/chunk_param.chunk_size];
 
-    ivec3 cell_coordinate = ivec3(
+    ivec3 cell_chunk_coordinate = ivec3(
         gl_GlobalInvocationID.x,
-        gl_GlobalInvocationID.y,
-        gl_GlobalInvocationID.z%chunk_param.chunk_size
+        gl_GlobalInvocationID.y%chunk_param.chunk_size, // x / y / z batching
+        gl_GlobalInvocationID.z%chunk_param.chunk_size // chunk batching
         );
-
-    uint flat_index = gl_GlobalInvocationID.x + 
-        (gl_GlobalInvocationID.y+ gl_GlobalInvocationID.z*chunk_param.chunk_size)*chunk_param.chunk_size;
 
     /*GLSL_ALGORITHM_PASS*/
 }
@@ -279,9 +301,28 @@ void main() {
 
 static constexpr const char GLSL_FIRST_PASS[] = R"glsl(
 
-vec3 
+uint flat_index = get_flat_index(gl_GlobalInvocationID);
 
-sdf_sample[flat_index] = vec4(float(chunk_id.x), float(chunk_id.y), float(chunk_id.z),0.0);
+vec3 world_pos = chunk_to_world(chunk_id,chunk_param)+get_lod_size(chunk_id)*float(cell_chunk_coordinate);
+
+sdf_sample[flat_index] = evaluate_sdf(world_pos);
+
+)glsl";
+
+static constexpr const char GLSL_SECOND_PASS[] = R"glsl(
+
+uint axis = gl_GlobalInvocationID.y / chunk_param.chunk_size // axis 0:x, 1:y, 2:z
+
+if(cell_chunk_coordinate[axis]<chunk_param.chunk_size-1){
+
+uvec3 offset = uvec3(0);
+offset[axis]=1;
+
+float center_sdf = sdf_sample[flat_index];
+
+float offset_sdf = sdf_sample[get_flat_index(gl_GlobalInvocationID+offset)];
+
+}
 
 )glsl";
 
@@ -327,7 +368,7 @@ void GPUMesher::_initialize_gpu_compute(){
     
     buffer_sdf_sample = rd->storage_buffer_create(chunk_batch_number*chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(Vector4),empty_data);
 
-    buffer_edge_intersect =rd->storage_buffer_create((chunk_param.chunk_size-1)*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(float_t)*3,empty_data);
+    buffer_edge_intersect =rd->storage_buffer_create((chunk_param.chunk_size-1)*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(float_t)*3*chunk_batch_number,empty_data);
     /*
     Compressed position uint8 x 3
     Compressed normal uint8 x 3 
