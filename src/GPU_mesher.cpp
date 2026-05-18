@@ -933,15 +933,15 @@ void GPUMesher::render_chunk() {
         arrays[Mesh::ARRAY_INDEX] = chunk.output_triangles;
         arrays[Mesh::ARRAY_NORMAL] = chunk.output_normals;
 
-        RID mesh_rid = rs->mesh_create();
-        //chunk.mesh_rid = rs->mesh_create();
-        rs->mesh_add_surface_from_arrays(mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
+        //RID mesh_rid = rs->mesh_create();
+        chunk.mesh_rid = rs->mesh_create();
+        rs->mesh_add_surface_from_arrays(chunk.mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
-        RID instance_rid = rs->instance_create();
-        //chunk.instance_rid = rs->instance_create();
+        //RID instance_rid = rs->instance_create();
+        chunk.instance_rid = rs->instance_create();
 
-        rs->instance_set_scenario(instance_rid, scenario);
-        rs->instance_set_base(instance_rid, mesh_rid);
+        rs->instance_set_scenario(chunk.instance_rid, scenario);
+        rs->instance_set_base(chunk.instance_rid, chunk.mesh_rid);
         
         const float cell_size = chunk_param.voxel_size * ChunkMath::get_lod_size(chunk.chunk_id);
         Basis scaled_basis;
@@ -954,9 +954,11 @@ void GPUMesher::render_chunk() {
         float total_offset = chunk_offset + skirt_offset;
 
         rs->instance_set_transform(
-            instance_rid,
+            chunk.instance_rid,
             Transform3D(scaled_basis, ChunkMath::chunk_to_world(chunk.chunk_id, chunk_param) - Vector3(total_offset, total_offset, total_offset))
         );
+
+
     }
 }
 
@@ -991,6 +993,7 @@ bool GPUMesher::get_results(VoxelState &output){
             out.instance_rid = unpacked_chunks[i].instance_rid;
             output.add_new_loaded(out);
             
+
             working_generation.erase(unpacked_chunks[i].chunk_id);
         }
         result_available = false;

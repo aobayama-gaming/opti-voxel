@@ -2,6 +2,7 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 
 
@@ -15,19 +16,23 @@ void VoxelTerrain::_destroy_chunk() {
         const Vector3i chunk_pos = it->key;
         const ChunkOutput output = it->value;
 
-        if (output.mesh_rid.is_valid()) {
-            rs->free_rid(output.instance_rid);
-            rs->free_rid(output.mesh_rid);
-            visual_mesh_data.loaded_chunk.erase(chunk_pos);
-            visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
+        //if (output.instance_rid.is_valid()) {
+        rs->free_rid(output.instance_rid);
+        //}
+        //if (output.mesh_rid.is_valid()) {
+        rs->free_rid(output.mesh_rid);
+        //}
 
-            it = visual_mesh_data.to_destroy_chunk.begin();
-        }
+        visual_mesh_data.loaded_chunk.erase(chunk_pos);
+        visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
 
-
+        it = visual_mesh_data.to_destroy_chunk.begin();
 
         
     }
+
+    
+
 }
 
 void VoxelTerrain::_bind_methods() {
@@ -95,6 +100,12 @@ void VoxelTerrain::_process(double delta){
     
     chunk_discoverer->set_camera_chunk(camera->get_global_position());
 
+    UtilityFunctions::print("Loaded chunks: ", visual_mesh_data.loaded_chunk.size());
+    UtilityFunctions::print(
+        "Rendering draw calls: ",
+        RenderingServer::get_singleton()->get_rendering_info(RenderingServer::RENDERING_INFO_BUFFER_MEM_USED )
+    );
+
     LODHashSet new_scanned_chunk;
 
     bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk);
@@ -123,6 +134,7 @@ void VoxelTerrain::_process(double delta){
         visual_mesh->process_queue();
         visual_mesh->get_results(visual_mesh_data);
     }
+
 
     // process the queue and launch worker
     //
