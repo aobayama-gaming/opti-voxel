@@ -70,14 +70,17 @@ void VoxelTerrain::_ready(){
     gpu_mesher->initialize(
         sdf,
         chunk_param,
-        2, // chunk_batch
-        lod_numbers
+        512, // chunk_batch
+        lod_numbers,
+        scenario
     );
 
 }
 
 void VoxelTerrain::_process(double delta){
 
+    bool GPU = true;
+    //if(exec_time>1){return;}
 
     //debug
     
@@ -93,20 +96,34 @@ void VoxelTerrain::_process(double delta){
         //UtilityFunctions::print("Dirty scan checking");
 
         visual_mesh_data.add_scan_chunk(new_scanned_chunk);
+        if(GPU){
+            gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
+        }
+        else{
+            visual_mesh->send_chunk(visual_mesh_data.dirty_chunk); 
+        }
 
-        visual_mesh->send_chunk(visual_mesh_data.dirty_chunk); //wrong for debug
-        gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
     }
 
     visual_mesh_data.update_destroy_from_scan();
     _destroy_chunk();
 
+    if(GPU){
+        gpu_mesher->process_queue();
+        gpu_mesher->get_results(visual_mesh_data);
+    }
+    else{
+        visual_mesh->process_queue();
+        visual_mesh->get_results(visual_mesh_data);
+    }
+
     // process the queue and launch worker
-    visual_mesh->process_queue();
-    gpu_mesher->process_queue();
+    //
+    
 
-    visual_mesh->get_results(visual_mesh_data);
+    //
+    
 
-
+    exec_time++;
 
 }

@@ -10,9 +10,9 @@ public:
     ~SDFDummy() override = default;
     
     //plane
-    float evaluate(const Vector3 &p_world_pos) const override {
-        return -p_world_pos.y + 10.0f;
-    }
+    // float evaluate(const Vector3 &p_world_pos) const override {
+    //     return p_world_pos.y - 50.0f;
+    // }
 
     // GRAD OF 1 IS IMPORTANT !!!!
     // float evaluate(const Vector3 &p_world_pos) const override {
@@ -27,46 +27,46 @@ public:
     //     return p_world_pos / std::sqrt(len_sq);
     // }
 
-    // float evaluate(const Vector3 &p_world_pos) const override {
-    //     // 2D mountain shape (XZ), with ridged + fBm detail.
-    //     static const SimplexNoise mountain_fbm(0.0035f, 1.0f, 2.0f, 0.5f);
-    //     static const SimplexNoise detail_fbm(0.0100f, 1.0f, 2.0f, 0.5f);
-    //     static const SimplexNoise cave_fbm(0.0300f, 1.0f, 2.0f, 0.5f);
+    float evaluate(const Vector3 &p_world_pos) const override {
+        // 2D mountain shape (XZ), with ridged + fBm detail.
+        static const SimplexNoise mountain_fbm(0.0035f, 1.0f, 2.0f, 0.5f);
+        static const SimplexNoise detail_fbm(0.0100f, 1.0f, 2.0f, 0.5f);
+        static const SimplexNoise cave_fbm(0.0300f, 1.0f, 2.0f, 0.5f);
 
-    //     const float x = p_world_pos.x;
-    //     const float y = p_world_pos.y;
-    //     const float z = p_world_pos.z;
+        const float x = p_world_pos.x;
+        const float y = p_world_pos.y;
+        const float z = p_world_pos.z;
 
-    //     const float n_base = mountain_fbm.fractal(5, x, z);      // [-1, 1] approx
-    //     const float n_ridge = 1.0f - Math::abs(n_base);          // [0, 1]
-    //     const float n_detail = detail_fbm.fractal(4, x + 137.0f, z - 71.0f);
+        const float n_base = mountain_fbm.fractal(5, x, z);      // [-1, 1] approx
+        const float n_ridge = 1.0f - Math::abs(n_base);          // [0, 1]
+        const float n_detail = detail_fbm.fractal(4, x + 137.0f, z - 71.0f);
 
-    //     // Mountain height profile.
-    //     const float base_level = 300.0f;
-    //     const float mountain_height =
-    //         base_level
-    //         + n_ridge * 55.0f
-    //         + n_detail * 8.0f;
+        // Mountain height profile.
+        const float base_level = 300.0f;
+        const float mountain_height =
+            base_level
+            + n_ridge * 55.0f
+            + n_detail * 8.0f;
 
-    //     // Terrain SDF: negative below terrain surface (solid).
-    //     const float terrain_sdf = y - mountain_height;
+        // Terrain SDF: negative below terrain surface (solid).
+        const float terrain_sdf = y - mountain_height;
 
-    //     // 3D cave field.
-    //     const float cave_n = cave_fbm.fractal(4, x, y * 0.8f, z);
+        // 3D cave field.
+        const float cave_n = cave_fbm.fractal(4, x, y * 0.8f, z);
 
-    //     // Keep caves mostly underground (fade out near surface).
-    //     const float depth = mountain_height - y; // >0 below terrain
-    //     const float depth_mask = Math::clamp((depth - 6.0f) / 18.0f, 0.0f, 1.0f);
+        // Keep caves mostly underground (fade out near surface).
+        const float depth = mountain_height - y; // >0 below terrain
+        const float depth_mask = Math::clamp((depth - 6.0f) / 18.0f, 0.0f, 1.0f);
 
-    //     // Cave threshold: higher threshold -> fewer caves.
-    //     const float cave_threshold = 0.45f + (1.0f - depth_mask) * 0.2f;
-    //     const float cave_sdf = cave_threshold - cave_n; // negative = cave interior
+        // Cave threshold: higher threshold -> fewer caves.
+        const float cave_threshold = 0.45f + (1.0f - depth_mask) * 0.2f;
+        const float cave_sdf = cave_threshold - cave_n; // negative = cave interior
 
-    //     // Subtract caves from terrain: A \ B => max(A, -B)
-    //     const float carved = MAX(terrain_sdf, -cave_sdf);
+        // Subtract caves from terrain: A \ B => max(A, -B)
+        const float carved = MAX(terrain_sdf, -cave_sdf);
 
-    //     return -carved;
-    // }
+        return -carved;
+    }
 
     // Repeated cube SDF + sinusoidal terrain term.
     // Positive means inside/solid (project convention).
@@ -144,7 +144,7 @@ public:
     String get_glsl_code() const override {
         return R"(
         vec4 terrain_sdf(vec3 pos){
-            return vec4(0,1,0,10-pos.y);  // Dummy: plane
+            return vec4(0,1,0,pos.y-50.0);  // Dummy: plane
         }
         )";
     }

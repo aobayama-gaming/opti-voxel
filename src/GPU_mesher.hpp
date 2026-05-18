@@ -14,6 +14,32 @@
 
 using namespace godot;
 
+struct UnpackChunk{
+
+    Vector3i chunk_id;
+
+    PackedVector3Array output_points;
+    PackedVector3Array output_normals;
+    PackedInt32Array output_triangles;
+
+    uint32_t point_offset; // used to fill the array
+
+    HashMap<uint32_t,uint32_t> index_storage;
+
+    PackedInt32Array quad_masks;
+
+    RID mesh_rid;
+
+    void resize(int point_number, int triangles_number){
+        output_points.resize(point_number);
+        output_normals.resize(point_number);
+        quad_masks.resize(point_number);
+
+        output_triangles.resize(triangles_number*3);
+    }
+
+};
+
 class GPUMesher : public Object{
 
     private :
@@ -30,6 +56,8 @@ class GPUMesher : public Object{
     Ref<Semaphore> semaphore;
     bool worker_available = true;
     bool result_available = false;
+
+    RID scenario;
 
     uint32_t chunk_batch_number;
 
@@ -65,6 +93,9 @@ class GPUMesher : public Object{
     // RID uniform_set_output_point;
 
     RID shader_first_pass;
+    RID shader_second_pass;
+    RID shader_third_pass;
+
 
     std::vector<LODHashSet *> chunk_queue;
 
@@ -80,9 +111,16 @@ class GPUMesher : public Object{
 
     bool _is_available();
 
+    Vector3i _unflatten_index_z(uint32_t flat_idx);
+    uint32_t _get_flat_index_z(Vector3i cell);
+
+    void render_chunk();
+
+    std::vector<UnpackChunk> unpacked_chunks;
+
     public : 
     
-    void initialize(SDFBase* p_sdf,ChunkParam p_chunk_param, uint32_t p_chunk_batch_number,int lod_numbers);
+    void initialize(SDFBase* p_sdf,ChunkParam p_chunk_param, uint32_t p_chunk_batch_number,int lod_numbers, RID p_scenario);
 
     void process_queue();
 

@@ -40,7 +40,7 @@ private:
 	ChunkParam chunk_param{
 		32,     // chunk_size
 		0.5f,  // voxel_size
-		2,      // skirt_size
+		0,      // skirt_size
 		true    // use_skirt
 	};
 
@@ -58,7 +58,13 @@ private:
 
 	VoxelState visual_mesh_data;
 
+
+
 	void _destroy_chunk();
+
+	//debug 
+
+	uint32_t exec_time = 0;
 
 public:
 

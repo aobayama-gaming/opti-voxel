@@ -21,14 +21,23 @@
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_uniform.hpp>
 
+#include "godot_cpp/templates/hash_map.hpp"
+
+#include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/classes/array_mesh.hpp>
+
+#include "noise.hpp"
+
 //debug only
 #include <godot_cpp/classes/scene_tree.hpp>
+
+
 
 
 static constexpr const char GLSL_STRUCT_DEFINITION[] = R"glsl(
 
 #ifndef WORLD_NUDGE
-#define WORLD_NUDGE 0.0 // Define this to your desired nudge value or pass as uniform
+#define WORLD_NUDGE 0.123456 // Define this to your desired nudge value or pass as uniform
 #endif
 
 struct PointMetadata { int a; int b; int c; int d; };
@@ -139,6 +148,21 @@ ivec3 world_to_chunk(vec3 world_coord, ChunkParam chunk_param) {
     return cell * 2 + 1;
 }
 
+vec3 cell_to_world(ivec3 chunk_coord,vec3 point_coord, ChunkParam chunk_param){
+
+    float chunk_size = world_chunk_size(chunk_coord, chunk_param);
+    vec3 chunk_center = chunk_to_world(chunk_coord, chunk_param);
+    vec3 chunk_min_corner = chunk_center - vec3(chunk_size * 0.5);
+
+    return chunk_min_corner + vec3(
+        (float(point_coord.x) - float(chunk_param.skirt_size)) * chunk_size / chunk_voxel_dimension(chunk_param),
+        (float(point_coord.y) - float(chunk_param.skirt_size)) * chunk_size / chunk_voxel_dimension(chunk_param),
+        (float(point_coord.z) - float(chunk_param.skirt_size)) * chunk_size / chunk_voxel_dimension(chunk_param)
+    );
+
+
+}
+
 // ---------------------------------------------------------
 // Vertex <-> World Transforms
 // ---------------------------------------------------------
@@ -209,11 +233,17 @@ layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
     ChunkParam chunk_param;
 };
 
-uint get_flat_index(uvec3 cell_coordinate) {
-    return cell_coordinate.x + (cell_coordinate.y * params.chunk_size) + (cell_coordinate.z * params.chunk_size * params.chunk_size);
+uint get_flat_index_z(uvec3 cell_coordinate) {
+    return cell_coordinate.x + (cell_coordinate.y * chunk_param.chunk_size) + (cell_coordinate.z * chunk_param.chunk_size * chunk_param.chunk_size);
 }
 
-
+uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
+    uint cs = chunk_param.chunk_size;
+    uint local_idx = local_c.x + (local_c.y * cs) + (local_c.z * cs * cs);
+    
+    // Memory Layout: [Chunk Batch] -> [Axis 0/1/2] -> [Local Index]
+    return (chunk_idx * 3 * cs * cs * cs) + (axis * cs * cs * cs) + local_idx;
+}
 
 )glsl";
 
@@ -260,7 +290,7 @@ void main() {
     // 2. Inject the dynamic code
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/",GLSL_STRUCT_DEFINITION);
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/",GLSL_BUFFER_BINDING);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/","");
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE));
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/",sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", algorithm_pass);
 
@@ -301,42 +331,158 @@ void main() {
 
 static constexpr const char GLSL_FIRST_PASS[] = R"glsl(
 
-uint flat_index = get_flat_index(gl_GlobalInvocationID);
-
-vec3 world_pos = chunk_to_world(chunk_id,chunk_param)+get_lod_size(chunk_id)*float(cell_chunk_coordinate);
-
-sdf_sample[flat_index] = evaluate_sdf(world_pos);
+sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = evaluate_sdf(cell_to_world(chunk_id,vec3(cell_chunk_coordinate),chunk_param));
 
 )glsl";
 
 static constexpr const char GLSL_SECOND_PASS[] = R"glsl(
 
-uint axis = gl_GlobalInvocationID.y / chunk_param.chunk_size // axis 0:x, 1:y, 2:z
+uint axis = gl_GlobalInvocationID.y / chunk_param.chunk_size;
 
-if(cell_chunk_coordinate[axis]<chunk_param.chunk_size-1){
+if (cell_chunk_coordinate[axis] < chunk_param.chunk_size - 1) {
 
-uvec3 offset = uvec3(0);
-offset[axis]=1;
+    // global_cell is used ONLY for safely reading from the SDF buffer
+    uvec3 global_cell = uvec3(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y % chunk_param.chunk_size, gl_GlobalInvocationID.z);
 
-float center_sdf = sdf_sample[flat_index];
+    uvec3 offset = uvec3(0);
+    offset[axis] = 1;
 
-float offset_sdf = sdf_sample[get_flat_index(gl_GlobalInvocationID+offset)];
+    vec4 center_sdf = sdf_sample[get_flat_index_z(global_cell)];
+    vec4 offset_sdf = sdf_sample[get_flat_index_z(global_cell + offset)];
+
+    if ((center_sdf.w > 0.0) != (offset_sdf.w > 0.0)) {
+        float t = center_sdf.w / (center_sdf.w - offset_sdf.w + 0.00001);
+        
+        // Extract chunk batch to safely write edge data
+        uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
+        
+        // Write using the strictly local cell_chunk_coordinate
+        edge_intersect[get_edge_index(chunk_idx, axis, uvec3(cell_chunk_coordinate))] = t;
+    }
+}
+
+)glsl";
+
+static constexpr const char GLSL_THIRD_PASS[] = R"glsl(
+
+if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
+
+uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
+
+// Helper to construct a local grid coordinate for neighbor cells
+#define offset(x, y, z) (uvec3(cell_chunk_coordinate) + uvec3(x, y, z))
+
+// --- X-Axis Edges ---
+float e0_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,0,0))];
+float e2_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,1,0))];
+float e4_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,0,1))];
+float e6_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,1,1))];
+
+// --- Y-Axis Edges ---
+float e3_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(0,0,0))];
+float e1_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(1,0,0))];
+float e7_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(0,0,1))];
+float e5_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(1,0,1))];
+
+// --- Z-Axis Edges ---
+float e8_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(0,0,0))];
+float e9_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(1,0,0))];
+float e11_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(0,1,0))];
+float e10_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(1,1,0))];
+
+//storing results
+
+vec3 local_vertex = vec3(0.0);
+int active_edge_count = 0;
+
+// --- X-Axis Edges (varying X, static Y/Z) ---
+if (e0_t > 0.0) { local_vertex += vec3(e0_t, 0.0, 0.0); active_edge_count++; }
+if (e2_t > 0.0) { local_vertex += vec3(e2_t, 1.0, 0.0); active_edge_count++; }
+if (e4_t > 0.0) { local_vertex += vec3(e4_t, 0.0, 1.0); active_edge_count++; }
+if (e6_t > 0.0) { local_vertex += vec3(e6_t, 1.0, 1.0); active_edge_count++; }
+
+// --- Y-Axis Edges (varying Y, static X/Z) ---
+if (e3_t > 0.0) { local_vertex += vec3(0.0, e3_t, 0.0); active_edge_count++; }
+if (e1_t > 0.0) { local_vertex += vec3(1.0, e1_t, 0.0); active_edge_count++; }
+if (e7_t > 0.0) { local_vertex += vec3(0.0, e7_t, 1.0); active_edge_count++; }
+if (e5_t > 0.0) { local_vertex += vec3(1.0, e5_t, 1.0); active_edge_count++; }
+
+// --- Z-Axis Edges (varying Z, static X/Y) ---
+if (e8_t > 0.0) { local_vertex += vec3(0.0, 0.0, e8_t); active_edge_count++; }
+if (e9_t > 0.0) { local_vertex += vec3(1.0, 0.0, e9_t); active_edge_count++; }
+if (e11_t > 0.0) { local_vertex += vec3(0.0, 1.0, e11_t); active_edge_count++; }
+if (e10_t > 0.0) { local_vertex += vec3(1.0, 1.0, e10_t); active_edge_count++; }
+
+// --- Calculate Cell Centroid ---
+if (active_edge_count > 0) {
+    // Average the positions to find the center of mass
+    local_vertex /= float(active_edge_count);
+    
+    // 1. Pack Position (3 x uint8 = 24 bits)
+    // Convert 0.0->1.0 to 0->255
+    uvec3 byte_pos = uvec3(local_vertex * 255.0);
+    uint packed_pos = byte_pos.x | (byte_pos.y << 8) | (byte_pos.z << 16);
+
+    // 2. Pack Normal (using built in packSnorm4x8)
+    // Find the exact world position of our local_vertex
+    
+    // Resample the SDF to get the exact normal at this vertex
+    vec3 surface_normal = normalize(evaluate_sdf(cell_to_world(chunk_id,local_vertex,chunk_param)).xyz);
+    uint packed_normal = packSnorm4x8(vec4(surface_normal, 0.0));
+
+    // 3. Triangle Metadata (3 bit mask for X/Y/Z quad generation in Dual Contouring/Surface nets)
+    // We check if edges 0, 3, and 8 have intersections to know if this cell spawns a quad
+    uint quad_mask = 0;
+    if (e0_t > 0.0) quad_mask |= 1; // X-axis crossing quad
+    if (e3_t > 0.0) quad_mask |= 2; // Y-axis crossing quad
+    if (e8_t > 0.0) quad_mask |= 4; // Z-axis crossing quad
+
+    // 4. Update Atomic Counters    
+    // Get sparse index from global counter
+    uint global_point_idx = atomicAdd(atomic_counter[0], 1);
+    
+
+    // Increment the individual chunk counter (Index 2 + 2 * chunk_id)
+    uint local_chunk_point_idx = atomicAdd(atomic_counter[2 + 2 * chunk_idx], 1);
+
+    // Increment triangle counters (2 triangles per quad)
+    uint quad_count = bitCount(quad_mask);
+    if (quad_count > 0) {
+        atomicAdd(atomic_counter[1], quad_count * 2);
+        atomicAdd(atomic_counter[3 + 2 * chunk_idx], quad_count * 2);
+    }
+
+    // 5. Pack Metadata (Global Address + Chunk Address + Quad Mask)
+    // We have effectively 4 integers in PointMetadata based on your struct: {a, b, c, d}
+    // Note: If you reduce PointMetadata to 3 ints in C++, adjust this assignment.
+    
+    output_point[global_point_idx].a = int(packed_pos);
+    output_point[global_point_idx].b = int(packed_normal);
+    
+    // Store chunk index and mask in 'c' 
+    output_point[global_point_idx].c = int((chunk_idx & 0xFFFF) | (quad_mask << 16));
+    
+    // Store localized point address in 'd'
+    output_point[global_point_idx].d = int(get_flat_index_z(cell_chunk_coordinate));
+}
+
 
 }
 
 )glsl";
 
-
 void GPUMesher::initialize(
     SDFBase* p_sdf,
     ChunkParam p_chunk_param, 
     uint32_t p_chunk_batch_number,
-    int lod_numbers
+    int lod_numbers,
+    RID p_scenario
 ){
 
     sdf = p_sdf;
     chunk_param = p_chunk_param;
     chunk_batch_number = p_chunk_batch_number;
+    scenario = p_scenario;
 
     // Worker stuff
 
@@ -368,7 +514,9 @@ void GPUMesher::_initialize_gpu_compute(){
     
     buffer_sdf_sample = rd->storage_buffer_create(chunk_batch_number*chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(Vector4),empty_data);
 
-    buffer_edge_intersect =rd->storage_buffer_create((chunk_param.chunk_size-1)*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(float_t)*3*chunk_batch_number,empty_data);
+    buffer_edge_intersect =rd->storage_buffer_create(chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(float_t)*3*chunk_batch_number,empty_data);
+    //to simplify debug erase the optimise allocation
+    
     /*
     Compressed position uint8 x 3
     Compressed normal uint8 x 3 
@@ -377,7 +525,7 @@ void GPUMesher::_initialize_gpu_compute(){
     
     Total of 3 uint32_t
     */
-    buffer_output_point = rd->storage_buffer_create(3*chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(uint32_t),empty_data);
+    buffer_output_point = rd->storage_buffer_create(4*chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(uint32_t)*chunk_batch_number,empty_data);
 
     // Injection of Chunk Param in the uniform
     // Match the std140 layout for ChunkParam: 4 x 4-byte fields = 16 bytes
@@ -418,6 +566,8 @@ void GPUMesher::_initialize_gpu_compute(){
     // RID master_uniform_set = rd->uniform_set_create(uniforms, shader_rid, 0);
 
     shader_first_pass = compile_dynamic_shader(GLSL_FIRST_PASS);
+    shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS);
+    shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS);
 
     //since we assume all uniform for all the pass we do this
     uniform_set = rd->uniform_set_create(uniforms,shader_first_pass,0);
@@ -454,6 +604,19 @@ void GPUMesher::_execute_whole_pipeline(){
 
 }
 
+
+
+Vector3i GPUMesher::_unflatten_index_z(uint32_t flat_idx) {
+    uint32_t x = flat_idx % chunk_param.chunk_size;
+    uint32_t y = (flat_idx / chunk_param.chunk_size) % chunk_param.chunk_size;
+    uint32_t z = flat_idx / (chunk_param.chunk_size * chunk_param.chunk_size);
+    return Vector3i(x, y, z);
+}
+
+uint32_t GPUMesher::_get_flat_index_z(Vector3i cell) {
+    return cell.x + cell.y * chunk_param.chunk_size + cell.z * chunk_param.chunk_size * chunk_param.chunk_size;
+}
+
 void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
 
     // 1. RESET ATOMIC COUNTERS TO 0
@@ -462,35 +625,228 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
     counter_zeros.fill(0);
     rd->buffer_update(buffer_atomic_counter, 0, counter_zeros.size(), counter_zeros);
 
+    // Erase the active edges buffer to 0.0 
+    // (So passes read eX_t > 0.0 correctly)
+    
+    PackedByteArray edge_zeros;
+    edge_zeros.resize(chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(float_t) * 3 * chunk_batch_number);
+    edge_zeros.fill(0);
+    rd->buffer_update(buffer_edge_intersect, 0, edge_zeros.size(), edge_zeros);
+
+
     // 2. put the input inside
 
     rd->buffer_update(buffer_input_chunk_id, 0,p_chunk_id.size(),p_chunk_id);
 
     //first step pipeline
     RID first_pass = rd->compute_pipeline_create(shader_first_pass);
+    RID second_pass = rd->compute_pipeline_create(shader_second_pass);
+    RID third_pass = rd->compute_pipeline_create(shader_third_pass);
+
 
     // --- GPU SUBMISSION PIPELINE ---
     int64_t compute_list = rd->compute_list_begin();
-    rd->compute_list_bind_compute_pipeline(compute_list,first_pass);
+
     rd->compute_list_bind_uniform_set(compute_list,uniform_set,0); // bind for all pass actually
 
     uint32_t dispatch_size = chunk_param.chunk_size/8;
 
-    rd->compute_list_dispatch(compute_list,dispatch_size,dispatch_size,dispatch_size*chunk_batch_number); // Arise the requirement of chunk 8 secable
+    // ---- PASS 1: Sample SDF Distances ----
+    rd->compute_list_bind_compute_pipeline(compute_list, first_pass);
+    rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
+
+    // Barrier: Wait for Pass 1 to finish writing to sdf_sample
+    rd->compute_list_add_barrier(compute_list);
+
+    // ---- PASS 2: Calculate Edge Intersections ----
+    rd->compute_list_bind_compute_pipeline(compute_list, second_pass);
+    rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size*3, dispatch_size * chunk_batch_number);
+
+    // Barrier: Wait for Pass 2 to finish writing to edge_intersect
+    rd->compute_list_add_barrier(compute_list);
+
+    // ---- PASS 3: Generate Vertex Centroids, Normals & Metadata ----
+    rd->compute_list_bind_compute_pipeline(compute_list, third_pass);
+    rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
+
     rd->compute_list_end();
 
     rd->submit();
     rd->sync();
 
-    //debug retrieve sdf value
-    PackedByteArray debug_sdf;
-    debug_sdf = rd->buffer_get_data(buffer_sdf_sample);
+    // 1. Unpack Atomic Counters to get total point count
+    PackedByteArray counter_data = rd->buffer_get_data(buffer_atomic_counter);
+    PackedInt32Array counters = counter_data.to_int32_array();
+    
+    uint32_t total_points = counters[0];
+    uint32_t total_triangles = counters[1];
+    
+    if (total_points > 0) {
+        // 2. Unpack points
+        PackedByteArray point_data = rd->buffer_get_data(buffer_output_point);
+        PackedInt32Array points = point_data.to_int32_array();
 
-    PackedFloat32Array untangle_sdf;
-    untangle_sdf = debug_sdf.to_float32_array();
+        for (uint32_t i = 0; i < chunk_batch_number; i++) {
+            uint32_t local_point_count = counters[2 + 2 * i];
+            uint32_t local_triangle_count = counters[3 + 2 * i];
+            
+            // 1 triangle = 3 indices
+            unpacked_chunks[i].resize(local_point_count, local_triangle_count * 3);
+            
+            // Reconstruct the 3D chunk ID using byte array correctly
+            // We need to fetch the chunk ID from p_chunk_id based on `i`
+            // int32_t cx = p_chunk_id.decode_s32(i * 16 + 0);
+            // int32_t cy = p_chunk_id.decode_s32(i * 16 + 4);
+            // int32_t cz = p_chunk_id.decode_s32(i * 16 + 8);
+            // unpacked_chunks[i].chunk_id = Vector3i(cx, cy, cz);
+        }
+    
+        // 3. Process every point
+        for (uint32_t i = 0; i < total_points; i++) {
+            // Struct layout: int a, int b, int c, int d;
+            int offset = i * 4;
+            uint32_t a = points[offset + 0];
+            uint32_t b = points[offset + 1];
+            uint32_t c = points[offset + 2];
+            uint32_t d = points[offset + 3];
 
-    UtilityFunctions::print("Output: ",untangle_sdf);
+            // --- Unpack Flat Index (d) ---
+            uint32_t flat_idx = d;
+            Vector3i cell_coord = _unflatten_index_z(flat_idx);
 
+            // --- Unpack Position (a) ---
+            Vector3 local_vertex;
+            local_vertex.x = float(a & 0xFF) / 255.0f + cell_coord.x;
+            local_vertex.y = float((a >> 8) & 0xFF) / 255.0f + cell_coord.y;
+            local_vertex.z = float((a >> 16) & 0xFF) / 255.0f + cell_coord.z;
+
+            // --- Unpack Normal (b) ---
+            // packSnorm4x8 mapping: signed normalized -1.0 to 1.0 mapped to 0 to 255
+            Vector3 surface_normal;
+            surface_normal.x = Math::clamp(float((int8_t)(b & 0xFF)) / 127.0f, -1.0f, 1.0f);
+            surface_normal.y = Math::clamp(float((int8_t)((b >> 8) & 0xFF)) / 127.0f, -1.0f, 1.0f);
+            surface_normal.z = Math::clamp(float((int8_t)((b >> 16) & 0xFF)) / 127.0f, -1.0f, 1.0f);
+            
+            // --- Unpack Metadata (c) ---
+            uint32_t chunk_idx = c & 0xFFFF; // Changed to uint32_t for safe array indexing
+            uint8_t quad_mask = (c >> 16) & 0x7;
+
+
+
+            // Fill the unpack chunk points and normals
+            uint32_t pt_idx = unpacked_chunks[chunk_idx].point_offset++;
+            unpacked_chunks[chunk_idx].output_points.set(pt_idx, local_vertex);
+            unpacked_chunks[chunk_idx].output_normals.set(pt_idx, surface_normal);
+            unpacked_chunks[chunk_idx].quad_masks[pt_idx] = quad_mask;
+            unpacked_chunks[chunk_idx].index_storage[flat_idx] = pt_idx;
+
+        }
+
+        // 4. Generate Triangles based on dual contouring quad masks
+        for (uint32_t chunk_idx = 0; chunk_idx < chunk_batch_number; ++chunk_idx) {
+            uint32_t tri_offset = 0;
+
+            auto emit_quad = [&](uint32_t p0, uint32_t p1, uint32_t p2, uint32_t p3, bool positive_winding) {
+                if (positive_winding) {
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p0);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p1);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p3);
+
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p0);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p3);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p2);
+                } else {
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p0);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p3);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p1);
+
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p0);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p2);
+                    unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p3);
+                }
+            };
+            
+            for (uint32_t pt_idx = 0; pt_idx < unpacked_chunks[chunk_idx].point_offset; ++pt_idx) {
+                uint8_t quad_mask = unpacked_chunks[chunk_idx].quad_masks[pt_idx];
+                if (quad_mask == 0) continue;
+
+                Vector3 local_pos = unpacked_chunks[chunk_idx].output_points[pt_idx];
+                Vector3 point_normal = unpacked_chunks[chunk_idx].output_normals[pt_idx];
+                Vector3i cell_coord(Math::floor(local_pos.x), Math::floor(local_pos.y), Math::floor(local_pos.z));
+                // x-axis edge quad
+                if ((quad_mask & 1) && cell_coord.y > 0 && cell_coord.z > 0) {
+                    uint32_t p0 = pt_idx; // Current cell
+                    uint32_t p1 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 1, 0))];
+                    uint32_t p2 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 0, 1))];
+                    uint32_t p3 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 1, 1))];
+
+                    emit_quad(p0, p1, p2, p3, point_normal.x >= 0.0f);
+                }
+                
+                // y-axis edge quad
+                if ((quad_mask & 2) && cell_coord.x > 0 && cell_coord.z > 0) {
+                    uint32_t p0 = pt_idx;
+                    uint32_t p1 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(1, 0, 0))];
+                    uint32_t p2 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 0, 1))];
+                    uint32_t p3 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(1, 0, 1))];
+
+                    emit_quad(p0, p1, p2, p3, point_normal.y >= 0.0f);
+                }
+                
+                // z-axis edge quad
+                if ((quad_mask & 4) && cell_coord.x > 0 && cell_coord.y > 0) {
+                    uint32_t p0 = pt_idx;
+                    uint32_t p1 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(1, 0, 0))];
+                    uint32_t p2 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 1, 0))];
+                    uint32_t p3 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(1, 1, 0))];
+
+                    emit_quad(p0, p1, p2, p3, point_normal.z >= 0.0f);
+                }
+            }
+        }
+    }
+
+    render_chunk();
+
+}
+
+void GPUMesher::render_chunk() {
+    RenderingServer *rs = RenderingServer::get_singleton();
+
+    for (uint32_t chunk_idx = 0; chunk_idx < chunk_batch_number; ++chunk_idx) {
+        UnpackChunk &chunk = unpacked_chunks[chunk_idx];
+
+        if (chunk.output_points.is_empty() || chunk.output_triangles.is_empty()) {
+            continue;
+        }
+
+        Array arrays;
+        arrays.resize(Mesh::ARRAY_MAX);
+        arrays[Mesh::ARRAY_VERTEX] = chunk.output_points;
+        arrays[Mesh::ARRAY_INDEX] = chunk.output_triangles;
+        arrays[Mesh::ARRAY_NORMAL] = chunk.output_normals;
+
+        RID mesh_rid = rs->mesh_create();
+        rs->mesh_add_surface_from_arrays(mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
+
+        chunk.mesh_rid = rs->instance_create();
+
+        rs->instance_set_scenario(chunk.mesh_rid, scenario);
+        rs->instance_set_base(chunk.mesh_rid, mesh_rid);
+        
+        const float cell_size = chunk_param.voxel_size * ChunkMath::get_lod_size(chunk.chunk_id);
+        Basis scaled_basis;
+        scaled_basis.scale(Vector3(cell_size, cell_size, cell_size));
+
+        //scaled_basis.scale(Vector3(chunk_param.voxel_size, chunk_param.voxel_size, chunk_param.voxel_size));
+
+        float chunk_offset = chunk_param.chunk_world_dimension() * 0.5f * ChunkMath::get_lod_size(chunk.chunk_id);
+
+        rs->instance_set_transform(
+            chunk.mesh_rid,
+            Transform3D(scaled_basis, ChunkMath::chunk_to_world(chunk.chunk_id, chunk_param) - Vector3(chunk_offset,chunk_offset,chunk_offset))
+        );
+    }
 }
 
 bool GPUMesher::_is_available(){
@@ -499,7 +855,7 @@ bool GPUMesher::_is_available(){
 
     mutex->lock();
     available = worker_available;
-    //available &= !result_available; // since result is an array, change behavior from CPU
+    available &= !result_available; // since result is an array, change behavior from CPU
     mutex->unlock();
 
     //UtilityFunctions::print("GPUMesher : status = ",available);
@@ -508,12 +864,39 @@ bool GPUMesher::_is_available(){
 
 }
 
+bool GPUMesher::get_results(VoxelState &output){
+
+    mutex->lock();
+    const bool is_result_available = result_available; 
+
+    if(is_result_available){
+        for(uint32_t i=0; i<chunk_batch_number; i++){
+            // We consider the chunk finished processing whether it has mesh data or not.
+            // But we only add it to the scene if it yielded a mesh layer.
+
+            ChunkOutput out;
+            out.chunk_id = unpacked_chunks[i].chunk_id;
+            out.mesh_rid = unpacked_chunks[i].mesh_rid;
+            output.add_new_loaded(out);
+            
+            working_generation.erase(unpacked_chunks[i].chunk_id);
+        }
+        result_available = false;
+    }
+    mutex->unlock();
+
+    return is_result_available;
+}
+
 void GPUMesher::process_queue(){
 
     if(!_is_available()) return;
 
     PackedInt32Array new_batch;
     new_batch.resize(chunk_batch_number * 4); // 4 int32 per ivec3 for std430 alignment
+
+    unpacked_chunks.clear();
+    unpacked_chunks.resize(chunk_batch_number);
 
     int count = 0;
     Vector3i new_chunk;
@@ -530,6 +913,8 @@ void GPUMesher::process_queue(){
         new_batch[count * 4 + 1] = new_chunk.y;
         new_batch[count * 4 + 2] = new_chunk.z;
         new_batch[count * 4 + 3] = 0; // padding
+
+        unpacked_chunks[count].chunk_id = new_chunk;
         
         count++;
     }
@@ -576,7 +961,7 @@ void GPUMesher::send_chunk(LODHashSet p_chunks){
 
     for (const Vector3i &chunk_pos : p_chunks) {
 
-    UtilityFunctions::print("GPUMesher : Adding ",chunk_pos);
+    //UtilityFunctions::print("GPUMesher : Adding ",chunk_pos);
 
     const int lod = ChunkMath::get_lod(chunk_pos);
     if (lod < 0 || lod >= static_cast<int>(chunk_queue.size())) {
