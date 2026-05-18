@@ -16,13 +16,17 @@ void VoxelTerrain::_destroy_chunk() {
         const ChunkOutput output = it->value;
 
         if (output.mesh_rid.is_valid()) {
+            rs->free_rid(output.instance_rid);
             rs->free_rid(output.mesh_rid);
+            visual_mesh_data.loaded_chunk.erase(chunk_pos);
+            visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
+
+            it = visual_mesh_data.to_destroy_chunk.begin();
         }
 
-        visual_mesh_data.loaded_chunk.erase(chunk_pos);
-        visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
 
-        it = visual_mesh_data.to_destroy_chunk.begin();
+
+        
     }
 }
 
@@ -32,7 +36,7 @@ void VoxelTerrain::_bind_methods() {
 
 void VoxelTerrain::_ready(){
 
-    const int lod_numbers = 15;
+    const int lod_numbers = 5;
     const int worker_pool = 8;
 
     visual_mesh_data.set_max_lod(lod_numbers);
@@ -45,7 +49,10 @@ void VoxelTerrain::_ready(){
 
     chunk_discoverer->set_config(chunk_param,sdf);
 
-    chunk_discoverer->setup_lod(lod_numbers); //use base args
+    chunk_discoverer->setup_lod(
+        lod_numbers,
+        5.0f
+    ); //use base args
 
     chunk_discoverer->start();
 
@@ -70,7 +77,7 @@ void VoxelTerrain::_ready(){
     gpu_mesher->initialize(
         sdf,
         chunk_param,
-        512, // chunk_batch
+        1024, // chunk_batch
         lod_numbers,
         scenario
     );

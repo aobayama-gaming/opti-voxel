@@ -40,7 +40,7 @@ private:
 	ChunkParam chunk_param{
 		32,     // chunk_size
 		0.5f,  // voxel_size
-		0,      // skirt_size
+		2,      // skirt_size
 		true    // use_skirt
 	};
 

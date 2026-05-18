@@ -148,21 +148,6 @@ ivec3 world_to_chunk(vec3 world_coord, ChunkParam chunk_param) {
     return cell * 2 + 1;
 }
 
-vec3 cell_to_world(ivec3 chunk_coord,vec3 point_coord, ChunkParam chunk_param){
-
-    float chunk_size = world_chunk_size(chunk_coord, chunk_param);
-    vec3 chunk_center = chunk_to_world(chunk_coord, chunk_param);
-    vec3 chunk_min_corner = chunk_center - vec3(chunk_size * 0.5);
-
-    return chunk_min_corner + vec3(
-        (float(point_coord.x) - float(chunk_param.skirt_size)) * chunk_size / chunk_voxel_dimension(chunk_param),
-        (float(point_coord.y) - float(chunk_param.skirt_size)) * chunk_size / chunk_voxel_dimension(chunk_param),
-        (float(point_coord.z) - float(chunk_param.skirt_size)) * chunk_size / chunk_voxel_dimension(chunk_param)
-    );
-
-
-}
-
 // ---------------------------------------------------------
 // Vertex <-> World Transforms
 // ---------------------------------------------------------
@@ -204,6 +189,110 @@ bool vertices_out_of_bound(vec3 vertices_coord, ChunkParam chunk_param) {
     // Utilizes GLSL vector relational functions for a cleaner check
     return any(lessThan(vertices_coord, vec3(0.0))) || 
            any(greaterThan(vertices_coord, vec3(chunk_world_dimension(chunk_param))));
+}
+
+// ---------------------------------------------------------
+// SDF transform
+// ---------------------------------------------------------
+
+vec4 sdf_negate(vec4 sdf) {
+    // If f(x) = -g(x), then grad(f) = -grad(g)
+    return vec4(-sdf.xyz, -sdf.w);
+}
+
+vec4 sdf_scale(vec4 sdf, float scale) {
+    // If f(x) = a * g(x), then grad(f) = a * grad(g)
+    return vec4(sdf.xyz * scale, sdf.w * scale);
+}
+
+vec4 sdf_add(vec4 sdf1, vec4 sdf2) {
+    // If f(x) = g(x) + h(x), then grad(f) = grad(g) + grad(h)
+    return vec4(sdf1.xyz + sdf2.xyz, sdf1.w + sdf2.w);
+}
+
+vec4 sdf_subtract(vec4 sdf1, vec4 sdf2) {
+    // If f(x) = g(x) - h(x), then grad(f) = grad(g) - grad(h)
+    return vec4(sdf1.xyz - sdf2.xyz, sdf1.w - sdf2.w);
+}
+
+vec4 sdf_abs(vec4 sdf) {
+    // Absolute value flips gradient if value is negative
+    if(sdf.w < 0.0) {
+        return vec4(-sdf.xyz, -sdf.w);
+    } else {
+        return sdf;
+    }
+}
+
+vec4 sdf_constant(float constant) {
+    // Constant has zero gradient
+    return vec4(0.0, 0.0, 0.0, constant);
+}
+
+vec4 sdf_max(vec4 sdf1, vec4 sdf2) {
+    // Max operation takes the gradient of the active surface
+    if(sdf1.w > sdf2.w) {
+        return sdf1;
+    } else {
+        return sdf2;
+    }
+}
+
+)glsl";
+
+
+static constexpr const char GLSL_SKIRT_SDF[] = R"glsl(
+
+vec2 _calculate_skirt_offset(float coord,ChunkParam chunk_param){
+
+    float dist_from_min = coord;
+    float dist_from_max = float(chunk_param.chunk_size-1) - coord;
+
+    float offset_direction = 1.0;
+    float nearest_edge =dist_from_min;
+
+
+    if (dist_from_max<dist_from_min){
+        nearest_edge=dist_from_max;
+        offset_direction = -1.0;
+    }
+
+    float skirt_trimmed = float(chunk_param.skirt_size)*0.75;
+
+    float offset = 0.0;
+    float offset_grad = 0;
+
+    if(nearest_edge < skirt_trimmed){
+        offset = 1.0 - (nearest_edge/skirt_trimmed);
+        offset_grad = - offset_direction / skirt_trimmed;
+    }
+
+    return vec2(offset_grad,offset);
+
+}
+
+vec4 skirt_sdf(ivec3 chunk_coord,vec3 point_coord, ChunkParam chunk_param){
+
+    vec4 base_sdf = evaluate_sdf(vertices_to_world(chunk_coord,vec3(point_coord),chunk_param));
+
+    if(chunk_param.skirt_size > 0){
+
+        float normal_magnitude = length(base_sdf.xyz);
+        float offset_size = chunk_param.voxel_size*0.3*float(get_lod_size(chunk_coord)) / max(normal_magnitude, 0.1);
+
+        vec2 x_offset = _calculate_skirt_offset(point_coord.x,chunk_param);
+        vec2 y_offset = _calculate_skirt_offset(point_coord.y,chunk_param);
+        vec2 z_offset = _calculate_skirt_offset(point_coord.z,chunk_param);
+
+        vec4 offset = vec4(x_offset.x,0.0,0.0,x_offset.y);
+        offset +=vec4(0.0,y_offset.x,0.0,y_offset.y);
+        offset +=vec4(0.0,0.0,z_offset.x,z_offset.y);
+
+        return base_sdf+offset*offset_size;
+    }
+    else{
+        return base_sdf;
+    }
 }
 
 )glsl";
@@ -271,6 +360,8 @@ vec4 evaluate_sdf(vec3 pos) {
 
 }
 
+/*GLSL_SKIRT_SDF*/
+
 void main() {
 
 
@@ -291,6 +382,7 @@ void main() {
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/",GLSL_STRUCT_DEFINITION);
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/",GLSL_BUFFER_BINDING);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE));
+    shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/",sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", algorithm_pass);
 
@@ -331,7 +423,7 @@ void main() {
 
 static constexpr const char GLSL_FIRST_PASS[] = R"glsl(
 
-sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = evaluate_sdf(cell_to_world(chunk_id,vec3(cell_chunk_coordinate),chunk_param));
+sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = skirt_sdf(chunk_id,vec3(cell_chunk_coordinate),chunk_param);
 
 )glsl";
 
@@ -427,7 +519,10 @@ if (active_edge_count > 0) {
     // Find the exact world position of our local_vertex
     
     // Resample the SDF to get the exact normal at this vertex
-    vec3 surface_normal = normalize(evaluate_sdf(cell_to_world(chunk_id,local_vertex,chunk_param)).xyz);
+
+    vec3 chunk_vertex = local_vertex+vec3(cell_chunk_coordinate);
+
+    vec3 surface_normal = normalize(skirt_sdf(chunk_id,chunk_vertex,chunk_param).xyz);
     uint packed_normal = packSnorm4x8(vec4(surface_normal, 0.0));
 
     // 3. Triangle Metadata (3 bit mask for X/Y/Z quad generation in Dual Contouring/Surface nets)
@@ -436,6 +531,10 @@ if (active_edge_count > 0) {
     if (e0_t > 0.0) quad_mask |= 1; // X-axis crossing quad
     if (e3_t > 0.0) quad_mask |= 2; // Y-axis crossing quad
     if (e8_t > 0.0) quad_mask |= 4; // Z-axis crossing quad
+
+    if (sdf_sample[get_flat_index_z(gl_GlobalInvocationID)].w < 0.0) {
+        quad_mask |= 8; // Store "Origin is Solid" in the 4th bit!
+    }
 
     // 4. Update Atomic Counters    
     // Get sparse index from global counter
@@ -569,6 +668,11 @@ void GPUMesher::_initialize_gpu_compute(){
     shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS);
     shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS);
 
+    //first step pipeline
+    pipeline_first_pass = rd->compute_pipeline_create(shader_first_pass);
+    pipeline_second_pass = rd->compute_pipeline_create(shader_second_pass);
+    pipeline_third_pass = rd->compute_pipeline_create(shader_third_pass);
+
     //since we assume all uniform for all the pass we do this
     uniform_set = rd->uniform_set_create(uniforms,shader_first_pass,0);
 
@@ -638,10 +742,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
 
     rd->buffer_update(buffer_input_chunk_id, 0,p_chunk_id.size(),p_chunk_id);
 
-    //first step pipeline
-    RID first_pass = rd->compute_pipeline_create(shader_first_pass);
-    RID second_pass = rd->compute_pipeline_create(shader_second_pass);
-    RID third_pass = rd->compute_pipeline_create(shader_third_pass);
+
 
 
     // --- GPU SUBMISSION PIPELINE ---
@@ -652,21 +753,21 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
     uint32_t dispatch_size = chunk_param.chunk_size/8;
 
     // ---- PASS 1: Sample SDF Distances ----
-    rd->compute_list_bind_compute_pipeline(compute_list, first_pass);
+    rd->compute_list_bind_compute_pipeline(compute_list, pipeline_first_pass);
     rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
 
     // Barrier: Wait for Pass 1 to finish writing to sdf_sample
     rd->compute_list_add_barrier(compute_list);
 
     // ---- PASS 2: Calculate Edge Intersections ----
-    rd->compute_list_bind_compute_pipeline(compute_list, second_pass);
+    rd->compute_list_bind_compute_pipeline(compute_list, pipeline_second_pass);
     rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size*3, dispatch_size * chunk_batch_number);
 
     // Barrier: Wait for Pass 2 to finish writing to edge_intersect
     rd->compute_list_add_barrier(compute_list);
 
     // ---- PASS 3: Generate Vertex Centroids, Normals & Metadata ----
-    rd->compute_list_bind_compute_pipeline(compute_list, third_pass);
+    rd->compute_list_bind_compute_pipeline(compute_list, pipeline_third_pass);
     rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
 
     rd->compute_list_end();
@@ -729,7 +830,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             
             // --- Unpack Metadata (c) ---
             uint32_t chunk_idx = c & 0xFFFF; // Changed to uint32_t for safe array indexing
-            uint8_t quad_mask = (c >> 16) & 0x7;
+            uint8_t quad_mask = (c >> 16) & 0xF;
 
 
 
@@ -747,6 +848,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             uint32_t tri_offset = 0;
 
             auto emit_quad = [&](uint32_t p0, uint32_t p1, uint32_t p2, uint32_t p3, bool positive_winding) {
+                // No more floating point normals, we use the absolute mathematical truth
                 if (positive_winding) {
                     unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p0);
                     unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p1);
@@ -768,11 +870,16 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             
             for (uint32_t pt_idx = 0; pt_idx < unpacked_chunks[chunk_idx].point_offset; ++pt_idx) {
                 uint8_t quad_mask = unpacked_chunks[chunk_idx].quad_masks[pt_idx];
-                if (quad_mask == 0) continue;
+
+                // Mask out the sign bit to check if any geometry exists (mask & 7 checks the first 3 bits)
+                if ((quad_mask & 7) == 0) continue; 
+
+                // True if the origin cell is solid, false if it is empty air
+                bool origin_solid = (quad_mask & 8) != 0;
 
                 Vector3 local_pos = unpacked_chunks[chunk_idx].output_points[pt_idx];
-                Vector3 point_normal = unpacked_chunks[chunk_idx].output_normals[pt_idx];
                 Vector3i cell_coord(Math::floor(local_pos.x), Math::floor(local_pos.y), Math::floor(local_pos.z));
+                
                 // x-axis edge quad
                 if ((quad_mask & 1) && cell_coord.y > 0 && cell_coord.z > 0) {
                     uint32_t p0 = pt_idx; // Current cell
@@ -780,7 +887,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
                     uint32_t p2 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 0, 1))];
                     uint32_t p3 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 1, 1))];
 
-                    emit_quad(p0, p1, p2, p3, point_normal.x >= 0.0f);
+                    emit_quad(p0, p2, p1, p3, origin_solid); // axis 0 = X
                 }
                 
                 // y-axis edge quad
@@ -790,7 +897,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
                     uint32_t p2 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 0, 1))];
                     uint32_t p3 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(1, 0, 1))];
 
-                    emit_quad(p0, p1, p2, p3, point_normal.y >= 0.0f);
+                    emit_quad(p0, p1, p2, p3, origin_solid); // axis 1 = Y
                 }
                 
                 // z-axis edge quad
@@ -800,7 +907,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
                     uint32_t p2 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(0, 1, 0))];
                     uint32_t p3 = unpacked_chunks[chunk_idx].index_storage[_get_flat_index_z(cell_coord - Vector3i(1, 1, 0))];
 
-                    emit_quad(p0, p1, p2, p3, point_normal.z >= 0.0f);
+                    emit_quad(p0, p2, p1, p3, origin_solid); // axis 2 = Z
                 }
             }
         }
@@ -827,24 +934,28 @@ void GPUMesher::render_chunk() {
         arrays[Mesh::ARRAY_NORMAL] = chunk.output_normals;
 
         RID mesh_rid = rs->mesh_create();
+        //chunk.mesh_rid = rs->mesh_create();
         rs->mesh_add_surface_from_arrays(mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
-        chunk.mesh_rid = rs->instance_create();
+        RID instance_rid = rs->instance_create();
+        //chunk.instance_rid = rs->instance_create();
 
-        rs->instance_set_scenario(chunk.mesh_rid, scenario);
-        rs->instance_set_base(chunk.mesh_rid, mesh_rid);
+        rs->instance_set_scenario(instance_rid, scenario);
+        rs->instance_set_base(instance_rid, mesh_rid);
         
         const float cell_size = chunk_param.voxel_size * ChunkMath::get_lod_size(chunk.chunk_id);
         Basis scaled_basis;
         scaled_basis.scale(Vector3(cell_size, cell_size, cell_size));
 
-        //scaled_basis.scale(Vector3(chunk_param.voxel_size, chunk_param.voxel_size, chunk_param.voxel_size));
-
         float chunk_offset = chunk_param.chunk_world_dimension() * 0.5f * ChunkMath::get_lod_size(chunk.chunk_id);
 
+        // Add the skirt offset to align the Godot Mesh with the SDF mathematical bounds
+        float skirt_offset = chunk_param.skirt_size * cell_size;
+        float total_offset = chunk_offset + skirt_offset;
+
         rs->instance_set_transform(
-            chunk.mesh_rid,
-            Transform3D(scaled_basis, ChunkMath::chunk_to_world(chunk.chunk_id, chunk_param) - Vector3(chunk_offset,chunk_offset,chunk_offset))
+            instance_rid,
+            Transform3D(scaled_basis, ChunkMath::chunk_to_world(chunk.chunk_id, chunk_param) - Vector3(total_offset, total_offset, total_offset))
         );
     }
 }
@@ -877,6 +988,7 @@ bool GPUMesher::get_results(VoxelState &output){
             ChunkOutput out;
             out.chunk_id = unpacked_chunks[i].chunk_id;
             out.mesh_rid = unpacked_chunks[i].mesh_rid;
+            out.instance_rid = unpacked_chunks[i].instance_rid;
             output.add_new_loaded(out);
             
             working_generation.erase(unpacked_chunks[i].chunk_id);

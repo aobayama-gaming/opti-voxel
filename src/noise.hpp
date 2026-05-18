@@ -5,7 +5,7 @@
 
 using namespace godot;
 
-static constexpr const char GLSL_NOISE[] = R"(
+static constexpr const char GLSL_NOISE[] = R"glsl(
 //
 // Description : Array and textureless GLSL 2D/3D/4D simplex 
 //               noise functions.
@@ -111,47 +111,45 @@ vec4 snoise(vec3 v)
 
   return 105.0 * vec4(gradient ,dot(m4, pdotx));
 }
-)";
+
+struct NoiseParam {
+  float frequency;
+  float amplitude;
+  float lacunarity;
+  float persistence;
+};
+
+vec4 fractal(int octaves, NoiseParam param, vec3 pos) {
+  vec4 accumulated_noise = vec4(0.0);
+  vec3 sample_pos = pos * param.frequency;
+  float amplitude = param.amplitude;
+
+  for (int octave = 0; octave < octaves; ++octave) {
+    accumulated_noise += snoise(sample_pos) * amplitude;
+    sample_pos *= param.lacunarity;
+    amplitude *= param.persistence;
+  }
+
+  return accumulated_noise;
+}
+)glsl";
 
 // GLSL version to C++
 
-class SimplexNoise {
-public:
-    // 1D Perlin simplex noise
-    static float noise(float x);
-    // 2D Perlin simplex noise
-    static float noise(float x, float y);
-    // 3D Perlin simplex noise
-    static float noise(float x, float y, float z);
+namespace SimplexNoise {
+
+    struct NoiseParam{
+        float frequency;
+        float amplitude;
+        float lacunarity;
+        float persistence;
+    };
+
+
+    Vector4 noise(Vector3 pos);
 
     // Fractal/Fractional Brownian Motion (fBm) noise summation
-    float fractal(size_t octaves, float x) const;
-    float fractal(size_t octaves, float x, float y) const;
-    float fractal(size_t octaves, float x, float y, float z) const;
+    Vector4 fractal(size_t octaves,NoiseParam param, Vector3 pos);
 
-    /**
-     * Constructor of to initialize a fractal noise summation
-     *
-     * @param[in] frequency    Frequency ("width") of the first octave of noise (default to 1.0)
-     * @param[in] amplitude    Amplitude ("height") of the first octave of noise (default to 1.0)
-     * @param[in] lacunarity   Lacunarity specifies the frequency multiplier between successive octaves (default to 2.0).
-     * @param[in] persistence  Persistence is the loss of amplitude between successive octaves (usually 1/lacunarity)
-     */
-    explicit SimplexNoise(float frequency = 1.0f,
-                          float amplitude = 1.0f,
-                          float lacunarity = 2.0f,
-                          float persistence = 0.5f) :
-        mFrequency(frequency),
-        mAmplitude(amplitude),
-        mLacunarity(lacunarity),
-        mPersistence(persistence) {
-    }
-
-private:
-    // Parameters of Fractional Brownian Motion (fBm) : sum of N "octaves" of noise
-    float mFrequency;   ///< Frequency ("width") of the first octave of noise (default to 1.0)
-    float mAmplitude;   ///< Amplitude ("height") of the first octave of noise (default to 1.0)
-    float mLacunarity;  ///< Lacunarity specifies the frequency multiplier between successive octaves (default to 2.0).
-    float mPersistence; ///< Persistence is the loss of amplitude between successive octaves (usually 1/lacunarity)
 };
 

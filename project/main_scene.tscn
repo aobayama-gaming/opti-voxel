@@ -1,17 +1,28 @@
 [gd_scene format=3 uid="uid://dw1g78kfjm72u"]
 
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_o3jxj"]
+sky_energy_multiplier = 1.3
+
+[sub_resource type="Sky" id="Sky_0f027"]
+sky_material = SubResource("ProceduralSkyMaterial_o3jxj")
+
+[sub_resource type="Environment" id="Environment_2c62f"]
+background_mode = 2
+sky = SubResource("Sky_0f027")
+tonemap_mode = 3
+ssao_enabled = true
+ssil_enabled = true
+volumetric_fog_length = 0.01
+adjustment_brightness = 1.02
+adjustment_contrast = 1.025
+adjustment_saturation = 2.0
+
 [node name="Node3D" type="Node3D" unique_id=1494446098]
 
 [node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=969557005]
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1291580129]
-transform = Transform3D(0.72543, 0.44462442, 0.5254145, -0.16589876, -0.62790155, 0.76040596, 0.6680037, -0.6387869, -0.38173598, 0.56378174, 52.11998, 0)
-light_energy = 0.365
-light_indirect_energy = 0.0
-light_volumetric_fog_energy = 0.0
-light_specular = 0.0
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2075181569]
+environment = SubResource("Environment_2c62f")
 
-[node name="OmniLight3D" type="OmniLight3D" parent="." unique_id=1259110310]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -54.528503, 336.56223, -11.170034)
-light_energy = 4.685
-omni_range = 16.081
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1631923561]
+transform = Transform3D(1, 0, 0, 0, 0.7579067, 0.652363, 0, -0.652363, 0.7579067, 0, 383.89502, 0)

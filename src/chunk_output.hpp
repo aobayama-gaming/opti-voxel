@@ -7,4 +7,5 @@ using namespace godot;
 struct ChunkOutput{
     Vector3i chunk_id;
     RID mesh_rid;
+    RID instance_rid;
 };

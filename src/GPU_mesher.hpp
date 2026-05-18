@@ -29,6 +29,7 @@ struct UnpackChunk{
     PackedInt32Array quad_masks;
 
     RID mesh_rid;
+    RID instance_rid;
 
     void resize(int point_number, int triangles_number){
         output_points.resize(point_number);
@@ -95,6 +96,10 @@ class GPUMesher : public Object{
     RID shader_first_pass;
     RID shader_second_pass;
     RID shader_third_pass;
+
+    RID pipeline_first_pass;
+    RID pipeline_second_pass;
+    RID pipeline_third_pass;
 
 
     std::vector<LODHashSet *> chunk_queue;

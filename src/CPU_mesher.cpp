@@ -764,7 +764,7 @@ void CPUMesher::fourth_pass(const int32_t p_y_cell,const int32_t p_z_cell,const 
 
             if(!per_face_normal){
                 vertices_data.output_points[vertices_counter] = final_vertex;
-                vertices_data.output_normals[vertices_counter] = -sdf->evaluate_normal(final_vertex_world,cell_size);
+                vertices_data.output_normals[vertices_counter] = sdf->evaluate_normal(final_vertex_world,cell_size);
             }
 
             vertices_counter--;
@@ -823,7 +823,7 @@ void CPUMesher::fifth_pass(const int32_t p_y_qcell, const int32_t p_z_qcell) {
     auto& vertices = vertices_data.output_vertices;
 
     auto write_quad = [&](uint32_t write_idx, bool positive, uint32_t idA, uint32_t idB, uint32_t idC, uint32_t idD) {
-        if (positive) {
+        if (!positive) {
             vertices[write_idx + 0] = idA; vertices[write_idx + 1] = idB; vertices[write_idx + 2] = idC;
             vertices[write_idx + 3] = idA; vertices[write_idx + 4] = idC; vertices[write_idx + 5] = idD;
         } else {

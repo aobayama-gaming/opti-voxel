@@ -11,7 +11,7 @@ public:
     
     //plane
     // float evaluate(const Vector3 &p_world_pos) const override {
-    //     return p_world_pos.y - 50.0f;
+    //     return p_world_pos.y - 350.0f;
     // }
 
     // GRAD OF 1 IS IMPORTANT !!!!
@@ -28,44 +28,90 @@ public:
     // }
 
     float evaluate(const Vector3 &p_world_pos) const override {
-        // 2D mountain shape (XZ), with ridged + fBm detail.
-        static const SimplexNoise mountain_fbm(0.0035f, 1.0f, 2.0f, 0.5f);
-        static const SimplexNoise detail_fbm(0.0100f, 1.0f, 2.0f, 0.5f);
-        static const SimplexNoise cave_fbm(0.0300f, 1.0f, 2.0f, 0.5f);
+        // Mountain with sparse large caverns
+        static const SimplexNoise::NoiseParam mountain_param{0.0035f, 1.0f, 2.0f, 0.5f};
+        static const SimplexNoise::NoiseParam cave_blob_param{0.0080f, 1.0f, 2.0f, 0.5f};  // Low freq for big blobs
 
         const float x = p_world_pos.x;
         const float y = p_world_pos.y;
         const float z = p_world_pos.z;
 
-        const float n_base = mountain_fbm.fractal(5, x, z);      // [-1, 1] approx
-        const float n_ridge = 1.0f - Math::abs(n_base);          // [0, 1]
-        const float n_detail = detail_fbm.fractal(4, x + 137.0f, z - 71.0f);
+        // Get height with noise
+        const float n_height = SimplexNoise::fractal(5, mountain_param, Vector3(x, 0.0f, z)).w;
+        const float mountain_height = 300.0f + n_height * 50.0f;
 
-        // Mountain height profile.
-        const float base_level = 300.0f;
-        const float mountain_height =
-            base_level
-            + n_ridge * 55.0f
-            + n_detail * 8.0f;
-
-        // Terrain SDF: negative below terrain surface (solid).
+        // SDF = y - height (negative below surface)
         const float terrain_sdf = y - mountain_height;
 
-        // 3D cave field.
-        const float cave_n = cave_fbm.fractal(4, x, y * 0.8f, z);
+        // Low-frequency cave blob selector (sparse big voids)
+        const float cave_blob = SimplexNoise::fractal(3, cave_blob_param, Vector3(x, y, z)).w;
 
-        // Keep caves mostly underground (fade out near surface).
-        const float depth = mountain_height - y; // >0 below terrain
-        const float depth_mask = Math::clamp((depth - 6.0f) / 18.0f, 0.0f, 1.0f);
+        // Depth from surface (positive = below terrain)
+        const float depth = mountain_height - y;
+        
+        // Only carve caves in blob regions and when deep enough
+        const float blob_mask = (cave_blob + 0.3f) * 0.5f;  // Shift and scale to 0-0.8 range
+        const float depth_fade = depth / 40.0f;
+        const float cave_threshold = 0.5f + blob_mask * 0.4f + (1.0f - depth_fade) * 0.1f;
+        
+        // Simple cave field: just the blob
+        const float cave_sdf = cave_threshold - cave_blob;
 
-        // Cave threshold: higher threshold -> fewer caves.
-        const float cave_threshold = 0.45f + (1.0f - depth_mask) * 0.2f;
-        const float cave_sdf = cave_threshold - cave_n; // negative = cave interior
-
-        // Subtract caves from terrain: A \ B => max(A, -B)
+        // Carve caves: max(terrain, -caves)
         const float carved = MAX(terrain_sdf, -cave_sdf);
 
-        return -carved;
+        return carved;
+    }
+
+    //GLSL implementation
+    String get_glsl_code() const override {
+        return R"glsl(
+        vec4 terrain_sdf(vec3 pos){
+            NoiseParam mountain_param;
+            mountain_param.frequency = 0.0035;
+            mountain_param.amplitude = 1.0;
+            mountain_param.lacunarity = 2.0;
+            mountain_param.persistence = 0.5;
+
+            NoiseParam cave_blob_param;
+            cave_blob_param.frequency = 0.0080;
+            cave_blob_param.amplitude = 1.0;
+            cave_blob_param.lacunarity = 2.0;
+            cave_blob_param.persistence = 0.5;
+
+            // Get height noise with gradients
+            vec4 height_noise = fractal(5, mountain_param, vec3(pos.x, 0.0, pos.z));
+            
+            // Height = base + noise * amplitude
+            float base_height = 300.0;
+            float mountain_height = base_height + height_noise.w * 50.0;
+            
+            // SDF = y - height(x,z)
+            // Gradient: (−∂height/∂x, 1, −∂height/∂z)
+            vec3 grad_height = height_noise.xyz * 50.0;
+            vec3 sdf_gradient = vec3(-grad_height.x, 1.0, -grad_height.z);
+            float terrain_sdf = pos.y - mountain_height;
+            
+            // Low-frequency cave blob selector (sparse big voids)
+            vec4 cave_blob_noise = fractal(3, cave_blob_param, vec3(pos.x, pos.y, pos.z));
+            
+            // Depth from surface (positive = below terrain)
+            float depth = mountain_height - pos.y;
+            
+            // Only carve caves in blob regions and when deep enough
+            float blob_mask = (cave_blob_noise.w + 0.3) * 0.5;
+            float depth_fade = depth / 40.0;
+            float cave_threshold = 0.5 + blob_mask * 0.4 + (1.0 - depth_fade) * 0.1;
+            
+            // Cave SDF: negative = cave interior
+            float cave_sdf = cave_threshold - cave_blob_noise.w;
+            
+            // Carve caves: max(terrain, -caves)
+            float carved = max(terrain_sdf, -cave_sdf);
+            
+            return vec4(sdf_gradient, carved);
+        }
+        )glsl";
     }
 
     // Repeated cube SDF + sinusoidal terrain term.
@@ -140,12 +186,154 @@ public:
     //     return -q.length() + radius;
     // }
 
-    // GLSL implementation
-    String get_glsl_code() const override {
-        return R"(
-        vec4 terrain_sdf(vec3 pos){
-            return vec4(0,1,0,pos.y-50.0);  // Dummy: plane
-        }
-        )";
-    }
+
+    //GLSL implementation
+    // String get_glsl_code() const override {
+    //     return R"(
+    //     vec4 terrain_sdf(vec3 pos){
+    //         return vec4(0,1,0,pos.y-350.0);  // Dummy: plane
+    //     }
+    //     )";
+    // }
+
+
+// V1 Mountain 
+
+    //float evaluate(const Vector3 &p_world_pos) const override {
+    //     // 2D mountain shape (XZ), with ridged + fBm detail.
+    //     static const SimplexNoise::NoiseParam mountain_param{0.0035f, 1.0f, 2.0f, 0.5f};
+    //     static const SimplexNoise::NoiseParam detail_param{0.0100f, 1.0f, 2.0f, 0.5f};
+    //     static const SimplexNoise::NoiseParam cave_param{0.0300f, 1.0f, 2.0f, 0.5f};
+
+    //     const float x = p_world_pos.x;
+    //     const float y = p_world_pos.y;
+    //     const float z = p_world_pos.z;
+
+    //     const float n_base = SimplexNoise::fractal(5, mountain_param, Vector3(x, 0.0f, z)).w;      // [-1, 1] approx
+    //     const float n_ridge = 1.0f - Math::abs(n_base);          // [0, 1]
+    //     const float n_detail = SimplexNoise::fractal(4, detail_param, Vector3(x + 137.0f, 0.0f, z - 71.0f)).w;
+
+    //     // Mountain height profile.
+    //     const float base_level = 300.0f;
+    //     const float mountain_height =
+    //         base_level
+    //         + n_ridge * 55.0f
+    //         + n_detail * 8.0f;
+
+    //     // Terrain SDF: negative below terrain surface (solid).
+    //     const float terrain_sdf = y - mountain_height;
+
+    //     // 3D cave field.
+    //     const float cave_n = SimplexNoise::fractal(4, cave_param, Vector3(x, y * 0.8f, z)).w;
+
+    //     // Keep caves mostly underground (fade out near surface).
+    //     const float depth = mountain_height - y; // >0 below terrain
+    //     const float depth_mask = Math::clamp((depth - 6.0f) / 18.0f, 0.0f, 1.0f);
+
+    //     // Cave threshold: higher threshold -> fewer caves.
+    //     const float cave_threshold = 0.45f + (1.0f - depth_mask) * 0.2f;
+    //     const float cave_sdf = cave_threshold - cave_n; // negative = cave interior
+
+    //     // Subtract caves from terrain: A \ B => max(A, -B)
+    //     const float carved = MAX(terrain_sdf, -cave_sdf);
+
+    //     return carved;
+    // }
+
+    // //GLSL implementation
+    // String get_glsl_code() const override {
+    //     return R"glsl(
+    //     vec4 terrain_sdf(vec3 pos){
+    //         NoiseParam mountain_param;
+    //         mountain_param.frequency = 0.0035;
+    //         mountain_param.amplitude = 1.0;
+    //         mountain_param.lacunarity = 2.0;
+    //         mountain_param.persistence = 0.5;
+
+    //         NoiseParam detail_param;
+    //         detail_param.frequency = 0.0100;
+    //         detail_param.amplitude = 1.0;
+    //         detail_param.lacunarity = 2.0;
+    //         detail_param.persistence = 0.5;
+
+    //         NoiseParam cave_param;
+    //         cave_param.frequency = 0.0300;
+    //         cave_param.amplitude = 1.0;
+    //         cave_param.lacunarity = 2.0;
+    //         cave_param.persistence = 0.5;
+
+    //         float x = pos.x;
+    //         float y = pos.y;
+    //         float z = pos.z;
+
+    //         vec4 n_base = fractal(5, mountain_param, vec3(x, 0.0, z));
+    //         vec4 n_ridge = sdf_constant(1.0) - sdf_abs(n_base);
+    //         vec4 n_detail = fractal(4, detail_param, vec3(x + 137.0, 0.0, z - 71.0));
+
+    //         vec4 base_level = sdf_constant(300.0);
+    //         vec4 mountain_height = base_level + n_ridge * 55.0 + n_detail * 8.0;
+
+    //         vec4 terrain_sdf = sdf_constant(y) - mountain_height;
+
+    //         vec4 cave_n = fractal(4, cave_param, vec3(x, y * 0.8, z));
+
+    //         vec4 depth = mountain_height - sdf_constant(y);
+    //         float depth_mask = clamp((depth.w - 6.0) / 18.0, 0.0, 1.0);
+    //         float cave_threshold = 0.45 + (1.0 - depth_mask) * 0.2;
+
+    //         vec4 cave_sdf = sdf_constant(cave_threshold) - cave_n;
+
+    //         vec4 carved = sdf_max(terrain_sdf, -cave_sdf);
+
+    //         return carved;
+    //     }
+    //     )glsl";
+    // }
+
+    //V2
+
+    // float evaluate(const Vector3 &p_world_pos) const override {
+    //     // Mountain: simple height-based SDF with proper gradients
+    //     static const SimplexNoise::NoiseParam mountain_param{0.0035f, 1.0f, 2.0f, 0.5f};
+
+    //     const float x = p_world_pos.x;
+    //     const float y = p_world_pos.y;
+    //     const float z = p_world_pos.z;
+
+    //     // Get height with noise
+    //     const float n_height = SimplexNoise::fractal(5, mountain_param, Vector3(x, 0.0f, z)).w;
+    //     const float mountain_height = 300.0f + n_height * 50.0f;
+
+    //     // SDF = y - height (negative below surface)
+    //     return y - mountain_height;
+    // }
+
+    // //GLSL implementation
+    // String get_glsl_code() const override {
+    //     return R"glsl(
+    //     vec4 terrain_sdf(vec3 pos){
+    //         NoiseParam mountain_param;
+    //         mountain_param.frequency = 0.0035;
+    //         mountain_param.amplitude = 1.0;
+    //         mountain_param.lacunarity = 2.0;
+    //         mountain_param.persistence = 0.5;
+
+    //         // Get height noise with gradients
+    //         vec4 height_noise = fractal(5, mountain_param, vec3(pos.x, 0.0, pos.z));
+            
+    //         // Height = base + noise * amplitude
+    //         float base_height = 300.0;
+    //         float mountain_height = base_height + height_noise.w * 50.0;
+            
+    //         // SDF = y - height(x,z)
+    //         // Gradient: (−∂height/∂x, 1, −∂height/∂z)
+    //         vec3 grad_height = height_noise.xyz * 50.0;
+    //         vec3 sdf_gradient = vec3(-grad_height.x, 1.0, -grad_height.z);
+    //         float sdf_value = pos.y - mountain_height;
+            
+    //         return vec4(sdf_gradient, sdf_value);
+    //     }
+    //     )glsl";
+    // }
+
 };
