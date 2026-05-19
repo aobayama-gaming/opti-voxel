@@ -41,13 +41,16 @@ void VoxelTerrain::_bind_methods() {
 
 void VoxelTerrain::_ready(){
 
-    const int lod_numbers = 5;
+    const int lod_numbers = 15;
     const int worker_pool = 8;
 
     visual_mesh_data.set_max_lod(lod_numbers);
 
     if(Engine::get_singleton()->is_editor_hint()) {
         camera = EditorInterface::get_singleton()->get_editor_viewport_3d()->get_camera_3d();
+    }
+    else {
+        camera = get_viewport()->get_camera_3d();
     }
 
     chunk_discoverer = memnew(ChunkDiscoverer);
@@ -56,7 +59,7 @@ void VoxelTerrain::_ready(){
 
     chunk_discoverer->setup_lod(
         lod_numbers,
-        5.0f
+        2.0f
     ); //use base args
 
     chunk_discoverer->start();
@@ -100,11 +103,11 @@ void VoxelTerrain::_process(double delta){
     
     chunk_discoverer->set_camera_chunk(camera->get_global_position());
 
-    UtilityFunctions::print("Loaded chunks: ", visual_mesh_data.loaded_chunk.size());
-    UtilityFunctions::print(
-        "Rendering draw calls: ",
-        RenderingServer::get_singleton()->get_rendering_info(RenderingServer::RENDERING_INFO_BUFFER_MEM_USED )
-    );
+    // UtilityFunctions::print("Loaded chunks: ", visual_mesh_data.loaded_chunk.size());
+    // UtilityFunctions::print(
+    //     "Rendering draw calls: ",
+    //     RenderingServer::get_singleton()->get_rendering_info(RenderingServer::RENDERING_INFO_BUFFER_MEM_USED )
+    // );
 
     LODHashSet new_scanned_chunk;
 
@@ -124,7 +127,7 @@ void VoxelTerrain::_process(double delta){
     }
 
     visual_mesh_data.update_destroy_from_scan();
-    _destroy_chunk();
+    
 
     if(GPU){
         gpu_mesher->process_queue();
@@ -134,6 +137,8 @@ void VoxelTerrain::_process(double delta){
         visual_mesh->process_queue();
         visual_mesh->get_results(visual_mesh_data);
     }
+
+    _destroy_chunk();
 
 
     // process the queue and launch worker

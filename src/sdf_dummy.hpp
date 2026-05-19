@@ -9,9 +9,52 @@ public:
     SDFDummy() = default;
     ~SDFDummy() override = default;
     
-    //plane
+    // //sphere paved in X and Z
+    // float evaluate(const Vector3 &p_world_pos) const override {
+    //     float period = 150.0f;
+    //     float wrap_x = p_world_pos.x - period * std::floor(p_world_pos.x / period + 0.5f);
+    //     float wrap_z = p_world_pos.z - period * std::floor(p_world_pos.z / period + 0.5f);
+    //     Vector3 wrapped_pos(wrap_x, p_world_pos.y, wrap_z);
+        
+    //     Vector3 center(0.0f, 350.0f, 0.0f);
+    //     float radius = 50.0f;
+    //     return wrapped_pos.distance_to(center) - radius;
+    // }
+
+
+    // //GLSL implementation
+    // String get_glsl_code() const override {
+    //     return R"(
+    //     vec4 terrain_sdf(vec3 pos){
+    //         float period = 150.0;
+    //         float wrap_x = pos.x - period * floor(pos.x / period + 0.5);
+    //         float wrap_z = pos.z - period * floor(pos.z / period + 0.5);
+    //         vec3 wrapped_pos = vec3(wrap_x, pos.y, wrap_z);
+            
+    //         vec3 center = vec3(0.0, 350.0, 0.0);
+    //         float radius = 50.0;
+    //         vec3 d = wrapped_pos - center;
+    //         float dist = length(d);
+    //         vec3 normal = dist > 0.000001 ? d / dist : vec3(0.0, 1.0, 0.0);
+    //         return vec4(normal, dist - radius);
+    //     }
+    //     )";
+    // }
+
+    
+    // //plane
     // float evaluate(const Vector3 &p_world_pos) const override {
     //     return p_world_pos.y - 350.0f;
+    // }
+
+
+    // //GLSL implementation
+    // String get_glsl_code() const override {
+    //     return R"(
+    //     vec4 terrain_sdf(vec3 pos){
+    //         return vec4(0,1,0,pos.y-350.0);  // Dummy: plane
+    //     }
+    //     )";
     // }
 
     // GRAD OF 1 IS IMPORTANT !!!!
@@ -64,7 +107,7 @@ public:
     }
 
     //GLSL implementation
-    String get_glsl_code() const override {
+String get_glsl_code() const override {
         return R"glsl(
         vec4 terrain_sdf(vec3 pos){
             NoiseParam mountain_param;
@@ -79,37 +122,58 @@ public:
             cave_blob_param.lacunarity = 2.0;
             cave_blob_param.persistence = 0.5;
 
-            // Get height noise with gradients
+            // -----------------------------------------
+            // 1. Terrain SDF & Gradient
+            // -----------------------------------------
             vec4 height_noise = fractal(5, mountain_param, vec3(pos.x, 0.0, pos.z));
-            
-            // Height = base + noise * amplitude
             float base_height = 300.0;
             float mountain_height = base_height + height_noise.w * 50.0;
             
-            // SDF = y - height(x,z)
-            // Gradient: (−∂height/∂x, 1, −∂height/∂z)
+            // Calculate UNNORMALIZED terrain gradient & distance
             vec3 grad_height = height_noise.xyz * 50.0;
-            vec3 sdf_gradient = vec3(-grad_height.x, 1.0, -grad_height.z);
-            float terrain_sdf = pos.y - mountain_height;
+            vec3 unnorm_terrain_grad = vec3(-grad_height.x, 1.0, -grad_height.z);
+            float unnorm_terrain_dist = pos.y - mountain_height;
             
-            // Low-frequency cave blob selector (sparse big voids)
+            // Convert Terrain to true Euclidean Distance (Meters)
+            float t_len = length(unnorm_terrain_grad);
+            vec3 terrain_grad = unnorm_terrain_grad / t_len;
+            float terrain_dist = unnorm_terrain_dist / t_len;
+            
+            vec4 terrain_val = vec4(terrain_grad, terrain_dist);
+            
+            // -----------------------------------------
+            // 2. Cave Carving SDF & Gradient
+            // -----------------------------------------
             vec4 cave_blob_noise = fractal(3, cave_blob_param, vec3(pos.x, pos.y, pos.z));
+            float depth = mountain_height - pos.y; 
             
-            // Depth from surface (positive = below terrain)
-            float depth = mountain_height - pos.y;
-            
-            // Only carve caves in blob regions and when deep enough
             float blob_mask = (cave_blob_noise.w + 0.3) * 0.5;
             float depth_fade = depth / 40.0;
             float cave_threshold = 0.5 + blob_mask * 0.4 + (1.0 - depth_fade) * 0.1;
             
-            // Cave SDF: negative = cave interior
-            float cave_sdf = cave_threshold - cave_blob_noise.w;
+            // Calculate UNNORMALIZED cave gradient & distance
+            float unnorm_cave_dist = cave_threshold - cave_blob_noise.w;
+            float unnorm_carve_dist = -unnorm_cave_dist; // Invert to carve out space
             
-            // Carve caves: max(terrain, -caves)
-            float carved = max(terrain_sdf, -cave_sdf);
+            // Using the unnormalized terrain gradient for accurate Chain Rule math
+            vec3 unnorm_carve_grad = 0.8 * cave_blob_noise.xyz - 0.0025 * unnorm_terrain_grad;
             
-            return vec4(sdf_gradient, carved);
+            // Convert Cave to true Euclidean Distance (Meters)
+            float c_len = length(unnorm_carve_grad) + 0.0001;
+            vec3 carve_grad = unnorm_carve_grad / c_len;
+            float carve_dist = unnorm_carve_dist / c_len;
+            
+            vec4 carve_val = vec4(carve_grad, carve_dist);
+            
+            // -----------------------------------------
+            // 3. Smooth CSG Subtraction
+            // -----------------------------------------
+            // 5.0 determines the smoothness/bevel radius in meters.
+            // You can increase this to 10.0 for massive, swooping cave entrances,
+            // or lower it to 1.0 for harder, sharper rock edges.
+            float blend_intensity = 5.0; 
+            
+            return sdf_softmax(terrain_val, carve_val, blend_intensity);
         }
         )glsl";
     }
@@ -187,14 +251,6 @@ public:
     // }
 
 
-    //GLSL implementation
-    // String get_glsl_code() const override {
-    //     return R"(
-    //     vec4 terrain_sdf(vec3 pos){
-    //         return vec4(0,1,0,pos.y-350.0);  // Dummy: plane
-    //     }
-    //     )";
-    // }
 
 
 // V1 Mountain 
@@ -301,7 +357,7 @@ public:
     //     const float z = p_world_pos.z;
 
     //     // Get height with noise
-    //     const float n_height = SimplexNoise::fractal(5, mountain_param, Vector3(x, 0.0f, z)).w;
+    //     const float n_height = SimplexNoise::fractal(1, mountain_param, Vector3(x, 0.0f, z)).w;
     //     const float mountain_height = 300.0f + n_height * 50.0f;
 
     //     // SDF = y - height (negative below surface)
@@ -319,7 +375,7 @@ public:
     //         mountain_param.persistence = 0.5;
 
     //         // Get height noise with gradients
-    //         vec4 height_noise = fractal(5, mountain_param, vec3(pos.x, 0.0, pos.z));
+    //         vec4 height_noise = fractal(1, mountain_param, vec3(pos.x, 0.0, pos.z));
             
     //         // Height = base + noise * amplitude
     //         float base_height = 300.0;

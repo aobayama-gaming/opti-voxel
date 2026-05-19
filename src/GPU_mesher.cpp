@@ -25,11 +25,13 @@
 
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/array_mesh.hpp>
+#include <godot_cpp/classes/surface_tool.hpp>
 
 #include "noise.hpp"
 
 //debug only
 #include <godot_cpp/classes/scene_tree.hpp>
+#include <godot_cpp/classes/time.hpp>
 
 
 
@@ -238,6 +240,30 @@ vec4 sdf_max(vec4 sdf1, vec4 sdf2) {
     }
 }
 
+vec4 sdf_min(vec4 sdf1, vec4 sdf2) {
+    // Max operation takes the gradient of the active surface
+    if(sdf1.w < sdf2.w) {
+        return sdf1;
+    } else {
+        return sdf2;
+    }
+}
+
+vec4 sdf_softmax(vec4 a, vec4 b, float intensity) {
+    // Calculate the blend factor based on the distance between the two SDFs
+    // "intensity" is the smoothing radius in meters
+    float h = clamp(0.5 + 0.5 * (a.w - b.w) / intensity, 0.0, 1.0);
+    
+    // Smoothly blend the distance (and add the polynomial smoothing curve)
+    float smooth_dist = mix(b.w, a.w, h) + intensity * h * (1.0 - h);
+    
+    // Because of the Chain Rule, the gradient of the smooth max is simply 
+    // the linearly interpolated gradients of the two surfaces!
+    vec3 smooth_grad = normalize(mix(b.xyz, a.xyz, h));
+    
+    return vec4(smooth_grad, smooth_dist);
+}
+
 )glsl";
 
 
@@ -277,16 +303,21 @@ vec4 skirt_sdf(ivec3 chunk_coord,vec3 point_coord, ChunkParam chunk_param){
 
     if(chunk_param.skirt_size > 0){
 
-        float normal_magnitude = length(base_sdf.xyz);
-        float offset_size = chunk_param.voxel_size*0.3*float(get_lod_size(chunk_coord)) / max(normal_magnitude, 0.1);
+        float gradient_magnitude = length(base_sdf.xyz);
+        //float offset_size = chunk_param.voxel_size*0.3*float(get_lod_size(chunk_coord)) / max(gradient_magnitude, 0.1);
+        float offset_size = chunk_param.voxel_size*0.3*float(get_lod_size(chunk_coord)) / gradient_magnitude/1000.0;
 
         vec2 x_offset = _calculate_skirt_offset(point_coord.x,chunk_param);
         vec2 y_offset = _calculate_skirt_offset(point_coord.y,chunk_param);
         vec2 z_offset = _calculate_skirt_offset(point_coord.z,chunk_param);
 
-        vec4 offset = vec4(x_offset.x,0.0,0.0,x_offset.y);
-        offset +=vec4(0.0,y_offset.x,0.0,y_offset.y);
-        offset +=vec4(0.0,0.0,z_offset.x,z_offset.y);
+        // vec4 offset = vec4(x_offset.x,0.0,0.0,x_offset.y);
+        // offset +=vec4(0.0,y_offset.x,0.0,y_offset.y);
+        // offset +=vec4(0.0,0.0,z_offset.x,z_offset.y);
+
+        vec4 offset = vec4(0.0,0.0,0.0,x_offset.y);
+        offset +=vec4(0.0,0.0,0.0,y_offset.y);
+        offset +=vec4(0.0,0.0,0.0,z_offset.y);
 
         return base_sdf+offset*offset_size;
     }
@@ -724,28 +755,30 @@ uint32_t GPUMesher::_get_flat_index_z(Vector3i cell) {
 void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
 
     // 1. RESET ATOMIC COUNTERS TO 0
-    PackedByteArray counter_zeros;
-    counter_zeros.resize(2*(1+chunk_batch_number) * sizeof(uint32_t));
-    counter_zeros.fill(0);
-    rd->buffer_update(buffer_atomic_counter, 0, counter_zeros.size(), counter_zeros);
+    uint64_t t_counter_start = Time::get_singleton()->get_ticks_usec();
+    rd->buffer_clear(buffer_atomic_counter, 0, 2*(1+chunk_batch_number) * sizeof(uint32_t));
+    uint64_t t_counter_end = Time::get_singleton()->get_ticks_usec();
+    UtilityFunctions::print(String("GPU counter reset time (ms): ") + String::num_int64((int64_t)((t_counter_end - t_counter_start) / 1000ULL)));
 
     // Erase the active edges buffer to 0.0 
     // (So passes read eX_t > 0.0 correctly)
-    
-    PackedByteArray edge_zeros;
-    edge_zeros.resize(chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(float_t) * 3 * chunk_batch_number);
-    edge_zeros.fill(0);
-    rd->buffer_update(buffer_edge_intersect, 0, edge_zeros.size(), edge_zeros);
+    uint64_t t_edge_start = Time::get_singleton()->get_ticks_usec();
+    rd->buffer_clear(buffer_edge_intersect, 0, chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(float_t) * 3 * chunk_batch_number);
+    uint64_t t_edge_end = Time::get_singleton()->get_ticks_usec();
+    UtilityFunctions::print(String("GPU edge-zero upload time (ms): ") + String::num_int64((int64_t)((t_edge_end - t_edge_start) / 1000ULL)));
 
 
     // 2. put the input inside
-
+    uint64_t t_input_start = Time::get_singleton()->get_ticks_usec();
     rd->buffer_update(buffer_input_chunk_id, 0,p_chunk_id.size(),p_chunk_id);
+    uint64_t t_input_end = Time::get_singleton()->get_ticks_usec();
+    UtilityFunctions::print(String("GPU input upload time (ms): ") + String::num_int64((int64_t)((t_input_end - t_input_start) / 1000ULL)));
 
 
 
 
     // --- GPU SUBMISSION PIPELINE ---
+    uint64_t t_build_start = Time::get_singleton()->get_ticks_usec();
     int64_t compute_list = rd->compute_list_begin();
 
     rd->compute_list_bind_uniform_set(compute_list,uniform_set,0); // bind for all pass actually
@@ -771,21 +804,37 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
     rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
 
     rd->compute_list_end();
+    uint64_t t_build_end = Time::get_singleton()->get_ticks_usec();
+    UtilityFunctions::print(String("GPU compute-list build time (ms): ") + String::num_int64((int64_t)((t_build_end - t_build_start) / 1000ULL)));
 
+    uint64_t submit_start = Time::get_singleton()->get_ticks_usec();
     rd->submit();
     rd->sync();
+    uint64_t submit_end = Time::get_singleton()->get_ticks_usec();
+
+    uint64_t submit_ms = (submit_end - submit_start) / 1000ULL;
+    UtilityFunctions::print(String("GPU submit-sync time (ms): ") + String::num_int64((int64_t)submit_ms));
+
+
+    uint64_t unpack_total_start = Time::get_singleton()->get_ticks_usec();
 
     // 1. Unpack Atomic Counters to get total point count
+    uint64_t t_counters_fetch_start = Time::get_singleton()->get_ticks_usec();
     PackedByteArray counter_data = rd->buffer_get_data(buffer_atomic_counter);
     PackedInt32Array counters = counter_data.to_int32_array();
-    
+    uint64_t t_counters_fetch_end = Time::get_singleton()->get_ticks_usec();
+    UtilityFunctions::print(String("GPU counters fetch time (ms): ") + String::num_int64((int64_t)((t_counters_fetch_end - t_counters_fetch_start) / 1000ULL)));
+
     uint32_t total_points = counters[0];
     uint32_t total_triangles = counters[1];
-    
+
     if (total_points > 0) {
         // 2. Unpack points
-        PackedByteArray point_data = rd->buffer_get_data(buffer_output_point);
+        uint64_t t_points_fetch_start = Time::get_singleton()->get_ticks_usec();
+        PackedByteArray point_data = rd->buffer_get_data(buffer_output_point,0,total_points*4*sizeof(uint32_t));
         PackedInt32Array points = point_data.to_int32_array();
+        uint64_t t_points_fetch_end = Time::get_singleton()->get_ticks_usec();
+        UtilityFunctions::print(String("GPU points fetch time (ms): ") + String::num_int64((int64_t)((t_points_fetch_end - t_points_fetch_start) / 1000ULL)));
 
         for (uint32_t i = 0; i < chunk_batch_number; i++) {
             uint32_t local_point_count = counters[2 + 2 * i];
@@ -803,6 +852,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
         }
     
         // 3. Process every point
+        uint64_t t_points_process_start = Time::get_singleton()->get_ticks_usec();
         for (uint32_t i = 0; i < total_points; i++) {
             // Struct layout: int a, int b, int c, int d;
             int offset = i * 4;
@@ -827,12 +877,20 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             surface_normal.x = Math::clamp(float((int8_t)(b & 0xFF)) / 127.0f, -1.0f, 1.0f);
             surface_normal.y = Math::clamp(float((int8_t)((b >> 8) & 0xFF)) / 127.0f, -1.0f, 1.0f);
             surface_normal.z = Math::clamp(float((int8_t)((b >> 16) & 0xFF)) / 127.0f, -1.0f, 1.0f);
+
+            // (After your unpacking block)
+            float length = std::sqrt(surface_normal.x * surface_normal.x + 
+                                    surface_normal.y * surface_normal.y + 
+                                    surface_normal.z * surface_normal.z);
+            if (length > 0.0001f) {
+                surface_normal.x /= length;
+                surface_normal.y /= length;
+                surface_normal.z /= length;
+            }
             
             // --- Unpack Metadata (c) ---
             uint32_t chunk_idx = c & 0xFFFF; // Changed to uint32_t for safe array indexing
             uint8_t quad_mask = (c >> 16) & 0xF;
-
-
 
             // Fill the unpack chunk points and normals
             uint32_t pt_idx = unpacked_chunks[chunk_idx].point_offset++;
@@ -842,13 +900,15 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             unpacked_chunks[chunk_idx].index_storage[flat_idx] = pt_idx;
 
         }
+        uint64_t t_points_process_end = Time::get_singleton()->get_ticks_usec();
+        UtilityFunctions::print(String("GPU points processing time (ms): ") + String::num_int64((int64_t)((t_points_process_end - t_points_process_start) / 1000ULL)));
 
         // 4. Generate Triangles based on dual contouring quad masks
+        uint64_t t_tri_start = Time::get_singleton()->get_ticks_usec();
         for (uint32_t chunk_idx = 0; chunk_idx < chunk_batch_number; ++chunk_idx) {
             uint32_t tri_offset = 0;
 
             auto emit_quad = [&](uint32_t p0, uint32_t p1, uint32_t p2, uint32_t p3, bool positive_winding) {
-                // No more floating point normals, we use the absolute mathematical truth
                 if (positive_winding) {
                     unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p0);
                     unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p1);
@@ -911,14 +971,49 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
                 }
             }
         }
+        uint64_t t_tri_end = Time::get_singleton()->get_ticks_usec();
+        UtilityFunctions::print(String("GPU triangle generation time (ms): ") + String::num_int64((int64_t)((t_tri_end - t_tri_start) / 1000ULL)));
     }
 
+    uint64_t unpack_total_end = Time::get_singleton()->get_ticks_usec();
+    uint64_t unpack_ms = (unpack_total_end - unpack_total_start) / 1000ULL;
+    UtilityFunctions::print(String("GPU total unpack time (ms): ") + String::num_int64((int64_t)unpack_ms));
+
+
+    uint64_t render_start = Time::get_singleton()->get_ticks_usec();
     render_chunk();
+    uint64_t render_end = Time::get_singleton()->get_ticks_usec();
+    uint64_t render_ms = (render_end - render_start) / 1000ULL;
+    UtilityFunctions::print(String("GPU render_chunk time (ms): ") + String::num_int64((int64_t)render_ms));
+
+    //debug leak
+    // RenderingServer *rs = RenderingServer::get_singleton();
+    // for (uint32_t chunk_idx = 0; chunk_idx < chunk_batch_number; ++chunk_idx) {
+    //     UnpackChunk &chunk = unpacked_chunks[chunk_idx];
+
+    //     rs->free_rid(chunk.instance_rid);
+    //     rs->free_rid(chunk.mesh_rid);
+
+    // }
+    mutex->lock();  
+    for (uint32_t chunk_idx = 0; chunk_idx < chunk_batch_number; ++chunk_idx) {
+        UnpackChunk &chunk = unpacked_chunks[chunk_idx];
+
+        ChunkOutput out;
+        out.chunk_id = chunk.chunk_id;
+        out.mesh_rid = chunk.mesh_rid;
+        out.instance_rid = chunk.instance_rid;
+
+        out_queue.push_back(out);
+
+    }
+    mutex->unlock();
 
 }
 
 void GPUMesher::render_chunk() {
     RenderingServer *rs = RenderingServer::get_singleton();
+    constexpr bool debug_generate_normals = false;
 
     for (uint32_t chunk_idx = 0; chunk_idx < chunk_batch_number; ++chunk_idx) {
         UnpackChunk &chunk = unpacked_chunks[chunk_idx];
@@ -933,9 +1028,22 @@ void GPUMesher::render_chunk() {
         arrays[Mesh::ARRAY_INDEX] = chunk.output_triangles;
         arrays[Mesh::ARRAY_NORMAL] = chunk.output_normals;
 
-        //RID mesh_rid = rs->mesh_create();
-        chunk.mesh_rid = rs->mesh_create();
-        rs->mesh_add_surface_from_arrays(chunk.mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
+        if (debug_generate_normals) {
+            Ref<SurfaceTool> surface_tool;
+            surface_tool.instantiate();
+            surface_tool->create_from_arrays(arrays, Mesh::PRIMITIVE_TRIANGLES);
+            surface_tool->generate_normals();
+
+            Array lit_arrays = surface_tool->commit_to_arrays();
+
+            //RID mesh_rid = rs->mesh_create();
+            chunk.mesh_rid = rs->mesh_create();
+            rs->mesh_add_surface_from_arrays(chunk.mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, lit_arrays);
+        } else {
+            //RID mesh_rid = rs->mesh_create();
+            chunk.mesh_rid = rs->mesh_create();
+            rs->mesh_add_surface_from_arrays(chunk.mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
+        }
 
         //RID instance_rid = rs->instance_create();
         chunk.instance_rid = rs->instance_create();
@@ -968,7 +1076,7 @@ bool GPUMesher::_is_available(){
 
     mutex->lock();
     available = worker_available;
-    available &= !result_available; // since result is an array, change behavior from CPU
+    //available &= !result_available; // since result is an array, change behavior from CPU
     mutex->unlock();
 
     //UtilityFunctions::print("GPUMesher : status = ",available);
@@ -983,19 +1091,12 @@ bool GPUMesher::get_results(VoxelState &output){
     const bool is_result_available = result_available; 
 
     if(is_result_available){
-        for(uint32_t i=0; i<chunk_batch_number; i++){
-            // We consider the chunk finished processing whether it has mesh data or not.
-            // But we only add it to the scene if it yielded a mesh layer.
-
-            ChunkOutput out;
-            out.chunk_id = unpacked_chunks[i].chunk_id;
-            out.mesh_rid = unpacked_chunks[i].mesh_rid;
-            out.instance_rid = unpacked_chunks[i].instance_rid;
+        for (ChunkOutput &out : out_queue) {
             output.add_new_loaded(out);
-            
-
-            working_generation.erase(unpacked_chunks[i].chunk_id);
+            working_generation.erase(out.chunk_id);
         }
+
+        out_queue.clear();
         result_available = false;
     }
     mutex->unlock();
@@ -1064,6 +1165,22 @@ bool GPUMesher::_pop_queue(Vector3i &new_chunk) {
     }
 
     return false;
+}
+
+void GPUMesher::send_remove_chunk(LODHashSet p_chunks) {
+    mutex->lock();
+
+    for (const Vector3i &chunk_pos : p_chunks) {
+        if (working_generation.has(chunk_pos)) {
+            continue;
+        }
+
+        ChunkOutput tombstone;
+        tombstone.chunk_id = chunk_pos;
+        del_queue.push_back(tombstone);
+    }
+
+    mutex->unlock();
 }
 
 void GPUMesher::send_chunk(LODHashSet p_chunks){

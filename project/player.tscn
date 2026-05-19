@@ -1,0 +1,16 @@
+[gd_scene format=3 uid="uid://bwfx7fd23et6q"]
+
+[ext_resource type="Script" uid="uid://chrnybfglc7nt" path="res://player.gd" id="1_4flbx"]
+
+[sub_resource type="CameraAttributesPractical" id="CameraAttributesPractical_onrkg"]
+dof_blur_far_distance = 8192.0
+dof_blur_far_transition = 1.0
+
+[node name="Player" type="Node3D" unique_id=108500663]
+script = ExtResource("1_4flbx")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=1767818584]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.75, 0)
+attributes = SubResource("CameraAttributesPractical_onrkg")
+current = true
+far = 12000.0

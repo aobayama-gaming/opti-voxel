@@ -121,13 +121,25 @@ struct NoiseParam {
 
 vec4 fractal(int octaves, NoiseParam param, vec3 pos) {
   vec4 accumulated_noise = vec4(0.0);
-  vec3 sample_pos = pos * param.frequency;
-  float amplitude = param.amplitude;
+  
+  // Track current frequency alongside amplitude
+  float current_frequency = param.frequency;
+  float current_amplitude = param.amplitude;
+  vec3 sample_pos = pos * current_frequency;
 
   for (int octave = 0; octave < octaves; ++octave) {
-    accumulated_noise += snoise(sample_pos) * amplitude;
-    sample_pos *= param.lacunarity;
-    amplitude *= param.persistence;
+    vec4 n = snoise(sample_pos);
+    
+    // CHAIN RULE: Gradients are scaled by amplitude AND frequency
+    accumulated_noise.xyz += n.xyz * (current_amplitude * current_frequency);
+    
+    // Height value is only scaled by amplitude
+    accumulated_noise.w   += n.w * current_amplitude;
+    
+    // Step to the next octave
+    sample_pos        *= param.lacunarity;
+    current_frequency *= param.lacunarity;
+    current_amplitude *= param.persistence;
   }
 
   return accumulated_noise;

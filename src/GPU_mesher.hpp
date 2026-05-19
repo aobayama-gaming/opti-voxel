@@ -123,11 +123,16 @@ class GPUMesher : public Object{
 
     std::vector<UnpackChunk> unpacked_chunks;
 
+    std::vector<ChunkOutput> out_queue;
+    std::vector<ChunkOutput> del_queue;
+
     public : 
     
     void initialize(SDFBase* p_sdf,ChunkParam p_chunk_param, uint32_t p_chunk_batch_number,int lod_numbers, RID p_scenario);
 
     void process_queue();
+
+    void send_remove_chunk(LODHashSet p_chunks);
 
     void send_chunk(LODHashSet p_chunks);
 

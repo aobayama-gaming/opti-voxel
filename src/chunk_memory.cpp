@@ -25,6 +25,11 @@ void VoxelState::add_scan_chunk(LODHashSet &p_scanned_chunk){
 
 void VoxelState::add_new_loaded(ChunkOutput &new_output) {
 
+    if (loaded_chunk.has(new_output.chunk_id)) {
+        //UtilityFunctions::push_warning("already existing chunk");
+        loaded_chunk[new_output.chunk_id].free();
+    }
+
     dirty_chunk.erase(new_output.chunk_id);
     loaded_chunk[new_output.chunk_id] = new_output;
 }
