@@ -62,6 +62,9 @@ METRICS = [
     ("Geometry", "loaded chunks", lambda d: get(d, "phases.steady.terrain.chunks.loaded"), "", None),
     ("Geometry", "live triangles (real)", lambda d: get(d, "phases.steady.terrain.chunks.live_triangles"), "", None),
     ("Geometry", "triangles in index buffers (incl. padding)", lambda d: get(d, "phases.steady.terrain.chunks.drawn_triangles"), "", True),
+    ("Geometry", "  direct: pages with live chunks", lambda d: get(d, "phases.steady.terrain.mesher.pages_with_live_chunks"), "", None),
+    ("Geometry", "  direct: page AABB longest axis, mean", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_mean_extent_m"), "m", True),
+    ("Geometry", "  direct: page AABB longest axis, max", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_max_extent_m"), "m", True),
 
     ("Test conditions", "GPU clock, median (MHz)", lambda d: get(d, "telemetry.gpu_clock_mhz_median"), "", None),
     ("Test conditions", "GPU clock, min (MHz)", lambda d: get(d, "telemetry.gpu_clock_mhz_min"), "", None),
