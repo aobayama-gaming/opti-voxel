@@ -21,6 +21,8 @@ extends Node3D
 ##   --batch=N                    legacy batch size
 ##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
+##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
+##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##
@@ -72,6 +74,9 @@ func _ready() -> void:
 		terrain.direct_page_capacity = int(args["cap"])
 	terrain.debug_view = int(args.get("view", "0"))
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
+	if args.has("voxel"):
+		terrain.voxel_size = float(args["voxel"])
+	terrain.debug_test_rig = args.get("rig", "0") == "1"
 	if args.has("lod_error"):
 		terrain.lod_pixel_error = float(args["lod_error"])
 	add_child(terrain)

@@ -86,6 +86,7 @@ private:
 	int lod_numbers = 15;
 	bool legacy_trim_indices = false;
 	float lod_pixel_error = 2.0f;
+	bool debug_test_rig = false;
 	GPUDirectMesher::Settings direct_settings;
 	int debug_view = 0;
 
@@ -123,6 +124,14 @@ public:
 
 	void set_legacy_batch_size(int p_size);
 	int get_legacy_batch_size() const;
+
+	// Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
+	void set_voxel_size(float p_size);
+	float get_voxel_size() const;
+
+	// Adds centimetre-scale test shapes in front of the main_scene spawn (see sdf_test_rig.hpp).
+	void set_debug_test_rig(bool p_enable);
+	bool get_debug_test_rig() const;
 
 	// Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
 	void set_lod_pixel_error(float p_error);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs main_scene with a 1 Hz hardware log fsync'ed to disk, so a hard freeze leaves evidence.
+# Runs main_scene (or the scene given as argument, e.g. res://main_scene_5cm.tscn) with a 1 Hz hardware log fsync'ed to disk, so a hard freeze leaves evidence.
 cd "$(dirname "$0")/.."
 mkdir -p bench/results/play; LOG=bench/results/play/hw_$(date +%Y%m%d-%H%M%S).log
 (
@@ -12,6 +12,6 @@ mkdir -p bench/results/play; LOG=bench/results/play/hw_$(date +%Y%m%d-%H%M%S).lo
     done
 ) &
 MON=$!
-"$HOME/.local/bin/godot" --path project > "${LOG%.log}_godot.log" 2>&1
+"$HOME/.local/bin/godot" --path project "$@" > "${LOG%.log}_godot.log" 2>&1
 kill $MON
 echo "hardware log: $LOG"

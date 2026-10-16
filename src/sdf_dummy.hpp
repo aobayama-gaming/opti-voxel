@@ -3,9 +3,13 @@
 #include "sdf_base.hpp"
 #include <cmath>
 #include "noise.hpp"
+#include "sdf_test_rig.hpp"
 
 class SDFDummy : public SDFBase {
 public:
+    // Adds the centimetre-scale test shapes of sdf_test_rig.hpp (set before meshing starts).
+    bool test_rig = false;
+
     SDFDummy() = default;
     ~SDFDummy() override = default;
     
@@ -103,12 +107,12 @@ public:
         // Carve caves: max(terrain, -caves)
         const float carved = MAX(terrain_sdf, -cave_sdf);
 
-        return carved;
+        return test_rig ? MIN(carved, SDFTestRig::evaluate(p_world_pos)) : carved;
     }
 
     //GLSL implementation
 String get_glsl_code() const override {
-        return R"glsl(
+        String code = R"glsl(
         vec4 terrain_sdf(vec3 pos){
             NoiseParam mountain_param;
             mountain_param.frequency = 0.0035;
@@ -176,6 +180,12 @@ String get_glsl_code() const override {
             return sdf_softmax(terrain_val, carve_val, blend_intensity);
         }
         )glsl";
+        if (test_rig) {
+            code = code.replace("return sdf_softmax(terrain_val, carve_val, blend_intensity);",
+                    "return sdf_min(sdf_softmax(terrain_val, carve_val, blend_intensity), test_rig_sdf(pos));");
+            code = String(SDFTestRig::GLSL) + code;
+        }
+        return code;
     }
 
     // Repeated cube SDF + sinusoidal terrain term.
