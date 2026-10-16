@@ -1,7 +1,7 @@
 #include "quad_pool_spike.hpp"
 
 #include "debug_log.hpp"
-#include "gpu_glsl.hpp"
+#include "page_format.hpp"
 #include "rd_utils.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -17,16 +17,18 @@
 static constexpr const char SPIKE_COMPUTE[] = R"glsl(#version 450
 layout(local_size_x = 64) in;
 
-layout(set = 0, binding = 0, rgba32f) uniform restrict writeonly image2D staging;
+layout(set = 0, binding = 0, rgba16ui) uniform restrict writeonly uimage2D staging;
 layout(set = 0, binding = 1, std430) restrict buffer Counter { uint counter[]; };
 layout(push_constant, std430) uniform Params {
     vec4 origin_size; // xyz origin, w sheet size
     uvec4 dims;       // x = side
+    ivec4 chunk;      // xyz: the chunk the corners are stored relative to
+    vec4 grid;        // xyz: world position of its vertex (0, 0, 0), w: its cell size
 } params;
 
-#define TEX_WIDTH 256u // QuadPagePool::TEX_WIDTH
+#define QUAD_GROUP 64u
 
-/*GLSL_QUAD_PACK*/
+/*GLSL_PAGE_FORMAT*/
 
 float height(vec2 xz) { return params.origin_size.y + 3.0 * sin(xz.x * 0.3) * cos(xz.y * 0.3); }
 vec3 surf(vec2 xz) { return vec3(xz.x, height(xz), xz.y); }
@@ -36,8 +38,9 @@ vec3 surf_normal(vec2 xz) {
     return normalize(vec3(-dx, 1.0, -dz));
 }
 
-void store_corner(uint texel, vec2 xz) {
-    imageStore(staging, ivec2(texel % TEX_WIDTH, texel / TEX_WIDTH), vec4(surf(xz), pack_normal_oct24(surf_normal(xz)) + 1.0));
+void put_corner(uint slot, uint k, vec2 xz) {
+    vec3 local = (surf(xz) - params.grid.xyz) / params.grid.w;
+    store_corner(slot, k, encode_corner(local, pack_normal_oct22(surf_normal(xz)), page_pos_scale(32)));
 }
 
 void main() {
@@ -59,10 +62,13 @@ void main() {
         vec2 t = c1; c1 = c2; c2 = t;
     }
     uint slot = atomicAdd(counter[0], 1u);
-    store_corner(slot * 4u + 0u, base);
-    store_corner(slot * 4u + 1u, c1);
-    store_corner(slot * 4u + 2u, c2);
-    store_corner(slot * 4u + 3u, base + vec2(step, step));
+    if (slot % QUAD_GROUP == 0u) {
+        store_group_header(slot / QUAD_GROUP, params.chunk.xyz);
+    }
+    put_corner(slot, 0u, base);
+    put_corner(slot, 1u, c1);
+    put_corner(slot, 2u, c2);
+    put_corner(slot, 3u, base + vec2(step, step));
 }
 )glsl";
 
@@ -87,8 +93,20 @@ void QuadPoolSpike::_ready() {
     ERR_FAIL_COND_MSG(side * side > page_capacity, "QuadPoolSpike: sheet does not fit in one page.");
     ERR_FAIL_COND_MSG(KILL_B_OFFSET + KILL_B_COUNT > (uint32_t)(side * side), "QuadPoolSpike: sheet too small for the kill test.");
 
+    // Corners are stored relative to one chunk: the smallest one whose vertex grid holds the sheet.
+    const AABB sheet(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size));
+    sheet_chunk = ChunkMath::world_to_chunk(sheet.get_center(), chunk_param);
+    for (int lod = 0; lod < 24; lod++) {
+        const Vector3 lo = ChunkMath::vertices_to_world(sheet_chunk, Vector3(), chunk_param);
+        const Vector3 hi = ChunkMath::vertices_to_world(sheet_chunk, Vector3(1, 1, 1) * (chunk_param.chunk_size - 1), chunk_param);
+        if (AABB(lo, hi - lo).encloses(sheet)) {
+            break;
+        }
+        sheet_chunk = ChunkMath::get_parent_from_child(sheet_chunk);
+    }
+
     pool = memnew(QuadPagePool);
-    pool->initialize(get_world_3d()->get_scenario(), page_capacity, 1 + extra_pages, 0.5f);
+    pool->initialize(get_world_3d()->get_scenario(), page_capacity, 1 + extra_pages, chunk_param.voxel_size);
     page = pool->acquire_page();
     pool->set_page_aabb(page, AABB(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size)));
 
@@ -100,7 +118,7 @@ void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     ERR_FAIL_NULL_MSG(rd, "QuadPoolSpike: no RenderingDevice (Compatibility renderer?)");
 
-    String code = String(SPIKE_COMPUTE).replace("/*GLSL_QUAD_PACK*/", GLSL_QUAD_PACK);
+    String code = String(SPIKE_COMPUTE).replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
     Ref<RDShaderSource> source;
     source.instantiate();
     source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
@@ -112,7 +130,7 @@ void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
 
     Ref<RDTextureFormat> format;
     format.instantiate();
-    format->set_format(RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT);
+    format->set_format(QuadPagePool::TEX_FORMAT);
     format->set_width(QuadPagePool::TEX_WIDTH);
     format->set_height(pool->get_page_rows());
     format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
@@ -138,14 +156,22 @@ void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
     uniforms.push_back(u1);
     rt_uniform_set = rd->uniform_set_create(uniforms, rt_shader, 0);
 
+    const Vector3 grid = ChunkMath::vertices_to_world(sheet_chunk, Vector3(), chunk_param);
     PackedByteArray push;
-    push.resize(32);
+    push.resize(64);
     push.fill(0);
     push.encode_float(0, sheet_origin.x);
     push.encode_float(4, sheet_origin.y);
     push.encode_float(8, sheet_origin.z);
     push.encode_float(12, sheet_size);
     push.encode_u32(16, side);
+    push.encode_s32(32, sheet_chunk.x);
+    push.encode_s32(36, sheet_chunk.y);
+    push.encode_s32(40, sheet_chunk.z);
+    push.encode_float(48, grid.x);
+    push.encode_float(52, grid.y);
+    push.encode_float(56, grid.z);
+    push.encode_float(60, chunk_param.voxel_size * ChunkMath::get_lod_size(sheet_chunk));
 
     const uint32_t quad_count = side * side;
     rd->buffer_clear(rt_counter, 0, 16);
@@ -217,29 +243,24 @@ void QuadPoolSpike::_process(double p_delta) {
     }
 }
 
-static Vector3 oct_decode24(float p_packed) {
-    const uint32_t p = (uint32_t)p_packed;
-    const float fx = float(p & 4095u) / 4095.0f * 2.0f - 1.0f;
-    const float fy = float(p >> 12u) / 4095.0f * 2.0f - 1.0f;
-    Vector3 n(fx, fy, 1.0f - std::abs(fx) - std::abs(fy));
-    const float t = MAX(-n.z, 0.0f);
-    n.x += n.x >= 0.0f ? -t : t;
-    n.y += n.y >= 0.0f ? -t : t;
-    return n.normalized();
-}
-
 void QuadPoolSpike::_verify_write(Dictionary &r) {
     mutex->lock();
-    const PackedFloat32Array f = texture_data[0].to_float32_array();
+    const PackedByteArray bytes = texture_data[0];
     const PackedByteArray command = command_data;
     mutex->unlock();
+    const uint16_t *data = reinterpret_cast<const uint16_t *>(bytes.ptr());
+    const uint32_t rows = bytes.size() / PageFormat::ROW_BYTES;
+    const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
+    // One fixed-point step, plus float rounding of the world <-> grid transforms.
+    const double pos_tolerance = chunk_param.voxel_size * ChunkMath::get_lod_size(sheet_chunk) / scale + 1e-3;
 
     const uint32_t quad_count = side * side;
     r["expected_quads"] = quad_count;
     r["expected_groups"] = (quad_count + 63) / 64;
     r["indirect_index_count"] = command.decode_u32(0);
     r["indirect_group_count"] = command.decode_u32(4);
-    r["texture_floats_read"] = f.size();
+    r["texture_bytes_read"] = bytes.size();
+    r["sheet_chunk"] = sheet_chunk;
 
     const float step = sheet_size / side;
     auto height = [&](float x, float z) { return sheet_origin.y + 3.0f * std::sin(x * 0.3f) * std::cos(z * 0.3f); };
@@ -257,13 +278,21 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
     PackedInt32Array seen;
     seen.resize(quad_count);
     seen.fill(0);
-    for (uint32_t slot = 0; slot < quad_count && (slot + 1) * 16 <= (uint32_t)f.size(); slot++) {
-        const float *q = f.ptr() + slot * 16; // 4 corners x (x, y, z, packed normal + 1)
-        const Vector3 a(q[0], q[1], q[2]);
-        if (!a.is_finite() || q[3] <= 0.0f) {
+    int bad_headers = 0;
+    const uint32_t used_groups = (quad_count + PageFormat::QUAD_GROUP - 1) / PageFormat::QUAD_GROUP;
+    for (uint32_t g = 0; g < used_groups && g < rows; g++) {
+        bad_headers += PageFormat::header_chunk(PageFormat::row(data, g)) != sheet_chunk ? 1 : 0;
+    }
+    auto world_of = [&](uint32_t slot, int k) {
+        const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(data, slot / PageFormat::QUAD_GROUP));
+        return ChunkMath::vertices_to_world(chunk, PageFormat::decode_local(PageFormat::corner(data, slot, k), scale), chunk_param);
+    };
+    for (uint32_t slot = 0; slot < quad_count && slot / PageFormat::QUAD_GROUP < rows; slot++) {
+        if (PageFormat::is_zero(PageFormat::corner(data, slot, 0))) {
             bad++;
             continue;
         }
+        const Vector3 a = world_of(slot, 0);
         const int qx = (int)std::lround((a.x - sheet_origin.x) / step);
         const int qz = (int)std::lround((a.z - sheet_origin.z) / step);
         if (qx < 0 || qz < 0 || qx >= side || qz >= side) {
@@ -281,9 +310,9 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
             SWAP(c[1], c[2]);
         }
         for (int k = 0; k < 4; k++) {
-            const Vector3 got(q[k * 4 + 0], q[k * 4 + 1], q[k * 4 + 2]);
+            const Vector3 got = world_of(slot, k);
             max_pos_err = MAX(max_pos_err, (double)got.distance_to(surf(c[k].x, c[k].y)));
-            const Vector3 n = oct_decode24(q[k * 4 + 3] - 1.0f);
+            const Vector3 n = PageFormat::decode_normal(PageFormat::corner(data, slot, k));
             const double ang = Math::rad_to_deg(std::acos(CLAMP(n.dot(surf_normal(c[k].x, c[k].y)), -1.0f, 1.0f)));
             max_normal_err_deg = MAX(max_normal_err_deg, ang);
         }
@@ -294,45 +323,58 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
         missing += seen[i] == 0 ? 1 : 0;
         duplicated += seen[i] > 1 ? 1 : 0;
     }
-    // Slots past the sheet must be zero (the tail of the last group is drawn).
+    // Slots past the sheet must be zero (the tail of the last group is drawn), and so must the rows
+    // past it.
     int dirty_tail = 0;
-    for (uint32_t i = quad_count * 16; i < (uint32_t)f.size(); i++) {
-        dirty_tail += f[i] != 0.0f ? 1 : 0;
+    for (uint32_t slot = quad_count; slot < used_groups * PageFormat::QUAD_GROUP; slot++) {
+        for (int k = 0; k < 4; k++) {
+            dirty_tail += PageFormat::is_zero(PageFormat::corner(data, slot, k)) ? 0 : 1;
+        }
+    }
+    for (uint32_t i = used_groups * PageFormat::TEX_WIDTH * PageFormat::TEXEL_CHANNELS; i < bytes.size() / 2; i++) {
+        dirty_tail += data[i] != 0 ? 1 : 0;
     }
     r["max_position_error"] = max_pos_err;
+    r["position_tolerance"] = pos_tolerance;
+    r["bad_group_headers"] = bad_headers;
     r["max_normal_error_deg"] = max_normal_err_deg;
     r["bad_quads"] = bad;
     r["missing_cells"] = missing;
     r["duplicated_cells"] = duplicated;
     r["dirty_tail_floats"] = dirty_tail;
     r["write_ok"] = (int)command.decode_u32(4) == (int)((quad_count + 63) / 64) && (int)command.decode_u32(0) == 64 * 6 &&
-            max_pos_err < 1e-3 && max_normal_err_deg < 0.5 && bad == 0 && missing == 0 && duplicated == 0 && dirty_tail == 0;
+            max_pos_err < pos_tolerance && max_normal_err_deg < 0.5 && bad == 0 && bad_headers == 0 && missing == 0 &&
+            duplicated == 0 && dirty_tail == 0;
 }
 
 void QuadPoolSpike::_verify_kills(Dictionary &r) {
     mutex->lock();
-    const PackedFloat32Array before = texture_data[0].to_float32_array();
-    const PackedFloat32Array after = texture_data[1].to_float32_array();
+    const PackedByteArray before_bytes = texture_data[0];
+    const PackedByteArray after_bytes = texture_data[1];
     mutex->unlock();
-    auto killed = [](uint32_t q) {
+    const uint16_t *before = reinterpret_cast<const uint16_t *>(before_bytes.ptr());
+    const uint16_t *after = reinterpret_cast<const uint16_t *>(after_bytes.ptr());
+    // Kills zero whole rows (groups), headers included.
+    auto killed = [](uint32_t g) {
+        const uint32_t q = g * PageFormat::QUAD_GROUP;
         return (q >= KILL_A_OFFSET && q < KILL_A_OFFSET + KILL_A_COUNT) || (q >= KILL_B_OFFSET && q < KILL_B_OFFSET + KILL_B_COUNT);
     };
     int not_zeroed = 0;
     int damaged = 0;
-    const uint32_t quads = MIN(before.size(), after.size()) / 16;
-    for (uint32_t q = 0; q < quads; q++) {
-        for (int i = 0; i < 16; i++) {
-            const float a = after[q * 16 + i];
-            if (killed(q)) {
-                not_zeroed += a != 0.0f ? 1 : 0;
+    const uint32_t row_channels = PageFormat::TEX_WIDTH * PageFormat::TEXEL_CHANNELS;
+    const uint32_t rows = MIN(before_bytes.size(), after_bytes.size()) / PageFormat::ROW_BYTES;
+    for (uint32_t g = 0; g < rows; g++) {
+        for (uint32_t i = g * row_channels; i < (g + 1) * row_channels; i++) {
+            if (killed(g)) {
+                not_zeroed += after[i] != 0 ? 1 : 0;
             } else {
-                damaged += a != before[q * 16 + i] ? 1 : 0;
+                damaged += after[i] != before[i] ? 1 : 0;
             }
         }
     }
-    r["kill_not_zeroed_floats"] = not_zeroed;
-    r["kill_damaged_floats"] = damaged;
-    r["kill_ok"] = quads > 0 && not_zeroed == 0 && damaged == 0;
+    r["kill_not_zeroed_channels"] = not_zeroed;
+    r["kill_damaged_channels"] = damaged;
+    r["kill_ok"] = rows > 0 && not_zeroed == 0 && damaged == 0;
 }
 
 Dictionary QuadPoolSpike::get_report() {

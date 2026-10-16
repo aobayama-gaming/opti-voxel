@@ -7,6 +7,8 @@
 #include <godot_cpp/variant/aabb.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 
+#include "page_format.hpp"
+
 #include <vector>
 
 using namespace godot;
@@ -15,10 +17,12 @@ using namespace godot;
 // to see the geometry.
 //
 // Page = one MultiMesh whose instances are *groups* of QUAD_GROUP quads (the base mesh holds
-// QUAD_GROUP quads) + one RGBA32F texture holding the quads, one texel per corner:
-// xyz = world position, w = packed normal + 1 (0 = empty). One texture row is one group, so the
-// page shader pulls its corner with texelFetch(quad_tex, ivec2(VERTEX_ID, INSTANCE_ID)). The GPU
-// writes the number of used groups into the MultiMesh indirect command buffer.
+// QUAD_GROUP quads) + one RGBA16UI texture holding the quads, one row per group: a header with the
+// owning chunk's id, then 8 bytes per corner (chunk-local fixed-point position + octahedral
+// normal, see page_format.hpp). The page shader pulls its corner with
+// texelFetch(quad_tex, ivec2(HEADER_TEXELS + VERTEX_ID, INSTANCE_ID)) and rebuilds the world
+// position from the header. The GPU writes the number of used groups into the MultiMesh indirect
+// command buffer.
 //
 // Chunks start on a group boundary, so a chunk is a block of whole rows: moving it to another page
 // (compaction) or zeroing it (kill) is a single texture copy.
@@ -31,10 +35,9 @@ using namespace godot;
 // Never call multimesh_set_buffer / multimesh_instance_* / multimesh_get_buffer on a page.
 class QuadPagePool : public Object {
 public:
-    static constexpr uint32_t QUAD_GROUP = 64;        // quads per MultiMesh instance
-    static constexpr uint32_t TEX_WIDTH = QUAD_GROUP * 4; // texels per row of a page texture: one group
-    static constexpr uint32_t CORNER_BYTES = 16;      // one RGBA32F texel
-    static constexpr uint32_t QUAD_BYTES = 4 * CORNER_BYTES;
+    static constexpr uint32_t QUAD_GROUP = PageFormat::QUAD_GROUP; // quads per MultiMesh instance
+    static constexpr uint32_t TEX_WIDTH = PageFormat::TEX_WIDTH;   // texels per row: one group
+    static constexpr RenderingDevice::DataFormat TEX_FORMAT = RenderingDevice::DATA_FORMAT_R16G16B16A16_UINT;
     // VkDrawIndexedIndirectCommand: index_count, instance_count, first_index, vertex_offset, first_instance.
     static constexpr uint32_t INDIRECT_INSTANCE_COUNT_OFFSET = 4;
 
@@ -60,7 +63,7 @@ public:
 
     RID get_page_multimesh(int p_page) const { return pages[p_page].multimesh; }
     uint32_t get_page_capacity() const { return page_capacity; }
-    uint32_t get_page_rows() const { return page_capacity * 4 / TEX_WIDTH; }
+    uint32_t get_page_rows() const { return page_capacity / QUAD_GROUP; }
     int get_page_count() const { return pages.size(); } // index space, freed pages included
 
     void set_debug_view(int p_view);
@@ -75,7 +78,8 @@ public:
     void rt_set_group_count(int p_page, RID p_multimesh, uint32_t p_groups);
     // Copies a whole page worth of rows of `p_src`, starting at `p_src_row`, into the page texture.
     void rt_copy_page_from(int p_page, RID p_multimesh, RID p_src, uint32_t p_src_row);
-    // Zeroes quads [offset, offset + count): corners collapse to the origin, never rasterised.
+    // Zeroes the groups covering quads [offset, offset + count), headers included: the corners
+    // collapse to one point, never rasterised. p_offset must start a group (chunks do).
     void rt_kill_range(int p_page, RID p_multimesh, uint32_t p_offset, uint32_t p_count);
     // Copies p_rows groups (texture rows) from one page to another (different) page.
     void rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_row, uint32_t p_dst_row, uint32_t p_rows);

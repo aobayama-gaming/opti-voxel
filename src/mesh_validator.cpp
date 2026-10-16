@@ -2,6 +2,7 @@
 
 #include "GPU_mesher.hpp"
 #include "debug_log.hpp"
+#include "page_format.hpp"
 #include "quad_page_pool.hpp"
 
 #include <godot_cpp/classes/file_access.hpp>
@@ -16,17 +17,6 @@ struct Tri {
     Vector3 p[3];
     Vector3 n[3];
 };
-
-Vector3 oct_decode24(float p_packed) {
-    const uint32_t p = (uint32_t)p_packed;
-    const float fx = float(p & 4095u) / 4095.0f * 2.0f - 1.0f;
-    const float fy = float(p >> 12u) / 4095.0f * 2.0f - 1.0f;
-    Vector3 n(fx, fy, 1.0f - std::abs(fx) - std::abs(fy));
-    const float t = MAX(-n.z, 0.0f);
-    n.x += n.x >= 0.0f ? -t : t;
-    n.y += n.y >= 0.0f ? -t : t;
-    return n.normalized();
-}
 
 // Smallest |SDF| (CPU evaluation, in cells) over the grid corners of the cell holding `p_world`.
 // A sign decision taken on a near-zero corner can legitimately differ between two GPU evaluations.
@@ -163,6 +153,7 @@ void MeshValidator::_compare() {
     Array anomalies; // flipped / unmatched / bad-normal triangles with their nearest |sdf|
     PackedFloat64Array baseline_sdf; // same measure on ordinary matched triangles
     int64_t unexplained = 0;
+    int64_t bad_headers = 0; // groups of a chunk whose header names another chunk
     auto record = [&](const char *p_kind, const Vector3i &p_chunk, const Tri &p_tri, float p_cell, double p_extra) {
         const Vector3 c = (p_tri.p[0] + p_tri.p[1] + p_tri.p[2]) / 3.0f;
         const double near_zero = min_abs_sdf_cells(sdf, p_chunk, c, chunk_param, p_cell);
@@ -185,19 +176,27 @@ void MeshValidator::_compare() {
         const float cell = chunk_param.voxel_size * lod_size;
         const float tol = cell * 0.02f + 1e-4f;
 
-        // --- direct triangles from the page texture: 4 texels per quad, triangles A,B,D / A,D,C
+        // --- direct triangles from the page texture: 4 corners per quad, triangles A,B,D / A,D,C,
+        // positioned from the group header like the page shader does
         std::vector<Tri> direct;
         {
             mutex->lock();
-            const PackedFloat32Array f = page_data[t.page].to_float32_array();
+            const PackedByteArray bytes = page_data[t.page];
             mutex->unlock();
-            for (uint32_t q = t.offset; q < t.offset + t.count && (q + 1) * 16 <= (uint32_t)f.size(); q++) {
+            const uint16_t *page = reinterpret_cast<const uint16_t *>(bytes.ptr());
+            const uint32_t rows = bytes.size() / PageFormat::ROW_BYTES;
+            const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
+            for (uint32_t q = t.offset; q < t.offset + t.count && q / PageFormat::QUAD_GROUP < rows; q++) {
+                const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(page, q / PageFormat::QUAD_GROUP));
+                if (q % PageFormat::QUAD_GROUP == 0 && chunk != t.chunk_id) {
+                    bad_headers++;
+                }
                 Vector3 p[4];
                 Vector3 n[4];
                 for (int k = 0; k < 4; k++) {
-                    const float *c = f.ptr() + q * 16 + k * 4;
-                    p[k] = Vector3(c[0], c[1], c[2]);
-                    n[k] = c[3] > 0.0f ? oct_decode24(c[3] - 1.0f) : Vector3();
+                    const uint16_t *c = PageFormat::corner(page, q, k);
+                    p[k] = ChunkMath::vertices_to_world(chunk, PageFormat::decode_local(c, scale), chunk_param);
+                    n[k] = PageFormat::is_zero(c) ? Vector3() : PageFormat::decode_normal(c);
                 }
                 direct.push_back({ { p[0], p[1], p[3] }, { n[0], n[1], n[3] } });
                 direct.push_back({ { p[0], p[3], p[2] }, { n[0], n[3], n[2] } });
@@ -372,6 +371,7 @@ void MeshValidator::_compare() {
     // crossing present on one side only, gradient branch of max()). Such differences are
     // "explained"; anything next to a clearly non-zero corner is a real bug.
     report["unexplained_anomalies"] = unexplained;
-    report["ok"] = legacy_tris_total > 0 && legacy_tris_total == direct_tris_total && unexplained == 0 &&
+    report["bad_group_headers"] = bad_headers;
+    report["ok"] = legacy_tris_total > 0 && legacy_tris_total == direct_tris_total && unexplained == 0 && bad_headers == 0 &&
             (double)matched / legacy_tris_total > 0.9999 && (normal_samples == 0 || sum_normal_err_deg / normal_samples < 0.5);
 }

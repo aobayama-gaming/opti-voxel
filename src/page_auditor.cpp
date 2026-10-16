@@ -1,6 +1,8 @@
 #include "page_auditor.hpp"
 
+#include "chunk_math.hpp"
 #include "debug_log.hpp"
+#include "page_format.hpp"
 #include "quad_page_pool.hpp"
 
 #include <godot_cpp/classes/rendering_device.hpp>
@@ -10,8 +12,10 @@
 
 static constexpr int PAGES_PER_FRAME = 2; // larger async texture downloads per frame crash 4.6.3
 
-void PageAuditor::start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages) {
+void PageAuditor::start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, int p_chunk_size, float p_voxel_size) {
     pool = p_pool;
+    chunk_size = p_chunk_size;
+    voxel_size = p_voxel_size;
     pages = p_pages;
     mutex.instantiate();
     VLOG(1, "PageAuditor: auditing ", (int64_t)pages.size(), " pages");
@@ -56,33 +60,42 @@ bool PageAuditor::step() {
 }
 
 void PageAuditor::_analyse() {
-    int64_t drawn_slots = 0, live = 0, dead_zero = 0, stale = 0, partial = 0, broken = 0;
+    int64_t drawn_slots = 0, live = 0, dead_zero = 0, stale = 0, partial = 0, broken = 0, bad_header = 0;
+    ChunkParam param;
+    param.chunk_size = chunk_size;
+    param.voxel_size = voxel_size;
+    const float scale = PageFormat::pos_scale(chunk_size);
     double max_edge = 0.0;
     Vector3 max_edge_at;
     int64_t pages_with_stale = 0, pages_with_partial = 0;
     Array samples;
     for (const PageInfo &info : pages) {
         mutex->lock();
-        const PackedFloat32Array f = data[info.page].to_float32_array();
+        const PackedByteArray bytes = data[info.page];
         const uint32_t page_groups = groups[info.page];
         mutex->unlock();
-        std::vector<std::pair<uint32_t, uint32_t>> ranges = info.live;
+        const uint16_t *page = reinterpret_cast<const uint16_t *>(bytes.ptr());
+        std::vector<PageInfo::Range> ranges = info.live;
         std::sort(ranges.begin(), ranges.end());
-        const uint32_t slots = MIN(page_groups * QuadPagePool::QUAD_GROUP, (uint32_t)f.size() / 16);
+        const uint32_t slots = MIN(page_groups, bytes.size() / PageFormat::ROW_BYTES) * QuadPagePool::QUAD_GROUP;
         drawn_slots += slots;
         size_t r = 0;
         bool page_stale = false, page_partial = false;
         for (uint32_t q = 0; q < slots; q++) {
-            while (r < ranges.size() && ranges[r].first + ranges[r].second <= q) {
+            while (r < ranges.size() && ranges[r].offset + ranges[r].count <= q) {
                 r++;
             }
-            const bool in_live = r < ranges.size() && q >= ranges[r].first;
-            const float *c = f.ptr() + q * 16;
+            const bool in_live = r < ranges.size() && q >= ranges[r].offset;
+            const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(page, q / QuadPagePool::QUAD_GROUP));
+            if (in_live && q % QuadPagePool::QUAD_GROUP == 0 && chunk != ranges[r].chunk) {
+                bad_header++;
+            }
             int zero_corners = 0;
             Vector3 p[4];
             for (int k = 0; k < 4; k++) {
-                p[k] = Vector3(c[k * 4], c[k * 4 + 1], c[k * 4 + 2]);
-                zero_corners += (p[k] == Vector3() && c[k * 4 + 3] == 0.0f) ? 1 : 0;
+                const uint16_t *c = PageFormat::corner(page, q, k);
+                p[k] = ChunkMath::vertices_to_world(chunk, PageFormat::decode_local(c, scale), param);
+                zero_corners += PageFormat::is_zero(c) ? 1 : 0;
             }
             if (zero_corners > 0 && zero_corners < 4) {
                 partial++;
@@ -125,10 +138,11 @@ void PageAuditor::_analyse() {
     report["stale"] = stale;
     report["partial"] = partial;
     report["broken"] = broken;
+    report["bad_header"] = bad_header;
     report["pages_with_stale"] = pages_with_stale;
     report["pages_with_partial"] = pages_with_partial;
     report["max_quad_edge_m"] = max_edge;
     report["max_quad_edge_at"] = max_edge_at;
     report["partial_samples"] = samples;
-    report["ok"] = stale == 0 && partial == 0 && broken == 0;
+    report["ok"] = stale == 0 && partial == 0 && broken == 0 && bad_header == 0;
 }

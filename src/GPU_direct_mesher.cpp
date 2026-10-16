@@ -3,6 +3,7 @@
 #include "gpu_direct_glsl.hpp"
 #include "gpu_glsl.hpp"
 #include "noise.hpp"
+#include "page_format.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -22,8 +23,6 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 /*GLSL_DIRECT_BINDINGS*/
 
 /*GLSL_HELPER_FUNCTION*/
-
-/*GLSL_QUAD_PACK*/
 
 /*GLSL_TERRAIN_SDF*/
 
@@ -91,7 +90,10 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 
     pool = memnew(QuadPagePool);
     pool->initialize(scenario, settings.page_capacity, settings.initial_pages, chunk_param.voxel_size);
-    pool->set_material_param("chunk_world_dimension", chunk_param.chunk_world_dimension());
+    // The page shader rebuilds world positions from the group header's chunk id.
+    pool->set_material_param("chunk_size", chunk_param.chunk_size);
+    pool->set_material_param("skirt_size", chunk_param.skirt_size);
+    pool->set_material_param("pos_scale", PageFormat::pos_scale(chunk_param.chunk_size));
     page_state.resize(pool->get_page_count());
 
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_initialize));
@@ -101,8 +103,8 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass) {
     String shader = DIRECT_TEMPLATE;
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", GLSL_STRUCT_DEFINITION);
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", GLSL_DIRECT_BINDINGS);
+    shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE));
-    shader = shader.replace("/*GLSL_QUAD_PACK*/", GLSL_QUAD_PACK);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
@@ -140,7 +142,7 @@ void GPUDirectMesher::_rt_initialize() {
     {
         Ref<RDTextureFormat> format;
         format.instantiate();
-        format->set_format(RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT);
+        format->set_format(QuadPagePool::TEX_FORMAT);
         format->set_width(QuadPagePool::TEX_WIDTH);
         format->set_height(settings.pages_per_batch * pool->get_page_rows());
         format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
@@ -243,7 +245,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
     rd->buffer_clear(buffer_status, 0, status_size_bytes);
     // Pages draw whole groups of quads: slots past the fill must be zero (degenerate), not stale.
-    rd->texture_clear(staging_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+    rd->texture_clear(staging_texture, Color(0, 0, 0, 0), 0, 1, 0, 1); // headers included
 
     PackedByteArray push;
     push.resize(16);

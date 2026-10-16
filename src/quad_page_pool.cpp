@@ -8,41 +8,41 @@
 
 static constexpr const char PAGE_SHADER[] = R"gdshader(
 shader_type spatial;
-// Positions are absolute world coordinates pulled from the page texture; the MultiMesh instance
-// transforms are unused (left zero), so transform to view space ourselves.
+// Corners are chunk-local (page_format.hpp): world positions are rebuilt here from the group
+// header's chunk id; the MultiMesh instance transforms are unused (left zero), so transform to
+// view space ourselves.
 render_mode skip_vertex_transform, cull_back;
 
 // (RenderingServer::shader_set_code does not run the preprocessor: no #define here.)
-// Must match QuadPagePool::QUAD_GROUP / TEX_WIDTH (one row per group).
+// Must match page_format.hpp.
 const int QUAD_GROUP = 64;
-const int TEX_WIDTH = 256;
+const int HEADER_TEXELS = 2;
+// Must match WORLD_NUDGE in gpu_glsl.hpp (the compute passes sample the SDF with it).
+const float WORLD_NUDGE = 0.123456;
 
-uniform sampler2D quad_tex : filter_nearest, repeat_disable;
+uniform usampler2D quad_tex : filter_nearest, repeat_disable;
 // 0 shaded, 1 normals, 2 lod, 3 page, 4 shaded + quad wireframe, 5 chunk hash,
 // 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
-uniform float chunk_world_dimension = 14.0;
+uniform int chunk_size = 32;
+uniform int skirt_size = 2;
+uniform float pos_scale = 512.0;
 instance uniform int page_id = 0;
 
 varying vec3 v_world_normal;
 varying vec2 v_quad_uv;
 varying flat float v_lod;
-varying flat vec3 v_quad_corner0;
+varying flat vec3 v_chunk;
 varying flat ivec2 v_ids;
 
-vec3 oct_decode24(float packed) {
-    uint p = uint(packed);
-    vec2 f = vec2(float(p & 4095u), float(p >> 12u)) / 4095.0 * 2.0 - 1.0;
+vec3 oct_decode22(uint p) {
+    vec2 f = vec2(float(p & 2047u), float(p >> 11u)) / 2047.0 * 2.0 - 1.0;
     vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
     float t = max(-n.z, 0.0);
     n.x += n.x >= 0.0 ? -t : t;
     n.y += n.y >= 0.0 ? -t : t;
     return normalize(n);
-}
-
-vec4 corner_texel(int t) {
-    return texelFetch(quad_tex, ivec2(t % TEX_WIDTH, t / TEX_WIDTH), 0);
 }
 
 vec3 hash3(vec3 p) {
@@ -53,26 +53,28 @@ vec3 hash3(vec3 p) {
 
 void vertex() {
     int corner = VERTEX_ID % 4; // base quad corners A, B, C, D
-    int quad_texel = (INSTANCE_ID * QUAD_GROUP + VERTEX_ID / 4) * 4;
-    vec4 d = corner_texel(quad_texel + corner);
-    // Empty / killed quads are all-zero texels: every corner lands on the origin -> zero area.
-    vec3 world = d.xyz;
-    vec3 n = d.w > 0.0 ? oct_decode24(d.w - 1.0) : vec3(0.0, 1.0, 0.0);
+    uvec4 h0 = texelFetch(quad_tex, ivec2(0, INSTANCE_ID), 0);
+    uvec4 h1 = texelFetch(quad_tex, ivec2(1, INSTANCE_ID), 0);
+    uvec4 c = texelFetch(quad_tex, ivec2(HEADER_TEXELS + VERTEX_ID, INSTANCE_ID), 0);
+    ivec3 chunk = ivec3(int(h0.x | (h0.y << 16u)), int(h0.z | (h0.w << 16u)), int(h1.x | (h1.y << 16u)));
+
+    // ChunkMath::vertices_to_world. Empty / killed rows are all zero: every corner lands on the
+    // same point -> zero area.
+    int lod = chunk.x == 0 ? 0 : findLSB(chunk.x);
+    float voxel_dim = float(chunk_size - 2 * skirt_size);
+    float chunk_world_dim = voxel_dim * voxel_size;
+    float size = float(1 << lod) * chunk_world_dim;
+    vec3 chunk_min = vec3(chunk) * (chunk_world_dim * 0.5) + WORLD_NUDGE - vec3(size * 0.5);
+    vec3 local = vec3(float(c.x & 16383u), float(c.y & 16383u), float(c.z & 16383u)) / pos_scale;
+    vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
+    uint packed_normal = (c.x >> 14u) | ((c.y >> 14u) << 2u) | ((c.z >> 14u) << 4u) | (c.w << 6u);
+    vec3 n = c != uvec4(0u) ? oct_decode22(packed_normal) : vec3(0.0, 1.0, 0.0);
 
     v_world_normal = n;
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4);
     v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
-    v_lod = 0.0;
-    v_quad_corner0 = world;
-    if (debug_view == 2 || debug_view == 5) {
-        vec3 a = corner_texel(quad_texel).xyz;
-        vec3 b = corner_texel(quad_texel + 1).xyz;
-        vec3 c = corner_texel(quad_texel + 2).xyz;
-        vec3 e = corner_texel(quad_texel + 3).xyz;
-        float edge = 0.25 * (length(b - a) + length(c - a) + length(e - b) + length(e - c));
-        v_lod = round(log2(max(edge, 1e-6) / voxel_size));
-        v_quad_corner0 = a;
-    }
+    v_lod = float(lod);
+    v_chunk = vec3(chunk);
 
     VERTEX = (VIEW_MATRIX * vec4(world, 1.0)).xyz;
     NORMAL = normalize(mat3(VIEW_MATRIX) * n);
@@ -91,9 +93,8 @@ void fragment() {
         albedo = vec3(0.0);
         emission = hash3(vec3(float(page_id) + 0.5)) * 0.8 + 0.2;
     } else if (debug_view == 5) {
-        float size = chunk_world_dimension * exp2(v_lod);
         albedo = vec3(0.0);
-        emission = hash3(floor(v_quad_corner0 / size) + v_lod * 13.0) * 0.8 + 0.2;
+        emission = hash3(v_chunk * 0.37 + v_lod * 13.0) * 0.8 + 0.2;
     } else if (debug_view == 6) {
         albedo = vec3(0.0);
         emission = hash3(vec3(float(v_ids.x) + 0.5)) * 0.8 + 0.2;
@@ -194,7 +195,7 @@ void QuadPagePool::_rt_create_page(int p_page, RID p_multimesh, RID p_material) 
 
     Ref<RDTextureFormat> format;
     format.instantiate();
-    format->set_format(RenderingDevice::DATA_FORMAT_R32G32B32A32_SFLOAT);
+    format->set_format(TEX_FORMAT);
     format->set_width(TEX_WIDTH);
     format->set_height(get_page_rows());
     format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT |
@@ -335,25 +336,11 @@ void QuadPagePool::rt_kill_range(int p_page, RID p_multimesh, uint32_t p_offset,
     if (!page_rd.texture.is_valid()) {
         return; // trimmed
     }
-    // The texel run [first, end) wraps over rows: copy zeros as up to 3 rectangles.
-    uint32_t first = p_offset * 4;
-    const uint32_t end = (p_offset + p_count) * 4;
-    while (first < end) {
-        const uint32_t row = first / TEX_WIDTH;
-        const uint32_t col = first % TEX_WIDTH;
-        uint32_t width;
-        uint32_t height;
-        if (col != 0 || end - first < TEX_WIDTH) { // partial row
-            width = MIN(TEX_WIDTH - col, end - first);
-            height = 1;
-        } else { // block of full rows
-            width = TEX_WIDTH;
-            height = (end - first) / TEX_WIDTH;
-        }
-        rd->texture_copy(rt_zero_texture, page_rd.texture, Vector3(col, 0, 0), Vector3(col, row, 0),
-                Vector3(width, height, 1), 0, 0, 0, 0);
-        first += width * height;
-    }
+    ERR_FAIL_COND_MSG(p_offset % QUAD_GROUP != 0, "QuadPagePool: kill ranges must start on a group.");
+    const uint32_t first_row = p_offset / QUAD_GROUP;
+    const uint32_t rows = (p_count + QUAD_GROUP - 1) / QUAD_GROUP;
+    rd->texture_copy(rt_zero_texture, page_rd.texture, Vector3(0, 0, 0), Vector3(0, first_row, 0),
+            Vector3(TEX_WIDTH, rows, 1), 0, 0, 0, 0);
 }
 
 void QuadPagePool::rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_row, uint32_t p_dst_row, uint32_t p_rows) {
@@ -374,7 +361,7 @@ Dictionary QuadPagePool::get_stats() const {
     d["slots_total"] = alive * page_capacity;
     d["growth_events"] = (int64_t)growth_events;
     d["pages_trimmed"] = (int64_t)pages_trimmed;
-    d["vram_mb"] = alive * (double)page_capacity * QUAD_BYTES / 1048576.0;
+    d["vram_mb"] = alive * (double)get_page_rows() * PageFormat::ROW_BYTES / 1048576.0;
     return d;
 }
 
