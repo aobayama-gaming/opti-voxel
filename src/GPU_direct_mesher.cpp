@@ -62,10 +62,6 @@ static const char *PASS_NAMES[5] = { "sdf", "edges", "vertices", "reserve", "emi
 
 static constexpr uint32_t STATUS_HEADER_UINTS = 8; // must match STATUS_PAGE_FILL in the GLSL
 
-// Compaction never builds a page wider than this many of its own largest chunks, so merging two
-// sparse pages from distant places cannot defeat frustum culling.
-static constexpr float COMPACT_MAX_EXTENT_CHUNKS = 8.0f;
-
 static uint32_t groups_of(uint32_t p_quads) {
     return (p_quads + QuadPagePool::QUAD_GROUP - 1) / QuadPagePool::QUAD_GROUP;
 }
@@ -629,7 +625,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
     struct Dest {
         uint32_t groups = 0;
         AABB bounds;
-        float largest_chunk = 0.0f;
+        float smallest_chunk = 0.0f;
         size_t end = 0; // moves [previous dest's end, end)
     };
     const uint32_t page_groups = settings.page_capacity / QuadPagePool::QUAD_GROUP;
@@ -644,20 +640,21 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
         bool fits = false;
         if (!dests.empty()) {
             const Dest &d = dests.back();
-            const float largest = MAX(d.largest_chunk, size);
+            const float smallest = MIN(d.smallest_chunk, size);
             fits = d.groups + g <= page_groups &&
-                    d.bounds.merge(box).get_longest_axis_size() <= COMPACT_MAX_EXTENT_CHUNKS * largest;
+                    d.bounds.merge(box).get_longest_axis_size() <= settings.compact_max_extent * smallest;
         }
         if (!fits) {
             Dest d;
             d.bounds = box;
+            d.smallest_chunk = size;
             dests.push_back(d);
         }
         Dest &d = dests.back();
         dst_row[i] = d.groups;
         d.groups += g;
         d.bounds.merge_with(box);
-        d.largest_chunk = MAX(d.largest_chunk, size);
+        d.smallest_chunk = MIN(d.smallest_chunk, size);
         d.end = i + 1;
         dst_groups += g;
     }

@@ -47,6 +47,9 @@ public:
         uint32_t initial_pages = 64;
         bool compaction = true;
         uint32_t compact_pages_per_frame = 8; // source pages re-packed per frame at most
+        // A re-packed page is never wider than this many of its smallest chunks, so merging
+        // sparse pages from distant places, or distant LOD shells, cannot defeat frustum culling.
+        float compact_max_extent = 8.0f;
         uint32_t spare_pages = 64;            // free pages kept allocated (4 in-flight batches' worth)
     };
 
