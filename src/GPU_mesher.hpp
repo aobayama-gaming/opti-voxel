@@ -11,6 +11,7 @@
 #include"sdf_base.hpp"
 #include "lod_structures.hpp"
 #include "chunk_memory.hpp"
+#include "debug_log.hpp"
 
 using namespace godot;
 
@@ -22,7 +23,8 @@ struct UnpackChunk{
     PackedVector3Array output_normals;
     PackedInt32Array output_triangles;
 
-    uint32_t point_offset; // used to fill the array
+    uint32_t point_offset = 0; // used to fill the array
+    uint32_t index_count = 0; // indices actually written by the CPU triangulation
 
     HashMap<uint32_t,uint32_t> index_storage;
 
@@ -57,6 +59,22 @@ class GPUMesher : public Object{
     Ref<Semaphore> semaphore;
     bool worker_available = true;
     bool result_available = false;
+    bool exit_thread = false;
+    uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
+    bool trim_indices = false; // drop the zero padding at the end of the index buffer (legacy bug)
+
+    // Stats (written by the worker under mutex, read by get_stats()).
+    struct Stats {
+        TimingStat batch_total;   // whole worker iteration
+        TimingStat gpu_submit_sync;
+        TimingStat points_fetch;
+        TimingStat points_process;
+        TimingStat triangulate;
+        TimingStat render_upload;
+        uint64_t chunks_meshed = 0;
+        uint64_t points = 0;
+        uint64_t triangles = 0;
+    } stats;
 
     RID scenario;
 
@@ -137,6 +155,15 @@ class GPUMesher : public Object{
     void send_chunk(LODHashSet p_chunks);
 
     bool get_results(VoxelState &output);
+
+    // Stops the worker thread and frees the local RenderingDevice (on the worker, which owns it).
+    void stop();
+
+    bool is_idle();
+
+    void set_trim_indices(bool p_trim) { trim_indices = p_trim; }
+
+    Dictionary get_stats();
 
     
 

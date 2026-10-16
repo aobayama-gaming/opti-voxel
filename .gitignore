@@ -62,3 +62,6 @@ compile_commands.json
 # Cmake
 cmake-build*
 CMakeUserPresets.json
+
+# Bench outputs (tools/bench.sh)
+bench/results/

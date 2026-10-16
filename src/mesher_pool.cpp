@@ -108,6 +108,8 @@ bool MesherPool::get_results(VoxelState &output) {
         ChunkOutput result;
 
         if (worker->get_result(result)) {
+            chunks_meshed++;
+            triangles += result.triangle_count;
             output.add_new_loaded(result);
             working_generation.erase(result.chunk_id);
             has_any_result = true;
@@ -115,4 +117,40 @@ bool MesherPool::get_results(VoxelState &output) {
     }
 
     return has_any_result;
+}
+void MesherPool::stop() {
+    for (CPUMesher *worker : workers) {
+        if (worker) {
+            worker->stop();
+            memdelete(worker);
+        }
+    }
+    workers.clear();
+
+    for (LODHashSet *q : chunk_queue) {
+        memdelete(q);
+    }
+    chunk_queue.clear();
+}
+
+bool MesherPool::is_idle() {
+    for (CPUMesher *worker : workers) {
+        if (worker && !worker->is_available()) {
+            return false;
+        }
+    }
+    return working_generation.is_empty();
+}
+
+Dictionary MesherPool::get_stats() {
+    Dictionary d;
+    int64_t queued = 0;
+    for (LODHashSet *q : chunk_queue) {
+        queued += q->size();
+    }
+    d["queued"] = queued;
+    d["in_flight"] = (int64_t)working_generation.size();
+    d["chunks_meshed"] = (int64_t)chunks_meshed;
+    d["triangles"] = (int64_t)triangles;
+    return d;
 }

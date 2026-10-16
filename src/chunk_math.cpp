@@ -1,6 +1,19 @@
 
 #include "chunk_math.hpp"
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+// GCC/Clang equivalent of the MSVC intrinsic: writes the index of the lowest set bit, returns 0 if mask is 0.
+static inline unsigned char _BitScanForward(unsigned long *index, uint32_t mask) {
+    if (mask == 0) {
+        return 0;
+    }
+    *index = __builtin_ctz(mask);
+    return 1;
+}
+#endif
+
 constexpr inline float WORLD_NUDGE=0.123567f;
 
 int32_t ChunkMath::get_parent_from_child(int32_t coord, int &lod) {
