@@ -13,8 +13,9 @@ shader_type spatial;
 render_mode skip_vertex_transform, cull_back;
 
 // (RenderingServer::shader_set_code does not run the preprocessor: no #define here.)
+// Must match QuadPagePool::QUAD_GROUP / TEX_WIDTH (one row per group).
 const int QUAD_GROUP = 64;
-const int TEX_WIDTH = 1024;
+const int TEX_WIDTH = 256;
 
 uniform sampler2D quad_tex : filter_nearest, repeat_disable;
 // 0 shaded, 1 normals, 2 lod, 3 page, 4 shaded + quad wireframe, 5 chunk hash,
@@ -113,8 +114,7 @@ void fragment() {
 )gdshader";
 
 void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t p_initial_pages, float p_voxel_size) {
-    ERR_FAIL_COND_MSG(p_page_capacity % (TEX_WIDTH / 4) != 0 || p_page_capacity % QUAD_GROUP != 0,
-            "QuadPagePool: page capacity must be a multiple of 256 quads.");
+    ERR_FAIL_COND_MSG(p_page_capacity % QUAD_GROUP != 0, "QuadPagePool: page capacity must be a multiple of 64 quads.");
     RenderingServer *rs = RenderingServer::get_singleton();
     scenario = p_scenario;
     page_capacity = p_page_capacity;
@@ -149,7 +149,7 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     }
 }
 
-int QuadPagePool::_create_page() {
+int QuadPagePool::_create_page(int p_index) {
     RenderingServer *rs = RenderingServer::get_singleton();
     Page page;
     page.material = rs->material_create();
@@ -173,8 +173,13 @@ int QuadPagePool::_create_page() {
     rs->instance_geometry_set_material_override(page.instance, page.material);
     rs->instance_set_visible(page.instance, false);
 
-    const int index = pages.size();
-    pages.push_back(page);
+    int index = p_index;
+    if (index < 0) {
+        index = pages.size();
+        pages.push_back(page);
+    } else {
+        pages[index] = page;
+    }
     rs->instance_geometry_set_shader_parameter(page.instance, "page_id", index);
 
     // Texture creation must happen on the render thread; it also zeroes the group count (a fresh
@@ -222,7 +227,12 @@ void QuadPagePool::_rt_reset_page(int p_page, RID p_multimesh) {
 int QuadPagePool::acquire_page() {
     int page;
     if (free_pages.is_empty()) {
-        page = _create_page();
+        int reuse = -1;
+        if (!trimmed_pages.is_empty()) {
+            reuse = trimmed_pages[trimmed_pages.size() - 1];
+            trimmed_pages.remove_at(trimmed_pages.size() - 1);
+        }
+        page = _create_page(reuse);
         growth_events++;
         VLOG(2, "QuadPagePool: grew to ", (int64_t)pages.size(), " pages");
     } else {
@@ -246,6 +256,35 @@ void QuadPagePool::release_page(int p_page) {
     free_pages.push_back(p_page);
 }
 
+int QuadPagePool::trim(int p_keep_free, int p_max) {
+    RenderingServer *rs = RenderingServer::get_singleton();
+    int freed = 0;
+    while ((int)free_pages.size() > p_keep_free && freed < p_max) {
+        const int index = free_pages[free_pages.size() - 1];
+        free_pages.remove_at(free_pages.size() - 1);
+        Page &page = pages[index];
+        // Render-server frees are queued in order with call_on_render_thread: everything already
+        // queued for this page (resets, kills, copies) runs before its texture goes away.
+        rs->free_rid(page.instance);
+        rs->free_rid(page.multimesh);
+        rs->free_rid(page.material);
+        page = Page();
+        rs->call_on_render_thread(callable_mp(this, &QuadPagePool::_rt_free_page).bind(index));
+        trimmed_pages.push_back(index);
+        pages_trimmed++;
+        freed++;
+    }
+    return freed;
+}
+
+void QuadPagePool::_rt_free_page(int p_page) {
+    RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
+    PageRT &page = rt_pages[p_page];
+    RenderingServer::get_singleton()->free_rid(page.rs_texture);
+    rd->free_rid(page.texture);
+    page = PageRT(); // the command buffer belonged to the (already freed) multimesh
+}
+
 void QuadPagePool::set_page_aabb(int p_page, const AABB &p_aabb) {
     RenderingServer::get_singleton()->multimesh_set_custom_aabb(pages[p_page].multimesh, p_aabb);
 }
@@ -253,7 +292,9 @@ void QuadPagePool::set_page_aabb(int p_page, const AABB &p_aabb) {
 void QuadPagePool::set_material_param(const StringName &p_name, const Variant &p_value) {
     material_params[p_name] = p_value;
     for (const Page &page : pages) {
-        RenderingServer::get_singleton()->material_set_param(page.material, p_name, p_value);
+        if (page.material.is_valid()) {
+            RenderingServer::get_singleton()->material_set_param(page.material, p_name, p_value);
+        }
     }
 }
 
@@ -291,6 +332,9 @@ void QuadPagePool::rt_copy_page_from(int p_page, RID p_multimesh, RID p_src, uin
 void QuadPagePool::rt_kill_range(int p_page, RID p_multimesh, uint32_t p_offset, uint32_t p_count) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     const PageRD page_rd = rt_get_page_rd(p_page, p_multimesh);
+    if (!page_rd.texture.is_valid()) {
+        return; // trimmed
+    }
     // The texel run [first, end) wraps over rows: copy zeros as up to 3 rectangles.
     uint32_t first = p_offset * 4;
     const uint32_t end = (p_offset + p_count) * 4;
@@ -312,20 +356,34 @@ void QuadPagePool::rt_kill_range(int p_page, RID p_multimesh, uint32_t p_offset,
     }
 }
 
+void QuadPagePool::rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_row, uint32_t p_dst_row, uint32_t p_rows) {
+    RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
+    ERR_FAIL_INDEX(p_src_page, (int)rt_pages.size());
+    ERR_FAIL_INDEX(p_dst_page, (int)rt_pages.size());
+    ERR_FAIL_COND(p_src_page == p_dst_page);
+    rd->texture_copy(rt_pages[p_src_page].texture, rt_pages[p_dst_page].texture, Vector3(0, p_src_row, 0),
+            Vector3(0, p_dst_row, 0), Vector3(TEX_WIDTH, p_rows, 1), 0, 0, 0, 0);
+}
+
 Dictionary QuadPagePool::get_stats() const {
     Dictionary d;
-    d["pages_total"] = (int64_t)pages.size();
+    const int64_t alive = (int64_t)pages.size() - (int64_t)trimmed_pages.size();
+    d["pages_total"] = alive;
     d["pages_in_use"] = (int64_t)pages_in_use;
     d["page_capacity"] = (int64_t)page_capacity;
-    d["slots_total"] = (int64_t)pages.size() * page_capacity;
+    d["slots_total"] = alive * page_capacity;
     d["growth_events"] = (int64_t)growth_events;
-    d["vram_mb"] = pages.size() * (double)page_capacity * QUAD_BYTES / 1048576.0;
+    d["pages_trimmed"] = (int64_t)pages_trimmed;
+    d["vram_mb"] = alive * (double)page_capacity * QUAD_BYTES / 1048576.0;
     return d;
 }
 
 void QuadPagePool::destroy() {
     RenderingServer *rs = RenderingServer::get_singleton();
     for (Page &page : pages) {
+        if (!page.multimesh.is_valid()) {
+            continue; // trimmed
+        }
         rs->free_rid(page.instance);
         rs->free_rid(page.multimesh);
         rs->free_rid(page.material);

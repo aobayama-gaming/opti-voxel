@@ -326,6 +326,14 @@ void VoxelTerrain::_process(double delta){
     _destroy_chunk();
     process_stats.destroy_chunks.add(now_usec() - t0);
 
+    // After destruction (to_destroy_chunk holds copies of the outputs it moves), and never while the
+    // validator or auditor hold page ranges.
+    t0 = now_usec();
+    if (direct_mesher && !validator && !auditor) {
+        direct_mesher->compact(visual_mesh_data);
+    }
+    process_stats.compact.add(now_usec() - t0);
+
     if (debug_gpu_profile && exec_time % 15 == 0) {
         if (!gpu_profiler) {
             gpu_profiler = memnew(GPUProfiler);
@@ -464,6 +472,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
     process["mesher_dispatch"] = process_stats.mesher_dispatch.to_dict();
     process["mesher_collect"] = process_stats.mesher_collect.to_dict();
     process["destroy_chunks"] = process_stats.destroy_chunks.to_dict();
+    process["compact"] = process_stats.compact.to_dict();
     d["process"] = process;
 
     if (gpu_profiler) {

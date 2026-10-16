@@ -33,6 +33,8 @@ METRICS = [
     ("Mesher CPU", "main thread: _process total, avg", lambda d: get(d, "final_terrain.process.total.avg_ms"), "ms", True),
     ("Mesher CPU", "main thread: _process total, max", lambda d: get(d, "final_terrain.process.total.max_ms"), "ms", True),
     ("Mesher CPU", "main thread: mesher dispatch, max", lambda d: get(d, "final_terrain.process.mesher_dispatch.max_ms"), "ms", True),
+    ("Mesher CPU", "main thread: page compaction, avg", lambda d: get(d, "final_terrain.process.compact.avg_ms"), "ms", True),
+    ("Mesher CPU", "main thread: page compaction, max", lambda d: get(d, "final_terrain.process.compact.max_ms"), "ms", True),
     ("Mesher CPU", "batch wall time (worker/render thread), avg", lambda d: get(d, "final_terrain.mesher.batch_total.avg_ms"), "ms", True),
     ("Mesher CPU", "  legacy: GPU submit+sync, avg", lambda d: get(d, "final_terrain.mesher.gpu_submit_sync.avg_ms"), "ms", True),
     ("Mesher CPU", "  legacy: readback, avg", lambda d: get(d, "final_terrain.mesher.points_fetch.avg_ms"), "ms", True),
@@ -65,6 +67,10 @@ METRICS = [
     ("Geometry", "live triangles (real)", lambda d: get(d, "phases.steady.terrain.chunks.live_triangles"), "", None),
     ("Geometry", "triangles in index buffers (incl. padding)", lambda d: get(d, "phases.steady.terrain.chunks.drawn_triangles"), "", True),
     ("Geometry", "  direct: pages with live chunks", lambda d: get(d, "phases.steady.terrain.mesher.pages_with_live_chunks"), "", None),
+    ("Geometry", "  direct: drawn quad slots per live quad",
+     lambda d: (get(d, "phases.steady.terrain.mesher.drawn_quad_slots") or 0) / max(get(d, "phases.steady.terrain.mesher.live_quads", 1), 1)
+     if get(d, "phases.steady.terrain.mesher.drawn_quad_slots") is not None else None, "", True),
+    ("Geometry", "  direct: pages re-packed by compaction", lambda d: get(d, "phases.steady.terrain.mesher.pages_compacted"), "", None),
     ("Geometry", "  direct: page AABB longest axis, mean", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_extent_chunks_mean"), "chunks", True),
     ("Geometry", "  direct: page AABB longest axis, max", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_extent_chunks_max"), "chunks", True),
 
@@ -76,6 +82,8 @@ METRICS = [
     ("Memory", "RSS (end of steady)", lambda d: get(d, "phases.steady.memory.rss_mb"), "MB", True),
     ("Memory", "VRAM used (end of steady)", lambda d: get(d, "phases.steady.memory.video_mem_mb"), "MB", True),
     ("Memory", "RD buffer memory (end of steady)", lambda d: get(d, "phases.steady.memory.buffer_mem_mb"), "MB", True),
+    ("Memory", "  direct: page pool VRAM (end of steady)", lambda d: get(d, "phases.steady.terrain.mesher.pool.vram_mb"), "MB", True),
+    ("Memory", "  direct: page pool, pages allocated", lambda d: get(d, "phases.steady.terrain.mesher.pool.pages_total"), "", True),
 ]
 
 

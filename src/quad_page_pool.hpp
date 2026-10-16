@@ -16,9 +16,12 @@ using namespace godot;
 //
 // Page = one MultiMesh whose instances are *groups* of QUAD_GROUP quads (the base mesh holds
 // QUAD_GROUP quads) + one RGBA32F texture holding the quads, one texel per corner:
-// xyz = world position, w = packed normal + 1 (0 = empty). The page shader pulls its corner with
-// texelFetch(quad_tex, INSTANCE_ID * QUAD_GROUP * 4 + VERTEX_ID). The GPU writes the number of
-// used groups into the MultiMesh indirect command buffer.
+// xyz = world position, w = packed normal + 1 (0 = empty). One texture row is one group, so the
+// page shader pulls its corner with texelFetch(quad_tex, ivec2(VERTEX_ID, INSTANCE_ID)). The GPU
+// writes the number of used groups into the MultiMesh indirect command buffer.
+//
+// Chunks start on a group boundary, so a chunk is a block of whole rows: moving it to another page
+// (compaction) or zeroing it (kill) is a single texture copy.
 //
 // Why groups and not one instance per quad: Godot keeps three CPU-side interpolation arrays per
 // MultiMesh instance (~189 B RAM per instance with TRANSFORM_3D + custom, measured). Per group of
@@ -29,7 +32,7 @@ using namespace godot;
 class QuadPagePool : public Object {
 public:
     static constexpr uint32_t QUAD_GROUP = 64;        // quads per MultiMesh instance
-    static constexpr uint32_t TEX_WIDTH = 1024;       // texels per row of a page texture
+    static constexpr uint32_t TEX_WIDTH = QUAD_GROUP * 4; // texels per row of a page texture: one group
     static constexpr uint32_t CORNER_BYTES = 16;      // one RGBA32F texel
     static constexpr uint32_t QUAD_BYTES = 4 * CORNER_BYTES;
     // VkDrawIndexedIndirectCommand: index_count, instance_count, first_index, vertex_offset, first_instance.
@@ -40,7 +43,7 @@ public:
         RID command; // indirect command buffer (instance_count = used groups)
     };
 
-    // p_page_capacity must be a multiple of TEX_WIDTH / 4 and of QUAD_GROUP.
+    // p_page_capacity must be a multiple of QUAD_GROUP.
     void initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t p_initial_pages, float p_voxel_size);
     // Frees everything and deletes this object (on the render thread, after pending work).
     void destroy();
@@ -49,13 +52,16 @@ public:
     int acquire_page();
     // Main thread. The page stops drawing (hidden, group count reset on the render thread).
     void release_page(int p_page);
+    // Main thread. Frees free pages beyond p_keep_free (at most p_max per call) so VRAM follows the
+    // pages in use instead of the high-water mark. Their indices are reused by later growth.
+    int trim(int p_keep_free, int p_max);
 
     void set_page_aabb(int p_page, const AABB &p_aabb);
 
     RID get_page_multimesh(int p_page) const { return pages[p_page].multimesh; }
     uint32_t get_page_capacity() const { return page_capacity; }
     uint32_t get_page_rows() const { return page_capacity * 4 / TEX_WIDTH; }
-    int get_page_count() const { return pages.size(); }
+    int get_page_count() const { return pages.size(); } // index space, freed pages included
 
     void set_debug_view(int p_view);
     void set_material_param(const StringName &p_name, const Variant &p_value);
@@ -71,10 +77,12 @@ public:
     void rt_copy_page_from(int p_page, RID p_multimesh, RID p_src, uint32_t p_src_row);
     // Zeroes quads [offset, offset + count): corners collapse to the origin, never rasterised.
     void rt_kill_range(int p_page, RID p_multimesh, uint32_t p_offset, uint32_t p_count);
+    // Copies p_rows groups (texture rows) from one page to another (different) page.
+    void rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_row, uint32_t p_dst_row, uint32_t p_rows);
 
 private:
     struct Page {
-        RID multimesh;
+        RID multimesh; // invalid once trimmed
         RID instance;
         RID material;
         bool in_use = false;
@@ -96,15 +104,18 @@ private:
 
     std::vector<Page> pages;
     LocalVector<int> free_pages;
+    LocalVector<int> trimmed_pages; // indices whose resources were freed, reused first on growth
     uint64_t growth_events = 0;
+    uint64_t pages_trimmed = 0;
     int pages_in_use = 0;
 
     // render thread only
     std::vector<PageRT> rt_pages;
     RID rt_zero_texture;
 
-    int _create_page();
+    int _create_page(int p_index = -1);
     void _rt_create_page(int p_page, RID p_multimesh, RID p_material);
     void _rt_reset_page(int p_page, RID p_multimesh);
+    void _rt_free_page(int p_page);
     void _rt_destroy();
 };

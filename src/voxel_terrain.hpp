@@ -111,6 +111,7 @@ private:
 		TimingStat mesher_dispatch;  // process_queue
 		TimingStat mesher_collect;   // get_results
 		TimingStat destroy_chunks;   // _destroy_chunk
+		TimingStat compact;          // GPUDirectMesher::compact
 	} process_stats;
 
 public:

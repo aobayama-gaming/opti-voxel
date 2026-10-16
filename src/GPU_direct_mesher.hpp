@@ -32,6 +32,11 @@ using namespace godot;
 //           pages go back to the pool, overflowed chunks are re-queued
 // Destroying a chunk clears its quad range (zero transforms = degenerate, never rasterised),
 // shrinks the page AABB to the chunks still alive, and releases the page once nothing is left.
+//
+// Compaction (main thread, once per frame, after chunk destruction): pages less than half full of
+// live quads are re-packed GPU to GPU into fresh pages, survivors in Morton order, a few pages per
+// frame. The CPU knows every chunk's range, so it rewrites the ChunkOutputs in place: no readback.
+// Spare free pages are then freed, so VRAM follows the pages in use.
 class GPUDirectMesher : public Object, public ChunkReleaser {
 
 public:
@@ -40,6 +45,9 @@ public:
         uint32_t pages_per_batch = 16;
         uint32_t page_capacity = 32768;
         uint32_t initial_pages = 64;
+        bool compaction = true;
+        uint32_t compact_pages_per_frame = 8; // source pages re-packed per frame at most
+        uint32_t spare_pages = 64;            // free pages kept allocated (4 in-flight batches' worth)
     };
 
     void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings);
@@ -51,6 +59,10 @@ public:
     void process_queue();
     bool get_results(VoxelState &output);
     bool is_idle();
+    // Re-packs sparse pages and frees spare ones. Rewrites page/offset of the moved chunks in
+    // r_state.loaded_chunk, so call it after the frame's chunk destruction (to_destroy_chunk holds
+    // copies) and not while something holds page ranges (validator, auditor).
+    void compact(VoxelState &r_state);
 
     void release_chunk(const ChunkOutput &p_chunk) override;
 
@@ -71,12 +83,20 @@ private:
         PackedByteArray status;
     };
 
+    struct PageChunk {
+        Vector3i id;
+        uint32_t offset = 0; // quads, a multiple of QUAD_GROUP
+        uint32_t count = 0;
+    };
+
     struct PageState {
         uint32_t live_quads = 0;
-        int live_chunks = 0;
-        std::vector<Vector3i> chunks; // live chunks with geometry in this page
+        uint32_t live_groups = 0; // groups covered by live chunks
+        uint32_t groups = 0;      // groups drawn (the page's indirect instance count)
+        std::vector<PageChunk> chunks; // live chunks with geometry in this page
         AABB bounds;
         bool bounds_dirty = false; // a chunk died: recompute `bounds` at the next process_queue
+        bool settled = false;      // compaction found nothing to gain; cleared when a chunk dies
     };
 
     SDFBase *sdf = nullptr;
@@ -127,6 +147,7 @@ private:
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_kill(const PackedInt32Array &p_pages, const Array &p_multimeshes, const PackedInt64Array &p_ranges);
+    void _rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts, const Array &p_multimeshes);
     void _rt_read_timestamps();
     void _rt_destroy();
 
@@ -134,6 +155,8 @@ private:
     HashMap<uint32_t, CompletedBatch> partial;
 
     bool _pop_queue(Vector3i &r_chunk);
+    void _flush_kills();
+    bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
     void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
     AABB _chunk_aabb(const Vector3i &p_chunk) const;
@@ -147,6 +170,13 @@ private:
         uint64_t nan_vertices = 0;
         uint64_t kills = 0;
         uint64_t pages_returned_unused = 0;
+        uint64_t compact_rounds = 0;
+        uint64_t compact_skipped = 0;  // windows with nothing to gain (pages marked settled)
+        uint64_t pages_compacted = 0;  // source pages re-packed
+        uint64_t pages_compacted_into = 0;
+        uint64_t chunks_moved = 0;
+        uint64_t compact_copies = 0;   // texture copies (runs of contiguous chunks are merged)
+        TimingStat compact_cpu;        // main thread: compact when it re-packs
         TimingStat dispatch_cpu;    // main thread: process_queue when it dispatches
         TimingStat collect_cpu;     // main thread: get_results when it consumes a batch
         TimingStat rt_record_cpu;   // render thread: recording one batch

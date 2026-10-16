@@ -62,6 +62,14 @@ static const char *PASS_NAMES[5] = { "sdf", "edges", "vertices", "reserve", "emi
 
 static constexpr uint32_t STATUS_HEADER_UINTS = 8; // must match STATUS_PAGE_FILL in the GLSL
 
+// Compaction never builds a page wider than this many of its own largest chunks, so merging two
+// sparse pages from distant places cannot defeat frustum culling.
+static constexpr float COMPACT_MAX_EXTENT_CHUNKS = 8.0f;
+
+static uint32_t groups_of(uint32_t p_quads) {
+    return (p_quads + QuadPagePool::QUAD_GROUP - 1) / QuadPagePool::QUAD_GROUP;
+}
+
 static uint64_t morton_key(const Vector3i &p_chunk) {
     auto spread = [](uint64_t v) {
         v &= 0x1fffff;
@@ -318,6 +326,15 @@ void GPUDirectMesher::_rt_kill(const PackedInt32Array &p_pages, const Array &p_m
     }
 }
 
+void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts, const Array &p_multimeshes) {
+    for (int i = 0; i + 4 < p_copies.size(); i += 5) {
+        pool->rt_copy_rows(p_copies[i], p_copies[i + 1], p_copies[i + 2], p_copies[i + 3], p_copies[i + 4]);
+    }
+    for (int i = 0; i + 1 < p_group_counts.size(); i += 2) {
+        pool->rt_set_group_count(p_group_counts[i], p_multimeshes[i / 2], p_group_counts[i + 1]);
+    }
+}
+
 AABB GPUDirectMesher::_chunk_aabb(const Vector3i &p_chunk) const {
     const Vector3 center = ChunkMath::chunk_to_world(p_chunk, chunk_param);
     const float size = ChunkMath::world_chunk_size(p_chunk, chunk_param);
@@ -337,9 +354,9 @@ void GPUDirectMesher::_update_dirty_bounds() {
         if (ps.chunks.empty()) {
             continue;
         }
-        AABB bounds = _chunk_aabb(ps.chunks[0]);
+        AABB bounds = _chunk_aabb(ps.chunks[0].id);
         for (size_t i = 1; i < ps.chunks.size(); i++) {
-            bounds.merge_with(_chunk_aabb(ps.chunks[i]));
+            bounds.merge_with(_chunk_aabb(ps.chunks[i].id));
         }
         ps.bounds = bounds;
         pool->set_page_aabb(page, bounds);
@@ -359,20 +376,25 @@ bool GPUDirectMesher::_pop_queue(Vector3i &r_chunk) {
     return false;
 }
 
+void GPUDirectMesher::_flush_kills() {
+    if (pending_kill_pages.is_empty()) {
+        return;
+    }
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_kill)
+                    .bind(pending_kill_pages, pending_kill_multimeshes, pending_kill_ranges));
+    // Packed arrays are copy-on-write, but Array is shared by reference: the bound copy must
+    // not be cleared, so start a new one.
+    pending_kill_pages = PackedInt32Array();
+    pending_kill_multimeshes = Array();
+    pending_kill_ranges = PackedInt64Array();
+}
+
 void GPUDirectMesher::process_queue() {
     frame++;
     // Before acquiring pages: a page released since it was marked must not be touched.
     _update_dirty_bounds();
-
-    if (!pending_kill_pages.is_empty()) {
-        RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_kill)
-                        .bind(pending_kill_pages, pending_kill_multimeshes, pending_kill_ranges));
-        // Packed arrays are copy-on-write, but Array is shared by reference: the bound copy must
-        // not be cleared, so start a new one.
-        pending_kill_pages = PackedInt32Array();
-        pending_kill_multimeshes = Array();
-        pending_kill_ranges = PackedInt64Array();
-    }
+    // Before acquiring pages too: a kill must not land on a page reused by this batch.
+    _flush_kills();
 
     // Bound the number of batches waiting for their directory (each one holds pages_per_batch pages).
     if (in_flight.size() >= 4) {
@@ -459,6 +481,10 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
         std::vector<AABB> page_bounds(batch.pages.size());
         std::vector<bool> page_has_bounds(batch.pages.size(), false);
 
+        for (size_t k = 0; k < batch.pages.size(); k++) {
+            page_state[batch.pages[k]].groups = (uint32_t)status[STATUS_HEADER_UINTS + k];
+        }
+
         for (size_t i = 0; i < batch.chunks.size(); i++) {
             const Vector3i &chunk_id = batch.chunks[i];
             const uint32_t count = dir[i * 4 + 0];
@@ -484,9 +510,10 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 out.page = batch.pages[k];
                 out.quad_offset = base % settings.page_capacity;
                 out.quad_count = count;
-                page_state[out.page].live_quads += count;
-                page_state[out.page].live_chunks++;
-                page_state[out.page].chunks.push_back(chunk_id);
+                PageState &ps = page_state[out.page];
+                ps.live_quads += count;
+                ps.live_groups += groups_of(count);
+                ps.chunks.push_back({ chunk_id, out.quad_offset, count });
                 stats.live_quads += count;
                 const AABB box = _chunk_aabb(chunk_id);
                 page_bounds[k] = page_has_bounds[k] ? page_bounds[k].merge(box) : box;
@@ -498,7 +525,8 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
         for (size_t k = 0; k < batch.pages.size(); k++) {
             const int page = batch.pages[k];
-            if (page_state[page].live_chunks == 0) {
+            if (page_state[page].chunks.empty()) {
+                page_state[page] = PageState();
                 pool->release_page(page);
                 stats.pages_returned_unused++;
             } else {
@@ -519,22 +547,23 @@ void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
     ERR_FAIL_INDEX(p_chunk.page, (int)page_state.size());
     PageState &ps = page_state[p_chunk.page];
     ps.live_quads -= p_chunk.quad_count;
-    ps.live_chunks--;
+    ps.live_groups -= groups_of(p_chunk.quad_count);
     stats.live_quads -= p_chunk.quad_count;
     stats.kills++;
-    if (ps.live_chunks <= 0) {
-        // Last chunk in the page: hide and reset the whole page instead of clearing the range.
-        ps = PageState();
-        pool->release_page(p_chunk.page);
-        return;
-    }
     for (size_t i = 0; i < ps.chunks.size(); i++) {
-        if (ps.chunks[i] == p_chunk.chunk_id) {
+        if (ps.chunks[i].id == p_chunk.chunk_id) {
             ps.chunks[i] = ps.chunks.back();
             ps.chunks.pop_back();
             break;
         }
     }
+    if (ps.chunks.empty()) {
+        // Last chunk in the page: hide and reset the whole page instead of clearing the range.
+        ps = PageState();
+        pool->release_page(p_chunk.page);
+        return;
+    }
+    ps.settled = false;
     if (!ps.bounds_dirty) {
         ps.bounds_dirty = true;
         dirty_bounds_pages.push_back(p_chunk.page);
@@ -543,6 +572,165 @@ void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
     pending_kill_multimeshes.push_back(pool->get_page_multimesh(p_chunk.page));
     pending_kill_ranges.push_back(p_chunk.quad_offset);
     pending_kill_ranges.push_back(p_chunk.quad_count);
+}
+
+void GPUDirectMesher::compact(VoxelState &r_state) {
+    // Kills recorded this frame must reach the GPU before any page is copied, reused or freed.
+    _flush_kills();
+    if (settings.compaction) {
+        const uint64_t t0 = now_usec();
+        const uint32_t page_groups = settings.page_capacity / QuadPagePool::QUAD_GROUP;
+        // Pages less than half full of live quads: dead slots left by destroyed chunks, or the
+        // last, partly filled page of a batch. Pages of in-flight batches have no chunks yet.
+        std::vector<std::pair<uint64_t, int>> candidates;
+        for (int page = 0; page < (int)page_state.size(); page++) {
+            const PageState &ps = page_state[page];
+            if (ps.chunks.empty() || ps.settled || ps.live_groups * 2 > page_groups) {
+                continue;
+            }
+            uint64_t key = UINT64_MAX;
+            for (const PageChunk &c : ps.chunks) {
+                key = MIN(key, morton_key(c.id));
+            }
+            candidates.push_back({ key, page });
+        }
+        if (!candidates.empty()) {
+            // Neighbouring candidates in Morton order are the ones worth merging.
+            std::sort(candidates.begin(), candidates.end());
+            std::vector<int> window;
+            for (size_t i = 0; i < candidates.size() && window.size() < settings.compact_pages_per_frame; i++) {
+                window.push_back(candidates[i].second);
+            }
+            if (_compact_pages(window, r_state)) {
+                stats.compact_cpu.add(now_usec() - t0);
+            }
+        }
+    }
+    pool->trim(settings.spare_pages, settings.compact_pages_per_frame);
+}
+
+bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState &r_state) {
+    struct Move {
+        uint64_t key;
+        int src_page;
+        PageChunk chunk;
+    };
+    std::vector<Move> moves;
+    uint32_t src_groups = 0;
+    for (const int page : p_pages) {
+        for (const PageChunk &c : page_state[page].chunks) {
+            moves.push_back({ morton_key(c.id), page, c });
+        }
+        src_groups += page_state[page].groups;
+    }
+    std::sort(moves.begin(), moves.end(), [](const Move &a, const Move &b) { return a.key < b.key; });
+
+    // Plan: pack the survivors in Morton order, like a batch, into as few pages as fit.
+    struct Dest {
+        uint32_t groups = 0;
+        AABB bounds;
+        float largest_chunk = 0.0f;
+        size_t end = 0; // moves [previous dest's end, end)
+    };
+    const uint32_t page_groups = settings.page_capacity / QuadPagePool::QUAD_GROUP;
+    std::vector<Dest> dests;
+    std::vector<uint32_t> dst_row(moves.size());
+    uint32_t dst_groups = 0;
+    for (size_t i = 0; i < moves.size(); i++) {
+        const Vector3i &id = moves[i].chunk.id;
+        const uint32_t g = groups_of(moves[i].chunk.count);
+        const AABB box = _chunk_aabb(id);
+        const float size = ChunkMath::world_chunk_size(id, chunk_param);
+        bool fits = false;
+        if (!dests.empty()) {
+            const Dest &d = dests.back();
+            const float largest = MAX(d.largest_chunk, size);
+            fits = d.groups + g <= page_groups &&
+                    d.bounds.merge(box).get_longest_axis_size() <= COMPACT_MAX_EXTENT_CHUNKS * largest;
+        }
+        if (!fits) {
+            Dest d;
+            d.bounds = box;
+            dests.push_back(d);
+        }
+        Dest &d = dests.back();
+        dst_row[i] = d.groups;
+        d.groups += g;
+        d.bounds.merge_with(box);
+        d.largest_chunk = MAX(d.largest_chunk, size);
+        d.end = i + 1;
+        dst_groups += g;
+    }
+
+    // Worth it if it frees a page, or a quarter of the drawn groups were dead.
+    if (dests.size() >= p_pages.size() && (src_groups - dst_groups) * 4 < src_groups) {
+        for (const int page : p_pages) {
+            page_state[page].settled = true;
+        }
+        stats.compact_skipped++;
+        return false;
+    }
+
+    PackedInt32Array copies; // src page, dst page, src row, dst row, rows
+    PackedInt32Array group_counts; // dst page, groups
+    Array multimeshes; // per dst page
+    size_t begin = 0;
+    for (const Dest &d : dests) {
+        const int page = pool->acquire_page();
+        if ((int)page_state.size() <= page) {
+            page_state.resize(page + 1);
+        }
+        PageState &ps = page_state[page];
+        ps = PageState();
+        ps.groups = d.groups;
+        ps.bounds = d.bounds;
+        pool->set_page_aabb(page, d.bounds);
+        for (size_t i = begin; i < d.end; i++) {
+            const Move &m = moves[i];
+            const uint32_t rows = groups_of(m.chunk.count);
+            const uint32_t src_row = m.chunk.offset / QuadPagePool::QUAD_GROUP;
+            const int n = copies.size();
+            // Chunks that were neighbours in the source stay neighbours: extend the last copy.
+            if (n > 0 && copies[n - 5] == m.src_page && copies[n - 4] == page &&
+                    copies[n - 3] + copies[n - 1] == (int)src_row && copies[n - 2] + copies[n - 1] == (int)dst_row[i]) {
+                copies.set(n - 1, copies[n - 1] + rows);
+            } else {
+                copies.append_array({ m.src_page, page, (int)src_row, (int)dst_row[i], (int)rows });
+            }
+            PageChunk moved = m.chunk;
+            moved.offset = dst_row[i] * QuadPagePool::QUAD_GROUP;
+            ps.chunks.push_back(moved);
+            ps.live_quads += moved.count;
+            ps.live_groups += rows;
+
+            ChunkOutput *out = r_state.loaded_chunk.getptr(m.chunk.id);
+            if (out && out->owner == this && out->page == m.src_page) {
+                out->page = page;
+                out->quad_offset = moved.offset;
+            } else {
+                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", m.chunk.id));
+            }
+        }
+        group_counts.append_array({ page, (int)d.groups });
+        multimeshes.push_back(pool->get_page_multimesh(page));
+        begin = d.end;
+    }
+    // Queued before the sources' release, so the copies read them before anything reuses them.
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_compact)
+                    .bind(copies, group_counts, multimeshes));
+    for (const int page : p_pages) {
+        page_state[page] = PageState();
+        pool->release_page(page);
+    }
+
+    stats.compact_rounds++;
+    stats.pages_compacted += p_pages.size();
+    stats.pages_compacted_into += dests.size();
+    stats.chunks_moved += moves.size();
+    stats.compact_copies += copies.size() / 5;
+    VLOG(3, "GPUDirectMesher: compacted ", (int64_t)p_pages.size(), " pages into ", (int64_t)dests.size(),
+            " (", (int64_t)moves.size(), " chunks, ", (int64_t)copies.size() / 5, " copies)");
+    return true;
 }
 
 void GPUDirectMesher::send_chunk(LODHashSet p_chunks) {
@@ -595,14 +783,16 @@ Dictionary GPUDirectMesher::get_stats() {
     int pages_with_live = 0;
     double extent_sum = 0.0;
     double extent_max = 0.0;
+    int64_t drawn_groups = 0;
     for (const PageState &ps : page_state) {
-        if (ps.live_chunks > 0) {
+        if (!ps.chunks.empty()) {
             pages_with_live++;
+            drawn_groups += ps.groups;
             // Longest axis of the page AABB in units of its finest chunk (frustum culling
             // granularity; metres would be dominated by the kilometre-wide far LODs).
-            float finest = ChunkMath::world_chunk_size(ps.chunks[0], chunk_param);
-            for (const Vector3i &c : ps.chunks) {
-                finest = MIN(finest, ChunkMath::world_chunk_size(c, chunk_param));
+            float finest = ChunkMath::world_chunk_size(ps.chunks[0].id, chunk_param);
+            for (const PageChunk &c : ps.chunks) {
+                finest = MIN(finest, ChunkMath::world_chunk_size(c.id, chunk_param));
             }
             const double extent = ps.bounds.get_longest_axis_size() / finest;
             extent_sum += extent;
@@ -621,6 +811,15 @@ Dictionary GPUDirectMesher::get_stats() {
     d["nan_vertices"] = (int64_t)stats.nan_vertices;
     d["kills"] = (int64_t)stats.kills;
     d["pages_returned_unused"] = (int64_t)stats.pages_returned_unused;
+    // Quad slots the vertex shader runs on (whole groups of live pages): dead and padding included.
+    d["drawn_quad_slots"] = drawn_groups * QuadPagePool::QUAD_GROUP;
+    d["compact_rounds"] = (int64_t)stats.compact_rounds;
+    d["compact_skipped"] = (int64_t)stats.compact_skipped;
+    d["pages_compacted"] = (int64_t)stats.pages_compacted;
+    d["pages_compacted_into"] = (int64_t)stats.pages_compacted_into;
+    d["chunks_moved"] = (int64_t)stats.chunks_moved;
+    d["compact_copies"] = (int64_t)stats.compact_copies;
+    d["compact_cpu"] = stats.compact_cpu.to_dict();
     d["live_quads"] = (int64_t)stats.live_quads;
     d["pages_with_live_chunks"] = pages_with_live;
     const int64_t slots_in_live_pages = (int64_t)pages_with_live * settings.page_capacity;
