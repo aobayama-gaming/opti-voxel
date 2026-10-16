@@ -50,7 +50,9 @@ METRICS = [
     ("Steady state (scenario B)", "render GPU time p50", lambda d: get(d, "phases.steady.render_gpu_ms.p50"), "ms", True),
     ("Steady state (scenario B)", "render CPU time p50", lambda d: get(d, "phases.steady.render_cpu_ms.p50"), "ms", True),
     ("Steady state (scenario B)", "draw calls", lambda d: get(d, "phases.steady.draw_calls.p50"), "", True),
-    ("Steady state (scenario B)", "primitives drawn", lambda d: get(d, "phases.steady.primitives.p50"), "", True),
+    ("Steady state (scenario B)", "primitives drawn (direct: page capacity, not triangles)", lambda d: get(d, "phases.steady.primitives.p50"), "", True),
+    ("Steady state (scenario B)", "  draw calls, camera pass", lambda d: get(d, "phases.steady.draw_calls_view.p50"), "", True),
+    ("Steady state (scenario B)", "  draw calls, shadow pass", lambda d: get(d, "phases.steady.draw_calls_shadow.p50"), "", True),
 
     ("Flythrough (scenario C)", "frame time p50 (out)", lambda d: get(d, "phases.fly_out.frame_ms.p50"), "ms", True),
     ("Flythrough (scenario C)", "frame time p99 (out)", lambda d: get(d, "phases.fly_out.frame_ms.p99"), "ms", True),
@@ -63,8 +65,8 @@ METRICS = [
     ("Geometry", "live triangles (real)", lambda d: get(d, "phases.steady.terrain.chunks.live_triangles"), "", None),
     ("Geometry", "triangles in index buffers (incl. padding)", lambda d: get(d, "phases.steady.terrain.chunks.drawn_triangles"), "", True),
     ("Geometry", "  direct: pages with live chunks", lambda d: get(d, "phases.steady.terrain.mesher.pages_with_live_chunks"), "", None),
-    ("Geometry", "  direct: page AABB longest axis, mean", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_mean_extent_m"), "m", True),
-    ("Geometry", "  direct: page AABB longest axis, max", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_max_extent_m"), "m", True),
+    ("Geometry", "  direct: page AABB longest axis, mean", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_extent_chunks_mean"), "chunks", True),
+    ("Geometry", "  direct: page AABB longest axis, max", lambda d: get(d, "phases.steady.terrain.mesher.page_aabb_extent_chunks_max"), "chunks", True),
 
     ("Test conditions", "GPU clock, median (MHz)", lambda d: get(d, "telemetry.gpu_clock_mhz_median"), "", None),
     ("Test conditions", "GPU clock, min (MHz)", lambda d: get(d, "telemetry.gpu_clock_mhz_min"), "", None),

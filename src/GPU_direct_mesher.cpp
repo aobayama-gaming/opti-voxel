@@ -598,14 +598,19 @@ Dictionary GPUDirectMesher::get_stats() {
     for (const PageState &ps : page_state) {
         if (ps.live_chunks > 0) {
             pages_with_live++;
-            const double extent = ps.bounds.get_longest_axis_size();
+            // Longest axis of the page AABB in units of its finest chunk (frustum culling
+            // granularity; metres would be dominated by the kilometre-wide far LODs).
+            float finest = ChunkMath::world_chunk_size(ps.chunks[0], chunk_param);
+            for (const Vector3i &c : ps.chunks) {
+                finest = MIN(finest, ChunkMath::world_chunk_size(c, chunk_param));
+            }
+            const double extent = ps.bounds.get_longest_axis_size() / finest;
             extent_sum += extent;
             extent_max = MAX(extent_max, extent);
         }
     }
-    // Longest axis of the page AABBs (frustum culling granularity).
-    d["page_aabb_mean_extent_m"] = pages_with_live ? extent_sum / pages_with_live : 0.0;
-    d["page_aabb_max_extent_m"] = extent_max;
+    d["page_aabb_extent_chunks_mean"] = pages_with_live ? extent_sum / pages_with_live : 0.0;
+    d["page_aabb_extent_chunks_max"] = extent_max;
     d["queued"] = queued;
     d["in_flight"] = (int64_t)in_flight.size();
     d["batches"] = (int64_t)stats.batches;

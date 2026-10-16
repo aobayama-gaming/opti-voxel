@@ -64,6 +64,10 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Locked screen (`loginctl show-session <id> -p LockedHint` = yes): KWin stops presenting the
   window, GPU Direct readbacks never arrive and the bench times out with 0 chunks loaded at a
   210 MHz GPU clock. Benches need an unlocked session.
+- GPU Direct pages draw indirectly, so Godot's "primitives drawn" counts each visible page at full
+  capacity (draw calls × 65,536), not real triangles. Compare culling with the bench's
+  `draw_calls_view` / `draw_calls_shadow` (camera pass vs shadow pass), never with primitives.
+  The bench light's shadow pass (1,000 m) also draws pages behind the camera.
 - `thread_model=2` (separate render thread): Godot 4.6.3 aborts in `RenderingDevice::finalize` on
   every exit, even for an empty scene. `bench.sh` accepts that one abort if the bench finished.
 - Reading render GPU time (`viewport_get_measured_render_time_*`) syncs the render thread: the

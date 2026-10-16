@@ -99,7 +99,7 @@ func _begin_phase(p_name: String) -> void:
 	phase_frame = 0
 	phase_start_usec = Time.get_ticks_usec()
 	samples[p_name] = {"frame_ms": [], "gpu_ms": [], "cpu_render_ms": [], "pending": [],
-		"draw_calls": [], "primitives": []}
+		"draw_calls": [], "primitives": [], "draw_calls_view": [], "draw_calls_shadow": []}
 
 
 func _end_phase() -> void:
@@ -113,6 +113,8 @@ func _end_phase() -> void:
 		"pending_chunks": _summary(s["pending"]),
 		"draw_calls": _summary(s["draw_calls"]),
 		"primitives": _summary(s["primitives"]),
+		"draw_calls_view": _summary(s["draw_calls_view"]),
+		"draw_calls_shadow": _summary(s["draw_calls_shadow"]),
 		"terrain": terrain.get_debug_stats(),
 		"memory": _memory(),
 	}
@@ -135,6 +137,13 @@ func _process(delta: float) -> void:
 	s["pending"].append(terrain.get_pending_chunk_count())
 	s["draw_calls"].append(RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME))
 	s["primitives"].append(RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME))
+	# The totals mix the camera pass with the shadow pass (which draws pages behind the camera).
+	# GPU Direct pages draw indirectly, so their primitive counts are page capacities, not real
+	# triangles: draw calls per pass are the meaningful culling numbers.
+	s["draw_calls_view"].append(RenderingServer.viewport_get_render_info(vp_rid,
+		RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE, RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME))
+	s["draw_calls_shadow"].append(RenderingServer.viewport_get_render_info(vp_rid,
+		RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW, RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME))
 
 	_take_shots(str(frame))
 
