@@ -33,6 +33,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
     ClassDB::bind_method(D_METHOD("set_legacy_batch_size", "size"), &VoxelTerrain::set_legacy_batch_size);
     ClassDB::bind_method(D_METHOD("get_legacy_batch_size"), &VoxelTerrain::get_legacy_batch_size);
+    ClassDB::bind_method(D_METHOD("set_voxel_size", "size"), &VoxelTerrain::set_voxel_size);
+    ClassDB::bind_method(D_METHOD("get_voxel_size"), &VoxelTerrain::get_voxel_size);
+    ClassDB::bind_method(D_METHOD("set_debug_test_rig", "enable"), &VoxelTerrain::set_debug_test_rig);
+    ClassDB::bind_method(D_METHOD("get_debug_test_rig"), &VoxelTerrain::get_debug_test_rig);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
@@ -61,6 +65,7 @@ void VoxelTerrain::_bind_methods() {
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "CPU,GPU Legacy,GPU Direct"), "set_pipeline_mode", "get_pipeline_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
     ADD_GROUP("GPU Direct", "direct_");
@@ -71,6 +76,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_GROUP("Debug", "");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
 
     BIND_ENUM_CONSTANT(PIPELINE_CPU);
@@ -94,6 +100,25 @@ void VoxelTerrain::set_legacy_batch_size(int p_size) {
 
 int VoxelTerrain::get_legacy_batch_size() const {
     return legacy_batch_size;
+}
+
+void VoxelTerrain::set_voxel_size(float p_size) {
+    ERR_FAIL_COND_MSG(started, "voxel_size must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_size <= 0.0f, "voxel_size must be positive.");
+    chunk_param.voxel_size = p_size;
+}
+
+float VoxelTerrain::get_voxel_size() const {
+    return chunk_param.voxel_size;
+}
+
+void VoxelTerrain::set_debug_test_rig(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "debug_test_rig must be set before the terrain enters the tree.");
+    debug_test_rig = p_enable;
+}
+
+bool VoxelTerrain::get_debug_test_rig() const {
+    return debug_test_rig;
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
@@ -185,6 +210,9 @@ void VoxelTerrain::_ready(){
 
     started = true;
     start_usec = now_usec();
+
+    // sdf is always an SDFDummy for now (see the member initialiser).
+    static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
 
     visual_mesh_data.set_max_lod(lod_numbers);
 
