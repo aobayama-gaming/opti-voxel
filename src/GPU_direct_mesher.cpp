@@ -83,10 +83,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     settings = p_settings;
     mutex.instantiate();
 
-    chunk_queue.resize(p_lod_numbers, nullptr);
-    for (int i = 0; i < p_lod_numbers; ++i) {
-        chunk_queue[i] = memnew(LODHashSet);
-    }
+    chunk_queue.resize(p_lod_numbers);
 
     pool = memnew(QuadPagePool);
     pool->initialize(scenario, settings.page_capacity, settings.initial_pages, chunk_param.voxel_size);
@@ -330,14 +327,33 @@ AABB GPUDirectMesher::_chunk_aabb(const Vector3i &p_chunk) const {
     return AABB(center - half, half * 2.0f);
 }
 
-bool GPUDirectMesher::_pop_queue(Vector3i &r_chunk) {
-    for (LODHashSet *queue : chunk_queue) {
-        if (queue == nullptr || queue->is_empty()) {
+void GPUDirectMesher::_update_dirty_bounds() {
+    for (const int page : dirty_bounds_pages) {
+        PageState &ps = page_state[page];
+        if (!ps.bounds_dirty) {
+            continue; // released (and maybe reacquired) since it was marked
+        }
+        ps.bounds_dirty = false;
+        if (ps.chunks.empty()) {
             continue;
         }
-        LODHashSet::Iterator it = queue->begin();
-        r_chunk = *it;
-        queue->remove(it);
+        AABB bounds = _chunk_aabb(ps.chunks[0]);
+        for (size_t i = 1; i < ps.chunks.size(); i++) {
+            bounds.merge_with(_chunk_aabb(ps.chunks[i]));
+        }
+        ps.bounds = bounds;
+        pool->set_page_aabb(page, bounds);
+    }
+    dirty_bounds_pages.clear();
+}
+
+bool GPUDirectMesher::_pop_queue(Vector3i &r_chunk) {
+    for (std::vector<Vector3i> &queue : chunk_queue) {
+        if (queue.empty()) {
+            continue;
+        }
+        r_chunk = queue.back();
+        queue.pop_back();
         return true;
     }
     return false;
@@ -345,6 +361,8 @@ bool GPUDirectMesher::_pop_queue(Vector3i &r_chunk) {
 
 void GPUDirectMesher::process_queue() {
     frame++;
+    // Before acquiring pages: a page released since it was marked must not be touched.
+    _update_dirty_bounds();
 
     if (!pending_kill_pages.is_empty()) {
         RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_kill)
@@ -371,7 +389,7 @@ void GPUDirectMesher::process_queue() {
     }
     const uint64_t t0 = now_usec();
 
-    // Spatially coherent batches -> pages with tight bounds -> page-level frustum culling works.
+    // The queue already pops in Morton order; re-sorting covers re-queued overflow chunks.
     std::sort(chunks.begin(), chunks.end(), [](const Vector3i &a, const Vector3i &b) { return morton_key(a) < morton_key(b); });
 
     InFlightBatch batch;
@@ -451,7 +469,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
             if (flags & 1u) { // overflow: try again in a later batch
                 const int lod = ChunkMath::get_lod(chunk_id);
                 if (lod >= 0 && lod < (int)chunk_queue.size()) {
-                    chunk_queue[lod]->insert(chunk_id);
+                    chunk_queue[lod].push_back(chunk_id);
                 }
                 continue;
             }
@@ -468,6 +486,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 out.quad_count = count;
                 page_state[out.page].live_quads += count;
                 page_state[out.page].live_chunks++;
+                page_state[out.page].chunks.push_back(chunk_id);
                 stats.live_quads += count;
                 const AABB box = _chunk_aabb(chunk_id);
                 page_bounds[k] = page_has_bounds[k] ? page_bounds[k].merge(box) : box;
@@ -483,6 +502,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 pool->release_page(page);
                 stats.pages_returned_unused++;
             } else {
+                page_state[page].bounds = page_bounds[k];
                 pool->set_page_aabb(page, page_bounds[k]);
             }
         }
@@ -508,6 +528,17 @@ void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
         pool->release_page(p_chunk.page);
         return;
     }
+    for (size_t i = 0; i < ps.chunks.size(); i++) {
+        if (ps.chunks[i] == p_chunk.chunk_id) {
+            ps.chunks[i] = ps.chunks.back();
+            ps.chunks.pop_back();
+            break;
+        }
+    }
+    if (!ps.bounds_dirty) {
+        ps.bounds_dirty = true;
+        dirty_bounds_pages.push_back(p_chunk.page);
+    }
     pending_kill_pages.push_back(p_chunk.page);
     pending_kill_multimeshes.push_back(pool->get_page_multimesh(p_chunk.page));
     pending_kill_ranges.push_back(p_chunk.quad_offset);
@@ -515,16 +546,26 @@ void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
 }
 
 void GPUDirectMesher::send_chunk(LODHashSet p_chunks) {
-    for (LODHashSet *q : chunk_queue) {
-        q->clear();
-    }
+    // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
+    // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
+    std::vector<std::vector<std::pair<uint64_t, Vector3i>>> keyed(chunk_queue.size());
     for (const Vector3i &chunk_pos : p_chunks) {
         const int lod = ChunkMath::get_lod(chunk_pos);
         if (lod < 0 || lod >= (int)chunk_queue.size()) {
             continue;
         }
         if (!working_generation.has(chunk_pos)) {
-            chunk_queue[lod]->insert(chunk_pos);
+            keyed[lod].push_back({ morton_key(chunk_pos), chunk_pos });
+        }
+    }
+    for (size_t lod = 0; lod < chunk_queue.size(); lod++) {
+        std::sort(keyed[lod].begin(), keyed[lod].end(),
+                [](const std::pair<uint64_t, Vector3i> &a, const std::pair<uint64_t, Vector3i> &b) { return a.first > b.first; });
+        std::vector<Vector3i> &queue = chunk_queue[lod];
+        queue.clear();
+        queue.reserve(keyed[lod].size());
+        for (const std::pair<uint64_t, Vector3i> &k : keyed[lod]) {
+            queue.push_back(k.second);
         }
     }
 }
@@ -533,8 +574,8 @@ bool GPUDirectMesher::is_idle() {
     if (!in_flight.is_empty()) {
         return false;
     }
-    for (LODHashSet *q : chunk_queue) {
-        if (!q->is_empty()) {
+    for (const std::vector<Vector3i> &q : chunk_queue) {
+        if (!q.empty()) {
             return false;
         }
     }
@@ -548,13 +589,28 @@ void GPUDirectMesher::set_debug_view(int p_view) {
 Dictionary GPUDirectMesher::get_stats() {
     Dictionary d;
     int64_t queued = 0;
-    for (LODHashSet *q : chunk_queue) {
-        queued += q->size();
+    for (const std::vector<Vector3i> &q : chunk_queue) {
+        queued += q.size();
     }
     int pages_with_live = 0;
+    double extent_sum = 0.0;
+    double extent_max = 0.0;
     for (const PageState &ps : page_state) {
-        pages_with_live += ps.live_chunks > 0 ? 1 : 0;
+        if (ps.live_chunks > 0) {
+            pages_with_live++;
+            // Longest axis of the page AABB in units of its finest chunk (frustum culling
+            // granularity; metres would be dominated by the kilometre-wide far LODs).
+            float finest = ChunkMath::world_chunk_size(ps.chunks[0], chunk_param);
+            for (const Vector3i &c : ps.chunks) {
+                finest = MIN(finest, ChunkMath::world_chunk_size(c, chunk_param));
+            }
+            const double extent = ps.bounds.get_longest_axis_size() / finest;
+            extent_sum += extent;
+            extent_max = MAX(extent_max, extent);
+        }
     }
+    d["page_aabb_extent_chunks_mean"] = pages_with_live ? extent_sum / pages_with_live : 0.0;
+    d["page_aabb_extent_chunks_max"] = extent_max;
     d["queued"] = queued;
     d["in_flight"] = (int64_t)in_flight.size();
     d["batches"] = (int64_t)stats.batches;
@@ -589,9 +645,6 @@ Dictionary GPUDirectMesher::get_stats() {
 }
 
 void GPUDirectMesher::destroy() {
-    for (LODHashSet *q : chunk_queue) {
-        memdelete(q);
-    }
     chunk_queue.clear();
     // Queues its own render-thread cleanup. `pool` is not cleared: render-thread work queued before
     // (dispatch, kills) still uses it and runs first (FIFO).

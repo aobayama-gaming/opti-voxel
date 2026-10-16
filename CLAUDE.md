@@ -4,6 +4,31 @@ Godot 4.6 GDExtension (godot-cpp, 4.4 API) for an LOD voxel terrain meshed with 
 Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=template_debug -j$(nproc)`
 (installs into `project/bin/linux/`).
 
+## Workflow (branches, worktrees, PRs)
+- `main` only moves through merged PRs from `dev`. `dev` is the integration branch.
+  Never push directly to either.
+- One branch per feature, `feature/<name>`, started from `dev`, in its own worktree next to the
+  main checkout. Open a PR into `dev`; `dev` goes into `main` through a PR as well.
+  ```
+  git worktree add ../opti-voxel-worktrees/<name> -b feature/<name> dev
+  cd ../opti-voxel-worktrees/<name>
+  git submodule update --init                               # godot-cpp starts empty
+  scons platform=linux target=template_debug -j$(nproc)     # full build, a few minutes
+  ~/.local/bin/godot --headless --path project --import     # once: .godot/ is gitignored
+  ```
+  Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
+  ends with a segfault in the extension (headless editor exit, pre-existing). It's harmless as
+  long as `project/.godot/extension_list.cfg` exists afterwards.
+- Perf PRs carry a measured before/after table and name the new bottlenecks.
+  `tools/bench_ab.sh <dev checkout> <worktree> -- --mode=direct` builds both trees, interleaves
+  the runs and writes the table to paste into the PR.
+  Never build while a bench runs (thermals, see Gotchas).
+- Commits are GPG-signed, and the user types the passphrase.
+- Keep mesher and render work core-level. Order and bounds come from integer chunk ids. Sub-SDFs
+  per chunk and biome-local SDF origins are upcoming features with their own design: don't
+  anticipate them.
+- When done: `git worktree remove ../opti-voxel-worktrees/<name>` after the PR is merged.
+
 ## Pipelines (`VoxelTerrain.pipeline_mode`)
 - `0` CPU: `MesherPool` of `CPUMesher` threads.
 - `1` GPU Legacy (`GPUMesher`): compute on a local RenderingDevice, full readback, CPU
@@ -36,6 +61,13 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Laptop GPU: in the `quiet` platform profile the GPU is power-capped to ~300 MHz under load and
   every GPU number is meaningless. `bench.sh` records clocks/throttling in `stats.json["telemetry"]`;
   check `gpu_clock_mhz_median` before trusting a result.
+- Locked screen (`loginctl show-session <id> -p LockedHint` = yes): KWin stops presenting the
+  window, GPU Direct readbacks never arrive and the bench times out with 0 chunks loaded at a
+  210 MHz GPU clock. Benches need an unlocked session.
+- GPU Direct pages draw indirectly, so Godot's "primitives drawn" counts each visible page at full
+  capacity (draw calls × 65,536), not real triangles. Compare culling with the bench's
+  `draw_calls_view` / `draw_calls_shadow` (camera pass vs shadow pass), never with primitives.
+  The bench light's shadow pass (1,000 m) also draws pages behind the camera.
 - `thread_model=2` (separate render thread): Godot 4.6.3 aborts in `RenderingDevice::finalize` on
   every exit, even for an empty scene. `bench.sh` accepts that one abort if the bench finished.
 - Reading render GPU time (`viewport_get_measured_render_time_*`) syncs the render thread: the

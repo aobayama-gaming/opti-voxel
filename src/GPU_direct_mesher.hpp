@@ -22,14 +22,16 @@ using namespace godot;
 // which is bookkeeping for page recycling and chunk destruction, not needed to draw.
 //
 // Batch lifecycle (one batch per frame at most):
-//   main:   pop <= batch_size chunks (Morton order), acquire pages_per_batch pages
+//   main:   pop <= batch_size chunks, acquire pages_per_batch pages. The queue is kept in Morton
+//           order, so a batch is a compact region and so is every page: pages are frustum culled
+//           as a whole, with the union of their chunks' AABBs
 //   render: clear counters, 5 compute passes, copy staging -> pages, copy fill -> indirect counts,
 //           async readback of directory + status
 //   render: (frames later) readback callback -> completed queue
 //   main:   get_results(): chunks become loaded (ChunkOutput with page/offset/count), unused
 //           pages go back to the pool, overflowed chunks are re-queued
-// Destroying a chunk clears its quad range (zero transforms = degenerate, never rasterised) and
-// releases the page once nothing alive is left in it.
+// Destroying a chunk clears its quad range (zero transforms = degenerate, never rasterised),
+// shrinks the page AABB to the chunks still alive, and releases the page once nothing is left.
 class GPUDirectMesher : public Object, public ChunkReleaser {
 
 public:
@@ -72,6 +74,9 @@ private:
     struct PageState {
         uint32_t live_quads = 0;
         int live_chunks = 0;
+        std::vector<Vector3i> chunks; // live chunks with geometry in this page
+        AABB bounds;
+        bool bounds_dirty = false; // a chunk died: recompute `bounds` at the next process_queue
     };
 
     SDFBase *sdf = nullptr;
@@ -81,12 +86,14 @@ private:
 
     QuadPagePool *pool = nullptr;
 
-    std::vector<LODHashSet *> chunk_queue;
+    // Per LOD, sorted by descending Morton key: pop_back() walks space along the Morton curve.
+    std::vector<std::vector<Vector3i>> chunk_queue;
     LODHashSet working_generation;
 
     uint32_t next_batch_id = 0;
     HashMap<uint32_t, InFlightBatch> in_flight;
     std::vector<PageState> page_state; // indexed by pool page
+    std::vector<int> dirty_bounds_pages;
 
     // Kills collected during the frame, flushed to the render thread once.
     PackedInt32Array pending_kill_pages;
@@ -128,6 +135,7 @@ private:
 
     bool _pop_queue(Vector3i &r_chunk);
     void _release_page_if_dead(int p_page);
+    void _update_dirty_bounds();
     AABB _chunk_aabb(const Vector3i &p_chunk) const;
 
     struct Stats {
