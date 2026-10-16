@@ -76,6 +76,7 @@ void ChunkDiscoverer::discovery_loop() {
             break;
         }
 
+        const uint64_t t_scan_start = now_usec();
         LODHashSet new_scanned_chunk;
 
         const int lod_count = lod_distances.size()-1; 
@@ -109,6 +110,8 @@ void ChunkDiscoverer::discovery_loop() {
         //add output here
         scanned_chunks = new_scanned_chunk;
         scanned_chunks_dirty = true;
+        scan_time.add(now_usec() - t_scan_start);
+        last_scan_size = new_scanned_chunk.size();
         mutex->unlock();
 
         
@@ -248,7 +251,15 @@ void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos){
 
         semaphore->post();
 
-        UtilityFunctions::print("new chunk:", new_camera_chunk);
+        VLOG(2, "new chunk:", new_camera_chunk);
     }
 
+}
+Dictionary ChunkDiscoverer::get_stats() {
+    Dictionary d;
+    mutex->lock();
+    d["scan"] = scan_time.to_dict();
+    d["last_scan_size"] = last_scan_size;
+    mutex->unlock();
+    return d;
 }

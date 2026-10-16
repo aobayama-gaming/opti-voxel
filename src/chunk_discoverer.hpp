@@ -7,6 +7,7 @@
 #include "chunk_math.hpp"
 #include "lod_structures.hpp"
 #include "sdf_base.hpp"
+#include "debug_log.hpp"
 
 using namespace godot;
 
@@ -28,6 +29,8 @@ private:
     Vector3i camera_chunk;
     LODHashSet scanned_chunks;
     bool scanned_chunks_dirty = false;
+    TimingStat scan_time;
+    int64_t last_scan_size = 0;
 
     SDFBase * sdf;
 
@@ -40,6 +43,8 @@ public:
 
     void set_camera_chunk(Vector3 camera_pos);
     bool get_scanned_chunks(LODHashSet &p_scanned_chunks);
+
+    Dictionary get_stats();
 
     void set_config(
         ChunkParam &p_chunk_param,

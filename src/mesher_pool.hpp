@@ -18,6 +18,9 @@ private:
 
     LODHashSet working_generation;
 
+    uint64_t chunks_meshed = 0;
+    uint64_t triangles = 0;
+
 
     RID scenario;
     SDFBase* sdf;
@@ -40,6 +43,12 @@ public:
     void process_queue();
 
     bool get_results(VoxelState &output);
+
+    void stop();
+
+    bool is_idle();
+
+    Dictionary get_stats();
 
 
 };

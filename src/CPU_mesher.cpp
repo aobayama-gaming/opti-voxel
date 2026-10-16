@@ -986,16 +986,19 @@ void CPUMesher::render_chunk() {
 
     RenderingServer *rs = RenderingServer::get_singleton();
 
-    RID mesh_rid = rs->mesh_create();
+    chunk_output.mesh_rid = rs->mesh_create();
+    chunk_output.triangle_count = vertices_data.output_vertices.size() / 3;
+    chunk_output.drawn_triangles = chunk_output.triangle_count;
 
-    rs->mesh_add_surface_from_arrays(mesh_rid,RenderingServer::PRIMITIVE_TRIANGLES,arrays);
+    rs->mesh_add_surface_from_arrays(chunk_output.mesh_rid,RenderingServer::PRIMITIVE_TRIANGLES,arrays);
 
-    chunk_output.mesh_rid = rs->instance_create();
+    chunk_output.instance_rid = rs->instance_create();
+    DebugLog::chunk_rids_created++;
 
-    rs->instance_set_scenario(chunk_output.mesh_rid, scenario);
-    rs->instance_set_base(chunk_output.mesh_rid, mesh_rid);
+    rs->instance_set_scenario(chunk_output.instance_rid, scenario);
+    rs->instance_set_base(chunk_output.instance_rid, chunk_output.mesh_rid);
     rs->instance_set_transform(
-        chunk_output.mesh_rid,
+        chunk_output.instance_rid,
         Transform3D(Basis(), ChunkMath::chunk_to_world(chunk_id, chunk_param))
     );
 }
@@ -1025,6 +1028,10 @@ void CPUMesher::pipeline(){
     //UtilityFunctions::print("CPUMesher : pipeline started");
 
     mutex->lock();
+    if (exit_thread) {
+        mutex->unlock();
+        break;
+    }
     worker_available=false;
     mutex->unlock();
 
@@ -1042,6 +1049,23 @@ void CPUMesher::pipeline(){
     //UtilityFunctions::print("CPUMesher : pipeline ended");
     }
 
+}
+
+void CPUMesher::stop(){
+    if (worker.is_null()) {
+        return;
+    }
+    mutex->lock();
+    exit_thread = true;
+    mutex->unlock();
+    semaphore->post();
+    worker->wait_to_finish();
+    worker.unref();
+
+    if (result_available) {
+        chunk_output.free();
+        result_available = false;
+    }
 }
 
 void CPUMesher::launch_pipeline(Vector3i p_chunk_id){

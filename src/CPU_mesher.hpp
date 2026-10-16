@@ -290,6 +290,7 @@ private:
     Ref<Semaphore> semaphore;
     bool worker_available = true;
     bool result_available = false;
+    bool exit_thread = false;
 
     // Internal thread variable.
     VerticesData vertices_data;
@@ -326,6 +327,8 @@ public :
     );
 
     bool get_result(ChunkOutput &out);
+
+    void stop();
 
     void launch_pipeline(Vector3i p_chunk_id);
 
