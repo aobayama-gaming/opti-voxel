@@ -125,7 +125,6 @@ public:
 	void set_legacy_batch_size(int p_size);
 	int get_legacy_batch_size() const;
 
-	// Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
 	// Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
 	void set_voxel_size(float p_size);
 	float get_voxel_size() const;
@@ -134,6 +133,7 @@ public:
 	void set_debug_test_rig(bool p_enable);
 	bool get_debug_test_rig() const;
 
+	// Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
 	void set_lod_pixel_error(float p_error);
 	float get_lod_pixel_error() const;
 
