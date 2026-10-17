@@ -31,6 +31,13 @@
 // replaces. The bands reach the GPU as a table indexed by level (band_table), so the shader does not change
 // with the spec. Debug variant (CascadeSpike): the last level also stores its channels; the meshers' variant
 // doesn't, so the channels the sample doesn't use are dead code there.
+//
+// Items: the meshers' are chunks (32 points per axis, box from the chunk's anchor minus the skirt). The
+// discoverer's are points (create_points): a point item is a ChunkInput whose anchor is the point itself
+// (encode_point_input), with the point instance's ChunkParam (point_param: skirt 0), so its box is that one
+// point and every level above it at most 2 points per axis (level_bound(1, j)); the items are flattened over
+// the workgroups' x (no 65,535 limit on y), and Λ_L writes the bare cascade_terrain_sdf(...).w, one float per
+// point. The meshers' shader text is the same as before point items.
 namespace CascadeGLSL {
 
 static constexpr uint32_t BAND_BYTES = 64;
@@ -43,13 +50,22 @@ static constexpr uint32_t LOCAL_SIZE = 64;
 PackedByteArray band_table(const Cascade::Spec &p_spec);
 
 // Scratch points per chunk of buffer A (odd levels) and B (even levels >= 2), and vec4s per point.
-uint32_t scratch_points_a(int p_chunk_size);
-uint32_t scratch_points_b(int p_chunk_size);
+uint32_t scratch_points_a(int p_item_size);
+uint32_t scratch_points_b(int p_item_size);
 uint32_t vec4s_per_point(Cascade::ChannelSet p_set);
 
 // The level pass compute shader (one source for every level) for p_sdf's cascade; p_debug: the variant
-// whose level 0 also stores its channels in debug_channels.
-String level_shader(const SDFBase *p_sdf, bool p_debug);
+// whose level 0 also stores its channels in debug_channels; p_points: point items.
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false);
+
+// The point instance's ChunkParam: p_param with skirt 0 and chunk_size = the chunk's voxel dimension, so the
+// GPU's anchor (id - lod size) * half chunk stays the meshers' and an item's box is its anchor alone.
+ChunkParam point_param(const ChunkParam &p_param);
+
+// Writes point item p_index (r_bytes must hold it): the LOD-p_lod chunk whose anchor is p_point, which must be
+// on that LOD's corner grid (a multiple of 2^(lod + 1) half chunks, as the discoverer's node corners are).
+// False (and an error) otherwise.
+bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPos &p_point, int p_lod, const ChunkParam &p_point_param);
 
 // Fills /*GLSL_SKIRT_SDF*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers). With SDFDummy
 // exactly as before; with a cascade terrain it adds cascade_vertex_gradient and, in the vertex pass
@@ -69,6 +85,10 @@ public:
     // 16 B placeholder is bound). p_share_scratch: use that object's scratch buffers instead of new ones.
     bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
             RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr);
+    // Point items (the discoverer's): p_input holds encode_point_input items, p_param_ubo the std140
+    // point_param, p_values one float per item.
+    bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
+            RID p_values);
     void free();
     bool is_valid() const { return uniform_set.is_valid(); }
 
@@ -82,6 +102,7 @@ public:
 
     uint64_t scratch_bytes() const { return scratch_bytes_total; }
     uint32_t get_max_chunks() const { return max_chunks; }
+    bool is_points() const { return item_size == 1; }
     RID get_scratch_a() const { return scratch_a; }
     RID get_scratch_b() const { return scratch_b; }
 
@@ -95,8 +116,11 @@ private:
     RID debug_placeholder;
     RID uniform_set;
     int top = 0;
-    int chunk_size = 32;
+    int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items
     uint32_t max_chunks = 0;
     uint64_t scratch_bytes_total = 0;
     bool owns_scratch = true;
+
+    bool _create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo, RID p_output,
+            RID p_debug, const CascadePasses *p_share_scratch);
 };

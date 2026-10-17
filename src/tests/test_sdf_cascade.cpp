@@ -4,6 +4,7 @@
 #include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
 #include "cascade_terrain.hpp"
+#include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
 using namespace Cascade;
@@ -169,4 +170,34 @@ TEST_CASE("SDFCascade: evaluate_batch equals evaluate, bit for bit") {
         CAPTURE(lod);
         CHECK(differing == 0);
     }
+}
+
+// A point item is the ChunkInput of the chunk whose anchor is the point: the GPU derives the anchor's low words
+// from the id's ((id_lo - 2^L) * half chunk, wrapping) and takes its high words as they are.
+TEST_CASE("CascadeGLSL: point items encode the corner as the chunk anchor, at its LOD") {
+    const ChunkParam param;
+    const ChunkParam pp = CascadeGLSL::point_param(param);
+    CHECK(pp.skirt_size == 0);
+    CHECK(pp.half_chunk_voxels() == param.half_chunk_voxels());
+    PackedByteArray bytes;
+    bytes.resize(GPUFrame::CHUNK_INPUT_BYTES);
+    const int64_t bases[] = { 0, -(int64_t(1) << 32), (int64_t(1) << 60) - 99999, -(int64_t(1) << 60) + 777 };
+    for (const int lod : { 0, 1, 9, 24 }) {
+        const int64_t span = param.half_chunk_voxels() << (lod + 1);
+        for (const int64_t base : bases) {
+            const VoxelPos p(WorldCoord::floor_div(base, span) * span, (WorldCoord::floor_div(base, span) - 3) * span, -WorldCoord::floor_div(base, span) * span);
+            CHECK(CascadeGLSL::encode_point_input(bytes, 0, p, lod, pp));
+            const uint32_t id_lo[3] = { uint32_t(bytes.decode_u32(0)), uint32_t(bytes.decode_u32(4)), uint32_t(bytes.decode_u32(8)) };
+            for (int a = 0; a < 3; a++) {
+                CAPTURE(lod);
+                CAPTURE(a);
+                // chunk_frame(): lod from the id's lowest set bit, anchor low word (id_lo - 2^L) * half.
+                CHECK(__builtin_ctz(id_lo[a]) == lod);
+                CHECK((id_lo[a] - (uint32_t(1) << lod)) * uint32_t(pp.half_chunk_voxels()) == WorldCoord::lo32(p[a]));
+                CHECK(bytes.decode_s32(16 + 4 * a) == WorldCoord::hi32(p[a]));
+            }
+        }
+    }
+    // Off the corner grid: refused (prints one expected error).
+    CHECK(!CascadeGLSL::encode_point_input(bytes, 0, VoxelPos(14, 0, 0), 0, pp));
 }

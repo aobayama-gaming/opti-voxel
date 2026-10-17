@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # GPU cascade harness: build (unless --no-build), run res://debug/cascade_spike.tscn, check the result.
 #
-#   tools/cascade_test.sh [--no-build] [--lods=25] [--voxel=0.5] [--check=0|1] [--timing=0|1] [--runs=10] [--sets=8,4]
+#   tools/cascade_test.sh [--no-build] [--lods=25] [--voxel=0.5] [--check=0|1] [--points=0|1] [--timing=0|1] [--runs=10]
+#                         [--sets=8,4]
 #
 # check: the cascade passes (cascade_glsl.hpp) vs Cascade::run, every channel of every level and the
 # sdf_sample, chunks of every LOD near 0, +-2^60 and across 2^32 boundaries (G1), and the LOD relation on
-# the GPU outputs (G3). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
+# the GPU outputs (G3). points: the discoverer's point items (CascadePasses::create_points) vs Cascade::point +
+# SDFCascade::sdf, 5,120 corners per LOD near 0, +-2^60, across 2^32-voxel boundaries and lattice index 2^32
+# (D1 of the GPU discoverer). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
 # (G6), both channel sets (G7). GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.
@@ -84,6 +87,12 @@ if check:
         lines.append(f"| {s} ch | {d['chunks']} | {d['min_chunks_per_lod']} | {d['levels']} | {d['values']:,} | {d['differing']} | "
                      f"{d['samples']:,} | {d['samples_differing']} | {d['relation_points']:,} | {d['relation_differing']} | {d['ok']} |")
     lines.append("")
+pts = r.get("points", {})
+if pts:
+    lines += ["| set | point items | per LOD | differing | scratch MB | ok |", "|---|---|---|---|---|---|"]
+    for s, d in pts.items():
+        lines.append(f"| {s} ch | {d['points']:,} | {d['points_per_lod']:,} | {d['differing']} | {d['scratch_mb']:.2f} | {d['ok']} |")
+    lines.append("")
 t = r.get("timing", {})
 rows = t.get("rows", [])
 if rows:
@@ -127,7 +136,7 @@ if rows:
 text = "\n".join(lines)
 print(text)
 open(sys.argv[3], "w").write(text + "\n")
-for s, d in check.items():
+for s, d in list(check.items()) + list(pts.items()):
     for e in d.get("examples", [])[:8]:
         print(f"   example ({s} ch):", e)
 if "error" in r:
