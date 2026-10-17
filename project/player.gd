@@ -15,7 +15,22 @@ var marks_dir := "user://marks"
 var mark_index := 0
 var pending_audit := {}  # the mark waiting for its discovery audit report
 
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15): it must be set before the
+# terrain's _ready, and every node enters the tree before any is ready.
+func _enter_tree() -> void:
+	var terrain := get_parent().get_node_or_null("VoxelTerrain")
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--lods=") and terrain:
+			terrain.lod_numbers = a.trim_prefix("--lods=").to_int()
+
 func _ready():
+	# Far plane: the scene's at the default LOD count, the discoverer's load range with more LODs.
+	var terrain := get_parent().get_node_or_null("VoxelTerrain")
+	if terrain and terrain.lod_numbers > 15:
+		camera.far = maxf(camera.far, terrain.get_load_radius())
+		# Godot's float projection loses the far plane past far/near ~2^24 (the light culler then
+		# ERRORs every frame): near rises with far (~1.7 km at 25 LODs).
+		camera.near = maxf(camera.near, camera.far / 2097152.0)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	yaw = rotation.y
 	pitch = camera.rotation.x

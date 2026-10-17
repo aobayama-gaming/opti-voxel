@@ -24,6 +24,8 @@ extends Node3D
 ##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
+##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
+##                                covers the discoverer's load range and the terrain gains relief octaves
 ##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
 ##   --zero_pillar=1|2            add a column whose top SDF is exactly 0.0 (1) or 1 cm off it (2), see
 ##                                SDFDummy / tools/zero_test.sh
@@ -112,6 +114,8 @@ func _ready() -> void:
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
 	if args.has("voxel"):
 		terrain.voxel_size = float(args["voxel"])
+	if args.has("lods"):
+		terrain.lod_numbers = int(args["lods"])
 	terrain.debug_test_rig = args.get("rig", "0") == "1"
 	terrain.debug_zero_pillar = int(args.get("zero_pillar", "0"))
 	if args.has("compact"):
@@ -145,6 +149,13 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
+	# The scene's far plane (12 km) at the default LOD count, so pictures don't change; with more LODs,
+	# the discoverer's whole load range.
+	if terrain.lod_numbers > 15:
+		camera.far = maxf(camera.far, terrain.get_load_radius())
+		# Godot's float projection loses the far plane past far/near ~2^24 (the light culler then
+		# ERRORs every frame): near rises with far (~1.7 km at 25 LODs).
+		camera.near = maxf(camera.near, camera.far / 2097152.0)
 
 	_begin_phase("load")
 	print("BENCH: start mode=%s scenario=%s" % [args.get("mode", "legacy"), args.get("scenario", "load")])

@@ -94,6 +94,15 @@ to every change, and a reviewer may reject a PR on any of them.
   chunk_at_render`: render (Godot) space, relative to the world origin.
 - World origin: `VoxelTerrain.world_origin_x/y/z` (LOD0 voxels, |v| <= 2^60), snapped down to the
   root chunk span (2^lod_numbers ids = 458,752 voxels with the defaults). No runtime rebasing yet.
+- LOD range: `VoxelTerrain.lod_numbers` (default 15, at most 31: the GPU reads a LOD from the id's low
+  32 bits). `--lods=N` in `bench.gd` and in the main scene (`godot --path project -- --lods=25`).
+  Above 15 only: `SDFDummy` adds 2 relief octaves per extra LOD, the camera far plane becomes
+  `VoxelTerrain.get_load_radius()` (corner of the discoverer's scan grid) and near rises to far / 2^21
+  (~1.7 km at 25 LODs): past far/near ~2^24 Godot's float projection loses its far plane and the light
+  culler ERRORs every frame. Known: at 25 LODs `--validate` fails on a few normals (14-103 per run) in
+  LOD >= 15 chunks while every triangle matches; there the terrain lies within ~1e-3..1e-2 cells of the
+  y = 0 lattice row (the validator's near-zero threshold is 1e-3) and the full-detail gradient is
+  aliased. Not isolated yet.
 - Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE`): `hash_cell` = PCG3D of the cell's low
   words salted by a PCG3D of its high words and the seed (cells 2^32 apart don't collide);
   `perlin3` / `perlin2` = one octave of gradient noise with wavelength exactly 2^k LOD0 voxels
@@ -165,8 +174,9 @@ to every change, and a reviewer may reject a PR on any of them.
   A dropped chunk with quads is a miss, i.e. a hole; `ok` needs 0 misses and a max LOD jump of 1
   between face neighbours. `bench.sh` also fails a load-complete run whose loaded set != scanned set
   (`chunks.loaded_not_scanned` / `scanned_not_loaded`).
-  `tools/discovery_audit.sh [--only=a,b] [-- bench args]` runs it over 9 poses/settings (default,
-  lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly) and writes
+  `tools/discovery_audit.sh [--only=a,b] [-- bench args]` runs it over 11 poses/settings (default,
+  lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly, and with `--lods=25`
+  `lods25_10km` looking down from 10 km up, `lods25_100km` at the horizon from 100 km up) and writes
   `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
 - Discoverer: the cull verdict of a node only depends on its id and the (fixed) SDF, so it is cached
   across scans (`discovery_cache`, default on); `--discovery_verify=1` recomputes every hit and
@@ -213,6 +223,8 @@ to every change, and a reviewer may reject a PR on any of them.
   The bench light's shadow pass (1,000 m) also draws pages behind the camera.
 - `thread_model=2` (separate render thread): Godot 4.6.3 aborts in `RenderingDevice::finalize` on
   every exit, even for an empty scene. `bench.sh` accepts that one abort if the bench finished.
+- `--render-thread safe` (rendering on the main thread): every bench run reports ~581 leaked
+  StorageBuffer RIDs at exit, so `bench.sh` fails (exit 3). Bench runs need the separate thread.
 - Reading render GPU time (`viewport_get_measured_render_time_*`) syncs the render thread: the
   bench only does it in the steady phase. Godot's official build only captures viewport begin/end
   timestamps, so there is no per-pass GPU breakdown.

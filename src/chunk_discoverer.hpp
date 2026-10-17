@@ -103,6 +103,9 @@ public:
     void scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
             CullCache *p_cache = nullptr) const;
     int get_max_lod() const { return lod_distances.size() - 2; }
+    // The scan grid (after setup_lod): top-LOD chunk centres step `r_step` ids, from -r_count to
+    // +r_count steps around the camera's top-LOD ancestor.
+    void get_scan_grid(int64_t &r_step, int64_t &r_count) const;
 
     Dictionary get_stats();
 

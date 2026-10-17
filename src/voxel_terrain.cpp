@@ -40,6 +40,9 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_debug_zero_pillar"), &VoxelTerrain::get_debug_zero_pillar);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
+    ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
+    ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
+    ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
@@ -82,6 +85,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
@@ -241,6 +245,29 @@ float VoxelTerrain::get_lod_pixel_error() const {
     return lod_pixel_error;
 }
 
+void VoxelTerrain::set_lod_numbers(int p_count) {
+    ERR_FAIL_COND_MSG(started, "lod_numbers must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_count < 1 || p_count > MAX_LOD_NUMBERS, vformat("lod_numbers must be in [1, %d].", MAX_LOD_NUMBERS));
+    lod_numbers = p_count;
+}
+
+int VoxelTerrain::get_lod_numbers() const {
+    return lod_numbers;
+}
+
+double VoxelTerrain::get_load_radius() const {
+    if (chunk_discoverer == nullptr) {
+        return 0.0;
+    }
+    // The camera is within one step of its top-LOD ancestor, the grid spans `count` steps on each
+    // side of it and each top chunk reaches one step (its half extent) past its centre.
+    int64_t step;
+    int64_t count;
+    chunk_discoverer->get_scan_grid(step, count);
+    const double ids = double((count + 2) * step) * std::sqrt(3.0);
+    return ids * double(chunk_param.half_chunk_voxels()) * double(chunk_param.voxel_size);
+}
+
 void VoxelTerrain::set_legacy_trim_indices(bool p_trim) {
     ERR_FAIL_COND_MSG(started, "legacy_trim_indices must be set before the terrain enters the tree.");
     legacy_trim_indices = p_trim;
@@ -338,6 +365,7 @@ int VoxelTerrain::get_log_level() const {
 void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
+    ERR_FAIL_COND_MSG(lod_numbers < 1 || lod_numbers > MAX_LOD_NUMBERS, "VoxelTerrain: lod_numbers out of range.");
 
     started = true;
     start_usec = now_usec();
