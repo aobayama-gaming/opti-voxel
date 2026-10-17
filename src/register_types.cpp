@@ -5,6 +5,7 @@
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
 
+#include "cascade_report.hpp"
 #include "frame_spike.hpp"
 #include "quad_pool_spike.hpp"
 #include "voxel_terrain.hpp"
@@ -22,6 +23,7 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(QuadPoolSpike);
     GDREGISTER_CLASS(FrameSpike);
+    GDREGISTER_CLASS(CascadeReport);
 #ifdef OPTI_VOXEL_TESTS
     GDREGISTER_CLASS(UnitTests);
 #endif

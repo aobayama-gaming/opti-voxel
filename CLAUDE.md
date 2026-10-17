@@ -58,7 +58,7 @@ to every change, and a reviewer may reject a PR on any of them.
 - Functions over ~80 lines get split, files over ~800 lines need a reason. New debug tooling goes
   in its own class (like `MeshValidator`, `PageAuditor`), not into `VoxelTerrain`.
 - Logic in a pure module (`world_coord`, `chunk_math`, `page_format`, `lod_structures`,
-  `chunk_memory`, anything without a GPU) ships with doctest cases in `src/tests/`. A bug fix ships
+  `chunk_memory`, `cascade`, anything without a GPU) ships with doctest cases in `src/tests/`. A bug fix ships
   with the test that would have caught it.
 - `src/` is clang-formatted (`tools/format.sh`; a Claude Code hook in `.claude/settings.json`
   formats each file as it is edited, the pre-commit hook and CI refuse unformatted code) and builds
@@ -114,12 +114,25 @@ to every change, and a reviewer may reject a PR on any of them.
   GPU cost: they are only evaluated where the band lets them reach the smooth max (bit-identical to
   evaluating them everywhere, `cave_skip`, unit-tested).
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
+- Hermite cascade (`src/cascade.hpp`, CPU reference only, not used by the meshers yet; the GPU pass must
+  match it bit for bit): each noise band (octave k) is inserted once on the lattice Λ_{k-3} (multiples of
+  2^(k-3) voxels: 8 samples per wavelength), then carried down by tricubic Hermite subdivision with 8
+  channels (value, 3 slopes, 3 cross slopes, d3/dxdydz from `perlin3_cross`, in units of the lattice
+  spacing). A LOD-L chunk stops at Λ_L, so `V_m(p)` is a pure function of the point: every LOD gets the
+  same bits where they share points. Fixed order x, y, z; only + - * by 0.5, 0.125, 0.75 (no exact sums:
+  determinism comes from the fixed expressions); after each level |c| < 2^-64 is flushed to 0 (without it a
+  band carried far down makes denormals). `Cascade::point` = the same run on a one-point box. 4
+  samples per wavelength (worst case 2.2% value error) and the 4-channel variant (`LINEAR4`, twice the slope
+  error) were measured and rejected: `tools/cascade_report.sh`. Test terrain: `cascade_terrain.hpp`.
 
 ## Verify changes (do this, don't eyeball)
 - `tools/unit_test.sh [--no-build] [filter]`: the C++ unit tests (`src/tests/`, doctest) inside
   headless Godot, a few seconds, no GPU. `filter` is a doctest wildcard on test names
   (`'ChunkMath*'`). Tests are compiled into non-release builds only (`OPTI_VOXEL_TESTS`).
 - `tools/format.sh [--check] [files]`: clang-format 23.1.3 through `uvx` on `src/`.
+- `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
+  `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
+  channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
 - CI (`.github/workflows/ci.yml`) runs format, the `-Werror` build and the unit tests on every PR.
   Everything that needs a GPU stays local.
 - `tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]`: the correctness gate, ~2 min.
