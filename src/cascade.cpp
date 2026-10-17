@@ -1,6 +1,7 @@
 #include "cascade.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace Cascade {
 
@@ -285,6 +286,123 @@ Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r
 
 void point(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_ch[CHANNELS]) {
     run(p_spec, point_box(p_p), p_m).channels_at(p_p, r_ch);
+}
+
+namespace {
+
+constexpr int POINT_CAP = POINT_AXIS * POINT_AXIS * POINT_AXIS;
+
+// A Level of at most POINT_AXIS^3 points, on the stack (x-major like Level).
+struct SmallLevel {
+    Box box;
+    float ch[CHANNELS][POINT_CAP];
+
+    int64_t stride(int p_axis) const { return p_axis == 0 ? box.size(1) * box.size(2) : (p_axis == 1 ? box.size(2) : 1); }
+};
+
+// subdivide_axis on SmallLevels: the same index arithmetic and the same per-point ops.
+void subdivide_axis_small(const SmallLevel &p_in, ChannelSet p_set, int p_axis, int64_t p_lo, int64_t p_hi, SmallLevel &r_out) {
+    r_out.box = p_in.box;
+    r_out.box.lo[p_axis] = p_lo;
+    r_out.box.hi[p_axis] = p_hi;
+    const int nch = channel_count(p_set);
+    for (int c = 0; c < nch; c++) {
+        for (float &v : r_out.ch[c]) {
+            v = 0.0f;
+        }
+    }
+    const int64_t in_stride[3] = { p_in.stride(0), p_in.stride(1), p_in.stride(2) };
+    const int axis_slope = DX + p_axis;
+    for_each_point(r_out.box, [&](const Vector3i64 &p_p, int64_t p_o) {
+        const int64_t idx[3] = { p_p.x, p_p.y, p_p.z };
+        const int64_t c = idx[p_axis];
+        int64_t ia = 0;
+        for (int a = 0; a < 3; a++) {
+            ia += ((a == p_axis ? half_floor(c) : idx[a]) - p_in.box.lo[a]) * in_stride[a];
+        }
+        const int64_t ib = ia + in_stride[p_axis];
+        const bool copy = (c & 1) == 0;
+        auto pair = [&](int p_v, int p_s) {
+            if (copy) {
+                hermite_copy(p_in.ch[p_v][ia], p_in.ch[p_s][ia], r_out.ch[p_v][p_o], r_out.ch[p_s][p_o]);
+            } else {
+                hermite_mid(p_in.ch[p_v][ia], p_in.ch[p_v][ib], p_in.ch[p_s][ia], p_in.ch[p_s][ib], r_out.ch[p_v][p_o], r_out.ch[p_s][p_o]);
+            }
+        };
+        if (p_set == ChannelSet::HERMITE8) {
+            for (const auto &pr : PAIRS[p_axis]) {
+                pair(pr[0], pr[1]);
+            }
+            return;
+        }
+        pair(VALUE, axis_slope);
+        for (int s = DX; s <= DZ; s++) {
+            if (s != axis_slope) {
+                r_out.ch[s][p_o] = copy ? p_in.ch[s][ia] : (p_in.ch[s][ia] + p_in.ch[s][ib]) * 0.5f;
+            }
+        }
+    });
+}
+
+} // namespace
+
+void point_into(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_ch[CHANNELS]) {
+    for (int c = 0; c < CHANNELS; c++) {
+        r_ch[c] = 0.0f;
+    }
+    const int top = checked_top(p_spec, p_m);
+    if (top < 0) {
+        return;
+    }
+    const int nch = channel_count(p_spec.set);
+    const Box base = point_box(p_p);
+    // Ping-pong: cur holds level l, tmp the axis passes towards level l - 1.
+    SmallLevel a;
+    SmallLevel b;
+    SmallLevel *cur = &a;
+    SmallLevel *tmp = &b;
+    for (int l = top; l >= p_m; l--) {
+        // level_box == the iterated parent_box of run() (unit-tested); a point's boxes fit POINT_AXIS.
+        const Box box = level_box(base, l - p_m);
+        ERR_FAIL_COND_MSG(box.size(0) > POINT_AXIS || box.size(1) > POINT_AXIS || box.size(2) > POINT_AXIS, "Cascade::point_into: level box over POINT_AXIS.");
+        if (l == top) {
+            cur->box = box;
+            for (int c = 0; c < nch; c++) {
+                for (float &v : cur->ch[c]) {
+                    v = 0.0f;
+                }
+            }
+        } else {
+            // subdivide(): x, then y, then z.
+            subdivide_axis_small(*cur, p_spec.set, 0, box.lo[0], box.hi[0], *tmp);
+            subdivide_axis_small(*tmp, p_spec.set, 1, box.lo[1], box.hi[1], *cur);
+            subdivide_axis_small(*cur, p_spec.set, 2, box.lo[2], box.hi[2], *tmp);
+            std::swap(cur, tmp);
+        }
+        // insert_bands(), then flush().
+        for (const Band &band : p_spec.bands) {
+            if (p_spec.insert_level(band) != l) {
+                continue;
+            }
+            const BandFactors factors(p_spec, band);
+            for_each_point(cur->box, [&](const Vector3i64 &p_q, int64_t p_i) {
+                float o[CHANNELS];
+                band_channels(p_spec, band, factors, p_q, o);
+                for (int c = 0; c < nch; c++) {
+                    cur->ch[c][p_i] = cur->ch[c][p_i] + o[c];
+                }
+            });
+        }
+        const int64_t count = cur->box.count();
+        for (int c = 0; c < nch; c++) {
+            for (int64_t i = 0; i < count; i++) {
+                cur->ch[c][i] = flush_value(cur->ch[c][i]);
+            }
+        }
+    }
+    for (int c = 0; c < nch; c++) {
+        r_ch[c] = cur->ch[c][0];
+    }
 }
 
 } // namespace Cascade
