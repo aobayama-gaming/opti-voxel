@@ -38,6 +38,8 @@ extends Node3D
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
+##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
+##                                distance, iterated), e.g. for the cascade terrain whose ground height varies
 ##   --camera_voxel=X,Y,Z         place the scene (camera, lights, --cam_pos) relative to this absolute
 ##                                LOD0 voxel instead of the world origin (origin must be a root-span multiple)
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
@@ -159,6 +161,16 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
+	if args.has("above_ground"):
+		# Raise or lower the camera (and the fly path) to this height above the terrain under it.
+		var h := float(args["above_ground"])
+		for i in 32:
+			var d: float = terrain.get_sdf_at(camera.global_position)
+			if absf(d - h) < maxf(1.0, h * 0.05):
+				break
+			camera.global_position.y += h - d
+		start_pos = camera.global_position
+		print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, terrain.get_sdf_at(camera.global_position)])
 	# The scene's clip planes at the default LOD count, so pictures don't change; with more LODs they
 	# follow the camera's altitude (see _clip_planes), set once at the pose.
 	if terrain.lod_numbers > 15:

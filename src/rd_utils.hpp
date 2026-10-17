@@ -48,13 +48,14 @@ inline void delete_on_render_thread(Object *p_object) {
 }
 
 // Debug: with the environment variable OPTI_VOXEL_SHADER_DUMP=<dir>, writes a composed shader source to
-// <dir>/<name>.glsl (compare the shaders of two builds byte for byte).
+// <dir>/<name>_<hash>.glsl (compare the shaders of two builds byte for byte; one file per variant, e.g. the
+// debug shapes' origin-relative literals).
 inline void dump_shader(const String &p_name, const String &p_code) {
     const String dir = OS::get_singleton()->get_environment("OPTI_VOXEL_SHADER_DUMP");
     if (dir.is_empty()) {
         return;
     }
-    Ref<FileAccess> f = FileAccess::open(dir.path_join(p_name + String(".glsl")), FileAccess::WRITE);
+    Ref<FileAccess> f = FileAccess::open(dir.path_join(p_name + String("_") + String::num_uint64(p_code.hash(), 16) + String(".glsl")), FileAccess::WRITE);
     if (f.is_valid()) {
         f->store_string(p_code);
     }
