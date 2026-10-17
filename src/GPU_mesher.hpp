@@ -28,6 +28,10 @@ struct UnpackChunk {
     HashMap<uint32_t, uint32_t> index_storage;
 
     PackedInt32Array quad_masks;
+    // Cell (flat index) of each point. The triangulation must not derive it from the quantised position:
+    // a vertex on its cell's upper face (local coordinate 1.0, a crossing at t = 1) floors into the next
+    // cell, and its quads then take neighbour indices from the wrong cells.
+    PackedInt32Array point_cells;
 
     RID mesh_rid;
     RID instance_rid;
@@ -36,6 +40,7 @@ struct UnpackChunk {
         output_points.resize(point_number);
         output_normals.resize(point_number);
         quad_masks.resize(point_number);
+        point_cells.resize(point_number);
 
         output_triangles.resize(triangles_number * 3);
     }
@@ -45,6 +50,8 @@ struct UnpackChunk {
 // and as its perf baseline. A worker thread owns a local RenderingDevice and runs three compute
 // passes per batch (SDF samples, edge crossings, one point per surface cell with its quad mask),
 // reads everything back and triangulates on the CPU: one mesh + instance per chunk.
+class CascadePasses;
+
 class GPUMesher : public Object {
 private:
     // Constant between run
@@ -61,6 +68,7 @@ private:
     bool result_available = false;
     bool exit_thread = false;
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
+    int batch_min_lod = 0; // smallest LOD of the current batch (cascade levels to run)
     bool trim_indices = false; // drop the zero padding at the end of the index buffer (legacy bug)
 
     // Stats (written by the worker under mutex, read by get_stats()).
@@ -109,13 +117,18 @@ private:
     RID pipeline_second_pass;
     RID pipeline_third_pass;
 
+    // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 1, in sub-batches of at most
+    // CASCADE_MAX_CHUNKS chunks (its scratch, ~92 KB per chunk with 4 channels, is not sized for 1024).
+    static constexpr uint32_t CASCADE_MAX_CHUNKS = 128;
+    CascadePasses *cascade = nullptr;
+
     std::vector<LODHashSet *> chunk_queue;
 
     LODHashSet working_generation;
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
-    void _execute_gpu_pipeline(PackedByteArray p_chunk_id);
+    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod);
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
