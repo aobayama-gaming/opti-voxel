@@ -27,6 +27,16 @@ public:
     // voxel of that LOD), the distance is the same at every LOD.
     virtual float evaluate(const WorldPos &p_pos, int p_lod) const = 0;
 
+    // evaluate() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
+    // wave. The default loops over evaluate(); a terrain may spread it over threads.
+    virtual void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {
+        WorldPos pos;
+        for (int i = 0; i < p_count; i++) {
+            pos.voxel = p_points[i];
+            r_out[i] = evaluate(pos, p_lod);
+        }
+    }
+
     // GPU code: must define "vec4 terrain_sdf(WorldPos p, int lod)" (xyz gradient, w distance). The
     // shader provides the chunk_param uniform, the frame functions of gpu_frame.hpp and the exact
     // noise of exact_noise.hpp.

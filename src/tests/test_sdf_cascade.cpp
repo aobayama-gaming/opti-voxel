@@ -4,6 +4,7 @@
 #include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
 #include "cascade_terrain.hpp"
+#include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
 using namespace Cascade;
@@ -144,4 +145,59 @@ TEST_CASE("CascadeGLSL: the band table holds every band at its level, with the C
         CHECK(float_bits(n.w * table.decode_float(base)) == float_bits(o[VALUE]));
         CHECK(float_bits(n.x * table.decode_float(base + 4)) == float_bits(o[DX]));
     }
+}
+
+// The threaded batch (the CPU discoverer's corners) is evaluate() point by point, bit for bit.
+TEST_CASE("SDFCascade: evaluate_batch equals evaluate, bit for bit") {
+    ChunkParam param;
+    SDFCascade sdf;
+    sdf.configure(param, 25);
+    for (const int lod : { 0, 5, 13, 24 }) {
+        const int64_t corner = int64_t(param.half_chunk_voxels() * 2) << lod;
+        std::vector<VoxelPos> points;
+        for (int i = 0; i < 4000; i++) {
+            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(lod), uint32_t(i), 0xBA7Cu });
+            points.push_back(VoxelPos(int64_t(h.x % 61u) - 30, int64_t(h.y % 7u) - 3, int64_t(h.z % 61u) - 30) * corner);
+        }
+        std::vector<float> batch(points.size());
+        sdf.evaluate_batch(points.data(), int(points.size()), lod, batch.data());
+        int differing = 0;
+        for (size_t i = 0; i < points.size(); i++) {
+            WorldPos pos;
+            pos.voxel = points[i];
+            differing += float_bits(sdf.evaluate(pos, lod)) != float_bits(batch[i]) ? 1 : 0;
+        }
+        CAPTURE(lod);
+        CHECK(differing == 0);
+    }
+}
+
+// A point item is the ChunkInput of the chunk whose anchor is the point: the GPU derives the anchor's low words
+// from the id's ((id_lo - 2^L) * half chunk, wrapping) and takes its high words as they are.
+TEST_CASE("CascadeGLSL: point items encode the corner as the chunk anchor, at its LOD") {
+    const ChunkParam param;
+    const ChunkParam pp = CascadeGLSL::point_param(param);
+    CHECK(pp.skirt_size == 0);
+    CHECK(pp.half_chunk_voxels() == param.half_chunk_voxels());
+    PackedByteArray bytes;
+    bytes.resize(GPUFrame::CHUNK_INPUT_BYTES);
+    const int64_t bases[] = { 0, -(int64_t(1) << 32), (int64_t(1) << 60) - 99999, -(int64_t(1) << 60) + 777 };
+    for (const int lod : { 0, 1, 9, 24 }) {
+        const int64_t span = param.half_chunk_voxels() << (lod + 1);
+        for (const int64_t base : bases) {
+            const VoxelPos p(WorldCoord::floor_div(base, span) * span, (WorldCoord::floor_div(base, span) - 3) * span, -WorldCoord::floor_div(base, span) * span);
+            CHECK(CascadeGLSL::encode_point_input(bytes, 0, p, lod, pp));
+            const uint32_t id_lo[3] = { uint32_t(bytes.decode_u32(0)), uint32_t(bytes.decode_u32(4)), uint32_t(bytes.decode_u32(8)) };
+            for (int a = 0; a < 3; a++) {
+                CAPTURE(lod);
+                CAPTURE(a);
+                // chunk_frame(): lod from the id's lowest set bit, anchor low word (id_lo - 2^L) * half.
+                CHECK(__builtin_ctz(id_lo[a]) == lod);
+                CHECK((id_lo[a] - (uint32_t(1) << lod)) * uint32_t(pp.half_chunk_voxels()) == WorldCoord::lo32(p[a]));
+                CHECK(bytes.decode_s32(16 + 4 * a) == WorldCoord::hi32(p[a]));
+            }
+        }
+    }
+    // Off the corner grid: refused (prints one expected error).
+    CHECK(!CascadeGLSL::encode_point_input(bytes, 0, VoxelPos(14, 0, 0), 0, pp));
 }

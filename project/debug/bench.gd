@@ -45,6 +45,9 @@ extends Node3D
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
 ##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
 ##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
+##   --discoverer=cpu|gpu         VoxelTerrain.discoverer_mode: where the cull test's corners are evaluated
+##                                (default: gpu for the cascade terrain, cpu otherwise)
+##   --discovery_compare=1        discoverer: diff every scan against a fresh CPU scan, ERROR on a difference
 ##   --discovery_audit=1          direct: after steady, rebuild the scan without culling and count the
 ##                                quads of every culled chunk on the GPU (any quad = a miss = a hole)
 ##
@@ -143,6 +146,15 @@ func _ready() -> void:
 	if args.has("discovery_cache"):
 		terrain.discovery_cache = args["discovery_cache"] == "1"
 	terrain.discovery_verify = args.get("discovery_verify", "0") == "1"
+	if args.has("discoverer"):
+		var discoverers := {"cpu": 0, "gpu": 1}
+		if not discoverers.has(args["discoverer"]):
+			push_error("BENCH: unknown --discoverer=%s (expected cpu or gpu)" % args["discoverer"])
+			set_process(false)
+			get_tree().quit(1)
+			return
+		terrain.discoverer_mode = discoverers[args["discoverer"]]
+	terrain.discovery_compare = args.get("discovery_compare", "0") == "1"
 	if args.has("origin"):
 		var o: PackedStringArray = args["origin"].split(",")
 		terrain.world_origin_x = o[0].to_int()
@@ -352,6 +364,7 @@ func _finish() -> void:
 			fd.store_string(JSON.stringify(audit_report["chunk_digests"]))
 			fd.close()
 		audit_report.erase("chunk_digests")
+	var final_terrain: Dictionary = terrain.get_debug_stats()
 	var result := {
 		"args": args,
 		"timed_out": timed_out,
@@ -360,7 +373,9 @@ func _finish() -> void:
 		"validation": validation_report,
 		"audit": audit_report,
 		"discovery_audit": discovery_audit_report,
-		"final_terrain": terrain.get_debug_stats(),
+		"final_terrain": final_terrain,
+		# Mode, first / last scan with their waves (GPU ms, corners, dedup, readback), compare counts.
+		"discoverer": final_terrain.get("discoverer", {}),
 		"memory": _memory(),
 	}
 	if args.has("out"):

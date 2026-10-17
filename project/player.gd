@@ -17,8 +17,9 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15) and `-- --terrain=cascade` its
-# terrain_mode (the Hermite cascade test terrain): they must be set before the terrain's _ready, and every
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents`
+# its terrain_mode (the Hermite cascade test terrain, or its continents demo preset) and
+# `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
 var spawn_above_ground := false
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (cascade terrains)
@@ -34,6 +35,13 @@ func _enter_tree() -> void:
 		if a == "--terrain=cascade" and terrain:
 			terrain.terrain_mode = 1
 			spawn_above_ground = true
+		if a.begins_with("--discoverer=") and terrain:
+			var modes := {"cpu": 0, "gpu": 1}
+			var mode := a.trim_prefix("--discoverer=")
+			if modes.has(mode):
+				terrain.discoverer_mode = modes[mode]
+			else:
+				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
 			spawn_above_ground = true

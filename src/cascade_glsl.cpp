@@ -24,7 +24,7 @@ struct CascadeBand { vec4 factor; uvec4 offset_lo; ivec4 offset_hi; uvec4 info; 
 
 layout(set = 0, binding = 0, std430) restrict readonly buffer InputChunk { ChunkInput input_chunk[]; };
 layout(set = 0, binding = 1, std140) uniform ChunkParamUniform { ChunkParam chunk_param; };
-layout(set = 0, binding = 2, std430) restrict writeonly buffer SDFSample { vec4 sdf_sample[]; };
+/*OUTPUT_BUFFER*/
 layout(set = 0, binding = 3, std430) restrict buffer ScratchA { vec4 scratch_a[]; };
 layout(set = 0, binding = 4, std430) restrict buffer ScratchB { vec4 scratch_b[]; };
 layout(set = 0, binding = 5, std430) restrict readonly buffer Bands { CascadeBand bands[]; };
@@ -50,10 +50,7 @@ layout(push_constant, std430) uniform CascadeParams {
 /*CASCADE*/
 
 void main() {
-    uint c = gl_WorkGroupID.y;
-    uint n = pc.n_child;
-    uint local = gl_GlobalInvocationID.x;
-    if (c >= pc.chunk_count || local >= n * n * n) {
+/*ITEM_INDEX*/    if (c >= pc.chunk_count || local >= n * n * n) {
         return;
     }
     uvec3 i = uvec3(local % n, (local / n) % n, local / (n * n));
@@ -71,7 +68,7 @@ void main() {
     i64_add(lo_lo, lo_hi, ivec3(-chunk_param.skirt_size));
     uvec3 hi_lo = lo_lo;
     ivec3 hi_hi = lo_hi;
-    i64_add(hi_lo, hi_hi, ivec3(chunk_param.chunk_size - 1));
+    i64_add(hi_lo, hi_hi, ivec3(/*ITEM_EXTENT*/));
     // Level m: lo_m = floor(lo_L / 2^j), hi_m = ceil(hi_L / 2^j) (Cascade::level_box).
     uvec3 m_lo = lo_lo;
     ivec3 m_hi = lo_hi;
@@ -137,7 +134,29 @@ void main() {
     }
     // Λ_L: the sample.
     uint sample_index = (pc.chunk_base + c) * n * n * n + local;
-    /*DEBUG_STORE*/
+/*LEVEL0_OUTPUT*/
+}
+)glsl";
+
+// The parts of LEVEL_TEMPLATE that differ between chunk items (the meshers': 32^3 samples, workgroups x over a
+// level box, y over the chunks) and point items (the discoverer's: one value per point, the items flattened
+// over x). The chunk fills reproduce the template's text before point items, so the meshers' shaders are
+// byte-identical to it.
+struct ItemFills {
+    const char *output_buffer;
+    const char *item_index;
+    const char *item_extent;
+    const char *level0_output;
+};
+
+constexpr ItemFills CHUNK_FILLS = {
+    "layout(set = 0, binding = 2, std430) restrict writeonly buffer SDFSample { vec4 sdf_sample[]; };",
+    R"glsl(    uint c = gl_WorkGroupID.y;
+    uint n = pc.n_child;
+    uint local = gl_GlobalInvocationID.x;
+)glsl",
+    "chunk_param.chunk_size - 1",
+    R"glsl(    /*DEBUG_STORE*/
     precise vec4 r = cascade_terrain_sdf(vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod);
     // skirt_sdf (gpu_glsl.hpp), the same formula and order, precise; the depth is per LOD.
     if (chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0) {
@@ -149,9 +168,20 @@ void main() {
         precise float depth_m = cascade_skirt_depth_m(lod); // SDFCascade::skirt_depth_m
         r.w = r.w + clamp(-inside, 0.0, 1.0) * depth_m;
     }
-    sdf_sample[sample_index] = r;
-}
-)glsl";
+    sdf_sample[sample_index] = r;)glsl",
+};
+
+// A point item is a chunk of one sample (its anchor, skirt 0): box extent 0, the bare SDF value at Λ_L.
+constexpr ItemFills POINT_FILLS = {
+    "layout(set = 0, binding = 2, std430) restrict writeonly buffer SDFValue { float sdf_value[]; };",
+    R"glsl(    uint n = pc.n_child;
+    uint c = gl_GlobalInvocationID.x / (n * n * n);
+    uint local = gl_GlobalInvocationID.x % (n * n * n);
+)glsl",
+    "0",
+    R"glsl(    precise vec4 r = cascade_terrain_sdf(vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod);
+    sdf_value[sample_index] = r.w;)glsl",
+};
 
 String flt(float p_f) {
     return ExactNoise::glsl_float(p_f);
@@ -339,13 +369,13 @@ PackedByteArray band_table(const Spec &p_spec) {
     return bytes;
 }
 
-uint32_t scratch_points_a(int p_chunk_size) {
-    const uint32_t n = uint32_t(level_bound(p_chunk_size, 1));
+uint32_t scratch_points_a(int p_item_size) {
+    const uint32_t n = uint32_t(level_bound(p_item_size, 1));
     return n * n * n;
 }
 
-uint32_t scratch_points_b(int p_chunk_size) {
-    const uint32_t n = uint32_t(level_bound(p_chunk_size, 2));
+uint32_t scratch_points_b(int p_item_size) {
+    const uint32_t n = uint32_t(level_bound(p_item_size, 2));
     return n * n * n;
 }
 
@@ -353,16 +383,41 @@ uint32_t vec4s_per_point(ChannelSet p_set) {
     return uint32_t(channel_count(p_set) + 3) / 4;
 }
 
-String level_shader(const SDFBase *p_sdf, bool p_debug) {
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points) {
     const Spec *spec = p_sdf->get_cascade();
     ERR_FAIL_NULL_V(spec, String());
+    ERR_FAIL_COND_V_MSG(p_debug && p_points, String(), "CascadeGLSL: point items have no debug variant.");
+    const ItemFills &fills = p_points ? POINT_FILLS : CHUNK_FILLS;
     String code = LEVEL_TEMPLATE;
+    code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
+    code = code.replace("/*ITEM_INDEX*/", fills.item_index);
+    code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
+    code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code());
     code = code.replace("/*CASCADE*/", hermite_functions(spec->set) + storage_functions(spec->set) + band_functions(spec->set));
     code = code.replace("/*DEBUG_STORE*/", p_debug ? "store_debug(sample_index, ch); // CascadeSpike variant" : "");
     return code;
+}
+
+ChunkParam point_param(const ChunkParam &p_param) {
+    ChunkParam p = p_param;
+    p.chunk_size = p_param.chunk_voxel_dimension();
+    p.skirt_size = 0;
+    return p;
+}
+
+bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPos &p_point, int p_lod, const ChunkParam &p_point_param) {
+    const int64_t half = p_point_param.half_chunk_voxels();
+    const int64_t span = half << (p_lod + 1);
+    ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0 || p_point.x % span != 0 || p_point.y % span != 0 || p_point.z % span != 0, false,
+            "CascadeGLSL: a point item must be on its LOD's corner grid.");
+    // chunk_min_voxel(id) = (id - 2^lod) * half = p_point.
+    const int64_t lod_size = int64_t(1) << p_lod;
+    const ChunkId id(p_point.x / half + lod_size, p_point.y / half + lod_size, p_point.z / half + lod_size);
+    GPUFrame::encode_chunk_input(r_bytes, p_index, id, p_point_param);
+    return true;
 }
 
 String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const String &p_pass, bool p_vertex_pass) {
@@ -389,15 +444,27 @@ String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const Stri
 
 bool CascadePasses::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
         RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch) {
+    return _create(p_rd, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch);
+}
+
+bool CascadePasses::create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input,
+        RID p_param_ubo, RID p_values) {
+    ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0, false, "CascadePasses: point items need CascadeGLSL::point_param (skirt 0).");
+    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr);
+}
+
+bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo,
+        RID p_output, RID p_debug, const CascadePasses *p_share_scratch) {
     const Spec *spec = p_sdf->get_cascade();
     ERR_FAIL_NULL_V(spec, false);
     rd = p_rd;
     top = spec->top_level();
-    chunk_size = p_param.chunk_size;
-    max_chunks = p_max_chunks;
+    item_size = p_item_size;
+    max_chunks = p_max_items;
+    const bool points = item_size == 1;
 
-    const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid());
-    RDUtils::dump_shader(p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels", code);
+    const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points);
+    RDUtils::dump_shader(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels"), code);
     Ref<RDShaderSource> source;
     source.instantiate();
     source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
@@ -416,8 +483,8 @@ bool CascadePasses::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const Ch
     pipeline = rd->compute_pipeline_create(shader);
 
     const uint64_t vec4_bytes = 16 * CascadeGLSL::vec4s_per_point(spec->set);
-    const uint64_t bytes_a = uint64_t(max_chunks) * CascadeGLSL::scratch_points_a(chunk_size) * vec4_bytes;
-    const uint64_t bytes_b = uint64_t(max_chunks) * CascadeGLSL::scratch_points_b(chunk_size) * vec4_bytes;
+    const uint64_t bytes_a = uint64_t(max_chunks) * CascadeGLSL::scratch_points_a(item_size) * vec4_bytes;
+    const uint64_t bytes_b = uint64_t(max_chunks) * CascadeGLSL::scratch_points_b(item_size) * vec4_bytes;
     if (p_share_scratch != nullptr) {
         ERR_FAIL_COND_V(p_share_scratch->max_chunks < max_chunks || p_share_scratch->scratch_bytes_total < bytes_a + bytes_b, false);
         scratch_a = p_share_scratch->scratch_a;
@@ -447,7 +514,7 @@ bool CascadePasses::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const Ch
     TypedArray<RDUniform> uniforms;
     uniforms.push_back(make_uniform(0, p_input, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(1, p_param_ubo, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
-    uniforms.push_back(make_uniform(2, p_sdf_sample, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    uniforms.push_back(make_uniform(2, p_output, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(3, scratch_a, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(4, scratch_b, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(5, bands, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
@@ -488,7 +555,7 @@ int CascadePasses::level_count(int p_min_lod) const {
 
 void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count) {
     ERR_FAIL_COND(p_count == 0 || p_count > max_chunks);
-    const uint32_t n = uint32_t(level_bound(chunk_size, p_j));
+    const uint32_t n = uint32_t(level_bound(item_size, p_j));
     PackedByteArray push;
     push.resize(CascadeGLSL::PUSH_BYTES);
     push.fill(0);
@@ -497,12 +564,17 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count) {
     push.encode_s32(8, p_j);
     push.encode_s32(12, top);
     push.encode_u32(16, n);
-    push.encode_u32(20, uint32_t(level_bound(chunk_size, p_j + 1)));
+    push.encode_u32(20, uint32_t(level_bound(item_size, p_j + 1)));
     const int64_t list = rd->compute_list_begin();
     rd->compute_list_bind_compute_pipeline(list, pipeline);
     rd->compute_list_bind_uniform_set(list, uniform_set, 0);
     rd->compute_list_set_push_constant(list, push, push.size());
-    rd->compute_list_dispatch(list, (n * n * n + CascadeGLSL::LOCAL_SIZE - 1) / CascadeGLSL::LOCAL_SIZE, p_count, 1);
+    if (is_points()) {
+        // Items flattened over x: item c's points are threads c * n^3 ...
+        rd->compute_list_dispatch(list, (p_count * n * n * n + CascadeGLSL::LOCAL_SIZE - 1) / CascadeGLSL::LOCAL_SIZE, 1, 1);
+    } else {
+        rd->compute_list_dispatch(list, (n * n * n + CascadeGLSL::LOCAL_SIZE - 1) / CascadeGLSL::LOCAL_SIZE, p_count, 1);
+    }
     rd->compute_list_end();
 }
 

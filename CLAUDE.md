@@ -163,13 +163,14 @@ to every change, and a reviewer may reject a PR on any of them.
 - `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
   `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
   channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
-- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--timing=0|1] [--runs=10] [--sets=8,4]`
+- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--timing=0|1] [--runs=10] [--sets=8,4]`
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
-  both channel sets (G1); the LOD relation on the GPU outputs (G3); GPU timestamps of the passes for
+  both channel sets (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
+  `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); GPU timestamps of the passes for
   single-LOD batches of 128 at LOD 0, 4, ... 24 (G6, G7). Report: `<run>/cascade.md`. Run it after touching
-  `cascade*`, `exact_noise.hpp`, `gpu_frame.hpp` or `sdf_cascade.hpp`.
+  `cascade*`, `exact_noise.hpp`, `gpu_frame.hpp`, `sdf_cascade.hpp` or `discoverer_gpu*`.
 - CI (`.github/workflows/ci.yml`) runs format, the `-Werror` build and the unit tests on every PR.
   Everything that needs a GPU stays local.
 - `tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]`: the correctness gate, ~2 min.
@@ -212,7 +213,21 @@ to every change, and a reviewer may reject a PR on any of them.
   `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
 - Discoverer: the cull verdict of a node only depends on its id and the (fixed) SDF, so it is cached
   across scans (`discovery_cache`, default on); `--discovery_verify=1` recomputes every hit and
-  ERRORs on a mismatch. `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
+  ERRORs on a mismatch. The walk is breadth first, one wave per LOD: each wave's uncached nodes give
+  their 8 corners, deduplicated on the voxel (~6 nodes share a corner), evaluated in one batch
+  (`SDFBase::evaluate_batch`; `SDFCascade` spreads it over the `WorkerThreadPool` with the
+  allocation-free `Cascade::point_into`). `VoxelTerrain.discoverer_mode` / `--discoverer=cpu|gpu` (bench
+  and player): -1 auto (default: GPU for a cascade terrain, CPU otherwise), 0 CPU, 1 GPU. The GPU path,
+  `DiscovererGPU` (`src/discoverer_gpu.*`), runs the cascade passes on point items
+  (`CascadePasses::create_points`) on a **local RenderingDevice owned by the discoverer thread**: created
+  at the top of `discovery_loop` and freed there before the thread exits; no other thread may touch it,
+  and it does nothing on the main RD or the render thread. No local device (headless) or no cascade: one
+  warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
+  scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
+  (and `--lods=25`) after touching the discoverer, the cascade passes or `DiscovererGPU`.
+  `stats.json["discoverer"]`: mode, scratch MB, `gpu_init_ms` (device + shader, before the first scan),
+  compare counts, first and last scan (scan / cull / walk
+  ms, corners, unique corners, dedup ratio, per wave GPU ms, batches, readback bytes). `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
   `--camera_voxel=X,Y,Z` makes the scene (camera, lights, cam_pos) relative to that absolute voxel
   instead of the world origin.
 - `tools/zero_test.sh`: the debug zero pillar (`--zero_pillar=1|2`, `SDFDummy`) has its flat top
@@ -306,6 +321,8 @@ to every change, and a reviewer may reject a PR on any of them.
   multiplies (PCG3D) run at half the float rate; `precise` costs nothing measurable. To find where a
   shader's time goes, swap variants of the stitched GLSL and compare `gpu_pass_sdf` per batch.
 - `FrameSpike` uses a local RenderingDevice: it needs a window (not `--headless`) and an unlocked session.
+- A local RenderingDevice's timestamps (`get_captured_timestamp_*`) are readable right after `sync()` and
+  only until its next frame begins: `buffer_get_data` flushes one, so read them first (`DiscovererGPU`).
 - Main-RD resources must be created/freed on the render thread; objects owning them delete
   themselves there (`destroy()` -> `_rt_destroy()`), after the render-thread work already queued
   for them (FIFO).

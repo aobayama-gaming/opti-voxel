@@ -364,3 +364,35 @@ TEST_CASE("Cascade: no denormal at any level, and flushing denormals (FTZ/DAZ) c
     _mm_setcsr(csr);
 #endif
 }
+
+// GPU discoverer step 2: the allocation-free point query is point() bit for bit, every LOD, near 0, across
+// 2^32-voxel boundaries and the k = 20 noise-cell wrap, and at +-2^60.
+TEST_CASE("Cascade: point_into equals point, bit for bit (10,240 points per LOD 0-24, both channel sets)") {
+    const int64_t P32 = int64_t(1) << 32;
+    const int64_t bases[] = { 0, P32, -P32, 3 * P32, (int64_t(1) << 52) - 1000, (int64_t(1) << 60) - 4096, -(int64_t(1) << 60) + 4096, -5 * P32 };
+    constexpr int PER_BASE = 1280;
+    for (const ChannelSet set : SETS) {
+        const Spec spec = earth(set);
+        int64_t compared = 0;
+        int64_t differing = 0;
+        for (int m = 0; m <= 24; m++) {
+            const int64_t step = int64_t(1) << m;
+            uint32_t n = 0;
+            for (const int64_t base : bases) {
+                const int64_t b = WorldCoord::floor_div(base, step);
+                for (int i = 0; i < PER_BASE; i++, n++) {
+                    const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(m), n, 0x9017u });
+                    const Vector3i64 p(b + int64_t(h.x % 129u) - 64, b + int64_t(h.y % 129u) - 64, -b + int64_t(h.z % 129u) - 64);
+                    float want[CHANNELS];
+                    float got[CHANNELS];
+                    point(spec, p, m, want);
+                    point_into(spec, p, m, got);
+                    compared++;
+                    differing += same_bits(want, got, CHANNELS) ? 0 : 1;
+                }
+            }
+        }
+        CHECK(compared == 25 * 8 * PER_BASE);
+        CHECK(differing == 0);
+    }
+}

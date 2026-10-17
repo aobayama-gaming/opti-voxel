@@ -197,4 +197,10 @@ Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r
 // V_m at one lattice point of Λ_m.
 void point(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_ch[CHANNELS]);
 
+// point() without a heap allocation (the discoverer's corners, SDFCascade::evaluate): a point's level boxes
+// have at most POINT_AXIS points per axis (level_bound(1, j)), so every level and every axis pass of H fits
+// in stack arrays. The same ops on the same values in the same order as run(): the same bits (unit-tested).
+inline constexpr int POINT_AXIS = 2;
+void point_into(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_ch[CHANNELS]);
+
 } // namespace Cascade
