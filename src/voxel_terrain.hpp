@@ -171,6 +171,9 @@ public:
     // Distance from the camera (metres) that bounds every chunk the discoverer can load: the corner of
     // its scan grid. 0 before the terrain is ready.
     double get_load_radius() const;
+    // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain, for the
+    // clip planes above 15 LODs.
+    double get_sdf_at(const Vector3 &p_render_pos) const;
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;

@@ -96,13 +96,12 @@ to every change, and a reviewer may reject a PR on any of them.
   root chunk span (2^lod_numbers ids = 458,752 voxels with the defaults). No runtime rebasing yet.
 - LOD range: `VoxelTerrain.lod_numbers` (default 15, at most 31: the GPU reads a LOD from the id's low
   32 bits). `--lods=N` in `bench.gd` and in the main scene (`godot --path project -- --lods=25`).
-  Above 15 only: `SDFDummy` adds 2 relief octaves per extra LOD, the camera far plane becomes
-  `VoxelTerrain.get_load_radius()` (corner of the discoverer's scan grid) and near rises to far / 2^21
-  (~1.7 km at 25 LODs): past far/near ~2^24 Godot's float projection loses its far plane and the light
-  culler ERRORs every frame. Known: at 25 LODs `--validate` fails on a few normals (14-103 per run) in
-  LOD >= 15 chunks while every triangle matches; there the terrain lies within ~1e-3..1e-2 cells of the
-  y = 0 lattice row (the validator's near-zero threshold is 1e-3) and the full-detail gradient is
-  aliased. Not isolated yet.
+  Above 15 only: `SDFDummy` adds 2 relief octaves per extra LOD, and the camera's clip planes follow
+  its altitude (|SDF| at the camera, `VoxelTerrain.get_sdf_at`): near = altitude / 1000 (at least the
+  scene's), far = min(near * 2^21, `VoxelTerrain.get_load_radius()`). Past far/near ~2^24 Godot's float
+  projection loses its far plane and the light culler ERRORs every frame. The validator doesn't compare
+  the normals of sliver triangles (all edges within 2 * tol): around a lone near-zero corner a whole
+  closed sheet fits inside the tolerance and the vertex pairing is arbitrary (frequent at far LODs).
 - Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE`): `hash_cell` = PCG3D of the cell's low
   words salted by a PCG3D of its high words and the seed (cells 2^32 apart don't collide);
   `perlin3` / `perlin2` = one octave of gradient noise with wavelength exactly 2^k LOD0 voxels

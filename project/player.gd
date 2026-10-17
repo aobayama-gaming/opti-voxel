@@ -14,6 +14,8 @@ var yaw: float = 0.0
 var marks_dir := "user://marks"
 var mark_index := 0
 var pending_audit := {}  # the mark waiting for its discovery audit report
+var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
+var base_near := 0.05
 
 # `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15): it must be set before the
 # terrain's _ready, and every node enters the tree before any is ready.
@@ -24,13 +26,13 @@ func _enter_tree() -> void:
 			terrain.lod_numbers = a.trim_prefix("--lods=").to_int()
 
 func _ready():
-	# Far plane: the scene's at the default LOD count, the discoverer's load range with more LODs.
+	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude
+	# (_process): near = altitude / 1000, far = near * 2^21 capped at the discoverer's load range.
+	# Godot's float projection loses its far plane past far/near ~2^24 (the light culler ERRORs).
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
 	if terrain and terrain.lod_numbers > 15:
-		camera.far = maxf(camera.far, terrain.get_load_radius())
-		# Godot's float projection loses the far plane past far/near ~2^24 (the light culler then
-		# ERRORs every frame): near rises with far (~1.7 km at 25 LODs).
-		camera.near = maxf(camera.near, camera.far / 2097152.0)
+		far_lods_terrain = terrain
+		base_near = camera.near
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	yaw = rotation.y
 	pitch = camera.rotation.x
@@ -110,6 +112,10 @@ func _input(event: InputEvent) -> void:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _process(delta: float) -> void:
+	if far_lods_terrain:
+		var altitude: float = absf(far_lods_terrain.get_sdf_at(camera.global_position))
+		camera.near = maxf(base_near, altitude / 1000.0)
+		camera.far = minf(far_lods_terrain.get_load_radius(), camera.near * 2097152.0)
 	if not pending_audit.is_empty():
 		var report: Dictionary = _terrain().get_discovery_audit_report()
 		if not report.is_empty():

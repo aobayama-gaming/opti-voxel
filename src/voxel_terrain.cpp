@@ -43,6 +43,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
+    ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
@@ -249,6 +250,22 @@ void VoxelTerrain::set_lod_numbers(int p_count) {
     ERR_FAIL_COND_MSG(started, "lod_numbers must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_count < 1 || p_count > MAX_LOD_NUMBERS, vformat("lod_numbers must be in [1, %d].", MAX_LOD_NUMBERS));
     lod_numbers = p_count;
+}
+
+double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
+    const VoxelPos origin = chunk_param.origin_voxel();
+    const double vs = double(chunk_param.voxel_size);
+    auto axis = [vs](real_t p_r, int64_t p_origin, int64_t &r_voxel, float &r_frac) {
+        const double x = double(p_r) / vs;
+        const double fl = std::floor(x);
+        r_voxel = p_origin + int64_t(fl);
+        r_frac = MIN(float(x - fl), 0.99999994f); // [0, 1)
+    };
+    WorldPos p;
+    axis(p_render_pos.x, origin.x, p.voxel.x, p.frac.x);
+    axis(p_render_pos.y, origin.y, p.voxel.y, p.frac.y);
+    axis(p_render_pos.z, origin.z, p.voxel.z, p.frac.z);
+    return sdf->evaluate(p, 0);
 }
 
 int VoxelTerrain::get_lod_numbers() const {

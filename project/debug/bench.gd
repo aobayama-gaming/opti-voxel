@@ -149,13 +149,11 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
-	# The scene's far plane (12 km) at the default LOD count, so pictures don't change; with more LODs,
-	# the discoverer's whole load range.
+	# The scene's clip planes at the default LOD count, so pictures don't change; with more LODs they
+	# follow the camera's altitude (see _clip_planes), set once at the pose.
 	if terrain.lod_numbers > 15:
-		camera.far = maxf(camera.far, terrain.get_load_radius())
-		# Godot's float projection loses the far plane past far/near ~2^24 (the light culler then
-		# ERRORs every frame): near rises with far (~1.7 km at 25 LODs).
-		camera.near = maxf(camera.near, camera.far / 2097152.0)
+		_clip_planes(camera, camera.near)
+
 
 	_begin_phase("load")
 	print("BENCH: start mode=%s scenario=%s" % [args.get("mode", "legacy"), args.get("scenario", "load")])
@@ -389,3 +387,12 @@ static func _summary(values: Array) -> Dictionary:
 		"p99": v[int(0.99 * (v.size() - 1))],
 		"max": v[v.size() - 1],
 	}
+
+
+# Above 15 LODs: near = altitude / 1000 (altitude = |SDF| at the camera, at least the scene's near),
+# far = near * 2^21 capped at the discoverer's load range. Godot's float projection loses its far
+# plane past far/near ~2^24 (the light culler then ERRORs every frame), so far/near stays at 2^21.
+func _clip_planes(cam: Camera3D, base_near: float) -> void:
+	var altitude: float = absf(terrain.get_sdf_at(cam.global_position))
+	cam.near = maxf(base_near, altitude / 1000.0)
+	cam.far = minf(terrain.get_load_radius(), cam.near * 2097152.0)
