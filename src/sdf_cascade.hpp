@@ -34,13 +34,46 @@ public:
     // HERMITE8 stays implemented and proven (tools/cascade_test.sh checks both).
     Cascade::ChannelSet channel_set = Cascade::ChannelSet::LINEAR4;
 
+    // Set before configure(). 0: every octave at STEEPNESS (capped at MAX_AMP_M). 1 (continents, demo):
+    // the same octaves with an amplitude per wavelength (continent_amp_m), so continents, ocean basins and
+    // mountain ranges show at their own scales. Only the amplitudes differ: lattices, seeds and the
+    // cascade are the same, so both presets are the same proven code path.
+    int preset = 0;
+
+    // Amplitude (metres) of the octave of wavelength p_wavelength_m in the continents preset.
+    static double continent_amp_m(double p_wavelength_m) {
+        const double km = p_wavelength_m / 1000.0;
+        if (km >= 20000.0) {
+            return 500.0;
+        }
+        if (km >= 2000.0) {
+            return 2500.0;
+        }
+        if (km >= 400.0) {
+            return 1200.0;
+        }
+        if (km >= 100.0) {
+            return 600.0;
+        }
+        if (km >= 16.0) {
+            return 2200.0; // mountain ranges
+        }
+        if (km >= 4.0) {
+            return 1100.0;
+        }
+        if (km >= 1.0) {
+            return p_wavelength_m / 5.0;
+        }
+        return p_wavelength_m / 8.0;
+    }
+
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
         spec = CascadeTerrain::make_spec(SEED, p_lod_count + 4, STEEPNESS, channel_set, INSERT_SHIFT);
         const double cap = MAX_AMP_M / vs;
         for (Cascade::Band &b : spec.bands) {
-            b.amp = float(MIN(double(b.amp), cap));
+            b.amp = preset == 1 ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
         }
         datum = VoxelPos(0, std::llround(SDFDummy::DATUM_M / vs), 0);
         voxel_size = p_param.voxel_size;
