@@ -21,6 +21,9 @@ var base_near := 0.05
 # terrain_mode (the Hermite cascade test terrain): they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
 var spawn_above_ground := false
+var cascade_terrain: Node = null  # set with --terrain=cascade
+var cached_altitude := 0.0
+var altitude_age := 1.0
 
 func _enter_tree() -> void:
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
@@ -40,6 +43,7 @@ func _ready():
 		far_lods_terrain = terrain
 		base_near = camera.near
 	if spawn_above_ground and terrain:
+		cascade_terrain = terrain
 		# The cascade terrain's relief is kilometres high: start 200 m above the ground under the spawn.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
@@ -152,7 +156,12 @@ func _process(delta: float) -> void:
 
 	var direction = (transform.basis * input_dir).normalized()
 	var move_speed := speed
-	if spawn_above_ground:
+	if cascade_terrain:
 		# Cascade terrain: kilometre-scale relief, fly faster when high (half the altitude per second).
-		move_speed = maxf(speed, absf(_terrain().get_sdf_at(camera.global_position)) * 0.5)
+		# The altitude is a CPU cascade point query: refreshed 4 times per second.
+		altitude_age += delta
+		if altitude_age >= 0.25:
+			altitude_age = 0.0
+			cached_altitude = absf(cascade_terrain.get_sdf_at(camera.global_position))
+		move_speed = maxf(speed, cached_altitude * 0.5)
 	position += direction * move_speed * delta

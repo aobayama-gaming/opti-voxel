@@ -400,6 +400,7 @@ void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
     ERR_FAIL_COND_MSG(lod_numbers < 1 || lod_numbers > MAX_LOD_NUMBERS, "VoxelTerrain: lod_numbers out of range.");
+    ERR_FAIL_COND_MSG(terrain_mode == 1 && (debug_test_rig || debug_zero_pillar != 0), "VoxelTerrain: the debug shapes need terrain_mode 0 (dummy).");
 
     started = true;
     start_usec = now_usec();
@@ -419,7 +420,6 @@ void VoxelTerrain::_ready() {
 
     // sdf starts as an SDFDummy (see the member initialiser).
     if (terrain_mode == 1) {
-        ERR_FAIL_COND_MSG(debug_test_rig || debug_zero_pillar != 0, "VoxelTerrain: the debug shapes need terrain_mode 0 (dummy).");
         memdelete(sdf);
         sdf = memnew(SDFCascade);
     } else {
@@ -773,6 +773,11 @@ Dictionary VoxelTerrain::get_discovery_audit_report() const {
 
 bool VoxelTerrain::is_load_complete() {
     if (!started || !scan_received || !visual_mesh_data.dirty_chunk.is_empty()) {
+        return false;
+    }
+    // The received scan must be the camera's current one: a camera moved after _ready (bench
+    // --above_ground) is otherwise "loaded" with the first scan while the next one is still running.
+    if (camera != nullptr && ChunkMath::chunk_at_render(camera->get_global_position(), chunk_param) != scan_camera_chunk) {
         return false;
     }
     if (direct_mesher) {

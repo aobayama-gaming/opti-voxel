@@ -156,6 +156,7 @@ private:
     uint32_t status_size_bytes = 0;
     // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 0 (sdf).
     CascadePasses *cascade = nullptr;
+    uint64_t cascade_scratch_bytes = 0; // under `mutex` (get_stats reads it on the main thread)
 
     void _rt_initialize();
     RID _rt_compile(const char *p_pass, const char *p_name);

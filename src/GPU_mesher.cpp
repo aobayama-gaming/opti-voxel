@@ -114,14 +114,7 @@ void main() {
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/", GLSL_BUFFER_BINDING);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
-    if (sdf->get_cascade() != nullptr) {
-        // The cascade only exists on lattice points: vertex normals from the samples' gradients.
-        shader = shader.replace("/*GLSL_SKIRT_SDF*/", String(GLSL_SKIRT_SDF) + CascadeGLSL::GLSL_VERTEX_GRADIENT);
-        shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_name == "third" ? CascadeGLSL::vertex_pass(algorithm_pass) : algorithm_pass);
-    } else {
-        shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
-        shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", algorithm_pass);
-    }
+    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, algorithm_pass, p_name == "third");
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
     // 3. Create a Shader Source object
@@ -392,7 +385,7 @@ void GPUMesher::_initialize_gpu_compute() {
     if (sdf->get_cascade() != nullptr) {
         cascade = memnew(CascadePasses);
         if (!cascade->create(rd, sdf, chunk_param, MIN(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param, buffer_sdf_sample)) {
-            ERR_PRINT("GPUMesher: the cascade passes failed to compile.");
+            ERR_PRINT("GPUMesher: the cascade passes failed to compile: no pass runs (empty meshes).");
         }
         VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");
     }
@@ -535,6 +528,8 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
     if (cascade_samples && p_count > 0) {
         cascade->record_all(p_min_lod, p_count);
     }
+    // A cascade that failed to build must not fall back to pass 1 (its terrain_sdf is a NaN stub).
+    const bool run_passes = cascade == nullptr || cascade_samples;
 
     // --- GPU SUBMISSION PIPELINE ---
     int64_t compute_list = rd->compute_list_begin();
@@ -543,7 +538,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
 
     uint32_t dispatch_size = chunk_param.chunk_size / 8;
 
-    if (!cascade_samples) {
+    if (cascade == nullptr) {
         // ---- PASS 1: Sample SDF Distances ----
         rd->compute_list_bind_compute_pipeline(compute_list, pipeline_first_pass);
         rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
@@ -552,16 +547,18 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
         rd->compute_list_add_barrier(compute_list);
     }
 
-    // ---- PASS 2: Calculate Edge Intersections ----
-    rd->compute_list_bind_compute_pipeline(compute_list, pipeline_second_pass);
-    rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size * 3, dispatch_size * chunk_batch_number);
+    if (run_passes) {
+        // ---- PASS 2: Calculate Edge Intersections ----
+        rd->compute_list_bind_compute_pipeline(compute_list, pipeline_second_pass);
+        rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size * 3, dispatch_size * chunk_batch_number);
 
-    // Barrier: Wait for Pass 2 to finish writing to edge_intersect
-    rd->compute_list_add_barrier(compute_list);
+        // Barrier: Wait for Pass 2 to finish writing to edge_intersect
+        rd->compute_list_add_barrier(compute_list);
 
-    // ---- PASS 3: Generate Vertex Centroids, Normals & Metadata ----
-    rd->compute_list_bind_compute_pipeline(compute_list, pipeline_third_pass);
-    rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
+        // ---- PASS 3: Generate Vertex Centroids, Normals & Metadata ----
+        rd->compute_list_bind_compute_pipeline(compute_list, pipeline_third_pass);
+        rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
+    }
 
     rd->compute_list_end();
 

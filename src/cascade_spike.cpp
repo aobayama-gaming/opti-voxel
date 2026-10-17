@@ -130,190 +130,229 @@ String set_label(ChannelSet p_set) {
 }
 
 // One channel set: every batch through the GPU passes level by level, compared with Cascade::run.
-void check_set(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) {
-    SDFCascade sdf;
-    sdf.channel_set = p_set;
-    sdf.configure(p_param, p_lods);
-    const Spec &spec = sdf.get_spec();
-    const int top = spec.top_level();
-    const int nch = channel_count(p_set);
-    const uint32_t nv = CascadeGLSL::vec4s_per_point(p_set);
-    const int cs = p_param.chunk_size;
-    const uint64_t cells = uint64_t(cs) * cs * cs;
+class SetChecker {
+public:
+    SetChecker(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) :
+            rd(p_rd), set(p_set), lods(p_lods), param(p_param), checks(r_checks) {
+        sdf.channel_set = p_set;
+        sdf.configure(p_param, p_lods);
+        nch = channel_count(p_set);
+        nv = CascadeGLSL::vec4s_per_point(p_set);
+        cs = p_param.chunk_size;
+        cells = uint64_t(cs) * cs * cs;
+        input = rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
+        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_param);
+        param_ubo = rd->uniform_buffer_create(param_bytes.size(), param_bytes);
+        samples = rd->storage_buffer_create(MAX_BATCH * cells * 16);
+        debug = rd->storage_buffer_create(MAX_BATCH * cells * nv * 16);
+        debug_samples = rd->storage_buffer_create(MAX_BATCH * cells * 16);
+    }
 
-    const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_param);
-    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
-    const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
-    const RID debug = p_rd->storage_buffer_create(MAX_BATCH * cells * nv * 16);
-    const RID debug_samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
-    // The meshers' variant for every level and the samples; the debug variant (same scratch) re-runs level 0
-    // to read its channels.
+    ~SetChecker() {
+        debug_passes.free();
+        passes.free();
+        for (const RID &rid : { input, param_ubo, samples, debug, debug_samples }) {
+            rd->free_rid(rid);
+        }
+    }
+
+    void run() {
+        // The meshers' variant for every level and the samples; the debug variant (same scratch) re-runs
+        // level 0 to read its channels.
+        if (!passes.create(rd, &sdf, param, MAX_BATCH, input, param_ubo, samples) ||
+                !debug_passes.create(rd, &sdf, param, MAX_BATCH, input, param_ubo, debug_samples, debug, &passes)) {
+            checks.example("set " + set_label(set) + ": the cascade passes failed to compile");
+            checks.differing++;
+            return;
+        }
+        checks.chunks_per_lod.resize(lods);
+        checks.differing_per_lod.resize(lods);
+        for (int lod = 0; lod < lods; lod++) {
+            run_batch(lod);
+        }
+    }
+
+private:
+    RenderingDevice *rd;
+    ChannelSet set;
+    int lods;
+    ChunkParam param;
+    Checks &checks;
+    SDFCascade sdf;
+    int nch = 0;
+    uint32_t nv = 0;
+    int cs = 0;
+    uint64_t cells = 0;
+    RID input;
+    RID param_ubo;
+    RID samples;
+    RID debug;
+    RID debug_samples;
     CascadePasses passes;
     CascadePasses debug_passes;
-    if (!passes.create(p_rd, &sdf, p_param, MAX_BATCH, input, param_ubo, samples) ||
-            !debug_passes.create(p_rd, &sdf, p_param, MAX_BATCH, input, param_ubo, debug_samples, debug, &passes)) {
-        r_checks.example("set " + set_label(p_set) + ": the cascade passes failed to compile");
-        r_checks.differing++;
-    } else {
-        r_checks.chunks_per_lod.resize(p_lods);
-        r_checks.differing_per_lod.resize(p_lods);
-        for (int lod = 0; lod < p_lods; lod++) {
-            std::vector<Pair> pairs;
-            const std::vector<TestChunk> chunks = batch_chunks(lod, p_lods, p_param, pairs);
-            const uint32_t count = uint32_t(chunks.size());
-            // CPU oracle: every level of every chunk, top first.
-            std::vector<std::vector<Level>> cpu(count);
-            std::vector<Box> boxes(count);
-            PackedByteArray ids;
-            ids.resize(count * GPUFrame::CHUNK_INPUT_BYTES);
-            int min_lod = 64;
-            for (uint32_t c = 0; c < count; c++) {
-                boxes[c] = chunk_box(chunks[c].id, p_param);
-                run(spec, boxes[c], chunks[c].lod, &cpu[c]);
-                GPUFrame::encode_chunk_input(ids, c, chunks[c].id, p_param);
-                min_lod = MIN(min_lod, chunks[c].lod);
-                r_checks.chunks_per_lod.set(chunks[c].lod, r_checks.chunks_per_lod[chunks[c].lod] + 1);
+
+    // The batch being checked: its chunks, their Λ_L boxes and every CPU level (top first).
+    std::vector<TestChunk> chunks;
+    std::vector<Box> boxes;
+    std::vector<std::vector<Level>> cpu;
+
+    void run_batch(int p_lod) {
+        std::vector<Pair> pairs;
+        chunks = batch_chunks(p_lod, lods, param, pairs);
+        const uint32_t count = uint32_t(chunks.size());
+        cpu.assign(count, std::vector<Level>());
+        boxes.assign(count, Box());
+        PackedByteArray ids;
+        ids.resize(count * GPUFrame::CHUNK_INPUT_BYTES);
+        int min_lod = 64;
+        for (uint32_t c = 0; c < count; c++) {
+            boxes[c] = chunk_box(chunks[c].id, param);
+            Cascade::run(sdf.get_spec(), boxes[c], chunks[c].lod, &cpu[c]);
+            GPUFrame::encode_chunk_input(ids, c, chunks[c].id, param);
+            min_lod = MIN(min_lod, chunks[c].lod);
+            checks.chunks_per_lod.set(chunks[c].lod, checks.chunks_per_lod[chunks[c].lod] + 1);
+        }
+        checks.chunks += count;
+        rd->buffer_update(input, 0, ids.size(), ids);
+        PackedByteArray final_channels;
+        for (int j = passes.level_count(min_lod) - 1; j >= 0; j--) {
+            passes.record_level(j, 0, count);
+            if (j == 0) {
+                debug_passes.record_level(0, 0, count);
             }
-            r_checks.chunks += count;
-            p_rd->buffer_update(input, 0, ids.size(), ids);
-            PackedByteArray final_channels;
-            PackedByteArray final_samples;
-            for (int j = passes.level_count(min_lod) - 1; j >= 0; j--) {
-                passes.record_level(j, 0, count);
-                if (j == 0) {
-                    debug_passes.record_level(0, 0, count);
-                }
-                p_rd->submit();
-                p_rd->sync();
-                const uint32_t n = uint32_t(level_bound(cs, j));
-                const uint64_t points = uint64_t(n) * n * n;
-                PackedByteArray data;
-                if (j > 0) {
-                    data = p_rd->buffer_get_data((j & 1) ? passes.get_scratch_a() : passes.get_scratch_b(), 0, count * points * nv * 16);
-                } else {
-                    data = p_rd->buffer_get_data(debug, 0, count * points * nv * 16);
-                    final_channels = data;
-                    final_samples = p_rd->buffer_get_data(samples, 0, count * points * 16);
-                    // The debug variant's samples must be the same bits as the meshers' variant's.
-                    if (p_rd->buffer_get_data(debug_samples, 0, count * points * 16) != final_samples) {
-                        r_checks.samples_differing++;
-                        r_checks.example("set " + set_label(p_set) + vformat(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", lod));
-                    }
-                }
-                const float *gpu = reinterpret_cast<const float *>(data.ptr());
-                for (uint32_t c = 0; c < count; c++) {
-                    const int lod_c = chunks[c].lod;
-                    const int top_c = MAX(top, lod_c);
-                    const int m = lod_c + j;
-                    if (m > top_c) {
-                        continue;
-                    }
-                    const Level &level = cpu[c][size_t(top_c - m)];
-                    ERR_CONTINUE(level.m != m);
-                    r_checks.levels++;
-                    const Box &box = level.box;
-                    int64_t differing = 0;
-                    for (int64_t ix = 0; ix < box.size(0); ix++) {
-                        for (int64_t iy = 0; iy < box.size(1); iy++) {
-                            for (int64_t iz = 0; iz < box.size(2); iz++) {
-                                const int64_t cpu_i = (ix * box.size(1) + iy) * box.size(2) + iz;
-                                const uint64_t slot = c * points + uint64_t(ix) + n * (uint64_t(iy) + n * uint64_t(iz));
-                                for (int ch = 0; ch < nch; ch++) {
-                                    const float want = level.ch[ch][size_t(cpu_i)];
-                                    const float got = gpu[slot * nv * 4 + ch];
-                                    r_checks.values++;
-                                    if (float_bits(want) != float_bits(got)) {
-                                        differing++;
-                                        if (r_checks.wants_example()) {
-                                            r_checks.example(vformat("set %s LOD %d chunk %s (%s) level m=%d point (%d %d %d) channel %d: gpu %s cpu %s (bits %x / %x)",
-                                                    set_label(p_set), lod_c, WorldCoord::to_string(chunks[c].id), chunks[c].place, m, box.lo[0] + ix, box.lo[1] + iy,
-                                                    box.lo[2] + iz, ch, got, want, float_bits(got), float_bits(want)));
-                                        }
-                                    }
-                                }
-                                if (j == 0) {
-                                    // The sample: SDFCascade::sample of the CPU channels.
-                                    float chv[CHANNELS] = {};
-                                    for (int ch = 0; ch < nch; ch++) {
-                                        chv[ch] = level.ch[ch][size_t(cpu_i)];
-                                    }
-                                    const int64_t voxel_y = (box.lo[1] + iy) * (int64_t(1) << lod_c);
-                                    const ExactNoise::Float4 want = sdf.sample(chv, voxel_y, lod_c, Float3{ float(ix), float(iy), float(iz) });
-                                    const float *got = reinterpret_cast<const float *>(final_samples.ptr()) + (c * points + uint64_t(ix) + n * (uint64_t(iy) + n * uint64_t(iz))) * 4;
-                                    const float w[4] = { want.x, want.y, want.z, want.w };
-                                    r_checks.samples++;
-                                    bool same = true;
-                                    for (int k = 0; k < 4; k++) {
-                                        same = same && float_bits(w[k]) == float_bits(got[k]);
-                                    }
-                                    if (!same) {
-                                        r_checks.samples_differing++;
-                                        if (r_checks.wants_example()) {
-                                            r_checks.example(vformat("set %s LOD %d chunk %s sample (%d %d %d): gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(p_set), lod_c,
-                                                    WorldCoord::to_string(chunks[c].id), ix, iy, iz, got[0], got[1], got[2], got[3], w[0], w[1], w[2], w[3]));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    r_checks.differing += differing;
-                    r_checks.differing_per_lod.set(lod_c, r_checks.differing_per_lod[lod_c] + differing);
-                }
+            rd->submit();
+            rd->sync();
+            const uint64_t n = uint64_t(level_bound(cs, j));
+            const uint64_t bytes = count * n * n * n * nv * 16;
+            if (j > 0) {
+                compare_level(j, rd->buffer_get_data((j & 1) ? passes.get_scratch_a() : passes.get_scratch_b(), 0, bytes), PackedByteArray());
+                continue;
             }
-            // G3: the GPU's Λ_L channels of each child against its parent's Λ_{L+1} channels.
-            const uint64_t points = cells;
-            const float *gpu = reinterpret_cast<const float *>(final_channels.ptr());
-            for (const Pair &pair : pairs) {
-                const Box &cb = boxes[pair.child];
-                const Box &pb = boxes[pair.parent];
-                const int lod_c = chunks[pair.child].lod;
-                auto at = [&](size_t p_chunk, const Box &p_box, const Vector3i64 &p_p, int p_ch) {
-                    const uint64_t slot = p_chunk * points + uint64_t(p_p.x - p_box.lo[0]) + uint64_t(cs) * (uint64_t(p_p.y - p_box.lo[1]) + uint64_t(cs) * uint64_t(p_p.z - p_box.lo[2]));
-                    return gpu[slot * nv * 4 + p_ch];
-                };
-                for_each_point(cb, [&](const Vector3i64 &p_p, int64_t) {
-                    if (((p_p.x | p_p.y | p_p.z) & 1) != 0) {
-                        return;
-                    }
-                    const Vector3i64 q(p_p.x / 2, p_p.y / 2, p_p.z / 2);
-                    if (!pb.contains(q)) {
-                        return;
-                    }
-                    float expect[CHANNELS] = {};
-                    for (int ch = 0; ch < nch; ch++) {
-                        expect[ch] = at(pair.parent, pb, q, ch) * exact_pow2(-channel_order(ch));
-                    }
-                    for (const Band &band : spec.bands) {
-                        if (spec.insert_level(band) == lod_c) {
-                            float o[CHANNELS];
-                            band_channels(spec, band, p_p, o);
-                            for (int ch = 0; ch < nch; ch++) {
-                                expect[ch] = expect[ch] + o[ch];
-                            }
+            final_channels = rd->buffer_get_data(debug, 0, bytes);
+            const PackedByteArray final_samples = rd->buffer_get_data(samples, 0, count * cells * 16);
+            // The debug variant's samples must be the same bits as the meshers' variant's.
+            if (rd->buffer_get_data(debug_samples, 0, count * cells * 16) != final_samples) {
+                checks.samples_differing++;
+                checks.example("set " + set_label(set) + vformat(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", p_lod));
+            }
+            compare_level(0, final_channels, final_samples);
+        }
+        for (const Pair &pair : pairs) {
+            check_relation(pair, reinterpret_cast<const float *>(final_channels.ptr()));
+        }
+    }
+
+    // Level j of every chunk of the batch (GPU layout: x fastest, stride level_bound(j)) against the CPU's
+    // (x slowest); at j = 0 also the samples against SDFCascade::sample of the CPU channels.
+    void compare_level(int p_j, const PackedByteArray &p_data, const PackedByteArray &p_samples) {
+        const float *gpu = reinterpret_cast<const float *>(p_data.ptr());
+        const uint64_t n = uint64_t(level_bound(cs, p_j));
+        const uint64_t points = n * n * n;
+        const int top = sdf.get_spec().top_level();
+        for (uint32_t c = 0; c < uint32_t(chunks.size()); c++) {
+            const int lod_c = chunks[c].lod;
+            const int top_c = MAX(top, lod_c);
+            const int m = lod_c + p_j;
+            if (m > top_c) {
+                continue;
+            }
+            const Level &level = cpu[c][size_t(top_c - m)];
+            ERR_CONTINUE(level.m != m);
+            checks.levels++;
+            const Box &box = level.box;
+            int64_t differing = 0;
+            for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
+                const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
+                const uint64_t slot = c * points + uint64_t(i.x) + n * (uint64_t(i.y) + n * uint64_t(i.z));
+                for (int ch = 0; ch < nch; ch++) {
+                    const float want = level.ch[ch][size_t(p_cpu_i)];
+                    const float got = gpu[slot * nv * 4 + ch];
+                    checks.values++;
+                    if (float_bits(want) != float_bits(got)) {
+                        differing++;
+                        if (checks.wants_example()) {
+                            checks.example(vformat("set %s LOD %d chunk %s (%s) level m=%d point %s channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
+                                    WorldCoord::to_string(chunks[c].id), chunks[c].place, m, WorldCoord::to_string(p_p), ch, got, want, float_bits(got), float_bits(want)));
                         }
                     }
-                    r_checks.relation_points++;
-                    for (int ch = 0; ch < nch; ch++) {
-                        if (float_bits(flush_value(expect[ch])) != float_bits(at(pair.child, cb, p_p, ch))) {
-                            r_checks.relation_differing++;
-                            if (r_checks.wants_example()) {
-                                r_checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(p_set), lod_c, WorldCoord::to_string(chunks[pair.child].id),
-                                        WorldCoord::to_string(p_p), ch));
-                            }
-                            break;
-                        }
-                    }
-                });
+                }
+                if (p_j == 0) {
+                    compare_sample(c, level, p_p, i, size_t(p_cpu_i), reinterpret_cast<const float *>(p_samples.ptr()) + slot * 4);
+                }
+            });
+            checks.differing += differing;
+            checks.differing_per_lod.set(lod_c, checks.differing_per_lod[lod_c] + differing);
+        }
+    }
+
+    void compare_sample(uint32_t p_chunk, const Level &p_level, const Vector3i64 &p_p, const Vector3i64 &p_grid, size_t p_cpu_i, const float *p_got) {
+        float ch[CHANNELS] = {};
+        for (int k = 0; k < nch; k++) {
+            ch[k] = p_level.ch[k][p_cpu_i];
+        }
+        const int lod = chunks[p_chunk].lod;
+        const ExactNoise::Float4 want = sdf.sample(ch, p_p.y * (int64_t(1) << lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
+        const float w[4] = { want.x, want.y, want.z, want.w };
+        checks.samples++;
+        for (int k = 0; k < 4; k++) {
+            if (float_bits(w[k]) != float_bits(p_got[k])) {
+                checks.samples_differing++;
+                if (checks.wants_example()) {
+                    checks.example(vformat("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
+                            WorldCoord::to_string(chunks[p_chunk].id), WorldCoord::to_string(p_grid), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
+                }
+                return;
             }
         }
     }
-    debug_passes.free();
-    passes.free();
-    for (const RID &rid : { input, param_ubo, samples, debug, debug_samples }) {
-        p_rd->free_rid(rid);
+
+    // G3: the GPU's Λ_L channels of a child against its parent's Λ_{L+1} channels at the points they share:
+    // V_L = flush(V_{L+1} * 2^-order + O_L).
+    void check_relation(const Pair &p_pair, const float *p_channels) {
+        const Spec &spec = sdf.get_spec();
+        const Box &cb = boxes[p_pair.child];
+        const Box &pb = boxes[p_pair.parent];
+        const int lod = chunks[p_pair.child].lod;
+        auto at = [&](size_t p_chunk, const Box &p_box, const Vector3i64 &p_p, int p_ch) {
+            const uint64_t slot = p_chunk * cells + uint64_t(p_p.x - p_box.lo[0]) + uint64_t(cs) * (uint64_t(p_p.y - p_box.lo[1]) + uint64_t(cs) * uint64_t(p_p.z - p_box.lo[2]));
+            return p_channels[slot * nv * 4 + p_ch];
+        };
+        for_each_point(cb, [&](const Vector3i64 &p_p, int64_t) {
+            const Vector3i64 q(p_p.x / 2, p_p.y / 2, p_p.z / 2);
+            if (((p_p.x | p_p.y | p_p.z) & 1) != 0 || !pb.contains(q)) {
+                return;
+            }
+            float expect[CHANNELS] = {};
+            for (int ch = 0; ch < nch; ch++) {
+                expect[ch] = at(p_pair.parent, pb, q, ch) * exact_pow2(-channel_order(ch));
+            }
+            for (const Band &band : spec.bands) {
+                if (spec.insert_level(band) == lod) {
+                    float o[CHANNELS];
+                    band_channels(spec, band, p_p, o);
+                    for (int ch = 0; ch < nch; ch++) {
+                        expect[ch] = expect[ch] + o[ch];
+                    }
+                }
+            }
+            checks.relation_points++;
+            for (int ch = 0; ch < nch; ch++) {
+                if (float_bits(flush_value(expect[ch])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
+                    checks.relation_differing++;
+                    if (checks.wants_example()) {
+                        checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, WorldCoord::to_string(chunks[p_pair.child].id),
+                                WorldCoord::to_string(p_p), ch));
+                    }
+                    return;
+                }
+            }
+        });
     }
+};
+
+void check_set(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) {
+    SetChecker checker(p_rd, p_set, p_lods, p_param, r_checks);
+    checker.run();
 }
 
 double median(std::vector<double> p_v) {
@@ -322,6 +361,63 @@ double median(std::vector<double> p_v) {
     }
     std::sort(p_v.begin(), p_v.end());
     return p_v[p_v.size() / 2];
+}
+
+struct BatchTime {
+    double wall_ms = 0.0; // submit + sync
+    double gpu_ms = -1.0; // timestamps, -1 if they did not come back
+    std::vector<double> levels; // GPU ms per level, j = top ... 0
+    int timestamp_frames = -1; // extra frames before the timestamps came back
+};
+
+// Every level of one batch (input already uploaded), timed.
+BatchTime time_batch(RenderingDevice *p_rd, CascadePasses &p_passes, int p_lod, const String &p_prefix) {
+    BatchTime out;
+    const int levels = p_passes.level_count(p_lod);
+    p_rd->capture_timestamp(p_prefix + String("b"));
+    for (int j = levels - 1; j >= 0; j--) {
+        p_passes.record_level(j, 0, TIMING_CHUNKS);
+        p_rd->capture_timestamp(p_prefix + itos(j));
+    }
+    const uint64_t t0 = now_usec();
+    p_rd->submit();
+    p_rd->sync();
+    out.wall_ms = double(now_usec() - t0) / 1000.0;
+    // A local device returns a frame's timestamps when that frame slot is begun again: look after the
+    // sync, then after up to 3 empty frames.
+    int64_t t_begin = -1;
+    std::vector<int64_t> t_level(levels, -1);
+    for (int extra = 0; extra <= 3 && t_begin < 0; extra++) {
+        if (extra > 0) {
+            p_rd->submit();
+            p_rd->sync();
+        }
+        for (uint32_t i = 0; i < p_rd->get_captured_timestamps_count(); i++) {
+            const String name = p_rd->get_captured_timestamp_name(i);
+            if (!name.begins_with(p_prefix)) {
+                continue;
+            }
+            const String tail = name.substr(p_prefix.length());
+            const int64_t t = p_rd->get_captured_timestamp_gpu_time(i);
+            if (tail == "b") {
+                t_begin = t;
+            } else if (tail.to_int() < levels) {
+                t_level[tail.to_int()] = t;
+            }
+        }
+        if (t_begin >= 0) {
+            out.timestamp_frames = extra;
+        }
+    }
+    if (t_begin >= 0 && t_level[0] >= t_begin) {
+        out.gpu_ms = double(t_level[0] - t_begin) / 1e6;
+        int64_t prev = t_begin;
+        for (int j = levels - 1; j >= 0; j--) {
+            out.levels.push_back(t_level[j] >= prev ? double(t_level[j] - prev) / 1e6 : -1.0);
+            prev = MAX(prev, t_level[j]);
+        }
+    }
+    return out;
 }
 
 // G6 / G7: GPU time of every level for single-LOD batches of 128 chunks.
@@ -362,57 +458,15 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<ChannelSet> &p_sets, 
             p_rd->submit();
             p_rd->sync();
             for (size_t si = 0; si < p_sets.size(); si++) {
-                CascadePasses &p = *passes[si];
-                const int levels = p.level_count(lod);
-                const String prefix = vformat("cs%d_%d_%d_", r + 2, lod, int(si));
-                p_rd->capture_timestamp(prefix + String("b"));
-                for (int j = levels - 1; j >= 0; j--) {
-                    p.record_level(j, 0, TIMING_CHUNKS);
-                    p_rd->capture_timestamp(prefix + itos(j));
-                }
-                const uint64_t t0 = now_usec();
-                p_rd->submit();
-                p_rd->sync();
-                const uint64_t t1 = now_usec();
+                const BatchTime t = time_batch(p_rd, *passes[si], lod, vformat("cs%d_%d_%d_", r + 2, lod, int(si)));
                 if (r < 0) {
                     continue;
                 }
-                wall[si][li].push_back(double(t1 - t0) / 1000.0);
-                // A local device returns a frame's timestamps when that frame slot is begun again: look after
-                // the sync, then after up to 3 empty frames.
-                int64_t t_begin = -1;
-                std::vector<int64_t> t_level(levels, -1);
-                for (int extra = 0; extra <= 3 && t_begin < 0; extra++) {
-                    if (extra > 0) {
-                        p_rd->submit();
-                        p_rd->sync();
-                    }
-                    for (uint32_t i = 0; i < p_rd->get_captured_timestamps_count(); i++) {
-                        const String name = p_rd->get_captured_timestamp_name(i);
-                        if (!name.begins_with(prefix)) {
-                            continue;
-                        }
-                        const String tail = name.substr(prefix.length());
-                        const int64_t t = p_rd->get_captured_timestamp_gpu_time(i);
-                        if (tail == "b") {
-                            t_begin = t;
-                        } else if (tail.to_int() < levels) {
-                            t_level[tail.to_int()] = t;
-                        }
-                    }
-                    if (t_begin >= 0) {
-                        timestamp_frames = MAX(timestamp_frames, extra);
-                    }
-                }
-                if (t_begin >= 0 && t_level[0] >= t_begin) {
-                    gpu[si][li].push_back(double(t_level[0] - t_begin) / 1e6);
-                    std::vector<double> lv;
-                    int64_t prev = t_begin;
-                    for (int j = levels - 1; j >= 0; j--) {
-                        lv.push_back(t_level[j] >= prev ? double(t_level[j] - prev) / 1e6 : -1.0);
-                        prev = MAX(prev, t_level[j]);
-                    }
-                    per_level[si][li] = lv;
+                wall[si][li].push_back(t.wall_ms);
+                timestamp_frames = MAX(timestamp_frames, t.timestamp_frames);
+                if (t.gpu_ms >= 0.0) {
+                    gpu[si][li].push_back(t.gpu_ms);
+                    per_level[si][li] = t.levels;
                 }
             }
         }

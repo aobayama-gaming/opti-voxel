@@ -26,7 +26,7 @@ public:
         int64_t nodes_visited = 0;
         int64_t sdf_calls = 0;
         int64_t culled = 0;
-        uint64_t cull_usec = 0; // time spent in the cull test (SDF evaluations)
+        uint64_t cull_nsec = 0; // time spent in the cull test (SDF evaluations), summed in ns (a node can take < 1 us)
         int64_t cache_hits = 0;
         int64_t verify_mismatches = 0;
     };

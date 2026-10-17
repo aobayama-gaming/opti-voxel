@@ -157,11 +157,9 @@ String flt(float p_f) {
     return ExactNoise::glsl_float(p_f);
 }
 
-// The per-level functions for a channel set: Ch, hermite_x/y/z (from Cascade::PAIRS), load / store,
-// insert_band, flush.
-String cascade_functions(ChannelSet p_set) {
+// Ch and hermite_x/y/z for a channel set (from Cascade::PAIRS).
+String hermite_functions(ChannelSet p_set) {
     const int nch = channel_count(p_set);
-    const int nv = int(CascadeGLSL::vec4s_per_point(p_set));
     String code = vformat("struct Ch { float c[%d]; };\n\n", nch);
     code += "Ch ch_zero() {\n    Ch r;\n";
     for (int c = 0; c < nch; c++) {
@@ -208,8 +206,14 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
         code += vformat("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r;\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
                 mid_code, copy_code);
     }
-    // Scratch access: nv vec4s per point.
-    code += "Ch unpack(";
+    return code;
+}
+
+// Scratch and debug buffer access (nv vec4s per point) and the x pass at a parent position.
+String storage_functions(ChannelSet p_set) {
+    const int nch = channel_count(p_set);
+    const int nv = int(CascadeGLSL::vec4s_per_point(p_set));
+    String code = "Ch unpack(";
     for (int v = 0; v < nv; v++) {
         code += vformat("%svec4 v%d", v ? ", " : "", v);
     }
@@ -252,8 +256,14 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
 }
 
 )glsl";
-    // Cascade::insert_bands: o = channel * factor[order], ch = ch + o (two roundings: precise).
-    code += "Ch insert_band(Ch ch, WorldPos p, CascadeBand band) {\n";
+    return code;
+}
+
+// Cascade::insert_bands for one band (o = channel * factor[order], ch = ch + o: two roundings, precise)
+// and Cascade::flush_value.
+String band_functions(ChannelSet p_set) {
+    const int nch = channel_count(p_set);
+    String code = "Ch insert_band(Ch ch, WorldPos p, CascadeBand band) {\n";
     if (p_set == ChannelSet::HERMITE8) {
         code += "    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz, c0, c1);\n";
         code += "    float n[8] = float[8](c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w);\n";
@@ -266,7 +276,6 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
         code += vformat("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), c, c);
     }
     code += "    return ch;\n}\n\n";
-    // Cascade::flush_value.
     code += "Ch flush(Ch ch) {\n";
     for (int c = 0; c < nch; c++) {
         code += vformat("    ch.c[%d] = abs(ch.c[%d]) < %s ? 0.0 : ch.c[%d];\n", c, c, flt(ExactNoise::bits_float(FLUSH_BITS)), c);
@@ -278,6 +287,8 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
 } // namespace
 
 namespace CascadeGLSL {
+
+namespace {
 
 const char *const GLSL_VERTEX_GRADIENT = R"glsl(
 
@@ -298,6 +309,8 @@ vec3 cascade_vertex_gradient(uvec3 gid, vec3 f) {
 }
 
 )glsl";
+
+} // namespace
 
 PackedByteArray band_table(const Spec &p_spec) {
     using namespace WorldCoord;
@@ -347,20 +360,29 @@ String level_shader(const SDFBase *p_sdf, bool p_debug) {
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code());
-    code = code.replace("/*CASCADE*/", cascade_functions(spec->set));
+    code = code.replace("/*CASCADE*/", hermite_functions(spec->set) + storage_functions(spec->set) + band_functions(spec->set));
     code = code.replace("/*DEBUG_STORE*/", p_debug ? "store_debug(sample_index, ch); // CascadeSpike variant" : "");
     return code;
 }
 
-String vertex_pass(const String &p_pass) {
-    // GPUDirectMesher and GPUMesher spell the call differently.
-    const char *calls[] = { "skirt_sdf(chunk, chunk_vertex, chunk_param).xyz", "skirt_sdf(chunk,chunk_vertex,chunk_param).xyz" };
-    for (const char *call : calls) {
-        if (p_pass.contains(call)) {
-            return p_pass.replace(call, "cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex)");
-        }
+String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const String &p_pass, bool p_vertex_pass) {
+    if (p_sdf->get_cascade() == nullptr) {
+        return p_shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF).replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
     }
-    ERR_FAIL_V_MSG(p_pass, "CascadeGLSL: the vertex pass has no skirt_sdf normal call to replace.");
+    String pass = p_pass;
+    if (p_vertex_pass) {
+        // GPUDirectMesher and GPUMesher spell the call differently.
+        const char *calls[] = { "skirt_sdf(chunk, chunk_vertex, chunk_param).xyz", "skirt_sdf(chunk,chunk_vertex,chunk_param).xyz" };
+        bool found = false;
+        for (const char *call : calls) {
+            if (pass.contains(call)) {
+                pass = pass.replace(call, "cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex)");
+                found = true;
+            }
+        }
+        ERR_FAIL_COND_V_MSG(!found, p_shader, "CascadeGLSL: the vertex pass has no skirt_sdf normal call to replace.");
+    }
+    return p_shader.replace("/*GLSL_SKIRT_SDF*/", String(GLSL_SKIRT_SDF) + GLSL_VERTEX_GRADIENT).replace("/*GLSL_ALGORITHM_PASS*/", pass);
 }
 
 } // namespace CascadeGLSL

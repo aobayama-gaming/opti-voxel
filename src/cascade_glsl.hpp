@@ -51,11 +51,11 @@ uint32_t vec4s_per_point(Cascade::ChannelSet p_set);
 // whose level 0 also stores its channels in debug_channels.
 String level_shader(const SDFBase *p_sdf, bool p_debug);
 
-// Cascade mode of the meshers' vertex pass: the vertex normal comes from the samples' gradients (the
-// cascade has no off-lattice evaluation). p_pass with its skirt_sdf normal call replaced, and the function
-// to add after GLSL_SKIRT_SDF.
-String vertex_pass(const String &p_pass);
-extern const char *const GLSL_VERTEX_GRADIENT;
+// Fills /*GLSL_SKIRT_SDF*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers). With SDFDummy
+// exactly as before; with a cascade terrain it adds cascade_vertex_gradient and, in the vertex pass
+// (p_vertex_pass), takes the normal from it instead of skirt_sdf: the cascade has no off-lattice evaluation.
+// An unmatched normal call leaves the placeholder, so the shader fails to compile (no silent NaN stub).
+String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const String &p_pass, bool p_vertex_pass);
 
 } // namespace CascadeGLSL
 

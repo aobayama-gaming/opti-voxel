@@ -119,14 +119,7 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
-    if (sdf->get_cascade() != nullptr) {
-        // The cascade only exists on lattice points: vertex normals from the samples' gradients.
-        shader = shader.replace("/*GLSL_SKIRT_SDF*/", String(GLSL_SKIRT_SDF) + CascadeGLSL::GLSL_VERTEX_GRADIENT);
-        shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_pass == GLSL_DIRECT_PASS_VERTICES ? CascadeGLSL::vertex_pass(p_pass) : String(p_pass));
-    } else {
-        shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
-        shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
-    }
+    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, p_pass, p_pass == GLSL_DIRECT_PASS_VERTICES);
     RDUtils::dump_shader(String("direct_") + p_name, shader);
 
     Ref<RDShaderSource> source;
@@ -212,6 +205,9 @@ void GPUDirectMesher::_rt_initialize() {
             ERR_FAIL_MSG("GPUDirectMesher: the cascade passes failed to compile.");
         }
         cascade_mb = cascade->scratch_bytes() / 1048576;
+        mutex->lock();
+        cascade_scratch_bytes = cascade->scratch_bytes();
+        mutex->unlock();
     }
 
     VLOG(1, "GPUDirectMesher: initialized (batch ", settings.batch_size, ", ", settings.pages_per_batch,
@@ -1000,7 +996,7 @@ Dictionary GPUDirectMesher::get_stats() {
         for (int g = 0; g < 4; g++) {
             d[String("gpu_cascade_") + CASCADE_GROUP_NAMES[g]] = stats.gpu_cascade[g].to_dict();
         }
-        d["cascade_scratch_mb"] = cascade != nullptr ? double(cascade->scratch_bytes()) / 1048576.0 : 0.0;
+        d["cascade_scratch_mb"] = double(cascade_scratch_bytes) / 1048576.0;
     }
     mutex->unlock();
     Dictionary frames;
