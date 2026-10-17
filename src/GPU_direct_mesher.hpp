@@ -126,7 +126,6 @@ private:
 
     // Kills collected during the frame, flushed to the render thread once.
     PackedInt32Array pending_kill_pages;
-    Array pending_kill_multimeshes;
     PackedInt64Array pending_kill_ranges; // offset, count pairs (quads)
 
     Ref<Mutex> mutex; // guards `completed`, `audit_completed` and the render-thread timing stats
@@ -157,13 +156,13 @@ private:
     void _rt_initialize();
     RID _rt_compile(const char *p_pass);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const Array &p_page_multimeshes, const PackedInt32Array &p_pages);
+            const PackedInt32Array &p_pages);
     void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id);
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);
-    void _rt_kill(const PackedInt32Array &p_pages, const Array &p_multimeshes, const PackedInt64Array &p_ranges);
-    void _rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts, const Array &p_multimeshes);
+    void _rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges);
+    void _rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts);
     void _rt_read_timestamps();
     void _rt_destroy();
 

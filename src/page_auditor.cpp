@@ -21,9 +21,9 @@ void PageAuditor::start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pag
     VLOG(1, "PageAuditor: auditing ", (int64_t)pages.size(), " pages");
 }
 
-void PageAuditor::_rt_read(int p_page, RID p_multimesh) {
+void PageAuditor::_rt_read(int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    const QuadPagePool::PageRD prd = pool->rt_get_page_rd(p_page, p_multimesh);
+    const QuadPagePool::PageRD prd = pool->rt_get_page_rd(p_page);
     rd->texture_get_data_async(prd.texture, 0, callable_mp(this, &PageAuditor::_rt_on_texture).bind(p_page));
     rd->buffer_get_data_async(prd.command, callable_mp(this, &PageAuditor::_rt_on_command).bind(p_page), 0, 20);
 }
@@ -46,7 +46,7 @@ bool PageAuditor::step() {
     }
     for (int i = 0; i < PAGES_PER_FRAME && next_request < pages.size(); i++, next_request++) {
         RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &PageAuditor::_rt_read)
-                        .bind(pages[next_request].page, pages[next_request].multimesh));
+                        .bind(pages[next_request].page));
     }
     mutex->lock();
     const bool ready = data.size() == pages.size() && groups.size() == pages.size();

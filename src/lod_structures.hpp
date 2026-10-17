@@ -11,7 +11,7 @@ class LODHashSet : public HashSet<ChunkId, Vector3i64Hasher> {
     // It enables fast LOD calculation and chunk management.
 
 public:
-    uint32_t max_lod;
+    int max_lod = 0;
 
     int get_max_lod(ChunkId &p_chunk_pos) const {
         // Get if a parent of the chunk is already in the HashSet, and return the LOD of the parent chunk. If no parent is found, return -1.
@@ -35,7 +35,7 @@ public:
 
 class ChunkHashMap : public HashMap<ChunkId, ChunkOutput, Vector3i64Hasher> {
 public:
-    uint32_t max_lod;
+    int max_lod = 0;
 
     int get_max_lod(ChunkId &p_chunk_pos) const {
         // Get if a parent of the chunk is already in the HashSet, and return the LOD of the parent chunk. If no parent is found, return -1.

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Refuses a commit whose staged C++ under src/ is not clang-formatted (tools/format.sh fixes it).
+# Enabled once per clone by tools/setup_hooks.sh. Checks the working-tree copy of each staged file.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+mapfile -t STAGED < <(git diff --cached --name-only --diff-filter=ACMR -- 'src/*.cpp' 'src/*.hpp' 'src/*.h')
+[[ ${#STAGED[@]} -eq 0 ]] && exit 0
+"$ROOT/tools/format.sh" --check "${STAGED[@]}"

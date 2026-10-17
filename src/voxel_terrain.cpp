@@ -416,7 +416,7 @@ void VoxelTerrain::_ready() {
     VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
 }
 
-void VoxelTerrain::_process(double delta) {
+void VoxelTerrain::_process(double) {
     if (!started) {
         return;
     }
@@ -520,7 +520,6 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
             MeshValidator::Target t;
             t.chunk_id = kv.key;
             t.page = kv.value.page;
-            t.page_multimesh = direct_mesher->get_pool()->get_page_multimesh(kv.value.page);
             t.offset = kv.value.quad_offset;
             t.count = kv.value.quad_count;
             candidates.push_back(t);
@@ -556,7 +555,6 @@ bool VoxelTerrain::debug_audit_pages() {
             index_of_page[kv.value.page] = pages.size();
             PageAuditor::PageInfo info;
             info.page = kv.value.page;
-            info.multimesh = direct_mesher->get_pool()->get_page_multimesh(kv.value.page);
             pages.push_back(info);
         }
         pages[index_of_page[kv.value.page]].live.push_back({ kv.value.quad_offset, kv.value.quad_count, kv.key });

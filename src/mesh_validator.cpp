@@ -87,20 +87,20 @@ void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, 
     legacy->send_chunk(chunks);
 
     // Direct side: read back every page holding a target.
-    HashMap<int, RID> pages;
+    HashSet<int> pages;
     for (const Target &t : targets) {
-        pages[t.page] = t.page_multimesh;
+        pages.insert(t.page);
     }
     pages_requested = pages.size();
-    for (const KeyValue<int, RID> &kv : pages) {
-        pages_to_request.push_back({ kv.key, kv.value });
+    for (const int page : pages) {
+        pages_to_request.push_back(page);
     }
     VLOG(1, "MeshValidator: validating ", (int64_t)targets.size(), " chunks in ", pages_requested, " pages");
 }
 
-void MeshValidator::_rt_read_page(int p_page, RID p_multimesh) {
+void MeshValidator::_rt_read_page(int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    rd->texture_get_data_async(pool->rt_get_page_rd(p_page, p_multimesh).texture, 0,
+    rd->texture_get_data_async(pool->rt_get_page_rd(p_page).texture, 0,
             callable_mp(this, &MeshValidator::_rt_on_page).bind(p_page));
 }
 
@@ -118,10 +118,10 @@ bool MeshValidator::step() {
     legacy->get_results(legacy_state);
 
     for (int i = 0; i < PAGES_PER_FRAME && !pages_to_request.empty(); i++) {
-        const std::pair<int, RID> page = pages_to_request.back();
+        const int page = pages_to_request.back();
         pages_to_request.pop_back();
         RenderingServer::get_singleton()->call_on_render_thread(
-                callable_mp(this, &MeshValidator::_rt_read_page).bind(page.first, page.second));
+                callable_mp(this, &MeshValidator::_rt_read_page).bind(page));
     }
 
     mutex->lock();

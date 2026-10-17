@@ -43,12 +43,7 @@ protected:
 private:
     Camera3D *camera = nullptr;
 
-    ChunkParam chunk_param{
-        32, // chunk_size
-        0.5f, // voxel_size
-        2, // skirt_size
-        1.0f // skirt_depth
-    };
+    ChunkParam chunk_param; // ChunkParam's defaults; voxel_size and skirt_depth are properties
 
     ChunkDiscoverer *chunk_discoverer = nullptr;
 

@@ -868,7 +868,7 @@ void GPUMesher::process_queue() {
     unpacked_chunks.clear();
     unpacked_chunks.resize(chunk_batch_number);
 
-    int count = 0;
+    uint32_t count = 0;
     ChunkId new_chunk;
 
     //UtilityFunctions::print("GPUMesher : prepare for ",chunk_batch_number);

@@ -22,6 +22,7 @@ customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
 
 opts = Variables(customs, ARGUMENTS)
+opts.Add(BoolVariable("werror", "Treat compiler warnings in src/ as errors (werror=no to iterate past them)", True))
 opts.Update(localEnv)
 
 Help(opts.GenerateHelpText(localEnv))
@@ -36,6 +37,19 @@ Run the following command to download godot-cpp:
     sys.exit(1)
 
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
+
+# Our sources get their own environment: warnings are ours to fix, godot-cpp keeps its own flags.
+# Its headers are included as system headers so their warnings don't drown ours.
+src_env = env.Clone()
+if not src_env.get("is_msvc", False):
+    godot_includes = src_env["CPPPATH"]
+    src_env["CPPPATH"] = []
+    for include in godot_includes:
+        src_env.Append(CCFLAGS=["-isystem", src_env.Dir(include).abspath])
+    src_env.Append(CCFLAGS=["-Wall", "-Wextra"])
+    if localEnv["werror"]:
+        src_env.Append(CCFLAGS=["-Werror"])
+env = src_env
 
 env.Append(CPPPATH=["src/"])
 sources = Glob("src/*.cpp")

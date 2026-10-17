@@ -28,7 +28,6 @@ public:
     struct Target {
         ChunkId chunk_id;
         int page = -1;
-        RID page_multimesh;
         uint32_t offset = 0;
         uint32_t count = 0;
     };
@@ -55,13 +54,13 @@ private:
     int pages_requested = 0;
     // Pages still to read back. Requested a few per frame: queuing many MB of async texture
     // downloads in one frame overruns the engine's download staging blocks (crashes in 4.6.3).
-    std::vector<std::pair<int, RID>> pages_to_request;
+    std::vector<int> pages_to_request;
     static constexpr int PAGES_PER_FRAME = 2;
 
     Dictionary report;
     bool done = false;
 
-    void _rt_read_page(int p_page, RID p_multimesh);
+    void _rt_read_page(int p_page);
     void _rt_on_page(const PackedByteArray &p_data, int p_page);
     void _compare();
 };

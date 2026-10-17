@@ -25,7 +25,6 @@ class PageAuditor : public Object {
 public:
     struct PageInfo {
         int page = -1;
-        RID multimesh;
         struct Range {
             uint32_t offset = 0; // quads
             uint32_t count = 0;
@@ -50,7 +49,7 @@ private:
     Dictionary report;
     bool done = false;
 
-    void _rt_read(int p_page, RID p_multimesh);
+    void _rt_read(int p_page);
     void _rt_on_texture(const PackedByteArray &p_data, int p_page);
     void _rt_on_command(const PackedByteArray &p_data, int p_page);
     void _analyse();

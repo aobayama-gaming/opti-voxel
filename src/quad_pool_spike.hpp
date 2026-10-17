@@ -51,8 +51,8 @@ private:
     RID rt_counter;
     RID rt_uniform_set;
 
-    void _rt_run(RID p_multimesh, int p_page);
-    void _rt_kill(RID p_multimesh, int p_page);
+    void _rt_run(int p_page);
+    void _rt_kill(int p_page);
     void _rt_on_texture(const PackedByteArray &p_data, int p_stage);
     void _rt_on_command(const PackedByteArray &p_data);
     void _verify_write(Dictionary &r);
