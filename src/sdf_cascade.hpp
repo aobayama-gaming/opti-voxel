@@ -77,9 +77,25 @@ public:
         }
         datum = VoxelPos(0, std::llround(SDFDummy::DATUM_M / vs), 0);
         voxel_size = p_param.voxel_size;
+        // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
+        // from this chunk's by one octave: k = L + 2 (a finer neighbour's extra one) or k = L + 3 (the one
+        // a coarser neighbour drops). Twice the larger amplitude (the 2D seam model needs 1.3x), never
+        // deeper than the old skirt_depth voxels of the LOD: the groove at the border is depth / 4.
+        skirt_depth_table.assign(p_lod_count, 0.0f);
+        for (int l = 0; l < p_lod_count; l++) {
+            double amp = 0.0;
+            for (const Cascade::Band &b : spec.bands) {
+                if (b.k == l + 2 || b.k == l + 3) {
+                    amp = MAX(amp, double(b.amp));
+                }
+            }
+            const double full_m = double(p_param.skirt_depth) * vs * std::ldexp(1.0, l);
+            skirt_depth_table[l] = float(MIN(2.0 * amp * vs, full_m));
+        }
     }
 
     const Cascade::Spec *get_cascade() const override { return &spec; }
+    float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Cascade::Spec &get_spec() const { return spec; }
     int64_t get_datum_y() const { return datum.y; }
 
@@ -105,7 +121,8 @@ public:
     }
 
     // The meshers' sdf_sample at vertex-grid point p_grid (integer coordinates) of a LOD-p_lod chunk: sdf()
-    // plus the skirt (gpu_glsl.hpp's skirt_sdf formula, written out in the same order; cascade_glsl.hpp).
+    // plus the skirt (gpu_glsl.hpp's skirt_sdf formula, written out in the same order, with the depth from
+    // skirt_depth_m; cascade_glsl.hpp).
     ExactNoise::Float4 sample(const float p_ch[Cascade::CHANNELS], int64_t p_voxel_y, int p_lod, const Float3 &p_grid) const {
         ExactNoise::Float4 r = sdf(p_ch, p_voxel_y, p_lod);
         if (param.skirt_size > 0 && param.skirt_depth > 0.0f) {
@@ -113,7 +130,7 @@ public:
             const float hi = lo + float(param.chunk_voxel_dimension());
             auto inside = [lo, hi](float p_c) { return MIN(p_c - lo, hi - p_c); };
             const float in = MIN(inside(p_grid.x), MIN(inside(p_grid.y), inside(p_grid.z)));
-            const float depth_m = param.skirt_depth * param.voxel_size * float(int64_t(1) << p_lod);
+            const float depth_m = skirt_depth_table[p_lod];
             r.w = r.w + CLAMP(-in, 0.0f, 1.0f) * depth_m;
         }
         return r;
@@ -145,12 +162,27 @@ vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod) {
     r.w = r.w * to_m;
     return r;
 }
+
+// SDFCascade::skirt_depth_m: the skirt depth (metres) of a LOD-lod chunk.
+float cascade_skirt_depth_m(int lod) {
+    const uint t[SKIRT_N] = uint[SKIRT_N](SKIRT_TABLE);
+    return uintBitsToFloat(t[lod]);
+}
 )glsl";
-        return code.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT));
+        String table;
+        for (size_t l = 0; l < skirt_depth_table.size(); l++) {
+            if (l) {
+                table += ", ";
+            }
+            table += glsl_uint(float_bits(skirt_depth_table[l]));
+        }
+        return code.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT))
+                .replace("SKIRT_N", itos(int64_t(skirt_depth_table.size()))).replace("SKIRT_TABLE", table);
     }
 
 private:
     Cascade::Spec spec;
+    std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
     VoxelPos datum;
     float voxel_size = 0.5f;
 };

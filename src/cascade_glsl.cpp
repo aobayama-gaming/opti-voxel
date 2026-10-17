@@ -139,14 +139,14 @@ void main() {
     uint sample_index = (pc.chunk_base + c) * n * n * n + local;
     /*DEBUG_STORE*/
     precise vec4 r = cascade_terrain_sdf(vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod);
-    // skirt_sdf (gpu_glsl.hpp), the same formula and order, precise.
+    // skirt_sdf (gpu_glsl.hpp), the same formula and order, precise; the depth is per LOD.
     if (chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0) {
         vec3 grid = vec3(i);
         precise float lo = float(chunk_param.skirt_size);
         precise float hi = lo + chunk_voxel_dimension(chunk_param);
         precise vec3 inside3 = min(grid - lo, hi - grid);
         precise float inside = min(inside3.x, min(inside3.y, inside3.z));
-        precise float depth_m = chunk_param.skirt_depth * chunk_param.voxel_size * float(f.lod_size);
+        precise float depth_m = cascade_skirt_depth_m(lod); // SDFCascade::skirt_depth_m
         r.w = r.w + clamp(-inside, 0.0, 1.0) * depth_m;
     }
     sdf_sample[sample_index] = r;

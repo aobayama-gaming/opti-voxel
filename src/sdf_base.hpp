@@ -37,6 +37,13 @@ public:
     // only takes lattice points (frac 0, voxel a multiple of 2^lod).
     virtual const Cascade::Spec *get_cascade() const { return nullptr; }
 
+    // Depth (metres) of the skirt of a LOD-p_lod chunk: how far past its bounds the SDF is pushed towards
+    // air (gpu_glsl.hpp skirt_sdf). By default skirt_depth voxels of the LOD; SDFCascade sizes it from its
+    // octave amplitudes.
+    virtual float skirt_depth_m(int p_lod) const {
+        return param.skirt_depth * param.voxel_size * float(int64_t(1) << p_lod);
+    }
+
 protected:
     ChunkParam param;
 };
