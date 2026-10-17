@@ -326,6 +326,19 @@ TEST_CASE("ExactNoise: perlin3 output bits are unchanged (digest)") {
     CHECK(digest == 837132468u);
 }
 
+// GLSL_EXACT_NOISE is spliced from fragments shared with GLSL_PERLIN3_CROSS: its text (and so every
+// SDFDummy shader) must stay byte-identical. FNV-1a of the text, recorded on the unsplit string.
+TEST_CASE("ExactNoise: GLSL_EXACT_NOISE text is unchanged by the perlin3_cross split") {
+    uint32_t h = 0x811C9DC5u;
+    size_t n = 0;
+    for (const char *c = GLSL_EXACT_NOISE; *c != 0; c++, n++) {
+        h = (h ^ uint8_t(*c)) * 0x01000193u;
+    }
+    CHECK(n == 8240);
+    CHECK(h == 1257729531u);
+    CHECK(String(GLSL_PERLIN3_CROSS).contains("precise float k7 = -va + vb + vc - vd + ve - vf - vg + vh;"));
+}
+
 TEST_CASE("ExactNoise: perlin3_cross extends perlin3 with cross derivatives matching finite differences") {
     const int k = 6;
     const Vector3i64 offset(21, 37, 45);

@@ -37,6 +37,8 @@ using namespace godot;
 // live quads are re-packed GPU to GPU into fresh pages, survivors in Morton order, a few pages per
 // frame. The CPU knows every chunk's range, so it rewrites the ChunkOutputs in place: no readback.
 // Spare free pages are then freed, so VRAM follows the pages in use.
+class CascadePasses;
+
 class GPUDirectMesher : public Object, public ChunkReleaser {
 public:
     struct Settings {
@@ -152,12 +154,18 @@ private:
     RID pipelines[5];
     RID uniform_set;
     uint32_t status_size_bytes = 0;
+    // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 0 (sdf).
+    CascadePasses *cascade = nullptr;
+    uint64_t cascade_scratch_bytes = 0; // under `mutex` (get_stats reads it on the main thread)
 
     void _rt_initialize();
-    RID _rt_compile(const char *p_pass);
+    RID _rt_compile(const char *p_pass, const char *p_name);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const PackedInt32Array &p_pages);
-    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id);
+            const PackedInt32Array &p_pages, int p_min_lod);
+    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod);
+    // Pass 0: the sdf pass, or the cascade's levels (timestamps "<prefix>_c<group>" after each level group
+    // when p_prefix is not empty).
+    void _rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix);
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);
@@ -203,6 +211,8 @@ private:
         TimingStat gpu_compute; // GPU time of passes 1-5 (from timestamps)
         TimingStat gpu_copy; // GPU time of the page copies
         TimingStat gpu_pass[5];
+        // Cascade terrain: GPU time of the level groups j >= 3, j = 2, j = 1, j = 0 (pass 0 is their sum).
+        TimingStat gpu_cascade[4];
         uint64_t live_quads = 0;
     } stats;
 };

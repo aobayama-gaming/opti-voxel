@@ -288,8 +288,8 @@ inline Float4 perlin3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vec
 // derivative differentiates each axis once, through its fade (du) or through a coefficient k_j (g):
 // no second derivative of the fade appears. Products of at most four factors from {u, du, k_j,
 // integer g}, each 0 or >= 2^-24: the denormal rule holds as for perlin3.
-// TODO: CPU only. The cascade's GPU PR adds the GLSL twin (GLSL perlin3 split into cell setup + value /
-// gradient the same way) and a FrameSpike probe for it.
+// GLSL twin: GLSL_PERLIN3_CROSS, built from the same cell setup and value / gradient code as GLSL perlin3
+// (FrameSpike probes perlin3_cross_k*).
 struct Channels8 {
     float c[8];
 };
@@ -503,8 +503,10 @@ inline String glsl_fbm(const String &p_name, const OctaveSet &p_set) {
 
 } // namespace ExactNoise
 
-// After the frame functions (WorldPos), before the terrain SDF.
-inline constexpr const char GLSL_EXACT_NOISE[] = R"glsl(
+// GLSL_EXACT_NOISE is spliced from these fragments, so GLSL perlin3_cross (GLSL_PERLIN3_CROSS) shares
+// perlin3's cell setup and value / gradient code while GLSL_EXACT_NOISE stays byte-identical (unit test).
+// Raw string macros: adjacent literals concatenate at compile time.
+#define OV_GLSL_NOISE_HEAD R"glsl(
 
 uvec3 pcg3d(uvec3 v) {
     v = v * 1664525u + 1013904223u;
@@ -601,7 +603,9 @@ vec3 corner_grad(uvec3 lo, uvec3 salt) {
 }
 
 vec4 perlin3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
-    OctaveCell c = octave_cell(p, k, olo, ohi);
+)glsl"
+// perlin3's cell setup: fades u, du, corner gradients ga..gh, coefficients k0..k7.
+#define OV_GLSL_PERLIN3_SETUP R"glsl(    OctaveCell c = octave_cell(p, k, olo, ohi);
     precise vec3 f = vec3(c.q) * uintBitsToFloat(0x33800000u);
     precise vec3 u = fade3(f);
     precise vec3 du = dfade3(f);
@@ -648,7 +652,9 @@ vec4 perlin3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
     precise float k6 = va - vb - ve + vf;
     precise float k7 = -va + vb + vc - vd + ve - vf - vg + vh;
 
-    precise float value = k0 + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z;
+)glsl"
+// perlin3's value and gradient per cell: value, g1..g7, d.
+#define OV_GLSL_PERLIN3_VALUE_GRADIENT R"glsl(    precise float value = k0 + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z;
     precise vec3 g1 = gb - ga;
     precise vec3 g2 = gc - ga;
     precise vec3 g3 = ge - ga;
@@ -659,7 +665,8 @@ vec4 perlin3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
     precise vec3 interp = ga + g1 * u.x + g2 * u.y + g3 * u.z + g4 * u.x * u.y + g5 * u.y * u.z + g6 * u.z * u.x + g7 * u.x * u.y * u.z;
     precise vec3 fd = vec3(k1, k2, k3) + u.yzx * vec3(k4, k5, k6) + u.zxy * vec3(k6, k4, k5) + k7 * u.yzx * u.zxy;
     precise vec3 d = interp + du * fd;
-    return vec4(d, value);
+)glsl"
+#define OV_GLSL_NOISE_TAIL R"glsl(    return vec4(d, value);
 }
 
 uint hash_cell_2d(uint lx, int hx, uint lz, int hz, uint seed) {
@@ -719,4 +726,36 @@ float det_rsqrt(float x) {
     return y;
 }
 
+)glsl"
+
+// After the frame functions (WorldPos), before the terrain SDF.
+inline constexpr const char GLSL_EXACT_NOISE[] = OV_GLSL_NOISE_HEAD OV_GLSL_PERLIN3_SETUP OV_GLSL_PERLIN3_VALUE_GRADIENT OV_GLSL_NOISE_TAIL;
+
+// GLSL twin of ExactNoise::perlin3_cross (after GLSL_EXACT_NOISE; only the cascade's shaders include it):
+// c0 = (value, d/dx, d/dy, d/dz), c1 = (d2/dxdy, d2/dxdz, d2/dydz, d3/dxdydz) per cell. c0 has perlin3's
+// bits (same code). gx[j] of the CPU is gj.x here.
+inline constexpr const char GLSL_PERLIN3_CROSS[] = R"glsl(
+void perlin3_cross(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi, out vec4 c0, out vec4 c1) {
+)glsl" OV_GLSL_PERLIN3_SETUP OV_GLSL_PERLIN3_VALUE_GRADIENT R"glsl(
+    precise float ux = u.x;
+    precise float uy = u.y;
+    precise float uz = u.z;
+    precise float dux = du.x;
+    precise float duy = du.y;
+    precise float duz = du.z;
+    precise float cxy = duy * (g2.x + g4.x * ux + g5.x * uz + g7.x * ux * uz) + dux * (g1.y + g4.y * uy + g6.y * uz + g7.y * uy * uz) +
+            dux * duy * (k4 + k7 * uz);
+    precise float cxz = duz * (g3.x + g6.x * ux + g5.x * uy + g7.x * ux * uy) + dux * (g1.z + g4.z * uy + g6.z * uz + g7.z * uy * uz) +
+            dux * duz * (k6 + k7 * uy);
+    precise float cyz = duz * (g3.y + g5.y * uy + g6.y * ux + g7.y * ux * uy) + duy * (g2.z + g4.z * ux + g5.z * uz + g7.z * ux * uz) +
+            duy * duz * (k5 + k7 * ux);
+    precise float cxyz = duy * duz * (g5.x + g7.x * ux) + dux * duz * (g6.y + g7.y * uy) + dux * duy * (g4.z + g7.z * uz) + dux * duy * duz * k7;
+    c0 = vec4(value, d);
+    c1 = vec4(cxy, cxz, cyz, cxyz);
+}
 )glsl";
+
+#undef OV_GLSL_NOISE_HEAD
+#undef OV_GLSL_PERLIN3_SETUP
+#undef OV_GLSL_PERLIN3_VALUE_GRADIENT
+#undef OV_GLSL_NOISE_TAIL

@@ -7,6 +7,10 @@
 
 using namespace godot;
 
+namespace Cascade {
+struct Spec;
+}
+
 class SDFBase {
 public:
     virtual ~SDFBase() = default;
@@ -27,6 +31,11 @@ public:
     // shader provides the chunk_param uniform, the frame functions of gpu_frame.hpp and the exact
     // noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
+
+    // The Hermite cascade's bands, if this terrain is one (SDFCascade): the meshers then compute the
+    // samples with the cascade passes (cascade_glsl.hpp) instead of calling terrain_sdf, and evaluate()
+    // only takes lattice points (frac 0, voxel a multiple of 2^lod).
+    virtual const Cascade::Spec *get_cascade() const { return nullptr; }
 
 protected:
     ChunkParam param;

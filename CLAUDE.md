@@ -122,16 +122,38 @@ to every change, and a reviewer may reject a PR on any of them.
   GPU cost: they are only evaluated where the band lets them reach the smooth max (bit-identical to
   evaluating them everywhere, `cave_skip`, unit-tested).
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
-- Hermite cascade (`src/cascade.hpp`, CPU reference only, not used by the meshers yet; the GPU pass must
-  match it bit for bit): each noise band (octave k) is inserted once on the lattice Λ_{k-3} (multiples of
-  2^(k-3) voxels: 8 samples per wavelength), then carried down by tricubic Hermite subdivision with 8
-  channels (value, 3 slopes, 3 cross slopes, d3/dxdydz from `perlin3_cross`, in units of the lattice
-  spacing). A LOD-L chunk stops at Λ_L, so `V_m(p)` is a pure function of the point: every LOD gets the
-  same bits where they share points. Fixed order x, y, z; only + - * by 0.5, 0.125, 0.75 (no exact sums:
-  determinism comes from the fixed expressions); after each level |c| < 2^-64 is flushed to 0 (without it a
-  band carried far down makes denormals). `Cascade::point` = the same run on a one-point box. 4
-  samples per wavelength (worst case 2.2% value error) and the 4-channel variant (`LINEAR4`, twice the slope
-  error) were measured and rejected: `tools/cascade_report.sh`. Test terrain: `cascade_terrain.hpp`.
+- Hermite cascade (`src/cascade.hpp`: CPU reference, the oracle; `src/cascade_glsl.{hpp,cpp}`: the GPU
+  passes, bit-identical to it): each noise band (octave k) is inserted once on the lattice Λ_{k-3}
+  (multiples of 2^(k-3) voxels: 8 samples per wavelength), then carried down by tricubic Hermite
+  subdivision. Channels in units of the lattice spacing: `HERMITE8` (value, 3 slopes, 3 cross slopes,
+  d3/dxdydz from `perlin3_cross`) or `LINEAR4` (value + gradient, transverse slopes linear). A LOD-L chunk
+  stops at Λ_L, so `V_m(p)` is a pure function of the point: every LOD gets the same bits where they share
+  points. Fixed order x, y, z; only + - * by 0.5, 0.125, 0.75; after each level |c| < 2^-64 is flushed to 0
+  (without it a band carried far down makes denormals). `Cascade::point` = the same run on a one-point box.
+  4 samples per wavelength (worst case 2.2% value error) was rejected (`tools/cascade_report.sh`); the
+  meshed set is `LINEAR4` (G7 of the design: 8 channels cost 1.30x the GPU time of 4, threshold 1.15).
+- GPU cascade: one dispatch per level for the whole batch (level L + j of every chunk, j from T minus the
+  batch's smallest LOD down to 0), boxes in closed form from the chunk's anchor on (lo, hi) words
+  (`GLSL_FRAME_INT64`, `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2
+  parents (code generated from `Cascade::PAIRS`), ping-pong scratch A (odd j, 17^3 points per chunk) / B
+  (even j >= 2, 10^3), j = 0 straight to `sdf_sample`. Bands come from a table indexed by level
+  (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per RenderingDevice; the direct mesher runs
+  them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
+- Terrain: `VoxelTerrain.terrain_mode` 0 = `SDFDummy` (default), 1 = `SDFCascade` (`src/sdf_cascade.hpp`,
+  the cascade test terrain: 3D height field, octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes
+  capped at 3.3 km, datum at 300 m, absolute position only). `--terrain=cascade` in `bench.gd` and the
+  main scene (`godot --path project -- --terrain=cascade --lods=25`: the player spawns 200 m above the
+  ground and flies at half its altitude per second). `bench.gd --above_ground=M` moves the camera to M
+  metres above the terrain (the cascade's ground is kilometres from the datum).
+- **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
+  multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
+  such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
+  `terrain_sdf` (a NaN stub): vertex normals are the trilinear blend of the cell's 8 sample gradients
+  (`CascadeGLSL::GLSL_VERTEX_GRADIENT`), in both meshers. A new cascade terrain keeps this rule.
+- With `SDFDummy` every composed mesher shader is byte-identical to the pre-cascade ones: cascade code is
+  only added in cascade mode, and `GLSL_EXACT_NOISE` is spliced from fragments it shares with
+  `GLSL_PERLIN3_CROSS` (FNV unit test on its text). `OPTI_VOXEL_SHADER_DUMP=<dir>` writes every composed
+  shader to `<dir>/<name>_<hash>.glsl` to compare two builds.
 
 ## Verify changes (do this, don't eyeball)
 - `tools/unit_test.sh [--no-build] [filter]`: the C++ unit tests (`src/tests/`, doctest) inside
@@ -141,6 +163,13 @@ to every change, and a reviewer may reject a PR on any of them.
 - `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
   `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
   channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
+- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--timing=0|1] [--runs=10] [--sets=8,4]`
+  (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
+  GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
+  `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
+  both channel sets (G1); the LOD relation on the GPU outputs (G3); GPU timestamps of the passes for
+  single-LOD batches of 128 at LOD 0, 4, ... 24 (G6, G7). Report: `<run>/cascade.md`. Run it after touching
+  `cascade*`, `exact_noise.hpp`, `gpu_frame.hpp` or `sdf_cascade.hpp`.
 - CI (`.github/workflows/ci.yml`) runs format, the `-Werror` build and the unit tests on every PR.
   Everything that needs a GPU stays local.
 - `tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]`: the correctness gate, ~2 min.
@@ -155,6 +184,8 @@ to every change, and a reviewer may reject a PR on any of them.
   camera, writes `bench/results/<run>/stats.json` + `godot.log` + screenshots, prints a summary.
   Exits non-zero on build failure, crashes, `ERROR` lines, leaked RIDs, and (exit 4) a requested
   validation or audit that failed. `bench/results/LAST` holds the latest run dir.
+  A load is complete once the received scan is the camera's current one and the mesher is idle
+  (`VoxelTerrain::is_load_complete`).
   `--origin=X,Y,Z` sets the world origin (voxels). `--cool=1` waits for the GPU to cool first (perf
   runs only; `bench_ab.sh` / `bench_compare.sh` pass it): until 65 C, a plateau, or 30 s at most.
   `BENCH_ROOT=<checkout>` benches another tree with this harness.
@@ -164,6 +195,8 @@ to every change, and a reviewer may reject a PR on any of them.
   come from non-exact debug shapes (test rig). Vertex positions differ by up to ~0.02 cells between
   the two meshers, so a quad smaller than the 0.02-cell tolerance can't be matched one to one; a
   leftover sliver near a same-size triangle of the other side counts as `ambiguous_slivers`, not an anomaly.
+  The legacy triangulation takes each point's cell from the index the GPU wrote, never from its quantised
+  position (a vertex on its cell's upper face, a crossing at t = 1.0, would floor into the next cell).
 - `--audit=1` (direct): reads every page back and classifies all drawn slots
   (live / dead_zero / stale / partial / broken). Anything but live/dead_zero is a bug. Also writes a
   per-chunk mesh digest (quad count + order-independent hash of the chunk-local corners) to

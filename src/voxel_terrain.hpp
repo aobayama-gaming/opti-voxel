@@ -24,6 +24,7 @@
 #include "page_auditor.hpp"
 
 //debug
+#include "sdf_cascade.hpp"
 #include "sdf_dummy.hpp"
 
 using namespace godot;
@@ -66,6 +67,7 @@ private:
 
     // Settings (must be set before the node enters the tree).
     PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
+    int terrain_mode = 0;
     int legacy_batch_size = 1024;
     // Number of LOD levels (0 .. lod_numbers - 1). The GPU reads a chunk's LOD from the low 32 bits
     // of its id (findLSB), so at most MAX_LOD_NUMBERS.
@@ -134,6 +136,10 @@ public:
 
     void set_pipeline_mode(int p_mode);
     int get_pipeline_mode() const;
+
+    // Terrain: 0 SDFDummy (default), 1 the Hermite cascade test terrain (SDFCascade, --terrain=cascade).
+    void set_terrain_mode(int p_mode);
+    int get_terrain_mode() const;
 
     void set_legacy_batch_size(int p_size);
     int get_legacy_batch_size() const;

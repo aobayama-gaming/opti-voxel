@@ -40,7 +40,7 @@ bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos, CullMode p
 bool ChunkDiscoverer::_timed_cull(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const {
     const auto t0 = std::chrono::steady_clock::now();
     const bool outside = _chunk_is_outside_sdf(chunk_pos, p_mode, r_counters);
-    r_counters.cull_usec += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+    r_counters.cull_nsec += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     return outside;
 }
 
@@ -130,7 +130,7 @@ void ChunkDiscoverer::discovery_loop() {
         scanned_chunks_dirty = true;
         const uint64_t t_published = now_usec();
         stats.scan.add(t_scan_end - t_scan_start);
-        stats.cull.add(counters.cull_usec);
+        stats.cull.add(counters.cull_nsec / 1000);
         stats.publish.add(t_published - t_scan_end);
         if (camera_change_usec > 0) {
             stats.latency.add(t_published - camera_change_usec);
@@ -349,6 +349,9 @@ Dictionary ChunkDiscoverer::get_stats() {
     d["cache_size"] = stats.cache_size;
     d["cache_evicted_total"] = stats.cache_evicted_total;
     d["verify_mismatches_total"] = stats.verify_mismatches_total;
+    // Share of visited nodes whose verdict came from the cache, and the cost of one corner SDF evaluation.
+    d["cache_hit_rate"] = stats.nodes_visited_total ? double(stats.cache_hits_total) / double(stats.nodes_visited_total) : 0.0;
+    d["usec_per_sdf_call"] = stats.sdf_calls_total ? double(stats.cull.total) / double(stats.sdf_calls_total) : 0.0;
     mutex->unlock();
     return d;
 }

@@ -119,10 +119,75 @@ ivec3 sat_diff(WorldPos p, uvec3 anchor_lo, ivec3 anchor_hi, int limit) {
 
 )glsl";
 
+// 64-bit integer helpers on (low word, high word) pairs, one per axis: the GPU has no int64
+// (GL_ARB_gpu_shader_int64 is not used). Only the cascade's shaders and FrameSpike include them, after
+// GLSL_FRAME_FUNCTIONS. CPU mirror: plain int64 arithmetic (FrameSpike probes i64_* against it).
+inline constexpr const char GLSL_FRAME_INT64[] = R"glsl(
+
+// v >> s, arithmetic (floor(v / 2^s)), 0 <= s <= 63.
+void i64_asr(inout uvec3 lo, inout ivec3 hi, int s) {
+    if (s == 0) {
+        return;
+    }
+    if (s < 32) {
+        lo = (lo >> uint(s)) | (uvec3(hi) << uint(32 - s));
+        hi = hi >> s;
+    } else {
+        lo = uvec3(hi >> (s - 32));
+        hi = hi >> 31;
+    }
+}
+
+// ceil(v / 2^s), 0 <= s <= 63.
+void i64_asr_ceil(inout uvec3 lo, inout ivec3 hi, int s) {
+    // The bits shifted out: any set bit rounds up.
+    uvec3 rest;
+    if (s < 32) {
+        rest = lo & uvec3((1u << uint(s)) - 1u);
+    } else {
+        rest = lo | (uvec3(hi) & uvec3((1u << uint(s - 32)) - 1u));
+    }
+    i64_asr(lo, hi, s);
+    i64_add(lo, hi, ivec3(notEqual(rest, uvec3(0u))));
+}
+
+// v << s (wrapping), 0 <= s <= 63.
+void i64_shl(inout uvec3 lo, inout ivec3 hi, int s) {
+    if (s == 0) {
+        return;
+    }
+    if (s < 32) {
+        hi = ivec3((uvec3(hi) << uint(s)) | (lo >> uint(32 - s)));
+        lo = lo << uint(s);
+    } else {
+        hi = ivec3(lo << uint(s - 32));
+        lo = uvec3(0u);
+    }
+}
+
+)glsl";
+
+// i64_add comes first (i64_asr_ceil calls it).
+inline constexpr const char GLSL_FRAME_INT64_ADD[] = R"glsl(
+
+// v + d (wrapping), d a signed 32-bit value.
+void i64_add(inout uvec3 lo, inout ivec3 hi, ivec3 d) {
+    uvec3 r = lo + uvec3(d);
+    hi = hi + (d >> 31) + ivec3(lessThan(r, lo));
+    lo = r;
+}
+
+)glsl";
+
 namespace GPUFrame {
 
 inline String glsl_functions() {
     return String(GLSL_FRAME_FUNCTIONS);
+}
+
+// The int64 helpers (after glsl_functions()).
+inline String glsl_int64() {
+    return String(GLSL_FRAME_INT64_ADD) + String(GLSL_FRAME_INT64);
 }
 
 } // namespace GPUFrame
