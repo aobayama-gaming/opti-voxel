@@ -67,6 +67,8 @@ private:
     // Settings (must be set before the node enters the tree).
     PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
     int legacy_batch_size = 1024;
+    // Number of LOD levels (0 .. lod_numbers - 1). The GPU reads a chunk's LOD from the low 32 bits
+    // of its id (findLSB), so at most MAX_LOD_NUMBERS.
     int lod_numbers = 15;
     bool legacy_trim_indices = false;
     float lod_pixel_error = 2.0f;
@@ -162,6 +164,16 @@ public:
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);
     float get_lod_pixel_error() const;
+
+    static constexpr int MAX_LOD_NUMBERS = 31;
+    void set_lod_numbers(int p_count);
+    int get_lod_numbers() const;
+    // Distance from the camera (metres) that bounds every chunk the discoverer can load: the corner of
+    // its scan grid. 0 before the terrain is ready.
+    double get_load_radius() const;
+    // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain, for the
+    // clip planes above 15 LODs.
+    double get_sdf_at(const Vector3 &p_render_pos) const;
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;

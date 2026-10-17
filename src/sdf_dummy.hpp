@@ -44,6 +44,15 @@ public:
     static constexpr double HEIGHT_WAVELENGTH_M = 1.0 / 0.0035;
     static constexpr double HEIGHT_AMPLITUDE_M = 50.0;
     static constexpr int HEIGHT_OCTAVES = 5;
+    // Relief: with more than RELIEF_FROM_LODS LODs, the far LODs would only see a flat plane. Each extra
+    // LOD adds two octaves above the mountains' (wavelengths up to the largest chunks), continuing the
+    // mountains' amplitude with a factor sqrt(2) per octave (Hurst 0.5). At the default LOD count there
+    // is no relief and the terrain is unchanged. The relief's height at the absolute voxel (0, 0, 0) is
+    // subtracted, so the spawn area keeps about the same ground height. Heights are floats in LOD0
+    // voxels: with 25 LODs the sum
+    // reaches ~2^18 voxels, a float step of ~2^-6 voxel.
+    static constexpr int RELIEF_FROM_LODS = 15;
+    static constexpr uint32_t RELIEF_SEED = 0x5E1EFu;
     static constexpr double CAVE_WAVELENGTH_M = 1.0 / 0.008;
     static constexpr int CAVE_OCTAVES = 3;
     // Caves only between these depths below the surface. Outside the band the cave field is the
@@ -59,9 +68,12 @@ public:
     static constexpr double NORM_3D = 4.0 / 3.0;
     static constexpr uint32_t HEIGHT_SEED = 0x7E7A11u;
     static constexpr uint32_t CAVE_SEED = 0xCA7E5u;
-    // Saturation of the vertical distance to the datum (voxels): exact float conversion. A saturated
-    // |SDF| only makes chunk discovery keep more chunks, never drop one.
-    static constexpr int32_t DY_LIMIT = 1 << 24;
+    // Saturation of the vertical distance to the datum (voxels). A saturated |SDF| only makes chunk
+    // discovery keep more chunks, never drop one, but it must stay several cells of the largest LOD
+    // (2^24 was 1 cell at LOD 24: skirts meshed phantom sheets deep underground). Above 2^24 the
+    // conversion to float rounds, identically on the CPU and the GPU; the default LODs (up to 14)
+    // never reach it.
+    static constexpr int32_t DY_LIMIT = 1 << 30;
     // Saturation of the debug shapes' origin-relative position (voxels).
     static constexpr int32_t DEBUG_LIMIT = 1 << 20;
 
@@ -74,7 +86,16 @@ public:
         auto k_of = [vs](double p_wavelength_m) { return int(std::lround(std::log2(p_wavelength_m / vs))); };
         height = ExactNoise::make_fbm(true, HEIGHT_SEED, k_of(HEIGHT_WAVELENGTH_M), HEIGHT_OCTAVES, HEIGHT_AMPLITUDE_M / vs * NORM_2D, 0.5);
         caves = ExactNoise::make_fbm(false, CAVE_SEED, k_of(CAVE_WAVELENGTH_M), CAVE_OCTAVES, NORM_3D, 0.5);
-        for (const ExactNoise::OctaveSet *set : { &height, &caves }) {
+        relief = ExactNoise::OctaveSet();
+        relief.is_2d = true;
+        if (p_lod_count > RELIEF_FROM_LODS) {
+            const int n = 2 * (p_lod_count - RELIEF_FROM_LODS);
+            relief = ExactNoise::make_fbm(true, RELIEF_SEED, k_of(HEIGHT_WAVELENGTH_M) + n, n,
+                    HEIGHT_AMPLITUDE_M / vs * NORM_2D * std::ldexp(1.0, n / 2), std::sqrt(0.5));
+        }
+        // The value (w) doesn't depend on the LOD.
+        relief_offset = relief.octaves.empty() ? 0.0f : ExactNoise::fbm(relief, WorldPos(), 0).w;
+        for (const ExactNoise::OctaveSet *set : { &height, &caves, &relief }) {
             const String error = ExactNoise::gradient_range_error(*set, p_lod_count);
             if (!error.is_empty()) {
                 ERR_PRINT(error);
@@ -98,6 +119,7 @@ public:
     // The two fBms, GLSL "terrain_height" / "terrain_caves" (FrameSpike probes them).
     const ExactNoise::OctaveSet &get_height() const { return height; }
     const ExactNoise::OctaveSet &get_caves() const { return caves; }
+    const ExactNoise::OctaveSet &get_relief() const { return relief; }
 
     float evaluate(const WorldPos &p_pos, int p_lod) const override {
         const ExactNoise::Float4 d = sdf(p_pos, p_lod);
@@ -113,7 +135,12 @@ public:
         const float inv_s = exact_pow2(-p_lod);
         // Height field: surface at datum + h(x, z), the terrain distance normalised by its gradient
         // (LOD0 voxels per voxel of the LOD), so terrain.w is in voxels of the LOD.
-        const Float4 hn = fbm(height, p_pos, p_lod);
+        Float4 hn = fbm(height, p_pos, p_lod);
+        if (!relief.octaves.empty()) {
+            Float4 r = fbm(relief, p_pos, p_lod);
+            r.w = r.w - relief_offset;
+            hn = Float4{ hn.x + r.x, hn.y + r.y, hn.z + r.z, hn.w + r.w };
+        }
         const float dy = float(WorldCoord::sat_diff(p_pos.voxel.y, datum.y, DY_LIMIT)) + p_pos.frac.y;
         Float4 t{ -hn.x, s, -hn.z, dy - hn.w };
         const float tr = det_rsqrt(t.x * t.x + t.y * t.y + t.z * t.z);
@@ -172,11 +199,15 @@ public:
     String get_glsl_code() const override {
         using namespace ExactNoise;
         String code = glsl_fbm("terrain_height", height) + glsl_fbm("terrain_caves", caves);
+        if (!relief.octaves.empty()) {
+            code += glsl_fbm("terrain_relief", relief);
+        }
         String body = R"glsl(
 vec4 terrain_sdf(WorldPos p, int lod) {
     precise float s = exact_pow2(lod);
     precise float inv_s = exact_pow2(-lod);
     precise vec4 hn = terrain_height(p, lod);
+    /*RELIEF*/
     int sy = sat_diff(p, DATUM_LO, DATUM_HI, DY_LIMIT).y;
     precise float dy = float(sy) + p.frac.y;
     precise vec4 t = vec4(-hn.x, s, -hn.z, dy - hn.w);
@@ -219,6 +250,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
     return r;
 }
 )glsl";
+        body = body.replace("/*RELIEF*/", relief.octaves.empty() ? "" : "precise vec4 rl = terrain_relief(p, lod);\n    rl.w = rl.w - " + glsl_float(relief_offset) + ";\n    hn = hn + rl;");
         body = body.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT));
         body = body.replace("CAVE_TOP", glsl_float(cave_top)).replace("CAVE_FLOOR", glsl_float(cave_floor)).replace("CAVE_GAIN", glsl_float(cave_gain));
         body = body.replace("CAVE_ALWAYS", cave_skip ? "" : "true || ");
@@ -267,6 +299,8 @@ vec4 zero_pillar_min(vec4 r, WorldPos p, float inv_s) {
 private:
     ExactNoise::OctaveSet height;
     ExactNoise::OctaveSet caves;
+    ExactNoise::OctaveSet relief; // empty at RELIEF_FROM_LODS LODs or fewer
+    float relief_offset = 0.0f;
     VoxelPos datum;
     VoxelPos debug_anchor;
     float cave_top = 0.0f;

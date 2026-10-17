@@ -291,6 +291,24 @@ TEST_CASE("ExactNoise: gradient_range_error flags factors outside [2^-16, 2^40] 
     CHECK(gradient_range_error(gentle, 15).is_empty());
 }
 
+TEST_CASE("SDFDummy: relief octaves only above 15 LODs, in range at 25 LODs") {
+    for (float voxel : { 0.5f, 0.05f }) {
+        ChunkParam param;
+        param.voxel_size = voxel;
+        SDFDummy sdf;
+        sdf.configure(param, 15);
+        CHECK(sdf.get_relief().octaves.empty());
+        sdf.configure(param, 25);
+        CHECK(sdf.get_relief().octaves.size() == 20);
+        for (const OctaveSet *set : { &sdf.get_height(), &sdf.get_caves(), &sdf.get_relief() }) {
+            CHECK(gradient_range_error(*set, 25).is_empty());
+        }
+        // Back to the default: the same terrain as before (no relief left over).
+        sdf.configure(param, 15);
+        CHECK(sdf.get_relief().octaves.empty());
+    }
+}
+
 // Regression guard for the refactors of perlin3 (the cascade's perlin3_cross shares its setup): a
 // digest of its output bits at 4096 points (fractions included), k 0..62, recorded on dev.
 TEST_CASE("ExactNoise: perlin3 output bits are unchanged (digest)") {

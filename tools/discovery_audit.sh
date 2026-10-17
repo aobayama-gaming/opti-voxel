@@ -6,7 +6,8 @@
 #   tools/discovery_audit.sh [--only=a,b] [-- extra bench args, e.g. --discovery_cull=2]
 #
 # Cases: default pose, the main scene's lod_error 4, underground, another area, high above, deep
-# below, a far world origin, 5 cm voxels, and a fly run (audited once it settles back at the start).
+# below, a far world origin, 5 cm voxels, a fly run (audited once it settles back at the start), and
+# 25 LODs (--lods=25) from 10 km up looking down and from 100 km up looking at the horizon.
 # Report: bench/results/<timestamp>-discovery.md. Exit code: 0 no miss anywhere, 1 a run failed or missed.
 # No build (run scons first), no cooldown: this is a correctness check.
 set -uo pipefail
@@ -43,6 +44,8 @@ CASES=(
     "far_origin|--origin=$FAR,0,-$FAR"
     "cm|--voxel=0.05 --lod_error=4"
     "fly|--scenario=fly"
+    "lods25_10km|--lods=25 --cam_pos=-52.76,10000,-95.64 --pitch=-45"
+    "lods25_100km|--lods=25 --cam_pos=-52.76,100000,-95.64 --pitch=-5"
 )
 
 OUT="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-discovery.md"

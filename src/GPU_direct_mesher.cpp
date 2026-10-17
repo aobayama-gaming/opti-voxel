@@ -68,7 +68,8 @@ static uint32_t groups_of(uint32_t p_quads) {
 }
 
 // Morton order of a chunk id relative to the world origin, for batch and page locality only: ids
-// more than 2^20 units from the origin wrap and merely lose locality.
+// more than 2^20 units from the origin (far LODs with more than 15 LODs, a camera far from the origin)
+// are clamped onto the faces of the key space and only keep a coarse locality.
 static uint64_t morton_key(const ChunkId &p_chunk, const ChunkId &p_origin) {
     auto spread = [](uint64_t v) {
         v &= 0x1fffff;
@@ -80,10 +81,8 @@ static uint64_t morton_key(const ChunkId &p_chunk, const ChunkId &p_origin) {
         return v;
     };
     constexpr int64_t bias = int64_t(1) << 20;
-    const ChunkId rel = p_chunk - p_origin;
-    if (unlikely(rel.x < -bias || rel.x >= bias || rel.y < -bias || rel.y >= bias || rel.z < -bias || rel.z >= bias)) {
-        ERR_PRINT_ONCE("GPUDirectMesher: chunks more than 2^20 id units from the world origin, Morton locality degrades.");
-    }
+    const ChunkId d = p_chunk - p_origin;
+    const ChunkId rel(CLAMP(d.x, -bias, bias - 1), CLAMP(d.y, -bias, bias - 1), CLAMP(d.z, -bias, bias - 1));
     return spread(uint64_t(rel.x + bias)) | (spread(uint64_t(rel.y + bias)) << 1) | (spread(uint64_t(rel.z + bias)) << 2);
 }
 

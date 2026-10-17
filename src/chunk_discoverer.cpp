@@ -152,13 +152,10 @@ void ChunkDiscoverer::discovery_loop() {
 
 void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
         CullCache *p_cache) const {
-    const int lod_count = lod_distances.size() - 1;
-
-    const int max_lod = lod_count - 1; // The maximum LOD level to consider for loading. This is determined by the size of the lod_distances array, which should be set up so that each LOD level corresponds to a distance threshold.
-
-    const int64_t max_lod_radius = int64_t(2) << (max_lod); // The radius of the largest LOD. This is the maximum distance at which chunks will be loaded, so it determines the size of the area to scan.
-
-    const int64_t max_lod_number = MIN(int64_t(std::ceil(lod_distances[lod_count - 1] / double(max_lod_radius))) + 2, int64_t(max_lod));
+    const int max_lod = get_max_lod();
+    int64_t max_lod_radius;
+    int64_t max_lod_number;
+    get_scan_grid(max_lod_radius, max_lod_number);
 
     const ChunkId ancestor_chunk = ChunkMath::get_parent_from_child_until(p_camera_chunk, max_lod);
 
@@ -175,6 +172,16 @@ void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHa
             }
         }
     }
+}
+
+void ChunkDiscoverer::get_scan_grid(int64_t &r_step, int64_t &r_count) const {
+    const int lod_count = lod_distances.size() - 1;
+
+    const int max_lod = lod_count - 1; // The maximum LOD level to consider for loading. This is determined by the size of the lod_distances array, which should be set up so that each LOD level corresponds to a distance threshold.
+
+    r_step = int64_t(2) << (max_lod); // The radius of the largest LOD. This is the maximum distance at which chunks will be loaded, so it determines the size of the area to scan.
+
+    r_count = MIN(int64_t(std::ceil(lod_distances[lod_count - 1] / double(r_step))) + 2, int64_t(max_lod));
 }
 
 void ChunkDiscoverer::set_config(
@@ -212,7 +219,7 @@ void ChunkDiscoverer::setup_lod(
     float previous_distance = 0.0f;
     for (int i = 0; i < lod_levels + 1; ++i) {
         // Geometric error follows voxel size per LOD (voxel doubles each level).
-        const float lod_voxel_size_world = chunk_param.voxel_size * static_cast<float>(1 << i);
+        const float lod_voxel_size_world = chunk_param.voxel_size * static_cast<float>(int64_t(1) << i);
         const float geometric_error_world = lod_voxel_size_world * 0.5f;
 
         // Compute threshold in world units, then convert to chunk-coordinate units.
@@ -270,7 +277,7 @@ void ChunkDiscoverer::_recursive_chunk_scan(const ChunkId &camera_chunk, const C
 
     // Work fully in chunk-coordinate units.
     // Half-extent of current LOD chunk in chunk-coord units is 2^lod.
-    const float half_extent = static_cast<float>(1 << current_lod);
+    const float half_extent = static_cast<float>(int64_t(1) << current_lod);
     // Bounding sphere radius of the chunk cube in chunk-coord units.
     const float chunk_outer_radius = std::sqrt(3.0f) * half_extent;
 

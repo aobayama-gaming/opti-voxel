@@ -200,6 +200,7 @@ void MeshValidator::_compare() {
     Array anomalies; // flipped / unmatched / bad-normal triangles with their nearest |sdf|
     PackedFloat64Array baseline_sdf; // same measure on ordinary matched triangles
     int64_t unexplained = 0;
+    int64_t sliver_normals_skipped = 0; // matched sliver triangles: normal partners are ambiguous
     int64_t bad_headers = 0; // groups of a chunk whose header names another chunk
     auto record = [&](const char *p_kind, const ChunkId &p_chunk, const Tri &p_tri, float p_cell, double p_extra) {
         const Vector3 c = (p_tri.p[0] + p_tri.p[1] + p_tri.p[2]) / 3.0f;
@@ -378,6 +379,13 @@ void MeshValidator::_compare() {
             }
             max_pos_err_cells = MAX(max_pos_err_cells, best_err);
             const Tri &d = direct[best];
+            // A sliver's partner is any triangle of its cluster within the tolerance (e.g. the 6 quads
+            // closing around a lone corner whose |sdf| is a few 1e-3 cells, all within ~0.01 cells of
+            // it): its vertices can't be paired, so its normals are not compared.
+            if (sliver(l)) {
+                sliver_normals_skipped++;
+                continue;
+            }
             for (int k = 0; k < 3; k++) {
                 const int dk = best_flipped ? (best_rot + 3 - k) % 3 : (best_rot + k) % 3;
                 if (l.n[k] == Vector3() || d.n[dk] == Vector3()) {
@@ -455,6 +463,7 @@ void MeshValidator::_compare() {
     report["max_normal_error_deg"] = max_normal_err_deg;
     report["mean_normal_error_deg"] = normal_samples ? sum_normal_err_deg / normal_samples : 0.0;
     report["normals_over_5deg"] = normals_over_5deg;
+    report["sliver_normals_skipped"] = sliver_normals_skipped;
     report["mismatching_chunks"] = per_chunk;
     report["anomalies"] = anomalies;
     {
