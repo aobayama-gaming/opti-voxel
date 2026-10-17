@@ -32,6 +32,9 @@ uniform ivec3 origin_chunk_lo = ivec3(0);
 uniform int chunk_size = 32;
 uniform int skirt_size = 2;
 uniform float pos_scale = 512.0;
+// Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
+// colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
+uniform float skirt_depth_m[32];
 instance uniform int page_id = 0;
 
 varying vec3 v_world_normal;
@@ -83,7 +86,13 @@ void vertex() {
     v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
     v_lod = float(lod);
     v_chunk = vec3(rel);
-    v_height = world.y;
+    // skirt_sdf pushed the SDF towards air by clamp(-inside) * depth past the chunk bounds, which lowers
+    // the surface by push / n.y. The push is linear inside a cell, so on a planar surface the vertex lies
+    // on the pushed plane and this gives back the exact height.
+    float lo = float(skirt_size);
+    vec3 in3 = min(local - lo, lo + voxel_dim - local);
+    float push = clamp(-min(in3.x, min(in3.y, in3.z)), 0.0, 1.0) * skirt_depth_m[min(lod, 31)];
+    v_height = world.y + push / max(n.y, 0.2);
 
     VERTEX = (VIEW_MATRIX * vec4(world, 1.0)).xyz;
     NORMAL = normalize(mat3(VIEW_MATRIX) * n);

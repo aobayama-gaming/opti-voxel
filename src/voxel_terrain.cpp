@@ -471,6 +471,13 @@ void VoxelTerrain::_ready() {
         direct_mesher = memnew(GPUDirectMesher);
         direct_mesher->initialize(sdf, chunk_param, lod_numbers, scenario, direct_settings);
         direct_mesher->set_debug_view(debug_view);
+        // Skirt depth per LOD: the page shader's height colours undo the skirt push.
+        PackedFloat32Array skirt_depths;
+        skirt_depths.resize(32);
+        for (int l = 0; l < 32; l++) {
+            skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
+        }
+        direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
         if (terrain_mode == 2) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
             const double sea_m = double(static_cast<SDFCascade *>(sdf)->get_datum_y() - chunk_param.origin_voxel().y) * chunk_param.voxel_size;
