@@ -1,6 +1,6 @@
 #include "chunk_memory.hpp"
 
-void VoxelState::add_scan_chunk(LODHashSet &p_scanned_chunk){
+void VoxelState::add_scan_chunk(std::unique_ptr<LODHashSet> p_scanned_chunk){
 
     // Any loaded chunk not present in the new scan must be destroyed.
     // for (ChunkHashMap::ConstIterator it = loaded_chunk.begin(); it != loaded_chunk.end(); ++it) {
@@ -10,12 +10,13 @@ void VoxelState::add_scan_chunk(LODHashSet &p_scanned_chunk){
     //     }
     // }
 
-    scanned_chunk = p_scanned_chunk;
+    p_scanned_chunk->max_lod = dirty_chunk.max_lod;
+    scanned_chunk = std::move(p_scanned_chunk);
 
     dirty_chunk.clear();
 
     // Any scanned chunk not already loaded must be generated.
-    for (const ChunkId &pos : p_scanned_chunk) {
+    for (const ChunkId &pos : *scanned_chunk) {
         if (!loaded_chunk.has(pos)) {
             dirty_chunk.insert(pos);
         }
@@ -60,7 +61,7 @@ void VoxelState::update_destroy_from_scan() {
     // Anything loaded but not stalled can be safely destroyed.
     for (ChunkHashMap::ConstIterator it = loaded_chunk.begin(); it != loaded_chunk.end(); ++it) {
 
-        if(scanned_chunk.has(it->key)){
+        if(scanned_chunk->has(it->key)){
             continue;
         }
 

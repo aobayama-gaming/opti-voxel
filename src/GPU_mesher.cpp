@@ -949,7 +949,7 @@ void GPUMesher::send_remove_chunk(LODHashSet p_chunks) {
     mutex->unlock();
 }
 
-void GPUMesher::send_chunk(LODHashSet p_chunks){
+void GPUMesher::send_chunk(const LODHashSet &p_chunks){
 
     for (LODHashSet *q : chunk_queue) {
         if (q) {

@@ -66,9 +66,11 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 
 ## Verify changes (do this, don't eyeball)
-- `tools/check.sh [--no-build] [--spike] [--keep-going]`: the correctness gate, ~2 min. One build, then
-  a direct load run with `--validate=64 --audit=1`, `origin_parity.sh`, `frame_test.sh`, and the
-  QuadPagePool spike (with `--spike`, or automatically when `src/quad_page_pool*` differs from `dev`).
+- `tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]`: the correctness gate, ~2 min.
+  One build, then a direct load run with `--validate=64 --audit=1 --discovery_audit=1`,
+  `origin_parity.sh`, `frame_test.sh`, the QuadPagePool spike (with `--spike`, or automatically when
+  `src/quad_page_pool*` differs from `dev`) and `discovery_audit.sh` (with `--discovery`, or
+  automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~6 min).
   Prints PASS/FAIL per step. Perf numbers come from `bench_ab.sh` instead.
 - `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
   [--view=0..7] [--validate=64] [--audit=1] [--cool=1]`: builds, runs `project/debug/bench.tscn` with a fixed
@@ -84,6 +86,20 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   differently compiled SDF evaluations disagree on the sign of ~0).
 - `--audit=1` (direct): reads every page back and classifies all drawn slots
   (live / dead_zero / stale / partial / broken). Anything but live/dead_zero is a bug.
+- `--discovery_audit=1` (direct): rebuilds the current scan without culling (`--discovery_cull=0`) and
+  counts the quads of every chunk the cull dropped on the GPU (passes sdf/edges/vertices, count only).
+  A dropped chunk with quads is a miss, i.e. a hole; `ok` needs 0 misses and a max LOD jump of 1
+  between face neighbours. `bench.sh` also fails a load-complete run whose loaded set != scanned set
+  (`chunks.loaded_not_scanned` / `scanned_not_loaded`).
+  `tools/discovery_audit.sh [--only=a,b] [-- bench args]` runs it over 9 poses/settings (default,
+  lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly) and writes
+  `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
+- Discoverer: the cull verdict of a node only depends on its id and the (fixed) SDF, so it is cached
+  across scans (`discovery_cache`, default on); `--discovery_verify=1` recomputes every hit and
+  ERRORs on a mismatch. `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera.
+- Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
+  pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
+  saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
@@ -124,6 +140,9 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   blocks: only call it on the render thread.
 - Many MB of `texture_get_data_async` in one frame crashes 4.6.3 (download staging overflow):
   throttle readbacks (validator/auditor do 2 pages per frame).
+- An interrupted scons (session moved, killed shell) can leave 0-byte `.os` files that scons later
+  treats as up to date: the `.so` links but fails to load (`undefined symbol: _ZTV15GPUDirectMesher`)
+  and the bench loops on script errors. `find src -name "*.os" -size 0 -delete`, then rebuild.
 - `RenderingServer::shader_set_code` does not run the shader preprocessor: no `#define`.
 - `texture_rd_create` only wraps RD formats that have an `Image` equivalent: RG32UI / RGBA32UI fail
   ("Unsupported image format"), 16-bit integer formats (RGBA16UI) work.

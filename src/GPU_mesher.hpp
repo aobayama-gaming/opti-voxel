@@ -152,7 +152,7 @@ class GPUMesher : public Object{
 
     void send_remove_chunk(LODHashSet p_chunks);
 
-    void send_chunk(LODHashSet p_chunks);
+    void send_chunk(const LODHashSet &p_chunks);
 
     bool get_results(VoxelState &output);
 

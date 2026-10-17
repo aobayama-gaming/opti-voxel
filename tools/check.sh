@@ -2,10 +2,12 @@
 # Correctness gate for a change: one build, then every check, no GPU cooldown (temperature only matters
 # for perf numbers, use tools/bench_ab.sh for those).
 #
-#   tools/check.sh [--no-build] [--spike] [--keep-going]
+#   tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]
 #
-# Steps: build, direct load run with validation + audit, origin parity (4 runs), integer-frame test,
-# and the QuadPagePool spike when --spike is given or src/quad_page_pool* differs from dev.
+# Steps: build, direct load run with validation + page audit + discovery audit, origin parity (4 runs),
+# integer-frame test, the QuadPagePool spike when --spike is given or src/quad_page_pool* differs from
+# dev, and the discovery miss audit over 9 poses (tools/discovery_audit.sh) when --discovery is given
+# or the discoverer / SDF sources differ from dev.
 # Stops at the first failure unless --keep-going. Exit code: 0 all passed, 1 something failed.
 # Needs a GPU and an unlocked session.
 set -uo pipefail
@@ -14,17 +16,22 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GODOT="${GODOT:-$HOME/.local/bin/godot}"
 BUILD=1
 SPIKE=0
+DISCOVERY=0
 KEEP_GOING=0
 for a in "$@"; do
     case "$a" in
         --no-build) BUILD=0 ;;
         --spike) SPIKE=1 ;;
+        --discovery) DISCOVERY=1 ;;
         --keep-going) KEEP_GOING=1 ;;
-        *) echo "usage: $0 [--no-build] [--spike] [--keep-going]"; exit 1 ;;
+        *) echo "usage: $0 [--no-build] [--spike] [--discovery] [--keep-going]"; exit 1 ;;
     esac
 done
 if [[ $SPIKE == 0 ]] && git -C "$ROOT" diff --name-only dev -- 'src/quad_page_pool*' 2>/dev/null | grep -q .; then
     SPIKE=1
+fi
+if [[ $DISCOVERY == 0 ]] && git -C "$ROOT" diff --name-only dev -- 'src/chunk_discoverer*' 'src/sdf*' 'src/chunk_math*' 2>/dev/null | grep -q .; then
+    DISCOVERY=1
 fi
 
 START=$(date +%s)
@@ -65,9 +72,10 @@ spike() {
 
 [[ $BUILD == 1 ]] && step build build
 step direct "$ROOT/tools/bench.sh" --no-build --tag=check --mode=direct --scenario=load --steady=60 \
-    --validate=64 --audit=1
+    --validate=64 --audit=1 --discovery_audit=1
 step parity "$ROOT/tools/origin_parity.sh" -- --mode=direct --validate=64 --audit=1
 step frame "$ROOT/tools/frame_test.sh" --no-build
 [[ $SPIKE == 1 ]] && step spike spike
+[[ $DISCOVERY == 1 ]] && step discovery "$ROOT/tools/discovery_audit.sh"
 summary
 exit $FAILED
