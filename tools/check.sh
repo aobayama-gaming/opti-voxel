@@ -6,8 +6,8 @@
 #
 # Steps: build, direct load run with validation + page audit + discovery audit, origin parity (4 runs),
 # integer-frame test, the QuadPagePool spike when --spike is given or src/quad_page_pool* differs from
-# dev, and the discovery miss audit over 9 poses (tools/discovery_audit.sh) when --discovery is given
-# or the discoverer / SDF sources differ from dev.
+# dev, the discovery miss audit over 9 poses (tools/discovery_audit.sh) when --discovery is given
+# or the discoverer / SDF sources differ from dev, and the exact-zero SDF test (tools/zero_test.sh).
 # Stops at the first failure unless --keep-going. Exit code: 0 all passed, 1 something failed.
 # Needs a GPU and an unlocked session.
 set -uo pipefail
@@ -75,6 +75,7 @@ step direct "$ROOT/tools/bench.sh" --no-build --tag=check --mode=direct --scenar
     --validate=64 --audit=1 --discovery_audit=1
 step parity "$ROOT/tools/origin_parity.sh" -- --mode=direct --validate=64 --audit=1
 step frame "$ROOT/tools/frame_test.sh" --no-build
+step zero "$ROOT/tools/zero_test.sh"
 [[ $SPIKE == 1 ]] && step spike spike
 [[ $DISCOVERY == 1 ]] && step discovery "$ROOT/tools/discovery_audit.sh"
 summary

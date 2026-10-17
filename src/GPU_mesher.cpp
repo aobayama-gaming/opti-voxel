@@ -180,8 +180,10 @@ if (cell_chunk_coordinate[axis] < chunk_param.chunk_size - 1) {
     vec4 center_sdf = sdf_sample[get_flat_index_z(global_cell)];
     vec4 offset_sdf = sdf_sample[get_flat_index_z(global_cell + offset)];
 
+    // Solid is !(w > 0) in every pass. A crossing is t > 0 downstream, so a sample of exactly 0.0
+    // must not give t = 0 (lost quad = hole); the signs differ, so the denominator is never 0.
     if ((center_sdf.w > 0.0) != (offset_sdf.w > 0.0)) {
-        float t = center_sdf.w / (center_sdf.w - offset_sdf.w + 0.00001);
+        float t = max(center_sdf.w / (center_sdf.w - offset_sdf.w), 1e-6);
         
         // Extract chunk batch to safely write edge data
         uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
@@ -270,7 +272,7 @@ if (active_edge_count > 0) {
     if (e3_t > 0.0) quad_mask |= 2; // Y-axis crossing quad
     if (e8_t > 0.0) quad_mask |= 4; // Z-axis crossing quad
 
-    if (sdf_sample[get_flat_index_z(gl_GlobalInvocationID)].w < 0.0) {
+    if (!(sdf_sample[get_flat_index_z(gl_GlobalInvocationID)].w > 0.0)) { // same side rule as the edge pass
         quad_mask |= 8; // Store "Origin is Solid" in the 4th bit!
     }
 

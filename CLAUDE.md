@@ -70,7 +70,8 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   One build, then a direct load run with `--validate=64 --audit=1 --discovery_audit=1`,
   `origin_parity.sh`, `frame_test.sh`, the QuadPagePool spike (with `--spike`, or automatically when
   `src/quad_page_pool*` differs from `dev`) and `discovery_audit.sh` (with `--discovery`, or
-  automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~6 min).
+  automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~2 min)
+  and `zero_test.sh`.
   Prints PASS/FAIL per step. Perf numbers come from `bench_ab.sh` instead.
 - `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
   [--view=0..7] [--validate=64] [--audit=1] [--cool=1]`: builds, runs `project/debug/bench.tscn` with a fixed
@@ -97,6 +98,9 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Discoverer: the cull verdict of a node only depends on its id and the (fixed) SDF, so it is cached
   across scans (`discovery_cache`, default on); `--discovery_verify=1` recomputes every hit and
   ERRORs on a mismatch. `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera.
+- `tools/zero_test.sh`: the debug zero pillar (`--zero_pillar=1|2`, `SDFDummy`) has its flat top
+  exactly on a lattice row (SDF exactly 0.0 at LODs 0-6); run 2 moves it up 1 cm. Same triangle count
+  and the same picture are required: a sample of exactly 0.0 must neither lose its quad nor flip it.
 - Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
@@ -143,6 +147,10 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - An interrupted scons (session moved, killed shell) can leave 0-byte `.os` files that scons later
   treats as up to date: the `.so` links but fails to load (`undefined symbol: _ZTV15GPUDirectMesher`)
   and the bench loops on script errors. `find src -name "*.os" -size 0 -delete`, then rebuild.
+- SDF samples of exactly 0.0 happen (float heights hit the 0.5 m grid ~1 in 16k vertical crossings).
+  Every pass uses the same side rule, solid = `!(w > 0)`, and a crossing's `t` is clamped above 0
+  because `t > 0` is what marks a crossing downstream. Mixing `< 0` and `> 0`, or letting t reach 0,
+  drops or flips quads: small diamond/hexagon holes, in both pipelines (the validator can't see it).
 - `RenderingServer::shader_set_code` does not run the shader preprocessor: no `#define`.
 - `texture_rd_create` only wraps RD formats that have an `Image` equivalent: RG32UI / RGBA32UI fail
   ("Unsupported image format"), 16-bit integer formats (RGBA16UI) work.

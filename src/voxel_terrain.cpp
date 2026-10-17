@@ -43,6 +43,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
     ClassDB::bind_method(D_METHOD("set_debug_test_rig", "enable"), &VoxelTerrain::set_debug_test_rig);
     ClassDB::bind_method(D_METHOD("get_debug_test_rig"), &VoxelTerrain::get_debug_test_rig);
+    ClassDB::bind_method(D_METHOD("set_debug_zero_pillar", "mode"), &VoxelTerrain::set_debug_zero_pillar);
+    ClassDB::bind_method(D_METHOD("get_debug_zero_pillar"), &VoxelTerrain::get_debug_zero_pillar);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
@@ -106,6 +108,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_zero_pillar", PROPERTY_HINT_ENUM, "Off,Exact top,Top +1 cm"), "set_debug_zero_pillar", "get_debug_zero_pillar");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
 
@@ -225,6 +228,15 @@ void VoxelTerrain::set_debug_test_rig(bool p_enable) {
 
 bool VoxelTerrain::get_debug_test_rig() const {
     return debug_test_rig;
+}
+
+void VoxelTerrain::set_debug_zero_pillar(int p_mode) {
+    ERR_FAIL_COND_MSG(started, "debug_zero_pillar must be set before the terrain enters the tree.");
+    debug_zero_pillar = p_mode;
+}
+
+int VoxelTerrain::get_debug_zero_pillar() const {
+    return debug_zero_pillar;
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
@@ -353,6 +365,7 @@ void VoxelTerrain::_ready(){
 
     // sdf is always an SDFDummy for now (see the member initialiser).
     static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
+    static_cast<SDFDummy *>(sdf)->zero_pillar = debug_zero_pillar;
     sdf->configure(chunk_param);
 
     visual_mesh_data.set_max_lod(lod_numbers);
