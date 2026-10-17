@@ -13,15 +13,15 @@ bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos){
     const float chunk_size = ChunkMath::world_chunk_size(chunk_pos,chunk_param);
     const float chunk_outer_radius = chunk_size*2 ; //0.8660254f // 2 is extra margin
     const VoxelPos chunk_center = ChunkMath::chunk_center_voxel(chunk_pos,chunk_param);
-    // Chunk size in voxels.
-    const int64_t size_voxels = ChunkMath::get_lod_size(chunk_pos) * 2 * chunk_param.half_chunk_voxels();
+    // Half the chunk size in voxels: the corners are at the centre +- this.
+    const int64_t half_voxels = ChunkMath::get_lod_size(chunk_pos) * chunk_param.half_chunk_voxels();
 
     for (int corner = 0; corner < 8; ++corner) {
         WorldPos corner_pos;
         corner_pos.voxel = chunk_center + VoxelPos(
-            (corner & 1) ? 0 : size_voxels,
-            (corner & 2) ? 0 : size_voxels,
-            (corner & 4) ? 0 : size_voxels
+            (corner & 1) ? half_voxels : -half_voxels,
+            (corner & 2) ? half_voxels : -half_voxels,
+            (corner & 4) ? half_voxels : -half_voxels
         );
 
         const float corner_distance = std::abs(sdf->evaluate(corner_pos));
@@ -208,7 +208,8 @@ void ChunkDiscoverer::_recursive_chunk_scan(const ChunkId &camera_chunk,const Ch
     // Bounding sphere radius of the chunk cube in chunk-coord units.
     const float chunk_outer_radius = std::sqrt(3.0f) * half_extent;
 
-    if (distance_to_player - chunk_outer_radius < lod_distances[current_lod-1]) {
+    // lod_distances[L] is the distance from which LOD L is within the pixel error: split when closer.
+    if (distance_to_player - chunk_outer_radius < lod_distances[current_lod]) {
 
         const int child_lod = current_lod - 1;
         const int64_t child_size = int64_t(1) << child_lod;

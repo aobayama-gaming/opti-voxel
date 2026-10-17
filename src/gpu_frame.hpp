@@ -7,7 +7,7 @@
 
 // The integer frame (world_coord.hpp) on the GPU, shared by both meshers and the FrameSpike harness.
 //
-// ChunkParam UBO (std140, 48 B): chunk_size, voxel_size, skirt_size, use_skirt, then the world origin
+// ChunkParam UBO (std140, 48 B): chunk_size, voxel_size, skirt_size, skirt_depth, then the world origin
 // in LOD0 voxels: low words (uvec4 at offset 16) and high words (ivec4 at offset 32).
 //
 // Per-chunk input (std430, 32 B): ChunkInput { uvec4 id; ivec4 anchor_hi; } holds the low 32 bits of
@@ -34,7 +34,7 @@ inline PackedByteArray chunk_param_bytes(const ChunkParam &p_param) {
     bytes.encode_s32(0, p_param.chunk_size);
     bytes.encode_float(4, p_param.voxel_size);
     bytes.encode_s32(8, p_param.skirt_size);
-    bytes.encode_s32(12, p_param.use_skirt ? 1 : 0);
+    bytes.encode_float(12, p_param.skirt_depth);
     bytes.encode_u32(16, lo32(origin.x));
     bytes.encode_u32(20, lo32(origin.y));
     bytes.encode_u32(24, lo32(origin.z));
