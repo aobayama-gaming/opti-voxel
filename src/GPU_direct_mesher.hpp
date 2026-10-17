@@ -58,7 +58,7 @@ public:
     // Loaded chunks must have been released before.
     void destroy();
 
-    void send_chunk(LODHashSet p_chunks);
+    void send_chunk(const LODHashSet &p_chunks);
     void process_queue();
     bool get_results(VoxelState &output);
     bool is_idle();
@@ -68,6 +68,13 @@ public:
     void compact(VoxelState &r_state);
 
     void release_chunk(const ChunkOutput &p_chunk) override;
+
+    // Discovery audit: quad counts of chunks that are not loaded. Passes sdf, edges and vertices only,
+    // nothing is written to pages, nothing becomes loaded. Batches run only when the mesh queue is empty.
+    void audit_count_chunks(const std::vector<ChunkId> &p_chunks);
+    // Counts that came back since the last call (consumed by get_results()).
+    void take_audit_counts(std::vector<std::pair<ChunkId, uint32_t>> &r_counts);
+    bool is_audit_idle() const { return audit_queue.empty() && audit_in_flight.is_empty(); }
 
     void set_debug_view(int p_view);
     Dictionary get_stats();
@@ -123,8 +130,13 @@ private:
     Array pending_kill_multimeshes;
     PackedInt64Array pending_kill_ranges; // offset, count pairs (quads)
 
-    Ref<Mutex> mutex; // guards `completed` and the render-thread timing stats
+    Ref<Mutex> mutex; // guards `completed`, `audit_completed` and the render-thread timing stats
     std::vector<CompletedBatch> completed;
+
+    std::vector<ChunkId> audit_queue;
+    HashMap<uint32_t, std::vector<ChunkId>> audit_in_flight;
+    std::vector<CompletedBatch> audit_completed; // directory only
+    std::vector<std::pair<ChunkId, uint32_t>> audit_counts;
 
     uint64_t frame = 0;
 
@@ -147,7 +159,9 @@ private:
     RID _rt_compile(const char *p_pass);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
             const Array &p_page_multimeshes, const PackedInt32Array &p_pages);
+    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id);
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
+    void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_kill(const PackedInt32Array &p_pages, const Array &p_multimeshes, const PackedInt64Array &p_ranges);
     void _rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts, const Array &p_multimeshes);
@@ -158,6 +172,7 @@ private:
     HashMap<uint32_t, CompletedBatch> partial;
 
     bool _pop_queue(ChunkId &r_chunk);
+    void _dispatch_audit_batch();
     void _flush_kills();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
     void _release_page_if_dead(int p_page);
@@ -169,6 +184,8 @@ private:
         uint64_t chunks_meshed = 0;
         uint64_t quads_emitted = 0;
         uint64_t overflow_chunks = 0;
+        uint64_t overflow_requeued = 0; // chunks sent back to the queue because their batch overflowed
+        uint64_t audit_batches = 0;
         uint64_t missing_neighbor = 0;
         uint64_t nan_vertices = 0;
         uint64_t kills = 0;

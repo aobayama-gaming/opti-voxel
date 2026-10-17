@@ -13,6 +13,7 @@ extends Node3D
 ##                                penalised by flying further per second.
 ##   --max_frames=N               hard cap; run is marked timed_out (default 20000)
 ##   --pitch=DEG                  camera pitch (default -20)
+##   --yaw=DEG                    camera yaw (default 0, looking down -Z); player.gd hole marks print both
 ##   --shot=<when>:<path.png>     repeatable. when = loaded | steady_end | fly_end | <frame number>
 ##   --out=<path.json>            stats output
 ##   --log=N                      VoxelTerrain.log_level
@@ -29,6 +30,14 @@ extends Node3D
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
+##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
+##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
+##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
+##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
+##   --discovery_audit=1          direct: after steady, rebuild the scan without culling and count the
+##                                quads of every culled chunk on the GPU (any quad = a miss = a hole)
+##
+## Checks after steady run in this order: discovery_audit, audit, validate.
 ##
 ## Render GPU/CPU time is only read during the "steady" phase: reading it forces a
 ## render-thread sync, which would distort the load/fly frame timings.
@@ -51,6 +60,8 @@ var phase_results := {}
 var timed_out := false
 var validation_report := {}
 var audit_report := {}
+var discovery_audit_report := {}
+var checks := []  # remaining post-steady checks
 
 
 func _ready() -> void:
@@ -60,12 +71,22 @@ func _ready() -> void:
 
 	camera = $Camera3D
 	camera.rotation_degrees.x = float(args.get("pitch", "-20"))
+	camera.rotation_degrees.y = float(args.get("yaw", "0"))
+	if args.has("cam_pos"):
+		var c: PackedStringArray = args["cam_pos"].split(",")
+		camera.global_position = Vector3(float(c[0]), float(c[1]), float(c[2]))
 	start_pos = camera.global_position
 
 	vp_rid = get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
 
 	terrain = ClassDB.instantiate("VoxelTerrain")
+	if terrain == null:
+		# The extension failed to load (see the errors above): fail now instead of timing out.
+		push_error("BENCH: VoxelTerrain is not available")
+		set_process(false)
+		get_tree().quit(1)
+		return
 	terrain.log_level = int(args.get("log", "1"))
 	terrain.debug_gpu_profile = true
 	var mode: String = args.get("mode", "legacy")
@@ -95,6 +116,11 @@ func _ready() -> void:
 		terrain.lod_pixel_error = float(args["lod_error"])
 	if args.has("skirt"):
 		terrain.skirt_depth = float(args["skirt"])
+	if args.has("discovery_cull"):
+		terrain.discovery_cull_mode = int(args["discovery_cull"])
+	if args.has("discovery_cache"):
+		terrain.discovery_cache = args["discovery_cache"] == "1"
+	terrain.discovery_verify = args.get("discovery_verify", "0") == "1"
 	if args.has("origin"):
 		var o: PackedStringArray = args["origin"].split(",")
 		terrain.world_origin_x = o[0].to_int()
@@ -206,26 +232,24 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				if args.has("audit"):
-					_begin_phase("audit")
-					terrain.debug_audit_pages()
-				elif args.has("validate"):
-					_begin_phase("validate")
-					var dump: String = args["out"].get_base_dir() if args.has("out") else ""
-					terrain.debug_validate(int(args["validate"]), dump)
-				else:
-					_finish()
+				for c in ["discovery_audit", "audit", "validate"]:
+					if args.has(c):
+						checks.append(c)
+				_next_check()
+				return
+		"discovery_audit":
+			var report: Dictionary = terrain.get_discovery_audit_report()
+			if not report.is_empty():
+				discovery_audit_report = report
+				print("BENCH: discovery_audit ", JSON.stringify(report))
+				_next_check()
 				return
 		"audit":
 			var report: Dictionary = terrain.get_audit_report()
 			if not report.is_empty():
 				audit_report = report
 				print("BENCH: audit ", JSON.stringify(report))
-				if args.has("validate"):
-					_begin_phase("validate")
-					terrain.debug_validate(int(args["validate"]), args["out"].get_base_dir() if args.has("out") else "")
-				else:
-					_finish()
+				_next_check()
 				return
 		"validate":
 			var report: Dictionary = terrain.get_validation_report()
@@ -235,13 +259,28 @@ func _process(delta: float) -> void:
 					report.get("ok"), report.get("matched_tris"), report.get("legacy_tris"), report.get("legacy_unmatched_tris"),
 					report.get("direct_unmatched_tris"), report.get("winding_flipped_tris"),
 					report.get("max_position_error_cells"), report.get("max_normal_error_deg")])
-				_finish()
+				_next_check()
 				return
 
 	if frame >= int(args.get("max_frames", "20000")):
 		timed_out = true
 		_end_phase()
 		_finish()
+
+
+func _next_check() -> void:
+	if checks.is_empty():
+		_finish()
+		return
+	var c: String = checks.pop_front()
+	_begin_phase(c)
+	match c:
+		"discovery_audit":
+			terrain.debug_audit_discovery()
+		"audit":
+			terrain.debug_audit_pages()
+		"validate":
+			terrain.debug_validate(int(args["validate"]), args["out"].get_base_dir() if args.has("out") else "")
 
 
 func _take_shots(when: String) -> void:
@@ -262,6 +301,7 @@ func _finish() -> void:
 		"phases": phase_results,
 		"validation": validation_report,
 		"audit": audit_report,
+		"discovery_audit": discovery_audit_report,
 		"final_terrain": terrain.get_debug_stats(),
 		"memory": _memory(),
 	}

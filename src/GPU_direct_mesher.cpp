@@ -299,6 +299,48 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     mutex->unlock();
 }
 
+void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id) {
+    if (!uniform_set.is_valid()) {
+        return;
+    }
+    rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
+    rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
+    rd->buffer_clear(buffer_status, 0, status_size_bytes);
+
+    PackedByteArray push;
+    push.resize(16);
+    push.encode_u32(0, p_count);
+    push.encode_u32(4, 0);
+    push.encode_u32(8, settings.page_capacity);
+    push.encode_u32(12, 0);
+
+    // sdf, edges, vertices: the vertices pass leaves the exact quad count in chunk_dir.x.
+    const uint32_t g = chunk_param.chunk_size / 8;
+    const uint32_t groups[3][3] = {
+        { g, g, g * p_count },
+        { g, 3 * g, g * p_count },
+        { g, g, g * p_count },
+    };
+    for (int i = 0; i < 3; i++) {
+        const int64_t list = rd->compute_list_begin();
+        rd->compute_list_bind_compute_pipeline(list, pipelines[i]);
+        rd->compute_list_bind_uniform_set(list, uniform_set, 0);
+        rd->compute_list_set_push_constant(list, push, push.size());
+        rd->compute_list_dispatch(list, groups[i][0], groups[i][1], groups[i][2]);
+        rd->compute_list_end();
+    }
+    rd->buffer_get_data_async(buffer_chunk_dir, callable_mp(this, &GPUDirectMesher::_rt_on_audit_directory).bind(p_batch_id), 0, p_count * 16);
+}
+
+void GPUDirectMesher::_rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id) {
+    mutex->lock();
+    CompletedBatch c;
+    c.batch_id = p_batch_id;
+    c.directory = p_data;
+    audit_completed.push_back(c);
+    mutex->unlock();
+}
+
 void GPUDirectMesher::_rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id) {
     mutex->lock();
     CompletedBatch &c = partial[p_batch_id];
@@ -400,7 +442,7 @@ void GPUDirectMesher::process_queue() {
     _flush_kills();
 
     // Bound the number of batches waiting for their directory (each one holds pages_per_batch pages).
-    if (in_flight.size() >= 4) {
+    if (in_flight.size() + audit_in_flight.size() >= 4) {
         return;
     }
 
@@ -410,6 +452,7 @@ void GPUDirectMesher::process_queue() {
         chunks.push_back(chunk);
     }
     if (chunks.empty()) {
+        _dispatch_audit_batch();
         return;
     }
     const uint64_t t0 = now_usec();
@@ -456,11 +499,52 @@ void GPUDirectMesher::process_queue() {
     VLOG(3, "GPUDirectMesher: dispatched batch ", batch_id, " (", (int64_t)chunks.size(), " chunks)");
 }
 
+void GPUDirectMesher::_dispatch_audit_batch() {
+    if (audit_queue.empty()) {
+        return;
+    }
+    const size_t n = MIN((size_t)settings.batch_size, audit_queue.size());
+    std::vector<ChunkId> chunks(audit_queue.end() - n, audit_queue.end());
+    audit_queue.resize(audit_queue.size() - n);
+
+    PackedByteArray ids;
+    ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
+    for (size_t i = 0; i < chunks.size(); i++) {
+        GPUFrame::encode_chunk_input(ids, (int64_t)i, chunks[i], chunk_param);
+    }
+    const uint32_t batch_id = next_batch_id++;
+    audit_in_flight[batch_id] = chunks;
+    stats.audit_batches++;
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch_count)
+                    .bind(ids, (uint32_t)chunks.size(), batch_id));
+}
+
+void GPUDirectMesher::audit_count_chunks(const std::vector<ChunkId> &p_chunks) {
+    audit_queue.insert(audit_queue.end(), p_chunks.begin(), p_chunks.end());
+}
+
+void GPUDirectMesher::take_audit_counts(std::vector<std::pair<ChunkId, uint32_t>> &r_counts) {
+    r_counts.insert(r_counts.end(), audit_counts.begin(), audit_counts.end());
+    audit_counts.clear();
+}
+
 bool GPUDirectMesher::get_results(VoxelState &output) {
     mutex->lock();
     std::vector<CompletedBatch> done;
     done.swap(completed);
+    std::vector<CompletedBatch> audit_done;
+    audit_done.swap(audit_completed);
     mutex->unlock();
+
+    for (CompletedBatch &c : audit_done) {
+        HashMap<uint32_t, std::vector<ChunkId>>::Iterator it = audit_in_flight.find(c.batch_id);
+        ERR_CONTINUE(it == audit_in_flight.end());
+        const PackedInt32Array dir = c.directory.to_int32_array();
+        for (size_t i = 0; i < it->value.size(); i++) {
+            audit_counts.push_back({ it->value[i], (uint32_t)dir[i * 4 + 0] });
+        }
+        audit_in_flight.remove(it);
+    }
 
     if (done.empty()) {
         return false;
@@ -494,6 +578,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
             working_generation.erase(chunk_id);
 
             if (flags & 1u) { // overflow: try again in a later batch
+                stats.overflow_requeued++;
                 const int lod = ChunkMath::get_lod(chunk_id);
                 if (lod >= 0 && lod < (int)chunk_queue.size()) {
                     chunk_queue[lod].push_back(chunk_id);
@@ -735,7 +820,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
     return true;
 }
 
-void GPUDirectMesher::send_chunk(LODHashSet p_chunks) {
+void GPUDirectMesher::send_chunk(const LODHashSet &p_chunks) {
     // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
     // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
     std::vector<std::vector<std::pair<uint64_t, ChunkId>>> keyed(chunk_queue.size());
@@ -809,6 +894,8 @@ Dictionary GPUDirectMesher::get_stats() {
     d["chunks_meshed"] = (int64_t)stats.chunks_meshed;
     d["quads_emitted"] = (int64_t)stats.quads_emitted;
     d["overflow_chunks"] = (int64_t)stats.overflow_chunks;
+    d["overflow_requeued"] = (int64_t)stats.overflow_requeued;
+    d["audit_batches"] = (int64_t)stats.audit_batches;
     d["missing_neighbor"] = (int64_t)stats.missing_neighbor;
     d["nan_vertices"] = (int64_t)stats.nan_vertices;
     d["kills"] = (int64_t)stats.kills;

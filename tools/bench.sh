@@ -11,7 +11,8 @@
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log,
-# 4 a requested --validate / --audit reported ok=false.
+# 4 a requested --validate / --audit / --discovery_audit reported ok=false, or a loaded run did not
+# settle (loaded chunks != scanned chunks).
 set -uo pipefail
 
 # BENCH_ROOT: bench another checkout with this harness (bench_ab.sh uses it for the "before" tree).
@@ -173,6 +174,23 @@ a = d.get("audit") or {}
 if a:
     print(f">> AUDIT ok={a.get('ok')} live={a.get('live')} dead_zero={a.get('dead_zero')} stale={a.get('stale')}"
           f" partial={a.get('partial')} broken={a.get('broken')} bad_header={a.get('bad_header')}")
+da = d.get("discovery_audit") or {}
+if da:
+    print(f">> DISCOVERY AUDIT ok={da.get('ok')} misses={da.get('misses')} (quads {da.get('miss_quads')}) checked={da.get('checked')}/{da.get('culled')} culled"
+          f" scanned={da.get('scanned')} reference={da.get('reference')} scanned_not_in_ref={da.get('scanned_not_in_reference')}"
+          f" max_lod_jump={da.get('max_lod_jump')} faces={da.get('lod_jump_faces')} misses_by_lod={da.get('misses_by_lod')} ({da.get('ms', 0):.0f} ms)")
+    for e in (da.get("miss_examples") or [])[:5]:
+        print(f"   miss {e}")
+ch = d.get("final_terrain", {}).get("chunks", {})
+if d.get("final_terrain", {}).get("load_complete"):
+    print(f">> SETTLE loaded_not_scanned={ch.get('loaded_not_scanned')} scanned_not_loaded={ch.get('scanned_not_loaded')}")
+dsc = d.get("final_terrain", {}).get("discoverer", {})
+if dsc:
+    sc = dsc.get("scan", {})
+    print(f">> discoverer: cull_mode={dsc.get('cull_mode')} scans={sc.get('count')} avg={sc.get('avg_ms', 0):.1f}ms max={sc.get('max_ms', 0):.1f}ms"
+          f" cull avg={dsc.get('cull', {}).get('avg_ms', 0):.1f}ms latency max={dsc.get('latency', {}).get('max_ms', 0):.0f}ms"
+          f" nodes={dsc.get('last_nodes_visited')} sdf_calls={dsc.get('last_sdf_calls')} size={dsc.get('last_scan_size')} skipped={dsc.get('scans_skipped_same_chunk')}"
+          f" cache={dsc.get('cache')} hits={dsc.get('last_cache_hits')} cache_size={dsc.get('cache_size')} verify_mismatches={dsc.get('verify_mismatches_total')}")
 wo = d.get("final_terrain", {}).get("world_origin")
 if wo:
     print(f">> world origin voxel={wo.get('voxel')} chunk={wo.get('chunk')}")
@@ -204,7 +222,10 @@ try:
     d = json.load(open(sys.argv[1]))
 except Exception:
     print(1); sys.exit()
-v, a = d.get('validation') or {}, d.get('audit') or {}
-print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok')))))" "$RUN_DIR/stats.json")
-[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT FAILED"; exit 4; }
+v, a, da = d.get('validation') or {}, d.get('audit') or {}, d.get('discovery_audit') or {}
+ft = d.get('final_terrain', {})
+ch = ft.get('chunks', {})
+settled = not ft.get('load_complete') or (ch.get('loaded_not_scanned', 0) == 0 and ch.get('scanned_not_loaded', 0) == 0)
+print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok'))) and (not da or bool(da.get('ok'))) and settled))" "$RUN_DIR/stats.json")
+[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT/DISCOVERY/SETTLE CHECK FAILED"; exit 4; }
 exit 0

@@ -84,8 +84,31 @@ private:
 	VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
 	GPUDirectMesher::Settings direct_settings;
 	int debug_view = 0;
+	int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
+	bool discovery_cache = true;
+	bool discovery_verify = false;
 
 	bool started = false;
+
+	// update_destroy_from_scan is needed (a scan or mesher results arrived since it last ran).
+	bool destroy_dirty = false;
+	// Camera chunk of the scan currently in visual_mesh_data.scanned_chunk.
+	ChunkId scan_camera_chunk;
+
+	// Discovery audit (debug_audit_discovery): quad counts of every chunk the cull dropped.
+	struct DiscoveryAudit {
+		bool running = false;
+		Dictionary base; // sizes, lod jump: filled when it starts
+		int64_t expected = 0;
+		int64_t checked = 0;
+		int64_t misses = 0;
+		int64_t miss_quads = 0;
+		Array miss_examples;
+		Dictionary misses_by_lod;
+		uint64_t start_usec = 0;
+	} discovery_audit;
+	Dictionary discovery_audit_report;
+	void _poll_discovery_audit();
 
 	void _destroy_chunk();
 
@@ -171,6 +194,16 @@ public:
 	void set_direct_compact_max_extent(float p_chunks);
 	float get_direct_compact_max_extent() const;
 
+	// How the discoverer drops LOD tree nodes holding no surface (ChunkDiscoverer::CullMode).
+	void set_discovery_cull_mode(int p_mode);
+	int get_discovery_cull_mode() const;
+	// Remember each LOD tree node's cull verdict across scans (exact: the SDF does not change).
+	void set_discovery_cache(bool p_enable);
+	bool get_discovery_cache() const;
+	// Debug: recompute every cached verdict and report mismatches as errors.
+	void set_discovery_verify(bool p_enable);
+	bool get_discovery_verify() const;
+
 	// GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk.
 	void set_debug_view(int p_view);
 	int get_debug_view() const;
@@ -193,6 +226,12 @@ public:
 	// (live / dead / stale / partial). Asynchronous: poll get_audit_report().
 	bool debug_audit_pages();
 	Dictionary get_audit_report() const;
+
+	// GPU Direct only: rebuild the current scan without culling and count the quads of every chunk
+	// the cull dropped (GPU, nothing loaded). A culled chunk with quads is a miss: a hole. Asynchronous:
+	// poll get_discovery_audit_report(). Run it with the camera still and the load complete.
+	bool debug_audit_discovery();
+	Dictionary get_discovery_audit_report() const;
 
 	VoxelTerrain() = default;
 	~VoxelTerrain() override;

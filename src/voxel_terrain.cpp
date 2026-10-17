@@ -74,6 +74,14 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_validation_report"), &VoxelTerrain::get_validation_report);
     ClassDB::bind_method(D_METHOD("debug_audit_pages"), &VoxelTerrain::debug_audit_pages);
     ClassDB::bind_method(D_METHOD("get_audit_report"), &VoxelTerrain::get_audit_report);
+    ClassDB::bind_method(D_METHOD("debug_audit_discovery"), &VoxelTerrain::debug_audit_discovery);
+    ClassDB::bind_method(D_METHOD("get_discovery_audit_report"), &VoxelTerrain::get_discovery_audit_report);
+    ClassDB::bind_method(D_METHOD("set_discovery_cull_mode", "mode"), &VoxelTerrain::set_discovery_cull_mode);
+    ClassDB::bind_method(D_METHOD("get_discovery_cull_mode"), &VoxelTerrain::get_discovery_cull_mode);
+    ClassDB::bind_method(D_METHOD("set_discovery_cache", "enable"), &VoxelTerrain::set_discovery_cache);
+    ClassDB::bind_method(D_METHOD("get_discovery_cache"), &VoxelTerrain::get_discovery_cache);
+    ClassDB::bind_method(D_METHOD("set_discovery_verify", "enable"), &VoxelTerrain::set_discovery_verify);
+    ClassDB::bind_method(D_METHOD("get_discovery_verify"), &VoxelTerrain::get_discovery_verify);
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
@@ -81,6 +89,8 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
     ADD_GROUP("World Origin", "world_origin_");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_x", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_x", "get_world_origin_x");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_y", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_y", "get_world_origin_y");
@@ -97,6 +107,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
 
     BIND_ENUM_CONSTANT(PIPELINE_GPU_LEGACY);
     BIND_ENUM_CONSTANT(PIPELINE_GPU_DIRECT);
@@ -130,6 +141,34 @@ void VoxelTerrain::set_voxel_size(float p_size) {
 
 float VoxelTerrain::get_voxel_size() const {
     return chunk_param.voxel_size;
+}
+
+void VoxelTerrain::set_discovery_cull_mode(int p_mode) {
+    ERR_FAIL_COND_MSG(started, "discovery_cull_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_mode < ChunkDiscoverer::CULL_NONE || p_mode > ChunkDiscoverer::CULL_LEGACY, "Unknown discovery_cull_mode.");
+    discovery_cull_mode = p_mode;
+}
+
+int VoxelTerrain::get_discovery_cull_mode() const {
+    return discovery_cull_mode;
+}
+
+void VoxelTerrain::set_discovery_cache(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "discovery_cache must be set before the terrain enters the tree.");
+    discovery_cache = p_enable;
+}
+
+bool VoxelTerrain::get_discovery_cache() const {
+    return discovery_cache;
+}
+
+void VoxelTerrain::set_discovery_verify(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "discovery_verify must be set before the terrain enters the tree.");
+    discovery_verify = p_enable;
+}
+
+bool VoxelTerrain::get_discovery_verify() const {
+    return discovery_verify;
 }
 
 void VoxelTerrain::set_skirt_depth(float p_depth) {
@@ -328,6 +367,8 @@ void VoxelTerrain::_ready(){
     chunk_discoverer = memnew(ChunkDiscoverer);
 
     chunk_discoverer->set_config(chunk_param,sdf);
+    chunk_discoverer->set_cull_mode((ChunkDiscoverer::CullMode)discovery_cull_mode);
+    chunk_discoverer->set_cache(discovery_cache, discovery_verify);
 
     // The pixel error is measured against the camera's real vertical FOV and viewport height.
     float viewport_height = 1080.0f;
@@ -386,14 +427,15 @@ void VoxelTerrain::_process(double delta){
     chunk_discoverer->set_camera_chunk(camera->get_global_position());
 
     uint64_t t0 = now_usec();
-    LODHashSet new_scanned_chunk;
+    std::unique_ptr<LODHashSet> new_scanned_chunk;
 
-    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk);
+    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_camera_chunk);
 
     if(dirty_scan){
         scan_received = true;
+        destroy_dirty = true;
 
-        visual_mesh_data.add_scan_chunk(new_scanned_chunk);
+        visual_mesh_data.add_scan_chunk(std::move(new_scanned_chunk));
         if (direct_mesher) {
             direct_mesher->send_chunk(visual_mesh_data.dirty_chunk);
         } else {
@@ -403,9 +445,13 @@ void VoxelTerrain::_process(double delta){
     }
     process_stats.scan_ingest.add(now_usec() - t0);
 
-    t0 = now_usec();
-    visual_mesh_data.update_destroy_from_scan();
-    process_stats.destroy_from_scan.add(now_usec() - t0);
+    // Only a new scan or new results change what can be destroyed.
+    if (destroy_dirty) {
+        destroy_dirty = false;
+        t0 = now_usec();
+        visual_mesh_data.update_destroy_from_scan();
+        process_stats.destroy_from_scan.add(now_usec() - t0);
+    }
 
     t0 = now_usec();
     if (direct_mesher) {
@@ -416,11 +462,8 @@ void VoxelTerrain::_process(double delta){
     process_stats.mesher_dispatch.add(now_usec() - t0);
 
     t0 = now_usec();
-    if (direct_mesher) {
-        direct_mesher->get_results(visual_mesh_data);
-    } else {
-        gpu_mesher->get_results(visual_mesh_data);
-    }
+    const bool results = direct_mesher ? direct_mesher->get_results(visual_mesh_data) : gpu_mesher->get_results(visual_mesh_data);
+    destroy_dirty = destroy_dirty || results;
     process_stats.mesher_collect.add(now_usec() - t0);
 
     t0 = now_usec();
@@ -447,6 +490,10 @@ void VoxelTerrain::_process(double delta){
         memdelete(auditor);
         auditor = nullptr;
         VLOG(1, "VoxelTerrain: page audit: ", audit_report);
+    }
+
+    if (discovery_audit.running) {
+        _poll_discovery_audit();
     }
 
     if (validator && validator->step()) {
@@ -526,6 +573,134 @@ Dictionary VoxelTerrain::get_audit_report() const {
     return audit_report;
 }
 
+// LOD of the scanned chunk holding the LOD0 chunk `p_point` (odd coordinates), or -1.
+static int scanned_lod_at(const LODHashSet &p_scan, const ChunkId &p_point, int p_max_lod) {
+    for (int lod = 0; lod <= p_max_lod; lod++) {
+        const int64_t span = int64_t(2) << lod; // a LOD-lod chunk spans 2^(lod+1) units
+        auto centre = [span, lod](int64_t v) { return WorldCoord::floor_div(v, span) * span + (int64_t(1) << lod); };
+        if (p_scan.has(ChunkId(centre(p_point.x), centre(p_point.y), centre(p_point.z)))) {
+            return lod;
+        }
+    }
+    return -1;
+}
+
+bool VoxelTerrain::debug_audit_discovery() {
+    ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_discovery needs pipeline_mode = GPU Direct.");
+    ERR_FAIL_COND_V_MSG(discovery_audit.running, false, "A discovery audit is already running.");
+    ERR_FAIL_COND_V_MSG(!scan_received, false, "No scan received yet.");
+
+    const uint64_t t0 = now_usec();
+    const LODHashSet &scanned = *visual_mesh_data.scanned_chunk;
+    LODHashSet reference;
+    ChunkDiscoverer::ScanCounters counters;
+    chunk_discoverer->scan(scan_camera_chunk, ChunkDiscoverer::CULL_NONE, reference, counters);
+
+    int64_t scanned_not_in_ref = 0;
+    for (const ChunkId &id : scanned) {
+        if (!reference.has(id)) {
+            scanned_not_in_ref++;
+        }
+    }
+    std::vector<ChunkId> culled;
+    for (const ChunkId &id : reference) {
+        if (!scanned.has(id)) {
+            culled.push_back(id);
+        }
+    }
+
+    // LOD difference across chunk faces (the skirt hides a jump of 1). One probe per face, just past
+    // its minimum corner: the LOD0 chunk there, then whichever scanned chunk holds it.
+    const int max_lod = chunk_discoverer->get_max_lod();
+    int max_jump = 0;
+    Dictionary jumps; // jump -> faces
+    for (const ChunkId &id : scanned) {
+        const int lod = ChunkMath::get_lod(id);
+        const int64_t half = int64_t(1) << lod;
+        const ChunkId corner = id - ChunkId(half - 1, half - 1, half - 1); // LOD0 chunk in the min corner
+        for (int axis = 0; axis < 3; axis++) {
+            for (int side = -1; side <= 1; side += 2) {
+                ChunkId probe = corner;
+                int64_t *c = axis == 0 ? &probe.x : (axis == 1 ? &probe.y : &probe.z);
+                const int64_t centre = axis == 0 ? id.x : (axis == 1 ? id.y : id.z);
+                *c = side < 0 ? centre - half - 1 : centre + half + 1;
+                const int other = scanned_lod_at(scanned, probe, max_lod);
+                if (other < 0) {
+                    continue;
+                }
+                const int jump = ABS(other - lod);
+                max_jump = MAX(max_jump, jump);
+                jumps[jump] = int64_t(jumps.get(jump, 0)) + 1;
+            }
+        }
+    }
+
+    discovery_audit = DiscoveryAudit();
+    discovery_audit.running = true;
+    discovery_audit.start_usec = t0;
+    discovery_audit.expected = (int64_t)culled.size();
+    Dictionary base;
+    base["camera_chunk"] = WorldCoord::to_string(scan_camera_chunk);
+    base["cull_mode"] = discovery_cull_mode;
+    base["reference"] = (int64_t)reference.size();
+    base["reference_nodes_visited"] = counters.nodes_visited;
+    base["scanned"] = (int64_t)scanned.size();
+    base["culled"] = (int64_t)culled.size();
+    base["scanned_not_in_reference"] = scanned_not_in_ref;
+    base["max_lod_jump"] = max_jump;
+    base["lod_jump_faces"] = jumps;
+    base["reference_ms"] = (now_usec() - t0) / 1000.0;
+    discovery_audit.base = base;
+    discovery_audit_report = Dictionary();
+
+    direct_mesher->audit_count_chunks(culled);
+    VLOG(1, "VoxelTerrain: discovery audit started: reference ", (int64_t)reference.size(), " chunks, scanned ",
+            (int64_t)scanned.size(), ", checking ", (int64_t)culled.size(), " culled chunks");
+    return true;
+}
+
+void VoxelTerrain::_poll_discovery_audit() {
+    std::vector<std::pair<ChunkId, uint32_t>> counts;
+    direct_mesher->take_audit_counts(counts);
+    for (const std::pair<ChunkId, uint32_t> &c : counts) {
+        discovery_audit.checked++;
+        if (c.second == 0) {
+            continue;
+        }
+        discovery_audit.misses++;
+        discovery_audit.miss_quads += c.second;
+        const int lod = ChunkMath::get_lod(c.first);
+        discovery_audit.misses_by_lod[lod] = int64_t(discovery_audit.misses_by_lod.get(lod, 0)) + 1;
+        if (discovery_audit.miss_examples.size() < 20) {
+            Dictionary e;
+            e["id"] = WorldCoord::to_string(c.first);
+            e["lod"] = lod;
+            e["quads"] = (int64_t)c.second;
+            e["distance_chunks"] = scan_camera_chunk.distance_to(c.first);
+            discovery_audit.miss_examples.push_back(e);
+        }
+    }
+    if (!direct_mesher->is_audit_idle()) {
+        return;
+    }
+    Dictionary r = discovery_audit.base.duplicate();
+    r["checked"] = discovery_audit.checked;
+    r["misses"] = discovery_audit.misses;
+    r["miss_quads"] = discovery_audit.miss_quads;
+    r["misses_by_lod"] = discovery_audit.misses_by_lod;
+    r["miss_examples"] = discovery_audit.miss_examples;
+    r["ms"] = (now_usec() - discovery_audit.start_usec) / 1000.0;
+    r["ok"] = discovery_audit.misses == 0 && discovery_audit.checked == discovery_audit.expected &&
+            int64_t(r["scanned_not_in_reference"]) == 0;
+    discovery_audit_report = r;
+    discovery_audit.running = false;
+    VLOG(1, "VoxelTerrain: discovery audit: ", r);
+}
+
+Dictionary VoxelTerrain::get_discovery_audit_report() const {
+    return discovery_audit_report;
+}
+
 bool VoxelTerrain::is_load_complete() {
     if (!started || !scan_received || !visual_mesh_data.dirty_chunk.is_empty()) {
         return false;
@@ -563,10 +738,21 @@ Dictionary VoxelTerrain::get_debug_stats() {
     }
 
     Dictionary chunks;
-    chunks["scanned"] = (int64_t)visual_mesh_data.scanned_chunk.size();
+    chunks["scanned"] = (int64_t)visual_mesh_data.scanned_chunk->size();
     chunks["loaded"] = (int64_t)visual_mesh_data.loaded_chunk.size();
     chunks["loaded_non_empty"] = non_empty_chunks;
     chunks["pending"] = (int64_t)visual_mesh_data.dirty_chunk.size();
+    // Settle check: once the load is complete both must be 0 (a scanned chunk not loaded is a hole).
+    int64_t loaded_not_scanned = 0;
+    int64_t scanned_not_loaded = 0;
+    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
+        loaded_not_scanned += visual_mesh_data.scanned_chunk->has(kv.key) ? 0 : 1;
+    }
+    for (const ChunkId &id : *visual_mesh_data.scanned_chunk) {
+        scanned_not_loaded += visual_mesh_data.loaded_chunk.has(id) ? 0 : 1;
+    }
+    chunks["loaded_not_scanned"] = loaded_not_scanned;
+    chunks["scanned_not_loaded"] = scanned_not_loaded;
     chunks["live_triangles"] = live_triangles;
     chunks["drawn_triangles"] = drawn_triangles;
     d["chunks"] = chunks;

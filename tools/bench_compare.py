@@ -45,7 +45,22 @@ METRICS = [
     ("Mesher GPU", "  direct: GPU copy per batch, avg", lambda d: get(d, "final_terrain.mesher.gpu_copy.avg_ms"), "ms", True),
 
     ("Other CPU", "update_destroy_from_scan, avg", lambda d: get(d, "final_terrain.process.destroy_from_scan.avg_ms"), "ms", True),
-    ("Other CPU", "discoverer scan, avg", lambda d: get(d, "final_terrain.discoverer.scan.avg_ms"), "ms", True),
+    ("Other CPU", "update_destroy_from_scan, total", lambda d: get(d, "final_terrain.process.destroy_from_scan.total_ms"), "ms", True),
+    ("Other CPU", "scan ingest (main thread), total", lambda d: get(d, "final_terrain.process.scan_ingest.total_ms"), "ms", True),
+
+    ("Discoverer (worker thread)", "scans", lambda d: get(d, "final_terrain.discoverer.scan.count"), "", None),
+    ("Discoverer (worker thread)", "scan, avg", lambda d: get(d, "final_terrain.discoverer.scan.avg_ms"), "ms", True),
+    ("Discoverer (worker thread)", "scan, max", lambda d: get(d, "final_terrain.discoverer.scan.max_ms"), "ms", True),
+    ("Discoverer (worker thread)", "  cull share of scan time",
+     lambda d: get(d, "final_terrain.discoverer.cull.total_ms", 0) / max(get(d, "final_terrain.discoverer.scan.total_ms", 1), 1e-9) * 100
+     if get(d, "final_terrain.discoverer.cull.total_ms") is not None else None, "%", True),
+    ("Discoverer (worker thread)", "camera move to published scan, max", lambda d: get(d, "final_terrain.discoverer.latency.max_ms"), "ms", True),
+    ("Discoverer (worker thread)", "scans skipped (same camera chunk)", lambda d: get(d, "final_terrain.discoverer.scans_skipped_same_chunk"), "", None),
+    ("Discoverer (worker thread)", "nodes visited, total", lambda d: get(d, "final_terrain.discoverer.nodes_visited_total"), "", None),
+    ("Discoverer (worker thread)", "SDF calls, total", lambda d: get(d, "final_terrain.discoverer.sdf_calls_total"), "", True),
+    ("Discoverer (worker thread)", "cull cache hits, total", lambda d: get(d, "final_terrain.discoverer.cache_hits_total"), "", None),
+    ("Discoverer (worker thread)", "scanned chunks (last scan)", lambda d: get(d, "final_terrain.chunks.scanned"), "", None),
+    ("Discoverer (worker thread)", "  of which non-empty", lambda d: get(d, "final_terrain.chunks.loaded_non_empty"), "", None),
 
     ("Steady state (scenario B)", "frame time p50", lambda d: get(d, "phases.steady.frame_ms.p50"), "ms", True),
     ("Steady state (scenario B)", "frame time p99", lambda d: get(d, "phases.steady.frame_ms.p99"), "ms", True),
