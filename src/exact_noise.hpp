@@ -181,20 +181,29 @@ inline float dfade(float f) {
     return du < bits_float(FADE_FLUSH_BITS) ? 0.0f : du;
 }
 
-// One 3D octave at wavelength 2^k voxels: (d/dx, d/dy, d/dz per cell, value), value in about [-1, 1]
-// (std 0.27).
-inline Float4 perlin3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
+// The cell setup of one 3D octave at a position: fades, corner gradient terms and the coefficients of
+// the multilinear form value = k0 + k1 ux + k2 uy + k3 uz + k4 ux uy + k5 uy uz + k6 uz ux + k7 ux uy uz,
+// where each k_j is linear in the in-cell position with d k_j / d f_i = g[i][j].
+struct Perlin3Cell {
+    float u[3];
+    float du[3];
+    float k[8];
+    float g[3][8];
+};
+
+inline Perlin3Cell perlin3_cell(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
     const OctaveCell c = octave_cell(p_pos, p_k, p_offset);
     const float scale = bits_float(FADE_FLUSH_BITS); // 2^-24
     const float fx = float(c.q.x) * scale;
     const float fy = float(c.q.y) * scale;
     const float fz = float(c.q.z) * scale;
-    const float ux = fade(fx);
-    const float uy = fade(fy);
-    const float uz = fade(fz);
-    const float dux = dfade(fx);
-    const float duy = dfade(fy);
-    const float duz = dfade(fz);
+    Perlin3Cell r;
+    r.u[0] = fade(fx);
+    r.u[1] = fade(fy);
+    r.u[2] = fade(fz);
+    r.du[0] = dfade(fx);
+    r.du[1] = dfade(fy);
+    r.du[2] = dfade(fz);
 
     auto grad = [&](int p_i, int p_j, int p_l) {
         return grad3(hash_cell(c.cell + Vector3i64(p_i, p_j, p_l), p_seed) >> 28);
@@ -219,41 +228,97 @@ inline Float4 perlin3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vec
     const float vg = gg[0] * fx + gg[1] * fy1 + gg[2] * fz1;
     const float vh = gh[0] * fx1 + gh[1] * fy1 + gh[2] * fz1;
 
-    const float k0 = va;
-    const float k1 = vb - va;
-    const float k2 = vc - va;
-    const float k3 = ve - va;
-    const float k4 = va - vb - vc + vd;
-    const float k5 = va - vc - ve + vg;
-    const float k6 = va - vb - ve + vf;
-    const float k7 = -va + vb + vc - vd + ve - vf - vg + vh;
+    r.k[0] = va;
+    r.k[1] = vb - va;
+    r.k[2] = vc - va;
+    r.k[3] = ve - va;
+    r.k[4] = va - vb - vc + vd;
+    r.k[5] = va - vc - ve + vg;
+    r.k[6] = va - vb - ve + vf;
+    r.k[7] = -va + vb + vc - vd + ve - vf - vg + vh;
+    for (int i = 0; i < 3; i++) {
+        float *g = r.g[i];
+        g[0] = ga[i];
+        g[1] = gb[i] - ga[i];
+        g[2] = gc[i] - ga[i];
+        g[3] = ge[i] - ga[i];
+        g[4] = ga[i] - gb[i] - gc[i] + gd[i];
+        g[5] = ga[i] - gc[i] - ge[i] + gg[i];
+        g[6] = ga[i] - gb[i] - ge[i] + gf[i];
+        g[7] = -ga[i] + gb[i] + gc[i] - gd[i] + ge[i] - gf[i] - gg[i] + gh[i];
+    }
+    return r;
+}
 
+// Value and gradient per cell of a cell setup: (d/dx, d/dy, d/dz, value).
+inline Float4 perlin3_value_gradient(const Perlin3Cell &p_c) {
+    const float ux = p_c.u[0];
+    const float uy = p_c.u[1];
+    const float uz = p_c.u[2];
+    const float *k = p_c.k;
     Float4 r;
-    r.w = k0 + k1 * ux + k2 * uy + k3 * uz + k4 * ux * uy + k5 * uy * uz + k6 * uz * ux + k7 * ux * uy * uz;
+    r.w = k[0] + k[1] * ux + k[2] * uy + k[3] * uz + k[4] * ux * uy + k[5] * uy * uz + k[6] * uz * ux + k[7] * ux * uy * uz;
     // Per component: gradient interpolation + fade derivative terms (GLSL: vector ops, same order).
     float d[3];
     const float uyzx[3] = { uy, uz, ux };
     const float uzxy[3] = { uz, ux, uy };
-    const float k123[3] = { k1, k2, k3 };
-    const float k456[3] = { k4, k5, k6 };
-    const float k645[3] = { k6, k4, k5 };
-    const float du[3] = { dux, duy, duz };
+    const float k123[3] = { k[1], k[2], k[3] };
+    const float k456[3] = { k[4], k[5], k[6] };
+    const float k645[3] = { k[6], k[4], k[5] };
     for (int i = 0; i < 3; i++) {
-        const float g0 = ga[i];
-        const float g1 = gb[i] - ga[i];
-        const float g2 = gc[i] - ga[i];
-        const float g3 = ge[i] - ga[i];
-        const float g4 = ga[i] - gb[i] - gc[i] + gd[i];
-        const float g5 = ga[i] - gc[i] - ge[i] + gg[i];
-        const float g6 = ga[i] - gb[i] - ge[i] + gf[i];
-        const float g7 = -ga[i] + gb[i] + gc[i] - gd[i] + ge[i] - gf[i] - gg[i] + gh[i];
-        const float interp = g0 + g1 * ux + g2 * uy + g3 * uz + g4 * ux * uy + g5 * uy * uz + g6 * uz * ux + g7 * ux * uy * uz;
-        const float fd = k123[i] + uyzx[i] * k456[i] + uzxy[i] * k645[i] + k7 * uyzx[i] * uzxy[i];
-        d[i] = interp + du[i] * fd;
+        const float *g = p_c.g[i];
+        const float interp = g[0] + g[1] * ux + g[2] * uy + g[3] * uz + g[4] * ux * uy + g[5] * uy * uz + g[6] * uz * ux + g[7] * ux * uy * uz;
+        const float fd = k123[i] + uyzx[i] * k456[i] + uzxy[i] * k645[i] + k[7] * uyzx[i] * uzxy[i];
+        d[i] = interp + p_c.du[i] * fd;
     }
     r.x = d[0];
     r.y = d[1];
     r.z = d[2];
+    return r;
+}
+
+// One 3D octave at wavelength 2^k voxels: (d/dx, d/dy, d/dz per cell, value), value in about [-1, 1]
+// (std 0.27).
+inline Float4 perlin3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
+    return perlin3_value_gradient(perlin3_cell(p_pos, p_k, p_seed, p_offset));
+}
+
+// The 8 channels of one 3D octave, per cell: value, d/dx, d/dy, d/dz, d2/dxdy, d2/dxdz, d2/dydz,
+// d3/dxdydz (the order of Cascade::Channel). The first four are perlin3's, bit for bit. A mixed
+// derivative differentiates each axis once, through its fade (du) or through a coefficient k_j (g):
+// no second derivative of the fade appears. Products of at most four factors from {u, du, k_j,
+// integer g}, each 0 or >= 2^-24: the denormal rule holds as for perlin3.
+// TODO: CPU only. The cascade's GPU PR adds the GLSL twin (GLSL perlin3 split into cell setup + value /
+// gradient the same way) and a FrameSpike probe for it.
+struct Channels8 {
+    float c[8];
+};
+
+inline Channels8 perlin3_cross(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
+    const Perlin3Cell p = perlin3_cell(p_pos, p_k, p_seed, p_offset);
+    const Float4 vg = perlin3_value_gradient(p);
+    const float ux = p.u[0];
+    const float uy = p.u[1];
+    const float uz = p.u[2];
+    const float dux = p.du[0];
+    const float duy = p.du[1];
+    const float duz = p.du[2];
+    const float *k = p.k;
+    const float *gx = p.g[0];
+    const float *gy = p.g[1];
+    const float *gz = p.g[2];
+    Channels8 r;
+    r.c[0] = vg.w;
+    r.c[1] = vg.x;
+    r.c[2] = vg.y;
+    r.c[3] = vg.z;
+    r.c[4] = duy * (gx[2] + gx[4] * ux + gx[5] * uz + gx[7] * ux * uz) + dux * (gy[1] + gy[4] * uy + gy[6] * uz + gy[7] * uy * uz) +
+            dux * duy * (k[4] + k[7] * uz);
+    r.c[5] = duz * (gx[3] + gx[6] * ux + gx[5] * uy + gx[7] * ux * uy) + dux * (gz[1] + gz[4] * uy + gz[6] * uz + gz[7] * uy * uz) +
+            dux * duz * (k[6] + k[7] * uy);
+    r.c[6] = duz * (gy[3] + gy[5] * uy + gy[6] * ux + gy[7] * ux * uy) + duy * (gz[2] + gz[4] * ux + gz[5] * uz + gz[7] * ux * uz) +
+            duy * duz * (k[5] + k[7] * ux);
+    r.c[7] = duy * duz * (gx[5] + gx[7] * ux) + dux * duz * (gy[6] + gy[7] * uy) + dux * duy * (gz[4] + gz[7] * uz) + dux * duy * duz * k[7];
     return r;
 }
 
