@@ -7,6 +7,7 @@
 
 #include "voxel_terrain.hpp"
 #include "quad_pool_spike.hpp"
+#include "frame_spike.hpp"
 
 using namespace godot;
 
@@ -17,6 +18,7 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level)
 	}
 	GDREGISTER_CLASS(VoxelTerrain);
 	GDREGISTER_CLASS(QuadPoolSpike);
+	GDREGISTER_CLASS(FrameSpike);
 }
 
 void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {
