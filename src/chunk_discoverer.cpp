@@ -11,37 +11,111 @@
 
 using namespace godot;
 
-bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const {
-    if (p_mode == CULL_NONE) {
-        return false;
-    }
-
-    const float chunk_size = ChunkMath::world_chunk_size(chunk_pos, chunk_param);
-    const float chunk_outer_radius = chunk_size * 2; //0.8660254f // 2 is extra margin
-    const VoxelPos chunk_center = ChunkMath::chunk_center_voxel(chunk_pos, chunk_param);
-    // Half the chunk size in voxels: the corners are at the centre +- this.
-    const int64_t half_voxels = ChunkMath::get_lod_size(chunk_pos) * chunk_param.half_chunk_voxels();
-    const int lod = ChunkMath::get_lod(chunk_pos);
-
-    for (int corner = 0; corner < 8; ++corner) {
-        WorldPos corner_pos;
-        corner_pos.voxel = chunk_center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);
-
-        const float corner_distance = std::abs(sdf->evaluate(corner_pos, lod));
-        r_counters.sdf_calls++;
-        if (corner_distance <= chunk_outer_radius) {
-            return false;
+void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod,
+        std::vector<uint8_t> &r_outside, WaveStats &r_wave) const {
+    // The 8 corners of each node (centre +- half its size, points of Λ_lod), shared by up to 8 nodes:
+    // deduplicated on their voxel, then evaluated in one batch.
+    const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();
+    HashMap<VoxelPos, uint32_t, Vector3i64Hasher> index;
+    std::vector<VoxelPos> points;
+    std::vector<uint32_t> corner_point(p_nodes.size() * 8);
+    for (size_t n = 0; n < p_nodes.size(); n++) {
+        const VoxelPos center = ChunkMath::chunk_center_voxel(p_wave[p_nodes[n]], chunk_param);
+        for (int corner = 0; corner < 8; ++corner) {
+            const VoxelPos p = center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);
+            const uint32_t *known = index.getptr(p);
+            if (known) {
+                corner_point[n * 8 + corner] = *known;
+            } else {
+                corner_point[n * 8 + corner] = uint32_t(points.size());
+                index.insert(p, uint32_t(points.size()));
+                points.push_back(p);
+            }
         }
     }
+    std::vector<float> values(points.size());
+    const uint64_t t_eval = now_usec();
+    sdf->evaluate_batch(points.data(), int(points.size()), p_lod, values.data());
+    r_wave.eval_usec = now_usec() - t_eval;
+    r_wave.evaluated = int64_t(p_nodes.size());
+    r_wave.corners = int64_t(p_nodes.size()) * 8;
+    r_wave.unique_corners = int64_t(points.size());
 
-    return true;
+    // Outside iff |SDF| > 2 chunk sizes at all 8 corners: the old per-node test, which stopped at the first
+    // near corner, so the same verdict.
+    const float chunk_outer_radius = ChunkMath::world_chunk_size(p_wave[p_nodes[0]], chunk_param) * 2;
+    r_outside.assign(p_nodes.size(), 1);
+    for (size_t n = 0; n < p_nodes.size(); n++) {
+        for (int corner = 0; corner < 8; ++corner) {
+            if (std::abs(values[corner_point[n * 8 + corner]]) <= chunk_outer_radius) {
+                r_outside[n] = 0;
+                break;
+            }
+        }
+    }
 }
 
-bool ChunkDiscoverer::_timed_cull(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const {
+void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside,
+        ScanCounters &r_counters, CullCache *p_cache) const {
+    WaveStats wave;
+    wave.lod = p_lod;
+    wave.nodes = int64_t(p_wave.size());
+    r_outside.assign(p_wave.size(), 0);
+
+    // Cached verdicts first; the other nodes (and every hit with verify) get a fresh one.
+    std::vector<uint32_t> fresh;
+    std::vector<uint8_t> cached(p_wave.size(), 0);
+    for (uint32_t i = 0; i < uint32_t(p_wave.size()); i++) {
+        CullCache::Entry *entry = p_cache ? p_cache->entries.getptr(p_wave[i]) : nullptr;
+        if (entry) {
+            r_counters.cache_hits++;
+            entry->last_scan = p_cache->scan_index;
+            cached[i] = 1;
+            r_outside[i] = entry->outside;
+            if (!p_cache->verify) {
+                continue;
+            }
+        }
+        fresh.push_back(i);
+    }
+
     const auto t0 = std::chrono::steady_clock::now();
-    const bool outside = _chunk_is_outside_sdf(chunk_pos, p_mode, r_counters);
+    std::vector<uint8_t> verdict(fresh.size(), 0);
+    if (p_mode != CULL_NONE && !fresh.empty()) {
+        _corner_verdicts(p_wave, fresh, p_lod, verdict, wave);
+    }
     r_counters.cull_nsec += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
-    return outside;
+    r_counters.sdf_calls += wave.unique_corners;
+    r_counters.corners += wave.corners;
+
+    for (size_t f = 0; f < fresh.size(); f++) {
+        const uint32_t i = fresh[f];
+        if (cached[i]) {
+            r_counters.verify_mismatches += verdict[f] != r_outside[i] ? 1 : 0;
+            continue;
+        }
+        r_outside[i] = verdict[f];
+        if (p_cache) {
+            CullCache::Entry e;
+            e.outside = verdict[f];
+            e.last_scan = p_cache->scan_index;
+            p_cache->entries.insert(p_wave[i], e);
+        }
+    }
+    r_counters.waves.push_back(wave);
+}
+
+bool ChunkDiscoverer::_should_split(const ChunkId &p_camera_chunk, const ChunkId &p_node, int p_lod) const {
+    const double distance_to_player = p_camera_chunk.distance_to(p_node);
+
+    // Work fully in chunk-coordinate units.
+    // Half-extent of current LOD chunk in chunk-coord units is 2^lod.
+    const float half_extent = static_cast<float>(int64_t(1) << p_lod);
+    // Bounding sphere radius of the chunk cube in chunk-coord units.
+    const float chunk_outer_radius = std::sqrt(3.0f) * half_extent;
+
+    // lod_distances[L] is the distance from which LOD L is within the pixel error: split when closer.
+    return distance_to_player - chunk_outer_radius < lod_distances[p_lod];
 }
 
 void ChunkDiscoverer::start() {
@@ -146,6 +220,10 @@ void ChunkDiscoverer::discovery_loop() {
         stats.cache_size = cache.entries.size();
         stats.cache_evicted_total += evicted;
         stats.verify_mismatches_total += counters.verify_mismatches;
+        stats.last_scan = _scan_dict(counters, t_scan_end - t_scan_start);
+        if (stats.first_scan.is_empty()) {
+            stats.first_scan = stats.last_scan;
+        }
         mutex->unlock();
     }
 }
@@ -165,12 +243,37 @@ void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHa
 
     const ChunkId end_scan = ancestor_chunk + search_space;
 
+    std::vector<ChunkId> wave;
     for (int64_t x = start_scan.x; x <= end_scan.x; x += max_lod_radius) {
         for (int64_t y = start_scan.y; y <= end_scan.y; y += max_lod_radius) {
             for (int64_t z = start_scan.z; z <= end_scan.z; z += max_lod_radius) {
-                _recursive_chunk_scan(p_camera_chunk, ChunkId(x, y, z), p_mode, r_chunks, r_counters, p_cache);
+                wave.push_back(ChunkId(x, y, z));
             }
         }
+    }
+
+    std::vector<ChunkId> next;
+    std::vector<uint8_t> outside;
+    for (int lod = max_lod; !wave.empty(); lod--) {
+        _cull_wave(wave, lod, p_mode, outside, r_counters, p_cache);
+        next.clear();
+        for (size_t i = 0; i < wave.size(); i++) {
+            const ChunkId &node = wave[i];
+            r_counters.nodes_visited++;
+            if (outside[i]) {
+                r_counters.culled++;
+                continue;
+            }
+            if (lod == 0 || !_should_split(p_camera_chunk, node, lod)) {
+                r_chunks.insert(node);
+                continue;
+            }
+            const int64_t child_size = int64_t(1) << (lod - 1);
+            for (int c = 0; c < 8; ++c) {
+                next.push_back(node + ChunkId((c & 1) ? child_size : -child_size, (c & 2) ? child_size : -child_size, (c & 4) ? child_size : -child_size));
+            }
+        }
+        wave.swap(next);
     }
 }
 
@@ -240,71 +343,6 @@ void ChunkDiscoverer::setup_lod(
     }
 }
 
-void ChunkDiscoverer::_recursive_chunk_scan(const ChunkId &camera_chunk, const ChunkId &parent_chunk, CullMode p_mode,
-        LODHashSet &scanned_chunks, ScanCounters &r_counters, CullCache *p_cache) const {
-    const int current_lod = ChunkMath::get_lod(parent_chunk);
-    r_counters.nodes_visited++;
-
-    bool outside;
-    CullCache::Entry *cached = p_cache ? p_cache->entries.getptr(parent_chunk) : nullptr;
-    if (cached) {
-        r_counters.cache_hits++;
-        cached->last_scan = p_cache->scan_index;
-        outside = cached->outside;
-        if (p_cache->verify && _timed_cull(parent_chunk, p_mode, r_counters) != outside) {
-            r_counters.verify_mismatches++;
-        }
-    } else {
-        outside = _timed_cull(parent_chunk, p_mode, r_counters);
-        if (p_cache) {
-            CullCache::Entry e;
-            e.outside = outside;
-            e.last_scan = p_cache->scan_index;
-            p_cache->entries.insert(parent_chunk, e);
-        }
-    }
-    if (outside) {
-        r_counters.culled++;
-        return;
-    }
-
-    if (current_lod == 0) {
-        scanned_chunks.insert(parent_chunk);
-        return;
-    }
-
-    const double distance_to_player = camera_chunk.distance_to(parent_chunk);
-
-    // Work fully in chunk-coordinate units.
-    // Half-extent of current LOD chunk in chunk-coord units is 2^lod.
-    const float half_extent = static_cast<float>(int64_t(1) << current_lod);
-    // Bounding sphere radius of the chunk cube in chunk-coord units.
-    const float chunk_outer_radius = std::sqrt(3.0f) * half_extent;
-
-    // lod_distances[L] is the distance from which LOD L is within the pixel error: split when closer.
-    if (distance_to_player - chunk_outer_radius < lod_distances[current_lod]) {
-        const int child_lod = current_lod - 1;
-        const int64_t child_size = int64_t(1) << child_lod;
-
-        for (int i = 0; i < 8; ++i) {
-            ChunkId child_offset(
-                    (i & 1) ? child_size : -child_size,
-                    (i & 2) ? child_size : -child_size,
-                    (i & 4) ? child_size : -child_size);
-
-            _recursive_chunk_scan(
-                    camera_chunk,
-                    parent_chunk + child_offset,
-                    p_mode,
-                    scanned_chunks,
-                    r_counters,
-                    p_cache);
-        }
-    } else {
-        scanned_chunks.insert(parent_chunk);
-    }
-}
-
 void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos) {
     /*
     Function to set the camera chunk in a thread-safe manner.
@@ -327,6 +365,33 @@ void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos) {
         VLOG(2, "new chunk:", WorldCoord::to_string(new_camera_chunk));
     }
 }
+Dictionary ChunkDiscoverer::_scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec) {
+    Dictionary d;
+    const double cull_ms = double(p_counters.cull_nsec) / 1e6;
+    d["scan_ms"] = double(p_scan_usec) / 1000.0;
+    d["cull_ms"] = cull_ms;
+    d["walk_ms"] = double(p_scan_usec) / 1000.0 - cull_ms; // everything else: the tree walk, cache lookups and eviction
+    d["nodes_visited"] = p_counters.nodes_visited;
+    d["culled"] = p_counters.culled;
+    d["cache_hits"] = p_counters.cache_hits;
+    d["corners"] = p_counters.corners;
+    d["sdf_calls"] = p_counters.sdf_calls;
+    d["dedup_ratio"] = p_counters.sdf_calls ? double(p_counters.corners) / double(p_counters.sdf_calls) : 0.0;
+    Array waves;
+    for (const WaveStats &w : p_counters.waves) {
+        Dictionary wd;
+        wd["lod"] = w.lod;
+        wd["nodes"] = w.nodes;
+        wd["evaluated"] = w.evaluated;
+        wd["corners"] = w.corners;
+        wd["unique_corners"] = w.unique_corners;
+        wd["eval_ms"] = double(w.eval_usec) / 1000.0;
+        waves.push_back(wd);
+    }
+    d["waves"] = waves;
+    return d;
+}
+
 Dictionary ChunkDiscoverer::get_stats() {
     Dictionary d;
     mutex->lock();
@@ -352,6 +417,8 @@ Dictionary ChunkDiscoverer::get_stats() {
     // Share of visited nodes whose verdict came from the cache, and the cost of one corner SDF evaluation.
     d["cache_hit_rate"] = stats.nodes_visited_total ? double(stats.cache_hits_total) / double(stats.nodes_visited_total) : 0.0;
     d["usec_per_sdf_call"] = stats.sdf_calls_total ? double(stats.cull.total) / double(stats.sdf_calls_total) : 0.0;
+    d["first_scan"] = stats.first_scan.duplicate(true);
+    d["last_scan"] = stats.last_scan.duplicate(true);
     mutex->unlock();
     return d;
 }

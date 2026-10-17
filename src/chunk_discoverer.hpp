@@ -10,6 +10,7 @@
 #include <godot_cpp/classes/thread.hpp>
 
 #include <memory>
+#include <vector>
 
 using namespace godot;
 
@@ -21,14 +22,26 @@ public:
         CULL_LEGACY = 1, // |SDF| at the 8 corners > 2 chunk sizes
     };
 
+    // One wave of a scan: the nodes of one LOD.
+    struct WaveStats {
+        int lod = 0;
+        int64_t nodes = 0;
+        int64_t evaluated = 0; // nodes whose corners were evaluated (no cached verdict, or verify)
+        int64_t corners = 0; // their corners, 8 per node
+        int64_t unique_corners = 0; // after dedup: the SDF evaluations
+        uint64_t eval_usec = 0; // the corner batch (SDF evaluations only)
+    };
+
     // Work done by one scan.
     struct ScanCounters {
         int64_t nodes_visited = 0;
-        int64_t sdf_calls = 0;
+        int64_t sdf_calls = 0; // corner evaluations after dedup
+        int64_t corners = 0; // corners of the evaluated nodes, before dedup
         int64_t culled = 0;
-        uint64_t cull_nsec = 0; // time spent in the cull test (SDF evaluations), summed in ns (a node can take < 1 us)
+        uint64_t cull_nsec = 0; // time spent in the cull test (corners, dedup, SDF, verdicts), in ns
         int64_t cache_hits = 0;
         int64_t verify_mismatches = 0;
+        std::vector<WaveStats> waves;
     };
 
     // Per-node verdict of the cull test. It only depends on the node id and the SDF, which does not
@@ -80,14 +93,22 @@ private:
         int64_t cache_size = 0;
         int64_t cache_evicted_total = 0;
         int64_t verify_mismatches_total = 0;
+        Dictionary first_scan; // the first scan's counters and waves (a cold cache)
+        Dictionary last_scan;
     } stats;
 
     SDFBase *sdf;
 
-    bool _chunk_is_outside_sdf(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const;
-    bool _timed_cull(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const;
-    void _recursive_chunk_scan(const ChunkId &camera_chunk, const ChunkId &parent_chunk, CullMode p_mode,
-            LODHashSet &scanned_chunks, ScanCounters &r_counters, CullCache *p_cache) const;
+    // The cull verdicts of one wave (all nodes of LOD p_lod): cached ones from p_cache, the others from
+    // their corners, deduplicated and evaluated in one batch. r_outside[i]: node i holds no surface.
+    void _cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside, ScanCounters &r_counters,
+            CullCache *p_cache) const;
+    // Fresh verdicts of nodes p_nodes (indices into p_wave, all of LOD p_lod).
+    void _corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod, std::vector<uint8_t> &r_outside,
+            WaveStats &r_wave) const;
+    // A node is split when its bounding sphere comes closer to the camera than its LOD's distance.
+    bool _should_split(const ChunkId &p_camera_chunk, const ChunkId &p_node, int p_lod) const;
+    static Dictionary _scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec);
 
 public:
     void start();
@@ -100,9 +121,13 @@ public:
     // The full scan around `p_camera_chunk`. Const and thread safe: the discovery audit calls it from
     // the main thread to rebuild the published scan without culling.
     // `p_cache` (optional) remembers each node's verdict across scans.
+    // Breadth first, one wave per LOD from the top-LOD grid down: the wave's verdicts (_cull_wave), then
+    // its surviving nodes are kept or split into the next wave by distance. The scanned set doesn't
+    // depend on the visit order, so it is the one the old recursive walk gave (unit-tested).
     void scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
             CullCache *p_cache = nullptr) const;
     int get_max_lod() const { return lod_distances.size() - 2; }
+    const PackedFloat32Array &get_lod_distances() const { return lod_distances; }
     // The scan grid (after setup_lod): top-LOD chunk centres step `r_step` ids, from -r_count to
     // +r_count steps around the camera's top-LOD ancestor.
     void get_scan_grid(int64_t &r_step, int64_t &r_count) const;
