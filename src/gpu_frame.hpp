@@ -1,0 +1,133 @@
+#pragma once
+
+#include "chunk_math.hpp"
+
+#include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/string.hpp>
+
+// The integer frame (world_coord.hpp) on the GPU, shared by both meshers and the FrameSpike harness.
+//
+// ChunkParam UBO (std140, 48 B): chunk_size, voxel_size, skirt_size, use_skirt, then the world origin
+// in LOD0 voxels: low words (uvec4 at offset 16) and high words (ivec4 at offset 32).
+//
+// Per-chunk input (std430, 32 B): ChunkInput { uvec4 id; ivec4 anchor_hi; } holds the low 32 bits of
+// the chunk id and the high 32 bits of the chunk's minimum voxel. The low word of the minimum voxel
+// is derived on the GPU: (id_lo - lod_size) * half_chunk in wrapping uint arithmetic is exactly the
+// low word of the int64 product. The .w components are reserved.
+//
+// Every absolute position is a WorldPos: the LOD0 voxel as low word (wrapping) + high word, plus a
+// fraction in [0, 1). Differences of low words are exact within 2^31 voxels; the high word is only
+// needed for absolute identity (noise lattices). The CPU mirrors of the float math are in ChunkMath
+// (sample_pos, legacy_rel_voxels, legacy_metres) and must stay op for op identical; `precise` keeps
+// the GPU from fusing them into FMAs.
+namespace GPUFrame {
+
+static constexpr uint32_t CHUNK_PARAM_BYTES = 48;
+static constexpr uint32_t CHUNK_INPUT_BYTES = 32;
+
+inline PackedByteArray chunk_param_bytes(const ChunkParam &p_param) {
+    using namespace WorldCoord;
+    const VoxelPos origin = p_param.origin_voxel();
+    PackedByteArray bytes;
+    bytes.resize(CHUNK_PARAM_BYTES);
+    bytes.fill(0);
+    bytes.encode_s32(0, p_param.chunk_size);
+    bytes.encode_float(4, p_param.voxel_size);
+    bytes.encode_s32(8, p_param.skirt_size);
+    bytes.encode_s32(12, p_param.use_skirt ? 1 : 0);
+    bytes.encode_u32(16, lo32(origin.x));
+    bytes.encode_u32(20, lo32(origin.y));
+    bytes.encode_u32(24, lo32(origin.z));
+    bytes.encode_s32(32, hi32(origin.x));
+    bytes.encode_s32(36, hi32(origin.y));
+    bytes.encode_s32(40, hi32(origin.z));
+    return bytes;
+}
+
+// Writes chunk p_index of a ChunkInput array (r_bytes must hold it).
+inline void encode_chunk_input(PackedByteArray &r_bytes, int64_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
+    using namespace WorldCoord;
+    const VoxelPos anchor = ChunkMath::chunk_min_voxel(p_chunk, p_param);
+    const int64_t base = p_index * CHUNK_INPUT_BYTES;
+    r_bytes.encode_u32(base + 0, lo32(p_chunk.x));
+    r_bytes.encode_u32(base + 4, lo32(p_chunk.y));
+    r_bytes.encode_u32(base + 8, lo32(p_chunk.z));
+    r_bytes.encode_u32(base + 12, 0);
+    r_bytes.encode_s32(base + 16, hi32(anchor.x));
+    r_bytes.encode_s32(base + 20, hi32(anchor.y));
+    r_bytes.encode_s32(base + 24, hi32(anchor.z));
+    r_bytes.encode_s32(base + 28, 0);
+}
+
+} // namespace GPUFrame
+
+// Before the bindings (ChunkInput is a buffer element type).
+inline constexpr const char GLSL_FRAME_STRUCTS[] = R"glsl(
+
+struct ChunkInput { uvec4 id; ivec4 anchor_hi; };
+
+// An absolute position: LOD0 voxel (lo: low 32 bits, wrapping; hi: high 32 bits) + fraction in [0, 1).
+struct WorldPos { uvec3 lo; ivec3 hi; vec3 frac; };
+
+// A chunk of the batch: low words of its id, its LOD size and its minimum voxel.
+struct ChunkFrame { ivec3 id_lo; int lod_size; uvec3 anchor_lo; ivec3 anchor_hi; };
+
+)glsl";
+
+// After the LOD helpers (get_lod_size), before the terrain SDF. Use GPUFrame::glsl_functions().
+inline constexpr const char GLSL_FRAME_FUNCTIONS[] = R"glsl(
+
+const float LEGACY_NUDGE_M = /*LEGACY_NUDGE_M*/;
+
+ChunkFrame chunk_frame(ChunkInput c, ChunkParam cp) {
+    ChunkFrame f;
+    f.id_lo = ivec3(c.id.xyz);
+    f.lod_size = get_lod_size(f.id_lo);
+    uint half_chunk = uint(cp.chunk_size - 2 * cp.skirt_size) >> 1u;
+    f.anchor_lo = (c.id.xyz - uvec3(uint(f.lod_size))) * half_chunk;
+    f.anchor_hi = c.anchor_hi.xyz;
+    return f;
+}
+
+// Absolute position of a point of the chunk's vertex grid (grid index skirt_size is the chunk's
+// minimum corner). The integer part goes into the voxel, so the same point reached from two chunks
+// gives bit-identical members.
+WorldPos world_pos_from_grid(ChunkFrame f, vec3 grid, ChunkParam cp) {
+    precise vec3 off = (grid - float(cp.skirt_size)) * float(f.lod_size);
+    precise vec3 fl = floor(off);
+    WorldPos p;
+    p.frac = off - fl;
+    ivec3 ioff = ivec3(fl);
+    p.lo = f.anchor_lo + uvec3(ioff);
+    // Carry out of the low word, minus the sign extension of a negative offset.
+    p.hi = f.anchor_hi + ivec3(lessThan(p.lo, f.anchor_lo)) - ivec3(lessThan(ioff, ivec3(0)));
+    return p;
+}
+
+// Position relative to the world origin in voxels, from the exact 64-bit difference: what the low
+// word cannot hold (a wrong high word, or more than 2^31 voxels away) shows up as a 2^32-voxel jump
+// rather than being wrapped away. Only for SDFs written in metres around the origin (SDFMetreBridge).
+vec3 legacy_rel_voxels(WorldPos p, ChunkParam cp) {
+    uvec3 dlo = p.lo - cp.origin_lo.xyz;
+    ivec3 s = ivec3(dlo);
+    ivec3 dhi = p.hi - cp.origin_hi.xyz - ivec3(lessThan(p.lo, cp.origin_lo.xyz));
+    ivec3 excess = dhi + ivec3(lessThan(s, ivec3(0)));
+    precise vec3 r = vec3(s) + vec3(excess) * 4294967296.0 + p.frac;
+    return r;
+}
+
+vec3 legacy_sdf_metres(WorldPos p, ChunkParam cp) {
+    precise vec3 m = legacy_rel_voxels(p, cp) * cp.voxel_size + LEGACY_NUDGE_M;
+    return m;
+}
+
+)glsl";
+
+namespace GPUFrame {
+
+inline String glsl_functions() {
+    // 9 significant digits round-trip a float exactly.
+    return String(GLSL_FRAME_FUNCTIONS).replace("/*LEGACY_NUDGE_M*/", String::num(WorldCoord::LEGACY_NUDGE_M, 9));
+}
+
+} // namespace GPUFrame

@@ -134,3 +134,47 @@ ChunkId ChunkMath::chunk_at_render(const Vector3 &render_pos, const ChunkParam &
     };
     return chunk_param.origin_chunk + ChunkId(cell(render_pos.x) * 2 + 1, cell(render_pos.y) * 2 + 1, cell(render_pos.z) * 2 + 1);
 }
+
+// The float operations below mirror gpu_frame.hpp one by one, in float32, as separate statements.
+// (x86-64 without -mfma never contracts them into FMAs; the GPU side uses `precise`.)
+
+WorldPos ChunkMath::sample_pos(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param) {
+    const float lod_size = float(get_lod_size(chunk_coord));
+    const float skirt = float(chunk_param.skirt_size);
+    const VoxelPos anchor = chunk_min_voxel(chunk_coord, chunk_param);
+    auto axis = [lod_size, skirt](float p_grid, int64_t p_anchor, float &r_frac) {
+        const float d = p_grid - skirt;
+        const float off = d * lod_size;
+        const float fl = std::floor(off);
+        r_frac = off - fl;
+        return p_anchor + int64_t(fl);
+    };
+    WorldPos pos;
+    pos.voxel.x = axis(grid.x, anchor.x, pos.frac.x);
+    pos.voxel.y = axis(grid.y, anchor.y, pos.frac.y);
+    pos.voxel.z = axis(grid.z, anchor.z, pos.frac.z);
+    return pos;
+}
+
+Float3 ChunkMath::legacy_rel_voxels(const WorldPos &pos, const ChunkParam &chunk_param) {
+    const VoxelPos d = pos.voxel - chunk_param.origin_voxel();
+    auto axis = [](int64_t p_d, float p_frac) {
+        // p_d = s + excess * 2^32 with s the signed low word, like the GPU's low/high split.
+        const int32_t s = WorldCoord::as_i32(WorldCoord::lo32(p_d));
+        const int64_t excess = (p_d - s) / (int64_t(1) << 32);
+        const float a = float(s);
+        const float b = float(excess) * 4294967296.0f;
+        const float ab = a + b;
+        return ab + p_frac;
+    };
+    return Float3{ axis(d.x, pos.frac.x), axis(d.y, pos.frac.y), axis(d.z, pos.frac.z) };
+}
+
+Vector3 ChunkMath::legacy_metres(const WorldPos &pos, const ChunkParam &chunk_param) {
+    const Float3 r = legacy_rel_voxels(pos, chunk_param);
+    auto axis = [&chunk_param](float p_r) {
+        const float m = p_r * chunk_param.voxel_size;
+        return m + WorldCoord::LEGACY_NUDGE_M;
+    };
+    return Vector3(axis(r.x), axis(r.y), axis(r.z));
+}

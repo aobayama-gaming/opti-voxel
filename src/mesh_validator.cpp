@@ -25,8 +25,8 @@ double min_abs_sdf_cells(SDFBase *p_sdf, const ChunkId &p_chunk, const Vector3 &
     const Vector3i base((int)std::floor(p_grid.x), (int)std::floor(p_grid.y), (int)std::floor(p_grid.z));
     double best = 1e30;
     for (int i = 0; i < 8; i++) {
-        const Vector3 corner(base.x + (i & 1), base.y + ((i >> 1) & 1), base.z + ((i >> 2) & 1));
-        best = MIN(best, std::abs((double)p_sdf->evaluate(ChunkMath::grid_to_render(p_chunk, corner, p_param))) / p_cell);
+        const Float3 corner{ float(base.x + (i & 1)), float(base.y + ((i >> 1) & 1)), float(base.z + ((i >> 2) & 1)) };
+        best = MIN(best, std::abs((double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param))) / p_cell);
     }
     return best;
 }

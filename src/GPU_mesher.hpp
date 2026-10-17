@@ -81,7 +81,7 @@ class GPUMesher : public Object{
     uint32_t chunk_batch_number;
 
     //input 
-    PackedInt32Array input_chunk_id;
+    PackedByteArray input_chunk_id;
 
     // GPU stuff
 

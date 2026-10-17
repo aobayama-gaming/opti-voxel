@@ -1,6 +1,7 @@
 #include "GPU_direct_mesher.hpp"
 
 #include "gpu_direct_glsl.hpp"
+#include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "noise.hpp"
 #include "page_format.hpp"
@@ -26,8 +27,8 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 /*GLSL_TERRAIN_SDF*/
 
-vec4 evaluate_sdf(vec3 pos) {
-    return terrain_sdf(pos);
+vec4 evaluate_sdf(WorldPos p) {
+    return terrain_sdf(p);
 }
 
 /*GLSL_SKIRT_SDF*/
@@ -40,7 +41,8 @@ void main() {
     if (batch.batch_count == 0u) {
         return;
     }
-    ivec3 chunk_id = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size].xyz;
+    ChunkFrame chunk = chunk_frame(input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size], chunk_param);
+    ivec3 chunk_id = chunk.id_lo;
     ivec3 cell_chunk_coordinate = ivec3(
         gl_GlobalInvocationID.x,
         gl_GlobalInvocationID.y % chunk_param.chunk_size,
@@ -107,10 +109,10 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 
 RID GPUDirectMesher::_rt_compile(const char *p_pass) {
     String shader = DIRECT_TEMPLATE;
-    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", GLSL_STRUCT_DEFINITION);
+    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", GLSL_DIRECT_BINDINGS);
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE));
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE) + GPUFrame::glsl_functions());
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
@@ -141,7 +143,7 @@ void GPUDirectMesher::_rt_initialize() {
     const uint64_t batch = settings.batch_size;
 
     buffer_chunk_dir = rd->storage_buffer_create(batch * 16);
-    buffer_input_chunk = rd->storage_buffer_create(batch * 16);
+    buffer_input_chunk = rd->storage_buffer_create(batch * GPUFrame::CHUNK_INPUT_BYTES);
     buffer_sdf = rd->storage_buffer_create(batch * cells * 16);
     buffer_edges = rd->storage_buffer_create(batch * cells * 3 * sizeof(float));
     buffer_vertices = rd->storage_buffer_create(batch * cells * 16);
@@ -160,12 +162,7 @@ void GPUDirectMesher::_rt_initialize() {
     status_size_bytes = ((STATUS_HEADER_UINTS + settings.pages_per_batch) * 4 + 15) / 16 * 16;
     buffer_status = rd->storage_buffer_create(status_size_bytes);
 
-    PackedByteArray param_data;
-    param_data.resize(16);
-    param_data.encode_s32(0, chunk_param.chunk_size);
-    param_data.encode_float(4, chunk_param.voxel_size);
-    param_data.encode_s32(8, chunk_param.skirt_size);
-    param_data.encode_s32(12, chunk_param.use_skirt ? 1 : 0);
+    const PackedByteArray param_data = GPUFrame::chunk_param_bytes(chunk_param);
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     for (int i = 0; i < 5; i++) {
@@ -425,14 +422,9 @@ void GPUDirectMesher::process_queue() {
 
     AABB bounds = _chunk_aabb(chunks[0]);
     PackedByteArray ids;
-    ids.resize(chunks.size() * 16);
+    ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
     for (size_t i = 0; i < chunks.size(); i++) {
-        // The GPU works on the low 32 bits of the id (wrapping arithmetic).
-        const Vector3i chunk_lo = WorldCoord::lo32_i(chunks[i]);
-        ids.encode_s32(i * 16 + 0, chunk_lo.x);
-        ids.encode_s32(i * 16 + 4, chunk_lo.y);
-        ids.encode_s32(i * 16 + 8, chunk_lo.z);
-        ids.encode_s32(i * 16 + 12, 0);
+        GPUFrame::encode_chunk_input(ids, (int64_t)i, chunks[i], chunk_param);
         bounds.merge_with(_chunk_aabb(chunks[i]));
         working_generation.insert(chunks[i]);
     }

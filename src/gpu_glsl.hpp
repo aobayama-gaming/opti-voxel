@@ -5,10 +5,6 @@
 
 inline constexpr const char GLSL_STRUCT_DEFINITION[] = R"glsl(
 
-#ifndef WORLD_NUDGE
-#define WORLD_NUDGE 0.123456 // Define this to your desired nudge value or pass as uniform
-#endif
-
 struct PointMetadata { int a; int b; int c; int d; };
 
 // Equivalent to your C++ ChunkParam class
@@ -17,6 +13,8 @@ struct ChunkParam {
     float voxel_size;
     int skirt_size;
     int use_skirt; // nearly useless but need the padding
+    uvec4 origin_lo; // world origin in LOD0 voxels, low words (see gpu_frame.hpp)
+    ivec4 origin_hi; // high words
 };
 
 float chunk_voxel_dimension(ChunkParam param) {
@@ -83,82 +81,6 @@ int get_lod_size(ivec3 coord) {
     return (1 << get_lod(coord));
 }
 
-ivec3 get_parent_from_child_until(ivec3 coord, int target_lod) {
-    ivec3 parent = coord;
-    int current_lod = -1;
-
-    while (current_lod < target_lod) {
-        parent = get_parent_from_child(parent, current_lod);
-    }
-
-    return parent;
-}
-
-// ---------------------------------------------------------
-// World <-> Chunk Transforms
-// ---------------------------------------------------------
-
-float world_chunk_size(ivec3 chunk_coord, ChunkParam chunk_param) {
-    int lod = get_lod(chunk_coord);
-    return float(1 << lod) * chunk_world_dimension(chunk_param); 
-}
-
-float world_chunk_spherical_radius(ivec3 chunk_coord, ChunkParam chunk_param) {
-    float half_size = world_chunk_size(chunk_coord, chunk_param) * 0.5;
-    return sqrt(half_size * half_size * 3.0); 
-}
-
-vec3 chunk_to_world(ivec3 chunk_coord, ChunkParam chunk_param) {
-    return vec3(chunk_coord) * (chunk_world_dimension(chunk_param) * 0.5) + WORLD_NUDGE;
-}
-
-ivec3 world_to_chunk(vec3 world_coord, ChunkParam chunk_param) {
-    ivec3 cell = ivec3(floor(world_coord / chunk_world_dimension(chunk_param)));
-    return cell * 2 + 1;
-}
-
-// ---------------------------------------------------------
-// Vertex <-> World Transforms
-// ---------------------------------------------------------
-
-float direct_transform(float inputValue, float chunk_dim, ChunkParam chunk_param) {
-    return (inputValue - float(chunk_param.skirt_size)) * chunk_dim / chunk_voxel_dimension(chunk_param);
-}
-
-float inverse_transform(float inputValue, float chunk_dim, ChunkParam chunk_param) {
-    return inputValue * chunk_voxel_dimension(chunk_param) / chunk_dim + float(chunk_param.skirt_size);
-}
-
-vec3 vertices_to_world(ivec3 chunk_coord, vec3 local_coord, ChunkParam chunk_param) {
-    float chunk_size = world_chunk_size(chunk_coord, chunk_param);
-    vec3 chunk_center = chunk_to_world(chunk_coord, chunk_param);
-    vec3 chunk_min_corner = chunk_center - vec3(chunk_size * 0.5);
-
-    return chunk_min_corner + vec3(
-        direct_transform(local_coord.x, chunk_size, chunk_param),
-        direct_transform(local_coord.y, chunk_size, chunk_param),
-        direct_transform(local_coord.z, chunk_size, chunk_param)
-    );
-}
-
-vec3 world_to_vertices(ivec3 chunk_coord, vec3 world_coord, ChunkParam chunk_param) {
-    float chunk_size = world_chunk_size(chunk_coord, chunk_param);
-    vec3 chunk_center = chunk_to_world(chunk_coord, chunk_param);
-    vec3 chunk_min_corner = chunk_center - vec3(chunk_size * 0.5);
-    
-    vec3 local_offset = world_coord - chunk_min_corner;
-    return vec3(
-        inverse_transform(local_offset.x, chunk_size, chunk_param),
-        inverse_transform(local_offset.y, chunk_size, chunk_param),
-        inverse_transform(local_offset.z, chunk_size, chunk_param)
-    );
-}
-
-bool vertices_out_of_bound(vec3 vertices_coord, ChunkParam chunk_param) {
-    // Utilizes GLSL vector relational functions for a cleaner check
-    return any(lessThan(vertices_coord, vec3(0.0))) || 
-           any(greaterThan(vertices_coord, vec3(chunk_world_dimension(chunk_param))));
-}
 
 // ---------------------------------------------------------
 // SDF transform
@@ -264,15 +186,15 @@ vec2 _calculate_skirt_offset(float coord,ChunkParam chunk_param){
 
 }
 
-vec4 skirt_sdf(ivec3 chunk_coord,vec3 point_coord, ChunkParam chunk_param){
+vec4 skirt_sdf(ChunkFrame chunk, vec3 point_coord, ChunkParam chunk_param){
 
-    vec4 base_sdf = evaluate_sdf(vertices_to_world(chunk_coord,vec3(point_coord),chunk_param));
+    vec4 base_sdf = evaluate_sdf(world_pos_from_grid(chunk, point_coord, chunk_param));
 
     if(chunk_param.skirt_size > 0){
 
         float gradient_magnitude = length(base_sdf.xyz);
-        //float offset_size = chunk_param.voxel_size*0.3*float(get_lod_size(chunk_coord)) / max(gradient_magnitude, 0.1);
-        float offset_size = chunk_param.voxel_size*0.3*float(get_lod_size(chunk_coord)) / gradient_magnitude/1000.0;
+        //float offset_size = chunk_param.voxel_size*0.3*float(chunk.lod_size) / max(gradient_magnitude, 0.1);
+        float offset_size = chunk_param.voxel_size*0.3*float(chunk.lod_size) / gradient_magnitude/1000.0;
 
         vec2 x_offset = _calculate_skirt_offset(point_coord.x,chunk_param);
         vec2 y_offset = _calculate_skirt_offset(point_coord.y,chunk_param);

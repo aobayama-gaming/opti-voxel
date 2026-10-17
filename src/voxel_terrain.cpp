@@ -233,11 +233,15 @@ int VoxelTerrain::get_log_level() const {
 
 void VoxelTerrain::_ready(){
 
+    // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
+    ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
+
     started = true;
     start_usec = now_usec();
 
     // sdf is always an SDFDummy for now (see the member initialiser).
     static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
+    sdf->configure(chunk_param);
 
     visual_mesh_data.set_max_lod(lod_numbers);
 

@@ -28,6 +28,7 @@
 #include <godot_cpp/classes/surface_tool.hpp>
 
 #include "noise.hpp"
+#include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 
 //debug only
@@ -43,7 +44,7 @@ layout(set = 0, binding = 0, std430) restrict buffer AtomicCounter {
 };
 
 layout(set = 0, binding = 1, std430) restrict buffer InputChunk {
-    ivec3 input_chunk[];
+    ChunkInput input_chunk[];
 };
 
 layout(set = 0, binding = 2, std430) restrict buffer SDFSample {
@@ -89,15 +90,11 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 /*GLSL_HELPER_FUNCTION*/
 
-//Will inject vec4 terrain_sdf(vec3 pos)
+//Will inject vec4 terrain_sdf(WorldPos p)
 /*GLSL_TERRAIN_SDF*/
 
-// A placeholder function that we will inject code into!
-vec4 evaluate_sdf(vec3 pos) {
-
-    //injected function
-    return terrain_sdf(pos);
-
+vec4 evaluate_sdf(WorldPos p) {
+    return terrain_sdf(p);
 }
 
 /*GLSL_SKIRT_SDF*/
@@ -106,7 +103,8 @@ void main() {
 
 
 
-    ivec3 chunk_id = input_chunk[gl_GlobalInvocationID.z/chunk_param.chunk_size];
+    ChunkFrame chunk = chunk_frame(input_chunk[gl_GlobalInvocationID.z/chunk_param.chunk_size], chunk_param);
+    ivec3 chunk_id = chunk.id_lo;
 
     ivec3 cell_chunk_coordinate = ivec3(
         gl_GlobalInvocationID.x,
@@ -119,9 +117,9 @@ void main() {
     )glsl";
 
     // 2. Inject the dynamic code
-    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/",GLSL_STRUCT_DEFINITION);
+    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/",GLSL_BUFFER_BINDING);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE));
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE) + GPUFrame::glsl_functions());
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/",sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", algorithm_pass);
@@ -163,7 +161,7 @@ void main() {
 
 static constexpr const char GLSL_FIRST_PASS[] = R"glsl(
 
-sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = skirt_sdf(chunk_id,vec3(cell_chunk_coordinate),chunk_param);
+sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = skirt_sdf(chunk,vec3(cell_chunk_coordinate),chunk_param);
 
 )glsl";
 
@@ -262,7 +260,7 @@ if (active_edge_count > 0) {
 
     vec3 chunk_vertex = local_vertex+vec3(cell_chunk_coordinate);
 
-    vec3 surface_normal = normalize(skirt_sdf(chunk_id,chunk_vertex,chunk_param).xyz);
+    vec3 surface_normal = normalize(skirt_sdf(chunk,chunk_vertex,chunk_param).xyz);
     uint packed_normal = packSnorm4x8(vec4(surface_normal, 0.0));
 
     // 3. Triangle Metadata (3 bit mask for X/Y/Z quad generation in Dual Contouring/Surface nets)
@@ -347,7 +345,7 @@ void GPUMesher::_initialize_gpu_compute(){
 
     PackedByteArray empty_data;
 
-    buffer_input_chunk_id = rd->storage_buffer_create((chunk_batch_number)*sizeof(Vector4i),empty_data); // need to be Vector4i due to padding...
+    buffer_input_chunk_id = rd->storage_buffer_create(chunk_batch_number * GPUFrame::CHUNK_INPUT_BYTES, empty_data);
 
     buffer_atomic_counter = rd->storage_buffer_create(2*(1+chunk_batch_number)*sizeof(uint32_t),empty_data);
     
@@ -368,14 +366,7 @@ void GPUMesher::_initialize_gpu_compute(){
 
     // Injection of Chunk Param in the uniform
     // Match the std140 layout for ChunkParam: 4 x 4-byte fields = 16 bytes
-    PackedByteArray param_data;
-    param_data.resize(16);
-    
-    param_data.encode_s32(0, chunk_param.chunk_size);
-    param_data.encode_float(4, chunk_param.voxel_size);
-    param_data.encode_s32(8, chunk_param.skirt_size);
-    param_data.encode_s32(12, chunk_param.use_skirt ? 1 : 0);
-    
+    const PackedByteArray param_data = GPUFrame::chunk_param_bytes(chunk_param);
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     // Helper lambda to keep code clean
@@ -429,7 +420,7 @@ void GPUMesher::_execute_whole_pipeline(){
     //UtilityFunctions::print("GPUMesher : pipeline started");
     mutex->lock();
     const bool should_exit = exit_thread;
-    PackedByteArray local_chunk_id = input_chunk_id.to_byte_array();
+    PackedByteArray local_chunk_id = input_chunk_id;
     mutex->unlock();
 
     if (should_exit) {
@@ -884,8 +875,9 @@ void GPUMesher::process_queue(){
 
     if(!_is_available()) return;
 
-    PackedInt32Array new_batch;
-    new_batch.resize(chunk_batch_number * 4); // 4 int32 per ivec3 for std430 alignment
+    PackedByteArray new_batch;
+    new_batch.resize(chunk_batch_number * GPUFrame::CHUNK_INPUT_BYTES);
+    new_batch.fill(0);
 
     unpacked_chunks.clear();
     unpacked_chunks.resize(chunk_batch_number);
@@ -901,12 +893,7 @@ void GPUMesher::process_queue(){
 
         working_generation.insert(new_chunk);
         
-        // The GPU works on the low 32 bits of the id (wrapping arithmetic).
-        const Vector3i chunk_lo = WorldCoord::lo32_i(new_chunk);
-        new_batch[count * 4 + 0] = chunk_lo.x;
-        new_batch[count * 4 + 1] = chunk_lo.y;
-        new_batch[count * 4 + 2] = chunk_lo.z;
-        new_batch[count * 4 + 3] = 0; // padding
+        GPUFrame::encode_chunk_input(new_batch, count, new_chunk, chunk_param);
 
         unpacked_chunks[count].chunk_id = new_chunk;
         

@@ -66,4 +66,11 @@ namespace ChunkMath{
     Vector3 grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &grid, const ChunkParam &chunk_param);
     // LOD0 chunk holding a render-space position.
     ChunkId chunk_at_render(const Vector3 &render_pos, const ChunkParam &chunk_param);
+
+    // Absolute position of a vertex-grid point: CPU mirror of world_pos_from_grid (gpu_frame.hpp).
+    WorldPos sample_pos(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param);
+    // Origin-relative voxels and metres for SDFs written in metres (SDFMetreBridge): CPU mirrors of
+    // legacy_rel_voxels / legacy_sdf_metres, op for op.
+    Float3 legacy_rel_voxels(const WorldPos &pos, const ChunkParam &chunk_param);
+    Vector3 legacy_metres(const WorldPos &pos, const ChunkParam &chunk_param);
 }

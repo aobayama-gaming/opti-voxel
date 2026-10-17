@@ -11,18 +11,20 @@ using namespace godot;
 bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos){
 
     const float chunk_size = ChunkMath::world_chunk_size(chunk_pos,chunk_param);
-    const float half_size = chunk_size * 0.5f;
     const float chunk_outer_radius = chunk_size*2 ; //0.8660254f // 2 is extra margin
-    const Vector3 chunk_center = ChunkMath::chunk_render_center(chunk_pos,chunk_param);
+    const VoxelPos chunk_center = ChunkMath::chunk_center_voxel(chunk_pos,chunk_param);
+    // Chunk size in voxels.
+    const int64_t size_voxels = ChunkMath::get_lod_size(chunk_pos) * 2 * chunk_param.half_chunk_voxels();
 
     for (int corner = 0; corner < 8; ++corner) {
-        const Vector3 corner_offset(
-            (corner & 1) ? 0 : chunk_size,
-            (corner & 2) ? 0 : chunk_size,
-            (corner & 4) ? 0 : chunk_size
+        WorldPos corner_pos;
+        corner_pos.voxel = chunk_center + VoxelPos(
+            (corner & 1) ? 0 : size_voxels,
+            (corner & 2) ? 0 : size_voxels,
+            (corner & 4) ? 0 : size_voxels
         );
 
-        const float corner_distance = std::abs(sdf->evaluate(chunk_center + corner_offset));
+        const float corner_distance = std::abs(sdf->evaluate(corner_pos));
         if (corner_distance <= chunk_outer_radius) {
             return false;
         }
