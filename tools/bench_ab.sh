@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Before/after comparison of two checkouts (e.g. dev vs a feature worktree), same bench args for both.
 #
-#   tools/bench_ab.sh [--runs=3] [--scenarios="load fly"] BEFORE_ROOT AFTER_ROOT [-- bench-args...]
+#   tools/bench_ab.sh [--runs=2] [--scenarios="load fly"] BEFORE_ROOT AFTER_ROOT [-- bench-args...]
 #   e.g. tools/bench_ab.sh ../opti-voxel . -- --mode=direct
 # Each tree is built once (one after the other, never during a bench), then runs are interleaved
 # before/after so slow drift (thermals, background load) hits both. Each tree benches with its own
-# build and keeps its run dirs; the table lands in <AFTER_ROOT>/bench/results/<date>-ab.md.
+# build and keeps its run dirs, both through AFTER's tools/bench.sh (same harness on both sides).
+# The table lands in <AFTER_ROOT>/bench/results/<date>-ab.md.
 set -uo pipefail
 
-RUNS=3
+RUNS=2
 SCENARIOS="load fly"
 ROOTS=()
 BARGS=()
@@ -45,7 +46,7 @@ for scenario in $SCENARIOS; do
         for side in before after; do
             root="$BEFORE"; [[ $side == after ]] && root="$AFTER"
             echo ">> [$scenario] $side run $i/$RUNS"
-            if "$root/tools/bench.sh" --no-build --tag="$side-$scenario-$i" "${BARGS[@]}" --scenario="$scenario" > /dev/null 2>&1; then
+            if BENCH_ROOT="$root" "$AFTER/tools/bench.sh" --no-build --cool=1 --tag="$side-$scenario-$i" "${BARGS[@]}" --scenario="$scenario" > /dev/null 2>&1; then
                 dir="$(cat "$root/bench/results/LAST")"
                 if [[ $side == before ]]; then DIRS_BEFORE="${DIRS_BEFORE:+$DIRS_BEFORE,}$dir"; else DIRS_AFTER="${DIRS_AFTER:+$DIRS_AFTER,}$dir"; fi
             else

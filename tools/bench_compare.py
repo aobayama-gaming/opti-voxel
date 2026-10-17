@@ -76,6 +76,7 @@ METRICS = [
 
     ("Test conditions", "GPU clock, median (MHz)", lambda d: get(d, "telemetry.gpu_clock_mhz_median"), "", None),
     ("Test conditions", "GPU clock, min (MHz)", lambda d: get(d, "telemetry.gpu_clock_mhz_min"), "", None),
+    ("Test conditions", "GPU temperature at start (C)", lambda d: get(d, "telemetry.start_temp_c"), "", None),
     ("Test conditions", "GPU temperature, max (C)", lambda d: get(d, "telemetry.gpu_temp_c_max"), "", None),
     ("Test conditions", "share of samples throttled", lambda d: (get(d, "telemetry.throttled_share") or 0) * 100, "%", None),
 

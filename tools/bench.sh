@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Build the extension, run the scripted bench scene, check the log for problems, print a summary.
 #
-#   tools/bench.sh [--no-build] [--tag=name] [bench.gd args...]
+#   tools/bench.sh [--no-build] [--cool=1] [--tag=name] [bench.gd args...]
 #   e.g. tools/bench.sh --mode=legacy --scenario=load --shot=loaded:loaded.png
+#
+# --cool=1 lets the GPU cool down before the run (perf comparisons only: bench_ab.sh / bench_compare.sh).
+# It stops at BENCH_COOL_C (65 C), when the temperature stops falling, or after BENCH_COOLDOWN_MAX_S (30 s).
+# Correctness runs (validate, audit, parity) don't need it and start immediately.
 #
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
@@ -10,14 +14,17 @@
 # 4 a requested --validate / --audit reported ok=false.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# BENCH_ROOT: bench another checkout with this harness (bench_ab.sh uses it for the "before" tree).
+ROOT="${BENCH_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 GODOT="${GODOT:-$HOME/.local/bin/godot}"
 BUILD=1
+COOL=0
 TAG=""
 PASS=()
 for a in "$@"; do
     case "$a" in
         --no-build) BUILD=0 ;;
+        --cool=*) COOL="${a#--cool=}" ;;
         --tag=*) TAG="${a#--tag=}" ;;
         *) PASS+=("$a") ;;
     esac
@@ -50,21 +57,36 @@ if [[ $BUILD == 1 ]]; then
     fi
 fi
 
-# Laptop GPUs throttle hard (power cap / thermals). Wait for a cool GPU so runs start from the same
-# state, and record clocks during the run so throttled runs are visible in the results.
+# Laptop GPUs throttle hard (power cap / thermals). Record clocks during the run so throttled runs are
+# visible in the results. With --cool=1, first let the GPU cool down. Right after a run it sits at 70-87 C
+# and does not get back to 65 C within minutes, so also stop once the temperature plateaus.
 HAVE_SMI=0
 command -v nvidia-smi > /dev/null && HAVE_SMI=1
+COOLDOWN_S=0
+START_TEMP=""
 if [[ $HAVE_SMI == 1 ]]; then
-    for i in $(seq 1 "${BENCH_COOLDOWN_MAX_S:-120}"); do
-        T=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits | head -1)
-        [[ "$T" -le "${BENCH_COOL_C:-65}" ]] && break
-        [[ $i == 1 ]] && echo ">> cooling down (GPU at ${T}C)"
-        sleep 1
-    done
+    gpu_temp() { nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits | head -1; }
+    START_TEMP=$(gpu_temp)
+    if [[ $COOL == 1 ]]; then
+        T0=$START_TEMP
+        HIST=()
+        T=$T0
+        while [[ $COOLDOWN_S -lt ${BENCH_COOLDOWN_MAX_S:-30} && $T -gt ${BENCH_COOL_C:-65} ]]; do
+            # Plateau: less than 1 C lost over the last 10 s.
+            if [[ ${#HIST[@]} -ge 10 && $(( HIST[${#HIST[@]} - 10] - T )) -lt 1 ]]; then break; fi
+            sleep 1
+            COOLDOWN_S=$((COOLDOWN_S + 1))
+            T=$(gpu_temp)
+            HIST+=("$T")
+        done
+        echo ">> cooldown ${COOLDOWN_S}s (GPU ${T0}C -> ${T}C)"
+        START_TEMP=$T
+    fi
     nvidia-smi --query-gpu=clocks.gr,temperature.gpu,power.draw,clocks_throttle_reasons.active \
         --format=csv,noheader,nounits -lms 500 > "$RUN_DIR/gpu_telemetry.csv" 2>/dev/null &
     SMI_PID=$!
 fi
+echo "$COOLDOWN_S ${START_TEMP:-}" > "$RUN_DIR/cooldown.txt"
 echo "$(cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo unknown)" > "$RUN_DIR/platform_profile.txt"
 
 echo ">> running godot (${ARGS[*]})"
@@ -82,6 +104,10 @@ if not os.path.exists(p):
     sys.exit(0)
 d = json.load(open(p))
 tel = {"platform_profile": open(os.path.join(run, "platform_profile.txt")).read().strip()}
+cd = open(os.path.join(run, "cooldown.txt")).read().split()
+tel["cooldown_s"] = int(cd[0])
+if len(cd) > 1:
+    tel["start_temp_c"] = int(cd[1])
 rows = []
 if os.path.exists(t):
     for line in open(t):
@@ -129,7 +155,7 @@ print(f">> mode={d['args'].get('mode','legacy')} timed_out={d['timed_out']} fram
 tel = d.get("telemetry", {})
 if tel:
     print(f">> GPU: profile={tel.get('platform_profile')} clock median={tel.get('gpu_clock_mhz_median')} min={tel.get('gpu_clock_mhz_min')} MHz"
-          f" temp max={tel.get('gpu_temp_c_max')}C power={tel.get('gpu_power_w_median')}W throttled={tel.get('throttled_share', 0):.0%}")
+          f" temp start={tel.get('start_temp_c')}C max={tel.get('gpu_temp_c_max')}C cooldown={tel.get('cooldown_s')}s power={tel.get('gpu_power_w_median')}W throttled={tel.get('throttled_share', 0):.0%}")
 for name, ph in d["phases"].items():
     f, g, t = ph["frame_ms"], ph["render_gpu_ms"], ph["terrain"]
     ch = t.get("chunks", {})

@@ -19,9 +19,12 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
   ends with a segfault in the extension (headless editor exit, pre-existing). It's harmless as
   long as `project/.godot/extension_list.cfg` exists afterwards.
+- When a feature is done and its checks pass, commit, push and open the PR into `dev` without waiting
+  to be asked. Don't merge it: the user reviews and merges.
 - Perf PRs carry a measured before/after table and name the new bottlenecks.
   `tools/bench_ab.sh <dev checkout> <worktree> -- --mode=direct` builds both trees, interleaves
-  the runs and writes the table to paste into the PR.
+  the runs (2 per side by default, both through the worktree's `bench.sh`) and writes the table to paste
+  into the PR. Comparing a tree against itself still shows load-time deltas of ~5%: that's the noise.
   Never build while a bench runs (thermals, see Gotchas).
 - Commits are GPG-signed, and the user types the passphrase.
 - Keep mesher and render work core-level. Order and bounds come from integer chunk ids. Sub-SDFs
@@ -63,12 +66,18 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 
 ## Verify changes (do this, don't eyeball)
+- `tools/check.sh [--no-build] [--spike] [--keep-going]`: the correctness gate, ~2 min. One build, then
+  a direct load run with `--validate=64 --audit=1`, `origin_parity.sh`, `frame_test.sh`, and the
+  QuadPagePool spike (with `--spike`, or automatically when `src/quad_page_pool*` differs from `dev`).
+  Prints PASS/FAIL per step. Perf numbers come from `bench_ab.sh` instead.
 - `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
-  [--view=0..7] [--validate=64] [--audit=1]`: builds, runs `project/debug/bench.tscn` with a fixed
+  [--view=0..7] [--validate=64] [--audit=1] [--cool=1]`: builds, runs `project/debug/bench.tscn` with a fixed
   camera, writes `bench/results/<run>/stats.json` + `godot.log` + screenshots, prints a summary.
   Exits non-zero on build failure, crashes, `ERROR` lines, leaked RIDs, and (exit 4) a requested
   validation or audit that failed. `bench/results/LAST` holds the latest run dir.
-  `--origin=X,Y,Z` sets the world origin (voxels).
+  `--origin=X,Y,Z` sets the world origin (voxels). `--cool=1` waits for the GPU to cool first (perf
+  runs only; `bench_ab.sh` / `bench_compare.sh` pass it): until 65 C, a plateau, or 30 s at most.
+  `BENCH_ROOT=<checkout>` benches another tree with this harness.
 - `--validate=N` (direct): re-meshes N loaded chunks with the legacy mesher and compares
   triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies;
   a handful of winding flips / normal outliers at corners where |SDF| ~ 0 are expected (two
@@ -78,7 +87,7 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
-- `tools/bench_compare.sh --runs=3 "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
+- `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
 - `tools/frame_test.sh [--no-build]` (`FrameSpike`): GPU vs CPU check of the integer frame (WorldPos,
   anchors, pairs reaching the same voxel, continuity across low-word wraps) at far origins. Run it
@@ -93,6 +102,9 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Laptop GPU: in the `quiet` platform profile the GPU is power-capped to ~300 MHz under load and
   every GPU number is meaningless. `bench.sh` records clocks/throttling in `stats.json["telemetry"]`;
   check `gpu_clock_mhz_median` before trusting a result.
+- Right after a run the GPU sits at 70-87 C and doesn't get back to 65 C within minutes. The old
+  cooldown always waited out its full 120 s, about 95% of the time a test run took. Correctness runs don't cool
+  down; perf runs settle at most 30 s and record `start_temp_c` / `cooldown_s` in the telemetry.
 - Locked screen (`loginctl show-session <id> -p LockedHint` = yes): KWin stops presenting the
   window, GPU Direct readbacks never arrive and the bench times out with 0 chunks loaded at a
   210 MHz GPU clock. Benches need an unlocked session.
