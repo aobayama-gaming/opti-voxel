@@ -3,6 +3,7 @@
 #include "godot_cpp/variant/variant.hpp"
 #include <godot_cpp/classes/rendering_server.hpp>
 #include "debug_log.hpp"
+#include "world_coord.hpp"
 
 using namespace godot;
 
@@ -16,7 +17,7 @@ struct ChunkReleaser {
 };
 
 struct ChunkOutput{
-    Vector3i chunk_id;
+    ChunkId chunk_id;
     RID mesh_rid;
     RID instance_rid;
     uint32_t triangle_count = 0; // stats only: real (non-degenerate) triangles

@@ -8,12 +8,12 @@
 
 using namespace godot;
 
-bool ChunkDiscoverer::_chunk_is_outside_sdf(const Vector3i &chunk_pos){
+bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos){
 
     const float chunk_size = ChunkMath::world_chunk_size(chunk_pos,chunk_param);
     const float half_size = chunk_size * 0.5f;
     const float chunk_outer_radius = chunk_size*2 ; //0.8660254f // 2 is extra margin
-    const Vector3 chunk_center = ChunkMath::chunk_to_world(chunk_pos,chunk_param);
+    const Vector3 chunk_center = ChunkMath::chunk_render_center(chunk_pos,chunk_param);
 
     for (int corner = 0; corner < 8; ++corner) {
         const Vector3 corner_offset(
@@ -68,7 +68,7 @@ void ChunkDiscoverer::discovery_loop() {
         mutex->lock();
         bool should_exit = exit_thread;
 
-        Vector3i actual_camera_chunk = camera_chunk;
+        ChunkId actual_camera_chunk = camera_chunk;
         // Add other variable import.
         mutex->unlock();
 
@@ -83,24 +83,22 @@ void ChunkDiscoverer::discovery_loop() {
 
         const int max_lod = lod_count-1; // The maximum LOD level to consider for loading. This is determined by the size of the lod_distances array, which should be set up so that each LOD level corresponds to a distance threshold.
 
-        const int max_lod_radius = 2 << (max_lod); // The radius of the largest LOD. This is the maximum distance at which chunks will be loaded, so it determines the size of the area to scan.
+        const int64_t max_lod_radius = int64_t(2) << (max_lod); // The radius of the largest LOD. This is the maximum distance at which chunks will be loaded, so it determines the size of the area to scan.
 
-        const int max_lod_number = MIN(ceil( lod_distances[lod_count-1] /max_lod_radius)+2,max_lod); 
+        const int64_t max_lod_number = MIN(int64_t(std::ceil( lod_distances[lod_count-1] / double(max_lod_radius)))+2, int64_t(max_lod));
 
-        const Vector3i ancestor_chunk = ChunkMath::get_parent_from_child_until(actual_camera_chunk, max_lod);
+        const ChunkId ancestor_chunk = ChunkMath::get_parent_from_child_until(actual_camera_chunk, max_lod);
 
-        const Vector3i search_space = Vector3i(max_lod_number, max_lod_number, max_lod_number) * max_lod_radius;
+        const ChunkId search_space = ChunkId(max_lod_number, max_lod_number, max_lod_number) * max_lod_radius;
 
-        const Vector3i start_scan = ancestor_chunk - search_space;
+        const ChunkId start_scan = ancestor_chunk - search_space;
 
-        const Vector3i end_scan = ancestor_chunk + search_space;
+        const ChunkId end_scan = ancestor_chunk + search_space;
 
-        //scanned_chunks.insert(Vector3i(-21, 3, 1));
-
-        for (int x = start_scan.x; x <= end_scan.x; x += max_lod_radius) {
-            for (int y = start_scan.y; y <= end_scan.y; y += max_lod_radius) {
-                for (int z = start_scan.z; z <= end_scan.z; z += max_lod_radius) {
-                    Vector3i scan(x, y, z);
+        for (int64_t x = start_scan.x; x <= end_scan.x; x += max_lod_radius) {
+            for (int64_t y = start_scan.y; y <= end_scan.y; y += max_lod_radius) {
+                for (int64_t z = start_scan.z; z <= end_scan.z; z += max_lod_radius) {
+                    ChunkId scan(x, y, z);
                     _recursive_chunk_scan(actual_camera_chunk,scan,new_scanned_chunk);
                 }
             }
@@ -118,7 +116,7 @@ void ChunkDiscoverer::discovery_loop() {
         //UtilityFunctions::print("scanned chunk count:", (int)new_scanned_chunk.size());
 
         // print debug 
-        // for (const Vector3i &chunk : new_scanned_chunk) {
+        // for (const ChunkId &chunk : new_scanned_chunk) {
         //     UtilityFunctions::print("scanned:", chunk);
         // }
 
@@ -187,7 +185,7 @@ void ChunkDiscoverer::setup_lod(
 
 }
 
-void ChunkDiscoverer::_recursive_chunk_scan(const Vector3i &camera_chunk,const Vector3i &parent_chunk, LODHashSet &scanned_chunks)
+void ChunkDiscoverer::_recursive_chunk_scan(const ChunkId &camera_chunk,const ChunkId &parent_chunk, LODHashSet &scanned_chunks)
 {
     const int current_lod = ChunkMath::get_lod(parent_chunk);
 
@@ -211,10 +209,10 @@ void ChunkDiscoverer::_recursive_chunk_scan(const Vector3i &camera_chunk,const V
     if (distance_to_player - chunk_outer_radius < lod_distances[current_lod-1]) {
 
         const int child_lod = current_lod - 1;
-        const int child_size = 1 << child_lod;
+        const int64_t child_size = int64_t(1) << child_lod;
 
         for (int i = 0; i < 8; ++i) {
-            Vector3i child_offset(
+            ChunkId child_offset(
                 (i & 1) ? child_size : -child_size,
                 (i & 2) ? child_size : -child_size,
                 (i & 4) ? child_size : -child_size
@@ -238,10 +236,10 @@ void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos){
     */
 
     mutex->lock();
-    Vector3i old_camera_chunk = camera_chunk;
+    ChunkId old_camera_chunk = camera_chunk;
     mutex->unlock();
 
-    Vector3i new_camera_chunk = ChunkMath::world_to_chunk(camera_pos,chunk_param);
+    ChunkId new_camera_chunk = ChunkMath::chunk_at_render(camera_pos,chunk_param);
 
     if(new_camera_chunk!=old_camera_chunk){
 
@@ -251,7 +249,7 @@ void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos){
 
         semaphore->post();
 
-        VLOG(2, "new chunk:", new_camera_chunk);
+        VLOG(2, "new chunk:", WorldCoord::to_string(new_camera_chunk));
     }
 
 }

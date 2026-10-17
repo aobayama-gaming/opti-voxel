@@ -18,25 +18,27 @@ struct Tri {
     Vector3 n[3];
 };
 
-// Smallest |SDF| (CPU evaluation, in cells) over the grid corners of the cell holding `p_world`.
-// A sign decision taken on a near-zero corner can legitimately differ between two GPU evaluations.
-double min_abs_sdf_cells(SDFBase *p_sdf, const Vector3i &p_chunk, const Vector3 &p_world, const ChunkParam &p_param, float p_cell) {
-    const Vector3 local = ChunkMath::world_to_vertices(p_chunk, p_world, p_param);
-    const Vector3i base((int)std::floor(local.x), (int)std::floor(local.y), (int)std::floor(local.z));
+// Smallest |SDF| (CPU evaluation, in cells) over the grid corners of the cell holding `p_grid` (a
+// point of the chunk's vertex grid). A sign decision taken on a near-zero corner can legitimately
+// differ between two GPU evaluations.
+double min_abs_sdf_cells(SDFBase *p_sdf, const ChunkId &p_chunk, const Vector3 &p_grid, const ChunkParam &p_param, float p_cell) {
+    const Vector3i base((int)std::floor(p_grid.x), (int)std::floor(p_grid.y), (int)std::floor(p_grid.z));
     double best = 1e30;
     for (int i = 0; i < 8; i++) {
         const Vector3 corner(base.x + (i & 1), base.y + ((i >> 1) & 1), base.z + ((i >> 2) & 1));
-        best = MIN(best, std::abs((double)p_sdf->evaluate(ChunkMath::vertices_to_world(p_chunk, corner, p_param))) / p_cell);
+        best = MIN(best, std::abs((double)p_sdf->evaluate(ChunkMath::grid_to_render(p_chunk, corner, p_param))) / p_cell);
     }
     return best;
 }
 
-void write_obj(const String &p_path, const std::vector<Tri> &p_tris) {
+// Triangles in the chunk's vertex grid, written in render space (metres relative to the origin).
+void write_obj(const String &p_path, const std::vector<Tri> &p_tris, const ChunkId &p_chunk, const ChunkParam &p_param) {
     Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::WRITE);
     ERR_FAIL_COND(f.is_null());
     for (const Tri &t : p_tris) {
         for (int k = 0; k < 3; k++) {
-            f->store_line(vformat("v %f %f %f", t.p[k].x, t.p[k].y, t.p[k].z));
+            const Vector3 p = ChunkMath::grid_to_render(p_chunk, t.p[k], p_param);
+            f->store_line(vformat("v %f %f %f", p.x, p.y, p.z));
         }
     }
     for (size_t i = 0; i < p_tris.size(); i++) {
@@ -123,7 +125,7 @@ bool MeshValidator::step() {
     }
     _compare();
 
-    for (KeyValue<Vector3i, ChunkOutput> &kv : legacy_state.loaded_chunk) {
+    for (KeyValue<ChunkId, ChunkOutput> &kv : legacy_state.loaded_chunk) {
         kv.value.free();
     }
     legacy_state.loaded_chunk.clear();
@@ -154,7 +156,7 @@ void MeshValidator::_compare() {
     PackedFloat64Array baseline_sdf; // same measure on ordinary matched triangles
     int64_t unexplained = 0;
     int64_t bad_headers = 0; // groups of a chunk whose header names another chunk
-    auto record = [&](const char *p_kind, const Vector3i &p_chunk, const Tri &p_tri, float p_cell, double p_extra) {
+    auto record = [&](const char *p_kind, const ChunkId &p_chunk, const Tri &p_tri, float p_cell, double p_extra) {
         const Vector3 c = (p_tri.p[0] + p_tri.p[1] + p_tri.p[2]) / 3.0f;
         const double near_zero = min_abs_sdf_cells(sdf, p_chunk, c, chunk_param, p_cell);
         unexplained += near_zero > 1e-3 ? 1 : 0;
@@ -163,21 +165,23 @@ void MeshValidator::_compare() {
         }
         Dictionary a;
         a["kind"] = p_kind;
-        a["chunk"] = p_chunk;
-        a["centroid"] = c;
+        a["chunk"] = WorldCoord::to_string(p_chunk);
+        a["centroid"] = ChunkMath::grid_to_render(p_chunk, c, chunk_param);
         a["min_abs_sdf_cells"] = near_zero;
         a["extra"] = p_extra;
         anomalies.push_back(a);
     };
     bool dumped = false;
 
+    // Both sides are compared in the chunk's vertex grid (cell units): positions never go through
+    // absolute coordinates, so the comparison does not depend on where the world origin is.
     for (const Target &t : targets) {
-        const float lod_size = ChunkMath::get_lod_size(t.chunk_id);
+        const float lod_size = float(ChunkMath::get_lod_size(t.chunk_id));
         const float cell = chunk_param.voxel_size * lod_size;
-        const float tol = cell * 0.02f + 1e-4f;
+        const float tol = 0.02f + 1e-4f / cell;
+        const Vector3i chunk_lo = WorldCoord::lo32_i(t.chunk_id);
 
-        // --- direct triangles from the page texture: 4 corners per quad, triangles A,B,D / A,D,C,
-        // positioned from the group header like the page shader does
+        // --- direct triangles from the page texture: 4 corners per quad, triangles A,B,D / A,D,C
         std::vector<Tri> direct;
         {
             mutex->lock();
@@ -187,15 +191,14 @@ void MeshValidator::_compare() {
             const uint32_t rows = bytes.size() / PageFormat::ROW_BYTES;
             const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
             for (uint32_t q = t.offset; q < t.offset + t.count && q / PageFormat::QUAD_GROUP < rows; q++) {
-                const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(page, q / PageFormat::QUAD_GROUP));
-                if (q % PageFormat::QUAD_GROUP == 0 && chunk != t.chunk_id) {
+                if (q % PageFormat::QUAD_GROUP == 0 && PageFormat::header_chunk(PageFormat::row(page, q / PageFormat::QUAD_GROUP)) != chunk_lo) {
                     bad_headers++;
                 }
                 Vector3 p[4];
                 Vector3 n[4];
                 for (int k = 0; k < 4; k++) {
                     const uint16_t *c = PageFormat::corner(page, q, k);
-                    p[k] = ChunkMath::vertices_to_world(chunk, PageFormat::decode_local(c, scale), chunk_param);
+                    p[k] = PageFormat::decode_local(c, scale);
                     n[k] = PageFormat::is_zero(c) ? Vector3() : PageFormat::decode_normal(c);
                 }
                 direct.push_back({ { p[0], p[1], p[3] }, { n[0], n[1], n[3] } });
@@ -203,7 +206,7 @@ void MeshValidator::_compare() {
             }
         }
 
-        // --- legacy triangles: local cell space -> world with the legacy instance transform
+        // --- legacy triangles: the mesh vertices already are vertex-grid coordinates
         std::vector<Tri> legacy_tris;
         if (legacy_state.loaded_chunk.has(t.chunk_id)) {
             const ChunkOutput &out = legacy_state.loaded_chunk[t.chunk_id];
@@ -212,13 +215,10 @@ void MeshValidator::_compare() {
                 const PackedVector3Array v = arrays[Mesh::ARRAY_VERTEX];
                 const PackedVector3Array vn = arrays[Mesh::ARRAY_NORMAL];
                 const PackedInt32Array idx = arrays[Mesh::ARRAY_INDEX];
-                const float chunk_offset = chunk_param.chunk_world_dimension() * 0.5f * lod_size;
-                const float total_offset = chunk_offset + chunk_param.skirt_size * cell;
-                const Vector3 origin = ChunkMath::chunk_to_world(t.chunk_id, chunk_param) - Vector3(total_offset, total_offset, total_offset);
                 for (int i = 0; i + 2 < idx.size(); i += 3) {
                     Tri tri;
                     for (int k = 0; k < 3; k++) {
-                        tri.p[k] = origin + v[idx[i + k]] * cell;
+                        tri.p[k] = v[idx[i + k]];
                         tri.n[k] = vn.size() == v.size() ? vn[idx[i + k]].normalized() : Vector3();
                     }
                     legacy_tris.push_back(tri);
@@ -264,7 +264,11 @@ void MeshValidator::_compare() {
                                         const int dk = flip ? (rot + 3 - k) % 3 : (rot + k) % 3;
                                         err = MAX(err, (double)l.p[k].distance_to(d.p[dk]));
                                     }
-                                    if (err <= tol && err < best_err) {
+                                    // Same winding wins over flipped: a sliver (two corners closer than
+                                    // the tolerance) matches both windings and has no meaningful one,
+                                    // so it only counts as flipped when no same-winding match exists.
+                                    const bool better = best < 0 || (!flip && best_flipped) || (bool(flip) == best_flipped && err < best_err);
+                                    if (err <= tol && better) {
                                         best = di;
                                         best_err = err;
                                         best_flipped = flip;
@@ -290,7 +294,7 @@ void MeshValidator::_compare() {
                 const Vector3 c = (l.p[0] + l.p[1] + l.p[2]) / 3.0f;
                 baseline_sdf.push_back(min_abs_sdf_cells(sdf, t.chunk_id, c, chunk_param, cell));
             }
-            max_pos_err_cells = MAX(max_pos_err_cells, best_err / cell);
+            max_pos_err_cells = MAX(max_pos_err_cells, best_err);
             const Tri &d = direct[best];
             for (int k = 0; k < 3; k++) {
                 const int dk = best_flipped ? (best_rot + 3 - k) % 3 : (best_rot + k) % 3;
@@ -323,7 +327,7 @@ void MeshValidator::_compare() {
 
         if (!exact) {
             Dictionary c;
-            c["chunk"] = t.chunk_id;
+            c["chunk"] = WorldCoord::to_string(t.chunk_id);
             c["lod"] = ChunkMath::get_lod(t.chunk_id);
             c["legacy_tris"] = (int64_t)legacy_tris.size();
             c["direct_tris"] = (int64_t)direct.size();
@@ -333,8 +337,8 @@ void MeshValidator::_compare() {
             per_chunk.push_back(c);
             if (!dumped && !dump_dir.is_empty()) {
                 const String base = dump_dir.path_join(vformat("chunk_%d_%d_%d", t.chunk_id.x, t.chunk_id.y, t.chunk_id.z));
-                write_obj(base + String("_legacy.obj"), legacy_tris);
-                write_obj(base + String("_direct.obj"), direct);
+                write_obj(base + String("_legacy.obj"), legacy_tris, t.chunk_id, chunk_param);
+                write_obj(base + String("_direct.obj"), direct, t.chunk_id, chunk_param);
                 c["dumped"] = base;
                 dumped = true;
             }

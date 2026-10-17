@@ -26,7 +26,7 @@ private:
     PackedFloat32Array lod_distances;
 
     // actively mutexed
-    Vector3i camera_chunk;
+    ChunkId camera_chunk;
     LODHashSet scanned_chunks;
     bool scanned_chunks_dirty = false;
     TimingStat scan_time;
@@ -34,7 +34,7 @@ private:
 
     SDFBase * sdf;
 
-    bool _chunk_is_outside_sdf(const Vector3i &chunk_pos);
+    bool _chunk_is_outside_sdf(const ChunkId &chunk_pos);
 
 public:
 
@@ -59,6 +59,6 @@ public:
         float viewport_height = 1080.0f,
         float fov_rad = 75.0f * (3.14159265f / 180.0f));
 
-    void _recursive_chunk_scan(const Vector3i &camera_chunk,const Vector3i &parent_chunk, LODHashSet &scanned_chunks);
+    void _recursive_chunk_scan(const ChunkId &camera_chunk,const ChunkId &parent_chunk, LODHashSet &scanned_chunks);
 
 };

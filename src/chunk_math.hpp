@@ -2,6 +2,8 @@
 
 #include "godot_cpp/classes/engine.hpp"
 
+#include "world_coord.hpp"
+
 using namespace godot;
 
 struct ChunkParam{
@@ -9,6 +11,10 @@ struct ChunkParam{
     float voxel_size = 0.5f;
     int skirt_size = 2;
     bool use_skirt = true;
+    // Integer world origin in chunk-id units (snapped to the root chunk span, see VoxelTerrain::_ready).
+    // Godot space is the integer frame shifted by it: render positions are metres relative to the
+    // origin, so they stay small wherever the world is.
+    ChunkId origin_chunk;
 
     int chunk_voxel_dimension() const noexcept {
         return (chunk_size-skirt_size*2);
@@ -18,30 +24,46 @@ struct ChunkParam{
         return chunk_voxel_dimension() * voxel_size;
     }
 
+    // One chunk-id unit is half a LOD0 chunk (chunk_voxel_dimension must be even).
+    int64_t half_chunk_voxels() const noexcept {
+        return chunk_voxel_dimension() / 2;
+    }
+
+    VoxelPos origin_voxel() const noexcept {
+        return origin_chunk * half_chunk_voxels();
+    }
+
 };
 
+// Chunk ids are int64 chunk centres in chunk-id units (half a LOD0 chunk): LOD0 chunks sit on odd
+// coordinates, a LOD-L chunk's coordinates have their lowest set bit at L and it spans 2^(L+1) units.
 namespace ChunkMath{
 
-    // Just the signatures, no function bodies
-    int32_t get_parent_from_child(int32_t coord, int &lod);
-    int32_t get_parent_from_child(int32_t coord);
+    int64_t get_parent_from_child(int64_t coord, int &lod);
+    int64_t get_parent_from_child(int64_t coord);
 
-    Vector3i get_parent_from_child(Vector3i coord, int &lod);
-    Vector3i get_parent_from_child(Vector3i coord);
+    ChunkId get_parent_from_child(const ChunkId &coord, int &lod);
+    ChunkId get_parent_from_child(const ChunkId &coord);
 
-    int32_t get_lod(Vector3i coord);
-    int32_t get_lod_size(Vector3i coord);
+    int get_lod(const ChunkId &coord);
+    int64_t get_lod_size(const ChunkId &coord);
 
-    Vector3i get_parent_from_child_until(Vector3i coord, int target_lod);
+    ChunkId get_parent_from_child_until(const ChunkId &coord, int target_lod);
 
-    Vector3 chunk_to_world(Vector3i chunk_coord,ChunkParam chunk_param);
-    Vector3i world_to_chunk(Vector3 world_coord,ChunkParam chunk_param);
+    // Edge length of the chunk in metres (a size, not a position).
+    float world_chunk_size(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 
-    Vector3 vertices_to_world(Vector3i chunk_coord, Vector3 local_coord,ChunkParam chunk_param);
-    Vector3 world_to_vertices(Vector3i chunk_coord, Vector3 world_coord,ChunkParam chunk_param);
-    
-    float world_chunk_size(Vector3i chunk_coord,ChunkParam chunk_param);
-    float world_chunk_spherical_radius(Vector3i chunk_coord,ChunkParam chunk_param);
+    // LOD0 voxel of the chunk's minimum corner (vertex grid index skirt_size) and of its centre.
+    VoxelPos chunk_min_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
+    VoxelPos chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 
-    bool vertices_out_of_bound(Vector3 vertices_coord,ChunkParam chunk_param);
+    // Render space (Godot space): metres relative to the world origin, shifted by the legacy lattice
+    // offset like the GPU sampling and the page shader. Only these helpers produce metres.
+    Vector3 chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
+    // A point of the chunk's vertex grid (the grid the SDF is sampled on, skirt included).
+    Vector3 grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const ChunkParam &chunk_param);
+    // Same from a page header, which only carries the low 32 bits of the id (mirrors the page shader).
+    Vector3 grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &grid, const ChunkParam &chunk_param);
+    // LOD0 chunk holding a render-space position.
+    ChunkId chunk_at_render(const Vector3 &render_pos, const ChunkParam &chunk_param);
 }

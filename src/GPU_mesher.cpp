@@ -832,19 +832,14 @@ void GPUMesher::render_chunk() {
         rs->instance_set_scenario(chunk.instance_rid, scenario);
         rs->instance_set_base(chunk.instance_rid, chunk.mesh_rid);
         
-        const float cell_size = chunk_param.voxel_size * ChunkMath::get_lod_size(chunk.chunk_id);
+        // Mesh vertices are in the chunk's vertex grid: scale by the cell size, origin at grid (0,0,0).
+        const float cell_size = chunk_param.voxel_size * float(ChunkMath::get_lod_size(chunk.chunk_id));
         Basis scaled_basis;
         scaled_basis.scale(Vector3(cell_size, cell_size, cell_size));
 
-        float chunk_offset = chunk_param.chunk_world_dimension() * 0.5f * ChunkMath::get_lod_size(chunk.chunk_id);
-
-        // Add the skirt offset to align the Godot Mesh with the SDF mathematical bounds
-        float skirt_offset = chunk_param.skirt_size * cell_size;
-        float total_offset = chunk_offset + skirt_offset;
-
         rs->instance_set_transform(
             chunk.instance_rid,
-            Transform3D(scaled_basis, ChunkMath::chunk_to_world(chunk.chunk_id, chunk_param) - Vector3(total_offset, total_offset, total_offset))
+            Transform3D(scaled_basis, ChunkMath::grid_to_render(chunk.chunk_id, Vector3(), chunk_param))
         );
 
 
@@ -896,7 +891,7 @@ void GPUMesher::process_queue(){
     unpacked_chunks.resize(chunk_batch_number);
 
     int count = 0;
-    Vector3i new_chunk;
+    ChunkId new_chunk;
 
     //UtilityFunctions::print("GPUMesher : prepare for ",chunk_batch_number);
     
@@ -906,9 +901,11 @@ void GPUMesher::process_queue(){
 
         working_generation.insert(new_chunk);
         
-        new_batch[count * 4 + 0] = new_chunk.x;
-        new_batch[count * 4 + 1] = new_chunk.y;
-        new_batch[count * 4 + 2] = new_chunk.z;
+        // The GPU works on the low 32 bits of the id (wrapping arithmetic).
+        const Vector3i chunk_lo = WorldCoord::lo32_i(new_chunk);
+        new_batch[count * 4 + 0] = chunk_lo.x;
+        new_batch[count * 4 + 1] = chunk_lo.y;
+        new_batch[count * 4 + 2] = chunk_lo.z;
         new_batch[count * 4 + 3] = 0; // padding
 
         unpacked_chunks[count].chunk_id = new_chunk;
@@ -929,7 +926,7 @@ void GPUMesher::process_queue(){
 
 }
 
-bool GPUMesher::_pop_queue(Vector3i &new_chunk) {
+bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
     for (LODHashSet *queue : chunk_queue) {
         if (queue == nullptr || queue->is_empty()) {
             continue;
@@ -940,7 +937,7 @@ bool GPUMesher::_pop_queue(Vector3i &new_chunk) {
             continue;
         }
 
-        Vector3i chunk_pos = *it;
+        ChunkId chunk_pos = *it;
         queue->remove(it);
         new_chunk = chunk_pos;
         return true;
@@ -952,7 +949,7 @@ bool GPUMesher::_pop_queue(Vector3i &new_chunk) {
 void GPUMesher::send_remove_chunk(LODHashSet p_chunks) {
     mutex->lock();
 
-    for (const Vector3i &chunk_pos : p_chunks) {
+    for (const ChunkId &chunk_pos : p_chunks) {
         if (working_generation.has(chunk_pos)) {
             continue;
         }
@@ -973,7 +970,7 @@ void GPUMesher::send_chunk(LODHashSet p_chunks){
         }
     }
 
-    for (const Vector3i &chunk_pos : p_chunks) {
+    for (const ChunkId &chunk_pos : p_chunks) {
 
     //UtilityFunctions::print("GPUMesher : Adding ",chunk_pos);
 

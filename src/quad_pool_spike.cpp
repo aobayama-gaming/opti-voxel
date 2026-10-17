@@ -95,10 +95,10 @@ void QuadPoolSpike::_ready() {
 
     // Corners are stored relative to one chunk: the smallest one whose vertex grid holds the sheet.
     const AABB sheet(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size));
-    sheet_chunk = ChunkMath::world_to_chunk(sheet.get_center(), chunk_param);
+    sheet_chunk = ChunkMath::chunk_at_render(sheet.get_center(), chunk_param);
     for (int lod = 0; lod < 24; lod++) {
-        const Vector3 lo = ChunkMath::vertices_to_world(sheet_chunk, Vector3(), chunk_param);
-        const Vector3 hi = ChunkMath::vertices_to_world(sheet_chunk, Vector3(1, 1, 1) * (chunk_param.chunk_size - 1), chunk_param);
+        const Vector3 lo = ChunkMath::grid_to_render(sheet_chunk, Vector3(), chunk_param);
+        const Vector3 hi = ChunkMath::grid_to_render(sheet_chunk, Vector3(1, 1, 1) * (chunk_param.chunk_size - 1), chunk_param);
         if (AABB(lo, hi - lo).encloses(sheet)) {
             break;
         }
@@ -156,7 +156,8 @@ void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
     uniforms.push_back(u1);
     rt_uniform_set = rd->uniform_set_create(uniforms, rt_shader, 0);
 
-    const Vector3 grid = ChunkMath::vertices_to_world(sheet_chunk, Vector3(), chunk_param);
+    const Vector3 grid = ChunkMath::grid_to_render(sheet_chunk, Vector3(), chunk_param);
+    const Vector3i sheet_chunk_lo = WorldCoord::lo32_i(sheet_chunk);
     PackedByteArray push;
     push.resize(64);
     push.fill(0);
@@ -165,13 +166,13 @@ void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
     push.encode_float(8, sheet_origin.z);
     push.encode_float(12, sheet_size);
     push.encode_u32(16, side);
-    push.encode_s32(32, sheet_chunk.x);
-    push.encode_s32(36, sheet_chunk.y);
-    push.encode_s32(40, sheet_chunk.z);
+    push.encode_s32(32, sheet_chunk_lo.x);
+    push.encode_s32(36, sheet_chunk_lo.y);
+    push.encode_s32(40, sheet_chunk_lo.z);
     push.encode_float(48, grid.x);
     push.encode_float(52, grid.y);
     push.encode_float(56, grid.z);
-    push.encode_float(60, chunk_param.voxel_size * ChunkMath::get_lod_size(sheet_chunk));
+    push.encode_float(60, chunk_param.voxel_size * float(ChunkMath::get_lod_size(sheet_chunk)));
 
     const uint32_t quad_count = side * side;
     rd->buffer_clear(rt_counter, 0, 16);
@@ -252,7 +253,7 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
     const uint32_t rows = bytes.size() / PageFormat::ROW_BYTES;
     const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
     // One fixed-point step, plus float rounding of the world <-> grid transforms.
-    const double pos_tolerance = chunk_param.voxel_size * ChunkMath::get_lod_size(sheet_chunk) / scale + 1e-3;
+    const double pos_tolerance = chunk_param.voxel_size * double(ChunkMath::get_lod_size(sheet_chunk)) / scale + 1e-3;
 
     const uint32_t quad_count = side * side;
     r["expected_quads"] = quad_count;
@@ -260,7 +261,7 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
     r["indirect_index_count"] = command.decode_u32(0);
     r["indirect_group_count"] = command.decode_u32(4);
     r["texture_bytes_read"] = bytes.size();
-    r["sheet_chunk"] = sheet_chunk;
+    r["sheet_chunk"] = WorldCoord::to_string(sheet_chunk);
 
     const float step = sheet_size / side;
     auto height = [&](float x, float z) { return sheet_origin.y + 3.0f * std::sin(x * 0.3f) * std::cos(z * 0.3f); };
@@ -281,11 +282,11 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
     int bad_headers = 0;
     const uint32_t used_groups = (quad_count + PageFormat::QUAD_GROUP - 1) / PageFormat::QUAD_GROUP;
     for (uint32_t g = 0; g < used_groups && g < rows; g++) {
-        bad_headers += PageFormat::header_chunk(PageFormat::row(data, g)) != sheet_chunk ? 1 : 0;
+        bad_headers += PageFormat::header_chunk(PageFormat::row(data, g)) != WorldCoord::lo32_i(sheet_chunk) ? 1 : 0;
     }
     auto world_of = [&](uint32_t slot, int k) {
         const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(data, slot / PageFormat::QUAD_GROUP));
-        return ChunkMath::vertices_to_world(chunk, PageFormat::decode_local(PageFormat::corner(data, slot, k), scale), chunk_param);
+        return ChunkMath::grid_to_render_lo32(chunk, PageFormat::decode_local(PageFormat::corner(data, slot, k), scale), chunk_param);
     };
     for (uint32_t slot = 0; slot < quad_count && slot / PageFormat::QUAD_GROUP < rows; slot++) {
         if (PageFormat::is_zero(PageFormat::corner(data, slot, 0))) {

@@ -4,7 +4,7 @@
 #include <godot_cpp/core/object.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
 
-#include <godot_cpp/variant/vector3i.hpp>
+#include "chunk_math.hpp"
 
 #include <vector>
 
@@ -29,20 +29,19 @@ public:
         struct Range {
             uint32_t offset = 0; // quads
             uint32_t count = 0;
-            Vector3i chunk;
+            ChunkId chunk;
             bool operator<(const Range &p_other) const { return offset < p_other.offset; }
         };
         std::vector<Range> live;
     };
 
-    void start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, int p_chunk_size, float p_voxel_size);
+    void start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, const ChunkParam &p_chunk_param);
     bool step();
     Dictionary get_report() const { return report; }
 
 private:
     QuadPagePool *pool = nullptr;
-    int chunk_size = 32;
-    float voxel_size = 0.5f;
+    ChunkParam chunk_param;
     std::vector<PageInfo> pages;
     size_t next_request = 0;
     Ref<Mutex> mutex;

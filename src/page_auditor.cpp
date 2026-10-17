@@ -9,13 +9,13 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 static constexpr int PAGES_PER_FRAME = 2; // larger async texture downloads per frame crash 4.6.3
 
-void PageAuditor::start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, int p_chunk_size, float p_voxel_size) {
+void PageAuditor::start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, const ChunkParam &p_chunk_param) {
     pool = p_pool;
-    chunk_size = p_chunk_size;
-    voxel_size = p_voxel_size;
+    chunk_param = p_chunk_param;
     pages = p_pages;
     mutex.instantiate();
     VLOG(1, "PageAuditor: auditing ", (int64_t)pages.size(), " pages");
@@ -61,10 +61,7 @@ bool PageAuditor::step() {
 
 void PageAuditor::_analyse() {
     int64_t drawn_slots = 0, live = 0, dead_zero = 0, stale = 0, partial = 0, broken = 0, bad_header = 0;
-    ChunkParam param;
-    param.chunk_size = chunk_size;
-    param.voxel_size = voxel_size;
-    const float scale = PageFormat::pos_scale(chunk_size);
+    const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
     double max_edge = 0.0;
     Vector3 max_edge_at;
     int64_t pages_with_stale = 0, pages_with_partial = 0;
@@ -86,15 +83,16 @@ void PageAuditor::_analyse() {
                 r++;
             }
             const bool in_live = r < ranges.size() && q >= ranges[r].offset;
+            // Headers carry the low 32 bits of the chunk id.
             const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(page, q / QuadPagePool::QUAD_GROUP));
-            if (in_live && q % QuadPagePool::QUAD_GROUP == 0 && chunk != ranges[r].chunk) {
+            if (in_live && q % QuadPagePool::QUAD_GROUP == 0 && chunk != WorldCoord::lo32_i(ranges[r].chunk)) {
                 bad_header++;
             }
             int zero_corners = 0;
-            Vector3 p[4];
+            Vector3 p[4]; // in the chunk's vertex grid
             for (int k = 0; k < 4; k++) {
                 const uint16_t *c = PageFormat::corner(page, q, k);
-                p[k] = ChunkMath::vertices_to_world(chunk, PageFormat::decode_local(c, scale), param);
+                p[k] = PageFormat::decode_local(c, scale);
                 zero_corners += PageFormat::is_zero(c) ? 1 : 0;
             }
             if (zero_corners > 0 && zero_corners < 4) {
@@ -121,10 +119,12 @@ void PageAuditor::_analyse() {
                 page_stale = true;
             }
             if (zero_corners == 0) {
-                const double e = MAX(MAX(p[0].distance_to(p[1]), p[0].distance_to(p[2])), MAX(p[3].distance_to(p[1]), p[3].distance_to(p[2])));
+                const int lod = chunk.x == 0 ? 0 : WorldCoord::ctz64(WorldCoord::lo32(chunk.x));
+                const double cell = std::ldexp(double(chunk_param.voxel_size), lod);
+                const double e = cell * MAX(MAX(p[0].distance_to(p[1]), p[0].distance_to(p[2])), MAX(p[3].distance_to(p[1]), p[3].distance_to(p[2])));
                 if (e > max_edge) {
                     max_edge = e;
-                    max_edge_at = p[0];
+                    max_edge_at = ChunkMath::grid_to_render_lo32(chunk, p[0], chunk_param);
                 }
             }
         }

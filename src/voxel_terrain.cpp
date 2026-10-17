@@ -11,7 +11,7 @@ void VoxelTerrain::_destroy_chunk() {
     for (ChunkHashMap::Iterator it = visual_mesh_data.to_destroy_chunk.begin();
         it != visual_mesh_data.to_destroy_chunk.end();) {
 
-        const Vector3i chunk_pos = it->key;
+        const ChunkId chunk_pos = it->key;
         ChunkOutput output = it->value;
 
         output.free();
@@ -378,7 +378,7 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
     ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_validate needs pipeline_mode = GPU Direct.");
     ERR_FAIL_COND_V_MSG(validator, false, "A validation is already running.");
     std::vector<MeshValidator::Target> candidates;
-    for (const KeyValue<Vector3i, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
+    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
         if (kv.value.owner) {
             MeshValidator::Target t;
             t.chunk_id = kv.key;
@@ -411,7 +411,7 @@ bool VoxelTerrain::debug_audit_pages() {
     ERR_FAIL_COND_V_MSG(auditor, false, "An audit is already running.");
     HashMap<int, int> index_of_page;
     std::vector<PageAuditor::PageInfo> pages;
-    for (const KeyValue<Vector3i, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
+    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
         if (!kv.value.owner) {
             continue;
         }
@@ -426,7 +426,7 @@ bool VoxelTerrain::debug_audit_pages() {
     }
     audit_report = Dictionary();
     auditor = memnew(PageAuditor);
-    auditor->start(direct_mesher->get_pool(), pages, chunk_param.chunk_size, chunk_param.voxel_size);
+    auditor->start(direct_mesher->get_pool(), pages, chunk_param);
     return true;
 }
 
@@ -459,7 +459,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
     int64_t live_triangles = 0;
     int64_t drawn_triangles = 0;
     int64_t non_empty_chunks = 0;
-    for (const KeyValue<Vector3i, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
+    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
         live_triangles += kv.value.triangle_count;
         drawn_triangles += kv.value.drawn_triangles;
         non_empty_chunks += kv.value.triangle_count > 0 ? 1 : 0;
@@ -505,7 +505,7 @@ void VoxelTerrain::_teardown() {
     chunk_discoverer = nullptr;
 
     // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
-    for (KeyValue<Vector3i, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
+    for (KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
         kv.value.free();
     }
     visual_mesh_data.loaded_chunk.clear();
