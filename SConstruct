@@ -38,6 +38,11 @@ Run the following command to download godot-cpp:
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
 env.Append(CPPPATH=["src/"])
+# The CPU mirrors of the GPU float math (ChunkMath::sample_pos, exact_noise.hpp, the terrain SDF) must
+# round exactly like the GPU's `precise` code: no FMA contraction, whatever the target (aarch64 and
+# -march=native have FMA). MSVC does not contract unless asked to.
+if not env.get("is_msvc", False):
+    env.Append(CCFLAGS=["-ffp-contract=off"])
 sources = Glob("src/*.cpp")
 
 if env["target"] in ["editor", "template_debug"]:

@@ -3,7 +3,7 @@
 #include "gpu_direct_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
-#include "noise.hpp"
+#include "exact_noise.hpp"
 #include "page_format.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -114,7 +114,7 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass) {
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", GLSL_DIRECT_BINDINGS);
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE) + GPUFrame::glsl_functions());
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_pass);

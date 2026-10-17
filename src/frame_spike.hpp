@@ -5,14 +5,16 @@
 
 using namespace godot;
 
-// Test harness for the integer frame (world_coord.hpp, gpu_frame.hpp): builds WorldPos and evaluates
-// the terrain SDF on the GPU (local RenderingDevice, the same GLSL snippets as the meshers) for test
-// vectors around far world origins and 2^32-voxel boundaries, and checks against the CPU mirrors:
+// Test harness for the integer frame (world_coord.hpp, gpu_frame.hpp) and the exact noise
+// (exact_noise.hpp): builds WorldPos and evaluates the probes on the GPU (local RenderingDevice, the
+// same GLSL snippets as the meshers) for test vectors around far world origins, 2^32-voxel boundaries
+// and absolute points, and checks against the CPU mirrors:
 //   - CPU sample_pos == GPU WorldPos and anchor, bit for bit
+//   - every probe of the probe table (frame_spike.cpp: hash, octave decomposition, perlin3/2, the
+//     terrain fBms, terrain_sdf): CPU == GPU, bit for bit
 //   - the same voxel reached from two chunks (neighbour, parent) gives bit-identical GPU results
-//   - CPU legacy_rel_voxels == GPU, bit for bit (the high word reaches the drawn terrain through it)
-//   - the terrain SDF stays continuous across a low-word wrap
-//   - every probe of the probe table (frame_spike.cpp): CPU vs GPU, and pair identity
+//   - the same absolute point gives bit-identical GPU results at every world origin
+//   - the noises stay continuous along lines across voxel and cell low-word wraps
 // run() is synchronous and needs a GPU (not --headless). Run: tools/frame_test.sh
 class FrameSpike : public Node {
     GDCLASS(FrameSpike, Node)

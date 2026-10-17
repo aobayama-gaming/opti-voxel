@@ -26,7 +26,7 @@ pipeline_mode = 2
 voxel_size = 0.05
 debug_test_rig = true
 world_origin_x = 19999987660226560
-world_origin_y = -30064771072
+world_origin_y = 0
 world_origin_z = -19999987660226560
 lod_pixel_error = 4.0
 

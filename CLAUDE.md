@@ -59,10 +59,18 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   chunk_at_render`: render (Godot) space, relative to the world origin.
 - World origin: `VoxelTerrain.world_origin_x/y/z` (LOD0 voxels, |v| <= 2^60), snapped down to the
   root chunk span (2^lod_numbers ids = 458,752 voxels with the defaults). No runtime rebasing yet.
-- The current SDF (`SDFDummy`) is written in metres and goes through `SDFMetreBridge`: evaluated at
-  the origin-relative position, so the terrain follows the origin. `WorldCoord::LEGACY_NUDGE_M`
-  (0.123456 m) is its lattice offset (page shader: `lattice_offset_m`). Both go away with the exact
-  noise.
+- Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE`): `hash_cell` = PCG3D of the cell's low
+  words salted by a PCG3D of its high words and the seed (cells 2^32 apart don't collide);
+  `perlin3` / `perlin2` = one octave of gradient noise with wavelength exactly 2^k LOD0 voxels
+  (`cell = (voxel + offset) >> k`, the in-cell position as 24-bit fixed point, quintic fade, analytic
+  derivatives); `make_fbm` / `fbm` / `glsl_fbm` = octave sets with per-octave seed and integer offset
+  (a quarter to three quarters of a cell, so the nested lattices' zeros never line up).
+- The terrain (`SDFDummy`) is a function of the absolute position: the same world point gives the same
+  value from any origin, and `SDFDummy::sdf()` is bit-identical to GLSL `terrain_sdf` (gradient
+  included). It works in voxels and returns metres; parameters are metres rounded to 2^k voxels in
+  `configure()`, so another voxel size is another world. Flat world: the datum is absolute y ~ 300 m,
+  so far origins only show terrain with y = 0. Debug shapes (test rig, zero pillar) are placed
+  relative to the world origin (exact `sat_diff` to it).
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 
 ## Verify changes (do this, don't eyeball)
@@ -82,11 +90,15 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   runs only; `bench_ab.sh` / `bench_compare.sh` pass it): until 65 C, a plateau, or 30 s at most.
   `BENCH_ROOT=<checkout>` benches another tree with this harness.
 - `--validate=N` (direct): re-meshes N loaded chunks with the legacy mesher and compares
-  triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies;
-  a handful of winding flips / normal outliers at corners where |SDF| ~ 0 are expected (two
-  differently compiled SDF evaluations disagree on the sign of ~0).
+  triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies.
+  The terrain SDF is bit-exact, so both meshers see the same signs: winding flips at |SDF| ~ 0 only
+  come from non-exact debug shapes (test rig). Vertex positions differ by up to ~0.02 cells between
+  the two meshers, so a quad smaller than the 0.02-cell tolerance can't be matched one to one; a
+  leftover sliver near a same-size triangle of the other side counts as `ambiguous_slivers`, not an anomaly.
 - `--audit=1` (direct): reads every page back and classifies all drawn slots
-  (live / dead_zero / stale / partial / broken). Anything but live/dead_zero is a bug.
+  (live / dead_zero / stale / partial / broken). Anything but live/dead_zero is a bug. Also writes a
+  per-chunk mesh digest (quad count + order-independent hash of the chunk-local corners) to
+  `<run>/chunks.json`.
 - `--discovery_audit=1` (direct): rebuilds the current scan without culling (`--discovery_cull=0`) and
   counts the quads of every chunk the cull dropped on the GPU (passes sdf/edges/vertices, count only).
   A dropped chunk with quads is a miss, i.e. a hole; `ok` needs 0 misses and a max LOD jump of 1
@@ -97,7 +109,9 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
 - Discoverer: the cull verdict of a node only depends on its id and the (fixed) SDF, so it is cached
   across scans (`discovery_cache`, default on); `--discovery_verify=1` recomputes every hit and
-  ERRORs on a mismatch. `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera.
+  ERRORs on a mismatch. `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
+  `--camera_voxel=X,Y,Z` makes the scene (camera, lights, cam_pos) relative to that absolute voxel
+  instead of the world origin.
 - `tools/zero_test.sh`: the debug zero pillar (`--zero_pillar=1|2`, `SDFDummy`) has its flat top
   exactly on a lattice row (SDF exactly 0.0 at LODs 0-6); run 2 moves it up 1 cm. Same triangle count
   and the same picture are required: a sample of exactly 0.0 must neither lose its quad nor flip it.
@@ -109,14 +123,18 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
-- `tools/frame_test.sh [--no-build]` (`FrameSpike`): GPU vs CPU check of the integer frame (WorldPos,
-  anchors, pairs reaching the same voxel, continuity across low-word wraps) at far origins. Run it
-  after touching `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math` or the SDF plumbing. A new noise
-  adds an entry (CPU fn + GLSL fn) to the probe table in `src/frame_spike.cpp`.
-- `tools/origin_parity.sh [--voxel=M] -- --mode=direct --validate=64 --audit=1`: the same run at
-  origins 0, 0 again (noise floor), ~1e15 m and a low-word wrap; counts must match exactly and
-  screenshots stay at the noise floor. Report: `bench/results/<date>-parity.md`. Only meaningful
-  while the SDF follows the origin (`SDFMetreBridge`).
+- `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike`): GPU vs CPU check of the integer
+  frame and the exact noise at 5 far origins: WorldPos and anchors, then every probe of the probe
+  table bit for bit (hash, octave decomposition at k 0..62, perlin3/2, the terrain's fBms,
+  `terrain_sdf`), pairs reaching the same voxel, absolute points identical at every origin, and
+  continuity along lines across voxel and noise-cell low-word wraps. Run it after touching
+  `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp` or the SDF. A new noise or SDF
+  term adds an entry (CPU fn + GLSL fn) to `make_probes()` in `src/frame_spike.cpp`.
+- `tools/origin_parity.sh [--voxel=M] -- --mode=direct --validate=64`: the same world point seen
+  from different origins (`--camera_voxel`): runs zero, zero2 (determinism), then pairs one root span
+  apart near 0, at ~1e15 m and at 2^48 (voxel and noise-cell low-word wraps). Each pair must load the
+  same non-empty chunks with identical mesh digests (`chunks.json`); pair screenshots are informational
+  (a camera 229 km from its origin jitters at the cm level). Report: `bench/results/<date>-parity.md`.
 
 ## Gotchas (all hit for real)
 - Laptop GPU: in the `quiet` platform profile the GPU is power-capped to ~300 MHz under load and
@@ -164,9 +182,19 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   `WorldCoord::lo32_i`.
 - Godot's JSON parser reads numbers back as doubles: reports carry int64 ids as strings
   (`WorldCoord::to_string`).
-- CPU mirrors of GPU float math (`ChunkMath::sample_pos`, `legacy_rel_voxels`, `legacy_metres`)
-  must stay op for op identical in float32: separate statements, `Float3` (not `Vector3`, which is
-  double in precision=double builds), and `precise` on the GPU side. `FrameSpike` checks bit-exactness.
+- CPU mirrors of GPU float math (`ChunkMath::sample_pos`, `exact_noise.hpp`, `SDFDummy::sdf`) must
+  stay op for op identical in float32: same expression order, `Float3` (not `Vector3`, which is
+  double in precision=double builds), `precise` on every GPU float, and `-ffp-contract=off` (in
+  `SConstruct`; aarch64 or `-march=native` would fuse FMAs otherwise). Only correctly rounded ops:
+  + - *, compares, min/max/clamp, floor, int <-> float below 2^24. No GLSL `mix` / `dot` / `length` /
+  `normalize` / `sqrt` / division (implementation-defined precision): write dots and lerps out, use
+  `det_rsqrt` (integer seed + Newton, mul/add only). Float constants go to the GLSL as bits
+  (`ExactNoise::glsl_float`). No denormals: the GPU may flush them, the CPU keeps them (24-bit
+  fixed-point cell positions, fades flushed below 2^-24, amplitudes in [2^-16, 2^40]).
+  `FrameSpike` checks bit-exactness.
+- A distance estimate c / |grad c| of a noise field badly underestimates far from its zero set; under a
+  `max()` it can win and make deep rock read |SDF| < one cell, and skirts then build walls kilometres
+  underground (the cave field is capped by the distance to its depth band for that reason).
 - `FrameSpike` uses a local RenderingDevice: it needs a window (not `--headless`) and an unlocked session.
 - Main-RD resources must be created/freed on the render thread; objects owning them delete
   themselves there (`destroy()` -> `_rt_destroy()`), since callables bound to a freed object are

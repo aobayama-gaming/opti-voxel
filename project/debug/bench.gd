@@ -17,7 +17,8 @@ extends Node3D
 ##   --shot=<when>:<path.png>     repeatable. when = loaded | steady_end | fly_end | <frame number>
 ##   --out=<path.json>            stats output
 ##   --log=N                      VoxelTerrain.log_level
-##   --audit=1                    direct: after steady, classify every drawn quad slot of every page
+##   --audit=1                    direct: after steady, classify every drawn quad slot of every page;
+##                                writes per-chunk mesh digests to chunks.json next to --out
 ##   --validate=N                 direct: after steady, compare N chunks against the legacy mesher
 ##   --batch=N                    legacy batch size
 ##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
@@ -33,6 +34,8 @@ extends Node3D
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
+##   --camera_voxel=X,Y,Z         place the scene (camera, lights, --cam_pos) relative to this absolute
+##                                LOD0 voxel instead of the world origin (origin must be a root-span multiple)
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
 ##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
 ##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
@@ -129,6 +132,18 @@ func _ready() -> void:
 		terrain.world_origin_x = o[0].to_int()
 		terrain.world_origin_y = o[1].to_int()
 		terrain.world_origin_z = o[2].to_int()
+	if args.has("camera_voxel"):
+		# The scene (camera, lights) is placed relative to this absolute voxel instead of the world
+		# origin: the same world point seen from another origin. Origins must be multiples of the root
+		# chunk span (no snapping), as in tools/origin_parity.sh.
+		var cv: PackedStringArray = args["camera_voxel"].split(",")
+		var vs: float = terrain.voxel_size
+		var shift := Vector3(float(cv[0].to_int() - terrain.world_origin_x) * vs,
+			float(cv[1].to_int() - terrain.world_origin_y) * vs, float(cv[2].to_int() - terrain.world_origin_z) * vs)
+		for child in get_children():
+			if child is Node3D:
+				child.global_position += shift
+		start_pos = camera.global_position
 	add_child(terrain)
 
 	_begin_phase("load")
@@ -251,7 +266,9 @@ func _process(delta: float) -> void:
 			var report: Dictionary = terrain.get_audit_report()
 			if not report.is_empty():
 				audit_report = report
-				print("BENCH: audit ", JSON.stringify(report))
+				var shown := report.duplicate()
+				shown.erase("chunk_digests")
+				print("BENCH: audit ", JSON.stringify(shown))
 				_next_check()
 				return
 		"validate":
@@ -297,6 +314,13 @@ func _take_shots(when: String) -> void:
 
 func _finish() -> void:
 	set_process(false)
+	# Per-chunk mesh digests of the page audit go to their own file (thousands of entries).
+	if audit_report.has("chunk_digests"):
+		if args.has("out"):
+			var fd := FileAccess.open(args["out"].get_base_dir().path_join("chunks.json"), FileAccess.WRITE)
+			fd.store_string(JSON.stringify(audit_report["chunk_digests"]))
+			fd.close()
+		audit_report.erase("chunk_digests")
 	var result := {
 		"args": args,
 		"timed_out": timed_out,

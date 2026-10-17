@@ -8,7 +8,8 @@
 using namespace godot;
 
 // Debug: centimetre-scale test shapes floating ~3 m in front of the main_scene spawn point, to
-// check what a given voxel size resolves. Negative inside (project convention).
+// check what a given voxel size resolves. Negative inside (project convention). Input: metres relative
+// to the world origin (SDFDummy computes them from the exact voxel difference to the origin).
 //   - sphere ladder (y +0.5): radii 2, 4, 6, 8, 12, 16, 24, 32 cm, left to right
 //   - thin walls (y -0.3): 2, 5, 10, 20 cm thick, left to right
 //   - bumpy plate (right, y -0.3): 8 cm slab with +-2 cm bumps, 20 cm wavelength

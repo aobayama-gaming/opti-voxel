@@ -27,7 +27,7 @@
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/surface_tool.hpp>
 
-#include "noise.hpp"
+#include "exact_noise.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 
@@ -119,7 +119,7 @@ void main() {
     // 2. Inject the dynamic code
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/",GLSL_BUFFER_BINDING);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE) + GPUFrame::glsl_functions());
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/",sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", algorithm_pass);

@@ -27,10 +27,11 @@ for a in "$@"; do
     fi
 done
 
-# Far origin: same values as tools/origin_parity.sh (multiples of 7 * 2^32 voxels, ~1e15 m).
-read -r FAR WRAP <<< "$(python3 -c "
+# Far origin: ~1e15 m on x and z, a multiple of the root chunk span (2^15 ids of 14 voxels) and of
+# 2^32 voxels. y stays 0: the terrain's datum is at absolute y ~ 300 m.
+read -r FAR <<< "$(python3 -c "
 w = 7 * 2**32
-print(round(1e15 / 0.5 / w) * w, w)")"
+print(round(1e15 / 0.5 / w) * w)")"
 
 CASES=(
     "default|"
@@ -39,7 +40,7 @@ CASES=(
     "east|--cam_pos=3000,340,2000"
     "high|--cam_pos=-52.76,1500,-95.64"
     "deep|--cam_pos=-52.76,-900,-95.64"
-    "far_origin|--origin=$FAR,-$WRAP,-$FAR"
+    "far_origin|--origin=$FAR,0,-$FAR"
     "cm|--voxel=0.05 --lod_error=4"
     "fly|--scenario=fly"
 )

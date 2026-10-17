@@ -4,7 +4,7 @@
 #
 #   tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]
 #
-# Steps: build, direct load run with validation + page audit + discovery audit, origin parity (4 runs),
+# Steps: build, direct load run with validation + page audit + discovery audit, origin parity (7 runs),
 # integer-frame test, the QuadPagePool spike when --spike is given or src/quad_page_pool* differs from
 # dev, the discovery miss audit over 9 poses (tools/discovery_audit.sh) when --discovery is given
 # or the discoverer / SDF sources differ from dev, and the exact-zero SDF test (tools/zero_test.sh).
@@ -30,7 +30,7 @@ done
 if [[ $SPIKE == 0 ]] && git -C "$ROOT" diff --name-only dev -- 'src/quad_page_pool*' 2>/dev/null | grep -q .; then
     SPIKE=1
 fi
-if [[ $DISCOVERY == 0 ]] && git -C "$ROOT" diff --name-only dev -- 'src/chunk_discoverer*' 'src/sdf*' 'src/chunk_math*' 2>/dev/null | grep -q .; then
+if [[ $DISCOVERY == 0 ]] && git -C "$ROOT" diff --name-only dev -- 'src/chunk_discoverer*' 'src/sdf*' 'src/exact_noise*' 'src/chunk_math*' 2>/dev/null | grep -q .; then
     DISCOVERY=1
 fi
 

@@ -24,8 +24,6 @@ uniform usampler2D quad_tex : filter_nearest, repeat_disable;
 // 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
-// Lattice offset of the SDF sampling (WorldCoord::LEGACY_NUDGE_M), metres.
-uniform float lattice_offset_m = 0.0;
 // World origin in chunk-id units, low 32 bits: positions are drawn relative to it.
 uniform ivec3 origin_chunk_lo = ivec3(0);
 uniform int chunk_size = 32;
@@ -70,7 +68,7 @@ void vertex() {
     // Wrapping int32 difference: exact while the chunk is within 2^31 ids of the origin. The origin is a
     // multiple of the root chunk span, so the low word keeps the LOD bit used above.
     ivec3 rel = chunk - origin_chunk_lo;
-    vec3 chunk_min = vec3(rel) * (chunk_world_dim * 0.5) + lattice_offset_m - vec3(size * 0.5);
+    vec3 chunk_min = vec3(rel) * (chunk_world_dim * 0.5) - vec3(size * 0.5);
     vec3 local = vec3(float(c.x & 16383u), float(c.y & 16383u), float(c.z & 16383u)) / pos_scale;
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
     uint packed_normal = (c.x >> 14u) | ((c.y >> 14u) << 2u) | ((c.z >> 14u) << 4u) | (c.w << 6u);
@@ -150,7 +148,6 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     shader = rs->shader_create();
     rs->shader_set_code(shader, PAGE_SHADER);
     material_params["voxel_size"] = voxel_size;
-    material_params["lattice_offset_m"] = WorldCoord::LEGACY_NUDGE_M;
 
     for (uint32_t i = 0; i < p_initial_pages; i++) {
         free_pages.push_back(_create_page());
