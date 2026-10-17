@@ -30,7 +30,6 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - When done: `git worktree remove ../opti-voxel-worktrees/<name>` after the PR is merged.
 
 ## Pipelines (`VoxelTerrain.pipeline_mode`)
-- `0` CPU: `MesherPool` of `CPUMesher` threads.
 - `1` GPU Legacy (`GPUMesher`): compute on a local RenderingDevice, full readback, CPU
   triangulation, one mesh + instance per chunk. Kept as the correctness oracle and perf baseline.
 - `2` GPU Direct (`GPUDirectMesher`, default in `main_scene`): compute on the main RenderingDevice
@@ -44,7 +43,7 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`).
 
 ## Verify changes (do this, don't eyeball)
-- `tools/bench.sh [--no-build] --mode=direct|legacy|cpu --scenario=load|fly [--shot=loaded:x.png]
+- `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
   [--view=0..7] [--validate=64] [--audit=1]`: builds, runs `project/debug/bench.tscn` with a fixed
   camera, writes `bench/results/<run>/stats.json` + `godot.log` + screenshots, prints a summary.
   Exits non-zero on build failure, crashes, `ERROR` lines, leaked RIDs. `bench/results/LAST` holds

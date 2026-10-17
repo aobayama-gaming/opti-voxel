@@ -11,7 +11,6 @@
 #include "godot_cpp/classes/editor_interface.hpp"
 #include "godot_cpp/classes/sub_viewport.hpp"
 
-#include "mesher_pool.hpp"
 
 #include <vector>
 
@@ -37,7 +36,6 @@ class VoxelTerrain : public Node3D {
 
 public:
 	enum PipelineMode {
-		PIPELINE_CPU = 0,
 		PIPELINE_GPU_LEGACY = 1,
 		PIPELINE_GPU_DIRECT = 2,
 	};
@@ -60,8 +58,6 @@ private:
 
 	RID scenario;
 
-	MesherPool* visual_mesh = nullptr;
-
 	GPUMesher* gpu_mesher = nullptr;
 
 	GPUDirectMesher* direct_mesher = nullptr;
@@ -75,14 +71,11 @@ private:
 
 	SDFBase* sdf = memnew(SDFDummy);
 
-	std::vector<ChunkOutput *> visual_mesh_storage;
-
 	VoxelState visual_mesh_data;
 
 	// Settings (must be set before the node enters the tree).
 	PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
 	int legacy_batch_size = 1024;
-	int cpu_workers = 8;
 	int lod_numbers = 15;
 	bool legacy_trim_indices = false;
 	float lod_pixel_error = 2.0f;

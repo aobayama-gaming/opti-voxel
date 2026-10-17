@@ -67,7 +67,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("debug_audit_pages"), &VoxelTerrain::debug_audit_pages);
     ClassDB::bind_method(D_METHOD("get_audit_report"), &VoxelTerrain::get_audit_report);
 
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "CPU,GPU Legacy,GPU Direct"), "set_pipeline_mode", "get_pipeline_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
@@ -85,13 +85,14 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
 
-    BIND_ENUM_CONSTANT(PIPELINE_CPU);
     BIND_ENUM_CONSTANT(PIPELINE_GPU_LEGACY);
     BIND_ENUM_CONSTANT(PIPELINE_GPU_DIRECT);
 }
 
 void VoxelTerrain::set_pipeline_mode(int p_mode) {
     ERR_FAIL_COND_MSG(started, "pipeline_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_mode != PIPELINE_GPU_LEGACY && p_mode != PIPELINE_GPU_DIRECT,
+            "pipeline_mode must be 1 (GPU Legacy) or 2 (GPU Direct).");
     pipeline_mode = (PipelineMode)p_mode;
 }
 
@@ -260,17 +261,7 @@ void VoxelTerrain::_ready(){
 
     scenario = get_world_3d()->get_scenario();
 
-    if (pipeline_mode == PIPELINE_CPU) {
-        visual_mesh = memnew(MesherPool);
-
-        visual_mesh->start(
-            cpu_workers,
-            lod_numbers,
-            scenario,
-            sdf,
-            chunk_param
-        );
-    } else if (pipeline_mode == PIPELINE_GPU_DIRECT) {
+    if (pipeline_mode == PIPELINE_GPU_DIRECT) {
         direct_mesher = memnew(GPUDirectMesher);
         direct_mesher->initialize(sdf, chunk_param, lod_numbers, scenario, direct_settings);
         direct_mesher->set_debug_view(debug_view);
@@ -313,10 +304,8 @@ void VoxelTerrain::_process(double delta){
         visual_mesh_data.add_scan_chunk(new_scanned_chunk);
         if (direct_mesher) {
             direct_mesher->send_chunk(visual_mesh_data.dirty_chunk);
-        } else if (gpu_mesher) {
-            gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
         } else {
-            visual_mesh->send_chunk(visual_mesh_data.dirty_chunk);
+            gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
         }
 
     }
@@ -329,20 +318,16 @@ void VoxelTerrain::_process(double delta){
     t0 = now_usec();
     if (direct_mesher) {
         direct_mesher->process_queue();
-    } else if (gpu_mesher) {
-        gpu_mesher->process_queue();
     } else {
-        visual_mesh->process_queue();
+        gpu_mesher->process_queue();
     }
     process_stats.mesher_dispatch.add(now_usec() - t0);
 
     t0 = now_usec();
     if (direct_mesher) {
         direct_mesher->get_results(visual_mesh_data);
-    } else if (gpu_mesher) {
-        gpu_mesher->get_results(visual_mesh_data);
     } else {
-        visual_mesh->get_results(visual_mesh_data);
+        gpu_mesher->get_results(visual_mesh_data);
     }
     process_stats.mesher_collect.add(now_usec() - t0);
 
@@ -456,7 +441,7 @@ bool VoxelTerrain::is_load_complete() {
     if (direct_mesher) {
         return direct_mesher->is_idle();
     }
-    return gpu_mesher ? gpu_mesher->is_idle() : visual_mesh->is_idle();
+    return gpu_mesher->is_idle();
 }
 
 Dictionary VoxelTerrain::get_debug_stats() {
@@ -504,11 +489,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
     }
     d["chunk_rids_alive"] = DebugLog::chunk_rids_created.load() - DebugLog::chunk_rids_freed.load();
     d["discoverer"] = chunk_discoverer->get_stats();
-    if (direct_mesher) {
-        d["mesher"] = direct_mesher->get_stats();
-    } else {
-        d["mesher"] = gpu_mesher ? gpu_mesher->get_stats() : visual_mesh->get_stats();
-    }
+    d["mesher"] = direct_mesher ? direct_mesher->get_stats() : gpu_mesher->get_stats();
 
     return d;
 }
@@ -537,11 +518,6 @@ void VoxelTerrain::_teardown() {
         gpu_mesher->stop();
         memdelete(gpu_mesher);
         gpu_mesher = nullptr;
-    }
-    if (visual_mesh) {
-        visual_mesh->stop();
-        memdelete(visual_mesh);
-        visual_mesh = nullptr;
     }
 
     VLOG(1, "VoxelTerrain: teardown, chunk instances created=", DebugLog::chunk_rids_created.load(),

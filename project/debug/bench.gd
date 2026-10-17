@@ -4,7 +4,7 @@ extends Node3D
 ##       --mode=legacy --scenario=load --out=/tmp/stats.json --shot=loaded:/tmp/a.png
 ##
 ## Args (all optional):
-##   --mode=cpu|legacy|direct     pipeline (default legacy)
+##   --mode=legacy|direct         pipeline (default legacy)
 ##   --scenario=load|fly          load: load + steady phase. fly: load, fly out and back, settle, steady.
 ##   --steady=N                   frames measured after load completes (default 300)
 ##   --fly_seconds=S              wall-clock duration of the outbound leg (same again for return, default 10)
@@ -31,7 +31,7 @@ extends Node3D
 ## Render GPU/CPU time is only read during the "steady" phase: reading it forces a
 ## render-thread sync, which would distort the load/fly frame timings.
 
-const MODES := {"cpu": 0, "legacy": 1, "direct": 2}
+const MODES := {"legacy": 1, "direct": 2}
 
 var args := {}
 var shots := []  # [[when, path], ...]
@@ -66,7 +66,13 @@ func _ready() -> void:
 	terrain = ClassDB.instantiate("VoxelTerrain")
 	terrain.log_level = int(args.get("log", "1"))
 	terrain.debug_gpu_profile = true
-	terrain.pipeline_mode = MODES[args.get("mode", "legacy")]
+	var mode: String = args.get("mode", "legacy")
+	if not MODES.has(mode):
+		push_error("BENCH: unknown --mode=%s (expected legacy or direct)" % mode)
+		set_process(false)
+		get_tree().quit(1)
+		return
+	terrain.pipeline_mode = MODES[mode]
 	if args.has("batch"):
 		terrain.legacy_batch_size = int(args["batch"])
 		terrain.direct_batch_size = int(args["batch"])

@@ -66,14 +66,6 @@ public:
     //     return -sqrt(p_world_pos.y*p_world_pos.y + p_world_pos.x*p_world_pos.x + p_world_pos.z*p_world_pos.z)  + 10.0f;
     // }
 
-    // Vector3 evaluate_normal(const Vector3 &p_world_pos) const override {
-    //     const float len_sq = p_world_pos.length_squared();
-    //     if (len_sq <= 1e-12f) {
-    //         return Vector3(0.0f, 1.0f, 0.0f);
-    //     }
-    //     return p_world_pos / std::sqrt(len_sq);
-    // }
-
     float evaluate(const Vector3 &p_world_pos) const override {
         // Mountain with sparse large caverns
         static const SimplexNoise::NoiseParam mountain_param{0.0035f, 1.0f, 2.0f, 0.5f};
