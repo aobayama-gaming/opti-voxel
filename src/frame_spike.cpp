@@ -79,6 +79,11 @@ uint32_t fold_cell(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, in
 constexpr int CELL_KS[] = { 0, 3, 13, 24, 25, 31, 32, 33, 47, 62 };
 constexpr int PERLIN3_KS[] = { 2, 9, 20, 33 };
 constexpr int PERLIN2_KS[] = { 2, 9, 33 };
+// LODs the terrain's fBms and terrain_sdf are probed at (4 words each). The GLSL gets them as
+// lod_bias + L, lod_bias a push constant 0: a runtime value like the meshers' chunk LOD, not a literal
+// the compiler could fold.
+constexpr int PROBE_LODS[] = { 0, 1, 5, 14, 24 };
+constexpr int PROBE_LOD_COUNT = int(sizeof(PROBE_LODS) / sizeof(PROBE_LODS[0]));
 
 // A deterministic test offset for octave k, any value in [0, 2^(k+1)) (large ones exercise the carry).
 Vector3i64 test_offset(int p_k) {
@@ -178,49 +183,48 @@ void probe_octave_cell(WorldPos p, uint b) {
         p.continuity_word = 3;
         probes.push_back(p);
     }
-    // The terrain's two fBms and the terrain itself (gradient included).
+    // The terrain's two fBms and the terrain itself (gradient included), at every LOD of PROBE_LODS.
+    // Continuity is checked on the value of LOD 0 (word 3), the same at every LOD.
     auto fbm_bound = [](const OctaveSet &p_set, double p_g) {
         double b = 0.0;
         for (const Octave &o : p_set.octaves) {
-            b += double(o.damp) * p_g;
+            b += double(gradient_factor(o, 0)) * p_g;
         }
         return b;
     };
+    auto lod_probe = [](const String &p_name, const String &p_fn, std::function<Float4(const WorldPos &, int)> p_cpu) {
+        Probe p;
+        p.name = p_name;
+        p.words = 4 * PROBE_LOD_COUNT;
+        p.is_float = true;
+        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n", p_name);
+        for (int i = 0; i < PROBE_LOD_COUNT; i++) {
+            p.glsl += vformat("    vec4 v%d = %s(p, int(params.lod_bias) + %d);\n", i, p_fn, PROBE_LODS[i]);
+            p.glsl += vformat("    for (uint i = 0u; i < 4u; i++) { results[b + %du + i] = floatBitsToUint(v%d[i]); }\n", 4 * i, i);
+        }
+        p.glsl += "}\n";
+        p.cpu = [p_cpu](const WorldPos &q, uint32_t *r) {
+            for (int i = 0; i < PROBE_LOD_COUNT; i++) {
+                const Float4 v = p_cpu(q, PROBE_LODS[i]);
+                r[4 * i + 0] = float_bits(v.x);
+                r[4 * i + 1] = float_bits(v.y);
+                r[4 * i + 2] = float_bits(v.z);
+                r[4 * i + 3] = float_bits(v.w);
+            }
+        };
+        return p;
+    };
     const SDFDummy *sdf = &p_sdf;
     for (int which = 0; which < 2; which++) {
-        Probe p;
-        p.name = which == 0 ? "terrain_height" : "terrain_caves";
-        p.words = 4;
-        p.is_float = true;
-        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = %s(p);\n", p.name, p.name);
-        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
-        p.cpu = [sdf, which](const WorldPos &q, uint32_t *r) {
-            const Float4 v = fbm(which == 0 ? sdf->get_height() : sdf->get_caves(), q);
-            r[0] = float_bits(v.x);
-            r[1] = float_bits(v.y);
-            r[2] = float_bits(v.z);
-            r[3] = float_bits(v.w);
-        };
+        const String name = which == 0 ? "terrain_height" : "terrain_caves";
+        Probe p = lod_probe(name, name, [sdf, which](const WorldPos &q, int p_lod) {
+            return fbm(which == 0 ? sdf->get_height() : sdf->get_caves(), q, p_lod);
+        });
         p.continuity_bound = fbm_bound(which == 0 ? p_sdf.get_height() : p_sdf.get_caves(), which == 0 ? 6.0 : 4.0);
         p.continuity_word = 3;
         probes.push_back(p);
     }
-    {
-        Probe p;
-        p.name = "terrain_sdf";
-        p.words = 4;
-        p.is_float = true;
-        p.glsl = "void probe_terrain_sdf(WorldPos p, uint b) {\n    vec4 v = terrain_sdf(p);\n";
-        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
-        p.cpu = [sdf](const WorldPos &q, uint32_t *r) {
-            const Float4 v = sdf->sdf(q);
-            r[0] = float_bits(v.x);
-            r[1] = float_bits(v.y);
-            r[2] = float_bits(v.z);
-            r[3] = float_bits(v.w);
-        };
-        probes.push_back(p);
-    }
+    probes.push_back(lod_probe("terrain_sdf", "terrain_sdf", [sdf](const WorldPos &q, int p_lod) { return sdf->sdf(q, p_lod); }));
     return probes;
 }
 
@@ -239,7 +243,7 @@ struct Sample { ChunkInput chunk; vec4 grid; };
 layout(set = 0, binding = 0, std430) restrict readonly buffer Samples { Sample samples[]; };
 layout(set = 0, binding = 1, std430) restrict writeonly buffer Results { uint results[]; };
 layout(set = 0, binding = 2, std140) uniform ChunkParamUniform { ChunkParam chunk_param; };
-layout(push_constant, std430) uniform Params { uint count; uint words; uint pad0; uint pad1; } params;
+layout(push_constant, std430) uniform Params { uint count; uint words; uint lod_bias; uint pad1; } params;
 
 /*HELPERS*/
 
@@ -630,7 +634,7 @@ Dictionary FrameSpike::run() {
     ChunkParam sdf_param;
     sdf_param.voxel_size = voxel_size;
     SDFDummy sdf;
-    sdf.configure(sdf_param);
+    sdf.configure(sdf_param, PROBE_LODS[PROBE_LOD_COUNT - 1] + 1);
     const std::vector<Probe> probes = make_probes(sdf);
     checks.probe_mismatch.assign(probes.size(), 0);
     uint32_t words = FIXED_WORDS;
@@ -705,6 +709,7 @@ Dictionary FrameSpike::run() {
         push.fill(0);
         push.encode_u32(0, count);
         push.encode_u32(4, words);
+        push.encode_u32(8, 0); // lod_bias, see PROBE_LODS
         const int64_t list = rd->compute_list_begin();
         rd->compute_list_bind_compute_pipeline(list, pipeline);
         rd->compute_list_bind_uniform_set(list, uniform_set, 0);
