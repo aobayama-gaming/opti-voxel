@@ -4,10 +4,11 @@
 #
 #   tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]
 #
-# Steps: build, direct load run with validation + page audit + discovery audit, origin parity (4 runs),
-# integer-frame test, the QuadPagePool spike when --spike is given or src/quad_page_pool* differs from
-# dev, the discovery miss audit over 9 poses (tools/discovery_audit.sh) when --discovery is given
-# or the discoverer / SDF sources differ from dev, and the exact-zero SDF test (tools/zero_test.sh).
+# Steps: build, C++ unit tests (seconds, first so they fail fast), direct load run with validation +
+# page audit + discovery audit, origin parity (4 runs), integer-frame test, the QuadPagePool spike
+# when --spike is given or src/quad_page_pool* differs from dev, the discovery miss audit over 9
+# poses (tools/discovery_audit.sh) when --discovery is given or the discoverer / SDF sources differ
+# from dev, and the exact-zero SDF test (tools/zero_test.sh).
 # Stops at the first failure unless --keep-going. Exit code: 0 all passed, 1 something failed.
 # Needs a GPU and an unlocked session.
 set -uo pipefail
@@ -71,6 +72,7 @@ spike() {
 }
 
 [[ $BUILD == 1 ]] && step build build
+step unit "$ROOT/tools/unit_test.sh" --no-build
 step direct "$ROOT/tools/bench.sh" --no-build --tag=check --mode=direct --scenario=load --steady=60 \
     --validate=64 --audit=1 --discovery_audit=1
 step parity "$ROOT/tools/origin_parity.sh" -- --mode=direct --validate=64 --audit=1

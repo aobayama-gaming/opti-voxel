@@ -54,6 +54,15 @@ env = src_env
 env.Append(CPPPATH=["src/"])
 sources = Glob("src/*.cpp")
 
+# Unit tests (src/tests/, doctest) ship in debug builds only; tools/unit_test.sh runs them.
+if env["target"] != "template_release":
+    env.Append(CPPDEFINES=["OPTI_VOXEL_TESTS"])
+    if env.get("is_msvc", False):
+        env.Append(CPPPATH=["thirdparty/doctest"])
+    else:
+        env.Append(CCFLAGS=["-isystem", env.Dir("thirdparty/doctest").abspath])
+    sources += Glob("src/tests/*.cpp")
+
 if env["target"] in ["editor", "template_debug"]:
     try:
         doc_data = env.GodotCPPDocData("src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml"))

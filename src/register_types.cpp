@@ -9,6 +9,10 @@
 #include "quad_pool_spike.hpp"
 #include "voxel_terrain.hpp"
 
+#ifdef OPTI_VOXEL_TESTS
+#include "tests/unit_tests.hpp"
+#endif
+
 using namespace godot;
 
 void initialize_gdextension_types(ModuleInitializationLevel p_level) {
@@ -18,6 +22,9 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(QuadPoolSpike);
     GDREGISTER_CLASS(FrameSpike);
+#ifdef OPTI_VOXEL_TESTS
+    GDREGISTER_CLASS(UnitTests);
+#endif
 }
 
 void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {
