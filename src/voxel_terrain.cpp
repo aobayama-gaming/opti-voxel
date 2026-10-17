@@ -89,7 +89,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discovery_compare"), &VoxelTerrain::get_discovery_compare);
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1"), "set_terrain_mode", "get_terrain_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1,Continents:2"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
@@ -136,7 +136,7 @@ int VoxelTerrain::get_pipeline_mode() const {
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
     ERR_FAIL_COND_MSG(started, "terrain_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode != 0 && p_mode != 1, "terrain_mode must be 0 (dummy) or 1 (cascade).");
+    ERR_FAIL_COND_MSG(p_mode < 0 || p_mode > 2, "terrain_mode must be 0 (dummy), 1 (cascade) or 2 (cascade, continents preset).");
     terrain_mode = p_mode;
 }
 
@@ -425,7 +425,7 @@ void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
     ERR_FAIL_COND_MSG(lod_numbers < 1 || lod_numbers > MAX_LOD_NUMBERS, "VoxelTerrain: lod_numbers out of range.");
-    ERR_FAIL_COND_MSG(terrain_mode == 1 && (debug_test_rig || debug_zero_pillar != 0), "VoxelTerrain: the debug shapes need terrain_mode 0 (dummy).");
+    ERR_FAIL_COND_MSG(terrain_mode != 0 && (debug_test_rig || debug_zero_pillar != 0), "VoxelTerrain: the debug shapes need terrain_mode 0 (dummy).");
 
     started = true;
     start_usec = now_usec();
@@ -444,9 +444,11 @@ void VoxelTerrain::_ready() {
     }
 
     // sdf starts as an SDFDummy (see the member initialiser).
-    if (terrain_mode == 1) {
+    if (terrain_mode != 0) {
         memdelete(sdf);
-        sdf = memnew(SDFCascade);
+        SDFCascade *cascade = memnew(SDFCascade);
+        cascade->preset = terrain_mode == 2 ? 1 : 0;
+        sdf = cascade;
     } else {
         static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
         static_cast<SDFDummy *>(sdf)->zero_pillar = debug_zero_pillar;
@@ -496,6 +498,18 @@ void VoxelTerrain::_ready() {
         direct_mesher = memnew(GPUDirectMesher);
         direct_mesher->initialize(sdf, chunk_param, lod_numbers, scenario, direct_settings);
         direct_mesher->set_debug_view(debug_view);
+        // Skirt depth per LOD: the page shader's height colours undo the skirt push.
+        PackedFloat32Array skirt_depths;
+        skirt_depths.resize(32);
+        for (int l = 0; l < 32; l++) {
+            skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
+        }
+        direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
+        if (terrain_mode == 2) {
+            // Continents preset: the page shader colours heights around sea level (the cascade's datum).
+            const double sea_m = double(static_cast<SDFCascade *>(sdf)->get_datum_y() - chunk_param.origin_voxel().y) * chunk_param.voxel_size;
+            direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
+        }
     } else {
         gpu_mesher = memnew(GPUMesher);
 

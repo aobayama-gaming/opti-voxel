@@ -24,11 +24,17 @@ uniform usampler2D quad_tex : filter_nearest, repeat_disable;
 // 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
+// Sea level in metres above the world origin: below -1e29, no height colours (VoxelTerrain sets it for
+// the continents preset).
+uniform float sea_level_m = -1e30;
 // World origin in chunk-id units, low 32 bits: positions are drawn relative to it.
 uniform ivec3 origin_chunk_lo = ivec3(0);
 uniform int chunk_size = 32;
 uniform int skirt_size = 2;
 uniform float pos_scale = 512.0;
+// Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
+// colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
+uniform float skirt_depth_m[32];
 instance uniform int page_id = 0;
 
 varying vec3 v_world_normal;
@@ -36,6 +42,7 @@ varying vec2 v_quad_uv;
 varying flat float v_lod;
 varying flat vec3 v_chunk;
 varying flat ivec2 v_ids;
+varying float v_height; // metres above the world origin (shaded view: contour lines)
 
 vec3 oct_decode22(uint p) {
     vec2 f = vec2(float(p & 2047u), float(p >> 11u)) / 2047.0 * 2.0 - 1.0;
@@ -79,13 +86,47 @@ void vertex() {
     v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
     v_lod = float(lod);
     v_chunk = vec3(rel);
+    // skirt_sdf pushed the SDF towards air by clamp(-inside) * depth past the chunk bounds, which lowers
+    // the surface by push / n.y. The push is linear inside a cell, so on a planar surface the vertex lies
+    // on the pushed plane and this gives back the exact height.
+    float lo = float(skirt_size);
+    vec3 in3 = min(local - lo, lo + voxel_dim - local);
+    float push = clamp(-min(in3.x, min(in3.y, in3.z)), 0.0, 1.0) * skirt_depth_m[min(lod, 31)];
+    v_height = world.y + push / max(n.y, 0.2);
 
     VERTEX = (VIEW_MATRIX * vec4(world, 1.0)).xyz;
     NORMAL = normalize(mat3(VIEW_MATRIX) * n);
 }
 
 void fragment() {
-    vec3 albedo = vec3(1.0);
+    // Shaded: grass on gentle slopes, rock on steep ones, faint contour lines every 100 m (mid tones, so
+    // the tonemapper keeps the relief readable).
+    float up = clamp(v_world_normal.y, 0.0, 1.0);
+    vec3 rock = vec3(0.36, 0.32, 0.28);
+    vec3 albedo = mix(rock, vec3(0.24, 0.36, 0.16), smoothstep(0.8, 0.95, up));
+    float contour_m = 100.0;
+    if (sea_level_m > -1e29) {
+        // Height colours (dark albedos: the scene's tonemapper brightens them): sea floor blue, darker with
+        // depth, beach, lowland green, highland brown, snow; rock on steep land.
+        float e = v_height - sea_level_m;
+        vec3 steep = vec3(0.20, 0.18, 0.16);
+        if (e < 0.0) {
+            albedo = mix(vec3(0.005, 0.02, 0.10), vec3(0.04, 0.16, 0.35), smoothstep(-4000.0, 0.0, e));
+        } else if (e < 30.0) {
+            albedo = vec3(0.45, 0.40, 0.26);
+        } else {
+            vec3 land = mix(vec3(0.08, 0.20, 0.05), vec3(0.24, 0.18, 0.10), smoothstep(200.0, 1800.0, e));
+            land = mix(land, vec3(0.80), smoothstep(2800.0, 3600.0, e));
+            albedo = mix(steep, land, smoothstep(0.7, 0.9, up));
+        }
+        contour_m = 500.0;
+    }
+    float h = v_height / contour_m;
+    float fw = max(fwidth(h), 1e-6);
+    float line = abs(fract(h + 0.5) - 0.5) / fw;
+    // Contours fade out where they would be denser than ~10 pixels apart.
+    float contour = 1.0 - smoothstep(0.03, 0.1, fw);
+    albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
     vec3 emission = vec3(0.0);
     if (debug_view == 1) {
         albedo = vec3(0.0);

@@ -17,10 +17,12 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade` its
-# terrain_mode (the Hermite cascade test terrain) and `-- --discoverer=cpu|gpu` its discoverer_mode: they must
-# be set before the terrain's _ready, and every node enters the tree before any is ready.
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents`
+# its terrain_mode (the Hermite cascade test terrain, or its continents demo preset) and
+# `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
+# node enters the tree before any is ready.
 var spawn_above_ground := false
+var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (cascade terrains)
 var cascade_terrain: Node = null  # set with --terrain=cascade
 var cached_altitude := 0.0
 var altitude_age := 1.0
@@ -40,6 +42,15 @@ func _enter_tree() -> void:
 				terrain.discoverer_mode = modes[mode]
 			else:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
+		if a == "--terrain=continents" and terrain:
+			terrain.terrain_mode = 2
+			spawn_above_ground = true
+		if a.begins_with("--altitude="):
+			spawn_altitude = a.trim_prefix("--altitude=").to_float()
+		if a.begins_with("--lod_error=") and terrain:
+			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
+		if a.begins_with("--view=") and terrain:
+			terrain.debug_view = a.trim_prefix("--view=").to_int()
 
 func _ready():
 	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude
@@ -51,12 +62,12 @@ func _ready():
 		base_near = camera.near
 	if spawn_above_ground and terrain:
 		cascade_terrain = terrain
-		# The cascade terrain's relief is kilometres high: start 200 m above the ground under the spawn.
+		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
-			if d > 150.0 and d < 400.0:
+			if absf(d - spawn_altitude) < spawn_altitude * 0.25:
 				break
-			global_position.y += 200.0 - d
+			global_position.y += spawn_altitude - d
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	yaw = rotation.y
 	pitch = camera.rotation.x
@@ -128,6 +139,13 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
+
+	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad.
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_V:
+		var terrain := _terrain()
+		if terrain:
+			terrain.debug_view = (terrain.debug_view + 1) % 8
+			print("debug view ", terrain.debug_view)
 
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:

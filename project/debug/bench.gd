@@ -123,10 +123,10 @@ func _ready() -> void:
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"dummy": 0, "cascade": 1}
+	var terrains := {"dummy": 0, "cascade": 1, "continents": 2}
 	var terrain_arg: String = args.get("terrain", "dummy")
 	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected dummy or cascade)" % terrain_arg)
+		push_error("BENCH: unknown --terrain=%s (expected dummy, cascade or continents)" % terrain_arg)
 		set_process(false)
 		get_tree().quit(1)
 		return
