@@ -106,9 +106,10 @@ private:
         Dictionary last_scan;
         bool gpu_active = false;
         double gpu_scratch_mb = 0.0;
+        uint64_t gpu_init_usec = 0; // local device + point shader, before the first scan
         int64_t compare_scans = 0;
         int64_t compare_differences = 0;
-        TimingStat compare_cpu; // the fresh CPU scans of --discovery_compare
+        TimingStat compare_cpu; // the fresh CPU scans of --discovery_compare (in latency, not in scan or publish)
     } stats;
 
     SDFBase *sdf;

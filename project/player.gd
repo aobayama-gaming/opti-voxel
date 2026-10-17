@@ -34,7 +34,12 @@ func _enter_tree() -> void:
 			terrain.terrain_mode = 1
 			spawn_above_ground = true
 		if a.begins_with("--discoverer=") and terrain:
-			terrain.discoverer_mode = {"cpu": 0, "gpu": 1}.get(a.trim_prefix("--discoverer="), -1)
+			var modes := {"cpu": 0, "gpu": 1}
+			var mode := a.trim_prefix("--discoverer=")
+			if modes.has(mode):
+				terrain.discoverer_mode = modes[mode]
+			else:
+				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 
 func _ready():
 	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude

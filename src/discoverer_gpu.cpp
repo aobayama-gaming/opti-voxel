@@ -11,10 +11,12 @@ bool DiscovererGPU::create(const SDFBase *p_sdf, const ChunkParam &p_param) {
     if (p_sdf->get_cascade() == nullptr) {
         return false;
     }
+    const uint64_t t0 = now_usec();
     rd = RenderingServer::get_singleton()->create_local_rendering_device();
     if (rd == nullptr) {
         return false;
     }
+    const uint64_t t_device = now_usec();
     point_param = CascadeGLSL::point_param(p_param);
     input = rd->storage_buffer_create(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
     const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(point_param);
@@ -25,7 +27,8 @@ bool DiscovererGPU::create(const SDFBase *p_sdf, const ChunkParam &p_param) {
         return false;
     }
     input_bytes.resize(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
-    VLOG(1, "DiscovererGPU: local device, scratch ", double(passes.scratch_bytes()) / 1048576.0, " MB for ", int64_t(MAX_POINTS), " points per batch");
+    VLOG(1, "DiscovererGPU: local device in ", double(t_device - t0) / 1000.0, " ms, point passes (shader compile) in ", double(now_usec() - t_device) / 1000.0,
+            " ms, scratch ", double(passes.scratch_bytes()) / 1048576.0, " MB for ", int64_t(MAX_POINTS), " points per batch");
     return true;
 }
 
@@ -47,20 +50,20 @@ void DiscovererGPU::free() {
     rd = nullptr;
 }
 
-void DiscovererGPU::evaluate(const VoxelPos *p_points, int p_count, int p_lod, float *r_out, BatchStats &r_stats) {
-    ERR_FAIL_COND(!is_valid());
+bool DiscovererGPU::evaluate(const VoxelPos *p_points, int p_count, int p_lod, float *r_out, BatchStats &r_stats) {
+    ERR_FAIL_COND_V(!is_valid(), false);
     for (int base = 0; base < p_count; base += int(MAX_POINTS)) {
-        _run_batch(p_points + base, uint32_t(MIN(int(MAX_POINTS), p_count - base)), p_lod, r_out + base, r_stats);
+        if (!_run_batch(p_points + base, uint32_t(MIN(int(MAX_POINTS), p_count - base)), p_lod, r_out + base, r_stats)) {
+            return false;
+        }
     }
+    return true;
 }
 
-void DiscovererGPU::_run_batch(const VoxelPos *p_points, uint32_t p_count, int p_lod, float *r_out, BatchStats &r_stats) {
-    const uint64_t t0 = now_usec();
+bool DiscovererGPU::_run_batch(const VoxelPos *p_points, uint32_t p_count, int p_lod, float *r_out, BatchStats &r_stats) {
     for (uint32_t i = 0; i < p_count; i++) {
         if (!CascadeGLSL::encode_point_input(input_bytes, i, p_points[i], p_lod, point_param)) {
-            // Not a node corner: no GPU value for it (callers only pass node corners).
-            std::memset(r_out, 0, sizeof(float) * p_count);
-            return;
+            return false; // not a node corner: no GPU value for it
         }
     }
     rd->buffer_update(input, 0, int64_t(p_count) * GPUFrame::CHUNK_INPUT_BYTES, input_bytes);
@@ -93,9 +96,9 @@ void DiscovererGPU::_run_batch(const VoxelPos *p_points, uint32_t p_count, int p
 
     const int64_t bytes = int64_t(p_count) * int64_t(sizeof(float));
     const PackedByteArray out = rd->buffer_get_data(values, 0, bytes);
-    ERR_FAIL_COND(out.size() != bytes);
+    ERR_FAIL_COND_V(out.size() != bytes, false);
     std::memcpy(r_out, out.ptr(), size_t(bytes));
     r_stats.batches++;
     r_stats.readback_bytes += bytes;
-    r_stats.wall_usec += now_usec() - t0;
+    return true;
 }

@@ -146,12 +146,8 @@ private:
 
     static void _batch_block(void *p_job, uint32_t p_block) {
         const BatchJob &job = *static_cast<const BatchJob *>(p_job);
-        const int end = MIN(job.count, int(p_block + 1) * BATCH_BLOCK);
-        WorldPos pos;
-        for (int i = int(p_block) * BATCH_BLOCK; i < end; i++) {
-            pos.voxel = job.points[i];
-            job.out[i] = job.sdf->evaluate(pos, job.lod);
-        }
+        const int begin = int(p_block) * BATCH_BLOCK;
+        job.sdf->SDFBase::evaluate_batch(job.points + begin, MIN(job.count - begin, BATCH_BLOCK), job.lod, job.out + begin);
     }
 
     Cascade::Spec spec;

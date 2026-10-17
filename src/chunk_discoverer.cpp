@@ -17,6 +17,7 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     // deduplicated on their voxel, then evaluated in one batch.
     const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();
     HashMap<VoxelPos, uint32_t, Vector3i64Hasher> index;
+    index.reserve(uint32_t(p_nodes.size() * 2)); // ~1.3 unique corners per node (dedup ratio ~6)
     std::vector<VoxelPos> points;
     std::vector<uint32_t> corner_point(p_nodes.size() * 8);
     for (size_t n = 0; n < p_nodes.size(); n++) {
@@ -35,10 +36,9 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     }
     std::vector<float> values(points.size());
     const uint64_t t_eval = now_usec();
-    if (p_gpu) {
-        DiscovererGPU::BatchStats gpu_stats;
-        p_gpu->evaluate(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
-        r_wave.gpu = true;
+    DiscovererGPU::BatchStats gpu_stats;
+    r_wave.gpu = p_gpu && p_gpu->evaluate(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
+    if (r_wave.gpu) {
         r_wave.batches = gpu_stats.batches;
         r_wave.gpu_ms = gpu_stats.gpu_ms;
         r_wave.readback_bytes = gpu_stats.readback_bytes;
@@ -153,7 +153,9 @@ void ChunkDiscoverer::discovery_loop() {
     bool has_scanned = false;
     ChunkId last_scanned_camera_chunk;
 
-    // The GPU discoverer's local device lives on this thread only.
+    // The GPU discoverer's local device lives on this thread only. Creating it (device + the point
+    // shader's compile) delays the first scan: gpu_init_ms.
+    const uint64_t t_init = now_usec();
     if (want_gpu) {
         gpu = memnew(DiscovererGPU);
         if (!gpu->create(sdf, chunk_param)) {
@@ -165,6 +167,7 @@ void ChunkDiscoverer::discovery_loop() {
     mutex->lock();
     stats.gpu_active = gpu != nullptr;
     stats.gpu_scratch_mb = gpu ? double(gpu->scratch_bytes()) / 1048576.0 : 0.0;
+    stats.gpu_init_usec = want_gpu ? now_usec() - t_init : 0;
     mutex->unlock();
 
     while (true) {
@@ -490,6 +493,7 @@ Dictionary ChunkDiscoverer::get_stats() {
     d["usec_per_sdf_call"] = stats.sdf_calls_total ? double(stats.cull.total) / double(stats.sdf_calls_total) : 0.0;
     d["mode"] = stats.gpu_active ? "gpu" : "cpu";
     d["gpu_scratch_mb"] = stats.gpu_scratch_mb;
+    d["gpu_init_ms"] = double(stats.gpu_init_usec) / 1000.0;
     d["compare"] = compare;
     d["compare_scans"] = stats.compare_scans;
     d["compare_differences"] = stats.compare_differences;

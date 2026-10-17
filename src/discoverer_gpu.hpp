@@ -22,7 +22,6 @@ public:
     // One evaluate() call (a discoverer wave).
     struct BatchStats {
         int batches = 0; // submissions (at most MAX_POINTS points each)
-        uint64_t wall_usec = 0; // encode, upload, submit + sync, readback
         double gpu_ms = 0.0; // GPU timestamps around the levels, summed over the batches; -1 if one did not come back
         int64_t readback_bytes = 0;
     };
@@ -33,8 +32,9 @@ public:
     void free();
     bool is_valid() const { return rd != nullptr && passes.is_valid(); }
 
-    // The SDF (metres) at p_count corners of LOD p_lod's corner grid (ChunkDiscoverer's node corners).
-    void evaluate(const VoxelPos *p_points, int p_count, int p_lod, float *r_out, BatchStats &r_stats);
+    // The SDF (metres) at p_count corners of LOD p_lod's corner grid (ChunkDiscoverer's node corners). False
+    // (with an error) if a point is off that grid: r_out is then incomplete and the caller must use the CPU.
+    bool evaluate(const VoxelPos *p_points, int p_count, int p_lod, float *r_out, BatchStats &r_stats);
 
     uint64_t scratch_bytes() const { return passes.scratch_bytes(); }
 
@@ -48,5 +48,5 @@ private:
     PackedByteArray input_bytes;
     uint64_t batch_serial = 0;
 
-    void _run_batch(const VoxelPos *p_points, uint32_t p_count, int p_lod, float *r_out, BatchStats &r_stats);
+    bool _run_batch(const VoxelPos *p_points, uint32_t p_count, int p_lod, float *r_out, BatchStats &r_stats);
 };

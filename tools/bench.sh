@@ -195,10 +195,11 @@ if dsc:
     fs = dsc.get("first_scan") or {}
     if fs:
         waves = fs.get("waves") or []
-        gpu_ms = sum(max(w.get("gpu_ms", 0), 0) for w in waves)
+        gpu_ms = sum(w.get("gpu_ms", 0) for w in waves)
+        gpu = "n/a" if any(w.get("gpu_ms", 0) < 0 for w in waves) else f"{gpu_ms:.2f}ms"
         print(f">> discoverer {dsc.get('mode')}: first scan {fs.get('scan_ms', 0):.1f}ms (cull {fs.get('cull_ms', 0):.1f} walk {fs.get('walk_ms', 0):.1f})"
               f" corners={fs.get('corners')} unique={fs.get('sdf_calls')} dedup={fs.get('dedup_ratio', 0):.2f} waves={len(waves)}"
-              f" gpu={gpu_ms:.2f}ms readback={sum(w.get('readback_bytes', 0) for w in waves)}B scratch={dsc.get('gpu_scratch_mb', 0):.2f}MB"
+              f" gpu={gpu} init={dsc.get('gpu_init_ms', 0):.0f}ms readback={sum(w.get('readback_bytes', 0) for w in waves)}B scratch={dsc.get('gpu_scratch_mb', 0):.2f}MB"
               f" compare scans={dsc.get('compare_scans')} differences={dsc.get('compare_differences')}")
 wo = d.get("final_terrain", {}).get("world_origin")
 if wo:
