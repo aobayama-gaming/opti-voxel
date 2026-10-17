@@ -40,7 +40,8 @@ RESULTS=()
 FAILED=0
 step() {
     local name="$1"; shift
-    local t0=$(date +%s)
+    local t0
+    t0=$(date +%s)
     echo ">> $name"
     "$@"
     local code=$?
@@ -55,12 +56,15 @@ summary() {
     echo ">> total $(( $(date +%s) - START ))s"
 }
 
+# build and spike are called through step.
+# shellcheck disable=SC2329
 build() {
     local log="$ROOT/bench/results/check-build.log"
     mkdir -p "$ROOT/bench/results"
     (cd "$ROOT" && scons platform=linux target=template_debug -j"$(nproc)" > "$log" 2>&1) \
         || { grep -E "error|Error" "$log" | head -30; echo ">> full log: $log"; return 1; }
 }
+# shellcheck disable=SC2329
 spike() {
     local log="$ROOT/bench/results/check-spike.log"
     timeout 300 "$GODOT" --path "$ROOT/project" --resolution 640x360 res://debug/spike.tscn > "$log" 2>&1
@@ -68,7 +72,10 @@ spike() {
     # Same known thread_model=2 exit abort as tools/bench.sh, accepted once the run finished.
     if [[ $code -eq 134 ]] && grep -q "BENCH: done" "$log"; then code=0; fi
     grep "SPIKE:" "$log" | tail -1
-    [[ $code -eq 0 ]] && grep -q '"ok":true' "$log" || { echo ">> log: $log"; return 1; }
+    if [[ $code -ne 0 ]] || ! grep -q '"ok":true' "$log"; then
+        echo ">> log: $log"
+        return 1
+    fi
 }
 
 [[ $BUILD == 1 ]] && step build build

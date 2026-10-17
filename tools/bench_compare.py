@@ -128,10 +128,10 @@ def main():
         for rd in dirs.split(","):
             p = os.path.join(rd, "stats.json")
             if os.path.exists(p):
-                runs.append(json.load(open(p)))
+                with open(p) as f:
+                    runs.append(json.load(f))
         configs.append((label, runs))
     baseline = baseline or configs[0][0]
-    base_runs = dict(configs)[baseline]
 
     lines = []
     n_runs = ", ".join(f"{label}: {len(runs)} runs" for label, runs in configs)

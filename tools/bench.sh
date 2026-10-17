@@ -88,7 +88,7 @@ if [[ $HAVE_SMI == 1 ]]; then
     SMI_PID=$!
 fi
 echo "$COOLDOWN_S ${START_TEMP:-}" > "$RUN_DIR/cooldown.txt"
-echo "$(cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo unknown)" > "$RUN_DIR/platform_profile.txt"
+{ cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo unknown; } > "$RUN_DIR/platform_profile.txt"
 
 echo ">> running godot (${ARGS[*]})"
 timeout "${BENCH_TIMEOUT:-600}" "$GODOT" --path "$ROOT/project" --resolution 1280x720 \

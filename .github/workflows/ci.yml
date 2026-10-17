@@ -1,88 +1,75 @@
-# For syntax, see https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
-# This workflow is automatically triggered for every push and pull request, to verify that everything still builds.
-
-name: Continuous Integration
+# Formatting, a warnings-as-errors build and the C++ unit tests (headless Godot, no GPU) on every
+# pull request and on pushes to dev / main. The GPU checks (tools/check.sh) need a real GPU and
+# an unlocked session: they stay local.
+name: CI
 on:
-  workflow_call:
-  push:
   pull_request:
-  merge_group:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.6.3
+  CLANG_FORMAT_VERSION: 23.1.3
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        # Test a few selected combinations of parameters ("test case matrix").
-        # While it would be nice to test all needed combinations, in practice this would a waste of CI usage time.
-        # By building just with a few combinations, we only need a few runners,
-        # while still achieving adequate coverage.
-        # To make a full build with all combinations, use the make_build.yml workflow instead.
-        include:
-          - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
-            target-type: template_debug
-            float-precision: double
-          - target: { platform: windows, arch: x86_64, os: windows-latest }
-            target-type: template_release
-            float-precision: single
-          - target: { platform: macos, arch: universal, os: macos-latest }
-            target-type: template_debug
-            float-precision: single
-          - target: { platform: android, arch: arm64, os: ubuntu-22.04 }
-            target-type: template_debug
-            float-precision: single
-          - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
-            target-type: template_release
-            float-precision: double
-
-    runs-on: ${{ matrix.target.os }}
+  linux:
+    runs-on: ubuntu-24.04
     steps:
-      # Clone this repository
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: true
 
-      # Lint
-      #- name: Setup clang-format
-      #  shell: bash
-      #  run: |
-      #    python -m pip install clang-format
-      #- name: Run clang-format
-      #  shell: bash
-      #  run: |
-      #    clang-format src/** --dry-run --Werror
-
-      # Add linux x86_32 toolchain
-      - name: Install multilib support
-        if: ${{ matrix.target.platform == 'linux' && matrix.target.arch == 'x86_32' }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
-
-      # Setup dependencies
       - name: Setup godot-cpp
         uses: ./godot-cpp/.github/actions/setup-godot-cpp
         with:
-          platform: ${{ matrix.target.platform }}
-          em-version: 3.1.62
+          platform: linux
 
-      # Build GDExtension (with caches)
+      - name: Format
+        run: |
+          python -m pip install "clang-format==${CLANG_FORMAT_VERSION}"
+          CLANG_FORMAT=clang-format tools/format.sh --check
 
       - name: Restore .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
-          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
+          cache-name: linux_x86_64_single_template_debug
 
-      - name: Build GDExtension Debug Build
-        shell: sh
+      - name: Build (warnings are errors)
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
-        run: |
-          scons target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }}
+        run: scons platform=linux target=template_debug werror=yes -j"$(nproc)"
 
       - name: Save .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-save
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
-          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
+          cache-name: linux_x86_64_single_template_debug
+
+      - name: Cache Godot
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-linux
+
+      - name: Download Godot
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot
+
+      - name: Unit tests
+        run: |
+          export GODOT=~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          # The import registers the extension; the headless editor crashes on exit (known, harmless).
+          "$GODOT" --headless --path project --import > import.log 2>&1 || true
+          test -f project/.godot/extension_list.cfg || { tail -30 import.log; exit 1; }
+          tools/unit_test.sh --no-build
