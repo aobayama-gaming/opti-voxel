@@ -1,4 +1,5 @@
 #include "voxel_terrain.hpp"
+#include "rd_utils.hpp"
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
@@ -490,7 +491,7 @@ void VoxelTerrain::_process(double) {
 
     if (auditor && auditor->step()) {
         audit_report = auditor->get_report();
-        memdelete(auditor);
+        auditor->destroy();
         auditor = nullptr;
         VLOG(1, "VoxelTerrain: page audit: ", audit_report);
     }
@@ -501,7 +502,7 @@ void VoxelTerrain::_process(double) {
 
     if (validator && validator->step()) {
         validation_report = validator->get_report();
-        memdelete(validator);
+        validator->destroy();
         validator = nullptr;
         VLOG(1, "VoxelTerrain: validation report: ", validation_report);
     }
@@ -785,16 +786,17 @@ void VoxelTerrain::_teardown() {
     started = false;
 
     // Debug tools first: the validator owns a legacy mesher, and both hold pages of the direct one.
+    // A run may be in flight: they delete themselves once their readbacks have arrived.
     if (validator) {
-        memdelete(validator);
+        validator->destroy();
         validator = nullptr;
     }
     if (auditor) {
-        memdelete(auditor);
+        auditor->destroy();
         auditor = nullptr;
     }
     if (gpu_profiler) {
-        memdelete(gpu_profiler);
+        RDUtils::delete_on_render_thread(gpu_profiler);
         gpu_profiler = nullptr;
     }
 

@@ -24,6 +24,7 @@ void PageAuditor::start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pag
 void PageAuditor::_rt_read(int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     const QuadPagePool::PageRD prd = pool->rt_get_page_rd(p_page);
+    rt_readbacks_in_flight += 2;
     rd->texture_get_data_async(prd.texture, 0, callable_mp(this, &PageAuditor::_rt_on_texture).bind(p_page));
     rd->buffer_get_data_async(prd.command, callable_mp(this, &PageAuditor::_rt_on_command).bind(p_page), 0, 20);
 }
@@ -32,12 +33,33 @@ void PageAuditor::_rt_on_texture(const PackedByteArray &p_data, int p_page) {
     mutex->lock();
     data[p_page] = p_data;
     mutex->unlock();
+    _rt_readback_done();
 }
 
 void PageAuditor::_rt_on_command(const PackedByteArray &p_data, int p_page) {
     mutex->lock();
     groups[p_page] = p_data.decode_u32(QuadPagePool::INDIRECT_INSTANCE_COUNT_OFFSET);
     mutex->unlock();
+    _rt_readback_done();
+}
+
+void PageAuditor::_rt_readback_done() {
+    rt_readbacks_in_flight--;
+    if (rt_destroying && rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
+}
+
+void PageAuditor::destroy() {
+    // FIFO: reads queued by step() run before _rt_destroy and are counted.
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &PageAuditor::_rt_destroy));
+}
+
+void PageAuditor::_rt_destroy() {
+    rt_destroying = true;
+    if (rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
 }
 
 bool PageAuditor::step() {

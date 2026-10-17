@@ -37,6 +37,11 @@ public:
     bool step();
     Dictionary get_report() const { return report; }
 
+    // Main thread. Frees the legacy mesher now, then deletes this object on the render thread once
+    // its page readbacks in flight have arrived: their callbacks are not skipped when the object is
+    // freed. Safe mid-validation.
+    void destroy();
+
     ~MeshValidator();
 
 private:
@@ -64,6 +69,12 @@ private:
 
     void _rt_read_page(int p_page);
     void _rt_on_page(const PackedByteArray &p_data, int p_page);
+    void _rt_destroy();
     void _compare();
+    // Stops and frees the legacy mesher (joins its worker: main thread only). Idempotent.
     void _release_legacy();
+
+    // Render thread only.
+    int rt_readbacks_in_flight = 0;
+    bool rt_destroying = false;
 };

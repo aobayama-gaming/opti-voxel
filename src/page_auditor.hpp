@@ -37,6 +37,9 @@ public:
     void start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, const ChunkParam &p_chunk_param);
     bool step();
     Dictionary get_report() const { return report; }
+    // Deletes this object on the render thread once its readbacks in flight have arrived: their
+    // callbacks are not skipped when the object is freed. Safe mid-audit.
+    void destroy();
 
 private:
     QuadPagePool *pool = nullptr;
@@ -48,9 +51,14 @@ private:
     HashMap<int, uint32_t> groups; // indirect group counts
     Dictionary report;
     bool done = false;
+    // Render thread only.
+    int rt_readbacks_in_flight = 0;
+    bool rt_destroying = false;
 
     void _rt_read(int p_page);
     void _rt_on_texture(const PackedByteArray &p_data, int p_page);
     void _rt_on_command(const PackedByteArray &p_data, int p_page);
+    void _rt_readback_done();
+    void _rt_destroy();
     void _analyse();
 };

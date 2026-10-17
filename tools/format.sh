@@ -27,8 +27,12 @@ fi
 
 TARGETS=()
 for f in "${FILES[@]}"; do
-    rel="$(realpath --relative-to="$ROOT" "$f" 2>/dev/null)" || continue
-    [[ $rel == src/* && $rel != src/gen/* && $rel =~ \.(cpp|hpp|h)$ && -f $rel ]] && TARGETS+=("$rel")
+    [[ -f $f ]] || continue
+    abs="$(realpath "$f")"
+    # Relative to the file's own checkout: a hook may pass a file from another worktree.
+    top="$(git -C "$(dirname "$abs")" rev-parse --show-toplevel 2>/dev/null)" || continue
+    rel="${abs#"$top"/}"
+    [[ $rel == src/* && $rel != src/gen/* && $rel =~ \.(cpp|hpp|h)$ ]] && TARGETS+=("$abs")
 done
 [[ ${#TARGETS[@]} -eq 0 ]] && exit 0
 

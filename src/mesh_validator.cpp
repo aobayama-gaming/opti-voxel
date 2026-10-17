@@ -100,6 +100,7 @@ void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, 
 
 void MeshValidator::_rt_read_page(int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
+    rt_readbacks_in_flight++;
     rd->texture_get_data_async(pool->rt_get_page_rd(p_page).texture, 0,
             callable_mp(this, &MeshValidator::_rt_on_page).bind(p_page));
 }
@@ -108,6 +109,10 @@ void MeshValidator::_rt_on_page(const PackedByteArray &p_data, int p_page) {
     mutex->lock();
     page_data[p_page] = p_data;
     mutex->unlock();
+    rt_readbacks_in_flight--;
+    if (rt_destroying && rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
 }
 
 bool MeshValidator::step() {
@@ -158,8 +163,20 @@ void MeshValidator::_release_legacy() {
     RenderingServer::get_singleton()->free_rid(legacy_scenario);
 }
 
+void MeshValidator::destroy() {
+    _release_legacy();
+    // FIFO: page reads queued by step() run before _rt_destroy and are counted.
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &MeshValidator::_rt_destroy));
+}
+
+void MeshValidator::_rt_destroy() {
+    rt_destroying = true;
+    if (rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
+}
+
 MeshValidator::~MeshValidator() {
-    // Deleted mid-run (terrain teardown): pending page reads are skipped with the freed object.
     _release_legacy();
 }
 

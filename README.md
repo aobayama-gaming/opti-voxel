@@ -49,7 +49,7 @@ Then open `project/` in Godot 4.6 and run the main scene.
 
 | Command | What | Needs |
 |---|---|---|
-| `tools/unit_test.sh [filter]` | C++ unit tests (`src/tests/`, doctest) inside headless Godot | nothing, ~5 s |
+| `tools/unit_test.sh [filter]` | C++ unit tests (`src/tests/`, doctest) inside headless Godot | the one-time import, ~5 s after a build |
 | `tools/check.sh` | The correctness gate: build, unit tests, a validated + audited load run, origin parity, integer frame, zero SDF test | GPU, unlocked session, ~2 min |
 | `tools/format.sh [--check]` | clang-format (pinned, through `uvx`) on `src/` | `uv` |
 | `tools/bench_ab.sh <a> <b>` | Before/after perf table of two checkouts | GPU |

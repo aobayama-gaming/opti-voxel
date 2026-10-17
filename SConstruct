@@ -39,12 +39,12 @@ Run the following command to download godot-cpp:
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
 # Our sources get their own environment: warnings are ours to fix, godot-cpp keeps its own flags.
-# Its headers are included as system headers so their warnings don't drown ours.
+# Its headers are also passed as -isystem so their warnings don't drown ours (GCC then ignores the
+# matching -I). They stay in CPPPATH: that is what SCons scans for header dependencies, and the
+# generated bindings must exist before our sources compile.
 src_env = env.Clone()
 if not src_env.get("is_msvc", False):
-    godot_includes = src_env["CPPPATH"]
-    src_env["CPPPATH"] = []
-    for include in godot_includes:
+    for include in src_env["CPPPATH"]:
         src_env.Append(CCFLAGS=["-isystem", src_env.Dir(include).abspath])
     src_env.Append(CCFLAGS=["-Wall", "-Wextra"])
     if localEnv["werror"]:
@@ -57,9 +57,8 @@ sources = Glob("src/*.cpp")
 # Unit tests (src/tests/, doctest) ship in debug builds only; tools/unit_test.sh runs them.
 if env["target"] != "template_release":
     env.Append(CPPDEFINES=["OPTI_VOXEL_TESTS"])
-    if env.get("is_msvc", False):
-        env.Append(CPPPATH=["thirdparty/doctest"])
-    else:
+    env.Append(CPPPATH=["thirdparty/doctest"])
+    if not env.get("is_msvc", False):
         env.Append(CCFLAGS=["-isystem", env.Dir("thirdparty/doctest").abspath])
     sources += Glob("src/tests/*.cpp")
 
