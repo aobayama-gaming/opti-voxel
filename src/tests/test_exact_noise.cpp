@@ -16,6 +16,30 @@ WorldPos at(int64_t p_x, int64_t p_y, int64_t p_z, Float3 p_frac = Float3{}) {
     return p;
 }
 
+bool same_bits(const Float4 &p_a, const Float4 &p_b) {
+    return float_bits(p_a.x) == float_bits(p_b.x) && float_bits(p_a.y) == float_bits(p_b.y) && float_bits(p_a.z) == float_bits(p_b.z) &&
+            float_bits(p_a.w) == float_bits(p_b.w);
+}
+
+// LODs above 0 checked against LOD 0 (up to 24, past the default 15 LODs).
+constexpr int SCALED_LODS[] = { 1, 2, 5, 9, 14, 20, 24 };
+
+// Deterministic pseudo-random points: near 0, around the 2^32 low-word wrap and far out (2^45, 2^60),
+// with fractions in [0, 1) as multiples of 2^-18 (the vertex grid's resolution). y in [p_y0, p_y0 + p_dy).
+std::vector<WorldPos> random_points(int p_count, int64_t p_y0, int64_t p_dy) {
+    const int64_t bases[] = { 0, int64_t(1) << 32, -(int64_t(1) << 32), int64_t(1) << 45, -(int64_t(1) << 60) };
+    std::vector<WorldPos> out;
+    for (int i = 0; i < p_count; i++) {
+        const UVec3 h = pcg3d(UVec3{ uint32_t(i), 0x5EEDu, 0x1234u });
+        const UVec3 f = pcg3d(h);
+        const int64_t base = bases[i % 5];
+        auto frac = [](uint32_t p_u) { return float(p_u >> 14) * exact_pow2(-18); };
+        out.push_back(at(base + int64_t(h.x % 200000u) - 100000, p_y0 + int64_t(h.y % uint32_t(p_dy)), base - int64_t(h.z % 200000u) + 100000,
+                Float3{ frac(f.x), frac(f.y), frac(f.z) }));
+    }
+    return out;
+}
+
 } // namespace
 
 TEST_CASE("ExactNoise: grad3 is Perlin's 12 cube edges, padded to 16") {
@@ -123,7 +147,8 @@ TEST_CASE("ExactNoise: make_fbm halves wavelength and amplitude, offsets a quart
         CAPTURE(i);
         CHECK(o.k == 20 - i);
         CHECK(o.amp == float(std::ldexp(8.0, -i)));
-        CHECK(o.damp == float(std::ldexp(double(o.amp), -o.k)));
+        CHECK(gradient_factor(o, 0) == float(std::ldexp(double(o.amp), -o.k)));
+        CHECK(gradient_factor(o, 7) == float(std::ldexp(double(o.amp), 7 - o.k)));
         const int64_t cell = int64_t(1) << o.k;
         for (const int64_t v : { o.offset.x, o.offset.y, o.offset.z }) {
             CHECK(v >= cell / 4);
@@ -156,8 +181,8 @@ TEST_CASE("SDFDummy: skipping the caves where they can't show changes no bit") {
     SDFDummy skip;
     SDFDummy full;
     full.cave_skip = false;
-    skip.configure(param);
-    full.configure(param);
+    skip.configure(param, 15);
+    full.configure(param, 15);
     const int64_t datum = std::llround(SDFDummy::DATUM_M / param.voxel_size);
     // Columns from 400 m below the datum to 100 m above: below the cave band, in it, in its top metres
     // and in the air.
@@ -166,13 +191,102 @@ TEST_CASE("SDFDummy: skipping the caves where they can't show changes no bit") {
         const int64_t x = c * 977 - 5000;
         const int64_t z = 3000 - c * 613;
         for (int64_t y = datum - 800; y <= datum + 200; y++) {
-            const Float4 a = skip.sdf(at(x, y, z, Float3{ 0.0f, 0.25f, 0.0f }));
-            const Float4 b = full.sdf(at(x, y, z, Float3{ 0.0f, 0.25f, 0.0f }));
+            const Float4 a = skip.sdf(at(x, y, z, Float3{ 0.0f, 0.25f, 0.0f }), 0);
+            const Float4 b = full.sdf(at(x, y, z, Float3{ 0.0f, 0.25f, 0.0f }), 0);
             differing += float_bits(a.x) != float_bits(b.x) || float_bits(a.y) != float_bits(b.y) ||
                     float_bits(a.z) != float_bits(b.z) || float_bits(a.w) != float_bits(b.w);
         }
-        CHECK(skip.sdf(at(x, datum - 800, z)).w < 0.0f); // rock below the band
-        CHECK(skip.sdf(at(x, datum + 200, z)).w > 0.0f); // air
+        CHECK(skip.sdf(at(x, datum - 800, z), 0).w < 0.0f); // rock below the band
+        CHECK(skip.sdf(at(x, datum + 200, z), 0).w > 0.0f); // air
     }
     CHECK(differing == 0);
+}
+
+TEST_CASE("ExactNoise: the fBm gradient at LOD L is exactly 2^L times the one at LOD 0, the value unchanged") {
+    ChunkParam param;
+    SDFDummy sdf;
+    sdf.configure(param, 15);
+    const OctaveSet wide = make_fbm(false, 99, 20, 6, 1000.0, 0.5); // factors 2^-10 at LOD 0
+    int differing = 0;
+    int checked = 0;
+    for (const OctaveSet *set : { &sdf.get_height(), &sdf.get_caves(), &wide }) {
+        for (const WorldPos &p : random_points(400, -100000, 200000)) {
+            const Float4 n0 = fbm(*set, p, 0);
+            for (const int lod : SCALED_LODS) {
+                const float s = exact_pow2(lod);
+                const Float4 n = fbm(*set, p, lod);
+                differing += !same_bits(n, Float4{ n0.x * s, n0.y * s, n0.z * s, n0.w });
+                checked++;
+            }
+        }
+    }
+    CHECK(checked > 0);
+    CHECK(differing == 0);
+}
+
+TEST_CASE("SDFDummy: the distance in metres and the normalised gradient are bit-identical at every LOD") {
+    for (const float voxel_size : { 0.5f, 0.05f }) {
+        CAPTURE(voxel_size);
+        ChunkParam param;
+        param.voxel_size = voxel_size;
+        SDFDummy plain;
+        SDFDummy full; // caves everywhere
+        full.cave_skip = false;
+        SDFDummy pillar;
+        pillar.zero_pillar = 1;
+        SDFDummy rig;
+        rig.test_rig = true;
+        for (SDFDummy *s : { &plain, &full, &pillar, &rig }) {
+            s->configure(param, 15);
+        }
+        const double vs = voxel_size;
+        const int64_t datum = std::llround(SDFDummy::DATUM_M / vs);
+        // Columns through the air, the ground, the cave band and the rock below, far out included, and
+        // a box around the zero pillar's top and the test rig (placed relative to the origin, 0 here).
+        std::vector<WorldPos> points = random_points(3000, datum - std::llround(400.0 / vs), std::llround(500.0 / vs));
+        const int64_t px = std::llround(SDFDummy::ZERO_PILLAR_X / vs);
+        const int64_t pz = std::llround(SDFDummy::ZERO_PILLAR_Z / vs);
+        const int64_t py = std::llround(SDFDummy::ZERO_PILLAR_TOP_M / vs);
+        const int64_t r = std::llround(10.0 / vs);
+        for (int64_t i = 0; i < 4000; i++) {
+            const UVec3 h = pcg3d(UVec3{ uint32_t(i), 0xB0Bu, 0u });
+            points.push_back(at(px + int64_t(h.x % uint32_t(2 * r)) - r, py + int64_t(h.y % uint32_t(4 * r)) - 3 * r,
+                    pz + int64_t(h.z % uint32_t(2 * r)) - r, Float3{ 0.5f, 0.0f, 0.25f }));
+        }
+        int differing = 0;
+        int pillar_wins = 0;
+        for (const WorldPos &p : points) {
+            const Float4 a0 = plain.sdf(p, 0);
+            const Float4 b0 = full.sdf(p, 0);
+            const Float4 c0 = pillar.sdf(p, 0);
+            const float r0 = rig.evaluate(p, 0);
+            pillar_wins += !same_bits(c0, a0);
+            for (const int lod : SCALED_LODS) {
+                differing += !same_bits(plain.sdf(p, lod), a0);
+                differing += !same_bits(full.sdf(p, lod), b0);
+                differing += !same_bits(pillar.sdf(p, lod), c0);
+                differing += float_bits(rig.evaluate(p, lod)) != float_bits(r0);
+            }
+        }
+        CHECK(pillar_wins > 0);
+        CHECK(differing == 0);
+    }
+}
+
+TEST_CASE("ExactNoise: gradient_range_error flags factors outside [2^-16, 2^40] at the evaluated LODs") {
+    ChunkParam param;
+    SDFDummy sdf;
+    sdf.configure(param, 15);
+    // Today's terrain, up to LOD 24.
+    CHECK(gradient_range_error(sdf.get_height(), 25).is_empty());
+    CHECK(gradient_range_error(sdf.get_caves(), 25).is_empty());
+    // amp 2^30 at k = 0: 2^40 at LOD 10, 2^41 at LOD 11.
+    const OctaveSet steep = make_fbm(false, 1, 0, 1, std::ldexp(1.0, 30), 0.5);
+    CHECK(gradient_range_error(steep, 11).is_empty());
+    CHECK_FALSE(gradient_range_error(steep, 12).is_empty());
+    // amp 1 at k = 20: 2^-20 at LOD 0; amp 16: 2^-16 at LOD 0.
+    OctaveSet gentle = make_fbm(true, 1, 20, 1, 1.0, 0.5);
+    CHECK_FALSE(gradient_range_error(gentle, 1).is_empty());
+    gentle.octaves[0].amp = exact_pow2(4);
+    CHECK(gradient_range_error(gentle, 15).is_empty());
 }

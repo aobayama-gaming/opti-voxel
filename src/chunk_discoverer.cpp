@@ -21,12 +21,13 @@ bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos, CullMode p
     const VoxelPos chunk_center = ChunkMath::chunk_center_voxel(chunk_pos, chunk_param);
     // Half the chunk size in voxels: the corners are at the centre +- this.
     const int64_t half_voxels = ChunkMath::get_lod_size(chunk_pos) * chunk_param.half_chunk_voxels();
+    const int lod = ChunkMath::get_lod(chunk_pos);
 
     for (int corner = 0; corner < 8; ++corner) {
         WorldPos corner_pos;
         corner_pos.voxel = chunk_center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);
 
-        const float corner_distance = std::abs(sdf->evaluate(corner_pos));
+        const float corner_distance = std::abs(sdf->evaluate(corner_pos, lod));
         r_counters.sdf_calls++;
         if (corner_distance <= chunk_outer_radius) {
             return false;

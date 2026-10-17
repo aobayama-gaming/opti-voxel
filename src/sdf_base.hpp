@@ -11,15 +11,21 @@ class SDFBase {
 public:
     virtual ~SDFBase() = default;
 
-    // Called once before any thread uses the SDF (VoxelTerrain::_ready).
-    virtual void configure(const ChunkParam &p_param) { param = p_param; }
+    // Called once before any thread uses the SDF (VoxelTerrain::_ready). Chunks exist at LODs
+    // [0, p_lod_count).
+    virtual void configure(const ChunkParam &p_param, int p_lod_count) {
+        (void)p_lod_count;
+        param = p_param;
+    }
 
-    // CPU evaluation at an absolute position (integer frame): signed distance, negative inside.
-    virtual float evaluate(const WorldPos &p_pos) const = 0;
+    // CPU evaluation at an absolute position (integer frame), for a chunk of LOD p_lod: signed
+    // distance in metres, negative inside. The LOD only sets the unit of the internal gradients (per
+    // voxel of that LOD), the distance is the same at every LOD.
+    virtual float evaluate(const WorldPos &p_pos, int p_lod) const = 0;
 
-    // GPU code: must define "vec4 terrain_sdf(WorldPos p)" (xyz gradient, w distance). The shader
-    // provides the chunk_param uniform, the frame functions of gpu_frame.hpp and the exact noise of
-    // exact_noise.hpp.
+    // GPU code: must define "vec4 terrain_sdf(WorldPos p, int lod)" (xyz gradient, w distance). The
+    // shader provides the chunk_param uniform, the frame functions of gpu_frame.hpp and the exact
+    // noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
 
 protected:

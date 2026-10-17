@@ -83,9 +83,10 @@ to every change, and a reviewer may reject a PR on any of them.
 - CPU: chunk ids and voxel coordinates are int64 (`ChunkId` / `VoxelPos` = `Vector3i64`,
   `src/world_coord.hpp`). Chunk ids are chunk centres in chunk-id units (half a LOD0 chunk = 14
   voxels); LOD0 ids are odd, a LOD-L id has its lowest set bit at L.
-- The SDF takes a `WorldPos` (LOD0 voxel + float fraction in [0, 1)): `SDFBase::evaluate(const
-  WorldPos &)`, GLSL `vec4 terrain_sdf(WorldPos p)`. The same point reached from two chunks gives a
-  bit-identical `WorldPos`.
+- The SDF takes a `WorldPos` (LOD0 voxel + float fraction in [0, 1)) and the chunk's LOD:
+  `SDFBase::evaluate(const WorldPos &, int lod)`, GLSL `vec4 terrain_sdf(WorldPos p, int lod)` (the
+  meshers pass `ChunkFrame::lod`, the discoverer and validator `ChunkMath::get_lod`). The same point
+  reached from two chunks gives a bit-identical `WorldPos`.
 - GPU (`src/gpu_frame.hpp`): low 32 bits with wrapping arithmetic (exact for differences under 2^31),
   plus high words where absolute identity matters. `ChunkParam` UBO is 48 B (origin low/high
   words), per-chunk input is `ChunkInput` (32 B). Page headers carry the id's low words.
@@ -98,12 +99,17 @@ to every change, and a reviewer may reject a PR on any of them.
   `perlin3` / `perlin2` = one octave of gradient noise with wavelength exactly 2^k LOD0 voxels
   (`cell = (voxel + offset) >> k`, the in-cell position as 24-bit fixed point, quintic fade, analytic
   derivatives); `make_fbm` / `fbm` / `glsl_fbm` = octave sets with per-octave seed and integer offset
-  (a quarter to three quarters of a cell, so the nested lattices' zeros never line up).
+  (a quarter to three quarters of a cell, so the nested lattices' zeros never line up). At LOD L the
+  fBm gradient is per voxel of that LOD (2^L LOD0 voxels): octave factor `amp * 2^(L-k)`
+  (`gradient_factor`), kept in [2^-16, 2^40] at every LOD the octave is evaluated at
+  (`gradient_range_error`, checked in `SDFDummy::configure`). Values are unscaled.
 - The terrain (`SDFDummy`) is a function of the absolute position: the same world point gives the same
   value from any origin, and `SDFDummy::sdf()` is bit-identical to GLSL `terrain_sdf` (gradient
-  included). It works in voxels and returns metres; parameters are metres rounded to 2^k voxels in
-  `configure()`, so another voxel size is another world. Flat world: the datum is absolute y ~ 300 m,
-  so far origins only show terrain with y = 0. Debug shapes (test rig, zero pillar) are placed
+  included). Heights and depths are in LOD0 voxels, gradients and distances in voxels of the chunk's
+  LOD, and it returns metres; every LOD factor is an exact power of two, so the metres and the
+  normalised gradient are bit-identical at every LOD (unit-tested). Parameters are metres rounded to
+  2^k voxels in `configure()`, so another voxel size is another world. Flat world: the datum is
+  absolute y ~ 300 m, so far origins only show terrain with y = 0. Debug shapes (test rig, zero pillar) are placed
   relative to the world origin (exact `sat_diff` to it). The 3D caves are two thirds of the SDF's
   GPU cost: they are only evaluated where the band lets them reach the smooth max (bit-identical to
   evaluating them everywhere, `cave_skip`, unit-tested).
@@ -167,9 +173,9 @@ to every change, and a reviewer may reject a PR on any of them.
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
 - `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike`): GPU vs CPU check of the integer
   frame and the exact noise at 5 far origins: WorldPos and anchors, then every probe of the probe
-  table bit for bit (hash, octave decomposition at k 0..62, perlin3/2, the terrain's fBms,
-  `terrain_sdf`), pairs reaching the same voxel, absolute points identical at every origin, and
-  continuity along lines across voxel and noise-cell low-word wraps. Run it after touching
+  table bit for bit (hash, octave decomposition at k 0..62, perlin3/2, the terrain's fBms and
+  `terrain_sdf` at LODs 0, 1, 5, 14, 24), pairs reaching the same voxel, absolute points identical
+  at every origin, and continuity along lines across voxel and noise-cell low-word wraps. Run it after touching
   `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp` or the SDF. A new noise or SDF
   term adds an entry (CPU fn + GLSL fn) to `make_probes()` in `src/frame_spike.cpp`.
 - `tools/origin_parity.sh [--voxel=M] -- --mode=direct --validate=64`: the same world point seen
@@ -232,7 +238,8 @@ to every change, and a reviewer may reject a PR on any of them.
   `normalize` / `sqrt` / division (implementation-defined precision): write dots and lerps out, use
   `det_rsqrt` (integer seed + Newton, mul/add only). Float constants go to the GLSL as bits
   (`ExactNoise::glsl_float`). No denormals: the GPU may flush them, the CPU keeps them (24-bit
-  fixed-point cell positions, fades flushed below 2^-24, amplitudes in [2^-16, 2^40]).
+  fixed-point cell positions, fades flushed below 2^-24, amplitudes and per-LOD gradient factors in
+  [2^-16, 2^40]).
   `FrameSpike` checks bit-exactness.
 - A distance estimate c / |grad c| of a noise field badly underestimates far from its zero set; under a
   `max()` it can win and make deep rock read |SDF| < one cell, and skirts then build walls kilometres

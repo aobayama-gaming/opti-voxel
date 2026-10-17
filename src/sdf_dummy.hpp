@@ -10,8 +10,12 @@
 // absolute datum) carved by sparse 3D cave blobs in a depth band below the surface, with a smooth
 // subtraction. It is a function of the absolute position only: the same world point gives the same
 // value from any world origin, and the CPU evaluation (sdf()) is bit-identical to the GLSL
-// (terrain_sdf), gradient included. Everything is computed in LOD0 voxels and the distance is turned
-// into metres last.
+// (terrain_sdf), gradient included. Values (heights, depths) are in LOD0 voxels; gradients and
+// distances are per voxel of the chunk's LOD (2^lod LOD0 voxels), and the distance is turned into
+// metres last. Every LOD-dependent factor is an exact power of two, so the result in metres is
+// bit-identical at every LOD (unit-tested). In theory an intermediate below 2^-(126-lod) voxels (a
+// height sum within 2^-102 of a sample's row) would turn denormal at a high LOD only; in practice
+// none comes near. The gradient's unit keeps a later per-LOD octave window away from tiny factors.
 //
 // Parameters are written in metres and rounded to wavelengths of 2^k voxels in configure(), so
 // another voxel size gives another world (the hashed cells are voxels), at about the same scale.
@@ -64,12 +68,18 @@ public:
     SDFDummy() = default;
     ~SDFDummy() override = default;
 
-    void configure(const ChunkParam &p_param) override {
-        SDFBase::configure(p_param);
+    void configure(const ChunkParam &p_param, int p_lod_count) override {
+        SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
         auto k_of = [vs](double p_wavelength_m) { return int(std::lround(std::log2(p_wavelength_m / vs))); };
         height = ExactNoise::make_fbm(true, HEIGHT_SEED, k_of(HEIGHT_WAVELENGTH_M), HEIGHT_OCTAVES, HEIGHT_AMPLITUDE_M / vs * NORM_2D, 0.5);
         caves = ExactNoise::make_fbm(false, CAVE_SEED, k_of(CAVE_WAVELENGTH_M), CAVE_OCTAVES, NORM_3D, 0.5);
+        for (const ExactNoise::OctaveSet *set : { &height, &caves }) {
+            const String error = ExactNoise::gradient_range_error(*set, p_lod_count);
+            if (!error.is_empty()) {
+                ERR_PRINT(error);
+            }
+        }
         datum = VoxelPos(0, std::llround(DATUM_M / vs), 0);
         cave_top = float(CAVE_TOP_M / vs);
         cave_floor = float(CAVE_FLOOR_M / vs);
@@ -89,19 +99,23 @@ public:
     const ExactNoise::OctaveSet &get_height() const { return height; }
     const ExactNoise::OctaveSet &get_caves() const { return caves; }
 
-    float evaluate(const WorldPos &p_pos) const override {
-        const ExactNoise::Float4 d = sdf(p_pos);
+    float evaluate(const WorldPos &p_pos, int p_lod) const override {
+        const ExactNoise::Float4 d = sdf(p_pos, p_lod);
         return test_rig ? MIN(d.w, SDFTestRig::evaluate(debug_metres(p_pos))) : d.w;
     }
 
-    // Gradient (normalised) and distance in metres: the CPU side of terrain_sdf without the test rig,
-    // bit for bit.
-    ExactNoise::Float4 sdf(const WorldPos &p_pos) const {
+    // Gradient (normalised) and distance in metres for a chunk of LOD p_lod: the CPU side of
+    // terrain_sdf without the test rig, bit for bit.
+    ExactNoise::Float4 sdf(const WorldPos &p_pos, int p_lod) const {
         using namespace ExactNoise;
-        // Height field: surface at datum + h(x, z), the terrain distance normalised by its gradient.
-        const Float4 hn = fbm(height, p_pos);
+        // One voxel of the chunk's LOD in LOD0 voxels, and its inverse.
+        const float s = exact_pow2(p_lod);
+        const float inv_s = exact_pow2(-p_lod);
+        // Height field: surface at datum + h(x, z), the terrain distance normalised by its gradient
+        // (LOD0 voxels per voxel of the LOD), so terrain.w is in voxels of the LOD.
+        const Float4 hn = fbm(height, p_pos, p_lod);
         const float dy = float(WorldCoord::sat_diff(p_pos.voxel.y, datum.y, DY_LIMIT)) + p_pos.frac.y;
-        Float4 t{ -hn.x, 1.0f, -hn.z, dy - hn.w };
+        Float4 t{ -hn.x, s, -hn.z, dy - hn.w };
         const float tr = det_rsqrt(t.x * t.x + t.y * t.y + t.z * t.z);
         const Float4 terrain{ t.x * tr, t.y * tr, t.z * tr, t.w * tr };
 
@@ -120,23 +134,27 @@ public:
         // Smooth max(terrain, carve) over `blend` voxels: exactly the terrain once h = 1. carve.w <=
         // band_w, so where the band alone gives h = 1 (above the ground and in the top metres of the
         // band) the caves can't show and aren't evaluated: they are two thirds of the SDF's cost.
+        // The blend radius in voxels of the LOD, and the gradient floor of the cave field.
+        const float blend_l = blend * inv_s;
+        const float inv_blend_l = inv_blend * s;
+        const float cave_eps2_l = cave_eps2 * (s * s);
         float gx = terrain.x;
         float gy = terrain.y;
         float gz = terrain.z;
         float dist = terrain.w;
-        if (!cave_skip || (terrain.w - band_w) * inv_blend < 1.0f) {
-            const Float4 blob = fbm(caves, p_pos);
+        if (!cave_skip || (terrain.w - band_w) * inv_blend_l < 1.0f) {
+            const Float4 blob = fbm(caves, p_pos, p_lod);
             const float gs = ts * cave_gain;
             Float4 c{ 0.8f * blob.x + gs * t.x, 0.8f * blob.y + gs * t.y, 0.8f * blob.z + gs * t.z,
                 0.8f * blob.w - 0.66f + cave_gain * tent };
-            const float cr = det_rsqrt(MAX(c.x * c.x + c.y * c.y + c.z * c.z, cave_eps2));
+            const float cr = det_rsqrt(MAX(c.x * c.x + c.y * c.y + c.z * c.z, cave_eps2_l));
             const Float4 blobs{ c.x * cr, c.y * cr, c.z * cr, c.w * cr };
             const Float4 band{ ts * terrain.x, ts * terrain.y, ts * terrain.z, band_w };
             const Float4 carve = blobs.w < band.w ? blobs : band;
             const float dw = terrain.w - carve.w;
-            const float h = CLAMP(0.5f + 0.5f * (dw * inv_blend), 0.0f, 1.0f);
+            const float h = CLAMP(0.5f + 0.5f * (dw * inv_blend_l), 0.0f, 1.0f);
             if (h < 1.0f) {
-                dist = carve.w + dw * h + blend * h * (1.0f - h);
+                dist = carve.w + dw * h + blend_l * h * (1.0f - h);
                 gx = carve.x + (terrain.x - carve.x) * h;
                 gy = carve.y + (terrain.y - carve.y) * h;
                 gz = carve.z + (terrain.z - carve.z) * h;
@@ -146,20 +164,22 @@ public:
         Float4 r{ gx * gr, gy * gr, gz * gr, dist };
 
         if (zero_pillar) {
-            r = pillar_min(r, p_pos);
+            r = pillar_min(r, p_pos, inv_s);
         }
-        return Float4{ r.x, r.y, r.z, r.w * voxel_size };
+        return Float4{ r.x, r.y, r.z, r.w * (voxel_size * s) };
     }
 
     String get_glsl_code() const override {
         using namespace ExactNoise;
         String code = glsl_fbm("terrain_height", height) + glsl_fbm("terrain_caves", caves);
         String body = R"glsl(
-vec4 terrain_sdf(WorldPos p) {
-    precise vec4 hn = terrain_height(p);
+vec4 terrain_sdf(WorldPos p, int lod) {
+    precise float s = exact_pow2(lod);
+    precise float inv_s = exact_pow2(-lod);
+    precise vec4 hn = terrain_height(p, lod);
     int sy = sat_diff(p, DATUM_LO, DATUM_HI, DY_LIMIT).y;
     precise float dy = float(sy) + p.frac.y;
-    precise vec4 t = vec4(-hn.x, 1.0, -hn.z, dy - hn.w);
+    precise vec4 t = vec4(-hn.x, s, -hn.z, dy - hn.w);
     precise float tr = det_rsqrt(t.x * t.x + t.y * t.y + t.z * t.z);
     precise vec4 terrain = t * tr;
 
@@ -171,27 +191,30 @@ vec4 terrain_sdf(WorldPos p) {
     precise float ts = near_top ? -1.0 : 1.0;
     precise float band_w = tent * tr;
 
+    precise float blend_l = BLEND * inv_s;
+    precise float inv_blend_l = INV_BLEND * s;
+    precise float cave_eps2_l = CAVE_EPS2 * (s * s);
     precise vec3 g = terrain.xyz;
     precise float dist = terrain.w;
-    if (CAVE_ALWAYS(terrain.w - band_w) * INV_BLEND < 1.0) {
-        precise vec4 blob = terrain_caves(p);
+    if (CAVE_ALWAYS(terrain.w - band_w) * inv_blend_l < 1.0) {
+        precise vec4 blob = terrain_caves(p, lod);
         precise float gs = ts * CAVE_GAIN;
         precise vec4 c = vec4(0.8 * blob.xyz + gs * t.xyz, 0.8 * blob.w - 0.66 + CAVE_GAIN * tent);
-        precise float cr = det_rsqrt(max(c.x * c.x + c.y * c.y + c.z * c.z, CAVE_EPS2));
+        precise float cr = det_rsqrt(max(c.x * c.x + c.y * c.y + c.z * c.z, cave_eps2_l));
         precise vec4 blobs = c * cr;
         precise vec4 band = vec4(ts * terrain.xyz, band_w);
         precise vec4 carve = blobs.w < band.w ? blobs : band;
         precise float dw = terrain.w - carve.w;
-        precise float h = clamp(0.5 + 0.5 * (dw * INV_BLEND), 0.0, 1.0);
+        precise float h = clamp(0.5 + 0.5 * (dw * inv_blend_l), 0.0, 1.0);
         if (h < 1.0) {
-            dist = carve.w + dw * h + BLEND * h * (1.0 - h);
+            dist = carve.w + dw * h + blend_l * h * (1.0 - h);
             g = carve.xyz + (terrain.xyz - carve.xyz) * h;
         }
     }
     precise float gr = det_rsqrt(max(g.x * g.x + g.y * g.y + g.z * g.z, uintBitsToFloat(0x2B800000u)));
     precise vec4 r = vec4(g * gr, dist);
     /*ZERO_PILLAR*/
-    r.w = r.w * VOXEL_SIZE;
+    r.w = r.w * (VOXEL_SIZE * s);
     /*TEST_RIG*/
     return r;
 }
@@ -214,7 +237,7 @@ vec3 debug_voxels(WorldPos p) {
                         .replace("DEBUG_HI", glsl_hi(debug_anchor));
         if (zero_pillar) {
             code += String(R"glsl(
-vec4 zero_pillar_min(vec4 r, WorldPos p) {
+vec4 zero_pillar_min(vec4 r, WorldPos p, float inv_s) {
     precise vec3 v = debug_voxels(p);
     precise vec4 d = vec4(0.0, 1.0, 0.0, v.y - TOP);
     precise float ox = v.x - PX;
@@ -223,6 +246,7 @@ vec4 zero_pillar_min(vec4 r, WorldPos p) {
     precise float dz = abs(oz) - HALF;
     if (dx > d.w) d = vec4(ox < 0.0 ? -1.0 : 1.0, 0.0, 0.0, dx);
     if (dz > d.w) d = vec4(0.0, 0.0, oz < 0.0 ? -1.0 : 1.0, dz);
+    d.w = d.w * inv_s;
     return d.w < r.w ? d : r;
 }
 )glsl")
@@ -230,7 +254,7 @@ vec4 zero_pillar_min(vec4 r, WorldPos p) {
                             .replace("PX", glsl_float(pillar_x))
                             .replace("PZ", glsl_float(pillar_z))
                             .replace("HALF", glsl_float(pillar_half));
-            body = body.replace("/*ZERO_PILLAR*/", "r = zero_pillar_min(r, p);");
+            body = body.replace("/*ZERO_PILLAR*/", "r = zero_pillar_min(r, p, inv_s);");
         }
         if (test_rig) {
             code = String(SDFTestRig::GLSL) + code;
@@ -269,7 +293,8 @@ private:
         return Vector3(v.x * voxel_size, v.y * voxel_size, v.z * voxel_size);
     }
 
-    ExactNoise::Float4 pillar_min(const ExactNoise::Float4 &p_r, const WorldPos &p_pos) const {
+    // In LOD0 voxels, the distance returned in voxels of the LOD (times p_inv_s).
+    ExactNoise::Float4 pillar_min(const ExactNoise::Float4 &p_r, const WorldPos &p_pos, float p_inv_s) const {
         const Float3 v = debug_voxels(p_pos);
         ExactNoise::Float4 d{ 0.0f, 1.0f, 0.0f, v.y - pillar_top };
         const float ox = v.x - pillar_x;
@@ -282,6 +307,7 @@ private:
         if (dz > d.w) {
             d = ExactNoise::Float4{ 0.0f, 0.0f, oz < 0.0f ? -1.0f : 1.0f, dz };
         }
+        d.w = d.w * p_inv_s;
         return d.w < p_r.w ? d : p_r;
     }
 };

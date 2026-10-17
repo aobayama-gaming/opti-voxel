@@ -17,7 +17,9 @@
 //   perlin3 / perlin2      one octave of gradient noise (quintic fade, analytic derivatives) with
 //                          wavelength 2^k LOD0 voxels: cell = (voxel + offset) >> k, and the float math
 //                          only sees the position inside the cell, as 24-bit fixed point.
-//   fbm (OctaveSet)        sum of octaves, each with its own k, seed, integer offset and amplitude.
+//   fbm (OctaveSet)        sum of octaves, each with its own k, seed, integer offset and amplitude, at
+//                          a LOD L: the value is unscaled, the gradient is per voxel of LOD L (2^L
+//                          LOD0 voxels), each octave's derivative per cell times amp * 2^(L-k).
 //
 // Exactness rules (the CPU mirror below is op for op the GLSL of GLSL_EXACT_NOISE):
 //   - uint32 wrapping arithmetic only for the hash (CPU uint32_t, never int: signed overflow is UB).
@@ -28,7 +30,8 @@
 //     -ffp-contract=off (SConstruct).
 //   - No denormal ever: the GPU may flush them, the CPU keeps them. Cell positions are multiples of
 //     2^-24 and the fades are flushed to 0 below 2^-24 (an error below the octave's float resolution),
-//     so every product stays >= 2^-96 or is 0; amplitudes are kept in [2^-16, 2^40] (make_fbm).
+//     so every product stays >= 2^-96 or is 0; amplitudes and gradient factors amp * 2^(L-k) are
+//     kept in [2^-16, 2^40] (make_fbm, gradient_range_error).
 //   - Float constants reach the GLSL as raw bits (glsl_float), never as decimal text.
 namespace ExactNoise {
 
@@ -313,14 +316,24 @@ inline float det_rsqrt(float p_x) {
     return y;
 }
 
-// Fractal sum. Octave i: wavelength 2^k voxels, value * amp, derivative per voxel * damp (= amp * 2^-k).
+// Fractal sum. Octave i: wavelength 2^k voxels, value * amp. At LOD L the gradient is per voxel of
+// that LOD: derivative per cell * amp * 2^(L-k) (gradient_factor), an exact power-of-two rescale of
+// the gradient per LOD0 voxel, so L only changes its exponent.
 struct Octave {
     int k = 0;
     uint32_t seed = 0;
     Vector3i64 offset;
     float amp = 0.0f;
-    float damp = 0.0f;
 };
+
+inline float gradient_factor(const Octave &p_octave, int p_lod) {
+    return p_octave.amp * exact_pow2(p_lod - p_octave.k);
+}
+
+// Bounds of amplitudes and gradient factors: no denormal in any product (see the rules above).
+inline bool in_exact_range(float p_f) {
+    return p_f >= exact_pow2(-16) && p_f <= exact_pow2(40);
+}
 
 struct OctaveSet {
     bool is_2d = false;
@@ -351,11 +364,8 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
         const UVec3 h2 = pcg3d(h);
         o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
         o.amp = float(amp);
-        o.damp = float(std::ldexp(double(o.amp), -o.k));
-        const float lo = exact_pow2(-16);
-        const float hi = exact_pow2(40);
-        if (!(o.amp >= lo && o.amp <= hi && o.damp >= lo && o.damp <= hi)) {
-            ERR_PRINT(vformat("ExactNoise: octave k=%d amplitude %s (per voxel %s) outside [2^-16, 2^40]: denormals possible.", o.k, o.amp, o.damp));
+        if (!in_exact_range(o.amp)) {
+            ERR_PRINT(vformat("ExactNoise: octave k=%d amplitude %s outside [2^-16, 2^40]: denormals possible.", o.k, o.amp));
         }
         set.octaves.push_back(o);
         amp *= p_persistence;
@@ -363,13 +373,29 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
     return set;
 }
 
-inline Float4 fbm(const OctaveSet &p_set, const WorldPos &p_pos) {
+// Checks the gradient factors at the LODs [0, p_lod_count) the set is evaluated at (configure time):
+// an error message, empty if they are all in range.
+inline String gradient_range_error(const OctaveSet &p_set, int p_lod_count) {
+    for (const Octave &o : p_set.octaves) {
+        for (int lod = 0; lod < p_lod_count; lod++) {
+            if (!in_exact_range(gradient_factor(o, lod))) {
+                return vformat("ExactNoise: octave k=%d amplitude %s at LOD %d: gradient factor %s outside [2^-16, 2^40], denormals possible.",
+                        o.k, o.amp, lod, gradient_factor(o, lod));
+            }
+        }
+    }
+    return String();
+}
+
+// Value and gradient per voxel of LOD p_lod (see Octave).
+inline Float4 fbm(const OctaveSet &p_set, const WorldPos &p_pos, int p_lod) {
     Float4 n;
     for (const Octave &o : p_set.octaves) {
         const Float4 v = p_set.is_2d ? perlin2(p_pos, o.k, o.seed, o.offset) : perlin3(p_pos, o.k, o.seed, o.offset);
-        n.x = n.x + v.x * o.damp;
-        n.y = n.y + v.y * o.damp;
-        n.z = n.z + v.z * o.damp;
+        const float g = gradient_factor(o, p_lod);
+        n.x = n.x + v.x * g;
+        n.y = n.y + v.y * g;
+        n.z = n.z + v.z * g;
         n.w = n.w + v.w * o.amp;
     }
     return n;
@@ -396,13 +422,14 @@ inline String glsl_hi(const Vector3i64 &p_v) {
             glsl_uint(uint32_t(hi32(p_v.z))) + "))";
 }
 
-// GLSL "vec4 <name>(WorldPos p)", the GPU side of fbm(): straight-line code with literal constants.
+// GLSL "vec4 <name>(WorldPos p, int lod)", the GPU side of fbm(): straight-line code with literal
+// constants.
 inline String glsl_fbm(const String &p_name, const OctaveSet &p_set) {
-    String code = "vec4 " + p_name + "(WorldPos p) {\n    precise vec4 n = vec4(0.0);\n    precise vec4 o;\n";
+    String code = "vec4 " + p_name + "(WorldPos p, int lod) {\n    precise vec4 n = vec4(0.0);\n    precise vec4 o;\n";
     for (const Octave &o : p_set.octaves) {
         code += vformat("    o = %s(p, %d, %s, %s, %s);\n", p_set.is_2d ? "perlin2" : "perlin3", o.k, glsl_uint(o.seed), glsl_lo(o.offset),
                 glsl_hi(o.offset));
-        code += "    n.xyz = n.xyz + o.xyz * " + glsl_float(o.damp) + ";\n";
+        code += vformat("    n.xyz = n.xyz + o.xyz * (%s * exact_pow2(lod - %d));\n", glsl_float(o.amp), o.k);
         code += "    n.w = n.w + o.w * " + glsl_float(o.amp) + ";\n";
     }
     code += "    return n;\n}\n";

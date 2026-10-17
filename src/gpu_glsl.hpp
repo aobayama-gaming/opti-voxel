@@ -136,7 +136,7 @@ float _skirt_inside_distance(float coord, ChunkParam chunk_param){
 // visible surface is exact. The gradient (normal) stays the base one.
 vec4 skirt_sdf(ChunkFrame chunk, vec3 point_coord, ChunkParam chunk_param){
 
-    vec4 base_sdf = evaluate_sdf(world_pos_from_grid(chunk, point_coord, chunk_param));
+    vec4 base_sdf = evaluate_sdf(world_pos_from_grid(chunk, point_coord, chunk_param), chunk.lod);
 
     if(chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0){
         float inside = min(_skirt_inside_distance(point_coord.x, chunk_param),

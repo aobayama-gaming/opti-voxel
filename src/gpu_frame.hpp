@@ -69,18 +69,20 @@ struct ChunkInput { uvec4 id; ivec4 anchor_hi; };
 // An absolute position: LOD0 voxel (lo: low 32 bits, wrapping; hi: high 32 bits) + fraction in [0, 1).
 struct WorldPos { uvec3 lo; ivec3 hi; vec3 frac; };
 
-// A chunk of the batch: low words of its id, its LOD size and its minimum voxel.
-struct ChunkFrame { ivec3 id_lo; int lod_size; uvec3 anchor_lo; ivec3 anchor_hi; };
+// A chunk of the batch: low words of its id, its LOD (and 2^LOD; the low word holds the id's lowest
+// set bit for LODs below 32) and its minimum voxel.
+struct ChunkFrame { ivec3 id_lo; int lod; int lod_size; uvec3 anchor_lo; ivec3 anchor_hi; };
 
 )glsl";
 
-// After the LOD helpers (get_lod_size), before the terrain SDF. Use GPUFrame::glsl_functions().
+// After the LOD helpers (get_lod), before the terrain SDF. Use GPUFrame::glsl_functions().
 inline constexpr const char GLSL_FRAME_FUNCTIONS[] = R"glsl(
 
 ChunkFrame chunk_frame(ChunkInput c, ChunkParam cp) {
     ChunkFrame f;
     f.id_lo = ivec3(c.id.xyz);
-    f.lod_size = get_lod_size(f.id_lo);
+    f.lod = get_lod(f.id_lo);
+    f.lod_size = 1 << f.lod;
     uint half_chunk = uint(cp.chunk_size - 2 * cp.skirt_size) >> 1u;
     f.anchor_lo = (c.id.xyz - uvec3(uint(f.lod_size))) * half_chunk;
     f.anchor_hi = c.anchor_hi.xyz;

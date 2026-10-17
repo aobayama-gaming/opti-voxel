@@ -39,7 +39,7 @@ double min_abs_sdf_cells(SDFBase *p_sdf, const ChunkId &p_chunk, const Vector3 &
     double best = 1e30;
     for (int i = 0; i < 8; i++) {
         const Float3 corner{ float(base.x + (i & 1)), float(base.y + ((i >> 1) & 1)), float(base.z + ((i >> 2) & 1)) };
-        const double sdf_cells = (double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param)) / p_cell;
+        const double sdf_cells = (double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param), ChunkMath::get_lod(p_chunk)) / p_cell;
         best = MIN(best, std::abs(sdf_cells + skirt_offset_cells(corner, p_param)));
     }
     return best;

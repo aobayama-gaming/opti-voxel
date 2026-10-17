@@ -358,7 +358,7 @@ void VoxelTerrain::_ready() {
     // sdf is always an SDFDummy for now (see the member initialiser).
     static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
     static_cast<SDFDummy *>(sdf)->zero_pillar = debug_zero_pillar;
-    sdf->configure(chunk_param);
+    sdf->configure(chunk_param, lod_numbers);
 
     visual_mesh_data.set_max_lod(lod_numbers);
 
