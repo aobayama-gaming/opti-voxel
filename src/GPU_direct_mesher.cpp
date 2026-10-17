@@ -102,6 +102,8 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     pool->set_material_param("chunk_size", chunk_param.chunk_size);
     pool->set_material_param("skirt_size", chunk_param.skirt_size);
     pool->set_material_param("pos_scale", PageFormat::pos_scale(chunk_param.chunk_size));
+    // Render positions are relative to the world origin (low words, wrapping).
+    pool->set_material_param("origin_chunk_lo", WorldCoord::lo32_i(chunk_param.origin_chunk));
     page_state.resize(pool->get_page_count());
 
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_initialize));

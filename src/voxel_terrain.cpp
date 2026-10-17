@@ -35,6 +35,12 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_legacy_batch_size"), &VoxelTerrain::get_legacy_batch_size);
     ClassDB::bind_method(D_METHOD("set_voxel_size", "size"), &VoxelTerrain::set_voxel_size);
     ClassDB::bind_method(D_METHOD("get_voxel_size"), &VoxelTerrain::get_voxel_size);
+    ClassDB::bind_method(D_METHOD("set_world_origin_x", "voxel"), &VoxelTerrain::set_world_origin_x);
+    ClassDB::bind_method(D_METHOD("get_world_origin_x"), &VoxelTerrain::get_world_origin_x);
+    ClassDB::bind_method(D_METHOD("set_world_origin_y", "voxel"), &VoxelTerrain::set_world_origin_y);
+    ClassDB::bind_method(D_METHOD("get_world_origin_y"), &VoxelTerrain::get_world_origin_y);
+    ClassDB::bind_method(D_METHOD("set_world_origin_z", "voxel"), &VoxelTerrain::set_world_origin_z);
+    ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
     ClassDB::bind_method(D_METHOD("set_debug_test_rig", "enable"), &VoxelTerrain::set_debug_test_rig);
     ClassDB::bind_method(D_METHOD("get_debug_test_rig"), &VoxelTerrain::get_debug_test_rig);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
@@ -72,6 +78,10 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
+    ADD_GROUP("World Origin", "world_origin_");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_x", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_x", "get_world_origin_x");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_y", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_y", "get_world_origin_y");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_z", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_z", "get_world_origin_z");
     ADD_GROUP("GPU Direct", "direct_");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_batch_size", PROPERTY_HINT_RANGE, "1,1024"), "set_direct_batch_size", "get_direct_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_pages_per_batch", PROPERTY_HINT_RANGE, "1,256"), "set_direct_pages_per_batch", "get_direct_pages_per_batch");
@@ -117,6 +127,43 @@ void VoxelTerrain::set_voxel_size(float p_size) {
 
 float VoxelTerrain::get_voxel_size() const {
     return chunk_param.voxel_size;
+}
+
+bool VoxelTerrain::_can_set_world_origin(int64_t p_voxel) const {
+    ERR_FAIL_COND_V_MSG(started, false, "world_origin must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_V_MSG(p_voxel > WorldCoord::MAX_ABS_ORIGIN_VOXEL || p_voxel < -WorldCoord::MAX_ABS_ORIGIN_VOXEL, false,
+            "world_origin must be within +-2^60 voxels.");
+    return true;
+}
+
+void VoxelTerrain::set_world_origin_x(int64_t p_voxel) {
+    if (_can_set_world_origin(p_voxel)) {
+        world_origin_request.x = p_voxel;
+    }
+}
+
+int64_t VoxelTerrain::get_world_origin_x() const {
+    return world_origin_request.x;
+}
+
+void VoxelTerrain::set_world_origin_y(int64_t p_voxel) {
+    if (_can_set_world_origin(p_voxel)) {
+        world_origin_request.y = p_voxel;
+    }
+}
+
+int64_t VoxelTerrain::get_world_origin_y() const {
+    return world_origin_request.y;
+}
+
+void VoxelTerrain::set_world_origin_z(int64_t p_voxel) {
+    if (_can_set_world_origin(p_voxel)) {
+        world_origin_request.z = p_voxel;
+    }
+}
+
+int64_t VoxelTerrain::get_world_origin_z() const {
+    return world_origin_request.z;
 }
 
 void VoxelTerrain::set_debug_test_rig(bool p_enable) {
@@ -238,6 +285,19 @@ void VoxelTerrain::_ready(){
 
     started = true;
     start_usec = now_usec();
+
+    // The world origin, snapped down to the root chunk span (2^lod_numbers chunk-id units): the
+    // octree around the camera, the LOD layout and the GPU low words are then the same at any origin.
+    {
+        const int64_t root_units = int64_t(1) << lod_numbers;
+        const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
+        chunk_param.origin_chunk = ChunkId(WorldCoord::floor_div(world_origin_request.x, root_voxels) * root_units,
+                WorldCoord::floor_div(world_origin_request.y, root_voxels) * root_units,
+                WorldCoord::floor_div(world_origin_request.z, root_voxels) * root_units);
+        if (chunk_param.origin_voxel() != world_origin_request) {
+            VLOG(1, "VoxelTerrain: world origin snapped to ", WorldCoord::to_string(chunk_param.origin_voxel()), " voxels");
+        }
+    }
 
     // sdf is always an SDFDummy for now (see the member initialiser).
     static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
@@ -455,6 +515,11 @@ Dictionary VoxelTerrain::get_debug_stats() {
     }
 
     d["pipeline_mode"] = (int)pipeline_mode;
+    Dictionary origin;
+    origin["requested_voxel"] = WorldCoord::to_string(world_origin_request);
+    origin["voxel"] = WorldCoord::to_string(chunk_param.origin_voxel());
+    origin["chunk"] = WorldCoord::to_string(chunk_param.origin_chunk);
+    d["world_origin"] = origin;
     d["frames"] = (int64_t)exec_time;
     d["load_complete"] = is_load_complete();
     d["frames_until_loaded"] = frames_until_loaded;
