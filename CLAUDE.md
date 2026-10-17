@@ -26,6 +26,12 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   the runs (2 per side by default, both through the worktree's `bench.sh`) and writes the table to paste
   into the PR. Comparing a tree against itself still shows load-time deltas of ~5%: that's the noise.
   Never build while a bench runs (thermals, see Gotchas).
+- One GPU, several agents: other sessions work in other worktrees and run their own builds, benches
+  and check.sh on the same laptop. Perf numbers are only valid when nothing else runs. Before a perf
+  run (`bench_ab.sh`, `bench_compare.sh`, `--cool=1`), check `ps -eo pid,etime,args | grep -E
+  "godot|scons"` for processes outside your worktree; if any, wait or ask the user. Correctness checks
+  are fine in parallel, perf A/Bs never are (an A/B swung from +175% to -29% on the same metric
+  because another session's tests overlapped).
 - Commits are GPG-signed, and the user types the passphrase.
 - Keep mesher and render work core-level. Order and bounds come from integer chunk ids. Sub-SDFs
   per chunk and biome-local SDF origins are upcoming features with their own design: don't
