@@ -42,12 +42,33 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   `GPUDirectMesher::compact()` re-packs pages under half full GPU to GPU and rewrites the moved
   `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`).
 
+## Integer frame (no float ever holds an absolute coordinate)
+- CPU: chunk ids and voxel coordinates are int64 (`ChunkId` / `VoxelPos` = `Vector3i64`,
+  `src/world_coord.hpp`). Chunk ids are chunk centres in chunk-id units (half a LOD0 chunk = 14
+  voxels); LOD0 ids are odd, a LOD-L id has its lowest set bit at L.
+- The SDF takes a `WorldPos` (LOD0 voxel + float fraction in [0, 1)): `SDFBase::evaluate(const
+  WorldPos &)`, GLSL `vec4 terrain_sdf(WorldPos p)`. The same point reached from two chunks gives a
+  bit-identical `WorldPos`.
+- GPU (`src/gpu_frame.hpp`): low 32 bits with wrapping arithmetic (exact for differences under 2^31),
+  plus high words where absolute identity matters. `ChunkParam` UBO is 48 B (origin low/high
+  words), per-chunk input is `ChunkInput` (32 B). Page headers carry the id's low words.
+- Metres only come from `ChunkMath::chunk_render_center / grid_to_render / grid_to_render_lo32 /
+  chunk_at_render`: render (Godot) space, relative to the world origin.
+- World origin: `VoxelTerrain.world_origin_x/y/z` (LOD0 voxels, |v| <= 2^60), snapped down to the
+  root chunk span (2^lod_numbers ids = 458,752 voxels with the defaults). No runtime rebasing yet.
+- The current SDF (`SDFDummy`) is written in metres and goes through `SDFMetreBridge`: evaluated at
+  the origin-relative position, so the terrain follows the origin. `WorldCoord::LEGACY_NUDGE_M`
+  (0.123456 m) is its lattice offset (page shader: `lattice_offset_m`). Both go away with the exact
+  noise.
+- Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
+
 ## Verify changes (do this, don't eyeball)
 - `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
   [--view=0..7] [--validate=64] [--audit=1]`: builds, runs `project/debug/bench.tscn` with a fixed
   camera, writes `bench/results/<run>/stats.json` + `godot.log` + screenshots, prints a summary.
-  Exits non-zero on build failure, crashes, `ERROR` lines, leaked RIDs. `bench/results/LAST` holds
-  the latest run dir.
+  Exits non-zero on build failure, crashes, `ERROR` lines, leaked RIDs, and (exit 4) a requested
+  validation or audit that failed. `bench/results/LAST` holds the latest run dir.
+  `--origin=X,Y,Z` sets the world origin (voxels).
 - `--validate=N` (direct): re-meshes N loaded chunks with the legacy mesher and compares
   triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies;
   a handful of winding flips / normal outliers at corners where |SDF| ~ 0 are expected (two
@@ -59,6 +80,14 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh --runs=3 "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
+- `tools/frame_test.sh [--no-build]` (`FrameSpike`): GPU vs CPU check of the integer frame (WorldPos,
+  anchors, pairs reaching the same voxel, continuity across low-word wraps) at far origins. Run it
+  after touching `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math` or the SDF plumbing. A new noise
+  adds an entry (CPU fn + GLSL fn) to the probe table in `src/frame_spike.cpp`.
+- `tools/origin_parity.sh [--voxel=M] -- --mode=direct --validate=64 --audit=1`: the same run at
+  origins 0, 0 again (noise floor), ~1e15 m and a low-word wrap; counts must match exactly and
+  screenshots stay at the noise floor. Report: `bench/results/<date>-parity.md`. Only meaningful
+  while the SDF follows the origin (`SDFMetreBridge`).
 
 ## Gotchas (all hit for real)
 - Laptop GPU: in the `quiet` platform profile the GPU is power-capped to ~300 MHz under load and
@@ -91,6 +120,15 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   `to_destroy_chunk` holds stale copies until `_destroy_chunk`, so compact after it.
 - `Array` is shared by reference (Packed*Array are copy-on-write): don't clear an Array after
   binding it into a deferred callable.
+- `PackedByteArray::encode_s32/u32`, `PackedInt32Array` element assignment and `Vector3i(...)`
+  truncate int64 silently: ids reach the GPU only through `GPUFrame::encode_chunk_input` /
+  `WorldCoord::lo32_i`.
+- Godot's JSON parser reads numbers back as doubles: reports carry int64 ids as strings
+  (`WorldCoord::to_string`).
+- CPU mirrors of GPU float math (`ChunkMath::sample_pos`, `legacy_rel_voxels`, `legacy_metres`)
+  must stay op for op identical in float32: separate statements, `Float3` (not `Vector3`, which is
+  double in precision=double builds), and `precise` on the GPU side. `FrameSpike` checks bit-exactness.
+- `FrameSpike` uses a local RenderingDevice: it needs a window (not `--headless`) and an unlocked session.
 - Main-RD resources must be created/freed on the render thread; objects owning them delete
   themselves there (`destroy()` -> `_rt_destroy()`), since callables bound to a freed object are
   skipped.

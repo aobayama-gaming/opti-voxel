@@ -6,7 +6,8 @@
 #
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
-# Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log.
+# Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log,
+# 4 a requested --validate / --audit reported ok=false.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -142,6 +143,13 @@ if v:
           f" max_pos={v.get('max_position_error_cells', 0):.4f} cells normal max={v.get('max_normal_error_deg', 0):.2f} mean={v.get('mean_normal_error_deg', 0):.3f} deg >5deg={v.get('normals_over_5deg')}")
     if v.get("error"):
         print(">> VALIDATION ERROR:", v["error"])
+a = d.get("audit") or {}
+if a:
+    print(f">> AUDIT ok={a.get('ok')} live={a.get('live')} dead_zero={a.get('dead_zero')} stale={a.get('stale')}"
+          f" partial={a.get('partial')} broken={a.get('broken')} bad_header={a.get('bad_header')}")
+wo = d.get("final_terrain", {}).get("world_origin")
+if wo:
+    print(f">> world origin voxel={wo.get('voxel')} chunk={wo.get('chunk')}")
 ft = d["final_terrain"]
 print(f">> frames_until_loaded={ft.get('frames_until_loaded')} ms_until_loaded={ft.get('ms_until_loaded'):.0f}")
 m = ft.get("mesher", {})
@@ -163,4 +171,14 @@ fi
 echo "$RUN_DIR" > "$ROOT/bench/results/LAST"
 [[ $CODE -ne 0 ]] && exit 2
 [[ $ERRORS -gt 0 ]] && exit 3
+# A validation or audit that ran must have passed (empty dicts: not requested).
+CHECKS_OK=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(1); sys.exit()
+v, a = d.get('validation') or {}, d.get('audit') or {}
+print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok')))))" "$RUN_DIR/stats.json")
+[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT FAILED"; exit 4; }
 exit 0
