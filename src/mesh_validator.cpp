@@ -188,6 +188,8 @@ void MeshValidator::_compare() {
     int64_t winding_flipped = 0;
     int64_t legacy_unmatched = 0;
     int64_t direct_unmatched = 0;
+    int64_t ambiguous_slivers = 0; // stranded by the greedy matching
+    int64_t ambiguous_flips = 0; // matched to a flipped twin only
     double max_pos_err_cells = 0.0;
     double max_normal_err_deg = 0.0;
     double sum_normal_err_deg = 0.0;
@@ -279,10 +281,44 @@ void MeshValidator::_compare() {
             const Tri &d = direct[i];
             grid[key((d.p[0] + d.p[1] + d.p[2]) / 3.0f)].push_back(i);
         }
+        // A quad smaller than the tolerance matches any triangle of its neighbourhood, so the greedy
+        // one-to-one pass below can strand a triangle whose partner was taken by a neighbour, or leave
+        // it only its flipped twin. Such a sliver (every edge within 2 * tol) is accepted if some
+        // triangle of the other side, used or not, lies within the tolerance (in the same winding, for
+        // a flipped match).
+        auto sliver = [&](const Tri &p_t) {
+            return p_t.p[0].distance_to(p_t.p[1]) <= 2.0f * tol && p_t.p[1].distance_to(p_t.p[2]) <= 2.0f * tol &&
+                    p_t.p[2].distance_to(p_t.p[0]) <= 2.0f * tol;
+        };
+        auto near_any = [&](const Tri &p_t, const std::vector<Tri> &p_others, bool p_same_winding) {
+            const Vector3 c = (p_t.p[0] + p_t.p[1] + p_t.p[2]) / 3.0f;
+            for (const Tri &o : p_others) {
+                if (((o.p[0] + o.p[1] + o.p[2]) / 3.0f).distance_to(c) > 3.0f * tol) {
+                    continue;
+                }
+                for (int flip = 0; flip < (p_same_winding ? 1 : 2); flip++) {
+                    for (int rot = 0; rot < 3; rot++) {
+                        double err = 0.0;
+                        for (int k = 0; k < 3; k++) {
+                            const int ok = flip ? (rot + 3 - k) % 3 : (rot + k) % 3;
+                            err = MAX(err, (double)p_t.p[k].distance_to(o.p[ok]));
+                        }
+                        if (err <= tol) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        };
+        int64_t chunk_ambiguous = 0; // stranded slivers, not in chunk_matched
+        int64_t chunk_ambiguous_flips = 0; // matched, flipped twin only
         std::vector<bool> direct_used(direct.size(), false);
         int64_t chunk_matched = 0;
         int64_t chunk_flipped = 0;
-        for (const Tri &l : legacy_tris) {
+        std::vector<int> legacy_left; // unmatched after the one-to-one pass
+        for (int li = 0; li < (int)legacy_tris.size(); li++) {
+            const Tri &l = legacy_tris[li];
             const Vector3i k0 = key((l.p[0] + l.p[1] + l.p[2]) / 3.0f);
             int best = -1;
             bool best_flipped = false;
@@ -324,14 +360,17 @@ void MeshValidator::_compare() {
                 }
             }
             if (best < 0) {
-                legacy_unmatched++;
-                record("legacy_unmatched", t.chunk_id, l, cell, 0.0);
+                legacy_left.push_back(li);
                 continue;
             }
             direct_used[best] = true;
             chunk_matched++;
-            chunk_flipped += best_flipped ? 1 : 0;
-            if (best_flipped) {
+            // A sliver whose same-winding partner was taken by a neighbour is not a flip.
+            const bool ambiguous_flip = best_flipped && sliver(l) && near_any(l, direct, true);
+            chunk_ambiguous_flips += ambiguous_flip ? 1 : 0;
+            const bool flipped = best_flipped && !ambiguous_flip;
+            chunk_flipped += flipped ? 1 : 0;
+            if (flipped) {
                 record("winding_flipped", t.chunk_id, l, cell, 0.0);
             } else if (chunk_matched % 4000 == 1 && baseline_sdf.size() < 200) {
                 const Vector3 c = (l.p[0] + l.p[1] + l.p[2]) / 3.0f;
@@ -354,11 +393,25 @@ void MeshValidator::_compare() {
                 }
             }
         }
-        int64_t chunk_direct_unmatched = 0;
-        for (bool used : direct_used) {
-            chunk_direct_unmatched += used ? 0 : 1;
+        int64_t chunk_legacy_unmatched = 0;
+        for (int li : legacy_left) {
+            const Tri &l = legacy_tris[li];
+            if (sliver(l) && near_any(l, direct, false)) {
+                chunk_ambiguous++;
+                continue;
+            }
+            chunk_legacy_unmatched++;
+            record("legacy_unmatched", t.chunk_id, l, cell, 0.0);
         }
-        const int64_t chunk_legacy_unmatched = (int64_t)legacy_tris.size() - chunk_matched;
+        int64_t chunk_direct_unmatched = 0;
+        for (int di = 0; di < (int)direct.size(); di++) {
+            if (!direct_used[di] && !(sliver(direct[di]) && near_any(direct[di], legacy_tris, false))) {
+                chunk_direct_unmatched++;
+            }
+        }
+        legacy_unmatched += chunk_legacy_unmatched;
+        ambiguous_slivers += chunk_ambiguous;
+        ambiguous_flips += chunk_ambiguous_flips;
 
         legacy_tris_total += legacy_tris.size();
         direct_tris_total += direct.size();
@@ -396,6 +449,8 @@ void MeshValidator::_compare() {
     report["legacy_unmatched_tris"] = legacy_unmatched;
     report["direct_unmatched_tris"] = direct_unmatched;
     report["winding_flipped_tris"] = winding_flipped;
+    report["ambiguous_slivers"] = ambiguous_slivers;
+    report["ambiguous_sliver_flips"] = ambiguous_flips;
     report["max_position_error_cells"] = max_pos_err_cells;
     report["max_normal_error_deg"] = max_normal_err_deg;
     report["mean_normal_error_deg"] = normal_samples ? sum_normal_err_deg / normal_samples : 0.0;
@@ -412,13 +467,14 @@ void MeshValidator::_compare() {
         b["median"] = sorted.is_empty() ? 0.0 : sorted[sorted.size() / 2];
         report["baseline_min_abs_sdf_cells"] = b;
     }
-    report["match_ratio"] = legacy_tris_total ? (double)matched / legacy_tris_total : 1.0;
-    // Legacy and direct evaluate the same SDF with differently compiled shaders on different devices,
-    // so a sign decision on a corner where |sdf| ~ 0 may legitimately differ (winding flip, edge
-    // crossing present on one side only, gradient branch of max()). Such differences are
-    // "explained"; anything next to a clearly non-zero corner is a real bug.
+    report["match_ratio"] = legacy_tris_total ? (double)(matched + ambiguous_slivers) / legacy_tris_total : 1.0;
+    // Legacy and direct evaluate the same SDF with differently compiled shaders on different devices.
+    // The terrain SDF is bit-exact (exact_noise.hpp, `precise`), so its signs agree; a debug shape that
+    // is not (test rig) may still disagree on the sign of a corner where |sdf| ~ 0 (winding flip, edge
+    // crossing present on one side only). Such differences are "explained"; anything next to a
+    // clearly non-zero corner is a real bug.
     report["unexplained_anomalies"] = unexplained;
     report["bad_group_headers"] = bad_headers;
     report["ok"] = legacy_tris_total > 0 && legacy_tris_total == direct_tris_total && unexplained == 0 && bad_headers == 0 &&
-            (double)matched / legacy_tris_total > 0.9999 && (normal_samples == 0 || sum_normal_err_deg / normal_samples < 0.5);
+            (double)(matched + ambiguous_slivers) / legacy_tris_total > 0.9999 && (normal_samples == 0 || sum_normal_err_deg / normal_samples < 0.5);
 }

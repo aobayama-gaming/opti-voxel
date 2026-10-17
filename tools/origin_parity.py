@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
-"""Compares the runs of tools/origin_parity.sh: OUT label=run_dir ... (zero first, zero2 = noise floor)."""
+"""Compares the runs of tools/origin_parity.sh: OUT label=run_dir ...
+
+Pairs (same world point, different origins) must load the same non-empty chunks with identical
+per-chunk mesh digests (chunks.json of the page audit). Discovery only depends on the camera's chunk
+id, so the sets match unless a camera sits within float error of a chunk boundary (the parity cameras
+don't). zero / zero2 (the same run twice) must also match on the exact counts."""
 import json
 import sys
 
 import numpy as np
 from PIL import Image
 
-EXACT = [
-    ("chunks.scanned", lambda t: t["chunks"]["scanned"]),
+PAIRS = [("zero", "zero2"), ("zero", "near"), ("far_a", "far_b"), ("wrap_a", "wrap_b")]
+COUNTS = [
     ("chunks.loaded", lambda t: t["chunks"]["loaded"]),
     ("chunks.loaded_non_empty", lambda t: t["chunks"]["loaded_non_empty"]),
     ("chunks.live_triangles", lambda t: t["chunks"]["live_triangles"]),
-    ("chunks.drawn_triangles", lambda t: t["chunks"]["drawn_triangles"]),
-    ("discoverer.last_scan_size", lambda t: t["discoverer"]["last_scan_size"]),
     ("mesher.live_quads", lambda t: t["mesher"].get("live_quads")),
-    ("mesher.missing_neighbor", lambda t: t["mesher"].get("missing_neighbor")),
 ]
 SHOTS = ["loaded.png", "steady.png"]
+
+
+def load(path):
+    with open(path) as f:
+        return json.load(f)
 
 
 def image_diff(a, b):
@@ -29,38 +36,48 @@ def image_diff(a, b):
 def main():
     out = sys.argv[1]
     runs = dict(arg.split("=", 1) for arg in sys.argv[2:])
-    stats = {}
-    for k, d in runs.items():
-        with open(f"{d}/stats.json") as f:
-            stats[k] = json.load(f)
-    lines = ["# Origin parity", "", "| run | origin (voxels) | " + " | ".join(n for n, _ in EXACT) + " | nan | validation | audit |",
-             "|" + "---|" * (len(EXACT) + 5)]
+    stats = {k: load(f"{d}/stats.json") for k, d in runs.items()}
+    digests = {k: load(f"{d}/chunks.json") for k, d in runs.items()}
     ok = True
-    base = {n: f(stats["zero"]["final_terrain"]) for n, f in EXACT}
+
+    lines = ["# Origin parity", "", "| run | origin (voxels) | " + " | ".join(n for n, _ in COUNTS) + " | nan | validation | audit |",
+             "|" + "---|" * (len(COUNTS) + 5)]
     for k, s in stats.items():
         t = s["final_terrain"]
-        vals = [f(t) for _, f in EXACT]
         nan = t["mesher"].get("nan_vertices", 0)
         val = (s.get("validation") or {}).get("ok", "-")
         aud = (s.get("audit") or {}).get("ok", "-")
-        same = all(v == base[n] for (n, _), v in zip(EXACT, vals))
-        ok &= same and not nan and val in (True, "-") and aud in (True, "-")
-        lines.append(f"| {k} | {t['world_origin']['voxel']} | " + " | ".join(str(v) for v in vals) +
-                     f" | {nan} | {val} | {aud} |" + ("" if same else " **differs**"))
-    lines += ["", "Screenshots vs `zero`: share of pixels with a channel difference > 3 (max difference).", "",
-              "| run | " + " | ".join(SHOTS) + " |", "|" + "---|" * (len(SHOTS) + 1)]
+        run_ok = not nan and val in (True, "-") and aud is True
+        ok &= run_ok
+        lines.append(f"| {k} | {t['world_origin']['voxel']} | " + " | ".join(str(f(t)) for _, f in COUNTS) +
+                     f" | {nan} | {val} | {aud} |" + ("" if run_ok else " **failed**"))
+
+    lines += ["", "Same world point, different origins: per-chunk mesh digests.", "",
+              "| pair | chunks a | chunks b | shared | identical | differing | " + " | ".join(SHOTS) + " |",
+              "|" + "---|" * (6 + len(SHOTS))]
     floor = {shot: image_diff(f"{runs['zero']}/{shot}", f"{runs['zero2']}/{shot}")[0] for shot in SHOTS}
-    for k, d in runs.items():
-        if k == "zero":
-            continue
+    examples = []
+    for a, b in PAIRS:
+        da, db = digests[a], digests[b]
+        shared = set(da) & set(db)
+        differing = sorted(c for c in shared if da[c] != db[c])
+        share = len(shared) / max(len(da), len(db), 1)
+        pair_ok = not differing and set(da) == set(db) and len(shared) > 0
+        if (a, b) == ("zero", "zero2"):
+            pair_ok &= all(f(stats[a]["final_terrain"]) == f(stats[b]["final_terrain"]) for _, f in COUNTS)
+        ok &= pair_ok
+        examples += [f"{a}/{b} {c}: {da[c]} vs {db[c]}" for c in differing[:5]]
         cells = []
         for shot in SHOTS:
-            share, mx = image_diff(f"{runs['zero']}/{shot}", f"{d}/{shot}")
-            limit = max(2 * floor[shot], 1e-4)
-            cells.append(f"{share:.6f} ({mx})" + ("" if share <= limit else " **over**"))
-            ok &= share <= limit
-        lines.append(f"| {k} | " + " | ".join(cells) + " |")
-    lines += ["", f"**{'PARITY OK' if ok else 'PARITY BROKEN'}**", ""]
+            s, mx = image_diff(f"{runs[a]}/{shot}", f"{runs[b]}/{shot}")
+            cells.append(f"{s:.6f} ({mx})")
+        lines.append(f"| {a} / {b} | {len(da)} | {len(db)} | {share:.4f} | {len(shared) - len(differing)} | {len(differing)} | " +
+                     " | ".join(cells) + " |" + ("" if pair_ok else " **broken**"))
+    lines += ["", "Screenshots: share of pixels with a channel difference > 3 (max difference); noise floor (zero / zero2): " +
+              ", ".join(f"{s} {floor[s]:.6f}" for s in SHOTS) + ". Informational for the pairs.", ""]
+    if examples:
+        lines += ["Differing chunks (quads:digest):", ""] + [f"- {e}" for e in examples] + [""]
+    lines += [f"**{'PARITY OK' if ok else 'PARITY BROKEN'}**", ""]
     lines += [f"- {k}: `{d}`" for k, d in runs.items()]
     with open(out, "w") as f:
         f.write("\n".join(lines) + "\n")

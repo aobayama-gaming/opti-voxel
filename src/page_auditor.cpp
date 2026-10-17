@@ -13,6 +13,30 @@
 
 static constexpr int PAGES_PER_FRAME = 2; // larger async texture downloads per frame crash 4.6.3
 
+namespace {
+
+uint64_t mix64(uint64_t p_x) {
+    p_x ^= p_x >> 30;
+    p_x *= 0xBF58476D1CE4E5B9ull;
+    p_x ^= p_x >> 27;
+    p_x *= 0x94D049BB133111EBull;
+    p_x ^= p_x >> 31;
+    return p_x;
+}
+
+// One quad's 4 corners (8 bytes each, in emission order) as a 64-bit hash.
+uint64_t quad_hash(const uint16_t *p_page, uint32_t p_quad) {
+    uint64_t h = 0x9E3779B97F4A7C15ull;
+    for (int k = 0; k < 4; k++) {
+        const uint16_t *c = PageFormat::corner(p_page, p_quad, k);
+        const uint64_t word = uint64_t(c[0]) | (uint64_t(c[1]) << 16) | (uint64_t(c[2]) << 32) | (uint64_t(c[3]) << 48);
+        h = mix64(h ^ word);
+    }
+    return h;
+}
+
+} // namespace
+
 void PageAuditor::start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, const ChunkParam &p_chunk_param) {
     pool = p_pool;
     chunk_param = p_chunk_param;
@@ -88,6 +112,10 @@ void PageAuditor::_analyse() {
     Vector3 max_edge_at;
     int64_t pages_with_stale = 0, pages_with_partial = 0;
     Array samples;
+    // Per chunk: quad count and the wrapping sum of the quad hashes. The order of the quads inside a
+    // chunk comes from GPU atomics, so the sum is what is comparable across runs; corners are
+    // chunk-local, so it does not depend on the world origin or on where the chunk sits in the pool.
+    HashMap<ChunkId, std::pair<int64_t, uint64_t>, Vector3i64Hasher> digests;
     for (const PageInfo &info : pages) {
         mutex->lock();
         const PackedByteArray bytes = data[info.page];
@@ -96,6 +124,14 @@ void PageAuditor::_analyse() {
         const uint16_t *page = reinterpret_cast<const uint16_t *>(bytes.ptr());
         std::vector<PageInfo::Range> ranges = info.live;
         std::sort(ranges.begin(), ranges.end());
+        const uint32_t page_quads = bytes.size() / PageFormat::ROW_BYTES * QuadPagePool::QUAD_GROUP;
+        for (const PageInfo::Range &range : ranges) {
+            std::pair<int64_t, uint64_t> &d = digests[range.chunk];
+            for (uint32_t q = range.offset; q < range.offset + range.count && q < page_quads; q++) {
+                d.first++;
+                d.second += quad_hash(page, q);
+            }
+        }
         const uint32_t slots = MIN(page_groups, bytes.size() / PageFormat::ROW_BYTES) * QuadPagePool::QUAD_GROUP;
         drawn_slots += slots;
         size_t r = 0;
@@ -166,5 +202,10 @@ void PageAuditor::_analyse() {
     report["max_quad_edge_m"] = max_edge;
     report["max_quad_edge_at"] = max_edge_at;
     report["partial_samples"] = samples;
+    Dictionary chunk_digests;
+    for (const KeyValue<ChunkId, std::pair<int64_t, uint64_t>> &kv : digests) {
+        chunk_digests[WorldCoord::to_string(kv.key)] = vformat("%d:%s", kv.value.first, String::num_uint64(kv.value.second, 16));
+    }
+    report["chunk_digests"] = chunk_digests;
     report["ok"] = stale == 0 && partial == 0 && broken == 0 && bad_header == 0;
 }

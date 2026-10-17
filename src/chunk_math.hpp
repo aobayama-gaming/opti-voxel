@@ -56,8 +56,7 @@ float world_chunk_size(const ChunkId &chunk_coord, const ChunkParam &chunk_param
 VoxelPos chunk_min_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 VoxelPos chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 
-// Render space (Godot space): metres relative to the world origin, shifted by the legacy lattice
-// offset like the GPU sampling and the page shader. Only these helpers produce metres.
+// Render space (Godot space): metres relative to the world origin. Only these helpers produce metres.
 Vector3 chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 // A point of the chunk's vertex grid (the grid the SDF is sampled on, skirt included).
 Vector3 grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const ChunkParam &chunk_param);
@@ -68,8 +67,4 @@ ChunkId chunk_at_render(const Vector3 &render_pos, const ChunkParam &chunk_param
 
 // Absolute position of a vertex-grid point: CPU mirror of world_pos_from_grid (gpu_frame.hpp).
 WorldPos sample_pos(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param);
-// Origin-relative voxels and metres for SDFs written in metres (SDFMetreBridge): CPU mirrors of
-// legacy_rel_voxels / legacy_sdf_metres, op for op.
-Float3 legacy_rel_voxels(const WorldPos &pos, const ChunkParam &chunk_param);
-Vector3 legacy_metres(const WorldPos &pos, const ChunkParam &chunk_param);
 } //namespace ChunkMath

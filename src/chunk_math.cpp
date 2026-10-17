@@ -88,11 +88,10 @@ Vector3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size
     const double ls = double(p_lod_size);
     const double vs = double(p_param.voxel_size);
     const double skirt = double(p_param.skirt_size);
-    const double nudge = double(WorldCoord::LEGACY_NUDGE_M);
     return Vector3(
-            real_t((double(p_min_rel_voxel.x) + (double(p_grid.x) - skirt) * ls) * vs + nudge),
-            real_t((double(p_min_rel_voxel.y) + (double(p_grid.y) - skirt) * ls) * vs + nudge),
-            real_t((double(p_min_rel_voxel.z) + (double(p_grid.z) - skirt) * ls) * vs + nudge));
+            real_t((double(p_min_rel_voxel.x) + (double(p_grid.x) - skirt) * ls) * vs),
+            real_t((double(p_min_rel_voxel.y) + (double(p_grid.y) - skirt) * ls) * vs),
+            real_t((double(p_min_rel_voxel.z) + (double(p_grid.z) - skirt) * ls) * vs));
 }
 
 } // namespace
@@ -100,8 +99,7 @@ Vector3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size
 Vector3 ChunkMath::chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
     const Vector3i64 rel = chunk_center_voxel(chunk_coord, chunk_param) - chunk_param.origin_voxel();
     const double vs = double(chunk_param.voxel_size);
-    const double nudge = double(WorldCoord::LEGACY_NUDGE_M);
-    return Vector3(real_t(double(rel.x) * vs + nudge), real_t(double(rel.y) * vs + nudge), real_t(double(rel.z) * vs + nudge));
+    return Vector3(real_t(double(rel.x) * vs), real_t(double(rel.y) * vs), real_t(double(rel.z) * vs));
 }
 
 Vector3 ChunkMath::grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const ChunkParam &chunk_param) {
@@ -132,8 +130,8 @@ ChunkId ChunkMath::chunk_at_render(const Vector3 &render_pos, const ChunkParam &
     return chunk_param.origin_chunk + ChunkId(cell(render_pos.x) * 2 + 1, cell(render_pos.y) * 2 + 1, cell(render_pos.z) * 2 + 1);
 }
 
-// The float operations below mirror gpu_frame.hpp one by one, in float32, as separate statements.
-// (x86-64 without -mfma never contracts them into FMAs; the GPU side uses `precise`.)
+// The float operations below mirror gpu_frame.hpp one by one, in float32, as separate statements
+// (built with -ffp-contract=off, see SConstruct; the GPU side uses `precise`).
 
 WorldPos ChunkMath::sample_pos(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param) {
     const float lod_size = float(get_lod_size(chunk_coord));
@@ -151,27 +149,4 @@ WorldPos ChunkMath::sample_pos(const ChunkId &chunk_coord, const Float3 &grid, c
     pos.voxel.y = axis(grid.y, anchor.y, pos.frac.y);
     pos.voxel.z = axis(grid.z, anchor.z, pos.frac.z);
     return pos;
-}
-
-Float3 ChunkMath::legacy_rel_voxels(const WorldPos &pos, const ChunkParam &chunk_param) {
-    const VoxelPos d = pos.voxel - chunk_param.origin_voxel();
-    auto axis = [](int64_t p_d, float p_frac) {
-        // p_d = s + excess * 2^32 with s the signed low word, like the GPU's low/high split.
-        const int32_t s = WorldCoord::as_i32(WorldCoord::lo32(p_d));
-        const int64_t excess = (p_d - s) / (int64_t(1) << 32);
-        const float a = float(s);
-        const float b = float(excess) * 4294967296.0f;
-        const float ab = a + b;
-        return ab + p_frac;
-    };
-    return Float3{ axis(d.x, pos.frac.x), axis(d.y, pos.frac.y), axis(d.z, pos.frac.z) };
-}
-
-Vector3 ChunkMath::legacy_metres(const WorldPos &pos, const ChunkParam &chunk_param) {
-    const Float3 r = legacy_rel_voxels(pos, chunk_param);
-    auto axis = [&chunk_param](float p_r) {
-        const float m = p_r * chunk_param.voxel_size;
-        return m + WorldCoord::LEGACY_NUDGE_M;
-    };
-    return Vector3(axis(r.x), axis(r.y), axis(r.z));
 }

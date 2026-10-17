@@ -25,7 +25,7 @@ adjustment_saturation = 2.0
 pipeline_mode = 2
 lod_pixel_error = 4.0
 world_origin_x = 1999998766022656
-world_origin_y = -30064771072
+world_origin_y = 0
 world_origin_z = -1999998766022656
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2075181569]

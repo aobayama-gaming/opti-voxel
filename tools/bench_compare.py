@@ -42,6 +42,7 @@ METRICS = [
     ("Mesher CPU", "  legacy: CPU triangulate, avg", lambda d: get(d, "final_terrain.mesher.triangulate.avg_ms"), "ms", True),
     ("Mesher CPU", "  legacy: mesh upload, avg", lambda d: get(d, "final_terrain.mesher.render_upload.avg_ms"), "ms", True),
     ("Mesher GPU", "  direct: GPU compute per batch, avg", lambda d: get(d, "final_terrain.mesher.gpu_compute.avg_ms"), "ms", True),
+    ("Mesher GPU", "    of which SDF pass (fixed samples per batch), avg", lambda d: get(d, "final_terrain.mesher.gpu_pass_sdf.avg_ms"), "ms", True),
     ("Mesher GPU", "  direct: GPU copy per batch, avg", lambda d: get(d, "final_terrain.mesher.gpu_copy.avg_ms"), "ms", True),
 
     ("Other CPU", "update_destroy_from_scan, avg", lambda d: get(d, "final_terrain.process.destroy_from_scan.avg_ms"), "ms", True),

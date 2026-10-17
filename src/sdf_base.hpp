@@ -18,32 +18,10 @@ public:
     virtual float evaluate(const WorldPos &p_pos) const = 0;
 
     // GPU code: must define "vec4 terrain_sdf(WorldPos p)" (xyz gradient, w distance). The shader
-    // provides the chunk_param uniform and the frame functions of gpu_frame.hpp.
+    // provides the chunk_param uniform, the frame functions of gpu_frame.hpp and the exact noise of
+    // exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
 
 protected:
     ChunkParam param;
-};
-
-// Adapter for SDFs written in metres around the world origin (the convention before the integer
-// frame): they are evaluated at the origin-relative position, so their terrain follows the origin.
-// Goes away with the exact noise.
-class SDFMetreBridge : public SDFBase {
-public:
-    float evaluate(const WorldPos &p_pos) const final {
-        return evaluate_metres(ChunkMath::legacy_metres(p_pos, param));
-    }
-
-    String get_glsl_code() const final {
-        return get_metre_glsl_code() + String(R"glsl(
-vec4 terrain_sdf(WorldPos p) {
-    return legacy_terrain_sdf(legacy_sdf_metres(p, chunk_param));
-}
-)glsl");
-    }
-
-protected:
-    virtual float evaluate_metres(const Vector3 &p_metres) const = 0;
-    // Must define "vec4 legacy_terrain_sdf(vec3 pos)".
-    virtual String get_metre_glsl_code() const = 0;
 };

@@ -17,9 +17,9 @@
 //
 // Every absolute position is a WorldPos: the LOD0 voxel as low word (wrapping) + high word, plus a
 // fraction in [0, 1). Differences of low words are exact within 2^31 voxels; the high word is only
-// needed for absolute identity (noise lattices). The CPU mirrors of the float math are in ChunkMath
-// (sample_pos, legacy_rel_voxels, legacy_metres) and must stay op for op identical; `precise` keeps
-// the GPU from fusing them into FMAs.
+// needed for absolute identity (noise lattices, exact_noise.hpp). The CPU mirror of the float math is
+// ChunkMath::sample_pos and must stay op for op identical; `precise` keeps the GPU from fusing it into
+// FMAs.
 namespace GPUFrame {
 
 static constexpr uint32_t CHUNK_PARAM_BYTES = 48;
@@ -77,8 +77,6 @@ struct ChunkFrame { ivec3 id_lo; int lod_size; uvec3 anchor_lo; ivec3 anchor_hi;
 // After the LOD helpers (get_lod_size), before the terrain SDF. Use GPUFrame::glsl_functions().
 inline constexpr const char GLSL_FRAME_FUNCTIONS[] = R"glsl(
 
-const float LEGACY_NUDGE_M = /*LEGACY_NUDGE_M*/;
-
 ChunkFrame chunk_frame(ChunkInput c, ChunkParam cp) {
     ChunkFrame f;
     f.id_lo = ivec3(c.id.xyz);
@@ -104,21 +102,17 @@ WorldPos world_pos_from_grid(ChunkFrame f, vec3 grid, ChunkParam cp) {
     return p;
 }
 
-// Position relative to the world origin in voxels, from the exact 64-bit difference: what the low
-// word cannot hold (a wrong high word, or more than 2^31 voxels away) shows up as a 2^32-voxel jump
-// rather than being wrapped away. Only for SDFs written in metres around the origin (SDFMetreBridge).
-vec3 legacy_rel_voxels(WorldPos p, ChunkParam cp) {
-    uvec3 dlo = p.lo - cp.origin_lo.xyz;
+// p - anchor in voxels (integer part), saturated to [-limit, limit] (limit < 2^31): the exact 64-bit
+// difference wherever it is small. CPU mirror: WorldCoord::sat_diff.
+ivec3 sat_diff(WorldPos p, uvec3 anchor_lo, ivec3 anchor_hi, int limit) {
+    uvec3 dlo = p.lo - anchor_lo;
+    ivec3 dhi = p.hi - anchor_hi - ivec3(lessThan(p.lo, anchor_lo));
     ivec3 s = ivec3(dlo);
-    ivec3 dhi = p.hi - cp.origin_hi.xyz - ivec3(lessThan(p.lo, cp.origin_lo.xyz));
-    ivec3 excess = dhi + ivec3(lessThan(s, ivec3(0)));
-    precise vec3 r = vec3(s) + vec3(excess) * 4294967296.0 + p.frac;
-    return r;
-}
-
-vec3 legacy_sdf_metres(WorldPos p, ChunkParam cp) {
-    precise vec3 m = legacy_rel_voxels(p, cp) * cp.voxel_size + LEGACY_NUDGE_M;
-    return m;
+    // The difference fits in an int32 iff the high word is the sign extension of the low word.
+    bvec3 fits = equal(dhi, s >> 31);
+    ivec3 inside = clamp(s, ivec3(-limit), ivec3(limit));
+    ivec3 outside = mix(ivec3(-limit), ivec3(limit), greaterThanEqual(dhi, ivec3(0)));
+    return mix(outside, inside, fits);
 }
 
 )glsl";
@@ -126,8 +120,7 @@ vec3 legacy_sdf_metres(WorldPos p, ChunkParam cp) {
 namespace GPUFrame {
 
 inline String glsl_functions() {
-    // 9 significant digits round-trip a float exactly.
-    return String(GLSL_FRAME_FUNCTIONS).replace("/*LEGACY_NUDGE_M*/", String::num(WorldCoord::LEGACY_NUDGE_M, 9));
+    return String(GLSL_FRAME_FUNCTIONS);
 }
 
 } // namespace GPUFrame

@@ -89,10 +89,6 @@ struct WorldPos {
 
 namespace WorldCoord {
 
-// Placeholder lattice offset of the pre-integer-frame SDF (metres), used only by the metre bridge
-// (sdf_base.hpp) and as a render offset. Goes away with the exact noise.
-inline constexpr float LEGACY_NUDGE_M = 0.123456f;
-
 // World origins are bounded so that int64 voxel arithmetic around them never overflows.
 inline constexpr int64_t MAX_ABS_ORIGIN_VOXEL = int64_t(1) << 60;
 
@@ -126,6 +122,13 @@ inline int64_t floor_div(int64_t p_a, int64_t p_b) {
         q--;
     }
     return q;
+}
+
+// p_a - p_b saturated to [-p_limit, p_limit] (p_limit < 2^31): the exact int64 difference wherever it
+// is small, CPU mirror of sat_diff (gpu_frame.hpp). Below 2^24 it converts to float exactly.
+inline int32_t sat_diff(int64_t p_a, int64_t p_b, int32_t p_limit) {
+    const int64_t d = p_a - p_b;
+    return int32_t(d < -p_limit ? -p_limit : (d > p_limit ? p_limit : d));
 }
 
 // Index of the lowest set bit, p_v != 0.
