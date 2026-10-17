@@ -5,12 +5,13 @@
 //
 //   1 sdf       per vertex sample            (legacy pass 1, unchanged)
 //   2 edges     per axis edge crossing t     (legacy pass 2, but always writes -> no clear needed)
-//   3 vertices  dense per-cell vertex + normal, per-chunk quad count (workgroup-reduced atomics)
+//   3 vertices  dense per-cell vertex (chunk-local) + normal, per-chunk quad count (workgroup-reduced
+//               atomics)
 //   4 reserve   one thread packs chunks into the batch's pages, each chunk starting on a group
 //               (texture row) boundary, no chunk straddling a page
-//   5 emit      one quad per sign-changing edge, written at base + atomicAdd(cursor) as 4 corner
-//               texels (xyz world, w = packed normal + 1) into the staging image; staging rows are
-//               then copied into the page textures (see QuadPagePool)
+//   5 emit      one quad per sign-changing edge, written at base + atomicAdd(cursor) as 4 corners
+//               of 8 bytes, plus the group header for the first quad of each group, into the staging
+//               image (layout: page_format.hpp); staging rows are then copied into the page textures
 //
 // The quad topology, corner order and winding mirror GPUMesher's CPU triangulation exactly
 // (see emit pass), so the two paths can be compared triangle for triangle.
@@ -35,7 +36,7 @@ layout(set = 0, binding = 3, std430) restrict buffer EdgeIntersect {
     float edge_intersect[];
 };
 
-// Dense per cell: xyz world position, w = packed normal + 1 (0 = no vertex in this cell)
+// Dense per cell: xyz position in the chunk's vertex grid, w = oct22 normal + 1 (0 = no vertex)
 layout(set = 0, binding = 4, std430) restrict buffer CellVertex {
     vec4 cell_vertex[];
 };
@@ -44,15 +45,11 @@ layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
     ChunkParam chunk_param;
 };
 
-// K pages stacked vertically, 4 texels (corners) per quad, one group of quads per row
-// (QuadPagePool::TEX_WIDTH).
-#define TEX_WIDTH 256u
+// K pages stacked vertically, one group of quads per row (page_format.hpp).
 #define QUAD_GROUP 64u
-layout(set = 0, binding = 6, rgba32f) uniform restrict writeonly image2D staging;
+layout(set = 0, binding = 6, rgba16ui) uniform restrict writeonly uimage2D staging;
 
-void store_corner(uint texel, vec4 corner) {
-    imageStore(staging, ivec2(texel % TEX_WIDTH, texel / TEX_WIDTH), corner);
-}
+/*GLSL_PAGE_FORMAT*/
 
 // Debug/status counters + per page fill (instance count), read back asynchronously.
 #define STATUS_TOTAL_QUADS 0
@@ -116,7 +113,8 @@ if (cell_chunk_coordinate[axis] < chunk_param.chunk_size - 1) {
 )glsl";
 
 // Vertex placement identical to legacy pass 3 (mass point of edge crossings, normal from the SDF
-// gradient at the vertex) but unquantised, in world space, stored densely per cell.
+// gradient at the vertex), stored densely per cell in chunk-local vertex coordinates; quantised
+// only when written to the page (1/512 cell, legacy uses a coarser grid).
 inline constexpr const char GLSL_DIRECT_PASS_VERTICES[] = R"glsl(
 
 uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
@@ -164,12 +162,11 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
     if (active_edge_count > 0) {
         local_vertex /= float(active_edge_count);
         vec3 chunk_vertex = local_vertex + vec3(cell_chunk_coordinate);
-        vec3 world = vertices_to_world(chunk_id, chunk_vertex, chunk_param);
         vec3 surface_normal = normalize(skirt_sdf(chunk_id, chunk_vertex, chunk_param).xyz);
-        if (any(isnan(world)) || any(isinf(world))) {
+        if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {
-            out_vertex = vec4(world, pack_normal_oct24(surface_normal) + 1.0);
+            out_vertex = vec4(chunk_vertex, float(pack_normal_oct22(surface_normal)) + 1.0);
         }
 
         // Count exactly the quads the emit pass will produce (same rules as the CPU triangulation).
@@ -274,11 +271,16 @@ if (v0.w > 0.0 && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk
             vec4 tmp = qb; qb = qc; qc = tmp;
         }
         uint slot = dir.z + atomicAdd(chunk_dir[chunk_idx].y, 1u);
-        // Cell vertex records already are the corner format (world xyz, packed normal + 1).
-        store_corner(slot * 4u + 0u, qa);
-        store_corner(slot * 4u + 1u, qb);
-        store_corner(slot * 4u + 2u, qc);
-        store_corner(slot * 4u + 3u, qd);
+        // The chunk starts on a group (reserve pass), so its slots cover each of its groups' first
+        // slot exactly once.
+        if (slot % QUAD_GROUP == 0u) {
+            store_group_header(slot / QUAD_GROUP, chunk_id);
+        }
+        float pos_scale = page_pos_scale(chunk_param.chunk_size);
+        store_corner(slot, 0u, encode_corner(qa.xyz, uint(qa.w - 1.0), pos_scale));
+        store_corner(slot, 1u, encode_corner(qb.xyz, uint(qb.w - 1.0), pos_scale));
+        store_corner(slot, 2u, encode_corner(qc.xyz, uint(qc.w - 1.0), pos_scale));
+        store_corner(slot, 3u, encode_corner(qd.xyz, uint(qd.w - 1.0), pos_scale));
     }
 }
 

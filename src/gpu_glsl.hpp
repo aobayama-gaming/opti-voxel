@@ -294,35 +294,3 @@ vec4 skirt_sdf(ivec3 chunk_coord,vec3 point_coord, ChunkParam chunk_param){
 }
 
 )glsl";
-
-// Quad record written by the direct mesher, consumed by the page MultiMesh shader.
-// One quad = one MultiMesh instance = 4 x vec4 (64 B), in Godot's TRANSFORM_3D + custom layout:
-//   rows 0..2: (basis.x[i], basis.y[i], basis.z[i], origin[i])  -- row-major 3x4
-//   row 3    : INSTANCE_CUSTOM = 4 corner normals, octahedral 2x12 bit packed in a float (exact integer)
-// Base quad corners A=(0,0,0) B=(1,0,0) C=(0,1,0) D=(1,1,1), triangles A,B,D / A,D,C, so with
-// origin=p0, bx=p1-p0, by=p2-p0, bz=p3-p1-p2+p0 the corners land on p0,p1,p2,p3 exactly.
-inline constexpr const char GLSL_QUAD_PACK[] = R"glsl(
-
-vec2 _oct_sign_not_zero(vec2 v) {
-    return vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
-}
-
-float pack_normal_oct24(vec3 n) {
-    n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-20);
-    vec2 o = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * _oct_sign_not_zero(n.xy);
-    uvec2 q = uvec2(round(clamp(o * 0.5 + 0.5, 0.0, 1.0) * 4095.0));
-    return float(q.x | (q.y << 12u));
-}
-
-void quad_record(vec3 p0, vec3 p1, vec3 p2, vec3 p3, vec3 n0, vec3 n1, vec3 n2, vec3 n3,
-                 out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
-    vec3 bx = p1 - p0;
-    vec3 by = p2 - p0;
-    vec3 bz = p3 - p1 - p2 + p0;
-    r0 = vec4(bx.x, by.x, bz.x, p0.x);
-    r1 = vec4(bx.y, by.y, bz.y, p0.y);
-    r2 = vec4(bx.z, by.z, bz.z, p0.z);
-    r3 = vec4(pack_normal_oct24(n0), pack_normal_oct24(n1), pack_normal_oct24(n2), pack_normal_oct24(n3));
-}
-
-)glsl";

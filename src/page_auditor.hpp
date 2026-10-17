@@ -4,6 +4,8 @@
 #include <godot_cpp/core/object.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
 
+#include <godot_cpp/variant/vector3i.hpp>
+
 #include <vector>
 
 using namespace godot;
@@ -17,21 +19,30 @@ class QuadPagePool;
 //   stale     outside live ranges but non-zero                         -> drawn garbage
 //   partial   some corners zero, some not                              -> giant triangles to origin
 //   broken    inside a live range but has a zero corner
-// plus the longest quad edge among drawn quads.
+// plus, per live group, whether its header names the chunk that owns it (bad_header otherwise),
+// and the longest quad edge among drawn quads.
 class PageAuditor : public Object {
 public:
     struct PageInfo {
         int page = -1;
         RID multimesh;
-        std::vector<std::pair<uint32_t, uint32_t>> live; // (offset, count) in quads
+        struct Range {
+            uint32_t offset = 0; // quads
+            uint32_t count = 0;
+            Vector3i chunk;
+            bool operator<(const Range &p_other) const { return offset < p_other.offset; }
+        };
+        std::vector<Range> live;
     };
 
-    void start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages);
+    void start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, int p_chunk_size, float p_voxel_size);
     bool step();
     Dictionary get_report() const { return report; }
 
 private:
     QuadPagePool *pool = nullptr;
+    int chunk_size = 32;
+    float voxel_size = 0.5f;
     std::vector<PageInfo> pages;
     size_t next_request = 0;
     Ref<Mutex> mutex;

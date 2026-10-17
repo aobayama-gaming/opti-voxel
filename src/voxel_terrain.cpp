@@ -437,11 +437,11 @@ bool VoxelTerrain::debug_audit_pages() {
             info.multimesh = direct_mesher->get_pool()->get_page_multimesh(kv.value.page);
             pages.push_back(info);
         }
-        pages[index_of_page[kv.value.page]].live.push_back({ kv.value.quad_offset, kv.value.quad_count });
+        pages[index_of_page[kv.value.page]].live.push_back({ kv.value.quad_offset, kv.value.quad_count, kv.key });
     }
     audit_report = Dictionary();
     auditor = memnew(PageAuditor);
-    auditor->start(direct_mesher->get_pool(), pages);
+    auditor->start(direct_mesher->get_pool(), pages, chunk_param.chunk_size, chunk_param.voxel_size);
     return true;
 }
 

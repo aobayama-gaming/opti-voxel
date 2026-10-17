@@ -35,8 +35,9 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   triangulation, one mesh + instance per chunk. Kept as the correctness oracle and perf baseline.
 - `2` GPU Direct (`GPUDirectMesher`, default in `main_scene`): compute on the main RenderingDevice
   (render thread, `call_on_render_thread`), quads written straight into `QuadPagePool` pages, which
-  are MultiMesh instances of 64-quad groups that pull their corners from a GPU-written RGBA32F
-  texture. Only a ~2 KB per-batch directory comes back to the CPU (asynchronously) for bookkeeping.
+  are MultiMesh instances of 64-quad groups that pull their corners from a GPU-written RGBA16UI
+  texture: one row per group, a header with the owning chunk id, then 8 B per corner (chunk-local
+  14-bit fixed point + 22-bit octahedral normal). Layout and decoders: `src/page_format.hpp`. Only a ~2 KB per-batch directory comes back to the CPU (asynchronously) for bookkeeping.
   Shared GLSL: `src/gpu_glsl.hpp`, direct passes: `src/gpu_direct_glsl.hpp`.
   Chunks start on a 64-quad group and a texture row is one group, so a chunk is whole rows.
   `GPUDirectMesher::compact()` re-packs pages under half full GPU to GPU and rewrites the moved
@@ -84,6 +85,8 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Many MB of `texture_get_data_async` in one frame crashes 4.6.3 (download staging overflow):
   throttle readbacks (validator/auditor do 2 pages per frame).
 - `RenderingServer::shader_set_code` does not run the shader preprocessor: no `#define`.
+- `texture_rd_create` only wraps RD formats that have an `Image` equivalent: RG32UI / RGBA32UI fail
+  ("Unsupported image format"), 16-bit integer formats (RGBA16UI) work.
 - Compaction moves chunks between pages: anything that holds page ranges across frames (validator,
   auditor) must run with compaction paused (`VoxelTerrain::_process` skips it while they run), and
   `to_destroy_chunk` holds stale copies until `_destroy_chunk`, so compact after it.

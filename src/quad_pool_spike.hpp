@@ -3,16 +3,18 @@
 #include <godot_cpp/classes/mutex.hpp>
 #include <godot_cpp/classes/node3d.hpp>
 
+#include "chunk_math.hpp"
 #include "quad_page_pool.hpp"
 
 using namespace godot;
 
 // Debug/regression node for the GPU -> page path, independent of the terrain:
-//  1. a compute shader writes a side x side sheet of quads (corner texels) into a staging image,
+//  1. a compute shader writes a side x side sheet of quads (page_format.hpp: corners relative to
+//     one chunk whose vertex grid holds the whole sheet, plus group headers) into a staging image,
 //  2. the staging rows are copied into a pool page texture and the GPU writes the used group count
 //     into the page's indirect command buffer,
 //  3. page texture + command buffer are read back and checked against a CPU computation,
-//  4. two quad ranges are killed (covering partial-row and full-row rectangles) and checked again.
+//  4. two group-aligned quad ranges are killed (whole rows, headers included) and checked again.
 // The left half of the sheet (qx < side/2) uses the base winding, the right half swaps p1/p2,
 // so a screenshot shows which orientation is front-facing.
 class QuadPoolSpike : public Node3D {
@@ -27,6 +29,8 @@ private:
     int extra_pages = 0; // pre-allocated pages, to measure pool RAM cost
     Vector3 sheet_origin = Vector3(-72.0f, 342.0f, -150.0f);
     float sheet_size = 40.0f;
+    ChunkParam chunk_param; // the page shader's defaults (chunk 32, skirt 2, voxel 0.5)
+    Vector3i sheet_chunk;   // chunk the sheet's corners are stored relative to
 
     QuadPagePool *pool = nullptr;
     int page = -1;
@@ -55,9 +59,9 @@ private:
     void _verify_kills(Dictionary &r);
 
 public:
-    // Killed ranges (quads): one wrapping a row boundary, one spanning several full rows.
-    static constexpr uint32_t KILL_A_OFFSET = 100, KILL_A_COUNT = 300;
-    static constexpr uint32_t KILL_B_OFFSET = 1000, KILL_B_COUNT = 1024;
+    // Killed ranges (quads), starting on a group like chunks do: 5 groups, then 16.
+    static constexpr uint32_t KILL_A_OFFSET = 128, KILL_A_COUNT = 320;
+    static constexpr uint32_t KILL_B_OFFSET = 1024, KILL_B_COUNT = 1024;
 
     void _ready() override;
     void _process(double p_delta) override;
