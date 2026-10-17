@@ -87,20 +87,21 @@ void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, 
     legacy->send_chunk(chunks);
 
     // Direct side: read back every page holding a target.
-    HashMap<int, RID> pages;
+    HashSet<int> pages;
     for (const Target &t : targets) {
-        pages[t.page] = t.page_multimesh;
+        pages.insert(t.page);
     }
     pages_requested = pages.size();
-    for (const KeyValue<int, RID> &kv : pages) {
-        pages_to_request.push_back({ kv.key, kv.value });
+    for (const int page : pages) {
+        pages_to_request.push_back(page);
     }
     VLOG(1, "MeshValidator: validating ", (int64_t)targets.size(), " chunks in ", pages_requested, " pages");
 }
 
-void MeshValidator::_rt_read_page(int p_page, RID p_multimesh) {
+void MeshValidator::_rt_read_page(int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    rd->texture_get_data_async(pool->rt_get_page_rd(p_page, p_multimesh).texture, 0,
+    rt_readbacks_in_flight++;
+    rd->texture_get_data_async(pool->rt_get_page_rd(p_page).texture, 0,
             callable_mp(this, &MeshValidator::_rt_on_page).bind(p_page));
 }
 
@@ -108,6 +109,10 @@ void MeshValidator::_rt_on_page(const PackedByteArray &p_data, int p_page) {
     mutex->lock();
     page_data[p_page] = p_data;
     mutex->unlock();
+    rt_readbacks_in_flight--;
+    if (rt_destroying && rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
 }
 
 bool MeshValidator::step() {
@@ -118,10 +123,10 @@ bool MeshValidator::step() {
     legacy->get_results(legacy_state);
 
     for (int i = 0; i < PAGES_PER_FRAME && !pages_to_request.empty(); i++) {
-        const std::pair<int, RID> page = pages_to_request.back();
+        const int page = pages_to_request.back();
         pages_to_request.pop_back();
         RenderingServer::get_singleton()->call_on_render_thread(
-                callable_mp(this, &MeshValidator::_rt_read_page).bind(page.first, page.second));
+                callable_mp(this, &MeshValidator::_rt_read_page).bind(page));
     }
 
     mutex->lock();
@@ -133,12 +138,21 @@ bool MeshValidator::step() {
             report["error"] = vformat("timeout: pages %d/%d legacy %d/%d", (int64_t)page_data.size(), pages_requested,
                     (int64_t)legacy_state.loaded_chunk.size(), (int64_t)targets.size());
             report["ok"] = false;
+            _release_legacy();
             done = true;
         }
         return done;
     }
     _compare();
+    _release_legacy();
+    done = true;
+    return true;
+}
 
+void MeshValidator::_release_legacy() {
+    if (!legacy) {
+        return;
+    }
     for (KeyValue<ChunkId, ChunkOutput> &kv : legacy_state.loaded_chunk) {
         kv.value.free();
     }
@@ -147,8 +161,23 @@ bool MeshValidator::step() {
     memdelete(legacy);
     legacy = nullptr;
     RenderingServer::get_singleton()->free_rid(legacy_scenario);
-    done = true;
-    return true;
+}
+
+void MeshValidator::destroy() {
+    _release_legacy();
+    // FIFO: page reads queued by step() run before _rt_destroy and are counted.
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &MeshValidator::_rt_destroy));
+}
+
+void MeshValidator::_rt_destroy() {
+    rt_destroying = true;
+    if (rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
+}
+
+MeshValidator::~MeshValidator() {
+    _release_legacy();
 }
 
 void MeshValidator::_compare() {

@@ -1,16 +1,14 @@
 #include "voxel_terrain.hpp"
-#include <godot_cpp/classes/world3d.hpp>
-#include <godot_cpp/classes/rendering_server.hpp>
+#include "rd_utils.hpp"
+#include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-
-
 void VoxelTerrain::_destroy_chunk() {
-
     for (ChunkHashMap::Iterator it = visual_mesh_data.to_destroy_chunk.begin();
-        it != visual_mesh_data.to_destroy_chunk.end();) {
-
+            it != visual_mesh_data.to_destroy_chunk.end();) {
         const ChunkId chunk_pos = it->key;
         ChunkOutput output = it->value;
 
@@ -20,12 +18,7 @@ void VoxelTerrain::_destroy_chunk() {
         visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
 
         it = visual_mesh_data.to_destroy_chunk.begin();
-
-
     }
-
-
-
 }
 
 void VoxelTerrain::_bind_methods() {
@@ -105,7 +98,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "direct_compaction"), "set_direct_compaction", "get_direct_compaction");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direct_compact_max_extent", PROPERTY_HINT_RANGE, "1,1000000"), "set_direct_compact_max_extent", "get_direct_compact_max_extent");
     ADD_GROUP("Debug", "");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk"), "set_debug_view", "get_debug_view");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk,Group,Quad index"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_zero_pillar", PROPERTY_HINT_ENUM, "Off,Exact top,Top +1 cm"), "set_debug_zero_pillar", "get_debug_zero_pillar");
@@ -342,8 +335,7 @@ int VoxelTerrain::get_log_level() const {
     return DebugLog::level.load();
 }
 
-void VoxelTerrain::_ready(){
-
+void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
 
@@ -370,16 +362,15 @@ void VoxelTerrain::_ready(){
 
     visual_mesh_data.set_max_lod(lod_numbers);
 
-    if(Engine::get_singleton()->is_editor_hint()) {
+    if (Engine::get_singleton()->is_editor_hint()) {
         camera = EditorInterface::get_singleton()->get_editor_viewport_3d()->get_camera_3d();
-    }
-    else {
+    } else {
         camera = get_viewport()->get_camera_3d();
     }
 
     chunk_discoverer = memnew(ChunkDiscoverer);
 
-    chunk_discoverer->set_config(chunk_param,sdf);
+    chunk_discoverer->set_config(chunk_param, sdf);
     chunk_discoverer->set_cull_mode((ChunkDiscoverer::CullMode)discovery_cull_mode);
     chunk_discoverer->set_cache(discovery_cache, discovery_verify);
 
@@ -397,11 +388,10 @@ void VoxelTerrain::_ready(){
     }
 
     chunk_discoverer->setup_lod(
-        lod_numbers,
-        lod_pixel_error,
-        viewport_height,
-        fov_rad
-    );
+            lod_numbers,
+            lod_pixel_error,
+            viewport_height,
+            fov_rad);
 
     chunk_discoverer->start();
 
@@ -415,36 +405,38 @@ void VoxelTerrain::_ready(){
         gpu_mesher = memnew(GPUMesher);
 
         gpu_mesher->initialize(
-            sdf,
-            chunk_param,
-            legacy_batch_size, // chunk_batch
-            lod_numbers,
-            scenario
-        );
+                sdf,
+                chunk_param,
+                legacy_batch_size, // chunk_batch
+                lod_numbers,
+                scenario);
         gpu_mesher->set_trim_indices(legacy_trim_indices);
     }
 
-    chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    if (camera != nullptr) {
+        chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    }
 
     VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
 }
 
-void VoxelTerrain::_process(double delta){
-
+void VoxelTerrain::_process(double) {
     if (!started) {
         return;
     }
 
     const uint64_t t_process_start = now_usec();
 
-    chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    if (camera != nullptr) {
+        chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    }
 
     uint64_t t0 = now_usec();
     std::unique_ptr<LODHashSet> new_scanned_chunk;
 
     bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_camera_chunk);
 
-    if(dirty_scan){
+    if (dirty_scan) {
         scan_received = true;
         destroy_dirty = true;
 
@@ -454,7 +446,6 @@ void VoxelTerrain::_process(double delta){
         } else {
             gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
         }
-
     }
     process_stats.scan_ingest.add(now_usec() - t0);
 
@@ -500,7 +491,7 @@ void VoxelTerrain::_process(double delta){
 
     if (auditor && auditor->step()) {
         audit_report = auditor->get_report();
-        memdelete(auditor);
+        auditor->destroy();
         auditor = nullptr;
         VLOG(1, "VoxelTerrain: page audit: ", audit_report);
     }
@@ -511,7 +502,7 @@ void VoxelTerrain::_process(double delta){
 
     if (validator && validator->step()) {
         validation_report = validator->get_report();
-        memdelete(validator);
+        validator->destroy();
         validator = nullptr;
         VLOG(1, "VoxelTerrain: validation report: ", validation_report);
     }
@@ -535,7 +526,6 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
             MeshValidator::Target t;
             t.chunk_id = kv.key;
             t.page = kv.value.page;
-            t.page_multimesh = direct_mesher->get_pool()->get_page_multimesh(kv.value.page);
             t.offset = kv.value.quad_offset;
             t.count = kv.value.quad_count;
             candidates.push_back(t);
@@ -571,7 +561,6 @@ bool VoxelTerrain::debug_audit_pages() {
             index_of_page[kv.value.page] = pages.size();
             PageAuditor::PageInfo info;
             info.page = kv.value.page;
-            info.multimesh = direct_mesher->get_pool()->get_page_multimesh(kv.value.page);
             pages.push_back(info);
         }
         pages[index_of_page[kv.value.page]].live.push_back({ kv.value.quad_offset, kv.value.quad_count, kv.key });
@@ -795,6 +784,21 @@ void VoxelTerrain::_teardown() {
         return;
     }
     started = false;
+
+    // Debug tools first: the validator owns a legacy mesher, and both hold pages of the direct one.
+    // A run may be in flight: they delete themselves once their readbacks have arrived.
+    if (validator) {
+        validator->destroy();
+        validator = nullptr;
+    }
+    if (auditor) {
+        auditor->destroy();
+        auditor = nullptr;
+    }
+    if (gpu_profiler) {
+        RDUtils::delete_on_render_thread(gpu_profiler);
+        gpu_profiler = nullptr;
+    }
 
     chunk_discoverer->stop();
     memdelete(chunk_discoverer);

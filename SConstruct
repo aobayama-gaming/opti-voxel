@@ -22,6 +22,7 @@ customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
 
 opts = Variables(customs, ARGUMENTS)
+opts.Add(BoolVariable("werror", "Treat compiler warnings in src/ as errors (werror=no to iterate past them)", True))
 opts.Update(localEnv)
 
 Help(opts.GenerateHelpText(localEnv))
@@ -37,15 +38,29 @@ Run the following command to download godot-cpp:
 
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
+# Our sources get their own environment: warnings are ours to fix, godot-cpp keeps its own flags.
+# Its headers are also passed as -isystem so their warnings don't drown ours (GCC then ignores the
+# matching -I). They stay in CPPPATH: that is what SCons scans for header dependencies, and the
+# generated bindings must exist before our sources compile.
+src_env = env.Clone()
+if not src_env.get("is_msvc", False):
+    for include in src_env["CPPPATH"]:
+        src_env.Append(CCFLAGS=["-isystem", src_env.Dir(include).abspath])
+    src_env.Append(CCFLAGS=["-Wall", "-Wextra"])
+    if localEnv["werror"]:
+        src_env.Append(CCFLAGS=["-Werror"])
+env = src_env
+
 env.Append(CPPPATH=["src/"])
 sources = Glob("src/*.cpp")
 
-if env["target"] in ["editor", "template_debug"]:
-    try:
-        doc_data = env.GodotCPPDocData("src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml"))
-        sources.append(doc_data)
-    except AttributeError:
-        print("Not including class reference as we're targeting a pre-4.3 baseline.")
+# Unit tests (src/tests/, doctest) ship in debug builds only; tools/unit_test.sh runs them.
+if env["target"] != "template_release":
+    env.Append(CPPDEFINES=["OPTI_VOXEL_TESTS"])
+    env.Append(CPPPATH=["thirdparty/doctest"])
+    if not env.get("is_msvc", False):
+        env.Append(CCFLAGS=["-isystem", env.Dir("thirdparty/doctest").abspath])
+    sources += Glob("src/tests/*.cpp")
 
 # .dev doesn't inhibit compatibility, so we don't need to key it.
 # .universal just means "compatible with all relevant arches" so we don't need to key it.

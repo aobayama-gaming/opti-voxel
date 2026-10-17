@@ -1,9 +1,9 @@
 #pragma once
 
-#include "godot_cpp/variant/variant.hpp"
-#include <godot_cpp/classes/rendering_server.hpp>
 #include "debug_log.hpp"
+#include "godot_cpp/variant/variant.hpp"
 #include "world_coord.hpp"
+#include <godot_cpp/classes/rendering_server.hpp>
 
 using namespace godot;
 
@@ -16,7 +16,7 @@ struct ChunkReleaser {
     virtual void release_chunk(const ChunkOutput &p_chunk) = 0;
 };
 
-struct ChunkOutput{
+struct ChunkOutput {
     ChunkId chunk_id;
     RID mesh_rid;
     RID instance_rid;
@@ -29,13 +29,13 @@ struct ChunkOutput{
     uint32_t quad_offset = 0;
     uint32_t quad_count = 0;
 
-    void free(){
+    void free() {
         if (owner) {
             owner->release_chunk(*this);
             owner = nullptr;
             return;
         }
-        RenderingServer* rs = RenderingServer::get_singleton();
+        RenderingServer *rs = RenderingServer::get_singleton();
         // Empty chunks have no mesh/instance.
         if (instance_rid.is_valid()) {
             rs->free_rid(instance_rid);
@@ -47,5 +47,4 @@ struct ChunkOutput{
         instance_rid = RID();
         mesh_rid = RID();
     }
-
 };

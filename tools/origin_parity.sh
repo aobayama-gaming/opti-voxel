@@ -42,7 +42,7 @@ declare -A ORIGINS=(
     [far]="$FAR,-$WRAP,-$FAR"
     [wrap]="$WRAP,$WRAP,-$WRAP"
 )
-LIST=""
+LIST=()
 for label in zero zero2 far wrap; do
     echo ">> $label: origin ${ORIGINS[$label]}"
     "$ROOT/tools/bench.sh" --no-build --tag="parity-$label" --scenario=load --steady=60 --voxel="$VOXEL" "${BENCH_ARGS[@]}" \
@@ -53,8 +53,8 @@ for label in zero zero2 far wrap; do
         echo ">> run $label failed (exit $CODE): $DIR"
         exit 1
     fi
-    LIST="$LIST $label=$DIR"
+    LIST+=("$label=$DIR")
 done
 
 OUT="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-parity.md"
-python3 "$ROOT/tools/origin_parity.py" "$OUT" $LIST
+python3 "$ROOT/tools/origin_parity.py" "$OUT" "${LIST[@]}"

@@ -12,24 +12,19 @@
 using namespace godot;
 
 bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const {
-
     if (p_mode == CULL_NONE) {
         return false;
     }
 
-    const float chunk_size = ChunkMath::world_chunk_size(chunk_pos,chunk_param);
-    const float chunk_outer_radius = chunk_size*2 ; //0.8660254f // 2 is extra margin
-    const VoxelPos chunk_center = ChunkMath::chunk_center_voxel(chunk_pos,chunk_param);
+    const float chunk_size = ChunkMath::world_chunk_size(chunk_pos, chunk_param);
+    const float chunk_outer_radius = chunk_size * 2; //0.8660254f // 2 is extra margin
+    const VoxelPos chunk_center = ChunkMath::chunk_center_voxel(chunk_pos, chunk_param);
     // Half the chunk size in voxels: the corners are at the centre +- this.
     const int64_t half_voxels = ChunkMath::get_lod_size(chunk_pos) * chunk_param.half_chunk_voxels();
 
     for (int corner = 0; corner < 8; ++corner) {
         WorldPos corner_pos;
-        corner_pos.voxel = chunk_center + VoxelPos(
-            (corner & 1) ? half_voxels : -half_voxels,
-            (corner & 2) ? half_voxels : -half_voxels,
-            (corner & 4) ? half_voxels : -half_voxels
-        );
+        corner_pos.voxel = chunk_center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);
 
         const float corner_distance = std::abs(sdf->evaluate(corner_pos));
         r_counters.sdf_calls++;
@@ -39,7 +34,6 @@ bool ChunkDiscoverer::_chunk_is_outside_sdf(const ChunkId &chunk_pos, CullMode p
     }
 
     return true;
-
 }
 
 bool ChunkDiscoverer::_timed_cull(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const {
@@ -49,20 +43,17 @@ bool ChunkDiscoverer::_timed_cull(const ChunkId &chunk_pos, CullMode p_mode, Sca
     return outside;
 }
 
-void ChunkDiscoverer::start(){
+void ChunkDiscoverer::start() {
     worker.instantiate();
     mutex.instantiate();
     semaphore.instantiate();
 
-    //UtilityFunctions::print("ChunkDiscoverer : Start loop");
-
-    worker->start(callable_mp(this,&ChunkDiscoverer::discovery_loop),Thread::PRIORITY_NORMAL);
+    worker->start(callable_mp(this, &ChunkDiscoverer::discovery_loop), Thread::PRIORITY_NORMAL);
 }
 
-void ChunkDiscoverer::stop(){
-
+void ChunkDiscoverer::stop() {
     mutex->lock();
-    exit_thread=true;
+    exit_thread = true;
     mutex->unlock();
 
     semaphore->post();
@@ -75,14 +66,10 @@ void ChunkDiscoverer::stop(){
 }
 
 void ChunkDiscoverer::discovery_loop() {
-
-    //UtilityFunctions::print("ChunkDiscoverer : loop started");
-
     bool has_scanned = false;
     ChunkId last_scanned_camera_chunk;
 
-    while(true){
-
+    while (true) {
         semaphore->wait();
         // One post per camera chunk crossing: posts that piled up during the last scan all ask for
         // the same thing, a scan around the latest camera chunk.
@@ -96,7 +83,7 @@ void ChunkDiscoverer::discovery_loop() {
         // Add other variable import.
         mutex->unlock();
 
-        if(should_exit){
+        if (should_exit) {
             break;
         }
 
@@ -159,28 +146,18 @@ void ChunkDiscoverer::discovery_loop() {
         stats.cache_evicted_total += evicted;
         stats.verify_mismatches_total += counters.verify_mismatches;
         mutex->unlock();
-
-        //UtilityFunctions::print("scanned chunk count:", (int)new_scanned_chunk.size());
-
-        // print debug 
-        // for (const ChunkId &chunk : new_scanned_chunk) {
-        //     UtilityFunctions::print("scanned:", chunk);
-        // }
-
     }
-
 }
 
 void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
         CullCache *p_cache) const {
+    const int lod_count = lod_distances.size() - 1;
 
-    const int lod_count = lod_distances.size()-1; 
-
-    const int max_lod = lod_count-1; // The maximum LOD level to consider for loading. This is determined by the size of the lod_distances array, which should be set up so that each LOD level corresponds to a distance threshold.
+    const int max_lod = lod_count - 1; // The maximum LOD level to consider for loading. This is determined by the size of the lod_distances array, which should be set up so that each LOD level corresponds to a distance threshold.
 
     const int64_t max_lod_radius = int64_t(2) << (max_lod); // The radius of the largest LOD. This is the maximum distance at which chunks will be loaded, so it determines the size of the area to scan.
 
-    const int64_t max_lod_number = MIN(int64_t(std::ceil( lod_distances[lod_count-1] / double(max_lod_radius)))+2, int64_t(max_lod));
+    const int64_t max_lod_number = MIN(int64_t(std::ceil(lod_distances[lod_count - 1] / double(max_lod_radius))) + 2, int64_t(max_lod));
 
     const ChunkId ancestor_chunk = ChunkMath::get_parent_from_child_until(p_camera_chunk, max_lod);
 
@@ -200,20 +177,18 @@ void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHa
 }
 
 void ChunkDiscoverer::set_config(
-    ChunkParam &p_chunk_param,
-    SDFBase* p_sdf
-){
-    sdf=p_sdf;
-    chunk_param= p_chunk_param;
+        ChunkParam &p_chunk_param,
+        SDFBase *p_sdf) {
+    sdf = p_sdf;
+    chunk_param = p_chunk_param;
 }
 
-bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, ChunkId &r_camera_chunk){
-
+bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, ChunkId &r_camera_chunk) {
     mutex->lock();
 
-    bool dirty=scanned_chunks_dirty;
-    
-    if(dirty){
+    bool dirty = scanned_chunks_dirty;
+
+    if (dirty) {
         r_scanned_chunks = std::move(scanned_chunks);
         r_camera_chunk = scanned_camera_chunk;
         scanned_chunks_dirty = false;
@@ -222,16 +197,13 @@ bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_
     mutex->unlock();
 
     return dirty;
-
 }
 
 void ChunkDiscoverer::setup_lod(
-    int lod_levels,
-    float target_pixel_error, 
-    float viewport_height,
-    float fov_rad){
-
-
+        int lod_levels,
+        float target_pixel_error,
+        float viewport_height,
+        float fov_rad) {
     const float focal_length = viewport_height / (2.0f * std::tan(fov_rad * 0.5f));
 
     lod_distances.resize(lod_levels + 1);
@@ -239,7 +211,7 @@ void ChunkDiscoverer::setup_lod(
     float previous_distance = 0.0f;
     for (int i = 0; i < lod_levels + 1; ++i) {
         // Geometric error follows voxel size per LOD (voxel doubles each level).
-        const float lod_voxel_size_world = chunk_param.voxel_size* static_cast<float>(1 << i);
+        const float lod_voxel_size_world = chunk_param.voxel_size * static_cast<float>(1 << i);
         const float geometric_error_world = lod_voxel_size_world * 0.5f;
 
         // Compute threshold in world units, then convert to chunk-coordinate units.
@@ -258,12 +230,10 @@ void ChunkDiscoverer::setup_lod(
         lod_distances.set(i, dist_chunk);
         previous_distance = dist_chunk;
     }
-
 }
 
 void ChunkDiscoverer::_recursive_chunk_scan(const ChunkId &camera_chunk, const ChunkId &parent_chunk, CullMode p_mode,
-        LODHashSet &scanned_chunks, ScanCounters &r_counters, CullCache *p_cache) const
-{
+        LODHashSet &scanned_chunks, ScanCounters &r_counters, CullCache *p_cache) const {
     const int current_lod = ChunkMath::get_lod(parent_chunk);
     r_counters.nodes_visited++;
 
@@ -290,7 +260,7 @@ void ChunkDiscoverer::_recursive_chunk_scan(const ChunkId &camera_chunk, const C
         return;
     }
 
-    if (current_lod ==0){
+    if (current_lod == 0) {
         scanned_chunks.insert(parent_chunk);
         return;
     }
@@ -305,33 +275,29 @@ void ChunkDiscoverer::_recursive_chunk_scan(const ChunkId &camera_chunk, const C
 
     // lod_distances[L] is the distance from which LOD L is within the pixel error: split when closer.
     if (distance_to_player - chunk_outer_radius < lod_distances[current_lod]) {
-
         const int child_lod = current_lod - 1;
         const int64_t child_size = int64_t(1) << child_lod;
 
         for (int i = 0; i < 8; ++i) {
             ChunkId child_offset(
-                (i & 1) ? child_size : -child_size,
-                (i & 2) ? child_size : -child_size,
-                (i & 4) ? child_size : -child_size
-            );
+                    (i & 1) ? child_size : -child_size,
+                    (i & 2) ? child_size : -child_size,
+                    (i & 4) ? child_size : -child_size);
 
             _recursive_chunk_scan(
-                camera_chunk,
-                parent_chunk + child_offset,
-                p_mode,
-                scanned_chunks,
-                r_counters,
-                p_cache
-            );
+                    camera_chunk,
+                    parent_chunk + child_offset,
+                    p_mode,
+                    scanned_chunks,
+                    r_counters,
+                    p_cache);
         }
-    }
-    else {
+    } else {
         scanned_chunks.insert(parent_chunk);
     }
 }
 
-void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos){
+void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos) {
     /*
     Function to set the camera chunk in a thread-safe manner.
     */
@@ -340,10 +306,9 @@ void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos){
     ChunkId old_camera_chunk = camera_chunk;
     mutex->unlock();
 
-    ChunkId new_camera_chunk = ChunkMath::chunk_at_render(camera_pos,chunk_param);
+    ChunkId new_camera_chunk = ChunkMath::chunk_at_render(camera_pos, chunk_param);
 
-    if(new_camera_chunk!=old_camera_chunk){
-
+    if (new_camera_chunk != old_camera_chunk) {
         mutex->lock();
         camera_chunk = new_camera_chunk;
         camera_change_usec = now_usec();
@@ -353,7 +318,6 @@ void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos){
 
         VLOG(2, "new chunk:", WorldCoord::to_string(new_camera_chunk));
     }
-
 }
 Dictionary ChunkDiscoverer::get_stats() {
     Dictionary d;

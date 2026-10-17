@@ -225,11 +225,11 @@ void QuadPagePool::_rt_create_page(int p_page, RID p_multimesh, RID p_material) 
     page.rs_texture = rs->texture_rd_create(page.texture);
     rs->material_set_param(p_material, "quad_tex", page.rs_texture);
     page.command = rs->multimesh_get_command_buffer_rd_rid(p_multimesh);
-    rt_set_group_count(p_page, p_multimesh, 0);
+    rt_set_group_count(p_page, 0);
 }
 
-void QuadPagePool::_rt_reset_page(int p_page, RID p_multimesh) {
-    rt_set_group_count(p_page, p_multimesh, 0);
+void QuadPagePool::_rt_reset_page(int p_page) {
+    rt_set_group_count(p_page, 0);
 }
 
 int QuadPagePool::acquire_page() {
@@ -260,7 +260,7 @@ void QuadPagePool::release_page(int p_page) {
     pages[p_page].in_use = false;
     pages_in_use--;
     rs->instance_set_visible(pages[p_page].instance, false);
-    rs->call_on_render_thread(callable_mp(this, &QuadPagePool::_rt_reset_page).bind(p_page, pages[p_page].multimesh));
+    rs->call_on_render_thread(callable_mp(this, &QuadPagePool::_rt_reset_page).bind(p_page));
     free_pages.push_back(p_page);
 }
 
@@ -311,7 +311,7 @@ void QuadPagePool::set_debug_view(int p_view) {
     set_material_param("debug_view", p_view);
 }
 
-QuadPagePool::PageRD QuadPagePool::rt_get_page_rd(int p_page, RID p_multimesh) {
+QuadPagePool::PageRD QuadPagePool::rt_get_page_rd(int p_page) {
     PageRD out;
     if (p_page < (int)rt_pages.size()) {
         out.texture = rt_pages[p_page].texture;
@@ -320,9 +320,9 @@ QuadPagePool::PageRD QuadPagePool::rt_get_page_rd(int p_page, RID p_multimesh) {
     return out;
 }
 
-void QuadPagePool::rt_set_group_count(int p_page, RID p_multimesh, uint32_t p_groups) {
+void QuadPagePool::rt_set_group_count(int p_page, uint32_t p_groups) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    const PageRD page_rd = rt_get_page_rd(p_page, p_multimesh);
+    const PageRD page_rd = rt_get_page_rd(p_page);
     ERR_FAIL_COND_MSG(!page_rd.command.is_valid(), "QuadPagePool: page has no indirect command buffer.");
     PackedByteArray data;
     data.resize(4);
@@ -330,16 +330,16 @@ void QuadPagePool::rt_set_group_count(int p_page, RID p_multimesh, uint32_t p_gr
     rd->buffer_update(page_rd.command, INDIRECT_INSTANCE_COUNT_OFFSET, 4, data);
 }
 
-void QuadPagePool::rt_copy_page_from(int p_page, RID p_multimesh, RID p_src, uint32_t p_src_row) {
+void QuadPagePool::rt_copy_page_from(int p_page, RID p_src, uint32_t p_src_row) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    const PageRD page_rd = rt_get_page_rd(p_page, p_multimesh);
+    const PageRD page_rd = rt_get_page_rd(p_page);
     rd->texture_copy(p_src, page_rd.texture, Vector3(0, p_src_row, 0), Vector3(0, 0, 0),
             Vector3(TEX_WIDTH, get_page_rows(), 1), 0, 0, 0, 0);
 }
 
-void QuadPagePool::rt_kill_range(int p_page, RID p_multimesh, uint32_t p_offset, uint32_t p_count) {
+void QuadPagePool::rt_kill_range(int p_page, uint32_t p_offset, uint32_t p_count) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    const PageRD page_rd = rt_get_page_rd(p_page, p_multimesh);
+    const PageRD page_rd = rt_get_page_rd(p_page);
     if (!page_rd.texture.is_valid()) {
         return; // trimmed
     }

@@ -29,7 +29,10 @@ def image_diff(a, b):
 def main():
     out = sys.argv[1]
     runs = dict(arg.split("=", 1) for arg in sys.argv[2:])
-    stats = {k: json.load(open(f"{d}/stats.json")) for k, d in runs.items()}
+    stats = {}
+    for k, d in runs.items():
+        with open(f"{d}/stats.json") as f:
+            stats[k] = json.load(f)
     lines = ["# Origin parity", "", "| run | origin (voxels) | " + " | ".join(n for n, _ in EXACT) + " | nan | validation | audit |",
              "|" + "---|" * (len(EXACT) + 5)]
     ok = True
@@ -47,19 +50,20 @@ def main():
     lines += ["", "Screenshots vs `zero`: share of pixels with a channel difference > 3 (max difference).", "",
               "| run | " + " | ".join(SHOTS) + " |", "|" + "---|" * (len(SHOTS) + 1)]
     floor = {shot: image_diff(f"{runs['zero']}/{shot}", f"{runs['zero2']}/{shot}")[0] for shot in SHOTS}
-    for k in runs:
+    for k, d in runs.items():
         if k == "zero":
             continue
         cells = []
         for shot in SHOTS:
-            share, mx = image_diff(f"{runs['zero']}/{shot}", f"{runs[k]}/{shot}")
+            share, mx = image_diff(f"{runs['zero']}/{shot}", f"{d}/{shot}")
             limit = max(2 * floor[shot], 1e-4)
             cells.append(f"{share:.6f} ({mx})" + ("" if share <= limit else " **over**"))
             ok &= share <= limit
         lines.append(f"| {k} | " + " | ".join(cells) + " |")
     lines += ["", f"**{'PARITY OK' if ok else 'PARITY BROKEN'}**", ""]
     lines += [f"- {k}: `{d}`" for k, d in runs.items()]
-    open(out, "w").write("\n".join(lines) + "\n")
+    with open(out, "w") as f:
+        f.write("\n".join(lines) + "\n")
     print("\n".join(lines))
     print(f">> report: {out}")
     sys.exit(0 if ok else 2)

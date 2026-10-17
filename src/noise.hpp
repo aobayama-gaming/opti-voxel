@@ -1,3 +1,5 @@
+#pragma once
+
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 #include <godot_cpp/variant/vector3.hpp>
@@ -150,18 +152,16 @@ vec4 fractal(int octaves, NoiseParam param, vec3 pos) {
 
 namespace SimplexNoise {
 
-    struct NoiseParam{
-        float frequency;
-        float amplitude;
-        float lacunarity;
-        float persistence;
-    };
-
-
-    Vector4 noise(Vector3 pos);
-
-    // Fractal/Fractional Brownian Motion (fBm) noise summation
-    Vector4 fractal(size_t octaves,NoiseParam param, Vector3 pos);
-
+struct NoiseParam {
+    float frequency;
+    float amplitude;
+    float lacunarity;
+    float persistence;
 };
 
+Vector4 noise(Vector3 pos);
+
+// Fractal/Fractional Brownian Motion (fBm) noise summation
+Vector4 fractal(size_t octaves, NoiseParam param, Vector3 pos);
+
+}; //namespace SimplexNoise

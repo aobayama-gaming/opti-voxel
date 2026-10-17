@@ -1,0 +1,5 @@
+# Formatting-only commits, skipped by `git blame` (GitHub reads this file; locally run once:
+# git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# Format src/ with clang-format, spaces (no code change)
+b7e4e062aab7474fa946f24b002acd9899db2e9c
