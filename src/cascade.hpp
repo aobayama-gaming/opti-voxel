@@ -60,6 +60,14 @@ constexpr int channel_order(int p_channel) {
     return (CHANNEL_AXES[p_channel] & 1) + ((CHANNEL_AXES[p_channel] >> 1) & 1) + ((CHANNEL_AXES[p_channel] >> 2) & 1);
 }
 
+// Per axis pass of HERMITE8: the (value-like, slope-like) channel pairs, slope = value + the axis, in the
+// order the passes apply them (the GPU's code is generated from this table).
+inline constexpr int PAIRS[3][4][2] = {
+    { { VALUE, DX }, { DY, DXY }, { DZ, DXZ }, { DYZ, DXYZ } },
+    { { VALUE, DY }, { DX, DXY }, { DZ, DYZ }, { DXZ, DXYZ } },
+    { { VALUE, DZ }, { DX, DXZ }, { DY, DYZ }, { DXY, DXYZ } },
+};
+
 enum class ChannelSet {
     HERMITE8,
     LINEAR4, // value + gradient (VALUE..DZ)

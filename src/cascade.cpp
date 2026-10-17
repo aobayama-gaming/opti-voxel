@@ -13,13 +13,6 @@ int64_t half_floor(int64_t p_v) {
     return p_v >= 0 ? (p_v >> 1) : ~((~p_v) >> 1);
 }
 
-// Per axis pass of HERMITE8: the (value-like, slope-like) channel pairs, slope = value + the axis.
-constexpr int PAIRS[3][4][2] = {
-    { { VALUE, DX }, { DY, DXY }, { DZ, DXZ }, { DYZ, DXYZ } },
-    { { VALUE, DY }, { DX, DXY }, { DZ, DYZ }, { DXZ, DXYZ } },
-    { { VALUE, DZ }, { DX, DXZ }, { DY, DYZ }, { DXY, DXYZ } },
-};
-
 constexpr bool pairs_match_axes() {
     for (int a = 0; a < 3; a++) {
         for (int i = 0; i < 4; i++) {

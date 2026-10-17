@@ -11,6 +11,7 @@
 // The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain (VoxelTerrain.terrain_mode 1,
 // --terrain=cascade): a 3D height field of perlin3 octaves carried down the Hermite cascade, octaves from
 // k = 3 (8 voxels, inserted on Λ_0) up to k = lod_count + 4, steepness 1/8, amplitudes capped at 3.3 km,
+// 4 channels (value + gradient, see channel_set),
 // surface at datum + h with the datum at SDFDummy::DATUM_M. A function of the absolute position only.
 //
 // The cascade only exists on lattice points: a LOD-L chunk's samples are the points of Λ_L, computed by
@@ -27,8 +28,11 @@ public:
     // Saturation of the height above the datum (LOD0 voxels), as SDFDummy::DY_LIMIT.
     static constexpr int32_t DY_LIMIT = 1 << 30;
 
-    // Set before configure(). HERMITE8 is the meshed set (decision G7); LINEAR4 is kept for measurements.
-    Cascade::ChannelSet channel_set = Cascade::ChannelSet::HERMITE8;
+    // Set before configure(). LINEAR4 (value + gradient) is the meshed set: by the design's criterion G7
+    // (keep 8 channels unless they cost > 15% more GPU time than 4), measured with CascadeSpike: the
+    // 8-channel passes cost 1.30x the 4-channel ones (1.29 vs 1.00 ms per batch of 128 LOD-0 chunks).
+    // HERMITE8 stays implemented and proven (tools/cascade_test.sh checks both).
+    Cascade::ChannelSet channel_set = Cascade::ChannelSet::LINEAR4;
 
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);

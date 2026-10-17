@@ -1,6 +1,7 @@
 #include "test_common.hpp"
 
 #include "cascade.hpp"
+#include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
 #include "cascade_terrain.hpp"
 #include "sdf_cascade.hpp"
@@ -116,4 +117,31 @@ TEST_CASE("SDFCascade: the shader stub and get_cascade") {
     SDFDummy dummy;
     dummy.configure(param, 15);
     CHECK(dummy.get_cascade() == nullptr);
+}
+
+TEST_CASE("CascadeGLSL: the band table holds every band at its level, with the CPU's factors") {
+    ChunkParam param;
+    SDFCascade sdf;
+    sdf.configure(param, 25);
+    const Spec &spec = sdf.get_spec();
+    const PackedByteArray table = CascadeGLSL::band_table(spec);
+    CHECK(table.size() == CascadeGLSL::BAND_ENTRIES * int64_t(CascadeGLSL::BAND_BYTES));
+    int present = 0;
+    for (int m = 0; m < CascadeGLSL::BAND_ENTRIES; m++) {
+        present += table.decode_u32(m * CascadeGLSL::BAND_BYTES + 48) != 0;
+    }
+    CHECK(present == int(spec.bands.size()));
+    for (const Band &b : spec.bands) {
+        const int64_t base = int64_t(spec.insert_level(b)) * CascadeGLSL::BAND_BYTES;
+        CHECK(table.decode_u32(base + 56) == uint32_t(b.k));
+        CHECK(table.decode_u32(base + 52) == b.seed);
+        CHECK(table.decode_u32(base + 16) == WorldCoord::lo32(b.offset.x));
+        CHECK(table.decode_s32(base + 40) == WorldCoord::hi32(b.offset.z));
+        float o[CHANNELS];
+        band_channels(spec, b, Vector3i64(3, -7, 11), o);
+        // factor[order] * channel == band_channels, bit for bit (one product each).
+        const ExactNoise::Float4 n = ExactNoise::perlin3(WorldPos{ Vector3i64(3, -7, 11) * (int64_t(1) << spec.insert_level(b)), Float3() }, b.k, b.seed, b.offset);
+        CHECK(float_bits(n.w * table.decode_float(base)) == float_bits(o[VALUE]));
+        CHECK(float_bits(n.x * table.decode_float(base + 4)) == float_bits(o[DX]));
+    }
 }

@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://debug/cascade_spike.gd" id="1_cascade_spike"]
+
+[node name="CascadeSpike" type="Node"]
+script = ExtResource("1_cascade_spike")
