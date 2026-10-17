@@ -349,6 +349,9 @@ Dictionary ChunkDiscoverer::get_stats() {
     d["cache_size"] = stats.cache_size;
     d["cache_evicted_total"] = stats.cache_evicted_total;
     d["verify_mismatches_total"] = stats.verify_mismatches_total;
+    // Share of visited nodes whose verdict came from the cache, and the cost of one corner SDF evaluation.
+    d["cache_hit_rate"] = stats.nodes_visited_total ? double(stats.cache_hits_total) / double(stats.nodes_visited_total) : 0.0;
+    d["usec_per_sdf_call"] = stats.sdf_calls_total ? double(stats.cull.total) / double(stats.sdf_calls_total) : 0.0;
     mutex->unlock();
     return d;
 }

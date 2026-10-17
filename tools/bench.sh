@@ -190,7 +190,8 @@ if dsc:
     print(f">> discoverer: cull_mode={dsc.get('cull_mode')} scans={sc.get('count')} avg={sc.get('avg_ms', 0):.1f}ms max={sc.get('max_ms', 0):.1f}ms"
           f" cull avg={dsc.get('cull', {}).get('avg_ms', 0):.1f}ms latency max={dsc.get('latency', {}).get('max_ms', 0):.0f}ms"
           f" nodes={dsc.get('last_nodes_visited')} sdf_calls={dsc.get('last_sdf_calls')} size={dsc.get('last_scan_size')} skipped={dsc.get('scans_skipped_same_chunk')}"
-          f" cache={dsc.get('cache')} hits={dsc.get('last_cache_hits')} cache_size={dsc.get('cache_size')} verify_mismatches={dsc.get('verify_mismatches_total')}")
+          f" cache={dsc.get('cache')} hits={dsc.get('last_cache_hits')} cache_size={dsc.get('cache_size')} verify_mismatches={dsc.get('verify_mismatches_total')}"
+          f" hit_rate={dsc.get('cache_hit_rate', 0):.3f} us/sdf_call={dsc.get('usec_per_sdf_call', 0):.2f}")
 wo = d.get("final_terrain", {}).get("world_origin")
 if wo:
     print(f">> world origin voxel={wo.get('voxel')} chunk={wo.get('chunk')}")
