@@ -83,6 +83,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discovery_cache"), &VoxelTerrain::get_discovery_cache);
     ClassDB::bind_method(D_METHOD("set_discovery_verify", "enable"), &VoxelTerrain::set_discovery_verify);
     ClassDB::bind_method(D_METHOD("get_discovery_verify"), &VoxelTerrain::get_discovery_verify);
+    ClassDB::bind_method(D_METHOD("set_discoverer_mode", "mode"), &VoxelTerrain::set_discoverer_mode);
+    ClassDB::bind_method(D_METHOD("get_discoverer_mode"), &VoxelTerrain::get_discoverer_mode);
+    ClassDB::bind_method(D_METHOD("set_discovery_compare", "enable"), &VoxelTerrain::set_discovery_compare);
+    ClassDB::bind_method(D_METHOD("get_discovery_compare"), &VoxelTerrain::get_discovery_compare);
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1"), "set_terrain_mode", "get_terrain_mode");
@@ -94,6 +98,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "discoverer_mode", PROPERTY_HINT_ENUM, "Auto:-1,CPU:0,GPU:1"), "set_discoverer_mode", "get_discoverer_mode");
     ADD_GROUP("World Origin", "world_origin_");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_x", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_x", "get_world_origin_x");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_y", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_y", "get_world_origin_y");
@@ -112,6 +117,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_zero_pillar", PROPERTY_HINT_ENUM, "Off,Exact top,Top +1 cm"), "set_debug_zero_pillar", "get_debug_zero_pillar");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_compare"), "set_discovery_compare", "get_discovery_compare");
 
     BIND_ENUM_CONSTANT(PIPELINE_GPU_LEGACY);
     BIND_ENUM_CONSTANT(PIPELINE_GPU_DIRECT);
@@ -183,6 +189,25 @@ void VoxelTerrain::set_discovery_verify(bool p_enable) {
 
 bool VoxelTerrain::get_discovery_verify() const {
     return discovery_verify;
+}
+
+void VoxelTerrain::set_discoverer_mode(int p_mode) {
+    ERR_FAIL_COND_MSG(started, "discoverer_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_mode < -1 || p_mode > 1, "Unknown discoverer_mode (-1 auto, 0 CPU, 1 GPU).");
+    discoverer_mode = p_mode;
+}
+
+int VoxelTerrain::get_discoverer_mode() const {
+    return discoverer_mode;
+}
+
+void VoxelTerrain::set_discovery_compare(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "discovery_compare must be set before the terrain enters the tree.");
+    discovery_compare = p_enable;
+}
+
+bool VoxelTerrain::get_discovery_compare() const {
+    return discovery_compare;
 }
 
 void VoxelTerrain::set_skirt_depth(float p_depth) {
@@ -441,6 +466,8 @@ void VoxelTerrain::_ready() {
     chunk_discoverer->set_config(chunk_param, sdf);
     chunk_discoverer->set_cull_mode((ChunkDiscoverer::CullMode)discovery_cull_mode);
     chunk_discoverer->set_cache(discovery_cache, discovery_verify);
+    chunk_discoverer->set_gpu(discoverer_mode == 1 || (discoverer_mode == -1 && sdf->get_cascade() != nullptr));
+    chunk_discoverer->set_compare(discovery_compare);
 
     // The pixel error is measured against the camera's real vertical FOV and viewport height.
     float viewport_height = 1080.0f;

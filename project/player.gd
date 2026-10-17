@@ -17,9 +17,9 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15) and `-- --terrain=cascade` its
-# terrain_mode (the Hermite cascade test terrain): they must be set before the terrain's _ready, and every
-# node enters the tree before any is ready.
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade` its
+# terrain_mode (the Hermite cascade test terrain) and `-- --discoverer=cpu|gpu` its discoverer_mode: they must
+# be set before the terrain's _ready, and every node enters the tree before any is ready.
 var spawn_above_ground := false
 var cascade_terrain: Node = null  # set with --terrain=cascade
 var cached_altitude := 0.0
@@ -33,6 +33,8 @@ func _enter_tree() -> void:
 		if a == "--terrain=cascade" and terrain:
 			terrain.terrain_mode = 1
 			spawn_above_ground = true
+		if a.begins_with("--discoverer=") and terrain:
+			terrain.discoverer_mode = {"cpu": 0, "gpu": 1}.get(a.trim_prefix("--discoverer="), -1)
 
 func _ready():
 	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude

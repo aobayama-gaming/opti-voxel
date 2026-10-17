@@ -12,7 +12,7 @@
 using namespace godot;
 
 void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod,
-        std::vector<uint8_t> &r_outside, WaveStats &r_wave) const {
+        std::vector<uint8_t> &r_outside, WaveStats &r_wave, DiscovererGPU *p_gpu) const {
     // The 8 corners of each node (centre +- half its size, points of Λ_lod), shared by up to 8 nodes:
     // deduplicated on their voxel, then evaluated in one batch.
     const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();
@@ -35,7 +35,16 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     }
     std::vector<float> values(points.size());
     const uint64_t t_eval = now_usec();
-    sdf->evaluate_batch(points.data(), int(points.size()), p_lod, values.data());
+    if (p_gpu) {
+        DiscovererGPU::BatchStats gpu_stats;
+        p_gpu->evaluate(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
+        r_wave.gpu = true;
+        r_wave.batches = gpu_stats.batches;
+        r_wave.gpu_ms = gpu_stats.gpu_ms;
+        r_wave.readback_bytes = gpu_stats.readback_bytes;
+    } else {
+        sdf->evaluate_batch(points.data(), int(points.size()), p_lod, values.data());
+    }
     r_wave.eval_usec = now_usec() - t_eval;
     r_wave.evaluated = int64_t(p_nodes.size());
     r_wave.corners = int64_t(p_nodes.size()) * 8;
@@ -56,7 +65,7 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
 }
 
 void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside,
-        ScanCounters &r_counters, CullCache *p_cache) const {
+        ScanCounters &r_counters, CullCache *p_cache, DiscovererGPU *p_gpu) const {
     WaveStats wave;
     wave.lod = p_lod;
     wave.nodes = int64_t(p_wave.size());
@@ -82,7 +91,7 @@ void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, 
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<uint8_t> verdict(fresh.size(), 0);
     if (p_mode != CULL_NONE && !fresh.empty()) {
-        _corner_verdicts(p_wave, fresh, p_lod, verdict, wave);
+        _corner_verdicts(p_wave, fresh, p_lod, verdict, wave, p_gpu);
     }
     r_counters.cull_nsec += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     r_counters.sdf_calls += wave.unique_corners;
@@ -144,6 +153,20 @@ void ChunkDiscoverer::discovery_loop() {
     bool has_scanned = false;
     ChunkId last_scanned_camera_chunk;
 
+    // The GPU discoverer's local device lives on this thread only.
+    if (want_gpu) {
+        gpu = memnew(DiscovererGPU);
+        if (!gpu->create(sdf, chunk_param)) {
+            WARN_PRINT("ChunkDiscoverer: the GPU discoverer needs a cascade terrain and a local RenderingDevice: the corners are evaluated on the CPU.");
+            memdelete(gpu);
+            gpu = nullptr;
+        }
+    }
+    mutex->lock();
+    stats.gpu_active = gpu != nullptr;
+    stats.gpu_scratch_mb = gpu ? double(gpu->scratch_bytes()) / 1048576.0 : 0.0;
+    mutex->unlock();
+
     while (true) {
         semaphore->wait();
         // One post per camera chunk crossing: posts that piled up during the last scan all ask for
@@ -175,61 +198,80 @@ void ChunkDiscoverer::discovery_loop() {
         std::unique_ptr<LODHashSet> new_scanned_chunk = std::make_unique<LODHashSet>();
         ScanCounters counters;
         cache.scan_index++;
-        scan(actual_camera_chunk, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr);
-        // Forget the verdicts of nodes no scan has visited for a while, once the cache is well
-        // past the size of one scan (flying keeps adding new nodes).
-        int64_t evicted = 0;
-        if (use_cache && cache.entries.size() > uint32_t(4 * counters.nodes_visited)) {
-            std::vector<ChunkId> stale;
-            for (const KeyValue<ChunkId, CullCache::Entry> &kv : cache.entries) {
-                if (kv.value.last_scan + 4 < cache.scan_index) {
-                    stale.push_back(kv.key);
-                }
-            }
-            for (const ChunkId &id : stale) {
-                cache.entries.erase(id);
-            }
-            evicted = (int64_t)stale.size();
-        }
+        scan(actual_camera_chunk, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
+        const int64_t evicted = _evict_cache(counters.nodes_visited);
         if (counters.verify_mismatches > 0) {
             ERR_PRINT(String("ChunkDiscoverer: ") + String::num_int64(counters.verify_mismatches) +
                     " cached cull verdicts differ from a fresh evaluation.");
         }
         const uint64_t t_scan_end = now_usec();
+        if (compare) {
+            _compare_with_cpu(actual_camera_chunk, *new_scanned_chunk);
+        }
+        const uint64_t t_compared = now_usec();
 
-        mutex->lock();
-        const int64_t size = new_scanned_chunk->size();
-        scanned_chunks = std::move(new_scanned_chunk);
-        scanned_camera_chunk = actual_camera_chunk;
-        scanned_chunks_dirty = true;
-        const uint64_t t_published = now_usec();
-        stats.scan.add(t_scan_end - t_scan_start);
-        stats.cull.add(counters.cull_nsec / 1000);
-        stats.publish.add(t_published - t_scan_end);
-        if (camera_change_usec > 0) {
-            stats.latency.add(t_published - camera_change_usec);
-        }
-        stats.last_scan_size = size;
-        stats.last_nodes_visited = counters.nodes_visited;
-        stats.last_sdf_calls = counters.sdf_calls;
-        stats.last_culled = counters.culled;
-        stats.nodes_visited_total += counters.nodes_visited;
-        stats.sdf_calls_total += counters.sdf_calls;
-        stats.last_cache_hits = counters.cache_hits;
-        stats.cache_hits_total += counters.cache_hits;
-        stats.cache_size = cache.entries.size();
-        stats.cache_evicted_total += evicted;
-        stats.verify_mismatches_total += counters.verify_mismatches;
-        stats.last_scan = _scan_dict(counters, t_scan_end - t_scan_start);
-        if (stats.first_scan.is_empty()) {
-            stats.first_scan = stats.last_scan;
-        }
-        mutex->unlock();
+        _publish(std::move(new_scanned_chunk), actual_camera_chunk, counters, evicted, t_scan_end - t_scan_start, t_compared);
+    }
+
+    if (gpu) {
+        gpu->free();
+        memdelete(gpu);
+        gpu = nullptr;
     }
 }
 
+int64_t ChunkDiscoverer::_evict_cache(int64_t p_nodes_visited) {
+    // Forget the verdicts of nodes no scan has visited for a while, once the cache is well
+    // past the size of one scan (flying keeps adding new nodes).
+    if (!use_cache || cache.entries.size() <= uint32_t(4 * p_nodes_visited)) {
+        return 0;
+    }
+    std::vector<ChunkId> stale;
+    for (const KeyValue<ChunkId, CullCache::Entry> &kv : cache.entries) {
+        if (kv.value.last_scan + 4 < cache.scan_index) {
+            stale.push_back(kv.key);
+        }
+    }
+    for (const ChunkId &id : stale) {
+        cache.entries.erase(id);
+    }
+    return (int64_t)stale.size();
+}
+
+void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, const ChunkId &p_camera_chunk, const ScanCounters &p_counters, int64_t p_evicted,
+        uint64_t p_scan_usec, uint64_t p_ready_usec) {
+    mutex->lock();
+    const int64_t size = p_scan->size();
+    scanned_chunks = std::move(p_scan);
+    scanned_camera_chunk = p_camera_chunk;
+    scanned_chunks_dirty = true;
+    const uint64_t t_published = now_usec();
+    stats.scan.add(p_scan_usec);
+    stats.cull.add(p_counters.cull_nsec / 1000);
+    stats.publish.add(t_published - p_ready_usec);
+    if (camera_change_usec > 0) {
+        stats.latency.add(t_published - camera_change_usec);
+    }
+    stats.last_scan_size = size;
+    stats.last_nodes_visited = p_counters.nodes_visited;
+    stats.last_sdf_calls = p_counters.sdf_calls;
+    stats.last_culled = p_counters.culled;
+    stats.nodes_visited_total += p_counters.nodes_visited;
+    stats.sdf_calls_total += p_counters.sdf_calls;
+    stats.last_cache_hits = p_counters.cache_hits;
+    stats.cache_hits_total += p_counters.cache_hits;
+    stats.cache_size = cache.entries.size();
+    stats.cache_evicted_total += p_evicted;
+    stats.verify_mismatches_total += p_counters.verify_mismatches;
+    stats.last_scan = _scan_dict(p_counters, p_scan_usec);
+    if (stats.first_scan.is_empty()) {
+        stats.first_scan = stats.last_scan;
+    }
+    mutex->unlock();
+}
+
 void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
-        CullCache *p_cache) const {
+        CullCache *p_cache, DiscovererGPU *p_gpu) const {
     const int max_lod = get_max_lod();
     int64_t max_lod_radius;
     int64_t max_lod_number;
@@ -255,7 +297,7 @@ void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHa
     std::vector<ChunkId> next;
     std::vector<uint8_t> outside;
     for (int lod = max_lod; !wave.empty(); lod--) {
-        _cull_wave(wave, lod, p_mode, outside, r_counters, p_cache);
+        _cull_wave(wave, lod, p_mode, outside, r_counters, p_cache, p_gpu);
         next.clear();
         for (size_t i = 0; i < wave.size(); i++) {
             const ChunkId &node = wave[i];
@@ -365,6 +407,30 @@ void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos) {
         VLOG(2, "new chunk:", WorldCoord::to_string(new_camera_chunk));
     }
 }
+void ChunkDiscoverer::_compare_with_cpu(const ChunkId &p_camera_chunk, const LODHashSet &p_scanned) {
+    const uint64_t t0 = now_usec();
+    LODHashSet cpu_set;
+    ScanCounters cpu_counters;
+    scan(p_camera_chunk, cull_mode, cpu_set, cpu_counters);
+    int64_t only_here = 0;
+    int64_t only_cpu = 0;
+    for (const ChunkId &id : p_scanned) {
+        only_here += cpu_set.has(id) ? 0 : 1;
+    }
+    for (const ChunkId &id : cpu_set) {
+        only_cpu += p_scanned.has(id) ? 0 : 1;
+    }
+    if (only_here + only_cpu > 0) {
+        ERR_PRINT(vformat("ChunkDiscoverer: --discovery_compare: the %s scan around %s differs from the CPU scan: %d chunks only in it, %d only in the CPU's.",
+                gpu ? "GPU" : "CPU", WorldCoord::to_string(p_camera_chunk), only_here, only_cpu));
+    }
+    mutex->lock();
+    stats.compare_scans++;
+    stats.compare_differences += only_here + only_cpu;
+    stats.compare_cpu.add(now_usec() - t0);
+    mutex->unlock();
+}
+
 Dictionary ChunkDiscoverer::_scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec) {
     Dictionary d;
     const double cull_ms = double(p_counters.cull_nsec) / 1e6;
@@ -386,6 +452,11 @@ Dictionary ChunkDiscoverer::_scan_dict(const ScanCounters &p_counters, uint64_t 
         wd["corners"] = w.corners;
         wd["unique_corners"] = w.unique_corners;
         wd["eval_ms"] = double(w.eval_usec) / 1000.0;
+        if (w.gpu) {
+            wd["gpu_ms"] = w.gpu_ms;
+            wd["batches"] = w.batches;
+            wd["readback_bytes"] = w.readback_bytes;
+        }
         waves.push_back(wd);
     }
     d["waves"] = waves;
@@ -417,6 +488,12 @@ Dictionary ChunkDiscoverer::get_stats() {
     // Share of visited nodes whose verdict came from the cache, and the cost of one corner SDF evaluation.
     d["cache_hit_rate"] = stats.nodes_visited_total ? double(stats.cache_hits_total) / double(stats.nodes_visited_total) : 0.0;
     d["usec_per_sdf_call"] = stats.sdf_calls_total ? double(stats.cull.total) / double(stats.sdf_calls_total) : 0.0;
+    d["mode"] = stats.gpu_active ? "gpu" : "cpu";
+    d["gpu_scratch_mb"] = stats.gpu_scratch_mb;
+    d["compare"] = compare;
+    d["compare_scans"] = stats.compare_scans;
+    d["compare_differences"] = stats.compare_differences;
+    d["compare_cpu"] = stats.compare_cpu.to_dict();
     d["first_scan"] = stats.first_scan.duplicate(true);
     d["last_scan"] = stats.last_scan.duplicate(true);
     mutex->unlock();

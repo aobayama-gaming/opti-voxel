@@ -82,6 +82,8 @@ private:
     int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
     bool discovery_cache = true;
     bool discovery_verify = false;
+    int discoverer_mode = -1; // -1 auto: GPU for a cascade terrain, CPU otherwise
+    bool discovery_compare = false;
 
     bool started = false;
 
@@ -213,6 +215,14 @@ public:
     // Debug: recompute every cached verdict and report mismatches as errors.
     void set_discovery_verify(bool p_enable);
     bool get_discovery_verify() const;
+    // Where the discoverer evaluates the corners of its cull test: -1 auto (GPU when the terrain is a cascade,
+    // CPU otherwise), 0 CPU, 1 GPU (DiscovererGPU, a local device on the discoverer thread; CPU with a warning
+    // if it can't be created or the terrain has no cascade). Both give the same scans.
+    void set_discoverer_mode(int p_mode);
+    int get_discoverer_mode() const;
+    // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).
+    void set_discovery_compare(bool p_enable);
+    bool get_discovery_compare() const;
 
     // GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);
