@@ -5,6 +5,7 @@
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "page_format.hpp"
+#include "rd_utils.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -108,7 +109,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_initialize));
 }
 
-RID GPUDirectMesher::_rt_compile(const char *p_pass) {
+RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     String shader = DIRECT_TEMPLATE;
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", GLSL_DIRECT_BINDINGS);
@@ -117,6 +118,7 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass) {
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
+    RDUtils::dump_shader(String("direct_") + p_name, shader);
 
     Ref<RDShaderSource> source;
     source.instantiate();
@@ -167,7 +169,7 @@ void GPUDirectMesher::_rt_initialize() {
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     for (int i = 0; i < 5; i++) {
-        shaders[i] = _rt_compile(PASS_SOURCES[i]);
+        shaders[i] = _rt_compile(PASS_SOURCES[i], PASS_NAMES[i]);
         ERR_FAIL_COND_MSG(!shaders[i].is_valid(), String("GPUDirectMesher: pass failed to compile: ") + PASS_NAMES[i]);
         pipelines[i] = rd->compute_pipeline_create(shaders[i]);
     }

@@ -29,6 +29,7 @@
 #include "exact_noise.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
+#include "rd_utils.hpp"
 
 static constexpr const char GLSL_BUFFER_BINDING[] = R"glsl(
 layout(set = 0, binding = 0, std430) restrict buffer AtomicCounter {
@@ -69,7 +70,7 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
 
 )glsl";
 
-RID GPUMesher::compile_dynamic_shader(const String &algorithm_pass) {
+RID GPUMesher::compile_dynamic_shader(const String &algorithm_pass, const String &p_name) {
     // Template shared by the three passes; the placeholders are filled below.
     String shader = R"glsl(#version 450
 
@@ -114,6 +115,7 @@ void main() {
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", algorithm_pass);
+    RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
     // 3. Create a Shader Source object
     Ref<RDShaderSource> shader_source;
@@ -368,9 +370,9 @@ void GPUMesher::_initialize_gpu_compute() {
     uniforms.push_back(create_storage_uniform(4, buffer_output_point));
     uniforms.push_back(create_storage_uniform(5, buffer_chunk_param, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
 
-    shader_first_pass = compile_dynamic_shader(GLSL_FIRST_PASS);
-    shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS);
-    shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS);
+    shader_first_pass = compile_dynamic_shader(GLSL_FIRST_PASS, "first");
+    shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS, "second");
+    shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS, "third");
 
     //first step pipeline
     pipeline_first_pass = rd->compute_pipeline_create(shader_first_pass);

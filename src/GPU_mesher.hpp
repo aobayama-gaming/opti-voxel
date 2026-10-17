@@ -113,7 +113,7 @@ private:
 
     LODHashSet working_generation;
 
-    RID compile_dynamic_shader(const String &custom_sdf_code);
+    RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
     void _execute_gpu_pipeline(PackedByteArray p_chunk_id);
     void _execute_whole_pipeline();

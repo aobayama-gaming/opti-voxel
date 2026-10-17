@@ -1,5 +1,7 @@
 #pragma once
 
+#include <godot_cpp/classes/file_access.hpp>
+#include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/variant/array.hpp>
@@ -43,6 +45,19 @@ inline void _rt_delete_object(uint64_t p_object) {
 inline void delete_on_render_thread(Object *p_object) {
     RenderingServer::get_singleton()->call_on_render_thread(
             callable_mp_static(&_rt_delete_object).bind(uint64_t(uintptr_t(p_object))));
+}
+
+// Debug: with the environment variable OPTI_VOXEL_SHADER_DUMP=<dir>, writes a composed shader source to
+// <dir>/<name>.glsl (compare the shaders of two builds byte for byte).
+inline void dump_shader(const String &p_name, const String &p_code) {
+    const String dir = OS::get_singleton()->get_environment("OPTI_VOXEL_SHADER_DUMP");
+    if (dir.is_empty()) {
+        return;
+    }
+    Ref<FileAccess> f = FileAccess::open(dir.path_join(p_name + String(".glsl")), FileAccess::WRITE);
+    if (f.is_valid()) {
+        f->store_string(p_code);
+    }
 }
 
 } // namespace RDUtils

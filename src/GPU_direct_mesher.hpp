@@ -154,7 +154,7 @@ private:
     uint32_t status_size_bytes = 0;
 
     void _rt_initialize();
-    RID _rt_compile(const char *p_pass);
+    RID _rt_compile(const char *p_pass, const char *p_name);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
             const PackedInt32Array &p_pages);
     void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id);

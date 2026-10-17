@@ -42,6 +42,8 @@ struct Vector3i64 {
         z += p_o.z;
         return *this;
     }
+    constexpr int64_t operator[](int p_axis) const { return p_axis == 0 ? x : (p_axis == 1 ? y : z); }
+    int64_t &operator[](int p_axis) { return p_axis == 0 ? x : (p_axis == 1 ? y : z); }
     constexpr bool operator==(const Vector3i64 &p_o) const { return x == p_o.x && y == p_o.y && z == p_o.z; }
     constexpr bool operator!=(const Vector3i64 &p_o) const { return !(*this == p_o); }
 

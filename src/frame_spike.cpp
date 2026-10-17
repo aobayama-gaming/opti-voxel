@@ -79,6 +79,14 @@ uint32_t fold_cell(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, in
 constexpr int CELL_KS[] = { 0, 3, 13, 24, 25, 31, 32, 33, 47, 62 };
 constexpr int PERLIN3_KS[] = { 2, 9, 20, 33 };
 constexpr int PERLIN2_KS[] = { 2, 9, 33 };
+// perlin3_cross (the cascade's bands): perlin3's ks, and the band each LOD of PROBE_LODS inserts on its own
+// lattice (k = L + 3).
+constexpr int CROSS_KS[] = { 2, 3, 4, 8, 9, 17, 20, 27, 33 };
+// The int64 helpers of GLSL_FRAME_INT64: shifts and small addends.
+constexpr int I64_SHIFTS[] = { 0, 1, 5, 31, 32, 33, 47, 63 };
+constexpr int I64_SHIFT_COUNT = int(sizeof(I64_SHIFTS) / sizeof(I64_SHIFTS[0]));
+constexpr int32_t I64_ADDS[] = { 0, 1, -1, -896, 2147483647, -2147483647 - 1 };
+constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
 // LODs the terrain's fBms and terrain_sdf are probed at (4 words each). The GLSL gets them as
 // lod_bias + L, lod_bias a push constant 0: a runtime value like the meshers' chunk LOD, not a literal
 // the compiler could fold.
@@ -181,6 +189,76 @@ void probe_octave_cell(WorldPos p, uint b) {
         };
         p.continuity_bound = octave_step_bound(k, 6.0);
         p.continuity_word = 3;
+        probes.push_back(p);
+    }
+    for (int k : CROSS_KS) {
+        Probe p;
+        p.name = vformat("perlin3_cross_k%d", k);
+        p.words = 8;
+        p.is_float = true;
+        const Vector3i64 o = test_offset(k);
+        const uint32_t seed = 0x3000u + uint32_t(k);
+        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, %d, %s, %s, %s, c0, c1);\n", p.name,
+                k, glsl_uint(seed), glsl_lo(o), glsl_hi(o));
+        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(c0[i]); results[b + 4u + i] = floatBitsToUint(c1[i]); }\n}\n";
+        p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
+            const Channels8 c = perlin3_cross(q, k, seed, o);
+            for (int i = 0; i < 8; i++) {
+                r[i] = float_bits(c.c[i]);
+            }
+        };
+        p.continuity_bound = octave_step_bound(k, 4.0);
+        p.continuity_word = 0;
+        probes.push_back(p);
+    }
+    {
+        // The voxel's three axes through every shift (asr, ceil asr, shl), then every addend: (lo, hi) words.
+        Probe p;
+        p.name = "i64";
+        p.words = 3 * 6 * I64_SHIFT_COUNT + 6 * I64_ADD_COUNT;
+        p.glsl = "void probe_i64_store(uvec3 lo, ivec3 hi, uint b) {\n"
+                 "    for (uint i = 0u; i < 3u; i++) { results[b + 2u * i] = lo[i]; results[b + 2u * i + 1u] = uint(hi[i]); }\n}\n"
+                 "void probe_i64(WorldPos p, uint b) {\n";
+        for (int i = 0; i < I64_SHIFT_COUNT; i++) {
+            const int s = I64_SHIFTS[i];
+            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_asr(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i);
+            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_asr_ceil(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i + 6);
+            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_shl(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i + 12);
+        }
+        for (int i = 0; i < I64_ADD_COUNT; i++) {
+            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_add(lo, hi, ivec3(%s)); probe_i64_store(lo, hi, b + %du); }\n",
+                    I64_ADDS[i] == INT32_MIN ? String("-2147483647 - 1") : itos(I64_ADDS[i]), 18 * I64_SHIFT_COUNT + 6 * i);
+        }
+        p.glsl += "}\n";
+        p.cpu = [](const WorldPos &q, uint32_t *r) {
+            auto store = [](const Vector3i64 &p_v, uint32_t *r_w) {
+                for (int a = 0; a < 3; a++) {
+                    r_w[2 * a] = lo32(p_v[a]);
+                    r_w[2 * a + 1] = uint32_t(hi32(p_v[a]));
+                }
+            };
+            for (int i = 0; i < I64_SHIFT_COUNT; i++) {
+                const int s = I64_SHIFTS[i];
+                Vector3i64 asr, ceil, shl;
+                for (int a = 0; a < 3; a++) {
+                    const int64_t v = q.voxel[a];
+                    asr[a] = v >> s;
+                    const uint64_t rest = uint64_t(v) & ((uint64_t(1) << s) - 1);
+                    ceil[a] = asr[a] + (rest != 0 ? 1 : 0);
+                    shl[a] = int64_t(uint64_t(v) << s);
+                }
+                store(asr, r + 18 * i);
+                store(ceil, r + 18 * i + 6);
+                store(shl, r + 18 * i + 12);
+            }
+            for (int i = 0; i < I64_ADD_COUNT; i++) {
+                Vector3i64 sum;
+                for (int a = 0; a < 3; a++) {
+                    sum[a] = int64_t(uint64_t(q.voxel[a]) + uint64_t(int64_t(I64_ADDS[i])));
+                }
+                store(sum, r + 18 * I64_SHIFT_COUNT + 6 * i);
+            }
+        };
         probes.push_back(p);
     }
     // The terrain's two fBms and the terrain itself (gradient included), at every LOD of PROBE_LODS.
@@ -647,7 +725,7 @@ Dictionary FrameSpike::run() {
     }
     String code = String(SHADER_TEMPLATE);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
     code = code.replace("/*TERRAIN_SDF*/", sdf.get_glsl_code());
     code = code.replace("/*PROBES*/", probes_glsl);
     code = code.replace("/*PROBE_CALLS*/", probe_calls);
