@@ -104,7 +104,9 @@ to every change, and a reviewer may reject a PR on any of them.
   included). It works in voxels and returns metres; parameters are metres rounded to 2^k voxels in
   `configure()`, so another voxel size is another world. Flat world: the datum is absolute y ~ 300 m,
   so far origins only show terrain with y = 0. Debug shapes (test rig, zero pillar) are placed
-  relative to the world origin (exact `sat_diff` to it).
+  relative to the world origin (exact `sat_diff` to it). The 3D caves are two thirds of the SDF's
+  GPU cost: they are only evaluated where the band lets them reach the smooth max (bit-identical to
+  evaluating them everywhere, `cave_skip`, unit-tested).
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 
 ## Verify changes (do this, don't eyeball)
@@ -235,6 +237,10 @@ to every change, and a reviewer may reject a PR on any of them.
 - A distance estimate c / |grad c| of a noise field badly underestimates far from its zero set; under a
   `max()` it can win and make deep rock read |SDF| < one cell, and skirts then build walls kilometres
   underground (the cave field is capped by the distance to its depth band for that reason).
+- GPU shader cost: a `const` array indexed by a per-thread value (a gradient table indexed by a hash)
+  serializes on NVIDIA; it cost 15% of the SDF pass, selects on the hash bits are free. Integer
+  multiplies (PCG3D) run at half the float rate; `precise` costs nothing measurable. To find where a
+  shader's time goes, swap variants of the stitched GLSL and compare `gpu_pass_sdf` per batch.
 - `FrameSpike` uses a local RenderingDevice: it needs a window (not `--headless`) and an unlocked session.
 - Main-RD resources must be created/freed on the render thread; objects owning them delete
   themselves there (`destroy()` -> `_rt_destroy()`), after the render-thread work already queued

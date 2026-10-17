@@ -135,35 +135,38 @@ inline OctaveCell octave_cell(const WorldPos &p_pos, int p_k, const Vector3i64 &
     return c;
 }
 
-// Ken Perlin's 12 cube-edge gradients (padded to 16), and 8 equal-length 2D ones (|g| = sqrt(5)).
-inline constexpr float GRAD3[16][3] = {
-    { 1, 1, 0 },
-    { -1, 1, 0 },
-    { 1, -1, 0 },
-    { -1, -1, 0 },
-    { 1, 0, 1 },
-    { -1, 0, 1 },
-    { 1, 0, -1 },
-    { -1, 0, -1 },
-    { 0, 1, 1 },
-    { 0, -1, 1 },
-    { 0, 1, -1 },
-    { 0, -1, -1 },
-    { 1, 1, 0 },
-    { -1, 1, 0 },
-    { 0, -1, 1 },
-    { 0, -1, -1 },
+// Corner gradients, built from the hash's top bits rather than looked up: on the GPU a table indexed
+// by a per-thread value serializes (it cost 15% of the SDF pass).
+struct Grad3 {
+    float v[3];
+    float operator[](int p_i) const { return v[p_i]; }
 };
-inline constexpr float GRAD2[8][2] = {
-    { 1, 2 },
-    { 2, 1 },
-    { -1, 2 },
-    { -2, 1 },
-    { 1, -2 },
-    { 2, -1 },
-    { -1, -2 },
-    { -2, -1 },
+struct Grad2 {
+    float v[2];
+    float operator[](int p_i) const { return v[p_i]; }
 };
+
+// Ken Perlin's 12 cube edges for i in [0, 16): bit 0 / bit 1 flip the two non-zero components, i >> 2
+// picks the plane (xy, xz, yz), and 12-15 repeat (±1, 1, 0) and (0, -1, ±1).
+inline Grad3 grad3(uint32_t p_i) {
+    const float sa = (p_i & 1u) ? -1.0f : 1.0f;
+    const float sb = (p_i & 2u) ? -1.0f : 1.0f;
+    const uint32_t plane = p_i >> 2;
+    if (plane == 1u) {
+        return { { sa, 0.0f, sb } };
+    }
+    if (plane == 2u) {
+        return { { 0.0f, sa, sb } };
+    }
+    return p_i < 14u ? Grad3{ { sa, sb, 0.0f } } : Grad3{ { 0.0f, sb, sa } };
+}
+
+// 8 equal-length 2D gradients (±1, ±2) and (±2, ±1) for i in [0, 8): bit 0 swaps, bits 1 / 2 flip.
+inline Grad2 grad2(uint32_t p_i) {
+    const float a = (p_i & 1u) ? 2.0f : 1.0f;
+    const float b = (p_i & 1u) ? 1.0f : 2.0f;
+    return { { (p_i & 2u) ? -a : a, (p_i & 4u) ? -b : b } };
+}
 
 inline float fade(float f) {
     const float u = f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f);
@@ -191,16 +194,16 @@ inline Float4 perlin3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vec
     const float duz = dfade(fz);
 
     auto grad = [&](int p_i, int p_j, int p_l) {
-        return GRAD3[hash_cell(c.cell + Vector3i64(p_i, p_j, p_l), p_seed) >> 28];
+        return grad3(hash_cell(c.cell + Vector3i64(p_i, p_j, p_l), p_seed) >> 28);
     };
-    const float *ga = grad(0, 0, 0);
-    const float *gb = grad(1, 0, 0);
-    const float *gc = grad(0, 1, 0);
-    const float *gd = grad(1, 1, 0);
-    const float *ge = grad(0, 0, 1);
-    const float *gf = grad(1, 0, 1);
-    const float *gg = grad(0, 1, 1);
-    const float *gh = grad(1, 1, 1);
+    const Grad3 ga = grad(0, 0, 0);
+    const Grad3 gb = grad(1, 0, 0);
+    const Grad3 gc = grad(0, 1, 0);
+    const Grad3 gd = grad(1, 1, 0);
+    const Grad3 ge = grad(0, 0, 1);
+    const Grad3 gf = grad(1, 0, 1);
+    const Grad3 gg = grad(0, 1, 1);
+    const Grad3 gh = grad(1, 1, 1);
     const float fx1 = fx - 1.0f;
     const float fy1 = fy - 1.0f;
     const float fz1 = fz - 1.0f;
@@ -265,10 +268,10 @@ inline Float4 perlin2(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vec
     const float dux = dfade(fx);
     const float duz = dfade(fz);
 
-    const float *ga = GRAD2[hash_cell_2d(cx, cz, p_seed) >> 29];
-    const float *gb = GRAD2[hash_cell_2d(cx + 1, cz, p_seed) >> 29];
-    const float *gc = GRAD2[hash_cell_2d(cx, cz + 1, p_seed) >> 29];
-    const float *gd = GRAD2[hash_cell_2d(cx + 1, cz + 1, p_seed) >> 29];
+    const Grad2 ga = grad2(hash_cell_2d(cx, cz, p_seed) >> 29);
+    const Grad2 gb = grad2(hash_cell_2d(cx + 1, cz, p_seed) >> 29);
+    const Grad2 gc = grad2(hash_cell_2d(cx, cz + 1, p_seed) >> 29);
+    const Grad2 gd = grad2(hash_cell_2d(cx + 1, cz + 1, p_seed) >> 29);
     const float fx1 = fx - 1.0f;
     const float fz1 = fz - 1.0f;
     const float va = ga[0] * fx + ga[1] * fz;
@@ -471,15 +474,22 @@ OctaveCell octave_cell(WorldPos p, int k, uvec3 olo, ivec3 ohi) {
     return c;
 }
 
-const vec3 GRAD3[16] = vec3[16](
-    vec3(1.0, 1.0, 0.0), vec3(-1.0, 1.0, 0.0), vec3(1.0, -1.0, 0.0), vec3(-1.0, -1.0, 0.0),
-    vec3(1.0, 0.0, 1.0), vec3(-1.0, 0.0, 1.0), vec3(1.0, 0.0, -1.0), vec3(-1.0, 0.0, -1.0),
-    vec3(0.0, 1.0, 1.0), vec3(0.0, -1.0, 1.0), vec3(0.0, 1.0, -1.0), vec3(0.0, -1.0, -1.0),
-    vec3(1.0, 1.0, 0.0), vec3(-1.0, 1.0, 0.0), vec3(0.0, -1.0, 1.0), vec3(0.0, -1.0, -1.0));
+// See ExactNoise::grad3 / grad2 (selects, no table).
+vec3 grad3(uint i) {
+    float sa = (i & 1u) != 0u ? -1.0 : 1.0;
+    float sb = (i & 2u) != 0u ? -1.0 : 1.0;
+    uint plane = i >> 2u;
+    vec3 g = i < 14u ? vec3(sa, sb, 0.0) : vec3(0.0, sb, sa);
+    g = plane == 1u ? vec3(sa, 0.0, sb) : g;
+    g = plane == 2u ? vec3(0.0, sa, sb) : g;
+    return g;
+}
 
-const vec2 GRAD2[8] = vec2[8](
-    vec2(1.0, 2.0), vec2(2.0, 1.0), vec2(-1.0, 2.0), vec2(-2.0, 1.0),
-    vec2(1.0, -2.0), vec2(2.0, -1.0), vec2(-1.0, -2.0), vec2(-2.0, -1.0));
+vec2 grad2(uint i) {
+    float a = (i & 1u) != 0u ? 2.0 : 1.0;
+    float b = (i & 1u) != 0u ? 1.0 : 2.0;
+    return vec2((i & 2u) != 0u ? -a : a, (i & 4u) != 0u ? -b : b);
+}
 
 vec3 fade3(vec3 f) {
     precise vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
@@ -491,15 +501,11 @@ vec3 dfade3(vec3 f) {
     return mix(du, vec3(0.0), lessThan(du, vec3(uintBitsToFloat(0x33800000u))));
 }
 
-// Hash of the corner `pick` of the cell. Corners share the cell's high words (and its salt) unless
-// the low word carries, i.e. the cell sits on a 2^32 boundary.
-uint corner_hash(OctaveCell c, uvec3 lo1, ivec3 hi1, bvec3 pick, bool wrap, uvec3 salt0, uint seed) {
-    uvec3 lo = mix(c.lo, lo1, pick);
-    uvec3 salt = salt0;
-    if (wrap) {
-        salt = cell_salt(mix(c.hi, hi1, pick), seed);
-    }
-    return pcg3d(lo ^ salt).x;
+// Corner hashes of a cell: hash_cell of each corner. The corners share the cell's high words (and so
+// one salt) unless a low word carries, i.e. the cell sits on a 2^32 boundary: one branch per cell,
+// not per corner.
+vec3 corner_grad(uvec3 lo, uvec3 salt) {
+    return grad3(pcg3d(lo ^ salt).x >> 28u);
 }
 
 vec4 perlin3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
@@ -511,16 +517,25 @@ vec4 perlin3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
     uvec3 lo1 = c.lo + 1u;
     bvec3 carry = equal(lo1, uvec3(0u));
     ivec3 hi1 = c.hi + ivec3(carry);
-    bool wrap = any(carry);
-    uvec3 salt0 = cell_salt(c.hi, seed);
-    vec3 ga = GRAD3[corner_hash(c, lo1, hi1, bvec3(false, false, false), wrap, salt0, seed) >> 28u];
-    vec3 gb = GRAD3[corner_hash(c, lo1, hi1, bvec3(true, false, false), wrap, salt0, seed) >> 28u];
-    vec3 gc = GRAD3[corner_hash(c, lo1, hi1, bvec3(false, true, false), wrap, salt0, seed) >> 28u];
-    vec3 gd = GRAD3[corner_hash(c, lo1, hi1, bvec3(true, true, false), wrap, salt0, seed) >> 28u];
-    vec3 ge = GRAD3[corner_hash(c, lo1, hi1, bvec3(false, false, true), wrap, salt0, seed) >> 28u];
-    vec3 gf = GRAD3[corner_hash(c, lo1, hi1, bvec3(true, false, true), wrap, salt0, seed) >> 28u];
-    vec3 gg = GRAD3[corner_hash(c, lo1, hi1, bvec3(false, true, true), wrap, salt0, seed) >> 28u];
-    vec3 gh = GRAD3[corner_hash(c, lo1, hi1, bvec3(true, true, true), wrap, salt0, seed) >> 28u];
+    uvec3 s000 = cell_salt(c.hi, seed);
+    uvec3 s100 = s000, s010 = s000, s110 = s000, s001 = s000, s101 = s000, s011 = s000, s111 = s000;
+    if (any(carry)) {
+        s100 = cell_salt(ivec3(hi1.x, c.hi.y, c.hi.z), seed);
+        s010 = cell_salt(ivec3(c.hi.x, hi1.y, c.hi.z), seed);
+        s110 = cell_salt(ivec3(hi1.x, hi1.y, c.hi.z), seed);
+        s001 = cell_salt(ivec3(c.hi.x, c.hi.y, hi1.z), seed);
+        s101 = cell_salt(ivec3(hi1.x, c.hi.y, hi1.z), seed);
+        s011 = cell_salt(ivec3(c.hi.x, hi1.y, hi1.z), seed);
+        s111 = cell_salt(hi1, seed);
+    }
+    vec3 ga = corner_grad(c.lo, s000);
+    vec3 gb = corner_grad(uvec3(lo1.x, c.lo.y, c.lo.z), s100);
+    vec3 gc = corner_grad(uvec3(c.lo.x, lo1.y, c.lo.z), s010);
+    vec3 gd = corner_grad(uvec3(lo1.x, lo1.y, c.lo.z), s110);
+    vec3 ge = corner_grad(uvec3(c.lo.x, c.lo.y, lo1.z), s001);
+    vec3 gf = corner_grad(uvec3(lo1.x, c.lo.y, lo1.z), s101);
+    vec3 gg = corner_grad(uvec3(c.lo.x, lo1.y, lo1.z), s011);
+    vec3 gh = corner_grad(lo1, s111);
 
     precise vec3 f1 = f - 1.0;
     precise float va = ga.x * f.x + ga.y * f.y + ga.z * f.z;
@@ -572,10 +587,18 @@ vec4 perlin2(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
     int cxh1 = cxh + int(cxl1 == 0u);
     uint czl1 = czl + 1u;
     int czh1 = czh + int(czl1 == 0u);
-    vec2 ga = GRAD2[hash_cell_2d(cxl, cxh, czl, czh, seed) >> 29u];
-    vec2 gb = GRAD2[hash_cell_2d(cxl1, cxh1, czl, czh, seed) >> 29u];
-    vec2 gc = GRAD2[hash_cell_2d(cxl, cxh, czl1, czh1, seed) >> 29u];
-    vec2 gd = GRAD2[hash_cell_2d(cxl1, cxh1, czl1, czh1, seed) >> 29u];
+    // Same salt sharing as perlin3.
+    uvec3 s00 = cell_salt(ivec3(cxh, czh, 0), seed);
+    uvec3 s10 = s00, s01 = s00, s11 = s00;
+    if (cxl1 == 0u || czl1 == 0u) {
+        s10 = cell_salt(ivec3(cxh1, czh, 0), seed);
+        s01 = cell_salt(ivec3(cxh, czh1, 0), seed);
+        s11 = cell_salt(ivec3(cxh1, czh1, 0), seed);
+    }
+    vec2 ga = grad2(pcg3d(uvec3(cxl, czl, 0x6A09E667u) ^ s00).x >> 29u);
+    vec2 gb = grad2(pcg3d(uvec3(cxl1, czl, 0x6A09E667u) ^ s10).x >> 29u);
+    vec2 gc = grad2(pcg3d(uvec3(cxl, czl1, 0x6A09E667u) ^ s01).x >> 29u);
+    vec2 gd = grad2(pcg3d(uvec3(cxl1, czl1, 0x6A09E667u) ^ s11).x >> 29u);
 
     precise vec2 f1 = f - 1.0;
     precise float va = ga.x * f.x + ga.y * f.y;

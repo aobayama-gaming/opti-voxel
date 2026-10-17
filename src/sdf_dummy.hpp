@@ -27,6 +27,9 @@ public:
     // row (multiple of 64 LOD0 voxels above the origin), so the SDF is exactly 0.0 there at LODs 0-6.
     // 1 = exact top, 2 = top 1 cm higher (no exact zero, same signs: must mesh the same quad count).
     int zero_pillar = 0;
+    // Debug: false evaluates the caves at every sample instead of only where they can show. The result
+    // is bit-identical either way (unit test); only the cost changes.
+    bool cave_skip = true;
     static constexpr float ZERO_PILLAR_X = -52.75f;
     static constexpr float ZERO_PILLAR_Z = -110.0f;
     static constexpr float ZERO_PILLAR_HALF = 4.0f;
@@ -105,7 +108,6 @@ public:
         // Caves: carve where the blob noise exceeds a threshold that drops with the distance into the
         // band (tent: positive inside, distance to the band outside, in voxels along the terrain
         // gradient). Positive = carved out.
-        const Float4 blob = fbm(caves, p_pos);
         const float depth = hn.w - dy;
         const float below_top = depth - cave_top;
         const float above_floor = cave_floor - depth;
@@ -113,21 +115,33 @@ public:
         const float tent = near_top ? below_top : above_floor;
         // d depth / d p = -(t.x, t.y, t.z).
         const float ts = near_top ? -1.0f : 1.0f;
-        const float gs = ts * cave_gain;
-        Float4 c{ 0.8f * blob.x + gs * t.x, 0.8f * blob.y + gs * t.y, 0.8f * blob.z + gs * t.z,
-            0.8f * blob.w - 0.66f + cave_gain * tent };
-        const float cr = det_rsqrt(MAX(c.x * c.x + c.y * c.y + c.z * c.z, cave_eps2));
-        const Float4 blobs{ c.x * cr, c.y * cr, c.z * cr, c.w * cr };
-        const Float4 band{ ts * terrain.x, ts * terrain.y, ts * terrain.z, tent * tr };
-        const Float4 carve = blobs.w < band.w ? blobs : band;
+        const float band_w = tent * tr;
 
-        // Smooth max(terrain, carve) over `blend` voxels.
-        const float dw = terrain.w - carve.w;
-        const float h = CLAMP(0.5f + 0.5f * (dw * inv_blend), 0.0f, 1.0f);
-        const float dist = carve.w + dw * h + blend * h * (1.0f - h);
-        const float gx = carve.x + (terrain.x - carve.x) * h;
-        const float gy = carve.y + (terrain.y - carve.y) * h;
-        const float gz = carve.z + (terrain.z - carve.z) * h;
+        // Smooth max(terrain, carve) over `blend` voxels: exactly the terrain once h = 1. carve.w <=
+        // band_w, so where the band alone gives h = 1 (above the ground and in the top metres of the
+        // band) the caves can't show and aren't evaluated: they are two thirds of the SDF's cost.
+        float gx = terrain.x;
+        float gy = terrain.y;
+        float gz = terrain.z;
+        float dist = terrain.w;
+        if (!cave_skip || (terrain.w - band_w) * inv_blend < 1.0f) {
+            const Float4 blob = fbm(caves, p_pos);
+            const float gs = ts * cave_gain;
+            Float4 c{ 0.8f * blob.x + gs * t.x, 0.8f * blob.y + gs * t.y, 0.8f * blob.z + gs * t.z,
+                0.8f * blob.w - 0.66f + cave_gain * tent };
+            const float cr = det_rsqrt(MAX(c.x * c.x + c.y * c.y + c.z * c.z, cave_eps2));
+            const Float4 blobs{ c.x * cr, c.y * cr, c.z * cr, c.w * cr };
+            const Float4 band{ ts * terrain.x, ts * terrain.y, ts * terrain.z, band_w };
+            const Float4 carve = blobs.w < band.w ? blobs : band;
+            const float dw = terrain.w - carve.w;
+            const float h = CLAMP(0.5f + 0.5f * (dw * inv_blend), 0.0f, 1.0f);
+            if (h < 1.0f) {
+                dist = carve.w + dw * h + blend * h * (1.0f - h);
+                gx = carve.x + (terrain.x - carve.x) * h;
+                gy = carve.y + (terrain.y - carve.y) * h;
+                gz = carve.z + (terrain.z - carve.z) * h;
+            }
+        }
         const float gr = det_rsqrt(MAX(gx * gx + gy * gy + gz * gz, exact_pow2(-40)));
         Float4 r{ gx * gr, gy * gr, gz * gr, dist };
 
@@ -149,24 +163,31 @@ vec4 terrain_sdf(WorldPos p) {
     precise float tr = det_rsqrt(t.x * t.x + t.y * t.y + t.z * t.z);
     precise vec4 terrain = t * tr;
 
-    precise vec4 blob = terrain_caves(p);
     precise float depth = hn.w - dy;
     precise float below_top = depth - CAVE_TOP;
     precise float above_floor = CAVE_FLOOR - depth;
     bool near_top = below_top <= above_floor;
     precise float tent = near_top ? below_top : above_floor;
     precise float ts = near_top ? -1.0 : 1.0;
-    precise float gs = ts * CAVE_GAIN;
-    precise vec4 c = vec4(0.8 * blob.xyz + gs * t.xyz, 0.8 * blob.w - 0.66 + CAVE_GAIN * tent);
-    precise float cr = det_rsqrt(max(c.x * c.x + c.y * c.y + c.z * c.z, CAVE_EPS2));
-    precise vec4 blobs = c * cr;
-    precise vec4 band = vec4(ts * terrain.xyz, tent * tr);
-    precise vec4 carve = blobs.w < band.w ? blobs : band;
+    precise float band_w = tent * tr;
 
-    precise float dw = terrain.w - carve.w;
-    precise float h = clamp(0.5 + 0.5 * (dw * INV_BLEND), 0.0, 1.0);
-    precise float dist = carve.w + dw * h + BLEND * h * (1.0 - h);
-    precise vec3 g = carve.xyz + (terrain.xyz - carve.xyz) * h;
+    precise vec3 g = terrain.xyz;
+    precise float dist = terrain.w;
+    if (CAVE_ALWAYS(terrain.w - band_w) * INV_BLEND < 1.0) {
+        precise vec4 blob = terrain_caves(p);
+        precise float gs = ts * CAVE_GAIN;
+        precise vec4 c = vec4(0.8 * blob.xyz + gs * t.xyz, 0.8 * blob.w - 0.66 + CAVE_GAIN * tent);
+        precise float cr = det_rsqrt(max(c.x * c.x + c.y * c.y + c.z * c.z, CAVE_EPS2));
+        precise vec4 blobs = c * cr;
+        precise vec4 band = vec4(ts * terrain.xyz, band_w);
+        precise vec4 carve = blobs.w < band.w ? blobs : band;
+        precise float dw = terrain.w - carve.w;
+        precise float h = clamp(0.5 + 0.5 * (dw * INV_BLEND), 0.0, 1.0);
+        if (h < 1.0) {
+            dist = carve.w + dw * h + BLEND * h * (1.0 - h);
+            g = carve.xyz + (terrain.xyz - carve.xyz) * h;
+        }
+    }
     precise float gr = det_rsqrt(max(g.x * g.x + g.y * g.y + g.z * g.z, uintBitsToFloat(0x2B800000u)));
     precise vec4 r = vec4(g * gr, dist);
     /*ZERO_PILLAR*/
@@ -177,6 +198,7 @@ vec4 terrain_sdf(WorldPos p) {
 )glsl";
         body = body.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT));
         body = body.replace("CAVE_TOP", glsl_float(cave_top)).replace("CAVE_FLOOR", glsl_float(cave_floor)).replace("CAVE_GAIN", glsl_float(cave_gain));
+        body = body.replace("CAVE_ALWAYS", cave_skip ? "" : "true || ");
         body = body.replace("CAVE_EPS2", glsl_float(cave_eps2)).replace("INV_BLEND", glsl_float(inv_blend));
         body = body.replace("BLEND", glsl_float(blend)).replace("VOXEL_SIZE", glsl_float(voxel_size));
         body = body.replace("0.8 *", glsl_float(0.8f) + " *").replace("- 0.66", "- " + glsl_float(0.66f));
