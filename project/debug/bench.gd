@@ -24,6 +24,8 @@ extends Node3D
 ##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
+##   --terrain=dummy|cascade      VoxelTerrain.terrain_mode (default dummy; cascade: the Hermite cascade
+##                                test terrain, SDFCascade)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range and the terrain gains relief octaves
 ##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
@@ -116,6 +118,14 @@ func _ready() -> void:
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
+	var terrains := {"dummy": 0, "cascade": 1}
+	var terrain_arg: String = args.get("terrain", "dummy")
+	if not terrains.has(terrain_arg):
+		push_error("BENCH: unknown --terrain=%s (expected dummy or cascade)" % terrain_arg)
+		set_process(false)
+		get_tree().quit(1)
+		return
+	terrain.terrain_mode = terrains[terrain_arg]
 	terrain.debug_test_rig = args.get("rig", "0") == "1"
 	terrain.debug_zero_pillar = int(args.get("zero_pillar", "0"))
 	if args.has("compact"):

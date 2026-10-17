@@ -94,6 +94,24 @@ std::vector<Box> level_boxes(const Box &p_box, int p_lod, int p_top) {
     return boxes;
 }
 
+Box level_box(const Box &p_box, int p_j) {
+    Box b;
+    const uint64_t mask = (uint64_t(1) << p_j) - 1;
+    for (int a = 0; a < 3; a++) {
+        b.lo[a] = p_box.lo[a] >> p_j;
+        b.hi[a] = (p_box.hi[a] >> p_j) + ((uint64_t(p_box.hi[a]) & mask) != 0 ? 1 : 0);
+    }
+    return b;
+}
+
+int level_bound(int p_size, int p_j) {
+    int n = p_size;
+    for (int j = 0; j < p_j; j++) {
+        n = (n + 1) / 2 + 1;
+    }
+    return n;
+}
+
 Box chunk_box(const ChunkId &p_chunk, const ChunkParam &p_param) {
     const int lod = ChunkMath::get_lod(p_chunk);
     const VoxelPos anchor = ChunkMath::chunk_min_voxel(p_chunk, p_param);

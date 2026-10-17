@@ -17,13 +17,19 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15): it must be set before the
-# terrain's _ready, and every node enters the tree before any is ready.
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15) and `-- --terrain=cascade` its
+# terrain_mode (the Hermite cascade test terrain): they must be set before the terrain's _ready, and every
+# node enters the tree before any is ready.
+var spawn_above_ground := false
+
 func _enter_tree() -> void:
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--lods=") and terrain:
 			terrain.lod_numbers = a.trim_prefix("--lods=").to_int()
+		if a == "--terrain=cascade" and terrain:
+			terrain.terrain_mode = 1
+			spawn_above_ground = true
 
 func _ready():
 	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude
@@ -33,6 +39,13 @@ func _ready():
 	if terrain and terrain.lod_numbers > 15:
 		far_lods_terrain = terrain
 		base_near = camera.near
+	if spawn_above_ground and terrain:
+		# The cascade terrain's relief is kilometres high: start 200 m above the ground under the spawn.
+		for i in 32:
+			var d: float = terrain.get_sdf_at(global_position)
+			if d > 150.0 and d < 400.0:
+				break
+			global_position.y += 200.0 - d
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	yaw = rotation.y
 	pitch = camera.rotation.x
@@ -138,4 +151,8 @@ func _process(delta: float) -> void:
 		input_dir.y -= 1.0
 
 	var direction = (transform.basis * input_dir).normalized()
-	position += direction * speed * delta
+	var move_speed := speed
+	if spawn_above_ground:
+		# Cascade terrain: kilometre-scale relief, fly faster when high (half the altitude per second).
+		move_speed = maxf(speed, absf(_terrain().get_sdf_at(camera.global_position)) * 0.5)
+	position += direction * move_speed * delta

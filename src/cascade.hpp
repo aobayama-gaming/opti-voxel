@@ -124,6 +124,15 @@ Box parent_box(const Box &p_child);
 // The boxes of levels p_lod .. p_top (index m - p_lod) for p_box on Λ_{p_lod}.
 std::vector<Box> level_boxes(const Box &p_box, int p_lod, int p_top);
 
+// Closed form of level_boxes (the GPU's): the box of level m = L + p_j for p_box on Λ_L,
+// lo_m = floor(lo_L / 2^j), hi_m = ceil(hi_L / 2^j) (unit-tested equal to the iterated parent_box).
+Box level_box(const Box &p_box, int p_j);
+
+// Upper bound of a level box's size per axis, p_j levels above a box of p_size points per axis, whatever
+// its position: n_0 = p_size, n_{j+1} = ceil(n_j / 2) + 1 (17, 10, 6, 4, 3, 3, ... for 32). The GPU's
+// scratch strides and dispatch sizes.
+int level_bound(int p_size, int p_j);
+
 // The samples of a chunk (vertex grid, skirt included) on its own lattice Λ_L.
 Box chunk_box(const ChunkId &p_chunk, const ChunkParam &p_param);
 
