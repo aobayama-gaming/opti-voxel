@@ -18,6 +18,19 @@ struct Tri {
     Vector3 n[3];
 };
 
+// The GPU meshes skirt_sdf (gpu_glsl.hpp), not the bare SDF: past the chunk bounds it adds up to
+// skirt_depth cells. Same formula here, so the corners are judged on the field that was meshed.
+double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param) {
+    if (p_param.skirt_size <= 0 || p_param.skirt_depth <= 0.0f) {
+        return 0.0;
+    }
+    const double lo = double(p_param.skirt_size);
+    const double hi = lo + double(p_param.chunk_voxel_dimension());
+    auto inside = [lo, hi](double c) { return MIN(c - lo, hi - c); };
+    const double d = MIN(inside(p_corner.x), MIN(inside(p_corner.y), inside(p_corner.z)));
+    return CLAMP(-d, 0.0, 1.0) * double(p_param.skirt_depth);
+}
+
 // Smallest |SDF| (CPU evaluation, in cells) over the grid corners of the cell holding `p_grid` (a
 // point of the chunk's vertex grid). A sign decision taken on a near-zero corner can legitimately
 // differ between two GPU evaluations.
@@ -26,7 +39,8 @@ double min_abs_sdf_cells(SDFBase *p_sdf, const ChunkId &p_chunk, const Vector3 &
     double best = 1e30;
     for (int i = 0; i < 8; i++) {
         const Float3 corner{ float(base.x + (i & 1)), float(base.y + ((i >> 1) & 1)), float(base.z + ((i >> 2) & 1)) };
-        best = MIN(best, std::abs((double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param))) / p_cell);
+        const double sdf_cells = (double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param)) / p_cell;
+        best = MIN(best, std::abs(sdf_cells + skirt_offset_cells(corner, p_param)));
     }
     return best;
 }

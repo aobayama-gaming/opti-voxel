@@ -10,7 +10,9 @@ struct ChunkParam{
     int chunk_size = 32;
     float voxel_size = 0.5f;
     int skirt_size = 2;
-    bool use_skirt = true;
+    // Depth of the skirt in voxels of the chunk's own LOD: the overhang past the chunk bounds is
+    // pushed this far into the solid, under the neighbour's surface, to hide LOD seams.
+    float skirt_depth = 1.0f;
     // Integer world origin in chunk-id units (snapped to the root chunk span, see VoxelTerrain::_ready).
     // Godot space is the integer frame shifted by it: render positions are metres relative to the
     // origin, so they stay small wherever the world is.

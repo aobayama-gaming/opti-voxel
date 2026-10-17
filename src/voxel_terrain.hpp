@@ -10,6 +10,7 @@
 
 #include "godot_cpp/classes/editor_interface.hpp"
 #include "godot_cpp/classes/sub_viewport.hpp"
+#include "godot_cpp/classes/viewport.hpp"
 
 
 #include <vector>
@@ -51,7 +52,7 @@ private:
 		32,     // chunk_size
 		0.5f,  // voxel_size
 		2,      // skirt_size
-		true    // use_skirt
+		1.0f    // skirt_depth
 	};
 
     ChunkDiscoverer* chunk_discoverer = nullptr;
@@ -125,6 +126,9 @@ public:
 	// Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
 	void set_voxel_size(float p_size);
 	float get_voxel_size() const;
+	// Depth of the LOD-seam skirt, in voxels of each chunk's LOD (0 disables it).
+	void set_skirt_depth(float p_depth);
+	float get_skirt_depth() const;
 
 	// Integer world origin in LOD0 voxels: Godot space (0, 0, 0) is this voxel of the integer frame
 	// (plus the legacy lattice offset). Snapped down to a multiple of the root chunk span when the

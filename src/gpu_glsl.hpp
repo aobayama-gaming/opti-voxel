@@ -12,7 +12,7 @@ struct ChunkParam {
     int chunk_size;
     float voxel_size;
     int skirt_size;
-    int use_skirt; // nearly useless but need the padding
+    float skirt_depth; // in voxels of the chunk's LOD
     uvec4 origin_lo; // world origin in LOD0 voxels, low words (see gpu_frame.hpp)
     ivec4 origin_hi; // high words
 };
@@ -158,61 +158,31 @@ vec4 sdf_softmax(vec4 a, vec4 b, float intensity) {
 
 inline constexpr const char GLSL_SKIRT_SDF[] = R"glsl(
 
-vec2 _calculate_skirt_offset(float coord,ChunkParam chunk_param){
-
-    float dist_from_min = coord;
-    float dist_from_max = float(chunk_param.chunk_size-1) - coord;
-
-    float offset_direction = 1.0;
-    float nearest_edge =dist_from_min;
-
-
-    if (dist_from_max<dist_from_min){
-        nearest_edge=dist_from_max;
-        offset_direction = -1.0;
-    }
-
-    float skirt_trimmed = float(chunk_param.skirt_size)*0.75;
-
-    float offset = 0.0;
-    float offset_grad = 0;
-
-    if(nearest_edge < skirt_trimmed){
-        offset = 1.0 - (nearest_edge/skirt_trimmed);
-        offset_grad = - offset_direction / skirt_trimmed;
-    }
-
-    return vec2(offset_grad,offset);
-
+// Signed distance of a vertex-grid coordinate to the chunk bounds along one axis, in voxels of the
+// chunk's LOD: positive inside, negative in the overhang. The grid overhangs by skirt_size voxels on
+// the min side (index skirt_size is the chunk's minimum) and skirt_size - 1 on the max side.
+float _skirt_inside_distance(float coord, ChunkParam chunk_param){
+    float lo = float(chunk_param.skirt_size);
+    float hi = lo + chunk_voxel_dimension(chunk_param);
+    return min(coord - lo, hi - coord);
 }
 
+// Skirt: past the chunk bounds the SDF is pushed towards air by up to skirt_depth voxels, so the
+// overhanging rim of the mesh turns down into the solid and hides under the neighbour's surface
+// (which covers that overhang), whatever its LOD. Inside the bounds the SDF is untouched, so the
+// visible surface is exact. The gradient (normal) stays the base one.
 vec4 skirt_sdf(ChunkFrame chunk, vec3 point_coord, ChunkParam chunk_param){
 
     vec4 base_sdf = evaluate_sdf(world_pos_from_grid(chunk, point_coord, chunk_param));
 
-    if(chunk_param.skirt_size > 0){
-
-        float gradient_magnitude = length(base_sdf.xyz);
-        //float offset_size = chunk_param.voxel_size*0.3*float(chunk.lod_size) / max(gradient_magnitude, 0.1);
-        float offset_size = chunk_param.voxel_size*0.3*float(chunk.lod_size) / gradient_magnitude/1000.0;
-
-        vec2 x_offset = _calculate_skirt_offset(point_coord.x,chunk_param);
-        vec2 y_offset = _calculate_skirt_offset(point_coord.y,chunk_param);
-        vec2 z_offset = _calculate_skirt_offset(point_coord.z,chunk_param);
-
-        // vec4 offset = vec4(x_offset.x,0.0,0.0,x_offset.y);
-        // offset +=vec4(0.0,y_offset.x,0.0,y_offset.y);
-        // offset +=vec4(0.0,0.0,z_offset.x,z_offset.y);
-
-        vec4 offset = vec4(0.0,0.0,0.0,x_offset.y);
-        offset +=vec4(0.0,0.0,0.0,y_offset.y);
-        offset +=vec4(0.0,0.0,0.0,z_offset.y);
-
-        return base_sdf+offset*offset_size;
+    if(chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0){
+        float inside = min(_skirt_inside_distance(point_coord.x, chunk_param),
+                       min(_skirt_inside_distance(point_coord.y, chunk_param),
+                           _skirt_inside_distance(point_coord.z, chunk_param)));
+        float depth_m = chunk_param.skirt_depth * chunk_param.voxel_size * float(chunk.lod_size);
+        base_sdf.w += clamp(-inside, 0.0, 1.0) * depth_m;
     }
-    else{
-        return base_sdf;
-    }
+    return base_sdf;
 }
 
 )glsl";

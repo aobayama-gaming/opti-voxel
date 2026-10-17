@@ -45,6 +45,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_debug_test_rig"), &VoxelTerrain::get_debug_test_rig);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
+    ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
+    ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
     ClassDB::bind_method(D_METHOD("get_legacy_trim_indices"), &VoxelTerrain::get_legacy_trim_indices);
     ClassDB::bind_method(D_METHOD("get_pending_chunk_count"), &VoxelTerrain::get_pending_chunk_count);
@@ -77,6 +79,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
     ADD_GROUP("World Origin", "world_origin_");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_x", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_x", "get_world_origin_x");
@@ -127,6 +130,16 @@ void VoxelTerrain::set_voxel_size(float p_size) {
 
 float VoxelTerrain::get_voxel_size() const {
     return chunk_param.voxel_size;
+}
+
+void VoxelTerrain::set_skirt_depth(float p_depth) {
+    ERR_FAIL_COND_MSG(started, "skirt_depth must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_depth < 0.0f, "skirt_depth must not be negative.");
+    chunk_param.skirt_depth = p_depth;
+}
+
+float VoxelTerrain::get_skirt_depth() const {
+    return chunk_param.skirt_depth;
 }
 
 bool VoxelTerrain::_can_set_world_origin(int64_t p_voxel) const {
@@ -316,10 +329,25 @@ void VoxelTerrain::_ready(){
 
     chunk_discoverer->set_config(chunk_param,sdf);
 
+    // The pixel error is measured against the camera's real vertical FOV and viewport height.
+    float viewport_height = 1080.0f;
+    float fov_rad = Math::deg_to_rad(75.0f);
+    if (camera != nullptr) {
+        const Vector2 viewport_size = camera->get_viewport()->get_visible_rect().size;
+        viewport_height = MAX(viewport_size.y, 1.0f);
+        fov_rad = Math::deg_to_rad(float(camera->get_fov()));
+        if (camera->get_keep_aspect_mode() == Camera3D::KEEP_WIDTH && viewport_size.x > 0.0f) {
+            // fov is horizontal: convert it to vertical.
+            fov_rad = 2.0f * std::atan(std::tan(fov_rad * 0.5f) * viewport_size.y / viewport_size.x);
+        }
+    }
+
     chunk_discoverer->setup_lod(
         lod_numbers,
-        lod_pixel_error
-    ); //use base args
+        lod_pixel_error,
+        viewport_height,
+        fov_rad
+    );
 
     chunk_discoverer->start();
 

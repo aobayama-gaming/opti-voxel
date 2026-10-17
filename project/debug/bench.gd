@@ -24,6 +24,7 @@ extends Node3D
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
 ##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
+##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
@@ -92,6 +93,8 @@ func _ready() -> void:
 		terrain.direct_compact_max_extent = float(args["compact_extent"])
 	if args.has("lod_error"):
 		terrain.lod_pixel_error = float(args["lod_error"])
+	if args.has("skirt"):
+		terrain.skirt_depth = float(args["skirt"])
 	if args.has("origin"):
 		var o: PackedStringArray = args["origin"].split(",")
 		terrain.world_origin_x = o[0].to_int()
