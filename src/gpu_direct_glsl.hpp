@@ -102,9 +102,11 @@ if (cell_chunk_coordinate[axis] < chunk_param.chunk_size - 1) {
     vec4 center_sdf = sdf_sample[get_flat_index_z(global_cell)];
     vec4 offset_sdf = sdf_sample[get_flat_index_z(global_cell + offset)];
 
+    // Solid is !(w > 0) in every pass. A crossing is t > 0 downstream, so a sample of exactly 0.0
+    // must not give t = 0 (lost quad = hole); the signs differ, so the denominator is never 0.
     float t = 0.0;
     if ((center_sdf.w > 0.0) != (offset_sdf.w > 0.0)) {
-        t = center_sdf.w / (center_sdf.w - offset_sdf.w + 0.00001);
+        t = max(center_sdf.w / (center_sdf.w - offset_sdf.w), 1e-6);
     }
     uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
     edge_intersect[get_edge_index(chunk_idx, axis, uvec3(cell_chunk_coordinate))] = t;
@@ -240,7 +242,7 @@ vec4 v0 = cell_vertex[flat_idx];
 
 if (v0.w > 0.0 && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
     ivec3 c = cell_chunk_coordinate;
-    bool origin_solid = sdf_sample[flat_idx].w < 0.0;
+    bool origin_solid = !(sdf_sample[flat_idx].w > 0.0); // same side rule as the edge pass
     uint sx = 1u;
     uint sy = uint(chunk_param.chunk_size);
     uint sz = uint(chunk_param.chunk_size * chunk_param.chunk_size);

@@ -12,6 +12,30 @@ public:
     // Adds the centimetre-scale test shapes of sdf_test_rig.hpp (set before meshing starts).
     bool test_rig = false;
 
+    // Debug: a square column in front of the main_scene spawn whose flat top lies exactly on a lattice
+    // row (multiple of 64 LOD0 voxels), so the SDF is exactly 0.0 there at LODs 0-6.
+    // 1 = exact top, 2 = top 1 cm higher (no exact zero, same signs: must mesh the same quad count).
+    int zero_pillar = 0;
+    static constexpr float ZERO_PILLAR_X = -52.75f;
+    static constexpr float ZERO_PILLAR_Z = -110.0f;
+    static constexpr float ZERO_PILLAR_HALF = 4.0f;
+    static constexpr float ZERO_PILLAR_TOP_M = 416.0f;
+    float zero_pillar_top = 0.0f; // metres, set by configure()
+
+    void configure(const ChunkParam &p_param) override {
+        SDFMetreBridge::configure(p_param);
+        // The metre value the samples of that row get, op for op (ChunkMath::legacy_metres).
+        WorldPos top;
+        top.voxel = p_param.origin_voxel() + VoxelPos(0, int64_t(std::round(ZERO_PILLAR_TOP_M / p_param.voxel_size / 64.0f)) * 64, 0);
+        top.frac = Float3{ 0.0f, 0.0f, 0.0f };
+        zero_pillar_top = ChunkMath::legacy_metres(top, p_param).y + (zero_pillar == 2 ? 0.01f : 0.0f);
+    }
+
+    float zero_pillar_distance(const Vector3 &p) const {
+        return MAX(p.y - zero_pillar_top,
+                MAX(std::abs(p.x - ZERO_PILLAR_X) - ZERO_PILLAR_HALF, std::abs(p.z - ZERO_PILLAR_Z) - ZERO_PILLAR_HALF));
+    }
+
     SDFDummy() = default;
     ~SDFDummy() override = default;
     
@@ -101,7 +125,8 @@ public:
         // Carve caves: max(terrain, -caves)
         const float carved = MAX(terrain_sdf, -cave_sdf);
 
-        return test_rig ? MIN(carved, SDFTestRig::evaluate(p_world_pos)) : carved;
+        float d = test_rig ? MIN(carved, SDFTestRig::evaluate(p_world_pos)) : carved;
+        return zero_pillar ? MIN(d, zero_pillar_distance(p_world_pos)) : d;
     }
 
     //GLSL implementation
@@ -174,12 +199,28 @@ public:
             return sdf_softmax(terrain_val, carve_val, blend_intensity);
         }
         )glsl";
+        String result = "sdf_softmax(terrain_val, carve_val, blend_intensity)";
         if (test_rig) {
-            code = code.replace("return sdf_softmax(terrain_val, carve_val, blend_intensity);",
-                    "return sdf_min(sdf_softmax(terrain_val, carve_val, blend_intensity), test_rig_sdf(pos));");
+            result = "sdf_min(" + result + ", test_rig_sdf(pos))";
             code = String(SDFTestRig::GLSL) + code;
         }
-        return code;
+        if (zero_pillar) {
+            result = "sdf_min(" + result + ", zero_pillar_sdf(pos))";
+            // The top as raw float bits: the GPU compares against the exact same float.
+            union { float f; uint32_t u; } bits{ zero_pillar_top };
+            code = String(R"glsl(
+        vec4 zero_pillar_sdf(vec3 pos) {
+            vec4 d = vec4(0.0, 1.0, 0.0, pos.y - uintBitsToFloat(TOPu));
+            float dx = abs(pos.x - (PX)) - HALF;
+            float dz = abs(pos.z - (PZ)) - HALF;
+            if (dx > d.w) d = vec4(sign(pos.x - (PX)), 0.0, 0.0, dx);
+            if (dz > d.w) d = vec4(0.0, 0.0, sign(pos.z - (PZ)), dz);
+            return d;
+        }
+        )glsl").replace("TOP", String::num_uint64(bits.u)).replace("PX", String::num(ZERO_PILLAR_X, 9))
+                    .replace("PZ", String::num(ZERO_PILLAR_Z, 9)).replace("HALF", String::num(ZERO_PILLAR_HALF, 9)) + code;
+        }
+        return code.replace("return sdf_softmax(terrain_val, carve_val, blend_intensity);", "return " + result + ";");
     }
 
     // Repeated cube SDF + sinusoidal terrain term.

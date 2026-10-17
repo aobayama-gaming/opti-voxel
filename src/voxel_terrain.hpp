@@ -81,6 +81,7 @@ private:
 	bool legacy_trim_indices = false;
 	float lod_pixel_error = 2.0f;
 	bool debug_test_rig = false;
+	int debug_zero_pillar = 0;
 	VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
 	GPUDirectMesher::Settings direct_settings;
 	int debug_view = 0;
@@ -166,6 +167,8 @@ public:
 	// Adds centimetre-scale test shapes in front of the main_scene spawn (see sdf_test_rig.hpp).
 	void set_debug_test_rig(bool p_enable);
 	bool get_debug_test_rig() const;
+	void set_debug_zero_pillar(int p_mode);
+	int get_debug_zero_pillar() const;
 
 	// Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
 	void set_lod_pixel_error(float p_error);

@@ -24,6 +24,8 @@ extends Node3D
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
 ##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
+##   --zero_pillar=1|2            add a column whose top SDF is exactly 0.0 (1) or 1 cm off it (2), see
+##                                SDFDummy / tools/zero_test.sh
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
@@ -108,6 +110,7 @@ func _ready() -> void:
 	if args.has("voxel"):
 		terrain.voxel_size = float(args["voxel"])
 	terrain.debug_test_rig = args.get("rig", "0") == "1"
+	terrain.debug_zero_pillar = int(args.get("zero_pillar", "0"))
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"
 	if args.has("compact_extent"):
