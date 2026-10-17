@@ -6,7 +6,7 @@
 #   e.g. tools/origin_parity.sh -- --mode=direct --validate=64 --audit=1
 #        tools/origin_parity.sh --voxel=0.05 -- --mode=direct --rig=1
 #
-# Runs (no build, load scenario): origin 0, origin 0 again (noise floor), ~1e15 m ("far"), and an
+# Runs (no build, load scenario, 60 steady frames unless overridden): origin 0, origin 0 again (noise floor), ~1e15 m ("far"), and an
 # origin where the GPU low words wrap ("wrap", 7 * 2^32 voxels). All origins are multiples of the root
 # chunk span, so nothing is snapped. Compares chunk/triangle/quad counts exactly and the loaded /
 # steady_end screenshots against the noise floor. Report: bench/results/<timestamp>-parity.md
@@ -45,7 +45,7 @@ declare -A ORIGINS=(
 LIST=""
 for label in zero zero2 far wrap; do
     echo ">> $label: origin ${ORIGINS[$label]}"
-    "$ROOT/tools/bench.sh" --no-build --tag="parity-$label" --scenario=load --voxel="$VOXEL" "${BENCH_ARGS[@]}" \
+    "$ROOT/tools/bench.sh" --no-build --tag="parity-$label" --scenario=load --steady=60 --voxel="$VOXEL" "${BENCH_ARGS[@]}" \
         --origin="${ORIGINS[$label]}" --shot=loaded:loaded.png --shot=steady_end:steady.png > /dev/null 2>&1
     CODE=$?
     DIR="$(cat "$ROOT/bench/results/LAST")"

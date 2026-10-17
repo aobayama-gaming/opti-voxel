@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Before/after comparison: runs each config N times per scenario and writes a markdown table.
 #
-#   tools/bench_compare.sh [--runs=3] [--scenarios="load fly"] CONFIG...
+#   tools/bench_compare.sh [--runs=2] [--scenarios="load fly"] CONFIG...
 #   CONFIG = label:bench-args (bench-args comma-separated), e.g.
 #     tools/bench_compare.sh "legacy:--mode=legacy" "legacy-trim:--mode=legacy,--trim=1" "direct:--mode=direct"
 # The first config is the baseline. Output: bench/results/<date>-compare.md
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RUNS=3
+RUNS=2
 SCENARIOS="load fly"
 CONFIGS=()
 for a in "$@"; do
@@ -31,7 +31,7 @@ for scenario in $SCENARIOS; do
             label="${cfg%%:*}"
             IFS=',' read -r -a bargs <<< "${cfg#*:}"
             echo ">> [$scenario] $label run $i/$RUNS"
-            if "$ROOT/tools/bench.sh" --no-build --tag="$label-$scenario-$i" "${bargs[@]}" --scenario="$scenario" > /dev/null 2>&1; then
+            if "$ROOT/tools/bench.sh" --no-build --cool=1 --tag="$label-$scenario-$i" "${bargs[@]}" --scenario="$scenario" > /dev/null 2>&1; then
                 DIRS[$label]="${DIRS[$label]:+${DIRS[$label]},}$(cat "$ROOT/bench/results/LAST")"
             else
                 echo "   run failed: $(cat "$ROOT/bench/results/LAST")"
