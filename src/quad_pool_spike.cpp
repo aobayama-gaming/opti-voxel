@@ -111,10 +111,10 @@ void QuadPoolSpike::_ready() {
     pool->set_page_aabb(page, AABB(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size)));
 
     RenderingServer::get_singleton()->call_on_render_thread(
-            callable_mp(this, &QuadPoolSpike::_rt_run).bind(pool->get_page_multimesh(page), page));
+            callable_mp(this, &QuadPoolSpike::_rt_run).bind(page));
 }
 
-void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
+void QuadPoolSpike::_rt_run(int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     ERR_FAIL_NULL_MSG(rd, "QuadPoolSpike: no RenderingDevice (Compatibility renderer?)");
 
@@ -184,8 +184,8 @@ void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
     rd->compute_list_end();
 
     // The whole point: GPU -> GPU, the CPU never sees the quads or the count.
-    pool->rt_copy_page_from(p_page, p_multimesh, rt_staging, 0);
-    const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_page, p_multimesh);
+    pool->rt_copy_page_from(p_page, rt_staging, 0);
+    const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_page);
     rd->buffer_copy(rt_counter, page_rd.command, 4, QuadPagePool::INDIRECT_INSTANCE_COUNT_OFFSET, 4);
 
     // Debug verification only.
@@ -194,11 +194,11 @@ void QuadPoolSpike::_rt_run(RID p_multimesh, int p_page) {
     VLOG(1, "QuadPoolSpike: dispatched ", quad_count, " quads into page ", p_page);
 }
 
-void QuadPoolSpike::_rt_kill(RID p_multimesh, int p_page) {
-    pool->rt_kill_range(p_page, p_multimesh, KILL_A_OFFSET, KILL_A_COUNT);
-    pool->rt_kill_range(p_page, p_multimesh, KILL_B_OFFSET, KILL_B_COUNT);
+void QuadPoolSpike::_rt_kill(int p_page) {
+    pool->rt_kill_range(p_page, KILL_A_OFFSET, KILL_A_COUNT);
+    pool->rt_kill_range(p_page, KILL_B_OFFSET, KILL_B_COUNT);
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    rd->texture_get_data_async(pool->rt_get_page_rd(p_page, p_multimesh).texture, 0,
+    rd->texture_get_data_async(pool->rt_get_page_rd(p_page).texture, 0,
             callable_mp(this, &QuadPoolSpike::_rt_on_texture).bind(1));
 }
 
@@ -216,7 +216,7 @@ void QuadPoolSpike::_rt_on_command(const PackedByteArray &p_data) {
     mutex->unlock();
 }
 
-void QuadPoolSpike::_process(double p_delta) {
+void QuadPoolSpike::_process(double) {
     mutex->lock();
     const bool ready = readback_ready;
     readback_ready = false;
@@ -389,7 +389,7 @@ void QuadPoolSpike::run_kill_test() {
     ERR_FAIL_COND_MSG(stage != 1, "QuadPoolSpike: run_kill_test() needs a verified write first.");
     stage = 2;
     RenderingServer::get_singleton()->call_on_render_thread(
-            callable_mp(this, &QuadPoolSpike::_rt_kill).bind(pool->get_page_multimesh(page), page));
+            callable_mp(this, &QuadPoolSpike::_rt_kill).bind(page));
 }
 
 void QuadPoolSpike::set_debug_view(int p_view) {

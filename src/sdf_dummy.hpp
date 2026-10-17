@@ -1,7 +1,7 @@
 #pragma once
 
-#include "sdf_base.hpp"
 #include "exact_noise.hpp"
+#include "sdf_base.hpp"
 #include "sdf_test_rig.hpp"
 
 #include <cmath>
@@ -186,7 +186,10 @@ vec3 debug_voxels(WorldPos p) {
     precise vec3 v = vec3(sat_diff(p, DEBUG_LO, DEBUG_HI, DEBUG_LIMIT)) + p.frac;
     return v;
 }
-)glsl").replace("DEBUG_LIMIT", itos(DEBUG_LIMIT)).replace("DEBUG_LO", glsl_lo(debug_anchor)).replace("DEBUG_HI", glsl_hi(debug_anchor));
+)glsl")
+                        .replace("DEBUG_LIMIT", itos(DEBUG_LIMIT))
+                        .replace("DEBUG_LO", glsl_lo(debug_anchor))
+                        .replace("DEBUG_HI", glsl_hi(debug_anchor));
         if (zero_pillar) {
             code += String(R"glsl(
 vec4 zero_pillar_min(vec4 r, WorldPos p) {
@@ -200,7 +203,10 @@ vec4 zero_pillar_min(vec4 r, WorldPos p) {
     if (dz > d.w) d = vec4(0.0, 0.0, oz < 0.0 ? -1.0 : 1.0, dz);
     return d.w < r.w ? d : r;
 }
-)glsl").replace("TOP", glsl_float(pillar_top)).replace("PX", glsl_float(pillar_x)).replace("PZ", glsl_float(pillar_z))
+)glsl")
+                            .replace("TOP", glsl_float(pillar_top))
+                            .replace("PX", glsl_float(pillar_x))
+                            .replace("PZ", glsl_float(pillar_z))
                             .replace("HALF", glsl_float(pillar_half));
             body = body.replace("/*ZERO_PILLAR*/", "r = zero_pillar_min(r, p);");
         }

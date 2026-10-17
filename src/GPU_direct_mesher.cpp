@@ -1,9 +1,9 @@
 #include "GPU_direct_mesher.hpp"
 
+#include "exact_noise.hpp"
 #include "gpu_direct_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
-#include "exact_noise.hpp"
 #include "page_format.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -239,7 +239,7 @@ void GPUDirectMesher::_rt_read_timestamps() {
 }
 
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-        const Array &p_page_multimeshes, const PackedInt32Array &p_pages) {
+        const PackedInt32Array &p_pages) {
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
@@ -261,11 +261,11 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 
     const uint32_t g = chunk_param.chunk_size / 8;
     const uint32_t groups[5][3] = {
-        { g, g, g * p_count },     // sdf
+        { g, g, g * p_count }, // sdf
         { g, 3 * g, g * p_count }, // edges (y spans the 3 axes)
-        { g, g, g * p_count },     // vertices
-        { 1, 1, 1 },               // reserve
-        { g, g, g * p_count },     // emit
+        { g, g, g * p_count }, // vertices
+        { 1, 1, 1 }, // reserve
+        { g, g, g * p_count }, // emit
     };
 
     const String prefix = "vx" + String::num_int64(p_batch_id);
@@ -283,8 +283,8 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 
     // GPU -> GPU: quads into the page textures, used group counts into the indirect instance counts.
     for (int k = 0; k < p_pages.size(); k++) {
-        pool->rt_copy_page_from(p_pages[k], p_page_multimeshes[k], staging_texture, k * pool->get_page_rows());
-        const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_pages[k], p_page_multimeshes[k]);
+        pool->rt_copy_page_from(p_pages[k], staging_texture, k * pool->get_page_rows());
+        const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_pages[k]);
         rd->buffer_copy(buffer_status, page_rd.command, (STATUS_HEADER_UINTS + k) * 4,
                 QuadPagePool::INDIRECT_INSTANCE_COUNT_OFFSET, 4);
     }
@@ -365,18 +365,18 @@ void GPUDirectMesher::_rt_on_status(const PackedByteArray &p_data, uint32_t p_ba
     mutex->unlock();
 }
 
-void GPUDirectMesher::_rt_kill(const PackedInt32Array &p_pages, const Array &p_multimeshes, const PackedInt64Array &p_ranges) {
+void GPUDirectMesher::_rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges) {
     for (int i = 0; i < p_pages.size(); i++) {
-        pool->rt_kill_range(p_pages[i], p_multimeshes[i], p_ranges[i * 2], p_ranges[i * 2 + 1]);
+        pool->rt_kill_range(p_pages[i], p_ranges[i * 2], p_ranges[i * 2 + 1]);
     }
 }
 
-void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts, const Array &p_multimeshes) {
+void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts) {
     for (int i = 0; i + 4 < p_copies.size(); i += 5) {
         pool->rt_copy_rows(p_copies[i], p_copies[i + 1], p_copies[i + 2], p_copies[i + 3], p_copies[i + 4]);
     }
     for (int i = 0; i + 1 < p_group_counts.size(); i += 2) {
-        pool->rt_set_group_count(p_group_counts[i], p_multimeshes[i / 2], p_group_counts[i + 1]);
+        pool->rt_set_group_count(p_group_counts[i], p_group_counts[i + 1]);
     }
 }
 
@@ -426,11 +426,8 @@ void GPUDirectMesher::_flush_kills() {
         return;
     }
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_kill)
-                    .bind(pending_kill_pages, pending_kill_multimeshes, pending_kill_ranges));
-    // Packed arrays are copy-on-write, but Array is shared by reference: the bound copy must
-    // not be cleared, so start a new one.
+                    .bind(pending_kill_pages, pending_kill_ranges));
     pending_kill_pages = PackedInt32Array();
-    pending_kill_multimeshes = Array();
     pending_kill_ranges = PackedInt64Array();
 }
 
@@ -474,7 +471,6 @@ void GPUDirectMesher::process_queue() {
         working_generation.insert(chunks[i]);
     }
 
-    Array multimeshes;
     PackedInt32Array pages;
     for (uint32_t k = 0; k < settings.pages_per_batch; k++) {
         const int page = pool->acquire_page();
@@ -486,13 +482,12 @@ void GPUDirectMesher::process_queue() {
         pool->set_page_aabb(page, bounds);
         batch.pages.push_back(page);
         pages.push_back(page);
-        multimeshes.push_back(pool->get_page_multimesh(page));
     }
 
     const uint32_t batch_id = next_batch_id++;
     in_flight[batch_id] = batch;
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
-                    .bind(batch_id, ids, (uint32_t)chunks.size(), multimeshes, pages));
+                    .bind(batch_id, ids, (uint32_t)chunks.size(), pages));
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
@@ -655,7 +650,6 @@ void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
         dirty_bounds_pages.push_back(p_chunk.page);
     }
     pending_kill_pages.push_back(p_chunk.page);
-    pending_kill_multimeshes.push_back(pool->get_page_multimesh(p_chunk.page));
     pending_kill_ranges.push_back(p_chunk.quad_offset);
     pending_kill_ranges.push_back(p_chunk.quad_count);
 }
@@ -760,7 +754,6 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
 
     PackedInt32Array copies; // src page, dst page, src row, dst row, rows
     PackedInt32Array group_counts; // dst page, groups
-    Array multimeshes; // per dst page
     size_t begin = 0;
     for (const Dest &d : dests) {
         const int page = pool->acquire_page();
@@ -799,12 +792,11 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
             }
         }
         group_counts.append_array({ page, (int)d.groups });
-        multimeshes.push_back(pool->get_page_multimesh(page));
         begin = d.end;
     }
     // Queued before the sources' release, so the copies read them before anything reuses them.
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_compact)
-                    .bind(copies, group_counts, multimeshes));
+                    .bind(copies, group_counts));
     for (const int page : p_pages) {
         page_state[page] = PageState();
         pool->release_page(page);

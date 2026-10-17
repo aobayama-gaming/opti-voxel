@@ -30,7 +30,7 @@ private:
     Vector3 sheet_origin = Vector3(-72.0f, 342.0f, -150.0f);
     float sheet_size = 40.0f;
     ChunkParam chunk_param; // the page shader's defaults (chunk 32, skirt 2, voxel 0.5)
-    ChunkId sheet_chunk;   // chunk the sheet's corners are stored relative to
+    ChunkId sheet_chunk; // chunk the sheet's corners are stored relative to
 
     QuadPagePool *pool = nullptr;
     int page = -1;
@@ -51,8 +51,8 @@ private:
     RID rt_counter;
     RID rt_uniform_set;
 
-    void _rt_run(RID p_multimesh, int p_page);
-    void _rt_kill(RID p_multimesh, int p_page);
+    void _rt_run(int p_page);
+    void _rt_kill(int p_page);
     void _rt_on_texture(const PackedByteArray &p_data, int p_stage);
     void _rt_on_command(const PackedByteArray &p_data);
     void _verify_write(Dictionary &r);

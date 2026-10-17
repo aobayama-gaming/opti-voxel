@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs main_scene (or the scene given as argument, e.g. res://main_scene_5cm.tscn) with a 1 Hz hardware log fsync'ed to disk, so a hard freeze leaves evidence.
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 mkdir -p bench/results/play; LOG=bench/results/play/hw_$(date +%Y%m%d-%H%M%S).log
 (
     while true; do

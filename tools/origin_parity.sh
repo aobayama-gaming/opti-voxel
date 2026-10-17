@@ -53,7 +53,7 @@ ORIGIN[far_a]="$FAR,0,-$FAR";                      CAMERA[far_a]="$FAR,0,-$FAR"
 ORIGIN[far_b]="$((FAR + R)),0,$((-FAR + R))";      CAMERA[far_b]="$FAR,0,-$FAR"
 ORIGIN[wrap_a]="$WRAPX,0,$WRAPZ";                  CAMERA[wrap_a]="$W,0,-$W"
 ORIGIN[wrap_b]="$((WRAPX + R)),0,$((WRAPZ + R))";  CAMERA[wrap_b]="$W,0,-$W"
-LIST=""
+LIST=()
 for label in zero zero2 near far_a far_b wrap_a wrap_b; do
     echo ">> $label: origin ${ORIGIN[$label]} camera ${CAMERA[$label]}"
     "$ROOT/tools/bench.sh" --no-build --tag="parity-$label" --scenario=load --steady=60 --voxel="$VOXEL" "${BENCH_ARGS[@]}" \
@@ -65,8 +65,8 @@ for label in zero zero2 near far_a far_b wrap_a wrap_b; do
         echo ">> run $label failed (exit $CODE): $DIR"
         exit 1
     fi
-    LIST="$LIST $label=$DIR"
+    LIST+=("$label=$DIR")
 done
 
 OUT="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-parity.md"
-python3 "$ROOT/tools/origin_parity.py" "$OUT" $LIST
+python3 "$ROOT/tools/origin_parity.py" "$OUT" "${LIST[@]}"

@@ -49,6 +49,7 @@ compile_commands.json
 *.ilk
 # Other stuff
 *.log
+__pycache__/
 
 # VSCode
 .vscode/*

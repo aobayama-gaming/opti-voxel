@@ -7,7 +7,7 @@ inline constexpr const char GLSL_STRUCT_DEFINITION[] = R"glsl(
 
 struct PointMetadata { int a; int b; int c; int d; };
 
-// Equivalent to your C++ ChunkParam class
+// Mirror of the C++ ChunkParam, std140 (laid out by GPUFrame::chunk_param_bytes).
 struct ChunkParam {
     int chunk_size;
     float voxel_size;
@@ -27,47 +27,11 @@ float chunk_world_dimension(ChunkParam param) {
 
 )glsl";
 
-inline constexpr const char GLSL_HELPER_FUNCTION[] =  R"glsl(
+inline constexpr const char GLSL_HELPER_FUNCTION[] = R"glsl(
 
 // ---------------------------------------------------------
 // Bitwise & LOD functions
 // ---------------------------------------------------------
-
-int get_parent_from_child(int coord, out int lod) {
-    int lsb_index = findLSB(coord);
-    if (lsb_index == -1) { // findLSB returns -1 when coord is 0
-        lod = 0;
-        return 0; 
-    }
-
-    lod = lsb_index + 1;
-    
-    int cleared_coord = coord & ~(1 << lsb_index);
-    int parent_coord = cleared_coord | (1 << (lsb_index + 1));
-
-    return parent_coord;
-}
-
-int get_parent_from_child(int coord) {
-    int dummy_lod;
-    return get_parent_from_child(coord, dummy_lod);
-}
-
-ivec3 get_parent_from_child(ivec3 coord, out int lod) {
-    // Evaluated sequentially to guarantee safe `out` parameter assignment
-    int px = get_parent_from_child(coord.x, lod);
-    int py = get_parent_from_child(coord.y);
-    int pz = get_parent_from_child(coord.z);
-    return ivec3(px, py, pz);
-}
-
-ivec3 get_parent_from_child(ivec3 coord) {
-    return ivec3(
-        get_parent_from_child(coord.x),
-        get_parent_from_child(coord.y),
-        get_parent_from_child(coord.z)
-    );
-}
 
 int get_lod(ivec3 coord) {
     int lod_x = findLSB(coord.x);
@@ -154,7 +118,6 @@ vec4 sdf_softmax(vec4 a, vec4 b, float intensity) {
 }
 
 )glsl";
-
 
 inline constexpr const char GLSL_SKIRT_SDF[] = R"glsl(
 

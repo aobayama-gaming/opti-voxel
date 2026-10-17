@@ -23,25 +23,22 @@ int64_t ChunkMath::get_parent_from_child(int64_t coord, int &lod) {
 }
 
 int64_t ChunkMath::get_parent_from_child(int64_t coord) {
-
     int dummy_lod;
     return get_parent_from_child(coord, dummy_lod);
 }
 
 ChunkId ChunkMath::get_parent_from_child(const ChunkId &coord, int &lod) {
     return ChunkId(
-        get_parent_from_child(coord.x, lod),
-        get_parent_from_child(coord.y),
-        get_parent_from_child(coord.z)
-    );
+            get_parent_from_child(coord.x, lod),
+            get_parent_from_child(coord.y),
+            get_parent_from_child(coord.z));
 }
 
 ChunkId ChunkMath::get_parent_from_child(const ChunkId &coord) {
     return ChunkId(
-        get_parent_from_child(coord.x),
-        get_parent_from_child(coord.y),
-        get_parent_from_child(coord.z)
-    );
+            get_parent_from_child(coord.x),
+            get_parent_from_child(coord.y),
+            get_parent_from_child(coord.z));
 }
 
 int ChunkMath::get_lod(const ChunkId &coord) {
@@ -92,9 +89,9 @@ Vector3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size
     const double vs = double(p_param.voxel_size);
     const double skirt = double(p_param.skirt_size);
     return Vector3(
-        real_t((double(p_min_rel_voxel.x) + (double(p_grid.x) - skirt) * ls) * vs),
-        real_t((double(p_min_rel_voxel.y) + (double(p_grid.y) - skirt) * ls) * vs),
-        real_t((double(p_min_rel_voxel.z) + (double(p_grid.z) - skirt) * ls) * vs));
+            real_t((double(p_min_rel_voxel.x) + (double(p_grid.x) - skirt) * ls) * vs),
+            real_t((double(p_min_rel_voxel.y) + (double(p_grid.y) - skirt) * ls) * vs),
+            real_t((double(p_min_rel_voxel.z) + (double(p_grid.z) - skirt) * ls) * vs));
 }
 
 } // namespace
@@ -114,9 +111,9 @@ Vector3 ChunkMath::grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &
     using namespace WorldCoord;
     // Wrapping difference of the low words: exact while the chunk is within 2^31 ids of the origin.
     const Vector3i64 rel(
-        as_i32(lo32(chunk_lo.x) - lo32(chunk_param.origin_chunk.x)),
-        as_i32(lo32(chunk_lo.y) - lo32(chunk_param.origin_chunk.y)),
-        as_i32(lo32(chunk_lo.z) - lo32(chunk_param.origin_chunk.z)));
+            as_i32(lo32(chunk_lo.x) - lo32(chunk_param.origin_chunk.x)),
+            as_i32(lo32(chunk_lo.y) - lo32(chunk_param.origin_chunk.y)),
+            as_i32(lo32(chunk_lo.z) - lo32(chunk_param.origin_chunk.z)));
     // The origin is a multiple of the root span, so the low word keeps the LOD bit.
     const int64_t lod_size = chunk_lo.x == 0 ? 1 : int64_t(1) << ctz64(uint64_t(lo32(chunk_lo.x)));
     const Vector3i64 min_rel = (rel - Vector3i64(lod_size, lod_size, lod_size)) * chunk_param.half_chunk_voxels();

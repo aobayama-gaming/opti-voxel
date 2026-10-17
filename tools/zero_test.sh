@@ -15,6 +15,7 @@ EXTRA=()
 [[ "${1:-}" == "--" ]] && { shift; EXTRA=("$@"); }
 
 # Above the pillar (top at 416 m, x -52.75, z -110), looking down at it.
+# shellcheck disable=SC2054  # the commas are part of the value
 CAM=(--cam_pos=-52.75,430,-96 --pitch=-45)
 declare -A DIRS
 FAILED=0

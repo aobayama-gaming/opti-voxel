@@ -1,84 +1,41 @@
 #pragma once
 
-#include "godot_cpp/templates/hash_set.hpp"
 #include "chunk_math.hpp"
 #include "chunk_output.hpp"
+#include "godot_cpp/templates/hash_set.hpp"
 
 using namespace godot;
 
+// Nearest strict ancestor of r_chunk that p_set holds, searching the LODs below p_max_lod (the LODs
+// chunks exist at). Returns its LOD and sets r_chunk to it, or returns -1 and leaves r_chunk alone.
+template <typename T>
+int find_ancestor_in(const T &p_set, ChunkId &r_chunk, int p_max_lod) {
+    ChunkId parent = r_chunk;
+    for (int lod = ChunkMath::get_lod(r_chunk) + 1; lod < p_max_lod; lod++) {
+        const ChunkId next = ChunkMath::get_parent_from_child(parent);
+        if (next == parent) {
+            return -1; // past the top of the int64 octree
+        }
+        parent = next;
+        if (p_set.has(parent)) {
+            r_chunk = parent;
+            return lod;
+        }
+    }
+    return -1;
+}
+
+// Chunk ids (chunk centres, see chunk_math.hpp).
 class LODHashSet : public HashSet<ChunkId, Vector3i64Hasher> {
-// HashSet of chunk position. The position is stored as the chunk center (LOD 0 : 2 wide),
-// It enables fast LOD calculation and chunk management.
-
 public:
+    int max_lod = 0; // chunks exist at LODs [0, max_lod)
 
-    uint32_t max_lod;
-
-    int get_max_lod(ChunkId &p_chunk_pos) const {
-        // Get if a parent of the chunk is already in the HashSet, and return the LOD of the parent chunk. If no parent is found, return -1.
-        
-        int actual_lod = 0;
-        ChunkId parent_pos = p_chunk_pos;
-
-        while (actual_lod < max_lod) {
-
-            parent_pos = ChunkMath::get_parent_from_child(parent_pos, actual_lod);
-
-            if (has(parent_pos)) {
-                p_chunk_pos=parent_pos;
-                return actual_lod;
-            }
-            actual_lod++;
-        };
-
-        return -1; // Not found
-    };
+    int find_ancestor(ChunkId &r_chunk) const { return find_ancestor_in(*this, r_chunk, max_lod); }
 };
 
-
-class ChunkHashMap : public HashMap<ChunkId, ChunkOutput, Vector3i64Hasher>{
-
+class ChunkHashMap : public HashMap<ChunkId, ChunkOutput, Vector3i64Hasher> {
 public:
+    int max_lod = 0; // chunks exist at LODs [0, max_lod)
 
-    uint32_t max_lod;
-
-    int get_max_lod(ChunkId &p_chunk_pos) const {
-        // Get if a parent of the chunk is already in the HashSet, and return the LOD of the parent chunk. If no parent is found, return -1.
-        
-        int actual_lod = 0;
-
-        ChunkId parent_pos = p_chunk_pos;
-
-        while (actual_lod < max_lod) {
-
-            parent_pos = ChunkMath::get_parent_from_child(parent_pos, actual_lod);
-
-            if (has(parent_pos)) {
-                p_chunk_pos=parent_pos;
-                return actual_lod;
-            }
-        };
-
-        return -1; // Not found
-    };
-
-    int get_chunk(const ChunkId &p_chunk_pos, ChunkOutput &chunk){
-        // retrieve the chunk or its parent.
-
-        int actual_lod = 0;
-
-        ChunkId parent_pos = p_chunk_pos;
-        while (actual_lod < max_lod) {
-
-            parent_pos = ChunkMath::get_parent_from_child(parent_pos, actual_lod);
-
-            if (has(parent_pos)) {
-                chunk = get(parent_pos);
-                return actual_lod; //actual
-            }
-        };
-
-        return -1; // Not found
-    };
-
+    int find_ancestor(ChunkId &r_chunk) const { return find_ancestor_in(*this, r_chunk, max_lod); }
 };

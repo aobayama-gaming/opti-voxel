@@ -2,7 +2,8 @@
 
 Godot 4.6 GDExtension (godot-cpp, 4.4 API) for an LOD voxel terrain meshed with surface nets.
 Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=template_debug -j$(nproc)`
-(installs into `project/bin/linux/`).
+(installs into `project/bin/linux/`). `src/` builds with `-Wall -Wextra -Werror`: `werror=no` only to
+iterate past a warning, never to commit one.
 
 ## Workflow (branches, worktrees, PRs)
 - `main` only moves through merged PRs from `dev`. `dev` is the integration branch.
@@ -15,6 +16,7 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   git submodule update --init                               # godot-cpp starts empty
   scons platform=linux target=template_debug -j$(nproc)     # full build, a few minutes
   ~/.local/bin/godot --headless --path project --import     # once: .godot/ is gitignored
+  tools/setup_hooks.sh                                      # once per clone: format check on commit
   ```
   Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
   ends with a segfault in the extension (headless editor exit, pre-existing). It's harmless as
@@ -37,6 +39,32 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   per chunk and biome-local SDF origins are upcoming features with their own design: don't
   anticipate them.
 - When done: `git worktree remove ../opti-voxel-worktrees/<name>` after the PR is merged.
+
+## Code rules (keep it from turning into spaghetti)
+Most of this code is written with AI agents. These rules are what keeps it reviewable; they apply
+to every change, and a reviewer may reject a PR on any of them.
+- One source of truth for every constant and layout. Page layout lives in `page_format.hpp`, the
+  integer frame in `world_coord.hpp` / `gpu_frame.hpp`. Extend those; never retype a literal (64,
+  14 bits, byte offsets, binding numbers) on the C++, GLSL or shader side. GLSL gets C++ constants
+  by substitution (`GPUFrame::glsl_functions()` shows how; no `#define` in shaders that go through
+  `shader_set_code`).
+- Two copies that must stay in sync are one function. Before pasting a block, extract it (the two
+  `get_max_lod` copies had already drifted). Exception: the legacy mesher's GLSL stays separate
+  from GPU Direct's on purpose, it is the oracle.
+- No new `if (direct_mesher) ... else gpu_mesher` branch in `VoxelTerrain`: a mesher interface is
+  planned; until then, put new mesher behaviour behind the meshers' common methods.
+- No commented-out code (git has it) and no debug prints left behind: use `VLOG`. A TODO says why
+  and what would close it.
+- Functions over ~80 lines get split, files over ~800 lines need a reason. New debug tooling goes
+  in its own class (like `MeshValidator`, `PageAuditor`), not into `VoxelTerrain`.
+- Logic in a pure module (`world_coord`, `chunk_math`, `page_format`, `lod_structures`,
+  `chunk_memory`, anything without a GPU) ships with doctest cases in `src/tests/`. A bug fix ships
+  with the test that would have caught it.
+- `src/` is clang-formatted (`tools/format.sh`; a Claude Code hook in `.claude/settings.json`
+  formats each file as it is edited, the pre-commit hook and CI refuse unformatted code) and builds
+  warning-free.
+- Before opening a PR: run `/simplify`, then `/code-review` on the branch diff, and fix what holds.
+  Keep a PR reviewable: split anything over ~1,000 hand-written lines.
 
 ## Pipelines (`VoxelTerrain.pipeline_mode`)
 - `1` GPU Legacy (`GPUMesher`): compute on a local RenderingDevice, full readback, CPU
@@ -80,8 +108,14 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 
 ## Verify changes (do this, don't eyeball)
+- `tools/unit_test.sh [--no-build] [filter]`: the C++ unit tests (`src/tests/`, doctest) inside
+  headless Godot, a few seconds, no GPU. `filter` is a doctest wildcard on test names
+  (`'ChunkMath*'`). Tests are compiled into non-release builds only (`OPTI_VOXEL_TESTS`).
+- `tools/format.sh [--check] [files]`: clang-format 23.1.3 through `uvx` on `src/`.
+- CI (`.github/workflows/ci.yml`) runs format, the `-Werror` build and the unit tests on every PR.
+  Everything that needs a GPU stays local.
 - `tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]`: the correctness gate, ~2 min.
-  One build, then a direct load run with `--validate=64 --audit=1 --discovery_audit=1`,
+  One build, the unit tests, then a direct load run with `--validate=64 --audit=1 --discovery_audit=1`,
   `origin_parity.sh`, `frame_test.sh`, the QuadPagePool spike (with `--spike`, or automatically when
   `src/quad_page_pool*` differs from `dev`) and `discovery_audit.sh` (with `--discovery`, or
   automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~2 min)
@@ -203,5 +237,10 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   underground (the cave field is capped by the distance to its depth band for that reason).
 - `FrameSpike` uses a local RenderingDevice: it needs a window (not `--headless`) and an unlocked session.
 - Main-RD resources must be created/freed on the render thread; objects owning them delete
-  themselves there (`destroy()` -> `_rt_destroy()`), since callables bound to a freed object are
-  skipped.
+  themselves there (`destroy()` -> `_rt_destroy()`), after the render-thread work already queued
+  for them (FIFO).
+- Async readback callbacks (`texture_get_data_async`, `buffer_get_data_async`) are NOT skipped when
+  their object is freed: they arrive frames later and run on freed memory (segfault in
+  `MeshValidator::_rt_on_page` when quitting mid-validation). An object with readbacks in flight
+  counts them and deletes itself when the last one lands (`MeshValidator` / `PageAuditor::destroy`).
+  `GPUDirectMesher::_rt_destroy` does not do this yet.

@@ -21,6 +21,11 @@ COUNTS = [
 SHOTS = ["loaded.png", "steady.png"]
 
 
+def load(path):
+    with open(path) as f:
+        return json.load(f)
+
+
 def image_diff(a, b):
     ia = np.asarray(Image.open(a).convert("RGB")).astype(int)
     ib = np.asarray(Image.open(b).convert("RGB")).astype(int)
@@ -31,8 +36,8 @@ def image_diff(a, b):
 def main():
     out = sys.argv[1]
     runs = dict(arg.split("=", 1) for arg in sys.argv[2:])
-    stats = {k: json.load(open(f"{d}/stats.json")) for k, d in runs.items()}
-    digests = {k: json.load(open(f"{d}/chunks.json")) for k, d in runs.items()}
+    stats = {k: load(f"{d}/stats.json") for k, d in runs.items()}
+    digests = {k: load(f"{d}/chunks.json") for k, d in runs.items()}
     ok = True
 
     lines = ["# Origin parity", "", "| run | origin (voxels) | " + " | ".join(n for n, _ in COUNTS) + " | nan | validation | audit |",
@@ -74,7 +79,8 @@ def main():
         lines += ["Differing chunks (quads:digest):", ""] + [f"- {e}" for e in examples] + [""]
     lines += [f"**{'PARITY OK' if ok else 'PARITY BROKEN'}**", ""]
     lines += [f"- {k}: `{d}`" for k, d in runs.items()]
-    open(out, "w").write("\n".join(lines) + "\n")
+    with open(out, "w") as f:
+        f.write("\n".join(lines) + "\n")
     print("\n".join(lines))
     print(f">> report: {out}")
     sys.exit(0 if ok else 2)

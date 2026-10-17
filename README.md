@@ -1,56 +1,64 @@
-# godot-cpp template
-This repository serves as a quickstart template for GDExtension development with Godot 4.0+.
+# opti-voxel : LOD voxel terrain meshed on the GPU, for Godot
 
-## Contents
-* Preconfigured source files for C++ development of the GDExtension ([src/](./src/))
-* An empty Godot project in [project/](./project), to test the GDExtension
-* godot-cpp as a submodule (`godot-cpp/`)
-* GitHub Issues template ([.github/ISSUE_TEMPLATE.yml](./.github/ISSUE_TEMPLATE.yml))
-* GitHub CI/CD workflows to publish your library packages when creating a release ([.github/workflows/builds.yml](./.github/workflows/builds.yml))
-* An SConstruct file with various functions, such as boilerplate for [Adding documentation](https://docs.godotengine.org/en/stable/tutorials/scripting/cpp/gdextension_docs_system.html)
+Why this project ? I wanted a voxel terrain with **5 cm voxels** on a world much bigger than
+**10,000 km**, that you can still fly over smoothly. Most voxel engines pick one of the two. This
+one is a Godot 4.6 GDExtension (C++, godot-cpp) that builds a chunk octree around the camera and
+meshes every chunk with surface nets, directly on the GPU.
 
-## Usage - Template
+**Disclaimer :** this is a work in progress. Only Linux is built and tested, and the terrain
+itself (`SDFDummy`) is a placeholder noise until the exact, integer-based noise lands.
 
-To use this template, log in to GitHub and click the green "Use this template" button at the top of the repository page. This will let you create a copy of this repository with a clean git history.
+## How it works
 
-To get started with your new GDExtension, do the following:
+Before diving into the code, the big picture:
 
-* clone your repository to your local computer
-* initialize the godot-cpp git submodule via `git submodule update --init`
-* change the name of the compiled library file inside the [SConstruct](./SConstruct) file by modifying the `libname` string.
-  * change the paths of the to be loaded library name inside the [project/bin/example.gdextension](./project/bin/example.gdextension) file, by replacing `EXTENSION-NAME` with the name you chose for `libname`.
-* change the `entry_symbol` string inside [project/bin/example.gdextension](./project/bin/example.gdextension) file.
-  * rename the `example_library_init` function in [src/register_types.cpp](./src/register_types.cpp) to the same name you chose for `entry_symbol`.
-* change the name of the `project/bin/example.gdextension` file
+- **Chunk octree.** Every chunk has an integer id (`ChunkId`, int64). The LOD of a chunk is the
+  lowest set bit of its id, so parents, children and neighbours are bit tricks, never floats
+  (`src/chunk_math.*`, `src/world_coord.hpp`).
+- **Discovery.** A worker thread (`ChunkDiscoverer`) walks the octree down from the largest
+  chunks around the camera, splits a chunk while its screen-space error is too big, and drops the
+  ones the SDF says are empty.
+- **Meshing.** Two pipelines, picked by `VoxelTerrain.pipeline_mode`:
+  - `2` GPU Direct (default): compute passes write the quads straight into pooled pages that the
+    GPU draws indirectly. Only a ~2 KB directory per batch comes back to the CPU.
+  - `1` GPU Legacy: same passes on a local RenderingDevice, full readback, triangulation on the
+    CPU. Slow, but simple: it is kept as the correctness oracle of GPU Direct.
+- **Integer frame.** No float ever holds an absolute coordinate: the GPU gets the low 32 bits of
+  the ids, render positions are relative to the world origin.
 
-Now, you can build the project with the following command:
+`CLAUDE.md` has the details (page layout, threading rules, and every gotcha already hit).
 
-```shell
-scons
+## Build
+
+```sh
+git clone --recursive <this repo>      # godot-cpp is a submodule
+scons platform=linux target=template_debug -j$(nproc)   # first build compiles godot-cpp too, a few minutes
+godot --headless --path project --import                # once: registers the extension
+tools/setup_hooks.sh                                    # once per clone: format check before each commit
 ```
 
-If the build command worked, you can test it with the [project](./project) project. Import it into Godot, open it, and launch the main scene. You should see it print the following line in the console:
+*The import ends with a crash in the extension when the headless editor exits. It's harmless as
+long as `project/.godot/extension_list.cfg` exists afterwards.*
 
-```
-Type: 24
-```
+The build treats warnings as errors (`-Wall -Wextra -Werror` on `src/`). To iterate past one, add
+`werror=no`, but fix it before committing.
 
-### Configuring an IDE
-You can develop your own extension with any text editor and by invoking scons on the command line, but if you want to work with an IDE (Integrated Development Environment), you can use a compilation database file called `compile_commands.json`. Most IDEs should automatically identify this file, and self-configure appropriately.
-To generate the database file, you can run one of the following commands in the project root directory:
-```shell
-# Generate compile_commands.json while compiling
-scons compiledb=yes
+Then open `project/` in Godot 4.6 and run the main scene.
 
-# Generate compile_commands.json without compiling
-scons compiledb=yes compile_commands.json
-```
+## Checks
 
-## Usage - Actions
+| Command | What | Needs |
+|---|---|---|
+| `tools/unit_test.sh [filter]` | C++ unit tests (`src/tests/`, doctest) inside headless Godot | the one-time import, ~5 s after a build |
+| `tools/check.sh` | The correctness gate: build, unit tests, a validated + audited load run, origin parity, integer frame, zero SDF test | GPU, unlocked session, ~2 min |
+| `tools/format.sh [--check]` | clang-format (pinned, through `uvx`) on `src/` | `uv` |
+| `tools/bench_ab.sh <a> <b>` | Before/after perf table of two checkouts | GPU |
 
-This repository comes with continuous integration (CI) through a GitHub action that tests building the GDExtension.
-It triggers automatically for each pushed change. You can find and edit it in [builds.yml](.github/workflows/ci.yml).
+The unit tests only cover the pure parts so far (integer frame, chunk math, page format, LOD
+lookups, load/unload rules). The GPU side is checked end to end by `check.sh`: the legacy mesher
+re-meshes chunks to compare triangle by triangle, and an auditor reads every page back.
 
-There is also a workflow ([make_build.yml](.github/workflows/make_build.yml)) that builds the GDExtension for all supported platforms that you can use to create releases.
-You can trigger this workflow manually from the `Actions` tab on GitHub.
-After it is complete, you can find the file `godot-cpp-template.zip` in the `Artifacts` section of the workflow run.
+## Contributing
+
+One branch per feature from `dev`, one PR into `dev`. The rules for code (and for the AI agents
+that help writing it) are in `CLAUDE.md`, section "Code rules".

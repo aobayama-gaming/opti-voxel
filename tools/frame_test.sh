@@ -48,7 +48,7 @@ ERRORS=$(grep -E -A1 "^(ERROR|SCRIPT ERROR|USER ERROR)|SHADER COMPILATION FAILED
 
 OK=0
 if [[ -f "$RUN_DIR/frame.json" ]]; then
-    python3 - "$RUN_DIR/frame.json" <<'PY'
+    python3 - "$RUN_DIR/frame.json" <<'PY' && OK=1
 import json, sys
 r = json.load(open(sys.argv[1]))
 keys = ["ok", "origins", "samples", "worldpos_mismatch", "anchor_mismatch", "pairs",
@@ -61,7 +61,6 @@ for e in r.get("examples", []):
     print("   example:", e)
 sys.exit(0 if r.get("ok") else 1)
 PY
-    [[ $? -eq 0 ]] && OK=1
 fi
 
 echo ">> log: $RUN_DIR/godot.log  (errors=$ERRORS exit=$CODE ok=$OK)"

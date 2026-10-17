@@ -36,7 +36,7 @@ using namespace godot;
 class QuadPagePool : public Object {
 public:
     static constexpr uint32_t QUAD_GROUP = PageFormat::QUAD_GROUP; // quads per MultiMesh instance
-    static constexpr uint32_t TEX_WIDTH = PageFormat::TEX_WIDTH;   // texels per row: one group
+    static constexpr uint32_t TEX_WIDTH = PageFormat::TEX_WIDTH; // texels per row: one group
     static constexpr RenderingDevice::DataFormat TEX_FORMAT = RenderingDevice::DATA_FORMAT_R16G16B16A16_UINT;
     // VkDrawIndexedIndirectCommand: index_count, instance_count, first_index, vertex_offset, first_instance.
     static constexpr uint32_t INDIRECT_INSTANCE_COUNT_OFFSET = 4;
@@ -61,7 +61,6 @@ public:
 
     void set_page_aabb(int p_page, const AABB &p_aabb);
 
-    RID get_page_multimesh(int p_page) const { return pages[p_page].multimesh; }
     uint32_t get_page_capacity() const { return page_capacity; }
     uint32_t get_page_rows() const { return page_capacity / QUAD_GROUP; }
     int get_page_count() const { return pages.size(); } // index space, freed pages included
@@ -72,15 +71,14 @@ public:
     Dictionary get_stats() const;
 
     // ---- render thread ----
-    // The multimesh RID is passed in (not read from `pages`) because the main thread may be growing
-    // `pages` concurrently.
-    PageRD rt_get_page_rd(int p_page, RID p_multimesh);
-    void rt_set_group_count(int p_page, RID p_multimesh, uint32_t p_groups);
+    // These only read `rt_pages`, never `pages`, which the main thread may be growing concurrently.
+    PageRD rt_get_page_rd(int p_page);
+    void rt_set_group_count(int p_page, uint32_t p_groups);
     // Copies a whole page worth of rows of `p_src`, starting at `p_src_row`, into the page texture.
-    void rt_copy_page_from(int p_page, RID p_multimesh, RID p_src, uint32_t p_src_row);
+    void rt_copy_page_from(int p_page, RID p_src, uint32_t p_src_row);
     // Zeroes the groups covering quads [offset, offset + count), headers included: the corners
     // collapse to one point, never rasterised. p_offset must start a group (chunks do).
-    void rt_kill_range(int p_page, RID p_multimesh, uint32_t p_offset, uint32_t p_count);
+    void rt_kill_range(int p_page, uint32_t p_offset, uint32_t p_count);
     // Copies p_rows groups (texture rows) from one page to another (different) page.
     void rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_row, uint32_t p_dst_row, uint32_t p_rows);
 
@@ -93,7 +91,7 @@ private:
     };
 
     struct PageRT {
-        RID texture;    // RD
+        RID texture; // RD
         RID rs_texture; // RenderingServer wrapper sampled by the material
         RID command;
     };
@@ -119,7 +117,7 @@ private:
 
     int _create_page(int p_index = -1);
     void _rt_create_page(int p_page, RID p_multimesh, RID p_material);
-    void _rt_reset_page(int p_page, RID p_multimesh);
+    void _rt_reset_page(int p_page);
     void _rt_free_page(int p_page);
     void _rt_destroy();
 };
