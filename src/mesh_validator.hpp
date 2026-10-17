@@ -16,7 +16,7 @@ class GPUMesher;
 class QuadPagePool;
 
 // Debug oracle: checks GPU Direct chunks against the legacy GPU mesher (GPU sampling + CPU
-// triangulation), triangle by triangle, in world space.
+// triangulation), triangle by triangle, in the chunk's vertex grid (independent of the world origin).
 //
 //   start(): pick chunks, launch the legacy mesher on them (its own local RenderingDevice, a hidden
 //            scenario, trimmed index buffers) and async-read the page textures holding them.
@@ -26,7 +26,7 @@ class QuadPagePool;
 class MeshValidator : public Object {
 public:
     struct Target {
-        Vector3i chunk_id;
+        ChunkId chunk_id;
         int page = -1;
         RID page_multimesh;
         uint32_t offset = 0;

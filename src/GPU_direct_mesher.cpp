@@ -1,6 +1,7 @@
 #include "GPU_direct_mesher.hpp"
 
 #include "gpu_direct_glsl.hpp"
+#include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "noise.hpp"
 #include "page_format.hpp"
@@ -26,8 +27,8 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 /*GLSL_TERRAIN_SDF*/
 
-vec4 evaluate_sdf(vec3 pos) {
-    return terrain_sdf(pos);
+vec4 evaluate_sdf(WorldPos p) {
+    return terrain_sdf(p);
 }
 
 /*GLSL_SKIRT_SDF*/
@@ -40,7 +41,8 @@ void main() {
     if (batch.batch_count == 0u) {
         return;
     }
-    ivec3 chunk_id = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size].xyz;
+    ChunkFrame chunk = chunk_frame(input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size], chunk_param);
+    ivec3 chunk_id = chunk.id_lo;
     ivec3 cell_chunk_coordinate = ivec3(
         gl_GlobalInvocationID.x,
         gl_GlobalInvocationID.y % chunk_param.chunk_size,
@@ -65,7 +67,9 @@ static uint32_t groups_of(uint32_t p_quads) {
     return (p_quads + QuadPagePool::QUAD_GROUP - 1) / QuadPagePool::QUAD_GROUP;
 }
 
-static uint64_t morton_key(const Vector3i &p_chunk) {
+// Morton order of a chunk id relative to the world origin, for batch and page locality only: ids
+// more than 2^20 units from the origin wrap and merely lose locality.
+static uint64_t morton_key(const ChunkId &p_chunk, const ChunkId &p_origin) {
     auto spread = [](uint64_t v) {
         v &= 0x1fffff;
         v = (v | v << 32) & 0x1f00000000ffffULL;
@@ -75,8 +79,12 @@ static uint64_t morton_key(const Vector3i &p_chunk) {
         v = (v | v << 2) & 0x1249249249249249ULL;
         return v;
     };
-    const uint64_t bias = 1 << 20;
-    return spread(p_chunk.x + bias) | (spread(p_chunk.y + bias) << 1) | (spread(p_chunk.z + bias) << 2);
+    constexpr int64_t bias = int64_t(1) << 20;
+    const ChunkId rel = p_chunk - p_origin;
+    if (unlikely(rel.x < -bias || rel.x >= bias || rel.y < -bias || rel.y >= bias || rel.z < -bias || rel.z >= bias)) {
+        ERR_PRINT_ONCE("GPUDirectMesher: chunks more than 2^20 id units from the world origin, Morton locality degrades.");
+    }
+    return spread(uint64_t(rel.x + bias)) | (spread(uint64_t(rel.y + bias)) << 1) | (spread(uint64_t(rel.z + bias)) << 2);
 }
 
 void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings) {
@@ -94,6 +102,8 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     pool->set_material_param("chunk_size", chunk_param.chunk_size);
     pool->set_material_param("skirt_size", chunk_param.skirt_size);
     pool->set_material_param("pos_scale", PageFormat::pos_scale(chunk_param.chunk_size));
+    // Render positions are relative to the world origin (low words, wrapping).
+    pool->set_material_param("origin_chunk_lo", WorldCoord::lo32_i(chunk_param.origin_chunk));
     page_state.resize(pool->get_page_count());
 
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_initialize));
@@ -101,10 +111,10 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 
 RID GPUDirectMesher::_rt_compile(const char *p_pass) {
     String shader = DIRECT_TEMPLATE;
-    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", GLSL_STRUCT_DEFINITION);
+    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", GLSL_DIRECT_BINDINGS);
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE));
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE) + GPUFrame::glsl_functions());
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
@@ -135,7 +145,7 @@ void GPUDirectMesher::_rt_initialize() {
     const uint64_t batch = settings.batch_size;
 
     buffer_chunk_dir = rd->storage_buffer_create(batch * 16);
-    buffer_input_chunk = rd->storage_buffer_create(batch * 16);
+    buffer_input_chunk = rd->storage_buffer_create(batch * GPUFrame::CHUNK_INPUT_BYTES);
     buffer_sdf = rd->storage_buffer_create(batch * cells * 16);
     buffer_edges = rd->storage_buffer_create(batch * cells * 3 * sizeof(float));
     buffer_vertices = rd->storage_buffer_create(batch * cells * 16);
@@ -154,12 +164,7 @@ void GPUDirectMesher::_rt_initialize() {
     status_size_bytes = ((STATUS_HEADER_UINTS + settings.pages_per_batch) * 4 + 15) / 16 * 16;
     buffer_status = rd->storage_buffer_create(status_size_bytes);
 
-    PackedByteArray param_data;
-    param_data.resize(16);
-    param_data.encode_s32(0, chunk_param.chunk_size);
-    param_data.encode_float(4, chunk_param.voxel_size);
-    param_data.encode_s32(8, chunk_param.skirt_size);
-    param_data.encode_s32(12, chunk_param.use_skirt ? 1 : 0);
+    const PackedByteArray param_data = GPUFrame::chunk_param_bytes(chunk_param);
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     for (int i = 0; i < 5; i++) {
@@ -333,8 +338,8 @@ void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const Packed
     }
 }
 
-AABB GPUDirectMesher::_chunk_aabb(const Vector3i &p_chunk) const {
-    const Vector3 center = ChunkMath::chunk_to_world(p_chunk, chunk_param);
+AABB GPUDirectMesher::_chunk_aabb(const ChunkId &p_chunk) const {
+    const Vector3 center = ChunkMath::chunk_render_center(p_chunk, chunk_param);
     const float size = ChunkMath::world_chunk_size(p_chunk, chunk_param);
     // Skirt cells extend past the chunk bounds; be generous rather than cull visible geometry.
     const float margin = size * 0.25f;
@@ -362,8 +367,8 @@ void GPUDirectMesher::_update_dirty_bounds() {
     dirty_bounds_pages.clear();
 }
 
-bool GPUDirectMesher::_pop_queue(Vector3i &r_chunk) {
-    for (std::vector<Vector3i> &queue : chunk_queue) {
+bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
+    for (std::vector<ChunkId> &queue : chunk_queue) {
         if (queue.empty()) {
             continue;
         }
@@ -399,8 +404,8 @@ void GPUDirectMesher::process_queue() {
         return;
     }
 
-    std::vector<Vector3i> chunks;
-    Vector3i chunk;
+    std::vector<ChunkId> chunks;
+    ChunkId chunk;
     while (chunks.size() < settings.batch_size && _pop_queue(chunk)) {
         chunks.push_back(chunk);
     }
@@ -410,7 +415,8 @@ void GPUDirectMesher::process_queue() {
     const uint64_t t0 = now_usec();
 
     // The queue already pops in Morton order; re-sorting covers re-queued overflow chunks.
-    std::sort(chunks.begin(), chunks.end(), [](const Vector3i &a, const Vector3i &b) { return morton_key(a) < morton_key(b); });
+    const ChunkId origin = chunk_param.origin_chunk;
+    std::sort(chunks.begin(), chunks.end(), [origin](const ChunkId &a, const ChunkId &b) { return morton_key(a, origin) < morton_key(b, origin); });
 
     InFlightBatch batch;
     batch.chunks = chunks;
@@ -418,12 +424,9 @@ void GPUDirectMesher::process_queue() {
 
     AABB bounds = _chunk_aabb(chunks[0]);
     PackedByteArray ids;
-    ids.resize(chunks.size() * 16);
+    ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
     for (size_t i = 0; i < chunks.size(); i++) {
-        ids.encode_s32(i * 16 + 0, chunks[i].x);
-        ids.encode_s32(i * 16 + 4, chunks[i].y);
-        ids.encode_s32(i * 16 + 8, chunks[i].z);
-        ids.encode_s32(i * 16 + 12, 0);
+        GPUFrame::encode_chunk_input(ids, (int64_t)i, chunks[i], chunk_param);
         bounds.merge_with(_chunk_aabb(chunks[i]));
         working_generation.insert(chunks[i]);
     }
@@ -484,7 +487,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
         }
 
         for (size_t i = 0; i < batch.chunks.size(); i++) {
-            const Vector3i &chunk_id = batch.chunks[i];
+            const ChunkId &chunk_id = batch.chunks[i];
             const uint32_t count = dir[i * 4 + 0];
             const uint32_t base = dir[i * 4 + 2];
             const uint32_t flags = dir[i * 4 + 3];
@@ -588,7 +591,7 @@ void GPUDirectMesher::compact(VoxelState &r_state) {
             }
             uint64_t key = UINT64_MAX;
             for (const PageChunk &c : ps.chunks) {
-                key = MIN(key, morton_key(c.id));
+                key = MIN(key, morton_key(c.id, chunk_param.origin_chunk));
             }
             candidates.push_back({ key, page });
         }
@@ -617,7 +620,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
     uint32_t src_groups = 0;
     for (const int page : p_pages) {
         for (const PageChunk &c : page_state[page].chunks) {
-            moves.push_back({ morton_key(c.id), page, c });
+            moves.push_back({ morton_key(c.id, chunk_param.origin_chunk), page, c });
         }
         src_groups += page_state[page].groups;
     }
@@ -635,7 +638,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
     std::vector<uint32_t> dst_row(moves.size());
     uint32_t dst_groups = 0;
     for (size_t i = 0; i < moves.size(); i++) {
-        const Vector3i &id = moves[i].chunk.id;
+        const ChunkId &id = moves[i].chunk.id;
         const uint32_t g = groups_of(moves[i].chunk.count);
         const AABB box = _chunk_aabb(id);
         const float size = ChunkMath::world_chunk_size(id, chunk_param);
@@ -707,7 +710,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
                 out->page = page;
                 out->quad_offset = moved.offset;
             } else {
-                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", m.chunk.id));
+                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", WorldCoord::to_string(m.chunk.id)));
             }
         }
         group_counts.append_array({ page, (int)d.groups });
@@ -735,23 +738,23 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
 void GPUDirectMesher::send_chunk(LODHashSet p_chunks) {
     // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
     // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
-    std::vector<std::vector<std::pair<uint64_t, Vector3i>>> keyed(chunk_queue.size());
-    for (const Vector3i &chunk_pos : p_chunks) {
+    std::vector<std::vector<std::pair<uint64_t, ChunkId>>> keyed(chunk_queue.size());
+    for (const ChunkId &chunk_pos : p_chunks) {
         const int lod = ChunkMath::get_lod(chunk_pos);
         if (lod < 0 || lod >= (int)chunk_queue.size()) {
             continue;
         }
         if (!working_generation.has(chunk_pos)) {
-            keyed[lod].push_back({ morton_key(chunk_pos), chunk_pos });
+            keyed[lod].push_back({ morton_key(chunk_pos, chunk_param.origin_chunk), chunk_pos });
         }
     }
     for (size_t lod = 0; lod < chunk_queue.size(); lod++) {
         std::sort(keyed[lod].begin(), keyed[lod].end(),
-                [](const std::pair<uint64_t, Vector3i> &a, const std::pair<uint64_t, Vector3i> &b) { return a.first > b.first; });
-        std::vector<Vector3i> &queue = chunk_queue[lod];
+                [](const std::pair<uint64_t, ChunkId> &a, const std::pair<uint64_t, ChunkId> &b) { return a.first > b.first; });
+        std::vector<ChunkId> &queue = chunk_queue[lod];
         queue.clear();
         queue.reserve(keyed[lod].size());
-        for (const std::pair<uint64_t, Vector3i> &k : keyed[lod]) {
+        for (const std::pair<uint64_t, ChunkId> &k : keyed[lod]) {
             queue.push_back(k.second);
         }
     }
@@ -761,7 +764,7 @@ bool GPUDirectMesher::is_idle() {
     if (!in_flight.is_empty()) {
         return false;
     }
-    for (const std::vector<Vector3i> &q : chunk_queue) {
+    for (const std::vector<ChunkId> &q : chunk_queue) {
         if (!q.empty()) {
             return false;
         }
@@ -776,7 +779,7 @@ void GPUDirectMesher::set_debug_view(int p_view) {
 Dictionary GPUDirectMesher::get_stats() {
     Dictionary d;
     int64_t queued = 0;
-    for (const std::vector<Vector3i> &q : chunk_queue) {
+    for (const std::vector<ChunkId> &q : chunk_queue) {
         queued += q.size();
     }
     int pages_with_live = 0;

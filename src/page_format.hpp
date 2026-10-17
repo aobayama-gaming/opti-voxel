@@ -13,14 +13,16 @@ using namespace godot;
 //
 // One RGBA16UI texture per page (RenderingServer cannot wrap 32-bit integer RD textures), one row
 // per group of QUAD_GROUP quads:
-//   texel 0          (x lo, x hi, y lo, y hi)  group header: the chunk owning every quad of the row
-//   texel 1          (z lo, z hi, 0, 0)        (chunks start on a group, so rows never mix chunks)
+//   texel 0          (x lo, x hi, y lo, y hi)  group header: low 32 bits of the id of the chunk owning
+//   texel 1          (z lo, z hi, 0, 0)        every quad of the row (chunks start on a group, so rows
+//                                               never mix chunks)
 //   texel 2 + 4q + k corner k of quad q
 // A corner is its position in the chunk's vertex grid (the grid the SDF is sampled on, skirt
 // included) as 3 x 14-bit fixed point, and its normal n = nx | ny << 11 as 2 x 11-bit octahedral:
 //   (x | (n & 3) << 14, y | (n >> 2 & 3) << 14, z | (n >> 4 & 3) << 14, n >> 6)
-// World positions are rebuilt from the header chunk id with the same formula as
-// ChunkMath::vertices_to_world. An all-zero row is empty: its corners collapse to one point.
+// Render positions are rebuilt from the header (relative to the world origin, wrapping int32) with
+// the same formula as ChunkMath::grid_to_render_lo32. An all-zero row is empty: its corners collapse
+// to one point.
 namespace PageFormat {
 
 static constexpr uint32_t QUAD_GROUP = 64;

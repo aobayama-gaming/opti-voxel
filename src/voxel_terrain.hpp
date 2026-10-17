@@ -80,6 +80,7 @@ private:
 	bool legacy_trim_indices = false;
 	float lod_pixel_error = 2.0f;
 	bool debug_test_rig = false;
+	VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
 	GPUDirectMesher::Settings direct_settings;
 	int debug_view = 0;
 
@@ -88,6 +89,8 @@ private:
 	void _destroy_chunk();
 
 	void _teardown();
+
+	bool _can_set_world_origin(int64_t p_voxel) const;
 
 	//debug
 
@@ -122,6 +125,16 @@ public:
 	// Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
 	void set_voxel_size(float p_size);
 	float get_voxel_size() const;
+
+	// Integer world origin in LOD0 voxels: Godot space (0, 0, 0) is this voxel of the integer frame
+	// (plus the legacy lattice offset). Snapped down to a multiple of the root chunk span when the
+	// terrain starts, so the LOD layout is the same around any origin. |value| <= 2^60.
+	void set_world_origin_x(int64_t p_voxel);
+	int64_t get_world_origin_x() const;
+	void set_world_origin_y(int64_t p_voxel);
+	int64_t get_world_origin_y() const;
+	void set_world_origin_z(int64_t p_voxel);
+	int64_t get_world_origin_z() const;
 
 	// Adds centimetre-scale test shapes in front of the main_scene spawn (see sdf_test_rig.hpp).
 	void set_debug_test_rig(bool p_enable);

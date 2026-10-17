@@ -75,7 +75,7 @@ public:
 
 private:
     struct InFlightBatch {
-        std::vector<Vector3i> chunks;
+        std::vector<ChunkId> chunks;
         std::vector<int> pages;
         uint64_t dispatch_frame = 0;
     };
@@ -87,7 +87,7 @@ private:
     };
 
     struct PageChunk {
-        Vector3i id;
+        ChunkId id;
         uint32_t offset = 0; // quads, a multiple of QUAD_GROUP
         uint32_t count = 0;
     };
@@ -110,7 +110,7 @@ private:
     QuadPagePool *pool = nullptr;
 
     // Per LOD, sorted by descending Morton key: pop_back() walks space along the Morton curve.
-    std::vector<std::vector<Vector3i>> chunk_queue;
+    std::vector<std::vector<ChunkId>> chunk_queue;
     LODHashSet working_generation;
 
     uint32_t next_batch_id = 0;
@@ -157,12 +157,12 @@ private:
     // completion assembly (render thread writes, main thread consumes; under mutex)
     HashMap<uint32_t, CompletedBatch> partial;
 
-    bool _pop_queue(Vector3i &r_chunk);
+    bool _pop_queue(ChunkId &r_chunk);
     void _flush_kills();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
     void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
-    AABB _chunk_aabb(const Vector3i &p_chunk) const;
+    AABB _chunk_aabb(const ChunkId &p_chunk) const;
 
     struct Stats {
         uint64_t batches = 0;

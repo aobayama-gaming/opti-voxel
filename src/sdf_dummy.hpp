@@ -5,7 +5,9 @@
 #include "noise.hpp"
 #include "sdf_test_rig.hpp"
 
-class SDFDummy : public SDFBase {
+// Placeholder terrain, written in metres (see SDFMetreBridge). The commented-out variants below use
+// the same convention.
+class SDFDummy : public SDFMetreBridge {
 public:
     // Adds the centimetre-scale test shapes of sdf_test_rig.hpp (set before meshing starts).
     bool test_rig = false;
@@ -66,7 +68,7 @@ public:
     //     return -sqrt(p_world_pos.y*p_world_pos.y + p_world_pos.x*p_world_pos.x + p_world_pos.z*p_world_pos.z)  + 10.0f;
     // }
 
-    float evaluate(const Vector3 &p_world_pos) const override {
+    float evaluate_metres(const Vector3 &p_world_pos) const override {
         // Mountain with sparse large caverns
         static const SimplexNoise::NoiseParam mountain_param{0.0035f, 1.0f, 2.0f, 0.5f};
         static const SimplexNoise::NoiseParam cave_blob_param{0.0080f, 1.0f, 2.0f, 0.5f};  // Low freq for big blobs
@@ -103,9 +105,9 @@ public:
     }
 
     //GLSL implementation
-String get_glsl_code() const override {
+    String get_metre_glsl_code() const override {
         String code = R"glsl(
-        vec4 terrain_sdf(vec3 pos){
+        vec4 legacy_terrain_sdf(vec3 pos){
             NoiseParam mountain_param;
             mountain_param.frequency = 0.0035;
             mountain_param.amplitude = 1.0;

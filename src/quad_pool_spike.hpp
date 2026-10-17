@@ -30,7 +30,7 @@ private:
     Vector3 sheet_origin = Vector3(-72.0f, 342.0f, -150.0f);
     float sheet_size = 40.0f;
     ChunkParam chunk_param; // the page shader's defaults (chunk 32, skirt 2, voxel 0.5)
-    Vector3i sheet_chunk;   // chunk the sheet's corners are stored relative to
+    ChunkId sheet_chunk;   // chunk the sheet's corners are stored relative to
 
     QuadPagePool *pool = nullptr;
     int page = -1;

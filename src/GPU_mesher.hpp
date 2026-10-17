@@ -17,7 +17,7 @@ using namespace godot;
 
 struct UnpackChunk{
 
-    Vector3i chunk_id;
+    ChunkId chunk_id;
 
     PackedVector3Array output_points;
     PackedVector3Array output_normals;
@@ -81,7 +81,7 @@ class GPUMesher : public Object{
     uint32_t chunk_batch_number;
 
     //input 
-    PackedInt32Array input_chunk_id;
+    PackedByteArray input_chunk_id;
 
     // GPU stuff
 
@@ -130,7 +130,7 @@ class GPUMesher : public Object{
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
-    bool _pop_queue(Vector3i &new_chunk);
+    bool _pop_queue(ChunkId &new_chunk);
 
     bool _is_available();
 

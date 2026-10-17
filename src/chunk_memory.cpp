@@ -4,7 +4,7 @@ void VoxelState::add_scan_chunk(LODHashSet &p_scanned_chunk){
 
     // Any loaded chunk not present in the new scan must be destroyed.
     // for (ChunkHashMap::ConstIterator it = loaded_chunk.begin(); it != loaded_chunk.end(); ++it) {
-    //     const Vector3i &pos = it->key;
+    //     const ChunkId &pos = it->key;
     //     if (!scanned_chunk.has(pos)) {
     //         to_destroy_chunk.insert(pos, it->value);
     //     }
@@ -15,7 +15,7 @@ void VoxelState::add_scan_chunk(LODHashSet &p_scanned_chunk){
     dirty_chunk.clear();
 
     // Any scanned chunk not already loaded must be generated.
-    for (const Vector3i &pos : p_scanned_chunk) {
+    for (const ChunkId &pos : p_scanned_chunk) {
         if (!loaded_chunk.has(pos)) {
             dirty_chunk.insert(pos);
         }
@@ -40,9 +40,9 @@ void VoxelState::update_destroy_from_scan() {
 
     LODHashSet stall_chunk;
     stall_chunk.max_lod = loaded_chunk.max_lod;
-    for (const Vector3i &scan_pos : dirty_chunk){
+    for (const ChunkId &scan_pos : dirty_chunk){
 
-        Vector3i parent_id = scan_pos;
+        ChunkId parent_id = scan_pos;
 
         
 
@@ -68,7 +68,7 @@ void VoxelState::update_destroy_from_scan() {
             continue;
         }
 
-        Vector3i parent_id = it->key;
+        ChunkId parent_id = it->key;
 
         const int parent_lod =dirty_chunk.get_max_lod(parent_id);
         if(parent_lod>=0 ){ //&& parent_lod-ChunkMath::get_lod(it->key)>CHUNK_DIFFERENCE

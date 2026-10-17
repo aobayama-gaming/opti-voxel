@@ -1,188 +1,180 @@
 
 #include "chunk_math.hpp"
 
-#if defined(_MSC_VER)
-#include <intrin.h>
-#else
-// GCC/Clang equivalent of the MSVC intrinsic: writes the index of the lowest set bit, returns 0 if mask is 0.
-static inline unsigned char _BitScanForward(unsigned long *index, uint32_t mask) {
-    if (mask == 0) {
-        return 0;
-    }
-    *index = __builtin_ctz(mask);
-    return 1;
-}
-#endif
+#include <cmath>
 
-constexpr inline float WORLD_NUDGE=0.123567f;
+using WorldCoord::ctz64;
 
-int32_t ChunkMath::get_parent_from_child(int32_t coord, int &lod) {
-    // Get the center coordinate of the parent chunk.
-
-    // 1. Find the index of the least significant bit (LSB).
-    //    For 5 (101), the LSB is at index 0.
-    //    For 6 (110), the LSB is at index 1.
-    unsigned long lsb_index;
-    if (_BitScanForward(&lsb_index, coord) == 0) {
+int64_t ChunkMath::get_parent_from_child(int64_t coord, int &lod) {
+    // Get the center coordinate of the parent chunk: clear the lowest set bit, set the next one.
+    // For 5 (101) the LSB is at index 0, the parent is 6 (110); for 6 it is at index 1, the parent is 4.
+    if (coord == 0) {
         return 0; // If coord is 0, its parent is 0.
     }
+    const int lsb_index = ctz64(uint64_t(coord));
+    if (lsb_index >= 62) {
+        return coord; // past the top of the int64 octree
+    }
 
-    lod = lsb_index+1; // The LOD is the index of the LSB. +1 because we are going to output the lod of parent
+    lod = lsb_index + 1; // +1 because we output the lod of the parent
 
-    // 2. "set to 0 the least importance"
-    //    Create a mask to clear that one bit.
-    int32_t cleared_coord = coord & ~(1 << lsb_index);
-
-    // 3. "flip to 1 the one after"
-    //    Set the bit at the next higher index.
-    int32_t parent_coord = cleared_coord | (1 << (lsb_index + 1));
-
-    return parent_coord;
+    const uint64_t cleared_coord = uint64_t(coord) & ~(uint64_t(1) << lsb_index);
+    return int64_t(cleared_coord | (uint64_t(1) << (lsb_index + 1)));
 }
 
-int32_t ChunkMath::get_parent_from_child(int32_t coord ) {
+int64_t ChunkMath::get_parent_from_child(int64_t coord) {
 
     int dummy_lod;
     return get_parent_from_child(coord, dummy_lod);
 }
 
-Vector3i ChunkMath::get_parent_from_child(Vector3i coord,int &lod) {
-    return Vector3i(
+ChunkId ChunkMath::get_parent_from_child(const ChunkId &coord, int &lod) {
+    return ChunkId(
         get_parent_from_child(coord.x, lod),
         get_parent_from_child(coord.y),
         get_parent_from_child(coord.z)
     );
 }
 
-Vector3i ChunkMath::get_parent_from_child(Vector3i coord) {
-    return Vector3i(
+ChunkId ChunkMath::get_parent_from_child(const ChunkId &coord) {
+    return ChunkId(
         get_parent_from_child(coord.x),
         get_parent_from_child(coord.y),
         get_parent_from_child(coord.z)
     );
 }
 
-int32_t ChunkMath::get_lod(Vector3i coord) {
-    // Get the LOD of the chunk at the given coordinate. The LOD is determined by the largest power of 2 from any coordinate.
-
-    unsigned long lod_x = 0;
-    if (_BitScanForward(&lod_x, coord.x) == 0) {
-        return 0; // If coord.x is 0, it contributes no LOD.
+int ChunkMath::get_lod(const ChunkId &coord) {
+    // The LOD of a chunk is the index of the lowest set bit of its coordinates (x is enough).
+    if (coord.x == 0) {
+        return 0;
     }
-
-    return lod_x;
+    return ctz64(uint64_t(coord.x));
 }
 
-Vector3i ChunkMath::get_parent_from_child_until(Vector3i coord, int target_lod) {
-    // Get the parent chunk at the target LOD. This is done by repeatedly getting the parent until the desired LOD is reached.
+int64_t ChunkMath::get_lod_size(const ChunkId &coord) {
+    return int64_t(1) << get_lod(coord);
+}
 
-    Vector3i parent = coord;
+ChunkId ChunkMath::get_parent_from_child_until(const ChunkId &coord, int target_lod) {
+    // Get the parent chunk at the target LOD by repeatedly getting the parent.
+
+    ChunkId parent = coord;
     int current_lod = -1;
 
-    while (current_lod < target_lod) {
-        parent = get_parent_from_child(parent,current_lod);
+    while (current_lod < target_lod && parent.x != 0) {
+        parent = get_parent_from_child(parent, current_lod);
     }
 
     return parent;
 }
 
-Vector3 ChunkMath::chunk_to_world(Vector3i chunk_coord,ChunkParam chunk_param = ChunkParam()) {
-    // Convert chunk coordinates to world coordinates. This is done by multiplying the chunk coordinates by the chunk size and voxel size.
+float ChunkMath::world_chunk_size(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
+    // The world size of a chunk is the LOD0 chunk size scaled by its LOD.
+    return float(get_lod_size(chunk_coord)) * chunk_param.chunk_world_dimension();
+}
 
+VoxelPos ChunkMath::chunk_min_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
+    const int64_t lod_size = get_lod_size(chunk_coord);
+    return (chunk_coord - ChunkId(lod_size, lod_size, lod_size)) * chunk_param.half_chunk_voxels();
+}
+
+VoxelPos ChunkMath::chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
+    return chunk_coord * chunk_param.half_chunk_voxels();
+}
+
+namespace {
+
+// Render position of a vertex-grid point, from the chunk's minimum corner in voxels relative to the
+// origin (exact integers, small). Double precision: the result is converted to Godot's real_t last.
+Vector3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size, const Vector3 &p_grid, const ChunkParam &p_param) {
+    const double ls = double(p_lod_size);
+    const double vs = double(p_param.voxel_size);
+    const double skirt = double(p_param.skirt_size);
+    const double nudge = double(WorldCoord::LEGACY_NUDGE_M);
     return Vector3(
-        (chunk_coord.x) * chunk_param.chunk_world_dimension()/2+WORLD_NUDGE,
-        (chunk_coord.y) * chunk_param.chunk_world_dimension()/2+WORLD_NUDGE,
-        (chunk_coord.z) * chunk_param.chunk_world_dimension()/2+WORLD_NUDGE
-    );
+        real_t((double(p_min_rel_voxel.x) + (double(p_grid.x) - skirt) * ls) * vs + nudge),
+        real_t((double(p_min_rel_voxel.y) + (double(p_grid.y) - skirt) * ls) * vs + nudge),
+        real_t((double(p_min_rel_voxel.z) + (double(p_grid.z) - skirt) * ls) * vs + nudge));
 }
 
-float _direct_transform(float inputValue,float chunk_dim,ChunkParam chunk_param){
+} // namespace
 
-    return  (inputValue-chunk_param.skirt_size)*chunk_dim/chunk_param.chunk_voxel_dimension();
-
+Vector3 ChunkMath::chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
+    const Vector3i64 rel = chunk_center_voxel(chunk_coord, chunk_param) - chunk_param.origin_voxel();
+    const double vs = double(chunk_param.voxel_size);
+    const double nudge = double(WorldCoord::LEGACY_NUDGE_M);
+    return Vector3(real_t(double(rel.x) * vs + nudge), real_t(double(rel.y) * vs + nudge), real_t(double(rel.z) * vs + nudge));
 }
 
-float _inverse_transform(float inputValue,float chunk_dim,ChunkParam chunk_param){
-
-    return inputValue*chunk_param.chunk_voxel_dimension()/chunk_dim+chunk_param.skirt_size;
-
+Vector3 ChunkMath::grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const ChunkParam &chunk_param) {
+    const Vector3i64 min_rel = chunk_min_voxel(chunk_coord, chunk_param) - chunk_param.origin_voxel();
+    return _grid_point_render(min_rel, get_lod_size(chunk_coord), grid, chunk_param);
 }
 
-Vector3 ChunkMath::vertices_to_world(Vector3i chunk_coord, Vector3 local_coord,ChunkParam chunk_param = ChunkParam()) {
-    // Convert a vertex coordinate inside a chunk to a world-space position.
-    // Uses fixed-width edge scheme with _direct_transform.
-    const float chunk_size = world_chunk_size(chunk_coord,chunk_param);
-    const Vector3 chunk_center = chunk_to_world(chunk_coord,chunk_param);
-    const Vector3 chunk_min_corner = chunk_center - Vector3(
-        chunk_size * 0.5f,
-        chunk_size * 0.5f,
-        chunk_size * 0.5f
-    );
-
-    return chunk_min_corner + Vector3(
-        _direct_transform(static_cast<float>(local_coord.x), chunk_size,chunk_param),
-        _direct_transform(static_cast<float>(local_coord.y), chunk_size,chunk_param),
-        _direct_transform(static_cast<float>(local_coord.z), chunk_size,chunk_param)
-    );
+Vector3 ChunkMath::grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &grid, const ChunkParam &chunk_param) {
+    using namespace WorldCoord;
+    // Wrapping difference of the low words: exact while the chunk is within 2^31 ids of the origin.
+    const Vector3i64 rel(
+        as_i32(lo32(chunk_lo.x) - lo32(chunk_param.origin_chunk.x)),
+        as_i32(lo32(chunk_lo.y) - lo32(chunk_param.origin_chunk.y)),
+        as_i32(lo32(chunk_lo.z) - lo32(chunk_param.origin_chunk.z)));
+    // The origin is a multiple of the root span, so the low word keeps the LOD bit.
+    const int64_t lod_size = chunk_lo.x == 0 ? 1 : int64_t(1) << ctz64(uint64_t(lo32(chunk_lo.x)));
+    const Vector3i64 min_rel = (rel - Vector3i64(lod_size, lod_size, lod_size)) * chunk_param.half_chunk_voxels();
+    return _grid_point_render(min_rel, lod_size, grid, chunk_param);
 }
 
-Vector3 ChunkMath::world_to_vertices(Vector3i chunk_coord, Vector3 world_coord,ChunkParam chunk_param = ChunkParam()) {
-    // Convert a world-space position back to the chunk's vertex-local coordinate system.
-    // Uses fixed-width edge scheme with _inverse_transform.
-    const float chunk_size = world_chunk_size(chunk_coord,chunk_param);
-    const Vector3 chunk_center = chunk_to_world(chunk_coord,chunk_param);
-    const Vector3 chunk_min_corner = chunk_center - Vector3(
-        chunk_size * 0.5f,
-        chunk_size * 0.5f,
-        chunk_size * 0.5f
-    );
-    
-    Vector3 local_offset = world_coord - chunk_min_corner;
-    return Vector3(
-        _inverse_transform(local_offset.x, chunk_size,chunk_param),
-        _inverse_transform(local_offset.y, chunk_size,chunk_param),
-        _inverse_transform(local_offset.z, chunk_size,chunk_param)
-    );
+ChunkId ChunkMath::chunk_at_render(const Vector3 &render_pos, const ChunkParam &chunk_param) {
+    // Cells of one LOD0 chunk, relative to the origin; LOD0 chunk centers are odd: ..., -3, -1, 1, 3, ...
+    const double dim = double(chunk_param.chunk_world_dimension());
+    auto cell = [dim](real_t p_v) {
+        const double c = std::floor(double(p_v) / dim);
+        return int64_t(CLAMP(c, -1e15, 1e15));
+    };
+    return chunk_param.origin_chunk + ChunkId(cell(render_pos.x) * 2 + 1, cell(render_pos.y) * 2 + 1, cell(render_pos.z) * 2 + 1);
 }
 
-float ChunkMath::world_chunk_size(Vector3i chunk_coord,ChunkParam chunk_param = ChunkParam()) {
-    // Get the world size of the chunk at the given coordinate. The world size is determined by the chunk size multiplied by the LOD.
-    int lod = ChunkMath::get_lod(chunk_coord);
-    return (1 << lod) * chunk_param.chunk_world_dimension(); 
+// The float operations below mirror gpu_frame.hpp one by one, in float32, as separate statements.
+// (x86-64 without -mfma never contracts them into FMAs; the GPU side uses `precise`.)
+
+WorldPos ChunkMath::sample_pos(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param) {
+    const float lod_size = float(get_lod_size(chunk_coord));
+    const float skirt = float(chunk_param.skirt_size);
+    const VoxelPos anchor = chunk_min_voxel(chunk_coord, chunk_param);
+    auto axis = [lod_size, skirt](float p_grid, int64_t p_anchor, float &r_frac) {
+        const float d = p_grid - skirt;
+        const float off = d * lod_size;
+        const float fl = std::floor(off);
+        r_frac = off - fl;
+        return p_anchor + int64_t(fl);
+    };
+    WorldPos pos;
+    pos.voxel.x = axis(grid.x, anchor.x, pos.frac.x);
+    pos.voxel.y = axis(grid.y, anchor.y, pos.frac.y);
+    pos.voxel.z = axis(grid.z, anchor.z, pos.frac.z);
+    return pos;
 }
 
-float ChunkMath::world_chunk_spherical_radius(Vector3i chunk_coord,ChunkParam chunk_param = ChunkParam()) {
-    // Get the world spherical radius of the chunk at the given coordinate. This is used for distance calculations when determining which chunks to load.
-    // The spherical radius is the distance from the center of the chunk to any of its corners, which can be calculated using the Pythagorean theorem in 3D.
-
-    float half_size = world_chunk_size(chunk_coord,chunk_param) * 0.5f;
-    return sqrt(half_size * half_size * 3); // sqrt(x^2 + y^2 + z^2) where x=y=z=half_size
+Float3 ChunkMath::legacy_rel_voxels(const WorldPos &pos, const ChunkParam &chunk_param) {
+    const VoxelPos d = pos.voxel - chunk_param.origin_voxel();
+    auto axis = [](int64_t p_d, float p_frac) {
+        // p_d = s + excess * 2^32 with s the signed low word, like the GPU's low/high split.
+        const int32_t s = WorldCoord::as_i32(WorldCoord::lo32(p_d));
+        const int64_t excess = (p_d - s) / (int64_t(1) << 32);
+        const float a = float(s);
+        const float b = float(excess) * 4294967296.0f;
+        const float ab = a + b;
+        return ab + p_frac;
+    };
+    return Float3{ axis(d.x, pos.frac.x), axis(d.y, pos.frac.y), axis(d.z, pos.frac.z) };
 }
 
-Vector3i ChunkMath::world_to_chunk(Vector3 world_coord,ChunkParam chunk_param = ChunkParam()) {
-    // Convert world coordinates to the nearest LOD0 chunk coordinates.
-
-    const int32_t cell_x = static_cast<int32_t>(Math::floor(world_coord.x / chunk_param.chunk_world_dimension()));
-    const int32_t cell_y = static_cast<int32_t>(Math::floor(world_coord.y / chunk_param.chunk_world_dimension()));
-    const int32_t cell_z = static_cast<int32_t>(Math::floor(world_coord.z / chunk_param.chunk_world_dimension()));
-
-    // LOD0 chunk centers are odd chunk coordinates: ..., -3, -1, 1, 3, ...
-    return Vector3i(
-        cell_x * 2 + 1,
-        cell_y * 2 + 1,
-        cell_z * 2 + 1
-    );
-}
-
-bool ChunkMath::vertices_out_of_bound(Vector3 vertices_coord,ChunkParam chunk_param = ChunkParam()) {
-    // Check if vertices coordinate is out of bounds in any dimension.
-    // Valid range is [0, CHUNK_SIZE] in each dimension.
-    
-    return vertices_coord.x < 0.0f || vertices_coord.x > chunk_param.chunk_world_dimension() ||
-           vertices_coord.y < 0.0f || vertices_coord.y > chunk_param.chunk_world_dimension() ||
-           vertices_coord.z < 0.0f || vertices_coord.z > chunk_param.chunk_world_dimension();
-}
-
-int32_t ChunkMath::get_lod_size(Vector3i coord){
-    return (1<<get_lod(coord));
+Vector3 ChunkMath::legacy_metres(const WorldPos &pos, const ChunkParam &chunk_param) {
+    const Float3 r = legacy_rel_voxels(pos, chunk_param);
+    auto axis = [&chunk_param](float p_r) {
+        const float m = p_r * chunk_param.voxel_size;
+        return m + WorldCoord::LEGACY_NUDGE_M;
+    };
+    return Vector3(axis(r.x), axis(r.y), axis(r.z));
 }
