@@ -27,7 +27,7 @@ float chunk_world_dimension(ChunkParam param) {
 
 )glsl";
 
-inline constexpr const char GLSL_HELPER_FUNCTION[] =  R"glsl(
+inline constexpr const char GLSL_HELPER_FUNCTION[] = R"glsl(
 
 // ---------------------------------------------------------
 // Bitwise & LOD functions
@@ -154,7 +154,6 @@ vec4 sdf_softmax(vec4 a, vec4 b, float intensity) {
 }
 
 )glsl";
-
 
 inline constexpr const char GLSL_SKIRT_SDF[] = R"glsl(
 

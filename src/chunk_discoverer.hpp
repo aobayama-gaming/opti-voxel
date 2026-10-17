@@ -1,24 +1,23 @@
 #pragma once
 
-#include <godot_cpp/classes/node.hpp>
-#include <godot_cpp/classes/thread.hpp>
-#include <godot_cpp/classes/mutex.hpp>
-#include <godot_cpp/classes/semaphore.hpp>
 #include "chunk_math.hpp"
+#include "debug_log.hpp"
 #include "lod_structures.hpp"
 #include "sdf_base.hpp"
-#include "debug_log.hpp"
+#include <godot_cpp/classes/mutex.hpp>
+#include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/semaphore.hpp>
+#include <godot_cpp/classes/thread.hpp>
 
 #include <memory>
 
 using namespace godot;
 
 class ChunkDiscoverer : public Object {
-
 public:
     // How a node of the LOD tree is dropped as holding no surface.
     enum CullMode {
-        CULL_NONE = 0,   // keep everything (reference set of the discovery audit)
+        CULL_NONE = 0, // keep everything (reference set of the discovery audit)
         CULL_LEGACY = 1, // |SDF| at the 8 corners > 2 chunk sizes
     };
 
@@ -47,13 +46,12 @@ public:
 private:
     Ref<Thread> worker;
 
-
     Ref<Semaphore> semaphore;
     Ref<Mutex> mutex;
     bool exit_thread = false;
 
     // non thread safe variable
-    ChunkParam chunk_param=ChunkParam();
+    ChunkParam chunk_param = ChunkParam();
     PackedFloat32Array lod_distances;
     CullMode cull_mode = CULL_LEGACY;
     bool use_cache = true;
@@ -67,7 +65,7 @@ private:
     bool scanned_chunks_dirty = false;
     struct Stats {
         TimingStat scan;
-        TimingStat cull;    // part of `scan` spent in the cull test
+        TimingStat cull; // part of `scan` spent in the cull test
         TimingStat publish; // handing the set over (under the mutex)
         TimingStat latency; // camera chunk change -> scan published
         int64_t scans_skipped_same_chunk = 0;
@@ -84,7 +82,7 @@ private:
         int64_t verify_mismatches_total = 0;
     } stats;
 
-    SDFBase * sdf;
+    SDFBase *sdf;
 
     bool _chunk_is_outside_sdf(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const;
     bool _timed_cull(const ChunkId &chunk_pos, CullMode p_mode, ScanCounters &r_counters) const;
@@ -92,7 +90,6 @@ private:
             LODHashSet &scanned_chunks, ScanCounters &r_counters, CullCache *p_cache) const;
 
 public:
-
     void start();
     void stop();
 
@@ -111,9 +108,8 @@ public:
 
     // Must be called before start().
     void set_config(
-        ChunkParam &p_chunk_param,
-        SDFBase * p_sdf
-    );
+            ChunkParam &p_chunk_param,
+            SDFBase *p_sdf);
     void set_cull_mode(CullMode p_mode) { cull_mode = p_mode; }
     void set_cache(bool p_enable, bool p_verify) {
         use_cache = p_enable;
@@ -123,9 +119,8 @@ public:
     void discovery_loop();
 
     void setup_lod(
-        int lod_levels = 4,
-        float target_pixel_error = 10.0f, 
-        float viewport_height = 1080.0f,
-        float fov_rad = 75.0f * (3.14159265f / 180.0f));
-
+            int lod_levels = 4,
+            float target_pixel_error = 10.0f,
+            float viewport_height = 1080.0f,
+            float fov_rad = 75.0f * (3.14159265f / 180.0f));
 };

@@ -261,11 +261,11 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 
     const uint32_t g = chunk_param.chunk_size / 8;
     const uint32_t groups[5][3] = {
-        { g, g, g * p_count },     // sdf
+        { g, g, g * p_count }, // sdf
         { g, 3 * g, g * p_count }, // edges (y spans the 3 axes)
-        { g, g, g * p_count },     // vertices
-        { 1, 1, 1 },               // reserve
-        { g, g, g * p_count },     // emit
+        { g, g, g * p_count }, // vertices
+        { 1, 1, 1 }, // reserve
+        { g, g, g * p_count }, // emit
     };
 
     const String prefix = "vx" + String::num_int64(p_batch_id);

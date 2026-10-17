@@ -1,22 +1,21 @@
 #pragma once
 
-#include <godot_cpp/core/object.hpp>
 #include "chunk_math.hpp"
+#include <godot_cpp/core/object.hpp>
 
-#include <godot_cpp/classes/thread.hpp>
 #include <godot_cpp/classes/mutex.hpp>
 #include <godot_cpp/classes/semaphore.hpp>
+#include <godot_cpp/classes/thread.hpp>
 
-#include <godot_cpp/classes/rendering_server.hpp>
-#include"sdf_base.hpp"
-#include "lod_structures.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
+#include "lod_structures.hpp"
+#include "sdf_base.hpp"
+#include <godot_cpp/classes/rendering_server.hpp>
 
 using namespace godot;
 
-struct UnpackChunk{
-
+struct UnpackChunk {
     ChunkId chunk_id;
 
     PackedVector3Array output_points;
@@ -26,29 +25,26 @@ struct UnpackChunk{
     uint32_t point_offset = 0; // used to fill the array
     uint32_t index_count = 0; // indices actually written by the CPU triangulation
 
-    HashMap<uint32_t,uint32_t> index_storage;
+    HashMap<uint32_t, uint32_t> index_storage;
 
     PackedInt32Array quad_masks;
 
     RID mesh_rid;
     RID instance_rid;
 
-    void resize(int point_number, int triangles_number){
+    void resize(int point_number, int triangles_number) {
         output_points.resize(point_number);
         output_normals.resize(point_number);
         quad_masks.resize(point_number);
 
-        output_triangles.resize(triangles_number*3);
+        output_triangles.resize(triangles_number * 3);
     }
-
 };
 
-class GPUMesher : public Object{
-
-    private :
-    
+class GPUMesher : public Object {
+private:
     // Constant between run
-    SDFBase* sdf;
+    SDFBase *sdf;
     ChunkParam chunk_param;
 
     //worker
@@ -65,7 +61,7 @@ class GPUMesher : public Object{
 
     // Stats (written by the worker under mutex, read by get_stats()).
     struct Stats {
-        TimingStat batch_total;   // whole worker iteration
+        TimingStat batch_total; // whole worker iteration
         TimingStat gpu_submit_sync;
         TimingStat points_fetch;
         TimingStat points_process;
@@ -80,7 +76,7 @@ class GPUMesher : public Object{
 
     uint32_t chunk_batch_number;
 
-    //input 
+    //input
     PackedByteArray input_chunk_id;
 
     // GPU stuff
@@ -95,11 +91,10 @@ class GPUMesher : public Object{
     RID buffer_sdf_sample;
     RID buffer_edge_intersect;
 
-    RID buffer_output_point;    
+    RID buffer_output_point;
     RID buffer_chunk_param;
     // Uniform set
 
-    
     RID uniform_set;
 
     //no need this now we use all at once.
@@ -118,7 +113,6 @@ class GPUMesher : public Object{
     RID pipeline_first_pass;
     RID pipeline_second_pass;
     RID pipeline_third_pass;
-
 
     std::vector<LODHashSet *> chunk_queue;
 
@@ -144,9 +138,8 @@ class GPUMesher : public Object{
     std::vector<ChunkOutput> out_queue;
     std::vector<ChunkOutput> del_queue;
 
-    public : 
-    
-    void initialize(SDFBase* p_sdf,ChunkParam p_chunk_param, uint32_t p_chunk_batch_number,int lod_numbers, RID p_scenario);
+public:
+    void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, uint32_t p_chunk_batch_number, int lod_numbers, RID p_scenario);
 
     void process_queue();
 
@@ -164,9 +157,6 @@ class GPUMesher : public Object{
     void set_trim_indices(bool p_trim) { trim_indices = p_trim; }
 
     Dictionary get_stats();
-
-    
-
 };
 
 /*

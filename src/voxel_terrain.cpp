@@ -1,16 +1,12 @@
 #include "voxel_terrain.hpp"
-#include <godot_cpp/classes/world3d.hpp>
-#include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-
-
 void VoxelTerrain::_destroy_chunk() {
-
     for (ChunkHashMap::Iterator it = visual_mesh_data.to_destroy_chunk.begin();
-        it != visual_mesh_data.to_destroy_chunk.end();) {
-
+            it != visual_mesh_data.to_destroy_chunk.end();) {
         const ChunkId chunk_pos = it->key;
         ChunkOutput output = it->value;
 
@@ -20,12 +16,7 @@ void VoxelTerrain::_destroy_chunk() {
         visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
 
         it = visual_mesh_data.to_destroy_chunk.begin();
-
-
     }
-
-
-
 }
 
 void VoxelTerrain::_bind_methods() {
@@ -342,8 +333,7 @@ int VoxelTerrain::get_log_level() const {
     return DebugLog::level.load();
 }
 
-void VoxelTerrain::_ready(){
-
+void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
 
@@ -370,16 +360,15 @@ void VoxelTerrain::_ready(){
 
     visual_mesh_data.set_max_lod(lod_numbers);
 
-    if(Engine::get_singleton()->is_editor_hint()) {
+    if (Engine::get_singleton()->is_editor_hint()) {
         camera = EditorInterface::get_singleton()->get_editor_viewport_3d()->get_camera_3d();
-    }
-    else {
+    } else {
         camera = get_viewport()->get_camera_3d();
     }
 
     chunk_discoverer = memnew(ChunkDiscoverer);
 
-    chunk_discoverer->set_config(chunk_param,sdf);
+    chunk_discoverer->set_config(chunk_param, sdf);
     chunk_discoverer->set_cull_mode((ChunkDiscoverer::CullMode)discovery_cull_mode);
     chunk_discoverer->set_cache(discovery_cache, discovery_verify);
 
@@ -397,11 +386,10 @@ void VoxelTerrain::_ready(){
     }
 
     chunk_discoverer->setup_lod(
-        lod_numbers,
-        lod_pixel_error,
-        viewport_height,
-        fov_rad
-    );
+            lod_numbers,
+            lod_pixel_error,
+            viewport_height,
+            fov_rad);
 
     chunk_discoverer->start();
 
@@ -415,12 +403,11 @@ void VoxelTerrain::_ready(){
         gpu_mesher = memnew(GPUMesher);
 
         gpu_mesher->initialize(
-            sdf,
-            chunk_param,
-            legacy_batch_size, // chunk_batch
-            lod_numbers,
-            scenario
-        );
+                sdf,
+                chunk_param,
+                legacy_batch_size, // chunk_batch
+                lod_numbers,
+                scenario);
         gpu_mesher->set_trim_indices(legacy_trim_indices);
     }
 
@@ -429,8 +416,7 @@ void VoxelTerrain::_ready(){
     VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
 }
 
-void VoxelTerrain::_process(double delta){
-
+void VoxelTerrain::_process(double delta) {
     if (!started) {
         return;
     }
@@ -444,7 +430,7 @@ void VoxelTerrain::_process(double delta){
 
     bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_camera_chunk);
 
-    if(dirty_scan){
+    if (dirty_scan) {
         scan_received = true;
         destroy_dirty = true;
 
@@ -454,7 +440,6 @@ void VoxelTerrain::_process(double delta){
         } else {
             gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
         }
-
     }
     process_stats.scan_ingest.add(now_usec() - t0);
 

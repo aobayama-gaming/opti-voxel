@@ -3,9 +3,14 @@ root = true
 [*]
 charset = utf-8
 end_of_line = lf
-indent_style = tab
+indent_style = space
+indent_size = 4
 insert_final_newline = true
 trim_trailing_whitespace = true
+
+# Godot writes its own files with tabs.
+[*.{gd,tscn,tres,gdshader,godot,import}]
+indent_style = tab
 
 [{*.gradle,AndroidManifest.xml}]
 indent_style = space

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "sdf_base.hpp"
-#include <cmath>
 #include "noise.hpp"
+#include "sdf_base.hpp"
 #include "sdf_test_rig.hpp"
+#include <cmath>
 
 // Placeholder terrain, written in metres (see SDFMetreBridge). The commented-out variants below use
 // the same convention.
@@ -38,19 +38,18 @@ public:
 
     SDFDummy() = default;
     ~SDFDummy() override = default;
-    
+
     // //sphere paved in X and Z
     // float evaluate(const Vector3 &p_world_pos) const override {
     //     float period = 150.0f;
     //     float wrap_x = p_world_pos.x - period * std::floor(p_world_pos.x / period + 0.5f);
     //     float wrap_z = p_world_pos.z - period * std::floor(p_world_pos.z / period + 0.5f);
     //     Vector3 wrapped_pos(wrap_x, p_world_pos.y, wrap_z);
-        
+
     //     Vector3 center(0.0f, 350.0f, 0.0f);
     //     float radius = 50.0f;
     //     return wrapped_pos.distance_to(center) - radius;
     // }
-
 
     // //GLSL implementation
     // String get_glsl_code() const override {
@@ -60,7 +59,7 @@ public:
     //         float wrap_x = pos.x - period * floor(pos.x / period + 0.5);
     //         float wrap_z = pos.z - period * floor(pos.z / period + 0.5);
     //         vec3 wrapped_pos = vec3(wrap_x, pos.y, wrap_z);
-            
+
     //         vec3 center = vec3(0.0, 350.0, 0.0);
     //         float radius = 50.0;
     //         vec3 d = wrapped_pos - center;
@@ -71,12 +70,10 @@ public:
     //     )";
     // }
 
-    
     // //plane
     // float evaluate(const Vector3 &p_world_pos) const override {
     //     return p_world_pos.y - 350.0f;
     // }
-
 
     // //GLSL implementation
     // String get_glsl_code() const override {
@@ -94,8 +91,8 @@ public:
 
     float evaluate_metres(const Vector3 &p_world_pos) const override {
         // Mountain with sparse large caverns
-        static const SimplexNoise::NoiseParam mountain_param{0.0035f, 1.0f, 2.0f, 0.5f};
-        static const SimplexNoise::NoiseParam cave_blob_param{0.0080f, 1.0f, 2.0f, 0.5f};  // Low freq for big blobs
+        static const SimplexNoise::NoiseParam mountain_param{ 0.0035f, 1.0f, 2.0f, 0.5f };
+        static const SimplexNoise::NoiseParam cave_blob_param{ 0.0080f, 1.0f, 2.0f, 0.5f }; // Low freq for big blobs
 
         const float x = p_world_pos.x;
         const float y = p_world_pos.y;
@@ -113,12 +110,12 @@ public:
 
         // Depth from surface (positive = below terrain)
         const float depth = mountain_height - y;
-        
+
         // Only carve caves in blob regions and when deep enough
-        const float blob_mask = (cave_blob + 0.3f) * 0.5f;  // Shift and scale to 0-0.8 range
+        const float blob_mask = (cave_blob + 0.3f) * 0.5f; // Shift and scale to 0-0.8 range
         const float depth_fade = depth / 40.0f;
         const float cave_threshold = 0.5f + blob_mask * 0.4f + (1.0f - depth_fade) * 0.1f;
-        
+
         // Simple cave field: just the blob
         const float cave_sdf = cave_threshold - cave_blob;
 
@@ -207,7 +204,10 @@ public:
         if (zero_pillar) {
             result = "sdf_min(" + result + ", zero_pillar_sdf(pos))";
             // The top as raw float bits: the GPU compares against the exact same float.
-            union { float f; uint32_t u; } bits{ zero_pillar_top };
+            union {
+                float f;
+                uint32_t u;
+            } bits{ zero_pillar_top };
             code = String(R"glsl(
         vec4 zero_pillar_sdf(vec3 pos) {
             vec4 d = vec4(0.0, 1.0, 0.0, pos.y - uintBitsToFloat(TOPu));
@@ -217,8 +217,12 @@ public:
             if (dz > d.w) d = vec4(0.0, 0.0, sign(pos.z - (PZ)), dz);
             return d;
         }
-        )glsl").replace("TOP", String::num_uint64(bits.u)).replace("PX", String::num(ZERO_PILLAR_X, 9))
-                    .replace("PZ", String::num(ZERO_PILLAR_Z, 9)).replace("HALF", String::num(ZERO_PILLAR_HALF, 9)) + code;
+        )glsl")
+                            .replace("TOP", String::num_uint64(bits.u))
+                            .replace("PX", String::num(ZERO_PILLAR_X, 9))
+                            .replace("PZ", String::num(ZERO_PILLAR_Z, 9))
+                            .replace("HALF", String::num(ZERO_PILLAR_HALF, 9)) +
+                    code;
         }
         return code.replace("return sdf_softmax(terrain_val, carve_val, blend_intensity);", "return " + result + ";");
     }
@@ -265,7 +269,7 @@ public:
     //     // Union: keep either terrain or repeated cubes as solid.
     //     return MAX(terrain, repeated_cube);
     // }
-    
+
     // Sinusoidal blob idea:
     // float evaluate(const Vector3 &p_world_pos) const override {
     //     const float r = p_world_pos.length();
@@ -276,7 +280,7 @@ public:
     // }
 
     // Periodic sphere SDF using modulo-like coordinate wrapping.
-    
+
     // float evaluate(const Vector3 &p_world_pos) const override {
     //     const float period = 3.0f;
     //     const float radius = 0.5f;
@@ -295,10 +299,7 @@ public:
     //     return -q.length() + radius;
     // }
 
-
-
-
-// V1 Mountain 
+    // V1 Mountain
 
     //float evaluate(const Vector3 &p_world_pos) const override {
     //     // 2D mountain shape (XZ), with ridged + fBm detail.
@@ -421,20 +422,19 @@ public:
 
     //         // Get height noise with gradients
     //         vec4 height_noise = fractal(1, mountain_param, vec3(pos.x, 0.0, pos.z));
-            
+
     //         // Height = base + noise * amplitude
     //         float base_height = 300.0;
     //         float mountain_height = base_height + height_noise.w * 50.0;
-            
+
     //         // SDF = y - height(x,z)
     //         // Gradient: (−∂height/∂x, 1, −∂height/∂z)
     //         vec3 grad_height = height_noise.xyz * 50.0;
     //         vec3 sdf_gradient = vec3(-grad_height.x, 1.0, -grad_height.z);
     //         float sdf_value = pos.y - mountain_height;
-            
+
     //         return vec4(sdf_gradient, sdf_value);
     //     }
     //     )glsl";
     // }
-
 };

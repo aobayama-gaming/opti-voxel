@@ -14,13 +14,13 @@ inline std::atomic<int> level{ 0 };
 // Leak accounting for chunk render resources (mesh/instance pairs).
 inline std::atomic<int64_t> chunk_rids_created{ 0 };
 inline std::atomic<int64_t> chunk_rids_freed{ 0 };
-}
+} //namespace DebugLog
 
-#define VLOG(p_level, ...)                              \
-    do {                                                \
-        if (DebugLog::level.load() >= (p_level)) {      \
-            UtilityFunctions::print(__VA_ARGS__);       \
-        }                                               \
+#define VLOG(p_level, ...)                         \
+    do {                                           \
+        if (DebugLog::level.load() >= (p_level)) { \
+            UtilityFunctions::print(__VA_ARGS__);  \
+        }                                          \
     } while (0)
 
 inline uint64_t now_usec() {

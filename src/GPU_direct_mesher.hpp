@@ -38,7 +38,6 @@ using namespace godot;
 // frame. The CPU knows every chunk's range, so it rewrites the ChunkOutputs in place: no readback.
 // Spare free pages are then freed, so VRAM follows the pages in use.
 class GPUDirectMesher : public Object, public ChunkReleaser {
-
 public:
     struct Settings {
         uint32_t batch_size = 128;
@@ -50,7 +49,7 @@ public:
         // A re-packed page is never wider than this many of its smallest chunks, so merging
         // sparse pages from distant places, or distant LOD shells, cannot defeat frustum culling.
         float compact_max_extent = 8.0f;
-        uint32_t spare_pages = 64;            // free pages kept allocated (4 in-flight batches' worth)
+        uint32_t spare_pages = 64; // free pages kept allocated (4 in-flight batches' worth)
     };
 
     void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings);
@@ -102,11 +101,11 @@ private:
     struct PageState {
         uint32_t live_quads = 0;
         uint32_t live_groups = 0; // groups covered by live chunks
-        uint32_t groups = 0;      // groups drawn (the page's indirect instance count)
+        uint32_t groups = 0; // groups drawn (the page's indirect instance count)
         std::vector<PageChunk> chunks; // live chunks with geometry in this page
         AABB bounds;
         bool bounds_dirty = false; // a chunk died: recompute `bounds` at the next process_queue
-        bool settled = false;      // compaction found nothing to gain; cleared when a chunk dies
+        bool settled = false; // compaction found nothing to gain; cleared when a chunk dies
     };
 
     SDFBase *sdf = nullptr;
@@ -191,19 +190,19 @@ private:
         uint64_t kills = 0;
         uint64_t pages_returned_unused = 0;
         uint64_t compact_rounds = 0;
-        uint64_t compact_skipped = 0;  // windows with nothing to gain (pages marked settled)
-        uint64_t pages_compacted = 0;  // source pages re-packed
+        uint64_t compact_skipped = 0; // windows with nothing to gain (pages marked settled)
+        uint64_t pages_compacted = 0; // source pages re-packed
         uint64_t pages_compacted_into = 0;
         uint64_t chunks_moved = 0;
-        uint64_t compact_copies = 0;   // texture copies (runs of contiguous chunks are merged)
-        TimingStat compact_cpu;        // main thread: compact when it re-packs
-        TimingStat dispatch_cpu;    // main thread: process_queue when it dispatches
-        TimingStat collect_cpu;     // main thread: get_results when it consumes a batch
-        TimingStat rt_record_cpu;   // render thread: recording one batch
+        uint64_t compact_copies = 0; // texture copies (runs of contiguous chunks are merged)
+        TimingStat compact_cpu; // main thread: compact when it re-packs
+        TimingStat dispatch_cpu; // main thread: process_queue when it dispatches
+        TimingStat collect_cpu; // main thread: get_results when it consumes a batch
+        TimingStat rt_record_cpu; // render thread: recording one batch
         uint64_t readback_frames_total = 0; // frames between dispatch and directory arrival
         uint64_t readback_frames_max = 0;
-        TimingStat gpu_compute;     // GPU time of passes 1-5 (from timestamps)
-        TimingStat gpu_copy;        // GPU time of the page copies
+        TimingStat gpu_compute; // GPU time of passes 1-5 (from timestamps)
+        TimingStat gpu_copy; // GPU time of the page copies
         TimingStat gpu_pass[5];
         uint64_t live_quads = 0;
     } stats;

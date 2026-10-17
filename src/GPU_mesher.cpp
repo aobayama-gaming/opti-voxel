@@ -1,17 +1,17 @@
 /*
  * TODO (Optimization): Replace slow uniform integer division operations.
- * Currently, compute shaders use integer division and modulo (`/` and `%`) 
- * with a uniform variable (`chunk_param.chunk_size`) to calculate batch offsets 
- * and flatten 3D indices (e.g., `gl_GlobalInvocationID.y / chunk_param.chunk_size`). 
+ * Currently, compute shaders use integer division and modulo (`/` and `%`)
+ * with a uniform variable (`chunk_param.chunk_size`) to calculate batch offsets
+ * and flatten 3D indices (e.g., `gl_GlobalInvocationID.y / chunk_param.chunk_size`).
  * GPU hardware lacks fast integer division, making uniform division quite slow.
  *
  * Once the meshing logic works perfectly, implement one of these fixes:
- * 1. Compile-Time Injection (Best): Since shaders are compiled dynamically in 
- *    `compile_dynamic_shader()`, inject the chunk size into the shader string as 
- *    a `#define` macro. The GLSL compiler will then automatically optimize the 
+ * 1. Compile-Time Injection (Best): Since shaders are compiled dynamically in
+ *    `compile_dynamic_shader()`, inject the chunk size into the shader string as
+ *    a `#define` macro. The GLSL compiler will then automatically optimize the
  *    math into 1-cycle instructions.
- * 2. Power-of-Two Bitshifts: If `chunk_size` is guaranteed to be a power of two, 
- *    pass shift and mask values as uniforms and replace divisions with bitwise 
+ * 2. Power-of-Two Bitshifts: If `chunk_size` is guaranteed to be a power of two,
+ *    pass shift and mask values as uniforms and replace divisions with bitwise
  *    shifts (`>>`) and modulos with bitwise ANDs (`&`).
  */
 
@@ -23,20 +23,17 @@
 
 #include "godot_cpp/templates/hash_map.hpp"
 
-#include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/array_mesh.hpp>
+#include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/surface_tool.hpp>
 
-#include "noise.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
+#include "noise.hpp"
 
 //debug only
 #include <godot_cpp/classes/scene_tree.hpp>
 #include <godot_cpp/classes/time.hpp>
-
-
-
 
 static constexpr const char GLSL_BUFFER_BINDING[] = R"glsl(
 layout(set = 0, binding = 0, std430) restrict buffer AtomicCounter {
@@ -78,7 +75,6 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
 )glsl";
 
 RID GPUMesher::compile_dynamic_shader(const String &algorithm_pass) {
-    
     // 1. Define your base Compute Shader using a C++ Raw String
     String shader = R"glsl(#version 450
 
@@ -118,16 +114,16 @@ void main() {
 
     // 2. Inject the dynamic code
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    shader = shader.replace("/*GLSL_BUFFER_BINDING*/",GLSL_BUFFER_BINDING);
+    shader = shader.replace("/*GLSL_BUFFER_BINDING*/", GLSL_BUFFER_BINDING);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + String(GLSL_NOISE) + GPUFrame::glsl_functions());
     shader = shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF);
-    shader = shader.replace("/*GLSL_TERRAIN_SDF*/",sdf->get_glsl_code());
+    shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_ALGORITHM_PASS*/", algorithm_pass);
 
     // 3. Create a Shader Source object
     Ref<RDShaderSource> shader_source;
     shader_source.instantiate();
-    
+
     // Tell Godot this is a Compute Shader
     shader_source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, shader);
 
@@ -141,13 +137,13 @@ void main() {
         UtilityFunctions::printerr("ERROR MESSAGE:\n", error_msg);
         UtilityFunctions::printerr("-------------------------------------");
         UtilityFunctions::printerr("SHADER SOURCE CODE:\n");
-        
+
         // Print shader code with line numbers
         PackedStringArray lines = shader.split("\n");
         for (int i = 0; i < lines.size(); i++) {
             UtilityFunctions::printerr(String::num_int64(i + 1) + " | " + lines[i]);
         }
-        
+
         UtilityFunctions::printerr("-------------------------------------");
 
         return RID(); // Return invalid RID
@@ -155,7 +151,7 @@ void main() {
 
     // 6. Create the final shader RID
     RID shader_rid = rd->shader_create_from_spirv(spirv);
-    
+
     return shader_rid;
 }
 
@@ -311,13 +307,11 @@ if (active_edge_count > 0) {
 )glsl";
 
 void GPUMesher::initialize(
-    SDFBase* p_sdf,
-    ChunkParam p_chunk_param, 
-    uint32_t p_chunk_batch_number,
-    int lod_numbers,
-    RID p_scenario
-){
-
+        SDFBase *p_sdf,
+        ChunkParam p_chunk_param,
+        uint32_t p_chunk_batch_number,
+        int lod_numbers,
+        RID p_scenario) {
     sdf = p_sdf;
     chunk_param = p_chunk_param;
     chunk_batch_number = p_chunk_batch_number;
@@ -329,18 +323,16 @@ void GPUMesher::initialize(
     mutex.instantiate();
     semaphore.instantiate();
 
-    worker->start(callable_mp(this,&GPUMesher::_execute_whole_pipeline),Thread::PRIORITY_NORMAL);
+    worker->start(callable_mp(this, &GPUMesher::_execute_whole_pipeline), Thread::PRIORITY_NORMAL);
 
     chunk_queue.resize(lod_numbers, nullptr);
 
     for (int i = 0; i < lod_numbers; ++i) {
         chunk_queue[i] = memnew(LODHashSet);
     }
-
 };
 
-void GPUMesher::_initialize_gpu_compute(){
-
+void GPUMesher::_initialize_gpu_compute() {
     //alocate memory
 
     rd = RenderingServer::get_singleton()->create_local_rendering_device();
@@ -349,22 +341,22 @@ void GPUMesher::_initialize_gpu_compute(){
 
     buffer_input_chunk_id = rd->storage_buffer_create(chunk_batch_number * GPUFrame::CHUNK_INPUT_BYTES, empty_data);
 
-    buffer_atomic_counter = rd->storage_buffer_create(2*(1+chunk_batch_number)*sizeof(uint32_t),empty_data);
-    
-    buffer_sdf_sample = rd->storage_buffer_create(chunk_batch_number*chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(Vector4),empty_data);
+    buffer_atomic_counter = rd->storage_buffer_create(2 * (1 + chunk_batch_number) * sizeof(uint32_t), empty_data);
 
-    buffer_edge_intersect =rd->storage_buffer_create(chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(float_t)*3*chunk_batch_number,empty_data);
+    buffer_sdf_sample = rd->storage_buffer_create(chunk_batch_number * chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(Vector4), empty_data);
+
+    buffer_edge_intersect = rd->storage_buffer_create(chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(float_t) * 3 * chunk_batch_number, empty_data);
     //to simplify debug erase the optimise allocation
-    
+
     /*
     Compressed position uint8 x 3
-    Compressed normal uint8 x 3 
+    Compressed normal uint8 x 3
     Address of point uint32
     Address of chunk + quad 3bit mask 16bit
-    
+
     Total of 3 uint32_t
     */
-    buffer_output_point = rd->storage_buffer_create(4*chunk_param.chunk_size*chunk_param.chunk_size*chunk_param.chunk_size*sizeof(uint32_t)*chunk_batch_number,empty_data);
+    buffer_output_point = rd->storage_buffer_create(4 * chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(uint32_t) * chunk_batch_number, empty_data);
 
     // Injection of Chunk Param in the uniform
     // Match the std140 layout for ChunkParam: 4 x 4-byte fields = 16 bytes
@@ -372,7 +364,7 @@ void GPUMesher::_initialize_gpu_compute(){
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     // Helper lambda to keep code clean
-    auto create_storage_uniform =[](int binding, RID buffer,RenderingDevice::UniformType type = RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER) -> Ref<RDUniform> {
+    auto create_storage_uniform = [](int binding, RID buffer, RenderingDevice::UniformType type = RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER) -> Ref<RDUniform> {
         Ref<RDUniform> uniform;
         uniform.instantiate();
         uniform->set_uniform_type(type);
@@ -383,15 +375,14 @@ void GPUMesher::_initialize_gpu_compute(){
 
     TypedArray<RDUniform> uniforms;
     // 1. Create the Uniforms mapping to GLSL binding points (0 to 6)
-    
+
     uniforms.push_back(create_storage_uniform(0, buffer_atomic_counter));
     uniforms.push_back(create_storage_uniform(1, buffer_input_chunk_id));
     uniforms.push_back(create_storage_uniform(2, buffer_sdf_sample));
     uniforms.push_back(create_storage_uniform(3, buffer_edge_intersect));
     uniforms.push_back(create_storage_uniform(4, buffer_output_point));
     uniforms.push_back(create_storage_uniform(5, buffer_chunk_param, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
-    
-    
+
     // 2. Create the Uniform Set (CACHE THIS RID!)
     // 'shader_rid' is the RID returned when you compiled your GLSL.
     // '0' is the layout(set = 0) index.
@@ -407,46 +398,43 @@ void GPUMesher::_initialize_gpu_compute(){
     pipeline_third_pass = rd->compute_pipeline_create(shader_third_pass);
 
     //since we assume all uniform for all the pass we do this
-    uniform_set = rd->uniform_set_create(uniforms,shader_first_pass,0);
-
+    uniform_set = rd->uniform_set_create(uniforms, shader_first_pass, 0);
 }
 
-void GPUMesher::_execute_whole_pipeline(){
-
+void GPUMesher::_execute_whole_pipeline() {
     _initialize_gpu_compute();
     VLOG(1, "GPUMesher : Worker started");
 
-    while(true){
-    
-    semaphore->wait();
-    //UtilityFunctions::print("GPUMesher : pipeline started");
-    mutex->lock();
-    const bool should_exit = exit_thread;
-    PackedByteArray local_chunk_id = input_chunk_id;
-    mutex->unlock();
+    while (true) {
+        semaphore->wait();
+        //UtilityFunctions::print("GPUMesher : pipeline started");
+        mutex->lock();
+        const bool should_exit = exit_thread;
+        PackedByteArray local_chunk_id = input_chunk_id;
+        mutex->unlock();
 
-    if (should_exit) {
-        break;
-    }
+        if (should_exit) {
+            break;
+        }
 
-    const uint64_t t_batch_start = now_usec();
-    _execute_gpu_pipeline(local_chunk_id);
+        const uint64_t t_batch_start = now_usec();
+        _execute_gpu_pipeline(local_chunk_id);
 
-    mutex->lock();
-    stats.batch_total.add(now_usec() - t_batch_start);
-    mutex->unlock();
+        mutex->lock();
+        stats.batch_total.add(now_usec() - t_batch_start);
+        mutex->unlock();
 
-    //render_chunk();
+        //render_chunk();
 
-    //debug pipeline
-    //render_chunk_box();
+        //debug pipeline
+        //render_chunk_box();
 
-    mutex->lock();
-    worker_available=true;
-    result_available=true;
-    mutex->unlock();
+        mutex->lock();
+        worker_available = true;
+        result_available = true;
+        mutex->unlock();
 
-    //UtilityFunctions::print("GPUMesher : pipeline ended");
+        //UtilityFunctions::print("GPUMesher : pipeline ended");
     }
 
     // The local device must be freed on the thread that created it.
@@ -508,13 +496,18 @@ Dictionary GPUMesher::get_stats() {
     d["chunks_meshed"] = (int64_t)stats.chunks_meshed;
     d["points"] = (int64_t)stats.points;
     d["triangles"] = (int64_t)stats.triangles;
-    d["queued"] = (int64_t)[this]() { int64_t n = 0; for (LODHashSet *q : chunk_queue) { n += q->size(); } return n; }();
+    d["queued"] = (int64_t)[this]() {
+        int64_t n = 0;
+        for (LODHashSet *q : chunk_queue) {
+            n += q->size();
+        }
+        return n;
+    }
+    ();
     d["in_flight"] = (int64_t)(worker_available ? 0 : batch_count);
     mutex->unlock();
     return d;
 }
-
-
 
 Vector3i GPUMesher::_unflatten_index_z(uint32_t flat_idx) {
     uint32_t x = flat_idx % chunk_param.chunk_size;
@@ -527,24 +520,23 @@ uint32_t GPUMesher::_get_flat_index_z(Vector3i cell) {
     return cell.x + cell.y * chunk_param.chunk_size + cell.z * chunk_param.chunk_size * chunk_param.chunk_size;
 }
 
-void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
-
+void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id) {
     // 1. RESET ATOMIC COUNTERS TO 0
-    rd->buffer_clear(buffer_atomic_counter, 0, 2*(1+chunk_batch_number) * sizeof(uint32_t));
+    rd->buffer_clear(buffer_atomic_counter, 0, 2 * (1 + chunk_batch_number) * sizeof(uint32_t));
 
-    // Erase the active edges buffer to 0.0 
+    // Erase the active edges buffer to 0.0
     // (So passes read eX_t > 0.0 correctly)
     rd->buffer_clear(buffer_edge_intersect, 0, chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(float_t) * 3 * chunk_batch_number);
 
     // 2. put the input inside
-    rd->buffer_update(buffer_input_chunk_id, 0,p_chunk_id.size(),p_chunk_id);
+    rd->buffer_update(buffer_input_chunk_id, 0, p_chunk_id.size(), p_chunk_id);
 
     // --- GPU SUBMISSION PIPELINE ---
     int64_t compute_list = rd->compute_list_begin();
 
-    rd->compute_list_bind_uniform_set(compute_list,uniform_set,0); // bind for all pass actually
+    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0); // bind for all pass actually
 
-    uint32_t dispatch_size = chunk_param.chunk_size/8;
+    uint32_t dispatch_size = chunk_param.chunk_size / 8;
 
     // ---- PASS 1: Sample SDF Distances ----
     rd->compute_list_bind_compute_pipeline(compute_list, pipeline_first_pass);
@@ -555,7 +547,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
 
     // ---- PASS 2: Calculate Edge Intersections ----
     rd->compute_list_bind_compute_pipeline(compute_list, pipeline_second_pass);
-    rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size*3, dispatch_size * chunk_batch_number);
+    rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size * 3, dispatch_size * chunk_batch_number);
 
     // Barrier: Wait for Pass 2 to finish writing to edge_intersect
     rd->compute_list_add_barrier(compute_list);
@@ -587,17 +579,17 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
     if (total_points > 0) {
         // 2. Unpack points
         const uint64_t t_points_fetch_start = now_usec();
-        PackedByteArray point_data = rd->buffer_get_data(buffer_output_point,0,total_points*4*sizeof(uint32_t));
+        PackedByteArray point_data = rd->buffer_get_data(buffer_output_point, 0, total_points * 4 * sizeof(uint32_t));
         PackedInt32Array points = point_data.to_int32_array();
         t_points_fetch += now_usec() - t_points_fetch_start;
 
         for (uint32_t i = 0; i < chunk_batch_number; i++) {
             uint32_t local_point_count = counters[2 + 2 * i];
             uint32_t local_triangle_count = counters[3 + 2 * i];
-            
+
             // 1 triangle = 3 indices
             unpacked_chunks[i].resize(local_point_count, local_triangle_count * 3);
-            
+
             // Reconstruct the 3D chunk ID using byte array correctly
             // We need to fetch the chunk ID from p_chunk_id based on `i`
             // int32_t cx = p_chunk_id.decode_s32(i * 16 + 0);
@@ -605,7 +597,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             // int32_t cz = p_chunk_id.decode_s32(i * 16 + 8);
             // unpacked_chunks[i].chunk_id = Vector3i(cx, cy, cz);
         }
-    
+
         // 3. Process every point
         const uint64_t t_points_process_start = now_usec();
         for (uint32_t i = 0; i < total_points; i++) {
@@ -634,15 +626,15 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             surface_normal.z = Math::clamp(float((int8_t)((b >> 16) & 0xFF)) / 127.0f, -1.0f, 1.0f);
 
             // (After your unpacking block)
-            float length = std::sqrt(surface_normal.x * surface_normal.x + 
-                                    surface_normal.y * surface_normal.y + 
-                                    surface_normal.z * surface_normal.z);
+            float length = std::sqrt(surface_normal.x * surface_normal.x +
+                    surface_normal.y * surface_normal.y +
+                    surface_normal.z * surface_normal.z);
             if (length > 0.0001f) {
                 surface_normal.x /= length;
                 surface_normal.y /= length;
                 surface_normal.z /= length;
             }
-            
+
             // --- Unpack Metadata (c) ---
             uint32_t chunk_idx = c & 0xFFFF; // Changed to uint32_t for safe array indexing
             uint8_t quad_mask = (c >> 16) & 0xF;
@@ -653,7 +645,6 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
             unpacked_chunks[chunk_idx].output_normals.set(pt_idx, surface_normal);
             unpacked_chunks[chunk_idx].quad_masks[pt_idx] = quad_mask;
             unpacked_chunks[chunk_idx].index_storage[flat_idx] = pt_idx;
-
         }
         t_points_process = now_usec() - t_points_process_start;
 
@@ -681,19 +672,20 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
                     unpacked_chunks[chunk_idx].output_triangles.set(tri_offset++, p3);
                 }
             };
-            
+
             for (uint32_t pt_idx = 0; pt_idx < unpacked_chunks[chunk_idx].point_offset; ++pt_idx) {
                 uint8_t quad_mask = unpacked_chunks[chunk_idx].quad_masks[pt_idx];
 
                 // Mask out the sign bit to check if any geometry exists (mask & 7 checks the first 3 bits)
-                if ((quad_mask & 7) == 0) continue; 
+                if ((quad_mask & 7) == 0)
+                    continue;
 
                 // True if the origin cell is solid, false if it is empty air
                 bool origin_solid = (quad_mask & 8) != 0;
 
                 Vector3 local_pos = unpacked_chunks[chunk_idx].output_points[pt_idx];
                 Vector3i cell_coord(Math::floor(local_pos.x), Math::floor(local_pos.y), Math::floor(local_pos.z));
-                
+
                 // x-axis edge quad
                 if ((quad_mask & 1) && cell_coord.y > 0 && cell_coord.z > 0) {
                     uint32_t p0 = pt_idx; // Current cell
@@ -703,7 +695,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
 
                     emit_quad(p0, p2, p1, p3, origin_solid); // axis 0 = X
                 }
-                
+
                 // y-axis edge quad
                 if ((quad_mask & 2) && cell_coord.x > 0 && cell_coord.z > 0) {
                     uint32_t p0 = pt_idx;
@@ -713,7 +705,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
 
                     emit_quad(p0, p1, p2, p3, origin_solid); // axis 1 = Y
                 }
-                
+
                 // z-axis edge quad
                 if ((quad_mask & 4) && cell_coord.x > 0 && cell_coord.y > 0) {
                     uint32_t p0 = pt_idx;
@@ -748,7 +740,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
 
     // }
     uint64_t emitted_triangles = 0;
-    mutex->lock();  
+    mutex->lock();
     // Only the first batch_count slots hold real chunks; the rest of the batch is unused.
     for (uint32_t chunk_idx = 0; chunk_idx < batch_count; ++chunk_idx) {
         UnpackChunk &chunk = unpacked_chunks[chunk_idx];
@@ -762,7 +754,6 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
         emitted_triangles += out.triangle_count;
 
         out_queue.push_back(out);
-
     }
     stats.gpu_submit_sync.add(t_submit_sync);
     stats.points_fetch.add(t_points_fetch);
@@ -773,7 +764,6 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id){
     stats.points += total_points;
     stats.triangles += emitted_triangles;
     mutex->unlock();
-
 }
 
 void GPUMesher::render_chunk() {
@@ -824,23 +814,19 @@ void GPUMesher::render_chunk() {
 
         rs->instance_set_scenario(chunk.instance_rid, scenario);
         rs->instance_set_base(chunk.instance_rid, chunk.mesh_rid);
-        
+
         // Mesh vertices are in the chunk's vertex grid: scale by the cell size, origin at grid (0,0,0).
         const float cell_size = chunk_param.voxel_size * float(ChunkMath::get_lod_size(chunk.chunk_id));
         Basis scaled_basis;
         scaled_basis.scale(Vector3(cell_size, cell_size, cell_size));
 
         rs->instance_set_transform(
-            chunk.instance_rid,
-            Transform3D(scaled_basis, ChunkMath::grid_to_render(chunk.chunk_id, Vector3(), chunk_param))
-        );
-
-
+                chunk.instance_rid,
+                Transform3D(scaled_basis, ChunkMath::grid_to_render(chunk.chunk_id, Vector3(), chunk_param)));
     }
 }
 
-bool GPUMesher::_is_available(){
-
+bool GPUMesher::_is_available() {
     bool available;
 
     mutex->lock();
@@ -851,15 +837,13 @@ bool GPUMesher::_is_available(){
     //UtilityFunctions::print("GPUMesher : status = ",available);
 
     return available;
-
 }
 
-bool GPUMesher::get_results(VoxelState &output){
-
+bool GPUMesher::get_results(VoxelState &output) {
     mutex->lock();
-    const bool is_result_available = result_available; 
+    const bool is_result_available = result_available;
 
-    if(is_result_available){
+    if (is_result_available) {
         for (ChunkOutput &out : out_queue) {
             output.add_new_loaded(out);
             working_generation.erase(out.chunk_id);
@@ -873,9 +857,9 @@ bool GPUMesher::get_results(VoxelState &output){
     return is_result_available;
 }
 
-void GPUMesher::process_queue(){
-
-    if(!_is_available()) return;
+void GPUMesher::process_queue() {
+    if (!_is_available())
+        return;
 
     PackedByteArray new_batch;
     new_batch.resize(chunk_batch_number * GPUFrame::CHUNK_INPUT_BYTES);
@@ -888,31 +872,29 @@ void GPUMesher::process_queue(){
     ChunkId new_chunk;
 
     //UtilityFunctions::print("GPUMesher : prepare for ",chunk_batch_number);
-    
-    while(count < chunk_batch_number && _pop_queue(new_chunk)){
 
+    while (count < chunk_batch_number && _pop_queue(new_chunk)) {
         //UtilityFunctions::print("Dispatching chunk: ", new_chunk);
 
         working_generation.insert(new_chunk);
-        
+
         GPUFrame::encode_chunk_input(new_batch, count, new_chunk, chunk_param);
 
         unpacked_chunks[count].chunk_id = new_chunk;
-        
+
         count++;
     }
 
-    if(count > 0) {
+    if (count > 0) {
         mutex->lock();
         input_chunk_id = new_batch;
         batch_count = count;
         worker_available = false;
         mutex->unlock();
-        
+
         semaphore->post(); // wake up the worker thread
         //UtilityFunctions::print("GPUMesher : Semaphore posted.");
     }
-
 }
 
 bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
@@ -951,8 +933,7 @@ void GPUMesher::send_remove_chunk(LODHashSet p_chunks) {
     mutex->unlock();
 }
 
-void GPUMesher::send_chunk(const LODHashSet &p_chunks){
-
+void GPUMesher::send_chunk(const LODHashSet &p_chunks) {
     for (LODHashSet *q : chunk_queue) {
         if (q) {
             q->clear();
@@ -960,18 +941,16 @@ void GPUMesher::send_chunk(const LODHashSet &p_chunks){
     }
 
     for (const ChunkId &chunk_pos : p_chunks) {
+        //UtilityFunctions::print("GPUMesher : Adding ",chunk_pos);
 
-    //UtilityFunctions::print("GPUMesher : Adding ",chunk_pos);
+        const int lod = ChunkMath::get_lod(chunk_pos);
+        if (lod < 0 || lod >= static_cast<int>(chunk_queue.size())) {
+            continue;
+        }
 
-    const int lod = ChunkMath::get_lod(chunk_pos);
-    if (lod < 0 || lod >= static_cast<int>(chunk_queue.size())) {
-        continue;
+        LODHashSet *q = chunk_queue[lod];
+        if (q && !working_generation.has(chunk_pos)) {
+            q->insert(chunk_pos);
+        }
     }
-
-    LODHashSet *q = chunk_queue[lod];
-    if (q && !working_generation.has(chunk_pos)) {
-        q->insert(chunk_pos);
-    }
-    }
-
 }

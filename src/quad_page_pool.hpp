@@ -36,7 +36,7 @@ using namespace godot;
 class QuadPagePool : public Object {
 public:
     static constexpr uint32_t QUAD_GROUP = PageFormat::QUAD_GROUP; // quads per MultiMesh instance
-    static constexpr uint32_t TEX_WIDTH = PageFormat::TEX_WIDTH;   // texels per row: one group
+    static constexpr uint32_t TEX_WIDTH = PageFormat::TEX_WIDTH; // texels per row: one group
     static constexpr RenderingDevice::DataFormat TEX_FORMAT = RenderingDevice::DATA_FORMAT_R16G16B16A16_UINT;
     // VkDrawIndexedIndirectCommand: index_count, instance_count, first_index, vertex_offset, first_instance.
     static constexpr uint32_t INDIRECT_INSTANCE_COUNT_OFFSET = 4;
@@ -93,7 +93,7 @@ private:
     };
 
     struct PageRT {
-        RID texture;    // RD
+        RID texture; // RD
         RID rs_texture; // RenderingServer wrapper sampled by the material
         RID command;
     };
