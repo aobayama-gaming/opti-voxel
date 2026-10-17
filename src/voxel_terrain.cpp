@@ -52,6 +52,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_direct_page_capacity"), &VoxelTerrain::get_direct_page_capacity);
     ClassDB::bind_method(D_METHOD("set_direct_initial_pages", "pages"), &VoxelTerrain::set_direct_initial_pages);
     ClassDB::bind_method(D_METHOD("get_direct_initial_pages"), &VoxelTerrain::get_direct_initial_pages);
+    ClassDB::bind_method(D_METHOD("set_direct_compaction", "enable"), &VoxelTerrain::set_direct_compaction);
+    ClassDB::bind_method(D_METHOD("get_direct_compaction"), &VoxelTerrain::get_direct_compaction);
+    ClassDB::bind_method(D_METHOD("set_direct_compact_max_extent", "chunks"), &VoxelTerrain::set_direct_compact_max_extent);
+    ClassDB::bind_method(D_METHOD("get_direct_compact_max_extent"), &VoxelTerrain::get_direct_compact_max_extent);
     ClassDB::bind_method(D_METHOD("set_debug_view", "view"), &VoxelTerrain::set_debug_view);
     ClassDB::bind_method(D_METHOD("get_debug_view"), &VoxelTerrain::get_debug_view);
     ClassDB::bind_method(D_METHOD("set_log_level", "level"), &VoxelTerrain::set_log_level);
@@ -73,6 +77,8 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_pages_per_batch", PROPERTY_HINT_RANGE, "1,256"), "set_direct_pages_per_batch", "get_direct_pages_per_batch");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_page_capacity", PROPERTY_HINT_RANGE, "1024,1048576"), "set_direct_page_capacity", "get_direct_page_capacity");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_initial_pages", PROPERTY_HINT_RANGE, "0,4096"), "set_direct_initial_pages", "get_direct_initial_pages");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "direct_compaction"), "set_direct_compaction", "get_direct_compaction");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direct_compact_max_extent", PROPERTY_HINT_RANGE, "1,1000000"), "set_direct_compact_max_extent", "get_direct_compact_max_extent");
     ADD_GROUP("Debug", "");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
@@ -185,6 +191,24 @@ void VoxelTerrain::set_direct_initial_pages(int p_pages) {
 
 int VoxelTerrain::get_direct_initial_pages() const {
     return direct_settings.initial_pages;
+}
+
+void VoxelTerrain::set_direct_compaction(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "direct_compaction must be set before the terrain enters the tree.");
+    direct_settings.compaction = p_enable;
+}
+
+bool VoxelTerrain::get_direct_compaction() const {
+    return direct_settings.compaction;
+}
+
+void VoxelTerrain::set_direct_compact_max_extent(float p_chunks) {
+    ERR_FAIL_COND_MSG(started, "direct_compact_max_extent must be set before the terrain enters the tree.");
+    direct_settings.compact_max_extent = p_chunks;
+}
+
+float VoxelTerrain::get_direct_compact_max_extent() const {
+    return direct_settings.compact_max_extent;
 }
 
 void VoxelTerrain::set_debug_view(int p_view) {
@@ -326,6 +350,14 @@ void VoxelTerrain::_process(double delta){
     _destroy_chunk();
     process_stats.destroy_chunks.add(now_usec() - t0);
 
+    // After destruction (to_destroy_chunk holds copies of the outputs it moves), and never while the
+    // validator or auditor hold page ranges.
+    t0 = now_usec();
+    if (direct_mesher && !validator && !auditor) {
+        direct_mesher->compact(visual_mesh_data);
+    }
+    process_stats.compact.add(now_usec() - t0);
+
     if (debug_gpu_profile && exec_time % 15 == 0) {
         if (!gpu_profiler) {
             gpu_profiler = memnew(GPUProfiler);
@@ -464,6 +496,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
     process["mesher_dispatch"] = process_stats.mesher_dispatch.to_dict();
     process["mesher_collect"] = process_stats.mesher_collect.to_dict();
     process["destroy_chunks"] = process_stats.destroy_chunks.to_dict();
+    process["compact"] = process_stats.compact.to_dict();
     d["process"] = process;
 
     if (gpu_profiler) {

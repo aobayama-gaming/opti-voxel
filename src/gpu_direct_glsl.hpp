@@ -6,7 +6,8 @@
 //   1 sdf       per vertex sample            (legacy pass 1, unchanged)
 //   2 edges     per axis edge crossing t     (legacy pass 2, but always writes -> no clear needed)
 //   3 vertices  dense per-cell vertex + normal, per-chunk quad count (workgroup-reduced atomics)
-//   4 reserve   one thread packs chunks end to end into the batch's pages (no chunk straddles a page)
+//   4 reserve   one thread packs chunks into the batch's pages, each chunk starting on a group
+//               (texture row) boundary, no chunk straddling a page
 //   5 emit      one quad per sign-changing edge, written at base + atomicAdd(cursor) as 4 corner
 //               texels (xyz world, w = packed normal + 1) into the staging image; staging rows are
 //               then copied into the page textures (see QuadPagePool)
@@ -43,8 +44,9 @@ layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
     ChunkParam chunk_param;
 };
 
-// K pages stacked vertically, TEX_WIDTH texels per row, 4 texels (corners) per quad.
-#define TEX_WIDTH 1024u
+// K pages stacked vertically, 4 texels (corners) per quad, one group of quads per row
+// (QuadPagePool::TEX_WIDTH).
+#define TEX_WIDTH 256u
 #define QUAD_GROUP 64u
 layout(set = 0, binding = 6, rgba32f) uniform restrict writeonly image2D staging;
 
@@ -205,7 +207,10 @@ if (gl_GlobalInvocationID == uvec3(0)) {
             chunk_dir[i].w = 0u;
             continue;
         }
-        if (fill + count > batch.page_capacity) { // never straddle pages: start the next one
+        // Chunks start on a group: each one is whole texture rows, so it can be moved or zeroed
+        // with one copy. The tail of its last group stays zero (degenerate).
+        uint padded = (count + QUAD_GROUP - 1u) / QUAD_GROUP * QUAD_GROUP;
+        if (fill + padded > batch.page_capacity) { // never straddle pages: start the next one
             page++;
             fill = 0u;
         }
@@ -217,10 +222,9 @@ if (gl_GlobalInvocationID == uvec3(0)) {
         }
         chunk_dir[i].z = page * batch.page_capacity + fill;
         chunk_dir[i].w = 0u;
-        fill += count;
+        fill += padded;
         total += count;
-        // The page draws whole groups of QUAD_GROUP quads; the tail of the last group is zero.
-        status[STATUS_PAGE_FILL + page] = (fill + QUAD_GROUP - 1u) / QUAD_GROUP;
+        status[STATUS_PAGE_FILL + page] = fill / QUAD_GROUP;
     }
     status[STATUS_TOTAL_QUADS] = total;
 }

@@ -111,6 +111,7 @@ private:
 		TimingStat mesher_dispatch;  // process_queue
 		TimingStat mesher_collect;   // get_results
 		TimingStat destroy_chunks;   // _destroy_chunk
+		TimingStat compact;          // GPUDirectMesher::compact
 	} process_stats;
 
 public:
@@ -155,6 +156,10 @@ public:
 	int get_direct_page_capacity() const;
 	void set_direct_initial_pages(int p_pages);
 	int get_direct_initial_pages() const;
+	void set_direct_compaction(bool p_enable);
+	bool get_direct_compaction() const;
+	void set_direct_compact_max_extent(float p_chunks);
+	float get_direct_compact_max_extent() const;
 
 	// GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk.
 	void set_debug_view(int p_view);

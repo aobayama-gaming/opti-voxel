@@ -24,7 +24,7 @@ layout(push_constant, std430) uniform Params {
     uvec4 dims;       // x = side
 } params;
 
-#define TEX_WIDTH 1024u
+#define TEX_WIDTH 256u // QuadPagePool::TEX_WIDTH
 
 /*GLSL_QUAD_PACK*/
 

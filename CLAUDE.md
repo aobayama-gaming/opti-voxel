@@ -38,6 +38,9 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
   are MultiMesh instances of 64-quad groups that pull their corners from a GPU-written RGBA32F
   texture. Only a ~2 KB per-batch directory comes back to the CPU (asynchronously) for bookkeeping.
   Shared GLSL: `src/gpu_glsl.hpp`, direct passes: `src/gpu_direct_glsl.hpp`.
+  Chunks start on a 64-quad group and a texture row is one group, so a chunk is whole rows.
+  `GPUDirectMesher::compact()` re-packs pages under half full GPU to GPU and rewrites the moved
+  `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`).
 
 ## Verify changes (do this, don't eyeball)
 - `tools/bench.sh [--no-build] --mode=direct|legacy|cpu --scenario=load|fly [--shot=loaded:x.png]
@@ -81,6 +84,9 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 - Many MB of `texture_get_data_async` in one frame crashes 4.6.3 (download staging overflow):
   throttle readbacks (validator/auditor do 2 pages per frame).
 - `RenderingServer::shader_set_code` does not run the shader preprocessor: no `#define`.
+- Compaction moves chunks between pages: anything that holds page ranges across frames (validator,
+  auditor) must run with compaction paused (`VoxelTerrain::_process` skips it while they run), and
+  `to_destroy_chunk` holds stale copies until `_destroy_chunk`, so compact after it.
 - `Array` is shared by reference (Packed*Array are copy-on-write): don't clear an Array after
   binding it into a deferred callable.
 - Main-RD resources must be created/freed on the render thread; objects owning them delete

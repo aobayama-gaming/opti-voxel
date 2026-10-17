@@ -24,6 +24,8 @@ extends Node3D
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
 ##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
+##   --compact=0|1                direct: page compaction (default 1)
+##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##
 ## Render GPU/CPU time is only read during the "steady" phase: reading it forces a
@@ -77,6 +79,10 @@ func _ready() -> void:
 	if args.has("voxel"):
 		terrain.voxel_size = float(args["voxel"])
 	terrain.debug_test_rig = args.get("rig", "0") == "1"
+	if args.has("compact"):
+		terrain.direct_compaction = args["compact"] == "1"
+	if args.has("compact_extent"):
+		terrain.direct_compact_max_extent = float(args["compact_extent"])
 	if args.has("lod_error"):
 		terrain.lod_pixel_error = float(args["lod_error"])
 	add_child(terrain)
