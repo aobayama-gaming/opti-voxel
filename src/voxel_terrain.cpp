@@ -1,4 +1,5 @@
 #include "voxel_terrain.hpp"
+#include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
@@ -96,7 +97,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "direct_compaction"), "set_direct_compaction", "get_direct_compaction");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direct_compact_max_extent", PROPERTY_HINT_RANGE, "1,1000000"), "set_direct_compact_max_extent", "get_direct_compact_max_extent");
     ADD_GROUP("Debug", "");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk"), "set_debug_view", "get_debug_view");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk,Group,Quad index"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_zero_pillar", PROPERTY_HINT_ENUM, "Off,Exact top,Top +1 cm"), "set_debug_zero_pillar", "get_debug_zero_pillar");
@@ -411,7 +412,9 @@ void VoxelTerrain::_ready() {
         gpu_mesher->set_trim_indices(legacy_trim_indices);
     }
 
-    chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    if (camera != nullptr) {
+        chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    }
 
     VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
 }
@@ -423,7 +426,9 @@ void VoxelTerrain::_process(double) {
 
     const uint64_t t_process_start = now_usec();
 
-    chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    if (camera != nullptr) {
+        chunk_discoverer->set_camera_chunk(camera->get_global_position());
+    }
 
     uint64_t t0 = now_usec();
     std::unique_ptr<LODHashSet> new_scanned_chunk;
@@ -778,6 +783,20 @@ void VoxelTerrain::_teardown() {
         return;
     }
     started = false;
+
+    // Debug tools first: the validator owns a legacy mesher, and both hold pages of the direct one.
+    if (validator) {
+        memdelete(validator);
+        validator = nullptr;
+    }
+    if (auditor) {
+        memdelete(auditor);
+        auditor = nullptr;
+    }
+    if (gpu_profiler) {
+        memdelete(gpu_profiler);
+        gpu_profiler = nullptr;
+    }
 
     chunk_discoverer->stop();
     memdelete(chunk_discoverer);

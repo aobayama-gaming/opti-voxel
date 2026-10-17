@@ -48,8 +48,6 @@ void ChunkDiscoverer::start() {
     mutex.instantiate();
     semaphore.instantiate();
 
-    //UtilityFunctions::print("ChunkDiscoverer : Start loop");
-
     worker->start(callable_mp(this, &ChunkDiscoverer::discovery_loop), Thread::PRIORITY_NORMAL);
 }
 
@@ -68,8 +66,6 @@ void ChunkDiscoverer::stop() {
 }
 
 void ChunkDiscoverer::discovery_loop() {
-    //UtilityFunctions::print("ChunkDiscoverer : loop started");
-
     bool has_scanned = false;
     ChunkId last_scanned_camera_chunk;
 
@@ -150,13 +146,6 @@ void ChunkDiscoverer::discovery_loop() {
         stats.cache_evicted_total += evicted;
         stats.verify_mismatches_total += counters.verify_mismatches;
         mutex->unlock();
-
-        //UtilityFunctions::print("scanned chunk count:", (int)new_scanned_chunk.size());
-
-        // print debug
-        // for (const ChunkId &chunk : new_scanned_chunk) {
-        //     UtilityFunctions::print("scanned:", chunk);
-        // }
     }
 }
 

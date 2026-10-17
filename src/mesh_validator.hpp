@@ -37,6 +37,8 @@ public:
     bool step();
     Dictionary get_report() const { return report; }
 
+    ~MeshValidator();
+
 private:
     std::vector<Target> targets;
     SDFBase *sdf = nullptr;
@@ -63,4 +65,5 @@ private:
     void _rt_read_page(int p_page);
     void _rt_on_page(const PackedByteArray &p_data, int p_page);
     void _compare();
+    void _release_legacy();
 };

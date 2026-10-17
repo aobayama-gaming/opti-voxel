@@ -1,5 +1,7 @@
 #include "noise.hpp"
 
+namespace {
+
 // GLSL `step(edge, x)` returns 0.0 if x < edge, and 1.0 otherwise.
 inline Vector3 step(const Vector3 &edge, const Vector3 &x) {
     return Vector3(
@@ -133,6 +135,8 @@ Vector4 snoise(const Vector3 &v) {
     float noise_val = m4.dot(pdotx);
     return Vector4(gradient.x, gradient.y, gradient.z, noise_val) * 105.0f;
 }
+
+} // namespace
 
 Vector4 SimplexNoise::noise(Vector3 pos) {
     return snoise(pos);

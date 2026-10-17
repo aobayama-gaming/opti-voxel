@@ -196,7 +196,7 @@ public:
     void set_discovery_verify(bool p_enable);
     bool get_discovery_verify() const;
 
-    // GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk.
+    // GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);
     int get_debug_view() const;
 

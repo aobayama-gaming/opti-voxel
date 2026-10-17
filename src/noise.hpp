@@ -1,3 +1,5 @@
+#pragma once
+
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 #include <godot_cpp/variant/vector3.hpp>

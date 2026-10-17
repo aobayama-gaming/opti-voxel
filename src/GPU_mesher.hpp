@@ -41,6 +41,10 @@ struct UnpackChunk {
     }
 };
 
+// Legacy pipeline (pipeline_mode 1), kept as the correctness oracle of GPU Direct (MeshValidator)
+// and as its perf baseline. A worker thread owns a local RenderingDevice and runs three compute
+// passes per batch (SDF samples, edge crossings, one point per surface cell with its quad mask),
+// reads everything back and triangulates on the CPU: one mesh + instance per chunk.
 class GPUMesher : public Object {
 private:
     // Constant between run
@@ -97,15 +101,6 @@ private:
 
     RID uniform_set;
 
-    //no need this now we use all at once.
-    // RID uniform_set_input_chunk_id;
-
-    // RID uniform_set_atomic_counter;
-    // RID uniform_set_sdf_sample;
-    // RID uniform_set_edge_intersect;
-
-    // RID uniform_set_output_point;
-
     RID shader_first_pass;
     RID shader_second_pass;
     RID shader_third_pass;
@@ -136,14 +131,11 @@ private:
     std::vector<UnpackChunk> unpacked_chunks;
 
     std::vector<ChunkOutput> out_queue;
-    std::vector<ChunkOutput> del_queue;
 
 public:
     void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, uint32_t p_chunk_batch_number, int lod_numbers, RID p_scenario);
 
     void process_queue();
-
-    void send_remove_chunk(LODHashSet p_chunks);
 
     void send_chunk(const LODHashSet &p_chunks);
 
@@ -158,45 +150,3 @@ public:
 
     Dictionary get_stats();
 };
-
-/*
-Algorithm will be quite different because the different passes will all be brute force:
-
-Pass 1 (Vertex): Determine the sdf sample
-
-**compute list barrier**
-
-Pass 2, 3, 4 (Edge): Determine X/Y/Z edge crossing
-
-**compute list barrier**
-
-Pass 5 (Cell): QEF/ point - normals + Quad_metadata
-
-
-Variable and compression:
-
-GLOBAL
-
-global_point_atomic_counter uint32
-global_triangle_atomic_counter uint32
-
-PER_CHUNK (assume that batch fit in 65,535 and doesnt overflow the global atomic counter)
-
-SDF_sample DENSE (chunk_size+1)^3 : float32
-
-edge_intersect X/Y/Z DENSE (chunk_size-1) * chunk_size^2 : 3 float32
-
-per_chunk_point_atomic_counter uint32
-per_chunk_triangle_atomic_counter uint32
-
-point output :
-
-    output_point SPARSE (chunk_size)^3 : uint8 x 3 (compression, local position inside the cell)
-    output_normal SPARSE (chunk_size)^3 : uint8 x 3 (packSnorm4x8)
-    output_point_metadata SPARSE (chunk_size)^3 : uint32 (address of the point) + uint16** (address of the chunk) + 3bitmask (triangle metadata)
-
-    total SPARSE (chunk_size)^3 : 4 x uint32
-
-** Probably less than 16 can use the end to store other data
-
-*/

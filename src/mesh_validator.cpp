@@ -133,12 +133,21 @@ bool MeshValidator::step() {
             report["error"] = vformat("timeout: pages %d/%d legacy %d/%d", (int64_t)page_data.size(), pages_requested,
                     (int64_t)legacy_state.loaded_chunk.size(), (int64_t)targets.size());
             report["ok"] = false;
+            _release_legacy();
             done = true;
         }
         return done;
     }
     _compare();
+    _release_legacy();
+    done = true;
+    return true;
+}
 
+void MeshValidator::_release_legacy() {
+    if (!legacy) {
+        return;
+    }
     for (KeyValue<ChunkId, ChunkOutput> &kv : legacy_state.loaded_chunk) {
         kv.value.free();
     }
@@ -147,8 +156,11 @@ bool MeshValidator::step() {
     memdelete(legacy);
     legacy = nullptr;
     RenderingServer::get_singleton()->free_rid(legacy_scenario);
-    done = true;
-    return true;
+}
+
+MeshValidator::~MeshValidator() {
+    // Deleted mid-run (terrain teardown): pending page reads are skipped with the freed object.
+    _release_legacy();
 }
 
 void MeshValidator::_compare() {

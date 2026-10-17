@@ -1,7 +1,5 @@
 #pragma once
 
-#include "godot_cpp/classes/engine.hpp"
-
 #include "world_coord.hpp"
 
 using namespace godot;
