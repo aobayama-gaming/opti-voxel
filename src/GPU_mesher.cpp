@@ -111,19 +111,14 @@ void main() {
 }
     )glsl";
 
-    // Dual contouring: the vertex pass rewrites its mass point into the shared QEF (gpu_glsl.hpp).
-    String pass = algorithm_pass;
-    if (dual_contouring) {
-        pass = pass.replace(GLSL_MASS_POINT_VERTEX, GLSL_QEF_VERTEX_CALL);
-    }
+    // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
+    const String pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : String(algorithm_pass);
 
     // 2. Inject the dynamic code
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/", GLSL_BUFFER_BINDING);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
-    // Before fill_mesher_pass: it swaps qef_crossing_normal's body for a cascade, and its own
-    // /*GLSL_SKIRT_SDF*/ replacement lands before this text (qef_crossing_normal calls skirt_sdf).
     shader = shader.replace("/*GLSL_QEF_VERTEX*/", dual_contouring ? String(GLSL_QEF_VERTEX) : String());
     shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, p_name == "third");
     RDUtils::dump_shader(String("legacy_") + p_name, shader);

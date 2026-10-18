@@ -425,7 +425,6 @@ String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const Stri
         return p_shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF).replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
     }
     String pass = p_pass;
-    String shader = p_shader;
     if (p_vertex_pass) {
         // GPUDirectMesher and GPUMesher spell the call differently.
         const char *calls[] = { "skirt_sdf(chunk, chunk_vertex, chunk_param).xyz", "skirt_sdf(chunk,chunk_vertex,chunk_param).xyz" };
@@ -437,14 +436,8 @@ String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const Stri
             }
         }
         ERR_FAIL_COND_V_MSG(!found, p_shader, "CascadeGLSL: the vertex pass has no skirt_sdf normal call to replace.");
-        // Dual contouring's Hermite normal is a point query, which a cascade cannot do (it only exists
-        // on lattice points): fall back to the cell-corner gradient lerp (gpu_glsl.hpp).
-        const char *qef_query = "return skirt_sdf(chunk, crossing, chunk_param).xyz;";
-        if (shader.contains(qef_query)) {
-            shader = shader.replace(qef_query, "return ga + (gb - ga) * t; // cascade: corner-gradient lerp");
-        }
     }
-    return shader.replace("/*GLSL_SKIRT_SDF*/", String(GLSL_SKIRT_SDF) + GLSL_VERTEX_GRADIENT).replace("/*GLSL_ALGORITHM_PASS*/", pass);
+    return p_shader.replace("/*GLSL_SKIRT_SDF*/", String(GLSL_SKIRT_SDF) + GLSL_VERTEX_GRADIENT).replace("/*GLSL_ALGORITHM_PASS*/", pass);
 }
 
 } // namespace CascadeGLSL

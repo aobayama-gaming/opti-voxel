@@ -78,6 +78,14 @@ to every change, and a reviewer may reject a PR on any of them.
   Chunks start on a 64-quad group and a texture row is one group, so a chunk is whole rows.
   `GPUDirectMesher::compact()` re-packs pages under half full GPU to GPU and rewrites the moved
   `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`).
+- Dual contouring (`VoxelTerrain.dual_contouring`, `--dual_contouring=1` in `bench.gd` and the main scene;
+  off by default): both meshers' vertex pass places its vertex at a regularised QEF of the cell's Hermite
+  data instead of the mass point (`qef_vertex` in `gpu_glsl.hpp`, rewritten into both passes by
+  `dual_contouring_pass`). The Hermite normal at a crossing is the lerp of the edge's two corner gradients
+  (no SDF evaluation, the same code on every terrain); tau = 0.15 * trace(A) / 3; the move is capped at
+  0.5 cells from the mass point, then clamped to the cell; where the gradient at the placed vertex
+  vanishes, its normal is the mean of the Hermite normals. The Hermite data must agree with the
+  crossings: on an SDF with detail finer than the cell (the archetype ground at far LODs) vertices jitter.
 
 ## Integer frame (no float ever holds an absolute coordinate)
 - CPU: chunk ids and voxel coordinates are int64 (`ChunkId` / `VoxelPos` = `Vector3i64`,
