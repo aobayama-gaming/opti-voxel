@@ -274,7 +274,8 @@ to every change, and a reviewer may reject a PR on any of them.
 - Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
-- `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
+- `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
+  8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it).
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
