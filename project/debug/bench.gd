@@ -5,9 +5,12 @@ extends Node3D
 ##
 ## Args (all optional):
 ##   --mode=legacy|direct         pipeline (default legacy)
-##   --scenario=load|fly|edit     load: load + steady phase. fly: load, fly out and back, settle, steady.
+##   --scenario=load|fly|edit|dig load: load + steady phase. fly: load, fly out and back, settle, steady.
 ##                                edit: load, then N instance edits (add / move / remove) then settle, steady
+##                                dig: load, then K dig holes along the view, a scripted drag, settle, steady
 ##   --edits=N                    edit scenario: number of edits (default 100)
+##   --digs=K                     dig scenario: number of scripted right-click holes (default 8)
+##   --drag_s=S                   dig scenario: wall-clock seconds of scripted drag (tube re-placed every frame, default 2)
 ##   --steady=N                   frames measured after load completes (default 300)
 ##   --fly_seconds=S              wall-clock duration of the outbound leg (same again for return, default 10)
 ##   --fly_dist=M                 metres travelled on the outbound leg (default 1500)
@@ -77,6 +80,10 @@ var frame := 0
 var phase := "load"  # load -> (fly_out -> fly_back -> settle) -> steady -> done
 var edit_ids: Array[int] = []  # edit scenario: the live instance ids
 var edits_done := 0
+var digs_done := 0  # dig scenario
+var drag_frames := 0
+var drag_start_usec := 0
+var script_drag_id := -1
 var phase_frame := 0
 var phase_start_usec := 0
 var samples := {}  # phase -> {frame_ms: [], gpu_ms: [], cpu_render_ms: [], pending: []}
@@ -291,6 +298,43 @@ func _run_edits() -> void:
 		edits_done += 1
 
 
+# Dig scenario, the player's tools scripted (player.gd): --digs K smooth-subtract capsules (6 m long,
+# 1.5 m radius) starting along the view, one per frame, then the left-click tube for --drag_s seconds: a
+# 20 m SUBTRACT capsule from 0.5 m ahead of the camera whose direction sweeps 10 degrees either side
+# (re-placed every frame, as when the player turns), then removed.
+const CAPSULE_TYPE := 1  # SDFArchetype's library: 0 sphere, 1 capsule, 2 rock
+
+
+func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: float, op: int, id: int) -> int:
+	var up := Vector3.UP
+	if absf(fwd.dot(up)) > 0.99:
+		up = Vector3.RIGHT
+	var right := fwd.cross(up).normalized()
+	var u2 := right.cross(fwd).normalized()
+	var rot := PackedFloat32Array([right.x, right.y, right.z, fwd.x, fwd.y, fwd.z, u2.x, u2.y, u2.z])
+	var v := _voxel_of(pos, vt)
+	if id < 0:
+		var params := PackedFloat32Array([length / vt, radius / vt])
+		return terrain.add_instance(CAPSULE_TYPE, v[0], v[1], v[2], rot, params, op, 0.3 / vt)
+	terrain.move_instance(id, v[0], v[1], v[2], rot)
+	return id
+
+
+func _run_dig() -> void:
+	var vt: float = terrain.get_voxel_size()
+	var fwd := -camera.global_transform.basis.z
+	var digs := int(args.get("digs", "8"))
+	if digs_done < digs:
+		_dig_capsule(vt, camera.global_position + fwd * (20.0 + digs_done * 6.0), fwd, 6.0, 1.5, 3, -1)
+		digs_done += 1
+		drag_start_usec = Time.get_ticks_usec()
+		return
+	var t := float(Time.get_ticks_usec() - drag_start_usec) * 1e-6
+	var dir := fwd.rotated(camera.global_transform.basis.y.normalized(), deg_to_rad(10.0) * sin(t * 3.0))
+	script_drag_id = _dig_capsule(vt, camera.global_position + dir * 0.5, dir, 20.0, 1.0, 2, script_drag_id)
+	drag_frames += 1
+
+
 func _process(delta: float) -> void:
 	frame += 1
 	phase_frame += 1
@@ -329,8 +373,21 @@ func _process(delta: float) -> void:
 				elif args.get("scenario", "load") == "edit":
 					seed(0x5EED)  # the same edits every run
 					_begin_phase("edit")
+				elif args.get("scenario", "load") == "dig":
+					_begin_phase("dig")
 				else:
 					_begin_phase("steady")
+		"dig":
+			_run_dig()
+			var digs := int(args.get("digs", "8"))
+			var drag_us := int(float(args.get("drag_s", "2")) * 1e6)
+			if digs_done >= digs and drag_frames > 0 and Time.get_ticks_usec() - drag_start_usec >= drag_us:
+				if script_drag_id >= 0:
+					terrain.remove_instance(script_drag_id)
+					script_drag_id = -1
+				_end_phase()
+				_take_shots("dig_end")
+				_begin_phase("settle")
 		"edit":
 			_run_edits()
 			if edits_done >= int(args.get("edits", "100")):
