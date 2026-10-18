@@ -3,21 +3,35 @@
 #include "archetype_glsl.hpp"
 #include "archetype_instance.hpp"
 #include "sdf_base.hpp"
-#include "sdf_dummy.hpp"
 
 #include <cmath>
 
 // Demo terrain of the archetype IR (terrain_mode 3, --terrain=archetypes): one scene of instances compiled
 // into one Program (archetype_instance.hpp), its GLSL generated as terrain_sdf (archetype_glsl.hpp) and its
 // CPU evaluation the interpreter, bit for bit (FrameSpike probe arch_demo). An fBm ground (first-order
-// distance, the height field of SDFDummy without its caves) with a few noisy rocks and tree trunks merged
+// distance of a 2D height field, height_fbm) with a few noisy rocks and tree trunks merged
 // in by smooth unions and one cave mouth smoothly subtracted from a slope, all placed by absolute anchors
 // in front of the main_scene spawn. A function of the absolute position: far origins see the ground only.
-// Sizes are metres rounded to voxels in configure(), like SDFDummy.
+// Sizes are metres rounded to voxels in configure(), so another voxel size is another world.
 class SDFArchetype : public SDFBase {
 public:
     static constexpr uint32_t HEIGHT_SEED = 0xA2C4E7u;
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
+    // The ground's mountains (metres).
+    static constexpr double HEIGHT_WAVELENGTH_M = 1.0 / 0.0035;
+    static constexpr double HEIGHT_AMPLITUDE_M = 50.0;
+    static constexpr int HEIGHT_OCTAVES = 5;
+    // Scales the octaves to the spread of the simplex noise the mountains were tuned with (std 0.36 for one
+    // octave): perlin2 has std 0.48.
+    static constexpr double NORM_2D = 0.75;
+
+    // A wavelength of p_wavelength_m metres as 2^k voxels of p_voxel metres.
+    static int k_of(double p_wavelength_m, double p_voxel) { return int(std::lround(std::log2(p_wavelength_m / p_voxel))); }
+
+    // The mountains' fBm at voxel size p_voxel (heights in LOD0 voxels).
+    static ExactNoise::OctaveSet height_fbm(double p_voxel, uint32_t p_seed = HEIGHT_SEED) {
+        return ExactNoise::make_fbm(true, p_seed, k_of(HEIGHT_WAVELENGTH_M, p_voxel), HEIGHT_OCTAVES, HEIGHT_AMPLITUDE_M / p_voxel * NORM_2D, 0.5);
+    }
 
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
@@ -46,9 +60,8 @@ public:
     static Archetype::Instance scene(double p_voxel) {
         using namespace Archetype;
         auto v = [p_voxel](double p_metres) { return float(p_metres / p_voxel); };
-        // SDFDummy's mountains (its height fBm recipe, another seed), around the same datum.
-        const ExactNoise::OctaveSet height = SDFDummy::height_fbm(p_voxel, HEIGHT_SEED);
-        const int64_t datum = std::llround(SDFDummy::DATUM_M / p_voxel);
+        const ExactNoise::OctaveSet height = height_fbm(p_voxel);
+        const int64_t datum = std::llround(DATUM_M / p_voxel);
         Instance root;
         root.def = ground_def(height);
         root.anchor = VoxelPos(0, datum, 0);
@@ -74,7 +87,7 @@ public:
             double x, z, r, yaw;
         } rocks[] = { { -40.0, -150.0, 4.0, 0.3 }, { -62.0, -132.0, 2.5, 1.2 }, { -25.0, -128.0, 3.0, 2.0 }, { -75.0, -165.0, 5.0, 0.7 } };
         for (const auto &r : rocks) {
-            const ExactNoise::OctaveSet bumps = ExactNoise::make_fbm(false, ROCK_SEED, SDFDummy::k_of(2.0 * r.r, p_voxel), 2, 0.1 * r.r / p_voxel, 0.5);
+            const ExactNoise::OctaveSet bumps = ExactNoise::make_fbm(false, ROCK_SEED, k_of(2.0 * r.r, p_voxel), 2, 0.1 * r.r / p_voxel, 0.5);
             add(Combine::SMOOTH_UNION, 1.5, rock_def(v(r.r), bumps), r.x, r.z, -0.4 * r.r, r.yaw);
         }
         // Tree trunks, 12 m, rooted 1 m below the ground.

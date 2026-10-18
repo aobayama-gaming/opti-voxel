@@ -26,7 +26,6 @@
 //debug
 #include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
-#include "sdf_dummy.hpp"
 
 using namespace godot;
 
@@ -62,21 +61,22 @@ private:
     bool debug_gpu_profile = false;
     Dictionary validation_report;
 
-    SDFBase *sdf = memnew(SDFDummy);
+    SDFBase *sdf = memnew(SDFCascade);
 
     VoxelState visual_mesh_data;
 
     // Settings (must be set before the node enters the tree).
     PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
-    int terrain_mode = 0;
+    int terrain_mode = 1;
     int legacy_batch_size = 1024;
     // Number of LOD levels (0 .. lod_numbers - 1). The GPU reads a chunk's LOD from the low 32 bits
     // of its id (findLSB), so at most MAX_LOD_NUMBERS.
     int lod_numbers = 15;
     bool legacy_trim_indices = false;
+    // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
+    // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
+    bool dual_contouring = false;
     float lod_pixel_error = 2.0f;
-    bool debug_test_rig = false;
-    int debug_zero_pillar = 0;
     VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
     GPUDirectMesher::Settings direct_settings;
     int debug_view = 0;
@@ -141,8 +141,9 @@ public:
     void set_pipeline_mode(int p_mode);
     int get_pipeline_mode() const;
 
-    // Terrain: 0 SDFDummy (default), 1 the Hermite cascade test terrain (SDFCascade, --terrain=cascade), 2 its
-    // continents preset, 3 the archetype IR's demo scene (SDFArchetype, --terrain=archetypes).
+    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 3 the archetype
+    // IR's demo scene (SDFArchetype, --terrain=archetypes). 0 was SDFDummy (removed): saved scenes keep
+    // their numbers.
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 
@@ -166,12 +167,6 @@ public:
     void set_world_origin_z(int64_t p_voxel);
     int64_t get_world_origin_z() const;
 
-    // Adds centimetre-scale test shapes in front of the main_scene spawn (see sdf_test_rig.hpp).
-    void set_debug_test_rig(bool p_enable);
-    bool get_debug_test_rig() const;
-    void set_debug_zero_pillar(int p_mode);
-    int get_debug_zero_pillar() const;
-
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);
     float get_lod_pixel_error() const;
@@ -188,6 +183,11 @@ public:
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;
+
+    // Dual contouring of Hermite data (DC-lite, both meshers): sharp UNION / SUBTRACT creases are
+    // placed on the crease instead of the Surface Nets mass point. Off by default (Surface Nets).
+    void set_dual_contouring(bool p_enable);
+    bool get_dual_contouring() const;
 
     int get_pending_chunk_count() const;
 

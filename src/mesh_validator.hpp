@@ -33,7 +33,7 @@ public:
     };
 
     void start(const std::vector<Target> &p_targets, SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers,
-            QuadPagePool *p_pool, const String &p_dump_dir);
+            QuadPagePool *p_pool, const String &p_dump_dir, bool p_dual_contouring = false);
     bool step();
     Dictionary get_report() const { return report; }
 

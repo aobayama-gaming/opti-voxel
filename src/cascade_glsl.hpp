@@ -67,8 +67,8 @@ ChunkParam point_param(const ChunkParam &p_param);
 // False (and an error) otherwise.
 bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPos &p_point, int p_lod, const ChunkParam &p_point_param);
 
-// Fills /*GLSL_SKIRT_SDF*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers). With SDFDummy
-// exactly as before; with a cascade terrain it adds cascade_vertex_gradient and, in the vertex pass
+// Fills /*GLSL_SKIRT_SDF*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers). With a point-
+// evaluable terrain (archetypes) as is; with a cascade terrain it adds cascade_vertex_gradient and, in the vertex pass
 // (p_vertex_pass), takes the normal from it instead of skirt_sdf: the cascade has no off-lattice evaluation.
 // An unmatched normal call leaves the placeholder, so the shader fails to compile (no silent NaN stub).
 String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const String &p_pass, bool p_vertex_pass);

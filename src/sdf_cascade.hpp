@@ -4,7 +4,6 @@
 #include "cascade_terrain.hpp"
 #include "exact_noise.hpp"
 #include "sdf_base.hpp"
-#include "sdf_dummy.hpp"
 
 #include <cmath>
 
@@ -12,7 +11,7 @@
 // --terrain=cascade): a 3D height field of perlin3 octaves carried down the Hermite cascade, octaves from
 // k = 3 (8 voxels, inserted on Λ_0) up to k = lod_count + 4, steepness 1/8, amplitudes capped at 3.3 km,
 // 4 channels (value + gradient, see channel_set),
-// surface at datum + h with the datum at SDFDummy::DATUM_M. A function of the absolute position only.
+// surface at datum + h with the datum at SDFBase::DATUM_M. A function of the absolute position only.
 //
 // The cascade only exists on lattice points: a LOD-L chunk's samples are the points of Λ_L, computed by
 // the meshers' cascade passes (cascade_glsl.hpp) bit for bit like Cascade::run, and evaluate() takes the
@@ -25,7 +24,8 @@ public:
     static constexpr int INSERT_SHIFT = 3;
     // CascadeTerrain::EARTH_MAX_AMP (2^16 voxels) at 5 cm voxels.
     static constexpr double MAX_AMP_M = CascadeTerrain::EARTH_MAX_AMP * 0.05;
-    // Saturation of the height above the datum (LOD0 voxels), as SDFDummy::DY_LIMIT.
+    // Saturation of the height above the datum (LOD0 voxels). A saturated |SDF| only makes chunk
+    // discovery keep more chunks, never drop one, but it must stay several cells of the largest LOD.
     static constexpr int32_t DY_LIMIT = 1 << 30;
 
     // Set before configure(). LINEAR4 (value + gradient) is the meshed set: by the design's criterion G7
@@ -75,7 +75,7 @@ public:
         for (Cascade::Band &b : spec.bands) {
             b.amp = preset == 1 ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
         }
-        datum = VoxelPos(0, std::llround(SDFDummy::DATUM_M / vs), 0);
+        datum = VoxelPos(0, std::llround(DATUM_M / vs), 0);
         voxel_size = p_param.voxel_size;
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
         // from this chunk's by one octave: k = L + 2 (a finer neighbour's extra one) or k = L + 3 (the one

@@ -92,6 +92,8 @@ vec4 evaluate_sdf(WorldPos p, int lod) {
 
 /*GLSL_SKIRT_SDF*/
 
+/*GLSL_QEF_VERTEX*/
+
 void main() {
 
 
@@ -109,12 +111,16 @@ void main() {
 }
     )glsl";
 
+    // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
+    const String pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : String(algorithm_pass);
+
     // 2. Inject the dynamic code
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/", GLSL_BUFFER_BINDING);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
-    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, algorithm_pass, p_name == "third");
+    shader = shader.replace("/*GLSL_QEF_VERTEX*/", dual_contouring ? String(GLSL_QEF_VERTEX) : String());
+    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, p_name == "third");
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
     // 3. Create a Shader Source object
