@@ -146,6 +146,11 @@ void fragment() {
     } else if (debug_view == 7) {
         albedo = vec3(0.0);
         emission = vec3(float(v_ids.y) / 63.0, 0.2, 1.0 - float(v_ids.y) / 63.0);
+    } else if (debug_view == 8) {
+        // Faceted: one clay colour, each triangle lit by its own plane (the vertex normals, shared across a
+        // crease, smear the shading of sharp edges).
+        albedo = vec3(0.5);
+        NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
     }
     if (debug_view == 4) {
         float d = min(min(v_quad_uv.x, 1.0 - v_quad_uv.x), min(v_quad_uv.y, 1.0 - v_quad_uv.y));
