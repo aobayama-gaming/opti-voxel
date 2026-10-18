@@ -55,6 +55,8 @@ func _enter_tree() -> void:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
+		if a == "--dual_contouring=1" and terrain:
+			terrain.dual_contouring = true
 
 func _ready():
 	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude

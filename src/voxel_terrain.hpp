@@ -74,6 +74,9 @@ private:
     // of its id (findLSB), so at most MAX_LOD_NUMBERS.
     int lod_numbers = 15;
     bool legacy_trim_indices = false;
+    // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
+    // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
+    bool dual_contouring = false;
     float lod_pixel_error = 2.0f;
     bool debug_test_rig = false;
     int debug_zero_pillar = 0;
@@ -188,6 +191,11 @@ public:
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;
+
+    // Dual contouring of Hermite data (DC-lite, both meshers): sharp UNION / SUBTRACT creases are
+    // placed on the crease instead of the Surface Nets mass point. Off by default (Surface Nets).
+    void set_dual_contouring(bool p_enable);
+    bool get_dual_contouring() const;
 
     int get_pending_chunk_count() const;
 

@@ -35,6 +35,8 @@ vec4 evaluate_sdf(WorldPos p, int lod) {
 
 /*GLSL_SKIRT_SDF*/
 
+/*GLSL_QEF_VERTEX*/
+
 shared uint wg_quad_count;
 
 void main() {
@@ -120,13 +122,23 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 }
 
 RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
+    const bool vertex_pass = (p_pass == GLSL_DIRECT_PASS_VERTICES);
+    // Dual contouring: the vertex pass rewrites its mass point into the shared QEF (gpu_glsl.hpp).
+    String pass = p_pass;
+    if (dual_contouring) {
+        pass = pass.replace(GLSL_MASS_POINT_VERTEX, GLSL_QEF_VERTEX_CALL);
+    }
     String shader = DIRECT_TEMPLATE;
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", GLSL_DIRECT_BINDINGS);
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/",
+            String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
-    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, p_pass, p_pass == GLSL_DIRECT_PASS_VERTICES);
+    // Before fill_mesher_pass: it swaps qef_crossing_normal's body for a cascade, and its own
+    // /*GLSL_SKIRT_SDF*/ replacement lands before this text (qef_crossing_normal calls skirt_sdf).
+    shader = shader.replace("/*GLSL_QEF_VERTEX*/", dual_contouring ? String(GLSL_QEF_VERTEX) : String());
+    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, vertex_pass);
     RDUtils::dump_shader(String("direct_") + p_name, shader);
 
     Ref<RDShaderSource> source;

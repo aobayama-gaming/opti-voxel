@@ -22,6 +22,7 @@ extends Node3D
 ##   --validate=N                 direct: after steady, compare N chunks against the legacy mesher
 ##   --batch=N                    legacy batch size
 ##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
+##   --dual_contouring=1          both meshers: DC-lite vertex placement (sharp UNION/SUBTRACT creases)
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
 ##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
@@ -127,6 +128,7 @@ func _ready() -> void:
 		terrain.direct_max_in_flight = int(args["max_in_flight"])
 	terrain.debug_view = int(args.get("view", "0"))
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
+	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
 	if args.has("voxel"):
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):

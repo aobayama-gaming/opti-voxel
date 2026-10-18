@@ -70,6 +70,9 @@ private:
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
     int batch_min_lod = 0; // smallest LOD of the current batch (cascade levels to run)
     bool trim_indices = false; // drop the zero padding at the end of the index buffer (legacy bug)
+    // Dual contouring of Hermite data (DC-lite) in the vertex pass (gpu_glsl.hpp). Set before
+    // initialize(): the worker compiles the vertex shader there.
+    bool dual_contouring = false;
 
     // Stats (written by the worker under mutex, read by get_stats()).
     struct Stats {
@@ -160,6 +163,11 @@ public:
     bool is_idle();
 
     void set_trim_indices(bool p_trim) { trim_indices = p_trim; }
+
+    // Dual contouring of Hermite data (DC-lite) in the vertex pass: sharp UNION / SUBTRACT creases are
+    // placed on the crease instead of the Surface Nets mass point (gpu_glsl.hpp). Set it before
+    // initialize(). Both meshers expose it so VoxelTerrain does not branch on the pipeline.
+    void set_dual_contouring(bool p_enable) { dual_contouring = p_enable; }
 
     Dictionary get_stats();
 };

@@ -119,6 +119,156 @@ vec4 sdf_softmax(vec4 a, vec4 b, float intensity) {
 
 )glsl";
 
+// Dual contouring of Hermite data. Both meshers' vertex pass replaces its mass point with a call to
+// qef_vertex (GPU_mesher / GPU_direct_mesher), so the placement is one function: the two meshers
+// compute the same vertex, which is what MeshValidator's direct == legacy comparison relies on.
+//
+// The QEF
+//
+//     minimise  sum_i (n_i . (x - p_i))^2 + tau * |x - x0|^2      (x0 = the mass point)
+//  =>  (sum_i n_i n_i^T + tau I) x = sum_i n_i (n_i . p_i) + tau x0
+//
+// places the vertex at the intersection of the crossing tangent planes, which is the crease/corner
+// for a hard UNION / SUBTRACT, instead of the mass point (Surface Nets), which rounds it into a
+// staircase. p_i is the crossing, n_i the Hermite normal there (qef_crossing_normal). tau is scaled
+// to the QEF's spectrum (see the regularisation below), which keeps the solve well posed on a flat
+// face (rank-1) and on a curved patch (where the plane intersection runs away), without an SVD.
+inline constexpr const char GLSL_QEF_VERTEX[] = R"glsl(
+
+// The Hermite normal at a crossing: the SDF gradient at the crossing point (a point query). It is
+// the exact Hermite normal, and unlike the lerp of the cell's corner gradients it does not carry the
+// crossing's t: the two meshers run on different RenderingDevices and compute t ~1e-3 apart, which a
+// near-cancelling lerp amplifies into degrees of normal error (and the QEF then amplifies that).
+// CascadeGLSL::fill_mesher_pass swaps the body for the corner-gradient lerp: a cascade only exists on
+// lattice points, so it has no off-lattice evaluation.
+vec3 qef_crossing_normal(ChunkFrame chunk, vec3 crossing, float t, vec3 ga, vec3 gb) {
+    return skirt_sdf(chunk, crossing, chunk_param).xyz;
+}
+
+vec3 qef_vertex(ChunkFrame chunk, vec3 cell, uvec3 gid, vec3 mass_point, float edge_t[12]) {
+    // Every float here is `precise`: the two meshers compile this same text into two different
+    // shaders (different pipelines, and the legacy one on its own RenderingDevice), and without
+    // `precise` the compilers may reassociate or fuse multiply-adds differently, which the
+    // near-singular solve below would then amplify past the validator's tolerance.
+    // The cell's 8 corner gradients, corner index c = x + 2 y + 4 z (the sample grid), for the
+    // cascade fallback of qef_crossing_normal.
+    precise vec3 corner_gradient[8] = vec3[8](
+            sdf_sample[get_flat_index_z(gid + uvec3(0u, 0u, 0u))].xyz,
+            sdf_sample[get_flat_index_z(gid + uvec3(1u, 0u, 0u))].xyz,
+            sdf_sample[get_flat_index_z(gid + uvec3(0u, 1u, 0u))].xyz,
+            sdf_sample[get_flat_index_z(gid + uvec3(1u, 1u, 0u))].xyz,
+            sdf_sample[get_flat_index_z(gid + uvec3(0u, 0u, 1u))].xyz,
+            sdf_sample[get_flat_index_z(gid + uvec3(1u, 0u, 1u))].xyz,
+            sdf_sample[get_flat_index_z(gid + uvec3(0u, 1u, 1u))].xyz,
+            sdf_sample[get_flat_index_z(gid + uvec3(1u, 1u, 1u))].xyz);
+
+    // The 12 edges in the pass's order (e0, e2, e4, e6, e3, e1, e7, e5, e8, e9, e11, e10): the two
+    // corner indices each. Edge 0-3 varies x, 4-7 y, 8-11 z.
+    const int edge_corner_a[12] = int[12](0, 2, 4, 6, 0, 1, 4, 5, 0, 1, 2, 3);
+    const int edge_corner_b[12] = int[12](1, 3, 5, 7, 2, 3, 6, 7, 4, 5, 6, 7);
+
+    precise float a00 = 0.0, a01 = 0.0, a02 = 0.0;
+    precise float a11 = 0.0, a12 = 0.0, a22 = 0.0;
+    precise float b0 = 0.0, b1 = 0.0, b2 = 0.0;
+
+    for (int e = 0; e < 12; e++) {
+        const float t = edge_t[e];
+        if (!(t > 0.0)) {
+            continue;
+        }
+        const int ca = edge_corner_a[e];
+        precise vec3 p = vec3(float(ca & 1), float((ca >> 1) & 1), float((ca >> 2) & 1));
+        if (e < 4) {
+            p.x += t;
+        } else if (e < 8) {
+            p.y += t;
+        } else {
+            p.z += t;
+        }
+        precise vec3 n = qef_crossing_normal(chunk, cell + p, t, corner_gradient[ca], corner_gradient[edge_corner_b[e]]);
+        precise float len2 = n.x * n.x + n.y * n.y + n.z * n.z;
+        if (!(len2 > 0.0)) {
+            continue; // a flat gradient: no Hermite normal to place with
+        }
+        n *= inversesqrt(len2);
+
+        a00 += n.x * n.x;
+        a01 += n.x * n.y;
+        a02 += n.x * n.z;
+        a11 += n.y * n.y;
+        a12 += n.y * n.z;
+        a22 += n.z * n.z;
+        precise float ndp = n.x * p.x + n.y * p.y + n.z * p.z;
+        b0 += n.x * ndp;
+        b1 += n.y * ndp;
+        b2 += n.z * ndp;
+    }
+
+    // Regularise the QEF with a mass-point prior (Tikhonov): the minimiser of
+    //
+    //     sum_i (n_i . (x - p_i))^2 + tau * |x - x0|^2      (x0 = the mass point)
+    //
+    // is (A + tau I) x = b + tau x0 with A = sum n_i n_i^T, b = sum n_i (n_i . p_i). tau is scaled to
+    // the QEF's own spectrum: the directions the crossing normals barely span (a curved patch's
+    // tangential directions, where the tangent planes meet far outside the cell) fall back to the mass
+    // point, while the directions they do span (a crease) still reach the plane intersection. A fixed
+    // tiny tau leaves those weak directions unconstrained, so the vertex runs off to the tangent-plane
+    // intersection: that is the spikes. This is a fixed-formula stand-in for clamping the QEF's small
+    // singular values (no SVD, no eigenvectors).
+    precise float qef_trace = (a00 + a11 + a22) / 3.0;
+    precise float TAU = 0.15 * max(qef_trace, 1e-4);
+    a00 += TAU;
+    a11 += TAU;
+    a22 += TAU;
+    b0 += TAU * mass_point.x;
+    b1 += TAU * mass_point.y;
+    b2 += TAU * mass_point.z;
+
+    precise float c00 = a11 * a22 - a12 * a12;
+    precise float c01 = a12 * a02 - a01 * a22;
+    precise float c02 = a01 * a12 - a11 * a02;
+    precise float c11 = a00 * a22 - a02 * a02;
+    precise float c12 = a01 * a02 - a00 * a12;
+    precise float c22 = a00 * a11 - a01 * a01;
+    precise float det = a00 * c00 + a01 * c01 + a02 * c02;
+    if (!(abs(det) > 1e-12)) {
+        return mass_point; // rank-deficient even with the prior: keep the mass point
+    }
+    precise vec3 x;
+    x.x = (c00 * b0 + c01 * b1 + c02 * b2) / det;
+    x.y = (c01 * b0 + c11 * b1 + c12 * b2) / det;
+    x.z = (c02 * b0 + c12 * b1 + c22 * b2) / det;
+    // A regularised QEF solution can still sit outside the cell on an under-sampled (coarse-LOD) cell
+    // or a strongly curved patch; bound the move from the mass point to a fraction of the cell before
+    // the AABB clamp, so a cell whose fit is bad cannot hurl its vertex across the cell (a jagged
+    // silhouette) while a crease, which sits within a fraction of a cell of the mass point, is still
+    // reached.
+    precise vec3 move = x - mass_point;
+    precise float move_len2 = move.x * move.x + move.y * move.y + move.z * move.z;
+    const float move_cap = 0.25;
+    if (move_len2 > move_cap * move_cap) {
+        move *= move_cap * inversesqrt(move_len2);
+    }
+    precise vec3 candidate = clamp(mass_point + move, vec3(0.0), vec3(1.0));
+    // A placed vertex can land where the SDF gradient vanishes (the pass then normalizes a zero
+    // vector and the vertex normal is NaN: a hole). Keep the mass point there.
+    precise vec3 vertex_gradient = qef_crossing_normal(chunk, cell + candidate, 0.0, corner_gradient[0], corner_gradient[0]);
+    precise float vertex_gradient2 = vertex_gradient.x * vertex_gradient.x + vertex_gradient.y * vertex_gradient.y + vertex_gradient.z * vertex_gradient.z;
+    if (!(vertex_gradient2 > 0.0)) {
+        return mass_point;
+    }
+    return candidate;
+}
+
+)glsl";
+
+// The mass-point line both vertex passes rewrite to qef_vertex when the terrain has dual contouring
+// enabled. Kept next to the function so the two call sites cannot drift.
+inline constexpr const char GLSL_MASS_POINT_VERTEX[] = "local_vertex /= float(active_edge_count);";
+inline constexpr const char GLSL_QEF_VERTEX_CALL[] =
+        "local_vertex = qef_vertex(chunk, vec3(cell_chunk_coordinate), gl_GlobalInvocationID, local_vertex, "
+        "float[12](e0_t, e2_t, e4_t, e6_t, e3_t, e1_t, e7_t, e5_t, e8_t, e9_t, e11_t, e10_t));";
+
 inline constexpr const char GLSL_SKIRT_SDF[] = R"glsl(
 
 // Signed distance of a vertex-grid coordinate to the chunk bounds along one axis, in voxels of the

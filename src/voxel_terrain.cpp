@@ -35,6 +35,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
     ClassDB::bind_method(D_METHOD("get_legacy_trim_indices"), &VoxelTerrain::get_legacy_trim_indices);
+    ClassDB::bind_method(D_METHOD("set_dual_contouring", "enable"), &VoxelTerrain::set_dual_contouring);
+    ClassDB::bind_method(D_METHOD("get_dual_contouring"), &VoxelTerrain::get_dual_contouring);
     ClassDB::bind_method(D_METHOD("get_pending_chunk_count"), &VoxelTerrain::get_pending_chunk_count);
     ClassDB::bind_method(D_METHOD("set_debug_gpu_profile", "enable"), &VoxelTerrain::set_debug_gpu_profile);
     ClassDB::bind_method(D_METHOD("get_debug_gpu_profile"), &VoxelTerrain::get_debug_gpu_profile);
@@ -87,6 +89,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "dual_contouring"), "set_dual_contouring", "get_dual_contouring");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discoverer_mode", PROPERTY_HINT_ENUM, "Auto:-1,CPU:0,GPU:1"), "set_discoverer_mode", "get_discoverer_mode");
@@ -339,6 +342,15 @@ bool VoxelTerrain::get_legacy_trim_indices() const {
     return legacy_trim_indices;
 }
 
+void VoxelTerrain::set_dual_contouring(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "dual_contouring must be set before the terrain enters the tree.");
+    dual_contouring = p_enable;
+}
+
+bool VoxelTerrain::get_dual_contouring() const {
+    return dual_contouring;
+}
+
 void VoxelTerrain::set_debug_gpu_profile(bool p_enable) {
     debug_gpu_profile = p_enable;
 }
@@ -529,6 +541,7 @@ void VoxelTerrain::_ready() {
 
     if (pipeline_mode == PIPELINE_GPU_DIRECT) {
         direct_mesher = memnew(GPUDirectMesher);
+        direct_mesher->set_dual_contouring(dual_contouring);
         direct_mesher->initialize(sdf, chunk_param, lod_numbers, scenario, direct_settings);
         direct_mesher->set_debug_view(debug_view);
         // Skirt depth per LOD: the page shader's height colours undo the skirt push.
@@ -546,6 +559,7 @@ void VoxelTerrain::_ready() {
     } else {
         gpu_mesher = memnew(GPUMesher);
 
+        gpu_mesher->set_dual_contouring(dual_contouring);
         gpu_mesher->initialize(
                 sdf,
                 chunk_param,
@@ -694,7 +708,7 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
     }
     validation_report = Dictionary();
     validator = memnew(MeshValidator);
-    validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), p_dump_dir);
+    validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), p_dump_dir, dual_contouring);
     return true;
 }
 

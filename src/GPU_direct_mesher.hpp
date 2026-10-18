@@ -90,6 +90,10 @@ public:
     bool is_audit_idle() const { return audit_queue.empty() && audit_in_flight.is_empty(); }
 
     void set_debug_view(int p_view);
+    // Dual contouring of Hermite data (DC-lite) in the vertex pass: sharp UNION / SUBTRACT creases
+    // are placed on the crease instead of the Surface Nets mass point (gpu_glsl.hpp). Set it before
+    // initialize(): the render thread compiles the vertex shader in _rt_initialize.
+    void set_dual_contouring(bool p_enable) { dual_contouring = p_enable; }
     Dictionary get_stats();
     QuadPagePool *get_pool() const { return pool; }
 
@@ -126,6 +130,9 @@ private:
     ChunkParam chunk_param;
     Settings settings;
     RID scenario;
+    // Dual contouring of Hermite data (DC-lite) in the vertex pass (gpu_glsl.hpp). Set before
+    // initialize(): the worker compiles the vertex shader there.
+    bool dual_contouring = false;
 
     QuadPagePool *pool = nullptr;
 
