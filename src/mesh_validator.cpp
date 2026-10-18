@@ -63,7 +63,7 @@ void write_obj(const String &p_path, const std::vector<Tri> &p_tris, const Chunk
 } // namespace
 
 void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers,
-        QuadPagePool *p_pool, const String &p_dump_dir) {
+        QuadPagePool *p_pool, const String &p_dump_dir, bool p_dual_contouring) {
     targets = p_targets;
     sdf = p_sdf;
     chunk_param = p_chunk_param;
@@ -77,6 +77,9 @@ void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, 
     legacy_scenario = rs->scenario_create();
     legacy_state.set_max_lod(p_lod_numbers);
     legacy = memnew(GPUMesher);
+    // Same vertex placement as the direct side, or every triangle mismatches (two copies of one
+    // function: see gpu_glsl.hpp).
+    legacy->set_dual_contouring(p_dual_contouring);
     legacy->initialize(sdf, chunk_param, MAX((int)targets.size(), 1), p_lod_numbers, legacy_scenario);
     legacy->set_trim_indices(true);
     LODHashSet chunks;

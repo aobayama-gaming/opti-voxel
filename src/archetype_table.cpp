@@ -23,11 +23,10 @@ int DefLibrary::add(const TableDefPtr &p_def) {
     return int(list.size() - 1);
 }
 
-// M(lod) = ceil(k + margin_c * 2^lod) + 2, clamped to INPUT_LIMIT (ints stay in range). The CPU and the
-// GPU (arch_in_box) compute the same float expression, so the same branch.
-static int influence_margin(const TableRecord &p_record, int p_lod) {
-    const float m = p_record.k + p_record.margin_c * exact_pow2(p_lod);
-    return MIN(int(std::ceil(m)), INPUT_LIMIT) + 2;
+int influence_margin(const TableRecord &p_record, int p_lod) {
+    // Clamped before the conversion: a float above INT_MAX converts to anything (CPU) or saturates (GPU).
+    const float m = MIN(p_record.k + p_record.margin_c * exact_pow2(p_lod), float(INPUT_LIMIT));
+    return int(std::ceil(m)) + 2;
 }
 
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {
@@ -167,7 +166,8 @@ static const char GLSL_TABLE_FOLD[] = R"glsl(
 
 bool arch_in_box(WorldPos p, DefRecord rec, int lod) {
     ivec3 d = sat_diff(p, rec.anchor_lo.xyz, rec.anchor_hi.xyz, LIMIT);
-    int m = min(int(ceil(uintBitsToFloat(rec.head.z) + uintBitsToFloat(rec.box_lo.w) * exact_pow2(lod))), LIMIT) + 2;
+    precise float mf = min(uintBitsToFloat(rec.head.z) + uintBitsToFloat(rec.box_lo.w) * exact_pow2(lod), float(LIMIT));
+    int m = int(ceil(mf)) + 2;
     return all(greaterThanEqual(d, rec.box_lo.xyz - ivec3(m))) && all(lessThanEqual(d, rec.box_hi.xyz + ivec3(m)));
 }
 

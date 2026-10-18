@@ -1,5 +1,8 @@
 #include "test_common.hpp"
 
+#include <atomic>
+#include <thread>
+
 #include "archetype_instance.hpp"
 #include "archetype_probes.hpp"
 #include "sdf_archetype.hpp"
@@ -259,10 +262,10 @@ TEST_CASE("SDFArchetype scatter: evaluate() and its gradient stay finite") {
     int64_t checked = 0;
     for (uint32_t i = 0; i < 8000; i++) {
         const WorldPos p = random_point(VoxelPos(-100, 600, -300), 420.0, i, 7);
-        sdf.get_snapshot()->point_candidates(p.voxel, list);
         for (const int lod : { 0, 2, 4 }) {
+            sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
             const Float4 r = finish_table(fold(sdf.get_ground(), sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(),
-                                                 uint32_t(list.size()), p, lod),
+                                                  uint32_t(list.size()), p, lod),
                     lod, 0.5f, true);
             if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.z) || !std::isfinite(r.w)) {
                 nonfinite++;
@@ -294,10 +297,10 @@ TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the
         for (uint32_t i = 0; i < 2000; i++) {
             const WorldPos p = random_point(VoxelPos(std::llround(-50.0 / voxel), std::llround(300.0 / voxel), std::llround(-140.0 / voxel)), 60.0 / voxel,
                     i, 33);
-            sdf.get_snapshot()->point_candidates(p.voxel, list);
             for (const int lod : { 0, 4 }) {
+                sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
                 const Float4 r = finish_table(fold(ground, sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(), uint32_t(list.size()),
-                                                  p, lod),
+                                                      p, lod),
                         lod, float(voxel), true);
                 CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(r.w));
                 below += (lod == 0 && r.w < 0.0f) ? 1 : 0;
@@ -309,12 +312,40 @@ TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the
         const VoxelPos far(2000000000000000, std::llround(300.0 / voxel), -2000000000000000);
         for (uint32_t i = 0; i < 500; i++) {
             const WorldPos p = random_point(far, 200.0 / voxel, i, 34);
-            sdf.get_snapshot()->point_candidates(p.voxel, list);
             for (const int lod : { 0, 4 }) {
+                sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
                 // No instance's box contains a far point: the fold is the bare ground.
                 const float g = finish_table(run(ground, p, lod), lod, float(voxel), true).w;
                 CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(g));
             }
         }
     }
+}
+
+// Edits replace SDFArchetype's snapshot on the main thread while the discoverer thread evaluates and runs
+// cull_exempt: a plain shared_ptr assignment there freed the snapshot under the reader (SIGSEGV).
+TEST_CASE("SDFArchetype: evaluating on another thread while the main thread moves an instance") {
+    ChunkParam param;
+    SDFArchetype sdf;
+    sdf.configure(param, 15);
+    const VoxelPos anchor = sdf.get_snapshot()->records[0].anchor;
+    std::atomic<bool> stop{ false };
+    std::atomic<int64_t> evaluations{ 0 };
+    std::thread reader([&]() {
+        uint32_t i = 0;
+        while (!stop.load()) {
+            WorldPos p;
+            p.voxel = anchor + VoxelPos(int64_t(i % 17) - 8, int64_t(i % 13) - 6, int64_t(i % 11) - 5);
+            (void)sdf.evaluate(p, int(i % 3));
+            (void)sdf.cull_exempt(ChunkId(1, 1, 1), 0);
+            i++;
+            evaluations.fetch_add(1);
+        }
+    });
+    for (int step = 0; step < 5000; step++) {
+        CHECK(sdf.move_instance(0, anchor + VoxelPos(step % 7, 0, step % 5), nullptr));
+    }
+    stop.store(true);
+    reader.join();
+    CHECK(evaluations.load() > 0);
 }

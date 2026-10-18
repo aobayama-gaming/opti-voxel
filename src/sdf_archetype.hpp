@@ -4,9 +4,11 @@
 #include "archetype_table.hpp"
 #include "instance_table.hpp"
 #include "sdf_base.hpp"
-#include "sdf_dummy.hpp"
 
+#include <atomic>
+#include <cfloat>
 #include <cmath>
+#include <memory>
 
 // Demo terrain of the archetype table (terrain_mode 3, --terrain=archetypes): an fBm ground (a compiled
 // Program) plus a table of instances (rocks, tree trunks and a cave mouth) in front of the main_scene
@@ -17,6 +19,21 @@ class SDFArchetype : public SDFBase {
 public:
     static constexpr uint32_t HEIGHT_SEED = 0xA2C4E7u;
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
+    // The ground's mountains (metres).
+    static constexpr double HEIGHT_WAVELENGTH_M = 1.0 / 0.0035;
+    static constexpr double HEIGHT_AMPLITUDE_M = 50.0;
+    static constexpr int HEIGHT_OCTAVES = 5;
+    // Scales the octaves to the spread of the simplex noise the mountains were tuned with (std 0.36 for one
+    // octave): perlin2 has std 0.48.
+    static constexpr double NORM_2D = 0.75;
+
+    // A wavelength of p_wavelength_m metres as 2^k voxels of p_voxel metres.
+    static int k_of(double p_wavelength_m, double p_voxel) { return int(std::lround(std::log2(p_wavelength_m / p_voxel))); }
+
+    // The mountains' fBm at voxel size p_voxel (heights in LOD0 voxels).
+    static ExactNoise::OctaveSet height_fbm(double p_voxel, uint32_t p_seed = HEIGHT_SEED) {
+        return ExactNoise::make_fbm(true, p_seed, k_of(HEIGHT_WAVELENGTH_M, p_voxel), HEIGHT_OCTAVES, HEIGHT_AMPLITUDE_M / p_voxel * NORM_2D, 0.5);
+    }
 
     // A deterministic scatter of p_count rocks and pillars in a square of side p_area (metres) around
     // the demo objects (--instances / --instance_area). Set before configure().
@@ -28,7 +45,7 @@ public:
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         create_scene(p_param.voxel_size, p_lod_count);
-        const String ground_error = snapshot->ground.validate(p_lod_count);
+        const String ground_error = current()->ground.validate(p_lod_count);
         if (!ground_error.is_empty()) {
             ERR_PRINT(ground_error);
         }
@@ -42,9 +59,10 @@ public:
 
     float evaluate(const WorldPos &p_pos, int p_lod) const override {
         thread_local std::vector<uint32_t> list;
-        snapshot->point_candidates(p_pos.voxel, list);
-        const Archetype::Float4 r = Archetype::fold(snapshot->ground, *snapshot->library, snapshot->records.data(), list.data(), uint32_t(list.size()), p_pos, p_lod);
-        return Archetype::finish_table(r, p_lod, snapshot->out_scale, snapshot->normalize).w;
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
+        snap->point_candidates(p_pos.voxel, p_lod, list);
+        const Archetype::Float4 r = Archetype::fold(snap->ground, *snap->library, snap->records.data(), list.data(), uint32_t(list.size()), p_pos, p_lod);
+        return Archetype::finish_table(r, p_lod, snap->out_scale, snap->normalize).w;
     }
 
     void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const override {
@@ -52,7 +70,8 @@ public:
     }
 
     String get_glsl_code() const override {
-        return Archetype::generate_table_sdf(snapshot->ground, *snapshot->library, snapshot->out_scale, snapshot->normalize);
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
+        return Archetype::generate_table_sdf(snap->ground, *snap->library, snap->out_scale, snap->normalize);
     }
 
     SDFGpuTable *get_gpu_table() override { return &gpu; }
@@ -60,7 +79,8 @@ public:
     bool cull_exempt(const ChunkId &p_node, int p_lod) const override {
         // The node's world box grown by the cull band (2 chunk sizes at its LOD), against every instance's
         // influence box. O(records) with a short circuit: fine for the demo's small tables.
-        if (!snapshot) {
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
+        if (!snap) {
             return false;
         }
         const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);
@@ -68,7 +88,10 @@ public:
         const int64_t grow = 2 * span;
         const VoxelPos lo = min - VoxelPos(grow, grow, grow);
         const VoxelPos hi = min + VoxelPos(span + grow, span + grow, span + grow);
-        for (const Archetype::TableRecord &rec : snapshot->records) {
+        for (const Archetype::TableRecord &rec : snap->records) {
+            if (rec.removed) {
+                continue;
+            }
             bool overlap = true;
             for (int a = 0; a < 3; a++) {
                 const int64_t rlo = rec.anchor[a] + rec.box_lo[a];
@@ -91,6 +114,10 @@ public:
         if (!library || p_type < 0 || p_type >= library->size()) {
             return -1;
         }
+        const String error = edit_error(p_rotation, p_params, p_op, p_k);
+        ERR_FAIL_COND_V_MSG(!error.is_empty(), -1, "add_instance: " + error);
+        ERR_FAIL_COND_V_MSG(records.size() >= gpu.instance_capacity(), -1,
+                vformat("add_instance: the table is full (%d instances, removed ones included).", gpu.instance_capacity()));
         Archetype::TableRecord rec;
         rec.def = uint8_t(p_type);
         rec.op = Archetype::Combine(p_op);
@@ -128,6 +155,8 @@ public:
         if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
             return false;
         }
+        const String error = edit_error(p_rotation, nullptr, 0, 0.0f);
+        ERR_FAIL_COND_V_MSG(!error.is_empty(), false, "move_instance: " + error);
         Archetype::TableRecord &rec = records[p_id];
         const VoxelBox old_box = record_box(rec);
         rec.anchor = p_anchor;
@@ -154,30 +183,32 @@ public:
         if (!edit_box.valid) {
             return false;
         }
-        const int lod = ChunkMath::get_lod(p_chunk);
-        const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
-        const VoxelPos min = ChunkMath::chunk_min_voxel(p_chunk, param);
-        const float m = edit_k + edit_margin_c * ExactNoise::exact_pow2(lod);
-        const int64_t grow = int64_t(std::ceil(m)) + 2;
-        VoxelBox box;
-        box.valid = true;
+        // The chunk's samples (span + skirt overhang) against the edit region grown by M(lod).
+        Archetype::TableRecord grown;
+        grown.k = edit_k;
+        grown.margin_c = edit_margin_c;
+        grown.anchor = edit_box.lo;
         for (int a = 0; a < 3; a++) {
-            box.lo[a] = min[a] - grow;
-            box.hi[a] = min[a] + span + grow;
+            grown.box_hi[a] = int32_t(MIN<int64_t>(edit_box.hi[a] - edit_box.lo[a], INT32_MAX));
         }
-        return box.intersects(edit_box);
+        VoxelPos lo, hi;
+        Archetype::chunk_sample_box(p_chunk, param, lo, hi);
+        return Archetype::influence_meets(grown, ChunkMath::get_lod(p_chunk), lo, hi);
     }
 
-    const std::shared_ptr<const Archetype::InstanceSnapshot> &get_snapshot() const { return snapshot; }
-    const Archetype::DefLibrary &get_library() const { return *snapshot->library; }
-    const Archetype::Program &get_ground() const { return snapshot->ground; }
+    // The current snapshot. Edits replace it on the main thread while the discoverer thread evaluates and
+    // the render thread uploads: every reader takes one atomic copy and works on it.
+    std::shared_ptr<const Archetype::InstanceSnapshot> current() const { return std::atomic_load(&snapshot); }
+    std::shared_ptr<const Archetype::InstanceSnapshot> get_snapshot() const { return current(); }
+    const Archetype::DefLibrary &get_library() const { return *library; }
+    const Archetype::Program &get_ground() const { return ground_program; }
 
     // The compiled (PR 1) reference of the same scene (bounds test, arch_demo probe).
     static Archetype::Instance scene(double p_voxel) {
         using namespace Archetype;
         auto v = [p_voxel](double p_metres) { return float(p_metres / p_voxel); };
-        const ExactNoise::OctaveSet height = SDFDummy::height_fbm(p_voxel, HEIGHT_SEED);
-        const int64_t datum = std::llround(SDFDummy::DATUM_M / p_voxel);
+        const ExactNoise::OctaveSet height = height_fbm(p_voxel);
+        const int64_t datum = std::llround(DATUM_M / p_voxel);
         Instance root;
         root.def = ground_def(height);
         root.anchor = VoxelPos(0, datum, 0);
@@ -200,7 +231,7 @@ public:
             double x, z, r, yaw;
         } rocks[] = { { -40.0, -150.0, 4.0, 0.3 }, { -62.0, -132.0, 2.5, 1.2 }, { -25.0, -128.0, 3.0, 2.0 }, { -75.0, -165.0, 5.0, 0.7 } };
         for (const auto &r : rocks) {
-            const ExactNoise::OctaveSet bumps = ExactNoise::make_fbm(false, ROCK_SEED, SDFDummy::k_of(2.0 * r.r, p_voxel), 2, 0.1 * r.r / p_voxel, 0.5);
+            const ExactNoise::OctaveSet bumps = ExactNoise::make_fbm(false, ROCK_SEED, k_of(2.0 * r.r, p_voxel), 2, 0.1 * r.r / p_voxel, 0.5);
             add(Combine::SMOOTH_UNION, 1.5, rock_def(v(r.r), bumps), r.x, r.z, -0.4 * r.r, r.yaw);
         }
         for (const double x : { -50.0, -33.0, -58.0 }) {
@@ -226,9 +257,43 @@ private:
 
     void rebuild(const VoxelBox &p_region) {
         version++;
-        snapshot = Archetype::build_snapshot(library, ground_program, out_scale, true, records, param, lod_count - 1, version);
-        gpu.set_snapshot(snapshot);
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap =
+                Archetype::build_snapshot(library, ground_program, out_scale, true, records, param, lod_count - 1, version);
+        std::atomic_store(&snapshot, snap);
+        gpu.set_snapshot(snap);
         edit_box = p_region;
+    }
+
+    // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite,
+    // normal floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level
+    // operators, and a smooth radius is >= 0.
+    static String edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k) {
+        auto bad = [](float p_v) { return !std::isfinite(p_v) || (p_v != 0.0f && std::fabs(p_v) < FLT_MIN); };
+        if (p_op < int(Archetype::Combine::UNION) || p_op > int(Archetype::Combine::SMOOTH_SUBTRACT)) {
+            return vformat("op %d is not 0 union, 1 smooth union, 2 subtract or 3 smooth subtract.", p_op);
+        }
+        if (bad(p_k) || p_k < 0.0f) {
+            return "k must be finite and >= 0.";
+        }
+        for (int i = 0; p_params && i < 8; i++) {
+            if (bad(p_params[i])) {
+                return vformat("param %d is not a finite normal float.", i);
+            }
+        }
+        if (p_rotation) {
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    double d = 0.0;
+                    for (int c = 0; c < 3; c++) {
+                        d += double(p_rotation[3 * i + c]) * double(p_rotation[3 * j + c]);
+                    }
+                    if (bad(p_rotation[3 * i + j]) || std::abs(d - (i == j ? 1.0 : 0.0)) > 1e-5) {
+                        return "the rotation is not orthonormal (rows within 1e-5).";
+                    }
+                }
+            }
+        }
+        return String();
     }
 
     void finish_record(Archetype::TableRecord &r_rec) const {
@@ -254,8 +319,8 @@ private:
     void create_scene(double p_voxel, int p_lod_count) {
         using namespace Archetype;
         auto v = [p_voxel](double p_metres) { return float(p_metres / p_voxel); };
-        const ExactNoise::OctaveSet height = SDFDummy::height_fbm(p_voxel, HEIGHT_SEED);
-        const int64_t datum = std::llround(SDFDummy::DATUM_M / p_voxel);
+        const ExactNoise::OctaveSet height = height_fbm(p_voxel);
+        const int64_t datum = std::llround(DATUM_M / p_voxel);
         auto ground = [&](double p_x, double p_z) {
             WorldPos p;
             p.voxel = VoxelPos(std::llround(p_x / p_voxel), 0, std::llround(p_z / p_voxel));

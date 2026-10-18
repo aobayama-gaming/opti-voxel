@@ -318,6 +318,7 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
     std::vector<TableRecord> records;
     const int64_t E = 1 << 14;
     int64_t checked = 0;
+    int64_t near_points = 0;
     for (uint32_t step = 0; step < 400; step++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ step, 0xED17u, 0x0BADu });
         switch (h.x % 3u) {
@@ -396,11 +397,29 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
             p.voxel = v;
             p.frac = Float3{};
             for (const int lod : { 0, 3, 8 }) {
-                snap->point_candidates(v, candidates);
+                snap->point_candidates(v, lod, candidates);
                 const Float4 indexed = fold(ground, lib, records.data(), candidates.data(), uint32_t(candidates.size()), p, lod, true);
                 const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
                 CHECK(same_bits(indexed, brute));
                 checked++;
+            }
+        }
+        // Points next to the live instances (random points almost never are): within their influence box.
+        for (uint32_t q : all) {
+            for (uint32_t j = 0; j < 4; j++) {
+                const WorldPos p = random_point(records[q].anchor, 24.0, j, step * 977u + q);
+                for (const int lod : { 0, 3, 8 }) {
+                    snap->point_candidates(p.voxel, lod, candidates);
+                    const Float4 indexed = fold(ground, lib, records.data(), candidates.data(), uint32_t(candidates.size()), p, lod, true);
+                    const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
+                    CHECK(same_bits(indexed, brute));
+                    for (uint32_t r : all) {
+                        if (in_influence_box(records[r], p, lod)) {
+                            near_points++;
+                            break;
+                        }
+                    }
+                }
             }
         }
         // A few chunks: chunk_list is sorted and unique, and folds the same as the brute force at its own
@@ -423,8 +442,10 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
             CHECK(same_bits(from_chunk, brute));
         }
     }
-    MESSAGE("edits: ", checked, " (index vs brute force) fold comparisons over 400 random add / remove / move steps");
+    MESSAGE("edits: ", checked, " (index vs brute force) fold comparisons over 400 random add / remove / move steps, ", near_points,
+            " points next to an instance");
     CHECK(checked > 0);
+    CHECK(near_points > 10000);
 }
 
 TEST_CASE("Archetype table: encode_record lays the GPU DefRecord out at the documented offsets") {
@@ -457,4 +478,62 @@ TEST_CASE("Archetype table: encode_record lays the GPU DefRecord out at the docu
     CHECK(bytes.decode_s32(128) == -7);
     CHECK(bytes.decode_s32(144 + 8) == 11);
     CHECK(bytes.decode_float(140) == 6.0f);
+}
+
+// A chunk's samples reach past its span (the skirt overhang), and at a coarser LOD than an instance's
+// storage LOD its influence box spills into the neighbouring chunks: those must list it too, or two chunks
+// see different values at the same point (seams, and skirt walls across a subtracted hole).
+TEST_CASE("Archetype table: a chunk lists every instance its samples can see, at every LOD") {
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    ChunkParam param;
+    param.voxel_size = 1.0f;
+    int64_t samples = 0, box_hits = 0;
+    for (const Combine op : { Combine::UNION, Combine::SUBTRACT }) {
+        Builder gb;
+        const Program ground = gb.finish(gb.constant(op == Combine::UNION ? 3.0f : -3.0f));
+        for (const float r : { 3.0f, 10.0f }) {
+            for (const int64_t gap : { 2, 6, 16, 40 }) {
+                // A sphere just below the x = 0 chunk boundary (a boundary at every LOD).
+                TableRecord rec;
+                rec.op = op;
+                rec.params[0] = r;
+                rec.anchor = VoxelPos(-(int64_t(r) + gap), 40, 40);
+                const Bounds wb = record_world_bounds(lib[0], rec);
+                for (int a = 0; a < 3; a++) {
+                    rec.box_lo[a] = int32_t(wb.lo[a] - rec.anchor[a]);
+                    rec.box_hi[a] = int32_t(wb.hi[a] - rec.anchor[a]);
+                }
+                rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+                const std::vector<TableRecord> records = { rec };
+                auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 12, 1);
+                const uint32_t all[1] = { 0 };
+                for (int lod = 0; lod <= 5; lod++) {
+                    const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+                    const int64_t unit = int64_t(1) << lod;
+                    // The chunk above the boundary and the one holding the sphere.
+                    for (const int64_t cx : { int64_t(0), -span }) {
+                        const ChunkId c((WorldCoord::floor_div(cx, span) * 2 + 1) * unit, (WorldCoord::floor_div(40, span) * 2 + 1) * unit,
+                                (WorldCoord::floor_div(40, span) * 2 + 1) * unit);
+                        std::vector<uint32_t> cl;
+                        snap->chunk_list(c, cl);
+                        for (int i = 0; i < param.chunk_size; i++) {
+                            for (int j = 0; j < param.chunk_size; j += 3) {
+                                for (int k = 0; k < param.chunk_size; k += 3) {
+                                    const WorldPos p = ChunkMath::sample_pos(c, Float3{ float(i), float(j), float(k) }, param);
+                                    samples++;
+                                    box_hits += in_influence_box(rec, p, lod) ? 1 : 0;
+                                    const Float4 a = fold(ground, lib, records.data(), cl.data(), uint32_t(cl.size()), p, lod);
+                                    const Float4 b = fold(ground, lib, records.data(), all, 1, p, lod);
+                                    CHECK(same_bits(a, b));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    MESSAGE("chunk lists: ", samples, " samples, ", box_hits, " inside the instance's influence box");
+    CHECK(box_hits > 10000);
 }

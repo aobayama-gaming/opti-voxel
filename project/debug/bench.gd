@@ -10,7 +10,7 @@ extends Node3D
 ##                                dig: load, then K dig holes along the view, a scripted drag, settle, steady
 ##   --edits=N                    edit scenario: number of edits (default 100)
 ##   --digs=K                     dig scenario: number of scripted right-click holes (default 8)
-##   --drag_s=S                   dig scenario: seconds of scripted drag (tube moved every frame, default 2)
+##   --drag_s=S                   dig scenario: wall-clock seconds of scripted drag (tube re-placed every frame, default 2)
 ##   --steady=N                   frames measured after load completes (default 300)
 ##   --fly_seconds=S              wall-clock duration of the outbound leg (same again for return, default 10)
 ##   --fly_dist=M                 metres travelled on the outbound leg (default 1500)
@@ -27,20 +27,18 @@ extends Node3D
 ##   --validate=N                 direct: after steady, compare N chunks against the legacy mesher
 ##   --batch=N                    legacy batch size
 ##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
+##   --dual_contouring=1          both meshers: DC-lite vertex placement (sharp UNION/SUBTRACT creases)
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
 ##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
-##   --terrain=dummy|cascade|continents|archetypes
-##                                VoxelTerrain.terrain_mode (default dummy; cascade: the Hermite cascade
-##                                test terrain, SDFCascade; archetypes: the archetype IR demo, SDFArchetype)
+##   --terrain=cascade|continents|archetypes
+##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
+##                                SDFCascade; continents: its preset; archetypes: the archetype IR demo, SDFArchetype)
 ##   --instances=N                archetypes: scatter N rocks/pillars around the demo objects (default 0)
 ##   --instance_area=M            archetypes: side of the scatter square, metres (default 200)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
-##                                covers the discoverer's load range and the terrain gains relief octaves
-##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
-##   --zero_pillar=1|2            add a column whose top SDF is exactly 0.0 (1) or 1 cm off it (2), see
-##                                SDFDummy / tools/zero_test.sh
+##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
@@ -49,7 +47,8 @@ extends Node3D
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
-##                                distance, iterated), e.g. for the cascade terrain whose ground height varies
+##                                distance, iterated; negative: below it). Default 50 on the cascade terrains,
+##                                whose ground height varies by kilometres, unless --cam_pos gives the height
 ##   --camera_voxel=X,Y,Z         place the scene (camera, lights, --cam_pos) relative to this absolute
 ##                                LOD0 voxel instead of the world origin (origin must be a root-span multiple)
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
@@ -82,6 +81,7 @@ var edit_ids: Array[int] = []  # edit scenario: the live instance ids
 var edits_done := 0
 var digs_done := 0  # dig scenario
 var drag_frames := 0
+var drag_start_usec := 0
 var script_drag_id := -1
 var phase_frame := 0
 var phase_start_usec := 0
@@ -139,14 +139,15 @@ func _ready() -> void:
 		terrain.direct_max_in_flight = int(args["max_in_flight"])
 	terrain.debug_view = int(args.get("view", "0"))
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
+	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
 	if args.has("voxel"):
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"dummy": 0, "cascade": 1, "continents": 2, "archetypes": 3}
-	var terrain_arg: String = args.get("terrain", "dummy")
+	var terrains := {"cascade": 1, "continents": 2, "archetypes": 3}
+	var terrain_arg: String = args.get("terrain", "cascade")
 	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected dummy, cascade, continents or archetypes)" % terrain_arg)
+		push_error("BENCH: unknown --terrain=%s (expected cascade, continents or archetypes)" % terrain_arg)
 		set_process(false)
 		get_tree().quit(1)
 		return
@@ -155,8 +156,6 @@ func _ready() -> void:
 	if args.has("instance_area"):
 		terrain.archetype_instance_area = float(args["instance_area"])
 	terrain.terrain_mode = terrains[terrain_arg]
-	terrain.debug_test_rig = args.get("rig", "0") == "1"
-	terrain.debug_zero_pillar = int(args.get("zero_pillar", "0"))
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"
 	if args.has("compact_extent"):
@@ -198,9 +197,10 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
-	if args.has("above_ground"):
+	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 3 or args.has("cam_pos") else "50")
+	if above_ground != "":
 		# Raise or lower the camera (and the fly path) to this height above the terrain under it.
-		var h := float(args["above_ground"])
+		var h := float(above_ground)
 		for i in 32:
 			var d: float = terrain.get_sdf_at(camera.global_position)
 			if absf(d - h) < maxf(1.0, h * 0.05):
@@ -263,36 +263,47 @@ func _end_phase() -> void:
 	_take_shots(phase + "_end")
 
 
+## LOD0 voxel of a render-space position: the int64 world origin plus a small rounded offset (the origin
+## never goes through a float).
+func _voxel_of(pos: Vector3, vt: float) -> Array:
+	return [terrain.world_origin_x + int(round(pos.x / vt)), terrain.world_origin_y + int(round(pos.y / vt)),
+			terrain.world_origin_z + int(round(pos.z / vt))]
+
+
 ## Edit scenario: a few instance edits per frame in front of the camera (alternating add / move /
 ## remove). Anchors are LOD0 voxels = world origin + render position / voxel size.
 func _run_edits() -> void:
 	var total := int(args.get("edits", "100"))
 	var vt: float = terrain.get_voxel_size()
-	var origin: Vector3 = Vector3(terrain.world_origin_x, terrain.world_origin_y, terrain.world_origin_z)
 	for k in range(4):
 		if edits_done >= total:
 			return
 		var fwd := -camera.global_transform.basis.z
 		var pos := camera.global_position + fwd * 30.0 \
 			+ Vector3(randf_range(-25, 25), randf_range(-15, 15), randf_range(-25, 25))
-		var vox: Vector3 = (origin + pos / vt).round()
+		var vox := _voxel_of(pos, vt)
 		if edits_done % 3 == 0 and edit_ids.size() > 0:
 			var idx: int = edit_ids[randi() % edit_ids.size()]
 			if edits_done % 6 == 0:
 				terrain.remove_instance(idx)
 				edit_ids.erase(idx)
 			else:
-				terrain.move_instance(idx, int(vox.x), int(vox.y), int(vox.z))
+				terrain.move_instance(idx, vox[0], vox[1], vox[2])
 		else:
-			var id: int = terrain.add_instance(0, int(vox.x), int(vox.y), int(vox.z),
+			var id: int = terrain.add_instance(0, vox[0], vox[1], vox[2],
 				PackedFloat32Array(), PackedFloat32Array([4.0 / vt]), 3, 1.0 / vt)
 			if id >= 0:
 				edit_ids.append(id)
 		edits_done += 1
 
 
-# Dig scenario: --digs K smooth-subtract capsules along the view (scripted right clicks), then one
-# capsule moved every frame for --drag_s seconds (scripted left-click drag), then removed.
+# Dig scenario, the player's tools scripted (player.gd): --digs K smooth-subtract capsules (6 m long,
+# 1.5 m radius) starting along the view, one per frame, then the left-click tube for --drag_s seconds: a
+# 20 m SUBTRACT capsule from 0.5 m ahead of the camera whose direction sweeps 10 degrees either side
+# (re-placed every frame, as when the player turns), then removed.
+const CAPSULE_TYPE := 1  # SDFArchetype's library: 0 sphere, 1 capsule, 2 rock
+
+
 func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: float, op: int, id: int) -> int:
 	var up := Vector3.UP
 	if absf(fwd.dot(up)) > 0.99:
@@ -300,12 +311,11 @@ func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: 
 	var right := fwd.cross(up).normalized()
 	var u2 := right.cross(fwd).normalized()
 	var rot := PackedFloat32Array([right.x, right.y, right.z, fwd.x, fwd.y, fwd.z, u2.x, u2.y, u2.z])
-	var origin := Vector3(terrain.world_origin_x, terrain.world_origin_y, terrain.world_origin_z)
-	var v := (origin + pos / vt).round()
-	var params := PackedFloat32Array([length / vt, radius / vt])
+	var v := _voxel_of(pos, vt)
 	if id < 0:
-		return terrain.add_instance(1, int(v.x), int(v.y), int(v.z), rot, params, op, 0.3 / vt)
-	terrain.move_instance(id, int(v.x), int(v.y), int(v.z), rot)
+		var params := PackedFloat32Array([length / vt, radius / vt])
+		return terrain.add_instance(CAPSULE_TYPE, v[0], v[1], v[2], rot, params, op, 0.3 / vt)
+	terrain.move_instance(id, v[0], v[1], v[2], rot)
 	return id
 
 
@@ -316,10 +326,11 @@ func _run_dig() -> void:
 	if digs_done < digs:
 		_dig_capsule(vt, camera.global_position + fwd * (20.0 + digs_done * 6.0), fwd, 6.0, 1.5, 3, -1)
 		digs_done += 1
+		drag_start_usec = Time.get_ticks_usec()
 		return
-	var side := camera.global_transform.basis.x
-	var pos := camera.global_position + fwd * 15.0 + side * sin(drag_frames * 0.05) * 5.0
-	script_drag_id = _dig_capsule(vt, pos, fwd, 6.0, 1.5, 3, script_drag_id)
+	var t := float(Time.get_ticks_usec() - drag_start_usec) * 1e-6
+	var dir := fwd.rotated(camera.global_transform.basis.y.normalized(), deg_to_rad(10.0) * sin(t * 3.0))
+	script_drag_id = _dig_capsule(vt, camera.global_position + dir * 0.5, dir, 20.0, 1.0, 2, script_drag_id)
 	drag_frames += 1
 
 
@@ -359,6 +370,7 @@ func _process(delta: float) -> void:
 				if args.get("scenario", "load") == "fly":
 					_begin_phase("fly_out")
 				elif args.get("scenario", "load") == "edit":
+					seed(0x5EED)  # the same edits every run
 					_begin_phase("edit")
 				elif args.get("scenario", "load") == "dig":
 					_begin_phase("dig")
@@ -367,8 +379,8 @@ func _process(delta: float) -> void:
 		"dig":
 			_run_dig()
 			var digs := int(args.get("digs", "8"))
-			var drag_target := int(float(args.get("drag_s", "2")) * 60.0)
-			if digs_done >= digs and drag_frames >= drag_target:
+			var drag_us := int(float(args.get("drag_s", "2")) * 1e6)
+			if digs_done >= digs and drag_frames > 0 and Time.get_ticks_usec() - drag_start_usec >= drag_us:
 				if script_drag_id >= 0:
 					terrain.remove_instance(script_drag_id)
 					script_drag_id = -1

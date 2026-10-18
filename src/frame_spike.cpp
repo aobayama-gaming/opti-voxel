@@ -7,7 +7,6 @@
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "sdf_archetype.hpp"
-#include "sdf_dummy.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -102,8 +101,22 @@ double octave_step_bound(int p_k, double p_g) {
     return p_g * std::ldexp(1.0, -MIN(p_k, 24)) + std::ldexp(1.0, -20);
 }
 
+// The two fBms the noise probes check, a 2D one (the archetype ground's mountains) and a 3D one (perlin3
+// octaves, like the archetype rocks' bumps), in every probe set's shader. Their octaves also place the
+// continuity lines.
+struct ProbeNoise {
+    ExactNoise::OctaveSet fbm2d;
+    ExactNoise::OctaveSet fbm3d;
+
+    explicit ProbeNoise(double p_voxel) :
+            fbm2d(SDFArchetype::height_fbm(p_voxel)),
+            fbm3d(ExactNoise::make_fbm(false, 0xCA7E5u, SDFArchetype::k_of(125.0, p_voxel), 3, 4.0 / 3.0, 0.5)) {}
+
+    String glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d); }
+};
+
 // A probe set (a new noise or SDF term adds its entries here; one table, shared by every origin).
-std::vector<Probe> make_probes(const SDFDummy &p_sdf) {
+std::vector<Probe> make_probes(const ProbeNoise &p_noise) {
     using namespace ExactNoise;
     std::vector<Probe> probes;
     {
@@ -261,8 +274,8 @@ void probe_octave_cell(WorldPos p, uint b) {
         };
         probes.push_back(p);
     }
-    // The terrain's two fBms and the terrain itself (gradient included), at every LOD of PROBE_LODS.
-    // Continuity is checked on the value of LOD 0 (word 3), the same at every LOD.
+    // The two fBms (gradient included), at every LOD of PROBE_LODS. Continuity is checked on the value
+    // of LOD 0 (word 3), the same at every LOD.
     auto fbm_bound = [](const OctaveSet &p_set, double p_g) {
         double b = 0.0;
         for (const Octave &o : p_set.octaves) {
@@ -293,17 +306,14 @@ void probe_octave_cell(WorldPos p, uint b) {
         };
         return p;
     };
-    const SDFDummy *sdf = &p_sdf;
     for (int which = 0; which < 2; which++) {
-        const String name = which == 0 ? "terrain_height" : "terrain_caves";
-        Probe p = lod_probe(name, name, [sdf, which](const WorldPos &q, int p_lod) {
-            return fbm(which == 0 ? sdf->get_height() : sdf->get_caves(), q, p_lod);
-        });
-        p.continuity_bound = fbm_bound(which == 0 ? p_sdf.get_height() : p_sdf.get_caves(), which == 0 ? 6.0 : 4.0);
+        const OctaveSet *set = which == 0 ? &p_noise.fbm2d : &p_noise.fbm3d;
+        const String name = which == 0 ? "noise_fbm2d" : "noise_fbm3d";
+        Probe p = lod_probe(name, name, [set](const WorldPos &q, int p_lod) { return fbm(*set, q, p_lod); });
+        p.continuity_bound = fbm_bound(*set, which == 0 ? 6.0 : 4.0);
         p.continuity_word = 3;
         probes.push_back(p);
     }
-    probes.push_back(lod_probe("terrain_sdf", "terrain_sdf", [sdf](const WorldPos &q, int p_lod) { return sdf->sdf(q, p_lod); }));
     return probes;
 }
 
@@ -326,7 +336,7 @@ layout(push_constant, std430) uniform Params { uint count; uint words; uint lod_
 
 /*HELPERS*/
 
-/*TERRAIN_SDF*/
+/*NOISE*/
 
 /*PROBES*/
 
@@ -413,7 +423,7 @@ void add_random_cases(OriginRun &r_run) {
     }
 }
 
-void build_cases(OriginRun &r_run, const SDFDummy &p_sdf) {
+void build_cases(OriginRun &r_run, const ProbeNoise &p_noise) {
     const ChunkParam &param = r_run.param;
     const ChunkId origin = param.origin_chunk;
     const VoxelPos origin_voxel = param.origin_voxel();
@@ -515,10 +525,10 @@ void build_cases(OriginRun &r_run, const SDFDummy &p_sdf) {
         }
     }
     // Continuity lines: 81 consecutive LOD0 voxels along x at y near the datum, across voxel low-word
-    // wraps and across the cell low-word wraps of the terrain's octaves (where (v + offset) >> k crosses
+    // wraps and across the cell low-word wraps of the probed octaves (where (v + offset) >> k crosses
     // a multiple of 2^32), on both sides of 0.
     std::vector<int64_t> centres = { 0, P32, -P32 };
-    for (const ExactNoise::OctaveSet *set : { &p_sdf.get_height(), &p_sdf.get_caves() }) {
+    for (const ExactNoise::OctaveSet *set : { &p_noise.fbm2d, &p_noise.fbm3d }) {
         for (const ExactNoise::Octave &o : set->octaves) {
             if (o.k <= 28) {
                 centres.push_back((int64_t(1) << (32 + o.k)) - o.offset.x);
@@ -526,7 +536,7 @@ void build_cases(OriginRun &r_run, const SDFDummy &p_sdf) {
             }
         }
     }
-    const int64_t datum_voxel = std::llround(SDFDummy::DATUM_M / param.voxel_size);
+    const int64_t datum_voxel = std::llround(SDFBase::DATUM_M / param.voxel_size);
     for (int64_t c : centres) {
         const size_t begin = r_run.cases.size();
         for (int64_t v = c - 40; v <= c + 40; v++) {
@@ -707,8 +717,8 @@ void check_cpu(Checks &r_checks) {
     expect(WorldCoord::sat_diff(int64_t(1) << 40, 0, 1 << 24) == (1 << 24) && WorldCoord::sat_diff(-5, 7, 1 << 24) == -12, "sat_diff");
 }
 
-// The probe shader of one probe set: SHADER_TEMPLATE with the frame, the noise, the terrain and the probes.
-String probe_shader(const SDFDummy &p_sdf, const std::vector<Probe> &p_probes, uint32_t &r_words) {
+// The probe shader of one probe set: SHADER_TEMPLATE with the frame, the noise and the probes.
+String probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_probes, uint32_t &r_words) {
     r_words = FIXED_WORDS;
     String probes_glsl;
     String probe_calls;
@@ -720,7 +730,7 @@ String probe_shader(const SDFDummy &p_sdf, const std::vector<Probe> &p_probes, u
     String code = String(SHADER_TEMPLATE);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
-    code = code.replace("/*TERRAIN_SDF*/", p_sdf.get_glsl_code());
+    code = code.replace("/*NOISE*/", p_noise.glsl());
     code = code.replace("/*PROBES*/", probes_glsl);
     return code.replace("/*PROBE_CALLS*/", probe_calls);
 }
@@ -810,13 +820,13 @@ void check_relative(const OriginRun &p_run, const std::vector<Probe> &p_probes, 
 
 // Runs one probe set at every origin and checks it (p_first: index of its first probe in the report).
 // False if its shader doesn't compile.
-bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Probe> &p_probes, size_t p_first, const std::vector<OriginRun> &p_runs,
+bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector<Probe> &p_probes, size_t p_first, const std::vector<OriginRun> &p_runs,
         Checks &r_checks) {
     const uint64_t t0 = Time::get_singleton()->get_ticks_msec();
     uint32_t words = 0;
     Ref<RDShaderSource> source;
     source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, probe_shader(p_sdf, p_probes, words));
+    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, probe_shader(p_noise, p_probes, words));
     Ref<RDShaderSPIRV> spirv = p_rd->shader_compile_spirv_from_source(source);
     const String err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
     if (!err.is_empty()) {
@@ -872,7 +882,10 @@ struct TableProbeData {
     std::vector<uint32_t> list;
 };
 
-TableProbeData make_table_probe_data() {
+// The records sit a few voxels from probe sample points (one run's case each), so the fold and the
+// smooth blends run near the instances' surfaces at the fine LODs, not only far away at LOD 24. The
+// ground is a small constant for the same reason: instance values reach it and the blends engage.
+TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     using namespace Archetype;
     TableProbeData t;
     t.library.add(make_sphere_type());
@@ -881,8 +894,7 @@ TableProbeData make_table_probe_data() {
     t.library.add(make_cylinder_type());
     t.library.add(make_rock_type(8, 0x1234u));
     Builder gb;
-    t.ground = gb.finish(gb.constant(80.0f));
-    const int64_t E = int64_t(1) << 22;
+    t.ground = gb.finish(gb.constant(2.0f));
     for (uint32_t i = 0; i < 64; i++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0x7AB1u, 0x9E37u });
         TableRecord rec;
@@ -890,8 +902,10 @@ TableProbeData make_table_probe_data() {
         rec.op = Combine(h.y % 4u);
         rec.k = float(h.z % 8u) + 0.5f;
         rec.inv_k = 1.0f / rec.k;
-        rec.anchor = VoxelPos(ExactNoise::random_offset(i, 1, 1u, E), ExactNoise::random_offset(i, 2, 2u, E) / 2,
-                ExactNoise::random_offset(i, 3, 3u, E));
+        const OriginRun &run = p_runs[i % p_runs.size()];
+        const Case &near = run.cases[(size_t(i) * 7919u) % run.cases.size()];
+        const VoxelPos at = ChunkMath::sample_pos(near.chunk, near.grid, run.param).voxel;
+        rec.anchor = at + VoxelPos(int64_t(h.x % 9u) - 4, int64_t(h.y % 9u) - 4, int64_t(h.z % 9u) - 4);
         const double yaw = double(h.x >> 8) * 1e-4;
         const float cy = float(std::cos(yaw)), sy = float(std::sin(yaw));
         const float rot[9] = { cy, 0.0f, -sy, 0.0f, 1.0f, 0.0f, sy, 0.0f, cy };
@@ -969,7 +983,7 @@ void main() {
 )glsl";
 
 int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, Dictionary &r_report) {
-    const TableProbeData table = make_table_probe_data();
+    const TableProbeData table = make_table_probe_data(p_runs);
     const uint32_t count = uint32_t(table.records.size());
     String lod_calls;
     for (int j = 0; j < PROBE_LOD_COUNT; j++) {
@@ -1017,6 +1031,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     const uint32_t words = 4 * PROBE_LOD_COUNT;
     int64_t mismatches = 0;
     int64_t samples = 0;
+    int64_t near = 0; // samples inside an instance's influence box at the finest probe LOD
     std::vector<uint32_t> want(words);
     for (const OriginRun &run : p_runs) {
         const uint32_t n = uint32_t(run.cases.size());
@@ -1076,6 +1091,12 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
                 want[4 * j + 3] = Archetype::zero_canonical(float_bits(r.w));
             }
             samples++;
+            for (const Archetype::TableRecord &rec : table.records) {
+                if (Archetype::in_influence_box(rec, pos, PROBE_LODS[0])) {
+                    near++;
+                    break;
+                }
+            }
             for (uint32_t k = 0; k < words; k++) {
                 if (res[i * words + k] != want[k]) {
                     mismatches++;
@@ -1097,6 +1118,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     p_rd->free_rid(pipeline);
     p_rd->free_rid(shader);
     r_report["table_samples"] = samples;
+    r_report["table_near_samples"] = near;
     r_report["table_mismatch"] = mismatches;
     return mismatches == 0 ? 1 : 0;
 }
@@ -1136,11 +1158,10 @@ Dictionary FrameSpike::run() {
         ChunkId(far60, -far60, far60),
     };
 
-    // One terrain for all origins: it (debug shapes off) does not depend on the origin.
+    // One noise for all origins: it does not depend on the origin.
     ChunkParam sdf_param;
     sdf_param.voxel_size = voxel_size;
-    SDFDummy sdf;
-    sdf.configure(sdf_param, PROBE_LODS[PROBE_LOD_COUNT - 1] + 1);
+    const ProbeNoise noise(voxel_size);
     std::vector<OriginRun> runs;
     // The archetype programs' anchors: two near each origin, so every origin's points see unsaturated inputs.
     std::vector<VoxelPos> anchors;
@@ -1149,7 +1170,7 @@ Dictionary FrameSpike::run() {
         OriginRun run;
         run.param.voxel_size = voxel_size;
         run.param.origin_chunk = origin;
-        build_cases(run, sdf);
+        build_cases(run, noise);
         for (uint32_t j = 0; j < 2; j++) {
             const uint32_t n = uint32_t(anchors.size());
             anchors.push_back(run.param.origin_voxel() + VoxelPos(ExactNoise::random_offset(n, j, 1u, 2048), ExactNoise::random_offset(n, j, 2u, 2048), ExactNoise::random_offset(n, j, 3u, 2048)));
@@ -1158,8 +1179,8 @@ Dictionary FrameSpike::run() {
         runs.push_back(run);
     }
 
-    // Probe sets, one shader each: the frame / noise / terrain table, then the archetype probes.
-    std::vector<std::vector<Probe>> sets = { make_probes(sdf) };
+    // Probe sets, one shader each: the frame / noise table, then the archetype probes.
+    std::vector<std::vector<Probe>> sets = { make_probes(noise) };
     // The archetype probes, the demo terrain's compiled (PR 1) program first (its anchors are absolute,
     // near 0). The table probes follow the archetype ones (see make_table_probes).
     Archetype::Compiled demo_compiled = Archetype::compile(SDFArchetype::scene(voxel_size));
@@ -1190,7 +1211,7 @@ Dictionary FrameSpike::run() {
     checks.probe_mismatch.assign(names.size(), 0);
     size_t first = 0;
     for (const std::vector<Probe> &set : sets) {
-        if (!run_set(rd, sdf, set, first, runs, checks)) {
+        if (!run_set(rd, noise, set, first, runs, checks)) {
             report["error"] = "shader compilation failed";
             memdelete(rd);
             return report;
@@ -1238,7 +1259,7 @@ Dictionary FrameSpike::run() {
     }
     report["probe_mismatch"] = probe_report;
     report["examples"] = checks.examples;
-    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
+    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&
             checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0 &&

@@ -18,32 +18,35 @@ var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the a
 var base_near := 0.05
 
 # `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|archetypes`
-# its terrain_mode (the Hermite cascade test terrain, its continents demo preset, or the archetype IR demo) and
+# its terrain_mode (the Hermite cascade terrain, the default, its continents demo preset, or the archetype IR demo) and
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
-var spawn_above_ground := false
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (cascade terrains)
-var cascade_terrain: Node = null  # set with --terrain=cascade
+var cascade_terrain: Node = null  # set on the cascade terrains
 var cached_altitude := 0.0
 var altitude_age := 1.0
 
-# ---- Archetype dig tools (feature/archetype-dig) -----------------------------------------------
-# Right click digs a hole: a SMOOTH_SUBTRACT capsule along the view, centred on the ray-march hit.
-# Left click (held): one tube re-placed every frame in front of the camera (move_instance), removed on
-# release. Both use VoxelTerrain.add_instance / move_instance / remove_instance (archetype table only).
+# ---- Archetype dig tools (archetype table terrain, --terrain=archetypes) ----------------------
+# Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
+# of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
+# by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press
+# (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release. Both only act while the mouse is captured. They use VoxelTerrain.add_instance /
+# move_instance / remove_instance; other terrains refuse the edits.
+const CAPSULE_TYPE := 1        # SDFArchetype's library: 0 sphere, 1 capsule, 2 rock (create_scene)
+const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
-var drag_length := 20.0     # --drag_length=M: the capsule's depth, from the camera along the view
-var drag_radius := 1.0      # --drag_radius=M: the capsule's radius (1 m = 2 m wide)
+var drag_length := 20.0     # --drag_length=M: how far past the surface the tube carves
+var drag_radius := 1.0      # --drag_radius=M: the tube's radius (1 m = 2 m wide)
 var dig_k := 0.3            # smooth radius (metres)
-var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid capsule)
+var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid tube); --drag_op=subtract|union
 var drag_active := false
 var drag_id := -1
-var drag_last_vox := Vector3(1e30, 1e30, 1e30) # skip move_instance while the pose is unchanged
+var drag_pose := []         # [anchor voxel Array, rotation]: the tube's last placed pose
 var edits_count := 0
 var hud: Label = null
-var hud_layer: CanvasLayer = null
-var hud_visible := true
+var hud_visible := true     # TAB; the HUD only exists on the archetype terrain
+var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 
 func _enter_tree() -> void:
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
@@ -52,7 +55,6 @@ func _enter_tree() -> void:
 			terrain.lod_numbers = a.trim_prefix("--lods=").to_int()
 		if a == "--terrain=cascade" and terrain:
 			terrain.terrain_mode = 1
-			spawn_above_ground = true
 		if a.begins_with("--discoverer=") and terrain:
 			var modes := {"cpu": 0, "gpu": 1}
 			var mode := a.trim_prefix("--discoverer=")
@@ -62,7 +64,6 @@ func _enter_tree() -> void:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
-			spawn_above_ground = true
 		if a == "--terrain=archetypes" and terrain:
 			terrain.terrain_mode = 3
 		if a.begins_with("--altitude="):
@@ -85,6 +86,8 @@ func _enter_tree() -> void:
 			drag_op = 0
 		if a.begins_with("--drag_radius="):
 			drag_radius = a.trim_prefix("--drag_radius=").to_float()
+		if a == "--dual_contouring=1" and terrain:
+			terrain.dual_contouring = true
 
 func _ready():
 	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude
@@ -94,7 +97,7 @@ func _ready():
 	if terrain and terrain.lod_numbers > 15:
 		far_lods_terrain = terrain
 		base_near = camera.near
-	if spawn_above_ground and terrain:
+	if terrain and terrain.terrain_mode != 3:  # the cascade terrains; the archetype demo keeps the scene's spawn
 		cascade_terrain = terrain
 		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:
@@ -103,7 +106,18 @@ func _ready():
 				break
 			global_position.y += spawn_altitude - d
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	hud_layer = CanvasLayer.new()
+	if terrain and terrain.terrain_mode == 3:
+		_make_hud()
+	yaw = rotation.y
+	pitch = camera.rotation.x
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--marks="):
+			marks_dir = a.trim_prefix("--marks=")
+	DirAccess.make_dir_recursive_absolute(marks_dir)
+	get_tree().auto_accept_quit = false
+
+func _make_hud() -> void:
+	var hud_layer := CanvasLayer.new()
 	add_child(hud_layer)
 	hud = Label.new()
 	hud.position = Vector2(10, 10)
@@ -112,13 +126,6 @@ func _ready():
 	hud.add_theme_constant_override("shadow_offset_x", 1)
 	hud.add_theme_constant_override("shadow_offset_y", 1)
 	hud_layer.add_child(hud)
-	yaw = rotation.y
-	pitch = camera.rotation.x
-	for a in OS.get_cmdline_user_args():
-		if a.begins_with("--marks="):
-			marks_dir = a.trim_prefix("--marks=")
-	DirAccess.make_dir_recursive_absolute(marks_dir)
-	get_tree().auto_accept_quit = false
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -180,14 +187,17 @@ func _input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			speed /= 1.2
 
-	# Dig tools (archetype table): right click digs a hole, left click (held) drags a tube.
+	# Dig tools (archetype table): right click digs a hole, left click (held) drags a tube. Only while the
+	# mouse is captured: a click that gives the window focus back (after Escape) must not dig. A release
+	# always ends the drag.
 	if event is InputEventMouseButton:
-		if event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+		if event.pressed and captured and event.button_index == MOUSE_BUTTON_RIGHT:
 			_dig()
 		elif event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
+			if event.pressed and captured:
 				drag_active = true
-			else:
+			elif not event.pressed:
 				_end_drag()
 
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_TAB:
@@ -220,12 +230,12 @@ func _raymarch(terrain: Node, origin: Vector3, dir: Vector3) -> Vector3:
 		t += maxf(absf(d) * 0.5, 0.1)
 	return origin + dir * 10.0
 
-# LOD0 voxel of a render-space position (int64; returned as an Array, never through Vector3i).
+# LOD0 voxel of a render-space position: the int64 world origin plus a small rounded offset (int64 in an
+# Array, never through a float or Vector3i).
 func _voxel_of(terrain: Node, pos: Vector3) -> Array:
 	var vt: float = terrain.voxel_size
-	return [int(round(float(terrain.world_origin_x) + pos.x / vt)),
-			int(round(float(terrain.world_origin_y) + pos.y / vt)),
-			int(round(float(terrain.world_origin_z) + pos.z / vt))]
+	return [terrain.world_origin_x + int(round(pos.x / vt)), terrain.world_origin_y + int(round(pos.y / vt)),
+			terrain.world_origin_z + int(round(pos.z / vt))]
 
 # World -> local basis (row major) with local y along fwd: the capsule's axis.
 func _basis9(fwd: Vector3) -> PackedFloat32Array:
@@ -245,8 +255,7 @@ func _dig() -> void:
 	var hit := _raymarch(terrain, camera.global_position, fwd)
 	var p := _voxel_of(terrain, hit)
 	var params := PackedFloat32Array([dig_length / vt, dig_radius / vt])
-	var id: int = terrain.add_instance(1, p[0], p[1], p[2], _basis9(fwd), params, 3, dig_k / vt)
-	if id >= 0:
+	if terrain.add_instance(CAPSULE_TYPE, p[0], p[1], p[2], _basis9(fwd), params, 3, dig_k / vt) >= 0:
 		edits_count += 1
 
 func _update_drag() -> void:
@@ -257,49 +266,43 @@ func _update_drag() -> void:
 		return
 	var vt: float = terrain.voxel_size
 	var fwd := -camera.global_transform.basis.z
-	# A capsule carried by the camera, from 0.5 m in front of it along the view, long enough to REACH the
-	# surface the view hits and then go drag_length metres DEEPER (so it is always ~20 m of rock carved,
-	# not a fixed 20 m that stops in mid-air when the rock is farther). The capsule's local y runs along
-	# the view. Op 2 = SUBTRACT (carves); --drag_op=union is a solid capsule.
-	var hit := _raymarch(terrain, camera.global_position, fwd)
-	var dist := camera.global_position.distance_to(hit)
-	var length := clampf(dist + drag_length, drag_length, 250.0)
 	var p := _voxel_of(terrain, camera.global_position + fwd * 0.5)
 	var rot := _basis9(fwd)
-	var params := PackedFloat32Array([length / vt, drag_radius / vt])
 	if drag_id < 0:
-		drag_id = terrain.add_instance(1, p[0], p[1], p[2], rot, params, drag_op, dig_k / vt)
+		# The length is measured once, at the press: afterwards the ray-march would find the end of the
+		# tube's own hole and lengthen it every frame.
+		var hit := _raymarch(terrain, camera.global_position, fwd)
+		var length := clampf(camera.global_position.distance_to(hit) + drag_length, drag_length, DRAG_MAX_LENGTH)
+		var params := PackedFloat32Array([length / vt, drag_radius / vt])
+		drag_id = terrain.add_instance(CAPSULE_TYPE, p[0], p[1], p[2], rot, params, drag_op, dig_k / vt)
 		if drag_id < 0:
-			push_error("dig: terrain.add_instance returned -1 (is the terrain an archetype table?)")
+			push_warning("dig: add_instance refused the tube (not the archetype terrain, or the table is full)")
 			drag_active = false
 			return
 		edits_count += 1
-		drag_last_vox = Vector3(p[0], p[1], p[2])
-		print("DIG press anchor_vox=", p, " fwd=", fwd, " sdf_cam=", terrain.get_sdf_at(camera.global_position),
-			" hit_dist=", dist, " len_m=", length, " r_m=", drag_radius, " op=", drag_op)
-	else:
-		# Only re-edit when the pose changed: moving every frame makes every re-mesh stale and the carve
-		# lags behind (it looks like it never carves while you fly).
-		var vox := Vector3(p[0], p[1], p[2])
-		if (vox - drag_last_vox).length_squared() >= 0.25:
-			terrain.move_instance(drag_id, int(vox.x), int(vox.y), int(vox.z), rot)
-			drag_last_vox = vox
-			edits_count += 1
+	elif drag_pose[0] != p or drag_pose[1] != rot:
+		# Only when the pose changed: every edit makes the re-meshes in flight stale.
+		terrain.move_instance(drag_id, p[0], p[1], p[2], rot)
+		edits_count += 1
+	drag_pose = [p, rot]
 
 func _end_drag() -> void:
 	drag_active = false
+	drag_pose = []
 	if drag_id >= 0:
 		var terrain := _terrain()
 		if terrain:
 			terrain.remove_instance(drag_id)
 		drag_id = -1
 
-func _update_hud() -> void:
+func _update_hud(delta: float) -> void:
 	if hud == null:
 		return
 	hud.visible = hud_visible
-	if not hud_visible:
+	hud_age += delta
+	if not hud_visible or hud_age < 0.25:
 		return
+	hud_age = 0.0
 	var terrain := _terrain()
 	if terrain == null:
 		return
@@ -309,14 +312,16 @@ func _update_hud() -> void:
 	var apply_ms := 0.0
 	if edits.get("apply") is Dictionary:
 		apply_ms = float((edits["apply"] as Dictionary).get("avg", 0.0))
-	hud.text = "fps %d   edits %d (+%d tool)\nre-mesh queue %d  dispatched %d  stale %d\nlast edit %d chunks, apply %.2f ms" % [
+	hud.text = "fps %d   edits %d (%d by the tools)
+re-mesh queue %d  dispatched %d  stale %d
+last edit %d chunks, apply %.2f ms" % [
 		Engine.get_frames_per_second(), int(edits.get("edits", 0)), edits_count,
 		int(ms.get("remesh_queue", 0)), int(ms.get("remesh_pops", 0)), int(ms.get("remesh_stale_dropped", 0)),
 		int(edits.get("remesh_last", 0)), apply_ms]
 
 func _process(delta: float) -> void:
 	_update_drag()
-	_update_hud()
+	_update_hud(delta)
 	if far_lods_terrain:
 		var altitude: float = absf(far_lods_terrain.get_sdf_at(camera.global_position))
 		camera.near = maxf(base_near, altitude / 1000.0)

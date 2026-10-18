@@ -71,7 +71,6 @@ Reg Builder::t_param(int p_index) {
     return emit(in);
 }
 
-
 namespace {
 
 Instr instr(Op p_op, Reg p_a, Reg p_b = -1, Reg p_c = -1, Reg p_d = -1) {

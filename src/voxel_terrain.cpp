@@ -21,14 +21,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world_origin_y"), &VoxelTerrain::get_world_origin_y);
     ClassDB::bind_method(D_METHOD("set_world_origin_z", "voxel"), &VoxelTerrain::set_world_origin_z);
     ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
-    ClassDB::bind_method(D_METHOD("set_debug_test_rig", "enable"), &VoxelTerrain::set_debug_test_rig);
-    ClassDB::bind_method(D_METHOD("get_debug_test_rig"), &VoxelTerrain::get_debug_test_rig);
     ClassDB::bind_method(D_METHOD("set_archetype_instances", "count"), &VoxelTerrain::set_archetype_instances);
     ClassDB::bind_method(D_METHOD("get_archetype_instances"), &VoxelTerrain::get_archetype_instances);
     ClassDB::bind_method(D_METHOD("set_archetype_instance_area", "area"), &VoxelTerrain::set_archetype_instance_area);
     ClassDB::bind_method(D_METHOD("get_archetype_instance_area"), &VoxelTerrain::get_archetype_instance_area);
-    ClassDB::bind_method(D_METHOD("set_debug_zero_pillar", "mode"), &VoxelTerrain::set_debug_zero_pillar);
-    ClassDB::bind_method(D_METHOD("get_debug_zero_pillar"), &VoxelTerrain::get_debug_zero_pillar);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
@@ -39,6 +35,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
     ClassDB::bind_method(D_METHOD("get_legacy_trim_indices"), &VoxelTerrain::get_legacy_trim_indices);
+    ClassDB::bind_method(D_METHOD("set_dual_contouring", "enable"), &VoxelTerrain::set_dual_contouring);
+    ClassDB::bind_method(D_METHOD("get_dual_contouring"), &VoxelTerrain::get_dual_contouring);
     ClassDB::bind_method(D_METHOD("get_pending_chunk_count"), &VoxelTerrain::get_pending_chunk_count);
     ClassDB::bind_method(D_METHOD("set_debug_gpu_profile", "enable"), &VoxelTerrain::set_debug_gpu_profile);
     ClassDB::bind_method(D_METHOD("get_debug_gpu_profile"), &VoxelTerrain::get_debug_gpu_profile);
@@ -88,7 +86,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("move_instance", "id", "x", "y", "z", "rotation"), &VoxelTerrain::move_instance, DEFVAL(PackedFloat32Array()));
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_instances", PROPERTY_HINT_RANGE, "0,1000000,1"), "set_archetype_instances", "get_archetype_instances");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
@@ -97,6 +95,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "dual_contouring"), "set_dual_contouring", "get_dual_contouring");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discoverer_mode", PROPERTY_HINT_ENUM, "Auto:-1,CPU:0,GPU:1"), "set_discoverer_mode", "get_discoverer_mode");
@@ -116,8 +115,6 @@ void VoxelTerrain::_bind_methods() {
     ADD_GROUP("Debug", "");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk,Group,Quad index"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_zero_pillar", PROPERTY_HINT_ENUM, "Off,Exact top,Top +1 cm"), "set_debug_zero_pillar", "get_debug_zero_pillar");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "destroy_verify"), "set_destroy_verify", "get_destroy_verify");
@@ -140,7 +137,7 @@ int VoxelTerrain::get_pipeline_mode() const {
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
     ERR_FAIL_COND_MSG(started, "terrain_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode < 0 || p_mode > 3, "terrain_mode must be 0 (dummy), 1 (cascade), 2 (cascade, continents preset) or 3 (archetypes).");
+    ERR_FAIL_COND_MSG(p_mode < 1 || p_mode > 3, "terrain_mode must be 1 (cascade), 2 (cascade, continents preset) or 3 (archetypes).");
     terrain_mode = p_mode;
 }
 
@@ -270,20 +267,6 @@ int64_t VoxelTerrain::get_world_origin_z() const {
     return world_origin_request.z;
 }
 
-void VoxelTerrain::set_debug_test_rig(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "debug_test_rig must be set before the terrain enters the tree.");
-    debug_test_rig = p_enable;
-}
-
-bool VoxelTerrain::get_debug_test_rig() const {
-    return debug_test_rig;
-}
-
-void VoxelTerrain::set_debug_zero_pillar(int p_mode) {
-    ERR_FAIL_COND_MSG(started, "debug_zero_pillar must be set before the terrain enters the tree.");
-    debug_zero_pillar = p_mode;
-}
-
 void VoxelTerrain::set_archetype_instances(int p_count) {
     ERR_FAIL_COND_MSG(started, "archetype_instances must be set before the terrain enters the tree.");
     archetype_instances = p_count;
@@ -300,10 +283,6 @@ void VoxelTerrain::set_archetype_instance_area(double p_area) {
 
 double VoxelTerrain::get_archetype_instance_area() const {
     return archetype_instance_area;
-}
-
-int VoxelTerrain::get_debug_zero_pillar() const {
-    return debug_zero_pillar;
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
@@ -365,6 +344,15 @@ void VoxelTerrain::set_legacy_trim_indices(bool p_trim) {
 
 bool VoxelTerrain::get_legacy_trim_indices() const {
     return legacy_trim_indices;
+}
+
+void VoxelTerrain::set_dual_contouring(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "dual_contouring must be set before the terrain enters the tree.");
+    dual_contouring = p_enable;
+}
+
+bool VoxelTerrain::get_dual_contouring() const {
+    return dual_contouring;
 }
 
 void VoxelTerrain::set_debug_gpu_profile(bool p_enable) {
@@ -476,7 +464,6 @@ void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
     ERR_FAIL_COND_MSG(lod_numbers < 1 || lod_numbers > MAX_LOD_NUMBERS, "VoxelTerrain: lod_numbers out of range.");
-    ERR_FAIL_COND_MSG(terrain_mode != 0 && (debug_test_rig || debug_zero_pillar != 0), "VoxelTerrain: the debug shapes need terrain_mode 0 (dummy).");
 
     started = true;
     start_usec = now_usec();
@@ -494,20 +481,13 @@ void VoxelTerrain::_ready() {
         }
     }
 
-    // sdf starts as an SDFDummy (see the member initialiser).
+    // sdf starts as an SDFCascade (see the member initialiser).
     switch (terrain_mode) {
-        case 0:
-            static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
-            static_cast<SDFDummy *>(sdf)->zero_pillar = debug_zero_pillar;
-            break;
         case 1:
-        case 2: {
-            memdelete(sdf);
-            SDFCascade *cascade = memnew(SDFCascade);
-            cascade->preset = terrain_mode == 2 ? 1 : 0;
-            sdf = cascade;
             break;
-        }
+        case 2:
+            static_cast<SDFCascade *>(sdf)->preset = 1;
+            break;
         case 3: {
             memdelete(sdf);
             SDFArchetype *archetype = memnew(SDFArchetype);
@@ -560,6 +540,7 @@ void VoxelTerrain::_ready() {
 
     if (pipeline_mode == PIPELINE_GPU_DIRECT) {
         direct_mesher = memnew(GPUDirectMesher);
+        direct_mesher->set_dual_contouring(dual_contouring);
         direct_mesher->initialize(sdf, chunk_param, lod_numbers, scenario, direct_settings);
         direct_mesher->set_debug_view(debug_view);
         // Skirt depth per LOD: the page shader's height colours undo the skirt push.
@@ -577,6 +558,7 @@ void VoxelTerrain::_ready() {
     } else {
         gpu_mesher = memnew(GPUMesher);
 
+        gpu_mesher->set_dual_contouring(dual_contouring);
         gpu_mesher->initialize(
                 sdf,
                 chunk_param,
@@ -812,7 +794,7 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
     }
     validation_report = Dictionary();
     validator = memnew(MeshValidator);
-    validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), p_dump_dir);
+    validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), p_dump_dir, dual_contouring);
     return true;
 }
 

@@ -3,6 +3,7 @@
 #include "instance_table.hpp"
 #include "sdf_base.hpp"
 
+#include <atomic>
 #include <memory>
 
 // The archetype instance table's data for the GPU (SDFGpuTable): the DefRecord array and the per-batch
@@ -13,19 +14,28 @@ namespace Archetype {
 class GpuTable : public SDFGpuTable {
 public:
     // Main thread: the snapshot the GPU mirrors. Its version drives the record upload.
-    void set_snapshot(const std::shared_ptr<const InstanceSnapshot> &p_snapshot) { snap = p_snapshot; }
-    const std::shared_ptr<const InstanceSnapshot> &snapshot() const { return snap; }
+    // Read from the render thread (direct mesher) and the legacy worker: atomic, and each reader works on
+    // one copy.
+    void set_snapshot(const std::shared_ptr<const InstanceSnapshot> &p_snapshot) { std::atomic_store(&snap, p_snapshot); }
+    std::shared_ptr<const InstanceSnapshot> snapshot() const { return std::atomic_load(&snap); }
 
     String glsl_buffers(int p_record_binding, int p_list_binding) const override;
     String glsl_set_chunk() const override;
 
-    uint32_t version() const override { return snap ? snap->version : 0u; }
-    uint32_t instance_count() const override { return snap ? uint32_t(snap->records.size()) : 0u; }
+    uint32_t version() const override {
+        const std::shared_ptr<const InstanceSnapshot> s = snapshot();
+        return s ? s->version : 0u;
+    }
+    uint32_t instance_count() const override {
+        const std::shared_ptr<const InstanceSnapshot> s = snapshot();
+        return s ? uint32_t(s->records.size()) : 0u;
+    }
     // The buffers are sized for this many instances up front (runtime edits only append). Raised by
     // --instance_capacity for a large scatter.
-    uint32_t instance_capacity() const override { return MAX(capacity, instance_count()); }
+    uint32_t instance_capacity() const override { return capacity; }
     void set_capacity(uint32_t p_capacity) { capacity = p_capacity; }
-    PackedByteArray record_bytes() const override;
+    PackedByteArray record_bytes(uint32_t &r_version) const override;
+    uint32_t record_size() const override { return RECORD_BYTES; }
 
     void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
 
