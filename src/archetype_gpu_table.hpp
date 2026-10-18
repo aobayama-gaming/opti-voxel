@@ -21,12 +21,17 @@ public:
 
     uint32_t version() const override { return snap ? snap->version : 0u; }
     uint32_t instance_count() const override { return snap ? uint32_t(snap->records.size()) : 0u; }
+    // The buffers are sized for this many instances up front (runtime edits only append). Raised by
+    // --instance_capacity for a large scatter.
+    uint32_t instance_capacity() const override { return MAX(capacity, instance_count()); }
+    void set_capacity(uint32_t p_capacity) { capacity = p_capacity; }
     PackedByteArray record_bytes() const override;
 
     void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
 
 private:
     std::shared_ptr<const InstanceSnapshot> snap;
+    uint32_t capacity = 16384; // the GPU record/list buffers hold this many instances
 };
 
 } // namespace Archetype

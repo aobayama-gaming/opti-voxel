@@ -2,7 +2,9 @@
 
 #include "archetype_instance.hpp"
 #include "archetype_table.hpp"
+#include "instance_table.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -301,6 +303,128 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
     CHECK(points > 0);
     CHECK(differ > 0); // the rule does drop instances somewhere
     CHECK(sign_flips == 0);
+}
+
+TEST_CASE("Archetype table: random add / remove / move keep the index equal to a brute-force fold") {
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    lib.add(make_box_type());
+    lib.add(make_capsule_type());
+    Builder gb;
+    const Program ground = gb.finish(gb.constant(80.0f));
+    ChunkParam param;
+    param.voxel_size = 1.0f;
+
+    std::vector<TableRecord> records;
+    const int64_t E = 1 << 14;
+    int64_t checked = 0;
+    for (uint32_t step = 0; step < 400; step++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ step, 0xED17u, 0x0BADu });
+        switch (h.x % 3u) {
+            case 0: { // add
+                TableRecord rec;
+                rec.def = uint8_t(h.y % uint32_t(lib.size()));
+                rec.op = Combine(h.z % 4u);
+                rec.k = float(h.z % 6u) + 0.5f;
+                rec.inv_k = 1.0f / rec.k;
+                rec.anchor = VoxelPos(ExactNoise::random_offset(step, 1, 1u, E), ExactNoise::random_offset(step, 2, 2u, E),
+                        ExactNoise::random_offset(step, 3, 3u, E));
+                const double yaw = double(h.y >> 8) * 1e-3;
+                const float cy = float(std::cos(yaw)), sy = float(std::sin(yaw));
+                const float rot[9] = { cy, 0, -sy, 0, 1, 0, sy, 0, cy };
+                std::copy(rot, rot + 9, rec.rotation);
+                rec.params[0] = 3.0f + float(h.x % 6u);
+                rec.params[1] = 2.0f;
+                rec.salt = 0;
+                const Bounds wb = record_world_bounds(lib[rec.def], rec);
+                for (int a = 0; a < 3; a++) {
+                    rec.box_lo[a] = int32_t(wb.lo[a] - rec.anchor[a]);
+                    rec.box_hi[a] = int32_t(wb.hi[a] - rec.anchor[a]);
+                }
+                rec.lipschitz = wb.lipschitz;
+                rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+                records.push_back(rec);
+                break;
+            }
+            case 1: { // remove a live one
+                std::vector<uint32_t> live;
+                for (uint32_t i = 0; i < records.size(); i++) {
+                    if (!records[i].removed) {
+                        live.push_back(i);
+                    }
+                }
+                if (!live.empty()) {
+                    records[live[h.y % uint32_t(live.size())]].removed = true;
+                }
+                break;
+            }
+            default: { // move a live one
+                std::vector<uint32_t> live;
+                for (uint32_t i = 0; i < records.size(); i++) {
+                    if (!records[i].removed) {
+                        live.push_back(i);
+                    }
+                }
+                if (!live.empty()) {
+                    TableRecord &rec = records[live[h.y % uint32_t(live.size())]];
+                    rec.anchor = VoxelPos(ExactNoise::random_offset(step, 5, 5u, E), ExactNoise::random_offset(step, 6, 6u, E),
+                            ExactNoise::random_offset(step, 7, 7u, E));
+                    const Bounds wb = record_world_bounds(lib[rec.def], rec);
+                    for (int a = 0; a < 3; a++) {
+                        rec.box_lo[a] = int32_t(wb.lo[a] - rec.anchor[a]);
+                        rec.box_hi[a] = int32_t(wb.hi[a] - rec.anchor[a]);
+                    }
+                }
+                break;
+            }
+        }
+
+        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 12, step + 1);
+        // The whole table in id order, the brute-force reference.
+        std::vector<uint32_t> all;
+        for (uint32_t i = 0; i < records.size(); i++) {
+            if (!records[i].removed) {
+                all.push_back(i);
+            }
+        }
+        std::vector<uint32_t> candidates;
+        std::vector<uint32_t> have_the_table;
+        for (uint32_t i = 0; i < 40; i++) {
+            const VoxelPos v(ExactNoise::random_offset(i, step, 11u, E), ExactNoise::random_offset(i, step, 12u, E),
+                    ExactNoise::random_offset(i, step, 13u, E));
+            WorldPos p;
+            p.voxel = v;
+            p.frac = Float3{};
+            for (const int lod : { 0, 3, 8 }) {
+                snap->point_candidates(v, candidates);
+                const Float4 indexed = fold(ground, lib, records.data(), candidates.data(), uint32_t(candidates.size()), p, lod, true);
+                const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
+                CHECK(same_bits(indexed, brute));
+                checked++;
+            }
+        }
+        // A few chunks: chunk_list is sorted and unique, and folds the same as the brute force at its own
+        // LOD (the duplicate-instance bug the edit run found).
+        int chunk_checks = 0;
+        for (const KeyValue<ChunkId, std::vector<uint32_t>> &kv : snap->stored_at) {
+            if (chunk_checks >= 8) {
+                break;
+            }
+            chunk_checks++;
+            std::vector<uint32_t> cl;
+            snap->chunk_list(kv.key, cl);
+            CHECK(std::is_sorted(cl.begin(), cl.end()));
+            CHECK(std::adjacent_find(cl.begin(), cl.end()) == cl.end());
+            const int lod = ChunkMath::get_lod(kv.key);
+            WorldPos p;
+            p.voxel = ChunkMath::chunk_min_voxel(kv.key, param);
+            const Float4 from_chunk = fold(ground, lib, records.data(), cl.data(), uint32_t(cl.size()), p, lod, true);
+            const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
+            CHECK(same_bits(from_chunk, brute));
+        }
+    }
+    MESSAGE("edits: ", checked, " (index vs brute force) fold comparisons over 400 random add / remove / move steps");
+    CHECK(checked > 0);
 }
 
 TEST_CASE("Archetype table: encode_record lays the GPU DefRecord out at the documented offsets") {

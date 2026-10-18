@@ -5,7 +5,9 @@ extends Node3D
 ##
 ## Args (all optional):
 ##   --mode=legacy|direct         pipeline (default legacy)
-##   --scenario=load|fly          load: load + steady phase. fly: load, fly out and back, settle, steady.
+##   --scenario=load|fly|edit     load: load + steady phase. fly: load, fly out and back, settle, steady.
+##                                edit: load, then N instance edits (add / move / remove) then settle, steady
+##   --edits=N                    edit scenario: number of edits (default 100)
 ##   --steady=N                   frames measured after load completes (default 300)
 ##   --fly_seconds=S              wall-clock duration of the outbound leg (same again for return, default 10)
 ##   --fly_dist=M                 metres travelled on the outbound leg (default 1500)
@@ -71,6 +73,8 @@ var vp_rid: RID
 
 var frame := 0
 var phase := "load"  # load -> (fly_out -> fly_back -> settle) -> steady -> done
+var edit_ids: Array[int] = []  # edit scenario: the live instance ids
+var edits_done := 0
 var phase_frame := 0
 var phase_start_usec := 0
 var samples := {}  # phase -> {frame_ms: [], gpu_ms: [], cpu_render_ms: [], pending: []}
@@ -247,6 +251,34 @@ func _end_phase() -> void:
 	_take_shots(phase + "_end")
 
 
+## Edit scenario: a few instance edits per frame in front of the camera (alternating add / move /
+## remove). Anchors are LOD0 voxels = world origin + render position / voxel size.
+func _run_edits() -> void:
+	var total := int(args.get("edits", "100"))
+	var vt: float = terrain.get_voxel_size()
+	var origin: Vector3 = Vector3(terrain.world_origin_x, terrain.world_origin_y, terrain.world_origin_z)
+	for k in range(4):
+		if edits_done >= total:
+			return
+		var fwd := -camera.global_transform.basis.z
+		var pos := camera.global_position + fwd * 30.0 \
+			+ Vector3(randf_range(-25, 25), randf_range(-15, 15), randf_range(-25, 25))
+		var vox: Vector3 = (origin + pos / vt).round()
+		if edits_done % 3 == 0 and edit_ids.size() > 0:
+			var idx: int = edit_ids[randi() % edit_ids.size()]
+			if edits_done % 6 == 0:
+				terrain.remove_instance(idx)
+				edit_ids.erase(idx)
+			else:
+				terrain.move_instance(idx, int(vox.x), int(vox.y), int(vox.z))
+		else:
+			var id: int = terrain.add_instance(0, int(vox.x), int(vox.y), int(vox.z),
+				PackedFloat32Array(), PackedFloat32Array([4.0 / vt]), 3, 1.0 / vt)
+			if id >= 0:
+				edit_ids.append(id)
+		edits_done += 1
+
+
 func _process(delta: float) -> void:
 	frame += 1
 	phase_frame += 1
@@ -282,8 +314,16 @@ func _process(delta: float) -> void:
 				_take_shots("loaded")
 				if args.get("scenario", "load") == "fly":
 					_begin_phase("fly_out")
+				elif args.get("scenario", "load") == "edit":
+					_begin_phase("edit")
 				else:
 					_begin_phase("steady")
+		"edit":
+			_run_edits()
+			if edits_done >= int(args.get("edits", "100")):
+				_end_phase()
+				_take_shots("edit_end")
+				_begin_phase("settle")
 		"fly_out":
 			camera.global_position = start_pos + Vector3(fly_dist, 0, 0) * minf(leg, 1.0)
 			if leg >= 1.0:

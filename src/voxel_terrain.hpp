@@ -2,6 +2,7 @@
 
 #include "godot_cpp/classes/node3d.hpp"
 #include "godot_cpp/classes/wrapped.hpp"
+#include "godot_cpp/variant/packed_float32_array.hpp"
 #include "godot_cpp/variant/variant.hpp"
 
 #include "chunk_discoverer.hpp"
@@ -110,6 +111,15 @@ private:
     void _poll_discovery_audit();
 
     void _teardown();
+
+    // Re-mesh the loaded chunks an instance edit can change and invalidate the discoverer's cull cache.
+    void _apply_instance_edit();
+    struct EditStats {
+        int64_t edits = 0;
+        int64_t remesh_total = 0;
+        int64_t remesh_last = 0;
+        TimingStat apply; // the edit + the re-mesh enqueue
+    } edit_stats;
 
     bool _can_set_world_origin(int64_t p_voxel) const;
 
@@ -241,6 +251,15 @@ public:
 
     void set_log_level(int p_level);
     int get_log_level() const;
+
+    // Instance edits (archetype table). The anchor is in LOD0 voxels (int64, never through Vector3i);
+    // rotation is a 9-float row-major basis and params up to 8 floats (empty: identity / zero). op is a
+    // Combine (0 union, 1 smooth union, 2 subtract, 3 smooth subtract). Returns the new id or -1.
+    // add_instance / move_instance re-mesh the chunks the edit can change and rescan the discoverer.
+    int add_instance(int p_type, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation, const PackedFloat32Array &p_params,
+            int p_op, float p_k);
+    bool remove_instance(int p_id);
+    bool move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation);
 
     // True once every scanned chunk is meshed and the mesher has nothing in flight.
     bool is_load_complete();

@@ -54,6 +54,7 @@ private:
 // One instance, as the CPU keeps it. The GPU reads the same fields from a DefRecord (encode_record).
 struct TableRecord {
     uint8_t def = 0; // library index
+    bool removed = false; // an edit removed it: kept in the array (stable ids), skipped by the index
     Combine op = Combine::UNION;
     float k = 0.0f; // smooth radius (voxels)
     float inv_k = 0.0f; // 1 / k, precomputed (never divided on the GPU)

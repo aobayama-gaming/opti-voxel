@@ -43,6 +43,9 @@ void InstanceSnapshot::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> 
         }
     }
     std::sort(r_out.begin(), r_out.end());
+    // An instance stored in up to 8 sibling chunks appears once per touched node in their ancestors'
+    // subtrees: dedup, or a smooth op would fold it several times.
+    r_out.erase(std::unique(r_out.begin(), r_out.end()), r_out.end());
 }
 
 void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, std::vector<uint32_t> &r_out) const {
@@ -56,6 +59,7 @@ void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, std::vector<uin
         }
     }
     std::sort(r_out.begin(), r_out.end());
+    r_out.erase(std::unique(r_out.begin(), r_out.end()), r_out.end());
 }
 
 std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
@@ -73,6 +77,9 @@ std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const Def
 
     for (uint32_t i = 0; i < snap->records.size(); i++) {
         const TableRecord &rec = snap->records[i];
+        if (rec.removed) {
+            continue; // kept for stable ids, never listed
+        }
         const Bounds wb = record_world_bounds((*p_library)[rec.def], rec);
         if (!wb.bounded) {
             snap->unbounded.push_back(i); // listed by every chunk
@@ -132,6 +139,12 @@ std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const Def
         const ChunkId parent = ChunkMath::get_parent_from_child(n);
         std::vector<uint32_t> &pacc = snap->subtree[parent];
         pacc.insert(pacc.end(), snap->subtree[n].begin(), snap->subtree[n].end());
+    }
+    // Dedup every subtree: an instance stored in sibling chunks is appended once per sibling.
+    for (KeyValue<ChunkId, std::vector<uint32_t>> &kv : snap->subtree) {
+        std::vector<uint32_t> &v = kv.value;
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
     }
     return snap;
 }

@@ -156,6 +156,8 @@ public:
     void process_queue();
 
     void send_chunk(const LODHashSet &p_chunks);
+    // Re-mesh chunks an instance edit changed (legacy path; the direct mesher has the versioned queue).
+    void remesh_chunks(const std::vector<ChunkId> &p_chunks);
 
     bool get_results(VoxelState &output);
 

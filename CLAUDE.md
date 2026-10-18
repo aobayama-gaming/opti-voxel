@@ -195,6 +195,19 @@ to every change, and a reviewer may reject a PR on any of them.
   culled, whatever the slope. FrameSpike's table probe checks the library + fold GPU == CPU. **To add a
   library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
   bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
+  **Runtime edits:** `VoxelTerrain.add_instance(type, x, y, z, rotation, params, op, k)` /
+  `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (anchors are int64 LOD0 voxels, never
+  through `Vector3i`). Each edit rebuilds the snapshot (copy on write) and bumps its version; the mesher
+  re-uploads the records when the version changes. The edit region (old box of a remove/move plus new box
+  of an add/move) drives two things: the loaded chunks whose box grown by `M(lod)` meets it are re-queued
+  in the mesher's `remesh_queue` (dispatched before new chunks, finest LOD first, `remesh_chunks` /
+  `remesh_pops`), and the discoverer's `invalidate` drops the cull verdicts near it and forces a rescan
+  even if the camera chunk did not change. A chunk carries a `required_version`: a result computed from
+  an older table version is dropped and re-queued (`remesh_stale_dropped`). `add_new_loaded` drops a
+  pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
+  `instance_capacity()` instances up front (default 16384; the records array is padded to it). The bench's
+  `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
+  discovery_audit should stay `ok`.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL

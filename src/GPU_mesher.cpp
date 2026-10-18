@@ -382,7 +382,7 @@ void GPUMesher::_initialize_gpu_compute() {
     if (SDFGpuTable *table = sdf->get_gpu_table()) {
         const PackedByteArray records = table->record_bytes();
         buffer_table_records = rd->storage_buffer_create(records.size(), records);
-        const uint64_t list_words = uint64_t(chunk_batch_number) * MAX<uint64_t>(table->instance_count(), 1u);
+        const uint64_t list_words = uint64_t(chunk_batch_number) * MAX<uint64_t>(table->instance_capacity(), 1u);
         buffer_table_list = rd->storage_buffer_create(list_words * 4);
         uploaded_table_version = table->version();
         uniforms.push_back(create_storage_uniform(6, buffer_table_records));
@@ -923,6 +923,15 @@ bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
     }
 
     return false;
+}
+
+void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
+    for (const ChunkId &chunk : p_chunks) {
+        const int lod = ChunkMath::get_lod(chunk);
+        if (lod >= 0 && lod < (int)chunk_queue.size() && chunk_queue[lod] != nullptr) {
+            chunk_queue[lod]->insert(chunk);
+        }
+    }
 }
 
 void GPUMesher::send_chunk(const LODHashSet &p_chunks) {

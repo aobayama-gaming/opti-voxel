@@ -25,8 +25,8 @@ public:
         if (!ground_error.is_empty()) {
             ERR_PRINT(ground_error);
         }
-        for (int i = 0; i < library.size(); i++) {
-            const String error = library[i].program.validate(p_lod_count);
+        for (int i = 0; i < library->size(); i++) {
+            const String error = (*library)[i].program.validate(p_lod_count);
             if (!error.is_empty()) {
                 ERR_PRINT(vformat("Archetype library type %d: ", i) + error);
             }
@@ -78,6 +78,89 @@ public:
         return false;
     }
 
+    // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the
+    // records when it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh.
+    int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) override {
+        if (!library || p_type < 0 || p_type >= library->size()) {
+            return -1;
+        }
+        Archetype::TableRecord rec;
+        rec.def = uint8_t(p_type);
+        rec.op = Archetype::Combine(p_op);
+        rec.k = p_k;
+        rec.inv_k = p_k > 0.0f ? float(1.0 / double(p_k)) : 0.0f;
+        rec.anchor = p_anchor;
+        if (p_rotation) {
+            std::copy(p_rotation, p_rotation + 9, rec.rotation);
+        }
+        if (p_params) {
+            std::copy(p_params, p_params + 8, rec.params);
+        }
+        finish_record(rec);
+        const VoxelBox region = record_box(rec);
+        records.push_back(rec);
+        edit_k = rec.k;
+        edit_margin_c = rec.margin_c;
+        rebuild(region);
+        return int(records.size() - 1);
+    }
+
+    bool remove_instance(int p_id) override {
+        if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
+            return false;
+        }
+        const VoxelBox region = record_box(records[p_id]);
+        records[p_id].removed = true;
+        edit_k = records[p_id].k;
+        edit_margin_c = records[p_id].margin_c;
+        rebuild(region);
+        return true;
+    }
+
+    bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation) override {
+        if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
+            return false;
+        }
+        Archetype::TableRecord &rec = records[p_id];
+        const VoxelBox old_box = record_box(rec);
+        rec.anchor = p_anchor;
+        if (p_rotation) {
+            std::copy(p_rotation, p_rotation + 9, rec.rotation);
+        }
+        finish_record(rec);
+        const VoxelBox new_box = record_box(rec);
+        VoxelBox region;
+        region.valid = true;
+        for (int a = 0; a < 3; a++) {
+            region.lo[a] = MIN(old_box.lo[a], new_box.lo[a]);
+            region.hi[a] = MAX(old_box.hi[a], new_box.hi[a]);
+        }
+        edit_k = rec.k;
+        edit_margin_c = rec.margin_c;
+        rebuild(region);
+        return true;
+    }
+
+    // Whether a chunk's samples can be changed by the last edit (its box grown by M(lod) meets the
+    // edit's region): the chunks to re-mesh.
+    bool edit_affects_chunk(const ChunkId &p_chunk) const override {
+        if (!edit_box.valid) {
+            return false;
+        }
+        const int lod = ChunkMath::get_lod(p_chunk);
+        const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+        const VoxelPos min = ChunkMath::chunk_min_voxel(p_chunk, param);
+        const float m = edit_k + edit_margin_c * ExactNoise::exact_pow2(lod);
+        const int64_t grow = int64_t(std::ceil(m)) + 2;
+        VoxelBox box;
+        box.valid = true;
+        for (int a = 0; a < 3; a++) {
+            box.lo[a] = min[a] - grow;
+            box.hi[a] = min[a] + span + grow;
+        }
+        return box.intersects(edit_box);
+    }
+
     const std::shared_ptr<const Archetype::InstanceSnapshot> &get_snapshot() const { return snapshot; }
     const Archetype::DefLibrary &get_library() const { return *snapshot->library; }
     const Archetype::Program &get_ground() const { return snapshot->ground; }
@@ -121,9 +204,43 @@ public:
     }
 
 private:
-    Archetype::DefLibrary library;
+    std::shared_ptr<const Archetype::DefLibrary> library;
+    Archetype::Program ground_program;
+    float out_scale = 1.0f;
+    int lod_count = 24;
+    uint32_t version = 0;
+    std::vector<Archetype::TableRecord> records; // editable: the snapshot is rebuilt from these
     std::shared_ptr<const Archetype::InstanceSnapshot> snapshot;
     Archetype::GpuTable gpu;
+    float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
+    float edit_margin_c = 0.0f;
+
+    void rebuild(const VoxelBox &p_region) {
+        version++;
+        snapshot = Archetype::build_snapshot(library, ground_program, out_scale, true, records, param, lod_count - 1, version);
+        gpu.set_snapshot(snapshot);
+        edit_box = p_region;
+    }
+
+    void finish_record(Archetype::TableRecord &r_rec) const {
+        const Archetype::Bounds wb = Archetype::record_world_bounds((*library)[r_rec.def], r_rec);
+        for (int a = 0; a < 3; a++) {
+            r_rec.box_lo[a] = int32_t(wb.lo[a] - r_rec.anchor[a]);
+            r_rec.box_hi[a] = int32_t(wb.hi[a] - r_rec.anchor[a]);
+        }
+        r_rec.lipschitz = wb.lipschitz;
+        r_rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+    }
+
+    VoxelBox record_box(const Archetype::TableRecord &p_rec) const {
+        VoxelBox b;
+        b.valid = true;
+        for (int a = 0; a < 3; a++) {
+            b.lo[a] = p_rec.anchor[a] + p_rec.box_lo[a];
+            b.hi[a] = p_rec.anchor[a] + p_rec.box_hi[a];
+        }
+        return b;
+    }
 
     void create_scene(double p_voxel, int p_lod_count) {
         using namespace Archetype;
@@ -135,12 +252,13 @@ private:
             p.voxel = VoxelPos(std::llround(p_x / p_voxel), 0, std::llround(p_z / p_voxel));
             return int64_t(std::floor(ExactNoise::fbm(height, p, 0).w));
         };
-        library = DefLibrary();
-        const int sphere = library.add(make_sphere_type());
-        const int capsule = library.add(make_capsule_type());
-        const int rock = library.add(make_rock_type(int(std::lround(std::log2(8.0 / p_voxel))), ROCK_SEED));
+        DefLibrary lib;
+        const int sphere = lib.add(make_sphere_type());
+        const int capsule = lib.add(make_capsule_type());
+        const int rock = lib.add(make_rock_type(int(std::lround(std::log2(8.0 / p_voxel))), ROCK_SEED));
+        library = std::make_shared<const DefLibrary>(lib);
 
-        std::vector<TableRecord> records;
+        records.clear();
         uint32_t seed = 1;
         auto add = [&](Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw) {
             TableRecord rec;
@@ -157,13 +275,7 @@ private:
             std::copy(rot, rot + 9, rec.rotation);
             const uint32_t salt_seed = seed++;
             rec.salt = salt_seed == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ salt_seed, 0x5EEDu, 0u }).x;
-            const Bounds wb = record_world_bounds(library[rec.def], rec);
-            for (int a = 0; a < 3; a++) {
-                rec.box_lo[a] = int32_t(wb.lo[a] - rec.anchor[a]);
-                rec.box_hi[a] = int32_t(wb.hi[a] - rec.anchor[a]);
-            }
-            rec.lipschitz = wb.lipschitz;
-            rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+            finish_record(rec);
             records.push_back(rec);
         };
         const struct {
@@ -185,9 +297,11 @@ private:
         Archetype::Instance ground_inst;
         ground_inst.def = ground_def(height);
         ground_inst.anchor = VoxelPos(0, datum, 0);
-        const Program ground_program = compile(ground_inst).program;
-        snapshot = Archetype::build_snapshot(std::make_shared<const DefLibrary>(library), ground_program, float(p_voxel), true, std::move(records), param,
-                p_lod_count - 1, 1);
-        gpu.set_snapshot(snapshot);
+        ground_program = compile(ground_inst).program;
+        out_scale = float(p_voxel);
+        lod_count = p_lod_count;
+        edit_k = 0.0f;
+        edit_margin_c = 0.0f;
+        rebuild(VoxelBox());
     }
 };

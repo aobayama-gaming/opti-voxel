@@ -18,8 +18,8 @@ String GpuTable::glsl_set_chunk() const {
 
 PackedByteArray GpuTable::record_bytes() const {
     PackedByteArray bytes;
-    const uint32_t count = MAX(instance_count(), 1u);
-    bytes.resize(count * RECORD_BYTES);
+    // Padded to the buffer's capacity: the mesher uploads this whole array, so appends always fit.
+    bytes.resize(instance_capacity() * RECORD_BYTES);
     bytes.fill(0);
     if (snap) {
         for (uint32_t i = 0; i < snap->records.size(); i++) {

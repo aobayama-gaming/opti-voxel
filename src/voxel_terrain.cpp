@@ -78,6 +78,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discoverer_mode"), &VoxelTerrain::get_discoverer_mode);
     ClassDB::bind_method(D_METHOD("set_discovery_compare", "enable"), &VoxelTerrain::set_discovery_compare);
     ClassDB::bind_method(D_METHOD("get_discovery_compare"), &VoxelTerrain::get_discovery_compare);
+    ClassDB::bind_method(D_METHOD("add_instance", "type", "x", "y", "z", "rotation", "params", "op", "k"), &VoxelTerrain::add_instance,
+            DEFVAL(PackedFloat32Array()), DEFVAL(PackedFloat32Array()), DEFVAL(0), DEFVAL(0.0f));
+    ClassDB::bind_method(D_METHOD("remove_instance", "id"), &VoxelTerrain::remove_instance);
+    ClassDB::bind_method(D_METHOD("move_instance", "id", "x", "y", "z", "rotation"), &VoxelTerrain::move_instance, DEFVAL(PackedFloat32Array()));
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
@@ -562,6 +566,93 @@ void VoxelTerrain::_ready() {
     VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
 }
 
+int VoxelTerrain::add_instance(int p_type, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation,
+        const PackedFloat32Array &p_params, int p_op, float p_k) {
+    if (!sdf) {
+        return -1;
+    }
+    float rot[9];
+    const float *rp = nullptr;
+    if (p_rotation.size() >= 9) {
+        for (int i = 0; i < 9; i++) {
+            rot[i] = p_rotation[i];
+        }
+        rp = rot;
+    }
+    float params[8] = {};
+    const float *pp = nullptr;
+    if (!p_params.is_empty()) {
+        for (int i = 0; i < 8; i++) {
+            params[i] = i < p_params.size() ? p_params[i] : 0.0f;
+        }
+        pp = params;
+    }
+    const int id = sdf->add_instance(p_type, VoxelPos(p_x, p_y, p_z), rp, pp, p_op, p_k);
+    if (id >= 0) {
+        _apply_instance_edit();
+    }
+    return id;
+}
+
+bool VoxelTerrain::remove_instance(int p_id) {
+    if (!sdf) {
+        return false;
+    }
+    const bool ok = sdf->remove_instance(p_id);
+    if (ok) {
+        _apply_instance_edit();
+    }
+    return ok;
+}
+
+bool VoxelTerrain::move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation) {
+    if (!sdf) {
+        return false;
+    }
+    float rot[9];
+    const float *rp = nullptr;
+    if (p_rotation.size() >= 9) {
+        for (int i = 0; i < 9; i++) {
+            rot[i] = p_rotation[i];
+        }
+        rp = rot;
+    }
+    const bool ok = sdf->move_instance(p_id, VoxelPos(p_x, p_y, p_z), rp);
+    if (ok) {
+        _apply_instance_edit();
+    }
+    return ok;
+}
+
+void VoxelTerrain::_apply_instance_edit() {
+    const uint64_t t0 = now_usec();
+    const VoxelBox &box = sdf->last_edit_box();
+    if (!box.valid) {
+        return;
+    }
+    // The loaded chunks whose samples the edit can change: their box grown by the locality margin at
+    // their LOD meets the edit's region.
+    std::vector<ChunkId> remesh;
+    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
+        if (sdf->edit_affects_chunk(kv.key)) {
+            remesh.push_back(kv.key);
+        }
+    }
+    if (direct_mesher) {
+        direct_mesher->remesh_chunks(remesh);
+    } else if (gpu_mesher) {
+        gpu_mesher->remesh_chunks(remesh);
+    }
+    if (chunk_discoverer) {
+        chunk_discoverer->invalidate(box);
+    }
+    destroy_dirty = true;
+    edit_stats.edits++;
+    edit_stats.remesh_last = (int64_t)remesh.size();
+    edit_stats.remesh_total += (int64_t)remesh.size();
+    edit_stats.apply.add(now_usec() - t0);
+}
+
 void VoxelTerrain::_process(double) {
     if (!started) {
         return;
@@ -952,6 +1043,13 @@ Dictionary VoxelTerrain::get_debug_stats() {
     d["chunk_rids_alive"] = DebugLog::chunk_rids_created.load() - DebugLog::chunk_rids_freed.load();
     d["discoverer"] = chunk_discoverer->get_stats();
     d["mesher"] = direct_mesher ? direct_mesher->get_stats() : gpu_mesher->get_stats();
+
+    Dictionary edits;
+    edits["edits"] = edit_stats.edits;
+    edits["remesh_total"] = edit_stats.remesh_total;
+    edits["remesh_last"] = edit_stats.remesh_last;
+    edits["apply"] = edit_stats.apply.to_dict();
+    d["edits"] = edits;
 
     return d;
 }

@@ -72,6 +72,8 @@ public:
     void destroy();
 
     void send_chunk(const LODHashSet &p_chunks);
+    // Re-mesh already-loaded chunks whose surface an instance edit changed (finest LOD first).
+    void remesh_chunks(const std::vector<ChunkId> &p_chunks);
     void process_queue();
     bool get_results(VoxelState &output);
     bool is_idle();
@@ -98,6 +100,7 @@ private:
         std::vector<ChunkId> chunks;
         std::vector<int> pages;
         uint64_t dispatch_frame = 0;
+        uint32_t table_version = 0; // the instance table version the batch was recomputed from
     };
 
     struct CompletedBatch {
@@ -131,6 +134,10 @@ private:
 
     // Per LOD, sorted by descending Morton key: pop_back() walks space along the Morton curve.
     std::vector<std::vector<ChunkId>> chunk_queue;
+    // Instance edits: their chunks, dispatched before chunk_queue, finest LOD first. send_chunk() does
+    // not touch this. required_version is the table version a chunk must be re-meshed from (staleness).
+    std::vector<std::vector<ChunkId>> remesh_queue;
+    HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
     LODHashSet working_generation;
 
     uint32_t next_batch_id = 0;
@@ -165,6 +172,7 @@ private:
     // The instance table's buffers (archetype instances): records + the current batch's list.
     RID buffer_table_records;
     RID buffer_table_list;
+    uint64_t table_list_capacity = 0; // bytes
     uint32_t uploaded_table_version = UINT32_MAX;
     RID shaders[5];
     RID pipelines[5];
@@ -234,6 +242,10 @@ private:
         TimingStat gpu_compute; // GPU time of passes 1-5 (from timestamps)
         TimingStat gpu_copy; // GPU time of the page copies
         TimingStat gpu_pass[5];
+        uint64_t remesh_chunks = 0; // chunks queued by remesh_chunks()
+        uint64_t remesh_pops = 0; // remesh chunks dispatched
+        uint64_t remesh_stale_dropped = 0; // results from a table version older than the chunk's edit
+        uint64_t remesh_queue_max = 0;
         // Cascade terrain: GPU time of the level groups j >= 3, j = 2, j = 1, j = 0 (pass 0 is their sum).
         TimingStat gpu_cascade[4];
         uint64_t live_quads = 0;

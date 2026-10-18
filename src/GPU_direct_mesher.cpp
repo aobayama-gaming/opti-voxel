@@ -105,6 +105,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     mutex.instantiate();
 
     chunk_queue.resize(p_lod_numbers);
+    remesh_queue.resize(p_lod_numbers);
 
     pool = memnew(QuadPagePool);
     pool->initialize(scenario, settings.page_capacity, settings.initial_pages, chunk_param.voxel_size);
@@ -215,8 +216,9 @@ void GPUDirectMesher::_rt_initialize() {
     if (SDFGpuTable *table = sdf->get_gpu_table()) {
         const PackedByteArray records = table->record_bytes();
         buffer_table_records = rd->storage_buffer_create(records.size(), records);
-        const uint64_t list_words = uint64_t(settings.batch_size) * MAX<uint64_t>(table->instance_count(), 1u);
-        buffer_table_list = rd->storage_buffer_create(list_words * 4);
+        const uint64_t list_words = uint64_t(settings.batch_size) * MAX<uint64_t>(table->instance_capacity(), 1u);
+        table_list_capacity = list_words * 4;
+        buffer_table_list = rd->storage_buffer_create(table_list_capacity);
         uploaded_table_version = table->version();
         uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
         uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
@@ -354,6 +356,7 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, uint32_t p
         uploaded_table_version = p_table_version;
     }
     if (!p_list.is_empty()) {
+        ERR_FAIL_COND_MSG(uint64_t(p_list.size()) > table_list_capacity, vformat("GPUDirectMesher: batch list %d bytes over the %d B buffer.", p_list.size(), table_list_capacity));
         rd->buffer_update(buffer_table_list, 0, p_list.size(), p_list);
     }
 }
@@ -543,6 +546,16 @@ void GPUDirectMesher::_update_dirty_bounds() {
 }
 
 bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
+    // Instance edits first, finest LOD first: the chunk under the edit is what the user is looking at.
+    for (std::vector<ChunkId> &queue : remesh_queue) {
+        if (queue.empty()) {
+            continue;
+        }
+        r_chunk = queue.back();
+        queue.pop_back();
+        stats.remesh_pops++;
+        return true;
+    }
     for (std::vector<ChunkId> &queue : chunk_queue) {
         if (queue.empty()) {
             continue;
@@ -552,6 +565,24 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
         return true;
     }
     return false;
+}
+
+void GPUDirectMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
+    const uint32_t version = sdf->get_gpu_table() ? sdf->get_gpu_table()->version() : 0u;
+    uint64_t queued = 0;
+    for (const std::vector<ChunkId> &q : remesh_queue) {
+        queued += q.size();
+    }
+    stats.remesh_queue_max = MAX(stats.remesh_queue_max, queued + p_chunks.size());
+    for (const ChunkId &chunk : p_chunks) {
+        const int lod = ChunkMath::get_lod(chunk);
+        if (lod < 0 || lod >= (int)remesh_queue.size()) {
+            continue;
+        }
+        remesh_queue[lod].push_back(chunk);
+        required_version[chunk] = version;
+        stats.remesh_chunks++;
+    }
 }
 
 void GPUDirectMesher::_flush_kills() {
@@ -641,6 +672,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
 
     const uint32_t batch_id = next_batch_id++;
     const uint32_t count = chunks.size();
+    batch.table_version = table_version;
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
@@ -749,6 +781,21 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                     chunk_queue[lod].push_back(chunk_id);
                 }
                 continue;
+            }
+
+            // Staleness (instance edits): this result was computed from a table version older than the
+            // chunk's latest edit. Drop it and re-mesh from the current table.
+            if (required_version.has(chunk_id)) {
+                const uint32_t required = required_version[chunk_id];
+                if (required > batch.table_version) {
+                    const int lod = ChunkMath::get_lod(chunk_id);
+                    if (lod >= 0 && lod < (int)remesh_queue.size()) {
+                        remesh_queue[lod].push_back(chunk_id);
+                    }
+                    stats.remesh_stale_dropped++;
+                    continue;
+                }
+                required_version.erase(chunk_id);
             }
 
             ChunkOutput out;
@@ -1055,6 +1102,15 @@ Dictionary GPUDirectMesher::get_stats() {
     d["page_aabb_extent_chunks_mean"] = pages_with_live ? extent_sum / pages_with_live : 0.0;
     d["page_aabb_extent_chunks_max"] = extent_max;
     d["queued"] = queued;
+    int64_t remesh_queued = 0;
+    for (const std::vector<ChunkId> &q : remesh_queue) {
+        remesh_queued += q.size();
+    }
+    d["remesh_queue"] = remesh_queued;
+    d["remesh_queue_max"] = (int64_t)stats.remesh_queue_max;
+    d["remesh_chunks"] = (int64_t)stats.remesh_chunks;
+    d["remesh_pops"] = (int64_t)stats.remesh_pops;
+    d["remesh_stale_dropped"] = (int64_t)stats.remesh_stale_dropped;
     d["in_flight"] = (int64_t)in_flight.size();
     d["in_flight_max"] = (int64_t)stats.in_flight_max;
     // Mesh and audit batches per frame that dispatched any.
