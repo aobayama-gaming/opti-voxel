@@ -12,7 +12,7 @@
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log,
 # 4 a requested --validate / --audit / --discovery_audit reported ok=false, or a loaded run did not
-# settle (loaded chunks != scanned chunks).
+# settle (loaded chunks != scanned chunks), or a --destroy_verify=1 run found a mismatch.
 set -uo pipefail
 
 # BENCH_ROOT: bench another checkout with this harness (bench_ab.sh uses it for the "before" tree).
@@ -201,6 +201,11 @@ if dsc:
               f" corners={fs.get('corners')} unique={fs.get('sdf_calls')} dedup={fs.get('dedup_ratio', 0):.2f} waves={len(waves)}"
               f" gpu={gpu} init={dsc.get('gpu_init_ms', 0):.0f}ms readback={sum(w.get('readback_bytes', 0) for w in waves)}B scratch={dsc.get('gpu_scratch_mb', 0):.2f}MB"
               f" compare scans={dsc.get('compare_scans')} differences={dsc.get('compare_differences')}")
+dv = d.get("final_terrain", {}).get("destroy", {})
+if dv:
+    print(f">> destroy: leaving max={dv.get('leaving_max')} rescans={dv.get('rescans')} (re-anchored {dv.get('rescan_reanchored')},"
+          f" {dv.get('rescan_ms_total', 0):.1f}ms) verify={dv.get('verify')} checks={dv.get('verify_checks')}"
+          f" mismatches={dv.get('verify_mismatches')} delta_mismatches={dv.get('delta_mismatches')} octree_violations={dv.get('octree_violations')}")
 wo = d.get("final_terrain", {}).get("world_origin")
 if wo:
     print(f">> world origin voxel={wo.get('voxel')} chunk={wo.get('chunk')}")
@@ -236,6 +241,8 @@ v, a, da = d.get('validation') or {}, d.get('audit') or {}, d.get('discovery_aud
 ft = d.get('final_terrain', {})
 ch = ft.get('chunks', {})
 settled = not ft.get('load_complete') or (ch.get('loaded_not_scanned', 0) == 0 and ch.get('scanned_not_loaded', 0) == 0)
-print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok'))) and (not da or bool(da.get('ok'))) and settled))" "$RUN_DIR/stats.json")
-[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT/DISCOVERY/SETTLE CHECK FAILED"; exit 4; }
+dv = ft.get('destroy') or {}
+destroy_ok = not dv.get('verify') or (dv.get('verify_mismatches', 0) == 0 and dv.get('delta_mismatches', 0) == 0 and dv.get('octree_violations', 0) == 0)
+print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok'))) and (not da or bool(da.get('ok'))) and settled and destroy_ok))" "$RUN_DIR/stats.json")
+[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT/DISCOVERY/SETTLE/DESTROY CHECK FAILED"; exit 4; }
 exit 0

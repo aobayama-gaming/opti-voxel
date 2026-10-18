@@ -26,7 +26,9 @@ void scan(VoxelState &r_state, const std::vector<ChunkId> &p_ids) {
     for (const ChunkId &id : p_ids) {
         scanned->insert(id);
     }
-    r_state.add_scan_chunk(std::move(scanned));
+    ScanDelta delta;
+    ScanDelta::between(*r_state.scanned_chunk, *scanned, delta);
+    r_state.add_scan_chunk(std::move(scanned), delta);
 }
 
 // A chunk as a mesher hands it back. No RIDs and no owner, so free() has nothing to release.
@@ -38,9 +40,16 @@ void load(VoxelState &r_state, const std::vector<ChunkId> &p_ids) {
     }
 }
 
+// The incremental destroy check, compared with the full recompute.
+void update(VoxelState &r_state) {
+    r_state.update_destroy();
+    CHECK(r_state.verify_against_full() == 0);
+}
+
 VoxelState make_state() {
     VoxelState state;
     state.set_max_lod(MAX_LOD);
+    state.verify = true;
     return state;
 }
 
@@ -60,15 +69,15 @@ TEST_CASE("VoxelState: a parent stays until all its children are loaded (split)"
     const std::vector<ChunkId> children = children_of(PARENT);
     scan(state, children);
 
-    state.update_destroy_full();
+    update(state);
     CHECK_FALSE(state.to_destroy_chunk.has(PARENT));
 
     load(state, std::vector<ChunkId>(children.begin(), children.end() - 1));
-    state.update_destroy_full();
+    update(state);
     CHECK_FALSE(state.to_destroy_chunk.has(PARENT)); // one child still missing
 
     load(state, { children.back() });
-    state.update_destroy_full();
+    update(state);
     CHECK(state.to_destroy_chunk.has(PARENT));
     CHECK(state.to_destroy_chunk.size() == 1);
 }
@@ -79,11 +88,11 @@ TEST_CASE("VoxelState: children stay until their parent is loaded (merge)") {
     load(state, children);
     scan(state, { PARENT });
 
-    state.update_destroy_full();
+    update(state);
     CHECK(state.to_destroy_chunk.size() == 0);
 
     load(state, { PARENT });
-    state.update_destroy_full();
+    update(state);
     CHECK(state.to_destroy_chunk.size() == 8);
     for (const ChunkId &child : children) {
         CHECK(state.to_destroy_chunk.has(child));
@@ -94,7 +103,7 @@ TEST_CASE("VoxelState: an unrelated chunk outside the scan is destroyed at once"
     VoxelState state = make_state();
     load(state, { ChunkId(1, 1, 1), ChunkId(-31, 1, 1) });
     scan(state, { ChunkId(1, 1, 1) });
-    state.update_destroy_full();
+    update(state);
     CHECK(state.to_destroy_chunk.size() == 1);
     CHECK(state.to_destroy_chunk.has(ChunkId(-31, 1, 1)));
 }
@@ -141,8 +150,11 @@ struct Sim {
     double camera[3] = { 0.0, 0.0, 0.0 };
     double split = 2.0;
 
-    // Discoverer: the latest scan, until the main thread takes it (a scan it skipped is just replaced).
+    // Discoverer: the latest scan and its delta, until the main thread takes them (a skipped scan's delta
+    // is merged into the next one, like ChunkDiscoverer::_publish).
+    LODHashSet worker_scan;
     std::unique_ptr<LODHashSet> published;
+    ScanDelta published_delta;
     // Mesher: queue rebuilt from the dirty chunks on every scan (minus those in flight), results back in any order.
     std::vector<ChunkId> queue;
     std::vector<ChunkId> in_flight;
@@ -160,6 +172,7 @@ struct Sim {
     explicit Sim(uint64_t p_seed) :
             rng(p_seed) {
         state.set_max_lod(SIM_MAX_LOD);
+        state.verify = true;
     }
 
     int uniform(int p_n) { return int(rng() % uint64_t(p_n)); }
@@ -184,13 +197,21 @@ struct Sim {
         for (int i = 0; i < 8; i++) {
             sim_scan_node(ChunkId((i & 1) ? root : -root, (i & 2) ? root : -root, (i & 4) ? root : -root), SIM_MAX_LOD - 1, camera, split, *scan);
         }
-        scans_skipped += published ? 1 : 0;
+        ScanDelta delta;
+        ScanDelta::between(worker_scan, *scan, delta);
+        delta.apply(worker_scan);
+        if (published) {
+            published_delta.merge(delta);
+            scans_skipped++;
+        } else {
+            published_delta = delta;
+        }
         published = std::move(scan);
         scans_published++;
     }
 
     void take_scan() {
-        state.add_scan_chunk(std::move(published));
+        state.add_scan_chunk(std::move(published), published_delta);
         queue.clear();
         for (const ChunkId &id : state.dirty_chunk) {
             if (!in_flight_set.has(id)) {
@@ -225,7 +246,7 @@ struct Sim {
 
     // The frame's destroy check, then (like _process) the frame's results, then the destruction.
     void frame() {
-        state.update_destroy_full();
+        update(state);
         for (const KeyValue<ChunkId, ChunkOutput> &kv : state.to_destroy_chunk) {
             failures += state.loaded_chunk.has(kv.key) && !state.scanned_chunk->has(kv.key) ? 0 : 1;
         }
@@ -234,6 +255,15 @@ struct Sim {
         }
         destroyed += state.to_destroy_chunk.size();
         state.destroy_marked();
+    }
+
+    // The incremental destroy check against the full recompute (which also checks dirty = scan - loaded
+    // and leaving = loaded - scan), as if a frame ran now.
+    void check_incremental() {
+        state.update_destroy();
+        failures += state.verify_against_full();
+        state.to_destroy_chunk.clear();
+        failures += state.stats.verify_mismatches + state.stats.delta_mismatches + state.stats.octree_violations;
     }
 
     // The dirty set is always the scan minus the loaded chunks.
@@ -266,6 +296,7 @@ struct Sim {
         }
         events++;
         check_dirty();
+        check_incremental();
     }
 
     // No new scan: the mesher drains, then the loaded set must be exactly the scan.
@@ -291,7 +322,9 @@ struct Sim {
 
 } // namespace
 
-TEST_CASE("VoxelState: randomized scans and results settle on the scan") {
+// I1 of the incremental destroy: after every event the incremental state gives the same to_destroy set
+// and stall counts as the full recompute.
+TEST_CASE("VoxelState: randomized scans and results, incremental destroy = full recompute") {
     int64_t events = 0;
     for (uint64_t seed = 1; seed <= 4; seed++) {
         Sim sim(seed);
@@ -303,7 +336,7 @@ TEST_CASE("VoxelState: randomized scans and results settle on the scan") {
         }
         CHECK(sim.failures == 0);
         events += sim.events;
-        MESSAGE("seed ", seed, ": ", sim.events, " events, ", sim.scans_published, " scans (", sim.scans_skipped, " skipped), ", sim.results,
+        MESSAGE("seed ", seed, ": ", sim.events, " events, ", sim.state.stats.verify_checks, " comparisons, ", sim.state.stats.rescans, " rescans, ", sim.scans_published, " scans (", sim.scans_skipped, " skipped), ", sim.results,
                 " results (", sim.stale_results, " stale), ", sim.destroyed, " destroyed, last scan ", sim.state.scanned_chunk->size(), " chunks");
     }
     CHECK(events >= 100000);

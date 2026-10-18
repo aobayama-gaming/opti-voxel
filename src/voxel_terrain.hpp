@@ -82,12 +82,13 @@ private:
     int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
     bool discovery_cache = true;
     bool discovery_verify = false;
+    bool destroy_verify = false;
     int discoverer_mode = -1; // -1 auto: GPU for a cascade terrain, CPU otherwise
     bool discovery_compare = false;
 
     bool started = false;
 
-    // update_destroy_full is needed (a scan or mesher results arrived since it last ran).
+    // update_destroy is needed (a scan or mesher results arrived since it last ran).
     bool destroy_dirty = false;
     // Camera chunk of the scan currently in visual_mesh_data.scanned_chunk.
     ChunkId scan_camera_chunk;
@@ -122,7 +123,9 @@ private:
     struct ProcessStats {
         TimingStat process_total;
         TimingStat scan_ingest; // get_scanned_chunks + add_scan_chunk + send_chunk
-        TimingStat destroy_from_scan; // VoxelState::update_destroy_full
+        TimingStat scan_apply; // part of scan_ingest: VoxelState::add_scan_chunk (the scan delta)
+        TimingStat destroy_from_scan; // VoxelState::update_destroy
+        TimingStat destroy_verify; // VoxelState::verify_against_full (--destroy_verify)
         TimingStat mesher_dispatch; // process_queue
         TimingStat mesher_collect; // get_results
         TimingStat destroy_chunks; // VoxelState::destroy_marked
@@ -217,6 +220,10 @@ public:
     // Debug: recompute every cached verdict and report mismatches as errors.
     void set_discovery_verify(bool p_enable);
     bool get_discovery_verify() const;
+    // Debug: check every scan delta against the full scans and every incremental destroy check against
+    // the full recompute (VoxelState::verify_against_full), ERROR on a difference.
+    void set_destroy_verify(bool p_enable);
+    bool get_destroy_verify() const;
     // Where the discoverer evaluates the corners of its cull test: -1 auto (GPU when the terrain is a cascade,
     // CPU otherwise), 0 CPU, 1 GPU (DiscovererGPU, a local device on the discoverer thread; CPU with a warning
     // if it can't be created or the terrain has no cascade). Both give the same scans.

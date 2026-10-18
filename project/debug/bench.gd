@@ -47,6 +47,7 @@ extends Node3D
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
 ##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
 ##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
+##   --destroy_verify=1           check every scan delta and incremental destroy check against the full recompute, ERROR on a mismatch
 ##   --discoverer=cpu|gpu         VoxelTerrain.discoverer_mode: where the cull test's corners are evaluated
 ##                                (default: gpu for the cascade terrain, cpu otherwise)
 ##   --discovery_compare=1        discoverer: diff every scan against a fresh CPU scan, ERROR on a difference
@@ -152,6 +153,7 @@ func _ready() -> void:
 	if args.has("discovery_cache"):
 		terrain.discovery_cache = args["discovery_cache"] == "1"
 	terrain.discovery_verify = args.get("discovery_verify", "0") == "1"
+	terrain.destroy_verify = args.get("destroy_verify", "0") == "1"
 	if args.has("discoverer"):
 		var discoverers := {"cpu": 0, "gpu": 1}
 		if not discoverers.has(args["discoverer"]):
