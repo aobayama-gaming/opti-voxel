@@ -263,10 +263,13 @@ vec3 qef_vertex(ChunkFrame chunk, vec3 cell, uvec3 gid, vec3 mass_point, float e
 )glsl";
 
 // The mass-point line both vertex passes rewrite to qef_vertex when the terrain has dual contouring
-// enabled. Kept next to the function so the two call sites cannot drift.
+// enabled. Kept next to the function so the two call sites cannot drift. The rewritten line is the
+// division that turns the sum of the crossings into their mean, so the call divides: handed the sum,
+// qef_vertex clamped the vertex onto the cell's far faces (terraces).
 inline constexpr const char GLSL_MASS_POINT_VERTEX[] = "local_vertex /= float(active_edge_count);";
 inline constexpr const char GLSL_QEF_VERTEX_CALL[] =
-        "local_vertex = qef_vertex(chunk, vec3(cell_chunk_coordinate), gl_GlobalInvocationID, local_vertex, "
+        "local_vertex = qef_vertex(chunk, vec3(cell_chunk_coordinate), gl_GlobalInvocationID, "
+        "local_vertex / float(active_edge_count), "
         "float[12](e0_t, e2_t, e4_t, e6_t, e3_t, e1_t, e7_t, e5_t, e8_t, e9_t, e11_t, e10_t));";
 
 inline constexpr const char GLSL_SKIRT_SDF[] = R"glsl(
