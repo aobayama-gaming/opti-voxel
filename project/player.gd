@@ -39,6 +39,7 @@ var dig_k := 0.3            # smooth radius (metres)
 var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid capsule)
 var drag_active := false
 var drag_id := -1
+var drag_last_vox := Vector3(1e30, 1e30, 1e30) # skip move_instance while the pose is unchanged
 var edits_count := 0
 var hud: Label = null
 var hud_layer: CanvasLayer = null
@@ -256,12 +257,16 @@ func _update_drag() -> void:
 		return
 	var vt: float = terrain.voxel_size
 	var fwd := -camera.global_transform.basis.z
-	# Just a capsule carried by the camera: its origin is 0.5 m in front, its local y runs along the view,
-	# so it is drag_length metres deep and drag_radius metres wide (2 m wide by default). Moved every frame
-	# (a SUBTRACT carves it; --drag_op=union is a solid capsule). No ray-march.
+	# A capsule carried by the camera, from 0.5 m in front of it along the view, long enough to REACH the
+	# surface the view hits and then go drag_length metres DEEPER (so it is always ~20 m of rock carved,
+	# not a fixed 20 m that stops in mid-air when the rock is farther). The capsule's local y runs along
+	# the view. Op 2 = SUBTRACT (carves); --drag_op=union is a solid capsule.
+	var hit := _raymarch(terrain, camera.global_position, fwd)
+	var dist := camera.global_position.distance_to(hit)
+	var length := clampf(dist + drag_length, drag_length, 250.0)
 	var p := _voxel_of(terrain, camera.global_position + fwd * 0.5)
 	var rot := _basis9(fwd)
-	var params := PackedFloat32Array([drag_length / vt, drag_radius / vt])
+	var params := PackedFloat32Array([length / vt, drag_radius / vt])
 	if drag_id < 0:
 		drag_id = terrain.add_instance(1, p[0], p[1], p[2], rot, params, drag_op, dig_k / vt)
 		if drag_id < 0:
@@ -269,9 +274,17 @@ func _update_drag() -> void:
 			drag_active = false
 			return
 		edits_count += 1
+		drag_last_vox = Vector3(p[0], p[1], p[2])
+		print("DIG press anchor_vox=", p, " fwd=", fwd, " sdf_cam=", terrain.get_sdf_at(camera.global_position),
+			" hit_dist=", dist, " len_m=", length, " r_m=", drag_radius, " op=", drag_op)
 	else:
-		terrain.move_instance(drag_id, p[0], p[1], p[2], rot)
-		edits_count += 1
+		# Only re-edit when the pose changed: moving every frame makes every re-mesh stale and the carve
+		# lags behind (it looks like it never carves while you fly).
+		var vox := Vector3(p[0], p[1], p[2])
+		if (vox - drag_last_vox).length_squared() >= 0.25:
+			terrain.move_instance(drag_id, int(vox.x), int(vox.y), int(vox.z), rot)
+			drag_last_vox = vox
+			edits_count += 1
 
 func _end_drag() -> void:
 	drag_active = false
