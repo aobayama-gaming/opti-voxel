@@ -172,6 +172,29 @@ to every change, and a reviewer may reject a PR on any of them.
   compiled scene as `terrain_sdf` and `evaluate()`: SDFDummy's height fBm (first-order distance), four
   noisy rocks and three trunk capsules smooth-unioned in, a cave mouth smooth-subtracted, absolute anchors
   in front of the main_scene spawn; far from them it is the bare ground, bit for bit (unit-tested).
+- Archetype table (step 3, `src/archetype_table.*`, `instance_table.*`, `archetype_gpu_table.*`): the
+  instances are no longer compiled into one program, they live in a GPU table and each chunk folds only
+  the instances near it. A library type (`TableDef`) is a Program written once in the instance's frame:
+  its sizes are `T_PARAM` (one sphere type serves every radius), its anchor, rotation and noise lattice
+  come from the instance's record through `T_INPUT` / `T_PERLIN3|2` (`i64_sub` of the Def offset minus the
+  record anchor, seed salted by the record). `generate_library_glsl` emits `vec4 arch_<k>(WorldPos p, int
+  lod, DefRecord rec)`, the CPU interpreter runs the same program with a `DefRecord` (unit test: identical
+  to the compiled path per type / rotation / anchor). `generate_table_sdf` emits the ground (a compiled
+  Program), the library, the fold and the epilogue; the fold reads `sdf_records` / `sdf_list` and the
+  `ChunkInput` global `g_sdf_chunk` (the chunk's list offset in `id.w`, count in `anchor_hi.w`).
+  `SDFBase::get_gpu_table()` hands the mesher the `DefRecord` bytes (`record_bytes`, re-uploaded when the
+  snapshot version changes) and the per-batch lists (`build_lists`); each mesher owns the buffers on its
+  own RenderingDevice (direct bindings 8/9, legacy 6/7). **Locality rule:** an instance's influence box
+  is its world box grown by `M(lod) = ceil(k + margin_c * 2^lod) + 2` voxels, `margin_c = 2 L +
+  skirt_depth`; outside it the value is >= M, so folding it in or out only changes F where `|F| > 2 L
+  2^lod` (the mesh and normals are unchanged). The test is integer (`sat_diff` vs an int32 box), so the
+  CPU and the GPU, and two chunks of the same LOD, take the same branch: seams stay exact. The index
+  (`instance_table`) stores each instance at the finest LOD whose chunk span holds its grown box, in the
+  1-8 chunks it touches; a chunk's list is its subtree plus its strict ancestors' own, in id order.
+  `SDFBase::cull_exempt` feeds the discoverer's no-cull rule: a node box near an instance's box is never
+  culled, whatever the slope. FrameSpike's table probe checks the library + fold GPU == CPU. **To add a
+  library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
+  bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
