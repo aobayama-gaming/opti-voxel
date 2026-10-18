@@ -44,7 +44,7 @@ void main() {
         return;
     }
     ChunkFrame chunk = chunk_frame(input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size], chunk_param);
-    ivec3 chunk_id = chunk.id_lo;
+    ivec3 chunk_id = chunk.id_lo;/*GLSL_SET_CHUNK*/
     ivec3 cell_chunk_coordinate = ivec3(
         gl_GlobalInvocationID.x,
         gl_GlobalInvocationID.y % chunk_param.chunk_size,
@@ -121,11 +121,23 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 
 RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     String shader = DIRECT_TEMPLATE;
+    // The instance table (archetype instances) adds the DefRecord/List buffers at 8/9, the exact int64
+    // helpers (i64_sub, for the table's noise lattice) and the ChunkInput global g_sdf_chunk. A terrain
+    // without a table gets exactly the same shader text as before (byte-identical).
+    String bindings = GLSL_DIRECT_BINDINGS;
+    String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE);
+    String set_chunk;
+    if (SDFGpuTable *table = sdf->get_gpu_table()) {
+        bindings += table->glsl_buffers(8, 9);
+        helpers += GPUFrame::glsl_int64();
+        set_chunk = table->glsl_set_chunk();
+    }
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", GLSL_DIRECT_BINDINGS);
+    shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", bindings);
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
+    shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
     shader = CascadeGLSL::fill_mesher_pass(shader, sdf, p_pass, p_pass == GLSL_DIRECT_PASS_VERTICES);
     RDUtils::dump_shader(String("direct_") + p_name, shader);
 
@@ -200,6 +212,15 @@ void GPUDirectMesher::_rt_initialize() {
     uniforms.push_back(make_uniform(5, buffer_chunk_param, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
     uniforms.push_back(make_uniform(6, staging_texture, RenderingDevice::UNIFORM_TYPE_IMAGE));
     uniforms.push_back(make_uniform(7, buffer_status, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    if (SDFGpuTable *table = sdf->get_gpu_table()) {
+        const PackedByteArray records = table->record_bytes();
+        buffer_table_records = rd->storage_buffer_create(records.size(), records);
+        const uint64_t list_words = uint64_t(settings.batch_size) * MAX<uint64_t>(table->instance_count(), 1u);
+        buffer_table_list = rd->storage_buffer_create(list_words * 4);
+        uploaded_table_version = table->version();
+        uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+        uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    }
     // All passes declare the same bindings, so one set (created against pass 0) serves them all.
     uniform_set = rd->uniform_set_create(uniforms, shaders[0], 0);
 
@@ -322,13 +343,29 @@ void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const 
     cascade->record_level(0, 0, p_count);
 }
 
+void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, uint32_t p_table_version) {
+    SDFGpuTable *table = sdf->get_gpu_table();
+    if (!table || !buffer_table_records.is_valid()) {
+        return;
+    }
+    if (p_table_version != uploaded_table_version) {
+        const PackedByteArray records = table->record_bytes();
+        rd->buffer_update(buffer_table_records, 0, records.size(), records);
+        uploaded_table_version = p_table_version;
+    }
+    if (!p_list.is_empty()) {
+        rd->buffer_update(buffer_table_list, 0, p_list.size(), p_list);
+    }
+}
+
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-        const PackedInt32Array &p_pages, int p_min_lod) {
+        const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, uint32_t p_table_version) {
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
     const uint64_t t0 = now_usec();
     _rt_read_timestamps();
+    _rt_upload_table(p_list, p_table_version);
 
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
@@ -389,10 +426,12 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     mutex->unlock();
 }
 
-void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod) {
+void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
+        const PackedByteArray &p_list, uint32_t p_table_version) {
     if (!uniform_set.is_valid()) {
         return;
     }
+    _rt_upload_table(p_list, p_table_version);
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
     rd->buffer_clear(buffer_status, 0, status_size_bytes);
@@ -580,6 +619,12 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
         bounds.merge_with(_chunk_aabb(chunks[i]));
         working_generation.insert(chunks[i]);
     }
+    PackedByteArray list;
+    uint32_t table_version = 0;
+    if (SDFGpuTable *table = sdf->get_gpu_table()) {
+        table->build_lists(chunks, chunk_param, ids, list);
+        table_version = table->version();
+    }
 
     PackedInt32Array pages;
     for (uint32_t k = 0; k < settings.pages_per_batch; k++) {
@@ -599,7 +644,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
-                    .bind(batch_id, ids, count, pages, min_lod));
+                    .bind(batch_id, ids, count, pages, min_lod, list, table_version));
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
@@ -622,11 +667,17 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
         GPUFrame::encode_chunk_input(ids, (int64_t)i, chunks[i], chunk_param);
         min_lod = MIN(min_lod, ChunkMath::get_lod(chunks[i]));
     }
+    PackedByteArray list;
+    uint32_t table_version = 0;
+    if (SDFGpuTable *table = sdf->get_gpu_table()) {
+        table->build_lists(chunks, chunk_param, ids, list);
+        table_version = table->version();
+    }
     const uint32_t batch_id = next_batch_id++;
     audit_in_flight[batch_id] = chunks;
     stats.audit_batches++;
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch_count)
-                    .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod));
+                    .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod, list, table_version));
     return true;
 }
 
@@ -1076,7 +1127,7 @@ void GPUDirectMesher::_rt_destroy() {
         pipelines[0], pipelines[1], pipelines[2], pipelines[3], pipelines[4],
         shaders[0], shaders[1], shaders[2], shaders[3], shaders[4],
         buffer_chunk_dir, buffer_input_chunk, buffer_sdf, buffer_edges, buffer_vertices,
-        buffer_chunk_param, staging_texture, buffer_status };
+        buffer_chunk_param, staging_texture, buffer_status, buffer_table_records, buffer_table_list };
     if (rd) {
         for (const RID &rid : rids) {
             if (rid.is_valid()) {

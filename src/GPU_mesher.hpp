@@ -90,6 +90,7 @@ private:
 
     //input
     PackedByteArray input_chunk_id;
+    PackedByteArray input_table_list; // the batch's instance list (archetype instances)
 
     // GPU stuff
 
@@ -105,6 +106,10 @@ private:
 
     RID buffer_output_point;
     RID buffer_chunk_param;
+    // The instance table's buffers (archetype instances), on the local device.
+    RID buffer_table_records;
+    RID buffer_table_list;
+    uint32_t uploaded_table_version = UINT32_MAX;
     // Uniform set
 
     RID uniform_set;
@@ -128,7 +133,7 @@ private:
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
-    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod);
+    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list);
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 

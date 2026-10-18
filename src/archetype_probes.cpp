@@ -63,7 +63,9 @@ Instance operator_scene(Combine p_op, const VoxelPos &p_anchor, float p_size) {
     Instance root;
     root.def = rock_def(0.4f * p_size, ExactNoise::make_fbm(false, 0xB0C4u, k, 3, 0.05 * p_size, 0.5));
     root.anchor = p_anchor;
-    root.set_rotation_y(0.7);
+    // The root is unrotated: a child's offset is in its parent's frame (archetype_instance.hpp), so the
+    // multi-origin `copies` probe can only nest the scenes under an identity-rotation parent. Rotations
+    // live on the children below (and the table tests cover a rotated root).
     Instance::Child c;
     c.op = p_op;
     c.k = 0.1f * p_size;

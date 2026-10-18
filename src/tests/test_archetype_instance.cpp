@@ -247,41 +247,46 @@ TEST_CASE("Archetype: compile reports invalid instances") {
     CHECK(compile(smooth).error.is_empty());
 }
 
-TEST_CASE("SDFArchetype: the demo terrain is valid at 0.5 m and 5 cm voxels, evaluate() is the interpreter, far away the bare ground") {
+TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the fold, far away the bare ground") {
     for (const float voxel : { 0.5f, 0.05f }) {
         CAPTURE(voxel);
         ChunkParam param;
         param.voxel_size = voxel;
         SDFArchetype sdf;
         sdf.configure(param, 25);
-        const Program &prog = sdf.get_program();
-        CHECK(prog.validate(25).is_empty());
-        CHECK(compile(SDFArchetype::scene(voxel)).error.is_empty());
-        CHECK(prog.normalize);
+        const Program &ground = sdf.get_ground();
+        CHECK(ground.validate(25).is_empty());
+        for (int i = 0; i < sdf.get_library().size(); i++) {
+            CHECK(sdf.get_library()[i].program.validate(25).is_empty());
+        }
+        CHECK(sdf.get_snapshot());
+        CHECK(sdf.get_snapshot()->records.size() == 8); // 4 rocks + 3 trunks + 1 cave
+        // The library and ground evaluate: evaluate() is the fold over the point's candidates, box-tested.
         int below = 0;
+        std::vector<uint32_t> list;
         for (uint32_t i = 0; i < 2000; i++) {
-            // Around the rocks and trunks, from below the ground to above it.
-            const WorldPos p = random_point(VoxelPos(std::llround(-50.0 / voxel), std::llround(300.0 / voxel), std::llround(-140.0 / voxel)), 60.0 / voxel, i, 33);
+            const WorldPos p = random_point(VoxelPos(std::llround(-50.0 / voxel), std::llround(300.0 / voxel), std::llround(-140.0 / voxel)), 60.0 / voxel,
+                    i, 33);
+            sdf.get_snapshot()->point_candidates(p.voxel, list);
             for (const int lod : { 0, 4 }) {
-                const Float4 r = run(prog, p, lod);
+                const Float4 r = finish_table(fold(ground, sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(), uint32_t(list.size()),
+                                                  p, lod),
+                        lod, float(voxel), true);
                 CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(r.w));
                 below += (lod == 0 && r.w < 0.0f) ? 1 : 0;
             }
         }
-        // Both sides of the surface are sampled.
         CHECK(below > 200);
         CHECK(below < 1800);
-        // Far away (a far origin's view) the instances' inputs saturate at 2^30 voxels: the bare ground, every bit.
-        Instance bare = SDFArchetype::scene(voxel);
-        bare.children.clear();
-        Program ground = compile(bare).program;
-        ground.out_scale = prog.out_scale;
-        ground.normalize = true;
+        // Far away (a far origin's view) the instances' boxes are nowhere near: the bare ground, every bit.
         const VoxelPos far(2000000000000000, std::llround(300.0 / voxel), -2000000000000000);
         for (uint32_t i = 0; i < 500; i++) {
             const WorldPos p = random_point(far, 200.0 / voxel, i, 34);
+            sdf.get_snapshot()->point_candidates(p.voxel, list);
             for (const int lod : { 0, 4 }) {
-                CHECK(same_bits(run(prog, p, lod), run(ground, p, lod)));
+                // No instance's box contains a far point: the fold is the bare ground.
+                const float g = finish_table(run(ground, p, lod), lod, float(voxel), true).w;
+                CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(g));
             }
         }
     }

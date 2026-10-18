@@ -162,6 +162,10 @@ private:
     RID buffer_chunk_param;
     RID staging_texture;
     RID buffer_status;
+    // The instance table's buffers (archetype instances): records + the current batch's list.
+    RID buffer_table_records;
+    RID buffer_table_list;
+    uint32_t uploaded_table_version = UINT32_MAX;
     RID shaders[5];
     RID pipelines[5];
     RID uniform_set;
@@ -173,9 +177,11 @@ private:
 
     void _rt_initialize();
     RID _rt_compile(const char *p_pass, const char *p_name);
+    void _rt_upload_table(const PackedByteArray &p_list, uint32_t p_table_version);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const PackedInt32Array &p_pages, int p_min_lod);
-    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod);
+            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, uint32_t p_table_version);
+    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
+            const PackedByteArray &p_list, uint32_t p_table_version);
     // Pass 0: the sdf pass, or the cascade's levels (timestamps "<prefix>_c<group>" after each level group
     // when p_prefix is not empty).
     void _rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix);

@@ -55,6 +55,12 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     const float chunk_outer_radius = ChunkMath::world_chunk_size(p_wave[p_nodes[0]], chunk_param) * 2;
     r_outside.assign(p_nodes.size(), 1);
     for (size_t n = 0; n < p_nodes.size(); n++) {
+        // No-cull rule (archetype instances): a node box near an instance's box is never culled, so a
+        // steep, rotated or subtracted shape can't be dropped by the slope-bounded corner test.
+        if (sdf->cull_exempt(p_wave[p_nodes[n]], p_lod)) {
+            r_outside[n] = 0;
+            continue;
+        }
         for (int corner = 0; corner < 8; ++corner) {
             if (std::abs(values[corner_point[n * 8 + corner]]) <= chunk_outer_radius) {
                 r_outside[n] = 0;
