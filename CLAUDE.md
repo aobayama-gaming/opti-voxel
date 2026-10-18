@@ -207,6 +207,12 @@ to every change, and a reviewer may reject a PR on any of them.
   pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
   `instance_capacity()` instances up front (default 16384; the records array is padded to it). The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
+  discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter N rocks and pillars in a
+  square of side M metres around the demo objects (set before the node enters the tree). **Experimental,
+  default 0:** with N > 0 a rare (~1e-7) non-finite sample turns into a broken quad (the auditor's
+  `broken` / `nan_vertices`), CPU and GPU alike, so the mesh otherwise validates; the scatter is off
+  until that edge is understood (a follow-up, likely in the smooth-op / epilogue numerics), not the
+  table wiring.
   discovery_audit should stay `ok`.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are

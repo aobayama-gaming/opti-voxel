@@ -23,6 +23,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
     ClassDB::bind_method(D_METHOD("set_debug_test_rig", "enable"), &VoxelTerrain::set_debug_test_rig);
     ClassDB::bind_method(D_METHOD("get_debug_test_rig"), &VoxelTerrain::get_debug_test_rig);
+    ClassDB::bind_method(D_METHOD("set_archetype_instances", "count"), &VoxelTerrain::set_archetype_instances);
+    ClassDB::bind_method(D_METHOD("get_archetype_instances"), &VoxelTerrain::get_archetype_instances);
+    ClassDB::bind_method(D_METHOD("set_archetype_instance_area", "area"), &VoxelTerrain::set_archetype_instance_area);
+    ClassDB::bind_method(D_METHOD("get_archetype_instance_area"), &VoxelTerrain::get_archetype_instance_area);
     ClassDB::bind_method(D_METHOD("set_debug_zero_pillar", "mode"), &VoxelTerrain::set_debug_zero_pillar);
     ClassDB::bind_method(D_METHOD("get_debug_zero_pillar"), &VoxelTerrain::get_debug_zero_pillar);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
@@ -86,6 +90,8 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_instances", PROPERTY_HINT_RANGE, "0,1000000,1"), "set_archetype_instances", "get_archetype_instances");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
@@ -276,6 +282,24 @@ bool VoxelTerrain::get_debug_test_rig() const {
 void VoxelTerrain::set_debug_zero_pillar(int p_mode) {
     ERR_FAIL_COND_MSG(started, "debug_zero_pillar must be set before the terrain enters the tree.");
     debug_zero_pillar = p_mode;
+}
+
+void VoxelTerrain::set_archetype_instances(int p_count) {
+    ERR_FAIL_COND_MSG(started, "archetype_instances must be set before the terrain enters the tree.");
+    archetype_instances = p_count;
+}
+
+int VoxelTerrain::get_archetype_instances() const {
+    return archetype_instances;
+}
+
+void VoxelTerrain::set_archetype_instance_area(double p_area) {
+    ERR_FAIL_COND_MSG(started, "archetype_instance_area must be set before the terrain enters the tree.");
+    archetype_instance_area = p_area;
+}
+
+double VoxelTerrain::get_archetype_instance_area() const {
+    return archetype_instance_area;
 }
 
 int VoxelTerrain::get_debug_zero_pillar() const {
@@ -484,10 +508,13 @@ void VoxelTerrain::_ready() {
             sdf = cascade;
             break;
         }
-        case 3:
+        case 3: {
             memdelete(sdf);
-            sdf = memnew(SDFArchetype);
+            SDFArchetype *archetype = memnew(SDFArchetype);
+            archetype->set_scatter(archetype_instances, archetype_instance_area);
+            sdf = archetype;
             break;
+        }
     }
     sdf->configure(chunk_param, lod_numbers);
 

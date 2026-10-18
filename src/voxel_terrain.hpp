@@ -74,6 +74,8 @@ private:
     // Number of LOD levels (0 .. lod_numbers - 1). The GPU reads a chunk's LOD from the low 32 bits
     // of its id (findLSB), so at most MAX_LOD_NUMBERS.
     int lod_numbers = 15;
+    int archetype_instances = 0;
+    double archetype_instance_area = 200.0;
     bool legacy_trim_indices = false;
     float lod_pixel_error = 2.0f;
     bool debug_test_rig = false;
@@ -179,6 +181,13 @@ public:
     // Adds centimetre-scale test shapes in front of the main_scene spawn (see sdf_test_rig.hpp).
     void set_debug_test_rig(bool p_enable);
     bool get_debug_test_rig() const;
+
+    // Archetype demo scene: a deterministic scatter of --instances rocks and pillars in a square of side
+    // --instance_area metres around the fixed objects. Must be set before the node enters the tree.
+    void set_archetype_instances(int p_count);
+    int get_archetype_instances() const;
+    void set_archetype_instance_area(double p_area);
+    double get_archetype_instance_area() const;
     void set_debug_zero_pillar(int p_mode);
     int get_debug_zero_pillar() const;
 

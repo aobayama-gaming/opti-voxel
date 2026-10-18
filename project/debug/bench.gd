@@ -31,6 +31,8 @@ extends Node3D
 ##   --terrain=dummy|cascade|continents|archetypes
 ##                                VoxelTerrain.terrain_mode (default dummy; cascade: the Hermite cascade
 ##                                test terrain, SDFCascade; archetypes: the archetype IR demo, SDFArchetype)
+##   --instances=N                archetypes: scatter N rocks/pillars around the demo objects (default 0)
+##   --instance_area=M            archetypes: side of the scatter square, metres (default 200)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range and the terrain gains relief octaves
 ##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
@@ -142,6 +144,10 @@ func _ready() -> void:
 		set_process(false)
 		get_tree().quit(1)
 		return
+	if args.has("instances"):
+		terrain.archetype_instances = int(args["instances"])
+	if args.has("instance_area"):
+		terrain.archetype_instance_area = float(args["instance_area"])
 	terrain.terrain_mode = terrains[terrain_arg]
 	terrain.debug_test_rig = args.get("rig", "0") == "1"
 	terrain.debug_zero_pillar = int(args.get("zero_pillar", "0"))

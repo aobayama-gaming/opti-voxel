@@ -18,6 +18,13 @@ public:
     static constexpr uint32_t HEIGHT_SEED = 0xA2C4E7u;
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
 
+    // A deterministic scatter of p_count rocks and pillars in a square of side p_area (metres) around
+    // the demo objects (--instances / --instance_area). Set before configure().
+    void set_scatter(int p_count, double p_area) {
+        scatter_count = p_count;
+        scatter_area = p_area;
+    }
+
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         create_scene(p_param.voxel_size, p_lod_count);
@@ -214,6 +221,8 @@ private:
     Archetype::GpuTable gpu;
     float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
     float edit_margin_c = 0.0f;
+    int scatter_count = 0; // --instances
+    double scatter_area = 200.0; // --instance_area (metres)
 
     void rebuild(const VoxelBox &p_region) {
         version++;
@@ -293,6 +302,21 @@ private:
             const float params[8] = { v(7.0), 0, 0, 0, 0, 0, 0, 0 };
             add(Combine::SMOOTH_SUBTRACT, 1.0, sphere, params, -10.0, -170.0, -3.0, 0.0);
         }
+        // The scatter: deterministic rocks and pillars on the ground, around the demo objects.
+        const double centre_x = -50.0, centre_z = -150.0;
+        for (int i = 0; i < scatter_count; i++) {
+            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0x5CA7u, 0x7E12u });
+            const double px = centre_x + (double(h.x >> 8) / 16777216.0 - 0.5) * scatter_area;
+            const double pz = centre_z + (double(h.y >> 8) / 16777216.0 - 0.5) * scatter_area;
+            const float r = 1.0f + float(h.z % 300u) * 0.01f;
+            if (i % 2 == 0) {
+                const float params[8] = { v(double(r)), 0.1f * v(double(r)), 0, 0, 0, 0, 0, 0 };
+                add(Combine::SMOOTH_UNION, 1.0, rock, params, px, pz, -0.4 * double(r), double(h.x % 628u) * 0.01);
+            } else {
+                const float params[8] = { v(2.0 + double(r)), v(0.5), 0, 0, 0, 0, 0, 0 };
+                add(Combine::SMOOTH_UNION, 0.8, capsule, params, px, pz, 0.0, 0.0);
+            }
+        }
         // The ground register: the ground Def placed at the datum (a compiled program, constants only).
         Archetype::Instance ground_inst;
         ground_inst.def = ground_def(height);
@@ -302,6 +326,8 @@ private:
         lod_count = p_lod_count;
         edit_k = 0.0f;
         edit_margin_c = 0.0f;
+        // The GPU buffers hold the scatter plus room for runtime edits (the mesher reads this at init).
+        gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
         rebuild(VoxelBox());
     }
 };

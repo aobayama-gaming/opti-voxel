@@ -247,6 +247,33 @@ TEST_CASE("Archetype: compile reports invalid instances") {
     CHECK(compile(smooth).error.is_empty());
 }
 
+TEST_CASE("SDFArchetype scatter: evaluate() and its gradient stay finite") {
+    ChunkParam param;
+    param.voxel_size = 0.5f;
+    SDFArchetype sdf;
+    sdf.set_scatter(1000, 200.0);
+    sdf.configure(param, 15);
+    CHECK(sdf.get_snapshot()->records.size() == 1008);
+    std::vector<uint32_t> list;
+    int64_t nonfinite = 0;
+    int64_t checked = 0;
+    for (uint32_t i = 0; i < 8000; i++) {
+        const WorldPos p = random_point(VoxelPos(-100, 600, -300), 420.0, i, 7);
+        sdf.get_snapshot()->point_candidates(p.voxel, list);
+        for (const int lod : { 0, 2, 4 }) {
+            const Float4 r = finish_table(fold(sdf.get_ground(), sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(),
+                                                 uint32_t(list.size()), p, lod),
+                    lod, 0.5f, true);
+            if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.z) || !std::isfinite(r.w)) {
+                nonfinite++;
+            }
+            checked++;
+        }
+    }
+    MESSAGE("scatter: ", checked, " evaluations, ", nonfinite, " non-finite");
+    CHECK(nonfinite == 0);
+}
+
 TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the fold, far away the bare ground") {
     for (const float voxel : { 0.5f, 0.05f }) {
         CAPTURE(voxel);
