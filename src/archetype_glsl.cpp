@@ -15,6 +15,12 @@ String flat_vec(const String &p_value) {
     return "vec4(0.0, 0.0, 0.0, " + p_value + ")";
 }
 
+// det_rsqrt of |grad p_v|^2 floored (inv_grad_length in archetype_ir.cpp): DIST and the epilogue.
+String inv_grad_length(const String &p_v) {
+    return "det_rsqrt(max(" + p_v + ".x * " + p_v + ".x + " + p_v + ".y * " + p_v + ".y + " + p_v + ".z * " + p_v + ".z, " +
+            glsl_float(exact_pow2(GRAD_FLOOR_EXP)) + " * s * s))";
+}
+
 // ADD, SUB, MUL, NEG, ABS: GLSL side of eval_arith (archetype_ir.cpp). Vector ops are per component, in
 // the interpreter's order.
 String arith(const Instr &p_in, const std::vector<Instr> &p_code) {
@@ -84,8 +90,7 @@ String statement(const Program &p_program, int p_i) {
             return "    precise float y" + id + " = det_rsqrt(" + a + ".w);\n" + out + "vec4(" + a + ".xyz * (" + glsl_float(-0.5f) + " * y" + id +
                     " * y" + id + " * y" + id + "), y" + id + ");\n";
         case Op::DIST:
-            return "    precise float q" + id + " = s * det_rsqrt(max(" + a + ".x * " + a + ".x + " + a + ".y * " + a + ".y + " + a + ".z * " + a +
-                    ".z, " + glsl_float(exact_pow2(GRAD_FLOOR_EXP)) + " * s * s));\n" + out + a + " * q" + id + ";\n";
+            return "    precise float q" + id + " = s * " + inv_grad_length(a) + ";\n" + out + a + " * q" + id + ";\n";
         case Op::PERLIN3:
         case Op::PERLIN2:
             return vformat("    precise vec4 n%d = %s(p, %d, %s, %s, %s);\n", p_i, in.op == Op::PERLIN3 ? "perlin3" : "perlin2", in.k,
@@ -118,7 +123,7 @@ String generate_glsl(const Program &p_program, const String &p_name, bool p_trac
     code += "    precise vec4 o = " + r(p_program.output) + ";\n";
     code += "    precise float v = o.w * " + glsl_float(p_program.out_scale) + ";\n";
     if (p_program.normalize) {
-        code += "    precise float gr = det_rsqrt(max(o.x * o.x + o.y * o.y + o.z * o.z, " + glsl_float(exact_pow2(GRAD_FLOOR_EXP)) + " * s * s));\n";
+        code += "    precise float gr = " + inv_grad_length("o") + ";\n";
         code += "    return vec4(o.xyz * gr, v);\n}\n";
     } else {
         code += "    return vec4(o.xyz, v);\n}\n";

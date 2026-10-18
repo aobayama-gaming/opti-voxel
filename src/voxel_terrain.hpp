@@ -24,6 +24,7 @@
 #include "page_auditor.hpp"
 
 //debug
+#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 #include "sdf_dummy.hpp"
 
@@ -140,7 +141,8 @@ public:
     void set_pipeline_mode(int p_mode);
     int get_pipeline_mode() const;
 
-    // Terrain: 0 SDFDummy (default), 1 the Hermite cascade test terrain (SDFCascade, --terrain=cascade).
+    // Terrain: 0 SDFDummy (default), 1 the Hermite cascade test terrain (SDFCascade, --terrain=cascade), 2 its
+    // continents preset, 3 the archetype IR's demo scene (SDFArchetype, --terrain=archetypes).
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 

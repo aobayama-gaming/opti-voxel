@@ -141,10 +141,37 @@ to every change, and a reviewer may reject a PR on any of them.
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
 - Terrain: `VoxelTerrain.terrain_mode` 0 = `SDFDummy` (default), 1 = `SDFCascade` (`src/sdf_cascade.hpp`,
   the cascade test terrain: 3D height field, octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes
-  capped at 3.3 km, datum at 300 m, absolute position only). `--terrain=cascade` in `bench.gd` and the
+  capped at 3.3 km, datum at 300 m, absolute position only), 2 = its continents preset, 3 = `SDFArchetype`
+  (the archetype IR's demo, below). `--terrain=cascade|continents|archetypes` in `bench.gd` and the
   main scene (`godot --path project -- --terrain=cascade --lods=25`: the player spawns 200 m above the
   ground and flies at half its altitude per second). `bench.gd --above_ground=M` moves the camera to M
   metres above the terrain (the cascade's ground is kilometres from the datum).
+- Archetype IR (`src/archetype_ir.*`, builders and fuzzer in `archetype_build.cpp`): an SDF as a linear SSA
+  program of dual numbers (value + forward-mode gradient), the one source of its GLSL (`archetype_glsl.*`,
+  straight-line `precise` code, one statement per instruction) and of its CPU evaluation (`Archetype::run`,
+  an interpreter: archetypes are runtime data), bit-identical. On top of the exactness rules (Gotchas): no
+  division (1 / k is a constant); RSQRT only of `max(x, c > 0)` (`Program::validate`), because `det_rsqrt`
+  reads the bits and the GPU doesn't keep the sign of a zero (NVIDIA folds x + 0.0 to x): nothing else lets
+  a zero's sign reach a non-zero value, and results are compared through `zero_canonical` (-0 read as +0).
+  A point is in the exact domain when every register component is 0 or within [2^-63, 2^63], so that a
+  product of two is normal (`exact_domain`). Blends keep their end values exact at any magnitude
+  (`smooth_min` = min - k/4 h^2, BLEND = parent (1 - w) + child w): a far instance reads 2^30 voxels
+  (saturated INPUT), and the lerp b + (a - b) h rounded the ground to its ulp, terraces of 64 voxels at far
+  origins. Instances
+  (`archetype_instance.*`): a `Def` at an int64 anchor (INPUT = exact `sat_diff`) with a float rotation
+  applied op for op, children combined by union / smooth union / subtract / smooth subtract / intersect /
+  blend; `compile` flattens the tree into one Program, with a world box and a Lipschitz bound per node
+  (sampled on 100k points per scene in the unit tests). Adding an op: `Op`, `op_arity`, `op_cost`, `is_flat`,
+  `validate`, the interpreter's `eval` and the generator's `statement` (same formula, same order), a case
+  in the float32 reference test (`test_archetype_ir.cpp`), a branch in `random_program`, then
+  `tools/frame_test.sh` and a new text pin (the FNV test). FrameSpike's `arch_*` probes
+  (`archetype_probes.cpp`): every shape builder, each operator, the test scene, the demo (`arch_demo`),
+  `arch_frames` (one scene at the same offset from every origin, compared across origins) and 200 fuzzed
+  programs, output plus a hash of every register; evaluations outside the exact domain are counted apart
+  (`inexact_*`, gated like the rest). `SDFArchetype` (`src/sdf_archetype.hpp`, `--terrain=archetypes`): the
+  compiled scene as `terrain_sdf` and `evaluate()`: SDFDummy's height fBm (first-order distance), four
+  noisy rocks and three trunk capsules smooth-unioned in, a cave mouth smooth-subtracted, absolute anchors
+  in front of the main_scene spawn; far from them it is the bare ground, bit for bit (unit-tested).
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -251,8 +278,9 @@ to every change, and a reviewer may reject a PR on any of them.
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
 - `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike`): GPU vs CPU check of the integer
   frame and the exact noise at 5 far origins: WorldPos and anchors, then every probe of the probe
-  table bit for bit (hash, octave decomposition at k 0..62, perlin3/2, the terrain's fBms and
-  `terrain_sdf` at LODs 0, 1, 5, 14, 24), pairs reaching the same voxel, absolute points identical
+  table bit for bit over a fixed grid plus 1,024 hash-random points per origin (hash, octave
+  decomposition at k 0..62, perlin3/2, the terrain's fBms and `terrain_sdf`, the archetype IR's `arch_*`
+  sets, at LODs 0, 1, 5, 14, 24), pairs reaching the same voxel, absolute points identical
   at every origin, and continuity along lines across voxel and noise-cell low-word wraps. Run it after touching
   `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp` or the SDF. A new noise or SDF
   term adds an entry (CPU fn + GLSL fn) to `make_probes()` in `src/frame_spike.cpp`.

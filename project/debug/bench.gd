@@ -26,8 +26,9 @@ extends Node3D
 ##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
-##   --terrain=dummy|cascade      VoxelTerrain.terrain_mode (default dummy; cascade: the Hermite cascade
-##                                test terrain, SDFCascade)
+##   --terrain=dummy|cascade|continents|archetypes
+##                                VoxelTerrain.terrain_mode (default dummy; cascade: the Hermite cascade
+##                                test terrain, SDFCascade; archetypes: the archetype IR demo, SDFArchetype)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range and the terrain gains relief octaves
 ##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
@@ -130,10 +131,10 @@ func _ready() -> void:
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"dummy": 0, "cascade": 1, "continents": 2}
+	var terrains := {"dummy": 0, "cascade": 1, "continents": 2, "archetypes": 3}
 	var terrain_arg: String = args.get("terrain", "dummy")
 	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected dummy, cascade or continents)" % terrain_arg)
+		push_error("BENCH: unknown --terrain=%s (expected dummy, cascade, continents or archetypes)" % terrain_arg)
 		set_process(false)
 		get_tree().quit(1)
 		return

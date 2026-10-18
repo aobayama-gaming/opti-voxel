@@ -80,7 +80,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discovery_compare"), &VoxelTerrain::get_discovery_compare);
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1,Continents:2"), "set_terrain_mode", "get_terrain_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
@@ -130,7 +130,7 @@ int VoxelTerrain::get_pipeline_mode() const {
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
     ERR_FAIL_COND_MSG(started, "terrain_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode < 0 || p_mode > 2, "terrain_mode must be 0 (dummy), 1 (cascade) or 2 (cascade, continents preset).");
+    ERR_FAIL_COND_MSG(p_mode < 0 || p_mode > 3, "terrain_mode must be 0 (dummy), 1 (cascade), 2 (cascade, continents preset) or 3 (archetypes).");
     terrain_mode = p_mode;
 }
 
@@ -467,14 +467,23 @@ void VoxelTerrain::_ready() {
     }
 
     // sdf starts as an SDFDummy (see the member initialiser).
-    if (terrain_mode != 0) {
-        memdelete(sdf);
-        SDFCascade *cascade = memnew(SDFCascade);
-        cascade->preset = terrain_mode == 2 ? 1 : 0;
-        sdf = cascade;
-    } else {
-        static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
-        static_cast<SDFDummy *>(sdf)->zero_pillar = debug_zero_pillar;
+    switch (terrain_mode) {
+        case 0:
+            static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
+            static_cast<SDFDummy *>(sdf)->zero_pillar = debug_zero_pillar;
+            break;
+        case 1:
+        case 2: {
+            memdelete(sdf);
+            SDFCascade *cascade = memnew(SDFCascade);
+            cascade->preset = terrain_mode == 2 ? 1 : 0;
+            sdf = cascade;
+            break;
+        }
+        case 3:
+            memdelete(sdf);
+            sdf = memnew(SDFArchetype);
+            break;
     }
     sdf->configure(chunk_param, lod_numbers);
 

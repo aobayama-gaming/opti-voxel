@@ -23,6 +23,13 @@ bool finite_not_denormal(float p_f) {
     return p_f == 0.0f || (std::isfinite(p_f) && std::fabs(p_f) >= FLT_MIN);
 }
 
+// 1 / |grad p_v|, its square floored at 2^GRAD_FLOOR_EXP per LOD0 voxel (p_s = 2^lod): DIST and the epilogue
+// (GLSL: inv_grad_length in archetype_glsl.cpp).
+float inv_grad_length(const Float4 &p_v, float p_s) {
+    const float n2 = p_v.x * p_v.x + p_v.y * p_v.y + p_v.z * p_v.z;
+    return det_rsqrt(MAX(n2, exact_pow2(GRAD_FLOOR_EXP) * p_s * p_s));
+}
+
 // ADD, SUB, MUL, NEG, ABS: the dual-number rules, flat operands' terms skipped (GLSL: emit_arith).
 Float4 eval_arith(const Instr &p_in, const Float4 &p_a, const Float4 &p_b, bool p_fa, bool p_fb) {
     const Float4 &a = p_a;
@@ -90,8 +97,7 @@ Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p
         }
         case Op::DIST: {
             const Float4 &a = p_r[p_in.a];
-            const float n2 = a.x * a.x + a.y * a.y + a.z * a.z;
-            const float q = p_s * det_rsqrt(MAX(n2, exact_pow2(GRAD_FLOOR_EXP) * p_s * p_s));
+            const float q = p_s * inv_grad_length(a, p_s);
             return Float4{ a.x * q, a.y * q, a.z * q, a.w * q };
         }
         default: { // PERLIN3, PERLIN2
@@ -215,6 +221,9 @@ String Program::validate(int p_lod_count) const {
     }
     for (Reg i = 0; i < Reg(code.size()); i++) {
         const Instr &in = code[i];
+        if (uint8_t(in.op) > uint8_t(Op::PERLIN2)) {
+            return vformat("Archetype: instruction %d: unknown op %d.", i, int(in.op));
+        }
         const Reg operands[4] = { in.a, in.b, in.c, in.d };
         for (int j = 0; j < op_arity(in.op); j++) {
             if (operands[j] < 0 || operands[j] >= i) {
@@ -232,6 +241,14 @@ String Program::validate(int p_lod_count) const {
         }
         if (in.op == Op::DIST && code[in.a].flat) {
             return vformat("Archetype: instruction %d: DIST of a flat register.", i);
+        }
+        if (in.op == Op::RSQRT) {
+            // det_rsqrt reads the bits: a zero would give different non-zero results for -0 and +0.
+            const Instr &g = code[in.a];
+            auto positive = [&](Reg p_r) { return code[p_r].op == Op::CONST && code[p_r].value > 0.0f; };
+            if (g.op != Op::MAX || !(positive(g.a) || positive(g.b))) {
+                return vformat("Archetype: instruction %d: RSQRT of a register that isn't max(x, c > 0).", i);
+            }
         }
         if ((in.op == Op::CONST || in.op == Op::PERLIN3 || in.op == Op::PERLIN2) && !finite_not_denormal(in.value)) {
             return vformat("Archetype: instruction %d: constant %s is denormal or not finite.", i, in.value);
@@ -278,9 +295,7 @@ Float4 finish(const Program &p_program, const Float4 &p_out, int p_lod) {
     if (!p_program.normalize) {
         return Float4{ o.x, o.y, o.z, v };
     }
-    const float s = exact_pow2(p_lod);
-    const float n2 = o.x * o.x + o.y * o.y + o.z * o.z;
-    const float gr = det_rsqrt(MAX(n2, exact_pow2(GRAD_FLOOR_EXP) * s * s));
+    const float gr = inv_grad_length(o, exact_pow2(p_lod));
     return Float4{ o.x * gr, o.y * gr, o.z * gr, v };
 }
 
@@ -291,8 +306,8 @@ Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod) {
 }
 
 bool exact_domain(const Program &p_program, const std::vector<Float4> &p_regs) {
-    const float lo = exact_pow2(-60);
-    const float hi = exact_pow2(60);
+    const float lo = exact_pow2(-63);
+    const float hi = exact_pow2(63);
     for (const Instr &in : p_program.code) {
         if (in.op == Op::RSQRT && !(p_regs[in.a].w > 0.0f)) {
             return false;

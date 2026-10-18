@@ -80,17 +80,24 @@ public:
     SDFDummy() = default;
     ~SDFDummy() override = default;
 
+    // A wavelength of p_wavelength_m metres as 2^k voxels of p_voxel metres.
+    static int k_of(double p_wavelength_m, double p_voxel) { return int(std::lround(std::log2(p_wavelength_m / p_voxel))); }
+
+    // The mountains' fBm at voxel size p_voxel (heights in LOD0 voxels); SDFArchetype reuses it with its own seed.
+    static ExactNoise::OctaveSet height_fbm(double p_voxel, uint32_t p_seed = HEIGHT_SEED) {
+        return ExactNoise::make_fbm(true, p_seed, k_of(HEIGHT_WAVELENGTH_M, p_voxel), HEIGHT_OCTAVES, HEIGHT_AMPLITUDE_M / p_voxel * NORM_2D, 0.5);
+    }
+
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
-        auto k_of = [vs](double p_wavelength_m) { return int(std::lround(std::log2(p_wavelength_m / vs))); };
-        height = ExactNoise::make_fbm(true, HEIGHT_SEED, k_of(HEIGHT_WAVELENGTH_M), HEIGHT_OCTAVES, HEIGHT_AMPLITUDE_M / vs * NORM_2D, 0.5);
-        caves = ExactNoise::make_fbm(false, CAVE_SEED, k_of(CAVE_WAVELENGTH_M), CAVE_OCTAVES, NORM_3D, 0.5);
+        height = height_fbm(vs);
+        caves = ExactNoise::make_fbm(false, CAVE_SEED, k_of(CAVE_WAVELENGTH_M, vs), CAVE_OCTAVES, NORM_3D, 0.5);
         relief = ExactNoise::OctaveSet();
         relief.is_2d = true;
         if (p_lod_count > RELIEF_FROM_LODS) {
             const int n = 2 * (p_lod_count - RELIEF_FROM_LODS);
-            relief = ExactNoise::make_fbm(true, RELIEF_SEED, k_of(HEIGHT_WAVELENGTH_M) + n, n,
+            relief = ExactNoise::make_fbm(true, RELIEF_SEED, k_of(HEIGHT_WAVELENGTH_M, vs) + n, n,
                     HEIGHT_AMPLITUDE_M / vs * NORM_2D * std::ldexp(1.0, n / 2), std::sqrt(0.5));
         }
         // The value (w) doesn't depend on the LOD.

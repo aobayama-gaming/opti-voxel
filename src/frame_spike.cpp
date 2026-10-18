@@ -6,6 +6,7 @@
 #include "frame_probe.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
+#include "sdf_archetype.hpp"
 #include "sdf_dummy.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -13,6 +14,7 @@
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
@@ -80,6 +82,7 @@ constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
 constexpr int RANDOM_POINTS = 1024;
 constexpr int FUZZ_PROGRAMS = 200;
 constexpr size_t PROBES_PER_SET = 24;
+constexpr int64_t MAX_SET_GLSL = 300000; // bytes of probe GLSL per shader (compile time)
 // Size (voxels) of the archetype shapes probed (a copy near each origin): the grid and the random points
 // fall inside and outside them.
 constexpr float ARCH_SHAPE_SIZE = 2000.0f;
@@ -107,14 +110,14 @@ std::vector<Probe> make_probes(const SDFDummy &p_sdf) {
         Probe p;
         p.name = "voxel_hash";
         p.glsl = VOXEL_HASH_GLSL;
-        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = voxel_hash_cpu(q); };
+        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = voxel_hash_cpu(q); return true; };
         probes.push_back(p);
     }
     {
         Probe p;
         p.name = "hash_cell";
         p.glsl = "void probe_hash_cell(WorldPos p, uint b) {\n    results[b] = hash_cell(p.lo, p.hi, 0x00ABCDEFu);\n}\n";
-        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = hash_cell(q.voxel, 0x00ABCDEFu); };
+        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = hash_cell(q.voxel, 0x00ABCDEFu); return true; };
         probes.push_back(p);
     }
     {
@@ -138,6 +141,7 @@ void probe_octave_cell(WorldPos p, uint b) {
                 const OctaveCell c = octave_cell(q, CELL_KS[i], test_offset(CELL_KS[i]));
                 r[i] = fold_cell(lo32(c.cell.x), lo32(c.cell.y), lo32(c.cell.z), hi32(c.cell.x), hi32(c.cell.y), hi32(c.cell.z), c.q);
             }
+            return true;
         };
         probes.push_back(p);
     }
@@ -157,6 +161,7 @@ void probe_octave_cell(WorldPos p, uint b) {
             r[1] = float_bits(v.y);
             r[2] = float_bits(v.z);
             r[3] = float_bits(v.w);
+            return true;
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
         p.continuity_word = 3;
@@ -178,6 +183,7 @@ void probe_octave_cell(WorldPos p, uint b) {
             r[1] = float_bits(v.y);
             r[2] = float_bits(v.z);
             r[3] = float_bits(v.w);
+            return true;
         };
         p.continuity_bound = octave_step_bound(k, 6.0);
         p.continuity_word = 3;
@@ -198,6 +204,7 @@ void probe_octave_cell(WorldPos p, uint b) {
             for (int i = 0; i < 8; i++) {
                 r[i] = float_bits(c.c[i]);
             }
+            return true;
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
         p.continuity_word = 0;
@@ -250,6 +257,7 @@ void probe_octave_cell(WorldPos p, uint b) {
                 }
                 store(sum, r + 18 * I64_SHIFT_COUNT + 6 * i);
             }
+            return true;
         };
         probes.push_back(p);
     }
@@ -281,6 +289,7 @@ void probe_octave_cell(WorldPos p, uint b) {
                 r[4 * i + 2] = float_bits(v.z);
                 r[4 * i + 3] = float_bits(v.w);
             }
+            return true;
         };
         return p;
     };
@@ -363,6 +372,8 @@ struct OriginRun {
     std::vector<Pair> pairs;
     // Absolute test points (the same for every origin): cases[absolute_begin ..].
     size_t absolute_begin = 0;
+    // The hash-random points (the same offsets from every origin): cases[random_begin, absolute_begin).
+    size_t random_begin = 0;
     // Consecutive LOD0 voxels along x: index ranges into cases.
     std::vector<std::pair<size_t, size_t>> lines;
 };
@@ -385,11 +396,6 @@ Case lod0_case(const Vector3i64 &p_voxel, const Float3 &p_frac, int64_t p_half) 
     return c;
 }
 
-int64_t random_offset(uint32_t p_a, uint32_t p_b, uint32_t p_c, int64_t p_range) {
-    const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_a, p_b, p_c });
-    return int64_t(((uint64_t(h.x) << 32) | h.y) % uint64_t(2 * p_range + 1)) - p_range;
-}
-
 // RANDOM_POINTS hash-random samples around the origin: a chunk of LOD 0, 1, 4 or 8 within 16 chunks of
 // it on each axis, a vertex-grid position in [0, 32) in steps of 2^-6 (fractions of a voxel included).
 void add_random_cases(OriginRun &r_run) {
@@ -400,7 +406,7 @@ void add_random_cases(OriginRun &r_run) {
         const int64_t s = int64_t(1) << LODS[h.x & 3u];
         Case c;
         for (int a = 0; a < 3; a++) {
-            c.chunk[a] = origin[a] + (2 * random_offset(i, uint32_t(a), 0xD1CEu, 16) + 1) * s;
+            c.chunk[a] = origin[a] + (2 * ExactNoise::random_offset(i, uint32_t(a), 0xD1CEu, 16) + 1) * s;
         }
         c.grid = Float3{ float(h.y & 2047u) * 0.015625f, float(h.z & 2047u) * 0.015625f, float((h.y >> 16) & 2047u) * 0.015625f };
         r_run.cases.push_back(c);
@@ -490,6 +496,7 @@ void build_cases(OriginRun &r_run, const SDFDummy &p_sdf) {
         }
     }
 
+    r_run.random_begin = r_run.cases.size();
     add_random_cases(r_run);
 
     // Absolute points, identical at every origin: the GPU results must not depend on the origin.
@@ -541,9 +548,12 @@ struct Checks {
     int64_t cross_origin_points = 0;
     int64_t cross_origin_mismatch = 0;
     std::vector<int64_t> probe_mismatch;
-    // Probe evaluations outside the exact domain (Probe::cpu_exact), and how many of them differ (not a failure).
+    // Probe evaluations outside the exact domain (Probe::cpu), and how many of them differ (also in probe_mismatch).
     int64_t inexact_evaluations = 0;
     int64_t inexact_mismatch = 0;
+    // Probe::origin_relative: (random point, probe) pairs compared with the first origin.
+    int64_t relative_points = 0;
+    int64_t relative_mismatch = 0;
     int64_t cpu_failed = 0;
     Array examples;
 
@@ -585,17 +595,9 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_
         uint32_t w = FIXED_WORDS;
         for (size_t k = 0; k < p_probes.size(); k++) {
             const Probe &probe = p_probes[k];
-            bool exact = true;
-            if (probe.cpu_exact) {
-                exact = probe.cpu_exact(pos, want.data());
-            } else {
-                probe.cpu(pos, want.data());
-            }
-            if (!exact) {
+            if (!probe.cpu(pos, want.data())) {
                 r_checks.inexact_evaluations++;
                 r_checks.inexact_mismatch += std::memcmp(want.data(), g + w, probe.words * sizeof(uint32_t)) != 0 ? 1 : 0;
-                w += probe.words;
-                continue;
             }
             for (int j = 0; j < probe.words; j++) {
                 if (want[j] != g[w + j]) {
@@ -778,10 +780,39 @@ PackedByteArray dispatch(RenderingDevice *p_rd, RID p_shader, RID p_pipeline, co
     return results;
 }
 
+// The origin-relative probes' words at the random points, against the first origin's (r_ref, filled then).
+void check_relative(const OriginRun &p_run, const std::vector<Probe> &p_probes, uint32_t p_words, const PackedByteArray &p_results,
+        std::vector<uint32_t> &r_ref, Checks &r_checks) {
+    const uint32_t *res = reinterpret_cast<const uint32_t *>(p_results.ptr());
+    const bool first = r_ref.empty();
+    size_t n = 0;
+    uint32_t w = FIXED_WORDS;
+    for (const Probe &probe : p_probes) {
+        if (probe.origin_relative) {
+            for (size_t i = p_run.random_begin; i < p_run.absolute_begin; i++) {
+                const uint32_t *g = res + i * p_words + w;
+                if (first) {
+                    r_ref.insert(r_ref.end(), g, g + probe.words);
+                } else {
+                    r_checks.relative_points++;
+                    if (std::memcmp(g, r_ref.data() + n, probe.words * sizeof(uint32_t)) != 0) {
+                        r_checks.relative_mismatch++;
+                        r_checks.example(vformat("origin %s: %s at random point %s differs from the first origin", to_string(p_run.param.origin_chunk),
+                                probe.name, case_str(p_run.cases[i])));
+                    }
+                }
+                n += probe.words;
+            }
+        }
+        w += probe.words;
+    }
+}
+
 // Runs one probe set at every origin and checks it (p_first: index of its first probe in the report).
 // False if its shader doesn't compile.
 bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Probe> &p_probes, size_t p_first, const std::vector<OriginRun> &p_runs,
         Checks &r_checks) {
+    const uint64_t t0 = Time::get_singleton()->get_ticks_msec();
     uint32_t words = 0;
     Ref<RDShaderSource> source;
     source.instantiate();
@@ -794,12 +825,16 @@ bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Pro
     }
     const RID shader = p_rd->shader_create_from_spirv(spirv);
     const RID pipeline = p_rd->compute_pipeline_create(shader);
+    const uint64_t t1 = Time::get_singleton()->get_ticks_msec();
 
-    // GPU results of the absolute points at the first origin, compared with every other origin.
+    // GPU results of the absolute points at the first origin, compared with every other origin; the same for
+    // the random points of the origin-relative probes.
     std::vector<uint32_t> absolute_ref;
+    std::vector<uint32_t> random_ref;
     for (const OriginRun &run : p_runs) {
         const PackedByteArray results = dispatch(p_rd, shader, pipeline, run, words);
         check_run(run, p_probes, p_first, words, results, r_checks);
+        check_relative(run, p_probes, words, results, random_ref, r_checks);
 
         // Everything a sample yields is a function of its absolute position (and chunk id).
         const uint32_t *res = reinterpret_cast<const uint32_t *>(results.ptr());
@@ -819,6 +854,8 @@ bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Pro
     }
     p_rd->free_rid(pipeline);
     p_rd->free_rid(shader);
+    UtilityFunctions::print(vformat("FrameSpike: %d probes from %s, %d words per sample: compile %d ms, run and check %d ms", int64_t(p_probes.size()),
+            p_probes[0].name, words, int64_t(t1 - t0), int64_t(Time::get_singleton()->get_ticks_msec() - t1)));
     return true;
 }
 
@@ -865,6 +902,7 @@ Dictionary FrameSpike::run() {
     std::vector<OriginRun> runs;
     // The archetype programs' anchors: two near each origin, so every origin's points see unsaturated inputs.
     std::vector<VoxelPos> anchors;
+    std::vector<VoxelPos> frame_anchors;
     for (const ChunkId &origin : origins) {
         OriginRun run;
         run.param.voxel_size = voxel_size;
@@ -872,16 +910,29 @@ Dictionary FrameSpike::run() {
         build_cases(run, sdf);
         for (uint32_t j = 0; j < 2; j++) {
             const uint32_t n = uint32_t(anchors.size());
-            anchors.push_back(run.param.origin_voxel() + VoxelPos(random_offset(n, j, 1u, 2048), random_offset(n, j, 2u, 2048), random_offset(n, j, 3u, 2048)));
+            anchors.push_back(run.param.origin_voxel() + VoxelPos(ExactNoise::random_offset(n, j, 1u, 2048), ExactNoise::random_offset(n, j, 2u, 2048), ExactNoise::random_offset(n, j, 3u, 2048)));
         }
+        frame_anchors.push_back(run.param.origin_voxel() + VoxelPos(-1500, 700, 2100));
         runs.push_back(run);
     }
 
     // Probe sets, one shader each: the frame / noise / terrain table, then the archetype probes.
     std::vector<std::vector<Probe>> sets = { make_probes(sdf) };
-    const std::vector<Probe> arch = ArchetypeProbes::make(anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS);
-    for (size_t i = 0; i < arch.size(); i += PROBES_PER_SET) {
-        sets.emplace_back(arch.begin() + i, arch.begin() + MIN(i + PROBES_PER_SET, arch.size()));
+    // The archetype probes, the demo terrain's program first (SDFArchetype: its anchors are absolute, near 0).
+    SDFArchetype demo;
+    demo.configure(sdf_param, PROBE_LODS[PROBE_LOD_COUNT - 1] + 1);
+    std::vector<Probe> arch = { ArchetypeProbes::probe("demo", demo.get_program(), true) };
+    for (Probe &probe : ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS)) {
+        arch.push_back(probe);
+    }
+    int64_t set_glsl = 0;
+    for (const Probe &probe : arch) {
+        if (sets.size() == 1 || sets.back().size() == PROBES_PER_SET || set_glsl + probe.glsl.length() > MAX_SET_GLSL) {
+            sets.emplace_back();
+            set_glsl = 0;
+        }
+        sets.back().push_back(probe);
+        set_glsl += probe.glsl.length();
     }
     std::vector<String> names;
     for (const std::vector<Probe> &set : sets) {
@@ -922,6 +973,8 @@ Dictionary FrameSpike::run() {
     report["cpu_checks_failed"] = checks.cpu_failed;
     report["inexact_evaluations"] = checks.inexact_evaluations;
     report["inexact_mismatch"] = checks.inexact_mismatch;
+    report["relative_points"] = checks.relative_points;
+    report["relative_mismatch"] = checks.relative_mismatch;
     // Per probe; the fuzzed programs summed into one entry.
     int64_t probe_total = 0;
     Dictionary probe_report;
@@ -934,6 +987,7 @@ Dictionary FrameSpike::run() {
     report["examples"] = checks.examples;
     report["ok"] = checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&
-            checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0;
+            checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0 &&
+            checks.relative_points > 0 && checks.relative_mismatch == 0;
     return report;
 }
