@@ -144,9 +144,13 @@ to every change, and a reviewer may reject a PR on any of them.
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
 - Terrain: `VoxelTerrain.terrain_mode` 1 = `SDFCascade` (default, `src/sdf_cascade.hpp`: 3D height field,
   octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m, absolute
-  position only), 2 = its continents preset, 3 = `SDFArchetype` (the archetype IR's demo, below). 0 was
+  position only), 2 = its continents preset, 3 = `SDFArchetype` (the archetype IR's demo, below), 4 = its shapes
+  gallery (`SDFArchetype::shapes`, `--terrain=shapes`, `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG
+  cubes with sphere holes, each twice the size and distance of the last, i.e. one per LOD, plus a die, stairs and a
+  tunnelled cube on a flat ground at 250 m, off the page shader's 100 m contours, for dual contouring's creases;
+  compiled into the table's ground program, with no table instances: its composites nest, which the table doesn't). 0 was
   `SDFDummy`, removed: it evaluated every octave at every LOD (detail finer than the cell, aliased far
-  away), the cascade never inserts a band finer than 8 cells of the chunk's LOD. `--terrain=cascade|continents|archetypes`
+  away), the cascade never inserts a band finer than 8 cells of the chunk's LOD. `--terrain=cascade|continents|archetypes|shapes`
   in `bench.gd` and the main scene (`godot --path project -- --lods=25`). On the cascade terrains the
   player spawns 200 m above the ground and flies at half its altitude per second, and the bench camera
   starts 50 m above it unless `--cam_pos` or `--above_ground=M` (M metres above the terrain under the
@@ -325,7 +329,8 @@ to every change, and a reviewer may reject a PR on any of them.
 - Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
-- `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
+- `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
+  8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it).
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,

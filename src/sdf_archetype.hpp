@@ -15,8 +15,16 @@
 // spawn. Each chunk folds only the instances near it (instance_table.hpp); the library
 // (archetype_table.hpp) is compiled once and reads the instances' records from a GPU buffer. A function
 // of the absolute position: far origins see the ground only.
+// Scene::SHAPES (terrain_mode 4, --terrain=shapes) has no table instances: shapes() compiled into the
+// ground program (hard CSG for dual contouring, nested composites the table does not express).
 class SDFArchetype : public SDFBase {
 public:
+    enum class Scene { DEMO,
+        SHAPES };
+
+    explicit SDFArchetype(Scene p_scene = Scene::DEMO) :
+            which(p_scene) {}
+
     static constexpr uint32_t HEIGHT_SEED = 0xA2C4E7u;
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
     // The ground's mountains (metres).
@@ -241,6 +249,51 @@ public:
         return root;
     }
 
+    // The shapes gallery at voxel size p_voxel (metres): hard unions, subtractions and intersections (sharp
+    // creases, no smoothing) on a flat ground at GROUND_M, around the main_scene spawn (SPAWN_X, SPAWN_Z).
+    // In front (-z): a ladder of eight cubes with a sphere hole through every face, each twice the size and
+    // twice the distance of the previous one, so the same size on screen about one LOD coarser each (LOD 0
+    // to ~7 at lod_pixel_error 4), turned to show the camera the same two faces. Behind (+z): a die (a cube
+    // intersected with a sphere, its pips subtracted), a staircase and a cube tunnelled through along its
+    // three axes, turned off the voxel axes.
+    static constexpr double SPAWN_X = -52.0;
+    static constexpr double SPAWN_Z = -95.0;
+    static constexpr double GROUND_M = DATUM_M - 50.0;
+    static Archetype::Instance shapes(double p_voxel) {
+        using namespace Archetype;
+        const Metres m{ p_voxel };
+        Instance root;
+        root.def = ground_def(ExactNoise::OctaveSet()); // no octave: y = 0
+        // 50 m below the datum: halfway between the page shader's 100 m contour lines. On one (300 m), a flat
+        // ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
+        root.anchor = VoxelPos(0, m.at(GROUND_M), 0);
+        // Centres at 0.9 of the half size: a little sunk, so the voxel rounding never lifts one off the ground.
+        for (int i = 0; i < 8; i++) {
+            const double d = 80.0 * double(1 << i);
+            const double h = 0.1 * d;
+            const double theta = (-45.5 + 13.0 * i) * Math_PI / 180.0;
+            Instance::Child cube = m.child(Combine::UNION, box_def(m.v(h), m.v(h), m.v(h)), SPAWN_X + d * std::sin(theta), 0.9 * h, SPAWN_Z - d * std::cos(theta), 0.5 - theta);
+            cube.instance.children.push_back(m.child(Combine::SUBTRACT, sphere_def(m.v(1.2 * h)), 0.0, 0.0, 0.0, 0.0));
+            root.children.push_back(cube);
+        }
+        const double h = 6.0;
+        root.children.push_back(die(m, h, SPAWN_X - 25.0, SPAWN_Z + 40.0));
+        // The staircase: eight 1 m steps, 2 m deep, 8 m wide, rising away from the spawn; columns centred on the ground.
+        Instance::Child stairs = m.child(Combine::UNION, box_def(m.v(4.0), m.v(1.0), m.v(1.0)), SPAWN_X, 0.0, SPAWN_Z + 33.0, 0.3);
+        for (int k = 1; k < 8; k++) {
+            stairs.instance.children.push_back(m.child(Combine::UNION, box_def(m.v(4.0), m.v(k + 1.0), m.v(1.0)), 0.0, 0.0, 2.0 * k, 0.0));
+        }
+        root.children.push_back(stairs);
+        // The tunnelled cube: 5 m square tunnels along x, y and z.
+        Instance::Child tunnels = m.child(Combine::UNION, box_def(m.v(h), m.v(h), m.v(h)), SPAWN_X + 25.0, 0.9 * h, SPAWN_Z + 40.0, 0.6);
+        for (int a = 0; a < 3; a++) {
+            const float e[3] = { m.v(a == 0 ? h + 1.0 : 2.5), m.v(a == 1 ? h + 1.0 : 2.5), m.v(a == 2 ? h + 1.0 : 2.5) };
+            tunnels.instance.children.push_back(m.child(Combine::SUBTRACT, box_def(e[0], e[1], e[2]), 0.0, 0.0, 0.0, 0.0));
+        }
+        root.children.push_back(tunnels);
+        return root;
+    }
+
 private:
     std::shared_ptr<const Archetype::DefLibrary> library;
     Archetype::Program ground_program;
@@ -254,6 +307,49 @@ private:
     float edit_margin_c = 0.0f;
     int scatter_count = 0; // --instances
     double scatter_area = 200.0; // --instance_area (metres)
+    Scene which;
+
+    // shapes() in metres, rounded to voxels.
+    struct Metres {
+        double voxel;
+        float v(double p_metres) const { return float(p_metres / voxel); }
+        int64_t at(double p_metres) const { return std::llround(p_metres / voxel); }
+        // p_def at (p_x, p_y, p_z) in its parent's frame (a child's anchor and rotation are relative to its
+        // parent's, archetype_instance.hpp), turned by p_yaw.
+        Archetype::Instance::Child child(Archetype::Combine p_op, const std::shared_ptr<Archetype::Def> &p_def, double p_x, double p_y, double p_z, double p_yaw) const {
+            Archetype::Instance::Child c;
+            c.op = p_op;
+            c.instance.def = p_def;
+            c.instance.anchor = VoxelPos(at(p_x), at(p_y), at(p_z));
+            c.instance.set_rotation_y(p_yaw);
+            return c;
+        }
+    };
+
+    // The die of shapes(), half size p_h, on the ground at (p_x, p_z): pips on a 3 x 3 grid of p_h / 2 steps, faces
+    // +y (1), +z (2), +x (3), -x (4), -z (5); 6 is underground.
+    static Archetype::Instance::Child die(const Metres &p_m, double p_h, double p_x, double p_z) {
+        using namespace Archetype;
+        const double yaw = 0.4;
+        Instance::Child die = p_m.child(Combine::UNION, box_def(p_m.v(p_h), p_m.v(p_h), p_m.v(p_h)), p_x, 0.95 * p_h, p_z, yaw);
+        die.instance.children.push_back(p_m.child(Combine::INTERSECT, sphere_def(p_m.v(1.55 * p_h)), 0.0, 0.0, 0.0, 0.0));
+        const char *faces[5] = { "000010000", "100000001", "100010001", "101000101", "101010101" };
+        const int axis[5] = { 1, 2, 0, 0, 2 };
+        const double sign[5] = { 1.0, 1.0, 1.0, -1.0, -1.0 };
+        const std::shared_ptr<Def> pip = sphere_def(p_m.v(0.2 * p_h));
+        for (int f = 0; f < 5; f++) {
+            for (int g = 0; g < 9; g++) {
+                if (faces[f][g] == '1') {
+                    double p[3];
+                    p[axis[f]] = sign[f] * p_h;
+                    p[(axis[f] + 1) % 3] = double(g % 3 - 1) * 0.5 * p_h;
+                    p[(axis[f] + 2) % 3] = double(g / 3 - 1) * 0.5 * p_h;
+                    die.instance.children.push_back(p_m.child(Combine::SUBTRACT, pip, p[0], p[1], p[2], 0.0));
+                }
+            }
+        }
+        return die;
+    }
 
     void rebuild(const VoxelBox &p_region) {
         version++;
@@ -386,7 +482,16 @@ private:
         Archetype::Instance ground_inst;
         ground_inst.def = ground_def(height);
         ground_inst.anchor = VoxelPos(0, datum, 0);
-        ground_program = compile(ground_inst).program;
+        if (which == Scene::SHAPES) {
+            // The shapes gallery is the ground program itself; the table starts empty (edits still work).
+            records.clear();
+            ground_inst = shapes(p_voxel);
+        }
+        const Archetype::Compiled ground_compiled = compile(ground_inst);
+        if (!ground_compiled.error.is_empty()) {
+            ERR_PRINT(ground_compiled.error);
+        }
+        ground_program = ground_compiled.program;
         out_scale = float(p_voxel);
         lod_count = p_lod_count;
         edit_k = 0.0f;

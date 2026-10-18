@@ -1,0 +1,37 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" uid="uid://bwfx7fd23et6q" path="res://player.tscn" id="1_player"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_shapes"]
+
+[sub_resource type="Sky" id="Sky_shapes"]
+sky_material = SubResource("ProceduralSkyMaterial_shapes")
+
+[sub_resource type="Environment" id="Environment_shapes"]
+background_mode = 2
+sky = SubResource("Sky_shapes")
+tonemap_mode = 3
+ssao_enabled = true
+
+[node name="ShapesScene" type="Node3D"]
+
+[node name="VoxelTerrain" type="VoxelTerrain" parent="."]
+pipeline_mode = 2
+terrain_mode = 4
+debug_view = 8
+lod_pixel_error = 4.0
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_shapes")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.8660254, 0.3535534, -0.3535534, 0, 0.7071068, 0.7071068, 0.5, -0.6123724, 0.6123724, 0, 400, 0)
+shadow_enabled = true
+directional_shadow_mode = 0
+directional_shadow_max_distance = 2000.0
+
+[node name="Player" parent="." instance=ExtResource("1_player")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -52, 258, -95)
+
+[node name="Camera3D" parent="Player" index="0"]
+far = 60000.0
