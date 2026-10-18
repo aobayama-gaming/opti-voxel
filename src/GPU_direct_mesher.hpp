@@ -21,7 +21,7 @@ using namespace godot;
 // receives (asynchronously, a few frames later) a small directory of where each chunk landed,
 // which is bookkeeping for page recycling and chunk destruction, not needed to draw.
 //
-// Batch lifecycle (one batch per frame at most):
+// Batch lifecycle (up to max_batches_per_frame per frame, max_in_flight waiting for their directory):
 //   main:   pop <= batch_size chunks, acquire pages_per_batch pages. The queue is kept in Morton
 //           order, so a batch is a compact region and so is every page: pages are frustum culled
 //           as a whole, with the union of their chunks' AABBs
@@ -41,9 +41,19 @@ class CascadePasses;
 
 class GPUDirectMesher : public Object, public ChunkReleaser {
 public:
+    // A batch captures up to 10 GPU timestamps; Godot keeps 256 per frame by default
+    // (debug/settings/profiler/max_timestamp_query_elements), shared with the renderer and the discoverer.
+    static constexpr uint32_t MAX_BATCHES_PER_FRAME = 16;
+
     struct Settings {
         uint32_t batch_size = 128;
         uint32_t pages_per_batch = 16;
+        // Pacing: batches dispatched per frame at most, and batches (mesh + audit) waiting for their
+        // directory at most. A directory comes back 2 frames after its dispatch, so sustaining N batches
+        // per frame needs 3N in flight (0 = that); each one holds pages_per_batch pages until then. More
+        // per frame loads faster but lengthens the loading frames (~2-3 ms of GPU per batch).
+        uint32_t max_batches_per_frame = 4;
+        uint32_t max_in_flight = 0;
         uint32_t page_capacity = 32768;
         uint32_t initial_pages = 64;
         bool compaction = true;
@@ -51,7 +61,9 @@ public:
         // A re-packed page is never wider than this many of its smallest chunks, so merging
         // sparse pages from distant places, or distant LOD shells, cannot defeat frustum culling.
         float compact_max_extent = 8.0f;
-        uint32_t spare_pages = 64; // free pages kept allocated (4 in-flight batches' worth)
+        // Free pages kept allocated (0 = max_in_flight batches' worth: max_in_flight * pages_per_batch),
+        // so the next batches don't recreate the pages the previous ones returned.
+        uint32_t spare_pages = 0;
     };
 
     void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings);
@@ -157,6 +169,7 @@ private:
     // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 0 (sdf).
     CascadePasses *cascade = nullptr;
     uint64_t cascade_scratch_bytes = 0; // under `mutex` (get_stats reads it on the main thread)
+    uint64_t timestamps_frame_read = UINT64_MAX; // RD frame whose captured timestamps were consumed
 
     void _rt_initialize();
     RID _rt_compile(const char *p_pass, const char *p_name);
@@ -178,7 +191,9 @@ private:
     HashMap<uint32_t, CompletedBatch> partial;
 
     bool _pop_queue(ChunkId &r_chunk);
-    void _dispatch_audit_batch();
+    // One batch each; false when there was nothing to dispatch.
+    bool _dispatch_mesh_batch();
+    bool _dispatch_audit_batch();
     void _flush_kills();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
     void _release_page_if_dead(int p_page);
@@ -192,6 +207,8 @@ private:
         uint64_t overflow_chunks = 0;
         uint64_t overflow_requeued = 0; // chunks sent back to the queue because their batch overflowed
         uint64_t audit_batches = 0;
+        uint64_t dispatch_frames = 0; // frames that dispatched at least one batch
+        uint64_t in_flight_max = 0; // mesh + audit batches waiting for their directory
         uint64_t missing_neighbor = 0;
         uint64_t nan_vertices = 0;
         uint64_t kills = 0;

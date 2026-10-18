@@ -95,6 +95,13 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     chunk_param = p_chunk_param;
     scenario = p_scenario;
     settings = p_settings;
+    settings.max_batches_per_frame = CLAMP(settings.max_batches_per_frame, 1u, MAX_BATCHES_PER_FRAME);
+    if (settings.max_in_flight == 0) {
+        settings.max_in_flight = 3 * settings.max_batches_per_frame;
+    }
+    if (settings.spare_pages == 0) {
+        settings.spare_pages = settings.max_in_flight * settings.pages_per_batch;
+    }
     mutex.instantiate();
 
     chunk_queue.resize(p_lod_numbers);
@@ -216,54 +223,68 @@ void GPUDirectMesher::_rt_initialize() {
 }
 
 void GPUDirectMesher::_rt_read_timestamps() {
-    // Timestamps captured in an earlier frame are readable now. Our markers are "vx<batch>_<step>".
+    // Timestamps captured in an earlier frame are readable now; read each captured frame once, as
+    // several batches may dispatch per frame. Our markers are "vx<batch>_<step>".
+    const uint64_t captured_frame = rd->get_captured_timestamps_frame();
+    if (captured_frame == timestamps_frame_read) {
+        return;
+    }
+    timestamps_frame_read = captured_frame;
+    struct BatchTimes {
+        int64_t begin = -1;
+        int64_t pass[5] = { -1, -1, -1, -1, -1 };
+        int64_t cascade[3] = { -1, -1, -1 }; // after the groups j >= 3, j = 2, j = 1
+        int64_t copy = -1;
+    };
+    HashMap<int64_t, BatchTimes> batches;
     const uint32_t n = rd->get_captured_timestamps_count();
-    int64_t t_begin = -1;
-    int64_t t_pass[5] = { -1, -1, -1, -1, -1 };
-    int64_t t_cascade[3] = { -1, -1, -1 }; // after the groups j >= 3, j = 2, j = 1
-    int64_t t_copy = -1;
     for (uint32_t i = 0; i < n; i++) {
         const String name = rd->get_captured_timestamp_name(i);
         if (!name.begins_with("vx")) {
             continue;
         }
+        BatchTimes &b = batches[name.substr(2).get_slice("_", 0).to_int()];
+        const String step = name.get_slice("_", 1);
         const int64_t t = rd->get_captured_timestamp_gpu_time(i);
-        if (name.ends_with("_begin")) {
-            t_begin = t;
-        } else if (name.ends_with("_copy")) {
-            t_copy = t;
-        } else if (name.contains("_c")) {
-            const int group = name.get_slice("_c", 1).to_int();
+        if (step == "begin") {
+            b.begin = t;
+        } else if (step == "copy") {
+            b.copy = t;
+        } else if (step.begins_with("c")) {
+            const int group = step.substr(1).to_int();
             if (group >= 0 && group < 3) {
-                t_cascade[group] = t;
+                b.cascade[group] = t;
             }
-        } else {
-            const int pass = name.get_slice("_p", 1).to_int();
+        } else if (step.begins_with("p")) {
+            const int pass = step.substr(1).to_int();
             if (pass >= 0 && pass < 5) {
-                t_pass[pass] = t;
+                b.pass[pass] = t;
             }
         }
-    }
-    if (t_begin < 0 || t_copy < 0 || t_pass[4] < 0) {
-        return;
     }
     // GPU timestamps are in nanoseconds; TimingStat stores microseconds.
     mutex->lock();
-    int64_t prev = t_begin;
-    for (int i = 0; i < 5; i++) {
-        if (t_pass[i] >= prev) {
-            stats.gpu_pass[i].add((t_pass[i] - prev) / 1000);
-            prev = t_pass[i];
+    for (const KeyValue<int64_t, BatchTimes> &kv : batches) {
+        const BatchTimes &b = kv.value;
+        if (b.begin < 0 || b.copy < 0 || b.pass[4] < 0) {
+            continue;
         }
-    }
-    if (t_cascade[0] >= t_begin && t_cascade[1] >= t_cascade[0] && t_cascade[2] >= t_cascade[1] && t_pass[0] >= t_cascade[2]) {
-        const int64_t bounds[5] = { t_begin, t_cascade[0], t_cascade[1], t_cascade[2], t_pass[0] };
-        for (int g = 0; g < 4; g++) {
-            stats.gpu_cascade[g].add((bounds[g + 1] - bounds[g]) / 1000);
+        int64_t prev = b.begin;
+        for (int i = 0; i < 5; i++) {
+            if (b.pass[i] >= prev) {
+                stats.gpu_pass[i].add((b.pass[i] - prev) / 1000);
+                prev = b.pass[i];
+            }
         }
+        if (b.cascade[0] >= b.begin && b.cascade[1] >= b.cascade[0] && b.cascade[2] >= b.cascade[1] && b.pass[0] >= b.cascade[2]) {
+            const int64_t bounds[5] = { b.begin, b.cascade[0], b.cascade[1], b.cascade[2], b.pass[0] };
+            for (int g = 0; g < 4; g++) {
+                stats.gpu_cascade[g].add((bounds[g + 1] - bounds[g]) / 1000);
+            }
+        }
+        stats.gpu_compute.add((b.pass[4] - b.begin) / 1000);
+        stats.gpu_copy.add((b.copy - b.pass[4]) / 1000);
     }
-    stats.gpu_compute.add((t_pass[4] - t_begin) / 1000);
-    stats.gpu_copy.add((t_copy - t_pass[4]) / 1000);
     mutex->unlock();
 }
 
@@ -353,6 +374,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     for (int k = 0; k < p_pages.size(); k++) {
         pool->rt_copy_page_from(p_pages[k], staging_texture, k * pool->get_page_rows());
         const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_pages[k]);
+        ERR_CONTINUE_MSG(!page_rd.command.is_valid(), vformat("GPUDirectMesher: batch %d: page %d has no command buffer", p_batch_id, p_pages[k]));
         rd->buffer_copy(buffer_status, page_rd.command, (STATUS_HEADER_UINTS + k) * 4,
                 QuadPagePool::INDIRECT_INSTANCE_COUNT_OFFSET, 4);
     }
@@ -507,22 +529,35 @@ void GPUDirectMesher::process_queue() {
     frame++;
     // Before acquiring pages: a page released since it was marked must not be touched.
     _update_dirty_bounds();
-    // Before acquiring pages too: a kill must not land on a page reused by this batch.
+    // Before acquiring pages too: a kill must not land on a page reused by this frame's batches.
     _flush_kills();
 
-    // Bound the number of batches waiting for their directory (each one holds pages_per_batch pages).
-    if (in_flight.size() + audit_in_flight.size() >= 4) {
-        return;
+    // Batches of one frame share the scratch buffers, the staging texture and the status buffer: the
+    // render graph orders them like batches of consecutive frames (each readback copies its own data
+    // at its point in the graph). Audit batches only run once the mesh queue is empty.
+    uint32_t dispatched = 0;
+    // Bound the batches waiting for their directory (each one holds pages_per_batch pages).
+    while (dispatched < settings.max_batches_per_frame && in_flight.size() + audit_in_flight.size() < settings.max_in_flight) {
+        if (!_dispatch_mesh_batch() && !_dispatch_audit_batch()) {
+            break;
+        }
+        dispatched++;
     }
+    if (dispatched > 0) {
+        stats.dispatch_frames++;
+        stats.in_flight_max = MAX(stats.in_flight_max, (uint64_t)(in_flight.size() + audit_in_flight.size()));
+    }
+}
 
+bool GPUDirectMesher::_dispatch_mesh_batch() {
     std::vector<ChunkId> chunks;
+    chunks.reserve(settings.batch_size);
     ChunkId chunk;
     while (chunks.size() < settings.batch_size && _pop_queue(chunk)) {
         chunks.push_back(chunk);
     }
     if (chunks.empty()) {
-        _dispatch_audit_batch();
-        return;
+        return false;
     }
     const uint64_t t0 = now_usec();
 
@@ -531,7 +566,6 @@ void GPUDirectMesher::process_queue() {
     std::sort(chunks.begin(), chunks.end(), [origin](const ChunkId &a, const ChunkId &b) { return morton_key(a, origin) < morton_key(b, origin); });
 
     InFlightBatch batch;
-    batch.chunks = chunks;
     batch.dispatch_frame = frame;
     int min_lod = ChunkMath::get_lod(chunks[0]);
     for (const ChunkId &c : chunks) {
@@ -561,18 +595,21 @@ void GPUDirectMesher::process_queue() {
     }
 
     const uint32_t batch_id = next_batch_id++;
-    in_flight[batch_id] = batch;
+    const uint32_t count = chunks.size();
+    batch.chunks = std::move(chunks);
+    in_flight[batch_id] = std::move(batch);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
-                    .bind(batch_id, ids, (uint32_t)chunks.size(), pages, min_lod));
+                    .bind(batch_id, ids, count, pages, min_lod));
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
-    VLOG(3, "GPUDirectMesher: dispatched batch ", batch_id, " (", (int64_t)chunks.size(), " chunks)");
+    VLOG(3, "GPUDirectMesher: dispatched batch ", batch_id, " (", (int64_t)count, " chunks)");
+    return true;
 }
 
-void GPUDirectMesher::_dispatch_audit_batch() {
+bool GPUDirectMesher::_dispatch_audit_batch() {
     if (audit_queue.empty()) {
-        return;
+        return false;
     }
     const size_t n = MIN((size_t)settings.batch_size, audit_queue.size());
     std::vector<ChunkId> chunks(audit_queue.end() - n, audit_queue.end());
@@ -590,6 +627,7 @@ void GPUDirectMesher::_dispatch_audit_batch() {
     stats.audit_batches++;
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch_count)
                     .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod));
+    return true;
 }
 
 void GPUDirectMesher::audit_count_chunks(const std::vector<ChunkId> &p_chunks) {
@@ -641,6 +679,9 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
         for (size_t k = 0; k < batch.pages.size(); k++) {
             page_state[batch.pages[k]].groups = (uint32_t)status[STATUS_HEADER_UINTS + k];
+            if ((uint32_t)status[STATUS_HEADER_UINTS + k] > pool->get_page_rows()) {
+                ERR_PRINT(vformat("GPUDirectMesher: batch %d page %d: status fill %d groups", c.batch_id, (int64_t)k, status[STATUS_HEADER_UINTS + k]));
+            }
         }
 
         for (size_t i = 0; i < batch.chunks.size(); i++) {
@@ -665,6 +706,10 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
             out.drawn_triangles = count * 2;
             if (count > 0) {
                 const uint32_t k = base / settings.page_capacity;
+                if (k >= batch.pages.size() || base % settings.page_capacity + count > settings.page_capacity) {
+                    ERR_PRINT(vformat("GPUDirectMesher: bad directory entry: batch %d chunk %d count %d base %d flags %d", c.batch_id, (int64_t)i, count, base, flags));
+                    continue;
+                }
                 out.owner = this;
                 out.page = batch.pages[k];
                 out.quad_offset = base % settings.page_capacity;
@@ -960,6 +1005,9 @@ Dictionary GPUDirectMesher::get_stats() {
     d["page_aabb_extent_chunks_max"] = extent_max;
     d["queued"] = queued;
     d["in_flight"] = (int64_t)in_flight.size();
+    d["in_flight_max"] = (int64_t)stats.in_flight_max;
+    // Mesh and audit batches per frame that dispatched any.
+    d["batches_per_dispatch_frame"] = stats.dispatch_frames ? double(stats.batches + stats.audit_batches) / stats.dispatch_frames : 0.0;
     d["batches"] = (int64_t)stats.batches;
     d["chunks_meshed"] = (int64_t)stats.chunks_meshed;
     d["quads_emitted"] = (int64_t)stats.quads_emitted;

@@ -23,6 +23,8 @@ extends Node3D
 ##   --batch=N                    legacy batch size
 ##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
+##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
+##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
 ##   --terrain=dummy|cascade      VoxelTerrain.terrain_mode (default dummy; cascade: the Hermite cascade
 ##                                test terrain, SDFCascade)
@@ -117,6 +119,10 @@ func _ready() -> void:
 		terrain.direct_pages_per_batch = int(args["pages"])
 	if args.has("cap"):
 		terrain.direct_page_capacity = int(args["cap"])
+	if args.has("batches_per_frame"):
+		terrain.direct_batches_per_frame = int(args["batches_per_frame"])
+	if args.has("max_in_flight"):
+		terrain.direct_max_in_flight = int(args["max_in_flight"])
 	terrain.debug_view = int(args.get("view", "0"))
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
 	if args.has("voxel"):
@@ -221,6 +227,7 @@ func _end_phase() -> void:
 		"frames": phase_frame,
 		"wall_ms": (Time.get_ticks_usec() - phase_start_usec) / 1000.0,
 		"frame_ms": _summary(s["frame_ms"]),
+		"frame_ms_slowest": _slowest(s["frame_ms"], 5),
 		"render_gpu_ms": _summary(s["gpu_ms"]),
 		"render_cpu_ms": _summary(s["cpu_render_ms"]),
 		"pending_chunks": _summary(s["pending"]),
@@ -406,6 +413,16 @@ func _memory() -> Dictionary:
 		"video_mem_mb": RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED) / 1048576.0,
 		"buffer_mem_mb": RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_BUFFER_MEM_USED) / 1048576.0,
 	}
+
+
+# The p_count largest values as [index in the phase, value], largest first: tells startup frames from stutter.
+static func _slowest(values: Array, p_count: int) -> Array:
+	var order := range(values.size())
+	order.sort_custom(func(a, b): return values[a] > values[b])
+	var out := []
+	for i in order.slice(0, p_count):
+		out.append([i, values[i]])
+	return out
 
 
 static func _summary(values: Array) -> Dictionary:

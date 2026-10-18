@@ -231,6 +231,8 @@ int QuadPagePool::_create_page(int p_index) {
     // Texture creation must happen on the render thread; it also zeroes the group count (a fresh
     // page would otherwise draw every group).
     rs->call_on_render_thread(callable_mp(this, &QuadPagePool::_rt_create_page).bind(index, page.multimesh, page.material));
+    // A reused index left trimmed_pages before this call.
+    pages_alive_peak = MAX(pages_alive_peak, _alive_pages());
     return index;
 }
 
@@ -362,6 +364,7 @@ void QuadPagePool::rt_set_group_count(int p_page, uint32_t p_groups) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     const PageRD page_rd = rt_get_page_rd(p_page);
     ERR_FAIL_COND_MSG(!page_rd.command.is_valid(), "QuadPagePool: page has no indirect command buffer.");
+    ERR_FAIL_COND_MSG(p_groups > get_page_rows(), vformat("QuadPagePool: group count %d > page rows on page %d", p_groups, p_page));
     PackedByteArray data;
     data.resize(4);
     data.encode_u32(0, p_groups);
@@ -371,6 +374,7 @@ void QuadPagePool::rt_set_group_count(int p_page, uint32_t p_groups) {
 void QuadPagePool::rt_copy_page_from(int p_page, RID p_src, uint32_t p_src_row) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     const PageRD page_rd = rt_get_page_rd(p_page);
+    ERR_FAIL_COND_MSG(!page_rd.texture.is_valid(), vformat("QuadPagePool: batch copy into a freed page %d", p_page));
     rd->texture_copy(p_src, page_rd.texture, Vector3(0, p_src_row, 0), Vector3(0, 0, 0),
             Vector3(TEX_WIDTH, get_page_rows(), 1), 0, 0, 0, 0);
 }
@@ -384,6 +388,7 @@ void QuadPagePool::rt_kill_range(int p_page, uint32_t p_offset, uint32_t p_count
     ERR_FAIL_COND_MSG(p_offset % QUAD_GROUP != 0, "QuadPagePool: kill ranges must start on a group.");
     const uint32_t first_row = p_offset / QUAD_GROUP;
     const uint32_t rows = (p_count + QUAD_GROUP - 1) / QUAD_GROUP;
+    ERR_FAIL_COND_MSG(first_row + rows > get_page_rows(), vformat("QuadPagePool: kill out of page: page %d rows %d+%d", p_page, first_row, rows));
     rd->texture_copy(rt_zero_texture, page_rd.texture, Vector3(0, 0, 0), Vector3(0, first_row, 0),
             Vector3(TEX_WIDTH, rows, 1), 0, 0, 0, 0);
 }
@@ -393,20 +398,25 @@ void QuadPagePool::rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_r
     ERR_FAIL_INDEX(p_src_page, (int)rt_pages.size());
     ERR_FAIL_INDEX(p_dst_page, (int)rt_pages.size());
     ERR_FAIL_COND(p_src_page == p_dst_page);
+    ERR_FAIL_COND_MSG(!rt_pages[p_src_page].texture.is_valid() || !rt_pages[p_dst_page].texture.is_valid(), vformat("QuadPagePool: copy rows on a freed page %d -> %d", p_src_page, p_dst_page));
+    ERR_FAIL_COND_MSG(p_src_row + p_rows > get_page_rows() || p_dst_row + p_rows > get_page_rows(), vformat("QuadPagePool: copy rows out of page %d:%d -> %d:%d x %d", p_src_page, p_src_row, p_dst_page, p_dst_row, p_rows));
     rd->texture_copy(rt_pages[p_src_page].texture, rt_pages[p_dst_page].texture, Vector3(0, p_src_row, 0),
             Vector3(0, p_dst_row, 0), Vector3(TEX_WIDTH, p_rows, 1), 0, 0, 0, 0);
 }
 
 Dictionary QuadPagePool::get_stats() const {
     Dictionary d;
-    const int64_t alive = (int64_t)pages.size() - (int64_t)trimmed_pages.size();
+    const int64_t alive = _alive_pages();
     d["pages_total"] = alive;
     d["pages_in_use"] = (int64_t)pages_in_use;
     d["page_capacity"] = (int64_t)page_capacity;
     d["slots_total"] = alive * page_capacity;
     d["growth_events"] = (int64_t)growth_events;
     d["pages_trimmed"] = (int64_t)pages_trimmed;
-    d["vram_mb"] = alive * (double)get_page_rows() * PageFormat::ROW_BYTES / 1048576.0;
+    const double page_mb = (double)get_page_rows() * PageFormat::ROW_BYTES / 1048576.0;
+    d["vram_mb"] = alive * page_mb;
+    d["pages_peak"] = pages_alive_peak;
+    d["vram_peak_mb"] = pages_alive_peak * page_mb;
     return d;
 }
 

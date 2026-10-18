@@ -197,6 +197,10 @@ public:
     int get_direct_batch_size() const;
     void set_direct_pages_per_batch(int p_pages);
     int get_direct_pages_per_batch() const;
+    void set_direct_batches_per_frame(int p_batches);
+    int get_direct_batches_per_frame() const;
+    void set_direct_max_in_flight(int p_batches);
+    int get_direct_max_in_flight() const;
     void set_direct_page_capacity(int p_capacity);
     int get_direct_page_capacity() const;
     void set_direct_initial_pages(int p_pages);

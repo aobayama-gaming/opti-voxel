@@ -47,6 +47,8 @@ func _enter_tree() -> void:
 			spawn_above_ground = true
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
+		if a.begins_with("--voxel=") and terrain:
+			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
 		if a.begins_with("--view=") and terrain:
