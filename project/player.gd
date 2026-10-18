@@ -33,10 +33,10 @@ var altitude_age := 1.0
 # release. Both use VoxelTerrain.add_instance / move_instance / remove_instance (archetype table only).
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
-var drag_length := 20.0     # --drag_length=M: how far the tube carves INWARD from the surface
-var drag_radius := 3.0      # --drag_radius=M: the tube's radius
+var drag_length := 20.0     # --drag_length=M: the capsule's depth, from the camera along the view
+var drag_radius := 1.0      # --drag_radius=M: the capsule's radius (1 m = 2 m wide)
 var dig_k := 0.3            # smooth radius (metres)
-var drag_op := 2            # Combine: 2 subtract (a hole that follows you), 0 union
+var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid capsule)
 var drag_active := false
 var drag_id := -1
 var edits_count := 0
@@ -256,15 +256,12 @@ func _update_drag() -> void:
 		return
 	var vt: float = terrain.voxel_size
 	var fwd := -camera.global_transform.basis.z
-	# The tube starts at the surface the view hits and carves drag_length metres INWARD along the view, so
-	# it goes deep into the mountain instead of eating only the sliver it overlaps. The capsule's local y
-	# runs along the view; its origin is 1 m before the surface (so the mouth opens) and it is
-	# drag_length + 1 m long. If the view hits nothing (sky) or the camera is already inside solid, the
-	# hit is the camera and it carves from there. SUBTRACT by default; --drag_op=union makes it solid.
-	var hit := _raymarch(terrain, camera.global_position, fwd)
-	var p := _voxel_of(terrain, hit - fwd * 1.0)
+	# Just a capsule carried by the camera: its origin is 0.5 m in front, its local y runs along the view,
+	# so it is drag_length metres deep and drag_radius metres wide (2 m wide by default). Moved every frame
+	# (a SUBTRACT carves it; --drag_op=union is a solid capsule). No ray-march.
+	var p := _voxel_of(terrain, camera.global_position + fwd * 0.5)
 	var rot := _basis9(fwd)
-	var params := PackedFloat32Array([(drag_length + 1.0) / vt, drag_radius / vt])
+	var params := PackedFloat32Array([drag_length / vt, drag_radius / vt])
 	if drag_id < 0:
 		drag_id = terrain.add_instance(1, p[0], p[1], p[2], rot, params, drag_op, dig_k / vt)
 		if drag_id < 0:
