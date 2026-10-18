@@ -87,7 +87,7 @@ private:
 
     bool started = false;
 
-    // update_destroy_from_scan is needed (a scan or mesher results arrived since it last ran).
+    // update_destroy_full is needed (a scan or mesher results arrived since it last ran).
     bool destroy_dirty = false;
     // Camera chunk of the scan currently in visual_mesh_data.scanned_chunk.
     ChunkId scan_camera_chunk;
@@ -107,8 +107,6 @@ private:
     Dictionary discovery_audit_report;
     void _poll_discovery_audit();
 
-    void _destroy_chunk();
-
     void _teardown();
 
     bool _can_set_world_origin(int64_t p_voxel) const;
@@ -124,10 +122,10 @@ private:
     struct ProcessStats {
         TimingStat process_total;
         TimingStat scan_ingest; // get_scanned_chunks + add_scan_chunk + send_chunk
-        TimingStat destroy_from_scan; // VoxelState::update_destroy_from_scan
+        TimingStat destroy_from_scan; // VoxelState::update_destroy_full
         TimingStat mesher_dispatch; // process_queue
         TimingStat mesher_collect; // get_results
-        TimingStat destroy_chunks; // _destroy_chunk
+        TimingStat destroy_chunks; // VoxelState::destroy_marked
         TimingStat compact; // GPUDirectMesher::compact
     } process_stats;
 

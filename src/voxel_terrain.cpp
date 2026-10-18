@@ -6,21 +6,6 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-void VoxelTerrain::_destroy_chunk() {
-    for (ChunkHashMap::Iterator it = visual_mesh_data.to_destroy_chunk.begin();
-            it != visual_mesh_data.to_destroy_chunk.end();) {
-        const ChunkId chunk_pos = it->key;
-        ChunkOutput output = it->value;
-
-        output.free();
-
-        visual_mesh_data.loaded_chunk.erase(chunk_pos);
-        visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
-
-        it = visual_mesh_data.to_destroy_chunk.begin();
-    }
-}
-
 void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_pipeline_mode", "mode"), &VoxelTerrain::set_pipeline_mode);
     ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
@@ -588,7 +573,7 @@ void VoxelTerrain::_process(double) {
     if (destroy_dirty) {
         destroy_dirty = false;
         t0 = now_usec();
-        visual_mesh_data.update_destroy_from_scan();
+        visual_mesh_data.update_destroy_full();
         process_stats.destroy_from_scan.add(now_usec() - t0);
     }
 
@@ -606,7 +591,7 @@ void VoxelTerrain::_process(double) {
     process_stats.mesher_collect.add(now_usec() - t0);
 
     t0 = now_usec();
-    _destroy_chunk();
+    visual_mesh_data.destroy_marked();
     process_stats.destroy_chunks.add(now_usec() - t0);
 
     // After destruction (to_destroy_chunk holds copies of the outputs it moves), and never while the
