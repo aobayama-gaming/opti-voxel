@@ -53,6 +53,25 @@ Local Builder::local(int p_anchor) {
     return Local{ input(0, p_anchor), input(1, p_anchor), input(2, p_anchor) };
 }
 
+Reg Builder::t_input(int p_axis) {
+    Instr in;
+    in.op = Op::T_INPUT;
+    in.axis = uint8_t(p_axis);
+    return emit(in);
+}
+
+Local Builder::t_local() {
+    return Local{ t_input(0), t_input(1), t_input(2) };
+}
+
+Reg Builder::t_param(int p_index) {
+    Instr in;
+    in.op = Op::T_PARAM;
+    in.index = p_index;
+    return emit(in);
+}
+
+
 namespace {
 
 Instr instr(Op p_op, Reg p_a, Reg p_b = -1, Reg p_c = -1, Reg p_d = -1) {
@@ -118,6 +137,14 @@ Reg Builder::perlin2(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float
     return emit(noise(Op::PERLIN2, p_k, p_seed, p_offset, p_amp));
 }
 
+Reg Builder::t_perlin3(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
+    return emit(noise(Op::T_PERLIN3, p_k, p_seed, p_offset, p_amp));
+}
+
+Reg Builder::t_perlin2(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
+    return emit(noise(Op::T_PERLIN2, p_k, p_seed, p_offset, p_amp));
+}
+
 // Every builder emits one instruction per statement: C++ leaves the order of a call's arguments
 // unspecified, and the instruction order (the GLSL text, its FNV pin) must not depend on the compiler.
 
@@ -168,6 +195,49 @@ Reg Builder::cylinder(const Local &p_p, float p_half_height, float p_radius) {
     const Reg dr = sub(len, constant(p_radius));
     const Reg ay = abs(p_p.y);
     const Reg dy = sub(ay, constant(p_half_height));
+    const Reg pr = max(dr, zero);
+    const Reg outside = length(pr, max(dy, zero));
+    const Reg inner = max(dr, dy);
+    return add(outside, min(inner, zero));
+}
+
+Reg Builder::clamp(Reg p_a, Reg p_lo, Reg p_hi) {
+    const Reg lo = max(p_a, p_lo);
+    return min(lo, p_hi);
+}
+
+Reg Builder::sphere(const Local &p_p, Reg p_radius) {
+    const Reg len = length(p_p.x, p_p.y, p_p.z);
+    return sub(len, p_radius);
+}
+
+Reg Builder::box(const Local &p_p, Reg p_hx, Reg p_hy, Reg p_hz) {
+    const Reg zero = constant(0.0f);
+    const Reg q[3] = { abs(p_p.x), abs(p_p.y), abs(p_p.z) };
+    const Reg h[3] = { p_hx, p_hy, p_hz };
+    Reg d[3];
+    Reg pos[3];
+    for (int i = 0; i < 3; i++) {
+        d[i] = sub(q[i], h[i]);
+        pos[i] = max(d[i], zero);
+    }
+    const Reg outside = length(pos[0], pos[1], pos[2]);
+    const Reg inner = max(d[0], max(d[1], d[2]));
+    return add(outside, min(inner, zero));
+}
+
+Reg Builder::capsule(const Local &p_p, Reg p_height, Reg p_radius) {
+    const Reg y = sub(p_p.y, clamp(p_p.y, constant(0.0f), p_height));
+    const Reg len = length(p_p.x, y, p_p.z);
+    return sub(len, p_radius);
+}
+
+Reg Builder::cylinder(const Local &p_p, Reg p_half_height, Reg p_radius) {
+    const Reg zero = constant(0.0f);
+    const Reg len = length(p_p.x, p_p.z);
+    const Reg dr = sub(len, p_radius);
+    const Reg ay = abs(p_p.y);
+    const Reg dy = sub(ay, p_half_height);
     const Reg pr = max(dr, zero);
     const Reg outside = length(pr, max(dy, zero));
     const Reg inner = max(dr, dy);

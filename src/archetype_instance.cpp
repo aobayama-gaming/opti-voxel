@@ -52,6 +52,39 @@ bool is_orthonormal(const float *p_r) {
     return true;
 }
 
+// R_a R_b, double accumulation then a float round: deterministic, CPU only.
+void mat_mul(const float *p_a, const float *p_b, float r_out[9]) {
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            double s = 0.0;
+            for (int k = 0; k < 3; k++) {
+                s += double(p_a[i * 3 + k]) * double(p_b[k * 3 + j]);
+            }
+            r_out[i * 3 + j] = float(s);
+        }
+    }
+}
+
+// A child's world anchor: the parent's anchor plus the child's offset rotated into world axes
+// (R_parent^T c), rounded to voxels (deterministic). A child's offset is in its parent's local frame,
+// so a composite placed with a rotation turns as a whole.
+VoxelPos child_world_anchor(const float *p_parent_r, const VoxelPos &p_c) {
+    // An unrotated parent keeps its child's offset bit for bit: the double round trip below would lose
+    // voxels above 2^53 (the root's anchor is passed through here).
+    if (is_identity(p_parent_r)) {
+        return p_c;
+    }
+    VoxelPos o;
+    for (int j = 0; j < 3; j++) {
+        double s = 0.0;
+        for (int k = 0; k < 3; k++) {
+            s += double(p_parent_r[k * 3 + j]) * double(p_c[k]);
+        }
+        o[j] = int64_t(std::llround(s));
+    }
+    return o;
+}
+
 // The local x, y, z of an instance: R (p - anchor), op for op.
 Local frame(Builder &p_b, const VoxelPos &p_anchor, const float *p_r) {
     const Local l = p_b.local(p_b.anchor(p_anchor));
@@ -73,8 +106,10 @@ Local frame(Builder &p_b, const VoxelPos &p_anchor, const float *p_r) {
     return Local{ out[0], out[1], out[2] };
 }
 
-// p_def's program appended in the frame (anchor, rotation, params, seed) of p_inst.
-Reg inline_def(Builder &p_b, const Def &p_def, const VoxelPos &p_anchor, const Instance &p_inst) {
+// p_def's program appended in the frame (anchor, rotation, params, seed) of p_inst. p_rotation is the
+// instance's effective world rotation (the composition with its parents, compile_node); a child of a
+// rotated parent turns with it.
+Reg inline_def(Builder &p_b, const Def &p_def, const VoxelPos &p_anchor, const Instance &p_inst, const float *p_rotation) {
     const Program &p = p_def.program;
     std::vector<Reg> map(p.code.size(), -1);
     Local local;
@@ -84,7 +119,7 @@ Reg inline_def(Builder &p_b, const Def &p_def, const VoxelPos &p_anchor, const I
         switch (in.op) {
             case Op::INPUT:
                 if (!have_local) {
-                    local = frame(p_b, p_anchor, p_inst.rotation);
+                    local = frame(p_b, p_anchor, p_rotation);
                     have_local = true;
                 }
                 map[i] = in.axis == 0 ? local.x : (in.axis == 1 ? local.y : local.z);
@@ -118,33 +153,8 @@ String def_error(const Def &p_def) {
     return p_def.program.output < 0 ? "Archetype: a Def without output." : "";
 }
 
-Bounds world_bounds(const Def &p_def, const VoxelPos &p_anchor, const float *p_r) {
-    Bounds b;
-    b.lipschitz = p_def.lipschitz;
-    b.bounded = p_def.bounded;
-    if (!b.bounded) {
-        return b;
-    }
-    // The local box's corners back in world axes (R^T q), then a margin for the float rotation: one voxel, plus
-    // R^T's distance to R^-1 (rows orthonormal within 1e-5, is_orthonormal) times the box's reach.
-    double lo[3] = { INFINITY, INFINITY, INFINITY };
-    double hi[3] = { -INFINITY, -INFINITY, -INFINITY };
-    double reach = 0.0;
-    for (int c = 0; c < 8; c++) {
-        const double q[3] = { (c & 1) ? p_def.hi.x : p_def.lo.x, (c & 2) ? p_def.hi.y : p_def.lo.y, (c & 4) ? p_def.hi.z : p_def.lo.z };
-        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
-        for (int j = 0; j < 3; j++) {
-            const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
-            lo[j] = MIN(lo[j], w);
-            hi[j] = MAX(hi[j], w);
-        }
-    }
-    const double margin = 1.0 + 1e-4 * reach;
-    for (int j = 0; j < 3; j++) {
-        b.lo[j] = p_anchor[j] + int64_t(std::floor(lo[j] - margin));
-        b.hi[j] = p_anchor[j] + int64_t(std::ceil(hi[j] + margin));
-    }
-    return b;
+Bounds def_world_bounds(const Def &p_def, const VoxelPos &p_anchor, const float *p_r) {
+    return world_bounds(p_def.lo, p_def.hi, p_def.lipschitz, p_def.bounded, p_anchor, p_r);
 }
 
 double volume(const Bounds &p_b) {
@@ -153,7 +163,7 @@ double volume(const Bounds &p_b) {
 
 // p_parent combined with a child (its value p_child, bounds p_cb): the new value, r_bounds updated.
 Reg combine(Builder &p_b, Reg p_parent, Bounds &r_bounds, const Instance::Child &p_child, Reg p_child_reg, const Bounds &p_cb,
-        const VoxelPos &p_child_anchor) {
+        const VoxelPos &p_child_anchor, const float *p_child_rotation) {
     const Bounds a = r_bounds;
     const float l = MAX(a.lipschitz, p_cb.lipschitz);
     switch (p_child.op) {
@@ -183,11 +193,11 @@ Reg combine(Builder &p_b, Reg p_parent, Bounds &r_bounds, const Instance::Child 
         default: { // BLEND: >= min(parent, child); the weight's gradient times (child - parent) is unbounded.
             r_bounds = hull(a, p_cb);
             r_bounds.lipschitz = INFINITY;
-            // The weight in the child's frame (rotation, seed), with its own parameters.
+            // The weight in the child's frame (effective rotation, seed), with its own parameters.
             Instance weight_frame;
-            std::copy(p_child.instance.rotation, p_child.instance.rotation + 9, weight_frame.rotation);
+            std::copy(p_child_rotation, p_child_rotation + 9, weight_frame.rotation);
             weight_frame.seed = p_child.instance.seed;
-            const Reg w = p_b.clamp(inline_def(p_b, *p_child.weight, p_child_anchor, weight_frame), 0.0f, 1.0f);
+            const Reg w = p_b.clamp(inline_def(p_b, *p_child.weight, p_child_anchor, weight_frame, p_child_rotation), 0.0f, 1.0f);
             // parent (1 - w) + child w: exactly the parent at w = 0 and the child at w = 1, at any magnitude
             // (parent + (child - parent) w would round the child to the parent's ulp).
             const Reg one = p_b.constant(1.0f);
@@ -208,26 +218,42 @@ String child_error(const Instance::Child &p_child) {
     return String();
 }
 
-// -1 and r_out.error set at the first invalid instance or child (nothing more is emitted).
-Reg compile_node(Builder &p_b, const Instance &p_inst, const VoxelPos &p_parent_anchor, Compiled &r_out, Bounds &r_bounds) {
-    const VoxelPos anchor = p_parent_anchor + p_inst.anchor;
+// -1 and r_out.error set at the first invalid instance or child (nothing more is emitted). The instance
+// is placed in its parent's local frame: its world anchor is p_parent_anchor + R_parent^T p_inst.anchor
+// and its effective rotation R_inst R_parent, so a composite turns as a whole with its parent.
+Reg compile_node(Builder &p_b, const Instance &p_inst, const VoxelPos &p_parent_anchor, const float *p_parent_rotation, Compiled &r_out,
+        Bounds &r_bounds) {
     r_out.error = p_inst.def ? def_error(*p_inst.def) : String("Archetype: an instance without a Def.");
-    if (r_out.error.is_empty() && !is_orthonormal(p_inst.rotation)) {
+    if (r_out.error.is_empty() && (!is_orthonormal(p_inst.rotation) || !is_orthonormal(p_parent_rotation))) {
         r_out.error = "Archetype: an instance rotation is not orthonormal.";
     }
     if (!r_out.error.is_empty()) {
         return -1;
     }
-    Reg r = inline_def(p_b, *p_inst.def, anchor, p_inst);
-    r_bounds = world_bounds(*p_inst.def, anchor, p_inst.rotation);
+    const VoxelPos anchor = p_parent_anchor + child_world_anchor(p_parent_rotation, p_inst.anchor);
+    float rotation[9];
+    mat_mul(p_inst.rotation, p_parent_rotation, rotation);
+    if (!is_orthonormal(rotation)) {
+        r_out.error = "Archetype: a composed rotation is not orthonormal.";
+        return -1;
+    }
+    Reg r = inline_def(p_b, *p_inst.def, anchor, p_inst, rotation);
+    r_bounds = def_world_bounds(*p_inst.def, anchor, rotation);
     for (const Instance::Child &child : p_inst.children) {
         r_out.error = child_error(child);
+        if (!r_out.error.is_empty()) {
+            return -1;
+        }
+        // The child's effective frame, for its BLEND weight and its own children.
+        const VoxelPos child_anchor = anchor + child_world_anchor(rotation, child.instance.anchor);
+        float child_rotation[9];
+        mat_mul(child.instance.rotation, rotation, child_rotation);
         Bounds cb;
-        const Reg c = r_out.error.is_empty() ? compile_node(p_b, child.instance, anchor, r_out, cb) : -1;
+        const Reg c = compile_node(p_b, child.instance, anchor, rotation, r_out, cb);
         if (c < 0) {
             return -1;
         }
-        r = combine(p_b, r, r_bounds, child, c, cb, anchor + child.instance.anchor);
+        r = combine(p_b, r, r_bounds, child, c, cb, child_anchor, child_rotation);
     }
     r_out.nodes.push_back(Compiled::Node{ r, r_bounds });
     return r;
@@ -244,6 +270,35 @@ std::shared_ptr<Def> make_def(Builder &p_b, Reg p_out, Float3 p_lo, Float3 p_hi,
 
 } // namespace
 
+Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded, const VoxelPos &p_anchor, const float *p_r) {
+    Bounds b;
+    b.lipschitz = p_lipschitz;
+    b.bounded = p_bounded;
+    if (!b.bounded) {
+        return b;
+    }
+    // The local box's corners back in world axes (R^T q), then a margin for the float rotation: one voxel, plus
+    // R^T's distance to R^-1 (rows orthonormal within 1e-5, is_orthonormal) times the box's reach.
+    double lo[3] = { INFINITY, INFINITY, INFINITY };
+    double hi[3] = { -INFINITY, -INFINITY, -INFINITY };
+    double reach = 0.0;
+    for (int c = 0; c < 8; c++) {
+        const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
+        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
+        for (int j = 0; j < 3; j++) {
+            const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
+            lo[j] = MIN(lo[j], w);
+            hi[j] = MAX(hi[j], w);
+        }
+    }
+    const double margin = 1.0 + 1e-4 * reach;
+    for (int j = 0; j < 3; j++) {
+        b.lo[j] = p_anchor[j] + int64_t(std::floor(lo[j] - margin));
+        b.hi[j] = p_anchor[j] + int64_t(std::ceil(hi[j] + margin));
+    }
+    return b;
+}
+
 Bounds hull(const Bounds &p_a, const Bounds &p_b) {
     Bounds r;
     r.bounded = p_a.bounded && p_b.bounded;
@@ -259,7 +314,8 @@ Compiled compile(const Instance &p_root) {
     Compiled out;
     Builder b;
     Bounds bounds;
-    const Reg r = compile_node(b, p_root, VoxelPos(), out, bounds);
+    const float identity[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+    const Reg r = compile_node(b, p_root, VoxelPos(), identity, out, bounds);
     if (r >= 0) {
         out.program = b.finish(r);
     }

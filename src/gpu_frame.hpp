@@ -177,6 +177,15 @@ void i64_add(inout uvec3 lo, inout ivec3 hi, ivec3 d) {
     lo = r;
 }
 
+// v - w (wrapping), w a (low, high) word pair (the record's anchor). Convention: lo is the low 32
+// bits and hi the arithmetic high word of an int64, so the pair (lo, hi) *is* the value; the borrow
+// out of the low word is lessThan(lo, wlo). CPU mirror: plain int64 subtraction (archetype_table.cpp).
+void i64_sub(inout uvec3 lo, inout ivec3 hi, uvec3 wlo, ivec3 whi) {
+    uvec3 r = lo - wlo;
+    hi = hi - whi - ivec3(lessThan(lo, wlo));
+    lo = r;
+}
+
 )glsl";
 
 namespace GPUFrame {

@@ -60,7 +60,8 @@ enum class Combine : uint8_t {
 
 struct Instance {
     std::shared_ptr<const Def> def;
-    // The root's: absolute. A child's: relative to its parent's anchor, in world axes (not rotated).
+    // The root's: absolute. A child's: relative to its parent, in the parent's local frame (the parent's
+    // rotation is applied to it, so a composite placed with a rotation turns as a whole).
     VoxelPos anchor;
     // local = R (p - anchor), row major, orthonormal.
     float rotation[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
@@ -94,6 +95,11 @@ Compiled compile(const Instance &p_root);
 
 // The box holding both (bounded if both are), the larger Lipschitz bound.
 Bounds hull(const Bounds &p_a, const Bounds &p_b);
+
+// The world box (LOD0 voxels, int64, inclusive) of a local box (p_lo, p_hi) placed at p_anchor with
+// rotation p_r: the corners rotated back (R^T q) and rounded out, plus a margin for the float rotation.
+// Shared by the compiled path (world_bounds) and the table (record_world_bounds).
+Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded, const VoxelPos &p_anchor, const float *p_r);
 
 // Archetypes with their bounds (sizes in voxels).
 std::shared_ptr<Def> sphere_def(float p_radius);

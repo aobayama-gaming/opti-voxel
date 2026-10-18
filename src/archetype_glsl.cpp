@@ -68,6 +68,17 @@ String statement(const Program &p_program, int p_i) {
             return out + flat_vec(glsl_float(in.value)) + ";\n";
         case Op::PARAM:
             return out + flat_vec(glsl_float(p_program.params[in.index])) + ";\n";
+        case Op::T_PARAM:
+            return out + flat_vec("rec.params[" + itos(in.index) + "]") + ";\n";
+        case Op::T_INPUT: {
+            // Mirror of eval_special's T_INPUT: sat_diff on the record's anchor, the full rotation.
+            const String row = "rec.rot[" + itos(in.axis) + "]";
+            return "    precise ivec3 d" + id + " = sat_diff(p, rec.anchor_lo.xyz, rec.anchor_hi.xyz, " + itos(INPUT_LIMIT) + ");\n" +
+                    "    precise float qx" + id + " = float(d" + id + ".x) + p.frac.x;\n" +
+                    "    precise float qy" + id + " = float(d" + id + ".y) + p.frac.y;\n" +
+                    "    precise float qz" + id + " = float(d" + id + ".z) + p.frac.z;\n" + out + "vec4(s * " + row + ".x, s * " + row +
+                    ".y, s * " + row + ".z, qx" + id + " * " + row + ".x + qy" + id + " * " + row + ".y + qz" + id + " * " + row + ".z);\n";
+        }
         case Op::INPUT: {
             const VoxelPos &anchor = p_program.anchors[in.index];
             const char *axis = in.axis == 0 ? "x" : (in.axis == 1 ? "y" : "z");
@@ -96,6 +107,16 @@ String statement(const Program &p_program, int p_i) {
             return vformat("    precise vec4 n%d = %s(p, %d, %s, %s, %s);\n", p_i, in.op == Op::PERLIN3 ? "perlin3" : "perlin2", in.k,
                            ExactNoise::glsl_uint(in.seed), ExactNoise::glsl_lo(in.offset), ExactNoise::glsl_hi(in.offset)) +
                     out + vformat("vec4(n%d.xyz * (%s * exact_pow2(lod - %d)), n%d.w * %s);\n", p_i, glsl_float(in.value), in.k, p_i, glsl_float(in.value));
+        case Op::T_PERLIN3:
+        case Op::T_PERLIN2:
+            // Mirror of eval_special's T_PERLIN*: the lattice offset is the Def's minus the record's
+            // anchor (exact int64, i64_sub), the seed salted by the record's salt.
+            return vformat("    precise uvec3 o%d = %s;\n", p_i, ExactNoise::glsl_lo(in.offset)) +
+                    vformat("    precise ivec3 ohi%d = %s;\n", p_i, ExactNoise::glsl_hi(in.offset)) +
+                    vformat("    i64_sub(o%d, ohi%d, rec.anchor_lo.xyz, rec.anchor_hi.xyz);\n", p_i, p_i) +
+                    vformat("    precise vec4 n%d = %s(p, %d, %s ^ rec.anchor_lo.w, o%d, ohi%d);\n", p_i,
+                            in.op == Op::T_PERLIN3 ? "perlin3" : "perlin2", in.k, ExactNoise::glsl_uint(in.seed), p_i, p_i) +
+                    out + vformat("vec4(n%d.xyz * (%s * exact_pow2(lod - %d)), n%d.w * %s);\n", p_i, glsl_float(in.value), in.k, p_i, glsl_float(in.value));
         default:
             return out + arith(in, p_program.code) + ";\n";
     }
@@ -103,8 +124,10 @@ String statement(const Program &p_program, int p_i) {
 
 } // namespace
 
-String generate_glsl(const Program &p_program, const String &p_name, bool p_trace) {
-    String code = "vec4 " + p_name + "(WorldPos p, int lod" + (p_trace ? ", out uint trace" : "") + ") {\n";
+namespace {
+
+String generate(const Program &p_program, const String &p_name, bool p_trace, bool p_table) {
+    String code = "vec4 " + p_name + "(WorldPos p, int lod" + (p_table ? ", DefRecord rec" : "") + (p_trace ? ", out uint trace" : "") + ") {\n";
     code += "    precise float s = exact_pow2(lod);\n";
     for (int i = 0; i < int(p_program.code.size()); i++) {
         code += statement(p_program, i);
@@ -129,6 +152,16 @@ String generate_glsl(const Program &p_program, const String &p_name, bool p_trac
         code += "    return vec4(o.xyz, v);\n}\n";
     }
     return code;
+}
+
+} // namespace
+
+String generate_glsl(const Program &p_program, const String &p_name, bool p_trace) {
+    return generate(p_program, p_name, p_trace, false);
+}
+
+String generate_def_glsl(const Program &p_program, const String &p_name, bool p_trace) {
+    return generate(p_program, p_name, p_trace, true);
 }
 
 } // namespace Archetype

@@ -154,21 +154,21 @@ TEST_CASE("Archetype: node bounds hold on 100,000 random points per scene") {
 TEST_CASE("Archetype: operator identities") {
     const std::shared_ptr<Def> rock = rock_def(20.0f, ExactNoise::make_fbm(false, 3u, 4, 2, 2.0, 0.5));
     const std::shared_ptr<Def> capsule = capsule_def(30.0f, 5.0f);
-    // Union is commutative: the same value (bits); the same gradient off ties.
+    // Both trees are the same scene (the two shapes swapped, identity rotations, so a child's offset in
+    // its parent's frame is its world offset): a noisy rock at the world origin and a capsule at C.
+    const VoxelPos C(15, -10, 3);
     Instance ab;
     ab.def = rock;
-    ab.set_rotation_y(0.4);
     Instance::Child cb;
     cb.instance.def = capsule;
-    cb.instance.anchor = VoxelPos(15, -10, 3);
+    cb.instance.anchor = C;
     ab.children.push_back(cb);
     Instance ba;
     ba.def = capsule;
-    ba.anchor = VoxelPos(15, -10, 3);
+    ba.anchor = C;
     Instance::Child ca;
     ca.instance.def = rock;
-    ca.instance.anchor = VoxelPos(-15, 10, -3);
-    ca.instance.set_rotation_y(0.4);
+    ca.instance.anchor = VoxelPos(-C.x, -C.y, -C.z);
     ba.children.push_back(ca);
     const Program pab = scene_program(ab);
     const Program pba = scene_program(ba);
@@ -184,10 +184,15 @@ TEST_CASE("Archetype: operator identities") {
     const Program palone = scene_program(alone);
     const Program pcut = scene_program(cut);
     int ties = 0;
+    bool first_mismatch = true;
     for (uint32_t i = 0; i < 20000; i++) {
         const WorldPos p = random_point(VoxelPos(), 60.0, i, 21);
         const Float4 x = run(pab, p, 0);
         const Float4 y = run(pba, p, 0);
+        if (float_bits(x.w) != float_bits(y.w) && ties >= 0 && first_mismatch) {
+            first_mismatch = false;
+            MESSAGE("commutativity mismatch at ", WorldCoord::to_string(p.voxel), " frac (", p.frac.x, ",", p.frac.y, ",", p.frac.z, "): ab w=", x.w, " ba w=", y.w);
+        }
         CHECK(float_bits(x.w) == float_bits(y.w));
         if (x.x != y.x || x.y != y.y || x.z != y.z) {
             ties++;
