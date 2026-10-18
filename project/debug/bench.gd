@@ -27,9 +27,10 @@ extends Node3D
 ##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
-##   --terrain=cascade|continents|archetypes
+##   --terrain=cascade|continents|archetypes|shapes
 ##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
-##                                SDFCascade; continents: its preset; archetypes: the archetype IR demo, SDFArchetype)
+##                                SDFCascade; continents: its preset; archetypes: the archetype IR demo, SDFArchetype;
+##                                shapes: its hard-CSG gallery on a flat ground, SDFArchetype::shapes)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
@@ -131,10 +132,10 @@ func _ready() -> void:
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"cascade": 1, "continents": 2, "archetypes": 3}
+	var terrains := {"cascade": 1, "continents": 2, "archetypes": 3, "shapes": 4}
 	var terrain_arg: String = args.get("terrain", "cascade")
 	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected cascade, continents or archetypes)" % terrain_arg)
+		push_error("BENCH: unknown --terrain=%s (expected cascade, continents, archetypes or shapes)" % terrain_arg)
 		set_process(false)
 		get_tree().quit(1)
 		return
@@ -180,7 +181,7 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
-	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 3 or args.has("cam_pos") else "50")
+	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode >= 3 or args.has("cam_pos") else "50")
 	if above_ground != "":
 		# Raise or lower the camera (and the fly path) to this height above the terrain under it.
 		var h := float(above_ground)
