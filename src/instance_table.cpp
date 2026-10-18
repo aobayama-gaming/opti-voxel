@@ -27,39 +27,66 @@ static int instance_lod(double p_bare_size, float p_k, float p_margin_c, const C
     return p_max_lod;
 }
 
-void InstanceSnapshot::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const {
-    r_out = unbounded;
-    if (const std::vector<uint32_t> *s = subtree.getptr(p_chunk)) {
-        r_out.insert(r_out.end(), s->begin(), s->end());
-    }
-    // The strict ancestors' own instances.
-    int lod = ChunkMath::get_lod(p_chunk);
-    ChunkId a = p_chunk;
-    while (lod < max_lod) {
-        a = ChunkMath::get_parent_from_child(a);
-        lod++;
-        if (const std::vector<uint32_t> *v = stored_at.getptr(a)) {
-            r_out.insert(r_out.end(), v->begin(), v->end());
-        }
-    }
-    std::sort(r_out.begin(), r_out.end());
-    // An instance stored in up to 8 sibling chunks appears once per touched node in their ancestors'
-    // subtrees: dedup, or a smooth op would fold it several times.
-    r_out.erase(std::unique(r_out.begin(), r_out.end()), r_out.end());
+void chunk_sample_box(const ChunkId &p_chunk, const ChunkParam &p_param, VoxelPos &r_lo, VoxelPos &r_hi) {
+    const int64_t cell = ChunkMath::get_lod_size(p_chunk);
+    const VoxelPos min = ChunkMath::chunk_min_voxel(p_chunk, p_param);
+    const int64_t lo = -int64_t(p_param.skirt_size) * cell;
+    const int64_t hi = int64_t(p_param.chunk_size - 1 - p_param.skirt_size) * cell;
+    r_lo = min + VoxelPos(lo, lo, lo);
+    r_hi = min + VoxelPos(hi, hi, hi);
 }
 
-void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, std::vector<uint32_t> &r_out) const {
+bool influence_meets(const TableRecord &p_record, int p_lod, const VoxelPos &p_lo, const VoxelPos &p_hi) {
+    const int64_t m = influence_margin(p_record, p_lod);
+    for (int a = 0; a < 3; a++) {
+        const int64_t lo = p_record.anchor[a] + p_record.box_lo[a] - m;
+        const int64_t hi = p_record.anchor[a] + p_record.box_hi[a] + m;
+        if (p_hi[a] < lo || p_lo[a] > hi) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void InstanceSnapshot::gather(const ChunkId &p_centre, int p_lod, const VoxelPos &p_lo, const VoxelPos &p_hi, std::vector<uint32_t> &r_out) const {
     r_out = unbounded;
-    // One node per LOD on the point's path; the instance that owns a sample point sits on its node's
-    // path at its own LOD.
-    for (int lod = 0; lod <= max_lod; lod++) {
-        const ChunkId id = chunk_at_voxel(p_voxel, lod, param);
-        if (const std::vector<uint32_t> *v = stored_at.getptr(id)) {
-            r_out.insert(r_out.end(), v->begin(), v->end());
+    thread_local std::vector<uint32_t> candidates;
+    candidates.clear();
+    const int64_t step = int64_t(2) << p_lod;
+    for (int i = 0; i < 27; i++) {
+        const ChunkId n = p_centre + ChunkId((i % 3 - 1) * step, (i / 3 % 3 - 1) * step, (i / 9 - 1) * step);
+        if (const std::vector<uint32_t> *s = subtree.getptr(n)) {
+            candidates.insert(candidates.end(), s->begin(), s->end());
+        }
+        ChunkId a = n;
+        for (int lod = p_lod; lod < max_lod; lod++) {
+            a = ChunkMath::get_parent_from_child(a);
+            if (const std::vector<uint32_t> *v = stored_at.getptr(a)) {
+                candidates.insert(candidates.end(), v->begin(), v->end());
+            }
+        }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    // An instance stored in several chunks of the neighbourhood is gathered once per node: dedup, or a
+    // smooth op would fold it several times.
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    for (const uint32_t i : candidates) {
+        if (influence_meets(records[i], p_lod, p_lo, p_hi)) {
+            r_out.push_back(i);
         }
     }
     std::sort(r_out.begin(), r_out.end());
-    r_out.erase(std::unique(r_out.begin(), r_out.end()), r_out.end());
+}
+
+void InstanceSnapshot::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const {
+    VoxelPos lo, hi;
+    chunk_sample_box(p_chunk, param, lo, hi);
+    gather(p_chunk, ChunkMath::get_lod(p_chunk), lo, hi, r_out);
+}
+
+void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_out) const {
+    const int lod = MIN(MAX(p_lod, 0), max_lod);
+    gather(chunk_at_voxel(p_voxel, lod, param), lod, p_voxel, p_voxel, r_out);
 }
 
 std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
@@ -115,30 +142,24 @@ std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const Def
         }
     }
 
-    // The subtree lists: process nodes finest first and append each into its parent (children are
-    // always finer, so a node is final when it is reached).
-    std::vector<ChunkId> nodes;
-    nodes.reserve(snap->stored_at.size());
+    // The subtree lists, one LOD at a time from the finest: every node's list is final when its LOD is
+    // reached, and each one goes into its parent, whether or not the parent stores anything itself (an
+    // instance stored at LOD 0 must reach its LOD 2+ ancestors through LOD 1 nodes that store nothing).
+    std::vector<std::vector<ChunkId>> by_lod(p_max_lod + 1);
     for (const KeyValue<ChunkId, std::vector<uint32_t>> &kv : snap->stored_at) {
-        nodes.push_back(kv.key);
+        snap->subtree[kv.key] = kv.value;
+        by_lod[MIN(ChunkMath::get_lod(kv.key), p_max_lod)].push_back(kv.key);
     }
-    std::sort(nodes.begin(), nodes.end(), [](const ChunkId &p_a, const ChunkId &p_b) { return ChunkMath::get_lod(p_a) > ChunkMath::get_lod(p_b); });
-    for (const ChunkId &n : nodes) {
-        std::vector<uint32_t> acc;
-        if (const std::vector<uint32_t> *own = snap->stored_at.getptr(n)) {
-            acc = *own;
+    for (int lod = 0; lod < p_max_lod; lod++) {
+        for (const ChunkId &n : by_lod[lod]) {
+            const ChunkId parent = ChunkMath::get_parent_from_child(n);
+            if (!snap->subtree.has(parent)) {
+                by_lod[lod + 1].push_back(parent);
+            }
+            const std::vector<uint32_t> child = snap->subtree[n];
+            std::vector<uint32_t> &pacc = snap->subtree[parent];
+            pacc.insert(pacc.end(), child.begin(), child.end());
         }
-        if (const std::vector<uint32_t> *sub = snap->subtree.getptr(n)) {
-            acc.insert(acc.end(), sub->begin(), sub->end());
-        }
-        if (ChunkMath::get_lod(n) >= p_max_lod) {
-            snap->subtree[n] = std::move(acc);
-            continue;
-        }
-        snap->subtree[n] = acc;
-        const ChunkId parent = ChunkMath::get_parent_from_child(n);
-        std::vector<uint32_t> &pacc = snap->subtree[parent];
-        pacc.insert(pacc.end(), snap->subtree[n].begin(), snap->subtree[n].end());
     }
     // Dedup every subtree: an instance stored in sibling chunks is appended once per sibling.
     for (KeyValue<ChunkId, std::vector<uint32_t>> &kv : snap->subtree) {

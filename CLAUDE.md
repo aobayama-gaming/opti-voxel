@@ -195,22 +195,35 @@ to every change, and a reviewer may reject a PR on any of them.
   2^lod` (the mesh and normals are unchanged). The test is integer (`sat_diff` vs an int32 box), so the
   CPU and the GPU, and two chunks of the same LOD, take the same branch: seams stay exact. The index
   (`instance_table`) stores each instance at the finest LOD whose chunk span holds its grown box, in the
-  1-8 chunks it touches; a chunk's list is its subtree plus its strict ancestors' own, in id order.
+  1-8 chunks it touches (subtree lists climb through ancestors that store nothing). A chunk's samples
+  reach past its span (skirt overhang) and a coarser chunk's influence boxes outgrow the storage nodes, so
+  a chunk's list gathers the 27 chunks around it (subtree + strict ancestors' own) and keeps the instances
+  whose influence box at its LOD meets its sample box (`chunk_sample_box`, `influence_meets`), in id order;
+  the CPU `evaluate` does the same for the point (`point_candidates(voxel, lod)`). Unit-tested on every
+  sample of the chunks around an instance at LODs 0-5.
   `SDFBase::cull_exempt` feeds the discoverer's no-cull rule: a node box near an instance's box is never
   culled, whatever the slope. FrameSpike's table probe checks the library + fold GPU == CPU. **To add a
   library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
   bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
   **Runtime edits:** `VoxelTerrain.add_instance(type, x, y, z, rotation, params, op, k)` /
   `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (anchors are int64 LOD0 voxels, never
-  through `Vector3i`). Each edit rebuilds the snapshot (copy on write) and bumps its version; the mesher
-  re-uploads the records when the version changes. The edit region (old box of a remove/move plus new box
+  through `Vector3i`); the op must be 0-3, k >= 0, params finite and normal, the rotation orthonormal,
+  else the edit is refused (ERR, -1 / false). Each edit rebuilds the snapshot (copy on write) and bumps
+  its version. **The snapshot is read from other threads** (the discoverer's `evaluate` / `cull_exempt`):
+  it is published with `std::atomic_store` and every reader takes one `current()` copy (a plain
+  assignment freed it under the reader, unit-tested). The meshers build a batch's lists and, when the
+  version changed, its records on the main thread from the same snapshot and hand both to the GPU with
+  the batch. The edit region (old box of a remove/move plus new box
   of an add/move) drives two things: the loaded chunks whose box grown by `M(lod)` meets it are re-queued
   in the mesher's `remesh_queue` (dispatched before new chunks, finest LOD first, `remesh_chunks` /
   `remesh_pops`), and the discoverer's `invalidate` drops the cull verdicts near it and forces a rescan
   even if the camera chunk did not change. A chunk carries a `required_version`: a result computed from
-  an older table version is dropped and re-queued (`remesh_stale_dropped`). `add_new_loaded` drops a
+  an older table version is dropped and re-queued (`remesh_stale_dropped`), and its quads, already in the
+  page, are killed (else the old surface stays drawn); an edit also requires the new version from the
+  chunks in flight for their first mesh (not loaded yet, so not listed). `remesh_queue` holds a chunk once. `add_new_loaded` drops a
   pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
-  `instance_capacity()` instances up front (default 16384; the records array is padded to it). The bench's
+  `instance_capacity()` instances up front (default 16384, removed ones count); an add past it is refused,
+  and an upload only carries the used records. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
   discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter N rocks and pillars in a
   square of side M metres around the demo objects (set before the node enters the tree). **Experimental,
@@ -218,7 +231,6 @@ to every change, and a reviewer may reject a PR on any of them.
   `broken` / `nan_vertices`), CPU and GPU alike, so the mesh otherwise validates; the scatter is off
   until that edge is understood (a follow-up, likely in the smooth-op / epilogue numerics), not the
   table wiring.
-  discovery_audit should stay `ok`.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL

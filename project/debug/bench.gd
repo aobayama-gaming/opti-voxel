@@ -256,28 +256,34 @@ func _end_phase() -> void:
 	_take_shots(phase + "_end")
 
 
+## LOD0 voxel of a render-space position: the int64 world origin plus a small rounded offset (the origin
+## never goes through a float).
+func _voxel_of(pos: Vector3, vt: float) -> Array:
+	return [terrain.world_origin_x + int(round(pos.x / vt)), terrain.world_origin_y + int(round(pos.y / vt)),
+			terrain.world_origin_z + int(round(pos.z / vt))]
+
+
 ## Edit scenario: a few instance edits per frame in front of the camera (alternating add / move /
 ## remove). Anchors are LOD0 voxels = world origin + render position / voxel size.
 func _run_edits() -> void:
 	var total := int(args.get("edits", "100"))
 	var vt: float = terrain.get_voxel_size()
-	var origin: Vector3 = Vector3(terrain.world_origin_x, terrain.world_origin_y, terrain.world_origin_z)
 	for k in range(4):
 		if edits_done >= total:
 			return
 		var fwd := -camera.global_transform.basis.z
 		var pos := camera.global_position + fwd * 30.0 \
 			+ Vector3(randf_range(-25, 25), randf_range(-15, 15), randf_range(-25, 25))
-		var vox: Vector3 = (origin + pos / vt).round()
+		var vox := _voxel_of(pos, vt)
 		if edits_done % 3 == 0 and edit_ids.size() > 0:
 			var idx: int = edit_ids[randi() % edit_ids.size()]
 			if edits_done % 6 == 0:
 				terrain.remove_instance(idx)
 				edit_ids.erase(idx)
 			else:
-				terrain.move_instance(idx, int(vox.x), int(vox.y), int(vox.z))
+				terrain.move_instance(idx, vox[0], vox[1], vox[2])
 		else:
-			var id: int = terrain.add_instance(0, int(vox.x), int(vox.y), int(vox.z),
+			var id: int = terrain.add_instance(0, vox[0], vox[1], vox[2],
 				PackedFloat32Array(), PackedFloat32Array([4.0 / vt]), 3, 1.0 / vt)
 			if id >= 0:
 				edit_ids.append(id)
@@ -320,6 +326,7 @@ func _process(delta: float) -> void:
 				if args.get("scenario", "load") == "fly":
 					_begin_phase("fly_out")
 				elif args.get("scenario", "load") == "edit":
+					seed(0x5EED)  # the same edits every run
 					_begin_phase("edit")
 				else:
 					_begin_phase("steady")

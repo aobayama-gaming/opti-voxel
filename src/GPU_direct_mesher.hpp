@@ -4,6 +4,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/core/object.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
 
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
@@ -145,6 +146,7 @@ private:
     // not touch this. required_version is the table version a chunk must be re-meshed from (staleness).
     std::vector<std::vector<ChunkId>> remesh_queue;
     HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
+    HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
     LODHashSet working_generation;
 
     uint32_t next_batch_id = 0;
@@ -180,7 +182,7 @@ private:
     RID buffer_table_records;
     RID buffer_table_list;
     uint64_t table_list_capacity = 0; // bytes
-    uint32_t uploaded_table_version = UINT32_MAX;
+    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last bound to a dispatch
     RID shaders[5];
     RID pipelines[5];
     RID uniform_set;
@@ -192,11 +194,15 @@ private:
 
     void _rt_initialize();
     RID _rt_compile(const char *p_pass, const char *p_name);
-    void _rt_upload_table(const PackedByteArray &p_list, uint32_t p_table_version);
+    void _queue_remesh(const ChunkId &p_chunk);
+    void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
+    // Main thread: the batch's instance lists (patched into r_ids) and, if the table changed since the last
+    // dispatch, its records. Returns the table version they are.
+    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, uint32_t p_table_version);
+            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records);
     void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
-            const PackedByteArray &p_list, uint32_t p_table_version);
+            const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Pass 0: the sdf pass, or the cascade's levels (timestamps "<prefix>_c<group>" after each level group
     // when p_prefix is not empty).
     void _rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix);

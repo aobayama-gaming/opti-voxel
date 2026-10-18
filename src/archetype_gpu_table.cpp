@@ -16,21 +16,27 @@ String GpuTable::glsl_set_chunk() const {
     return "\n    g_sdf_chunk = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size];";
 }
 
-PackedByteArray GpuTable::record_bytes() const {
+PackedByteArray GpuTable::record_bytes(uint32_t &r_version) const {
+    const std::shared_ptr<const InstanceSnapshot> s = snapshot();
     PackedByteArray bytes;
-    // Padded to the buffer's capacity: the mesher uploads this whole array, so appends always fit.
-    bytes.resize(instance_capacity() * RECORD_BYTES);
-    bytes.fill(0);
-    if (snap) {
-        for (uint32_t i = 0; i < snap->records.size(); i++) {
-            encode_record(bytes, i, snap->records[i]);
-        }
+    r_version = s ? s->version : 0u;
+    if (!s) {
+        return bytes;
+    }
+    // The used records only (the buffer is sized for capacity() up front): an edit uploads its table, not
+    // the whole capacity.
+    const uint32_t count = uint32_t(s->records.size());
+    ERR_FAIL_COND_V_MSG(count > capacity, bytes, vformat("GpuTable: %d instances, over the GPU capacity of %d.", count, capacity));
+    bytes.resize(int64_t(count) * RECORD_BYTES);
+    for (uint32_t i = 0; i < count; i++) {
+        encode_record(bytes, i, s->records[i]);
     }
     return bytes;
 }
 
 void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const {
     (void)p_param;
+    const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
     std::vector<uint32_t> words;
     std::vector<uint32_t> indices;
     for (size_t i = 0; i < p_chunks.size(); i++) {

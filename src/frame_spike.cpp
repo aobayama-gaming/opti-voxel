@@ -882,7 +882,10 @@ struct TableProbeData {
     std::vector<uint32_t> list;
 };
 
-TableProbeData make_table_probe_data() {
+// The records sit a few voxels from probe sample points (one run's case each), so the fold and the
+// smooth blends run near the instances' surfaces at the fine LODs, not only far away at LOD 24. The
+// ground is a small constant for the same reason: instance values reach it and the blends engage.
+TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     using namespace Archetype;
     TableProbeData t;
     t.library.add(make_sphere_type());
@@ -891,8 +894,7 @@ TableProbeData make_table_probe_data() {
     t.library.add(make_cylinder_type());
     t.library.add(make_rock_type(8, 0x1234u));
     Builder gb;
-    t.ground = gb.finish(gb.constant(80.0f));
-    const int64_t E = int64_t(1) << 22;
+    t.ground = gb.finish(gb.constant(2.0f));
     for (uint32_t i = 0; i < 64; i++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0x7AB1u, 0x9E37u });
         TableRecord rec;
@@ -900,8 +902,10 @@ TableProbeData make_table_probe_data() {
         rec.op = Combine(h.y % 4u);
         rec.k = float(h.z % 8u) + 0.5f;
         rec.inv_k = 1.0f / rec.k;
-        rec.anchor = VoxelPos(ExactNoise::random_offset(i, 1, 1u, E), ExactNoise::random_offset(i, 2, 2u, E) / 2,
-                ExactNoise::random_offset(i, 3, 3u, E));
+        const OriginRun &run = p_runs[i % p_runs.size()];
+        const Case &near = run.cases[(size_t(i) * 7919u) % run.cases.size()];
+        const VoxelPos at = ChunkMath::sample_pos(near.chunk, near.grid, run.param).voxel;
+        rec.anchor = at + VoxelPos(int64_t(h.x % 9u) - 4, int64_t(h.y % 9u) - 4, int64_t(h.z % 9u) - 4);
         const double yaw = double(h.x >> 8) * 1e-4;
         const float cy = float(std::cos(yaw)), sy = float(std::sin(yaw));
         const float rot[9] = { cy, 0.0f, -sy, 0.0f, 1.0f, 0.0f, sy, 0.0f, cy };
@@ -979,7 +983,7 @@ void main() {
 )glsl";
 
 int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, Dictionary &r_report) {
-    const TableProbeData table = make_table_probe_data();
+    const TableProbeData table = make_table_probe_data(p_runs);
     const uint32_t count = uint32_t(table.records.size());
     String lod_calls;
     for (int j = 0; j < PROBE_LOD_COUNT; j++) {
@@ -1027,6 +1031,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     const uint32_t words = 4 * PROBE_LOD_COUNT;
     int64_t mismatches = 0;
     int64_t samples = 0;
+    int64_t near = 0; // samples inside an instance's influence box at the finest probe LOD
     std::vector<uint32_t> want(words);
     for (const OriginRun &run : p_runs) {
         const uint32_t n = uint32_t(run.cases.size());
@@ -1086,6 +1091,12 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
                 want[4 * j + 3] = Archetype::zero_canonical(float_bits(r.w));
             }
             samples++;
+            for (const Archetype::TableRecord &rec : table.records) {
+                if (Archetype::in_influence_box(rec, pos, PROBE_LODS[0])) {
+                    near++;
+                    break;
+                }
+            }
             for (uint32_t k = 0; k < words; k++) {
                 if (res[i * words + k] != want[k]) {
                     mismatches++;
@@ -1107,6 +1118,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     p_rd->free_rid(pipeline);
     p_rd->free_rid(shader);
     r_report["table_samples"] = samples;
+    r_report["table_near_samples"] = near;
     r_report["table_mismatch"] = mismatches;
     return mismatches == 0 ? 1 : 0;
 }
@@ -1247,7 +1259,7 @@ Dictionary FrameSpike::run() {
     }
     report["probe_mismatch"] = probe_report;
     report["examples"] = checks.examples;
-    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
+    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&
             checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0 &&

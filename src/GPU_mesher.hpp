@@ -94,6 +94,7 @@ private:
     //input
     PackedByteArray input_chunk_id;
     PackedByteArray input_table_list; // the batch's instance list (archetype instances)
+    PackedByteArray input_table_records; // the table's records, when they changed since the last batch
 
     // GPU stuff
 
@@ -112,7 +113,9 @@ private:
     // The instance table's buffers (archetype instances), on the local device.
     RID buffer_table_records;
     RID buffer_table_list;
-    uint32_t uploaded_table_version = UINT32_MAX;
+    uint64_t table_list_capacity = 0; // bytes
+    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last handed to the worker
+    std::vector<ChunkId> in_flight_ids; // main thread: the chunks of the batch handed to the worker
     // Uniform set
 
     RID uniform_set;
@@ -136,7 +139,8 @@ private:
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
-    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list);
+    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
+            const PackedByteArray &p_table_records);
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 

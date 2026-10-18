@@ -38,10 +38,13 @@ public:
     // The snapshot version the GPU should mirror (record uploads are skipped while it is unchanged).
     virtual uint32_t version() const = 0;
     virtual uint32_t instance_count() const = 0;
-    // How many instances the GPU buffers are sized for (runtime edits only append).
+    // How many instances the GPU buffers are sized for (runtime edits only append; more is refused).
     virtual uint32_t instance_capacity() const { return instance_count(); }
-    // The encoded DefRecord array (instance_count() * RECORD_BYTES bytes).
-    virtual PackedByteArray record_bytes() const = 0;
+    // The encoded DefRecord array of the current snapshot (its record count * RECORD_BYTES bytes) and, in
+    // r_version, the version those bytes are: one snapshot for both, whatever edits land meanwhile.
+    virtual PackedByteArray record_bytes(uint32_t &r_version) const = 0;
+    // Bytes per record in the GPU buffer.
+    virtual uint32_t record_size() const = 0;
 
     // Main thread: patch each ChunkInput of the batch (id.w = this chunk's list offset in uint32 words,
     // anchor_hi.w = its instance count) and append the indices (uint32) to r_list. r_chunk_ids already

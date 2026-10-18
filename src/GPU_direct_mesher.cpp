@@ -220,12 +220,11 @@ void GPUDirectMesher::_rt_initialize() {
     uniforms.push_back(make_uniform(6, staging_texture, RenderingDevice::UNIFORM_TYPE_IMAGE));
     uniforms.push_back(make_uniform(7, buffer_status, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        const PackedByteArray records = table->record_bytes();
-        buffer_table_records = rd->storage_buffer_create(records.size(), records);
+        // Sized for the capacity up front; the records arrive with the first dispatch (_table_payload).
+        buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
         const uint64_t list_words = uint64_t(settings.batch_size) * MAX<uint64_t>(table->instance_capacity(), 1u);
         table_list_capacity = list_words * 4;
         buffer_table_list = rd->storage_buffer_create(table_list_capacity);
-        uploaded_table_version = table->version();
         uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
         uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     }
@@ -351,15 +350,13 @@ void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const 
     cascade->record_level(0, 0, p_count);
 }
 
-void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, uint32_t p_table_version) {
-    SDFGpuTable *table = sdf->get_gpu_table();
-    if (!table || !buffer_table_records.is_valid()) {
+void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records) {
+    if (!buffer_table_records.is_valid()) {
         return;
     }
-    if (p_table_version != uploaded_table_version) {
-        const PackedByteArray records = table->record_bytes();
-        rd->buffer_update(buffer_table_records, 0, records.size(), records);
-        uploaded_table_version = p_table_version;
+    // The records the batch's lists were built against (main thread, same snapshot), when they changed.
+    if (!p_records.is_empty()) {
+        rd->buffer_update(buffer_table_records, 0, p_records.size(), p_records);
     }
     if (!p_list.is_empty()) {
         ERR_FAIL_COND_MSG(uint64_t(p_list.size()) > table_list_capacity, vformat("GPUDirectMesher: batch list %d bytes over the %d B buffer.", p_list.size(), table_list_capacity));
@@ -367,14 +364,28 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, uint32_t p
     }
 }
 
+uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records) {
+    SDFGpuTable *table = sdf->get_gpu_table();
+    if (!table) {
+        return 0;
+    }
+    // Main thread, like the edits: the lists and the records come from the same snapshot.
+    table->build_lists(p_chunks, chunk_param, r_ids, r_list);
+    const uint32_t version = table->version();
+    if (version != sent_table_version) {
+        r_records = table->record_bytes(sent_table_version);
+    }
+    return version;
+}
+
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-        const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, uint32_t p_table_version) {
+        const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records) {
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
     const uint64_t t0 = now_usec();
     _rt_read_timestamps();
-    _rt_upload_table(p_list, p_table_version);
+    _rt_upload_table(p_list, p_records);
 
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
@@ -436,11 +447,11 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 }
 
 void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
-        const PackedByteArray &p_list, uint32_t p_table_version) {
+        const PackedByteArray &p_list, const PackedByteArray &p_records) {
     if (!uniform_set.is_valid()) {
         return;
     }
-    _rt_upload_table(p_list, p_table_version);
+    _rt_upload_table(p_list, p_records);
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
     rd->buffer_clear(buffer_status, 0, status_size_bytes);
@@ -559,6 +570,7 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
         }
         r_chunk = queue.back();
         queue.pop_back();
+        remesh_queued.erase(r_chunk);
         stats.remesh_pops++;
         return true;
     }
@@ -573,22 +585,39 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
     return false;
 }
 
+void GPUDirectMesher::_queue_remesh(const ChunkId &p_chunk) {
+    const int lod = ChunkMath::get_lod(p_chunk);
+    if (lod < 0 || lod >= (int)remesh_queue.size() || remesh_queued.has(p_chunk)) {
+        return; // queued once: an edit storm re-requires the version, it doesn't dispatch the chunk again
+    }
+    remesh_queued.insert(p_chunk);
+    remesh_queue[lod].push_back(p_chunk);
+}
+
 void GPUDirectMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
     const uint32_t version = sdf->get_gpu_table() ? sdf->get_gpu_table()->version() : 0u;
+    for (const ChunkId &chunk : p_chunks) {
+        required_version[chunk] = version;
+        _queue_remesh(chunk);
+        stats.remesh_chunks++;
+    }
+    // Chunks in flight for their first mesh aren't loaded yet, so the terrain doesn't list them: their
+    // result, computed from the old table, must not be kept either (it is dropped and re-queued on landing).
+    for (const KeyValue<uint32_t, InFlightBatch> &kv : in_flight) {
+        if (kv.value.table_version >= version) {
+            continue;
+        }
+        for (const ChunkId &chunk : kv.value.chunks) {
+            if (sdf->edit_affects_chunk(chunk)) {
+                required_version[chunk] = version;
+            }
+        }
+    }
     uint64_t queued = 0;
     for (const std::vector<ChunkId> &q : remesh_queue) {
         queued += q.size();
     }
-    stats.remesh_queue_max = MAX(stats.remesh_queue_max, queued + p_chunks.size());
-    for (const ChunkId &chunk : p_chunks) {
-        const int lod = ChunkMath::get_lod(chunk);
-        if (lod < 0 || lod >= (int)remesh_queue.size()) {
-            continue;
-        }
-        remesh_queue[lod].push_back(chunk);
-        required_version[chunk] = version;
-        stats.remesh_chunks++;
-    }
+    stats.remesh_queue_max = MAX(stats.remesh_queue_max, queued);
 }
 
 void GPUDirectMesher::_flush_kills() {
@@ -657,11 +686,8 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
         working_generation.insert(chunks[i]);
     }
     PackedByteArray list;
-    uint32_t table_version = 0;
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        table->build_lists(chunks, chunk_param, ids, list);
-        table_version = table->version();
-    }
+    PackedByteArray records;
+    const uint32_t table_version = _table_payload(chunks, ids, list, records);
 
     PackedInt32Array pages;
     for (uint32_t k = 0; k < settings.pages_per_batch; k++) {
@@ -682,7 +708,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
-                    .bind(batch_id, ids, count, pages, min_lod, list, table_version));
+                    .bind(batch_id, ids, count, pages, min_lod, list, records));
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
@@ -706,16 +732,13 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
         min_lod = MIN(min_lod, ChunkMath::get_lod(chunks[i]));
     }
     PackedByteArray list;
-    uint32_t table_version = 0;
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        table->build_lists(chunks, chunk_param, ids, list);
-        table_version = table->version();
-    }
+    PackedByteArray records;
+    _table_payload(chunks, ids, list, records);
     const uint32_t batch_id = next_batch_id++;
     audit_in_flight[batch_id] = chunks;
     stats.audit_batches++;
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch_count)
-                    .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod, list, table_version));
+                    .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod, list, records));
     return true;
 }
 
@@ -764,6 +787,10 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
         stats.nan_vertices += (uint32_t)status[3];
 
         std::vector<AABB> page_bounds(batch.pages.size());
+        struct StaleRange {
+            uint32_t page_index, offset, count;
+        };
+        std::vector<StaleRange> stale_ranges;
         std::vector<bool> page_has_bounds(batch.pages.size(), false);
 
         for (size_t k = 0; k < batch.pages.size(); k++) {
@@ -794,11 +821,16 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
             if (required_version.has(chunk_id)) {
                 const uint32_t required = required_version[chunk_id];
                 if (required > batch.table_version) {
-                    const int lod = ChunkMath::get_lod(chunk_id);
-                    if (lod >= 0 && lod < (int)remesh_queue.size()) {
-                        remesh_queue[lod].push_back(chunk_id);
-                    }
+                    _queue_remesh(chunk_id);
                     stats.remesh_stale_dropped++;
+                    // Its quads are already in the page: kill them, or the old surface stays drawn next
+                    // to the chunk's re-mesh for as long as the page lives.
+                    if (count > 0) {
+                        const uint32_t k = base / settings.page_capacity;
+                        if (k < batch.pages.size()) {
+                            stale_ranges.push_back({ k, base % settings.page_capacity, count });
+                        }
+                    }
                     continue;
                 }
                 required_version.erase(chunk_id);
@@ -831,6 +863,18 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
             output.add_new_loaded(out);
         }
 
+        // Dropped (stale) results in pages that stay: their slots are drawn until killed. A page left
+        // without chunks is hidden and reset below, slots included.
+        for (const StaleRange &r : stale_ranges) {
+            const int page = batch.pages[r.page_index];
+            if (page_state[page].chunks.empty()) {
+                continue;
+            }
+            page_state[page].settled = false;
+            pending_kill_pages.push_back(page);
+            pending_kill_ranges.push_back(r.offset);
+            pending_kill_ranges.push_back(r.count);
+        }
         for (size_t k = 0; k < batch.pages.size(); k++) {
             const int page = batch.pages[k];
             if (page_state[page].chunks.empty()) {
