@@ -33,11 +33,10 @@ var altitude_age := 1.0
 # release. Both use VoxelTerrain.add_instance / move_instance / remove_instance (archetype table only).
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
-var drag_distance := 8.0    # --drag_distance=M
-var drag_length := 6.0
-var drag_radius := 1.5
+var drag_length := 20.0     # --drag_length=M: how far the tube carves INWARD from the surface
+var drag_radius := 3.0      # --drag_radius=M: the tube's radius
 var dig_k := 0.3            # smooth radius (metres)
-var drag_op := 3            # Combine: 3 smooth subtract (a hole), 0 union (a solid tube)
+var drag_op := 2            # Combine: 2 subtract (a hole that follows you), 0 union
 var drag_active := false
 var drag_id := -1
 var edits_count := 0
@@ -77,8 +76,10 @@ func _enter_tree() -> void:
 			dig_radius = a.trim_prefix("--dig_radius=").to_float()
 		if a.begins_with("--dig_length="):
 			dig_length = a.trim_prefix("--dig_length=").to_float()
-		if a.begins_with("--drag_distance="):
-			drag_distance = a.trim_prefix("--drag_distance=").to_float()
+		if a.begins_with("--drag_length="):
+			drag_length = a.trim_prefix("--drag_length=").to_float()
+		if a == "--drag_op=subtract":
+			drag_op = 2
 		if a == "--drag_op=union":
 			drag_op = 0
 		if a.begins_with("--drag_radius="):
@@ -216,7 +217,7 @@ func _raymarch(terrain: Node, origin: Vector3, dir: Vector3) -> Vector3:
 		if d < 0.5:
 			return p
 		t += maxf(absf(d) * 0.5, 0.1)
-	return origin + dir * drag_distance
+	return origin + dir * 10.0
 
 # LOD0 voxel of a render-space position (int64; returned as an Array, never through Vector3i).
 func _voxel_of(terrain: Node, pos: Vector3) -> Array:
@@ -255,13 +256,22 @@ func _update_drag() -> void:
 		return
 	var vt: float = terrain.voxel_size
 	var fwd := -camera.global_transform.basis.z
-	var p := _voxel_of(terrain, camera.global_position + fwd * drag_distance)
+	# The tube starts at the surface the view hits and carves drag_length metres INWARD along the view, so
+	# it goes deep into the mountain instead of eating only the sliver it overlaps. The capsule's local y
+	# runs along the view; its origin is 1 m before the surface (so the mouth opens) and it is
+	# drag_length + 1 m long. If the view hits nothing (sky) or the camera is already inside solid, the
+	# hit is the camera and it carves from there. SUBTRACT by default; --drag_op=union makes it solid.
+	var hit := _raymarch(terrain, camera.global_position, fwd)
+	var p := _voxel_of(terrain, hit - fwd * 1.0)
 	var rot := _basis9(fwd)
+	var params := PackedFloat32Array([(drag_length + 1.0) / vt, drag_radius / vt])
 	if drag_id < 0:
-		var params := PackedFloat32Array([drag_length / vt, drag_radius / vt])
 		drag_id = terrain.add_instance(1, p[0], p[1], p[2], rot, params, drag_op, dig_k / vt)
-		if drag_id >= 0:
-			edits_count += 1
+		if drag_id < 0:
+			push_error("dig: terrain.add_instance returned -1 (is the terrain an archetype table?)")
+			drag_active = false
+			return
+		edits_count += 1
 	else:
 		terrain.move_instance(drag_id, p[0], p[1], p[2], rot)
 		edits_count += 1
