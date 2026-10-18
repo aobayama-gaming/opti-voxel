@@ -14,11 +14,10 @@ struct Probe {
     int words = 1;
     bool is_float = false;
     String glsl; // defines "void probe_<name>(WorldPos p, uint b)", writing results[b + 0 .. words - 1]
-    std::function<void(const WorldPos &, uint32_t *)> cpu;
-    // Instead of cpu, for data-dependent exactness (the archetype IR): writes the words and returns false
-    // where the evaluation left the exact domain (a denormal or a huge intermediate, which the GPU may flush
-    // or round differently). Mismatches there are counted apart and don't fail the run.
-    std::function<bool(const WorldPos &, uint32_t *)> cpu_exact;
+    // Writes the words; returns false where the evaluation left the exact domain (the archetype IR's
+    // data-dependent exactness: a denormal or a huge intermediate, which the GPU could flush or round
+    // differently). Those evaluations are counted apart, but they are compared and gated like the others.
+    std::function<bool(const WorldPos &, uint32_t *)> cpu;
     // >= 0: word `continuity_word` may change by at most this much per LOD0 voxel along the
     // continuity lines (a wrong corner hash at a low-word carry shows up as a jump).
     double continuity_bound = -1.0;

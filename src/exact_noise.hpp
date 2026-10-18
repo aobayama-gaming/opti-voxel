@@ -89,6 +89,12 @@ inline UVec3 pcg3d(UVec3 v) {
     return v;
 }
 
+// A deterministic integer in [-p_range, p_range] from three words: the spikes' hash-random test points.
+inline int64_t random_offset(uint32_t p_a, uint32_t p_b, uint32_t p_c, int64_t p_range) {
+    const UVec3 h = pcg3d(UVec3{ p_a, p_b, p_c });
+    return int64_t(((uint64_t(h.x) << 32) | h.y) % uint64_t(2 * p_range + 1)) - p_range;
+}
+
 // Salt of a block of 2^32 x 2^32 x 2^32 cells: its high words and the seed.
 inline UVec3 cell_salt(int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
     return pcg3d(UVec3{ uint32_t(p_hx) ^ p_seed, uint32_t(p_hy) ^ (p_seed ^ SALT_Y), uint32_t(p_hz) ^ (p_seed ^ SALT_Z) });

@@ -12,11 +12,6 @@ using ExactNoise::float_bits;
 
 namespace {
 
-bool same_bits(const Float4 &p_a, const Float4 &p_b) {
-    return float_bits(p_a.x) == float_bits(p_b.x) && float_bits(p_a.y) == float_bits(p_b.y) && float_bits(p_a.z) == float_bits(p_b.z) &&
-            float_bits(p_a.w) == float_bits(p_b.w);
-}
-
 // p_anchor + an offset in [-p_range, p_range)^3 voxels, fraction in steps of 2^-18.
 WorldPos random_point(const VoxelPos &p_anchor, double p_range, uint32_t p_i, uint32_t p_seed) {
     const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_i, p_seed, 0x1A57u });
@@ -211,4 +206,30 @@ TEST_CASE("Archetype: compile reports invalid instances") {
     c.instance.def = sphere_def(2.0f);
     blend.children.push_back(c);
     CHECK_FALSE(compile(blend).error.is_empty());
+    // A weight Def must sit at the local origin too; with a valid one the blend compiles.
+    blend.children[0].weight = moved;
+    CHECK_FALSE(compile(blend).error.is_empty());
+    blend.children[0].weight = ramp_def(4.0f);
+    CHECK(compile(blend).error.is_empty());
+    // A child without Def, a rotation with a zero row, a smooth operator without radius: an error, no program
+    // (compiling on would dereference null or emit operands -1).
+    Instance parent;
+    parent.def = sphere_def(3.0f);
+    parent.children.push_back(Instance::Child());
+    Compiled none = compile(parent);
+    CHECK_FALSE(none.error.is_empty());
+    CHECK(none.program.code.empty());
+    Instance zero_row;
+    zero_row.def = sphere_def(3.0f);
+    zero_row.rotation[0] = 0.0f;
+    CHECK_FALSE(compile(zero_row).error.is_empty());
+    Instance smooth;
+    smooth.def = sphere_def(3.0f);
+    Instance::Child sc;
+    sc.op = Combine::SMOOTH_UNION;
+    sc.instance.def = sphere_def(2.0f);
+    smooth.children.push_back(sc);
+    CHECK_FALSE(compile(smooth).error.is_empty());
+    smooth.children[0].k = 1.0f;
+    CHECK(compile(smooth).error.is_empty());
 }

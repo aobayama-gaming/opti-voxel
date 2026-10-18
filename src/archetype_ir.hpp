@@ -22,14 +22,15 @@
 // Exactness rules (exact_noise.hpp): only + - *, compares and selects, floor, abs, det_rsqrt and the exact
 // noise; no division, no sqrt, no mix / dot / length / normalize; constants as raw bits; no denormal. The
 // last one depends on the data: a point is in the exact domain when every register component is 0 or
-// within [2^-60, 2^60] (any product of two is then a normal float) and every RSQRT reads a value > 0;
+// within [2^-63, 2^63] (any product of two is then a normal float) and every RSQRT reads a value > 0;
 // outside it the GPU may flush or round differently (exact_domain()). Builders keep authored archetypes
 // inside it.
 //
 // The sign of a zero is not kept: the GPU compiler folds x + 0.0 to x (no SignedZeroInfNanPreserve), so a
 // zero may come out -0 on one side and +0 on the other. The IR never lets it reach a non-zero value (no
-// division, compares see -0 == +0, RSQRT only on x > 0), and comparisons of results go through
-// zero_canonical().
+// division, compares see -0 == +0, and det_rsqrt, which reads the bits, only sees max(x, c > 0): RSQRT's
+// operand must be such a MAX (validate), DIST and the epilogue add their floor), and comparisons of results
+// go through zero_canonical().
 //
 // A register whose gradient is statically zero (a constant, a floor) is "flat": both back-ends skip its
 // gradient terms, the same way.
@@ -51,7 +52,7 @@ enum class Op : uint8_t {
     MAX, // b > a ? b : a
     SELECT, // a < b ? c : d
     FLOOR, // flat
-    RSQRT, // det_rsqrt(a), a a normal float > 0 (builders guard it)
+    RSQRT, // det_rsqrt(a), a = max(x, c) or max(c, x), c a constant > 0 (validate)
     DIST, // a / |grad a|: first-order distance, gradient normalised (to 2^lod); grad a must not be flat
     PERLIN3, // one exact-noise octave times `value` (amp): wavelength 2^k voxels, seed, lattice offset
     PERLIN2, // the same over (x, z)
@@ -114,7 +115,7 @@ Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod);
 void run_registers(const Program &p_program, const WorldPos &p_pos, int p_lod, std::vector<Float4> &r_regs);
 Float4 finish(const Program &p_program, const Float4 &p_out, int p_lod);
 
-// Every component 0 or within [2^-60, 2^60], every RSQRT input > 0 (see the exactness rules above).
+// Every component 0 or within [2^-63, 2^63], every RSQRT input > 0 (see the exactness rules above).
 bool exact_domain(const Program &p_program, const std::vector<Float4> &p_regs);
 // The bits of a float with -0 read as +0.
 inline uint32_t zero_canonical(uint32_t p_bits) {

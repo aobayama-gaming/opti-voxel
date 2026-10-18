@@ -39,12 +39,6 @@ ChunkId chunk_holding(const Vector3i64 &p_voxel, int p_lod, const ChunkParam &p_
     return ChunkId(axis(p_voxel.x), axis(p_voxel.y), axis(p_voxel.z));
 }
 
-int64_t random_offset(uint32_t p_a, uint32_t p_b, uint32_t p_c, int64_t p_range) {
-    const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_a, p_b, p_c });
-    const uint64_t r = (uint64_t(h.x) << 32) | h.y;
-    return int64_t(r % uint64_t(2 * p_range + 1)) - p_range;
-}
-
 struct TestChunk {
     ChunkId id;
     int lod = 0;
@@ -82,7 +76,7 @@ std::vector<TestChunk> batch_chunks(int p_lod, int p_lods, const ChunkParam &p_p
         }
         Vector3i64 v;
         for (int a = 0; a < 3; a++) {
-            v[a] = base + random_offset(uint32_t(p_lod), n, uint32_t(a) + 0xCA5Cu, p_place.range);
+            v[a] = base + ExactNoise::random_offset(uint32_t(p_lod), n, uint32_t(a) + 0xCA5Cu, p_place.range);
         }
         n++;
         chunks.push_back({ chunk_holding(v, p_lod, p_param), p_lod, p_place.name });
@@ -545,7 +539,7 @@ Dictionary check_points(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, con
                 VoxelPos v;
                 for (int a = 0; a < 3; a++) {
                     const int64_t base = place == 3 ? boundaries[(i + a) % 4] : bases[place];
-                    v[a] = (WorldCoord::floor_div(base, span) + random_offset(uint32_t(lod), uint32_t(place * PER_PLACE + i), uint32_t(a) + 0xD1u, 32)) * span;
+                    v[a] = (WorldCoord::floor_div(base, span) + ExactNoise::random_offset(uint32_t(lod), uint32_t(place * PER_PLACE + i), uint32_t(a) + 0xD1u, 32)) * span;
                 }
                 CascadeGLSL::encode_point_input(bytes, int64_t(points.size()), v, lod, pp);
                 points.push_back(v);

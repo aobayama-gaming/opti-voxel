@@ -55,7 +55,7 @@ enum class Combine : uint8_t {
     SUBTRACT, // max(parent, -child)
     SMOOTH_SUBTRACT, // smooth_max(parent, -child), radius k
     INTERSECT, // max(parent, child)
-    BLEND, // parent + (child - parent) w, w = clamp(weight, 0, 1) in the child's frame
+    BLEND, // parent (1 - w) + child w, w = clamp(weight, 0, 1) in the child's frame
 };
 
 struct Instance {
@@ -87,10 +87,13 @@ struct Compiled {
     };
     Program program; // output: the root node; out_scale / normalize left to the caller
     std::vector<Node> nodes; // children before their parent: the last is the root
-    String error; // empty if every Def and rotation was valid
+    String error; // empty if every Def, rotation and child was valid; else the first error, and no program
 };
 
 Compiled compile(const Instance &p_root);
+
+// The box holding both (bounded if both are), the larger Lipschitz bound.
+Bounds hull(const Bounds &p_a, const Bounds &p_b);
 
 // Archetypes with their bounds (sizes in voxels).
 std::shared_ptr<Def> sphere_def(float p_radius);

@@ -37,8 +37,8 @@ Probe probe(const String &p_name, const Program &p_program, bool p_trace) {
             p_trace ? "uint t;\n        vec4 v = " + p.name + "(p, int(params.lod_bias) + lods[i], t);"
                     : "vec4 v = " + p.name + "(p, int(params.lod_bias) + lods[i]);",
             stride, p_trace ? "results[b + 5u * i + 4u] = t;" : "");
-    p.cpu_exact = [p_program, stride](const WorldPos &q, uint32_t *r) {
-        std::vector<Float4> regs;
+    p.cpu = [p_program, stride](const WorldPos &q, uint32_t *r) {
+        thread_local std::vector<Float4> regs;
         bool exact = true;
         for (int i = 0; i < PROBE_LOD_COUNT; i++) {
             run_registers(p_program, q, PROBE_LODS[i], regs);

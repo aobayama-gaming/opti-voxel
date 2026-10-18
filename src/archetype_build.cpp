@@ -188,11 +188,15 @@ Reg Builder::plane(const Local &p_p, float p_nx, float p_ny, float p_nz, float p
 }
 
 Reg Builder::smooth_min(Reg p_a, Reg p_b, float p_k) {
-    // h = clamp(0.5 + (b - a) / (2k), 0, 1); b + (a - b) h - k h (1 - h). 1 / (2k) is a constant.
-    const Reg h = clamp(add(mul(sub(p_b, p_a), float(0.5 / double(p_k))), 0.5f), 0.0f, 1.0f);
-    const Reg mixed = add(p_b, mul(sub(p_a, p_b), h));
+    // min(a, b) - k / 4 h^2, h = max(1 - |a - b| / k, 0) (1 / k a constant). Beyond the radius h is +0 and the
+    // result min(a, b) to the bit, whatever the magnitudes: the lerp form b + (a - b) h would round a to the ulp
+    // of b (a far instance's 2^30 voxels quantised the ground to 64 voxels).
+    const Reg d = abs(sub(p_a, p_b));
     const Reg one = constant(1.0f);
-    return sub(mixed, mul(mul(h, sub(one, h)), p_k));
+    const Reg zero = constant(0.0f);
+    const Reg h = max(sub(one, mul(d, float(1.0 / double(p_k)))), zero);
+    const Reg m = min(p_a, p_b);
+    return sub(m, mul(mul(h, h), float(0.25 * double(p_k))));
 }
 
 Reg Builder::smooth_max(Reg p_a, Reg p_b, float p_k) {
@@ -340,7 +344,8 @@ Program random_program(uint32_t p_seed, const std::vector<VoxelPos> &p_anchors, 
     for (const VoxelPos &a : p_anchors) {
         f.b.anchor(a);
     }
-    const int anchors = MAX(int(p_anchors.size()), 1);
+    // Builder::anchor merges equal anchors: draw from the program's own.
+    const int anchors = MAX(int(f.b.program.anchors.size()), 1);
     f.input(anchors);
     f.input(anchors);
     f.noise(true);

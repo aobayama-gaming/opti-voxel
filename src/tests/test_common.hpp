@@ -4,6 +4,7 @@
 
 #include <doctest.h>
 
+#include "exact_noise.hpp"
 #include "world_coord.hpp"
 
 #include <godot_cpp/variant/vector3.hpp>
@@ -27,3 +28,10 @@ struct StringMaker<godot::Vector3> {
 };
 
 } // namespace doctest
+
+// Every bit of a value and its gradient (the sign of a zero included).
+inline bool same_bits(const ExactNoise::Float4 &p_a, const ExactNoise::Float4 &p_b) {
+    using ExactNoise::float_bits;
+    return float_bits(p_a.x) == float_bits(p_b.x) && float_bits(p_a.y) == float_bits(p_b.y) && float_bits(p_a.z) == float_bits(p_b.z) &&
+            float_bits(p_a.w) == float_bits(p_b.w);
+}

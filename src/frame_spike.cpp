@@ -109,14 +109,14 @@ std::vector<Probe> make_probes(const SDFDummy &p_sdf) {
         Probe p;
         p.name = "voxel_hash";
         p.glsl = VOXEL_HASH_GLSL;
-        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = voxel_hash_cpu(q); };
+        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = voxel_hash_cpu(q); return true; };
         probes.push_back(p);
     }
     {
         Probe p;
         p.name = "hash_cell";
         p.glsl = "void probe_hash_cell(WorldPos p, uint b) {\n    results[b] = hash_cell(p.lo, p.hi, 0x00ABCDEFu);\n}\n";
-        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = hash_cell(q.voxel, 0x00ABCDEFu); };
+        p.cpu = [](const WorldPos &q, uint32_t *r) { r[0] = hash_cell(q.voxel, 0x00ABCDEFu); return true; };
         probes.push_back(p);
     }
     {
@@ -140,6 +140,7 @@ void probe_octave_cell(WorldPos p, uint b) {
                 const OctaveCell c = octave_cell(q, CELL_KS[i], test_offset(CELL_KS[i]));
                 r[i] = fold_cell(lo32(c.cell.x), lo32(c.cell.y), lo32(c.cell.z), hi32(c.cell.x), hi32(c.cell.y), hi32(c.cell.z), c.q);
             }
+            return true;
         };
         probes.push_back(p);
     }
@@ -159,6 +160,7 @@ void probe_octave_cell(WorldPos p, uint b) {
             r[1] = float_bits(v.y);
             r[2] = float_bits(v.z);
             r[3] = float_bits(v.w);
+            return true;
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
         p.continuity_word = 3;
@@ -180,6 +182,7 @@ void probe_octave_cell(WorldPos p, uint b) {
             r[1] = float_bits(v.y);
             r[2] = float_bits(v.z);
             r[3] = float_bits(v.w);
+            return true;
         };
         p.continuity_bound = octave_step_bound(k, 6.0);
         p.continuity_word = 3;
@@ -200,6 +203,7 @@ void probe_octave_cell(WorldPos p, uint b) {
             for (int i = 0; i < 8; i++) {
                 r[i] = float_bits(c.c[i]);
             }
+            return true;
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
         p.continuity_word = 0;
@@ -252,6 +256,7 @@ void probe_octave_cell(WorldPos p, uint b) {
                 }
                 store(sum, r + 18 * I64_SHIFT_COUNT + 6 * i);
             }
+            return true;
         };
         probes.push_back(p);
     }
@@ -283,6 +288,7 @@ void probe_octave_cell(WorldPos p, uint b) {
                 r[4 * i + 2] = float_bits(v.z);
                 r[4 * i + 3] = float_bits(v.w);
             }
+            return true;
         };
         return p;
     };
@@ -389,11 +395,6 @@ Case lod0_case(const Vector3i64 &p_voxel, const Float3 &p_frac, int64_t p_half) 
     return c;
 }
 
-int64_t random_offset(uint32_t p_a, uint32_t p_b, uint32_t p_c, int64_t p_range) {
-    const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_a, p_b, p_c });
-    return int64_t(((uint64_t(h.x) << 32) | h.y) % uint64_t(2 * p_range + 1)) - p_range;
-}
-
 // RANDOM_POINTS hash-random samples around the origin: a chunk of LOD 0, 1, 4 or 8 within 16 chunks of
 // it on each axis, a vertex-grid position in [0, 32) in steps of 2^-6 (fractions of a voxel included).
 void add_random_cases(OriginRun &r_run) {
@@ -404,7 +405,7 @@ void add_random_cases(OriginRun &r_run) {
         const int64_t s = int64_t(1) << LODS[h.x & 3u];
         Case c;
         for (int a = 0; a < 3; a++) {
-            c.chunk[a] = origin[a] + (2 * random_offset(i, uint32_t(a), 0xD1CEu, 16) + 1) * s;
+            c.chunk[a] = origin[a] + (2 * ExactNoise::random_offset(i, uint32_t(a), 0xD1CEu, 16) + 1) * s;
         }
         c.grid = Float3{ float(h.y & 2047u) * 0.015625f, float(h.z & 2047u) * 0.015625f, float((h.y >> 16) & 2047u) * 0.015625f };
         r_run.cases.push_back(c);
@@ -546,7 +547,7 @@ struct Checks {
     int64_t cross_origin_points = 0;
     int64_t cross_origin_mismatch = 0;
     std::vector<int64_t> probe_mismatch;
-    // Probe evaluations outside the exact domain (Probe::cpu_exact), and how many of them differ (not a failure).
+    // Probe evaluations outside the exact domain (Probe::cpu), and how many of them differ (also in probe_mismatch).
     int64_t inexact_evaluations = 0;
     int64_t inexact_mismatch = 0;
     // Probe::origin_relative: (random point, probe) pairs compared with the first origin.
@@ -593,17 +594,9 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_
         uint32_t w = FIXED_WORDS;
         for (size_t k = 0; k < p_probes.size(); k++) {
             const Probe &probe = p_probes[k];
-            bool exact = true;
-            if (probe.cpu_exact) {
-                exact = probe.cpu_exact(pos, want.data());
-            } else {
-                probe.cpu(pos, want.data());
-            }
-            if (!exact) {
+            if (!probe.cpu(pos, want.data())) {
                 r_checks.inexact_evaluations++;
                 r_checks.inexact_mismatch += std::memcmp(want.data(), g + w, probe.words * sizeof(uint32_t)) != 0 ? 1 : 0;
-                w += probe.words;
-                continue;
             }
             for (int j = 0; j < probe.words; j++) {
                 if (want[j] != g[w + j]) {
@@ -916,7 +909,7 @@ Dictionary FrameSpike::run() {
         build_cases(run, sdf);
         for (uint32_t j = 0; j < 2; j++) {
             const uint32_t n = uint32_t(anchors.size());
-            anchors.push_back(run.param.origin_voxel() + VoxelPos(random_offset(n, j, 1u, 2048), random_offset(n, j, 2u, 2048), random_offset(n, j, 3u, 2048)));
+            anchors.push_back(run.param.origin_voxel() + VoxelPos(ExactNoise::random_offset(n, j, 1u, 2048), ExactNoise::random_offset(n, j, 2u, 2048), ExactNoise::random_offset(n, j, 3u, 2048)));
         }
         frame_anchors.push_back(run.param.origin_voxel() + VoxelPos(-1500, 700, 2100));
         runs.push_back(run);

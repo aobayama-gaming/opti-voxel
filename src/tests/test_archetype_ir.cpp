@@ -13,11 +13,6 @@ using ExactNoise::float_bits;
 
 namespace {
 
-bool same_bits(const Float4 &p_a, const Float4 &p_b) {
-    return float_bits(p_a.x) == float_bits(p_b.x) && float_bits(p_a.y) == float_bits(p_b.y) && float_bits(p_a.z) == float_bits(p_b.z) &&
-            float_bits(p_a.w) == float_bits(p_b.w);
-}
-
 // A point p_offset LOD0 voxels (fraction included) from p_anchor.
 WorldPos near(const VoxelPos &p_anchor, double p_x, double p_y, double p_z) {
     WorldPos p;
@@ -102,8 +97,9 @@ TEST_CASE("Archetype: every op matches a hand-written float32 reference") {
     b.anchor(FAR_ANCHOR);
     const Local l = b.local();
     const Reg c = b.constant(-1.75f);
+    const Reg eps = b.constant(exact_pow2(-8));
     const Reg ops[] = { b.add(l.x, l.y), b.sub(l.x, l.z), b.mul(l.x, l.y), b.mul(l.x, c), b.neg(l.z), b.abs(l.x), b.min(l.x, l.y),
-        b.max(l.y, l.z), b.select(l.x, l.y, l.z, c), b.floor(l.y), b.rsqrt(b.abs(l.z)), b.dist(b.mul(l.x, l.y)),
+        b.max(l.y, l.z), b.select(l.x, l.y, l.z, c), b.floor(l.y), b.rsqrt(b.max(b.abs(l.z), eps)), b.dist(b.mul(l.x, l.y)),
         b.perlin3(n3.k, n3.seed, n3.offset, n3.amp), b.perlin2(n2.k, n2.seed, n2.offset, n2.amp), b.add(c, l.y), b.sub(c, l.y) };
     const Program prog = b.finish(ops[0]);
     CHECK(prog.validate(25).is_empty());
@@ -116,9 +112,12 @@ TEST_CASE("Archetype: every op matches a hand-written float32 reference") {
             const float y = float(p.voxel.y - FAR_ANCHOR.y) + p.frac.y;
             const float z = float(p.voxel.z - FAR_ANCHOR.z) + p.frac.z;
             const float cv = -1.75f;
-            const float ry = ExactNoise::det_rsqrt(std::fabs(z));
-            const float ky = -0.5f * ry * ry * ry;
             const float zs = z < 0.0f ? -s : s;
+            // RSQRT of max(|z|, 2^-8).
+            const Float4 gz = exact_pow2(-8) > std::fabs(z) ? Float4{ 0.0f, 0.0f, 0.0f, exact_pow2(-8) }
+                                                            : Float4{ z < 0.0f ? -0.0f : 0.0f, z < 0.0f ? -0.0f : 0.0f, zs, std::fabs(z) };
+            const float ry = ExactNoise::det_rsqrt(gz.w);
+            const float ky = -0.5f * ry * ry * ry;
             const Float4 xy{ s * y + x * 0.0f, 0.0f * y + x * s, 0.0f * y + x * 0.0f, x * y }; // a.g * b.w + a.w * b.g
             const float q = s * ExactNoise::det_rsqrt(MAX(xy.x * xy.x + xy.y * xy.y + xy.z * xy.z, exact_pow2(-40) * s * s));
             const Float4 p3 = ExactNoise::perlin3(p, n3.k, n3.seed, n3.offset);
@@ -136,7 +135,7 @@ TEST_CASE("Archetype: every op matches a hand-written float32 reference") {
                 z > y ? Float4{ 0.0f, 0.0f, s, z } : Float4{ 0.0f, s, 0.0f, y },
                 x < y ? Float4{ 0.0f, 0.0f, s, z } : Float4{ 0.0f, 0.0f, 0.0f, cv },
                 { 0.0f, 0.0f, 0.0f, std::floor(y) },
-                { (z < 0.0f ? -0.0f : 0.0f) * ky, (z < 0.0f ? -0.0f : 0.0f) * ky, zs * ky, ry },
+                { gz.x * ky, gz.y * ky, gz.z * ky, ry },
                 { xy.x * q, xy.y * q, xy.z * q, xy.w * q },
                 { p3.x * f3, p3.y * f3, p3.z * f3, p3.w * n3.amp },
                 { p2.x * f2, p2.y * f2, p2.z * f2, p2.w * n2.amp },
@@ -315,6 +314,13 @@ TEST_CASE("Archetype: validate rejects malformed programs") {
             in.a = int(p.code.size()) - 2; // the sphere's radius constant
             p.code.push_back(in);
         },
+        [](Program &p) {
+            Instr in;
+            in.op = Op::RSQRT;
+            in.a = int(p.code.size()) - 1; // the sphere: 0 on its surface, unguarded
+            p.code.push_back(in);
+        },
+        [](Program &p) { p.code[3].op = Op(200); },
     };
     int i = 0;
     for (const auto &breaker : breakers) {
@@ -328,6 +334,29 @@ TEST_CASE("Archetype: validate rejects malformed programs") {
         CHECK(bad.validate(25).is_empty());
         breaker(bad);
         CHECK_FALSE(bad.validate(25).is_empty());
+    }
+}
+
+TEST_CASE("Archetype: smooth_min / smooth_max are exactly min / max beyond their radius, at any magnitude") {
+    // A shape near its anchor against a far one (a saturated INPUT reads 2^30 voxels): the near value's bits.
+    Builder b;
+    const Local l = b.local();
+    const Reg near_shape = b.sphere(l, 6.0f);
+    const Reg far_shape = b.add(l.x, 1073741824.0f);
+    const Reg far_neg = b.neg(far_shape);
+    const Reg u = b.smooth_min(near_shape, far_shape, 8.0f);
+    const Reg u2 = b.smooth_min(far_shape, near_shape, 8.0f);
+    const Reg m = b.smooth_max(near_shape, far_neg, 8.0f);
+    const Program prog = b.finish(u);
+    CHECK(prog.validate(25).is_empty());
+    std::vector<Float4> regs;
+    for (const int lod : { 0, 14 }) {
+        for (const WorldPos &p : random_points(VoxelPos(), 500, 40.0, 21)) {
+            run_registers(prog, p, lod, regs);
+            CHECK(same_bits(regs[u], regs[near_shape]));
+            CHECK(same_bits(regs[u2], regs[near_shape]));
+            CHECK(same_bits(regs[m], regs[near_shape]));
+        }
     }
 }
 
@@ -346,6 +375,11 @@ TEST_CASE("Archetype: fuzzed programs are valid and use every op") {
     for (int op = 0; op <= int(Op::PERLIN2); op++) {
         CAPTURE(op);
         CHECK((op == int(Op::PARAM) || seen[op] > 0));
+    }
+    // Equal anchors are merged: the inputs still read anchors of the program.
+    for (uint32_t seed = 0; seed < 50; seed++) {
+        CAPTURE(seed);
+        CHECK(random_program(seed, { VoxelPos(), VoxelPos(), VoxelPos(7, 0, 0) }, 40).validate(25).is_empty());
     }
 }
 
@@ -390,6 +424,6 @@ TEST_CASE("Archetype: the generated GLSL is pinned and uses exact operations onl
         h = (h ^ uint8_t(text[i])) * 0x01000193u;
     }
     MESSAGE("generated GLSL: ", text.length(), " bytes, FNV-1a ", h);
-    CHECK(text.length() == 211160);
-    CHECK(h == 1697673909u);
+    CHECK(text.length() == 210572);
+    CHECK(h == 148225014u);
 }

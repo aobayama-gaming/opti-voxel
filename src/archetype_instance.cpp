@@ -54,11 +54,11 @@ bool is_orthonormal(const float *p_r) {
 
 // The local x, y, z of an instance: R (p - anchor), op for op.
 Local frame(Builder &p_b, const VoxelPos &p_anchor, const float *p_r) {
-    const int a = p_b.anchor(p_anchor);
-    const Reg d[3] = { p_b.input(0, a), p_b.input(1, a), p_b.input(2, a) };
+    const Local l = p_b.local(p_b.anchor(p_anchor));
     if (is_identity(p_r)) {
-        return Local{ d[0], d[1], d[2] };
+        return l;
     }
+    const Reg d[3] = { l.x, l.y, l.z };
     Reg out[3];
     for (int i = 0; i < 3; i++) {
         out[i] = -1;
@@ -125,33 +125,26 @@ Bounds world_bounds(const Def &p_def, const VoxelPos &p_anchor, const float *p_r
     if (!b.bounded) {
         return b;
     }
-    // The local box's corners back in world axes (R^T q), then one voxel of margin for the float rotation.
+    // The local box's corners back in world axes (R^T q), then a margin for the float rotation: one voxel, plus
+    // R^T's distance to R^-1 (rows orthonormal within 1e-5, is_orthonormal) times the box's reach.
     double lo[3] = { INFINITY, INFINITY, INFINITY };
     double hi[3] = { -INFINITY, -INFINITY, -INFINITY };
+    double reach = 0.0;
     for (int c = 0; c < 8; c++) {
         const double q[3] = { (c & 1) ? p_def.hi.x : p_def.lo.x, (c & 2) ? p_def.hi.y : p_def.lo.y, (c & 4) ? p_def.hi.z : p_def.lo.z };
+        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
         for (int j = 0; j < 3; j++) {
             const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
             lo[j] = MIN(lo[j], w);
             hi[j] = MAX(hi[j], w);
         }
     }
+    const double margin = 1.0 + 1e-4 * reach;
     for (int j = 0; j < 3; j++) {
-        b.lo[j] = p_anchor[j] + int64_t(std::floor(lo[j])) - 1;
-        b.hi[j] = p_anchor[j] + int64_t(std::ceil(hi[j])) + 1;
+        b.lo[j] = p_anchor[j] + int64_t(std::floor(lo[j] - margin));
+        b.hi[j] = p_anchor[j] + int64_t(std::ceil(hi[j] + margin));
     }
     return b;
-}
-
-Bounds hull(const Bounds &p_a, const Bounds &p_b) {
-    Bounds r;
-    r.bounded = p_a.bounded && p_b.bounded;
-    r.lipschitz = MAX(p_a.lipschitz, p_b.lipschitz);
-    for (int j = 0; j < 3; j++) {
-        r.lo[j] = MIN(p_a.lo[j], p_b.lo[j]);
-        r.hi[j] = MAX(p_a.hi[j], p_b.hi[j]);
-    }
-    return r;
 }
 
 double volume(const Bounds &p_b) {
@@ -190,30 +183,50 @@ Reg combine(Builder &p_b, Reg p_parent, Bounds &r_bounds, const Instance::Child 
         default: { // BLEND: >= min(parent, child); the weight's gradient times (child - parent) is unbounded.
             r_bounds = hull(a, p_cb);
             r_bounds.lipschitz = INFINITY;
-            const Reg w = p_b.clamp(inline_def(p_b, *p_child.weight, p_child_anchor, p_child.instance), 0.0f, 1.0f);
-            const Reg d = p_b.sub(p_child_reg, p_parent);
-            return p_b.add(p_parent, p_b.mul(d, w));
+            // The weight in the child's frame (rotation, seed), with its own parameters.
+            Instance weight_frame;
+            std::copy(p_child.instance.rotation, p_child.instance.rotation + 9, weight_frame.rotation);
+            weight_frame.seed = p_child.instance.seed;
+            const Reg w = p_b.clamp(inline_def(p_b, *p_child.weight, p_child_anchor, weight_frame), 0.0f, 1.0f);
+            // parent (1 - w) + child w: exactly the parent at w = 0 and the child at w = 1, at any magnitude
+            // (parent + (child - parent) w would round the child to the parent's ulp).
+            const Reg one = p_b.constant(1.0f);
+            const Reg kept = p_b.mul(p_parent, p_b.sub(one, w));
+            return p_b.add(kept, p_b.mul(p_child_reg, w));
         }
     }
 }
 
+// Empty if p_child can be combined (its instance is checked by compile_node).
+String child_error(const Instance::Child &p_child) {
+    if ((p_child.op == Combine::SMOOTH_UNION || p_child.op == Combine::SMOOTH_SUBTRACT) && !(p_child.k > 0.0f)) {
+        return "Archetype: a smooth operator needs a radius k > 0.";
+    }
+    if (p_child.op == Combine::BLEND) {
+        return p_child.weight ? def_error(*p_child.weight) : String("Archetype: a BLEND child without weight.");
+    }
+    return String();
+}
+
+// -1 and r_out.error set at the first invalid instance or child (nothing more is emitted).
 Reg compile_node(Builder &p_b, const Instance &p_inst, const VoxelPos &p_parent_anchor, Compiled &r_out, Bounds &r_bounds) {
     const VoxelPos anchor = p_parent_anchor + p_inst.anchor;
-    if (r_out.error.is_empty()) {
-        r_out.error = def_error(*p_inst.def);
-    }
+    r_out.error = p_inst.def ? def_error(*p_inst.def) : String("Archetype: an instance without a Def.");
     if (r_out.error.is_empty() && !is_orthonormal(p_inst.rotation)) {
         r_out.error = "Archetype: an instance rotation is not orthonormal.";
+    }
+    if (!r_out.error.is_empty()) {
+        return -1;
     }
     Reg r = inline_def(p_b, *p_inst.def, anchor, p_inst);
     r_bounds = world_bounds(*p_inst.def, anchor, p_inst.rotation);
     for (const Instance::Child &child : p_inst.children) {
-        if (child.op == Combine::BLEND && !child.weight) {
-            r_out.error = "Archetype: a BLEND child without weight.";
-            continue;
-        }
+        r_out.error = child_error(child);
         Bounds cb;
-        const Reg c = compile_node(p_b, child.instance, anchor, r_out, cb);
+        const Reg c = r_out.error.is_empty() ? compile_node(p_b, child.instance, anchor, r_out, cb) : -1;
+        if (c < 0) {
+            return -1;
+        }
         r = combine(p_b, r, r_bounds, child, c, cb, anchor + child.instance.anchor);
     }
     r_out.nodes.push_back(Compiled::Node{ r, r_bounds });
@@ -231,12 +244,25 @@ std::shared_ptr<Def> make_def(Builder &p_b, Reg p_out, Float3 p_lo, Float3 p_hi,
 
 } // namespace
 
+Bounds hull(const Bounds &p_a, const Bounds &p_b) {
+    Bounds r;
+    r.bounded = p_a.bounded && p_b.bounded;
+    r.lipschitz = MAX(p_a.lipschitz, p_b.lipschitz);
+    for (int j = 0; j < 3; j++) {
+        r.lo[j] = MIN(p_a.lo[j], p_b.lo[j]);
+        r.hi[j] = MAX(p_a.hi[j], p_b.hi[j]);
+    }
+    return r;
+}
+
 Compiled compile(const Instance &p_root) {
     Compiled out;
     Builder b;
     Bounds bounds;
     const Reg r = compile_node(b, p_root, VoxelPos(), out, bounds);
-    out.program = b.finish(r);
+    if (r >= 0) {
+        out.program = b.finish(r);
+    }
     return out;
 }
 

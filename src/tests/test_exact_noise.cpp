@@ -16,11 +16,6 @@ WorldPos at(int64_t p_x, int64_t p_y, int64_t p_z, Float3 p_frac = Float3{}) {
     return p;
 }
 
-bool same_bits(const Float4 &p_a, const Float4 &p_b) {
-    return float_bits(p_a.x) == float_bits(p_b.x) && float_bits(p_a.y) == float_bits(p_b.y) && float_bits(p_a.z) == float_bits(p_b.z) &&
-            float_bits(p_a.w) == float_bits(p_b.w);
-}
-
 // LODs above 0 checked against LOD 0 (up to 24, past the default 15 LODs).
 constexpr int SCALED_LODS[] = { 1, 2, 5, 9, 14, 20, 24 };
 
