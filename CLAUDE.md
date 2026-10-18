@@ -230,6 +230,14 @@ to every change, and a reviewer may reject a PR on any of them.
   ms, corners, unique corners, dedup ratio, per wave GPU ms, batches, readback bytes). `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
   `--camera_voxel=X,Y,Z` makes the scene (camera, lights, cam_pos) relative to that absolute voxel
   instead of the world origin.
+- Destroy check (`VoxelState`, `src/chunk_memory.*`) is incremental: the discoverer publishes each scan
+  with its delta (`ScanDelta`: entered / left, merged across the scans the main thread skipped), and
+  VoxelState keeps per event the dirty chunks' nearest loaded ancestors, the stall count per loaded chunk
+  (split rule) and `leaving` (loaded, not scanned); `update_destroy` only looks at `leaving`. It relies
+  on the scan being an octree cut. `compute_destroy_full` is the oracle: `--destroy_verify=1` checks every
+  delta and every destroy check against it and ERRORs on a difference (unit test: the randomized run in
+  `test_chunk_memory.cpp`). Run a fly with it after touching `chunk_memory`, the discoverer's publish or
+  the meshers' result path. `destroy.rescans` counts the rare pass over the dirty set (a stale result).
 - `tools/zero_test.sh`: the debug zero pillar (`--zero_pillar=1|2`, `SDFDummy`) has its flat top
   exactly on a lattice row (SDF exactly 0.0 at LODs 0-6); run 2 moves it up 1 cm. Same triangle count
   and the same picture are required: a sample of exactly 0.0 must neither lose its quad nor flip it.
