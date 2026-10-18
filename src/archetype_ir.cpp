@@ -79,12 +79,36 @@ Float4 eval_arith(const Instr &p_in, const Float4 &p_a, const Float4 &p_b, bool 
 }
 
 // INPUT, DIST, RSQRT and the noises (GLSL: emit_instr).
-Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p_r, const WorldPos &p_pos, int p_lod, float p_s) {
+Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p_r, const WorldPos &p_pos, int p_lod, float p_s,
+        const DefRecord *p_record) {
     switch (p_in.op) {
         case Op::INPUT: {
             const VoxelPos &anchor = p_program.anchors[p_in.index];
             const float v = float(WorldCoord::sat_diff(p_pos.voxel[p_in.axis], anchor[p_in.axis], INPUT_LIMIT)) + axis_of(p_pos.frac, p_in.axis);
             return Float4{ p_in.axis == 0 ? p_s : 0.0f, p_in.axis == 1 ? p_s : 0.0f, p_in.axis == 2 ? p_s : 0.0f, v };
+        }
+        case Op::T_INPUT: {
+            // The record's frame: R (p - anchor), the full 9 mul + 6 add (a runtime rotation can't skip
+            // zeros as frame() does). q[a] and the dot product are in the generator's order (archetype_glsl).
+            const DefRecord &rec = *p_record;
+            float q[3];
+            for (int a = 0; a < 3; a++) {
+                q[a] = float(WorldCoord::sat_diff(p_pos.voxel[a], rec.anchor[a], INPUT_LIMIT)) + axis_of(p_pos.frac, a);
+            }
+            const float *row = rec.rotation + 3 * p_in.axis;
+            const float v = q[0] * row[0] + q[1] * row[1] + q[2] * row[2];
+            return Float4{ p_s * row[0], p_s * row[1], p_s * row[2], v };
+        }
+        case Op::T_PERLIN3:
+        case Op::T_PERLIN2: {
+            // The lattice follows the record's anchor (offset - anchor, exact int64), the seed is salted.
+            const DefRecord &rec = *p_record;
+            const Vector3i64 offset = p_in.offset - rec.anchor;
+            const uint32_t seed = p_in.seed ^ rec.salt;
+            const Float4 n = p_in.op == Op::T_PERLIN3 ? ExactNoise::perlin3(p_pos, p_in.k, seed, offset)
+                                                      : ExactNoise::perlin2(p_pos, p_in.k, seed, offset);
+            const float f = p_in.value * exact_pow2(p_lod - p_in.k);
+            return Float4{ n.x * f, n.y * f, n.z * f, n.w * p_in.value };
         }
         case Op::RSQRT: {
             const Float4 &a = p_r[p_in.a];
@@ -109,13 +133,15 @@ Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p
     }
 }
 
-Float4 eval(const Program &p_program, int p_i, const Float4 *p_r, const WorldPos &p_pos, int p_lod, float p_s) {
+Float4 eval(const Program &p_program, int p_i, const Float4 *p_r, const WorldPos &p_pos, int p_lod, float p_s, const DefRecord *p_record) {
     const Instr &in = p_program.code[p_i];
     switch (in.op) {
         case Op::CONST:
             return flat_value(in.value);
         case Op::PARAM:
             return flat_value(p_program.params[in.index]);
+        case Op::T_PARAM:
+            return flat_value(p_record->params[in.index]);
         case Op::ADD:
         case Op::SUB:
         case Op::MUL:
@@ -132,7 +158,7 @@ Float4 eval(const Program &p_program, int p_i, const Float4 *p_r, const WorldPos
         case Op::FLOOR:
             return flat_value(std::floor(p_r[in.a].w));
         default:
-            return eval_special(p_program, in, p_r, p_pos, p_lod, p_s);
+            return eval_special(p_program, in, p_r, p_pos, p_lod, p_s, p_record);
     }
 }
 
@@ -143,12 +169,16 @@ bool is_flat(const Instr &p_in, const std::vector<Instr> &p_code) {
     switch (p_in.op) {
         case Op::CONST:
         case Op::PARAM:
+        case Op::T_PARAM:
         case Op::FLOOR:
             return true;
         case Op::INPUT:
+        case Op::T_INPUT:
         case Op::DIST:
         case Op::PERLIN3:
         case Op::PERLIN2:
+        case Op::T_PERLIN3:
+        case Op::T_PERLIN2:
             return false;
         case Op::NEG:
         case Op::ABS:
@@ -168,6 +198,10 @@ int op_arity(Op p_op) {
         case Op::INPUT:
         case Op::PERLIN3:
         case Op::PERLIN2:
+        case Op::T_INPUT:
+        case Op::T_PARAM:
+        case Op::T_PERLIN3:
+        case Op::T_PERLIN2:
             return 0;
         case Op::NEG:
         case Op::ABS:
@@ -186,15 +220,20 @@ int op_cost(Op p_op) {
     switch (p_op) {
         case Op::CONST:
         case Op::PARAM:
+        case Op::T_PARAM:
             return 0;
         case Op::MUL:
             return 7;
         case Op::RSQRT:
         case Op::DIST:
             return 14;
+        case Op::T_INPUT: // sat_diff + the full 9 mul + 6 add
+            return 24;
         case Op::PERLIN3:
+        case Op::T_PERLIN3:
             return 260;
         case Op::PERLIN2:
+        case Op::T_PERLIN2:
             return 110;
         default:
             return 4;
@@ -221,7 +260,7 @@ String Program::validate(int p_lod_count) const {
     }
     for (Reg i = 0; i < Reg(code.size()); i++) {
         const Instr &in = code[i];
-        if (uint8_t(in.op) > uint8_t(Op::PERLIN2)) {
+        if (uint8_t(in.op) > uint8_t(Op::T_PERLIN2)) {
             return vformat("Archetype: instruction %d: unknown op %d.", i, int(in.op));
         }
         const Reg operands[4] = { in.a, in.b, in.c, in.d };
@@ -239,6 +278,12 @@ String Program::validate(int p_lod_count) const {
         if (in.op == Op::PARAM && (in.index < 0 || in.index >= int(params.size()))) {
             return vformat("Archetype: instruction %d: parameter %d out of range.", i, in.index);
         }
+        if (in.op == Op::T_INPUT && in.axis > 2) {
+            return vformat("Archetype: instruction %d: bad table input axis.", i);
+        }
+        if (in.op == Op::T_PARAM && (in.index < 0 || in.index >= 8)) {
+            return vformat("Archetype: instruction %d: table parameter %d out of range (0 to 7).", i, in.index);
+        }
         if (in.op == Op::DIST && code[in.a].flat) {
             return vformat("Archetype: instruction %d: DIST of a flat register.", i);
         }
@@ -250,10 +295,11 @@ String Program::validate(int p_lod_count) const {
                 return vformat("Archetype: instruction %d: RSQRT of a register that isn't max(x, c > 0).", i);
             }
         }
-        if ((in.op == Op::CONST || in.op == Op::PERLIN3 || in.op == Op::PERLIN2) && !finite_not_denormal(in.value)) {
+        if ((in.op == Op::CONST || in.op == Op::PERLIN3 || in.op == Op::PERLIN2 || in.op == Op::T_PERLIN3 || in.op == Op::T_PERLIN2) &&
+                !finite_not_denormal(in.value)) {
             return vformat("Archetype: instruction %d: constant %s is denormal or not finite.", i, in.value);
         }
-        if (in.op == Op::PERLIN3 || in.op == Op::PERLIN2) {
+        if (in.op == Op::PERLIN3 || in.op == Op::PERLIN2 || in.op == Op::T_PERLIN3 || in.op == Op::T_PERLIN2) {
             ExactNoise::OctaveSet set;
             set.octaves.push_back(ExactNoise::Octave{ in.k, in.seed, in.offset, in.value });
             if (in.k < 0 || in.k > ExactNoise::MAX_K || !ExactNoise::in_exact_range(in.value)) {
@@ -280,12 +326,12 @@ String Program::validate(int p_lod_count) const {
     return String();
 }
 
-void run_registers(const Program &p_program, const WorldPos &p_pos, int p_lod, std::vector<Float4> &r_regs) {
+void run_registers(const Program &p_program, const WorldPos &p_pos, int p_lod, std::vector<Float4> &r_regs, const DefRecord *p_record) {
     const float s = exact_pow2(p_lod);
     r_regs.resize(p_program.code.size());
     Float4 *r = r_regs.data();
     for (int i = 0; i < int(p_program.code.size()); i++) {
-        r[i] = eval(p_program, i, r, p_pos, p_lod, s);
+        r[i] = eval(p_program, i, r, p_pos, p_lod, s, p_record);
     }
 }
 
@@ -299,9 +345,9 @@ Float4 finish(const Program &p_program, const Float4 &p_out, int p_lod) {
     return Float4{ o.x * gr, o.y * gr, o.z * gr, v };
 }
 
-Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod) {
+Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod, const DefRecord *p_record) {
     thread_local std::vector<Float4> regs;
-    run_registers(p_program, p_pos, p_lod, regs);
+    run_registers(p_program, p_pos, p_lod, regs, p_record);
     return finish(p_program, regs[p_program.output], p_lod);
 }
 

@@ -35,6 +35,12 @@ void VoxelState::add_scan_chunk(std::unique_ptr<LODHashSet> p_scanned_chunk, con
 
 void VoxelState::add_new_loaded(ChunkOutput &new_output) {
     const ChunkId id = new_output.chunk_id;
+    // A re-meshed chunk (an edit) can land after its destruction was marked: drop the pending copy, so
+    // it can't be freed twice or leak its new quads. The next update_destroy re-adds it if it is still
+    // leaving. (Also covered by "only scanned chunks are re-meshed".)
+    if (to_destroy_chunk.has(id)) {
+        to_destroy_chunk.erase(id);
+    }
     ChunkOutput *old = loaded_chunk.getptr(id);
     if (old) {
         // Loaded again: the sets don't change.

@@ -1,0 +1,47 @@
+#pragma once
+
+#include "instance_table.hpp"
+#include "sdf_base.hpp"
+
+#include <atomic>
+#include <memory>
+
+// The archetype instance table's data for the GPU (SDFGpuTable): the DefRecord array and the per-batch
+// list of instance indices. Each mesher owns the actual buffers (on its own RenderingDevice) and uploads
+// record_bytes() when version() changes; archetype_table.cpp generates terrain_sdf reading them.
+namespace Archetype {
+
+class GpuTable : public SDFGpuTable {
+public:
+    // Main thread: the snapshot the GPU mirrors. Its version drives the record upload.
+    // Read from the render thread (direct mesher) and the legacy worker: atomic, and each reader works on
+    // one copy.
+    void set_snapshot(const std::shared_ptr<const InstanceSnapshot> &p_snapshot) { std::atomic_store(&snap, p_snapshot); }
+    std::shared_ptr<const InstanceSnapshot> snapshot() const { return std::atomic_load(&snap); }
+
+    String glsl_buffers(int p_record_binding, int p_list_binding) const override;
+    String glsl_set_chunk() const override;
+
+    uint32_t version() const override {
+        const std::shared_ptr<const InstanceSnapshot> s = snapshot();
+        return s ? s->version : 0u;
+    }
+    uint32_t instance_count() const override {
+        const std::shared_ptr<const InstanceSnapshot> s = snapshot();
+        return s ? uint32_t(s->records.size()) : 0u;
+    }
+    // The buffers are sized for this many instances up front (runtime edits only append). Raised by
+    // --instance_capacity for a large scatter.
+    uint32_t instance_capacity() const override { return capacity; }
+    void set_capacity(uint32_t p_capacity) { capacity = p_capacity; }
+    PackedByteArray record_bytes(uint32_t &r_version) const override;
+    uint32_t record_size() const override { return RECORD_BYTES; }
+
+    void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
+
+private:
+    std::shared_ptr<const InstanceSnapshot> snap;
+    uint32_t capacity = 16384; // the GPU record/list buffers hold this many instances
+};
+
+} // namespace Archetype

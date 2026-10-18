@@ -93,6 +93,8 @@ private:
 
     //input
     PackedByteArray input_chunk_id;
+    PackedByteArray input_table_list; // the batch's instance list (archetype instances)
+    PackedByteArray input_table_records; // the table's records, when they changed since the last batch
 
     // GPU stuff
 
@@ -108,6 +110,12 @@ private:
 
     RID buffer_output_point;
     RID buffer_chunk_param;
+    // The instance table's buffers (archetype instances), on the local device.
+    RID buffer_table_records;
+    RID buffer_table_list;
+    uint64_t table_list_capacity = 0; // bytes
+    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last handed to the worker
+    std::vector<ChunkId> in_flight_ids; // main thread: the chunks of the batch handed to the worker
     // Uniform set
 
     RID uniform_set;
@@ -131,7 +139,8 @@ private:
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
-    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod);
+    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
+            const PackedByteArray &p_table_records);
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
@@ -154,6 +163,8 @@ public:
     void process_queue();
 
     void send_chunk(const LODHashSet &p_chunks);
+    // Re-mesh chunks an instance edit changed (legacy path; the direct mesher has the versioned queue).
+    void remesh_chunks(const std::vector<ChunkId> &p_chunks);
 
     bool get_results(VoxelState &output);
 

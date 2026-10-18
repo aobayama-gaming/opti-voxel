@@ -81,6 +81,10 @@ private:
 
     // actively mutexed
     ChunkId camera_chunk;
+    // Region(s) an instance edit changed (LOD0 voxels): the worker drops the cull verdicts of the nodes
+    // near them and rescans even if the camera chunk didn't change.
+    std::vector<VoxelBox> pending_invalidations;
+    bool rescan_requested = false;
     uint64_t camera_change_usec = 0;
     std::unique_ptr<LODHashSet> scanned_chunks; // published scan, handed over without a copy
     std::unique_ptr<ScanDelta> scanned_delta; // last taken scan -> published scan
@@ -143,6 +147,9 @@ public:
     void stop();
 
     void set_camera_chunk(Vector3 camera_pos);
+    // An instance edit changed the SDF in p_box: the next scan drops the cull verdicts of the nodes
+    // near it and runs even if the camera chunk didn't change.
+    void invalidate(const VoxelBox &p_box);
     // Takes the latest scan if there is a new one; r_camera_chunk is the camera chunk it was made for and
     // r_delta the change from the scan taken before (from the empty set for the first one).
     bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ChunkId &r_camera_chunk);

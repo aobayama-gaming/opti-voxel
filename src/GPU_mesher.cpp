@@ -99,7 +99,7 @@ void main() {
 
 
     ChunkFrame chunk = chunk_frame(input_chunk[gl_GlobalInvocationID.z/chunk_param.chunk_size], chunk_param);
-    ivec3 chunk_id = chunk.id_lo;
+    ivec3 chunk_id = chunk.id_lo;/*GLSL_SET_CHUNK*/
 
     ivec3 cell_chunk_coordinate = ivec3(
         gl_GlobalInvocationID.x,
@@ -115,10 +115,19 @@ void main() {
     const String pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : String(algorithm_pass);
 
     // 2. Inject the dynamic code
+    String bindings = GLSL_BUFFER_BINDING;
+    String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE);
+    String set_chunk;
+    if (SDFGpuTable *table = sdf->get_gpu_table()) {
+        bindings += table->glsl_buffers(6, 7);
+        helpers += GPUFrame::glsl_int64();
+        set_chunk = table->glsl_set_chunk();
+    }
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    shader = shader.replace("/*GLSL_BUFFER_BINDING*/", GLSL_BUFFER_BINDING);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE));
+    shader = shader.replace("/*GLSL_BUFFER_BINDING*/", bindings);
+    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
+    shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
     shader = shader.replace("/*GLSL_QEF_VERTEX*/", dual_contouring ? String(GLSL_QEF_VERTEX) : String());
     shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, p_name == "third");
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
@@ -376,6 +385,16 @@ void GPUMesher::_initialize_gpu_compute() {
     uniforms.push_back(create_storage_uniform(4, buffer_output_point));
     uniforms.push_back(create_storage_uniform(5, buffer_chunk_param, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
 
+    if (SDFGpuTable *table = sdf->get_gpu_table()) {
+        // Sized for the capacity up front; the records arrive with the first batch (process_queue).
+        buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
+        const uint64_t list_words = uint64_t(chunk_batch_number) * MAX<uint64_t>(table->instance_capacity(), 1u);
+        table_list_capacity = list_words * 4;
+        buffer_table_list = rd->storage_buffer_create(table_list_capacity);
+        uniforms.push_back(create_storage_uniform(6, buffer_table_records));
+        uniforms.push_back(create_storage_uniform(7, buffer_table_list));
+    }
+
     shader_first_pass = compile_dynamic_shader(GLSL_FIRST_PASS, "first");
     shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS, "second");
     shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS, "third");
@@ -406,6 +425,8 @@ void GPUMesher::_execute_whole_pipeline() {
         mutex->lock();
         const bool should_exit = exit_thread;
         PackedByteArray local_chunk_id = input_chunk_id;
+        PackedByteArray local_table_list = input_table_list;
+        PackedByteArray local_table_records = input_table_records;
         const uint32_t local_count = batch_count;
         const int local_min_lod = batch_min_lod;
         mutex->unlock();
@@ -415,7 +436,7 @@ void GPUMesher::_execute_whole_pipeline() {
         }
 
         const uint64_t t_batch_start = now_usec();
-        _execute_gpu_pipeline(local_chunk_id, local_count, local_min_lod);
+        _execute_gpu_pipeline(local_chunk_id, local_count, local_min_lod, local_table_list, local_table_records);
 
         mutex->lock();
         stats.batch_total.add(now_usec() - t_batch_start);
@@ -438,7 +459,8 @@ void GPUMesher::_execute_whole_pipeline() {
         uniform_set, pipeline_first_pass, pipeline_second_pass, pipeline_third_pass,
         shader_first_pass, shader_second_pass, shader_third_pass,
         buffer_input_chunk_id, buffer_atomic_counter, buffer_sdf_sample,
-        buffer_edge_intersect, buffer_output_point, buffer_chunk_param
+        buffer_edge_intersect, buffer_output_point, buffer_chunk_param,
+        buffer_table_records, buffer_table_list
     };
     for (const RID &rid : resources) {
         if (rid.is_valid()) {
@@ -516,7 +538,19 @@ uint32_t GPUMesher::_get_flat_index_z(Vector3i cell) {
     return cell.x + cell.y * chunk_param.chunk_size + cell.z * chunk_param.chunk_size * chunk_param.chunk_size;
 }
 
-void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod) {
+void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
+        const PackedByteArray &p_table_records) {
+    // The instance table (archetype instances): the records the main thread captured with this batch's
+    // lists (same snapshot) when they changed, then the lists.
+    if (buffer_table_records.is_valid()) {
+        if (!p_table_records.is_empty()) {
+            rd->buffer_update(buffer_table_records, 0, p_table_records.size(), p_table_records);
+        }
+        if (!p_table_list.is_empty()) {
+            ERR_FAIL_COND_MSG(uint64_t(p_table_list.size()) > table_list_capacity, "GPUMesher: batch instance list over its buffer.");
+            rd->buffer_update(buffer_table_list, 0, p_table_list.size(), p_table_list);
+        }
+    }
     // 1. RESET ATOMIC COUNTERS TO 0
     rd->buffer_clear(buffer_atomic_counter, 0, 2 * (1 + chunk_batch_number) * sizeof(uint32_t));
 
@@ -858,8 +892,22 @@ void GPUMesher::process_queue() {
     }
 
     if (count > 0) {
+        PackedByteArray table_list;
+        PackedByteArray table_records;
+        in_flight_ids.clear();
+        for (uint32_t i = 0; i < count; i++) {
+            in_flight_ids.push_back(unpacked_chunks[i].chunk_id);
+        }
+        if (SDFGpuTable *table = sdf->get_gpu_table()) {
+            table->build_lists(in_flight_ids, chunk_param, new_batch, table_list);
+            if (table->version() != sent_table_version) {
+                table_records = table->record_bytes(sent_table_version);
+            }
+        }
         mutex->lock();
         input_chunk_id = new_batch;
+        input_table_list = table_list;
+        input_table_records = table_records;
         batch_count = count;
         batch_min_lod = min_lod;
         worker_available = false;
@@ -887,6 +935,24 @@ bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
     }
 
     return false;
+}
+
+void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
+    std::vector<ChunkId> chunks = p_chunks;
+    // The batch in flight was built from the old table: its chunks the edit reaches are meshed again after
+    // it lands (a first mesh isn't in loaded_chunk, so the terrain doesn't list it).
+    // (chunk_queue is a set: a chunk already loaded and listed is queued once.)
+    for (const ChunkId &chunk : in_flight_ids) {
+        if (sdf->edit_affects_chunk(chunk)) {
+            chunks.push_back(chunk);
+        }
+    }
+    for (const ChunkId &chunk : chunks) {
+        const int lod = ChunkMath::get_lod(chunk);
+        if (lod >= 0 && lod < (int)chunk_queue.size() && chunk_queue[lod] != nullptr) {
+            chunk_queue[lod]->insert(chunk);
+        }
+    }
 }
 
 void GPUMesher::send_chunk(const LODHashSet &p_chunks) {

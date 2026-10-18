@@ -1,5 +1,8 @@
 #include "test_common.hpp"
 
+#include <atomic>
+#include <thread>
+
 #include "archetype_instance.hpp"
 #include "archetype_probes.hpp"
 #include "sdf_archetype.hpp"
@@ -155,21 +158,21 @@ TEST_CASE("Archetype: node bounds hold on 100,000 random points per scene") {
 TEST_CASE("Archetype: operator identities") {
     const std::shared_ptr<Def> rock = rock_def(20.0f, ExactNoise::make_fbm(false, 3u, 4, 2, 2.0, 0.5));
     const std::shared_ptr<Def> capsule = capsule_def(30.0f, 5.0f);
-    // Union is commutative: the same value (bits); the same gradient off ties.
+    // Both trees are the same scene (the two shapes swapped, identity rotations, so a child's offset in
+    // its parent's frame is its world offset): a noisy rock at the world origin and a capsule at C.
+    const VoxelPos C(15, -10, 3);
     Instance ab;
     ab.def = rock;
-    ab.set_rotation_y(0.4);
     Instance::Child cb;
     cb.instance.def = capsule;
-    cb.instance.anchor = VoxelPos(15, -10, 3);
+    cb.instance.anchor = C;
     ab.children.push_back(cb);
     Instance ba;
     ba.def = capsule;
-    ba.anchor = VoxelPos(15, -10, 3);
+    ba.anchor = C;
     Instance::Child ca;
     ca.instance.def = rock;
-    ca.instance.anchor = VoxelPos(-15, 10, -3);
-    ca.instance.set_rotation_y(0.4);
+    ca.instance.anchor = VoxelPos(-C.x, -C.y, -C.z);
     ba.children.push_back(ca);
     const Program pab = scene_program(ab);
     const Program pba = scene_program(ba);
@@ -185,10 +188,15 @@ TEST_CASE("Archetype: operator identities") {
     const Program palone = scene_program(alone);
     const Program pcut = scene_program(cut);
     int ties = 0;
+    bool first_mismatch = true;
     for (uint32_t i = 0; i < 20000; i++) {
         const WorldPos p = random_point(VoxelPos(), 60.0, i, 21);
         const Float4 x = run(pab, p, 0);
         const Float4 y = run(pba, p, 0);
+        if (float_bits(x.w) != float_bits(y.w) && ties >= 0 && first_mismatch) {
+            first_mismatch = false;
+            MESSAGE("commutativity mismatch at ", WorldCoord::to_string(p.voxel), " frac (", p.frac.x, ",", p.frac.y, ",", p.frac.z, "): ab w=", x.w, " ba w=", y.w);
+        }
         CHECK(float_bits(x.w) == float_bits(y.w));
         if (x.x != y.x || x.y != y.y || x.z != y.z) {
             ties++;
@@ -243,44 +251,104 @@ TEST_CASE("Archetype: compile reports invalid instances") {
     CHECK(compile(smooth).error.is_empty());
 }
 
-TEST_CASE("SDFArchetype: the demo terrain is valid at 0.5 m and 5 cm voxels, evaluate() is the interpreter, far away the bare ground") {
+TEST_CASE("SDFArchetype scatter: evaluate() and its gradient stay finite") {
+    ChunkParam param;
+    param.voxel_size = 0.5f;
+    SDFArchetype sdf;
+    sdf.set_scatter(1000, 200.0);
+    sdf.configure(param, 15);
+    CHECK(sdf.get_snapshot()->records.size() == 1008);
+    std::vector<uint32_t> list;
+    int64_t nonfinite = 0;
+    int64_t checked = 0;
+    for (uint32_t i = 0; i < 8000; i++) {
+        const WorldPos p = random_point(VoxelPos(-100, 600, -300), 420.0, i, 7);
+        for (const int lod : { 0, 2, 4 }) {
+            sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
+            const Float4 r = finish_table(fold(sdf.get_ground(), sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(),
+                                                  uint32_t(list.size()), p, lod),
+                    lod, 0.5f, true);
+            if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.z) || !std::isfinite(r.w)) {
+                nonfinite++;
+            }
+            checked++;
+        }
+    }
+    MESSAGE("scatter: ", checked, " evaluations, ", nonfinite, " non-finite");
+    CHECK(nonfinite == 0);
+}
+
+TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the fold, far away the bare ground") {
     for (const float voxel : { 0.5f, 0.05f }) {
         CAPTURE(voxel);
         ChunkParam param;
         param.voxel_size = voxel;
         SDFArchetype sdf;
         sdf.configure(param, 25);
-        const Program &prog = sdf.get_program();
-        CHECK(prog.validate(25).is_empty());
-        CHECK(compile(SDFArchetype::scene(voxel)).error.is_empty());
-        CHECK(prog.normalize);
+        const Program &ground = sdf.get_ground();
+        CHECK(ground.validate(25).is_empty());
+        for (int i = 0; i < sdf.get_library().size(); i++) {
+            CHECK(sdf.get_library()[i].program.validate(25).is_empty());
+        }
+        CHECK(sdf.get_snapshot());
+        CHECK(sdf.get_snapshot()->records.size() == 8); // 4 rocks + 3 trunks + 1 cave
+        // The library and ground evaluate: evaluate() is the fold over the point's candidates, box-tested.
         int below = 0;
+        std::vector<uint32_t> list;
         for (uint32_t i = 0; i < 2000; i++) {
-            // Around the rocks and trunks, from below the ground to above it.
-            const WorldPos p = random_point(VoxelPos(std::llround(-50.0 / voxel), std::llround(300.0 / voxel), std::llround(-140.0 / voxel)), 60.0 / voxel, i, 33);
+            const WorldPos p = random_point(VoxelPos(std::llround(-50.0 / voxel), std::llround(300.0 / voxel), std::llround(-140.0 / voxel)), 60.0 / voxel,
+                    i, 33);
             for (const int lod : { 0, 4 }) {
-                const Float4 r = run(prog, p, lod);
+                sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
+                const Float4 r = finish_table(fold(ground, sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(), uint32_t(list.size()),
+                                                      p, lod),
+                        lod, float(voxel), true);
                 CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(r.w));
                 below += (lod == 0 && r.w < 0.0f) ? 1 : 0;
             }
         }
-        // Both sides of the surface are sampled.
         CHECK(below > 200);
         CHECK(below < 1800);
-        // Far away (a far origin's view) the instances' inputs saturate at 2^30 voxels: the bare ground, every bit.
-        Instance bare = SDFArchetype::scene(voxel);
-        bare.children.clear();
-        Program ground = compile(bare).program;
-        ground.out_scale = prog.out_scale;
-        ground.normalize = true;
+        // Far away (a far origin's view) the instances' boxes are nowhere near: the bare ground, every bit.
         const VoxelPos far(2000000000000000, std::llround(300.0 / voxel), -2000000000000000);
         for (uint32_t i = 0; i < 500; i++) {
             const WorldPos p = random_point(far, 200.0 / voxel, i, 34);
             for (const int lod : { 0, 4 }) {
-                CHECK(same_bits(run(prog, p, lod), run(ground, p, lod)));
+                sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
+                // No instance's box contains a far point: the fold is the bare ground.
+                const float g = finish_table(run(ground, p, lod), lod, float(voxel), true).w;
+                CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(g));
             }
         }
     }
+}
+
+// Edits replace SDFArchetype's snapshot on the main thread while the discoverer thread evaluates and runs
+// cull_exempt: a plain shared_ptr assignment there freed the snapshot under the reader (SIGSEGV).
+TEST_CASE("SDFArchetype: evaluating on another thread while the main thread moves an instance") {
+    ChunkParam param;
+    SDFArchetype sdf;
+    sdf.configure(param, 15);
+    const VoxelPos anchor = sdf.get_snapshot()->records[0].anchor;
+    std::atomic<bool> stop{ false };
+    std::atomic<int64_t> evaluations{ 0 };
+    std::thread reader([&]() {
+        uint32_t i = 0;
+        while (!stop.load()) {
+            WorldPos p;
+            p.voxel = anchor + VoxelPos(int64_t(i % 17) - 8, int64_t(i % 13) - 6, int64_t(i % 11) - 5);
+            (void)sdf.evaluate(p, int(i % 3));
+            (void)sdf.cull_exempt(ChunkId(1, 1, 1), 0);
+            i++;
+            evaluations.fetch_add(1);
+        }
+    });
+    for (int step = 0; step < 5000; step++) {
+        CHECK(sdf.move_instance(0, anchor + VoxelPos(step % 7, 0, step % 5), nullptr));
+    }
+    stop.store(true);
+    reader.join();
+    CHECK(evaluations.load() > 0);
 }
 
 TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes holed through, its die pipped") {
@@ -288,7 +356,7 @@ TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes
     const double vs = param.voxel_size;
     SDFArchetype sdf(SDFArchetype::Scene::SHAPES);
     sdf.configure(param, 25);
-    CHECK(sdf.get_program().validate(25).is_empty());
+    CHECK(sdf.get_ground().validate(25).is_empty());
     const Instance scene = SDFArchetype::shapes(vs);
     CHECK(compile(scene).error.is_empty());
     // The SDF (metres) at p_anchor + (p_x, p_y, p_z) metres.
@@ -331,7 +399,16 @@ TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes
     const Instance &stairs = scene.children[9].instance;
     for (int k = 0; k < 8; k++) {
         CAPTURE(k);
-        const VoxelPos c = scene.anchor + stairs.anchor + (k == 0 ? VoxelPos() : stairs.children[k - 1].instance.anchor);
+        // A child's anchor is in its parent's frame: R^T of the offset, rounded to voxels.
+        VoxelPos off;
+        if (k > 0) {
+            const VoxelPos &o = stairs.children[k - 1].instance.anchor;
+            const float *r = stairs.rotation;
+            for (int a = 0; a < 3; a++) {
+                off[a] = std::llround(double(r[a]) * double(o.x) + double(r[3 + a]) * double(o.y) + double(r[6 + a]) * double(o.z));
+            }
+        }
+        const VoxelPos c = scene.anchor + stairs.anchor + off;
         CHECK(sdf_at(c, 0.0, k + 0.5, 0.0) < 0.0f);
         CHECK(sdf_at(c, 0.0, k + 1.5, 0.0) > 0.0f);
     }

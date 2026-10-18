@@ -23,6 +23,9 @@ struct ReferenceWalk {
         const VoxelPos center = ChunkMath::chunk_center_voxel(p_chunk, param);
         const int64_t half_voxels = ChunkMath::get_lod_size(p_chunk) * param.half_chunk_voxels();
         const int lod = ChunkMath::get_lod(p_chunk);
+        if (sdf.cull_exempt(p_chunk, lod)) {
+            return false; // the no-cull rule near instances (SDFBase::cull_exempt)
+        }
         for (int corner = 0; corner < 8; ++corner) {
             WorldPos corner_pos;
             corner_pos.voxel = center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);

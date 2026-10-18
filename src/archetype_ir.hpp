@@ -56,6 +56,13 @@ enum class Op : uint8_t {
     DIST, // a / |grad a|: first-order distance, gradient normalised (to 2^lod); grad a must not be flat
     PERLIN3, // one exact-noise octave times `value` (amp): wavelength 2^k voxels, seed, lattice offset
     PERLIN2, // the same over (x, z)
+    // Table Defs (archetype_table.hpp): the instance's frame, parameters and noise lattice come from
+    // its record (run() with a DefRecord) instead of being baked in. The compiler never emits these in
+    // a scene program, so a compiled Program stays a function of the position alone.
+    T_INPUT, // axis: the local coordinate `axis` of the record's frame: R (p - anchor), the full rotation
+    T_PARAM, // index: params[index] of the record
+    T_PERLIN3, // PERLIN3 with the record's anchor subtracted from the lattice offset and the seed salted
+    T_PERLIN2,
 };
 
 struct Instr {
@@ -75,6 +82,16 @@ struct Instr {
     // Recorded for later steps, unused here: the band (wavelength in LOD0 voxels, 0 = none) of the band
     // rule, and the cost of cost-based batching (op_cost).
     float band = 0.0f;
+};
+
+// The per-instance data a Table Def's T_* ops read (archetype_table.hpp's TableRecord is the CPU
+// record; the GPU reads the same fields from a DefRecord storage buffer). Passed to run() / the
+// interpreter; a null pointer is only valid for a program without T_* ops.
+struct DefRecord {
+    VoxelPos anchor;
+    float rotation[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+    float params[8] = {};
+    uint32_t salt = 0; // the noise salt: seed ^ salt, 0 when the instance's seed is 0
 };
 
 // Saturation of INPUT's integer offset (voxels): exact below 2^24, rounded identically above.
@@ -109,10 +126,11 @@ bool is_flat(const Instr &p_in, const std::vector<Instr> &p_code);
 int op_arity(Op p_op);
 
 // The output of p_program at p_pos for a chunk of LOD p_lod: (gradient, value) after the epilogue.
-Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod);
+// p_record is required for a program with T_* ops (a Table Def), ignored otherwise.
+Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod, const DefRecord *p_record = nullptr);
 
 // Every register (before the epilogue), for tests and probes.
-void run_registers(const Program &p_program, const WorldPos &p_pos, int p_lod, std::vector<Float4> &r_regs);
+void run_registers(const Program &p_program, const WorldPos &p_pos, int p_lod, std::vector<Float4> &r_regs, const DefRecord *p_record = nullptr);
 Float4 finish(const Program &p_program, const Float4 &p_out, int p_lod);
 
 // Every component 0 or within [2^-63, 2^63], every RSQRT input > 0 (see the exactness rules above).
@@ -143,6 +161,12 @@ public:
     Reg input(int p_axis, int p_anchor = 0);
     // The position relative to anchor p_anchor (x, y, z inputs).
     Local local(int p_anchor = 0);
+    // Table Defs (archetype_table.hpp): read the instance's record instead of baked constants.
+    Reg t_input(int p_axis);
+    Local t_local();
+    Reg t_param(int p_index);
+    Reg t_perlin3(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp);
+    Reg t_perlin2(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp);
     Reg add(Reg p_a, Reg p_b);
     Reg sub(Reg p_a, Reg p_b);
     Reg mul(Reg p_a, Reg p_b);
@@ -170,6 +194,13 @@ public:
     Reg capsule(const Local &p_p, float p_height, float p_radius);
     // Vertical, centred on y = 0, half height p_half_height.
     Reg cylinder(const Local &p_p, float p_half_height, float p_radius);
+    // The same shapes with runtime sizes (a Table Def's parameters): the operand order matches the
+    // constant versions, for the CPU and GPU to agree bit for bit.
+    Reg clamp(Reg p_a, Reg p_lo, Reg p_hi);
+    Reg sphere(const Local &p_p, Reg p_radius);
+    Reg box(const Local &p_p, Reg p_hx, Reg p_hy, Reg p_hz);
+    Reg capsule(const Local &p_p, Reg p_height, Reg p_radius);
+    Reg cylinder(const Local &p_p, Reg p_half_height, Reg p_radius);
     // n . p - p_d (n of length 1).
     Reg plane(const Local &p_p, float p_nx, float p_ny, float p_nz, float p_d);
     // Polynomial smooth min of radius p_k (> 0): min(a, b) - p_k / 4 at worst, gradient h grad a + (1 - h) grad b.

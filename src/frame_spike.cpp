@@ -869,6 +869,260 @@ bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector
     return true;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Archetype table probe (M2): the generated arch_<k> functions and the full fold (archetype_table.hpp)
+// on the GPU against the CPU interpreter, at every origin and LOD. Every sample's ChunkInput carries the
+// whole table (id.w = 0, anchor_hi.w = N), so the box test alone selects the instances.
+// ---------------------------------------------------------------------------------------------------
+
+struct TableProbeData {
+    Archetype::DefLibrary library;
+    std::vector<Archetype::TableRecord> records;
+    Archetype::Program ground;
+    std::vector<uint32_t> list;
+};
+
+// The records sit a few voxels from probe sample points (one run's case each), so the fold and the
+// smooth blends run near the instances' surfaces at the fine LODs, not only far away at LOD 24. The
+// ground is a small constant for the same reason: instance values reach it and the blends engage.
+TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
+    using namespace Archetype;
+    TableProbeData t;
+    t.library.add(make_sphere_type());
+    t.library.add(make_box_type());
+    t.library.add(make_capsule_type());
+    t.library.add(make_cylinder_type());
+    t.library.add(make_rock_type(8, 0x1234u));
+    Builder gb;
+    t.ground = gb.finish(gb.constant(2.0f));
+    for (uint32_t i = 0; i < 64; i++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0x7AB1u, 0x9E37u });
+        TableRecord rec;
+        rec.def = uint8_t(h.x % uint32_t(t.library.size()));
+        rec.op = Combine(h.y % 4u);
+        rec.k = float(h.z % 8u) + 0.5f;
+        rec.inv_k = 1.0f / rec.k;
+        const OriginRun &run = p_runs[i % p_runs.size()];
+        const Case &near = run.cases[(size_t(i) * 7919u) % run.cases.size()];
+        const VoxelPos at = ChunkMath::sample_pos(near.chunk, near.grid, run.param).voxel;
+        rec.anchor = at + VoxelPos(int64_t(h.x % 9u) - 4, int64_t(h.y % 9u) - 4, int64_t(h.z % 9u) - 4);
+        const double yaw = double(h.x >> 8) * 1e-4;
+        const float cy = float(std::cos(yaw)), sy = float(std::sin(yaw));
+        const float rot[9] = { cy, 0.0f, -sy, 0.0f, 1.0f, 0.0f, sy, 0.0f, cy };
+        std::copy(rot, rot + 9, rec.rotation);
+        switch (rec.def) {
+            case 0:
+                rec.params[0] = 3.0f + float(i % 7);
+                break;
+            case 1:
+                rec.params[0] = 5.0f;
+                rec.params[1] = 2.0f;
+                rec.params[2] = 7.0f;
+                break;
+            case 2:
+                rec.params[0] = 12.0f;
+                rec.params[1] = 2.0f;
+                break;
+            case 3:
+                rec.params[0] = 6.0f;
+                rec.params[1] = 4.0f;
+                break;
+            default:
+                rec.params[0] = 6.0f + float(i % 5);
+                rec.params[1] = 1.5f;
+                break;
+        }
+        rec.salt = i == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ i + 1, 0x5EEDu, 0u }).x;
+        const Bounds wb = record_world_bounds(t.library[rec.def], rec);
+        for (int a = 0; a < 3; a++) {
+            rec.box_lo[a] = int32_t(wb.lo[a] - rec.anchor[a]);
+            rec.box_hi[a] = int32_t(wb.hi[a] - rec.anchor[a]);
+        }
+        rec.lipschitz = wb.lipschitz;
+        rec.margin_c = 2.0f * wb.lipschitz + 2.0f;
+        t.records.push_back(rec);
+    }
+    t.list.resize(t.records.size());
+    for (uint32_t i = 0; i < t.list.size(); i++) {
+        t.list[i] = i;
+    }
+    return t;
+}
+
+constexpr const char TABLE_SHADER[] = R"glsl(#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+/*STRUCTS*/
+/*DEF_RECORD*/
+
+struct Sample { ChunkInput chunk; vec4 grid; };
+
+layout(set = 0, binding = 0, std430) restrict readonly buffer Samples { Sample samples[]; };
+layout(set = 0, binding = 1, std430) restrict writeonly buffer Results { uint results[]; };
+layout(set = 0, binding = 2, std140) uniform ChunkParamUniform { ChunkParam chunk_param; };
+layout(set = 0, binding = 3, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };
+layout(set = 0, binding = 4, std430) restrict readonly buffer DefList { uint sdf_list[]; };
+layout(push_constant, std430) uniform Params { uint count; uint words; uint lod_bias; uint pad1; } params;
+
+/*HELPERS*/
+
+/*TERRAIN*/
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= params.count) {
+        return;
+    }
+    ChunkFrame f = chunk_frame(samples[i].chunk, chunk_param);
+    WorldPos p = world_pos_from_grid(f, samples[i].grid.xyz, chunk_param);
+    g_sdf_chunk = samples[i].chunk;
+    uint b = i * params.words;
+    /*LOD_CALLS*/
+}
+)glsl";
+
+int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, Dictionary &r_report) {
+    const TableProbeData table = make_table_probe_data(p_runs);
+    const uint32_t count = uint32_t(table.records.size());
+    String lod_calls;
+    for (int j = 0; j < PROBE_LOD_COUNT; j++) {
+        lod_calls += vformat("    {\n    precise vec4 v = terrain_sdf(p, int(params.lod_bias) + %d);\n", PROBE_LODS[j]);
+        for (int k = 0; k < 4; k++) {
+            lod_calls += vformat("    { uint u = floatBitsToUint(v[%d]); results[b + %du + %du] = (u << 1u) == 0u ? 0u : u; }\n", k, 4 * j, k);
+        }
+        lod_calls += "    }\n";
+    }
+    String code = String(TABLE_SHADER);
+    code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
+    code = code.replace("/*DEF_RECORD*/", String(Archetype::GLSL_DEF_RECORD_STRUCT));
+    code = code.replace("/*HELPERS*/",
+            String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE));
+    code = code.replace("/*TERRAIN*/", Archetype::generate_table_sdf(table.ground, table.library, 1.0f, false));
+    code = code.replace("/*LOD_CALLS*/", lod_calls);
+
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
+    Ref<RDShaderSPIRV> spirv = p_rd->shader_compile_spirv_from_source(source);
+    const String err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+    if (!err.is_empty()) {
+        UtilityFunctions::printerr("FrameSpike table: SHADER COMPILATION FAILED: " + err);
+        return -1;
+    }
+    const RID shader = p_rd->shader_create_from_spirv(spirv);
+    const RID pipeline = p_rd->compute_pipeline_create(shader);
+
+    // The records and the whole-table list, at once.
+    PackedByteArray records_bytes;
+    records_bytes.resize(count * Archetype::RECORD_BYTES);
+    records_bytes.fill(0);
+    for (uint32_t i = 0; i < count; i++) {
+        Archetype::encode_record(records_bytes, i, table.records[i]);
+    }
+    const RID buffer_records = p_rd->storage_buffer_create(records_bytes.size(), records_bytes);
+    PackedByteArray list_bytes;
+    list_bytes.resize(int64_t(table.list.size()) * 4);
+    for (size_t i = 0; i < table.list.size(); i++) {
+        list_bytes.encode_u32(int64_t(i) * 4, table.list[i]);
+    }
+    const RID buffer_list = p_rd->storage_buffer_create(list_bytes.size(), list_bytes);
+
+    const uint32_t words = 4 * PROBE_LOD_COUNT;
+    int64_t mismatches = 0;
+    int64_t samples = 0;
+    int64_t near = 0; // samples inside an instance's influence box at the finest probe LOD
+    std::vector<uint32_t> want(words);
+    for (const OriginRun &run : p_runs) {
+        const uint32_t n = uint32_t(run.cases.size());
+        PackedByteArray samples_bytes;
+        samples_bytes.resize(n * SAMPLE_BYTES);
+        PackedByteArray inputs;
+        inputs.resize(n * GPUFrame::CHUNK_INPUT_BYTES);
+        for (uint32_t i = 0; i < n; i++) {
+            GPUFrame::encode_chunk_input(inputs, i, run.cases[i].chunk, run.param);
+            std::memcpy(samples_bytes.ptrw() + i * SAMPLE_BYTES, inputs.ptr() + i * GPUFrame::CHUNK_INPUT_BYTES, GPUFrame::CHUNK_INPUT_BYTES);
+            // the whole table for every sample
+            samples_bytes.encode_u32(i * SAMPLE_BYTES + 12, 0);
+            samples_bytes.encode_s32(i * SAMPLE_BYTES + 28, int32_t(count));
+            samples_bytes.encode_float(i * SAMPLE_BYTES + 32, run.cases[i].grid.x);
+            samples_bytes.encode_float(i * SAMPLE_BYTES + 36, run.cases[i].grid.y);
+            samples_bytes.encode_float(i * SAMPLE_BYTES + 40, run.cases[i].grid.z);
+            samples_bytes.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
+        }
+        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(run.param);
+        const RID buffer_samples = p_rd->storage_buffer_create(samples_bytes.size(), samples_bytes);
+        const RID buffer_results = p_rd->storage_buffer_create(uint64_t(n) * words * 4);
+        const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
+        TypedArray<RDUniform> uniforms;
+        const RID ids[5] = { buffer_samples, buffer_results, buffer_param, buffer_records, buffer_list };
+        for (int b = 0; b < 5; b++) {
+            Ref<RDUniform> u;
+            u.instantiate();
+            u->set_uniform_type(b == 2 ? RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER : RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+            u->set_binding(b);
+            u->add_id(ids[b]);
+            uniforms.push_back(u);
+        }
+        const RID uniform_set = p_rd->uniform_set_create(uniforms, shader, 0);
+        PackedByteArray push;
+        push.resize(16);
+        push.fill(0);
+        push.encode_u32(0, n);
+        push.encode_u32(4, words);
+        const int64_t list = p_rd->compute_list_begin();
+        p_rd->compute_list_bind_compute_pipeline(list, pipeline);
+        p_rd->compute_list_bind_uniform_set(list, uniform_set, 0);
+        p_rd->compute_list_set_push_constant(list, push, push.size());
+        p_rd->compute_list_dispatch(list, (n + 63) / 64, 1, 1);
+        p_rd->compute_list_end();
+        p_rd->submit();
+        p_rd->sync();
+        const PackedByteArray results = p_rd->buffer_get_data(buffer_results);
+        const uint32_t *res = reinterpret_cast<const uint32_t *>(results.ptr());
+        for (uint32_t i = 0; i < n; i++) {
+            const WorldPos pos = ChunkMath::sample_pos(run.cases[i].chunk, run.cases[i].grid, run.param);
+            for (int j = 0; j < PROBE_LOD_COUNT; j++) {
+                const Archetype::Float4 r = Archetype::fold(table.ground, table.library, table.records.data(), table.list.data(),
+                        uint32_t(table.list.size()), pos, PROBE_LODS[j]);
+                want[4 * j + 0] = Archetype::zero_canonical(float_bits(r.x));
+                want[4 * j + 1] = Archetype::zero_canonical(float_bits(r.y));
+                want[4 * j + 2] = Archetype::zero_canonical(float_bits(r.z));
+                want[4 * j + 3] = Archetype::zero_canonical(float_bits(r.w));
+            }
+            samples++;
+            for (const Archetype::TableRecord &rec : table.records) {
+                if (Archetype::in_influence_box(rec, pos, PROBE_LODS[0])) {
+                    near++;
+                    break;
+                }
+            }
+            for (uint32_t k = 0; k < words; k++) {
+                if (res[i * words + k] != want[k]) {
+                    mismatches++;
+                    if (mismatches < 8) {
+                        UtilityFunctions::printerr(vformat("FrameSpike table: origin %s chunk %s: word %d gpu %x cpu %x", to_string(run.param.origin_chunk),
+                                to_string(run.cases[i].chunk), k, res[i * words + k], want[k]));
+                    }
+                    break;
+                }
+            }
+        }
+        p_rd->free_rid(uniform_set);
+        p_rd->free_rid(buffer_samples);
+        p_rd->free_rid(buffer_results);
+        p_rd->free_rid(buffer_param);
+    }
+    p_rd->free_rid(buffer_records);
+    p_rd->free_rid(buffer_list);
+    p_rd->free_rid(pipeline);
+    p_rd->free_rid(shader);
+    r_report["table_samples"] = samples;
+    r_report["table_near_samples"] = near;
+    r_report["table_mismatch"] = mismatches;
+    return mismatches == 0 ? 1 : 0;
+}
+
 } // namespace
 
 void FrameSpike::_bind_methods() {
@@ -927,10 +1181,15 @@ Dictionary FrameSpike::run() {
 
     // Probe sets, one shader each: the frame / noise table, then the archetype probes.
     std::vector<std::vector<Probe>> sets = { make_probes(noise) };
-    // The archetype probes, the demo terrain's program first (SDFArchetype: its anchors are absolute, near 0).
-    SDFArchetype demo;
-    demo.configure(sdf_param, PROBE_LODS[PROBE_LOD_COUNT - 1] + 1);
-    std::vector<Probe> arch = { ArchetypeProbes::probe("demo", demo.get_program(), true) };
+    // The archetype probes, the demo terrain's compiled (PR 1) program first (its anchors are absolute,
+    // near 0). The table probes follow the archetype ones (see make_table_probes).
+    Archetype::Compiled demo_compiled = Archetype::compile(SDFArchetype::scene(voxel_size));
+    if (!demo_compiled.error.is_empty()) {
+        UtilityFunctions::printerr("FrameSpike: demo scene: " + demo_compiled.error);
+    }
+    demo_compiled.program.normalize = true;
+    demo_compiled.program.out_scale = 0.5f;
+    std::vector<Probe> arch = { ArchetypeProbes::probe("demo", demo_compiled.program, true) };
     for (Probe &probe : ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS)) {
         arch.push_back(probe);
     }
@@ -959,7 +1218,13 @@ Dictionary FrameSpike::run() {
         }
         first += set.size();
     }
+    // Archetype table (M2): the generated library + fold on the GPU against the CPU interpreter.
+    const int table_status = run_table_set(rd, runs, report);
     memdelete(rd);
+    if (table_status < 0) {
+        report["error"] = "table shader compilation failed";
+        return report;
+    }
 
     report["origins"] = (int64_t)(sizeof(origins) / sizeof(origins[0]));
     int64_t cases = 0;
@@ -994,7 +1259,8 @@ Dictionary FrameSpike::run() {
     }
     report["probe_mismatch"] = probe_report;
     report["examples"] = checks.examples;
-    report["ok"] = checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
+    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
+            checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&
             checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0 &&
             checks.relative_points > 0 && checks.relative_mismatch == 0;

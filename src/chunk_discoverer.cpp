@@ -55,6 +55,12 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     const float chunk_outer_radius = ChunkMath::world_chunk_size(p_wave[p_nodes[0]], chunk_param) * 2;
     r_outside.assign(p_nodes.size(), 1);
     for (size_t n = 0; n < p_nodes.size(); n++) {
+        // No-cull rule (archetype instances): a node box near an instance's box is never culled, so a
+        // steep, rotated or subtracted shape can't be dropped by the slope-bounded corner test.
+        if (sdf->cull_exempt(p_wave[p_nodes[n]], p_lod)) {
+            r_outside[n] = 0;
+            continue;
+        }
         for (int corner = 0; corner < 8; ++corner) {
             if (std::abs(values[corner_point[n * 8 + corner]]) <= chunk_outer_radius) {
                 r_outside[n] = 0;
@@ -183,14 +189,44 @@ void ChunkDiscoverer::discovery_loop() {
         bool should_exit = exit_thread;
 
         ChunkId actual_camera_chunk = camera_chunk;
-        // Add other variable import.
+        const bool force_rescan = rescan_requested;
+        rescan_requested = false;
+        std::vector<VoxelBox> invalidations = std::move(pending_invalidations);
+        pending_invalidations.clear();
         mutex->unlock();
 
         if (should_exit) {
             break;
         }
 
-        if (has_scanned && actual_camera_chunk == last_scanned_camera_chunk) {
+        // An instance edit: drop the cull verdicts of the nodes near the changed region before the scan
+        // (the no-cull rule reads the current SDF, but the cache may hold a verdict from before).
+        if (!invalidations.empty()) {
+            std::vector<ChunkId> stale;
+            for (const KeyValue<ChunkId, CullCache::Entry> &kv : cache.entries) {
+                const int lod = ChunkMath::get_lod(kv.key);
+                const int64_t span = int64_t(chunk_param.chunk_voxel_dimension()) << lod;
+                const VoxelPos min = ChunkMath::chunk_min_voxel(kv.key, chunk_param);
+                VoxelBox node;
+                node.valid = true;
+                const int64_t grow = 2 * span; // the cull band
+                for (int a = 0; a < 3; a++) {
+                    node.lo[a] = min[a] - grow;
+                    node.hi[a] = min[a] + span + grow;
+                }
+                for (const VoxelBox &region : invalidations) {
+                    if (node.intersects(region)) {
+                        stale.push_back(kv.key);
+                        break;
+                    }
+                }
+            }
+            for (const ChunkId &id : stale) {
+                cache.entries.erase(id);
+            }
+        }
+
+        if (has_scanned && actual_camera_chunk == last_scanned_camera_chunk && !force_rescan) {
             mutex->lock();
             stats.scans_skipped_same_chunk++;
             mutex->unlock();
@@ -406,6 +442,17 @@ void ChunkDiscoverer::setup_lod(
         lod_distances.set(i, dist_chunk);
         previous_distance = dist_chunk;
     }
+}
+
+void ChunkDiscoverer::invalidate(const VoxelBox &p_box) {
+    if (!p_box.valid) {
+        return;
+    }
+    mutex->lock();
+    pending_invalidations.push_back(p_box);
+    rescan_requested = true;
+    mutex->unlock();
+    semaphore->post();
 }
 
 void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos) {

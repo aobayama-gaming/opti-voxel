@@ -13,4 +13,10 @@ namespace Archetype {
 // components (trace_hash), so a probe sees every instruction, not only the output.
 String generate_glsl(const Program &p_program, const String &p_name, bool p_trace = false);
 
+// GLSL "vec4 <p_name>(WorldPos p, int lod, DefRecord rec)" of a Table Def (archetype_table.hpp): the
+// same code, with the T_* ops reading the record `rec` (its anchor, rotation, parameters, salt) instead
+// of baked constants. Needs GLSL_DEF_RECORD, the frame functions and the int64 helpers (i64_sub) before
+// it. A program without T_* ops generates the same body as generate_glsl.
+String generate_def_glsl(const Program &p_program, const String &p_name, bool p_trace = false);
+
 } // namespace Archetype

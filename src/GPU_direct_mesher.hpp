@@ -4,6 +4,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/core/object.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
 
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
@@ -72,6 +73,8 @@ public:
     void destroy();
 
     void send_chunk(const LODHashSet &p_chunks);
+    // Re-mesh already-loaded chunks whose surface an instance edit changed (finest LOD first).
+    void remesh_chunks(const std::vector<ChunkId> &p_chunks);
     void process_queue();
     bool get_results(VoxelState &output);
     bool is_idle();
@@ -102,6 +105,7 @@ private:
         std::vector<ChunkId> chunks;
         std::vector<int> pages;
         uint64_t dispatch_frame = 0;
+        uint32_t table_version = 0; // the instance table version the batch was recomputed from
     };
 
     struct CompletedBatch {
@@ -138,6 +142,11 @@ private:
 
     // Per LOD, sorted by descending Morton key: pop_back() walks space along the Morton curve.
     std::vector<std::vector<ChunkId>> chunk_queue;
+    // Instance edits: their chunks, dispatched before chunk_queue, finest LOD first. send_chunk() does
+    // not touch this. required_version is the table version a chunk must be re-meshed from (staleness).
+    std::vector<std::vector<ChunkId>> remesh_queue;
+    HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
+    HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
     LODHashSet working_generation;
 
     uint32_t next_batch_id = 0;
@@ -169,6 +178,11 @@ private:
     RID buffer_chunk_param;
     RID staging_texture;
     RID buffer_status;
+    // The instance table's buffers (archetype instances): records + the current batch's list.
+    RID buffer_table_records;
+    RID buffer_table_list;
+    uint64_t table_list_capacity = 0; // bytes
+    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last bound to a dispatch
     RID shaders[5];
     RID pipelines[5];
     RID uniform_set;
@@ -180,9 +194,15 @@ private:
 
     void _rt_initialize();
     RID _rt_compile(const char *p_pass, const char *p_name);
+    void _queue_remesh(const ChunkId &p_chunk);
+    void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
+    // Main thread: the batch's instance lists (patched into r_ids) and, if the table changed since the last
+    // dispatch, its records. Returns the table version they are.
+    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const PackedInt32Array &p_pages, int p_min_lod);
-    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod);
+            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records);
+    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
+            const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Pass 0: the sdf pass, or the cascade's levels (timestamps "<prefix>_c<group>" after each level group
     // when p_prefix is not empty).
     void _rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix);
@@ -235,6 +255,10 @@ private:
         TimingStat gpu_compute; // GPU time of passes 1-5 (from timestamps)
         TimingStat gpu_copy; // GPU time of the page copies
         TimingStat gpu_pass[5];
+        uint64_t remesh_chunks = 0; // chunks queued by remesh_chunks()
+        uint64_t remesh_pops = 0; // remesh chunks dispatched
+        uint64_t remesh_stale_dropped = 0; // results from a table version older than the chunk's edit
+        uint64_t remesh_queue_max = 0;
         // Cascade terrain: GPU time of the level groups j >= 3, j = 2, j = 1, j = 0 (pass 0 is their sum).
         TimingStat gpu_cascade[4];
         uint64_t live_quads = 0;
