@@ -27,6 +27,7 @@ METRICS = [
     ("Load (scenario A)", "chunks meshed / s",
      lambda d: get(d, "phases.load.terrain.chunks.loaded", 0) / max(get(d, "final_terrain.ms_until_loaded", 1), 1) * 1000, "chunks/s", False),
     ("Load (scenario A)", "frame time p50 while loading", lambda d: get(d, "phases.load.frame_ms.p50"), "ms", True),
+    ("Load (scenario A)", "frame time p95 while loading", lambda d: get(d, "phases.load.frame_ms.p95"), "ms", True),
     ("Load (scenario A)", "frame time p99 while loading", lambda d: get(d, "phases.load.frame_ms.p99"), "ms", True),
     ("Load (scenario A)", "frame time max while loading", lambda d: get(d, "phases.load.frame_ms.max"), "ms", True),
 
@@ -44,6 +45,12 @@ METRICS = [
     ("Mesher GPU", "  direct: GPU compute per batch, avg", lambda d: get(d, "final_terrain.mesher.gpu_compute.avg_ms"), "ms", True),
     ("Mesher GPU", "    of which SDF pass (fixed samples per batch), avg", lambda d: get(d, "final_terrain.mesher.gpu_pass_sdf.avg_ms"), "ms", True),
     ("Mesher GPU", "  direct: GPU copy per batch, avg", lambda d: get(d, "final_terrain.mesher.gpu_copy.avg_ms"), "ms", True),
+    ("Mesher pacing", "  direct: batches (load)", lambda d: get(d, "phases.load.terrain.mesher.batches"), "", None),
+    ("Mesher pacing", "  direct: batches per dispatching frame (load)", lambda d: get(d, "phases.load.terrain.mesher.batches_per_dispatch_frame"), "", None),
+    ("Mesher pacing", "  direct: batches in flight, max (load)", lambda d: get(d, "phases.load.terrain.mesher.in_flight_max"), "", None),
+    ("Mesher pacing", "  direct: directory readback latency, avg (load)", lambda d: get(d, "phases.load.terrain.mesher.readback_latency_frames.avg"), "frames", True),
+    ("Mesher pacing", "  direct: dispatch CPU per batch, avg", lambda d: get(d, "final_terrain.mesher.dispatch_cpu.avg_ms"), "ms", True),
+    ("Mesher pacing", "  direct: collect CPU per batch, avg", lambda d: get(d, "final_terrain.mesher.collect_cpu.avg_ms"), "ms", True),
 
     ("Other CPU", "update_destroy_from_scan, avg", lambda d: get(d, "final_terrain.process.destroy_from_scan.avg_ms"), "ms", True),
     ("Other CPU", "update_destroy_from_scan, total", lambda d: get(d, "final_terrain.process.destroy_from_scan.total_ms"), "ms", True),
@@ -101,6 +108,7 @@ METRICS = [
     ("Memory", "RD buffer memory (end of steady)", lambda d: get(d, "phases.steady.memory.buffer_mem_mb"), "MB", True),
     ("Memory", "  direct: page pool VRAM (end of steady)", lambda d: get(d, "phases.steady.terrain.mesher.pool.vram_mb"), "MB", True),
     ("Memory", "  direct: page pool, pages allocated", lambda d: get(d, "phases.steady.terrain.mesher.pool.pages_total"), "", True),
+    ("Memory", "  direct: page pool VRAM, peak", lambda d: get(d, "final_terrain.mesher.pool.vram_peak_mb"), "MB", True),
 ]
 
 

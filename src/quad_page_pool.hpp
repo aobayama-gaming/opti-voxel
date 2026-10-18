@@ -110,12 +110,14 @@ private:
     uint64_t growth_events = 0;
     uint64_t pages_trimmed = 0;
     int pages_in_use = 0;
+    int64_t pages_alive_peak = 0; // high-water mark of allocated pages (VRAM peak)
 
     // render thread only
     std::vector<PageRT> rt_pages;
     RID rt_zero_texture;
 
     int _create_page(int p_index = -1);
+    int64_t _alive_pages() const { return (int64_t)pages.size() - (int64_t)trimmed_pages.size(); } // with resources
     void _rt_create_page(int p_page, RID p_multimesh, RID p_material);
     void _rt_reset_page(int p_page);
     void _rt_free_page(int p_page);
