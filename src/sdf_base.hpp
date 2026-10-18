@@ -5,6 +5,8 @@
 
 #include "chunk_math.hpp"
 
+#include <godot_cpp/classes/worker_thread_pool.hpp>
+
 using namespace godot;
 
 namespace Cascade {
@@ -56,4 +58,36 @@ public:
 
 protected:
     ChunkParam param;
+
+    // evaluate_batch() over the WorkerThreadPool, in blocks of BATCH_BLOCK points (the same bits): the override
+    // of a terrain whose evaluate() is thread-safe.
+    static constexpr int BATCH_BLOCK = 64;
+    void evaluate_batch_parallel(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {
+        BatchJob job{ this, p_points, p_count, p_lod, r_out };
+        const int blocks = (p_count + BATCH_BLOCK - 1) / BATCH_BLOCK;
+        if (blocks <= 1) {
+            if (blocks == 1) {
+                _batch_block(&job, 0);
+            }
+            return;
+        }
+        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&SDFBase::_batch_block, &job, blocks, -1, true, "SDFBase::evaluate_batch");
+        pool->wait_for_group_task_completion(id);
+    }
+
+private:
+    struct BatchJob {
+        const SDFBase *sdf;
+        const VoxelPos *points;
+        int count;
+        int lod;
+        float *out;
+    };
+
+    static void _batch_block(void *p_job, uint32_t p_block) {
+        const BatchJob &job = *static_cast<const BatchJob *>(p_job);
+        const int begin = int(p_block) * BATCH_BLOCK;
+        job.sdf->SDFBase::evaluate_batch(job.points + begin, MIN(job.count - begin, BATCH_BLOCK), job.lod, job.out + begin);
+    }
 };

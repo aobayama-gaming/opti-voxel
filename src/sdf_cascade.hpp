@@ -6,8 +6,6 @@
 #include "sdf_base.hpp"
 #include "sdf_dummy.hpp"
 
-#include <godot_cpp/classes/worker_thread_pool.hpp>
-
 #include <cmath>
 
 // The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain (VoxelTerrain.terrain_mode 1,
@@ -111,21 +109,10 @@ public:
         return sdf(ch, p_pos.voxel.y, p_lod).w;
     }
 
-    // evaluate() over the WorkerThreadPool, in blocks of BATCH_BLOCK points: the CPU discoverer's corner
-    // batches (and the GPU discoverer's oracle and fallback).
-    static constexpr int BATCH_BLOCK = 64;
+    // evaluate() over the WorkerThreadPool: the CPU discoverer's corner batches (and the GPU discoverer's oracle
+    // and fallback).
     void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const override {
-        BatchJob job{ this, p_points, p_count, p_lod, r_out };
-        const int blocks = (p_count + BATCH_BLOCK - 1) / BATCH_BLOCK;
-        if (blocks <= 1) {
-            if (blocks == 1) {
-                _batch_block(&job, 0);
-            }
-            return;
-        }
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&SDFCascade::_batch_block, &job, blocks, -1, true, "SDFCascade::evaluate_batch");
-        pool->wait_for_group_task_completion(id);
+        evaluate_batch_parallel(p_points, p_count, p_lod, r_out);
     }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod at a point of absolute height p_voxel_y, the
@@ -195,25 +182,10 @@ float cascade_skirt_depth_m(int lod) {
             }
             table += glsl_uint(float_bits(skirt_depth_table[l]));
         }
-        return code.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT))
-                .replace("SKIRT_N", itos(int64_t(skirt_depth_table.size()))).replace("SKIRT_TABLE", table);
+        return code.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT)).replace("SKIRT_N", itos(int64_t(skirt_depth_table.size()))).replace("SKIRT_TABLE", table);
     }
 
 private:
-    struct BatchJob {
-        const SDFCascade *sdf;
-        const VoxelPos *points;
-        int count;
-        int lod;
-        float *out;
-    };
-
-    static void _batch_block(void *p_job, uint32_t p_block) {
-        const BatchJob &job = *static_cast<const BatchJob *>(p_job);
-        const int begin = int(p_block) * BATCH_BLOCK;
-        job.sdf->SDFBase::evaluate_batch(job.points + begin, MIN(job.count - begin, BATCH_BLOCK), job.lod, job.out + begin);
-    }
-
     Cascade::Spec spec;
     std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
     VoxelPos datum;

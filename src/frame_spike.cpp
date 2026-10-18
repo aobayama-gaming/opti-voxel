@@ -6,6 +6,7 @@
 #include "frame_probe.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
+#include "sdf_archetype.hpp"
 #include "sdf_dummy.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -917,7 +918,13 @@ Dictionary FrameSpike::run() {
 
     // Probe sets, one shader each: the frame / noise / terrain table, then the archetype probes.
     std::vector<std::vector<Probe>> sets = { make_probes(sdf) };
-    const std::vector<Probe> arch = ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS);
+    // The archetype probes, the demo terrain's program first (SDFArchetype: its anchors are absolute, near 0).
+    SDFArchetype demo;
+    demo.configure(sdf_param, PROBE_LODS[PROBE_LOD_COUNT - 1] + 1);
+    std::vector<Probe> arch = { ArchetypeProbes::probe("demo", demo.get_program(), true) };
+    for (Probe &probe : ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS)) {
+        arch.push_back(probe);
+    }
     int64_t set_glsl = 0;
     for (const Probe &probe : arch) {
         if (sets.size() == 1 || sets.back().size() == PROBES_PER_SET || set_glsl + probe.glsl.length() > MAX_SET_GLSL) {

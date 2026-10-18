@@ -17,8 +17,8 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents`
-# its terrain_mode (the Hermite cascade test terrain, or its continents demo preset) and
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|archetypes`
+# its terrain_mode (the Hermite cascade test terrain, its continents demo preset, or the archetype IR demo) and
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
 var spawn_above_ground := false
@@ -45,6 +45,8 @@ func _enter_tree() -> void:
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
 			spawn_above_ground = true
+		if a == "--terrain=archetypes" and terrain:
+			terrain.terrain_mode = 3
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
 		if a.begins_with("--voxel=") and terrain:
