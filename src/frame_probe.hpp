@@ -23,6 +23,9 @@ struct Probe {
     // continuity lines (a wrong corner hash at a low-word carry shows up as a jump).
     double continuity_bound = -1.0;
     int continuity_word = 0;
+    // The probe is a function of the position relative to the origin: its words at the hash-random points
+    // (the same offsets from every origin) must match the first origin's.
+    bool origin_relative = false;
 };
 
 // LODs the LOD-dependent probes are evaluated at. The GLSL gets them as lod_bias + L, lod_bias a push

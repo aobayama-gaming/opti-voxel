@@ -179,7 +179,7 @@ public:
 
     Program finish(Reg p_output);
 
-private:
+    // Appends an instruction as is (operands already in this program), its flat flag recomputed.
     Reg emit(const Instr &p_instr);
 };
 

@@ -13,6 +13,7 @@
 #include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
@@ -80,6 +81,7 @@ constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
 constexpr int RANDOM_POINTS = 1024;
 constexpr int FUZZ_PROGRAMS = 200;
 constexpr size_t PROBES_PER_SET = 24;
+constexpr int64_t MAX_SET_GLSL = 300000; // bytes of probe GLSL per shader (compile time)
 // Size (voxels) of the archetype shapes probed (a copy near each origin): the grid and the random points
 // fall inside and outside them.
 constexpr float ARCH_SHAPE_SIZE = 2000.0f;
@@ -363,6 +365,8 @@ struct OriginRun {
     std::vector<Pair> pairs;
     // Absolute test points (the same for every origin): cases[absolute_begin ..].
     size_t absolute_begin = 0;
+    // The hash-random points (the same offsets from every origin): cases[random_begin, absolute_begin).
+    size_t random_begin = 0;
     // Consecutive LOD0 voxels along x: index ranges into cases.
     std::vector<std::pair<size_t, size_t>> lines;
 };
@@ -490,6 +494,7 @@ void build_cases(OriginRun &r_run, const SDFDummy &p_sdf) {
         }
     }
 
+    r_run.random_begin = r_run.cases.size();
     add_random_cases(r_run);
 
     // Absolute points, identical at every origin: the GPU results must not depend on the origin.
@@ -544,6 +549,9 @@ struct Checks {
     // Probe evaluations outside the exact domain (Probe::cpu_exact), and how many of them differ (not a failure).
     int64_t inexact_evaluations = 0;
     int64_t inexact_mismatch = 0;
+    // Probe::origin_relative: (random point, probe) pairs compared with the first origin.
+    int64_t relative_points = 0;
+    int64_t relative_mismatch = 0;
     int64_t cpu_failed = 0;
     Array examples;
 
@@ -778,10 +786,39 @@ PackedByteArray dispatch(RenderingDevice *p_rd, RID p_shader, RID p_pipeline, co
     return results;
 }
 
+// The origin-relative probes' words at the random points, against the first origin's (r_ref, filled then).
+void check_relative(const OriginRun &p_run, const std::vector<Probe> &p_probes, uint32_t p_words, const PackedByteArray &p_results,
+        std::vector<uint32_t> &r_ref, Checks &r_checks) {
+    const uint32_t *res = reinterpret_cast<const uint32_t *>(p_results.ptr());
+    const bool first = r_ref.empty();
+    size_t n = 0;
+    uint32_t w = FIXED_WORDS;
+    for (const Probe &probe : p_probes) {
+        if (probe.origin_relative) {
+            for (size_t i = p_run.random_begin; i < p_run.absolute_begin; i++) {
+                const uint32_t *g = res + i * p_words + w;
+                if (first) {
+                    r_ref.insert(r_ref.end(), g, g + probe.words);
+                } else {
+                    r_checks.relative_points++;
+                    if (std::memcmp(g, r_ref.data() + n, probe.words * sizeof(uint32_t)) != 0) {
+                        r_checks.relative_mismatch++;
+                        r_checks.example(vformat("origin %s: %s at random point %s differs from the first origin", to_string(p_run.param.origin_chunk),
+                                probe.name, case_str(p_run.cases[i])));
+                    }
+                }
+                n += probe.words;
+            }
+        }
+        w += probe.words;
+    }
+}
+
 // Runs one probe set at every origin and checks it (p_first: index of its first probe in the report).
 // False if its shader doesn't compile.
 bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Probe> &p_probes, size_t p_first, const std::vector<OriginRun> &p_runs,
         Checks &r_checks) {
+    const uint64_t t0 = Time::get_singleton()->get_ticks_msec();
     uint32_t words = 0;
     Ref<RDShaderSource> source;
     source.instantiate();
@@ -794,12 +831,16 @@ bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Pro
     }
     const RID shader = p_rd->shader_create_from_spirv(spirv);
     const RID pipeline = p_rd->compute_pipeline_create(shader);
+    const uint64_t t1 = Time::get_singleton()->get_ticks_msec();
 
-    // GPU results of the absolute points at the first origin, compared with every other origin.
+    // GPU results of the absolute points at the first origin, compared with every other origin; the same for
+    // the random points of the origin-relative probes.
     std::vector<uint32_t> absolute_ref;
+    std::vector<uint32_t> random_ref;
     for (const OriginRun &run : p_runs) {
         const PackedByteArray results = dispatch(p_rd, shader, pipeline, run, words);
         check_run(run, p_probes, p_first, words, results, r_checks);
+        check_relative(run, p_probes, words, results, random_ref, r_checks);
 
         // Everything a sample yields is a function of its absolute position (and chunk id).
         const uint32_t *res = reinterpret_cast<const uint32_t *>(results.ptr());
@@ -819,6 +860,8 @@ bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Pro
     }
     p_rd->free_rid(pipeline);
     p_rd->free_rid(shader);
+    UtilityFunctions::print(vformat("FrameSpike: %d probes from %s, %d words per sample: compile %d ms, run and check %d ms", int64_t(p_probes.size()),
+            p_probes[0].name, words, int64_t(t1 - t0), int64_t(Time::get_singleton()->get_ticks_msec() - t1)));
     return true;
 }
 
@@ -865,6 +908,7 @@ Dictionary FrameSpike::run() {
     std::vector<OriginRun> runs;
     // The archetype programs' anchors: two near each origin, so every origin's points see unsaturated inputs.
     std::vector<VoxelPos> anchors;
+    std::vector<VoxelPos> frame_anchors;
     for (const ChunkId &origin : origins) {
         OriginRun run;
         run.param.voxel_size = voxel_size;
@@ -874,14 +918,21 @@ Dictionary FrameSpike::run() {
             const uint32_t n = uint32_t(anchors.size());
             anchors.push_back(run.param.origin_voxel() + VoxelPos(random_offset(n, j, 1u, 2048), random_offset(n, j, 2u, 2048), random_offset(n, j, 3u, 2048)));
         }
+        frame_anchors.push_back(run.param.origin_voxel() + VoxelPos(-1500, 700, 2100));
         runs.push_back(run);
     }
 
     // Probe sets, one shader each: the frame / noise / terrain table, then the archetype probes.
     std::vector<std::vector<Probe>> sets = { make_probes(sdf) };
-    const std::vector<Probe> arch = ArchetypeProbes::make(anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS);
-    for (size_t i = 0; i < arch.size(); i += PROBES_PER_SET) {
-        sets.emplace_back(arch.begin() + i, arch.begin() + MIN(i + PROBES_PER_SET, arch.size()));
+    const std::vector<Probe> arch = ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS);
+    int64_t set_glsl = 0;
+    for (const Probe &probe : arch) {
+        if (sets.size() == 1 || sets.back().size() == PROBES_PER_SET || set_glsl + probe.glsl.length() > MAX_SET_GLSL) {
+            sets.emplace_back();
+            set_glsl = 0;
+        }
+        sets.back().push_back(probe);
+        set_glsl += probe.glsl.length();
     }
     std::vector<String> names;
     for (const std::vector<Probe> &set : sets) {
@@ -922,6 +973,8 @@ Dictionary FrameSpike::run() {
     report["cpu_checks_failed"] = checks.cpu_failed;
     report["inexact_evaluations"] = checks.inexact_evaluations;
     report["inexact_mismatch"] = checks.inexact_mismatch;
+    report["relative_points"] = checks.relative_points;
+    report["relative_mismatch"] = checks.relative_mismatch;
     // Per probe; the fuzzed programs summed into one entry.
     int64_t probe_total = 0;
     Dictionary probe_report;
@@ -934,6 +987,7 @@ Dictionary FrameSpike::run() {
     report["examples"] = checks.examples;
     report["ok"] = checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&
-            checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0;
+            checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0 &&
+            checks.relative_points > 0 && checks.relative_mismatch == 0;
     return report;
 }
