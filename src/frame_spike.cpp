@@ -1,7 +1,9 @@
 #include "frame_spike.hpp"
 
+#include "archetype_probes.hpp"
 #include "chunk_math.hpp"
 #include "exact_noise.hpp"
+#include "frame_probe.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "sdf_dummy.hpp"
@@ -24,20 +26,6 @@ using ExactNoise::bits_float;
 using ExactNoise::float_bits;
 
 namespace {
-
-// A value computed from a WorldPos on the CPU and on the GPU, `words` uint32 (floats as their bits),
-// compared bit for bit. A new noise adds its entries in make_probes().
-struct Probe {
-    String name;
-    int words = 1;
-    bool is_float = false;
-    String glsl; // defines "void probe_<name>(WorldPos p, uint b)", writing results[b + 0 .. words - 1]
-    std::function<void(const WorldPos &, uint32_t *)> cpu;
-    // >= 0: word `continuity_word` may change by at most this much per LOD0 voxel along the
-    // continuity lines (a wrong corner hash at a low-word carry shows up as a jump).
-    double continuity_bound = -1.0;
-    int continuity_word = 0;
-};
 
 // Plumbing check: an integer hash of every bit of the position.
 uint32_t voxel_hash_cpu(const WorldPos &p_pos) {
@@ -87,11 +75,14 @@ constexpr int I64_SHIFTS[] = { 0, 1, 5, 31, 32, 33, 47, 63 };
 constexpr int I64_SHIFT_COUNT = int(sizeof(I64_SHIFTS) / sizeof(I64_SHIFTS[0]));
 constexpr int32_t I64_ADDS[] = { 0, 1, -1, -896, 2147483647, -2147483647 - 1 };
 constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
-// LODs the terrain's fBms and terrain_sdf are probed at (4 words each). The GLSL gets them as
-// lod_bias + L, lod_bias a push constant 0: a runtime value like the meshers' chunk LOD, not a literal
-// the compiler could fold.
-constexpr int PROBE_LODS[] = { 0, 1, 5, 14, 24 };
-constexpr int PROBE_LOD_COUNT = int(sizeof(PROBE_LODS) / sizeof(PROBE_LODS[0]));
+// Hash-random points per origin, besides the fixed grid; fuzzed archetype programs and how many probes
+// share one shader (one dispatch per set and origin).
+constexpr int RANDOM_POINTS = 1024;
+constexpr int FUZZ_PROGRAMS = 200;
+constexpr size_t PROBES_PER_SET = 24;
+// Size (voxels) of the archetype shapes probed (a copy near each origin): the grid and the random points
+// fall inside and outside them.
+constexpr float ARCH_SHAPE_SIZE = 2000.0f;
 
 // A deterministic test offset for octave k, any value in [0, 2^(k+1)) (large ones exercise the carry).
 Vector3i64 test_offset(int p_k) {
@@ -108,6 +99,7 @@ double octave_step_bound(int p_k, double p_g) {
     return p_g * std::ldexp(1.0, -MIN(p_k, 24)) + std::ldexp(1.0, -20);
 }
 
+// A probe set (a new noise or SDF term adds its entries here; one table, shared by every origin).
 std::vector<Probe> make_probes(const SDFDummy &p_sdf) {
     using namespace ExactNoise;
     std::vector<Probe> probes;
@@ -393,6 +385,28 @@ Case lod0_case(const Vector3i64 &p_voxel, const Float3 &p_frac, int64_t p_half) 
     return c;
 }
 
+int64_t random_offset(uint32_t p_a, uint32_t p_b, uint32_t p_c, int64_t p_range) {
+    const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_a, p_b, p_c });
+    return int64_t(((uint64_t(h.x) << 32) | h.y) % uint64_t(2 * p_range + 1)) - p_range;
+}
+
+// RANDOM_POINTS hash-random samples around the origin: a chunk of LOD 0, 1, 4 or 8 within 16 chunks of
+// it on each axis, a vertex-grid position in [0, 32) in steps of 2^-6 (fractions of a voxel included).
+void add_random_cases(OriginRun &r_run) {
+    static const int LODS[] = { 0, 1, 4, 8 };
+    const ChunkId origin = r_run.param.origin_chunk;
+    for (uint32_t i = 0; i < uint32_t(RANDOM_POINTS); i++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0xC0FFEEu, 0x5A3Du });
+        const int64_t s = int64_t(1) << LODS[h.x & 3u];
+        Case c;
+        for (int a = 0; a < 3; a++) {
+            c.chunk[a] = origin[a] + (2 * random_offset(i, uint32_t(a), 0xD1CEu, 16) + 1) * s;
+        }
+        c.grid = Float3{ float(h.y & 2047u) * 0.015625f, float(h.z & 2047u) * 0.015625f, float((h.y >> 16) & 2047u) * 0.015625f };
+        r_run.cases.push_back(c);
+    }
+}
+
 void build_cases(OriginRun &r_run, const SDFDummy &p_sdf) {
     const ChunkParam &param = r_run.param;
     const ChunkId origin = param.origin_chunk;
@@ -476,6 +490,8 @@ void build_cases(OriginRun &r_run, const SDFDummy &p_sdf) {
         }
     }
 
+    add_random_cases(r_run);
+
     // Absolute points, identical at every origin: the GPU results must not depend on the origin.
     // Values around 0, the 2^32 low-word wrap, cell wraps of high octaves and the int64 range, with
     // fractions (exact in the vertex grid: < 2^-18 of resolution needed).
@@ -525,6 +541,9 @@ struct Checks {
     int64_t cross_origin_points = 0;
     int64_t cross_origin_mismatch = 0;
     std::vector<int64_t> probe_mismatch;
+    // Probe evaluations outside the exact domain (Probe::cpu_exact), and how many of them differ (not a failure).
+    int64_t inexact_evaluations = 0;
+    int64_t inexact_mismatch = 0;
     int64_t cpu_failed = 0;
     Array examples;
 
@@ -535,7 +554,9 @@ struct Checks {
     }
 };
 
-void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, uint32_t p_words, const PackedByteArray &p_results, Checks &r_checks) {
+// p_first: index of p_probes[0] in r_checks.probe_mismatch.
+void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_t p_first, uint32_t p_words, const PackedByteArray &p_results,
+        Checks &r_checks) {
     const ChunkParam &param = p_run.param;
     const uint32_t *res = reinterpret_cast<const uint32_t *>(p_results.ptr());
     const String origin = to_string(param.origin_chunk);
@@ -564,10 +585,21 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, uint3
         uint32_t w = FIXED_WORDS;
         for (size_t k = 0; k < p_probes.size(); k++) {
             const Probe &probe = p_probes[k];
-            p_probes[k].cpu(pos, want.data());
+            bool exact = true;
+            if (probe.cpu_exact) {
+                exact = probe.cpu_exact(pos, want.data());
+            } else {
+                probe.cpu(pos, want.data());
+            }
+            if (!exact) {
+                r_checks.inexact_evaluations++;
+                r_checks.inexact_mismatch += std::memcmp(want.data(), g + w, probe.words * sizeof(uint32_t)) != 0 ? 1 : 0;
+                w += probe.words;
+                continue;
+            }
             for (int j = 0; j < probe.words; j++) {
                 if (want[j] != g[w + j]) {
-                    r_checks.probe_mismatch[k]++;
+                    r_checks.probe_mismatch[p_first + k]++;
                     if (probe.is_float) {
                         r_checks.example(vformat("origin %s %s voxel %s: probe %s[%d] gpu %s cpu %s (bits %x / %x)", origin, case_str(c),
                                 to_string(pos.voxel), probe.name, j, bits_float(g[w + j]), bits_float(want[j]), g[w + j], want[j]));
@@ -673,6 +705,123 @@ void check_cpu(Checks &r_checks) {
     expect(WorldCoord::sat_diff(int64_t(1) << 40, 0, 1 << 24) == (1 << 24) && WorldCoord::sat_diff(-5, 7, 1 << 24) == -12, "sat_diff");
 }
 
+// The probe shader of one probe set: SHADER_TEMPLATE with the frame, the noise, the terrain and the probes.
+String probe_shader(const SDFDummy &p_sdf, const std::vector<Probe> &p_probes, uint32_t &r_words) {
+    r_words = FIXED_WORDS;
+    String probes_glsl;
+    String probe_calls;
+    for (const Probe &probe : p_probes) {
+        probes_glsl += probe.glsl;
+        probe_calls += vformat("    probe_%s(p, b + %du);\n", probe.name, (int64_t)r_words);
+        r_words += probe.words;
+    }
+    String code = String(SHADER_TEMPLATE);
+    code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
+    code = code.replace("/*TERRAIN_SDF*/", p_sdf.get_glsl_code());
+    code = code.replace("/*PROBES*/", probes_glsl);
+    return code.replace("/*PROBE_CALLS*/", probe_calls);
+}
+
+// One dispatch of a probe pipeline over an origin's cases: the results, p_words per case.
+PackedByteArray dispatch(RenderingDevice *p_rd, RID p_shader, RID p_pipeline, const OriginRun &p_run, uint32_t p_words) {
+    const uint32_t count = (uint32_t)p_run.cases.size();
+    PackedByteArray inputs;
+    inputs.resize(count * GPUFrame::CHUNK_INPUT_BYTES);
+    PackedByteArray samples;
+    samples.resize(count * SAMPLE_BYTES);
+    for (uint32_t i = 0; i < count; i++) {
+        GPUFrame::encode_chunk_input(inputs, i, p_run.cases[i].chunk, p_run.param);
+        std::memcpy(samples.ptrw() + i * SAMPLE_BYTES, inputs.ptr() + i * GPUFrame::CHUNK_INPUT_BYTES, GPUFrame::CHUNK_INPUT_BYTES);
+        samples.encode_float(i * SAMPLE_BYTES + 32, p_run.cases[i].grid.x);
+        samples.encode_float(i * SAMPLE_BYTES + 36, p_run.cases[i].grid.y);
+        samples.encode_float(i * SAMPLE_BYTES + 40, p_run.cases[i].grid.z);
+        samples.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
+    }
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_run.param);
+    const RID buffer_samples = p_rd->storage_buffer_create(samples.size(), samples);
+    const RID buffer_results = p_rd->storage_buffer_create(count * p_words * 4);
+    const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
+
+    TypedArray<RDUniform> uniforms;
+    const RID ids[3] = { buffer_samples, buffer_results, buffer_param };
+    for (int b = 0; b < 3; b++) {
+        Ref<RDUniform> u;
+        u.instantiate();
+        u->set_uniform_type(b == 2 ? RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER : RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+        u->set_binding(b);
+        u->add_id(ids[b]);
+        uniforms.push_back(u);
+    }
+    const RID uniform_set = p_rd->uniform_set_create(uniforms, p_shader, 0);
+
+    PackedByteArray push;
+    push.resize(16);
+    push.fill(0);
+    push.encode_u32(0, count);
+    push.encode_u32(4, p_words);
+    push.encode_u32(8, 0); // lod_bias, see PROBE_LODS
+    const int64_t list = p_rd->compute_list_begin();
+    p_rd->compute_list_bind_compute_pipeline(list, p_pipeline);
+    p_rd->compute_list_bind_uniform_set(list, uniform_set, 0);
+    p_rd->compute_list_set_push_constant(list, push, push.size());
+    p_rd->compute_list_dispatch(list, (count + 63) / 64, 1, 1);
+    p_rd->compute_list_end();
+    p_rd->submit();
+    p_rd->sync();
+
+    const PackedByteArray results = p_rd->buffer_get_data(buffer_results);
+    p_rd->free_rid(uniform_set);
+    p_rd->free_rid(buffer_samples);
+    p_rd->free_rid(buffer_results);
+    p_rd->free_rid(buffer_param);
+    return results;
+}
+
+// Runs one probe set at every origin and checks it (p_first: index of its first probe in the report).
+// False if its shader doesn't compile.
+bool run_set(RenderingDevice *p_rd, const SDFDummy &p_sdf, const std::vector<Probe> &p_probes, size_t p_first, const std::vector<OriginRun> &p_runs,
+        Checks &r_checks) {
+    uint32_t words = 0;
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, probe_shader(p_sdf, p_probes, words));
+    Ref<RDShaderSPIRV> spirv = p_rd->shader_compile_spirv_from_source(source);
+    const String err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+    if (!err.is_empty()) {
+        UtilityFunctions::printerr("FrameSpike: SHADER COMPILATION FAILED: " + err);
+        return false;
+    }
+    const RID shader = p_rd->shader_create_from_spirv(spirv);
+    const RID pipeline = p_rd->compute_pipeline_create(shader);
+
+    // GPU results of the absolute points at the first origin, compared with every other origin.
+    std::vector<uint32_t> absolute_ref;
+    for (const OriginRun &run : p_runs) {
+        const PackedByteArray results = dispatch(p_rd, shader, pipeline, run, words);
+        check_run(run, p_probes, p_first, words, results, r_checks);
+
+        // Everything a sample yields is a function of its absolute position (and chunk id).
+        const uint32_t *res = reinterpret_cast<const uint32_t *>(results.ptr());
+        const std::vector<uint32_t> absolute(res + run.absolute_begin * words, res + run.cases.size() * words);
+        if (absolute_ref.empty()) {
+            absolute_ref = absolute;
+            continue;
+        }
+        for (size_t i = 0; i < absolute.size() / words; i++) {
+            r_checks.cross_origin_points++;
+            if (std::memcmp(absolute.data() + i * words, absolute_ref.data() + i * words, words * sizeof(uint32_t)) != 0) {
+                r_checks.cross_origin_mismatch++;
+                r_checks.example(vformat("origin %s: absolute point %s differs from origin 0", WorldCoord::to_string(run.param.origin_chunk),
+                        case_str(run.cases[run.absolute_begin + i])));
+            }
+        }
+    }
+    p_rd->free_rid(pipeline);
+    p_rd->free_rid(shader);
+    return true;
+}
+
 } // namespace
 
 void FrameSpike::_bind_methods() {
@@ -708,124 +857,58 @@ Dictionary FrameSpike::run() {
         ChunkId(far60, -far60, far60),
     };
 
-    // One shader for all origins: the terrain (debug shapes off) does not depend on the origin.
+    // One terrain for all origins: it (debug shapes off) does not depend on the origin.
     ChunkParam sdf_param;
     sdf_param.voxel_size = voxel_size;
     SDFDummy sdf;
     sdf.configure(sdf_param, PROBE_LODS[PROBE_LOD_COUNT - 1] + 1);
-    const std::vector<Probe> probes = make_probes(sdf);
-    checks.probe_mismatch.assign(probes.size(), 0);
-    uint32_t words = FIXED_WORDS;
-    String probes_glsl;
-    String probe_calls;
-    for (const Probe &probe : probes) {
-        probes_glsl += probe.glsl;
-        probe_calls += vformat("    probe_%s(p, b + %du);\n", probe.name, (int64_t)words);
-        words += probe.words;
-    }
-    String code = String(SHADER_TEMPLATE);
-    code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
-    code = code.replace("/*TERRAIN_SDF*/", sdf.get_glsl_code());
-    code = code.replace("/*PROBES*/", probes_glsl);
-    code = code.replace("/*PROBE_CALLS*/", probe_calls);
-
-    Ref<RDShaderSource> source;
-    source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
-    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-    const String err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-    if (!err.is_empty()) {
-        UtilityFunctions::printerr("FrameSpike: SHADER COMPILATION FAILED: " + err);
-        report["error"] = "shader compilation failed";
-        memdelete(rd);
-        return report;
-    }
-    const RID shader = rd->shader_create_from_spirv(spirv);
-    const RID pipeline = rd->compute_pipeline_create(shader);
-
-    // GPU results of the absolute points at the first origin, compared with every other origin.
-    std::vector<uint32_t> absolute_ref;
+    std::vector<OriginRun> runs;
+    // The archetype programs' anchors: two near each origin, so every origin's points see unsaturated inputs.
+    std::vector<VoxelPos> anchors;
     for (const ChunkId &origin : origins) {
         OriginRun run;
         run.param.voxel_size = voxel_size;
         run.param.origin_chunk = origin;
         build_cases(run, sdf);
-        const uint32_t count = (uint32_t)run.cases.size();
-
-        PackedByteArray inputs;
-        inputs.resize(count * GPUFrame::CHUNK_INPUT_BYTES);
-        PackedByteArray samples;
-        samples.resize(count * SAMPLE_BYTES);
-        for (uint32_t i = 0; i < count; i++) {
-            GPUFrame::encode_chunk_input(inputs, i, run.cases[i].chunk, run.param);
-            std::memcpy(samples.ptrw() + i * SAMPLE_BYTES, inputs.ptr() + i * GPUFrame::CHUNK_INPUT_BYTES, GPUFrame::CHUNK_INPUT_BYTES);
-            samples.encode_float(i * SAMPLE_BYTES + 32, run.cases[i].grid.x);
-            samples.encode_float(i * SAMPLE_BYTES + 36, run.cases[i].grid.y);
-            samples.encode_float(i * SAMPLE_BYTES + 40, run.cases[i].grid.z);
-            samples.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
+        for (uint32_t j = 0; j < 2; j++) {
+            const uint32_t n = uint32_t(anchors.size());
+            anchors.push_back(run.param.origin_voxel() + VoxelPos(random_offset(n, j, 1u, 2048), random_offset(n, j, 2u, 2048), random_offset(n, j, 3u, 2048)));
         }
-        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(run.param);
-        const RID buffer_samples = rd->storage_buffer_create(samples.size(), samples);
-        const RID buffer_results = rd->storage_buffer_create(count * words * 4);
-        const RID buffer_param = rd->uniform_buffer_create(param_bytes.size(), param_bytes);
-
-        TypedArray<RDUniform> uniforms;
-        const RID ids[3] = { buffer_samples, buffer_results, buffer_param };
-        for (int b = 0; b < 3; b++) {
-            Ref<RDUniform> u;
-            u.instantiate();
-            u->set_uniform_type(b == 2 ? RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER : RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-            u->set_binding(b);
-            u->add_id(ids[b]);
-            uniforms.push_back(u);
-        }
-        const RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
-
-        PackedByteArray push;
-        push.resize(16);
-        push.fill(0);
-        push.encode_u32(0, count);
-        push.encode_u32(4, words);
-        push.encode_u32(8, 0); // lod_bias, see PROBE_LODS
-        const int64_t list = rd->compute_list_begin();
-        rd->compute_list_bind_compute_pipeline(list, pipeline);
-        rd->compute_list_bind_uniform_set(list, uniform_set, 0);
-        rd->compute_list_set_push_constant(list, push, push.size());
-        rd->compute_list_dispatch(list, (count + 63) / 64, 1, 1);
-        rd->compute_list_end();
-        rd->submit();
-        rd->sync();
-
-        const PackedByteArray results = rd->buffer_get_data(buffer_results);
-        check_run(run, probes, words, results, checks);
-
-        // Everything a sample yields is a function of its absolute position (and chunk id).
-        const uint32_t *res = reinterpret_cast<const uint32_t *>(results.ptr());
-        const std::vector<uint32_t> absolute(res + run.absolute_begin * words, res + size_t(count) * words);
-        if (absolute_ref.empty()) {
-            absolute_ref = absolute;
-        } else {
-            for (size_t i = 0; i < absolute.size() / words; i++) {
-                checks.cross_origin_points++;
-                if (std::memcmp(absolute.data() + i * words, absolute_ref.data() + i * words, words * sizeof(uint32_t)) != 0) {
-                    checks.cross_origin_mismatch++;
-                    checks.example(vformat("origin %s: absolute point %s differs from origin 0", WorldCoord::to_string(origin),
-                            case_str(run.cases[run.absolute_begin + i])));
-                }
-            }
-        }
-
-        rd->free_rid(uniform_set);
-        rd->free_rid(buffer_samples);
-        rd->free_rid(buffer_results);
-        rd->free_rid(buffer_param);
+        runs.push_back(run);
     }
-    rd->free_rid(pipeline);
-    rd->free_rid(shader);
+
+    // Probe sets, one shader each: the frame / noise / terrain table, then the archetype probes.
+    std::vector<std::vector<Probe>> sets = { make_probes(sdf) };
+    const std::vector<Probe> arch = ArchetypeProbes::make(anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS);
+    for (size_t i = 0; i < arch.size(); i += PROBES_PER_SET) {
+        sets.emplace_back(arch.begin() + i, arch.begin() + MIN(i + PROBES_PER_SET, arch.size()));
+    }
+    std::vector<String> names;
+    for (const std::vector<Probe> &set : sets) {
+        for (const Probe &probe : set) {
+            names.push_back(probe.name);
+        }
+    }
+    checks.probe_mismatch.assign(names.size(), 0);
+    size_t first = 0;
+    for (const std::vector<Probe> &set : sets) {
+        if (!run_set(rd, sdf, set, first, runs, checks)) {
+            report["error"] = "shader compilation failed";
+            memdelete(rd);
+            return report;
+        }
+        first += set.size();
+    }
     memdelete(rd);
 
     report["origins"] = (int64_t)(sizeof(origins) / sizeof(origins[0]));
+    int64_t cases = 0;
+    for (const OriginRun &run : runs) {
+        cases += int64_t(run.cases.size());
+    }
+    report["cases"] = cases; // over every origin; "samples" counts them once per probe set
+    report["probe_sets"] = (int64_t)sets.size();
+    report["arch_programs"] = (int64_t)arch.size();
     report["samples"] = checks.samples;
     report["worldpos_mismatch"] = checks.worldpos_mismatch;
     report["anchor_mismatch"] = checks.anchor_mismatch;
@@ -837,10 +920,14 @@ Dictionary FrameSpike::run() {
     report["cross_origin_points"] = checks.cross_origin_points;
     report["cross_origin_mismatch"] = checks.cross_origin_mismatch;
     report["cpu_checks_failed"] = checks.cpu_failed;
+    report["inexact_evaluations"] = checks.inexact_evaluations;
+    report["inexact_mismatch"] = checks.inexact_mismatch;
+    // Per probe; the fuzzed programs summed into one entry.
     int64_t probe_total = 0;
     Dictionary probe_report;
-    for (size_t k = 0; k < probes.size(); k++) {
-        probe_report[probes[k].name] = checks.probe_mismatch[k];
+    for (size_t k = 0; k < names.size(); k++) {
+        const String key = names[k].begins_with("arch_fuzz_") ? String("arch_fuzz") : names[k];
+        probe_report[key] = int64_t(probe_report.get(key, 0)) + checks.probe_mismatch[k];
         probe_total += checks.probe_mismatch[k];
     }
     report["probe_mismatch"] = probe_report;
