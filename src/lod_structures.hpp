@@ -50,6 +50,9 @@ struct ScanDelta {
     static void between(const LODHashSet &p_from, const LODHashSet &p_to, ScanDelta &r_delta) {
         r_delta.entered.clear();
         r_delta.left.clear();
+        if (p_from.is_empty()) {
+            r_delta.entered.reserve(p_to.size()); // the first scan enters whole
+        }
         for (const ChunkId &id : p_to) {
             if (!p_from.has(id)) {
                 r_delta.entered.insert(id);
@@ -79,6 +82,7 @@ struct ScanDelta {
 
     // a -> b applied to r_scan = a makes it b.
     void apply(LODHashSet &r_scan) const {
+        r_scan.reserve(r_scan.size() + entered.size());
         for (const ChunkId &id : left) {
             r_scan.erase(id);
         }

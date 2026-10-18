@@ -9,7 +9,10 @@ void VoxelState::add_scan_chunk(std::unique_ptr<LODHashSet> p_scanned_chunk, con
     }
     scanned_chunk = std::move(p_scanned_chunk);
 
-    // The loaded set doesn't change here, so the other dirty chunks keep their anchors.
+    // The loaded set doesn't change here, so the other dirty chunks keep their anchors. With nothing loaded
+    // (the first scan: the whole scan enters) there is no anchor to look for.
+    const bool any_loaded = !loaded_chunk.is_empty();
+    dirty_chunk.reserve(dirty_chunk.size() + p_delta.entered.size());
     for (const ChunkId &id : p_delta.left) {
         if (dirty_chunk.erase(id)) {
             _unanchor(id);
@@ -23,7 +26,9 @@ void VoxelState::add_scan_chunk(std::unique_ptr<LODHashSet> p_scanned_chunk, con
         } else {
             // Must be generated.
             dirty_chunk.insert(id);
-            _anchor(id);
+            if (any_loaded) {
+                _anchor(id);
+            }
         }
     }
 }
