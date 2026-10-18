@@ -147,7 +147,7 @@ to every change, and a reviewer may reject a PR on any of them.
   position only), 2 = its continents preset, 3 = `SDFArchetype` (the archetype IR's demo, below), 4 = its shapes
   gallery (`SDFArchetype::shapes`, `--terrain=shapes`, `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG
   cubes with sphere holes, each twice the size and distance of the last, i.e. one per LOD, plus a die, stairs and a
-  tunnelled cube on a flat ground, for dual contouring's creases). 0 was
+  tunnelled cube on a flat ground at 250 m, off the page shader's 100 m contours, for dual contouring's creases). 0 was
   `SDFDummy`, removed: it evaluated every octave at every LOD (detail finer than the cell, aliased far
   away), the cascade never inserts a band finer than 8 cells of the chunk's LOD. `--terrain=cascade|continents|archetypes|shapes`
   in `bench.gd` and the main scene (`godot --path project -- --lods=25`). On the cascade terrains the

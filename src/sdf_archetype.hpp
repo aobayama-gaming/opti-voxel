@@ -107,7 +107,7 @@ public:
     }
 
     // The shapes gallery at voxel size p_voxel (metres): hard unions, subtractions and intersections (sharp
-    // creases, no smoothing) on a flat ground at the datum, around the main_scene spawn (SPAWN_X, SPAWN_Z).
+    // creases, no smoothing) on a flat ground at GROUND_M, around the main_scene spawn (SPAWN_X, SPAWN_Z).
     // In front (-z): a ladder of eight cubes with a sphere hole through every face, each twice the size and
     // twice the distance of the previous one, so the same size on screen about one LOD coarser each (LOD 0
     // to ~7 at lod_pixel_error 4), turned to show the camera the same two faces. Behind (+z): a die (a cube
@@ -115,12 +115,15 @@ public:
     // three axes, turned off the voxel axes.
     static constexpr double SPAWN_X = -52.0;
     static constexpr double SPAWN_Z = -95.0;
+    static constexpr double GROUND_M = DATUM_M - 50.0;
     static Archetype::Instance shapes(double p_voxel) {
         using namespace Archetype;
         const Metres m{ p_voxel };
         Instance root;
         root.def = ground_def(ExactNoise::OctaveSet()); // no octave: y = 0
-        root.anchor = VoxelPos(0, m.at(DATUM_M), 0);
+        // 50 m below the datum: halfway between the page shader's 100 m contour lines. On one (300 m), a flat
+        // ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
+        root.anchor = VoxelPos(0, m.at(GROUND_M), 0);
         // Centres at 0.9 of the half size: a little sunk, so the voxel rounding never lifts one off the ground.
         for (int i = 0; i < 8; i++) {
             const double d = 80.0 * double(1 << i);

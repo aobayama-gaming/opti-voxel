@@ -30,7 +30,7 @@ directional_shadow_mode = 0
 directional_shadow_max_distance = 2000.0
 
 [node name="Player" parent="." instance=ExtResource("1_player")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -52, 308, -95)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -52, 258, -95)
 
 [node name="Camera3D" parent="Player" index="0"]
 far = 60000.0
