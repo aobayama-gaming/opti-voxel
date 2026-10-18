@@ -142,8 +142,8 @@ public:
     int get_pipeline_mode() const;
 
     // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 3 the archetype
-    // IR's demo scene (SDFArchetype, --terrain=archetypes). 0 was SDFDummy (removed): saved scenes keep
-    // their numbers.
+    // IR's demo scene (SDFArchetype, --terrain=archetypes), 4 its shapes gallery (SDFArchetype::shapes,
+    // --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy (removed): saved scenes keep their numbers.
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 

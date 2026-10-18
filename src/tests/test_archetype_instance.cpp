@@ -100,6 +100,7 @@ TEST_CASE("Archetype: node bounds hold on 100,000 random points per scene") {
         scenes.push_back({ "operator " + std::to_string(op), ArchetypeProbes::operator_scene(Combine(op), VoxelPos(-(int64_t(1) << 40), 9, 0), 48.0f) });
     }
     scenes.push_back({ "demo terrain", SDFArchetype::scene(0.5) });
+    scenes.push_back({ "shapes gallery", SDFArchetype::shapes(0.5) });
     for (const Scene &scene : scenes) {
         Compiled c = compile(scene.root);
         CHECK(c.error.is_empty());
@@ -280,4 +281,63 @@ TEST_CASE("SDFArchetype: the demo terrain is valid at 0.5 m and 5 cm voxels, eva
             }
         }
     }
+}
+
+TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes holed through, its die pipped") {
+    ChunkParam param;
+    const double vs = param.voxel_size;
+    SDFArchetype sdf(SDFArchetype::Scene::SHAPES);
+    sdf.configure(param, 25);
+    CHECK(sdf.get_program().validate(25).is_empty());
+    const Instance scene = SDFArchetype::shapes(vs);
+    CHECK(compile(scene).error.is_empty());
+    // The SDF (metres) at p_anchor + (p_x, p_y, p_z) metres.
+    auto sdf_at = [&](const VoxelPos &p_anchor, double p_x, double p_y, double p_z) {
+        const double d[3] = { p_x / vs, p_y / vs, p_z / vs };
+        WorldPos p;
+        float *frac[3] = { &p.frac.x, &p.frac.y, &p.frac.z };
+        for (int a = 0; a < 3; a++) {
+            p.voxel[a] = p_anchor[a] + int64_t(std::floor(d[a]));
+            *frac[a] = float(d[a] - std::floor(d[a]));
+        }
+        return sdf.evaluate(p, 0);
+    };
+    // Far from the shapes: 10 m above the flat ground.
+    CHECK(std::abs(sdf_at(scene.anchor, 5000.0, 10.0, 5000.0) - 10.0f) < 1e-3f);
+    // Probes on vertical lines and rings around them: the yaw of an instance doesn't move them.
+    auto ring = [&](const VoxelPos &p_centre, double p_radius, double p_y) {
+        float worst = -INFINITY;
+        for (int a = 0; a < 16; a++) {
+            const double phi = a * Math_PI / 8.0;
+            worst = MAX(worst, sdf_at(p_centre, p_radius * std::cos(phi), p_y, p_radius * std::sin(phi)));
+        }
+        return worst;
+    };
+    // The ladder: air at the centre and up through the top face, solid in the wall around the top hole.
+    for (int i = 0; i < 8; i++) {
+        CAPTURE(i);
+        const VoxelPos c = scene.anchor + scene.children[i].instance.anchor;
+        const double h = 8.0 * double(1 << i);
+        CHECK(sdf_at(c, 0.0, 0.0, 0.0) > 0.0f);
+        CHECK(sdf_at(c, 0.0, 0.95 * h, 0.0) > 0.0f);
+        CHECK(ring(c, 0.88 * h, 0.92 * h) < 0.0f);
+    }
+    // The die (half size 6 m): solid, but the top's one pip.
+    const VoxelPos die = scene.anchor + scene.children[8].instance.anchor;
+    CHECK(sdf_at(die, 0.0, 0.0, 0.0) < 0.0f);
+    CHECK(sdf_at(die, 0.0, 4.0, 0.0) < 0.0f);
+    CHECK(sdf_at(die, 0.0, 5.5, 0.0) > 0.0f);
+    // The staircase: step k's top at k + 1 m.
+    const Instance &stairs = scene.children[9].instance;
+    for (int k = 0; k < 8; k++) {
+        CAPTURE(k);
+        const VoxelPos c = scene.anchor + stairs.anchor + (k == 0 ? VoxelPos() : stairs.children[k - 1].instance.anchor);
+        CHECK(sdf_at(c, 0.0, k + 0.5, 0.0) < 0.0f);
+        CHECK(sdf_at(c, 0.0, k + 1.5, 0.0) > 0.0f);
+    }
+    // The tunnelled cube (half size 6 m, tunnels 2.5 m): air down the vertical tunnel, solid around it.
+    const VoxelPos tunnels = scene.anchor + scene.children[10].instance.anchor;
+    CHECK(sdf_at(tunnels, 0.0, 0.0, 0.0) > 0.0f);
+    CHECK(sdf_at(tunnels, 0.0, 5.0, 0.0) > 0.0f);
+    CHECK(ring(tunnels, 4.5, 5.0) < 0.0f);
 }

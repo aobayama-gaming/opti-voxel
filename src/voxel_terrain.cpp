@@ -78,7 +78,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discovery_compare"), &VoxelTerrain::get_discovery_compare);
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Archetypes:3,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
@@ -127,7 +127,7 @@ int VoxelTerrain::get_pipeline_mode() const {
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
     ERR_FAIL_COND_MSG(started, "terrain_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode < 1 || p_mode > 3, "terrain_mode must be 1 (cascade), 2 (cascade, continents preset) or 3 (archetypes).");
+    ERR_FAIL_COND_MSG(p_mode < 1 || p_mode > 4, "terrain_mode must be 1 (cascade), 2 (cascade, continents preset), 3 (archetypes) or 4 (shapes).");
     terrain_mode = p_mode;
 }
 
@@ -463,6 +463,10 @@ void VoxelTerrain::_ready() {
         case 3:
             memdelete(sdf);
             sdf = memnew(SDFArchetype);
+            break;
+        case 4:
+            memdelete(sdf);
+            sdf = memnew(SDFArchetype(SDFArchetype::Scene::SHAPES));
             break;
     }
     sdf->configure(chunk_param, lod_numbers);
