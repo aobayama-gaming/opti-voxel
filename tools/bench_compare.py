@@ -52,9 +52,17 @@ METRICS = [
     ("Mesher pacing", "  direct: dispatch CPU per batch, avg", lambda d: get(d, "final_terrain.mesher.dispatch_cpu.avg_ms"), "ms", True),
     ("Mesher pacing", "  direct: collect CPU per batch, avg", lambda d: get(d, "final_terrain.mesher.collect_cpu.avg_ms"), "ms", True),
 
-    ("Other CPU", "update_destroy_from_scan, avg", lambda d: get(d, "final_terrain.process.destroy_from_scan.avg_ms"), "ms", True),
-    ("Other CPU", "update_destroy_from_scan, total", lambda d: get(d, "final_terrain.process.destroy_from_scan.total_ms"), "ms", True),
+    ("Other CPU", "destroy check, avg", lambda d: get(d, "final_terrain.process.destroy_from_scan.avg_ms"), "ms", True),
+    ("Other CPU", "destroy check, max", lambda d: get(d, "final_terrain.process.destroy_from_scan.max_ms"), "ms", True),
+    ("Other CPU", "destroy check, total", lambda d: get(d, "final_terrain.process.destroy_from_scan.total_ms"), "ms", True),
+    ("Other CPU", "scan ingest (main thread), avg", lambda d: get(d, "final_terrain.process.scan_ingest.avg_ms"), "ms", True),
+    ("Other CPU", "scan ingest (main thread), max", lambda d: get(d, "final_terrain.process.scan_ingest.max_ms"), "ms", True),
     ("Other CPU", "scan ingest (main thread), total", lambda d: get(d, "final_terrain.process.scan_ingest.total_ms"), "ms", True),
+    ("Other CPU", "  scan delta applied (add_scan_chunk), avg", lambda d: get(d, "final_terrain.process.scan_apply.avg_ms"), "ms", True),
+    ("Other CPU", "  scan delta applied (add_scan_chunk), max", lambda d: get(d, "final_terrain.process.scan_apply.max_ms"), "ms", True),
+    ("Other CPU", "destroy rescans (stale result above dirty chunks)", lambda d: get(d, "final_terrain.destroy.rescans"), "", None),
+    ("Other CPU", "  rescans, total", lambda d: get(d, "final_terrain.destroy.rescan_ms_total"), "ms", True),
+    ("Other CPU", "leaving chunks (loaded, not scanned), max", lambda d: get(d, "final_terrain.destroy.leaving_max"), "", None),
 
     ("Discoverer (worker thread)", "scans", lambda d: get(d, "final_terrain.discoverer.scan.count"), "", None),
     ("Discoverer (worker thread)", "scan, avg", lambda d: get(d, "final_terrain.discoverer.scan.avg_ms"), "ms", True),
@@ -62,6 +70,8 @@ METRICS = [
     ("Discoverer (worker thread)", "  cull share of scan time",
      lambda d: get(d, "final_terrain.discoverer.cull.total_ms", 0) / max(get(d, "final_terrain.discoverer.scan.total_ms", 1), 1e-9) * 100
      if get(d, "final_terrain.discoverer.cull.total_ms") is not None else None, "%", True),
+    ("Discoverer (worker thread)", "scan delta (diff with the previous scan), avg", lambda d: get(d, "final_terrain.discoverer.delta.avg_ms"), "ms", True),
+    ("Discoverer (worker thread)", "deltas merged (scans the main thread skipped)", lambda d: get(d, "final_terrain.discoverer.deltas_merged"), "", None),
     ("Discoverer (worker thread)", "camera move to published scan, max", lambda d: get(d, "final_terrain.discoverer.latency.max_ms"), "ms", True),
     ("Discoverer (worker thread)", "scans skipped (same camera chunk)", lambda d: get(d, "final_terrain.discoverer.scans_skipped_same_chunk"), "", None),
     ("Discoverer (worker thread)", "nodes visited, total", lambda d: get(d, "final_terrain.discoverer.nodes_visited_total"), "", None),

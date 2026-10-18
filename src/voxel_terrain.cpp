@@ -6,21 +6,6 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-void VoxelTerrain::_destroy_chunk() {
-    for (ChunkHashMap::Iterator it = visual_mesh_data.to_destroy_chunk.begin();
-            it != visual_mesh_data.to_destroy_chunk.end();) {
-        const ChunkId chunk_pos = it->key;
-        ChunkOutput output = it->value;
-
-        output.free();
-
-        visual_mesh_data.loaded_chunk.erase(chunk_pos);
-        visual_mesh_data.to_destroy_chunk.erase(chunk_pos);
-
-        it = visual_mesh_data.to_destroy_chunk.begin();
-    }
-}
-
 void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_pipeline_mode", "mode"), &VoxelTerrain::set_pipeline_mode);
     ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
@@ -85,6 +70,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discovery_cull_mode"), &VoxelTerrain::get_discovery_cull_mode);
     ClassDB::bind_method(D_METHOD("set_discovery_cache", "enable"), &VoxelTerrain::set_discovery_cache);
     ClassDB::bind_method(D_METHOD("get_discovery_cache"), &VoxelTerrain::get_discovery_cache);
+    ClassDB::bind_method(D_METHOD("set_destroy_verify", "enable"), &VoxelTerrain::set_destroy_verify);
+    ClassDB::bind_method(D_METHOD("get_destroy_verify"), &VoxelTerrain::get_destroy_verify);
     ClassDB::bind_method(D_METHOD("set_discovery_verify", "enable"), &VoxelTerrain::set_discovery_verify);
     ClassDB::bind_method(D_METHOD("get_discovery_verify"), &VoxelTerrain::get_discovery_verify);
     ClassDB::bind_method(D_METHOD("set_discoverer_mode", "mode"), &VoxelTerrain::set_discoverer_mode);
@@ -123,6 +110,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_zero_pillar", PROPERTY_HINT_ENUM, "Off,Exact top,Top +1 cm"), "set_debug_zero_pillar", "get_debug_zero_pillar");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "destroy_verify"), "set_destroy_verify", "get_destroy_verify");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_compare"), "set_discovery_compare", "get_discovery_compare");
 
     BIND_ENUM_CONSTANT(PIPELINE_GPU_LEGACY);
@@ -195,6 +183,15 @@ void VoxelTerrain::set_discovery_verify(bool p_enable) {
 
 bool VoxelTerrain::get_discovery_verify() const {
     return discovery_verify;
+}
+
+void VoxelTerrain::set_destroy_verify(bool p_enable) {
+    ERR_FAIL_COND_MSG(started, "destroy_verify must be set before the terrain enters the tree.");
+    destroy_verify = p_enable;
+}
+
+bool VoxelTerrain::get_destroy_verify() const {
+    return destroy_verify;
 }
 
 void VoxelTerrain::set_discoverer_mode(int p_mode) {
@@ -482,6 +479,7 @@ void VoxelTerrain::_ready() {
     sdf->configure(chunk_param, lod_numbers);
 
     visual_mesh_data.set_max_lod(lod_numbers);
+    visual_mesh_data.verify = destroy_verify;
 
     if (Engine::get_singleton()->is_editor_hint()) {
         camera = EditorInterface::get_singleton()->get_editor_viewport_3d()->get_camera_3d();
@@ -568,14 +566,17 @@ void VoxelTerrain::_process(double) {
 
     uint64_t t0 = now_usec();
     std::unique_ptr<LODHashSet> new_scanned_chunk;
+    std::unique_ptr<ScanDelta> scan_delta;
 
-    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_camera_chunk);
+    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_camera_chunk);
 
     if (dirty_scan) {
         scan_received = true;
         destroy_dirty = true;
 
-        visual_mesh_data.add_scan_chunk(std::move(new_scanned_chunk));
+        const uint64_t t_apply = now_usec();
+        visual_mesh_data.add_scan_chunk(std::move(new_scanned_chunk), *scan_delta);
+        process_stats.scan_apply.add(now_usec() - t_apply);
         if (direct_mesher) {
             direct_mesher->send_chunk(visual_mesh_data.dirty_chunk);
         } else {
@@ -588,8 +589,17 @@ void VoxelTerrain::_process(double) {
     if (destroy_dirty) {
         destroy_dirty = false;
         t0 = now_usec();
-        visual_mesh_data.update_destroy_from_scan();
+        visual_mesh_data.update_destroy();
         process_stats.destroy_from_scan.add(now_usec() - t0);
+        if (destroy_verify) {
+            t0 = now_usec();
+            const int64_t mismatches = visual_mesh_data.verify_against_full();
+            process_stats.destroy_verify.add(now_usec() - t0);
+            if (mismatches > 0) {
+                ERR_PRINT(String("VoxelTerrain: incremental destroy check differs from the full recompute: ") + String::num_int64(mismatches) +
+                        " differences (frame " + String::num_int64(exec_time) + ").");
+            }
+        }
     }
 
     t0 = now_usec();
@@ -606,7 +616,7 @@ void VoxelTerrain::_process(double) {
     process_stats.mesher_collect.add(now_usec() - t0);
 
     t0 = now_usec();
-    _destroy_chunk();
+    visual_mesh_data.destroy_marked();
     process_stats.destroy_chunks.add(now_usec() - t0);
 
     // After destruction (to_destroy_chunk holds copies of the outputs it moves), and never while the
@@ -903,12 +913,29 @@ Dictionary VoxelTerrain::get_debug_stats() {
     Dictionary process;
     process["total"] = process_stats.process_total.to_dict();
     process["scan_ingest"] = process_stats.scan_ingest.to_dict();
+    process["scan_apply"] = process_stats.scan_apply.to_dict();
     process["destroy_from_scan"] = process_stats.destroy_from_scan.to_dict();
+    process["destroy_verify"] = process_stats.destroy_verify.to_dict();
     process["mesher_dispatch"] = process_stats.mesher_dispatch.to_dict();
     process["mesher_collect"] = process_stats.mesher_collect.to_dict();
     process["destroy_chunks"] = process_stats.destroy_chunks.to_dict();
     process["compact"] = process_stats.compact.to_dict();
     d["process"] = process;
+
+    const VoxelState::Stats &vs = visual_mesh_data.stats;
+    Dictionary destroy;
+    destroy["leaving"] = (int64_t)visual_mesh_data.leaving.size();
+    destroy["leaving_max"] = vs.leaving_max;
+    destroy["stalled"] = (int64_t)visual_mesh_data.stall_count.size();
+    destroy["rescans"] = vs.rescans;
+    destroy["rescan_reanchored"] = vs.rescan_reanchored;
+    destroy["rescan_ms_total"] = vs.rescan_usec / 1000.0;
+    destroy["verify"] = destroy_verify;
+    destroy["verify_checks"] = vs.verify_checks;
+    destroy["verify_mismatches"] = vs.verify_mismatches;
+    destroy["delta_mismatches"] = vs.delta_mismatches;
+    destroy["octree_violations"] = vs.octree_violations;
+    d["destroy"] = destroy;
 
     if (gpu_profiler) {
         d["gpu_breakdown"] = gpu_profiler->get_breakdown();
@@ -963,8 +990,7 @@ void VoxelTerrain::_teardown() {
 
     VLOG(1, "VoxelTerrain: teardown, chunk instances created=", DebugLog::chunk_rids_created.load(),
             " freed=", DebugLog::chunk_rids_freed.load());
-    visual_mesh_data.to_destroy_chunk.clear();
-    visual_mesh_data.dirty_chunk.clear();
+    visual_mesh_data.clear();
 }
 
 void VoxelTerrain::_exit_tree() {
