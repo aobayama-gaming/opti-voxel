@@ -290,9 +290,14 @@ Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod) {
     return finish(p_program, regs[p_program.output], p_lod);
 }
 
-bool exact_domain(const std::vector<Float4> &p_regs) {
+bool exact_domain(const Program &p_program, const std::vector<Float4> &p_regs) {
     const float lo = exact_pow2(-60);
     const float hi = exact_pow2(60);
+    for (const Instr &in : p_program.code) {
+        if (in.op == Op::RSQRT && !(p_regs[in.a].w > 0.0f)) {
+            return false;
+        }
+    }
     for (const Float4 &r : p_regs) {
         for (const float f : { r.x, r.y, r.z, r.w }) {
             const float m = std::fabs(f);
@@ -308,7 +313,7 @@ uint32_t trace_hash(const std::vector<Float4> &p_regs) {
     uint32_t h = 0x811C9DC5u;
     for (const Float4 &r : p_regs) {
         for (const float f : { r.x, r.y, r.z, r.w }) {
-            h = (h ^ float_bits(f)) * 0x01000193u;
+            h = (h ^ zero_canonical(float_bits(f))) * 0x01000193u;
         }
     }
     return h;

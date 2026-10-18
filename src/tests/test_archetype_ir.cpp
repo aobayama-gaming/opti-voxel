@@ -1,9 +1,11 @@
 #include "test_common.hpp"
 
+#include "archetype_glsl.hpp"
 #include "archetype_ir.hpp"
 
 #include <cmath>
 #include <functional>
+#include <string>
 
 using namespace Archetype;
 using ExactNoise::exact_pow2;
@@ -260,10 +262,10 @@ TEST_CASE("Archetype: values are the same bits at every LOD, gradients scale by 
             points++;
             run_registers(prog, p, 0, r0);
             const Float4 n0 = finish(prog, r0[prog.output], 0);
-            bool ok = exact_domain(r0);
+            bool ok = exact_domain(prog, r0);
             for (const int lod : { 1, 5, 14, 24 }) {
                 run_registers(prog, p, lod, rl);
-                ok = ok && exact_domain(rl);
+                ok = ok && exact_domain(prog, rl);
                 if (!ok) {
                     break;
                 }
@@ -345,4 +347,49 @@ TEST_CASE("Archetype: fuzzed programs are valid and use every op") {
         CAPTURE(op);
         CHECK((op == int(Op::PARAM) || seen[op] > 0));
     }
+}
+
+// The generated GLSL is proven against the interpreter by FrameSpike (the arch_* probes): a change of its
+// text needs a tools/frame_test.sh run, then a new pin. FNV-1a of the text of fixed programs.
+TEST_CASE("Archetype: the generated GLSL is pinned and uses exact operations only") {
+    const std::vector<VoxelPos> anchors = { VoxelPos(), VoxelPos(int64_t(1) << 40, -3, 77) };
+    String all;
+    for (uint32_t seed = 0; seed < 20; seed++) {
+        const Program prog = random_program(seed, anchors, 40);
+        const String code = generate_glsl(prog, vformat("f%d", seed), (seed & 1u) != 0);
+        // One statement per instruction.
+        CHECK(code.count("    precise vec4 r") == int(prog.code.size()));
+        all += code;
+    }
+    Builder b;
+    const Local l = b.local(b.anchor(VoxelPos(-9, 1 << 20, 5)));
+    const Reg s = b.sphere(l, 30.0f);
+    const Reg c = b.smooth_min(s, b.capsule(l, 40.0f, 6.0f), 8.0f);
+    const Reg x = b.smooth_max(c, b.neg(b.box(l, 10.0f, 4.0f, 9.0f)), 2.0f);
+    const Reg y = b.min(x, b.cylinder(l, 5.0f, 7.0f));
+    Program prog = b.finish(b.dist(b.add(y, b.fbm(ExactNoise::make_fbm(true, 5u, 8, 3, 10.0, 0.5)))));
+    prog.normalize = true;
+    prog.out_scale = 0.5f;
+    all += generate_glsl(prog, "shapes");
+    const String without_det = all.replace("det_rsqrt(", "");
+    for (const char *banned : { "/", "mix(", "sqrt(", "normalize(", "length(", "dot(", "fma(", "#" }) {
+        CAPTURE(std::string(banned));
+        CHECK_FALSE(without_det.contains(banned));
+    }
+    // Float constants only as raw bits: the one decimal literal is 0.0.
+    const String rest = all.replace("0.0", "");
+    auto digit = [](char32_t p_c) { return p_c >= '0' && p_c <= '9'; };
+    bool decimal = false;
+    for (int i = 1; i + 1 < rest.length(); i++) {
+        decimal = decimal || (rest[i] == '.' && digit(rest[i - 1]) && digit(rest[i + 1]));
+    }
+    CHECK_FALSE(decimal);
+    const CharString text = all.utf8();
+    uint32_t h = 0x811C9DC5u;
+    for (int i = 0; i < text.length(); i++) {
+        h = (h ^ uint8_t(text[i])) * 0x01000193u;
+    }
+    MESSAGE("generated GLSL: ", text.length(), " bytes, FNV-1a ", h);
+    CHECK(text.length() == 211160);
+    CHECK(h == 1697673909u);
 }

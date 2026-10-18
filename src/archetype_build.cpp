@@ -246,10 +246,12 @@ struct Fuzz {
         return rng.below(10) < 7 ? n - 1 - rng.below(MIN(n, 6)) : rng.below(n);
     }
     void input(int p_anchors) {
-        const int e = rng.below(13);
+        // Scaled by 2^-12 .. 2^-20: points within ~2^17 voxels of the anchor give values up to 2^5, a saturated
+        // input (an anchor near another FrameSpike origin) up to 2^18.
+        const int e = 12 + rng.below(9);
         const int axis = rng.below(3);
         const int anchor = rng.below(p_anchors);
-        push(b.mul(b.input(axis, anchor), exact_pow2(-e)), std::ldexp(1.0f, 18 - e));
+        push(b.mul(b.input(axis, anchor), exact_pow2(-e)), std::ldexp(1.0f, 31 - e));
     }
     void noise(bool p_3d) {
         const int k = 2 + rng.below(13);

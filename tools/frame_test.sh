@@ -51,9 +51,10 @@ if [[ -f "$RUN_DIR/frame.json" ]]; then
     python3 - "$RUN_DIR/frame.json" <<'PY' && OK=1
 import json, sys
 r = json.load(open(sys.argv[1]))
-keys = ["ok", "origins", "samples", "worldpos_mismatch", "anchor_mismatch", "pairs",
+keys = ["ok", "origins", "cases", "probe_sets", "arch_programs", "samples", "worldpos_mismatch", "anchor_mismatch", "pairs",
         "pair_cpu_mismatch", "pair_gpu_mismatch", "continuity_steps", "continuity_violations",
-        "cross_origin_points", "cross_origin_mismatch", "cpu_checks_failed", "probe_mismatch", "error"]
+        "cross_origin_points", "cross_origin_mismatch", "cpu_checks_failed", "inexact_evaluations",
+        "inexact_mismatch", "probe_mismatch", "error"]
 for k in keys:
     if k in r:
         print(f"   {k:24} {r[k]}")

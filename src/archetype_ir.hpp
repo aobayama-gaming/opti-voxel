@@ -22,8 +22,14 @@
 // Exactness rules (exact_noise.hpp): only + - *, compares and selects, floor, abs, det_rsqrt and the exact
 // noise; no division, no sqrt, no mix / dot / length / normalize; constants as raw bits; no denormal. The
 // last one depends on the data: a point is in the exact domain when every register component is 0 or
-// within [2^-60, 2^60] (any product of two is then a normal float); outside it the GPU may flush or
-// round differently (exact_domain()). Builders keep authored archetypes inside it.
+// within [2^-60, 2^60] (any product of two is then a normal float) and every RSQRT reads a value > 0;
+// outside it the GPU may flush or round differently (exact_domain()). Builders keep authored archetypes
+// inside it.
+//
+// The sign of a zero is not kept: the GPU compiler folds x + 0.0 to x (no SignedZeroInfNanPreserve), so a
+// zero may come out -0 on one side and +0 on the other. The IR never lets it reach a non-zero value (no
+// division, compares see -0 == +0, RSQRT only on x > 0), and comparisons of results go through
+// zero_canonical().
 //
 // A register whose gradient is statically zero (a constant, a floor) is "flat": both back-ends skip its
 // gradient terms, the same way.
@@ -108,9 +114,13 @@ Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod);
 void run_registers(const Program &p_program, const WorldPos &p_pos, int p_lod, std::vector<Float4> &r_regs);
 Float4 finish(const Program &p_program, const Float4 &p_out, int p_lod);
 
-// Every component 0 or within [2^-60, 2^60] (see the exactness rules above).
-bool exact_domain(const std::vector<Float4> &p_regs);
-// FNV-1a over every component of every register: what the GLSL trace variant computes.
+// Every component 0 or within [2^-60, 2^60], every RSQRT input > 0 (see the exactness rules above).
+bool exact_domain(const Program &p_program, const std::vector<Float4> &p_regs);
+// The bits of a float with -0 read as +0.
+inline uint32_t zero_canonical(uint32_t p_bits) {
+    return (p_bits << 1) == 0u ? 0u : p_bits;
+}
+// FNV-1a over every component of every register (zero_canonical): what the GLSL trace variant computes.
 uint32_t trace_hash(const std::vector<Float4> &p_regs);
 
 // Local frame: three registers holding the local x, y, z (LOD0 voxels).
