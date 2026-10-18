@@ -23,7 +23,6 @@ adjustment_saturation = 2.0
 [node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=969557005]
 pipeline_mode = 2
 voxel_size = 0.05
-debug_test_rig = true
 lod_pixel_error = 4.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2075181569]

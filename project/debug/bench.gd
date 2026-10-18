@@ -27,14 +27,11 @@ extends Node3D
 ##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
-##   --terrain=dummy|cascade|continents|archetypes
-##                                VoxelTerrain.terrain_mode (default dummy; cascade: the Hermite cascade
-##                                test terrain, SDFCascade; archetypes: the archetype IR demo, SDFArchetype)
+##   --terrain=cascade|continents|archetypes
+##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
+##                                SDFCascade; continents: its preset; archetypes: the archetype IR demo, SDFArchetype)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
-##                                covers the discoverer's load range and the terrain gains relief octaves
-##   --rig=1                      add the centimetre test shapes (sdf_test_rig.hpp) in front of the camera
-##   --zero_pillar=1|2            add a column whose top SDF is exactly 0.0 (1) or 1 cm off it (2), see
-##                                SDFDummy / tools/zero_test.sh
+##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
@@ -43,7 +40,8 @@ extends Node3D
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
-##                                distance, iterated), e.g. for the cascade terrain whose ground height varies
+##                                distance, iterated; negative: below it). Default 50 on the cascade terrains,
+##                                whose ground height varies by kilometres, unless --cam_pos gives the height
 ##   --camera_voxel=X,Y,Z         place the scene (camera, lights, --cam_pos) relative to this absolute
 ##                                LOD0 voxel instead of the world origin (origin must be a root-span multiple)
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
@@ -133,16 +131,14 @@ func _ready() -> void:
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"dummy": 0, "cascade": 1, "continents": 2, "archetypes": 3}
-	var terrain_arg: String = args.get("terrain", "dummy")
+	var terrains := {"cascade": 1, "continents": 2, "archetypes": 3}
+	var terrain_arg: String = args.get("terrain", "cascade")
 	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected dummy, cascade, continents or archetypes)" % terrain_arg)
+		push_error("BENCH: unknown --terrain=%s (expected cascade, continents or archetypes)" % terrain_arg)
 		set_process(false)
 		get_tree().quit(1)
 		return
 	terrain.terrain_mode = terrains[terrain_arg]
-	terrain.debug_test_rig = args.get("rig", "0") == "1"
-	terrain.debug_zero_pillar = int(args.get("zero_pillar", "0"))
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"
 	if args.has("compact_extent"):
@@ -184,9 +180,10 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
-	if args.has("above_ground"):
+	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 3 or args.has("cam_pos") else "50")
+	if above_ground != "":
 		# Raise or lower the camera (and the fly path) to this height above the terrain under it.
-		var h := float(args["above_ground"])
+		var h := float(above_ground)
 		for i in 32:
 			var d: float = terrain.get_sdf_at(camera.global_position)
 			if absf(d - h) < maxf(1.0, h * 0.05):

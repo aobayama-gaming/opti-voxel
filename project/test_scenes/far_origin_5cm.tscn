@@ -24,7 +24,6 @@ adjustment_saturation = 2.0
 [node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=969557005]
 pipeline_mode = 2
 voxel_size = 0.05
-debug_test_rig = true
 world_origin_x = 19999987660226560
 world_origin_y = 0
 world_origin_z = -19999987660226560

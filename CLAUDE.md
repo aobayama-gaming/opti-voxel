@@ -104,7 +104,7 @@ to every change, and a reviewer may reject a PR on any of them.
   root chunk span (2^lod_numbers ids = 458,752 voxels with the defaults). No runtime rebasing yet.
 - LOD range: `VoxelTerrain.lod_numbers` (default 15, at most 31: the GPU reads a LOD from the id's low
   32 bits). `--lods=N` in `bench.gd` and in the main scene (`godot --path project -- --lods=25`).
-  Above 15 only: `SDFDummy` adds 2 relief octaves per extra LOD, and the camera's clip planes follow
+  Above 15 only: the camera's clip planes follow
   its altitude (|SDF| at the camera, `VoxelTerrain.get_sdf_at`): near = altitude / 1000 (at least the
   scene's), far = min(near * 2^21, `VoxelTerrain.get_load_radius()`). Past far/near ~2^24 Godot's float
   projection loses its far plane and the light culler ERRORs every frame. The validator doesn't compare
@@ -118,17 +118,12 @@ to every change, and a reviewer may reject a PR on any of them.
   (a quarter to three quarters of a cell, so the nested lattices' zeros never line up). At LOD L the
   fBm gradient is per voxel of that LOD (2^L LOD0 voxels): octave factor `amp * 2^(L-k)`
   (`gradient_factor`), kept in [2^-16, 2^40] at every LOD the octave is evaluated at
-  (`gradient_range_error`, checked in `SDFDummy::configure`). Values are unscaled.
-- The terrain (`SDFDummy`) is a function of the absolute position: the same world point gives the same
-  value from any origin, and `SDFDummy::sdf()` is bit-identical to GLSL `terrain_sdf` (gradient
-  included). Heights and depths are in LOD0 voxels, gradients and distances in voxels of the chunk's
-  LOD, and it returns metres; every LOD factor is an exact power of two, so the metres and the
-  normalised gradient are bit-identical at every LOD (unit-tested). Parameters are metres rounded to
-  2^k voxels in `configure()`, so another voxel size is another world. Flat world: the datum is
-  absolute y ~ 300 m, so far origins only show terrain with y = 0. Debug shapes (test rig, zero pillar) are placed
-  relative to the world origin (exact `sat_diff` to it). The 3D caves are two thirds of the SDF's
-  GPU cost: they are only evaluated where the band lets them reach the smooth max (bit-identical to
-  evaluating them everywhere, `cave_skip`, unit-tested).
+  (`gradient_range_error`, checked when an archetype program is validated). Values are unscaled.
+- Every terrain is a function of the absolute position: the same world point gives the same value from
+  any origin. Heights and depths are in LOD0 voxels, gradients and distances in voxels of the chunk's
+  LOD, and they return metres. Parameters are metres rounded to 2^k voxels in `configure()`, so another
+  voxel size is another world. Flat world: the datum (`SDFBase::DATUM_M`) is absolute y ~ 300 m, so far
+  origins only show terrain with y = 0.
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 - Hermite cascade (`src/cascade.hpp`: CPU reference, the oracle; `src/cascade_glsl.{hpp,cpp}`: the GPU
   passes, bit-identical to it): each noise band (octave k) is inserted once on the lattice Λ_{k-3}
@@ -147,13 +142,15 @@ to every change, and a reviewer may reject a PR on any of them.
   (even j >= 2, 10^3), j = 0 straight to `sdf_sample`. Bands come from a table indexed by level
   (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per RenderingDevice; the direct mesher runs
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
-- Terrain: `VoxelTerrain.terrain_mode` 0 = `SDFDummy` (default), 1 = `SDFCascade` (`src/sdf_cascade.hpp`,
-  the cascade test terrain: 3D height field, octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes
-  capped at 3.3 km, datum at 300 m, absolute position only), 2 = its continents preset, 3 = `SDFArchetype`
-  (the archetype IR's demo, below). `--terrain=cascade|continents|archetypes` in `bench.gd` and the
-  main scene (`godot --path project -- --terrain=cascade --lods=25`: the player spawns 200 m above the
-  ground and flies at half its altitude per second). `bench.gd --above_ground=M` moves the camera to M
-  metres above the terrain (the cascade's ground is kilometres from the datum).
+- Terrain: `VoxelTerrain.terrain_mode` 1 = `SDFCascade` (default, `src/sdf_cascade.hpp`: 3D height field,
+  octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m, absolute
+  position only), 2 = its continents preset, 3 = `SDFArchetype` (the archetype IR's demo, below). 0 was
+  `SDFDummy`, removed: it evaluated every octave at every LOD (detail finer than the cell, aliased far
+  away), the cascade never inserts a band finer than 8 cells of the chunk's LOD. `--terrain=cascade|continents|archetypes`
+  in `bench.gd` and the main scene (`godot --path project -- --lods=25`). On the cascade terrains the
+  player spawns 200 m above the ground and flies at half its altitude per second, and the bench camera
+  starts 50 m above it unless `--cam_pos` or `--above_ground=M` (M metres above the terrain under the
+  camera, negative below) says otherwise: the cascade's ground is kilometres from the datum.
 - Archetype IR (`src/archetype_ir.*`, builders and fuzzer in `archetype_build.cpp`): an SDF as a linear SSA
   program of dual numbers (value + forward-mode gradient), the one source of its GLSL (`archetype_glsl.*`,
   straight-line `precise` code, one statement per instruction) and of its CPU evaluation (`Archetype::run`,
@@ -177,7 +174,7 @@ to every change, and a reviewer may reject a PR on any of them.
   `arch_frames` (one scene at the same offset from every origin, compared across origins) and 200 fuzzed
   programs, output plus a hash of every register; evaluations outside the exact domain are counted apart
   (`inexact_*`, gated like the rest). `SDFArchetype` (`src/sdf_archetype.hpp`, `--terrain=archetypes`): the
-  compiled scene as `terrain_sdf` and `evaluate()`: SDFDummy's height fBm (first-order distance), four
+  compiled scene as `terrain_sdf` and `evaluate()`: an fBm ground (`height_fbm`, first-order distance), four
   noisy rocks and three trunk capsules smooth-unioned in, a cave mouth smooth-subtracted, absolute anchors
   in front of the main_scene spawn; far from them it is the bare ground, bit for bit (unit-tested).
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
@@ -185,8 +182,7 @@ to every change, and a reviewer may reject a PR on any of them.
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
   `terrain_sdf` (a NaN stub): vertex normals are the trilinear blend of the cell's 8 sample gradients
   (`CascadeGLSL::GLSL_VERTEX_GRADIENT`), in both meshers. A new cascade terrain keeps this rule.
-- With `SDFDummy` every composed mesher shader is byte-identical to the pre-cascade ones: cascade code is
-  only added in cascade mode, and `GLSL_EXACT_NOISE` is spliced from fragments it shares with
+- Cascade code is only added to a mesher shader in cascade mode, and `GLSL_EXACT_NOISE` is spliced from fragments it shares with
   `GLSL_PERLIN3_CROSS` (FNV unit test on its text). `OPTI_VOXEL_SHADER_DUMP=<dir>` writes every composed
   shader to `<dir>/<name>_<hash>.glsl` to compare two builds.
 
@@ -212,8 +208,7 @@ to every change, and a reviewer may reject a PR on any of them.
   One build, the unit tests, then a direct load run with `--validate=64 --audit=1 --discovery_audit=1`,
   `origin_parity.sh`, `frame_test.sh`, the QuadPagePool spike (with `--spike`, or automatically when
   `src/quad_page_pool*` differs from `dev`) and `discovery_audit.sh` (with `--discovery`, or
-  automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~2 min)
-  and `zero_test.sh`.
+  automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~2 min).
   Prints PASS/FAIL per step. Perf numbers come from `bench_ab.sh` instead.
 - `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
   [--view=0..7] [--validate=64] [--audit=1] [--cool=1]`: builds, runs `project/debug/bench.tscn` with a fixed
@@ -227,8 +222,8 @@ to every change, and a reviewer may reject a PR on any of them.
   `BENCH_ROOT=<checkout>` benches another tree with this harness.
 - `--validate=N` (direct): re-meshes N loaded chunks with the legacy mesher and compares
   triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies.
-  The terrain SDF is bit-exact, so both meshers see the same signs: winding flips at |SDF| ~ 0 only
-  come from non-exact debug shapes (test rig). Vertex positions differ by up to ~0.02 cells between
+  The terrain SDF is bit-exact, so both meshers see the same signs (no winding flips at |SDF| ~ 0).
+  Vertex positions differ by up to ~0.02 cells between
   the two meshers, so a quad smaller than the 0.02-cell tolerance can't be matched one to one; a
   leftover sliver near a same-size triangle of the other side counts as `ambiguous_slivers`, not an anomaly.
   The legacy triangulation takes each point's cell from the index the GPU wrote, never from its quantised
@@ -273,9 +268,6 @@ to every change, and a reviewer may reject a PR on any of them.
   delta and every destroy check against it and ERRORs on a difference (unit test: the randomized run in
   `test_chunk_memory.cpp`). Run a fly with it after touching `chunk_memory`, the discoverer's publish or
   the meshers' result path. `destroy.rescans` counts the rare pass over the dirty set (a stale result).
-- `tools/zero_test.sh`: the debug zero pillar (`--zero_pillar=1|2`, `SDFDummy`) has its flat top
-  exactly on a lattice row (SDF exactly 0.0 at LODs 0-6); run 2 moves it up 1 cm. Same triangle count
-  and the same picture are required: a sample of exactly 0.0 must neither lose its quad nor flip it.
 - Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
@@ -287,7 +279,7 @@ to every change, and a reviewer may reject a PR on any of them.
 - `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike`): GPU vs CPU check of the integer
   frame and the exact noise at 5 far origins: WorldPos and anchors, then every probe of the probe
   table bit for bit over a fixed grid plus 1,024 hash-random points per origin (hash, octave
-  decomposition at k 0..62, perlin3/2, the terrain's fBms and `terrain_sdf`, the archetype IR's `arch_*`
+  decomposition at k 0..62, perlin3/2, a 2D and a 3D fBm, the archetype IR's `arch_*`
   sets, at LODs 0, 1, 5, 14, 24), pairs reaching the same voxel, absolute points identical
   at every origin, and continuity along lines across voxel and noise-cell low-word wraps. Run it after touching
   `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp` or the SDF. A new noise or SDF
@@ -346,7 +338,7 @@ to every change, and a reviewer may reject a PR on any of them.
   `WorldCoord::lo32_i`.
 - Godot's JSON parser reads numbers back as doubles: reports carry int64 ids as strings
   (`WorldCoord::to_string`).
-- CPU mirrors of GPU float math (`ChunkMath::sample_pos`, `exact_noise.hpp`, `SDFDummy::sdf`) must
+- CPU mirrors of GPU float math (`ChunkMath::sample_pos`, `exact_noise.hpp`, `Archetype::run`, `Cascade::run`) must
   stay op for op identical in float32: same expression order, `Float3` (not `Vector3`, which is
   double in precision=double builds), `precise` on every GPU float, and `-ffp-contract=off` (in
   `SConstruct`; aarch64 or `-march=native` would fuse FMAs otherwise). Only correctly rounded ops:

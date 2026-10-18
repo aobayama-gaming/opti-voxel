@@ -21,10 +21,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world_origin_y"), &VoxelTerrain::get_world_origin_y);
     ClassDB::bind_method(D_METHOD("set_world_origin_z", "voxel"), &VoxelTerrain::set_world_origin_z);
     ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
-    ClassDB::bind_method(D_METHOD("set_debug_test_rig", "enable"), &VoxelTerrain::set_debug_test_rig);
-    ClassDB::bind_method(D_METHOD("get_debug_test_rig"), &VoxelTerrain::get_debug_test_rig);
-    ClassDB::bind_method(D_METHOD("set_debug_zero_pillar", "mode"), &VoxelTerrain::set_debug_zero_pillar);
-    ClassDB::bind_method(D_METHOD("get_debug_zero_pillar"), &VoxelTerrain::get_debug_zero_pillar);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
@@ -82,7 +78,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discovery_compare"), &VoxelTerrain::get_discovery_compare);
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Dummy:0,Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Archetypes:3"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
@@ -109,8 +105,6 @@ void VoxelTerrain::_bind_methods() {
     ADD_GROUP("Debug", "");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk,Group,Quad index"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_test_rig"), "set_debug_test_rig", "get_debug_test_rig");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_zero_pillar", PROPERTY_HINT_ENUM, "Off,Exact top,Top +1 cm"), "set_debug_zero_pillar", "get_debug_zero_pillar");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "destroy_verify"), "set_destroy_verify", "get_destroy_verify");
@@ -133,7 +127,7 @@ int VoxelTerrain::get_pipeline_mode() const {
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
     ERR_FAIL_COND_MSG(started, "terrain_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode < 0 || p_mode > 3, "terrain_mode must be 0 (dummy), 1 (cascade), 2 (cascade, continents preset) or 3 (archetypes).");
+    ERR_FAIL_COND_MSG(p_mode < 1 || p_mode > 3, "terrain_mode must be 1 (cascade), 2 (cascade, continents preset) or 3 (archetypes).");
     terrain_mode = p_mode;
 }
 
@@ -261,24 +255,6 @@ void VoxelTerrain::set_world_origin_z(int64_t p_voxel) {
 
 int64_t VoxelTerrain::get_world_origin_z() const {
     return world_origin_request.z;
-}
-
-void VoxelTerrain::set_debug_test_rig(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "debug_test_rig must be set before the terrain enters the tree.");
-    debug_test_rig = p_enable;
-}
-
-bool VoxelTerrain::get_debug_test_rig() const {
-    return debug_test_rig;
-}
-
-void VoxelTerrain::set_debug_zero_pillar(int p_mode) {
-    ERR_FAIL_COND_MSG(started, "debug_zero_pillar must be set before the terrain enters the tree.");
-    debug_zero_pillar = p_mode;
-}
-
-int VoxelTerrain::get_debug_zero_pillar() const {
-    return debug_zero_pillar;
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
@@ -460,7 +436,6 @@ void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
     ERR_FAIL_COND_MSG(lod_numbers < 1 || lod_numbers > MAX_LOD_NUMBERS, "VoxelTerrain: lod_numbers out of range.");
-    ERR_FAIL_COND_MSG(terrain_mode != 0 && (debug_test_rig || debug_zero_pillar != 0), "VoxelTerrain: the debug shapes need terrain_mode 0 (dummy).");
 
     started = true;
     start_usec = now_usec();
@@ -478,20 +453,13 @@ void VoxelTerrain::_ready() {
         }
     }
 
-    // sdf starts as an SDFDummy (see the member initialiser).
+    // sdf starts as an SDFCascade (see the member initialiser).
     switch (terrain_mode) {
-        case 0:
-            static_cast<SDFDummy *>(sdf)->test_rig = debug_test_rig;
-            static_cast<SDFDummy *>(sdf)->zero_pillar = debug_zero_pillar;
-            break;
         case 1:
-        case 2: {
-            memdelete(sdf);
-            SDFCascade *cascade = memnew(SDFCascade);
-            cascade->preset = terrain_mode == 2 ? 1 : 0;
-            sdf = cascade;
             break;
-        }
+        case 2:
+            static_cast<SDFCascade *>(sdf)->preset = 1;
+            break;
         case 3:
             memdelete(sdf);
             sdf = memnew(SDFArchetype);

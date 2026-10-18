@@ -18,12 +18,11 @@ var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the a
 var base_near := 0.05
 
 # `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|archetypes`
-# its terrain_mode (the Hermite cascade test terrain, its continents demo preset, or the archetype IR demo) and
+# its terrain_mode (the Hermite cascade terrain, the default, its continents demo preset, or the archetype IR demo) and
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
-var spawn_above_ground := false
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (cascade terrains)
-var cascade_terrain: Node = null  # set with --terrain=cascade
+var cascade_terrain: Node = null  # set on the cascade terrains
 var cached_altitude := 0.0
 var altitude_age := 1.0
 
@@ -34,7 +33,6 @@ func _enter_tree() -> void:
 			terrain.lod_numbers = a.trim_prefix("--lods=").to_int()
 		if a == "--terrain=cascade" and terrain:
 			terrain.terrain_mode = 1
-			spawn_above_ground = true
 		if a.begins_with("--discoverer=") and terrain:
 			var modes := {"cpu": 0, "gpu": 1}
 			var mode := a.trim_prefix("--discoverer=")
@@ -44,7 +42,6 @@ func _enter_tree() -> void:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
-			spawn_above_ground = true
 		if a == "--terrain=archetypes" and terrain:
 			terrain.terrain_mode = 3
 		if a.begins_with("--altitude="):
@@ -66,7 +63,7 @@ func _ready():
 	if terrain and terrain.lod_numbers > 15:
 		far_lods_terrain = terrain
 		base_near = camera.near
-	if spawn_above_ground and terrain:
+	if terrain and terrain.terrain_mode != 3:  # the cascade terrains; the archetype demo keeps the scene's spawn
 		cascade_terrain = terrain
 		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:

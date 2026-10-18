@@ -5,6 +5,7 @@
 #include "cascade_measure.hpp"
 #include "cascade_terrain.hpp"
 #include "gpu_frame.hpp"
+#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
 using namespace Cascade;
@@ -115,9 +116,9 @@ TEST_CASE("SDFCascade: the shader stub and get_cascade") {
     const String glsl = sdf.get_glsl_code();
     CHECK(glsl.contains("vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod)"));
     CHECK(!glsl.contains("DATUM_LO"));
-    SDFDummy dummy;
-    dummy.configure(param, 15);
-    CHECK(dummy.get_cascade() == nullptr);
+    SDFArchetype archetype;
+    archetype.configure(param, 15);
+    CHECK(archetype.get_cascade() == nullptr);
 }
 
 TEST_CASE("CascadeGLSL: the band table holds every band at its level, with the CPU's factors") {

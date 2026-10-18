@@ -5,8 +5,8 @@ Why this project ? I wanted a voxel terrain with **5 cm voxels** on a world much
 one is a Godot 4.6 GDExtension (C++, godot-cpp) that builds a chunk octree around the camera and
 meshes every chunk with surface nets, directly on the GPU.
 
-**Disclaimer :** this is a work in progress. Only Linux is built and tested, and the terrain
-itself (`SDFDummy`) is a placeholder noise until the exact, integer-based noise lands.
+**Disclaimer :** this is a work in progress. Only Linux is built and tested. The terrain is a test
+height field of exact, integer-based noise carried down a Hermite cascade (`SDFCascade`).
 
 ## How it works
 
@@ -50,7 +50,7 @@ Then open `project/` in Godot 4.6 and run the main scene.
 | Command | What | Needs |
 |---|---|---|
 | `tools/unit_test.sh [filter]` | C++ unit tests (`src/tests/`, doctest) inside headless Godot | the one-time import, ~5 s after a build |
-| `tools/check.sh` | The correctness gate: build, unit tests, a validated + audited load run, origin parity, integer frame, zero SDF test | GPU, unlocked session, ~2 min |
+| `tools/check.sh` | The correctness gate: build, unit tests, a validated + audited load run, origin parity, integer frame | GPU, unlocked session, ~2 min |
 | `tools/format.sh [--check]` | clang-format (pinned, through `uvx`) on `src/` | `uv` |
 | `tools/bench_ab.sh <a> <b>` | Before/after perf table of two checkouts | GPU |
 

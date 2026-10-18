@@ -2,7 +2,7 @@
 
 #include "cascade.hpp"
 
-// Test terrain of the cascade (code and tests only; the meshers still use SDFDummy): a 3D height field
+// The cascade's terrain (SDFCascade meshes it; the tests use it directly): a 3D height field
 // h(x, y, z) of perlin3 octaves, every octave with the same steepness (amplitude = steepness * wavelength,
 // in LOD0 voxels), surface at y = datum + h.
 namespace CascadeTerrain {
@@ -34,9 +34,8 @@ inline Cascade::Spec earth(Cascade::ChannelSet p_set) {
 // SDF of the height field from cascade channels on Λ_L (value in LOD0 voxels, slopes per LOD-L voxel),
 // in voxels of LOD L: t = (-dh/dx, 1 - dh/dy, -dh/dz) with h and the position both in LOD-L voxels
 // (exact 2^-L scalings), distance (dy - h) / |t|. p_dy: height above the datum in LOD-L voxels.
-// Returns (normalised t, distance). Like SDFDummy, p_dy - h subtracts two heights in float: both stay
-// within the bands' amplitudes of the datum (p_dy saturated by the caller). Test-only convention: SDFDummy's 2D height field scales y instead;
-// one of the two goes when the cascade feeds the terrain.
+// Returns (normalised t, distance). p_dy - h subtracts two heights in float: both stay within the bands'
+// amplitudes of the datum (p_dy saturated by the caller).
 inline ExactNoise::Float4 height_sdf(const float p_ch[Cascade::CHANNELS], int p_lod, float p_dy) {
     using namespace Cascade;
     const float s = ExactNoise::exact_pow2(-p_lod);
