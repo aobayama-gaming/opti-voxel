@@ -6,7 +6,7 @@ var mouse_sensitivity: float = 0.002
 var pitch: float = 0.0
 var yaw: float = 0.0
 
-@onready var camera = $Camera3D
+@onready var camera: Camera3D = $Camera3D
 
 # Hole marks: H saves the camera pose, a screenshot, the terrain's chunk counts and a discovery audit
 # (are culled chunks missing?) to marks.jsonl in the marks dir; closing the window saves a last pose.
@@ -26,6 +26,24 @@ var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (ca
 var cascade_terrain: Node = null  # set with --terrain=cascade
 var cached_altitude := 0.0
 var altitude_age := 1.0
+
+# ---- Archetype dig tools (feature/archetype-dig) -----------------------------------------------
+# Right click digs a hole: a SMOOTH_SUBTRACT capsule along the view, centred on the ray-march hit.
+# Left click (held): one tube re-placed every frame in front of the camera (move_instance), removed on
+# release. Both use VoxelTerrain.add_instance / move_instance / remove_instance (archetype table only).
+var dig_radius := 1.5       # --dig_radius=M
+var dig_length := 6.0       # --dig_length=M
+var drag_distance := 8.0    # --drag_distance=M
+var drag_length := 6.0
+var drag_radius := 1.5
+var dig_k := 0.3            # smooth radius (metres)
+var drag_op := 3            # Combine: 3 smooth subtract (a hole), 0 union (a solid tube)
+var drag_active := false
+var drag_id := -1
+var edits_count := 0
+var hud: Label = null
+var hud_layer: CanvasLayer = null
+var hud_visible := true
 
 func _enter_tree() -> void:
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
@@ -55,6 +73,16 @@ func _enter_tree() -> void:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
+		if a.begins_with("--dig_radius="):
+			dig_radius = a.trim_prefix("--dig_radius=").to_float()
+		if a.begins_with("--dig_length="):
+			dig_length = a.trim_prefix("--dig_length=").to_float()
+		if a.begins_with("--drag_distance="):
+			drag_distance = a.trim_prefix("--drag_distance=").to_float()
+		if a == "--drag_op=union":
+			drag_op = 0
+		if a.begins_with("--drag_radius="):
+			drag_radius = a.trim_prefix("--drag_radius=").to_float()
 
 func _ready():
 	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude
@@ -73,6 +101,15 @@ func _ready():
 				break
 			global_position.y += spawn_altitude - d
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	hud_layer = CanvasLayer.new()
+	add_child(hud_layer)
+	hud = Label.new()
+	hud.position = Vector2(10, 10)
+	hud.add_theme_color_override("font_color", Color(1, 1, 1))
+	hud.add_theme_color_override("font_shadow_color", Color(0, 0, 0))
+	hud.add_theme_constant_override("shadow_offset_x", 1)
+	hud.add_theme_constant_override("shadow_offset_y", 1)
+	hud_layer.add_child(hud)
 	yaw = rotation.y
 	pitch = camera.rotation.x
 	for a in OS.get_cmdline_user_args():
@@ -141,6 +178,19 @@ func _input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			speed /= 1.2
 
+	# Dig tools (archetype table): right click digs a hole, left click (held) drags a tube.
+	if event is InputEventMouseButton:
+		if event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			_dig()
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				drag_active = true
+			else:
+				_end_drag()
+
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_TAB:
+		hud_visible = not hud_visible
+
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
 
@@ -157,7 +207,96 @@ func _input(event: InputEvent) -> void:
 		else:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
+# The dig tools: a ray-march along the view (get_sdf_at) and the archetype edit API.
+func _raymarch(terrain: Node, origin: Vector3, dir: Vector3) -> Vector3:
+	var t := 0.0
+	while t < 200.0:
+		var p := origin + dir * t
+		var d: float = terrain.get_sdf_at(p)
+		if d < 0.5:
+			return p
+		t += maxf(absf(d) * 0.5, 0.1)
+	return origin + dir * drag_distance
+
+# LOD0 voxel of a render-space position (int64; returned as an Array, never through Vector3i).
+func _voxel_of(terrain: Node, pos: Vector3) -> Array:
+	var vt: float = terrain.voxel_size
+	return [int(round(float(terrain.world_origin_x) + pos.x / vt)),
+			int(round(float(terrain.world_origin_y) + pos.y / vt)),
+			int(round(float(terrain.world_origin_z) + pos.z / vt))]
+
+# World -> local basis (row major) with local y along fwd: the capsule's axis.
+func _basis9(fwd: Vector3) -> PackedFloat32Array:
+	var up := Vector3.UP
+	if absf(fwd.dot(up)) > 0.99:
+		up = Vector3.RIGHT
+	var right := fwd.cross(up).normalized()
+	var u2 := right.cross(fwd).normalized()
+	return PackedFloat32Array([right.x, right.y, right.z, fwd.x, fwd.y, fwd.z, u2.x, u2.y, u2.z])
+
+func _dig() -> void:
+	var terrain := _terrain()
+	if terrain == null:
+		return
+	var vt: float = terrain.voxel_size
+	var fwd := -camera.global_transform.basis.z
+	var hit := _raymarch(terrain, camera.global_position, fwd)
+	var p := _voxel_of(terrain, hit)
+	var params := PackedFloat32Array([dig_length / vt, dig_radius / vt])
+	var id: int = terrain.add_instance(1, p[0], p[1], p[2], _basis9(fwd), params, 3, dig_k / vt)
+	if id >= 0:
+		edits_count += 1
+
+func _update_drag() -> void:
+	if not drag_active:
+		return
+	var terrain := _terrain()
+	if terrain == null:
+		return
+	var vt: float = terrain.voxel_size
+	var fwd := -camera.global_transform.basis.z
+	var p := _voxel_of(terrain, camera.global_position + fwd * drag_distance)
+	var rot := _basis9(fwd)
+	if drag_id < 0:
+		var params := PackedFloat32Array([drag_length / vt, drag_radius / vt])
+		drag_id = terrain.add_instance(1, p[0], p[1], p[2], rot, params, drag_op, dig_k / vt)
+		if drag_id >= 0:
+			edits_count += 1
+	else:
+		terrain.move_instance(drag_id, p[0], p[1], p[2], rot)
+		edits_count += 1
+
+func _end_drag() -> void:
+	drag_active = false
+	if drag_id >= 0:
+		var terrain := _terrain()
+		if terrain:
+			terrain.remove_instance(drag_id)
+		drag_id = -1
+
+func _update_hud() -> void:
+	if hud == null:
+		return
+	hud.visible = hud_visible
+	if not hud_visible:
+		return
+	var terrain := _terrain()
+	if terrain == null:
+		return
+	var s: Dictionary = terrain.get_debug_stats()
+	var edits: Dictionary = s.get("edits", {})
+	var ms: Dictionary = s.get("mesher", {})
+	var apply_ms := 0.0
+	if edits.get("apply") is Dictionary:
+		apply_ms = float((edits["apply"] as Dictionary).get("avg", 0.0))
+	hud.text = "fps %d   edits %d (+%d tool)\nre-mesh queue %d  dispatched %d  stale %d\nlast edit %d chunks, apply %.2f ms" % [
+		Engine.get_frames_per_second(), int(edits.get("edits", 0)), edits_count,
+		int(ms.get("remesh_queue", 0)), int(ms.get("remesh_pops", 0)), int(ms.get("remesh_stale_dropped", 0)),
+		int(edits.get("remesh_last", 0)), apply_ms]
+
 func _process(delta: float) -> void:
+	_update_drag()
+	_update_hud()
 	if far_lods_terrain:
 		var altitude: float = absf(far_lods_terrain.get_sdf_at(camera.global_position))
 		camera.near = maxf(base_near, altitude / 1000.0)
