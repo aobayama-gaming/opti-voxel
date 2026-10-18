@@ -17,8 +17,9 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|archetypes`
-# its terrain_mode (the Hermite cascade terrain, the default, its continents demo preset, or the archetype IR demo) and
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|archetypes|shapes`
+# its terrain_mode (the Hermite cascade terrain, the default, its continents demo preset, the archetype IR demo, or its
+# hard-CSG shapes gallery) and
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (cascade terrains)
@@ -44,6 +45,8 @@ func _enter_tree() -> void:
 			terrain.terrain_mode = 2
 		if a == "--terrain=archetypes" and terrain:
 			terrain.terrain_mode = 3
+		if a == "--terrain=shapes" and terrain:
+			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
 		if a.begins_with("--voxel=") and terrain:
@@ -63,7 +66,7 @@ func _ready():
 	if terrain and terrain.lod_numbers > 15:
 		far_lods_terrain = terrain
 		base_near = camera.near
-	if terrain and terrain.terrain_mode != 3:  # the cascade terrains; the archetype demo keeps the scene's spawn
+	if terrain and terrain.terrain_mode < 3:  # the cascade terrains; the archetype scenes keep the scene's spawn
 		cascade_terrain = terrain
 		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:
@@ -143,11 +146,11 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
 
-	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad.
+	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted.
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_V:
 		var terrain := _terrain()
 		if terrain:
-			terrain.debug_view = (terrain.debug_view + 1) % 8
+			terrain.debug_view = (terrain.debug_view + 1) % 9
 			print("debug view ", terrain.debug_view)
 
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
