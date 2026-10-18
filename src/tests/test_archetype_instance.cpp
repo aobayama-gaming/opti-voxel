@@ -262,7 +262,7 @@ TEST_CASE("SDFArchetype scatter: evaluate() and its gradient stay finite") {
         sdf.get_snapshot()->point_candidates(p.voxel, list);
         for (const int lod : { 0, 2, 4 }) {
             const Float4 r = finish_table(fold(sdf.get_ground(), sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(),
-                                                 uint32_t(list.size()), p, lod),
+                                                  uint32_t(list.size()), p, lod),
                     lod, 0.5f, true);
             if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.z) || !std::isfinite(r.w)) {
                 nonfinite++;
@@ -297,7 +297,7 @@ TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the
             sdf.get_snapshot()->point_candidates(p.voxel, list);
             for (const int lod : { 0, 4 }) {
                 const Float4 r = finish_table(fold(ground, sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(), uint32_t(list.size()),
-                                                  p, lod),
+                                                      p, lod),
                         lod, float(voxel), true);
                 CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(r.w));
                 below += (lod == 0 && r.w < 0.0f) ? 1 : 0;

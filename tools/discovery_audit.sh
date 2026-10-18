@@ -7,7 +7,8 @@
 #
 # Cases: default pose, the main scene's lod_error 4, underground, another area, high above, deep
 # below, a far world origin, 5 cm voxels, a fly run (audited once it settles back at the start), and
-# 25 LODs (--lods=25) from 10 km up looking down and from 100 km up looking at the horizon.
+# 25 LODs (--lods=25) from 10 km up looking down and from 100 km up looking at the horizon. Heights are
+# above the ground under the camera (--above_ground): the cascade's ground height varies by kilometres.
 # Report: bench/results/<timestamp>-discovery.md. Exit code: 0 no miss anywhere, 1 a run failed or missed.
 # No build (run scons first), no cooldown: this is a correctness check.
 set -uo pipefail
@@ -37,15 +38,15 @@ print(round(1e15 / 0.5 / w) * w)")"
 CASES=(
     "default|"
     "lod4|--lod_error=4"
-    "underground|--cam_pos=-52.76,250,-95.64"
-    "east|--cam_pos=3000,340,2000"
-    "high|--cam_pos=-52.76,1500,-95.64"
-    "deep|--cam_pos=-52.76,-900,-95.64"
+    "underground|--above_ground=-60"
+    "east|--cam_pos=3000,340,2000 --above_ground=50"
+    "high|--above_ground=1200"
+    "deep|--above_ground=-1200"
     "far_origin|--origin=$FAR,0,-$FAR"
     "cm|--voxel=0.05 --lod_error=4"
     "fly|--scenario=fly"
-    "lods25_10km|--lods=25 --cam_pos=-52.76,10000,-95.64 --pitch=-45"
-    "lods25_100km|--lods=25 --cam_pos=-52.76,100000,-95.64 --pitch=-5"
+    "lods25_10km|--lods=25 --above_ground=10000 --pitch=-45"
+    "lods25_100km|--lods=25 --above_ground=100000 --pitch=-5"
 )
 
 OUT="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-discovery.md"

@@ -35,6 +35,8 @@ vec4 evaluate_sdf(WorldPos p, int lod) {
 
 /*GLSL_SKIRT_SDF*/
 
+/*GLSL_QEF_VERTEX*/
+
 shared uint wg_quad_count;
 
 void main() {
@@ -121,6 +123,9 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 }
 
 RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
+    const bool vertex_pass = (p_pass == GLSL_DIRECT_PASS_VERTICES);
+    // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
+    const String pass = dual_contouring && vertex_pass ? dual_contouring_pass(p_pass) : String(p_pass);
     String shader = DIRECT_TEMPLATE;
     // The instance table (archetype instances) adds the DefRecord/List buffers at 8/9, the exact int64
     // helpers (i64_sub, for the table's noise lattice) and the ChunkInput global g_sdf_chunk. A terrain
@@ -139,7 +144,8 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
-    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, p_pass, p_pass == GLSL_DIRECT_PASS_VERTICES);
+    shader = shader.replace("/*GLSL_QEF_VERTEX*/", dual_contouring ? String(GLSL_QEF_VERTEX) : String());
+    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, vertex_pass);
     RDUtils::dump_shader(String("direct_") + p_name, shader);
 
     Ref<RDShaderSource> source;

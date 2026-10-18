@@ -63,6 +63,9 @@ struct VoxelBox {
 
 class SDFBase {
 public:
+    // Every terrain's datum, metres of absolute y: a flat world, so far origins only show terrain at y = 0.
+    static constexpr double DATUM_M = 300.0;
+
     virtual ~SDFBase() = default;
 
     // Called once before any thread uses the SDF (VoxelTerrain::_ready). Chunks exist at LODs

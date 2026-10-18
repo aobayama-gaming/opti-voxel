@@ -1,8 +1,8 @@
 #include "test_common.hpp"
 
 #include "chunk_discoverer.hpp"
+#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
-#include "sdf_dummy.hpp"
 
 #include <cmath>
 #include <memory>
@@ -23,6 +23,9 @@ struct ReferenceWalk {
         const VoxelPos center = ChunkMath::chunk_center_voxel(p_chunk, param);
         const int64_t half_voxels = ChunkMath::get_lod_size(p_chunk) * param.half_chunk_voxels();
         const int lod = ChunkMath::get_lod(p_chunk);
+        if (sdf.cull_exempt(p_chunk, lod)) {
+            return false; // the no-cull rule near instances (SDFBase::cull_exempt)
+        }
         for (int corner = 0; corner < 8; ++corner) {
             WorldPos corner_pos;
             corner_pos.voxel = center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);
@@ -132,10 +135,10 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
 
 } // namespace
 
-TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFDummy, 15 and 25 LODs)") {
+TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFArchetype, 15 and 25 LODs)") {
     for (const int lods : { 15, 25 }) {
         CAPTURE(lods);
-        SDFDummy sdf;
+        SDFArchetype sdf;
         compare_walks(sdf, lods);
     }
 }
