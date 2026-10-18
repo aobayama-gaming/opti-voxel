@@ -2,6 +2,9 @@
 
 #include "lod_structures.hpp"
 
+#include <random>
+#include <vector>
+
 namespace {
 
 void add(LODHashSet &r_set, const ChunkId &p_id) {
@@ -66,4 +69,111 @@ TEST_CASE_TEMPLATE("LOD sets: find_ancestor stops at the top of the int64 octree
     ChunkId id(top, top, top);
     CHECK(set.find_ancestor(id) == -1);
     CHECK(id == ChunkId(top, top, top));
+}
+
+namespace {
+
+LODHashSet set_of(std::initializer_list<ChunkId> p_ids) {
+    LODHashSet s;
+    for (const ChunkId &id : p_ids) {
+        s.insert(id);
+    }
+    return s;
+}
+
+bool same_set(const LODHashSet &p_a, const LODHashSet &p_b) {
+    if (p_a.size() != p_b.size()) {
+        return false;
+    }
+    for (const ChunkId &id : p_a) {
+        if (!p_b.has(id)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// a -> b, then b -> c merged into it.
+ScanDelta merged(const LODHashSet &p_a, const LODHashSet &p_b, const LODHashSet &p_c) {
+    ScanDelta d;
+    ScanDelta::between(p_a, p_b, d);
+    ScanDelta next;
+    ScanDelta::between(p_b, p_c, next);
+    d.merge(next);
+    return d;
+}
+
+} // namespace
+
+TEST_CASE("ScanDelta: between two scans") {
+    const ChunkId a(1, 1, 1), b(3, 1, 1), c(5, 1, 1);
+    ScanDelta d;
+    ScanDelta::between(set_of({ a, b }), set_of({ b, c }), d);
+    CHECK(same_set(d.entered, set_of({ c })));
+    CHECK(same_set(d.left, set_of({ a })));
+}
+
+TEST_CASE("ScanDelta: merging across a skipped scan cancels what came and went") {
+    const ChunkId a(1, 1, 1), b(3, 1, 1), c(5, 1, 1);
+    const LODHashSet empty;
+
+    // Entered then left: nothing.
+    ScanDelta d = merged(empty, set_of({ a }), empty);
+    CHECK(d.entered.is_empty());
+    CHECK(d.left.is_empty());
+
+    // Left then entered again: nothing.
+    d = merged(set_of({ a }), empty, set_of({ a }));
+    CHECK(d.entered.is_empty());
+    CHECK(d.left.is_empty());
+
+    // Entered twice in a row is impossible, but an id kept across both steps stays out of the delta.
+    d = merged(set_of({ a }), set_of({ a, b }), set_of({ a, b, c }));
+    CHECK(same_set(d.entered, set_of({ b, c })));
+    CHECK(d.left.is_empty());
+
+    // Repeats: enter, leave, enter.
+    ScanDelta step;
+    d = merged(empty, set_of({ a }), empty);
+    ScanDelta::between(empty, set_of({ a }), step);
+    d.merge(step);
+    CHECK(same_set(d.entered, set_of({ a })));
+    CHECK(d.left.is_empty());
+}
+
+TEST_CASE("ScanDelta: merged deltas of random scan sequences equal the direct delta") {
+    std::mt19937_64 rng(7);
+    int64_t merges = 0;
+    for (int run = 0; run < 200; run++) {
+        // Ids drawn from a small pool so they come and go often.
+        auto random_scan = [&rng]() {
+            LODHashSet s;
+            for (int i = 0; i < 40; i++) {
+                if (rng() % 2) {
+                    s.insert(ChunkId(2 * i + 1, 1, 1));
+                }
+            }
+            return s;
+        };
+        const LODHashSet first = random_scan();
+        LODHashSet previous = first;
+        LODHashSet applied = first;
+        ScanDelta acc;
+        const int steps = 1 + int(rng() % 8);
+        for (int i = 0; i < steps; i++) {
+            const LODHashSet next = random_scan();
+            ScanDelta step;
+            ScanDelta::between(previous, next, step);
+            acc.merge(step);
+            merges++;
+            previous = next;
+        }
+        ScanDelta direct;
+        ScanDelta::between(first, previous, direct);
+        CHECK(same_set(acc.entered, direct.entered));
+        CHECK(same_set(acc.left, direct.left));
+        acc.apply(applied);
+        CHECK(same_set(applied, previous));
+    }
+    MESSAGE(merges, " merges over 200 random scan sequences");
 }

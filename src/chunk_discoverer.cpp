@@ -152,6 +152,8 @@ void ChunkDiscoverer::stop() {
 void ChunkDiscoverer::discovery_loop() {
     bool has_scanned = false;
     ChunkId last_scanned_camera_chunk;
+    // The previous scan, kept up to date by applying each delta (the published set leaves without a copy).
+    LODHashSet previous_scan;
 
     // The GPU discoverer's local device lives on this thread only. Creating it (device + the point
     // shader's compile) delays the first scan: gpu_init_ms.
@@ -213,7 +215,17 @@ void ChunkDiscoverer::discovery_loop() {
         }
         const uint64_t t_compared = now_usec();
 
-        _publish(std::move(new_scanned_chunk), actual_camera_chunk, counters, evicted, t_scan_end - t_scan_start, t_compared);
+        std::unique_ptr<ScanDelta> delta = std::make_unique<ScanDelta>();
+        ScanDelta::between(previous_scan, *new_scanned_chunk, *delta);
+        delta->apply(previous_scan);
+        const uint64_t t_delta = now_usec();
+        mutex->lock();
+        stats.delta.add(t_delta - t_compared);
+        stats.last_delta_entered = delta->entered.size();
+        stats.last_delta_left = delta->left.size();
+        mutex->unlock();
+
+        _publish(std::move(new_scanned_chunk), std::move(delta), actual_camera_chunk, counters, evicted, t_scan_end - t_scan_start, t_delta);
     }
 
     if (gpu) {
@@ -241,11 +253,18 @@ int64_t ChunkDiscoverer::_evict_cache(int64_t p_nodes_visited) {
     return (int64_t)stale.size();
 }
 
-void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, const ChunkId &p_camera_chunk, const ScanCounters &p_counters, int64_t p_evicted,
-        uint64_t p_scan_usec, uint64_t p_ready_usec) {
+void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ChunkId &p_camera_chunk,
+        const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec, uint64_t p_ready_usec) {
     mutex->lock();
     const int64_t size = p_scan->size();
     scanned_chunks = std::move(p_scan);
+    // The main thread hasn't taken the previous scan: its delta still leads from the last scan taken.
+    if (scanned_chunks_dirty) {
+        scanned_delta->merge(*p_delta);
+        stats.deltas_merged++;
+    } else {
+        scanned_delta = std::move(p_delta);
+    }
     scanned_camera_chunk = p_camera_chunk;
     scanned_chunks_dirty = true;
     const uint64_t t_published = now_usec();
@@ -339,13 +358,14 @@ void ChunkDiscoverer::set_config(
     chunk_param = p_chunk_param;
 }
 
-bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, ChunkId &r_camera_chunk) {
+bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ChunkId &r_camera_chunk) {
     mutex->lock();
 
     bool dirty = scanned_chunks_dirty;
 
     if (dirty) {
         r_scanned_chunks = std::move(scanned_chunks);
+        r_delta = std::move(scanned_delta);
         r_camera_chunk = scanned_camera_chunk;
         scanned_chunks_dirty = false;
     }
@@ -472,6 +492,10 @@ Dictionary ChunkDiscoverer::get_stats() {
     d["scan"] = stats.scan.to_dict();
     d["cull"] = stats.cull.to_dict();
     d["publish"] = stats.publish.to_dict();
+    d["delta"] = stats.delta.to_dict();
+    d["deltas_merged"] = stats.deltas_merged;
+    d["last_delta_entered"] = stats.last_delta_entered;
+    d["last_delta_left"] = stats.last_delta_left;
     d["latency"] = stats.latency.to_dict();
     d["cull_mode"] = (int)cull_mode;
     d["scans_skipped_same_chunk"] = stats.scans_skipped_same_chunk;

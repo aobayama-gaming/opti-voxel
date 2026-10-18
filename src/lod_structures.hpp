@@ -39,3 +39,51 @@ public:
 
     int find_ancestor(ChunkId &r_chunk) const { return find_ancestor_in(*this, r_chunk, max_lod); }
 };
+
+// What changed between two scans. The discoverer publishes one with each scan, merged across the scans
+// the main thread skipped, so it always leads from the last scan the main thread took to the new one.
+struct ScanDelta {
+    LODHashSet entered; // in the new scan, not in the old one
+    LODHashSet left; // in the old scan, not in the new one
+
+    // r_delta = p_from -> p_to.
+    static void between(const LODHashSet &p_from, const LODHashSet &p_to, ScanDelta &r_delta) {
+        r_delta.entered.clear();
+        r_delta.left.clear();
+        for (const ChunkId &id : p_to) {
+            if (!p_from.has(id)) {
+                r_delta.entered.insert(id);
+            }
+        }
+        for (const ChunkId &id : p_from) {
+            if (!p_to.has(id)) {
+                r_delta.left.insert(id);
+            }
+        }
+    }
+
+    // this = a -> b and p_next = b -> c: this becomes a -> c. An id that entered then left (or left then
+    // entered again) cancels out.
+    void merge(const ScanDelta &p_next) {
+        for (const ChunkId &id : p_next.entered) {
+            if (!left.erase(id)) {
+                entered.insert(id);
+            }
+        }
+        for (const ChunkId &id : p_next.left) {
+            if (!entered.erase(id)) {
+                left.insert(id);
+            }
+        }
+    }
+
+    // a -> b applied to r_scan = a makes it b.
+    void apply(LODHashSet &r_scan) const {
+        for (const ChunkId &id : left) {
+            r_scan.erase(id);
+        }
+        for (const ChunkId &id : entered) {
+            r_scan.insert(id);
+        }
+    }
+};

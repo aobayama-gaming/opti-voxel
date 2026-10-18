@@ -553,8 +553,9 @@ void VoxelTerrain::_process(double) {
 
     uint64_t t0 = now_usec();
     std::unique_ptr<LODHashSet> new_scanned_chunk;
+    std::unique_ptr<ScanDelta> scan_delta;
 
-    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_camera_chunk);
+    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_camera_chunk);
 
     if (dirty_scan) {
         scan_received = true;

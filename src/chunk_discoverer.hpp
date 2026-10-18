@@ -83,12 +83,17 @@ private:
     ChunkId camera_chunk;
     uint64_t camera_change_usec = 0;
     std::unique_ptr<LODHashSet> scanned_chunks; // published scan, handed over without a copy
+    std::unique_ptr<ScanDelta> scanned_delta; // last taken scan -> published scan
     ChunkId scanned_camera_chunk; // camera chunk the published scan was made for
     bool scanned_chunks_dirty = false;
     struct Stats {
         TimingStat scan;
         TimingStat cull; // part of `scan` spent in the cull test
-        TimingStat publish; // handing the set over (under the mutex)
+        TimingStat publish; // handing the set over (under the mutex), merging deltas included
+        TimingStat delta; // previous scan -> this one (ScanDelta::between, then apply)
+        int64_t deltas_merged = 0; // scans the main thread skipped: their delta merged into the next one
+        int64_t last_delta_entered = 0;
+        int64_t last_delta_left = 0;
         TimingStat latency; // camera chunk change -> scan published
         int64_t scans_skipped_same_chunk = 0;
         int64_t last_scan_size = 0;
@@ -129,7 +134,7 @@ private:
     int64_t _evict_cache(int64_t p_nodes_visited);
     // Hands the scan over to the main thread (get_scanned_chunks) and records its stats. p_ready_usec: when
     // the scan (and its compare) finished.
-    void _publish(std::unique_ptr<LODHashSet> p_scan, const ChunkId &p_camera_chunk, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec,
+    void _publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ChunkId &p_camera_chunk, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec,
             uint64_t p_ready_usec);
     static Dictionary _scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec);
 
@@ -138,8 +143,9 @@ public:
     void stop();
 
     void set_camera_chunk(Vector3 camera_pos);
-    // Takes the latest scan if there is a new one; r_camera_chunk is the camera chunk it was made for.
-    bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, ChunkId &r_camera_chunk);
+    // Takes the latest scan if there is a new one; r_camera_chunk is the camera chunk it was made for and
+    // r_delta the change from the scan taken before (from the empty set for the first one).
+    bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ChunkId &r_camera_chunk);
 
     // The full scan around `p_camera_chunk`. Const and thread safe: the discovery audit calls it from
     // the main thread to rebuild the published scan without culling.
