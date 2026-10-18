@@ -27,7 +27,7 @@ var cascade_terrain: Node = null  # set on the cascade terrains
 var cached_altitude := 0.0
 var altitude_age := 1.0
 
-# ---- Archetype dig tools (archetype table terrain, --terrain=archetypes) ----------------------
+# ---- Archetype dig tools (archetype table terrains, --terrain=archetypes|shapes) -------------------
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
 # of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
 # by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press
@@ -109,7 +109,7 @@ func _ready():
 				break
 			global_position.y += spawn_altitude - d
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	if terrain and terrain.terrain_mode == 3:
+	if terrain and terrain.terrain_mode >= 3:  # the archetype table terrains (demo, shapes)
 		_make_hud()
 	yaw = rotation.y
 	pitch = camera.rotation.x
