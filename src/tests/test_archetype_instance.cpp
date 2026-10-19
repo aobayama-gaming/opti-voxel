@@ -418,3 +418,58 @@ TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes
     CHECK(sdf_at(tunnels, 0.0, 5.0, 0.0) > 0.0f);
     CHECK(ring(tunnels, 4.5, 5.0) < 0.0f);
 }
+
+// B6: the band rule makes two LODs see different surfaces (an octave or an instance dropped or eroded between
+// them). A skirt pushes its chunk's rim towards air by skirt_depth voxels of its LOD, so at a seam between a LOD L
+// and a LOD L+1 chunk the field may differ by at most the skirt depth of the chunk whose surface is the outer one,
+// or a crack shows. On the demo ground with a dense scatter, at points near the LOD-L surface of columns of
+// Λ_{L+1}, with the skirt depth the terrain asks for (min_skirt_depth).
+TEST_CASE("SDFArchetype band: the field step between LOD L and L+1 stays within the skirt depth") {
+    ChunkParam param;
+    param.voxel_size = 0.5f;
+    SDFArchetype sdf;
+    sdf.set_scatter(4000, 200.0);
+    const float skirt = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 15));
+    param.skirt_depth = skirt;
+    sdf.configure(param, 15);
+    MESSAGE("skirt depth asked for: ", skirt, " voxels of the chunk's LOD");
+    CHECK(skirt >= ERODE_CELLS);
+    const double datum = SDFBase::DATUM_M / 0.5;
+    auto at = [&](const VoxelPos &p_column, double p_y, int p_lod) {
+        WorldPos p;
+        p.voxel = VoxelPos(p_column.x, int64_t(std::floor(p_y)), p_column.z);
+        p.frac = Float3{ 0.0f, float(p_y - std::floor(p_y)), 0.0f };
+        return double(sdf.evaluate(p, p_lod));
+    };
+    for (int lod = 0; lod <= 6; lod++) {
+        CAPTURE(lod);
+        const double cell = std::ldexp(1.0, lod);
+        double worst = 0.0;
+        int64_t points = 0;
+        const int64_t unit = int64_t(2) << lod; // Λ_{L+1}
+        for (uint32_t i = 0; i < 300; i++) {
+            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x5EA4u });
+            const VoxelPos column(WorldCoord::floor_div(-100 + int64_t(h.x % 400u) - 200, unit) * unit, 0,
+                    WorldCoord::floor_div(-300 + int64_t(h.y % 400u) - 200, unit) * unit);
+            // The LOD-L top surface: scan down in cells.
+            double y = datum + 300.0;
+            while (at(column, y - cell, lod) > 0.0 && y > datum - 300.0) {
+                y -= cell;
+            }
+            for (double d = -2.0 * cell; d <= 2.0 * cell; d += 0.25 * cell) {
+                const double fine = at(column, y + d, lod);
+                if (std::fabs(fine) > double(param.voxel_size) * cell) {
+                    continue; // only near the surface, where the skirt has to hide the step
+                }
+                const double step = at(column, y + d, lod + 1) - fine;
+                // step > 0: the coarse field is more air there, its surface the inner one: the fine rim must cover.
+                const double depth_m = double(skirt) * double(param.voxel_size) * std::ldexp(1.0, step > 0.0 ? lod : lod + 1);
+                worst = MAX(worst, std::fabs(step) / depth_m);
+                points++;
+            }
+        }
+        MESSAGE("LOD ", lod, " | ", lod + 1, ": ", points, " points near the surface, worst step ", worst, " of the outer chunk's skirt depth");
+        CHECK(points > 300);
+        CHECK(worst <= 1.0);
+    }
+}

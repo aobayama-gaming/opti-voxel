@@ -149,6 +149,11 @@ public:
     // only takes lattice points (frac 0, voxel a multiple of 2^lod).
     virtual const Cascade::Spec *get_cascade() const { return nullptr; }
 
+    // The smallest skirt depth (voxels of the chunk's LOD) this terrain needs: how far apart the surfaces of a
+    // LOD L and a LOD L+1 chunk can be (a band dropped between them), so a seam shows no crack. VoxelTerrain raises
+    // skirt_depth to it before configure().
+    virtual float min_skirt_depth(const ChunkParam &, int) const { return 0.0f; }
+
     // Depth (metres) of the skirt of a LOD-p_lod chunk: how far past its bounds the SDF is pushed towards
     // air (gpu_glsl.hpp skirt_sdf). By default skirt_depth voxels of the LOD; SDFCascade sizes it from its
     // octave amplitudes.

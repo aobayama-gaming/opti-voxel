@@ -38,6 +38,7 @@ extends Node3D
 ##                                shapes: its hard-CSG gallery on a flat ground, SDFArchetype::shapes)
 ##   --instances=N                archetypes: scatter N rocks/pillars around the demo objects (default 0)
 ##   --instance_area=M            archetypes: side of the scatter square, metres (default 200)
+##   --instance_band=0            archetypes: keep every instance at every LOD (no band rule; the reference)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
@@ -156,6 +157,8 @@ func _ready() -> void:
 		terrain.archetype_instances = int(args["instances"])
 	if args.has("instance_area"):
 		terrain.archetype_instance_area = float(args["instance_area"])
+	if args.has("instance_band"):
+		terrain.archetype_band = args["instance_band"] != "0"
 	terrain.terrain_mode = terrains[terrain_arg]
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"

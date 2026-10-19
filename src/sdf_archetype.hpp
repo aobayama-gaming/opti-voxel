@@ -50,6 +50,23 @@ public:
         scatter_area = p_area;
     }
 
+    // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
+    void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
+
+    // The band rule's steps between LOD L and L+1: an instance erodes by ERODE_CELLS cells; a ground octave k,
+    // dropped from LOD k - 2 on, moves the ground by up to amp * PERLIN2_MAX, i.e. that many cells of LOD k - 3.
+    float min_skirt_depth(const ChunkParam &p_param, int p_lod_count) const override {
+        double need = Archetype::ERODE_CELLS;
+        if (which == Scene::DEMO) {
+            for (const ExactNoise::Octave &o : height_fbm(p_param.voxel_size).octaves) {
+                if (o.k - ExactNoise::BAND_SHIFT + 1 < p_lod_count) {
+                    need = MAX(need, double(o.amp) * Archetype::PERLIN2_MAX * std::ldexp(1.0, ExactNoise::BAND_SHIFT - o.k));
+                }
+            }
+        }
+        return float(need);
+    }
+
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         create_scene(p_param.voxel_size, p_lod_count);
@@ -307,6 +324,7 @@ private:
     float edit_margin_c = 0.0f;
     int scatter_count = 0; // --instances
     double scatter_area = 200.0; // --instance_area (metres)
+    bool instance_band = true; // --instance_band
     Scene which;
 
     // shapes() in metres, rounded to voxels.
@@ -393,13 +411,7 @@ private:
     }
 
     void finish_record(Archetype::TableRecord &r_rec) const {
-        const Archetype::Bounds wb = Archetype::record_world_bounds((*library)[r_rec.def], r_rec);
-        for (int a = 0; a < 3; a++) {
-            r_rec.box_lo[a] = int32_t(wb.lo[a] - r_rec.anchor[a]);
-            r_rec.box_hi[a] = int32_t(wb.hi[a] - r_rec.anchor[a]);
-        }
-        r_rec.lipschitz = wb.lipschitz;
-        r_rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+        Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band);
     }
 
     VoxelBox record_box(const Archetype::TableRecord &p_rec) const {

@@ -71,7 +71,7 @@ void InstanceSnapshot::gather(const ChunkId &p_centre, int p_lod, const VoxelPos
     // smooth op would fold it several times.
     candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
     for (const uint32_t i : candidates) {
-        if (influence_meets(records[i], p_lod, p_lo, p_hi)) {
+        if (records[i].listed_at(p_lod) && influence_meets(records[i], p_lod, p_lo, p_hi)) {
             r_out.push_back(i);
         }
     }
@@ -104,8 +104,8 @@ std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const Def
 
     for (uint32_t i = 0; i < snap->records.size(); i++) {
         const TableRecord &rec = snap->records[i];
-        if (rec.removed) {
-            continue; // kept for stable ids, never listed
+        if (rec.removed || rec.max_lod <= rec.min_lod) {
+            continue; // removed: kept for stable ids; dropped at every LOD: never listed
         }
         const Bounds wb = record_world_bounds((*p_library)[rec.def], rec);
         if (!wb.bounded) {
@@ -152,13 +152,23 @@ std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const Def
     }
     for (int lod = 0; lod < p_max_lod; lod++) {
         for (const ChunkId &n : by_lod[lod]) {
+            // The band rule: the parent's chunks only need the instances still listed at its LOD, so a coarse
+            // node's subtree holds the instances big enough for it, not every instance under it.
+            std::vector<uint32_t> up;
+            for (const uint32_t i : snap->subtree[n]) {
+                if (lod + 1 < snap->records[i].max_lod) {
+                    up.push_back(i);
+                }
+            }
+            if (up.empty()) {
+                continue;
+            }
             const ChunkId parent = ChunkMath::get_parent_from_child(n);
             if (!snap->subtree.has(parent)) {
                 by_lod[lod + 1].push_back(parent);
             }
-            const std::vector<uint32_t> child = snap->subtree[n];
             std::vector<uint32_t> &pacc = snap->subtree[parent];
-            pacc.insert(pacc.end(), child.begin(), child.end());
+            pacc.insert(pacc.end(), up.begin(), up.end());
         }
     }
     // Dedup every subtree: an instance stored in sibling chunks is appended once per sibling.

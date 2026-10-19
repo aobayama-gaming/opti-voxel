@@ -75,6 +75,7 @@ private:
     int lod_numbers = 15;
     int archetype_instances = 0;
     double archetype_instance_area = 200.0;
+    bool archetype_band = true;
     bool legacy_trim_indices = false;
     // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
     // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
@@ -185,6 +186,10 @@ public:
     int get_archetype_instances() const;
     void set_archetype_instance_area(double p_area);
     double get_archetype_instance_area() const;
+    // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
+    // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
+    void set_archetype_band(bool p_enabled);
+    bool get_archetype_band() const;
 
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);

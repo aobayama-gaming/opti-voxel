@@ -66,9 +66,30 @@ struct TableRecord {
     int32_t box_hi[3] = {};
     float margin_c = 0.0f; // 2 * L + skirt_depth (voxels); M(lod) = ceil(k + margin_c * 2^lod) + 2
     float lipschitz = 1.0f; // the instance's L (metrics / tests)
+    // The band rule (set_band): listed by the chunks of LOD [min_lod, max_lod) only, and eroded at LOD L by
+    // erode * (2^L - 1) voxels (its distance raised: the shape shrinks uniformly).
+    uint8_t min_lod = 0;
+    uint8_t max_lod = NEVER_DROPPED;
+    float erode = 0.0f;
+
+    static constexpr uint8_t NEVER_DROPPED = 255;
+    bool listed_at(int p_lod) const { return p_lod >= min_lod && p_lod < max_lod; }
 
     DefRecord def_record() const;
 };
+
+// The band rule for instances. At LOD L an instance is eroded by ERODE_CELLS * (2^L - 1) LOD0 voxels: it
+// shrinks by ERODE_CELLS cells per LOD, so the surfaces of a LOD L and a LOD L+1 chunk differ by at most
+// ERODE_CELLS cells of L, under the fine chunk's skirt (skirt_depth >= ERODE_CELLS): no crack at a seam. It is
+// dropped (no longer listed) from the first LOD whose erosion reaches its depth plus k (the depth: half its
+// box's smallest side times L), where the eroded shape no longer reaches zero, so dropping it changes no sign:
+// the drop itself is invisible. Its mean (nothing, or an aggregate for a cluster) stands in for it. p_enabled
+// false (--instance_band=0) keeps it whole at every LOD: the reference F_ref.
+inline constexpr float ERODE_CELLS = 0.5f;
+void set_band(TableRecord &r_record, bool p_bounded, bool p_enabled);
+
+// The record's box (relative to the anchor), L and margin from its type's bounds, then its band.
+void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band);
 
 // The DefRecord struct (with the sdf_records / sdf_list buffer declarations): spliced with the frame
 // structs, before the bindings, by the SDF's GPU data. The fold helpers (arch_in_box, arch_combine) go

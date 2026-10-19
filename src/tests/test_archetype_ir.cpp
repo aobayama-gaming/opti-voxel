@@ -301,6 +301,7 @@ TEST_CASE("Archetype: values are the same bits at every LOD, gradients scale by 
     const std::vector<VoxelPos> anchors = { VoxelPos(), VoxelPos(3000, -77, 5) };
     int64_t points = 0;
     int64_t in_domain = 0;
+    int64_t compared = 0;
     for (uint32_t seed = 0; seed < 100; seed++) {
         Program prog = random_program(seed, anchors, 40);
         prog.normalize = true;
@@ -325,12 +326,15 @@ TEST_CASE("Archetype: values are the same bits at every LOD, gradients scale by 
                 const Float4 &c = rl[prog.output];
                 CHECK(same_bits(Float4{ a.x * s, a.y * s, a.z * s, a.w }, c));
                 CHECK(same_bits(finish(prog, c, lod), n0));
+                compared++;
             }
             in_domain += ok ? 1 : 0;
         }
     }
     MESSAGE("points in the exact domain at LODs 0, 1, 5, 14, 24: ", in_domain, " of ", points);
     CHECK(in_domain * 10 >= points * 8);
+    MESSAGE("(point, LOD) pairs with the same bands as LOD 0, compared: ", compared);
+    CHECK(compared > 1000);
 }
 
 TEST_CASE("Archetype: validate rejects malformed programs") {

@@ -537,3 +537,177 @@ TEST_CASE("Archetype table: a chunk lists every instance its samples can see, at
     MESSAGE("chunk lists: ", samples, " samples, ", box_hits, " inside the instance's influence box");
     CHECK(box_hits > 10000);
 }
+
+namespace {
+
+// The LOD-p_lod chunk id holding LOD0 voxel p_v (instance_table.cpp's chunk_at_voxel).
+ChunkId chunk_holding(const VoxelPos &p_v, int p_lod, const ChunkParam &p_param) {
+    const int64_t span = int64_t(p_param.chunk_voxel_dimension()) << p_lod;
+    const int64_t unit = int64_t(1) << p_lod;
+    return ChunkId((WorldCoord::floor_div(p_v.x, span) * 2 + 1) * unit, (WorldCoord::floor_div(p_v.y, span) * 2 + 1) * unit,
+            (WorldCoord::floor_div(p_v.z, span) * 2 + 1) * unit);
+}
+
+// Spheres and boxes over six decades of size (1 to 2^20 voxels), unions and subtracts, some smooth, some
+// removed, around p_centre: the band rule's test table.
+std::vector<TableRecord> band_table(const DefLibrary &p_lib, const VoxelPos &p_centre, int p_count, uint32_t p_seed, bool p_band) {
+    std::vector<TableRecord> records;
+    for (int i = 0; i < p_count; i++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), p_seed, 0xBA4Du });
+        TableRecord rec;
+        rec.def = uint8_t(h.x % 2u);
+        rec.op = Combine(h.y % 4u);
+        rec.k = (h.y & 0x100u) ? float(h.z % 8u) + 0.5f : 0.0f;
+        rec.inv_k = rec.k > 0.0f ? 1.0f / rec.k : 0.0f;
+        const float size = std::ldexp(1.0f + float(h.z % 1000u) * 1e-3f, int(h.x >> 8) % 21);
+        rec.params[0] = size;
+        rec.params[1] = 0.5f * size + 1.0f;
+        rec.params[2] = size;
+        const int64_t spread = int64_t(size) * 4 + 4096;
+        rec.anchor = p_centre + VoxelPos(ExactNoise::random_offset(i, 1, p_seed, spread), ExactNoise::random_offset(i, 2, p_seed, spread), ExactNoise::random_offset(i, 3, p_seed, spread));
+        const double yaw = double(h.z >> 8) * 1e-4;
+        const float cy = float(std::cos(yaw)), sy = float(std::sin(yaw));
+        const float rot[9] = { cy, 0, -sy, 0, 1, 0, sy, 0, cy };
+        std::copy(rot, rot + 9, rec.rotation);
+        finish_record(p_lib[rec.def], rec, 1.0f, p_band);
+        rec.removed = (h.x % 13u) == 0u;
+        records.push_back(rec);
+    }
+    return records;
+}
+
+} // namespace
+
+// B3: with the band rule, a chunk's list (and a point's candidates) is still exactly the brute force: every
+// record listed at the chunk's LOD whose influence box meets its samples, in id order. The index prunes
+// the subtree lists above each instance's drop LOD: that must lose nothing.
+TEST_CASE("Archetype band: chunk lists and point candidates equal the brute force at every LOD") {
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    lib.add(make_box_type());
+    Builder gb;
+    const Program ground = gb.finish(gb.constant(5.0f));
+    ChunkParam param;
+    param.voxel_size = 1.0f;
+    int64_t lists = 0, entries = 0, dropped_somewhere = 0;
+    for (const VoxelPos &centre : { VoxelPos(), VoxelPos(int64_t(1) << 50, -(int64_t(1) << 33), 12345) }) {
+        const std::vector<TableRecord> records = band_table(lib, centre, 80, 7u, true);
+        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 14, 1);
+        for (const TableRecord &r : records) {
+            dropped_somewhere += r.max_lod != TableRecord::NEVER_DROPPED ? 1 : 0;
+        }
+        std::vector<uint32_t> got, want;
+        for (uint32_t q = 0; q < records.size(); q++) {
+            for (int lod = 0; lod <= 13; lod++) {
+                const ChunkId c = chunk_holding(records[q].anchor, lod, param);
+                const int64_t step = int64_t(2) << lod;
+                for (int n = 0; n < 27; n += 2) {
+                    const ChunkId chunk = c + ChunkId((n % 3 - 1) * step, (n / 3 % 3 - 1) * step, (n / 9 - 1) * step);
+                    VoxelPos lo, hi;
+                    chunk_sample_box(chunk, param, lo, hi);
+                    want.clear();
+                    for (uint32_t i = 0; i < records.size(); i++) {
+                        if (!records[i].removed && records[i].listed_at(lod) && influence_meets(records[i], lod, lo, hi)) {
+                            want.push_back(i);
+                        }
+                    }
+                    snap->chunk_list(chunk, got);
+                    CHECK(got == want);
+                    lists++;
+                    entries += int64_t(want.size());
+                }
+                // The point query at the anchor and at a box corner.
+                for (const VoxelPos &v : { records[q].anchor, records[q].anchor + VoxelPos(records[q].box_hi[0], records[q].box_lo[1], 3) }) {
+                    want.clear();
+                    for (uint32_t i = 0; i < records.size(); i++) {
+                        if (!records[i].removed && records[i].listed_at(lod) && influence_meets(records[i], lod, v, v)) {
+                            want.push_back(i);
+                        }
+                    }
+                    snap->point_candidates(v, lod, got);
+                    CHECK(got == want);
+                }
+            }
+        }
+    }
+    MESSAGE("band lists: ", lists, " chunk lists, ", entries, " entries; ", dropped_somewhere, " of 160 instances dropped at some LOD");
+    CHECK(dropped_somewhere > 100);
+    CHECK(entries > 1000);
+}
+
+// B4: the band rule moves the surface only where it erodes or drops an instance. Wherever F with the band rule
+// and F with every instance whole at every LOD (the reference) disagree in sign, the point is inside the bare
+// box (grown by k) of an instance eroded or dropped at that LOD; and an instance is only dropped once its
+// erosion reaches its depth plus k (set_band), so the drop itself moves nothing.
+TEST_CASE("Archetype band: the surface moves only inside instances eroded or dropped at the LOD") {
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    lib.add(make_box_type());
+    Builder gb;
+    const Local l = gb.local(gb.anchor(VoxelPos(0, 0, 0)));
+    const Program ground = gb.finish(l.y); // the plane y = 0
+    const VoxelPos centre(0, 0, 0);
+    const std::vector<TableRecord> banded = band_table(lib, centre, 60, 11u, true);
+    const std::vector<TableRecord> reference = band_table(lib, centre, 60, 11u, false);
+    std::vector<uint32_t> all;
+    for (uint32_t i = 0; i < banded.size(); i++) {
+        if (!banded[i].removed) {
+            all.push_back(i);
+        }
+    }
+    int64_t points = 0, flips = 0, unexplained = 0;
+    for (uint32_t q : all) {
+        const TableRecord &near = banded[q];
+        double extent = 0.0;
+        for (int a = 0; a < 3; a++) {
+            extent = MAX(extent, double(near.box_hi[a] - near.box_lo[a]));
+        }
+        for (int lod = 0; lod <= 20; lod += 2) {
+            for (uint32_t j = 0; j < 200; j++) {
+                const WorldPos p = random_point(near.anchor, 0.75 * extent + 4.0, j, q * 131u + uint32_t(lod));
+                std::vector<uint32_t> listed;
+                for (uint32_t i : all) {
+                    if (banded[i].listed_at(lod)) {
+                        listed.push_back(i);
+                    }
+                }
+                const Float4 fb = fold(ground, lib, banded.data(), listed.data(), uint32_t(listed.size()), p, lod);
+                const Float4 fr = fold(ground, lib, reference.data(), all.data(), uint32_t(all.size()), p, lod);
+                points++;
+                if ((fb.w > 0.0f) == (fr.w > 0.0f)) {
+                    continue;
+                }
+                flips++;
+                bool explained = false;
+                for (uint32_t i : all) {
+                    const TableRecord &r = banded[i];
+                    const bool changed = !r.listed_at(lod) || (lod > 0 && r.erode > 0.0f);
+                    if (!changed) {
+                        continue;
+                    }
+                    bool inside = true;
+                    for (int a = 0; a < 3; a++) {
+                        const double d = double(p.voxel[a] - r.anchor[a]) + double(a == 0 ? p.frac.x : (a == 1 ? p.frac.y : p.frac.z));
+                        inside = inside && d >= r.box_lo[a] - r.k - 1.0 && d <= r.box_hi[a] + r.k + 1.0;
+                    }
+                    explained = explained || inside;
+                }
+                unexplained += explained ? 0 : 1;
+            }
+        }
+    }
+    // Dropped only once fully eroded: erode * (2^max_lod - 1) >= depth + k.
+    for (const TableRecord &r : banded) {
+        if (r.max_lod != TableRecord::NEVER_DROPPED) {
+            double side = 1e30;
+            for (int a = 0; a < 3; a++) {
+                side = MIN(side, double(r.box_hi[a] - r.box_lo[a]));
+            }
+            CHECK(double(r.erode) * (std::ldexp(1.0, r.max_lod) - 1.0) >= 0.5 * side * double(r.lipschitz) + double(r.k));
+            CHECK((r.max_lod == 0 || double(r.erode) * (std::ldexp(1.0, r.max_lod - 1) - 1.0) < 0.5 * side * double(r.lipschitz) + double(r.k)));
+        }
+    }
+    MESSAGE("band surface: ", points, " points, ", flips, " sign flips vs the reference, ", unexplained, " unexplained");
+    CHECK(flips > 100);
+    CHECK(unexplained == 0);
+}
