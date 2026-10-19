@@ -9,6 +9,7 @@
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
+#include "gpu_cost_model.hpp"
 #include "lod_structures.hpp"
 #include "quad_page_pool.hpp"
 #include "sdf_base.hpp"
@@ -55,6 +56,10 @@ public:
         // per frame loads faster but lengthens the loading frames (~2-3 ms of GPU per batch).
         uint32_t max_batches_per_frame = 4;
         uint32_t max_in_flight = 0;
+        // GPU time the mesh batches of one frame may take, estimated by GPUCostModel from the measured
+        // batches; a batch is cut where the budget runs out (at least one chunk per frame, at most
+        // max_batches_per_frame batches). 0: no budget, whole batches.
+        float gpu_budget_ms = 0.0f;
         uint32_t page_capacity = 32768;
         uint32_t initial_pages = 64;
         bool compaction = true;
@@ -162,7 +167,7 @@ private:
     PackedInt32Array pending_kill_pages;
     PackedInt64Array pending_kill_ranges; // offset, count pairs (quads)
 
-    Ref<Mutex> mutex; // guards `completed`, `audit_completed` and the render-thread timing stats
+    Ref<Mutex> mutex; // guards `completed`, `audit_completed`, `measured_batches` and the render-thread timing stats
     std::vector<CompletedBatch> completed;
 
     std::vector<ChunkId> audit_queue;
@@ -171,6 +176,14 @@ private:
     std::vector<std::pair<ChunkId, uint32_t>> audit_counts;
 
     uint64_t frame = 0;
+
+    // GPU budget (Settings::gpu_budget_ms). The render thread hands each batch's measured GPU time
+    // (us, timestamps begin..copy) to `measured_batches` (under mutex); the main thread matches it with
+    // the batch's chunks per LOD and corrects the model.
+    GPUCostModel cost_model;
+    HashMap<uint32_t, std::vector<uint32_t>> batch_lod_counts;
+    std::vector<std::pair<uint32_t, uint64_t>> measured_batches;
+    void _update_cost_model();
 
     // ---- render thread only ----
     RenderingDevice *rd = nullptr;
@@ -222,8 +235,9 @@ private:
     HashMap<uint32_t, CompletedBatch> partial;
 
     bool _pop_queue(ChunkId &r_chunk);
-    // One batch each; false when there was nothing to dispatch.
-    bool _dispatch_mesh_batch();
+    // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
+    // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
+    bool _dispatch_mesh_batch(double &r_budget_us);
     bool _dispatch_audit_batch();
     void _flush_kills();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
@@ -266,5 +280,8 @@ private:
         // Cascade terrain: GPU time of the level groups j >= 3, j = 2, j = 1, j = 0 (pass 0 is their sum).
         TimingStat gpu_cascade[4];
         uint64_t live_quads = 0;
+        TimingStat budget_frame_estimate; // estimated GPU time of the mesh batches dispatched in a frame
+        double model_ratio_sum = 0.0; // measured / estimated GPU time of the batches matched
+        uint64_t model_ratio_count = 0;
     } stats;
 };
