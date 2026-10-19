@@ -15,12 +15,22 @@ the same SDF, the same surface-nets/QEF mesher, the same LOD chunk scan.
   turns invisible. `ApplyMesh` copies and `Clone()` are linked too (`probe/`).
 - Each EditableMesh holds ≤ 20k triangles / 60k vertices, so custom geometry is capped at
   **~160k triangles per client**. One mesh per chunk (`default.project.json`) shows ~16 chunks.
-- **Smooth Terrain** has none of these limits: 4-stud voxels (fixed), ±128k studs per axis,
-  automatic collision, built-in LOD for distant terrain, replication of server edits.
+- **Any mesh or part is at most 2048 studs per axis** (`CreateMeshPartAsync`: "Mesh extents size too
+  large"; `Part.Size` clamps).
+- **Smooth Terrain** has none of the mesh limits: 4-stud voxels (fixed), ±128k studs per axis,
+  automatic collision, built-in LOD, replication of server edits. It is drawn only **~3k studs around
+  the camera** (~750 voxels whatever the scale): voxels written farther out cost memory and are never
+  seen.
 
-So the current direction: **our SDF stays the source of truth, Smooth Terrain renders it**
-(`terrain.project.json`). A visual-only far field (clipmap rings in the 8 EditableMeshes, or thin
-far terrain) is the next step being evaluated.
+So the direction: **our SDF stays the source of truth, Smooth Terrain renders it**
+(`terrain.project.json`), with a thin height-field shell out to ±3072 studs. A far field past the draw
+distance was tried and dropped: EditableMesh rings don't fit (2048-stud and 8-mesh limits), and rings
+of WedgePart triangles (29k parts out to 32k studs) looked poor next to the terrain and took ~700 ms
+to rebuild a ring.
+
+Scale: `STUDS_PER_UNIT` 8 makes a voxel 0.5 m (the engine's) with characters scaled to 1.8 m, so the
+draw distance is ~375 m and the terrain world ±16 km. 5 cm voxels were tried: ~37 m of view, and
+`workspace.Gravity` caps at 1000 (scaled gravity needs ~5,200), so jumps turn floaty.
 
 Benchmark, same 336×336-stud region with caves, same 10 sphere edits (`bench.project.json`):
 
