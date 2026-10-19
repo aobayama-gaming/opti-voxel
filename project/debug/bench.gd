@@ -60,6 +60,7 @@ extends Node3D
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
 ##   --shadows=0                  the bench light casts no shadow (where render time goes)
+##   --shadow_distance=M          the bench light's shadow distance in metres (default 1000)
 ##   --scale_3d=F                 the viewport's 3D render scale (0.5: a quarter of the pixels)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
@@ -146,6 +147,8 @@ func _ready() -> void:
 	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
 	if args.get("shadows", "1") == "0":
 		$DirectionalLight3D.shadow_enabled = false
+	if args.has("shadow_distance"):
+		$DirectionalLight3D.directional_shadow_max_distance = float(args["shadow_distance"])
 	if args.has("scale_3d"):
 		get_viewport().scaling_3d_scale = float(args["scale_3d"])
 
