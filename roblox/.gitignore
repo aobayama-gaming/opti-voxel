@@ -1,7 +1,0 @@
-*.rbxl
-*.rbxlx
-tools/cpp_oracle/build/
-sourcemap.json
-__pycache__/
-*.rbxl.lock
-*.rbxlx.lock
