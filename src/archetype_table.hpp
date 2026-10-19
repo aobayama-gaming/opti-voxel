@@ -127,12 +127,18 @@ private:
 // The band rule for instances. At LOD L an instance is eroded by ERODE_CELLS * (2^L - 1) LOD0 voxels: it
 // shrinks by ERODE_CELLS cells per LOD, so the surfaces of a LOD L and a LOD L+1 chunk differ by at most
 // ERODE_CELLS cells of L, under the fine chunk's skirt (skirt_depth >= ERODE_CELLS): no crack at a seam. It is
-// dropped (no longer listed) from the first LOD whose erosion reaches its depth plus k (the depth: half its
-// box's smallest side times L), where the eroded shape no longer reaches zero, so dropping it changes no sign:
-// the drop itself is invisible. Its mean (nothing, or an aggregate for a cluster) stands in for it. p_enabled
-// false (--instance_band=0) keeps it whole at every LOD: the reference F_ref.
+// dropped (no longer listed) from the first LOD whose erosion reaches its depth plus k (band_depth), where the
+// eroded shape no longer reaches zero, so dropping it changes no sign: the drop itself is invisible. Its mean
+// (nothing, or an aggregate for a cluster) stands in for it. p_enabled false (--instance_band=0) keeps it
+// whole at every LOD: the reference F_ref. Needs the record's world box (finish_record sets it first).
 inline constexpr float ERODE_CELLS = 1.0f;
-void set_band(TableRecord &r_record, bool p_bounded, bool p_enabled);
+void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled);
+
+// How deep inside its shape a point can be, plus k: half its box's smallest side times L. Outside the box the
+// value is >= 0 and every point inside is within half that side of its boundary. The smaller of the local box
+// (its type's bounds, grown by rotation_margin on each side) and the world box: the local one doesn't grow
+// when the record turns (a diagonal branch's world box is far wider than the branch).
+double band_depth(const TableDef &p_def, const TableRecord &p_record);
 
 // The record's box (relative to the anchor), L and margin from its type's bounds, then its band.
 void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band);
@@ -167,12 +173,14 @@ Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_r
 Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_normalize);
 
 // Library types. Parameters (voxels): sphere {radius}; box {hx, hy, hz}; capsule {height, radius};
+// branch {height, radius, slope} (a capsule tapering by slope voxels of radius per voxel of height);
 // cylinder {half_height, radius}; rock {radius, amp} (an fbm-displaced sphere); swiss_cube
 // {hx, hy, hz, ring_radius, hole_radius} (a box with p_holes spherical holes, a composite through the
 // table).
 TableDefPtr make_sphere_type();
 TableDefPtr make_box_type();
 TableDefPtr make_capsule_type();
+TableDefPtr make_branch_type();
 TableDefPtr make_cylinder_type();
 TableDefPtr make_rock_type(int p_k, uint32_t p_seed);
 TableDefPtr make_swiss_cube_type(int p_holes);

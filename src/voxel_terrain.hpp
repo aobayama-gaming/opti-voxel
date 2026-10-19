@@ -75,6 +75,8 @@ private:
     int lod_numbers = 15;
     int archetype_instances = 0;
     double archetype_instance_area = 200.0;
+    int archetype_trees = 0;
+    double archetype_tree_area = 60.0;
     bool archetype_band = true;
     bool legacy_trim_indices = false;
     // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
@@ -186,6 +188,12 @@ public:
     int get_archetype_instances() const;
     void set_archetype_instance_area(double p_area);
     double get_archetype_instance_area() const;
+    // Archetype demo scene: a forest of about --trees grown trees (tree_archetype.hpp) in a square of side
+    // --tree_area metres around the demo objects. Set before the node enters the tree.
+    void set_archetype_trees(int p_count);
+    int get_archetype_trees() const;
+    void set_archetype_tree_area(double p_area);
+    double get_archetype_tree_area() const;
     // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);

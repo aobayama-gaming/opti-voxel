@@ -51,6 +51,10 @@ std::shared_ptr<Def> ref_def(const std::string &p_type, const float *p_params) {
         r = b.box(l, p_params[0], p_params[1], p_params[2]);
     } else if (p_type == "capsule") {
         r = b.capsule(l, p_params[0], p_params[1]);
+    } else if (p_type == "branch") {
+        const Reg yc = b.clamp(l.y, b.constant(0.0f), b.constant(p_params[0]));
+        const Reg len = b.length(l.x, b.sub(l.y, yc), l.z);
+        r = b.sub(len, b.add(b.constant(p_params[1]), b.mul(b.constant(p_params[2]), yc)));
     } else if (p_type == "cylinder") {
         r = b.cylinder(l, p_params[0], p_params[1]);
     } else if (p_type == "rock") {
@@ -83,6 +87,9 @@ TableDefPtr table_def(const std::string &p_type) {
     }
     if (p_type == "capsule") {
         return make_capsule_type();
+    }
+    if (p_type == "branch") {
+        return make_branch_type();
     }
     if (p_type == "cylinder") {
         return make_cylinder_type();
@@ -119,6 +126,7 @@ TEST_CASE("Archetype table: a table Def matches the compiled (PR 1) program per 
         { "sphere", { 7.0f, 0, 0, 0, 0 } },
         { "box", { 6.0f, 4.0f, 9.0f, 0, 0 } },
         { "capsule", { 20.0f, 3.0f, 0, 0, 0 } },
+        { "branch", { 20.0f, 3.0f, -0.1f, 0, 0 } },
         { "cylinder", { 8.0f, 5.0f, 0, 0, 0 } },
         { "rock", { 12.0f, 2.0f, 0, 0, 0 } },
         { "swiss_cube", { 10.0f, 10.0f, 10.0f, 5.0f, 4.0f } },
@@ -176,6 +184,67 @@ TEST_CASE("Archetype table: a table Def matches the compiled (PR 1) program per 
     MESSAGE("table vs compiled (value and gradient): ", compared, " comparisons");
 }
 
+// The contract the locality rule and the band rule rest on, for every library type in its own frame: outside the
+// local box its bounds give, the value is at least the distance to that box, and |grad| <= L everywhere.
+TEST_CASE("Archetype table: every library type's box and Lipschitz bound hold") {
+    struct Type {
+        std::string name;
+        float params[5];
+    };
+    const std::vector<Type> types = {
+        { "sphere", { 7.0f, 0, 0, 0, 0 } },
+        { "box", { 6.0f, 4.0f, 9.0f, 0, 0 } },
+        { "capsule", { 20.0f, 3.0f, 0, 0, 0 } },
+        { "branch", { 20.0f, 3.0f, -0.1f, 0, 0 } },
+        { "branch", { 30.0f, 0.75f, 0.05f, 0, 0 } },
+        { "cylinder", { 8.0f, 5.0f, 0, 0, 0 } },
+        { "rock", { 12.0f, 2.0f, 0, 0, 0 } },
+        { "swiss_cube", { 10.0f, 10.0f, 10.0f, 5.0f, 4.0f } },
+    };
+    for (const Type &t : types) {
+        const TableDefPtr def = table_def(t.name);
+        Float3 lo{}, hi{};
+        float lipschitz = 0.0f;
+        def->bounds(t.params, lo, hi, lipschitz);
+        TableRecord rec;
+        std::memcpy(rec.params, t.params, sizeof(t.params));
+        rec.salt = noise_salt(5);
+        const DefRecord dr = rec.def_record();
+        const double box_lo[3] = { lo.x, lo.y, lo.z };
+        const double box_hi[3] = { hi.x, hi.y, hi.z };
+        double half = 0.0;
+        for (int a = 0; a < 3; a++) {
+            half = MAX(half, MAX(std::fabs(box_lo[a]), std::fabs(box_hi[a])));
+        }
+        int64_t outside = 0, violations = 0;
+        double worst_margin = INFINITY, worst_slope = 0.0;
+        for (uint32_t i = 0; i < 100000; i++) {
+            const WorldPos p = random_point(VoxelPos(), 1.5 * half + 4.0, i, 0xB0B5u);
+            const Float4 r = run(def->program, p, 0, &dr);
+            const double frac[3] = { p.frac.x, p.frac.y, p.frac.z };
+            double d2 = 0.0;
+            for (int a = 0; a < 3; a++) {
+                const double q = double(p.voxel[a]) + frac[a];
+                const double e = MAX(MAX(box_lo[a] - q, q - box_hi[a]), 0.0);
+                d2 += e * e;
+            }
+            const double d = std::sqrt(d2);
+            if (d > 0.0) {
+                outside++;
+                worst_margin = MIN(worst_margin, double(r.w) - d);
+                violations += double(r.w) < d - 1e-4 * (d + 1.0) ? 1 : 0;
+            }
+            const double g = std::sqrt(double(r.x) * r.x + double(r.y) * r.y + double(r.z) * r.z);
+            worst_slope = MAX(worst_slope, g / double(lipschitz));
+            violations += g > double(lipschitz) * (1.0 + 1e-5) ? 1 : 0;
+        }
+        CAPTURE(t.name);
+        MESSAGE(t.name, ": ", outside, " points outside the box (worst value - distance ", worst_margin, "), worst |grad| / L ", worst_slope);
+        CHECK(outside > 1000);
+        CHECK(violations == 0);
+    }
+}
+
 TEST_CASE("Archetype: a child of a rotated instance turns with its parent") {
     Instance inst;
     inst.def = box_def(20.0f, 20.0f, 20.0f);
@@ -211,6 +280,7 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
     lib.add(make_box_type());
     lib.add(make_capsule_type());
     lib.add(make_rock_type(8, 0x1234u));
+    lib.add(make_branch_type());
     std::vector<TableRecord> records;
     const int64_t P32 = int64_t(1) << 32;
     const int64_t E = 1 << 20;
@@ -242,9 +312,14 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
                 rec.params[0] = 10.0f;
                 rec.params[1] = 2.0f;
                 break;
-            default:
+            case 3:
                 rec.params[0] = 6.0f + float(i % 4);
                 rec.params[1] = 1.5f;
+                break;
+            default:
+                rec.params[0] = 14.0f;
+                rec.params[1] = 3.0f;
+                rec.params[2] = -0.12f;
                 break;
         }
         rec.salt = noise_salt(i + 1);
@@ -697,17 +772,61 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
     // Dropped only once fully eroded: erode * (2^max_lod - 1) >= depth + k.
     for (const TableRecord &r : banded) {
         if (r.max_lod != TableRecord::NEVER_DROPPED) {
-            double side = 1e30;
-            for (int a = 0; a < 3; a++) {
-                side = MIN(side, double(r.box_hi[a] - r.box_lo[a]));
-            }
-            CHECK(double(r.erode) * (std::ldexp(1.0, r.max_lod) - 1.0) >= 0.5 * side * double(r.lipschitz) + double(r.k));
-            CHECK((r.max_lod == 0 || double(r.erode) * (std::ldexp(1.0, r.max_lod - 1) - 1.0) < 0.5 * side * double(r.lipschitz) + double(r.k)));
+            const double depth = band_depth(lib[r.def], r);
+            CHECK(double(r.erode) * (std::ldexp(1.0, r.max_lod) - 1.0) >= depth);
+            CHECK((r.max_lod == 0 || double(r.erode) * (std::ldexp(1.0, r.max_lod - 1) - 1.0) < depth));
         }
     }
     MESSAGE("band surface: ", points, " points, ", flips, " sign flips vs the reference, ", unexplained, " unexplained");
     CHECK(flips > 100);
     CHECK(unexplained == 0);
+}
+
+// The band depth comes from the local box as well as the world box: a capsule or a branch drops at the same LOD
+// however it turns, never later than from its world box alone, and a diagonal one drops earlier than that.
+TEST_CASE("Archetype band: a record's drop LOD does not depend on its rotation") {
+    std::vector<std::array<float, 9>> rots;
+    rotations(rots);
+    const double d = 1.0 / std::sqrt(3.0), e = 1.0 / std::sqrt(2.0), f = 1.0 / std::sqrt(6.0);
+    // Local y along (1, 1, 1) / sqrt(3): rows (1, -1, 0) / sqrt(2), (1, 1, 1) / sqrt(3), (1, 1, -2) / sqrt(6).
+    rots.push_back({ float(e), float(-e), 0.0f, float(d), float(d), float(d), float(f), float(f), float(-2.0 * f) });
+    auto first_lod = [](double p_depth) {
+        for (int lod = 0; lod < 32; lod++) {
+            if (double(ERODE_CELLS) * (std::ldexp(1.0, lod) - 1.0) >= p_depth) {
+                return lod;
+            }
+        }
+        return int(TableRecord::NEVER_DROPPED);
+    };
+    for (const std::string &name : { std::string("capsule"), std::string("branch") }) {
+        const TableDefPtr def = table_def(name);
+        int lod0 = -1;
+        bool earlier = false;
+        for (const std::array<float, 9> &rot : rots) {
+            TableRecord rec;
+            rec.k = 1.5f;
+            rec.anchor = VoxelPos(1000, -20, 7);
+            std::copy(rot.begin(), rot.end(), rec.rotation);
+            rec.params[0] = 60.0f;
+            rec.params[1] = 3.0f;
+            rec.params[2] = name == "branch" ? -0.03f : 0.0f;
+            finish_record(*def, rec, 1.0f, true);
+            double side = 1e30;
+            for (int a = 0; a < 3; a++) {
+                side = MIN(side, double(rec.box_hi[a] - rec.box_lo[a]));
+            }
+            const int world_lod = first_lod(0.5 * side * double(rec.lipschitz) + double(rec.k));
+            CAPTURE(name);
+            MESSAGE(name, ": max_lod ", int(rec.max_lod), ", ", world_lod, " from the world box (smallest side ", side, ")");
+            CHECK(int(rec.max_lod) <= world_lod);
+            earlier = earlier || int(rec.max_lod) < world_lod;
+            if (lod0 < 0) {
+                lod0 = rec.max_lod;
+            }
+            CHECK(int(rec.max_lod) == lod0);
+        }
+        CHECK(earlier);
+    }
 }
 
 // The discoverer's no-cull rule from the index: near_instance is true wherever the old O(N) scan (every

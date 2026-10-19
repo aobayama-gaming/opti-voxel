@@ -40,6 +40,8 @@ public:
     void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
 
     Dictionary get_stats() const override;
+    // The scene's own numbers (SDFArchetype's forest), merged into get_stats(). Main thread, before the meshers start.
+    void set_scene_stats(const Dictionary &p_stats) { scene_stats = p_stats; }
 
 private:
     // Main thread only (build_lists is called by the meshers' dispatch on the main thread).
@@ -54,6 +56,7 @@ private:
     mutable ListStats list_stats;
     std::shared_ptr<const InstanceSnapshot> snap;
     uint32_t capacity = 16384; // the GPU record/list buffers hold this many instances
+    Dictionary scene_stats;
 };
 
 } // namespace Archetype

@@ -96,6 +96,10 @@ Compiled compile(const Instance &p_root);
 // The box holding both (bounded if both are), the larger Lipschitz bound.
 Bounds hull(const Bounds &p_a, const Bounds &p_b);
 
+// The margin world_bounds adds on each side for the float rotation: one voxel, plus R^T's distance to R^-1
+// (rows orthonormal within 1e-5, is_orthonormal) times the local box's reach (its largest |x| + |y| + |z|).
+double rotation_margin(Float3 p_lo, Float3 p_hi);
+
 // The world box (LOD0 voxels, int64, inclusive) of a local box (p_lo, p_hi) placed at p_anchor with
 // rotation p_r: the corners rotated back (R^T q) and rounded out, plus a margin for the float rotation.
 // Shared by the compiled path (world_bounds) and the table (record_world_bounds).

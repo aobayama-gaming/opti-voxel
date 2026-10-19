@@ -425,52 +425,74 @@ TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes
 // or a crack shows. On the demo ground with a dense scatter, at points near the LOD-L surface of columns of
 // Λ_{L+1}, with the skirt depth the terrain asks for (min_skirt_depth).
 TEST_CASE("SDFArchetype band: the field step between LOD L and L+1 stays within the skirt depth") {
-    ChunkParam param;
-    param.voxel_size = 0.5f;
-    SDFArchetype sdf;
-    sdf.set_scatter(4000, 200.0);
-    const float skirt = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 15));
-    param.skirt_depth = skirt;
-    sdf.configure(param, 15);
-    MESSAGE("skirt depth asked for: ", skirt, " voxels of the chunk's LOD");
-    CHECK(skirt >= ERODE_CELLS);
-    const double datum = SDFBase::DATUM_M / 0.5;
-    auto at = [&](const VoxelPos &p_column, double p_y, int p_lod) {
-        WorldPos p;
-        p.voxel = VoxelPos(p_column.x, int64_t(std::floor(p_y)), p_column.z);
-        p.frac = Float3{ 0.0f, float(p_y - std::floor(p_y)), 0.0f };
-        return double(sdf.evaluate(p, p_lod));
+    // A 4,000-rock scatter at 0.5 m voxels, then a forest of grown trees at 5 cm (branches erode, crowns lose
+    // their bumps' octaves): columns over the scene, the top surface found from above the tallest tree.
+    struct Scene {
+        std::string name;
+        float voxel;
+        int rocks;
+        int trees;
+        double area_m;
+        uint32_t columns;
+        double above_m;
     };
-    for (int lod = 0; lod <= 6; lod++) {
-        CAPTURE(lod);
-        const double cell = std::ldexp(1.0, lod);
-        double worst = 0.0;
-        int64_t points = 0;
-        const int64_t unit = int64_t(2) << lod; // Λ_{L+1}
-        for (uint32_t i = 0; i < 300; i++) {
-            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x5EA4u });
-            const VoxelPos column(WorldCoord::floor_div(-100 + int64_t(h.x % 400u) - 200, unit) * unit, 0,
-                    WorldCoord::floor_div(-300 + int64_t(h.y % 400u) - 200, unit) * unit);
-            // The LOD-L top surface: scan down in cells.
-            double y = datum + 300.0;
-            while (at(column, y - cell, lod) > 0.0 && y > datum - 300.0) {
-                y -= cell;
-            }
-            for (double d = -2.0 * cell; d <= 2.0 * cell; d += 0.25 * cell) {
-                const double fine = at(column, y + d, lod);
-                if (std::fabs(fine) > double(param.voxel_size) * cell) {
-                    continue; // only near the surface, where the skirt has to hide the step
+    const Scene scenes[] = { { "4,000-rock scatter", 0.5f, 4000, 0, 200.0, 300, 150.0 }, { "forest", 0.05f, 0, 60, 40.0, 100, 26.0 } };
+    for (const Scene &scene : scenes) {
+        CAPTURE(scene.name);
+        ChunkParam param;
+        param.voxel_size = scene.voxel;
+        SDFArchetype sdf;
+        sdf.set_scatter(scene.rocks, scene.area_m);
+        sdf.set_forest(scene.trees, scene.area_m);
+        const float skirt = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 15));
+        param.skirt_depth = skirt;
+        sdf.configure(param, 15);
+        MESSAGE(scene.name, ": skirt depth asked for: ", skirt, " voxels of the chunk's LOD");
+        CHECK(skirt >= ERODE_CELLS);
+        const double datum = SDFBase::DATUM_M / double(scene.voxel);
+        const ExactNoise::OctaveSet height = SDFArchetype::height_fbm(double(scene.voxel));
+        const int64_t window = std::llround(scene.area_m / double(scene.voxel));
+        const VoxelPos centre(std::llround(-50.0 / double(scene.voxel)), 0, std::llround(-150.0 / double(scene.voxel)));
+        auto at = [&](const VoxelPos &p_column, double p_y, int p_lod) {
+            WorldPos p;
+            p.voxel = VoxelPos(p_column.x, int64_t(std::floor(p_y)), p_column.z);
+            p.frac = Float3{ 0.0f, float(p_y - std::floor(p_y)), 0.0f };
+            return double(sdf.evaluate(p, p_lod));
+        };
+        for (int lod = 0; lod <= 6; lod++) {
+            CAPTURE(lod);
+            const double cell = std::ldexp(1.0, lod);
+            double worst = 0.0;
+            int64_t points = 0;
+            const int64_t unit = int64_t(2) << lod; // Λ_{L+1}
+            for (uint32_t i = 0; i < scene.columns; i++) {
+                const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x5EA4u });
+                const VoxelPos column(WorldCoord::floor_div(centre.x + int64_t(h.x % uint32_t(window)) - window / 2, unit) * unit, 0,
+                        WorldCoord::floor_div(centre.z + int64_t(h.y % uint32_t(window)) - window / 2, unit) * unit);
+                WorldPos g;
+                g.voxel = column;
+                const double ground = datum + std::floor(ExactNoise::fbm(height, g, 0).w);
+                // The LOD-L top surface: scan down in cells.
+                double y = ground + scene.above_m / double(scene.voxel);
+                while (at(column, y - cell, lod) > 0.0 && y > ground - scene.above_m / double(scene.voxel)) {
+                    y -= cell;
                 }
-                const double step = at(column, y + d, lod + 1) - fine;
-                // step > 0: the coarse field is more air there, its surface the inner one: the fine rim must cover.
-                const double depth_m = double(skirt) * double(param.voxel_size) * std::ldexp(1.0, step > 0.0 ? lod : lod + 1);
-                worst = MAX(worst, std::fabs(step) / depth_m);
-                points++;
+                for (double d = -2.0 * cell; d <= 2.0 * cell; d += 0.25 * cell) {
+                    const double fine = at(column, y + d, lod);
+                    if (std::fabs(fine) > double(param.voxel_size) * cell) {
+                        continue; // only near the surface, where the skirt has to hide the step
+                    }
+                    const double step = at(column, y + d, lod + 1) - fine;
+                    // step > 0: the coarse field is more air there, its surface the inner one: the fine rim must cover.
+                    const double depth_m = double(skirt) * double(param.voxel_size) * std::ldexp(1.0, step > 0.0 ? lod : lod + 1);
+                    worst = MAX(worst, std::fabs(step) / depth_m);
+                    points++;
+                }
             }
+            MESSAGE(scene.name, ": LOD ", lod, " | ", lod + 1, ": ", points, " points near the surface, worst step ", worst, " of the outer chunk's skirt depth");
+            CHECK(points > 300);
+            CHECK(worst <= 1.0);
         }
-        MESSAGE("LOD ", lod, " | ", lod + 1, ": ", points, " points near the surface, worst step ", worst, " of the outer chunk's skirt depth");
-        CHECK(points > 300);
-        CHECK(worst <= 1.0);
     }
 }
 

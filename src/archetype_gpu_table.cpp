@@ -124,6 +124,7 @@ Dictionary GpuTable::get_stats() const {
         per_lod[itos(lod)] = l;
     }
     d["list_len_per_lod"] = per_lod;
+    d.merge(scene_stats.duplicate(true)); // a copy: a Dictionary is shared by reference
     return d;
 }
 
