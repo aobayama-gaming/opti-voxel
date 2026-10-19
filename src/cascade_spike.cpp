@@ -398,6 +398,7 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
         if (!words.is_empty()) {
             p_rd->buffer_update(list, 0, words.size(), words);
         }
+        passes.set_fold(true); // even a batch with empty lists: the fold variant must give the bare bits there
         passes.record_all(lod, uint32_t(ids.size()));
         p_rd->submit();
         p_rd->sync();

@@ -398,6 +398,9 @@ bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_l
             return true; // an unbounded instance (edited away from the base: its stale entry doesn't count)
         }
     }
+    if (p_layer.stored_ids.empty()) {
+        return false; // nothing stored: no node to look up (a terrain without instances asks this per culled node)
+    }
     // An instance stored at this LOD or finer: some node of this LOD near the grown box holds it in its
     // subtree. A bigger one is stored at a coarser LOD: the nodes near the grown box there, exact test.
     for (int l = p_lod; l <= max_lod; l++) {

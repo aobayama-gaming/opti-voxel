@@ -972,15 +972,13 @@ constexpr const char TABLE_SHADER[] = R"glsl(#version 450
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 /*STRUCTS*/
-/*DEF_RECORD*/
 
 struct Sample { ChunkInput chunk; vec4 grid; };
 
 layout(set = 0, binding = 0, std430) restrict readonly buffer Samples { Sample samples[]; };
 layout(set = 0, binding = 1, std430) restrict writeonly buffer Results { uint results[]; };
 layout(set = 0, binding = 2, std140) uniform ChunkParamUniform { ChunkParam chunk_param; };
-layout(set = 0, binding = 3, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };
-layout(set = 0, binding = 4, std430) restrict readonly buffer DefList { uint sdf_list[]; };
+/*TABLE_BUFFERS*/
 layout(push_constant, std430) uniform Params { uint count; uint words; uint lod_bias; uint pad1; } params;
 
 /*HELPERS*/
@@ -1013,7 +1011,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     }
     String code = String(TABLE_SHADER);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*DEF_RECORD*/", String(Archetype::GLSL_DEF_RECORD_STRUCT));
+    code = code.replace("/*TABLE_BUFFERS*/", Archetype::glsl_table_buffers(3, 4));
     code = code.replace("/*HELPERS*/",
             String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE));
     code = code.replace("/*TERRAIN*/", Archetype::generate_table_sdf(table.ground, table.library, 1.0f, false));

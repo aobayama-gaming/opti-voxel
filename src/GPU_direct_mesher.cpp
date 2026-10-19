@@ -361,6 +361,9 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
     if (!buffer_table_records.is_valid()) {
         return;
     }
+    if (cascade != nullptr) {
+        cascade->set_fold(!p_list.is_empty()); // a batch with no instance listed samples the bare cascade
+    }
     // The records the batch's lists were built against (main thread, same snapshot), when they changed.
     if (!p_records.is_empty()) {
         SDFGpuTable::upload_records(rd, buffer_table_records, p_records);

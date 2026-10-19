@@ -593,6 +593,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
     // are computed but never used (see render_chunk).
     const bool cascade_samples = cascade != nullptr && cascade->is_valid();
     if (cascade_samples && p_count > 0) {
+        cascade->set_fold(!p_table_list.is_empty()); // a batch with no instance listed samples the bare cascade
         cascade->record_all(p_min_lod, p_count);
     }
     // A cascade that failed to build must not fall back to pass 1 (its terrain_sdf is a NaN stub).

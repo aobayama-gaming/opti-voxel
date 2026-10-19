@@ -58,8 +58,10 @@ uint32_t scratch_points_b(int p_item_size);
 uint32_t vec4s_per_point(Cascade::ChannelSet p_set);
 
 // The level pass compute shader (one source for every level) for p_sdf's cascade; p_debug: the variant
-// whose level 0 also stores its channels in debug_channels; p_points: point items.
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false);
+// whose level 0 also stores its channels in debug_channels; p_points: point items; p_fold: level 0 folds the
+// chunks' instance lists (cascade_sample_sdf). Without, it is the bare cascade_terrain_sdf: the same bits as the
+// fold over empty lists, for the batches that have none.
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false);
 
 // The point instance's ChunkParam: p_param with skirt 0 and chunk_size = the chunk's voxel dimension, so the
 // GPU's anchor (id - lod size) * half chunk stays the meshers' and an item's box is its anchor alone.
@@ -96,7 +98,11 @@ public:
     bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
             RID p_values);
     void free();
-    bool is_valid() const { return uniform_set.is_valid(); }
+    bool is_valid() const { return uniform_set[0].is_valid(); }
+
+    // Whether the next level-0 records fold the chunks' instance lists (a table terrain's batch whose lists aren't
+    // all empty). Off, level 0 is the bare cascade, the same bits over empty lists without the fold's cost.
+    void set_fold(bool p_fold) { fold = p_fold; }
 
     // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
     int level_count(int p_min_lod) const;
@@ -114,14 +120,16 @@ public:
 
 private:
     RenderingDevice *rd = nullptr;
-    RID shader;
-    RID pipeline;
+    // [0]: the bare level-0 output, [1]: with the instance fold (chunk items of a table terrain only).
+    RID shader[2];
+    RID pipeline[2];
+    RID uniform_set[2];
+    bool fold = false;
     RID scratch_a;
     RID scratch_b;
     RID bands;
     RID debug_placeholder;
     RID table_placeholders[2]; // records, list: bound when the caller has no table buffers
-    RID uniform_set;
     int top = 0;
     int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items
     uint32_t max_chunks = 0;
