@@ -433,57 +433,100 @@ std::vector<OccluderSet::Box> chunk_boxes(const ChunkId &p_chunk, const ChunkPar
     return boxes;
 }
 
-} // namespace
-
-Dictionary OcclusionAuditor::occlusion_estimate(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const ChunkHashMap &p_loaded,
-        const VoxelPos &p_eye_base, const Vector3 &p_eye, int p_max_lod) {
-    const uint64_t t0 = now_usec();
-    const int cells = int(2 * p_param.half_chunk_voxels());
+// The sample corners of the scanned chunks of LOD <= p_max_lod (CPU, the worker pool).
+struct Occupancy {
     std::vector<ChunkId> chunks;
+    std::vector<std::vector<uint8_t>> solid;
+    int cells = 0;
+};
+
+Occupancy sample_occupancy(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, int p_max_lod) {
+    Occupancy o;
+    o.cells = int(2 * p_param.half_chunk_voxels());
     for (const ChunkId &id : p_scan) {
         if (ChunkMath::get_lod(id) <= p_max_lod) {
-            chunks.push_back(id);
+            o.chunks.push_back(id);
         }
     }
-    std::vector<std::vector<uint8_t>> solid(chunks.size());
-    OccupancyJob job{ &p_sdf, &p_param, &chunks, &solid, cells };
-    if (!chunks.empty()) {
+    o.solid.resize(o.chunks.size());
+    OccupancyJob job{ &p_sdf, &p_param, &o.chunks, &o.solid, o.cells };
+    if (!o.chunks.empty()) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&sample_one, &job, int(chunks.size()), -1, true, "OcclusionEstimate");
+        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&sample_one, &job, int(o.chunks.size()), -1, true, "OcclusionOccupancy");
         pool->wait_for_group_task_completion(id);
     }
-    const double sample_ms = double(now_usec() - t0) / 1000.0;
+    return o;
+}
 
-    // The targets: every scanned chunk's sample box, relative to the eye.
-    const OcclusionMap::Vec3 eye{ double(p_eye.x), double(p_eye.y), double(p_eye.z) };
-    struct Target {
-        ChunkId id;
-        OcclusionMap::Vec3 lo, hi;
-        int64_t quads;
-    };
+OccluderSet occluders(const Occupancy &p_occupancy, const ChunkParam &p_param, int p_block) {
+    OccluderSet set;
+    for (size_t i = 0; i < p_occupancy.chunks.size(); i++) {
+        set.set(p_occupancy.chunks[i], chunk_boxes(p_occupancy.chunks[i], p_param, p_occupancy.solid[i], p_occupancy.cells, p_block));
+    }
+    return set;
+}
+
+// A scanned chunk to test: its sample box relative to the eye, and its loaded quads.
+struct Target {
+    ChunkId id;
+    OcclusionMap::Vec3 lo, hi;
+    int64_t quads;
+};
+
+std::vector<Target> make_targets(const ChunkParam &p_param, const LODHashSet &p_scan, const ChunkHashMap &p_loaded, const VoxelPos &p_eye_base,
+        const OcclusionMap::Vec3 &p_eye) {
     std::vector<Target> targets;
     for (const ChunkId &id : p_scan) {
         VoxelPos lo, hi;
         Archetype::chunk_sample_box(id, p_param, lo, hi);
         Target t;
         t.id = id;
-        t.lo = { double(lo.x - p_eye_base.x) - eye.x, double(lo.y - p_eye_base.y) - eye.y, double(lo.z - p_eye_base.z) - eye.z };
-        t.hi = { double(hi.x - p_eye_base.x) - eye.x, double(hi.y - p_eye_base.y) - eye.y, double(hi.z - p_eye_base.z) - eye.z };
+        t.lo = { double(lo.x - p_eye_base.x) - p_eye.x, double(lo.y - p_eye_base.y) - p_eye.y, double(lo.z - p_eye_base.z) - p_eye.z };
+        t.hi = { double(hi.x - p_eye_base.x) - p_eye.x, double(hi.y - p_eye_base.y) - p_eye.y, double(hi.z - p_eye_base.z) - p_eye.z };
         const ChunkOutput *out = p_loaded.getptr(id);
         t.quads = out ? out->triangle_count / 2 : 0;
         targets.push_back(t);
     }
+    return targets;
+}
+
+} // namespace
+
+std::vector<LODHashSet> OcclusionAuditor::hidden_by_blocks(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan,
+        const VoxelPos &p_eye_base, const Vector3 &p_eye, int p_max_lod, int p_block, const std::vector<double> &p_margins_m) {
+    const Occupancy occupancy = sample_occupancy(p_sdf, p_param, p_scan, p_max_lod);
+    const OcclusionMap::Vec3 eye{ double(p_eye.x), double(p_eye.y), double(p_eye.z) };
+    const std::vector<Target> targets = make_targets(p_param, p_scan, ChunkHashMap(), p_eye_base, eye);
+    const OccluderSet set = occluders(occupancy, p_param, p_block);
+    std::vector<LODHashSet> hidden(p_margins_m.size());
+    OcclusionMap map;
+    for (size_t m = 0; m < p_margins_m.size(); m++) {
+        set.build(map, p_eye_base, eye, p_margins_m[m] / p_param.voxel_size);
+        for (const Target &t : targets) {
+            if (map.box_hidden(t.lo, t.hi)) {
+                hidden[m].insert(t.id);
+            }
+        }
+    }
+    return hidden;
+}
+
+Dictionary OcclusionAuditor::occlusion_estimate(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const ChunkHashMap &p_loaded,
+        const VoxelPos &p_eye_base, const Vector3 &p_eye, int p_max_lod) {
+    const uint64_t t0 = now_usec();
+    const Occupancy occupancy = sample_occupancy(p_sdf, p_param, p_scan, p_max_lod);
+    const double sample_ms = double(now_usec() - t0) / 1000.0;
+    const OcclusionMap::Vec3 eye{ double(p_eye.x), double(p_eye.y), double(p_eye.z) };
+    const std::vector<Target> targets = make_targets(p_param, p_scan, p_loaded, p_eye_base, eye);
+    const std::vector<ChunkId> &chunks = occupancy.chunks;
 
     Array configs;
     OcclusionMap map;
     for (int block : { 2, 4, 7 }) {
-        if (cells % block != 0) {
+        if (occupancy.cells % block != 0) {
             continue;
         }
-        OccluderSet set;
-        for (size_t i = 0; i < chunks.size(); i++) {
-            set.set(chunks[i], chunk_boxes(chunks[i], p_param, solid[i], cells, block));
-        }
+        const OccluderSet set = occluders(occupancy, p_param, block);
         for (double margin_m : { 0.0, 0.25, 1.0 }) {
             const uint64_t b0 = now_usec();
             const OccluderSet::BuildStats bs = set.build(map, p_eye_base, eye, margin_m / p_param.voxel_size);

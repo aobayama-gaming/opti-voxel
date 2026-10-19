@@ -41,4 +41,8 @@ public:
     // of the loaded quads, and the build and test times (the runtime job's cost).
     static Dictionary occlusion_estimate(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const ChunkHashMap &p_loaded,
             const VoxelPos &p_eye_base, const Vector3 &p_eye, int p_max_lod);
+    // The scanned chunks occlusion_estimate's occluders (blocks of p_block cells) hide from one eye, one set per
+    // margin.
+    static std::vector<LODHashSet> hidden_by_blocks(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan,
+            const VoxelPos &p_eye_base, const Vector3 &p_eye, int p_max_lod, int p_block, const std::vector<double> &p_margins_m);
 };

@@ -84,6 +84,9 @@ extends Node3D
 ##                                the SDF, trees included: per LOD, the share of rays and of chunks blocked
 ##   --occlusion_estimate=L       after steady, what the solid blocks of the scanned chunks of LOD <= L would
 ##                                hide from the camera (CPU occupancy, blocks of 2/4/7 cells, margins 0/0.25/1 m)
+##   --occlusion_hide=L           last check: frees the quads of the chunks those blocks (4 cells) hide at margins
+##                                1, 0.25 and 0 m in turn, a steady phase after each (steady_hide0..2): the render
+##                                time occlusion would save
 ##
 ## Checks after steady run in this order: discovery_audit, occlusion_audit, audit, validate.
 ##
@@ -120,6 +123,7 @@ var discovery_audit_report := {}
 var occlusion_audit_report := {}
 var ray_census_report := {}
 var occlusion_estimate_report := {}
+var occlusion_hide_reports := []
 var checks := []  # remaining post-steady checks
 
 
@@ -387,7 +391,7 @@ func _process(delta: float) -> void:
 
 	var s: Dictionary = samples[phase]
 	s["frame_ms"].append(delta * 1000.0)
-	if phase == "steady":
+	if phase.begins_with("steady"):
 		s["gpu_ms"].append(RenderingServer.viewport_get_measured_render_time_gpu(vp_rid))
 		s["cpu_render_ms"].append(RenderingServer.viewport_get_measured_render_time_cpu(vp_rid)
 			+ RenderingServer.get_frame_setup_time_cpu())
@@ -408,6 +412,16 @@ func _process(delta: float) -> void:
 	var fly_usec := float(args.get("fly_seconds", "10")) * 1e6
 	var leg := (Time.get_ticks_usec() - phase_start_usec) / fly_usec
 	var fly_dist := float(args.get("fly_dist", "1500"))
+
+	if phase.begins_with("steady_hide"):
+		if phase_frame >= steady:
+			_end_phase()
+			var step := int(phase.trim_prefix("steady_hide")) + 1
+			if step < 3:
+				_occlusion_hide(step)
+			else:
+				_next_check()
+		return
 
 	match phase:
 		"load":
@@ -478,7 +492,7 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				for c in ["discovery_audit", "occlusion_audit", "ray_census", "occlusion_estimate", "audit", "validate"]:
+				for c in ["discovery_audit", "occlusion_audit", "ray_census", "occlusion_estimate", "audit", "validate", "occlusion_hide"]:
 					if args.has(c):
 						checks.append(c)
 				_next_check()
@@ -516,6 +530,14 @@ func _process(delta: float) -> void:
 		_finish()
 
 
+## --occlusion_hide step k: free the quads of the chunks hidden at the k-th margin, then a steady phase.
+func _occlusion_hide(p_step: int) -> void:
+	var report: Dictionary = terrain.debug_occlusion_hide(int(args["occlusion_hide"]), p_step)
+	occlusion_hide_reports.append(report)
+	print("BENCH: occlusion_hide ", JSON.stringify(report))
+	_begin_phase("steady_hide%d" % p_step)
+
+
 func _next_check() -> void:
 	if checks.is_empty():
 		_finish()
@@ -537,6 +559,8 @@ func _next_check() -> void:
 			occlusion_estimate_report = terrain.debug_occlusion_estimate(int(args["occlusion_estimate"]))
 			print("BENCH: occlusion_estimate ", JSON.stringify(occlusion_estimate_report))
 			_next_check()
+		"occlusion_hide":
+			_occlusion_hide(0)
 		"audit":
 			terrain.debug_audit_pages()
 		"validate":
@@ -573,6 +597,7 @@ func _finish() -> void:
 		"occlusion_audit": occlusion_audit_report,
 		"ray_census": ray_census_report,
 		"occlusion_estimate": occlusion_estimate_report,
+		"occlusion_hide": occlusion_hide_reports,
 		"final_terrain": final_terrain,
 		# Mode, first / last scan with their waves (GPU ms, corners, dedup, readback), compare counts.
 		"discoverer": final_terrain.get("discoverer", {}),

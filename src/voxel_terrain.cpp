@@ -86,6 +86,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("debug_audit_occlusion", "count"), &VoxelTerrain::debug_audit_occlusion);
     ClassDB::bind_method(D_METHOD("debug_ray_census", "min_lod", "per_lod"), &VoxelTerrain::debug_ray_census);
     ClassDB::bind_method(D_METHOD("debug_occlusion_estimate", "max_lod"), &VoxelTerrain::debug_occlusion_estimate);
+    ClassDB::bind_method(D_METHOD("debug_occlusion_hide", "max_lod", "step"), &VoxelTerrain::debug_occlusion_hide);
     ClassDB::bind_method(D_METHOD("set_occlusion_mode", "mode"), &VoxelTerrain::set_occlusion_mode);
     ClassDB::bind_method(D_METHOD("get_occlusion_mode"), &VoxelTerrain::get_occlusion_mode);
     ClassDB::bind_method(D_METHOD("set_occlusion_margin_m", "metres"), &VoxelTerrain::set_occlusion_margin_m);
@@ -1079,6 +1080,47 @@ Dictionary VoxelTerrain::debug_occlusion_estimate(int p_max_lod) {
             eye_base, eye, p_max_lod);
     report["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
     return report;
+}
+
+Dictionary VoxelTerrain::debug_occlusion_hide(int p_max_lod, int p_step) {
+    static const std::vector<double> DEBUG_HIDE_MARGINS_M = { 1.0, 0.25, 0.0 };
+    ERR_FAIL_COND_V_MSG(!started || camera == nullptr || direct_mesher == nullptr, Dictionary(), "debug_occlusion_hide needs a started GPU Direct terrain and a camera.");
+    ERR_FAIL_INDEX_V(p_step, int(DEBUG_HIDE_MARGINS_M.size()), Dictionary());
+    const uint64_t t0 = now_usec();
+    if (p_step == 0) {
+        const VoxelPos eye_base = ChunkMath::chunk_center_voxel(scan_view.camera_chunk, chunk_param);
+        const VoxelPos origin = chunk_param.origin_voxel();
+        const Vector3 eye = Vector3(real_t(origin.x - eye_base.x), real_t(origin.y - eye_base.y), real_t(origin.z - eye_base.z)) +
+                camera->get_global_position() / chunk_param.voxel_size;
+        debug_hide_sets = OcclusionAuditor::hidden_by_blocks(*sdf, chunk_param, *visual_mesh_data.scanned_chunk, eye_base, eye, p_max_lod, 4, DEBUG_HIDE_MARGINS_M);
+    }
+    ERR_FAIL_COND_V(p_step >= int(debug_hide_sets.size()), Dictionary());
+    int64_t freed_chunks = 0, freed_quads = 0, quads_left = 0;
+    for (const ChunkId &id : debug_hide_sets[p_step]) {
+        ChunkOutput *out = visual_mesh_data.loaded_chunk.getptr(id);
+        if (out != nullptr && out->owner != nullptr && out->quad_count > 0) {
+            freed_chunks++;
+            freed_quads += out->triangle_count / 2;
+            out->free();
+            out->page = -1;
+            out->quad_offset = 0;
+            out->quad_count = 0;
+            out->triangle_count = 0;
+            out->drawn_triangles = 0;
+        }
+    }
+    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
+        quads_left += kv.value.triangle_count / 2;
+    }
+    Dictionary d;
+    d["step"] = p_step;
+    d["margin_m"] = DEBUG_HIDE_MARGINS_M[p_step];
+    d["hidden"] = int64_t(debug_hide_sets[p_step].size());
+    d["freed_chunks"] = freed_chunks;
+    d["freed_quads"] = freed_quads;
+    d["quads_left"] = quads_left;
+    d["ms"] = double(now_usec() - t0) / 1000.0;
+    return d;
 }
 
 void VoxelTerrain::_poll_discovery_audit() {

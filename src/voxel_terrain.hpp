@@ -99,6 +99,8 @@ private:
     float occlusion_margin_m = 4.0f;
     // The hidden chunks of the scan in visual_mesh_data.scanned_chunk (empty without occlusion).
     std::unique_ptr<LODHashSet> hidden_chunks = std::make_unique<LODHashSet>();
+    // debug_occlusion_hide: the hidden sets of its margins (DEBUG_HIDE_MARGINS_M), computed by its first step.
+    std::vector<LODHashSet> debug_hide_sets;
 
     bool started = false;
 
@@ -349,6 +351,11 @@ public:
     // What the meshed scene's solid blocks would hide from the camera (OcclusionAuditor::occlusion_estimate).
     // Synchronous (CPU, the worker pool).
     Dictionary debug_occlusion_estimate(int p_max_lod);
+    // What occlusion would save on render (--occlusion_hide=MAX_LOD): step 0 computes the chunks the solid blocks
+    // (4 cells) of the scanned chunks of LOD <= max_lod hide from the camera, for margins of 1, 0.25 and 0 m
+    // (each set holds the previous one, nearly), then step k frees the quads of the chunks of the k-th set (their
+    // loaded entries stay, empty: nothing is re-queued). Keep the camera still. Synchronous (CPU, the worker pool).
+    Dictionary debug_occlusion_hide(int p_max_lod, int p_step);
 
     VoxelTerrain() = default;
     ~VoxelTerrain() override;
