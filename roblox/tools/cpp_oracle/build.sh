@@ -7,9 +7,13 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../../.." && pwd)"
 out="${1:-$here/build}"
 
+# The Luau port mirrors the engine as of ORACLE_REV (the CPU pipeline and float noise were removed on
+# dev afterwards): the oracle sources come from that commit, not from the working tree. Bump it when
+# the port catches up with a newer engine.
+ORACLE_REV="${ORACLE_REV:-29c2f8b}"
 mkdir -p "$out/src"
 for f in CPU_mesher.cpp CPU_mesher.hpp chunk_math.cpp chunk_math.hpp noise.cpp noise.hpp sdf_base.hpp sdf_dummy.hpp; do
-	cp "$repo/src/$f" "$out/src/"
+	git -C "$repo" show "$ORACLE_REV:src/$f" >"$out/src/$f"
 done
 # Stubs must sit next to the copied sources: quoted includes resolve there first.
 cp "$here"/stubs/*.hpp "$out/src/"

@@ -26,9 +26,13 @@ return {
 	-- Only LOD 0 chunks get collision (the player walks on them); the rest are visual only.
 	COLLISION_MAX_LOD = 0,
 
-	-- Destroy the EditableMesh once its MeshPart exists. Saves the client memory budget if the
-	-- MeshPart keeps its own copy of the geometry; if chunks turn invisible, set this to false.
+	-- Destroy the EditableMesh once its MeshPart exists. Measured in Studio: the MeshPart stays linked
+	-- to it and turns invisible, so this must stay false (the client allows only 8 live EditableMeshes,
+	-- which is why this chunk-per-mesh client shows ~16 chunks; see README).
 	DESTROY_EDITABLE_AFTER_PART = false,
+
+	-- Smooth Terrain playground (terrain.project.json): generated square, half side in studs.
+	TERRAIN_HALF_STUDS = 1024,
 
 	-- Vertex colors by slope and height (false: plain part color, fewer API calls per chunk).
 	VERTEX_COLORS = true,

@@ -10,6 +10,11 @@
 				"$path": "src/worker"
 			}
 		},
+		"ServerScriptService": {
+			"OptiVoxelServer": {
+				"$path": "src/server"
+			}
+		},
 		"StarterPlayer": {
 			"StarterPlayerScripts": {
 				"OptiVoxelClient": {

@@ -1,56 +1,87 @@
-# opti-voxel on Roblox (proof of concept)
+# opti-voxel on Roblox
 
-A Luau port of the **CPU pipeline** (`pipeline_mode = 0`) running in a Roblox client:
-same SDF, same surface-nets/QEF mesher, same LOD chunk scan, with meshes built through
-`EditableMesh` → `MeshPart`. The GPU pipelines can't be ported: Roblox has no compute shaders.
+Port of the opti-voxel SDF terrain to Roblox, in Luau. This branch (`roblox`) runs parallel to `dev`
+and lags behind it: engine features land on `dev` first and get ported here progressively.
+
+The GPU pipelines can't be ported (Roblox has no compute shaders). What runs here is the CPU side:
+the same SDF, the same surface-nets/QEF mesher, the same LOD chunk scan.
+
+## Rendering: what Roblox allows (measured in Studio 0.743)
+
+- **EditableMesh: at most 8 alive per client**, whatever their size (0 or 19k triangles each).
+  `AssetService:CreateEditableMesh()` returns nil past that ("reaching memory budget limits").
+- A MeshPart made from an EditableMesh stays **linked** to it: destroy the EditableMesh and the part
+  turns invisible. `ApplyMesh` copies and `Clone()` are linked too (`probe/`).
+- Each EditableMesh holds ≤ 20k triangles / 60k vertices, so custom geometry is capped at
+  **~160k triangles per client**. One mesh per chunk (`default.project.json`) shows ~16 chunks.
+- **Smooth Terrain** has none of these limits: 4-stud voxels (fixed), ±128k studs per axis,
+  automatic collision, built-in LOD for distant terrain, replication of server edits.
+
+So the current direction: **our SDF stays the source of truth, Smooth Terrain renders it**
+(`terrain.project.json`). A visual-only far field (clipmap rings in the 8 EditableMeshes, or thin
+far terrain) is the next step being evaluated.
+
+Benchmark, same 336×336-stud region with caves, same 10 sphere edits (`bench.project.json`):
+
+| | pack: our mesher → 8 shared EditableMeshes | Smooth Terrain: SDF → WriteVoxels |
+|---|---|---|
+| Build | 10.5 s (8.6 s Luau meshing, 1 thread) | 0.42 s (0.39 s sampling) |
+| Coverage | budget full at 159k tris, 45/252 chunks dropped | complete |
+| One edit (r = 15 studs) | 226 ms + 350 ms collision re-cook | 0.9 ms (engine re-meshes async) |
+| 2048×2048 studs | impossible | 12.3M voxels in 18.5 s, ~56 FPS |
+
+## Layout
 
 ```
 src/shared/OptiVoxel/   pure Luau, runs in Roblox and in the Luau CLI
   Noise.luau            src/noise.cpp (simplex, value only)
-  Sdf.luau              SDFDummy::evaluate (mountain + caves)
+  Sdf.luau              SDFDummy::evaluate (mountain + caves) + sphere edits (carve / fill)
   ChunkMath.luau        src/chunk_math.cpp
   Mesher.luau           CPUMesher (surface nets + QEF + skirts)
   Discoverer.luau       ChunkDiscoverer (LOD scan)
   Config.luau           Roblox-side knobs
+  TerrainGen.luau       Roblox only: SDF -> Smooth Terrain voxels (materials by depth / slope)
   ChunkBuilder.luau     Roblox only: Mesher output -> EditableMesh -> MeshPart
-src/worker/             Actor template: meshes in parallel, builds parts, owns them
-src/client/             LocalScript: scan, queue, dispatch to actors, unload, stats overlay
-tools/                  validation against the real C++ code + benchmark
+src/terrain_server/     Smooth Terrain playground: generation + server-side edits
+src/terrain_client/     dig / fill tool + overlay
+src/bench/              pack vs Smooth Terrain benchmark
+src/client/, worker/    chunk-per-EditableMesh client (Actors), limited by the 8-mesh cap
+src/server/             spawn platform for the chunk client
+probe/                  EditableMesh budget / linking probe
+tools/                  validation against the real C++ code + Luau benchmark
 ```
 
-## Try it on the Mac (no Studio editing needed)
+## Places
 
-1. Install [Rojo](https://rojo.space/docs/v7/getting-started/installation/): with
-   [Rokit](https://github.com/rojo-rbx/rokit), `rokit install` in this folder picks the version
-   pinned in `rokit.toml`.
-2. Build a place file from this folder and open it:
-   ```sh
-   cd roblox
-   rojo build -o opti-voxel.rbxl
-   open opti-voxel.rbxl        # opens in Roblox Studio
-   ```
-3. Press **Play** (F5). You spawn on the mountain (frozen until the ground under you is meshed).
-   The overlay in the top-left shows what matters:
-   - `chunks loaded/desired`, `queue`: streaming progress
-   - `mesh median`: Luau meshing time per chunk, inside an Actor
-   - `build median`: EditableMesh + CreateMeshPartAsync time per chunk (serial phase)
-   - `failures` + the last error: EditableMesh memory budget or API errors
+Install [Rojo](https://rojo.space/docs/v7/getting-started/installation/) (`rokit install` here picks
+the version pinned in `rokit.toml`), then build and open in Studio:
 
-Live-sync instead of rebuilding: `rojo serve` + the Rojo Studio plugin ("Connect").
+| Project | Build | What |
+|---|---|---|
+| `terrain.project.json` | `rojo build terrain.project.json -o terrain.rbxl` | Smooth Terrain playground: LMB dig, F fill, R/T radius, H overlay |
+| `bench.project.json` | `rojo build bench.project.json -o bench.rbxl` | benchmark; set `workspace` attributes `BenchMode` = `pack` / `terrain`, `BenchHalfStuds` before Play; result printed as `[Bench] {json}` |
+| `probe.project.json` | `rojo build probe.project.json -o probe.rbxl` | EditableMesh budget and linking probe |
+| `default.project.json` | `rojo build -o opti-voxel.rbxl` | chunk-per-EditableMesh client (historical) |
 
-Changing settings means editing `src/shared/OptiVoxel/Config.luau` and rebuilding:
+## Gotchas (all hit for real)
 
-| Symptom | Knob |
-|---|---|
-| Terrain visible only from below | `FLIP_WINDING = false` |
-| `failures` grow (memory budget) | lower `LOD_LEVELS` / raise `PIXEL_ERROR`, or try `DESTROY_EDITABLE_AFTER_PART = true` |
-| Chunks disappear with `DESTROY_EDITABLE_AFTER_PART = true` | the MeshPart still references the EditableMesh: set it back to `false` |
-| Slow loading | `WORKERS` (one Actor each), `VERTEX_COLORS = false` (fewer API calls) |
+- `Sdf.height(0, z)` is degenerate exactly at x = 0 (257.8 vs ~300 around it): the simplex noise
+  misbehaves on that lattice point. Never place anything with exact integer samples; spawn code uses
+  the max height over a footprint at non-integer offsets.
+- Terrain collision is built asynchronously, on each client too: keep a spawn platform solid until
+  generation is done, or players fall through.
+- Before the character exists the camera sits at the origin, deep underground: don't scan from it.
+- Studio throttles an unfocused window to ~15 FPS: frame times are only meaningful with Studio
+  focused.
+- Studio writes Output to `~/Library/Logs/Roblox/*_last.log`, but long lines get truncated there.
+- The Roblox Studio MCP (`StudioMCP`) can Play/Stop, run Luau in the Edit/Client/Server datamodels,
+  read the console and take screenshots: verify in Studio directly.
 
 ## What was verified here (Linux, no Roblox)
 
 `tools/validate.sh` compiles the **unchanged** `src/CPU_mesher.cpp`, `src/chunk_math.cpp`,
-`src/noise.cpp` and `src/sdf_dummy.hpp` against a small stand-in for the godot-cpp types
+`src/noise.cpp` and `src/sdf_dummy.hpp` of the engine commit the port mirrors (`ORACLE_REV` in
+`tools/cpp_oracle/build.sh`; dev has since dropped the CPU pipeline) against a small stand-in for the godot-cpp types
 (`tools/cpp_oracle/`) and compares them with the Luau port:
 
 - SDF, 20 000 points: no sign flips; max difference 5e-7 vs the C++ built with doubles,

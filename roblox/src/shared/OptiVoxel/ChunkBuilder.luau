@@ -14,6 +14,8 @@ local readVertex = Mesher.readVertex
 export type Built = {
 	parts: { MeshPart },
 	meshes: { EditableMesh },
+	meshTriangles: number, -- triangles held by `meshes`
+	budgetExhausted: boolean,
 	failures: number,
 	lastError: string?,
 }
@@ -31,6 +33,11 @@ end
 
 local ChunkBuilder = {}
 
+-- EditableMeshes alive in this Lua VM (one per worker Actor). The client has a strict memory budget
+-- for them, and CreateEditableMesh returns nil once it is spent.
+ChunkBuilder.aliveMeshes = 0
+ChunkBuilder.aliveTriangles = 0
+
 function ChunkBuilder.destroy(built: Built)
 	for _, part in built.parts do
 		part:Destroy()
@@ -38,12 +45,15 @@ function ChunkBuilder.destroy(built: Built)
 	for _, mesh in built.meshes do
 		mesh:Destroy()
 	end
+	ChunkBuilder.aliveMeshes -= #built.meshes
+	ChunkBuilder.aliveTriangles -= built.meshTriangles
+	built.meshTriangles = 0
 	table.clear(built.parts)
 	table.clear(built.meshes)
 end
 
 function ChunkBuilder.build(result: Mesher.MeshResult, cx: number, cy: number, cz: number, parent: Instance): Built
-	local built: Built = { parts = {}, meshes = {}, failures = 0, lastError = nil }
+	local built: Built = { parts = {}, meshes = {}, meshTriangles = 0, budgetExhausted = false, failures = 0, lastError = nil }
 	local triCount = result.triangleCount
 	if triCount == 0 then
 		return built
@@ -74,7 +84,14 @@ function ChunkBuilder.build(result: Mesher.MeshResult, cx: number, cy: number, c
 
 		local ok, err = pcall(function()
 			local mesh = AssetService:CreateEditableMesh()
+			if not mesh then
+				built.budgetExhausted = true
+				error(`EditableMesh memory budget exhausted ({ChunkBuilder.aliveMeshes} meshes / {ChunkBuilder.aliveTriangles} triangles alive in this worker)`, 0)
+			end
 			table.insert(built.meshes, mesh)
+			ChunkBuilder.aliveMeshes += 1
+			ChunkBuilder.aliveTriangles += last - first + 1
+			built.meshTriangles += last - first + 1
 
 			local vertexIds: { [number]: number } = {}
 			local normalIds: { [number]: number } = {}
@@ -130,6 +147,9 @@ function ChunkBuilder.build(result: Mesher.MeshResult, cx: number, cy: number, c
 			if Config.DESTROY_EDITABLE_AFTER_PART then
 				mesh:Destroy()
 				table.remove(built.meshes)
+				ChunkBuilder.aliveMeshes -= 1
+				ChunkBuilder.aliveTriangles -= last - first + 1
+				built.meshTriangles -= last - first + 1
 			end
 		end)
 		if not ok then

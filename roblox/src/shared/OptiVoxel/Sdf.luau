@@ -10,6 +10,64 @@ local max = math.max
 
 local Sdf = {}
 
+-- Edits: spheres applied in order, 4 f64 each (x, y, z, radius). A positive radius carves
+-- (max(sdf, radius - distance)), a negative one adds matter (min(sdf, distance - |radius|)).
+-- Per Lua VM: an Actor that samples or meshes needs its own copy.
+local edits = buffer.create(0)
+local editCount = 0
+
+local function addEdit(x: number, y: number, z: number, radius: number)
+	if (editCount + 1) * 32 > buffer.len(edits) then
+		local grown = buffer.create(math.max(32, buffer.len(edits) * 2))
+		buffer.copy(grown, 0, edits)
+		edits = grown
+	end
+	local o = editCount * 32
+	buffer.writef64(edits, o, x)
+	buffer.writef64(edits, o + 8, y)
+	buffer.writef64(edits, o + 16, z)
+	buffer.writef64(edits, o + 24, radius)
+	editCount += 1
+end
+
+function Sdf.addSubtractSphere(x: number, y: number, z: number, radius: number)
+	addEdit(x, y, z, radius)
+end
+
+function Sdf.addUnionSphere(x: number, y: number, z: number, radius: number)
+	addEdit(x, y, z, -radius)
+end
+
+function Sdf.editCount(): number
+	return editCount
+end
+
+function Sdf.clearEdits()
+	editCount = 0
+end
+
+local function applyEdits(x: number, y: number, z: number, d: number): number
+	local readf64 = buffer.readf64
+	for i = 0, editCount - 1 do
+		local o = i * 32
+		local dx, dy, dz = x - readf64(edits, o), y - readf64(edits, o + 8), z - readf64(edits, o + 16)
+		local r = readf64(edits, o + 24)
+		local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+		if r > 0 then
+			local carve = r - dist
+			if carve > d then
+				d = carve
+			end
+		else
+			local fill = dist + r
+			if fill < d then
+				d = fill
+			end
+		end
+	end
+	return d
+end
+
 -- Max of |fractal(3 octaves)| is below 1.75 (snoise is in [-1, 1]); with that bound,
 -- -cave_sdf <= 0.8 * 1.75 - 0.66 + depth / 400 < 0.75 whenever terrain_sdf > 0.75.
 -- Above that the cave term can never win the max(): skip the 3D noise (exact, not an approximation).
@@ -27,7 +85,7 @@ end
 function Sdf.evaluateWithHeight(x: number, y: number, z: number, mountain_height: number): number
 	local terrain_sdf = y - mountain_height
 	if terrain_sdf > CAVE_SKIP_ABOVE then
-		return terrain_sdf
+		return if editCount > 0 then applyEdits(x, y, z, terrain_sdf) else terrain_sdf
 	end
 
 	local cave_blob = fractal(3, CAVE_FREQ, 1, 2, 0.5, x, y, z)
@@ -37,7 +95,8 @@ function Sdf.evaluateWithHeight(x: number, y: number, z: number, mountain_height
 	local cave_threshold = 0.5 + blob_mask * 0.4 + (1 - depth_fade) * 0.1
 	local cave_sdf = cave_threshold - cave_blob
 
-	return max(terrain_sdf, -cave_sdf)
+	local d = max(terrain_sdf, -cave_sdf)
+	return if editCount > 0 then applyEdits(x, y, z, d) else d
 end
 
 local evaluateWithHeight = Sdf.evaluateWithHeight

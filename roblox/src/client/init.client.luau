@@ -11,7 +11,6 @@ local OptiVoxel = ReplicatedStorage:WaitForChild("OptiVoxel")
 local ChunkMath = require(OptiVoxel:WaitForChild("ChunkMath"))
 local Config = require(OptiVoxel:WaitForChild("Config"))
 local Discoverer = require(OptiVoxel:WaitForChild("Discoverer"))
-local Sdf = require(OptiVoxel:WaitForChild("Sdf"))
 
 local S = Config.STUDS_PER_UNIT
 local player = Players.LocalPlayer
@@ -25,15 +24,31 @@ local done = Instance.new("BindableEvent")
 done.Name = "OptiVoxelDone"
 done.Parent = playerScripts
 
-type Worker = { actor: Actor, ready: boolean, busy: boolean }
+type Worker = {
+	actor: Actor,
+	ready: boolean,
+	busy: boolean,
+	busySince: number,
+	sent: number,
+	completed: number,
+	aliveMeshes: number,
+	aliveTriangles: number,
+}
 local workers: { [string]: Worker } = {}
 local template = ReplicatedStorage:WaitForChild("OptiVoxelWorker") :: Actor
 for i = 1, Config.WORKERS do
 	local actor = template:Clone()
 	actor.Name = `OptiVoxelWorker{i}`
-	workers[actor.Name] = { actor = actor, ready = false, busy = false }
+	workers[actor.Name] = { actor = actor, ready = false, busy = false, busySince = 0, sent = 0, completed = 0, aliveMeshes = 0, aliveTriangles = 0 }
 	actor.Parent = playerScripts
 end
+local startTime = os.clock()
+local lastPing = 0
+local lastStatusPrint = 0
+-- CreateEditableMesh returned nil: dispatching more chunks only produces failures. Wait for
+-- unloads to free memory (or this time to pass) before trying again.
+local budgetPausedUntil = 0
+local budgetHits = 0
 
 local discoverer = Discoverer.new(Config.LOD_LEVELS, Config.PIXEL_ERROR, Config.VIEWPORT_HEIGHT, math.rad(Config.FOV_DEGREES))
 
@@ -94,6 +109,9 @@ local function unloadStale()
 end
 
 local function dispatch()
+	if os.clock() < budgetPausedUntil then
+		return
+	end
 	for _, worker in workers do
 		if worker.ready and not worker.busy then
 			local chunk: Discoverer.Chunk? = nil
@@ -108,6 +126,8 @@ local function dispatch()
 				return
 			end
 			worker.busy = true
+			worker.busySince = os.clock()
+			worker.sent += 1
 			inflight[chunk.key] = true
 			worker.actor:SendMessage("mesh", chunk.key, chunk.x, chunk.y, chunk.z)
 		end
@@ -116,15 +136,34 @@ end
 
 done.Event:Connect(function(kind: string, workerName: string, key: string?, info: any)
 	local worker = workers[workerName]
+	if not worker then
+		return
+	end
 	if kind == "ready" then
 		worker.ready = true
 		return
 	end
 	worker.busy = false
+	worker.completed += 1
 	if not key then
 		return
 	end
 	inflight[key] = nil
+	worker.aliveMeshes = info.aliveMeshes
+	worker.aliveTriangles = info.aliveTriangles
+	if info.budgetExhausted then
+		-- Not loaded: requeue it (nearest first, so next to go) and free what is no longer wanted.
+		budgetHits += 1
+		budgetPausedUntil = os.clock() + 2
+		if budgetHits == 1 then
+			warn(`OptiVoxel: {info.lastError}`)
+		end
+		if desired[key] then
+			table.insert(queue, desired[key])
+		end
+		unloadStale()
+		return
+	end
 	loaded[key] = workerName
 	table.insert(stats.meshMs, info.meshMs)
 	table.insert(stats.buildMs, info.buildMs)
@@ -151,13 +190,17 @@ done.Event:Connect(function(kind: string, workerName: string, key: string?, info
 	end
 end)
 
--- Overlay with the numbers that matter for the feasibility test.
+-- Overlay with the numbers that matter for the feasibility test. Bottom-left: the chat window
+-- (CoreGui, always drawn on top) owns the top-left corner.
 local gui = Instance.new("ScreenGui")
 gui.Name = "OptiVoxelStats"
 gui.ResetOnSpawn = false
+gui.DisplayOrder = 100
 local label = Instance.new("TextLabel")
-label.Size = UDim2.fromOffset(460, 150)
-label.Position = UDim2.fromOffset(8, 8)
+label.AnchorPoint = Vector2.new(0, 1)
+label.Size = UDim2.fromOffset(620, 190)
+label.Position = UDim2.new(0, 8, 1, -8)
+label.TextWrapped = true
 label.BackgroundTransparency = 0.4
 label.BackgroundColor3 = Color3.new(0, 0, 0)
 label.TextColor3 = Color3.new(1, 1, 1)
@@ -168,28 +211,13 @@ label.TextYAlignment = Enum.TextYAlignment.Top
 label.Parent = gui
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- Spawn on the surface, frozen until the ground under the player exists.
-local function onCharacter(character: Model)
-	local root = character:WaitForChild("HumanoidRootPart") :: BasePart
-	root.Anchored = true
-	local surface = Sdf.height(0, 0)
-	character:PivotTo(CFrame.new(0, (surface + 2) * S, 0))
-	local x, y, z = ChunkMath.worldToChunk(0, surface, 0)
-	local groundKey = `{x},{y},{z}`
-	local deadline = os.clock() + 60
-	while not loaded[groundKey] and os.clock() < deadline do
-		task.wait(0.1)
-	end
-	root.Anchored = false
-end
-player.CharacterAdded:Connect(onCharacter)
-if player.Character then
-	task.spawn(onCharacter, player.Character)
-end
-
+-- The player spawns on the surface on the server's OptiVoxelSpawn platform (src/server), which
+-- holds them whether or not the ground chunk meshed. Until the character exists the camera sits at
+-- the origin, deep underground: don't scan from there.
 RunService.Heartbeat:Connect(function()
 	local camera = workspace.CurrentCamera
-	if camera then
+	local character = player.Character
+	if camera and character and character:FindFirstChild("HumanoidRootPart") then
 		local p = camera.CFrame.Position / S
 		local x, y, z = ChunkMath.worldToChunk(p.X, p.Y, p.Z)
 		local key = `{x},{y},{z}`
@@ -199,12 +227,48 @@ RunService.Heartbeat:Connect(function()
 			rescan()
 		end
 	end
+	-- Worker handshake: the "ready" event can be missed if a worker starts before the connection
+	-- above, so also read the attribute it sets and re-ping the silent ones.
+	local now = os.clock()
+	local pingDue = now - lastPing > 1
+	for _, w in workers do
+		if not w.ready then
+			if w.actor:GetAttribute("OptiVoxelReady") then
+				w.ready = true
+			elseif pingDue then
+				w.actor:SendMessage("ping")
+			end
+		end
+	end
+	if pingDue then
+		lastPing = now
+	end
+
 	dispatch()
 
-	local busy, ready = 0, 0
+	local busy, ready, stuck, sent, completed = 0, 0, 0, 0, 0
+	local aliveMeshes, aliveTriangles = 0, 0
 	for _, w in workers do
+		local m = w.actor:GetAttribute("AliveMeshes")
+		if typeof(m) == "number" then
+			-- Set by unloads, which don't report through `done`.
+			w.aliveMeshes = m
+			w.aliveTriangles = w.actor:GetAttribute("AliveTriangles") :: number
+			w.actor:SetAttribute("AliveMeshes", nil)
+		end
+		aliveMeshes += w.aliveMeshes
+		aliveTriangles += w.aliveTriangles
 		busy += if w.busy then 1 else 0
 		ready += if w.ready then 1 else 0
+		stuck += if w.busy and now - w.busySince > 10 then 1 else 0
+		sent += w.sent
+		completed += w.completed
+	end
+	local workerNote = ""
+	if ready < Config.WORKERS and now - startTime > 5 then
+		workerNote = "  WORKERS NOT STARTED: see Output for script errors"
+	elseif stuck > 0 then
+		workerNote = `  {stuck} STUCK >10s`
 	end
 	local loadedCount = 0
 	for _ in loaded do
@@ -216,9 +280,21 @@ RunService.Heartbeat:Connect(function()
 	end
 	label.Text = table.concat({
 		`OptiVoxel  camera chunk {cameraChunk}  scan {string.format("%.1f", stats.scanMs)} ms`,
-		`chunks {loadedCount}/{desiredCount}  queue {#queue}  workers {busy}/{ready} busy`,
+		`chunks {loadedCount}/{desiredCount}  queue {#queue}  inflight {sent - completed}`,
+		`workers ready {ready}/{Config.WORKERS}  busy {busy}  sent {sent}  done {completed}{workerNote}`,
 		`mesh median {string.format("%.1f", median(stats.meshMs))} ms  build median {string.format("%.1f", median(stats.buildMs))} ms`,
 		`triangles built {stats.triangles}  parts {stats.parts}  last full load {string.format("%.1f", stats.loadSeconds)} s`,
+		`editable meshes alive {aliveMeshes} ({aliveTriangles} tris)  budget full x{budgetHits}{if now < budgetPausedUntil then "  PAUSED" else ""}`,
 		`failures {stats.failures}  {stats.lastError or ""}`,
 	}, "\n")
+
+	-- Same numbers in Output (and Studio's log file) every 5 s, for runs nobody is watching.
+	if now - lastStatusPrint > 5 then
+		lastStatusPrint = now
+		print(
+			`[OptiVoxel] chunks {loadedCount}/{desiredCount} queue {#queue} workers ready {ready}/{Config.WORKERS}`
+				.. ` busy {busy} sent {sent} done {completed} stuck {stuck} parts {stats.parts} failures {stats.failures}`
+				.. ` alive {aliveMeshes} meshes/{aliveTriangles} tris budget-full x{budgetHits}`
+		)
+	end
 end)
