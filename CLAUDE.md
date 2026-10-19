@@ -465,5 +465,5 @@ to every change, and a reviewer may reject a PR on any of them.
 - Async readback callbacks (`texture_get_data_async`, `buffer_get_data_async`) are NOT skipped when
   their object is freed: they arrive frames later and run on freed memory (segfault in
   `MeshValidator::_rt_on_page` when quitting mid-validation). An object with readbacks in flight
-  counts them and deletes itself when the last one lands (`MeshValidator` / `PageAuditor::destroy`).
-  `GPUDirectMesher::_rt_destroy` does not do this yet.
+  counts them and deletes itself when the last one lands (`MeshValidator` / `PageAuditor::destroy`,
+  `GPUDirectMesher::_rt_destroy`, which frees its RIDs at once and only defers the delete).
