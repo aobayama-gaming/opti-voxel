@@ -134,6 +134,9 @@ private:
     CascadePasses *cascade = nullptr;
 
     std::vector<LODHashSet *> chunk_queue;
+    // Instance edits' re-meshes (loaded chunks), popped before chunk_queue. Kept apart because send_chunk
+    // rebuilds chunk_queue from each scan's dirty chunks, which a loaded chunk isn't.
+    std::vector<LODHashSet *> remesh_queue;
 
     LODHashSet working_generation;
 

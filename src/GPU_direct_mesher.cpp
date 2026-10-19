@@ -813,6 +813,12 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
             if (flags & 1u) { // overflow: try again in a later batch
                 stats.overflow_requeued++;
+                if (output.loaded_chunk.has(chunk_id)) {
+                    // A re-mesh (instance edit): send_chunk rebuilds chunk_queue from the scan's dirty
+                    // chunks only, which a loaded chunk isn't, so it would be lost there.
+                    _queue_remesh(chunk_id);
+                    continue;
+                }
                 const int lod = ChunkMath::get_lod(chunk_id);
                 if (lod >= 0 && lod < (int)chunk_queue.size()) {
                     chunk_queue[lod].push_back(chunk_id);
@@ -1121,7 +1127,8 @@ bool GPUDirectMesher::is_idle() {
             return false;
         }
     }
-    return true;
+    // Re-meshes queued by an edit or by a stale result (get_results) are pending work too.
+    return remesh_queued.is_empty();
 }
 
 void GPUDirectMesher::set_debug_view(int p_view) {

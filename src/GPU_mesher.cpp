@@ -336,8 +336,10 @@ void GPUMesher::initialize(
 
     chunk_queue.resize(lod_numbers, nullptr);
 
+    remesh_queue.resize(lod_numbers, nullptr);
     for (int i = 0; i < lod_numbers; ++i) {
         chunk_queue[i] = memnew(LODHashSet);
+        remesh_queue[i] = memnew(LODHashSet);
     }
 };
 
@@ -493,13 +495,25 @@ void GPUMesher::stop() {
         memdelete(q);
     }
     chunk_queue.clear();
+    for (LODHashSet *q : remesh_queue) {
+        memdelete(q);
+    }
+    remesh_queue.clear();
 }
 
 bool GPUMesher::is_idle() {
     mutex->lock();
     const bool idle = worker_available && !result_available;
     mutex->unlock();
-    return idle;
+    if (!idle) {
+        return false;
+    }
+    for (const LODHashSet *q : remesh_queue) {
+        if (!q->is_empty()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 Dictionary GPUMesher::get_stats() {
@@ -517,6 +531,14 @@ Dictionary GPUMesher::get_stats() {
     d["queued"] = (int64_t)[this]() {
         int64_t n = 0;
         for (LODHashSet *q : chunk_queue) {
+            n += q->size();
+        }
+        return n;
+    }
+    ();
+    d["remesh_queue"] = (int64_t)[this]() {
+        int64_t n = 0;
+        for (LODHashSet *q : remesh_queue) {
             n += q->size();
         }
         return n;
@@ -918,22 +940,18 @@ void GPUMesher::process_queue() {
 }
 
 bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
-    for (LODHashSet *queue : chunk_queue) {
-        if (queue == nullptr || queue->is_empty()) {
-            continue;
+    // Instance edits first, finest LOD first (as GPUDirectMesher::_pop_queue).
+    for (const std::vector<LODHashSet *> *queues : { &remesh_queue, &chunk_queue }) {
+        for (LODHashSet *queue : *queues) {
+            if (queue == nullptr || queue->is_empty()) {
+                continue;
+            }
+            LODHashSet::Iterator it = queue->begin();
+            new_chunk = *it;
+            queue->remove(it);
+            return true;
         }
-
-        LODHashSet::Iterator it = queue->begin();
-        if (!it) {
-            continue;
-        }
-
-        ChunkId chunk_pos = *it;
-        queue->remove(it);
-        new_chunk = chunk_pos;
-        return true;
     }
-
     return false;
 }
 
@@ -941,7 +959,7 @@ void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
     std::vector<ChunkId> chunks = p_chunks;
     // The batch in flight was built from the old table: its chunks the edit reaches are meshed again after
     // it lands (a first mesh isn't in loaded_chunk, so the terrain doesn't list it).
-    // (chunk_queue is a set: a chunk already loaded and listed is queued once.)
+    // (remesh_queue is a set: a chunk already loaded and listed is queued once.)
     for (const ChunkId &chunk : in_flight_ids) {
         if (sdf->edit_affects_chunk(chunk)) {
             chunks.push_back(chunk);
@@ -949,8 +967,8 @@ void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
     }
     for (const ChunkId &chunk : chunks) {
         const int lod = ChunkMath::get_lod(chunk);
-        if (lod >= 0 && lod < (int)chunk_queue.size() && chunk_queue[lod] != nullptr) {
-            chunk_queue[lod]->insert(chunk);
+        if (lod >= 0 && lod < (int)remesh_queue.size() && remesh_queue[lod] != nullptr) {
+            remesh_queue[lod]->insert(chunk);
         }
     }
 }
