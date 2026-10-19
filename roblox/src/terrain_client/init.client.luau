@@ -13,7 +13,9 @@ local player = Players.LocalPlayer
 local edit = ReplicatedStorage:WaitForChild("OptiVoxelEdit") :: RemoteEvent
 local camera = workspace.CurrentCamera
 
-local radius = 8 -- studs
+local Config = require(ReplicatedStorage:WaitForChild("OptiVoxel"):WaitForChild("Config"))
+local K = Config.STUDS_PER_UNIT / 3 -- player scale, as on the server
+local radius = 8 * K -- studs
 local REPEAT = 0.08 -- seconds between edits while held
 
 -- Brush preview.
@@ -36,7 +38,7 @@ params.FilterDescendantsInstances = { workspace.Terrain }
 local function aim(): Vector3?
 	local m = UserInputService:GetMouseLocation()
 	local ray = camera:ViewportPointToRay(m.X, m.Y)
-	local hit = workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
+	local hit = workspace:Raycast(ray.Origin, ray.Direction * 2000 * K, params)
 	return if hit then hit.Position else nil
 end
 
@@ -68,9 +70,9 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	elseif input.KeyCode == Enum.KeyCode.F then
 		filling = true
 	elseif input.KeyCode == Enum.KeyCode.R then
-		radius = math.max(2, radius - 2)
+		radius = math.max(2 * K, radius - 2 * K)
 	elseif input.KeyCode == Enum.KeyCode.T then
-		radius = math.min(40, radius + 2)
+		radius = math.min(40 * K, radius + 2 * K)
 	elseif input.KeyCode == Enum.KeyCode.H then
 		label.Visible = not label.Visible
 	end
@@ -118,7 +120,7 @@ RunService.RenderStepped:Connect(function(dt)
 			else `far field {num("FarHalfStuds") * 2} studs in {string.format("%.1f", num("FarSeconds"))} s: {num("FarVoxels")} voxels (sample {math.floor(num("FarSampleMs"))} ms, write {math.floor(num("FarWriteMs"))} ms)`,
 		`terrain voxels {math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.TerrainVoxels))} MB   total {math.floor(Stats:GetTotalMemoryUsageMb())} MB`,
 		`last edit: sample {string.format("%.2f", num("LastEditSampleMs"))} ms  write {string.format("%.2f", num("LastEditWriteMs"))} ms  ({num("LastEditVoxels")} voxels, {num("EditCount")} edits)`,
-		`brush radius {radius} studs   position {math.floor(pos.X)}, {math.floor(pos.Y)}, {math.floor(pos.Z)}`,
+		`brush radius {string.format("%.1f", radius / Config.STUDS_PER_UNIT)} m   position {math.floor(pos.X / Config.STUDS_PER_UNIT)}, {math.floor(pos.Y / Config.STUDS_PER_UNIT)}, {math.floor(pos.Z / Config.STUDS_PER_UNIT)} m   voxel {4 / Config.STUDS_PER_UNIT} m`,
 		"",
 		"LMB dig   F fill   R/T radius   H hide",
 	}, "\n")

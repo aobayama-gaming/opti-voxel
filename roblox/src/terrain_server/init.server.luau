@@ -6,7 +6,9 @@
 -- Terrain is edited here, on the server, so it replicates to every player.
 -- Progress and timings go to workspace attributes (read by the client overlay).
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local OptiVoxel = ReplicatedStorage:WaitForChild("OptiVoxel")
 local Config = require(OptiVoxel:WaitForChild("Config"))
@@ -15,9 +17,72 @@ local TerrainGen = require(OptiVoxel:WaitForChild("TerrainGen"))
 
 local S = Config.STUDS_PER_UNIT
 local HALF = Config.TERRAIN_HALF_STUDS
+local K = S / 3 -- player scale: Roblox's default avatar is sized for ~3 studs per metre
 local SLAB = 64 -- studs per side of one generation step
-local DEPTH = 40 -- units of ground (and caves) under the lowest surface point of each slab
+local DEPTH = 120 / S -- units of ground (and caves) under the lowest surface point of each slab: 30 voxels
 local terrain = workspace.Terrain
+
+-- Bigger players: PLAYER_HEIGHT_M tall whatever the avatar, same timings (jump duration, fall time).
+workspace.Gravity = 196.2 * K
+
+-- Scaling is about the pivot: put the feet back on top of the spawn.
+local function placeOnSpawn(character: Model)
+	local spawnLocation = workspace:FindFirstChild("OptiVoxelSpawn") :: BasePart?
+	if spawnLocation then
+		local size = character:GetExtentsSize()
+		character:PivotTo(CFrame.new(spawnLocation.Position + Vector3.new(0, spawnLocation.Size.Y / 2 + size.Y / 2 + K, 0)))
+	end
+end
+
+-- Head top to feet, in studs: body parts only (accessories and the root box excluded).
+local function bodyHeight(character: Model): number
+	local lo, hi = math.huge, -math.huge
+	for _, part in character:GetChildren() do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			lo = math.min(lo, part.Position.Y - part.Size.Y / 2)
+			hi = math.max(hi, part.Position.Y + part.Size.Y / 2)
+		end
+	end
+	return hi - lo
+end
+
+local function scaleCharacter(player: Player, character: Model)
+	if not player:HasAppearanceLoaded() then
+		player.CharacterAppearanceLoaded:Wait()
+	end
+	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
+	-- The rig is only laid out after a physics step: measured earlier, the parts overlap and the body
+	-- reads short. Measure, scale, then correct once against the scaled body.
+	while not character:IsDescendantOf(workspace) do
+		character.AncestryChanged:Wait()
+	end
+	RunService.Heartbeat:Wait()
+	RunService.Heartbeat:Wait()
+	local target = Config.PLAYER_HEIGHT_M * S
+	local scale = character:GetScale() * target / bodyHeight(character)
+	character:ScaleTo(scale)
+	RunService.Heartbeat:Wait()
+	scale *= target / bodyHeight(character)
+	character:ScaleTo(scale)
+	humanoid.WalkSpeed = 16 * scale
+	humanoid.JumpPower = 50 * scale
+	humanoid.JumpHeight = 7.2 * scale
+	placeOnSpawn(character)
+end
+local function setupPlayer(player: Player)
+	player.CameraMaxZoomDistance = 128 * K
+	player.CameraMinZoomDistance = 0.5 * K
+	player.CharacterAdded:Connect(function(character)
+		scaleCharacter(player, character)
+	end)
+	if player.Character then
+		task.spawn(scaleCharacter, player, player.Character)
+	end
+end
+Players.PlayerAdded:Connect(setupPlayer)
+for _, player in Players:GetPlayers() do
+	setupPlayer(player)
+end
 
 -- Spawn platform until the ground under it exists. Highest surface point under its footprint;
 -- never Sdf.height(0, 0) itself: the simplex noise is degenerate exactly on that lattice point
@@ -25,7 +90,7 @@ local terrain = workspace.Terrain
 local surface = -math.huge
 for dx = -8, 8, 2 do
 	for dz = -8, 8, 2 do
-		surface = math.max(surface, Sdf.height((dx + 0.37) / S, (dz + 0.37) / S) * S)
+		surface = math.max(surface, Sdf.height((dx * K + 0.37) / S, (dz * K + 0.37) / S) * S)
 	end
 end
 local spawn = Instance.new("SpawnLocation")
@@ -33,9 +98,9 @@ spawn.Name = "OptiVoxelSpawn"
 spawn.Anchored = true
 spawn.Neutral = true
 spawn.Duration = 0
-spawn.Size = Vector3.new(16, 1, 16)
+spawn.Size = Vector3.new(16 * K, 1, 16 * K)
 spawn.Transparency = 0.5
-spawn.Position = Vector3.new(0, surface + 2, 0)
+spawn.Position = Vector3.new(0, surface + 2 * K, 0)
 spawn.Parent = workspace
 
 local edit = Instance.new("RemoteEvent")
@@ -122,6 +187,22 @@ task.spawn(function()
 		writeMs += b
 		voxels += n
 		workspace:SetAttribute("GenDone", i)
+		if i == 4 then
+			-- The four nearest slabs hold the spawn: put the platform on the real ground (the height
+			-- field misses the cave and overhang terms, it read ~20 m too high here).
+			local params = RaycastParams.new()
+			params.FilterType = Enum.RaycastFilterType.Include
+			params.FilterDescendantsInstances = { terrain }
+			local hit = workspace:Raycast(spawn.Position + Vector3.new(0, 100 * K, 0), Vector3.new(0, -400 * K, 0), params)
+			if hit then
+				spawn.Position = hit.Position + Vector3.new(0, K, 0)
+				for _, player in Players:GetPlayers() do
+					if player.Character then
+						placeOnSpawn(player.Character)
+					end
+				end
+			end
+		end
 		task.wait()
 	end
 	-- Terrain collision is built asynchronously (on each client too): dropping the platform as soon
@@ -153,7 +234,7 @@ edit.OnServerEvent:Connect(function(player: Player, kind: unknown, position: unk
 		return
 	end
 	lastEdit[player] = now
-	local r = math.clamp(radius, 2, 40)
+	local r = math.clamp(radius, 2 * K, 40 * K)
 	local p = position / S
 	if kind == "dig" then
 		Sdf.addSubtractSphere(p.X, p.Y, p.Z, r / S)
@@ -168,6 +249,6 @@ edit.OnServerEvent:Connect(function(player: Player, kind: unknown, position: unk
 	workspace:SetAttribute("EditCount", Sdf.editCount())
 end)
 
-game:GetService("Players").PlayerRemoving:Connect(function(player)
+Players.PlayerRemoving:Connect(function(player)
 	lastEdit[player] = nil
 end)

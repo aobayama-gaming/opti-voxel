@@ -3,8 +3,10 @@
 -- matches the Godot defaults.
 
 return {
-	-- Studs per Godot world unit. A Roblox character is ~5 studs tall, so ~3 studs per meter.
-	STUDS_PER_UNIT = 3,
+	-- Studs per Godot world unit (metre). Roblox's default avatar is ~5 studs tall, i.e. ~3 studs per
+	-- metre. Smooth Terrain voxels are 4 studs whatever we do, so this picks the voxel size in metres:
+	-- 8 studs per metre = 0.5 m voxels (the engine's), with characters scaled by PLAYER_SCALE.
+	STUDS_PER_UNIT = 8,
 
 	-- LOD scan (ChunkDiscoverer::setup_lod). Godot uses 15 levels at 4 px; each level doubles the
 	-- view distance. 6 levels at 8 px is ~1.3k chunks and ~2.3k studs of view distance.
@@ -31,7 +33,11 @@ return {
 	-- which is why this chunk-per-mesh client shows ~16 chunks; see README).
 	DESTROY_EDITABLE_AFTER_PART = false,
 
-	-- Smooth Terrain playground (terrain.project.json): generated square, half side in studs.
+	-- Smooth Terrain playground (terrain.project.json): characters are scaled to PLAYER_HEIGHT_M
+	-- (measured body, head to feet, without accessories); walk speed and jump follow their scale,
+	-- gravity, camera zoom and the brush follow STUDS_PER_UNIT / 3.
+	PLAYER_HEIGHT_M = 1.8,
+	-- Generated square, half side in studs.
 	TERRAIN_HALF_STUDS = 1024,
 	-- Far field around it, out to this half side: the height field only (no caves, no edits), written
 	-- as a thin shell, sampled every 8 / 16 studs by distance (TerrainGen.writeFarTile). 0 turns it off.
