@@ -12,7 +12,8 @@
 //   children fork off at hashed points with radii from the pipe model (r^2 of the parent >= the sum of the
 //   children's r^2 plus the tip's);
 // - a crown hull (1-3 spheres along the upper trunk) and a clump at the tip of every leaf stem (the `crown`
-//   type: a rock with bumps of about CROWN_WAVELENGTH_M).
+//   type: a rock with bumps of about CROWN_WAVELENGTH_M), or for a conifer a few stacked cones with the same
+//   bumps (the `cone` type).
 // Nothing in it depends on the LOD: the band rule (set_band) is the LOD rule. Each record erodes by one cell
 // per LOD and is dropped once gone, so the thin parts leave first (a tapered branch loses its tip first) and the
 // hull last, and no part appears with the LOD: the records listed at LOD L+1 are a subset of those at L. The
@@ -29,6 +30,8 @@ struct TreeSpecies {
     double crown_radius = 3.5; // the limbs' reach
     double hull_ratio = 0.55; // hull sphere radius / crown_radius
     int hull_spheres = 2; // along the trunk, between the crown base and the top
+    double hull_taper = 1.0; // the top hull sphere's (or tier's) radius / the bottom one's
+    int cone_tiers = 0; // > 0: the crown is that many stacked cones (a conifer) instead of hull spheres
     int limbs = 6; // order-1 stems on the trunk
     int twigs = 2; // order-2 stems on each limb
     double limb_angle = 0.9; // a child's angle from its parent's axis
@@ -37,11 +40,12 @@ struct TreeSpecies {
     double tip_ratio = 0.2; // and at least this (the pipe model's floor)
     double twig_length = 0.5; // order-2 length / parent length
     double tortuosity = 0.15; // a midpoint moves by up to this times its segment's length
+    double trunk_tortuosity = 0.05; // the same for the trunk
     double segment_ratio = 10.0; // a segment is split while longer than this many radii
-    double clump_ratio = 0.3; // clump radius / crown_radius
-    double flare = 1.0; // the trunk's smooth union with the ground, times its radius
+    double clump_ratio = 0.38; // clump radius / crown_radius
+    double flare = 2.0; // the trunk's smooth union with the ground, times its radius
     double fork_smooth = 0.5; // a child's smooth union with its parent, times its radius
-    double crown_smooth = 0.2; // the hull's and clumps' smooth union, times their radius
+    double crown_smooth = 0.5; // the hull's and clumps' smooth union, times their radius: one foliage mass
     int budget = 96; // records per tree: the thinnest stems are cut first
 };
 
@@ -51,18 +55,19 @@ const std::vector<TreeSpecies> &tree_species();
 // The crown type: make_rock_type(crown_k(voxel), CROWN_SEED). Its bump amplitude is set so that the bumps add
 // CROWN_BUMP to its Lipschitz bound (the band depth, the locality margin and the list lengths grow with it).
 inline constexpr uint32_t CROWN_SEED = 0xC40Du;
-inline constexpr double CROWN_WAVELENGTH_M = 2.0;
-inline constexpr double CROWN_BUMP = 0.5;
+inline constexpr double CROWN_WAVELENGTH_M = 0.8;
+inline constexpr double CROWN_BUMP = 1.5;
 int crown_k(double p_voxel);
 
 // The library types trees use and the crown type's numbers, read from its bounds (crown_types).
 struct TreeTypes {
     int branch = -1; // make_branch_type()
     int crown = -1; // the crown type
+    int cone = -1; // make_cone_type(crown_k(voxel), CROWN_SEED): its bumps are the crown's
     float crown_amp = 0.0f; // its amp param: the bumps add CROWN_BUMP to L
     float crown_dent = 0.0f; // how far the bumps can reach inside its radius (voxels)
 };
-TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def);
+TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, int p_cone = -1);
 
 // One stem as grown (tests): its order, base and tip radius and the radii of the children forking off it (voxels).
 struct TreeStem {

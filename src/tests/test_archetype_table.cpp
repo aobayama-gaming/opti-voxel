@@ -890,7 +890,7 @@ TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
         rec.anchor = VoxelPos(0, 0, 0);
         rec.params[0] = 200.0f; // tall: the radius sets the depth
         rec.params[1] = 6.0f;
-        finish_record(*def, rec, 1.0f, true, rate);
+        finish_record(*def, rec, 1.0f, true, ErodeRule{ rate, 0.0f });
         CAPTURE(rate);
         CHECK(rec.erode == rate);
         const double depth = band_depth(*def, rec);
@@ -899,5 +899,51 @@ TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
         CHECK(double(rate) * (std::ldexp(1.0, lod - 1) - 1.0) < depth);
         CHECK(lod >= previous);
         previous = lod;
+    }
+}
+
+// --instance_resolve: a part erodes only from its onset, the coarsest LOD whose cells fit `resolve` times in its half
+// thickness; the step between two LODs is still at most `rate` cells, and the drop still comes once the erosion
+// reaches its depth. resolve 0 is the plain rule (onset 0).
+TEST_CASE("Archetype band: the onset keeps a part whole while its cells resolve it") {
+    const TableDefPtr def = table_def("capsule");
+    struct Case {
+        float radius;
+        ErodeRule rule;
+        float erode_from;
+        int max_lod;
+    };
+    // A capsule of radius r: band radius = depth = r + 1.04 (its rotation margin; L = 1, k = 0). r 6 (7.04), rate 1:
+    // 2^L - 1 >= 7.04 at LOD 4; resolve 1: onset 2 (4 <= 7.04 < 8), whole to LOD 2, 2^L - 4 >= 7.04 at LOD 4 too;
+    // rate 0.5: 0.5 (2^L - 4) >= 7.04 at LOD 5; resolve 2: onset 1. r 40: onset 5, 2^L - 32 >= 41.04 at LOD 7.
+    // r 0.75 (1.79): under one cell at LOD 0 already, onset 0.
+    const Case cases[] = { { 6.0f, ErodeRule{ 1.0f, 0.0f }, 1.0f, 4 }, { 6.0f, ErodeRule{ 1.0f, 1.0f }, 4.0f, 4 },
+        { 6.0f, ErodeRule{ 0.5f, 1.0f }, 4.0f, 5 }, { 6.0f, ErodeRule{ 1.0f, 2.0f }, 2.0f, 4 }, { 40.0f, ErodeRule{ 1.0f, 1.0f }, 32.0f, 7 },
+        { 0.75f, ErodeRule{ 1.0f, 1.0f }, 1.0f, 2 } };
+    for (const Case &c : cases) {
+        TableRecord rec;
+        rec.anchor = VoxelPos(0, 0, 0);
+        rec.params[0] = 400.0f; // tall: the radius sets the depth
+        rec.params[1] = c.radius;
+        finish_record(*def, rec, 1.0f, true, c.rule);
+        CAPTURE(c.radius);
+        CAPTURE(c.rule.rate);
+        CAPTURE(c.rule.resolve);
+        CHECK(rec.erode == c.rule.rate);
+        CHECK(rec.erode_from == c.erode_from);
+        CHECK(int(rec.max_lod) == c.max_lod);
+        if (c.rule.resolve > 0.0f) { // the coarsest such LOD (onset 0 at the least)
+            CHECK((rec.erode_from == 1.0f || band_radius(*def, rec) >= double(c.rule.resolve) * double(rec.erode_from)));
+            CHECK(double(c.rule.resolve) * 2.0 * double(rec.erode_from) > band_radius(*def, rec));
+        }
+        for (int lod = 0; lod < 20; lod++) {
+            const float e0 = band_erosion(rec.erode, rec.erode_from, lod);
+            const float e1 = band_erosion(rec.erode, rec.erode_from, lod + 1);
+            CHECK((exact_pow2(lod) > rec.erode_from || e0 == 0.0f)); // whole up to the onset
+            CHECK(e1 - e0 <= rec.erode * exact_pow2(lod)); // at most `rate` cells of LOD L: under the skirt
+            CHECK(e1 >= e0);
+        }
+        CHECK(double(band_erosion(rec.erode, rec.erode_from, rec.max_lod)) >= band_depth(*def, rec));
+        CHECK(double(band_erosion(rec.erode, rec.erode_from, rec.max_lod - 1)) < band_depth(*def, rec));
     }
 }

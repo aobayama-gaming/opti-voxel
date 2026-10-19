@@ -67,9 +67,11 @@ struct TableRecord {
     float margin_c = 0.0f; // 2 * L + skirt_depth (voxels); M(lod) = ceil(k + margin_c * 2^lod) + 2
     float lipschitz = 1.0f; // the instance's L (metrics / tests)
     // The band rule (set_band): listed by the chunks of LOD below max_lod only, and eroded at LOD L by
-    // erode * (2^L - 1) voxels (its distance raised: the shape shrinks uniformly).
+    // erode * max(2^L - erode_from, 0) voxels (its distance raised: the shape shrinks uniformly once the
+    // grid can no longer draw it whole; erode_from = 2^onset).
     uint8_t max_lod = NEVER_DROPPED;
     float erode = 0.0f;
+    float erode_from = 1.0f;
 
     static constexpr uint8_t NEVER_DROPPED = 255;
     bool listed_at(int p_lod) const { return p_lod < max_lod; }
@@ -124,26 +126,39 @@ private:
     const RecordStore *store = nullptr;
 };
 
-// The band rule for instances. At LOD L an instance is eroded by ERODE_CELLS * (2^L - 1) LOD0 voxels: it
-// shrinks by ERODE_CELLS cells per LOD, so the surfaces of a LOD L and a LOD L+1 chunk differ by at most
-// ERODE_CELLS cells of L, under the fine chunk's skirt (skirt_depth >= ERODE_CELLS): no crack at a seam. It is
-// dropped (no longer listed) from the first LOD whose erosion reaches its depth plus k (band_depth), where the
-// eroded shape no longer reaches zero, so dropping it changes no sign: the drop itself is invisible. Its mean
-// (nothing, or an aggregate for a cluster) stands in for it. p_enabled false (--instance_band=0) keeps it
-// whole at every LOD: the reference F_ref. Needs the record's world box (finish_record sets it first).
-// p_erode_cells is the rate (--instance_erode, default ERODE_CELLS): any rate > 0 keeps both properties, a
-// lower one keeps thin parts to coarser LODs (a 0.3 m trunk at 5 cm voxels: gone at LOD 3 at 1, at LOD 4 at 0.5).
+// The band rule for instances. At LOD L an instance is eroded by rate * max(2^L - 2^onset, 0) LOD0 voxels: from
+// its onset LOD on it shrinks by `rate` cells per LOD, so the surfaces of a LOD L and a LOD L+1 chunk differ by at
+// most `rate` cells of L, under the fine chunk's skirt (skirt_depth >= rate): no crack at a seam. It is dropped
+// (no longer listed) from the first LOD whose erosion reaches its depth plus k (band_depth), where the eroded
+// shape no longer reaches zero, so dropping it changes no sign: the drop itself is invisible. Its mean (nothing,
+// or an aggregate for a cluster) stands in for it. p_enabled false (--instance_band=0) keeps it whole at every
+// LOD: the reference F_ref. Needs the record's world box (finish_record sets it first).
+// rate (--instance_erode, default ERODE_CELLS): any rate > 0 keeps both properties, a lower one keeps thin parts
+// to coarser LODs (a 0.3 m trunk at 5 cm voxels: gone at LOD 3 at 1, at LOD 4 at 0.5).
+// resolve (--instance_resolve, cells, 0 = onset 0: erodes from LOD 1): the onset is the coarsest LOD whose cells
+// still fit `resolve` times in the part's half thickness (band_radius), so a part erodes only once the grid can
+// no longer draw it whole, whatever its size: a 0.3 m trunk at 5 cm stays whole to LOD 2 at resolve 1.
 inline constexpr float ERODE_CELLS = 1.0f;
-void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, float p_erode_cells = ERODE_CELLS);
+struct ErodeRule {
+    float rate = ERODE_CELLS;
+    float resolve = 0.0f;
+};
+void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, const ErodeRule &p_rule = ErodeRule());
+// The erosion at p_lod, in voxels: what both back-ends add to the record's distance.
+inline float band_erosion(float p_erode, float p_erode_from, int p_lod) {
+    return p_erode * MAX(ExactNoise::exact_pow2(p_lod) - p_erode_from, 0.0f);
+}
 
 // How deep inside its shape a point can be, plus k: half its box's smallest side times L. Outside the box the
 // value is >= 0 and every point inside is within half that side of its boundary. The smaller of the local box
 // (its type's bounds, grown by rotation_margin on each side) and the world box: the local one doesn't grow
 // when the record turns (a diagonal branch's world box is far wider than the branch).
 double band_depth(const TableDef &p_def, const TableRecord &p_record);
+// Half the smallest side of that box (voxels): the part's half thickness, which sets its onset.
+double band_radius(const TableDef &p_def, const TableRecord &p_record);
 
 // The record's box (relative to the anchor), L and margin from its type's bounds, then its band.
-void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, float p_erode_cells = ERODE_CELLS);
+void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, const ErodeRule &p_rule = ErodeRule());
 
 // The DefRecord struct (with the sdf_records / sdf_list buffer declarations): spliced with the frame
 // structs, before the bindings, by the SDF's GPU data. The fold helpers (arch_in_box, arch_combine) go
@@ -176,7 +191,9 @@ Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_no
 
 // Library types. Parameters (voxels): sphere {radius}; box {hx, hy, hz}; capsule {height, radius};
 // branch {height, radius, slope} (a capsule tapering by slope voxels of radius per voxel of height);
-// cylinder {half_height, radius}; rock {radius, amp} (an fbm-displaced sphere); swiss_cube
+// cylinder {half_height, radius}; rock {radius, amp} (an fbm-displaced sphere); cone {radius, height, cos, sin,
+// amp} (a cone on y = 0, its apex at y = height, cos / sin of its half angle from the CPU, displaced like the
+// rock: a conifer's tier); swiss_cube
 // {hx, hy, hz, ring_radius, hole_radius} (a box with p_holes spherical holes, a composite through the
 // table).
 TableDefPtr make_sphere_type();
@@ -185,6 +202,7 @@ TableDefPtr make_capsule_type();
 TableDefPtr make_branch_type();
 TableDefPtr make_cylinder_type();
 TableDefPtr make_rock_type(int p_k, uint32_t p_seed);
+TableDefPtr make_cone_type(int p_k, uint32_t p_seed);
 TableDefPtr make_swiss_cube_type(int p_holes);
 
 // The influence box (world axes, int64, absolute) of a record: the type's local box, rotated by the
