@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "instance_table.hpp"
+#include "occluder_set.hpp"
 
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 #include <godot_cpp/variant/array.hpp>
@@ -363,5 +364,179 @@ Dictionary OcclusionAuditor::audit(const SDFBase &p_sdf, const ChunkParam &p_par
     d["steps_avg"] = rays.empty() ? 0.0 : double(steps) / double(rays.size());
     d["ms"] = double(now_usec() - t0) / 1000.0;
     d["ok"] = counts[RAY_MISS] == 0 && counts[RAY_OUT_OF_STEPS] == 0;
+    return d;
+}
+
+namespace {
+
+// The sample corners of a chunk, solid or not: (N + 1)^3 lattice points at the chunk's LOD, N cells a side.
+struct OccupancyJob {
+    const SDFBase *sdf;
+    const ChunkParam *param;
+    const std::vector<ChunkId> *chunks;
+    std::vector<std::vector<uint8_t>> *solid;
+    int cells;
+};
+
+VoxelPos chunk_min_voxel(const ChunkId &p_chunk, const ChunkParam &p_param) {
+    const int64_t half = p_param.half_chunk_voxels() << ChunkMath::get_lod(p_chunk);
+    return ChunkMath::chunk_center_voxel(p_chunk, p_param) - VoxelPos(half, half, half);
+}
+
+void sample_one(void *p_job, uint32_t p_index) {
+    const OccupancyJob &job = *static_cast<OccupancyJob *>(p_job);
+    const ChunkId &chunk = (*job.chunks)[p_index];
+    const int lod = ChunkMath::get_lod(chunk);
+    const int64_t cell = int64_t(1) << lod;
+    const VoxelPos lo = chunk_min_voxel(chunk, *job.param);
+    const int s = job.cells + 1;
+    std::vector<uint8_t> &solid = (*job.solid)[p_index];
+    solid.resize(size_t(s) * s * s);
+    for (int z = 0; z < s; z++) {
+        for (int y = 0; y < s; y++) {
+            for (int x = 0; x < s; x++) {
+                const float w = eval(*job.sdf, lo + VoxelPos(x * cell, y * cell, z * cell), lod);
+                solid[(size_t(z) * s + y) * s + x] = !(w > 0.0f) ? 1 : 0;
+            }
+        }
+    }
+}
+
+// A chunk's solid blocks of p_block cells, merged, as boxes in LOD0 voxels.
+std::vector<OccluderSet::Box> chunk_boxes(const ChunkId &p_chunk, const ChunkParam &p_param, const std::vector<uint8_t> &p_solid, int p_cells, int p_block) {
+    const int s = p_cells + 1;
+    const int n = p_cells / p_block;
+    std::vector<uint8_t> blocks(size_t(n) * n * n, 0);
+    for (int bz = 0; bz < n; bz++) {
+        for (int by = 0; by < n; by++) {
+            for (int bx = 0; bx < n; bx++) {
+                bool all = true;
+                for (int z = bz * p_block; all && z <= (bz + 1) * p_block; z++) {
+                    for (int y = by * p_block; all && y <= (by + 1) * p_block; y++) {
+                        for (int x = bx * p_block; all && x <= (bx + 1) * p_block; x++) {
+                            all = p_solid[(size_t(z) * s + y) * s + x] != 0;
+                        }
+                    }
+                }
+                blocks[(size_t(bz) * n + by) * n + bx] = all ? 1 : 0;
+            }
+        }
+    }
+    std::vector<OccluderSet::BlockBox> merged;
+    OccluderSet::merge_blocks(blocks, n, merged);
+    const int64_t step = int64_t(p_block) << ChunkMath::get_lod(p_chunk);
+    const VoxelPos lo = chunk_min_voxel(p_chunk, p_param);
+    std::vector<OccluderSet::Box> boxes;
+    for (const OccluderSet::BlockBox &b : merged) {
+        boxes.push_back({ lo + VoxelPos(b.x0 * step, b.y0 * step, b.z0 * step), lo + VoxelPos(b.x1 * step, b.y1 * step, b.z1 * step) });
+    }
+    return boxes;
+}
+
+} // namespace
+
+Dictionary OcclusionAuditor::occlusion_estimate(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const ChunkHashMap &p_loaded,
+        const VoxelPos &p_eye_base, const Vector3 &p_eye, int p_max_lod) {
+    const uint64_t t0 = now_usec();
+    const int cells = int(2 * p_param.half_chunk_voxels());
+    std::vector<ChunkId> chunks;
+    for (const ChunkId &id : p_scan) {
+        if (ChunkMath::get_lod(id) <= p_max_lod) {
+            chunks.push_back(id);
+        }
+    }
+    std::vector<std::vector<uint8_t>> solid(chunks.size());
+    OccupancyJob job{ &p_sdf, &p_param, &chunks, &solid, cells };
+    if (!chunks.empty()) {
+        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&sample_one, &job, int(chunks.size()), -1, true, "OcclusionEstimate");
+        pool->wait_for_group_task_completion(id);
+    }
+    const double sample_ms = double(now_usec() - t0) / 1000.0;
+
+    // The targets: every scanned chunk's sample box, relative to the eye.
+    const OcclusionMap::Vec3 eye{ double(p_eye.x), double(p_eye.y), double(p_eye.z) };
+    struct Target {
+        ChunkId id;
+        OcclusionMap::Vec3 lo, hi;
+        int64_t quads;
+    };
+    std::vector<Target> targets;
+    for (const ChunkId &id : p_scan) {
+        VoxelPos lo, hi;
+        Archetype::chunk_sample_box(id, p_param, lo, hi);
+        Target t;
+        t.id = id;
+        t.lo = { double(lo.x - p_eye_base.x) - eye.x, double(lo.y - p_eye_base.y) - eye.y, double(lo.z - p_eye_base.z) - eye.z };
+        t.hi = { double(hi.x - p_eye_base.x) - eye.x, double(hi.y - p_eye_base.y) - eye.y, double(hi.z - p_eye_base.z) - eye.z };
+        const ChunkOutput *out = p_loaded.getptr(id);
+        t.quads = out ? out->triangle_count / 2 : 0;
+        targets.push_back(t);
+    }
+
+    Array configs;
+    OcclusionMap map;
+    for (int block : { 2, 4, 7 }) {
+        if (cells % block != 0) {
+            continue;
+        }
+        OccluderSet set;
+        for (size_t i = 0; i < chunks.size(); i++) {
+            set.set(chunks[i], chunk_boxes(chunks[i], p_param, solid[i], cells, block));
+        }
+        for (double margin_m : { 0.0, 0.25, 1.0 }) {
+            const uint64_t b0 = now_usec();
+            const OccluderSet::BuildStats bs = set.build(map, p_eye_base, eye, margin_m / p_param.voxel_size);
+            const uint64_t b1 = now_usec();
+            std::vector<int64_t> lod_chunks(ChunkMath::MAX_LOD_NUMBERS, 0), lod_hidden(ChunkMath::MAX_LOD_NUMBERS, 0);
+            int64_t quads = 0, hidden_quads = 0, quads_far = 0, hidden_quads_far = 0;
+            for (const Target &t : targets) {
+                const int lod = ChunkMath::get_lod(t.id);
+                const bool hidden = map.box_hidden(t.lo, t.hi);
+                lod_chunks[lod]++;
+                lod_hidden[lod] += hidden ? 1 : 0;
+                quads += t.quads;
+                hidden_quads += hidden ? t.quads : 0;
+                if (lod >= 2) {
+                    quads_far += t.quads;
+                    hidden_quads_far += hidden ? t.quads : 0;
+                }
+            }
+            const uint64_t b2 = now_usec();
+            Array lods;
+            for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
+                if (lod_chunks[lod] > 0) {
+                    Dictionary l;
+                    l["lod"] = lod;
+                    l["chunks"] = lod_chunks[lod];
+                    l["hidden"] = lod_hidden[lod];
+                    lods.push_back(l);
+                }
+            }
+            Dictionary c;
+            c["block_cells"] = block;
+            c["margin_m"] = margin_m;
+            c["boxes"] = bs.boxes;
+            c["vanished"] = bs.vanished;
+            c["already_hidden"] = bs.already_hidden;
+            c["rasterised"] = bs.rasterised;
+            c["written"] = bs.written;
+            c["build_ms"] = double(b1 - b0) / 1000.0;
+            c["test_ms"] = double(b2 - b1) / 1000.0;
+            c["lods"] = lods;
+            c["quads"] = quads;
+            c["hidden_quads"] = hidden_quads;
+            c["hidden_quad_share"] = quads > 0 ? double(hidden_quads) / double(quads) : 0.0;
+            c["hidden_quad_share_lod2"] = quads_far > 0 ? double(hidden_quads_far) / double(quads_far) : 0.0;
+            configs.push_back(c);
+        }
+    }
+    Dictionary d;
+    d["max_lod"] = p_max_lod;
+    d["sampled_chunks"] = int64_t(chunks.size());
+    d["sample_ms"] = sample_ms;
+    d["targets"] = int64_t(targets.size());
+    d["configs"] = configs;
+    d["ms"] = double(now_usec() - t0) / 1000.0;
     return d;
 }

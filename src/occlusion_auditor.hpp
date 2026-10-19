@@ -32,4 +32,13 @@ public:
     // blocked (what chunk culling could skip; 9 rays are a sample, an upper bound).
     static Dictionary ray_census(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const VoxelPos &p_eye_base,
             const Vector3 &p_eye, int p_min_lod, int p_per_lod);
+
+    // Step 0 of occlusion by the meshed scene (--occlusion_estimate=MAX_LOD): what the scanned chunks' solid
+    // blocks would hide from one eye. The occupancy the mesher would give (blocks of B cells whose (B + 1)^3
+    // sample corners are solid) is computed on the CPU for the scanned chunks of LOD <= p_max_lod, merged into
+    // boxes (OccluderSet), rasterised (OcclusionMap::add_box) and every scanned chunk tested, for blocks of 2, 4
+    // and 7 cells and margins of 0, 0.25 and 1 m. Per configuration: the hidden chunks per LOD, the hidden share
+    // of the loaded quads, and the build and test times (the runtime job's cost).
+    static Dictionary occlusion_estimate(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const ChunkHashMap &p_loaded,
+            const VoxelPos &p_eye_base, const Vector3 &p_eye, int p_max_lod);
 };

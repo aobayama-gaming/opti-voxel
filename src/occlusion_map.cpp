@@ -186,6 +186,113 @@ void OcclusionMap::add_ball(const Vec3 &p_centre, double p_radius) {
     stats.balls_written += written ? 1 : 0;
 }
 
+void OcclusionMap::box_cap(const Vec3 &p_lo, const Vec3 &p_hi, Vec3 &r_axis, double &r_radius) {
+    const Vec3 centre{ (p_lo.x + p_hi.x) * 0.5, (p_lo.y + p_hi.y) * 0.5, (p_lo.z + p_hi.z) * 0.5 };
+    const double radius = length(Vec3{ p_hi.x - p_lo.x, p_hi.y - p_lo.y, p_hi.z - p_lo.z }) * 0.5;
+    const double d = length(centre);
+    if (d <= radius * (1.0 + 1e-9)) {
+        r_axis = Vec3{ 1.0, 0.0, 0.0 };
+        r_radius = WIDE_CAP;
+        return;
+    }
+    r_axis = scaled(centre, 1.0 / d);
+    r_radius = std::asin(radius / d);
+}
+
+void OcclusionMap::update_tile(int p_face, int p_ti, int p_tj) {
+    const float *face_depth = depth.data() + p_face * RES * RES;
+    float farthest = 0.0f;
+    for (int j = p_tj * TILE; j < p_tj * TILE + TILE; j++) {
+        for (int i = p_ti * TILE; i < p_ti * TILE + TILE; i++) {
+            farthest = std::max(farthest, face_depth[j * RES + i]);
+        }
+    }
+    tile_max[p_face * TILES * TILES + p_tj * TILES + p_ti] = farthest;
+}
+
+bool OcclusionMap::add_box(const Vec3 &p_lo, const Vec3 &p_hi) {
+    stats.boxes++;
+    if (p_lo.x <= 0.0 && p_lo.y <= 0.0 && p_lo.z <= 0.0 && p_hi.x >= 0.0 && p_hi.y >= 0.0 && p_hi.z >= 0.0) {
+        return false;
+    }
+    Vec3 axis;
+    double radius;
+    box_cap(p_lo, p_hi, axis, radius);
+    const Vec3 far{ std::max(std::abs(p_lo.x), std::abs(p_hi.x)), std::max(std::abs(p_lo.y), std::abs(p_hi.y)),
+        std::max(std::abs(p_lo.z), std::abs(p_hi.z)) };
+    const float box_depth = float(length(far));
+    bool written = false;
+    for (int face = 0; face < 6; face++) {
+        const int a = face >> 1;
+        // The box in the face's frame: the ray of face coordinates (u, v) is t (1, u, v), t >= 0.
+        const double x0 = (face & 1) ? -p_hi[a] : p_lo[a];
+        const double x1 = (face & 1) ? -p_lo[a] : p_hi[a];
+        const double y0 = p_lo[(a + 1) % 3], y1 = p_hi[(a + 1) % 3];
+        const double z0 = p_lo[(a + 2) % 3], z1 = p_hi[(a + 2) % 3];
+        if (x1 <= 0.0) {
+            continue;
+        }
+        int i0, i1, j0, j1;
+        if (!cap_rect(axis, radius, face, i0, i1, j0, j1)) {
+            continue;
+        }
+        // Whether the corner ray (u, v) hits the box: the slab test.
+        const auto hits = [&](double p_u, double p_v) {
+            double t0 = std::max(x0, 0.0);
+            double t1 = x1;
+            const auto slab = [&](double p_d, double p_s0, double p_s1) {
+                if (p_d > 0.0) {
+                    t0 = std::max(t0, p_s0 / p_d);
+                    t1 = std::min(t1, p_s1 / p_d);
+                } else if (p_d < 0.0) {
+                    t0 = std::max(t0, p_s1 / p_d);
+                    t1 = std::min(t1, p_s0 / p_d);
+                } else if (!(p_s0 < 0.0 && p_s1 > 0.0)) {
+                    t1 = -1.0;
+                }
+            };
+            slab(p_u, y0, y1);
+            slab(p_v, z0, z1);
+            return t0 < t1;
+        };
+        float *face_depth = depth.data() + face * RES * RES;
+        const float *face_tiles = tile_max.data() + face * TILES * TILES;
+        bool corner[(TILE + 1) * (TILE + 1)];
+        for (int tj = j0 / TILE; tj <= j1 / TILE; tj++) {
+            for (int ti = i0 / TILE; ti <= i1 / TILE; ti++) {
+                if (face_tiles[tj * TILES + ti] <= box_depth) {
+                    continue; // every pixel of the tile is already blocked nearer
+                }
+                const int pi0 = std::max(i0, ti * TILE), pi1 = std::min(i1, ti * TILE + TILE - 1);
+                const int pj0 = std::max(j0, tj * TILE), pj1 = std::min(j1, tj * TILE + TILE - 1);
+                const int w = pi1 - pi0 + 2;
+                for (int j = pj0; j <= pj1 + 1; j++) {
+                    for (int i = pi0; i <= pi1 + 1; i++) {
+                        corner[(j - pj0) * w + (i - pi0)] = hits(face_coord(i), face_coord(j));
+                    }
+                }
+                bool tile_written = false;
+                for (int j = pj0; j <= pj1; j++) {
+                    for (int i = pi0; i <= pi1; i++) {
+                        const int c = (j - pj0) * w + (i - pi0);
+                        if (corner[c] && corner[c + 1] && corner[c + w] && corner[c + w + 1] && box_depth < face_depth[j * RES + i]) {
+                            face_depth[j * RES + i] = box_depth;
+                            stats.pixels_written++;
+                            tile_written = true;
+                        }
+                    }
+                }
+                if (tile_written) {
+                    written = true;
+                    update_tile(face, ti, tj);
+                }
+            }
+        }
+    }
+    stats.boxes_written += written ? 1 : 0;
+    return written;
+}
+
 bool OcclusionMap::box_hidden(const Vec3 &p_lo, const Vec3 &p_hi) const {
     const Vec3 centre{ (p_lo.x + p_hi.x) * 0.5, (p_lo.y + p_hi.y) * 0.5, (p_lo.z + p_hi.z) * 0.5 };
     const double radius = length(Vec3{ p_hi.x - p_lo.x, p_hi.y - p_lo.y, p_hi.z - p_lo.z }) * 0.5;

@@ -85,6 +85,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("debug_audit_discovery"), &VoxelTerrain::debug_audit_discovery);
     ClassDB::bind_method(D_METHOD("debug_audit_occlusion", "count"), &VoxelTerrain::debug_audit_occlusion);
     ClassDB::bind_method(D_METHOD("debug_ray_census", "min_lod", "per_lod"), &VoxelTerrain::debug_ray_census);
+    ClassDB::bind_method(D_METHOD("debug_occlusion_estimate", "max_lod"), &VoxelTerrain::debug_occlusion_estimate);
     ClassDB::bind_method(D_METHOD("set_occlusion_mode", "mode"), &VoxelTerrain::set_occlusion_mode);
     ClassDB::bind_method(D_METHOD("get_occlusion_mode"), &VoxelTerrain::get_occlusion_mode);
     ClassDB::bind_method(D_METHOD("set_occlusion_margin_m", "metres"), &VoxelTerrain::set_occlusion_margin_m);
@@ -1064,6 +1065,18 @@ Dictionary VoxelTerrain::debug_ray_census(int p_min_lod, int p_per_lod) {
     const Vector3 eye = Vector3(real_t(origin.x - eye_base.x), real_t(origin.y - eye_base.y), real_t(origin.z - eye_base.z)) +
             camera->get_global_position() / chunk_param.voxel_size;
     Dictionary report = OcclusionAuditor::ray_census(*sdf, chunk_param, *visual_mesh_data.scanned_chunk, eye_base, eye, p_min_lod, p_per_lod);
+    report["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
+    return report;
+}
+
+Dictionary VoxelTerrain::debug_occlusion_estimate(int p_max_lod) {
+    ERR_FAIL_COND_V_MSG(!started || camera == nullptr, Dictionary(), "debug_occlusion_estimate needs a started terrain and a camera.");
+    const VoxelPos eye_base = ChunkMath::chunk_center_voxel(scan_view.camera_chunk, chunk_param);
+    const VoxelPos origin = chunk_param.origin_voxel();
+    const Vector3 eye = Vector3(real_t(origin.x - eye_base.x), real_t(origin.y - eye_base.y), real_t(origin.z - eye_base.z)) +
+            camera->get_global_position() / chunk_param.voxel_size;
+    Dictionary report = OcclusionAuditor::occlusion_estimate(*sdf, chunk_param, *visual_mesh_data.scanned_chunk, visual_mesh_data.loaded_chunk,
+            eye_base, eye, p_max_lod);
     report["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
     return report;
 }

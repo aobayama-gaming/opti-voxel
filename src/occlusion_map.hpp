@@ -34,6 +34,11 @@ public:
     void clear();
     // A solid ball, centre relative to the eye. Skipped when it holds the eye or covers no whole pixel.
     void add_ball(const Vec3 &p_centre, double p_radius);
+    // A solid box [p_lo, p_hi], relative to the eye. A pixel is written when its 4 corner rays hit the box: the
+    // directions that hit a convex box form a convex cone and a pixel's cone is the hull of its corner rays, so
+    // every ray of the pixel hits it, before the box's farthest corner (the depth written). Skipped when it holds
+    // the eye. Returns whether a pixel was written.
+    bool add_box(const Vec3 &p_lo, const Vec3 &p_hi);
     // Every ray from the eye to the box [p_lo, p_hi] (relative to the eye) is blocked before reaching it. An eye
     // inside or touching the box's bounding sphere: false.
     bool box_hidden(const Vec3 &p_lo, const Vec3 &p_hi) const;
@@ -44,6 +49,8 @@ public:
     struct Stats {
         int64_t balls = 0; // add_ball calls
         int64_t balls_written = 0; // balls that wrote at least one pixel
+        int64_t boxes = 0; // add_box calls
+        int64_t boxes_written = 0; // boxes that wrote at least one pixel
         int64_t pixels_written = 0;
     };
     const Stats &get_stats() const { return stats; }
@@ -67,4 +74,9 @@ private:
     static bool cap_rect(const Vec3 &p_axis, double p_radius, int p_face, int &r_i0, int &r_i1, int &r_j0, int &r_j1);
     // p_dir in the frame of face p_face (axis, u, v), the face's axis component positive inside it.
     static Vec3 to_face(const Vec3 &p_dir, int p_face);
+    // The bounding sphere of [p_lo, p_hi] seen from the eye: its unit axis and angular radius (WIDE_CAP or more
+    // when it holds the eye).
+    static void box_cap(const Vec3 &p_lo, const Vec3 &p_hi, Vec3 &r_axis, double &r_radius);
+    // Recomputes a tile's farthest depth.
+    void update_tile(int p_face, int p_ti, int p_tj);
 };

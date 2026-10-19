@@ -193,6 +193,13 @@ if rc:
     print(f">> RAY CENSUS rays={rc.get('rays')} out_of_steps={rc.get('out_of_steps')} steps_avg={rc.get('steps_avg', 0):.0f} ({rc.get('ms', 0):.0f} ms)")
     for l in rc.get("lods") or []:
         print(f"   LOD {l['lod']:2}: rays blocked {l['ray_share']:6.1%}   chunks with all 9 rays blocked {l['chunks_all_blocked']:4}/{l['chunks']:4} ({l['chunk_share']:6.1%})")
+oe = d.get("occlusion_estimate") or {}
+if oe:
+    print(f">> OCCLUSION ESTIMATE sampled={oe.get('sampled_chunks')} chunks (LOD <= {oe.get('max_lod')}) in {oe.get('sample_ms', 0):.0f} ms, targets={oe.get('targets')}")
+    for c in oe.get("configs") or []:
+        lods = " ".join(f"{l['lod']}:{l['hidden'] / max(l['chunks'], 1):.0%}" for l in c.get("lods") or [])
+        print(f"   block {c['block_cells']} margin {c['margin_m']:.2f} m: quads hidden {c['hidden_quad_share']:.0%} (LOD 2+ {c['hidden_quad_share_lod2']:.0%})"
+              f" boxes={c['boxes']} raster={c['rasterised']} build {c['build_ms']:.1f} ms test {c['test_ms']:.1f} ms | {lods}")
 oc = d.get("final_terrain", {}).get("occlusion") or {}
 if oc:
     oct = d.get("final_terrain", {}).get("discoverer", {}).get("occlusion", {})

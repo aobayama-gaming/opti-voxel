@@ -346,6 +346,9 @@ public:
     // What the real scene hides from the camera (OcclusionAuditor::ray_census): rays to up to `per_lod` scanned
     // chunks of each LOD from `min_lod`. Synchronous (CPU, the worker pool).
     Dictionary debug_ray_census(int p_min_lod, int p_per_lod);
+    // What the meshed scene's solid blocks would hide from the camera (OcclusionAuditor::occlusion_estimate).
+    // Synchronous (CPU, the worker pool).
+    Dictionary debug_occlusion_estimate(int p_max_lod);
 
     VoxelTerrain() = default;
     ~VoxelTerrain() override;

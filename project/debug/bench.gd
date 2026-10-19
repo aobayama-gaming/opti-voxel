@@ -82,6 +82,8 @@ extends Node3D
 ##                                a ray reaching one is a miss
 ##   --ray_census=L               after steady, rays from the camera to up to 300 chunks per LOD from L against
 ##                                the SDF, trees included: per LOD, the share of rays and of chunks blocked
+##   --occlusion_estimate=L       after steady, what the solid blocks of the scanned chunks of LOD <= L would
+##                                hide from the camera (CPU occupancy, blocks of 2/4/7 cells, margins 0/0.25/1 m)
 ##
 ## Checks after steady run in this order: discovery_audit, occlusion_audit, audit, validate.
 ##
@@ -117,6 +119,7 @@ var audit_report := {}
 var discovery_audit_report := {}
 var occlusion_audit_report := {}
 var ray_census_report := {}
+var occlusion_estimate_report := {}
 var checks := []  # remaining post-steady checks
 
 
@@ -475,7 +478,7 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				for c in ["discovery_audit", "occlusion_audit", "ray_census", "audit", "validate"]:
+				for c in ["discovery_audit", "occlusion_audit", "ray_census", "occlusion_estimate", "audit", "validate"]:
 					if args.has(c):
 						checks.append(c)
 				_next_check()
@@ -530,6 +533,10 @@ func _next_check() -> void:
 			ray_census_report = terrain.debug_ray_census(int(args["ray_census"]), 300)
 			print("BENCH: ray_census ", JSON.stringify(ray_census_report))
 			_next_check()
+		"occlusion_estimate":
+			occlusion_estimate_report = terrain.debug_occlusion_estimate(int(args["occlusion_estimate"]))
+			print("BENCH: occlusion_estimate ", JSON.stringify(occlusion_estimate_report))
+			_next_check()
 		"audit":
 			terrain.debug_audit_pages()
 		"validate":
@@ -565,6 +572,7 @@ func _finish() -> void:
 		"discovery_audit": discovery_audit_report,
 		"occlusion_audit": occlusion_audit_report,
 		"ray_census": ray_census_report,
+		"occlusion_estimate": occlusion_estimate_report,
 		"final_terrain": final_terrain,
 		# Mode, first / last scan with their waves (GPU ms, corners, dedup, readback), compare counts.
 		"discoverer": final_terrain.get("discoverer", {}),
