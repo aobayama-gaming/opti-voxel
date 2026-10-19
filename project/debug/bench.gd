@@ -50,6 +50,7 @@ extends Node3D
 ##   --instances=N                archetypes: scatter N rocks/pillars around the demo objects (default 0)
 ##   --instance_area=M            archetypes: side of the scatter square, metres (default 200)
 ##   --instance_band=0            archetypes: keep every instance at every LOD (no band rule; the reference)
+##   --instance_erode=F           archetypes: the band rule's erosion, cells per LOD (default 1; 0.5 keeps trunks a LOD longer)
 ##   --trees=N                    archetypes: a forest of about N grown trees around the demo objects (default 0)
 ##   --tree_area=M                archetypes: side of the forest square, metres (default 60)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
@@ -190,6 +191,8 @@ func _ready() -> void:
 		terrain.archetype_instance_area = float(args["instance_area"])
 	if args.has("instance_band"):
 		terrain.archetype_band = args["instance_band"] != "0"
+	if args.has("instance_erode"):
+		terrain.archetype_erode = float(args["instance_erode"])
 	if args.has("trees"):
 		terrain.archetype_trees = int(args["trees"])
 	if args.has("tree_area"):

@@ -131,8 +131,10 @@ private:
 // eroded shape no longer reaches zero, so dropping it changes no sign: the drop itself is invisible. Its mean
 // (nothing, or an aggregate for a cluster) stands in for it. p_enabled false (--instance_band=0) keeps it
 // whole at every LOD: the reference F_ref. Needs the record's world box (finish_record sets it first).
+// p_erode_cells is the rate (--instance_erode, default ERODE_CELLS): any rate > 0 keeps both properties, a
+// lower one keeps thin parts to coarser LODs (a 0.3 m trunk at 5 cm voxels: gone at LOD 3 at 1, at LOD 4 at 0.5).
 inline constexpr float ERODE_CELLS = 1.0f;
-void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled);
+void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, float p_erode_cells = ERODE_CELLS);
 
 // How deep inside its shape a point can be, plus k: half its box's smallest side times L. Outside the box the
 // value is >= 0 and every point inside is within half that side of its boundary. The smaller of the local box
@@ -141,7 +143,7 @@ void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled);
 double band_depth(const TableDef &p_def, const TableRecord &p_record);
 
 // The record's box (relative to the anchor), L and margin from its type's bounds, then its band.
-void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band);
+void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, float p_erode_cells = ERODE_CELLS);
 
 // The DefRecord struct (with the sdf_records / sdf_list buffer declarations): spliced with the frame
 // structs, before the bindings, by the SDF's GPU data. The fold helpers (arch_in_box, arch_combine) go
