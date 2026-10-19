@@ -34,7 +34,7 @@ public:
     // --instance_capacity for a large scatter.
     uint32_t instance_capacity() const override { return capacity; }
     void set_capacity(uint32_t p_capacity) { capacity = p_capacity; }
-    PackedByteArray record_bytes(uint32_t &r_version) const override;
+    PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version, uint32_t &r_first) const override;
     uint32_t record_size() const override { return RECORD_BYTES; }
 
     void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;

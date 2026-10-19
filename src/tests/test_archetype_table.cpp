@@ -424,19 +424,17 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
         }
         // A few chunks: chunk_list is sorted and unique, and folds the same as the brute force at its own
         // LOD (the duplicate-instance bug the edit run found).
-        int chunk_checks = 0;
-        for (const KeyValue<ChunkId, std::vector<uint32_t>> &kv : snap->stored_at) {
-            if (chunk_checks >= 8) {
-                break;
-            }
-            chunk_checks++;
+        std::vector<ChunkId> stored_nodes;
+        snap->base->stored_at.for_each([&](const ChunkId &p_node, const IndexRange &) { stored_nodes.push_back(p_node); });
+        for (size_t c = 0; c < stored_nodes.size() && c < 8; c++) {
+            const ChunkId &key = stored_nodes[c];
             std::vector<uint32_t> cl;
-            snap->chunk_list(kv.key, cl);
+            snap->chunk_list(key, cl);
             CHECK(std::is_sorted(cl.begin(), cl.end()));
             CHECK(std::adjacent_find(cl.begin(), cl.end()) == cl.end());
-            const int lod = ChunkMath::get_lod(kv.key);
+            const int lod = ChunkMath::get_lod(key);
             WorldPos p;
-            p.voxel = ChunkMath::chunk_min_voxel(kv.key, param);
+            p.voxel = ChunkMath::chunk_min_voxel(key, param);
             const Float4 from_chunk = fold(ground, lib, records.data(), cl.data(), uint32_t(cl.size()), p, lod, true);
             const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
             CHECK(same_bits(from_chunk, brute));

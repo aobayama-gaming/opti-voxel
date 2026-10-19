@@ -265,7 +265,7 @@ TEST_CASE("SDFArchetype scatter: evaluate() and its gradient stay finite") {
         const WorldPos p = random_point(VoxelPos(-100, 600, -300), 420.0, i, 7);
         for (const int lod : { 0, 2, 4 }) {
             sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
-            const Float4 r = finish_table(fold(sdf.get_ground(), sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(),
+            const Float4 r = finish_table(fold(sdf.get_ground(), sdf.get_library(), sdf.get_snapshot()->records, list.data(),
                                                   uint32_t(list.size()), p, lod),
                     lod, 0.5f, true);
             if (!std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.z) || !std::isfinite(r.w)) {
@@ -300,7 +300,7 @@ TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the
                     i, 33);
             for (const int lod : { 0, 4 }) {
                 sdf.get_snapshot()->point_candidates(p.voxel, lod, list);
-                const Float4 r = finish_table(fold(ground, sdf.get_library(), sdf.get_snapshot()->records.data(), list.data(), uint32_t(list.size()),
+                const Float4 r = finish_table(fold(ground, sdf.get_library(), sdf.get_snapshot()->records, list.data(), uint32_t(list.size()),
                                                       p, lod),
                         lod, float(voxel), true);
                 CHECK(float_bits(sdf.evaluate(p, lod)) == float_bits(r.w));
@@ -499,4 +499,120 @@ TEST_CASE("SDFArchetype band: an edit re-meshes only the LODs its instance is li
         CAPTURE(lod);
         CHECK(sdf.edit_affects_chunk(c) == (lod < rec.max_lod));
     }
+}
+
+// Constant cost per chunk: at a fixed density of rocks, the longest list at each LOD doesn't grow with the
+// number of rocks (10x more rocks on 10x the area), and from LOD 6 on the rocks are eroded away and dropped
+// (at LOD 4 a chunk outgrows the small scene's square, so only the bigger one fills it):
+// the lists only hold the demo's big objects.
+TEST_CASE("SDFArchetype band: list lengths are flat in the number of instances at a fixed density") {
+    int64_t longest[2][13] = {};
+    for (int run = 0; run < 2; run++) {
+        const int n = run == 0 ? 2000 : 20000;
+        const double area = 200.0 * std::sqrt(double(n) / 2000.0);
+        ChunkParam param;
+        param.voxel_size = 0.5f;
+        SDFArchetype sdf;
+        sdf.set_scatter(n, area);
+        sdf.configure(param, 15);
+        const std::shared_ptr<const InstanceSnapshot> snap = sdf.get_snapshot();
+        std::vector<uint32_t> list;
+        for (int lod = 0; lod <= 12; lod++) {
+            for (uint32_t i = 0; i < 48; i++) {
+                const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x7111u });
+                const double px = -50.0 + (double(h.x >> 8) / 16777216.0 - 0.5) * area;
+                const double pz = -150.0 + (double(h.y >> 8) / 16777216.0 - 0.5) * area;
+                const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+                const int64_t unit = int64_t(1) << lod;
+                const ChunkId c((WorldCoord::floor_div(int64_t(px / 0.5), span) * 2 + 1) * unit, (WorldCoord::floor_div(600, span) * 2 + 1) * unit,
+                        (WorldCoord::floor_div(int64_t(pz / 0.5), span) * 2 + 1) * unit);
+                snap->chunk_list(c, list);
+                longest[run][lod] = MAX(longest[run][lod], int64_t(list.size()));
+            }
+        }
+    }
+    for (int lod = 0; lod <= 12; lod++) {
+        CAPTURE(lod);
+        MESSAGE("LOD ", lod, ": longest list ", longest[0][lod], " (2,000 rocks) vs ", longest[1][lod], " (20,000 on 10x the area)");
+        if (lod <= 3) {
+            // Up to LOD 3 a chunk (112 m) is smaller than the 200 m square: the same density, the same lists.
+            CHECK(double(longest[1][lod]) <= 1.5 * double(longest[0][lod]) + 8.0);
+        } else if (lod >= 6) {
+            CHECK(longest[1][lod] <= 8); // the demo objects at most: every scattered rock is dropped by LOD 6
+        }
+    }
+}
+
+// Edits go through the overlay (a small index over the edited records, the base kept): after random adds,
+// moves and removes, every chunk list and point query equals the one of a whole new index over the same
+// records; past REBASE edited records the base is rebuilt. The GPU gets the pages an edit changed.
+TEST_CASE("SDFArchetype table: the edit overlay lists exactly what a whole new index lists") {
+    ChunkParam param;
+    param.voxel_size = 0.5f;
+    SDFArchetype sdf;
+    sdf.set_scatter(3000, 150.0);
+    sdf.configure(param, 15);
+    const std::shared_ptr<const InstanceSnapshot> first = sdf.get_snapshot();
+    int64_t lists = 0, entries = 0, edits = 0;
+    std::vector<uint32_t> touched;
+    for (uint32_t step = 0; step < 2600; step++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ step, 0xED17u, 0x0FA7u });
+        const uint32_t n = sdf.get_snapshot()->records.size();
+        const VoxelPos at(-100 + int64_t(h.y % 300u) - 150, 600 + int64_t(h.z % 40u) - 20, -300 + int64_t(h.x % 300u) - 150);
+        int id = -1;
+        if (h.x % 3u == 0u) {
+            const float params[8] = { 3.0f + float(h.y % 6u), 0, 0, 0, 0, 0, 0, 0 };
+            id = sdf.add_instance(0, at, nullptr, params, int(h.z % 4u), 1.0f);
+        } else if (h.x % 3u == 1u) {
+            id = int(h.y % n);
+            id = sdf.move_instance(id, at, nullptr) ? id : -1;
+        } else {
+            id = int(h.z % n);
+            id = sdf.remove_instance(id) ? id : -1;
+        }
+        if (id < 0) {
+            continue;
+        }
+        edits++;
+        touched.push_back(uint32_t(id));
+        if (step % 200 != 199) {
+            continue;
+        }
+        const std::shared_ptr<const InstanceSnapshot> snap = sdf.get_snapshot();
+        const std::shared_ptr<const InstanceSnapshot> whole =
+                build_snapshot(snap->library, snap->ground, snap->out_scale, snap->normalize, snap->records, snap->param, snap->max_lod, snap->version);
+        std::vector<uint32_t> a, b;
+        for (uint32_t i = 0; i < 64; i++) {
+            const VoxelPos &v = snap->records[touched[(i * 7919u) % touched.size()]].anchor;
+            for (int lod = 0; lod <= 6; lod++) {
+                const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+                const int64_t unit = int64_t(1) << lod;
+                const ChunkId c((WorldCoord::floor_div(v.x, span) * 2 + 1) * unit, (WorldCoord::floor_div(v.y, span) * 2 + 1) * unit,
+                        (WorldCoord::floor_div(v.z, span) * 2 + 1) * unit);
+                snap->chunk_list(c, a);
+                whole->chunk_list(c, b);
+                CHECK(a == b);
+                snap->point_candidates(v + VoxelPos(1, 2, 3), lod, a);
+                whole->point_candidates(v + VoxelPos(1, 2, 3), lod, b);
+                CHECK(a == b);
+                CHECK(snap->near_instance(c, lod) == true); // an instance is there (or was: conservative)
+                lists++;
+                entries += int64_t(b.size());
+            }
+        }
+        MESSAGE("after ", edits, " edits: overlay ", snap->overlay_ids.size(), " records, base ", std::string(snap->base == first->base ? "kept" : "rebuilt"));
+    }
+    MESSAGE("overlay vs whole index: ", lists, " chunk lists and point queries, ", entries, " entries");
+    CHECK(sdf.get_snapshot()->base != first->base); // more than REBASE records edited: rebuilt at least once
+    CHECK(entries > 1000);
+    // An edit uploads the page it changed, not the table.
+    uint32_t v = 0, first_record = 0;
+    const uint32_t before = sdf.get_snapshot()->version;
+    const float params[8] = { 4.0f, 0, 0, 0, 0, 0, 0, 0 };
+    CHECK(sdf.add_instance(0, VoxelPos(-100, 600, -300), nullptr, params, 0, 0.0f) >= 0);
+    const PackedByteArray bytes = sdf.get_gpu_table()->record_bytes(before, v, first_record);
+    CHECK(v == before + 1);
+    CHECK(bytes.size() > 0);
+    CHECK(bytes.size() <= int64_t(RecordStore::PAGE) * RECORD_BYTES);
+    CHECK(first_record % RecordStore::PAGE == 0);
 }

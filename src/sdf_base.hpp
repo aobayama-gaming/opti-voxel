@@ -41,9 +41,11 @@ public:
     virtual uint32_t instance_count() const = 0;
     // How many instances the GPU buffers are sized for (runtime edits only append; more is refused).
     virtual uint32_t instance_capacity() const { return instance_count(); }
-    // The encoded DefRecord array of the current snapshot (its record count * RECORD_BYTES bytes) and, in
-    // r_version, the version those bytes are: one snapshot for both, whatever edits land meanwhile.
-    virtual PackedByteArray record_bytes(uint32_t &r_version) const = 0;
+    // The encoded DefRecords of the current snapshot changed since p_have_version (UINT32_MAX: none sent
+    // yet, all of them): records [r_first, r_first + bytes / record_size()), to write at r_first *
+    // record_size(). r_version is the version those bytes are: one snapshot for both, whatever edits land
+    // meanwhile. An edit re-sends the pages it changed, not the table.
+    virtual PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version, uint32_t &r_first) const = 0;
     // Bytes per record in the GPU buffer.
     virtual uint32_t record_size() const = 0;
 

@@ -350,13 +350,13 @@ void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const 
     cascade->record_level(0, 0, p_count);
 }
 
-void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records) {
+void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records, uint32_t p_records_offset) {
     if (!buffer_table_records.is_valid()) {
         return;
     }
     // The records the batch's lists were built against (main thread, same snapshot), when they changed.
     if (!p_records.is_empty()) {
-        rd->buffer_update(buffer_table_records, 0, p_records.size(), p_records);
+        rd->buffer_update(buffer_table_records, p_records_offset, p_records.size(), p_records);
     }
     if (!p_list.is_empty()) {
         ERR_FAIL_COND_MSG(uint64_t(p_list.size()) > table_list_capacity, vformat("GPUDirectMesher: batch list %d bytes over the %d B buffer.", p_list.size(), table_list_capacity));
@@ -364,7 +364,8 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
     }
 }
 
-uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records) {
+uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records,
+        uint32_t &r_records_offset) {
     SDFGpuTable *table = sdf->get_gpu_table();
     if (!table) {
         return 0;
@@ -373,19 +374,22 @@ uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, P
     table->build_lists(p_chunks, chunk_param, r_ids, r_list);
     const uint32_t version = table->version();
     if (version != sent_table_version) {
-        r_records = table->record_bytes(sent_table_version);
+        uint32_t first = 0;
+        r_records = table->record_bytes(sent_table_version, sent_table_version, first);
+        r_records_offset = first * table->record_size();
     }
     return version;
 }
 
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-        const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records) {
+        const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records,
+        uint32_t p_records_offset) {
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
     const uint64_t t0 = now_usec();
     _rt_read_timestamps();
-    _rt_upload_table(p_list, p_records);
+    _rt_upload_table(p_list, p_records, p_records_offset);
 
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
@@ -447,11 +451,11 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 }
 
 void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
-        const PackedByteArray &p_list, const PackedByteArray &p_records) {
+        const PackedByteArray &p_list, const PackedByteArray &p_records, uint32_t p_records_offset) {
     if (!uniform_set.is_valid()) {
         return;
     }
-    _rt_upload_table(p_list, p_records);
+    _rt_upload_table(p_list, p_records, p_records_offset);
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
     rd->buffer_clear(buffer_status, 0, status_size_bytes);
@@ -687,7 +691,8 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
     }
     PackedByteArray list;
     PackedByteArray records;
-    const uint32_t table_version = _table_payload(chunks, ids, list, records);
+    uint32_t records_offset = 0;
+    const uint32_t table_version = _table_payload(chunks, ids, list, records, records_offset);
 
     PackedInt32Array pages;
     for (uint32_t k = 0; k < settings.pages_per_batch; k++) {
@@ -708,7 +713,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
-                    .bind(batch_id, ids, count, pages, min_lod, list, records));
+                    .bind(batch_id, ids, count, pages, min_lod, list, records, records_offset));
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
@@ -733,12 +738,13 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
     }
     PackedByteArray list;
     PackedByteArray records;
-    _table_payload(chunks, ids, list, records);
+    uint32_t records_offset = 0;
+    _table_payload(chunks, ids, list, records, records_offset);
     const uint32_t batch_id = next_batch_id++;
     audit_in_flight[batch_id] = chunks;
     stats.audit_batches++;
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch_count)
-                    .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod, list, records));
+                    .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod, list, records, records_offset));
     return true;
 }
 

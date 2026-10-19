@@ -78,6 +78,53 @@ struct TableRecord {
     DefRecord def_record() const;
 };
 
+// The records of a table, in pages of PAGE records shared between snapshots: an edit copies the one page it
+// changes (copy on write), not the whole table, and each page remembers the version it last changed in, so the
+// GPU re-uploads only the pages changed since the version it has (changed_since).
+class RecordStore {
+public:
+    static constexpr uint32_t PAGE = 4096;
+
+    RecordStore() = default;
+    explicit RecordStore(const std::vector<TableRecord> &p_records, uint32_t p_version = 0);
+
+    uint32_t size() const { return count; }
+    const TableRecord &operator[](uint32_t p_i) const { return pages[p_i / PAGE]->r[p_i % PAGE]; }
+    void push_back(const TableRecord &p_record, uint32_t p_version);
+    void set(uint32_t p_i, const TableRecord &p_record, uint32_t p_version);
+    void clear() {
+        pages.clear();
+        count = 0;
+    }
+    // The records [r_first, r_first + r_count) covering every page changed after p_version (all of them when
+    // p_version is UINT32_MAX, nothing sent yet).
+    void changed_since(uint32_t p_version, uint32_t &r_first, uint32_t &r_count) const;
+
+private:
+    struct Page {
+        std::vector<TableRecord> r;
+        uint32_t version = 0;
+    };
+    // The page p_page, owned by this store alone (cloned if a snapshot shares it).
+    Page &own(uint32_t p_page);
+    std::vector<std::shared_ptr<Page>> pages; // shared with the snapshots; mutated only when owned alone
+    uint32_t count = 0;
+};
+
+// The records fold() reads: a plain array (tests, probes) or a RecordStore.
+class RecordView {
+public:
+    RecordView(const TableRecord *p_flat) :
+            flat(p_flat) {}
+    RecordView(const RecordStore &p_store) :
+            store(&p_store) {}
+    const TableRecord &operator[](uint32_t p_i) const { return flat ? flat[p_i] : (*store)[p_i]; }
+
+private:
+    const TableRecord *flat = nullptr;
+    const RecordStore *store = nullptr;
+};
+
 // The band rule for instances. At LOD L an instance is eroded by ERODE_CELLS * (2^L - 1) LOD0 voxels: it
 // shrinks by ERODE_CELLS cells per LOD, so the surfaces of a LOD L and a LOD L+1 chunk differ by at most
 // ERODE_CELLS cells of L, under the fine chunk's skirt (skirt_depth >= ERODE_CELLS): no crack at a seam. It is
@@ -85,7 +132,7 @@ struct TableRecord {
 // box's smallest side times L), where the eroded shape no longer reaches zero, so dropping it changes no sign:
 // the drop itself is invisible. Its mean (nothing, or an aggregate for a cluster) stands in for it. p_enabled
 // false (--instance_band=0) keeps it whole at every LOD: the reference F_ref.
-inline constexpr float ERODE_CELLS = 0.5f;
+inline constexpr float ERODE_CELLS = 1.0f;
 void set_band(TableRecord &r_record, bool p_bounded, bool p_enabled);
 
 // The record's box (relative to the anchor), L and margin from its type's bounds, then its band.
@@ -115,7 +162,7 @@ bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_
 // The fold: r = ground, then each listed instance (in order, its box test), the epilogue applied.
 // Returns the final register (gradient, value). p_list holds the instance indices in table order.
 // p_box_test false folds every instance (the locality rule's reference, M1b).
-Float4 fold(const Program &p_ground, const DefLibrary &p_library, const TableRecord *p_records, const uint32_t *p_list,
+Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list,
         uint32_t p_count, const WorldPos &p_pos, int p_lod, bool p_box_test = true);
 // fold() then the epilogue (archetype_ir.cpp finish()).
 Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_normalize);

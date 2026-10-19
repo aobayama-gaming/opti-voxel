@@ -18,6 +18,48 @@ DefRecord TableRecord::def_record() const {
     return r;
 }
 
+RecordStore::RecordStore(const std::vector<TableRecord> &p_records, uint32_t p_version) {
+    for (const TableRecord &r : p_records) {
+        push_back(r, p_version);
+    }
+}
+
+RecordStore::Page &RecordStore::own(uint32_t p_page) {
+    if (pages[p_page].use_count() > 1) {
+        pages[p_page] = std::make_shared<Page>(*pages[p_page]); // a snapshot shares it: copy on write
+    }
+    return *pages[p_page];
+}
+
+void RecordStore::push_back(const TableRecord &p_record, uint32_t p_version) {
+    if (count % PAGE == 0) {
+        pages.push_back(std::make_shared<Page>());
+        pages.back()->r.reserve(PAGE);
+    }
+    Page &page = own(uint32_t(pages.size() - 1));
+    page.r.push_back(p_record);
+    page.version = MAX(page.version, p_version);
+    count++;
+}
+
+void RecordStore::set(uint32_t p_i, const TableRecord &p_record, uint32_t p_version) {
+    Page &page = own(p_i / PAGE);
+    page.r[p_i % PAGE] = p_record;
+    page.version = MAX(page.version, p_version);
+}
+
+void RecordStore::changed_since(uint32_t p_version, uint32_t &r_first, uint32_t &r_count) const {
+    uint32_t first = UINT32_MAX, end = 0;
+    for (uint32_t p = 0; p < pages.size(); p++) {
+        if (p_version == UINT32_MAX || pages[p]->version > p_version) {
+            first = MIN(first, p * PAGE);
+            end = MAX(end, MIN(count, (p + 1) * PAGE));
+        }
+    }
+    r_first = first == UINT32_MAX ? 0 : first;
+    r_count = first == UINT32_MAX ? 0 : end - first;
+}
+
 int DefLibrary::add(const TableDefPtr &p_def) {
     list.push_back(p_def);
     return int(list.size() - 1);
@@ -149,7 +191,7 @@ Float4 combine4(const Float4 &p_r, const Float4 &p_c, const TableRecord &p_recor
 
 } // namespace
 
-Float4 fold(const Program &p_ground, const DefLibrary &p_library, const TableRecord *p_records, const uint32_t *p_list,
+Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list,
         uint32_t p_count, const WorldPos &p_pos, int p_lod, bool p_box_test) {
     thread_local std::vector<Float4> regs;
     run_registers(p_ground, p_pos, p_lod, regs);

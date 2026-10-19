@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
+#include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <algorithm>
 
@@ -17,20 +18,21 @@ String GpuTable::glsl_set_chunk() const {
     return "\n    g_sdf_chunk = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size];";
 }
 
-PackedByteArray GpuTable::record_bytes(uint32_t &r_version) const {
+PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_version, uint32_t &r_first) const {
     const std::shared_ptr<const InstanceSnapshot> s = snapshot();
     PackedByteArray bytes;
     r_version = s ? s->version : 0u;
+    r_first = 0;
     if (!s) {
         return bytes;
     }
-    // The used records only (the buffer is sized for capacity() up front): an edit uploads its table, not
-    // the whole capacity.
-    const uint32_t count = uint32_t(s->records.size());
-    ERR_FAIL_COND_V_MSG(count > capacity, bytes, vformat("GpuTable: %d instances, over the GPU capacity of %d.", count, capacity));
+    // The buffer is sized for capacity() up front; only the pages changed since the GPU's version go up.
+    ERR_FAIL_COND_V_MSG(s->records.size() > capacity, bytes, vformat("GpuTable: %d instances, over the GPU capacity of %d.", s->records.size(), capacity));
+    uint32_t count = 0;
+    s->records.changed_since(p_have_version, r_first, count);
     bytes.resize(int64_t(count) * RECORD_BYTES);
     for (uint32_t i = 0; i < count; i++) {
-        encode_record(bytes, i, s->records[i]);
+        encode_record(bytes, i, s->records[r_first + i]);
     }
     return bytes;
 }
@@ -40,10 +42,27 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
     const uint32_t cap = max_chunk_list();
+    // The chunks' lists on the worker pool (a dense scatter makes thousands of candidates per chunk).
+    struct Job {
+        const InstanceSnapshot *snap;
+        const ChunkId *chunks;
+        std::vector<uint32_t> *lists;
+        static void run(void *p_job, uint32_t p_i) {
+            const Job &job = *static_cast<const Job *>(p_job);
+            job.snap->chunk_list(job.chunks[p_i], job.lists[p_i]);
+        }
+    };
+    std::vector<std::vector<uint32_t>> lists(p_chunks.size());
+    Job job{ snap.get(), p_chunks.data(), lists.data() };
+    if (p_chunks.size() > 1) {
+        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+        pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
+    } else if (p_chunks.size() == 1) {
+        Job::run(&job, 0);
+    }
     std::vector<uint32_t> words;
-    std::vector<uint32_t> indices;
     for (size_t i = 0; i < p_chunks.size(); i++) {
-        snap->chunk_list(p_chunks[i], indices);
+        std::vector<uint32_t> &indices = lists[i];
         const int lod = MIN(MAX(ChunkMath::get_lod(p_chunks[i]), 0), 31);
         list_stats.chunks[lod]++;
         list_stats.entries[lod] += int64_t(indices.size());
