@@ -1,7 +1,8 @@
 # opti-voxel on Roblox
 
-Port of the opti-voxel SDF terrain to Roblox, in Luau. This branch (`roblox`) runs parallel to `dev`
-and lags behind it: engine features land on `dev` first and get ported here progressively.
+Port of the opti-voxel SDF terrain to Roblox, in Luau. It lives in this folder on `dev` and lags behind
+the engine: features land in `src/` first and get ported here progressively (`PORTING.md`; working
+rules in `CLAUDE.md`).
 
 The GPU pipelines can't be ported (Roblox has no compute shaders). What runs here is the CPU side:
 the same SDF, the same surface-nets/QEF mesher, the same LOD chunk scan.

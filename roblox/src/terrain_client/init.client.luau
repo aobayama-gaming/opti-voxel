@@ -6,6 +6,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
 local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
@@ -46,7 +47,7 @@ gui.ResetOnSpawn = false
 local label = Instance.new("TextLabel")
 label.AnchorPoint = Vector2.new(0, 1)
 label.Position = UDim2.new(0, 8, 1, -8)
-label.Size = UDim2.fromOffset(470, 132)
+label.Size = UDim2.fromOffset(560, 164)
 label.BackgroundTransparency = 0.4
 label.BackgroundColor3 = Color3.new(0, 0, 0)
 label.TextColor3 = Color3.new(1, 1, 1)
@@ -112,6 +113,10 @@ RunService.RenderStepped:Connect(function(dt)
 		if genDone < genTotal
 			then `generating slab {genDone}/{genTotal}`
 			else `generated in {string.format("%.1f", num("GenSeconds"))} s: {num("GenVoxels")} voxels (sample {math.floor(num("GenSampleMs"))} ms, write {math.floor(num("GenWriteMs"))} ms)`,
+		if num("FarTotal") == 0 then "no far field"
+			elseif num("FarDone") < num("FarTotal") then `far field {num("FarHalfStuds") * 2} studs: tile {num("FarDone")}/{num("FarTotal")}`
+			else `far field {num("FarHalfStuds") * 2} studs in {string.format("%.1f", num("FarSeconds"))} s: {num("FarVoxels")} voxels (sample {math.floor(num("FarSampleMs"))} ms, write {math.floor(num("FarWriteMs"))} ms)`,
+		`terrain voxels {math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.TerrainVoxels))} MB   total {math.floor(Stats:GetTotalMemoryUsageMb())} MB`,
 		`last edit: sample {string.format("%.2f", num("LastEditSampleMs"))} ms  write {string.format("%.2f", num("LastEditWriteMs"))} ms  ({num("LastEditVoxels")} voxels, {num("EditCount")} edits)`,
 		`brush radius {radius} studs   position {math.floor(pos.X)}, {math.floor(pos.Y)}, {math.floor(pos.Z)}`,
 		"",
