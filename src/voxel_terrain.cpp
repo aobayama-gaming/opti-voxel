@@ -1008,6 +1008,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     origin["voxel"] = WorldCoord::to_string(chunk_param.origin_voxel());
     origin["chunk"] = WorldCoord::to_string(chunk_param.origin_chunk);
     d["world_origin"] = origin;
+    if (SDFGpuTable *table = sdf ? sdf->get_gpu_table() : nullptr) {
+        d["table"] = table->get_stats();
+    }
     d["frames"] = (int64_t)exec_time;
     d["load_complete"] = is_load_complete();
     d["frames_until_loaded"] = frames_until_loaded;

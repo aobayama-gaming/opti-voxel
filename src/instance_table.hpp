@@ -4,6 +4,7 @@
 #include "chunk_math.hpp"
 
 #include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
 
 #include <memory>
 #include <vector>
@@ -31,13 +32,19 @@ struct InstanceSnapshot {
     std::vector<uint32_t> unbounded; // instances with an unbounded box: listed by every chunk
     // node -> the instances stored at it
     HashMap<ChunkId, std::vector<uint32_t>, Vector3i64Hasher> stored_at;
-    // node -> every instance in its subtree (own + descendants)
+    // node -> every instance in its subtree (own + descendants) still listed at the node's LOD (the band rule)
     HashMap<ChunkId, std::vector<uint32_t>, Vector3i64Hasher> subtree;
+    // Every node whose subtree stores an instance, at every LOD, band or not (near_instance).
+    HashSet<ChunkId, Vector3i64Hasher> occupied;
 
     // The instances whose box test can pass at one of the chunk's samples, in id order.
     void chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const;
     // The instances whose box test at p_lod can pass at p_voxel, in id order.
     void point_candidates(const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_out) const;
+    // The discoverer's no-cull rule: whether an instance's bare box (at any LOD it is listed at or not) may
+    // meet the node's box grown by 2 chunk spans of its LOD. Conservative to a node: an occupied neighbour
+    // counts whole.
+    bool near_instance(const ChunkId &p_node, int p_lod) const;
 
 private:
     // The instances whose influence box at p_lod meets [p_lo, p_hi] (LOD0 voxels, inclusive), gathered

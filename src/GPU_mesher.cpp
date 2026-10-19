@@ -388,7 +388,7 @@ void GPUMesher::_initialize_gpu_compute() {
     if (SDFGpuTable *table = sdf->get_gpu_table()) {
         // Sized for the capacity up front; the records arrive with the first batch (process_queue).
         buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
-        const uint64_t list_words = uint64_t(chunk_batch_number) * MAX<uint64_t>(table->instance_capacity(), 1u);
+        const uint64_t list_words = uint64_t(chunk_batch_number) * table->max_chunk_list(); // no list is longer (build_lists)
         table_list_capacity = list_words * 4;
         buffer_table_list = rd->storage_buffer_create(table_list_capacity);
         uniforms.push_back(create_storage_uniform(6, buffer_table_records));

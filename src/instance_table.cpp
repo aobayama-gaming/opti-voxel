@@ -89,6 +89,52 @@ void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, int p_lod, std:
     gather(chunk_at_voxel(p_voxel, lod, param), lod, p_voxel, p_voxel, r_out);
 }
 
+bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
+    if (!unbounded.empty()) {
+        return true;
+    }
+    const int lod = MIN(MAX(p_lod, 0), max_lod);
+    const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+    const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);
+    const VoxelPos lo = min - VoxelPos(2 * span, 2 * span, 2 * span);
+    const VoxelPos hi = min + VoxelPos(3 * span, 3 * span, 3 * span);
+    // An instance stored at its LOD or finer: some node of this LOD covering the grown box holds it in its
+    // subtree. A bigger one is stored at a coarser LOD: the nodes covering the grown box there, exact test.
+    for (int l = lod; l <= max_lod; l++) {
+        const ChunkId a = chunk_at_voxel(lo, l, param);
+        const ChunkId b = chunk_at_voxel(hi, l, param);
+        const int64_t step = int64_t(2) << l;
+        for (int64_t x = a.x; x <= b.x; x += step) {
+            for (int64_t y = a.y; y <= b.y; y += step) {
+                for (int64_t z = a.z; z <= b.z; z += step) {
+                    const ChunkId n(x, y, z);
+                    if (l == lod) {
+                        if (occupied.has(n)) {
+                            return true;
+                        }
+                        continue;
+                    }
+                    const std::vector<uint32_t> *v = stored_at.getptr(n);
+                    if (!v) {
+                        continue;
+                    }
+                    for (const uint32_t i : *v) {
+                        const TableRecord &r = records[i];
+                        bool meets = true;
+                        for (int ax = 0; ax < 3 && meets; ax++) {
+                            meets = hi[ax] >= r.anchor[ax] + r.box_lo[ax] && lo[ax] <= r.anchor[ax] + r.box_hi[ax];
+                        }
+                        if (meets) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
 std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
         float p_out_scale, bool p_normalize, std::vector<TableRecord> p_records, const ChunkParam &p_param, int p_max_lod,
         uint32_t p_version) {
@@ -139,6 +185,15 @@ std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const Def
                     snap->stored_at[ChunkId(id[0][0] + x * step, id[1][0] + y * step, id[2][0] + z * step)].push_back(i);
                 }
             }
+        }
+    }
+
+    // Occupancy for the no-cull rule: every stored node and its ancestors (stop at the first already there).
+    for (const KeyValue<ChunkId, std::vector<uint32_t>> &kv : snap->stored_at) {
+        ChunkId n = kv.key;
+        for (int lod = ChunkMath::get_lod(n); lod <= p_max_lod && !snap->occupied.has(n); lod++) {
+            snap->occupied.insert(n);
+            n = ChunkMath::get_parent_from_child(n);
         }
     }
 

@@ -102,35 +102,10 @@ public:
     SDFGpuTable *get_gpu_table() override { return &gpu; }
 
     bool cull_exempt(const ChunkId &p_node, int p_lod) const override {
-        // The node's world box grown by the cull band (2 chunk sizes at its LOD), against every instance's
-        // influence box. O(records) with a short circuit: fine for the demo's small tables.
+        // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box,
+        // band or not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp).
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        if (!snap) {
-            return false;
-        }
-        const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);
-        const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
-        const int64_t grow = 2 * span;
-        const VoxelPos lo = min - VoxelPos(grow, grow, grow);
-        const VoxelPos hi = min + VoxelPos(span + grow, span + grow, span + grow);
-        for (const Archetype::TableRecord &rec : snap->records) {
-            if (rec.removed) {
-                continue;
-            }
-            bool overlap = true;
-            for (int a = 0; a < 3; a++) {
-                const int64_t rlo = rec.anchor[a] + rec.box_lo[a];
-                const int64_t rhi = rec.anchor[a] + rec.box_hi[a];
-                if (hi[a] < rlo || lo[a] > rhi) {
-                    overlap = false;
-                    break;
-                }
-            }
-            if (overlap) {
-                return true;
-            }
-        }
-        return false;
+        return snap && snap->near_instance(p_node, p_lod);
     }
 
     // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the
@@ -160,6 +135,7 @@ public:
         records.push_back(rec);
         edit_k = rec.k;
         edit_margin_c = rec.margin_c;
+        set_edit_lods(rec, rec);
         rebuild(region);
         return int(records.size() - 1);
     }
@@ -172,6 +148,7 @@ public:
         records[p_id].removed = true;
         edit_k = records[p_id].k;
         edit_margin_c = records[p_id].margin_c;
+        set_edit_lods(records[p_id], records[p_id]);
         rebuild(region);
         return true;
     }
@@ -183,6 +160,7 @@ public:
         const String error = edit_error(p_rotation, nullptr, 0, 0.0f);
         ERR_FAIL_COND_V_MSG(!error.is_empty(), false, "move_instance: " + error);
         Archetype::TableRecord &rec = records[p_id];
+        const Archetype::TableRecord before = rec;
         const VoxelBox old_box = record_box(rec);
         rec.anchor = p_anchor;
         if (p_rotation) {
@@ -198,6 +176,7 @@ public:
         }
         edit_k = rec.k;
         edit_margin_c = rec.margin_c;
+        set_edit_lods(before, rec);
         rebuild(region);
         return true;
     }
@@ -206,6 +185,12 @@ public:
     // edit's region): the chunks to re-mesh.
     bool edit_affects_chunk(const ChunkId &p_chunk) const override {
         if (!edit_box.valid) {
+            return false;
+        }
+        // The band rule: the changed instances are listed at LODs [edit_lod_min, edit_lod_max) only, so a
+        // small dig doesn't re-mesh the coarse chunks around it.
+        const int lod = ChunkMath::get_lod(p_chunk);
+        if (lod < edit_lod_min || lod >= edit_lod_max) {
             return false;
         }
         // The chunk's samples (span + skirt overhang) against the edit region grown by M(lod).
@@ -322,6 +307,8 @@ private:
     Archetype::GpuTable gpu;
     float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
     float edit_margin_c = 0.0f;
+    int edit_lod_min = 0; // the LODs the changed records are listed at (edit_affects_chunk)
+    int edit_lod_max = 0;
     int scatter_count = 0; // --instances
     double scatter_area = 200.0; // --instance_area (metres)
     bool instance_band = true; // --instance_band
@@ -412,6 +399,12 @@ private:
 
     void finish_record(Archetype::TableRecord &r_rec) const {
         Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band);
+    }
+
+    // The LOD range an edit can change: the union of the record's ranges before and after it.
+    void set_edit_lods(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after) {
+        edit_lod_min = MIN(p_before.min_lod, p_after.min_lod);
+        edit_lod_max = MAX(p_before.max_lod, p_after.max_lod);
     }
 
     VoxelBox record_box(const Archetype::TableRecord &p_rec) const {
@@ -508,6 +501,8 @@ private:
         lod_count = p_lod_count;
         edit_k = 0.0f;
         edit_margin_c = 0.0f;
+        edit_lod_min = 0;
+        edit_lod_max = 0;
         // The GPU buffers hold the scatter plus room for runtime edits (the mesher reads this at init).
         gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
         rebuild(VoxelBox());

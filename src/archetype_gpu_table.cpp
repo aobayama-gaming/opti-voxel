@@ -1,5 +1,6 @@
 #include "archetype_gpu_table.hpp"
 
+#include "debug_log.hpp"
 #include "gpu_frame.hpp"
 
 #include <algorithm>
@@ -36,11 +37,24 @@ PackedByteArray GpuTable::record_bytes(uint32_t &r_version) const {
 
 void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const {
     (void)p_param;
+    const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
+    const uint32_t cap = max_chunk_list();
     std::vector<uint32_t> words;
     std::vector<uint32_t> indices;
     for (size_t i = 0; i < p_chunks.size(); i++) {
         snap->chunk_list(p_chunks[i], indices);
+        const int lod = MIN(MAX(ChunkMath::get_lod(p_chunks[i]), 0), 31);
+        list_stats.chunks[lod]++;
+        list_stats.entries[lod] += int64_t(indices.size());
+        list_stats.longest[lod] = MAX(list_stats.longest[lod], int64_t(indices.size()));
+        if (indices.size() > cap) {
+            if (list_stats.truncated++ == 0) {
+                ERR_PRINT(vformat("GpuTable: a LOD %d chunk lists %d instances, over the %d a chunk can carry: truncated (wrong surface there).", lod,
+                        int64_t(indices.size()), cap));
+            }
+            indices.resize(cap);
+        }
         const int64_t base = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
         r_chunk_ids.encode_u32(base + 12, uint32_t(words.size()));
         r_chunk_ids.encode_s32(base + 28, int32_t(indices.size()));
@@ -50,6 +64,32 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
     for (size_t i = 0; i < words.size(); i++) {
         r_list.encode_u32(int64_t(i) * 4, words[i]);
     }
+    list_stats.batches++;
+    list_stats.build_usec += int64_t(now_usec() - t0);
+}
+
+Dictionary GpuTable::get_stats() const {
+    Dictionary d;
+    const std::shared_ptr<const InstanceSnapshot> s = snapshot();
+    d["records"] = s ? int64_t(s->records.size()) : int64_t(0);
+    d["capacity"] = int64_t(capacity);
+    d["max_chunk_list"] = int64_t(max_chunk_list());
+    d["list_batches"] = list_stats.batches;
+    d["list_build_ms_avg"] = list_stats.batches > 0 ? double(list_stats.build_usec) / 1000.0 / double(list_stats.batches) : 0.0;
+    d["list_truncated"] = list_stats.truncated;
+    Dictionary per_lod;
+    for (int lod = 0; lod < 32; lod++) {
+        if (list_stats.chunks[lod] == 0) {
+            continue;
+        }
+        Dictionary l;
+        l["chunks"] = list_stats.chunks[lod];
+        l["avg"] = double(list_stats.entries[lod]) / double(list_stats.chunks[lod]);
+        l["max"] = list_stats.longest[lod];
+        per_lod[itos(lod)] = l;
+    }
+    d["list_len_per_lod"] = per_lod;
+    return d;
 }
 
 } // namespace Archetype

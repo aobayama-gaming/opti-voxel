@@ -1,5 +1,6 @@
 #pragma once
 
+#include "godot_cpp/variant/dictionary.hpp"
 #include "godot_cpp/variant/packed_byte_array.hpp"
 #include "godot_cpp/variant/rid.hpp"
 #include "godot_cpp/variant/string.hpp"
@@ -48,8 +49,16 @@ public:
 
     // Main thread: patch each ChunkInput of the batch (id.w = this chunk's list offset in uint32 words,
     // anchor_hi.w = its instance count) and append the indices (uint32) to r_list. r_chunk_ids already
-    // holds the batch's ChunkInput array (GPUFrame::encode_chunk_input).
+    // holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). A list never exceeds
+    // max_chunk_list(), so a batch's lists fit in batch size * max_chunk_list() words.
     virtual void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const = 0;
+
+    // The longest list one chunk carries: the meshers size their list buffer for batch size * this. The band
+    // rule keeps lists to the instances big enough for the chunk's LOD; a longer list is truncated (ERR, counted).
+    static constexpr uint32_t MAX_CHUNK_LIST = 4096;
+    uint32_t max_chunk_list() const { return MAX<uint32_t>(MIN(instance_capacity(), MAX_CHUNK_LIST), 1u); }
+    // List statistics (main thread): lengths per LOD, build time, truncations.
+    virtual Dictionary get_stats() const { return Dictionary(); }
 };
 
 // An axis-aligned box in LOD0 voxels (inclusive), the region an instance edit changed.

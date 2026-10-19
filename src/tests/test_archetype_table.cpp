@@ -711,3 +711,54 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
     CHECK(flips > 100);
     CHECK(unexplained == 0);
 }
+
+// The discoverer's no-cull rule from the index: near_instance is true wherever the old O(N) scan (every
+// instance's bare box against the node box grown by 2 chunk spans) is, at every LOD, band or not. It may say
+// yes a node more often (occupancy is per node), never less.
+TEST_CASE("Archetype band: near_instance covers every node the brute-force no-cull scan exempts") {
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    lib.add(make_box_type());
+    Builder gb;
+    const Program ground = gb.finish(gb.constant(5.0f));
+    ChunkParam param;
+    param.voxel_size = 1.0f;
+    int64_t nodes = 0, exempt = 0, extra = 0;
+    for (const VoxelPos &centre : { VoxelPos(), VoxelPos(-(int64_t(1) << 45), 77, int64_t(1) << 38) }) {
+        const std::vector<TableRecord> records = band_table(lib, centre, 60, 23u, true);
+        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 14, 1);
+        for (uint32_t q = 0; q < records.size(); q++) {
+            for (int lod = 0; lod <= 14; lod++) {
+                const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+                const ChunkId c = chunk_holding(records[q].anchor, lod, param);
+                const int64_t step = int64_t(2) << lod;
+                for (int n = 0; n < 125; n += 3) {
+                    const ChunkId node = c + ChunkId((n % 5 - 2) * step, (n / 5 % 5 - 2) * step, (n / 25 - 2) * step);
+                    const VoxelPos min = ChunkMath::chunk_min_voxel(node, param);
+                    const VoxelPos lo = min - VoxelPos(2 * span, 2 * span, 2 * span);
+                    const VoxelPos hi = min + VoxelPos(3 * span, 3 * span, 3 * span);
+                    bool want = false;
+                    for (const TableRecord &r : records) {
+                        if (r.removed) {
+                            continue;
+                        }
+                        bool meets = true;
+                        for (int a = 0; a < 3; a++) {
+                            meets = meets && hi[a] >= r.anchor[a] + r.box_lo[a] && lo[a] <= r.anchor[a] + r.box_hi[a];
+                        }
+                        want = want || meets;
+                    }
+                    const bool got = snap->near_instance(node, lod);
+                    nodes++;
+                    exempt += want ? 1 : 0;
+                    extra += (got && !want) ? 1 : 0;
+                    if (want) {
+                        CHECK(got);
+                    }
+                }
+            }
+        }
+    }
+    MESSAGE("no-cull rule: ", nodes, " nodes, ", exempt, " exempt by the brute force, ", extra, " more by the index (per-node occupancy)");
+    CHECK(exempt > 1000);
+}

@@ -39,7 +39,19 @@ public:
 
     void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
 
+    Dictionary get_stats() const override;
+
 private:
+    // Main thread only (build_lists is called by the meshers' dispatch on the main thread).
+    struct ListStats {
+        int64_t chunks[32] = {};
+        int64_t entries[32] = {};
+        int64_t longest[32] = {};
+        int64_t build_usec = 0;
+        int64_t batches = 0;
+        int64_t truncated = 0;
+    };
+    mutable ListStats list_stats;
     std::shared_ptr<const InstanceSnapshot> snap;
     uint32_t capacity = 16384; // the GPU record/list buffers hold this many instances
 };

@@ -473,3 +473,30 @@ TEST_CASE("SDFArchetype band: the field step between LOD L and L+1 stays within 
         CHECK(worst <= 1.0);
     }
 }
+
+// An edit only re-meshes the LODs the changed instance is listed at: a small rock added next to the spawn
+// asks for its LOD 0 chunk, not for the coarse chunks over it (their lists never held it).
+TEST_CASE("SDFArchetype band: an edit re-meshes only the LODs its instance is listed at") {
+    ChunkParam param;
+    param.voxel_size = 0.5f;
+    SDFArchetype sdf;
+    sdf.configure(param, 15);
+    const float params[8] = { 4.0f, 0.4f, 0, 0, 0, 0, 0, 0 }; // a 2 m rock (sphere type 0: radius 4 voxels)
+    const VoxelPos at(-104, 600, -190);
+    const int id = sdf.add_instance(0, at, nullptr, params, int(Combine::UNION), 0.0f);
+    CHECK(id >= 0);
+    if (id < 0) {
+        return;
+    }
+    const TableRecord &rec = sdf.get_snapshot()->records[id];
+    MESSAGE("a radius-4 sphere is listed at LODs [", int(rec.min_lod), ", ", int(rec.max_lod), ")");
+    CHECK(rec.max_lod < 15);
+    for (int lod = 0; lod < 15; lod++) {
+        const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+        const int64_t unit = int64_t(1) << lod;
+        const ChunkId c((WorldCoord::floor_div(at.x, span) * 2 + 1) * unit, (WorldCoord::floor_div(at.y, span) * 2 + 1) * unit,
+                (WorldCoord::floor_div(at.z, span) * 2 + 1) * unit);
+        CAPTURE(lod);
+        CHECK(sdf.edit_affects_chunk(c) == (lod < rec.max_lod));
+    }
+}
