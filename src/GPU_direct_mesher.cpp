@@ -439,8 +439,9 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     rd->capture_timestamp(prefix + String("_copy"));
 
     // Bookkeeping only (where each chunk landed); rendering does not wait for it.
-    rd->buffer_get_data_async(buffer_chunk_dir, callable_mp(this, &GPUDirectMesher::_rt_on_directory).bind(p_batch_id), 0, p_count * 16);
-    rd->buffer_get_data_async(buffer_status, callable_mp(this, &GPUDirectMesher::_rt_on_status).bind(p_batch_id), 0, status_size_bytes);
+    // Counted only when queued: a refused readback never calls back (_rt_destroy waits for the count).
+    rt_readbacks_in_flight += rd->buffer_get_data_async(buffer_chunk_dir, callable_mp(this, &GPUDirectMesher::_rt_on_directory).bind(p_batch_id), 0, p_count * 16) == OK;
+    rt_readbacks_in_flight += rd->buffer_get_data_async(buffer_status, callable_mp(this, &GPUDirectMesher::_rt_on_status).bind(p_batch_id), 0, status_size_bytes) == OK;
 
     mutex->lock();
     stats.rt_record_cpu.add(now_usec() - t0);
@@ -483,7 +484,7 @@ void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uin
         rd->compute_list_dispatch(list, groups[i][0], groups[i][1], groups[i][2]);
         rd->compute_list_end();
     }
-    rd->buffer_get_data_async(buffer_chunk_dir, callable_mp(this, &GPUDirectMesher::_rt_on_audit_directory).bind(p_batch_id), 0, p_count * 16);
+    rt_readbacks_in_flight += rd->buffer_get_data_async(buffer_chunk_dir, callable_mp(this, &GPUDirectMesher::_rt_on_audit_directory).bind(p_batch_id), 0, p_count * 16) == OK;
 }
 
 void GPUDirectMesher::_rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id) {
@@ -493,6 +494,7 @@ void GPUDirectMesher::_rt_on_audit_directory(const PackedByteArray &p_data, uint
     c.directory = p_data;
     audit_completed.push_back(c);
     mutex->unlock();
+    _rt_readback_done();
 }
 
 void GPUDirectMesher::_rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id) {
@@ -505,6 +507,7 @@ void GPUDirectMesher::_rt_on_directory(const PackedByteArray &p_data, uint32_t p
         partial.erase(p_batch_id);
     }
     mutex->unlock();
+    _rt_readback_done();
 }
 
 void GPUDirectMesher::_rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id) {
@@ -517,6 +520,7 @@ void GPUDirectMesher::_rt_on_status(const PackedByteArray &p_data, uint32_t p_ba
         partial.erase(p_batch_id);
     }
     mutex->unlock();
+    _rt_readback_done();
 }
 
 void GPUDirectMesher::_rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges) {
@@ -810,6 +814,12 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
             if (flags & 1u) { // overflow: try again in a later batch
                 stats.overflow_requeued++;
+                if (output.loaded_chunk.has(chunk_id)) {
+                    // A re-mesh (instance edit): send_chunk rebuilds chunk_queue from the scan's dirty
+                    // chunks only, which a loaded chunk isn't, so it would be lost there.
+                    _queue_remesh(chunk_id);
+                    continue;
+                }
                 const int lod = ChunkMath::get_lod(chunk_id);
                 if (lod >= 0 && lod < lod_count) {
                     chunk_queue[ChunkMath::load_queue(chunk_id, lod_count, load_view)].push_back(chunk_id);
@@ -1119,7 +1129,8 @@ bool GPUDirectMesher::is_idle() {
             return false;
         }
     }
-    return true;
+    // Re-meshes queued by an edit or by a stale result (get_results) are pending work too.
+    return remesh_queued.is_empty();
 }
 
 void GPUDirectMesher::set_debug_view(int p_view) {
@@ -1244,5 +1255,16 @@ void GPUDirectMesher::_rt_destroy() {
             }
         }
     }
-    memdelete(this);
+    // The RIDs can go now (the readbacks copied them to staging when they were recorded), not the object.
+    rt_destroying = true;
+    if (rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
+}
+
+void GPUDirectMesher::_rt_readback_done() {
+    rt_readbacks_in_flight--;
+    if (rt_destroying && rt_readbacks_in_flight == 0) {
+        memdelete(this);
+    }
 }

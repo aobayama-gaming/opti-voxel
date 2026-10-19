@@ -140,6 +140,8 @@ public:
         if (p_params) {
             std::copy(p_params, p_params + 8, rec.params);
         }
+        const String fit = Archetype::record_fit_error((*library)[rec.def], rec, max_instance_extent());
+        ERR_FAIL_COND_V_MSG(!fit.is_empty(), -1, "add_instance: " + fit);
         finish_record(rec);
         const VoxelBox region = record_box(rec);
         records.push_back(rec, version + 1);
@@ -178,6 +180,8 @@ public:
         if (p_rotation) {
             std::copy(p_rotation, p_rotation + 9, rec.rotation);
         }
+        const String fit = Archetype::record_fit_error((*library)[rec.def], rec, max_instance_extent());
+        ERR_FAIL_COND_V_MSG(!fit.is_empty(), false, "move_instance: " + fit);
         finish_record(rec);
         records.set(p_id, rec, version + 1);
         const VoxelBox new_box = record_box(rec);
@@ -414,6 +418,14 @@ private:
         std::atomic_store(&snapshot, snap);
         gpu.set_snapshot(snap);
         edit_box = p_region;
+    }
+
+    // The widest instance an edit may add (box plus twice k, voxels): 4 top-LOD chunk spans, so the index
+    // places a handful of entries for it, and at most 2^29 so that box_lo minus the influence margin
+    // (clamped to INPUT_LIMIT = 2^30) stays in int32 on the GPU (arch_in_box).
+    int64_t max_instance_extent() const {
+        const int64_t top_span = int64_t(param.chunk_voxel_dimension()) << (lod_count - 1);
+        return MIN(4 * top_span, int64_t(1) << 29);
     }
 
     void finish_record(Archetype::TableRecord &r_rec) const {

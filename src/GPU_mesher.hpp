@@ -135,8 +135,10 @@ private:
 
     // One set per ChunkMath::load_queue: in the view cone first, then by LOD.
     std::vector<LODHashSet *> chunk_queue;
-    ScanView load_view; // the view of the last send_chunk, for remesh_chunks
     int lod_count = 0;
+    // Instance edits' re-meshes (loaded chunks), popped before chunk_queue. Kept apart because send_chunk
+    // rebuilds chunk_queue from each scan's dirty chunks, which a loaded chunk isn't.
+    std::vector<LODHashSet *> remesh_queue;
 
     LODHashSet working_generation;
 

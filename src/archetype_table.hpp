@@ -189,4 +189,13 @@ TableDefPtr make_swiss_cube_type(int p_holes);
 // record's rotation, rounded out, plus the record's anchor. Used by the table's spatial index.
 Bounds record_world_bounds(const TableDef &p_def, const TableRecord &p_record);
 
+// The steepest field a runtime edit may add (the library's shapes are ~1-2 voxels per voxel).
+inline constexpr float MAX_RECORD_LIPSCHITZ = 1024.0f;
+// Why a runtime edit's record doesn't fit the table (empty if it does): an anchor beyond the world-origin
+// bound (+-2^60 voxels, so int64 boxes around it can't overflow), a non-finite type box or a Lipschitz bound
+// above MAX_RECORD_LIPSCHITZ, or a box (under any rotation) plus twice the smooth radius k wider than
+// p_max_extent voxels. Checked before finish_record, whose int64 / int32 conversions of the box assume it,
+// and whose index places one entry per top-LOD node the box touches.
+String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent);
+
 } // namespace Archetype
