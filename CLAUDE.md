@@ -35,7 +35,7 @@ iterate past a warning, never to commit one.
   Where the frame goes (`bench.sh --profile=1`, 1920x1080, error 2 | back 8, budget 4): GPU-bound in every phase
   (wall = GPU total, render thread 1.5-4 ms, terrain `_process` 3-5 ms while flying). Steady in the forest: 17.3 ms,
   of which the three geometry passes are 16.4 (opaque 6.6, shadows 4.9, depth pre-pass 4.9) and SSAO / SSIL /
-  post 0.9; they scale with the quads in view (~0.8 ms per million). The fly's misses are the old chunks kept
+  post 0.9; they follow the pages drawn (25-34 us of geometry per camera-pass page in every phase; live quads count off-screen chunks too). The fly's misses are the old chunks kept
   drawn until their replacements land (fly_back: 2x the live quads, geometry 21 ms, mesher still 4).
   Turning: geometry flat, the frames over budget are the mesher's batches. The pre-pass can't simply go:
   without it SSAO / SSIL lose their normals and shadowed surfaces turn black.
