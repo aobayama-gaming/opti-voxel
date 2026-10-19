@@ -106,13 +106,17 @@ public:
     // voxel of that LOD), the distance is the same at every LOD.
     virtual float evaluate(const WorldPos &p_pos, int p_lod) const = 0;
 
-    // evaluate() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
-    // wave. The default loops over evaluate(); a terrain may spread it over threads.
+    // The value the discoverer's cull reads at a corner: evaluate() by default. A terrain may leave out what
+    // cull_exempt() covers anyway (SDFCascade: the bare cascade, the GPU discoverer's point items bit for bit).
+    virtual float evaluate_cull(const WorldPos &p_pos, int p_lod) const { return evaluate(p_pos, p_lod); }
+
+    // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
+    // wave. The default loops; a terrain may spread it over threads.
     virtual void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {
         WorldPos pos;
         for (int i = 0; i < p_count; i++) {
             pos.voxel = p_points[i];
-            r_out[i] = evaluate(pos, p_lod);
+            r_out[i] = evaluate_cull(pos, p_lod);
         }
     }
 
@@ -120,6 +124,9 @@ public:
     // shader provides the chunk_param uniform, the frame functions of gpu_frame.hpp and the exact
     // noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
+    // A cascade terrain with an instance table: the GLSL its level passes' fold variant splices after the table
+    // buffers (cascade_glsl.hpp), defining `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk)`.
+    virtual String get_sample_fold_glsl() const { return String(); }
 
     // The instance table's GPU buffers, if this terrain owns one (SDFTable). The meshers splice and bind it, and
     // the cascade passes fold it into their samples.

@@ -125,14 +125,9 @@ String SDFTable::edit_error(const float *p_rotation, const float *p_params, int 
     return String();
 }
 
-void SDFTable::rebuild(const VoxelBox &p_region, int64_t p_changed) {
-    version++;
-    const std::shared_ptr<const InstanceSnapshot> previous = current();
-    const std::shared_ptr<const InstanceSnapshot> snap = p_changed >= 0 && previous
-            ? edit_snapshot(*previous, records, { uint32_t(p_changed) }, version)
-            : build_snapshot(library, ground_program, out_scale, true, records, param, lod_count - 1, version);
-    std::atomic_store(&snapshot, snap);
-    gpu.set_snapshot(snap);
+void SDFTable::publish(const std::shared_ptr<const InstanceSnapshot> &p_snapshot, const VoxelBox &p_region) {
+    std::atomic_store(&snapshot, p_snapshot);
+    gpu.set_snapshot(p_snapshot);
     edit_box = p_region;
 }
 
@@ -145,15 +140,13 @@ void SDFTable::finish_record(TableRecord &r_rec) const {
     Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
 }
 
-void SDFTable::set_edit_lods(const TableRecord &p_before, const TableRecord &p_after) {
-    edit_lod_max = MAX(p_before.max_lod, p_after.max_lod);
-}
-
 void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id) {
     edit_k = p_after.k;
     edit_margin_c = p_after.margin_c;
-    set_edit_lods(p_before, p_after);
-    rebuild(p_region, p_id);
+    // The LODs the edit can change: below the larger of the record's max_lod before and after it.
+    edit_lod_max = MAX(p_before.max_lod, p_after.max_lod);
+    version++;
+    publish(edit_snapshot(*current(), records, { p_id }, version), p_region);
 }
 
 VoxelBox SDFTable::record_box(const TableRecord &p_rec) {
@@ -213,8 +206,6 @@ void SDFTable::build_table(const Program &p_ground, double p_voxel, int p_lod_co
             ERR_PRINT(vformat("Archetype library type %d: ", i) + error);
         }
     }
-    ground_program = p_ground;
-    out_scale = float(p_voxel);
     lod_count = p_lod_count;
 
     records.clear();
@@ -276,5 +267,6 @@ void SDFTable::build_table(const Program &p_ground, double p_voxel, int p_lod_co
     edit_lod_max = 0;
     // The GPU buffers hold the scene plus room for runtime edits (the mesher reads this at init).
     gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
-    rebuild(VoxelBox());
+    version++;
+    publish(build_snapshot(library, p_ground, float(p_voxel), true, records, param, lod_count - 1, version), VoxelBox());
 }

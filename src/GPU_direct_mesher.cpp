@@ -323,7 +323,8 @@ void GPUDirectMesher::_rt_read_timestamps() {
     mutex->unlock();
 }
 
-void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix) {
+void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix,
+        const PackedByteArray &p_list) {
     if (cascade == nullptr) {
         const uint32_t g = chunk_param.chunk_size / 8;
         const int64_t list = rd->compute_list_begin();
@@ -354,15 +355,12 @@ void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const 
         cascade->record_level(j--, 0, p_count);
     }
     mark(2);
-    cascade->record_level(0, 0, p_count);
+    cascade->record_level(0, 0, p_count, !p_list.is_empty()); // no instance listed: the bare cascade
 }
 
 void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records) {
     if (!buffer_table_records.is_valid()) {
         return;
-    }
-    if (cascade != nullptr) {
-        cascade->set_fold(!p_list.is_empty()); // a batch with no instance listed samples the bare cascade
     }
     // The records the batch's lists were built against (main thread, same snapshot), when they changed.
     if (!p_records.is_empty()) {
@@ -423,7 +421,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     rd->capture_timestamp(prefix + String("_begin"));
     for (int i = 0; i < 5; i++) {
         if (i == 0) {
-            _rt_record_samples(p_count, p_min_lod, push, prefix);
+            _rt_record_samples(p_count, p_min_lod, push, prefix, p_list);
             rd->capture_timestamp(prefix + String("_p0"));
             continue;
         }
@@ -483,7 +481,7 @@ void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uin
     };
     for (int i = 0; i < 3; i++) {
         if (i == 0) {
-            _rt_record_samples(p_count, p_min_lod, push, String());
+            _rt_record_samples(p_count, p_min_lod, push, String(), p_list);
             continue;
         }
         const int64_t list = rd->compute_list_begin();

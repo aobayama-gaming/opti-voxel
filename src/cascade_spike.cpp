@@ -32,13 +32,6 @@ uint64_t now_usec() {
     return Time::get_singleton()->get_ticks_usec();
 }
 
-// The LOD-L chunk whose interior holds LOD0 voxel p_voxel.
-ChunkId chunk_holding(const Vector3i64 &p_voxel, int p_lod, const ChunkParam &p_param) {
-    const int64_t span = (p_param.half_chunk_voxels() * 2) << p_lod;
-    auto axis = [&](int64_t p_v) { return WorldCoord::floor_div(p_v, span) * span / p_param.half_chunk_voxels() + (int64_t(1) << p_lod); };
-    return ChunkId(axis(p_voxel.x), axis(p_voxel.y), axis(p_voxel.z));
-}
-
 struct TestChunk {
     ChunkId id;
     int lod = 0;
@@ -79,7 +72,7 @@ std::vector<TestChunk> batch_chunks(int p_lod, int p_lods, const ChunkParam &p_p
             v[a] = base + ExactNoise::random_offset(uint32_t(p_lod), n, uint32_t(a) + 0xCA5Cu, p_place.range);
         }
         n++;
-        chunks.push_back({ chunk_holding(v, p_lod, p_param), p_lod, p_place.name });
+        chunks.push_back({ ChunkMath::chunk_at_voxel(v, p_lod, p_param), p_lod, p_place.name });
     };
     for (const Place &place : places) {
         for (int i = 0; i < CHUNKS_PER_PLACE; i++) {
@@ -285,7 +278,7 @@ private:
             ch[k] = p_level.ch[k][p_cpu_i];
         }
         const int lod = chunks[p_chunk].lod;
-        const ExactNoise::Float4 want = sdf.sample(ch, p_p.y * (int64_t(1) << lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
+        const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p.y * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
         const float w[4] = { want.x, want.y, want.z, want.w };
         checks.samples++;
         for (int k = 0; k < 4; k++) {
@@ -374,16 +367,16 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     uint32_t version = 0;
     SDFGpuTable::upload_records(p_rd, records, table->record_bytes(UINT32_MAX, version));
     CascadePasses passes;
-    int64_t chunks = 0, compared = 0, folded = 0, differing = 0;
-    Array examples;
+    Checks checks;
+    int64_t folded = 0;
     if (!passes.create(p_rd, &sdf, param, MAX_BATCH, input, param_ubo, samples, RID(), nullptr, records, list)) {
-        examples.push_back("the cascade passes failed to compile");
-        differing++;
+        checks.example("the cascade passes failed to compile");
+        checks.samples_differing++;
     }
     for (int lod = 0; lod < TABLE_LODS && passes.is_valid(); lod++) {
         std::vector<ChunkId> ids;
         for (uint32_t r = 0; r < snap->records.size() && ids.size() < MAX_BATCH; r++) {
-            const ChunkId id = chunk_holding(Vector3i64(snap->records[r].anchor.x, snap->records[r].anchor.y, snap->records[r].anchor.z), lod, param);
+            const ChunkId id = ChunkMath::chunk_at_voxel(snap->records[r].anchor, lod, param);
             if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
                 ids.push_back(id);
             }
@@ -398,8 +391,7 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
         if (!words.is_empty()) {
             p_rd->buffer_update(list, 0, words.size(), words);
         }
-        passes.set_fold(true); // even a batch with empty lists: the fold variant must give the bare bits there
-        passes.record_all(lod, uint32_t(ids.size()));
+        passes.record_all(lod, uint32_t(ids.size()), true); // the fold variant, empty lists included (the bare bits there)
         p_rd->submit();
         p_rd->sync();
         const PackedByteArray got_bytes = p_rd->buffer_get_data(samples, 0, ids.size() * cells * 16);
@@ -420,37 +412,33 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
                 WorldPos p;
                 p.voxel = VoxelPos(p_p.x << lod, p_p.y << lod, p_p.z << lod);
                 const Float3 grid{ float(i.x), float(i.y), float(i.z) };
-                const ExactNoise::Float4 want = sdf.sample(*snap, chunk_list.data(), uint32_t(chunk_list.size()), ch, p, lod, grid);
-                const ExactNoise::Float4 bare = sdf.sample(ch, p.voxel.y, lod, grid);
+                const ExactNoise::Float4 want = sdf.with_skirt(sdf.sample_sdf(*snap, chunk_list.data(), uint32_t(chunk_list.size()), ch, p, lod), lod, grid);
+                const ExactNoise::Float4 bare = sdf.with_skirt(sdf.sdf(ch, p.voxel.y, lod), lod, grid);
                 folded += float_bits(want.w) != float_bits(bare.w) ? 1 : 0;
                 const float *g = got + (c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))) * 4;
-                const float w[4] = { want.x, want.y, want.z, want.w };
-                compared++;
-                for (int k = 0; k < 4; k++) {
-                    if (float_bits(w[k]) != float_bits(g[k])) {
-                        differing++;
-                        if (examples.size() < 24) {
-                            examples.push_back(vformat("LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", lod, WorldCoord::to_string(ids[c]),
-                                    WorldCoord::to_string(i), g[0], g[1], g[2], g[3], w[0], w[1], w[2], w[3]));
-                        }
-                        break;
+                checks.samples++;
+                if (!ExactNoise::same_bits(want, ExactNoise::Float4{ g[0], g[1], g[2], g[3] })) {
+                    checks.samples_differing++;
+                    if (checks.wants_example()) {
+                        checks.example(vformat("LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", lod, WorldCoord::to_string(ids[c]),
+                                WorldCoord::to_string(i), g[0], g[1], g[2], g[3], want.x, want.y, want.z, want.w));
                     }
                 }
             });
         }
-        chunks += int64_t(ids.size());
+        checks.chunks += int64_t(ids.size());
     }
     passes.free();
     for (const RID &rid : { input, param_ubo, samples, records, list }) {
         p_rd->free_rid(rid);
     }
     d["records"] = int64_t(snap->records.size());
-    d["chunks"] = chunks;
-    d["samples"] = compared;
+    d["chunks"] = checks.chunks;
+    d["samples"] = checks.samples;
     d["samples_folded"] = folded;
-    d["samples_differing"] = differing;
-    d["examples"] = examples;
-    d["ok"] = differing == 0 && folded > 0 && compared > 0;
+    d["samples_differing"] = checks.samples_differing;
+    d["examples"] = checks.examples;
+    d["ok"] = checks.samples_differing == 0 && folded > 0 && checks.samples > 0;
     return d;
 }
 

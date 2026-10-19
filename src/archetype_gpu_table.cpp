@@ -16,6 +16,7 @@ String glsl_table_buffers(int p_record_binding, int p_list_binding) {
             "ChunkInput g_sdf_chunk; // the chunk being sampled: its list offset (id.w) and length (anchor_hi.w)\n";
 }
 
+// The virtual's implementation: glsl_table_buffers, the one source (FrameSpike splices it directly).
 String GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
     return glsl_table_buffers(p_record_binding, p_list_binding);
 }
@@ -60,7 +61,7 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
     (void)p_param;
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
-    if (!snap || snap->records.size() == 0) {
+    if (!snap || snap->empty()) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
         list_stats.batches++;
         return;

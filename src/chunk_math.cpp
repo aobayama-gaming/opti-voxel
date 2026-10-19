@@ -76,6 +76,13 @@ VoxelPos ChunkMath::chunk_min_voxel(const ChunkId &chunk_coord, const ChunkParam
     return (chunk_coord - ChunkId(lod_size, lod_size, lod_size)) * chunk_param.half_chunk_voxels();
 }
 
+ChunkId ChunkMath::chunk_at_voxel(const VoxelPos &p_voxel, int p_lod, const ChunkParam &chunk_param) {
+    const int64_t span = int64_t(chunk_param.chunk_voxel_dimension()) << p_lod;
+    const int64_t unit = int64_t(1) << p_lod;
+    auto axis = [&](int64_t p_v) { return (WorldCoord::floor_div(p_v, span) * 2 + 1) * unit; };
+    return ChunkId(axis(p_voxel.x), axis(p_voxel.y), axis(p_voxel.z));
+}
+
 VoxelPos ChunkMath::chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
     return chunk_coord * chunk_param.half_chunk_voxels();
 }

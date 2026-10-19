@@ -88,8 +88,8 @@ public:
     // p_max_chunks: chunks per dispatch (scratch size). p_debug: valid for the debug variant, a buffer for
     // the last level's channels (vec4s_per_point vec4s per sample, CascadeSpike); invalid for the meshers' (a
     // 16 B placeholder is bound). p_share_scratch: use that object's scratch buffers instead of new ones.
-    // p_table_records / p_table_list: the mesher's instance table buffers (a terrain with a table: its samples fold
-    // the chunks' instance lists); invalid binds placeholders, for inputs whose lists are empty (CascadeSpike).
+    // p_table_records / p_table_list: the mesher's instance table buffers (a terrain with a table): with them, a
+    // second variant whose level 0 folds the chunks' instance lists (record_level's p_fold).
     bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
             RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr, RID p_table_records = RID(),
             RID p_table_list = RID());
@@ -100,17 +100,15 @@ public:
     void free();
     bool is_valid() const { return uniform_set[0].is_valid(); }
 
-    // Whether the next level-0 records fold the chunks' instance lists (a table terrain's batch whose lists aren't
-    // all empty). Off, level 0 is the bare cascade, the same bits over empty lists without the fold's cost.
-    void set_fold(bool p_fold) { fold = p_fold; }
-
     // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
     int level_count(int p_min_lod) const;
     // Records level j for chunks [p_base, p_base + p_count) of the input (p_count <= max chunks: the scratch
-    // holds chunk p_base + i at slot i) as one compute list.
-    void record_level(int p_j, uint32_t p_base, uint32_t p_count);
+    // holds chunk p_base + i at slot i) as one compute list. p_fold: level 0 folds the chunks' instance lists (a
+    // batch with any instance listed; needs the table's buffers). Off, the bare cascade: the same bits over empty
+    // lists, without the fold's cost.
+    void record_level(int p_j, uint32_t p_base, uint32_t p_count, bool p_fold = false);
     // Every level, sub-batches of at most max chunks.
-    void record_all(int p_min_lod, uint32_t p_count);
+    void record_all(int p_min_lod, uint32_t p_count, bool p_fold = false);
 
     uint64_t scratch_bytes() const { return scratch_bytes_total; }
     uint32_t get_max_chunks() const { return max_chunks; }
@@ -120,16 +118,14 @@ public:
 
 private:
     RenderingDevice *rd = nullptr;
-    // [0]: the bare level-0 output, [1]: with the instance fold (chunk items of a table terrain only).
+    // [0]: the bare level-0 output, [1]: with the instance fold (given the table's buffers).
     RID shader[2];
     RID pipeline[2];
     RID uniform_set[2];
-    bool fold = false;
     RID scratch_a;
     RID scratch_b;
     RID bands;
     RID debug_placeholder;
-    RID table_placeholders[2]; // records, list: bound when the caller has no table buffers
     int top = 0;
     int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items
     uint32_t max_chunks = 0;

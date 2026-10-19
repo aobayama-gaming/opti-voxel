@@ -46,8 +46,8 @@ public:
     // The band rule's onset: a part erodes once its half thickness holds fewer than this many cells (0: from LOD 1).
     void set_instance_resolve(float p_cells) { erode_rule.resolve = p_cells; }
 
-    // An instance erodes by erode_rule.rate cells between LOD L and L+1: the skirts must hide that step.
-    float min_skirt_depth(const ChunkParam &, int) const override { return erode_rule.rate; }
+    // An instance erodes by erode_rule.rate cells between LOD L and L+1 (the band rule): the skirts must hide that step.
+    float min_skirt_depth(const ChunkParam &, int) const override { return instance_band ? erode_rule.rate : 0.0f; }
 
     SDFGpuTable *get_gpu_table() const override { return &gpu; }
 
@@ -89,8 +89,6 @@ protected:
 
 private:
     std::shared_ptr<const Archetype::DefLibrary> library;
-    Archetype::Program ground_program;
-    float out_scale = 1.0f;
     int lod_count = 24;
     uint32_t version = 0;
     Archetype::RecordStore records; // editable (paged, copy on write): each snapshot shares its pages
@@ -107,17 +105,15 @@ private:
     bool instance_band = true; // --instance_band
     Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
 
-    // A new snapshot: a whole new index (p_changed < 0: the scene was rebuilt) or the previous base plus the edited
-    // records' overlay.
-    void rebuild(const VoxelBox &p_region, int64_t p_changed = -1);
+    // Makes p_snapshot the current one (readers and the GPU table) and p_region the last edit's region.
+    void publish(const std::shared_ptr<const Archetype::InstanceSnapshot> &p_snapshot, const VoxelBox &p_region);
     // The widest instance an edit may add (box plus twice k, voxels): 4 top-LOD chunk spans, so the index places a
     // handful of entries for it, and at most 2^29 so that box_lo minus the influence margin (clamped to INPUT_LIMIT
     // = 2^30) stays in int32 on the GPU (arch_in_box).
     int64_t max_instance_extent() const;
     void finish_record(Archetype::TableRecord &r_rec) const;
-    // The LODs an edit can change: below the larger of the record's max_lod before and after it.
-    void set_edit_lods(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after);
-    // The changed records' margins and LODs, then a new snapshot over the edit region.
+    // The changed record's margins and LODs, then a new snapshot (the previous base plus the edited records'
+    // overlay) over the edit region.
     void finish_edit(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id);
     static VoxelBox record_box(const Archetype::TableRecord &p_rec);
     // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.

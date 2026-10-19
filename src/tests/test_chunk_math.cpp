@@ -84,6 +84,28 @@ TEST_CASE("ChunkMath: chunk corners and centres in LOD0 voxels") {
     CHECK(ChunkMath::chunk_center_voxel(ChunkId(2, 2, 2), param) == VoxelPos(28, 28, 28));
 }
 
+TEST_CASE("ChunkMath: chunk_at_voxel is the chunk whose span holds the voxel") {
+    const ChunkParam param;
+    const int64_t far = int64_t(1) << 60;
+    for (int lod = 0; lod <= 30; lod += 3) {
+        const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+        for (const int64_t base : { int64_t(0), int64_t(-1), far - 77, -far + 5, (int64_t(1) << 32) - 3 }) {
+            for (const int64_t d : { int64_t(0), int64_t(1), span - 1, span, -span }) {
+                const VoxelPos v(base + d, -(base + d), base / 2 - d);
+                const ChunkId id = ChunkMath::chunk_at_voxel(v, lod, param);
+                CAPTURE(lod);
+                CAPTURE(v);
+                CHECK(ChunkMath::get_lod(id) == lod);
+                const VoxelPos lo = ChunkMath::chunk_min_voxel(id, param);
+                for (int a = 0; a < 3; a++) {
+                    CHECK(lo[a] <= v[a]);
+                    CHECK(v[a] < lo[a] + span);
+                }
+            }
+        }
+    }
+}
+
 TEST_CASE("ChunkMath: chunk_at_render finds the chunk whose centre was rendered") {
     ChunkParam param;
     const ChunkId origins[] = { ChunkId(), snapped_origin(int64_t(1) << 40, -(int64_t(1) << 40), 123456789) };

@@ -18,31 +18,23 @@ struct ScatteredCascade {
     }
 };
 
-// The bare cascade's distance (LOD0 voxels) at a LOD-0 lattice point.
-float bare_distance(const SDFCascade &p_sdf, const VoxelPos &p_voxel) {
-    float ch[Cascade::CHANNELS];
-    Cascade::point_into(p_sdf.get_spec(), Vector3i64(p_voxel.x, p_voxel.y, p_voxel.z), 0, ch);
-    return p_sdf.unit(ch, p_voxel.y, 0).w;
-}
-
 // sample_sdf at a LOD-p_lod lattice point with a given list.
 Float4 sample_with(const SDFCascade &p_sdf, const InstanceSnapshot &p_snap, const std::vector<uint32_t> &p_list, const VoxelPos &p_voxel, int p_lod) {
     float ch[Cascade::CHANNELS];
-    Cascade::point_into(p_sdf.get_spec(), Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod, ch);
+    p_sdf.channels_at(p_voxel, p_lod, ch);
     WorldPos p;
     p.voxel = p_voxel;
     return p_sdf.sample_sdf(p_snap, p_list.data(), uint32_t(p_list.size()), ch, p, p_lod);
 }
 
-// The LOD-p_lod chunk holding voxel p_voxel (origin 0).
-ChunkId chunk_holding(const VoxelPos &p_voxel, int p_lod, const ChunkParam &p_param) {
-    const int64_t span = p_param.half_chunk_voxels() << (p_lod + 1);
-    ChunkId id;
-    for (int a = 0; a < 3; a++) {
-        id[a] = WorldCoord::floor_div(p_voxel[a], span) * (int64_t(2) << p_lod) + (int64_t(1) << p_lod);
-    }
-    return id;
+// The bare cascade at a LOD-p_lod lattice point (metres).
+float bare_sdf(const SDFCascade &p_sdf, const VoxelPos &p_voxel, int p_lod) {
+    float ch[Cascade::CHANNELS];
+    p_sdf.channels_at(p_voxel, p_lod, ch);
+    return p_sdf.sdf(ch, p_voxel.y, p_lod).w;
 }
+
+using ChunkMath::chunk_at_voxel;
 
 } // namespace
 
@@ -52,8 +44,8 @@ TEST_CASE("SDFCascade table: ground_y is the bare cascade's top solid voxel") {
         const int64_t x = int64_t(i) * 977 - 20000;
         const int64_t z = int64_t(i) * -613 + 5000;
         const int64_t y = t.sdf.ground_y(x, z);
-        CHECK(!(bare_distance(t.sdf, VoxelPos(x, y, z)) > 0.0f));
-        CHECK(bare_distance(t.sdf, VoxelPos(x, y + 1, z)) > 0.0f);
+        CHECK(!(bare_sdf(t.sdf, VoxelPos(x, y, z), 0) > 0.0f));
+        CHECK(bare_sdf(t.sdf, VoxelPos(x, y + 1, z), 0) > 0.0f);
         CHECK(t.sdf.ground_y(x, z) == y); // deterministic
     }
 }
@@ -72,7 +64,7 @@ TEST_CASE("SDFCascade table: the scatter stands on the ground, folded at lattice
         // Halfway up a pillar (a capsule on its column's ground): air in the bare cascade, solid with the table.
         WorldPos p;
         p.voxel = rec.anchor + VoxelPos(0, int64_t(0.5f * rec.params[0]), 0);
-        CHECK(bare_distance(t.sdf, p.voxel) > 0.0f);
+        CHECK(bare_sdf(t.sdf, p.voxel, 0) > 0.0f);
         CHECK(t.sdf.evaluate(p, 0) < 0.0f);
         snap->point_candidates(p.voxel, 0, list);
         CHECK(std::find(list.begin(), list.end(), i) != list.end());
@@ -87,9 +79,7 @@ TEST_CASE("SDFCascade table: the scatter stands on the ground, folded at lattice
             p.voxel = VoxelPos((8000 + i * 37) * step, t.sdf.ground_y(8000 * step, 0) / step * step, (i * 53 - 400) * step);
             snap->point_candidates(p.voxel, lod, list);
             CHECK(list.empty());
-            float ch[Cascade::CHANNELS];
-            Cascade::point_into(t.sdf.get_spec(), Vector3i64(p.voxel.x >> lod, p.voxel.y >> lod, p.voxel.z >> lod), lod, ch);
-            CHECK(float_bits(t.sdf.evaluate(p, lod)) == float_bits(t.sdf.sdf(ch, p.voxel.y, lod).w));
+            CHECK(float_bits(t.sdf.evaluate(p, lod)) == float_bits(bare_sdf(t.sdf, p.voxel, lod)));
         }
     }
 }
@@ -105,7 +95,7 @@ TEST_CASE("SDFCascade table: two neighbour chunks give the same bits at the samp
         const int64_t step = int64_t(1) << lod;
         for (uint32_t r = 0; r < snap->records.size(); r += 9) {
             const TableRecord &rec = snap->records[r];
-            const ChunkId a = chunk_holding(rec.anchor, lod, t.param);
+            const ChunkId a = chunk_at_voxel(rec.anchor, lod, t.param);
             for (int axis = 0; axis < 3; axis++) {
                 ChunkId b = a;
                 b[axis] += int64_t(2) << lod;
@@ -128,15 +118,8 @@ TEST_CASE("SDFCascade table: two neighbour chunks give the same bits at the samp
                             const VoxelPos v(x, y, z);
                             const Float4 sa = sample_with(t.sdf, *snap, list_a, v, lod);
                             const Float4 sb = sample_with(t.sdf, *snap, list_b, v, lod);
-                            CHECK(float_bits(sa.w) == float_bits(sb.w));
-                            CHECK(float_bits(sa.x) == float_bits(sb.x));
-                            CHECK(float_bits(sa.y) == float_bits(sb.y));
-                            CHECK(float_bits(sa.z) == float_bits(sb.z));
-                            WorldPos p;
-                            p.voxel = v;
-                            float ch[Cascade::CHANNELS];
-                            Cascade::point_into(t.sdf.get_spec(), Vector3i64(x >> lod, y >> lod, z >> lod), lod, ch);
-                            folded += float_bits(sa.w) != float_bits(t.sdf.sdf(ch, y, lod).w) ? 1 : 0;
+                            CHECK(same_bits(sa, sb));
+                            folded += float_bits(sa.w) != float_bits(bare_sdf(t.sdf, v, lod)) ? 1 : 0;
                             compared++;
                         }
                     }
@@ -164,9 +147,9 @@ TEST_CASE("SDFCascade table: runtime edits on the cascade") {
     }
     CHECK(t.sdf.evaluate(p, 0) < 0.0f);
     CHECK(t.sdf.last_edit_box().valid);
-    CHECK(t.sdf.edit_affects_chunk(chunk_holding(p.voxel, 0, t.param)));
-    CHECK(!t.sdf.edit_affects_chunk(chunk_holding(p.voxel + VoxelPos(5000, 0, 0), 0, t.param)));
-    CHECK(t.sdf.cull_exempt(chunk_holding(p.voxel, 2, t.param), 2));
+    CHECK(t.sdf.edit_affects_chunk(chunk_at_voxel(p.voxel, 0, t.param)));
+    CHECK(!t.sdf.edit_affects_chunk(chunk_at_voxel(p.voxel + VoxelPos(5000, 0, 0), 0, t.param)));
+    CHECK(t.sdf.cull_exempt(chunk_at_voxel(p.voxel, 2, t.param), 2));
     CHECK(t.sdf.remove_instance(id));
     CHECK(t.sdf.evaluate(p, 0) > 0.0f);
 }

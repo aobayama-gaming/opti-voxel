@@ -109,21 +109,36 @@ public:
 
     // Lattice points only: frac 0 and every coordinate a multiple of 2^lod (ERR otherwise, and 0).
     float evaluate(const WorldPos &p_pos, int p_lod) const override {
-        const int64_t mask = (int64_t(1) << p_lod) - 1;
-        ERR_FAIL_COND_V_MSG(p_pos.frac.x != 0.0f || p_pos.frac.y != 0.0f || p_pos.frac.z != 0.0f || ((p_pos.voxel.x | p_pos.voxel.y | p_pos.voxel.z) & mask) != 0,
-                0.0f, "SDFCascade: the cascade only exists on lattice points (frac 0, voxel a multiple of 2^lod).");
+        if (!on_lattice(p_pos, p_lod)) {
+            return 0.0f;
+        }
         float ch[Cascade::CHANNELS];
-        Cascade::point_into(spec, Vector3i64(p_pos.voxel.x >> p_lod, p_pos.voxel.y >> p_lod, p_pos.voxel.z >> p_lod), p_lod, ch);
+        channels_at(p_pos.voxel, p_lod, ch);
         thread_local std::vector<uint32_t> list;
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
         snap->point_candidates(p_pos.voxel, p_lod, list);
         return sample_sdf(*snap, list.data(), uint32_t(list.size()), ch, p_pos, p_lod).w;
     }
 
-    // evaluate() over the WorkerThreadPool: the CPU discoverer's corner batches (and the GPU discoverer's oracle
-    // and fallback).
+    // The discoverer's corners: the bare cascade, as its GPU point items (a node near an instance is never culled).
+    float evaluate_cull(const WorldPos &p_pos, int p_lod) const override {
+        if (!on_lattice(p_pos, p_lod)) {
+            return 0.0f;
+        }
+        float ch[Cascade::CHANNELS];
+        channels_at(p_pos.voxel, p_lod, ch);
+        return sdf(ch, p_pos.voxel.y, p_lod).w;
+    }
+
+    // evaluate_cull() over the WorkerThreadPool: the CPU discoverer's corner batches (and the GPU discoverer's
+    // oracle and fallback).
     void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const override {
         evaluate_batch_parallel(p_points, p_count, p_lod, r_out);
+    }
+
+    // The channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod (Cascade::point_into).
+    void channels_at(const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
+        Cascade::point_into(spec, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod, r_ch);
     }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod at a point of absolute height p_voxel_y: the unit
@@ -136,17 +151,15 @@ public:
 
     // The bare cascade's SDF, the distance in metres (GLSL cascade_terrain_sdf, bit for bit).
     ExactNoise::Float4 sdf(const float p_ch[Cascade::CHANNELS], int64_t p_voxel_y, int p_lod) const {
-        const ExactNoise::Float4 h = unit(p_ch, p_voxel_y, p_lod);
-        const float to_m = voxel_size * ExactNoise::exact_pow2(p_lod);
-        return ExactNoise::Float4{ h.x, h.y, h.z, h.w * to_m };
+        return metres(unit(p_ch, p_voxel_y, p_lod), p_lod);
     }
 
     // sdf() with the listed instances p_list folded in (GLSL cascade_sample_sdf, bit for bit): the bare sdf() where
     // no instance's box test passes.
     ExactNoise::Float4 sample_sdf(const Archetype::InstanceSnapshot &p_snap, const uint32_t *p_list, uint32_t p_count,
             const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod) const {
+        const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel.y, p_lod);
         if (p_count > 0) {
-            const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel.y, p_lod);
             const float s = ExactNoise::exact_pow2(p_lod);
             bool touched = false;
             const ExactNoise::Float4 r = Archetype::fold_onto(ExactNoise::Float4{ u.x * s, u.y * s, u.z * s, u.w * s }, *p_snap.library, p_snap.records,
@@ -155,22 +168,12 @@ public:
                 return Archetype::finish_table(r, p_lod, p_snap.out_scale, p_snap.normalize);
             }
         }
-        return sdf(p_ch, p_pos.voxel.y, p_lod);
+        return metres(u, p_lod);
     }
 
-    // The meshers' sdf_sample at vertex-grid point p_grid (integer coordinates) of a LOD-p_lod chunk with no
-    // instance near it: sdf() plus the skirt (cascade_glsl.hpp).
-    ExactNoise::Float4 sample(const float p_ch[Cascade::CHANNELS], int64_t p_voxel_y, int p_lod, const Float3 &p_grid) const {
-        return with_skirt(sdf(p_ch, p_voxel_y, p_lod), p_lod, p_grid);
-    }
-    // The same with the chunk's instance list p_list folded in (sample_sdf).
-    ExactNoise::Float4 sample(const Archetype::InstanceSnapshot &p_snap, const uint32_t *p_list, uint32_t p_count, const float p_ch[Cascade::CHANNELS],
-            const WorldPos &p_pos, int p_lod, const Float3 &p_grid) const {
-        return with_skirt(sample_sdf(p_snap, p_list, p_count, p_ch, p_pos, p_lod), p_lod, p_grid);
-    }
-
-    // The skirt of vertex-grid point p_grid of a LOD-p_lod chunk (gpu_glsl.hpp's skirt_sdf formula, written out in
-    // the same order, with the depth from skirt_depth_m; cascade_glsl.hpp).
+    // The meshers' sdf_sample at vertex-grid point p_grid of a LOD-p_lod chunk: p_r (sdf() or sample_sdf()) plus the
+    // skirt (gpu_glsl.hpp's skirt_sdf formula, written out in the same order, with the depth from skirt_depth_m;
+    // cascade_glsl.hpp).
     ExactNoise::Float4 with_skirt(ExactNoise::Float4 r, int p_lod, const Float3 &p_grid) const {
         if (param.skirt_size > 0 && param.skirt_depth > 0.0f) {
             const float lo = float(param.skirt_size);
@@ -188,7 +191,7 @@ public:
     int64_t ground_y(int64_t p_x, int64_t p_z) const override {
         auto distance = [&](int64_t p_y) {
             float ch[Cascade::CHANNELS];
-            Cascade::point_into(spec, Vector3i64(p_x, p_y, p_z), 0, ch);
+            channels_at(VoxelPos(p_x, p_y, p_z), 0, ch);
             return unit(ch, p_y, 0).w;
         };
         int64_t y = datum.y;
@@ -220,8 +223,7 @@ public:
 
     // terrain_sdf is a NaN stub: the meshers' templates reference it, but in cascade mode the sdf pass
     // and the vertex normals are replaced by the cascade passes (a stray call would show as NaN vertices).
-    // cascade_terrain_sdf is sdf() for the discoverer's point items, cascade_sample_sdf sample_sdf() for the
-    // meshers' samples (the chunk's instance list from input_chunk[chunk]).
+    // cascade_terrain_sdf is sdf(), for the discoverer's point items and the batches with no instance listed.
     String get_glsl_code() const override {
         using namespace ExactNoise;
         String code = R"glsl(
@@ -243,27 +245,17 @@ vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
     return vec4(tx * tr, ty * tr, tz * tr, (dy - h) * tr);
 }
 
-// SDFCascade::sdf: the distance in metres.
-vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod) {
-    precise vec4 r = cascade_terrain_unit(c0, p, lod);
+// SDFCascade::metres: the distance of a unit register in metres.
+vec4 cascade_metres(vec4 u, int lod) {
+    precise vec4 r = u;
     precise float to_m = chunk_param.voxel_size * exact_pow2(lod);
     r.w = r.w * to_m;
     return r;
 }
 
-// SDFCascade::sample_sdf: the instances of input chunk `chunk`'s list folded onto the register.
-vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk) {
-    g_sdf_chunk = input_chunk[chunk];
-    if (g_sdf_chunk.anchor_hi.w > 0) {
-        precise vec4 u = cascade_terrain_unit(c0, p, lod);
-        precise float s = exact_pow2(lod);
-        bool touched = false;
-        precise vec4 r = arch_fold(vec4(u.xyz * s, u.w * s), p, lod, touched);
-        if (touched) {
-            return arch_finish(r, lod);
-        }
-    }
-    return cascade_terrain_sdf(c0, p, lod);
+// SDFCascade::sdf: the distance in metres.
+vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod) {
+    return cascade_metres(cascade_terrain_unit(c0, p, lod), lod);
 }
 
 // SDFCascade::skirt_depth_m: the skirt depth (metres) of a LOD-lod chunk.
@@ -279,12 +271,45 @@ float cascade_skirt_depth_m(int lod) {
             }
             table += glsl_uint(float_bits(skirt_depth_table[l]));
         }
+        return code.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT)).replace("SKIRT_N", itos(int64_t(skirt_depth_table.size()))).replace("SKIRT_TABLE", table);
+    }
+
+    // The level passes' fold variant (after the table buffers): sample_sdf on the GPU, the instances of input chunk
+    // `chunk`'s list folded onto the register.
+    String get_sample_fold_glsl() const override {
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        code = code.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT)).replace("SKIRT_N", itos(int64_t(skirt_depth_table.size()))).replace("SKIRT_TABLE", table);
-        return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize) + code;
+        return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize) + R"glsl(
+vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk) {
+    precise vec4 u = cascade_terrain_unit(c0, p, lod);
+    g_sdf_chunk = input_chunk[chunk];
+    if (g_sdf_chunk.anchor_hi.w > 0) {
+        precise float s = exact_pow2(lod);
+        bool touched = false;
+        precise vec4 r = arch_fold(u * s, p, lod, touched);
+        if (touched) {
+            return arch_finish(r, lod);
+        }
+    }
+    return cascade_metres(u, lod);
+}
+)glsl";
     }
 
 private:
+    // ERR and false unless p_pos is a point of Λ_lod (frac 0, voxel a multiple of 2^lod).
+    static bool on_lattice(const WorldPos &p_pos, int p_lod) {
+        const int64_t mask = (int64_t(1) << p_lod) - 1;
+        ERR_FAIL_COND_V_MSG(p_pos.frac.x != 0.0f || p_pos.frac.y != 0.0f || p_pos.frac.z != 0.0f || ((p_pos.voxel.x | p_pos.voxel.y | p_pos.voxel.z) & mask) != 0,
+                false, "SDFCascade: the cascade only exists on lattice points (frac 0, voxel a multiple of 2^lod).");
+        return true;
+    }
+
+    // A unit register (unit()) with its distance in metres: sdf(), and sample_sdf() where no instance folds.
+    ExactNoise::Float4 metres(const ExactNoise::Float4 &p_u, int p_lod) const {
+        const float to_m = voxel_size * ExactNoise::exact_pow2(p_lod);
+        return ExactNoise::Float4{ p_u.x, p_u.y, p_u.z, p_u.w * to_m };
+    }
+
     Cascade::Spec spec;
     std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
     VoxelPos datum;
