@@ -188,6 +188,11 @@ if oa:
           f" steps_avg={oa.get('steps_avg', 0):.0f} ({oa.get('ms', 0):.0f} ms)")
     for e in (oa.get("miss_examples") or [])[:5]:
         print(f"   miss {e}")
+rc = d.get("ray_census") or {}
+if rc:
+    print(f">> RAY CENSUS rays={rc.get('rays')} out_of_steps={rc.get('out_of_steps')} steps_avg={rc.get('steps_avg', 0):.0f} ({rc.get('ms', 0):.0f} ms)")
+    for l in rc.get("lods") or []:
+        print(f"   LOD {l['lod']:2}: rays blocked {l['ray_share']:6.1%}   chunks with all 9 rays blocked {l['chunks_all_blocked']:4}/{l['chunks']:4} ({l['chunk_share']:6.1%})")
 oc = d.get("final_terrain", {}).get("occlusion") or {}
 if oc:
     oct = d.get("final_terrain", {}).get("discoverer", {}).get("occlusion", {})

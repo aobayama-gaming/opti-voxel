@@ -133,7 +133,130 @@ double box_entry(const double p_dir[3], const double p_lo[3], const double p_hi[
     return enter;
 }
 
+// The rays from eye p_eye (offset from p_eye_base, LOD0 voxels) to the centre of p_target's vertex-grid box and its
+// corners pulled a tenth of the way in.
+void add_rays(const ChunkId &p_target, const ChunkParam &p_param, const VoxelPos &p_eye_base, const Vector3 &p_eye, std::vector<Ray> &r_rays) {
+    VoxelPos lo, hi;
+    Archetype::chunk_sample_box(p_target, p_param, lo, hi);
+    double blo[3], bhi[3];
+    for (int a = 0; a < 3; a++) {
+        blo[a] = double(lo[a] - p_eye_base[a]) - double(p_eye[a]);
+        bhi[a] = double(hi[a] - p_eye_base[a]) - double(p_eye[a]);
+    }
+    for (int k = 0; k < 9; k++) {
+        double q[3];
+        for (int a = 0; a < 3; a++) {
+            const double mid = 0.5 * (blo[a] + bhi[a]);
+            q[a] = k == 8 ? mid : mid + 0.9 * (((k >> a) & 1) ? bhi[a] - mid : blo[a] - mid);
+        }
+        const double len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
+        if (len < 1e-9) {
+            continue;
+        }
+        Ray r;
+        r.eye_base = p_eye_base;
+        r.target = p_target;
+        for (int a = 0; a < 3; a++) {
+            r.eye[a] = double(p_eye[a]);
+            r.dir[a] = q[a] / len;
+        }
+        r.t_enter = box_entry(r.dir, blo, bhi);
+        r_rays.push_back(r);
+    }
+}
+
+// Marches p_rays over the WorkerThreadPool: one RayResult each.
+std::vector<uint8_t> march_all(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const LODHashSet &p_hidden,
+        const std::vector<Ray> &p_rays, int64_t &r_steps) {
+    std::vector<uint8_t> results(p_rays.size(), RAY_MISS);
+    Job job;
+    job.sdf = &p_sdf;
+    job.param = &p_param;
+    job.scan = &p_scan;
+    job.hidden = &p_hidden;
+    job.rays = &p_rays;
+    job.results = &results;
+    job.lipschitz = SPHERE_TRACE_LIPSCHITZ;
+    if (!p_rays.empty()) {
+        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&march_one, &job, int(p_rays.size()), -1, true, "OcclusionAuditor");
+        pool->wait_for_group_task_completion(id);
+    }
+    r_steps = job.steps.load();
+    return results;
+}
+
 } // namespace
+
+Dictionary OcclusionAuditor::ray_census(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const VoxelPos &p_eye_base,
+        const Vector3 &p_eye, int p_min_lod, int p_per_lod) {
+    const uint64_t t0 = now_usec();
+    // Up to p_per_lod chunks per LOD, every k-th by distance.
+    std::vector<std::vector<std::pair<double, ChunkId>>> by_lod(ChunkMath::MAX_LOD_NUMBERS);
+    for (const ChunkId &id : p_scan) {
+        const int lod = ChunkMath::get_lod(id);
+        if (lod >= p_min_lod) {
+            by_lod[lod].push_back({ ChunkMath::chunk_center_voxel(id, p_param).distance_to(p_eye_base), id });
+        }
+    }
+    std::vector<Ray> rays;
+    for (std::vector<std::pair<double, ChunkId>> &chunks : by_lod) {
+        std::sort(chunks.begin(), chunks.end(), [](const std::pair<double, ChunkId> &a, const std::pair<double, ChunkId> &b) { return a.first < b.first; });
+        const size_t stride = MAX<size_t>(1, chunks.size() / MAX(p_per_lod, 1));
+        for (size_t i = 0; i < chunks.size(); i += stride) {
+            add_rays(chunks[i].second, p_param, p_eye_base, p_eye, rays);
+        }
+    }
+    int64_t steps = 0;
+    const LODHashSet none;
+    const std::vector<uint8_t> results = march_all(p_sdf, p_param, p_scan, none, rays, steps);
+
+    // Per LOD: chunks, chunks with every ray blocked, rays, rays blocked.
+    HashMap<ChunkId, bool, Vector3i64Hasher> all_blocked;
+    std::vector<int64_t> rays_lod(ChunkMath::MAX_LOD_NUMBERS, 0), blocked_lod(ChunkMath::MAX_LOD_NUMBERS, 0);
+    int64_t out_of_steps = 0;
+    for (size_t i = 0; i < rays.size(); i++) {
+        const int lod = ChunkMath::get_lod(rays[i].target);
+        const bool blocked = results[i] == RAY_BLOCKED;
+        out_of_steps += results[i] == RAY_OUT_OF_STEPS ? 1 : 0;
+        rays_lod[lod]++;
+        blocked_lod[lod] += blocked ? 1 : 0;
+        bool *b = all_blocked.getptr(rays[i].target);
+        if (!b) {
+            all_blocked.insert(rays[i].target, blocked);
+        } else {
+            *b = *b && blocked;
+        }
+    }
+    std::vector<int64_t> chunks_lod(ChunkMath::MAX_LOD_NUMBERS, 0), hidden_lod(ChunkMath::MAX_LOD_NUMBERS, 0);
+    for (const KeyValue<ChunkId, bool> &kv : all_blocked) {
+        const int lod = ChunkMath::get_lod(kv.key);
+        chunks_lod[lod]++;
+        hidden_lod[lod] += kv.value ? 1 : 0;
+    }
+    Array lods;
+    for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
+        if (chunks_lod[lod] == 0) {
+            continue;
+        }
+        Dictionary l;
+        l["lod"] = lod;
+        l["chunks"] = chunks_lod[lod];
+        l["chunks_all_blocked"] = hidden_lod[lod];
+        l["rays"] = rays_lod[lod];
+        l["rays_blocked"] = blocked_lod[lod];
+        l["ray_share"] = double(blocked_lod[lod]) / double(rays_lod[lod]);
+        l["chunk_share"] = double(hidden_lod[lod]) / double(chunks_lod[lod]);
+        lods.push_back(l);
+    }
+    Dictionary d;
+    d["lods"] = lods;
+    d["rays"] = int64_t(rays.size());
+    d["out_of_steps"] = out_of_steps;
+    d["steps_avg"] = rays.empty() ? 0.0 : double(steps) / double(rays.size());
+    d["ms"] = double(now_usec() - t0) / 1000.0;
+    return d;
+}
 
 Dictionary OcclusionAuditor::hidden_stats(const LODHashSet &p_hidden, const ChunkHashMap &p_loaded) {
     Dictionary bands;
@@ -203,52 +326,12 @@ Dictionary OcclusionAuditor::audit(const SDFBase &p_sdf, const ChunkParam &p_par
 
     std::vector<Ray> rays;
     for (const ChunkId &target : targets) {
-        VoxelPos lo, hi;
-        Archetype::chunk_sample_box(target, p_param, lo, hi);
         for (const Vector3 &eye : p_eyes) {
-            double blo[3], bhi[3];
-            for (int a = 0; a < 3; a++) {
-                blo[a] = double(lo[a] - p_eye_base[a]) - double(eye[a]);
-                bhi[a] = double(hi[a] - p_eye_base[a]) - double(eye[a]);
-            }
-            // The box centre and its corners pulled a tenth of the way in.
-            for (int k = 0; k < 9; k++) {
-                double q[3];
-                for (int a = 0; a < 3; a++) {
-                    const double mid = 0.5 * (blo[a] + bhi[a]);
-                    q[a] = k == 8 ? mid : mid + 0.9 * (((k >> a) & 1) ? bhi[a] - mid : blo[a] - mid);
-                }
-                const double len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
-                if (len < 1e-9) {
-                    continue;
-                }
-                Ray r;
-                r.eye_base = p_eye_base;
-                r.target = target;
-                for (int a = 0; a < 3; a++) {
-                    r.eye[a] = double(eye[a]);
-                    r.dir[a] = q[a] / len;
-                }
-                r.t_enter = box_entry(r.dir, blo, bhi);
-                rays.push_back(r);
-            }
+            add_rays(target, p_param, p_eye_base, eye, rays);
         }
     }
-
-    std::vector<uint8_t> results(rays.size(), RAY_MISS);
-    Job job;
-    job.sdf = &p_sdf;
-    job.param = &p_param;
-    job.scan = &p_scan;
-    job.hidden = &p_hidden;
-    job.rays = &rays;
-    job.results = &results;
-    job.lipschitz = SPHERE_TRACE_LIPSCHITZ;
-    if (!rays.empty()) {
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&march_one, &job, int(rays.size()), -1, true, "OcclusionAuditor::audit");
-        pool->wait_for_group_task_completion(id);
-    }
+    int64_t steps = 0;
+    const std::vector<uint8_t> results = march_all(p_sdf, p_param, p_scan, p_hidden, rays, steps);
 
     int64_t counts[4] = {};
     HashSet<ChunkId, Vector3i64Hasher> miss_chunks;
@@ -277,7 +360,7 @@ Dictionary OcclusionAuditor::audit(const SDFBase &p_sdf, const ChunkParam &p_par
     d["out_of_steps"] = counts[RAY_OUT_OF_STEPS];
     d["miss_chunks"] = int64_t(miss_chunks.size());
     d["miss_examples"] = examples;
-    d["steps_avg"] = rays.empty() ? 0.0 : double(job.steps.load()) / double(rays.size());
+    d["steps_avg"] = rays.empty() ? 0.0 : double(steps) / double(rays.size());
     d["ms"] = double(now_usec() - t0) / 1000.0;
     d["ok"] = counts[RAY_MISS] == 0 && counts[RAY_OUT_OF_STEPS] == 0;
     return d;

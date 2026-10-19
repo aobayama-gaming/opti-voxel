@@ -80,6 +80,8 @@ extends Node3D
 ##   --occlusion_margin=M         metres the camera may move from where a chunk was found hidden (default 4)
 ##   --occlusion_audit=N          after steady, rays from the camera to N hidden chunks against the SDF (CPU):
 ##                                a ray reaching one is a miss
+##   --ray_census=L               after steady, rays from the camera to up to 300 chunks per LOD from L against
+##                                the SDF, trees included: per LOD, the share of rays and of chunks blocked
 ##
 ## Checks after steady run in this order: discovery_audit, occlusion_audit, audit, validate.
 ##
@@ -114,6 +116,7 @@ var validation_report := {}
 var audit_report := {}
 var discovery_audit_report := {}
 var occlusion_audit_report := {}
+var ray_census_report := {}
 var checks := []  # remaining post-steady checks
 
 
@@ -472,7 +475,7 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				for c in ["discovery_audit", "occlusion_audit", "audit", "validate"]:
+				for c in ["discovery_audit", "occlusion_audit", "ray_census", "audit", "validate"]:
 					if args.has(c):
 						checks.append(c)
 				_next_check()
@@ -523,6 +526,10 @@ func _next_check() -> void:
 			occlusion_audit_report = terrain.debug_audit_occlusion(int(args["occlusion_audit"]))
 			print("BENCH: occlusion_audit ", JSON.stringify(occlusion_audit_report))
 			_next_check()
+		"ray_census":
+			ray_census_report = terrain.debug_ray_census(int(args["ray_census"]), 300)
+			print("BENCH: ray_census ", JSON.stringify(ray_census_report))
+			_next_check()
 		"audit":
 			terrain.debug_audit_pages()
 		"validate":
@@ -557,6 +564,7 @@ func _finish() -> void:
 		"audit": audit_report,
 		"discovery_audit": discovery_audit_report,
 		"occlusion_audit": occlusion_audit_report,
+		"ray_census": ray_census_report,
 		"final_terrain": final_terrain,
 		# Mode, first / last scan with their waves (GPU ms, corners, dedup, readback), compare counts.
 		"discoverer": final_terrain.get("discoverer", {}),

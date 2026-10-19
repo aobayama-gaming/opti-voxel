@@ -25,4 +25,11 @@ public:
     // miss; ok = no miss and no ray out of steps. CPU, rays spread over the WorkerThreadPool.
     static Dictionary audit(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const LODHashSet &p_hidden,
             const ChunkHashMap &p_loaded, const VoxelPos &p_eye_base, const std::vector<Vector3> &p_eyes, int p_count);
+
+    // What the real scene (trees included) hides from one eye (--ray_census=MIN_LOD): for up to p_per_lod scanned
+    // chunks of each LOD from p_min_lod, the rays of audit() to 9 points of each, marched the same way (no hidden
+    // chunk blocks). Per LOD: the share of rays blocked (what a depth test would cull) and of chunks with all 9
+    // blocked (what chunk culling could skip; 9 rays are a sample, an upper bound).
+    static Dictionary ray_census(const SDFBase &p_sdf, const ChunkParam &p_param, const LODHashSet &p_scan, const VoxelPos &p_eye_base,
+            const Vector3 &p_eye, int p_min_lod, int p_per_lod);
 };

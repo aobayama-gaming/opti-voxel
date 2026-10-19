@@ -343,6 +343,9 @@ public:
     // Occlusion: the oracle on up to `count` hidden chunks of the current scan (OcclusionAuditor::audit), rays
     // from the scan's eye and from the camera. Synchronous (CPU, the worker pool). Run it with the camera still.
     Dictionary debug_audit_occlusion(int p_count);
+    // What the real scene hides from the camera (OcclusionAuditor::ray_census): rays to up to `per_lod` scanned
+    // chunks of each LOD from `min_lod`. Synchronous (CPU, the worker pool).
+    Dictionary debug_ray_census(int p_min_lod, int p_per_lod);
 
     VoxelTerrain() = default;
     ~VoxelTerrain() override;
