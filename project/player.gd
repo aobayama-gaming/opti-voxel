@@ -46,7 +46,7 @@ var drag_id := -1
 var drag_pose := []         # [anchor voxel Array, rotation]: the tube's last placed pose
 var edits_count := 0
 var hud: Label = null
-var hud_visible := true     # TAB; the HUD only exists on the archetype terrain
+var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 
 func _enter_tree() -> void:
@@ -115,7 +115,7 @@ func _ready():
 				break
 			global_position.y += spawn_altitude - d
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	if terrain and terrain.terrain_mode >= 3:  # the archetype table terrains (demo, shapes)
+	if terrain:
 		_make_hud()
 	yaw = rotation.y
 	pitch = camera.rotation.x
@@ -321,10 +321,16 @@ func _update_hud(delta: float) -> void:
 	var apply_ms := 0.0
 	if edits.get("apply") is Dictionary:
 		apply_ms = float((edits["apply"] as Dictionary).get("avg", 0.0))
-	hud.text = "fps %d   edits %d (%d by the tools)
+	var chunks: Dictionary = s.get("chunks", {})
+	hud.text = "fps %d  frame %.1f ms  lod_error %.1f  %s
+chunks %d loaded, %d pending  triangles %.1f M  mesher queue %d
+edits %d (%d by the tools)
 re-mesh queue %d  dispatched %d  stale %d
 last edit %d chunks, apply %.2f ms" % [
-		Engine.get_frames_per_second(), int(edits.get("edits", 0)), edits_count,
+		Engine.get_frames_per_second(), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0), terrain.lod_pixel_error,
+		"loaded" if s.get("load_complete", false) else "loading",
+		int(chunks.get("loaded", 0)), int(chunks.get("pending", 0)), float(chunks.get("live_triangles", 0)) / 1e6,
+		int(ms.get("queued", 0)), int(edits.get("edits", 0)), edits_count,
 		int(ms.get("remesh_queue", 0)), int(ms.get("remesh_pops", 0)), int(ms.get("remesh_stale_dropped", 0)),
 		int(edits.get("remesh_last", 0)), apply_ms]
 

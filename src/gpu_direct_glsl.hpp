@@ -164,7 +164,7 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
     if (active_edge_count > 0) {
         local_vertex /= float(active_edge_count);
         vec3 chunk_vertex = local_vertex + vec3(cell_chunk_coordinate);
-        vec3 surface_normal = normalize(skirt_sdf(chunk, chunk_vertex, chunk_param).xyz);
+        vec3 surface_normal = vertex_normal(vec3(0.0), skirt_sdf(chunk, chunk_vertex, chunk_param).xyz);
         if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {

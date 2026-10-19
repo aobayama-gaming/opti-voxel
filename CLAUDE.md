@@ -84,7 +84,7 @@ to every change, and a reviewer may reject a PR on any of them.
   `dual_contouring_pass`). The Hermite normal at a crossing is the lerp of the edge's two corner gradients
   (no SDF evaluation, the same code on every terrain); tau = 0.15 * trace(A) / 3; the move is capped at
   0.5 cells from the mass point, then clamped to the cell; where the gradient at the placed vertex
-  vanishes, its normal is the mean of the Hermite normals. The Hermite data must agree with the
+  vanishes, its normal is the mean of the Hermite normals (`vertex_normal`, below). The Hermite data must agree with the
   crossings: on an SDF with detail finer than the cell vertices jitter (the archetype IR's band rule drops such noise).
 
 ## Integer frame (no float ever holds an absolute coordinate)
@@ -254,11 +254,7 @@ to every change, and a reviewer may reject a PR on any of them.
   past it is refused. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
   discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter N rocks and pillars in a
-  square of side M metres around the demo objects (set before the node enters the tree). **Experimental,
-  default 0:** with N > 0 a rare (~1e-7) non-finite sample turns into a broken quad (the auditor's
-  `broken` / `nan_vertices`), CPU and GPU alike, so the mesh otherwise validates; the scatter is off
-  until that edge is understood (a follow-up, likely in the smooth-op / epilogue numerics), not the
-  table wiring.
+  square of side M metres around the demo objects (set before the node enters the tree), default 0.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -404,6 +400,11 @@ to every change, and a reviewer may reject a PR on any of them.
 - An interrupted scons (session moved, killed shell) can leave 0-byte `.os` files that scons later
   treats as up to date: the `.so` links but fails to load (`undefined symbol: _ZTV15GPUDirectMesher`)
   and the bench loops on script errors. `find src -name "*.os" -size 0 -delete`, then rebuild.
+- The SDF gradient at a vertex can be exactly 0: on a medial axis, where a cell symmetric about it puts
+  its vertex (a capsule thinner than the cell on a lattice line, the scatter's pillars at LODs 1-4), and the
+  nearby corner and Hermite gradients cancel by the same symmetry. `normalize()` of it is NaN and the
+  vertex was dropped (broken quads, `nan_vertices`); both vertex passes take their normal from
+  `vertex_normal` (`gpu_glsl.hpp`: the gradient, else the fallback, else straight up).
 - SDF samples of exactly 0.0 happen (float heights hit the 0.5 m grid ~1 in 16k vertical crossings).
   Every pass uses the same side rule, solid = `!(w > 0)`, and a crossing's `t` is clamped above 0
   because `t > 0` is what marks a crossing downstream. Mixing `< 0` and `> 0`, or letting t reach 0,
