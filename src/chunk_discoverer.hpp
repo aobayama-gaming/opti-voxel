@@ -43,6 +43,7 @@ public:
         int64_t sdf_calls = 0; // corner evaluations after dedup
         int64_t corners = 0; // corners of the evaluated nodes, before dedup
         int64_t culled = 0;
+        int64_t out_of_view = 0; // scanned chunks outside the view cone
         uint64_t cull_nsec = 0; // time spent in the cull test (corners, dedup, SDF, verdicts), in ns
         int64_t cache_hits = 0;
         int64_t verify_mismatches = 0;
@@ -71,6 +72,9 @@ private:
     // non thread safe variable
     ChunkParam chunk_param = ChunkParam();
     PackedFloat32Array lod_distances;
+    double cone_half_angle = Math_PI; // the view cone of ScanView: every node is in it by default
+    double back_scale = 0.0; // ScanView::back_scale
+    double memory_distance = 0.0; // chunk-id units (set_view_memory); 0: no memory
     CullMode cull_mode = CULL_LEGACY;
     bool use_cache = true;
     CullCache cache;
@@ -80,15 +84,15 @@ private:
     DiscovererGPU *gpu = nullptr;
 
     // actively mutexed
-    ChunkId camera_chunk;
+    ScanView view; // the camera's latest view that asked for a scan
     // Region(s) an instance edit changed (LOD0 voxels): the worker drops the cull verdicts of the nodes
     // near them and rescans even if the camera chunk didn't change.
     std::vector<VoxelBox> pending_invalidations;
     bool rescan_requested = false;
-    uint64_t camera_change_usec = 0;
+    uint64_t camera_change_usec = 0; // when set_camera last changed the view
     std::unique_ptr<LODHashSet> scanned_chunks; // published scan, handed over without a copy
     std::unique_ptr<ScanDelta> scanned_delta; // last taken scan -> published scan
-    ChunkId scanned_camera_chunk; // camera chunk the published scan was made for
+    ScanView scanned_view; // the view the published scan was made for
     bool scanned_chunks_dirty = false;
     struct Stats {
         TimingStat scan;
@@ -98,9 +102,15 @@ private:
         int64_t deltas_merged = 0; // scans the main thread skipped: their delta merged into the next one
         int64_t last_delta_entered = 0;
         int64_t last_delta_left = 0;
-        TimingStat latency; // camera chunk change -> scan published
+        TimingStat latency; // view change (set_camera) -> scan published
         int64_t scans_skipped_same_chunk = 0;
         int64_t last_scan_size = 0;
+        int64_t last_out_of_view = 0;
+        int64_t last_memories = 0;
+        int64_t memories_added = 0;
+        int64_t memories_replaced = 0;
+        int64_t delta_entered_total = 0; // chunks that entered / left the scanned set, over every scan
+        int64_t delta_left_total = 0;
         int64_t last_nodes_visited = 0;
         int64_t last_sdf_calls = 0;
         int64_t last_culled = 0;
@@ -131,14 +141,15 @@ private:
     void _corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod, std::vector<uint8_t> &r_outside,
             WaveStats &r_wave, DiscovererGPU *p_gpu) const;
     // --discovery_compare: the CPU scan with a fresh cache, diffed with p_scanned; ERROR on a difference.
-    void _compare_with_cpu(const ChunkId &p_camera_chunk, const LODHashSet &p_scanned);
-    // A node is split when its bounding sphere comes closer to the camera than its LOD's distance.
-    bool _should_split(const ChunkId &p_camera_chunk, const ChunkId &p_node, int p_lod) const;
+    void _compare_with_cpu(const ScanView &p_view, const LODHashSet &p_scanned);
+    // A node is split when its bounding sphere comes closer to the camera than its LOD's distance, the
+    // distance being grown away from the view cone (ChunkMath::lod_distance).
+    bool _should_split(const ScanView &p_view, const ChunkId &p_node, int p_lod) const;
     // Drops the cached verdicts no recent scan used; the number dropped.
     int64_t _evict_cache(int64_t p_nodes_visited);
     // Hands the scan over to the main thread (get_scanned_chunks) and records its stats. p_ready_usec: when
     // the scan (and its compare) finished.
-    void _publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ChunkId &p_camera_chunk, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec,
+    void _publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ScanView &p_view, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec,
             uint64_t p_ready_usec);
     static Dictionary _scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec);
 
@@ -146,22 +157,50 @@ public:
     void start();
     void stop();
 
-    void set_camera_chunk(Vector3 camera_pos);
+    // A turn of the view axis past this angle from the views remembered at the camera chunk remembers a new
+    // one, which asks for a rescan (when the LOD rule depends on the direction).
+    static constexpr double RESCAN_TURN_DEG = 8.0;
+    // The angle between unit axes p_a and p_b is over RESCAN_TURN_DEG.
+    static bool turned_past(const Vector3 &p_a, const Vector3 &p_b);
+    // lod_view_memory_m < 0: the memory distance is where this LOD starts.
+    static constexpr int VIEW_MEMORY_AUTO_LOD = 2;
+
+    // The view of a camera at render position p_pos looking along p_forward, without memories.
+    ScanView make_view(const Vector3 &p_pos, const Vector3 &p_forward) const;
+    // p_new needs another scan than p_scanned: another camera chunk or other memories.
+    static bool view_changed(const ScanView &p_scanned, const ScanView &p_new);
+    enum Remembered {
+        REMEMBERED_KNOWN, // a memory at the camera chunk is within RESCAN_TURN_DEG of forward
+        REMEMBERED_ADDED,
+        REMEMBERED_REPLACED, // added over the most faded one (full)
+    };
+    // r_view (camera chunk, forward and the previous view's memories) remembers its own view, with the fades
+    // of p_memory_distance (chunk-id units) from its camera chunk, sorted by fade. Up to MAX_VIEW_MEMORIES;
+    // with p_memory_distance 0, only one: the view replaced on every new camera chunk or turn. No back_scale
+    // or no forward: no memories. Static for the unit tests.
+    static Remembered remember_view(ScanView &r_view, double p_memory_distance);
+    // Remembers the camera's view (remember_view) and asks for a scan when the view changed (view_changed).
+    void set_camera(const Vector3 &p_pos, const Vector3 &p_forward);
+    // The view of the latest set_camera, memories included.
+    ScanView get_view();
+    // How far the camera walks from where it had a view before that view starts to fade (render metres;
+    // < 0: where LOD VIEW_MEMORY_AUTO_LOD starts, 0: no memory). After setup_lod, before start().
+    void set_view_memory(double p_metres);
     // An instance edit changed the SDF in p_box: the next scan drops the cull verdicts of the nodes
     // near it and runs even if the camera chunk didn't change.
     void invalidate(const VoxelBox &p_box);
-    // Takes the latest scan if there is a new one; r_camera_chunk is the camera chunk it was made for and
-    // r_delta the change from the scan taken before (from the empty set for the first one).
-    bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ChunkId &r_camera_chunk);
+    // Takes the latest scan if there is a new one; r_view is the view it was made for and r_delta the
+    // change from the scan taken before (from the empty set for the first one).
+    bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ScanView &r_view);
 
-    // The full scan around `p_camera_chunk`. Const and thread safe: the discovery audit calls it from
+    // The full scan around `p_view`'s camera chunk. Const and thread safe: the discovery audit calls it from
     // the main thread to rebuild the published scan without culling.
     // `p_cache` (optional) remembers each node's verdict across scans. `p_gpu` (optional, the worker
     // thread's own) evaluates the corners on the GPU instead of SDFBase::evaluate_batch, the same bits.
     // Breadth first, one wave per LOD from the top-LOD grid down: the wave's verdicts (_cull_wave), then
     // its surviving nodes are kept or split into the next wave by distance. The scanned set doesn't
     // depend on the visit order, so it is the one the old recursive walk gave (unit-tested).
-    void scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
+    void scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
             CullCache *p_cache = nullptr, DiscovererGPU *p_gpu = nullptr) const;
     int get_max_lod() const { return lod_distances.size() - 2; }
     const PackedFloat32Array &get_lod_distances() const { return lod_distances; }
@@ -187,9 +226,13 @@ public:
 
     void discovery_loop();
 
+    // The LOD distances of `target_pixel_error`. Outside a view cone of half-angle `cone_half_angle_rad`
+    // they shrink towards those of `target_pixel_error_back` (ignored unless coarser than the front error).
     void setup_lod(
             int lod_levels = 4,
             float target_pixel_error = 10.0f,
             float viewport_height = 1080.0f,
-            float fov_rad = 75.0f * (3.14159265f / 180.0f));
+            float fov_rad = 75.0f * (3.14159265f / 180.0f),
+            float target_pixel_error_back = 0.0f,
+            float cone_half_angle_rad = Math_PI);
 };

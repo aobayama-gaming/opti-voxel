@@ -27,6 +27,11 @@ iterate past a warning, never to commit one.
   `tools/bench_ab.sh <dev checkout> <worktree> -- --mode=direct` builds both trees, interleaves
   the runs (2 per side by default, both through the worktree's `bench.sh`) and writes the table to paste
   into the PR. Comparing a tree against itself still shows load-time deltas of ~5%: that's the noise.
+  **Perf target:** `--preset=forest5cm` (`project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
+  the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at error 2 (stretch: 1).
+  Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene_5cm).
+  Baseline (PR #34, 25 m/s): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
+  (~7 ms of GPU per batch, 4x a treeless batch) and the 31 M triangles drawn are the two costs.
   Never build while a bench runs (thermals, see Gotchas).
 - One GPU, several agents: other sessions work in other worktrees and run their own builds, benches
   and check.sh on the same laptop. Perf numbers are only valid when nothing else runs. Before a perf
@@ -84,7 +89,7 @@ to every change, and a reviewer may reject a PR on any of them.
   (3.0 -> 5.0 s) and merges lagging while moving (coarse parents queue behind the fine chunks: 2x the chunks
   loaded mid-fly). Ordering the queue by displayed error instead (the loaded ancestor's 2^lod / distance, merges
   at their own LOD) was measured worse: same GPU work, 4-6x the detail left pending at the end of a fly, +20%
-  draw calls (`load_queue` keeps finest LOD first).
+  draw calls (`load_queue` keeps in-cone, finest LOD first).
   `GPUDirectMesher::compact()` re-packs pages under half full GPU to GPU and rewrites the moved
   `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`).
 - Dual contouring (`VoxelTerrain.dual_contouring`, `--dual_contouring=1` in `bench.gd` and the main scene;
@@ -365,6 +370,27 @@ to every change, and a reviewer may reject a PR on any of them.
   ms, corners, unique corners, dedup ratio, per wave GPU ms, batches, readback bytes). `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
   `--camera_voxel=X,Y,Z` makes the scene (camera, lights, cam_pos) relative to that absolute voxel
   instead of the world origin.
+- View-dependent LOD (`VoxelTerrain.lod_pixel_error_back` / `lod_view_margin_deg`, `--lod_error_back=F
+  --lod_view_margin=DEG` in bench.gd and the main scene; off by default): a scan carries a `ScanView` (camera
+  chunk, forward, the view cone = the frustum's diagonal half-FOV + margin, `back_scale` = back / front error - 1).
+  The split test compares `ChunkMath::lod_distance`: the distance plus back_scale times the bounding sphere's
+  gap to the cone (1-Lipschitz). In the cone it is the front rule bit for bit; far behind, the back error's.
+  Face neighbours stay within one LOD up to a ratio of 4 (unit-tested at 720p; 8 gave jumps of 2, so
+  `setup_lod` warns past 4). View memory (`lod_view_memory_m`, `--lod_view_memory=M`; default -1 = where LOD 2
+  starts, 0 = off): the view carries up to 64 `ScanView::memories` (camera chunk, view axis, fade = distance from
+  the camera past M), sorted by fade, and the gap is `ChunkMath::lod_cone_gap` = min over them of gap to their
+  cone + fade: still 1-Lipschitz, still a pure function of the view (audit / compare re-scan it). `remember_view`
+  adds the camera chunk's view unless one there is within `RESCAN_TURN_DEG` (8 degrees), replacing the most faded
+  (least recently used among equals) when full; memory 0 keeps one view, replaced on every new chunk or turn. The
+  remembered axis lags the camera by up to 8 degrees, so `lod_view_margin_deg` is at least that; besides camera chunk crossings, a rescan only follows an added memory. Turning in place: about 40 memories in the
+  first turn, then no rescan and no re-mesh. Walking on: the views fade with distance (no timer). `bench.gd
+  --scenario=turn --turns=N` and `--scenario=turn_walk --walk=M`; `discoverer.delta_entered_total /
+  delta_left_total` in each phase's stats count the churn.
+  Both meshers' queues are indexed by `ChunkMath::load_queue`: in the cone first, then by LOD, Morton order
+  inside (batches stay compact for page culling). `--scenario=turn` (bench.gd) turns the camera 360 degrees after the load.
+  Cost with memory 0 (measured in PR 34): a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
+  back already leaves +64% draw calls): after one full turn at error 1 | 4, the steady state is +26% render GPU
+  vs error 1 without the split. A locality-aware compaction would close it.
 - Destroy check (`VoxelState`, `src/chunk_memory.*`) is incremental: the discoverer publishes each scan
   with its delta (`ScanDelta`: entered / left, merged across the scans the main thread skipped), and
   VoxelState keeps per event the dirty chunks' nearest loaded ancestors, the stall count per loaded chunk

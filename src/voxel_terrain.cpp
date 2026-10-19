@@ -1,5 +1,6 @@
 #include "voxel_terrain.hpp"
 #include "rd_utils.hpp"
+#include <cmath>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
@@ -33,6 +34,12 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
+    ClassDB::bind_method(D_METHOD("set_lod_pixel_error_back", "error"), &VoxelTerrain::set_lod_pixel_error_back);
+    ClassDB::bind_method(D_METHOD("get_lod_pixel_error_back"), &VoxelTerrain::get_lod_pixel_error_back);
+    ClassDB::bind_method(D_METHOD("set_lod_view_margin_deg", "degrees"), &VoxelTerrain::set_lod_view_margin_deg);
+    ClassDB::bind_method(D_METHOD("get_lod_view_margin_deg"), &VoxelTerrain::get_lod_view_margin_deg);
+    ClassDB::bind_method(D_METHOD("set_lod_view_memory_m", "metres"), &VoxelTerrain::set_lod_view_memory_m);
+    ClassDB::bind_method(D_METHOD("get_lod_view_memory_m"), &VoxelTerrain::get_lod_view_memory_m);
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
@@ -103,6 +110,9 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
@@ -331,6 +341,42 @@ void VoxelTerrain::set_lod_pixel_error(float p_error) {
 
 float VoxelTerrain::get_lod_pixel_error() const {
     return lod_pixel_error;
+}
+
+void VoxelTerrain::set_lod_pixel_error_back(float p_error) {
+    ERR_FAIL_COND_MSG(started, "lod_pixel_error_back must be set before the terrain enters the tree.");
+    lod_pixel_error_back = p_error;
+}
+
+float VoxelTerrain::get_lod_pixel_error_back() const {
+    return lod_pixel_error_back;
+}
+
+void VoxelTerrain::set_lod_view_margin_deg(float p_degrees) {
+    ERR_FAIL_COND_MSG(started, "lod_view_margin_deg must be set before the terrain enters the tree.");
+    // The remembered view axis lags the camera's by up to RESCAN_TURN_DEG: a smaller margin would leave the
+    // frustum's edge outside the cone.
+    ERR_FAIL_COND_MSG(!(p_degrees >= ChunkDiscoverer::RESCAN_TURN_DEG && p_degrees <= 180.0f),
+            vformat("lod_view_margin_deg must be in [%d, 180].", int(ChunkDiscoverer::RESCAN_TURN_DEG)));
+    lod_view_margin_deg = p_degrees;
+}
+
+float VoxelTerrain::get_lod_view_margin_deg() const {
+    return lod_view_margin_deg;
+}
+
+void VoxelTerrain::set_lod_view_memory_m(float p_metres) {
+    ERR_FAIL_COND_MSG(started, "lod_view_memory_m must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(std::isnan(p_metres), "lod_view_memory_m must be a number.");
+    lod_view_memory_m = p_metres;
+}
+
+float VoxelTerrain::get_lod_view_memory_m() const {
+    return lod_view_memory_m;
+}
+
+Vector3 VoxelTerrain::_camera_forward() const {
+    return -camera->get_global_transform().basis.get_column(2);
 }
 
 void VoxelTerrain::set_lod_numbers(int p_count) {
@@ -584,9 +630,11 @@ void VoxelTerrain::_ready() {
     // The pixel error is measured against the camera's real vertical FOV and viewport height.
     float viewport_height = 1080.0f;
     float fov_rad = Math::deg_to_rad(75.0f);
+    float aspect = 16.0f / 9.0f;
     if (camera != nullptr) {
         const Vector2 viewport_size = camera->get_viewport()->get_visible_rect().size;
         viewport_height = MAX(viewport_size.y, 1.0f);
+        aspect = viewport_size.x > 0.0f ? viewport_size.x / viewport_height : aspect;
         fov_rad = Math::deg_to_rad(float(camera->get_fov()));
         if (camera->get_keep_aspect_mode() == Camera3D::KEEP_WIDTH && viewport_size.x > 0.0f) {
             // fov is horizontal: convert it to vertical.
@@ -594,11 +642,15 @@ void VoxelTerrain::_ready() {
         }
     }
 
+    // The view cone holds the frustum: its half-angle is the half-FOV along the screen diagonal.
     chunk_discoverer->setup_lod(
             lod_numbers,
             lod_pixel_error,
             viewport_height,
-            fov_rad);
+            fov_rad,
+            lod_pixel_error_back,
+            ChunkMath::view_cone_half_angle(fov_rad, aspect, Math::deg_to_rad(lod_view_margin_deg)));
+    chunk_discoverer->set_view_memory(lod_view_memory_m);
 
     chunk_discoverer->start();
 
@@ -635,7 +687,7 @@ void VoxelTerrain::_ready() {
     }
 
     if (camera != nullptr) {
-        chunk_discoverer->set_camera_chunk(camera->get_global_position());
+        chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
     }
 
     VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
@@ -736,14 +788,14 @@ void VoxelTerrain::_process(double) {
     const uint64_t t_process_start = now_usec();
 
     if (camera != nullptr) {
-        chunk_discoverer->set_camera_chunk(camera->get_global_position());
+        chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
     }
 
     uint64_t t0 = now_usec();
     std::unique_ptr<LODHashSet> new_scanned_chunk;
     std::unique_ptr<ScanDelta> scan_delta;
 
-    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_camera_chunk);
+    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_view);
 
     if (dirty_scan) {
         scan_received = true;
@@ -753,9 +805,9 @@ void VoxelTerrain::_process(double) {
         visual_mesh_data.add_scan_chunk(std::move(new_scanned_chunk), *scan_delta);
         process_stats.scan_apply.add(now_usec() - t_apply);
         if (direct_mesher) {
-            direct_mesher->send_chunk(visual_mesh_data.dirty_chunk);
+            direct_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
         } else {
-            gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk);
+            gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
         }
     }
     process_stats.scan_ingest.add(now_usec() - t0);
@@ -895,18 +947,6 @@ Dictionary VoxelTerrain::get_audit_report() const {
     return audit_report;
 }
 
-// LOD of the scanned chunk holding the LOD0 chunk `p_point` (odd coordinates), or -1.
-static int scanned_lod_at(const LODHashSet &p_scan, const ChunkId &p_point, int p_max_lod) {
-    for (int lod = 0; lod <= p_max_lod; lod++) {
-        const int64_t span = int64_t(2) << lod; // a LOD-lod chunk spans 2^(lod+1) units
-        auto centre = [span, lod](int64_t v) { return WorldCoord::floor_div(v, span) * span + (int64_t(1) << lod); };
-        if (p_scan.has(ChunkId(centre(p_point.x), centre(p_point.y), centre(p_point.z)))) {
-            return lod;
-        }
-    }
-    return -1;
-}
-
 bool VoxelTerrain::debug_audit_discovery() {
     ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_discovery needs pipeline_mode = GPU Direct.");
     ERR_FAIL_COND_V_MSG(discovery_audit.running, false, "A discovery audit is already running.");
@@ -916,7 +956,7 @@ bool VoxelTerrain::debug_audit_discovery() {
     const LODHashSet &scanned = *visual_mesh_data.scanned_chunk;
     LODHashSet reference;
     ChunkDiscoverer::ScanCounters counters;
-    chunk_discoverer->scan(scan_camera_chunk, ChunkDiscoverer::CULL_NONE, reference, counters);
+    chunk_discoverer->scan(scan_view, ChunkDiscoverer::CULL_NONE, reference, counters);
 
     int64_t scanned_not_in_ref = 0;
     for (const ChunkId &id : scanned) {
@@ -931,29 +971,15 @@ bool VoxelTerrain::debug_audit_discovery() {
         }
     }
 
-    // LOD difference across chunk faces (the skirt hides a jump of 1). One probe per face, just past
-    // its minimum corner: the LOD0 chunk there, then whichever scanned chunk holds it.
-    const int max_lod = chunk_discoverer->get_max_lod();
+    // LOD difference across chunk faces (the skirt hides a jump of 1).
+    std::vector<int64_t> faces;
+    face_lod_jumps(scanned, chunk_discoverer->get_max_lod(), faces);
     int max_jump = 0;
     Dictionary jumps; // jump -> faces
-    for (const ChunkId &id : scanned) {
-        const int lod = ChunkMath::get_lod(id);
-        const int64_t half = int64_t(1) << lod;
-        const ChunkId corner = id - ChunkId(half - 1, half - 1, half - 1); // LOD0 chunk in the min corner
-        for (int axis = 0; axis < 3; axis++) {
-            for (int side = -1; side <= 1; side += 2) {
-                ChunkId probe = corner;
-                int64_t *c = axis == 0 ? &probe.x : (axis == 1 ? &probe.y : &probe.z);
-                const int64_t centre = axis == 0 ? id.x : (axis == 1 ? id.y : id.z);
-                *c = side < 0 ? centre - half - 1 : centre + half + 1;
-                const int other = scanned_lod_at(scanned, probe, max_lod);
-                if (other < 0) {
-                    continue;
-                }
-                const int jump = ABS(other - lod);
-                max_jump = MAX(max_jump, jump);
-                jumps[jump] = int64_t(jumps.get(jump, 0)) + 1;
-            }
+    for (int j = 0; j < (int)faces.size(); j++) {
+        if (faces[j] > 0) {
+            jumps[j] = faces[j];
+            max_jump = j;
         }
     }
 
@@ -962,7 +988,7 @@ bool VoxelTerrain::debug_audit_discovery() {
     discovery_audit.start_usec = t0;
     discovery_audit.expected = (int64_t)culled.size();
     Dictionary base;
-    base["camera_chunk"] = WorldCoord::to_string(scan_camera_chunk);
+    base["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
     base["cull_mode"] = discovery_cull_mode;
     base["reference"] = (int64_t)reference.size();
     base["reference_nodes_visited"] = counters.nodes_visited;
@@ -998,7 +1024,7 @@ void VoxelTerrain::_poll_discovery_audit() {
             e["id"] = WorldCoord::to_string(c.first);
             e["lod"] = lod;
             e["quads"] = (int64_t)c.second;
-            e["distance_chunks"] = scan_camera_chunk.distance_to(c.first);
+            e["distance_chunks"] = scan_view.camera_chunk.distance_to(c.first);
             discovery_audit.miss_examples.push_back(e);
         }
     }
@@ -1027,9 +1053,11 @@ bool VoxelTerrain::is_load_complete() {
     if (!started || !scan_received || !visual_mesh_data.dirty_chunk.is_empty()) {
         return false;
     }
-    // The received scan must be the camera's current one: a camera moved after _ready (bench
-    // --above_ground) is otherwise "loaded" with the first scan while the next one is still running.
-    if (camera != nullptr && ChunkMath::chunk_at_render(camera->get_global_position(), chunk_param) != scan_camera_chunk) {
+    // The received scan must be the camera's current one: a camera moved (bench --above_ground) or turned
+    // after _ready is otherwise "loaded" with the first scan while the next one is still running.
+    // The view of the last set_camera (_process) carries the remembered views; a camera moved since is
+    // caught by its chunk, a turn since by the next frame.
+    if (camera != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(camera->get_global_position(), chunk_param) != scan_view.camera_chunk)) {
         return false;
     }
     if (direct_mesher) {

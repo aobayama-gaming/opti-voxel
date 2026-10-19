@@ -108,7 +108,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     mutex.instantiate();
 
     lod_count = p_lod_numbers;
-    chunk_queue.resize(p_lod_numbers);
+    chunk_queue.resize(ChunkMath::load_queue_count(p_lod_numbers));
     remesh_queue.resize(p_lod_numbers);
     cost_model.resize(p_lod_numbers);
 
@@ -877,8 +877,8 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                     continue;
                 }
                 const int lod = ChunkMath::get_lod(chunk_id);
-                if (lod >= 0 && lod < (int)chunk_queue.size()) {
-                    chunk_queue[lod].push_back(chunk_id);
+                if (lod >= 0 && lod < lod_count) {
+                    chunk_queue[ChunkMath::load_queue(chunk_id, lod_count, load_view)].push_back(chunk_id);
                 }
                 continue;
             }
@@ -1150,26 +1150,27 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
     return true;
 }
 
-void GPUDirectMesher::send_chunk(const LODHashSet &p_chunks) {
+void GPUDirectMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_view) {
     // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
     // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
+    load_view = p_view;
     std::vector<std::vector<std::pair<uint64_t, ChunkId>>> keyed(chunk_queue.size());
     for (const ChunkId &chunk_pos : p_chunks) {
         const int lod = ChunkMath::get_lod(chunk_pos);
-        if (lod < 0 || lod >= (int)chunk_queue.size()) {
+        if (lod < 0 || lod >= lod_count) {
             continue;
         }
         if (!working_generation.has(chunk_pos)) {
-            keyed[lod].push_back({ morton_key(chunk_pos, chunk_param.origin_chunk), chunk_pos });
+            keyed[ChunkMath::load_queue(chunk_pos, lod_count, p_view)].push_back({ morton_key(chunk_pos, chunk_param.origin_chunk), chunk_pos });
         }
     }
-    for (size_t lod = 0; lod < chunk_queue.size(); lod++) {
-        std::sort(keyed[lod].begin(), keyed[lod].end(),
+    for (size_t q = 0; q < chunk_queue.size(); q++) {
+        std::sort(keyed[q].begin(), keyed[q].end(),
                 [](const std::pair<uint64_t, ChunkId> &a, const std::pair<uint64_t, ChunkId> &b) { return a.first > b.first; });
-        std::vector<ChunkId> &queue = chunk_queue[lod];
+        std::vector<ChunkId> &queue = chunk_queue[q];
         queue.clear();
-        queue.reserve(keyed[lod].size());
-        for (const std::pair<uint64_t, ChunkId> &k : keyed[lod]) {
+        queue.reserve(keyed[q].size());
+        for (const std::pair<uint64_t, ChunkId> &k : keyed[q]) {
             queue.push_back(k.second);
         }
     }

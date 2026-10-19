@@ -5,7 +5,13 @@ extends Node3D
 ##
 ## Args (all optional):
 ##   --mode=legacy|direct         pipeline (default legacy)
-##   --scenario=load|fly|edit|dig load: load + steady phase. fly: load, fly out and back, settle, steady.
+##   --preset=NAME                a named argument set (debug/presets.gd; forest5cm = the perf target),
+##                                explicit arguments override it
+##   --scenario=load|fly|turn|turn_walk|edit|dig load: load + steady phase. fly: load, fly out and back, settle, steady.
+##                                turn: load, --turns=N full turns of the camera's yaw (default 1), --turn_seconds
+##                                each (default 8), settle, steady
+##                                turn_walk: turn, then walk --walk=M metres (default 300) straight ahead,
+##                                level, in --walk_seconds (default 6), settle, steady
 ##                                edit: load, then N instance edits (add / move / remove) then settle, steady
 ##                                dig: load, then K dig holes along the view, a scripted drag, settle, steady
 ##   --edits=N                    edit scenario: number of edits (default 100)
@@ -45,6 +51,10 @@ extends Node3D
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
+##   --lod_error_back=F           error outside the view cone, reached behind the camera (default 0 = lod_error)
+##   --lod_view_margin=DEG        view cone = the frustum's diagonal half-FOV + DEG (default 20)
+##   --lod_view_memory=M          a view keeps the front error until the camera is M metres from where it
+##                                had it (default -1: where LOD 2 starts, 0 = off)
 ##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
@@ -72,12 +82,14 @@ extends Node3D
 ## render-thread sync, which would distort the load/fly frame timings.
 
 const MODES := {"legacy": 1, "direct": 2}
+const Presets = preload("res://debug/presets.gd")
 
 var args := {}
 var shots := []  # [[when, path], ...]
 var terrain
 var camera: Camera3D
 var start_pos: Vector3
+var walk_from: Vector3  # turn_walk: where the walk starts
 var vp_rid: RID
 
 var frame := 0
@@ -175,6 +187,12 @@ func _ready() -> void:
 		terrain.direct_compact_max_extent = float(args["compact_extent"])
 	if args.has("lod_error"):
 		terrain.lod_pixel_error = float(args["lod_error"])
+	if args.has("lod_error_back"):
+		terrain.lod_pixel_error_back = float(args["lod_error_back"])
+	if args.has("lod_view_margin"):
+		terrain.lod_view_margin_deg = float(args["lod_view_margin"])
+	if args.has("lod_view_memory"):
+		terrain.lod_view_memory_m = float(args["lod_view_memory"])
 	if args.has("skirt"):
 		terrain.skirt_depth = float(args["skirt"])
 	if args.has("discovery_cull"):
@@ -232,7 +250,7 @@ func _ready() -> void:
 
 
 func _parse_args() -> void:
-	for a in OS.get_cmdline_user_args():
+	for a in Presets.user_args():
 		if not a.begins_with("--"):
 			continue
 		var kv: PackedStringArray = a.substr(2).split("=", true, 1)
@@ -382,6 +400,8 @@ func _process(delta: float) -> void:
 				_take_shots("loaded")
 				if args.get("scenario", "load") == "fly":
 					_begin_phase("fly_out")
+				elif args.get("scenario", "load") in ["turn", "turn_walk"]:
+					_begin_phase("turn")
 				elif args.get("scenario", "load") == "edit":
 					seed(0x5EED)  # the same edits every run
 					_begin_phase("edit")
@@ -405,6 +425,23 @@ func _process(delta: float) -> void:
 			if edits_done >= int(args.get("edits", "100")):
 				_end_phase()
 				_take_shots("edit_end")
+				_begin_phase("settle")
+		"turn":
+			var turns := float(args.get("turns", "1"))
+			var turn := (Time.get_ticks_usec() - phase_start_usec) / (float(args.get("turn_seconds", "8")) * 1e6)
+			camera.rotation_degrees.y = float(args.get("yaw", "0")) + 360.0 * minf(turn, turns)
+			if turn >= turns:
+				_end_phase()
+				_take_shots("turn_end")
+				walk_from = camera.global_position
+				_begin_phase("walk" if args.get("scenario", "load") == "turn_walk" else "settle")
+		"walk":
+			var walked := (Time.get_ticks_usec() - phase_start_usec) / (float(args.get("walk_seconds", "6")) * 1e6)
+			var ahead := Vector3.FORWARD.rotated(Vector3.UP, camera.global_rotation.y)  # level, whatever the pitch
+			camera.global_position = walk_from + ahead * float(args.get("walk", "300")) * minf(walked, 1.0)
+			if walked >= 1.0:
+				_end_phase()
+				_take_shots("walk_end")
 				_begin_phase("settle")
 		"fly_out":
 			camera.global_position = start_pos + Vector3(fly_dist, 0, 0) * minf(leg, 1.0)

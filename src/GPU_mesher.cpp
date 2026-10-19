@@ -334,12 +334,15 @@ void GPUMesher::initialize(
 
     worker->start(callable_mp(this, &GPUMesher::_execute_whole_pipeline), Thread::PRIORITY_NORMAL);
 
-    chunk_queue.resize(lod_numbers, nullptr);
+    lod_count = lod_numbers;
+    chunk_queue.resize(ChunkMath::load_queue_count(lod_numbers), nullptr);
 
+    for (LODHashSet *&q : chunk_queue) {
+        q = memnew(LODHashSet);
+    }
     remesh_queue.resize(lod_numbers, nullptr);
-    for (int i = 0; i < lod_numbers; ++i) {
-        chunk_queue[i] = memnew(LODHashSet);
-        remesh_queue[i] = memnew(LODHashSet);
+    for (LODHashSet *&q : remesh_queue) {
+        q = memnew(LODHashSet);
     }
 };
 
@@ -495,6 +498,7 @@ void GPUMesher::stop() {
         memdelete(q);
     }
     chunk_queue.clear();
+    lod_count = 0;
     for (LODHashSet *q : remesh_queue) {
         memdelete(q);
     }
@@ -973,22 +977,18 @@ void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
     }
 }
 
-void GPUMesher::send_chunk(const LODHashSet &p_chunks) {
+void GPUMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_view) {
     for (LODHashSet *q : chunk_queue) {
-        if (q) {
-            q->clear();
-        }
+        q->clear();
     }
 
     for (const ChunkId &chunk_pos : p_chunks) {
         const int lod = ChunkMath::get_lod(chunk_pos);
-        if (lod < 0 || lod >= static_cast<int>(chunk_queue.size())) {
+        if (lod < 0 || lod >= lod_count) {
             continue;
         }
-
-        LODHashSet *q = chunk_queue[lod];
-        if (q && !working_generation.has(chunk_pos)) {
-            q->insert(chunk_pos);
+        if (!working_generation.has(chunk_pos)) {
+            chunk_queue[ChunkMath::load_queue(chunk_pos, lod_count, p_view)]->insert(chunk_pos);
         }
     }
 }

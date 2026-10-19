@@ -6,6 +6,7 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <vector>
 
@@ -120,17 +121,9 @@ void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, 
     r_counters.waves.push_back(wave);
 }
 
-bool ChunkDiscoverer::_should_split(const ChunkId &p_camera_chunk, const ChunkId &p_node, int p_lod) const {
-    const double distance_to_player = p_camera_chunk.distance_to(p_node);
-
-    // Work fully in chunk-coordinate units.
-    // Half-extent of current LOD chunk in chunk-coord units is 2^lod.
-    const float half_extent = static_cast<float>(int64_t(1) << p_lod);
-    // Bounding sphere radius of the chunk cube in chunk-coord units.
-    const float chunk_outer_radius = std::sqrt(3.0f) * half_extent;
-
+bool ChunkDiscoverer::_should_split(const ScanView &p_view, const ChunkId &p_node, int p_lod) const {
     // lod_distances[L] is the distance from which LOD L is within the pixel error: split when closer.
-    return distance_to_player - chunk_outer_radius < lod_distances[p_lod];
+    return ChunkMath::lod_split(p_node, p_lod, p_view, lod_distances[p_lod]);
 }
 
 void ChunkDiscoverer::start() {
@@ -157,7 +150,7 @@ void ChunkDiscoverer::stop() {
 
 void ChunkDiscoverer::discovery_loop() {
     bool has_scanned = false;
-    ChunkId last_scanned_camera_chunk;
+    ScanView last_scanned_view;
     // The previous scan, kept up to date by applying each delta (the published set leaves without a copy).
     LODHashSet previous_scan;
 
@@ -188,7 +181,7 @@ void ChunkDiscoverer::discovery_loop() {
         mutex->lock();
         bool should_exit = exit_thread;
 
-        ChunkId actual_camera_chunk = camera_chunk;
+        const ScanView actual_view = view;
         const bool force_rescan = rescan_requested;
         rescan_requested = false;
         std::vector<VoxelBox> invalidations = std::move(pending_invalidations);
@@ -226,20 +219,22 @@ void ChunkDiscoverer::discovery_loop() {
             }
         }
 
-        if (has_scanned && actual_camera_chunk == last_scanned_camera_chunk && !force_rescan) {
+        // set_camera only posts for a view that changed: an equal one is a post that piled up. Without
+        // back_scale the forward doesn't change the set: a new one alone is no reason to scan.
+        if (has_scanned && !view_changed(last_scanned_view, actual_view) && !force_rescan) {
             mutex->lock();
             stats.scans_skipped_same_chunk++;
             mutex->unlock();
             continue;
         }
         has_scanned = true;
-        last_scanned_camera_chunk = actual_camera_chunk;
+        last_scanned_view = actual_view;
 
         const uint64_t t_scan_start = now_usec();
         std::unique_ptr<LODHashSet> new_scanned_chunk = std::make_unique<LODHashSet>();
         ScanCounters counters;
         cache.scan_index++;
-        scan(actual_camera_chunk, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
+        scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
         const int64_t evicted = _evict_cache(counters.nodes_visited);
         if (counters.verify_mismatches > 0) {
             ERR_PRINT(String("ChunkDiscoverer: ") + String::num_int64(counters.verify_mismatches) +
@@ -247,7 +242,7 @@ void ChunkDiscoverer::discovery_loop() {
         }
         const uint64_t t_scan_end = now_usec();
         if (compare) {
-            _compare_with_cpu(actual_camera_chunk, *new_scanned_chunk);
+            _compare_with_cpu(actual_view, *new_scanned_chunk);
         }
         const uint64_t t_compared = now_usec();
 
@@ -259,9 +254,11 @@ void ChunkDiscoverer::discovery_loop() {
         stats.delta.add(t_delta - t_compared);
         stats.last_delta_entered = delta->entered.size();
         stats.last_delta_left = delta->left.size();
+        stats.delta_entered_total += delta->entered.size();
+        stats.delta_left_total += delta->left.size();
         mutex->unlock();
 
-        _publish(std::move(new_scanned_chunk), std::move(delta), actual_camera_chunk, counters, evicted, t_scan_end - t_scan_start, t_delta);
+        _publish(std::move(new_scanned_chunk), std::move(delta), actual_view, counters, evicted, t_scan_end - t_scan_start, t_delta);
     }
 
     if (gpu) {
@@ -289,7 +286,7 @@ int64_t ChunkDiscoverer::_evict_cache(int64_t p_nodes_visited) {
     return (int64_t)stale.size();
 }
 
-void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ChunkId &p_camera_chunk,
+void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ScanView &p_view,
         const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec, uint64_t p_ready_usec) {
     mutex->lock();
     const int64_t size = p_scan->size();
@@ -301,7 +298,7 @@ void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_p
     } else {
         scanned_delta = std::move(p_delta);
     }
-    scanned_camera_chunk = p_camera_chunk;
+    scanned_view = p_view;
     scanned_chunks_dirty = true;
     const uint64_t t_published = now_usec();
     stats.scan.add(p_scan_usec);
@@ -311,6 +308,8 @@ void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_p
         stats.latency.add(t_published - camera_change_usec);
     }
     stats.last_scan_size = size;
+    stats.last_out_of_view = p_counters.out_of_view;
+    stats.last_memories = p_view.memory_count;
     stats.last_nodes_visited = p_counters.nodes_visited;
     stats.last_sdf_calls = p_counters.sdf_calls;
     stats.last_culled = p_counters.culled;
@@ -328,14 +327,14 @@ void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_p
     mutex->unlock();
 }
 
-void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
+void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
         CullCache *p_cache, DiscovererGPU *p_gpu) const {
     const int max_lod = get_max_lod();
     int64_t max_lod_radius;
     int64_t max_lod_number;
     get_scan_grid(max_lod_radius, max_lod_number);
 
-    const ChunkId ancestor_chunk = ChunkMath::get_parent_from_child_until(p_camera_chunk, max_lod);
+    const ChunkId ancestor_chunk = ChunkMath::get_parent_from_child_until(p_view.camera_chunk, max_lod);
 
     const ChunkId search_space = ChunkId(max_lod_number, max_lod_number, max_lod_number) * max_lod_radius;
 
@@ -364,8 +363,9 @@ void ChunkDiscoverer::scan(const ChunkId &p_camera_chunk, CullMode p_mode, LODHa
                 r_counters.culled++;
                 continue;
             }
-            if (lod == 0 || !_should_split(p_camera_chunk, node, lod)) {
+            if (lod == 0 || !_should_split(p_view, node, lod)) {
                 r_chunks.insert(node);
+                r_counters.out_of_view += ChunkMath::view_cone_gap(node, lod, p_view) > 0.0 ? 1 : 0;
                 continue;
             }
             const int64_t child_size = int64_t(1) << (lod - 1);
@@ -394,7 +394,7 @@ void ChunkDiscoverer::set_config(
     chunk_param = p_chunk_param;
 }
 
-bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ChunkId &r_camera_chunk) {
+bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ScanView &r_view) {
     mutex->lock();
 
     bool dirty = scanned_chunks_dirty;
@@ -402,7 +402,7 @@ bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_
     if (dirty) {
         r_scanned_chunks = std::move(scanned_chunks);
         r_delta = std::move(scanned_delta);
-        r_camera_chunk = scanned_camera_chunk;
+        r_view = scanned_view;
         scanned_chunks_dirty = false;
     }
 
@@ -415,7 +415,18 @@ void ChunkDiscoverer::setup_lod(
         int lod_levels,
         float target_pixel_error,
         float viewport_height,
-        float fov_rad) {
+        float fov_rad,
+        float target_pixel_error_back,
+        float cone_half_angle_rad) {
+    cone_half_angle = cone_half_angle_rad;
+    // The LOD distances scale as 1 / error: far from the cone, (1 + back_scale) times the distance meets
+    // the back error's thresholds.
+    back_scale = target_pixel_error_back > target_pixel_error ? double(target_pixel_error_back) / double(target_pixel_error) - 1.0 : 0.0;
+    if (back_scale > 3.0) {
+        // Ratio 4 keeps face neighbours within one LOD at 720p from error 1 or 2; 8 at error 2 gave jumps of 2.
+        WARN_PRINT(vformat("ChunkDiscoverer: lod_pixel_error_back is %.1fx lod_pixel_error: past 4x, face neighbours can be 2 LODs apart (holes). Check with --discovery_audit=1.",
+                back_scale + 1.0));
+    }
     const float focal_length = viewport_height / (2.0f * std::tan(fov_rad * 0.5f));
 
     lod_distances.resize(lod_levels + 1);
@@ -455,33 +466,134 @@ void ChunkDiscoverer::invalidate(const VoxelBox &p_box) {
     semaphore->post();
 }
 
-void ChunkDiscoverer::set_camera_chunk(Vector3 camera_pos) {
-    /*
-    Function to set the camera chunk in a thread-safe manner.
-    */
-
+ScanView ChunkDiscoverer::get_view() {
     mutex->lock();
-    ChunkId old_camera_chunk = camera_chunk;
+    const ScanView v = view;
     mutex->unlock();
+    return v;
+}
 
-    ChunkId new_camera_chunk = ChunkMath::chunk_at_render(camera_pos, chunk_param);
+ScanView ChunkDiscoverer::make_view(const Vector3 &p_pos, const Vector3 &p_forward) const {
+    ScanView v;
+    v.camera_chunk = ChunkMath::chunk_at_render(p_pos, chunk_param);
+    v.forward = p_forward.length_squared() > 0.0f ? p_forward.normalized() : Vector3();
+    v.set_half_angle(cone_half_angle);
+    v.back_scale = back_scale;
+    return v;
+}
 
-    if (new_camera_chunk != old_camera_chunk) {
-        mutex->lock();
-        camera_chunk = new_camera_chunk;
+bool ChunkDiscoverer::turned_past(const Vector3 &p_a, const Vector3 &p_b) {
+    static const double cos_turn = std::cos(Math::deg_to_rad(RESCAN_TURN_DEG));
+    return p_a.dot(p_b) < cos_turn;
+}
+
+bool ChunkDiscoverer::view_changed(const ScanView &p_scanned, const ScanView &p_new) {
+    if (p_new.camera_chunk != p_scanned.camera_chunk || p_new.memory_count != p_scanned.memory_count) {
+        return true;
+    }
+    // Memories are copied from view to view: an unchanged one is bit for bit the same.
+    for (int i = 0; i < p_new.memory_count; i++) {
+        const ScanView::ViewMemory &a = p_new.memories[i];
+        const ScanView::ViewMemory &b = p_scanned.memories[i];
+        if (a.apex != b.apex || a.dir != b.dir) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ChunkDiscoverer::Remembered ChunkDiscoverer::remember_view(ScanView &r_view, double p_memory_distance) {
+    if (r_view.back_scale == 0.0 || r_view.forward == Vector3()) {
+        r_view.memory_count = 0; // the set doesn't depend on the direction
+        return REMEMBERED_KNOWN;
+    }
+    // Without memory distance, only the camera chunk's own view is kept.
+    const int capacity = p_memory_distance > 0.0 ? ScanView::MAX_VIEW_MEMORIES : 1;
+    const uint32_t now = ++r_view.memory_clock;
+    for (int i = 0; i < r_view.memory_count; i++) {
+        ScanView::ViewMemory &m = r_view.memories[i];
+        m.fade = MAX(0.0, r_view.camera_chunk.distance_to(m.apex) - p_memory_distance);
+    }
+    Remembered result = REMEMBERED_ADDED;
+    int slot = -1;
+    for (int i = 0; i < r_view.memory_count && slot < 0; i++) {
+        if (r_view.memories[i].apex == r_view.camera_chunk && !turned_past(r_view.memories[i].dir, r_view.forward)) {
+            slot = i;
+            result = REMEMBERED_KNOWN;
+        }
+    }
+    if (result == REMEMBERED_KNOWN) {
+        r_view.memories[slot].used = now;
+    } else {
+        slot = r_view.memory_count;
+        if (slot >= capacity) {
+            // Over the most faded one, the least recently used among equals (all fade 0 within the distance).
+            slot = 0;
+            for (int i = 1; i < r_view.memory_count; i++) {
+                const ScanView::ViewMemory &m = r_view.memories[i];
+                const ScanView::ViewMemory &worst = r_view.memories[slot];
+                slot = m.fade > worst.fade || (m.fade == worst.fade && m.used < worst.used) ? i : slot;
+            }
+            result = REMEMBERED_REPLACED;
+        } else {
+            r_view.memory_count++;
+        }
+        r_view.memories[slot] = { r_view.camera_chunk, r_view.forward, 0.0, now };
+    }
+    // Sorted by fade, which a new camera chunk changes (lod_split stops at the first fade too large).
+    // Insertion sort: stable, no allocation, and the list is short and nearly sorted.
+    for (int i = 1; i < r_view.memory_count; i++) {
+        const ScanView::ViewMemory m = r_view.memories[i];
+        int j = i;
+        for (; j > 0 && r_view.memories[j - 1].fade > m.fade; j--) {
+            r_view.memories[j] = r_view.memories[j - 1];
+        }
+        r_view.memories[j] = m;
+    }
+    return result;
+}
+
+void ChunkDiscoverer::set_camera(const Vector3 &p_pos, const Vector3 &p_forward) {
+    ScanView new_view = make_view(p_pos, p_forward);
+    mutex->lock();
+    new_view.copy_memories_from(view);
+    const Remembered remembered = remember_view(new_view, memory_distance);
+    stats.memories_added += remembered != REMEMBERED_KNOWN ? 1 : 0;
+    stats.memories_replaced += remembered == REMEMBERED_REPLACED ? 1 : 0;
+    const bool changed = view_changed(view, new_view);
+    if (changed) {
+        view = new_view;
         camera_change_usec = now_usec();
         mutex->unlock();
-
         semaphore->post();
+        VLOG(2, "new view:", WorldCoord::to_string(new_view.camera_chunk), " ", new_view.forward, " memories ", new_view.memory_count);
+        return;
+    }
+    // Same chunk and memories, in the same order: keep the use times for eviction.
+    view.copy_memories_from(new_view);
+    if (turned_past(new_view.forward, view.forward)) {
+        // A turn that doesn't change the scanned set (back_scale 0, or towards a remembered view): no
+        // rescan, but the next scan (camera chunk, instance edit) orders the meshers' queues by the current
+        // direction.
+        view.forward = new_view.forward;
+    }
+    mutex->unlock();
+}
 
-        VLOG(2, "new chunk:", WorldCoord::to_string(new_camera_chunk));
+void ChunkDiscoverer::set_view_memory(double p_metres) {
+    ERR_FAIL_COND_MSG(lod_distances.size() < 2, "ChunkDiscoverer::set_view_memory: call setup_lod first.");
+    if (p_metres < 0.0) {
+        memory_distance = lod_distances[MIN(VIEW_MEMORY_AUTO_LOD, get_max_lod())];
+    } else {
+        // One chunk-id unit is half a LOD0 chunk.
+        memory_distance = p_metres / (chunk_param.chunk_world_dimension() * 0.5);
     }
 }
-void ChunkDiscoverer::_compare_with_cpu(const ChunkId &p_camera_chunk, const LODHashSet &p_scanned) {
+void ChunkDiscoverer::_compare_with_cpu(const ScanView &p_view, const LODHashSet &p_scanned) {
     const uint64_t t0 = now_usec();
     LODHashSet cpu_set;
     ScanCounters cpu_counters;
-    scan(p_camera_chunk, cull_mode, cpu_set, cpu_counters);
+    scan(p_view, cull_mode, cpu_set, cpu_counters);
     int64_t only_here = 0;
     int64_t only_cpu = 0;
     for (const ChunkId &id : p_scanned) {
@@ -492,7 +604,7 @@ void ChunkDiscoverer::_compare_with_cpu(const ChunkId &p_camera_chunk, const LOD
     }
     if (only_here + only_cpu > 0) {
         ERR_PRINT(vformat("ChunkDiscoverer: --discovery_compare: the %s scan around %s differs from the CPU scan: %d chunks only in it, %d only in the CPU's.",
-                gpu ? "GPU" : "CPU", WorldCoord::to_string(p_camera_chunk), only_here, only_cpu));
+                gpu ? "GPU" : "CPU", WorldCoord::to_string(p_view.camera_chunk), only_here, only_cpu));
     }
     mutex->lock();
     stats.compare_scans++;
@@ -509,6 +621,7 @@ Dictionary ChunkDiscoverer::_scan_dict(const ScanCounters &p_counters, uint64_t 
     d["walk_ms"] = double(p_scan_usec) / 1000.0 - cull_ms; // everything else: the tree walk, cache lookups and eviction
     d["nodes_visited"] = p_counters.nodes_visited;
     d["culled"] = p_counters.culled;
+    d["out_of_view"] = p_counters.out_of_view;
     d["cache_hits"] = p_counters.cache_hits;
     d["corners"] = p_counters.corners;
     d["sdf_calls"] = p_counters.sdf_calls;
@@ -547,6 +660,15 @@ Dictionary ChunkDiscoverer::get_stats() {
     d["cull_mode"] = (int)cull_mode;
     d["scans_skipped_same_chunk"] = stats.scans_skipped_same_chunk;
     d["last_scan_size"] = stats.last_scan_size;
+    d["last_out_of_view"] = stats.last_out_of_view;
+    d["last_memories"] = stats.last_memories;
+    d["memories_added"] = stats.memories_added;
+    d["memories_replaced"] = stats.memories_replaced;
+    d["memory_distance"] = memory_distance;
+    d["delta_entered_total"] = stats.delta_entered_total;
+    d["delta_left_total"] = stats.delta_left_total;
+    d["back_scale"] = back_scale;
+    d["cone_half_angle_deg"] = Math::rad_to_deg(cone_half_angle);
     d["last_nodes_visited"] = stats.last_nodes_visited;
     d["last_sdf_calls"] = stats.last_sdf_calls;
     d["last_culled"] = stats.last_culled;
