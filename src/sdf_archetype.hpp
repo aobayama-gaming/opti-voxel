@@ -4,6 +4,7 @@
 #include "archetype_table.hpp"
 #include "instance_table.hpp"
 #include "sdf_base.hpp"
+#include "tree_archetype.hpp"
 
 #include <atomic>
 #include <cfloat>
@@ -11,10 +12,10 @@
 #include <memory>
 
 // Demo terrain of the archetype table (terrain_mode 3, --terrain=archetypes): an fBm ground (a compiled
-// Program) plus a table of instances (rocks, tree trunks and a cave mouth) in front of the main_scene
-// spawn. Each chunk folds only the instances near it (instance_table.hpp); the library
-// (archetype_table.hpp) is compiled once and reads the instances' records from a GPU buffer. A function
-// of the absolute position: far origins see the ground only.
+// Program) plus a table of instances (rocks, tree trunks and a cave mouth; optionally a scatter and a forest
+// of grown trees, tree_archetype.hpp) in front of the main_scene spawn. Each chunk folds only the instances
+// near it (instance_table.hpp); the library (archetype_table.hpp) is compiled once and reads the instances'
+// records from a GPU buffer. A function of the absolute position: far origins see the ground only.
 // Scene::SHAPES (terrain_mode 4, --terrain=shapes) has no table instances: shapes() compiled into the
 // ground program (hard CSG for dual contouring, nested composites the table does not express).
 class SDFArchetype : public SDFBase {
@@ -49,6 +50,14 @@ public:
         scatter_count = p_count;
         scatter_area = p_area;
     }
+
+    // A forest of about p_count grown trees (tree_archetype.hpp) in a square of side p_area (metres) around the demo
+    // objects (--trees / --tree_area). Set before configure().
+    void set_forest(int p_count, double p_area) {
+        forest_count = p_count;
+        forest_area = p_area;
+    }
+    const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
 
     // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
     void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
@@ -300,6 +309,38 @@ public:
         return root;
     }
 
+    // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite,
+    // normal floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level
+    // operators, and a smooth radius is >= 0.
+    static String edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k) {
+        auto bad = [](float p_v) { return !std::isfinite(p_v) || (p_v != 0.0f && std::fabs(p_v) < FLT_MIN); };
+        if (p_op < int(Archetype::Combine::UNION) || p_op > int(Archetype::Combine::SMOOTH_SUBTRACT)) {
+            return vformat("op %d is not 0 union, 1 smooth union, 2 subtract or 3 smooth subtract.", p_op);
+        }
+        if (bad(p_k) || p_k < 0.0f) {
+            return "k must be finite and >= 0.";
+        }
+        for (int i = 0; p_params && i < 8; i++) {
+            if (bad(p_params[i])) {
+                return vformat("param %d is not a finite normal float.", i);
+            }
+        }
+        if (p_rotation) {
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    double d = 0.0;
+                    for (int c = 0; c < 3; c++) {
+                        d += double(p_rotation[3 * i + c]) * double(p_rotation[3 * j + c]);
+                    }
+                    if (bad(p_rotation[3 * i + j]) || std::abs(d - (i == j ? 1.0 : 0.0)) > 1e-5) {
+                        return "the rotation is not orthonormal (rows within 1e-5).";
+                    }
+                }
+            }
+        }
+        return String();
+    }
+
 private:
     std::shared_ptr<const Archetype::DefLibrary> library;
     Archetype::Program ground_program;
@@ -314,6 +355,9 @@ private:
     int edit_lod_max = 0; // the changed records are listed below this LOD (edit_affects_chunk)
     int scatter_count = 0; // --instances
     double scatter_area = 200.0; // --instance_area (metres)
+    int forest_count = 0; // --trees
+    double forest_area = 60.0; // --tree_area (metres)
+    std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
     bool instance_band = true; // --instance_band
     Scene which;
 
@@ -372,38 +416,6 @@ private:
         edit_box = p_region;
     }
 
-    // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite,
-    // normal floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level
-    // operators, and a smooth radius is >= 0.
-    static String edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k) {
-        auto bad = [](float p_v) { return !std::isfinite(p_v) || (p_v != 0.0f && std::fabs(p_v) < FLT_MIN); };
-        if (p_op < int(Archetype::Combine::UNION) || p_op > int(Archetype::Combine::SMOOTH_SUBTRACT)) {
-            return vformat("op %d is not 0 union, 1 smooth union, 2 subtract or 3 smooth subtract.", p_op);
-        }
-        if (bad(p_k) || p_k < 0.0f) {
-            return "k must be finite and >= 0.";
-        }
-        for (int i = 0; p_params && i < 8; i++) {
-            if (bad(p_params[i])) {
-                return vformat("param %d is not a finite normal float.", i);
-            }
-        }
-        if (p_rotation) {
-            for (int i = 0; i < 3; i++) {
-                for (int j = 0; j < 3; j++) {
-                    double d = 0.0;
-                    for (int c = 0; c < 3; c++) {
-                        d += double(p_rotation[3 * i + c]) * double(p_rotation[3 * j + c]);
-                    }
-                    if (bad(p_rotation[3 * i + j]) || std::abs(d - (i == j ? 1.0 : 0.0)) > 1e-5) {
-                        return "the rotation is not orthonormal (rows within 1e-5).";
-                    }
-                }
-            }
-        }
-        return String();
-    }
-
     void finish_record(Archetype::TableRecord &r_rec) const {
         Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band);
     }
@@ -423,20 +435,56 @@ private:
         return b;
     }
 
+    // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.
+    void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z,
+            const std::function<int64_t(int64_t, int64_t)> &p_ground_y) {
+        using namespace Archetype;
+        std::vector<TreeSite> sites;
+        forest_sites(forest_count, forest_area, p_centre_x, p_centre_z, p_voxel, p_ground_y, sites);
+        std::vector<TableRecord> parts;
+        int64_t most = 0;
+        for (const TreeSite &site : sites) {
+            parts.clear();
+            grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, parts);
+            trees.push_back(TreeSpan{ records.size(), uint32_t(parts.size()), site.species, site.seed });
+            for (TableRecord &rec : parts) {
+                finish_record(rec);
+                records.push_back(rec, version + 1);
+            }
+            most = MAX(most, int64_t(parts.size()));
+        }
+        Dictionary forest;
+        forest["count"] = int64_t(trees.size());
+        int64_t total = 0;
+        for (const TreeSpan &t : trees) {
+            total += t.count;
+        }
+        forest["records"] = total;
+        forest["records_per_tree_avg"] = trees.empty() ? 0.0 : double(total) / double(trees.size());
+        forest["records_per_tree_max"] = most;
+        Dictionary scene;
+        scene["trees"] = forest;
+        gpu.set_scene_stats(scene);
+    }
+
     void create_scene(double p_voxel, int p_lod_count) {
         using namespace Archetype;
         auto v = [p_voxel](double p_metres) { return float(p_metres / p_voxel); };
         const ExactNoise::OctaveSet height = height_fbm(p_voxel);
         const int64_t datum = std::llround(DATUM_M / p_voxel);
-        auto ground = [&](double p_x, double p_z) {
+        auto ground_voxel = [&](int64_t p_x, int64_t p_z) {
             WorldPos p;
-            p.voxel = VoxelPos(std::llround(p_x / p_voxel), 0, std::llround(p_z / p_voxel));
+            p.voxel = VoxelPos(p_x, 0, p_z);
             return int64_t(std::floor(ExactNoise::fbm(height, p, 0).w));
         };
+        auto ground = [&](double p_x, double p_z) { return ground_voxel(std::llround(p_x / p_voxel), std::llround(p_z / p_voxel)); };
+        // Appended in this order: the GDScript side names the indices (CAPSULE_TYPE).
         DefLibrary lib;
         const int sphere = lib.add(make_sphere_type());
         const int capsule = lib.add(make_capsule_type());
         const int rock = lib.add(make_rock_type(int(std::lround(std::log2(8.0 / p_voxel))), ROCK_SEED));
+        const int branch = lib.add(make_branch_type());
+        const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED));
         library = std::make_shared<const DefLibrary>(lib);
 
         records.clear();
@@ -488,6 +536,11 @@ private:
                 const float params[8] = { v(2.0 + double(r)), v(0.5), 0, 0, 0, 0, 0, 0 };
                 add(Combine::SMOOTH_UNION, 0.8, capsule, params, px, pz, 0.0, 0.0);
             }
+        }
+        trees.clear();
+        if (which == Scene::DEMO) {
+            add_forest(crown_types(branch, crown, lib[crown]), p_voxel, centre_x, centre_z,
+                    [&](int64_t p_x, int64_t p_z) { return datum + ground_voxel(p_x, p_z); });
         }
         // The ground register: the ground Def placed at the datum (a compiled program, constants only).
         Archetype::Instance ground_inst;

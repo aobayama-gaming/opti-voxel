@@ -202,12 +202,13 @@ to every change, and a reviewer may reject a PR on any of them.
   (`ExactNoise::band_kept`, `BAND_SHIFT` = the cascade's insertion lattice: 8 samples per wavelength), on
   both back-ends. Each record has a `max_lod` (`set_band`): at LOD L its distance is
   raised by `ERODE_CELLS * (2^L - 1)` voxels (1 cell per LOD: it shrinks uniformly, GPU and CPU alike), and
-  it is listed only below the first LOD whose erosion reaches its depth (half its box's smallest side times
-  L) plus k, where the eroded shape no longer reaches zero, so the drop changes no sign. The band steps
+  it is listed only below the first LOD whose erosion reaches its depth (`band_depth`: half its box's smallest
+  side times L, plus k; the smaller of the local box grown by `rotation_margin` and the world box, so a turned
+  record drops at the same LOD), where the eroded shape no longer reaches zero, so the drop changes no sign. The band steps
   between LOD L and L+1 (an eroded instance, a dropped ground octave) are hidden by skirts: the archetype
   terrains ask for `SDFBase::min_skirt_depth` (ground octave step + erosion, 3.34 cells on the demo) and
   VoxelTerrain raises `skirt_depth` to it before `configure` (unit test: the L | L+1 field step within the
-  skirt at LODs 0-6 on a 4,000-rock scatter). `archetype_band` / `--instance_band=0` keep every instance
+  skirt at LODs 0-6 on a 4,000-rock scatter and a 5 cm forest). `archetype_band` / `--instance_band=0` keep every instance
   whole (the reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty
   from LOD 5 on.
   **The index** (`instance_table`): an instance is stored once, at the finest LOD whose chunk span holds its
@@ -255,6 +256,21 @@ to every change, and a reviewer may reject a PR on any of them.
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
   discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter N rocks and pillars in a
   square of side M metres around the demo objects (set before the node enters the tree), default 0.
+  **Trees (step 5, `src/tree_archetype.*`):** a tree is a contiguous run of plain records, all smooth union
+  (`SDFArchetype::get_trees()`: `TreeSpan` first id + count), no change to the IR, the fold or the meshers.
+  Library types 3 `branch` (a tapered capsule {height, radius, slope}, slope = (r1 - r0) / height from the
+  CPU, L = 1 + slope^2 / 2) and 4 `crown` (`make_rock_type(crown_k(voxel), CROWN_SEED)`, bumps of ~2 m whose
+  amplitude adds `CROWN_BUMP` to L). `grow_tree` is one recursion for topology and bends: a stem's axis split
+  at midpoints moved by a hash of their path (joints on whole voxels: a segment's end is the next one's
+  anchor), children at hashed forks with pipe-model radii (r0^2 >= tip^2 + sum of the children's), stems
+  grown thickest first so the per-tree budget cuts the thinnest; then a hull of 1-3 crown spheres on the
+  upper trunk and a clump at each leaf stem's tip; segments and clumps the hull always covers are skipped.
+  Nothing is LOD-specific: the band rule is the LOD rule (thin parts erode away first, a tapered branch
+  from its tip, the hull last; nothing appears with the LOD). `forest_sites`: one tree per cell of an absolute
+  jittered grid. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
+  (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
+  The forest has no aggregate past its hulls: past ~LOD 6 at 5 cm there is nothing, from ~LOD 3 the crowns
+  stand on trunks already eroded away.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
