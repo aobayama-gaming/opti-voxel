@@ -105,6 +105,8 @@ func _enter_tree() -> void:
 			terrain.archetype_instance_area = a.trim_prefix("--instance_area=").to_float()
 		if a == "--instance_band=0" and terrain:
 			terrain.archetype_band = false
+		if a.begins_with("--instance_erode=") and terrain:
+			terrain.archetype_erode = a.trim_prefix("--instance_erode=").to_float()
 		if a.begins_with("--trees=") and terrain:
 			terrain.archetype_trees = a.trim_prefix("--trees=").to_int()
 		if a.begins_with("--tree_area=") and terrain:

@@ -32,6 +32,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_tree_area"), &VoxelTerrain::get_archetype_tree_area);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
+    ClassDB::bind_method(D_METHOD("set_archetype_erode", "cells"), &VoxelTerrain::set_archetype_erode);
+    ClassDB::bind_method(D_METHOD("get_archetype_erode"), &VoxelTerrain::get_archetype_erode);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error_back", "error"), &VoxelTerrain::set_lod_pixel_error_back);
@@ -112,6 +114,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000,1"), "set_archetype_trees", "get_archetype_trees");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
@@ -337,6 +340,16 @@ void VoxelTerrain::set_archetype_band(bool p_enabled) {
 
 bool VoxelTerrain::get_archetype_band() const {
     return archetype_band;
+}
+
+void VoxelTerrain::set_archetype_erode(float p_cells) {
+    ERR_FAIL_COND_MSG(started, "archetype_erode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(!(p_cells > 0.0f && p_cells <= 4.0f), "archetype_erode must be in (0, 4] cells per LOD.");
+    archetype_erode = p_cells;
+}
+
+float VoxelTerrain::get_archetype_erode() const {
+    return archetype_erode;
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
@@ -622,6 +635,7 @@ void VoxelTerrain::_ready() {
             archetype->set_scatter(archetype_instances, archetype_instance_area);
             archetype->set_forest(archetype_trees, archetype_tree_area);
             archetype->set_instance_band(archetype_band);
+            archetype->set_instance_erode(archetype_erode);
             sdf = archetype;
             break;
         }
@@ -629,6 +643,7 @@ void VoxelTerrain::_ready() {
             memdelete(sdf);
             sdf = memnew(SDFArchetype(SDFArchetype::Scene::SHAPES));
             static_cast<SDFArchetype *>(sdf)->set_instance_band(archetype_band);
+            static_cast<SDFArchetype *>(sdf)->set_instance_erode(archetype_erode);
             break;
     }
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);

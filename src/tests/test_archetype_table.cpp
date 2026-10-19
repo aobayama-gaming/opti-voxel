@@ -879,3 +879,25 @@ TEST_CASE("Archetype band: near_instance covers every node the brute-force no-cu
     MESSAGE("no-cull rule: ", nodes, " nodes, ", exempt, " exempt by the brute force, ", extra, " more by the index (per-node occupancy)");
     CHECK(exempt > 1000);
 }
+
+// --instance_erode: the record carries its rate, and a slower rate drops it at the first LOD whose erosion at that
+// rate reaches its depth, never before the default's (a 6-voxel trunk: LOD 3 at 1 cell per LOD, LOD 4 at 0.5).
+TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
+    const TableDefPtr def = table_def("capsule");
+    int previous = -1;
+    for (const float rate : { 2.0f, ERODE_CELLS, 0.5f, 0.25f }) {
+        TableRecord rec;
+        rec.anchor = VoxelPos(0, 0, 0);
+        rec.params[0] = 200.0f; // tall: the radius sets the depth
+        rec.params[1] = 6.0f;
+        finish_record(*def, rec, 1.0f, true, rate);
+        CAPTURE(rate);
+        CHECK(rec.erode == rate);
+        const double depth = band_depth(*def, rec);
+        const int lod = rec.max_lod;
+        CHECK(double(rate) * (std::ldexp(1.0, lod) - 1.0) >= depth);
+        CHECK(double(rate) * (std::ldexp(1.0, lod - 1) - 1.0) < depth);
+        CHECK(lod >= previous);
+        previous = lod;
+    }
+}

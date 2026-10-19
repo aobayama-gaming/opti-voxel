@@ -61,6 +61,8 @@ public:
 
     // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
     void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
+    // The band rule's erosion rate in cells per LOD (Archetype::set_band). Set before configure().
+    void set_instance_erode(float p_cells) { instance_erode = p_cells; }
 
     // The band rule's steps between LOD L and L+1: an instance erodes by ERODE_CELLS cells; a ground octave k,
     // dropped from LOD k - 2 on, moves the ground by up to amp * PERLIN2_MAX, i.e. that many cells of LOD k - 3.
@@ -74,7 +76,7 @@ public:
                 }
             }
         }
-        return float(ground + Archetype::ERODE_CELLS);
+        return float(ground + instance_erode);
     }
 
     void configure(const ChunkParam &p_param, int p_lod_count) override {
@@ -363,6 +365,7 @@ private:
     double forest_area = 60.0; // --tree_area (metres)
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
     bool instance_band = true; // --instance_band
+    float instance_erode = Archetype::ERODE_CELLS; // --instance_erode
     Scene which;
 
     // shapes() in metres, rounded to voxels.
@@ -429,7 +432,7 @@ private:
     }
 
     void finish_record(Archetype::TableRecord &r_rec) const {
-        Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band);
+        Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, instance_erode);
     }
 
     // The LODs an edit can change: below the larger of the record's max_lod before and after it.

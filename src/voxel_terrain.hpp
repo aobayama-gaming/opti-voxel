@@ -80,6 +80,7 @@ private:
     int archetype_trees = 0;
     double archetype_tree_area = 60.0;
     bool archetype_band = true;
+    float archetype_erode = Archetype::ERODE_CELLS;
     bool legacy_trim_indices = false;
     // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
     // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
@@ -213,6 +214,10 @@ public:
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
     bool get_archetype_band() const;
+    // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): lower keeps thin parts (trunks) to
+    // coarser LODs (--instance_erode). Must be set before the node enters the tree.
+    void set_archetype_erode(float p_cells);
+    float get_archetype_erode() const;
 
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);

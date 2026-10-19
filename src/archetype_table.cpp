@@ -86,23 +86,23 @@ double band_depth(const TableDef &p_def, const TableRecord &p_record) {
     return 0.5 * side * double(p_record.lipschitz) + double(p_record.k);
 }
 
-void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled) {
+void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, float p_erode_cells) {
     r_record.max_lod = TableRecord::NEVER_DROPPED;
     r_record.erode = 0.0f;
     if (!p_def.bounded || !p_enabled) {
         return;
     }
-    r_record.erode = ERODE_CELLS;
+    r_record.erode = p_erode_cells;
     const double depth = band_depth(p_def, r_record);
     for (int lod = 0; lod < 32; lod++) {
-        if (double(ERODE_CELLS) * (std::ldexp(1.0, lod) - 1.0) >= depth) {
+        if (double(p_erode_cells) * (std::ldexp(1.0, lod) - 1.0) >= depth) {
             r_record.max_lod = uint8_t(lod);
             break;
         }
     }
 }
 
-void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band) {
+void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, float p_erode_cells) {
     const Bounds wb = record_world_bounds(p_def, r_record);
     for (int a = 0; a < 3; a++) {
         r_record.box_lo[a] = int32_t(wb.lo[a] - r_record.anchor[a]);
@@ -110,7 +110,7 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
     }
     r_record.lipschitz = wb.lipschitz;
     r_record.margin_c = 2.0f * wb.lipschitz + p_skirt_depth;
-    set_band(r_record, p_def, p_band);
+    set_band(r_record, p_def, p_band, p_erode_cells);
 }
 
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {

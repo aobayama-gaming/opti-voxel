@@ -293,7 +293,10 @@ to every change, and a reviewer may reject a PR on any of them.
   jittered grid. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
   The forest has no aggregate past its hulls: past ~LOD 6 at 5 cm there is nothing, from ~LOD 3 the crowns
-  stand on trunks already eroded away.
+  stand on trunks already eroded away. The erosion rate is `VoxelTerrain.archetype_erode` / `--instance_erode=F`
+  (cells per LOD, default `ERODE_CELLS` = 1, bench and player; the record carries it as `erode`, the skirt
+  follows it): 0.5 keeps a 0.3 m trunk to LOD 3 and fuller distant crowns, for +0.9 ms steady and +0.6 s of
+  load in the forest fly (1080p); validate / audit / discovery_audit stay ok.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
