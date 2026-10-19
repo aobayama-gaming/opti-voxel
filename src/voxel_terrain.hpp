@@ -13,6 +13,7 @@
 #include "godot_cpp/classes/sub_viewport.hpp"
 #include "godot_cpp/classes/viewport.hpp"
 
+#include <utility>
 #include <vector>
 
 #include "chunk_memory.hpp"
@@ -60,6 +61,7 @@ private:
     PageAuditor *auditor = nullptr;
     Dictionary audit_report;
     bool debug_gpu_profile = false;
+    bool debug_gpu_profile_frames = false; // record every captured frame (GPUProfiler::take_frames)
     Dictionary validation_report;
 
     SDFBase *sdf = memnew(SDFCascade);
@@ -151,6 +153,14 @@ private:
         TimingStat mesher_collect; // get_results
         TimingStat destroy_chunks; // VoxelState::destroy_marked
         TimingStat compact; // GPUDirectMesher::compact
+
+        // The sections by name, for the reports.
+        std::vector<std::pair<const char *, const TimingStat *>> sections() const {
+            return { { "total", &process_total }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
+                { "destroy_from_scan", &destroy_from_scan }, { "destroy_verify", &destroy_verify },
+                { "mesher_dispatch", &mesher_dispatch }, { "mesher_collect", &mesher_collect },
+                { "destroy_chunks", &destroy_chunks }, { "compact", &compact } };
+        }
     } process_stats;
 
 public:
@@ -249,6 +259,12 @@ public:
     // render time, which is what makes the renderer capture timestamps).
     void set_debug_gpu_profile(bool p_enable);
     bool get_debug_gpu_profile() const;
+    void set_debug_gpu_profile_frames(bool p_enable);
+    bool get_debug_gpu_profile_frames() const;
+    // The frames recorded since the last call (debug_gpu_profile_frames), see GPUProfiler::take_frames.
+    Array take_gpu_profile_frames();
+    // { section: total ms since start } of _process, cheap enough to read every frame.
+    Dictionary get_process_times_ms() const;
 
     void set_direct_batch_size(int p_size);
     int get_direct_batch_size() const;

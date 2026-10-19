@@ -28,6 +28,10 @@ extends Node3D
 ##   --shot=<when>:<path.png>     repeatable. when = loaded | steady_end | fly_end | <frame number>
 ##   --out=<path.json>            stats output
 ##   --log=N                      VoxelTerrain.log_level
+##   --profile=1                  per-frame profile to profile.json next to --out: main thread (frame time, each
+##                                VoxelTerrain::_process section) and, per captured frame, every
+##                                renderer pass's GPU and render-thread CPU time. Per-pass timestamps need Godot's
+##                                visual profiler, which needs a debugger: run through `tools/bench.sh --profile=1`.
 ##   --audit=1                    direct: after steady, classify every drawn quad slot of every page;
 ##                                writes per-chunk mesh digests to chunks.json next to --out
 ##   --validate=N                 direct: after steady, compare N chunks against the legacy mesher
@@ -109,6 +113,10 @@ var validation_report := {}
 var audit_report := {}
 var discovery_audit_report := {}
 var checks := []  # remaining post-steady checks
+var profile_main := []  # --profile=1: one entry per frame
+var profile_gpu := []  # --profile=1: one entry per captured renderer frame
+var profile_last_process := {}
+var profile_last_usec := 0
 
 
 func _ready() -> void:
@@ -136,6 +144,12 @@ func _ready() -> void:
 		return
 	terrain.log_level = int(args.get("log", "1"))
 	terrain.debug_gpu_profile = true
+	if args.get("profile", "0") == "1":
+		terrain.debug_gpu_profile_frames = true
+		if EngineDebugger.has_profiler("visual"):
+			EngineDebugger.profiler_enable("visual", true)
+		else:
+			push_warning("BENCH: --profile=1 without a debugger: the renderer only times the viewport (use bench.sh --profile=1)")
 	var mode: String = args.get("mode", "legacy")
 	if not MODES.has(mode):
 		push_error("BENCH: unknown --mode=%s (expected legacy or direct)" % mode)
@@ -386,6 +400,9 @@ func _process(delta: float) -> void:
 	s["draw_calls_shadow"].append(RenderingServer.viewport_get_render_info(vp_rid,
 		RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW, RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME))
 
+	if terrain.debug_gpu_profile_frames:
+		_record_profile(delta)
+
 	_take_shots(str(frame))
 
 	var steady := int(args.get("steady", "300"))
@@ -524,8 +541,40 @@ func _take_shots(when: String) -> void:
 			print("BENCH: screenshot %s -> %s" % [when, shot[1]])
 
 
+## --profile=1: this frame's main-thread times (VoxelTerrain sections as the difference of their running totals)
+## and the renderer frames captured since the last call, tagged with the current phase.
+func _record_profile(delta: float) -> void:
+	var totals: Dictionary = terrain.get_process_times_ms()
+	var sections := {}
+	for k in totals:
+		sections[k] = totals[k] - profile_last_process.get(k, 0.0)
+	profile_last_process = totals
+	var now := Time.get_ticks_usec()
+	var wall_ms := (now - profile_last_usec) / 1000.0 if profile_last_usec > 0 else delta * 1000.0
+	profile_last_usec = now
+	profile_main.append({
+		"frame": frame,
+		"engine_frame": Engine.get_frames_drawn(),
+		"phase": phase,
+		"frame_ms": delta * 1000.0,  # Godot's delta (may be smoothed)
+		"wall_ms": wall_ms,  # wall clock since the previous frame's _process
+		"terrain": sections,
+		"pending": terrain.get_pending_chunk_count(),
+		"draw_calls_view": samples[phase]["draw_calls_view"][-1],
+		"draw_calls_shadow": samples[phase]["draw_calls_shadow"][-1],
+	})
+	for g in terrain.take_gpu_profile_frames():
+		g["phase"] = phase
+		profile_gpu.append(g)
+
+
 func _finish() -> void:
 	set_process(false)
+	if terrain.debug_gpu_profile_frames and args.has("out"):
+		var fp := FileAccess.open(args["out"].get_base_dir().path_join("profile.json"), FileAccess.WRITE)
+		fp.store_string(JSON.stringify({"main": profile_main, "gpu": profile_gpu,
+			"window": DisplayServer.window_get_size(), "phases": phase_results.keys()}))
+		fp.close()
 	# Per-chunk mesh digests of the page audit go to their own file (thousands of entries).
 	if audit_report.has("chunk_digests"):
 		if args.has("out"):

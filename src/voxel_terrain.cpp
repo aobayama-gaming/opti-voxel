@@ -53,6 +53,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_pending_chunk_count"), &VoxelTerrain::get_pending_chunk_count);
     ClassDB::bind_method(D_METHOD("set_debug_gpu_profile", "enable"), &VoxelTerrain::set_debug_gpu_profile);
     ClassDB::bind_method(D_METHOD("get_debug_gpu_profile"), &VoxelTerrain::get_debug_gpu_profile);
+    ClassDB::bind_method(D_METHOD("set_debug_gpu_profile_frames", "enable"), &VoxelTerrain::set_debug_gpu_profile_frames);
+    ClassDB::bind_method(D_METHOD("get_debug_gpu_profile_frames"), &VoxelTerrain::get_debug_gpu_profile_frames);
+    ClassDB::bind_method(D_METHOD("take_gpu_profile_frames"), &VoxelTerrain::take_gpu_profile_frames);
+    ClassDB::bind_method(D_METHOD("get_process_times_ms"), &VoxelTerrain::get_process_times_ms);
     ClassDB::bind_method(D_METHOD("set_direct_batch_size", "size"), &VoxelTerrain::set_direct_batch_size);
     ClassDB::bind_method(D_METHOD("get_direct_batch_size"), &VoxelTerrain::get_direct_batch_size);
     ClassDB::bind_method(D_METHOD("set_direct_pages_per_batch", "pages"), &VoxelTerrain::set_direct_pages_per_batch);
@@ -138,6 +142,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk,Group,Quad index,Faceted"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile_frames"), "set_debug_gpu_profile_frames", "get_debug_gpu_profile_frames");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "destroy_verify"), "set_destroy_verify", "get_destroy_verify");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_compare"), "set_discovery_compare", "get_discovery_compare");
@@ -446,6 +451,29 @@ void VoxelTerrain::set_debug_gpu_profile(bool p_enable) {
 
 bool VoxelTerrain::get_debug_gpu_profile() const {
     return debug_gpu_profile;
+}
+
+void VoxelTerrain::set_debug_gpu_profile_frames(bool p_enable) {
+    debug_gpu_profile_frames = p_enable;
+    if (gpu_profiler) {
+        gpu_profiler->set_recording(p_enable);
+    }
+}
+
+bool VoxelTerrain::get_debug_gpu_profile_frames() const {
+    return debug_gpu_profile_frames;
+}
+
+Array VoxelTerrain::take_gpu_profile_frames() {
+    return gpu_profiler ? gpu_profiler->take_frames() : Array();
+}
+
+Dictionary VoxelTerrain::get_process_times_ms() const {
+    Dictionary d;
+    for (const auto &[name, stat] : process_stats.sections()) {
+        d[name] = stat->total / 1000.0;
+    }
+    return d;
 }
 
 int VoxelTerrain::get_pending_chunk_count() const {
@@ -854,9 +882,10 @@ void VoxelTerrain::_process(double) {
     }
     process_stats.compact.add(now_usec() - t0);
 
-    if (debug_gpu_profile && exec_time % 15 == 0) {
+    if ((debug_gpu_profile && exec_time % 15 == 0) || debug_gpu_profile_frames) {
         if (!gpu_profiler) {
             gpu_profiler = memnew(GPUProfiler);
+            gpu_profiler->set_recording(debug_gpu_profile_frames);
         }
         gpu_profiler->poll();
     }
@@ -1117,15 +1146,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     d["chunks"] = chunks;
 
     Dictionary process;
-    process["total"] = process_stats.process_total.to_dict();
-    process["scan_ingest"] = process_stats.scan_ingest.to_dict();
-    process["scan_apply"] = process_stats.scan_apply.to_dict();
-    process["destroy_from_scan"] = process_stats.destroy_from_scan.to_dict();
-    process["destroy_verify"] = process_stats.destroy_verify.to_dict();
-    process["mesher_dispatch"] = process_stats.mesher_dispatch.to_dict();
-    process["mesher_collect"] = process_stats.mesher_collect.to_dict();
-    process["destroy_chunks"] = process_stats.destroy_chunks.to_dict();
-    process["compact"] = process_stats.compact.to_dict();
+    for (const auto &[name, stat] : process_stats.sections()) {
+        process[name] = stat->to_dict();
+    }
     d["process"] = process;
 
     const VoxelState::Stats &vs = visual_mesh_data.stats;
