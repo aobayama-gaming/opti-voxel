@@ -184,10 +184,14 @@ to every change, and a reviewer may reject a PR on any of them.
   is the cascade's unit gradient and LOD-L distance times 2^L (exact), then `Archetype::fold_onto` and
   `finish_table`, **only where an instance passes its box test**, else the bare cascade bit for bit. That keeps a
   sample a pure function of the point: two chunks with different lists agree at a shared sample (unit test, 671
-  pairs with different lists). The level shader binds the table at 7 / 8 (`CascadeGLSL::TABLE_*_BINDING`; the
-  meshers' buffers, or zero placeholders whose lists are empty: CascadeSpike, the discoverer). The discoverer's
-  point items stay bare: a node near an instance is never culled (`cull_exempt`). The cascade skirt is at least
-  the instances' erosion step; `SDFCascade::ground_y` sphere-traces the bare cascade.
+  pairs with different lists). `CascadePasses` compiles a second level-shader variant with the fold
+  (`get_sample_fold_glsl` and the table buffers at 7 / 8, `CascadeGLSL::TABLE_*_BINDING`) when the mesher passes its
+  table buffers; `record_level(..., p_fold)` uses it for level 0 of a batch with any instance listed, dev's bare
+  shader otherwise (same bits over empty lists). The discoverer's corners stay bare on both back-ends
+  (`SDFBase::evaluate_cull`, the GPU point items): a node near an instance is never culled (`cull_exempt`). With
+  instances placed at configure, the cascade skirt is the bare one plus the instances' erosion step (both steps meet
+  at a seam next to a smooth-unioned rock); without, the bare cascade's skirts, so a runtime edit on a cascade
+  configured empty gets no extra depth. `SDFCascade::ground_y` sphere-traces the bare cascade.
 - Archetype IR (`src/archetype_ir.*`, builders and fuzzer in `archetype_build.cpp`): an SDF as a linear SSA
   program of dual numbers (value + forward-mode gradient), the one source of its GLSL (`archetype_glsl.*`,
   straight-line `precise` code, one statement per instruction) and of its CPU evaluation (`Archetype::run`,
@@ -345,7 +349,7 @@ to every change, and a reviewer may reject a PR on any of them.
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
   both channel sets (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
   `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade
-  with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample` (`--table`, G9); GPU timestamps of the passes for
+  with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample_sdf` + skirt (`--table`, G9); GPU timestamps of the passes for
   single-LOD batches of 128 at LOD 0, 4, ... 24 (G6, G7). Report: `<run>/cascade.md`. Run it after touching
   `cascade*`, `exact_noise.hpp`, `gpu_frame.hpp`, `sdf_cascade.hpp` or `discoverer_gpu*`.
 - CI (`.github/workflows/ci.yml`) runs format, the `-Werror` build and the unit tests on every PR.

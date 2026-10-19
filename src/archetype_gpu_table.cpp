@@ -63,7 +63,11 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
     if (!snap || snap->empty()) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
+        for (const ChunkId &c : p_chunks) {
+            list_stats.chunks[MIN(MAX(ChunkMath::get_lod(c), 0), ChunkMath::MAX_LOD_NUMBERS - 1)]++;
+        }
         list_stats.batches++;
+        list_stats.build_usec += int64_t(now_usec() - t0);
         return;
     }
     const uint32_t cap = max_chunk_list();

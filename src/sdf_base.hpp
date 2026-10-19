@@ -129,8 +129,9 @@ public:
     virtual String get_sample_fold_glsl() const { return String(); }
 
     // The instance table's GPU buffers, if this terrain owns one (SDFTable). The meshers splice and bind it, and
-    // the cascade passes fold it into their samples.
-    virtual SDFGpuTable *get_gpu_table() const { return nullptr; }
+    // the cascade passes fold it into their samples. The const form only reads (the shader text, the sizes).
+    virtual SDFGpuTable *get_gpu_table() { return nullptr; }
+    const SDFGpuTable *get_gpu_table() const { return const_cast<SDFBase *>(this)->get_gpu_table(); }
 
     // The discoverer's no-cull rule: a node whose box intersects any instance's influence box (grown by
     // the cull band, 2 chunk sizes at the node's LOD) must never be culled, whatever the corners say.

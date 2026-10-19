@@ -82,12 +82,15 @@ public:
         }
         datum = VoxelPos(0, std::llround(DATUM_M / vs), 0);
         voxel_size = p_param.voxel_size;
+        build_table(Archetype::Program(), vs, p_lod_count, Scene::PLACED);
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
         // from this chunk's by one octave: k = L + 2 (a finer neighbour's extra one) or k = L + 3 (the one
-        // a coarser neighbour drops). Twice the larger amplitude (the 2D seam model needs 1.3x), and at least an
-        // instance's erosion step (SDFTable::min_skirt_depth cells), never deeper than the old skirt_depth voxels of
-        // the LOD: the groove at the border is depth / 4.
-        const double erode_cells = SDFTable::min_skirt_depth(p_param, p_lod_count);
+        // a coarser neighbour drops). Twice the larger amplitude (the 2D seam model needs 1.3x), never deeper than
+        // the old skirt_depth voxels of the LOD: the groove at the border is depth / 4. With instances placed, plus
+        // their erosion step (SDFTable::min_skirt_depth cells): next to a rock smooth-unioned into the ground both
+        // steps happen at the same seam, so the sum (SDFArchetype::min_skirt_depth). Without, the bare cascade's
+        // skirts, bit for bit: a runtime edit on a cascade configured with no instance gets no extra depth.
+        const double erode_cells = current()->empty() ? 0.0 : SDFTable::min_skirt_depth(p_param, p_lod_count);
         skirt_depth_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
             double amp = 0.0;
@@ -97,9 +100,8 @@ public:
                 }
             }
             const double cell_m = vs * std::ldexp(1.0, l);
-            skirt_depth_table[l] = float(MIN(MAX(2.0 * amp * vs, erode_cells * cell_m), double(p_param.skirt_depth) * cell_m));
+            skirt_depth_table[l] = float(MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m) + erode_cells * cell_m);
         }
-        build_table(Archetype::Program(), vs, p_lod_count, Scene::PLACED);
     }
 
     const Cascade::Spec *get_cascade() const override { return &spec; }
@@ -198,15 +200,17 @@ public:
         float d = distance(y);
         const bool start_air = d > 0.0f;
         int64_t other = y;
-        for (int i = 0; i < 4096; i++) {
+        bool flipped = false;
+        for (int i = 0; i < 4096 && !flipped; i++) {
             const float step = std::floor(std::fabs(d));
             other = y + (start_air ? -1 : 1) * MAX<int64_t>(1, int64_t(MIN(step, float(DY_LIMIT))));
             d = distance(other);
-            if ((d > 0.0f) != start_air) {
-                break;
+            flipped = (d > 0.0f) != start_air;
+            if (!flipped) {
+                y = other;
             }
-            y = other;
         }
+        ERR_FAIL_COND_V_MSG(!flipped, y, vformat("SDFCascade::ground_y: no surface found in column (%d, %d) within 4096 steps.", p_x, p_z));
         // solid = !(d > 0), the meshers' side rule; lo solid, hi air.
         int64_t lo = start_air ? other : y;
         int64_t hi = start_air ? y : other;

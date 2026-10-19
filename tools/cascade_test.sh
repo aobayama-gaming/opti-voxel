@@ -9,7 +9,7 @@
 # the GPU outputs (G3). points: the discoverer's point items (CascadePasses::create_points) vs Cascade::point +
 # SDFCascade::sdf, 5,120 corners per LOD near 0, +-2^60, across 2^32-voxel boundaries and lattice index 2^32
 # (D1 of the GPU discoverer). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
-# chunks' instance lists vs SDFCascade::sample (G9: the fold onto the cascade, bit for bit). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
+# chunks' instance lists vs SDFCascade::sample_sdf + skirt (G9: the fold onto the cascade, bit for bit). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
 # (G6), both channel sets (G7). GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.

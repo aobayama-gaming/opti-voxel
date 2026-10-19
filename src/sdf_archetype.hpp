@@ -98,7 +98,8 @@ public:
         return datum + int64_t(std::floor(ExactNoise::fbm(height, p, 0).w));
     }
 
-    const Archetype::Program &get_ground() const { return current()->ground; }
+    // A copy: the snapshot holding it is replaced by the next edit.
+    Archetype::Program get_ground() const { return current()->ground; }
 
     // The compiled (PR 1) reference of the same scene (bounds test, arch_demo probe).
     static Archetype::Instance scene(double p_voxel) {

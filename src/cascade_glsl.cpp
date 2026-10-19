@@ -474,7 +474,7 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     // Variant 0: the bare cascade at level 0; variant 1 (given the table's buffers): the instance fold.
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
     ERR_FAIL_COND_V_MSG(table && (points || p_sdf->get_gpu_table() == nullptr), false, "CascadePasses: table buffers for items that can't fold.");
-    const int variants = table ? 2 : 1;
+    const int variants = table ? 2 : 1; // a fold variant that fails to compile leaves the bare one working
     for (int v = 0; v < variants; v++) {
         const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1);
         RDUtils::dump_shader(String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (v == 1 ? "_fold" : ""), code);
@@ -490,7 +490,10 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
             for (int i = 0; i < lines.size(); i++) {
                 UtilityFunctions::printerr(String::num_int64(i + 1) + " | " + lines[i]);
             }
-            return false;
+            if (v == 0) {
+                return false;
+            }
+            break; // the bare terrain still works; a fold asked for later ERRs (record_level)
         }
         shader[v] = rd->shader_create_from_spirv(spirv);
         pipeline[v] = rd->compute_pipeline_create(shader[v]);
@@ -534,12 +537,12 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     uniforms.push_back(make_uniform(5, bands, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(6, debug, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniform_set[0] = rd->uniform_set_create(uniforms, shader[0], 0);
-    if (table) {
+    if (shader[1].is_valid()) {
         uniforms.push_back(make_uniform(CascadeGLSL::TABLE_RECORD_BINDING, p_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
         uniforms.push_back(make_uniform(CascadeGLSL::TABLE_LIST_BINDING, p_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
         uniform_set[1] = rd->uniform_set_create(uniforms, shader[1], 0);
     }
-    return uniform_set[0].is_valid() && (!table || uniform_set[1].is_valid());
+    return uniform_set[0].is_valid();
 }
 
 void CascadePasses::free() {
@@ -586,8 +589,12 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, boo
     push.encode_s32(12, top);
     push.encode_u32(16, n);
     push.encode_u32(20, uint32_t(level_bound(item_size, p_j + 1)));
-    ERR_FAIL_COND_MSG(p_fold && !pipeline[1].is_valid(), "CascadePasses: a fold without the table's buffers (create).");
-    const int v = p_j == 0 && p_fold ? 1 : 0;
+    bool fold = p_j == 0 && p_fold;
+    if (fold && !uniform_set[1].is_valid()) {
+        ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
+        fold = false;
+    }
+    const int v = fold ? 1 : 0;
     const int64_t list = rd->compute_list_begin();
     rd->compute_list_bind_compute_pipeline(list, pipeline[v]);
     rd->compute_list_bind_uniform_set(list, uniform_set[v], 0);

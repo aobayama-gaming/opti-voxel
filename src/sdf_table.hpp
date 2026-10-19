@@ -49,7 +49,8 @@ public:
     // An instance erodes by erode_rule.rate cells between LOD L and L+1 (the band rule): the skirts must hide that step.
     float min_skirt_depth(const ChunkParam &, int) const override { return instance_band ? erode_rule.rate : 0.0f; }
 
-    SDFGpuTable *get_gpu_table() const override { return &gpu; }
+    SDFGpuTable *get_gpu_table() override { return &gpu; }
+    using SDFBase::get_gpu_table; // the const form
 
     // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box, band or
     // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp).
@@ -93,7 +94,7 @@ private:
     uint32_t version = 0;
     Archetype::RecordStore records; // editable (paged, copy on write): each snapshot shares its pages
     std::shared_ptr<const Archetype::InstanceSnapshot> snapshot;
-    mutable Archetype::GpuTable gpu; // the meshers read and upload through get_gpu_table()
+    Archetype::GpuTable gpu; // the meshers read and upload through get_gpu_table()
     float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
     float edit_margin_c = 0.0f;
     int edit_lod_max = 0; // the changed records are listed below this LOD (edit_affects_chunk)

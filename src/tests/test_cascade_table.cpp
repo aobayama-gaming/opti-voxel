@@ -132,6 +132,23 @@ TEST_CASE("SDFCascade table: two neighbour chunks give the same bits at the samp
     CHECK(folded > 0);
 }
 
+TEST_CASE("SDFCascade table: the skirt covers the ground's step plus the instances' erosion, only with instances") {
+    // Next to a rock smooth-unioned into the ground, a dropped octave and the rock's erosion both step between LOD L
+    // and L+1 at the same seam: the skirt is their sum. With no instance, the bare cascade's skirt.
+    ScatteredCascade bare(0);
+    ScatteredCascade rocks(50);
+    for (int l = 0; l < 15; l++) {
+        const double cell_m = double(bare.param.voxel_size) * std::ldexp(1.0, l);
+        CAPTURE(l);
+        CHECK(double(rocks.sdf.skirt_depth_m(l)) == doctest::Approx(double(bare.sdf.skirt_depth_m(l)) + Archetype::ERODE_CELLS * cell_m).epsilon(1e-6));
+    }
+    SDFCascade unbanded;
+    unbanded.set_scatter(50, 200.0);
+    unbanded.set_instance_band(false);
+    unbanded.configure(bare.param, 15);
+    CHECK(unbanded.skirt_depth_m(7) == bare.sdf.skirt_depth_m(7)); // no band rule, no erosion
+}
+
 TEST_CASE("SDFCascade table: runtime edits on the cascade") {
     ScatteredCascade t(0);
     const int64_t x = 1000, z = -3000;
