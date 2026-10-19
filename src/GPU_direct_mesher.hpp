@@ -213,6 +213,11 @@ private:
     void _rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts);
     void _rt_read_timestamps();
     void _rt_destroy();
+    // Async readback callbacks are not skipped when their object is freed (CLAUDE.md, Gotchas): _rt_destroy
+    // frees the GPU resources, then the object deletes itself once the last readback has landed.
+    void _rt_readback_done();
+    int rt_readbacks_in_flight = 0;
+    bool rt_destroying = false;
 
     // completion assembly (render thread writes, main thread consumes; under mutex)
     HashMap<uint32_t, CompletedBatch> partial;

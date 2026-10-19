@@ -490,4 +490,40 @@ Bounds record_world_bounds(const TableDef &p_def, const TableRecord &p_record) {
     return world_bounds(lo, hi, lipschitz, p_def.bounded, p_record.anchor, p_record.rotation);
 }
 
+String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent) {
+    for (int a = 0; a < 3; a++) {
+        if (p_record.anchor[a] > WorldCoord::MAX_ABS_ORIGIN_VOXEL || p_record.anchor[a] < -WorldCoord::MAX_ABS_ORIGIN_VOXEL) {
+            return "the anchor is beyond +-2^60 voxels.";
+        }
+    }
+    const double smooth = 2.0 * double(p_record.k);
+    if (!p_def.bounded) {
+        return smooth <= double(p_max_extent) ? String() : vformat("twice k is more than the %d voxels the table takes.", p_max_extent);
+    }
+    Float3 lo{}, hi{};
+    float lipschitz = 1.0f;
+    p_def.bounds(p_record.params, lo, hi, lipschitz);
+    // The influence margin grows by 2 L voxels per voxel of the LOD (finish_record's margin_c): a steep field
+    // would grow the box like a huge one.
+    if (!(lipschitz >= 0.0f && lipschitz <= MAX_RECORD_LIPSCHITZ)) {
+        return vformat("the type's Lipschitz bound %f for these params is outside [0, %f].", lipschitz, MAX_RECORD_LIPSCHITZ);
+    }
+    for (const float *v : { &lo.x, &lo.y, &lo.z, &hi.x, &hi.y, &hi.z }) {
+        if (!std::isfinite(*v)) {
+            return "the type's box is not finite for these params.";
+        }
+    }
+    // Any rotation keeps the box inside the sphere through its farthest corner.
+    double reach2 = 0.0;
+    const float far[3] = { MAX(std::fabs(lo.x), std::fabs(hi.x)), MAX(std::fabs(lo.y), std::fabs(hi.y)), MAX(std::fabs(lo.z), std::fabs(hi.z)) };
+    for (float f : far) {
+        reach2 += double(f) * double(f);
+    }
+    const double extent = 2.0 * (std::sqrt(reach2) + rotation_margin(lo, hi)) + smooth;
+    if (!(extent <= double(p_max_extent))) {
+        return vformat("the instance spans %.0f voxels (its box plus twice k), more than the %d the table takes.", extent, p_max_extent);
+    }
+    return String();
+}
+
 } // namespace Archetype

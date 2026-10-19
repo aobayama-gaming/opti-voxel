@@ -19,8 +19,8 @@ iterate past a warning, never to commit one.
   tools/setup_hooks.sh                                      # once per clone: format check on commit
   ```
   Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
-  ends with a segfault in the extension (headless editor exit, pre-existing). It's harmless as
-  long as `project/.godot/extension_list.cfg` exists afterwards.
+  opens the main scene headless: the terrain finds no RenderingDevice, prints one ERROR and stays
+  empty (it used to segfault in `QuadPagePool::_rt_create_page`; CI now fails on a crashing import).
 - When a feature is done and its checks pass, commit, push and open the PR into `dev` without waiting
   to be asked. Don't merge it: the user reviews and merges.
 - Perf PRs carry a measured before/after table and name the new bottlenecks.
@@ -236,6 +236,8 @@ to every change, and a reviewer may reject a PR on any of them.
   **Runtime edits:** `VoxelTerrain.add_instance(type, x, y, z, rotation, params, op, k)` /
   `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (anchors are int64 LOD0 voxels, never
   through `Vector3i`); the op must be 0-3, k >= 0, params finite and normal, the rotation orthonormal,
+  the anchor within +-2^60 voxels and the box (any rotation) plus 2 k at most
+  `SDFArchetype::max_instance_extent()` (4 top-LOD chunk spans, at most 2^29: `Archetype::record_fit_error`),
   else the edit is refused (ERR, -1 / false). Each edit makes a new snapshot (the base kept, the overlay
   rebuilt) and bumps its version. **The snapshot is read from other threads** (the discoverer's `evaluate` / `cull_exempt`):
   it is published with `std::atomic_store` and every reader takes one `current()` copy (a plain
@@ -465,5 +467,5 @@ to every change, and a reviewer may reject a PR on any of them.
 - Async readback callbacks (`texture_get_data_async`, `buffer_get_data_async`) are NOT skipped when
   their object is freed: they arrive frames later and run on freed memory (segfault in
   `MeshValidator::_rt_on_page` when quitting mid-validation). An object with readbacks in flight
-  counts them and deletes itself when the last one lands (`MeshValidator` / `PageAuditor::destroy`).
-  `GPUDirectMesher::_rt_destroy` does not do this yet.
+  counts them and deletes itself when the last one lands (`MeshValidator` / `PageAuditor::destroy`,
+  `GPUDirectMesher::_rt_destroy`, which frees its RIDs at once and only defers the delete).
