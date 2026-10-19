@@ -1,5 +1,6 @@
 #pragma once
 
+#include "archetype_instance.hpp"
 #include "cascade.hpp"
 #include "cascade_terrain.hpp"
 #include "exact_noise.hpp"
@@ -92,6 +93,22 @@ public:
             const double full_m = double(p_param.skirt_depth) * vs * std::ldexp(1.0, l);
             skirt_depth_table[l] = float(MIN(2.0 * amp * vs, full_m));
         }
+    }
+
+    // Occluders: (dy - h) / |t| has no analytic bound (h is a 3D field), OCCLUDER_LIPSCHITZ is the sampled one
+    // (test_occlusion_bound.cpp). The deviation: the bands LOD p_lod + 1 does not insert, each moving h by up to
+    // amp * PERLIN3_MAX.
+    static constexpr float OCCLUDER_LIPSCHITZ = 2.0f;
+    OccluderBound occluder_bound(const ChunkId &p_node, int p_lod) const override {
+        (void)p_node;
+        if (p_lod < 0) {
+            return OccluderBound();
+        }
+        double dropped = 0.0;
+        for (const Cascade::Band &b : spec.bands) {
+            dropped += spec.insert_level(b) < p_lod + 1 ? double(b.amp) * Archetype::PERLIN3_MAX : 0.0;
+        }
+        return OccluderBound{ OCCLUDER_LIPSCHITZ, float(dropped * voxel_size) };
     }
 
     const Cascade::Spec *get_cascade() const override { return &spec; }

@@ -1,5 +1,7 @@
 #include "chunk_discoverer.hpp"
 
+#include "instance_table.hpp"
+
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/time.hpp>
@@ -13,7 +15,7 @@
 using namespace godot;
 
 void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod,
-        std::vector<uint8_t> &r_outside, WaveStats &r_wave, DiscovererGPU *p_gpu) const {
+        std::vector<uint8_t> &r_outside, std::vector<float> &r_corners, WaveStats &r_wave, DiscovererGPU *p_gpu) const {
     // The 8 corners of each node (centre +- half its size, points of Λ_lod), shared by up to 8 nodes:
     // deduplicated on their voxel, then evaluated in one batch.
     const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();
@@ -55,6 +57,10 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     // near corner, so the same verdict.
     const float chunk_outer_radius = ChunkMath::world_chunk_size(p_wave[p_nodes[0]], chunk_param) * 2;
     r_outside.assign(p_nodes.size(), 1);
+    r_corners.resize(p_nodes.size() * 8);
+    for (size_t n = 0; n < p_nodes.size() * 8; n++) {
+        r_corners[n] = values[corner_point[n]];
+    }
     for (size_t n = 0; n < p_nodes.size(); n++) {
         for (int corner = 0; corner < 8; ++corner) {
             if (std::abs(values[corner_point[n * 8 + corner]]) <= chunk_outer_radius) {
@@ -72,11 +78,12 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
 }
 
 void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside,
-        ScanCounters &r_counters, CullCache *p_cache, DiscovererGPU *p_gpu) const {
+        std::vector<float> &r_corners, ScanCounters &r_counters, CullCache *p_cache, DiscovererGPU *p_gpu) const {
     WaveStats wave;
     wave.lod = p_lod;
     wave.nodes = int64_t(p_wave.size());
     r_outside.assign(p_wave.size(), 0);
+    r_corners.assign(p_wave.size() * 8, 0.0f);
 
     // Cached verdicts first; the other nodes (and every hit with verify) get a fresh one.
     std::vector<uint32_t> fresh;
@@ -88,6 +95,7 @@ void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, 
             entry->last_scan = p_cache->scan_index;
             cached[i] = 1;
             r_outside[i] = entry->outside;
+            std::copy(entry->corners, entry->corners + 8, r_corners.begin() + i * 8);
             if (!p_cache->verify) {
                 continue;
             }
@@ -97,8 +105,9 @@ void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, 
 
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<uint8_t> verdict(fresh.size(), 0);
+    std::vector<float> fresh_corners(fresh.size() * 8, 0.0f);
     if (p_mode != CULL_NONE && !fresh.empty()) {
-        _corner_verdicts(p_wave, fresh, p_lod, verdict, wave, p_gpu);
+        _corner_verdicts(p_wave, fresh, p_lod, verdict, fresh_corners, wave, p_gpu);
     }
     r_counters.cull_nsec += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     r_counters.sdf_calls += wave.unique_corners;
@@ -111,10 +120,12 @@ void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, 
             continue;
         }
         r_outside[i] = verdict[f];
+        std::copy(fresh_corners.begin() + f * 8, fresh_corners.begin() + f * 8 + 8, r_corners.begin() + i * 8);
         if (p_cache) {
             CullCache::Entry e;
             e.outside = verdict[f];
             e.last_scan = p_cache->scan_index;
+            std::copy(fresh_corners.begin() + f * 8, fresh_corners.begin() + f * 8 + 8, e.corners);
             p_cache->entries.insert(p_wave[i], e);
         }
     }
@@ -153,6 +164,7 @@ void ChunkDiscoverer::discovery_loop() {
     ScanView last_scanned_view;
     // The previous scan, kept up to date by applying each delta (the published set leaves without a copy).
     LODHashSet previous_scan;
+    LODHashSet previous_hidden; // its hidden chunks (revealed_total)
 
     // The GPU discoverer's local device lives on this thread only. Creating it (device + the point
     // shader's compile) delays the first scan: gpu_init_ms.
@@ -234,7 +246,7 @@ void ChunkDiscoverer::discovery_loop() {
         std::unique_ptr<LODHashSet> new_scanned_chunk = std::make_unique<LODHashSet>();
         ScanCounters counters;
         cache.scan_index++;
-        scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
+        scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu, occlusion.get());
         const int64_t evicted = _evict_cache(counters.nodes_visited);
         if (counters.verify_mismatches > 0) {
             ERR_PRINT(String("ChunkDiscoverer: ") + String::num_int64(counters.verify_mismatches) +
@@ -250,15 +262,34 @@ void ChunkDiscoverer::discovery_loop() {
         ScanDelta::between(previous_scan, *new_scanned_chunk, *delta);
         delta->apply(previous_scan);
         const uint64_t t_delta = now_usec();
+        std::unique_ptr<LODHashSet> hidden = std::make_unique<LODHashSet>();
+        int64_t revealed = 0;
+        if (occlusion) {
+            for (const ChunkId &id : previous_hidden) {
+                revealed += new_scanned_chunk->has(id) && !occlusion->hidden.has(id) ? 1 : 0;
+            }
+            previous_hidden = occlusion->hidden;
+            *hidden = occlusion->hidden;
+        }
         mutex->lock();
         stats.delta.add(t_delta - t_compared);
         stats.last_delta_entered = delta->entered.size();
         stats.last_delta_left = delta->left.size();
         stats.delta_entered_total += delta->entered.size();
         stats.delta_left_total += delta->left.size();
+        if (occlusion) {
+            stats.occlusion.add(occlusion->usec);
+            stats.occlusion_raster.add(occlusion->raster_usec);
+            stats.occlusion_test.add(occlusion->test_usec);
+            stats.last_hidden = occlusion->hidden.size();
+            stats.last_balls = occlusion->balls;
+            stats.last_balls_written = occlusion->balls_written;
+            stats.revealed_total += revealed;
+            stats.hidden_total += occlusion->hidden.size();
+        }
         mutex->unlock();
 
-        _publish(std::move(new_scanned_chunk), std::move(delta), actual_view, counters, evicted, t_scan_end - t_scan_start, t_delta);
+        _publish(std::move(new_scanned_chunk), std::move(delta), std::move(hidden), actual_view, counters, evicted, t_scan_end - t_scan_start, t_delta);
     }
 
     if (gpu) {
@@ -286,11 +317,12 @@ int64_t ChunkDiscoverer::_evict_cache(int64_t p_nodes_visited) {
     return (int64_t)stale.size();
 }
 
-void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ScanView &p_view,
-        const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec, uint64_t p_ready_usec) {
+void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, std::unique_ptr<LODHashSet> p_hidden,
+        const ScanView &p_view, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec, uint64_t p_ready_usec) {
     mutex->lock();
     const int64_t size = p_scan->size();
     scanned_chunks = std::move(p_scan);
+    scanned_hidden = std::move(p_hidden); // only the latest one matters
     // The main thread hasn't taken the previous scan: its delta still leads from the last scan taken.
     if (scanned_chunks_dirty) {
         scanned_delta->merge(*p_delta);
@@ -327,8 +359,90 @@ void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_p
     mutex->unlock();
 }
 
+void ChunkDiscoverer::_add_occluders(const ChunkId &p_node, int p_lod, const float *p_corners, double p_margin_m,
+        HashMap<VoxelPos, float, Vector3i64Hasher> &r_balls) const {
+    bool negative = false;
+    for (int corner = 0; corner < 8; ++corner) {
+        negative = negative || p_corners[corner] < 0.0f;
+    }
+    if (!negative) {
+        return;
+    }
+    const SDFBase::OccluderBound bound = sdf->occluder_bound(p_node, p_lod);
+    if (!(bound.lipschitz > 0.0f)) {
+        return;
+    }
+    // (-v - deviation) / lipschitz, less one cell of LOD p_lod + 1 (the mesh within a cell of the field) and the
+    // margin, at most MAX_OCCLUDER_SPANS node spans (the reach of the bound).
+    const double voxel = chunk_param.voxel_size;
+    const double span_m = double(chunk_param.chunk_voxel_dimension()) * std::ldexp(voxel, p_lod);
+    const double cell_diag_m = std::sqrt(3.0) * std::ldexp(voxel, p_lod + 1);
+    const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();
+    const VoxelPos center = ChunkMath::chunk_center_voxel(p_node, chunk_param);
+    for (int corner = 0; corner < 8; ++corner) {
+        const double v = p_corners[corner];
+        if (!(v < 0.0)) {
+            continue;
+        }
+        const double radius_m = MIN((-v - bound.deviation_m) / bound.lipschitz - cell_diag_m, SDFBase::MAX_OCCLUDER_SPANS * span_m) - p_margin_m;
+        if (radius_m <= 0.0) {
+            continue;
+        }
+        const VoxelPos p = center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);
+        const float radius = float(radius_m / voxel);
+        float *known = r_balls.getptr(p);
+        if (!known) {
+            r_balls.insert(p, radius);
+        } else if (*known < radius) {
+            *known = radius;
+        }
+    }
+}
+
+void ChunkDiscoverer::_find_hidden(const ScanView &p_view, const LODHashSet &p_chunks, const HashMap<VoxelPos, float, Vector3i64Hasher> &p_balls,
+        Occlusion &r_occlusion) const {
+    // Positions relative to the eye, the camera chunk's centre, in LOD0 voxels (int64 differences, exact).
+    const VoxelPos eye = ChunkMath::chunk_center_voxel(p_view.camera_chunk, chunk_param);
+    auto rel = [&eye](const VoxelPos &p_v) {
+        return OcclusionMap::Vec3{ double(p_v.x - eye.x), double(p_v.y - eye.y), double(p_v.z - eye.z) };
+    };
+    // Front to back: the nearest balls fill the map's tiles first, most of the others skip them.
+    const uint64_t t0 = now_usec();
+    struct Ball {
+        double distance;
+        OcclusionMap::Vec3 centre;
+        float radius;
+    };
+    std::vector<Ball> sorted;
+    sorted.reserve(p_balls.size());
+    for (const KeyValue<VoxelPos, float> &kv : p_balls) {
+        const OcclusionMap::Vec3 c = rel(kv.key);
+        sorted.push_back({ c.x * c.x + c.y * c.y + c.z * c.z, c, kv.value });
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const Ball &a, const Ball &b) { return a.distance < b.distance; });
+    r_occlusion.map.clear();
+    for (const Ball &b : sorted) {
+        r_occlusion.map.add_ball(b.centre, b.radius);
+    }
+    r_occlusion.balls = p_balls.size();
+    r_occlusion.balls_written = r_occlusion.map.get_stats().balls_written;
+    const uint64_t t1 = now_usec();
+    r_occlusion.raster_usec = t1 - t0;
+    r_occlusion.hidden.clear();
+    r_occlusion.hidden.max_lod = p_chunks.max_lod;
+    for (const ChunkId &id : p_chunks) {
+        // The box of the chunk's vertex grid (its quads stay in it, skirts included).
+        VoxelPos lo, hi;
+        Archetype::chunk_sample_box(id, chunk_param, lo, hi);
+        if (r_occlusion.map.box_hidden(rel(lo), rel(hi))) {
+            r_occlusion.hidden.insert(id);
+        }
+    }
+    r_occlusion.test_usec = now_usec() - t1;
+}
+
 void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
-        CullCache *p_cache, DiscovererGPU *p_gpu) const {
+        CullCache *p_cache, DiscovererGPU *p_gpu, Occlusion *r_occlusion) const {
     const int max_lod = get_max_lod();
     int64_t max_lod_radius;
     int64_t max_lod_number;
@@ -353,17 +467,28 @@ void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &
 
     std::vector<ChunkId> next;
     std::vector<uint8_t> outside;
+    std::vector<float> corners;
+    // Occluders: the corners of the culled nodes and of the scanned chunks (a split node's are its children's).
+    const bool occlude = r_occlusion && p_mode != CULL_NONE;
+    HashMap<VoxelPos, float, Vector3i64Hasher> balls;
+    uint64_t occlusion_usec = 0;
     for (int lod = max_lod; !wave.empty(); lod--) {
-        _cull_wave(wave, lod, p_mode, outside, r_counters, p_cache, p_gpu);
+        _cull_wave(wave, lod, p_mode, outside, corners, r_counters, p_cache, p_gpu);
         next.clear();
         for (size_t i = 0; i < wave.size(); i++) {
             const ChunkId &node = wave[i];
             r_counters.nodes_visited++;
+            const bool leaf = !outside[i] && (lod == 0 || !_should_split(p_view, node, lod));
+            if (occlude && (outside[i] || leaf)) {
+                const uint64_t t0 = now_usec();
+                _add_occluders(node, lod, corners.data() + i * 8, r_occlusion->margin_m, balls);
+                occlusion_usec += now_usec() - t0;
+            }
             if (outside[i]) {
                 r_counters.culled++;
                 continue;
             }
-            if (lod == 0 || !_should_split(p_view, node, lod)) {
+            if (leaf) {
                 r_chunks.insert(node);
                 r_counters.out_of_view += ChunkMath::view_cone_gap(node, lod, p_view) > 0.0 ? 1 : 0;
                 continue;
@@ -374,6 +499,11 @@ void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &
             }
         }
         wave.swap(next);
+    }
+    if (occlude) {
+        const uint64_t t0 = now_usec();
+        _find_hidden(p_view, r_chunks, balls, *r_occlusion);
+        r_occlusion->usec = occlusion_usec + now_usec() - t0;
     }
 }
 
@@ -394,7 +524,8 @@ void ChunkDiscoverer::set_config(
     chunk_param = p_chunk_param;
 }
 
-bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ScanView &r_view) {
+bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ScanView &r_view,
+        std::unique_ptr<LODHashSet> &r_hidden) {
     mutex->lock();
 
     bool dirty = scanned_chunks_dirty;
@@ -402,6 +533,7 @@ bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_
     if (dirty) {
         r_scanned_chunks = std::move(scanned_chunks);
         r_delta = std::move(scanned_delta);
+        r_hidden = std::move(scanned_hidden);
         r_view = scanned_view;
         scanned_chunks_dirty = false;
     }
@@ -580,6 +712,16 @@ void ChunkDiscoverer::set_camera(const Vector3 &p_pos, const Vector3 &p_forward)
     mutex->unlock();
 }
 
+void ChunkDiscoverer::set_occlusion(bool p_enable, double p_margin_m) {
+    if (!p_enable) {
+        occlusion.reset();
+        return;
+    }
+    occlusion = std::make_unique<Occlusion>();
+    // The eye is the camera chunk's centre: the camera is within half a LOD0 chunk's diagonal of it.
+    occlusion->margin_m = MAX(p_margin_m, 0.0) + std::sqrt(3.0) * 0.5 * chunk_param.chunk_world_dimension();
+}
+
 void ChunkDiscoverer::set_view_memory(double p_metres) {
     ERR_FAIL_COND_MSG(lod_distances.size() < 2, "ChunkDiscoverer::set_view_memory: call setup_lod first.");
     if (p_metres < 0.0) {
@@ -693,6 +835,19 @@ Dictionary ChunkDiscoverer::get_stats() {
     d["compare_cpu"] = stats.compare_cpu.to_dict();
     d["first_scan"] = stats.first_scan.duplicate(true);
     d["last_scan"] = stats.last_scan.duplicate(true);
+    if (occlusion) {
+        Dictionary o;
+        o["margin_m"] = occlusion->margin_m;
+        o["time"] = stats.occlusion.to_dict();
+        o["raster"] = stats.occlusion_raster.to_dict();
+        o["test"] = stats.occlusion_test.to_dict();
+        o["last_hidden"] = stats.last_hidden;
+        o["last_balls"] = stats.last_balls;
+        o["last_balls_written"] = stats.last_balls_written;
+        o["revealed_total"] = stats.revealed_total;
+        o["hidden_total"] = stats.hidden_total;
+        d["occlusion"] = o;
+    }
     mutex->unlock();
     return d;
 }

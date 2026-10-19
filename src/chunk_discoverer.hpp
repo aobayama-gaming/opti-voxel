@@ -4,6 +4,7 @@
 #include "debug_log.hpp"
 #include "discoverer_gpu.hpp"
 #include "lod_structures.hpp"
+#include "occlusion_map.hpp"
 #include "sdf_base.hpp"
 #include <godot_cpp/classes/mutex.hpp>
 #include <godot_cpp/classes/node.hpp>
@@ -56,10 +57,27 @@ public:
         struct Entry {
             bool outside = false;
             uint32_t last_scan = 0;
+            float corners[8] = {}; // the SDF at the 8 corners (the occluders)
         };
         HashMap<ChunkId, Entry, Vector3i64Hasher> entries;
         uint32_t scan_index = 0;
         bool verify = false; // recompute the verdict on every hit and count mismatches
+    };
+
+    // Occlusion at discovery: the scanned chunks no ray from the eye (the camera chunk's centre) can reach. The
+    // corners of the culled nodes and of the scanned chunks that the SDF proves solid (SDFBase::occluder_bound,
+    // every split node's corners are among its children's) are balls of an OcclusionMap, shrunk by the margin:
+    // a hidden chunk is hidden from every eye within it of the camera chunk's centre. The caller owns it (the
+    // map is reused across scans).
+    struct Occlusion {
+        double margin_m = 4.0; // occlusion_margin_m plus half a LOD0 chunk's diagonal (the camera in its chunk)
+        OcclusionMap map;
+        LODHashSet hidden;
+        int64_t balls = 0; // distinct corners that gave a ball
+        int64_t balls_written = 0; // balls that blocked at least one pixel
+        uint64_t usec = 0; // balls, map and tests (also inside the scan's time)
+        uint64_t raster_usec = 0; // of which the map
+        uint64_t test_usec = 0; // and the chunks' tests
     };
 
 private:
@@ -80,6 +98,7 @@ private:
     CullCache cache;
     bool want_gpu = false; // discoverer_mode 1: corners on DiscovererGPU
     bool compare = false; // --discovery_compare: diff every scan against a fresh CPU scan
+    std::unique_ptr<Occlusion> occlusion; // set_occlusion: the worker's (null: off)
     // Owned by the worker thread: created at the top of discovery_loop, freed before it returns.
     DiscovererGPU *gpu = nullptr;
 
@@ -92,6 +111,7 @@ private:
     uint64_t camera_change_usec = 0; // when set_camera last changed the view
     std::unique_ptr<LODHashSet> scanned_chunks; // published scan, handed over without a copy
     std::unique_ptr<ScanDelta> scanned_delta; // last taken scan -> published scan
+    std::unique_ptr<LODHashSet> scanned_hidden; // the published scan's hidden chunks
     ScanView scanned_view; // the view the published scan was made for
     bool scanned_chunks_dirty = false;
     struct Stats {
@@ -129,17 +149,34 @@ private:
         int64_t compare_scans = 0;
         int64_t compare_differences = 0;
         TimingStat compare_cpu; // the fresh CPU scans of --discovery_compare (in latency, not in scan or publish)
+        TimingStat occlusion; // Occlusion::usec (inside scan)
+        TimingStat occlusion_raster;
+        TimingStat occlusion_test;
+        int64_t last_hidden = 0;
+        int64_t last_balls = 0;
+        int64_t last_balls_written = 0;
+        // Chunks hidden in one scan and scanned visible in the next: what moving reveals (meshed late if hidden
+        // chunks are skipped).
+        int64_t revealed_total = 0;
+        int64_t hidden_total = 0; // hidden chunks summed over every scan
     } stats;
 
     SDFBase *sdf;
 
     // The cull verdicts of one wave (all nodes of LOD p_lod): cached ones from p_cache, the others from
-    // their corners, deduplicated and evaluated in one batch. r_outside[i]: node i holds no surface.
-    void _cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside, ScanCounters &r_counters,
-            CullCache *p_cache, DiscovererGPU *p_gpu) const;
-    // Fresh verdicts of nodes p_nodes (indices into p_wave, all of LOD p_lod).
+    // their corners, deduplicated and evaluated in one batch. r_outside[i]: node i holds no surface;
+    // r_corners[8 i + c]: the SDF at its corner c (0 for every corner in CULL_NONE).
+    void _cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside, std::vector<float> &r_corners,
+            ScanCounters &r_counters, CullCache *p_cache, DiscovererGPU *p_gpu) const;
+    // Fresh verdicts of nodes p_nodes (indices into p_wave, all of LOD p_lod), with their 8 corner values
+    // (r_corners[8 n + c] for p_nodes[n]).
     void _corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod, std::vector<uint8_t> &r_outside,
-            WaveStats &r_wave, DiscovererGPU *p_gpu) const;
+            std::vector<float> &r_corners, WaveStats &r_wave, DiscovererGPU *p_gpu) const;
+    // The occluder balls of a culled node or a scanned chunk: its corners the SDF proves solid, as LOD0 voxel ->
+    // radius (LOD0 voxels, the largest one per corner).
+    void _add_occluders(const ChunkId &p_node, int p_lod, const float *p_corners, double p_margin_m, HashMap<VoxelPos, float, Vector3i64Hasher> &r_balls) const;
+    // The hidden set of a scan from its occluder balls.
+    void _find_hidden(const ScanView &p_view, const LODHashSet &p_chunks, const HashMap<VoxelPos, float, Vector3i64Hasher> &p_balls, Occlusion &r_occlusion) const;
     // --discovery_compare: the CPU scan with a fresh cache, diffed with p_scanned; ERROR on a difference.
     void _compare_with_cpu(const ScanView &p_view, const LODHashSet &p_scanned);
     // A node is split when its bounding sphere comes closer to the camera than its LOD's distance, the
@@ -149,8 +186,8 @@ private:
     int64_t _evict_cache(int64_t p_nodes_visited);
     // Hands the scan over to the main thread (get_scanned_chunks) and records its stats. p_ready_usec: when
     // the scan (and its compare) finished.
-    void _publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ScanView &p_view, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec,
-            uint64_t p_ready_usec);
+    void _publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, std::unique_ptr<LODHashSet> p_hidden, const ScanView &p_view,
+            const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec, uint64_t p_ready_usec);
     static Dictionary _scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec);
 
 public:
@@ -189,9 +226,11 @@ public:
     // An instance edit changed the SDF in p_box: the next scan drops the cull verdicts of the nodes
     // near it and runs even if the camera chunk didn't change.
     void invalidate(const VoxelBox &p_box);
-    // Takes the latest scan if there is a new one; r_view is the view it was made for and r_delta the
-    // change from the scan taken before (from the empty set for the first one).
-    bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ScanView &r_view);
+    // Takes the latest scan if there is a new one; r_view is the view it was made for, r_delta the change
+    // from the scan taken before (from the empty set for the first one) and r_hidden its hidden chunks (empty
+    // without occlusion).
+    bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ScanView &r_view,
+            std::unique_ptr<LODHashSet> &r_hidden);
 
     // The full scan around `p_view`'s camera chunk. Const and thread safe: the discovery audit calls it from
     // the main thread to rebuild the published scan without culling.
@@ -200,8 +239,9 @@ public:
     // Breadth first, one wave per LOD from the top-LOD grid down: the wave's verdicts (_cull_wave), then
     // its surviving nodes are kept or split into the next wave by distance. The scanned set doesn't
     // depend on the visit order, so it is the one the old recursive walk gave (unit-tested).
+    // `r_occlusion` (optional, needs a cull mode: the corners are its occluders) gets the hidden chunks.
     void scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
-            CullCache *p_cache = nullptr, DiscovererGPU *p_gpu = nullptr) const;
+            CullCache *p_cache = nullptr, DiscovererGPU *p_gpu = nullptr, Occlusion *r_occlusion = nullptr) const;
     int get_max_lod() const { return lod_distances.size() - 2; }
     const PackedFloat32Array &get_lod_distances() const { return lod_distances; }
     // The scan grid (after setup_lod): top-LOD chunk centres step `r_step` ids, from -r_count to
@@ -223,6 +263,9 @@ public:
     // against a fresh CPU scan.
     void set_gpu(bool p_enable) { want_gpu = p_enable; }
     void set_compare(bool p_enable) { compare = p_enable; }
+    // Occlusion at discovery: every scan also finds its hidden chunks, hidden from any eye within p_margin_m of
+    // the camera (Occlusion).
+    void set_occlusion(bool p_enable, double p_margin_m);
 
     void discovery_loop();
 

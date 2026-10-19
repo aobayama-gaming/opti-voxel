@@ -135,6 +135,22 @@ public:
         return false;
     }
 
+    // Occluders (occlusion at discovery, OcclusionMap): what the corner values of node p_node (LOD p_lod) prove
+    // solid. Where evaluate() gives v < 0 at one of its corners, the field of every LOD up to p_lod + 1 (a chunk
+    // drawn there is at most one LOD coarser) is negative within (-v - deviation_m) / lipschitz metres, and no
+    // farther than MAX_OCCLUDER_SPANS of the node's span: the bound may depend on what lies near the node (its
+    // box grown by that much). lipschitz 0: no occluders from this node (or this terrain).
+    static constexpr int MAX_OCCLUDER_SPANS = 2;
+    struct OccluderBound {
+        float lipschitz = 0.0f;
+        float deviation_m = 0.0f; // how much less solid another LOD's field can be at the same point
+    };
+    virtual OccluderBound occluder_bound(const ChunkId &p_node, int p_lod) const {
+        (void)p_node;
+        (void)p_lod;
+        return OccluderBound();
+    }
+
     // Runtime instance edits (archetype instances). A terrain without an instance table rejects them.
     // rotation (9 floats, row major) and params (8 floats) may be null (identity / zero). p_op is a
     // Combine. Returns the new instance id (>= 0) or -1. When any edit succeeds, last_edit_box() holds

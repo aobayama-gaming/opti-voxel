@@ -77,6 +77,37 @@ public:
         return float(ground + Archetype::ERODE_CELLS);
     }
 
+    // Occluders. Away from every instance (the node's box grown by MAX_OCCLUDER_SPANS, near_instance) the field is
+    // the ground's, a first-order distance a / |grad a|: 1-Lipschitz at the surface only, the normalisation's
+    // gradient grows with the depth. GROUND_LIPSCHITZ is sampled (test_occlusion_bound.cpp: 1.0 fails, 1.25 holds),
+    // with a margin. Near union records, the larger of it and union_lipschitz; near a remover, none. The
+    // deviation: the ground octaves LOD p_lod + 1 drops (band_kept), each moving the ground by up to
+    // amp * PERLIN2_MAX, plus one erosion step (a coarser neighbour's instances are ERODE_CELLS cells of p_lod
+    // thinner). The shapes gallery carves its ground program with hard CSG: no occluders.
+    static constexpr float GROUND_LIPSCHITZ = 1.5f;
+    OccluderBound occluder_bound(const ChunkId &p_node, int p_lod) const override {
+        static_assert(MAX_OCCLUDER_SPANS == 2, "near_instance and the remover test grow the node box by 2 spans");
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
+        if (which != Scene::DEMO || !snap || p_lod < 0 || p_lod >= lod_count) {
+            return OccluderBound();
+        }
+        float lipschitz = GROUND_LIPSCHITZ;
+        if (snap->near_instance(p_node, p_lod)) {
+            const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
+            const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);
+            if (snap->near_remover(min - VoxelPos(2 * span, 2 * span, 2 * span), min + VoxelPos(3 * span, 3 * span, 3 * span), p_lod + 1)) {
+                return OccluderBound();
+            }
+            lipschitz = MAX(snap->union_lipschitz, GROUND_LIPSCHITZ);
+        }
+        double ground = 0.0;
+        for (const ExactNoise::Octave &o : height_fbm(param.voxel_size).octaves) {
+            ground += ExactNoise::band_kept(o.k, p_lod + 1) ? 0.0 : double(o.amp) * Archetype::PERLIN2_MAX;
+        }
+        const double erosion = instance_band ? double(Archetype::ERODE_CELLS) * std::ldexp(1.0, p_lod) : 0.0;
+        return OccluderBound{ lipschitz, float((ground + erosion) * param.voxel_size) };
+    }
+
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         create_scene(p_param.voxel_size, p_lod_count);

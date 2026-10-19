@@ -1,4 +1,5 @@
 #include "voxel_terrain.hpp"
+#include "occlusion_auditor.hpp"
 #include "rd_utils.hpp"
 #include <cmath>
 #include <godot_cpp/classes/engine.hpp>
@@ -82,6 +83,11 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("debug_audit_pages"), &VoxelTerrain::debug_audit_pages);
     ClassDB::bind_method(D_METHOD("get_audit_report"), &VoxelTerrain::get_audit_report);
     ClassDB::bind_method(D_METHOD("debug_audit_discovery"), &VoxelTerrain::debug_audit_discovery);
+    ClassDB::bind_method(D_METHOD("debug_audit_occlusion", "count"), &VoxelTerrain::debug_audit_occlusion);
+    ClassDB::bind_method(D_METHOD("set_occlusion_mode", "mode"), &VoxelTerrain::set_occlusion_mode);
+    ClassDB::bind_method(D_METHOD("get_occlusion_mode"), &VoxelTerrain::get_occlusion_mode);
+    ClassDB::bind_method(D_METHOD("set_occlusion_margin_m", "metres"), &VoxelTerrain::set_occlusion_margin_m);
+    ClassDB::bind_method(D_METHOD("get_occlusion_margin_m"), &VoxelTerrain::get_occlusion_margin_m);
     ClassDB::bind_method(D_METHOD("get_discovery_audit_report"), &VoxelTerrain::get_discovery_audit_report);
     ClassDB::bind_method(D_METHOD("set_discovery_cull_mode", "mode"), &VoxelTerrain::set_discovery_cull_mode);
     ClassDB::bind_method(D_METHOD("get_discovery_cull_mode"), &VoxelTerrain::get_discovery_cull_mode);
@@ -120,6 +126,8 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discoverer_mode", PROPERTY_HINT_ENUM, "Auto:-1,CPU:0,GPU:1"), "set_discoverer_mode", "get_discoverer_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "occlusion_mode", PROPERTY_HINT_ENUM, "Off:0,Dry run:1"), "set_occlusion_mode", "get_occlusion_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occlusion_margin_m", PROPERTY_HINT_RANGE, "0,100,0.5,or_greater,suffix:m"), "set_occlusion_margin_m", "get_occlusion_margin_m");
     ADD_GROUP("World Origin", "world_origin_");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_x", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_x", "get_world_origin_x");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_y", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_y", "get_world_origin_y");
@@ -203,6 +211,26 @@ void VoxelTerrain::set_discovery_cache(bool p_enable) {
 
 bool VoxelTerrain::get_discovery_cache() const {
     return discovery_cache;
+}
+
+void VoxelTerrain::set_occlusion_mode(int p_mode) {
+    ERR_FAIL_COND_MSG(started, "occlusion_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_mode < 0 || p_mode > 1, "occlusion_mode must be 0 (off) or 1 (dry run).");
+    occlusion_mode = p_mode;
+}
+
+int VoxelTerrain::get_occlusion_mode() const {
+    return occlusion_mode;
+}
+
+void VoxelTerrain::set_occlusion_margin_m(float p_metres) {
+    ERR_FAIL_COND_MSG(started, "occlusion_margin_m must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(!(p_metres >= 0.0f), "occlusion_margin_m must be >= 0.");
+    occlusion_margin_m = p_metres;
+}
+
+float VoxelTerrain::get_occlusion_margin_m() const {
+    return occlusion_margin_m;
 }
 
 void VoxelTerrain::set_discovery_verify(bool p_enable) {
@@ -626,6 +654,7 @@ void VoxelTerrain::_ready() {
     chunk_discoverer->set_cache(discovery_cache, discovery_verify);
     chunk_discoverer->set_gpu(discoverer_mode == 1 || (discoverer_mode == -1 && sdf->get_cascade() != nullptr));
     chunk_discoverer->set_compare(discovery_compare);
+    chunk_discoverer->set_occlusion(occlusion_mode != 0, occlusion_margin_m);
 
     // The pixel error is measured against the camera's real vertical FOV and viewport height.
     float viewport_height = 1080.0f;
@@ -795,7 +824,7 @@ void VoxelTerrain::_process(double) {
     std::unique_ptr<LODHashSet> new_scanned_chunk;
     std::unique_ptr<ScanDelta> scan_delta;
 
-    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_view);
+    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_view, hidden_chunks);
 
     if (dirty_scan) {
         scan_received = true;
@@ -1007,6 +1036,26 @@ bool VoxelTerrain::debug_audit_discovery() {
     return true;
 }
 
+Dictionary VoxelTerrain::debug_audit_occlusion(int p_count) {
+    ERR_FAIL_COND_V_MSG(!started || occlusion_mode == 0, Dictionary(), "debug_audit_occlusion needs occlusion_mode on and a started terrain.");
+    // The scan's eye (the camera chunk's centre), then the camera itself.
+    const VoxelPos eye_base = ChunkMath::chunk_center_voxel(scan_view.camera_chunk, chunk_param);
+    std::vector<Vector3> eyes = { Vector3() };
+    if (camera != nullptr) {
+        const VoxelPos origin = chunk_param.origin_voxel();
+        const Vector3 base_offset(real_t(origin.x - eye_base.x), real_t(origin.y - eye_base.y), real_t(origin.z - eye_base.z));
+        eyes.push_back(base_offset + camera->get_global_position() / chunk_param.voxel_size);
+    }
+    Dictionary report = OcclusionAuditor::audit(*sdf, chunk_param, *visual_mesh_data.scanned_chunk, *hidden_chunks, visual_mesh_data.loaded_chunk,
+            eye_base, eyes, p_count);
+    report["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
+    if (!bool(report["ok"])) {
+        ERR_PRINT(vformat("VoxelTerrain: occlusion audit: %d rays reached a hidden chunk (%d chunks), %d ran out of steps.", int64_t(report["misses"]),
+                int64_t(report["miss_chunks"]), int64_t(report["out_of_steps"])));
+    }
+    return report;
+}
+
 void VoxelTerrain::_poll_discovery_audit() {
     std::vector<std::pair<ChunkId, uint32_t>> counts;
     direct_mesher->take_audit_counts(counts);
@@ -1115,6 +1164,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     chunks["live_triangles"] = live_triangles;
     chunks["drawn_triangles"] = drawn_triangles;
     d["chunks"] = chunks;
+    if (occlusion_mode != 0) {
+        d["occlusion"] = OcclusionAuditor::hidden_stats(*hidden_chunks, visual_mesh_data.loaded_chunk);
+    }
 
     Dictionary process;
     process["total"] = process_stats.process_total.to_dict();

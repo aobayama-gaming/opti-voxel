@@ -11,7 +11,7 @@
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log,
-# 4 a requested --validate / --audit / --discovery_audit reported ok=false, or a loaded run did not
+# 4 a requested --validate / --audit / --discovery_audit / --occlusion_audit reported ok=false, or a loaded run did not
 # settle (loaded chunks != scanned chunks), or a --destroy_verify=1 run found a mismatch.
 set -uo pipefail
 
@@ -181,6 +181,21 @@ if da:
           f" max_lod_jump={da.get('max_lod_jump')} faces={da.get('lod_jump_faces')} misses_by_lod={da.get('misses_by_lod')} ({da.get('ms', 0):.0f} ms)")
     for e in (da.get("miss_examples") or [])[:5]:
         print(f"   miss {e}")
+oa = d.get("occlusion_audit") or {}
+if oa:
+    print(f">> OCCLUSION AUDIT ok={oa.get('ok')} misses={oa.get('misses')} ({oa.get('miss_chunks')} chunks) out_of_steps={oa.get('out_of_steps')}"
+          f" rays={oa.get('rays')} blocked={oa.get('blocked')} by_hidden={oa.get('blocked_by_hidden')} checked={oa.get('checked_chunks')}/{oa.get('hidden')} hidden"
+          f" steps_avg={oa.get('steps_avg', 0):.0f} ({oa.get('ms', 0):.0f} ms)")
+    for e in (oa.get("miss_examples") or [])[:5]:
+        print(f"   miss {e}")
+oc = d.get("final_terrain", {}).get("occlusion") or {}
+if oc:
+    oct = d.get("final_terrain", {}).get("discoverer", {}).get("occlusion", {})
+    bands = " ".join(f"{k}={b.get('hidden_quads', 0) / max(b.get('loaded_quads', 1), 1):.0%}" for k, b in (oc.get("bands") or {}).items())
+    print(f">> OCCLUSION hidden={oc.get('hidden')} hidden quads {oc.get('hidden_quads')}/{oc.get('loaded_quads')} ({oc.get('hidden_quad_share', 0):.0%}: {bands})"
+          f" revealed_total={oct.get('revealed_total')} balls={oct.get('last_balls')} written={oct.get('last_balls_written')}"
+          f" time avg={oct.get('time', {}).get('avg_ms', 0):.1f}ms max={oct.get('time', {}).get('max_ms', 0):.1f}ms"
+          f" (raster {oct.get('raster', {}).get('avg_ms', 0):.1f} test {oct.get('test', {}).get('avg_ms', 0):.1f})")
 ch = d.get("final_terrain", {}).get("chunks", {})
 if d.get("final_terrain", {}).get("load_complete"):
     print(f">> SETTLE loaded_not_scanned={ch.get('loaded_not_scanned')} scanned_not_loaded={ch.get('scanned_not_loaded')}")
@@ -238,11 +253,12 @@ try:
 except Exception:
     print(1); sys.exit()
 v, a, da = d.get('validation') or {}, d.get('audit') or {}, d.get('discovery_audit') or {}
+oa = d.get('occlusion_audit') or {}
 ft = d.get('final_terrain', {})
 ch = ft.get('chunks', {})
 settled = not ft.get('load_complete') or (ch.get('loaded_not_scanned', 0) == 0 and ch.get('scanned_not_loaded', 0) == 0)
 dv = ft.get('destroy') or {}
 destroy_ok = not dv.get('verify') or (dv.get('verify_mismatches', 0) == 0 and dv.get('delta_mismatches', 0) == 0 and dv.get('octree_violations', 0) == 0)
-print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok'))) and (not da or bool(da.get('ok'))) and settled and destroy_ok))" "$RUN_DIR/stats.json")
-[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT/DISCOVERY/SETTLE/DESTROY CHECK FAILED"; exit 4; }
+print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok'))) and (not da or bool(da.get('ok'))) and (not oa or bool(oa.get('ok'))) and settled and destroy_ok))" "$RUN_DIR/stats.json")
+[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT/DISCOVERY/OCCLUSION/SETTLE/DESTROY CHECK FAILED"; exit 4; }
 exit 0

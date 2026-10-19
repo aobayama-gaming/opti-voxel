@@ -437,6 +437,49 @@ bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_l
     return false;
 }
 
+bool InstanceSnapshot::near_remover(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod) const {
+    for (const uint32_t id : removers) {
+        if (influence_meets(records[id], p_lod, p_lo, p_hi)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+namespace {
+
+bool is_union(const TableRecord &p_record) {
+    return p_record.op == Combine::UNION || p_record.op == Combine::SMOOTH_UNION;
+}
+
+// The occluder fields of r_snap after the records p_ids changed (all of them for a new base): union_lipschitz
+// only grows (a moved or removed record may leave it high: conservative), removers are re-filtered.
+void update_occluders(InstanceSnapshot &r_snap, const std::vector<uint32_t> &p_ids) {
+    std::vector<uint32_t> removers = r_snap.removers;
+    for (const uint32_t i : p_ids) {
+        const TableRecord &r = r_snap.records[i];
+        if (r.removed) {
+            continue;
+        }
+        if (is_union(r)) {
+            r_snap.union_lipschitz = MAX(r_snap.union_lipschitz, r.lipschitz);
+        } else {
+            removers.push_back(i);
+        }
+    }
+    std::sort(removers.begin(), removers.end());
+    removers.erase(std::unique(removers.begin(), removers.end()), removers.end());
+    r_snap.removers.clear();
+    for (const uint32_t i : removers) {
+        const TableRecord &r = r_snap.records[i];
+        if (!r.removed && !is_union(r)) {
+            r_snap.removers.push_back(i);
+        }
+    }
+}
+
+} // namespace
+
 bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
     const int lod = MIN(MAX(p_lod, 0), max_lod);
     const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
@@ -463,6 +506,7 @@ std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const Def
     }
     snap->base = build_layer(*p_library, snap->records, all, p_param, p_max_lod);
     snap->base_count = snap->records.size();
+    update_occluders(*snap, all);
     return snap;
 }
 
@@ -494,6 +538,9 @@ std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_
         }
     }
     snap->overlay = build_layer(*snap->library, snap->records, snap->overlay_ids, snap->param, snap->max_lod);
+    snap->union_lipschitz = p_previous.union_lipschitz;
+    snap->removers = p_previous.removers;
+    update_occluders(*snap, p_changed);
     return snap;
 }
 

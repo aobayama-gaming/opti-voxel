@@ -91,6 +91,13 @@ struct InstanceSnapshot {
     std::shared_ptr<const IndexLayer> overlay; // over overlay_ids, their current state
     std::vector<uint32_t> overlay_ids; // sorted: every record edited (added, moved, removed) since the base
     HashSet<uint32_t> masked; // the base ids among overlay_ids: their base entries are stale
+    // Occluders (SDFArchetype::occluder_bound). A union only adds solid, keeps the field's Lipschitz bound at the
+    // larger of the two, and folding it in or out (the locality rule) never changes a negative value: the largest
+    // bound of the union records, at least the ground's 1. The other records remove solid ("removers": subtract,
+    // intersect, blend): folded in or out, they move deep values by far more than the bound (and a blend has
+    // none), so no occluder comes from near them. Ids of the live ones, sorted.
+    float union_lipschitz = 1.0f;
+    std::vector<uint32_t> removers;
 
     static constexpr uint32_t REBASE = 2048;
 
@@ -102,6 +109,9 @@ struct InstanceSnapshot {
     // meet the node's box grown by 2 chunk spans of its LOD. Conservative to a node (an occupied neighbour
     // counts whole, a masked base entry still counts).
     bool near_instance(const ChunkId &p_node, int p_lod) const;
+    // Whether a remover's influence box at LOD p_lod meets [p_lo, p_hi] (LOD0 voxels, inclusive). A linear pass
+    // over the removers: scenes carve with a few of them.
+    bool near_remover(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod) const;
 
 private:
     // The instances whose influence box at p_lod meets [p_lo, p_hi] (LOD0 voxels, inclusive), gathered

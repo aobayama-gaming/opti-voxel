@@ -75,8 +75,13 @@ extends Node3D
 ##   --discovery_compare=1        discoverer: diff every scan against a fresh CPU scan, ERROR on a difference
 ##   --discovery_audit=1          direct: after steady, rebuild the scan without culling and count the
 ##                                quads of every culled chunk on the GPU (any quad = a miss = a hole)
+##   --occlusion=0|1              VoxelTerrain.occlusion_mode: 1 = dry run (hidden chunks found and reported,
+##                                still meshed); stats in final_terrain.occlusion and discoverer.occlusion
+##   --occlusion_margin=M         metres the camera may move from where a chunk was found hidden (default 4)
+##   --occlusion_audit=N          after steady, rays from the camera to N hidden chunks against the SDF (CPU):
+##                                a ray reaching one is a miss
 ##
-## Checks after steady run in this order: discovery_audit, audit, validate.
+## Checks after steady run in this order: discovery_audit, occlusion_audit, audit, validate.
 ##
 ## Render GPU/CPU time is only read during the "steady" phase: reading it forces a
 ## render-thread sync, which would distort the load/fly frame timings.
@@ -108,6 +113,7 @@ var timed_out := false
 var validation_report := {}
 var audit_report := {}
 var discovery_audit_report := {}
+var occlusion_audit_report := {}
 var checks := []  # remaining post-steady checks
 
 
@@ -210,6 +216,10 @@ func _ready() -> void:
 			return
 		terrain.discoverer_mode = discoverers[args["discoverer"]]
 	terrain.discovery_compare = args.get("discovery_compare", "0") == "1"
+	if args.has("occlusion"):
+		terrain.occlusion_mode = int(args["occlusion"])
+	if args.has("occlusion_margin"):
+		terrain.occlusion_margin_m = float(args["occlusion_margin"])
 	if args.has("origin"):
 		var o: PackedStringArray = args["origin"].split(",")
 		terrain.world_origin_x = o[0].to_int()
@@ -462,7 +472,7 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				for c in ["discovery_audit", "audit", "validate"]:
+				for c in ["discovery_audit", "occlusion_audit", "audit", "validate"]:
 					if args.has(c):
 						checks.append(c)
 				_next_check()
@@ -509,6 +519,10 @@ func _next_check() -> void:
 	match c:
 		"discovery_audit":
 			terrain.debug_audit_discovery()
+		"occlusion_audit":
+			occlusion_audit_report = terrain.debug_audit_occlusion(int(args["occlusion_audit"]))
+			print("BENCH: occlusion_audit ", JSON.stringify(occlusion_audit_report))
+			_next_check()
 		"audit":
 			terrain.debug_audit_pages()
 		"validate":
@@ -542,6 +556,7 @@ func _finish() -> void:
 		"validation": validation_report,
 		"audit": audit_report,
 		"discovery_audit": discovery_audit_report,
+		"occlusion_audit": occlusion_audit_report,
 		"final_terrain": final_terrain,
 		# Mode, first / last scan with their waves (GPU ms, corners, dedup, readback), compare counts.
 		"discoverer": final_terrain.get("discoverer", {}),

@@ -85,6 +85,10 @@ func _enter_tree() -> void:
 			terrain.lod_view_memory_m = a.trim_prefix("--lod_view_memory=").to_float()
 		if a.begins_with("--mesher_budget=") and terrain:
 			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
+		if a.begins_with("--occlusion=") and terrain:
+			terrain.occlusion_mode = a.trim_prefix("--occlusion=").to_int()
+		if a.begins_with("--occlusion_margin=") and terrain:
+			terrain.occlusion_margin_m = a.trim_prefix("--occlusion_margin=").to_float()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
 		if a.begins_with("--dig_radius="):

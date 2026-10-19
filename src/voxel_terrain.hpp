@@ -95,6 +95,10 @@ private:
     bool destroy_verify = false;
     int discoverer_mode = -1; // -1 auto: GPU for a cascade terrain, CPU otherwise
     bool discovery_compare = false;
+    int occlusion_mode = 0;
+    float occlusion_margin_m = 4.0f;
+    // The hidden chunks of the scan in visual_mesh_data.scanned_chunk (empty without occlusion).
+    std::unique_ptr<LODHashSet> hidden_chunks = std::make_unique<LODHashSet>();
 
     bool started = false;
 
@@ -290,6 +294,13 @@ public:
     // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).
     void set_discovery_compare(bool p_enable);
     bool get_discovery_compare() const;
+    // Occlusion at discovery (ChunkDiscoverer::Occlusion): 0 off, 1 dry run (each scan finds the chunks hidden
+    // behind the terrain from the camera, in every direction; the stats report them, everything is still meshed).
+    void set_occlusion_mode(int p_mode);
+    int get_occlusion_mode() const;
+    // How far the camera may be from where a scan saw a chunk hidden (metres): the occluders shrink by it.
+    void set_occlusion_margin_m(float p_metres);
+    float get_occlusion_margin_m() const;
 
     // GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);
@@ -328,6 +339,10 @@ public:
     // poll get_discovery_audit_report(). Run it with the camera still and the load complete.
     bool debug_audit_discovery();
     Dictionary get_discovery_audit_report() const;
+
+    // Occlusion: the oracle on up to `count` hidden chunks of the current scan (OcclusionAuditor::audit), rays
+    // from the scan's eye and from the camera. Synchronous (CPU, the worker pool). Run it with the camera still.
+    Dictionary debug_audit_occlusion(int p_count);
 
     VoxelTerrain() = default;
     ~VoxelTerrain() override;
