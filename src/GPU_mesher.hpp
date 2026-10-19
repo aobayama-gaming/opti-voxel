@@ -133,7 +133,10 @@ private:
     static constexpr uint32_t CASCADE_MAX_CHUNKS = 128;
     CascadePasses *cascade = nullptr;
 
+    // One set per ChunkMath::load_queue: in the view cone first, then by LOD.
     std::vector<LODHashSet *> chunk_queue;
+    ScanView load_view; // the view of the last send_chunk, for remesh_chunks
+    int lod_count = 0;
 
     LODHashSet working_generation;
 
@@ -162,7 +165,8 @@ public:
 
     void process_queue();
 
-    void send_chunk(const LODHashSet &p_chunks);
+    // The chunks to mesh (replacing the queue), loaded in the order of ChunkMath::load_queue for p_view.
+    void send_chunk(const LODHashSet &p_chunks, const ScanView &p_view);
     // Re-mesh chunks an instance edit changed (legacy path; the direct mesher has the versioned queue).
     void remesh_chunks(const std::vector<ChunkId> &p_chunks);
 

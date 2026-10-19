@@ -83,6 +83,8 @@ private:
     // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
     bool dual_contouring = false;
     float lod_pixel_error = 2.0f;
+    float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
+    float lod_view_margin_deg = 20.0f;
     VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
     GPUDirectMesher::Settings direct_settings;
     int debug_view = 0;
@@ -97,8 +99,8 @@ private:
 
     // update_destroy is needed (a scan or mesher results arrived since it last ran).
     bool destroy_dirty = false;
-    // Camera chunk of the scan currently in visual_mesh_data.scanned_chunk.
-    ChunkId scan_camera_chunk;
+    // View of the scan currently in visual_mesh_data.scanned_chunk.
+    ScanView scan_view;
 
     // Discovery audit (debug_audit_discovery): quad counts of every chunk the cull dropped.
     struct DiscoveryAudit {
@@ -119,6 +121,8 @@ private:
 
     // Re-mesh the loaded chunks an instance edit can change and invalidate the discoverer's cull cache.
     void _apply_instance_edit();
+    // The camera's view axis in render space.
+    Vector3 _camera_forward() const;
     struct EditStats {
         int64_t edits = 0;
         int64_t remesh_total = 0;
@@ -202,6 +206,15 @@ public:
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);
     float get_lod_pixel_error() const;
+    // The error away from the view: coarser LODs outside the view cone, from lod_pixel_error at its edge to
+    // this one behind the camera (0 or <= lod_pixel_error: off). Turning then rescans and re-meshes.
+    void set_lod_pixel_error_back(float p_error);
+    float get_lod_pixel_error_back() const;
+    // The view cone: the frustum's diagonal half-FOV plus this margin, in degrees. It keeps lod_pixel_error
+    // around the view while turning (a turn of ChunkDiscoverer::RESCAN_TURN_DEG rescans), and the meshers
+    // load the chunks inside it first.
+    void set_lod_view_margin_deg(float p_degrees);
+    float get_lod_view_margin_deg() const;
 
     static constexpr int MAX_LOD_NUMBERS = ChunkMath::MAX_LOD_NUMBERS;
     void set_lod_numbers(int p_count);

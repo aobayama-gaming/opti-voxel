@@ -4,6 +4,8 @@
 #include "chunk_output.hpp"
 #include "godot_cpp/templates/hash_set.hpp"
 
+#include <vector>
+
 using namespace godot;
 
 // Nearest strict ancestor of r_chunk that p_set holds, searching the LODs below p_max_lod (the LODs
@@ -91,3 +93,42 @@ struct ScanDelta {
         }
     }
 };
+
+// LOD of the chunk of p_scan holding the LOD0 chunk `p_point` (odd coordinates), or -1.
+inline int scanned_lod_at(const LODHashSet &p_scan, const ChunkId &p_point, int p_max_lod) {
+    for (int lod = 0; lod <= p_max_lod; lod++) {
+        const int64_t span = int64_t(2) << lod; // a LOD-lod chunk spans 2^(lod+1) units
+        auto centre = [span, lod](int64_t v) { return WorldCoord::floor_div(v, span) * span + (int64_t(1) << lod); };
+        if (p_scan.has(ChunkId(centre(p_point.x), centre(p_point.y), centre(p_point.z)))) {
+            return lod;
+        }
+    }
+    return -1;
+}
+
+// LOD differences across the chunk faces of a scan (the skirt hides a jump of 1): r_faces[j] = faces whose
+// two sides are j LODs apart. One probe per face, just past its minimum corner: the LOD0 chunk there, then
+// whichever chunk of p_scan holds it (none: the face isn't counted).
+inline void face_lod_jumps(const LODHashSet &p_scan, int p_max_lod, std::vector<int64_t> &r_faces) {
+    r_faces.clear();
+    for (const ChunkId &id : p_scan) {
+        const int lod = ChunkMath::get_lod(id);
+        const int64_t half = int64_t(1) << lod;
+        const ChunkId corner = id - ChunkId(half - 1, half - 1, half - 1); // LOD0 chunk in the min corner
+        for (int axis = 0; axis < 3; axis++) {
+            for (int side = -1; side <= 1; side += 2) {
+                ChunkId probe = corner;
+                probe[axis] = side < 0 ? id[axis] - half - 1 : id[axis] + half + 1;
+                const int other = scanned_lod_at(p_scan, probe, p_max_lod);
+                if (other < 0) {
+                    continue;
+                }
+                const size_t jump = size_t(ABS(other - lod));
+                if (r_faces.size() <= jump) {
+                    r_faces.resize(jump + 1, 0);
+                }
+                r_faces[jump]++;
+            }
+        }
+    }
+}

@@ -87,7 +87,7 @@ void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, 
     for (const Target &t : targets) {
         chunks.insert(t.chunk_id);
     }
-    legacy->send_chunk(chunks);
+    legacy->send_chunk(chunks, ScanView()); // no view: LOD order
 
     // Direct side: read back every page holding a target.
     HashSet<int> pages;

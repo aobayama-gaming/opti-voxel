@@ -354,6 +354,18 @@ to every change, and a reviewer may reject a PR on any of them.
   ms, corners, unique corners, dedup ratio, per wave GPU ms, batches, readback bytes). `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
   `--camera_voxel=X,Y,Z` makes the scene (camera, lights, cam_pos) relative to that absolute voxel
   instead of the world origin.
+- View-dependent LOD (`VoxelTerrain.lod_pixel_error_back` / `lod_view_margin_deg`, `--lod_error_back=F
+  --lod_view_margin=DEG` in bench.gd and the main scene; off by default): a scan carries a `ScanView` (camera
+  chunk, forward, the view cone = the frustum's diagonal half-FOV + margin, `back_scale` = back / front error - 1).
+  The split test compares `ChunkMath::lod_distance`: the distance plus back_scale times the bounding sphere's
+  gap to the cone (1-Lipschitz). In the cone it is the front rule bit for bit; far behind, the back error's.
+  Face neighbours stay within one LOD up to a ratio of 4 (unit-tested at 720p; 8 gave jumps of 2, so
+  `setup_lod` warns past 4). A turn past `ChunkDiscoverer::RESCAN_TURN_DEG` (8 degrees) rescans when back_scale > 0.
+  Both meshers' queues are indexed by `ChunkMath::load_queue`: in the cone first, then by LOD, Morton order
+  inside (batches stay compact for page culling). `--scenario=turn` (bench.gd) turns the camera 360 degrees after the load.
+  Cost: a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
+  back already leaves +64% draw calls): after one full turn at error 1 | 4, the steady state is +26% render GPU
+  vs error 1 without the split. A locality-aware compaction would close it.
 - Destroy check (`VoxelState`, `src/chunk_memory.*`) is incremental: the discoverer publishes each scan
   with its delta (`ScanDelta`: entered / left, merged across the scans the main thread skipped), and
   VoxelState keeps per event the dirty chunks' nearest loaded ancestors, the stall count per loaded chunk

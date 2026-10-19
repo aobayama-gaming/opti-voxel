@@ -114,3 +114,79 @@ TEST_CASE("ChunkMath: sample_pos gives the same WorldPos from every chunk reachi
     CHECK(half.voxel == VoxelPos(0, 0, 0));
     CHECK(half.frac.x == 0.5f);
 }
+
+TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the view cone") {
+    ScanView view;
+    view.camera_chunk = ChunkId(1, 1, 1);
+    view.forward = Vector3(0, 0, -1);
+    view.set_half_angle(Math_PI / 4.0);
+    const double r0 = ChunkMath::chunk_bounding_radius(0);
+    CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, -99), 0, view) == 0.0); // on the axis
+    CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, view) == doctest::Approx(100.0 - r0)); // behind: the apex
+    CHECK(ChunkMath::view_cone_gap(ChunkId(101, 1, 1), 0, view) == doctest::Approx(100.0 * std::sqrt(0.5) - r0)); // 45 degrees out
+    CHECK(ChunkMath::view_cone_gap(ChunkId(3, 1, 1), 0, view) == 0.0); // 45 degrees out, but the sphere reaches the cone
+    const ChunkId far_behind(8, 8, 1000);
+    CHECK(ChunkMath::view_cone_gap(far_behind, 3, view) ==
+            doctest::Approx(view.camera_chunk.distance_to(far_behind) - ChunkMath::chunk_bounding_radius(3)));
+
+    ScanView none = view;
+    none.forward = Vector3();
+    CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, none) == 0.0); // no direction: all in view
+
+    // Past 90 degrees (a wide margin): the axis is inside, only the back cone is out.
+    ScanView wide = view;
+    wide.set_half_angle(Math::deg_to_rad(120.0));
+    CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, -99), 0, wide) == 0.0);
+    CHECK(ChunkMath::view_cone_gap(ChunkId(101, 1, 1), 0, wide) == 0.0);
+    CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, wide) == doctest::Approx(100.0 * std::sin(Math::deg_to_rad(60.0)) - r0));
+    // The default half-angle (pi): every chunk is in the cone.
+    ScanView all = view;
+    all.cos_half_angle = ScanView().cos_half_angle;
+    all.sin_half_angle = ScanView().sin_half_angle;
+    for (const ChunkId &c : { ChunkId(1, 1, -99), ChunkId(101, 1, 1), ChunkId(1, 1, 101) }) {
+        CHECK(ChunkMath::view_cone_gap(c, 0, all) == 0.0);
+    }
+
+    // 1-Lipschitz in the centre: the LOD rule's balance relies on it.
+    view.forward = Vector3(0.3f, -0.5f, 0.8f).normalized();
+    uint64_t state = 12345;
+    auto next = [&state]() {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return int64_t(state >> 40) % 2001 - 1000;
+    };
+    for (int i = 0; i < 2000; i++) {
+        const ChunkId a(next() * 2 + 1, next() * 2 + 1, next() * 2 + 1);
+        const ChunkId b = a + ChunkId(next() % 16 * 2, next() % 16 * 2, next() % 16 * 2);
+        CAPTURE(a);
+        CAPTURE(b);
+        CHECK(std::abs(ChunkMath::view_cone_gap(a, 0, view) - ChunkMath::view_cone_gap(b, 0, view)) <= a.distance_to(b) + 1e-9);
+    }
+}
+
+TEST_CASE("ChunkMath: lod_distance grows away from the view cone, up to the back error") {
+    ScanView view;
+    view.camera_chunk = ChunkId(1, 1, 1);
+    view.forward = Vector3(0, 0, -1);
+    view.set_half_angle(Math_PI / 4.0);
+    const ChunkId ahead(4, 4, -500);
+    const ChunkId behind(4, 4, 500);
+    const float r2 = ChunkMath::chunk_bounding_radius(2);
+    // Off (back_scale 0): the plain distance, bit for bit what the discoverer compared before.
+    CHECK(ChunkMath::lod_distance(behind, 2, view) == view.camera_chunk.distance_to(behind) - r2);
+    view.back_scale = 3.0; // error 1 in the cone, 4 behind
+    CHECK(ChunkMath::lod_distance(ahead, 2, view) == view.camera_chunk.distance_to(ahead) - r2);
+    CHECK(ChunkMath::lod_distance(behind, 2, view) == doctest::Approx(4.0 * (view.camera_chunk.distance_to(behind) - r2)));
+}
+
+TEST_CASE("ChunkMath: load_queue puts the view cone first, then the finest LOD") {
+    ScanView view;
+    view.camera_chunk = ChunkId(1, 1, 1);
+    view.forward = Vector3(1, 0, 0);
+    view.set_half_angle(Math::deg_to_rad(60.0));
+    const int lods = 15;
+    CHECK(ChunkMath::load_queue(ChunkId(41, 1, 1), lods, view) == 0);
+    CHECK(ChunkMath::load_queue(ChunkId(1000, 8, 8), lods, view) == 3);
+    CHECK(ChunkMath::load_queue(ChunkId(-39, 1, 1), lods, view) == lods);
+    CHECK(ChunkMath::load_queue(ChunkId(-1000, 8, 8), lods, view) == lods + 3);
+    CHECK(ChunkMath::load_queue(ChunkId(-39, 1, 1), lods, ScanView()) == 0); // no view: LOD order
+}

@@ -102,7 +102,9 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
 
         LODHashSet got;
         ChunkDiscoverer::ScanCounters counters;
-        discoverer->scan(camera, ChunkDiscoverer::CULL_LEGACY, got, counters);
+        ScanView view;
+        view.camera_chunk = camera;
+        discoverer->scan(view, ChunkDiscoverer::CULL_LEGACY, got, counters);
         CHECK(want.size() > 0);
         CHECK(got.size() == want.size());
         CHECK(set_difference(got, want) == 0);
@@ -123,7 +125,7 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
             cache.scan_index++;
             LODHashSet cached;
             ChunkDiscoverer::ScanCounters c;
-            discoverer->scan(camera, ChunkDiscoverer::CULL_LEGACY, cached, c, &cache);
+            discoverer->scan(view, ChunkDiscoverer::CULL_LEGACY, cached, c, &cache);
             CHECK(set_difference(cached, want) == 0);
             CHECK(cached.size() == want.size());
             CHECK(c.verify_mismatches == 0);
@@ -149,4 +151,67 @@ TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCas
         SDFCascade sdf;
         compare_walks(sdf, lods);
     }
+}
+
+// lod_pixel_error_back: the chunks in the view cone are those of the front error alone, there are fewer
+// outside it, and face neighbours stay within one LOD (the effective distance changes by at most
+// 1 + back_scale per unit, ChunkMath::lod_distance).
+TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one LOD across faces") {
+    ChunkParam param;
+    SDFCascade sdf;
+    const int lods = 15;
+    sdf.configure(param, lods);
+    ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
+    discoverer->set_config(param, &sdf);
+    // The bench's 1280x720 view, error 1 in the view cone and 4 behind (the main_scene case).
+    const float fov = Math::deg_to_rad(75.0f);
+    const float half_diagonal = std::atan(std::tan(fov * 0.5f) * std::sqrt(1.0f + (16.0f / 9.0f) * (16.0f / 9.0f)));
+    discoverer->setup_lod(lods, 1.0f, 720.0f, fov, 4.0f, half_diagonal + Math::deg_to_rad(20.0f));
+    const Vector3 pose(3000.0f, 3200.0f, 2000.0f); // near the 15-LOD cascade ground
+    for (const Vector3 &forward : { Vector3(1, 0, 0), Vector3(0.3f, -0.8f, 0.5f), Vector3(-0.2f, 0.3f, -1.0f) }) {
+        CAPTURE(forward);
+        const ScanView split = discoverer->make_view(pose, forward);
+        CHECK(split.back_scale == doctest::Approx(3.0));
+        ScanView front = split;
+        front.back_scale = 0.0;
+        LODHashSet got;
+        LODHashSet want;
+        ChunkDiscoverer::ScanCounters split_counters;
+        ChunkDiscoverer::ScanCounters front_counters;
+        discoverer->scan(split, ChunkDiscoverer::CULL_LEGACY, got, split_counters);
+        discoverer->scan(front, ChunkDiscoverer::CULL_LEGACY, want, front_counters);
+
+        auto in_cone = [&split](const LODHashSet &p_set) {
+            LODHashSet r;
+            for (const ChunkId &id : p_set) {
+                if (ChunkMath::view_cone_gap(id, ChunkMath::get_lod(id), split) == 0.0) {
+                    r.insert(id);
+                }
+            }
+            return r;
+        };
+        const LODHashSet got_in = in_cone(got);
+        const LODHashSet want_in = in_cone(want);
+        CHECK(got_in.size() > 0);
+        CHECK(got_in.size() == want_in.size());
+        CHECK(set_difference(got_in, want_in) == 0);
+        CHECK(split_counters.out_of_view > 0);
+        CHECK(got.size() < want.size());
+        MESSAGE("chunks: ", int64_t(want.size()), " at error 1, ", int64_t(got.size()), " with 4 behind (", split_counters.out_of_view, " out of view)");
+
+        std::vector<int64_t> faces;
+        face_lod_jumps(got, discoverer->get_max_lod(), faces);
+        CHECK(faces.size() <= 2); // jumps of 0 and 1 only
+    }
+
+    // A turn rescans past RESCAN_TURN_DEG, and only when the LOD rule depends on the direction.
+    const ScanView a = discoverer->make_view(pose, Vector3(1, 0, 0));
+    const ScanView small_turn = discoverer->make_view(pose, Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(5.0f)));
+    const ScanView big_turn = discoverer->make_view(pose, Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(12.0f)));
+    CHECK(!ChunkDiscoverer::view_changed(a, small_turn));
+    CHECK(ChunkDiscoverer::view_changed(a, big_turn));
+    ScanView off = big_turn;
+    off.back_scale = 0.0;
+    CHECK(!ChunkDiscoverer::view_changed(a, off));
+    memdelete(discoverer);
 }

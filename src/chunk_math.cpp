@@ -150,3 +150,49 @@ WorldPos ChunkMath::sample_pos(const ChunkId &chunk_coord, const Float3 &grid, c
     pos.voxel.z = axis(grid.z, anchor.z, pos.frac.z);
     return pos;
 }
+
+float ChunkMath::chunk_bounding_radius(int p_lod) {
+    return std::sqrt(3.0f) * static_cast<float>(int64_t(1) << p_lod);
+}
+
+double ChunkMath::view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
+    if (p_view.forward == Vector3()) {
+        return 0.0;
+    }
+    const double vx = double(p_chunk.x - p_view.camera_chunk.x);
+    const double vy = double(p_chunk.y - p_view.camera_chunk.y);
+    const double vz = double(p_chunk.z - p_view.camera_chunk.z);
+    const double fx = p_view.forward.x;
+    const double fy = p_view.forward.y;
+    const double fz = p_view.forward.z;
+    const double along = vx * fx + vy * fy + vz * fz;
+    // Distance to the axis from |v x f|, accurate near the axis.
+    const double cx = vy * fz - vz * fy;
+    const double cy = vz * fx - vx * fz;
+    const double cz = vx * fy - vy * fx;
+    const double perp = std::sqrt(cx * cx + cy * cy + cz * cz);
+    // At an angle a off the axis and distance d, past_sin / past_cos are d sin(a - h) and d cos(a - h) for a
+    // cone of half-angle h. Inside (a <= h) the gap is 0; outside, d sin(a - h), or d once a - h passes 90
+    // degrees (the apex is then the nearest point). a - h is checked through its sine first: with h above 90
+    // degrees a point near the axis also has cos(a - h) < 0.
+    const double past_sin = perp * p_view.cos_half_angle - along * p_view.sin_half_angle;
+    if (past_sin <= 0.0) {
+        return 0.0;
+    }
+    const double past_cos = along * p_view.cos_half_angle + perp * p_view.sin_half_angle;
+    const double gap = (past_cos > 0.0 ? past_sin : std::sqrt(vx * vx + vy * vy + vz * vz)) - chunk_bounding_radius(p_lod);
+    return gap > 0.0 ? gap : 0.0;
+}
+
+double ChunkMath::lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
+    const double near = p_view.camera_chunk.distance_to(p_chunk) - chunk_bounding_radius(p_lod);
+    if (p_view.back_scale == 0.0) {
+        return near;
+    }
+    return near + p_view.back_scale * view_cone_gap(p_chunk, p_lod, p_view);
+}
+
+int ChunkMath::load_queue(const ChunkId &p_chunk, int p_lod_count, const ScanView &p_view) {
+    const int lod = get_lod(p_chunk);
+    return (view_cone_gap(p_chunk, lod, p_view) > 0.0 ? p_lod_count : 0) + lod;
+}

@@ -72,7 +72,8 @@ public:
     // Loaded chunks must have been released before.
     void destroy();
 
-    void send_chunk(const LODHashSet &p_chunks);
+    // The chunks to mesh (replacing the queue), loaded in the order of ChunkMath::load_queue for p_view.
+    void send_chunk(const LODHashSet &p_chunks, const ScanView &p_view);
     // Re-mesh already-loaded chunks whose surface an instance edit changed (finest LOD first).
     void remesh_chunks(const std::vector<ChunkId> &p_chunks);
     void process_queue();
@@ -140,8 +141,11 @@ private:
 
     QuadPagePool *pool = nullptr;
 
-    // Per LOD, sorted by descending Morton key: pop_back() walks space along the Morton curve.
+    // One queue per ChunkMath::load_queue (in the view cone first, then by LOD), each sorted by descending
+    // Morton key: pop_back() walks space along the Morton curve, so a batch's chunks stay close together.
     std::vector<std::vector<ChunkId>> chunk_queue;
+    ScanView load_view; // the view of the last send_chunk, for the chunks queued again
+    int lod_count = 0;
     // Instance edits: their chunks, dispatched before chunk_queue, finest LOD first. send_chunk() does
     // not touch this. required_version is the table version a chunk must be re-meshed from (staleness).
     std::vector<std::vector<ChunkId>> remesh_queue;

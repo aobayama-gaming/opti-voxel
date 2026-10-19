@@ -34,6 +34,26 @@ struct ChunkParam {
     }
 };
 
+// Where a scan looks from, in chunk-id units (render axes are the chunk-id axes). The view cone has its
+// apex at the camera chunk's centre and a half-angle of the frustum's diagonal half-FOV plus a margin. The
+// LOD rule coarsens the nodes outside it (ChunkMath::lod_distance), the meshers load the chunks inside it
+// first (ChunkMath::load_queue).
+struct ScanView {
+    ChunkId camera_chunk;
+    Vector3 forward; // unit view axis; zero: no direction, every chunk is in the cone
+    double cos_half_angle = -1.0;
+    double sin_half_angle = 0.0;
+    // How much coarser the LOD rule gets away from the cone: lod_pixel_error_back / lod_pixel_error - 1.
+    // 0: the scanned set ignores the direction.
+    double back_scale = 0.0;
+
+    void set_half_angle(double p_rad) {
+        const double a = p_rad < 0.0 ? 0.0 : (p_rad > Math_PI ? Math_PI : p_rad);
+        cos_half_angle = std::cos(a);
+        sin_half_angle = std::sin(a);
+    }
+};
+
 // Chunk ids are int64 chunk centres in chunk-id units (half a LOD0 chunk): LOD0 chunks sit on odd
 // coordinates, a LOD-L chunk's coordinates have their lowest set bit at L and it spans 2^(L+1) units.
 namespace ChunkMath {
@@ -67,6 +87,20 @@ Vector3 grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const Ch
 Vector3 grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &grid, const ChunkParam &chunk_param);
 // LOD0 chunk holding a render-space position.
 ChunkId chunk_at_render(const Vector3 &render_pos, const ChunkParam &chunk_param);
+
+// Bounding sphere radius of a LOD-p_lod chunk in chunk-id units (its half extent is 2^lod).
+float chunk_bounding_radius(int p_lod);
+// Distance from the bounding sphere of `p_chunk` (LOD p_lod) to the view cone, in chunk-id units; 0 when
+// they meet. 1-Lipschitz in the chunk's centre, like any distance to a set.
+double view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
+// The distance the LOD rule compares to its LOD's threshold: from the camera chunk to the chunk's bounding
+// sphere, plus back_scale times its gap to the view cone. In the cone it is the plain distance; far behind,
+// (1 + back_scale) times it: the thresholds of lod_pixel_error_back. It changes by at most (1 + back_scale)
+// per unit of position, so face neighbours stay within one LOD (unit-tested at error 1 | 4).
+double lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
+// The meshers' load queue of a chunk, popped in increasing order: the chunks in the view cone first, then
+// finest LOD first. In [0, 2 * p_lod_count).
+int load_queue(const ChunkId &p_chunk, int p_lod_count, const ScanView &p_view);
 
 // Absolute position of a vertex-grid point: CPU mirror of world_pos_from_grid (gpu_frame.hpp).
 WorldPos sample_pos(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param);

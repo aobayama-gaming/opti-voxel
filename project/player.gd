@@ -75,6 +75,10 @@ func _enter_tree() -> void:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
+		if a.begins_with("--lod_error_back=") and terrain:
+			terrain.lod_pixel_error_back = a.trim_prefix("--lod_error_back=").to_float()
+		if a.begins_with("--lod_view_margin=") and terrain:
+			terrain.lod_view_margin_deg = a.trim_prefix("--lod_view_margin=").to_float()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
 		if a.begins_with("--dig_radius="):
@@ -168,6 +172,7 @@ func _mark(kind: String, audit: bool) -> void:
 		m["chunks"] = stats.get("chunks", {})
 		m["load_complete"] = terrain.is_load_complete()
 		m["lod_pixel_error"] = terrain.lod_pixel_error
+		m["lod_pixel_error_back"] = terrain.lod_pixel_error_back
 		m["voxel_size"] = terrain.voxel_size
 		if audit and pending_audit.is_empty() and terrain.debug_audit_discovery():
 			pending_audit = m
