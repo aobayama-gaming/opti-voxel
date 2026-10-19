@@ -104,19 +104,24 @@ String statement(const Program &p_program, int p_i) {
             return "    precise float q" + id + " = s * " + inv_grad_length(a) + ";\n" + out + a + " * q" + id + ";\n";
         case Op::PERLIN3:
         case Op::PERLIN2:
-            return vformat("    precise vec4 n%d = %s(p, %d, %s, %s, %s);\n", p_i, in.op == Op::PERLIN3 ? "perlin3" : "perlin2", in.k,
-                           ExactNoise::glsl_uint(in.seed), ExactNoise::glsl_lo(in.offset), ExactNoise::glsl_hi(in.offset)) +
-                    out + vformat("vec4(n%d.xyz * (%s * exact_pow2(lod - %d)), n%d.w * %s);\n", p_i, glsl_float(in.value), in.k, p_i, glsl_float(in.value));
+            // The band rule (ExactNoise::band_kept): lod is uniform per chunk, so a dropped octave costs nothing.
+            return out + "vec4(0.0);\n" + vformat("    if (lod <= %d) {\n", in.k - ExactNoise::BAND_SHIFT) +
+                    vformat("        precise vec4 n%d = %s(p, %d, %s, %s, %s);\n", p_i, in.op == Op::PERLIN3 ? "perlin3" : "perlin2", in.k,
+                            ExactNoise::glsl_uint(in.seed), ExactNoise::glsl_lo(in.offset), ExactNoise::glsl_hi(in.offset)) +
+                    vformat("        %s = vec4(n%d.xyz * (%s * exact_pow2(lod - %d)), n%d.w * %s);\n    }\n", r(p_i), p_i, glsl_float(in.value), in.k, p_i,
+                            glsl_float(in.value));
         case Op::T_PERLIN3:
         case Op::T_PERLIN2:
-            // Mirror of eval_special's T_PERLIN*: the lattice offset is the Def's minus the record's
-            // anchor (exact int64, i64_sub), the seed salted by the record's salt.
-            return vformat("    precise uvec3 o%d = %s;\n", p_i, ExactNoise::glsl_lo(in.offset)) +
-                    vformat("    precise ivec3 ohi%d = %s;\n", p_i, ExactNoise::glsl_hi(in.offset)) +
-                    vformat("    i64_sub(o%d, ohi%d, rec.anchor_lo.xyz, rec.anchor_hi.xyz);\n", p_i, p_i) +
-                    vformat("    precise vec4 n%d = %s(p, %d, %s ^ rec.anchor_lo.w, o%d, ohi%d);\n", p_i,
+            // Mirror of eval_special's T_PERLIN*: the band rule, then the lattice offset is the Def's minus the
+            // record's anchor (exact int64, i64_sub), the seed salted by the record's salt.
+            return out + "vec4(0.0);\n" + vformat("    if (lod <= %d) {\n", in.k - ExactNoise::BAND_SHIFT) +
+                    vformat("        precise uvec3 o%d = %s;\n", p_i, ExactNoise::glsl_lo(in.offset)) +
+                    vformat("        precise ivec3 ohi%d = %s;\n", p_i, ExactNoise::glsl_hi(in.offset)) +
+                    vformat("        i64_sub(o%d, ohi%d, rec.anchor_lo.xyz, rec.anchor_hi.xyz);\n", p_i, p_i) +
+                    vformat("        precise vec4 n%d = %s(p, %d, %s ^ rec.anchor_lo.w, o%d, ohi%d);\n", p_i,
                             in.op == Op::T_PERLIN3 ? "perlin3" : "perlin2", in.k, ExactNoise::glsl_uint(in.seed), p_i, p_i) +
-                    out + vformat("vec4(n%d.xyz * (%s * exact_pow2(lod - %d)), n%d.w * %s);\n", p_i, glsl_float(in.value), in.k, p_i, glsl_float(in.value));
+                    vformat("        %s = vec4(n%d.xyz * (%s * exact_pow2(lod - %d)), n%d.w * %s);\n    }\n", r(p_i), p_i, glsl_float(in.value), in.k, p_i,
+                            glsl_float(in.value));
         default:
             return out + arith(in, p_program.code) + ";\n";
     }

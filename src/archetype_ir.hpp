@@ -54,7 +54,7 @@ enum class Op : uint8_t {
     FLOOR, // flat
     RSQRT, // det_rsqrt(a), a = max(x, c) or max(c, x), c a constant > 0 (validate)
     DIST, // a / |grad a|: first-order distance, gradient normalised (to 2^lod); grad a must not be flat
-    PERLIN3, // one exact-noise octave times `value` (amp): wavelength 2^k voxels, seed, lattice offset
+    PERLIN3, // one exact-noise octave times `value` (amp): wavelength 2^k voxels, seed, lattice offset; +0 where the band rule drops it
     PERLIN2, // the same over (x, z)
     // Table Defs (archetype_table.hpp): the instance's frame, parameters and noise lattice come from
     // its record (run() with a DefRecord) instead of being baked in. The compiler never emits these in
@@ -79,8 +79,8 @@ struct Instr {
     int k = 0;
     uint32_t seed = 0;
     Vector3i64 offset;
-    // Recorded for later steps, unused here: the band (wavelength in LOD0 voxels, 0 = none) of the band
-    // rule, and the cost of cost-based batching (op_cost).
+    // The band (wavelength in LOD0 voxels, 0 = none) of a noise op. The band rule itself reads k
+    // (ExactNoise::band_kept): a noise op is +0 at the LODs where its octave is finer than 8 cells.
     float band = 0.0f;
 };
 

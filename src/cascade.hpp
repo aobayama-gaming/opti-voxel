@@ -162,7 +162,7 @@ using Band = ExactNoise::Octave;
 struct Spec {
     std::vector<Band> bands;
     // Band k is inserted on Λ_{k - insert_shift}: 2 = 4 samples per wavelength, 3 = 8 (the chosen one).
-    int insert_shift = 3;
+    int insert_shift = ExactNoise::BAND_SHIFT;
     ChannelSet set = ChannelSet::HERMITE8;
     // Coarsest lattice T; -1: the highest insertion lattice of the bands.
     int top = -1;
