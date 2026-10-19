@@ -59,6 +59,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_direct_pages_per_batch"), &VoxelTerrain::get_direct_pages_per_batch);
     ClassDB::bind_method(D_METHOD("set_direct_batches_per_frame", "batches"), &VoxelTerrain::set_direct_batches_per_frame);
     ClassDB::bind_method(D_METHOD("get_direct_batches_per_frame"), &VoxelTerrain::get_direct_batches_per_frame);
+    ClassDB::bind_method(D_METHOD("set_direct_gpu_budget_ms", "ms"), &VoxelTerrain::set_direct_gpu_budget_ms);
+    ClassDB::bind_method(D_METHOD("get_direct_gpu_budget_ms"), &VoxelTerrain::get_direct_gpu_budget_ms);
     ClassDB::bind_method(D_METHOD("set_direct_max_in_flight", "batches"), &VoxelTerrain::set_direct_max_in_flight);
     ClassDB::bind_method(D_METHOD("get_direct_max_in_flight"), &VoxelTerrain::get_direct_max_in_flight);
     ClassDB::bind_method(D_METHOD("set_direct_page_capacity", "capacity"), &VoxelTerrain::set_direct_page_capacity);
@@ -126,6 +128,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_batch_size", PROPERTY_HINT_RANGE, "1,1024"), "set_direct_batch_size", "get_direct_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_pages_per_batch", PROPERTY_HINT_RANGE, "1,256"), "set_direct_pages_per_batch", "get_direct_pages_per_batch");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_batches_per_frame", PROPERTY_HINT_RANGE, vformat("1,%d", GPUDirectMesher::MAX_BATCHES_PER_FRAME)), "set_direct_batches_per_frame", "get_direct_batches_per_frame");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direct_gpu_budget_ms", PROPERTY_HINT_RANGE, "0,100,0.1,suffix:ms"), "set_direct_gpu_budget_ms", "get_direct_gpu_budget_ms");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_max_in_flight", PROPERTY_HINT_RANGE, "0,256"), "set_direct_max_in_flight", "get_direct_max_in_flight");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_page_capacity", PROPERTY_HINT_RANGE, "1024,1048576"), "set_direct_page_capacity", "get_direct_page_capacity");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_initial_pages", PROPERTY_HINT_RANGE, "0,4096"), "set_direct_initial_pages", "get_direct_initial_pages");
@@ -475,6 +478,16 @@ void VoxelTerrain::set_direct_batches_per_frame(int p_batches) {
 
 int VoxelTerrain::get_direct_batches_per_frame() const {
     return direct_settings.max_batches_per_frame;
+}
+
+void VoxelTerrain::set_direct_gpu_budget_ms(float p_ms) {
+    ERR_FAIL_COND_MSG(started, "direct_gpu_budget_ms must be set before the terrain enters the tree.");
+    ERR_FAIL_COND(!(p_ms >= 0.0f)); // 0: no budget
+    direct_settings.gpu_budget_ms = p_ms;
+}
+
+float VoxelTerrain::get_direct_gpu_budget_ms() const {
+    return direct_settings.gpu_budget_ms;
 }
 
 void VoxelTerrain::set_direct_max_in_flight(int p_batches) {

@@ -36,6 +36,7 @@ extends Node3D
 ##   --dual_contouring=1          both meshers: DC-lite vertex placement (sharp UNION/SUBTRACT creases)
 ##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
 ##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
+##   --mesher_budget=MS           direct: estimated GPU ms of mesh batches per frame (default 0 = whole batches)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
 ##   --terrain=cascade|continents|archetypes|shapes
@@ -151,6 +152,8 @@ func _ready() -> void:
 		terrain.direct_page_capacity = int(args["cap"])
 	if args.has("batches_per_frame"):
 		terrain.direct_batches_per_frame = int(args["batches_per_frame"])
+	if args.has("mesher_budget"):
+		terrain.direct_gpu_budget_ms = float(args["mesher_budget"])
 	if args.has("max_in_flight"):
 		terrain.direct_max_in_flight = int(args["max_in_flight"])
 	terrain.debug_view = int(args.get("view", "0"))

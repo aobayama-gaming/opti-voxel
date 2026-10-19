@@ -1,0 +1,25 @@
+{
+	"name": "opti-voxel-probe",
+	"tree": {
+		"$className": "DataModel",
+		"Workspace": {
+			"Baseplate": {
+				"$className": "SpawnLocation",
+				"$properties": {
+					"Anchored": true,
+					"Neutral": true,
+					"Duration": 0,
+					"Size": [128, 2, 128],
+					"Position": [0, -1, 0]
+				}
+			}
+		},
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"Probe": {
+					"$path": "probe/Probe.client.luau"
+				}
+			}
+		}
+	}
+}
