@@ -19,8 +19,14 @@ the same SDF, the same surface-nets/QEF mesher, the same LOD chunk scan.
   large"; `Part.Size` clamps).
 - **Smooth Terrain** has none of the mesh limits: 4-stud voxels (fixed), ±128k studs per axis,
   automatic collision, built-in LOD, replication of server edits. It is drawn only **~3k studs around
-  the camera** (~750 voxels whatever the scale): voxels written farther out cost memory and are never
-  seen.
+  the camera** (~750 voxels whatever the scale) at maximum graphics quality: voxels written farther
+  out cost memory and are never seen. The draw distance shrinks with the client's graphics quality,
+  and "Automatic" quality drops when frames are slow and stays down: after a heavy test the view
+  looked a few hundred studs deep until Studio was set back to Level 21 (Studio Settings → Rendering
+  → Quality Level). Players pick their own quality, so their view will often be shorter than Studio's.
+- **One Terrain per place**: `Instance.new("Terrain")` and `Terrain:Clone()` are refused, and
+  ViewportFrames and WorldModels don't render terrain. `CopyRegion` gives an offline `TerrainRegion`
+  (data, not drawn). Terrain written on a client stays on that client (no replication).
 
 So the direction: **our SDF stays the source of truth, Smooth Terrain renders it**
 (`terrain.project.json`), with a thin height-field shell out to ±3072 studs. A far field past the draw
