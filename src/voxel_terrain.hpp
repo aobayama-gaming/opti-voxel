@@ -234,6 +234,8 @@ public:
     int get_direct_pages_per_batch() const;
     void set_direct_batches_per_frame(int p_batches);
     int get_direct_batches_per_frame() const;
+    void set_direct_gpu_budget_ms(float p_ms);
+    float get_direct_gpu_budget_ms() const;
     void set_direct_max_in_flight(int p_batches);
     int get_direct_max_in_flight() const;
     void set_direct_page_capacity(int p_capacity);

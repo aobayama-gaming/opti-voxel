@@ -24,6 +24,7 @@ adjustment_saturation = 2.0
 pipeline_mode = 2
 voxel_size = 0.05
 lod_pixel_error = 4.0
+direct_gpu_budget_ms = 4.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2075181569]
 environment = SubResource("Environment_2c62f")
