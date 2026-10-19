@@ -27,6 +27,11 @@ iterate past a warning, never to commit one.
   `tools/bench_ab.sh <dev checkout> <worktree> -- --mode=direct` builds both trees, interleaves
   the runs (2 per side by default, both through the worktree's `bench.sh`) and writes the table to paste
   into the PR. Comparing a tree against itself still shows load-time deltas of ~5%: that's the noise.
+  **Perf target:** `--preset=forest5cm` (`project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
+  the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at error 2 (stretch: 1).
+  Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene_5cm).
+  Baseline (PR #34, 25 m/s): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
+  (~7 ms of GPU per batch, 4x a treeless batch) and the 31 M triangles drawn are the two costs.
   Never build while a bench runs (thermals, see Gotchas).
 - One GPU, several agents: other sessions work in other worktrees and run their own builds, benches
   and check.sh on the same laptop. Perf numbers are only valid when nothing else runs. Before a perf

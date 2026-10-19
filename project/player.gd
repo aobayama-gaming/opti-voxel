@@ -1,5 +1,7 @@
 extends Node3D
 
+const Presets = preload("res://debug/presets.gd")
+
 var speed: float = 50.0
 var mouse_sensitivity: float = 0.002
 
@@ -51,7 +53,7 @@ var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug
 
 func _enter_tree() -> void:
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
-	for a in OS.get_cmdline_user_args():
+	for a in Presets.user_args():
 		if a.begins_with("--lods=") and terrain:
 			terrain.lod_numbers = a.trim_prefix("--lods=").to_int()
 		if a == "--terrain=cascade" and terrain:
@@ -127,7 +129,7 @@ func _ready():
 		_make_hud()
 	yaw = rotation.y
 	pitch = camera.rotation.x
-	for a in OS.get_cmdline_user_args():
+	for a in Presets.user_args():
 		if a.begins_with("--marks="):
 			marks_dir = a.trim_prefix("--marks=")
 	DirAccess.make_dir_recursive_absolute(marks_dir)

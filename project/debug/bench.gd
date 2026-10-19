@@ -5,6 +5,8 @@ extends Node3D
 ##
 ## Args (all optional):
 ##   --mode=legacy|direct         pipeline (default legacy)
+##   --preset=NAME                a named argument set (debug/presets.gd; forest5cm = the perf target),
+##                                explicit arguments override it
 ##   --scenario=load|fly|turn|edit|dig load: load + steady phase. fly: load, fly out and back, settle, steady.
 ##                                turn: load, one full turn of the camera's yaw in --turn_seconds (default 8), settle, steady
 ##                                edit: load, then N instance edits (add / move / remove) then settle, steady
@@ -74,6 +76,7 @@ extends Node3D
 ## render-thread sync, which would distort the load/fly frame timings.
 
 const MODES := {"legacy": 1, "direct": 2}
+const Presets = preload("res://debug/presets.gd")
 
 var args := {}
 var shots := []  # [[when, path], ...]
@@ -236,7 +239,7 @@ func _ready() -> void:
 
 
 func _parse_args() -> void:
-	for a in OS.get_cmdline_user_args():
+	for a in Presets.user_args():
 		if not a.begins_with("--"):
 			continue
 		var kv: PackedStringArray = a.substr(2).split("=", true, 1)
