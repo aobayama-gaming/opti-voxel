@@ -893,6 +893,7 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     t.library.add(make_capsule_type());
     t.library.add(make_cylinder_type());
     t.library.add(make_rock_type(8, 0x1234u));
+    t.library.add(make_branch_type());
     Builder gb;
     t.ground = gb.finish(gb.constant(2.0f));
     for (uint32_t i = 0; i < 64; i++) {
@@ -927,9 +928,14 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
                 rec.params[0] = 6.0f;
                 rec.params[1] = 4.0f;
                 break;
-            default:
+            case 4:
                 rec.params[0] = 6.0f + float(i % 5);
                 rec.params[1] = 1.5f;
+                break;
+            default:
+                rec.params[0] = 14.0f;
+                rec.params[1] = 2.5f;
+                rec.params[2] = -0.1f;
                 break;
         }
         rec.salt = i == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ i + 1, 0x5EEDu, 0u }).x;

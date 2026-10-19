@@ -270,6 +270,15 @@ std::shared_ptr<Def> make_def(Builder &p_b, Reg p_out, Float3 p_lo, Float3 p_hi,
 
 } // namespace
 
+double rotation_margin(Float3 p_lo, Float3 p_hi) {
+    double reach = 0.0;
+    for (int c = 0; c < 8; c++) {
+        const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
+        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
+    }
+    return 1.0 + 1e-4 * reach;
+}
+
 Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded, const VoxelPos &p_anchor, const float *p_r) {
     Bounds b;
     b.lipschitz = p_lipschitz;
@@ -277,21 +286,18 @@ Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded,
     if (!b.bounded) {
         return b;
     }
-    // The local box's corners back in world axes (R^T q), then a margin for the float rotation: one voxel, plus
-    // R^T's distance to R^-1 (rows orthonormal within 1e-5, is_orthonormal) times the box's reach.
+    // The local box's corners back in world axes (R^T q), then rotation_margin.
     double lo[3] = { INFINITY, INFINITY, INFINITY };
     double hi[3] = { -INFINITY, -INFINITY, -INFINITY };
-    double reach = 0.0;
     for (int c = 0; c < 8; c++) {
         const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
-        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
         for (int j = 0; j < 3; j++) {
             const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
             lo[j] = MIN(lo[j], w);
             hi[j] = MAX(hi[j], w);
         }
     }
-    const double margin = 1.0 + 1e-4 * reach;
+    const double margin = rotation_margin(p_lo, p_hi);
     for (int j = 0; j < 3; j++) {
         b.lo[j] = p_anchor[j] + int64_t(std::floor(lo[j] - margin));
         b.hi[j] = p_anchor[j] + int64_t(std::ceil(hi[j] + margin));

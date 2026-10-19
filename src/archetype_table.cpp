@@ -75,18 +75,25 @@ int influence_margin(const TableRecord &p_record, int p_lod) {
     return int(std::ceil(m)) + 2;
 }
 
-void set_band(TableRecord &r_record, bool p_bounded, bool p_enabled) {
+double band_depth(const TableDef &p_def, const TableRecord &p_record) {
+    Float3 lo{}, hi{};
+    float lipschitz = 1.0f;
+    p_def.bounds(p_record.params, lo, hi, lipschitz);
+    double side = MIN(MIN(double(hi.x) - double(lo.x), double(hi.y) - double(lo.y)), double(hi.z) - double(lo.z)) + 2.0 * rotation_margin(lo, hi);
+    for (int a = 0; a < 3; a++) {
+        side = MIN(side, double(p_record.box_hi[a]) - double(p_record.box_lo[a]));
+    }
+    return 0.5 * side * double(p_record.lipschitz) + double(p_record.k);
+}
+
+void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled) {
     r_record.max_lod = TableRecord::NEVER_DROPPED;
     r_record.erode = 0.0f;
-    if (!p_bounded || !p_enabled) {
+    if (!p_def.bounded || !p_enabled) {
         return;
     }
     r_record.erode = ERODE_CELLS;
-    double side = double(INT32_MAX);
-    for (int a = 0; a < 3; a++) {
-        side = MIN(side, double(r_record.box_hi[a]) - double(r_record.box_lo[a]));
-    }
-    const double depth = 0.5 * side * double(r_record.lipschitz) + double(r_record.k);
+    const double depth = band_depth(p_def, r_record);
     for (int lod = 0; lod < 32; lod++) {
         if (double(ERODE_CELLS) * (std::ldexp(1.0, lod) - 1.0) >= depth) {
             r_record.max_lod = uint8_t(lod);
@@ -103,7 +110,7 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
     }
     r_record.lipschitz = wb.lipschitz;
     r_record.margin_c = 2.0f * wb.lipschitz + p_skirt_depth;
-    set_band(r_record, wb.bounded, p_band);
+    set_band(r_record, p_def, p_band);
 }
 
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {
@@ -387,6 +394,27 @@ TableDefPtr make_capsule_type() {
         r_lo = Float3{ -p[1], -p[1], -p[1] };
         r_hi = Float3{ p[1], p[0] + p[1], p[1] };
         r_l = 1.0f;
+    };
+    return d;
+}
+
+TableDefPtr make_branch_type() {
+    // params {height, radius, slope}: a capsule from y = 0 to y = height whose radius goes linearly from radius
+    // to radius + slope * height (slope = (r1 - r0) / height, computed on the CPU: no division here). Not an
+    // exact distance (the radius changes along the axis, not normal to the surface), but outside its box it is
+    // at least the distance to the capsule of the larger radius. Its gradient is the unit radial direction minus
+    // slope along the axis (normal to it), so |grad| <= sqrt(1 + slope^2) <= 1 + slope^2 / 2.
+    Builder b;
+    const Local l = b.t_local();
+    const Reg yc = b.clamp(l.y, b.constant(0.0f), b.t_param(0));
+    const Reg len = b.length(l.x, b.sub(l.y, yc), l.z);
+    const Reg r = b.sub(len, b.add(b.t_param(1), b.mul(b.t_param(2), yc)));
+    std::shared_ptr<TableDef> d = make_def("branch", 3, b, r);
+    d->bounds = [](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+        const float rad = MAX(p[1], p[1] + p[2] * p[0]);
+        r_lo = Float3{ -rad, -rad, -rad };
+        r_hi = Float3{ rad, p[0] + rad, rad };
+        r_l = 1.0f + 0.5f * p[2] * p[2];
     };
     return d;
 }
