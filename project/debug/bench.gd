@@ -59,6 +59,8 @@ extends Node3D
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
+##   --shadows=0                  the bench light casts no shadow (where render time goes)
+##   --scale_3d=F                 the viewport's 3D render scale (0.5: a quarter of the pixels)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
@@ -142,6 +144,10 @@ func _ready() -> void:
 
 	vp_rid = get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
+	if args.get("shadows", "1") == "0":
+		$DirectionalLight3D.shadow_enabled = false
+	if args.has("scale_3d"):
+		get_viewport().scaling_3d_scale = float(args["scale_3d"])
 
 	terrain = ClassDB.instantiate("VoxelTerrain")
 	if terrain == null:
