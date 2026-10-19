@@ -18,6 +18,52 @@ DefRecord TableRecord::def_record() const {
     return r;
 }
 
+RecordStore::RecordStore(const std::vector<TableRecord> &p_records, uint32_t p_version) {
+    for (const TableRecord &r : p_records) {
+        push_back(r, p_version);
+    }
+}
+
+RecordStore::Page &RecordStore::own(uint32_t p_page) {
+    if (pages[p_page].use_count() > 1) {
+        pages[p_page] = std::make_shared<Page>(*pages[p_page]); // a snapshot shares it: copy on write
+    }
+    return *pages[p_page];
+}
+
+void RecordStore::push_back(const TableRecord &p_record, uint32_t p_version) {
+    if (count % PAGE == 0) {
+        pages.push_back(std::make_shared<Page>());
+        pages.back()->r.reserve(PAGE);
+    }
+    Page &page = own(uint32_t(pages.size() - 1));
+    page.r.push_back(p_record);
+    page.version = MAX(page.version, p_version);
+    count++;
+}
+
+void RecordStore::set(uint32_t p_i, const TableRecord &p_record, uint32_t p_version) {
+    Page &page = own(p_i / PAGE);
+    page.r[p_i % PAGE] = p_record;
+    page.version = MAX(page.version, p_version);
+}
+
+void RecordStore::changed_since(uint32_t p_version, std::vector<std::pair<uint32_t, uint32_t>> &r_runs) const {
+    r_runs.clear();
+    for (uint32_t p = 0; p < pages.size(); p++) {
+        if (p_version != UINT32_MAX && pages[p]->version <= p_version) {
+            continue;
+        }
+        const uint32_t first = p * PAGE;
+        const uint32_t end = MIN(count, (p + 1) * PAGE);
+        if (!r_runs.empty() && r_runs.back().first + r_runs.back().second == first) {
+            r_runs.back().second = end - r_runs.back().first;
+        } else {
+            r_runs.push_back({ first, end - first });
+        }
+    }
+}
+
 int DefLibrary::add(const TableDefPtr &p_def) {
     list.push_back(p_def);
     return int(list.size() - 1);
@@ -27,6 +73,37 @@ int influence_margin(const TableRecord &p_record, int p_lod) {
     // Clamped before the conversion: a float above INT_MAX converts to anything (CPU) or saturates (GPU).
     const float m = MIN(p_record.k + p_record.margin_c * exact_pow2(p_lod), float(INPUT_LIMIT));
     return int(std::ceil(m)) + 2;
+}
+
+void set_band(TableRecord &r_record, bool p_bounded, bool p_enabled) {
+    r_record.max_lod = TableRecord::NEVER_DROPPED;
+    r_record.erode = 0.0f;
+    if (!p_bounded || !p_enabled) {
+        return;
+    }
+    r_record.erode = ERODE_CELLS;
+    double side = double(INT32_MAX);
+    for (int a = 0; a < 3; a++) {
+        side = MIN(side, double(r_record.box_hi[a]) - double(r_record.box_lo[a]));
+    }
+    const double depth = 0.5 * side * double(r_record.lipschitz) + double(r_record.k);
+    for (int lod = 0; lod < 32; lod++) {
+        if (double(ERODE_CELLS) * (std::ldexp(1.0, lod) - 1.0) >= depth) {
+            r_record.max_lod = uint8_t(lod);
+            break;
+        }
+    }
+}
+
+void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band) {
+    const Bounds wb = record_world_bounds(p_def, r_record);
+    for (int a = 0; a < 3; a++) {
+        r_record.box_lo[a] = int32_t(wb.lo[a] - r_record.anchor[a]);
+        r_record.box_hi[a] = int32_t(wb.hi[a] - r_record.anchor[a]);
+    }
+    r_record.lipschitz = wb.lipschitz;
+    r_record.margin_c = 2.0f * wb.lipschitz + p_skirt_depth;
+    set_band(r_record, wb.bounded, p_band);
 }
 
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {
@@ -66,7 +143,7 @@ void encode_record(PackedByteArray &r_bytes, uint32_t p_index, const TableRecord
         r_bytes.encode_s32(base + 144 + i * 4, p_record.box_hi[i]);
     }
     r_bytes.encode_float(base + 140, p_record.margin_c);
-    r_bytes.encode_s32(base + 156, 0);
+    r_bytes.encode_float(base + 156, p_record.erode);
 }
 
 // ---- the fold ----
@@ -118,7 +195,7 @@ Float4 combine4(const Float4 &p_r, const Float4 &p_c, const TableRecord &p_recor
 
 } // namespace
 
-Float4 fold(const Program &p_ground, const DefLibrary &p_library, const TableRecord *p_records, const uint32_t *p_list,
+Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list,
         uint32_t p_count, const WorldPos &p_pos, int p_lod, bool p_box_test) {
     thread_local std::vector<Float4> regs;
     run_registers(p_ground, p_pos, p_lod, regs);
@@ -130,7 +207,9 @@ Float4 fold(const Program &p_ground, const DefLibrary &p_library, const TableRec
         }
         const DefRecord dr = rec.def_record();
         run_registers(p_library[rec.def].program, p_pos, p_lod, regs, &dr);
-        r = combine4(r, regs[p_library[rec.def].program.output], rec);
+        Float4 c = regs[p_library[rec.def].program.output];
+        c.w = c.w + rec.erode * (exact_pow2(p_lod) - 1.0f); // the band rule's erosion (set_band)
+        r = combine4(r, c, rec);
     }
     return r;
 }
@@ -156,7 +235,7 @@ struct DefRecord {
     vec4 rot[3];     // world -> local, row major
     float params[8];
     ivec4 box_lo;    // xyz: influence box low (relative), w: margin_c bits
-    ivec4 box_hi;    // xyz: influence box high, w: unused
+    ivec4 box_hi;    // xyz: influence box high, w: erode bits (voxels per 2^lod - 1, set_band)
 };
 )glsl";
 
@@ -230,7 +309,9 @@ static String fold_glsl(const DefLibrary &p_library) {
         if (!arch_in_box(p, rec, lod)) {
             continue;
         }
-        r = arch_combine(r, arch_eval_instance(p, lod, rec), rec);
+        precise vec4 c = arch_eval_instance(p, lod, rec);
+        c.w = c.w + intBitsToFloat(rec.box_hi.w) * (exact_pow2(lod) - 1.0);
+        r = arch_combine(r, c, rec);
     }
     return r;
 }

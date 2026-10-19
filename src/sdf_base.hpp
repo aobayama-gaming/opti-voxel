@@ -1,5 +1,7 @@
 #pragma once
 
+#include "godot_cpp/classes/rendering_device.hpp"
+#include "godot_cpp/variant/dictionary.hpp"
 #include "godot_cpp/variant/packed_byte_array.hpp"
 #include "godot_cpp/variant/rid.hpp"
 #include "godot_cpp/variant/string.hpp"
@@ -40,16 +42,37 @@ public:
     virtual uint32_t instance_count() const = 0;
     // How many instances the GPU buffers are sized for (runtime edits only append; more is refused).
     virtual uint32_t instance_capacity() const { return instance_count(); }
-    // The encoded DefRecord array of the current snapshot (its record count * RECORD_BYTES bytes) and, in
-    // r_version, the version those bytes are: one snapshot for both, whatever edits land meanwhile.
-    virtual PackedByteArray record_bytes(uint32_t &r_version) const = 0;
+    // The encoded DefRecords of the current snapshot changed since p_have_version (UINT32_MAX: none sent yet,
+    // all of them), as spans for upload_records(): uint32 span count, then per span its byte offset in the
+    // buffer, its byte size and the bytes. r_version is the version they are: one snapshot for both, whatever
+    // edits land meanwhile. An edit re-sends the pages it changed, not the table.
+    virtual PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const = 0;
+    // Writes record_bytes()' spans into the records buffer (on the device that owns it).
+    static void upload_records(RenderingDevice *p_rd, const RID &p_buffer, const PackedByteArray &p_spans) {
+        int64_t at = 4;
+        for (uint32_t s = 0; s < (p_spans.size() >= 4 ? p_spans.decode_u32(0) : 0u); s++) {
+            const uint32_t offset = p_spans.decode_u32(at);
+            const uint32_t size = p_spans.decode_u32(at + 4);
+            p_rd->buffer_update(p_buffer, offset, size, p_spans.slice(at + 8, at + 8 + size));
+            at += 8 + size;
+        }
+    }
     // Bytes per record in the GPU buffer.
     virtual uint32_t record_size() const = 0;
 
     // Main thread: patch each ChunkInput of the batch (id.w = this chunk's list offset in uint32 words,
     // anchor_hi.w = its instance count) and append the indices (uint32) to r_list. r_chunk_ids already
-    // holds the batch's ChunkInput array (GPUFrame::encode_chunk_input).
+    // holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). A batch's lists never exceed its
+    // chunk count * max_chunk_list() words (the meshers' buffer).
     virtual void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const = 0;
+
+    // The average list a batch's chunks may carry: the meshers size their list buffer for batch size * this.
+    // The band rule keeps lists to the instances big enough for the chunk's LOD; a batch over it is cut (ERR,
+    // counted).
+    static constexpr uint32_t MAX_CHUNK_LIST = 4096;
+    uint32_t max_chunk_list() const { return MAX<uint32_t>(MIN(instance_capacity(), MAX_CHUNK_LIST), 1u); }
+    // List statistics (main thread): lengths per LOD, build time, truncations.
+    virtual Dictionary get_stats() const { return Dictionary(); }
 };
 
 // An axis-aligned box in LOD0 voxels (inclusive), the region an instance edit changed.
@@ -148,6 +171,11 @@ public:
     // samples with the cascade passes (cascade_glsl.hpp) instead of calling terrain_sdf, and evaluate()
     // only takes lattice points (frac 0, voxel a multiple of 2^lod).
     virtual const Cascade::Spec *get_cascade() const { return nullptr; }
+
+    // The smallest skirt depth (voxels of the chunk's LOD) this terrain needs: how far apart the surfaces of a
+    // LOD L and a LOD L+1 chunk can be (a band dropped between them), so a seam shows no crack. VoxelTerrain raises
+    // skirt_depth to it before configure().
+    virtual float min_skirt_depth(const ChunkParam &, int) const { return 0.0f; }
 
     // Depth (metres) of the skirt of a LOD-p_lod chunk: how far past its bounds the SDF is pushed towards
     // air (gpu_glsl.hpp skirt_sdf). By default skirt_depth voxels of the LOD; SDFCascade sizes it from its

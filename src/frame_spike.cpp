@@ -940,6 +940,8 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
         }
         rec.lipschitz = wb.lipschitz;
         rec.margin_c = 2.0f * wb.lipschitz + 2.0f;
+        // The band rule's erosion (erode * (2^lod - 1), on both sides), on most records.
+        rec.erode = (i % 4u) != 0u ? Archetype::ERODE_CELLS : 0.0f;
         t.records.push_back(rec);
     }
     t.list.resize(t.records.size());

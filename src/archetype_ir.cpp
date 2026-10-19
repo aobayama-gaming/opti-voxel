@@ -102,6 +102,9 @@ Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p
         case Op::T_PERLIN3:
         case Op::T_PERLIN2: {
             // The lattice follows the record's anchor (offset - anchor, exact int64), the seed is salted.
+            if (!ExactNoise::band_kept(p_in.k, p_lod)) {
+                return Float4{}; // the band rule: an octave finer than the LOD is its mean
+            }
             const DefRecord &rec = *p_record;
             const Vector3i64 offset = p_in.offset - rec.anchor;
             const uint32_t seed = p_in.seed ^ rec.salt;
@@ -125,6 +128,9 @@ Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p
             return Float4{ a.x * q, a.y * q, a.z * q, a.w * q };
         }
         default: { // PERLIN3, PERLIN2
+            if (!ExactNoise::band_kept(p_in.k, p_lod)) {
+                return Float4{};
+            }
             const Float4 n = p_in.op == Op::PERLIN3 ? ExactNoise::perlin3(p_pos, p_in.k, p_in.seed, p_in.offset)
                                                     : ExactNoise::perlin2(p_pos, p_in.k, p_in.seed, p_in.offset);
             const float f = p_in.value * exact_pow2(p_lod - p_in.k);
@@ -305,7 +311,8 @@ String Program::validate(int p_lod_count) const {
             if (in.k < 0 || in.k > ExactNoise::MAX_K || !ExactNoise::in_exact_range(in.value)) {
                 return vformat("Archetype: instruction %d: noise k=%d amplitude %s out of range.", i, in.k, in.value);
             }
-            const String error = ExactNoise::gradient_range_error(set, p_lod_count);
+            // Only at the LODs the band rule evaluates it at.
+            const String error = ExactNoise::gradient_range_error(set, MIN(p_lod_count, in.k - ExactNoise::BAND_SHIFT + 1));
             if (!error.is_empty()) {
                 return vformat("Archetype: instruction %d: ", i) + error;
             }

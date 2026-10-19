@@ -401,6 +401,14 @@ inline float gradient_factor(const Octave &p_octave, int p_lod) {
     return p_octave.amp * exact_pow2(p_lod - p_octave.k);
 }
 
+// The band rule: octave k is evaluated at LOD p_lod only if its wavelength is at least 2^BAND_SHIFT voxels of
+// that LOD (8 samples per wavelength, the cascade's insertion lattice). A finer octave is replaced by its
+// mean, 0: it can't be represented by the chunk's samples, and evaluating it aliases (vertices jitter).
+inline constexpr int BAND_SHIFT = 3;
+inline bool band_kept(int p_k, int p_lod) {
+    return p_lod <= p_k - BAND_SHIFT;
+}
+
 // Bounds of amplitudes and gradient factors: no denormal in any product (see the rules above).
 inline bool in_exact_range(float p_f) {
     return p_f >= exact_pow2(-16) && p_f <= exact_pow2(40);

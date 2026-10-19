@@ -388,7 +388,7 @@ void GPUMesher::_initialize_gpu_compute() {
     if (SDFGpuTable *table = sdf->get_gpu_table()) {
         // Sized for the capacity up front; the records arrive with the first batch (process_queue).
         buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
-        const uint64_t list_words = uint64_t(chunk_batch_number) * MAX<uint64_t>(table->instance_capacity(), 1u);
+        const uint64_t list_words = uint64_t(chunk_batch_number) * table->max_chunk_list(); // no list is longer (build_lists)
         table_list_capacity = list_words * 4;
         buffer_table_list = rd->storage_buffer_create(table_list_capacity);
         uniforms.push_back(create_storage_uniform(6, buffer_table_records));
@@ -544,7 +544,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
     // lists (same snapshot) when they changed, then the lists.
     if (buffer_table_records.is_valid()) {
         if (!p_table_records.is_empty()) {
-            rd->buffer_update(buffer_table_records, 0, p_table_records.size(), p_table_records);
+            SDFGpuTable::upload_records(rd, buffer_table_records, p_table_records);
         }
         if (!p_table_list.is_empty()) {
             ERR_FAIL_COND_MSG(uint64_t(p_table_list.size()) > table_list_capacity, "GPUMesher: batch instance list over its buffer.");
@@ -901,7 +901,7 @@ void GPUMesher::process_queue() {
         if (SDFGpuTable *table = sdf->get_gpu_table()) {
             table->build_lists(in_flight_ids, chunk_param, new_batch, table_list);
             if (table->version() != sent_table_version) {
-                table_records = table->record_bytes(sent_table_version);
+                table_records = table->record_bytes(sent_table_version, sent_table_version);
             }
         }
         mutex->lock();

@@ -197,7 +197,7 @@ private:
     void _queue_remesh(const ChunkId &p_chunk);
     void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Main thread: the batch's instance lists (patched into r_ids) and, if the table changed since the last
-    // dispatch, its records. Returns the table version they are.
+    // dispatch, the records it changed (SDFGpuTable::record_bytes spans). Returns the table version they are.
     uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
             const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records);

@@ -85,7 +85,7 @@ to every change, and a reviewer may reject a PR on any of them.
   (no SDF evaluation, the same code on every terrain); tau = 0.15 * trace(A) / 3; the move is capped at
   0.5 cells from the mass point, then clamped to the cell; where the gradient at the placed vertex
   vanishes, its normal is the mean of the Hermite normals (`vertex_normal`, below). The Hermite data must agree with the
-  crossings: on an SDF with detail finer than the cell (the archetype ground at far LODs) vertices jitter.
+  crossings: on an SDF with detail finer than the cell vertices jitter (the archetype IR's band rule drops such noise).
 
 ## Integer frame (no float ever holds an absolute coordinate)
 - CPU: chunk ids and voxel coordinates are int64 (`ChunkId` / `VoxelPos` = `Vector3i64`,
@@ -197,28 +197,52 @@ to every change, and a reviewer may reject a PR on any of them.
   is its world box grown by `M(lod) = ceil(k + margin_c * 2^lod) + 2` voxels, `margin_c = 2 L +
   skirt_depth`; outside it the value is >= M, so folding it in or out only changes F where `|F| > 2 L
   2^lod` (the mesh and normals are unchanged). The test is integer (`sat_diff` vs an int32 box), so the
-  CPU and the GPU, and two chunks of the same LOD, take the same branch: seams stay exact. The index
-  (`instance_table`) stores each instance at the finest LOD whose chunk span holds its grown box, in the
-  1-8 chunks it touches (subtree lists climb through ancestors that store nothing). A chunk's samples
-  reach past its span (skirt overhang) and a coarser chunk's influence boxes outgrow the storage nodes, so
-  a chunk's list gathers the 27 chunks around it (subtree + strict ancestors' own) and keeps the instances
-  whose influence box at its LOD meets its sample box (`chunk_sample_box`, `influence_meets`), in id order;
-  the CPU `evaluate` does the same for the point (`point_candidates(voxel, lod)`). Unit-tested on every
-  sample of the chunks around an instance at LODs 0-5.
-  `SDFBase::cull_exempt` feeds the discoverer's no-cull rule: a node box near an instance's box is never
-  culled, whatever the slope. FrameSpike's table probe checks the library + fold GPU == CPU. **To add a
+  CPU and the GPU, and two chunks of the same LOD, take the same branch: seams stay exact.
+  **Band rule (step 4):** a noise op of octave k (PERLIN*, T_PERLIN*) is +0 at LODs above k - 3
+  (`ExactNoise::band_kept`, `BAND_SHIFT` = the cascade's insertion lattice: 8 samples per wavelength), on
+  both back-ends. Each record has a `max_lod` (`set_band`): at LOD L its distance is
+  raised by `ERODE_CELLS * (2^L - 1)` voxels (1 cell per LOD: it shrinks uniformly, GPU and CPU alike), and
+  it is listed only below the first LOD whose erosion reaches its depth (half its box's smallest side times
+  L) plus k, where the eroded shape no longer reaches zero, so the drop changes no sign. The band steps
+  between LOD L and L+1 (an eroded instance, a dropped ground octave) are hidden by skirts: the archetype
+  terrains ask for `SDFBase::min_skirt_depth` (ground octave step + erosion, 3.34 cells on the demo) and
+  VoxelTerrain raises `skirt_depth` to it before `configure` (unit test: the L | L+1 field step within the
+  skirt at LODs 0-6 on a 4,000-rock scatter). `archetype_band` / `--instance_band=0` keep every instance
+  whole (the reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty
+  from LOD 5 on.
+  **The index** (`instance_table`): an instance is stored once, at the finest LOD whose chunk span holds its
+  grown box, in the node holding its centre (every touched node only when wider than a top-LOD node);
+  subtree lists stop above each instance's `max_lod`. A chunk's list gathers the subtrees of the 125 chunks
+  within 2 and the 27 nodes around each coarser ancestor, and keeps the instances listed at its LOD whose
+  influence box meets its sample box (`chunk_sample_box`, `influence_meets`), in id order; the CPU
+  `evaluate` does the same for the point (`point_candidates(voxel, lod)`). Unit-tested against the brute
+  force over six decades of sizes at LODs 0-13. Two layers: a base built once (flat arrays, an
+  open-addressing `NodeRangeMap`, Morton-ordered levels; 1M rocks in ~1.8 s) and an overlay over the records
+  edited since, rebuilt by every edit (~15 us at 1M); edited base entries are masked; past
+  `InstanceSnapshot::REBASE` (2,048) edited records the base is rebuilt (unit test: the overlay lists what a
+  whole new index lists), on the main thread for now: ~1.8 s at 1M every 2,048 edited records (moving it to a
+  worker and publishing when done is the follow-up). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
+  write per page); the GPU re-uploads the runs of pages changed since its version (`record_bytes` spans,
+  `SDFGpuTable::upload_records`). `build_lists` runs on the worker pool; the list buffer holds batch size *
+  `max_chunk_list()` (4,096) words, a batch over it is cut (ERR, `table.list_truncated`; the GPU then
+  disagrees with the CPU there). `get_debug_stats()["table"]`: list length avg / max per LOD,
+  list build ms. `SDFBase::cull_exempt` (`near_instance`, from the index: per-LOD occupancy + coarser
+  nodes' boxes) feeds the discoverer's no-cull rule, band or not: a node near an instance's box is never
+  culled (asked only when the corners would cull). FrameSpike's table probe checks the library + fold (with
+  erosion) GPU == CPU. **To add a
   library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
   bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
   **Runtime edits:** `VoxelTerrain.add_instance(type, x, y, z, rotation, params, op, k)` /
   `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (anchors are int64 LOD0 voxels, never
   through `Vector3i`); the op must be 0-3, k >= 0, params finite and normal, the rotation orthonormal,
-  else the edit is refused (ERR, -1 / false). Each edit rebuilds the snapshot (copy on write) and bumps
-  its version. **The snapshot is read from other threads** (the discoverer's `evaluate` / `cull_exempt`):
+  else the edit is refused (ERR, -1 / false). Each edit makes a new snapshot (the base kept, the overlay
+  rebuilt) and bumps its version. **The snapshot is read from other threads** (the discoverer's `evaluate` / `cull_exempt`):
   it is published with `std::atomic_store` and every reader takes one `current()` copy (a plain
   assignment freed it under the reader, unit-tested). The meshers build a batch's lists and, when the
   version changed, its records on the main thread from the same snapshot and hand both to the GPU with
   the batch. The edit region (old box of a remove/move plus new box
-  of an add/move) drives two things: the loaded chunks whose box grown by `M(lod)` meets it are re-queued
+  of an add/move) drives two things: the loaded chunks whose box grown by `M(lod)` meets it, at the LODs
+  the changed record is listed at, are re-queued
   in the mesher's `remesh_queue` (dispatched before new chunks, finest LOD first, `remesh_chunks` /
   `remesh_pops`), and the discoverer's `invalidate` drops the cull verdicts near it and forces a rescan
   even if the camera chunk did not change. A chunk carries a `required_version`: a result computed from
@@ -226,8 +250,8 @@ to every change, and a reviewer may reject a PR on any of them.
   page, are killed (else the old surface stays drawn); an edit also requires the new version from the
   chunks in flight for their first mesh (not loaded yet, so not listed). `remesh_queue` holds a chunk once. `add_new_loaded` drops a
   pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
-  `instance_capacity()` instances up front (default 16384, removed ones count); an add past it is refused,
-  and an upload only carries the used records. The bench's
+  `instance_capacity()` instances up front (default 16384 or the scatter + 4096, removed ones count); an add
+  past it is refused. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
   discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter N rocks and pillars in a
   square of side M metres around the demo objects (set before the node enters the tree), default 0.

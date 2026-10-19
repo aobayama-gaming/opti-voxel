@@ -137,8 +137,9 @@ TEST_CASE("Archetype: every op matches a hand-written float32 reference") {
                 { 0.0f, 0.0f, 0.0f, std::floor(y) },
                 { gz.x * ky, gz.y * ky, gz.z * ky, ry },
                 { xy.x * q, xy.y * q, xy.z * q, xy.w * q },
-                { p3.x * f3, p3.y * f3, p3.z * f3, p3.w * n3.amp },
-                { p2.x * f2, p2.y * f2, p2.z * f2, p2.w * n2.amp },
+                // The band rule: an octave finer than 8 cells of the LOD is +0.
+                ExactNoise::band_kept(n3.k, lod) ? Float4{ p3.x * f3, p3.y * f3, p3.z * f3, p3.w * n3.amp } : Float4{},
+                ExactNoise::band_kept(n2.k, lod) ? Float4{ p2.x * f2, p2.y * f2, p2.z * f2, p2.w * n2.amp } : Float4{},
                 { 0.0f, s, 0.0f, cv + y },
                 { -0.0f, -s, -0.0f, cv - y },
             };
@@ -236,9 +237,18 @@ TEST_CASE("Archetype: the IR fbm gives ExactNoise::fbm's bits") {
         Builder b;
         const Program prog = b.finish(b.fbm(set));
         CHECK(prog.validate(25).is_empty());
-        for (const int lod : { 0, 5, 14 }) {
+        for (const int lod : { 0, 5, 7, 14 }) {
+            // The band rule keeps the octaves at least 8 cells of the LOD long (k 9..13 here: all at LOD 0 to 6,
+            // k >= 10 at 7, none at 14).
+            ExactNoise::OctaveSet kept = set;
+            kept.octaves.clear();
+            for (const ExactNoise::Octave &o : set.octaves) {
+                if (ExactNoise::band_kept(o.k, lod)) {
+                    kept.octaves.push_back(o);
+                }
+            }
             for (const WorldPos &p : random_points(FAR_ANCHOR, 200, 1e5, 3)) {
-                const Float4 want = ExactNoise::fbm(set, p, lod);
+                const Float4 want = ExactNoise::fbm(kept, p, lod);
                 const Float4 got = run(prog, p, lod);
                 CHECK(float_bits(got.w) == float_bits(want.w));
                 // The same up to the sign of a zero (the IR's first octave isn't added to +0).
@@ -248,10 +258,50 @@ TEST_CASE("Archetype: the IR fbm gives ExactNoise::fbm's bits") {
     }
 }
 
+// Whether the band rule keeps the same noise ops at LODs p_a and p_b.
+static bool same_bands(const Program &p_prog, int p_a, int p_b) {
+    for (const Instr &in : p_prog.code) {
+        const bool noise = in.op == Op::PERLIN3 || in.op == Op::PERLIN2 || in.op == Op::T_PERLIN3 || in.op == Op::T_PERLIN2;
+        if (noise && ExactNoise::band_kept(in.k, p_a) != ExactNoise::band_kept(in.k, p_b)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TEST_CASE("Archetype: the band rule drops a noise op to +0 exactly below 8 cells of the LOD") {
+    // k - 4 .. k - 2 around each op's cutoff lod = k - 3, at far anchors: kept = the octave's bits, dropped = +0.
+    for (const int k : { 3, 6, 12, 15 }) {
+        CAPTURE(k);
+        Builder b;
+        const Reg n3 = b.perlin3(k, 0xBA5Du, Vector3i64(int64_t(1) << 41, -9, 77), 1.5f);
+        const Reg n2 = b.perlin2(k, 0x2Du, Vector3i64(3, 0, -(int64_t(1) << 35)), 0.75f);
+        const Program prog = b.finish(b.add(n3, n2));
+        CHECK(prog.validate(25).is_empty());
+        for (int lod = MAX(k - 5, 0); lod <= k - 1; lod++) {
+            CAPTURE(lod);
+            CHECK(ExactNoise::band_kept(k, lod) == (lod <= k - 3));
+            std::vector<Float4> regs;
+            for (const WorldPos &p : random_points(FAR_ANCHOR, 64, double(int64_t(1) << MIN(k + 4, 40)), uint32_t(k * 31 + lod))) {
+                run_registers(prog, p, lod, regs);
+                if (ExactNoise::band_kept(k, lod)) {
+                    const Float4 a = ExactNoise::perlin3(p, k, 0xBA5Du, Vector3i64(int64_t(1) << 41, -9, 77));
+                    const float f = 1.5f * exact_pow2(lod - k);
+                    CHECK(same_bits(regs[n3], Float4{ a.x * f, a.y * f, a.z * f, a.w * 1.5f }));
+                } else {
+                    CHECK(same_bits(regs[n3], Float4{}));
+                    CHECK(same_bits(regs[n2], Float4{}));
+                }
+            }
+        }
+    }
+}
+
 TEST_CASE("Archetype: values are the same bits at every LOD, gradients scale by exactly 2^lod") {
     const std::vector<VoxelPos> anchors = { VoxelPos(), VoxelPos(3000, -77, 5) };
     int64_t points = 0;
     int64_t in_domain = 0;
+    int64_t compared = 0;
     for (uint32_t seed = 0; seed < 100; seed++) {
         Program prog = random_program(seed, anchors, 40);
         prog.normalize = true;
@@ -263,6 +313,9 @@ TEST_CASE("Archetype: values are the same bits at every LOD, gradients scale by 
             const Float4 n0 = finish(prog, r0[prog.output], 0);
             bool ok = exact_domain(prog, r0);
             for (const int lod : { 1, 5, 14, 24 }) {
+                if (!same_bands(prog, 0, lod)) {
+                    continue; // the band rule drops an octave between LOD 0 and this one: another function
+                }
                 run_registers(prog, p, lod, rl);
                 ok = ok && exact_domain(prog, rl);
                 if (!ok) {
@@ -273,12 +326,15 @@ TEST_CASE("Archetype: values are the same bits at every LOD, gradients scale by 
                 const Float4 &c = rl[prog.output];
                 CHECK(same_bits(Float4{ a.x * s, a.y * s, a.z * s, a.w }, c));
                 CHECK(same_bits(finish(prog, c, lod), n0));
+                compared++;
             }
             in_domain += ok ? 1 : 0;
         }
     }
     MESSAGE("points in the exact domain at LODs 0, 1, 5, 14, 24: ", in_domain, " of ", points);
     CHECK(in_domain * 10 >= points * 8);
+    MESSAGE("(point, LOD) pairs with the same bands as LOD 0, compared: ", compared);
+    CHECK(compared > 1000);
 }
 
 TEST_CASE("Archetype: validate rejects malformed programs") {
@@ -424,6 +480,6 @@ TEST_CASE("Archetype: the generated GLSL is pinned and uses exact operations onl
         h = (h ^ uint8_t(text[i])) * 0x01000193u;
     }
     MESSAGE("generated GLSL: ", text.length(), " bytes, FNV-1a ", h);
-    CHECK(text.length() == 210572);
-    CHECK(h == 148225014u);
+    CHECK(text.length() == 215026);
+    CHECK(h == 1466245997u);
 }

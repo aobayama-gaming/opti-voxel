@@ -25,6 +25,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_instances"), &VoxelTerrain::get_archetype_instances);
     ClassDB::bind_method(D_METHOD("set_archetype_instance_area", "area"), &VoxelTerrain::set_archetype_instance_area);
     ClassDB::bind_method(D_METHOD("get_archetype_instance_area"), &VoxelTerrain::get_archetype_instance_area);
+    ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
+    ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
@@ -89,7 +91,8 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Archetypes:3,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_instances", PROPERTY_HINT_RANGE, "0,1000000,1"), "set_archetype_instances", "get_archetype_instances");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
@@ -283,6 +286,15 @@ void VoxelTerrain::set_archetype_instance_area(double p_area) {
 
 double VoxelTerrain::get_archetype_instance_area() const {
     return archetype_instance_area;
+}
+
+void VoxelTerrain::set_archetype_band(bool p_enabled) {
+    ERR_FAIL_COND_MSG(started, "archetype_band must be set before the terrain enters the tree.");
+    archetype_band = p_enabled;
+}
+
+bool VoxelTerrain::get_archetype_band() const {
+    return archetype_band;
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
@@ -492,13 +504,20 @@ void VoxelTerrain::_ready() {
             memdelete(sdf);
             SDFArchetype *archetype = memnew(SDFArchetype);
             archetype->set_scatter(archetype_instances, archetype_instance_area);
+            archetype->set_instance_band(archetype_band);
             sdf = archetype;
             break;
         }
         case 4:
             memdelete(sdf);
             sdf = memnew(SDFArchetype(SDFArchetype::Scene::SHAPES));
+            static_cast<SDFArchetype *>(sdf)->set_instance_band(archetype_band);
             break;
+    }
+    const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);
+    if (chunk_param.skirt_depth < min_skirt) {
+        VLOG(1, "VoxelTerrain: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
+        chunk_param.skirt_depth = min_skirt;
     }
     sdf->configure(chunk_param, lod_numbers);
 
@@ -989,6 +1008,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     origin["voxel"] = WorldCoord::to_string(chunk_param.origin_voxel());
     origin["chunk"] = WorldCoord::to_string(chunk_param.origin_chunk);
     d["world_origin"] = origin;
+    if (SDFGpuTable *table = sdf ? sdf->get_gpu_table() : nullptr) {
+        d["table"] = table->get_stats();
+    }
     d["frames"] = (int64_t)exec_time;
     d["load_complete"] = is_load_complete();
     d["frames_until_loaded"] = frames_until_loaded;

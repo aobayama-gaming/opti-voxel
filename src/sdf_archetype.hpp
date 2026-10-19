@@ -50,6 +50,24 @@ public:
         scatter_area = p_area;
     }
 
+    // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
+    void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
+
+    // The band rule's steps between LOD L and L+1: an instance erodes by ERODE_CELLS cells; a ground octave k,
+    // dropped from LOD k - 2 on, moves the ground by up to amp * PERLIN2_MAX, i.e. that many cells of LOD k - 3.
+    // Both at once next to a rock on the ground (its smooth blend follows both): the sum.
+    float min_skirt_depth(const ChunkParam &p_param, int p_lod_count) const override {
+        double ground = 0.0;
+        if (which == Scene::DEMO) {
+            for (const ExactNoise::Octave &o : height_fbm(p_param.voxel_size).octaves) {
+                if (o.k - ExactNoise::BAND_SHIFT + 1 < p_lod_count) {
+                    ground = MAX(ground, double(o.amp) * Archetype::PERLIN2_MAX * std::ldexp(1.0, ExactNoise::BAND_SHIFT - o.k));
+                }
+            }
+        }
+        return float(ground + Archetype::ERODE_CELLS);
+    }
+
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         create_scene(p_param.voxel_size, p_lod_count);
@@ -69,7 +87,7 @@ public:
         thread_local std::vector<uint32_t> list;
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
         snap->point_candidates(p_pos.voxel, p_lod, list);
-        const Archetype::Float4 r = Archetype::fold(snap->ground, *snap->library, snap->records.data(), list.data(), uint32_t(list.size()), p_pos, p_lod);
+        const Archetype::Float4 r = Archetype::fold(snap->ground, *snap->library, snap->records, list.data(), uint32_t(list.size()), p_pos, p_lod);
         return Archetype::finish_table(r, p_lod, snap->out_scale, snap->normalize).w;
     }
 
@@ -85,35 +103,10 @@ public:
     SDFGpuTable *get_gpu_table() override { return &gpu; }
 
     bool cull_exempt(const ChunkId &p_node, int p_lod) const override {
-        // The node's world box grown by the cull band (2 chunk sizes at its LOD), against every instance's
-        // influence box. O(records) with a short circuit: fine for the demo's small tables.
+        // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box,
+        // band or not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp).
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        if (!snap) {
-            return false;
-        }
-        const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);
-        const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
-        const int64_t grow = 2 * span;
-        const VoxelPos lo = min - VoxelPos(grow, grow, grow);
-        const VoxelPos hi = min + VoxelPos(span + grow, span + grow, span + grow);
-        for (const Archetype::TableRecord &rec : snap->records) {
-            if (rec.removed) {
-                continue;
-            }
-            bool overlap = true;
-            for (int a = 0; a < 3; a++) {
-                const int64_t rlo = rec.anchor[a] + rec.box_lo[a];
-                const int64_t rhi = rec.anchor[a] + rec.box_hi[a];
-                if (hi[a] < rlo || lo[a] > rhi) {
-                    overlap = false;
-                    break;
-                }
-            }
-            if (overlap) {
-                return true;
-            }
-        }
-        return false;
+        return snap && snap->near_instance(p_node, p_lod);
     }
 
     // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the
@@ -140,10 +133,11 @@ public:
         }
         finish_record(rec);
         const VoxelBox region = record_box(rec);
-        records.push_back(rec);
+        records.push_back(rec, version + 1);
         edit_k = rec.k;
         edit_margin_c = rec.margin_c;
-        rebuild(region);
+        set_edit_lods(rec, rec);
+        rebuild(region, records.size() - 1);
         return int(records.size() - 1);
     }
 
@@ -151,11 +145,14 @@ public:
         if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
             return false;
         }
-        const VoxelBox region = record_box(records[p_id]);
-        records[p_id].removed = true;
-        edit_k = records[p_id].k;
-        edit_margin_c = records[p_id].margin_c;
-        rebuild(region);
+        Archetype::TableRecord rec = records[p_id];
+        const VoxelBox region = record_box(rec);
+        rec.removed = true;
+        records.set(p_id, rec, version + 1);
+        edit_k = rec.k;
+        edit_margin_c = rec.margin_c;
+        set_edit_lods(rec, rec);
+        rebuild(region, p_id);
         return true;
     }
 
@@ -165,13 +162,15 @@ public:
         }
         const String error = edit_error(p_rotation, nullptr, 0, 0.0f);
         ERR_FAIL_COND_V_MSG(!error.is_empty(), false, "move_instance: " + error);
-        Archetype::TableRecord &rec = records[p_id];
+        Archetype::TableRecord rec = records[p_id];
+        const Archetype::TableRecord before = rec;
         const VoxelBox old_box = record_box(rec);
         rec.anchor = p_anchor;
         if (p_rotation) {
             std::copy(p_rotation, p_rotation + 9, rec.rotation);
         }
         finish_record(rec);
+        records.set(p_id, rec, version + 1);
         const VoxelBox new_box = record_box(rec);
         VoxelBox region;
         region.valid = true;
@@ -181,7 +180,8 @@ public:
         }
         edit_k = rec.k;
         edit_margin_c = rec.margin_c;
-        rebuild(region);
+        set_edit_lods(before, rec);
+        rebuild(region, p_id);
         return true;
     }
 
@@ -189,6 +189,12 @@ public:
     // edit's region): the chunks to re-mesh.
     bool edit_affects_chunk(const ChunkId &p_chunk) const override {
         if (!edit_box.valid) {
+            return false;
+        }
+        // The band rule: the changed instances are listed below edit_lod_max only, so a
+        // small dig doesn't re-mesh the coarse chunks around it.
+        const int lod = ChunkMath::get_lod(p_chunk);
+        if (lod >= edit_lod_max) {
             return false;
         }
         // The chunk's samples (span + skirt overhang) against the edit region grown by M(lod).
@@ -300,13 +306,15 @@ private:
     float out_scale = 1.0f;
     int lod_count = 24;
     uint32_t version = 0;
-    std::vector<Archetype::TableRecord> records; // editable: the snapshot is rebuilt from these
+    Archetype::RecordStore records; // editable (paged, copy on write): each snapshot shares its pages
     std::shared_ptr<const Archetype::InstanceSnapshot> snapshot;
     Archetype::GpuTable gpu;
     float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
     float edit_margin_c = 0.0f;
+    int edit_lod_max = 0; // the changed records are listed below this LOD (edit_affects_chunk)
     int scatter_count = 0; // --instances
     double scatter_area = 200.0; // --instance_area (metres)
+    bool instance_band = true; // --instance_band
     Scene which;
 
     // shapes() in metres, rounded to voxels.
@@ -351,10 +359,14 @@ private:
         return die;
     }
 
-    void rebuild(const VoxelBox &p_region) {
+    // A new snapshot: a whole new index (p_changed < 0: the scene was rebuilt) or the previous base plus the
+    // edited records' overlay.
+    void rebuild(const VoxelBox &p_region, int64_t p_changed = -1) {
         version++;
-        const std::shared_ptr<const Archetype::InstanceSnapshot> snap =
-                Archetype::build_snapshot(library, ground_program, out_scale, true, records, param, lod_count - 1, version);
+        const std::shared_ptr<const Archetype::InstanceSnapshot> previous = current();
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = p_changed >= 0 && previous
+                ? Archetype::edit_snapshot(*previous, records, { uint32_t(p_changed) }, version)
+                : Archetype::build_snapshot(library, ground_program, out_scale, true, records, param, lod_count - 1, version);
         std::atomic_store(&snapshot, snap);
         gpu.set_snapshot(snap);
         edit_box = p_region;
@@ -393,13 +405,12 @@ private:
     }
 
     void finish_record(Archetype::TableRecord &r_rec) const {
-        const Archetype::Bounds wb = Archetype::record_world_bounds((*library)[r_rec.def], r_rec);
-        for (int a = 0; a < 3; a++) {
-            r_rec.box_lo[a] = int32_t(wb.lo[a] - r_rec.anchor[a]);
-            r_rec.box_hi[a] = int32_t(wb.hi[a] - r_rec.anchor[a]);
-        }
-        r_rec.lipschitz = wb.lipschitz;
-        r_rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+        Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band);
+    }
+
+    // The LODs an edit can change: below the larger of the record's max_lod before and after it.
+    void set_edit_lods(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after) {
+        edit_lod_max = MAX(p_before.max_lod, p_after.max_lod);
     }
 
     VoxelBox record_box(const Archetype::TableRecord &p_rec) const {
@@ -446,7 +457,7 @@ private:
             const uint32_t salt_seed = seed++;
             rec.salt = salt_seed == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ salt_seed, 0x5EEDu, 0u }).x;
             finish_record(rec);
-            records.push_back(rec);
+            records.push_back(rec, version + 1);
         };
         const struct {
             double x, z, r, yaw;
@@ -496,6 +507,7 @@ private:
         lod_count = p_lod_count;
         edit_k = 0.0f;
         edit_margin_c = 0.0f;
+        edit_lod_max = 0;
         // The GPU buffers hold the scatter plus room for runtime edits (the mesher reads this at init).
         gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
         rebuild(VoxelBox());

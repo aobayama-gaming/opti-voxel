@@ -94,7 +94,7 @@ private:
     //input
     PackedByteArray input_chunk_id;
     PackedByteArray input_table_list; // the batch's instance list (archetype instances)
-    PackedByteArray input_table_records; // the table's records, when they changed since the last batch
+    PackedByteArray input_table_records; // the table's records changed since the last batch (record_bytes spans)
 
     // GPU stuff
 

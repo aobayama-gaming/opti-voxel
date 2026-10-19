@@ -222,7 +222,7 @@ void GPUDirectMesher::_rt_initialize() {
     if (SDFGpuTable *table = sdf->get_gpu_table()) {
         // Sized for the capacity up front; the records arrive with the first dispatch (_table_payload).
         buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
-        const uint64_t list_words = uint64_t(settings.batch_size) * MAX<uint64_t>(table->instance_capacity(), 1u);
+        const uint64_t list_words = uint64_t(settings.batch_size) * table->max_chunk_list(); // no list is longer (build_lists)
         table_list_capacity = list_words * 4;
         buffer_table_list = rd->storage_buffer_create(table_list_capacity);
         uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
@@ -356,7 +356,7 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
     }
     // The records the batch's lists were built against (main thread, same snapshot), when they changed.
     if (!p_records.is_empty()) {
-        rd->buffer_update(buffer_table_records, 0, p_records.size(), p_records);
+        SDFGpuTable::upload_records(rd, buffer_table_records, p_records);
     }
     if (!p_list.is_empty()) {
         ERR_FAIL_COND_MSG(uint64_t(p_list.size()) > table_list_capacity, vformat("GPUDirectMesher: batch list %d bytes over the %d B buffer.", p_list.size(), table_list_capacity));
@@ -373,7 +373,7 @@ uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, P
     table->build_lists(p_chunks, chunk_param, r_ids, r_list);
     const uint32_t version = table->version();
     if (version != sent_table_version) {
-        r_records = table->record_bytes(sent_table_version);
+        r_records = table->record_bytes(sent_table_version, sent_table_version);
     }
     return version;
 }

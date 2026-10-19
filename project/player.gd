@@ -89,6 +89,12 @@ func _enter_tree() -> void:
 			drag_op = 0
 		if a.begins_with("--drag_radius="):
 			drag_radius = a.trim_prefix("--drag_radius=").to_float()
+		if a.begins_with("--instances=") and terrain:
+			terrain.archetype_instances = a.trim_prefix("--instances=").to_int()
+		if a.begins_with("--instance_area=") and terrain:
+			terrain.archetype_instance_area = a.trim_prefix("--instance_area=").to_float()
+		if a == "--instance_band=0" and terrain:
+			terrain.archetype_band = false
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 

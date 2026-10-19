@@ -38,6 +38,9 @@ struct ChunkParam {
 // coordinates, a LOD-L chunk's coordinates have their lowest set bit at L and it spans 2^(L+1) units.
 namespace ChunkMath {
 
+// The most LODs a terrain has (0 .. MAX_LOD_NUMBERS - 1): the GPU reads a chunk's LOD from its id's low 32 bits.
+inline constexpr int MAX_LOD_NUMBERS = 31;
+
 int64_t get_parent_from_child(int64_t coord, int &lod);
 int64_t get_parent_from_child(int64_t coord);
 
