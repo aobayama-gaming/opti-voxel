@@ -46,6 +46,20 @@ struct ScanView {
     // How much coarser the LOD rule gets away from the cone: lod_pixel_error_back / lod_pixel_error - 1.
     // 0: the scanned set ignores the direction.
     double back_scale = 0.0;
+    // The views the camera had (ChunkDiscoverer::remember_view): a camera chunk, a unit view axis, and a
+    // fade = max(0, distance from the camera chunk to that one - memory_distance), so a view fades out as
+    // the camera walks away from where it was. The LOD rule coarsens away from the union of their cones,
+    // each pushed back by its fade. One of them is the camera chunk's own, within RESCAN_TURN_DEG of
+    // `forward`. Sorted by increasing fade. None (memory off): the cone around `forward` alone.
+    struct ViewMemory {
+        ChunkId apex;
+        Vector3 dir;
+        double fade = 0.0;
+    };
+    static constexpr int MAX_VIEW_MEMORIES = 64;
+    ViewMemory memories[MAX_VIEW_MEMORIES];
+    int memory_count = 0;
+    double memory_distance = 0.0; // chunk-id units; 0: memory off
 
     void set_half_angle(double p_rad) {
         const double a = p_rad < 0.0 ? 0.0 : (p_rad > Math_PI ? Math_PI : p_rad);
@@ -93,8 +107,12 @@ float chunk_bounding_radius(int p_lod);
 // Distance from the bounding sphere of `p_chunk` (LOD p_lod) to the view cone, in chunk-id units; 0 when
 // they meet. 1-Lipschitz in the chunk's centre, like any distance to a set.
 double view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
+// The LOD rule's gap: the least, over p_view.memories, of the gap to the memory's cone (apex at its camera
+// chunk) plus its fade; view_cone_gap without memories. Each term is a distance plus a constant, so it is
+// still 1-Lipschitz in the chunk's centre.
+double lod_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
 // The distance the LOD rule compares to its LOD's threshold: from the camera chunk to the chunk's bounding
-// sphere, plus back_scale times its gap to the view cone. In the cone it is the plain distance; far behind,
+// sphere, plus back_scale times its gap to the view cones (lod_cone_gap). In the cone it is the plain distance; far behind,
 // (1 + back_scale) times it: the thresholds of lod_pixel_error_back. It changes by at most (1 + back_scale)
 // per unit of position, so face neighbours stay within one LOD (unit-tested at error 1 | 4).
 double lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);

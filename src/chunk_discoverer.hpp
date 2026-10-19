@@ -74,6 +74,7 @@ private:
     PackedFloat32Array lod_distances;
     double cone_half_angle = Math_PI; // the view cone of ScanView: every node is in it by default
     double back_scale = 0.0; // ScanView::back_scale
+    double memory_distance = 0.0; // ScanView::memory_distance (set_view_memory)
     CullMode cull_mode = CULL_LEGACY;
     bool use_cache = true;
     CullCache cache;
@@ -105,6 +106,11 @@ private:
         int64_t scans_skipped_same_chunk = 0;
         int64_t last_scan_size = 0;
         int64_t last_out_of_view = 0;
+        int64_t last_memories = 0;
+        int64_t memories_added = 0;
+        int64_t memories_evicted = 0;
+        int64_t delta_entered_total = 0; // chunks that entered / left the scanned set, over every scan
+        int64_t delta_left_total = 0;
         int64_t last_nodes_visited = 0;
         int64_t last_sdf_calls = 0;
         int64_t last_culled = 0;
@@ -151,16 +157,30 @@ public:
     void start();
     void stop();
 
-    // A turn of the view axis past this angle asks for a rescan when the LOD rule depends on the direction.
+    // A turn of the view axis past this angle asks for a rescan when the LOD rule depends on the direction:
+    // without memory, the new axis replaces the scanned one; with it, a view is remembered.
     static constexpr double RESCAN_TURN_DEG = 8.0;
+    // lod_view_memory_m < 0: the memory distance is where this LOD starts.
+    static constexpr int VIEW_MEMORY_AUTO_LOD = 2;
 
-    // The view of a camera at render position p_pos looking along p_forward.
+    // The view of a camera at render position p_pos looking along p_forward, without memories.
     ScanView make_view(const Vector3 &p_pos, const Vector3 &p_forward) const;
-    // p_new needs another scan than p_scanned: another camera chunk, or a turn past RESCAN_TURN_DEG when
-    // the LOD rule depends on the direction.
+    // p_new needs another scan than p_scanned: another camera chunk, or, when the LOD rule depends on the
+    // direction, other memories (with memory) or a turn past RESCAN_TURN_DEG (without).
     static bool view_changed(const ScanView &p_scanned, const ScanView &p_new);
-    // Asks for a scan when the view changed (view_changed) since the last one asked for.
+    // r_view (camera chunk, forward, memory_distance and the previous view's memories) remembers its own
+    // view: unless a memory at its camera chunk is within RESCAN_TURN_DEG of forward, one is added, over the
+    // most faded one when full. Then the fades are recomputed for its camera chunk and the memories sorted
+    // by fade. No memory distance or no forward: no memories. Returns the memories evicted (0 or 1) through
+    // r_evicted and whether one was added. Static for the unit tests.
+    static bool remember_view(ScanView &r_view, int64_t &r_evicted);
+    // Remembers the camera's view (remember_view) and asks for a scan when the view changed (view_changed).
     void set_camera(const Vector3 &p_pos, const Vector3 &p_forward);
+    // The view of the latest set_camera, memories included.
+    ScanView get_view();
+    // How far the camera walks from where it had a view before that view starts to fade (render metres;
+    // < 0: where LOD VIEW_MEMORY_AUTO_LOD starts, 0: no memory). After setup_lod, before start().
+    void set_view_memory(double p_metres);
     // An instance edit changed the SDF in p_box: the next scan drops the cull verdicts of the nodes
     // near it and runs even if the camera chunk didn't change.
     void invalidate(const VoxelBox &p_box);

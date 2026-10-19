@@ -365,10 +365,18 @@ to every change, and a reviewer may reject a PR on any of them.
   The split test compares `ChunkMath::lod_distance`: the distance plus back_scale times the bounding sphere's
   gap to the cone (1-Lipschitz). In the cone it is the front rule bit for bit; far behind, the back error's.
   Face neighbours stay within one LOD up to a ratio of 4 (unit-tested at 720p; 8 gave jumps of 2, so
-  `setup_lod` warns past 4). A turn past `ChunkDiscoverer::RESCAN_TURN_DEG` (8 degrees) rescans when back_scale > 0.
+  `setup_lod` warns past 4). View memory (`lod_view_memory_m`, `--lod_view_memory=M`; default -1 = where LOD 2
+  starts, 0 = off): the view carries up to 64 `ScanView::memories` (camera chunk, view axis, fade = distance from
+  the camera past M), sorted by fade, and the gap is `ChunkMath::lod_cone_gap` = min over them of gap to their
+  cone + fade: still 1-Lipschitz, still a pure function of the view (audit / compare re-scan it). `remember_view`
+  adds the camera chunk's view unless one there is within `RESCAN_TURN_DEG` (8 degrees), evicting the most faded
+  when full; besides camera chunk crossings, a rescan only follows an added memory. Turning in place: about 40 memories in the
+  first turn, then no rescan and no re-mesh. Walking on: the views fade with distance (no timer). `bench.gd
+  --scenario=turn --turns=N` and `--scenario=turn_walk --walk=M`; `discoverer.delta_entered_total /
+  delta_left_total` in each phase's stats count the churn.
   Both meshers' queues are indexed by `ChunkMath::load_queue`: in the cone first, then by LOD, Morton order
   inside (batches stay compact for page culling). `--scenario=turn` (bench.gd) turns the camera 360 degrees after the load.
-  Cost: a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
+  Cost with memory 0 (measured in PR 34): a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
   back already leaves +64% draw calls): after one full turn at error 1 | 4, the steady state is +26% render GPU
   vs error 1 without the split. A locality-aware compaction would close it.
 - Destroy check (`VoxelState`, `src/chunk_memory.*`) is incremental: the discoverer publishes each scan

@@ -1,5 +1,6 @@
 #include "voxel_terrain.hpp"
 #include "rd_utils.hpp"
+#include <cmath>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
@@ -37,6 +38,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error_back"), &VoxelTerrain::get_lod_pixel_error_back);
     ClassDB::bind_method(D_METHOD("set_lod_view_margin_deg", "degrees"), &VoxelTerrain::set_lod_view_margin_deg);
     ClassDB::bind_method(D_METHOD("get_lod_view_margin_deg"), &VoxelTerrain::get_lod_view_margin_deg);
+    ClassDB::bind_method(D_METHOD("set_lod_view_memory_m", "metres"), &VoxelTerrain::set_lod_view_memory_m);
+    ClassDB::bind_method(D_METHOD("get_lod_view_memory_m"), &VoxelTerrain::get_lod_view_memory_m);
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
@@ -107,6 +110,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, "0,180,1,suffix:deg"), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
@@ -353,6 +357,16 @@ void VoxelTerrain::set_lod_view_margin_deg(float p_degrees) {
 
 float VoxelTerrain::get_lod_view_margin_deg() const {
     return lod_view_margin_deg;
+}
+
+void VoxelTerrain::set_lod_view_memory_m(float p_metres) {
+    ERR_FAIL_COND_MSG(started, "lod_view_memory_m must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(std::isnan(p_metres), "lod_view_memory_m must be a number.");
+    lod_view_memory_m = p_metres;
+}
+
+float VoxelTerrain::get_lod_view_memory_m() const {
+    return lod_view_memory_m;
 }
 
 Vector3 VoxelTerrain::_camera_forward() const {
@@ -616,6 +630,7 @@ void VoxelTerrain::_ready() {
             fov_rad,
             lod_pixel_error_back,
             half_diagonal_fov + Math::deg_to_rad(lod_view_margin_deg));
+    chunk_discoverer->set_view_memory(lod_view_memory_m);
 
     chunk_discoverer->start();
 
@@ -1020,8 +1035,12 @@ bool VoxelTerrain::is_load_complete() {
     }
     // The received scan must be the camera's current one: a camera moved (bench --above_ground) or turned
     // after _ready is otherwise "loaded" with the first scan while the next one is still running.
-    if (camera != nullptr && ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->make_view(camera->get_global_position(), _camera_forward()))) {
-        return false;
+    // set_camera first: the camera's current view, with the views it remembers.
+    if (camera != nullptr) {
+        chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
+        if (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view())) {
+            return false;
+        }
     }
     if (direct_mesher) {
         return direct_mesher->is_idle();

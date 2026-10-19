@@ -155,16 +155,12 @@ float ChunkMath::chunk_bounding_radius(int p_lod) {
     return std::sqrt(3.0f) * static_cast<float>(int64_t(1) << p_lod);
 }
 
-double ChunkMath::view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
-    if (p_view.forward == Vector3()) {
-        return 0.0;
-    }
-    const double vx = double(p_chunk.x - p_view.camera_chunk.x);
-    const double vy = double(p_chunk.y - p_view.camera_chunk.y);
-    const double vz = double(p_chunk.z - p_view.camera_chunk.z);
-    const double fx = p_view.forward.x;
-    const double fy = p_view.forward.y;
-    const double fz = p_view.forward.z;
+namespace {
+// Gap from the bounding sphere of a LOD-p_lod chunk, at p_v from the apex, to the cone around unit axis p_f.
+double cone_gap(double vx, double vy, double vz, const Vector3 &p_f, int p_lod, const ScanView &p_view) {
+    const double fx = p_f.x;
+    const double fy = p_f.y;
+    const double fz = p_f.z;
     const double along = vx * fx + vy * fy + vz * fz;
     // Distance to the axis from |v x f|, accurate near the axis.
     const double cx = vy * fz - vz * fy;
@@ -180,8 +176,32 @@ double ChunkMath::view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanVie
         return 0.0;
     }
     const double past_cos = along * p_view.cos_half_angle + perp * p_view.sin_half_angle;
-    const double gap = (past_cos > 0.0 ? past_sin : std::sqrt(vx * vx + vy * vy + vz * vz)) - chunk_bounding_radius(p_lod);
+    const double gap = (past_cos > 0.0 ? past_sin : std::sqrt(vx * vx + vy * vy + vz * vz)) - ChunkMath::chunk_bounding_radius(p_lod);
     return gap > 0.0 ? gap : 0.0;
+}
+} //namespace
+
+double ChunkMath::view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
+    if (p_view.forward == Vector3()) {
+        return 0.0;
+    }
+    return cone_gap(double(p_chunk.x - p_view.camera_chunk.x), double(p_chunk.y - p_view.camera_chunk.y), double(p_chunk.z - p_view.camera_chunk.z),
+            p_view.forward, p_lod, p_view);
+}
+
+double ChunkMath::lod_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
+    if (p_view.memory_count == 0) {
+        return view_cone_gap(p_chunk, p_lod, p_view);
+    }
+    double best = INFINITY;
+    // Sorted by fade: once a fade alone reaches the best gap, no later memory can beat it.
+    for (int i = 0; i < p_view.memory_count && p_view.memories[i].fade < best; i++) {
+        const ScanView::ViewMemory &m = p_view.memories[i];
+        const double gap = m.fade +
+                cone_gap(double(p_chunk.x - m.apex.x), double(p_chunk.y - m.apex.y), double(p_chunk.z - m.apex.z), m.dir, p_lod, p_view);
+        best = MIN(best, gap);
+    }
+    return best;
 }
 
 double ChunkMath::lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
@@ -189,7 +209,7 @@ double ChunkMath::lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView
     if (p_view.back_scale == 0.0) {
         return near;
     }
-    return near + p_view.back_scale * view_cone_gap(p_chunk, p_lod, p_view);
+    return near + p_view.back_scale * lod_cone_gap(p_chunk, p_lod, p_view);
 }
 
 int ChunkMath::load_queue(const ChunkId &p_chunk, int p_lod_count, const ScanView &p_view) {

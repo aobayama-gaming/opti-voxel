@@ -163,6 +163,44 @@ TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the
     }
 }
 
+TEST_CASE("ChunkMath: lod_cone_gap is the least faded gap to the remembered cones") {
+    ScanView view;
+    view.camera_chunk = ChunkId(1, 1, 1);
+    view.forward = Vector3(0, 0, -1);
+    view.set_half_angle(Math::deg_to_rad(70.0));
+    CHECK(ChunkMath::lod_cone_gap(ChunkId(1, 1, 101), 0, view) == ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, view)); // no memory
+    // Views from the camera chunk and from spots it walked away from (sorted by fade, as remember_view does).
+    const ScanView::ViewMemory memories[] = {
+        { ChunkId(1, 1, 1), Vector3(0, 0, -1), 0.0 },
+        { ChunkId(1, 1, 1), Vector3(1, 0, 0), 0.0 },
+        { ChunkId(-39, 3, 41), Vector3(0.3f, -0.8f, 0.5f).normalized(), 10.0 },
+        { ChunkId(201, -7, 1), Vector3(-0.6f, 0.1f, 0.7f).normalized(), 150.0 },
+    };
+    for (const ScanView::ViewMemory &m : memories) {
+        view.memories[view.memory_count++] = m;
+    }
+    uint64_t state = 777;
+    auto next = [&state]() {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return int64_t(state >> 40) % 2001 - 1000;
+    };
+    for (int i = 0; i < 2000; i++) {
+        const ChunkId a(next() * 2 + 1, next() * 2 + 1, next() * 2 + 1);
+        double want = INFINITY;
+        for (const ScanView::ViewMemory &m : memories) {
+            ScanView one = view;
+            one.camera_chunk = m.apex;
+            one.forward = m.dir;
+            want = MIN(want, m.fade + ChunkMath::view_cone_gap(a, 0, one));
+        }
+        CAPTURE(a);
+        CHECK(ChunkMath::lod_cone_gap(a, 0, view) == want);
+        // Still 1-Lipschitz: the LOD rule's one-LOD balance relies on it.
+        const ChunkId b = a + ChunkId(next() % 16 * 2, next() % 16 * 2, next() % 16 * 2);
+        CHECK(std::abs(ChunkMath::lod_cone_gap(a, 0, view) - ChunkMath::lod_cone_gap(b, 0, view)) <= a.distance_to(b) + 1e-9);
+    }
+}
+
 TEST_CASE("ChunkMath: lod_distance grows away from the view cone, up to the back error") {
     ScanView view;
     view.camera_chunk = ChunkId(1, 1, 1);

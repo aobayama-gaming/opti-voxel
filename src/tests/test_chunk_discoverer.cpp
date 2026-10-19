@@ -4,6 +4,7 @@
 #include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 
@@ -168,6 +169,8 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     const float half_diagonal = std::atan(std::tan(fov * 0.5f) * std::sqrt(1.0f + (16.0f / 9.0f) * (16.0f / 9.0f)));
     discoverer->setup_lod(lods, 1.0f, 720.0f, fov, 4.0f, half_diagonal + Math::deg_to_rad(20.0f));
     const Vector3 pose(3000.0f, 3200.0f, 2000.0f); // near the 15-LOD cascade ground
+    size_t split_x_size = 0; // forward +x: the set of the split, and of the front error (reused below)
+    size_t front_x_size = 0;
     for (const Vector3 &forward : { Vector3(1, 0, 0), Vector3(0.3f, -0.8f, 0.5f), Vector3(-0.2f, 0.3f, -1.0f) }) {
         CAPTURE(forward);
         const ScanView split = discoverer->make_view(pose, forward);
@@ -197,11 +200,47 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
         CHECK(set_difference(got_in, want_in) == 0);
         CHECK(split_counters.out_of_view > 0);
         CHECK(got.size() < want.size());
+        if (forward == Vector3(1, 0, 0)) {
+            split_x_size = got.size();
+            front_x_size = want.size();
+        }
         MESSAGE("chunks: ", int64_t(want.size()), " at error 1, ", int64_t(got.size()), " with 4 behind (", split_counters.out_of_view, " out of view)");
 
         std::vector<int64_t> faces;
         face_lod_jumps(got, discoverer->get_max_lod(), faces);
         CHECK(faces.size() <= 2); // jumps of 0 and 1 only
+    }
+
+    // Remembered views (a camera that looked around, then walked): the LOD rule's distance is still
+    // 1-Lipschitz (each term is a distance to a cone plus a constant), so face neighbours stay within one
+    // LOD, and the set lies between the current view's alone and the front error's.
+    {
+        ScanView looked = discoverer->make_view(pose, Vector3(1, 0, 0));
+        looked.memory_distance = 30.0;
+        const ChunkId spot = looked.camera_chunk - ChunkId(64, 0, 0); // 64 units back along x
+        for (int i = 0; i < 9; i++) {
+            looked.forward = Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(40.0f * i));
+            ScanView there = looked;
+            there.camera_chunk = spot;
+            int64_t evicted = 0;
+            ChunkDiscoverer::remember_view(there, evicted);
+            looked.memory_count = there.memory_count;
+            std::copy(there.memories, there.memories + there.memory_count, looked.memories);
+        }
+        looked.forward = Vector3(1, 0, 0);
+        int64_t evicted = 0;
+        CHECK(ChunkDiscoverer::remember_view(looked, evicted));
+        CHECK(looked.memory_count == 10);
+        CHECK(looked.memories[0].fade == 0.0);
+        CHECK(looked.memories[9].fade == doctest::Approx(64.0 - 30.0));
+        LODHashSet got;
+        ChunkDiscoverer::ScanCounters c;
+        discoverer->scan(looked, ChunkDiscoverer::CULL_LEGACY, got, c);
+        CHECK(split_x_size < got.size());
+        CHECK(got.size() < front_x_size);
+        std::vector<int64_t> faces;
+        face_lod_jumps(got, discoverer->get_max_lod(), faces);
+        CHECK(faces.size() <= 2);
     }
 
     // A turn rescans past RESCAN_TURN_DEG, and only when the LOD rule depends on the direction.
@@ -214,4 +253,73 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     off.back_scale = 0.0;
     CHECK(!ChunkDiscoverer::view_changed(a, off));
     memdelete(discoverer);
+}
+
+// remember_view: a camera turning in place remembers a view per RESCAN_TURN_DEG during its first turn,
+// then its scanned set stops changing; walking on, the views it had fade with the distance.
+TEST_CASE("ChunkDiscoverer: remembered views stop the rescans of a camera turning in place") {
+    auto turn = [](ScanView &r_view, int p_degrees, int &r_changes) {
+        r_changes = 0;
+        const int start = int(std::lround(Math::rad_to_deg(std::atan2(-r_view.forward.z, r_view.forward.x))));
+        for (int deg = start + 1; deg <= start + p_degrees; deg++) {
+            ScanView next = r_view;
+            next.forward = Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(float(deg)));
+            int64_t evicted = 0;
+            ChunkDiscoverer::remember_view(next, evicted);
+            CHECK(evicted == 0);
+            if (ChunkDiscoverer::view_changed(r_view, next)) {
+                r_changes++;
+                r_view = next;
+            }
+        }
+    };
+    ScanView view;
+    view.camera_chunk = ChunkId(1, 1, 1);
+    view.forward = Vector3(1, 0, 0);
+    view.back_scale = 3.0;
+    view.memory_distance = 30.0;
+    int64_t evicted = 0;
+    CHECK(ChunkDiscoverer::remember_view(view, evicted));
+    int first = 0;
+    int second = 0;
+    turn(view, 360, first);
+    turn(view, 360, second);
+    CHECK(first >= 30); // one view every RESCAN_TURN_DEG + 1 degree
+    CHECK(second == 0);
+    CHECK(view.memory_count == first + 1);
+
+    // Without memory every RESCAN_TURN_DEG of every turn rescans.
+    ScanView off = view;
+    off.memory_distance = 0.0;
+    CHECK(!ChunkDiscoverer::remember_view(off, evicted));
+    CHECK(off.memory_count == 0);
+    turn(off, 360, second);
+    CHECK(second >= 30);
+
+    // Walking along x: within memory_distance nothing fades; past it, the turn's views fade with the
+    // distance, the camera chunk's own view first.
+    for (int64_t x = 3; x <= 101; x += 2) {
+        ScanView next = view;
+        next.camera_chunk = ChunkId(x, 1, 1);
+        CHECK(ChunkDiscoverer::remember_view(next, evicted));
+        CHECK(ChunkDiscoverer::view_changed(view, next));
+        view = next;
+    }
+    bool own = false;
+    for (int i = 0; i < view.memory_count; i++) {
+        own = own || (view.memories[i].apex == view.camera_chunk && view.memories[i].fade == 0.0);
+    }
+    CHECK(own);
+    CHECK(view.memories[view.memory_count - 1].apex == ChunkId(1, 1, 1));
+    CHECK(view.memories[view.memory_count - 1].fade == doctest::Approx(100.0 - 30.0));
+    for (int i = 1; i < view.memory_count; i++) {
+        CHECK(view.memories[i - 1].fade <= view.memories[i].fade);
+    }
+    // Full: a new view evicts the most faded one (a view of the turn, the farthest).
+    CHECK(view.memory_count == ScanView::MAX_VIEW_MEMORIES);
+    ScanView next = view;
+    next.forward = Vector3(0, 0, 1);
+    CHECK(ChunkDiscoverer::remember_view(next, evicted));
+    CHECK(evicted == 1);
+    CHECK(next.memory_count == ScanView::MAX_VIEW_MEMORIES);
 }

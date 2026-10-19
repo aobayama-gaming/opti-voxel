@@ -85,6 +85,7 @@ private:
     float lod_pixel_error = 2.0f;
     float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
     float lod_view_margin_deg = 20.0f;
+    float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
     VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
     GPUDirectMesher::Settings direct_settings;
     int debug_view = 0;
@@ -207,7 +208,7 @@ public:
     void set_lod_pixel_error(float p_error);
     float get_lod_pixel_error() const;
     // The error away from the view: coarser LODs outside the view cone, from lod_pixel_error at its edge to
-    // this one behind the camera (0 or <= lod_pixel_error: off). Turning then rescans and re-meshes.
+    // this one behind the camera (0 or <= lod_pixel_error: off). See lod_view_memory_m for turning.
     void set_lod_pixel_error_back(float p_error);
     float get_lod_pixel_error_back() const;
     // The view cone: the frustum's diagonal half-FOV plus this margin, in degrees. It keeps lod_pixel_error
@@ -215,6 +216,13 @@ public:
     // load the chunks inside it first.
     void set_lod_view_margin_deg(float p_degrees);
     float get_lod_view_margin_deg() const;
+    // The views the camera had keep lod_pixel_error in their cone until the camera walks this many metres
+    // from where it had them; past that they fade (the LOD coarsens with the extra distance). Turning in
+    // place ends up with the front set all around and stops re-meshing; walking on coarsens what is behind
+    // as the views fade. < 0 (default): the distance where LOD ChunkDiscoverer::VIEW_MEMORY_AUTO_LOD starts.
+    // 0: only the current view (every turn re-meshes the cone's edges).
+    void set_lod_view_memory_m(float p_metres);
+    float get_lod_view_memory_m() const;
 
     static constexpr int MAX_LOD_NUMBERS = ChunkMath::MAX_LOD_NUMBERS;
     void set_lod_numbers(int p_count);
