@@ -19,8 +19,8 @@ iterate past a warning, never to commit one.
   tools/setup_hooks.sh                                      # once per clone: format check on commit
   ```
   Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
-  ends with a segfault in the extension (headless editor exit, pre-existing). It's harmless as
-  long as `project/.godot/extension_list.cfg` exists afterwards.
+  opens the main scene headless: the terrain finds no RenderingDevice, prints one ERROR and stays
+  empty (it used to segfault in `QuadPagePool::_rt_create_page`; CI now fails on a crashing import).
 - When a feature is done and its checks pass, commit, push and open the PR into `dev` without waiting
   to be asked. Don't merge it: the user reviews and merges.
 - Perf PRs carry a measured before/after table and name the new bottlenecks.

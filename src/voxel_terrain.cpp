@@ -500,6 +500,11 @@ void VoxelTerrain::_ready() {
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
     ERR_FAIL_COND_MSG(lod_numbers < 1 || lod_numbers > MAX_LOD_NUMBERS, "VoxelTerrain: lod_numbers out of range.");
+    // Both meshers need a RenderingDevice (GPU Direct the main one, Legacy a local one, which needs it too).
+    // Without one (--headless, the Compatibility renderer) the page pool would dereference null on the
+    // render thread: the terrain stays empty instead. This also covers the editor's headless --import.
+    ERR_FAIL_NULL_MSG(RenderingServer::get_singleton()->get_rendering_device(),
+            "VoxelTerrain: no RenderingDevice (--headless or the Compatibility renderer): the terrain is disabled.");
 
     started = true;
     start_usec = now_usec();
