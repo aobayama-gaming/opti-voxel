@@ -200,7 +200,7 @@ to every change, and a reviewer may reject a PR on any of them.
   CPU and the GPU, and two chunks of the same LOD, take the same branch: seams stay exact.
   **Band rule (step 4):** a noise op of octave k (PERLIN*, T_PERLIN*) is +0 at LODs above k - 3
   (`ExactNoise::band_kept`, `BAND_SHIFT` = the cascade's insertion lattice: 8 samples per wavelength), on
-  both back-ends. Each record has a LOD range `[min_lod, max_lod)` (`set_band`): at LOD L its distance is
+  both back-ends. Each record has a `max_lod` (`set_band`): at LOD L its distance is
   raised by `ERODE_CELLS * (2^L - 1)` voxels (1 cell per LOD: it shrinks uniformly, GPU and CPU alike), and
   it is listed only below the first LOD whose erosion reaches its depth (half its box's smallest side times
   L) plus k, where the eroded shape no longer reaches zero, so the drop changes no sign. The band steps
@@ -220,10 +220,12 @@ to every change, and a reviewer may reject a PR on any of them.
   open-addressing `NodeRangeMap`, Morton-ordered levels; 1M rocks in ~1.8 s) and an overlay over the records
   edited since, rebuilt by every edit (~15 us at 1M); edited base entries are masked; past
   `InstanceSnapshot::REBASE` (2,048) edited records the base is rebuilt (unit test: the overlay lists what a
-  whole new index lists). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
-  write per page); the GPU re-uploads the pages changed since its version. `build_lists` runs on the worker
-  pool; a list is at most `max_chunk_list()` (4,096; longer is truncated, ERR, `table.list_truncated`), and
-  the list buffer holds batch size * that. `get_debug_stats()["table"]`: list length avg / max per LOD,
+  whole new index lists), on the main thread for now: ~1.8 s at 1M every 2,048 edited records (moving it to a
+  worker and publishing when done is the follow-up). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
+  write per page); the GPU re-uploads the runs of pages changed since its version (`record_bytes` spans,
+  `SDFGpuTable::upload_records`). `build_lists` runs on the worker pool; the list buffer holds batch size *
+  `max_chunk_list()` (4,096) words, a batch over it is cut (ERR, `table.list_truncated`; the GPU then
+  disagrees with the CPU there). `get_debug_stats()["table"]`: list length avg / max per LOD,
   list build ms. `SDFBase::cull_exempt` (`near_instance`, from the index: per-LOD occupancy + coarser
   nodes' boxes) feeds the discoverer's no-cull rule, band or not: a node near an instance's box is never
   culled (asked only when the corners would cull). FrameSpike's table probe checks the library + fold (with

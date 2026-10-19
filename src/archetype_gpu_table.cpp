@@ -5,6 +5,7 @@
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <algorithm>
+#include <cstring>
 
 namespace Archetype {
 
@@ -18,21 +19,34 @@ String GpuTable::glsl_set_chunk() const {
     return "\n    g_sdf_chunk = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size];";
 }
 
-PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_version, uint32_t &r_first) const {
+PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_version) const {
     const std::shared_ptr<const InstanceSnapshot> s = snapshot();
     PackedByteArray bytes;
     r_version = s ? s->version : 0u;
-    r_first = 0;
     if (!s) {
         return bytes;
     }
     // The buffer is sized for capacity() up front; only the pages changed since the GPU's version go up.
     ERR_FAIL_COND_V_MSG(s->records.size() > capacity, bytes, vformat("GpuTable: %d instances, over the GPU capacity of %d.", s->records.size(), capacity));
-    uint32_t count = 0;
-    s->records.changed_since(p_have_version, r_first, count);
-    bytes.resize(int64_t(count) * RECORD_BYTES);
-    for (uint32_t i = 0; i < count; i++) {
-        encode_record(bytes, i, s->records[r_first + i]);
+    std::vector<std::pair<uint32_t, uint32_t>> runs;
+    s->records.changed_since(p_have_version, runs);
+    int64_t total = 4;
+    for (const std::pair<uint32_t, uint32_t> &r : runs) {
+        total += 8 + int64_t(r.second) * RECORD_BYTES;
+    }
+    bytes.resize(total);
+    bytes.encode_u32(0, uint32_t(runs.size()));
+    int64_t at = 4;
+    for (const std::pair<uint32_t, uint32_t> &r : runs) {
+        bytes.encode_u32(at, r.first * RECORD_BYTES);
+        bytes.encode_u32(at + 4, r.second * RECORD_BYTES);
+        PackedByteArray span;
+        span.resize(int64_t(r.second) * RECORD_BYTES);
+        for (uint32_t i = 0; i < r.second; i++) {
+            encode_record(span, i, s->records[r.first + i]);
+        }
+        std::memcpy(bytes.ptrw() + at + 8, span.ptr(), span.size());
+        at += 8 + span.size();
     }
     return bytes;
 }
@@ -60,19 +74,21 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
     } else if (p_chunks.size() == 1) {
         Job::run(&job, 0);
     }
+    const size_t budget = p_chunks.size() * size_t(cap);
     std::vector<uint32_t> words;
     for (size_t i = 0; i < p_chunks.size(); i++) {
         std::vector<uint32_t> &indices = lists[i];
-        const int lod = MIN(MAX(ChunkMath::get_lod(p_chunks[i]), 0), 31);
+        const int lod = MIN(MAX(ChunkMath::get_lod(p_chunks[i]), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
         list_stats.chunks[lod]++;
         list_stats.entries[lod] += int64_t(indices.size());
         list_stats.longest[lod] = MAX(list_stats.longest[lod], int64_t(indices.size()));
-        if (indices.size() > cap) {
-            if (list_stats.truncated++ == 0) {
-                ERR_PRINT(vformat("GpuTable: a LOD %d chunk lists %d instances, over the %d a chunk can carry: truncated (wrong surface there).", lod,
-                        int64_t(indices.size()), cap));
-            }
-            indices.resize(cap);
+        // The buffer holds batch size * cap words: one long list fits beside short ones. Only a batch over the
+        // whole budget is cut (its chunk gets a wrong surface, and the CPU's evaluate disagrees there).
+        if (words.size() + indices.size() > budget) {
+            list_stats.truncated++;
+            ERR_PRINT(vformat("GpuTable: a batch's instance lists are over the %d words of the buffer: a LOD %d chunk's list of %d truncated (wrong surface there).",
+                    int64_t(budget), lod, int64_t(indices.size())));
+            indices.resize(budget - words.size());
         }
         const int64_t base = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
         r_chunk_ids.encode_u32(base + 12, uint32_t(words.size()));
@@ -97,7 +113,7 @@ Dictionary GpuTable::get_stats() const {
     d["list_build_ms_avg"] = list_stats.batches > 0 ? double(list_stats.build_usec) / 1000.0 / double(list_stats.batches) : 0.0;
     d["list_truncated"] = list_stats.truncated;
     Dictionary per_lod;
-    for (int lod = 0; lod < 32; lod++) {
+    for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
         if (list_stats.chunks[lod] == 0) {
             continue;
         }

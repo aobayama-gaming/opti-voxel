@@ -66,14 +66,13 @@ struct TableRecord {
     int32_t box_hi[3] = {};
     float margin_c = 0.0f; // 2 * L + skirt_depth (voxels); M(lod) = ceil(k + margin_c * 2^lod) + 2
     float lipschitz = 1.0f; // the instance's L (metrics / tests)
-    // The band rule (set_band): listed by the chunks of LOD [min_lod, max_lod) only, and eroded at LOD L by
+    // The band rule (set_band): listed by the chunks of LOD below max_lod only, and eroded at LOD L by
     // erode * (2^L - 1) voxels (its distance raised: the shape shrinks uniformly).
-    uint8_t min_lod = 0;
     uint8_t max_lod = NEVER_DROPPED;
     float erode = 0.0f;
 
     static constexpr uint8_t NEVER_DROPPED = 255;
-    bool listed_at(int p_lod) const { return p_lod >= min_lod && p_lod < max_lod; }
+    bool listed_at(int p_lod) const { return p_lod < max_lod; }
 
     DefRecord def_record() const;
 };
@@ -96,9 +95,9 @@ public:
         pages.clear();
         count = 0;
     }
-    // The records [r_first, r_first + r_count) covering every page changed after p_version (all of them when
-    // p_version is UINT32_MAX, nothing sent yet).
-    void changed_since(uint32_t p_version, uint32_t &r_first, uint32_t &r_count) const;
+    // The runs of records (first, count) of the pages changed after p_version (all of them when p_version is
+    // UINT32_MAX, nothing sent yet); consecutive changed pages make one run.
+    void changed_since(uint32_t p_version, std::vector<std::pair<uint32_t, uint32_t>> &r_runs) const;
 
 private:
     struct Page {

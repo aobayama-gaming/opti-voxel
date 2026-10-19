@@ -195,16 +195,14 @@ private:
     void _rt_initialize();
     RID _rt_compile(const char *p_pass, const char *p_name);
     void _queue_remesh(const ChunkId &p_chunk);
-    void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records, uint32_t p_records_offset);
+    void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Main thread: the batch's instance lists (patched into r_ids) and, if the table changed since the last
-    // dispatch, the records it changed (to write at r_records_offset bytes). Returns the table version they are.
-    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records,
-            uint32_t &r_records_offset);
+    // dispatch, the records it changed (SDFGpuTable::record_bytes spans). Returns the table version they are.
+    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records,
-            uint32_t p_records_offset);
+            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records);
     void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
-            const PackedByteArray &p_list, const PackedByteArray &p_records, uint32_t p_records_offset);
+            const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Pass 0: the sdf pass, or the cascade's levels (timestamps "<prefix>_c<group>" after each level group
     // when p_prefix is not empty).
     void _rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix);

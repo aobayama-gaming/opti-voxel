@@ -191,10 +191,10 @@ public:
         if (!edit_box.valid) {
             return false;
         }
-        // The band rule: the changed instances are listed at LODs [edit_lod_min, edit_lod_max) only, so a
+        // The band rule: the changed instances are listed below edit_lod_max only, so a
         // small dig doesn't re-mesh the coarse chunks around it.
         const int lod = ChunkMath::get_lod(p_chunk);
-        if (lod < edit_lod_min || lod >= edit_lod_max) {
+        if (lod >= edit_lod_max) {
             return false;
         }
         // The chunk's samples (span + skirt overhang) against the edit region grown by M(lod).
@@ -311,8 +311,7 @@ private:
     Archetype::GpuTable gpu;
     float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
     float edit_margin_c = 0.0f;
-    int edit_lod_min = 0; // the LODs the changed records are listed at (edit_affects_chunk)
-    int edit_lod_max = 0;
+    int edit_lod_max = 0; // the changed records are listed below this LOD (edit_affects_chunk)
     int scatter_count = 0; // --instances
     double scatter_area = 200.0; // --instance_area (metres)
     bool instance_band = true; // --instance_band
@@ -409,9 +408,8 @@ private:
         Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band);
     }
 
-    // The LOD range an edit can change: the union of the record's ranges before and after it.
+    // The LODs an edit can change: below the larger of the record's max_lod before and after it.
     void set_edit_lods(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after) {
-        edit_lod_min = MIN(p_before.min_lod, p_after.min_lod);
         edit_lod_max = MAX(p_before.max_lod, p_after.max_lod);
     }
 
@@ -509,7 +507,6 @@ private:
         lod_count = p_lod_count;
         edit_k = 0.0f;
         edit_margin_c = 0.0f;
-        edit_lod_min = 0;
         edit_lod_max = 0;
         // The GPU buffers hold the scatter plus room for runtime edits (the mesher reads this at init).
         gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));

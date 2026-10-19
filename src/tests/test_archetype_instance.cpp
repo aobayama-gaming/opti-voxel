@@ -489,7 +489,7 @@ TEST_CASE("SDFArchetype band: an edit re-meshes only the LODs its instance is li
         return;
     }
     const TableRecord &rec = sdf.get_snapshot()->records[id];
-    MESSAGE("a radius-4 sphere is listed at LODs [", int(rec.min_lod), ", ", int(rec.max_lod), ")");
+    MESSAGE("a radius-4 sphere is listed at LODs [0, ", int(rec.max_lod), ")");
     CHECK(rec.max_lod < 15);
     for (int lod = 0; lod < 15; lod++) {
         const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
@@ -606,13 +606,32 @@ TEST_CASE("SDFArchetype table: the edit overlay lists exactly what a whole new i
     CHECK(sdf.get_snapshot()->base != first->base); // more than REBASE records edited: rebuilt at least once
     CHECK(entries > 1000);
     // An edit uploads the page it changed, not the table.
-    uint32_t v = 0, first_record = 0;
+    // An edit sends its page, not the table.
+    uint32_t v = 0;
     const uint32_t before = sdf.get_snapshot()->version;
     const float params[8] = { 4.0f, 0, 0, 0, 0, 0, 0, 0 };
     CHECK(sdf.add_instance(0, VoxelPos(-100, 600, -300), nullptr, params, 0, 0.0f) >= 0);
-    const PackedByteArray bytes = sdf.get_gpu_table()->record_bytes(before, v, first_record);
+    const PackedByteArray bytes = sdf.get_gpu_table()->record_bytes(before, v);
     CHECK(v == before + 1);
-    CHECK(bytes.size() > 0);
-    CHECK(bytes.size() <= int64_t(RecordStore::PAGE) * RECORD_BYTES);
-    CHECK(first_record % RecordStore::PAGE == 0);
+    CHECK(bytes.decode_u32(0) == 1u);
+    CHECK(bytes.size() <= 4 + 8 + int64_t(RecordStore::PAGE) * RECORD_BYTES);
+    // Two edits far apart in id (the first record, and an add on the last page) are two runs, not the records
+    // between them; consecutive pages are one.
+    RecordStore store;
+    for (uint32_t i = 0; i < 3 * RecordStore::PAGE; i++) {
+        store.push_back(TableRecord(), 1);
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> runs;
+    store.changed_since(1, runs);
+    CHECK(runs.empty());
+    store.set(5, TableRecord(), 2);
+    store.push_back(TableRecord(), 2);
+    store.changed_since(1, runs);
+    CHECK(runs.size() == 2);
+    CHECK((runs.size() == 2 && runs[0] == std::make_pair(0u, RecordStore::PAGE) && runs[1] == std::make_pair(3u * RecordStore::PAGE, 1u)));
+    store.set(RecordStore::PAGE + 1, TableRecord(), 3);
+    store.changed_since(1, runs);
+    CHECK(runs.size() == 2); // pages 0 and 1 merge into one run
+    store.changed_since(UINT32_MAX, runs);
+    CHECK((runs.size() == 1 && runs[0].second == 3u * RecordStore::PAGE + 1u));
 }

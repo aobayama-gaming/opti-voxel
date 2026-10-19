@@ -427,7 +427,6 @@ void GPUMesher::_execute_whole_pipeline() {
         PackedByteArray local_chunk_id = input_chunk_id;
         PackedByteArray local_table_list = input_table_list;
         PackedByteArray local_table_records = input_table_records;
-        const uint32_t local_table_records_offset = input_table_records_offset;
         const uint32_t local_count = batch_count;
         const int local_min_lod = batch_min_lod;
         mutex->unlock();
@@ -437,7 +436,7 @@ void GPUMesher::_execute_whole_pipeline() {
         }
 
         const uint64_t t_batch_start = now_usec();
-        _execute_gpu_pipeline(local_chunk_id, local_count, local_min_lod, local_table_list, local_table_records, local_table_records_offset);
+        _execute_gpu_pipeline(local_chunk_id, local_count, local_min_lod, local_table_list, local_table_records);
 
         mutex->lock();
         stats.batch_total.add(now_usec() - t_batch_start);
@@ -540,12 +539,12 @@ uint32_t GPUMesher::_get_flat_index_z(Vector3i cell) {
 }
 
 void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
-        const PackedByteArray &p_table_records, uint32_t p_table_records_offset) {
+        const PackedByteArray &p_table_records) {
     // The instance table (archetype instances): the records the main thread captured with this batch's
     // lists (same snapshot) when they changed, then the lists.
     if (buffer_table_records.is_valid()) {
         if (!p_table_records.is_empty()) {
-            rd->buffer_update(buffer_table_records, p_table_records_offset, p_table_records.size(), p_table_records);
+            SDFGpuTable::upload_records(rd, buffer_table_records, p_table_records);
         }
         if (!p_table_list.is_empty()) {
             ERR_FAIL_COND_MSG(uint64_t(p_table_list.size()) > table_list_capacity, "GPUMesher: batch instance list over its buffer.");
@@ -895,7 +894,6 @@ void GPUMesher::process_queue() {
     if (count > 0) {
         PackedByteArray table_list;
         PackedByteArray table_records;
-        uint32_t table_records_offset = 0;
         in_flight_ids.clear();
         for (uint32_t i = 0; i < count; i++) {
             in_flight_ids.push_back(unpacked_chunks[i].chunk_id);
@@ -903,16 +901,13 @@ void GPUMesher::process_queue() {
         if (SDFGpuTable *table = sdf->get_gpu_table()) {
             table->build_lists(in_flight_ids, chunk_param, new_batch, table_list);
             if (table->version() != sent_table_version) {
-                uint32_t first = 0;
-                table_records = table->record_bytes(sent_table_version, sent_table_version, first);
-                table_records_offset = first * table->record_size();
+                table_records = table->record_bytes(sent_table_version, sent_table_version);
             }
         }
         mutex->lock();
         input_chunk_id = new_batch;
         input_table_list = table_list;
         input_table_records = table_records;
-        input_table_records_offset = table_records_offset;
         batch_count = count;
         batch_min_lod = min_lod;
         worker_available = false;

@@ -48,16 +48,20 @@ void RecordStore::set(uint32_t p_i, const TableRecord &p_record, uint32_t p_vers
     page.version = MAX(page.version, p_version);
 }
 
-void RecordStore::changed_since(uint32_t p_version, uint32_t &r_first, uint32_t &r_count) const {
-    uint32_t first = UINT32_MAX, end = 0;
+void RecordStore::changed_since(uint32_t p_version, std::vector<std::pair<uint32_t, uint32_t>> &r_runs) const {
+    r_runs.clear();
     for (uint32_t p = 0; p < pages.size(); p++) {
-        if (p_version == UINT32_MAX || pages[p]->version > p_version) {
-            first = MIN(first, p * PAGE);
-            end = MAX(end, MIN(count, (p + 1) * PAGE));
+        if (p_version != UINT32_MAX && pages[p]->version <= p_version) {
+            continue;
+        }
+        const uint32_t first = p * PAGE;
+        const uint32_t end = MIN(count, (p + 1) * PAGE);
+        if (!r_runs.empty() && r_runs.back().first + r_runs.back().second == first) {
+            r_runs.back().second = end - r_runs.back().first;
+        } else {
+            r_runs.push_back({ first, end - first });
         }
     }
-    r_first = first == UINT32_MAX ? 0 : first;
-    r_count = first == UINT32_MAX ? 0 : end - first;
 }
 
 int DefLibrary::add(const TableDefPtr &p_def) {
@@ -85,7 +89,7 @@ void set_band(TableRecord &r_record, bool p_bounded, bool p_enabled) {
     const double depth = 0.5 * side * double(r_record.lipschitz) + double(r_record.k);
     for (int lod = 0; lod < 32; lod++) {
         if (double(ERODE_CELLS) * (std::ldexp(1.0, lod) - 1.0) >= depth) {
-            r_record.max_lod = uint8_t(MAX(lod, int(r_record.min_lod)));
+            r_record.max_lod = uint8_t(lod);
             break;
         }
     }

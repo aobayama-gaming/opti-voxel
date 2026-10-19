@@ -99,40 +99,34 @@ namespace {
 struct Placement {
     ChunkId node;
     uint32_t id;
-    bool operator<(const Placement &p_o) const {
-        if (node.x != p_o.node.x) {
-            return node.x < p_o.node.x;
-        }
-        if (node.y != p_o.node.y) {
-            return node.y < p_o.node.y;
-        }
-        if (node.z != p_o.node.z) {
-            return node.z < p_o.node.z;
-        }
-        return id < p_o.id;
-    }
     bool operator==(const Placement &p_o) const { return node == p_o.node && id == p_o.id; }
 };
 
 // Morton order of the nodes of one LOD: on their indices at that LOD, biased by 2^(60 - lod) so a parent's key is
 // exactly its child's key >> 1. A parent's order is then its children's: a level's entries mapped to their
 // parents stay sorted (by node), and each LOD merges instead of sorting again.
+// Negative, zero or positive as a is before, equal to or after b in Morton order (keys of the three axes): the
+// axis with the highest differing bit decides.
+int morton_compare(const uint64_t *p_a, const uint64_t *p_b) {
+    int d = 0;
+    uint64_t top = 0;
+    for (int k = 0; k < 3; k++) {
+        const uint64_t x = p_a[k] ^ p_b[k];
+        if (top < x && top < (top ^ x)) { // x's highest bit is above top's
+            d = k;
+            top = x;
+        }
+    }
+    return top == 0 ? 0 : (p_a[d] < p_b[d] ? -1 : 1);
+}
+
 struct MortonLess {
     int lod = 0;
     uint64_t key(int64_t p_c) const { return uint64_t((p_c >> (lod + 1)) + (int64_t(1) << (60 - lod))); }
     bool operator()(const ChunkId &p_a, const ChunkId &p_b) const {
         const uint64_t a[3] = { key(p_a.x), key(p_a.y), key(p_a.z) };
         const uint64_t b[3] = { key(p_b.x), key(p_b.y), key(p_b.z) };
-        int d = 0;
-        uint64_t top = 0;
-        for (int k = 0; k < 3; k++) {
-            const uint64_t x = a[k] ^ b[k];
-            if (top < x && top < (top ^ x)) { // x's highest bit is above top's
-                d = k;
-                top = x;
-            }
-        }
-        return a[d] < b[d];
+        return morton_compare(a, b) < 0;
     }
     bool operator()(const Placement &p_a, const Placement &p_b) const {
         return (*this)(p_a.node, p_b.node) || (p_a.node == p_b.node && p_a.id < p_b.id);
@@ -166,16 +160,8 @@ void sort_morton(std::vector<Placement> &r_v, const MortonLess &p_less) {
         keyed[i] = { { p_less.key(r_v[i].node.x), p_less.key(r_v[i].node.y), p_less.key(r_v[i].node.z) }, uint32_t(i) };
     }
     std::sort(keyed.begin(), keyed.end(), [&r_v](const Keyed &p_a, const Keyed &p_b) {
-        int d = 0;
-        uint64_t top = 0;
-        for (int k = 0; k < 3; k++) {
-            const uint64_t x = p_a.k[k] ^ p_b.k[k];
-            if (top < x && top < (top ^ x)) {
-                d = k;
-                top = x;
-            }
-        }
-        return top != 0 ? p_a.k[d] < p_b.k[d] : r_v[p_a.i].id < r_v[p_b.i].id;
+        const int c = morton_compare(p_a.k, p_b.k);
+        return c != 0 ? c < 0 : r_v[p_a.i].id < r_v[p_b.i].id;
     });
     std::vector<Placement> sorted(r_v.size());
     for (size_t i = 0; i < keyed.size(); i++) {
@@ -192,20 +178,18 @@ size_t unique_nodes(const std::vector<Placement> &p_sorted) {
     return n;
 }
 
-// The layer over the records p_ids (ascending): one placement per instance, bucketed by storage LOD, then per LOD the subtree
-// entries (that LOD's own placements plus its children's entries still listed above them) and the occupancy.
-std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const RecordStore &p_records, const std::vector<uint32_t> &p_ids,
-        const ChunkParam &p_param, int p_max_lod) {
-    std::shared_ptr<IndexLayer> layer = std::make_shared<IndexLayer>();
-    std::vector<std::vector<Placement>> by_lod(p_max_lod + 1);
+// Where each record of p_ids is stored (r_by_lod, one bucket per storage LOD) or, unbounded, listed everywhere.
+void place_instances(const DefLibrary &p_library, const RecordStore &p_records, const std::vector<uint32_t> &p_ids, const ChunkParam &p_param,
+        int p_max_lod, std::vector<std::vector<Placement>> &r_by_lod, std::vector<uint32_t> &r_unbounded) {
+    r_by_lod.assign(p_max_lod + 1, std::vector<Placement>());
     for (const uint32_t i : p_ids) {
         const TableRecord &rec = p_records[i];
-        if (rec.removed || rec.max_lod <= rec.min_lod) {
+        if (rec.removed || rec.max_lod == 0) {
             continue; // removed: kept for stable ids; dropped at every LOD: never listed
         }
         const Bounds wb = record_world_bounds(p_library[rec.def], rec);
         if (!wb.bounded) {
-            layer->unbounded.push_back(i); // listed by every chunk
+            r_unbounded.push_back(i); // listed by every chunk
             continue;
         }
         double size = 0.0;
@@ -216,8 +200,7 @@ std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const
         // whose samples it meets are near that node at every LOD (gather). Wider than a node even at the top
         // LOD: in every node its grown box touches.
         const int lod = instance_lod(size, rec.k, rec.margin_c, p_param, p_max_lod);
-        const double sc = std::ldexp(1.0, lod);
-        const double m = double(rec.k) + double(rec.margin_c) * sc;
+        const double m = double(rec.k) + double(rec.margin_c) * std::ldexp(1.0, lod);
         const int64_t half = int64_t(1) << lod;
         const int64_t span = int64_t(p_param.chunk_voxel_dimension()) * half;
         if (size + 2.0 * m <= double(span)) {
@@ -225,27 +208,80 @@ std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const
             for (int a = 0; a < 3; a++) {
                 centre[a] = wb.lo[a] + (wb.hi[a] - wb.lo[a]) / 2;
             }
-            by_lod[lod].push_back({ chunk_at_voxel(centre, lod, p_param), i });
+            r_by_lod[lod].push_back({ chunk_at_voxel(centre, lod, p_param), i });
             continue;
         }
         const int64_t step = int64_t(1) << (lod + 1);
         int64_t id[3];
         int64_t count[3];
         for (int a = 0; a < 3; a++) {
-            const int64_t lo = int64_t(std::floor(double(wb.lo[a]) - m));
-            const int64_t hi = int64_t(std::ceil(double(wb.hi[a]) + m));
-            id[a] = WorldCoord::floor_div(lo, span) * step + half;
-            count[a] = (WorldCoord::floor_div(hi, span) * step + half - id[a]) / step + 1;
+            id[a] = WorldCoord::floor_div(int64_t(std::floor(double(wb.lo[a]) - m)), span) * step + half;
+            count[a] = (WorldCoord::floor_div(int64_t(std::ceil(double(wb.hi[a]) + m)), span) * step + half - id[a]) / step + 1;
         }
         for (int64_t x = 0; x < count[0]; x++) {
             for (int64_t y = 0; y < count[1]; y++) {
                 for (int64_t z = 0; z < count[2]; z++) {
-                    by_lod[lod].push_back({ ChunkId(id[0] + x * step, id[1] + y * step, id[2] + z * step), i });
+                    r_by_lod[lod].push_back({ ChunkId(id[0] + x * step, id[1] + y * step, id[2] + z * step), i });
                 }
             }
         }
     }
+}
 
+// A LOD's subtree entries mapped to their parents, those still listed one LOD up (the band rule). The parents stay
+// in Morton order; a parent's ids come from up to 8 children: each run is sorted.
+void carry_up(const std::vector<Placement> &p_level, int p_lod, const RecordStore &p_records, std::vector<Placement> &r_carry) {
+    r_carry.clear();
+    for (const Placement &e : p_level) {
+        if (p_lod + 1 < p_records[e.id].max_lod) {
+            r_carry.push_back({ ChunkMath::get_parent_from_child(e.node), e.id });
+        }
+    }
+    for (size_t i = 0; i < r_carry.size();) {
+        size_t j = i + 1;
+        while (j < r_carry.size() && r_carry[j].node == r_carry[i].node) {
+            j++;
+        }
+        if (j - i > 1) {
+            std::sort(r_carry.begin() + i, r_carry.begin() + j, [](const Placement &p_a, const Placement &p_b) { return p_a.id < p_b.id; });
+        }
+        i = j;
+    }
+}
+
+// A LOD's occupancy: its own placements' nodes merged with the occupied children's parents (r_carry in, the
+// next LOD's carry out).
+void occupancy_level(const std::vector<Placement> &p_own, const MortonLess &p_less, bool p_top, std::vector<ChunkId> &r_carry, std::vector<ChunkId> &r_occ) {
+    std::vector<ChunkId> nodes;
+    nodes.reserve(p_own.size());
+    for (const Placement &e : p_own) {
+        if (nodes.empty() || !(nodes.back() == e.node)) {
+            nodes.push_back(e.node);
+        }
+    }
+    r_occ.resize(r_carry.size() + nodes.size());
+    std::merge(r_carry.begin(), r_carry.end(), nodes.begin(), nodes.end(), r_occ.begin(), p_less);
+    r_occ.erase(std::unique(r_occ.begin(), r_occ.end()), r_occ.end());
+    r_carry.clear();
+    if (!p_top) {
+        for (const ChunkId &n : r_occ) {
+            const ChunkId parent = ChunkMath::get_parent_from_child(n);
+            if (r_carry.empty() || !(r_carry.back() == parent)) {
+                r_carry.push_back(parent);
+            }
+        }
+    }
+}
+
+// The layer over the records p_ids (ascending): one placement per instance, then per LOD from the finest the
+// stored entries, the subtree entries (that LOD's own placements plus its children's entries still listed at
+// it: a coarse node holds the instances big enough for it, not every instance under it) and the occupancy
+// (every placement climbs to the top, band or not). Each LOD merges instead of sorting (MortonLess).
+std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const RecordStore &p_records, const std::vector<uint32_t> &p_ids,
+        const ChunkParam &p_param, int p_max_lod) {
+    std::shared_ptr<IndexLayer> layer = std::make_shared<IndexLayer>();
+    std::vector<std::vector<Placement>> by_lod;
+    place_instances(p_library, p_records, p_ids, p_param, p_max_lod, by_lod, layer->unbounded);
     size_t placements = 0;
     for (const std::vector<Placement> &b : by_lod) {
         placements += b.size();
@@ -261,7 +297,6 @@ std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const
         const MortonLess less{ lod };
         std::vector<Placement> &own = by_lod[lod];
         sort_morton(own, less);
-        // The nodes' own instances (stored_at): this LOD's placements, sorted.
         fill_ranges(own, layer->stored_at, layer->stored_ids);
         std::vector<Placement> &level = sub[lod];
         level.resize(carry.size() + own.size());
@@ -269,45 +304,10 @@ std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const
         level.erase(std::unique(level.begin(), level.end()), level.end());
         sub_total += level.size();
         sub_nodes += unique_nodes(level);
-        carry.clear();
         if (lod < p_max_lod) {
-            for (const Placement &e : level) {
-                if (lod + 1 < p_records[e.id].max_lod) {
-                    carry.push_back({ ChunkMath::get_parent_from_child(e.node), e.id });
-                }
-            }
-            // Sorted by node already (Morton); the ids of a parent come from up to 8 children: sort each run.
-            for (size_t i = 0; i < carry.size();) {
-                size_t j = i + 1;
-                while (j < carry.size() && carry[j].node == carry[i].node) {
-                    j++;
-                }
-                if (j - i > 1) {
-                    std::sort(carry.begin() + i, carry.begin() + j, [](const Placement &p_a, const Placement &p_b) { return p_a.id < p_b.id; });
-                }
-                i = j;
-            }
+            carry_up(level, lod, p_records, carry);
         }
-        std::vector<ChunkId> nodes;
-        nodes.reserve(own.size());
-        for (const Placement &e : own) {
-            if (nodes.empty() || !(nodes.back() == e.node)) {
-                nodes.push_back(e.node);
-            }
-        }
-        std::vector<ChunkId> &occ = layer->occupied[lod];
-        occ.resize(occ_carry.size() + nodes.size());
-        std::merge(occ_carry.begin(), occ_carry.end(), nodes.begin(), nodes.end(), occ.begin(), less);
-        occ.erase(std::unique(occ.begin(), occ.end()), occ.end());
-        occ_carry.clear();
-        if (lod < p_max_lod) {
-            for (const ChunkId &n : occ) {
-                const ChunkId parent = ChunkMath::get_parent_from_child(n);
-                if (occ_carry.empty() || !(occ_carry.back() == parent)) {
-                    occ_carry.push_back(parent);
-                }
-            }
-        }
+        occupancy_level(own, less, lod == p_max_lod, occ_carry, layer->occupied[lod]);
         own = std::vector<Placement>();
     }
     layer->subtree.reserve(uint32_t(sub_nodes));
@@ -393,8 +393,10 @@ void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, int p_lod, std:
 }
 
 bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod) const {
-    if (!p_layer.unbounded.empty()) {
-        return true;
+    for (const uint32_t i : p_layer.unbounded) {
+        if (&p_layer != base.get() || !masked.has(i)) {
+            return true; // an unbounded instance (edited away from the base: its stale entry doesn't count)
+        }
     }
     // An instance stored at this LOD or finer: some node of this LOD near the grown box holds it in its
     // subtree. A bigger one is stored at a coarser LOD: the nodes near the grown box there, exact test.

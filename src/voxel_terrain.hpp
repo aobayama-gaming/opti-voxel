@@ -195,7 +195,7 @@ public:
     void set_lod_pixel_error(float p_error);
     float get_lod_pixel_error() const;
 
-    static constexpr int MAX_LOD_NUMBERS = 31;
+    static constexpr int MAX_LOD_NUMBERS = ChunkMath::MAX_LOD_NUMBERS;
     void set_lod_numbers(int p_count);
     int get_lod_numbers() const;
     // Distance from the camera (metres) that bounds every chunk the discoverer can load: the corner of

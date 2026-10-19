@@ -34,7 +34,7 @@ public:
     // --instance_capacity for a large scatter.
     uint32_t instance_capacity() const override { return capacity; }
     void set_capacity(uint32_t p_capacity) { capacity = p_capacity; }
-    PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version, uint32_t &r_first) const override;
+    PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const override;
     uint32_t record_size() const override { return RECORD_BYTES; }
 
     void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
@@ -44,9 +44,9 @@ public:
 private:
     // Main thread only (build_lists is called by the meshers' dispatch on the main thread).
     struct ListStats {
-        int64_t chunks[32] = {};
-        int64_t entries[32] = {};
-        int64_t longest[32] = {};
+        int64_t chunks[ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t entries[ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t longest[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t build_usec = 0;
         int64_t batches = 0;
         int64_t truncated = 0;

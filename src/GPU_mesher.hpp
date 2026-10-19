@@ -94,8 +94,7 @@ private:
     //input
     PackedByteArray input_chunk_id;
     PackedByteArray input_table_list; // the batch's instance list (archetype instances)
-    PackedByteArray input_table_records; // the table's records changed since the last batch
-    uint32_t input_table_records_offset = 0; // where they go in the buffer (bytes)
+    PackedByteArray input_table_records; // the table's records changed since the last batch (record_bytes spans)
 
     // GPU stuff
 
@@ -141,7 +140,7 @@ private:
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
     void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
-            const PackedByteArray &p_table_records, uint32_t p_table_records_offset);
+            const PackedByteArray &p_table_records);
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
