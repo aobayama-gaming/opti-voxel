@@ -335,7 +335,7 @@ void GPUMesher::initialize(
     worker->start(callable_mp(this, &GPUMesher::_execute_whole_pipeline), Thread::PRIORITY_NORMAL);
 
     lod_count = lod_numbers;
-    chunk_queue.resize(2 * lod_numbers, nullptr);
+    chunk_queue.resize(ChunkMath::load_queue_count(lod_numbers), nullptr);
 
     for (LODHashSet *&q : chunk_queue) {
         q = memnew(LODHashSet);

@@ -428,7 +428,6 @@ func _process(delta: float) -> void:
 			var turn := (Time.get_ticks_usec() - phase_start_usec) / (float(args.get("turn_seconds", "8")) * 1e6)
 			camera.rotation_degrees.y = float(args.get("yaw", "0")) + 360.0 * minf(turn, turns)
 			if turn >= turns:
-				camera.rotation_degrees.y = float(args.get("yaw", "0")) + 360.0 * turns
 				_end_phase()
 				_take_shots("turn_end")
 				walk_from = camera.global_position

@@ -2,6 +2,8 @@
 
 #include "world_coord.hpp"
 
+#include <algorithm>
+
 using namespace godot;
 
 struct ChunkParam {
@@ -47,10 +49,11 @@ struct ScanView {
     // 0: the scanned set ignores the direction.
     double back_scale = 0.0;
     // The views the camera had (ChunkDiscoverer::remember_view): a camera chunk, a unit view axis, and a
-    // fade = max(0, distance from the camera chunk to that one - memory_distance), so a view fades out as
-    // the camera walks away from where it was. The LOD rule coarsens away from the union of their cones,
+    // fade = max(0, distance from the camera chunk to that one - the memory distance), so a view fades out
+    // as the camera walks away from where it was. The LOD rule coarsens away from the union of their cones,
     // each pushed back by its fade. One of them is the camera chunk's own, within RESCAN_TURN_DEG of
-    // `forward`. Sorted by increasing fade. None (memory off): the cone around `forward` alone.
+    // `forward` (the only one without memory). Sorted by increasing fade. None (a view not made by
+    // remember_view): the cone around `forward`.
     struct ViewMemory {
         ChunkId apex;
         Vector3 dir;
@@ -59,12 +62,15 @@ struct ScanView {
     static constexpr int MAX_VIEW_MEMORIES = 64;
     ViewMemory memories[MAX_VIEW_MEMORIES];
     int memory_count = 0;
-    double memory_distance = 0.0; // chunk-id units; 0: memory off
 
     void set_half_angle(double p_rad) {
-        const double a = p_rad < 0.0 ? 0.0 : (p_rad > Math_PI ? Math_PI : p_rad);
+        const double a = CLAMP(p_rad, 0.0, Math_PI);
         cos_half_angle = std::cos(a);
         sin_half_angle = std::sin(a);
+    }
+    void copy_memories_from(const ScanView &p_other) {
+        memory_count = p_other.memory_count;
+        std::copy(p_other.memories, p_other.memories + p_other.memory_count, memories);
     }
 };
 
@@ -116,9 +122,19 @@ double lod_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
 // (1 + back_scale) times it: the thresholds of lod_pixel_error_back. It changes by at most (1 + back_scale)
 // per unit of position, so face neighbours stay within one LOD (unit-tested at error 1 | 4).
 double lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
+// lod_distance(p_chunk, p_lod, p_view) < p_threshold, bit for bit, without the full minimum over the memories:
+// the plain distance alone may already fail, and any one memory under the threshold is enough.
+bool lod_split(const ChunkId &p_chunk, int p_lod, const ScanView &p_view, double p_threshold);
+// The half-angle of the view cone: the frustum's diagonal half-FOV (p_fov_rad vertical, p_aspect width /
+// height) plus p_margin_rad.
+float view_cone_half_angle(float p_fov_rad, float p_aspect, float p_margin_rad);
 // The meshers' load queue of a chunk, popped in increasing order: the chunks in the view cone first, then
-// finest LOD first. In [0, 2 * p_lod_count).
+// finest LOD first. In [0, load_queue_count(p_lod_count)).
 int load_queue(const ChunkId &p_chunk, int p_lod_count, const ScanView &p_view);
+// The number of load queues.
+constexpr int load_queue_count(int p_lod_count) {
+    return 2 * p_lod_count;
+}
 
 // Absolute position of a vertex-grid point: CPU mirror of world_pos_from_grid (gpu_frame.hpp).
 WorldPos sample_pos(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param);

@@ -123,11 +123,7 @@ void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, 
 
 bool ChunkDiscoverer::_should_split(const ScanView &p_view, const ChunkId &p_node, int p_lod) const {
     // lod_distances[L] is the distance from which LOD L is within the pixel error: split when closer.
-    // lod_distance is never under the plain distance: skip the cone gaps when that one already fails.
-    if (p_view.camera_chunk.distance_to(p_node) - ChunkMath::chunk_bounding_radius(p_lod) >= lod_distances[p_lod]) {
-        return false;
-    }
-    return ChunkMath::lod_distance(p_node, p_lod, p_view) < lod_distances[p_lod];
+    return ChunkMath::lod_split(p_node, p_lod, p_view, lod_distances[p_lod]);
 }
 
 void ChunkDiscoverer::start() {
@@ -369,7 +365,7 @@ void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &
             }
             if (lod == 0 || !_should_split(p_view, node, lod)) {
                 r_chunks.insert(node);
-                r_counters.out_of_view += ChunkMath::lod_cone_gap(node, lod, p_view) > 0.0 ? 1 : 0;
+                r_counters.out_of_view += ChunkMath::view_cone_gap(node, lod, p_view) > 0.0 ? 1 : 0;
                 continue;
             }
             const int64_t child_size = int64_t(1) << (lod - 1);
@@ -483,21 +479,16 @@ ScanView ChunkDiscoverer::make_view(const Vector3 &p_pos, const Vector3 &p_forwa
     v.forward = p_forward.length_squared() > 0.0f ? p_forward.normalized() : Vector3();
     v.set_half_angle(cone_half_angle);
     v.back_scale = back_scale;
-    v.memory_distance = memory_distance;
     return v;
 }
 
+bool ChunkDiscoverer::turned_past(const Vector3 &p_a, const Vector3 &p_b) {
+    static const double cos_turn = std::cos(Math::deg_to_rad(RESCAN_TURN_DEG));
+    return p_a.dot(p_b) < cos_turn;
+}
+
 bool ChunkDiscoverer::view_changed(const ScanView &p_scanned, const ScanView &p_new) {
-    if (p_new.camera_chunk != p_scanned.camera_chunk) {
-        return true;
-    }
-    if (p_new.back_scale == 0.0) {
-        return false;
-    }
-    if (p_new.memory_count == 0 && p_scanned.memory_count == 0) {
-        return p_new.forward.dot(p_scanned.forward) < std::cos(Math::deg_to_rad(RESCAN_TURN_DEG));
-    }
-    if (p_new.memory_count != p_scanned.memory_count) {
+    if (p_new.camera_chunk != p_scanned.camera_chunk || p_new.memory_count != p_scanned.memory_count) {
         return true;
     }
     // Memories are copied from view to view: an unchanged one is bit for bit the same.
@@ -511,52 +502,58 @@ bool ChunkDiscoverer::view_changed(const ScanView &p_scanned, const ScanView &p_
     return false;
 }
 
-bool ChunkDiscoverer::remember_view(ScanView &r_view, int64_t &r_evicted) {
-    r_evicted = 0;
-    if (r_view.memory_distance <= 0.0 || r_view.back_scale == 0.0 || r_view.forward == Vector3()) {
-        r_view.memory_count = 0;
-        return false;
+ChunkDiscoverer::Remembered ChunkDiscoverer::remember_view(ScanView &r_view, double p_memory_distance) {
+    if (r_view.back_scale == 0.0 || r_view.forward == Vector3()) {
+        r_view.memory_count = 0; // the set doesn't depend on the direction
+        return REMEMBERED_KNOWN;
     }
+    // Without memory distance, only the camera chunk's own view is kept.
+    const int capacity = p_memory_distance > 0.0 ? ScanView::MAX_VIEW_MEMORIES : 1;
     for (int i = 0; i < r_view.memory_count; i++) {
         ScanView::ViewMemory &m = r_view.memories[i];
-        m.fade = MAX(0.0, r_view.camera_chunk.distance_to(m.apex) - r_view.memory_distance);
+        m.fade = MAX(0.0, r_view.camera_chunk.distance_to(m.apex) - p_memory_distance);
     }
-    const double cos_turn = std::cos(Math::deg_to_rad(RESCAN_TURN_DEG));
-    bool known = false;
-    for (int i = 0; i < r_view.memory_count && !known; i++) {
-        known = r_view.memories[i].apex == r_view.camera_chunk && r_view.memories[i].dir.dot(r_view.forward) >= cos_turn;
-    }
-    if (!known) {
-        int slot = r_view.memory_count;
-        if (slot == ScanView::MAX_VIEW_MEMORIES) {
-            slot = 0;
-            for (int i = 1; i < r_view.memory_count; i++) {
-                slot = r_view.memories[i].fade > r_view.memories[slot].fade ? i : slot;
-            }
-            r_evicted = 1;
-        } else {
-            r_view.memory_count++;
+    for (int i = 0; i < r_view.memory_count; i++) {
+        if (r_view.memories[i].apex == r_view.camera_chunk && !turned_past(r_view.memories[i].dir, r_view.forward)) {
+            return REMEMBERED_KNOWN;
         }
-        r_view.memories[slot] = { r_view.camera_chunk, r_view.forward, 0.0 };
     }
-    std::stable_sort(r_view.memories, r_view.memories + r_view.memory_count,
-            [](const ScanView::ViewMemory &a, const ScanView::ViewMemory &b) { return a.fade < b.fade; });
-    return !known;
+    Remembered result = REMEMBERED_ADDED;
+    int slot = r_view.memory_count;
+    if (slot >= capacity) {
+        slot = 0;
+        for (int i = 1; i < r_view.memory_count; i++) {
+            slot = r_view.memories[i].fade > r_view.memories[slot].fade ? i : slot;
+        }
+        result = REMEMBERED_REPLACED;
+    } else {
+        r_view.memory_count++;
+    }
+    r_view.memories[slot] = { r_view.camera_chunk, r_view.forward, 0.0 };
+    // Insertion sort by fade (stable, no allocation): the list is short and nearly sorted.
+    for (int i = 1; i < r_view.memory_count; i++) {
+        const ScanView::ViewMemory m = r_view.memories[i];
+        int j = i;
+        for (; j > 0 && r_view.memories[j - 1].fade > m.fade; j--) {
+            r_view.memories[j] = r_view.memories[j - 1];
+        }
+        r_view.memories[j] = m;
+    }
+    return result;
 }
 
 void ChunkDiscoverer::set_camera(const Vector3 &p_pos, const Vector3 &p_forward) {
     ScanView new_view = make_view(p_pos, p_forward);
     mutex->lock();
-    new_view.memory_count = view.memory_count;
-    std::copy(view.memories, view.memories + view.memory_count, new_view.memories);
-    int64_t evicted = 0;
-    stats.memories_added += remember_view(new_view, evicted) ? 1 : 0;
-    stats.memories_evicted += evicted;
+    new_view.copy_memories_from(view);
+    const Remembered remembered = remember_view(new_view, memory_distance);
+    stats.memories_added += remembered != REMEMBERED_KNOWN ? 1 : 0;
+    stats.memories_replaced += remembered == REMEMBERED_REPLACED ? 1 : 0;
     const bool changed = view_changed(view, new_view);
     if (changed) {
         view = new_view;
         camera_change_usec = now_usec();
-    } else if (new_view.forward.dot(view.forward) < std::cos(Math::deg_to_rad(RESCAN_TURN_DEG))) {
+    } else if (turned_past(new_view.forward, view.forward)) {
         // A turn that doesn't change the scanned set (back_scale 0, or towards a remembered view): no
         // rescan, but the next scan (camera chunk, instance edit) orders the meshers' queues by the current
         // direction.
@@ -652,7 +649,7 @@ Dictionary ChunkDiscoverer::get_stats() {
     d["last_out_of_view"] = stats.last_out_of_view;
     d["last_memories"] = stats.last_memories;
     d["memories_added"] = stats.memories_added;
-    d["memories_evicted"] = stats.memories_evicted;
+    d["memories_replaced"] = stats.memories_replaced;
     d["memory_distance"] = memory_distance;
     d["delta_entered_total"] = stats.delta_entered_total;
     d["delta_left_total"] = stats.delta_left_total;

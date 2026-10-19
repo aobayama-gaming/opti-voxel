@@ -212,6 +212,31 @@ double ChunkMath::lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView
     return near + p_view.back_scale * lod_cone_gap(p_chunk, p_lod, p_view);
 }
 
+bool ChunkMath::lod_split(const ChunkId &p_chunk, int p_lod, const ScanView &p_view, double p_threshold) {
+    const double near = p_view.camera_chunk.distance_to(p_chunk) - chunk_bounding_radius(p_lod);
+    if (near >= p_threshold) {
+        return false; // lod_distance is never under the plain distance
+    }
+    if (p_view.back_scale == 0.0 || p_view.memory_count == 0) {
+        return lod_distance(p_chunk, p_lod, p_view) < p_threshold;
+    }
+    // near + back_scale * x only grows with x, also in floating point: the minimum is under the threshold
+    // iff one term is, and once a fade alone fails the later (more faded) memories fail too.
+    for (int i = 0; i < p_view.memory_count && near + p_view.back_scale * p_view.memories[i].fade < p_threshold; i++) {
+        const ScanView::ViewMemory &m = p_view.memories[i];
+        const double gap = m.fade +
+                cone_gap(double(p_chunk.x - m.apex.x), double(p_chunk.y - m.apex.y), double(p_chunk.z - m.apex.z), m.dir, p_lod, p_view);
+        if (near + p_view.back_scale * gap < p_threshold) {
+            return true;
+        }
+    }
+    return false;
+}
+
+float ChunkMath::view_cone_half_angle(float p_fov_rad, float p_aspect, float p_margin_rad) {
+    return std::atan(std::tan(p_fov_rad * 0.5f) * std::sqrt(1.0f + p_aspect * p_aspect)) + p_margin_rad;
+}
+
 int ChunkMath::load_queue(const ChunkId &p_chunk, int p_lod_count, const ScanView &p_view) {
     const int lod = get_lod(p_chunk);
     return (view_cone_gap(p_chunk, lod, p_view) > 0.0 ? p_lod_count : 0) + lod;

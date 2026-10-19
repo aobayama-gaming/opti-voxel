@@ -17,6 +17,15 @@ ChunkId snapped_origin(int64_t p_x, int64_t p_y, int64_t p_z) {
             WorldCoord::floor_div(p_z, root) * root);
 }
 
+// Deterministic coordinates in [-1000, 1000] (an LCG: the same sequence on every platform).
+struct Lcg {
+    uint64_t state;
+    int64_t next() {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return int64_t(state >> 40) % 2001 - 1000;
+    }
+};
+
 } // namespace
 
 TEST_CASE("ChunkMath: parent of a coordinate") {
@@ -149,11 +158,8 @@ TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the
 
     // 1-Lipschitz in the centre: the LOD rule's balance relies on it.
     view.forward = Vector3(0.3f, -0.5f, 0.8f).normalized();
-    uint64_t state = 12345;
-    auto next = [&state]() {
-        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-        return int64_t(state >> 40) % 2001 - 1000;
-    };
+    Lcg rng{ 12345 };
+    auto next = [&rng]() { return rng.next(); };
     for (int i = 0; i < 2000; i++) {
         const ChunkId a(next() * 2 + 1, next() * 2 + 1, next() * 2 + 1);
         const ChunkId b = a + ChunkId(next() % 16 * 2, next() % 16 * 2, next() % 16 * 2);
@@ -179,11 +185,9 @@ TEST_CASE("ChunkMath: lod_cone_gap is the least faded gap to the remembered cone
     for (const ScanView::ViewMemory &m : memories) {
         view.memories[view.memory_count++] = m;
     }
-    uint64_t state = 777;
-    auto next = [&state]() {
-        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-        return int64_t(state >> 40) % 2001 - 1000;
-    };
+    Lcg rng{ 777 };
+    auto next = [&rng]() { return rng.next(); };
+    view.back_scale = 3.0;
     for (int i = 0; i < 2000; i++) {
         const ChunkId a(next() * 2 + 1, next() * 2 + 1, next() * 2 + 1);
         double want = INFINITY;
@@ -198,7 +202,18 @@ TEST_CASE("ChunkMath: lod_cone_gap is the least faded gap to the remembered cone
         // Still 1-Lipschitz: the LOD rule's one-LOD balance relies on it.
         const ChunkId b = a + ChunkId(next() % 16 * 2, next() % 16 * 2, next() % 16 * 2);
         CHECK(std::abs(ChunkMath::lod_cone_gap(a, 0, view) - ChunkMath::lod_cone_gap(b, 0, view)) <= a.distance_to(b) + 1e-9);
+        // lod_split's early exits give the comparison of the full minimum, bit for bit.
+        for (int lod = 0; lod < 4; lod++) {
+            const double threshold = double(next() + 1000) * 3.0;
+            CHECK(ChunkMath::lod_split(a, lod, view, threshold) == (ChunkMath::lod_distance(a, lod, view) < threshold));
+        }
     }
+}
+
+TEST_CASE("ChunkMath: view_cone_half_angle is the diagonal half-FOV plus the margin") {
+    // A 90 degree square view: the diagonal is at atan(sqrt(2)) off the axis.
+    CHECK(ChunkMath::view_cone_half_angle(float(Math_PI / 2.0), 1.0f, 0.0f) == doctest::Approx(std::atan(std::sqrt(2.0))));
+    CHECK(ChunkMath::view_cone_half_angle(float(Math_PI / 2.0), 1.0f, 0.25f) == doctest::Approx(std::atan(std::sqrt(2.0)) + 0.25));
 }
 
 TEST_CASE("ChunkMath: lod_distance grows away from the view cone, up to the back error") {

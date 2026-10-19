@@ -74,7 +74,7 @@ private:
     PackedFloat32Array lod_distances;
     double cone_half_angle = Math_PI; // the view cone of ScanView: every node is in it by default
     double back_scale = 0.0; // ScanView::back_scale
-    double memory_distance = 0.0; // ScanView::memory_distance (set_view_memory)
+    double memory_distance = 0.0; // chunk-id units (set_view_memory); 0: no memory
     CullMode cull_mode = CULL_LEGACY;
     bool use_cache = true;
     CullCache cache;
@@ -89,7 +89,7 @@ private:
     // near them and rescans even if the camera chunk didn't change.
     std::vector<VoxelBox> pending_invalidations;
     bool rescan_requested = false;
-    uint64_t camera_change_usec = 0;
+    uint64_t camera_change_usec = 0; // when set_camera last changed the view
     std::unique_ptr<LODHashSet> scanned_chunks; // published scan, handed over without a copy
     std::unique_ptr<ScanDelta> scanned_delta; // last taken scan -> published scan
     ScanView scanned_view; // the view the published scan was made for
@@ -102,13 +102,13 @@ private:
         int64_t deltas_merged = 0; // scans the main thread skipped: their delta merged into the next one
         int64_t last_delta_entered = 0;
         int64_t last_delta_left = 0;
-        TimingStat latency; // camera chunk change -> scan published
+        TimingStat latency; // view change (set_camera) -> scan published
         int64_t scans_skipped_same_chunk = 0;
         int64_t last_scan_size = 0;
         int64_t last_out_of_view = 0;
         int64_t last_memories = 0;
         int64_t memories_added = 0;
-        int64_t memories_evicted = 0;
+        int64_t memories_replaced = 0;
         int64_t delta_entered_total = 0; // chunks that entered / left the scanned set, over every scan
         int64_t delta_left_total = 0;
         int64_t last_nodes_visited = 0;
@@ -157,23 +157,28 @@ public:
     void start();
     void stop();
 
-    // A turn of the view axis past this angle asks for a rescan when the LOD rule depends on the direction:
-    // without memory, the new axis replaces the scanned one; with it, a view is remembered.
+    // A turn of the view axis past this angle from the views remembered at the camera chunk remembers a new
+    // one, which asks for a rescan (when the LOD rule depends on the direction).
     static constexpr double RESCAN_TURN_DEG = 8.0;
+    // The angle between unit axes p_a and p_b is over RESCAN_TURN_DEG.
+    static bool turned_past(const Vector3 &p_a, const Vector3 &p_b);
     // lod_view_memory_m < 0: the memory distance is where this LOD starts.
     static constexpr int VIEW_MEMORY_AUTO_LOD = 2;
 
     // The view of a camera at render position p_pos looking along p_forward, without memories.
     ScanView make_view(const Vector3 &p_pos, const Vector3 &p_forward) const;
-    // p_new needs another scan than p_scanned: another camera chunk, or, when the LOD rule depends on the
-    // direction, other memories (with memory) or a turn past RESCAN_TURN_DEG (without).
+    // p_new needs another scan than p_scanned: another camera chunk or other memories.
     static bool view_changed(const ScanView &p_scanned, const ScanView &p_new);
-    // r_view (camera chunk, forward, memory_distance and the previous view's memories) remembers its own
-    // view: unless a memory at its camera chunk is within RESCAN_TURN_DEG of forward, one is added, over the
-    // most faded one when full. Then the fades are recomputed for its camera chunk and the memories sorted
-    // by fade. No memory distance or no forward: no memories. Returns the memories evicted (0 or 1) through
-    // r_evicted and whether one was added. Static for the unit tests.
-    static bool remember_view(ScanView &r_view, int64_t &r_evicted);
+    enum Remembered {
+        REMEMBERED_KNOWN, // a memory at the camera chunk is within RESCAN_TURN_DEG of forward
+        REMEMBERED_ADDED,
+        REMEMBERED_REPLACED, // added over the most faded one (full)
+    };
+    // r_view (camera chunk, forward and the previous view's memories) remembers its own view, with the fades
+    // of p_memory_distance (chunk-id units) from its camera chunk, sorted by fade. Up to MAX_VIEW_MEMORIES;
+    // with p_memory_distance 0, only one: the view replaced on every new camera chunk or turn. No back_scale
+    // or no forward: no memories. Static for the unit tests.
+    static Remembered remember_view(ScanView &r_view, double p_memory_distance);
     // Remembers the camera's view (remember_view) and asks for a scan when the view changed (view_changed).
     void set_camera(const Vector3 &p_pos, const Vector3 &p_forward);
     // The view of the latest set_camera, memories included.

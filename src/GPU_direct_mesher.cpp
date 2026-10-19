@@ -107,7 +107,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     mutex.instantiate();
 
     lod_count = p_lod_numbers;
-    chunk_queue.resize(2 * p_lod_numbers);
+    chunk_queue.resize(ChunkMath::load_queue_count(p_lod_numbers));
     remesh_queue.resize(p_lod_numbers);
 
     pool = memnew(QuadPagePool);

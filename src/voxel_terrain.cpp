@@ -627,14 +627,13 @@ void VoxelTerrain::_ready() {
     }
 
     // The view cone holds the frustum: its half-angle is the half-FOV along the screen diagonal.
-    const float half_diagonal_fov = std::atan(std::tan(fov_rad * 0.5f) * std::sqrt(1.0f + aspect * aspect));
     chunk_discoverer->setup_lod(
             lod_numbers,
             lod_pixel_error,
             viewport_height,
             fov_rad,
             lod_pixel_error_back,
-            half_diagonal_fov + Math::deg_to_rad(lod_view_margin_deg));
+            ChunkMath::view_cone_half_angle(fov_rad, aspect, Math::deg_to_rad(lod_view_margin_deg)));
     chunk_discoverer->set_view_memory(lod_view_memory_m);
 
     chunk_discoverer->start();
@@ -1040,12 +1039,10 @@ bool VoxelTerrain::is_load_complete() {
     }
     // The received scan must be the camera's current one: a camera moved (bench --above_ground) or turned
     // after _ready is otherwise "loaded" with the first scan while the next one is still running.
-    // set_camera first: the camera's current view, with the views it remembers.
-    if (camera != nullptr) {
-        chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
-        if (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view())) {
-            return false;
-        }
+    // The view of the last set_camera (_process) carries the remembered views; a camera moved since is
+    // caught by its chunk, a turn since by the next frame.
+    if (camera != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(camera->get_global_position(), chunk_param) != scan_view.camera_chunk)) {
+        return false;
     }
     if (direct_mesher) {
         return direct_mesher->is_idle();
