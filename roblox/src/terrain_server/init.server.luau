@@ -56,6 +56,62 @@ workspace:SetAttribute("GenTotal", #slabs)
 workspace:SetAttribute("GenDone", 0)
 workspace:SetAttribute("TerrainHalfStuds", HALF)
 
+-- Far field: tiles of FAR_TILE studs around the generated square, nearest first, sampled coarser with
+-- distance. Several tiles per frame, within a time budget.
+local FAR_HALF = Config.TERRAIN_FAR_HALF_STUDS
+local FAR_TILE = 256
+local FAR_BUDGET = 0.012 -- seconds of generation per frame
+
+local function farStep(tile: Vector2): number
+	local c = tile + Vector2.new(FAR_TILE / 2, FAR_TILE / 2)
+	local d = math.max(math.abs(c.X), math.abs(c.Y))
+	return if d < 2 * HALF then 8 elseif d < 4 * HALF then 16 else 32
+end
+
+local farTiles: { Vector2 } = {}
+for x = -FAR_HALF, FAR_HALF - 1, FAR_TILE do
+	for z = -FAR_HALF, FAR_HALF - 1, FAR_TILE do
+		if x < -HALF or x >= HALF or z < -HALF or z >= HALF then
+			table.insert(farTiles, Vector2.new(x, z))
+		end
+	end
+end
+table.sort(farTiles, function(a, b)
+	local h = Vector2.new(FAR_TILE / 2, FAR_TILE / 2)
+	return (a + h).Magnitude < (b + h).Magnitude
+end)
+workspace:SetAttribute("FarTotal", #farTiles)
+workspace:SetAttribute("FarDone", 0)
+workspace:SetAttribute("FarHalfStuds", FAR_HALF)
+
+local function generateFar()
+	local sampleMs, writeMs, voxels = 0, 0, 0
+	local t0 = os.clock()
+	local frame = os.clock()
+	for i, t in farTiles do
+		local a, b, n = TerrainGen.writeFarTile(terrain, t.X, t.Y, t.X + FAR_TILE, t.Y + FAR_TILE, farStep(t))
+		sampleMs += a
+		writeMs += b
+		voxels += n
+		if os.clock() - frame > FAR_BUDGET then
+			workspace:SetAttribute("FarDone", i)
+			task.wait()
+			frame = os.clock()
+		end
+	end
+	workspace:SetAttribute("FarDone", #farTiles)
+	workspace:SetAttribute("FarSeconds", os.clock() - t0)
+	workspace:SetAttribute("FarSampleMs", sampleMs)
+	workspace:SetAttribute("FarWriteMs", writeMs)
+	workspace:SetAttribute("FarVoxels", voxels)
+	print(
+		`[OptiVoxel] far field to {FAR_HALF * 2}x{FAR_HALF * 2} studs: {#farTiles} tiles, {voxels} solid voxels,`
+			.. ` sample {math.floor(sampleMs)} ms, WriteVoxels {math.floor(writeMs)} ms,`
+			.. ` wall {string.format("%.1f", os.clock() - t0)} s, terrain voxels`
+			.. ` {math.floor(game:GetService("Stats"):GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.TerrainVoxels))} MB`
+	)
+end
+
 task.spawn(function()
 	local sampleMs, writeMs, voxels = 0, 0, 0
 	local t0 = os.clock()
@@ -83,6 +139,7 @@ task.spawn(function()
 		`[OptiVoxel] terrain {HALF * 2}x{HALF * 2} studs: {voxels} voxels, sample {math.floor(sampleMs)} ms,`
 			.. ` WriteVoxels {math.floor(writeMs)} ms, wall {string.format("%.1f", os.clock() - t0)} s`
 	)
+	generateFar()
 end)
 
 -- Edits: SDF spheres, in studs on the wire, units in the SDF.

@@ -33,6 +33,11 @@ return {
 
 	-- Smooth Terrain playground (terrain.project.json): generated square, half side in studs.
 	TERRAIN_HALF_STUDS = 1024,
+	-- Far field around it, out to this half side: the height field only (no caves, no edits), written
+	-- as a thin shell, sampled every 8 / 16 studs by distance (TerrainGen.writeFarTile). 0 turns it off.
+	-- Roblox draws Smooth Terrain only ~3k studs around the camera (measured), so a wider shell costs
+	-- memory for nothing: +103 MB at 3072, +330 MB at 8192 (the near square alone is 457 MB).
+	TERRAIN_FAR_HALF_STUDS = 3072,
 
 	-- Vertex colors by slope and height (false: plain part color, fewer API calls per chunk).
 	VERTEX_COLORS = true,

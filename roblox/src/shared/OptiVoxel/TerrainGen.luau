@@ -79,4 +79,83 @@ function TerrainGen.writeBox(terrain: Terrain, x0: number, y0: number, z0: numbe
 	return sampleMs, (os.clock() - t1) * 1000, nx * ny * nz
 end
 
+local SHELL = 2 * VOX -- studs of solid under the lowest neighbouring column top
+
+local function surfaceMaterial(h: number, slope: number): Enum.Material
+	return if h > SNOW_ABOVE * S then Snow elseif slope > 0.9 then Rock else Grass
+end
+
+-- Far field: the height field only (no caves, no edits), sampled every `step` studs (a multiple of
+-- VOX) and interpolated bilinearly per voxel column, written as a shell SHELL thick under the lowest
+-- neighbouring column top (hollow underneath: only seen from above). Box [x0, x1) x [z0, z1), aligned
+-- on `step`. Returns ms spent sampling, ms spent in WriteVoxels, voxel count.
+function TerrainGen.writeFarTile(terrain: Terrain, x0: number, z0: number, x1: number, z1: number, step: number): (number, number, number)
+	local t0 = os.clock()
+	-- Height samples (studs) from x0 - step to x1 + step: the border columns need their neighbours.
+	local gn, gm = (x1 - x0) // step + 3, (z1 - z0) // step + 3
+	local grid = table.create(gn * gm)
+	for i = 0, gn - 1 do
+		local x = (x0 + (i - 1) * step) / S
+		for k = 0, gm - 1 do
+			grid[i * gm + k + 1] = Sdf.height(x, (z0 + (k - 1) * step) / S) * S
+		end
+	end
+	-- Column tops (studs), with a one-column border.
+	local nx, nz = (x1 - x0) // VOX, (z1 - z0) // VOX
+	local cm = nz + 2
+	local tops = table.create((nx + 2) * cm)
+	local lo, hi = math.huge, -math.huge
+	for i = 0, nx + 1 do
+		local fx = (i - 0.5) * VOX / step + 1
+		local gi = math.floor(fx)
+		local tx = fx - gi
+		for k = 0, nz + 1 do
+			local fz = (k - 0.5) * VOX / step + 1
+			local gk = math.floor(fz)
+			local tz = fz - gk
+			local a = grid[gi * gm + gk + 1]
+			local b = grid[(gi + 1) * gm + gk + 1]
+			local c = grid[gi * gm + gk + 2]
+			local d = grid[(gi + 1) * gm + gk + 2]
+			local h = a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz
+			tops[i * cm + k + 1] = h
+			lo, hi = math.min(lo, h), math.max(hi, h)
+		end
+	end
+	local y0, y1 = align(lo - SHELL, false), align(hi + VOX, true)
+	local ny = (y1 - y0) // VOX
+	local mats = table.create(nx)
+	local occs = table.create(nx)
+	local voxels = 0
+	for i = 1, nx do
+		local mi, oi = table.create(ny), table.create(ny)
+		mats[i], occs[i] = mi, oi
+		for j = 1, ny do
+			mi[j], oi[j] = table.create(nz, Air), table.create(nz, 0)
+		end
+		for k = 1, nz do
+			local c = i * cm + k + 1
+			local h = tops[c]
+			local hx, hz = tops[c + cm], tops[c + 1]
+			local slope = math.max(math.abs(hx - h), math.abs(hz - h)) / UNITS_PER_VOX / S
+			local bottom = math.min(h, hx, hz, tops[c - cm], tops[c - 1]) - SHELL
+			local surface = surfaceMaterial(h, slope)
+			local below = if slope > 0.9 then Rock else Ground
+			for j = math.max(1, (bottom - y0) // VOX + 1), math.min(ny, (h - y0) // VOX + 2) do
+				local wy = y0 + (j - 0.5) * VOX
+				local occ = 0.5 - (wy - h) / VOX
+				if occ > 0 then
+					oi[j][k] = if occ > 1 then 1 else occ
+					mi[j][k] = if h - wy < 1.5 * S then surface else below
+					voxels += 1
+				end
+			end
+		end
+	end
+	local sampleMs = (os.clock() - t0) * 1000
+	local t1 = os.clock()
+	terrain:WriteVoxels(Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x1, y1, z1)), VOX, mats, occs)
+	return sampleMs, (os.clock() - t1) * 1000, voxels
+end
+
 return TerrainGen
