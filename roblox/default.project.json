@@ -1,0 +1,21 @@
+{
+	"name": "opti-voxel",
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"OptiVoxel": {
+				"$path": "src/shared/OptiVoxel"
+			},
+			"OptiVoxelWorker": {
+				"$path": "src/worker"
+			}
+		},
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"OptiVoxelClient": {
+					"$path": "src/client"
+				}
+			}
+		}
+	}
+}
