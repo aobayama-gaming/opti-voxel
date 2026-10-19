@@ -25,5 +25,7 @@ this folder; where they differ from the root `CLAUDE.md`, they win inside `roblo
 ## Studio gotchas
 - Smooth Terrain is only drawn ~3,000 studs around the camera: terrain written farther out costs
   memory and generation time and is never seen.
+- `Terrain:FillRegion` refuses big regions ("Region is too large"): clear slab by slab.
+- A part anchored by the client stops replicating its position (to fake a walk, pivot every frame).
 - Studio builds terrain render meshes and runs at full fps only while its window is focused (unfocused:
   ~15 fps, meshes not built). Check the fps before trusting a screenshot or a timing.

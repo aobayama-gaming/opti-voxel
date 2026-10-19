@@ -1,6 +1,7 @@
 # Plan: infinite world on Smooth Terrain (streaming window + treadmill)
 
-Status 2026-10-19: findings and the solo swap test are done (branch `roblox-treadmill`). Next: part 1.
+Status 2026-10-19: parts 1 and 2 are implemented, solo (branch `roblox-streaming`, measurements in
+`README.md`). Next: the user's walk test in Studio, then part 3.
 
 ## What we know (measured in Studio)
 
@@ -98,6 +99,25 @@ studs.
    - Studio unfocused: render meshes don't build.
 6. **Measure:** the stutter frame (195 ms on a fresh area), the pop, memory while two windows exist,
    and time from trigger to jump.
+
+### As built (parts 1 and 2)
+
+- `terrain_server/Window.luau`: one window = an origin + slab states + a sorted job queue (near
+  pieces, then shells, then clears, nearest first), rebuilt when the center changes slab.
+  - A slab going from shell to near is upgraded in place, piece by piece (the near box holds the
+    whole shell). Near to shell is a clear + shell in one frame.
+  - Each slab remembers the y range ever written, which is what gets cleared.
+- `Sdf.focusEdits` (all edits near a box, exact for occupancy) replaces bucketing: one linear pass
+  per piece. `TerrainGen.yRange` grows the sampled box to hold the edits over the column.
+- The server follows the first player. A move over 512 studs in a frame is only followed after 1 s
+  or on a respawn (stale positions right after a jump).
+- Jump protocol: copy complete → `OptiVoxelTreadmill` "jump" (delta, version, origin) to every
+  client, resent every 2 s until one answers "landed". The server switches origin on that answer,
+  so it never mixes a new physical position with the old origin.
+- The spawn keeps its logical place while inside the box, and becomes a checkpoint where the
+  player landed otherwise. A character respawned outside the written area is anchored until the
+  slabs around it are at full detail.
+- J forces a jump (by 40,960 studs on z when near the centre), B triples the walk speed.
 
 ## Part 3: objects and multiplayer (later)
 

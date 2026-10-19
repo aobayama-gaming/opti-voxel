@@ -37,13 +37,25 @@ return {
 	-- (measured body, head to feet, without accessories); walk speed and jump follow their scale,
 	-- gravity, camera zoom and the brush follow STUDS_PER_UNIT / 3.
 	PLAYER_HEIGHT_M = 1.8,
-	-- Generated square, half side in studs.
+	-- Streaming window around the player (terrain_server/Window.luau), half sides in studs: full detail
+	-- (caves, edits) out to TERRAIN_HALF_STUDS, then the height field alone as a thin shell (no caves,
+	-- no edits) out to TERRAIN_FAR_HALF_STUDS. Roblox draws Smooth Terrain only ~3k studs around the
+	-- camera (measured), so a wider shell costs memory for nothing: +103 MB at 3072, +330 MB at 8192
+	-- (the near square alone is 457 MB).
 	TERRAIN_HALF_STUDS = 1024,
-	-- Far field around it, out to this half side: the height field only (no caves, no edits), written
-	-- as a thin shell, sampled every 8 / 16 studs by distance (TerrainGen.writeFarTile). 0 turns it off.
-	-- Roblox draws Smooth Terrain only ~3k studs around the camera (measured), so a wider shell costs
-	-- memory for nothing: +103 MB at 3072, +330 MB at 8192 (the near square alone is 457 MB).
 	TERRAIN_FAR_HALF_STUDS = 3072,
+	-- Slabs are the window's unit (studs per side); near slabs are written in pieces of
+	-- STREAM_NEAR_PIECE_STUDS, the shell samples the height field every STREAM_CRUST_STEP_STUDS.
+	STREAM_SLAB_STUDS = 64,
+	STREAM_NEAR_PIECE_STUDS = 32,
+	STREAM_CRUST_STEP_STUDS = 8,
+	-- Server ms per frame for the window; a treadmill copy (or a window being cleared) gets at least
+	-- STREAM_COPY_BUDGET_MS more.
+	STREAM_BUDGET_MS = 8,
+	STREAM_COPY_BUDGET_MS = 2,
+	-- Treadmill: past this many studs from the centre of Roblox space (x or z), the window is written
+	-- again around the box centre and the player jumps there. Terrain extents are +-128k studs.
+	TREADMILL_STUDS = 65536,
 
 	-- Vertex colors by slope and height (false: plain part color, fewer API calls per chunk).
 	VERTEX_COLORS = true,

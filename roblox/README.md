@@ -29,7 +29,8 @@ the same SDF, the same surface-nets/QEF mesher, the same LOD chunk scan.
   (data, not drawn). Terrain written on a client stays on that client (no replication).
 
 So the direction: **our SDF stays the source of truth, Smooth Terrain renders it**
-(`terrain.project.json`), with a thin height-field shell out to ±3072 studs. A far field past the draw
+(`terrain.project.json`), with a thin height-field shell out to ±3072 studs, streamed around the
+player and moved back to the box centre by a treadmill jump (below). A far field past the draw
 distance was tried and dropped: EditableMesh rings don't fit (2048-stud and 8-mesh limits), and rings
 of WedgePart triangles (29k parts out to 32k studs) looked poor next to the terrain and took ~700 ms
 to rebuild a ring.
@@ -37,6 +38,28 @@ to rebuild a ring.
 Scale: `STUDS_PER_UNIT` 8 makes a voxel 0.5 m (the engine's) with characters scaled to 1.8 m, so the
 draw distance is ~375 m and the terrain world ±16 km. 5 cm voxels were tried: ~37 m of view, and
 `workspace.Gravity` caps at 1000 (scaled gravity needs ~5,200), so jumps turn floaty.
+
+## Infinite world: streaming window + treadmill (`PLAN-infinite-world.md`)
+
+Positions are logical (the world: the SDF and edits) = physical (Roblox space) + origin. The server
+(`terrain_server/Window.luau`) keeps the 64-stud slabs around the player written: full detail out to
+±1,024 studs (written in 32-stud pieces), a height-field shell out to ±3,072, cleared beyond, one slab
+of hysteresis, 8 ms of server time per frame. Past 64k studs from the box centre (or on J), it writes
+the window again around the centre with the next origin, then the client moves the character and
+camera there in one frame. Measured in Studio (2026-10-19, solo, Studio unfocused):
+
+| | |
+|---|---|
+| First window | 25.5 s (near square ~12 s): 1,089 near + 8,320 shell slabs, ~1.4 GB of terrain voxels |
+| Costs | near piece (32×32) 1.6 ms p50 (90% sampling); shell slab 0.6 ms; clear 0.05 ms; ~310 ms of server time per row of slabs crossed |
+| Walking (44 studs/s), 30 s | ≤ 490 jobs queued, nearest unwritten near slab ≥ 991 studs away, server ≤ 16 ms/frame |
+| 3× walking, diagonal | near work lags (nearest unwritten slab 668 studs away) but stays far; the budget holds up to ~100 studs/s |
+| Memory after 3.9 km | 1,395 → 1,415 MB (flat; the extra is the hysteresis row) |
+| Treadmill jump | copy written in 25.6 s, jump, old window cleared in 3.4 s; worst client frame after it 184 ms (first visit) |
+| Edits | converted with the origin of the version they were sent in; a dug hole survives its slab being cleared and rewritten |
+
+`WriteVoxels` itself stalls now and then (2 of 1,600 near pieces took 100–250 ms, sampling 2 ms):
+Roblox-side. In Studio, the server and client share a process, so it shows as a client hitch there.
 
 Benchmark, same 336×336-stud region with caves, same 10 sphere edits (`bench.project.json`):
 
@@ -59,7 +82,7 @@ src/shared/OptiVoxel/   pure Luau, runs in Roblox and in the Luau CLI
   Config.luau           Roblox-side knobs
   TerrainGen.luau       Roblox only: SDF -> Smooth Terrain voxels (materials by depth / slope)
   ChunkBuilder.luau     Roblox only: Mesher output -> EditableMesh -> MeshPart
-src/terrain_server/     Smooth Terrain playground: generation + server-side edits
+src/terrain_server/     Smooth Terrain playground: streaming window (Window.luau), treadmill, edits
 src/terrain_client/     dig / fill tool + overlay
 src/bench/              pack vs Smooth Terrain benchmark
 src/client/, worker/    chunk-per-EditableMesh client (Actors), limited by the 8-mesh cap
@@ -75,7 +98,7 @@ the version pinned in `rokit.toml`), then build and open in Studio:
 
 | Project | Build | What |
 |---|---|---|
-| `terrain.project.json` | `rojo build terrain.project.json -o terrain.rbxl` | Smooth Terrain playground: LMB dig, F fill, R/T radius, H overlay |
+| `terrain.project.json` | `rojo build terrain.project.json -o terrain.rbxl` | Smooth Terrain playground, streamed: LMB dig, F fill, R/T radius, J treadmill jump now, B walk ×3, H overlay |
 | `bench.project.json` | `rojo build bench.project.json -o bench.rbxl` | benchmark; set `workspace` attributes `BenchMode` = `pack` / `terrain`, `BenchHalfStuds` before Play; result printed as `[Bench] {json}` |
 | `probe.project.json` | `rojo build probe.project.json -o probe.rbxl` | EditableMesh budget and linking probe |
 | `default.project.json` | `rojo build -o opti-voxel.rbxl` | chunk-per-EditableMesh client (historical) |
@@ -87,6 +110,10 @@ the version pinned in `rokit.toml`), then build and open in Studio:
   the max height over a footprint at non-integer offsets.
 - Terrain collision is built asynchronously, on each client too: keep a spawn platform solid until
   generation is done, or players fall through.
+- `Terrain:FillRegion` refuses big regions ("Region is too large"; 1,300×4,000×1,300 studs failed):
+  clear slab by slab.
+- A part the client anchors no longer replicates its position: to move a character for a test, pivot
+  it every frame and zero its velocity instead.
 - Before the character exists the camera sits at the origin, deep underground: don't scan from it.
 - Studio throttles an unfocused window to ~15 FPS: frame times are only meaningful with Studio
   focused.
@@ -101,6 +128,8 @@ the version pinned in `rokit.toml`), then build and open in Studio:
 `tools/cpp_oracle/build.sh`; dev has since dropped the CPU pipeline) against a small stand-in for the godot-cpp types
 (`tools/cpp_oracle/`) and compares them with the Luau port:
 
+- Edit focus (`tools/luau/edit_focus.luau`): `Sdf.focusEdits` keeps only the edits near a box; on
+  40 random edit sets, the Smooth Terrain occupancies of ~660k voxels are identical with and without it.
 - SDF, 20 000 points: no sign flips; max difference 5e-7 vs the C++ built with doubles,
   3e-4 vs the real float32 build.
 - 15 chunks (surface, caves, empty, negative coordinates, LOD 0..5): **identical triangles,

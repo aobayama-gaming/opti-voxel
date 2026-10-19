@@ -24,7 +24,7 @@ local function align(v: number, up: boolean): number
 end
 
 -- Studs range [y0, y1) worth sampling over a column box: from `depth` units under the lowest surface
--- point to a bit above the highest.
+-- point to a bit above the highest, grown to hold the edits over the column (dug deeper, built higher).
 function TerrainGen.yRange(x0: number, z0: number, x1: number, z1: number, depth: number, shift: Vector2?): (number, number)
 	local sx, sz = if shift then shift.X else 0, if shift then shift.Y else 0
 	local lo, hi = math.huge, -math.huge
@@ -34,7 +34,12 @@ function TerrainGen.yRange(x0: number, z0: number, x1: number, z1: number, depth
 			lo, hi = math.min(lo, h), math.max(hi, h)
 		end
 	end
-	return align((lo - depth) * S, false), align((hi + 2) * S, true)
+	lo, hi = lo - depth, hi + 2
+	local elo, ehi = Sdf.editYRange((x0 - sx) / S, (z0 - sz) / S, (x1 - sx) / S, (z1 - sz) / S, UNITS_PER_VOX)
+	if elo and ehi then
+		lo, hi = math.min(lo, elo), math.max(hi, ehi)
+	end
+	return align(lo * S, false), align(hi * S, true)
 end
 
 -- Samples the box [x0, x1) x [y0, y1) x [z0, z1) (studs, any values: aligned outward to the grid)
@@ -48,6 +53,8 @@ function TerrainGen.writeBox(terrain: Terrain, x0: number, y0: number, z0: numbe
 		return 0, 0, 0
 	end
 	local t0 = os.clock()
+	-- Only the edits that can change an occupancy in the box (occupancy saturates half a voxel off zero).
+	Sdf.focusEdits((x0 - sx) / S, y0 / S, (z0 - sz) / S, (x1 - sx) / S, y1 / S, (z1 - sz) / S, UNITS_PER_VOX)
 	local mats = table.create(nx)
 	local occs = table.create(nx)
 	for i = 1, nx do
@@ -77,10 +84,19 @@ function TerrainGen.writeBox(terrain: Terrain, x0: number, y0: number, z0: numbe
 			end
 		end
 	end
+	Sdf.unfocusEdits()
 	local sampleMs = (os.clock() - t0) * 1000
 	local t1 = os.clock()
 	terrain:WriteVoxels(Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x1, y1, z1)), VOX, mats, occs)
 	return sampleMs, (os.clock() - t1) * 1000, nx * ny * nz
+end
+
+-- Turns the box (studs, aligned outward to the grid) to air. Returns ms spent.
+function TerrainGen.clearBox(terrain: Terrain, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number
+	local t0 = os.clock()
+	local region = Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x1, y1, z1)):ExpandToGrid(VOX)
+	terrain:FillRegion(region, VOX, Air)
+	return (os.clock() - t0) * 1000
 end
 
 local SHELL = 2 * VOX -- studs of solid under the lowest neighbouring column top
@@ -92,8 +108,9 @@ end
 -- Far field: the height field only (no caves, no edits), sampled every `step` studs (a multiple of
 -- VOX) and interpolated bilinearly per voxel column, written as a shell SHELL thick under the lowest
 -- neighbouring column top (hollow underneath: only seen from above). Box [x0, x1) x [z0, z1), aligned
--- on `step`. Returns ms spent sampling, ms spent in WriteVoxels, voxel count.
-function TerrainGen.writeFarTile(terrain: Terrain, x0: number, z0: number, x1: number, z1: number, step: number, shift: Vector2?): (number, number, number)
+-- on `step`. Returns ms spent sampling, ms spent in WriteVoxels, voxel count, and the studs range
+-- [y0, y1) written.
+function TerrainGen.writeFarTile(terrain: Terrain, x0: number, z0: number, x1: number, z1: number, step: number, shift: Vector2?): (number, number, number, number, number)
 	local sx, sz = if shift then shift.X else 0, if shift then shift.Y else 0
 	local t0 = os.clock()
 	-- Height samples (studs) from x0 - step to x1 + step: the border columns need their neighbours.
@@ -160,7 +177,7 @@ function TerrainGen.writeFarTile(terrain: Terrain, x0: number, z0: number, x1: n
 	local sampleMs = (os.clock() - t0) * 1000
 	local t1 = os.clock()
 	terrain:WriteVoxels(Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x1, y1, z1)), VOX, mats, occs)
-	return sampleMs, (os.clock() - t1) * 1000, voxels
+	return sampleMs, (os.clock() - t1) * 1000, voxels, y0, y1
 end
 
 return TerrainGen

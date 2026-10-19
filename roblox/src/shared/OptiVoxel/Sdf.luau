@@ -13,21 +13,27 @@ local Sdf = {}
 -- Edits: spheres applied in order, 4 f64 each (x, y, z, radius). A positive radius carves
 -- (max(sdf, radius - distance)), a negative one adds matter (min(sdf, distance - |radius|)).
 -- Per Lua VM: an Actor that samples or meshes needs its own copy.
-local edits = buffer.create(0)
-local editCount = 0
+-- `edits` / `editCount` are what evaluate() applies: every edit, or the subset focusEdits() picked.
+local all = buffer.create(0)
+local allCount = 0
+local scratch = buffer.create(0)
+local edits, editCount = all, 0
+local focused = false
 
 local function addEdit(x: number, y: number, z: number, radius: number)
-	if (editCount + 1) * 32 > buffer.len(edits) then
-		local grown = buffer.create(math.max(32, buffer.len(edits) * 2))
-		buffer.copy(grown, 0, edits)
-		edits = grown
+	assert(not focused, "Sdf: edit added while focused")
+	if (allCount + 1) * 32 > buffer.len(all) then
+		local grown = buffer.create(math.max(32, buffer.len(all) * 2))
+		buffer.copy(grown, 0, all)
+		all = grown
 	end
-	local o = editCount * 32
-	buffer.writef64(edits, o, x)
-	buffer.writef64(edits, o + 8, y)
-	buffer.writef64(edits, o + 16, z)
-	buffer.writef64(edits, o + 24, radius)
-	editCount += 1
+	local o = allCount * 32
+	buffer.writef64(all, o, x)
+	buffer.writef64(all, o + 8, y)
+	buffer.writef64(all, o + 16, z)
+	buffer.writef64(all, o + 24, radius)
+	allCount += 1
+	edits, editCount = all, allCount
 end
 
 function Sdf.addSubtractSphere(x: number, y: number, z: number, radius: number)
@@ -39,11 +45,65 @@ function Sdf.addUnionSphere(x: number, y: number, z: number, radius: number)
 end
 
 function Sdf.editCount(): number
-	return editCount
+	return allCount
 end
 
 function Sdf.clearEdits()
-	editCount = 0
+	assert(not focused, "Sdf: edits cleared while focused")
+	allCount = 0
+	edits, editCount = all, 0
+end
+
+-- Squared distance from (x, y, z) to the box [x0, x1] x [y0, y1] x [z0, z1].
+local function boxDistance2(x: number, y: number, z: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number
+	local dx = math.max(x0 - x, 0, x - x1)
+	local dy = math.max(y0 - y, 0, y - y1)
+	local dz = math.max(z0 - z, 0, z - z1)
+	return dx * dx + dy * dy + dz * dz
+end
+
+-- Until unfocusEdits(), evaluate() only applies the edits whose sphere grown by `margin` meets the
+-- box. An edit leaves every value it can change past `margin` of its sphere on the same side of
+-- +-margin (min / max with it keep a value <= -margin below it and one >= margin above it), so a
+-- consumer that clamps values to [-margin, margin] (Smooth Terrain occupancy) sees no difference.
+function Sdf.focusEdits(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, margin: number)
+	assert(not focused, "Sdf: already focused")
+	focused = true
+	if buffer.len(scratch) < buffer.len(all) then
+		scratch = buffer.create(buffer.len(all))
+	end
+	local readf64 = buffer.readf64
+	local n = 0
+	for i = 0, allCount - 1 do
+		local o = i * 32
+		local reach = math.abs(readf64(all, o + 24)) + margin
+		if boxDistance2(readf64(all, o), readf64(all, o + 8), readf64(all, o + 16), x0, y0, z0, x1, y1, z1) <= reach * reach then
+			buffer.copy(scratch, n * 32, all, o, 32)
+			n += 1
+		end
+	end
+	edits, editCount = scratch, n
+end
+
+function Sdf.unfocusEdits()
+	focused = false
+	edits, editCount = all, allCount
+end
+
+-- Vertical extent (lo, hi) of the edits whose sphere grown by `margin` overlaps the column
+-- [x0, x1] x [z0, z1], or nil: a box sampled from the height field alone would miss what they carved
+-- under it or built over it.
+function Sdf.editYRange(x0: number, z0: number, x1: number, z1: number, margin: number): (number?, number?)
+	local readf64 = buffer.readf64
+	local lo: number?, hi: number? = nil, nil
+	for i = 0, allCount - 1 do
+		local o = i * 32
+		local y, reach = readf64(all, o + 8), math.abs(readf64(all, o + 24)) + margin
+		if boxDistance2(readf64(all, o), y, readf64(all, o + 16), x0, y, z0, x1, y, z1) <= reach * reach then
+			lo, hi = math.min(lo or math.huge, y - reach), math.max(hi or -math.huge, y + reach)
+		end
+	end
+	return lo, hi
 end
 
 local function applyEdits(x: number, y: number, z: number, d: number): number

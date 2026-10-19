@@ -29,6 +29,9 @@ for b in f64 f32; do
 	python3 -c "import json,sys; r=json.loads(sys.argv[1]); sys.exit(0 if r['sign_flips']==0 and r['max']<(1e-5 if sys.argv[2]=='f64' else 1e-3) else 1)" "$res" "$b" || fail=1
 done
 
+echo "== Edit focus (Smooth Terrain occupancy unchanged)"
+"$luau" --codegen "$here/luau/edit_focus.luau" || fail=1
+
 # Surface, caves, deep, empty, negative coordinates, LOD 1..5 (LOD >= 5 takes the mass-point path).
 chunks=(
 	"1 43 1" "1 41 1" "1 39 1" "1 37 1" "-3 43 -5" "-21 41 13" "9 45 -7" "1 47 1"
