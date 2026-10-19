@@ -509,28 +509,39 @@ ChunkDiscoverer::Remembered ChunkDiscoverer::remember_view(ScanView &r_view, dou
     }
     // Without memory distance, only the camera chunk's own view is kept.
     const int capacity = p_memory_distance > 0.0 ? ScanView::MAX_VIEW_MEMORIES : 1;
+    const uint32_t now = ++r_view.memory_clock;
     for (int i = 0; i < r_view.memory_count; i++) {
         ScanView::ViewMemory &m = r_view.memories[i];
         m.fade = MAX(0.0, r_view.camera_chunk.distance_to(m.apex) - p_memory_distance);
     }
-    for (int i = 0; i < r_view.memory_count; i++) {
-        if (r_view.memories[i].apex == r_view.camera_chunk && !turned_past(r_view.memories[i].dir, r_view.forward)) {
-            return REMEMBERED_KNOWN;
-        }
-    }
     Remembered result = REMEMBERED_ADDED;
-    int slot = r_view.memory_count;
-    if (slot >= capacity) {
-        slot = 0;
-        for (int i = 1; i < r_view.memory_count; i++) {
-            slot = r_view.memories[i].fade > r_view.memories[slot].fade ? i : slot;
+    int slot = -1;
+    for (int i = 0; i < r_view.memory_count && slot < 0; i++) {
+        if (r_view.memories[i].apex == r_view.camera_chunk && !turned_past(r_view.memories[i].dir, r_view.forward)) {
+            slot = i;
+            result = REMEMBERED_KNOWN;
         }
-        result = REMEMBERED_REPLACED;
-    } else {
-        r_view.memory_count++;
     }
-    r_view.memories[slot] = { r_view.camera_chunk, r_view.forward, 0.0 };
-    // Insertion sort by fade (stable, no allocation): the list is short and nearly sorted.
+    if (result == REMEMBERED_KNOWN) {
+        r_view.memories[slot].used = now;
+    } else {
+        slot = r_view.memory_count;
+        if (slot >= capacity) {
+            // Over the most faded one, the least recently used among equals (all fade 0 within the distance).
+            slot = 0;
+            for (int i = 1; i < r_view.memory_count; i++) {
+                const ScanView::ViewMemory &m = r_view.memories[i];
+                const ScanView::ViewMemory &worst = r_view.memories[slot];
+                slot = m.fade > worst.fade || (m.fade == worst.fade && m.used < worst.used) ? i : slot;
+            }
+            result = REMEMBERED_REPLACED;
+        } else {
+            r_view.memory_count++;
+        }
+        r_view.memories[slot] = { r_view.camera_chunk, r_view.forward, 0.0, now };
+    }
+    // Sorted by fade, which a new camera chunk changes (lod_split stops at the first fade too large).
+    // Insertion sort: stable, no allocation, and the list is short and nearly sorted.
     for (int i = 1; i < r_view.memory_count; i++) {
         const ScanView::ViewMemory m = r_view.memories[i];
         int j = i;
@@ -553,17 +564,20 @@ void ChunkDiscoverer::set_camera(const Vector3 &p_pos, const Vector3 &p_forward)
     if (changed) {
         view = new_view;
         camera_change_usec = now_usec();
-    } else if (turned_past(new_view.forward, view.forward)) {
+        mutex->unlock();
+        semaphore->post();
+        VLOG(2, "new view:", WorldCoord::to_string(new_view.camera_chunk), " ", new_view.forward, " memories ", new_view.memory_count);
+        return;
+    }
+    // Same chunk and memories, in the same order: keep the use times for eviction.
+    view.copy_memories_from(new_view);
+    if (turned_past(new_view.forward, view.forward)) {
         // A turn that doesn't change the scanned set (back_scale 0, or towards a remembered view): no
         // rescan, but the next scan (camera chunk, instance edit) orders the meshers' queues by the current
         // direction.
         view.forward = new_view.forward;
     }
     mutex->unlock();
-    if (changed) {
-        semaphore->post();
-        VLOG(2, "new view:", WorldCoord::to_string(new_view.camera_chunk), " ", new_view.forward, " memories ", new_view.memory_count);
-    }
 }
 
 void ChunkDiscoverer::set_view_memory(double p_metres) {

@@ -189,6 +189,20 @@ double ChunkMath::view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanVie
             p_view.forward, p_lod, p_view);
 }
 
+namespace {
+// One term of lod_cone_gap: the memory's fade plus the gap to its cone.
+double memory_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view, const ScanView::ViewMemory &p_memory) {
+    const ChunkId &apex = p_memory.apex;
+    return p_memory.fade +
+            cone_gap(double(p_chunk.x - apex.x), double(p_chunk.y - apex.y), double(p_chunk.z - apex.z), p_memory.dir, p_lod, p_view);
+}
+
+// lod_distance's plain part: from the camera chunk to the chunk's bounding sphere.
+double sphere_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
+    return p_view.camera_chunk.distance_to(p_chunk) - ChunkMath::chunk_bounding_radius(p_lod);
+}
+} //namespace
+
 double ChunkMath::lod_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
     if (p_view.memory_count == 0) {
         return view_cone_gap(p_chunk, p_lod, p_view);
@@ -196,16 +210,13 @@ double ChunkMath::lod_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView
     double best = INFINITY;
     // Sorted by fade: once a fade alone reaches the best gap, no later memory can beat it.
     for (int i = 0; i < p_view.memory_count && p_view.memories[i].fade < best; i++) {
-        const ScanView::ViewMemory &m = p_view.memories[i];
-        const double gap = m.fade +
-                cone_gap(double(p_chunk.x - m.apex.x), double(p_chunk.y - m.apex.y), double(p_chunk.z - m.apex.z), m.dir, p_lod, p_view);
-        best = MIN(best, gap);
+        best = MIN(best, memory_gap(p_chunk, p_lod, p_view, p_view.memories[i]));
     }
     return best;
 }
 
 double ChunkMath::lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
-    const double near = p_view.camera_chunk.distance_to(p_chunk) - chunk_bounding_radius(p_lod);
+    const double near = sphere_distance(p_chunk, p_lod, p_view);
     if (p_view.back_scale == 0.0) {
         return near;
     }
@@ -213,7 +224,7 @@ double ChunkMath::lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView
 }
 
 bool ChunkMath::lod_split(const ChunkId &p_chunk, int p_lod, const ScanView &p_view, double p_threshold) {
-    const double near = p_view.camera_chunk.distance_to(p_chunk) - chunk_bounding_radius(p_lod);
+    const double near = sphere_distance(p_chunk, p_lod, p_view);
     if (near >= p_threshold) {
         return false; // lod_distance is never under the plain distance
     }
@@ -221,12 +232,27 @@ bool ChunkMath::lod_split(const ChunkId &p_chunk, int p_lod, const ScanView &p_v
         return lod_distance(p_chunk, p_lod, p_view) < p_threshold;
     }
     // near + back_scale * x only grows with x, also in floating point: the minimum is under the threshold
-    // iff one term is, and once a fade alone fails the later (more faded) memories fail too.
-    for (int i = 0; i < p_view.memory_count && near + p_view.back_scale * p_view.memories[i].fade < p_threshold; i++) {
+    // iff one term is, in any order. First the camera chunk's own view nearest in angle (found by dot products
+    // alone; the gap grows with the angle): inside any of its cones, that one exact gap decides.
+    const double vx = double(p_chunk.x - p_view.camera_chunk.x);
+    const double vy = double(p_chunk.y - p_view.camera_chunk.y);
+    const double vz = double(p_chunk.z - p_view.camera_chunk.z);
+    int nearest = -1;
+    double nearest_dot = -INFINITY;
+    for (int i = 0; i < p_view.memory_count; i++) {
         const ScanView::ViewMemory &m = p_view.memories[i];
-        const double gap = m.fade +
-                cone_gap(double(p_chunk.x - m.apex.x), double(p_chunk.y - m.apex.y), double(p_chunk.z - m.apex.z), m.dir, p_lod, p_view);
-        if (near + p_view.back_scale * gap < p_threshold) {
+        const double dot = vx * m.dir.x + vy * m.dir.y + vz * m.dir.z;
+        if (m.apex == p_view.camera_chunk && dot > nearest_dot) {
+            nearest_dot = dot;
+            nearest = i;
+        }
+    }
+    if (nearest >= 0 && near + p_view.back_scale * memory_gap(p_chunk, p_lod, p_view, p_view.memories[nearest]) < p_threshold) {
+        return true;
+    }
+    // Then every memory, by fade: once a fade alone fails, the later (more faded) memories fail too.
+    for (int i = 0; i < p_view.memory_count && near + p_view.back_scale * p_view.memories[i].fade < p_threshold; i++) {
+        if (near + p_view.back_scale * memory_gap(p_chunk, p_lod, p_view, p_view.memories[i]) < p_threshold) {
             return true;
         }
     }

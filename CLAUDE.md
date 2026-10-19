@@ -371,8 +371,9 @@ to every change, and a reviewer may reject a PR on any of them.
   starts, 0 = off): the view carries up to 64 `ScanView::memories` (camera chunk, view axis, fade = distance from
   the camera past M), sorted by fade, and the gap is `ChunkMath::lod_cone_gap` = min over them of gap to their
   cone + fade: still 1-Lipschitz, still a pure function of the view (audit / compare re-scan it). `remember_view`
-  adds the camera chunk's view unless one there is within `RESCAN_TURN_DEG` (8 degrees), evicting the most faded
-  when full; besides camera chunk crossings, a rescan only follows an added memory. Turning in place: about 40 memories in the
+  adds the camera chunk's view unless one there is within `RESCAN_TURN_DEG` (8 degrees), replacing the most faded
+  (least recently used among equals) when full; memory 0 keeps one view, replaced on every new chunk or turn. The
+  remembered axis lags the camera by up to 8 degrees, so `lod_view_margin_deg` is at least that; besides camera chunk crossings, a rescan only follows an added memory. Turning in place: about 40 memories in the
   first turn, then no rescan and no re-mesh. Walking on: the views fade with distance (no timer). `bench.gd
   --scenario=turn --turns=N` and `--scenario=turn_walk --walk=M`; `discoverer.delta_entered_total /
   delta_left_total` in each phase's stats count the churn.

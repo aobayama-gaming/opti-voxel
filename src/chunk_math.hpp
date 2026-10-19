@@ -58,10 +58,12 @@ struct ScanView {
         ChunkId apex;
         Vector3 dir;
         double fade = 0.0;
+        uint32_t used = 0; // memory_clock when the camera last had this view (eviction only, not compared)
     };
     static constexpr int MAX_VIEW_MEMORIES = 64;
     ViewMemory memories[MAX_VIEW_MEMORIES];
     int memory_count = 0;
+    uint32_t memory_clock = 0; // remember_view calls
 
     void set_half_angle(double p_rad) {
         const double a = CLAMP(p_rad, 0.0, Math_PI);
@@ -70,6 +72,7 @@ struct ScanView {
     }
     void copy_memories_from(const ScanView &p_other) {
         memory_count = p_other.memory_count;
+        memory_clock = p_other.memory_clock;
         std::copy(p_other.memories, p_other.memories + p_other.memory_count, memories);
     }
 };

@@ -109,7 +109,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, "0,180,1,suffix:deg"), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
@@ -351,7 +351,10 @@ float VoxelTerrain::get_lod_pixel_error_back() const {
 
 void VoxelTerrain::set_lod_view_margin_deg(float p_degrees) {
     ERR_FAIL_COND_MSG(started, "lod_view_margin_deg must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(!(p_degrees >= 0.0f && p_degrees <= 180.0f), "lod_view_margin_deg must be in [0, 180].");
+    // The remembered view axis lags the camera's by up to RESCAN_TURN_DEG: a smaller margin would leave the
+    // frustum's edge outside the cone.
+    ERR_FAIL_COND_MSG(!(p_degrees >= ChunkDiscoverer::RESCAN_TURN_DEG && p_degrees <= 180.0f),
+            vformat("lod_view_margin_deg must be in [%d, 180].", int(ChunkDiscoverer::RESCAN_TURN_DEG)));
     lod_view_margin_deg = p_degrees;
 }
 

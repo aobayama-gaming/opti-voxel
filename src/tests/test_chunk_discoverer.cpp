@@ -330,3 +330,58 @@ TEST_CASE("ChunkDiscoverer: remembered views stop the rescans of a camera turnin
     CHECK(ChunkDiscoverer::remember_view(next, memory_distance) == ChunkDiscoverer::REMEMBERED_REPLACED);
     CHECK(next.memory_count == ScanView::MAX_VIEW_MEMORIES);
 }
+
+// The memories stay sorted by fade when the camera comes back to a chunk it already had a view in (a
+// known view, nothing added): lod_split stops at the first fade too large.
+TEST_CASE("ChunkDiscoverer: remember_view re-sorts the fades of a known view") {
+    ScanView view;
+    view.back_scale = 3.0;
+    view.forward = Vector3(1, 0, 0);
+    const double memory_distance = 10.0;
+    for (int64_t x : { int64_t(1), int64_t(201) }) { // out to x = 201, a view at each end
+        view.camera_chunk = ChunkId(x, 1, 1);
+        CHECK(ChunkDiscoverer::remember_view(view, memory_distance) == ChunkDiscoverer::REMEMBERED_ADDED);
+    }
+    CHECK(view.memories[0].apex == ChunkId(201, 1, 1));
+    view.camera_chunk = ChunkId(1, 1, 1); // and back
+    CHECK(ChunkDiscoverer::remember_view(view, memory_distance) == ChunkDiscoverer::REMEMBERED_KNOWN);
+    CHECK(view.memories[0].apex == ChunkId(1, 1, 1));
+    CHECK(view.memories[0].fade == 0.0);
+    CHECK(view.memories[1].fade == doctest::Approx(200.0 - memory_distance));
+}
+
+// Full, with every fade 0 (looking around in place): the least recently used view goes, not the newest.
+TEST_CASE("ChunkDiscoverer: a full memory replaces the least recently used view") {
+    std::vector<Vector3> dirs;
+    for (int yaw = 0; yaw < 360; yaw += 9) {
+        dirs.push_back(Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(float(yaw))));
+    }
+    for (int yaw = 0; int(dirs.size()) < ScanView::MAX_VIEW_MEMORIES + 2; yaw += 13) { // 9.2 degrees apart at 45 degrees up
+        dirs.push_back(Vector3(1, 1, 0).normalized().rotated(Vector3(0, 1, 0), Math::deg_to_rad(float(yaw))));
+    }
+    ScanView view;
+    view.back_scale = 3.0;
+    view.camera_chunk = ChunkId(1, 1, 1);
+    auto look = [&view](const Vector3 &p_dir) {
+        view.forward = p_dir;
+        return ChunkDiscoverer::remember_view(view, 30.0);
+    };
+    for (int i = 0; i < ScanView::MAX_VIEW_MEMORIES; i++) {
+        CHECK(look(dirs[i]) == ChunkDiscoverer::REMEMBERED_ADDED);
+    }
+    CHECK(look(dirs[0]) == ChunkDiscoverer::REMEMBERED_KNOWN); // dirs[1] is now the least recently used
+    auto has = [&view](const Vector3 &p_dir) {
+        for (int i = 0; i < view.memory_count; i++) {
+            if (view.memories[i].dir == p_dir) {
+                return true;
+            }
+        }
+        return false;
+    };
+    CHECK(look(dirs[ScanView::MAX_VIEW_MEMORIES]) == ChunkDiscoverer::REMEMBERED_REPLACED);
+    CHECK(has(dirs[0]));
+    CHECK(!has(dirs[1]));
+    CHECK(look(dirs[ScanView::MAX_VIEW_MEMORIES + 1]) == ChunkDiscoverer::REMEMBERED_REPLACED);
+    CHECK(has(dirs[ScanView::MAX_VIEW_MEMORIES])); // the newest stays
+    CHECK(!has(dirs[2]));
+}

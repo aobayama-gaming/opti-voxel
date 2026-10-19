@@ -211,7 +211,8 @@ public:
     // this one behind the camera (0 or <= lod_pixel_error: off). See lod_view_memory_m for turning.
     void set_lod_pixel_error_back(float p_error);
     float get_lod_pixel_error_back() const;
-    // The view cone: the frustum's diagonal half-FOV plus this margin, in degrees. It keeps lod_pixel_error
+    // The view cone: the frustum's diagonal half-FOV plus this margin, in degrees (at least
+    // ChunkDiscoverer::RESCAN_TURN_DEG, the most the remembered view axis lags the camera's). It keeps lod_pixel_error
     // around the view while turning (a turn of ChunkDiscoverer::RESCAN_TURN_DEG rescans), and the meshers
     // load the chunks inside it first.
     void set_lod_view_margin_deg(float p_degrees);

@@ -434,9 +434,8 @@ func _process(delta: float) -> void:
 				_begin_phase("walk" if args.get("scenario", "load") == "turn_walk" else "settle")
 		"walk":
 			var walked := (Time.get_ticks_usec() - phase_start_usec) / (float(args.get("walk_seconds", "6")) * 1e6)
-			var ahead := -camera.global_transform.basis.z
-			ahead.y = 0.0
-			camera.global_position = walk_from + ahead.normalized() * float(args.get("walk", "300")) * minf(walked, 1.0)
+			var ahead := Vector3.FORWARD.rotated(Vector3.UP, camera.global_rotation.y)  # level, whatever the pitch
+			camera.global_position = walk_from + ahead * float(args.get("walk", "300")) * minf(walked, 1.0)
 			if walked >= 1.0:
 				_end_phase()
 				_take_shots("walk_end")
