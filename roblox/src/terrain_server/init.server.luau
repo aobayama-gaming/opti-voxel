@@ -4,6 +4,8 @@
 --   - generates the SDF terrain into Roblox Terrain, slab by slab, nearest the spawn first;
 --   - applies dig / fill requests from clients as SDF edits, then resamples the edited box.
 -- Terrain is edited here, on the server, so it replicates to every player.
+-- Treadmill test: once generated, the same window is written again JUMP_OFFSET away (out of view);
+-- clients swap between the two copies in one frame (J). Edits go to both copies.
 -- Progress and timings go to workspace attributes (read by the client overlay).
 
 local Players = game:GetService("Players")
@@ -108,6 +110,12 @@ spawn.Transparency = 0.5
 spawn.Position = Vector3.new(0, surface + 2 * K, 0)
 spawn.Parent = workspace
 
+-- The copy: far past Smooth Terrain's draw distance, well inside its ±128k-stud extents.
+local JUMP_OFFSET = Vector2.new(0, 40960)
+local shifts = { Vector2.zero, JUMP_OFFSET }
+workspace:SetAttribute("JumpOffset", Vector3.new(JUMP_OFFSET.X, 0, JUMP_OFFSET.Y))
+workspace:SetAttribute("JumpReady", false)
+
 local edit = Instance.new("RemoteEvent")
 edit.Name = "OptiVoxelEdit"
 edit.Parent = ReplicatedStorage
@@ -154,43 +162,58 @@ workspace:SetAttribute("FarTotal", #farTiles)
 workspace:SetAttribute("FarDone", 0)
 workspace:SetAttribute("FarHalfStuds", FAR_HALF)
 
-local function generateFar()
+-- `progress(i)` after each tile (or batch of tiles within the frame budget).
+local function generateFar(shift: Vector2, progress: (number) -> ())
 	local sampleMs, writeMs, voxels = 0, 0, 0
 	local t0 = os.clock()
 	local frame = os.clock()
 	for i, t in farTiles do
-		local a, b, n = TerrainGen.writeFarTile(terrain, t.X, t.Y, t.X + FAR_TILE, t.Y + FAR_TILE, farStep(t))
+		local a, b, n = TerrainGen.writeFarTile(terrain, t.X + shift.X, t.Y + shift.Y, t.X + shift.X + FAR_TILE, t.Y + shift.Y + FAR_TILE, farStep(t), shift)
 		sampleMs += a
 		writeMs += b
 		voxels += n
 		if os.clock() - frame > FAR_BUDGET then
-			workspace:SetAttribute("FarDone", i)
+			progress(i)
 			task.wait()
 			frame = os.clock()
 		end
 	end
-	workspace:SetAttribute("FarDone", #farTiles)
-	workspace:SetAttribute("FarSeconds", os.clock() - t0)
+	progress(#farTiles)
+	return sampleMs, writeMs, voxels, os.clock() - t0
+end
+
+-- Near square at `shift`; `progress(i)` after each slab.
+local function generateNear(shift: Vector2, progress: (number) -> ())
+	local sampleMs, writeMs, voxels = 0, 0, 0
+	local t0 = os.clock()
+	for i, s in slabs do
+		local y0, y1 = TerrainGen.yRange(s.X + shift.X, s.Y + shift.Y, s.X + shift.X + SLAB, s.Y + shift.Y + SLAB, DEPTH, shift)
+		local a, b, n = TerrainGen.writeBox(terrain, s.X + shift.X, y0, s.Y + shift.Y, s.X + shift.X + SLAB, y1, s.Y + shift.Y + SLAB, shift)
+		sampleMs += a
+		writeMs += b
+		voxels += n
+		progress(i)
+		task.wait()
+	end
+	return sampleMs, writeMs, voxels, os.clock() - t0
+end
+
+local function reportFar(sampleMs: number, writeMs: number, voxels: number, seconds: number)
+	workspace:SetAttribute("FarSeconds", seconds)
 	workspace:SetAttribute("FarSampleMs", sampleMs)
 	workspace:SetAttribute("FarWriteMs", writeMs)
 	workspace:SetAttribute("FarVoxels", voxels)
 	print(
 		`[OptiVoxel] far field to {FAR_HALF * 2}x{FAR_HALF * 2} studs: {#farTiles} tiles, {voxels} solid voxels,`
 			.. ` sample {math.floor(sampleMs)} ms, WriteVoxels {math.floor(writeMs)} ms,`
-			.. ` wall {string.format("%.1f", os.clock() - t0)} s, terrain voxels`
+			.. ` wall {string.format("%.1f", seconds)} s, terrain voxels`
 			.. ` {math.floor(game:GetService("Stats"):GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.TerrainVoxels))} MB`
 	)
 end
 
 task.spawn(function()
-	local sampleMs, writeMs, voxels = 0, 0, 0
 	local t0 = os.clock()
-	for i, s in slabs do
-		local y0, y1 = TerrainGen.yRange(s.X, s.Y, s.X + SLAB, s.Y + SLAB, DEPTH)
-		local a, b, n = TerrainGen.writeBox(terrain, s.X, y0, s.Y, s.X + SLAB, y1, s.Y + SLAB)
-		sampleMs += a
-		writeMs += b
-		voxels += n
+	local sampleMs, writeMs, voxels = generateNear(Vector2.zero, function(i)
 		workspace:SetAttribute("GenDone", i)
 		if i == 4 then
 			-- The four nearest slabs hold the spawn: put the platform on the real ground (the height
@@ -208,8 +231,7 @@ task.spawn(function()
 				end
 			end
 		end
-		task.wait()
-	end
+	end)
 	-- Terrain collision is built asynchronously (on each client too): dropping the platform as soon
 	-- as the ground under it was written let players fall through into the caves. Keep the spawn
 	-- point, drop its collision once everything is written and has had time to settle.
@@ -225,7 +247,22 @@ task.spawn(function()
 		`[OptiVoxel] terrain {HALF * 2}x{HALF * 2} studs: {voxels} voxels, sample {math.floor(sampleMs)} ms,`
 			.. ` WriteVoxels {math.floor(writeMs)} ms, wall {string.format("%.1f", os.clock() - t0)} s`
 	)
-	generateFar()
+	reportFar(generateFar(Vector2.zero, function(i)
+		workspace:SetAttribute("FarDone", i)
+	end))
+
+	-- The treadmill's copy, out of view.
+	workspace:SetAttribute("CopyTotal", #slabs + #farTiles)
+	local c0 = os.clock()
+	generateNear(JUMP_OFFSET, function(i)
+		workspace:SetAttribute("CopyDone", i)
+	end)
+	generateFar(JUMP_OFFSET, function(i)
+		workspace:SetAttribute("CopyDone", #slabs + i)
+	end)
+	workspace:SetAttribute("CopySeconds", os.clock() - c0)
+	workspace:SetAttribute("JumpReady", true)
+	print(`[OptiVoxel] treadmill copy at {JUMP_OFFSET} written in {string.format("%.1f", os.clock() - c0)} s`)
 end)
 
 -- Edits: SDF spheres, in studs on the wire, units in the SDF.
@@ -240,14 +277,28 @@ edit.OnServerEvent:Connect(function(player: Player, kind: unknown, position: unk
 	end
 	lastEdit[player] = now
 	local r = math.clamp(radius, 2 * K, 40 * K)
-	local p = position / S
+	-- Physical -> logical: the copy the edit was made in is the nearest one.
+	local here = Vector2.new(position.X, position.Z)
+	local from = Vector2.zero
+	for _, s in shifts do
+		if (here - s).Magnitude < (here - from).Magnitude then
+			from = s
+		end
+	end
+	local logical = position - Vector3.new(from.X, 0, from.Y)
+	local p = logical / S
 	if kind == "dig" then
 		Sdf.addSubtractSphere(p.X, p.Y, p.Z, r / S)
 	else
 		Sdf.addUnionSphere(p.X, p.Y, p.Z, r / S)
 	end
 	local m = r + TerrainGen.VOXEL * 2
-	local a, b, n = TerrainGen.writeBox(terrain, position.X - m, position.Y - m, position.Z - m, position.X + m, position.Y + m, position.Z + m)
+	local a, b, n = 0, 0, 0
+	for _, s in shifts do
+		local c = logical + Vector3.new(s.X, 0, s.Y)
+		local sa, sb, sn = TerrainGen.writeBox(terrain, c.X - m, c.Y - m, c.Z - m, c.X + m, c.Y + m, c.Z + m, s)
+		a, b, n = a + sa, b + sb, n + sn
+	end
 	workspace:SetAttribute("LastEditSampleMs", a)
 	workspace:SetAttribute("LastEditWriteMs", b)
 	workspace:SetAttribute("LastEditVoxels", n)

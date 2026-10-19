@@ -2,6 +2,8 @@
 --!native
 -- Roblox only: samples the SDF (with its edits) into Smooth Terrain. Roblox voxels are 4 studs and
 -- store an occupancy in [0, 1]; occupancy = 0.5 - sdf / voxel puts the 0.5 isosurface on sdf = 0.
+-- `shift` (studs, x and z): the box is physical, the SDF is sampled at physical - shift, i.e. a copy of
+-- the world written `shift` away (the treadmill's copies).
 
 local Config = require(script.Parent.Config)
 local Sdf = require(script.Parent.Sdf)
@@ -23,11 +25,12 @@ end
 
 -- Studs range [y0, y1) worth sampling over a column box: from `depth` units under the lowest surface
 -- point to a bit above the highest.
-function TerrainGen.yRange(x0: number, z0: number, x1: number, z1: number, depth: number): (number, number)
+function TerrainGen.yRange(x0: number, z0: number, x1: number, z1: number, depth: number, shift: Vector2?): (number, number)
+	local sx, sz = if shift then shift.X else 0, if shift then shift.Y else 0
 	local lo, hi = math.huge, -math.huge
 	for x = x0, x1, VOX * 2 do
 		for z = z0, z1, VOX * 2 do
-			local h = Sdf.height(x / S, z / S)
+			local h = Sdf.height((x - sx) / S, (z - sz) / S)
 			lo, hi = math.min(lo, h), math.max(hi, h)
 		end
 	end
@@ -36,7 +39,8 @@ end
 
 -- Samples the box [x0, x1) x [y0, y1) x [z0, z1) (studs, any values: aligned outward to the grid)
 -- and writes it. Returns ms spent sampling, ms spent in WriteVoxels, voxel count.
-function TerrainGen.writeBox(terrain: Terrain, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): (number, number, number)
+function TerrainGen.writeBox(terrain: Terrain, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, shift: Vector2?): (number, number, number)
+	local sx, sz = if shift then shift.X else 0, if shift then shift.Y else 0
 	x0, y0, z0 = align(x0, false), align(y0, false), align(z0, false)
 	x1, y1, z1 = align(x1, true), align(y1, true), align(z1, true)
 	local nx, ny, nz = (x1 - x0) // VOX, (y1 - y0) // VOX, (z1 - z0) // VOX
@@ -52,9 +56,9 @@ function TerrainGen.writeBox(terrain: Terrain, x0: number, y0: number, z0: numbe
 		for j = 1, ny do
 			mi[j], oi[j] = table.create(nz, Air), table.create(nz, 0)
 		end
-		local wx = (x0 + (i - 0.5) * VOX) / S
+		local wx = (x0 + (i - 0.5) * VOX - sx) / S
 		for k = 1, nz do
-			local wz = (z0 + (k - 0.5) * VOX) / S
+			local wz = (z0 + (k - 0.5) * VOX - sz) / S
 			local h = Sdf.height(wx, wz)
 			-- Slope of the height field (rise per unit): steep faces are bare rock.
 			local slope = math.max(math.abs(Sdf.height(wx + 1, wz) - h), math.abs(Sdf.height(wx, wz + 1) - h))
@@ -89,15 +93,16 @@ end
 -- VOX) and interpolated bilinearly per voxel column, written as a shell SHELL thick under the lowest
 -- neighbouring column top (hollow underneath: only seen from above). Box [x0, x1) x [z0, z1), aligned
 -- on `step`. Returns ms spent sampling, ms spent in WriteVoxels, voxel count.
-function TerrainGen.writeFarTile(terrain: Terrain, x0: number, z0: number, x1: number, z1: number, step: number): (number, number, number)
+function TerrainGen.writeFarTile(terrain: Terrain, x0: number, z0: number, x1: number, z1: number, step: number, shift: Vector2?): (number, number, number)
+	local sx, sz = if shift then shift.X else 0, if shift then shift.Y else 0
 	local t0 = os.clock()
 	-- Height samples (studs) from x0 - step to x1 + step: the border columns need their neighbours.
 	local gn, gm = (x1 - x0) // step + 3, (z1 - z0) // step + 3
 	local grid = table.create(gn * gm)
 	for i = 0, gn - 1 do
-		local x = (x0 + (i - 1) * step) / S
+		local x = (x0 + (i - 1) * step - sx) / S
 		for k = 0, gm - 1 do
-			grid[i * gm + k + 1] = Sdf.height(x, (z0 + (k - 1) * step) / S) * S
+			grid[i * gm + k + 1] = Sdf.height(x, (z0 + (k - 1) * step - sz) / S) * S
 		end
 	end
 	-- Column tops (studs), with a one-column border.

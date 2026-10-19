@@ -1,6 +1,7 @@
 --!strict
 -- Smooth Terrain playground, client side: dig / fill tool and overlay.
 --   Left mouse (hold): dig      F (hold): fill      R / T: radius -/+      H: hide overlay
+--   J: jump to the treadmill copy of the world and back (character and camera move in one frame)
 -- Edits go to the server (OptiVoxelEdit), which updates the SDF and the Terrain for everyone.
 
 local Players = game:GetService("Players")
@@ -49,7 +50,7 @@ gui.ResetOnSpawn = false
 local label = Instance.new("TextLabel")
 label.AnchorPoint = Vector2.new(0, 1)
 label.Position = UDim2.new(0, 8, 1, -8)
-label.Size = UDim2.fromOffset(560, 164)
+label.Size = UDim2.fromOffset(600, 184)
 label.BackgroundTransparency = 0.4
 label.BackgroundColor3 = Color3.new(0, 0, 0)
 label.TextColor3 = Color3.new(1, 1, 1)
@@ -59,6 +60,27 @@ label.TextXAlignment = Enum.TextXAlignment.Left
 label.TextYAlignment = Enum.TextYAlignment.Top
 label.Parent = gui
 gui.Parent = player:WaitForChild("PlayerGui")
+
+-- Treadmill test: the server writes the same window JumpOffset away; J moves the character and the
+-- camera there (or back) in one frame. Watch the frames after it for hitches.
+local jumps, watch, worstMs = 0, 0, 0
+local function atCopy(position: Vector3, offset: Vector3): boolean
+	return (position - offset).Magnitude < position.Magnitude
+end
+local function jump()
+	local offset = workspace:GetAttribute("JumpOffset")
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not workspace:GetAttribute("JumpReady") or typeof(offset) ~= "Vector3" or not character or not root then
+		return
+	end
+	local delta = if atCopy(root.Position, offset) then -offset else offset
+	character:PivotTo(character:GetPivot() + delta)
+	camera.CFrame += delta
+	camera.Focus += delta
+	jumps += 1
+	watch, worstMs = 120, 0
+end
 
 local digging, filling = false, false
 UserInputService.InputBegan:Connect(function(input, processed)
@@ -75,6 +97,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		radius = math.min(40 * K, radius + 2 * K)
 	elseif input.KeyCode == Enum.KeyCode.H then
 		label.Visible = not label.Visible
+	elseif input.KeyCode == Enum.KeyCode.J then
+		jump()
 	end
 end)
 UserInputService.InputEnded:Connect(function(input)
@@ -100,6 +124,10 @@ RunService.RenderStepped:Connect(function(dt)
 	else
 		brush.Transparency = 1
 	end
+	if watch > 0 then
+		watch -= 1
+		worstMs = math.max(worstMs, dt * 1000)
+	end
 	local now = os.clock()
 	if target and (digging or filling) and now - lastSend > REPEAT then
 		lastSend = now
@@ -108,6 +136,11 @@ RunService.RenderStepped:Connect(function(dt)
 
 	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local pos = if root then root.Position else Vector3.zero
+	local offset = workspace:GetAttribute("JumpOffset")
+	local inCopy = typeof(offset) == "Vector3" and atCopy(pos, offset)
+	if inCopy then
+		pos -= offset :: Vector3 -- logical position, the same in both copies
+	end
 	local genDone, genTotal = num("GenDone"), num("GenTotal")
 	local half = num("TerrainHalfStuds")
 	label.Text = table.concat({
@@ -119,9 +152,12 @@ RunService.RenderStepped:Connect(function(dt)
 			elseif num("FarDone") < num("FarTotal") then `far field {num("FarHalfStuds") * 2} studs: tile {num("FarDone")}/{num("FarTotal")}`
 			else `far field {num("FarHalfStuds") * 2} studs in {string.format("%.1f", num("FarSeconds"))} s: {num("FarVoxels")} voxels (sample {math.floor(num("FarSampleMs"))} ms, write {math.floor(num("FarWriteMs"))} ms)`,
 		`terrain voxels {math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.TerrainVoxels))} MB   total {math.floor(Stats:GetTotalMemoryUsageMb())} MB`,
+		if workspace:GetAttribute("JumpReady")
+			then `treadmill: in {if inCopy then "copy" else "home"}, J to jump   jumps {jumps}   worst frame after jump {math.floor(worstMs)} ms{if watch > 0 then " (watching)" else ""}`
+			else `treadmill copy: {num("CopyDone")}/{num("CopyTotal")}`,
 		`last edit: sample {string.format("%.2f", num("LastEditSampleMs"))} ms  write {string.format("%.2f", num("LastEditWriteMs"))} ms  ({num("LastEditVoxels")} voxels, {num("EditCount")} edits)`,
 		`brush radius {string.format("%.1f", radius / Config.STUDS_PER_UNIT)} m   position {math.floor(pos.X / Config.STUDS_PER_UNIT)}, {math.floor(pos.Y / Config.STUDS_PER_UNIT)}, {math.floor(pos.Z / Config.STUDS_PER_UNIT)} m   voxel {4 / Config.STUDS_PER_UNIT} m`,
 		"",
-		"LMB dig   F fill   R/T radius   H hide",
+		"LMB dig   F fill   R/T radius   J jump   H hide",
 	}, "\n")
 end)
