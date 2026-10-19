@@ -147,6 +147,7 @@ private:
 
     // Per LOD, sorted by descending Morton key: pop_back() walks space along the Morton curve.
     std::vector<std::vector<ChunkId>> chunk_queue;
+    int lod_count = 0;
     // Instance edits: their chunks, dispatched before chunk_queue, finest LOD first. send_chunk() does
     // not touch this. required_version is the table version a chunk must be re-meshed from (staleness).
     std::vector<std::vector<ChunkId>> remesh_queue;

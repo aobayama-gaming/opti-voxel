@@ -107,6 +107,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     }
     mutex.instantiate();
 
+    lod_count = p_lod_numbers;
     chunk_queue.resize(p_lod_numbers);
     remesh_queue.resize(p_lod_numbers);
     cost_model.resize(p_lod_numbers);
@@ -1291,6 +1292,7 @@ Dictionary GPUDirectMesher::get_stats() {
 
 void GPUDirectMesher::destroy() {
     chunk_queue.clear();
+    lod_count = 0;
     // Queues its own render-thread cleanup. `pool` is not cleared: render-thread work queued before
     // (dispatch, kills) still uses it and runs first (FIFO).
     pool->destroy();
