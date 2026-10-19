@@ -426,7 +426,8 @@ TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes
 // Λ_{L+1}, with the skirt depth the terrain asks for (min_skirt_depth).
 TEST_CASE("SDFArchetype band: the field step between LOD L and L+1 stays within the skirt depth") {
     // A 4,000-rock scatter at 0.5 m voxels, then a forest of grown trees at 5 cm (branches erode, crowns lose
-    // their bumps' octaves): columns over the scene, the top surface found from above the tallest tree.
+    // their bumps' octaves), by default and with a late onset at half the rate: columns over the scene, the top
+    // surface found from above the tallest tree.
     struct Scene {
         std::string name;
         float voxel;
@@ -435,8 +436,10 @@ TEST_CASE("SDFArchetype band: the field step between LOD L and L+1 stays within 
         double area_m;
         uint32_t columns;
         double above_m;
+        ErodeRule rule;
     };
-    const Scene scenes[] = { { "4,000-rock scatter", 0.5f, 4000, 0, 200.0, 300, 150.0 }, { "forest", 0.05f, 0, 60, 40.0, 100, 26.0 } };
+    const Scene scenes[] = { { "4,000-rock scatter", 0.5f, 4000, 0, 200.0, 300, 150.0, ErodeRule() },
+        { "forest", 0.05f, 0, 60, 40.0, 100, 26.0, ErodeRule() }, { "forest, resolve 1, rate 0.5", 0.05f, 0, 60, 40.0, 100, 26.0, ErodeRule{ 0.5f, 1.0f } } };
     for (const Scene &scene : scenes) {
         CAPTURE(scene.name);
         ChunkParam param;
@@ -444,11 +447,13 @@ TEST_CASE("SDFArchetype band: the field step between LOD L and L+1 stays within 
         SDFArchetype sdf;
         sdf.set_scatter(scene.rocks, scene.area_m);
         sdf.set_forest(scene.trees, scene.area_m);
+        sdf.set_instance_erode(scene.rule.rate);
+        sdf.set_instance_resolve(scene.rule.resolve);
         const float skirt = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 15));
         param.skirt_depth = skirt;
         sdf.configure(param, 15);
         MESSAGE(scene.name, ": skirt depth asked for: ", skirt, " voxels of the chunk's LOD");
-        CHECK(skirt >= ERODE_CELLS);
+        CHECK(skirt >= scene.rule.rate);
         const double datum = SDFBase::DATUM_M / double(scene.voxel);
         const ExactNoise::OctaveSet height = SDFArchetype::height_fbm(double(scene.voxel));
         const int64_t window = std::llround(scene.area_m / double(scene.voxel));

@@ -62,7 +62,9 @@ public:
     // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
     void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
     // The band rule's erosion rate in cells per LOD (Archetype::set_band). Set before configure().
-    void set_instance_erode(float p_cells) { instance_erode = p_cells; }
+    void set_instance_erode(float p_cells) { erode_rule.rate = p_cells; }
+    // The band rule's onset: a part erodes once its half thickness holds fewer than this many cells (0: from LOD 1).
+    void set_instance_resolve(float p_cells) { erode_rule.resolve = p_cells; }
 
     // The band rule's steps between LOD L and L+1: an instance erodes by ERODE_CELLS cells; a ground octave k,
     // dropped from LOD k - 2 on, moves the ground by up to amp * PERLIN2_MAX, i.e. that many cells of LOD k - 3.
@@ -76,7 +78,7 @@ public:
                 }
             }
         }
-        return float(ground + instance_erode);
+        return float(ground + erode_rule.rate);
     }
 
     void configure(const ChunkParam &p_param, int p_lod_count) override {
@@ -365,7 +367,7 @@ private:
     double forest_area = 60.0; // --tree_area (metres)
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
     bool instance_band = true; // --instance_band
-    float instance_erode = Archetype::ERODE_CELLS; // --instance_erode
+    Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
     Scene which;
 
     // shapes() in metres, rounded to voxels.
@@ -432,7 +434,7 @@ private:
     }
 
     void finish_record(Archetype::TableRecord &r_rec) const {
-        Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, instance_erode);
+        Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
     }
 
     // The LODs an edit can change: below the larger of the record's max_lod before and after it.
@@ -500,6 +502,7 @@ private:
         const int rock = lib.add(make_rock_type(int(std::lround(std::log2(8.0 / p_voxel))), ROCK_SEED));
         const int branch = lib.add(make_branch_type());
         const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED));
+        const int cone = lib.add(make_cone_type(crown_k(p_voxel), CROWN_SEED));
         library = std::make_shared<const DefLibrary>(lib);
 
         records.clear();
@@ -554,7 +557,7 @@ private:
         }
         trees.clear();
         if (which == Scene::DEMO) {
-            add_forest(crown_types(branch, crown, lib[crown]), p_voxel, centre_x, centre_z,
+            add_forest(crown_types(branch, crown, lib[crown], cone), p_voxel, centre_x, centre_z,
                     [&](int64_t p_x, int64_t p_z) { return datum + ground_voxel(p_x, p_z); });
         }
         // The ground register: the ground Def placed at the datum (a compiled program, constants only).
