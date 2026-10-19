@@ -64,7 +64,7 @@ private:
     bool debug_gpu_profile_frames = false; // record every captured frame (GPUProfiler::take_frames)
     Dictionary validation_report;
 
-    SDFBase *sdf = memnew(SDFCascade);
+    SDFTable *sdf = memnew(SDFCascade); // every terrain is a ground under the instance table
 
     VoxelState visual_mesh_data;
 

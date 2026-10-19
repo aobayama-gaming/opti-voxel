@@ -414,7 +414,8 @@ void GPUMesher::_initialize_gpu_compute() {
 
     if (sdf->get_cascade() != nullptr) {
         cascade = memnew(CascadePasses);
-        if (!cascade->create(rd, sdf, chunk_param, MIN(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param, buffer_sdf_sample)) {
+        if (!cascade->create(rd, sdf, chunk_param, MIN(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param, buffer_sdf_sample,
+                    RID(), nullptr, buffer_table_records, buffer_table_list)) {
             ERR_PRINT("GPUMesher: the cascade passes failed to compile: no pass runs (empty meshes).");
         }
         VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");

@@ -29,7 +29,7 @@ var cascade_terrain: Node = null  # set on the cascade terrains
 var cached_altitude := 0.0
 var altitude_age := 1.0
 
-# ---- Archetype dig tools (archetype table terrains, --terrain=archetypes|shapes) -------------------
+# ---- Archetype dig tools (the instance table: every terrain) ---------------------------------------
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
 # of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
 # by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press

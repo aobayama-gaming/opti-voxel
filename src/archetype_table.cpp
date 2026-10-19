@@ -217,9 +217,15 @@ Float4 combine4(const Float4 &p_r, const Float4 &p_c, const TableRecord &p_recor
 
 Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list,
         uint32_t p_count, const WorldPos &p_pos, int p_lod, bool p_box_test) {
+    thread_local std::vector<Float4> ground;
+    run_registers(p_ground, p_pos, p_lod, ground);
+    return fold_onto(ground[p_ground.output], p_library, p_records, p_list, p_count, p_pos, p_lod, p_box_test);
+}
+
+Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
+        const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched) {
     thread_local std::vector<Float4> regs;
-    run_registers(p_ground, p_pos, p_lod, regs);
-    Float4 r = regs[p_ground.output];
+    Float4 r = p_r;
     for (uint32_t i = 0; i < p_count; i++) {
         const TableRecord &rec = p_records[p_list[i]];
         if (p_box_test && !in_influence_box(rec, p_pos, p_lod)) {
@@ -230,6 +236,9 @@ Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_r
         Float4 c = regs[p_library[rec.def].program.output];
         c.w = c.w + band_erosion(rec.erode, rec.erode_from, p_lod); // the band rule's erosion (set_band)
         r = combine4(r, c, rec);
+        if (r_touched) {
+            *r_touched = true;
+        }
     }
     return r;
 }
@@ -311,17 +320,16 @@ String generate_library_glsl(const DefLibrary &p_library) {
     return code;
 }
 
-static String fold_glsl(const DefLibrary &p_library) {
+String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize) {
     String code = String(GLSL_TABLE_FOLD).replace("LIMIT", itos(INPUT_LIMIT));
-    code += "\nChunkInput g_sdf_chunk;\n\n";
+    code += "\n";
     code += generate_library_glsl(p_library);
     code += "vec4 arch_eval_instance(WorldPos p, int lod, DefRecord rec) {\n    switch (rec.head.x) {\n";
     for (int i = 0; i < p_library.size(); i++) {
         code += vformat("        case %du: return arch_%d(p, lod, rec);\n", i, i);
     }
     code += "        default: return vec4(0.0);\n    }\n}\n\n";
-    code += R"glsl(vec4 terrain_sdf_register(WorldPos p, int lod) {
-    vec4 r = arch_ground_register(p, lod);
+    code += R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched) {
     uint off = g_sdf_chunk.id.w;
     uint n = g_sdf_chunk.anchor_hi.w;
     for (uint i = 0u; i < n; i++) {
@@ -332,31 +340,37 @@ static String fold_glsl(const DefLibrary &p_library) {
         precise vec4 c = arch_eval_instance(p, lod, rec);
         c.w = c.w + intBitsToFloat(rec.box_hi.w) * max(exact_pow2(lod) - intBitsToFloat(rec.anchor_hi.w), 0.0);
         r = arch_combine(r, c, rec);
+        touched = true;
     }
     return r;
 }
 
 )glsl";
+    // finish_table.
+    code += "vec4 arch_finish(vec4 o, int lod) {\n";
+    if (p_normalize) {
+        code += "    precise float s = exact_pow2(lod);\n";
+    }
+    code += "    precise float v = o.w * " + glsl_float(p_out_scale) + ";\n";
+    if (p_normalize) {
+        code += "    precise float gr = det_rsqrt(max(o.x * o.x + o.y * o.y + o.z * o.z, " + glsl_float(exact_pow2(GRAD_FLOOR_EXP)) +
+                " * s * s));\n";
+        code += "    return vec4(o.xyz * gr, v);\n}\n\n";
+    } else {
+        code += "    return vec4(o.xyz, v);\n}\n\n";
+    }
     return code;
 }
 
 String generate_table_sdf(const Program &p_ground, const DefLibrary &p_library, float p_out_scale, bool p_normalize) {
     String code = generate_glsl(p_ground, "arch_ground_register", false);
     code += "\n";
-    code += fold_glsl(p_library);
-    code += "vec4 terrain_sdf(WorldPos p, int lod) {\n";
-    if (p_normalize) {
-        code += "    precise float s = exact_pow2(lod);\n";
-    }
-    code += "    precise vec4 o = terrain_sdf_register(p, lod);\n";
-    code += "    precise float v = o.w * " + glsl_float(p_out_scale) + ";\n";
-    if (p_normalize) {
-        code += "    precise float gr = det_rsqrt(max(o.x * o.x + o.y * o.y + o.z * o.z, " + glsl_float(exact_pow2(GRAD_FLOOR_EXP)) +
-                " * s * s));\n";
-        code += "    return vec4(o.xyz * gr, v);\n}\n";
-    } else {
-        code += "    return vec4(o.xyz, v);\n}\n";
-    }
+    code += generate_fold_glsl(p_library, p_out_scale, p_normalize);
+    code += R"glsl(vec4 terrain_sdf(WorldPos p, int lod) {
+    bool touched = false;
+    return arch_finish(arch_fold(arch_ground_register(p, lod), p, lod, touched), lod);
+}
+)glsl";
     return code;
 }
 

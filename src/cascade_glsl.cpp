@@ -29,6 +29,7 @@ layout(set = 0, binding = 3, std430) restrict buffer ScratchA { vec4 scratch_a[]
 layout(set = 0, binding = 4, std430) restrict buffer ScratchB { vec4 scratch_b[]; };
 layout(set = 0, binding = 5, std430) restrict readonly buffer Bands { CascadeBand bands[]; };
 layout(set = 0, binding = 6, std430) restrict writeonly buffer DebugChannels { vec4 debug_channels[]; };
+/*TABLE_BUFFERS*/
 
 // One level of every chunk of a sub-batch: chunk i of the dispatch is input chunk chunk_base + i, scratch
 // slot i. Workgroups: x over the level box bound n_child^3, y over the chunks.
@@ -157,7 +158,7 @@ constexpr ItemFills CHUNK_FILLS = {
 )glsl",
     "chunk_param.chunk_size - 1",
     R"glsl(    /*DEBUG_STORE*/
-    precise vec4 r = cascade_terrain_sdf(vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod);
+    precise vec4 r = cascade_sample_sdf(vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod, pc.chunk_base + c);
     // skirt_sdf (gpu_glsl.hpp), the same formula and order, precise; the depth is per LOD.
     if (chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0) {
         vec3 grid = vec3(i);
@@ -171,7 +172,8 @@ constexpr ItemFills CHUNK_FILLS = {
     sdf_sample[sample_index] = r;)glsl",
 };
 
-// A point item is a chunk of one sample (its anchor, skirt 0): box extent 0, the bare SDF value at Λ_L.
+// A point item is a chunk of one sample (its anchor, skirt 0): box extent 0, the bare SDF value at Λ_L (no
+// instance folded: the discoverer never culls a node near an instance, SDFBase::cull_exempt).
 constexpr ItemFills POINT_FILLS = {
     "layout(set = 0, binding = 2, std430) restrict writeonly buffer SDFValue { float sdf_value[]; };",
     R"glsl(    uint n = pc.n_child;
@@ -394,6 +396,8 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points) {
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
+    const SDFGpuTable *table = p_sdf->get_gpu_table();
+    code = code.replace("/*TABLE_BUFFERS*/", table ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code());
     code = code.replace("/*CASCADE*/", hermite_functions(spec->set) + storage_functions(spec->set) + band_functions(spec->set));
@@ -443,18 +447,19 @@ String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const Stri
 } // namespace CascadeGLSL
 
 bool CascadePasses::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
-        RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch) {
-    return _create(p_rd, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch);
+        RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list) {
+    return _create(p_rd, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch, p_table_records,
+            p_table_list);
 }
 
 bool CascadePasses::create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input,
         RID p_param_ubo, RID p_values) {
     ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0, false, "CascadePasses: point items need CascadeGLSL::point_param (skirt 0).");
-    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr);
+    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr, RID(), RID());
 }
 
 bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo,
-        RID p_output, RID p_debug, const CascadePasses *p_share_scratch) {
+        RID p_output, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list) {
     const Spec *spec = p_sdf->get_cascade();
     ERR_FAIL_NULL_V(spec, false);
     rd = p_rd;
@@ -519,6 +524,23 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     uniforms.push_back(make_uniform(4, scratch_b, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(5, bands, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(6, debug, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    if (const SDFGpuTable *table = p_sdf->get_gpu_table()) {
+        // Without the caller's buffers, every input's list is empty (encode_chunk_input): one zero record and word.
+        RID records = p_table_records;
+        RID list = p_table_list;
+        if (!records.is_valid() || !list.is_valid()) {
+            PackedByteArray zero;
+            zero.resize(table->record_size());
+            zero.fill(0);
+            table_placeholders[0] = rd->storage_buffer_create(zero.size(), zero);
+            zero.resize(16);
+            table_placeholders[1] = rd->storage_buffer_create(zero.size(), zero);
+            records = table_placeholders[0];
+            list = table_placeholders[1];
+        }
+        uniforms.push_back(make_uniform(CascadeGLSL::TABLE_RECORD_BINDING, records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+        uniforms.push_back(make_uniform(CascadeGLSL::TABLE_LIST_BINDING, list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    }
     uniform_set = rd->uniform_set_create(uniforms, shader, 0);
     return uniform_set.is_valid();
 }
@@ -527,7 +549,7 @@ void CascadePasses::free() {
     if (rd == nullptr) {
         return;
     }
-    for (const RID &rid : { uniform_set, pipeline, shader, bands, debug_placeholder }) {
+    for (const RID &rid : { uniform_set, pipeline, shader, bands, debug_placeholder, table_placeholders[0], table_placeholders[1] }) {
         if (rid.is_valid()) {
             rd->free_rid(rid);
         }
@@ -546,6 +568,8 @@ void CascadePasses::free() {
     scratch_b = RID();
     bands = RID();
     debug_placeholder = RID();
+    table_placeholders[0] = RID();
+    table_placeholders[1] = RID();
     rd = nullptr;
 }
 

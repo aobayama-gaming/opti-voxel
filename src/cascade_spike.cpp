@@ -349,6 +349,110 @@ void check_set(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkP
     checker.run();
 }
 
+// G9 (instance table): a cascade terrain with a scatter of rocks and pillars, LODs 0 to TABLE_LODS - 1, a batch of the
+// chunks holding the records per LOD with their instance lists and records on the GPU: every sample of the meshers'
+// variant against SDFCascade::sample with the chunk's list (fold_onto + finish_table where an instance passes its box
+// test, the bare cascade elsewhere), bit for bit.
+constexpr int TABLE_LODS = 7;
+Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_param) {
+    Dictionary d;
+    ChunkParam param = p_param;
+    SDFCascade sdf;
+    sdf.set_scatter(600, 160.0);
+    param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
+    sdf.configure(param, p_lods);
+    const std::shared_ptr<const Archetype::InstanceSnapshot> snap = sdf.get_snapshot();
+    SDFGpuTable *table = sdf.get_gpu_table();
+    const int cs = param.chunk_size;
+    const uint64_t cells = uint64_t(cs) * cs * cs;
+    const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(param);
+    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
+    const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
+    const RID records = p_rd->storage_buffer_create(uint64_t(table->instance_capacity()) * table->record_size());
+    const RID list = p_rd->storage_buffer_create(uint64_t(MAX_BATCH) * table->max_chunk_list() * 4);
+    uint32_t version = 0;
+    SDFGpuTable::upload_records(p_rd, records, table->record_bytes(UINT32_MAX, version));
+    CascadePasses passes;
+    int64_t chunks = 0, compared = 0, folded = 0, differing = 0;
+    Array examples;
+    if (!passes.create(p_rd, &sdf, param, MAX_BATCH, input, param_ubo, samples, RID(), nullptr, records, list)) {
+        examples.push_back("the cascade passes failed to compile");
+        differing++;
+    }
+    for (int lod = 0; lod < TABLE_LODS && passes.is_valid(); lod++) {
+        std::vector<ChunkId> ids;
+        for (uint32_t r = 0; r < snap->records.size() && ids.size() < MAX_BATCH; r++) {
+            const ChunkId id = chunk_holding(Vector3i64(snap->records[r].anchor.x, snap->records[r].anchor.y, snap->records[r].anchor.z), lod, param);
+            if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+                ids.push_back(id);
+            }
+        }
+        PackedByteArray inputs, words;
+        inputs.resize(int64_t(ids.size()) * GPUFrame::CHUNK_INPUT_BYTES);
+        for (size_t c = 0; c < ids.size(); c++) {
+            GPUFrame::encode_chunk_input(inputs, int64_t(c), ids[c], param);
+        }
+        table->build_lists(ids, param, inputs, words);
+        p_rd->buffer_update(input, 0, inputs.size(), inputs);
+        if (!words.is_empty()) {
+            p_rd->buffer_update(list, 0, words.size(), words);
+        }
+        passes.record_all(lod, uint32_t(ids.size()));
+        p_rd->submit();
+        p_rd->sync();
+        const PackedByteArray got_bytes = p_rd->buffer_get_data(samples, 0, ids.size() * cells * 16);
+        const float *got = reinterpret_cast<const float *>(got_bytes.ptr());
+        std::vector<uint32_t> chunk_list;
+        for (size_t c = 0; c < ids.size(); c++) {
+            snap->chunk_list(ids[c], chunk_list);
+            const Box box = chunk_box(ids[c], param);
+            std::vector<Level> levels;
+            Cascade::run(sdf.get_spec(), box, lod, &levels);
+            const Level &level = levels.back();
+            for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
+                const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
+                float ch[CHANNELS] = {};
+                for (int k = 0; k < channel_count(sdf.get_spec().set); k++) {
+                    ch[k] = level.ch[k][size_t(p_cpu_i)];
+                }
+                WorldPos p;
+                p.voxel = VoxelPos(p_p.x << lod, p_p.y << lod, p_p.z << lod);
+                const Float3 grid{ float(i.x), float(i.y), float(i.z) };
+                const ExactNoise::Float4 want = sdf.sample(*snap, chunk_list.data(), uint32_t(chunk_list.size()), ch, p, lod, grid);
+                const ExactNoise::Float4 bare = sdf.sample(ch, p.voxel.y, lod, grid);
+                folded += float_bits(want.w) != float_bits(bare.w) ? 1 : 0;
+                const float *g = got + (c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))) * 4;
+                const float w[4] = { want.x, want.y, want.z, want.w };
+                compared++;
+                for (int k = 0; k < 4; k++) {
+                    if (float_bits(w[k]) != float_bits(g[k])) {
+                        differing++;
+                        if (examples.size() < 24) {
+                            examples.push_back(vformat("LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", lod, WorldCoord::to_string(ids[c]),
+                                    WorldCoord::to_string(i), g[0], g[1], g[2], g[3], w[0], w[1], w[2], w[3]));
+                        }
+                        break;
+                    }
+                }
+            });
+        }
+        chunks += int64_t(ids.size());
+    }
+    passes.free();
+    for (const RID &rid : { input, param_ubo, samples, records, list }) {
+        p_rd->free_rid(rid);
+    }
+    d["records"] = int64_t(snap->records.size());
+    d["chunks"] = chunks;
+    d["samples"] = compared;
+    d["samples_folded"] = folded;
+    d["samples_differing"] = differing;
+    d["examples"] = examples;
+    d["ok"] = differing == 0 && folded > 0 && compared > 0;
+    return d;
+}
+
 double median(std::vector<double> p_v) {
     if (p_v.empty()) {
         return 0.0;
@@ -636,6 +740,13 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
             checks_report[set_label(set)] = d;
         }
         report["check"] = checks_report;
+    }
+    if (bool(p_options.get("table", true))) {
+        const uint64_t t0 = now_usec();
+        Dictionary d = check_table(rd, lods, param);
+        d["seconds"] = double(now_usec() - t0) / 1e6;
+        ok = ok && bool(d["ok"]);
+        report["table"] = d;
     }
     if (bool(p_options.get("points", true))) {
         Dictionary points_report;

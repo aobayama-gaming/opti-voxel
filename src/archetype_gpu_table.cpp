@@ -12,7 +12,8 @@ namespace Archetype {
 String GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
     return String(GLSL_DEF_RECORD_STRUCT) +
             vformat("\nlayout(set = 0, binding = %d, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };\n", p_record_binding) +
-            vformat("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding);
+            vformat("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding) +
+            "ChunkInput g_sdf_chunk; // the chunk being sampled: its list offset (id.w) and length (anchor_hi.w)\n";
 }
 
 String GpuTable::glsl_set_chunk() const {

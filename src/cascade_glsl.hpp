@@ -44,6 +44,9 @@ static constexpr uint32_t BAND_BYTES = 64;
 static constexpr int BAND_ENTRIES = Cascade::MAX_LEVEL + 1;
 static constexpr uint32_t PUSH_BYTES = 32;
 static constexpr uint32_t LOCAL_SIZE = 64;
+// The instance table's buffers in the level shader (after the cascade's own bindings 0-6).
+static constexpr int TABLE_RECORD_BINDING = 7;
+static constexpr int TABLE_LIST_BINDING = 8;
 
 // std430 CascadeBand[BAND_ENTRIES], indexed by insertion level m: factor (amp * 2^(-shift |S|) per derivative
 // order), offset low words, offset high words, info (present, seed, k). At most one band per level.
@@ -83,8 +86,11 @@ public:
     // p_max_chunks: chunks per dispatch (scratch size). p_debug: valid for the debug variant, a buffer for
     // the last level's channels (vec4s_per_point vec4s per sample, CascadeSpike); invalid for the meshers' (a
     // 16 B placeholder is bound). p_share_scratch: use that object's scratch buffers instead of new ones.
+    // p_table_records / p_table_list: the mesher's instance table buffers (a terrain with a table: its samples fold
+    // the chunks' instance lists); invalid binds placeholders, for inputs whose lists are empty (CascadeSpike).
     bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
-            RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr);
+            RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr, RID p_table_records = RID(),
+            RID p_table_list = RID());
     // Point items (the discoverer's): p_input holds encode_point_input items, p_param_ubo the std140
     // point_param, p_values one float per item.
     bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
@@ -114,6 +120,7 @@ private:
     RID scratch_b;
     RID bands;
     RID debug_placeholder;
+    RID table_placeholders[2]; // records, list: bound when the caller has no table buffers
     RID uniform_set;
     int top = 0;
     int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items
@@ -122,5 +129,5 @@ private:
     bool owns_scratch = true;
 
     bool _create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo, RID p_output,
-            RID p_debug, const CascadePasses *p_share_scratch);
+            RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list);
 };

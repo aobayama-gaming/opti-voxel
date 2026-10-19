@@ -237,7 +237,8 @@ void GPUDirectMesher::_rt_initialize() {
     uint64_t cascade_mb = 0;
     if (sdf->get_cascade() != nullptr) {
         cascade = memnew(CascadePasses);
-        if (!cascade->create(rd, sdf, chunk_param, settings.batch_size, buffer_input_chunk, buffer_chunk_param, buffer_sdf)) {
+        if (!cascade->create(rd, sdf, chunk_param, settings.batch_size, buffer_input_chunk, buffer_chunk_param, buffer_sdf, RID(), nullptr,
+                    buffer_table_records, buffer_table_list)) {
             rd->free_rid(uniform_set);
             uniform_set = RID(); // nothing dispatches
             ERR_FAIL_MSG("GPUDirectMesher: the cascade passes failed to compile.");
