@@ -75,6 +75,8 @@ func _enter_tree() -> void:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
+		if a.begins_with("--mesher_budget=") and terrain:
+			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
 		if a.begins_with("--dig_radius="):

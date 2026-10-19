@@ -16,6 +16,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 static constexpr const char DIRECT_TEMPLATE[] = R"glsl(#version 450
 
@@ -106,8 +107,10 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     }
     mutex.instantiate();
 
+    lod_count = p_lod_numbers;
     chunk_queue.resize(p_lod_numbers);
     remesh_queue.resize(p_lod_numbers);
+    cost_model.resize(p_lod_numbers);
 
     pool = memnew(QuadPagePool);
     pool->initialize(scenario, settings.page_capacity, settings.initial_pages, chunk_param.voxel_size);
@@ -312,6 +315,9 @@ void GPUDirectMesher::_rt_read_timestamps() {
         }
         stats.gpu_compute.add((b.pass[4] - b.begin) / 1000);
         stats.gpu_copy.add((b.copy - b.pass[4]) / 1000);
+        if (b.copy > b.begin) {
+            measured_batches.push_back({ (uint32_t)kv.key, uint64_t(b.copy - b.begin) / 1000 });
+        }
     }
     mutex->unlock();
 }
@@ -644,10 +650,15 @@ void GPUDirectMesher::process_queue() {
     // Batches of one frame share the scratch buffers, the staging texture and the status buffer: the
     // render graph orders them like batches of consecutive frames (each readback copies its own data
     // at its point in the graph). Audit batches only run once the mesh queue is empty.
+    _update_cost_model();
+    const bool budgeted = settings.gpu_budget_ms > 0.0f;
+    const double budget_us = budgeted ? settings.gpu_budget_ms * 1000.0 : INFINITY;
+    double budget_left = budget_us;
     uint32_t dispatched = 0;
     // Bound the batches waiting for their directory (each one holds pages_per_batch pages).
-    while (dispatched < settings.max_batches_per_frame && in_flight.size() + audit_in_flight.size() < settings.max_in_flight) {
-        if (!_dispatch_mesh_batch() && !_dispatch_audit_batch()) {
+    while (dispatched < settings.max_batches_per_frame && in_flight.size() + audit_in_flight.size() < settings.max_in_flight &&
+            budget_left > 0.0) {
+        if (!_dispatch_mesh_batch(budget_left) && !_dispatch_audit_batch()) {
             break;
         }
         dispatched++;
@@ -655,19 +666,64 @@ void GPUDirectMesher::process_queue() {
     if (dispatched > 0) {
         stats.dispatch_frames++;
         stats.in_flight_max = MAX(stats.in_flight_max, (uint64_t)(in_flight.size() + audit_in_flight.size()));
+        if (budgeted) {
+            stats.budget_frame_estimate.add(uint64_t(budget_us - budget_left));
+        }
     }
 }
 
-bool GPUDirectMesher::_dispatch_mesh_batch() {
+void GPUDirectMesher::_update_cost_model() {
+    std::vector<std::pair<uint32_t, uint64_t>> measured;
+    mutex->lock();
+    measured.swap(measured_batches);
+    mutex->unlock();
+    for (const std::pair<uint32_t, uint64_t> &m : measured) {
+        HashMap<uint32_t, std::vector<uint32_t>>::Iterator it = batch_lod_counts.find(m.first);
+        if (it == batch_lod_counts.end()) {
+            continue;
+        }
+        const double estimate = cost_model.estimate(it->value);
+        if (estimate > 0.0) {
+            stats.model_ratio_sum += m.second / estimate;
+            stats.model_ratio_count++;
+        }
+        cost_model.observe(it->value, (double)m.second);
+        batch_lod_counts.remove(it);
+    }
+    // A batch whose timestamps were never captured (over the per-frame limit) is forgotten after a while.
+    if (batch_lod_counts.size() > 1024) {
+        std::vector<uint32_t> old;
+        for (const KeyValue<uint32_t, std::vector<uint32_t>> &kv : batch_lod_counts) {
+            if (next_batch_id - kv.key > 1024) {
+                old.push_back(kv.key);
+            }
+        }
+        for (uint32_t id : old) {
+            batch_lod_counts.erase(id);
+        }
+    }
+}
+
+bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     std::vector<ChunkId> chunks;
     chunks.reserve(settings.batch_size);
+    std::vector<uint32_t> lod_counts(lod_count, 0);
+    double estimate = 0.0;
     ChunkId chunk;
-    while (chunks.size() < settings.batch_size && _pop_queue(chunk)) {
+    // With a budget the batch stops once its estimate reaches what's left (a frame dispatches at least
+    // one chunk: budget_left starts > 0).
+    while (chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk)) {
         chunks.push_back(chunk);
+        const int lod = ChunkMath::get_lod(chunk);
+        if (lod >= 0 && lod < lod_count) {
+            lod_counts[lod]++;
+            estimate += cost_model.estimate(lod);
+        }
     }
     if (chunks.empty()) {
         return false;
     }
+    r_budget_us -= estimate;
     const uint64_t t0 = now_usec();
 
     // The queue already pops in Morton order; re-sorting covers re-queued overflow chunks.
@@ -708,6 +764,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch() {
 
     const uint32_t batch_id = next_batch_id++;
     const uint32_t count = chunks.size();
+    batch_lod_counts[batch_id] = std::move(lod_counts);
     batch.table_version = table_version;
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
@@ -1177,6 +1234,15 @@ Dictionary GPUDirectMesher::get_stats() {
     // Mesh and audit batches per frame that dispatched any.
     d["batches_per_dispatch_frame"] = stats.dispatch_frames ? double(stats.batches + stats.audit_batches) / stats.dispatch_frames : 0.0;
     d["batches"] = (int64_t)stats.batches;
+    d["gpu_budget_ms"] = settings.gpu_budget_ms;
+    d["budget_frame_estimate"] = stats.budget_frame_estimate.to_dict();
+    // How well the cost model predicts a batch (1 = exactly), and its cost per chunk per LOD (us, -1 unmeasured).
+    d["cost_model_ratio_avg"] = stats.model_ratio_count ? stats.model_ratio_sum / stats.model_ratio_count : 0.0;
+    PackedFloat64Array cost_us;
+    for (double c : cost_model.us_per_chunk) {
+        cost_us.push_back(c);
+    }
+    d["cost_us_per_chunk"] = cost_us;
     d["chunks_meshed"] = (int64_t)stats.chunks_meshed;
     d["quads_emitted"] = (int64_t)stats.quads_emitted;
     d["overflow_chunks"] = (int64_t)stats.overflow_chunks;
@@ -1226,6 +1292,7 @@ Dictionary GPUDirectMesher::get_stats() {
 
 void GPUDirectMesher::destroy() {
     chunk_queue.clear();
+    lod_count = 0;
     // Queues its own render-thread cleanup. `pool` is not cleared: render-thread work queued before
     // (dispatch, kills) still uses it and runs first (FIFO).
     pool->destroy();
