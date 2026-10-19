@@ -143,7 +143,7 @@ vec4 sdf_softmax(vec4 a, vec4 b, float intensity) {
 inline constexpr const char GLSL_QEF_VERTEX[] = R"glsl(
 
 // r_fallback_normal: the mean of the Hermite normals, the vertex normal where the pass's gradient at
-// the placed vertex vanishes (qef_normalize). NaN when they cancel, like the pass's normalize().
+// the placed vertex vanishes (vertex_normal). NaN when they cancel: vertex_normal then points up.
 vec3 qef_vertex(uvec3 gid, vec3 mass_point, float edge_t[12], out vec3 r_fallback_normal) {
     // Every float here is `precise`: the two meshers compile this same text into two different
     // shaders (different pipelines, and the legacy one on its own RenderingDevice), and without
@@ -253,15 +253,24 @@ vec3 qef_vertex(uvec3 gid, vec3 mass_point, float edge_t[12], out vec3 r_fallbac
     return clamp(mass_point + move, vec3(0.0), vec3(1.0));
 }
 
-// The vertex normal with dual contouring: the pass's gradient at the placed vertex, or the mean of the
-// Hermite normals where that gradient vanishes (a placed vertex can land on a zero of it, and a NaN
-// normal drops the vertex: a hole). The vertex stays where the QEF put it, and no SDF is evaluated.
-vec3 qef_normalize(vec3 p_fallback, vec3 p_gradient) {
+)glsl";
+
+// Both meshers' vertex normal, with or without dual contouring (spliced before GLSL_QEF_VERTEX).
+inline constexpr const char GLSL_VERTEX_NORMAL[] = R"glsl(
+
+// The vertex normal: the SDF gradient at the vertex, else p_fallback (dual contouring: the mean of the
+// Hermite normals), else straight up. A NaN normal drops the vertex: a broken quad, a hole. The gradient
+// vanishes exactly on a medial axis, and a cell symmetric about one puts its vertex there: a capsule
+// thinner than the cell on a lattice line (the scatter's pillars, the demo's trunks at LOD 2). The shape
+// is finer than the cell, so the corner and Hermite gradients cancel by the same symmetry: any finite
+// normal will do.
+vec3 vertex_normal(vec3 p_fallback, vec3 p_gradient) {
     precise float len2 = p_gradient.x * p_gradient.x + p_gradient.y * p_gradient.y + p_gradient.z * p_gradient.z;
-    if (!(len2 > 0.0)) {
-        return p_fallback;
+    if (len2 > 0.0) {
+        return normalize(p_gradient);
     }
-    return p_gradient * inversesqrt(len2);
+    precise float fallback_len2 = p_fallback.x * p_fallback.x + p_fallback.y * p_fallback.y + p_fallback.z * p_fallback.z;
+    return fallback_len2 > 0.0 ? normalize(p_fallback) : vec3(0.0, 1.0, 0.0);
 }
 
 )glsl";
@@ -274,8 +283,8 @@ inline constexpr const char GLSL_QEF_VERTEX_CALL[] =
         "vec3 qef_fallback_normal;\n"
         "local_vertex = qef_vertex(gl_GlobalInvocationID, local_vertex / float(active_edge_count), "
         "float[12](e0_t, e2_t, e4_t, e6_t, e3_t, e1_t, e7_t, e5_t, e8_t, e9_t, e11_t, e10_t), qef_fallback_normal);";
-inline constexpr const char GLSL_SURFACE_NORMAL[] = "vec3 surface_normal = normalize(";
-inline constexpr const char GLSL_QEF_SURFACE_NORMAL[] = "vec3 surface_normal = qef_normalize(qef_fallback_normal, ";
+inline constexpr const char GLSL_SURFACE_NORMAL[] = "vec3 surface_normal = vertex_normal(vec3(0.0), ";
+inline constexpr const char GLSL_QEF_SURFACE_NORMAL[] = "vec3 surface_normal = vertex_normal(qef_fallback_normal, ";
 
 // A mesher's vertex pass with dual contouring (GLSL_QEF_VERTEX must be in the shader). A pass that
 // doesn't spell each line exactly once is returned unchanged, with an error: it meshes Surface Nets.

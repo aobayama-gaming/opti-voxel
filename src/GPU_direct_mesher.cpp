@@ -144,7 +144,7 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
-    shader = shader.replace("/*GLSL_QEF_VERTEX*/", dual_contouring ? String(GLSL_QEF_VERTEX) : String());
+    shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
     shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, vertex_pass);
     RDUtils::dump_shader(String("direct_") + p_name, shader);
 

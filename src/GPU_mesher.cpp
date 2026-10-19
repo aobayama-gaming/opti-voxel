@@ -128,7 +128,7 @@ void main() {
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
     shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
-    shader = shader.replace("/*GLSL_QEF_VERTEX*/", dual_contouring ? String(GLSL_QEF_VERTEX) : String());
+    shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
     shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, p_name == "third");
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
@@ -270,7 +270,7 @@ if (active_edge_count > 0) {
 
     vec3 chunk_vertex = local_vertex+vec3(cell_chunk_coordinate);
 
-    vec3 surface_normal = normalize(skirt_sdf(chunk,chunk_vertex,chunk_param).xyz);
+    vec3 surface_normal = vertex_normal(vec3(0.0), skirt_sdf(chunk,chunk_vertex,chunk_param).xyz);
     uint packed_normal = packSnorm4x8(vec4(surface_normal, 0.0));
 
     // 3. Triangle Metadata (3 bit mask for X/Y/Z quad generation in Dual Contouring/Surface nets)
