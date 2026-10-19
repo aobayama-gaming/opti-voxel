@@ -523,6 +523,40 @@ TEST_CASE("SDFArchetype band: an edit re-meshes only the LODs its instance is li
     }
 }
 
+// The edit API refuses records the table can't hold: a smooth radius or a size of kilometres made the index
+// place ~10^8 entries on the main thread (seconds, then out of memory), and anchors near +-2^63 overflowed
+// the int64 boxes (undefined, and the GPU wraps differently). A refused edit changes nothing.
+TEST_CASE("SDFArchetype edits: oversized or far records are refused, the table unchanged") {
+    ChunkParam param;
+    param.voxel_size = 0.5f;
+    SDFArchetype sdf;
+    sdf.configure(param, 15);
+    const VoxelPos at(-104, 600, -190);
+    const float rock[8] = { 4.0f, 0.4f, 0, 0, 0, 0, 0, 0 };
+    const int id = sdf.add_instance(0, at, nullptr, rock, int(Combine::UNION), 0.0f);
+    CHECK(id >= 0);
+    if (id < 0) {
+        return;
+    }
+    const size_t count = sdf.get_snapshot()->records.size();
+
+    // Each prints its expected error.
+    CHECK(sdf.add_instance(0, at, nullptr, rock, int(Combine::SMOOTH_UNION), 1e8f) == -1);
+    const float huge[8] = { 1e30f, 0.4f, 0, 0, 0, 0, 0, 0 };
+    CHECK(sdf.add_instance(0, at, nullptr, huge, int(Combine::UNION), 0.0f) == -1);
+    const VoxelPos far(int64_t(1) << 61, 0, 0);
+    CHECK(sdf.add_instance(0, far, nullptr, rock, int(Combine::UNION), 0.0f) == -1);
+    CHECK_FALSE(sdf.move_instance(id, far, nullptr));
+    CHECK(sdf.get_snapshot()->records.size() == count);
+    CHECK(sdf.get_snapshot()->records[id].anchor == at);
+
+    // Big but within 4 top-LOD chunk spans (1.8M voxels at 15 LODs): taken.
+    const float big[8] = { 1e5f, 0.4f, 0, 0, 0, 0, 0, 0 };
+    CHECK(sdf.add_instance(0, at, nullptr, big, int(Combine::SMOOTH_UNION), 1e3f) >= 0);
+    CHECK(sdf.add_instance(0, VoxelPos(int64_t(1) << 59, 0, 0), nullptr, rock, int(Combine::UNION), 0.0f) >= 0);
+    CHECK(sdf.move_instance(id, at + VoxelPos(64, 0, 0), nullptr));
+}
+
 // Constant cost per chunk: at a fixed density of rocks, the longest list at each LOD doesn't grow with the
 // number of rocks (10x more rocks on 10x the area), and from LOD 6 on the rocks are eroded away and dropped
 // (at LOD 4 a chunk outgrows the small scene's square, so only the bigger one fills it):

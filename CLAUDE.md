@@ -236,6 +236,8 @@ to every change, and a reviewer may reject a PR on any of them.
   **Runtime edits:** `VoxelTerrain.add_instance(type, x, y, z, rotation, params, op, k)` /
   `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (anchors are int64 LOD0 voxels, never
   through `Vector3i`); the op must be 0-3, k >= 0, params finite and normal, the rotation orthonormal,
+  the anchor within +-2^60 voxels and the box (any rotation) plus 2 k at most
+  `SDFArchetype::max_instance_extent()` (4 top-LOD chunk spans, at most 2^29: `Archetype::record_fit_error`),
   else the edit is refused (ERR, -1 / false). Each edit makes a new snapshot (the base kept, the overlay
   rebuilt) and bumps its version. **The snapshot is read from other threads** (the discoverer's `evaluate` / `cull_exempt`):
   it is published with `std::atomic_store` and every reader takes one `current()` copy (a plain
