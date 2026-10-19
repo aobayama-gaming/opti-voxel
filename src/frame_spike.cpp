@@ -894,6 +894,7 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     t.library.add(make_cylinder_type());
     t.library.add(make_rock_type(8, 0x1234u));
     t.library.add(make_branch_type());
+    t.library.add(make_cone_type(6, 0x4321u));
     Builder gb;
     t.ground = gb.finish(gb.constant(2.0f));
     for (uint32_t i = 0; i < 64; i++) {
@@ -932,10 +933,17 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
                 rec.params[0] = 6.0f + float(i % 5);
                 rec.params[1] = 1.5f;
                 break;
-            default:
+            case 5:
                 rec.params[0] = 14.0f;
                 rec.params[1] = 2.5f;
                 rec.params[2] = -0.1f;
+                break;
+            default: // a cone of radius 8, height 20: cos = 20 / sqrt(464), sin = 8 / sqrt(464)
+                rec.params[0] = 8.0f;
+                rec.params[1] = 20.0f;
+                rec.params[2] = 0.928477f;
+                rec.params[3] = 0.371391f;
+                rec.params[4] = 1.0f + float(i % 3);
                 break;
         }
         rec.salt = i == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ i + 1, 0x5EEDu, 0u }).x;
@@ -946,8 +954,10 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
         }
         rec.lipschitz = wb.lipschitz;
         rec.margin_c = 2.0f * wb.lipschitz + 2.0f;
-        // The band rule's erosion (erode * (2^lod - 1), on both sides), on most records.
+        // The band rule's erosion (erode * max(2^lod - erode_from, 0), on both sides), on most records, with
+        // onsets 0, 1 and 5.
         rec.erode = (i % 4u) != 0u ? Archetype::ERODE_CELLS : 0.0f;
+        rec.erode_from = (i % 3u) == 0u ? 1.0f : ((i % 3u) == 1u ? 2.0f : 32.0f);
         t.records.push_back(rec);
     }
     t.list.resize(t.records.size());

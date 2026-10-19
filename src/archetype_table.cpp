@@ -75,7 +75,7 @@ int influence_margin(const TableRecord &p_record, int p_lod) {
     return int(std::ceil(m)) + 2;
 }
 
-double band_depth(const TableDef &p_def, const TableRecord &p_record) {
+double band_radius(const TableDef &p_def, const TableRecord &p_record) {
     Float3 lo{}, hi{};
     float lipschitz = 1.0f;
     p_def.bounds(p_record.params, lo, hi, lipschitz);
@@ -83,26 +83,39 @@ double band_depth(const TableDef &p_def, const TableRecord &p_record) {
     for (int a = 0; a < 3; a++) {
         side = MIN(side, double(p_record.box_hi[a]) - double(p_record.box_lo[a]));
     }
-    return 0.5 * side * double(p_record.lipschitz) + double(p_record.k);
+    return 0.5 * side;
 }
 
-void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, float p_erode_cells) {
+double band_depth(const TableDef &p_def, const TableRecord &p_record) {
+    return band_radius(p_def, p_record) * double(p_record.lipschitz) + double(p_record.k);
+}
+
+void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, const ErodeRule &p_rule) {
     r_record.max_lod = TableRecord::NEVER_DROPPED;
     r_record.erode = 0.0f;
+    r_record.erode_from = 1.0f;
     if (!p_def.bounded || !p_enabled) {
         return;
     }
-    r_record.erode = p_erode_cells;
+    r_record.erode = p_rule.rate;
+    if (p_rule.resolve > 0.0f) {
+        const double radius = band_radius(p_def, r_record);
+        int onset = 0;
+        while (onset < 30 && double(p_rule.resolve) * std::ldexp(1.0, onset + 1) <= radius) {
+            onset++;
+        }
+        r_record.erode_from = exact_pow2(onset);
+    }
     const double depth = band_depth(p_def, r_record);
     for (int lod = 0; lod < 32; lod++) {
-        if (double(p_erode_cells) * (std::ldexp(1.0, lod) - 1.0) >= depth) {
+        if (double(p_rule.rate) * MAX(std::ldexp(1.0, lod) - double(r_record.erode_from), 0.0) >= depth) {
             r_record.max_lod = uint8_t(lod);
             break;
         }
     }
 }
 
-void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, float p_erode_cells) {
+void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, const ErodeRule &p_rule) {
     const Bounds wb = record_world_bounds(p_def, r_record);
     for (int a = 0; a < 3; a++) {
         r_record.box_lo[a] = int32_t(wb.lo[a] - r_record.anchor[a]);
@@ -110,7 +123,7 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
     }
     r_record.lipschitz = wb.lipschitz;
     r_record.margin_c = 2.0f * wb.lipschitz + p_skirt_depth;
-    set_band(r_record, p_def, p_band, p_erode_cells);
+    set_band(r_record, p_def, p_band, p_rule);
 }
 
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {
@@ -138,7 +151,7 @@ void encode_record(PackedByteArray &r_bytes, uint32_t p_index, const TableRecord
     r_bytes.encode_s32(base + 32, hi32(p_record.anchor.x));
     r_bytes.encode_s32(base + 36, hi32(p_record.anchor.y));
     r_bytes.encode_s32(base + 40, hi32(p_record.anchor.z));
-    r_bytes.encode_s32(base + 44, 0);
+    r_bytes.encode_float(base + 44, p_record.erode_from);
     for (int i = 0; i < 9; i++) {
         r_bytes.encode_float(base + 48 + (i / 3) * 16 + (i % 3) * 4, p_record.rotation[i]);
     }
@@ -215,7 +228,7 @@ Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_r
         const DefRecord dr = rec.def_record();
         run_registers(p_library[rec.def].program, p_pos, p_lod, regs, &dr);
         Float4 c = regs[p_library[rec.def].program.output];
-        c.w = c.w + rec.erode * (exact_pow2(p_lod) - 1.0f); // the band rule's erosion (set_band)
+        c.w = c.w + band_erosion(rec.erode, rec.erode_from, p_lod); // the band rule's erosion (set_band)
         r = combine4(r, c, rec);
     }
     return r;
@@ -238,11 +251,11 @@ const char GLSL_DEF_RECORD_STRUCT[] = R"glsl(
 struct DefRecord {
     uvec4 head;      // x: def, y: op, z: k bits, w: inv_k bits
     uvec4 anchor_lo; // xyz: low words, w: noise salt
-    ivec4 anchor_hi; // xyz: high words, w: unused
+    ivec4 anchor_hi; // xyz: high words, w: erode_from bits (2^onset, set_band)
     vec4 rot[3];     // world -> local, row major
     float params[8];
     ivec4 box_lo;    // xyz: influence box low (relative), w: margin_c bits
-    ivec4 box_hi;    // xyz: influence box high, w: erode bits (voxels per 2^lod - 1, set_band)
+    ivec4 box_hi;    // xyz: influence box high, w: erode bits (voxels per cell past the onset, set_band)
 };
 )glsl";
 
@@ -317,7 +330,7 @@ static String fold_glsl(const DefLibrary &p_library) {
             continue;
         }
         precise vec4 c = arch_eval_instance(p, lod, rec);
-        c.w = c.w + intBitsToFloat(rec.box_hi.w) * (exact_pow2(lod) - 1.0);
+        c.w = c.w + intBitsToFloat(rec.box_hi.w) * max(exact_pow2(lod) - intBitsToFloat(rec.anchor_hi.w), 0.0);
         r = arch_combine(r, c, rec);
     }
     return r;
@@ -431,32 +444,63 @@ TableDefPtr make_cylinder_type() {
     return d;
 }
 
+namespace {
+
+// The rock's and the cone's bumps: fbm_unit, octaves k .. k + 2 at amplitude 2^-i (the sum is within ~2.5), times
+// the amp param p_amp. r_reach / r_slope: how far it moves the surface and how much it adds to L, per unit of amp.
+Reg bumps(Builder &p_b, int p_k, uint32_t p_seed, Reg p_amp, double &r_reach, double &r_slope) {
+    Reg noise = p_b.constant(0.0f);
+    r_reach = 0.0;
+    r_slope = 0.0;
+    for (int i = 0; i < 3; i++) {
+        const float amp = float(std::ldexp(1.0, -i));
+        noise = p_b.add(noise, p_b.t_perlin3(p_k + i, p_seed + uint32_t(i), Vector3i64(), amp));
+        r_reach += double(amp) * PERLIN3_MAX;
+        r_slope += double(amp) * PERLIN3_GRAD_MAX * std::ldexp(1.0, -(p_k + i));
+    }
+    return p_b.mul(noise, p_amp);
+}
+
+} // namespace
+
 TableDefPtr make_rock_type(int p_k, uint32_t p_seed) {
-    // params {radius, amp}: sphere(radius) + amp * fbm_unit, fbm_unit's octaves at amplitude 2^-i (the sum
-    // is within ~2.5). The lattice is fixed by p_k, so the bumps keep one size; the demo picks p_k from the
-    // nominal radius.
+    // params {radius, amp}: sphere(radius) + bumps. The lattice is fixed by p_k, so the bumps keep one size; the
+    // demo picks p_k from the nominal radius.
     Builder b;
     const Local l = b.t_local();
     const Reg s = b.sphere(l, b.t_param(0));
-    Reg noise = b.constant(0.0f);
-    const int octaves = 3;
-    double reach_unit = 0.0;
-    double slope_unit = 0.0;
-    for (int i = 0; i < octaves; i++) {
-        const float amp = float(std::ldexp(1.0, -i));
-        noise = b.add(noise, b.t_perlin3(p_k + i, p_seed + uint32_t(i), Vector3i64(), amp));
-        reach_unit += double(amp) * PERLIN3_MAX;
-        slope_unit += double(amp) * PERLIN3_GRAD_MAX * std::ldexp(1.0, -(p_k + i));
-    }
-    const Reg r = b.add(s, b.mul(noise, b.t_param(1)));
+    double reach = 0.0, slope = 0.0;
+    const Reg r = b.add(s, bumps(b, p_k, p_seed, b.t_param(1), reach, slope));
     std::shared_ptr<TableDef> d = make_def("rock", 2, b, r);
-    const double reach = reach_unit;
-    const double slope = slope_unit;
     d->bounds = [reach, slope](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
         const float e = float(p[0] + double(p[1]) * reach);
         r_lo = Float3{ -e, -e, -e };
         r_hi = Float3{ e, e, e };
         r_l = float(1.0 + double(p[1]) * slope);
+    };
+    return d;
+}
+
+TableDefPtr make_cone_type(int p_k, uint32_t p_seed) {
+    // params {radius, height, cos, sin, amp}: max(|xz| cos + y sin - radius cos, -y, y - height) + bumps. The first
+    // term is the distance to the lateral surface (the cone from radius at y = 0 to its apex at y = height, cos and
+    // sin of its half angle), 1-Lipschitz like the caps; the top cap only bounds the bumps (without it they would
+    // raise the apex by reach / sin). The rim (lateral and base) is a smooth max over half a bump wavelength: a sharp
+    // crease under the bumps meshes ragged. A smooth max is >= the max (the bounds hold) and still 1-Lipschitz.
+    Builder b;
+    const Local l = b.t_local();
+    const Reg lateral = b.sub(b.add(b.mul(b.length(l.x, l.z), b.t_param(2)), b.mul(l.y, b.t_param(3))), b.mul(b.t_param(0), b.t_param(2)));
+    const Reg caps = b.max(b.neg(l.y), b.sub(l.y, b.t_param(1)));
+    double reach = 0.0, slope = 0.0;
+    const Reg r = b.add(b.smooth_max(lateral, caps, float(std::ldexp(1.0, p_k - 1))), bumps(b, p_k, p_seed, b.t_param(4), reach, slope));
+    std::shared_ptr<TableDef> d = make_def("cone", 5, b, r);
+    d->bounds = [reach, slope](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+        const float bump = float(double(p[4]) * reach);
+        // lateral <= bump with y >= -bump: |xz| <= radius + bump (1 + sin) / cos.
+        const float e = float(double(p[0]) + double(bump) * (1.0 + double(p[3])) / double(p[2]));
+        r_lo = Float3{ -e, -bump, -e };
+        r_hi = Float3{ e, p[1] + bump, e };
+        r_l = float(1.0 + double(p[4]) * slope);
     };
     return d;
 }

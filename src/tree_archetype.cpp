@@ -95,7 +95,7 @@ public:
         trunk.dir = turn(Vec{ 0.0, 1.0, 0.0 }, lean, TAU * unit_of(h.z));
         trunk.length = v(s.height) + trunk.r0;
         trunk.path = hash3(seed, 0x7EEu, 1u).x;
-        left = s.budget - s.hull_spheres;
+        left = s.budget - (s.cone_tiers > 0 ? s.cone_tiers : s.hull_spheres);
         heap.push(trunk);
         while (!heap.empty() && left > 0) {
             const Stem stem = heap.top();
@@ -104,6 +104,9 @@ public:
         }
         for (size_t i = 0; i < hull.size(); i++) {
             add_crown(hull[i], hash3(seed, 0x4011u, uint32_t(i)).x);
+        }
+        if (s.cone_tiers > 0) {
+            add_tiers(trunk_joints);
         }
     }
 
@@ -119,6 +122,7 @@ private:
     int left = 0;
     uint32_t seq = 0;
     std::vector<Sphere> hull;
+    std::vector<Joint> trunk_joints; // a conifer's tiers close the tree, like the hull
     std::priority_queue<Stem, std::vector<Stem>, Thicker> heap;
 
     // Metres to voxels, at this tree's scale.
@@ -195,11 +199,15 @@ private:
         std::vector<Joint> joints{ root };
         refine(p_stem, radius_at, root, tip, 1u, MAX(MAX_REFINE - p_stem.order, 0), joints);
 
-        if (p_stem.order == 0) {
-            // The hull: spheres on the trunk's polyline, between the crown base and the top.
+        if (p_stem.order == 0 && s.cone_tiers > 0) {
+            trunk_joints = joints;
+        } else if (p_stem.order == 0) {
+            // The hull: spheres on the trunk's polyline, above the crown base, the last one on the trunk's tip (it
+            // would poke out above the crown).
             for (int i = 0; i < s.hull_spheres; i++) {
-                const double t = s.crown_base + (1.0 - s.crown_base) * (double(i) + 0.5) / double(s.hull_spheres);
-                hull.push_back(Sphere{ point_at(joints, t), v(s.crown_radius * s.hull_ratio) });
+                const double f = s.hull_spheres > 1 ? double(i) / double(s.hull_spheres - 1) : 0.0;
+                const double t = s.crown_base + (1.0 - s.crown_base) * double(i + 1) / double(s.hull_spheres);
+                hull.push_back(Sphere{ point_at(joints, t), v(s.crown_radius * s.hull_ratio) * (1.0 + (s.hull_taper - 1.0) * f) });
             }
         }
         for (size_t k = 0; k + 1 < joints.size() && left > 0; k++) {
@@ -251,7 +259,7 @@ private:
         Vec e0, e2;
         normal_frame(d, e0, e2);
         const double azimuth = TAU * unit_of(h.x);
-        const double offset = s.tortuosity * l * (2.0 * unit_of(h.y) - 1.0);
+        const double offset = (p_stem.order == 0 ? s.trunk_tortuosity : s.tortuosity) * l * (2.0 * unit_of(h.y) - 1.0);
         const Joint m{ snap((p_a.p + p_b.p) * 0.5 + (e0 * std::cos(azimuth) + e2 * std::sin(azimuth)) * offset), 0.5 * (p_a.t + p_b.t) };
         refine(p_stem, p_radius_at, p_a, m, 2u * p_node, p_levels - 1, r_joints);
         refine(p_stem, p_radius_at, m, p_b, 2u * p_node + 1u, p_levels - 1, r_joints);
@@ -319,6 +327,35 @@ private:
         left--;
     }
 
+    // A conifer's crown: cone_tiers vertical cones on the trunk, each twice the spacing high (they overlap by half),
+    // the top one's apex at the trunk's tip, radii from crown_radius down to hull_taper times it.
+    void add_tiers(const std::vector<Joint> &p_joints) {
+        const int n = s.cone_tiers;
+        const double length = v(s.height) * (1.0 - s.crown_base);
+        const double spacing = length / double(n + 1);
+        for (int i = 0; i < n; i++) {
+            const double f = n > 1 ? double(i) / double(n - 1) : 0.0;
+            const double t = s.crown_base + (1.0 - s.crown_base) * double(i) / double(n + 1);
+            const ExactNoise::UVec3 h = hash3(seed, 0x7135u, uint32_t(i));
+            const double r = v(s.crown_radius) * (1.0 + (s.hull_taper - 1.0) * f) * (0.9 + 0.2 * unit_of(h.x));
+            const double height = 2.0 * spacing;
+            const double slant = std::sqrt(r * r + height * height);
+            TableRecord rec;
+            rec.def = uint8_t(types.cone);
+            rec.op = Combine::SMOOTH_UNION;
+            set_k(rec, s.crown_smooth * r);
+            rec.anchor = anchor_of(snap(point_at(p_joints, t)));
+            rec.params[0] = float(r);
+            rec.params[1] = float(height);
+            rec.params[2] = float(height / slant); // cos of the half angle
+            rec.params[3] = float(r / slant); // sin
+            rec.params[4] = types.crown_amp;
+            rec.salt = h.y;
+            out.push_back(rec);
+            left--;
+        }
+    }
+
     // p_salt: the noise salt, a hash of the part's path (not of how many parts came before it).
     void add_crown(const Sphere &p_sphere, uint32_t p_salt) {
         TableRecord rec;
@@ -356,6 +393,17 @@ const std::vector<TreeSpecies> &tree_species() {
         slender.twigs = 1;
         slender.limb_angle = 1.15;
         list.push_back(slender);
+        TreeSpecies conifer; // stacked cones from low down, the trunk bare below them
+        conifer.height = 20.0;
+        conifer.trunk_radius = 0.28;
+        conifer.lean = 0.04;
+        conifer.crown_base = 0.2;
+        conifer.crown_radius = 3.0;
+        conifer.cone_tiers = 4;
+        conifer.hull_taper = 0.45;
+        conifer.limbs = 0;
+        conifer.crown_smooth = 0.15;
+        list.push_back(conifer);
         return list;
     }();
     return species;
@@ -363,7 +411,7 @@ const std::vector<TreeSpecies> &tree_species() {
 
 int crown_k(double p_voxel) { return int(std::lround(std::log2(CROWN_WAVELENGTH_M / p_voxel))); }
 
-TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def) {
+TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, int p_cone) {
     // The rock's bounds at radius 1 and amp 1: half size 1 + reach, L = 1 + slope (per unit of amp).
     const float unit[8] = { 1.0f, 1.0f, 0, 0, 0, 0, 0, 0 };
     Float3 lo{}, hi{};
@@ -372,6 +420,7 @@ TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def) {
     TreeTypes t;
     t.branch = p_branch;
     t.crown = p_crown;
+    t.cone = p_cone;
     const double slope = double(lipschitz) - 1.0;
     t.crown_amp = slope > 0.0 ? float(CROWN_BUMP / slope) : 0.0f;
     t.crown_dent = float(double(t.crown_amp) * (double(hi.x) - 1.0));

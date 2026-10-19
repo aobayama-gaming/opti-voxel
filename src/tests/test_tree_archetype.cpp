@@ -19,7 +19,8 @@ struct TreeLibrary {
     explicit TreeLibrary(double p_voxel) {
         const int branch = lib.add(make_branch_type());
         const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED));
-        types = crown_types(branch, crown, lib[crown]);
+        const int cone = lib.add(make_cone_type(crown_k(p_voxel), CROWN_SEED));
+        types = crown_types(branch, crown, lib[crown], cone);
     }
 };
 
@@ -127,6 +128,12 @@ TEST_CASE("Tree: every part is a valid, bounded, banded record, within the budge
                         CHECK(rec.params[0] >= 1.0f);
                         CHECK(rec.params[1] > 0.0f);
                         CHECK(rec.params[1] + rec.params[2] * rec.params[0] > 0.0f);
+                    } else if (rec.def == tl.types.cone) {
+                        crowns++;
+                        CHECK(rec.params[0] > 0.0f);
+                        CHECK(rec.params[1] > 0.0f);
+                        CHECK(std::fabs(double(rec.params[2]) * double(rec.params[2]) + double(rec.params[3]) * double(rec.params[3]) - 1.0) < 1e-6);
+                        CHECK(float_bits(rec.params[4]) == float_bits(tl.types.crown_amp));
                     } else {
                         CHECK(rec.def == tl.types.crown);
                         crowns++;
@@ -139,7 +146,7 @@ TEST_CASE("Tree: every part is a valid, bounded, banded record, within the budge
                 }
             }
         }
-        MESSAGE(voxel, " m voxels: ", trees, " trees, ", parts, " records (", branches, " branch segments, ", crowns, " crown spheres), last listed at LOD ",
+        MESSAGE(voxel, " m voxels: ", trees, " trees, ", parts, " records (", branches, " branch segments, ", crowns, " crown spheres and cones), last listed at LOD ",
                 max_lod_seen - 1);
         CHECK(branches > trees);
         CHECK(crowns >= trees);
@@ -200,7 +207,7 @@ TEST_CASE("Tree: the pipe model holds and stems grow thickest first") {
             for (uint32_t seed = 1; seed <= 10; seed++) {
                 std::vector<TreeStem> stems;
                 grow(tl, tree_species()[sp], seed, voxel, VoxelPos(), &stems);
-                CHECK(stems.size() > 1);
+                CHECK(stems.size() > (tree_species()[sp].limbs > 0 ? 1u : 0u)); // a conifer is its trunk
                 double previous = INFINITY;
                 for (const TreeStem &stem : stems) {
                     double sum = stem.r_end * stem.r_end;
@@ -222,6 +229,9 @@ TEST_CASE("Tree: a smaller budget cuts the thinnest stems, the rest is unchanged
     const TreeLibrary tl(voxel);
     for (size_t sp = 0; sp < tree_species().size(); sp++) {
         TreeSpecies small = tree_species()[sp];
+        if (small.limbs == 0) {
+            continue; // a conifer: its trunk and tiers, nothing to cut
+        }
         TreeSpecies large = small;
         small.budget = 30;
         large.budget = 400;
