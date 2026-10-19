@@ -8,6 +8,11 @@
 # It stops at BENCH_COOL_C (65 C), when the temperature stops falling, or after BENCH_COOLDOWN_MAX_S (30 s).
 # Correctness runs (validate, audit, parity) don't need it and start immediately.
 #
+# --profile=1 (passed on to bench.gd) attaches tools/debug_sink.py as Godot's remote debugger, so that the
+# renderer times every pass, and writes <run>/profile.json + profile.md (tools/profile_report.py). With a
+# debugger attached a GDScript error pauses the game until the timeout. BENCH_RESOLUTION (default 1280x720)
+# sets the window size.
+#
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log,
@@ -21,12 +26,14 @@ GODOT="${GODOT:-$HOME/.local/bin/godot}"
 BUILD=1
 COOL=0
 TAG=""
+PROFILE=0
 PASS=()
 for a in "$@"; do
     case "$a" in
         --no-build) BUILD=0 ;;
         --cool=*) COOL="${a#--cool=}" ;;
         --tag=*) TAG="${a#--tag=}" ;;
+        --profile=*) PROFILE="${a#--profile=}"; PASS+=("$a") ;;
         *) PASS+=("$a") ;;
     esac
 done
@@ -90,11 +97,20 @@ fi
 echo "$COOLDOWN_S ${START_TEMP:-}" > "$RUN_DIR/cooldown.txt"
 { cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo unknown; } > "$RUN_DIR/platform_profile.txt"
 
+DEBUG_ARGS=()
+if [[ $PROFILE == 1 ]]; then
+    coproc SINK { exec python3 "$ROOT/tools/debug_sink.py"; }
+    SINK_PID=$SINK_PID
+    read -r SINK_PORT <&"${SINK[0]}"
+    DEBUG_ARGS=(--remote-debug "tcp://127.0.0.1:$SINK_PORT")
+fi
+
 echo ">> running godot (${ARGS[*]})"
-timeout "${BENCH_TIMEOUT:-600}" "$GODOT" --path "$ROOT/project" --resolution 1280x720 \
-    res://debug/bench.tscn -- "${ARGS[@]}" > "$RUN_DIR/godot.log" 2>&1
+timeout "${BENCH_TIMEOUT:-600}" "$GODOT" --path "$ROOT/project" --resolution "${BENCH_RESOLUTION:-1280x720}" \
+    "${DEBUG_ARGS[@]}" res://debug/bench.tscn -- "${ARGS[@]}" > "$RUN_DIR/godot.log" 2>&1
 CODE=$?
 [[ $HAVE_SMI == 1 ]] && kill "$SMI_PID" 2>/dev/null
+[[ $PROFILE == 1 ]] && kill "$SINK_PID" 2>/dev/null
 
 # Fold telemetry into stats.json (clock median/min, max temperature, share of throttled samples).
 python3 - "$RUN_DIR" <<'PY'
@@ -220,6 +236,10 @@ for k, v in m.items():
 for k, v in ft.get("process", {}).items():
     print(f"   process.{k:17} avg={v['avg_ms']:.3f}ms max={v['max_ms']:.2f}ms")
 PY
+
+if [[ -f "$RUN_DIR/profile.json" ]]; then
+    python3 "$ROOT/tools/profile_report.py" "$RUN_DIR" > "$RUN_DIR/profile.md" && echo ">> profile: $RUN_DIR/profile.md"
+fi
 
 echo ">> log: $RUN_DIR/godot.log  (errors=$ERRORS leak-lines=$LEAKS exit=$CODE known-engine-exit-abort=$KNOWN_EXIT_ABORT ${TEARDOWN:-})"
 if [[ $ERRORS -gt 0 || $LEAKS -gt 0 ]]; then

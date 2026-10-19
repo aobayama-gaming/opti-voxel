@@ -32,6 +32,13 @@ iterate past a warning, never to commit one.
   Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene_5cm).
   Baseline (PR #34, 25 m/s): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
   (~7 ms of GPU per batch, 4x a treeless batch) and the 31 M triangles drawn are the two costs.
+  Where the frame goes (`bench.sh --profile=1`, 1920x1080, error 2 | back 8, budget 4): GPU-bound in every phase
+  (wall = GPU total, render thread 1.5-4 ms, terrain `_process` 3-5 ms while flying). Steady in the forest: 17.3 ms,
+  of which the three geometry passes are 16.4 (opaque 6.6, shadows 4.9, depth pre-pass 4.9) and SSAO / SSIL /
+  post 0.9; they follow the pages drawn (25-34 us of geometry per camera-pass page in every phase; live quads count off-screen chunks too). The fly's misses are the old chunks kept
+  drawn until their replacements land (fly_back: 2x the live quads, geometry 21 ms, mesher still 4).
+  Turning: geometry flat, the frames over budget are the mesher's batches. The pre-pass can't simply go:
+  without it SSAO / SSIL lose their normals and shadowed surfaces turn black.
   Never build while a bench runs (thermals, see Gotchas).
 - One GPU, several agents: other sessions work in other worktrees and run their own builds, benches
   and check.sh on the same laptop. Perf numbers are only valid when nothing else runs. Before a perf
@@ -329,7 +336,12 @@ to every change, and a reviewer may reject a PR on any of them.
   (`VoxelTerrain::is_load_complete`).
   `--origin=X,Y,Z` sets the world origin (voxels). `--cool=1` waits for the GPU to cool first (perf
   runs only; `bench_ab.sh` / `bench_compare.sh` pass it): until 65 C, a plateau, or 30 s at most.
-  `BENCH_ROOT=<checkout>` benches another tree with this harness.
+  `BENCH_ROOT=<checkout>` benches another tree with this harness. `BENCH_RESOLUTION=1920x1080` sets the window
+  (default 1280x720; the LOD follows the pixels, so 1080p draws ~25% more quads).
+  `--profile=1`: a per-frame profile, `<run>/profile.json` and `profile.md` (`tools/profile_report.py <run>`):
+  per phase the wall frame time, each `VoxelTerrain::_process` section, the GPU and render-thread CPU per
+  renderer pass and mesher step, and what the frames over 16.7 ms spend against the others (see Gotchas for
+  how the per-pass timestamps are obtained).
 - `--validate=N` (direct): re-meshes N loaded chunks with the legacy mesher and compares
   triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies.
   The terrain SDF is bit-exact, so both meshers see the same signs (no winding flips at |SDF| ~ 0).
@@ -441,8 +453,18 @@ to every change, and a reviewer may reject a PR on any of them.
 - `--render-thread safe` (rendering on the main thread): every bench run reports ~581 leaked
   StorageBuffer RIDs at exit, so `bench.sh` fails (exit 3). Bench runs need the separate thread.
 - Reading render GPU time (`viewport_get_measured_render_time_*`) syncs the render thread: the
-  bench only does it in the steady phase. Godot's official build only captures viewport begin/end
-  timestamps, so there is no per-pass GPU breakdown.
+  bench only does it in the steady phase. Without a debugger Godot only captures the viewport's begin/end
+  timestamps; with one attached its "visual" profiler exists, and turning it on
+  (`EngineDebugger.profiler_enable("visual", true)`) captures a GPU + CPU timestamp per renderer pass.
+  `bench.sh --profile=1` attaches `tools/debug_sink.py` (a listener that discards the stream) for that.
+  The renderer's timestamp names start a section, the direct mesher's (`vx<batch>_p1`) end one
+  (`gpu_interval_labels`). With a debugger attached a script error pauses the game.
+  Godot's `Performance.TIME_PROCESS` is not this frame's process time (125 ms on 6 ms frames): use the
+  terrain's own section timers.
+- Killing a chunk's quads (`release_chunk`) zeroes its rows, and the page still draws them as degenerate
+  quads until compaction moves it (pages under half full): a "removed" quad keeps its vertex and setup cost.
+  The occlusion measurement (`feature/occlusion`, `--occlusion_hide`) removed quads this way, so it understated
+  the gain.
 - MultiMesh keeps ~190 B of CPU RAM per instance (interpolation arrays): never use one instance
   per quad. Pages use 64-quad groups for that reason.
 - Never call `multimesh_set_buffer` / `multimesh_instance_*` / `multimesh_get_buffer` on a page: it
