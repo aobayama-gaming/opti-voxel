@@ -69,9 +69,14 @@ local function scaleCharacter(player: Player, character: Model)
 	humanoid.JumpHeight = 7.2 * scale
 	placeOnSpawn(character)
 end
+-- Roblox copies these from StarterPlayer onto the player at every spawn: set them there.
+local StarterPlayer = game:GetService("StarterPlayer")
+StarterPlayer.CameraMaxZoomDistance = 128 * K
+StarterPlayer.CameraMinZoomDistance = 0.5 * K
+
 local function setupPlayer(player: Player)
-	player.CameraMaxZoomDistance = 128 * K
-	player.CameraMinZoomDistance = 0.5 * K
+	player.CameraMaxZoomDistance = StarterPlayer.CameraMaxZoomDistance
+	player.CameraMinZoomDistance = StarterPlayer.CameraMinZoomDistance
 	player.CharacterAdded:Connect(function(character)
 		scaleCharacter(player, character)
 	end)
