@@ -18,7 +18,7 @@ TEST_CASE("DualContouring: the vertex pass rewrite still divides the crossings b
     CHECK(dc.contains("qef_vertex("));
     CHECK((dc.contains("/ float(active_edge_count)") || dc.contains("/= float(active_edge_count)")));
     // The normal at the placed vertex falls back to the Hermite normals instead of the mass point.
-    CHECK(dc.contains("vertex_normal(qef_fallback_normal, skirt_sdf(chunk, chunk_vertex, chunk_param).xyz)"));
+    CHECK(dc.contains("vertex_normal(qef_fallback_normal, cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex))"));
 }
 
 // The Hermite normals are the lerp of the corner gradients the sample pass already stored: dual
@@ -26,9 +26,8 @@ TEST_CASE("DualContouring: the vertex pass rewrite still divides the crossings b
 // variant of it.
 TEST_CASE("DualContouring: the QEF evaluates no SDF") {
     const String qef(GLSL_QEF_VERTEX);
-    CHECK_FALSE(qef.contains("skirt_sdf("));
-    CHECK_FALSE(qef.contains("evaluate_sdf("));
-    CHECK_FALSE(qef.contains("terrain_sdf("));
+    CHECK_FALSE(qef.contains("cascade_terrain_sdf("));
+    CHECK_FALSE(qef.contains("cascade_sample_sdf("));
 }
 
 // The gradient at a vertex vanishes exactly on a medial axis (a capsule thinner than the cell, on a lattice
@@ -36,7 +35,7 @@ TEST_CASE("DualContouring: the QEF evaluates no SDF") {
 // gradients, by symmetry. normalize() of it is NaN and the vertex was dropped: broken quads.
 TEST_CASE("Vertex normal: the passes never normalize a raw gradient, a vanishing one points up") {
     const String pass(GLSL_DIRECT_PASS_VERTICES);
-    CHECK_FALSE(pass.contains("normalize(skirt_sdf("));
-    CHECK(pass.contains("vertex_normal(vec3(0.0), skirt_sdf(chunk, chunk_vertex, chunk_param).xyz)"));
+    CHECK_FALSE(pass.contains("normalize(cascade_vertex_gradient("));
+    CHECK(pass.contains("vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex))"));
     CHECK(String(GLSL_VERTEX_NORMAL).contains(": vec3(0.0, 1.0, 0.0)"));
 }

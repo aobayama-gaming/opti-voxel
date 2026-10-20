@@ -30,7 +30,8 @@ iterate past a warning, never to commit one.
   **Perf target:** `--preset=forest5cm` (`project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
   the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at error 2 (stretch: 1).
   Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene_5cm).
-  Baseline (PR #34, 25 m/s): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
+  Baseline (PR #34, 25 m/s, on the removed fBm ground: forest5cm now stands on the cascade, 15% fewer triangles, so
+  re-measure dev before comparing): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
   (~7 ms of GPU per batch, 4x a treeless batch) and the 31 M triangles drawn are the two costs.
   Where the frame goes (`bench.sh --profile=1`, 1920x1080, error 2 | back 8, budget 4): GPU-bound in every phase
   (wall = GPU total, render thread 1.5-4 ms, terrain `_process` 3-5 ms while flying). Steady in the forest: 17.3 ms,
@@ -113,7 +114,7 @@ to every change, and a reviewer may reject a PR on any of them.
   `src/world_coord.hpp`). Chunk ids are chunk centres in chunk-id units (half a LOD0 chunk = 14
   voxels); LOD0 ids are odd, a LOD-L id has its lowest set bit at L.
 - The SDF takes a `WorldPos` (LOD0 voxel + float fraction in [0, 1)) and the chunk's LOD:
-  `SDFBase::evaluate(const WorldPos &, int lod)`, GLSL `vec4 terrain_sdf(WorldPos p, int lod)` (the
+  `SDFBase::evaluate(const WorldPos &, int lod)`, GLSL `cascade_sample_sdf(c0, WorldPos p, int lod, chunk)` (the
   meshers pass `ChunkFrame::lod`, the discoverer and validator `ChunkMath::get_lod`). The same point
   reached from two chunks gives a bit-identical `WorldPos`.
 - GPU (`src/gpu_frame.hpp`): low 32 bits with wrapping arithmetic (exact for differences under 2^31),
@@ -163,23 +164,24 @@ to every change, and a reviewer may reject a PR on any of them.
   (even j >= 2, 10^3), j = 0 straight to `sdf_sample`. Bands come from a table indexed by level
   (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per RenderingDevice; the direct mesher runs
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
-- Terrain: `VoxelTerrain.terrain_mode` 1 = `SDFCascade` (default, `src/sdf_cascade.hpp`: 3D height field,
-  octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m, absolute
-  position only), 2 = its continents preset, 3 = `SDFArchetype` (the archetype IR's demo, below), 4 = its shapes
-  gallery (`SDFArchetype::shapes`, `--terrain=shapes`, `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG
-  cubes with sphere holes, each twice the size and distance of the last, i.e. one per LOD, plus a die, stairs and a
-  tunnelled cube on a flat ground at 250 m, off the page shader's 100 m contours, for dual contouring's creases;
-  compiled into the table's ground program, with no table instances: its composites nest, which the table doesn't). 0 was
-  `SDFDummy`, removed: it evaluated every octave at every LOD (detail finer than the cell, aliased far
-  away), the cascade never inserts a band finer than 8 cells of the chunk's LOD. `--terrain=cascade|continents|archetypes|shapes`
-  in `bench.gd` and the main scene (`godot --path project -- --lods=25`). On the cascade terrains the
-  player spawns 200 m above the ground and flies at half its altitude per second, and the bench camera
-  starts 50 m above it unless `--cam_pos` or `--above_ground=M` (M metres above the terrain under the
-  camera, negative below) says otherwise: the cascade's ground is kilometres from the datum.
-  **Every terrain is a ground under one instance table** (`SDFTable`, `src/sdf_table.*`: the library, records,
-  snapshot, GPU table, runtime edits and the scenes placed on the ground, i.e. the demo objects, `--instances` and
-  `--trees`, which only need the subclass's `ground_y`). `SDFArchetype` is a compiled-Program ground (fBm or the
-  shapes gallery), `SDFCascade` the cascade. On the cascade the table is folded into each lattice sample
+- **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
+  height field, octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m,
+  absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
+  make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`
+  picks a preset: 1 the default, 2 continents, 4 flat (`SDFCascade::Preset::FLAT`: no band, the ground at `FLAT_GROUND_M` = 250 m, off
+  the page shader's 100 m contours) under the shapes gallery (`SDFTable::Scene::SHAPES`, `--terrain=shapes`,
+  `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG cubes holed through every face, each twice the size and
+  distance of the last, i.e. one per LOD, plus a die, stairs and a tunnelled cube, for dual contouring's creases; the
+  composites are library types: `swiss_cube`, `die`, `stairs`, `tunnel_cube`; nothing in that scene is banded, its thin frames would tear). 0 was `SDFDummy` (it evaluated every
+  octave at every LOD: detail finer than the cell, aliased far away) and 3 `SDFArchetype` (a plain fBm ground, and
+  instances compiled into its program), both removed. `--terrain=cascade|continents|shapes` in `bench.gd` and the
+  main scene (`godot --path project -- --lods=25`). Outside the shapes gallery the player spawns 200 m above the
+  ground (`--altitude=M`) and flies at half its altitude per second, and the bench camera starts 50 m above it unless
+  `--cam_pos` or `--above_ground=M` (M metres above the terrain under the camera, negative below) says otherwise: the
+  cascade's ground is kilometres from the datum.
+  **The table** (`SDFTable`, `src/sdf_table.*`, `SDFCascade`'s base: the library, records, snapshot, GPU table,
+  runtime edits and the scenes placed on the ground, i.e. the gallery, `--instances` and `--trees`, which only need
+  `ground_y`) is folded into each lattice sample
   (`SDFCascade::sample_sdf`, GLSL `cascade_sample_sdf` at the level-0 store of the cascade passes): the register
   is the cascade's unit gradient and LOD-L distance times 2^L (exact), then `Archetype::fold_onto` and
   `finish_table`, **only where an instance passes its box test**, else the bare cascade bit for bit. That keeps a
@@ -201,33 +203,24 @@ to every change, and a reviewer may reject a PR on any of them.
   a zero's sign reach a non-zero value, and results are compared through `zero_canonical` (-0 read as +0).
   A point is in the exact domain when every register component is 0 or within [2^-63, 2^63], so that a
   product of two is normal (`exact_domain`). Blends keep their end values exact at any magnitude
-  (`smooth_min` = min - k/4 h^2, BLEND = parent (1 - w) + child w): a far instance reads 2^30 voxels
-  (saturated INPUT), and the lerp b + (a - b) h rounded the ground to its ulp, terraces of 64 voxels at far
-  origins. Instances
-  (`archetype_instance.*`): a `Def` at an int64 anchor (INPUT = exact `sat_diff`) with a float rotation
-  applied op for op, children combined by union / smooth union / subtract / smooth subtract / intersect /
-  blend; `compile` flattens the tree into one Program, with a world box and a Lipschitz bound per node
-  (sampled on 100k points per scene in the unit tests). Adding an op: `Op`, `op_arity`, `op_cost`, `is_flat`,
-  `validate`, the interpreter's `eval` and the generator's `statement` (same formula, same order), a case
-  in the float32 reference test (`test_archetype_ir.cpp`), a branch in `random_program`, then
-  `tools/frame_test.sh` and a new text pin (the FNV test). FrameSpike's `arch_*` probes
-  (`archetype_probes.cpp`): every shape builder, each operator, the test scene, the demo (`arch_demo`),
-  `arch_frames` (one scene at the same offset from every origin, compared across origins) and 200 fuzzed
-  programs, output plus a hash of every register; evaluations outside the exact domain are counted apart
-  (`inexact_*`, gated like the rest). `SDFArchetype` (`src/sdf_archetype.hpp`, `--terrain=archetypes`): the
-  compiled scene as `terrain_sdf` and `evaluate()`: an fBm ground (`height_fbm`, first-order distance), four
-  noisy rocks and three trunk capsules smooth-unioned in, a cave mouth smooth-subtracted, absolute anchors
-  in front of the main_scene spawn; far from them it is the bare ground, bit for bit (unit-tested).
-- Archetype table (step 3, `src/archetype_table.*`, `instance_table.*`, `archetype_gpu_table.*`): the
-  instances are no longer compiled into one program, they live in a GPU table and each chunk folds only
-  the instances near it. A library type (`TableDef`) is a Program written once in the instance's frame:
+  (`smooth_min` = min - k/4 h^2): a far instance reads 2^30 voxels (saturated INPUT), and the lerp
+  b + (a - b) h rounded the ground to its ulp, terraces of 64 voxels at far origins. Adding an op: `Op`,
+  `op_arity`, `op_cost`, `is_flat`, `validate`, the interpreter's `eval` and the generator's `statement` (same
+  formula, same order), a case in the float32 reference test (`test_archetype_ir.cpp`), a branch in
+  `random_program`, then `tools/frame_test.sh` and a new text pin (the FNV test). FrameSpike's `arch_*` probes
+  (`archetype_probes.cpp`): every shape builder, `arch_frames` (every shape at the same offset from every origin,
+  compared across origins) and 200 fuzzed programs, output plus a hash of every register; evaluations outside the
+  exact domain are counted apart (`inexact_*`, gated like the rest). The table probe covers the operators and
+  rotations.
+- Archetype table (`src/archetype_table.*`, `instance_table.*`, `archetype_gpu_table.*`): the instances live
+  in a GPU table and each chunk folds only the instances near it. A library type (`TableDef`) is a Program written
+  once in the instance's frame:
   its sizes are `T_PARAM` (one sphere type serves every radius), its anchor, rotation and noise lattice
   come from the instance's record through `T_INPUT` / `T_PERLIN3|2` (`i64_sub` of the Def offset minus the
   record anchor, seed salted by the record). `generate_library_glsl` emits `vec4 arch_<k>(WorldPos p, int
-  lod, DefRecord rec)`, the CPU interpreter runs the same program with a `DefRecord` (unit test: identical
-  to the compiled path per type / rotation / anchor). `generate_fold_glsl` emits the library, `arch_fold(r, p,
-  lod, touched)` (the GPU `fold_onto`) and `arch_finish` (`finish_table`); `generate_table_sdf` puts the ground
-  (a compiled Program) under them. The fold reads `sdf_records` / `sdf_list` and the `ChunkInput` global
+  lod, DefRecord rec)`, the CPU interpreter runs the same program with a `DefRecord` (unit test: the same bits for
+  the same local point at any anchor, per type / rotation / LOD). `generate_fold_glsl` emits the library, `arch_fold(r,
+  p, lod, touched)` (the GPU `fold_onto`) and `arch_finish` (`finish_table`). The fold reads `sdf_records` / `sdf_list` and the `ChunkInput` global
   `g_sdf_chunk` (the chunk's list offset in `id.w`, count in `anchor_hi.w`), all declared by
   `Archetype::glsl_table_buffers` (the one source, also FrameSpike's).
   `SDFBase::get_gpu_table()` hands the mesher the `DefRecord` bytes (`record_bytes`, re-uploaded when the
@@ -246,12 +239,13 @@ to every change, and a reviewer may reject a PR on any of them.
   it is listed only below the first LOD whose erosion reaches its depth (`band_depth`: half its box's smallest
   side times L, plus k; the smaller of the local box grown by `rotation_margin` and the world box, so a turned
   record drops at the same LOD), where the eroded shape no longer reaches zero, so the drop changes no sign. The band steps
-  between LOD L and L+1 (an eroded instance, a dropped ground octave) are hidden by skirts: the archetype
-  terrains ask for `SDFBase::min_skirt_depth` (ground octave step + erosion, 3.34 cells on the demo) and
-  VoxelTerrain raises `skirt_depth` to it before `configure` (unit test: the L | L+1 field step within the
-  skirt at LODs 0-6 on a 4,000-rock scatter and a 5 cm forest). `archetype_band` / `--instance_band=0` keep every instance
-  whole (the reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty
-  from LOD 5 on.
+  between LOD L and L+1 (an eroded instance, a dropped octave) are hidden by skirts: the table asks for
+  `SDFBase::min_skirt_depth` (the erosion rate), VoxelTerrain raises `skirt_depth` to it before `configure`, and the
+  cascade adds it to its own octave step. Unit test: at the samples a LOD L and a LOD L+1 chunk share near the surface,
+  LODs 0-6, a 4,000-rock scatter and a 5 cm forest, the field step is within the outer chunk's skirt, except over a
+  record dropped at L+1: no skirt bounds that step, but what is left of the record at L is at most `erode` cells thick
+  and the fine rim's skirt lifts it to air (checked). `archetype_band` / `--instance_band=0` keep every instance whole
+  (the reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty from LOD 6 on.
   **The index** (`instance_table`): an instance is stored once, at the finest LOD whose chunk span holds its
   grown box, in the node holding its centre (every touched node only when wider than a top-LOD node);
   subtree lists stop above each instance's `max_lod`. A chunk's list gathers the subtrees of the 125 chunks
@@ -298,8 +292,8 @@ to every change, and a reviewer may reject a PR on any of them.
   past it is refused. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
   discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter N rocks and pillars in a
-  square of side M metres around the demo objects (set before the node enters the tree), default 0, on every
-  terrain (the shapes gallery places none).
+  square of side M metres around (-50, -150) m (`SDFTable::SCENE_X / Z`, set before the node enters the tree),
+  default 0.
   **Trees (step 5, `src/tree_archetype.*`):** a tree is a contiguous run of plain records, all smooth union
   (`SDFTable::get_trees()`: `TreeSpan` first id + count), no change to the IR, the fold or the meshers.
   Library types 3 `branch` (a tapered capsule {height, radius, slope}, slope = (r1 - r0) / height from the
@@ -329,9 +323,9 @@ to every change, and a reviewer may reject a PR on any of them.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
-  `terrain_sdf` (a NaN stub): vertex normals are the trilinear blend of the cell's 8 sample gradients
+  `terrain_sdf`: vertex normals are the trilinear blend of the cell's 8 sample gradients
   (`CascadeGLSL::GLSL_VERTEX_GRADIENT`), in both meshers. A new cascade terrain keeps this rule.
-- Cascade code is only added to a mesher shader in cascade mode, and `GLSL_EXACT_NOISE` is spliced from fragments it shares with
+- `GLSL_EXACT_NOISE` is spliced from fragments it shares with
   `GLSL_PERLIN3_CROSS` (FNV unit test on its text). `OPTI_VOXEL_SHADER_DUMP=<dir>` writes every composed
   shader to `<dir>/<name>_<hash>.glsl` to compare two builds.
 
@@ -402,11 +396,11 @@ to every change, and a reviewer may reject a PR on any of them.
   their 8 corners, deduplicated on the voxel (~6 nodes share a corner), evaluated in one batch
   (`SDFBase::evaluate_batch`; `SDFCascade` spreads it over the `WorkerThreadPool` with the
   allocation-free `Cascade::point_into`). `VoxelTerrain.discoverer_mode` / `--discoverer=cpu|gpu` (bench
-  and player): -1 auto (default: GPU for a cascade terrain, CPU otherwise), 0 CPU, 1 GPU. The GPU path,
+  and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
   `DiscovererGPU` (`src/discoverer_gpu.*`), runs the cascade passes on point items
   (`CascadePasses::create_points`) on a **local RenderingDevice owned by the discoverer thread**: created
   at the top of `discovery_loop` and freed there before the thread exits; no other thread may touch it,
-  and it does nothing on the main RD or the render thread. No local device (headless) or no cascade: one
+  and it does nothing on the main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
   scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
   (and `--lods=25`) after touching the discoverer, the cascade passes or `DiscovererGPU`.

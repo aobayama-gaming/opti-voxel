@@ -81,12 +81,6 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
 
 )glsl";
 
-inline constexpr const char GLSL_DIRECT_PASS_SDF[] = R"glsl(
-
-sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = skirt_sdf(chunk,vec3(cell_chunk_coordinate),chunk_param);
-
-)glsl";
-
 // Same as legacy pass 2, except it writes 0.0 for edges without a crossing: every entry the
 // later passes read is rewritten each batch, so the 48 MB clear of the legacy path is not needed.
 inline constexpr const char GLSL_DIRECT_PASS_EDGES[] = R"glsl(
@@ -164,7 +158,7 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
     if (active_edge_count > 0) {
         local_vertex /= float(active_edge_count);
         vec3 chunk_vertex = local_vertex + vec3(cell_chunk_coordinate);
-        vec3 surface_normal = vertex_normal(vec3(0.0), skirt_sdf(chunk, chunk_vertex, chunk_param).xyz);
+        vec3 surface_normal = vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
         if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {

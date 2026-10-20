@@ -308,7 +308,7 @@ private:
         TableRecord rec;
         rec.def = uint8_t(types.branch);
         rec.op = Combine::SMOOTH_UNION;
-        set_k(rec, p_k);
+        rec.set_k(float(p_k));
         rec.anchor = anchor_of(p_a);
         const Vec d = seg * (1.0 / h);
         Vec e0, e2;
@@ -343,7 +343,7 @@ private:
             TableRecord rec;
             rec.def = uint8_t(types.cone);
             rec.op = Combine::SMOOTH_UNION;
-            set_k(rec, s.crown_smooth * r);
+            rec.set_k(float(s.crown_smooth * r));
             rec.anchor = anchor_of(snap(point_at(p_joints, t)));
             rec.params[0] = float(r);
             rec.params[1] = float(height);
@@ -361,18 +361,13 @@ private:
         TableRecord rec;
         rec.def = uint8_t(types.crown);
         rec.op = Combine::SMOOTH_UNION;
-        set_k(rec, s.crown_smooth * p_sphere.r);
+        rec.set_k(float(s.crown_smooth * p_sphere.r));
         rec.anchor = anchor_of(snap(p_sphere.c));
         rec.params[0] = float(p_sphere.r);
         rec.params[1] = types.crown_amp;
         rec.salt = p_salt;
         out.push_back(rec);
         left--;
-    }
-
-    static void set_k(TableRecord &r_rec, double p_k) {
-        r_rec.k = float(p_k);
-        r_rec.inv_k = r_rec.k > 0.0f ? float(1.0 / double(r_rec.k)) : 0.0f;
     }
 };
 

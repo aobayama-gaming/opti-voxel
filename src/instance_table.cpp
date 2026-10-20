@@ -170,9 +170,9 @@ size_t unique_nodes(const std::vector<Placement> &p_sorted) {
     return n;
 }
 
-// Where each record of p_ids is stored (r_by_lod, one bucket per storage LOD) or, unbounded, listed everywhere.
+// Where each record of p_ids is stored (r_by_lod, one bucket per storage LOD).
 void place_instances(const DefLibrary &p_library, const RecordStore &p_records, const std::vector<uint32_t> &p_ids, const ChunkParam &p_param,
-        int p_max_lod, std::vector<std::vector<Placement>> &r_by_lod, std::vector<uint32_t> &r_unbounded) {
+        int p_max_lod, std::vector<std::vector<Placement>> &r_by_lod) {
     r_by_lod.assign(p_max_lod + 1, std::vector<Placement>());
     for (const uint32_t i : p_ids) {
         const TableRecord &rec = p_records[i];
@@ -180,10 +180,6 @@ void place_instances(const DefLibrary &p_library, const RecordStore &p_records, 
             continue; // removed: kept for stable ids; dropped at every LOD: never listed
         }
         const Bounds wb = record_world_bounds(p_library[rec.def], rec);
-        if (!wb.bounded) {
-            r_unbounded.push_back(i); // listed by every chunk
-            continue;
-        }
         double size = 0.0;
         for (int a = 0; a < 3; a++) {
             size = MAX(size, double(wb.hi[a] - wb.lo[a]));
@@ -273,7 +269,7 @@ std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const
         const ChunkParam &p_param, int p_max_lod) {
     std::shared_ptr<IndexLayer> layer = std::make_shared<IndexLayer>();
     std::vector<std::vector<Placement>> by_lod;
-    place_instances(p_library, p_records, p_ids, p_param, p_max_lod, by_lod, layer->unbounded);
+    place_instances(p_library, p_records, p_ids, p_param, p_max_lod, by_lod);
     size_t placements = 0;
     for (const std::vector<Placement> &b : by_lod) {
         placements += b.size();
@@ -356,7 +352,6 @@ void InstanceSnapshot::gather(const ChunkId &p_centre, int p_lod, const VoxelPos
                 append_range(layer->stored_at, layer->stored_ids, c + ChunkId((i % 3 - 1) * s, (i / 3 % 3 - 1) * s, (i / 9 - 1) * s), candidates);
             }
         }
-        r_out.insert(r_out.end(), layer->unbounded.begin(), layer->unbounded.end());
         if (layer == base.get() && !masked.is_empty()) {
             // The base entries of edited records are stale: the overlay holds their current state.
             candidates.erase(std::remove_if(candidates.begin() + from, candidates.end(), [this](uint32_t p_i) { return masked.has(p_i); }),
@@ -388,11 +383,6 @@ void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, int p_lod, std:
 }
 
 bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod) const {
-    for (const uint32_t i : p_layer.unbounded) {
-        if (&p_layer != base.get() || !masked.has(i)) {
-            return true; // an unbounded instance (edited away from the base: its stale entry doesn't count)
-        }
-    }
     if (p_layer.stored_ids.empty()) {
         return false; // nothing stored: no node to look up
     }
@@ -447,11 +437,10 @@ bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
     return (base && near_layer(*base, lo, hi, lod)) || (overlay && near_layer(*overlay, lo, hi, lod));
 }
 
-std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
-        float p_out_scale, bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
+std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
+        bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
     std::shared_ptr<InstanceSnapshot> snap = std::make_shared<InstanceSnapshot>();
     snap->library = p_library;
-    snap->ground = p_ground;
     snap->out_scale = p_out_scale;
     snap->normalize = p_normalize;
     snap->version = p_version;
@@ -474,12 +463,11 @@ std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_
     std::sort(ids.begin(), ids.end());
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     if (ids.size() > InstanceSnapshot::REBASE || !p_previous.base) {
-        return build_snapshot(p_previous.library, p_previous.ground, p_previous.out_scale, p_previous.normalize, std::move(p_records),
-                p_previous.param, p_previous.max_lod, p_version);
+        return build_snapshot(p_previous.library, p_previous.out_scale, p_previous.normalize, std::move(p_records), p_previous.param,
+                p_previous.max_lod, p_version);
     }
     std::shared_ptr<InstanceSnapshot> snap = std::make_shared<InstanceSnapshot>();
     snap->library = p_previous.library;
-    snap->ground = p_previous.ground;
     snap->out_scale = p_previous.out_scale;
     snap->normalize = p_previous.normalize;
     snap->version = p_version;

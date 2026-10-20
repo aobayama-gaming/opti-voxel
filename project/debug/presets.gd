@@ -3,8 +3,9 @@
 
 const PRESETS := {
 	# The perf target: a 5 cm forest at lod_error 2. The camera args place the bench camera 5 m above
-	# the ground at the main_scene spawn, looking along the fly path (+X); the player ignores them.
-	"forest5cm": ["--terrain=archetypes", "--trees=4000", "--tree_area=316", "--voxel=0.05", "--lod_error=2",
+	# the ground at the main_scene spawn, looking along the fly path (+X); the player ignores them and
+	# starts --altitude metres above the ground (the bench ignores that one).
+	"forest5cm": ["--trees=4000", "--tree_area=316", "--voxel=0.05", "--lod_error=2", "--altitude=20",
 		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
 }
 

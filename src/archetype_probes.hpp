@@ -1,6 +1,6 @@
 #pragma once
 
-#include "archetype_instance.hpp"
+#include "archetype_ir.hpp"
 #include "frame_probe.hpp"
 
 #include <vector>
@@ -14,15 +14,10 @@ namespace ArchetypeProbes {
 // points outside the exact domain.
 Probe probe(const String &p_name, const Archetype::Program &p_program, bool p_trace);
 
-// A rotated rock at p_anchor with one child combined by p_op (sizes ~p_size voxels).
-Archetype::Instance operator_scene(Archetype::Combine p_op, const VoxelPos &p_anchor, float p_size);
-// A rock with a child of every operator (a rotated one among them): the frames and bounds test scene.
-Archetype::Instance test_scene(const VoxelPos &p_anchor, float p_size);
-
-// Each shape builder and the fBms (a union of one copy per p_anchors, sizes p_size voxels); each operator
-// (operator_scene) and test_scene, one copy near each of p_frame_anchors; test_scene at p_frame_anchors
-// (origin_relative: they sit at the same offset from each origin); then p_fuzz fuzzed programs
-// (Archetype::random_program, 8 to 40 instructions) over p_anchors.
+// Each shape builder and the fBms (a union of one copy per p_anchors, sizes p_size voxels); every shape at
+// p_frame_anchors (origin_relative: they sit at the same offset from each origin); then p_fuzz fuzzed programs
+// (Archetype::random_program, 8 to 40 instructions) over p_anchors. The table's operators and rotations are the
+// table probe's (frame_spike.cpp).
 std::vector<Probe> make(const std::vector<VoxelPos> &p_anchors, const std::vector<VoxelPos> &p_frame_anchors, float p_size, int p_fuzz);
 
 } // namespace ArchetypeProbes

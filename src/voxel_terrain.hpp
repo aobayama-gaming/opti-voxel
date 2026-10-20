@@ -25,8 +25,6 @@
 #include "mesh_validator.hpp"
 #include "page_auditor.hpp"
 
-//debug
-#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
 using namespace godot;
@@ -64,7 +62,7 @@ private:
     bool debug_gpu_profile_frames = false; // record every captured frame (GPUProfiler::take_frames)
     Dictionary validation_report;
 
-    SDFTable *sdf = memnew(SDFCascade); // every terrain is a ground under the instance table
+    SDFCascade *sdf = memnew(SDFCascade); // the one terrain: the cascade ground under the instance table
 
     VoxelState visual_mesh_data;
 
@@ -97,7 +95,7 @@ private:
     bool discovery_cache = true;
     bool discovery_verify = false;
     bool destroy_verify = false;
-    int discoverer_mode = -1; // -1 auto: GPU for a cascade terrain, CPU otherwise
+    int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made)
     bool discovery_compare = false;
 
     bool started = false;
@@ -173,9 +171,9 @@ public:
     void set_pipeline_mode(int p_mode);
     int get_pipeline_mode() const;
 
-    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 3 the archetype
-    // IR's demo scene (SDFArchetype, --terrain=archetypes), 4 its shapes gallery (SDFArchetype::shapes,
-    // --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy (removed): saved scenes keep their numbers.
+    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 4 its flat preset under
+    // the shapes gallery (SDFTable::Scene::SHAPES, --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy and 3
+    // the archetype demo on an fBm ground (SDFArchetype), both removed: saved scenes keep their numbers.
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 
@@ -199,14 +197,14 @@ public:
     void set_world_origin_z(int64_t p_voxel);
     int64_t get_world_origin_z() const;
 
-    // Archetype demo scene: a deterministic scatter of --instances rocks and pillars in a square of side
-    // --instance_area metres around the fixed objects. Must be set before the node enters the tree.
+    // A deterministic scatter of --instances rocks and pillars on the ground, in a square of side
+    // --instance_area metres around SDFTable::SCENE_X / Z. Must be set before the node enters the tree.
     void set_archetype_instances(int p_count);
     int get_archetype_instances() const;
     void set_archetype_instance_area(double p_area);
     double get_archetype_instance_area() const;
-    // Archetype demo scene: a forest of about --trees grown trees (tree_archetype.hpp) in a square of side
-    // --tree_area metres around the demo objects. Set before the node enters the tree.
+    // A forest of about --trees grown trees (tree_archetype.hpp) in a square of side
+    // --tree_area metres around SDFTable::SCENE_X / Z. Set before the node enters the tree.
     void set_archetype_trees(int p_count);
     int get_archetype_trees() const;
     void set_archetype_tree_area(double p_area);
@@ -309,9 +307,8 @@ public:
     // the full recompute (VoxelState::verify_against_full), ERROR on a difference.
     void set_destroy_verify(bool p_enable);
     bool get_destroy_verify() const;
-    // Where the discoverer evaluates the corners of its cull test: -1 auto (GPU when the terrain is a cascade,
-    // CPU otherwise), 0 CPU, 1 GPU (DiscovererGPU, a local device on the discoverer thread; CPU with a warning
-    // if it can't be created or the terrain has no cascade). Both give the same scans.
+    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 (and -1, auto) GPU (DiscovererGPU, a
+    // local device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
     void set_discoverer_mode(int p_mode);
     int get_discoverer_mode() const;
     // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).

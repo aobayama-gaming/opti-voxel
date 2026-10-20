@@ -43,17 +43,17 @@ extends Node3D
 ##   --mesher_budget=MS           direct: estimated GPU ms of mesh batches per frame (default 0 = whole batches)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
-##   --terrain=cascade|continents|archetypes|shapes
+##   --terrain=cascade|continents|shapes
 ##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
-##                                SDFCascade; continents: its preset; archetypes: the archetype IR demo, SDFArchetype;
-##                                shapes: its hard-CSG gallery on a flat ground, SDFArchetype::shapes)
-##   Instances (every terrain, around x -50 z -150 m, on the ground; shapes places none):
-##   --instances=N                scatter N rocks/pillars around the demo objects (default 0)
+##                                SDFCascade; continents: its continents preset; shapes: its flat preset under the
+##                                hard-CSG shapes gallery, SDFTable::Scene::SHAPES)
+##   Instances (around x -50 z -150 m, on the ground):
+##   --instances=N                scatter N rocks/pillars (default 0)
 ##   --instance_area=M            side of the scatter square, metres (default 200)
 ##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
 ##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1; 0.5 keeps trunks a LOD longer)
 ##   --instance_resolve=F         a part erodes only once its half thickness is under F cells (default 0: from LOD 1)
-##   --trees=N                    a forest of about N grown trees around the demo objects (default 0)
+##   --trees=N                    a forest of about N grown trees (default 0)
 ##   --tree_area=M                side of the forest square, metres (default 60)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
@@ -180,10 +180,10 @@ func _ready() -> void:
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"cascade": 1, "continents": 2, "archetypes": 3, "shapes": 4}
+	var terrains := {"cascade": 1, "continents": 2, "shapes": 4}
 	var terrain_arg: String = args.get("terrain", "cascade")
 	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected cascade, continents, archetypes or shapes)" % terrain_arg)
+		push_error("BENCH: unknown --terrain=%s (expected cascade, continents or shapes)" % terrain_arg)
 		set_process(false)
 		get_tree().quit(1)
 		return
@@ -249,7 +249,7 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
-	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode >= 3 or args.has("cam_pos") else "50")
+	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 4 or args.has("cam_pos") else "50")
 	if above_ground != "":
 		# Raise or lower the camera (and the fly path) to this height above the terrain under it.
 		var h := float(above_ground)
@@ -353,7 +353,7 @@ func _run_edits() -> void:
 # 1.5 m radius) starting along the view, one per frame, then the left-click tube for --drag_s seconds: a
 # 20 m SUBTRACT capsule from 0.5 m ahead of the camera whose direction sweeps 10 degrees either side
 # (re-placed every frame, as when the player turns), then removed.
-const CAPSULE_TYPE := 1  # SDFArchetype's library: 0 sphere, 1 capsule, 2 rock
+const CAPSULE_TYPE := 1  # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
 
 
 func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: float, op: int, id: int) -> int:

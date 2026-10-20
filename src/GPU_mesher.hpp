@@ -120,15 +120,13 @@ private:
 
     RID uniform_set;
 
-    RID shader_first_pass;
     RID shader_second_pass;
     RID shader_third_pass;
 
-    RID pipeline_first_pass;
     RID pipeline_second_pass;
     RID pipeline_third_pass;
 
-    // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 1, in sub-batches of at most
+    // The cascade passes: pass 1 (the samples), in sub-batches of at most
     // CASCADE_MAX_CHUNKS chunks (its scratch, ~92 KB per chunk with 4 channels, is not sized for 1024).
     static constexpr uint32_t CASCADE_MAX_CHUNKS = 128;
     CascadePasses *cascade = nullptr;

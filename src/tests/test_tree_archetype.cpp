@@ -1,6 +1,6 @@
 #include "test_common.hpp"
 
-#include "sdf_archetype.hpp"
+#include "sdf_cascade.hpp"
 #include "tree_archetype.hpp"
 
 #include <algorithm>
@@ -12,7 +12,7 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// The two types trees use, registered as SDFArchetype::create_scene does.
+// The types trees use, registered as SDFTable::build_table does.
 struct TreeLibrary {
     DefLibrary lib;
     TreeTypes types;
@@ -121,7 +121,7 @@ TEST_CASE("Tree: every part is a valid, bounded, banded record, within the budge
                     }
                 }
                 for (TableRecord &rec : records) {
-                    CHECK(SDFArchetype::edit_error(rec.rotation, rec.params, int(rec.op), rec.k).is_empty());
+                    CHECK(SDFTable::edit_error(rec.rotation, rec.params, int(rec.op), rec.k).is_empty());
                     CHECK(rec.op == Combine::SMOOTH_UNION);
                     if (rec.def == tl.types.branch) {
                         branches++;
@@ -296,17 +296,17 @@ TEST_CASE("Tree: forest sites fill the square, apart, the same tree per absolute
     CHECK(shared > int64_t(a.size()) / 3);
 }
 
-TEST_CASE("SDFArchetype forest: the trees are table records, trunks are solid, evaluate() stays the fold") {
+TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, evaluate() stays the fold") {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    SDFArchetype sdf;
+    SDFCascade sdf;
     sdf.set_forest(30, 40.0);
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);
     const std::vector<TreeSpan> &trees = sdf.get_trees();
     const auto snap = sdf.get_snapshot();
     CHECK(trees.size() > 20);
-    uint32_t next = 8; // 4 rocks + 3 trunks + 1 cave
+    uint32_t next = 0;
     for (const TreeSpan &t : trees) {
         CHECK(t.first == next);
         CHECK(t.count > 0);
@@ -316,8 +316,8 @@ TEST_CASE("SDFArchetype forest: the trees are table records, trunks are solid, e
     for (int i = 0; i < sdf.get_library().size(); i++) {
         CHECK(sdf.get_library()[i].program.validate(18).is_empty());
     }
-    // Inside each tree's first trunk segment, a quarter of the way up its axis: solid at LOD 0, and the point's
-    // candidates hold the segment.
+    // Inside each tree's first trunk segment, a quarter of the way up its axis (the LOD0 voxel: the cascade's lattice):
+    // solid at LOD 0, and the point's candidates hold the segment.
     std::vector<uint32_t> list;
     int64_t solid = 0;
     for (const TreeSpan &t : trees) {
@@ -325,23 +325,21 @@ TEST_CASE("SDFArchetype forest: the trees are table records, trunks are solid, e
         CHECK(rec.def == 3); // the branch type, after sphere, capsule and rock
         const double h = rec.params[0];
         WorldPos p;
-        double frac[3];
         for (int j = 0; j < 3; j++) {
-            const double v = double(rec.anchor[j]) + 0.25 * h * double(rec.rotation[3 + j]);
-            p.voxel[j] = int64_t(std::floor(v));
-            frac[j] = v - std::floor(v);
+            p.voxel[j] = int64_t(std::floor(double(rec.anchor[j]) + 0.25 * h * double(rec.rotation[3 + j])));
         }
-        p.frac = Float3{ float(frac[0]), float(frac[1]), float(frac[2]) };
         snap->point_candidates(p.voxel, 0, list);
         CHECK(std::find(list.begin(), list.end(), t.first) != list.end());
         const float value = sdf.evaluate(p, 0);
-        const Float4 r = finish_table(fold(sdf.get_ground(), sdf.get_library(), snap->records, list.data(), uint32_t(list.size()), p, 0), 0, 0.05f, true);
+        float ch[Cascade::CHANNELS];
+        sdf.channels_at(p.voxel, 0, ch);
+        const Float4 r = sdf.sample_sdf(*snap, list.data(), uint32_t(list.size()), ch, p, 0);
         CHECK(float_bits(value) == float_bits(r.w));
         CHECK(std::isfinite(r.x));
         CHECK(std::isfinite(r.y));
         CHECK(std::isfinite(r.z));
         solid += value < 0.0f ? 1 : 0;
     }
-    MESSAGE("forest: ", trees.size(), " trees, ", snap->records.size() - 8, " records, ", solid, " trunks solid at LOD 0");
+    MESSAGE("forest: ", trees.size(), " trees, ", snap->records.size(), " records, ", solid, " trunks solid at LOD 0");
     CHECK(solid == int64_t(trees.size()));
 }

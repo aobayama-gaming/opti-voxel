@@ -11,7 +11,7 @@ using namespace godot;
 // and absolute points, and checks against the CPU mirrors:
 //   - CPU sample_pos == GPU WorldPos and anchor, bit for bit
 //   - every probe of the probe table (frame_spike.cpp: hash, octave decomposition, perlin3/2, a 2D
-//     and a 3D fBm; archetype_probes.cpp: the archetype IR's shapes, demo terrain and fuzzed programs,
+//     and a 3D fBm; archetype_probes.cpp: the archetype IR's shapes, the table probe and fuzzed programs,
 //     generated GLSL vs the interpreter): CPU == GPU, bit for bit, at the fixed grid and 1,024
 //     hash-random points per origin
 //   - the same voxel reached from two chunks (neighbour, parent) gives bit-identical GPU results

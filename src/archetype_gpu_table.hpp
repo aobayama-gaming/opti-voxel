@@ -8,7 +8,7 @@
 
 // The archetype instance table's data for the GPU (SDFGpuTable): the DefRecord array and the per-batch
 // list of instance indices. Each mesher owns the actual buffers (on its own RenderingDevice) and uploads
-// record_bytes() when version() changes; archetype_table.cpp generates terrain_sdf reading them.
+// record_bytes() when version() changes; archetype_table.cpp generates the arch_fold reading them.
 namespace Archetype {
 
 // The DefRecord struct, the sdf_records / sdf_list buffers at these bindings and the global g_sdf_chunk (the
@@ -44,7 +44,7 @@ public:
     void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
 
     Dictionary get_stats() const override;
-    // The scene's own numbers (SDFArchetype's forest), merged into get_stats(). Main thread, before the meshers start.
+    // The scene's own numbers (the forest), merged into get_stats(). Main thread, before the meshers start.
     void set_scene_stats(const Dictionary &p_stats) { scene_stats = p_stats; }
 
 private:

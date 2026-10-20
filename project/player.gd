@@ -19,13 +19,13 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|archetypes|shapes`
-# its terrain_mode (the Hermite cascade terrain, the default, its continents demo preset, the archetype IR demo, or its
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|shapes`
+# its terrain_mode (the Hermite cascade terrain, the default, its continents preset, or its flat preset under the
 # hard-CSG shapes gallery) and
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
-var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (cascade terrains)
-var cascade_terrain: Node = null  # set on the cascade terrains
+var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
+var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
 var cached_altitude := 0.0
 var altitude_age := 1.0
 
@@ -34,8 +34,8 @@ var altitude_age := 1.0
 # of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
 # by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press
 # (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release. Both only act while the mouse is captured. They use VoxelTerrain.add_instance /
-# move_instance / remove_instance; other terrains refuse the edits.
-const CAPSULE_TYPE := 1        # SDFArchetype's library: 0 sphere, 1 capsule, 2 rock (create_scene)
+# move_instance / remove_instance.
+const CAPSULE_TYPE := 1        # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
 const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
@@ -67,8 +67,6 @@ func _enter_tree() -> void:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
-		if a == "--terrain=archetypes" and terrain:
-			terrain.terrain_mode = 3
 		if a == "--terrain=shapes" and terrain:
 			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
@@ -124,8 +122,8 @@ func _ready():
 	if terrain and terrain.lod_numbers > 15:
 		far_lods_terrain = terrain
 		base_near = camera.near
-	if terrain and terrain.terrain_mode < 3:  # the cascade terrains; the archetype scenes keep the scene's spawn
-		cascade_terrain = terrain
+	if terrain and terrain.terrain_mode != 4:  # the shapes gallery keeps the scene's spawn
+		altitude_terrain = terrain
 		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
@@ -383,12 +381,12 @@ func _process(delta: float) -> void:
 
 	var direction = (transform.basis * input_dir).normalized()
 	var move_speed := speed
-	if cascade_terrain:
+	if altitude_terrain:
 		# Cascade terrain: kilometre-scale relief, fly faster when high (half the altitude per second).
 		# The altitude is a CPU cascade point query: refreshed 4 times per second.
 		altitude_age += delta
 		if altitude_age >= 0.25:
 			altitude_age = 0.0
-			cached_altitude = absf(cascade_terrain.get_sdf_at(camera.global_position))
+			cached_altitude = absf(altitude_terrain.get_sdf_at(camera.global_position))
 		move_speed = maxf(speed, cached_altitude * 0.5)
 	position += direction * move_speed * delta

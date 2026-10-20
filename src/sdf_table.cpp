@@ -16,8 +16,7 @@ int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_
     TableRecord rec;
     rec.def = uint8_t(p_type);
     rec.op = Combine(p_op);
-    rec.k = p_k;
-    rec.inv_k = p_k > 0.0f ? float(1.0 / double(p_k)) : 0.0f;
+    rec.set_k(p_k);
     rec.anchor = p_anchor;
     if (p_rotation) {
         std::copy(p_rotation, p_rotation + 9, rec.rotation);
@@ -188,17 +187,86 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     gpu.set_scene_stats(scene);
 }
 
-void SDFTable::build_table(const Program &p_ground, double p_voxel, int p_lod_count, Scene p_scene) {
-    auto v = [p_voxel](double p_metres) { return float(p_metres / p_voxel); };
-    auto ground = [&](double p_x, double p_z) { return ground_y(std::llround(p_x / p_voxel), std::llround(p_z / p_voxel)); };
-    // Appended in this order: the GDScript side names the indices (CAPSULE_TYPE).
+float SDFTable::voxels(double p_metres) const {
+    return float(p_metres / param.voxel_size);
+}
+
+void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw) {
+    const double vs = param.voxel_size;
+    TableRecord rec;
+    rec.def = uint8_t(p_type);
+    rec.op = p_op;
+    rec.set_k(voxels(p_k_m));
+    std::copy(p_params, p_params + 8, rec.params);
+    const int64_t x = std::llround(p_x / vs), z = std::llround(p_z / vs);
+    rec.anchor = VoxelPos(x, ground_y(x, z) + std::llround(p_dy_m / vs), z);
+    const float c = float(std::cos(p_yaw)), s = float(std::sin(p_yaw));
+    const float rot[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
+    std::copy(rot, rot + 9, rec.rotation);
+    rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
+    // The same limits as a runtime edit (a gallery cube past 4 top-LOD chunk spans with few LODs).
+    const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
+    ERR_FAIL_COND_MSG(!fit.is_empty(), "SDFTable: scene record left out: " + fit);
+    finish_record(rec);
+    records.push_back(rec, version + 1);
+}
+
+void SDFTable::add_shapes(const Types &p_types) {
+    auto v = [this](double p_metres) { return voxels(p_metres); };
+    // The cube ladder: centres at 0.9 of the half size, a little sunk, so the voxel rounding never lifts one off the
+    // ground.
+    for (int i = 0; i < 8; i++) {
+        const double d = 80.0 * double(1 << i);
+        const double h = 0.1 * d;
+        const double theta = (-45.5 + 13.0 * i) * Math_PI / 180.0;
+        const float params[8] = { v(h), v(h), v(h), 0, v(1.2 * h), 0, 0, 0 };
+        place(Combine::UNION, 0.0, p_types.holed_cube, params, SHAPES_X + d * std::sin(theta), SHAPES_Z - d * std::cos(theta), 0.9 * h, 0.5 - theta);
+    }
+    const double h = 6.0;
+    const float die[8] = { v(h), 0, 0, 0, 0, 0, 0, 0 };
+    place(Combine::UNION, 0.0, p_types.die, die, SHAPES_X - 25.0, SHAPES_Z + 40.0, 0.95 * h, 0.4);
+    // Eight 1 m steps, 2 m deep, 8 m wide, rising away from the spawn.
+    const float stairs[8] = { v(4.0), v(1.0), v(1.0), 0, 0, 0, 0, 0 };
+    place(Combine::UNION, 0.0, p_types.stairs, stairs, SHAPES_X, SHAPES_Z + 33.0, 0.0, 0.3);
+    // 5 m square tunnels along x, y and z.
+    const float tunnels[8] = { v(h), v(2.5), 0, 0, 0, 0, 0, 0 };
+    place(Combine::UNION, 0.0, p_types.tunnel_cube, tunnels, SHAPES_X + 25.0, SHAPES_Z + 40.0, 0.9 * h, 0.6);
+}
+
+void SDFTable::add_scatter(const Types &p_types) {
+    auto v = [this](double p_metres) { return voxels(p_metres); };
+    for (int i = 0; i < scatter_count; i++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0x5CA7u, 0x7E12u });
+        const double px = SCENE_X + (double(h.x >> 8) / 16777216.0 - 0.5) * scatter_area;
+        const double pz = SCENE_Z + (double(h.y >> 8) / 16777216.0 - 0.5) * scatter_area;
+        const float r = 1.0f + float(h.z % 300u) * 0.01f;
+        if (i % 2 == 0) {
+            const float params[8] = { v(double(r)), 0.1f * v(double(r)), 0, 0, 0, 0, 0, 0 };
+            place(Combine::SMOOTH_UNION, 1.0, p_types.rock, params, px, pz, -0.4 * double(r), double(h.x % 628u) * 0.01);
+        } else {
+            const float params[8] = { v(2.0 + double(r)), v(0.5), 0, 0, 0, 0, 0, 0 };
+            place(Combine::SMOOTH_UNION, 0.8, p_types.capsule, params, px, pz, 0.0, 0.0);
+        }
+    }
+}
+
+void SDFTable::build_table(int p_lod_count) {
+    const double vs = param.voxel_size;
+    // Appended in this order: the GDScript side names the indices (CAPSULE_TYPE). The gallery's types only with it.
     DefLibrary lib;
-    const int sphere = lib.add(make_sphere_type());
-    const int capsule = lib.add(make_capsule_type());
-    const int rock = lib.add(make_rock_type(int(std::lround(std::log2(8.0 / p_voxel))), ROCK_SEED));
+    Types types;
+    lib.add(make_sphere_type());
+    types.capsule = lib.add(make_capsule_type());
+    types.rock = lib.add(make_rock_type(int(std::lround(std::log2(8.0 / vs))), ROCK_SEED));
     const int branch = lib.add(make_branch_type());
-    const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED));
-    const int cone = lib.add(make_cone_type(crown_k(p_voxel), CROWN_SEED));
+    const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED));
+    const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED));
+    if (scene == Scene::SHAPES) {
+        types.holed_cube = lib.add(make_swiss_cube_type(1));
+        types.die = lib.add(make_die_type());
+        types.stairs = lib.add(make_stairs_type());
+        types.tunnel_cube = lib.add(make_tunnel_cube_type());
+    }
     library = std::make_shared<const DefLibrary>(lib);
     for (int i = 0; i < library->size(); i++) {
         const String error = (*library)[i].program.validate(p_lod_count);
@@ -210,63 +278,16 @@ void SDFTable::build_table(const Program &p_ground, double p_voxel, int p_lod_co
 
     records.clear();
     trees.clear();
-    uint32_t seed = 1;
-    auto add = [&](Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw) {
-        TableRecord rec;
-        rec.def = uint8_t(p_type);
-        rec.op = p_op;
-        rec.k = v(p_k_m);
-        rec.inv_k = rec.k != 0.0f ? float(1.0 / double(rec.k)) : 0.0f;
-        for (int i = 0; i < 8; i++) {
-            rec.params[i] = p_params[i];
-        }
-        rec.anchor = VoxelPos(std::llround(p_x / p_voxel), ground(p_x, p_z) + std::llround(p_dy_m / p_voxel), std::llround(p_z / p_voxel));
-        const float c = float(std::cos(p_yaw)), s = float(std::sin(p_yaw));
-        const float rot[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
-        std::copy(rot, rot + 9, rec.rotation);
-        const uint32_t salt_seed = seed++;
-        rec.salt = salt_seed == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ salt_seed, 0x5EEDu, 0u }).x;
-        finish_record(rec);
-        records.push_back(rec, version + 1);
-    };
-    if (p_scene == Scene::DEMO) {
-        const struct {
-            double x, z, r, yaw;
-        } rocks[] = { { -40.0, -150.0, 4.0, 0.3 }, { -62.0, -132.0, 2.5, 1.2 }, { -25.0, -128.0, 3.0, 2.0 }, { -75.0, -165.0, 5.0, 0.7 } };
-        for (const auto &r : rocks) {
-            const float params[8] = { v(r.r), 0.1f * v(r.r), 0, 0, 0, 0, 0, 0 };
-            add(Combine::SMOOTH_UNION, 1.5, rock, params, r.x, r.z, -0.4 * r.r, r.yaw);
-        }
-        for (const double x : { -50.0, -33.0, -58.0 }) {
-            const float params[8] = { v(12.0), v(1.0), 0, 0, 0, 0, 0, 0 };
-            add(Combine::SMOOTH_UNION, 1.0, capsule, params, x, -160.0 + 0.3 * x, -1.0, 0.0);
-        }
-        const float params[8] = { v(7.0), 0, 0, 0, 0, 0, 0, 0 };
-        add(Combine::SMOOTH_SUBTRACT, 1.0, sphere, params, -10.0, -170.0, -3.0, 0.0);
+    if (scene == Scene::SHAPES) {
+        add_shapes(types);
     }
-    if (p_scene != Scene::EMPTY) {
-        // The scatter: deterministic rocks and pillars on the ground, around the demo objects.
-        const double centre_x = -50.0, centre_z = -150.0;
-        for (int i = 0; i < scatter_count; i++) {
-            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0x5CA7u, 0x7E12u });
-            const double px = centre_x + (double(h.x >> 8) / 16777216.0 - 0.5) * scatter_area;
-            const double pz = centre_z + (double(h.y >> 8) / 16777216.0 - 0.5) * scatter_area;
-            const float r = 1.0f + float(h.z % 300u) * 0.01f;
-            if (i % 2 == 0) {
-                const float params[8] = { v(double(r)), 0.1f * v(double(r)), 0, 0, 0, 0, 0, 0 };
-                add(Combine::SMOOTH_UNION, 1.0, rock, params, px, pz, -0.4 * double(r), double(h.x % 628u) * 0.01);
-            } else {
-                const float params[8] = { v(2.0 + double(r)), v(0.5), 0, 0, 0, 0, 0, 0 };
-                add(Combine::SMOOTH_UNION, 0.8, capsule, params, px, pz, 0.0, 0.0);
-            }
-        }
-        add_forest(crown_types(branch, crown, lib[crown], cone), p_voxel, centre_x, centre_z);
-    }
+    add_scatter(types);
+    add_forest(crown_types(branch, crown, lib[crown], cone), vs, SCENE_X, SCENE_Z);
     edit_k = 0.0f;
     edit_margin_c = 0.0f;
     edit_lod_max = 0;
     // The GPU buffers hold the scene plus room for runtime edits (the mesher reads this at init).
     gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
     version++;
-    publish(build_snapshot(library, p_ground, float(p_voxel), true, records, param, lod_count - 1, version), VoxelBox());
+    publish(build_snapshot(library, float(vs), true, records, param, lod_count - 1, version), VoxelBox());
 }
