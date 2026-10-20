@@ -27,6 +27,7 @@ TEST_CASE("Material::Library: built-ins in order, names unique, image layout") {
     CHECK(a.a == doctest::Approx(0.8));
     const Color lava = img->get_pixel(Material::TEXELS * Material::LAVA + 1, 0);
     CHECK(lava.a == float(Material::PATTERN_LAVA));
+    CHECK(img->get_pixel(Material::TEXELS * Material::BARK + 1, 0).a == float(Material::PATTERN_BARK));
 }
 
 TEST_CASE("ChunkPalette: ground first, distinct ids in list order, indices point back") {

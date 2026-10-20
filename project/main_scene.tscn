@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://dw1g78kfjm72u"]
 
 [ext_resource type="PackedScene" uid="uid://bwfx7fd23et6q" path="res://player.tscn" id="1_0f027"]
+[ext_resource type="CompressedTexture3D" uid="uid://ds6l17gi5l72p" path="res://grade_lut.png" id="2_lut"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_o3jxj"]
 
@@ -14,9 +15,8 @@ tonemap_mode = 3
 ssao_enabled = true
 ssil_enabled = true
 volumetric_fog_length = 0.01
-adjustment_brightness = 1.02
-adjustment_contrast = 1.025
-adjustment_saturation = 2.0
+adjustment_enabled = true
+adjustment_color_correction = ExtResource("2_lut")
 
 [node name="Node3D" type="Node3D" unique_id=1494446098]
 

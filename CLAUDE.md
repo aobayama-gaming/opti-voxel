@@ -380,8 +380,18 @@ to every change, and a reviewer may reject a PR on any of them.
   carries the id in `ARRAY_CUSTOM0`; the validator (half its sample from chunks with materials,
   `MeshValidator::pick_targets`) requires `material_mismatch == 0` on paired vertices, the auditor
   `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and
-  `table.list_len_per_lod.*.palette_avg / palette_max`. Next: a material per biome cell for the ground, materials
-  inside one record (an IR change), procedural bark and a colour-grading LUT.
+  `table.list_len_per_lod.*.palette_avg / palette_max`. **Bark** (`PATTERN_BARK`, `bark_height` in the page shader): a solid
+  texture, so no surface frame: noise stretched along world up (plates, V grooves ~11 cm apart), a sparse cell field of
+  knots (2 x 2 x 2 nearest cells) bending the grain, an analytic gradient for a ~1.5 cm bump (no derivatives in the
+  material branch); it fades to the plates' mean past ~4 pixels per groove (metres per pixel from the projection). It
+  samples at the uneroded surface: `p + n * instance_erode_m * (2^L - 1)` (`VoxelTerrain` sets the uniform from the band
+  rule's rate; exact for the default onset, over-corrected with `--instance_resolve`). Grooves finer than ~10 cm showed
+  chunk seams as lines (neighbouring chunks' surfaces differ by ~1 cm; flat shading hid it). Its axis is world up: a
+  near-horizontal branch gets grooves around it. **Grading:** the scenes' Environment has adjustments on and a 32^3 LUT
+  (`res://grade_lut.png`, a Texture3D of 32 slices, written by `tools/make_lut.py`: lifted cool shadows, warm mids,
+  +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
+  contrast / saturation values never applied (adjustments were off) and are gone. Next: a material per biome cell
+  for the ground, materials inside one record (an IR change), image textures (triplanar).
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
