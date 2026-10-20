@@ -8,7 +8,7 @@
 
 using namespace godot;
 
-// The discoverer's corner SDF on the GPU (VoxelTerrain.discoverer_mode 1, cascade terrains): the cascade
+// The discoverer's corner SDF on the GPU (VoxelTerrain.discoverer_mode 1, the default): the cascade
 // passes with point items (CascadePasses::create_points), bit for bit SDFBase::evaluate at the same corners.
 //
 // It owns a local RenderingDevice, created and freed by the discoverer thread (ChunkDiscoverer::discovery_loop,

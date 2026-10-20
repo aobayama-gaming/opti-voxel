@@ -64,7 +64,6 @@ private:
 
 // One layer of the index over a set of records (flat arrays: no allocation per node).
 struct IndexLayer {
-    std::vector<uint32_t> unbounded; // instances with an unbounded box: listed by every chunk
     // node -> the instances stored at it (stored_ids[begin, begin + count))
     NodeRangeMap stored_at;
     std::vector<uint32_t> stored_ids;
@@ -75,7 +74,7 @@ struct IndexLayer {
     std::vector<std::vector<ChunkId>> occupied;
 
     bool is_occupied(const ChunkId &p_node, int p_lod) const;
-    bool empty() const { return unbounded.empty() && stored_ids.empty(); }
+    bool empty() const { return stored_ids.empty(); }
 };
 
 struct InstanceSnapshot {

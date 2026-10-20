@@ -27,7 +27,7 @@ struct Spec;
 // list of instance indices. The SDF hands out the data; each mesher owns the buffers on its own
 // RenderingDevice (the legacy mesher runs on a local one), splices glsl_buffers() at the given bindings
 // and creates/frees two storage buffers. glsl_set_chunk() is spliced into main() to fill the ChunkInput
-// global g_sdf_chunk. The generated terrain_sdf (archetype_table.hpp) reads sdf_records / sdf_list.
+// global g_sdf_chunk. The generated arch_fold (archetype_table.hpp) reads sdf_records / sdf_list.
 class SDFGpuTable {
 public:
     virtual ~SDFGpuTable() = default;
@@ -111,11 +111,23 @@ public:
     virtual float evaluate_cull(const WorldPos &p_pos, int p_lod) const = 0;
 
     // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
-    // wave.
-    virtual void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const = 0;
+    // wave, over the WorkerThreadPool in blocks of BATCH_BLOCK points (evaluate_cull is thread-safe).
+    void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {
+        BatchJob job{ this, p_points, p_count, p_lod, r_out };
+        const int blocks = (p_count + BATCH_BLOCK - 1) / BATCH_BLOCK;
+        if (blocks <= 1) {
+            if (blocks == 1) {
+                _batch_block(&job, 0);
+            }
+            return;
+        }
+        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&SDFBase::_batch_block, &job, blocks, -1, true, "SDFBase::evaluate_batch");
+        pool->wait_for_group_task_completion(id);
+    }
 
-    // GPU code spliced into the meshers and the cascade passes (SDFCascade: the cascade's register, metres and
-    // skirt functions, and a NaN `terrain_sdf` stub the templates reference). The shader provides the chunk_param
+    // GPU code spliced into the cascade passes (SDFCascade: the cascade's register, metres and skirt
+    // functions). The shader provides the chunk_param
     // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
     // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
@@ -161,24 +173,8 @@ protected:
     ChunkParam param;
     VoxelBox edit_box;
 
-    // evaluate_batch() over the WorkerThreadPool, in blocks of BATCH_BLOCK points (the same bits): the override
-    // of a terrain whose evaluate() is thread-safe.
-    static constexpr int BATCH_BLOCK = 64;
-    void evaluate_batch_parallel(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {
-        BatchJob job{ this, p_points, p_count, p_lod, r_out };
-        const int blocks = (p_count + BATCH_BLOCK - 1) / BATCH_BLOCK;
-        if (blocks <= 1) {
-            if (blocks == 1) {
-                _batch_block(&job, 0);
-            }
-            return;
-        }
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&SDFBase::_batch_block, &job, blocks, -1, true, "SDFBase::evaluate_batch");
-        pool->wait_for_group_task_completion(id);
-    }
-
 private:
+    static constexpr int BATCH_BLOCK = 64;
     struct BatchJob {
         const SDFBase *sdf;
         const VoxelPos *points;

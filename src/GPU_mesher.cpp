@@ -83,14 +83,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 /*GLSL_HELPER_FUNCTION*/
 
-//Will inject vec4 terrain_sdf(WorldPos p, int lod)
-/*GLSL_TERRAIN_SDF*/
-
-vec4 evaluate_sdf(WorldPos p, int lod) {
-    return terrain_sdf(p, lod);
-}
-
-/*GLSL_SKIRT_SDF*/
+/*GLSL_VERTEX_GRADIENT*/
 
 /*GLSL_QEF_VERTEX*/
 
@@ -115,21 +108,16 @@ void main() {
     const String pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : String(algorithm_pass);
 
     // 2. Inject the dynamic code
-    String bindings = GLSL_BUFFER_BINDING;
-    String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE);
-    String set_chunk;
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        bindings += table->glsl_buffers(6, 7);
-        helpers += GPUFrame::glsl_int64();
-        set_chunk = table->glsl_set_chunk();
-    }
+    const SDFGpuTable *table = sdf->get_gpu_table();
+    const String bindings = String(GLSL_BUFFER_BINDING) + table->glsl_buffers(6, 7);
+    const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
+    const String set_chunk = table->glsl_set_chunk();
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/", bindings);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
-    shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
     shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
-    shader = CascadeGLSL::fill_mesher_pass(shader, pass, p_name == "third");
+    shader = CascadeGLSL::fill_mesher_pass(shader, pass);
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
     // 3. Create a Shader Source object
@@ -264,7 +252,7 @@ if (active_edge_count > 0) {
 
     vec3 chunk_vertex = local_vertex+vec3(cell_chunk_coordinate);
 
-    vec3 surface_normal = vertex_normal(vec3(0.0), skirt_sdf(chunk,chunk_vertex,chunk_param).xyz);
+    vec3 surface_normal = vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
     uint packed_normal = packSnorm4x8(vec4(surface_normal, 0.0));
 
     // 3. Triangle Metadata (3 bit mask for X/Y/Z quad generation in Dual Contouring/Surface nets)
@@ -384,15 +372,13 @@ void GPUMesher::_initialize_gpu_compute() {
     uniforms.push_back(create_storage_uniform(4, buffer_output_point));
     uniforms.push_back(create_storage_uniform(5, buffer_chunk_param, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
 
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        // Sized for the capacity up front; the records arrive with the first batch (process_queue).
-        buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
-        const uint64_t list_words = uint64_t(chunk_batch_number) * table->max_chunk_list(); // no list is longer (build_lists)
-        table_list_capacity = list_words * 4;
-        buffer_table_list = rd->storage_buffer_create(table_list_capacity);
-        uniforms.push_back(create_storage_uniform(6, buffer_table_records));
-        uniforms.push_back(create_storage_uniform(7, buffer_table_list));
-    }
+    // The table, sized for the capacity up front; the records arrive with the first batch (process_queue).
+    const SDFGpuTable *table = sdf->get_gpu_table();
+    buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
+    table_list_capacity = uint64_t(chunk_batch_number) * table->max_chunk_list() * 4; // no list is longer (build_lists)
+    buffer_table_list = rd->storage_buffer_create(table_list_capacity);
+    uniforms.push_back(create_storage_uniform(6, buffer_table_records));
+    uniforms.push_back(create_storage_uniform(7, buffer_table_list));
 
     shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS, "second");
     shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS, "third");
@@ -557,14 +543,12 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
         const PackedByteArray &p_table_records) {
     // The instance table (archetype instances): the records the main thread captured with this batch's
     // lists (same snapshot) when they changed, then the lists.
-    if (buffer_table_records.is_valid()) {
-        if (!p_table_records.is_empty()) {
-            SDFGpuTable::upload_records(rd, buffer_table_records, p_table_records);
-        }
-        if (!p_table_list.is_empty()) {
-            ERR_FAIL_COND_MSG(uint64_t(p_table_list.size()) > table_list_capacity, "GPUMesher: batch instance list over its buffer.");
-            rd->buffer_update(buffer_table_list, 0, p_table_list.size(), p_table_list);
-        }
+    if (!p_table_records.is_empty()) {
+        SDFGpuTable::upload_records(rd, buffer_table_records, p_table_records);
+    }
+    if (!p_table_list.is_empty()) {
+        ERR_FAIL_COND_MSG(uint64_t(p_table_list.size()) > table_list_capacity, "GPUMesher: batch instance list over its buffer.");
+        rd->buffer_update(buffer_table_list, 0, p_table_list.size(), p_table_list);
     }
     // 1. RESET ATOMIC COUNTERS TO 0
     rd->buffer_clear(buffer_atomic_counter, 0, 2 * (1 + chunk_batch_number) * sizeof(uint32_t));
@@ -902,11 +886,10 @@ void GPUMesher::process_queue() {
         for (uint32_t i = 0; i < count; i++) {
             in_flight_ids.push_back(unpacked_chunks[i].chunk_id);
         }
-        if (SDFGpuTable *table = sdf->get_gpu_table()) {
-            table->build_lists(in_flight_ids, chunk_param, new_batch, table_list);
-            if (table->version() != sent_table_version) {
-                table_records = table->record_bytes(sent_table_version, sent_table_version);
-            }
+        SDFGpuTable *table = sdf->get_gpu_table();
+        table->build_lists(in_flight_ids, chunk_param, new_batch, table_list);
+        if (table->version() != sent_table_version) {
+            table_records = table->record_bytes(sent_table_version, sent_table_version);
         }
         mutex->lock();
         input_chunk_id = new_batch;

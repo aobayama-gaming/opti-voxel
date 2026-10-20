@@ -634,9 +634,9 @@ void VoxelTerrain::_ready() {
 
     // One terrain, the cascade: mode 2 is its continents preset, 4 its flat preset under the shapes gallery.
     if (terrain_mode == 2) {
-        sdf->preset = 1;
+        sdf->preset = SDFCascade::Preset::CONTINENTS;
     } else if (terrain_mode == 4) {
-        sdf->preset = 2;
+        sdf->preset = SDFCascade::Preset::FLAT;
         sdf->set_scene(SDFTable::Scene::SHAPES);
     }
     sdf->set_scatter(archetype_instances, archetype_instance_area);
@@ -709,7 +709,7 @@ void VoxelTerrain::_ready() {
             skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
         }
         direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
-        if (terrain_mode == 2) {
+        if (sdf->preset == SDFCascade::Preset::CONTINENTS) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
             const double sea_m = double(sdf->get_datum_y() - chunk_param.origin_voxel().y) * chunk_param.voxel_size;
             direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
@@ -1121,8 +1121,8 @@ Dictionary VoxelTerrain::get_debug_stats() {
     origin["voxel"] = WorldCoord::to_string(chunk_param.origin_voxel());
     origin["chunk"] = WorldCoord::to_string(chunk_param.origin_chunk);
     d["world_origin"] = origin;
-    if (SDFGpuTable *table = sdf ? sdf->get_gpu_table() : nullptr) {
-        d["table"] = table->get_stats();
+    if (sdf) {
+        d["table"] = sdf->get_gpu_table()->get_stats();
     }
     d["frames"] = (int64_t)exec_time;
     d["load_complete"] = is_load_complete();

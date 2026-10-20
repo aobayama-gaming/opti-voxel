@@ -28,13 +28,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 /*GLSL_HELPER_FUNCTION*/
 
-/*GLSL_TERRAIN_SDF*/
-
-vec4 evaluate_sdf(WorldPos p, int lod) {
-    return terrain_sdf(p, lod);
-}
-
-/*GLSL_SKIRT_SDF*/
+/*GLSL_VERTEX_GRADIENT*/
 
 /*GLSL_QEF_VERTEX*/
 
@@ -132,25 +126,19 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
     const String pass = dual_contouring && vertex_pass ? dual_contouring_pass(p_pass) : String(p_pass);
     String shader = DIRECT_TEMPLATE;
-    // The instance table (archetype instances) adds the DefRecord/List buffers at 8/9, the exact int64
-    // helpers (i64_sub, for the table's noise lattice) and the ChunkInput global g_sdf_chunk. A terrain
-    // without a table gets exactly the same shader text as before (byte-identical).
-    String bindings = GLSL_DIRECT_BINDINGS;
-    String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE);
-    String set_chunk;
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        bindings += table->glsl_buffers(8, 9);
-        helpers += GPUFrame::glsl_int64();
-        set_chunk = table->glsl_set_chunk();
-    }
+    // The instance table adds the DefRecord/List buffers at 8/9, the exact int64 helpers (i64_sub, for the
+    // table's noise lattice) and the ChunkInput global g_sdf_chunk.
+    const SDFGpuTable *table = sdf->get_gpu_table();
+    const String bindings = String(GLSL_DIRECT_BINDINGS) + table->glsl_buffers(8, 9);
+    const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
+    const String set_chunk = table->glsl_set_chunk();
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", bindings);
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
-    shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
     shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
-    shader = CascadeGLSL::fill_mesher_pass(shader, pass, vertex_pass);
+    shader = CascadeGLSL::fill_mesher_pass(shader, pass);
     RDUtils::dump_shader(String("direct_") + p_name, shader);
 
     Ref<RDShaderSource> source;
@@ -224,15 +212,13 @@ void GPUDirectMesher::_rt_initialize() {
     uniforms.push_back(make_uniform(5, buffer_chunk_param, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
     uniforms.push_back(make_uniform(6, staging_texture, RenderingDevice::UNIFORM_TYPE_IMAGE));
     uniforms.push_back(make_uniform(7, buffer_status, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        // Sized for the capacity up front; the records arrive with the first dispatch (_table_payload).
-        buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
-        const uint64_t list_words = uint64_t(settings.batch_size) * table->max_chunk_list(); // no list is longer (build_lists)
-        table_list_capacity = list_words * 4;
-        buffer_table_list = rd->storage_buffer_create(table_list_capacity);
-        uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-        uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    }
+    // The table, sized for the capacity up front; the records arrive with the first dispatch (_table_payload).
+    const SDFGpuTable *table = sdf->get_gpu_table();
+    buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
+    table_list_capacity = uint64_t(settings.batch_size) * table->max_chunk_list() * 4; // no list is longer (build_lists)
+    buffer_table_list = rd->storage_buffer_create(table_list_capacity);
+    uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     // All passes declare the same bindings, so one set (created against pass 1) serves them all.
     uniform_set = rd->uniform_set_create(uniforms, shaders[1], 0);
 
@@ -348,9 +334,6 @@ void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const 
 }
 
 void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records) {
-    if (!buffer_table_records.is_valid()) {
-        return;
-    }
     // The records the batch's lists were built against (main thread, same snapshot), when they changed.
     if (!p_records.is_empty()) {
         SDFGpuTable::upload_records(rd, buffer_table_records, p_records);
@@ -363,9 +346,6 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
 
 uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records) {
     SDFGpuTable *table = sdf->get_gpu_table();
-    if (!table) {
-        return 0;
-    }
     // Main thread, like the edits: the lists and the records come from the same snapshot.
     table->build_lists(p_chunks, chunk_param, r_ids, r_list);
     const uint32_t version = table->version();
@@ -596,7 +576,7 @@ void GPUDirectMesher::_queue_remesh(const ChunkId &p_chunk) {
 }
 
 void GPUDirectMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
-    const uint32_t version = sdf->get_gpu_table() ? sdf->get_gpu_table()->version() : 0u;
+    const uint32_t version = sdf->get_gpu_table()->version();
     for (const ChunkId &chunk : p_chunks) {
         required_version[chunk] = version;
         _queue_remesh(chunk);

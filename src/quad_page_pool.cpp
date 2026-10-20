@@ -86,7 +86,7 @@ void vertex() {
     v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
     v_lod = float(lod);
     v_chunk = vec3(rel);
-    // skirt_sdf pushed the SDF towards air by clamp(-inside) * depth past the chunk bounds, which lowers
+    // The cascade skirt pushed the SDF towards air by clamp(-inside) * depth past the chunk bounds, which lowers
     // the surface by push / n.y. The push is linear inside a cell, so on a planar surface the vertex lies
     // on the pushed plane and this gives back the exact height.
     float lo = float(skirt_size);

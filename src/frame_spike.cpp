@@ -1011,11 +1011,13 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     code = code.replace("/*TABLE_BUFFERS*/", Archetype::glsl_table_buffers(3, 4));
     code = code.replace("/*HELPERS*/",
             String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE));
-    code = code.replace("/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + R"glsl(vec4 terrain_sdf(WorldPos p, int lod) {
+    const Archetype::Float4 &g = table.ground;
+    code = code.replace("/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + vformat(R"glsl(vec4 terrain_sdf(WorldPos p, int lod) {
     bool touched = false;
-    return arch_finish(arch_fold(vec4(0.0, 0.0, 0.0, 2.0), p, lod, touched), lod);
+    return arch_finish(arch_fold(vec4(%s, %s, %s, %s), p, lod, touched), lod);
 }
-)glsl");
+)glsl",
+                                                                                                           ExactNoise::glsl_float(g.x), ExactNoise::glsl_float(g.y), ExactNoise::glsl_float(g.z), ExactNoise::glsl_float(g.w)));
     code = code.replace("/*LOD_CALLS*/", lod_calls);
 
     Ref<RDShaderSource> source;

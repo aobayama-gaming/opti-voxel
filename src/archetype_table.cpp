@@ -94,7 +94,7 @@ void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, cons
     r_record.max_lod = TableRecord::NEVER_DROPPED;
     r_record.erode = 0.0f;
     r_record.erode_from = 1.0f;
-    if (!p_def.bounded || !p_enabled) {
+    if (!p_enabled) {
         return;
     }
     r_record.erode = p_rule.rate;
@@ -367,18 +367,28 @@ static std::shared_ptr<TableDef> make_def(const char *p_name, int p_param_count,
     return d;
 }
 
+// The bounds of a cube of half size p[0] (a sphere of radius p[0]; the die, the tunnelled cube: their CSG stays
+// inside it), L = 1.
+void cube_bounds(const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+    r_lo = Float3{ -p[0], -p[0], -p[0] };
+    r_hi = Float3{ p[0], p[0], p[0] };
+    r_l = 1.0f;
+}
+
+// The bounds of a box of half sizes p[0], p[1], p[2] (anything carved out of it), L = 1.
+void box_bounds(const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+    r_lo = Float3{ -p[0], -p[1], -p[2] };
+    r_hi = Float3{ p[0], p[1], p[2] };
+    r_l = 1.0f;
+}
+
 } // namespace
 
 TableDefPtr make_sphere_type() {
     Builder b;
     const Reg r = b.sphere(b.t_local(), b.t_param(0));
     std::shared_ptr<TableDef> d = make_def("sphere", 1, b, r);
-    d->bounds = [](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
-        const float rad = p[0];
-        r_lo = Float3{ -rad, -rad, -rad };
-        r_hi = Float3{ rad, rad, rad };
-        r_l = 1.0f;
-    };
+    d->bounds = cube_bounds;
     return d;
 }
 
@@ -386,11 +396,7 @@ TableDefPtr make_box_type() {
     Builder b;
     const Reg r = b.box(b.t_local(), b.t_param(0), b.t_param(1), b.t_param(2));
     std::shared_ptr<TableDef> d = make_def("box", 3, b, r);
-    d->bounds = [](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
-        r_lo = Float3{ -p[0], -p[1], -p[2] };
-        r_hi = Float3{ p[0], p[1], p[2] };
-        r_l = 1.0f;
-    };
+    d->bounds = box_bounds;
     return d;
 }
 
@@ -514,22 +520,11 @@ TableDefPtr make_swiss_cube_type(int p_holes) {
         r = b.max(r, b.neg(hole));
     }
     std::shared_ptr<TableDef> d = make_def("swiss_cube", 5, b, r);
-    d->bounds = [](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
-        r_lo = Float3{ -p[0], -p[1], -p[2] };
-        r_hi = Float3{ p[0], p[1], p[2] };
-        r_l = 1.0f;
-    };
+    d->bounds = box_bounds;
     return d;
 }
 
 namespace {
-
-// The bounds of a cube of half size p[0] (the die, the tunnelled cube: their CSG stays inside it), L = 1.
-void cube_bounds(const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
-    r_lo = Float3{ -p[0], -p[0], -p[0] };
-    r_hi = Float3{ p[0], p[0], p[0] };
-    r_l = 1.0f;
-}
 
 // p_l moved by -p_h (p_x, p_y, p_z): a point of the instance's frame in units of the half size p_h.
 Local shifted(Builder &p_b, const Local &p_l, Reg p_h, float p_x, float p_y, float p_z) {
@@ -608,13 +603,9 @@ double rotation_margin(Float3 p_lo, Float3 p_hi) {
     return 1.0 + 1e-4 * reach;
 }
 
-Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded, const VoxelPos &p_anchor, const float *p_r) {
+Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, const VoxelPos &p_anchor, const float *p_r) {
     Bounds b;
     b.lipschitz = p_lipschitz;
-    b.bounded = p_bounded;
-    if (!b.bounded) {
-        return b;
-    }
     double lo[3] = { INFINITY, INFINITY, INFINITY };
     double hi[3] = { -INFINITY, -INFINITY, -INFINITY };
     for (int c = 0; c < 8; c++) {
@@ -637,7 +628,7 @@ Bounds record_world_bounds(const TableDef &p_def, const TableRecord &p_record) {
     Float3 lo{}, hi{};
     float lipschitz = 1.0f;
     p_def.bounds(p_record.params, lo, hi, lipschitz);
-    return world_bounds(lo, hi, lipschitz, p_def.bounded, p_record.anchor, p_record.rotation);
+    return world_bounds(lo, hi, lipschitz, p_record.anchor, p_record.rotation);
 }
 
 String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent) {
@@ -647,9 +638,6 @@ String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int6
         }
     }
     const double smooth = 2.0 * double(p_record.k);
-    if (!p_def.bounded) {
-        return smooth <= double(p_max_extent) ? String() : vformat("twice k is more than the %d voxels the table takes.", p_max_extent);
-    }
     Float3 lo{}, hi{};
     float lipschitz = 1.0f;
     p_def.bounds(p_record.params, lo, hi, lipschitz);

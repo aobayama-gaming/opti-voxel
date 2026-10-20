@@ -159,7 +159,8 @@ constexpr ItemFills CHUNK_FILLS = {
     "chunk_param.chunk_size - 1",
     R"glsl(    /*DEBUG_STORE*/
     precise vec4 r = /*SAMPLE_SDF*/;
-    // skirt_sdf (gpu_glsl.hpp), the same formula and order, precise; the depth is per LOD.
+    // Skirt: past the chunk bounds the SDF is pushed towards air by up to the LOD's skirt depth, so the rim turns
+    // down under the neighbour's surface; inside the bounds it is untouched. SDFCascade::with_skirt, same order, precise.
     if (chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0) {
         vec3 grid = vec3(i);
         precise float lo = float(chunk_param.skirt_size);
@@ -427,21 +428,8 @@ bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPo
     return true;
 }
 
-String fill_mesher_pass(const String &p_shader, const String &p_pass, bool p_vertex_pass) {
-    String pass = p_pass;
-    if (p_vertex_pass) {
-        // GPUDirectMesher and GPUMesher spell the call differently.
-        const char *calls[] = { "skirt_sdf(chunk, chunk_vertex, chunk_param).xyz", "skirt_sdf(chunk,chunk_vertex,chunk_param).xyz" };
-        bool found = false;
-        for (const char *call : calls) {
-            if (pass.contains(call)) {
-                pass = pass.replace(call, "cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex)");
-                found = true;
-            }
-        }
-        ERR_FAIL_COND_V_MSG(!found, p_shader, "CascadeGLSL: the vertex pass has no skirt_sdf normal call to replace.");
-    }
-    return p_shader.replace("/*GLSL_SKIRT_SDF*/", String(GLSL_SKIRT_SDF) + GLSL_VERTEX_GRADIENT).replace("/*GLSL_ALGORITHM_PASS*/", pass);
+String fill_mesher_pass(const String &p_shader, const String &p_pass) {
+    return p_shader.replace("/*GLSL_VERTEX_GRADIENT*/", GLSL_VERTEX_GRADIENT).replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
 }
 
 } // namespace CascadeGLSL

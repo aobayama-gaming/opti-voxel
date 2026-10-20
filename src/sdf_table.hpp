@@ -132,18 +132,17 @@ private:
     // handful of entries for it, and at most 2^29 so that box_lo minus the influence margin (clamped to INPUT_LIMIT
     // = 2^30) stays in int32 on the GPU (arch_in_box).
     int64_t max_instance_extent() const;
-    // p_band false: whole at every LOD whatever set_instance_band says.
-    void finish_record(Archetype::TableRecord &r_rec, bool p_band = true) const;
+    // The band rule, unless set_instance_band(false) or in the shapes gallery: a crease test at every LOD (its ladder
+    // is sized one cube per LOD), where eroding the thin frames tears them.
+    void finish_record(Archetype::TableRecord &r_rec) const;
     // The changed record's margins and LODs, then a new snapshot (the previous base plus the edited records'
     // overlay) over the edit region.
     void finish_edit(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id);
     static VoxelBox record_box(const Archetype::TableRecord &p_rec);
+    float voxels(double p_metres) const;
     // A record of type p_type at (p_x, p_z) metres, p_dy_m above the ground there, turned by p_yaw about y, smooth
-    // radius p_k_m metres, appended (p_band: finish_record's).
-    void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw,
-            bool p_band = true);
-    // The gallery is not banded: a crease test at every LOD (its ladder is sized one cube per LOD), and eroding its
-    // thin frames tears them.
+    // radius p_k_m metres, appended.
+    void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw);
     void add_shapes(const Types &p_types);
     void add_scatter(const Types &p_types);
     // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.

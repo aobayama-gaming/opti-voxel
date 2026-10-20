@@ -30,13 +30,10 @@ namespace Archetype {
 // sample them.
 inline constexpr float PERLIN3_MAX = 1.5f;
 inline constexpr float PERLIN3_GRAD_MAX = 7.0f;
-inline constexpr float PERLIN2_MAX = 2.0f;
-inline constexpr float PERLIN2_GRAD_MAX = 8.5f;
 
 // A world box (LOD0 voxels, int64, inclusive) and a Lipschitz bound: outside the box the value is >= the distance
 // to it (voxels), and the gradient's length is <= L (per LOD0 voxel).
 struct Bounds {
-    bool bounded = true;
     VoxelPos lo;
     VoxelPos hi;
     float lipschitz = 1.0f;
@@ -56,14 +53,13 @@ double rotation_margin(Float3 p_lo, Float3 p_hi);
 
 // The world box (LOD0 voxels, int64, inclusive) of a local box (p_lo, p_hi) placed at p_anchor with rotation p_r:
 // the corners rotated back (R^T q) and rounded out, plus rotation_margin.
-Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded, const VoxelPos &p_anchor, const float *p_r);
+Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, const VoxelPos &p_anchor, const float *p_r);
 
 // A library type: a program in the record's frame and a bounds function of its parameters.
 struct TableDef {
     Program program;
     String name;
     int param_count = 0;
-    bool bounded = true;
     // Local (unrotated) box and Lipschitz bound (voxels) for the given params.
     std::function<void(const float *p_params, Float3 &r_lo, Float3 &r_hi, float &r_lipschitz)> bounds;
 };
@@ -88,7 +84,7 @@ struct TableRecord {
     bool removed = false; // an edit removed it: kept in the array (stable ids), skipped by the index
     Combine op = Combine::UNION;
     float k = 0.0f; // smooth radius (voxels)
-    float inv_k = 0.0f; // 1 / k, precomputed (never divided on the GPU)
+    float inv_k = 0.0f; // 1 / k, precomputed (never divided on the GPU): set both with set_k
     VoxelPos anchor;
     float rotation[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
     float params[8] = {};
@@ -106,6 +102,10 @@ struct TableRecord {
 
     static constexpr uint8_t NEVER_DROPPED = 255;
     bool listed_at(int p_lod) const { return p_lod < max_lod; }
+    void set_k(float p_k) {
+        k = p_k;
+        inv_k = p_k > 0.0f ? float(1.0 / double(p_k)) : 0.0f;
+    }
 
     DefRecord def_record() const;
 };

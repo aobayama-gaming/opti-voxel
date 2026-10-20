@@ -39,12 +39,15 @@ public:
     // HERMITE8 stays implemented and proven (tools/cascade_test.sh checks both).
     Cascade::ChannelSet channel_set = Cascade::ChannelSet::LINEAR4;
 
-    // Set before configure(). 0: every octave at STEEPNESS (capped at MAX_AMP_M). 1 (continents, demo):
+    // Set before configure(). DEFAULT: every octave at STEEPNESS (capped at MAX_AMP_M). CONTINENTS:
     // the same octaves with an amplitude per wavelength (continent_amp_m), so continents, ocean basins and
     // mountain ranges show at their own scales. Only the amplitudes differ: lattices, seeds and the
-    // cascade are the same, so both presets are the same proven code path. 2 (flat, the shapes gallery): every
-    // amplitude 0 and the ground at FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
-    int preset = 0;
+    // cascade are the same, so both presets are the same proven code path. FLAT (the shapes gallery): no
+    // band and the ground at FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
+    enum class Preset { DEFAULT,
+        CONTINENTS,
+        FLAT };
+    Preset preset = Preset::DEFAULT;
     // The flat preset's ground: 50 m below the datum, halfway between the page shader's 100 m contour lines. On one
     // (300 m), a flat ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
     static constexpr double FLAT_GROUND_M = DATUM_M - 50.0;
@@ -82,9 +85,14 @@ public:
         spec = CascadeTerrain::make_spec(SEED, p_lod_count + 4, STEEPNESS, channel_set, INSERT_SHIFT);
         const double cap = MAX_AMP_M / vs;
         for (Cascade::Band &b : spec.bands) {
-            b.amp = preset == 1 ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : (preset == 2 ? 0.0f : float(MIN(double(b.amp), cap)));
+            b.amp = preset == Preset::CONTINENTS ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
         }
-        datum = VoxelPos(0, std::llround((preset == 2 ? FLAT_GROUND_M : DATUM_M) / vs), 0);
+        if (preset == Preset::FLAT) {
+            // Flat: no band at all (the same lattice, without inserting zeros at every level).
+            spec.top = spec.top_level();
+            spec.bands.clear();
+        }
+        datum = VoxelPos(0, std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : DATUM_M) / vs), 0);
         voxel_size = p_param.voxel_size;
         build_table(p_lod_count);
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
@@ -136,12 +144,6 @@ public:
         return sdf(ch, p_pos.voxel.y, p_lod).w;
     }
 
-    // evaluate_cull() over the WorkerThreadPool: the CPU discoverer's corner batches (and the GPU discoverer's
-    // oracle and fallback).
-    void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const override {
-        evaluate_batch_parallel(p_points, p_count, p_lod, r_out);
-    }
-
     // The channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod (Cascade::point_into).
     void channels_at(const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
         Cascade::point_into(spec, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod, r_ch);
@@ -178,8 +180,7 @@ public:
     }
 
     // The meshers' sdf_sample at vertex-grid point p_grid of a LOD-p_lod chunk: p_r (sdf() or sample_sdf()) plus the
-    // skirt (gpu_glsl.hpp's skirt_sdf formula, written out in the same order, with the depth from skirt_depth_m;
-    // cascade_glsl.hpp).
+    // skirt (the cascade level pass's formula, cascade_glsl.cpp, in the same order, with the depth from skirt_depth_m).
     ExactNoise::Float4 with_skirt(ExactNoise::Float4 r, int p_lod, const Float3 &p_grid) const {
         if (param.skirt_size > 0 && param.skirt_depth > 0.0f) {
             const float lo = float(param.skirt_size);
@@ -229,17 +230,10 @@ public:
         return lo;
     }
 
-    // terrain_sdf is a NaN stub: the meshers' templates reference it, but in cascade mode the sdf pass
-    // and the vertex normals are replaced by the cascade passes (a stray call would show as NaN vertices).
     // cascade_terrain_sdf is sdf(), for the discoverer's point items and the batches with no instance listed.
     String get_glsl_code() const override {
         using namespace ExactNoise;
         String code = R"glsl(
-// SDFCascade: lattice points only, see cascade_terrain_sdf and the cascade passes.
-vec4 terrain_sdf(WorldPos p, int lod) {
-    return vec4(uintBitsToFloat(0x7FC00000u));
-}
-
 // CascadeTerrain::height_sdf (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
 vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
     precise float s = exact_pow2(-lod);

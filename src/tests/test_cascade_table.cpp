@@ -11,7 +11,7 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// A configured cascade terrain with the --instances scatter (rocks and pillars around the demo spot).
+// A configured cascade terrain with the --instances scatter (rocks and pillars around SDFTable::SCENE_X / Z).
 struct ScatteredCascade {
     ChunkParam param;
     SDFCascade sdf;
@@ -223,7 +223,7 @@ TEST_CASE("SDFCascade table: the shapes gallery on the flat preset: cubes holed 
     ChunkParam param;
     const double vs = param.voxel_size;
     SDFCascade sdf;
-    sdf.preset = 2;
+    sdf.preset = SDFCascade::Preset::FLAT;
     sdf.set_scene(SDFTable::Scene::SHAPES);
     sdf.configure(param, 25);
     for (int i = 0; i < sdf.get_library().size(); i++) {

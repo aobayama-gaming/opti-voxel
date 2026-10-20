@@ -261,7 +261,7 @@ inline constexpr const char GLSL_VERTEX_NORMAL[] = R"glsl(
 // The vertex normal: the SDF gradient at the vertex, else p_fallback (dual contouring: the mean of the
 // Hermite normals), else straight up. A NaN normal drops the vertex: a broken quad, a hole. The gradient
 // vanishes exactly on a medial axis, and a cell symmetric about one puts its vertex there: a capsule
-// thinner than the cell on a lattice line (the scatter's pillars, the demo's trunks at LOD 2). The shape
+// thinner than the cell on a lattice line (the scatter's pillars, thin trunks at LOD 2). The shape
 // is finer than the cell, so the corner and Hermite gradients cancel by the same symmetry: any finite
 // normal will do.
 vec3 vertex_normal(vec3 p_fallback, vec3 p_gradient) {
@@ -293,34 +293,3 @@ inline godot::String dual_contouring_pass(const godot::String &p_pass) {
             "dual_contouring_pass: the vertex pass no longer spells its mass point or normal line.");
     return p_pass.replace(GLSL_MASS_POINT_VERTEX, GLSL_QEF_VERTEX_CALL).replace(GLSL_SURFACE_NORMAL, GLSL_QEF_SURFACE_NORMAL);
 }
-
-inline constexpr const char GLSL_SKIRT_SDF[] = R"glsl(
-
-// Signed distance of a vertex-grid coordinate to the chunk bounds along one axis, in voxels of the
-// chunk's LOD: positive inside, negative in the overhang. The grid overhangs by skirt_size voxels on
-// the min side (index skirt_size is the chunk's minimum) and skirt_size - 1 on the max side.
-float _skirt_inside_distance(float coord, ChunkParam chunk_param){
-    float lo = float(chunk_param.skirt_size);
-    float hi = lo + chunk_voxel_dimension(chunk_param);
-    return min(coord - lo, hi - coord);
-}
-
-// Skirt: past the chunk bounds the SDF is pushed towards air by up to skirt_depth voxels, so the
-// overhanging rim of the mesh turns down into the solid and hides under the neighbour's surface
-// (which covers that overhang), whatever its LOD. Inside the bounds the SDF is untouched, so the
-// visible surface is exact. The gradient (normal) stays the base one.
-vec4 skirt_sdf(ChunkFrame chunk, vec3 point_coord, ChunkParam chunk_param){
-
-    vec4 base_sdf = evaluate_sdf(world_pos_from_grid(chunk, point_coord, chunk_param), chunk.lod);
-
-    if(chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0){
-        float inside = min(_skirt_inside_distance(point_coord.x, chunk_param),
-                       min(_skirt_inside_distance(point_coord.y, chunk_param),
-                           _skirt_inside_distance(point_coord.z, chunk_param)));
-        float depth_m = chunk_param.skirt_depth * chunk_param.voxel_size * float(chunk.lod_size);
-        base_sdf.w += clamp(-inside, 0.0, 1.0) * depth_m;
-    }
-    return base_sdf;
-}
-
-)glsl";

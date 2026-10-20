@@ -113,7 +113,7 @@ to every change, and a reviewer may reject a PR on any of them.
   `src/world_coord.hpp`). Chunk ids are chunk centres in chunk-id units (half a LOD0 chunk = 14
   voxels); LOD0 ids are odd, a LOD-L id has its lowest set bit at L.
 - The SDF takes a `WorldPos` (LOD0 voxel + float fraction in [0, 1)) and the chunk's LOD:
-  `SDFBase::evaluate(const WorldPos &, int lod)`, GLSL `vec4 terrain_sdf(WorldPos p, int lod)` (the
+  `SDFBase::evaluate(const WorldPos &, int lod)`, GLSL `cascade_sample_sdf(c0, WorldPos p, int lod, chunk)` (the
   meshers pass `ChunkFrame::lod`, the discoverer and validator `ChunkMath::get_lod`). The same point
   reached from two chunks gives a bit-identical `WorldPos`.
 - GPU (`src/gpu_frame.hpp`): low 32 bits with wrapping arithmetic (exact for differences under 2^31),
@@ -167,11 +167,11 @@ to every change, and a reviewer may reject a PR on any of them.
   height field, octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m,
   absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
   make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`
-  picks a preset: 1 the default, 2 continents, 4 flat (every amplitude 0, the ground at `FLAT_GROUND_M` = 250 m, off
+  picks a preset: 1 the default, 2 continents, 4 flat (`SDFCascade::Preset::FLAT`: no band, the ground at `FLAT_GROUND_M` = 250 m, off
   the page shader's 100 m contours) under the shapes gallery (`SDFTable::Scene::SHAPES`, `--terrain=shapes`,
   `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG cubes holed through every face, each twice the size and
   distance of the last, i.e. one per LOD, plus a die, stairs and a tunnelled cube, for dual contouring's creases; the
-  composites are library types: `swiss_cube`, `die`, `stairs`, `tunnel_cube`). 0 was `SDFDummy` (it evaluated every
+  composites are library types: `swiss_cube`, `die`, `stairs`, `tunnel_cube`; nothing in that scene is banded, its thin frames would tear). 0 was `SDFDummy` (it evaluated every
   octave at every LOD: detail finer than the cell, aliased far away) and 3 `SDFArchetype` (a plain fBm ground, and
   instances compiled into its program), both removed. `--terrain=cascade|continents|shapes` in `bench.gd` and the
   main scene (`godot --path project -- --lods=25`). Outside the shapes gallery the player spawns 200 m above the
@@ -322,9 +322,9 @@ to every change, and a reviewer may reject a PR on any of them.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
-  `terrain_sdf` (a NaN stub): vertex normals are the trilinear blend of the cell's 8 sample gradients
+  `terrain_sdf`: vertex normals are the trilinear blend of the cell's 8 sample gradients
   (`CascadeGLSL::GLSL_VERTEX_GRADIENT`), in both meshers. A new cascade terrain keeps this rule.
-- Cascade code is only added to a mesher shader in cascade mode, and `GLSL_EXACT_NOISE` is spliced from fragments it shares with
+- `GLSL_EXACT_NOISE` is spliced from fragments it shares with
   `GLSL_PERLIN3_CROSS` (FNV unit test on its text). `OPTI_VOXEL_SHADER_DUMP=<dir>` writes every composed
   shader to `<dir>/<name>_<hash>.glsl` to compare two builds.
 
@@ -395,11 +395,11 @@ to every change, and a reviewer may reject a PR on any of them.
   their 8 corners, deduplicated on the voxel (~6 nodes share a corner), evaluated in one batch
   (`SDFBase::evaluate_batch`; `SDFCascade` spreads it over the `WorkerThreadPool` with the
   allocation-free `Cascade::point_into`). `VoxelTerrain.discoverer_mode` / `--discoverer=cpu|gpu` (bench
-  and player): -1 auto (default: GPU for a cascade terrain, CPU otherwise), 0 CPU, 1 GPU. The GPU path,
+  and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
   `DiscovererGPU` (`src/discoverer_gpu.*`), runs the cascade passes on point items
   (`CascadePasses::create_points`) on a **local RenderingDevice owned by the discoverer thread**: created
   at the top of `discovery_loop` and freed there before the thread exits; no other thread may touch it,
-  and it does nothing on the main RD or the render thread. No local device (headless) or no cascade: one
+  and it does nothing on the main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
   scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
   (and `--lods=25`) after touching the discoverer, the cascade passes or `DiscovererGPU`.

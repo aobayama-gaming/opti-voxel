@@ -25,7 +25,7 @@ var base_near := 0.05
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
-var cascade_terrain: Node = null  # set unless the shapes gallery
+var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
 var cached_altitude := 0.0
 var altitude_age := 1.0
 
@@ -123,7 +123,7 @@ func _ready():
 		far_lods_terrain = terrain
 		base_near = camera.near
 	if terrain and terrain.terrain_mode != 4:  # the shapes gallery keeps the scene's spawn
-		cascade_terrain = terrain
+		altitude_terrain = terrain
 		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
@@ -381,12 +381,12 @@ func _process(delta: float) -> void:
 
 	var direction = (transform.basis * input_dir).normalized()
 	var move_speed := speed
-	if cascade_terrain:
+	if altitude_terrain:
 		# Cascade terrain: kilometre-scale relief, fly faster when high (half the altitude per second).
 		# The altitude is a CPU cascade point query: refreshed 4 times per second.
 		altitude_age += delta
 		if altitude_age >= 0.25:
 			altitude_age = 0.0
-			cached_altitude = absf(cascade_terrain.get_sdf_at(camera.global_position))
+			cached_altitude = absf(altitude_terrain.get_sdf_at(camera.global_position))
 		move_speed = maxf(speed, cached_altitude * 0.5)
 	position += direction * move_speed * delta

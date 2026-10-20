@@ -25,7 +25,6 @@
 #include "mesh_validator.hpp"
 #include "page_auditor.hpp"
 
-//debug
 #include "sdf_cascade.hpp"
 
 using namespace godot;
@@ -198,14 +197,14 @@ public:
     void set_world_origin_z(int64_t p_voxel);
     int64_t get_world_origin_z() const;
 
-    // Archetype demo scene: a deterministic scatter of --instances rocks and pillars in a square of side
-    // --instance_area metres around the fixed objects. Must be set before the node enters the tree.
+    // A deterministic scatter of --instances rocks and pillars on the ground, in a square of side
+    // --instance_area metres around SDFTable::SCENE_X / Z. Must be set before the node enters the tree.
     void set_archetype_instances(int p_count);
     int get_archetype_instances() const;
     void set_archetype_instance_area(double p_area);
     double get_archetype_instance_area() const;
-    // Archetype demo scene: a forest of about --trees grown trees (tree_archetype.hpp) in a square of side
-    // --tree_area metres around the demo objects. Set before the node enters the tree.
+    // A forest of about --trees grown trees (tree_archetype.hpp) in a square of side
+    // --tree_area metres around SDFTable::SCENE_X / Z. Set before the node enters the tree.
     void set_archetype_trees(int p_count);
     int get_archetype_trees() const;
     void set_archetype_tree_area(double p_area);

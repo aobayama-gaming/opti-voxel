@@ -48,12 +48,12 @@ extends Node3D
 ##                                SDFCascade; continents: its continents preset; shapes: its flat preset under the
 ##                                hard-CSG shapes gallery, SDFTable::Scene::SHAPES)
 ##   Instances (around x -50 z -150 m, on the ground):
-##   --instances=N                scatter N rocks/pillars around the demo objects (default 0)
+##   --instances=N                scatter N rocks/pillars (default 0)
 ##   --instance_area=M            side of the scatter square, metres (default 200)
 ##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
 ##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1; 0.5 keeps trunks a LOD longer)
 ##   --instance_resolve=F         a part erodes only once its half thickness is under F cells (default 0: from LOD 1)
-##   --trees=N                    a forest of about N grown trees around the demo objects (default 0)
+##   --trees=N                    a forest of about N grown trees (default 0)
 ##   --tree_area=M                side of the forest square, metres (default 60)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)

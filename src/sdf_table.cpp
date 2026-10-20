@@ -16,8 +16,7 @@ int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_
     TableRecord rec;
     rec.def = uint8_t(p_type);
     rec.op = Combine(p_op);
-    rec.k = p_k;
-    rec.inv_k = p_k > 0.0f ? float(1.0 / double(p_k)) : 0.0f;
+    rec.set_k(p_k);
     rec.anchor = p_anchor;
     if (p_rotation) {
         std::copy(p_rotation, p_rotation + 9, rec.rotation);
@@ -136,8 +135,8 @@ int64_t SDFTable::max_instance_extent() const {
     return MIN(4 * top_span, int64_t(1) << 29);
 }
 
-void SDFTable::finish_record(TableRecord &r_rec, bool p_band) const {
-    Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band && p_band, erode_rule);
+void SDFTable::finish_record(TableRecord &r_rec) const {
+    Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band && scene != Scene::SHAPES, erode_rule);
 }
 
 void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id) {
@@ -188,13 +187,16 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     gpu.set_scene_stats(scene);
 }
 
-void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw, bool p_band) {
+float SDFTable::voxels(double p_metres) const {
+    return float(p_metres / param.voxel_size);
+}
+
+void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw) {
     const double vs = param.voxel_size;
     TableRecord rec;
     rec.def = uint8_t(p_type);
     rec.op = p_op;
-    rec.k = float(p_k_m / vs);
-    rec.inv_k = rec.k != 0.0f ? float(1.0 / double(rec.k)) : 0.0f;
+    rec.set_k(voxels(p_k_m));
     std::copy(p_params, p_params + 8, rec.params);
     const int64_t x = std::llround(p_x / vs), z = std::llround(p_z / vs);
     rec.anchor = VoxelPos(x, ground_y(x, z) + std::llround(p_dy_m / vs), z);
@@ -202,13 +204,12 @@ void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_para
     const float rot[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
     std::copy(rot, rot + 9, rec.rotation);
     rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
-    finish_record(rec, p_band);
+    finish_record(rec);
     records.push_back(rec, version + 1);
 }
 
 void SDFTable::add_shapes(const Types &p_types) {
-    const double vs = param.voxel_size;
-    auto v = [vs](double p_metres) { return float(p_metres / vs); };
+    auto v = [this](double p_metres) { return voxels(p_metres); };
     // The cube ladder: centres at 0.9 of the half size, a little sunk, so the voxel rounding never lifts one off the
     // ground.
     for (int i = 0; i < 8; i++) {
@@ -216,22 +217,21 @@ void SDFTable::add_shapes(const Types &p_types) {
         const double h = 0.1 * d;
         const double theta = (-45.5 + 13.0 * i) * Math_PI / 180.0;
         const float params[8] = { v(h), v(h), v(h), 0, v(1.2 * h), 0, 0, 0 };
-        place(Combine::UNION, 0.0, p_types.holed_cube, params, SHAPES_X + d * std::sin(theta), SHAPES_Z - d * std::cos(theta), 0.9 * h, 0.5 - theta, false);
+        place(Combine::UNION, 0.0, p_types.holed_cube, params, SHAPES_X + d * std::sin(theta), SHAPES_Z - d * std::cos(theta), 0.9 * h, 0.5 - theta);
     }
     const double h = 6.0;
     const float die[8] = { v(h), 0, 0, 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.die, die, SHAPES_X - 25.0, SHAPES_Z + 40.0, 0.95 * h, 0.4, false);
+    place(Combine::UNION, 0.0, p_types.die, die, SHAPES_X - 25.0, SHAPES_Z + 40.0, 0.95 * h, 0.4);
     // Eight 1 m steps, 2 m deep, 8 m wide, rising away from the spawn.
     const float stairs[8] = { v(4.0), v(1.0), v(1.0), 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.stairs, stairs, SHAPES_X, SHAPES_Z + 33.0, 0.0, 0.3, false);
+    place(Combine::UNION, 0.0, p_types.stairs, stairs, SHAPES_X, SHAPES_Z + 33.0, 0.0, 0.3);
     // 5 m square tunnels along x, y and z.
     const float tunnels[8] = { v(h), v(2.5), 0, 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.tunnel_cube, tunnels, SHAPES_X + 25.0, SHAPES_Z + 40.0, 0.9 * h, 0.6, false);
+    place(Combine::UNION, 0.0, p_types.tunnel_cube, tunnels, SHAPES_X + 25.0, SHAPES_Z + 40.0, 0.9 * h, 0.6);
 }
 
 void SDFTable::add_scatter(const Types &p_types) {
-    const double vs = param.voxel_size;
-    auto v = [vs](double p_metres) { return float(p_metres / vs); };
+    auto v = [this](double p_metres) { return voxels(p_metres); };
     for (int i = 0; i < scatter_count; i++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0x5CA7u, 0x7E12u });
         const double px = SCENE_X + (double(h.x >> 8) / 16777216.0 - 0.5) * scatter_area;
