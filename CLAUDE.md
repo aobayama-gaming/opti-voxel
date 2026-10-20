@@ -366,12 +366,16 @@ to every change, and a reviewer may reject a PR on any of them.
   the batch's results for the chunks that loaded nothing); a `{GROUND}` palette, or one that finds no room (`full`),
   uses block 0 and draws as ground. The page shader reads header -> palette -> id -> `material_tex`
   (`Material::Library::make_image`, owned by the mesher) for corners of index > 0, and replaces the ground colours with
-  the material's albedo, roughness and emission (lava: `PATTERN_LAVA`'s crust; `material_shading`). **Blend:** each
-  vertex reads its quad's four corners: a = corner A's material, b = the first other one (`flat ivec2 v_materials`),
-  and its weight is 1 on b's corners (`v_blend`, the only interpolant). Every corner derives the same pair, so the
-  weight is continuous across quads; a third material inside one quad draws as a. The fragment shades b where the
-  weight, jittered by a value noise of about a cell of the chunk's LOD, crosses 1/2 (a smoothstep at least a pixel
-  wide): one material per fragment except on borders. `--view=9` shows the ids, blended (V reaches it in the player). Legacy
+  the material's albedo, roughness and emission (lava: `PATTERN_LAVA`'s crust; `material_shading`). **Blend:** corner A (the
+  provoking vertex) reads the quad's other corners: a = its material, b = the first other one, plus a 4-bit mask of the
+  corners that are not a, packed above b's id (flat `ivec2 v_materials`); the fragment interpolates the mask over the
+  base quad's uv (no new interpolant) and shades the higher id of the pair where the weight towards it, jittered by a
+  value noise of about a cell of the chunk's LOD, passes 1/2 (towards the higher id, so two quads holding the pair in
+  either order agree on their edge). A third material inside one quad draws as b. **Cost:** a per-pixel choice of
+  material costs ~1.3 ms of opaque pass and ~0.4 of pre-pass in the forest at 1080p (+6% render GPU), whatever its
+  form (select, branch, two shadings, mix) and even when no quad holds two materials: it is the shader's compiled form,
+  not executed work (feature/material-blend's bisection; 2 smooth vec4 of per-vertex parameters cost more, +2.2 ms).
+  `--view=9` shows the ids, blended (V reaches it in the player). Legacy
   carries the id in `ARRAY_CUSTOM0`; the validator (half its sample from chunks with materials,
   `MeshValidator::pick_targets`) requires `material_mismatch == 0` on paired vertices, the auditor
   `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and

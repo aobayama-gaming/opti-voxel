@@ -45,11 +45,11 @@ varying flat float v_lod;
 varying flat vec3 v_chunk;
 varying flat ivec2 v_ids;
 varying float v_height; // metres above the world origin (shaded view: contour lines)
-// The quad's two materials (a, b: global ids) and the weight of b (1 on b's corners). Two flat values and one
-// interpolant, not a material per corner: the pass is vertex-bound, every interpolant costs. The parameters are
-// fetched per fragment, and only off the ground.
+// The quad's two materials, from the provoking corner A: x = A's (global id), y = the other one's | its corner mask
+// << MASK_SHIFT (bit k: corner k is not A's material). The fragment's weight is the mask interpolated over v_quad_uv,
+// so the blend adds no interpolant: triangles are smaller than a pixel here, every attribute the fragment reads
+// costs setup per triangle.
 varying flat ivec2 v_materials;
-varying float v_blend;
 
 vec3 hash3(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -71,6 +71,8 @@ float value_noise(vec3 p) {
 
 // A corner's material: its chunk's palette block (header h1), its index in it, its id (palette). Index 0 is always
 // the ground: no fetch (most corners).
+const int MASK_SHIFT = 24; // material ids stay below 2^24 (Material::MAX_MATERIALS)
+
 uint corner_material(uvec4 h1, uint index) {
     if (index == 0u) {
         return MATERIAL_GROUND;
@@ -112,13 +114,7 @@ void vertex() {
     int corner = VERTEX_ID % 4; // base quad corners A, B, C, D
     uvec4 h0 = texelFetch(quad_tex, ivec2(0, INSTANCE_ID), 0);
     uvec4 h1 = texelFetch(quad_tex, ivec2(1, INSTANCE_ID), 0);
-    // The quad's four corners (consecutive texels); this vertex's is one of them.
-    int quad_texel = int(HEADER_TEXELS) + VERTEX_ID - corner;
-    uvec4 ca = texelFetch(quad_tex, ivec2(quad_texel, INSTANCE_ID), 0);
-    uvec4 cb = texelFetch(quad_tex, ivec2(quad_texel + 1, INSTANCE_ID), 0);
-    uvec4 cc = texelFetch(quad_tex, ivec2(quad_texel + 2, INSTANCE_ID), 0);
-    uvec4 cd = texelFetch(quad_tex, ivec2(quad_texel + 3, INSTANCE_ID), 0);
-    uvec4 c = corner == 0 ? ca : (corner == 1 ? cb : (corner == 2 ? cc : cd));
+    uvec4 c = texelFetch(quad_tex, ivec2(int(HEADER_TEXELS) + VERTEX_ID, INSTANCE_ID), 0);
     ivec3 chunk = ivec3(int(h0.x | (h0.y << 16u)), int(h0.z | (h0.w << 16u)), int(h1.x | (h1.y << 16u)));
 
     // ChunkMath::vertices_to_world. Empty / killed rows are all zero: every corner lands on the
@@ -134,19 +130,26 @@ void vertex() {
     vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
     vec3 n = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
-    // The quad's materials: a = corner A's, b = the first other one in A, B, C, D order (a when uniform). Every corner
-    // derives the same pair, so its weight only depends on its own material and quads sharing an edge interpolate
-    // the same values along it: the blend is continuous. A third material in one quad (three meeting inside one
-    // cell) draws as a.
-    uint ia = page_decode_palette(ca);
-    uint ib = ia;
-    for (int k = 1; k < 4; k++) {
-        uint ik = page_decode_palette(k == 1 ? cb : (k == 2 ? cc : cd));
-        ib = ib == ia ? ik : ib;
+    // The quad's materials: a = corner A's, b = the first other one in B, C, D (a when uniform). Flat values come
+    // from the provoking corner, A in both triangles, so only A reads the other corners (the quad's texels are
+    // consecutive) and goes through the palette; B, C and D only need A's index for their weight. A corner's weight
+    // only depends on whether it is A's material, so two quads sharing an edge see the same materials at its ends:
+    // the blend is continuous. A third material in one quad (three meeting inside one cell) draws as b.
+    ivec2 materials = ivec2(0);
+    if (corner == 0) {
+        uint ia = page_decode_palette(c);
+        uint ib = ia;
+        uint mask = 0u;
+        for (int k = 1; k < 4; k++) {
+            uint ik = page_decode_palette(texelFetch(quad_tex, ivec2(int(HEADER_TEXELS) + VERTEX_ID + k, INSTANCE_ID), 0));
+            ib = ib == ia ? ik : ib;
+            mask |= ik != ia ? 1u << uint(k) : 0u;
+        }
+        uint mat_a = corner_material(h1, ia);
+        uint mat_b = ib == ia ? mat_a : corner_material(h1, ib);
+        materials = ivec2(int(mat_a), int(mat_b | mask << uint(MASK_SHIFT)));
     }
-    uint mat_a = corner_material(h1, ia);
-    v_materials = ivec2(int(mat_a), int(ib == ia ? mat_a : corner_material(h1, ib)));
-    v_blend = ib != ia && page_decode_palette(c) == ib ? 1.0 : 0.0;
+    v_materials = materials;
 
     v_world_normal = n;
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4);
@@ -196,26 +199,23 @@ void fragment() {
     albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
     vec3 ground = albedo;
     vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    // Two materials: one is shaded per fragment, the higher id where the weight towards it, jittered by a noise of
+    // about a cell (of this LOD), passes 1/2, so the border wanders instead of following the cell grid. Towards the
+    // higher id, not towards b: two quads sharing an edge may hold the pair in either order, and must agree on
+    // the border. One material per fragment keeps the shader small (the pre-pass runs it too, for the roughness).
+    int mat_id = v_materials.x;
+    if (v_materials.y != v_materials.x) {
+        int mat_b = v_materials.y & ((1 << MASK_SHIFT) - 1);
+        int mask = v_materials.y >> MASK_SHIFT;
+        vec2 uv = v_quad_uv;
+        float to_b = mix(mix(0.0, float(mask >> 1 & 1), uv.x), mix(float(mask >> 2 & 1), float(mask >> 3 & 1), uv.x), uv.y);
+        float to_high = mat_b > mat_id ? to_b : 1.0 - to_b;
+        float jitter = value_noise(p / (voxel_size * exp2(v_lod)) * 1.7) - 0.5;
+        mat_id = to_high + 0.6 * jitter > 0.5 ? max(mat_id, mat_b) : min(mat_id, mat_b);
+    }
     float roughness;
     vec3 emission;
-    material_shading(uint(v_materials.x), ground, p, albedo, roughness, emission);
-    // Two materials: b takes over where the weight, jittered by a noise of about a cell (of this LOD), crosses 1/2, so
-    // the border wanders instead of following the cell grid. The edge stays at least a pixel wide (no aliasing).
-    float blend = 0.0;
-    float blend_fw = fwidth(v_blend); // outside the branch: derivatives need the whole 2x2 quad
-    if (v_materials.y != v_materials.x) {
-        float jitter = value_noise(p / (voxel_size * exp2(v_lod)) * 1.7) - 0.5;
-        float edge = max(0.08, blend_fw);
-        blend = smoothstep(0.5 - edge, 0.5 + edge, v_blend + 0.6 * jitter);
-        if (blend > 0.0) {
-            vec3 albedo_b, emission_b;
-            float roughness_b;
-            material_shading(uint(v_materials.y), ground, p, albedo_b, roughness_b, emission_b);
-            albedo = mix(albedo, albedo_b, blend);
-            roughness = mix(roughness, roughness_b, blend);
-            emission = mix(emission, emission_b, blend);
-        }
-    }
+    material_shading(uint(mat_id), ground, p, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -242,7 +242,7 @@ void fragment() {
         NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
     } else if (debug_view == 9) {
         albedo = vec3(0.0);
-        emission = mix(material_debug_color(v_materials.x), material_debug_color(v_materials.y), blend);
+        emission = material_debug_color(mat_id);
     }
     if (debug_view == 4) {
         float d = min(min(v_quad_uv.x, 1.0 - v_quad_uv.x), min(v_quad_uv.y, 1.0 - v_quad_uv.y));
