@@ -91,6 +91,7 @@ TEST_CASE("Moment layers: a uniform canopy reads a near-constant occupancy, its 
     const std::vector<MomentItem> items = sphere_slab(centre, 32, 16.0, 6.0, 0, 1);
     for (const int lod : { 4, 5 }) {
         MomentLayerParams params;
+        params.cell_shift = 2; // cells of 4 LOD cells: the slab spans many of them at both LODs
         params.lod_min = lod;
         params.lod_max = lod;
         std::vector<MomentBlob> blobs;

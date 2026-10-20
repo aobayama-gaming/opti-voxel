@@ -12,11 +12,13 @@ using ExactNoise::float_bits;
 namespace {
 
 // A configured cascade terrain with the --instances scatter (rocks and pillars around SDFTable::SCENE_X / Z).
+// The scatter's records alone (p_moments false): the tests count records and lists; the moment blobs have their own.
 struct ScatteredCascade {
     ChunkParam param;
     SDFCascade sdf;
-    explicit ScatteredCascade(int p_count, double p_area = 200.0, int p_lods = 15) {
+    explicit ScatteredCascade(int p_count, double p_area = 200.0, int p_lods = 15, bool p_moments = false) {
         sdf.set_scatter(p_count, p_area);
+        sdf.set_moment_blobs(p_moments);
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
         sdf.configure(param, p_lods);
     }
@@ -48,7 +50,8 @@ bool dropped_at(const std::shared_ptr<const InstanceSnapshot> &p_snap, const Vox
     p.voxel = p_voxel;
     for (uint32_t i : list) {
         const TableRecord &rec = p_snap->records[i];
-        if (!rec.listed_at(p_lod + 1) && in_influence_box(rec, p, p_lod)) {
+        // A moment blob is listed at one LOD by design, not dropped: its step is the skirt's to hide.
+        if (rec.op != Combine::ACCUM && !rec.listed_at(p_lod + 1) && in_influence_box(rec, p, p_lod)) {
             return true;
         }
     }
@@ -351,7 +354,10 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
                     }
                     const double step = at(column, y + d, lod + 1) - fine;
                     // step > 0: the coarse field is more air there, its surface the inner one: the fine rim must cover.
-                    const double depth_m = double(sdf.skirt_depth_m(step > 0.0 ? lod : lod + 1));
+                    WorldPos shared;
+                    shared.voxel = VoxelPos(column.x, y + d, column.z);
+                    // The outer chunk's skirt there: its LOD's, plus the moment skirt where a moment blob touches the point.
+                    const double depth_m = double(sdf.skirt_depth_at(shared, step > 0.0 ? lod : lod + 1));
                     if (step > depth_m && dropped_at(snap, VoxelPos(column.x, y + d, column.z), lod)) {
                         // A record listed at L, dropped at L+1: no skirt bounds that step, but the drop leaves at most
                         // `erode` cells of L of it (set_band), which the fine rim's skirt lifts to air: sealed.

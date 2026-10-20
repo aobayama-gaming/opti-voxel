@@ -50,7 +50,18 @@ enum class Combine : uint8_t {
     SMOOTH_UNION, // smooth_min, radius k
     SUBTRACT, // max(r, -c)
     SMOOTH_SUBTRACT, // smooth_max(r, -c), radius k
+    ACCUM, // a moment blob: c is an occupancy, summed into phi; the fold's epilogue draws phi (moment_surface)
 };
+
+// The far field drawn from the moment blobs (moment_layers.hpp) a chunk lists: with phi their summed occupancy (value
+// and gradient) and h = 2^lod, F = min(r - h phi, (MOMENT_ISO - phi) h / max(|grad phi|, MOMENT_ISO / 64)). The first
+// term lifts the surface under mass too thin to draw (phi < MOMENT_ISO: by at most that many cells), the second draws a surface of its own
+// where the occupancy reaches MOMENT_ISO (a canopy), a first-order distance (64 cells where phi is flat). MOMENT_ISO is
+// an opacity more than a volume: a canopy half its crowns' volume reads opaque from afar. The samples where phi >= half
+// of it take the strongest blob's material.
+inline constexpr float MOMENT_ISO = 0.25f;
+inline constexpr float MOMENT_MATERIAL_ISO = 0.5f * MOMENT_ISO;
+inline constexpr float MOMENT_GRAD_FLOOR = (MOMENT_ISO / 64.0f) * (MOMENT_ISO / 64.0f); // of |grad phi|^2, per cell
 
 // The operators that cut the register instead of adding to it.
 inline bool is_cutter(Combine p_op) {
@@ -113,6 +124,7 @@ struct TableRecord {
     // erode * max(2^L - erode_from, 0) voxels (its distance raised: the shape shrinks uniformly once the
     // grid can no longer draw it whole; erode_from = 2^onset).
     uint8_t max_lod = NEVER_DROPPED;
+    uint8_t min_lod = 0; // listed from this LOD on (a moment blob: its layer's LOD only)
     float erode = 0.0f;
     float erode_from = 1.0f;
     // Global material (material_library.hpp), by default its type's: CPU only, the GPU sees its chunk palette index
@@ -121,7 +133,7 @@ struct TableRecord {
     uint32_t material = Material::FROM_TYPE;
 
     static constexpr uint8_t NEVER_DROPPED = 255;
-    bool listed_at(int p_lod) const { return p_lod < max_lod; }
+    bool listed_at(int p_lod) const { return p_lod >= min_lod && p_lod < max_lod; }
     void set_k(float p_k) {
         k = p_k;
         inv_k = p_k > 0.0f ? float(1.0 / double(p_k)) : 0.0f;
@@ -219,7 +231,7 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
 extern const char GLSL_DEF_RECORD_STRUCT[];
 
 String generate_library_glsl(const DefLibrary &p_library);
-// The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material)` (fold_onto
+// The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments)` (fold_onto
 // over the chunk's list: g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers, a list word being the record
 // id | its palette index << SDFGpuTable::LIST_ID_BITS; touched is set when an instance passes its box test, material
 // to the palette index of a record that wins, unless it is ChunkPalette::INHERIT_INDEX) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
@@ -252,9 +264,14 @@ uint32_t record_material(uint32_t p_material, uint32_t p_type_material, Combine 
 // false folds every instance (the locality rule's reference, M1b). *r_touched (if given) is set when an instance
 // passed its box test; untouched, the result is p_r bit for bit. *r_material (if given, with p_palette: the list
 // entries' palette indices) is the palette index of the last record that won (record_wins), else left as it was.
+// *r_blobs (if given) is set when a moment blob passed its box test (its sample takes the moment skirt).
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
         const WorldPos &p_pos, int p_lod, bool p_box_test = true, bool *r_touched = nullptr, const uint16_t *p_palette = nullptr,
-        uint32_t *r_material = nullptr);
+        uint32_t *r_material = nullptr, bool *r_blobs = nullptr);
+// The moment blobs' surface on register p_r (the end of fold_onto when a blob passed its box test; GLSL arch_moments):
+// p_phi their summed occupancy, p_best the strongest one's palette index (ChunkPalette::INHERIT_INDEX: none), which
+// *r_material takes where p_phi >= MOMENT_MATERIAL_ISO.
+Float4 moment_surface(const Float4 &p_r, const Float4 &p_phi, int p_lod, uint32_t p_best, uint32_t *r_material);
 // The epilogue after fold_onto (archetype_ir.cpp finish()).
 Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_normalize);
 
@@ -283,6 +300,9 @@ TableDefPtr make_swiss_cube_type(int p_holes);
 TableDefPtr make_die_type();
 TableDefPtr make_stairs_type();
 TableDefPtr make_tunnel_cube_type();
+// A moment blob {1 / s_x^2, 1 / s_y^2, 1 / s_z^2, a}: the occupancy a max(1 - q, 0)^2, q = sum_i l_i^2 / s_i^2 in the
+// record's frame (its rotation: the blob's principal axes), folded with Combine::ACCUM (MomentBlob, moment_layers.hpp).
+TableDefPtr make_moment_blob_type();
 
 // The influence box (world axes, int64, absolute) of a record: the type's local box, rotated by the
 // record's rotation, rounded out, plus the record's anchor. Used by the table's spatial index.

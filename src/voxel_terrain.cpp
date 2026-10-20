@@ -34,6 +34,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_biome_radius"), &VoxelTerrain::get_biome_radius);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
+    ClassDB::bind_method(D_METHOD("set_archetype_moments", "enabled"), &VoxelTerrain::set_archetype_moments);
+    ClassDB::bind_method(D_METHOD("get_archetype_moments"), &VoxelTerrain::get_archetype_moments);
     ClassDB::bind_method(D_METHOD("set_archetype_erode", "cells"), &VoxelTerrain::set_archetype_erode);
     ClassDB::bind_method(D_METHOD("get_archetype_erode"), &VoxelTerrain::get_archetype_erode);
     ClassDB::bind_method(D_METHOD("set_archetype_resolve", "cells"), &VoxelTerrain::set_archetype_resolve);
@@ -119,6 +121,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_moments"), "set_archetype_moments", "get_archetype_moments");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_resolve", PROPERTY_HINT_RANGE, "0,8,0.25"), "set_archetype_resolve", "get_archetype_resolve");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
@@ -355,6 +358,15 @@ void VoxelTerrain::set_archetype_band(bool p_enabled) {
 
 bool VoxelTerrain::get_archetype_band() const {
     return archetype_band;
+}
+
+void VoxelTerrain::set_archetype_moments(bool p_enabled) {
+    ERR_FAIL_COND_MSG(started, "archetype_moments must be set before the terrain enters the tree.");
+    archetype_moments = p_enabled;
+}
+
+bool VoxelTerrain::get_archetype_moments() const {
+    return archetype_moments;
 }
 
 void VoxelTerrain::set_archetype_erode(float p_cells) {
@@ -647,6 +659,7 @@ void VoxelTerrain::_ready() {
     sdf->set_forest(archetype_trees, archetype_tree_area);
     sdf->set_biome_radius(biome_radius);
     sdf->set_instance_band(archetype_band && terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
+    sdf->set_moment_blobs(archetype_moments);
     sdf->set_instance_erode(archetype_erode);
     sdf->set_instance_resolve(archetype_resolve);
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);

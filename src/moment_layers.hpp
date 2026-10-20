@@ -30,15 +30,19 @@ struct MomentItem {
     VoxelPos anchor; // the moments' anchor
     Moments moments; // weight included
     uint32_t material = 0;
-    int drop_lod = 0; // the first LOD that no longer lists it
+    int drop_lod = 0; // the first LOD that no longer draws it
 };
 
 struct MomentLayerParams {
-    int cell_shift = 2; // cells of 2^(L + cell_shift) voxels at LOD L: 4 cells of the LOD
+    int cell_shift = 3; // cells of 2^(L + cell_shift) voxels at LOD L: 8 cells of the LOD
     double filter = 0.28867513459481287; // the kernel's added sigma, cells of the LOD (1 / sqrt(12): a box filter)
     // A blob whose occupancy, with its neighbours', stays under this is pruned, and one whose own peak is under 1/16 of
     // it (a sliver of a part's tent: it only spreads its neighbours' surface).
     double min_occupancy = 1.0 / 32.0;
+    // A material joins the layers from the first LOD that has dropped this share of its mass (0: every dropped part, from
+    // its drop on): before, its dropped parts are lone thin parts (a tree's twigs while its crown is drawn), which a blob
+    // would draw back fattened to the LOD's filter, at the cost of a blob per tent corner on the fine chunks.
+    double min_mass_share = 0.5;
     int lod_min = 0; // the layers built
     int lod_max = 14;
 };

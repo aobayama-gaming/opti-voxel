@@ -160,6 +160,7 @@ constexpr ItemFills CHUNK_FILLS = {
     "chunk_param.chunk_size - 1",
     R"glsl(    /*DEBUG_STORE*/
     uint material = 0u; // the sample's palette index: ground unless the fold's winner says otherwise
+    float skirt_extra = 0.0; // the moment skirt where a moment blob touches the sample (cascade_sample_sdf)
     precise vec4 r = /*SAMPLE_SDF*/;
     // Skirt: past the chunk bounds the SDF is pushed towards air by up to the LOD's skirt depth, so the rim turns
     // down under the neighbour's surface; inside the bounds it is untouched. SDFCascade::with_skirt, same order, precise.
@@ -169,7 +170,7 @@ constexpr ItemFills CHUNK_FILLS = {
         precise float hi = lo + chunk_voxel_dimension(chunk_param);
         precise vec3 inside3 = min(grid - lo, hi - grid);
         precise float inside = min(inside3.x, min(inside3.y, inside3.z));
-        precise float depth_m = cascade_skirt_depth_m(lod); // SDFCascade::skirt_depth_m
+        precise float depth_m = cascade_skirt_depth_m(lod) + skirt_extra; // SDFCascade::skirt_depth_m + the moment skirt
         r.w = r.w + clamp(-inside, 0.0, 1.0) * depth_m;
     }
     sdf_sample[sample_index] = r;
@@ -420,7 +421,7 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     const char *channels = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod";
-    code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c, material)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
+    code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c, material, skirt_extra)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
     // Only the fold writes materials, and only for chunks with a list: a chunk without one is ground, and the meshers
     // don't read its samples' materials (its palette is the ground block, or its list is empty).
     const bool store = p_material && p_fold;

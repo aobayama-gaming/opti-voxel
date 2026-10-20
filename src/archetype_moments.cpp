@@ -33,7 +33,7 @@ MaterialMoments span_moments(const DefLibrary &p_library, const TableRecord *p_r
     MaterialMoments out;
     for (uint32_t i = 0; i < p_count; i++) {
         const TableRecord &rec = p_records[i];
-        if (rec.removed || is_cutter(rec.op)) {
+        if (rec.removed || is_cutter(rec.op) || rec.op == Combine::ACCUM) {
             continue;
         }
         const double offset[3] = { double(rec.anchor.x - p_anchor.x), double(rec.anchor.y - p_anchor.y), double(rec.anchor.z - p_anchor.z) };

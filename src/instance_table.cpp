@@ -187,7 +187,8 @@ void place_instances(const DefLibrary &p_library, const RecordStore &p_records, 
         // Once, in the node holding its centre: its grown box is at most a node wide there, so the chunks
         // whose samples it meets are near that node at every LOD (gather). Wider than a node even at the top
         // LOD: in every node its grown box touches.
-        const int lod = instance_lod(size, rec.k, rec.margin_c, p_param, p_max_lod);
+        // Never finer than the first LOD that lists it (a moment blob is listed at one LOD only).
+        const int lod = MIN(MAX(instance_lod(size, rec.k, rec.margin_c, p_param, p_max_lod), int(rec.min_lod)), p_max_lod);
         const double m = double(rec.k) + double(rec.margin_c) * std::ldexp(1.0, lod);
         const int64_t half = int64_t(1) << lod;
         const int64_t span = int64_t(p_param.chunk_voxel_dimension()) * half;
@@ -410,6 +411,9 @@ bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_l
                     }
                     for (uint32_t k = r->begin; k < r->begin + r->count; k++) {
                         const TableRecord &rec = records[p_layer.stored_ids[k]];
+                        if (rec.min_lod > p_lod) {
+                            continue; // listed only coarser (a moment blob): no finer chunk can draw it
+                        }
                         bool meets = true;
                         for (int ax = 0; ax < 3 && meets; ax++) {
                             meets = p_hi[ax] >= rec.anchor[ax] + rec.box_lo[ax] && p_lo[ax] <= rec.anchor[ax] + rec.box_hi[ax];

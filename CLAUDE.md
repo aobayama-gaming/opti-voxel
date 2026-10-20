@@ -314,7 +314,7 @@ to every change, and a reviewer may reject a PR on any of them.
   from its tip, the hull last; nothing appears with the LOD). `forest_sites`: one tree per cell of an absolute
   jittered grid. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
-  The forest has no aggregate past its hulls: past ~LOD 7 at 5 cm there is nothing. **Band timing (moments,
+  Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum
   per material (`span_moments`: a tree's bark and leaves). Its half thickness is the equal-covariance ellipsoid's
@@ -326,6 +326,27 @@ to every change, and a reviewer may reject a PR on any of them.
   eroded from LOD 1), drawn at all 97% at LOD 5 and 48% at LOD 6 (65% and 0%). The rate is
   `VoxelTerrain.archetype_erode` / `--instance_erode=F` (cells per LOD, default `ERODE_CELLS` = 1, bench and player;
   the record carries it as `erode`, the skirt follows it): a higher one moves onsets later.
+  **Moment blobs (the far field, `src/moment_layers.*`):** what the dropped parts still weigh. For each LOD L, the
+  parts gone at L (dropped, or eroded past their half thickness) hand their moments to cells of 2^(L + 3) voxels (8
+  cells of L) on an absolute grid, per material, with tent weights over the 2 x 2 x 2 cells around each centroid (a
+  uniform cover reads a near-constant occupancy, a thin canopy stays thin); a material joins once half its mass is
+  gone (lone twigs would come back fattened). Each cell is a blob, `a max(1 - q, 0)^2` in its principal frame (the
+  record's rotation), its spread the cell's covariance plus the LOD's box filter, its integral the cell's mass; blobs
+  fainter than `MOMENT_MATERIAL_ISO` with their neighbours are pruned. They are table records (`moment_blob` type,
+  `Combine::ACCUM`, listed at their LOD only: `TableRecord::min_lod`), built by `SDFTable::add_moment_blobs` after the
+  scene; the fold sums them into an occupancy phi and its epilogue (`moment_surface` / GLSL `arch_moments`, bit for
+  bit, FrameSpike's table probe) draws `min(r - h phi, (MOMENT_ISO - phi) h / max(|grad phi|, MOMENT_ISO / 64))`: the
+  ground lifted under thin mass, a surface where phi reaches `MOMENT_ISO` (0.25: an opaque canopy), the strongest
+  blob's material from half of it. Each layer is listed at one LOD, so a L | L+1 seam steps: the samples a blob touches
+  take `SDFTable::MOMENT_SKIRT_CELLS` (2.5) more skirt (`cascade_sample_sdf`'s `skirt_extra`, `SDFCascade::with_skirt` /
+  `skirt_depth_at`; 0.93 of it on the rock scatter, the worst), and the locality margins take it whole when the scene
+  places instances; a global skirt that deep cost +20% triangles in the forest (taller walls on every chunk). The
+  discoverer's no-cull rule skips a blob below its LOD (`near_layer`: `min_lod`): its box would keep every finer node
+  under a coarse canopy uncullable (+18% loaded chunks).
+  A dense 5 cm forest keeps a canopy over most columns at LODs 6-8 (unit test); from 1,100 m the forest5cm square
+  is a canopy instead of nothing (`bench.sh --preset=forest5cm --cam_pos=-50,320,750 --above_ground=1100 --pitch=-55
+  --yaw=0 [--moments=0]`). `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
+  `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms. Runtime edits don't update them yet.
   **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
   change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles the plane with cells of
   640 m rounded to 2^k voxels, and a cell keeps one site in its middle half with the kind's chance, from
