@@ -380,15 +380,18 @@ to every change, and a reviewer may reject a PR on any of them.
   carries the id in `ARRAY_CUSTOM0`; the validator (half its sample from chunks with materials,
   `MeshValidator::pick_targets`) requires `material_mismatch == 0` on paired vertices, the auditor
   `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and
-  `table.list_len_per_lod.*.palette_avg / palette_max`. **Bark** (`PATTERN_BARK`, `bark_height` in the page shader): a solid
-  texture, so no surface frame: noise stretched along world up (plates, V grooves ~11 cm apart), a sparse cell field of
-  knots (2 x 2 x 2 nearest cells) bending the grain; colour only (a bump and a roughness following the plates cost
-  ~1.3 ms of depth pre-pass in the forest at 1080p, which writes normals and roughness for SSAO / SSIL, for relief
-  barely visible); it fades to the plates' mean past ~4 pixels per groove (metres per pixel from the projection). It
-  samples at the uneroded surface: `p + n * instance_erode_m * (2^L - 1)` (`VoxelTerrain` sets the uniform from the band
-  rule's rate; exact for the default onset, over-corrected with `--instance_resolve`). Grooves finer than ~10 cm showed
-  chunk seams as lines (neighbouring chunks' surfaces differ by ~1 cm; flat shading hid it). Its axis is world up: a
-  near-horizontal branch gets grooves around it. **Grading:** the scenes' Environment has adjustments on and a 32^3 LUT
+  `table.list_len_per_lod.*.palette_avg / palette_max`. **Bark** (`PATTERN_BARK`, `bark_grain` / `bark_plate` in the page
+  shader): a 3D noise with no surface frame: a smooth grain stretched along world up (plates, V grooves ~11 cm apart), a
+  sparse cell field of knots (2 x 2 x 2 nearest cells) bending it; colour only (a bump and a roughness following the
+  plates cost ~1.3 ms of depth pre-pass in the forest at 1080p, which writes normals and roughness for SSAO / SSIL, for
+  relief barely visible); it fades to the plates' mean past ~4 pixels per groove (metres per pixel from the projection).
+  It is read at `bark_point`: the normal's horizontal direction at 0.45 m (~25 grooves around any trunk) and the height,
+  so moving the surface along its normal (erosion, skirt push, the mesher's error) reads the same bark; read at the
+  position, it jumped at LOD changes (70% of the pairs across one vs 27%, `tools/bark_seams.sh`). Trees share their bark at
+  one height, thick trunks get wide plates, and its axis is world up (a near-horizontal branch gets grooves around it).
+  The page shader's lattice noise hashes its cells with integers (`cell_hash`, `GLSL_PCG3D`): a float hash of
+  coordinates in the thousands made every lattice plane a seam (the compiler reassociates `(i + 1) * k`, the hash
+  amplifies the last bit), the bark's horizontal lines. **Grading:** the scenes' Environment has adjustments on and a 32^3 LUT
   (`res://grade_lut.png`, a Texture3D of 32 slices, written by `tools/make_lut.py`: lifted cool shadows, warm mids,
   +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
   contrast / saturation values never applied (adjustments were off) and are gone. Next: a material per biome cell
@@ -515,11 +518,19 @@ to every change, and a reviewer may reject a PR on any of them.
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
-  8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids).
+  8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids),
+  10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`).
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
+- `tools/bark_seams.sh [--no-build] [--only=a,b]` (needs a window, ~2.5 min): the 5 cm forest at six close-up poses
+  (marks where seams were seen), `bench.gd --probe` (page shader views 10 / 11: the bark's grain, chunk, LOD, depth,
+  normal azimuth as raw bytes) and `tools/bark_seams.py`: pairs of neighbouring bark pixels, inside a chunk / across a
+  same-LOD border / across a LOD change, where the grain steps 4x more than next to it; fails on lines of such jumps
+  (> 100 pairs) or > 5% of same-LOD border pairs jumping. Writes `report.md` and `<pose>_seams.png` / `_shaded.png`.
+  Run it after touching the bark, `value_noise` or the page shader's normals. The float hash failed it (270 pairs on
+  lines on one pose); the current bark: 0.02% of pairs jump inside chunks, 3% across borders.
 - `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike`): GPU vs CPU check of the integer
   frame and the exact noise at 5 far origins: WorldPos and anchors, then every probe of the probe
   table bit for bit over a fixed grid plus 1,024 hash-random points per origin (hash, octave

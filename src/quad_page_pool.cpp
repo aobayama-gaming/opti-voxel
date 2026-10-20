@@ -1,6 +1,7 @@
 #include "quad_page_pool.hpp"
 
 #include "debug_log.hpp"
+#include "exact_noise.hpp"
 #include "material_library.hpp"
 #include "world_coord.hpp"
 
@@ -23,7 +24,8 @@ uniform usampler2D quad_tex : filter_nearest, repeat_disable;
 uniform usampler2D palette_tex : filter_nearest, repeat_disable;
 uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // 0 shaded, 1 normals, 2 lod, 3 page, 4 shaded + quad wireframe, 5 chunk hash,
-// 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4), 8 faceted, 9 material
+// 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4), 8 faceted, 9 material, 10 / 11 bark seam
+// probe (bench.gd --probe)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
 // Sea level in metres above the world origin: below -1e29, no height colours (VoxelTerrain sets it for
@@ -35,13 +37,8 @@ uniform int chunk_size = 32;
 uniform int skirt_size = 2;
 uniform float pos_scale = 256.0; // PageFormat::pos_scale(chunk_size), set by the mesher
 // Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
-// colours see the unpushed surface and the dip along chunk borders keeps the colour around it (the fragment gets the
-// push back from it for the solid textures).
+// colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
 uniform float skirt_depth_m[32];
-// An instance's surface at LOD L lies instance_erode_m * (2^L - 1) metres inside its LOD 0 one (the band rule's
-// erosion from LOD 1, VoxelTerrain.archetype_erode): solid textures sample that far out, so they don't jump across a
-// LOD seam (with --instance_resolve, parts that start eroding later are over-corrected).
-uniform float instance_erode_m = 0.0;
 instance uniform int page_id = 0;
 
 varying vec3 v_world_normal;
@@ -62,10 +59,12 @@ vec3 hash3(vec3 p) {
     return fract((p.xxy + p.yxx) * p.zyx);
 }
 
-float hash1(vec3 p) {
-    p = fract(p * 0.1031);
-    p += dot(p, p.zyx + 31.32);
-    return fract((p.x + p.y) * p.z);
+// A lattice cell's hash in [0, 1)^3 (c: the cell's integer coordinates, as floats from floor). Integer arithmetic
+// (PCG3D), so every neighbour of a cell reads the same value. A float hash of the coordinate did not: the compiler may
+// reassociate (i + 1) * k, and at coordinates in the thousands the hash turned that last bit into another value, a
+// seam along every lattice plane (the bark's horizontal lines, tools/bark_seams.sh).
+vec3 cell_hash(vec3 c, uint salt) {
+    return vec3(pcg3d(uvec3(ivec3(c)) ^ uvec3(salt)) >> 8u) * (1.0 / 16777216.0);
 }
 
 // Trilinear value noise in [0, 1], one lattice cell per unit.
@@ -73,21 +72,21 @@ float value_noise(vec3 p) {
     vec3 i = floor(p);
     vec3 f = p - i;
     f = f * f * (3.0 - 2.0 * f);
-    float x00 = mix(hash1(i), hash1(i + vec3(1, 0, 0)), f.x);
-    float x10 = mix(hash1(i + vec3(0, 1, 0)), hash1(i + vec3(1, 1, 0)), f.x);
-    float x01 = mix(hash1(i + vec3(0, 0, 1)), hash1(i + vec3(1, 0, 1)), f.x);
-    float x11 = mix(hash1(i + vec3(0, 1, 1)), hash1(i + vec3(1, 1, 1)), f.x);
+    float x00 = mix(cell_hash(i, 0u).x, cell_hash(i + vec3(1, 0, 0), 0u).x, f.x);
+    float x10 = mix(cell_hash(i + vec3(0, 1, 0), 0u).x, cell_hash(i + vec3(1, 1, 0), 0u).x, f.x);
+    float x01 = mix(cell_hash(i + vec3(0, 0, 1), 0u).x, cell_hash(i + vec3(1, 0, 1), 0u).x, f.x);
+    float x11 = mix(cell_hash(i + vec3(0, 1, 1), 0u).x, cell_hash(i + vec3(1, 1, 1), 0u).x, f.x);
     return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
 }
 
-// Bark (PATTERN_BARK) as a solid texture, so it needs no surface frame: noise stretched along world up makes plates
-// and V grooves that run up a trunk and wander slowly; a sparse cell field puts knots where a kept cell's point lies
-// near the surface, and the grain bends around them. Its axis is world up: a near-horizontal branch gets grooves
-// around it (the branch's axis is not known here). p in metres. Returns the plate height in [0, 1]; knot: the knot's
-// core, ring: its growth rings, in [0, 1]. Colour only: a bump from it (and a roughness following it) cost ~1.3 ms
-// of depth pre-pass in the forest at 1080p (the pre-pass writes normals and roughness for SSAO / SSIL), for relief
-// barely visible past a few metres.
-float bark_height(vec3 p, out float knot, out float ring) {
+// Bark (PATTERN_BARK) as a 3D noise, so it needs no surface frame: noise stretched along world up makes plates and V
+// grooves that run up a trunk and wander slowly; a sparse cell field puts knots where a kept cell's point lies near
+// the surface, and the grain bends around them. Its axis is world up: a near-horizontal branch gets grooves around it
+// (the branch's axis is not known here). p: bark_point's, in metres. Returns the grain, a smooth noise in [0, 1]
+// (bark_plate makes the plates and grooves of it); knot: the knot's core, ring: its growth rings, in [0, 1]. Colour
+// only: a bump from it (and a roughness following it) cost ~1.3 ms of depth pre-pass in the forest at 1080p (the
+// pre-pass writes normals and roughness for SSAO / SSIL), for relief barely visible past a few metres.
+float bark_grain(vec3 p, out float knot, out float ring) {
     const vec3 KNOT_CELL = vec3(0.7, 1.6, 0.7);
     // The 2 x 2 x 2 cells nearest p: a knot point lies in the middle 70% of its cell, and a knot reaches ~0.4 m.
     vec3 g = floor(p / KNOT_CELL - 0.5);
@@ -97,10 +96,10 @@ float bark_height(vec3 p, out float knot, out float ring) {
         for (int y = 0; y < 2; y++) {
             for (int x = 0; x < 2; x++) {
                 vec3 c = g + vec3(float(x), float(y), float(z));
-                if (hash1(c + 71.3) > 0.35) {
+                if (cell_hash(c, 1u).x > 0.35) {
                     continue; // about a third of the cells hold a knot
                 }
-                vec3 dk = p - (c + 0.15 + 0.7 * hash3(c + 19.1)) * KNOT_CELL;
+                vec3 dk = p - (c + 0.15 + 0.7 * cell_hash(c, 2u)) * KNOT_CELL;
                 vec3 dn = dk / vec3(0.08, 0.13, 0.08);
                 float r2 = dot(dn, dn);
                 nearest = min(nearest, r2);
@@ -111,12 +110,27 @@ float bark_height(vec3 p, out float knot, out float ring) {
     }
     knot = exp(-nearest);
     ring = nearest < 40.0 ? exp(-0.15 * nearest) * (0.5 + 0.5 * cos(sqrt(nearest) * 7.0)) : 0.0;
-    // Grooves ~11 cm apart, 6x longer than wide. Coarse on purpose: a solid texture also varies across the surface, and
-    // neighbouring chunks' surfaces may differ by ~1 cm (a 4.5 cm groove showed it as a line along chunk seams).
+    // Grooves ~11 cm apart, 6x longer than wide.
     const vec3 SCALE = vec3(9.0, 9.0 / 6.0, 9.0);
     vec3 wander = vec3(1.6, 0.0, 1.6) * value_noise(p * vec3(1.2, 0.25, 1.2));
-    // Plates with flat tops, V grooves where the noise crosses its middle.
-    return min(abs(2.0 * value_noise((p + bend) * SCALE + wander) - 1.0) * 1.8, 1.0);
+    return value_noise((p + bend) * SCALE + wander);
+}
+
+// The plate height in [0, 1] of a grain: plates with flat tops, V grooves where the grain crosses its middle.
+float bark_plate(float grain) {
+    return min(abs(2.0 * grain - 1.0) * 1.8, 1.0);
+}
+
+// Where the bark noise is read: the normal's horizontal direction at BARK_RADIUS (~25 grooves around any trunk; its
+// slope is left out, so a tapering or leaning trunk keeps its groove spacing) and the height. A surface moved along
+// its normal reads the same bark: erosion (a LOD L surface lies 2^L - 1 cells inside the LOD 0 one), the skirt's push
+// along chunk borders and the mesher's error move it by a good part of a groove, and read at the position the bark
+// jumped across LOD changes (tools/bark_seams.sh). Two trees read the same bark only at the same height; a flat face
+// reads one column of it.
+const float BARK_RADIUS = 0.45;
+vec3 bark_point(vec3 p, vec3 n) {
+    vec2 u = n.xz * (BARK_RADIUS * inversesqrt(max(dot(n.xz, n.xz), 1e-8)));
+    return vec3(u.x, p.y, u.y);
 }
 
 // A corner's material: its chunk's palette block (header h1), its index in it, its id (palette). Index 0 is always
@@ -129,11 +143,15 @@ uint corner_material(uvec4 h1, uint index) {
     return page_palette_id(texelFetch(palette_tex, page_palette_texel(entry), 0), entry);
 }
 
+// A material's first texel in material_tex (albedo, roughness; the next one: emission, pattern).
+ivec2 material_texel(uint mat_id) {
+    return ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
+}
+
 // A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
 // material_tex and its pattern. p: the fragment's position (metres, render space), n its normal (interpolated, not
-// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); depth: how far
-// the surface lies below the one solid textures sample (metres along n: skirt push + erosion).
-void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float depth, out vec3 albedo,
+// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature).
+void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, out vec3 albedo,
         out float roughness, out vec3 emission) {
     albedo = ground;
     roughness = 1.0;
@@ -141,7 +159,7 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
     if (mat_id == MATERIAL_GROUND) {
         return;
     }
-    ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
+    ivec2 mt = material_texel(mat_id);
     vec4 m0 = texelFetch(material_tex, mt, 0);
     vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
     albedo = m0.rgb;
@@ -161,9 +179,9 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
         float plate = 0.65;
         float knot_weight = 0.0;
         vec3 knot_albedo = vec3(0.0);
-        if (detail > 0.0) { // else the plates' mean, no bark_height
+        if (detail > 0.0) { // else the plates' mean, no bark_grain
             float knot, ring;
-            plate = mix(plate, bark_height(p + normalize(n) * depth, knot, ring), detail);
+            plate = mix(plate, bark_plate(bark_grain(bark_point(p, n), knot, ring)), detail);
             knot_weight = max(knot, ring * 0.6) * detail;
             knot_albedo = m0.rgb * mix(0.35, 0.7, ring);
         }
@@ -275,12 +293,7 @@ void fragment() {
     float roughness;
     vec3 emission;
     float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
-    // Solid textures sample the unpushed, uneroded surface: the skirt push (v_height - p.y gives back the vertex
-    // shader's push / max(n.y, 0.2), no extra interpolant) lowers the last cell of every chunk by up to a cell or more,
-    // and the bark then showed a band of another pattern along each chunk border.
-    float skirt_push = max(v_height - p.y, 0.0) * max(v_world_normal.y, 0.2);
-    float depth = skirt_push + instance_erode_m * (exp2(v_lod) - 1.0);
-    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, depth, albedo, roughness, emission);
+    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -308,6 +321,31 @@ void fragment() {
     } else if (debug_view == 9) {
         albedo = vec3(0.0);
         emission = uint(mat_id) == MATERIAL_GROUND ? vec3(0.15) : hash3(vec3(float(mat_id) * 0.61 + 0.5)) * 0.8 + 0.2;
+    } else if (debug_view >= 10) {
+        // Bark seam probe (bench.gd --probe, read by tools/bark_seams.py): bytes, written through the inverse of the
+        // sRGB encoding (the bench sets a linear tonemapper, no grade, glow or fog; SPECULAR 0 below), so each
+        // channel reads back as the byte. Bark fragments at full detail only, black elsewhere. 10: the grain (smooth, so
+        // a jump in it is a seam; the plates' V grooves step like one where they are a few pixels wide), a hash of the
+        // chunk, 8 * LOD + 4; 11: log2 of the depth in 12 bits (6 per channel, times 4), the normal's azimuth.
+        albedo = vec3(0.0);
+        emission = vec3(0.0);
+        bool bark = uint(mat_id) != MATERIAL_GROUND
+                && texelFetch(material_tex, material_texel(uint(mat_id)) + ivec2(1, 0), 0).a == MATERIAL_PATTERN_BARK;
+        if (bark && footprint < 0.012) {
+            vec3 bytes;
+            if (debug_view == 10) {
+                float knot, ring;
+                float grain = bark_grain(bark_point(p, v_world_normal), knot, ring);
+                bytes = vec3(round(grain * 255.0), 4.0 * floor(cell_hash(v_chunk, uint(v_lod)).x * 64.0),
+                        8.0 * v_lod + 4.0);
+            } else {
+                float depth = floor(clamp((log2(-VERTEX.z) + 4.0) / 16.0, 0.0, 1.0) * 4095.0);
+                float azimuth = atan(v_world_normal.z, v_world_normal.x) / 6.2831853 + 0.5;
+                bytes = vec3(4.0 * floor(depth / 64.0), 4.0 * mod(depth, 64.0), round(azimuth * 255.0));
+            }
+            vec3 c = bytes / 255.0;
+            emission = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+        }
     }
     if (debug_view == 4) {
         float d = min(min(v_quad_uv.x, 1.0 - v_quad_uv.x), min(v_quad_uv.y, 1.0 - v_quad_uv.y));
@@ -318,6 +356,9 @@ void fragment() {
     ALBEDO = albedo;
     EMISSION = emission;
     ROUGHNESS = roughness;
+    if (debug_view >= 10) {
+        SPECULAR = 0.0; // the probe's bytes are its emission only
+    }
 }
 )gdshader";
 
@@ -349,7 +390,7 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     rs->mesh_add_surface_from_arrays(base_mesh, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
     shader = rs->shader_create();
-    rs->shader_set_code(shader, String(PAGE_SHADER).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + Material::glsl_constants()));
+    rs->shader_set_code(shader, String(PAGE_SHADER).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + Material::glsl_constants() + GLSL_PCG3D));
     material_params["voxel_size"] = voxel_size;
 
     for (uint32_t i = 0; i < p_initial_pages; i++) {
