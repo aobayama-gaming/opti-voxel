@@ -63,7 +63,6 @@ TEST_CASE("ChunkPalette: INHERIT takes the reserved index and no entry") {
     CHECK(ChunkPalette::build(mats, 3, palette, index));
     CHECK(palette == std::vector<uint32_t>{ Material::GROUND, 7 });
     CHECK(index == std::vector<uint16_t>{ uint16_t(ChunkPalette::INHERIT_INDEX), 1, uint16_t(ChunkPalette::INHERIT_INDEX) });
-    static_assert(ChunkPalette::INHERIT_INDEX >= ChunkPalette::MAX_ENTRIES, "no palette entry is the reserved index");
 }
 
 TEST_CASE("PaletteAlloc: aligned blocks, the ground block reserved, frees merge back") {

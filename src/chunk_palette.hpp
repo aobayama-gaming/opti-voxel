@@ -12,10 +12,10 @@
 // record id order, so a chunk's palette is deterministic).
 namespace ChunkPalette {
 
-// A list word's palette index for a Material::INHERIT record: the fold skips it, so no sample and no corner holds it.
-// The palette itself has one entry less.
-static constexpr uint32_t INHERIT_INDEX = PageFormat::PALETTE_SIZE - 1;
+// A palette holds MAX_ENTRIES materials; the last index is a list word's for a Material::INHERIT record: the fold
+// skips it, so no sample and no corner holds it.
 static constexpr uint32_t MAX_ENTRIES = PageFormat::PALETTE_SIZE - 1;
+static constexpr uint32_t INHERIT_INDEX = MAX_ENTRIES;
 
 // p_materials[i]: the material of the chunk's list entry i. r_palette: the global ids; r_index[i]: entry i's
 // palette index (INHERIT_INDEX for Material::INHERIT, which takes no entry). Returns false when the chunk names

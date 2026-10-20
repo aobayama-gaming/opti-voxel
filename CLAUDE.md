@@ -367,8 +367,8 @@ to every change, and a reviewer may reject a PR on any of them.
   uses block 0 and draws as ground. The page shader reads header -> palette -> id -> `material_tex`
   (`Material::Library::make_image`, owned by the mesher) for corners of index > 0, and replaces the ground colours with
   the material's albedo, roughness and emission (lava: `PATTERN_LAVA`'s crust; `material_shading`). **Blend:** corner A (the
-  provoking vertex) reads the quad's other corners: a = its material, b = the first other one, plus a 4-bit mask of the
-  corners that are not a, packed above b's id (flat `ivec2 v_materials`); the fragment interpolates the mask over the
+  provoking vertex) reads the quad's other corners: a = its material, b = the first other one, plus a mask of the corners
+  (B, C, D) that are not a, packed above b's id (flat `ivec2 v_materials`); the fragment interpolates the mask over the
   base quad's uv (no new interpolant) and shades the higher id of the pair where the weight towards it, jittered by a
   value noise of about a cell of the chunk's LOD, passes 1/2 (towards the higher id, so two quads holding the pair in
   either order agree on their edge). A third material inside one quad draws as b. **Cost:** a per-pixel choice of
