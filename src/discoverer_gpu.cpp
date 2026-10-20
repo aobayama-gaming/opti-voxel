@@ -8,9 +8,6 @@
 #include <cstring>
 
 bool DiscovererGPU::create(const SDFBase *p_sdf, const ChunkParam &p_param) {
-    if (p_sdf->get_cascade() == nullptr) {
-        return false;
-    }
     const uint64_t t0 = now_usec();
     rd = RenderingServer::get_singleton()->create_local_rendering_device();
     if (rd == nullptr) {

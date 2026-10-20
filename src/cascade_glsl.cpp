@@ -427,10 +427,7 @@ bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPo
     return true;
 }
 
-String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const String &p_pass, bool p_vertex_pass) {
-    if (p_sdf->get_cascade() == nullptr) {
-        return p_shader.replace("/*GLSL_SKIRT_SDF*/", GLSL_SKIRT_SDF).replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
-    }
+String fill_mesher_pass(const String &p_shader, const String &p_pass, bool p_vertex_pass) {
     String pass = p_pass;
     if (p_vertex_pass) {
         // GPUDirectMesher and GPUMesher spell the call differently.

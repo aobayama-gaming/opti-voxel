@@ -81,12 +81,6 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
 
 )glsl";
 
-inline constexpr const char GLSL_DIRECT_PASS_SDF[] = R"glsl(
-
-sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = skirt_sdf(chunk,vec3(cell_chunk_coordinate),chunk_param);
-
-)glsl";
-
 // Same as legacy pass 2, except it writes 0.0 for edges without a crossing: every entry the
 // later passes read is rewritten each batch, so the 48 MB clear of the legacy path is not needed.
 inline constexpr const char GLSL_DIRECT_PASS_EDGES[] = R"glsl(

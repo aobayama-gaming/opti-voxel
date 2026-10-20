@@ -106,91 +106,56 @@ public:
     // voxel of that LOD), the distance is the same at every LOD.
     virtual float evaluate(const WorldPos &p_pos, int p_lod) const = 0;
 
-    // The value the discoverer's cull reads at a corner: evaluate() by default. A terrain may leave out what
-    // cull_exempt() covers anyway (SDFCascade: the bare cascade, the GPU discoverer's point items bit for bit).
-    virtual float evaluate_cull(const WorldPos &p_pos, int p_lod) const { return evaluate(p_pos, p_lod); }
+    // The value the discoverer's cull reads at a corner, leaving out what cull_exempt() covers anyway (SDFCascade:
+    // the bare cascade, the GPU discoverer's point items bit for bit).
+    virtual float evaluate_cull(const WorldPos &p_pos, int p_lod) const = 0;
 
     // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
-    // wave. The default loops; a terrain may spread it over threads.
-    virtual void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {
-        WorldPos pos;
-        for (int i = 0; i < p_count; i++) {
-            pos.voxel = p_points[i];
-            r_out[i] = evaluate_cull(pos, p_lod);
-        }
-    }
+    // wave.
+    virtual void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const = 0;
 
-    // GPU code: must define "vec4 terrain_sdf(WorldPos p, int lod)" (xyz gradient, w distance). The
-    // shader provides the chunk_param uniform, the frame functions of gpu_frame.hpp and the exact
-    // noise of exact_noise.hpp.
+    // GPU code spliced into the meshers and the cascade passes (SDFCascade: the cascade's register, metres and
+    // skirt functions, and a NaN `terrain_sdf` stub the templates reference). The shader provides the chunk_param
+    // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
-    // A cascade terrain with an instance table: the GLSL its level passes' fold variant splices after the table
-    // buffers (cascade_glsl.hpp), defining `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk)`.
-    virtual String get_sample_fold_glsl() const { return String(); }
+    // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
+    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk)`.
+    virtual String get_sample_fold_glsl() const = 0;
 
-    // The instance table's GPU buffers, if this terrain owns one (SDFTable). The meshers splice and bind it, and
-    // the cascade passes fold it into their samples. The const form only reads (the shader text, the sizes).
-    virtual SDFGpuTable *get_gpu_table() { return nullptr; }
+    // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it
+    // into their samples. The const form only reads (the shader text, the sizes).
+    virtual SDFGpuTable *get_gpu_table() = 0;
     const SDFGpuTable *get_gpu_table() const { return const_cast<SDFBase *>(this)->get_gpu_table(); }
 
     // The discoverer's no-cull rule: a node whose box intersects any instance's influence box (grown by
     // the cull band, 2 chunk sizes at the node's LOD) must never be culled, whatever the corners say.
-    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes). False for
-    // a terrain without instances.
-    virtual bool cull_exempt(const ChunkId &p_node, int p_lod) const {
-        (void)p_node;
-        (void)p_lod;
-        return false;
-    }
+    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes).
+    virtual bool cull_exempt(const ChunkId &p_node, int p_lod) const = 0;
 
-    // Runtime instance edits (archetype instances). A terrain without an instance table rejects them.
-    // rotation (9 floats, row major) and params (8 floats) may be null (identity / zero). p_op is a
-    // Combine. Returns the new instance id (>= 0) or -1. When any edit succeeds, last_edit_box() holds
+    // Runtime instance edits. rotation (9 floats, row major) and params (8 floats) may be null (identity / zero).
+    // p_op is a Combine. Returns the new instance id (>= 0) or -1. When any edit succeeds, last_edit_box() holds
     // the region it changed (old box of a remove/move + new box of an add/move).
-    virtual int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) {
-        (void)p_type;
-        (void)p_anchor;
-        (void)p_rotation;
-        (void)p_params;
-        (void)p_op;
-        (void)p_k;
-        return -1;
-    }
-    virtual bool remove_instance(int p_id) {
-        (void)p_id;
-        return false;
-    }
-    virtual bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation) {
-        (void)p_id;
-        (void)p_anchor;
-        (void)p_rotation;
-        return false;
-    }
+    virtual int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) = 0;
+    virtual bool remove_instance(int p_id) = 0;
+    virtual bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation) = 0;
     // Whether a chunk's samples can change from the last edit (its box grown by the locality margin at
     // its LOD meets the edit region): the chunks the terrain re-meshes.
-    virtual bool edit_affects_chunk(const ChunkId &p_chunk) const {
-        (void)p_chunk;
-        return false;
-    }
+    virtual bool edit_affects_chunk(const ChunkId &p_chunk) const = 0;
     // The region the last edit changed.
     const VoxelBox &last_edit_box() const { return edit_box; }
 
-    // The Hermite cascade's bands, if this terrain is one (SDFCascade): the meshers then compute the
-    // samples with the cascade passes (cascade_glsl.hpp) instead of calling terrain_sdf, and evaluate()
-    // only takes lattice points (frac 0, voxel a multiple of 2^lod).
-    virtual const Cascade::Spec *get_cascade() const { return nullptr; }
+    // The Hermite cascade's bands (never null): the meshers compute the samples with the cascade passes
+    // (cascade_glsl.hpp), and evaluate() only takes lattice points (frac 0, voxel a multiple of 2^lod).
+    virtual const Cascade::Spec *get_cascade() const = 0;
 
     // The smallest skirt depth (voxels of the chunk's LOD) this terrain needs: how far apart the surfaces of a
     // LOD L and a LOD L+1 chunk can be (a band dropped between them), so a seam shows no crack. VoxelTerrain raises
     // skirt_depth to it before configure().
-    virtual float min_skirt_depth(const ChunkParam &, int) const { return 0.0f; }
+    virtual float min_skirt_depth(const ChunkParam &p_param, int p_lod_count) const = 0;
 
-    // Depth (metres) of the skirt of a LOD-p_lod chunk: how far past its bounds the SDF is pushed towards
-    // air (gpu_glsl.hpp skirt_sdf). By default skirt_depth voxels of the LOD; SDFCascade sizes it from its
-    // octave amplitudes.
-    virtual float skirt_depth_m(int p_lod) const {
-        return param.skirt_depth * param.voxel_size * float(int64_t(1) << p_lod);
-    }
+    // Depth (metres) of the skirt of a LOD-p_lod chunk: how far past its bounds the SDF is pushed towards air
+    // (SDFCascade sizes it from its octave amplitudes).
+    virtual float skirt_depth_m(int p_lod) const = 0;
 
 protected:
     ChunkParam param;
@@ -225,6 +190,10 @@ private:
     static void _batch_block(void *p_job, uint32_t p_block) {
         const BatchJob &job = *static_cast<const BatchJob *>(p_job);
         const int begin = int(p_block) * BATCH_BLOCK;
-        job.sdf->SDFBase::evaluate_batch(job.points + begin, MIN(job.count - begin, BATCH_BLOCK), job.lod, job.out + begin);
+        WorldPos pos;
+        for (int i = begin; i < MIN(job.count, begin + BATCH_BLOCK); i++) {
+            pos.voxel = job.points[i];
+            job.out[i] = job.sdf->evaluate_cull(pos, job.lod);
+        }
     }
 };

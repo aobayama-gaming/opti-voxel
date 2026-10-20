@@ -18,9 +18,10 @@ struct Tri {
     Vector3 n[3];
 };
 
-// The GPU meshes skirt_sdf (gpu_glsl.hpp), not the bare SDF: past the chunk bounds it adds up to
-// skirt_depth cells. Same formula here, so the corners are judged on the field that was meshed.
-double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param) {
+// The GPU meshes the samples with their skirt, not the bare SDF: past the chunk bounds it adds up to
+// p_depth_cells (SDFBase::skirt_depth_m in cells). Same formula here, so the corners are judged on the field that
+// was meshed.
+double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param, double p_depth_cells) {
     if (p_param.skirt_size <= 0 || p_param.skirt_depth <= 0.0f) {
         return 0.0;
     }
@@ -28,7 +29,7 @@ double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param) {
     const double hi = lo + double(p_param.chunk_voxel_dimension());
     auto inside = [lo, hi](double c) { return MIN(c - lo, hi - c); };
     const double d = MIN(inside(p_corner.x), MIN(inside(p_corner.y), inside(p_corner.z)));
-    return CLAMP(-d, 0.0, 1.0) * double(p_param.skirt_depth);
+    return CLAMP(-d, 0.0, 1.0) * p_depth_cells;
 }
 
 // Smallest |SDF| (CPU evaluation, in cells) over the grid corners of the cell holding `p_grid` (a
@@ -37,10 +38,12 @@ double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param) {
 double min_abs_sdf_cells(SDFBase *p_sdf, const ChunkId &p_chunk, const Vector3 &p_grid, const ChunkParam &p_param, float p_cell) {
     const Vector3i base((int)std::floor(p_grid.x), (int)std::floor(p_grid.y), (int)std::floor(p_grid.z));
     double best = 1e30;
+    const int lod = ChunkMath::get_lod(p_chunk);
+    const double depth_cells = double(p_sdf->skirt_depth_m(lod)) / p_cell;
     for (int i = 0; i < 8; i++) {
         const Float3 corner{ float(base.x + (i & 1)), float(base.y + ((i >> 1) & 1)), float(base.z + ((i >> 2) & 1)) };
-        const double sdf_cells = (double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param), ChunkMath::get_lod(p_chunk)) / p_cell;
-        best = MIN(best, std::abs(sdf_cells + skirt_offset_cells(corner, p_param)));
+        const double sdf_cells = (double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param), lod) / p_cell;
+        best = MIN(best, std::abs(sdf_cells + skirt_offset_cells(corner, p_param, depth_cells)));
     }
     return best;
 }

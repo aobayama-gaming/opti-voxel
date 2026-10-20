@@ -96,7 +96,7 @@ private:
     bool discovery_cache = true;
     bool discovery_verify = false;
     bool destroy_verify = false;
-    int discoverer_mode = -1; // -1 auto: GPU for a cascade terrain, CPU otherwise
+    int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made)
     bool discovery_compare = false;
 
     bool started = false;
@@ -308,9 +308,8 @@ public:
     // the full recompute (VoxelState::verify_against_full), ERROR on a difference.
     void set_destroy_verify(bool p_enable);
     bool get_destroy_verify() const;
-    // Where the discoverer evaluates the corners of its cull test: -1 auto (GPU when the terrain is a cascade,
-    // CPU otherwise), 0 CPU, 1 GPU (DiscovererGPU, a local device on the discoverer thread; CPU with a warning
-    // if it can't be created or the terrain has no cascade). Both give the same scans.
+    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 (and -1, auto) GPU (DiscovererGPU, a
+    // local device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
     void set_discoverer_mode(int p_mode);
     int get_discoverer_mode() const;
     // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).

@@ -204,7 +204,7 @@ private:
     RID pipelines[5];
     RID uniform_set;
     uint32_t status_size_bytes = 0;
-    // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 0 (sdf).
+    // The cascade passes: pass 0 (the samples); shaders[0] / pipelines[0] stay empty.
     CascadePasses *cascade = nullptr;
     uint64_t cascade_scratch_bytes = 0; // under `mutex` (get_stats reads it on the main thread)
     uint64_t timestamps_frame_read = UINT64_MAX; // RD frame whose captured timestamps were consumed
@@ -220,9 +220,9 @@ private:
             const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records);
     void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
             const PackedByteArray &p_list, const PackedByteArray &p_records);
-    // Pass 0: the sdf pass, or the cascade's levels (timestamps "<prefix>_c<group>" after each level group
+    // Pass 0: the cascade's levels (timestamps "<prefix>_c<group>" after each level group
     // when p_prefix is not empty), folding the instances when the batch's list p_list holds any.
-    void _rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix, const PackedByteArray &p_list);
+    void _rt_record_samples(uint32_t p_count, int p_min_lod, const String &p_prefix, const PackedByteArray &p_list);
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);

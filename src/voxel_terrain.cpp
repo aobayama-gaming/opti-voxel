@@ -429,10 +429,7 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     axis(p_render_pos.x, origin.x, p.voxel.x, p.frac.x);
     axis(p_render_pos.y, origin.y, p.voxel.y, p.frac.y);
     axis(p_render_pos.z, origin.z, p.voxel.z, p.frac.z);
-    if (sdf->get_cascade() != nullptr) {
-        // The cascade only exists on lattice points: the LOD0 voxel corner (within one voxel).
-        p.frac = Float3();
-    }
+    p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
     return sdf->evaluate(p, 0);
 }
 
@@ -668,7 +665,7 @@ void VoxelTerrain::_ready() {
     chunk_discoverer->set_config(chunk_param, sdf);
     chunk_discoverer->set_cull_mode((ChunkDiscoverer::CullMode)discovery_cull_mode);
     chunk_discoverer->set_cache(discovery_cache, discovery_verify);
-    chunk_discoverer->set_gpu(discoverer_mode == 1 || (discoverer_mode == -1 && sdf->get_cascade() != nullptr));
+    chunk_discoverer->set_gpu(discoverer_mode != 0);
     chunk_discoverer->set_compare(discovery_compare);
 
     // The pixel error is measured against the camera's real vertical FOV and viewport height.

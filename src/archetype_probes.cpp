@@ -126,13 +126,18 @@ std::vector<Probe> make(const std::vector<VoxelPos> &p_anchors, const std::vecto
         prog.out_scale = 0.5f;
         return probe(p_name, prog, p_trace);
     };
-    std::vector<const Shape *> all;
+    std::vector<const Shape *> relative;
     for (const Shape &shape : SHAPES) {
         probes.push_back(shapes_probe(shape.name, { &shape }, p_anchors, true));
-        all.push_back(&shape);
+        // Not the same at the same offset from another origin: the fBm shapes read an absolute noise lattice, and the
+        // plane is unbounded (a copy 2^31 voxels away reads saturated inputs, a huge negative value, and wins the min).
+        const String name = shape.name;
+        if (name != "rock" && name != "height" && name != "plane") {
+            relative.push_back(&shape);
+        }
     }
-    // Every shape at the same offset from every origin: compared across origins (origin_relative).
-    Probe frames = shapes_probe("frames", all, p_frame_anchors, false);
+    // Every noise-free shape at the same offset from every origin: compared across origins (origin_relative).
+    Probe frames = shapes_probe("frames", relative, p_frame_anchors, false);
     frames.origin_relative = true;
     probes.push_back(frames);
     for (int i = 0; i < p_fuzz; i++) {
