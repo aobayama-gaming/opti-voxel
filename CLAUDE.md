@@ -346,7 +346,18 @@ to every change, and a reviewer may reject a PR on any of them.
   A dense 5 cm forest keeps a canopy over most columns at LODs 6-8 (unit test); from 1,100 m the forest5cm square
   is a canopy instead of nothing (`bench.sh --preset=forest5cm --cam_pos=-50,320,750 --above_ground=1100 --pitch=-55
   --yaw=0 [--moments=0]`). `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
-  `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms. Runtime edits don't update them yet.
+  `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms. **Edits** keep the blobs exact:
+  `Archetype::MomentLayers` holds each cell's members (by record id), their partial sums per block of 256 ids and the
+  pruning verdict; an edit moves its record between the cells its old and new tents touch, re-sums one block per cell
+  and re-judges the blobs whose box meets a changed one (bounds are summed in cell order), so the table holds the same
+  bits as a build of the edited records with the same joins (unit test: 6,829 blobs over 40 edits). The changed blobs go
+  through the edit's snapshot like any record (`SDFTable::update_moment_blobs`); `edit_affects_chunk` re-meshes each at
+  its LOD only (`EditRegion`). ~8 ms per edit on a 120-tree table in the debug build (0.17 without the blobs); the
+  forest5cm edit scenario re-meshes 6% more chunks; validate / audit / discovery_audit stay ok. The joins and the first
+  layer are frozen at the build: a material the build didn't have, or a part gone below its first layer, joins at the
+  next `configure`. A blob that vanishes keeps its record id for its key (removed, reused when it comes back: edits
+  don't eat the instance capacity). Coarse cells hold nearly every part: their member lists cost memory (~4 B per part
+  per cell its tent touches) and an O(parts) insert / erase per edit (TODO: per-block member lists would bound it).
   **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
   change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles the plane with cells of
   640 m rounded to 2^k voxels, and a cell keeps one site in its middle half with the kind's chance, from

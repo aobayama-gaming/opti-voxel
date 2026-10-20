@@ -4,6 +4,7 @@
 #include "archetype_table.hpp"
 #include "biome_features.hpp"
 #include "instance_table.hpp"
+#include "moment_layers.hpp"
 #include "sdf_base.hpp"
 #include "tree_archetype.hpp"
 
@@ -48,6 +49,9 @@ public:
         forest_area = p_area;
     }
     const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
+    // The moment blobs a whole rebuild of the current records would make, with the joins the table was built with: what
+    // the edits' incremental updates must match (tests).
+    void moment_blobs_reference(std::vector<Archetype::MomentBlob> &r_out) const;
     // The biome features (biome_features.hpp: lava lakes, floating islands) of the biome cells within p_radius metres
     // of (SCENE_X, SCENE_Z) (--biomes, kilometres there; 0: none). Set before configure().
     void set_biome_radius(double p_radius) { biome_radius = p_radius; }
@@ -77,8 +81,9 @@ public:
         const bool blobs = instance_band && moment_blobs && (scatter_count > 0 || forest_count > 0 || biome_radius > 0.0);
         return instance_erode_cells() + (blobs ? MOMENT_SKIRT_CELLS : 0.0f);
     }
-    // The moment skirt in cells: MOMENT_SKIRT_CELLS once the table holds moment blobs, else 0.
-    float moment_skirt_cells() const { return has_moment_blobs ? MOMENT_SKIRT_CELLS : 0.0f; }
+    // The moment skirt in cells: MOMENT_SKIRT_CELLS when the table has moment layers (edits may add blobs where the build
+    // placed none; the skirt only reaches the samples a blob touches), else 0.
+    float moment_skirt_cells() const { return moment_blob_type >= 0 ? MOMENT_SKIRT_CELLS : 0.0f; }
 
     SDFGpuTable *get_gpu_table() override { return &gpu; }
     using SDFBase::get_gpu_table; // the const form
@@ -138,9 +143,16 @@ private:
     Archetype::RecordStore records; // editable (paged, copy on write): each snapshot shares its pages
     std::shared_ptr<const Archetype::InstanceSnapshot> snapshot;
     Archetype::GpuTable gpu; // the meshers read and upload through get_gpu_table()
-    float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
-    float edit_margin_c = 0.0f;
-    int edit_lod_max = 0; // the changed records are listed below this LOD (edit_affects_chunk)
+    // What the last edit changed (edit_affects_chunk): one region per changed record, its margin inputs and the LODs
+    // [lod_min, lod_max) it is listed at (an instance below its max_lod, a moment blob at its layer's alone).
+    struct EditRegion {
+        VoxelBox box;
+        float k = 0.0f;
+        float margin_c = 0.0f;
+        int lod_min = 0;
+        int lod_max = 0;
+    };
+    std::vector<EditRegion> edit_regions;
     int scatter_count = 0; // --instances
     double scatter_area = 200.0; // --instance_area (metres)
     int forest_count = 0; // --trees
@@ -153,6 +165,17 @@ private:
     Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
     bool moment_blobs = true; // --moments
     bool has_moment_blobs = false; // add_moment_blobs placed some
+    // The moment layers of the records (add_moment_blobs; an item per record id), kept up to date by the edits, and each
+    // kept blob's record id by (lod, cell, material).
+    struct BlobKey {
+        int lod = 0;
+        int64_t x = 0, y = 0, z = 0;
+        uint32_t material = 0;
+        bool operator<(const BlobKey &p_o) const;
+    };
+    int moment_blob_type = -1; // -1: no moment layers
+    Archetype::MomentLayers moment_layers;
+    std::map<BlobKey, uint32_t> blob_ids;
 
     // Makes p_snapshot the current one (readers and the GPU table) and p_region the last edit's region.
     void publish(const std::shared_ptr<const Archetype::InstanceSnapshot> &p_snapshot, const VoxelBox &p_region);
@@ -179,6 +202,20 @@ private:
     void add_biomes(const Types &p_types, Dictionary &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
     void add_moment_blobs(int p_blob_type, Dictionary &r_stats);
+    // A record's moment item: its moments, material and the first LOD it is gone at (dropped, or eroded past its half
+    // thickness); empty moments for one that weighs nothing (removed, a cutter, a blob, never dropped).
+    Archetype::MomentItem moment_item(const Archetype::TableRecord &p_rec) const;
+    // A blob's record (op ACCUM, listed at its layer's LOD alone).
+    Archetype::TableRecord blob_record(const Archetype::MomentBlob &p_blob) const;
+    // After record p_id changed: its item updated in the moment layers (MomentLayers::update) and the kept blobs that
+    // changed applied to the table (added, replaced, removed): their ids appended to r_ids, their regions to edit_regions.
+    void update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids);
+    // Whether a blob's record fits the table (record_fit_error, the list id range): the build and the edits refuse the same.
+    bool blob_fits(const Archetype::TableRecord &p_rec) const;
+    // A new blob record for p_key, appended.
+    void add_blob_record(const BlobKey &p_key, const Archetype::TableRecord &p_rec);
+    // A blob record changed from p_old to p_new (removed: absent): its id and region recorded for the edit.
+    void blob_changed(uint32_t p_id, const Archetype::TableRecord &p_old, const Archetype::TableRecord &p_new, int p_lod, std::vector<uint32_t> &r_ids);
     // Finishes and appends r_records (one feature) if every one fits the table (record_fit_error, the limits of a
     // runtime edit), else none (ERR naming p_what).
     bool admit(std::vector<Archetype::TableRecord> &r_records, const char *p_what);

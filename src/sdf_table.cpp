@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
+#include <tuple>
 
 using namespace Archetype;
 
@@ -83,23 +85,27 @@ bool SDFTable::edit_affects_chunk(const ChunkId &p_chunk) const {
     if (!edit_box.valid) {
         return false;
     }
-    // The band rule: the changed instances are listed below edit_lod_max only, so a small dig doesn't re-mesh the
-    // coarse chunks around it.
     const int lod = ChunkMath::get_lod(p_chunk);
-    if (lod >= edit_lod_max) {
-        return false;
-    }
-    // The chunk's samples (span + skirt overhang) against the edit region grown by M(lod).
-    TableRecord grown;
-    grown.k = edit_k;
-    grown.margin_c = edit_margin_c;
-    grown.anchor = edit_box.lo;
-    for (int a = 0; a < 3; a++) {
-        grown.box_hi[a] = int32_t(MIN<int64_t>(edit_box.hi[a] - edit_box.lo[a], INT32_MAX));
-    }
     VoxelPos lo, hi;
     chunk_sample_box(p_chunk, param, lo, hi);
-    return influence_meets(grown, lod, lo, hi);
+    for (const EditRegion &r : edit_regions) {
+        // The LODs it is listed at only (the band rule: a small dig doesn't re-mesh the coarse chunks around it; a blob:
+        // its layer's alone), its region grown by M(lod) against the chunk's samples (span + skirt overhang).
+        if (lod < r.lod_min || lod >= r.lod_max) {
+            continue;
+        }
+        TableRecord grown;
+        grown.k = r.k;
+        grown.margin_c = r.margin_c;
+        grown.anchor = r.box.lo;
+        for (int a = 0; a < 3; a++) {
+            grown.box_hi[a] = int32_t(MIN<int64_t>(r.box.hi[a] - r.box.lo[a], INT32_MAX));
+        }
+        if (influence_meets(grown, lod, lo, hi)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 String SDFTable::edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k) {
@@ -148,12 +154,129 @@ void SDFTable::finish_record(TableRecord &r_rec) const {
 }
 
 void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id) {
-    edit_k = p_after.k;
-    edit_margin_c = p_after.margin_c;
-    // The LODs the edit can change: below the larger of the record's max_lod before and after it.
-    edit_lod_max = MAX(p_before.max_lod, p_after.max_lod);
+    // The LODs the edit can change: below the larger of the record's max_lod before and after it; then the moment
+    // blobs it changes, each at its layer's LOD.
+    edit_regions.assign(1, EditRegion{ p_region, MAX(p_before.k, p_after.k), MAX(p_before.margin_c, p_after.margin_c), 0, MAX(p_before.max_lod, p_after.max_lod) });
+    std::vector<uint32_t> ids{ p_id };
+    update_moment_blobs(p_id, ids);
+    VoxelBox all = p_region;
+    for (const EditRegion &r : edit_regions) {
+        for (int a = 0; a < 3; a++) {
+            all.lo[a] = MIN(all.lo[a], r.box.lo[a]);
+            all.hi[a] = MAX(all.hi[a], r.box.hi[a]);
+        }
+    }
     version++;
-    publish(edit_snapshot(*current(), records, { p_id }, version), p_region);
+    publish(edit_snapshot(*current(), records, ids, version), all);
+}
+
+bool SDFTable::BlobKey::operator<(const BlobKey &p_o) const {
+    return std::tie(lod, x, y, z, material) < std::tie(p_o.lod, p_o.x, p_o.y, p_o.z, p_o.material);
+}
+
+MomentItem SDFTable::moment_item(const TableRecord &p_rec) const {
+    MomentItem item;
+    item.anchor = p_rec.anchor;
+    item.material = p_rec.material;
+    if (p_rec.removed || is_cutter(p_rec.op) || p_rec.op == Combine::ACCUM || p_rec.max_lod == TableRecord::NEVER_DROPPED) {
+        return item;
+    }
+    // From the first LOD it is gone at: dropped, or eroded past its half thickness (still listed, barely drawn).
+    item.moments = record_moments((*library)[p_rec.def], p_rec);
+    const double half = item.moments.half_thickness();
+    item.drop_lod = p_rec.max_lod;
+    for (int l = 0; l < item.drop_lod; l++) {
+        if (double(band_erosion(p_rec.erode, p_rec.erode_from, l)) >= half) {
+            item.drop_lod = l;
+            break;
+        }
+    }
+    return item;
+}
+
+TableRecord SDFTable::blob_record(const MomentBlob &p_blob) const {
+    TableRecord rec;
+    rec.def = uint8_t(moment_blob_type);
+    rec.op = Combine::ACCUM;
+    rec.anchor = p_blob.anchor;
+    std::copy(p_blob.rotation, p_blob.rotation + 9, rec.rotation);
+    std::copy(p_blob.inv_s2, p_blob.inv_s2 + 3, rec.params);
+    rec.params[3] = p_blob.amplitude;
+    rec.material = p_blob.material;
+    Archetype::finish_record((*library)[rec.def], rec, param.skirt_depth, false);
+    rec.min_lod = uint8_t(p_blob.lod);
+    rec.max_lod = uint8_t(p_blob.lod + 1);
+    return rec;
+}
+
+void SDFTable::moment_blobs_reference(std::vector<MomentBlob> &r_out) const {
+    r_out.clear();
+    if (moment_blob_type >= 0) {
+        moment_layers.rebuild(r_out);
+    }
+}
+
+void SDFTable::update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids) {
+    if (moment_blob_type < 0) {
+        return;
+    }
+    std::vector<MomentBlobChange> changes;
+    moment_layers.update(p_id, moment_item(records[p_id]), changes);
+    for (const MomentBlobChange &c : changes) {
+        const BlobKey key{ c.blob.lod, c.blob.cell[0], c.blob.cell[1], c.blob.cell[2], c.blob.material };
+        const auto it = blob_ids.find(key);
+        if (!c.kept) {
+            if (it != blob_ids.end() && !records[it->second].removed) { // gone: removed, its id kept for the key
+                const TableRecord old = records[it->second];
+                TableRecord removed = old;
+                removed.removed = true;
+                records.set(it->second, removed, version + 1);
+                blob_changed(it->second, old, removed, key.lod, r_ids);
+            }
+            continue;
+        }
+        TableRecord rec = blob_record(c.blob);
+        if (!blob_fits(rec)) {
+            continue; // refused like at the build
+        }
+        if (it != blob_ids.end()) { // replaced when different (or back, in its old record)
+            const TableRecord old = records[it->second];
+            if (old.removed || rec.anchor != old.anchor || std::memcmp(rec.rotation, old.rotation, sizeof(rec.rotation)) != 0 ||
+                    std::memcmp(rec.params, old.params, sizeof(rec.params)) != 0 || rec.material != old.material) {
+                records.set(it->second, rec, version + 1);
+                blob_changed(it->second, old, rec, key.lod, r_ids);
+            }
+            continue;
+        }
+        ERR_CONTINUE_MSG(records.size() >= gpu.instance_capacity(), "SDFTable: a moment blob left out: the table is full.");
+        add_blob_record(key, rec);
+        TableRecord none = rec;
+        none.removed = true;
+        blob_changed(records.size() - 1, none, rec, key.lod, r_ids);
+    }
+}
+
+bool SDFTable::blob_fits(const TableRecord &p_rec) const {
+    return record_fit_error((*library)[p_rec.def], p_rec, max_instance_extent()).is_empty() && records.size() <= uint32_t(SDFGpuTable::LIST_ID_MASK);
+}
+
+void SDFTable::add_blob_record(const BlobKey &p_key, const TableRecord &p_rec) {
+    blob_ids[p_key] = records.size();
+    records.push_back(p_rec, version + 1);
+    has_moment_blobs = true;
+}
+
+void SDFTable::blob_changed(uint32_t p_id, const TableRecord &p_old, const TableRecord &p_new, int p_lod, std::vector<uint32_t> &r_ids) {
+    VoxelBox box = record_box(p_old.removed ? p_new : p_old);
+    if (!p_new.removed) {
+        const VoxelBox b = record_box(p_new);
+        for (int k = 0; k < 3; k++) {
+            box.lo[k] = MIN(box.lo[k], b.lo[k]);
+            box.hi[k] = MAX(box.hi[k], b.hi[k]);
+        }
+    }
+    edit_regions.push_back(EditRegion{ box, 0.0f, MAX(p_old.margin_c, p_new.margin_c), p_lod, p_lod + 1 });
+    r_ids.push_back(p_id);
 }
 
 VoxelBox SDFTable::record_box(const TableRecord &p_rec) {
@@ -301,59 +424,40 @@ void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
         return;
     }
     const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
-    std::vector<MomentItem> items;
-    MomentLayerParams layers;
-    layers.lod_min = lod_count;
-    layers.lod_max = lod_count - 1;
+    moment_blob_type = p_blob_type;
+    MomentLayerParams params;
+    params.lod_min = lod_count;
+    params.lod_max = lod_count - 1;
     // Fainter, even with its neighbours, than what draws a material: it would only lift the surface by an eighth of a cell.
-    layers.min_occupancy = MOMENT_MATERIAL_ISO;
+    params.min_occupancy = MOMENT_MATERIAL_ISO;
+    std::vector<MomentItem> items(records.size());
+    int64_t weighed = 0;
     for (uint32_t i = 0; i < records.size(); i++) {
-        const TableRecord &rec = records[i];
-        if (rec.removed || is_cutter(rec.op) || rec.op == Combine::ACCUM || rec.max_lod == TableRecord::NEVER_DROPPED) {
-            continue;
+        items[i] = moment_item(records[i]);
+        if (!items[i].moments.empty()) {
+            params.lod_min = MIN(params.lod_min, items[i].drop_lod);
+            weighed++;
         }
-        // From the first LOD it is gone at: dropped, or eroded past its half thickness (still listed, barely drawn).
-        const Moments m = record_moments((*library)[rec.def], rec);
-        const double half = m.half_thickness();
-        int gone = rec.max_lod;
-        for (int l = 0; l < gone; l++) {
-            if (double(band_erosion(rec.erode, rec.erode_from, l)) >= half) {
-                gone = l;
-                break;
-            }
-        }
-        items.push_back(MomentItem{ rec.anchor, m, rec.material, gone });
-        layers.lod_min = MIN(layers.lod_min, gone);
     }
+    moment_layers.build(items, params);
     std::vector<MomentBlob> blobs;
-    build_moment_blobs(items, layers, blobs);
-    const TableDef &def = (*library)[p_blob_type];
+    moment_layers.kept(blobs);
     Array per_lod;
     per_lod.resize(lod_count);
     per_lod.fill(int64_t(0));
+    blob_ids.clear();
     int64_t refused = 0;
     for (const MomentBlob &b : blobs) {
-        TableRecord rec;
-        rec.def = uint8_t(p_blob_type);
-        rec.op = Combine::ACCUM;
-        rec.anchor = b.anchor;
-        std::copy(b.rotation, b.rotation + 9, rec.rotation);
-        std::copy(b.inv_s2, b.inv_s2 + 3, rec.params);
-        rec.params[3] = b.amplitude;
-        rec.material = b.material;
-        if (!record_fit_error(def, rec, max_instance_extent()).is_empty() || records.size() > uint32_t(SDFGpuTable::LIST_ID_MASK)) {
+        const TableRecord rec = blob_record(b);
+        if (!blob_fits(rec)) {
             refused++;
             continue;
         }
-        Archetype::finish_record(def, rec, param.skirt_depth, false);
-        rec.min_lod = uint8_t(b.lod);
-        rec.max_lod = uint8_t(b.lod + 1);
-        records.push_back(rec, version + 1);
+        add_blob_record(BlobKey{ b.lod, b.cell[0], b.cell[1], b.cell[2], b.material }, rec);
         per_lod[b.lod] = int64_t(per_lod[b.lod]) + 1;
-        has_moment_blobs = true;
     }
     Dictionary d;
-    d["items"] = int64_t(items.size());
+    d["items"] = weighed;
     d["blobs"] = int64_t(blobs.size());
     d["blobs_per_lod"] = per_lod;
     d["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
@@ -483,6 +587,9 @@ void SDFTable::build_table(int p_lod_count) {
 
     records.clear();
     has_moment_blobs = false;
+    moment_blob_type = -1;
+    blob_ids.clear();
+    moment_layers = MomentLayers();
     trees.clear();
     lava_pools.clear();
     if (scene == Scene::SHAPES) {
@@ -495,9 +602,7 @@ void SDFTable::build_table(int p_lod_count) {
     add_forest(crown_types(branch, crown, lib[crown], cone), vs, SCENE_X, SCENE_Z, scene_stats);
     add_moment_blobs(blob, scene_stats);
     gpu.set_scene_stats(scene_stats);
-    edit_k = 0.0f;
-    edit_margin_c = 0.0f;
-    edit_lod_max = 0;
+    edit_regions.clear();
     // The GPU buffers hold the scene plus room for runtime edits (the mesher reads this at init).
     gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
     version++;

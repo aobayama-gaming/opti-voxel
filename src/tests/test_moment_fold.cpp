@@ -4,6 +4,8 @@
 #include "moment_layers.hpp"
 #include "sdf_cascade.hpp"
 
+#include <chrono>
+#include <cstring>
 #include <string>
 
 using namespace Archetype;
@@ -33,7 +35,90 @@ struct Forest {
     }
 };
 
+// A 5 cm forest of 120 trees, with or without its moment blobs, and its trees' record ids.
+void small_forest(SDFCascade &r_sdf, bool p_moments, std::vector<uint32_t> &r_parts) {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    r_sdf.set_forest(120, 60.0);
+    r_sdf.set_moment_blobs(p_moments);
+    param.skirt_depth = MAX(param.skirt_depth, r_sdf.min_skirt_depth(param, 18));
+    r_sdf.configure(param, 18);
+    const std::shared_ptr<const InstanceSnapshot> snap = r_sdf.get_snapshot();
+    for (uint32_t i = 0; i < snap->records.size(); i++) {
+        if (snap->records[i].op != Combine::ACCUM) {
+            r_parts.push_back(i);
+        }
+    }
+}
+
+// Edit p_step of a scripted sequence: a tree part removed, one moved by up to 10 m, or a 1-3 m sphere added near the
+// forest; its time (microseconds).
+int64_t edit_step(SDFCascade &p_sdf, const std::vector<uint32_t> &p_parts, uint32_t p_step) {
+    const int64_t cx = std::llround(SDFTable::SCENE_X / 0.05), cz = std::llround(SDFTable::SCENE_Z / 0.05);
+    const auto t0 = std::chrono::steady_clock::now();
+    const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_step, 0xED17u, 0x5u });
+    const uint32_t id = p_parts[h.x % p_parts.size()];
+    if (p_step % 3 == 0) {
+        p_sdf.remove_instance(int(id));
+    } else if (p_step % 3 == 1) {
+        const TableRecord rec = p_sdf.get_snapshot()->records[id];
+        p_sdf.move_instance(int(id), rec.anchor + VoxelPos(int64_t(h.y % 401u) - 200, 0, int64_t(h.z % 401u) - 200), nullptr);
+    } else {
+        const int64_t x = cx + int64_t(h.y % 1000u) - 500, z = cz + int64_t(h.z % 1000u) - 500;
+        const float params[8] = { 20.0f + float(h.x % 40u), 0, 0, 0, 0, 0, 0, 0 }; // type 0: a sphere
+        CHECK(p_sdf.add_instance(0, VoxelPos(x, p_sdf.ground_y(x, z) + 200, z), nullptr, params, int(Combine::SMOOTH_UNION), 4.0f) >= 0);
+    }
+    return int64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
+}
+
 } // namespace
+
+TEST_CASE("Moment edits: after adds, moves and removes the table holds the blobs a whole rebuild makes") {
+    SDFCascade sdf;
+    std::vector<uint32_t> parts;
+    small_forest(sdf, true, parts);
+    int64_t compared = 0;
+    int64_t edit_us = 0;
+    for (uint32_t step = 0; step < 40; step++) {
+        edit_us += edit_step(sdf, parts, step);
+        if (step % 10 != 9) {
+            continue;
+        }
+        std::vector<MomentBlob> reference;
+        sdf.moment_blobs_reference(reference);
+        const std::shared_ptr<const InstanceSnapshot> snap = sdf.get_snapshot();
+        std::vector<const TableRecord *> held;
+        for (uint32_t i = 0; i < snap->records.size(); i++) {
+            if (snap->records[i].op == Combine::ACCUM && !snap->records[i].removed) {
+                held.push_back(&snap->records[i]);
+            }
+        }
+        CAPTURE(step);
+        CHECK(held.size() == reference.size());
+        // Every reference blob is held, bit for bit (anchor, frame, params, material, LOD).
+        int64_t missing = 0;
+        for (const MomentBlob &b : reference) {
+            bool found = false;
+            for (const TableRecord *r : held) {
+                found = found || (r->anchor == b.anchor && int(r->min_lod) == b.lod && r->material == b.material && std::memcmp(r->rotation, b.rotation, sizeof(b.rotation)) == 0 && std::memcmp(r->params, b.inv_s2, sizeof(b.inv_s2)) == 0 && ExactNoise::float_bits(r->params[3]) == ExactNoise::float_bits(b.amplitude));
+            }
+            missing += found ? 0 : 1;
+        }
+        CHECK(missing == 0);
+        compared += int64_t(reference.size());
+    }
+    // The same edits without the blobs: what they add to an edit.
+    SDFCascade bare;
+    std::vector<uint32_t> bare_parts;
+    small_forest(bare, false, bare_parts);
+    int64_t bare_us = 0;
+    for (uint32_t step = 0; step < 40; step++) {
+        bare_us += edit_step(bare, bare_parts, step);
+    }
+    MESSAGE("moment edits: ", compared, " blobs compared with a whole rebuild over 40 edits; ", edit_us / 40, " us per edit (", bare_us / 40,
+            " without the blobs)");
+    CHECK(compared > 0);
+}
 
 TEST_CASE("Moment fold: the blob type's program is the blob's occupancy, in the record's frame") {
     const TableDefPtr def = make_moment_blob_type();
