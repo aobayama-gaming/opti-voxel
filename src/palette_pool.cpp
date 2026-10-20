@@ -84,7 +84,7 @@ void PalettePool::rt_create(RenderingDevice *p_rd) {
     format->set_width(PageFormat::PALETTE_TEX_WIDTH);
     format->set_height(rows());
     format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
-            RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
+            RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT); // copy-to: texture_clear
     Ref<RDTextureView> view;
     view.instantiate();
     texture = p_rd->texture_create(format, view);

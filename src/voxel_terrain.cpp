@@ -729,7 +729,8 @@ void VoxelTerrain::_ready() {
             direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
         }
         // The materials' parameters (Material::Library::make_image), read by id through the chunks' palettes.
-        direct_mesher->get_pool()->set_material_param("material_tex", ImageTexture::create_from_image(sdf->get_materials().make_image()));
+        material_texture = ImageTexture::create_from_image(sdf->get_materials().make_image());
+        direct_mesher->get_pool()->set_material_param("material_tex", material_texture->get_rid());
     } else {
         gpu_mesher = memnew(GPUMesher);
 
@@ -950,7 +951,8 @@ void VoxelTerrain::_process(double) {
 bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
     ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_validate needs pipeline_mode = GPU Direct.");
     ERR_FAIL_COND_V_MSG(validator, false, "A validation is already running.");
-    std::vector<MeshValidator::Target> candidates;
+    // The chunks whose palette names a material besides the ground apart: they are rare, and up to half the sample.
+    std::vector<MeshValidator::Target> candidates[2];
     for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
         if (kv.value.owner) {
             MeshValidator::Target t;
@@ -959,15 +961,18 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
             t.offset = kv.value.quad_offset;
             t.count = kv.value.quad_count;
             t.palette = kv.value.palette;
-            candidates.push_back(t);
+            candidates[t.palette.entries > 1 ? 1 : 0].push_back(t);
         }
     }
-    ERR_FAIL_COND_V_MSG(candidates.empty(), false, "No non-empty loaded chunk to validate.");
-    // Evenly spaced sample (hash map order is arbitrary but stable enough for a spread of LODs).
+    ERR_FAIL_COND_V_MSG(candidates[0].empty() && candidates[1].empty(), false, "No non-empty loaded chunk to validate.");
+    // Evenly spaced samples (hash map order is arbitrary but stable enough for a spread of LODs).
     std::vector<MeshValidator::Target> targets;
-    const int n = MIN(p_count, (int)candidates.size());
-    for (int i = 0; i < n; i++) {
-        targets.push_back(candidates[(size_t)i * candidates.size() / n]);
+    const int with_materials = MIN(p_count / 2, (int)candidates[1].size());
+    const int counts[2] = { MIN(p_count - with_materials, (int)candidates[0].size()), with_materials };
+    for (int s = 0; s < 2; s++) {
+        for (int i = 0; i < counts[s]; i++) {
+            targets.push_back(candidates[s][(size_t)i * candidates[s].size() / counts[s]]);
+        }
     }
     validation_report = Dictionary();
     validator = memnew(MeshValidator);

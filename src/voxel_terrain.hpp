@@ -1,5 +1,6 @@
 #pragma once
 
+#include "godot_cpp/classes/image_texture.hpp"
 #include "godot_cpp/classes/node3d.hpp"
 #include "godot_cpp/classes/wrapped.hpp"
 #include "godot_cpp/variant/packed_float32_array.hpp"
@@ -53,6 +54,7 @@ private:
     GPUMesher *gpu_mesher = nullptr;
 
     GPUDirectMesher *direct_mesher = nullptr;
+    Ref<ImageTexture> material_texture; // the pages' material_tex (a material param holds its RID only)
 
     MeshValidator *validator = nullptr;
     GPUProfiler *gpu_profiler = nullptr;
