@@ -15,9 +15,7 @@ shader_type spatial;
 render_mode skip_vertex_transform, cull_back;
 
 // (RenderingServer::shader_set_code does not run the preprocessor: no #define here.)
-// Must match page_format.hpp.
-const int QUAD_GROUP = 64;
-const int HEADER_TEXELS = 2;
+/*GLSL_PAGE_DECODE*/
 
 uniform usampler2D quad_tex : filter_nearest, repeat_disable;
 // 0 shaded, 1 normals, 2 lod, 3 page, 4 shaded + quad wireframe, 5 chunk hash,
@@ -31,7 +29,7 @@ uniform float sea_level_m = -1e30;
 uniform ivec3 origin_chunk_lo = ivec3(0);
 uniform int chunk_size = 32;
 uniform int skirt_size = 2;
-uniform float pos_scale = 512.0;
+uniform float pos_scale = 256.0; // PageFormat::pos_scale(chunk_size), set by the mesher
 // Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
 // colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
 uniform float skirt_depth_m[32];
@@ -47,15 +45,6 @@ varying flat vec3 v_chunk;
 varying flat ivec2 v_ids;
 varying float v_height; // metres above the world origin (shaded view: contour lines)
 
-vec3 oct_decode22(uint p) {
-    vec2 f = vec2(float(p & 2047u), float(p >> 11u)) / 2047.0 * 2.0 - 1.0;
-    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
-    float t = max(-n.z, 0.0);
-    n.x += n.x >= 0.0 ? -t : t;
-    n.y += n.y >= 0.0 ? -t : t;
-    return normalize(n);
-}
-
 vec3 hash3(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
     p += dot(p, p.yxz + 33.33);
@@ -66,7 +55,7 @@ void vertex() {
     int corner = VERTEX_ID % 4; // base quad corners A, B, C, D
     uvec4 h0 = texelFetch(quad_tex, ivec2(0, INSTANCE_ID), 0);
     uvec4 h1 = texelFetch(quad_tex, ivec2(1, INSTANCE_ID), 0);
-    uvec4 c = texelFetch(quad_tex, ivec2(HEADER_TEXELS + VERTEX_ID, INSTANCE_ID), 0);
+    uvec4 c = texelFetch(quad_tex, ivec2(int(HEADER_TEXELS) + VERTEX_ID, INSTANCE_ID), 0);
     ivec3 chunk = ivec3(int(h0.x | (h0.y << 16u)), int(h0.z | (h0.w << 16u)), int(h1.x | (h1.y << 16u)));
 
     // ChunkMath::vertices_to_world. Empty / killed rows are all zero: every corner lands on the
@@ -79,10 +68,9 @@ void vertex() {
     // multiple of the root chunk span, so the low word keeps the LOD bit used above.
     ivec3 rel = chunk - origin_chunk_lo;
     vec3 chunk_min = vec3(rel) * (chunk_world_dim * 0.5) - vec3(size * 0.5);
-    vec3 local = vec3(float(c.x & 16383u), float(c.y & 16383u), float(c.z & 16383u)) / pos_scale;
+    vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
-    uint packed_normal = (c.x >> 14u) | ((c.y >> 14u) << 2u) | ((c.z >> 14u) << 4u) | (c.w << 6u);
-    vec3 n = c != uvec4(0u) ? oct_decode22(packed_normal) : vec3(0.0, 1.0, 0.0);
+    vec3 n = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
 
     v_world_normal = n;
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4);
@@ -214,7 +202,7 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     rs->mesh_add_surface_from_arrays(base_mesh, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
     shader = rs->shader_create();
-    rs->shader_set_code(shader, String(PAGE_SHADER).replace("LAVA_POOL_MAX", itos(LAVA_POOL_MAX)));
+    rs->shader_set_code(shader, String(PAGE_SHADER).replace("LAVA_POOL_MAX", itos(LAVA_POOL_MAX)).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode()));
     material_params["voxel_size"] = voxel_size;
 
     for (uint32_t i = 0; i < p_initial_pages; i++) {
