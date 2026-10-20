@@ -51,10 +51,9 @@ void main() {
 }
 )glsl";
 
-// Pass 0 (the samples) is the cascade passes (CascadePasses, _rt_record_samples): no shader of its own here, its
-// slot keeps the timestamp and the gpu_pass_sdf stat.
-static const char *PASS_SOURCES[5] = {
-    nullptr,
+// The mesher's own compute passes (shaders[i] / pipelines[i]). Pass 0 of the stats and timestamps (`sdf`, `_p0`) is
+// the samples, the cascade passes (CascadePasses, _rt_record_samples); compute pass i is stat / timestamp i + 1.
+static const char *PASS_SOURCES[GPUDirectMesher::COMPUTE_PASSES] = {
     GLSL_DIRECT_PASS_EDGES,
     GLSL_DIRECT_PASS_VERTICES,
     GLSL_DIRECT_PASS_RESERVE,
@@ -189,9 +188,9 @@ void GPUDirectMesher::_rt_initialize() {
     const PackedByteArray param_data = GPUFrame::chunk_param_bytes(chunk_param);
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
-    for (int i = 1; i < 5; i++) {
-        shaders[i] = _rt_compile(PASS_SOURCES[i], PASS_NAMES[i]);
-        ERR_FAIL_COND_MSG(!shaders[i].is_valid(), String("GPUDirectMesher: pass failed to compile: ") + PASS_NAMES[i]);
+    for (int i = 0; i < COMPUTE_PASSES; i++) {
+        shaders[i] = _rt_compile(PASS_SOURCES[i], PASS_NAMES[i + 1]);
+        ERR_FAIL_COND_MSG(!shaders[i].is_valid(), String("GPUDirectMesher: pass failed to compile: ") + PASS_NAMES[i + 1]);
         pipelines[i] = rd->compute_pipeline_create(shaders[i]);
     }
 
@@ -219,8 +218,8 @@ void GPUDirectMesher::_rt_initialize() {
     buffer_table_list = rd->storage_buffer_create(table_list_capacity);
     uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    // All passes declare the same bindings, so one set (created against pass 1) serves them all.
-    uniform_set = rd->uniform_set_create(uniforms, shaders[1], 0);
+    // All passes declare the same bindings, so one set serves them all.
+    uniform_set = rd->uniform_set_create(uniforms, shaders[0], 0);
 
     cascade = memnew(CascadePasses);
     if (!cascade->create(rd, sdf, chunk_param, settings.batch_size, buffer_input_chunk, buffer_chunk_param, buffer_sdf, RID(), nullptr,
@@ -378,8 +377,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     push.encode_u32(12, 0);
 
     const uint32_t g = chunk_param.chunk_size / 8;
-    const uint32_t groups[5][3] = {
-        { 0, 0, 0 }, // samples: the cascade passes (_rt_record_samples)
+    const uint32_t groups[COMPUTE_PASSES][3] = {
         { g, 3 * g, g * p_count }, // edges (y spans the 3 axes)
         { g, g, g * p_count }, // vertices
         { 1, 1, 1 }, // reserve
@@ -388,12 +386,9 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 
     const String prefix = "vx" + String::num_int64(p_batch_id);
     rd->capture_timestamp(prefix + String("_begin"));
-    for (int i = 0; i < 5; i++) {
-        if (i == 0) {
-            _rt_record_samples(p_count, p_min_lod, prefix, p_list);
-            rd->capture_timestamp(prefix + String("_p0"));
-            continue;
-        }
+    _rt_record_samples(p_count, p_min_lod, prefix, p_list);
+    rd->capture_timestamp(prefix + String("_p0"));
+    for (int i = 0; i < COMPUTE_PASSES; i++) {
         // One list per pass so a timestamp can sit between passes; the render graph orders them.
         const int64_t list = rd->compute_list_begin();
         rd->compute_list_bind_compute_pipeline(list, pipelines[i]);
@@ -401,7 +396,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
         rd->compute_list_set_push_constant(list, push, push.size());
         rd->compute_list_dispatch(list, groups[i][0], groups[i][1], groups[i][2]);
         rd->compute_list_end();
-        rd->capture_timestamp(prefix + String("_p") + String::num_int64(i));
+        rd->capture_timestamp(prefix + String("_p") + String::num_int64(i + 1));
     }
 
     // GPU -> GPU: quads into the page textures, used group counts into the indirect instance counts.
@@ -443,16 +438,12 @@ void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uin
 
     // samples (the cascade passes), edges, vertices: the vertices pass leaves the exact quad count in chunk_dir.x.
     const uint32_t g = chunk_param.chunk_size / 8;
-    const uint32_t groups[3][3] = {
-        { 0, 0, 0 },
+    const uint32_t groups[2][3] = {
         { g, 3 * g, g * p_count },
         { g, g, g * p_count },
     };
-    for (int i = 0; i < 3; i++) {
-        if (i == 0) {
-            _rt_record_samples(p_count, p_min_lod, String(), p_list);
-            continue;
-        }
+    _rt_record_samples(p_count, p_min_lod, String(), p_list);
+    for (int i = 0; i < 2; i++) {
         const int64_t list = rd->compute_list_begin();
         rd->compute_list_bind_compute_pipeline(list, pipelines[i]);
         rd->compute_list_bind_uniform_set(list, uniform_set, 0);
@@ -1278,8 +1269,8 @@ void GPUDirectMesher::_rt_destroy() {
     }
     // Dependents (uniform set, pipelines) before the shaders and resources they use.
     RID rids[] = { uniform_set,
-        pipelines[1], pipelines[2], pipelines[3], pipelines[4],
-        shaders[1], shaders[2], shaders[3], shaders[4],
+        pipelines[0], pipelines[1], pipelines[2], pipelines[3],
+        shaders[0], shaders[1], shaders[2], shaders[3],
         buffer_chunk_dir, buffer_input_chunk, buffer_sdf, buffer_edges, buffer_vertices,
         buffer_chunk_param, staging_texture, buffer_status, buffer_table_records, buffer_table_list };
     if (rd) {

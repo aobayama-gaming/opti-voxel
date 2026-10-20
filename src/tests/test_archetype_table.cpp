@@ -115,6 +115,20 @@ void rotations(std::vector<std::array<float, 9>> &r_out) {
 // The record carries the frame: the same local point (offset and fraction) gives the same bits at an anchor near 0,
 // across the 2^32 low-word wrap and near 2^60, for every type, rotation and LOD (the noise lattice follows the
 // anchor, INPUT is the exact sat_diff).
+TEST_CASE("Archetype table: perlin3 octaves stay within the bounds the noisy types' boxes use") {
+    float vmax = 0.0f;
+    float gmax = 0.0f;
+    for (uint32_t i = 0; i < 200000; i++) {
+        const WorldPos p = random_point(VoxelPos(int64_t(i) << 20, 0, -int64_t(i) * 977), 4096.0, i, 5);
+        const ExactNoise::Float4 n = ExactNoise::perlin3(p, 4, i * 31u, Vector3i64());
+        vmax = MAX(vmax, std::fabs(n.w));
+        gmax = MAX(gmax, std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z));
+    }
+    MESSAGE("perlin3 max |value| ", vmax, " |grad| per cell ", gmax);
+    CHECK(vmax <= PERLIN3_MAX);
+    CHECK(gmax <= PERLIN3_GRAD_MAX);
+}
+
 TEST_CASE("Archetype table: a library type gives the same bits for the same local point at any anchor") {
     const int64_t P32 = int64_t(1) << 32;
     const VoxelPos anchors[] = { VoxelPos(), VoxelPos(P32 - 3, -P32 + 2, P32 - 1),

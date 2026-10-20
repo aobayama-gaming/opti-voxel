@@ -594,10 +594,22 @@ TableDefPtr make_tunnel_cube_type() {
     return d;
 }
 
+namespace {
+
+// Corner p_c (bits x, y, z: the high side) of the box (p_lo, p_hi).
+void box_corner(Float3 p_lo, Float3 p_hi, int p_c, double r_q[3]) {
+    r_q[0] = (p_c & 1) ? p_hi.x : p_lo.x;
+    r_q[1] = (p_c & 2) ? p_hi.y : p_lo.y;
+    r_q[2] = (p_c & 4) ? p_hi.z : p_lo.z;
+}
+
+} // namespace
+
 double rotation_margin(Float3 p_lo, Float3 p_hi) {
     double reach = 0.0;
     for (int c = 0; c < 8; c++) {
-        const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
+        double q[3];
+        box_corner(p_lo, p_hi, c, q);
         reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
     }
     return 1.0 + 1e-4 * reach;
@@ -609,7 +621,8 @@ Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, const VoxelPos 
     double lo[3] = { INFINITY, INFINITY, INFINITY };
     double hi[3] = { -INFINITY, -INFINITY, -INFINITY };
     for (int c = 0; c < 8; c++) {
-        const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
+        double q[3];
+        box_corner(p_lo, p_hi, c, q);
         for (int j = 0; j < 3; j++) {
             const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
             lo[j] = MIN(lo[j], w);

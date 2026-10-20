@@ -641,7 +641,7 @@ void VoxelTerrain::_ready() {
     }
     sdf->set_scatter(archetype_instances, archetype_instance_area);
     sdf->set_forest(archetype_trees, archetype_tree_area);
-    sdf->set_instance_band(archetype_band);
+    sdf->set_instance_band(archetype_band && terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_instance_erode(archetype_erode);
     sdf->set_instance_resolve(archetype_resolve);
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);

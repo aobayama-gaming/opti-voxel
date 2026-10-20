@@ -136,7 +136,7 @@ int64_t SDFTable::max_instance_extent() const {
 }
 
 void SDFTable::finish_record(TableRecord &r_rec) const {
-    Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band && scene != Scene::SHAPES, erode_rule);
+    Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
 }
 
 void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id) {
@@ -204,6 +204,9 @@ void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_para
     const float rot[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
     std::copy(rot, rot + 9, rec.rotation);
     rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
+    // The same limits as a runtime edit (a gallery cube past 4 top-LOD chunk spans with few LODs).
+    const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
+    ERR_FAIL_COND_MSG(!fit.is_empty(), "SDFTable: scene record left out: " + fit);
     finish_record(rec);
     records.push_back(rec, version + 1);
 }

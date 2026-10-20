@@ -88,9 +88,7 @@ public:
             b.amp = preset == Preset::CONTINENTS ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
         }
         if (preset == Preset::FLAT) {
-            // Flat: no band at all (the same lattice, without inserting zeros at every level).
-            spec.top = spec.top_level();
-            spec.bands.clear();
+            spec.bands.clear(); // no top lattice either: a chunk's run is its own level
         }
         datum = VoxelPos(0, std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : DATUM_M) / vs), 0);
         voxel_size = p_param.voxel_size;
@@ -101,7 +99,8 @@ public:
         // the old skirt_depth voxels of the LOD: the groove at the border is depth / 4. With instances placed, plus
         // their erosion step (SDFTable::min_skirt_depth cells): next to a rock smooth-unioned into the ground both
         // steps happen at the same seam, so the sum. Without, the bare cascade's
-        // skirts, bit for bit: a runtime edit on a cascade configured with no instance gets no extra depth.
+        // skirts, bit for bit: a runtime edit on a cascade configured with no instance gets no extra depth. Flat: the
+        // hard-CSG gallery's creases differ between LODs by up to a cell, so skirt_depth cells of the LOD.
         const double erode_cells = current()->empty() ? 0.0 : SDFTable::min_skirt_depth(p_param, p_lod_count);
         skirt_depth_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
@@ -112,7 +111,8 @@ public:
                 }
             }
             const double cell_m = vs * std::ldexp(1.0, l);
-            skirt_depth_table[l] = float(MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m) + erode_cells * cell_m);
+            const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
+            skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
         }
     }
 

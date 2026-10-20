@@ -132,8 +132,8 @@ private:
     // handful of entries for it, and at most 2^29 so that box_lo minus the influence margin (clamped to INPUT_LIMIT
     // = 2^30) stays in int32 on the GPU (arch_in_box).
     int64_t max_instance_extent() const;
-    // The band rule, unless set_instance_band(false) or in the shapes gallery: a crease test at every LOD (its ladder
-    // is sized one cube per LOD), where eroding the thin frames tears them.
+    // The band rule, unless set_instance_band(false) (VoxelTerrain: --instance_band=0, and the shapes gallery: its ladder
+    // is sized one cube per LOD, and eroding the thin frames tears them).
     void finish_record(Archetype::TableRecord &r_rec) const;
     // The changed record's margins and LODs, then a new snapshot (the previous base plus the edited records'
     // overlay) over the edit region.

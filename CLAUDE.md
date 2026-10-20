@@ -30,7 +30,8 @@ iterate past a warning, never to commit one.
   **Perf target:** `--preset=forest5cm` (`project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
   the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at error 2 (stretch: 1).
   Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene_5cm).
-  Baseline (PR #34, 25 m/s): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
+  Baseline (PR #34, 25 m/s, on the removed fBm ground: forest5cm now stands on the cascade, 15% fewer triangles, so
+  re-measure dev before comparing): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
   (~7 ms of GPU per batch, 4x a treeless batch) and the 31 M triangles drawn are the two costs.
   Where the frame goes (`bench.sh --profile=1`, 1920x1080, error 2 | back 8, budget 4): GPU-bound in every phase
   (wall = GPU total, render thread 1.5-4 ms, terrain `_process` 3-5 ms while flying). Steady in the forest: 17.3 ms,

@@ -65,6 +65,9 @@ using ShapeFn = Reg (*)(Builder &, const Local &, float);
 struct Shape {
     const char *name;
     ShapeFn fn;
+    // The same at the same offset from any origin: false for the fBm shapes (an absolute noise lattice) and the plane
+    // (unbounded: a copy 2^31 voxels away reads saturated inputs, a huge negative value, and wins the min).
+    bool origin_relative = true;
 };
 
 const ExactNoise::OctaveSet &rock_noise() {
@@ -83,7 +86,7 @@ const Shape SHAPES[] = {
     { "box", [](Builder &b, const Local &l, float s) { return b.box(l, 0.6f * s, 0.3f * s, s); } },
     { "capsule", [](Builder &b, const Local &l, float s) { return b.capsule(l, s, 0.25f * s); } },
     { "cylinder", [](Builder &b, const Local &l, float s) { return b.cylinder(l, 0.5f * s, 0.3f * s); } },
-    { "plane", [](Builder &b, const Local &l, float s) { return b.plane(l, 0.6f, 0.8f, 0.0f, 0.1f * s); } },
+    { "plane", [](Builder &b, const Local &l, float s) { return b.plane(l, 0.6f, 0.8f, 0.0f, 0.1f * s); }, false },
     { "smooth_min",
             [](Builder &b, const Local &l, float s) {
                 const Reg a = b.sphere(l, 0.5f * s);
@@ -98,12 +101,14 @@ const Shape SHAPES[] = {
             [](Builder &b, const Local &l, float s) {
                 const Reg a = b.sphere(l, s);
                 return b.dist(b.add(a, b.fbm(rock_noise())));
-            } },
+            },
+            false },
     { "height",
             [](Builder &b, const Local &l, float) {
                 const Reg h = b.fbm(height_noise());
                 return b.dist(b.sub(l.y, h));
-            } },
+            },
+            false },
 };
 
 } // namespace
@@ -129,10 +134,7 @@ std::vector<Probe> make(const std::vector<VoxelPos> &p_anchors, const std::vecto
     std::vector<const Shape *> relative;
     for (const Shape &shape : SHAPES) {
         probes.push_back(shapes_probe(shape.name, { &shape }, p_anchors, true));
-        // Not the same at the same offset from another origin: the fBm shapes read an absolute noise lattice, and the
-        // plane is unbounded (a copy 2^31 voxels away reads saturated inputs, a huge negative value, and wins the min).
-        const String name = shape.name;
-        if (name != "rock" && name != "height" && name != "plane") {
+        if (shape.origin_relative) {
             relative.push_back(&shape);
         }
     }

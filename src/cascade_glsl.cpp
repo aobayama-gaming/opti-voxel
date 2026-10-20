@@ -388,10 +388,9 @@ uint32_t vec4s_per_point(ChannelSet p_set) {
 
 String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold) {
     const Spec *spec = p_sdf->get_cascade();
-    ERR_FAIL_NULL_V(spec, String());
     ERR_FAIL_COND_V_MSG(p_debug && p_points, String(), "CascadeGLSL: point items have no debug variant.");
     const SDFGpuTable *table = p_sdf->get_gpu_table();
-    ERR_FAIL_COND_V_MSG(p_fold && (p_points || table == nullptr), String(), "CascadeGLSL: only chunk items of a table terrain fold.");
+    ERR_FAIL_COND_V_MSG(p_fold && p_points, String(), "CascadeGLSL: only chunk items fold.");
     const ItemFills &fills = p_points ? POINT_FILLS : CHUNK_FILLS;
     String code = LEVEL_TEMPLATE;
     code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
@@ -449,7 +448,6 @@ bool CascadePasses::create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, c
 bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo,
         RID p_output, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list) {
     const Spec *spec = p_sdf->get_cascade();
-    ERR_FAIL_NULL_V(spec, false);
     rd = p_rd;
     top = spec->top_level();
     item_size = p_item_size;
@@ -458,7 +456,7 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
 
     // Variant 0: the bare cascade at level 0; variant 1 (given the table's buffers): the instance fold.
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
-    ERR_FAIL_COND_V_MSG(table && (points || p_sdf->get_gpu_table() == nullptr), false, "CascadePasses: table buffers for items that can't fold.");
+    ERR_FAIL_COND_V_MSG(table && points, false, "CascadePasses: point items don't fold.");
     const int variants = table ? 2 : 1; // a fold variant that fails to compile leaves the bare one working
     for (int v = 0; v < variants; v++) {
         const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1);

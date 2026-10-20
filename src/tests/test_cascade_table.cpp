@@ -225,7 +225,10 @@ TEST_CASE("SDFCascade table: the shapes gallery on the flat preset: cubes holed 
     SDFCascade sdf;
     sdf.preset = SDFCascade::Preset::FLAT;
     sdf.set_scene(SDFTable::Scene::SHAPES);
+    sdf.set_instance_band(false); // as VoxelTerrain sets it for the gallery
     sdf.configure(param, 25);
+    CHECK(sdf.min_skirt_depth(param, 25) == 0.0f);
+    CHECK(sdf.skirt_depth_m(3) == doctest::Approx(double(param.skirt_depth) * vs * 8.0)); // full skirt_depth cells: hard creases
     for (int i = 0; i < sdf.get_library().size(); i++) {
         CHECK(sdf.get_library()[i].program.validate(25).is_empty());
     }
