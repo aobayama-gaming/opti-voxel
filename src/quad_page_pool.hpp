@@ -18,8 +18,8 @@ using namespace godot;
 //
 // Page = one MultiMesh whose instances are *groups* of QUAD_GROUP quads (the base mesh holds
 // QUAD_GROUP quads) + one RGBA16UI texture holding the quads, one row per group: a header with the
-// owning chunk's id, then 8 bytes per corner (chunk-local fixed-point position + octahedral
-// normal, see page_format.hpp). The page shader pulls its corner with
+// owning chunk's id, then 8 bytes per corner (chunk-local fixed-point position, palette index and
+// octahedral normal, see page_format.hpp). The page shader pulls its corner with
 // texelFetch(quad_tex, ivec2(HEADER_TEXELS + VERTEX_ID, INSTANCE_ID)) and rebuilds the world
 // position from the header. The GPU writes the number of used groups into the MultiMesh indirect
 // command buffer.

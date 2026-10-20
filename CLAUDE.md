@@ -88,7 +88,8 @@ to every change, and a reviewer may reject a PR on any of them.
   (render thread, `call_on_render_thread`), quads written straight into `QuadPagePool` pages, which
   are MultiMesh instances of 64-quad groups that pull their corners from a GPU-written RGBA16UI
   texture: one row per group, a header with the owning chunk id, then 8 B per corner (chunk-local
-  14-bit fixed point + 22-bit octahedral normal). Layout and decoders: `src/page_format.hpp`. Only a ~2 KB per-batch directory comes back to the CPU (asynchronously) for bookkeeping.
+  13-bit fixed point, 1/256 cell + a 9-bit palette index + 16-bit octahedral normal, at most ~1 degree off).
+  Layout, decoders and the GLSL of both (constants substituted, no literal elsewhere): `src/page_format.hpp`. Only a ~2 KB per-batch directory comes back to the CPU (asynchronously) for bookkeeping.
   Shared GLSL: `src/gpu_glsl.hpp`, direct passes: `src/gpu_direct_glsl.hpp`.
   Chunks start on a 64-quad group and a texture row is one group, so a chunk is whole rows.
   GPU budget (`VoxelTerrain.direct_gpu_budget_ms`, `--mesher_budget=MS` in bench and player; 0 = off, 4 in
