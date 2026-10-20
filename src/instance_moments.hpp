@@ -36,6 +36,8 @@ struct Moments {
         const double zero[3] = { 0.0, 0.0, 0.0 };
         add(p_other, zero);
     }
+    // Weight times: m0 and S scale, the centroid stays.
+    Moments scaled(double p_weight) const;
     // The same solid seen through p_r, a world -> local rotation: from the local frame to the world axes, c' = R^T c,
     // S' = R^T S R.
     Moments rotated(const float *p_r) const;

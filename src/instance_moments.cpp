@@ -68,6 +68,15 @@ void Moments::add(const Moments &p_other, const double p_offset[3]) {
     std::copy(nc, nc + 3, c);
 }
 
+Moments Moments::scaled(double p_weight) const {
+    Moments r = *this;
+    r.m0 *= p_weight;
+    for (double &v : r.s) {
+        v *= p_weight;
+    }
+    return r;
+}
+
 Moments Moments::rotated(const float *p_r) const {
     Moments out = *this;
     local_to_world(p_r, c, out.c);
