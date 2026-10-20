@@ -1,0 +1,141 @@
+#include "test_common.hpp"
+
+#include "archetype_table.hpp"
+#include "chunk_palette.hpp"
+#include "material_library.hpp"
+#include "page_format.hpp"
+
+#include <algorithm>
+#include <random>
+#include <utility>
+#include <vector>
+
+TEST_CASE("Material::Library: built-ins in order, names unique, image layout") {
+    Material::Library lib;
+    CHECK(lib.size() == Material::BUILTIN_COUNT);
+    CHECK(lib.find("ground") == Material::GROUND);
+    CHECK(lib.find("lava") == Material::LAVA);
+    CHECK(lib.find("nope") == UINT32_MAX);
+    const uint32_t moss = lib.add("moss", Material::Params{ Color(0.1, 0.2, 0.1), 0.8f, Color(0, 0, 0), Material::PATTERN_NONE });
+    CHECK(moss == Material::BUILTIN_COUNT);
+    const Ref<Image> img = lib.make_image();
+    CHECK(img->get_format() == Image::FORMAT_RGBAF);
+    CHECK(img->get_width() == Material::TEXELS * Material::IMAGE_MATERIALS_PER_ROW);
+    CHECK(img->get_height() == 1);
+    const Color a = img->get_pixel(Material::TEXELS * int(moss), 0);
+    CHECK(a.g == doctest::Approx(0.2));
+    CHECK(a.a == doctest::Approx(0.8));
+    const Color lava = img->get_pixel(Material::TEXELS * Material::LAVA + 1, 0);
+    CHECK(lava.a == float(Material::PATTERN_LAVA));
+}
+
+TEST_CASE("ChunkPalette: ground first, distinct ids in list order, indices point back") {
+    const uint32_t mats[] = { 7, Material::GROUND, 3, 7, 3, 9 };
+    std::vector<uint32_t> palette;
+    std::vector<uint16_t> index;
+    CHECK(ChunkPalette::build(mats, 6, palette, index));
+    CHECK(palette == std::vector<uint32_t>{ Material::GROUND, 7, 3, 9 });
+    for (uint32_t i = 0; i < 6; i++) {
+        CHECK(palette[index[i]] == mats[i]);
+    }
+    CHECK(ChunkPalette::build(nullptr, 0, palette, index));
+    CHECK(palette == std::vector<uint32_t>{ Material::GROUND });
+}
+
+TEST_CASE("ChunkPalette: past PALETTE_SIZE materials the rest draws as ground") {
+    std::vector<uint32_t> mats;
+    for (uint32_t m = 1; m <= PageFormat::PALETTE_SIZE + 5; m++) {
+        mats.push_back(m);
+    }
+    std::vector<uint32_t> palette;
+    std::vector<uint16_t> index;
+    CHECK_FALSE(ChunkPalette::build(mats.data(), uint32_t(mats.size()), palette, index));
+    CHECK(palette.size() == PageFormat::PALETTE_SIZE);
+    CHECK(index[PageFormat::PALETTE_SIZE - 2] == PageFormat::PALETTE_SIZE - 1); // material 511 is the last that fits
+    CHECK(index.back() == 0);
+}
+
+TEST_CASE("PaletteAlloc: aligned blocks, the ground block reserved, frees merge back") {
+    PaletteAlloc a;
+    a.reset(4096);
+    CHECK(a.used() == PaletteAlloc::MIN_BLOCK);
+    CHECK(PaletteAlloc::block_size(1) == 16);
+    CHECK(PaletteAlloc::block_size(17) == 32);
+    CHECK(PaletteAlloc::block_size(512) == 512);
+
+    std::mt19937 rng(3);
+    std::vector<std::pair<int64_t, uint32_t>> live;
+    for (int step = 0; step < 4000; step++) {
+        if (live.empty() || rng() % 3 != 0) {
+            const uint32_t n = 1 + rng() % PaletteAlloc::MAX_BLOCK;
+            const int64_t off = a.alloc(n);
+            if (off < 0) {
+                continue; // full
+            }
+            const uint32_t size = PaletteAlloc::block_size(n);
+            CHECK(off % size == 0);
+            CHECK(off != PaletteAlloc::GROUND_BLOCK);
+            CHECK(off + size <= a.capacity());
+            for (const std::pair<int64_t, uint32_t> &l : live) { // no overlap
+                const uint32_t ls = PaletteAlloc::block_size(l.second);
+                CHECK((off + size <= l.first || l.first + ls <= off));
+            }
+            live.push_back({ off, n });
+        } else {
+            const size_t i = rng() % live.size();
+            a.free(uint32_t(live[i].first), live[i].second);
+            live.erase(live.begin() + i);
+        }
+    }
+    for (const std::pair<int64_t, uint32_t> &l : live) {
+        a.free(uint32_t(l.first), l.second);
+    }
+    CHECK(a.used() == PaletteAlloc::MIN_BLOCK);
+    // Everything merged back: the largest blocks fit again, all but the half holding the ground block.
+    int big = 0;
+    while (a.alloc(PaletteAlloc::MAX_BLOCK) >= 0) {
+        big++;
+    }
+    CHECK(big == 4096 / 512 - 1);
+}
+
+TEST_CASE("Fold material: the record that wins the sample gives it its palette index") {
+    using namespace Archetype;
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    std::vector<TableRecord> records;
+    auto sphere = [&](int64_t p_x, float p_radius, Combine p_op) {
+        TableRecord rec;
+        rec.op = p_op;
+        rec.anchor = VoxelPos(p_x, 0, 0);
+        rec.params[0] = p_radius;
+        finish_record(lib[0], rec, 2.0f, false);
+        records.push_back(rec);
+    };
+    sphere(0, 10.0f, Combine::UNION); // palette 1
+    sphere(30, 10.0f, Combine::SMOOTH_UNION); // palette 2
+    sphere(0, 4.0f, Combine::SUBTRACT); // palette 3: a hole carved in the first
+    records[1].set_k(2.0f);
+    const std::vector<uint32_t> list = { 0, 1, 2 };
+    const std::vector<uint16_t> palette = { 1, 2, 3 };
+    const Float4 air{ 0.0f, 0.0f, 0.0f, 1000.0f };
+    auto material_at = [&](int64_t p_x) {
+        WorldPos p;
+        p.voxel = VoxelPos(p_x, 0, 0);
+        uint32_t m = 0;
+        fold_onto(air, lib, records.data(), list.data(), uint32_t(list.size()), p, 0, true, nullptr, palette.data(), &m);
+        return m;
+    };
+    CHECK(material_at(8) == 1); // inside the first sphere, outside the hole
+    CHECK(material_at(31) == 2); // inside the smooth-unioned one
+    CHECK(material_at(0) == 3); // in the hole: the cutter's face wins
+    CHECK(material_at(500) == 0); // far: no box test passes, ground
+
+    // The rule itself: the unions take the record where it is lower, the subtractions where its negation is higher.
+    const Float4 r{ 0, 0, 0, 1.0f };
+    CHECK(record_wins(r, Float4{ 0, 0, 0, 0.5f }, Combine::UNION));
+    CHECK(record_wins(r, Float4{ 0, 0, 0, 0.5f }, Combine::SMOOTH_UNION));
+    CHECK_FALSE(record_wins(r, Float4{ 0, 0, 0, 1.0f }, Combine::UNION)); // ties keep what was there
+    CHECK(record_wins(r, Float4{ 0, 0, 0, -2.0f }, Combine::SUBTRACT));
+    CHECK_FALSE(record_wins(r, Float4{ 0, 0, 0, 2.0f }, Combine::SMOOTH_SUBTRACT));
+}

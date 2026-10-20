@@ -140,6 +140,9 @@ int64_t SDFTable::max_instance_extent() const {
 }
 
 void SDFTable::finish_record(TableRecord &r_rec) const {
+    if (r_rec.material == Material::FROM_TYPE) {
+        r_rec.material = library->material(r_rec.def);
+    }
     Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
 }
 
@@ -257,11 +260,6 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
         d["radius_m"] = p.at.radius * vs;
         listed.push_back(d);
     }
-    // Nearest the centre first: the page shader colours the first LAVA_POOL_MAX.
-    std::sort(lava_pools.begin(), lava_pools.end(), [cx, cz](const Biome::LavaPool &p_a, const Biome::LavaPool &p_b) {
-        const double ax = double(p_a.top.x - cx), az = double(p_a.top.z - cz), bx = double(p_b.top.x - cx), bz = double(p_b.top.z - cz);
-        return ax * ax + az * az < bx * bx + bz * bz;
-    });
     Dictionary biomes;
     for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
         biomes[Biome::kind(Biome::Feature(f)).name] = counts[f];
@@ -283,6 +281,8 @@ bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
 }
 
 bool SDFTable::admit(std::vector<TableRecord> &r_records, const char *p_what) {
+    ERR_FAIL_COND_V_MSG(records.size() + r_records.size() > uint32_t(SDFGpuTable::LIST_ID_MASK) + 1, false,
+            vformat("SDFTable: %s left out: the table holds at most %d instances (SDFGpuTable::LIST_ID_BITS).", p_what, SDFGpuTable::LIST_ID_MASK + 1));
     for (const TableRecord &rec : r_records) {
         const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
         ERR_FAIL_COND_V_MSG(!fit.is_empty(), false, vformat("SDFTable: %s left out: ", p_what) + fit);
@@ -366,9 +366,9 @@ void SDFTable::build_table(int p_lod_count) {
     lib.add(make_sphere_type());
     types.capsule = lib.add(make_capsule_type());
     types.rock = lib.add(make_rock_type(ExactNoise::lattice_k(8.0, vs), ROCK_SEED));
-    const int branch = lib.add(make_branch_type());
-    const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED));
-    const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED));
+    const int branch = lib.add(make_branch_type(), Material::BARK);
+    const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
+    const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
     if (scene == Scene::SHAPES) {
         types.holed_cube = lib.add(make_swiss_cube_type(1));
         types.die = lib.add(make_die_type());

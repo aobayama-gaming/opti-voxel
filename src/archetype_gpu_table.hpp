@@ -37,11 +37,19 @@ public:
     // The buffers are sized for this many instances up front (runtime edits only append). Raised by
     // --instance_capacity for a large scatter.
     uint32_t instance_capacity() const override { return capacity; }
-    void set_capacity(uint32_t p_capacity) { capacity = p_capacity; }
+    void set_capacity(uint32_t p_capacity) {
+        // A list word holds the record id in LIST_ID_BITS: past it, clamped (the table then refuses more records).
+        if (p_capacity > LIST_ID_MASK + 1) {
+            ERR_PRINT(vformat("GpuTable: a capacity of %d instances is over the list word's %d: clamped.", p_capacity, LIST_ID_MASK + 1));
+            p_capacity = LIST_ID_MASK + 1;
+        }
+        capacity = p_capacity;
+    }
     PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const override;
     uint32_t record_size() const override { return RECORD_BYTES; }
 
-    void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const override;
+    void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+            std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const override;
 
     Dictionary get_stats() const override;
     // The scene's own numbers (the forest), merged into get_stats(). Main thread, before the meshers start.
@@ -56,6 +64,9 @@ private:
         int64_t build_usec = 0;
         int64_t batches = 0;
         int64_t truncated = 0;
+        int64_t palette_truncated = 0; // chunks naming more than PageFormat::PALETTE_SIZE materials
+        int64_t palette_entries[ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t palette_longest[ChunkMath::MAX_LOD_NUMBERS] = {};
     };
     mutable ListStats list_stats;
     std::shared_ptr<const InstanceSnapshot> snap;

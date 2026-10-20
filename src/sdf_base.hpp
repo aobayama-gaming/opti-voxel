@@ -8,6 +8,8 @@
 #include "godot_cpp/variant/vector3.hpp"
 
 #include "chunk_math.hpp"
+#include "material_library.hpp"
+#include "page_format.hpp"
 
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
@@ -61,15 +63,22 @@ public:
     virtual uint32_t record_size() const = 0;
 
     // Main thread: patch each ChunkInput of the batch (id.w = this chunk's list offset in uint32 words,
-    // anchor_hi.w = its instance count) and append the indices (uint32) to r_list. r_chunk_ids already
-    // holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). A batch's lists never exceed its
-    // chunk count * max_chunk_list() words (the meshers' buffer).
-    virtual void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const = 0;
+    // anchor_hi.w = its instance count) and append the list words (record id | palette index << LIST_ID_BITS) to
+    // r_list. r_chunk_ids already holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). A batch's lists
+    // never exceed its chunk count * max_chunk_list() words (the meshers' buffer). r_palettes (if given) gets each
+    // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name.
+    virtual void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+            std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const = 0;
 
     // The average list a batch's chunks may carry: the meshers size their list buffer for batch size * this.
     // The band rule keeps lists to the instances big enough for the chunk's LOD; a batch over it is cut (ERR,
     // counted).
     static constexpr uint32_t MAX_CHUNK_LIST = 4096;
+    // A list word: the record id in its low LIST_ID_BITS, the record's chunk palette index (chunk_palette.hpp) above.
+    // So a table holds at most 2^LIST_ID_BITS (8M) instances, removed ones included.
+    static constexpr uint32_t LIST_ID_BITS = 32 - PageFormat::PALETTE_BITS;
+    static constexpr uint32_t LIST_ID_MASK = (1u << LIST_ID_BITS) - 1;
+    static uint32_t list_word(uint32_t p_record, uint32_t p_palette_index) { return p_record | p_palette_index << LIST_ID_BITS; }
     uint32_t max_chunk_list() const { return MAX<uint32_t>(MIN(instance_capacity(), MAX_CHUNK_LIST), 1u); }
     // List statistics (main thread): lengths per LOD, build time, truncations.
     virtual Dictionary get_stats() const { return Dictionary(); }
@@ -131,13 +140,16 @@ public:
     // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
     // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
-    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk)`.
+    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material)` (material: the winning
+    // record's palette index, 0 = ground).
     virtual String get_sample_fold_glsl() const = 0;
 
     // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it
     // into their samples. The const form only reads (the shader text, the sizes).
     virtual SDFGpuTable *get_gpu_table() = 0;
     const SDFGpuTable *get_gpu_table() const { return const_cast<SDFBase *>(this)->get_gpu_table(); }
+    // The materials the table's records name (TableRecord::material): the page shader's material_tex.
+    virtual const Material::Library &get_materials() const = 0;
 
     // The discoverer's no-cull rule: a node whose box intersects any instance's influence box (grown by
     // the cull band, 2 chunk sizes at the node's LOD) must never be culled, whatever the corners say.

@@ -1,6 +1,7 @@
 #include "quad_page_pool.hpp"
 
 #include "debug_log.hpp"
+#include "material_library.hpp"
 #include "world_coord.hpp"
 
 #include <godot_cpp/classes/mesh.hpp>
@@ -18,8 +19,11 @@ render_mode skip_vertex_transform, cull_back;
 /*GLSL_PAGE_DECODE*/
 
 uniform usampler2D quad_tex : filter_nearest, repeat_disable;
+// The chunks' palettes (palette_pool.hpp) and the materials' parameters (Material::Library::make_image).
+uniform usampler2D palette_tex : filter_nearest, repeat_disable;
+uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // 0 shaded, 1 normals, 2 lod, 3 page, 4 shaded + quad wireframe, 5 chunk hash,
-// 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4)
+// 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4), 8 faceted, 9 material
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
 // Sea level in metres above the world origin: below -1e29, no height colours (VoxelTerrain sets it for
@@ -33,9 +37,6 @@ uniform float pos_scale = 256.0; // PageFormat::pos_scale(chunk_size), set by th
 // Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
 // colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
 uniform float skirt_depth_m[32];
-// Lava lakes (Biome::LavaPool, voxel_terrain.cpp's set_lava_pools): per pool x, z, radius and surface y in render metres.
-uniform vec4 lava_pools[LAVA_POOL_MAX];
-uniform int lava_count = 0;
 instance uniform int page_id = 0;
 
 varying vec3 v_world_normal;
@@ -44,6 +45,9 @@ varying flat float v_lod;
 varying flat vec3 v_chunk;
 varying flat ivec2 v_ids;
 varying float v_height; // metres above the world origin (shaded view: contour lines)
+// The provoking corner's material (one flat value: the pass is vertex-bound, every interpolant costs); its
+// parameters are fetched per fragment, and only off the ground.
+varying flat int v_material;
 
 vec3 hash3(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -71,6 +75,15 @@ void vertex() {
     vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
     vec3 n = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
+    // The corner's material: its chunk's palette block (header), its index in it (corner), its id (palette). Index 0
+    // is always the ground: no fetch (most corners).
+    uint index = page_decode_palette(c);
+    uint mat_id = MATERIAL_GROUND;
+    if (index != 0u) {
+        uint entry = page_header_palette(h1) + index;
+        mat_id = page_palette_id(texelFetch(palette_tex, page_palette_texel(entry), 0), entry);
+    }
+    v_material = int(mat_id);
 
     v_world_normal = n;
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4);
@@ -118,24 +131,24 @@ void fragment() {
     // Contours fade out where they would be denser than ~10 pixels apart.
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
     albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
+    // A material off the ground: its parameters (material_tex) replace the ground's colours.
+    float roughness = 1.0;
     vec3 emission = vec3(0.0);
-    // Lava: inside a pool's cylinder, at most a cell above its surface (a coarse LOD's vertex may sit up to a cell off;
-    // the band rule's erosion only sinks the lava). Behind a uniform branch: no cost without lakes, and no varying.
-    if (lava_count > 0) {
-        vec2 xz = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz;
-        bool lava = false;
-        for (int i = 0; i < lava_count; i++) {
-            vec2 d = xz - lava_pools[i].xy;
-            lava = lava || (dot(d, d) < lava_pools[i].z * lava_pools[i].z && v_height < lava_pools[i].w + voxel_size * exp2(v_lod));
-        }
-        if (lava) {
-            // A warped crust: dark seams over a glow that drifts slowly.
-            vec2 q = xz * 0.15;
+    uint mat_id = uint(v_material);
+    if (mat_id != MATERIAL_GROUND) {
+        ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
+        vec4 m0 = texelFetch(material_tex, mt, 0);
+        vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
+        albedo = m0.rgb;
+        roughness = m0.a;
+        emission = m1.rgb;
+        if (m1.a == MATERIAL_PATTERN_LAVA) {
+            // Lava: a warped crust, dark seams over a glow that drifts slowly.
+            vec2 q = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz * 0.15;
             q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
             float seam = abs(sin(q.x * 2.1) * sin(q.y * 1.9) + 0.5 * sin((q.x - q.y) * 3.3));
             float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
-            albedo = vec3(0.03, 0.015, 0.01);
-            emission = mix(vec3(0.12, 0.02, 0.0), vec3(1.1, 0.24, 0.02) * pulse, smoothstep(0.03, 0.18, seam));
+            emission = mix(m1.rgb * 0.11, m1.rgb * pulse, smoothstep(0.03, 0.18, seam));
         }
     }
     if (debug_view == 1) {
@@ -160,7 +173,11 @@ void fragment() {
         // Faceted: one clay colour, each triangle lit by its own plane (the vertex normals, shared across a
         // crease, smear the shading of sharp edges).
         albedo = vec3(0.5);
+        emission = vec3(0.0);
         NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
+    } else if (debug_view == 9) {
+        albedo = vec3(0.0);
+        emission = v_material == 0 ? vec3(0.15) : hash3(vec3(float(v_material) * 0.61 + 0.5)) * 0.8 + 0.2;
     }
     if (debug_view == 4) {
         float d = min(min(v_quad_uv.x, 1.0 - v_quad_uv.x), min(v_quad_uv.y, 1.0 - v_quad_uv.y));
@@ -170,7 +187,7 @@ void fragment() {
     }
     ALBEDO = albedo;
     EMISSION = emission;
-    ROUGHNESS = 1.0;
+    ROUGHNESS = roughness;
 }
 )gdshader";
 
@@ -202,7 +219,7 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     rs->mesh_add_surface_from_arrays(base_mesh, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
     shader = rs->shader_create();
-    rs->shader_set_code(shader, String(PAGE_SHADER).replace("LAVA_POOL_MAX", itos(LAVA_POOL_MAX)).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode()));
+    rs->shader_set_code(shader, String(PAGE_SHADER).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + Material::glsl_constants()));
     material_params["voxel_size"] = voxel_size;
 
     for (uint32_t i = 0; i < p_initial_pages; i++) {

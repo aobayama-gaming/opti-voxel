@@ -68,12 +68,18 @@ layout(set = 0, binding = 7, std430) restrict buffer Status {
     uint status[];
 };
 
+// sdf_material (per sample, its chunk palette index), the palette texture and the batch's palette payload
+// (GPUDirectMesher::glsl_material_bindings).
+/*GLSL_MATERIAL_BINDINGS*/
+
 layout(push_constant, std430) uniform BatchParams {
     uint batch_count;
     uint page_count;
     uint page_capacity;
     uint pad;
 } batch;
+
+/*GLSL_PALETTE_BATCH*/
 
 uint get_flat_index_z(uvec3 cell_coordinate) {
     return cell_coordinate.x + (cell_coordinate.y * chunk_param.chunk_size) + (cell_coordinate.z * chunk_param.chunk_size * chunk_param.chunk_size);
@@ -168,7 +174,11 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
         if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {
-            out_vertex = uvec4(floatBitsToUint(chunk_vertex), pack_normal_oct(surface_normal) + 1u);
+            // A chunk on the ground block (palette {GROUND}, or no room in the pool) is all ground: no reads, and its
+            // samples' sdf_material isn't written (the cascade only writes chunks with a list).
+            uint palette = palette_batch[chunk_idx] == PALETTE_GROUND_BLOCK ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+            uint word = pack_normal_oct(surface_normal) | (palette << PAGE_NORMAL_BITS);
+            out_vertex = uvec4(floatBitsToUint(chunk_vertex), word + 1u);
         }
 
         // Count exactly the quads the emit pass will produce (same rules as the CPU triangulation).
@@ -237,6 +247,9 @@ inline constexpr const char GLSL_DIRECT_PASS_EMIT[] = R"glsl(
 
 uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
 uint flat_idx = get_flat_index_z(gl_GlobalInvocationID);
+// The batch's new palettes, a texel per thread (the headers below name their blocks; the page shader reads them
+// after this pass).
+write_palette_texel(flat_idx);
 uvec4 dir = chunk_dir[chunk_idx];
 uvec4 v0 = cell_vertex[flat_idx];
 
@@ -276,7 +289,7 @@ if (v0.w > 0u && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_
         // The chunk starts on a group (reserve pass), so its slots cover each of its groups' first
         // slot exactly once.
         if (slot % QUAD_GROUP == 0u) {
-            store_group_header(slot / QUAD_GROUP, chunk_id);
+            store_group_header(slot / QUAD_GROUP, chunk_id, palette_batch[chunk_idx]);
         }
         float pos_scale = page_pos_scale(chunk_param.chunk_size);
         store_corner(slot, 0u, encode_cell_vertex(qa, pos_scale));

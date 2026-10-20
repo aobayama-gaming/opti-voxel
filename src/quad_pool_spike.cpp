@@ -61,7 +61,7 @@ void main() {
     }
     uint slot = atomicAdd(counter[0], 1u);
     if (slot % QUAD_GROUP == 0u) {
-        store_group_header(slot / QUAD_GROUP, params.chunk.xyz);
+        store_group_header(slot / QUAD_GROUP, params.chunk.xyz, 0u);
     }
     put_corner(slot, 0u, base);
     put_corner(slot, 1u, c1);

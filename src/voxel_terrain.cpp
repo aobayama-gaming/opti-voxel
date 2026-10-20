@@ -7,29 +7,6 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-namespace {
-
-// The page shader's lava: per lake (SDFTable::get_lava_pools, nearest the scene's centre first) x, z, radius and
-// surface y in render metres, at most QuadPagePool::LAVA_POOL_MAX of them.
-void set_lava_pools(QuadPagePool *p_pool, const SDFTable &p_sdf, const ChunkParam &p_param) {
-    const std::vector<Biome::LavaPool> &pools = p_sdf.get_lava_pools();
-    const int count = int(MIN(pools.size(), size_t(QuadPagePool::LAVA_POOL_MAX)));
-    if (count < int(pools.size())) {
-        WARN_PRINT(vformat("VoxelTerrain: %d lava lakes, the page shader colours the first %d.", int64_t(pools.size()), count));
-    }
-    PackedVector4Array data;
-    data.resize(QuadPagePool::LAVA_POOL_MAX);
-    data.fill(Vector4());
-    for (int i = 0; i < count; i++) {
-        const Vector3 top = ChunkMath::voxel_to_render(pools[i].top, p_param);
-        data.set(i, Vector4(top.x, top.z, real_t(pools[i].radius * p_param.voxel_size), top.y));
-    }
-    p_pool->set_material_param("lava_pools", data);
-    p_pool->set_material_param("lava_count", count);
-}
-
-} // namespace
-
 void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_pipeline_mode", "mode"), &VoxelTerrain::set_pipeline_mode);
     ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
@@ -750,7 +727,6 @@ void VoxelTerrain::_ready() {
             const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;
             direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
         }
-        set_lava_pools(direct_mesher->get_pool(), *sdf, chunk_param);
     } else {
         gpu_mesher = memnew(GPUMesher);
 
@@ -979,16 +955,13 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
             t.page = kv.value.page;
             t.offset = kv.value.quad_offset;
             t.count = kv.value.quad_count;
+            t.palette = kv.value.palette;
             candidates.push_back(t);
         }
     }
     ERR_FAIL_COND_V_MSG(candidates.empty(), false, "No non-empty loaded chunk to validate.");
-    // Evenly spaced sample (hash map order is arbitrary but stable enough for a spread of LODs).
-    std::vector<MeshValidator::Target> targets;
-    const int n = MIN(p_count, (int)candidates.size());
-    for (int i = 0; i < n; i++) {
-        targets.push_back(candidates[(size_t)i * candidates.size() / n]);
-    }
+    // (hash map order is arbitrary but stable enough for a spread of LODs)
+    const std::vector<MeshValidator::Target> targets = MeshValidator::pick_targets(candidates, p_count);
     validation_report = Dictionary();
     validator = memnew(MeshValidator);
     validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), p_dump_dir, dual_contouring);
@@ -1014,7 +987,7 @@ bool VoxelTerrain::debug_audit_pages() {
             info.page = kv.value.page;
             pages.push_back(info);
         }
-        pages[index_of_page[kv.value.page]].live.push_back({ kv.value.quad_offset, kv.value.quad_count, kv.key });
+        pages[index_of_page[kv.value.page]].live.push_back({ kv.value.quad_offset, kv.value.quad_count, kv.key, kv.value.palette });
     }
     audit_report = Dictionary();
     auditor = memnew(PageAuditor);

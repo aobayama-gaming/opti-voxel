@@ -15,8 +15,9 @@ using namespace godot;
 // One RGBA16UI texture per page (RenderingServer cannot wrap 32-bit integer RD textures), one row
 // per group of QUAD_GROUP quads:
 //   texel 0          (x lo, x hi, y lo, y hi)  group header: low 32 bits of the id of the chunk owning
-//   texel 1          (z lo, z hi, 0, 0)        every quad of the row (chunks start on a group, so rows
-//                                               never mix chunks)
+//   texel 1          (z lo, z hi, b lo, b hi)  every quad of the row (chunks start on a group, so rows
+//                                               never mix chunks), and b the offset of the chunk's palette
+//                                               block in the palette texture (palette_pool.hpp)
 //   texel 2 + 4q + k corner k of quad q
 // A corner is its position in the chunk's vertex grid (the grid the SDF is sampled on, skirt
 // included) as 3 x POS_BITS fixed point, a PALETTE_BITS palette index p spread over the top bits of the
@@ -44,6 +45,8 @@ static constexpr float NORMAL_MAX_ERROR_DEG = 1.0f;
 static constexpr uint32_t PALETTE_BITS = 9;
 static constexpr uint32_t PALETTE_LANE_BITS = PALETTE_BITS / 3; // per position channel
 static constexpr uint32_t PALETTE_SIZE = 1u << PALETTE_BITS;
+// The palette texture (palette_pool.hpp): RGBA16UI, two 32-bit global ids per texel, a whole palette per row.
+static constexpr uint32_t PALETTE_TEX_WIDTH = PALETTE_SIZE / 2;
 static_assert(POS_BITS + PALETTE_LANE_BITS == 16 && NORMAL_BITS == 16 && 3 * PALETTE_LANE_BITS == PALETTE_BITS,
         "a corner is exactly four 16-bit channels");
 
@@ -68,6 +71,10 @@ inline const uint16_t *row(const uint16_t *p_page, uint32_t p_group) {
 inline Vector3i header_chunk(const uint16_t *p_row) {
     return Vector3i((int32_t)(p_row[0] | (uint32_t)p_row[1] << 16), (int32_t)(p_row[2] | (uint32_t)p_row[3] << 16),
             (int32_t)(p_row[4] | (uint32_t)p_row[5] << 16));
+}
+
+inline uint32_t header_palette(const uint16_t *p_row) {
+    return uint32_t(p_row[6]) | uint32_t(p_row[7]) << 16;
 }
 
 // Corner k of quad q (q = slot within the page) as its four channels.
@@ -108,7 +115,7 @@ inline String glsl_constants() {
     } constants[] = { { "QUAD_GROUP", QUAD_GROUP }, { "HEADER_TEXELS", HEADER_TEXELS }, { "TEX_WIDTH", TEX_WIDTH },
         { "PAGE_POS_BITS", POS_BITS }, { "PAGE_POS_MASK", POS_MASK }, { "PAGE_NORMAL_AXIS_BITS", NORMAL_AXIS_BITS },
         { "PAGE_NORMAL_AXIS_MAX", NORMAL_AXIS_MAX }, { "PAGE_NORMAL_BITS", NORMAL_BITS },
-        { "PAGE_PALETTE_LANE_BITS", PALETTE_LANE_BITS } };
+        { "PAGE_PALETTE_LANE_BITS", PALETTE_LANE_BITS }, { "PALETTE_TEX_WIDTH", PALETTE_TEX_WIDTH } };
     for (const auto &c : constants) {
         s += String("const uint ") + c.name + " = " + itos(c.value) + "u;\n";
     }
@@ -136,6 +143,21 @@ vec3 page_decode_normal(uvec4 c) {
 uint page_decode_palette(uvec4 c) {
     return (c.x >> PAGE_POS_BITS) | ((c.y >> PAGE_POS_BITS) << PAGE_PALETTE_LANE_BITS) |
             ((c.z >> PAGE_POS_BITS) << (2u * PAGE_PALETTE_LANE_BITS));
+}
+
+// The palette block offset in header texel 1 (palette_pool.hpp), the GLSL header_palette.
+uint page_header_palette(uvec4 h1) {
+    return h1.z | (h1.w << 16u);
+}
+
+// Palette entry e (block offset + palette index): the palette texel holding it, and its id in that texel.
+ivec2 page_palette_texel(uint e) {
+    uint t = e >> 1u;
+    return ivec2(int(t % PALETTE_TEX_WIDTH), int(t / PALETTE_TEX_WIDTH));
+}
+
+uint page_palette_id(uvec4 texel, uint e) {
+    return (e & 1u) == 0u ? (texel.x | (texel.y << 16u)) : (texel.z | (texel.w << 16u));
 }
 
 )glsl";
@@ -166,23 +188,28 @@ uvec4 encode_corner(vec3 local, uint normal, uint palette, float pos_scale) {
     return uvec4(q | (p << PAGE_POS_BITS), normal);
 }
 
+// The palette texel holding ids id0 (even entry) and id1 (odd entry): page_palette_id's inverse.
+uvec4 page_palette_texel_value(uint id0, uint id1) {
+    return uvec4(id0 & 65535u, id0 >> 16u, id1 & 65535u, id1 >> 16u);
+}
+
 void store_corner(uint slot, uint k, uvec4 corner) {
     imageStore(staging, ivec2(HEADER_TEXELS + (slot % QUAD_GROUP) * 4u + k, slot / QUAD_GROUP), corner);
 }
 
-void store_group_header(uint group, ivec3 chunk) {
+void store_group_header(uint group, ivec3 chunk, uint palette_block) {
     uvec3 c = uvec3(chunk);
     imageStore(staging, ivec2(0, group), uvec4(c.x & 65535u, c.x >> 16u, c.y & 65535u, c.y >> 16u));
-    imageStore(staging, ivec2(1, group), uvec4(c.z & 65535u, c.z >> 16u, 0u, 0u));
+    imageStore(staging, ivec2(1, group), uvec4(c.z & 65535u, c.z >> 16u, palette_block & 65535u, palette_block >> 16u));
 }
 
 )glsl";
 
 namespace PageFormat {
 
-// Everything a compute pass writing pages needs, after its staging image binding.
+// Everything a compute pass writing pages needs, after its staging image binding (the decoders too: palette addressing).
 inline String glsl_encode() {
-    return glsl_constants() + GLSL_PAGE_ENCODE;
+    return glsl_constants() + GLSL_PAGE_DECODE + GLSL_PAGE_ENCODE;
 }
 
 // Everything the page shader needs to read corners.

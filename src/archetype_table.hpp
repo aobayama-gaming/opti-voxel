@@ -2,6 +2,7 @@
 
 #include "archetype_glsl.hpp"
 #include "exact_noise.hpp"
+#include "material_library.hpp"
 
 #include <godot_cpp/variant/packed_byte_array.hpp>
 
@@ -72,13 +73,16 @@ using TableDefPtr = std::shared_ptr<const TableDef>;
 // The types available to the table (a new type = a shader recompile). GLSL functions arch_<index>.
 class DefLibrary {
 public:
-    int add(const TableDefPtr &p_def);
+    // p_material: the type's default material (a record with Material::FROM_TYPE takes it).
+    int add(const TableDefPtr &p_def, uint32_t p_material = Material::GROUND);
     int size() const { return int(list.size()); }
     const TableDef &operator[](int p_index) const { return *list[p_index]; }
     const std::vector<TableDefPtr> &all() const { return list; }
+    uint32_t material(int p_index) const { return materials[p_index]; }
 
 private:
     std::vector<TableDefPtr> list;
+    std::vector<uint32_t> materials;
 };
 
 // One instance, as the CPU keeps it. The GPU reads the same fields from a DefRecord (encode_record).
@@ -102,6 +106,10 @@ struct TableRecord {
     uint8_t max_lod = NEVER_DROPPED;
     float erode = 0.0f;
     float erode_from = 1.0f;
+    // Global material (material_library.hpp), by default its type's: CPU only, the GPU sees its chunk palette index
+    // in the list word (GpuTable::build_lists). A sample takes the material of the record that wins the fold there
+    // (record_wins).
+    uint32_t material = Material::FROM_TYPE;
 
     static constexpr uint8_t NEVER_DROPPED = 255;
     bool listed_at(int p_lod) const { return p_lod < max_lod; }
@@ -200,9 +208,10 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
 extern const char GLSL_DEF_RECORD_STRUCT[];
 
 String generate_library_glsl(const DefLibrary &p_library);
-// The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched)` (fold_onto over the chunk's list:
-// g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers; touched is set when an instance passes its box
-// test) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
+// The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material)` (fold_onto
+// over the chunk's list: g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers, a list word being the record
+// id | its palette index << SDFGpuTable::LIST_ID_BITS; touched is set when an instance passes its box test, material
+// to the palette index of a record that wins) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
 String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize);
 
 // Bytes of one DefRecord in the GPU buffer (10 x vec4, all 16-byte aligned).
@@ -217,12 +226,19 @@ int influence_margin(const TableRecord &p_record, int p_lod);
 // arch_in_box (same sat_diff, same integer branch).
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod);
 
+// Whether record c's side wins combine4(r, c) (the sample takes the record's material): the side min / max picks,
+// and for the smooth operators the side their hard min picks. The same comparisons as the operators, so the
+// distances are untouched.
+bool record_wins(const Float4 &p_r, const Float4 &p_c, Combine p_op);
+
 // The fold onto the ground's register p_r: each listed instance (in order, its box test) combined in. Returns the
 // register (gradient, value) before the epilogue. p_list holds the instance indices in table order. p_box_test
 // false folds every instance (the locality rule's reference, M1b). *r_touched (if given) is set when an instance
-// passed its box test; untouched, the result is p_r bit for bit.
+// passed its box test; untouched, the result is p_r bit for bit. *r_material (if given, with p_palette: the list
+// entries' palette indices) is the palette index of the last record that won (record_wins), else left as it was.
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
-        const WorldPos &p_pos, int p_lod, bool p_box_test = true, bool *r_touched = nullptr);
+        const WorldPos &p_pos, int p_lod, bool p_box_test = true, bool *r_touched = nullptr, const uint16_t *p_palette = nullptr,
+        uint32_t *r_material = nullptr);
 // The epilogue after fold_onto (archetype_ir.cpp finish()).
 Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_normalize);
 

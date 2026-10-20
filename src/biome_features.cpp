@@ -96,6 +96,7 @@ bool lava_lake(const Site &p_site, const GroundFn &p_ground_y, const DefLibrary 
     const int64_t slab_half = (lava - bottom + 4 + 1) / 2;
     r_out.records.push_back(record(p_types.cylinder, Combine::UNION, 0.0, VoxelPos(p_site.x, lava - slab_half, p_site.z),
             { float(slab_half), float(slab_r) }, p_site.seed + 1u));
+    r_out.records.back().material = Material::LAVA; // the cylinder type is shared: the slab says it is lava
     r_out.top_y = lava;
     r_out.lava = true;
     r_out.pool.top = VoxelPos(p_site.x, lava, p_site.z);
@@ -135,9 +136,9 @@ int cell_shift(Feature p_feature, double p_voxel) {
 Types add_types(DefLibrary &r_library, double p_voxel) {
     const int k = ExactNoise::lattice_k(BUMP_M, p_voxel);
     Types t;
-    t.basin = r_library.add(make_basin_type(k, BASIN_SEED));
+    t.basin = r_library.add(make_basin_type(k, BASIN_SEED), Material::SCORCHED_ROCK);
     t.cylinder = r_library.add(make_cylinder_type());
-    t.island = r_library.add(make_island_type(k, ISLAND_SEED));
+    t.island = r_library.add(make_island_type(k, ISLAND_SEED), Material::ISLAND_ROCK);
     return t;
 }
 

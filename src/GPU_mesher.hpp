@@ -21,6 +21,10 @@ struct UnpackChunk {
     PackedVector3Array output_points;
     PackedVector3Array output_normals;
     PackedInt32Array output_triangles;
+    // Per point: its global material (material_library.hpp), from the chunk's palette. A float vertex channel
+    // (ARRAY_CUSTOM0, R float: ids < Material::MAX_MATERIALS are exact) the validator compares.
+    PackedFloat32Array output_materials;
+    std::vector<uint32_t> palette; // the chunk's palette (build_lists), main thread -> worker with the batch
 
     uint32_t point_offset = 0; // used to fill the array
     uint32_t index_count = 0; // indices actually written by the CPU triangulation
@@ -39,6 +43,7 @@ struct UnpackChunk {
     void resize(int point_number, int triangles_number) {
         output_points.resize(point_number);
         output_normals.resize(point_number);
+        output_materials.resize(point_number);
         quad_masks.resize(point_number);
         point_cells.resize(point_number);
 
@@ -113,6 +118,7 @@ private:
     // The instance table's buffers (archetype instances), on the local device.
     RID buffer_table_records;
     RID buffer_table_list;
+    RID buffer_material; // per sample: its palette index (cascade level 0 -> third pass)
     uint64_t table_list_capacity = 0; // bytes
     uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last handed to the worker
     std::vector<ChunkId> in_flight_ids; // main thread: the chunks of the batch handed to the worker
@@ -129,6 +135,11 @@ private:
     // The cascade passes: pass 1 (the samples), in sub-batches of at most
     // CASCADE_MAX_CHUNKS chunks (its scratch, ~92 KB per chunk with 4 channels, is not sized for 1024).
     static constexpr uint32_t CASCADE_MAX_CHUNKS = 128;
+    // sdf_material's binding (after the table's 6, 7), and the palette index's place in a point's word c: above the
+    // chunk index (16 bits) and the quad mask (4), within an int.
+    static constexpr int MATERIAL_BINDING = 8;
+    static constexpr uint32_t POINT_PALETTE_SHIFT = 20;
+    static_assert(POINT_PALETTE_SHIFT + PageFormat::PALETTE_BITS <= 31, "a point's word c is an int");
     CascadePasses *cascade = nullptr;
 
     // One set per ChunkMath::load_queue: in the view cone first, then by LOD.

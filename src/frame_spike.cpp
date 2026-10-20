@@ -9,6 +9,7 @@
 #include "frame_probe.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
+#include "page_format.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -881,6 +882,7 @@ struct TableProbeData {
     std::vector<Archetype::TableRecord> records;
     Archetype::Float4 ground{ 0.0f, 0.0f, 0.0f, 2.0f }; // the register the fold starts from
     std::vector<uint32_t> list;
+    std::vector<uint16_t> palette; // list entry i's palette index (the GPU reads it from the list word)
 };
 
 // The records sit a few voxels from probe sample points (one run's case each), so the fold and the
@@ -976,8 +978,10 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
         t.records.push_back(rec);
     }
     t.list.resize(t.records.size());
+    t.palette.resize(t.records.size());
     for (uint32_t i = 0; i < t.list.size(); i++) {
         t.list[i] = i;
+        t.palette[i] = uint16_t(1 + (i * 37u) % (PageFormat::PALETTE_SIZE - 1)); // non-zero: a win shows
     }
     return t;
 }
@@ -1016,12 +1020,15 @@ void main() {
 int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, Dictionary &r_report) {
     const TableProbeData table = make_table_probe_data(p_runs);
     const uint32_t count = uint32_t(table.records.size());
+    // Per probe LOD: the 4 floats of the fold, then the winner's palette index (record_wins).
+    constexpr uint32_t PER_LOD = 5;
     String lod_calls;
     for (int j = 0; j < PROBE_LOD_COUNT; j++) {
         lod_calls += vformat("    {\n    precise vec4 v = terrain_sdf(p, int(params.lod_bias) + %d);\n", PROBE_LODS[j]);
         for (int k = 0; k < 4; k++) {
-            lod_calls += vformat("    { uint u = floatBitsToUint(v[%d]); results[b + %du + %du] = (u << 1u) == 0u ? 0u : u; }\n", k, 4 * j, k);
+            lod_calls += vformat("    { uint u = floatBitsToUint(v[%d]); results[b + %du + %du] = (u << 1u) == 0u ? 0u : u; }\n", k, PER_LOD * j, k);
         }
+        lod_calls += vformat("    results[b + %du + 4u] = g_material;\n", PER_LOD * j);
         lod_calls += "    }\n";
     }
     String code = String(TABLE_SHADER);
@@ -1030,9 +1037,11 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     code = code.replace("/*HELPERS*/",
             String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE));
     const Archetype::Float4 &g = table.ground;
-    code = code.replace("/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + vformat(R"glsl(vec4 terrain_sdf(WorldPos p, int lod) {
+    code = code.replace("/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + vformat(R"glsl(uint g_material;
+vec4 terrain_sdf(WorldPos p, int lod) {
     bool touched = false;
-    return arch_finish(arch_fold(vec4(%s, %s, %s, %s), p, lod, touched), lod);
+    g_material = 0u;
+    return arch_finish(arch_fold(vec4(%s, %s, %s, %s), p, lod, touched, g_material), lod);
 }
 )glsl",
                                                                                                            ExactNoise::glsl_float(g.x), ExactNoise::glsl_float(g.y), ExactNoise::glsl_float(g.z), ExactNoise::glsl_float(g.w)));
@@ -1061,12 +1070,13 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     PackedByteArray list_bytes;
     list_bytes.resize(int64_t(table.list.size()) * 4);
     for (size_t i = 0; i < table.list.size(); i++) {
-        list_bytes.encode_u32(int64_t(i) * 4, table.list[i]);
+        list_bytes.encode_u32(int64_t(i) * 4, SDFGpuTable::list_word(table.list[i], table.palette[i]));
     }
     const RID buffer_list = p_rd->storage_buffer_create(list_bytes.size(), list_bytes);
 
-    const uint32_t words = 4 * PROBE_LOD_COUNT;
+    const uint32_t words = PER_LOD * PROBE_LOD_COUNT;
     int64_t mismatches = 0;
+    int64_t won = 0; // samples (per LOD) where a record wins the fold: the material path is exercised
     int64_t samples = 0;
     int64_t near = 0; // samples inside an instance's influence box at the finest probe LOD
     std::vector<uint32_t> want(words);
@@ -1120,12 +1130,15 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
         for (uint32_t i = 0; i < n; i++) {
             const WorldPos pos = ChunkMath::sample_pos(run.cases[i].chunk, run.cases[i].grid, run.param);
             for (int j = 0; j < PROBE_LOD_COUNT; j++) {
+                uint32_t material = 0;
                 const Archetype::Float4 r = Archetype::fold_onto(table.ground, table.library, table.records.data(), table.list.data(),
-                        uint32_t(table.list.size()), pos, PROBE_LODS[j]);
-                want[4 * j + 0] = Archetype::zero_canonical(float_bits(r.x));
-                want[4 * j + 1] = Archetype::zero_canonical(float_bits(r.y));
-                want[4 * j + 2] = Archetype::zero_canonical(float_bits(r.z));
-                want[4 * j + 3] = Archetype::zero_canonical(float_bits(r.w));
+                        uint32_t(table.list.size()), pos, PROBE_LODS[j], true, nullptr, table.palette.data(), &material);
+                want[PER_LOD * j + 0] = Archetype::zero_canonical(float_bits(r.x));
+                want[PER_LOD * j + 1] = Archetype::zero_canonical(float_bits(r.y));
+                want[PER_LOD * j + 2] = Archetype::zero_canonical(float_bits(r.z));
+                want[PER_LOD * j + 3] = Archetype::zero_canonical(float_bits(r.w));
+                want[PER_LOD * j + 4] = material;
+                won += material != 0;
             }
             samples++;
             for (const Archetype::TableRecord &rec : table.records) {
@@ -1157,6 +1170,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     r_report["table_samples"] = samples;
     r_report["table_near_samples"] = near;
     r_report["table_mismatch"] = mismatches;
+    r_report["table_material_won"] = won;
     return mismatches == 0 ? 1 : 0;
 }
 
@@ -1287,6 +1301,7 @@ Dictionary FrameSpike::run() {
     report["probe_mismatch"] = probe_report;
     report["examples"] = checks.examples;
     report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
+            int64_t(report["table_material_won"]) > 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&
             checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0 &&

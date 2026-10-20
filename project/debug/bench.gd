@@ -67,7 +67,7 @@ extends Node3D
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
-##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
+##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
 ##                                distance, iterated; negative: below it). Default 50 on the cascade terrains,

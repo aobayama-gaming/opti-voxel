@@ -51,8 +51,8 @@ public:
     // The biome features (biome_features.hpp: lava lakes, floating islands) of the biome cells within p_radius metres
     // of (SCENE_X, SCENE_Z) (--biomes, kilometres there; 0: none). Set before configure().
     void set_biome_radius(double p_radius) { biome_radius = p_radius; }
-    // The lava lakes' surfaces (the page shader colours them).
-    const std::vector<Biome::LavaPool> &get_lava_pools() const { return lava_pools; }
+    // The materials the records name (TableRecord::material): the page shader's material_tex.
+    const Material::Library &get_materials() const override { return materials; }
 
     // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
     void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
@@ -131,7 +131,8 @@ private:
     double forest_area = 60.0; // --tree_area (metres)
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
     double biome_radius = 0.0; // --biomes (metres)
-    std::vector<Biome::LavaPool> lava_pools;
+    std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
+    Material::Library materials;
     bool instance_band = true; // --instance_band
     Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
 

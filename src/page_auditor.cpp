@@ -106,7 +106,7 @@ bool PageAuditor::step() {
 }
 
 void PageAuditor::_analyse() {
-    int64_t drawn_slots = 0, live = 0, dead_zero = 0, stale = 0, partial = 0, broken = 0, bad_header = 0;
+    int64_t drawn_slots = 0, live = 0, dead_zero = 0, stale = 0, partial = 0, broken = 0, bad_header = 0, bad_material = 0;
     const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
     double max_edge = 0.0;
     Vector3 max_edge_at;
@@ -143,7 +143,9 @@ void PageAuditor::_analyse() {
             const bool in_live = r < ranges.size() && q >= ranges[r].offset;
             // Headers carry the low 32 bits of the chunk id.
             const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(page, q / QuadPagePool::QUAD_GROUP));
-            if (in_live && q % QuadPagePool::QUAD_GROUP == 0 && chunk != WorldCoord::lo32_i(ranges[r].chunk)) {
+            const uint16_t *row = PageFormat::row(page, q / QuadPagePool::QUAD_GROUP);
+            if (in_live && q % QuadPagePool::QUAD_GROUP == 0 &&
+                    (chunk != WorldCoord::lo32_i(ranges[r].chunk) || PageFormat::header_palette(row) != ranges[r].palette.offset)) {
                 bad_header++;
             }
             int zero_corners = 0;
@@ -152,6 +154,7 @@ void PageAuditor::_analyse() {
                 const uint16_t *c = PageFormat::corner(page, q, k);
                 p[k] = PageFormat::decode_local(c, scale);
                 zero_corners += PageFormat::is_zero(c) ? 1 : 0;
+                bad_material += in_live && PageFormat::decode_palette(c) >= ranges[r].palette.palette->size() ? 1 : 0;
             }
             if (zero_corners > 0 && zero_corners < 4) {
                 partial++;
@@ -197,6 +200,7 @@ void PageAuditor::_analyse() {
     report["partial"] = partial;
     report["broken"] = broken;
     report["bad_header"] = bad_header;
+    report["bad_material"] = bad_material; // corners whose palette index is past their chunk's palette
     report["pages_with_stale"] = pages_with_stale;
     report["pages_with_partial"] = pages_with_partial;
     report["max_quad_edge_m"] = max_edge;
@@ -207,5 +211,5 @@ void PageAuditor::_analyse() {
         chunk_digests[WorldCoord::to_string(kv.key)] = vformat("%d:%s", kv.value.first, String::num_uint64(kv.value.second, 16));
     }
     report["chunk_digests"] = chunk_digests;
-    report["ok"] = stale == 0 && partial == 0 && broken == 0 && bad_header == 0;
+    report["ok"] = stale == 0 && partial == 0 && broken == 0 && bad_header == 0 && bad_material == 0;
 }

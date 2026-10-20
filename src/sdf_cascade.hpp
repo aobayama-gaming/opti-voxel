@@ -281,13 +281,14 @@ float cascade_skirt_depth_m(int lod) {
     String get_sample_fold_glsl() const override {
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
         return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize) + R"glsl(
-vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk) {
+vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material) {
+    material = 0u;
     precise vec4 u = cascade_terrain_unit(c0, p, lod);
     g_sdf_chunk = input_chunk[chunk];
     if (g_sdf_chunk.anchor_hi.w > 0) {
         precise float s = exact_pow2(lod);
         bool touched = false;
-        precise vec4 r = arch_fold(u * s, p, lod, touched);
+        precise vec4 r = arch_fold(u * s, p, lod, touched, material);
         if (touched) {
             return arch_finish(r, lod);
         }

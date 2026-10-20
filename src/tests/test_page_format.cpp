@@ -36,10 +36,10 @@ void encode_corner(uint16_t *r_corner, const Vector3 &p_local, uint32_t p_normal
     r_corner[3] = uint16_t(p_normal);
 }
 
-void store_group_header(uint16_t *r_row, const Vector3i &p_chunk) {
+void store_group_header(uint16_t *r_row, const Vector3i &p_chunk, uint32_t p_palette_block) {
     const uint32_t c[3] = { uint32_t(p_chunk.x), uint32_t(p_chunk.y), uint32_t(p_chunk.z) };
     const uint16_t texels[8] = { uint16_t(c[0] & 65535u), uint16_t(c[0] >> 16), uint16_t(c[1] & 65535u), uint16_t(c[1] >> 16),
-        uint16_t(c[2] & 65535u), uint16_t(c[2] >> 16), 0, 0 };
+        uint16_t(c[2] & 65535u), uint16_t(c[2] >> 16), uint16_t(p_palette_block & 65535u), uint16_t(p_palette_block >> 16) };
     for (int i = 0; i < 8; i++) {
         r_row[i] = texels[i];
     }
@@ -82,12 +82,15 @@ TEST_CASE("PageFormat: corner addressing") {
     CHECK(is_zero(corner(page.data(), 0, 0)));
 }
 
-TEST_CASE("PageFormat: group header keeps the low words of the chunk id") {
+TEST_CASE("PageFormat: group header keeps the low words of the chunk id and the palette block") {
     uint16_t row_data[8];
     for (const Vector3i chunk : { Vector3i(-3, 70000, -2147483647), Vector3i(1, -1, 2147483647), Vector3i(0, 0, 0) }) {
-        CAPTURE(chunk);
-        store_group_header(row_data, chunk);
-        CHECK(header_chunk(row_data) == chunk);
+        for (const uint32_t block : { 0u, 16u, 0x12345670u }) {
+            CAPTURE(chunk);
+            store_group_header(row_data, chunk, block);
+            CHECK(header_chunk(row_data) == chunk);
+            CHECK(header_palette(row_data) == block);
+        }
     }
 }
 
