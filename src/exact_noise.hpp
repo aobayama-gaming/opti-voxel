@@ -101,6 +101,18 @@ inline int64_t random_offset(uint32_t p_a, uint32_t p_b, uint32_t p_c, int64_t p
     return int64_t(((uint64_t(h.x) << 32) | h.y) % uint64_t(2 * p_range + 1)) - p_range;
 }
 
+// CPU placement (trees, biome features): a hash of three words, and its top 24 bits as a double in [0, 1).
+inline UVec3 hash3(uint32_t p_a, uint32_t p_b, uint32_t p_c) {
+    return pcg3d(UVec3{ p_a, p_b, p_c });
+}
+inline double unit_of(uint32_t p_bits) {
+    return double(p_bits >> 8) * 0x1p-24;
+}
+// The k of a 2^k-voxel lattice nearest p_metres at voxel size p_voxel (bump and cell sizes in metres).
+inline int lattice_k(double p_metres, double p_voxel) {
+    return int(std::lround(std::log2(p_metres / p_voxel)));
+}
+
 // Salt of a block of 2^32 x 2^32 x 2^32 cells: its high words and the seed.
 inline UVec3 cell_salt(int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
     return pcg3d(UVec3{ uint32_t(p_hx) ^ p_seed, uint32_t(p_hy) ^ (p_seed ^ SALT_Y), uint32_t(p_hz) ^ (p_seed ^ SALT_Z) });
@@ -461,10 +473,10 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
 // The two fBms FrameSpike's noise probes and the unit tests check at voxel size p_voxel (metres): a 2D one
 // (wavelength 286 m, 5 octaves, 37.5 m) and a 3D one (125 m, 3 octaves).
 inline OctaveSet reference_fbm2d(double p_voxel) {
-    return make_fbm(true, 0xA2C4E7u, int(std::lround(std::log2(1.0 / 0.0035 / p_voxel))), 5, 50.0 / p_voxel * 0.75, 0.5);
+    return make_fbm(true, 0xA2C4E7u, lattice_k(1.0 / 0.0035, p_voxel), 5, 50.0 / p_voxel * 0.75, 0.5);
 }
 inline OctaveSet reference_fbm3d(double p_voxel) {
-    return make_fbm(false, 0xCA7E5u, int(std::lround(std::log2(125.0 / p_voxel))), 3, 4.0 / 3.0, 0.5);
+    return make_fbm(false, 0xCA7E5u, lattice_k(125.0, p_voxel), 3, 4.0 / 3.0, 0.5);
 }
 
 // Checks the gradient factors at the LODs [0, p_lod_count) the set is evaluated at (configure time):

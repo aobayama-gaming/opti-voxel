@@ -55,6 +55,7 @@ extends Node3D
 ##   --instance_resolve=F         a part erodes only once its half thickness is under F cells (default 0: from LOD 1)
 ##   --trees=N                    a forest of about N grown trees (default 0)
 ##   --tree_area=M                side of the forest square, metres (default 60)
+##   --biomes=KM                  lava lakes and floating islands of the biome cells within KM km (default 0)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
@@ -201,6 +202,8 @@ func _ready() -> void:
 		terrain.archetype_trees = int(args["trees"])
 	if args.has("tree_area"):
 		terrain.archetype_tree_area = float(args["tree_area"])
+	if args.has("biomes"):
+		terrain.biome_radius = 1000.0 * float(args["biomes"])
 	terrain.terrain_mode = terrains[terrain_arg]
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"

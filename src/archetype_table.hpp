@@ -26,6 +26,9 @@
 // the same branch and seams stay exact.
 namespace Archetype {
 
+// The y of the ground's top solid voxel in column (x, z), instances left out (SDFTable::ground_y): where the scenes stand.
+using GroundFn = std::function<int64_t(int64_t, int64_t)>;
+
 // Bounds of a perlin octave (ExactNoise): |value| and |gradient| per cell. Conservative; the unit tests
 // sample them.
 inline constexpr float PERLIN3_MAX = 1.5f;
@@ -232,7 +235,9 @@ Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_no
 // gallery's hard-CSG composites (SDFTable::Scene::SHAPES): die {h} (a cube of half size h rounded by a sphere, its
 // pips subtracted: 1 on +y, 2 on +z, 3 on +x, 4 on -x, 5 on -z); stairs {half_width, rise, half_depth} (8 steps
 // rising along +z, step i a box of half height (i + 1) rise centred on y = 0); tunnel_cube {h, t} (a cube of half
-// size h tunnelled through along its three axes, tunnels of half width t).
+// size h tunnelled through along its three axes, tunnels of half width t). Biome features (biome_features.hpp): basin
+// {half_height, radius, amp} (a cylinder displaced like the rock: a lava lake's crater); island {radius, height, cos,
+// sin, dome_radius, dome_drop, amp} (a spherical cap on a hanging cone, displaced like the rock).
 TableDefPtr make_sphere_type();
 TableDefPtr make_box_type();
 TableDefPtr make_capsule_type();
@@ -240,6 +245,8 @@ TableDefPtr make_branch_type();
 TableDefPtr make_cylinder_type();
 TableDefPtr make_rock_type(int p_k, uint32_t p_seed);
 TableDefPtr make_cone_type(int p_k, uint32_t p_seed);
+TableDefPtr make_basin_type(int p_k, uint32_t p_seed);
+TableDefPtr make_island_type(int p_k, uint32_t p_seed);
 TableDefPtr make_swiss_cube_type(int p_holes);
 TableDefPtr make_die_type();
 TableDefPtr make_stairs_type();

@@ -106,6 +106,8 @@ ChunkId chunk_at_voxel(const VoxelPos &p_voxel, int p_lod, const ChunkParam &chu
 
 // Render space (Godot space): metres relative to the world origin. Only these helpers produce metres.
 Vector3 chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
+// An LOD0 voxel (its lower corner).
+Vector3 voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param);
 // A point of the chunk's vertex grid (the grid the SDF is sampled on, skirt included).
 Vector3 grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const ChunkParam &chunk_param);
 // Same from a page header, which only carries the low 32 bits of the id (mirrors the page shader).

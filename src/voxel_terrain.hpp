@@ -77,6 +77,7 @@ private:
     double archetype_instance_area = 200.0;
     int archetype_trees = 0;
     double archetype_tree_area = 60.0;
+    double biome_radius = 0.0;
     bool archetype_band = true;
     float archetype_erode = Archetype::ERODE_CELLS;
     float archetype_resolve = 0.0f;
@@ -209,6 +210,10 @@ public:
     int get_archetype_trees() const;
     void set_archetype_tree_area(double p_area);
     double get_archetype_tree_area() const;
+    // The biome features (biome_features.hpp: lava lakes, floating islands) within this many metres of
+    // SDFTable::SCENE_X / Z, 0 for none (--biomes=KM). Set before the node enters the tree.
+    void set_biome_radius(double p_metres);
+    double get_biome_radius() const;
     // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);

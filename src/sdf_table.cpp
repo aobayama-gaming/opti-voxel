@@ -1,5 +1,9 @@
 #include "sdf_table.hpp"
 
+#include <godot_cpp/classes/time.hpp>
+#include <godot_cpp/classes/worker_thread_pool.hpp>
+
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 
@@ -158,20 +162,22 @@ VoxelBox SDFTable::record_box(const TableRecord &p_rec) {
     return b;
 }
 
-void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z) {
+void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats) {
     std::vector<TreeSite> sites;
     forest_sites(forest_count, forest_area, p_centre_x, p_centre_z, p_voxel, [this](int64_t p_x, int64_t p_z) { return ground_y(p_x, p_z); }, sites);
     std::vector<TableRecord> parts;
     int64_t most = 0;
     for (const TreeSite &site : sites) {
+        if (in_lake(site.base.x, site.base.z)) {
+            continue;
+        }
         parts.clear();
         grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, parts);
-        trees.push_back(TreeSpan{ records.size(), uint32_t(parts.size()), site.species, site.seed });
-        for (TableRecord &rec : parts) {
-            finish_record(rec);
-            records.push_back(rec, version + 1);
+        const uint32_t first = records.size();
+        if (admit(parts, "tree")) {
+            trees.push_back(TreeSpan{ first, uint32_t(parts.size()), site.species, site.seed });
+            most = MAX(most, int64_t(parts.size()));
         }
-        most = MAX(most, int64_t(parts.size()));
     }
     Dictionary forest;
     forest["count"] = int64_t(trees.size());
@@ -182,9 +188,110 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     forest["records"] = total;
     forest["records_per_tree_avg"] = trees.empty() ? 0.0 : double(total) / double(trees.size());
     forest["records_per_tree_max"] = most;
-    Dictionary scene;
-    scene["trees"] = forest;
-    gpu.set_scene_stats(scene);
+    r_stats["trees"] = forest;
+}
+
+void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
+    if (!(biome_radius > 0.0)) {
+        return;
+    }
+    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
+    const double vs = param.voxel_size;
+    const int64_t cx = std::llround(SCENE_X / vs), cz = std::llround(SCENE_Z / vs);
+    const int64_t r = std::llround(biome_radius / vs);
+    std::vector<Biome::Site> all, sites;
+    for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
+        Biome::sites(Biome::Feature(f), cx - r, cz - r, cx + r, cz + r, vs, all);
+    }
+    for (const Biome::Site &site : all) {
+        const double dx = double(site.x - cx), dz = double(site.z - cz);
+        if (dx * dx + dz * dz <= double(r) * double(r)) {
+            sites.push_back(site);
+        }
+    }
+    // Each site samples the ground at a few dozen columns (ground_y, const): on the worker pool, kept in site order.
+    struct Job {
+        const SDFTable *table;
+        const Biome::Types *types;
+        const Biome::Site *sites;
+        Biome::Placed *placed;
+        uint8_t *ok;
+        double voxel;
+        static void run(void *p_job, uint32_t p_i) {
+            const Job &job = *static_cast<const Job *>(p_job);
+            const SDFTable *t = job.table;
+            job.ok[p_i] = Biome::place(job.sites[p_i], [t](int64_t p_x, int64_t p_z) { return t->ground_y(p_x, p_z); }, *t->library, *job.types, job.voxel, job.placed[p_i]);
+        }
+    };
+    std::vector<Biome::Placed> placed(sites.size());
+    std::vector<uint8_t> ok(sites.size(), 0);
+    Job job{ this, &p_types.biome, sites.data(), placed.data(), ok.data(), vs };
+    if (!sites.empty()) {
+        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+        pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(sites.size()), -1, true, "SDFTable::add_biomes"));
+    }
+    Array listed;
+    int64_t counts[Biome::FEATURE_COUNT] = {};
+    int64_t too_steep = 0;
+    for (size_t i = 0; i < sites.size(); i++) {
+        if (!ok[i]) {
+            too_steep++;
+            continue;
+        }
+        if (!admit(placed[i].records, "biome feature")) {
+            continue;
+        }
+        const Biome::Placed &p = placed[i];
+        if (p.lava) {
+            lava_pools.push_back(p.pool);
+        }
+        counts[p.at.feature]++;
+        if (listed.size() >= SITES_LISTED_MAX) {
+            continue;
+        }
+        Dictionary d;
+        d["kind"] = Biome::kind(p.at.feature).name;
+        d["x_m"] = double(p.at.x) * vs;
+        d["z_m"] = double(p.at.z) * vs;
+        d["y_m"] = double(p.top_y) * vs; // the lava surface, the island's rim plane
+        d["radius_m"] = p.at.radius * vs;
+        listed.push_back(d);
+    }
+    // Nearest the centre first: the page shader colours the first LAVA_POOL_MAX.
+    std::sort(lava_pools.begin(), lava_pools.end(), [cx, cz](const Biome::LavaPool &p_a, const Biome::LavaPool &p_b) {
+        const double ax = double(p_a.top.x - cx), az = double(p_a.top.z - cz), bx = double(p_b.top.x - cx), bz = double(p_b.top.z - cz);
+        return ax * ax + az * az < bx * bx + bz * bz;
+    });
+    Dictionary biomes;
+    for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
+        biomes[Biome::kind(Biome::Feature(f)).name] = counts[f];
+    }
+    biomes["lakes_too_steep"] = too_steep;
+    biomes["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    biomes["sites"] = listed;
+    r_stats["biomes"] = biomes;
+}
+
+bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
+    for (const Biome::LavaPool &p : lava_pools) {
+        const double dx = double(p_x - p.top.x), dz = double(p_z - p.top.z), keep = Biome::LAKE_KEEP_OUT * p.radius;
+        if (dx * dx + dz * dz < keep * keep) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SDFTable::admit(std::vector<TableRecord> &r_records, const char *p_what) {
+    for (const TableRecord &rec : r_records) {
+        const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
+        ERR_FAIL_COND_V_MSG(!fit.is_empty(), false, vformat("SDFTable: %s left out: ", p_what) + fit);
+    }
+    for (TableRecord &rec : r_records) {
+        finish_record(rec);
+        records.push_back(rec, version + 1);
+    }
+    return true;
 }
 
 float SDFTable::voxels(double p_metres) const {
@@ -205,10 +312,8 @@ void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_para
     std::copy(rot, rot + 9, rec.rotation);
     rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
     // The same limits as a runtime edit (a gallery cube past 4 top-LOD chunk spans with few LODs).
-    const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
-    ERR_FAIL_COND_MSG(!fit.is_empty(), "SDFTable: scene record left out: " + fit);
-    finish_record(rec);
-    records.push_back(rec, version + 1);
+    std::vector<TableRecord> one{ rec };
+    admit(one, "scene record");
 }
 
 void SDFTable::add_shapes(const Types &p_types) {
@@ -237,8 +342,11 @@ void SDFTable::add_scatter(const Types &p_types) {
     auto v = [this](double p_metres) { return voxels(p_metres); };
     for (int i = 0; i < scatter_count; i++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0x5CA7u, 0x7E12u });
-        const double px = SCENE_X + (double(h.x >> 8) / 16777216.0 - 0.5) * scatter_area;
-        const double pz = SCENE_Z + (double(h.y >> 8) / 16777216.0 - 0.5) * scatter_area;
+        const double px = SCENE_X + (ExactNoise::unit_of(h.x) - 0.5) * scatter_area;
+        const double pz = SCENE_Z + (ExactNoise::unit_of(h.y) - 0.5) * scatter_area;
+        if (in_lake(std::llround(px / param.voxel_size), std::llround(pz / param.voxel_size))) {
+            continue;
+        }
         const float r = 1.0f + float(h.z % 300u) * 0.01f;
         if (i % 2 == 0) {
             const float params[8] = { v(double(r)), 0.1f * v(double(r)), 0, 0, 0, 0, 0, 0 };
@@ -257,7 +365,7 @@ void SDFTable::build_table(int p_lod_count) {
     Types types;
     lib.add(make_sphere_type());
     types.capsule = lib.add(make_capsule_type());
-    types.rock = lib.add(make_rock_type(int(std::lround(std::log2(8.0 / vs))), ROCK_SEED));
+    types.rock = lib.add(make_rock_type(ExactNoise::lattice_k(8.0, vs), ROCK_SEED));
     const int branch = lib.add(make_branch_type());
     const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED));
     const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED));
@@ -266,6 +374,9 @@ void SDFTable::build_table(int p_lod_count) {
         types.die = lib.add(make_die_type());
         types.stairs = lib.add(make_stairs_type());
         types.tunnel_cube = lib.add(make_tunnel_cube_type());
+    }
+    if (biome_radius > 0.0) {
+        types.biome = Biome::add_types(lib, vs);
     }
     library = std::make_shared<const DefLibrary>(lib);
     for (int i = 0; i < library->size(); i++) {
@@ -278,11 +389,16 @@ void SDFTable::build_table(int p_lod_count) {
 
     records.clear();
     trees.clear();
+    lava_pools.clear();
     if (scene == Scene::SHAPES) {
         add_shapes(types);
     }
+    // The biome features first: the scatter and the forest keep out of the lakes (their basins cut the ground away).
+    Dictionary scene_stats;
+    add_biomes(types, scene_stats);
     add_scatter(types);
-    add_forest(crown_types(branch, crown, lib[crown], cone), vs, SCENE_X, SCENE_Z);
+    add_forest(crown_types(branch, crown, lib[crown], cone), vs, SCENE_X, SCENE_Z, scene_stats);
+    gpu.set_scene_stats(scene_stats);
     edit_k = 0.0f;
     edit_margin_c = 0.0f;
     edit_lod_max = 0;

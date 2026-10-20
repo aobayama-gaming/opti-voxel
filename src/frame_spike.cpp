@@ -1,5 +1,7 @@
 #include "frame_spike.hpp"
 
+#include "biome_features.hpp"
+
 #include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
 #include "chunk_math.hpp"
@@ -894,6 +896,8 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     t.library.add(make_rock_type(8, 0x1234u));
     t.library.add(make_branch_type());
     t.library.add(make_cone_type(6, 0x4321u));
+    t.library.add(make_basin_type(5, Biome::BASIN_SEED));
+    t.library.add(make_island_type(5, Biome::ISLAND_SEED));
     for (uint32_t i = 0; i < 64; i++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0x7AB1u, 0x9E37u });
         TableRecord rec;
@@ -935,12 +939,26 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
                 rec.params[1] = 2.5f;
                 rec.params[2] = -0.1f;
                 break;
-            default: // a cone of radius 8, height 20: cos = 20 / sqrt(464), sin = 8 / sqrt(464)
+            case 6: // a cone of radius 8, height 20: cos = 20 / sqrt(464), sin = 8 / sqrt(464)
                 rec.params[0] = 8.0f;
                 rec.params[1] = 20.0f;
                 rec.params[2] = 0.928477f;
                 rec.params[3] = 0.371391f;
                 rec.params[4] = 1.0f + float(i % 3);
+                break;
+            case 7: // a basin of radius 10, half height 6
+                rec.params[0] = 6.0f;
+                rec.params[1] = 10.0f;
+                rec.params[2] = 1.0f + float(i % 2);
+                break;
+            default: // an island of radius 10, a 3-voxel cap (dome radius 18.17, drop 15.17), its cone 11 deep
+                rec.params[0] = 10.0f;
+                rec.params[1] = 11.0f;
+                rec.params[2] = 0.739940f;
+                rec.params[3] = 0.672673f;
+                rec.params[4] = 18.166667f;
+                rec.params[5] = 15.166667f;
+                rec.params[6] = 1.0f + float(i % 2);
                 break;
         }
         rec.salt = i == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ i + 1, 0x5EEDu, 0u }).x;
