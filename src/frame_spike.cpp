@@ -5,6 +5,7 @@
 #include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
 #include "chunk_math.hpp"
+#include "chunk_palette.hpp"
 #include "exact_noise.hpp"
 #include "frame_probe.hpp"
 #include "gpu_frame.hpp"
@@ -981,7 +982,8 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     t.palette.resize(t.records.size());
     for (uint32_t i = 0; i < t.list.size(); i++) {
         t.list[i] = i;
-        t.palette[i] = uint16_t(1 + (i * 37u) % (PageFormat::PALETTE_SIZE - 1)); // non-zero: a win shows
+        // Non-zero: a win shows. Every fifth record inherits: the fold skips it on both sides.
+        t.palette[i] = i % 5u == 4u ? uint16_t(ChunkPalette::INHERIT_INDEX) : uint16_t(1 + (i * 37u) % (ChunkPalette::MAX_ENTRIES - 1));
     }
     return t;
 }

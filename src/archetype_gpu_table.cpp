@@ -123,7 +123,7 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
         list_stats.palette_longest[lod] = MAX(list_stats.palette_longest[lod], int64_t(palettes[i].size()));
         if (!fits[i]) {
             list_stats.palette_truncated++;
-            ERR_PRINT(vformat("GpuTable: a LOD %d chunk names more than %d materials: the rest draw as ground.", lod, PageFormat::PALETTE_SIZE));
+            ERR_PRINT(vformat("GpuTable: a LOD %d chunk names more than %d materials: the rest draw as ground.", lod, ChunkPalette::MAX_ENTRIES));
         }
         // The buffer holds batch size * cap words: one long list fits beside short ones. Only a batch over the
         // whole budget is cut (its chunk gets a wrong surface, and the CPU's evaluate disagrees there).

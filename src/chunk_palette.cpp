@@ -13,12 +13,16 @@ bool build(const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> 
     bool fits = true;
     for (uint32_t i = 0; i < p_count; i++) {
         const uint32_t m = p_materials[i];
+        if (m == Material::INHERIT) {
+            r_index[i] = uint16_t(INHERIT_INDEX);
+            continue;
+        }
         uint32_t at = 0;
         while (at < r_palette.size() && r_palette[at] != m) { // palettes are short: a scan beats a map
             at++;
         }
         if (at == r_palette.size()) {
-            if (r_palette.size() == PageFormat::PALETTE_SIZE) {
+            if (r_palette.size() == MAX_ENTRIES) {
                 fits = false;
                 at = 0;
             } else {

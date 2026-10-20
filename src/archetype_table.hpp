@@ -73,8 +73,8 @@ using TableDefPtr = std::shared_ptr<const TableDef>;
 // The types available to the table (a new type = a shader recompile). GLSL functions arch_<index>.
 class DefLibrary {
 public:
-    // p_material: the type's default material (a record with Material::FROM_TYPE takes it).
-    int add(const TableDefPtr &p_def, uint32_t p_material = Material::GROUND);
+    // p_material: the type's default material (a record with Material::FROM_TYPE takes it). Generic shapes inherit.
+    int add(const TableDefPtr &p_def, uint32_t p_material = Material::INHERIT);
     int size() const { return int(list.size()); }
     const TableDef &operator[](int p_index) const { return *list[p_index]; }
     const std::vector<TableDefPtr> &all() const { return list; }
@@ -211,7 +211,7 @@ String generate_library_glsl(const DefLibrary &p_library);
 // The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material)` (fold_onto
 // over the chunk's list: g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers, a list word being the record
 // id | its palette index << SDFGpuTable::LIST_ID_BITS; touched is set when an instance passes its box test, material
-// to the palette index of a record that wins) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
+// to the palette index of a record that wins, unless it is ChunkPalette::INHERIT_INDEX) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
 String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize);
 
 // Bytes of one DefRecord in the GPU buffer (10 x vec4, all 16-byte aligned).

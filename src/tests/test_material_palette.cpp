@@ -42,7 +42,7 @@ TEST_CASE("ChunkPalette: ground first, distinct ids in list order, indices point
     CHECK(palette == std::vector<uint32_t>{ Material::GROUND });
 }
 
-TEST_CASE("ChunkPalette: past PALETTE_SIZE materials the rest draws as ground") {
+TEST_CASE("ChunkPalette: past MAX_ENTRIES materials the rest draws as ground") {
     std::vector<uint32_t> mats;
     for (uint32_t m = 1; m <= PageFormat::PALETTE_SIZE + 5; m++) {
         mats.push_back(m);
@@ -50,9 +50,20 @@ TEST_CASE("ChunkPalette: past PALETTE_SIZE materials the rest draws as ground") 
     std::vector<uint32_t> palette;
     std::vector<uint16_t> index;
     CHECK_FALSE(ChunkPalette::build(mats.data(), uint32_t(mats.size()), palette, index));
-    CHECK(palette.size() == PageFormat::PALETTE_SIZE);
-    CHECK(index[PageFormat::PALETTE_SIZE - 2] == PageFormat::PALETTE_SIZE - 1); // material 511 is the last that fits
+    CHECK(palette.size() == ChunkPalette::MAX_ENTRIES);
+    CHECK(index[ChunkPalette::MAX_ENTRIES - 2] == ChunkPalette::MAX_ENTRIES - 1); // material 510 is the last that fits
+    CHECK(index[ChunkPalette::MAX_ENTRIES - 1] == 0);
     CHECK(index.back() == 0);
+}
+
+TEST_CASE("ChunkPalette: INHERIT takes the reserved index and no entry") {
+    const uint32_t mats[] = { Material::INHERIT, 7, Material::INHERIT };
+    std::vector<uint32_t> palette;
+    std::vector<uint16_t> index;
+    CHECK(ChunkPalette::build(mats, 3, palette, index));
+    CHECK(palette == std::vector<uint32_t>{ Material::GROUND, 7 });
+    CHECK(index == std::vector<uint16_t>{ uint16_t(ChunkPalette::INHERIT_INDEX), 1, uint16_t(ChunkPalette::INHERIT_INDEX) });
+    static_assert(ChunkPalette::INHERIT_INDEX >= ChunkPalette::MAX_ENTRIES, "no palette entry is the reserved index");
 }
 
 TEST_CASE("PaletteAlloc: aligned blocks, the ground block reserved, frees merge back") {
@@ -115,9 +126,11 @@ TEST_CASE("Fold material: the record that wins the sample gives it its palette i
     sphere(0, 10.0f, Combine::UNION); // palette 1
     sphere(30, 10.0f, Combine::SMOOTH_UNION); // palette 2
     sphere(0, 4.0f, Combine::SUBTRACT); // palette 3: a hole carved in the first
+    sphere(30, 4.0f, Combine::SMOOTH_SUBTRACT); // inherits: a hole carved in the second
     records[1].set_k(2.0f);
-    const std::vector<uint32_t> list = { 0, 1, 2 };
-    const std::vector<uint16_t> palette = { 1, 2, 3 };
+    records[3].set_k(1.0f);
+    const std::vector<uint32_t> list = { 0, 1, 2, 3 };
+    const std::vector<uint16_t> palette = { 1, 2, 3, uint16_t(ChunkPalette::INHERIT_INDEX) };
     const Float4 air{ 0.0f, 0.0f, 0.0f, 1000.0f };
     auto material_at = [&](int64_t p_x) {
         WorldPos p;
@@ -129,6 +142,9 @@ TEST_CASE("Fold material: the record that wins the sample gives it its palette i
     CHECK(material_at(8) == 1); // inside the first sphere, outside the hole
     CHECK(material_at(31) == 2); // inside the smooth-unioned one
     CHECK(material_at(0) == 3); // in the hole: the cutter's face wins
+    CHECK(material_at(5) == 3); // the solid side of the hole's face too
+    CHECK(material_at(30) == 2); // an inheriting cutter: its face keeps what it cut
+    CHECK(material_at(35) == 2);
     CHECK(material_at(500) == 0); // far: no box test passes, ground
 
     // The rule itself: the unions take the record where it is lower, the subtractions where its negation is higher.

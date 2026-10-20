@@ -9,8 +9,8 @@
 
 using namespace godot;
 
-// Global materials: what a chunk palette entry names (chunk_palette.hpp). A record carries one (TableRecord::material),
-// the ground is GROUND. The page shader reads a material's parameters from make_image() by its id.
+// Global materials: what a chunk palette entry names (chunk_palette.hpp). A record carries one (TableRecord::material)
+// or INHERIT, the ground is GROUND. The page shader reads a material's parameters from make_image() by its id.
 namespace Material {
 
 // Built-in materials, registered in this order by Library's constructor. GROUND is the page shader's procedural
@@ -29,6 +29,9 @@ enum Builtin : uint32_t {
 static constexpr uint32_t MAX_MATERIALS = 1u << 24;
 // A record's material when it takes its library type's (DefLibrary::material), resolved by SDFTable::finish_record.
 static constexpr uint32_t FROM_TYPE = UINT32_MAX;
+// A record that colours nothing: where it wins a sample, the sample keeps the material it had (a cutter's face shows
+// what it cut, a shape unioned into a tree is bark). The generic shape types' default (DefLibrary::add).
+static constexpr uint32_t INHERIT = UINT32_MAX - 1;
 
 // Shading patterns the page shader knows (Params::pattern).
 enum Pattern : int {
