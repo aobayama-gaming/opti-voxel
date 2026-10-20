@@ -75,6 +75,7 @@ struct IndexLayer {
     std::vector<std::vector<ChunkId>> occupied;
 
     bool is_occupied(const ChunkId &p_node, int p_lod) const;
+    bool empty() const { return unbounded.empty() && stored_ids.empty(); }
 };
 
 struct InstanceSnapshot {
@@ -93,6 +94,9 @@ struct InstanceSnapshot {
     HashSet<uint32_t> masked; // the base ids among overlay_ids: their base entries are stale
 
     static constexpr uint32_t REBASE = 2048;
+
+    // No instance indexed (none placed, or every one removed and rebased away): every list is empty.
+    bool empty() const { return (!base || base->empty()) && (!overlay || overlay->empty()); }
 
     // The instances whose box test can pass at one of the chunk's samples, in id order.
     void chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const;

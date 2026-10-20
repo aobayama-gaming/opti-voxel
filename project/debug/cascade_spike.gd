@@ -23,6 +23,7 @@ func _ready() -> void:
 		"voxel": float(args.get("voxel", "0.5")),
 		"check": args.get("check", "1") == "1",
 		"points": args.get("points", "1") == "1",
+		"table": args.get("table", "1") == "1",
 		"timing": args.get("timing", "1") == "1",
 		"runs": int(args.get("runs", "10")),
 		"sets": args.get("sets", "8,4"),

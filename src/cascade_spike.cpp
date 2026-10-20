@@ -32,13 +32,6 @@ uint64_t now_usec() {
     return Time::get_singleton()->get_ticks_usec();
 }
 
-// The LOD-L chunk whose interior holds LOD0 voxel p_voxel.
-ChunkId chunk_holding(const Vector3i64 &p_voxel, int p_lod, const ChunkParam &p_param) {
-    const int64_t span = (p_param.half_chunk_voxels() * 2) << p_lod;
-    auto axis = [&](int64_t p_v) { return WorldCoord::floor_div(p_v, span) * span / p_param.half_chunk_voxels() + (int64_t(1) << p_lod); };
-    return ChunkId(axis(p_voxel.x), axis(p_voxel.y), axis(p_voxel.z));
-}
-
 struct TestChunk {
     ChunkId id;
     int lod = 0;
@@ -79,7 +72,7 @@ std::vector<TestChunk> batch_chunks(int p_lod, int p_lods, const ChunkParam &p_p
             v[a] = base + ExactNoise::random_offset(uint32_t(p_lod), n, uint32_t(a) + 0xCA5Cu, p_place.range);
         }
         n++;
-        chunks.push_back({ chunk_holding(v, p_lod, p_param), p_lod, p_place.name });
+        chunks.push_back({ ChunkMath::chunk_at_voxel(v, p_lod, p_param), p_lod, p_place.name });
     };
     for (const Place &place : places) {
         for (int i = 0; i < CHUNKS_PER_PLACE; i++) {
@@ -237,7 +230,7 @@ private:
     }
 
     // Level j of every chunk of the batch (GPU layout: x fastest, stride level_bound(j)) against the CPU's
-    // (x slowest); at j = 0 also the samples against SDFCascade::sample of the CPU channels.
+    // (x slowest); at j = 0 also the samples against SDFCascade::sdf + skirt of the CPU channels.
     void compare_level(int p_j, const PackedByteArray &p_data, const PackedByteArray &p_samples) {
         const float *gpu = reinterpret_cast<const float *>(p_data.ptr());
         const uint64_t n = uint64_t(level_bound(cs, p_j));
@@ -285,7 +278,7 @@ private:
             ch[k] = p_level.ch[k][p_cpu_i];
         }
         const int lod = chunks[p_chunk].lod;
-        const ExactNoise::Float4 want = sdf.sample(ch, p_p.y * (int64_t(1) << lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
+        const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p.y * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
         const float w[4] = { want.x, want.y, want.z, want.w };
         checks.samples++;
         for (int k = 0; k < 4; k++) {
@@ -347,6 +340,121 @@ private:
 void check_set(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) {
     SetChecker checker(p_rd, p_set, p_lods, p_param, r_checks);
     checker.run();
+}
+
+// G9 (instance table): a cascade terrain with a scatter of rocks and pillars, LODs 0 to TABLE_LODS - 1, a batch of the
+// chunks holding the records per LOD with their instance lists and records on the GPU: every sample of the meshers'
+// fold variant against SDFCascade::sample_sdf + skirt with the chunk's list (fold_onto + finish_table where an
+// instance passes its box test, the bare cascade elsewhere), bit for bit.
+constexpr int TABLE_LODS = 7;
+
+// The LOD-p_lod chunks holding the records' anchors (at most MAX_BATCH), encoded with their lists.
+std::vector<ChunkId> table_batch(const Archetype::InstanceSnapshot &p_snap, const SDFGpuTable &p_table, int p_lod, const ChunkParam &p_param,
+        PackedByteArray &r_inputs, PackedByteArray &r_words) {
+    std::vector<ChunkId> ids;
+    for (uint32_t r = 0; r < p_snap.records.size() && ids.size() < MAX_BATCH; r++) {
+        const ChunkId id = ChunkMath::chunk_at_voxel(p_snap.records[r].anchor, p_lod, p_param);
+        if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+            ids.push_back(id);
+        }
+    }
+    r_inputs.resize(int64_t(ids.size()) * GPUFrame::CHUNK_INPUT_BYTES);
+    for (size_t c = 0; c < ids.size(); c++) {
+        GPUFrame::encode_chunk_input(r_inputs, int64_t(c), ids[c], p_param);
+    }
+    p_table.build_lists(ids, p_param, r_inputs, r_words);
+    return ids;
+}
+
+// One chunk's GPU samples p_got (32^3 vec4) against the CPU's; counts the samples an instance changed in r_folded.
+void compare_table_chunk(const SDFCascade &p_sdf, const Archetype::InstanceSnapshot &p_snap, const ChunkId &p_id, int p_lod, const ChunkParam &p_param,
+        const float *p_got, Checks &r_checks, int64_t &r_folded) {
+    std::vector<uint32_t> list;
+    p_snap.chunk_list(p_id, list);
+    const Box box = chunk_box(p_id, p_param);
+    std::vector<Level> levels;
+    Cascade::run(p_sdf.get_spec(), box, p_lod, &levels);
+    const Level &level = levels.back();
+    const uint64_t cs = uint64_t(p_param.chunk_size);
+    for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
+        const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
+        float ch[CHANNELS] = {};
+        for (int k = 0; k < channel_count(p_sdf.get_spec().set); k++) {
+            ch[k] = level.ch[k][size_t(p_cpu_i)];
+        }
+        WorldPos p;
+        p.voxel = VoxelPos(p_p.x << p_lod, p_p.y << p_lod, p_p.z << p_lod);
+        const Float3 grid{ float(i.x), float(i.y), float(i.z) };
+        const ExactNoise::Float4 want = p_sdf.with_skirt(p_sdf.sample_sdf(p_snap, list.data(), uint32_t(list.size()), ch, p, p_lod), p_lod, grid);
+        const ExactNoise::Float4 bare = p_sdf.with_skirt(p_sdf.sdf(ch, p.voxel.y, p_lod), p_lod, grid);
+        r_folded += float_bits(want.w) != float_bits(bare.w) ? 1 : 0;
+        const float *g = p_got + (uint64_t(i.x) + cs * (uint64_t(i.y) + cs * uint64_t(i.z))) * 4;
+        r_checks.samples++;
+        if (!ExactNoise::same_bits(want, ExactNoise::Float4{ g[0], g[1], g[2], g[3] })) {
+            r_checks.samples_differing++;
+            if (r_checks.wants_example()) {
+                r_checks.example(vformat("LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", p_lod, WorldCoord::to_string(p_id),
+                        WorldCoord::to_string(i), g[0], g[1], g[2], g[3], want.x, want.y, want.z, want.w));
+            }
+        }
+    });
+}
+
+Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_param) {
+    Dictionary d;
+    ChunkParam param = p_param;
+    SDFCascade sdf;
+    sdf.set_scatter(600, 160.0);
+    param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
+    sdf.configure(param, p_lods);
+    const std::shared_ptr<const Archetype::InstanceSnapshot> snap = sdf.get_snapshot();
+    SDFGpuTable *table = sdf.get_gpu_table();
+    const int cs = param.chunk_size;
+    const uint64_t cells = uint64_t(cs) * cs * cs;
+    const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(param);
+    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
+    const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
+    const RID records = p_rd->storage_buffer_create(uint64_t(table->instance_capacity()) * table->record_size());
+    const RID list = p_rd->storage_buffer_create(uint64_t(MAX_BATCH) * table->max_chunk_list() * 4);
+    uint32_t version = 0;
+    SDFGpuTable::upload_records(p_rd, records, table->record_bytes(UINT32_MAX, version));
+    CascadePasses passes;
+    Checks checks;
+    int64_t folded = 0;
+    if (!passes.create(p_rd, &sdf, param, MAX_BATCH, input, param_ubo, samples, RID(), nullptr, records, list)) {
+        checks.example("the cascade passes failed to compile");
+        checks.samples_differing++;
+    }
+    for (int lod = 0; lod < TABLE_LODS && passes.is_valid(); lod++) {
+        PackedByteArray inputs, words;
+        const std::vector<ChunkId> ids = table_batch(*snap, *table, lod, param, inputs, words);
+        p_rd->buffer_update(input, 0, inputs.size(), inputs);
+        if (!words.is_empty()) {
+            p_rd->buffer_update(list, 0, words.size(), words);
+        }
+        passes.record_all(lod, uint32_t(ids.size()), true); // the fold variant, empty lists included (the bare bits there)
+        p_rd->submit();
+        p_rd->sync();
+        const PackedByteArray got_bytes = p_rd->buffer_get_data(samples, 0, ids.size() * cells * 16);
+        const float *got = reinterpret_cast<const float *>(got_bytes.ptr());
+        for (size_t c = 0; c < ids.size(); c++) {
+            compare_table_chunk(sdf, *snap, ids[c], lod, param, got + c * cells * 4, checks, folded);
+        }
+        checks.chunks += int64_t(ids.size());
+    }
+    passes.free();
+    for (const RID &rid : { input, param_ubo, samples, records, list }) {
+        p_rd->free_rid(rid);
+    }
+    d["records"] = int64_t(snap->records.size());
+    d["chunks"] = checks.chunks;
+    d["samples"] = checks.samples;
+    d["samples_folded"] = folded;
+    d["samples_differing"] = checks.samples_differing;
+    d["examples"] = checks.examples;
+    d["ok"] = checks.samples_differing == 0 && folded > 0 && checks.samples > 0;
+    return d;
 }
 
 double median(std::vector<double> p_v) {
@@ -636,6 +744,13 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
             checks_report[set_label(set)] = d;
         }
         report["check"] = checks_report;
+    }
+    if (bool(p_options.get("table", true))) {
+        const uint64_t t0 = now_usec();
+        Dictionary d = check_table(rd, lods, param);
+        d["seconds"] = double(now_usec() - t0) / 1e6;
+        ok = ok && bool(d["ok"]);
+        report["table"] = d;
     }
     if (bool(p_options.get("points", true))) {
         Dictionary points_report;

@@ -414,7 +414,8 @@ void GPUMesher::_initialize_gpu_compute() {
 
     if (sdf->get_cascade() != nullptr) {
         cascade = memnew(CascadePasses);
-        if (!cascade->create(rd, sdf, chunk_param, MIN(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param, buffer_sdf_sample)) {
+        if (!cascade->create(rd, sdf, chunk_param, MIN(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param, buffer_sdf_sample,
+                    RID(), nullptr, buffer_table_records, buffer_table_list)) {
             ERR_PRINT("GPUMesher: the cascade passes failed to compile: no pass runs (empty meshes).");
         }
         VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");
@@ -592,7 +593,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
     // are computed but never used (see render_chunk).
     const bool cascade_samples = cascade != nullptr && cascade->is_valid();
     if (cascade_samples && p_count > 0) {
-        cascade->record_all(p_min_lod, p_count);
+        cascade->record_all(p_min_lod, p_count, !p_table_list.is_empty()); // no instance listed: the bare cascade
     }
     // A cascade that failed to build must not fall back to pass 1 (its terrain_sdf is a NaN stub).
     const bool run_passes = cascade == nullptr || cascade_samples;

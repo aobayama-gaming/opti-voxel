@@ -101,6 +101,8 @@ float world_chunk_size(const ChunkId &chunk_coord, const ChunkParam &chunk_param
 // LOD0 voxel of the chunk's minimum corner (vertex grid index skirt_size) and of its centre.
 VoxelPos chunk_min_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 VoxelPos chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
+// The LOD-p_lod chunk whose span [chunk_min_voxel, + span) holds LOD0 voxel p_voxel.
+ChunkId chunk_at_voxel(const VoxelPos &p_voxel, int p_lod, const ChunkParam &chunk_param);
 
 // Render space (Godot space): metres relative to the world origin. Only these helpers produce metres.
 Vector3 chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param);

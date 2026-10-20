@@ -1,33 +1,24 @@
 #pragma once
 
-#include "archetype_gpu_table.hpp"
-#include "archetype_table.hpp"
-#include "instance_table.hpp"
-#include "sdf_base.hpp"
-#include "tree_archetype.hpp"
+#include "sdf_table.hpp"
 
-#include <atomic>
-#include <cfloat>
 #include <cmath>
 #include <memory>
 
-// Demo terrain of the archetype table (terrain_mode 3, --terrain=archetypes): an fBm ground (a compiled
-// Program) plus a table of instances (rocks, tree trunks and a cave mouth; optionally a scatter and a forest
-// of grown trees, tree_archetype.hpp) in front of the main_scene spawn. Each chunk folds only the instances
-// near it (instance_table.hpp); the library (archetype_table.hpp) is compiled once and reads the instances'
-// records from a GPU buffer. A function of the absolute position: far origins see the ground only.
-// Scene::SHAPES (terrain_mode 4, --terrain=shapes) has no table instances: shapes() compiled into the
-// ground program (hard CSG for dual contouring, nested composites the table does not express).
-class SDFArchetype : public SDFBase {
+// Demo terrain of the archetype table (terrain_mode 3, --terrain=archetypes): an fBm ground (a compiled Program)
+// under the instance table (SDFTable: the demo objects, the scatter and the forest in front of the main_scene
+// spawn). A function of the absolute position: far origins see the ground only.
+// Ground::SHAPES (terrain_mode 4, --terrain=shapes) has no table instances: shapes() compiled into the ground program
+// (hard CSG for dual contouring, nested composites the table does not express).
+class SDFArchetype : public SDFTable {
 public:
-    enum class Scene { DEMO,
+    enum class Ground { DEMO,
         SHAPES };
 
-    explicit SDFArchetype(Scene p_scene = Scene::DEMO) :
-            which(p_scene) {}
+    explicit SDFArchetype(Ground p_ground = Ground::DEMO) :
+            which(p_ground) {}
 
     static constexpr uint32_t HEIGHT_SEED = 0xA2C4E7u;
-    static constexpr uint32_t ROCK_SEED = 0x20C4u;
     // The ground's mountains (metres).
     static constexpr double HEIGHT_WAVELENGTH_M = 1.0 / 0.0035;
     static constexpr double HEIGHT_AMPLITUDE_M = 50.0;
@@ -44,56 +35,43 @@ public:
         return ExactNoise::make_fbm(true, p_seed, k_of(HEIGHT_WAVELENGTH_M, p_voxel), HEIGHT_OCTAVES, HEIGHT_AMPLITUDE_M / p_voxel * NORM_2D, 0.5);
     }
 
-    // A deterministic scatter of p_count rocks and pillars in a square of side p_area (metres) around
-    // the demo objects (--instances / --instance_area). Set before configure().
-    void set_scatter(int p_count, double p_area) {
-        scatter_count = p_count;
-        scatter_area = p_area;
-    }
-
-    // A forest of about p_count grown trees (tree_archetype.hpp) in a square of side p_area (metres) around the demo
-    // objects (--trees / --tree_area). Set before configure().
-    void set_forest(int p_count, double p_area) {
-        forest_count = p_count;
-        forest_area = p_area;
-    }
-    const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
-
-    // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
-    void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
-    // The band rule's erosion rate in cells per LOD (Archetype::set_band). Set before configure().
-    void set_instance_erode(float p_cells) { erode_rule.rate = p_cells; }
-    // The band rule's onset: a part erodes once its half thickness holds fewer than this many cells (0: from LOD 1).
-    void set_instance_resolve(float p_cells) { erode_rule.resolve = p_cells; }
-
-    // The band rule's steps between LOD L and L+1: an instance erodes by ERODE_CELLS cells; a ground octave k,
-    // dropped from LOD k - 2 on, moves the ground by up to amp * PERLIN2_MAX, i.e. that many cells of LOD k - 3.
-    // Both at once next to a rock on the ground (its smooth blend follows both): the sum.
+    // The band rule's steps between LOD L and L+1: an instance erodes (SDFTable); a ground octave k, dropped from
+    // LOD k - 2 on, moves the ground by up to amp * PERLIN2_MAX, i.e. that many cells of LOD k - 3. Both at once next
+    // to a rock on the ground (its smooth blend follows both): the sum.
     float min_skirt_depth(const ChunkParam &p_param, int p_lod_count) const override {
         double ground = 0.0;
-        if (which == Scene::DEMO) {
+        if (which == Ground::DEMO) {
             for (const ExactNoise::Octave &o : height_fbm(p_param.voxel_size).octaves) {
                 if (o.k - ExactNoise::BAND_SHIFT + 1 < p_lod_count) {
                     ground = MAX(ground, double(o.amp) * Archetype::PERLIN2_MAX * std::ldexp(1.0, ExactNoise::BAND_SHIFT - o.k));
                 }
             }
         }
-        return float(ground + erode_rule.rate);
+        return float(ground) + SDFTable::min_skirt_depth(p_param, p_lod_count);
     }
 
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
-        create_scene(p_param.voxel_size, p_lod_count);
-        const String ground_error = current()->ground.validate(p_lod_count);
-        if (!ground_error.is_empty()) {
-            ERR_PRINT(ground_error);
+        const double vs = p_param.voxel_size;
+        height = height_fbm(vs);
+        datum = std::llround(DATUM_M / vs);
+        // The ground register: the ground Def placed at the datum (a compiled program, constants only), or the
+        // shapes gallery, which is the ground program itself (the table starts empty; edits still work).
+        Archetype::Instance ground;
+        ground.def = Archetype::ground_def(height);
+        ground.anchor = VoxelPos(0, datum, 0);
+        if (which == Ground::SHAPES) {
+            ground = shapes(vs);
         }
-        for (int i = 0; i < library->size(); i++) {
-            const String error = (*library)[i].program.validate(p_lod_count);
-            if (!error.is_empty()) {
-                ERR_PRINT(vformat("Archetype library type %d: ", i) + error);
-            }
+        const Archetype::Compiled compiled = Archetype::compile(ground);
+        if (!compiled.error.is_empty()) {
+            ERR_PRINT(compiled.error);
         }
+        const String error = compiled.program.validate(p_lod_count);
+        if (!error.is_empty()) {
+            ERR_PRINT(error);
+        }
+        build_table(compiled.program, vs, p_lod_count, which == Ground::SHAPES ? Scene::EMPTY : Scene::DEMO);
     }
 
     float evaluate(const WorldPos &p_pos, int p_lod) const override {
@@ -113,126 +91,15 @@ public:
         return Archetype::generate_table_sdf(snap->ground, *snap->library, snap->out_scale, snap->normalize);
     }
 
-    SDFGpuTable *get_gpu_table() override { return &gpu; }
-
-    bool cull_exempt(const ChunkId &p_node, int p_lod) const override {
-        // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box,
-        // band or not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp).
-        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        return snap && snap->near_instance(p_node, p_lod);
+    // The mountains' surface (the scenes stand on the fBm ground, also under the shapes gallery's flat one).
+    int64_t ground_y(int64_t p_x, int64_t p_z) const override {
+        WorldPos p;
+        p.voxel = VoxelPos(p_x, 0, p_z);
+        return datum + int64_t(std::floor(ExactNoise::fbm(height, p, 0).w));
     }
 
-    // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the
-    // records when it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh.
-    int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) override {
-        if (!library || p_type < 0 || p_type >= library->size()) {
-            return -1;
-        }
-        const String error = edit_error(p_rotation, p_params, p_op, p_k);
-        ERR_FAIL_COND_V_MSG(!error.is_empty(), -1, "add_instance: " + error);
-        ERR_FAIL_COND_V_MSG(records.size() >= gpu.instance_capacity(), -1,
-                vformat("add_instance: the table is full (%d instances, removed ones included).", gpu.instance_capacity()));
-        Archetype::TableRecord rec;
-        rec.def = uint8_t(p_type);
-        rec.op = Archetype::Combine(p_op);
-        rec.k = p_k;
-        rec.inv_k = p_k > 0.0f ? float(1.0 / double(p_k)) : 0.0f;
-        rec.anchor = p_anchor;
-        if (p_rotation) {
-            std::copy(p_rotation, p_rotation + 9, rec.rotation);
-        }
-        if (p_params) {
-            std::copy(p_params, p_params + 8, rec.params);
-        }
-        const String fit = Archetype::record_fit_error((*library)[rec.def], rec, max_instance_extent());
-        ERR_FAIL_COND_V_MSG(!fit.is_empty(), -1, "add_instance: " + fit);
-        finish_record(rec);
-        const VoxelBox region = record_box(rec);
-        records.push_back(rec, version + 1);
-        edit_k = rec.k;
-        edit_margin_c = rec.margin_c;
-        set_edit_lods(rec, rec);
-        rebuild(region, records.size() - 1);
-        return int(records.size() - 1);
-    }
-
-    bool remove_instance(int p_id) override {
-        if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
-            return false;
-        }
-        Archetype::TableRecord rec = records[p_id];
-        const VoxelBox region = record_box(rec);
-        rec.removed = true;
-        records.set(p_id, rec, version + 1);
-        edit_k = rec.k;
-        edit_margin_c = rec.margin_c;
-        set_edit_lods(rec, rec);
-        rebuild(region, p_id);
-        return true;
-    }
-
-    bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation) override {
-        if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
-            return false;
-        }
-        const String error = edit_error(p_rotation, nullptr, 0, 0.0f);
-        ERR_FAIL_COND_V_MSG(!error.is_empty(), false, "move_instance: " + error);
-        Archetype::TableRecord rec = records[p_id];
-        const Archetype::TableRecord before = rec;
-        const VoxelBox old_box = record_box(rec);
-        rec.anchor = p_anchor;
-        if (p_rotation) {
-            std::copy(p_rotation, p_rotation + 9, rec.rotation);
-        }
-        const String fit = Archetype::record_fit_error((*library)[rec.def], rec, max_instance_extent());
-        ERR_FAIL_COND_V_MSG(!fit.is_empty(), false, "move_instance: " + fit);
-        finish_record(rec);
-        records.set(p_id, rec, version + 1);
-        const VoxelBox new_box = record_box(rec);
-        VoxelBox region;
-        region.valid = true;
-        for (int a = 0; a < 3; a++) {
-            region.lo[a] = MIN(old_box.lo[a], new_box.lo[a]);
-            region.hi[a] = MAX(old_box.hi[a], new_box.hi[a]);
-        }
-        edit_k = rec.k;
-        edit_margin_c = rec.margin_c;
-        set_edit_lods(before, rec);
-        rebuild(region, p_id);
-        return true;
-    }
-
-    // Whether a chunk's samples can be changed by the last edit (its box grown by M(lod) meets the
-    // edit's region): the chunks to re-mesh.
-    bool edit_affects_chunk(const ChunkId &p_chunk) const override {
-        if (!edit_box.valid) {
-            return false;
-        }
-        // The band rule: the changed instances are listed below edit_lod_max only, so a
-        // small dig doesn't re-mesh the coarse chunks around it.
-        const int lod = ChunkMath::get_lod(p_chunk);
-        if (lod >= edit_lod_max) {
-            return false;
-        }
-        // The chunk's samples (span + skirt overhang) against the edit region grown by M(lod).
-        Archetype::TableRecord grown;
-        grown.k = edit_k;
-        grown.margin_c = edit_margin_c;
-        grown.anchor = edit_box.lo;
-        for (int a = 0; a < 3; a++) {
-            grown.box_hi[a] = int32_t(MIN<int64_t>(edit_box.hi[a] - edit_box.lo[a], INT32_MAX));
-        }
-        VoxelPos lo, hi;
-        Archetype::chunk_sample_box(p_chunk, param, lo, hi);
-        return Archetype::influence_meets(grown, ChunkMath::get_lod(p_chunk), lo, hi);
-    }
-
-    // The current snapshot. Edits replace it on the main thread while the discoverer thread evaluates and
-    // the render thread uploads: every reader takes one atomic copy and works on it.
-    std::shared_ptr<const Archetype::InstanceSnapshot> current() const { return std::atomic_load(&snapshot); }
-    std::shared_ptr<const Archetype::InstanceSnapshot> get_snapshot() const { return current(); }
-    const Archetype::DefLibrary &get_library() const { return *library; }
-    const Archetype::Program &get_ground() const { return ground_program; }
+    // A copy: the snapshot holding it is replaced by the next edit.
+    Archetype::Program get_ground() const { return current()->ground; }
 
     // The compiled (PR 1) reference of the same scene (bounds test, arch_demo probe).
     static Archetype::Instance scene(double p_voxel) {
@@ -317,58 +184,10 @@ public:
         return root;
     }
 
-    // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite,
-    // normal floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level
-    // operators, and a smooth radius is >= 0.
-    static String edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k) {
-        auto bad = [](float p_v) { return !std::isfinite(p_v) || (p_v != 0.0f && std::fabs(p_v) < FLT_MIN); };
-        if (p_op < int(Archetype::Combine::UNION) || p_op > int(Archetype::Combine::SMOOTH_SUBTRACT)) {
-            return vformat("op %d is not 0 union, 1 smooth union, 2 subtract or 3 smooth subtract.", p_op);
-        }
-        if (bad(p_k) || p_k < 0.0f) {
-            return "k must be finite and >= 0.";
-        }
-        for (int i = 0; p_params && i < 8; i++) {
-            if (bad(p_params[i])) {
-                return vformat("param %d is not a finite normal float.", i);
-            }
-        }
-        if (p_rotation) {
-            for (int i = 0; i < 3; i++) {
-                for (int j = 0; j < 3; j++) {
-                    double d = 0.0;
-                    for (int c = 0; c < 3; c++) {
-                        d += double(p_rotation[3 * i + c]) * double(p_rotation[3 * j + c]);
-                    }
-                    if (bad(p_rotation[3 * i + j]) || std::abs(d - (i == j ? 1.0 : 0.0)) > 1e-5) {
-                        return "the rotation is not orthonormal (rows within 1e-5).";
-                    }
-                }
-            }
-        }
-        return String();
-    }
-
 private:
-    std::shared_ptr<const Archetype::DefLibrary> library;
-    Archetype::Program ground_program;
-    float out_scale = 1.0f;
-    int lod_count = 24;
-    uint32_t version = 0;
-    Archetype::RecordStore records; // editable (paged, copy on write): each snapshot shares its pages
-    std::shared_ptr<const Archetype::InstanceSnapshot> snapshot;
-    Archetype::GpuTable gpu;
-    float edit_k = 0.0f; // the changed records' largest margin inputs (edit_affects_chunk)
-    float edit_margin_c = 0.0f;
-    int edit_lod_max = 0; // the changed records are listed below this LOD (edit_affects_chunk)
-    int scatter_count = 0; // --instances
-    double scatter_area = 200.0; // --instance_area (metres)
-    int forest_count = 0; // --trees
-    double forest_area = 60.0; // --tree_area (metres)
-    std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
-    bool instance_band = true; // --instance_band
-    Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
-    Scene which;
+    Ground which;
+    ExactNoise::OctaveSet height; // the mountains (configure)
+    int64_t datum = 0; // LOD0 voxels
 
     // shapes() in metres, rounded to voxels.
     struct Metres {
@@ -410,177 +229,5 @@ private:
             }
         }
         return die;
-    }
-
-    // A new snapshot: a whole new index (p_changed < 0: the scene was rebuilt) or the previous base plus the
-    // edited records' overlay.
-    void rebuild(const VoxelBox &p_region, int64_t p_changed = -1) {
-        version++;
-        const std::shared_ptr<const Archetype::InstanceSnapshot> previous = current();
-        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = p_changed >= 0 && previous
-                ? Archetype::edit_snapshot(*previous, records, { uint32_t(p_changed) }, version)
-                : Archetype::build_snapshot(library, ground_program, out_scale, true, records, param, lod_count - 1, version);
-        std::atomic_store(&snapshot, snap);
-        gpu.set_snapshot(snap);
-        edit_box = p_region;
-    }
-
-    // The widest instance an edit may add (box plus twice k, voxels): 4 top-LOD chunk spans, so the index
-    // places a handful of entries for it, and at most 2^29 so that box_lo minus the influence margin
-    // (clamped to INPUT_LIMIT = 2^30) stays in int32 on the GPU (arch_in_box).
-    int64_t max_instance_extent() const {
-        const int64_t top_span = int64_t(param.chunk_voxel_dimension()) << (lod_count - 1);
-        return MIN(4 * top_span, int64_t(1) << 29);
-    }
-
-    void finish_record(Archetype::TableRecord &r_rec) const {
-        Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
-    }
-
-    // The LODs an edit can change: below the larger of the record's max_lod before and after it.
-    void set_edit_lods(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after) {
-        edit_lod_max = MAX(p_before.max_lod, p_after.max_lod);
-    }
-
-    VoxelBox record_box(const Archetype::TableRecord &p_rec) const {
-        VoxelBox b;
-        b.valid = true;
-        for (int a = 0; a < 3; a++) {
-            b.lo[a] = p_rec.anchor[a] + p_rec.box_lo[a];
-            b.hi[a] = p_rec.anchor[a] + p_rec.box_hi[a];
-        }
-        return b;
-    }
-
-    // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.
-    void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z,
-            const std::function<int64_t(int64_t, int64_t)> &p_ground_y) {
-        using namespace Archetype;
-        std::vector<TreeSite> sites;
-        forest_sites(forest_count, forest_area, p_centre_x, p_centre_z, p_voxel, p_ground_y, sites);
-        std::vector<TableRecord> parts;
-        int64_t most = 0;
-        for (const TreeSite &site : sites) {
-            parts.clear();
-            grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, parts);
-            trees.push_back(TreeSpan{ records.size(), uint32_t(parts.size()), site.species, site.seed });
-            for (TableRecord &rec : parts) {
-                finish_record(rec);
-                records.push_back(rec, version + 1);
-            }
-            most = MAX(most, int64_t(parts.size()));
-        }
-        Dictionary forest;
-        forest["count"] = int64_t(trees.size());
-        int64_t total = 0;
-        for (const TreeSpan &t : trees) {
-            total += t.count;
-        }
-        forest["records"] = total;
-        forest["records_per_tree_avg"] = trees.empty() ? 0.0 : double(total) / double(trees.size());
-        forest["records_per_tree_max"] = most;
-        Dictionary scene;
-        scene["trees"] = forest;
-        gpu.set_scene_stats(scene);
-    }
-
-    void create_scene(double p_voxel, int p_lod_count) {
-        using namespace Archetype;
-        auto v = [p_voxel](double p_metres) { return float(p_metres / p_voxel); };
-        const ExactNoise::OctaveSet height = height_fbm(p_voxel);
-        const int64_t datum = std::llround(DATUM_M / p_voxel);
-        auto ground_voxel = [&](int64_t p_x, int64_t p_z) {
-            WorldPos p;
-            p.voxel = VoxelPos(p_x, 0, p_z);
-            return int64_t(std::floor(ExactNoise::fbm(height, p, 0).w));
-        };
-        auto ground = [&](double p_x, double p_z) { return ground_voxel(std::llround(p_x / p_voxel), std::llround(p_z / p_voxel)); };
-        // Appended in this order: the GDScript side names the indices (CAPSULE_TYPE).
-        DefLibrary lib;
-        const int sphere = lib.add(make_sphere_type());
-        const int capsule = lib.add(make_capsule_type());
-        const int rock = lib.add(make_rock_type(int(std::lround(std::log2(8.0 / p_voxel))), ROCK_SEED));
-        const int branch = lib.add(make_branch_type());
-        const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED));
-        const int cone = lib.add(make_cone_type(crown_k(p_voxel), CROWN_SEED));
-        library = std::make_shared<const DefLibrary>(lib);
-
-        records.clear();
-        uint32_t seed = 1;
-        auto add = [&](Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw) {
-            TableRecord rec;
-            rec.def = uint8_t(p_type);
-            rec.op = p_op;
-            rec.k = v(p_k_m);
-            rec.inv_k = rec.k != 0.0f ? float(1.0 / double(rec.k)) : 0.0f;
-            for (int i = 0; i < 8; i++) {
-                rec.params[i] = p_params[i];
-            }
-            rec.anchor = VoxelPos(std::llround(p_x / p_voxel), datum + ground(p_x, p_z) + std::llround(p_dy_m / p_voxel), std::llround(p_z / p_voxel));
-            const float c = float(std::cos(p_yaw)), s = float(std::sin(p_yaw));
-            const float rot[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
-            std::copy(rot, rot + 9, rec.rotation);
-            const uint32_t salt_seed = seed++;
-            rec.salt = salt_seed == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ salt_seed, 0x5EEDu, 0u }).x;
-            finish_record(rec);
-            records.push_back(rec, version + 1);
-        };
-        const struct {
-            double x, z, r, yaw;
-        } rocks[] = { { -40.0, -150.0, 4.0, 0.3 }, { -62.0, -132.0, 2.5, 1.2 }, { -25.0, -128.0, 3.0, 2.0 }, { -75.0, -165.0, 5.0, 0.7 } };
-        for (const auto &r : rocks) {
-            const float params[8] = { v(r.r), 0.1f * v(r.r), 0, 0, 0, 0, 0, 0 };
-            add(Combine::SMOOTH_UNION, 1.5, rock, params, r.x, r.z, -0.4 * r.r, r.yaw);
-        }
-        for (const double x : { -50.0, -33.0, -58.0 }) {
-            const float params[8] = { v(12.0), v(1.0), 0, 0, 0, 0, 0, 0 };
-            add(Combine::SMOOTH_UNION, 1.0, capsule, params, x, -160.0 + 0.3 * x, -1.0, 0.0);
-        }
-        {
-            const float params[8] = { v(7.0), 0, 0, 0, 0, 0, 0, 0 };
-            add(Combine::SMOOTH_SUBTRACT, 1.0, sphere, params, -10.0, -170.0, -3.0, 0.0);
-        }
-        // The scatter: deterministic rocks and pillars on the ground, around the demo objects.
-        const double centre_x = -50.0, centre_z = -150.0;
-        for (int i = 0; i < scatter_count; i++) {
-            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0x5CA7u, 0x7E12u });
-            const double px = centre_x + (double(h.x >> 8) / 16777216.0 - 0.5) * scatter_area;
-            const double pz = centre_z + (double(h.y >> 8) / 16777216.0 - 0.5) * scatter_area;
-            const float r = 1.0f + float(h.z % 300u) * 0.01f;
-            if (i % 2 == 0) {
-                const float params[8] = { v(double(r)), 0.1f * v(double(r)), 0, 0, 0, 0, 0, 0 };
-                add(Combine::SMOOTH_UNION, 1.0, rock, params, px, pz, -0.4 * double(r), double(h.x % 628u) * 0.01);
-            } else {
-                const float params[8] = { v(2.0 + double(r)), v(0.5), 0, 0, 0, 0, 0, 0 };
-                add(Combine::SMOOTH_UNION, 0.8, capsule, params, px, pz, 0.0, 0.0);
-            }
-        }
-        trees.clear();
-        if (which == Scene::DEMO) {
-            add_forest(crown_types(branch, crown, lib[crown], cone), p_voxel, centre_x, centre_z,
-                    [&](int64_t p_x, int64_t p_z) { return datum + ground_voxel(p_x, p_z); });
-        }
-        // The ground register: the ground Def placed at the datum (a compiled program, constants only).
-        Archetype::Instance ground_inst;
-        ground_inst.def = ground_def(height);
-        ground_inst.anchor = VoxelPos(0, datum, 0);
-        if (which == Scene::SHAPES) {
-            // The shapes gallery is the ground program itself; the table starts empty (edits still work).
-            records.clear();
-            ground_inst = shapes(p_voxel);
-        }
-        const Archetype::Compiled ground_compiled = compile(ground_inst);
-        if (!ground_compiled.error.is_empty()) {
-            ERR_PRINT(ground_compiled.error);
-        }
-        ground_program = ground_compiled.program;
-        out_scale = float(p_voxel);
-        lod_count = p_lod_count;
-        edit_k = 0.0f;
-        edit_margin_c = 0.0f;
-        edit_lod_max = 0;
-        // The GPU buffers hold the scatter plus room for runtime edits (the mesher reads this at init).
-        gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
-        rebuild(VoxelBox());
     }
 };

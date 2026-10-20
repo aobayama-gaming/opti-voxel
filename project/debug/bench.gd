@@ -47,13 +47,14 @@ extends Node3D
 ##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
 ##                                SDFCascade; continents: its preset; archetypes: the archetype IR demo, SDFArchetype;
 ##                                shapes: its hard-CSG gallery on a flat ground, SDFArchetype::shapes)
-##   --instances=N                archetypes: scatter N rocks/pillars around the demo objects (default 0)
-##   --instance_area=M            archetypes: side of the scatter square, metres (default 200)
-##   --instance_band=0            archetypes: keep every instance at every LOD (no band rule; the reference)
-##   --instance_erode=F           archetypes: the band rule's erosion, cells per LOD (default 1; 0.5 keeps trunks a LOD longer)
-##   --instance_resolve=F         archetypes: a part erodes only once its half thickness is under F cells (default 0: from LOD 1)
-##   --trees=N                    archetypes: a forest of about N grown trees around the demo objects (default 0)
-##   --tree_area=M                archetypes: side of the forest square, metres (default 60)
+##   Instances (every terrain, around x -50 z -150 m, on the ground; shapes places none):
+##   --instances=N                scatter N rocks/pillars around the demo objects (default 0)
+##   --instance_area=M            side of the scatter square, metres (default 200)
+##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
+##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1; 0.5 keeps trunks a LOD longer)
+##   --instance_resolve=F         a part erodes only once its half thickness is under F cells (default 0: from LOD 1)
+##   --trees=N                    a forest of about N grown trees around the demo objects (default 0)
+##   --tree_area=M                side of the forest square, metres (default 60)
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
 ##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)

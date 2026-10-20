@@ -5,15 +5,7 @@
 
 namespace Archetype {
 
-// The chunk id at LOD p_lod holding LOD0 voxel p_v: chunk ids are centres in chunk-id units (half a
-// LOD0 chunk), the LOD-L id has its lowest set bit at L.
-static ChunkId chunk_at_voxel(const VoxelPos &p_v, int p_lod, const ChunkParam &p_param) {
-    const int64_t span = int64_t(p_param.chunk_voxel_dimension()) * (int64_t(1) << p_lod);
-    const int64_t step = int64_t(1) << (p_lod + 1);
-    const int64_t half = int64_t(1) << p_lod;
-    return ChunkId(WorldCoord::floor_div(p_v.x, span) * step + half, WorldCoord::floor_div(p_v.y, span) * step + half,
-            WorldCoord::floor_div(p_v.z, span) * step + half);
-}
+using ChunkMath::chunk_at_voxel;
 
 // The finest LOD whose chunk span holds the box grown by the locality margin at that LOD.
 static int instance_lod(double p_bare_size, float p_k, float p_margin_c, const ChunkParam &p_param, int p_max_lod) {
@@ -338,6 +330,9 @@ bool IndexLayer::is_occupied(const ChunkId &p_node, int p_lod) const {
 
 void InstanceSnapshot::gather(const ChunkId &p_centre, int p_lod, const VoxelPos &p_lo, const VoxelPos &p_hi, std::vector<uint32_t> &r_out) const {
     r_out.clear();
+    if (empty()) {
+        return;
+    }
     thread_local std::vector<uint32_t> candidates;
     candidates.clear();
     for (const IndexLayer *layer : { base.get(), overlay.get() }) {
@@ -398,6 +393,9 @@ bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_l
             return true; // an unbounded instance (edited away from the base: its stale entry doesn't count)
         }
     }
+    if (p_layer.stored_ids.empty()) {
+        return false; // nothing stored: no node to look up
+    }
     // An instance stored at this LOD or finer: some node of this LOD near the grown box holds it in its
     // subtree. A bigger one is stored at a coarser LOD: the nodes near the grown box there, exact test.
     for (int l = p_lod; l <= max_lod; l++) {
@@ -438,6 +436,9 @@ bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_l
 }
 
 bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
+    if (empty()) {
+        return false; // a terrain without instances asks this for every culled node
+    }
     const int lod = MIN(MAX(p_lod, 0), max_lod);
     const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
     const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);

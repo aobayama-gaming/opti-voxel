@@ -11,6 +11,10 @@
 // record_bytes() when version() changes; archetype_table.cpp generates terrain_sdf reading them.
 namespace Archetype {
 
+// The DefRecord struct, the sdf_records / sdf_list buffers at these bindings and the global g_sdf_chunk (the
+// chunk being sampled): what the generated fold reads (generate_fold_glsl).
+String glsl_table_buffers(int p_record_binding, int p_list_binding);
+
 class GpuTable : public SDFGpuTable {
 public:
     // Main thread: the snapshot the GPU mirrors. Its version drives the record upload.

@@ -9,10 +9,16 @@
 
 namespace Archetype {
 
-String GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
+String glsl_table_buffers(int p_record_binding, int p_list_binding) {
     return String(GLSL_DEF_RECORD_STRUCT) +
             vformat("\nlayout(set = 0, binding = %d, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };\n", p_record_binding) +
-            vformat("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding);
+            vformat("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding) +
+            "ChunkInput g_sdf_chunk; // the chunk being sampled: its list offset (id.w) and length (anchor_hi.w)\n";
+}
+
+// The virtual's implementation: glsl_table_buffers, the one source (FrameSpike splices it directly).
+String GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
+    return glsl_table_buffers(p_record_binding, p_list_binding);
 }
 
 String GpuTable::glsl_set_chunk() const {
@@ -55,6 +61,15 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
     (void)p_param;
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
+    if (!snap || snap->empty()) {
+        r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
+        for (const ChunkId &c : p_chunks) {
+            list_stats.chunks[MIN(MAX(ChunkMath::get_lod(c), 0), ChunkMath::MAX_LOD_NUMBERS - 1)]++;
+        }
+        list_stats.batches++;
+        list_stats.build_usec += int64_t(now_usec() - t0);
+        return;
+    }
     const uint32_t cap = max_chunk_list();
     // The chunks' lists on the worker pool (a dense scatter makes thousands of candidates per chunk).
     struct Job {

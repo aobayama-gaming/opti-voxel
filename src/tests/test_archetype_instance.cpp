@@ -354,7 +354,7 @@ TEST_CASE("SDFArchetype: evaluating on another thread while the main thread move
 TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes holed through, its die pipped") {
     ChunkParam param;
     const double vs = param.voxel_size;
-    SDFArchetype sdf(SDFArchetype::Scene::SHAPES);
+    SDFArchetype sdf(SDFArchetype::Ground::SHAPES);
     sdf.configure(param, 25);
     CHECK(sdf.get_ground().validate(25).is_empty());
     const Instance scene = SDFArchetype::shapes(vs);

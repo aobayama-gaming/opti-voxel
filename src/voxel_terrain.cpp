@@ -642,25 +642,21 @@ void VoxelTerrain::_ready() {
         case 2:
             static_cast<SDFCascade *>(sdf)->preset = 1;
             break;
-        case 3: {
+        case 3:
             memdelete(sdf);
-            SDFArchetype *archetype = memnew(SDFArchetype);
-            archetype->set_scatter(archetype_instances, archetype_instance_area);
-            archetype->set_forest(archetype_trees, archetype_tree_area);
-            archetype->set_instance_band(archetype_band);
-            archetype->set_instance_erode(archetype_erode);
-            archetype->set_instance_resolve(archetype_resolve);
-            sdf = archetype;
+            sdf = memnew(SDFArchetype);
             break;
-        }
         case 4:
             memdelete(sdf);
-            sdf = memnew(SDFArchetype(SDFArchetype::Scene::SHAPES));
-            static_cast<SDFArchetype *>(sdf)->set_instance_band(archetype_band);
-            static_cast<SDFArchetype *>(sdf)->set_instance_erode(archetype_erode);
-            static_cast<SDFArchetype *>(sdf)->set_instance_resolve(archetype_resolve);
+            sdf = memnew(SDFArchetype(SDFArchetype::Ground::SHAPES));
             break;
     }
+    // Every terrain carries the instance table (the shapes gallery places no scene).
+    sdf->set_scatter(archetype_instances, archetype_instance_area);
+    sdf->set_forest(archetype_trees, archetype_tree_area);
+    sdf->set_instance_band(archetype_band);
+    sdf->set_instance_erode(archetype_erode);
+    sdf->set_instance_resolve(archetype_resolve);
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);
     if (chunk_param.skirt_depth < min_skirt) {
         VLOG(1, "VoxelTerrain: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");

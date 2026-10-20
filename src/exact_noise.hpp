@@ -60,6 +60,12 @@ inline float bits_float(uint32_t p_u) {
     return f;
 }
 
+// Every bit of a value and its gradient (the sign of a zero included).
+inline bool same_bits(const Float4 &p_a, const Float4 &p_b) {
+    return float_bits(p_a.x) == float_bits(p_b.x) && float_bits(p_a.y) == float_bits(p_b.y) && float_bits(p_a.z) == float_bits(p_b.z) &&
+            float_bits(p_a.w) == float_bits(p_b.w);
+}
+
 // 2^e as a float, -126 <= e <= 127 (exact: built from the exponent bits, like exact_pow2 in GLSL).
 inline float exact_pow2(int p_e) {
     return bits_float(uint32_t(p_e + 127) << 23);

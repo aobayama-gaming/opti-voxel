@@ -166,6 +166,10 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
 extern const char GLSL_DEF_RECORD_STRUCT[];
 
 String generate_library_glsl(const DefLibrary &p_library);
+// The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched)` (fold_onto over the chunk's list:
+// g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers; touched is set when an instance passes its box
+// test) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
+String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize);
 // The mesher's terrain_sdf: the ground register, the fold, then the epilogue (out_scale / normalize).
 String generate_table_sdf(const Program &p_ground, const DefLibrary &p_library, float p_out_scale, bool p_normalize);
 
@@ -186,6 +190,10 @@ bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_
 // p_box_test false folds every instance (the locality rule's reference, M1b).
 Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list,
         uint32_t p_count, const WorldPos &p_pos, int p_lod, bool p_box_test = true);
+// The same fold onto a given register p_r (a terrain whose ground is not a Program: SDFCascade). *r_touched (if
+// given) is set when an instance passed its box test; untouched, the result is p_r bit for bit.
+Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
+        const WorldPos &p_pos, int p_lod, bool p_box_test = true, bool *r_touched = nullptr);
 // fold() then the epilogue (archetype_ir.cpp finish()).
 Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_normalize);
 

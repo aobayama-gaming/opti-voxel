@@ -613,14 +613,6 @@ TEST_CASE("Archetype table: a chunk lists every instance its samples can see, at
 
 namespace {
 
-// The LOD-p_lod chunk id holding LOD0 voxel p_v (instance_table.cpp's chunk_at_voxel).
-ChunkId chunk_holding(const VoxelPos &p_v, int p_lod, const ChunkParam &p_param) {
-    const int64_t span = int64_t(p_param.chunk_voxel_dimension()) << p_lod;
-    const int64_t unit = int64_t(1) << p_lod;
-    return ChunkId((WorldCoord::floor_div(p_v.x, span) * 2 + 1) * unit, (WorldCoord::floor_div(p_v.y, span) * 2 + 1) * unit,
-            (WorldCoord::floor_div(p_v.z, span) * 2 + 1) * unit);
-}
-
 // Spheres and boxes over six decades of size (1 to 2^20 voxels), unions and subtracts, some smooth, some
 // removed, around p_centre: the band rule's test table.
 std::vector<TableRecord> band_table(const DefLibrary &p_lib, const VoxelPos &p_centre, int p_count, uint32_t p_seed, bool p_band) {
@@ -672,7 +664,7 @@ TEST_CASE("Archetype band: chunk lists and point candidates equal the brute forc
         std::vector<uint32_t> got, want;
         for (uint32_t q = 0; q < records.size(); q++) {
             for (int lod = 0; lod <= 13; lod++) {
-                const ChunkId c = chunk_holding(records[q].anchor, lod, param);
+                const ChunkId c = ChunkMath::chunk_at_voxel(records[q].anchor, lod, param);
                 const int64_t step = int64_t(2) << lod;
                 for (int n = 0; n < 27; n += 2) {
                     const ChunkId chunk = c + ChunkId((n % 3 - 1) * step, (n / 3 % 3 - 1) * step, (n / 9 - 1) * step);
@@ -847,7 +839,7 @@ TEST_CASE("Archetype band: near_instance covers every node the brute-force no-cu
         for (uint32_t q = 0; q < records.size(); q++) {
             for (int lod = 0; lod <= 14; lod++) {
                 const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
-                const ChunkId c = chunk_holding(records[q].anchor, lod, param);
+                const ChunkId c = ChunkMath::chunk_at_voxel(records[q].anchor, lod, param);
                 const int64_t step = int64_t(2) << lod;
                 for (int n = 0; n < 125; n += 3) {
                     const ChunkId node = c + ChunkId((n % 5 - 2) * step, (n / 5 % 5 - 2) * step, (n / 25 - 2) * step);

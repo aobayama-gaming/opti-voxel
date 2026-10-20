@@ -29,6 +29,7 @@ layout(set = 0, binding = 3, std430) restrict buffer ScratchA { vec4 scratch_a[]
 layout(set = 0, binding = 4, std430) restrict buffer ScratchB { vec4 scratch_b[]; };
 layout(set = 0, binding = 5, std430) restrict readonly buffer Bands { CascadeBand bands[]; };
 layout(set = 0, binding = 6, std430) restrict writeonly buffer DebugChannels { vec4 debug_channels[]; };
+/*TABLE_BUFFERS*/
 
 // One level of every chunk of a sub-batch: chunk i of the dispatch is input chunk chunk_base + i, scratch
 // slot i. Workgroups: x over the level box bound n_child^3, y over the chunks.
@@ -157,7 +158,7 @@ constexpr ItemFills CHUNK_FILLS = {
 )glsl",
     "chunk_param.chunk_size - 1",
     R"glsl(    /*DEBUG_STORE*/
-    precise vec4 r = cascade_terrain_sdf(vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod);
+    precise vec4 r = /*SAMPLE_SDF*/;
     // skirt_sdf (gpu_glsl.hpp), the same formula and order, precise; the depth is per LOD.
     if (chunk_param.skirt_size > 0 && chunk_param.skirt_depth > 0.0) {
         vec3 grid = vec3(i);
@@ -171,7 +172,8 @@ constexpr ItemFills CHUNK_FILLS = {
     sdf_sample[sample_index] = r;)glsl",
 };
 
-// A point item is a chunk of one sample (its anchor, skirt 0): box extent 0, the bare SDF value at Λ_L.
+// A point item is a chunk of one sample (its anchor, skirt 0): box extent 0, the bare SDF value at Λ_L (no
+// instance folded: the discoverer never culls a node near an instance, SDFBase::cull_exempt).
 constexpr ItemFills POINT_FILLS = {
     "layout(set = 0, binding = 2, std430) restrict writeonly buffer SDFValue { float sdf_value[]; };",
     R"glsl(    uint n = pc.n_child;
@@ -383,19 +385,24 @@ uint32_t vec4s_per_point(ChannelSet p_set) {
     return uint32_t(channel_count(p_set) + 3) / 4;
 }
 
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points) {
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold) {
     const Spec *spec = p_sdf->get_cascade();
     ERR_FAIL_NULL_V(spec, String());
     ERR_FAIL_COND_V_MSG(p_debug && p_points, String(), "CascadeGLSL: point items have no debug variant.");
+    const SDFGpuTable *table = p_sdf->get_gpu_table();
+    ERR_FAIL_COND_V_MSG(p_fold && (p_points || table == nullptr), String(), "CascadeGLSL: only chunk items of a table terrain fold.");
     const ItemFills &fills = p_points ? POINT_FILLS : CHUNK_FILLS;
     String code = LEVEL_TEMPLATE;
     code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
     code = code.replace("/*ITEM_INDEX*/", fills.item_index);
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
+    const char *channels = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod";
+    code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
+    code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
-    code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code());
+    code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? p_sdf->get_sample_fold_glsl() : String()));
     code = code.replace("/*CASCADE*/", hermite_functions(spec->set) + storage_functions(spec->set) + band_functions(spec->set));
     code = code.replace("/*DEBUG_STORE*/", p_debug ? "store_debug(sample_index, ch); // CascadeSpike variant" : "");
     return code;
@@ -443,18 +450,19 @@ String fill_mesher_pass(const String &p_shader, const SDFBase *p_sdf, const Stri
 } // namespace CascadeGLSL
 
 bool CascadePasses::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
-        RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch) {
-    return _create(p_rd, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch);
+        RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list) {
+    return _create(p_rd, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch, p_table_records,
+            p_table_list);
 }
 
 bool CascadePasses::create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input,
         RID p_param_ubo, RID p_values) {
     ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0, false, "CascadePasses: point items need CascadeGLSL::point_param (skirt 0).");
-    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr);
+    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr, RID(), RID());
 }
 
 bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo,
-        RID p_output, RID p_debug, const CascadePasses *p_share_scratch) {
+        RID p_output, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list) {
     const Spec *spec = p_sdf->get_cascade();
     ERR_FAIL_NULL_V(spec, false);
     rd = p_rd;
@@ -463,24 +471,33 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     max_chunks = p_max_items;
     const bool points = item_size == 1;
 
-    const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points);
-    RDUtils::dump_shader(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels"), code);
-    Ref<RDShaderSource> source;
-    source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
-    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-    const String error = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-    if (!error.is_empty()) {
-        UtilityFunctions::printerr("--- SDF SHADER COMPILATION FAILED (CascadePasses) ---");
-        UtilityFunctions::printerr("ERROR MESSAGE:\n", error);
-        const PackedStringArray lines = code.split("\n");
-        for (int i = 0; i < lines.size(); i++) {
-            UtilityFunctions::printerr(String::num_int64(i + 1) + " | " + lines[i]);
+    // Variant 0: the bare cascade at level 0; variant 1 (given the table's buffers): the instance fold.
+    const bool table = p_table_records.is_valid() && p_table_list.is_valid();
+    ERR_FAIL_COND_V_MSG(table && (points || p_sdf->get_gpu_table() == nullptr), false, "CascadePasses: table buffers for items that can't fold.");
+    const int variants = table ? 2 : 1; // a fold variant that fails to compile leaves the bare one working
+    for (int v = 0; v < variants; v++) {
+        const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1);
+        RDUtils::dump_shader(String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (v == 1 ? "_fold" : ""), code);
+        Ref<RDShaderSource> source;
+        source.instantiate();
+        source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
+        Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+        const String error = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+        if (!error.is_empty()) {
+            UtilityFunctions::printerr("--- SDF SHADER COMPILATION FAILED (CascadePasses) ---");
+            UtilityFunctions::printerr("ERROR MESSAGE:\n", error);
+            const PackedStringArray lines = code.split("\n");
+            for (int i = 0; i < lines.size(); i++) {
+                UtilityFunctions::printerr(String::num_int64(i + 1) + " | " + lines[i]);
+            }
+            if (v == 0) {
+                return false;
+            }
+            break; // the bare terrain still works; a fold asked for later ERRs (record_level)
         }
-        return false;
+        shader[v] = rd->shader_create_from_spirv(spirv);
+        pipeline[v] = rd->compute_pipeline_create(shader[v]);
     }
-    shader = rd->shader_create_from_spirv(spirv);
-    pipeline = rd->compute_pipeline_create(shader);
 
     const uint64_t vec4_bytes = 16 * CascadeGLSL::vec4s_per_point(spec->set);
     const uint64_t bytes_a = uint64_t(max_chunks) * CascadeGLSL::scratch_points_a(item_size) * vec4_bytes;
@@ -495,8 +512,8 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
         scratch_b = rd->storage_buffer_create(bytes_b);
         scratch_bytes_total = bytes_a + bytes_b;
     }
-    const PackedByteArray table = CascadeGLSL::band_table(*spec);
-    bands = rd->storage_buffer_create(table.size(), table);
+    const PackedByteArray band_bytes = CascadeGLSL::band_table(*spec);
+    bands = rd->storage_buffer_create(band_bytes.size(), band_bytes);
     RID debug = p_debug;
     if (!debug.is_valid()) {
         debug_placeholder = rd->storage_buffer_create(16);
@@ -519,15 +536,20 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     uniforms.push_back(make_uniform(4, scratch_b, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(5, bands, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(6, debug, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniform_set = rd->uniform_set_create(uniforms, shader, 0);
-    return uniform_set.is_valid();
+    uniform_set[0] = rd->uniform_set_create(uniforms, shader[0], 0);
+    if (shader[1].is_valid()) {
+        uniforms.push_back(make_uniform(CascadeGLSL::TABLE_RECORD_BINDING, p_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+        uniforms.push_back(make_uniform(CascadeGLSL::TABLE_LIST_BINDING, p_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+        uniform_set[1] = rd->uniform_set_create(uniforms, shader[1], 0);
+    }
+    return uniform_set[0].is_valid();
 }
 
 void CascadePasses::free() {
     if (rd == nullptr) {
         return;
     }
-    for (const RID &rid : { uniform_set, pipeline, shader, bands, debug_placeholder }) {
+    for (const RID &rid : { uniform_set[0], uniform_set[1], pipeline[0], pipeline[1], shader[0], shader[1], bands, debug_placeholder }) {
         if (rid.is_valid()) {
             rd->free_rid(rid);
         }
@@ -539,9 +561,11 @@ void CascadePasses::free() {
             }
         }
     }
-    uniform_set = RID();
-    pipeline = RID();
-    shader = RID();
+    for (int v = 0; v < 2; v++) {
+        uniform_set[v] = RID();
+        pipeline[v] = RID();
+        shader[v] = RID();
+    }
     scratch_a = RID();
     scratch_b = RID();
     bands = RID();
@@ -553,7 +577,7 @@ int CascadePasses::level_count(int p_min_lod) const {
     return MAX(top - p_min_lod, 0) + 1;
 }
 
-void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count) {
+void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, bool p_fold) {
     ERR_FAIL_COND(p_count == 0 || p_count > max_chunks);
     const uint32_t n = uint32_t(level_bound(item_size, p_j));
     PackedByteArray push;
@@ -565,9 +589,15 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count) {
     push.encode_s32(12, top);
     push.encode_u32(16, n);
     push.encode_u32(20, uint32_t(level_bound(item_size, p_j + 1)));
+    bool fold = p_j == 0 && p_fold;
+    if (fold && !uniform_set[1].is_valid()) {
+        ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
+        fold = false;
+    }
+    const int v = fold ? 1 : 0;
     const int64_t list = rd->compute_list_begin();
-    rd->compute_list_bind_compute_pipeline(list, pipeline);
-    rd->compute_list_bind_uniform_set(list, uniform_set, 0);
+    rd->compute_list_bind_compute_pipeline(list, pipeline[v]);
+    rd->compute_list_bind_uniform_set(list, uniform_set[v], 0);
     rd->compute_list_set_push_constant(list, push, push.size());
     if (is_points()) {
         // Items flattened over x: item c's points are threads c * n^3 ...
@@ -578,11 +608,11 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count) {
     rd->compute_list_end();
 }
 
-void CascadePasses::record_all(int p_min_lod, uint32_t p_count) {
+void CascadePasses::record_all(int p_min_lod, uint32_t p_count, bool p_fold) {
     for (uint32_t base = 0; base < p_count; base += max_chunks) {
         const uint32_t count = MIN(max_chunks, p_count - base);
         for (int j = level_count(p_min_lod) - 1; j >= 0; j--) {
-            record_level(j, base, count);
+            record_level(j, base, count, p_fold);
         }
     }
 }
