@@ -68,12 +68,18 @@ TableDefPtr table_def(const std::string &p_type) {
     if (p_type == "tunnel_cube") {
         return make_tunnel_cube_type();
     }
+    if (p_type == "basin") {
+        return make_basin_type(ROCK_K, ROCK_SEED);
+    }
+    if (p_type == "island") {
+        return make_island_type(ROCK_K, ROCK_SEED);
+    }
     return make_swiss_cube_type(4);
 }
 
 struct TypeCase {
     std::string name;
-    float params[5];
+    float params[8];
 };
 
 // Every library type, with typical params (voxels).
@@ -91,6 +97,8 @@ const std::vector<TypeCase> &type_cases() {
         { "die", { 12.0f, 0, 0, 0, 0 } },
         { "stairs", { 8.0f, 2.0f, 2.0f, 0, 0 } },
         { "tunnel_cube", { 12.0f, 5.0f, 0, 0, 0 } },
+        { "basin", { 9.0f, 14.0f, 0.5f, 0, 0 } },
+        { "island", { 14.0f, 15.4f, 0.739940f, 0.672673f, 25.43f, 21.23f, 0.5f } },
     };
     return cases;
 }

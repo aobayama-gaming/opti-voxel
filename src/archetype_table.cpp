@@ -506,6 +506,53 @@ TableDefPtr make_cone_type(int p_k, uint32_t p_seed) {
     return d;
 }
 
+TableDefPtr make_basin_type(int p_k, uint32_t p_seed) {
+    // params {half_height, radius, amp}: a cylinder + bumps, a lava lake's crater (biome_features.hpp).
+    Builder b;
+    double reach = 0.0, slope = 0.0;
+    const Reg r = b.add(b.cylinder(b.t_local(), b.t_param(0), b.t_param(1)), bumps(b, p_k, p_seed, b.t_param(2), reach, slope));
+    std::shared_ptr<TableDef> d = make_def("basin", 3, b, r);
+    d->bounds = [reach, slope](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+        const float bump = float(double(p[2]) * reach);
+        r_lo = Float3{ -(p[1] + bump), -(p[0] + bump), -(p[1] + bump) };
+        r_hi = Float3{ p[1] + bump, p[0] + bump, p[1] + bump };
+        r_l = float(1.0 + double(p[2]) * slope);
+    };
+    return d;
+}
+
+TableDefPtr make_island_type(int p_k, uint32_t p_seed) {
+    // params {radius, height, cos, sin, dome_radius, dome_drop, amp}: a floating island, its rim the circle of radius
+    // `radius` on y = 0. The top is a spherical cap: the sphere of dome_radius centred dome_drop below the rim, cut at
+    // y = 0 (dome_radius^2 - dome_drop^2 = radius^2, from the CPU). The underside is the cone hanging from the rim to
+    // its apex at y = -height (make_cone_type's lateral term upside down, cos / sin of its half angle). Both are smooth-
+    // unioned over half a bump wavelength, so the rim is no crease, then the bumps are added. The smooth min is at most
+    // blend / 4 below the min: the bounds grow by that.
+    Builder b;
+    const Local l = b.t_local();
+    const Reg up = b.neg(l.y);
+    const Reg dome = b.max(b.sphere(Local{ l.x, b.add(l.y, b.t_param(5)), l.z }, b.t_param(4)), up);
+    const Reg lateral = b.sub(b.add(b.mul(b.length(l.x, l.z), b.t_param(2)), b.mul(up, b.t_param(3))), b.mul(b.t_param(0), b.t_param(2)));
+    const Reg cone = b.max(lateral, b.max(l.y, b.sub(up, b.t_param(1))));
+    const float blend = float(std::ldexp(1.0, p_k - 1));
+    double reach = 0.0, slope = 0.0;
+    const Reg r = b.add(b.smooth_min(dome, cone, blend), bumps(b, p_k, p_seed, b.t_param(6), reach, slope));
+    std::shared_ptr<TableDef> d = make_def("island", 7, b, r);
+    d->bounds = [reach, slope, blend](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+        const double grow = double(p[6]) * reach + 0.25 * double(blend);
+        // The cone: lateral <= grow with y <= grow gives |xz| <= radius + grow (1 + sin) / cos. The cap: sphere <= grow
+        // with y >= -grow.
+        const double cone_e = double(p[0]) + grow * (1.0 + double(p[3])) / double(p[2]);
+        const double rs = double(p[4]) + grow, low = double(p[5]) - grow;
+        const double dome_e = low > 0.0 ? std::sqrt(MAX(rs * rs - low * low, 0.0)) : rs;
+        const float e = float(MAX(cone_e, dome_e));
+        r_lo = Float3{ -e, float(-double(p[1]) - grow), -e };
+        r_hi = Float3{ e, float(double(p[4]) - double(p[5]) + grow), e };
+        r_l = float(1.0 + double(p[6]) * slope);
+    };
+    return d;
+}
+
 TableDefPtr make_swiss_cube_type(int p_holes) {
     // params {hx, hy, hz, ring_radius, hole_radius}: a box with p_holes spherical holes around its vertical
     // axis. A composite: its holes are children in the top frame, so it turns as a whole.

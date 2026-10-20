@@ -104,7 +104,11 @@ Vector3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size
 } // namespace
 
 Vector3 ChunkMath::chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
-    const Vector3i64 rel = chunk_center_voxel(chunk_coord, chunk_param) - chunk_param.origin_voxel();
+    return voxel_to_render(chunk_center_voxel(chunk_coord, chunk_param), chunk_param);
+}
+
+Vector3 ChunkMath::voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param) {
+    const Vector3i64 rel = p_voxel - chunk_param.origin_voxel();
     const double vs = double(chunk_param.voxel_size);
     return Vector3(real_t(double(rel.x) * vs), real_t(double(rel.y) * vs), real_t(double(rel.z) * vs));
 }

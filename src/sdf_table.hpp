@@ -2,6 +2,7 @@
 
 #include "archetype_gpu_table.hpp"
 #include "archetype_table.hpp"
+#include "biome_features.hpp"
 #include "instance_table.hpp"
 #include "sdf_base.hpp"
 #include "tree_archetype.hpp"
@@ -47,6 +48,11 @@ public:
         forest_area = p_area;
     }
     const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
+    // The biome features (biome_features.hpp: lava lakes, floating islands) of the biome cells within p_radius metres
+    // of (SCENE_X, SCENE_Z) (--biomes, kilometres there; 0: none). Set before configure().
+    void set_biome_radius(double p_radius) { biome_radius = p_radius; }
+    // The lava lakes' surfaces (the page shader colours them).
+    const std::vector<Biome::LavaPool> &get_lava_pools() const { return lava_pools; }
 
     // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
     void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
@@ -106,6 +112,7 @@ private:
         int die = -1;
         int stairs = -1;
         int tunnel_cube = -1;
+        Biome::Types biome;
     };
 
     Scene scene = Scene::PLACED;
@@ -123,6 +130,8 @@ private:
     int forest_count = 0; // --trees
     double forest_area = 60.0; // --tree_area (metres)
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
+    double biome_radius = 0.0; // --biomes (metres)
+    std::vector<Biome::LavaPool> lava_pools;
     bool instance_band = true; // --instance_band
     Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
 
@@ -146,5 +155,14 @@ private:
     void add_shapes(const Types &p_types);
     void add_scatter(const Types &p_types);
     // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.
-    void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z);
+    void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats);
+    // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
+    void add_biomes(const Types &p_types, Dictionary &r_stats);
+    // Finishes and appends r_records (one feature) if every one fits the table (record_fit_error, the limits of a
+    // runtime edit), else none (ERR naming p_what).
+    bool admit(std::vector<Archetype::TableRecord> &r_records, const char *p_what);
+    // Whether column (p_x, p_z) is in or near a lava lake (Biome::LAKE_KEEP_OUT radii): no tree or rock there.
+    bool in_lake(int64_t p_x, int64_t p_z) const;
+    // The biome sites listed in the table's stats (the counts cover all of them).
+    static constexpr int SITES_LISTED_MAX = 256;
 };

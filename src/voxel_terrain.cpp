@@ -7,6 +7,29 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+namespace {
+
+// The page shader's lava: per lake (SDFTable::get_lava_pools, nearest the scene's centre first) x, z, radius and
+// surface y in render metres, at most QuadPagePool::LAVA_POOL_MAX of them.
+void set_lava_pools(QuadPagePool *p_pool, const SDFTable &p_sdf, const ChunkParam &p_param) {
+    const std::vector<Biome::LavaPool> &pools = p_sdf.get_lava_pools();
+    const int count = int(MIN(pools.size(), size_t(QuadPagePool::LAVA_POOL_MAX)));
+    if (count < int(pools.size())) {
+        WARN_PRINT(vformat("VoxelTerrain: %d lava lakes, the page shader colours the first %d.", int64_t(pools.size()), count));
+    }
+    PackedVector4Array data;
+    data.resize(QuadPagePool::LAVA_POOL_MAX);
+    data.fill(Vector4());
+    for (int i = 0; i < count; i++) {
+        const Vector3 top = ChunkMath::voxel_to_render(pools[i].top, p_param);
+        data.set(i, Vector4(top.x, top.z, real_t(pools[i].radius * p_param.voxel_size), top.y));
+    }
+    p_pool->set_material_param("lava_pools", data);
+    p_pool->set_material_param("lava_count", count);
+}
+
+} // namespace
+
 void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_pipeline_mode", "mode"), &VoxelTerrain::set_pipeline_mode);
     ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
@@ -30,6 +53,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_trees"), &VoxelTerrain::get_archetype_trees);
     ClassDB::bind_method(D_METHOD("set_archetype_tree_area", "area"), &VoxelTerrain::set_archetype_tree_area);
     ClassDB::bind_method(D_METHOD("get_archetype_tree_area"), &VoxelTerrain::get_archetype_tree_area);
+    ClassDB::bind_method(D_METHOD("set_biome_radius", "metres"), &VoxelTerrain::set_biome_radius);
+    ClassDB::bind_method(D_METHOD("get_biome_radius"), &VoxelTerrain::get_biome_radius);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
     ClassDB::bind_method(D_METHOD("set_archetype_erode", "cells"), &VoxelTerrain::set_archetype_erode);
@@ -115,6 +140,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000,1"), "set_archetype_trees", "get_archetype_trees");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_resolve", PROPERTY_HINT_RANGE, "0,8,0.25"), "set_archetype_resolve", "get_archetype_resolve");
@@ -334,6 +360,15 @@ void VoxelTerrain::set_archetype_tree_area(double p_area) {
 
 double VoxelTerrain::get_archetype_tree_area() const {
     return archetype_tree_area;
+}
+
+void VoxelTerrain::set_biome_radius(double p_metres) {
+    ERR_FAIL_COND_MSG(started, "biome_radius must be set before the terrain enters the tree.");
+    biome_radius = p_metres;
+}
+
+double VoxelTerrain::get_biome_radius() const {
+    return biome_radius;
 }
 
 void VoxelTerrain::set_archetype_band(bool p_enabled) {
@@ -641,6 +676,7 @@ void VoxelTerrain::_ready() {
     }
     sdf->set_scatter(archetype_instances, archetype_instance_area);
     sdf->set_forest(archetype_trees, archetype_tree_area);
+    sdf->set_biome_radius(biome_radius);
     sdf->set_instance_band(archetype_band && terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_instance_erode(archetype_erode);
     sdf->set_instance_resolve(archetype_resolve);
@@ -711,9 +747,10 @@ void VoxelTerrain::_ready() {
         direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
         if (sdf->preset == SDFCascade::Preset::CONTINENTS) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
-            const double sea_m = double(sdf->get_datum_y() - chunk_param.origin_voxel().y) * chunk_param.voxel_size;
+            const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;
             direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
         }
+        set_lava_pools(direct_mesher->get_pool(), *sdf, chunk_param);
     } else {
         gpu_mesher = memnew(GPUMesher);
 

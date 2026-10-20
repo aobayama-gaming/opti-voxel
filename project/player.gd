@@ -111,6 +111,8 @@ func _enter_tree() -> void:
 			terrain.archetype_trees = a.trim_prefix("--trees=").to_int()
 		if a.begins_with("--tree_area=") and terrain:
 			terrain.archetype_tree_area = a.trim_prefix("--tree_area=").to_float()
+		if a.begins_with("--biomes=") and terrain:
+			terrain.biome_radius = 1000.0 * a.trim_prefix("--biomes=").to_float()
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 

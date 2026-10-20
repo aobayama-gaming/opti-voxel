@@ -30,9 +30,11 @@ iterate past a warning, never to commit one.
   **Perf target:** `--preset=forest5cm` (`project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
   the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at error 2 (stretch: 1).
   Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene_5cm).
-  Baseline (PR #34, 25 m/s, on the removed fBm ground: forest5cm now stands on the cascade, 15% fewer triangles, so
-  re-measure dev before comparing): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree folds
-  (~7 ms of GPU per batch, 4x a treeless batch) and the 31 M triangles drawn are the two costs.
+  Baseline on the cascade (PR #48, 1280x720, budget 4, 2 runs): steady frame p50 13.7 ms (render GPU 14.0), fly out
+  p50 11.7 ms, back 13.5 ms, 30.4 M live triangles, 865 MB of pages; open: the fly drops half its chunks on the way
+  out and re-meshes for 6.4 s after the return (623 ms on the old fBm ground). The PR #34 numbers below were measured on
+  the removed fBm ground (15% more triangles): fly frame p50 21-27 ms, steady 12 ms of render GPU; the mesher's tree
+  folds (~7 ms of GPU per batch, 4x a treeless batch) and the 31 M triangles drawn are the two costs.
   Where the frame goes (`bench.sh --profile=1`, 1920x1080, error 2 | back 8, budget 4): GPU-bound in every phase
   (wall = GPU total, render thread 1.5-4 ms, terrain `_process` 3-5 ms while flying). Steady in the forest: 17.3 ms,
   of which the three geometry passes are 16.4 (opaque 6.6, shadows 4.9, depth pre-pass 4.9) and SSAO / SSIL /
@@ -320,6 +322,26 @@ to every change, and a reviewer may reject a PR on any of them.
   a part starts eroding at the coarsest LOD whose cells still fit F times in its half thickness (`band_radius`),
   so a part erodes only once the grid can no longer draw it whole (a 0.3 m trunk at 5 cm stays whole to LOD 2
   at F = 1, a crown hull to LOD 5); the L | L+1 step stays `erode` cells (unit-tested), drops come later.
+  **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
+  change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles the plane with cells of
+  640 m rounded to 2^k voxels, and a cell keeps one site in its middle half with the kind's chance, from
+  `hash_cell` of the int64 cell (a site depends only on its cell: the same from any square or origin, unit-tested
+  near 0, 2^32 and +-2^60). A lake is two records: a `basin` (a cylinder plus the rock's bumps, 16 m lattice)
+  smooth-subtracted from the ground, then a hard-unioned `cylinder` slab whose top face is the flat lava, 4% of the
+  radius below the lowest of 72 ground samples on the slab's rim. `Biome::place` tries `LAKE_ATTEMPTS` spots of the
+  cell and gives up where the rim's ground spans over half the radius (`lakes_too_steep`). An island is one `island`
+  record (a spherical cap on a hanging cone, smooth-unioned, plus bumps), its box bottom 25-70 m above the highest
+  ground under it. Both follow the band rule like any record; the slab erodes away a few LODs before the basin (it
+  can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) that the shader still
+  colours. `--biomes=KM` (bench and player, `VoxelTerrain.biome_radius` in metres) places the cells within KM km of
+  (SCENE_X, SCENE_Z) once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
+  out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread. The page
+  shader colours lava: `SDFTable::get_lava_pools` (nearest the centre first) becomes the `vec4 lava_pools[]` uniform
+  (x, z, basin radius, surface in render metres, the first `QuadPagePool::LAVA_POOL_MAX`), tested per vertex: inside
+  a pool's cylinder at most a cell above its surface. Direct mesher only, fixed at `_ready` (runtime edits of a lake
+  keep its colour): a material channel in the page format is the real fix. `get_debug_stats()["table"]["biomes"]`:
+  counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z in metres, y the lava or the island's rim,
+  radius). `--preset=biomes` looks at a lava lake with two islands behind it.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL

@@ -41,8 +41,8 @@ Vec turn(const Vec &p_axis, double p_angle, double p_azimuth) {
     return unit(p_axis * std::cos(p_angle) + n * std::sin(p_angle));
 }
 
-ExactNoise::UVec3 hash3(uint32_t p_a, uint32_t p_b, uint32_t p_c) { return ExactNoise::pcg3d(ExactNoise::UVec3{ p_a, p_b, p_c }); }
-double unit_of(uint32_t p_bits) { return double(p_bits >> 8) * 0x1p-24; } // [0, 1)
+using ExactNoise::hash3;
+using ExactNoise::unit_of;
 
 constexpr double TAU = 6.283185307179586;
 constexpr double GOLDEN_ANGLE = 2.399963229728653;
@@ -404,7 +404,7 @@ const std::vector<TreeSpecies> &tree_species() {
     return species;
 }
 
-int crown_k(double p_voxel) { return int(std::lround(std::log2(CROWN_WAVELENGTH_M / p_voxel))); }
+int crown_k(double p_voxel) { return ExactNoise::lattice_k(CROWN_WAVELENGTH_M, p_voxel); }
 
 TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, int p_cone) {
     // The rock's bounds at radius 1 and amp 1: half size 1 + reach, L = 1 + slope (per unit of amp).
@@ -428,7 +428,7 @@ void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, uint32_t p_
 }
 
 void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_centre_z_m, double p_voxel,
-        const std::function<int64_t(int64_t, int64_t)> &p_ground_y, std::vector<TreeSite> &r_out) {
+        const GroundFn &p_ground_y, std::vector<TreeSite> &r_out) {
     if (p_count <= 0 || !(p_area_m > 0.0)) {
         return;
     }

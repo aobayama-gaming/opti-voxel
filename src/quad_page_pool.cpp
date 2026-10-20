@@ -35,6 +35,9 @@ uniform float pos_scale = 512.0;
 // Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
 // colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
 uniform float skirt_depth_m[32];
+// Lava lakes (Biome::LavaPool, voxel_terrain.cpp's set_lava_pools): per pool x, z, radius and surface y in render metres.
+uniform vec4 lava_pools[LAVA_POOL_MAX];
+uniform int lava_count = 0;
 instance uniform int page_id = 0;
 
 varying vec3 v_world_normal;
@@ -128,6 +131,25 @@ void fragment() {
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
     albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
     vec3 emission = vec3(0.0);
+    // Lava: inside a pool's cylinder, at most a cell above its surface (a coarse LOD's vertex may sit up to a cell off;
+    // the band rule's erosion only sinks the lava). Behind a uniform branch: no cost without lakes, and no varying.
+    if (lava_count > 0) {
+        vec2 xz = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz;
+        bool lava = false;
+        for (int i = 0; i < lava_count; i++) {
+            vec2 d = xz - lava_pools[i].xy;
+            lava = lava || (dot(d, d) < lava_pools[i].z * lava_pools[i].z && v_height < lava_pools[i].w + voxel_size * exp2(v_lod));
+        }
+        if (lava) {
+            // A warped crust: dark seams over a glow that drifts slowly.
+            vec2 q = xz * 0.15;
+            q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
+            float seam = abs(sin(q.x * 2.1) * sin(q.y * 1.9) + 0.5 * sin((q.x - q.y) * 3.3));
+            float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
+            albedo = vec3(0.03, 0.015, 0.01);
+            emission = mix(vec3(0.12, 0.02, 0.0), vec3(1.1, 0.24, 0.02) * pulse, smoothstep(0.03, 0.18, seam));
+        }
+    }
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -192,7 +214,7 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     rs->mesh_add_surface_from_arrays(base_mesh, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
     shader = rs->shader_create();
-    rs->shader_set_code(shader, PAGE_SHADER);
+    rs->shader_set_code(shader, String(PAGE_SHADER).replace("LAVA_POOL_MAX", itos(LAVA_POOL_MAX)));
     material_params["voxel_size"] = voxel_size;
 
     for (uint32_t i = 0; i < p_initial_pages; i++) {
