@@ -37,6 +37,10 @@ uniform float pos_scale = 256.0; // PageFormat::pos_scale(chunk_size), set by th
 // Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
 // colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
 uniform float skirt_depth_m[32];
+// An instance's surface at LOD L lies instance_erode_m * (2^L - 1) metres inside its LOD 0 one (the band rule's
+// erosion from LOD 1, VoxelTerrain.archetype_erode): solid textures sample that far out, so they don't jump across a
+// LOD seam (with --instance_resolve, parts that start eroding later are over-corrected).
+uniform float instance_erode_m = 0.0;
 instance uniform int page_id = 0;
 
 varying vec3 v_world_normal;
@@ -75,6 +79,45 @@ float value_noise(vec3 p) {
     return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
 }
 
+// Bark (PATTERN_BARK) as a solid texture, so it needs no surface frame: noise stretched along world up makes plates
+// and V grooves that run up a trunk and wander slowly; a sparse cell field puts knots where a kept cell's point lies
+// near the surface, and the grain bends around them. Its axis is world up: a near-horizontal branch gets grooves
+// around it (the branch's axis is not known here). p in metres. Returns the plate height in [0, 1]; knot: the knot's
+// core, ring: its growth rings, in [0, 1]. Colour only: a bump from it (and a roughness following it) cost ~1.3 ms
+// of depth pre-pass in the forest at 1080p (the pre-pass writes normals and roughness for SSAO / SSIL), for relief
+// barely visible past a few metres.
+float bark_height(vec3 p, out float knot, out float ring) {
+    const vec3 KNOT_CELL = vec3(0.7, 1.6, 0.7);
+    // The 2 x 2 x 2 cells nearest p: a knot point lies in the middle 70% of its cell, and a knot reaches ~0.4 m.
+    vec3 g = floor(p / KNOT_CELL - 0.5);
+    vec3 bend = vec3(0.0);
+    float nearest = 1e9;
+    for (int z = 0; z < 2; z++) {
+        for (int y = 0; y < 2; y++) {
+            for (int x = 0; x < 2; x++) {
+                vec3 c = g + vec3(float(x), float(y), float(z));
+                if (hash1(c + 71.3) > 0.35) {
+                    continue; // about a third of the cells hold a knot
+                }
+                vec3 dk = p - (c + 0.15 + 0.7 * hash3(c + 19.1)) * KNOT_CELL;
+                vec3 dn = dk / vec3(0.08, 0.13, 0.08);
+                float r2 = dot(dn, dn);
+                nearest = min(nearest, r2);
+                float fall = max(1.0 - r2 * (1.0 / 12.0), 0.0);
+                bend.xz += dk.xz * (1.5 * fall * fall);
+            }
+        }
+    }
+    knot = exp(-nearest);
+    ring = nearest < 40.0 ? exp(-0.15 * nearest) * (0.5 + 0.5 * cos(sqrt(nearest) * 7.0)) : 0.0;
+    // Grooves ~11 cm apart, 6x longer than wide. Coarse on purpose: a solid texture also varies across the surface, and
+    // neighbouring chunks' surfaces may differ by ~1 cm (a 4.5 cm groove showed it as a line along chunk seams).
+    const vec3 SCALE = vec3(9.0, 9.0 / 6.0, 9.0);
+    vec3 wander = vec3(1.6, 0.0, 1.6) * value_noise(p * vec3(1.2, 0.25, 1.2));
+    // Plates with flat tops, V grooves where the noise crosses its middle.
+    return min(abs(2.0 * value_noise((p + bend) * SCALE + wander) - 1.0) * 1.8, 1.0);
+}
+
 // A corner's material: its chunk's palette block (header h1), its index in it, its id (palette). Index 0 is always
 // the ground: no fetch (most corners).
 uint corner_material(uvec4 h1, uint index) {
@@ -86,8 +129,10 @@ uint corner_material(uvec4 h1, uint index) {
 }
 
 // A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
-// material_tex. p: the fragment's position (metres, render space).
-void material_shading(uint mat_id, vec3 ground, vec3 p, out vec3 albedo, out float roughness, out vec3 emission) {
+// material_tex and its pattern. p: the fragment's position (metres, render space), n its normal (interpolated, not
+// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); lod: the chunk's.
+void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float lod, out vec3 albedo,
+        out float roughness, out vec3 emission) {
     albedo = ground;
     roughness = 1.0;
     emission = vec3(0.0);
@@ -107,6 +152,20 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, out vec3 albedo, out flo
         float seam = abs(sin(q.x * 2.1) * sin(q.y * 1.9) + 0.5 * sin((q.x - q.y) * 3.3));
         float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
         emission = mix(m1.rgb * 0.11, m1.rgb * pulse, smoothstep(0.03, 0.18, seam));
+    } else if (m1.a == MATERIAL_PATTERN_BARK) {
+        // Bark: dark grooves, lighter plates, knots darker with rings. Past ~4 pixels per groove (11 cm) the detail
+        // fades to the plates' mean.
+        float detail = 1.0 - smoothstep(0.012, 0.03, footprint);
+        float plate = 0.65;
+        float knot_weight = 0.0;
+        vec3 knot_albedo = vec3(0.0);
+        if (detail > 0.0) { // else the plates' mean, no bark_height
+            float knot, ring;
+            plate = mix(plate, bark_height(p + normalize(n) * (instance_erode_m * (exp2(lod) - 1.0)), knot, ring), detail);
+            knot_weight = max(knot, ring * 0.6) * detail;
+            knot_albedo = m0.rgb * mix(0.35, 0.7, ring);
+        }
+        albedo = mix(mix(m0.rgb * 0.5, m0.rgb * 1.4, plate), knot_albedo, knot_weight);
     }
 }
 
@@ -213,7 +272,8 @@ void fragment() {
     }
     float roughness;
     vec3 emission;
-    material_shading(uint(mat_id), ground, p, albedo, roughness, emission);
+    float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
+    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, v_lod, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;

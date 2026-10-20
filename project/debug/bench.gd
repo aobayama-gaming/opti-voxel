@@ -69,6 +69,7 @@ extends Node3D
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material)
+##   --grade=0                    no colour grading (the scene's LUT, res://grade_lut.png, tools/make_lut.py)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
 ##                                distance, iterated; negative: below it). Default 50 on the cascade terrains,
@@ -176,6 +177,8 @@ func _ready() -> void:
 	if args.has("max_in_flight"):
 		terrain.direct_max_in_flight = int(args["max_in_flight"])
 	terrain.debug_view = int(args.get("view", "0"))
+	if args.get("grade", "1") == "0":
+		Presets.ungrade(self)
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
 	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
 	if args.has("voxel"):

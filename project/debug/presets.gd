@@ -13,6 +13,13 @@ const PRESETS := {
 }
 
 
+# --grade=0: no colour grading (the scene's LUT): adjustments off on the WorldEnvironment under p_scene_root.
+static func ungrade(p_scene_root: Node) -> void:
+	var world_env := p_scene_root.get_node_or_null("WorldEnvironment") as WorldEnvironment
+	if world_env:
+		world_env.environment.adjustment_enabled = false
+
+
 static func user_args() -> PackedStringArray:
 	var given := OS.get_cmdline_user_args()
 	var out := PackedStringArray()

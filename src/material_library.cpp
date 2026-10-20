@@ -9,7 +9,7 @@ namespace Material {
 Library::Library() {
     // Dark albedos: the scene's tonemapper brightens them (like the ground's).
     add("ground", Params());
-    add("bark", Params{ Color(0.17, 0.11, 0.07), 1.0f, Color(0, 0, 0), PATTERN_NONE });
+    add("bark", Params{ Color(0.17, 0.11, 0.07), 0.9f, Color(0, 0, 0), PATTERN_BARK });
     add("leaves", Params{ Color(0.07, 0.17, 0.05), 0.9f, Color(0, 0, 0), PATTERN_NONE });
     add("lava", Params{ Color(0.03, 0.015, 0.01), 1.0f, Color(1.1, 0.24, 0.02), PATTERN_LAVA });
     add("scorched_rock", Params{ Color(0.09, 0.075, 0.065), 1.0f, Color(0, 0, 0), PATTERN_NONE });
@@ -28,8 +28,8 @@ uint32_t Library::add(const String &p_name, const Params &p_params) {
 
 String glsl_constants() {
     return vformat("const uint MATERIAL_TEXELS = %du;\nconst uint MATERIALS_PER_ROW = %du;\nconst uint MATERIAL_GROUND = %du;\n"
-                   "const uint MATERIAL_ID_BITS = %du;\nconst float MATERIAL_PATTERN_LAVA = %d.0;\n",
-            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, ID_BITS, int(PATTERN_LAVA));
+                   "const uint MATERIAL_ID_BITS = %du;\nconst float MATERIAL_PATTERN_LAVA = %d.0;\nconst float MATERIAL_PATTERN_BARK = %d.0;\n",
+            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, ID_BITS, int(PATTERN_LAVA), int(PATTERN_BARK));
 }
 
 uint32_t Library::find(const String &p_name) const {

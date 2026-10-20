@@ -722,6 +722,8 @@ void VoxelTerrain::_ready() {
             skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
         }
         direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
+        // The band rule's erosion per LOD step, in metres: the bark texture samples the uneroded surface.
+        direct_mesher->get_pool()->set_material_param("instance_erode_m", sdf->instance_erode_cells() * chunk_param.voxel_size);
         if (sdf->preset == SDFCascade::Preset::CONTINENTS) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
             const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;
