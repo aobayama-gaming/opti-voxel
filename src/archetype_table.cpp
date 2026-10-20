@@ -1,5 +1,6 @@
 // The archetype table: the library, the records, the locality rule and the fold (archetype_table.hpp).
 #include "archetype_table.hpp"
+#include "sdf_base.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -215,8 +216,12 @@ Float4 combine4(const Float4 &p_r, const Float4 &p_c, const TableRecord &p_recor
 
 } // namespace
 
+bool record_wins(const Float4 &p_r, const Float4 &p_c, Combine p_op) {
+    return p_op == Combine::UNION || p_op == Combine::SMOOTH_UNION ? p_c.w < p_r.w : -p_c.w > p_r.w;
+}
+
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
-        const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched) {
+        const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched, const uint16_t *p_palette, uint32_t *r_material) {
     thread_local std::vector<Float4> regs;
     Float4 r = p_r;
     for (uint32_t i = 0; i < p_count; i++) {
@@ -228,6 +233,9 @@ Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_re
         run_registers(p_library[rec.def].program, p_pos, p_lod, regs, &dr);
         Float4 c = regs[p_library[rec.def].program.output];
         c.w = c.w + band_erosion(rec.erode, rec.erode_from, p_lod); // the band rule's erosion (set_band)
+        if (r_material && p_palette && record_wins(r, c, rec.op)) {
+            *r_material = p_palette[i];
+        }
         r = combine4(r, c, rec);
         if (r_touched) {
             *r_touched = true;
@@ -289,6 +297,11 @@ vec4 arch_smooth_max(vec4 a, vec4 b, float k, float inv_k) {
     return vec4(-s.xyz, -s.w);
 }
 
+// record_wins (ops 0 and 1 are the unions).
+bool arch_record_wins(vec4 r, vec4 c, uint op) {
+    return op <= 1u ? c.w < r.w : -c.w > r.w;
+}
+
 vec4 arch_combine(vec4 r, vec4 c, DefRecord rec) {
     uint op = rec.head.y;
     if (op == 0u) {
@@ -322,23 +335,29 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
         code += vformat("        case %du: return arch_%d(p, lod, rec);\n", i, i);
     }
     code += "        default: return vec4(0.0);\n    }\n}\n\n";
-    code += R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched) {
+    code += String(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material) {
     uint off = g_sdf_chunk.id.w;
     uint n = g_sdf_chunk.anchor_hi.w;
     for (uint i = 0u; i < n; i++) {
-        DefRecord rec = sdf_records[sdf_list[off + i]];
+        uint word = sdf_list[off + i];
+        DefRecord rec = sdf_records[word & LIST_ID_MASKu];
         if (!arch_in_box(p, rec, lod)) {
             continue;
         }
         precise vec4 c = arch_eval_instance(p, lod, rec);
         c.w = c.w + intBitsToFloat(rec.box_hi.w) * max(exact_pow2(lod) - intBitsToFloat(rec.anchor_hi.w), 0.0);
+        if (arch_record_wins(r, c, rec.head.y)) {
+            material = word >> LIST_ID_BITSu;
+        }
         r = arch_combine(r, c, rec);
         touched = true;
     }
     return r;
 }
 
-)glsl";
+)glsl")
+                    .replace("LIST_ID_MASK", itos(SDFGpuTable::LIST_ID_MASK))
+                    .replace("LIST_ID_BITS", itos(SDFGpuTable::LIST_ID_BITS));
     // finish_table.
     code += "vec4 arch_finish(vec4 o, int lod) {\n";
     if (p_normalize) {

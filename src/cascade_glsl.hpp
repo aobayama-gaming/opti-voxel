@@ -47,6 +47,8 @@ static constexpr uint32_t LOCAL_SIZE = 64;
 // The instance table's buffers in the level shader (after the cascade's own bindings 0-6).
 static constexpr int TABLE_RECORD_BINDING = 7;
 static constexpr int TABLE_LIST_BINDING = 8;
+// The per-sample material (chunk palette index) the meshers give create(): uint per sample, next to sdf_sample.
+static constexpr int MATERIAL_BINDING = 9;
 
 // std430 CascadeBand[BAND_ENTRIES], indexed by insertion level m: factor (amp * 2^(-shift |S|) per derivative
 // order), offset low words, offset high words, info (present, seed, k). At most one band per level.
@@ -60,8 +62,9 @@ uint32_t vec4s_per_point(Cascade::ChannelSet p_set);
 // The level pass compute shader (one source for every level) for p_sdf's cascade; p_debug: the variant
 // whose level 0 also stores its channels in debug_channels; p_points: point items; p_fold: level 0 folds the
 // chunks' instance lists (cascade_sample_sdf). Without, it is the bare cascade_terrain_sdf: the same bits as the
-// fold over empty lists, for the batches that have none.
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false);
+// fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
+// (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING.
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false);
 
 // The point instance's ChunkParam: p_param with skirt 0 and chunk_size = the chunk's voxel dimension, so the
 // GPU's anchor (id - lod size) * half chunk stays the meshers' and an item's box is its anchor alone.
@@ -73,7 +76,8 @@ ChunkParam point_param(const ChunkParam &p_param);
 bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPos &p_point, int p_lod, const ChunkParam &p_point_param);
 
 // Fills /*GLSL_VERTEX_GRADIENT*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers): the vertex
-// passes take their normal from cascade_vertex_gradient, since the cascade has no off-lattice evaluation.
+// passes take their normal from cascade_vertex_gradient, since the cascade has no off-lattice evaluation, and
+// their material from cascade_vertex_material (the mesher declares sdf_material).
 String fill_mesher_pass(const String &p_shader, const String &p_pass);
 
 } // namespace CascadeGLSL
@@ -87,10 +91,11 @@ public:
     // the last level's channels (vec4s_per_point vec4s per sample, CascadeSpike); invalid for the meshers' (a
     // 16 B placeholder is bound). p_share_scratch: use that object's scratch buffers instead of new ones.
     // p_table_records / p_table_list: the mesher's instance table buffers (a terrain with a table): with them, a
-    // second variant whose level 0 folds the chunks' instance lists (record_level's p_fold).
+    // second variant whose level 0 folds the chunks' instance lists (record_level's p_fold). p_sdf_material: the
+    // mesher's per-sample material buffer (uint per sample, indexed like sdf_sample), written by level 0 when given.
     bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
             RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr, RID p_table_records = RID(),
-            RID p_table_list = RID());
+            RID p_table_list = RID(), RID p_sdf_material = RID());
     // Point items (the discoverer's): p_input holds encode_point_input items, p_param_ubo the std140
     // point_param, p_values one float per item.
     bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
@@ -131,5 +136,5 @@ private:
     bool owns_scratch = true;
 
     bool _create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo, RID p_output,
-            RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list);
+            RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list, RID p_material);
 };

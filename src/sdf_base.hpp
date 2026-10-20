@@ -61,15 +61,20 @@ public:
     virtual uint32_t record_size() const = 0;
 
     // Main thread: patch each ChunkInput of the batch (id.w = this chunk's list offset in uint32 words,
-    // anchor_hi.w = its instance count) and append the indices (uint32) to r_list. r_chunk_ids already
-    // holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). A batch's lists never exceed its
-    // chunk count * max_chunk_list() words (the meshers' buffer).
-    virtual void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const = 0;
+    // anchor_hi.w = its instance count) and append the list words (record id | palette index << LIST_ID_BITS) to
+    // r_list. r_chunk_ids already holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). A batch's lists
+    // never exceed its chunk count * max_chunk_list() words (the meshers' buffer). r_palettes (if given) gets each
+    // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name.
+    virtual void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+            std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const = 0;
 
     // The average list a batch's chunks may carry: the meshers size their list buffer for batch size * this.
     // The band rule keeps lists to the instances big enough for the chunk's LOD; a batch over it is cut (ERR,
     // counted).
     static constexpr uint32_t MAX_CHUNK_LIST = 4096;
+    // A list word: the record id in its low LIST_ID_BITS, the record's chunk palette index (chunk_palette.hpp) above.
+    static constexpr uint32_t LIST_ID_BITS = 23;
+    static constexpr uint32_t LIST_ID_MASK = (1u << LIST_ID_BITS) - 1;
     uint32_t max_chunk_list() const { return MAX<uint32_t>(MIN(instance_capacity(), MAX_CHUNK_LIST), 1u); }
     // List statistics (main thread): lengths per LOD, build time, truncations.
     virtual Dictionary get_stats() const { return Dictionary(); }

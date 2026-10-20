@@ -163,15 +163,20 @@ public:
     }
 
     // sdf() with the listed instances p_list folded in (GLSL cascade_sample_sdf, bit for bit): the bare sdf() where
-    // no instance's box test passes.
+    // no instance's box test passes. *r_material (if given, with p_palette: the list entries' palette indices): the
+    // sample's palette index, 0 (ground) unless a record wins the fold.
     ExactNoise::Float4 sample_sdf(const Archetype::InstanceSnapshot &p_snap, const uint32_t *p_list, uint32_t p_count,
-            const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod) const {
+            const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod, const uint16_t *p_palette = nullptr,
+            uint32_t *r_material = nullptr) const {
         const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel.y, p_lod);
+        if (r_material) {
+            *r_material = 0;
+        }
         if (p_count > 0) {
             const float s = ExactNoise::exact_pow2(p_lod);
             bool touched = false;
             const ExactNoise::Float4 r = Archetype::fold_onto(ExactNoise::Float4{ u.x * s, u.y * s, u.z * s, u.w * s }, *p_snap.library, p_snap.records,
-                    p_list, p_count, p_pos, p_lod, true, &touched);
+                    p_list, p_count, p_pos, p_lod, true, &touched, p_palette, r_material);
             if (touched) {
                 return Archetype::finish_table(r, p_lod, p_snap.out_scale, p_snap.normalize);
             }
@@ -281,13 +286,14 @@ float cascade_skirt_depth_m(int lod) {
     String get_sample_fold_glsl() const override {
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
         return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize) + R"glsl(
-vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk) {
+vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material) {
+    material = 0u;
     precise vec4 u = cascade_terrain_unit(c0, p, lod);
     g_sdf_chunk = input_chunk[chunk];
     if (g_sdf_chunk.anchor_hi.w > 0) {
         precise float s = exact_pow2(lod);
         bool touched = false;
-        precise vec4 r = arch_fold(u * s, p, lod, touched);
+        precise vec4 r = arch_fold(u * s, p, lod, touched, material);
         if (touched) {
             return arch_finish(r, lod);
         }

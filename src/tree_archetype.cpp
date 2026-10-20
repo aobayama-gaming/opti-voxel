@@ -307,6 +307,7 @@ private:
         }
         TableRecord rec;
         rec.def = uint8_t(types.branch);
+        rec.material = Material::BARK;
         rec.op = Combine::SMOOTH_UNION;
         rec.set_k(float(p_k));
         rec.anchor = anchor_of(p_a);
@@ -342,6 +343,7 @@ private:
             const double slant = std::sqrt(r * r + height * height);
             TableRecord rec;
             rec.def = uint8_t(types.cone);
+            rec.material = Material::LEAVES;
             rec.op = Combine::SMOOTH_UNION;
             rec.set_k(float(s.crown_smooth * r));
             rec.anchor = anchor_of(snap(point_at(p_joints, t)));
@@ -360,6 +362,7 @@ private:
     void add_crown(const Sphere &p_sphere, uint32_t p_salt) {
         TableRecord rec;
         rec.def = uint8_t(types.crown);
+        rec.material = Material::LEAVES;
         rec.op = Combine::SMOOTH_UNION;
         rec.set_k(float(s.crown_smooth * p_sphere.r));
         rec.anchor = anchor_of(snap(p_sphere.c));

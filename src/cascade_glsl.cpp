@@ -30,6 +30,7 @@ layout(set = 0, binding = 4, std430) restrict buffer ScratchB { vec4 scratch_b[]
 layout(set = 0, binding = 5, std430) restrict readonly buffer Bands { CascadeBand bands[]; };
 layout(set = 0, binding = 6, std430) restrict writeonly buffer DebugChannels { vec4 debug_channels[]; };
 /*TABLE_BUFFERS*/
+/*MATERIAL_BUFFER*/
 
 // One level of every chunk of a sub-batch: chunk i of the dispatch is input chunk chunk_base + i, scratch
 // slot i. Workgroups: x over the level box bound n_child^3, y over the chunks.
@@ -158,6 +159,7 @@ constexpr ItemFills CHUNK_FILLS = {
 )glsl",
     "chunk_param.chunk_size - 1",
     R"glsl(    /*DEBUG_STORE*/
+    uint material = 0u; // the sample's palette index: ground unless the fold's winner says otherwise
     precise vec4 r = /*SAMPLE_SDF*/;
     // Skirt: past the chunk bounds the SDF is pushed towards air by up to the LOD's skirt depth, so the rim turns
     // down under the neighbour's surface; inside the bounds it is untouched. SDFCascade::with_skirt, same order, precise.
@@ -170,7 +172,8 @@ constexpr ItemFills CHUNK_FILLS = {
         precise float depth_m = cascade_skirt_depth_m(lod); // SDFCascade::skirt_depth_m
         r.w = r.w + clamp(-inside, 0.0, 1.0) * depth_m;
     }
-    sdf_sample[sample_index] = r;)glsl",
+    sdf_sample[sample_index] = r;
+    /*MATERIAL_STORE*/)glsl",
 };
 
 // A point item is a chunk of one sample (its anchor, skirt 0): box extent 0, the bare SDF value at Λ_L (no
@@ -341,6 +344,25 @@ vec3 cascade_vertex_gradient(uvec3 gid, vec3 f) {
     return mix(y0, y1, f.z);
 }
 
+// The vertex's material (its chunk palette index): the material of the solid corner closest to the surface (the
+// largest w among the corners with !(w > 0), the side rule every pass uses), ties to the first in x + 2y + 4z order.
+// A cell with a vertex has a solid corner.
+uint cascade_vertex_material(uvec3 gid) {
+    uint best = 0u;
+    float best_w = 0.0;
+    bool found = false;
+    for (uint k = 0u; k < 8u; k++) {
+        uint idx = get_flat_index_z(gid + uvec3(k & 1u, (k >> 1u) & 1u, k >> 2u));
+        float w = sdf_sample[idx].w;
+        if (!(w > 0.0) && (!found || w > best_w)) {
+            found = true;
+            best_w = w;
+            best = sdf_material[idx];
+        }
+    }
+    return best;
+}
+
 )glsl";
 
 } // namespace
@@ -386,11 +408,11 @@ uint32_t vec4s_per_point(ChannelSet p_set) {
     return uint32_t(channel_count(p_set) + 3) / 4;
 }
 
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold) {
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material) {
     const Spec *spec = p_sdf->get_cascade();
     ERR_FAIL_COND_V_MSG(p_debug && p_points, String(), "CascadeGLSL: point items have no debug variant.");
     const SDFGpuTable *table = p_sdf->get_gpu_table();
-    ERR_FAIL_COND_V_MSG(p_fold && p_points, String(), "CascadeGLSL: only chunk items fold.");
+    ERR_FAIL_COND_V_MSG((p_fold || p_material) && p_points, String(), "CascadeGLSL: only chunk items fold or carry a material.");
     const ItemFills &fills = p_points ? POINT_FILLS : CHUNK_FILLS;
     String code = LEVEL_TEMPLATE;
     code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
@@ -398,7 +420,10 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     const char *channels = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod";
-    code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
+    code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c, material)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
+    code = code.replace("/*MATERIAL_BUFFER*/",
+            p_material ? vformat("layout(set = 0, binding = %d, std430) restrict writeonly buffer SDFMaterial { uint sdf_material[]; };", MATERIAL_BINDING) : String());
+    code = code.replace("/*MATERIAL_STORE*/", p_material ? "sdf_material[sample_index] = material;" : "");
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
@@ -434,19 +459,19 @@ String fill_mesher_pass(const String &p_shader, const String &p_pass) {
 } // namespace CascadeGLSL
 
 bool CascadePasses::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
-        RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list) {
+        RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list, RID p_sdf_material) {
     return _create(p_rd, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch, p_table_records,
-            p_table_list);
+            p_table_list, p_sdf_material);
 }
 
 bool CascadePasses::create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input,
         RID p_param_ubo, RID p_values) {
     ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0, false, "CascadePasses: point items need CascadeGLSL::point_param (skirt 0).");
-    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr, RID(), RID());
+    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr, RID(), RID(), RID());
 }
 
 bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo,
-        RID p_output, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list) {
+        RID p_output, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list, RID p_material) {
     const Spec *spec = p_sdf->get_cascade();
     rd = p_rd;
     top = spec->top_level();
@@ -456,10 +481,10 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
 
     // Variant 0: the bare cascade at level 0; variant 1 (given the table's buffers): the instance fold.
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
-    ERR_FAIL_COND_V_MSG(table && points, false, "CascadePasses: point items don't fold.");
+    ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
     const int variants = table ? 2 : 1; // a fold variant that fails to compile leaves the bare one working
     for (int v = 0; v < variants; v++) {
-        const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1);
+        const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1, p_material.is_valid());
         RDUtils::dump_shader(String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (v == 1 ? "_fold" : ""), code);
         Ref<RDShaderSource> source;
         source.instantiate();
@@ -519,6 +544,9 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     uniforms.push_back(make_uniform(4, scratch_b, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(5, bands, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(6, debug, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    if (p_material.is_valid()) {
+        uniforms.push_back(make_uniform(CascadeGLSL::MATERIAL_BINDING, p_material, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    }
     uniform_set[0] = rd->uniform_set_create(uniforms, shader[0], 0);
     if (shader[1].is_valid()) {
         uniforms.push_back(make_uniform(CascadeGLSL::TABLE_RECORD_BINDING, p_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));

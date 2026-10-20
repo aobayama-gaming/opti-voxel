@@ -1,7 +1,9 @@
 #include "archetype_gpu_table.hpp"
 
+#include "chunk_palette.hpp"
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
+#include "page_format.hpp"
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <algorithm>
@@ -57,10 +59,14 @@ PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_vers
     return bytes;
 }
 
-void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list) const {
+void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+        std::vector<std::vector<uint32_t>> *r_palettes) const {
     (void)p_param;
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
+    if (r_palettes) {
+        r_palettes->assign(p_chunks.size(), std::vector<uint32_t>{ Material::GROUND });
+    }
     if (!snap || snap->empty()) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
         for (const ChunkId &c : p_chunks) {
@@ -71,18 +77,31 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
         return;
     }
     const uint32_t cap = max_chunk_list();
-    // The chunks' lists on the worker pool (a dense scatter makes thousands of candidates per chunk).
+    // The chunks' lists and palettes on the worker pool (a dense scatter makes thousands of candidates per chunk).
     struct Job {
         const InstanceSnapshot *snap;
         const ChunkId *chunks;
         std::vector<uint32_t> *lists;
+        std::vector<uint32_t> *palettes;
+        std::vector<uint16_t> *indices;
+        uint8_t *fits;
         static void run(void *p_job, uint32_t p_i) {
             const Job &job = *static_cast<const Job *>(p_job);
-            job.snap->chunk_list(job.chunks[p_i], job.lists[p_i]);
+            std::vector<uint32_t> &list = job.lists[p_i];
+            job.snap->chunk_list(job.chunks[p_i], list);
+            thread_local std::vector<uint32_t> materials;
+            materials.resize(list.size());
+            for (size_t k = 0; k < list.size(); k++) {
+                materials[k] = job.snap->records[list[k]].material;
+            }
+            job.fits[p_i] = ChunkPalette::build(materials.data(), uint32_t(list.size()), job.palettes[p_i], job.indices[p_i]);
         }
     };
     std::vector<std::vector<uint32_t>> lists(p_chunks.size());
-    Job job{ snap.get(), p_chunks.data(), lists.data() };
+    std::vector<std::vector<uint32_t>> palettes(p_chunks.size());
+    std::vector<std::vector<uint16_t>> palette_indices(p_chunks.size());
+    std::vector<uint8_t> fits(p_chunks.size(), 1);
+    Job job{ snap.get(), p_chunks.data(), lists.data(), palettes.data(), palette_indices.data(), fits.data() };
     if (p_chunks.size() > 1) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
         pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
@@ -97,6 +116,12 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
         list_stats.chunks[lod]++;
         list_stats.entries[lod] += int64_t(indices.size());
         list_stats.longest[lod] = MAX(list_stats.longest[lod], int64_t(indices.size()));
+        list_stats.palette_entries[lod] += int64_t(palettes[i].size());
+        list_stats.palette_longest[lod] = MAX(list_stats.palette_longest[lod], int64_t(palettes[i].size()));
+        if (!fits[i]) {
+            list_stats.palette_truncated++;
+            ERR_PRINT(vformat("GpuTable: a LOD %d chunk names more than %d materials: the rest draw as ground.", lod, PageFormat::PALETTE_SIZE));
+        }
         // The buffer holds batch size * cap words: one long list fits beside short ones. Only a batch over the
         // whole budget is cut (its chunk gets a wrong surface, and the CPU's evaluate disagrees there).
         if (words.size() + indices.size() > budget) {
@@ -108,7 +133,12 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
         const int64_t base = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
         r_chunk_ids.encode_u32(base + 12, uint32_t(words.size()));
         r_chunk_ids.encode_s32(base + 28, int32_t(indices.size()));
-        words.insert(words.end(), indices.begin(), indices.end());
+        for (size_t k = 0; k < indices.size(); k++) {
+            words.push_back(indices[k] | uint32_t(palette_indices[i][k]) << LIST_ID_BITS);
+        }
+        if (r_palettes) {
+            (*r_palettes)[i] = std::move(palettes[i]);
+        }
     }
     r_list.resize(int64_t(words.size()) * 4);
     for (size_t i = 0; i < words.size(); i++) {
@@ -127,6 +157,7 @@ Dictionary GpuTable::get_stats() const {
     d["list_batches"] = list_stats.batches;
     d["list_build_ms_avg"] = list_stats.batches > 0 ? double(list_stats.build_usec) / 1000.0 / double(list_stats.batches) : 0.0;
     d["list_truncated"] = list_stats.truncated;
+    d["palette_truncated"] = list_stats.palette_truncated;
     Dictionary per_lod;
     for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
         if (list_stats.chunks[lod] == 0) {
@@ -136,6 +167,8 @@ Dictionary GpuTable::get_stats() const {
         l["chunks"] = list_stats.chunks[lod];
         l["avg"] = double(list_stats.entries[lod]) / double(list_stats.chunks[lod]);
         l["max"] = list_stats.longest[lod];
+        l["palette_avg"] = double(list_stats.palette_entries[lod]) / double(list_stats.chunks[lod]);
+        l["palette_max"] = list_stats.palette_longest[lod];
         per_lod[itos(lod)] = l;
     }
     d["list_len_per_lod"] = per_lod;
