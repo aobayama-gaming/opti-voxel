@@ -257,11 +257,6 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
         d["radius_m"] = p.at.radius * vs;
         listed.push_back(d);
     }
-    // Nearest the centre first: the page shader colours the first LAVA_POOL_MAX.
-    std::sort(lava_pools.begin(), lava_pools.end(), [cx, cz](const Biome::LavaPool &p_a, const Biome::LavaPool &p_b) {
-        const double ax = double(p_a.top.x - cx), az = double(p_a.top.z - cz), bx = double(p_b.top.x - cx), bz = double(p_b.top.z - cz);
-        return ax * ax + az * az < bx * bx + bz * bz;
-    });
     Dictionary biomes;
     for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
         biomes[Biome::kind(Biome::Feature(f)).name] = counts[f];

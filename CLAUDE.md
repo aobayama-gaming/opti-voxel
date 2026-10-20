@@ -333,16 +333,33 @@ to every change, and a reviewer may reject a PR on any of them.
   cell and gives up where the rim's ground spans over half the radius (`lakes_too_steep`). An island is one `island`
   record (a spherical cap on a hanging cone, smooth-unioned, plus bumps), its box bottom 25-70 m above the highest
   ground under it. Both follow the band rule like any record; the slab erodes away a few LODs before the basin (it
-  can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) that the shader still
-  colours. `--biomes=KM` (bench and player, `VoxelTerrain.biome_radius` in metres) places the cells within KM km of
+  can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) whose scorched basin
+  material shows. `--biomes=KM` (bench and player, `VoxelTerrain.biome_radius` in metres) places the cells within KM km of
   (SCENE_X, SCENE_Z) once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
-  out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread. The page
-  shader colours lava: `SDFTable::get_lava_pools` (nearest the centre first) becomes the `vec4 lava_pools[]` uniform
-  (x, z, basin radius, surface in render metres, the first `QuadPagePool::LAVA_POOL_MAX`), tested per vertex: inside
-  a pool's cylinder at most a cell above its surface. Direct mesher only, fixed at `_ready` (runtime edits of a lake
-  keep its colour): a material channel in the page format is the real fix. `get_debug_stats()["table"]["biomes"]`:
-  counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z in metres, y the lava or the island's rim,
-  radius). `--preset=biomes` looks at a lava lake with two islands behind it.
+  out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread.
+  `get_debug_stats()["table"]["biomes"]`: counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z
+  in metres, y the lava or the island's rim, radius). `--preset=biomes` looks at a lava lake with two islands behind it.
+- **Materials (per-chunk palettes).** A record carries a global material (`TableRecord::material`, ids from
+  `Material::Library`, `src/material_library.*`: built-ins ground, bark, leaves, lava, scorched rock, island rock;
+  id 0 `GROUND` is the page shader's procedural slope / height colours). A corner stores a 9-bit index into its
+  chunk's **palette** (`src/chunk_palette.*`: entry 0 ground, then the listed records' materials in list order, at
+  most 512; past that the rest draws as ground, `palette_truncated`), so ids are unbounded and a chunk only carries
+  what it uses. `build_lists` builds the palettes on the worker pool and packs each entry's index above the record id
+  in the list word (`SDFGpuTable::LIST_ID_BITS` = 23: capacity <= 2^23 instances). The fold keeps the palette index of
+  the record that wins (`record_wins`: the operator's own comparison, so distances are untouched; a subtraction's
+  carved face takes the cutter's material; CPU `fold_onto` == GPU `arch_fold`, FrameSpike's table probe), the cascade's
+  level 0 writes it per sample (`sdf_material`, cascade binding 9), and the vertex takes the material of its cell's
+  solid corner closest to the surface (`cascade_vertex_material`, ties in x + 2y + 4z order; both meshers).
+  `PalettePool` (`src/palette_pool.*`, a buddy allocator of 16-512-entry blocks in one RGBA16UI texture, 2 ids per
+  texel, `GPUDirectMesher::Settings::palette_capacity` = 2M entries, 8 MB) holds the loaded chunks' palettes: placed
+  at dispatch, uploaded by the reserve pass, the block offset in each row header (texel 1 `.zw`, so compaction moves
+  it with the rows), freed with the chunk; a `{GROUND}` palette shares block 0 (no allocation). The page shader reads
+  header -> palette -> id -> `material_tex` (`Material::Library::make_image`) and blends the corners' albedo,
+  roughness and emission over the ground colours (lava: `PATTERN_LAVA`'s crust); `--view=9` shows the ids. Legacy
+  carries the id in `ARRAY_CUSTOM0`; the validator requires `material_mismatch == 0` on paired vertices, the auditor
+  `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and
+  `table.list_len_per_lod.*.palette_avg / palette_max`. Next: a material per biome cell for the ground, materials
+  inside one record (an IR change), textures.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -465,7 +482,7 @@ to every change, and a reviewer may reject a PR on any of them.
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
-  8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it).
+  8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids).
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,

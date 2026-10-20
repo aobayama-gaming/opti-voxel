@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "godot_cpp/variant/variant.hpp"
+#include "palette_pool.hpp"
 #include "world_coord.hpp"
 #include <godot_cpp/classes/rendering_server.hpp>
 
@@ -28,6 +29,7 @@ struct ChunkOutput {
     int32_t page = -1;
     uint32_t quad_offset = 0;
     uint32_t quad_count = 0;
+    PalettePool::Block palette; // the chunk's material palette (its offset is in the rows' headers)
 
     void free() {
         if (owner) {

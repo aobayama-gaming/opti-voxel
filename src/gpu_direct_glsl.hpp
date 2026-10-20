@@ -68,6 +68,17 @@ layout(set = 0, binding = 7, std430) restrict buffer Status {
     uint status[];
 };
 
+// Per sample, like sdf_sample: its chunk palette index (written by the cascade's level 0, 0 = ground).
+layout(set = 0, binding = 10, std430) restrict readonly buffer SDFMaterial {
+    uint sdf_material[];
+};
+// The palette texture (palette_pool.hpp) and the batch's PalettePool::place_batch payload: per chunk its block
+// offset, then the texel count, then (texel, id, id, 0) per texel. The reserve pass writes the texels.
+layout(set = 0, binding = 11, rgba16ui) uniform restrict writeonly uimage2D palette_image;
+layout(set = 0, binding = 12, std430) restrict readonly buffer PaletteBatch {
+    uint palette_batch[];
+};
+
 layout(push_constant, std430) uniform BatchParams {
     uint batch_count;
     uint page_count;
@@ -168,7 +179,8 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
         if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {
-            out_vertex = uvec4(floatBitsToUint(chunk_vertex), pack_normal_oct(surface_normal) + 1u);
+            uint word = pack_normal_oct(surface_normal) | (cascade_vertex_material(gl_GlobalInvocationID) << PAGE_NORMAL_BITS);
+            out_vertex = uvec4(floatBitsToUint(chunk_vertex), word + 1u);
         }
 
         // Count exactly the quads the emit pass will produce (same rules as the CPU triangulation).
@@ -226,6 +238,14 @@ if (gl_GlobalInvocationID == uvec3(0)) {
         status[STATUS_PAGE_FILL + page] = fill / QUAD_GROUP;
     }
     status[STATUS_TOTAL_QUADS] = total;
+    // The batch's new palettes, before the emit pass names their blocks in the headers.
+    uint texels = palette_batch[batch.batch_count];
+    for (uint k = 0u; k < texels; k++) {
+        uint at = batch.batch_count + 1u + 4u * k;
+        uint id0 = palette_batch[at + 1u];
+        uint id1 = palette_batch[at + 2u];
+        imageStore(palette_image, page_palette_texel(2u * palette_batch[at]), uvec4(id0 & 65535u, id0 >> 16u, id1 & 65535u, id1 >> 16u));
+    }
 }
 
 )glsl";
@@ -276,7 +296,7 @@ if (v0.w > 0u && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_
         // The chunk starts on a group (reserve pass), so its slots cover each of its groups' first
         // slot exactly once.
         if (slot % QUAD_GROUP == 0u) {
-            store_group_header(slot / QUAD_GROUP, chunk_id);
+            store_group_header(slot / QUAD_GROUP, chunk_id, palette_batch[chunk_idx]);
         }
         float pos_scale = page_pos_scale(chunk_param.chunk_size);
         store_corner(slot, 0u, encode_cell_vertex(qa, pos_scale));

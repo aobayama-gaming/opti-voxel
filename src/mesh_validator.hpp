@@ -6,6 +6,7 @@
 
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
+#include "palette_pool.hpp"
 #include "sdf_base.hpp"
 
 #include <vector>
@@ -30,6 +31,7 @@ public:
         int page = -1;
         uint32_t offset = 0;
         uint32_t count = 0;
+        PalettePool::Block palette; // its corners' palette indices name these materials
     };
 
     void start(const std::vector<Target> &p_targets, SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers,

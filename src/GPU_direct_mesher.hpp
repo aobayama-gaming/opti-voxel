@@ -72,6 +72,8 @@ public:
         // Free pages kept allocated (0 = max_in_flight batches' worth: max_in_flight * pages_per_batch),
         // so the next batches don't recreate the pages the previous ones returned.
         uint32_t spare_pages = 0;
+        // Entries of the palette texture (PalettePool, 4 B each; a power of two): the loaded chunks' palettes.
+        uint32_t palette_capacity = 1u << 21;
     };
 
     void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings);
@@ -111,6 +113,7 @@ public:
 private:
     struct InFlightBatch {
         std::vector<ChunkId> chunks;
+        std::vector<PalettePool::Block> palettes; // per chunk, placed at dispatch
         std::vector<int> pages;
         uint64_t dispatch_frame = 0;
         uint32_t table_version = 0; // the instance table version the batch was recomputed from
@@ -147,6 +150,7 @@ private:
     bool dual_contouring = false;
 
     QuadPagePool *pool = nullptr;
+    PalettePool palettes; // blocks: main thread; texture: render thread
 
     // One queue per ChunkMath::load_queue (in the view cone first, then by LOD), each sorted by descending
     // Morton key: pop_back() walks space along the Morton curve, so a batch's chunks stay close together.
@@ -197,6 +201,8 @@ private:
     RID buffer_chunk_param;
     RID staging_texture;
     RID buffer_status;
+    RID buffer_material; // per sample: its palette index (cascade level 0 -> vertex pass)
+    RID buffer_palette_batch; // the batch's PalettePool::place_batch payload
     // The instance table's buffers (archetype instances): records + the current batch's list.
     RID buffer_table_records;
     RID buffer_table_list;
@@ -215,11 +221,13 @@ private:
     RID _rt_compile(const char *p_pass, const char *p_name);
     void _queue_remesh(const ChunkId &p_chunk);
     void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
-    // Main thread: the batch's instance lists (patched into r_ids) and, if the table changed since the last
-    // dispatch, the records it changed (SDFGpuTable::record_bytes spans). Returns the table version they are.
-    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records);
-    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records);
+    // Main thread: the batch's instance lists (patched into r_ids), the chunks' palettes (if r_palettes) and, if
+    // the table changed since the last dispatch, the records it changed (SDFGpuTable::record_bytes spans). Returns
+    // the table version they are.
+    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records,
+            std::vector<std::vector<uint32_t>> *r_palettes = nullptr);
+    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages, int p_min_lod,
+            const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch);
     void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
             const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Pass 0: the cascade's levels (timestamps "<prefix>_c<group>" after each level group

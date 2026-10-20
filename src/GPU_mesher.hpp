@@ -21,6 +21,10 @@ struct UnpackChunk {
     PackedVector3Array output_points;
     PackedVector3Array output_normals;
     PackedInt32Array output_triangles;
+    // Per point: its global material (material_library.hpp), from the chunk's palette. A float vertex channel
+    // (ARRAY_CUSTOM0, R float: ids < Material::MAX_MATERIALS are exact) the validator compares.
+    PackedFloat32Array output_materials;
+    std::vector<uint32_t> palette; // the chunk's palette (build_lists), main thread -> worker with the batch
 
     uint32_t point_offset = 0; // used to fill the array
     uint32_t index_count = 0; // indices actually written by the CPU triangulation
@@ -39,6 +43,7 @@ struct UnpackChunk {
     void resize(int point_number, int triangles_number) {
         output_points.resize(point_number);
         output_normals.resize(point_number);
+        output_materials.resize(point_number);
         quad_masks.resize(point_number);
         point_cells.resize(point_number);
 
@@ -113,6 +118,7 @@ private:
     // The instance table's buffers (archetype instances), on the local device.
     RID buffer_table_records;
     RID buffer_table_list;
+    RID buffer_material; // per sample: its palette index (cascade level 0 -> third pass)
     uint64_t table_list_capacity = 0; // bytes
     uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last handed to the worker
     std::vector<ChunkId> in_flight_ids; // main thread: the chunks of the batch handed to the worker

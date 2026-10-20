@@ -116,6 +116,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     // Render positions are relative to the world origin (low words, wrapping).
     pool->set_material_param("origin_chunk_lo", WorldCoord::lo32_i(chunk_param.origin_chunk));
     page_state.resize(pool->get_page_count());
+    palettes.initialize(settings.palette_capacity);
 
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_initialize));
 }
@@ -170,6 +171,11 @@ void GPUDirectMesher::_rt_initialize() {
     buffer_sdf = rd->storage_buffer_create(batch * cells * 16);
     buffer_edges = rd->storage_buffer_create(batch * cells * 3 * sizeof(float));
     buffer_vertices = rd->storage_buffer_create(batch * cells * 16);
+    buffer_material = rd->storage_buffer_create(batch * cells * 4);
+    buffer_palette_batch = rd->storage_buffer_create(PalettePool::batch_bytes(settings.batch_size));
+    palettes.rt_create(rd);
+    // The pages' materials sample it; their parameters are set on the main thread.
+    callable_mp(pool, &QuadPagePool::set_material_param).call_deferred(StringName("palette_tex"), palettes.rt_shader_texture());
     {
         Ref<RDTextureFormat> format;
         format.instantiate();
@@ -218,12 +224,15 @@ void GPUDirectMesher::_rt_initialize() {
     buffer_table_list = rd->storage_buffer_create(table_list_capacity);
     uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    uniforms.push_back(make_uniform(10, buffer_material, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    uniforms.push_back(make_uniform(11, palettes.rt_texture(), RenderingDevice::UNIFORM_TYPE_IMAGE));
+    uniforms.push_back(make_uniform(12, buffer_palette_batch, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     // All passes declare the same bindings, so one set serves them all.
     uniform_set = rd->uniform_set_create(uniforms, shaders[0], 0);
 
     cascade = memnew(CascadePasses);
     if (!cascade->create(rd, sdf, chunk_param, settings.batch_size, buffer_input_chunk, buffer_chunk_param, buffer_sdf, RID(), nullptr,
-                buffer_table_records, buffer_table_list)) {
+                buffer_table_records, buffer_table_list, buffer_material)) {
         rd->free_rid(uniform_set);
         uniform_set = RID(); // nothing dispatches
         ERR_FAIL_MSG("GPUDirectMesher: the cascade passes failed to compile.");
@@ -235,7 +244,7 @@ void GPUDirectMesher::_rt_initialize() {
 
     VLOG(1, "GPUDirectMesher: initialized (batch ", settings.batch_size, ", ", settings.pages_per_batch,
             " pages x ", settings.page_capacity, " quads per batch, scratch ",
-            (batch * cells * (16 + 12 + 16)) / 1048576, " MB, cascade scratch ", cascade_mb, " MB)");
+            (batch * cells * (16 + 12 + 16 + 4)) / 1048576, " MB, cascade scratch ", cascade_mb, " MB)");
 }
 
 void GPUDirectMesher::_rt_read_timestamps() {
@@ -343,10 +352,11 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
     }
 }
 
-uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records) {
+uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records,
+        std::vector<std::vector<uint32_t>> *r_palettes) {
     SDFGpuTable *table = sdf->get_gpu_table();
     // Main thread, like the edits: the lists and the records come from the same snapshot.
-    table->build_lists(p_chunks, chunk_param, r_ids, r_list);
+    table->build_lists(p_chunks, chunk_param, r_ids, r_list, r_palettes);
     const uint32_t version = table->version();
     if (version != sent_table_version) {
         r_records = table->record_bytes(sent_table_version, sent_table_version);
@@ -354,14 +364,15 @@ uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, P
     return version;
 }
 
-void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-        const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records) {
+void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages,
+        int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch) {
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
     const uint64_t t0 = now_usec();
     _rt_read_timestamps();
     _rt_upload_table(p_list, p_records);
+    rd->buffer_update(buffer_palette_batch, 0, p_palette_batch.size(), p_palette_batch);
 
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
@@ -709,7 +720,9 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     }
     PackedByteArray list;
     PackedByteArray records;
-    const uint32_t table_version = _table_payload(chunks, ids, list, records);
+    std::vector<std::vector<uint32_t>> chunk_palettes;
+    const uint32_t table_version = _table_payload(chunks, ids, list, records, &chunk_palettes);
+    const PackedByteArray palette_batch = palettes.place_batch(chunk_palettes, uint32_t(chunks.size()), batch.palettes);
 
     PackedInt32Array pages;
     for (uint32_t k = 0; k < settings.pages_per_batch; k++) {
@@ -731,7 +744,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
-                    .bind(batch_id, ids, count, pages, min_lod, list, records));
+                    .bind(batch_id, ids, count, pages, min_lod, list, records, palette_batch));
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
@@ -832,6 +845,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
             if (flags & 1u) { // overflow: try again in a later batch
                 stats.overflow_requeued++;
+                palettes.release(batch.palettes[i]);
                 if (output.loaded_chunk.has(chunk_id)) {
                     // A re-mesh (instance edit): send_chunk rebuilds chunk_queue from the scan's dirty
                     // chunks only, which a loaded chunk isn't, so it would be lost there.
@@ -852,6 +866,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 if (required > batch.table_version) {
                     _queue_remesh(chunk_id);
                     stats.remesh_stale_dropped++;
+                    palettes.release(batch.palettes[i]);
                     // Its quads are already in the page: kill them, or the old surface stays drawn next
                     // to the chunk's re-mesh for as long as the page lives.
                     if (count > 0) {
@@ -873,9 +888,11 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 const uint32_t k = base / settings.page_capacity;
                 if (k >= batch.pages.size() || base % settings.page_capacity + count > settings.page_capacity) {
                     ERR_PRINT(vformat("GPUDirectMesher: bad directory entry: batch %d chunk %d count %d base %d flags %d", c.batch_id, (int64_t)i, count, base, flags));
+                    palettes.release(batch.palettes[i]);
                     continue;
                 }
                 out.owner = this;
+                out.palette = batch.palettes[i];
                 out.page = batch.pages[k];
                 out.quad_offset = base % settings.page_capacity;
                 out.quad_count = count;
@@ -887,6 +904,8 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 const AABB box = _chunk_aabb(chunk_id);
                 page_bounds[k] = page_has_bounds[k] ? page_bounds[k].merge(box) : box;
                 page_has_bounds[k] = true;
+            } else {
+                palettes.release(batch.palettes[i]); // no quads: nothing names the block
             }
             stats.chunks_meshed++;
             output.add_new_loaded(out);
@@ -926,6 +945,9 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
 void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
     ERR_FAIL_INDEX(p_chunk.page, (int)page_state.size());
+    // Its rows are killed (or its page reset) before a batch that could reuse the block is dispatched:
+    // process_queue flushes the kills first, on the render thread's FIFO.
+    palettes.release(p_chunk.palette);
     PageState &ps = page_state[p_chunk.page];
     ps.live_quads -= p_chunk.quad_count;
     ps.live_groups -= groups_of(p_chunk.quad_count);
@@ -1157,6 +1179,7 @@ void GPUDirectMesher::set_debug_view(int p_view) {
 
 Dictionary GPUDirectMesher::get_stats() {
     Dictionary d;
+    d["palettes"] = palettes.get_stats();
     int64_t queued = 0;
     for (const std::vector<ChunkId> &q : chunk_queue) {
         queued += q.size();
@@ -1271,7 +1294,7 @@ void GPUDirectMesher::_rt_destroy() {
     RID rids[] = { uniform_set,
         pipelines[0], pipelines[1], pipelines[2], pipelines[3],
         shaders[0], shaders[1], shaders[2], shaders[3],
-        buffer_chunk_dir, buffer_input_chunk, buffer_sdf, buffer_edges, buffer_vertices,
+        buffer_chunk_dir, buffer_input_chunk, buffer_sdf, buffer_edges, buffer_vertices, buffer_material, buffer_palette_batch,
         buffer_chunk_param, staging_texture, buffer_status, buffer_table_records, buffer_table_list };
     if (rd) {
         for (const RID &rid : rids) {
@@ -1279,6 +1302,7 @@ void GPUDirectMesher::_rt_destroy() {
                 rd->free_rid(rid);
             }
         }
+        palettes.rt_free(rd); // after the uniform set that binds it
     }
     // The RIDs can go now (the readbacks copied them to staging when they were recorded), not the object.
     rt_destroying = true;

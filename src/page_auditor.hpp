@@ -29,6 +29,8 @@ public:
             uint32_t offset = 0; // quads
             uint32_t count = 0;
             ChunkId chunk;
+            uint32_t palette_offset = 0; // the chunk's palette block (its rows' headers), and its size
+            uint32_t palette_entries = 1;
             bool operator<(const Range &p_other) const { return offset < p_other.offset; }
         };
         std::vector<Range> live;

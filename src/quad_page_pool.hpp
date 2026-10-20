@@ -40,8 +40,6 @@ public:
     static constexpr RenderingDevice::DataFormat TEX_FORMAT = RenderingDevice::DATA_FORMAT_R16G16B16A16_UINT;
     // VkDrawIndexedIndirectCommand: index_count, instance_count, first_index, vertex_offset, first_instance.
     static constexpr uint32_t INDIRECT_INSTANCE_COUNT_OFFSET = 4;
-    // Lava lakes the page shader colours (lava_pools: one vec4 each).
-    static constexpr int LAVA_POOL_MAX = 32;
 
     struct PageRD {
         RID texture; // RD texture holding the page's quads
