@@ -35,7 +35,8 @@ uniform int chunk_size = 32;
 uniform int skirt_size = 2;
 uniform float pos_scale = 256.0; // PageFormat::pos_scale(chunk_size), set by the mesher
 // Skirt depth per LOD (metres, SDFBase::skirt_depth_m): v_height adds the skirt push back, so the height
-// colours see the unpushed surface and the dip along chunk borders keeps the colour around it.
+// colours see the unpushed surface and the dip along chunk borders keeps the colour around it (the fragment gets the
+// push back from it for the solid textures).
 uniform float skirt_depth_m[32];
 // An instance's surface at LOD L lies instance_erode_m * (2^L - 1) metres inside its LOD 0 one (the band rule's
 // erosion from LOD 1, VoxelTerrain.archetype_erode): solid textures sample that far out, so they don't jump across a
@@ -130,8 +131,9 @@ uint corner_material(uvec4 h1, uint index) {
 
 // A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
 // material_tex and its pattern. p: the fragment's position (metres, render space), n its normal (interpolated, not
-// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); lod: the chunk's.
-void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float lod, out vec3 albedo,
+// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); depth: how far
+// the surface lies below the one solid textures sample (metres along n: skirt push + erosion).
+void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float depth, out vec3 albedo,
         out float roughness, out vec3 emission) {
     albedo = ground;
     roughness = 1.0;
@@ -161,7 +163,7 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
         vec3 knot_albedo = vec3(0.0);
         if (detail > 0.0) { // else the plates' mean, no bark_height
             float knot, ring;
-            plate = mix(plate, bark_height(p + normalize(n) * (instance_erode_m * (exp2(lod) - 1.0)), knot, ring), detail);
+            plate = mix(plate, bark_height(p + normalize(n) * depth, knot, ring), detail);
             knot_weight = max(knot, ring * 0.6) * detail;
             knot_albedo = m0.rgb * mix(0.35, 0.7, ring);
         }
@@ -273,7 +275,12 @@ void fragment() {
     float roughness;
     vec3 emission;
     float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
-    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, v_lod, albedo, roughness, emission);
+    // Solid textures sample the unpushed, uneroded surface: the skirt push (v_height - p.y gives back the vertex
+    // shader's push / max(n.y, 0.2), no extra interpolant) lowers the last cell of every chunk by up to a cell or more,
+    // and the bark then showed a band of another pattern along each chunk border.
+    float skirt_push = max(v_height - p.y, 0.0) * max(v_world_normal.y, 0.2);
+    float depth = skirt_push + instance_erode_m * (exp2(v_lod) - 1.0);
+    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, depth, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
