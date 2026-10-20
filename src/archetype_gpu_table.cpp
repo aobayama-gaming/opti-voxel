@@ -132,6 +132,9 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
             ERR_PRINT(vformat("GpuTable: a batch's instance lists are over the %d words of the buffer: a LOD %d chunk's list of %d truncated (wrong surface there).",
                     int64_t(budget), lod, int64_t(indices.size())));
             indices.resize(budget - words.size());
+            // Its palette came from the whole list: it draws as ground (the cascade writes no material for a cut list
+            // it may not hold, and both meshers then read none).
+            palettes[i].assign(1, Material::GROUND);
         }
         const int64_t base = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
         r_chunk_ids.encode_u32(base + 12, uint32_t(words.size()));

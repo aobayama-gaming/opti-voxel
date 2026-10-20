@@ -58,7 +58,7 @@ int64_t PaletteAlloc::alloc(uint32_t p_entries) {
     while (order < int(free_lists.size()) && free_lists[order].empty()) {
         order++;
     }
-    if (order == int(free_lists.size())) {
+    if (order >= int(free_lists.size())) { // full (or never reset)
         return -1;
     }
     uint32_t offset = *free_lists[order].begin(); // the lowest: keeps the used blocks packed

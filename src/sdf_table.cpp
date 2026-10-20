@@ -281,6 +281,8 @@ bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
 }
 
 bool SDFTable::admit(std::vector<TableRecord> &r_records, const char *p_what) {
+    ERR_FAIL_COND_V_MSG(records.size() + r_records.size() > uint32_t(SDFGpuTable::LIST_ID_MASK) + 1, false,
+            vformat("SDFTable: %s left out: the table holds at most %d instances (SDFGpuTable::LIST_ID_BITS).", p_what, SDFGpuTable::LIST_ID_MASK + 1));
     for (const TableRecord &rec : r_records) {
         const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
         ERR_FAIL_COND_V_MSG(!fit.is_empty(), false, vformat("SDFTable: %s left out: ", p_what) + fit);

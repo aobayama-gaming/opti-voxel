@@ -38,8 +38,11 @@ public:
     // --instance_capacity for a large scatter.
     uint32_t instance_capacity() const override { return capacity; }
     void set_capacity(uint32_t p_capacity) {
-        // A list word holds the record id in LIST_ID_BITS.
-        ERR_FAIL_COND_MSG(p_capacity > LIST_ID_MASK + 1, vformat("GpuTable: a capacity of %d instances is over the list word's %d.", p_capacity, LIST_ID_MASK + 1));
+        // A list word holds the record id in LIST_ID_BITS: past it, clamped (the table then refuses more records).
+        if (p_capacity > LIST_ID_MASK + 1) {
+            ERR_PRINT(vformat("GpuTable: a capacity of %d instances is over the list word's %d: clamped.", p_capacity, LIST_ID_MASK + 1));
+            p_capacity = LIST_ID_MASK + 1;
+        }
         capacity = p_capacity;
     }
     PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const override;

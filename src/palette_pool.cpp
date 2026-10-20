@@ -47,6 +47,7 @@ PackedByteArray PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_p
     const uint32_t chunks = uint32_t(p_palettes.size());
     r_blocks.assign(chunks, Block());
     std::vector<uint32_t> words(chunks + 1, PaletteAlloc::GROUND_BLOCK);
+    words[chunks] = 0; // the texel count
     for (uint32_t i = 0; i < chunks; i++) {
         std::vector<uint32_t> &palette = p_palettes[i];
         Block &b = r_blocks[i];

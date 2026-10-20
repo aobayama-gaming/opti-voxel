@@ -173,6 +173,7 @@ void fragment() {
         // Faceted: one clay colour, each triangle lit by its own plane (the vertex normals, shared across a
         // crease, smear the shading of sharp edges).
         albedo = vec3(0.5);
+        emission = vec3(0.0);
         NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
     } else if (debug_view == 9) {
         albedo = vec3(0.0);

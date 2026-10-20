@@ -450,6 +450,8 @@ void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uin
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
     rd->buffer_clear(buffer_status, 0, status_size_bytes);
+    // Counting only: every chunk on the ground block, no texel (the vertex pass then reads no material).
+    rd->buffer_clear(buffer_palette_batch, 0, (uint64_t(p_count) + 1) * 4);
 
     PackedByteArray push;
     push.resize(16);
