@@ -345,8 +345,9 @@ to every change, and a reviewer may reject a PR on any of them.
   (`DefLibrary::add(def, material)`, `Material::FROM_TYPE` resolved by `SDFTable::finish_record`: branch bark, crown
   and cone leaves, basin scorched rock, island island rock; the generic shapes (sphere, capsule, rock, cylinder, the
   shapes gallery) are `Material::INHERIT`, the lava slab sets lava), so runtime `add_instance` edits get theirs too.
-  An `INHERIT` record colours nothing: the fold skips its win, so the sample keeps what it had (the dig tool's
-  capsule carves a tree and the hole shows bark; a rock on the ground is ground). It takes the list word's reserved
+  An `INHERIT` cutter colours nothing: the fold skips its win, so the sample keeps what it had (the dig tool's
+  capsule carves a tree and the hole shows bark). On a union it resolves to ground (`Archetype::record_material`, in
+  `SDFTable::finish_record`): an inheriting union would take whatever record won the sample before it in list order. It takes the list word's reserved
   palette index `ChunkPalette::INHERIT_INDEX` (511) and no palette entry. A corner stores a 9-bit index into its
   chunk's **palette** (`src/chunk_palette.*`: entry 0 ground, then the listed records' materials in list order, at
   most `ChunkPalette::MAX_ENTRIES` = 511; past that the rest draws as ground, `palette_truncated`), so ids are unbounded and a chunk only carries

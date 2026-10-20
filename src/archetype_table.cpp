@@ -225,6 +225,12 @@ bool record_wins(const Float4 &p_r, const Float4 &p_c, Combine p_op) {
     return p_op == Combine::UNION || p_op == Combine::SMOOTH_UNION ? p_c.w < p_r.w : -p_c.w > p_r.w;
 }
 
+uint32_t record_material(uint32_t p_material, uint32_t p_type_material, Combine p_op) {
+    const uint32_t m = p_material == Material::FROM_TYPE ? p_type_material : p_material;
+    const bool cuts = p_op == Combine::SUBTRACT || p_op == Combine::SMOOTH_SUBTRACT;
+    return m == Material::INHERIT && !cuts ? Material::GROUND : m;
+}
+
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
         const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched, const uint16_t *p_palette, uint32_t *r_material) {
     thread_local std::vector<Float4> regs;

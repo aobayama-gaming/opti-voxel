@@ -146,6 +146,14 @@ TEST_CASE("Fold material: the record that wins the sample gives it its palette i
     CHECK(material_at(35) == 2);
     CHECK(material_at(500) == 0); // far: no box test passes, ground
 
+    // A record's material: its type's by default; INHERIT only for the cutters, a union that inherits is ground.
+    CHECK(record_material(Material::FROM_TYPE, Material::BARK, Combine::UNION) == Material::BARK);
+    CHECK(record_material(Material::LAVA, Material::BARK, Combine::UNION) == Material::LAVA);
+    CHECK(record_material(Material::FROM_TYPE, Material::INHERIT, Combine::SUBTRACT) == Material::INHERIT);
+    CHECK(record_material(Material::FROM_TYPE, Material::INHERIT, Combine::SMOOTH_SUBTRACT) == Material::INHERIT);
+    CHECK(record_material(Material::FROM_TYPE, Material::INHERIT, Combine::SMOOTH_UNION) == Material::GROUND);
+    CHECK(record_material(Material::INHERIT, Material::BARK, Combine::UNION) == Material::GROUND);
+
     // The rule itself: the unions take the record where it is lower, the subtractions where its negation is higher.
     const Float4 r{ 0, 0, 0, 1.0f };
     CHECK(record_wins(r, Float4{ 0, 0, 0, 0.5f }, Combine::UNION));

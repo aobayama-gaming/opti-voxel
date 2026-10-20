@@ -32,8 +32,8 @@ static constexpr uint32_t MAX_MATERIALS = 1u << ID_BITS;
 static_assert(ID_BITS + 4 <= 31, "the page shader's id | corner mask << ID_BITS fits a positive int");
 // A record's material when it takes its library type's (DefLibrary::material), resolved by SDFTable::finish_record.
 static constexpr uint32_t FROM_TYPE = UINT32_MAX;
-// A record that colours nothing: where it wins a sample, the sample keeps the material it had (a cutter's face shows
-// what it cut, a shape unioned into a tree is bark). The generic shape types' default (DefLibrary::add).
+// A cutter that colours nothing: where it wins a sample, the sample keeps the material it had (its face shows what it
+// cut). The generic shape types' default (DefLibrary::add); on a union it is ground (Archetype::record_material).
 static constexpr uint32_t INHERIT = UINT32_MAX - 1;
 
 // Shading patterns the page shader knows (Params::pattern).

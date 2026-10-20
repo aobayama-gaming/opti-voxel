@@ -231,6 +231,11 @@ bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_
 // distances are untouched.
 bool record_wins(const Float4 &p_r, const Float4 &p_c, Combine p_op);
 
+// A record's material: p_material, or its type's (p_type_material) when Material::FROM_TYPE. Material::INHERIT only
+// holds for the cutters (subtractions): a union that inherited would take whatever record won the sample before it
+// in list order (a rock touching a crown turning green), so it is ground.
+uint32_t record_material(uint32_t p_material, uint32_t p_type_material, Combine p_op);
+
 // The fold onto the ground's register p_r: each listed instance (in order, its box test) combined in. Returns the
 // register (gradient, value) before the epilogue. p_list holds the instance indices in table order. p_box_test
 // false folds every instance (the locality rule's reference, M1b). *r_touched (if given) is set when an instance

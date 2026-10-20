@@ -140,9 +140,7 @@ int64_t SDFTable::max_instance_extent() const {
 }
 
 void SDFTable::finish_record(TableRecord &r_rec) const {
-    if (r_rec.material == Material::FROM_TYPE) {
-        r_rec.material = library->material(r_rec.def);
-    }
+    r_rec.material = Archetype::record_material(r_rec.material, library->material(r_rec.def), r_rec.op);
     Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
 }
 
