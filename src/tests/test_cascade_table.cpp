@@ -234,6 +234,10 @@ TEST_CASE("SDFCascade table: the shapes gallery on the flat preset: cubes holed 
     if (snap->records.size() != 11) {
         return;
     }
+    for (uint32_t i = 0; i < 11; i++) {
+        CHECK(snap->records[i].max_lod == TableRecord::NEVER_DROPPED); // whole at every LOD: no band
+        CHECK(snap->records[i].erode == 0.0f);
+    }
     // The SDF (metres, LOD 0) at the voxel nearest p_anchor + (p_x, p_y, p_z) metres.
     auto sdf_at = [&](const VoxelPos &p_anchor, double p_x, double p_y, double p_z) {
         WorldPos p;

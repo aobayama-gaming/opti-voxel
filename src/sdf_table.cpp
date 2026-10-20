@@ -136,8 +136,8 @@ int64_t SDFTable::max_instance_extent() const {
     return MIN(4 * top_span, int64_t(1) << 29);
 }
 
-void SDFTable::finish_record(TableRecord &r_rec) const {
-    Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
+void SDFTable::finish_record(TableRecord &r_rec, bool p_band) const {
+    Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band && p_band, erode_rule);
 }
 
 void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id) {
@@ -188,7 +188,7 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     gpu.set_scene_stats(scene);
 }
 
-void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw) {
+void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw, bool p_band) {
     const double vs = param.voxel_size;
     TableRecord rec;
     rec.def = uint8_t(p_type);
@@ -202,7 +202,7 @@ void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_para
     const float rot[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
     std::copy(rot, rot + 9, rec.rotation);
     rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
-    finish_record(rec);
+    finish_record(rec, p_band);
     records.push_back(rec, version + 1);
 }
 
@@ -216,17 +216,17 @@ void SDFTable::add_shapes(const Types &p_types) {
         const double h = 0.1 * d;
         const double theta = (-45.5 + 13.0 * i) * Math_PI / 180.0;
         const float params[8] = { v(h), v(h), v(h), 0, v(1.2 * h), 0, 0, 0 };
-        place(Combine::UNION, 0.0, p_types.holed_cube, params, SHAPES_X + d * std::sin(theta), SHAPES_Z - d * std::cos(theta), 0.9 * h, 0.5 - theta);
+        place(Combine::UNION, 0.0, p_types.holed_cube, params, SHAPES_X + d * std::sin(theta), SHAPES_Z - d * std::cos(theta), 0.9 * h, 0.5 - theta, false);
     }
     const double h = 6.0;
     const float die[8] = { v(h), 0, 0, 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.die, die, SHAPES_X - 25.0, SHAPES_Z + 40.0, 0.95 * h, 0.4);
+    place(Combine::UNION, 0.0, p_types.die, die, SHAPES_X - 25.0, SHAPES_Z + 40.0, 0.95 * h, 0.4, false);
     // Eight 1 m steps, 2 m deep, 8 m wide, rising away from the spawn.
     const float stairs[8] = { v(4.0), v(1.0), v(1.0), 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.stairs, stairs, SHAPES_X, SHAPES_Z + 33.0, 0.0, 0.3);
+    place(Combine::UNION, 0.0, p_types.stairs, stairs, SHAPES_X, SHAPES_Z + 33.0, 0.0, 0.3, false);
     // 5 m square tunnels along x, y and z.
     const float tunnels[8] = { v(h), v(2.5), 0, 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.tunnel_cube, tunnels, SHAPES_X + 25.0, SHAPES_Z + 40.0, 0.9 * h, 0.6);
+    place(Combine::UNION, 0.0, p_types.tunnel_cube, tunnels, SHAPES_X + 25.0, SHAPES_Z + 40.0, 0.9 * h, 0.6, false);
 }
 
 void SDFTable::add_scatter(const Types &p_types) {
