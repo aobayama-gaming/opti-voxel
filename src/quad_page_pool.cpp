@@ -45,13 +45,9 @@ varying flat float v_lod;
 varying flat vec3 v_chunk;
 varying flat ivec2 v_ids;
 varying float v_height; // metres above the world origin (shaded view: contour lines)
-// The corner's material, blended across the quad: its albedo and roughness, its emission, how much of it is the
-// procedural ground (Material::GROUND), and how much shows the lava crust (Material::PATTERN_LAVA).
-varying vec4 v_albedo_rough;
-varying vec3 v_emission;
-varying float v_ground;
-varying float v_lava;
-varying flat float v_material; // debug view 9 (the provoking corner's id)
+// The provoking corner's material (one flat value: the pass is vertex-bound, every interpolant costs); its
+// parameters are fetched per fragment, and only off the ground.
+varying flat int v_material;
 
 vec3 hash3(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -79,24 +75,15 @@ void vertex() {
     vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
     vec3 n = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
-    // The corner's material: its chunk's palette block (header), its index in it (corner), its id (palette), its
-    // parameters (material_tex). Index 0 is always the ground: no fetch (most corners).
+    // The corner's material: its chunk's palette block (header), its index in it (corner), its id (palette). Index 0
+    // is always the ground: no fetch (most corners).
     uint index = page_decode_palette(c);
     uint mat_id = MATERIAL_GROUND;
-    v_albedo_rough = vec4(0.0);
-    v_emission = vec3(0.0);
-    v_lava = 0.0;
     if (index != 0u) {
         uint entry = page_header_palette(h1) + index;
         mat_id = page_palette_id(texelFetch(palette_tex, page_palette_texel(entry), 0), entry);
-        ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
-        vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
-        v_albedo_rough = texelFetch(material_tex, mt, 0);
-        v_emission = m1.rgb;
-        v_lava = m1.a == MATERIAL_PATTERN_LAVA ? 1.0 : 0.0;
     }
-    v_ground = mat_id == MATERIAL_GROUND ? 1.0 : 0.0;
-    v_material = float(mat_id);
+    v_material = int(mat_id);
 
     v_world_normal = n;
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4);
@@ -144,17 +131,25 @@ void fragment() {
     // Contours fade out where they would be denser than ~10 pixels apart.
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
     albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
-    // The corners' materials over the ground's colours (a quad blends its corners' materials).
-    albedo = mix(v_albedo_rough.rgb, albedo, v_ground);
-    float roughness = mix(v_albedo_rough.a, 1.0, v_ground);
-    vec3 emission = v_emission;
-    if (v_lava > 0.0) {
-        // Lava: a warped crust, dark seams over a glow that drifts slowly.
-        vec2 q = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz * 0.15;
-        q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
-        float seam = abs(sin(q.x * 2.1) * sin(q.y * 1.9) + 0.5 * sin((q.x - q.y) * 3.3));
-        float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
-        emission = mix(emission, mix(v_emission * 0.11, v_emission * pulse, smoothstep(0.03, 0.18, seam)), v_lava);
+    // A material off the ground: its parameters (material_tex) replace the ground's colours.
+    float roughness = 1.0;
+    vec3 emission = vec3(0.0);
+    uint mat_id = uint(v_material);
+    if (mat_id != MATERIAL_GROUND) {
+        ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
+        vec4 m0 = texelFetch(material_tex, mt, 0);
+        vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
+        albedo = m0.rgb;
+        roughness = m0.a;
+        emission = m1.rgb;
+        if (m1.a == MATERIAL_PATTERN_LAVA) {
+            // Lava: a warped crust, dark seams over a glow that drifts slowly.
+            vec2 q = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz * 0.15;
+            q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
+            float seam = abs(sin(q.x * 2.1) * sin(q.y * 1.9) + 0.5 * sin((q.x - q.y) * 3.3));
+            float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
+            emission = mix(m1.rgb * 0.11, m1.rgb * pulse, smoothstep(0.03, 0.18, seam));
+        }
     }
     if (debug_view == 1) {
         albedo = vec3(0.0);
@@ -181,7 +176,7 @@ void fragment() {
         NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
     } else if (debug_view == 9) {
         albedo = vec3(0.0);
-        emission = v_material < 0.5 ? vec3(0.15) : hash3(vec3(v_material * 0.61 + 0.5)) * 0.8 + 0.2;
+        emission = v_material == 0 ? vec3(0.15) : hash3(vec3(float(v_material) * 0.61 + 0.5)) * 0.8 + 0.2;
     }
     if (debug_view == 4) {
         float d = min(min(v_quad_uv.x, 1.0 - v_quad_uv.x), min(v_quad_uv.y, 1.0 - v_quad_uv.y));
@@ -191,7 +186,7 @@ void fragment() {
     }
     ALBEDO = albedo;
     EMISSION = emission;
-    ROUGHNESS = debug_view == 0 || debug_view == 4 ? roughness : 1.0;
+    ROUGHNESS = roughness;
 }
 )gdshader";
 
