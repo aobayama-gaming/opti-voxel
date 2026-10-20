@@ -1,12 +1,12 @@
 #include "frame_spike.hpp"
 
+#include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
 #include "chunk_math.hpp"
 #include "exact_noise.hpp"
 #include "frame_probe.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
-#include "sdf_archetype.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -101,16 +101,15 @@ double octave_step_bound(int p_k, double p_g) {
     return p_g * std::ldexp(1.0, -MIN(p_k, 24)) + std::ldexp(1.0, -20);
 }
 
-// The two fBms the noise probes check, a 2D one (the archetype ground's mountains) and a 3D one (perlin3
-// octaves, like the archetype rocks' bumps), in every probe set's shader. Their octaves also place the
-// continuity lines.
+// The two fBms the noise probes check (ExactNoise::reference_fbm2d / 3d), in every probe set's shader. Their
+// octaves also place the continuity lines.
 struct ProbeNoise {
     ExactNoise::OctaveSet fbm2d;
     ExactNoise::OctaveSet fbm3d;
 
     explicit ProbeNoise(double p_voxel) :
-            fbm2d(SDFArchetype::height_fbm(p_voxel)),
-            fbm3d(ExactNoise::make_fbm(false, 0xCA7E5u, SDFArchetype::k_of(125.0, p_voxel), 3, 4.0 / 3.0, 0.5)) {}
+            fbm2d(ExactNoise::reference_fbm2d(p_voxel)),
+            fbm3d(ExactNoise::reference_fbm3d(p_voxel)) {}
 
     String glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d); }
 };
@@ -878,7 +877,7 @@ bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector
 struct TableProbeData {
     Archetype::DefLibrary library;
     std::vector<Archetype::TableRecord> records;
-    Archetype::Program ground;
+    Archetype::Float4 ground{ 0.0f, 0.0f, 0.0f, 2.0f }; // the register the fold starts from
     std::vector<uint32_t> list;
 };
 
@@ -895,8 +894,6 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     t.library.add(make_rock_type(8, 0x1234u));
     t.library.add(make_branch_type());
     t.library.add(make_cone_type(6, 0x4321u));
-    Builder gb;
-    t.ground = gb.finish(gb.constant(2.0f));
     for (uint32_t i = 0; i < 64; i++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0x7AB1u, 0x9E37u });
         TableRecord rec;
@@ -1014,7 +1011,11 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     code = code.replace("/*TABLE_BUFFERS*/", Archetype::glsl_table_buffers(3, 4));
     code = code.replace("/*HELPERS*/",
             String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE));
-    code = code.replace("/*TERRAIN*/", Archetype::generate_table_sdf(table.ground, table.library, 1.0f, false));
+    code = code.replace("/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + R"glsl(vec4 terrain_sdf(WorldPos p, int lod) {
+    bool touched = false;
+    return arch_finish(arch_fold(vec4(0.0, 0.0, 0.0, 2.0), p, lod, touched), lod);
+}
+)glsl");
     code = code.replace("/*LOD_CALLS*/", lod_calls);
 
     Ref<RDShaderSource> source;
@@ -1099,7 +1100,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
         for (uint32_t i = 0; i < n; i++) {
             const WorldPos pos = ChunkMath::sample_pos(run.cases[i].chunk, run.cases[i].grid, run.param);
             for (int j = 0; j < PROBE_LOD_COUNT; j++) {
-                const Archetype::Float4 r = Archetype::fold(table.ground, table.library, table.records.data(), table.list.data(),
+                const Archetype::Float4 r = Archetype::fold_onto(table.ground, table.library, table.records.data(), table.list.data(),
                         uint32_t(table.list.size()), pos, PROBE_LODS[j]);
                 want[4 * j + 0] = Archetype::zero_canonical(float_bits(r.x));
                 want[4 * j + 1] = Archetype::zero_canonical(float_bits(r.y));
@@ -1197,18 +1198,8 @@ Dictionary FrameSpike::run() {
 
     // Probe sets, one shader each: the frame / noise table, then the archetype probes.
     std::vector<std::vector<Probe>> sets = { make_probes(noise) };
-    // The archetype probes, the demo terrain's compiled (PR 1) program first (its anchors are absolute,
-    // near 0). The table probes follow the archetype ones (see make_table_probes).
-    Archetype::Compiled demo_compiled = Archetype::compile(SDFArchetype::scene(voxel_size));
-    if (!demo_compiled.error.is_empty()) {
-        UtilityFunctions::printerr("FrameSpike: demo scene: " + demo_compiled.error);
-    }
-    demo_compiled.program.normalize = true;
-    demo_compiled.program.out_scale = 0.5f;
-    std::vector<Probe> arch = { ArchetypeProbes::probe("demo", demo_compiled.program, true) };
-    for (Probe &probe : ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS)) {
-        arch.push_back(probe);
-    }
+    // The archetype probes. The table probes follow them (see make_table_probes).
+    std::vector<Probe> arch = ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS);
     int64_t set_glsl = 0;
     for (const Probe &probe : arch) {
         if (sets.size() == 1 || sets.back().size() == PROBES_PER_SET || set_glsl + probe.glsl.length() > MAX_SET_GLSL) {

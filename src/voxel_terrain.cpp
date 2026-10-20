@@ -109,7 +109,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("move_instance", "id", "x", "y", "z", "rotation"), &VoxelTerrain::move_instance, DEFVAL(PackedFloat32Array()));
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Archetypes:3,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_instances", PROPERTY_HINT_RANGE, "0,1000000,1"), "set_archetype_instances", "get_archetype_instances");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
@@ -170,7 +170,7 @@ int VoxelTerrain::get_pipeline_mode() const {
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
     ERR_FAIL_COND_MSG(started, "terrain_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode < 1 || p_mode > 4, "terrain_mode must be 1 (cascade), 2 (cascade, continents preset), 3 (archetypes) or 4 (shapes).");
+    ERR_FAIL_COND_MSG(p_mode != 1 && p_mode != 2 && p_mode != 4, "terrain_mode must be 1 (cascade), 2 (continents preset) or 4 (shapes gallery).");
     terrain_mode = p_mode;
 }
 
@@ -635,23 +635,13 @@ void VoxelTerrain::_ready() {
         }
     }
 
-    // sdf starts as an SDFCascade (see the member initialiser).
-    switch (terrain_mode) {
-        case 1:
-            break;
-        case 2:
-            static_cast<SDFCascade *>(sdf)->preset = 1;
-            break;
-        case 3:
-            memdelete(sdf);
-            sdf = memnew(SDFArchetype);
-            break;
-        case 4:
-            memdelete(sdf);
-            sdf = memnew(SDFArchetype(SDFArchetype::Ground::SHAPES));
-            break;
+    // One terrain, the cascade: mode 2 is its continents preset, 4 its flat preset under the shapes gallery.
+    if (terrain_mode == 2) {
+        sdf->preset = 1;
+    } else if (terrain_mode == 4) {
+        sdf->preset = 2;
+        sdf->set_scene(SDFTable::Scene::SHAPES);
     }
-    // Every terrain carries the instance table (the shapes gallery places no scene).
     sdf->set_scatter(archetype_instances, archetype_instance_area);
     sdf->set_forest(archetype_trees, archetype_tree_area);
     sdf->set_instance_band(archetype_band);
@@ -724,7 +714,7 @@ void VoxelTerrain::_ready() {
         direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
         if (terrain_mode == 2) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
-            const double sea_m = double(static_cast<SDFCascade *>(sdf)->get_datum_y() - chunk_param.origin_voxel().y) * chunk_param.voxel_size;
+            const double sea_m = double(sdf->get_datum_y() - chunk_param.origin_voxel().y) * chunk_param.voxel_size;
             direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
         }
     } else {

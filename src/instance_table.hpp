@@ -80,7 +80,6 @@ struct IndexLayer {
 
 struct InstanceSnapshot {
     std::shared_ptr<const DefLibrary> library;
-    Program ground; // the ground register (archetype_table.hpp fold)
     float out_scale = 1.0f;
     bool normalize = true;
     uint32_t version = 0;
@@ -122,12 +121,11 @@ void chunk_sample_box(const ChunkId &p_chunk, const ChunkParam &p_param, VoxelPo
 bool influence_meets(const TableRecord &p_record, int p_lod, const VoxelPos &p_lo, const VoxelPos &p_hi);
 
 // Builds the snapshot with a base index over every record. Deterministic. p_max_lod bounds the octree depth.
-std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
-        float p_out_scale, bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version);
-inline std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
-        float p_out_scale, bool p_normalize, const std::vector<TableRecord> &p_records, const ChunkParam &p_param, int p_max_lod,
-        uint32_t p_version) {
-    return build_snapshot(p_library, p_ground, p_out_scale, p_normalize, RecordStore(p_records, p_version), p_param, p_max_lod, p_version);
+std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
+        bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version);
+inline std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
+        bool p_normalize, const std::vector<TableRecord> &p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
+    return build_snapshot(p_library, p_out_scale, p_normalize, RecordStore(p_records, p_version), p_param, p_max_lod, p_version);
 }
 
 // The next snapshot after an edit of the records p_changed (added, moved or removed; p_records is the table

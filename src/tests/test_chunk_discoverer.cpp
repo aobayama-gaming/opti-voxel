@@ -1,7 +1,6 @@
 #include "test_common.hpp"
 
 #include "chunk_discoverer.hpp"
-#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
 #include <algorithm>
@@ -138,10 +137,11 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
 
 } // namespace
 
-TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFArchetype, 15 and 25 LODs)") {
+TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCascade with instances: cull_exempt, 15 and 25 LODs)") {
     for (const int lods : { 15, 25 }) {
         CAPTURE(lods);
-        SDFArchetype sdf;
+        SDFCascade sdf;
+        sdf.set_scatter(400, 200.0);
         compare_walks(sdf, lods);
     }
 }

@@ -42,8 +42,12 @@ public:
     // Set before configure(). 0: every octave at STEEPNESS (capped at MAX_AMP_M). 1 (continents, demo):
     // the same octaves with an amplitude per wavelength (continent_amp_m), so continents, ocean basins and
     // mountain ranges show at their own scales. Only the amplitudes differ: lattices, seeds and the
-    // cascade are the same, so both presets are the same proven code path.
+    // cascade are the same, so both presets are the same proven code path. 2 (flat, the shapes gallery): every
+    // amplitude 0 and the ground at FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
     int preset = 0;
+    // The flat preset's ground: 50 m below the datum, halfway between the page shader's 100 m contour lines. On one
+    // (300 m), a flat ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
+    static constexpr double FLAT_GROUND_M = DATUM_M - 50.0;
 
     // Amplitude (metres) of the octave of wavelength p_wavelength_m in the continents preset.
     static double continent_amp_m(double p_wavelength_m) {
@@ -78,17 +82,17 @@ public:
         spec = CascadeTerrain::make_spec(SEED, p_lod_count + 4, STEEPNESS, channel_set, INSERT_SHIFT);
         const double cap = MAX_AMP_M / vs;
         for (Cascade::Band &b : spec.bands) {
-            b.amp = preset == 1 ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
+            b.amp = preset == 1 ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : (preset == 2 ? 0.0f : float(MIN(double(b.amp), cap)));
         }
-        datum = VoxelPos(0, std::llround(DATUM_M / vs), 0);
+        datum = VoxelPos(0, std::llround((preset == 2 ? FLAT_GROUND_M : DATUM_M) / vs), 0);
         voxel_size = p_param.voxel_size;
-        build_table(Archetype::Program(), vs, p_lod_count, Scene::PLACED);
+        build_table(p_lod_count);
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
         // from this chunk's by one octave: k = L + 2 (a finer neighbour's extra one) or k = L + 3 (the one
         // a coarser neighbour drops). Twice the larger amplitude (the 2D seam model needs 1.3x), never deeper than
         // the old skirt_depth voxels of the LOD: the groove at the border is depth / 4. With instances placed, plus
         // their erosion step (SDFTable::min_skirt_depth cells): next to a rock smooth-unioned into the ground both
-        // steps happen at the same seam, so the sum (SDFArchetype::min_skirt_depth). Without, the bare cascade's
+        // steps happen at the same seam, so the sum. Without, the bare cascade's
         // skirts, bit for bit: a runtime edit on a cascade configured with no instance gets no extra depth.
         const double erode_cells = current()->empty() ? 0.0 : SDFTable::min_skirt_depth(p_param, p_lod_count);
         skirt_depth_table.assign(p_lod_count, 0.0f);

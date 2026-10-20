@@ -26,7 +26,6 @@
 #include "page_auditor.hpp"
 
 //debug
-#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
 using namespace godot;
@@ -64,7 +63,7 @@ private:
     bool debug_gpu_profile_frames = false; // record every captured frame (GPUProfiler::take_frames)
     Dictionary validation_report;
 
-    SDFTable *sdf = memnew(SDFCascade); // every terrain is a ground under the instance table
+    SDFCascade *sdf = memnew(SDFCascade); // the one terrain: the cascade ground under the instance table
 
     VoxelState visual_mesh_data;
 
@@ -173,9 +172,9 @@ public:
     void set_pipeline_mode(int p_mode);
     int get_pipeline_mode() const;
 
-    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 3 the archetype
-    // IR's demo scene (SDFArchetype, --terrain=archetypes), 4 its shapes gallery (SDFArchetype::shapes,
-    // --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy (removed): saved scenes keep their numbers.
+    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 4 its flat preset under
+    // the shapes gallery (SDFTable::Scene::SHAPES, --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy and 3
+    // the archetype demo on an fBm ground (SDFArchetype), both removed: saved scenes keep their numbers.
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 

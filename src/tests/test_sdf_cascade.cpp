@@ -5,7 +5,6 @@
 #include "cascade_measure.hpp"
 #include "cascade_terrain.hpp"
 #include "gpu_frame.hpp"
-#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
 using namespace Cascade;
@@ -116,9 +115,24 @@ TEST_CASE("SDFCascade: the shader stub and get_cascade") {
     const String glsl = sdf.get_glsl_code();
     CHECK(glsl.contains("vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod)"));
     CHECK(!glsl.contains("DATUM_LO"));
-    SDFArchetype archetype;
-    archetype.configure(param, 15);
-    CHECK(archetype.get_cascade() == nullptr);
+}
+
+TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every LOD") {
+    ChunkParam param;
+    SDFCascade sdf;
+    sdf.preset = 2;
+    sdf.configure(param, 15);
+    const int64_t ground = std::llround(SDFCascade::FLAT_GROUND_M / double(param.voxel_size));
+    CHECK(sdf.ground_y(12345, -6789) == ground);
+    for (int lod = 0; lod < 15; lod++) {
+        const int64_t step = int64_t(1) << lod;
+        for (int i = -4; i <= 4; i++) {
+            WorldPos p;
+            p.voxel = VoxelPos(step * (1000 + 37 * i), WorldCoord::floor_div(ground, step) * step + step * i, step * (-300 + 11 * i));
+            const double want = double(p.voxel.y - ground) * double(param.voxel_size);
+            CHECK(double(sdf.evaluate(p, lod)) == doctest::Approx(want).epsilon(1e-6));
+        }
+    }
 }
 
 TEST_CASE("CascadeGLSL: the band table holds every band at its level, with the CPU's factors") {

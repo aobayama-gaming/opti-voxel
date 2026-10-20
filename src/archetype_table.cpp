@@ -195,7 +195,7 @@ Float4 smooth_max4(const Float4 &p_a, const Float4 &p_b, float p_k, float p_inv_
     return Float4{ -s.x, -s.y, -s.z, -s.w };
 }
 
-// The four allowed top-level operators (archetype_instance.hpp Combine), on registers.
+// The four Combine operators, on registers.
 Float4 combine4(const Float4 &p_r, const Float4 &p_c, const TableRecord &p_record) {
     switch (p_record.op) {
         case Combine::UNION:
@@ -214,13 +214,6 @@ Float4 combine4(const Float4 &p_r, const Float4 &p_c, const TableRecord &p_recor
 }
 
 } // namespace
-
-Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list,
-        uint32_t p_count, const WorldPos &p_pos, int p_lod, bool p_box_test) {
-    thread_local std::vector<Float4> ground;
-    run_registers(p_ground, p_pos, p_lod, ground);
-    return fold_onto(ground[p_ground.output], p_library, p_records, p_list, p_count, p_pos, p_lod, p_box_test);
-}
 
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
         const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched) {
@@ -359,18 +352,6 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
     } else {
         code += "    return vec4(o.xyz, v);\n}\n\n";
     }
-    return code;
-}
-
-String generate_table_sdf(const Program &p_ground, const DefLibrary &p_library, float p_out_scale, bool p_normalize) {
-    String code = generate_glsl(p_ground, "arch_ground_register", false);
-    code += "\n";
-    code += generate_fold_glsl(p_library, p_out_scale, p_normalize);
-    code += R"glsl(vec4 terrain_sdf(WorldPos p, int lod) {
-    bool touched = false;
-    return arch_finish(arch_fold(arch_ground_register(p, lod), p, lod, touched), lod);
-}
-)glsl";
     return code;
 }
 
@@ -539,6 +520,117 @@ TableDefPtr make_swiss_cube_type(int p_holes) {
         r_l = 1.0f;
     };
     return d;
+}
+
+namespace {
+
+// The bounds of a cube of half size p[0] (the die, the tunnelled cube: their CSG stays inside it), L = 1.
+void cube_bounds(const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+    r_lo = Float3{ -p[0], -p[0], -p[0] };
+    r_hi = Float3{ p[0], p[0], p[0] };
+    r_l = 1.0f;
+}
+
+// p_l moved by -p_h (p_x, p_y, p_z): a point of the instance's frame in units of the half size p_h.
+Local shifted(Builder &p_b, const Local &p_l, Reg p_h, float p_x, float p_y, float p_z) {
+    return Local{ p_b.sub(p_l.x, p_b.mul(p_h, p_x)), p_b.sub(p_l.y, p_b.mul(p_h, p_y)), p_b.sub(p_l.z, p_b.mul(p_h, p_z)) };
+}
+
+} // namespace
+
+TableDefPtr make_die_type() {
+    // A cube intersected with a sphere of 1.55 h, pips of 0.2 h on a 3 x 3 grid of h / 2 steps subtracted. Hard CSG
+    // (max of 1-Lipschitz bounds): sharp creases for dual contouring.
+    Builder b;
+    const Local l = b.t_local();
+    const Reg h = b.t_param(0);
+    Reg r = b.max(b.box(l, h, h, h), b.sphere(l, b.mul(h, 1.55f)));
+    const char *faces[5] = { "000010000", "100000001", "100010001", "101000101", "101010101" };
+    const int axis[5] = { 1, 2, 0, 0, 2 };
+    const float sign[5] = { 1.0f, 1.0f, 1.0f, -1.0f, -1.0f };
+    const Reg pip = b.mul(h, 0.2f);
+    for (int f = 0; f < 5; f++) {
+        for (int g = 0; g < 9; g++) {
+            if (faces[f][g] == '1') {
+                float c[3];
+                c[axis[f]] = sign[f];
+                c[(axis[f] + 1) % 3] = float(g % 3 - 1) * 0.5f;
+                c[(axis[f] + 2) % 3] = float(g / 3 - 1) * 0.5f;
+                r = b.max(r, b.neg(b.sphere(shifted(b, l, h, c[0], c[1], c[2]), pip)));
+            }
+        }
+    }
+    std::shared_ptr<TableDef> d = make_def("die", 1, b, r);
+    d->bounds = cube_bounds;
+    return d;
+}
+
+TableDefPtr make_stairs_type() {
+    Builder b;
+    const Local l = b.t_local();
+    Reg r = -1;
+    for (int i = 0; i < 8; i++) {
+        const Local q{ l.x, l.y, b.sub(l.z, b.mul(b.t_param(2), float(2 * i))) };
+        const Reg step = b.box(q, b.t_param(0), b.mul(b.t_param(1), float(i + 1)), b.t_param(2));
+        r = r < 0 ? step : b.min(r, step);
+    }
+    std::shared_ptr<TableDef> d = make_def("stairs", 3, b, r);
+    d->bounds = [](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+        r_lo = Float3{ -p[0], -8.0f * p[1], -p[2] };
+        r_hi = Float3{ p[0], 8.0f * p[1], 15.0f * p[2] };
+        r_l = 1.0f;
+    };
+    return d;
+}
+
+TableDefPtr make_tunnel_cube_type() {
+    // The tunnels run 1.25 h each way: through the faces.
+    Builder b;
+    const Local l = b.t_local();
+    const Reg h = b.t_param(0);
+    const Reg t = b.t_param(1);
+    const Reg through = b.mul(h, 1.25f);
+    Reg r = b.box(l, h, h, h);
+    r = b.max(r, b.neg(b.box(l, through, t, t)));
+    r = b.max(r, b.neg(b.box(l, t, through, t)));
+    r = b.max(r, b.neg(b.box(l, t, t, through)));
+    std::shared_ptr<TableDef> d = make_def("tunnel_cube", 2, b, r);
+    d->bounds = cube_bounds;
+    return d;
+}
+
+double rotation_margin(Float3 p_lo, Float3 p_hi) {
+    double reach = 0.0;
+    for (int c = 0; c < 8; c++) {
+        const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
+        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
+    }
+    return 1.0 + 1e-4 * reach;
+}
+
+Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded, const VoxelPos &p_anchor, const float *p_r) {
+    Bounds b;
+    b.lipschitz = p_lipschitz;
+    b.bounded = p_bounded;
+    if (!b.bounded) {
+        return b;
+    }
+    double lo[3] = { INFINITY, INFINITY, INFINITY };
+    double hi[3] = { -INFINITY, -INFINITY, -INFINITY };
+    for (int c = 0; c < 8; c++) {
+        const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
+        for (int j = 0; j < 3; j++) {
+            const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
+            lo[j] = MIN(lo[j], w);
+            hi[j] = MAX(hi[j], w);
+        }
+    }
+    const double margin = rotation_margin(p_lo, p_hi);
+    for (int j = 0; j < 3; j++) {
+        b.lo[j] = p_anchor[j] + int64_t(std::floor(lo[j] - margin));
+        b.hi[j] = p_anchor[j] + int64_t(std::ceil(hi[j] + margin));
+    }
+    return b;
 }
 
 Bounds record_world_bounds(const TableDef &p_def, const TableRecord &p_record) {

@@ -447,11 +447,10 @@ bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
     return (base && near_layer(*base, lo, hi, lod)) || (overlay && near_layer(*overlay, lo, hi, lod));
 }
 
-std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
-        float p_out_scale, bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
+std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
+        bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
     std::shared_ptr<InstanceSnapshot> snap = std::make_shared<InstanceSnapshot>();
     snap->library = p_library;
-    snap->ground = p_ground;
     snap->out_scale = p_out_scale;
     snap->normalize = p_normalize;
     snap->version = p_version;
@@ -474,12 +473,11 @@ std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_
     std::sort(ids.begin(), ids.end());
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     if (ids.size() > InstanceSnapshot::REBASE || !p_previous.base) {
-        return build_snapshot(p_previous.library, p_previous.ground, p_previous.out_scale, p_previous.normalize, std::move(p_records),
-                p_previous.param, p_previous.max_lod, p_version);
+        return build_snapshot(p_previous.library, p_previous.out_scale, p_previous.normalize, std::move(p_records), p_previous.param,
+                p_previous.max_lod, p_version);
     }
     std::shared_ptr<InstanceSnapshot> snap = std::make_shared<InstanceSnapshot>();
     snap->library = p_previous.library;
-    snap->ground = p_previous.ground;
     snap->out_scale = p_previous.out_scale;
     snap->normalize = p_previous.normalize;
     snap->version = p_version;

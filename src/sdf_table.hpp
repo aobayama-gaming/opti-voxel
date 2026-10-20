@@ -9,30 +9,39 @@
 #include <atomic>
 #include <memory>
 
-// A terrain with an archetype instance table: the ground is the subclass's (SDFCascade: the Hermite cascade;
-// SDFArchetype: a compiled Program), and every point folds the instances near it onto it (instance_table.hpp,
-// archetype_table.hpp fold / fold_onto). This class owns everything about the instances, the same for every
-// ground: the library, the records and their snapshot (read from other threads), the GPU table, the runtime edits,
-// and the scenes placed on the ground (the demo objects, the --instances scatter, the --trees forest), which only
-// need the subclass's ground_y.
+// The instance half of the terrain: every point folds the instances near it onto the ground's register
+// (instance_table.hpp, archetype_table.hpp fold_onto; the ground is SDFCascade's). This class owns everything about
+// the instances: the library, the records and their snapshot (read from other threads), the GPU table, the runtime
+// edits, and the scenes placed on the ground (the shapes gallery, the --instances scatter, the --trees forest),
+// which only need the subclass's ground_y.
 class SDFTable : public SDFBase {
 public:
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
+    // The scatter's and the forest's centre (metres, x and z), in front of the main_scene spawn.
+    static constexpr double SCENE_X = -50.0;
+    static constexpr double SCENE_Z = -150.0;
+    // The shapes gallery's centre (metres, x and z): the shapes_scene spawn.
+    static constexpr double SHAPES_X = -52.0;
+    static constexpr double SHAPES_Z = -95.0;
 
-    // What build_table places on the ground. PLACED: the scatter and the forest; DEMO: the demo objects (rocks,
-    // tree trunks and a cave mouth in front of the main_scene spawn) first, then the same.
-    enum class Scene { EMPTY,
-        PLACED,
-        DEMO };
+    // What build_table places on the ground. PLACED: the scatter and the forest (none by default); SHAPES: the shapes
+    // gallery first (hard unions, subtractions and intersections, sharp creases for dual contouring: a ladder of
+    // eight cubes holed through every face, each twice the size and twice the distance of the last, i.e. about one
+    // LOD coarser each on screen, turned to show the camera the same two faces; a die, a staircase and a cube
+    // tunnelled along its three axes behind the spawn), then the same.
+    enum class Scene { PLACED,
+        SHAPES };
+    // Set before configure().
+    void set_scene(Scene p_scene) { scene = p_scene; }
 
-    // A deterministic scatter of p_count rocks and pillars in a square of side p_area (metres) around the demo
-    // objects (--instances / --instance_area). Set before configure().
+    // A deterministic scatter of p_count rocks and pillars in a square of side p_area (metres) around
+    // (SCENE_X, SCENE_Z) (--instances / --instance_area). Set before configure().
     void set_scatter(int p_count, double p_area) {
         scatter_count = p_count;
         scatter_area = p_area;
     }
-    // A forest of about p_count grown trees (tree_archetype.hpp) in a square of side p_area (metres) around the demo
-    // objects (--trees / --tree_area). Set before configure().
+    // A forest of about p_count grown trees (tree_archetype.hpp) in a square of side p_area (metres) around
+    // (SCENE_X, SCENE_Z) (--trees / --tree_area). Set before configure().
     void set_forest(int p_count, double p_area) {
         forest_count = p_count;
         forest_area = p_area;
@@ -84,11 +93,22 @@ public:
     static String edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k);
 
 protected:
-    // The library, the records of p_scene and the first snapshot over p_ground (an empty Program for a ground that
-    // isn't one), its values in LOD0 voxels times p_voxel (metres). Call from configure(), after SDFBase's.
-    void build_table(const Archetype::Program &p_ground, double p_voxel, int p_lod_count, Scene p_scene);
+    // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
+    // (metres). Call from configure(), after SDFBase's and once ground_y works.
+    void build_table(int p_lod_count);
 
 private:
+    // The library indices the scenes place.
+    struct Types {
+        int capsule = -1;
+        int rock = -1;
+        int holed_cube = -1;
+        int die = -1;
+        int stairs = -1;
+        int tunnel_cube = -1;
+    };
+
+    Scene scene = Scene::PLACED;
     std::shared_ptr<const Archetype::DefLibrary> library;
     int lod_count = 24;
     uint32_t version = 0;
@@ -117,6 +137,11 @@ private:
     // overlay) over the edit region.
     void finish_edit(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id);
     static VoxelBox record_box(const Archetype::TableRecord &p_rec);
+    // A record of type p_type at (p_x, p_z) metres, p_dy_m above the ground there, turned by p_yaw about y, smooth
+    // radius p_k_m metres, appended.
+    void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw);
+    void add_shapes(const Types &p_types);
+    void add_scatter(const Types &p_types);
     // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.
     void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z);
 };

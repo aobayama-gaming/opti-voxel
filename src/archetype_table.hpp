@@ -1,7 +1,6 @@
 #pragma once
 
 #include "archetype_glsl.hpp"
-#include "archetype_instance.hpp"
 #include "exact_noise.hpp"
 
 #include <godot_cpp/variant/packed_byte_array.hpp>
@@ -10,7 +9,7 @@
 #include <memory>
 #include <vector>
 
-// Step 3 of the archetype work: instances live in a table instead of being compiled into the terrain.
+// The archetype table: the instances placed on the terrain (SDFTable), each chunk folding only the ones near it.
 //
 // A library type (TableDef) is a Program written once in the record's frame (T_INPUT / T_PARAM /
 // T_PERLIN): its sizes are parameters, its anchor, rotation and noise lattice come from the instance's
@@ -19,13 +18,45 @@
 // CPU record (the GPU reads the same fields from a DefRecord buffer: encode_record).
 //
 // The terrain is F(p, lod) = fold over the instances whose influence box contains p, in table order, of
-// r = op_i(r, c_i(p)), starting from the ground (a compiled Program). The influence box is the
+// r = op_i(r, c_i(p)), starting from the ground's register (SDFCascade). The influence box is the
 // instance's world box grown by M(lod) = ceil(k + margin_c * 2^lod) + 2 voxels (margin_c = 2 L +
 // skirt_depth). Outside it the instance's value is >= M, so the fold changes F only where |F| > 2 L
 // 2^lod: the mesh (and vertex normals) are the same as without the rule. The test is integer (a saturating
 // sat_diff of the voxel against the anchor), so the CPU and the GPU and two chunks of the same LOD take
 // the same branch and seams stay exact.
 namespace Archetype {
+
+// Bounds of a perlin octave (ExactNoise): |value| and |gradient| per cell. Conservative; the unit tests
+// sample them.
+inline constexpr float PERLIN3_MAX = 1.5f;
+inline constexpr float PERLIN3_GRAD_MAX = 7.0f;
+inline constexpr float PERLIN2_MAX = 2.0f;
+inline constexpr float PERLIN2_GRAD_MAX = 8.5f;
+
+// A world box (LOD0 voxels, int64, inclusive) and a Lipschitz bound: outside the box the value is >= the distance
+// to it (voxels), and the gradient's length is <= L (per LOD0 voxel).
+struct Bounds {
+    bool bounded = true;
+    VoxelPos lo;
+    VoxelPos hi;
+    float lipschitz = 1.0f;
+};
+
+// How a record combines with the register folded so far.
+enum class Combine : uint8_t {
+    UNION, // min(r, c)
+    SMOOTH_UNION, // smooth_min, radius k
+    SUBTRACT, // max(r, -c)
+    SMOOTH_SUBTRACT, // smooth_max(r, -c), radius k
+};
+
+// The margin world_bounds adds on each side for the float rotation: one voxel, plus R^T's distance to R^-1
+// (rows orthonormal within 1e-5, SDFTable::edit_error) times the local box's reach (its largest |x| + |y| + |z|).
+double rotation_margin(Float3 p_lo, Float3 p_hi);
+
+// The world box (LOD0 voxels, int64, inclusive) of a local box (p_lo, p_hi) placed at p_anchor with rotation p_r:
+// the corners rotated back (R^T q) and rounded out, plus rotation_margin.
+Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded, const VoxelPos &p_anchor, const float *p_r);
 
 // A library type: a program in the record's frame and a bounds function of its parameters.
 struct TableDef {
@@ -170,8 +201,6 @@ String generate_library_glsl(const DefLibrary &p_library);
 // g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers; touched is set when an instance passes its box
 // test) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
 String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize);
-// The mesher's terrain_sdf: the ground register, the fold, then the epilogue (out_scale / normalize).
-String generate_table_sdf(const Program &p_ground, const DefLibrary &p_library, float p_out_scale, bool p_normalize);
 
 // Bytes of one DefRecord in the GPU buffer (10 x vec4, all 16-byte aligned).
 inline constexpr uint32_t RECORD_BYTES = 160;
@@ -185,25 +214,25 @@ int influence_margin(const TableRecord &p_record, int p_lod);
 // arch_in_box (same sat_diff, same integer branch).
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod);
 
-// The fold: r = ground, then each listed instance (in order, its box test), the epilogue applied.
-// Returns the final register (gradient, value). p_list holds the instance indices in table order.
-// p_box_test false folds every instance (the locality rule's reference, M1b).
-Float4 fold(const Program &p_ground, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list,
-        uint32_t p_count, const WorldPos &p_pos, int p_lod, bool p_box_test = true);
-// The same fold onto a given register p_r (a terrain whose ground is not a Program: SDFCascade). *r_touched (if
-// given) is set when an instance passed its box test; untouched, the result is p_r bit for bit.
+// The fold onto the ground's register p_r: each listed instance (in order, its box test) combined in. Returns the
+// register (gradient, value) before the epilogue. p_list holds the instance indices in table order. p_box_test
+// false folds every instance (the locality rule's reference, M1b). *r_touched (if given) is set when an instance
+// passed its box test; untouched, the result is p_r bit for bit.
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
         const WorldPos &p_pos, int p_lod, bool p_box_test = true, bool *r_touched = nullptr);
-// fold() then the epilogue (archetype_ir.cpp finish()).
+// The epilogue after fold_onto (archetype_ir.cpp finish()).
 Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_normalize);
 
 // Library types. Parameters (voxels): sphere {radius}; box {hx, hy, hz}; capsule {height, radius};
 // branch {height, radius, slope} (a capsule tapering by slope voxels of radius per voxel of height);
 // cylinder {half_height, radius}; rock {radius, amp} (an fbm-displaced sphere); cone {radius, height, cos, sin,
 // amp} (a cone on y = 0, its apex at y = height, cos / sin of its half angle from the CPU, displaced like the
-// rock: a conifer's tier); swiss_cube
-// {hx, hy, hz, ring_radius, hole_radius} (a box with p_holes spherical holes, a composite through the
-// table).
+// rock: a conifer's tier); swiss_cube {hx, hy, hz, ring_radius, hole_radius} (a box with p_holes spherical holes on
+// a ring, a composite through the table; ring 0 and one hole: a cube holed through every face). The shapes
+// gallery's hard-CSG composites (SDFTable::Scene::SHAPES): die {h} (a cube of half size h rounded by a sphere, its
+// pips subtracted: 1 on +y, 2 on +z, 3 on +x, 4 on -x, 5 on -z); stairs {half_width, rise, half_depth} (8 steps
+// rising along +z, step i a box of half height (i + 1) rise centred on y = 0); tunnel_cube {h, t} (a cube of half
+// size h tunnelled through along its three axes, tunnels of half width t).
 TableDefPtr make_sphere_type();
 TableDefPtr make_box_type();
 TableDefPtr make_capsule_type();
@@ -212,6 +241,9 @@ TableDefPtr make_cylinder_type();
 TableDefPtr make_rock_type(int p_k, uint32_t p_seed);
 TableDefPtr make_cone_type(int p_k, uint32_t p_seed);
 TableDefPtr make_swiss_cube_type(int p_holes);
+TableDefPtr make_die_type();
+TableDefPtr make_stairs_type();
+TableDefPtr make_tunnel_cube_type();
 
 // The influence box (world axes, int64, absolute) of a record: the type's local box, rotated by the
 // record's rotation, rounded out, plus the record's anchor. Used by the table's spatial index.

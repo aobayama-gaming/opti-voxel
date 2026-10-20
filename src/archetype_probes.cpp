@@ -58,67 +58,6 @@ Probe probe(const String &p_name, const Program &p_program, bool p_trace) {
     return p;
 }
 
-Instance operator_scene(Combine p_op, const VoxelPos &p_anchor, float p_size) {
-    const int k = int(std::lround(std::log2(p_size * 0.25f)));
-    Instance root;
-    root.def = rock_def(0.4f * p_size, ExactNoise::make_fbm(false, 0xB0C4u, k, 3, 0.05 * p_size, 0.5));
-    root.anchor = p_anchor;
-    // The root is unrotated: a child's offset is in its parent's frame (archetype_instance.hpp), so the
-    // multi-origin `copies` probe can only nest the scenes under an identity-rotation parent. Rotations
-    // live on the children below (and the table tests cover a rotated root).
-    Instance::Child c;
-    c.op = p_op;
-    c.k = 0.1f * p_size;
-    switch (p_op) {
-        case Combine::SMOOTH_UNION:
-        case Combine::UNION:
-            c.instance.def = capsule_def(0.8f * p_size, 0.08f * p_size);
-            c.instance.anchor = VoxelPos(int64_t(0.3f * p_size), 0, 0);
-            break;
-        case Combine::SUBTRACT:
-        case Combine::SMOOTH_SUBTRACT:
-            c.instance.def = sphere_def(0.2f * p_size);
-            c.instance.anchor = VoxelPos(0, int64_t(0.35f * p_size), 0);
-            break;
-        case Combine::INTERSECT:
-            c.instance.def = box_def(p_size, 0.3f * p_size, p_size);
-            c.instance.set_rotation_y(0.3);
-            break;
-        case Combine::BLEND:
-            c.instance.def = rock_def(0.3f * p_size, ExactNoise::make_fbm(false, 0xB1E2u, k, 2, 0.05 * p_size, 0.5));
-            c.instance.anchor = VoxelPos(0, -int64_t(0.1f * p_size), int64_t(0.2f * p_size));
-            c.instance.seed = 7;
-            c.weight = ramp_def(0.5f * p_size);
-            break;
-    }
-    root.children.push_back(c);
-    return root;
-}
-
-Instance test_scene(const VoxelPos &p_anchor, float p_size) {
-    Instance root = operator_scene(Combine::SMOOTH_UNION, p_anchor, p_size);
-    for (const Combine op : { Combine::UNION, Combine::SUBTRACT, Combine::SMOOTH_SUBTRACT, Combine::BLEND, Combine::INTERSECT }) {
-        Instance::Child c = operator_scene(op, VoxelPos(), p_size).children[0];
-        if (op == Combine::UNION) {
-            c.instance.anchor = VoxelPos(-int64_t(0.5f * p_size), int64_t(0.2f * p_size), 0);
-            c.instance.set_rotation_y(-1.1);
-        }
-        root.children.push_back(c);
-    }
-    return root;
-}
-
-// p_scene at every anchor, unioned (the first copy is the root).
-Instance copies(const std::function<Instance(const VoxelPos &)> &p_scene, const std::vector<VoxelPos> &p_anchors) {
-    Instance root = p_scene(p_anchors[0]);
-    for (size_t i = 1; i < p_anchors.size(); i++) {
-        Instance::Child c;
-        c.instance = p_scene(p_anchors[i] - p_anchors[0]);
-        root.children.push_back(c);
-    }
-    return root;
-}
-
 namespace {
 
 using ShapeFn = Reg (*)(Builder &, const Local &, float);
@@ -171,40 +110,31 @@ const Shape SHAPES[] = {
 
 std::vector<Probe> make(const std::vector<VoxelPos> &p_anchors, const std::vector<VoxelPos> &p_frame_anchors, float p_size, int p_fuzz) {
     std::vector<Probe> probes;
-    auto scene_probe = [&](const String &p_name, const Instance &p_root, bool p_trace) {
-        Compiled c = compile(p_root);
-        ERR_FAIL_COND_V_MSG(!c.error.is_empty(), Probe(), c.error);
-        c.program.normalize = true;
-        c.program.out_scale = 0.5f;
-        return probe(p_name, c.program, p_trace);
-    };
-    // One copy per origin for the scenes (they are ~200 instructions each).
-    std::vector<VoxelPos> scene_anchors;
-    for (const VoxelPos &a : p_frame_anchors) {
-        scene_anchors.push_back(a + VoxelPos(2300, -900, -1700));
-    }
-    const char *op_names[] = { "union", "smooth_union", "subtract", "smooth_subtract", "intersect", "blend" };
-    for (int op = 0; op < 6; op++) {
-        probes.push_back(scene_probe(op_names[op], copies([&](const VoxelPos &a) { return operator_scene(Combine(op), a, p_size); }, scene_anchors), true));
-    }
-    auto scene = [&](const VoxelPos &a) { return test_scene(a, p_size); };
-    probes.push_back(scene_probe("scene", copies(scene, scene_anchors), true));
-    // The same scene at the same offset from every origin: compared across origins (origin_relative).
-    Probe frames = scene_probe("frames", copies(scene, p_frame_anchors), false);
-    frames.origin_relative = true;
-    probes.push_back(frames);
-    for (const Shape &shape : SHAPES) {
+    // A union of p_shapes, one copy per anchor of p_at.
+    auto shapes_probe = [&](const String &p_name, const std::vector<const Shape *> &p_shapes, const std::vector<VoxelPos> &p_at, bool p_trace) {
         Builder b;
         Reg u = -1;
-        for (const VoxelPos &a : p_anchors) {
-            const Reg d = shape.fn(b, b.local(b.anchor(a)), p_size);
-            u = u < 0 ? d : b.min(u, d);
+        for (const VoxelPos &a : p_at) {
+            const Local l = b.local(b.anchor(a));
+            for (const Shape *shape : p_shapes) {
+                const Reg d = shape->fn(b, l, p_size);
+                u = u < 0 ? d : b.min(u, d);
+            }
         }
         Program prog = b.finish(u);
         prog.normalize = true;
         prog.out_scale = 0.5f;
-        probes.push_back(probe(shape.name, prog, true));
+        return probe(p_name, prog, p_trace);
+    };
+    std::vector<const Shape *> all;
+    for (const Shape &shape : SHAPES) {
+        probes.push_back(shapes_probe(shape.name, { &shape }, p_anchors, true));
+        all.push_back(&shape);
     }
+    // Every shape at the same offset from every origin: compared across origins (origin_relative).
+    Probe frames = shapes_probe("frames", all, p_frame_anchors, false);
+    frames.origin_relative = true;
+    probes.push_back(frames);
     for (int i = 0; i < p_fuzz; i++) {
         probes.push_back(probe(vformat("fuzz_%d", i), random_program(uint32_t(i), p_anchors, 8 + i % 33), true));
     }

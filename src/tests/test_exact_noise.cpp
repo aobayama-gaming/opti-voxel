@@ -1,7 +1,7 @@
 #include "test_common.hpp"
 
+#include "chunk_math.hpp"
 #include "exact_noise.hpp"
-#include "sdf_archetype.hpp"
 
 #include <cmath>
 
@@ -19,13 +19,13 @@ WorldPos at(int64_t p_x, int64_t p_y, int64_t p_z, Float3 p_frac = Float3{}) {
 // LODs above 0 checked against LOD 0 (up to 24, past the default 15 LODs).
 constexpr int SCALED_LODS[] = { 1, 2, 5, 9, 14, 20, 24 };
 
-// A 2D fBm (the archetype ground's mountains) and a 3D one (perlin3 octaves) at the default voxel size.
+// FrameSpike's 2D and 3D fBms at the default voxel size.
 OctaveSet fbm2d() {
-    return SDFArchetype::height_fbm(ChunkParam().voxel_size);
+    return reference_fbm2d(ChunkParam().voxel_size);
 }
 
 OctaveSet fbm3d() {
-    return make_fbm(false, 0xCA7E5u, SDFArchetype::k_of(125.0, ChunkParam().voxel_size), 3, 4.0 / 3.0, 0.5);
+    return reference_fbm3d(ChunkParam().voxel_size);
 }
 
 // Deterministic pseudo-random points: near 0, around the 2^32 low-word wrap and far out (2^45, 2^60),

@@ -458,6 +458,15 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
     return set;
 }
 
+// The two fBms FrameSpike's noise probes and the unit tests check at voxel size p_voxel (metres): a 2D one
+// (wavelength 286 m, 5 octaves, 37.5 m) and a 3D one (125 m, 3 octaves).
+inline OctaveSet reference_fbm2d(double p_voxel) {
+    return make_fbm(true, 0xA2C4E7u, int(std::lround(std::log2(1.0 / 0.0035 / p_voxel))), 5, 50.0 / p_voxel * 0.75, 0.5);
+}
+inline OctaveSet reference_fbm3d(double p_voxel) {
+    return make_fbm(false, 0xCA7E5u, int(std::lround(std::log2(125.0 / p_voxel))), 3, 4.0 / 3.0, 0.5);
+}
+
 // Checks the gradient factors at the LODs [0, p_lod_count) the set is evaluated at (configure time):
 // an error message, empty if they are all in range.
 inline String gradient_range_error(const OctaveSet &p_set, int p_lod_count) {
