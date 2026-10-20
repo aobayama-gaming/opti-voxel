@@ -67,39 +67,26 @@ float hash1(vec3 p) {
     return fract((p.x + p.y) * p.z);
 }
 
-// Trilinear value noise with its analytic gradient, one lattice cell per unit: (value in [0, 1], d/dp).
-vec4 value_noise_d(vec3 p) {
+// Trilinear value noise in [0, 1], one lattice cell per unit.
+float value_noise(vec3 p) {
     vec3 i = floor(p);
     vec3 f = p - i;
-    vec3 u = f * f * (3.0 - 2.0 * f);
-    vec3 du = 6.0 * f * (1.0 - f);
-    float a = hash1(i);
-    float b = hash1(i + vec3(1, 0, 0));
-    float c = hash1(i + vec3(0, 1, 0));
-    float d = hash1(i + vec3(1, 1, 0));
-    float e = hash1(i + vec3(0, 0, 1));
-    float g = hash1(i + vec3(1, 0, 1));
-    float h = hash1(i + vec3(0, 1, 1));
-    float k = hash1(i + vec3(1, 1, 1));
-    float kx = b - a;
-    float ky = c - a;
-    float kz = e - a;
-    float kxy = a - b - c + d;
-    float kyz = a - c - e + h;
-    float kzx = a - b - e + g;
-    float kxyz = -a + b + c - d + e - g - h + k;
-    float v = a + kx * u.x + ky * u.y + kz * u.z + kxy * u.x * u.y + kyz * u.y * u.z + kzx * u.z * u.x + kxyz * u.x * u.y * u.z;
-    vec3 grad = du * vec3(kx + kxy * u.y + kzx * u.z + kxyz * u.y * u.z, ky + kyz * u.z + kxy * u.x + kxyz * u.z * u.x,
-            kz + kzx * u.x + kyz * u.y + kxyz * u.x * u.y);
-    return vec4(v, grad);
+    f = f * f * (3.0 - 2.0 * f);
+    float x00 = mix(hash1(i), hash1(i + vec3(1, 0, 0)), f.x);
+    float x10 = mix(hash1(i + vec3(0, 1, 0)), hash1(i + vec3(1, 1, 0)), f.x);
+    float x01 = mix(hash1(i + vec3(0, 0, 1)), hash1(i + vec3(1, 0, 1)), f.x);
+    float x11 = mix(hash1(i + vec3(0, 1, 1)), hash1(i + vec3(1, 1, 1)), f.x);
+    return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
 }
 
 // Bark (PATTERN_BARK) as a solid texture, so it needs no surface frame: noise stretched along world up makes plates
 // and V grooves that run up a trunk and wander slowly; a sparse cell field puts knots where a kept cell's point lies
 // near the surface, and the grain bends around them. Its axis is world up: a near-horizontal branch gets grooves
-// around it (the branch's axis is not known here). p in metres. Returns the plate height in [0, 1] and its gradient
-// per metre (the bend's and the wander's ignored); knot: the knot's core, ring: its growth rings, in [0, 1].
-vec4 bark_height(vec3 p, out float knot, out float ring) {
+// around it (the branch's axis is not known here). p in metres. Returns the plate height in [0, 1]; knot: the knot's
+// core, ring: its growth rings, in [0, 1]. Colour only: a bump from it (and a roughness following it) cost ~1.3 ms
+// of depth pre-pass in the forest at 1080p (the pre-pass writes normals and roughness for SSAO / SSIL), for relief
+// barely visible past a few metres.
+float bark_height(vec3 p, out float knot, out float ring) {
     const vec3 KNOT_CELL = vec3(0.7, 1.6, 0.7);
     // The 2 x 2 x 2 cells nearest p: a knot point lies in the middle 70% of its cell, and a knot reaches ~0.4 m.
     vec3 g = floor(p / KNOT_CELL - 0.5);
@@ -126,14 +113,9 @@ vec4 bark_height(vec3 p, out float knot, out float ring) {
     // Grooves ~11 cm apart, 6x longer than wide. Coarse on purpose: a solid texture also varies across the surface, and
     // neighbouring chunks' surfaces may differ by ~1 cm (a 4.5 cm groove showed it as a line along chunk seams).
     const vec3 SCALE = vec3(9.0, 9.0 / 6.0, 9.0);
-    vec3 wander = vec3(1.6, 0.0, 1.6) * value_noise_d(p * vec3(1.2, 0.25, 1.2)).x;
-    vec4 n = value_noise_d((p + bend) * SCALE + wander);
+    vec3 wander = vec3(1.6, 0.0, 1.6) * value_noise(p * vec3(1.2, 0.25, 1.2));
     // Plates with flat tops, V grooves where the noise crosses its middle.
-    const float PLATE_GAIN = 1.8;
-    float s = 2.0 * n.x - 1.0;
-    float plate = abs(s) * PLATE_GAIN;
-    vec3 grad = plate < 1.0 ? sign(s) * (2.0 * PLATE_GAIN) * n.yzw * SCALE : vec3(0.0);
-    return vec4(min(plate, 1.0), grad);
+    return min(abs(2.0 * value_noise((p + bend) * SCALE + wander) - 1.0) * 1.8, 1.0);
 }
 
 // A corner's material: its chunk's palette block (header h1), its index in it, its id (palette). Index 0 is always
@@ -148,14 +130,12 @@ uint corner_material(uvec4 h1, uint index) {
 
 // A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
 // material_tex and its pattern. p: the fragment's position (metres, render space), n its normal (interpolated, not
-// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); lod: the chunk's;
-// bump: added to the world normal.
+// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); lod: the chunk's.
 void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float lod, out vec3 albedo,
-        out float roughness, out vec3 emission, out vec3 bump) {
+        out float roughness, out vec3 emission) {
     albedo = ground;
     roughness = 1.0;
     emission = vec3(0.0);
-    bump = vec3(0.0);
     if (mat_id == MATERIAL_GROUND) {
         return;
     }
@@ -173,23 +153,19 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
         float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
         emission = mix(m1.rgb * 0.11, m1.rgb * pulse, smoothstep(0.03, 0.18, seam));
     } else if (m1.a == MATERIAL_PATTERN_BARK) {
-        // Bark: dark grooves, lighter plates, knots darker with rings; the grooves rougher and bumped ~1.5 cm deep.
-        // Past ~4 pixels per groove (11 cm) the detail fades to the plates' mean.
+        // Bark: dark grooves, lighter plates, knots darker with rings. Past ~4 pixels per groove (11 cm) the detail
+        // fades to the plates' mean.
         float detail = 1.0 - smoothstep(0.012, 0.03, footprint);
         float plate = 0.65;
         float knot_weight = 0.0;
         vec3 knot_albedo = vec3(0.0);
         if (detail > 0.0) { // else the plates' mean, no bark_height
-            vec3 un = normalize(n);
             float knot, ring;
-            vec4 h = bark_height(p + un * (instance_erode_m * (exp2(lod) - 1.0)), knot, ring);
-            plate = mix(plate, h.x, detail);
+            plate = mix(plate, bark_height(p + normalize(n) * (instance_erode_m * (exp2(lod) - 1.0)), knot, ring), detail);
             knot_weight = max(knot, ring * 0.6) * detail;
             knot_albedo = m0.rgb * mix(0.35, 0.7, ring);
-            bump = -0.015 * detail * (h.yzw - dot(h.yzw, un) * un);
         }
         albedo = mix(mix(m0.rgb * 0.5, m0.rgb * 1.4, plate), knot_albedo, knot_weight);
-        roughness = min(m0.a + 0.1 * (1.0 - plate), 1.0);
     }
 }
 
@@ -291,17 +267,13 @@ void fragment() {
         float to_b = mix(mix(0.0, float(mask >> 1 & 1), v_quad_uv.x), mix(float(mask >> 2 & 1), float(mask >> 3 & 1), v_quad_uv.x),
                 v_quad_uv.y);
         float to_high = mat_b > mat_id ? to_b : 1.0 - to_b;
-        float jitter = value_noise_d(p / (voxel_size * exp2(v_lod)) * 1.7).x - 0.5;
+        float jitter = value_noise(p / (voxel_size * exp2(v_lod)) * 1.7) - 0.5;
         mat_id = to_high + 0.6 * jitter > 0.5 ? max(mat_id, mat_b) : min(mat_id, mat_b);
     }
     float roughness;
     vec3 emission;
     float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
-    vec3 bump;
-    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, v_lod, albedo, roughness, emission, bump);
-    if (debug_view == 0 || debug_view == 4) { // the other views show the geometry's normals
-        NORMAL = normalize(NORMAL + mat3(VIEW_MATRIX) * bump);
-    }
+    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, v_lod, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;

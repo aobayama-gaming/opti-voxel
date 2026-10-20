@@ -382,8 +382,9 @@ to every change, and a reviewer may reject a PR on any of them.
   `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and
   `table.list_len_per_lod.*.palette_avg / palette_max`. **Bark** (`PATTERN_BARK`, `bark_height` in the page shader): a solid
   texture, so no surface frame: noise stretched along world up (plates, V grooves ~11 cm apart), a sparse cell field of
-  knots (2 x 2 x 2 nearest cells) bending the grain, an analytic gradient for a ~1.5 cm bump (no derivatives in the
-  material branch); it fades to the plates' mean past ~4 pixels per groove (metres per pixel from the projection). It
+  knots (2 x 2 x 2 nearest cells) bending the grain; colour only (a bump and a roughness following the plates cost
+  ~1.3 ms of depth pre-pass in the forest at 1080p, which writes normals and roughness for SSAO / SSIL, for relief
+  barely visible); it fades to the plates' mean past ~4 pixels per groove (metres per pixel from the projection). It
   samples at the uneroded surface: `p + n * instance_erode_m * (2^L - 1)` (`VoxelTerrain` sets the uniform from the band
   rule's rate; exact for the default onset, over-corrected with `--instance_resolve`). Grooves finer than ~10 cm showed
   chunk seams as lines (neighbouring chunks' surfaces differ by ~1 cm; flat shading hid it). Its axis is world up: a
