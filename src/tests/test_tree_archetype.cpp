@@ -343,3 +343,42 @@ TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, eva
     MESSAGE("forest: ", trees.size(), " trees, ", snap->records.size(), " records, ", solid, " trunks solid at LOD 0");
     CHECK(solid == int64_t(trees.size()));
 }
+
+// What the band rule leaves of a forest at each LOD, weighted by volume (record_moments): the share of the trees'
+// volume drawn whole (no erosion) and drawn at all (listed, eroded by less than its half thickness), under the default
+// rule (whole while resolved, eroding just before the drop) and under the rule it replaced (one cell per LOD from LOD 1,
+// dropped when that reaches the depth). The new rule keeps at least as much at every LOD.
+TEST_CASE("Tree band: the resolution rule keeps more of the trees at every LOD than eroding from LOD 1") {
+    const double voxel = 0.05;
+    const TreeLibrary tl(voxel);
+    constexpr int LODS = 9;
+    double total = 0.0, whole_old[LODS] = {}, drawn_old[LODS] = {}, whole_new[LODS] = {}, drawn_new[LODS] = {};
+    for (size_t sp = 0; sp < tree_species().size(); sp++) {
+        for (uint32_t seed = 1; seed <= 10; seed++) {
+            std::vector<TableRecord> records = grow(tl, tree_species()[sp], seed, voxel);
+            for (TableRecord &rec : records) {
+                const TableDef &def = tl.lib[rec.def];
+                finish_record(def, rec, 1.0f, true);
+                const Moments m = record_moments(def, rec);
+                const double half = m.half_thickness(), depth = band_depth(def, rec);
+                total += m.m0;
+                for (int lod = 0; lod < LODS; lod++) {
+                    const double old_erosion = double(ERODE_CELLS) * (std::ldexp(1.0, lod) - 1.0);
+                    const bool old_listed = double(ERODE_CELLS) * (std::ldexp(1.0, lod) - 1.0) < depth;
+                    whole_old[lod] += old_listed && old_erosion == 0.0 ? m.m0 : 0.0;
+                    drawn_old[lod] += old_listed && old_erosion < half ? m.m0 : 0.0;
+                    const double erosion = band_erosion(rec.erode, rec.erode_from, lod);
+                    whole_new[lod] += rec.listed_at(lod) && erosion == 0.0 ? m.m0 : 0.0;
+                    drawn_new[lod] += rec.listed_at(lod) && erosion < half ? m.m0 : 0.0;
+                }
+            }
+        }
+    }
+    for (int lod = 0; lod < LODS; lod++) {
+        MESSAGE("LOD ", lod, " (", voxel * std::ldexp(1.0, lod), " m cells): whole ", 100.0 * whole_old[lod] / total, "% -> ",
+                100.0 * whole_new[lod] / total, "%, drawn ", 100.0 * drawn_old[lod] / total, "% -> ", 100.0 * drawn_new[lod] / total, "%");
+        CHECK(whole_new[lod] >= whole_old[lod]);
+        CHECK(drawn_new[lod] >= drawn_old[lod]);
+    }
+    CHECK(whole_new[3] > whole_old[3]);
+}

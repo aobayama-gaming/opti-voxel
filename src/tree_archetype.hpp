@@ -14,9 +14,9 @@
 // - a crown hull (1-3 spheres along the upper trunk) and a clump at the tip of every leaf stem (the `crown`
 //   type: a rock with bumps of about CROWN_WAVELENGTH_M), or for a conifer a few stacked cones with the same
 //   bumps (the `cone` type).
-// Nothing in it depends on the LOD: the band rule (set_band) is the LOD rule. Each record erodes by one cell
-// per LOD and is dropped once gone, so the thin parts leave first (a tapered branch loses its tip first) and the
-// hull last, and no part appears with the LOD: the records listed at LOD L+1 are a subset of those at L. The
+// Nothing in it depends on the LOD: the band rule (set_band) is the LOD rule. Each record stays whole while the
+// grid resolves it, erodes in the LODs just before its drop and is dropped once gone, so the thin parts leave first
+// and the hull last, and no part appears with the LOD: the records listed at LOD L+1 are a subset of those at L. The
 // generation is CPU work done once (double math, hashes of the tree's seed and each part's path); the GPU reads
 // the records as data. Branch segments start and end on whole voxels, so a segment's end is the next one's anchor.
 namespace Archetype {

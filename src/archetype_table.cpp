@@ -78,6 +78,9 @@ int influence_margin(const TableRecord &p_record, int p_lod) {
     return int(std::ceil(m)) + 2;
 }
 
+namespace {
+
+// Half the smallest side of the band depth's box (voxels).
 double band_radius(const TableDef &p_def, const TableRecord &p_record) {
     Float3 lo{}, hi{};
     float lipschitz = 1.0f;
@@ -88,6 +91,8 @@ double band_radius(const TableDef &p_def, const TableRecord &p_record) {
     }
     return 0.5 * side;
 }
+
+} // namespace
 
 double band_depth(const TableDef &p_def, const TableRecord &p_record) {
     return band_radius(p_def, p_record) * double(p_record.lipschitz) + double(p_record.k);
@@ -101,21 +106,29 @@ void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, cons
         return;
     }
     r_record.erode = p_rule.rate;
-    if (p_rule.resolve > 0.0f) {
-        const double radius = band_radius(p_def, r_record);
-        int onset = 0;
-        while (onset < 30 && double(p_rule.resolve) * std::ldexp(1.0, onset + 1) <= radius) {
-            onset++;
-        }
-        r_record.erode_from = exact_pow2(onset);
-    }
+    const double rate = p_rule.rate;
     const double depth = band_depth(p_def, r_record);
-    for (int lod = 0; lod < 32; lod++) {
-        if (double(p_rule.rate) * MAX(std::ldexp(1.0, lod) - double(r_record.erode_from), 0.0) >= depth) {
-            r_record.max_lod = uint8_t(lod);
-            break;
+    // The first LOD erosion from LOD 0 can make the part vanish by, then later while the grid still resolves it.
+    int drop = 0;
+    while (drop < 31 && rate * (std::ldexp(1.0, drop) - 1.0) < depth) {
+        drop++;
+    }
+    if (p_rule.resolve > 0.0f) {
+        const double half = record_moments(p_def, r_record).half_thickness();
+        while (drop < 31 && double(p_rule.resolve) * std::ldexp(1.0, drop) <= half) {
+            drop++;
         }
     }
+    if (rate * (std::ldexp(1.0, drop) - 1.0) < depth) {
+        return; // deeper than 31 LODs can erode: never dropped (erode_from stays 1)
+    }
+    // The latest onset from which the erosion still reaches the depth at the drop (onset 0 always does).
+    int onset = MAX(drop - 1, 0);
+    while (onset > 0 && rate * (std::ldexp(1.0, drop) - std::ldexp(1.0, onset)) < depth) {
+        onset--;
+    }
+    r_record.erode_from = exact_pow2(onset);
+    r_record.max_lod = uint8_t(drop);
 }
 
 void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, const ErodeRule &p_rule) {

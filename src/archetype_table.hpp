@@ -177,22 +177,26 @@ private:
     const RecordStore *store = nullptr;
 };
 
-// The band rule for instances. At LOD L an instance is eroded by rate * max(2^L - 2^onset, 0) LOD0 voxels: from
-// its onset LOD on it shrinks by `rate` cells per LOD, so the surfaces of a LOD L and a LOD L+1 chunk differ by at
-// most `rate` cells of L, under the fine chunk's skirt (skirt_depth >= rate): no crack at a seam. It is dropped
-// (no longer listed) from the first LOD whose erosion reaches its depth plus k (band_depth), where the eroded
-// shape no longer reaches zero, so dropping it changes no sign: the drop itself is invisible. Its mean (nothing,
-// or an aggregate for a cluster) stands in for it. p_enabled false (--instance_band=0) keeps it whole at every
-// LOD: the reference F_ref. Needs the record's world box (finish_record sets it first).
-// rate (--instance_erode, default ERODE_CELLS): any rate > 0 keeps both properties, a lower one keeps thin parts
-// to coarser LODs (a 0.3 m trunk at 5 cm voxels: gone at LOD 3 at 1, at LOD 4 at 0.5).
-// resolve (--instance_resolve, cells, 0 = onset 0: erodes from LOD 1): the onset is the coarsest LOD whose cells
-// still fit `resolve` times in the part's half thickness (band_radius), so a part erodes only once the grid can
-// no longer draw it whole, whatever its size: a 0.3 m trunk at 5 cm stays whole to LOD 2 at resolve 1.
+// The band rule for instances: a part is drawn whole while the grid resolves it, and erodes only over the LODs just
+// before the one that drops it. At LOD L it is eroded by rate * max(2^L - 2^onset, 0) LOD0 voxels: from its onset
+// on it shrinks by `rate` cells per LOD, so the surfaces of a LOD L and a LOD L+1 chunk differ by at most `rate`
+// cells of L, under the fine chunk's skirt (skirt_depth >= rate): no crack at a seam. It is dropped (no longer
+// listed) from max_lod, where the erosion reaches its depth plus k (band_depth): the eroded shape no longer reaches
+// zero, so dropping it changes no sign and the drop itself is invisible. Its mean (an aggregate for a cluster)
+// stands in for it. p_enabled false (--instance_band=0) keeps it whole at every LOD: the reference F_ref. Needs the
+// record's world box (finish_record sets it first).
+// max_lod is the later of the first LOD whose cells no longer fit `resolve` times in the part's half thickness (its
+// moments' equal-covariance ellipsoid, record_moments: where the grid stops resolving it) and the first LOD by which
+// erosion at `rate` from LOD 0 can reach its depth. The onset is the latest LOD from which erosion at `rate` still
+// reaches the depth at max_lod: the part shrinks only in the band that is about to disappear.
+// rate (--instance_erode, default ERODE_CELLS): the skirt's depth and the fastest a part may shrink; a higher one keeps
+// parts whole to later onsets, a lower one spreads the erosion over more LODs.
+// resolve (--instance_resolve, cells, default 1): a part is kept while its half thickness holds that many cells (0:
+// dropped as soon as erosion can make it vanish).
 inline constexpr float ERODE_CELLS = 1.0f;
 struct ErodeRule {
     float rate = ERODE_CELLS;
-    float resolve = 0.0f;
+    float resolve = 1.0f;
 };
 void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, const ErodeRule &p_rule = ErodeRule());
 // The erosion at p_lod, in voxels: what both back-ends add to the record's distance.
@@ -205,8 +209,6 @@ inline float band_erosion(float p_erode, float p_erode_from, int p_lod) {
 // (its type's bounds, grown by rotation_margin on each side) and the world box: the local one doesn't grow
 // when the record turns (a diagonal branch's world box is far wider than the branch).
 double band_depth(const TableDef &p_def, const TableRecord &p_record);
-// Half the smallest side of that box (voxels): the part's half thickness, which sets its onset.
-double band_radius(const TableDef &p_def, const TableRecord &p_record);
 
 // The record's box (relative to the anchor), L and margin from its type's bounds, then its band.
 void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_depth, bool p_band, const ErodeRule &p_rule = ErodeRule());
