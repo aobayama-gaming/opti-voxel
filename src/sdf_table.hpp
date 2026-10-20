@@ -61,8 +61,11 @@ public:
     // The band rule's onset: a part erodes once its half thickness holds fewer than this many cells (0: from LOD 1).
     void set_instance_resolve(float p_cells) { erode_rule.resolve = p_cells; }
 
-    // An instance erodes by erode_rule.rate cells between LOD L and L+1 (the band rule): the skirts must hide that step.
-    float min_skirt_depth(const ChunkParam &, int) const override { return instance_band ? erode_rule.rate : 0.0f; }
+    // An instance erodes by this many cells between LOD L and L+1 (the band rule; 0 without it): with the default
+    // onset its surface at LOD L lies (2^L - 1) of them, in LOD0 voxels, inside its LOD 0 one.
+    float instance_erode_cells() const { return instance_band ? erode_rule.rate : 0.0f; }
+    // The skirts must hide the band rule's step.
+    float min_skirt_depth(const ChunkParam &, int) const override { return instance_erode_cells(); }
 
     SDFGpuTable *get_gpu_table() override { return &gpu; }
     using SDFBase::get_gpu_table; // the const form

@@ -85,10 +85,8 @@ func _enter_tree() -> void:
 			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
-		if a == "--grade=0":  # no colour grading (the scene's LUT)
-			var world_env := get_parent().get_node_or_null("WorldEnvironment") as WorldEnvironment
-			if world_env:
-				world_env.environment.adjustment_color_correction = null
+		if a == "--grade=0":
+			Presets.ungrade(get_parent())
 		if a.begins_with("--dig_radius="):
 			dig_radius = a.trim_prefix("--dig_radius=").to_float()
 		if a.begins_with("--dig_length="):

@@ -116,21 +116,23 @@ vec4 bark_height(vec3 p, out float knot, out float ring) {
                 vec3 dn = dk / vec3(0.08, 0.13, 0.08);
                 float r2 = dot(dn, dn);
                 nearest = min(nearest, r2);
-                bend.xz += dk.xz * (1.5 * exp(-0.3 * r2));
+                float fall = max(1.0 - r2 * (1.0 / 12.0), 0.0);
+                bend.xz += dk.xz * (1.5 * fall * fall);
             }
         }
     }
     knot = exp(-nearest);
-    ring = exp(-0.15 * nearest) * (0.5 + 0.5 * cos(sqrt(nearest) * 7.0));
+    ring = nearest < 40.0 ? exp(-0.15 * nearest) * (0.5 + 0.5 * cos(sqrt(nearest) * 7.0)) : 0.0;
     // Grooves ~11 cm apart, 6x longer than wide. Coarse on purpose: a solid texture also varies across the surface, and
     // neighbouring chunks' surfaces may differ by ~1 cm (a 4.5 cm groove showed it as a line along chunk seams).
     const vec3 SCALE = vec3(9.0, 9.0 / 6.0, 9.0);
     vec3 wander = vec3(1.6, 0.0, 1.6) * value_noise_d(p * vec3(1.2, 0.25, 1.2)).x;
     vec4 n = value_noise_d((p + bend) * SCALE + wander);
     // Plates with flat tops, V grooves where the noise crosses its middle.
+    const float PLATE_GAIN = 1.8;
     float s = 2.0 * n.x - 1.0;
-    float plate = abs(s) * 1.8;
-    vec3 grad = plate < 1.0 ? sign(s) * 3.6 * n.yzw * SCALE : vec3(0.0);
+    float plate = abs(s) * PLATE_GAIN;
+    vec3 grad = plate < 1.0 ? sign(s) * (2.0 * PLATE_GAIN) * n.yzw * SCALE : vec3(0.0);
     return vec4(min(plate, 1.0), grad);
 }
 
@@ -145,8 +147,9 @@ uint corner_material(uvec4 h1, uint index) {
 }
 
 // A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
-// material_tex and its pattern. p: the fragment's position (metres, render space), n its normal; footprint: metres
-// per pixel there (patterns fade out below a few pixels per feature); lod: the chunk's; bump: added to the world normal.
+// material_tex and its pattern. p: the fragment's position (metres, render space), n its normal (interpolated, not
+// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); lod: the chunk's;
+// bump: added to the world normal.
 void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float lod, out vec3 albedo,
         out float roughness, out vec3 emission, out vec3 bump) {
     albedo = ground;
@@ -172,14 +175,21 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
     } else if (m1.a == MATERIAL_PATTERN_BARK) {
         // Bark: dark grooves, lighter plates, knots darker with rings; the grooves rougher and bumped ~1.5 cm deep.
         // Past ~4 pixels per groove (11 cm) the detail fades to the plates' mean.
-        float knot, ring;
-        vec4 h = bark_height(p + n * (instance_erode_m * (exp2(lod) - 1.0)), knot, ring);
         float detail = 1.0 - smoothstep(0.012, 0.03, footprint);
-        float plate = mix(0.65, h.x, detail);
-        albedo = mix(m0.rgb * 0.5, m0.rgb * 1.4, plate);
-        albedo = mix(albedo, m0.rgb * mix(0.35, 0.7, ring), max(knot, ring * 0.6) * detail);
+        float plate = 0.65;
+        float knot_weight = 0.0;
+        vec3 knot_albedo = vec3(0.0);
+        if (detail > 0.0) { // else the plates' mean, no bark_height
+            vec3 un = normalize(n);
+            float knot, ring;
+            vec4 h = bark_height(p + un * (instance_erode_m * (exp2(lod) - 1.0)), knot, ring);
+            plate = mix(plate, h.x, detail);
+            knot_weight = max(knot, ring * 0.6) * detail;
+            knot_albedo = m0.rgb * mix(0.35, 0.7, ring);
+            bump = -0.015 * detail * (h.yzw - dot(h.yzw, un) * un);
+        }
+        albedo = mix(mix(m0.rgb * 0.5, m0.rgb * 1.4, plate), knot_albedo, knot_weight);
         roughness = min(m0.a + 0.1 * (1.0 - plate), 1.0);
-        bump = -0.015 * detail * (h.yzw - dot(h.yzw, n) * n);
     }
 }
 
@@ -288,8 +298,10 @@ void fragment() {
     vec3 emission;
     float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
     vec3 bump;
-    material_shading(uint(mat_id), ground, p, normalize(v_world_normal), footprint, v_lod, albedo, roughness, emission, bump);
-    NORMAL = normalize(NORMAL + mat3(VIEW_MATRIX) * bump);
+    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, v_lod, albedo, roughness, emission, bump);
+    if (debug_view == 0 || debug_view == 4) { // the other views show the geometry's normals
+        NORMAL = normalize(NORMAL + mat3(VIEW_MATRIX) * bump);
+    }
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;

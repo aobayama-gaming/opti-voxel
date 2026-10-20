@@ -178,9 +178,7 @@ func _ready() -> void:
 		terrain.direct_max_in_flight = int(args["max_in_flight"])
 	terrain.debug_view = int(args.get("view", "0"))
 	if args.get("grade", "1") == "0":
-		var world_env := get_node_or_null("WorldEnvironment") as WorldEnvironment
-		if world_env:
-			world_env.environment.adjustment_color_correction = null
+		Presets.ungrade(self)
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
 	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
 	if args.has("voxel"):
