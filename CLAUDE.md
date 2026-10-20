@@ -343,15 +343,19 @@ to every change, and a reviewer may reject a PR on any of them.
   `Material::Library`, `src/material_library.*`: built-ins ground, bark, leaves, lava, scorched rock, island rock;
   id 0 `GROUND` is the page shader's procedural slope / height colours; ids < 2^24). By default it is its type's
   (`DefLibrary::add(def, material)`, `Material::FROM_TYPE` resolved by `SDFTable::finish_record`: branch bark, crown
-  and cone leaves, basin scorched rock, island island rock; the shared cylinder is ground, the lava slab sets lava),
-  so runtime `add_instance` edits get theirs too. A corner stores a 9-bit index into its
+  and cone leaves, basin scorched rock, island island rock; the generic shapes (sphere, capsule, rock, cylinder, the
+  shapes gallery) are `Material::INHERIT`, the lava slab sets lava), so runtime `add_instance` edits get theirs too.
+  An `INHERIT` cutter colours nothing: the fold skips its win, so the sample keeps what it had (the dig tool's
+  capsule carves a tree and the hole shows bark). On a union it resolves to ground (`Archetype::record_material`, in
+  `SDFTable::finish_record`): an inheriting union would take whatever record won the sample before it in list order. It takes the list word's reserved
+  palette index `ChunkPalette::INHERIT_INDEX` (511) and no palette entry. A corner stores a 9-bit index into its
   chunk's **palette** (`src/chunk_palette.*`: entry 0 ground, then the listed records' materials in list order, at
-  most 512; past that the rest draws as ground, `palette_truncated`), so ids are unbounded and a chunk only carries
+  most `ChunkPalette::MAX_ENTRIES` = 511; past that the rest draws as ground, `palette_truncated`), so ids are unbounded and a chunk only carries
   what it uses. `build_lists` builds the palettes on the worker pool and packs each entry's index above the record id
   in the list word (`SDFGpuTable::list_word`; `LIST_ID_BITS` = 32 - 9: **a table holds at most 2^23 = 8M instances**,
   removed ones included; a separate per-entry index would lift it). The fold keeps the palette index of
   the record that wins (`record_wins`: the operator's own comparison, so distances are untouched; a subtraction's
-  carved face takes the cutter's material; CPU `fold_onto` == GPU `arch_fold`, FrameSpike's table probe), the cascade's
+  carved face takes the cutter's material unless it inherits; CPU `fold_onto` == GPU `arch_fold`, FrameSpike's table probe), the cascade's
   fold variant's level 0 writes it per sample for chunks with a list (`sdf_material`, cascade binding 9), and the vertex
   takes the material of its cell's solid corner closest to the surface (`cascade_vertex_material`, ties in x + 2y +
   4z order; both meshers), except in a chunk on the ground block (direct) or without a list (legacy): material 0, no
@@ -362,13 +366,22 @@ to every change, and a reviewer may reject a PR on any of them.
   in each row header (texel 1 `.zw`, so compaction moves it with the rows), freed with the chunk (or at the end of
   the batch's results for the chunks that loaded nothing); a `{GROUND}` palette, or one that finds no room (`full`),
   uses block 0 and draws as ground. The page shader reads header -> palette -> id -> `material_tex`
-  (`Material::Library::make_image`, owned by the mesher) for corners of index > 0 and blends the corners' albedo,
-  roughness and emission over the ground colours (lava: `PATTERN_LAVA`'s crust); `--view=9` shows the ids. Legacy
+  (`Material::Library::make_image`, owned by the mesher) for corners of index > 0, and replaces the ground colours with
+  the material's albedo, roughness and emission (lava: `PATTERN_LAVA`'s crust; `material_shading`). **Blend:** corner A (the
+  provoking vertex) reads the quad's other corners: a = its material, b = the first other one, plus a mask of the corners
+  (B, C, D) that are not a, packed above b's id (flat `ivec2 v_materials`); the fragment interpolates the mask over the
+  base quad's uv (no new interpolant) and shades the higher id of the pair where the weight towards it, jittered by a
+  value noise of about a cell of the chunk's LOD, passes 1/2 (towards the higher id, so two quads holding the pair in
+  either order agree on their edge). A third material inside one quad draws as b. **Cost:** a per-pixel choice of
+  material costs ~1.3 ms of opaque pass and ~0.4 of pre-pass in the forest at 1080p (+6% render GPU), whatever its
+  form (select, branch, two shadings, mix) and even when no quad holds two materials: it is the shader's compiled form,
+  not executed work (feature/material-blend's bisection; 2 smooth vec4 of per-vertex parameters cost more, +2.2 ms).
+  `--view=9` shows the ids, blended (V reaches it in the player). Legacy
   carries the id in `ARRAY_CUSTOM0`; the validator (half its sample from chunks with materials,
   `MeshValidator::pick_targets`) requires `material_mismatch == 0` on paired vertices, the auditor
   `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and
   `table.list_len_per_lod.*.palette_avg / palette_max`. Next: a material per biome cell for the ground, materials
-  inside one record (an IR change), textures.
+  inside one record (an IR change), procedural bark and a colour-grading LUT.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL

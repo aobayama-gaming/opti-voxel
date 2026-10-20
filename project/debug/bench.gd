@@ -16,6 +16,7 @@ extends Node3D
 ##                                dig: load, then K dig holes along the view, a scripted drag, settle, steady
 ##   --edits=N                    edit scenario: number of edits (default 100)
 ##   --digs=K                     dig scenario: number of scripted right-click holes (default 8)
+##   --dig_ahead=M                dig scenario: metres from the camera to the first hole (default 20)
 ##   --drag_s=S                   dig scenario: wall-clock seconds of scripted drag (tube re-placed every frame, default 2)
 ##   --steady=N                   frames measured after load completes (default 300)
 ##   --fly_seconds=S              wall-clock duration of the outbound leg (same again for return, default 10)
@@ -379,7 +380,7 @@ func _run_dig() -> void:
 	var fwd := -camera.global_transform.basis.z
 	var digs := int(args.get("digs", "8"))
 	if digs_done < digs:
-		_dig_capsule(vt, camera.global_position + fwd * (20.0 + digs_done * 6.0), fwd, 6.0, 1.5, 3, -1)
+		_dig_capsule(vt, camera.global_position + fwd * (float(args.get("dig_ahead", "20")) + digs_done * 6.0), fwd, 6.0, 1.5, 3, -1)
 		digs_done += 1
 		drag_start_usec = Time.get_ticks_usec()
 		return

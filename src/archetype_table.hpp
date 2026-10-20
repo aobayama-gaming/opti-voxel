@@ -73,8 +73,8 @@ using TableDefPtr = std::shared_ptr<const TableDef>;
 // The types available to the table (a new type = a shader recompile). GLSL functions arch_<index>.
 class DefLibrary {
 public:
-    // p_material: the type's default material (a record with Material::FROM_TYPE takes it).
-    int add(const TableDefPtr &p_def, uint32_t p_material = Material::GROUND);
+    // p_material: the type's default material (a record with Material::FROM_TYPE takes it). Generic shapes inherit.
+    int add(const TableDefPtr &p_def, uint32_t p_material = Material::INHERIT);
     int size() const { return int(list.size()); }
     const TableDef &operator[](int p_index) const { return *list[p_index]; }
     const std::vector<TableDefPtr> &all() const { return list; }
@@ -211,7 +211,7 @@ String generate_library_glsl(const DefLibrary &p_library);
 // The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material)` (fold_onto
 // over the chunk's list: g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers, a list word being the record
 // id | its palette index << SDFGpuTable::LIST_ID_BITS; touched is set when an instance passes its box test, material
-// to the palette index of a record that wins) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
+// to the palette index of a record that wins, unless it is ChunkPalette::INHERIT_INDEX) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
 String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize);
 
 // Bytes of one DefRecord in the GPU buffer (10 x vec4, all 16-byte aligned).
@@ -230,6 +230,11 @@ bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_
 // and for the smooth operators the side their hard min picks. The same comparisons as the operators, so the
 // distances are untouched.
 bool record_wins(const Float4 &p_r, const Float4 &p_c, Combine p_op);
+
+// A record's material: p_material, or its type's (p_type_material) when Material::FROM_TYPE. Material::INHERIT only
+// holds for the cutters (subtractions): a union that inherited would take whatever record won the sample before it
+// in list order (a rock touching a crown turning green), so it is ground.
+uint32_t record_material(uint32_t p_material, uint32_t p_type_material, Combine p_op);
 
 // The fold onto the ground's register p_r: each listed instance (in order, its box test) combined in. Returns the
 // register (gradient, value) before the epilogue. p_list holds the instance indices in table order. p_box_test

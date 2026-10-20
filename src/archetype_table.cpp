@@ -1,5 +1,6 @@
 // The archetype table: the library, the records, the locality rule and the fold (archetype_table.hpp).
 #include "archetype_table.hpp"
+#include "chunk_palette.hpp"
 #include "sdf_base.hpp"
 
 #include <cmath>
@@ -224,6 +225,12 @@ bool record_wins(const Float4 &p_r, const Float4 &p_c, Combine p_op) {
     return p_op == Combine::UNION || p_op == Combine::SMOOTH_UNION ? p_c.w < p_r.w : -p_c.w > p_r.w;
 }
 
+uint32_t record_material(uint32_t p_material, uint32_t p_type_material, Combine p_op) {
+    const uint32_t m = p_material == Material::FROM_TYPE ? p_type_material : p_material;
+    const bool cuts = p_op == Combine::SUBTRACT || p_op == Combine::SMOOTH_SUBTRACT;
+    return m == Material::INHERIT && !cuts ? Material::GROUND : m;
+}
+
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
         const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched, const uint16_t *p_palette, uint32_t *r_material) {
     thread_local std::vector<Float4> regs;
@@ -237,7 +244,7 @@ Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_re
         run_registers(p_library[rec.def].program, p_pos, p_lod, regs, &dr);
         Float4 c = regs[p_library[rec.def].program.output];
         c.w = c.w + band_erosion(rec.erode, rec.erode_from, p_lod); // the band rule's erosion (set_band)
-        if (r_material && p_palette && record_wins(r, c, rec.op)) {
+        if (r_material && p_palette && p_palette[i] != ChunkPalette::INHERIT_INDEX && record_wins(r, c, rec.op)) {
             *r_material = p_palette[i];
         }
         r = combine4(r, c, rec);
@@ -350,8 +357,9 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
         }
         precise vec4 c = arch_eval_instance(p, lod, rec);
         c.w = c.w + intBitsToFloat(rec.box_hi.w) * max(exact_pow2(lod) - intBitsToFloat(rec.anchor_hi.w), 0.0);
-        if (arch_record_wins(r, c, rec.head.y)) {
-            material = word >> LIST_ID_BITSu;
+        uint index = word >> LIST_ID_BITSu;
+        if (index != INHERIT_INDEXu && arch_record_wins(r, c, rec.head.y)) {
+            material = index;
         }
         r = arch_combine(r, c, rec);
         touched = true;
@@ -361,7 +369,8 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
 
 )glsl")
                     .replace("LIST_ID_MASK", itos(SDFGpuTable::LIST_ID_MASK))
-                    .replace("LIST_ID_BITS", itos(SDFGpuTable::LIST_ID_BITS));
+                    .replace("LIST_ID_BITS", itos(SDFGpuTable::LIST_ID_BITS))
+                    .replace("INHERIT_INDEX", itos(ChunkPalette::INHERIT_INDEX));
     // finish_table.
     code += "vec4 arch_finish(vec4 o, int lod) {\n";
     if (p_normalize) {

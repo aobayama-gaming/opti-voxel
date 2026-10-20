@@ -45,14 +45,69 @@ varying flat float v_lod;
 varying flat vec3 v_chunk;
 varying flat ivec2 v_ids;
 varying float v_height; // metres above the world origin (shaded view: contour lines)
-// The provoking corner's material (one flat value: the pass is vertex-bound, every interpolant costs); its
-// parameters are fetched per fragment, and only off the ground.
-varying flat int v_material;
+// The quad's two materials, from the provoking corner A: x = A's (global id), y = the other one's | its corner mask
+// << MATERIAL_ID_BITS (bit k, k = 1..3: corner k is not A's material). The fragment's weight is the mask interpolated
+// over v_quad_uv, so the blend adds no interpolant: triangles are smaller than a pixel here, every attribute the
+// fragment reads costs setup per triangle.
+varying flat ivec2 v_materials;
 
 vec3 hash3(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
     p += dot(p, p.yxz + 33.33);
     return fract((p.xxy + p.yxx) * p.zyx);
+}
+
+float hash1(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+
+// Trilinear value noise in [0, 1], one lattice cell per unit.
+float value_noise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    float x00 = mix(hash1(i), hash1(i + vec3(1, 0, 0)), f.x);
+    float x10 = mix(hash1(i + vec3(0, 1, 0)), hash1(i + vec3(1, 1, 0)), f.x);
+    float x01 = mix(hash1(i + vec3(0, 0, 1)), hash1(i + vec3(1, 0, 1)), f.x);
+    float x11 = mix(hash1(i + vec3(0, 1, 1)), hash1(i + vec3(1, 1, 1)), f.x);
+    return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
+}
+
+// A corner's material: its chunk's palette block (header h1), its index in it, its id (palette). Index 0 is always
+// the ground: no fetch (most corners).
+uint corner_material(uvec4 h1, uint index) {
+    if (index == 0u) {
+        return MATERIAL_GROUND;
+    }
+    uint entry = page_header_palette(h1) + index;
+    return page_palette_id(texelFetch(palette_tex, page_palette_texel(entry), 0), entry);
+}
+
+// A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
+// material_tex. p: the fragment's position (metres, render space).
+void material_shading(uint mat_id, vec3 ground, vec3 p, out vec3 albedo, out float roughness, out vec3 emission) {
+    albedo = ground;
+    roughness = 1.0;
+    emission = vec3(0.0);
+    if (mat_id == MATERIAL_GROUND) {
+        return;
+    }
+    ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
+    vec4 m0 = texelFetch(material_tex, mt, 0);
+    vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
+    albedo = m0.rgb;
+    roughness = m0.a;
+    emission = m1.rgb;
+    if (m1.a == MATERIAL_PATTERN_LAVA) {
+        // Lava: a warped crust, dark seams over a glow that drifts slowly.
+        vec2 q = p.xz * 0.15;
+        q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
+        float seam = abs(sin(q.x * 2.1) * sin(q.y * 1.9) + 0.5 * sin((q.x - q.y) * 3.3));
+        float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
+        emission = mix(m1.rgb * 0.11, m1.rgb * pulse, smoothstep(0.03, 0.18, seam));
+    }
 }
 
 void vertex() {
@@ -75,15 +130,24 @@ void vertex() {
     vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
     vec3 n = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
-    // The corner's material: its chunk's palette block (header), its index in it (corner), its id (palette). Index 0
-    // is always the ground: no fetch (most corners).
-    uint index = page_decode_palette(c);
-    uint mat_id = MATERIAL_GROUND;
-    if (index != 0u) {
-        uint entry = page_header_palette(h1) + index;
-        mat_id = page_palette_id(texelFetch(palette_tex, page_palette_texel(entry), 0), entry);
+    // The quad's materials: a = corner A's, b = the first other one in B, C, D (a when uniform), and which corners
+    // are not a. Flat values come from the provoking corner, A in both triangles: only A reads the other corners (the
+    // quad's texels are consecutive) and goes through the palette, the others' values are discarded. A third
+    // material in one quad (three meeting inside one cell) draws as b.
+    v_materials = ivec2(0);
+    if (corner == 0) {
+        uint ia = page_decode_palette(c);
+        uint ib = ia;
+        uint mask = 0u;
+        for (int k = 1; k < 4; k++) {
+            uint ik = page_decode_palette(texelFetch(quad_tex, ivec2(int(HEADER_TEXELS) + VERTEX_ID + k, INSTANCE_ID), 0));
+            ib = ib == ia ? ik : ib;
+            mask |= ik != ia ? 1u << uint(k) : 0u;
+        }
+        uint mat_a = corner_material(h1, ia);
+        uint mat_b = ib == ia ? mat_a : corner_material(h1, ib);
+        v_materials = ivec2(int(mat_a), int(mat_b | mask << MATERIAL_ID_BITS));
     }
-    v_material = int(mat_id);
 
     v_world_normal = n;
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4);
@@ -131,26 +195,25 @@ void fragment() {
     // Contours fade out where they would be denser than ~10 pixels apart.
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
     albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
-    // A material off the ground: its parameters (material_tex) replace the ground's colours.
-    float roughness = 1.0;
-    vec3 emission = vec3(0.0);
-    uint mat_id = uint(v_material);
-    if (mat_id != MATERIAL_GROUND) {
-        ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
-        vec4 m0 = texelFetch(material_tex, mt, 0);
-        vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
-        albedo = m0.rgb;
-        roughness = m0.a;
-        emission = m1.rgb;
-        if (m1.a == MATERIAL_PATTERN_LAVA) {
-            // Lava: a warped crust, dark seams over a glow that drifts slowly.
-            vec2 q = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz * 0.15;
-            q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
-            float seam = abs(sin(q.x * 2.1) * sin(q.y * 1.9) + 0.5 * sin((q.x - q.y) * 3.3));
-            float pulse = 0.75 + 0.25 * sin(q.x * 0.7 + q.y * 0.9 + TIME * 0.3);
-            emission = mix(m1.rgb * 0.11, m1.rgb * pulse, smoothstep(0.03, 0.18, seam));
-        }
+    vec3 ground = albedo;
+    vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    // Two materials: one is shaded per fragment, the higher id where the weight towards it (the corner mask over the
+    // quad), jittered by a noise of about a cell (of this LOD), passes 1/2, so the border wanders instead of following
+    // the cell grid. Towards the higher id, not towards b: two quads sharing an edge may hold the pair in either
+    // order, and must agree on the border.
+    int mat_id = v_materials.x;
+    if (v_materials.y != v_materials.x) {
+        int mat_b = v_materials.y & ((1 << int(MATERIAL_ID_BITS)) - 1);
+        int mask = v_materials.y >> int(MATERIAL_ID_BITS);
+        float to_b = mix(mix(0.0, float(mask >> 1 & 1), v_quad_uv.x), mix(float(mask >> 2 & 1), float(mask >> 3 & 1), v_quad_uv.x),
+                v_quad_uv.y);
+        float to_high = mat_b > mat_id ? to_b : 1.0 - to_b;
+        float jitter = value_noise(p / (voxel_size * exp2(v_lod)) * 1.7) - 0.5;
+        mat_id = to_high + 0.6 * jitter > 0.5 ? max(mat_id, mat_b) : min(mat_id, mat_b);
     }
+    float roughness;
+    vec3 emission;
+    material_shading(uint(mat_id), ground, p, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -177,7 +240,7 @@ void fragment() {
         NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
     } else if (debug_view == 9) {
         albedo = vec3(0.0);
-        emission = v_material == 0 ? vec3(0.15) : hash3(vec3(float(v_material) * 0.61 + 0.5)) * 0.8 + 0.2;
+        emission = uint(mat_id) == MATERIAL_GROUND ? vec3(0.15) : hash3(vec3(float(mat_id) * 0.61 + 0.5)) * 0.8 + 0.2;
     }
     if (debug_view == 4) {
         float d = min(min(v_quad_uv.x, 1.0 - v_quad_uv.x), min(v_quad_uv.y, 1.0 - v_quad_uv.y));

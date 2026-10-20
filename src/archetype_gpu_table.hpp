@@ -64,7 +64,7 @@ private:
         int64_t build_usec = 0;
         int64_t batches = 0;
         int64_t truncated = 0;
-        int64_t palette_truncated = 0; // chunks naming more than PageFormat::PALETTE_SIZE materials
+        int64_t palette_truncated = 0; // chunks naming more than ChunkPalette::MAX_ENTRIES materials
         int64_t palette_entries[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t palette_longest[ChunkMath::MAX_LOD_NUMBERS] = {};
     };

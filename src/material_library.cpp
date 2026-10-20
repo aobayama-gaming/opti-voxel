@@ -28,8 +28,8 @@ uint32_t Library::add(const String &p_name, const Params &p_params) {
 
 String glsl_constants() {
     return vformat("const uint MATERIAL_TEXELS = %du;\nconst uint MATERIALS_PER_ROW = %du;\nconst uint MATERIAL_GROUND = %du;\n"
-                   "const float MATERIAL_PATTERN_LAVA = %d.0;\n",
-            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, int(PATTERN_LAVA));
+                   "const uint MATERIAL_ID_BITS = %du;\nconst float MATERIAL_PATTERN_LAVA = %d.0;\n",
+            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, ID_BITS, int(PATTERN_LAVA));
 }
 
 uint32_t Library::find(const String &p_name) const {

@@ -234,11 +234,11 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
 
-	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted.
+	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted, material.
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_V:
 		var terrain := _terrain()
 		if terrain:
-			terrain.debug_view = (terrain.debug_view + 1) % 9
+			terrain.debug_view = (terrain.debug_view + 1) % 10
 			print("debug view ", terrain.debug_view)
 
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
