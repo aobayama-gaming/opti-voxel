@@ -145,7 +145,7 @@ void PageAuditor::_analyse() {
             const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(page, q / QuadPagePool::QUAD_GROUP));
             const uint16_t *row = PageFormat::row(page, q / QuadPagePool::QUAD_GROUP);
             if (in_live && q % QuadPagePool::QUAD_GROUP == 0 &&
-                    (chunk != WorldCoord::lo32_i(ranges[r].chunk) || PageFormat::header_palette(row) != ranges[r].palette_offset)) {
+                    (chunk != WorldCoord::lo32_i(ranges[r].chunk) || PageFormat::header_palette(row) != ranges[r].palette.offset)) {
                 bad_header++;
             }
             int zero_corners = 0;
@@ -154,7 +154,7 @@ void PageAuditor::_analyse() {
                 const uint16_t *c = PageFormat::corner(page, q, k);
                 p[k] = PageFormat::decode_local(c, scale);
                 zero_corners += PageFormat::is_zero(c) ? 1 : 0;
-                bad_material += in_live && PageFormat::decode_palette(c) >= ranges[r].palette_entries ? 1 : 0;
+                bad_material += in_live && PageFormat::decode_palette(c) >= ranges[r].palette.palette->size() ? 1 : 0;
             }
             if (zero_corners > 0 && zero_corners < 4) {
                 partial++;

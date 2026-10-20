@@ -27,6 +27,8 @@ enum Builtin : uint32_t {
 
 // Ids stay below 2^24: the legacy mesher (the oracle) carries them through a float vertex channel.
 static constexpr uint32_t MAX_MATERIALS = 1u << 24;
+// A record's material when it takes its library type's (DefLibrary::material), resolved by SDFTable::finish_record.
+static constexpr uint32_t FROM_TYPE = UINT32_MAX;
 
 // Shading patterns the page shader knows (Params::pattern).
 enum Pattern : int {
@@ -44,7 +46,12 @@ struct Params {
 // Texels per material in make_image(): (albedo.rgb, roughness), (emission.rgb, pattern).
 static constexpr int TEXELS = 2;
 // make_image()'s width in materials; a material m is at texel (TEXELS * (m % IMAGE_MATERIALS_PER_ROW) + t, m / IMAGE_MATERIALS_PER_ROW).
-static constexpr int IMAGE_MATERIALS_PER_ROW = 512;
+// MAX_MATERIALS / IMAGE_MATERIALS_PER_ROW rows stay within a texture's 16,384.
+static constexpr int IMAGE_MATERIALS_PER_ROW = 4096;
+static_assert(MAX_MATERIALS / IMAGE_MATERIALS_PER_ROW <= 16384, "material_tex rows");
+
+// The layout above as GLSL constants, for the page shader.
+String glsl_constants();
 
 class Library {
 public:

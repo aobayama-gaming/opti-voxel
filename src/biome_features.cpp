@@ -60,11 +60,9 @@ bool ground_span(const Site &p_site, const GroundFn &p_ground_y, double p_r, int
     return sample(p_site.x, p_site.z);
 }
 
-TableRecord record(int p_type, uint32_t p_material, Combine p_op, double p_k, const VoxelPos &p_anchor, std::initializer_list<float> p_params,
-        uint32_t p_salt) {
+TableRecord record(int p_type, Combine p_op, double p_k, const VoxelPos &p_anchor, std::initializer_list<float> p_params, uint32_t p_salt) {
     TableRecord rec;
     rec.def = uint8_t(p_type);
-    rec.material = p_material;
     rec.op = p_op;
     rec.set_k(float(p_k));
     rec.anchor = p_anchor;
@@ -92,12 +90,13 @@ bool lava_lake(const Site &p_site, const GroundFn &p_ground_y, const DefLibrary 
     const int64_t bottom = lava - int64_t(std::ceil(LAVA_DEPTH * r));
     const int64_t top = rim_hi + int64_t(std::ceil(BASIN_CLEAR * r + bump));
     const int64_t half = (top - bottom + 1) / 2;
-    r_out.records.push_back(record(p_types.basin, Material::SCORCHED_ROCK, Combine::SMOOTH_SUBTRACT, BASIN_K * r, VoxelPos(p_site.x, bottom + half, p_site.z),
+    r_out.records.push_back(record(p_types.basin, Combine::SMOOTH_SUBTRACT, BASIN_K * r, VoxelPos(p_site.x, bottom + half, p_site.z),
             { float(half), float(r), amp }, p_site.seed));
     // The slab: its top face is the lava, from 4 voxels under the basin's bottom.
     const int64_t slab_half = (lava - bottom + 4 + 1) / 2;
-    r_out.records.push_back(record(p_types.cylinder, Material::LAVA, Combine::UNION, 0.0, VoxelPos(p_site.x, lava - slab_half, p_site.z),
+    r_out.records.push_back(record(p_types.cylinder, Combine::UNION, 0.0, VoxelPos(p_site.x, lava - slab_half, p_site.z),
             { float(slab_half), float(slab_r) }, p_site.seed + 1u));
+    r_out.records.back().material = Material::LAVA; // the cylinder type is shared: the slab says it is lava
     r_out.top_y = lava;
     r_out.lava = true;
     r_out.pool.top = VoxelPos(p_site.x, lava, p_site.z);
@@ -120,7 +119,7 @@ void floating_island(const Site &p_site, const GroundFn &p_ground_y, const DefLi
     ground_span(p_site, p_ground_y, double(hi.x), 3, INFINITY, ground_lo, ground_hi);
     const double altitude = (ISLAND_ALT_LO_M + ISLAND_ALT_RANGE_M * unit_of(hash3(p_site.seed, 0xA17u, 0u).x)) / p_voxel;
     const int64_t y = ground_hi + std::llround(altitude) - int64_t(std::floor(lo.y)); // the box's bottom `altitude` up
-    r_out.records.push_back(record(p_types.island, Material::ISLAND_ROCK, Combine::UNION, 0.0, VoxelPos(p_site.x, y, p_site.z), params, p_site.seed));
+    r_out.records.push_back(record(p_types.island, Combine::UNION, 0.0, VoxelPos(p_site.x, y, p_site.z), params, p_site.seed));
     r_out.top_y = y;
 }
 
@@ -137,9 +136,9 @@ int cell_shift(Feature p_feature, double p_voxel) {
 Types add_types(DefLibrary &r_library, double p_voxel) {
     const int k = ExactNoise::lattice_k(BUMP_M, p_voxel);
     Types t;
-    t.basin = r_library.add(make_basin_type(k, BASIN_SEED));
+    t.basin = r_library.add(make_basin_type(k, BASIN_SEED), Material::SCORCHED_ROCK);
     t.cylinder = r_library.add(make_cylinder_type());
-    t.island = r_library.add(make_island_type(k, ISLAND_SEED));
+    t.island = r_library.add(make_island_type(k, ISLAND_SEED), Material::ISLAND_ROCK);
     return t;
 }
 

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 static constexpr const char DIRECT_TEMPLATE[] = R"glsl(#version 450
 
@@ -115,6 +116,9 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     pool->set_material_param("pos_scale", PageFormat::pos_scale(chunk_param.chunk_size));
     // Render positions are relative to the world origin (low words, wrapping).
     pool->set_material_param("origin_chunk_lo", WorldCoord::lo32_i(chunk_param.origin_chunk));
+    // The materials' parameters (Material::Library::make_image), read by id through the chunks' palettes.
+    material_texture = ImageTexture::create_from_image(sdf->get_materials().make_image());
+    pool->set_material_param("material_tex", material_texture->get_rid());
     page_state.resize(pool->get_page_count());
     palettes.initialize(settings.palette_capacity);
 
@@ -135,6 +139,13 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", bindings);
     shader = shader.replace("/*GLSL_PAGE_FORMAT*/", PageFormat::glsl_encode());
+    shader = shader.replace("/*GLSL_MATERIAL_BINDINGS*/",
+            CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly") +
+                    vformat("layout(set = 0, binding = %d, rgba16ui) uniform restrict writeonly uimage2D palette_image;\n"
+                            "layout(set = 0, binding = %d, std430) restrict readonly buffer PaletteBatch { uint palette_batch[]; };\n"
+                            "const uint PALETTE_GROUND_BLOCK = %du;\n",
+                            PALETTE_IMAGE_BINDING, PALETTE_BATCH_BINDING, PaletteAlloc::GROUND_BLOCK));
+    shader = shader.replace("/*GLSL_PALETTE_BATCH*/", PalettePool::glsl_batch());
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
     shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
@@ -224,9 +235,9 @@ void GPUDirectMesher::_rt_initialize() {
     buffer_table_list = rd->storage_buffer_create(table_list_capacity);
     uniforms.push_back(make_uniform(8, buffer_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     uniforms.push_back(make_uniform(9, buffer_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniforms.push_back(make_uniform(10, buffer_material, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniforms.push_back(make_uniform(11, palettes.rt_texture(), RenderingDevice::UNIFORM_TYPE_IMAGE));
-    uniforms.push_back(make_uniform(12, buffer_palette_batch, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    uniforms.push_back(make_uniform(MATERIAL_BINDING, buffer_material, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+    uniforms.push_back(make_uniform(PALETTE_IMAGE_BINDING, palettes.rt_texture(), RenderingDevice::UNIFORM_TYPE_IMAGE));
+    uniforms.push_back(make_uniform(PALETTE_BATCH_BINDING, buffer_palette_batch, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     // All passes declare the same bindings, so one set serves them all.
     uniform_set = rd->uniform_set_create(uniforms, shaders[0], 0);
 
@@ -722,7 +733,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     PackedByteArray records;
     std::vector<std::vector<uint32_t>> chunk_palettes;
     const uint32_t table_version = _table_payload(chunks, ids, list, records, &chunk_palettes);
-    const PackedByteArray palette_batch = palettes.place_batch(chunk_palettes, uint32_t(chunks.size()), batch.palettes);
+    const PackedByteArray palette_batch = palettes.place_batch(chunk_palettes, batch.palettes);
 
     PackedInt32Array pages;
     for (uint32_t k = 0; k < settings.pages_per_batch; k++) {
@@ -845,7 +856,6 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
             if (flags & 1u) { // overflow: try again in a later batch
                 stats.overflow_requeued++;
-                palettes.release(batch.palettes[i]);
                 if (output.loaded_chunk.has(chunk_id)) {
                     // A re-mesh (instance edit): send_chunk rebuilds chunk_queue from the scan's dirty
                     // chunks only, which a loaded chunk isn't, so it would be lost there.
@@ -866,7 +876,6 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 if (required > batch.table_version) {
                     _queue_remesh(chunk_id);
                     stats.remesh_stale_dropped++;
-                    palettes.release(batch.palettes[i]);
                     // Its quads are already in the page: kill them, or the old surface stays drawn next
                     // to the chunk's re-mesh for as long as the page lives.
                     if (count > 0) {
@@ -888,11 +897,10 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 const uint32_t k = base / settings.page_capacity;
                 if (k >= batch.pages.size() || base % settings.page_capacity + count > settings.page_capacity) {
                     ERR_PRINT(vformat("GPUDirectMesher: bad directory entry: batch %d chunk %d count %d base %d flags %d", c.batch_id, (int64_t)i, count, base, flags));
-                    palettes.release(batch.palettes[i]);
                     continue;
                 }
                 out.owner = this;
-                out.palette = batch.palettes[i];
+                out.palette = std::exchange(batch.palettes[i], PalettePool::Block()); // the chunk owns it now
                 out.page = batch.pages[k];
                 out.quad_offset = base % settings.page_capacity;
                 out.quad_count = count;
@@ -904,13 +912,16 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
                 const AABB box = _chunk_aabb(chunk_id);
                 page_bounds[k] = page_has_bounds[k] ? page_bounds[k].merge(box) : box;
                 page_has_bounds[k] = true;
-            } else {
-                palettes.release(batch.palettes[i]); // no quads: nothing names the block
             }
             stats.chunks_meshed++;
             output.add_new_loaded(out);
         }
 
+        // The palettes no loaded chunk took (overflow, stale, empty): nothing names their blocks any more (a stale
+        // result's rows are killed below, before any batch that could reuse them).
+        for (const PalettePool::Block &b : batch.palettes) {
+            palettes.release(b);
+        }
         // Dropped (stale) results in pages that stay: their slots are drawn until killed. A page left
         // without chunks is hidden and reset below, slots included.
         for (const StaleRange &r : stale_ranges) {

@@ -348,7 +348,7 @@ vec3 cascade_vertex_gradient(uvec3 gid, vec3 f) {
 // largest w among the corners with !(w > 0), the side rule every pass uses), ties to the first in x + 2y + 4z order.
 // A cell with a vertex has a solid corner.
 uint cascade_vertex_material(uvec3 gid) {
-    uint best = 0u;
+    uint best = get_flat_index_z(gid);
     float best_w = 0.0;
     bool found = false;
     for (uint k = 0u; k < 8u; k++) {
@@ -357,10 +357,10 @@ uint cascade_vertex_material(uvec3 gid) {
         if (!(w > 0.0) && (!found || w > best_w)) {
             found = true;
             best_w = w;
-            best = sdf_material[idx];
+            best = idx;
         }
     }
-    return best;
+    return sdf_material[best];
 }
 
 )glsl";
@@ -421,9 +421,11 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     const char *channels = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod";
     code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c, material)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
-    code = code.replace("/*MATERIAL_BUFFER*/",
-            p_material ? vformat("layout(set = 0, binding = %d, std430) restrict writeonly buffer SDFMaterial { uint sdf_material[]; };", MATERIAL_BINDING) : String());
-    code = code.replace("/*MATERIAL_STORE*/", p_material ? "sdf_material[sample_index] = material;" : "");
+    // Only the fold writes materials, and only for chunks with a list: a chunk without one is ground, and the meshers
+    // don't read its samples' materials (its palette is the ground block, or its list is empty).
+    const bool store = p_material && p_fold;
+    code = code.replace("/*MATERIAL_BUFFER*/", store ? glsl_material_buffer(MATERIAL_BINDING, "writeonly") : String());
+    code = code.replace("/*MATERIAL_STORE*/", store ? "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }" : "");
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
@@ -450,6 +452,10 @@ bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPo
     const ChunkId id(p_point.x / half + lod_size, p_point.y / half + lod_size, p_point.z / half + lod_size);
     GPUFrame::encode_chunk_input(r_bytes, p_index, id, p_point_param);
     return true;
+}
+
+String glsl_material_buffer(int p_binding, const char *p_access) {
+    return vformat("layout(set = 0, binding = %d, std430) restrict %s buffer SDFMaterial { uint sdf_material[]; };\n", p_binding, p_access);
 }
 
 String fill_mesher_pass(const String &p_shader, const String &p_pass) {

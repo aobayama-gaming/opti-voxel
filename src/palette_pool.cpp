@@ -1,16 +1,40 @@
 #include "palette_pool.hpp"
 
 #include "material_library.hpp"
-#include "page_format.hpp"
+#include "quad_page_pool.hpp"
 
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/error_macros.hpp>
 
+#include <cstring>
+
+namespace {
+
+// The palette of every chunk on the ground block.
+const std::shared_ptr<const std::vector<uint32_t>> &ground_palette() {
+    static const std::shared_ptr<const std::vector<uint32_t>> palette = std::make_shared<const std::vector<uint32_t>>(1, Material::GROUND);
+    return palette;
+}
+
+} // namespace
+
 uint64_t PalettePool::batch_bytes(uint32_t p_batch_size) {
     const uint64_t texels = uint64_t(p_batch_size) * PageFormat::PALETTE_TEX_WIDTH; // every chunk a whole palette
     return (uint64_t(p_batch_size) + 1 + texels * BATCH_TEXEL_WORDS) * 4;
+}
+
+String PalettePool::glsl_batch() {
+    return vformat(R"glsl(
+void write_palette_texel(uint t) {
+    if (t < palette_batch[batch.batch_count]) {
+        uint at = batch.batch_count + 1u + %du * t;
+        imageStore(palette_image, page_palette_texel(palette_batch[at]), page_palette_texel_value(palette_batch[at + 1u], palette_batch[at + 2u]));
+    }
+}
+)glsl",
+            BATCH_TEXEL_WORDS);
 }
 
 void PalettePool::initialize(uint32_t p_capacity) {
@@ -19,43 +43,37 @@ void PalettePool::initialize(uint32_t p_capacity) {
     full = 0;
 }
 
-PackedByteArray PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_palettes, uint32_t p_batch_size, std::vector<Block> &r_blocks) {
-    r_blocks.assign(p_palettes.size(), Block());
-    std::vector<uint32_t> words(p_batch_size + 1, PaletteAlloc::GROUND_BLOCK);
-    uint32_t texels = 0;
-    for (size_t i = 0; i < p_palettes.size(); i++) {
+PackedByteArray PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_palettes, std::vector<Block> &r_blocks) {
+    const uint32_t chunks = uint32_t(p_palettes.size());
+    r_blocks.assign(chunks, Block());
+    std::vector<uint32_t> words(chunks + 1, PaletteAlloc::GROUND_BLOCK);
+    for (uint32_t i = 0; i < chunks; i++) {
         std::vector<uint32_t> &palette = p_palettes[i];
         Block &b = r_blocks[i];
-        if (palette.size() > 1) {
-            const int64_t offset = alloc.alloc(uint32_t(palette.size()));
-            if (offset < 0) {
-                full++;
-                ERR_PRINT_ONCE("PalettePool: no room for a chunk palette (palette_capacity): it draws as ground.");
-            } else {
-                b.offset = uint32_t(offset);
-                b.entries = uint32_t(palette.size());
-                blocks_live++;
-                words[i] = b.offset;
-                for (uint32_t e = 0; e < b.entries; e += 2) {
-                    words.push_back((b.offset + e) / 2);
-                    words.push_back(palette[e]);
-                    words.push_back(e + 1 < b.entries ? palette[e + 1] : Material::GROUND);
-                    words.push_back(0);
-                    texels++;
-                }
-            }
+        b.palette = ground_palette();
+        if (palette.size() <= 1) {
+            continue;
         }
-        if (b.offset == PaletteAlloc::GROUND_BLOCK) {
-            palette.assign(1, Material::GROUND);
+        const int64_t offset = alloc.alloc(uint32_t(palette.size()));
+        if (offset < 0) {
+            full++;
+            ERR_PRINT_ONCE("PalettePool: no room for a chunk palette (palette_capacity): it draws as ground.");
+            continue;
+        }
+        b.offset = uint32_t(offset);
+        blocks_live++;
+        words[i] = b.offset;
+        for (uint32_t e = 0; e < palette.size(); e += 2) {
+            words.push_back(b.offset + e);
+            words.push_back(palette[e]);
+            words.push_back(e + 1 < palette.size() ? palette[e + 1] : Material::GROUND);
+            words[chunks]++;
         }
         b.palette = std::make_shared<const std::vector<uint32_t>>(std::move(palette));
     }
-    words[p_batch_size] = texels;
     PackedByteArray bytes;
     bytes.resize(int64_t(words.size()) * 4);
-    for (size_t i = 0; i < words.size(); i++) {
-        bytes.encode_u32(int64_t(i) * 4, words[i]);
-    }
+    std::memcpy(bytes.ptrw(), words.data(), words.size() * 4); // little-endian, like the GPU
     return bytes;
 }
 
@@ -63,7 +81,7 @@ void PalettePool::release(const Block &p_block) {
     if (p_block.offset == PaletteAlloc::GROUND_BLOCK) {
         return;
     }
-    alloc.free(p_block.offset, p_block.entries);
+    alloc.free(p_block.offset, uint32_t(p_block.palette->size()));
     blocks_live--;
 }
 
@@ -80,7 +98,7 @@ Dictionary PalettePool::get_stats() const {
 void PalettePool::rt_create(RenderingDevice *p_rd) {
     Ref<RDTextureFormat> format;
     format.instantiate();
-    format->set_format(RenderingDevice::DATA_FORMAT_R16G16B16A16_UINT);
+    format->set_format(QuadPagePool::TEX_FORMAT); // RGBA16UI, like the pages
     format->set_width(PageFormat::PALETTE_TEX_WIDTH);
     format->set_height(rows());
     format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |

@@ -1070,7 +1070,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
     PackedByteArray list_bytes;
     list_bytes.resize(int64_t(table.list.size()) * 4);
     for (size_t i = 0; i < table.list.size(); i++) {
-        list_bytes.encode_u32(int64_t(i) * 4, table.list[i] | uint32_t(table.palette[i]) << SDFGpuTable::LIST_ID_BITS);
+        list_bytes.encode_u32(int64_t(i) * 4, SDFGpuTable::list_word(table.list[i], table.palette[i]));
     }
     const RID buffer_list = p_rd->storage_buffer_create(list_bytes.size(), list_bytes);
 

@@ -5,8 +5,6 @@
 
 #include <godot_cpp/core/error_macros.hpp>
 
-static_assert(PaletteAlloc::MAX_BLOCK == PageFormat::PALETTE_SIZE, "a block holds a whole palette");
-
 namespace ChunkPalette {
 
 bool build(const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> &r_palette, std::vector<uint16_t> &r_index) {
@@ -34,17 +32,9 @@ bool build(const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> 
 
 } // namespace ChunkPalette
 
-uint32_t PaletteAlloc::block_size(uint32_t p_entries) {
-    uint32_t size = MIN_BLOCK;
-    while (size < p_entries) {
-        size <<= 1;
-    }
-    return size;
-}
-
-int PaletteAlloc::order_of(uint32_t p_size) const {
+int PaletteAlloc::order_for(uint32_t p_entries) {
     int order = 0;
-    while ((MIN_BLOCK << order) < p_size) {
+    while ((MIN_BLOCK << order) < p_entries) {
         order++;
     }
     return order;
@@ -54,7 +44,7 @@ void PaletteAlloc::reset(uint32_t p_capacity) {
     ERR_FAIL_COND_MSG(p_capacity < 2 * MAX_BLOCK || (p_capacity & (p_capacity - 1)) != 0, "PaletteAlloc: capacity must be a power of two >= 2 blocks of MAX_BLOCK.");
     cap = p_capacity;
     used_entries = 0;
-    free_lists.assign(order_of(cap) + 1, std::set<uint32_t>());
+    free_lists.assign(order_for(cap) + 1, std::set<uint32_t>());
     free_lists.back().insert(0);
     const int64_t ground = alloc(MIN_BLOCK); // the lowest free block: offset 0
     DEV_ASSERT(ground == GROUND_BLOCK);
@@ -63,7 +53,7 @@ void PaletteAlloc::reset(uint32_t p_capacity) {
 
 int64_t PaletteAlloc::alloc(uint32_t p_entries) {
     ERR_FAIL_COND_V(p_entries == 0 || p_entries > MAX_BLOCK, -1);
-    const int want = order_of(block_size(p_entries));
+    const int want = order_for(p_entries);
     int order = want;
     while (order < int(free_lists.size()) && free_lists[order].empty()) {
         order++;
@@ -83,7 +73,7 @@ int64_t PaletteAlloc::alloc(uint32_t p_entries) {
 
 void PaletteAlloc::free(uint32_t p_offset, uint32_t p_entries) {
     ERR_FAIL_COND(p_offset == GROUND_BLOCK || p_offset >= cap);
-    int order = order_of(block_size(p_entries));
+    int order = order_for(p_entries);
     used_entries -= MIN_BLOCK << order;
     uint32_t offset = p_offset;
     while (order + 1 < int(free_lists.size())) { // merge with the free buddy

@@ -75,6 +75,10 @@ ChunkParam point_param(const ChunkParam &p_param);
 // False (and an error) otherwise.
 bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPos &p_point, int p_lod, const ChunkParam &p_point_param);
 
+// The sdf_material declaration (uint per sample, indexed like sdf_sample) at p_binding, with p_access (readonly,
+// writeonly): the cascade writes it, the meshers' vertex passes read it.
+String glsl_material_buffer(int p_binding, const char *p_access);
+
 // Fills /*GLSL_VERTEX_GRADIENT*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers): the vertex
 // passes take their normal from cascade_vertex_gradient, since the cascade has no off-lattice evaluation, and
 // their material from cascade_vertex_material (the mesher declares sdf_material).

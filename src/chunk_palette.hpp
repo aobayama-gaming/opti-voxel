@@ -1,5 +1,7 @@
 #pragma once
 
+#include "page_format.hpp"
+
 #include <cstdint>
 #include <set>
 #include <vector>
@@ -24,7 +26,7 @@ bool build(const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> 
 class PaletteAlloc {
 public:
     static constexpr uint32_t MIN_BLOCK = 16;
-    static constexpr uint32_t MAX_BLOCK = 512; // PageFormat::PALETTE_SIZE
+    static constexpr uint32_t MAX_BLOCK = PageFormat::PALETTE_SIZE; // a whole palette
     static constexpr uint32_t GROUND_BLOCK = 0;
 
     // p_capacity: a power of two, at least 2 * MAX_BLOCK entries.
@@ -34,12 +36,13 @@ public:
     // Frees a block from alloc() (the same p_entries). GROUND_BLOCK is never freed.
     void free(uint32_t p_offset, uint32_t p_entries);
 
-    static uint32_t block_size(uint32_t p_entries);
+    static uint32_t block_size(uint32_t p_entries) { return MIN_BLOCK << order_for(p_entries); }
     uint32_t capacity() const { return cap; }
     uint32_t used() const { return used_entries; } // in block entries, the reserved block included
 
 private:
-    int order_of(uint32_t p_size) const;
+    // The block order holding p_entries: ceil(log2(p_entries / MIN_BLOCK)), at least 0.
+    static int order_for(uint32_t p_entries);
     uint32_t cap = 0;
     uint32_t used_entries = 0;
     std::vector<std::set<uint32_t>> free_lists; // per order: free block offsets

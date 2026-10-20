@@ -163,20 +163,15 @@ public:
     }
 
     // sdf() with the listed instances p_list folded in (GLSL cascade_sample_sdf, bit for bit): the bare sdf() where
-    // no instance's box test passes. *r_material (if given, with p_palette: the list entries' palette indices): the
-    // sample's palette index, 0 (ground) unless a record wins the fold.
+    // no instance's box test passes.
     ExactNoise::Float4 sample_sdf(const Archetype::InstanceSnapshot &p_snap, const uint32_t *p_list, uint32_t p_count,
-            const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod, const uint16_t *p_palette = nullptr,
-            uint32_t *r_material = nullptr) const {
+            const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod) const {
         const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel.y, p_lod);
-        if (r_material) {
-            *r_material = 0;
-        }
         if (p_count > 0) {
             const float s = ExactNoise::exact_pow2(p_lod);
             bool touched = false;
             const ExactNoise::Float4 r = Archetype::fold_onto(ExactNoise::Float4{ u.x * s, u.y * s, u.z * s, u.w * s }, *p_snap.library, p_snap.records,
-                    p_list, p_count, p_pos, p_lod, true, &touched, p_palette, r_material);
+                    p_list, p_count, p_pos, p_lod, true, &touched);
             if (touched) {
                 return Archetype::finish_table(r, p_lod, p_snap.out_scale, p_snap.normalize);
             }

@@ -73,13 +73,16 @@ using TableDefPtr = std::shared_ptr<const TableDef>;
 // The types available to the table (a new type = a shader recompile). GLSL functions arch_<index>.
 class DefLibrary {
 public:
-    int add(const TableDefPtr &p_def);
+    // p_material: the type's default material (a record with Material::FROM_TYPE takes it).
+    int add(const TableDefPtr &p_def, uint32_t p_material = Material::GROUND);
     int size() const { return int(list.size()); }
     const TableDef &operator[](int p_index) const { return *list[p_index]; }
     const std::vector<TableDefPtr> &all() const { return list; }
+    uint32_t material(int p_index) const { return materials[p_index]; }
 
 private:
     std::vector<TableDefPtr> list;
+    std::vector<uint32_t> materials;
 };
 
 // One instance, as the CPU keeps it. The GPU reads the same fields from a DefRecord (encode_record).
@@ -103,9 +106,10 @@ struct TableRecord {
     uint8_t max_lod = NEVER_DROPPED;
     float erode = 0.0f;
     float erode_from = 1.0f;
-    // Global material (material_library.hpp): CPU only, the GPU sees its chunk palette index in the list word
-    // (GpuTable::build_lists). A sample takes the material of the record that wins the fold there (record_wins).
-    uint32_t material = Material::GROUND;
+    // Global material (material_library.hpp), by default its type's: CPU only, the GPU sees its chunk palette index
+    // in the list word (GpuTable::build_lists). A sample takes the material of the record that wins the fold there
+    // (record_wins).
+    uint32_t material = Material::FROM_TYPE;
 
     static constexpr uint8_t NEVER_DROPPED = 255;
     bool listed_at(int p_lod) const { return p_lod < max_lod; }

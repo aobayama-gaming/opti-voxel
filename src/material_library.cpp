@@ -2,6 +2,7 @@
 
 #include <godot_cpp/core/error_macros.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 namespace Material {
 
@@ -23,6 +24,12 @@ uint32_t Library::add(const String &p_name, const Params &p_params) {
     names.push_back(p_name);
     params.push_back(p_params);
     return size() - 1;
+}
+
+String glsl_constants() {
+    return vformat("const uint MATERIAL_TEXELS = %du;\nconst uint MATERIALS_PER_ROW = %du;\nconst uint MATERIAL_GROUND = %du;\n"
+                   "const float MATERIAL_PATTERN_LAVA = %d.0;\n",
+            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, int(PATTERN_LAVA));
 }
 
 uint32_t Library::find(const String &p_name) const {

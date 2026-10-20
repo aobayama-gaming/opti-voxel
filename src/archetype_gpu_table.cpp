@@ -77,31 +77,34 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
         return;
     }
     const uint32_t cap = max_chunk_list();
-    // The chunks' lists and palettes on the worker pool (a dense scatter makes thousands of candidates per chunk).
+    // The chunks' lists and palettes on the worker pool (a dense scatter makes thousands of candidates per chunk): the
+    // list words come out packed (SDFGpuTable::list_word).
     struct Job {
         const InstanceSnapshot *snap;
         const ChunkId *chunks;
         std::vector<uint32_t> *lists;
         std::vector<uint32_t> *palettes;
-        std::vector<uint16_t> *indices;
         uint8_t *fits;
         static void run(void *p_job, uint32_t p_i) {
             const Job &job = *static_cast<const Job *>(p_job);
             std::vector<uint32_t> &list = job.lists[p_i];
             job.snap->chunk_list(job.chunks[p_i], list);
             thread_local std::vector<uint32_t> materials;
+            thread_local std::vector<uint16_t> indices;
             materials.resize(list.size());
             for (size_t k = 0; k < list.size(); k++) {
                 materials[k] = job.snap->records[list[k]].material;
             }
-            job.fits[p_i] = ChunkPalette::build(materials.data(), uint32_t(list.size()), job.palettes[p_i], job.indices[p_i]);
+            job.fits[p_i] = ChunkPalette::build(materials.data(), uint32_t(list.size()), job.palettes[p_i], indices);
+            for (size_t k = 0; k < list.size(); k++) {
+                list[k] = list_word(list[k], indices[k]);
+            }
         }
     };
     std::vector<std::vector<uint32_t>> lists(p_chunks.size());
     std::vector<std::vector<uint32_t>> palettes(p_chunks.size());
-    std::vector<std::vector<uint16_t>> palette_indices(p_chunks.size());
     std::vector<uint8_t> fits(p_chunks.size(), 1);
-    Job job{ snap.get(), p_chunks.data(), lists.data(), palettes.data(), palette_indices.data(), fits.data() };
+    Job job{ snap.get(), p_chunks.data(), lists.data(), palettes.data(), fits.data() };
     if (p_chunks.size() > 1) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
         pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
@@ -133,17 +136,13 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
         const int64_t base = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
         r_chunk_ids.encode_u32(base + 12, uint32_t(words.size()));
         r_chunk_ids.encode_s32(base + 28, int32_t(indices.size()));
-        for (size_t k = 0; k < indices.size(); k++) {
-            words.push_back(indices[k] | uint32_t(palette_indices[i][k]) << LIST_ID_BITS);
-        }
+        words.insert(words.end(), indices.begin(), indices.end());
         if (r_palettes) {
             (*r_palettes)[i] = std::move(palettes[i]);
         }
     }
     r_list.resize(int64_t(words.size()) * 4);
-    for (size_t i = 0; i < words.size(); i++) {
-        r_list.encode_u32(int64_t(i) * 4, words[i]);
-    }
+    std::memcpy(r_list.ptrw(), words.data(), words.size() * 4); // little-endian, like the GPU
     list_stats.batches++;
     list_stats.build_usec += int64_t(now_usec() - t0);
 }

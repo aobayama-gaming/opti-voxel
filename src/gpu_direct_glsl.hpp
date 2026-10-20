@@ -68,16 +68,9 @@ layout(set = 0, binding = 7, std430) restrict buffer Status {
     uint status[];
 };
 
-// Per sample, like sdf_sample: its chunk palette index (written by the cascade's level 0, 0 = ground).
-layout(set = 0, binding = 10, std430) restrict readonly buffer SDFMaterial {
-    uint sdf_material[];
-};
-// The palette texture (palette_pool.hpp) and the batch's PalettePool::place_batch payload: per chunk its block
-// offset, then the texel count, then (texel, id, id, 0) per texel. The reserve pass writes the texels.
-layout(set = 0, binding = 11, rgba16ui) uniform restrict writeonly uimage2D palette_image;
-layout(set = 0, binding = 12, std430) restrict readonly buffer PaletteBatch {
-    uint palette_batch[];
-};
+// sdf_material (per sample, its chunk palette index), the palette texture and the batch's palette payload
+// (GPUDirectMesher::glsl_material_bindings).
+/*GLSL_MATERIAL_BINDINGS*/
 
 layout(push_constant, std430) uniform BatchParams {
     uint batch_count;
@@ -85,6 +78,8 @@ layout(push_constant, std430) uniform BatchParams {
     uint page_capacity;
     uint pad;
 } batch;
+
+/*GLSL_PALETTE_BATCH*/
 
 uint get_flat_index_z(uvec3 cell_coordinate) {
     return cell_coordinate.x + (cell_coordinate.y * chunk_param.chunk_size) + (cell_coordinate.z * chunk_param.chunk_size * chunk_param.chunk_size);
@@ -179,7 +174,10 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
         if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {
-            uint word = pack_normal_oct(surface_normal) | (cascade_vertex_material(gl_GlobalInvocationID) << PAGE_NORMAL_BITS);
+            // A chunk on the ground block (palette {GROUND}, or no room in the pool) is all ground: no reads, and its
+            // samples' sdf_material isn't written (the cascade only writes chunks with a list).
+            uint palette = palette_batch[chunk_idx] == PALETTE_GROUND_BLOCK ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+            uint word = pack_normal_oct(surface_normal) | (palette << PAGE_NORMAL_BITS);
             out_vertex = uvec4(floatBitsToUint(chunk_vertex), word + 1u);
         }
 
@@ -238,14 +236,6 @@ if (gl_GlobalInvocationID == uvec3(0)) {
         status[STATUS_PAGE_FILL + page] = fill / QUAD_GROUP;
     }
     status[STATUS_TOTAL_QUADS] = total;
-    // The batch's new palettes, before the emit pass names their blocks in the headers.
-    uint texels = palette_batch[batch.batch_count];
-    for (uint k = 0u; k < texels; k++) {
-        uint at = batch.batch_count + 1u + 4u * k;
-        uint id0 = palette_batch[at + 1u];
-        uint id1 = palette_batch[at + 2u];
-        imageStore(palette_image, page_palette_texel(2u * palette_batch[at]), uvec4(id0 & 65535u, id0 >> 16u, id1 & 65535u, id1 >> 16u));
-    }
 }
 
 )glsl";
@@ -257,6 +247,9 @@ inline constexpr const char GLSL_DIRECT_PASS_EMIT[] = R"glsl(
 
 uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
 uint flat_idx = get_flat_index_z(gl_GlobalInvocationID);
+// The batch's new palettes, a texel per thread (the headers below name their blocks; the page shader reads them
+// after this pass).
+write_palette_texel(flat_idx);
 uvec4 dir = chunk_dir[chunk_idx];
 uvec4 v0 = cell_vertex[flat_idx];
 

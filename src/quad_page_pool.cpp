@@ -80,15 +80,22 @@ void vertex() {
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
     vec3 n = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
     // The corner's material: its chunk's palette block (header), its index in it (corner), its id (palette), its
-    // parameters (material_tex).
-    uint entry = (h1.z | (h1.w << 16u)) + page_decode_palette(c);
-    uint mat_id = page_palette_id(texelFetch(palette_tex, page_palette_texel(entry), 0), entry);
-    ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
-    vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
-    v_albedo_rough = texelFetch(material_tex, mt, 0);
-    v_emission = m1.rgb;
-    v_ground = mat_id == 0u ? 1.0 : 0.0;
-    v_lava = m1.a == MATERIAL_PATTERN_LAVA ? 1.0 : 0.0;
+    // parameters (material_tex). Index 0 is always the ground: no fetch (most corners).
+    uint index = page_decode_palette(c);
+    uint mat_id = MATERIAL_GROUND;
+    v_albedo_rough = vec4(0.0);
+    v_emission = vec3(0.0);
+    v_lava = 0.0;
+    if (index != 0u) {
+        uint entry = page_header_palette(h1) + index;
+        mat_id = page_palette_id(texelFetch(palette_tex, page_palette_texel(entry), 0), entry);
+        ivec2 mt = ivec2(int(MATERIAL_TEXELS * (mat_id % MATERIALS_PER_ROW)), int(mat_id / MATERIALS_PER_ROW));
+        vec4 m1 = texelFetch(material_tex, mt + ivec2(1, 0), 0);
+        v_albedo_rough = texelFetch(material_tex, mt, 0);
+        v_emission = m1.rgb;
+        v_lava = m1.a == MATERIAL_PATTERN_LAVA ? 1.0 : 0.0;
+    }
+    v_ground = mat_id == MATERIAL_GROUND ? 1.0 : 0.0;
     v_material = float(mat_id);
 
     v_world_normal = n;
@@ -216,9 +223,7 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     rs->mesh_add_surface_from_arrays(base_mesh, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
     shader = rs->shader_create();
-    const String materials = vformat("const uint MATERIAL_TEXELS = %du;\nconst uint MATERIALS_PER_ROW = %du;\nconst float MATERIAL_PATTERN_LAVA = %d.0;\n",
-            Material::TEXELS, Material::IMAGE_MATERIALS_PER_ROW, int(Material::PATTERN_LAVA));
-    rs->shader_set_code(shader, String(PAGE_SHADER).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + materials));
+    rs->shader_set_code(shader, String(PAGE_SHADER).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + Material::glsl_constants()));
     material_params["voxel_size"] = voxel_size;
 
     for (uint32_t i = 0; i < p_initial_pages; i++) {

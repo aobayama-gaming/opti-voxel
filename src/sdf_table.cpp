@@ -140,6 +140,9 @@ int64_t SDFTable::max_instance_extent() const {
 }
 
 void SDFTable::finish_record(TableRecord &r_rec) const {
+    if (r_rec.material == Material::FROM_TYPE) {
+        r_rec.material = library->material(r_rec.def);
+    }
     Archetype::finish_record((*library)[r_rec.def], r_rec, param.skirt_depth, instance_band, erode_rule);
 }
 
@@ -361,9 +364,9 @@ void SDFTable::build_table(int p_lod_count) {
     lib.add(make_sphere_type());
     types.capsule = lib.add(make_capsule_type());
     types.rock = lib.add(make_rock_type(ExactNoise::lattice_k(8.0, vs), ROCK_SEED));
-    const int branch = lib.add(make_branch_type());
-    const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED));
-    const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED));
+    const int branch = lib.add(make_branch_type(), Material::BARK);
+    const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
+    const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
     if (scene == Scene::SHAPES) {
         types.holed_cube = lib.add(make_swiss_cube_type(1));
         types.die = lib.add(make_die_type());

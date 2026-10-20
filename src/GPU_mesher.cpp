@@ -59,10 +59,8 @@ layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
     ChunkParam chunk_param;
 };
 
-// Per sample: its chunk palette index (written by the cascade's level 0, 0 = ground).
-layout(set = 0, binding = 8, std430) restrict readonly buffer SDFMaterial {
-    uint sdf_material[];
-};
+// Per sample: its chunk palette index (written by the cascade's level 0 for chunks with a list).
+/*GLSL_MATERIAL_BUFFER*/
 
 uint get_flat_index_z(uvec3 cell_coordinate) {
     return cell_coordinate.x + (cell_coordinate.y * chunk_param.chunk_size) + (cell_coordinate.z * chunk_param.chunk_size * chunk_param.chunk_size);
@@ -116,7 +114,8 @@ void main() {
 
     // 2. Inject the dynamic code
     const SDFGpuTable *table = sdf->get_gpu_table();
-    const String bindings = String(GLSL_BUFFER_BINDING) + table->glsl_buffers(6, 7);
+    const String bindings = String(GLSL_BUFFER_BINDING).replace("/*GLSL_MATERIAL_BUFFER*/", CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly")) +
+            table->glsl_buffers(6, 7) + vformat("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT);
     const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
     const String set_chunk = table->glsl_set_chunk();
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
@@ -293,8 +292,10 @@ if (active_edge_count > 0) {
     output_point[global_point_idx].b = int(packed_normal);
     
     // Store chunk index and mask in 'c' 
-    // (and the vertex's palette index, 9 bits, at 20)
-    output_point[global_point_idx].c = int((chunk_idx & 0xFFFF) | (quad_mask << 16) | (cascade_vertex_material(gl_GlobalInvocationID) << 20));
+    // (and the vertex's palette index at POINT_PALETTE_SHIFT; a chunk without a list is all ground, its samples'
+    // materials unwritten)
+    uint palette = input_chunk[chunk_idx].anchor_hi.w == 0 ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+    output_point[global_point_idx].c = int((chunk_idx & 0xFFFF) | (quad_mask << 16) | (palette << POINT_PALETTE_SHIFT));
     
     // Store localized point address in 'd'
     output_point[global_point_idx].d = int(get_flat_index_z(cell_chunk_coordinate));
@@ -352,7 +353,7 @@ void GPUMesher::_initialize_gpu_compute() {
     buffer_edge_intersect = rd->storage_buffer_create(chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(float_t) * 3 * chunk_batch_number, empty_data);
 
     // One PointMetadata per cell, 4 x uint32: position (3 x uint8), normal (snorm 3 x 8), chunk index
-    // | quad mask << 16 | palette index << 20, cell index.
+    // | quad mask << 16 | palette index << POINT_PALETTE_SHIFT, cell index.
     buffer_output_point = rd->storage_buffer_create(4 * chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(uint32_t) * chunk_batch_number, empty_data);
     // One palette index per sample, like sdf_sample (the cascade's level 0 writes it).
     buffer_material = rd->storage_buffer_create(chunk_batch_number * chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(uint32_t));
@@ -389,7 +390,7 @@ void GPUMesher::_initialize_gpu_compute() {
     buffer_table_list = rd->storage_buffer_create(table_list_capacity);
     uniforms.push_back(create_storage_uniform(6, buffer_table_records));
     uniforms.push_back(create_storage_uniform(7, buffer_table_list));
-    uniforms.push_back(create_storage_uniform(8, buffer_material));
+    uniforms.push_back(create_storage_uniform(MATERIAL_BINDING, buffer_material));
 
     shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS, "second");
     shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS, "third");
@@ -673,7 +674,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
             // --- Unpack Metadata (c) ---
             uint32_t chunk_idx = c & 0xFFFF; // Changed to uint32_t for safe array indexing
             uint8_t quad_mask = (c >> 16) & 0xF;
-            const uint32_t palette_index = (c >> 20) & (PageFormat::PALETTE_SIZE - 1);
+            const uint32_t palette_index = (c >> POINT_PALETTE_SHIFT) & (PageFormat::PALETTE_SIZE - 1);
             const std::vector<uint32_t> &palette = unpacked_chunks[chunk_idx].palette;
             const uint32_t material = palette_index < palette.size() ? palette[palette_index] : Material::GROUND;
 

@@ -13,6 +13,7 @@
 #include "lod_structures.hpp"
 #include "quad_page_pool.hpp"
 #include "sdf_base.hpp"
+#include <godot_cpp/classes/image_texture.hpp>
 
 #include <vector>
 
@@ -45,6 +46,10 @@ class GPUDirectMesher : public Object, public ChunkReleaser {
 public:
     // The mesher's own compute passes: edges, vertices, reserve, emit (the samples are the cascade passes).
     static constexpr int COMPUTE_PASSES = 4;
+    // The mesher set's bindings past the table's (8, 9): sdf_material, the palette texture, the batch's palettes.
+    static constexpr int MATERIAL_BINDING = 10;
+    static constexpr int PALETTE_IMAGE_BINDING = 11;
+    static constexpr int PALETTE_BATCH_BINDING = 12;
     // A batch captures up to 10 GPU timestamps; Godot keeps 256 per frame by default
     // (debug/settings/profiler/max_timestamp_query_elements), shared with the renderer and the discoverer.
     static constexpr uint32_t MAX_BATCHES_PER_FRAME = 16;
@@ -151,6 +156,7 @@ private:
 
     QuadPagePool *pool = nullptr;
     PalettePool palettes; // blocks: main thread; texture: render thread
+    Ref<ImageTexture> material_texture; // the pages' material_tex (a material param holds its RID only)
 
     // One queue per ChunkMath::load_queue (in the view cone first, then by LOD), each sorted by descending
     // Morton key: pop_back() walks space along the Morton curve, so a batch's chunks stay close together.

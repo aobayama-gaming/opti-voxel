@@ -135,6 +135,11 @@ private:
     // The cascade passes: pass 1 (the samples), in sub-batches of at most
     // CASCADE_MAX_CHUNKS chunks (its scratch, ~92 KB per chunk with 4 channels, is not sized for 1024).
     static constexpr uint32_t CASCADE_MAX_CHUNKS = 128;
+    // sdf_material's binding (after the table's 6, 7), and the palette index's place in a point's word c: above the
+    // chunk index (16 bits) and the quad mask (4), within an int.
+    static constexpr int MATERIAL_BINDING = 8;
+    static constexpr uint32_t POINT_PALETTE_SHIFT = 20;
+    static_assert(POINT_PALETTE_SHIFT + PageFormat::PALETTE_BITS <= 31, "a point's word c is an int");
     CascadePasses *cascade = nullptr;
 
     // One set per ChunkMath::load_queue: in the view cone first, then by LOD.

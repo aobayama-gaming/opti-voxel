@@ -67,6 +67,22 @@ void write_obj(const String &p_path, const std::vector<Tri> &p_tris, const Chunk
 
 } // namespace
 
+std::vector<MeshValidator::Target> MeshValidator::pick_targets(const std::vector<Target> &p_candidates, int p_count) {
+    std::vector<Target> sets[2];
+    for (const Target &t : p_candidates) {
+        sets[t.palette.palette && t.palette.palette->size() > 1 ? 1 : 0].push_back(t);
+    }
+    const int with_materials = MIN(p_count / 2, (int)sets[1].size());
+    const int counts[2] = { MIN(p_count - with_materials, (int)sets[0].size()), with_materials };
+    std::vector<Target> targets;
+    for (int s = 0; s < 2; s++) {
+        for (int i = 0; i < counts[s]; i++) {
+            targets.push_back(sets[s][(size_t)i * sets[s].size() / counts[s]]);
+        }
+    }
+    return targets;
+}
+
 void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers,
         QuadPagePool *p_pool, const String &p_dump_dir, bool p_dual_contouring) {
     targets = p_targets;

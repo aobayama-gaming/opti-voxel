@@ -52,7 +52,7 @@ public:
     // of (SCENE_X, SCENE_Z) (--biomes, kilometres there; 0: none). Set before configure().
     void set_biome_radius(double p_radius) { biome_radius = p_radius; }
     // The materials the records name (TableRecord::material): the page shader's material_tex.
-    const Material::Library &get_materials() const { return materials; }
+    const Material::Library &get_materials() const override { return materials; }
 
     // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
     void set_instance_band(bool p_enabled) { instance_band = p_enabled; }

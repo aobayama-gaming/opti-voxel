@@ -341,22 +341,31 @@ to every change, and a reviewer may reject a PR on any of them.
   in metres, y the lava or the island's rim, radius). `--preset=biomes` looks at a lava lake with two islands behind it.
 - **Materials (per-chunk palettes).** A record carries a global material (`TableRecord::material`, ids from
   `Material::Library`, `src/material_library.*`: built-ins ground, bark, leaves, lava, scorched rock, island rock;
-  id 0 `GROUND` is the page shader's procedural slope / height colours). A corner stores a 9-bit index into its
+  id 0 `GROUND` is the page shader's procedural slope / height colours; ids < 2^24). By default it is its type's
+  (`DefLibrary::add(def, material)`, `Material::FROM_TYPE` resolved by `SDFTable::finish_record`: branch bark, crown
+  and cone leaves, basin scorched rock, island island rock; the shared cylinder is ground, the lava slab sets lava),
+  so runtime `add_instance` edits get theirs too. A corner stores a 9-bit index into its
   chunk's **palette** (`src/chunk_palette.*`: entry 0 ground, then the listed records' materials in list order, at
   most 512; past that the rest draws as ground, `palette_truncated`), so ids are unbounded and a chunk only carries
   what it uses. `build_lists` builds the palettes on the worker pool and packs each entry's index above the record id
-  in the list word (`SDFGpuTable::LIST_ID_BITS` = 23: capacity <= 2^23 instances). The fold keeps the palette index of
+  in the list word (`SDFGpuTable::list_word`; `LIST_ID_BITS` = 32 - 9: **a table holds at most 2^23 = 8M instances**,
+  removed ones included; a separate per-entry index would lift it). The fold keeps the palette index of
   the record that wins (`record_wins`: the operator's own comparison, so distances are untouched; a subtraction's
   carved face takes the cutter's material; CPU `fold_onto` == GPU `arch_fold`, FrameSpike's table probe), the cascade's
-  level 0 writes it per sample (`sdf_material`, cascade binding 9), and the vertex takes the material of its cell's
-  solid corner closest to the surface (`cascade_vertex_material`, ties in x + 2y + 4z order; both meshers).
+  fold variant's level 0 writes it per sample for chunks with a list (`sdf_material`, cascade binding 9), and the vertex
+  takes the material of its cell's solid corner closest to the surface (`cascade_vertex_material`, ties in x + 2y +
+  4z order; both meshers), except in a chunk on the ground block (direct) or without a list (legacy): material 0, no
+  reads.
   `PalettePool` (`src/palette_pool.*`, a buddy allocator of 16-512-entry blocks in one RGBA16UI texture, 2 ids per
   texel, `GPUDirectMesher::Settings::palette_capacity` = 2M entries, 8 MB) holds the loaded chunks' palettes: placed
-  at dispatch, uploaded by the reserve pass, the block offset in each row header (texel 1 `.zw`, so compaction moves
-  it with the rows), freed with the chunk; a `{GROUND}` palette shares block 0 (no allocation). The page shader reads
-  header -> palette -> id -> `material_tex` (`Material::Library::make_image`) and blends the corners' albedo,
+  at dispatch, its texels written by the emit pass (a texel per thread, `PalettePool::glsl_batch`), the block offset
+  in each row header (texel 1 `.zw`, so compaction moves it with the rows), freed with the chunk (or at the end of
+  the batch's results for the chunks that loaded nothing); a `{GROUND}` palette, or one that finds no room (`full`),
+  uses block 0 and draws as ground. The page shader reads header -> palette -> id -> `material_tex`
+  (`Material::Library::make_image`, owned by the mesher) for corners of index > 0 and blends the corners' albedo,
   roughness and emission over the ground colours (lava: `PATTERN_LAVA`'s crust); `--view=9` shows the ids. Legacy
-  carries the id in `ARRAY_CUSTOM0`; the validator requires `material_mismatch == 0` on paired vertices, the auditor
+  carries the id in `ARRAY_CUSTOM0`; the validator (half its sample from chunks with materials,
+  `MeshValidator::pick_targets`) requires `material_mismatch == 0` on paired vertices, the auditor
   `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and
   `table.list_len_per_lod.*.palette_avg / palette_max`. Next: a material per biome cell for the ground, materials
   inside one record (an IR change), textures.

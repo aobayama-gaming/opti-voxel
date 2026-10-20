@@ -145,6 +145,11 @@ uint page_decode_palette(uvec4 c) {
             ((c.z >> PAGE_POS_BITS) << (2u * PAGE_PALETTE_LANE_BITS));
 }
 
+// The palette block offset in header texel 1 (palette_pool.hpp), the GLSL header_palette.
+uint page_header_palette(uvec4 h1) {
+    return h1.z | (h1.w << 16u);
+}
+
 // Palette entry e (block offset + palette index): the palette texel holding it, and its id in that texel.
 ivec2 page_palette_texel(uint e) {
     uint t = e >> 1u;
@@ -181,6 +186,11 @@ uvec4 encode_corner(vec3 local, uint normal, uint palette, float pos_scale) {
     uint lane = (1u << PAGE_PALETTE_LANE_BITS) - 1u;
     uvec3 p = uvec3(palette & lane, (palette >> PAGE_PALETTE_LANE_BITS) & lane, (palette >> (2u * PAGE_PALETTE_LANE_BITS)) & lane);
     return uvec4(q | (p << PAGE_POS_BITS), normal);
+}
+
+// The palette texel holding ids id0 (even entry) and id1 (odd entry): page_palette_id's inverse.
+uvec4 page_palette_texel_value(uint id0, uint id1) {
+    return uvec4(id0 & 65535u, id0 >> 16u, id1 & 65535u, id1 >> 16u);
 }
 
 void store_corner(uint slot, uint k, uvec4 corner) {
