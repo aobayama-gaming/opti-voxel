@@ -2,6 +2,7 @@
 
 #include "archetype_glsl.hpp"
 #include "exact_noise.hpp"
+#include "instance_moments.hpp"
 #include "material_library.hpp"
 
 #include <godot_cpp/variant/packed_byte_array.hpp>
@@ -51,6 +52,11 @@ enum class Combine : uint8_t {
     SMOOTH_SUBTRACT, // smooth_max(r, -c), radius k
 };
 
+// The operators that cut the register instead of adding to it.
+inline bool is_cutter(Combine p_op) {
+    return p_op == Combine::SUBTRACT || p_op == Combine::SMOOTH_SUBTRACT;
+}
+
 // The margin world_bounds adds on each side for the float rotation: one voxel, plus R^T's distance to R^-1
 // (rows orthonormal within 1e-5, SDFTable::edit_error) times the local box's reach (its largest |x| + |y| + |z|).
 double rotation_margin(Float3 p_lo, Float3 p_hi);
@@ -66,6 +72,9 @@ struct TableDef {
     int param_count = 0;
     // Local (unrotated) box and Lipschitz bound (voxels) for the given params.
     std::function<void(const float *p_params, Float3 &r_lo, Float3 &r_hi, float &r_lipschitz)> bounds;
+    // Its moments in its own frame, relative to the anchor (instance_moments.hpp), for the given params: the solid
+    // without its bumps (zero-mean noise). Unset: record_moments integrates the program on a grid.
+    std::function<Moments(const float *p_params)> moments;
 };
 
 using TableDefPtr = std::shared_ptr<const TableDef>;
@@ -276,6 +285,17 @@ TableDefPtr make_tunnel_cube_type();
 // The influence box (world axes, int64, absolute) of a record: the type's local box, rotated by the
 // record's rotation, rounded out, plus the record's anchor. Used by the table's spatial index.
 Bounds record_world_bounds(const TableDef &p_def, const TableRecord &p_record);
+
+// A record's moments (instance_moments.hpp) in world axes, relative to its anchor: its type's moments(params) rotated,
+// or, for a type without one, the CPU program at LOD 0 (solid where !(w > 0), like the meshers) sampled at the centres
+// of a FALLBACK_GRID^3 grid of its local box. Weight 1: the record's volume. (archetype_moments.cpp)
+inline constexpr int FALLBACK_GRID = 24;
+Moments record_moments(const TableDef &p_def, const TableRecord &p_record);
+// The moments of p_count records (an instance made of parts: a tree's span) per material, relative to p_anchor: each
+// record weighs its volume, its material resolved (record_material). The cutters and the removed records weigh
+// nothing: their overlap with the rest is unknown. Overlapping parts count twice (a tree's hull spheres and clumps
+// overlap).
+MaterialMoments span_moments(const DefLibrary &p_library, const TableRecord *p_records, uint32_t p_count, const VoxelPos &p_anchor);
 
 // The steepest field a runtime edit may add (the library's shapes are ~1-2 voxels per voxel).
 inline constexpr float MAX_RECORD_LIPSCHITZ = 1024.0f;

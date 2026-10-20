@@ -431,16 +431,8 @@ void VoxelTerrain::set_lod_numbers(int p_count) {
 double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     const VoxelPos origin = chunk_param.origin_voxel();
     const double vs = double(chunk_param.voxel_size);
-    auto axis = [vs](real_t p_r, int64_t p_origin, int64_t &r_voxel, float &r_frac) {
-        const double x = double(p_r) / vs;
-        const double fl = std::floor(x);
-        r_voxel = p_origin + int64_t(fl);
-        r_frac = MIN(float(x - fl), 0.99999994f); // [0, 1)
-    };
-    WorldPos p;
-    axis(p_render_pos.x, origin.x, p.voxel.x, p.frac.x);
-    axis(p_render_pos.y, origin.y, p.voxel.y, p.frac.y);
-    axis(p_render_pos.z, origin.z, p.voxel.z, p.frac.z);
+    const double offset[3] = { double(p_render_pos.x) / vs, double(p_render_pos.y) / vs, double(p_render_pos.z) / vs };
+    WorldPos p = WorldCoord::offset_pos(origin, offset);
     p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
     return sdf->evaluate(p, 0);
 }

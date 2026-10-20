@@ -144,6 +144,19 @@ inline int ctz64(uint64_t p_v) {
 #endif
 }
 
+// p_anchor plus an offset in voxels (double), canonical: the floor goes to the voxel, the rest to the fraction,
+// kept below 1 (a fraction that rounds up to 1.0f in float is clamped).
+inline WorldPos offset_pos(const VoxelPos &p_anchor, const double p_offset[3]) {
+    WorldPos p;
+    float *frac[3] = { &p.frac.x, &p.frac.y, &p.frac.z };
+    for (int a = 0; a < 3; a++) {
+        const double fl = std::floor(p_offset[a]);
+        p.voxel[a] = p_anchor[a] + int64_t(fl);
+        *frac[a] = float(p_offset[a] - fl) < 1.0f ? float(p_offset[a] - fl) : 0.99999994f;
+    }
+    return p;
+}
+
 // "(x, y, z)", the same text JSON shows for a Vector3i. Reports carry int64 ids as strings because
 // godot's JSON parser reads numbers back as doubles.
 inline String to_string(const Vector3i64 &p_v) {
