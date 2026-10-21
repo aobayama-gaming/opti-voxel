@@ -26,8 +26,9 @@ var base_near := 0.05
 # node enters the tree before any is ready.
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
 var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
-var cached_altitude := 0.0
-var altitude_age := 1.0
+var smoothed_altitude := 0.0  # 0: not read yet
+const ALTITUDE_TAU := 0.2  # seconds: the altitude reading's time constant, in log space
+const FLY_RATE := 1.0  # altitudes per second
 
 # ---- Archetype dig tools (the instance table: every terrain) ---------------------------------------
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
@@ -52,6 +53,7 @@ var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 
 func _enter_tree() -> void:
+	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
 	for a in Presets.user_args():
 		if a.begins_with("--lods=") and terrain:
@@ -143,6 +145,32 @@ func _ready():
 			marks_dir = a.trim_prefix("--marks=")
 	DirAccess.make_dir_recursive_absolute(marks_dir)
 	get_tree().auto_accept_quit = false
+
+# Godot's built-in 3D upscalers (no DLSS in 4.6): `--upscale=fsr2|fsr1|bilinear` renders the 3D at
+# `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD's pixel error
+# is in render pixels, so 0.5 draws the meshes of twice the error. FSR 2 needs `--render-thread safe`: on the separate
+# render thread Godot 4.6.3 exits silently while loading its shaders.
+func _setup_upscaling() -> void:
+	var modes := {
+		"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
+		"fsr1": Viewport.SCALING_3D_MODE_FSR,
+		"fsr2": Viewport.SCALING_3D_MODE_FSR2,
+	}
+	var mode := ""
+	var render_scale := 0.5
+	for a in Presets.user_args():
+		if a.begins_with("--upscale="):
+			mode = a.trim_prefix("--upscale=")
+		if a.begins_with("--render_scale="):
+			render_scale = a.trim_prefix("--render_scale=").to_float()
+	if mode.is_empty():
+		return
+	if not modes.has(mode):
+		push_error("--upscale=%s: expected fsr2, fsr1 or bilinear" % mode)
+		return
+	var viewport := get_viewport()
+	viewport.scaling_3d_mode = modes[mode]
+	viewport.scaling_3d_scale = clampf(render_scale, 0.25, 2.0)
 
 func _make_hud() -> void:
 	var hud_layer := CanvasLayer.new()
@@ -383,11 +411,13 @@ func _process(delta: float) -> void:
 	var direction = (transform.basis * input_dir).normalized()
 	var move_speed := speed
 	if altitude_terrain:
-		# Cascade terrain: kilometre-scale relief, fly faster when high (half the altitude per second).
-		# The altitude is a CPU cascade point query: refreshed 4 times per second.
-		altitude_age += delta
-		if altitude_age >= 0.25:
-			altitude_age = 0.0
-			cached_altitude = absf(altitude_terrain.get_sdf_at(camera.global_position))
-		move_speed = maxf(speed, cached_altitude * 0.5)
+		# Cascade terrain: kilometre-scale relief, fly faster when high (FLY_RATE altitudes per second, at least
+		# `speed`). The altitude is a CPU cascade point query, every frame; only the reading is smoothed (a canopy
+		# or a ridge passing under steps it), in log space and briefly: a longer lag on the speed itself left a climb
+		# at half speed for seconds.
+		var altitude := maxf(absf(altitude_terrain.get_sdf_at(camera.global_position)), 0.01)
+		if smoothed_altitude <= 0.0:
+			smoothed_altitude = altitude
+		smoothed_altitude *= pow(altitude / smoothed_altitude, 1.0 - exp(-delta / ALTITUDE_TAU))
+		move_speed = maxf(speed, smoothed_altitude * FLY_RATE)
 	position += direction * move_speed * delta
