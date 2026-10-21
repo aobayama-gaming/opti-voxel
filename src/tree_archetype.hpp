@@ -78,10 +78,12 @@ struct TreeStem {
 };
 
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
-// boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. Deterministic in (species,
-// seed, voxel); p_base only translates it. The stems, in the order they were grown, go to r_stems if given.
+// boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the
+// trunk grows along (null: +y, as is the cone tiers' axis); the tree is grown in absolute axes, joints on whole voxels.
+// Deterministic in (species, seed, voxel, up); p_base only translates it. The stems, in the order they were grown,
+// go to r_stems if given.
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
-        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems = nullptr);
+        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems = nullptr, const double *p_up = nullptr);
 
 // A tree in the table: its records are the ids [first, first + count), grown from (species, seed).
 struct TreeSpan {
@@ -98,10 +100,27 @@ struct TreeSite {
     int species = 0;
 };
 
-// About p_count trees in the square of side p_area_m metres centred on (p_centre_x_m, p_centre_z_m): one per cell
-// of an absolute grid of cells (side p_area_m / sqrt(p_count), whole voxels), jittered within it by a hash of the
-// cell. The same cell holds the same tree whatever the square. p_ground_y(x, z) gives the base's y at a column.
-void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_centre_z_m, double p_voxel,
-        const GroundFn &p_ground_y, std::vector<TreeSite> &r_out); // p_ground_y null: base.y 0 (the caller traces it)
+// The ground's field at a LOD0 voxel: the gradient (x, y, z) and the distance (w), both in LOD0 voxels. Thread-safe.
+using FieldFn = std::function<ExactNoise::Float4(const VoxelPos &)>;
+
+// The side (LOD0 voxels) of the forest's cells for about p_count trees on p_area_m^2 of flat ground: one tree per
+// cell crossed by the surface. 0 for no forest.
+int64_t forest_cell_side(int p_count, double p_area_m, double p_voxel);
+
+// Newton steps that move a cell's jittered voxel onto the ground (cell_site).
+inline constexpr int SITE_STEPS = 4;
+
+// The tree of the 3D cell p_cell (cells of p_side LOD0 voxels on the absolute grid): the cell's hashed voxel in its
+// middle 70% moved onto the field's zero by up to SITE_STEPS Newton steps on whole voxels. It exists when that
+// voxel ends within a voxel of the surface and inside the cell (a surface point has one owner). Seed and species
+// from the cell's hash. A pure function of the cell and the field: the same from any query and any origin.
+bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, TreeSite &r_site);
+
+// The trees of the cells meeting the box [p_lo, p_hi] (LOD0 voxels, inclusive) whose base lies in it, in cell order (z,
+// y, x). The cells tried come from an absolute octree walk (nodes of p_side * 2^k voxels, aligned on their own
+// multiples, the coarsest one holding the box) that keeps a node while one of its corners is within 2 node sides of
+// the surface: the discoverer's cull rule, so only the cells along the surface are tried. On the worker pool (not
+// from inside a pool task).
+void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<TreeSite> &r_out);
 
 } // namespace Archetype

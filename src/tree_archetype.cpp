@@ -1,6 +1,9 @@
 // Trees as archetype-table instances (tree_archetype.hpp).
 #include "tree_archetype.hpp"
 
+#include "parallel_for.hpp"
+
+#include <algorithm>
 #include <cmath>
 #include <queue>
 
@@ -82,17 +85,17 @@ struct Sphere {
 class Grower {
 public:
     Grower(const TreeSpecies &p_species, const VoxelPos &p_base, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
-            std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems) :
-            s(p_species), base(p_base), seed(p_seed), voxel(p_voxel), types(p_types), out(r_out), stems(r_stems) {}
+            std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems, const Vec &p_up) :
+            s(p_species), base(p_base), seed(p_seed), voxel(p_voxel), types(p_types), out(r_out), stems(r_stems), up(p_up) {}
 
     void grow() {
         const ExactNoise::UVec3 h = hash3(seed, 0x7EEu, 0u);
         scale = 0.8 + 0.4 * unit_of(h.x);
         Stem trunk;
         trunk.r0 = v(s.trunk_radius);
-        trunk.p0 = snap(Vec{ 0.0, -trunk.r0, 0.0 }); // sunk by its radius: the flare blends it into the ground
+        trunk.p0 = snap(up * -trunk.r0); // sunk by its radius: the flare blends it into the ground
         const double lean = s.lean * unit_of(h.y);
-        trunk.dir = turn(Vec{ 0.0, 1.0, 0.0 }, lean, TAU * unit_of(h.z));
+        trunk.dir = turn(up, lean, TAU * unit_of(h.z));
         trunk.length = v(s.height) + trunk.r0;
         trunk.path = hash3(seed, 0x7EEu, 1u).x;
         left = s.budget - (s.cone_tiers > 0 ? s.cone_tiers : s.hull_spheres);
@@ -118,6 +121,7 @@ private:
     const TreeTypes &types;
     std::vector<TableRecord> &out;
     std::vector<TreeStem> *stems;
+    const Vec up; // unit: the trunk's axis before its lean, the cone tiers' axis
     double scale = 1.0;
     int left = 0;
     uint32_t seq = 0;
@@ -299,6 +303,17 @@ private:
 
     VoxelPos anchor_of(const Vec &p_p) const { return base + VoxelPos(std::llround(p_p.x), std::llround(p_p.y), std::llround(p_p.z)); }
 
+    // A record's rotation from its local axes in absolute coordinates (the rows: absolute to local).
+    static void set_rotation(TableRecord &r_rec, const Vec &p_x, const Vec &p_y, const Vec &p_z) {
+        const Vec rows[3] = { p_x, p_y, p_z };
+        for (int i = 0; i < 3; i++) {
+            const double c[3] = { rows[i].x, rows[i].y, rows[i].z };
+            for (int j = 0; j < 3; j++) {
+                r_rec.rotation[3 * i + j] = std::fabs(c[j]) < ROTATION_FLUSH ? 0.0f : float(c[j]);
+            }
+        }
+    }
+
     void add_branch(const Vec &p_a, const Vec &p_b, double p_ra, double p_rb, double p_k) {
         const Vec seg = p_b - p_a;
         const double h = length(seg);
@@ -313,13 +328,7 @@ private:
         const Vec d = seg * (1.0 / h);
         Vec e0, e2;
         normal_frame(d, e0, e2);
-        const Vec rows[3] = { e0, d, e2 };
-        for (int i = 0; i < 3; i++) {
-            const double c[3] = { rows[i].x, rows[i].y, rows[i].z };
-            for (int j = 0; j < 3; j++) {
-                rec.rotation[3 * i + j] = std::fabs(c[j]) < ROTATION_FLUSH ? 0.0f : float(c[j]);
-            }
-        }
+        set_rotation(rec, e0, d, e2);
         rec.params[0] = float(h);
         rec.params[1] = float(p_ra);
         rec.params[2] = float((p_rb - p_ra) / h);
@@ -331,6 +340,19 @@ private:
     // the top one's apex at the trunk's tip, radii from crown_radius down to hull_taper times it.
     void add_tiers(const std::vector<Joint> &p_joints) {
         const int n = s.cone_tiers;
+        // The tiers stand along up: the cone's local x and z are the absolute ones turned by the smallest rotation
+        // taking +y to up (Rodrigues), the identity for up = +y; half a turn about x for up = -y.
+        const Vec y_axis{ 0.0, 1.0, 0.0 };
+        const Vec axis = cross(y_axis, up);
+        const double c = up.y;
+        auto turned = [&](const Vec &p_a) {
+            if (c <= -1.0 + 1e-9) {
+                return Vec{ p_a.x, -p_a.y, -p_a.z };
+            }
+            return p_a + cross(axis, p_a) + cross(axis, cross(axis, p_a)) * (1.0 / (1.0 + c));
+        };
+        const Vec tier_x = turned(Vec{ 1.0, 0.0, 0.0 });
+        const Vec tier_z = turned(Vec{ 0.0, 0.0, 1.0 });
         const double length = v(s.height) * (1.0 - s.crown_base);
         const double spacing = length / double(n + 1);
         for (int i = 0; i < n; i++) {
@@ -345,6 +367,7 @@ private:
             rec.op = Combine::SMOOTH_UNION;
             rec.set_k(float(s.crown_smooth * r));
             rec.anchor = anchor_of(snap(point_at(p_joints, t)));
+            set_rotation(rec, tier_x, up, tier_z);
             rec.params[0] = float(r);
             rec.params[1] = float(height);
             rec.params[2] = float(height / slant); // cos of the half angle
@@ -423,34 +446,144 @@ TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, in
 }
 
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
-        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems) {
-    Grower(p_species, p_base, p_seed, p_voxel, p_types, r_out, r_stems).grow();
+        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems, const double *p_up) {
+    const Vec up = p_up ? Vec{ p_up[0], p_up[1], p_up[2] } : Vec{ 0.0, 1.0, 0.0 };
+    Grower(p_species, p_base, p_seed, p_voxel, p_types, r_out, r_stems, up).grow();
 }
 
-void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_centre_z_m, double p_voxel,
-        const GroundFn &p_ground_y, std::vector<TreeSite> &r_out) {
+int64_t forest_cell_side(int p_count, double p_area_m, double p_voxel) {
     if (p_count <= 0 || !(p_area_m > 0.0)) {
+        return 0;
+    }
+    return MAX<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
+}
+
+bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, TreeSite &r_site) {
+    const uint32_t key = ExactNoise::hash_cell(p_cell, FOREST_SEED);
+    const ExactNoise::UVec3 h = hash3(key, 0x51E5u, 0u);
+    const ExactNoise::UVec3 g = hash3(key, 0x51E5u, 1u);
+    const uint32_t u[3] = { h.x, h.y, g.x };
+    // Within the middle 70% of the cell: two cells' voxels stand at least 0.3 cells apart before they move.
+    const VoxelPos lo = p_cell * p_side;
+    VoxelPos q;
+    for (int a = 0; a < 3; a++) {
+        q[a] = lo[a] + p_side / 2 + std::llround((unit_of(u[a]) - 0.5) * 0.7 * double(p_side));
+    }
+    ExactNoise::Float4 f = p_field(q);
+    for (int i = 0; i < SITE_STEPS && !(std::fabs(f.w) <= 1.0f); i++) {
+        const double g2 = double(f.x) * f.x + double(f.y) * f.y + double(f.z) * f.z;
+        if (!(g2 > 1e-12)) {
+            return false; // no direction to the surface
+        }
+        const double s = -double(f.w) / g2;
+        const VoxelPos step(std::llround(s * f.x), std::llround(s * f.y), std::llround(s * f.z));
+        if (step == VoxelPos()) {
+            break;
+        }
+        q += step;
+        f = p_field(q);
+    }
+    if (!(std::fabs(f.w) <= 1.0f)) {
+        return false;
+    }
+    for (int a = 0; a < 3; a++) {
+        if (q[a] < lo[a] || q[a] >= lo[a] + p_side) {
+            return false; // the surface point belongs to another cell
+        }
+    }
+    r_site.base = q;
+    r_site.seed = h.z;
+    r_site.species = int((h.z >> 16) % uint32_t(tree_species().size()));
+    return true;
+}
+
+namespace {
+
+bool in_box(const VoxelPos &p_v, const VoxelPos &p_lo, const VoxelPos &p_hi) {
+    return p_v.x >= p_lo.x && p_v.y >= p_lo.y && p_v.z >= p_lo.z && p_v.x <= p_hi.x && p_v.y <= p_hi.y && p_v.z <= p_hi.z;
+}
+
+// The nodes of side p_n (node units) meeting [p_lo, p_hi].
+std::vector<VoxelPos> nodes_meeting(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_n) {
+    VoxelPos a, b;
+    for (int i = 0; i < 3; i++) {
+        a[i] = WorldCoord::floor_div(p_lo[i], p_n);
+        b[i] = WorldCoord::floor_div(p_hi[i], p_n);
+    }
+    std::vector<VoxelPos> nodes;
+    for (int64_t z = a.z; z <= b.z; z++) {
+        for (int64_t y = a.y; y <= b.y; y++) {
+            for (int64_t x = a.x; x <= b.x; x++) {
+                nodes.emplace_back(x, y, z);
+            }
+        }
+    }
+    return nodes;
+}
+
+// The cells (of p_side voxels) meeting [p_lo, p_hi] that the surface may cross, in cell order (z, y, x): an absolute
+// octree walk from the coarsest level whose node holds the box, keeping a node while one of its corners is within 2
+// node sides of the surface (the discoverer's cull rule).
+std::vector<VoxelPos> surface_cells(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field) {
+    int64_t extent = 1;
+    for (int a = 0; a < 3; a++) {
+        extent = MAX(extent, p_hi[a] - p_lo[a] + 1);
+    }
+    int level = 0;
+    while ((p_side << level) < extent && level < 40) {
+        level++;
+    }
+    std::vector<VoxelPos> nodes = nodes_meeting(p_lo, p_hi, p_side << level);
+    std::vector<VoxelPos> kept;
+    for (;; level--) {
+        const int64_t n = p_side << level;
+        std::vector<uint8_t> near(nodes.size(), 0);
+        parallel_for(uint32_t(nodes.size()), "surface_cells", [&](uint32_t p_i) {
+            for (int c = 0; c < 8 && !near[p_i]; c++) {
+                const VoxelPos corner = (nodes[p_i] + VoxelPos(c & 1, (c >> 1) & 1, (c >> 2) & 1)) * n;
+                near[p_i] = std::fabs(double(p_field(corner).w)) <= 2.0 * double(n);
+            }
+        });
+        kept.clear();
+        for (size_t i = 0; i < nodes.size(); i++) {
+            if (near[i]) {
+                kept.push_back(nodes[i]);
+            }
+        }
+        if (level == 0) {
+            break;
+        }
+        // The children meeting the box.
+        nodes.clear();
+        const int64_t m = p_side << (level - 1);
+        for (const VoxelPos &k : kept) {
+            for (int c = 0; c < 8; c++) {
+                const VoxelPos child = k * 2 + VoxelPos(c & 1, (c >> 1) & 1, (c >> 2) & 1);
+                if (in_box(child * m, p_lo - VoxelPos(m - 1, m - 1, m - 1), p_hi)) {
+                    nodes.push_back(child);
+                }
+            }
+        }
+    }
+    std::sort(kept.begin(), kept.end(), [](const VoxelPos &p_a, const VoxelPos &p_b) {
+        return p_a.z != p_b.z ? p_a.z < p_b.z : (p_a.y != p_b.y ? p_a.y < p_b.y : p_a.x < p_b.x);
+    });
+    return kept;
+}
+
+} // namespace
+
+void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<TreeSite> &r_out) {
+    if (p_side <= 0) {
         return;
     }
-    const int64_t cell = MAX<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
-    const int64_t half = std::llround(0.5 * p_area_m / p_voxel);
-    const int64_t x0 = std::llround(p_centre_x_m / p_voxel) - half, x1 = x0 + 2 * half;
-    const int64_t z0 = std::llround(p_centre_z_m / p_voxel) - half, z1 = z0 + 2 * half;
-    const uint32_t species = uint32_t(tree_species().size());
-    for (int64_t cz = WorldCoord::floor_div(z0, cell); cz * cell <= z1; cz++) {
-        for (int64_t cx = WorldCoord::floor_div(x0, cell); cx * cell <= x1; cx++) {
-            const ExactNoise::UVec3 h = hash3(ExactNoise::hash_cell(Vector3i64(cx, 0, cz), FOREST_SEED), 0x51E5u, 0u);
-            // Within the middle 70% of the cell: two trees stand at least 0.3 cells apart.
-            const int64_t x = cx * cell + cell / 2 + std::llround((unit_of(h.x) - 0.5) * 0.7 * double(cell));
-            const int64_t z = cz * cell + cell / 2 + std::llround((unit_of(h.y) - 0.5) * 0.7 * double(cell));
-            if (x < x0 || x > x1 || z < z0 || z > z1) {
-                continue;
-            }
-            TreeSite site;
-            site.base = VoxelPos(x, p_ground_y ? p_ground_y(x, z) : 0, z);
-            site.seed = h.z;
-            site.species = int((h.z >> 16) % species);
-            r_out.push_back(site);
+    const std::vector<VoxelPos> cells = surface_cells(p_lo, p_hi, p_side, p_field);
+    std::vector<TreeSite> found(cells.size());
+    std::vector<uint8_t> ok(cells.size(), 0);
+    parallel_for(uint32_t(cells.size()), "forest_sites", [&](uint32_t p_i) { ok[p_i] = cell_site(cells[p_i], p_side, p_field, found[p_i]); });
+    for (size_t i = 0; i < cells.size(); i++) {
+        if (ok[i] && in_box(found[i].base, p_lo, p_hi)) {
+            r_out.push_back(found[i]);
         }
     }
 }

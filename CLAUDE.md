@@ -315,8 +315,13 @@ to every change, and a reviewer may reject a PR on any of them.
   upper trunk (the last on its tip) and a clump at each leaf stem's tip, smooth-unioned at half their radius
   into one mass; segments and clumps the hull always covers are skipped.
   Nothing is LOD-specific: the band rule is the LOD rule (thin parts erode away first, a tapered branch
-  from its tip, the hull last; nothing appears with the LOD). `forest_sites`: one tree per cell of an absolute
-  jittered grid. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
+  from its tip, the hull last; nothing appears with the LOD). Sites are 3D, no column or "y up" (planets come):
+  `cell_site` moves a 3D cell's hashed voxel onto the ground's zero (`SDFTable::ground_field`, Newton steps on whole
+  voxels) and keeps it if it stays in the cell (one owner per surface point); `forest_sites` tries only the cells an
+  absolute octree walk keeps near the surface (the discoverer's corner rule; unit-tested equal to the brute force on
+  hills and a 60 degree slope); the zone is a cube of side `--tree_area` around the ground under the scene's centre.
+  A tree grows along `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; +y gives the
+  old records bit for bit). `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second

@@ -119,6 +119,14 @@ public:
     // the bare cascade, the GPU discoverer's point items bit for bit).
     virtual float evaluate_cull(const WorldPos &p_pos, int p_lod) const = 0;
 
+    // The unit direction upright things (trees) grow along at a LOD0 voxel: the one source of "up" for placement.
+    // +y on the flat world; a planet overrides it.
+    virtual void up_at(const VoxelPos & /*p_voxel*/, double r_up[3]) const {
+        r_up[0] = 0.0;
+        r_up[1] = 1.0;
+        r_up[2] = 0.0;
+    }
+
     // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
     // wave, over the WorkerThreadPool in blocks of BATCH_BLOCK points (evaluate_cull is thread-safe).
     void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {

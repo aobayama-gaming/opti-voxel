@@ -289,9 +289,16 @@ VoxelBox SDFTable::record_box(const TableRecord &p_rec) {
 void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats) {
     const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
     std::vector<TreeSite> sites;
-    forest_sites(forest_count, forest_area, p_centre_x, p_centre_z, p_voxel, nullptr, sites); // the ground: below
-    // Each site's ground trace and tree are independent (ground_y and the library are const): on the worker pool, a
-    // batch at a time (the parts wait for their turn), then admitted in site order (the record ids don't change).
+    const int64_t side = forest_cell_side(forest_count, forest_area, p_voxel);
+    if (side > 0) {
+        // The zone: a cube of side forest_area around the ground under the scene's centre (the sites are 3D cells).
+        const int64_t x = std::llround(p_centre_x / p_voxel), z = std::llround(p_centre_z / p_voxel);
+        const VoxelPos centre(x, ground_y(x, z), z);
+        const int64_t half = std::llround(0.5 * forest_area / p_voxel);
+        forest_sites(centre - VoxelPos(half, half, half), centre + VoxelPos(half, half, half), side, [this](const VoxelPos &p_v) { return ground_field(p_v); }, sites);
+    }
+    // Each site's tree is independent (up_at and the library are const): on the worker pool, a batch at a time (the
+    // parts wait for their turn), then admitted in site order (the record ids don't change).
     constexpr size_t BATCH = 4096;
     std::vector<std::vector<TableRecord>> grown(MIN(BATCH, sites.size()));
     int64_t most = 0;
@@ -304,8 +311,9 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
                 TreeSite &site = sites[i + p_j];
                 grown[p_j].clear(); // empty: in a lake
                 if (!in_lake(site.base.x, site.base.z)) {
-                    site.base.y = ground_y(site.base.x, site.base.z);
-                    grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, grown[p_j]);
+                    double up[3];
+                    up_at(site.base, up);
+                    grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, grown[p_j], nullptr, up);
                 }
             });
         }
