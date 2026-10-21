@@ -26,8 +26,9 @@ var base_near := 0.05
 # node enters the tree before any is ready.
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
 var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
-var cached_altitude := 0.0
-var altitude_age := 1.0
+var smoothed_altitude := 0.0  # 0: not read yet
+const ALTITUDE_TAU := 0.2  # seconds: the altitude reading's time constant, in log space
+const FLY_RATE := 1.0  # altitudes per second
 
 # ---- Archetype dig tools (the instance table: every terrain) ---------------------------------------
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
@@ -383,11 +384,13 @@ func _process(delta: float) -> void:
 	var direction = (transform.basis * input_dir).normalized()
 	var move_speed := speed
 	if altitude_terrain:
-		# Cascade terrain: kilometre-scale relief, fly faster when high (half the altitude per second).
-		# The altitude is a CPU cascade point query: refreshed 4 times per second.
-		altitude_age += delta
-		if altitude_age >= 0.25:
-			altitude_age = 0.0
-			cached_altitude = absf(altitude_terrain.get_sdf_at(camera.global_position))
-		move_speed = maxf(speed, cached_altitude * 0.5)
+		# Cascade terrain: kilometre-scale relief, fly faster when high (FLY_RATE altitudes per second, at least
+		# `speed`). The altitude is a CPU cascade point query, every frame; only the reading is smoothed (a canopy
+		# or a ridge passing under steps it), in log space and briefly: a longer lag on the speed itself left a climb
+		# at half speed for seconds.
+		var altitude := maxf(absf(altitude_terrain.get_sdf_at(camera.global_position)), 0.01)
+		if smoothed_altitude <= 0.0:
+			smoothed_altitude = altitude
+		smoothed_altitude *= pow(altitude / smoothed_altitude, 1.0 - exp(-delta / ALTITUDE_TAU))
+		move_speed = maxf(speed, smoothed_altitude * FLY_RATE)
 	position += direction * move_speed * delta

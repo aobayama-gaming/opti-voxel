@@ -180,7 +180,7 @@ to every change, and a reviewer may reject a PR on any of them.
   octave at every LOD: detail finer than the cell, aliased far away) and 3 `SDFArchetype` (a plain fBm ground, and
   instances compiled into its program), both removed. `--terrain=cascade|continents|shapes` in `bench.gd` and the
   main scene (`godot --path project -- --lods=25`). Outside the shapes gallery the player spawns 200 m above the
-  ground (`--altitude=M`) and flies at half its altitude per second, and the bench camera starts 50 m above it unless
+  ground (`--altitude=M`) and flies at its altitude per second (read every frame, the reading smoothed over 0.2 s in log space: no speed steps), and the bench camera starts 50 m above it unless
   `--cam_pos` or `--above_ground=M` (M metres above the terrain under the camera, negative below) says otherwise: the
   cascade's ground is kilometres from the datum.
   **The table** (`SDFTable`, `src/sdf_table.*`, `SDFCascade`'s base: the library, records, snapshot, GPU table,
