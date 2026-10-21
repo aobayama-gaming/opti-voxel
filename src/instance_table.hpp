@@ -6,6 +6,7 @@
 #include <godot_cpp/templates/hash_map.hpp>
 #include <godot_cpp/templates/hash_set.hpp>
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -23,7 +24,8 @@
 // Two index layers: the base, built once over the whole table (a million instances take seconds), and an
 // overlay over the records edited since, rebuilt by every edit (milliseconds). A base entry whose record
 // was edited is masked; the overlay holds its current state. Lists merge both in id order, so the fold is
-// the same as from one index over the whole table. Past REBASE edited records, an edit rebuilds the base.
+// the same as from one index over the whole table. Past REBASE edited records the base is rebuilt, on the
+// worker pool while edits go on (BaseRebuild).
 namespace Archetype {
 
 struct IndexRange {
@@ -127,9 +129,46 @@ inline std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<co
     return build_snapshot(p_library, p_out_scale, p_normalize, RecordStore(p_records, p_version), p_param, p_max_lod, p_version);
 }
 
+// A base built on the WorkerThreadPool while edits go on: start() freezes the records of a snapshot and indexes
+// them in one pool task; the edits made after it note() the ids they change; once ready(), take() gives the
+// current records over that base plus an overlay of the ids changed since start(), the same lists as a whole
+// new base (the version is kept: the records didn't change, the GPU re-uploads nothing and nothing is re-meshed).
+// Main thread only, except the task itself, which reads the frozen copy (copy on write keeps it unchanged).
+class BaseRebuild {
+public:
+    ~BaseRebuild() { cancel(); }
+    bool running() const { return task >= 0; }
+    bool ready() const { return running() && done.load(std::memory_order_acquire); }
+    void start(const InstanceSnapshot &p_snapshot);
+    void note(const std::vector<uint32_t> &p_changed);
+    // Waits for the task if it isn't done (tests; edits past HARD_OVERLAY). p_current: the records now.
+    std::shared_ptr<const InstanceSnapshot> take(const InstanceSnapshot &p_current);
+    // Waits for the task and drops its base (configure, destruction).
+    void cancel();
+
+    // Past `rebase` edited ids an edit starts a base. Past `hard_overlay` while one is being built, an edit waits for
+    // it instead of growing the overlay (an overlay costs ~1.8 us per id to rebuild, every edit). Tests lower both.
+    uint32_t rebase = InstanceSnapshot::REBASE;
+    uint32_t hard_overlay = 16 * InstanceSnapshot::REBASE;
+
+private:
+    static void _run(void *p_self);
+    void wait();
+
+    int64_t task = -1;
+    std::atomic<bool> done{ false };
+    std::shared_ptr<const DefLibrary> library;
+    ChunkParam param;
+    int max_lod = 0;
+    RecordStore frozen;
+    std::shared_ptr<const IndexLayer> layer;
+    std::vector<uint32_t> changed; // since start(), unsorted, may repeat
+};
+
 // The next snapshot after an edit of the records p_changed (added, moved or removed; p_records is the table
-// after it): the previous base is kept and the overlay rebuilt, or past REBASE edited records, a new base.
+// after it): the previous base is kept and the overlay rebuilt. Past REBASE edited records a new base: built
+// here, or with p_rebuild, on the pool (the overlay keeps growing until it is taken, or up to HARD_OVERLAY).
 std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_previous, RecordStore p_records,
-        const std::vector<uint32_t> &p_changed, uint32_t p_version);
+        const std::vector<uint32_t> &p_changed, uint32_t p_version, BaseRebuild *p_rebuild = nullptr);
 
 } // namespace Archetype

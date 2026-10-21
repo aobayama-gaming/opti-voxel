@@ -456,6 +456,88 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
     CHECK(near_points > 10000);
 }
 
+// The base rebuilt on the pool while edits go on: whether it is taken early (waiting for the task), late, or by an
+// edit past hard_overlay, every snapshot lists what a whole new index over its records lists, at its own version.
+TEST_CASE("Archetype table: a base rebuilt on the pool lists what a whole new index lists") {
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    lib.add(make_box_type());
+    const std::shared_ptr<const DefLibrary> library = std::make_shared<const DefLibrary>(lib);
+    ChunkParam param;
+    param.voxel_size = 1.0f;
+    const int64_t E = 1 << 12;
+    auto place = [&](TableRecord &r_rec, uint32_t p_i, uint32_t p_salt) {
+        r_rec.anchor = VoxelPos(ExactNoise::random_offset(p_i, 1, p_salt, E), ExactNoise::random_offset(p_i, 2, p_salt, E),
+                ExactNoise::random_offset(p_i, 3, p_salt, E));
+        const Bounds wb = record_world_bounds(lib[r_rec.def], r_rec);
+        for (int a = 0; a < 3; a++) {
+            r_rec.box_lo[a] = int32_t(wb.lo[a] - r_rec.anchor[a]);
+            r_rec.box_hi[a] = int32_t(wb.hi[a] - r_rec.anchor[a]);
+        }
+        r_rec.lipschitz = wb.lipschitz;
+        r_rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+    };
+    const uint32_t n = 300;
+    std::vector<TableRecord> initial(n);
+    for (uint32_t i = 0; i < n; i++) {
+        initial[i].def = uint8_t(i % 2u);
+        initial[i].params[0] = 2.0f + float(i % 5u);
+        initial[i].params[1] = 2.0f;
+        place(initial[i], i, 7u);
+    }
+    uint32_t version = 1;
+    RecordStore store(initial, version);
+    std::shared_ptr<const InstanceSnapshot> snap = build_snapshot(library, 1.0f, false, store, param, 10, version);
+    BaseRebuild rebuild;
+    rebuild.rebase = 64;
+    rebuild.hard_overlay = 96;
+    int64_t starts = 0, early = 0, hard = 0, lists = 0;
+    for (uint32_t step = 0; step < 6 * n; step++) {
+        // Records in turn, so the overlay grows by one id per edit: a rebuild starts every ~64 edits.
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ step, 0xBA5Eu, 0x0A51u });
+        const uint32_t id = (step * 7u) % n;
+        TableRecord rec = store[id];
+        place(rec, step, 11u);
+        version++;
+        store.set(id, rec, version);
+        const bool was_running = rebuild.running();
+        const std::shared_ptr<const IndexLayer> base_before = snap->base;
+        rebuild.note({ id });
+        snap = edit_snapshot(*snap, store, { id }, version, &rebuild);
+        starts += !was_running && rebuild.running();
+        hard += was_running && !rebuild.running() && snap->base != base_before;
+        // Even rebuilds are taken early (waiting for the task), odd ones run until an edit passes hard_overlay.
+        if (rebuild.running() && starts % 2 == 0 && h.y % 5u == 0u) {
+            snap = rebuild.take(*snap);
+            early++;
+        }
+        CHECK(snap->version == version);
+        if (step % 7u != 0u) {
+            continue;
+        }
+        const std::shared_ptr<const InstanceSnapshot> whole = build_snapshot(library, 1.0f, false, store, param, 10, version);
+        std::vector<uint32_t> a, b;
+        for (uint32_t i = 0; i < 24; i++) {
+            const VoxelPos &v = store[(i * 7919u + step) % n].anchor;
+            for (int lod = 0; lod <= 5; lod++) {
+                const ChunkId c = ChunkMath::chunk_at_voxel(v, lod, param);
+                snap->chunk_list(c, a);
+                whole->chunk_list(c, b);
+                CHECK(a == b);
+                snap->point_candidates(v, lod, a);
+                whole->point_candidates(v, lod, b);
+                CHECK(a == b);
+                CHECK(snap->near_instance(c, lod));
+                lists++;
+            }
+        }
+    }
+    MESSAGE("pool rebuilds: ", starts, " started, ", early, " taken early, ", hard, " taken past hard_overlay; ", lists, " list comparisons");
+    CHECK(starts > 1);
+    CHECK(early > 0);
+    CHECK(hard > 0);
+}
+
 TEST_CASE("Archetype table: encode_record lays the GPU DefRecord out at the documented offsets") {
     TableRecord rec;
     rec.def = 2;

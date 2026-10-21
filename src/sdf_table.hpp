@@ -103,6 +103,9 @@ public:
     // Whether a chunk's samples can be changed by the last edit (its box grown by M(lod) meets the edit's region):
     // the chunks to re-mesh.
     bool edit_affects_chunk(const ChunkId &p_chunk) const override;
+    // Publishes the index base an edit started building on the pool, once it is done (main thread, every frame). The
+    // lists don't change, nor the version: nothing to upload or re-mesh. p_wait: wait for it if it runs (tests).
+    void poll_rebuild(bool p_wait = false);
 
     // The current snapshot. Edits replace it on the main thread while the discoverer thread evaluates and the render
     // thread uploads: every reader takes one atomic copy and works on it.
@@ -142,6 +145,7 @@ private:
     uint32_t version = 0;
     Archetype::RecordStore records; // editable (paged, copy on write): each snapshot shares its pages
     std::shared_ptr<const Archetype::InstanceSnapshot> snapshot;
+    Archetype::BaseRebuild rebuild; // the next index base, while the edits past REBASE go on
     Archetype::GpuTable gpu; // the meshers read and upload through get_gpu_table()
     // What the last edit changed (edit_affects_chunk): one region per changed record, its margin inputs and the LODs
     // [lod_min, lod_max) it is listed at (an instance below its max_lod, a moment blob at its layer's alone).

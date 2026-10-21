@@ -169,7 +169,14 @@ void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_aft
         }
     }
     version++;
-    publish(edit_snapshot(*current(), records, ids, version), all);
+    rebuild.note(ids);
+    publish(edit_snapshot(*current(), records, ids, version, &rebuild), all);
+}
+
+void SDFTable::poll_rebuild(bool p_wait) {
+    if (rebuild.ready() || (p_wait && rebuild.running())) {
+        publish(rebuild.take(*current()), edit_box);
+    }
 }
 
 bool SDFTable::BlobKey::operator<(const BlobKey &p_o) const {
@@ -594,6 +601,7 @@ void SDFTable::build_table(int p_lod_count) {
     }
     lod_count = p_lod_count;
 
+    rebuild.cancel(); // a base of the old records
     records.clear();
     has_moment_blobs = false;
     moment_blob_type = -1;
