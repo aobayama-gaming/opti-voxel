@@ -109,7 +109,7 @@ TEST_CASE("Climate: make_fbm's octaves are make_octave keyed by their index") {
     }
 }
 
-TEST_CASE("Climate: the example preset parses at 5 cm and 15 LODs, and is refused where its octaves don't exist") {
+TEST_CASE("Climate: the example preset parses at 5 cm at any LOD count, its ranges keeping the ground's octaves") {
     const Ref<FileAccess> f = FileAccess::open("res://climate/example.json", FileAccess::READ);
     CLIMATE_REQUIRE(f.is_valid());
     const String json = f->get_as_text();
@@ -118,12 +118,13 @@ TEST_CASE("Climate: the example preset parses at 5 cm and 15 LODs, and is refuse
     CHECK(parse_json(json, g.ground, t) == String());
     CLIMATE_REQUIRE(t.fields.size() == 3);
     CLIMATE_REQUIRE(t.biomes.size() == 7);
-    // 3.2 km .. 26 km at 5 cm: k = 16 .. 19, coarsest first, amplitude 0.8 times 0.7 per finer octave.
+    // 3.2 km .. 26 km at 5 cm: k = 16 .. 19, coarsest first, amplitude 0.5 times 0.7 per finer octave; the
+    // continental range (52 km ..) is past the ground's top octave (19) at 15 LODs.
     const Field &temp = t.fields[0];
     CLIMATE_REQUIRE(temp.bands.size() == 4);
     CHECK(temp.bands.front().k == 19);
     CHECK(temp.bands.back().k == 16);
-    CHECK(temp.bands[1].amp == float(0.8 * 0.7));
+    CHECK(temp.bands[1].amp == float(0.5 * 0.7));
     CLIMATE_REQUIRE(temp.terms.size() == 1);
     CHECK(temp.terms[0].source == GROUND);
     CHECK(temp.terms[0].coef == float(-0.00003 * g.ground.voxel_size));
@@ -132,13 +133,30 @@ TEST_CASE("Climate: the example preset parses at 5 cm and 15 LODs, and is refuse
     CHECK(t.biomes.back().name == "plain");
     CHECK(t.biomes.back().edges.empty());
     CHECK(t.biomes[0].debug_color == 0xC03818u);
-    // Ground multipliers name ground octaves: 1 km .. 6.5 km = k 14 .. 17.
-    CHECK(t.biomes[0].amps.size() == 4);
+    // Ground multipliers name ground octaves: 0.4 m .. 25 m = k 3 .. 9 and 50 m .. 13 km = k 10 .. 18; the plain's
+    // 0.4 m .. 12 m and 25 m .. 30,000 km keep k 3 .. 8 and 9 .. 19 here.
+    CHECK(t.biomes[0].amps.size() == 16);
+    CHECK(t.biomes.back().amps.size() == 6 + 11);
 
+    // 25 LODs: the continental octaves k = 20 .. 29 join, each at the amplitude it has at any LOD count.
+    GroundFixture g25(0.05, 25);
+    Table t25;
+    CHECK(parse_json(json, g25.ground, t25) == String());
+    CLIMATE_REQUIRE(t25.fields[0].bands.size() == 14);
+    CHECK(t25.fields[0].bands.front().k == 29);
+    CHECK(t25.fields[0].bands[9].k == 20);
+    CHECK(t25.fields[0].bands[9].amp == 0.35f);
+    CHECK(t25.fields[0].bands[10].amp == temp.bands[0].amp);
+    CHECK(t25.biomes.back().amps.size() == 6 + 21);
+
+    // 14 LODs: the ranges lose k = 19; a single wavelength past the top is refused.
     GroundFixture g14(0.05, 14);
     Table t14;
-    CHECK(parse_json(json, g14.ground, t14).contains("outside the ground's range"));
-    CHECK(t14.fields.empty());
+    CHECK(parse_json(json, g14.ground, t14) == String());
+    CHECK(t14.fields[0].bands.size() == 3);
+    Table single;
+    const char *past_top = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26000, "amp": 1}]}], "biomes": [{"name": "a"}]})";
+    CHECK(parse_json(past_top, g14.ground, single).contains("outside the ground's range"));
 }
 
 TEST_CASE("Climate: malformed tables are refused with the reason") {
@@ -438,7 +456,7 @@ TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slo
     CHECK(bad == 0);
     // Ground queries carry the fields only where FieldRange says; with all of them carried the ground is the same bits.
     const Cascade::FieldRange range = spec.field_range();
-    CHECK(range.floor == 7); // 50 m at 5 cm: k = 10, inserted on Λ_7
+    CHECK(range.floor == 0); // 0.4 m at 5 cm: k = 3, inserted on Λ_0
     CHECK(range.ceiling == 16); // 26 km: k = 19
     int64_t ground_differs = 0;
     for (const int lod : { 0, 6, 7, 12, 16, 17 }) {

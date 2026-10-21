@@ -201,7 +201,8 @@ String validate(const Table &p_table, const Ground &p_ground) {
 //             "bands": [ { "wavelength_m": 5000, "amp": 1 }
 //                      | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional) } ],
 //             "terms": [ { "source": "ground", "per_m": -0.002 } | { "source": "<earlier field>", "x": 0.5 } ] }
-//     A range is every octave from from_m to to_m, amp at to_m (the coarsest) times persistence per finer octave.
+//     A range is every octave from from_m to to_m that the ground has (its octaves depend on the LOD count: the
+//     table covers the whole spectrum at any count), amp at to_m (the coarsest) times persistence per finer octave.
 //     Octave k's seed and lattice are make_octave(field seed, k): editing one band leaves the others' unchanged.
 //     A ground term reads the ground's height above the datum (per metre); a field term that field's value.
 //   biome:  { "name": "volcanic",
@@ -211,7 +212,10 @@ String validate(const Table &p_table, const Ground &p_ground) {
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
 //             "debug_color": "#c04020" }
 //     The region is 1 between min and max, fading to 0 over the fade outside. A range of "amp" covers the
-//     octaves the field has in it. The last biome is the default: no "where". "surface": the biome's ground colours
+//     octaves the field has in it (none, past the ground's octaves at this LOD count). Octave k reads the weights
+//     from the fields' octaves coarser than k only (Cascade::Modulation): a region shapes the ground's octaves up to
+//     about the size of its fields' octaves, so flattening the continental octaves takes continental regions. The
+//     last biome is the default: no "where". "surface": the biome's ground colours
 //     (sRGB) on gentle and steep slopes; without it, the procedural ground's.
 namespace {
 
@@ -358,7 +362,13 @@ private:
         }
         const double amp = number(p_d, "amp", p_where);
         const double persistence = number(p_d, "persistence", p_where, 1.0);
+        // A range keeps the ground's octaves (another LOD count keeps another part of it, each octave at the same
+        // amplitude); a single wavelength outside them is refused by validate().
+        const bool range = lo != hi;
         for (int k = hi; k >= lo; k--) {
+            if (range && (k < ExactNoise::BAND_SHIFT || k > ground.k_max)) {
+                continue;
+            }
             r_f.bands.push_back(ExactNoise::make_octave(r_f.seed, uint32_t(k), k, float(amp * std::pow(persistence, hi - k))));
         }
     }
@@ -451,7 +461,8 @@ private:
                 r_b.amps.push_back(Amp{ f, band.k, mult });
             }
         }
-        if (r_b.amps.size() == before) {
+        // A range wholly past the ground's octaves names none at this LOD count (like a field's band range).
+        if (r_b.amps.size() == before && lo <= ground.k_max && hi >= ExactNoise::BAND_SHIFT) {
             fail(p_where, "the field has no octave in that range.");
         }
     }

@@ -453,7 +453,9 @@ to every change, and a reviewer may reject a PR on any of them.
   default): a climate is data, a JSON table (format above `parse()`, example `project/climate/example.json`, tuned for
   5 cm: at 0.5 m its x2 mountains exceed the cap and the table is refused) checked against
   `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (8) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
-  the ground's range (seeds `make_octave(field seed, k)`, keyed by k), plus linear terms `coef * (the ground or an earlier
+  the ground's range (seeds `make_octave(field seed, k)`, keyed by k; a `from_m` .. `to_m` range of bands or multipliers
+  keeps the octaves the LOD count has, each at the same amplitude, so one table covers the whole spectrum at 15 and 25
+  LODs; a single wavelength outside is refused), plus linear terms `coef * (the ground or an earlier
   field)` applied after the cascade, in list order (the lapse is a ground term). Biomes (<= `MAX_BIOMES`, 16): regions
   over any fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes
   the rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64.
@@ -463,7 +465,13 @@ to every change, and a reviewer may reject a PR on any of them.
   (`Cascade::field_slot`: after the ground's 8 slots on the CPU, after its 4 channels on the GPU: `Spec::gpu_base`, `Spec::slot_of_gpu`).
   A band some biome multiplies is modulated (`Cascade::Modulation`, `Climate::Modulator`): at each point of its level,
   from the channels before that level's insertions (H(V_{m+1}): no band reads one of its own level), A = sum_b w_b amp_b
-  and the band inserts A n, slopes n.s (A 2^-3) + n.w dA. `fields_at` reads V_m of the combined spec, so it is a pure
+  and the band inserts A n, slopes n.s (A 2^-3) + n.w dA. So ground octave k follows the biome map of the fields'
+  octaves coarser than k only: a region shapes the ground up to about its own size (a plain patch inside a mountain
+  region keeps the region's big octaves), and flattening the continental octaves takes continental regions. The
+  example's fields have km and continental octaves (to the top) and every biome multiplies the whole spectrum (raising
+  stops at the 3.3 km cap): at 25 LODs, mountain slopes 4-5x the plain's on 26 and 210 km squares (a plain alone:
+  slope 0.018, from 0.19 bare); the old example's few-octave multipliers moved slopes 0-45%, mountains +2%.
+  `climate_report.sh`'s relief table (height std, mean slope per biome, `ground_height.png`) measures it. `fields_at` reads V_m of the combined spec, so it is a pure
   function of (lattice point, m). `SDFCascade` skirts take the largest amplitude any biome gives an octave
   (`Climate::max_amp`). On the GPU the climate code is generated from the table (`Modulator::glsl`, op for op) and
   `CascadePasses` compiles a ground-only variant and a fields variant (`level_shader(..., p_fields)`, the scratch planar:
@@ -491,10 +499,11 @@ to every change, and a reviewer may reject a PR on any of them.
   every chunk's materials when the base is longer than one (`ChunkPalette::glsl_base`); on the ground block a record's
   index past the base reads as ground. Unit-tested (box run == point query per sample); CascadeSpike G10
   (`--biomes`): GPU == CPU on every sample of every LOD (58.7 M, all 7 example biomes seen). Cost (128-chunk
-  batches, the example's 3 fields): the climate's passes 1.53-1.64x the bare cascade at LODs 0-4 and 20-24 (was
-  1.00-1.09x: 12 more channels carried everywhere), 2.0-3.3x at 8-16 (was 2.2-3.5x); its fields alone 1.4-1.5x.
-  Forest5cm (throttled GPU, indicative): steady render GPU +6%, SDF pass per batch +19%, the climate's world +5%
-  triangles. `--view=12` (B in the player, V cycles to it) paints each biome its
+  batches, the example's 3 fields, every ground octave modulated): the climate's passes 2.0x the bare cascade at LODs
+  0-8, 3.3-3.9x at 12-24 (the weights run at every level; with multipliers on a few octaves it was 1.5-1.6x at 0-4
+  and 20-24: 12 more channels carried everywhere); its fields alone 1.4-1.5x. Forest5cm, retuned vs the few-octave
+  example (2 runs, GPU at 1.5 GHz): load +2%, SDF pass per batch +10-13%, steady render GPU +0%, fly p50 +11%
+  (the climate vs none, earlier and throttled: steady render GPU +6%, SDF pass +19%). `--view=12` (B in the player, V cycles to it) paints each biome its
   debug colour. A field no edge, term or multiplier reads is carried anyway: leave it out of the table.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
@@ -517,7 +526,8 @@ to every change, and a reviewer may reject a PR on any of them.
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice, each column at its ground
   surface (`--surface=0`: a slice through the datum, kilometres off the ground at 25 LODs): per-biome share and mean
   weight, where each pair of biomes meets nearest the centre with the player's `--spawn=X,Z` (metres), per-field range,
-  CPU us per point, `biomes_blend.png` / `biomes_pick.png` / `field_*.png`. Tune a table from it before any GPU run.
+  the ground under each biome (mean height, height std, mean slope), CPU us per point, `biomes_blend.png` /
+  `biomes_pick.png` / `ground_height.png` / `field_*.png`. Tune a table from it before any GPU run.
 - `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the

@@ -179,6 +179,49 @@ String field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sa
     return md;
 }
 
+// The ground under each biome's picks: its height spread and its mean slope between neighbouring columns of the same
+// pick (the relief of the octaves longer than about two lattice spacings), and a grey height map.
+String relief_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const String &p_dir,
+        Array &r_images) {
+    const int64_t points = int64_t(p_n) * p_n;
+    auto height = [&](int64_t p_i) { return double(p_s.ground_y[size_t(p_i)]) * p_voxel_m; };
+    std::vector<double> sum(size_t(p_s.nb), 0.0), sum2(size_t(p_s.nb), 0.0), slope(size_t(p_s.nb), 0.0);
+    std::vector<int64_t> count(size_t(p_s.nb), 0), pairs(size_t(p_s.nb), 0);
+    double lo = INFINITY, hi = -INFINITY;
+    for (int64_t i = 0; i < points; i++) {
+        const size_t b = size_t(p_s.picks[size_t(i)]);
+        const double h = height(i);
+        lo = MIN(lo, h);
+        hi = MAX(hi, h);
+        sum[b] += h;
+        sum2[b] += h * h;
+        count[b]++;
+        const int64_t col = i % p_n;
+        for (const int64_t nb : { col + 1 < p_n ? i + 1 : int64_t(-1), i + p_n < points ? i + p_n : int64_t(-1) }) {
+            if (nb >= 0 && size_t(p_s.picks[size_t(nb)]) == b) {
+                slope[b] += std::fabs(height(nb) - h) / p_spacing_m;
+                pairs[b]++;
+            }
+        }
+    }
+    String md = vformat("Ground height over the slice: %s .. %s m.\n\n| biome | mean height m | height std m | mean slope (m/m) |\n|---|---|---|---|\n",
+            String::num(lo, 0), String::num(hi, 0));
+    for (int b = 0; b < p_s.nb; b++) {
+        const double c = double(MAX(count[size_t(b)], int64_t(1)));
+        const double mean = sum[size_t(b)] / c;
+        md += vformat("| %s | %s | %s | %s |\n", p_table.biomes[size_t(b)].name, String::num(mean, 0),
+                String::num(std::sqrt(MAX(sum2[size_t(b)] / c - mean * mean, 0.0)), 0),
+                String::num(slope[size_t(b)] / double(MAX(pairs[size_t(b)], int64_t(1))), 3));
+    }
+    PackedByteArray grey;
+    grey.resize(points * 3);
+    for (int64_t i = 0; i < points; i++) {
+        grey[i * 3] = grey[i * 3 + 1] = grey[i * 3 + 2] = uint8_t(CLAMP(std::lround(255.0 * (height(i) - lo) / MAX(hi - lo, 1e-9)), 0L, 255L));
+    }
+    r_images.push_back(save(p_dir, "ground_height.png", p_n, grey));
+    return md;
+}
+
 } // namespace
 
 void ClimateReport::_bind_methods() {
@@ -220,6 +263,7 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     Array images;
     md += biome_section(table, s, n, p_out_dir, images) + String("\n");
     md += border_section(table, s, n, spacing_m, ground.voxel_size) + String("\n");
+    md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + String("\n");
     md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
     md += "\nImages (x right, z down): ";
     for (int64_t i = 0; i < images.size(); i++) {
