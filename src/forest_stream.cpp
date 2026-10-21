@@ -106,7 +106,7 @@ void ForestStream::wait_for_inputs(const FieldKey &p_key, Entry &r_entry) {
     r_entry.missing = 0;
     for (const FieldKey &k : inputs) {
         Entry &in = request(k, false);
-        if (in.state != Entry::READY || (!in.content && !in.placed)) {
+        if (in.state != Entry::READY) { // a ready entry holds its content or is placed
             r_entry.missing++;
             in.dependents.push_back(p_key); // land() counts it down
         }
@@ -124,7 +124,7 @@ bool ForestStream::ready(const ChunkId &p_chunk) {
     ChunkWait &w = it->second;
     w.asked = frame;
     // A chunk still missing keys since its last full check answers at once (its keys were asked for then).
-    const bool all = (!fresh && w.missing > 0 && frame - w.checked < RECHECK_FRAMES) ? false : check_chunk(p_chunk, w);
+    const bool all = !(!fresh && w.missing > 0 && frame - w.checked < RECHECK_FRAMES) && check_chunk(p_chunk, w);
     if (all) {
         chunk_waits.erase(it);
     }
@@ -146,7 +146,7 @@ bool ForestStream::check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait) {
     field().chunk_keys(p_chunk, param, keys);
     for (const FieldKey &k : keys) {
         Entry &e = request(k, true);
-        if (e.state == Entry::READY && e.placed) {
+        if (e.placed) {
             continue;
         }
         r_wait.missing++;
@@ -168,7 +168,7 @@ void ForestStream::start(const FieldKey &p_key, Entry &r_entry) {
     field().inputs(p_key, inputs);
     for (const FieldKey &k : inputs) {
         const Entry &in = request(k, false);
-        if (in.state != Entry::READY || (!in.content && !in.placed)) {
+        if (in.state != Entry::READY) {
             wait_for_inputs(p_key, r_entry); // an input made room meanwhile: computed again first
             return;
         }
@@ -203,7 +203,7 @@ void ForestStream::land(Entry &r_entry) {
     dependents.swap(r_entry.dependents);
     for (const FieldKey &d : dependents) {
         const auto it = entries.find(d);
-        if (it != entries.end() && it->second.state == Entry::WAITING && it->second.missing > 0 && --it->second.missing == 0) {
+        if (it != entries.end() && it->second.state == Entry::WAITING && --it->second.missing == 0) {
             it->second.state = Entry::QUEUED;
             queued.push_back(d);
         }
@@ -252,7 +252,7 @@ bool ForestStream::place(Entry &r_entry) {
     if (r_entry.count > 0 && !allocate(r_entry.count, slot) && !make_room(r_entry.count, slot)) {
         if (stats.slots_full++ == 0) {
             ERR_PRINT(vformat("ForestStream: %d records don't fit the %d slots, even past the keys asked for in the last %d frames: the chunks "
-                              "needing them wait (raise SDFTable::set_forest_slots).",
+                              "needing them wait (raise SDFTable::FOREST_SLOTS).",
                     r_entry.count, capacity, GRACE_FRAMES));
         }
         return false;
@@ -334,9 +334,7 @@ bool ForestStream::make_room(uint32_t p_count, uint32_t &r_slot) {
             old.push_back({ kv.second.used, kv.first });
         }
     }
-    std::sort(old.begin(), old.end(), [](const std::pair<uint64_t, FieldKey> &p_a, const std::pair<uint64_t, FieldKey> &p_b) {
-        return p_a.first != p_b.first ? p_a.first < p_b.first : p_a.second < p_b.second;
-    });
+    std::sort(old.begin(), old.end()); // least recently asked first, then key order
     // Past the request, a sixteenth of the pool more is freed: the scan above runs once per that much churn.
     const int64_t slack = int64_t(capacity / 16);
     int64_t freed = 0;
@@ -365,9 +363,7 @@ void ForestStream::trim_cache() {
             old.push_back({ kv.second.used, kv.first });
         }
     }
-    std::sort(old.begin(), old.end(), [](const std::pair<uint64_t, FieldKey> &p_a, const std::pair<uint64_t, FieldKey> &p_b) {
-        return p_a.first != p_b.first ? p_a.first < p_b.first : p_a.second < p_b.second;
-    });
+    std::sort(old.begin(), old.end()); // least recently asked first, then key order
     for (const std::pair<uint64_t, FieldKey> &o : old) {
         if (cached_records <= cache_limit * 3 / 4) { // down to 3/4: the scan above runs once per quarter of the cache
             break;
@@ -458,7 +454,7 @@ void ForestStream::trim_demand() const {
     for (const std::pair<const FieldKey, Demand> &kv : demand) {
         old.push_back({ kv.second.used, kv.first });
     }
-    std::sort(old.begin(), old.end(), [](const std::pair<uint64_t, FieldKey> &p_a, const std::pair<uint64_t, FieldKey> &p_b) { return p_a.first < p_b.first; });
+    std::sort(old.begin(), old.end()); // least recently read first (the clock is unique)
     for (const std::pair<uint64_t, FieldKey> &o : old) {
         if (demand_records <= DEMAND_CACHE_RECORDS / 2) {
             break;

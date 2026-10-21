@@ -32,9 +32,10 @@ public:
     // scene placed at configure), then the forest's, then the edits' (subtractions cut trees). Null: none.
     void set_stream(std::shared_ptr<ForestStream> p_stream, uint32_t p_scene_end) {
         stream = std::move(p_stream);
-        scene_end = p_scene_end;
+        scene_end_id = p_scene_end;
     }
-    const ForestStream *get_stream() const { return stream.get(); }
+    // The records placed at configure (the edits' ids follow).
+    uint32_t scene_end() const { return scene_end_id; }
 
     uint32_t version() const override {
         const std::shared_ptr<const InstanceSnapshot> s = snapshot();
@@ -92,7 +93,7 @@ private:
     std::shared_ptr<const InstanceSnapshot> snap;
     uint32_t capacity = 16384; // the GPU record buffer holds this many of the table's records, then the slots
     std::shared_ptr<ForestStream> stream;
-    uint32_t scene_end = 0;
+    uint32_t scene_end_id = 0;
     Dictionary scene_stats;
 };
 

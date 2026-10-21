@@ -51,9 +51,8 @@ public:
         forest_count = p_count;
         forest_area = p_area;
     }
-    // The streamed forest's records held at once (GPU slots of RECORD_BYTES each). Set before configure().
+    // The streamed forest's records held at once (GPU slots of RECORD_BYTES each).
     static constexpr uint32_t FOREST_SLOTS = uint32_t(2) << 20;
-    void set_forest_slots(uint32_t p_slots) { forest_slots = p_slots; }
     // The forest's field and residency (null without a forest).
     const Archetype::ForestField *get_forest() const { return forest_field.get(); }
     Archetype::ForestStream *get_forest_stream() const { return forest_stream.get(); }
@@ -100,7 +99,7 @@ public:
     // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp). The streamed forest's
     // records aren't in the index: a node of its zone is kept while its corners are within the band plus the forest's
     // reach from the ground (ForestField::ground_reach; the corners read the bare ground).
-    bool cull_exempt(const ChunkId &p_node, int p_lod, float p_min_corner_m) const override;
+    bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const override;
 
     // Whether the scene has instances (placed records or a forest): the cascade's skirts take the band rule's step.
     bool places_instances() const { return !current()->empty() || forest_field; }
@@ -177,10 +176,8 @@ private:
     double scatter_area = 200.0; // --instance_area (metres)
     int forest_count = 0; // --trees
     double forest_area = 60.0; // --tree_area (metres)
-    uint32_t forest_slots = FOREST_SLOTS;
     std::shared_ptr<const Archetype::ForestField> forest_field;
     std::shared_ptr<Archetype::ForestStream> forest_stream;
-    uint32_t scene_end = 0; // the records placed at configure (the edits' ids follow)
     double biome_radius = 0.0; // --biomes (metres)
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;

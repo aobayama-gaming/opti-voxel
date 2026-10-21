@@ -65,7 +65,7 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
         // No-cull rule (archetype instances): a node box near an instance's box is never culled, so a
         // steep, rotated or subtracted shape can't be dropped by the slope-bounded corner test. Asked only
         // when the corners would cull it.
-        if (r_outside[n] && sdf->cull_exempt(p_wave[p_nodes[n]], p_lod, nearest)) {
+        if (r_outside[n] && sdf->cull_exempt(p_wave[p_nodes[n]], p_lod, nearest - chunk_outer_radius)) {
             r_outside[n] = 0;
         }
     }

@@ -165,9 +165,9 @@ public:
 
     // The discoverer's no-cull rule: a node whose box intersects any instance's influence box (grown by
     // the cull band, 2 chunk sizes at the node's LOD) must never be culled, whatever the corners say.
-    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes). p_min_corner_m: the
-    // smallest |evaluate_cull| at the node's corners (metres; over the cull band, else it isn't asked).
-    virtual bool cull_exempt(const ChunkId &p_node, int p_lod, float p_min_corner_m) const = 0;
+    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes). p_past_band_m: how far
+    // the smallest |evaluate_cull| at the node's corners is past the cull band (metres, > 0, else it isn't asked).
+    virtual bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const = 0;
 
     // Runtime instance edits. rotation (9 floats, row major) and params (8 floats) may be null (identity / zero).
     // p_op is a Combine. Returns the new instance id (>= 0) or -1. When any edit succeeds, last_edit_box() holds

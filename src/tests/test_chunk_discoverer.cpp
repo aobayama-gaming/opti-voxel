@@ -34,7 +34,7 @@ struct ReferenceWalk {
                 return false;
             }
         }
-        return !sdf.cull_exempt(p_chunk, lod, nearest); // the no-cull rule near instances (SDFBase::cull_exempt)
+        return !sdf.cull_exempt(p_chunk, lod, nearest - chunk_outer_radius); // the no-cull rule near instances (SDFBase::cull_exempt)
     }
 
     void walk(const ChunkId &p_camera, const ChunkId &p_node, LODHashSet &r_set) {

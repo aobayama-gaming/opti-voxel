@@ -302,7 +302,7 @@ to every change, and a reviewer may reject a PR on any of them.
   square of side M metres around (-50, -150) m (`SDFTable::SCENE_X / Z`, set before the node enters the tree),
   default 0.
   **Trees (step 5, `src/tree_archetype.*`):** a tree is a contiguous run of plain records, all smooth union
-  (`SDFTable::get_trees()`: `TreeSpan` first id + count), no change to the IR, the fold or the meshers.
+  (a tree tile's records, `forest_field.*`), no change to the IR, the fold or the meshers.
   Library types 3 `branch` (a tapered capsule {height, radius, slope}, slope = (r1 - r0) / height from the
   CPU, L = 1 + slope^2 / 2), 4 `crown` (`make_rock_type(crown_k(voxel), CROWN_SEED)`, bumps of 0.8-3.2 m whose
   amplitude adds `CROWN_BUMP` = 1.5 to L: lumpy foliage up close, smooth once the band rule drops the octaves) and

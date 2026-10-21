@@ -128,7 +128,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<std::vector<uint32_t>> lists(p_chunks.size());
     std::vector<std::vector<uint32_t>> palettes(p_chunks.size());
     std::vector<uint8_t> fits(p_chunks.size(), 1);
-    Job job{ snap.get(), stream.get(), scene_end, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
+    Job job{ snap.get(), stream.get(), scene_end_id, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
     if (p_chunks.size() > 1) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
         pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));

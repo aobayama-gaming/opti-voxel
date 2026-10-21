@@ -281,7 +281,7 @@ void SDFTable::add_forest(const TreeTypes &p_types, int p_blob_type, Dictionary 
     r_stats["trees"] = forest;
 }
 
-bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_min_corner_m) const {
+bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const {
     const std::shared_ptr<const InstanceSnapshot> snap = current();
     if (snap && snap->near_instance(p_node, p_lod)) {
         return true;
@@ -292,7 +292,7 @@ bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_min_corner_
     // The corners are the bare ground's distance: the node holds a point within its band of the ground, so within the
     // band plus the reach of the forest's records when it can hold one (the corner test's own slope bound).
     const int64_t reach = forest_field->ground_reach(p_lod);
-    if (reach == 0 || double(p_min_corner_m) > 2.0 * double(ChunkMath::world_chunk_size(p_node, param)) + double(reach) * param.voxel_size) {
+    if (reach == 0 || double(p_past_band_m) > double(reach) * param.voxel_size) {
         return false;
     }
     const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
@@ -306,7 +306,7 @@ RecordView SDFTable::point_records(const InstanceSnapshot &p_snap, const VoxelPo
     }
     thread_local std::vector<TableRecord> flat;
     flat.clear();
-    const auto edits = std::lower_bound(r_list.begin(), r_list.end(), scene_end); // the candidates are in id order
+    const auto edits = std::lower_bound(r_list.begin(), r_list.end(), gpu.scene_end()); // the candidates are in id order
     for (auto it = r_list.begin(); it != edits; ++it) {
         flat.push_back(p_snap.records[*it]);
     }
@@ -581,12 +581,11 @@ void SDFTable::build_table(int p_lod_count) {
     // The GPU buffers hold the scene plus room for runtime edits (the mesher reads this at init).
     gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
     // The streamed forest's slots after the table's records, within the list word's ids.
-    scene_end = records.size();
     if (forest_field) {
         const uint32_t base = gpu.table_capacity();
-        forest_stream = std::make_shared<ForestStream>(forest_field, param, base, MIN(forest_slots, SDFGpuTable::LIST_ID_MASK + 1 - base));
+        forest_stream = std::make_shared<ForestStream>(forest_field, param, base, MIN(FOREST_SLOTS, SDFGpuTable::LIST_ID_MASK + 1 - base));
     }
-    gpu.set_stream(forest_stream, scene_end);
+    gpu.set_stream(forest_stream, uint32_t(records.size()));
     version++;
     publish(build_snapshot(library, float(vs), true, records, param, lod_count - 1, version), VoxelBox());
 }
