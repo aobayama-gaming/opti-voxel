@@ -29,15 +29,13 @@ class ForestStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
     static constexpr int JOBS_PER_WORKER = 32; // keys handed to the workers at once, per worker
-    // A chunk still waiting for its keys is checked in full again once they are all placed, or after RECHECK_FRAMES (the
-    // safety net: a key evicted or refused meanwhile); between, ready() answers from the keys placed since. Its placed keys
-    // may then go unasked past the grace: only a full pool evicts them, and the full check asks for them again. A full
-    // check every GRACE_FRAMES / 2 was 49% of the main thread on the 1M load (a LOD-7 chunk lists hundreds of keys). A
-    // wait not asked for in WAIT_DROP_FRAMES is dropped.
+    // A waiting chunk's full check again after RECHECK_FRAMES at most (ready()); its keys count as asked for until then. A
+    // full check every GRACE_FRAMES / 2 was 49% of the main thread on the 1M load (a LOD-7 chunk lists hundreds of keys).
+    // A wait not asked for in WAIT_DROP_FRAMES is dropped.
     static constexpr uint64_t RECHECK_FRAMES = 64;
     static constexpr uint64_t WAIT_DROP_FRAMES = 64;
-    // Placed keys without records (air, empty ground) hold no slot, so no eviction drops them: poll() sweeps those not
-    // asked for in GRACE_FRAMES once the keys doubled since the last sweep (at least SWEEP_MIN_KEYS): amortized O(1).
+    // Keys without records (air, empty ground) hold no slot and no cache, so no eviction drops them: poll() sweeps the
+    // stale ones (placed or inputs only) once the keys doubled since the last sweep (at least SWEEP_MIN_KEYS): amortized O(1).
     static constexpr size_t SWEEP_MIN_KEYS = 128;
     static constexpr int64_t INPUT_CACHE_RECORDS = int64_t(4) << 20; // the LOD-0 tree tiles kept for their readers, in records
     static constexpr int64_t DEMAND_CACHE_RECORDS = int64_t(1) << 20; // the contents CPU evaluations computed, in records
@@ -52,7 +50,8 @@ public:
 
     // Main thread. Whether every key the chunk lists is resident; asks for the ones that aren't (the meshers ask in queue
     // order: the first asked are computed first). A chunk found waiting is answered from the count of its keys placed
-    // since (no key looked at) until RECHECK_FRAMES have passed, then checked in full again.
+    // since (no key looked at); it is checked in full again once they are all placed, or after RECHECK_FRAMES (the safety
+    // net: a key evicted or refused meanwhile).
     bool ready(const ChunkId &p_chunk);
     // Main thread, once per frame: lands the keys the workers finished (their dependents queued once their last input is
     // there), starts the queued ones. Its cost follows what landed, not what the stream holds.
@@ -191,6 +190,8 @@ private:
     bool make_room(uint32_t p_count, uint32_t &r_slot);
     void trim_cache();
     void sweep_empty();
+    // Not asked for in GRACE_FRAMES: its records may go (a batch in flight reads the slots of the keys it asked for).
+    bool stale(const Entry &p_entry) const { return p_entry.used + GRACE_FRAMES < frame; }
     // A key's content for a CPU evaluation (under the mutex): kept (an input), back from its slots or computed, its
     // inputs the same way; cached in demand.
     const FieldContent &on_demand(const FieldKey &p_key) const;

@@ -431,6 +431,7 @@ TEST_CASE("Tree sites: on the cascade ground, the octree walk finds every cell's
         }
         MESSAGE("unsnapped: ", coarse_sites.size(), " sites, ", matched, " of the snapped trees' cells; bases within ", off, " voxels of the ground");
         CHECK(matched == walked.size());
+        CHECK(off <= double(side)); // within a cell of the ground
         CHECK(coarse_sites.size() * 100 <= walked.size() * 105);
     }
     CHECK(total > 300);

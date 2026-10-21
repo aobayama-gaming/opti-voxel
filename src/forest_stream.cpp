@@ -86,7 +86,7 @@ ForestStream::~ForestStream() {
 ForestStream::Entry &ForestStream::request(const FieldKey &p_key, bool p_listed) {
     const auto [it, fresh] = entries.try_emplace(p_key);
     Entry &e = it->second; // references survive the rehashes of the requests below
-    e.used = frame;
+    e.used = MAX(e.used, frame); // a waiting chunk's full check may have asked for it ahead
     if (fresh) {
         wait_for_inputs(p_key, e);
     }
@@ -143,9 +143,12 @@ bool ForestStream::check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait) {
     r_wait.checked = frame;
     r_wait.missing = 0;
     thread_local std::vector<FieldKey> keys;
+    thread_local std::vector<Entry *> seen; // stay valid: rehashes keep references, and nothing just asked for is stale
     field().chunk_keys(p_chunk, param, keys);
+    seen.clear();
     for (const FieldKey &k : keys) {
         Entry &e = request(k, true);
+        seen.push_back(&e);
         if (e.placed) {
             continue;
         }
@@ -154,6 +157,11 @@ bool ForestStream::check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait) {
             e.waiters.back().second = r_wait.gen;
         } else {
             e.waiters.push_back({ p_chunk, r_wait.gen }); // place() counts it down
+        }
+    }
+    if (r_wait.missing > 0) {
+        for (Entry *e : seen) {
+            e->used = frame + RECHECK_FRAMES; // asked for until the chunk's next full check: within the grace meanwhile
         }
     }
     return r_wait.missing == 0;
@@ -333,7 +341,7 @@ void ForestStream::release(uint32_t p_slot, uint32_t p_count) {
 bool ForestStream::make_room(uint32_t p_count, uint32_t &r_slot) {
     std::vector<std::pair<uint64_t, FieldKey>> old;
     for (const std::pair<const FieldKey, Entry> &kv : entries) {
-        if (kv.second.placed && kv.second.count > 0 && kv.second.used + GRACE_FRAMES < frame) {
+        if (kv.second.placed && kv.second.count > 0 && stale(kv.second)) {
             old.push_back({ kv.second.used, kv.first });
         }
     }
@@ -362,7 +370,7 @@ void ForestStream::trim_cache() {
     }
     std::vector<std::pair<uint64_t, FieldKey>> old;
     for (const std::pair<const FieldKey, Entry> &kv : entries) {
-        if (kv.second.state == Entry::READY && kv.second.content && !kv.second.listed && kv.second.used + GRACE_FRAMES < frame) {
+        if (kv.second.state == Entry::READY && kv.second.content && !kv.second.listed && stale(kv.second)) {
             old.push_back({ kv.second.used, kv.first });
         }
     }
@@ -381,7 +389,8 @@ void ForestStream::trim_cache() {
 void ForestStream::sweep_empty() {
     for (auto it = entries.begin(); it != entries.end();) {
         const Entry &e = it->second;
-        const bool drop = e.placed && e.count == 0 && e.used + GRACE_FRAMES < frame; // asked for again, computed again
+        // Placed, or an input only: asked for again, computed again.
+        const bool drop = e.state == Entry::READY && (e.placed || !e.listed) && e.count == 0 && stale(e);
         stats.swept += drop;
         it = drop ? entries.erase(it) : std::next(it);
     }

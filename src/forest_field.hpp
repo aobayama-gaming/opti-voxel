@@ -103,9 +103,9 @@ public:
     static constexpr int64_t MARGIN_CELLS = 5; // the cells past its own a blob tile reads: tents 1, pruning neighbours 4
     static constexpr int64_t PROXY_PER_CELL = 2; // far proxies per layer cell side
     static constexpr int64_t PART_CELL_SIDES = 3; // a layer reads the parts while its cell is under this many forest cells
-    // The surface walks (the trees' and the proxies') are done once per block of this many cells per side and kept for
-    // the tiles that read it (a tile reads several blocks, its margins its neighbours', every LOD of a tree tile the same
-    // ones), at most SITE_BLOCKS_KEPT of them (a block's sites are ~56 B each).
+    // The surface walks are done once per block and kept for the keys that read it: a tree tile's own (computed again
+    // after a trim, it only regrows its trees), the proxies' per block of SITE_BLOCK_CELLS of their cells (a tile reads
+    // several, its margins its neighbours'). At most SITE_BLOCKS_KEPT blocks (sites of ~56 B).
     static constexpr int64_t SITE_BLOCK_CELLS = 16;
     static constexpr size_t SITE_BLOCKS_KEPT = 32768;
 
@@ -161,7 +161,7 @@ private:
     int first_layer = 0;
     float blob_margin_c = 0.0f; // a blob record's locality margin (its type's, the table's skirt)
     std::vector<int64_t> ground_reaches; // ground_reach per LOD
-    // surface_sites of a block (cell side, snapped, block index), the least recently read dropped past SITE_BLOCKS_KEPT.
+    // The sites of a block (cell side, the trees', block index), the least recently read dropped past SITE_BLOCKS_KEPT.
     using SiteBlock = std::tuple<int64_t, bool, int64_t, int64_t, int64_t>;
     struct Sites {
         std::shared_ptr<const std::vector<CellSite>> sites;
@@ -170,9 +170,10 @@ private:
     mutable std::mutex site_mutex;
     mutable std::map<SiteBlock, Sites> site_blocks;
     mutable uint64_t site_clock = 0;
-    // The surface_sites of cell side p_side in p_box, in cell order, from the kept blocks: a cell's site depends on its
-    // block's walk only, whatever box asks.
-    void block_sites(const VoxelBox &p_box, int64_t p_side, bool p_snap, std::vector<CellSite> &r_out) const;
+    // The sites of cell side p_side in p_box, in cell order, from the kept blocks: a cell's site depends on its block's
+    // walk only, whatever box asks. p_trees: the forest's trees (ForestGenerator::trees of a tree tile); else the far
+    // proxies' (unsnapped surface_sites, blocks of SITE_BLOCK_CELLS).
+    void block_sites(const VoxelBox &p_box, int64_t p_side, bool p_trees, std::vector<CellSite> &r_out) const;
     mutable std::atomic<bool> profile_reported{ false };
 
     // Appends the keys (p_kind, p_lod) of the tiles of p_side voxels that meet p_box and the zone grown by p_zone_grow,

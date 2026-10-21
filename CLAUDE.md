@@ -331,8 +331,9 @@ to every change, and a reviewer may reject a PR on any of them.
   (`in_lake(x, z)`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
   every tree: forest5cm is another forest than before PR B. **The forest generator** (`src/forest_generator.*`):
   `ForestGenerator` (zone box + cell side; `trees(query)` = `surface_sites` on query and zone, a tree keyed by its cell:
-  two halves of a box give the trees of the whole, unit-tested) is how `add_forest` places the forest, and what streaming
-  will query by cell. `TreeClasses`: a tree's far-field moments without growing it, the mean of its class (species x 8
+  two halves of a box give the trees of the whole, unit-tested) is what a LOD-0 tree tile's sites are (one walk per tile,
+  kept by `ForestField::block_sites`: a tile computed again after a cache trim only regrows its trees; the far proxies keep
+  theirs there too, unsnapped: no LOD-0 evaluation). `TreeClasses`: a tree's far-field moments without growing it, the mean of its class (species x 8
   size buckets of `tree_scale`, 32 grown samples each, brought to scale 1) resized by its scale and turned to its up
   (`up_rotation`, the cone tiers' rotation). Per tree at 5 cm: volume error median 0.4-1.1% (p95 8-12%), centroid 0.08-0.13
   of its spread, largest semi-axis 0.2-0.9%; summed over 400 trees within 0.5% (one class per species: the broadleaf's

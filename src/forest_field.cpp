@@ -290,11 +290,8 @@ void ForestField::tree_tile(const FieldKey &p_key, FieldContent &r_out, const Lo
         r_out.out_of_profile = all->out_of_profile;
         return;
     }
-    std::vector<CellSite> sites; // ForestGenerator::trees, from the kept blocks (a tile computed again only grows)
-    const VoxelBox box = tile_box(p_key).clipped(set.generator.zone);
-    if (box.valid) {
-        block_sites(box, set.generator.side, true, sites);
-    }
+    std::vector<CellSite> sites; // kept per tile: a tile computed again after a trim regrows its trees, no new walk
+    block_sites(tile_box(p_key), set.generator.side, true, sites);
     const DefLibrary &lib = *set.library;
     std::vector<TableRecord> parts;
     for (const CellSite &cs : sites) {
@@ -373,7 +370,7 @@ void ForestField::far_items(const FieldKey &p_key, std::vector<MomentItem> &r_it
     const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * c + int64_t(std::ceil(prof.reach))).clipped(set.generator.zone.grown(g));
     std::vector<CellSite> sites;
     if (region.valid) {
-        block_sites(region, g, false, sites); // a proxy's base needn't be on the LOD-0 ground
+        block_sites(region, g, false, sites);
     }
     const double side = double(set.generator.side);
     const VoxelBox &zone = set.generator.zone;
@@ -410,8 +407,8 @@ void ForestField::far_items(const FieldKey &p_key, std::vector<MomentItem> &r_it
     }
 }
 
-void ForestField::block_sites(const VoxelBox &p_box, int64_t p_side, bool p_snap, std::vector<CellSite> &r_out) const {
-    const int64_t block = SITE_BLOCK_CELLS * p_side;
+void ForestField::block_sites(const VoxelBox &p_box, int64_t p_side, bool p_trees, std::vector<CellSite> &r_out) const {
+    const int64_t block = (p_trees ? TREE_TILE_CELLS : SITE_BLOCK_CELLS) * p_side;
     VoxelPos lo, hi;
     for (int a = 0; a < 3; a++) {
         lo[a] = WorldCoord::floor_div(p_box.lo[a], block);
@@ -421,7 +418,7 @@ void ForestField::block_sites(const VoxelBox &p_box, int64_t p_side, bool p_snap
     for (int64_t z = lo.z; z <= hi.z; z++) {
         for (int64_t y = lo.y; y <= hi.y; y++) {
             for (int64_t x = lo.x; x <= hi.x; x++) {
-                const SiteBlock key(p_side, p_snap, x, y, z);
+                const SiteBlock key(p_side, p_trees, x, y, z);
                 std::shared_ptr<const std::vector<CellSite>> sites;
                 {
                     const std::lock_guard<std::mutex> lock(site_mutex);
@@ -433,8 +430,12 @@ void ForestField::block_sites(const VoxelBox &p_box, int64_t p_side, bool p_snap
                 }
                 if (!sites) { // walked outside the lock: two tiles may walk a block at once, the same sites
                     auto walked = std::make_shared<std::vector<CellSite>>();
-                    const VoxelPos b = VoxelPos(x, y, z) * block;
-                    surface_sites(b, b + VoxelPos(block - 1, block - 1, block - 1), p_side, set.ground, *walked, p_snap);
+                    const VoxelBox b{ VoxelPos(x, y, z) * block, VoxelPos(x, y, z) * block + VoxelPos(block - 1, block - 1, block - 1), true };
+                    if (p_trees) {
+                        set.generator.trees(b, set.ground, *walked);
+                    } else {
+                        surface_sites(b.lo, b.hi, p_side, set.ground, *walked, false); // a proxy's base needn't be on the LOD-0 ground
+                    }
                     sites = walked;
                     const std::lock_guard<std::mutex> lock(site_mutex);
                     site_blocks[key] = Sites{ sites, ++site_clock };
@@ -443,7 +444,7 @@ void ForestField::block_sites(const VoxelBox &p_box, int64_t p_side, bool p_snap
                         for (const std::pair<const SiteBlock, Sites> &kv : site_blocks) {
                             old.push_back({ kv.second.used, kv.first });
                         }
-                        std::sort(old.begin(), old.end());
+                        std::nth_element(old.begin(), old.begin() + old.size() / 2, old.end()); // the least recently read half
                         for (size_t i = 0; i < old.size() / 2; i++) {
                             site_blocks.erase(old[i].second);
                         }
