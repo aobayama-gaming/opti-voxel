@@ -227,8 +227,7 @@ bool record_wins(const Float4 &p_r, const Float4 &p_c, Combine p_op) {
 
 uint32_t record_material(uint32_t p_material, uint32_t p_type_material, Combine p_op) {
     const uint32_t m = p_material == Material::FROM_TYPE ? p_type_material : p_material;
-    const bool cuts = p_op == Combine::SUBTRACT || p_op == Combine::SMOOTH_SUBTRACT;
-    return m == Material::INHERIT && !cuts ? Material::GROUND : m;
+    return m == Material::INHERIT && !is_cutter(p_op) ? Material::GROUND : m;
 }
 
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
@@ -421,6 +420,7 @@ TableDefPtr make_sphere_type() {
     const Reg r = b.sphere(b.t_local(), b.t_param(0));
     std::shared_ptr<TableDef> d = make_def("sphere", 1, b, r);
     d->bounds = cube_bounds;
+    d->moments = [](const float *p) { return sphere_moments(p[0]); };
     return d;
 }
 
@@ -429,6 +429,7 @@ TableDefPtr make_box_type() {
     const Reg r = b.box(b.t_local(), b.t_param(0), b.t_param(1), b.t_param(2));
     std::shared_ptr<TableDef> d = make_def("box", 3, b, r);
     d->bounds = box_bounds;
+    d->moments = [](const float *p) { return box_moments(p[0], p[1], p[2]); };
     return d;
 }
 
@@ -441,6 +442,7 @@ TableDefPtr make_capsule_type() {
         r_hi = Float3{ p[1], p[0] + p[1], p[1] };
         r_l = 1.0f;
     };
+    d->moments = [](const float *p) { return tapered_capsule_moments(p[0], p[1], p[1]); };
     return d;
 }
 
@@ -462,6 +464,7 @@ TableDefPtr make_branch_type() {
         r_hi = Float3{ rad, p[0] + rad, rad };
         r_l = 1.0f + 0.5f * p[2] * p[2];
     };
+    d->moments = [](const float *p) { return tapered_capsule_moments(p[0], p[1], double(p[1]) + double(p[2]) * double(p[0])); };
     return d;
 }
 
@@ -474,6 +477,7 @@ TableDefPtr make_cylinder_type() {
         r_hi = Float3{ p[1], p[0], p[1] };
         r_l = 1.0f;
     };
+    d->moments = [](const float *p) { return cylinder_moments(p[0], p[1]); };
     return d;
 }
 
@@ -511,6 +515,7 @@ TableDefPtr make_rock_type(int p_k, uint32_t p_seed) {
         r_hi = Float3{ e, e, e };
         r_l = float(1.0 + double(p[1]) * slope);
     };
+    d->moments = [](const float *p) { return sphere_moments(p[0]); };
     return d;
 }
 
@@ -535,6 +540,10 @@ TableDefPtr make_cone_type(int p_k, uint32_t p_seed) {
         r_hi = Float3{ e, p[1] + bump, e };
         r_l = float(1.0 + double(p[4]) * slope);
     };
+    d->moments = [](const float *p) { // the radius goes from r at y = 0 to 0 at the apex: (r - r y / h)^2
+        const double r = p[0], h = p[1];
+        return revolution_moments(r * r, -2.0 * r * r / h, r * r / (h * h), 0.0, h);
+    };
     return d;
 }
 
@@ -550,6 +559,7 @@ TableDefPtr make_basin_type(int p_k, uint32_t p_seed) {
         r_hi = Float3{ p[1] + bump, p[0] + bump, p[1] + bump };
         r_l = float(1.0 + double(p[2]) * slope);
     };
+    d->moments = [](const float *p) { return cylinder_moments(p[0], p[1]); };
     return d;
 }
 
@@ -581,6 +591,13 @@ TableDefPtr make_island_type(int p_k, uint32_t p_seed) {
         r_lo = Float3{ -e, float(-double(p[1]) - grow), -e };
         r_hi = Float3{ e, float(double(p[4]) - double(p[5]) + grow), e };
         r_l = float(1.0 + double(p[6]) * slope);
+    };
+    d->moments = [](const float *p) { // the hanging cone (r + y tan)^2, then the cap rd^2 - (y + drop)^2
+        const double r = p[0], tan = double(p[3]) / double(p[2]), rd = p[4], drop = p[5];
+        // Down to its apex (y = -r / tan) or its bottom cap, whichever comes first.
+        Moments m = revolution_moments(r * r, 2.0 * r * tan, tan * tan, MAX(-double(p[1]), -r / tan), 0.0);
+        m.add(revolution_moments(rd * rd - drop * drop, -2.0 * drop, -1.0, 0.0, rd - drop));
+        return m;
     };
     return d;
 }
@@ -654,6 +671,14 @@ TableDefPtr make_stairs_type() {
         r_hi = Float3{ p[0], 8.0f * p[1], 15.0f * p[2] };
         r_l = 1.0f;
     };
+    d->moments = [](const float *p) { // eight boxes side by side along z
+        Moments m;
+        for (int i = 0; i < 8; i++) {
+            const double at[3] = { 0.0, 0.0, 2.0 * i * double(p[2]) };
+            m.add(box_moments(p[0], double(p[1]) * (i + 1), p[2]), at);
+        }
+        return m;
+    };
     return d;
 }
 
@@ -702,10 +727,11 @@ Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, const VoxelPos 
     for (int c = 0; c < 8; c++) {
         double q[3];
         box_corner(p_lo, p_hi, c, q);
+        double w[3];
+        local_to_world(p_r, q, w);
         for (int j = 0; j < 3; j++) {
-            const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
-            lo[j] = MIN(lo[j], w);
-            hi[j] = MAX(hi[j], w);
+            lo[j] = MIN(lo[j], w[j]);
+            hi[j] = MAX(hi[j], w[j]);
         }
     }
     const double margin = rotation_margin(p_lo, p_hi);

@@ -17,6 +17,17 @@ TEST_CASE("WorldCoord: floor_div rounds towards minus infinity") {
     CHECK(floor_div(-458753, 458752) == -2);
 }
 
+TEST_CASE("WorldCoord: offset_pos splits an offset into a voxel and a fraction in [0, 1)") {
+    const VoxelPos anchor(int64_t(1) << 60, -5, 0);
+    const double offsets[3] = { 2.25, -0.5, -1e-12 }; // the last rounds to 1.0f: clamped below 1
+    const WorldPos p = WorldCoord::offset_pos(anchor, offsets);
+    CHECK(p.voxel == VoxelPos((int64_t(1) << 60) + 2, -6, -1));
+    CHECK(p.frac.x == 0.25f);
+    CHECK(p.frac.y == 0.5f);
+    CHECK(p.frac.z < 1.0f);
+    CHECK(p.frac.z > 0.999f);
+}
+
 TEST_CASE("WorldCoord: ctz64 is the index of the lowest set bit") {
     CHECK(ctz64(1) == 0);
     CHECK(ctz64(8) == 3);

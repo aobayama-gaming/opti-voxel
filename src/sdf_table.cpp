@@ -168,6 +168,9 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     forest_sites(forest_count, forest_area, p_centre_x, p_centre_z, p_voxel, [this](int64_t p_x, int64_t p_z) { return ground_y(p_x, p_z); }, sites);
     std::vector<TableRecord> parts;
     int64_t most = 0;
+    // Per material (bark, leaves): the trees' summed volume and equal-covariance semi-axes (span_moments), for the means.
+    const uint32_t tree_materials[2] = { Material::BARK, Material::LEAVES };
+    double volume[2] = {}, axes[2][3] = {};
     for (const TreeSite &site : sites) {
         if (in_lake(site.base.x, site.base.z)) {
             continue;
@@ -175,10 +178,31 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
         parts.clear();
         grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, parts);
         const uint32_t first = records.size();
-        if (admit(parts, "tree")) {
-            trees.push_back(TreeSpan{ first, uint32_t(parts.size()), site.species, site.seed });
-            most = MAX(most, int64_t(parts.size()));
+        if (!admit(parts, "tree")) {
+            continue;
         }
+        trees.push_back(TreeSpan{ first, uint32_t(parts.size()), site.species, site.seed });
+        most = MAX(most, int64_t(parts.size()));
+        const MaterialMoments mm = span_moments(*library, parts.data(), uint32_t(parts.size()), site.base);
+        for (int i = 0; i < 2; i++) {
+            if (const Moments *m = mm.find(tree_materials[i])) {
+                double a[3];
+                m->semi_axes(a);
+                volume[i] += m->m0;
+                for (int j = 0; j < 3; j++) {
+                    axes[i][j] += a[j];
+                }
+            }
+        }
+    }
+    // A tree's mean weight per material (m^3, overlapping parts counted twice) and spread (semi-axes, metres).
+    Dictionary materials_stats;
+    const double per_tree = trees.empty() ? 0.0 : p_voxel / double(trees.size());
+    for (int i = 0; i < 2; i++) {
+        Dictionary d;
+        d["volume_m3_avg"] = volume[i] * per_tree * p_voxel * p_voxel;
+        d["semi_axes_m_avg"] = vformat("%.2f %.2f %.2f", axes[i][0] * per_tree, axes[i][1] * per_tree, axes[i][2] * per_tree);
+        materials_stats[materials.name(tree_materials[i])] = d;
     }
     Dictionary forest;
     forest["count"] = int64_t(trees.size());
@@ -189,6 +213,7 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     forest["records"] = total;
     forest["records_per_tree_avg"] = trees.empty() ? 0.0 : double(total) / double(trees.size());
     forest["records_per_tree_max"] = most;
+    forest["moments"] = materials_stats;
     r_stats["trees"] = forest;
 }
 
