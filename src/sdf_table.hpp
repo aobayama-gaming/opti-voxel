@@ -51,8 +51,11 @@ public:
         forest_count = p_count;
         forest_area = p_area;
     }
-    // The streamed forest's records held at once (GPU slots of RECORD_BYTES each).
+    // The streamed forest's records held at once (GPU slots of RECORD_BYTES each): SLOTS_PER_TREE per tree (~40 parts at
+    // LOD 0, and the blobs), from MIN_FOREST_SLOTS to FOREST_SLOTS.
     static constexpr uint32_t FOREST_SLOTS = uint32_t(2) << 20;
+    static constexpr uint32_t MIN_FOREST_SLOTS = uint32_t(1) << 16;
+    static constexpr uint32_t SLOTS_PER_TREE = 128;
     // The forest's field and residency (null without a forest).
     const Archetype::ForestField *get_forest() const { return forest_field.get(); }
     Archetype::ForestStream *get_forest_stream() const { return forest_stream.get(); }
@@ -137,7 +140,7 @@ protected:
     // (metres). Call from configure(), after SDFBase's and once ground_y works.
     void build_table(int p_lod_count);
     // Waits for the forest's keys being computed and drops the stream: their jobs call the subclass's ground_field, so a
-    // subclass calls it from its destructor.
+    // subclass calls it from its destructor and before its configure() changes what ground_field reads.
     void stop_forest() {
         gpu.set_stream(nullptr, 0);
         forest_stream.reset();

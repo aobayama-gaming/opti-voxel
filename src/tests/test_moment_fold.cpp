@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
 
 using namespace Archetype;
 
@@ -268,4 +269,28 @@ TEST_CASE("Moment fold: the forest never thins out from its parts to its blobs")
     }
     MESSAGE("forest keys computed for the CPU evaluations: ", int64_t(with.sdf.get_forest_stream()->get_stats()["evaluate_computed"]), " with blobs, ",
             int64_t(without.sdf.get_forest_stream()->get_stats()["evaluate_computed"]), " without");
+}
+
+TEST_CASE("Streamed forest: slots follow the tree count; a second configure stops the old stream before rewriting the ground") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    SDFCascade sdf;
+    sdf.set_forest(400, 100.0);
+    param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
+    sdf.configure(param, 18);
+    CHECK(sdf.get_forest_stream()->slot_capacity() == SDFTable::MIN_FOREST_SLOTS); // 400 trees: not FOREST_SLOTS (340 MB)
+    // Keys running on the stream's workers (they read the cascade's spec) when configure runs again.
+    const int64_t x = std::llround(SDFTable::SCENE_X / param.voxel_size);
+    const int64_t z = std::llround(SDFTable::SCENE_Z / param.voxel_size);
+    const ChunkId chunk = ChunkMath::chunk_at_voxel(VoxelPos(x, sdf.ground_y(x, z), z), 0, param);
+    CHECK_FALSE(sdf.get_forest_stream()->ready(chunk));
+    sdf.get_forest_stream()->poll();
+    sdf.configure(param, 18);
+    ForestStream &stream = *sdf.get_forest_stream();
+    CHECK(int64_t(stream.get_stats()["computed"]) == 0); // a new stream
+    for (int i = 0; i < 100000 && !stream.ready(chunk); i++) {
+        stream.poll();
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    CHECK(stream.ready(chunk));
 }

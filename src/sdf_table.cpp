@@ -583,7 +583,8 @@ void SDFTable::build_table(int p_lod_count) {
     // The streamed forest's slots after the table's records, within the list word's ids.
     if (forest_field) {
         const uint32_t base = gpu.table_capacity();
-        forest_stream = std::make_shared<ForestStream>(forest_field, param, base, MIN(FOREST_SLOTS, SDFGpuTable::LIST_ID_MASK + 1 - base));
+        const uint32_t slots = uint32_t(CLAMP(int64_t(forest_count) * SLOTS_PER_TREE, int64_t(MIN_FOREST_SLOTS), int64_t(FOREST_SLOTS)));
+        forest_stream = std::make_shared<ForestStream>(forest_field, param, base, MIN(slots, SDFGpuTable::LIST_ID_MASK + 1 - base));
     }
     gpu.set_stream(forest_stream, uint32_t(records.size()));
     version++;

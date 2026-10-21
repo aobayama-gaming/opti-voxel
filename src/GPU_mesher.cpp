@@ -893,11 +893,13 @@ void GPUMesher::process_queue() {
     int min_lod = 64;
     ChunkId new_chunk;
     SDFGpuTable *table = sdf->get_gpu_table();
-    std::vector<ChunkId> waiting; // not ready (SDFGpuTable::chunk_ready): back in remesh_queue, which holds first meshes too
+    // Not ready (SDFGpuTable::chunk_ready): back in the queue they came from (send_chunk's rebuild drops them as any other).
+    std::vector<std::pair<ChunkId, LODHashSet *>> waiting;
+    LODHashSet *from = nullptr;
 
-    while (count < chunk_batch_number && waiting.size() < SDFGpuTable::WAITING_POPS_MAX && _pop_queue(new_chunk)) {
+    while (count < chunk_batch_number && waiting.size() < SDFGpuTable::WAITING_POPS_MAX && _pop_queue(new_chunk, &from)) {
         if (!table->chunk_ready(new_chunk)) {
-            waiting.push_back(new_chunk);
+            waiting.push_back({ new_chunk, from });
             continue;
         }
         working_generation.insert(new_chunk);
@@ -909,8 +911,8 @@ void GPUMesher::process_queue() {
 
         count++;
     }
-    for (const ChunkId &chunk : waiting) {
-        remesh_queue[ChunkMath::get_lod(chunk)]->insert(chunk);
+    for (const std::pair<ChunkId, LODHashSet *> &w : waiting) {
+        w.second->insert(w.first);
     }
 
     if (count > 0) {
@@ -954,7 +956,7 @@ void GPUMesher::process_queue() {
     }
 }
 
-bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
+bool GPUMesher::_pop_queue(ChunkId &new_chunk, LODHashSet **r_from) {
     // Instance edits first, finest LOD first (as GPUDirectMesher::_pop_queue).
     for (const std::vector<LODHashSet *> *queues : { &remesh_queue, &chunk_queue }) {
         for (LODHashSet *queue : *queues) {
@@ -964,6 +966,9 @@ bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
             LODHashSet::Iterator it = queue->begin();
             new_chunk = *it;
             queue->remove(it);
+            if (r_from) {
+                *r_from = queue;
+            }
             return true;
         }
     }

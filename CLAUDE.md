@@ -337,7 +337,7 @@ to every change, and a reviewer may reject a PR on any of them.
   (`up_rotation`, the cone tiers' rotation). Per tree at 5 cm: volume error median 0.4-1.1% (p95 8-12%), centroid 0.08-0.13
   of its spread, largest semi-axis 0.2-0.9%; summed over 400 trees within 0.5% (one class per species: the broadleaf's
   leaves 5% light, the record budget cuts big trees' clumps). `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
-  (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
+  (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: the field's (cell, reach, last LOD, build ms); what streamed: `["table"]["stream"]`.
   **The forest field** (`src/forest_field.*`, pure, CPU): a forest as keys whose records are a pure function of the key
   (`FieldKey`: kind, LOD, tile), what streaming loads per chunk (`keys(box, lod)`, conservative: unit-tested to miss no
   record that can reach the box). A tree tile of LOD L (8 forest cells per side): the parts listed at L of the trees
@@ -354,7 +354,7 @@ to every change, and a reviewer may reject a PR on any of them.
   an `InlineParallelFor` (a pool task computing a key).
   **The streamed forest** (`src/forest_stream.*`): `--trees` no longer places records at configure; `SDFTable` builds
   the field and a `ForestStream`, and the forest's records live in GPU slots past the table's capacity
-  (`SDFTable::FOREST_SLOTS` = 2M records, `SDFGpuTable::set_stream`). A mesher pops a chunk only once
+  (`SDFTable::SLOTS_PER_TREE` = 128 per tree, 64k to `FOREST_SLOTS` = 2M records of 160 B, `SDFGpuTable::set_stream`). A mesher pops a chunk only once
   `SDFBase::chunk_ready` (every key it lists resident), else puts it back (at most `WAITING_POPS_MAX` per batch), so a
   chunk's list is a pure function of its id. A chunk lists the scene's records, then its keys' slots in key order, then
   the edits'. Keys are computed on the stream's own threads (half the hardware threads), inputs first (LOD-0 tree tiles

@@ -83,6 +83,7 @@ public:
     }
 
     void configure(const ChunkParam &p_param, int p_lod_count) override {
+        stop_forest(); // its workers read the spec rewritten below
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
         spec = CascadeTerrain::make_spec(SEED, p_lod_count + 4, STEEPNESS, channel_set, INSERT_SHIFT);

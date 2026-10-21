@@ -158,7 +158,8 @@ private:
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
-    bool _pop_queue(ChunkId &new_chunk);
+    // r_from: the queue it was taken from.
+    bool _pop_queue(ChunkId &new_chunk, LODHashSet **r_from = nullptr);
 
     bool _is_available();
 

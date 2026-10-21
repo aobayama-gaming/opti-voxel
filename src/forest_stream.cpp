@@ -252,7 +252,7 @@ bool ForestStream::place(Entry &r_entry) {
     if (r_entry.count > 0 && !allocate(r_entry.count, slot) && !make_room(r_entry.count, slot)) {
         if (stats.slots_full++ == 0) {
             ERR_PRINT(vformat("ForestStream: %d records don't fit the %d slots, even past the keys asked for in the last %d frames: the chunks "
-                              "needing them wait (raise SDFTable::FOREST_SLOTS).",
+                              "needing them wait (raise SDFTable::SLOTS_PER_TREE / FOREST_SLOTS).",
                     r_entry.count, capacity, GRACE_FRAMES));
         }
         return false;
