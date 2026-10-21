@@ -547,8 +547,8 @@ inline String glsl_fbm(const String &p_name, const OctaveSet &p_set) {
 // GLSL_EXACT_NOISE is spliced from these fragments, so GLSL perlin3_cross (GLSL_PERLIN3_CROSS) shares
 // perlin3's cell setup and value / gradient code while GLSL_EXACT_NOISE stays byte-identical (unit test).
 // Raw string macros: adjacent literals concatenate at compile time.
-#define OV_GLSL_NOISE_HEAD R"glsl(
-
+// OV_GLSL_PCG3D is also the page shader's lattice hash (GLSL_PCG3D).
+#define OV_GLSL_PCG3D R"glsl(
 uvec3 pcg3d(uvec3 v) {
     v = v * 1664525u + 1013904223u;
     v.x += v.y * v.z;
@@ -560,7 +560,9 @@ uvec3 pcg3d(uvec3 v) {
     v.z += v.x * v.y;
     return v;
 }
-
+)glsl"
+#define OV_GLSL_NOISE_HEAD R"glsl(
+)glsl" OV_GLSL_PCG3D R"glsl(
 uvec3 cell_salt(ivec3 hi, uint seed) {
     return pcg3d(uvec3(hi) ^ uvec3(seed, seed ^ 0x9E3779B9u, seed ^ 0x85EBCA6Bu));
 }
@@ -770,6 +772,7 @@ float det_rsqrt(float x) {
 )glsl"
 
 // After the frame functions (WorldPos), before the terrain SDF.
+inline constexpr const char GLSL_PCG3D[] = OV_GLSL_PCG3D;
 inline constexpr const char GLSL_EXACT_NOISE[] = OV_GLSL_NOISE_HEAD OV_GLSL_PERLIN3_SETUP OV_GLSL_PERLIN3_VALUE_GRADIENT OV_GLSL_NOISE_TAIL;
 
 // GLSL twin of ExactNoise::perlin3_cross (after GLSL_EXACT_NOISE; only the cascade's shaders include it):
@@ -796,6 +799,7 @@ void perlin3_cross(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi, out vec4 
 }
 )glsl";
 
+#undef OV_GLSL_PCG3D
 #undef OV_GLSL_NOISE_HEAD
 #undef OV_GLSL_PERLIN3_SETUP
 #undef OV_GLSL_PERLIN3_VALUE_GRADIENT

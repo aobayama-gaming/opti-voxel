@@ -71,6 +71,8 @@ extends Node3D
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
 ##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material)
 ##   --grade=0                    no colour grading (the scene's LUT, res://grade_lut.png, tools/make_lut.py)
+##   --probe=PREFIX               direct: once loaded, PREFIX_shaded.png, then the bark seam probe views 10 and 11
+##                                as PREFIX_10.png and PREFIX_11.png, raw (tools/bark_seams.sh)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
 ##                                distance, iterated; negative: below it). Default 50 on the cascade terrains,
@@ -432,6 +434,8 @@ func _process(delta: float) -> void:
 			if terrain.is_load_complete():
 				_end_phase()
 				_take_shots("loaded")
+				if args.has("probe"):
+					_take_probe(args["probe"])
 				if args.get("scenario", "load") == "fly":
 					_begin_phase("fly_out")
 				elif args.get("scenario", "load") in ["turn", "turn_walk"]:
@@ -556,6 +560,27 @@ func _take_shots(when: String) -> void:
 			var img := get_viewport().get_texture().get_image()
 			img.save_png(shot[1])
 			print("BENCH: screenshot %s -> %s" % [when, shot[1]])
+
+
+## --probe=PREFIX: a shaded shot, then the bark seam probe views (the page shader's 10 and 11) with the environment
+## made raw (linear tonemapper, no grade, glow or fog), so each pixel reads back as the bytes the shader wrote.
+func _take_probe(p_prefix: String) -> void:
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(p_prefix + "_shaded.png")
+	var env: Environment = ($WorldEnvironment as WorldEnvironment).environment
+	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	env.tonemap_exposure = 1.0
+	env.adjustment_enabled = false
+	env.glow_enabled = false
+	env.fog_enabled = false
+	env.volumetric_fog_enabled = false
+	for view in [10, 11]:
+		terrain.debug_view = view
+		for i in 3:
+			await RenderingServer.frame_post_draw
+		var path := "%s_%d.png" % [p_prefix, view]
+		get_viewport().get_texture().get_image().save_png(path)
+		print("BENCH: probe view %d -> %s" % [view, path])
 
 
 ## --profile=1: this frame's main-thread times (VoxelTerrain sections as the difference of their running totals)
