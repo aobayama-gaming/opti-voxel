@@ -82,7 +82,9 @@ int MomentItem::first_lost_lod() const {
 
 void prepare_moment_item(MomentItem &r_item) {
     std::fill(r_item.semi, r_item.semi + 3, 0.0f);
-    std::fill(r_item.area, r_item.area + 6, 0.0);
+    if (!r_item.area_given) {
+        std::fill(r_item.area, r_item.area + 6, 0.0);
+    }
     if (r_item.moments.empty()) {
         return;
     }
@@ -91,6 +93,9 @@ void prepare_moment_item(MomentItem &r_item) {
     for (int i = 0; i < 3; i++) {
         lambda[i] = std::max(lambda[i], 1.0 / 12.0); // at least a voxel thick
         r_item.semi[i] = float(std::sqrt(5.0 * lambda[i]));
+    }
+    if (r_item.area_given) {
+        return;
     }
     // The equal-covariance ellipsoid's silhouette along n, pi sqrt(n^T adj(5 S) n), as a quadratic form: the square root
     // read as n^T adj n over the root of adj's mean eigenvalue (exact for a sphere, 1.22 times a long rod's side view, a
@@ -385,14 +390,14 @@ void MomentLayers::build_layer(Layer &r_layer) {
     finish_layer(r_layer);
 }
 
-void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params) {
+void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, const MomentJoins *p_joins) {
     ERR_FAIL_COND_MSG(p_params.cell_shift < 1 || p_params.lod_max + p_params.cell_shift > 60, "MomentLayers: cells of 2^(lod + cell_shift) voxels must be within [2, 2^60].");
     items = p_items;
     for (MomentItem &item : items) {
         prepare_moment_item(item);
     }
     params = p_params;
-    joins = moment_joins(items, params);
+    joins = p_joins ? *p_joins : moment_joins(items, params);
     layers.assign(MAX(params.lod_max - params.lod_min + 1, 0), Layer());
     for (size_t i = 0; i < layers.size(); i++) {
         layers[i].lod = params.lod_min + int(i);
@@ -531,6 +536,36 @@ void MomentLayers::rebuild(std::vector<MomentBlob> &r_out) const {
         fresh.build_layer(fresh.layers[i]);
     }
     fresh.kept(r_out);
+}
+
+MomentItem record_item(const DefLibrary &p_library, const TableRecord &p_record) {
+    MomentItem item;
+    item.anchor = p_record.anchor;
+    item.material = p_record.material;
+    if (p_record.removed || is_cutter(p_record.op) || p_record.op == Combine::ACCUM || p_record.max_lod == TableRecord::NEVER_DROPPED) {
+        return item;
+    }
+    // The layers take what its erosion removes, then all of it from its drop on.
+    item.moments = record_moments(p_library[p_record.def], p_record);
+    item.drop_lod = p_record.max_lod;
+    item.erode = p_record.erode;
+    item.erode_from = p_record.erode_from;
+    return item;
+}
+
+TableRecord blob_record(const DefLibrary &p_library, int p_blob_type, const MomentBlob &p_blob, float p_skirt_depth) {
+    TableRecord rec;
+    rec.def = uint8_t(p_blob_type);
+    rec.op = Combine::ACCUM;
+    rec.anchor = p_blob.anchor;
+    std::copy(p_blob.rotation, p_blob.rotation + 9, rec.rotation);
+    std::copy(p_blob.inv_s2, p_blob.inv_s2 + 3, rec.params);
+    rec.params[3] = p_blob.amplitude;
+    rec.material = p_blob.material;
+    finish_record(p_library[rec.def], rec, p_skirt_depth, false);
+    rec.min_lod = uint8_t(p_blob.lod);
+    rec.max_lod = uint8_t(p_blob.lod + 1);
+    return rec;
 }
 
 void build_moment_blobs(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, std::vector<MomentBlob> &r_out) {

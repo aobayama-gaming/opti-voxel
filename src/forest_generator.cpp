@@ -12,36 +12,47 @@ int TreeClasses::size_bucket(double p_scale) {
     return CLAMP(int(std::floor((p_scale - TREE_SCALE_MIN) / TREE_SCALE_SPAN * double(SIZE_BUCKETS))), 0, SIZE_BUCKETS - 1);
 }
 
-TreeClasses::TreeClasses(const DefLibrary &p_library, const TreeTypes &p_types, double p_voxel) {
-    const int species = int(tree_species().size());
+TreeSamples::TreeSamples(const TreeTypes &p_types, double p_voxel) {
+    const int count = int(tree_species().size());
     // Hashed seeds filed by size bucket until every bucket has SAMPLES (the scale alone, no tree grown yet).
-    std::vector<uint32_t> seeds;
-    for (int sp = 0; sp < species; sp++) {
-        std::vector<int> count(SIZE_BUCKETS, 0);
+    for (int sp = 0; sp < count; sp++) {
+        std::vector<int> per_bucket(TreeClasses::SIZE_BUCKETS, 0);
         int filled = 0;
-        for (uint32_t i = 0; filled < SIZE_BUCKETS && i < (1u << 20); i++) {
+        for (uint32_t i = 0; filled < TreeClasses::SIZE_BUCKETS && i < (1u << 20); i++) {
             const uint32_t seed = ExactNoise::hash3(uint32_t(sp), i, 0xC1A5u).x;
-            const int b = size_bucket(tree_scale(seed));
-            if (count[b] < SAMPLES) {
+            const int b = TreeClasses::size_bucket(tree_scale(seed));
+            if (per_bucket[b] < TreeClasses::SAMPLES) {
                 seeds.push_back(seed);
-                filled += ++count[b] == SAMPLES;
+                species.push_back(sp);
+                filled += ++per_bucket[b] == TreeClasses::SAMPLES;
             }
         }
-        ERR_FAIL_COND_MSG(filled < SIZE_BUCKETS, "TreeClasses: a size bucket that tree_scale never reaches.");
+        if (filled < TreeClasses::SIZE_BUCKETS) {
+            seeds.clear(); // no sample at all rather than a lopsided draw
+            species.clear();
+            ERR_FAIL_MSG("TreeSamples: a size bucket that tree_scale never reaches.");
+        }
     }
-    // The samples grown on the pool, summed in seed order (the same bits).
-    std::vector<MaterialMoments> grown(seeds.size());
-    parallel_for(uint32_t(seeds.size()), "TreeClasses", [&](uint32_t p_i) {
-        const int sp = int(p_i / uint32_t(SIZE_BUCKETS * SAMPLES));
-        std::vector<TableRecord> parts;
-        grow_tree(tree_species()[sp], VoxelPos(), UP_Y, seeds[p_i], p_voxel, p_types, parts);
+    parts.resize(seeds.size());
+    parallel_for(uint32_t(seeds.size()), "TreeSamples", [&](uint32_t p_i) {
+        grow_tree(tree_species()[species[p_i]], VoxelPos(), UP_Y, seeds[p_i], p_voxel, p_types, parts[p_i]);
+    });
+}
+
+TreeClasses::TreeClasses(const DefLibrary &p_library, const TreeTypes &p_types, double p_voxel) :
+        TreeClasses(p_library, TreeSamples(p_types, p_voxel)) {}
+
+TreeClasses::TreeClasses(const DefLibrary &p_library, const TreeSamples &p_samples) {
+    // Each sample's moments on the pool, summed in sample order (the same bits).
+    std::vector<MaterialMoments> grown(p_samples.size());
+    parallel_for(uint32_t(p_samples.size()), "TreeClasses", [&](uint32_t p_i) {
+        const std::vector<TableRecord> &parts = p_samples.parts[p_i];
         grown[p_i] = span_moments(p_library, parts.data(), uint32_t(parts.size()), VoxelPos());
     });
-    classes.assign(size_t(species * SIZE_BUCKETS), MaterialMoments());
-    for (size_t i = 0; i < seeds.size(); i++) {
-        const int sp = int(i / size_t(SIZE_BUCKETS * SAMPLES));
-        const double scale = tree_scale(seeds[i]);
-        MaterialMoments &mean = classes[sp * SIZE_BUCKETS + size_bucket(scale)];
+    classes.assign(tree_species().size() * size_t(SIZE_BUCKETS), MaterialMoments());
+    for (size_t i = 0; i < p_samples.size(); i++) {
+        const double scale = tree_scale(p_samples.seeds[i]);
+        MaterialMoments &mean = classes[p_samples.species[i] * SIZE_BUCKETS + size_bucket(scale)];
         for (const std::pair<uint32_t, Moments> &m : grown[i].parts) {
             mean.add(m.first, m.second.resized(1.0 / scale).scaled(1.0 / double(SAMPLES)));
         }

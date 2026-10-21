@@ -15,12 +15,14 @@ namespace Archetype {
 // stems (and their leaf clumps), hence the size buckets (one class per species left the broadleaf's leaves 5% light in
 // sum). A class's mean is over SAMPLES grown trees of that bucket, each brought to scale 1 (m0 / s^3, c / s, S / s^5),
 // upright; their leans and azimuths average out, their spread of centroids counts (a mixture's covariance).
+struct TreeSamples;
 class TreeClasses {
 public:
     static constexpr int SAMPLES = 32;
     static constexpr int SIZE_BUCKETS = 8; // over tree_scale's [0.8, 1.2)
 
     TreeClasses() = default;
+    TreeClasses(const DefLibrary &p_library, const TreeSamples &p_samples);
     TreeClasses(const DefLibrary &p_library, const TreeTypes &p_types, double p_voxel);
 
     // The moments of p_site's tree grown along p_up, per material, relative to its base (voxels).
@@ -31,6 +33,18 @@ public:
 
 private:
     std::vector<MaterialMoments> classes; // species-major
+};
+
+// The trees the classes (and a forest's profile, forest_field.hpp) are read from: per species, SAMPLES hashed seeds per
+// size bucket (species-major, bucket by bucket in hash order), each grown upright at the origin, its records not
+// finished. As a whole, a fair draw of the forest's trees: its species are uniform, its scales uniform over the buckets.
+struct TreeSamples {
+    std::vector<int> species;
+    std::vector<uint32_t> seeds;
+    std::vector<std::vector<TableRecord>> parts;
+
+    TreeSamples(const TreeTypes &p_types, double p_voxel);
+    size_t size() const { return seeds.size(); }
 };
 
 // A forest: the trees of the 3D cells of `side` voxels whose base lies in `zone`. A tree's key is its cell.

@@ -82,6 +82,20 @@ struct VoxelBox {
         }
         return r;
     }
+    // The smallest box holding this one and p_o (either one if the other is invalid).
+    VoxelBox merged(const VoxelBox &p_o) const {
+        if (!valid || !p_o.valid) {
+            return valid ? *this : p_o;
+        }
+        VoxelBox r = *this;
+        for (int a = 0; a < 3; a++) {
+            r.lo[a] = lo[a] < p_o.lo[a] ? lo[a] : p_o.lo[a];
+            r.hi[a] = hi[a] > p_o.hi[a] ? hi[a] : p_o.hi[a];
+        }
+        return r;
+    }
+    // This box grown by p_by voxels on every side.
+    VoxelBox grown(int64_t p_by) const { return VoxelBox{ lo - VoxelPos(p_by, p_by, p_by), hi + VoxelPos(p_by, p_by, p_by), valid }; }
 };
 
 // For godot HashMap / HashSet. Folds each int64 to 32 bits (high word scrambled in), then the same

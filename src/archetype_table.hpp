@@ -307,6 +307,11 @@ TableDefPtr make_moment_blob_type();
 // The influence box (world axes, int64, absolute) of a record: the type's local box, rotated by the
 // record's rotation, rounded out, plus the record's anchor. Used by the table's spatial index.
 Bounds record_world_bounds(const TableDef &p_def, const TableRecord &p_record);
+// A finished record's bare box (anchor + box_lo .. box_hi), absolute LOD0 voxels, inclusive.
+inline VoxelBox record_box(const TableRecord &p_record) {
+    return VoxelBox{ p_record.anchor + VoxelPos(p_record.box_lo[0], p_record.box_lo[1], p_record.box_lo[2]),
+        p_record.anchor + VoxelPos(p_record.box_hi[0], p_record.box_hi[1], p_record.box_hi[2]), true };
+}
 
 // A record's moments (instance_moments.hpp) in world axes, relative to its anchor: its type's moments(params) rotated,
 // or, for a type without one, the CPU program at LOD 0 (solid where !(w > 0), like the meshers) sampled at the centres
@@ -327,5 +332,16 @@ inline constexpr float MAX_RECORD_LIPSCHITZ = 1024.0f;
 // p_max_extent voxels. Checked before finish_record, whose int64 / int32 conversions of the box assume it,
 // and whose index places one entry per top-LOD node the box touches.
 String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent);
+
+// How a table finishes its records: its skirt depth (voxels), the band rule on or off and its erosion (SDFTable's
+// --instance_band / --instance_erode / --instance_resolve).
+struct RecordFinish {
+    float skirt_depth = 0.0f;
+    bool band = true;
+    ErodeRule rule;
+};
+// The record's material resolved against its type's (record_material), then finish_record: the table's records and a
+// streamed forest's alike.
+void finish_table_record(const DefLibrary &p_library, const RecordFinish &p_finish, TableRecord &r_record);
 
 } // namespace Archetype

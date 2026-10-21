@@ -1,5 +1,6 @@
 #pragma once
 
+#include "archetype_table.hpp"
 #include "instance_moments.hpp"
 #include "world_coord.hpp"
 
@@ -49,9 +50,11 @@ struct MomentItem {
     // Its erosion (archetype_table.hpp band_erosion; erode 0: whole until its drop).
     float erode = 0.0f;
     float erode_from = 1.0f;
-    // Set by the layers from the moments: the ellipsoid's semi-axes (ascending) and the area tensor (xx yy zz xy xz yz).
+    // Set by the layers from the moments: the ellipsoid's semi-axes (ascending) and the area tensor (xx yy zz xy xz yz),
+    // unless area_given (an aggregate of many parts: their summed silhouettes, not one ellipsoid's).
     float semi[3] = {};
     double area[6] = {};
+    bool area_given = false;
 
     // The share of its mass the LOD no longer draws (0 .. 1).
     double lost_share(int p_lod) const;
@@ -95,7 +98,7 @@ struct MomentBlob {
     double occupancy(const double p_offset[3]) const;
 };
 
-// The semi-axes and area tensor of p_item from its moments.
+// The semi-axes and area tensor (unless area_given) of p_item from its moments.
 void prepare_moment_item(MomentItem &r_item);
 
 // A blob of one cell's moments and area tensor at layer p_lod (the kernel's frame, size and amplitude); p_anchor: the
@@ -124,8 +127,9 @@ struct MomentBlobChange {
 // around them, and lands on the same bits as a build of the items as they now are (with the same joins).
 class MomentLayers {
 public:
-    // Every layer from p_items (indexed by id), with the joins they give.
-    void build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params);
+    // Every layer from p_items (indexed by id), with the joins they give, or p_joins (a streamed forest's, fixed by its
+    // profile: a tile's items alone don't know the forest's).
+    void build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, const MomentJoins *p_joins = nullptr);
     // Item p_id (the table grows as needed) becomes p_item; the kept blobs that appeared, changed or vanished are appended
     // to r_changes.
     void update(uint32_t p_id, const MomentItem &p_item, std::vector<MomentBlobChange> &r_changes);
@@ -207,6 +211,12 @@ private:
     // update() on one layer: item p_id was p_before (items[p_id] holds its new state).
     void update_layer(Layer &layer, uint32_t p_id, const MomentItem &p_before, std::vector<MomentBlobChange> &r_changes);
 };
+
+// A record's item: its moments, material and the first LOD it is gone at (dropped, or eroded past its half thickness);
+// empty moments for one that weighs nothing (removed, a cutter, a blob, never dropped).
+MomentItem record_item(const DefLibrary &p_library, const TableRecord &p_record);
+// A blob's record (op ACCUM, type p_blob_type, listed at its layer's LOD alone).
+TableRecord blob_record(const DefLibrary &p_library, int p_blob_type, const MomentBlob &p_blob, float p_skirt_depth);
 
 // The kept blobs of p_items' layers (a MomentLayers build), in (lod, cell, material) order.
 void build_moment_blobs(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, std::vector<MomentBlob> &r_out);
