@@ -263,7 +263,7 @@ to every change, and a reviewer may reject a PR on any of them.
   whole new index lists) in one `WorkerThreadPool` task (`BaseRebuild`, over the records as they were: copy on
   write keeps them) while the edits go on through the overlay and log their ids; `VoxelTerrain::_process`
   (`SDFTable::poll_rebuild`) swaps in the finished base plus an overlay of the ids changed since, at the same
-  version (nothing re-uploaded or re-meshed). Past 4x REBASE edited ids while it runs, an edit waits for it. A
+  version (nothing re-uploaded or re-meshed). Past 2x REBASE edited ids while it runs, an edit waits for it. A
   configure or the terrain's destruction still waits for a running build (no abort yet). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
   write per page); the GPU re-uploads the runs of pages changed since its version (`record_bytes` spans,
   `SDFGpuTable::upload_records`). `build_lists` runs on the worker pool; the list buffer holds batch size *

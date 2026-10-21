@@ -494,7 +494,7 @@ TEST_CASE("Archetype table: a base rebuilt on the pool lists what a whole new in
         store.set(id, rec, version);
         const bool was_running = rebuild.running();
         const std::shared_ptr<const IndexLayer> base_before = snap->base;
-        snap = edit_snapshot(*snap, store, { id }, version, rebuild);
+        snap = rebuild.edit(*snap, store, { id }, version);
         starts += !was_running && rebuild.running();
         hard += was_running && !rebuild.running() && snap->base != base_before;
         // Even rebuilds are taken early (waiting for the task), odd ones run until an edit passes hard_overlay.

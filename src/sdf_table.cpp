@@ -173,7 +173,7 @@ void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_aft
         }
     }
     version++;
-    publish(edit_snapshot(*current(), records, ids, version, rebuild), all);
+    publish(rebuild.edit(*current(), records, ids, version), all);
 }
 
 void SDFTable::poll_rebuild() {

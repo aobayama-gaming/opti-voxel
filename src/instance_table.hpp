@@ -128,39 +128,36 @@ inline std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<co
     return build_snapshot(p_library, p_out_scale, p_normalize, RecordStore(p_records, p_version), p_param, p_max_lod, p_version);
 }
 
-class BaseRebuild;
-
 // The next snapshot after an edit of the records p_changed (added, moved or removed; p_records is the table
-// after it): the previous base is kept and the overlay rebuilt; past r_rebuild.rebase edited records a new base is
-// built on the pool (the overlay keeps growing until it is taken, or up to r_rebuild.hard_overlay).
+// after it): the previous base kept, the overlay rebuilt over every record edited since it.
 std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_previous, RecordStore p_records,
-        const std::vector<uint32_t> &p_changed, uint32_t p_version, BaseRebuild &r_rebuild);
+        const std::vector<uint32_t> &p_changed, uint32_t p_version);
 
-// A base built on the WorkerThreadPool while edits go on: edit_snapshot starts it from a snapshot (one pool task
-// indexing its records, which copy on write keeps unchanged) and logs the ids every later edit changes; once
-// ready(), take() gives the records now over that base plus an overlay of the ids changed since: the same lists as
-// a whole new base. Main thread only, except the task itself.
+// When the base is rebuilt: edit() is edit_snapshot plus, past `rebase` edited ids, a new base built in one
+// WorkerThreadPool task over the records as they are then (copy on write keeps them unchanged), while later edits
+// grow the overlay and are logged; once ready(), take() gives the records now over that base plus an overlay of the
+// ids changed since: the same lists as a whole new base. Main thread only, except the task itself.
 class BaseRebuild {
 public:
     // Past p_rebase edited ids an edit starts a base. Past p_hard_overlay while one is being built, an edit waits for
-    // it instead of growing the overlay (an overlay costs ~1.8 us per id to rebuild, every edit).
-    explicit BaseRebuild(uint32_t p_rebase = InstanceSnapshot::REBASE, uint32_t p_hard_overlay = 4 * InstanceSnapshot::REBASE) :
+    // it instead of growing the overlay (an overlay costs ~1.8 us per id to rebuild, every edit: 7 ms at 4,096).
+    explicit BaseRebuild(uint32_t p_rebase = InstanceSnapshot::REBASE, uint32_t p_hard_overlay = 2 * InstanceSnapshot::REBASE) :
             rebase(p_rebase), hard_overlay(p_hard_overlay) {}
     ~BaseRebuild() { cancel(); }
     BaseRebuild(const BaseRebuild &) = delete;
     BaseRebuild &operator=(const BaseRebuild &) = delete;
 
+    std::shared_ptr<const InstanceSnapshot> edit(const InstanceSnapshot &p_previous, RecordStore p_records,
+            const std::vector<uint32_t> &p_changed, uint32_t p_version);
     bool running() const { return task >= 0; }
     bool ready() const;
-    // Waits for the task if it isn't done. p_like gives the snapshot's fields, p_records and p_version the table now:
-    // the version is kept, the records didn't change (the GPU re-uploads nothing, nothing is re-meshed).
+    // Waits for the task if it isn't done (null and ERR if none runs). p_like gives the snapshot's fields, p_records
+    // and p_version the table now: the version is kept, the records didn't change (nothing re-uploaded or re-meshed).
     std::shared_ptr<const InstanceSnapshot> take(const InstanceSnapshot &p_like, RecordStore p_records, uint32_t p_version);
     // Waits for the task and drops its base (configure, destruction).
     void cancel();
 
 private:
-    friend std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &, RecordStore, const std::vector<uint32_t> &, uint32_t,
-            BaseRebuild &);
     void start(std::shared_ptr<const InstanceSnapshot> p_from);
     static void _run(void *p_self);
     void wait();
