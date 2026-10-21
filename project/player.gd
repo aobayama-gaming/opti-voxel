@@ -28,6 +28,8 @@ var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (no
 var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
 var cached_altitude := 0.0
 var altitude_age := 1.0
+var fly_speed := 0.0  # eased towards the altitude's speed (0: not started)
+const FLY_SPEED_TAU := 1.5  # seconds: the speed's time constant, in log space
 
 # ---- Archetype dig tools (the instance table: every terrain) ---------------------------------------
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
@@ -389,5 +391,11 @@ func _process(delta: float) -> void:
 		if altitude_age >= 0.25:
 			altitude_age = 0.0
 			cached_altitude = absf(altitude_terrain.get_sdf_at(camera.global_position))
-		move_speed = maxf(speed, cached_altitude * 0.5)
+		# The altitude steps (4 queries a second, a canopy or a ridge passing under): the speed eases towards it in
+		# log space, so it ramps by the same ratio per second at any altitude instead of jumping.
+		var target := maxf(speed, cached_altitude * 0.5)
+		if fly_speed <= 0.0:
+			fly_speed = target
+		fly_speed *= pow(target / fly_speed, 1.0 - exp(-delta / FLY_SPEED_TAU))
+		move_speed = fly_speed
 	position += direction * move_speed * delta
