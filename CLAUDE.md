@@ -315,17 +315,22 @@ to every change, and a reviewer may reject a PR on any of them.
   upper trunk (the last on its tip) and a clump at each leaf stem's tip, smooth-unioned at half their radius
   into one mass; segments and clumps the hull always covers are skipped.
   Nothing is LOD-specific: the band rule is the LOD rule (thin parts erode away first, a tapered branch
-  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come): `cell_site` moves a
-  cell's hashed voxel onto the ground's zero (`SDFBase::ground_field`, `evaluate_cull`'s field with its gradient;
-  Newton steps on whole voxels) and keeps it if it stays in the cell (one owner per surface point); `surface_sites`
-  tries only the cells an absolute octree walk keeps near the surface (the discoverer's corner rule, corners evaluated
-  once; unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade); `forest_sites` drops a
-  site within `SITE_SPACING` (0.3) cells of an earlier neighbour's (projection brings sites together). A tree grows along
+  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come), found cheaply
+  (~9 ground evaluations per tree, 1 per empty tree tile; it was ~70 and ~85): `surface_sites` walks an absolute octree
+  from the box's node, reading the **coarse** field once at each node's centre (`SDFBase::ground_field(voxel, lod)` at
+  `site_lod`, a lattice of a third of the cell: the nearest sample extended along its gradient) and keeping the node
+  while that plane crosses it, give or take `SITE_SLACK` cells + `SITE_BEND` node sides (the cascade's field changes
+  faster than its gradient over tens of metres); `cell_site` projects the cell's hashed voxel on the cell centre's
+  plane (no evaluation): the tree exists if it lands in the cell's middle part (`SITE_INNER` margins on the two axes
+  across the normal: neighbours along the ground stay 0.3 cells apart, no neighbour is read; none on the normal's axis,
+  which left bare stripes along the contours), then its base is snapped onto the LOD-0 ground (`SNAP_STEPS` Newton
+  steps) within a voxel and inside the cell (one owner per surface point). Unit-tested equal to the brute force on
+  hills, a 60 degree slope and the 5 cm cascade; 2% of the trees on the slope have a neighbour within 0.3 cells. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). Still column-based (flat debt): the scene's centre (`ground_y`) and the lake keep-out
   (`in_lake(x, z)`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
   every tree: forest5cm is another forest than before PR B. **The forest generator** (`src/forest_generator.*`):
-  `ForestGenerator` (zone box + cell side; `trees(query)` = `forest_sites` on query and zone, a tree keyed by its cell:
+  `ForestGenerator` (zone box + cell side; `trees(query)` = `surface_sites` on query and zone, a tree keyed by its cell:
   two halves of a box give the trees of the whole, unit-tested) is how `add_forest` places the forest, and what streaming
   will query by cell. `TreeClasses`: a tree's far-field moments without growing it, the mean of its class (species x 8
   size buckets of `tree_scale`, 32 grown samples each, brought to scale 1) resized by its scale and turned to its up

@@ -31,7 +31,7 @@ struct FieldFixture {
         s.generator.side = 100;
         s.generator.zone = VoxelBox{ origin - VoxelPos(2250, 400, 2250), origin + VoxelPos(2249, 400, 2249), true };
         const VoxelPos o = origin;
-        s.ground = [o](const VoxelPos &p_v) {
+        s.ground = [o](const VoxelPos &p_v, int) {
             const double tau = 6.283185307179586, amp = 60.0, wave = 2400.0;
             const double x = double(p_v.x - o.x), z = double(p_v.z - o.z);
             const double w = double(p_v.y - o.y) - amp * std::sin(tau * x / wave) * std::cos(tau * z / wave);

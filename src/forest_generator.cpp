@@ -80,7 +80,7 @@ MaterialMoments TreeClasses::tree(const TreeSite &p_site, const UpAxis &p_up) co
 void ForestGenerator::trees(const VoxelBox &p_query, const FieldFn &p_ground, std::vector<CellSite> &r_out) const {
     const VoxelBox box = p_query.clipped(zone);
     if (box.valid) {
-        forest_sites(box.lo, box.hi, side, p_ground, r_out, &zone);
+        surface_sites(box.lo, box.hi, side, p_ground, r_out);
     }
 }
 

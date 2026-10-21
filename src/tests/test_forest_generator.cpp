@@ -117,7 +117,7 @@ TEST_CASE("Forest: a tree's class moments turn with its up and grow with its sca
 TEST_CASE("Forest generator: the trees of two halves are the trees of the whole") {
     const VoxelPos origin(int64_t(1) << 36, 2500, -77777);
     const double tau = 6.283185307179586;
-    const FieldFn hills = [origin, tau](const VoxelPos &p_v) {
+    const FieldFn hills = [origin, tau](const VoxelPos &p_v, int) {
         const double amp = 80.0, wave = 1800.0;
         const double x = double(p_v.x - origin.x), z = double(p_v.z - origin.z);
         const double w = double(p_v.y - origin.y) - amp * std::sin(tau * x / wave) * std::cos(tau * z / wave);

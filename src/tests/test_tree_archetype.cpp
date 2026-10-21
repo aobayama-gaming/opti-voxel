@@ -4,6 +4,7 @@
 #include "tree_archetype.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <numeric>
@@ -287,10 +288,10 @@ bool same_sites(const std::vector<CellSite> &p_a, const std::vector<TreeSite> &p
     return true;
 }
 
-// forest_sites' trees without their cells.
+// surface_sites' trees without their cells.
 std::vector<TreeSite> forest_trees(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field) {
     std::vector<CellSite> cells;
-    forest_sites(p_lo, p_hi, p_side, p_field, cells);
+    surface_sites(p_lo, p_hi, p_side, p_field, cells);
     std::vector<TreeSite> out;
     for (const CellSite &cs : cells) {
         out.push_back(cs.site);
@@ -312,7 +313,7 @@ double closest_pair(const std::vector<TreeSite> &p_sites) {
 
 // A plane through p_origin with unit normal (p_nx, p_ny, p_nz), as a field in LOD0 voxels.
 FieldFn plane_field(const VoxelPos &p_origin, double p_nx, double p_ny, double p_nz) {
-    return [=](const VoxelPos &p_v) {
+    return [=](const VoxelPos &p_v, int) {
         const double w = double(p_v.x - p_origin.x) * p_nx + double(p_v.y - p_origin.y) * p_ny + double(p_v.z - p_origin.z) * p_nz;
         return ExactNoise::Float4{ float(p_nx), float(p_ny), float(p_nz), float(w) };
     };
@@ -343,7 +344,7 @@ TEST_CASE("Tree sites: the octree walk finds every cell's tree (brute force), on
     const int64_t side = 80;
     const VoxelPos origin(int64_t(1) << 40, -517, -(int64_t(1) << 33));
     const double tau = 6.283185307179586;
-    const FieldFn hills = [origin, tau](const VoxelPos &p_v) {
+    const FieldFn hills = [origin, tau](const VoxelPos &p_v, int) {
         const double amp = 60.0, wave = 1500.0;
         const double x = double(p_v.x - origin.x);
         const double w = double(p_v.y - origin.y) - amp * std::sin(tau * x / wave);
@@ -359,41 +360,69 @@ TEST_CASE("Tree sites: the octree walk finds every cell's tree (brute force), on
         CHECK(walked.size() > 100);
         CHECK(same_sites(walked, brute));
         for (const CellSite &s : walked) {
-            CHECK(std::fabs((*f)(s.site.base).w) <= 1.0f);
+            CHECK(std::fabs((*f)(s.site.base, 0).w) <= 1.0f);
         }
-        // The forest keeps them SITE_SPACING cells apart, dropping a few (a projection brings two cells' sites together).
-        const std::vector<TreeSite> forest = forest_trees(lo, hi, side, *f);
-        MESSAGE("spaced: ", forest.size(), " of ", walked.size(), ", closest pair ", closest_pair(forest) / double(side), " cells (raw ",
-                closest_pair(brute) / double(side), ")");
-        CHECK(forest.size() >= walked.size() * 9 / 10);
-        CHECK(closest_pair(forest) >= SITE_SPACING * double(side));
+        // The middle-part rule keeps cells side by side along the ground 2 SITE_INNER cells apart; across the face of
+        // the normal's axis two sites can meet, rarely (their jitters along the ground are independent).
+        int64_t close = 0;
+        for (size_t i = 0; i < brute.size(); i++) {
+            for (size_t j = 0; j < brute.size(); j++) {
+                const VoxelPos d = brute[i].base - brute[j].base;
+                if (i != j && std::sqrt(double(d.x) * d.x + double(d.y) * d.y + double(d.z) * d.z) < 2.0 * SITE_INNER * double(side)) {
+                    close++;
+                    break;
+                }
+            }
+        }
+        MESSAGE("closest pair ", closest_pair(brute) / double(side), " cells; ", close, " of ", brute.size(), " trees closer than ",
+                2.0 * SITE_INNER, " cells to another");
+        CHECK(close * 100 <= 3 * int64_t(brute.size())); // 2% on the 60 degree slope
     }
 }
 
-// The rule the walk shares with the discoverer (a corner within 2 node sides) holds for a distance-like field; the
-// cascade's LOD0 field is a first-order height-field estimate with every fine octave in it. On the real ground at 5 cm
-// the walk must still find every cell's tree.
+// The walk keeps a node by its centre's coarse distance; the cascade's field is a first-order height-field estimate,
+// and the coarse one leaves the fine octaves out. On the real ground at 5 cm the walk must still find every cell's tree
+// (SITE_SLACK), at a few evaluations per tree.
 TEST_CASE("Tree sites: on the cascade ground, the octree walk finds every cell's tree (brute force)") {
     ChunkParam param;
     param.voxel_size = 0.05f;
     SDFCascade sdf;
     sdf.configure(param, 18);
     const int64_t side = 100;
-    const FieldFn ground = [&sdf](const VoxelPos &p_v) { return sdf.ground_field(p_v); };
+    std::atomic<int64_t> coarse{ 0 }, fine{ 0 };
+    const FieldFn ground = [&](const VoxelPos &p_v, int p_lod) {
+        (p_lod > 0 ? coarse : fine)++;
+        return sdf.ground_field(p_v, p_lod);
+    };
     int64_t total = 0;
     for (const int64_t x : { int64_t(-1000), int64_t(250000), int64_t(-3700000) }) {
         const int64_t z = x / 3 + 40000;
         const VoxelPos centre(x, sdf.ground_y(x, z), z);
         const VoxelPos reach(1000, 4000, 1000);
+        coarse = 0;
+        fine = 0;
         std::vector<CellSite> walked;
         surface_sites(centre - reach, centre + reach, side, ground, walked);
+        const int64_t walk_coarse = coarse, walk_fine = fine;
         const std::vector<TreeSite> brute = brute_sites(centre - reach, centre + reach, side, ground);
-        MESSAGE("cascade at x ", x, ": walk ", walked.size(), " trees, brute force ", brute.size());
+        MESSAGE("cascade at x ", x, ": walk ", walked.size(), " trees, brute force ", brute.size(), "; per tree ",
+                double(walk_coarse) / double(MAX<size_t>(walked.size(), 1)), " coarse + ", double(walk_fine) / double(MAX<size_t>(walked.size(), 1)),
+                " fine evaluations");
         CHECK(walked.size() > 100);
         CHECK(same_sites(walked, brute));
+        CHECK(walk_coarse + walk_fine <= 12 * int64_t(walked.size())); // ~70 before the plane test
         total += int64_t(walked.size());
     }
     CHECK(total > 300);
+    // An empty tile (a node of 8 cells far above the ground): one evaluation.
+    const int64_t tile = 8 * side;
+    const VoxelPos air(0, WorldCoord::floor_div(sdf.ground_y(0, 0), tile) + 20, 0);
+    coarse = 0;
+    fine = 0;
+    std::vector<CellSite> none;
+    surface_sites(air * tile, air * tile + VoxelPos(tile - 1, tile - 1, tile - 1), side, ground, none);
+    CHECK(none.empty());
+    CHECK(coarse + fine == 1);
 }
 
 TEST_CASE("Tree sites: a cell holds the same tree whatever the query box") {

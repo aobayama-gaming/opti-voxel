@@ -4,7 +4,7 @@
 
 #include <vector>
 
-// The procedural forest: its trees are a pure function of the 3D cells of its zone (forest_sites), so any part of it
+// The procedural forest: its trees are a pure function of the 3D cells of its zone (cell_site), so any part of it
 // can be made alone, anywhere, at any time, the same: the table's forest at configure, streamed by cell next. Far away
 // a tree is its moments, and those come without growing it (TreeClasses).
 namespace Archetype {
@@ -52,8 +52,8 @@ struct ForestGenerator {
     VoxelBox zone;
     int64_t side = 0;
 
-    // The trees whose base lies in p_query and the zone, in cell order (forest_sites: a tree's neighbours, for the
-    // spacing, are looked up past the query, so a tree is the same from any query; only the zone's trees count).
+    // The trees whose base lies in p_query and the zone, in cell order (surface_sites: a tree depends on its cell only,
+    // so it is the same from any query).
     void trees(const VoxelBox &p_query, const FieldFn &p_ground, std::vector<CellSite> &r_out) const;
 };
 

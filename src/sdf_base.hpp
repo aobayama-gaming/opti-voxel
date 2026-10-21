@@ -122,8 +122,10 @@ public:
     // the bare cascade, the GPU discoverer's point items bit for bit).
     virtual float evaluate_cull(const WorldPos &p_pos, int p_lod) const = 0;
 
-    // evaluate_cull's field at a LOD0 voxel with its gradient, both in LOD0 voxels (the forest's sites). Thread-safe.
-    virtual ExactNoise::Float4 ground_field(const VoxelPos &p_voxel) const = 0;
+    // evaluate_cull's field at a LOD0 voxel as LOD p_lod sees it, with its gradient, both in LOD0 voxels (the forest's
+    // sites, Archetype::FieldFn: LOD 0 is the field, a coarser LOD its nearest lattice sample extended along its
+    // gradient). Thread-safe.
+    virtual ExactNoise::Float4 ground_field(const VoxelPos &p_voxel, int p_lod) const = 0;
 
     // The unit direction upright things (trees) grow along at a LOD0 voxel: the one source of "up" for placement.
     // +y on the flat world; a planet overrides it.

@@ -480,38 +480,89 @@ int64_t forest_cell_side(int p_count, double p_area_m, double p_voxel) {
     return MAX<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
 }
 
-bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, TreeSite &r_site) {
+int site_lod(int64_t p_side) {
+    int lod = 0;
+    while (lod < SITE_LOD_MAX && (int64_t(3) << (lod + 1)) <= p_side) {
+        lod++;
+    }
+    return lod;
+}
+
+namespace {
+
+// The coarse field at the centre of node p_node (in units of its side p_n) of a walk over cells of p_side.
+ExactNoise::Float4 centre_field(const VoxelPos &p_node, int64_t p_n, int64_t p_side, const FieldFn &p_field) {
+    return p_field(p_node * p_n + VoxelPos(p_n / 2, p_n / 2, p_n / 2), site_lod(p_side));
+}
+
+// Whether the plane of p_f (the field at a node's centre, extended along its gradient) crosses the node of side p_n,
+// give or take SITE_SLACK cells of p_side and SITE_BEND of the node (the ground bends away from the plane).
+bool plane_meets(const ExactNoise::Float4 &p_f, int64_t p_n, int64_t p_side) {
+    const double reach = 0.5 * double(p_n) * (std::fabs(double(p_f.x)) + std::fabs(double(p_f.y)) + std::fabs(double(p_f.z)));
+    return std::fabs(double(p_f.w)) <= reach + SITE_SLACK * double(p_side) + SITE_BEND * double(p_n);
+}
+
+// A Newton step on whole voxels from r_q for the field p_f read at p_at (extended along its gradient to r_q); false when
+// it would go over two cell sides (or the gradient is flat).
+bool newton_step(const ExactNoise::Float4 &p_f, const VoxelPos &p_at, int64_t p_side, VoxelPos &r_q) {
+    const double g2 = double(p_f.x) * p_f.x + double(p_f.y) * p_f.y + double(p_f.z) * p_f.z;
+    const VoxelPos d = r_q - p_at;
+    const double s = -(double(p_f.w) + double(p_f.x) * double(d.x) + double(p_f.y) * double(d.y) + double(p_f.z) * double(d.z)) / g2;
+    if (!(g2 > 0.0) || !(std::fabs(s) * std::sqrt(g2) <= 2.0 * double(p_side))) {
+        return false;
+    }
+    r_q += VoxelPos(std::llround(s * p_f.x), std::llround(s * p_f.y), std::llround(s * p_f.z));
+    return true;
+}
+
+// cell_site with the coarse field at the cell's centre given (the walk read it).
+bool site_of(const VoxelPos &p_cell, int64_t p_side, const ExactNoise::Float4 &p_centre, const FieldFn &p_field, TreeSite &r_site) {
     const uint32_t key = ExactNoise::hash_cell(p_cell, FOREST_SEED);
     const ExactNoise::UVec3 h = hash3(key, 0x51E5u, 0u);
     const ExactNoise::UVec3 g = hash3(key, 0x51E5u, 1u);
     const uint32_t u[3] = { h.x, h.y, g.x };
     const VoxelBox cell{ p_cell * p_side, p_cell * p_side + VoxelPos(p_side - 1, p_side - 1, p_side - 1), true };
+    // The middle part spares the axis closest to the ground's normal: a margin there would leave the ground bare
+    // wherever it runs near a cell face (stripes along the contours).
+    const float n[3] = { std::fabs(p_centre.x), std::fabs(p_centre.y), std::fabs(p_centre.z) };
+    const int normal_axis = n[1] >= n[0] && n[1] >= n[2] ? 1 : (n[0] >= n[2] ? 0 : 2);
+    const int64_t margin = std::llround(SITE_INNER * double(p_side));
+    VoxelBox middle = cell;
+    for (int a = 0; a < 3; a++) {
+        if (a != normal_axis) {
+            middle.lo[a] += margin;
+            middle.hi[a] -= margin;
+        }
+    }
     VoxelPos q;
     for (int a = 0; a < 3; a++) {
         q[a] = cell.lo[a] + p_side / 2 + std::llround((unit_of(u[a]) - 0.5) * 0.7 * double(p_side));
     }
-    ExactNoise::Float4 f = p_field(q);
-    for (int i = 0; i < SITE_STEPS && !(std::fabs(f.w) <= 1.0f); i++) {
-        const double g2 = double(f.x) * f.x + double(f.y) * f.y + double(f.z) * f.z;
-        const double s = -double(f.w) / g2;
-        // A step longer than two cells leaves the cell anyway (and a flat gradient would overflow the voxel).
-        if (!(g2 > 0.0) || !(std::fabs(s) * std::sqrt(g2) <= 2.0 * double(p_side))) {
+    // Whether the tree exists: the hashed voxel projected on the coarse plane at the cell's centre lands in the middle part.
+    if (!newton_step(p_centre, cell.lo + VoxelPos(p_side / 2, p_side / 2, p_side / 2), p_side, q) || !middle.contains(q)) {
+        return false;
+    }
+    // Its base on the LOD-0 ground, within the cell.
+    ExactNoise::Float4 f = p_field(q, 0);
+    for (int i = 0; i < SNAP_STEPS && !(std::fabs(f.w) <= 1.0f); i++) {
+        if (!newton_step(f, q, p_side, q)) {
             return false;
         }
-        const VoxelPos step(std::llround(s * f.x), std::llround(s * f.y), std::llround(s * f.z));
-        if (step == VoxelPos()) {
-            break;
-        }
-        q += step;
-        f = p_field(q);
+        f = p_field(q, 0);
     }
     if (!(std::fabs(f.w) <= 1.0f) || !cell.contains(q)) {
-        return false; // not on the surface, or the surface point belongs to another cell
+        return false;
     }
     r_site.base = q;
     r_site.seed = h.z;
     r_site.species = int((h.z >> 16) % uint32_t(tree_species().size()));
     return true;
+}
+
+} // namespace
+
+bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, TreeSite &r_site) {
+    return site_of(p_cell, p_side, centre_field(p_cell, p_side, p_side, p_field), p_field, r_site);
 }
 
 namespace {
@@ -537,37 +588,15 @@ std::vector<VoxelPos> nodes_meeting(const VoxelBox &p_box, int64_t p_n) {
     return nodes;
 }
 
-// Which of p_nodes (side p_n) have a corner within SURFACE_NODE_SIDES node sides of the surface: each corner, shared by
-// up to 8 nodes, evaluated once (as the discoverer does).
-std::vector<uint8_t> near_surface(const std::vector<VoxelPos> &p_nodes, int64_t p_n, const FieldFn &p_field) {
-    std::vector<VoxelPos> corners;
-    corners.reserve(p_nodes.size() * 8);
-    for (const VoxelPos &node : p_nodes) {
-        for (const VoxelPos &c : CORNERS) {
-            corners.push_back(node + c);
-        }
-    }
-    std::sort(corners.begin(), corners.end(), cell_order);
-    corners.erase(std::unique(corners.begin(), corners.end()), corners.end());
-    std::vector<uint8_t> close(corners.size(), 0);
-    const double limit = SURFACE_NODE_SIDES * double(p_n);
-    parallel_for(uint32_t(corners.size()), "near_surface", [&](uint32_t p_i) { close[p_i] = std::fabs(double(p_field(corners[p_i] * p_n).w)) <= limit; });
-    std::vector<uint8_t> near(p_nodes.size(), 0);
-    for (size_t i = 0; i < p_nodes.size(); i++) {
-        for (const VoxelPos &c : CORNERS) {
-            const VoxelPos corner = p_nodes[i] + c;
-            if (close[std::lower_bound(corners.begin(), corners.end(), corner, cell_order) - corners.begin()]) {
-                near[i] = 1;
-                break;
-            }
-        }
-    }
-    return near;
-}
+// A cell the walk kept, with the coarse field at its centre.
+struct WalkCell {
+    VoxelPos cell;
+    ExactNoise::Float4 centre;
+};
 
 // The cells (of p_side voxels) meeting p_box that the surface may cross, in cell order: an absolute octree walk from the
-// coarsest level whose node holds the box, keeping a node while near_surface.
-std::vector<VoxelPos> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field) {
+// coarsest level whose node holds the box, keeping a node while the coarse plane at its centre crosses it (plane_meets).
+std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field) {
     int64_t extent = 1;
     for (int a = 0; a < 3; a++) {
         extent = MAX(extent, p_box.hi[a] - p_box.lo[a] + 1);
@@ -577,30 +606,33 @@ std::vector<VoxelPos> surface_cells(const VoxelBox &p_box, int64_t p_side, const
         level++;
     }
     std::vector<VoxelPos> nodes = nodes_meeting(p_box, p_side << level);
-    std::vector<VoxelPos> kept;
+    std::vector<WalkCell> kept;
+    std::vector<ExactNoise::Float4> fields;
     for (;; level--) {
-        const std::vector<uint8_t> near = near_surface(nodes, p_side << level, p_field);
+        const int64_t n = p_side << level;
+        fields.resize(nodes.size());
+        parallel_for(uint32_t(nodes.size()), "surface_cells", [&](uint32_t p_i) { fields[p_i] = centre_field(nodes[p_i], n, p_side, p_field); });
         kept.clear();
         for (size_t i = 0; i < nodes.size(); i++) {
-            if (near[i]) {
-                kept.push_back(nodes[i]);
+            if (plane_meets(fields[i], n, p_side)) {
+                kept.push_back(WalkCell{ nodes[i], fields[i] });
             }
         }
         if (level == 0) {
             break;
         }
         nodes.clear();
-        const int64_t m = p_side << (level - 1);
-        for (const VoxelPos &k : kept) {
+        const int64_t m = n / 2;
+        for (const WalkCell &k : kept) {
             for (const VoxelPos &c : CORNERS) {
-                const VoxelPos child = k * 2 + c;
+                const VoxelPos child = k.cell * 2 + c;
                 if (VoxelBox{ child * m, child * m + VoxelPos(m - 1, m - 1, m - 1), true }.intersects(p_box)) {
                     nodes.push_back(child);
                 }
             }
         }
     }
-    std::sort(kept.begin(), kept.end(), cell_order);
+    std::sort(kept.begin(), kept.end(), [](const WalkCell &p_a, const WalkCell &p_b) { return cell_order(p_a.cell, p_b.cell); });
     return kept;
 }
 
@@ -611,47 +643,14 @@ void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, c
         return;
     }
     const VoxelBox box{ p_lo, p_hi, true };
-    const std::vector<VoxelPos> cells = surface_cells(box, p_side, p_field);
+    const std::vector<WalkCell> cells = surface_cells(box, p_side, p_field);
     std::vector<TreeSite> found(cells.size());
     std::vector<uint8_t> ok(cells.size(), 0);
-    parallel_for(uint32_t(cells.size()), "surface_sites", [&](uint32_t p_i) { ok[p_i] = cell_site(cells[p_i], p_side, p_field, found[p_i]); });
+    parallel_for(uint32_t(cells.size()), "surface_sites",
+            [&](uint32_t p_i) { ok[p_i] = site_of(cells[p_i].cell, p_side, cells[p_i].centre, p_field, found[p_i]); });
     for (size_t i = 0; i < cells.size(); i++) {
         if (ok[i] && box.contains(found[i].base)) {
-            r_out.push_back(CellSite{ cells[i], found[i] });
-        }
-    }
-}
-
-void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out,
-        const VoxelBox *p_members) {
-    // Every site of the cells next to the box's (a neighbour's site is in its own cell, which meets the grown box).
-    std::vector<CellSite> all;
-    const VoxelPos grow(p_side, p_side, p_side);
-    surface_sites(p_lo - grow, p_hi + grow, p_side, p_field, all);
-    const VoxelBox box{ p_lo, p_hi, true };
-    const double spacing = SITE_SPACING * double(p_side);
-    for (const CellSite &cs : all) {
-        if (!box.contains(cs.site.base)) {
-            continue;
-        }
-        bool crowded = false;
-        for (int64_t dz = -1; dz <= 1 && !crowded; dz++) {
-            for (int64_t dy = -1; dy <= 1 && !crowded; dy++) {
-                for (int64_t dx = -1; dx <= 1 && !crowded; dx++) {
-                    const VoxelPos n = cs.cell + VoxelPos(dx, dy, dz);
-                    if (!cell_order(n, cs.cell)) {
-                        continue; // only the neighbours before it in cell order
-                    }
-                    const auto it = std::lower_bound(all.begin(), all.end(), n, [](const CellSite &p_a, const VoxelPos &p_b) { return cell_order(p_a.cell, p_b); });
-                    if (it != all.end() && it->cell == n && (!p_members || p_members->contains(it->site.base))) {
-                        const VoxelPos d = it->site.base - cs.site.base;
-                        crowded = std::sqrt(double(d.x) * d.x + double(d.y) * d.y + double(d.z) * d.z) < spacing;
-                    }
-                }
-            }
-        }
-        if (!crowded) {
-            r_out.push_back(cs);
+            r_out.push_back(CellSite{ cells[i].cell, found[i] });
         }
     }
 }

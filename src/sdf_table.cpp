@@ -262,7 +262,7 @@ void SDFTable::add_forest(const TreeTypes &p_types, int p_blob_type, Dictionary 
     s.voxel = vs;
     s.finish = record_finish();
     s.max_extent = max_instance_extent();
-    s.ground = [this](const VoxelPos &p_v) { return ground_field(p_v); };
+    s.ground = [this](const VoxelPos &p_v, int p_lod) { return ground_field(p_v, p_lod); };
     s.up = [this](const VoxelPos &p_v) { return up_at(p_v); };
     if (!lava_pools.empty()) {
         s.keep_out = [this](const VoxelPos &p_v) { return in_lake(p_v.x, p_v.z); };
