@@ -237,6 +237,9 @@ void ForestStream::poll() {
         }
     }
     trim_cache();
+    if (entries.size() > sweep_at) {
+        sweep_empty();
+    }
     if (frame % WAIT_DROP_FRAMES == 0) {
         for (auto it = chunk_waits.begin(); it != chunk_waits.end();) {
             it = it->second.asked + WAIT_DROP_FRAMES < frame ? chunk_waits.erase(it) : std::next(it); // left the queues
@@ -375,6 +378,16 @@ void ForestStream::trim_cache() {
     }
 }
 
+void ForestStream::sweep_empty() {
+    for (auto it = entries.begin(); it != entries.end();) {
+        const Entry &e = it->second;
+        const bool drop = e.placed && e.count == 0 && e.used + GRACE_FRAMES < frame; // asked for again, computed again
+        stats.swept += drop;
+        it = drop ? entries.erase(it) : std::next(it);
+    }
+    sweep_at = MAX(SWEEP_MIN_KEYS, 2 * entries.size());
+}
+
 int64_t ForestStream::slots_used() const {
     return int64_t(slot_store.size()) - free_slots;
 }
@@ -483,6 +496,7 @@ Dictionary ForestStream::get_stats() const {
     d["chunk_waits"] = int64_t(chunk_waits.size());
     d["chunk_full_checks"] = stats.full_checks;
     d["cache_trimmed"] = stats.trimmed;
+    d["keys_swept"] = stats.swept;
     d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
     d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
     d["ready_ms_total"] = double(stats.ready_usec) / 1000.0;

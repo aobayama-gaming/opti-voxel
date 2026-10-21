@@ -272,3 +272,24 @@ TEST_CASE("ForestStream: inputs dropped from a tiny cache are computed again for
     CHECK(int64_t(stats["cache_trimmed"]) > 0);
     CHECK(int64_t(stats["lists_missing"]) == 0);
 }
+
+// Placed keys without records hold no slot: past the grace, the sweep drops them, and a chunk asking again computes them
+// again (the same lists). Without it a long flight kept every empty tile ever asked for.
+TEST_CASE("ForestStream: empty keys are swept past the grace and computed again when asked") {
+    const StreamFixture &fx = StreamFixture::get();
+    ForestStream stream(fx.field, fx.param, 0, uint32_t(1) << 22);
+    for (int pass = 0; pass < 2; pass++) {
+        for (const ChunkId &c : fx.chunks) {
+            CAPTURE(ChunkMath::get_lod(c));
+            CHECK(settle(stream, { c }));
+            CHECK(same_records(streamed(stream, c), fx.direct(c)));
+            for (uint64_t f = 0; f <= ForestStream::GRACE_FRAMES; f++) {
+                stream.poll(); // nobody asks: the chunk's keys age past the grace
+            }
+        }
+    }
+    const Dictionary stats = stream.get_stats();
+    MESSAGE(int64_t(stats["keys_swept"]), " empty keys swept, ", int64_t(stats["keys"]), " kept, ", int64_t(stats["computed"]), " computed");
+    CHECK(int64_t(stats["keys_swept"]) > 0);
+    CHECK(int64_t(stats["lists_missing"]) == 0);
+}

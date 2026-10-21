@@ -412,6 +412,26 @@ TEST_CASE("Tree sites: on the cascade ground, the octree walk finds every cell's
         CHECK(same_sites(walked, brute));
         CHECK(walk_coarse + walk_fine <= 12 * int64_t(walked.size())); // ~70 before the plane test
         total += int64_t(walked.size());
+        // Unsnapped (the far proxies): no LOD-0 evaluation, every snapped tree's cell kept, the bases on the coarse plane.
+        coarse = 0;
+        fine = 0;
+        std::vector<CellSite> coarse_sites;
+        surface_sites(centre - reach, centre + reach, side, ground, coarse_sites, false);
+        CHECK(fine == 0);
+        size_t j = 0, matched = 0;
+        double off = 0.0;
+        for (const CellSite &s : walked) {
+            while (j < coarse_sites.size() && cell_order(coarse_sites[j].cell, s.cell)) { // both in cell order
+                j++;
+            }
+            if (j < coarse_sites.size() && coarse_sites[j].cell == s.cell) {
+                matched++;
+                off = MAX(off, std::fabs(double(sdf.ground_field(coarse_sites[j].site.base, 0).w)));
+            }
+        }
+        MESSAGE("unsnapped: ", coarse_sites.size(), " sites, ", matched, " of the snapped trees' cells; bases within ", off, " voxels of the ground");
+        CHECK(matched == walked.size());
+        CHECK(coarse_sites.size() * 100 <= walked.size() * 105);
     }
     CHECK(total > 300);
     // An empty tile (a node of 8 cells far above the ground): one evaluation.

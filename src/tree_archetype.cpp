@@ -515,8 +515,9 @@ bool newton_step(const ExactNoise::Float4 &p_f, const VoxelPos &p_at, int64_t p_
     return true;
 }
 
-// cell_site with the coarse field at the cell's centre given (the walk read it).
-bool site_of(const VoxelPos &p_cell, int64_t p_side, const ExactNoise::Float4 &p_centre, const FieldFn &p_field, TreeSite &r_site) {
+// cell_site with the coarse field at the cell's centre given (the walk read it); without p_snap the base stays on the
+// coarse plane.
+bool site_of(const VoxelPos &p_cell, int64_t p_side, const ExactNoise::Float4 &p_centre, const FieldFn &p_field, bool p_snap, TreeSite &r_site) {
     const uint32_t key = ExactNoise::hash_cell(p_cell, FOREST_SEED);
     const ExactNoise::UVec3 h = hash3(key, 0x51E5u, 0u);
     const ExactNoise::UVec3 g = hash3(key, 0x51E5u, 1u);
@@ -543,15 +544,17 @@ bool site_of(const VoxelPos &p_cell, int64_t p_side, const ExactNoise::Float4 &p
         return false;
     }
     // Its base on the LOD-0 ground, within the cell.
-    ExactNoise::Float4 f = p_field(q, 0);
-    for (int i = 0; i < SNAP_STEPS && !(std::fabs(f.w) <= 1.0f); i++) {
-        if (!newton_step(f, q, p_side, q)) {
+    if (p_snap) {
+        ExactNoise::Float4 f = p_field(q, 0);
+        for (int i = 0; i < SNAP_STEPS && !(std::fabs(f.w) <= 1.0f); i++) {
+            if (!newton_step(f, q, p_side, q)) {
+                return false;
+            }
+            f = p_field(q, 0);
+        }
+        if (!(std::fabs(f.w) <= 1.0f) || !cell.contains(q)) {
             return false;
         }
-        f = p_field(q, 0);
-    }
-    if (!(std::fabs(f.w) <= 1.0f) || !cell.contains(q)) {
-        return false;
     }
     r_site.base = q;
     r_site.seed = h.z;
@@ -562,7 +565,7 @@ bool site_of(const VoxelPos &p_cell, int64_t p_side, const ExactNoise::Float4 &p
 } // namespace
 
 bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, TreeSite &r_site) {
-    return site_of(p_cell, p_side, centre_field(p_cell, p_side, p_side, p_field), p_field, r_site);
+    return site_of(p_cell, p_side, centre_field(p_cell, p_side, p_side, p_field), p_field, true, r_site);
 }
 
 namespace {
@@ -638,7 +641,7 @@ std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const
 
 } // namespace
 
-void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out) {
+void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out, bool p_snap) {
     if (p_side <= 0) {
         return;
     }
@@ -647,7 +650,7 @@ void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, c
     std::vector<TreeSite> found(cells.size());
     std::vector<uint8_t> ok(cells.size(), 0);
     parallel_for(uint32_t(cells.size()), "surface_sites",
-            [&](uint32_t p_i) { ok[p_i] = site_of(cells[p_i].cell, p_side, cells[p_i].centre, p_field, found[p_i]); });
+            [&](uint32_t p_i) { ok[p_i] = site_of(cells[p_i].cell, p_side, cells[p_i].centre, p_field, p_snap, found[p_i]); });
     for (size_t i = 0; i < cells.size(); i++) {
         if (ok[i] && box.contains(found[i].base)) {
             r_out.push_back(CellSite{ cells[i].cell, found[i] });

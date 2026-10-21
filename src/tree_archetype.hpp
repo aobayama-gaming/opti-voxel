@@ -149,12 +149,13 @@ bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, T
 // once at each node's centre and keeps the node while the plane it gives crosses the node, give or take SITE_SLACK
 // cells plus SITE_BEND node sides (the ground bends away from the plane, and the cascade's field changes faster than
 // its gradient over tens of metres); a kept cell's reading is the one cell_site uses. An empty tree tile costs one
-// evaluation. On the worker pool (not from inside a pool task).
+// evaluation. Without p_snap, the bases stay on the coarse plane (no LOD-0 evaluation: the forest's far proxies, whose
+// sites only weigh where trees are). On the worker pool (not from inside a pool task).
 struct CellSite {
     VoxelPos cell;
     TreeSite site;
 };
-void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out);
+void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out, bool p_snap = true);
 inline constexpr double SITE_SLACK = 0.25;
 inline constexpr double SITE_BEND = 0.25;
 

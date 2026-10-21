@@ -29,11 +29,16 @@ class ForestStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
     static constexpr int JOBS_PER_WORKER = 32; // keys handed to the workers at once, per worker
-    // A chunk still waiting for its keys is checked in full again at most every RECHECK_FRAMES (its keys stay asked for
-    // within the grace); between, ready() answers from the keys placed since. A wait not asked for in WAIT_DROP_FRAMES
-    // is dropped.
-    static constexpr uint64_t RECHECK_FRAMES = GRACE_FRAMES / 2;
+    // A chunk still waiting for its keys is checked in full again once they are all placed, or after RECHECK_FRAMES (the
+    // safety net: a key evicted or refused meanwhile); between, ready() answers from the keys placed since. Its placed keys
+    // may then go unasked past the grace: only a full pool evicts them, and the full check asks for them again. A full
+    // check every GRACE_FRAMES / 2 was 49% of the main thread on the 1M load (a LOD-7 chunk lists hundreds of keys). A
+    // wait not asked for in WAIT_DROP_FRAMES is dropped.
+    static constexpr uint64_t RECHECK_FRAMES = 64;
     static constexpr uint64_t WAIT_DROP_FRAMES = 64;
+    // Placed keys without records (air, empty ground) hold no slot, so no eviction drops them: poll() sweeps those not
+    // asked for in GRACE_FRAMES once the keys doubled since the last sweep (at least SWEEP_MIN_KEYS): amortized O(1).
+    static constexpr size_t SWEEP_MIN_KEYS = 128;
     static constexpr int64_t INPUT_CACHE_RECORDS = int64_t(4) << 20; // the LOD-0 tree tiles kept for their readers, in records
     static constexpr int64_t DEMAND_CACHE_RECORDS = int64_t(1) << 20; // the contents CPU evaluations computed, in records
 
@@ -128,6 +133,7 @@ private:
     int max_running = 0;
     int64_t cache_limit = INPUT_CACHE_RECORDS;
     std::unordered_map<ChunkId, ChunkWait, ChunkHash> chunk_waits;
+    size_t sweep_at = SWEEP_MIN_KEYS;
     uint64_t frame = 0;
     RecordStore slot_store;
     uint32_t slot_version = 0;
@@ -160,6 +166,7 @@ private:
         int64_t waited_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t full_checks = 0; // ready() calls that looked at every key of their chunk
         int64_t trimmed = 0; // inputs dropped from the cache
+        int64_t swept = 0; // empty keys dropped
         uint64_t poll_usec_max = 0;
         uint64_t poll_usec = 0;
         uint64_t ready_usec = 0;
@@ -183,6 +190,7 @@ private:
     // Frees the slots of the least recently used placed entries not asked for in GRACE_FRAMES until p_count fit.
     bool make_room(uint32_t p_count, uint32_t &r_slot);
     void trim_cache();
+    void sweep_empty();
     // A key's content for a CPU evaluation (under the mutex): kept (an input), back from its slots or computed, its
     // inputs the same way; cached in demand.
     const FieldContent &on_demand(const FieldKey &p_key) const;
