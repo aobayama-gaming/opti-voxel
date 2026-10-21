@@ -126,7 +126,10 @@ TEST_CASE("Moment fold: the blob type's program is the blob's occupancy, in the 
     std::vector<std::array<float, 9>> rots;
     rotations(rots);
     m = m.rotated(rots.back().data());
-    const MomentBlob blob = make_blob(m, VoxelPos(int64_t(1) << 50, 77, -9000), 6, 1, 0.3 * 64.0, MomentLayerParams().sheet_ratio, 1.0);
+    MomentItem item;
+    item.moments = m;
+    prepare_moment_item(item);
+    const MomentBlob blob = make_blob(m, item.area, VoxelPos(int64_t(1) << 50, 77, -9000), 6, 1, 0.3 * 64.0, 4.0);
     TableRecord rec;
     rec.anchor = blob.anchor;
     std::copy(blob.rotation, blob.rotation + 9, rec.rotation);
@@ -229,12 +232,13 @@ TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at t
     }
 }
 
-TEST_CASE("Moment fold: the forest's cover at every LOD from its parts to its blobs") {
+TEST_CASE("Moment fold: the forest never thins out from its parts to its blobs") {
     const Forest with(true), without(false);
     const int64_t cx = std::llround(SDFTable::SCENE_X / 0.05), cz = std::llround(SDFTable::SCENE_Z / 0.05);
     // The same 48 columns of the middle 60 m at every LOD: the share with a canopy (solid 5 m above the ground) and
-    // its mean height. The hand-off from the parts to the blobs shows here as a trough (TODO: assert none once the
-    // blobs take the eroded parts' mass, feature/moment-handoff).
+    // its mean height. The blobs taking only the parts gone whole left a trough (26 of 48 at LOD 5, 34 at LOD 2): the
+    // cover never falls under nine tenths of LOD 2's.
+    int reference = 0;
     for (int lod = 2; lod <= 9; lod++) {
         int canopy = 0, bare = 0;
         double height = 0.0;
@@ -252,5 +256,8 @@ TEST_CASE("Moment fold: the forest's cover at every LOD from its parts to its bl
         }
         MESSAGE("LOD ", lod, ": canopy ", canopy, " / ", columns, " columns (", bare, " without blobs), mean height ",
                 canopy > 0 ? height / canopy : 0.0, " m");
+        reference = lod == 2 ? canopy : reference;
+        CAPTURE(lod);
+        CHECK(canopy * 10 >= reference * 9);
     }
 }

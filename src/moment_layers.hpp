@@ -26,12 +26,18 @@
 // filter of a cell of the LOD (sigma = 1 / sqrt(12) cells by default). a = m0 * 105 / (32 pi s_x s_y s_z): its
 // integral is the cell's mass, so a uniformly filled region reads its fill fraction.
 //
-// Except across a sheet: a cell whose parts spread sheet_ratio times wider along its middle axis than along its thinnest
-// (a forest's canopy) keeps the occupancy its parts have along that axis instead of its mass. The filter grows with the
-// LOD and spread a thin canopy thinner every LOD (under MOMENT_ISO past a few: the forest vanished from far away); from
-// above, the canopy's true thickness doesn't show, its cover does. The gain is the filtered over the bare spread along the
-// thin axis, at most the sheetness / sheet_ratio (no step at the threshold) and 2^(L - the material's first layer) (the
-// cover takes over one doubling per LOD), never past a full occupancy: a round cell (a lone tree) keeps its mass. Principal axes only: no up direction.
+// Keeping the mass alone, the filter, which grows with the LOD, spread a thin canopy thinner every LOD (under MOMENT_ISO
+// past a few: the forest vanished from far away, first at its edges, where a cell holds part of it and looks round).
+// From far, a canopy's thickness doesn't show, its cover does: each part also carries an area tensor (its silhouette
+// along a unit n is n^T P n: pi r^2 for a sphere, about mass over thickness for a flat part), and a cell's peak is at
+// least its cover along its thinnest principal axis, 3 A / (pi s_1 s_2) (the kernel's mid-plane then averages to the
+// silhouettes' share of the area), at most 1, and at most 2^(L - MomentJoin::cover_from) times the mass-kept peak
+// (the cover takes over one doubling per LOD: seams step no more). A dense canopy reads its cover at every LOD, edges
+// included; a lone tree fades once the filter outgrows it. Principal axes only: no up direction.
+//
+// The hand-off from the parts: a part eroding (the band rule) gives the layers the share of its mass the erosion took,
+// its equal-covariance ellipsoid shrunk by the erosion (1 - prod max(a_i - e, 0) / a_i), and all of it from its drop on:
+// what the parts draw plus what the blobs hold is the part's mass at every LOD (the forest thinned out between them).
 namespace Archetype {
 
 // One part, as the layers see it.
@@ -40,6 +46,17 @@ struct MomentItem {
     Moments moments; // weight included; empty: the part weighs nothing
     uint32_t material = 0;
     int drop_lod = 0; // the first LOD that no longer draws it
+    // Its erosion (archetype_table.hpp band_erosion; erode 0: whole until its drop).
+    float erode = 0.0f;
+    float erode_from = 1.0f;
+    // Set by the layers from the moments: the ellipsoid's semi-axes (ascending) and the area tensor (xx yy zz xy xz yz).
+    float semi[3] = {};
+    double area[6] = {};
+
+    // The share of its mass the LOD no longer draws (0 .. 1).
+    double lost_share(int p_lod) const;
+    // The first LOD that loses any of it: its erosion's first, at the latest its drop.
+    int first_lost_lod() const;
 };
 
 struct MomentLayerParams {
@@ -48,13 +65,15 @@ struct MomentLayerParams {
     // A blob whose occupancy, with its neighbours', stays under this is pruned, and one whose own peak is under 1/16 of
     // it (a sliver of a part's tent: it only spreads its neighbours' surface).
     double min_occupancy = 1.0 / 32.0;
-    // A material joins the layers from the first LOD that has dropped this share of its mass (0: every dropped part, from
-    // its drop on): before, its dropped parts are lone thin parts (a tree's twigs while its crown is drawn), which a blob
-    // would draw back fattened to the LOD's filter, at the cost of a blob per tent corner on the fine chunks.
-    double min_mass_share = 0.5;
-    // A cell this many times wider (middle over thinnest sigma) than thick keeps its occupancy across (see above); <= 0:
-    // every blob keeps its mass.
-    double sheet_ratio = 2.0;
+    // A material joins the layers from the first LOD that has lost this share of its mass (0: every part, from its first
+    // loss on): before, its lost parts are lone thin parts (a tree's twigs while its crown is drawn), which a blob would
+    // draw back fattened to the LOD's filter, at the cost of a blob per tent corner on the fine chunks.
+    double min_mass_share = 0.25;
+    // The cover ramps in (one doubling per LOD) from the first LOD that has lost this share: before, the blobs keep their
+    // mass next to the parts still drawn (a seam steps no more than with the mass kept).
+    double cover_mass_share = 0.5;
+    // A blob's peak is at least its cell's cover (see above); false: every blob keeps its mass.
+    bool keep_cover = true;
     int lod_min = 0; // the layers built
     int lod_max = 14;
 };
@@ -76,12 +95,21 @@ struct MomentBlob {
     double occupancy(const double p_offset[3]) const;
 };
 
-// A blob of one cell's moments at layer p_lod (the kernel's frame, size and amplitude); p_anchor: the moments' anchor.
-MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels, double p_sheet_ratio,
+// The semi-axes and area tensor of p_item from its moments.
+void prepare_moment_item(MomentItem &r_item);
+
+// A blob of one cell's moments and area tensor at layer p_lod (the kernel's frame, size and amplitude); p_anchor: the
+// moments' anchor; the cover raises its peak to at most p_max_gain times the mass-kept one (1: the mass kept).
+MomentBlob make_blob(const Moments &p_cell, const double p_area[6], const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels,
         double p_max_gain);
 
-// Per material, the first LOD that has dropped min_mass_share of its mass: the layers it joins.
-using MomentJoins = std::map<uint32_t, int>;
+// Per material, the first LOD that has lost min_mass_share of its mass (the layers it joins) and the first that has lost
+// cover_mass_share (where its cover ramps in from).
+struct MomentJoin {
+    int lod = 0;
+    int cover_from = 0;
+};
+using MomentJoins = std::map<uint32_t, MomentJoin>;
 MomentJoins moment_joins(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params);
 
 // A kept blob an update made appear, change or vanish.
@@ -121,9 +149,13 @@ private:
     // A cell's sum is the sum, in block order, of its members' partial sums per block of 2^BLOCK_SHIFT ids (each in id
     // order): an update re-sums one block and adds the blocks up, a build does the same, so they agree bit for bit.
     static constexpr int BLOCK_SHIFT = 8;
+    struct Sum {
+        Moments moments;
+        double area[6] = {};
+    };
     struct Cell {
         std::vector<uint32_t> members; // ascending ids
-        std::map<uint32_t, Moments> blocks; // id >> BLOCK_SHIFT -> its members' sum
+        std::map<uint32_t, Sum> blocks; // id >> BLOCK_SHIFT -> its members' sum
         MomentBlob blob;
         double extent[3] = {}; // its support's world-axis half extents
         bool kept = false;

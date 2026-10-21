@@ -327,15 +327,20 @@ to every change, and a reviewer may reject a PR on any of them.
   eroded from LOD 1), drawn at all 97% at LOD 5 and 48% at LOD 6 (65% and 0%). The rate is
   `VoxelTerrain.archetype_erode` / `--instance_erode=F` (cells per LOD, default `ERODE_CELLS` = 1, bench and player;
   the record carries it as `erode`, the skirt follows it): a higher one moves onsets later.
-  **Moment blobs (the far field, `src/moment_layers.*`):** what the dropped parts still weigh. For each LOD L, the
-  parts gone at L (dropped, or eroded past their half thickness) hand their moments to cells of 2^(L + 3) voxels (8
-  cells of L) on an absolute grid, per material, with tent weights over the 2 x 2 x 2 cells around each centroid (a
-  uniform cover reads a near-constant occupancy, a thin canopy stays thin); a material joins once half its mass is
-  gone (lone twigs would come back fattened). Each cell is a blob, `a max(1 - q, 0)^2` in its principal frame (the
-  record's rotation), its spread the cell's covariance plus the LOD's box filter, its integral the cell's mass, except across a sheet
-(`MomentLayerParams::sheet_ratio`, 2: middle over thinnest spread, filter included): there it keeps the occupancy its
-parts have along the thin axis (a canopy reads ~0.46 at LODs 6-8 where keeping the mass faded 0.36 -> 0.13), at most
-x2 per LOD from the material's first layer (seams step no more), a round clump keeps its mass; blobs
+  **Moment blobs (the far field, `src/moment_layers.*`):** what the parts a LOD no longer draws still weigh. For each
+  LOD L, every part hands the share of its mass the LOD lost (its equal-covariance ellipsoid shrunk by its erosion,
+  `MomentItem::lost_share`; all of it from its drop on: parts drawn + blobs = its mass at every LOD) to cells of
+  2^(L + 3) voxels (8 cells of L) on an absolute grid, per material, with tent weights over the 2 x 2 x 2 cells around
+  each centroid (a uniform cover reads a near-constant occupancy, a thin canopy stays thin); a material joins once a
+  quarter of its mass is lost (lone twigs would come back fattened). Taking only the parts gone whole left the forest
+  thinned out at LODs 4-6 (canopy columns 34 -> 26 of 48 at LOD 5; the unit test now holds 9/10 of LOD 2's). Each cell
+  is a blob, `a max(1 - q, 0)^2` in its principal frame (the record's rotation), its spread the cell's covariance plus
+  the LOD's box filter, its peak the mass-kept one or, higher, the cell's **cover**: each part's area tensor (its
+  silhouette along n is n^T P n, pi r^2 for a sphere, `prepare_moment_item`), summed and read along the cell's thinnest
+  axis, 3 A / (pi s_1 s_2), at most 1 (a canopy reads its cover, ~0.44, at every LOD 3-9 where keeping the mass faded
+  0.36 -> 0.08; edges and far LODs included, where cells look round and the old sheet gain vanished the forest; a lone
+  clump fades once the filter outgrows it), at most 2^(L - the LOD it lost half its mass at) times the mass-kept peak
+  (`MomentJoin::cover_from`: seams step no more, the rock scatter's 3 | 4 the worst at 0.90 of its skirt); blobs
   fainter than `MOMENT_MATERIAL_ISO` with their neighbours are pruned. They are table records (`moment_blob` type,
   `Combine::ACCUM`, listed at their LOD only: `TableRecord::min_lod`), built by `SDFTable::add_moment_blobs` after the
   scene; the fold sums them into an occupancy phi and its epilogue (`moment_surface` / GLSL `arch_moments`, bit for
