@@ -59,8 +59,8 @@ PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_vers
     return bytes;
 }
 
-void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
-        std::vector<std::vector<uint32_t>> *r_palettes) const {
+uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+        uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes) const {
     (void)p_param;
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
@@ -74,9 +74,8 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
         }
         list_stats.batches++;
         list_stats.build_usec += int64_t(now_usec() - t0);
-        return;
+        return uint32_t(p_chunks.size());
     }
-    const uint32_t cap = max_chunk_list();
     // The chunks' lists and palettes on the worker pool (a dense scatter makes thousands of candidates per chunk): the
     // list words come out packed (SDFGpuTable::list_word).
     struct Job {
@@ -111,10 +110,16 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
     } else if (p_chunks.size() == 1) {
         Job::run(&job, 0);
     }
-    const size_t budget = p_chunks.size() * size_t(cap);
+    const size_t budget = p_capacity_words;
     std::vector<uint32_t> words;
-    for (size_t i = 0; i < p_chunks.size(); i++) {
+    size_t kept = 0;
+    for (; kept < p_chunks.size(); kept++) {
+        const size_t i = kept;
         std::vector<uint32_t> &indices = lists[i];
+        if (i > 0 && words.size() + indices.size() > budget) {
+            list_stats.split++; // this chunk and the rest go in a later batch
+            break;
+        }
         const int lod = MIN(MAX(ChunkMath::get_lod(p_chunks[i]), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
         list_stats.chunks[lod]++;
         list_stats.entries[lod] += int64_t(indices.size());
@@ -125,13 +130,13 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
             list_stats.palette_truncated++;
             ERR_PRINT(vformat("GpuTable: a LOD %d chunk names more than %d materials: the rest draw as ground.", lod, ChunkPalette::MAX_ENTRIES));
         }
-        // The buffer holds batch size * cap words: one long list fits beside short ones. Only a batch over the
-        // whole budget is cut (its chunk gets a wrong surface, and the CPU's evaluate disagrees there).
-        if (words.size() + indices.size() > budget) {
+        // Only a list longer than the whole buffer is cut (its chunk gets a wrong surface, and the CPU's evaluate
+        // disagrees there).
+        if (indices.size() > budget) {
             list_stats.truncated++;
-            ERR_PRINT(vformat("GpuTable: a batch's instance lists are over the %d words of the buffer: a LOD %d chunk's list of %d truncated (wrong surface there).",
-                    int64_t(budget), lod, int64_t(indices.size())));
-            indices.resize(budget - words.size());
+            ERR_PRINT(vformat("GpuTable: a LOD %d chunk's list of %d instances is over the %d words of the buffer: truncated (wrong surface there).",
+                    lod, int64_t(indices.size()), int64_t(budget)));
+            indices.resize(budget);
             // Its palette came from the whole list: it draws as ground (the cascade writes no material for a cut list
             // it may not hold, and both meshers then read none).
             palettes[i].assign(1, Material::GROUND);
@@ -144,10 +149,14 @@ void GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkPara
             (*r_palettes)[i] = std::move(palettes[i]);
         }
     }
+    if (r_palettes) {
+        r_palettes->resize(kept);
+    }
     r_list.resize(int64_t(words.size()) * 4);
     std::memcpy(r_list.ptrw(), words.data(), words.size() * 4); // little-endian, like the GPU
     list_stats.batches++;
     list_stats.build_usec += int64_t(now_usec() - t0);
+    return uint32_t(kept);
 }
 
 Dictionary GpuTable::get_stats() const {
@@ -159,6 +168,7 @@ Dictionary GpuTable::get_stats() const {
     d["list_batches"] = list_stats.batches;
     d["list_build_ms_avg"] = list_stats.batches > 0 ? double(list_stats.build_usec) / 1000.0 / double(list_stats.batches) : 0.0;
     d["list_truncated"] = list_stats.truncated;
+    d["list_split"] = list_stats.split;
     d["palette_truncated"] = list_stats.palette_truncated;
     Dictionary per_lod;
     for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {

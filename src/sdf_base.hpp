@@ -64,15 +64,15 @@ public:
 
     // Main thread: patch each ChunkInput of the batch (id.w = this chunk's list offset in uint32 words,
     // anchor_hi.w = its instance count) and append the list words (record id | palette index << LIST_ID_BITS) to
-    // r_list. r_chunk_ids already holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). A batch's lists
-    // never exceed its chunk count * max_chunk_list() words (the meshers' buffer). r_palettes (if given) gets each
+    // r_list. r_chunk_ids already holds the batch's ChunkInput array (GPUFrame::encode_chunk_input). The lists never
+    // exceed p_capacity_words (the mesher's list buffer): returns how many leading chunks went in whole, and the
+    // caller dispatches only those and queues the rest again (a LOD-6 forest chunk lists ~9k records). Only a first
+    // chunk over the whole buffer is cut (ERR, counted: a wrong surface there). r_palettes (if given) gets each kept
     // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name.
-    virtual void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
-            std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const = 0;
+    virtual uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const = 0;
 
     // The average list a batch's chunks may carry: the meshers size their list buffer for batch size * this.
-    // The band rule keeps lists to the instances big enough for the chunk's LOD; a batch over it is cut (ERR,
-    // counted).
     static constexpr uint32_t MAX_CHUNK_LIST = 4096;
     // A list word: the record id in its low LIST_ID_BITS, the record's chunk palette index (chunk_palette.hpp) above.
     // So a table holds at most 2^LIST_ID_BITS (8M) instances, removed ones included.

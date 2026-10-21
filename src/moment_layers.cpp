@@ -2,6 +2,7 @@
 #include "moment_layers.hpp"
 
 #include "archetype_table.hpp"
+#include "parallel_for.hpp"
 
 #include <godot_cpp/core/error_macros.hpp>
 
@@ -267,7 +268,7 @@ void MomentLayers::place(Layer &r_layer, const CellKey &p_key, Cell &r_cell) {
         for (int64_t x = std::get<0>(lo); x <= std::get<0>(hi); x++) {
             for (int64_t y = std::get<1>(lo); y <= std::get<1>(hi); y++) {
                 for (int64_t z = std::get<2>(lo); z <= std::get<2>(hi); z++) {
-                    r_layer.bins[Bin(x, y, z)].push_back(p_key);
+                    r_layer.bins[Bin(x, y, z)].push_back(Near(p_key, &r_cell));
                 }
             }
         }
@@ -289,7 +290,7 @@ void MomentLayers::unplace(Layer &r_layer, const CellKey &p_key, Cell &r_cell) {
                 if (it == r_layer.bins.end()) {
                     continue;
                 }
-                it->second.erase(std::remove(it->second.begin(), it->second.end(), p_key), it->second.end());
+                it->second.erase(std::remove_if(it->second.begin(), it->second.end(), [&](const Near &p_n) { return p_n.first == p_key; }), it->second.end());
                 if (it->second.empty()) {
                     r_layer.bins.erase(it);
                 }
@@ -298,12 +299,12 @@ void MomentLayers::unplace(Layer &r_layer, const CellKey &p_key, Cell &r_cell) {
     }
 }
 
-void MomentLayers::candidates(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], std::vector<CellKey> &r_out) const {
+void MomentLayers::candidates(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], std::vector<Near> &r_out) const {
     r_out.clear();
     Bin lo, hi;
     if (!bin_range(p_layer, p_anchor, p_extent, lo, hi)) {
         for (const std::pair<const CellKey, Cell> &c : p_layer.cells) {
-            r_out.push_back(c.first); // a wide blob may meet any
+            r_out.push_back(Near(c.first, &c.second)); // a wide blob may meet any
         }
         return;
     }
@@ -317,25 +318,27 @@ void MomentLayers::candidates(const Layer &p_layer, const VoxelPos &p_anchor, co
             }
         }
     }
-    r_out.insert(r_out.end(), p_layer.wide.begin(), p_layer.wide.end());
-    std::sort(r_out.begin(), r_out.end());
-    r_out.erase(std::unique(r_out.begin(), r_out.end()), r_out.end());
+    for (const CellKey &k : p_layer.wide) {
+        r_out.push_back(Near(k, &p_layer.cells.at(k)));
+    }
+    std::sort(r_out.begin(), r_out.end(), [](const Near &p_a, const Near &p_b) { return p_a.first < p_b.first; });
+    r_out.erase(std::unique(r_out.begin(), r_out.end(), [](const Near &p_a, const Near &p_b) { return p_a.first == p_b.first; }), r_out.end());
 }
 
-void MomentLayers::judge(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const {
-    thread_local std::vector<CellKey> near;
+uint64_t MomentLayers::judge(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const {
+    thread_local std::vector<Near> near;
     candidates(p_layer, r_cell.blob.anchor, r_cell.extent, near);
-    box_tests += near.size();
     double sum = 0.0; // in cell order: the same bits whichever way the bins were filled
-    for (const CellKey &k : near) {
-        const Cell &o = k == p_key ? r_cell : p_layer.cells.at(k);
+    for (const Near &n : near) {
+        const Cell &o = n.first == p_key ? r_cell : *n.second;
         sum += boxes_meet(r_cell.blob.anchor, r_cell.extent, o.blob.anchor, o.extent) ? double(o.blob.amplitude) : 0.0;
     }
     r_cell.blob.peak_bound = sum;
     r_cell.kept = sum >= params.min_occupancy && double(r_cell.blob.amplitude) >= SLIVER * params.min_occupancy;
+    return near.size();
 }
 
-void MomentLayers::build_layer(Layer &r_layer) {
+void MomentLayers::fill_members(Layer &r_layer) const {
     for (uint32_t id = 0; id < items.size(); id++) {
         if (!on_layer(items[id], r_layer.lod)) {
             continue;
@@ -347,7 +350,17 @@ void MomentLayers::build_layer(Layer &r_layer) {
             r_layer.cells[keys[k]].members.push_back(id);
         }
     }
+}
+
+void MomentLayers::finish_layer(Layer &r_layer) {
+    std::vector<std::pair<const CellKey, Cell> *> cells;
+    cells.reserve(r_layer.cells.size());
     for (std::pair<const CellKey, Cell> &c : r_layer.cells) {
+        cells.push_back(&c);
+    }
+    // Each cell's sums and blob only read the items: side by side.
+    parallel_for(uint32_t(cells.size()), "MomentLayers::sums", [&](uint32_t p_i) {
+        std::pair<const CellKey, Cell> &c = *cells[p_i];
         for (size_t m = 0; m < c.second.members.size(); m++) {
             const uint32_t block = c.second.members[m] >> BLOCK_SHIFT;
             if (m == 0 || block != (c.second.members[m - 1] >> BLOCK_SHIFT)) {
@@ -355,11 +368,21 @@ void MomentLayers::build_layer(Layer &r_layer) {
             }
         }
         resum(r_layer, c.first, c.second);
-        place(r_layer, c.first, c.second);
+    });
+    for (std::pair<const CellKey, Cell> *c : cells) {
+        place(r_layer, c->first, c->second);
     }
-    for (std::pair<const CellKey, Cell> &c : r_layer.cells) {
-        judge(r_layer, c.first, c.second);
+    // Each verdict reads the other blobs, writes only its own.
+    std::vector<uint64_t> tests(cells.size());
+    parallel_for(uint32_t(cells.size()), "MomentLayers::pruning", [&](uint32_t p_i) { tests[p_i] = judge(r_layer, cells[p_i]->first, cells[p_i]->second); });
+    for (const uint64_t t : tests) {
+        box_tests += t;
     }
+}
+
+void MomentLayers::build_layer(Layer &r_layer) {
+    fill_members(r_layer);
+    finish_layer(r_layer);
 }
 
 void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params) {
@@ -374,7 +397,10 @@ void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLay
     for (size_t i = 0; i < layers.size(); i++) {
         layers[i].lod = params.lod_min + int(i);
         layers[i].cell = int64_t(1) << (layers[i].lod + params.cell_shift);
-        build_layer(layers[i]);
+    }
+    parallel_for(uint32_t(layers.size()), "MomentLayers::members", [&](uint32_t p_i) { fill_members(layers[p_i]); });
+    for (Layer &layer : layers) {
+        finish_layer(layer);
     }
 }
 
@@ -420,14 +446,15 @@ void MomentLayers::update_layer(Layer &layer, uint32_t p_id, const MomentItem &p
         std::sort(dirty.begin(), dirty.end());
         dirty.erase(std::unique(dirty.begin(), dirty.end()), dirty.end());
         // Re-sum them; every blob whose box meets one of theirs, before or after, is judged again.
-        std::vector<CellKey> affected = dirty, near;
-        // The blobs whose box meets a box (their bound reads its amplitude).
+        std::vector<CellKey> affected = dirty;
+        std::vector<Near> near;
+        // The blobs whose box meets a box (their bound reads its amplitude). The bins hold placed cells only, and a cell
+        // leaves them before it is erased.
         auto meeting = [&](const VoxelPos &p_anchor, const double *p_extent) {
             candidates(layer, p_anchor, p_extent, near);
-            for (const CellKey &n : near) {
-                const auto it = layer.cells.find(n);
-                if (it != layer.cells.end() && boxes_meet(p_anchor, p_extent, it->second.blob.anchor, it->second.extent)) {
-                    affected.push_back(n);
+            for (const Near &n : near) {
+                if (boxes_meet(p_anchor, p_extent, n.second->blob.anchor, n.second->extent)) {
+                    affected.push_back(n.first);
                 }
             }
         };
@@ -469,7 +496,7 @@ void MomentLayers::update_layer(Layer &layer, uint32_t p_id, const MomentItem &p
             Cell &cell = it->second;
             const auto w = was.find(k);
             const bool kept_before = w != was.end() ? w->second.first : cell.kept;
-            judge(layer, k, cell);
+            box_tests += judge(layer, k, cell);
             const bool reblobbed = w != was.end();
             if (cell.kept != kept_before || (cell.kept && reblobbed)) {
                 MomentBlobChange change;

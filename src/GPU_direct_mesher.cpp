@@ -363,11 +363,14 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
     }
 }
 
-uint32_t GPUDirectMesher::_table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records,
-        std::vector<std::vector<uint32_t>> *r_palettes) {
+uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
+        PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes) {
     SDFGpuTable *table = sdf->get_gpu_table();
     // Main thread, like the edits: the lists and the records come from the same snapshot.
-    table->build_lists(p_chunks, chunk_param, r_ids, r_list, r_palettes);
+    const uint32_t kept = table->build_lists(r_chunks, chunk_param, r_ids, r_list, uint32_t(table_list_capacity / 4), r_palettes);
+    r_rest.assign(r_chunks.begin() + kept, r_chunks.end());
+    r_chunks.resize(kept);
+    r_ids.resize(int64_t(kept) * GPUFrame::CHUNK_INPUT_BYTES);
     const uint32_t version = table->version();
     if (version != sent_table_version) {
         r_records = table->record_bytes(sent_table_version, sent_table_version);
@@ -558,7 +561,7 @@ void GPUDirectMesher::_update_dirty_bounds() {
     dirty_bounds_pages.clear();
 }
 
-bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
+bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, bool *r_remesh) {
     // Instance edits first, finest LOD first: the chunk under the edit is what the user is looking at.
     for (std::vector<ChunkId> &queue : remesh_queue) {
         if (queue.empty()) {
@@ -568,6 +571,9 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
         queue.pop_back();
         remesh_queued.erase(r_chunk);
         stats.remesh_pops++;
+        if (r_remesh) {
+            *r_remesh = true;
+        }
         return true;
     }
     for (std::vector<ChunkId> &queue : chunk_queue) {
@@ -576,9 +582,23 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk) {
         }
         r_chunk = queue.back();
         queue.pop_back();
+        if (r_remesh) {
+            *r_remesh = false;
+        }
         return true;
     }
     return false;
+}
+
+void GPUDirectMesher::_requeue(const ChunkId &p_chunk, bool p_remesh) {
+    if (p_remesh) {
+        _queue_remesh(p_chunk);
+        return;
+    }
+    const int lod = ChunkMath::get_lod(p_chunk);
+    if (lod >= 0 && lod < lod_count) {
+        chunk_queue[ChunkMath::load_queue(p_chunk, lod_count, load_view)].push_back(p_chunk);
+    }
 }
 
 void GPUDirectMesher::_queue_remesh(const ChunkId &p_chunk) {
@@ -693,48 +713,63 @@ void GPUDirectMesher::_update_cost_model() {
 bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     std::vector<ChunkId> chunks;
     chunks.reserve(settings.batch_size);
-    std::vector<uint32_t> lod_counts(lod_count, 0);
     double estimate = 0.0;
     ChunkId chunk;
+    bool remesh = false;
+    HashSet<ChunkId, Vector3i64Hasher> remeshes; // popped from remesh_queue: they go back there if they wait
     // With a budget the batch stops once its estimate reaches what's left (a frame dispatches at least
     // one chunk: budget_left starts > 0).
-    while (chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk)) {
+    while (chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk, &remesh)) {
         chunks.push_back(chunk);
+        if (remesh) {
+            remeshes.insert(chunk);
+        }
         const int lod = ChunkMath::get_lod(chunk);
         if (lod >= 0 && lod < lod_count) {
-            lod_counts[lod]++;
             estimate += cost_model.estimate(lod);
         }
     }
     if (chunks.empty()) {
         return false;
     }
-    r_budget_us -= estimate;
     const uint64_t t0 = now_usec();
 
     // The queue already pops in Morton order; re-sorting covers re-queued overflow chunks.
     const ChunkId origin = chunk_param.origin_chunk;
     std::sort(chunks.begin(), chunks.end(), [origin](const ChunkId &a, const ChunkId &b) { return morton_key(a, origin) < morton_key(b, origin); });
 
-    InFlightBatch batch;
-    batch.dispatch_frame = frame;
-    int min_lod = ChunkMath::get_lod(chunks[0]);
-    for (const ChunkId &c : chunks) {
-        min_lod = MIN(min_lod, ChunkMath::get_lod(c));
-    }
-
-    AABB bounds = _chunk_aabb(chunks[0]);
     PackedByteArray ids;
     ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
     for (size_t i = 0; i < chunks.size(); i++) {
         GPUFrame::encode_chunk_input(ids, (int64_t)i, chunks[i], chunk_param);
-        bounds.merge_with(_chunk_aabb(chunks[i]));
-        working_generation.insert(chunks[i]);
     }
     PackedByteArray list;
     PackedByteArray records;
     std::vector<std::vector<uint32_t>> chunk_palettes;
-    const uint32_t table_version = _table_payload(chunks, ids, list, records, &chunk_palettes);
+    std::vector<ChunkId> rest;
+    const uint32_t table_version = _table_payload(chunks, rest, ids, list, records, &chunk_palettes);
+    for (const ChunkId &c : rest) {
+        _requeue(c, remeshes.has(c));
+        stats.list_requeued++;
+    }
+
+    InFlightBatch batch;
+    batch.dispatch_frame = frame;
+    std::vector<uint32_t> lod_counts(lod_count, 0);
+    estimate = 0.0;
+    int min_lod = ChunkMath::get_lod(chunks[0]);
+    AABB bounds = _chunk_aabb(chunks[0]);
+    for (const ChunkId &c : chunks) {
+        const int lod = ChunkMath::get_lod(c);
+        if (lod >= 0 && lod < lod_count) {
+            lod_counts[lod]++;
+            estimate += cost_model.estimate(lod);
+        }
+        min_lod = MIN(min_lod, lod);
+        bounds.merge_with(_chunk_aabb(c));
+        working_generation.insert(c);
+    }
+    r_budget_us -= estimate;
     const PackedByteArray palette_batch = palettes.place_batch(chunk_palettes, batch.palettes);
 
     PackedInt32Array pages;
@@ -782,7 +817,9 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
     }
     PackedByteArray list;
     PackedByteArray records;
-    _table_payload(chunks, ids, list, records);
+    std::vector<ChunkId> rest;
+    _table_payload(chunks, rest, ids, list, records);
+    audit_queue.insert(audit_queue.end(), rest.begin(), rest.end());
     const uint32_t batch_id = next_batch_id++;
     audit_in_flight[batch_id] = chunks;
     stats.audit_batches++;
@@ -858,16 +895,9 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 
             if (flags & 1u) { // overflow: try again in a later batch
                 stats.overflow_requeued++;
-                if (output.loaded_chunk.has(chunk_id)) {
-                    // A re-mesh (instance edit): send_chunk rebuilds chunk_queue from the scan's dirty
-                    // chunks only, which a loaded chunk isn't, so it would be lost there.
-                    _queue_remesh(chunk_id);
-                    continue;
-                }
-                const int lod = ChunkMath::get_lod(chunk_id);
-                if (lod >= 0 && lod < lod_count) {
-                    chunk_queue[ChunkMath::load_queue(chunk_id, lod_count, load_view)].push_back(chunk_id);
-                }
+                // A loaded chunk is a re-mesh (instance edit): send_chunk rebuilds chunk_queue from the scan's dirty
+                // chunks only, which a loaded chunk isn't, so it would be lost there.
+                _requeue(chunk_id, output.loaded_chunk.has(chunk_id));
                 continue;
             }
 
@@ -1246,6 +1276,7 @@ Dictionary GPUDirectMesher::get_stats() {
     d["quads_emitted"] = (int64_t)stats.quads_emitted;
     d["overflow_chunks"] = (int64_t)stats.overflow_chunks;
     d["overflow_requeued"] = (int64_t)stats.overflow_requeued;
+    d["list_requeued"] = (int64_t)stats.list_requeued;
     d["audit_batches"] = (int64_t)stats.audit_batches;
     d["missing_neighbor"] = (int64_t)stats.missing_neighbor;
     d["nan_vertices"] = (int64_t)stats.nan_vertices;

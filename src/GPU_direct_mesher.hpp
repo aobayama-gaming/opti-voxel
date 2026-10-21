@@ -229,9 +229,13 @@ private:
     void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Main thread: the batch's instance lists (patched into r_ids), the chunks' palettes (if r_palettes) and, if
     // the table changed since the last dispatch, the records it changed (SDFGpuTable::record_bytes spans). Returns
-    // the table version they are.
-    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records,
-            std::vector<std::vector<uint32_t>> *r_palettes = nullptr);
+    // the table version they are. The lists fill the list buffer at most: r_chunks keeps the leading chunks that
+    // fit, r_rest gets the others (r_ids shrunk to match) for the caller to queue again.
+    uint32_t _table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
+            PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes = nullptr);
+    // Main thread: a chunk popped for a batch it couldn't go in (overflow, or its list didn't fit) back in its queue:
+    // remesh_queue (p_remesh) or chunk_queue.
+    void _requeue(const ChunkId &p_chunk, bool p_remesh);
     void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages, int p_min_lod,
             const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch);
     void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
@@ -255,7 +259,8 @@ private:
     // completion assembly (render thread writes, main thread consumes; under mutex)
     HashMap<uint32_t, CompletedBatch> partial;
 
-    bool _pop_queue(ChunkId &r_chunk);
+    // r_remesh (if given): whether the chunk came from remesh_queue.
+    bool _pop_queue(ChunkId &r_chunk, bool *r_remesh = nullptr);
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
     // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
     bool _dispatch_mesh_batch(double &r_budget_us);
@@ -272,6 +277,7 @@ private:
         uint64_t quads_emitted = 0;
         uint64_t overflow_chunks = 0;
         uint64_t overflow_requeued = 0; // chunks sent back to the queue because their batch overflowed
+        uint64_t list_requeued = 0; // chunks sent back before dispatch: their instance list didn't fit the batch's buffer
         uint64_t audit_batches = 0;
         uint64_t dispatch_frames = 0; // frames that dispatched at least one batch
         uint64_t in_flight_max = 0; // mesh + audit batches waiting for their directory

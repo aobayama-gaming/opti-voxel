@@ -264,8 +264,11 @@ to every change, and a reviewer may reject a PR on any of them.
   worker and publishing when done is the follow-up). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
   write per page); the GPU re-uploads the runs of pages changed since its version (`record_bytes` spans,
   `SDFGpuTable::upload_records`). `build_lists` runs on the worker pool; the list buffer holds batch size *
-  `max_chunk_list()` (4,096) words, a batch over it is cut (ERR, `table.list_truncated`; the GPU then
-  disagrees with the CPU there). `get_debug_stats()["table"]`: list length avg / max per LOD,
+  `max_chunk_list()` (4,096) words whatever the batch's chunk count; a batch keeps the leading chunks whose lists fit
+  it whole and the meshers queue the rest again (`table.list_split`, `list_requeued`: a LOD 6 forest chunk lists ~9k
+  records, and the budget-cut batches of 2-3 chunks used to truncate them, empty chunk squares in the canopy); only a
+  single list over the whole buffer is cut (ERR, `table.list_truncated`; the GPU then disagrees with the CPU there).
+  `get_debug_stats()["table"]`: list length avg / max per LOD,
   list build ms. `SDFBase::cull_exempt` (`near_instance`, from the index: per-LOD occupancy + coarser
   nodes' boxes) feeds the discoverer's no-cull rule, band or not: a node near an instance's box is never
   culled (asked only when the corners would cull). FrameSpike's table probe checks the library + fold (with
@@ -357,7 +360,11 @@ to every change, and a reviewer may reject a PR on any of them.
   --yaw=0 [--moments=0]`). The hand-off over every altitude: `tools/forest_lod_sheet.sh` (bench `--scenario=rise
   --altitudes=... --rise_shots=DIR`, 20 m to 13 km over the forest, shaded | LOD view, `sheet.png` + lists per step)
   and the unit test of the canopy columns at LODs 2-9. `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
-  `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms. **Edits** keep the blobs exact:
+  `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms (`["trees"]["build_ms"]`: the forest). The
+  build runs on the worker pool (`parallel_for.hpp`: each layer's members side by side, then each cell's sums and pruning;
+  the forest's ground traces and trees per site, admitted in site order), the same bits: forest5cm_x10 (40,000 trees,
+  2.2 M blobs) configures in 15 s, 93 s serial (blobs 89 -> 11 s, the pruning's map lookups were 2/3 of it; forest
+  18 -> 2 s); the main thread still waits for it (async configure: next). **Edits** keep the blobs exact:
   `Archetype::MomentLayers` holds each cell's members (by record id), their partial sums per block of 256 ids and the
   pruning verdict; an edit moves its record between the cells its old and new tents touch, re-sums one block per cell
   and re-judges the blobs whose box meets a changed one (bounds are summed in cell order), so the table holds the same

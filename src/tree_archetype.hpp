@@ -102,6 +102,6 @@ struct TreeSite {
 // of an absolute grid of cells (side p_area_m / sqrt(p_count), whole voxels), jittered within it by a hash of the
 // cell. The same cell holds the same tree whatever the square. p_ground_y(x, z) gives the base's y at a column.
 void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_centre_z_m, double p_voxel,
-        const GroundFn &p_ground_y, std::vector<TreeSite> &r_out);
+        const GroundFn &p_ground_y, std::vector<TreeSite> &r_out); // p_ground_y null: base.y 0 (the caller traces it)
 
 } // namespace Archetype

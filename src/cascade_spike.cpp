@@ -362,7 +362,9 @@ std::vector<ChunkId> table_batch(const Archetype::InstanceSnapshot &p_snap, cons
     for (size_t c = 0; c < ids.size(); c++) {
         GPUFrame::encode_chunk_input(r_inputs, int64_t(c), ids[c], p_param);
     }
-    p_table.build_lists(ids, p_param, r_inputs, r_words);
+    // The batch keeps the chunks whose lists fit the buffer (the same capacity as the list buffer below).
+    ids.resize(p_table.build_lists(ids, p_param, r_inputs, r_words, MAX_BATCH * p_table.max_chunk_list()));
+    r_inputs.resize(int64_t(ids.size()) * GPUFrame::CHUNK_INPUT_BYTES);
     return ids;
 }
 

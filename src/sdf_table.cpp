@@ -1,5 +1,7 @@
 #include "sdf_table.hpp"
+
 #include "moment_layers.hpp"
+#include "parallel_for.hpp"
 
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/worker_thread_pool.hpp>
@@ -285,21 +287,32 @@ VoxelBox SDFTable::record_box(const TableRecord &p_rec) {
 }
 
 void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats) {
+    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
     std::vector<TreeSite> sites;
-    forest_sites(forest_count, forest_area, p_centre_x, p_centre_z, p_voxel, [this](int64_t p_x, int64_t p_z) { return ground_y(p_x, p_z); }, sites);
-    std::vector<TableRecord> parts;
+    forest_sites(forest_count, forest_area, p_centre_x, p_centre_z, p_voxel, nullptr, sites); // the ground: below
+    // Each site's ground trace and tree are independent (ground_y and the library are const): on the worker pool, a
+    // batch at a time (the parts wait for their turn), then admitted in site order (the record ids don't change).
+    constexpr size_t BATCH = 4096;
+    std::vector<std::vector<TableRecord>> grown(MIN(BATCH, sites.size()));
     int64_t most = 0;
     // Per material (bark, leaves): the trees' summed volume and equal-covariance semi-axes (span_moments), for the means.
     const uint32_t tree_materials[2] = { Material::BARK, Material::LEAVES };
     double volume[2] = {}, axes[2][3] = {};
-    for (const TreeSite &site : sites) {
-        if (in_lake(site.base.x, site.base.z)) {
-            continue;
+    for (size_t i = 0; i < sites.size(); i++) {
+        if (i % BATCH == 0) {
+            parallel_for(uint32_t(MIN(BATCH, sites.size() - i)), "SDFTable::add_forest", [&](uint32_t p_j) {
+                TreeSite &site = sites[i + p_j];
+                grown[p_j].clear(); // empty: in a lake
+                if (!in_lake(site.base.x, site.base.z)) {
+                    site.base.y = ground_y(site.base.x, site.base.z);
+                    grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, grown[p_j]);
+                }
+            });
         }
-        parts.clear();
-        grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, parts);
+        const TreeSite &site = sites[i];
+        std::vector<TableRecord> &parts = grown[i % BATCH];
         const uint32_t first = records.size();
-        if (!admit(parts, "tree")) {
+        if (parts.empty() || !admit(parts, "tree")) {
             continue;
         }
         trees.push_back(TreeSpan{ first, uint32_t(parts.size()), site.species, site.seed });
@@ -335,6 +348,7 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     forest["records_per_tree_avg"] = trees.empty() ? 0.0 : double(total) / double(trees.size());
     forest["records_per_tree_max"] = most;
     forest["moments"] = materials_stats;
+    forest["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
     r_stats["trees"] = forest;
 }
 
