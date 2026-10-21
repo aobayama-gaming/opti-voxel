@@ -16,7 +16,7 @@ var yaw: float = 0.0
 var marks_dir := "user://marks"
 var mark_index := 0
 var pending_audit := {}  # the mark waiting for its discovery audit report
-var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
+var clip_terrain: Node = null  # the clip planes follow the altitude (Presets.clip_planes)
 var base_near := 0.05
 
 # `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|shapes`
@@ -121,12 +121,9 @@ func _enter_tree() -> void:
 			terrain.dual_contouring = true
 
 func _ready():
-	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude
-	# (_process): near = altitude / 1000, far = near * 2^21 capped at the discoverer's load range.
-	# Godot's float projection loses its far plane past far/near ~2^24 (the light culler ERRORs).
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
-	if terrain and terrain.lod_numbers > 15:
-		far_lods_terrain = terrain
+	if terrain:
+		clip_terrain = terrain
 		base_near = camera.near
 	if terrain and terrain.terrain_mode != 4:  # the shapes gallery keeps the scene's spawn
 		altitude_terrain = terrain
@@ -360,10 +357,8 @@ last edit %d chunks, apply %.2f ms" % [
 func _process(delta: float) -> void:
 	_update_drag()
 	_update_hud(delta)
-	if far_lods_terrain:
-		var altitude: float = absf(far_lods_terrain.get_sdf_at(camera.global_position))
-		camera.near = maxf(base_near, altitude / 1000.0)
-		camera.far = minf(far_lods_terrain.get_load_radius(), camera.near * 2097152.0)
+	if clip_terrain:
+		Presets.clip_planes(camera, clip_terrain, base_near)
 	if not pending_audit.is_empty():
 		var report: Dictionary = _terrain().get_discovery_audit_report()
 		if not report.is_empty():

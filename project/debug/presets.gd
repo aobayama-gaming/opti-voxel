@@ -23,6 +23,16 @@ static func ungrade(p_scene_root: Node) -> void:
 		world_env.environment.adjustment_enabled = false
 
 
+# The camera's clip planes, called every frame by the player and the bench: near = altitude / 1000 (altitude = |SDF|
+# at the camera, at least p_base_near, the scene's), far = near * 2^21 capped at the discoverer's load range, so the
+# ground stays in view from any height. Godot's float projection loses its far plane past far/near ~2^24 (the light
+# culler then ERRORs every frame), so far/near stays at 2^21.
+static func clip_planes(p_camera: Camera3D, p_terrain: Node, p_base_near: float) -> void:
+	var altitude: float = absf(p_terrain.get_sdf_at(p_camera.global_position))
+	p_camera.near = maxf(p_base_near, altitude / 1000.0)
+	p_camera.far = minf(p_terrain.get_load_radius(), p_camera.near * 2097152.0)
+
+
 static func user_args() -> PackedStringArray:
 	var given := OS.get_cmdline_user_args()
 	var out := PackedStringArray()

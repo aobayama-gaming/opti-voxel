@@ -129,9 +129,10 @@ to every change, and a reviewer may reject a PR on any of them.
   root chunk span (2^lod_numbers ids = 458,752 voxels with the defaults). No runtime rebasing yet.
 - LOD range: `VoxelTerrain.lod_numbers` (default 15, at most 31: the GPU reads a LOD from the id's low
   32 bits). `--lods=N` in `bench.gd` and in the main scene (`godot --path project -- --lods=25`).
-  Above 15 only: the camera's clip planes follow
-  its altitude (|SDF| at the camera, `VoxelTerrain.get_sdf_at`): near = altitude / 1000 (at least the
-  scene's), far = min(near * 2^21, `VoxelTerrain.get_load_radius()`). Past far/near ~2^24 Godot's float
+  At every LOD count the camera's clip planes follow
+  its altitude (`Presets.clip_planes`, every frame in the player and the bench; |SDF| at the camera,
+  `VoxelTerrain.get_sdf_at`): near = altitude / 1000 (at least the scene's), far = min(near * 2^21,
+  `VoxelTerrain.get_load_radius()`), so the ground stays in view from 13 km up. Past far/near ~2^24 Godot's float
   projection loses its far plane and the light culler ERRORs every frame. The validator doesn't compare
   the normals of sliver triangles (all edges within 2 * tol): around a lone near-zero corner a whole
   closed sheet fits inside the tolerance and the vertex pairing is arbitrary (frequent at far LODs).
@@ -348,7 +349,9 @@ x2 per LOD from the material's first layer (seams step no more), a round clump k
   under a coarse canopy uncullable (+18% loaded chunks).
   A dense 5 cm forest keeps a canopy over most columns at LODs 6-8 (unit test); from 1,100 m the forest5cm square
   is a canopy instead of nothing (`bench.sh --preset=forest5cm --cam_pos=-50,320,750 --above_ground=1100 --pitch=-55
-  --yaw=0 [--moments=0]`). `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
+  --yaw=0 [--moments=0]`). The hand-off over every altitude: `tools/forest_lod_sheet.sh` (bench `--scenario=rise
+  --altitudes=... --rise_shots=DIR`, 20 m to 13 km over the forest, shaded | LOD view, `sheet.png` + lists per step)
+  and the unit test of the canopy columns at LODs 2-9. `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
   `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms. **Edits** keep the blobs exact:
   `Archetype::MomentLayers` holds each cell's members (by record id), their partial sums per block of 256 ids and the
   pruning verdict; an edit moves its record between the cells its old and new tents touch, re-sums one block per cell
