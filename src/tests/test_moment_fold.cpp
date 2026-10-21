@@ -228,3 +228,29 @@ TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at t
         CHECK(listed > 0);
     }
 }
+
+TEST_CASE("Moment fold: the forest's cover at every LOD from its parts to its blobs") {
+    const Forest with(true), without(false);
+    const int64_t cx = std::llround(SDFTable::SCENE_X / 0.05), cz = std::llround(SDFTable::SCENE_Z / 0.05);
+    // The same 48 columns of the middle 60 m at every LOD: the share with a canopy (solid 5 m above the ground) and
+    // its mean height. The hand-off from the parts to the blobs shows here as a trough (TODO: assert none once the
+    // blobs take the eroded parts' mass, feature/moment-handoff).
+    for (int lod = 2; lod <= 9; lod++) {
+        int canopy = 0, bare = 0;
+        double height = 0.0;
+        const int columns = 48;
+        for (int i = 0; i < columns; i++) {
+            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0xC0E5u, 0u });
+            const int64_t x = cx + int64_t(h.x % 1200u) - 600, z = cz + int64_t(h.y % 1200u) - 600;
+            const int64_t ground = with.sdf.ground_y(x, z);
+            const int64_t top = with.top_solid(x, z, ground + 1200, lod);
+            if (top > ground + 100) {
+                canopy++;
+                height += double(top - ground) * 0.05;
+            }
+            bare += without.top_solid(x, z, ground + 1200, lod) > ground + 100 ? 1 : 0;
+        }
+        MESSAGE("LOD ", lod, ": canopy ", canopy, " / ", columns, " columns (", bare, " without blobs), mean height ",
+                canopy > 0 ? height / canopy : 0.0, " m");
+    }
+}

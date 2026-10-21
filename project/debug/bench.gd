@@ -7,13 +7,17 @@ extends Node3D
 ##   --mode=legacy|direct         pipeline (default legacy)
 ##   --preset=NAME                a named argument set (debug/presets.gd; forest5cm = the perf target),
 ##                                explicit arguments override it
-##   --scenario=load|fly|turn|turn_walk|edit|dig load: load + steady phase. fly: load, fly out and back, settle, steady.
+##   --scenario=load|fly|turn|turn_walk|edit|dig|rise load: load + steady phase. fly: load, fly out and back, settle, steady.
 ##                                turn: load, --turns=N full turns of the camera's yaw (default 1), --turn_seconds
 ##                                each (default 8), settle, steady
 ##                                turn_walk: turn, then walk --walk=M metres (default 300) straight ahead,
 ##                                level, in --walk_seconds (default 6), settle, steady
 ##                                edit: load, then N instance edits (add / move / remove) then settle, steady
 ##                                dig: load, then K dig holes along the view, a scripted drag, settle, steady
+##                                rise: load, then one phase per --altitudes step (rise_<i>): the camera at that
+##                                height above the terrain under the start position (same view), until loaded
+##   --altitudes=M,M,...          rise scenario: metres above the terrain (default 20,50,100,200,400,800,1600,3200,6400,13000)
+##   --rise_shots=DIR             rise scenario: a screenshot per step, DIR/rise_<i>_<M>m.png (relative to the run dir)
 ##   --edits=N                    edit scenario: number of edits (default 100)
 ##   --digs=K                     dig scenario: number of scripted right-click holes (default 8)
 ##   --dig_ahead=M                dig scenario: metres from the camera to the first hole (default 20)
@@ -58,8 +62,9 @@ extends Node3D
 ##   --trees=N                    a forest of about N grown trees (default 0)
 ##   --tree_area=M                side of the forest square, metres (default 60)
 ##   --biomes=KM                  lava lakes and floating islands of the biome cells within KM km (default 0)
-##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
-##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
+##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31; the cascade's octaves reach k = N + 4).
+##                                The clip planes follow the altitude at every LOD count, as in the player
+##                                (Presets.clip_planes: far up to the discoverer's load range)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --lod_error_back=F           error outside the view cone, reached behind the camera (default 0 = lod_error)
 ##   --lod_view_margin=DEG        view cone = the frustum's diagonal half-FOV + DEG (default 20)
@@ -101,6 +106,7 @@ var args := {}
 var shots := []  # [[when, path], ...]
 var terrain
 var camera: Camera3D
+var base_near := 0.05  # the scene's near plane, the clip planes' floor
 var start_pos: Vector3
 var walk_from: Vector3  # turn_walk: where the walk starts
 var vp_rid: RID
@@ -263,19 +269,10 @@ func _ready() -> void:
 	add_child(terrain)
 	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 4 or args.has("cam_pos") else "50")
 	if above_ground != "":
-		# Raise or lower the camera (and the fly path) to this height above the terrain under it.
-		var h := float(above_ground)
-		for i in 32:
-			var d: float = terrain.get_sdf_at(camera.global_position)
-			if absf(d - h) < maxf(1.0, h * 0.05):
-				break
-			camera.global_position.y += h - d
+		_place_above_ground(float(above_ground))  # the fly path starts there too
 		start_pos = camera.global_position
-		print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, terrain.get_sdf_at(camera.global_position)])
-	# The scene's clip planes at the default LOD count, so pictures don't change; with more LODs they
-	# follow the camera's altitude (see _clip_planes), set once at the pose.
-	if terrain.lod_numbers > 15:
-		_clip_planes(camera, camera.near)
+	base_near = camera.near
+	Presets.clip_planes(camera, terrain, base_near)
 
 
 	_begin_phase("load")
@@ -325,6 +322,23 @@ func _end_phase() -> void:
 	print("BENCH: phase %s done: %d frames, %.0f ms, frame p50 %.2f p99 %.2f max %.2f ms" % [
 		phase, phase_frame, r["wall_ms"], r["frame_ms"]["p50"], r["frame_ms"]["p99"], r["frame_ms"]["max"]])
 	_take_shots(phase + "_end")
+
+
+## Raise or lower the camera to p_height metres above the terrain under it (SDF distance, iterated).
+func _place_above_ground(p_height: float) -> void:
+	for i in 32:
+		var d: float = terrain.get_sdf_at(camera.global_position)
+		if absf(d - p_height) < maxf(1.0, p_height * 0.05):
+			break
+		camera.global_position.y += p_height - d
+	print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, terrain.get_sdf_at(camera.global_position)])
+
+
+func _altitudes() -> PackedFloat64Array:
+	var out := PackedFloat64Array()
+	for a in args.get("altitudes", "20,50,100,200,400,800,1600,3200,6400,13000").split(","):
+		out.append(float(a))
+	return out
 
 
 ## LOD0 voxel of a render-space position: the int64 world origin plus a small rounded offset (the origin
@@ -421,6 +435,7 @@ func _process(delta: float) -> void:
 
 	if terrain.debug_gpu_profile_frames:
 		_record_profile(delta)
+	Presets.clip_planes(camera, terrain, base_near)
 
 	_take_shots(str(frame))
 
@@ -445,6 +460,8 @@ func _process(delta: float) -> void:
 					_begin_phase("edit")
 				elif args.get("scenario", "load") == "dig":
 					_begin_phase("dig")
+				elif args.get("scenario", "load") == "rise":
+					_begin_phase("rise_0")
 				else:
 					_begin_phase("steady")
 		"dig":
@@ -493,6 +510,19 @@ func _process(delta: float) -> void:
 				_end_phase()
 				_take_shots("fly_end")
 				_begin_phase("settle")
+		var p when p.begins_with("rise_"):
+			# The camera moves on the step's first frame, once the last step's screenshot is drawn; a step
+			# ends loaded (a few frames in, so the scan is the new pose's).
+			var step := int(p.trim_prefix("rise_"))
+			var altitudes := _altitudes()
+			if phase_frame == 1:
+				camera.global_position = start_pos
+				_place_above_ground(altitudes[step])
+			elif phase_frame > 4 and terrain.is_load_complete():
+				_end_phase()
+				if args.has("rise_shots"):
+					_save_shot("%s/rise_%d_%dm.png" % [args["rise_shots"], step, int(altitudes[step])])
+				_begin_phase("rise_%d" % (step + 1) if step + 1 < altitudes.size() else "steady")
 		"settle":
 			if terrain.is_load_complete():
 				_end_phase()
@@ -556,10 +586,14 @@ func _next_check() -> void:
 func _take_shots(when: String) -> void:
 	for shot in shots:
 		if shot[0] == when:
-			await RenderingServer.frame_post_draw
-			var img := get_viewport().get_texture().get_image()
-			img.save_png(shot[1])
-			print("BENCH: screenshot %s -> %s" % [when, shot[1]])
+			_save_shot(shot[1])
+
+
+func _save_shot(p_path: String) -> void:
+	await RenderingServer.frame_post_draw
+	DirAccess.make_dir_recursive_absolute(p_path.get_base_dir())
+	get_viewport().get_texture().get_image().save_png(p_path)
+	print("BENCH: screenshot -> %s" % p_path)
 
 
 ## --probe=PREFIX: a shaded shot, then the bark seam probe views (the page shader's 10 and 11) with the environment
@@ -696,10 +730,3 @@ static func _summary(values: Array) -> Dictionary:
 	}
 
 
-# Above 15 LODs: near = altitude / 1000 (altitude = |SDF| at the camera, at least the scene's near),
-# far = near * 2^21 capped at the discoverer's load range. Godot's float projection loses its far
-# plane past far/near ~2^24 (the light culler then ERRORs every frame), so far/near stays at 2^21.
-func _clip_planes(cam: Camera3D, base_near: float) -> void:
-	var altitude: float = absf(terrain.get_sdf_at(cam.global_position))
-	cam.near = maxf(base_near, altitude / 1000.0)
-	cam.far = minf(terrain.get_load_radius(), cam.near * 2097152.0)
