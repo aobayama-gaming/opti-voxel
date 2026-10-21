@@ -73,6 +73,13 @@ func _enter_tree() -> void:
 			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
+		if a.begins_with("--spawn="):  # --spawn=X,Z: metres (tools/climate_report.sh lists biome borders)
+			var xz := a.trim_prefix("--spawn=").split(",")
+			if xz.size() == 2:
+				position.x = xz[0].to_float()
+				position.z = xz[1].to_float()
+			else:
+				push_error("player: --spawn=%s (expected X,Z in metres)" % a.trim_prefix("--spawn="))
 		if a.begins_with("--voxel=") and terrain:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:

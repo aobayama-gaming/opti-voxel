@@ -25,10 +25,12 @@ struct Sampled {
     std::vector<float> fields;
     std::vector<float> weights;
     std::vector<int> picks;
+    std::vector<int64_t> ground_y; // LOD0 voxels: the column's surface, or the datum
 };
 
-// The slice: pixel (column j, row i) is lattice point (j - n / 2, datum, i - n / 2) of Λ_m (x right, z down).
-Sampled sample(const Table &p_table, const Cascade::Spec &p_spec, int64_t p_datum_y, int p_m, int p_n) {
+// The slice: pixel (column j, row i) is the column (j - n / 2, i - n / 2) of Λ_m (x right, z down), at the lattice
+// point at or below its ground surface (p_surface: SDFCascade::ground_y), else at the datum's.
+Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, int p_m, int p_n) {
     Sampled s;
     s.nf = int(p_table.fields.size());
     s.nb = int(p_table.biomes.size());
@@ -36,14 +38,18 @@ Sampled sample(const Table &p_table, const Cascade::Spec &p_spec, int64_t p_datu
     s.fields.resize(points * s.nf);
     s.weights.resize(points * s.nb);
     s.picks.resize(points);
-    const int64_t y = p_datum_y >> p_m;
+    s.ground_y.resize(points);
+    const int64_t step = int64_t(1) << p_m;
     parallel_for(uint32_t(p_n), "climate_report", [&](uint32_t p_row) {
         for (int j = 0; j < p_n; j++) {
             const size_t i = size_t(p_row) * p_n + j;
-            const Vector3i64 p(int64_t(j) - p_n / 2, y, int64_t(p_row) - p_n / 2);
+            const int64_t x = int64_t(j) - p_n / 2;
+            const int64_t z = int64_t(p_row) - p_n / 2;
+            s.ground_y[i] = p_surface ? p_sdf.ground_y(x * step, z * step) : p_sdf.get_datum_y();
+            const Vector3i64 p(x, WorldCoord::floor_div(s.ground_y[i], step), z);
             Float4 f[MAX_FIELDS];
             Float4 w[MAX_BIOMES];
-            fields_at(p_table, p_spec, p, p_m, f);
+            fields_at(p_table, p_sdf.get_spec(), p, p_m, f);
             weights(p_table, f, w);
             s.picks[i] = pick(p_table, w, p, p_m);
             for (int c = 0; c < s.nf; c++) {
@@ -101,6 +107,48 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
     return md;
 }
 
+// Where each pair of biomes meets, the spot nearest the slice's centre: a pick and its right or lower neighbour
+// differ; the spot is the first of the two (metres, y its ground), with the player flag that spawns above it.
+String border_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m) {
+    struct Spot {
+        int64_t d2 = INT64_MAX;
+        size_t i = 0;
+    };
+    std::vector<Spot> best(size_t(p_s.nb) * p_s.nb);
+    for (int r = 0; r < p_n; r++) {
+        for (int j = 0; j < p_n; j++) {
+            const size_t i = size_t(r) * p_n + j;
+            const int64_t dx = j - p_n / 2, dz = r - p_n / 2;
+            const int right = j + 1 < p_n ? p_s.picks[i + 1] : p_s.picks[i];
+            const int below = r + 1 < p_n ? p_s.picks[i + size_t(p_n)] : p_s.picks[i];
+            for (const int o : { right, below }) {
+                if (o == p_s.picks[i]) {
+                    continue;
+                }
+                const int a = MIN(o, p_s.picks[i]), b = MAX(o, p_s.picks[i]);
+                Spot &spot = best[size_t(a) * p_s.nb + b];
+                if (dx * dx + dz * dz < spot.d2) {
+                    spot = Spot{ dx * dx + dz * dz, i };
+                }
+            }
+        }
+    }
+    String md = "| biomes | x m | ground y m | z m | player |\n|---|---|---|---|---|\n";
+    for (int a = 0; a < p_s.nb; a++) {
+        for (int b = a + 1; b < p_s.nb; b++) {
+            const Spot &spot = best[size_t(a) * p_s.nb + b];
+            if (spot.d2 == INT64_MAX) {
+                continue;
+            }
+            const int64_t x = int64_t(std::llround(double(int64_t(spot.i % size_t(p_n)) - p_n / 2) * p_spacing_m));
+            const int64_t z = int64_t(std::llround(double(int64_t(spot.i / size_t(p_n)) - p_n / 2) * p_spacing_m));
+            md += vformat("| %s / %s | %d | %d | %d | `--spawn=%d,%d` |\n", p_table.biomes[size_t(a)].name, p_table.biomes[size_t(b)].name, x,
+                    int64_t(std::llround(double(p_s.ground_y[spot.i]) * p_voxel_m)), z, x, z);
+        }
+    }
+    return md;
+}
+
 // The field table (octaves, min / mean / max) and one grey map per field (-max|v| .. +max|v|).
 String field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sampled &p_s, int p_n, int p_m, const String &p_dir, Array &r_images) {
     const int64_t points = int64_t(p_n) * p_n;
@@ -134,10 +182,10 @@ String field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sa
 } // namespace
 
 void ClimateReport::_bind_methods() {
-    ClassDB::bind_method(D_METHOD("run", "out_dir", "climate_path", "voxel_size", "lods", "extent_km", "size"), &ClimateReport::run);
+    ClassDB::bind_method(D_METHOD("run", "out_dir", "climate_path", "voxel_size", "lods", "extent_km", "size", "surface"), &ClimateReport::run);
 }
 
-Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size) {
+Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size, bool p_surface) {
     Dictionary report;
     report["ok"] = false;
     DirAccess::make_dir_recursive_absolute(p_out_dir);
@@ -161,16 +209,17 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     const int m = MAX(0, int(std::floor(std::log2(p_extent_km * 1000.0 / n / ground.voxel_size))));
     const double spacing_m = std::ldexp(ground.voxel_size, m);
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
-    const Sampled s = sample(table, sdf.get_spec(), sdf.get_datum_y(), m, n);
+    const Sampled s = sample(table, sdf, p_surface, m, n);
     const double us_per_point = double(Time::get_singleton()->get_ticks_usec() - t0) / (double(n) * n);
 
     String md = "# Climate report\n\n";
-    md += vformat("`%s` at %s m voxels, %d LODs: %d fields, %d biomes. Slice through the datum, %d x %d points of lattice %d (%s m apart, "
-                  "%s km across). CPU: %s us per point (fields + weights + pick, over the worker pool).\n\n",
-            p_climate_path, String::num(ground.voxel_size, 6), p_lods, s.nf, s.nb, n, n, m, String::num(spacing_m, 2), String::num(n * spacing_m / 1000.0, 1),
+    md += vformat("`%s` at %s m voxels, %d LODs: %d fields, %d biomes. Slice %s, %d x %d points of lattice %d (%s m apart, "
+                  "%s km across). CPU: %s us per point (ground trace + fields + weights + pick, over the worker pool).\n\n",
+            p_climate_path, String::num(ground.voxel_size, 6), p_lods, s.nf, s.nb, p_surface ? "on the ground surface" : "through the datum", n, n, m, String::num(spacing_m, 2), String::num(n * spacing_m / 1000.0, 1),
             String::num(us_per_point, 2));
     Array images;
     md += biome_section(table, s, n, p_out_dir, images) + String("\n");
+    md += border_section(table, s, n, spacing_m, ground.voxel_size) + String("\n");
     md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
     md += "\nImages (x right, z down): ";
     for (int64_t i = 0; i < images.size(); i++) {
