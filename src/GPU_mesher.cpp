@@ -34,6 +34,8 @@
 #include "page_format.hpp"
 #include "rd_utils.hpp"
 
+#include <cstring>
+
 static constexpr const char GLSL_BUFFER_BINDING[] = R"glsl(
 layout(set = 0, binding = 0, std430) restrict buffer AtomicCounter {
     uint atomic_counter[];
@@ -906,8 +908,21 @@ void GPUMesher::process_queue() {
         }
         SDFGpuTable *table = sdf->get_gpu_table();
         std::vector<std::vector<uint32_t>> palettes;
-        table->build_lists(in_flight_ids, chunk_param, new_batch, table_list, &palettes);
+        const uint32_t kept = table->build_lists(in_flight_ids, chunk_param, new_batch, table_list, uint32_t(table_list_capacity / 4), &palettes);
+        // The chunks whose lists didn't fit the buffer go first in a later batch (remesh_queue holds first meshes too,
+        // remesh_chunks puts the batch in flight there).
+        for (uint32_t i = kept; i < count; i++) {
+            const ChunkId &chunk = in_flight_ids[i];
+            working_generation.erase(chunk);
+            remesh_queue[ChunkMath::get_lod(chunk)]->insert(chunk);
+            unpacked_chunks[i] = UnpackChunk();
+            std::memset(new_batch.ptrw() + int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES, 0, GPUFrame::CHUNK_INPUT_BYTES); // an unused slot
+        }
+        in_flight_ids.resize(kept);
+        count = kept;
+        min_lod = 64;
         for (uint32_t i = 0; i < count; i++) {
+            min_lod = MIN(min_lod, ChunkMath::get_lod(in_flight_ids[i]));
             unpacked_chunks[i].palette = std::move(palettes[i]);
         }
         if (table->version() != sent_table_version) {

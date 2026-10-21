@@ -48,8 +48,8 @@ public:
     PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const override;
     uint32_t record_size() const override { return RECORD_BYTES; }
 
-    void build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
-            std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const override;
+    uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const override;
 
     Dictionary get_stats() const override;
     // The scene's own numbers (the forest), merged into get_stats(). Main thread, before the meshers start.
@@ -64,6 +64,7 @@ private:
         int64_t build_usec = 0;
         int64_t batches = 0;
         int64_t truncated = 0;
+        int64_t split = 0; // batches ended early: their next chunk's list didn't fit (queued again)
         int64_t palette_truncated = 0; // chunks naming more than ChunkPalette::MAX_ENTRIES materials
         int64_t palette_entries[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t palette_longest[ChunkMath::MAX_LOD_NUMBERS] = {};

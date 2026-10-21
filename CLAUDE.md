@@ -264,8 +264,11 @@ to every change, and a reviewer may reject a PR on any of them.
   worker and publishing when done is the follow-up). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
   write per page); the GPU re-uploads the runs of pages changed since its version (`record_bytes` spans,
   `SDFGpuTable::upload_records`). `build_lists` runs on the worker pool; the list buffer holds batch size *
-  `max_chunk_list()` (4,096) words, a batch over it is cut (ERR, `table.list_truncated`; the GPU then
-  disagrees with the CPU there). `get_debug_stats()["table"]`: list length avg / max per LOD,
+  `max_chunk_list()` (4,096) words whatever the batch's chunk count; a batch keeps the leading chunks whose lists fit
+  it whole and the meshers queue the rest again (`table.list_split`, `list_requeued`: a LOD 6 forest chunk lists ~9k
+  records, and the budget-cut batches of 2-3 chunks used to truncate them, empty chunk squares in the canopy); only a
+  single list over the whole buffer is cut (ERR, `table.list_truncated`; the GPU then disagrees with the CPU there).
+  `get_debug_stats()["table"]`: list length avg / max per LOD,
   list build ms. `SDFBase::cull_exempt` (`near_instance`, from the index: per-LOD occupancy + coarser
   nodes' boxes) feeds the discoverer's no-cull rule, band or not: a node near an instance's box is never
   culled (asked only when the corners would cull). FrameSpike's table probe checks the library + fold (with

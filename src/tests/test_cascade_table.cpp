@@ -1,7 +1,9 @@
 #include "test_common.hpp"
 
+#include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <string>
 #include <thread>
@@ -543,4 +545,73 @@ TEST_CASE("SDFCascade table: the edit overlay lists exactly what a whole new ind
     CHECK(runs.size() == 2); // pages 0 and 1 merge into one run
     store.changed_since(UINT32_MAX, runs);
     CHECK((runs.size() == 1 && runs[0].second == 3u * RecordStore::PAGE + 1u));
+}
+
+// A batch's lists fill the mesher's buffer at most: build_lists keeps the leading chunks whose lists fit whole and
+// leaves the rest to a later batch (the viewer's forest drew bare squares where a short batch cut its lists: their
+// blobs, last in id order, and every later chunk's whole list). Only one list over the whole buffer is truncated.
+TEST_CASE("SDFCascade table: a batch keeps the chunks whose lists fit the buffer whole, the rest wait") {
+    ScatteredCascade t(2000);
+    const std::shared_ptr<const InstanceSnapshot> snap = t.sdf.get_snapshot();
+    SDFGpuTable *table = t.sdf.get_gpu_table();
+    std::vector<ChunkId> chunks;
+    for (uint32_t r = 0; r < snap->records.size() && chunks.size() < 16; r += 7) {
+        const ChunkId c = chunk_at_voxel(snap->records[r].anchor, 3, t.param);
+        if (std::find(chunks.begin(), chunks.end(), c) == chunks.end()) {
+            chunks.push_back(c);
+        }
+    }
+    std::vector<std::vector<uint32_t>> want(chunks.size());
+    size_t total = 0;
+    for (size_t i = 0; i < chunks.size(); i++) {
+        snap->chunk_list(chunks[i], want[i]);
+        total += want[i].size();
+    }
+    CHECK(chunks.size() >= 8);
+    CHECK(want[0].size() > 4);
+    if (chunks.size() < 2 || want[0].size() <= 4) {
+        return;
+    }
+    const auto encode = [&](PackedByteArray &r_ids) {
+        r_ids.resize(int64_t(chunks.size()) * GPUFrame::CHUNK_INPUT_BYTES);
+        for (size_t i = 0; i < chunks.size(); i++) {
+            GPUFrame::encode_chunk_input(r_ids, int64_t(i), chunks[i], t.param);
+        }
+    };
+    const int64_t truncated0 = int64_t(table->get_stats()["list_truncated"]);
+    for (const size_t capacity : { total, total / 2, want[0].size() }) {
+        CAPTURE(capacity);
+        PackedByteArray ids, words;
+        encode(ids);
+        std::vector<std::vector<uint32_t>> palettes;
+        const uint32_t kept = table->build_lists(chunks, t.param, ids, words, uint32_t(capacity), &palettes);
+        size_t used = 0;
+        for (uint32_t i = 0; i < kept; i++) {
+            const uint32_t offset = ids.decode_u32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + 12);
+            const int32_t count = ids.decode_s32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + 28);
+            CHECK(offset == used);
+            CHECK(size_t(count) == want[i].size());
+            for (int32_t k = 0; k < count && size_t(k) < want[i].size(); k++) {
+                CHECK((words.decode_u32(int64_t(offset + uint32_t(k)) * 4) & SDFGpuTable::LIST_ID_MASK) == want[i][k]);
+            }
+            used += size_t(count);
+        }
+        CHECK(kept >= 1);
+        CHECK(palettes.size() == kept);
+        CHECK(used <= capacity);
+        CHECK(int64_t(words.size()) == int64_t(used) * 4);
+        if (kept < chunks.size()) {
+            CHECK(used + want[kept].size() > capacity); // cut where the next list doesn't fit
+        }
+        if (capacity == total) {
+            CHECK(kept == chunks.size());
+        }
+    }
+    CHECK(int64_t(table->get_stats()["list_truncated"]) == truncated0);
+    // A first list longer than the whole buffer: cut (counted), alone in its batch.
+    PackedByteArray ids, words;
+    encode(ids);
+    CHECK(table->build_lists(chunks, t.param, ids, words, uint32_t(want[0].size() - 1)) == 1u);
+    CHECK(ids.decode_s32(28) == int32_t(want[0].size() - 1));
+    CHECK(int64_t(table->get_stats()["list_truncated"]) == truncated0 + 1);
 }
