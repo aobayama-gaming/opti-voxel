@@ -72,6 +72,16 @@ struct VoxelBox {
     bool contains(const VoxelPos &p_v) const {
         return valid && lo.x <= p_v.x && p_v.x <= hi.x && lo.y <= p_v.y && p_v.y <= hi.y && lo.z <= p_v.z && p_v.z <= hi.z;
     }
+    // The part of this box inside p_o (invalid if they don't meet).
+    VoxelBox clipped(const VoxelBox &p_o) const {
+        VoxelBox r;
+        r.valid = intersects(p_o);
+        for (int a = 0; a < 3; a++) {
+            r.lo[a] = lo[a] > p_o.lo[a] ? lo[a] : p_o.lo[a];
+            r.hi[a] = hi[a] < p_o.hi[a] ? hi[a] : p_o.hi[a];
+        }
+        return r;
+    }
 };
 
 // For godot HashMap / HashSet. Folds each int64 to 32 bits (high word scrambled in), then the same

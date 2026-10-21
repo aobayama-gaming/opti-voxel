@@ -69,6 +69,8 @@ struct TreeTypes {
     float crown_dent = 0.0f; // how far the bumps can reach inside its radius (voxels)
 };
 TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, int p_cone = -1);
+// Appends the three tree types to r_library (branch: bark; crown, cone: leaves), in that order, and returns them.
+TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel);
 
 // One stem as grown (tests): its order, base and tip radius and the radii of the children forking off it (voxels).
 struct TreeStem {
@@ -81,6 +83,22 @@ struct TreeStem {
 // A unit direction in absolute axes (SDFBase::up_at).
 using UpAxis = std::array<double, 3>;
 inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
+
+// The rotation (rows: absolute to local) whose local y is p_up (a cone tier's, a tree's moments far away): the
+// identity for UP_Y, the smallest rotation taking +y to p_up above the horizon; below it, half a turn about x then the
+// smallest from -y (so x and z flip where up crosses the horizon).
+void up_rotation(const UpAxis &p_up, float r_rows[9]);
+
+// A tree's size factor, drawn first from its seed, uniform in [TREE_SCALE_MIN, TREE_SCALE_MIN + TREE_SCALE_SPAN):
+// every length of the tree is its species' times it (so its volume goes as its cube).
+inline constexpr double TREE_SCALE_MIN = 0.8;
+inline constexpr double TREE_SCALE_SPAN = 0.4;
+double tree_scale(uint32_t p_seed);
+
+// The order of cells (and their trees): z, then y, then x.
+inline bool cell_order(const VoxelPos &p_a, const VoxelPos &p_b) {
+    return p_a.z != p_b.z ? p_a.z < p_b.z : (p_a.y != p_b.y ? p_a.y < p_b.y : p_a.x < p_b.x);
+}
 
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
 // boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the
@@ -137,8 +155,10 @@ void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, c
 inline constexpr double SURFACE_NODE_SIDES = 2.0;
 
 // The forest in [p_lo, p_hi]: surface_sites without the sites within SITE_SPACING cells of a neighbouring cell's site
-// that comes first in cell order (the projection can bring two cells' sites together). Still a pure function of the
-// cell: the neighbours come from the box grown by a cell.
-void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<TreeSite> &r_out);
+// that comes first in cell order (the projection can bring two cells' sites together); only the neighbours whose base
+// lies in p_members count (a forest's zone; null: any). Still a pure function of the cell: the neighbours come from
+// the box grown by a cell.
+void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out,
+        const VoxelBox *p_members = nullptr);
 
 } // namespace Archetype

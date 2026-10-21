@@ -324,7 +324,14 @@ to every change, and a reviewer may reject a PR on any of them.
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). Still column-based (flat debt): the scene's centre (`ground_y`) and the lake keep-out
   (`in_lake(x, z)`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
-  every tree: forest5cm is another forest than before PR B. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
+  every tree: forest5cm is another forest than before PR B. **The forest generator** (`src/forest_generator.*`):
+  `ForestGenerator` (zone box + cell side; `trees(query)` = `forest_sites` on query and zone, a tree keyed by its cell:
+  two halves of a box give the trees of the whole, unit-tested) is how `add_forest` places the forest, and what streaming
+  will query by cell. `TreeClasses`: a tree's far-field moments without growing it, the mean of its class (species x 8
+  size buckets of `tree_scale`, 32 grown samples each, brought to scale 1) resized by its scale and turned to its up
+  (`up_rotation`, the cone tiers' rotation). Per tree at 5 cm: volume error median 0.4-1.1% (p95 8-12%), centroid 0.08-0.13
+  of its spread, largest semi-axis 0.2-0.9%; summed over 400 trees within 0.5% (one class per species: the broadleaf's
+  leaves 5% light, the record budget cuts big trees' clumps). `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second

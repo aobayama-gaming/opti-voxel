@@ -77,6 +77,19 @@ Moments Moments::scaled(double p_weight) const {
     return r;
 }
 
+Moments Moments::resized(double p_factor) const {
+    Moments r = *this;
+    const double f2 = p_factor * p_factor;
+    r.m0 *= f2 * p_factor;
+    for (double &v : r.c) {
+        v *= p_factor;
+    }
+    for (double &v : r.s) {
+        v *= f2 * f2 * p_factor;
+    }
+    return r;
+}
+
 Moments Moments::rotated(const float *p_r) const {
     Moments out = *this;
     local_to_world(p_r, c, out.c);

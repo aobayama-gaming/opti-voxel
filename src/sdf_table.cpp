@@ -1,5 +1,6 @@
 #include "sdf_table.hpp"
 
+#include "forest_generator.hpp"
 #include "moment_layers.hpp"
 #include "parallel_for.hpp"
 
@@ -288,9 +289,10 @@ VoxelBox SDFTable::record_box(const TableRecord &p_rec) {
 
 void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats) {
     const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
-    std::vector<TreeSite> sites;
-    const int64_t side = forest_cell_side(forest_count, forest_area, p_voxel);
-    if (side > 0) {
+    std::vector<CellSite> sites;
+    ForestGenerator generator;
+    generator.side = forest_cell_side(forest_count, forest_area, p_voxel);
+    if (generator.side > 0) {
         // The zone: the square of side forest_area around the scene's centre, over every height the ground can reach in
         // it (4 times its half side up and down from the ground at the centre; the walk only tries the cells along the
         // surface, so the empty air costs nothing). The scene's centre is still found down a column (ground_y).
@@ -298,7 +300,8 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
         const VoxelPos centre(x, ground_y(x, z), z);
         const int64_t half = std::llround(0.5 * forest_area / p_voxel);
         const VoxelPos reach(half, 4 * half, half);
-        forest_sites(centre - reach, centre + reach, side, [this](const VoxelPos &p_v) { return ground_field(p_v); }, sites);
+        generator.zone = VoxelBox{ centre - reach, centre + reach, true };
+        generator.trees(generator.zone, [this](const VoxelPos &p_v) { return ground_field(p_v); }, sites);
     }
     // Each site's tree is independent (up_at and the library are const): on the worker pool, a batch at a time (the
     // parts wait for their turn), then admitted in site order (the record ids don't change).
@@ -311,14 +314,14 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     for (size_t i = 0; i < sites.size(); i++) {
         if (i % BATCH == 0) {
             parallel_for(uint32_t(MIN(BATCH, sites.size() - i)), "SDFTable::add_forest", [&](uint32_t p_j) {
-                TreeSite &site = sites[i + p_j];
+                const TreeSite &site = sites[i + p_j].site;
                 grown[p_j].clear(); // empty: in a lake
                 if (!in_lake(site.base.x, site.base.z)) {
                     grow_tree(tree_species()[site.species], site.base, up_at(site.base), site.seed, p_voxel, p_types, grown[p_j]);
                 }
             });
         }
-        const TreeSite &site = sites[i];
+        const TreeSite &site = sites[i].site;
         std::vector<TableRecord> &parts = grown[i % BATCH];
         const uint32_t first = records.size();
         if (parts.empty() || !admit(parts, "tree")) {
@@ -358,6 +361,30 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     forest["records_per_tree_max"] = most;
     forest["moments"] = materials_stats;
     forest["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    if (!trees.empty()) {
+        // What the far field will read for this forest: per material, the class moments' summed volume over the trees'
+        // own (forest_generator.hpp; 1 within 0.5% in the unit test).
+        const uint64_t classes_us = Time::get_singleton()->get_ticks_usec();
+        const TreeClasses classes(*library, p_types, p_voxel);
+        double guess[2] = {};
+        for (const TreeSpan &t : trees) {
+            TreeSite site;
+            site.seed = t.seed;
+            site.species = t.species;
+            const MaterialMoments mm = classes.tree(site, UP_Y); // volumes don't turn
+            for (int i = 0; i < 2; i++) {
+                if (const Moments *m = mm.find(tree_materials[i])) {
+                    guess[i] += m->m0;
+                }
+            }
+        }
+        Dictionary class_stats;
+        for (int i = 0; i < 2; i++) {
+            class_stats[materials.name(tree_materials[i])] = volume[i] > 0.0 ? guess[i] / volume[i] : 0.0;
+        }
+        class_stats["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - classes_us) * 1e-3;
+        forest["classes"] = class_stats;
+    }
     r_stats["trees"] = forest;
 }
 
@@ -581,9 +608,7 @@ void SDFTable::build_table(int p_lod_count) {
     lib.add(make_sphere_type());
     types.capsule = lib.add(make_capsule_type());
     types.rock = lib.add(make_rock_type(ExactNoise::lattice_k(8.0, vs), ROCK_SEED));
-    const int branch = lib.add(make_branch_type(), Material::BARK);
-    const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
-    const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
+    const TreeTypes tree_types = add_tree_types(lib, vs);
     if (scene == Scene::SHAPES) {
         types.holed_cube = lib.add(make_swiss_cube_type(1));
         types.die = lib.add(make_die_type());
@@ -617,7 +642,7 @@ void SDFTable::build_table(int p_lod_count) {
     Dictionary scene_stats;
     add_biomes(types, scene_stats);
     add_scatter(types);
-    add_forest(crown_types(branch, crown, lib[crown], cone), vs, SCENE_X, SCENE_Z, scene_stats);
+    add_forest(tree_types, vs, SCENE_X, SCENE_Z, scene_stats);
     add_moment_blobs(blob, scene_stats);
     gpu.set_scene_stats(scene_stats);
     edit_regions.clear();
