@@ -686,12 +686,14 @@ void VoxelTerrain::_ready() {
     chunk_discoverer->set_gpu(discoverer_mode != 0);
     chunk_discoverer->set_compare(discovery_compare);
 
-    // The pixel error is measured against the camera's real vertical FOV and viewport height.
+    // The pixel error is measured against the camera's real vertical FOV and the 3D render's height: an upscaler's
+    // render scale (scaling_3d_scale) makes its pixels larger, and the LOD coarser with them.
     float viewport_height = 1080.0f;
     float fov_rad = Math::deg_to_rad(75.0f);
     float aspect = 16.0f / 9.0f;
     if (camera != nullptr) {
-        const Vector2 viewport_size = camera->get_viewport()->get_visible_rect().size;
+        Viewport *viewport = camera->get_viewport();
+        const Vector2 viewport_size = viewport->get_visible_rect().size * float(viewport->get_scaling_3d_scale());
         viewport_height = MAX(viewport_size.y, 1.0f);
         aspect = viewport_size.x > 0.0f ? viewport_size.x / viewport_height : aspect;
         fov_rad = Math::deg_to_rad(float(camera->get_fov()));

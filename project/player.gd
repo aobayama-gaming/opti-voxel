@@ -53,6 +53,7 @@ var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 
 func _enter_tree() -> void:
+	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
 	for a in Presets.user_args():
 		if a.begins_with("--lods=") and terrain:
@@ -142,13 +143,13 @@ func _ready():
 	for a in Presets.user_args():
 		if a.begins_with("--marks="):
 			marks_dir = a.trim_prefix("--marks=")
-	_setup_upscaling()
 	DirAccess.make_dir_recursive_absolute(marks_dir)
 	get_tree().auto_accept_quit = false
 
 # Godot's built-in 3D upscalers (no DLSS in 4.6): `--upscale=fsr2|fsr1|bilinear` renders the 3D at
-# `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD follows the
-# window's pixels, not the render's, so the meshes keep their detail.
+# `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD's pixel error
+# is in render pixels, so 0.5 draws the meshes of twice the error. FSR 2 needs `--render-thread safe`: on the separate
+# render thread Godot 4.6.3 exits silently while loading its shaders.
 func _setup_upscaling() -> void:
 	var modes := {
 		"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
