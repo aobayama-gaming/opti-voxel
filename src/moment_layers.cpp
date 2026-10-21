@@ -377,6 +377,11 @@ void MomentLayers::finish_layer(Layer &r_layer) {
     for (std::pair<const CellKey, Cell> *c : cells) {
         place(r_layer, c->first, c->second);
     }
+    if (params.judged.valid) {
+        cells.erase(std::remove_if(cells.begin(), cells.end(),
+                            [this](const std::pair<const CellKey, Cell> *p_c) { return !params.judged.contains(VoxelPos(p_c->first.x, p_c->first.y, p_c->first.z)); }),
+                cells.end());
+    }
     // Each verdict reads the other blobs, writes only its own.
     std::vector<uint64_t> tests(cells.size());
     parallel_for(uint32_t(cells.size()), "MomentLayers::pruning", [&](uint32_t p_i) { tests[p_i] = judge(r_layer, cells[p_i]->first, cells[p_i]->second); });

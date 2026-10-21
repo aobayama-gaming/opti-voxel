@@ -137,6 +137,12 @@ protected:
     // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
     // (metres). Call from configure(), after SDFBase's and once ground_y works.
     void build_table(int p_lod_count);
+    // Waits for the forest's keys being computed and drops the stream: their jobs call the subclass's ground_field, so a
+    // subclass calls it from its destructor.
+    void stop_forest() {
+        gpu.set_stream(nullptr, 0);
+        forest_stream.reset();
+    }
 
 private:
     // The library indices the scenes place.

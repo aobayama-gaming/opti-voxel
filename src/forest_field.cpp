@@ -366,9 +366,12 @@ void ForestField::far_items(const FieldKey &p_key, std::vector<MomentItem> &r_it
     // cells as the trees do (spreading each over its patch as well made the blobs 1.6-2 times too wide).
     const int64_t c = layer_cell(p_key.lod);
     const int64_t g = MAX<int64_t>(1, c / PROXY_PER_CELL);
-    const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * c + int64_t(std::ceil(prof.reach)));
+    // A proxy outside the zone weighs nothing: the walk stops a cell past it.
+    const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * c + int64_t(std::ceil(prof.reach))).clipped(set.generator.zone.grown(g));
     std::vector<CellSite> sites;
-    surface_sites(region.lo, region.hi, g, set.ground, sites);
+    if (region.valid) {
+        proxy_sites(region, g, sites);
+    }
     const double side = double(set.generator.side);
     const VoxelBox &zone = set.generator.zone;
     const ForestProfile::Lost &lost = prof.lost[p_key.lod];
@@ -404,6 +407,56 @@ void ForestField::far_items(const FieldKey &p_key, std::vector<MomentItem> &r_it
     }
 }
 
+void ForestField::proxy_sites(const VoxelBox &p_box, int64_t p_side, std::vector<CellSite> &r_out) const {
+    const int64_t block = SITE_BLOCK_CELLS * p_side;
+    VoxelPos lo, hi;
+    for (int a = 0; a < 3; a++) {
+        lo[a] = WorldCoord::floor_div(p_box.lo[a], block);
+        hi[a] = WorldCoord::floor_div(p_box.hi[a], block);
+    }
+    const size_t first = r_out.size();
+    for (int64_t z = lo.z; z <= hi.z; z++) {
+        for (int64_t y = lo.y; y <= hi.y; y++) {
+            for (int64_t x = lo.x; x <= hi.x; x++) {
+                const SiteBlock key(p_side, x, y, z);
+                std::shared_ptr<const std::vector<CellSite>> sites;
+                {
+                    const std::lock_guard<std::mutex> lock(site_mutex);
+                    const auto it = site_blocks.find(key);
+                    if (it != site_blocks.end()) {
+                        it->second.used = ++site_clock;
+                        sites = it->second.sites;
+                    }
+                }
+                if (!sites) { // walked outside the lock: two tiles may walk a block at once, the same sites
+                    auto walked = std::make_shared<std::vector<CellSite>>();
+                    const VoxelPos b = VoxelPos(x, y, z) * block;
+                    surface_sites(b, b + VoxelPos(block - 1, block - 1, block - 1), p_side, set.ground, *walked);
+                    sites = walked;
+                    const std::lock_guard<std::mutex> lock(site_mutex);
+                    site_blocks[key] = Sites{ sites, ++site_clock };
+                    if (site_blocks.size() > SITE_BLOCKS_KEPT) {
+                        std::vector<std::pair<uint64_t, SiteBlock>> old;
+                        for (const std::pair<const SiteBlock, Sites> &kv : site_blocks) {
+                            old.push_back({ kv.second.used, kv.first });
+                        }
+                        std::sort(old.begin(), old.end());
+                        for (size_t i = 0; i < old.size() / 2; i++) {
+                            site_blocks.erase(old[i].second);
+                        }
+                    }
+                }
+                for (const CellSite &s : *sites) {
+                    if (p_box.contains(s.site.base)) {
+                        r_out.push_back(s);
+                    }
+                }
+            }
+        }
+    }
+    std::sort(r_out.begin() + first, r_out.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
+}
+
 void ForestField::blobs(const FieldKey &p_key, std::vector<MomentBlob> &r_out, const Lookup &p_inputs) const {
     r_out.clear();
     if (!has_layer(p_key.lod)) {
@@ -415,11 +468,17 @@ void ForestField::blobs(const FieldKey &p_key, std::vector<MomentBlob> &r_out, c
     } else {
         far_items(p_key, items);
     }
-    if (items.empty()) {
+    // An item tents into the cells within a cell of its centroid, which lies within two reaches of its anchor (a part's
+    // anchor and centroid are both in its box, within the reach of its base): none near the tile's own cells, no blob
+    // (most tiles of a column: their region reaches the ground, their cells don't).
+    const VoxelBox near = tile_box(p_key).grown(layer_cell(p_key.lod) + 2 * int64_t(std::ceil(prof.reach)));
+    if (std::none_of(items.begin(), items.end(), [&near](const MomentItem &p_i) { return near.contains(p_i.anchor); })) {
         return;
     }
     MomentLayerParams params = set.layers;
     params.lod_min = params.lod_max = p_key.lod;
+    const int64_t own = blob_tile_cells(p_key.lod);
+    params.judged = VoxelBox{ p_key.tile * own, p_key.tile * own + VoxelPos(own - 1, own - 1, own - 1), true }; // its own cells
     MomentLayers layers;
     layers.build(items, params, &prof.joins);
     layers.kept(r_out);

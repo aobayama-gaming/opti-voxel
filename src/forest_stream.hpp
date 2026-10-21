@@ -2,13 +2,15 @@
 
 #include "forest_field.hpp"
 
-#include <godot_cpp/classes/worker_thread_pool.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 
+#include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 // The streamed forest's residency: which keys of a ForestField (forest_field.hpp) are computed, and where their records
@@ -16,7 +18,7 @@
 // (a pure function of each key) and its list folds them in key order, so a chunk's content is a pure function of its id
 // whatever streamed when, and no chunk is meshed twice because a key arrived late.
 //
-// Keys are computed on the worker pool, their inputs first (a coarser tree tile reads its LOD-0 tile, a part layer's blob
+// Keys are computed on the stream's own threads (Godot's pool gives low-priority tasks a few of its threads), their inputs first (a coarser tree tile reads its LOD-0 tile, a part layer's blob
 // tile the LOD-0 tree tiles around it: kept in a CPU cache for their readers), and a listed key's records are copied into
 // slots: the GPU table's records from slot_base on, uploaded as the pages changed since a mesher's version. Nothing is
 // freed until room is needed; then the keys least recently asked for, none asked for in the last GRACE_FRAMES (a batch in
@@ -26,12 +28,12 @@ namespace Archetype {
 class ForestStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
-    static constexpr int MAX_RUNNING = 48; // keys computed at once
+    static constexpr int MAX_RUNNING = 48; // keys handed to the workers at once
     static constexpr int64_t INPUT_CACHE_RECORDS = int64_t(4) << 20; // the LOD-0 tree tiles kept for their readers, in records
     static constexpr int64_t DEMAND_CACHE_RECORDS = int64_t(1) << 20; // the contents CPU evaluations computed, in records
 
     ForestStream(std::shared_ptr<const ForestField> p_field, const ChunkParam &p_param, uint32_t p_slot_base, uint32_t p_slot_capacity);
-    ~ForestStream(); // waits for the keys being computed
+    ~ForestStream(); // waits for the keys being computed, the others are dropped
 
     const ForestField &field() const { return *field_ptr; }
     uint32_t slot_base() const { return base; }
@@ -67,7 +69,8 @@ private:
         std::vector<std::pair<FieldKey, std::shared_ptr<const FieldContent>>> inputs;
         std::shared_ptr<FieldContent> out;
         uint64_t usec = 0;
-        static void run(void *p_job);
+        std::atomic<bool> done{ false };
+        void run();
     };
     struct Entry {
         enum State {
@@ -85,7 +88,6 @@ private:
         bool listed = false; // a chunk lists it: it goes in slots
         uint64_t used = 0; // the frame it was last asked for
         std::unique_ptr<Job> job;
-        WorkerThreadPool::TaskID task = -1;
     };
 
     std::shared_ptr<const ForestField> field_ptr;
@@ -93,6 +95,13 @@ private:
     uint32_t base = 0;
     uint32_t capacity = 0;
     std::unordered_map<FieldKey, Entry, KeyHash> entries;
+    // The workers (half the hardware threads, at least 2), each computing one key at a time, inline.
+    std::vector<std::thread> workers;
+    std::mutex job_mutex;
+    std::condition_variable job_cv;
+    std::deque<Job *> jobs; // handed out, not started
+    bool stopping = false;
+    void work();
     std::deque<FieldKey> queued; // to start, in the order asked
     std::vector<FieldKey> waiting; // for inputs
     int running = 0;
@@ -113,12 +122,18 @@ private:
     struct Stats {
         int64_t computed = 0;
         int64_t compute_usec = 0;
+        // Per kind (FieldKey::Kind) and LOD: keys computed, their time and records.
+        int64_t by_count[2][ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t by_usec[2][ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t by_records[2][ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t placed = 0;
         int64_t evicted = 0;
         int64_t slots_full = 0; // placements refused: no room even after evicting
         int64_t slots_peak = 0;
         int64_t ready_asked = 0;
         int64_t ready_waits = 0;
+        int64_t asked_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t waited_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
     };
     Stats stats;
     mutable std::atomic<int64_t> lists_missing{ 0 }; // keys a list needed that weren't resident (should stay 0)

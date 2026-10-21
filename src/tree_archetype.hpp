@@ -108,14 +108,6 @@ inline bool cell_order(const VoxelPos &p_a, const VoxelPos &p_b) {
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
         std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems = nullptr);
 
-// A tree in the table: its records are the ids [first, first + count), grown from (species, seed).
-struct TreeSpan {
-    uint32_t first = 0;
-    uint32_t count = 0;
-    int species = 0;
-    uint32_t seed = 0;
-};
-
 // Where a tree stands: the bottom of its trunk (absolute LOD0 voxel), its seed and species.
 struct TreeSite {
     VoxelPos base;

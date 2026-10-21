@@ -79,6 +79,9 @@ struct MomentLayerParams {
     bool keep_cover = true;
     int lod_min = 0; // the layers built
     int lod_max = 14;
+    // Valid: only the cells whose index (on the layer's grid) lies in it are judged, so kept (a streamed tile's own cells;
+    // the others only sum, for their pruning neighbours). Not for edits.
+    VoxelBox judged;
 };
 
 // A blob of layer lod: a record-to-be (SDFTable places it in the table).

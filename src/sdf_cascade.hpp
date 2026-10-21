@@ -33,6 +33,9 @@ public:
     // discovery keep more chunks, never drop one, but it must stay several cells of the largest LOD.
     static constexpr int32_t DY_LIMIT = 1 << 30;
 
+    // The forest's keys still computing read ground_field: they finish while this class is whole.
+    ~SDFCascade() override { stop_forest(); }
+
     // Set before configure(). LINEAR4 (value + gradient) is the meshed set: by the design's criterion G7
     // (keep 8 channels unless they cost > 15% more GPU time than 4), measured with CascadeSpike: the
     // 8-channel passes cost 1.30x the 4-channel ones (1.29 vs 1.00 ms per batch of 128 LOD-0 chunks).

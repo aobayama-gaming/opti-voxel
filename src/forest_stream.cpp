@@ -29,30 +29,54 @@ size_t ForestStream::KeyHash::operator()(const FieldKey &p_k) const {
     return ExactNoise::hash_cell(p_k.tile, uint32_t(p_k.kind * 64 + p_k.lod + 1) * 0x9E3779B1u);
 }
 
-void ForestStream::Job::run(void *p_job) {
-    Job &job = *static_cast<Job *>(p_job);
-    const InlineParallelFor inline_loops; // a pool task: the walks' and layers' loops run here
+void ForestStream::Job::run() {
+    const InlineParallelFor inline_loops; // one key per worker: the walks' and layers' loops run here
     const uint64_t t0 = now_usec();
-    job.out = std::make_shared<FieldContent>();
-    job.field->content(job.key, *job.out, [&job](const FieldKey &p_k) -> const FieldContent * {
-        for (const std::pair<FieldKey, std::shared_ptr<const FieldContent>> &in : job.inputs) {
+    out = std::make_shared<FieldContent>();
+    field->content(key, *out, [this](const FieldKey &p_k) -> const FieldContent * {
+        for (const std::pair<FieldKey, std::shared_ptr<const FieldContent>> &in : inputs) {
             if (in.first == p_k) {
                 return in.second.get();
             }
         }
         return nullptr; // computed there
     });
-    job.usec = now_usec() - t0;
+    usec = now_usec() - t0;
+    done.store(true, std::memory_order_release);
+}
+
+void ForestStream::work() {
+    for (;;) {
+        Job *job = nullptr;
+        {
+            std::unique_lock<std::mutex> lock(job_mutex);
+            job_cv.wait(lock, [this] { return stopping || !jobs.empty(); });
+            if (stopping) {
+                return;
+            }
+            job = jobs.front();
+            jobs.pop_front();
+        }
+        job->run();
+    }
 }
 
 ForestStream::ForestStream(std::shared_ptr<const ForestField> p_field, const ChunkParam &p_param, uint32_t p_slot_base, uint32_t p_slot_capacity) :
-        field_ptr(std::move(p_field)), param(p_param), base(p_slot_base), capacity(p_slot_capacity) {}
+        field_ptr(std::move(p_field)), param(p_param), base(p_slot_base), capacity(p_slot_capacity) {
+    const unsigned n = MAX(2u, std::thread::hardware_concurrency() / 2);
+    for (unsigned i = 0; i < n; i++) {
+        workers.emplace_back(&ForestStream::work, this);
+    }
+}
 
 ForestStream::~ForestStream() {
-    for (std::pair<const FieldKey, Entry> &kv : entries) {
-        if (kv.second.state == Entry::RUNNING) {
-            WorkerThreadPool::get_singleton()->wait_for_task_completion(kv.second.task);
-        }
+    {
+        const std::lock_guard<std::mutex> lock(job_mutex);
+        stopping = true; // the jobs not started are dropped with their entries
+    }
+    job_cv.notify_all();
+    for (std::thread &w : workers) {
+        w.join();
     }
 }
 
@@ -88,6 +112,9 @@ bool ForestStream::ready(const ChunkId &p_chunk) {
     }
     stats.ready_asked++;
     stats.ready_waits += !all;
+    const int lod = MIN(MAX(ChunkMath::get_lod(p_chunk), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
+    stats.asked_by_lod[lod]++;
+    stats.waited_by_lod[lod] += !all;
     return all;
 }
 
@@ -108,16 +135,24 @@ void ForestStream::start(const FieldKey &p_key, Entry &r_entry) {
         job.inputs.push_back({ k, in.content ? in.content : from_slots(slot_store, in.slot, in.count, in.groups) });
     }
     r_entry.job = std::move(job_ptr);
-    r_entry.task = WorkerThreadPool::get_singleton()->add_native_task(&Job::run, &job, false, "ForestStream");
+    {
+        const std::lock_guard<std::mutex> lock(job_mutex);
+        jobs.push_back(&job);
+    }
+    job_cv.notify_one();
     r_entry.state = Entry::RUNNING;
     running++;
 }
 
 void ForestStream::land(Entry &r_entry) {
-    WorkerThreadPool::get_singleton()->wait_for_task_completion(r_entry.task);
     running--;
     stats.computed++;
     stats.compute_usec += int64_t(r_entry.job->usec);
+    const FieldKey &key = r_entry.job->key;
+    const int lod = MIN(MAX(key.lod, 0), ChunkMath::MAX_LOD_NUMBERS - 1);
+    stats.by_count[key.kind][lod]++;
+    stats.by_usec[key.kind][lod] += int64_t(r_entry.job->usec);
+    stats.by_records[key.kind][lod] += int64_t(r_entry.job->out->records.size());
     r_entry.content = r_entry.job->out;
     r_entry.count = uint32_t(r_entry.content->records.size());
     r_entry.job.reset();
@@ -132,7 +167,7 @@ void ForestStream::poll() {
     const std::lock_guard<std::mutex> lock(mutex);
     frame++;
     for (std::pair<const FieldKey, Entry> &kv : entries) {
-        if (kv.second.state == Entry::RUNNING && WorkerThreadPool::get_singleton()->is_task_completed(kv.second.task)) {
+        if (kv.second.state == Entry::RUNNING && kv.second.job->done.load(std::memory_order_acquire)) {
             land(kv.second);
         }
     }
@@ -391,6 +426,20 @@ Dictionary ForestStream::get_stats() const {
     d["computed"] = stats.computed;
     d["compute_ms_avg"] = stats.computed > 0 ? double(stats.compute_usec) / 1000.0 / double(stats.computed) : 0.0;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
+    Dictionary by;
+    for (int kind = 0; kind < 2; kind++) {
+        for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
+            const int64_t n = stats.by_count[kind][lod];
+            if (n > 0) {
+                Dictionary k;
+                k["count"] = n;
+                k["ms_avg"] = double(stats.by_usec[kind][lod]) / 1000.0 / double(n);
+                k["records_avg"] = double(stats.by_records[kind][lod]) / double(n);
+                by[vformat("%s %d", kind == FieldKey::TREES ? "trees" : "blobs", lod)] = k;
+            }
+        }
+    }
+    d["computed_by_key"] = by;
     d["placed"] = stats.placed;
     d["evicted"] = stats.evicted;
     d["slots_used"] = slots_used();
@@ -400,6 +449,13 @@ Dictionary ForestStream::get_stats() const {
     d["cached_records"] = cached_records;
     d["chunks_asked"] = stats.ready_asked;
     d["chunks_waited"] = stats.ready_waits;
+    String per_lod; // asked / waited per LOD
+    for (int l = 0; l < ChunkMath::MAX_LOD_NUMBERS; l++) {
+        if (stats.asked_by_lod[l] > 0) {
+            per_lod += vformat("%sL%d %d/%d", per_lod.is_empty() ? "" : " ", l, stats.asked_by_lod[l], stats.waited_by_lod[l]);
+        }
+    }
+    d["chunks_asked_waited_per_lod"] = per_lod;
     d["lists_missing"] = lists_missing.load();
     d["evaluate_computed"] = demand_computed.load();
     return d;
