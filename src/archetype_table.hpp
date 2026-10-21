@@ -182,11 +182,18 @@ public:
             flat(p_flat) {}
     RecordView(const RecordStore &p_store) :
             store(&p_store) {}
-    const TableRecord &operator[](uint32_t p_i) const { return flat ? flat[p_i] : (*store)[p_i]; }
+    // p_store's records, then from id p_second_base on p_second's (a table's records and its streamed ones' slots).
+    RecordView(const RecordStore &p_store, const RecordStore *p_second, uint32_t p_second_base) :
+            store(&p_store), second(p_second), second_base(p_second_base) {}
+    const TableRecord &operator[](uint32_t p_i) const {
+        return flat ? flat[p_i] : (second && p_i >= second_base ? (*second)[p_i - second_base] : (*store)[p_i]);
+    }
 
 private:
     const TableRecord *flat = nullptr;
     const RecordStore *store = nullptr;
+    const RecordStore *second = nullptr;
+    uint32_t second_base = 0;
 };
 
 // The band rule for instances: a part is drawn whole while the grid resolves it, and erodes only over the LODs just

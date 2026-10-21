@@ -69,7 +69,7 @@ private:
     //worker availability
     Ref<Mutex> mutex;
     Ref<Semaphore> semaphore;
-    bool worker_available = true;
+    bool worker_available = false; // set by the worker once its device and buffers exist (process_queue sizes lists by them)
     bool result_available = false;
     bool exit_thread = false;
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)

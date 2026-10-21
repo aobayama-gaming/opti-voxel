@@ -413,6 +413,11 @@ void GPUMesher::_initialize_gpu_compute() {
 
 void GPUMesher::_execute_whole_pipeline() {
     _initialize_gpu_compute();
+    // Only now may process_queue build a batch: it sizes the lists by table_list_capacity, set above (before, a batch's
+    // first list was cut to 0 words: a validator chunk off on a forest).
+    mutex->lock();
+    worker_available = true;
+    mutex->unlock();
     VLOG(1, "GPUMesher : Worker started");
 
     while (true) {

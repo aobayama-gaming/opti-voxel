@@ -129,13 +129,15 @@ ForestProfile::ForestProfile(const DefLibrary &p_library, const TreeSamples &p_s
     }
 }
 
-void FieldContent::meeting(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, std::vector<uint32_t> &r_out) const {
-    for (const Group &g : groups) {
+void FieldContent::meeting(const std::vector<Group> &p_groups, RecordView p_records, uint32_t p_first, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod,
+        std::vector<uint32_t> &r_out) {
+    for (const Group &g : p_groups) {
         if (!g.bounds.listed_at(p_lod) || !influence_meets(g.bounds, p_lod, p_lo, p_hi)) {
             continue;
         }
-        for (uint32_t i = g.first; i < g.first + g.count; i++) {
-            if (records[i].listed_at(p_lod) && influence_meets(records[i], p_lod, p_lo, p_hi)) {
+        for (uint32_t i = p_first + g.first; i < p_first + g.first + g.count; i++) {
+            const TableRecord &rec = p_records[i];
+            if (rec.listed_at(p_lod) && influence_meets(rec, p_lod, p_lo, p_hi)) {
                 r_out.push_back(i);
             }
         }

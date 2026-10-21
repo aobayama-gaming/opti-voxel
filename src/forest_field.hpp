@@ -86,7 +86,12 @@ struct FieldContent {
     int64_t out_of_profile = 0; // trees with a part past the profile (reach, LODs, margins: chunks may miss it; stays 0)
 
     // Appends the indices (into records) of the records whose box test at p_lod can pass in [p_lo, p_hi].
-    void meeting(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, std::vector<uint32_t> &r_out) const;
+    void meeting(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, std::vector<uint32_t> &r_out) const {
+        meeting(groups, RecordView(records.data()), 0, p_lo, p_hi, p_lod, r_out);
+    }
+    // The same over p_groups whose records are p_records[p_first + i] (a streamed key's slots), appending p_first + i.
+    static void meeting(const std::vector<Group> &p_groups, RecordView p_records, uint32_t p_first, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod,
+            std::vector<uint32_t> &r_out);
 };
 
 class ForestField {
