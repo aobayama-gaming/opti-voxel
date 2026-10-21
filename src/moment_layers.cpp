@@ -139,11 +139,34 @@ void build_moment_blobs(const std::vector<MomentItem> &p_items, const MomentLaye
     // A blob under this many times min_occupancy on its own is a sliver of a part's tent.
     constexpr double SLIVER = 1.0 / 16.0;
     ERR_FAIL_COND_MSG(p_params.cell_shift < 1 || p_params.lod_max + p_params.cell_shift > 60, "build_moment_blobs: cells of 2^(lod + cell_shift) voxels must be within [2, 2^60].");
+    // Per material, the first LOD that has dropped min_mass_share of its mass.
+    std::map<uint32_t, std::vector<double>> dropped; // material -> mass dropped at each LOD (the last entry: never)
+    for (const MomentItem &item : p_items) {
+        std::vector<double> &d = dropped[item.material];
+        d.resize(p_params.lod_max + 2, 0.0);
+        d[MIN(MAX(item.drop_lod, 0), p_params.lod_max + 1)] += item.moments.m0;
+    }
+    std::map<uint32_t, int> joins;
+    for (const std::pair<const uint32_t, std::vector<double>> &d : dropped) {
+        double total = 0.0, sum = 0.0;
+        for (const double m : d.second) {
+            total += m;
+        }
+        int lod = p_params.lod_max + 1;
+        for (int l = 0; l <= p_params.lod_max; l++) {
+            sum += d.second[l];
+            if (sum >= p_params.min_mass_share * total) {
+                lod = l;
+                break;
+            }
+        }
+        joins[d.first] = lod;
+    }
     for (int lod = p_params.lod_min; lod <= p_params.lod_max; lod++) {
         const int64_t cell = int64_t(1) << (lod + p_params.cell_shift);
         std::map<CellKey, Moments> cells;
         for (const MomentItem &item : p_items) {
-            if (item.drop_lod > lod || item.moments.empty()) {
+            if (item.drop_lod > lod || item.moments.empty() || joins[item.material] > lod) {
                 continue;
             }
             // Tent weights over the 2 x 2 x 2 cells around the centroid (cell centres at (i + 1/2) cell).

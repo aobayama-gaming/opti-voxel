@@ -1,4 +1,5 @@
 #include "sdf_table.hpp"
+#include "moment_layers.hpp"
 
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/worker_thread_pool.hpp>
@@ -40,6 +41,7 @@ bool SDFTable::remove_instance(int p_id) {
     if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
         return false;
     }
+    ERR_FAIL_COND_V_MSG(records[p_id].op == Combine::ACCUM, false, "remove_instance: a moment blob is the table's, not an instance.");
     TableRecord rec = records[p_id];
     const VoxelBox region = record_box(rec);
     rec.removed = true;
@@ -52,6 +54,7 @@ bool SDFTable::move_instance(int p_id, const VoxelPos &p_anchor, const float *p_
     if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
         return false;
     }
+    ERR_FAIL_COND_V_MSG(records[p_id].op == Combine::ACCUM, false, "move_instance: a moment blob is the table's, not an instance.");
     const String error = edit_error(p_rotation, nullptr, 0, 0.0f);
     ERR_FAIL_COND_V_MSG(!error.is_empty(), false, "move_instance: " + error);
     TableRecord rec = records[p_id];
@@ -293,6 +296,73 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
     r_stats["biomes"] = biomes;
 }
 
+void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
+    if (!moment_blobs || !instance_band) {
+        return;
+    }
+    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
+    std::vector<MomentItem> items;
+    MomentLayerParams layers;
+    layers.lod_min = lod_count;
+    layers.lod_max = lod_count - 1;
+    // Fainter, even with its neighbours, than what draws a material: it would only lift the surface by an eighth of a cell.
+    layers.min_occupancy = MOMENT_MATERIAL_ISO;
+    for (uint32_t i = 0; i < records.size(); i++) {
+        const TableRecord &rec = records[i];
+        if (rec.removed || is_cutter(rec.op) || rec.op == Combine::ACCUM || rec.max_lod == TableRecord::NEVER_DROPPED) {
+            continue;
+        }
+        // From the first LOD it is gone at: dropped, or eroded past its half thickness (still listed, barely drawn).
+        const Moments m = record_moments((*library)[rec.def], rec);
+        const double half = m.half_thickness();
+        int gone = rec.max_lod;
+        for (int l = 0; l < gone; l++) {
+            if (double(band_erosion(rec.erode, rec.erode_from, l)) >= half) {
+                gone = l;
+                break;
+            }
+        }
+        items.push_back(MomentItem{ rec.anchor, m, rec.material, gone });
+        layers.lod_min = MIN(layers.lod_min, gone);
+    }
+    std::vector<MomentBlob> blobs;
+    build_moment_blobs(items, layers, blobs);
+    const TableDef &def = (*library)[p_blob_type];
+    Array per_lod;
+    per_lod.resize(lod_count);
+    per_lod.fill(int64_t(0));
+    int64_t refused = 0;
+    for (const MomentBlob &b : blobs) {
+        TableRecord rec;
+        rec.def = uint8_t(p_blob_type);
+        rec.op = Combine::ACCUM;
+        rec.anchor = b.anchor;
+        std::copy(b.rotation, b.rotation + 9, rec.rotation);
+        std::copy(b.inv_s2, b.inv_s2 + 3, rec.params);
+        rec.params[3] = b.amplitude;
+        rec.material = b.material;
+        if (!record_fit_error(def, rec, max_instance_extent()).is_empty() || records.size() > uint32_t(SDFGpuTable::LIST_ID_MASK)) {
+            refused++;
+            continue;
+        }
+        Archetype::finish_record(def, rec, param.skirt_depth, false);
+        rec.min_lod = uint8_t(b.lod);
+        rec.max_lod = uint8_t(b.lod + 1);
+        records.push_back(rec, version + 1);
+        per_lod[b.lod] = int64_t(per_lod[b.lod]) + 1;
+        has_moment_blobs = true;
+    }
+    Dictionary d;
+    d["items"] = int64_t(items.size());
+    d["blobs"] = int64_t(blobs.size());
+    d["blobs_per_lod"] = per_lod;
+    d["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    r_stats["moments"] = d;
+    if (refused > 0) {
+        ERR_PRINT(vformat("SDFTable: %d moment blobs left out (too wide, or the table is full).", refused));
+    }
+}
+
 bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
     for (const Biome::LavaPool &p : lava_pools) {
         const double dx = double(p_x - p.top.x), dz = double(p_z - p.top.z), keep = Biome::LAKE_KEEP_OUT * p.radius;
@@ -401,6 +471,7 @@ void SDFTable::build_table(int p_lod_count) {
     if (biome_radius > 0.0) {
         types.biome = Biome::add_types(lib, vs);
     }
+    const int blob = lib.add(make_moment_blob_type());
     library = std::make_shared<const DefLibrary>(lib);
     for (int i = 0; i < library->size(); i++) {
         const String error = (*library)[i].program.validate(p_lod_count);
@@ -411,6 +482,7 @@ void SDFTable::build_table(int p_lod_count) {
     lod_count = p_lod_count;
 
     records.clear();
+    has_moment_blobs = false;
     trees.clear();
     lava_pools.clear();
     if (scene == Scene::SHAPES) {
@@ -421,6 +493,7 @@ void SDFTable::build_table(int p_lod_count) {
     add_biomes(types, scene_stats);
     add_scatter(types);
     add_forest(crown_types(branch, crown, lib[crown], cone), vs, SCENE_X, SCENE_Z, scene_stats);
+    add_moment_blobs(blob, scene_stats);
     gpu.set_scene_stats(scene_stats);
     edit_k = 0.0f;
     edit_margin_c = 0.0f;

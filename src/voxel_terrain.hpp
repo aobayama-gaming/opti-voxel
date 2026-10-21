@@ -79,6 +79,7 @@ private:
     double archetype_tree_area = 60.0;
     double biome_radius = 0.0;
     bool archetype_band = true;
+    bool archetype_moments = true;
     float archetype_erode = Archetype::ERODE_CELLS;
     float archetype_resolve = Archetype::ErodeRule().resolve;
     bool legacy_trim_indices = false;
@@ -218,6 +219,10 @@ public:
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
     bool get_archetype_band() const;
+    // The far field of the dropped instances (default on): their moments, per LOD, as blobs the coarse chunks fold into a
+    // surface (moment_layers.hpp; --moments=0 to leave it out). Must be set before the node enters the tree.
+    void set_archetype_moments(bool p_enabled);
+    bool get_archetype_moments() const;
     // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): the skirt's depth and the fastest a part
     // shrinks before its drop (--instance_erode). Must be set before the node enters the tree.
     void set_archetype_erode(float p_cells);

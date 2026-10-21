@@ -978,6 +978,35 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
         rec.erode_from = (i % 3u) == 0u ? 1.0f : ((i % 3u) == 1u ? 2.0f : 32.0f);
         t.records.push_back(rec);
     }
+    // Moment blobs (Combine::ACCUM) among them: their occupancy summed, the far-field surface (moment_surface) on the
+    // register, near the same sample points.
+    const int blob = t.library.add(make_moment_blob_type());
+    for (uint32_t i = 0; i < 16; i++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0xB10Bu, 0x51u });
+        TableRecord rec;
+        rec.def = uint8_t(blob);
+        rec.op = Combine::ACCUM;
+        const OriginRun &run = p_runs[i % p_runs.size()];
+        const Case &near = run.cases[(size_t(i) * 4099u + 17u) % run.cases.size()];
+        rec.anchor = ChunkMath::sample_pos(near.chunk, near.grid, run.param).voxel + VoxelPos(int64_t(h.x % 7u) - 3, int64_t(h.y % 7u) - 3, 0);
+        const double yaw = double(h.z >> 8) * 1e-4;
+        const float cy = float(std::cos(yaw)), sy = float(std::sin(yaw));
+        const float rot[9] = { cy, 0.0f, -sy, 0.0f, 1.0f, 0.0f, sy, 0.0f, cy };
+        std::copy(rot, rot + 9, rec.rotation);
+        for (int a = 0; a < 3; a++) {
+            const float s = 3.0f + float((h.x >> (8 * a)) % 12u);
+            rec.params[a] = 1.0f / (s * s);
+        }
+        rec.params[3] = 0.1f + 0.08f * float(h.z % 16u);
+        const Bounds wb = record_world_bounds(t.library[rec.def], rec);
+        for (int a = 0; a < 3; a++) {
+            rec.box_lo[a] = int32_t(wb.lo[a] - rec.anchor[a]);
+            rec.box_hi[a] = int32_t(wb.hi[a] - rec.anchor[a]);
+        }
+        rec.lipschitz = wb.lipschitz;
+        rec.margin_c = 2.0f * wb.lipschitz + 2.0f;
+        t.records.push_back(rec);
+    }
     t.list.resize(t.records.size());
     t.palette.resize(t.records.size());
     for (uint32_t i = 0; i < t.list.size(); i++) {
@@ -1043,7 +1072,8 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
 vec4 terrain_sdf(WorldPos p, int lod) {
     bool touched = false;
     g_material = 0u;
-    return arch_finish(arch_fold(vec4(%s, %s, %s, %s), p, lod, touched, g_material), lod);
+    bool moments = false;
+    return arch_finish(arch_fold(vec4(%s, %s, %s, %s), p, lod, touched, g_material, moments), lod);
 }
 )glsl",
                                                                                                            ExactNoise::glsl_float(g.x), ExactNoise::glsl_float(g.y), ExactNoise::glsl_float(g.z), ExactNoise::glsl_float(g.w)));
@@ -1081,6 +1111,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
     int64_t won = 0; // samples (per LOD) where a record wins the fold: the material path is exercised
     int64_t samples = 0;
     int64_t near = 0; // samples inside an instance's influence box at the finest probe LOD
+    int64_t in_blob = 0; // samples inside a moment blob's box there
     std::vector<uint32_t> want(words);
     for (const OriginRun &run : p_runs) {
         const uint32_t n = uint32_t(run.cases.size());
@@ -1149,6 +1180,12 @@ vec4 terrain_sdf(WorldPos p, int lod) {
                     break;
                 }
             }
+            for (const Archetype::TableRecord &rec : table.records) {
+                if (rec.op == Archetype::Combine::ACCUM && Archetype::in_influence_box(rec, pos, PROBE_LODS[0])) {
+                    in_blob++; // the moment blobs' sum and surface run here
+                    break;
+                }
+            }
             for (uint32_t k = 0; k < words; k++) {
                 if (res[i * words + k] != want[k]) {
                     mismatches++;
@@ -1171,6 +1208,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
     p_rd->free_rid(shader);
     r_report["table_samples"] = samples;
     r_report["table_near_samples"] = near;
+    r_report["table_blob_samples"] = in_blob;
     r_report["table_mismatch"] = mismatches;
     r_report["table_material_won"] = won;
     return mismatches == 0 ? 1 : 0;
@@ -1302,7 +1340,8 @@ Dictionary FrameSpike::run() {
     }
     report["probe_mismatch"] = probe_report;
     report["examples"] = checks.examples;
-    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
+    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_blob_samples"]) > 0 &&
+            int64_t(report["table_mismatch"]) == 0 &&
             int64_t(report["table_material_won"]) > 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&

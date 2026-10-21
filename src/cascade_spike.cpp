@@ -385,7 +385,9 @@ void compare_table_chunk(const SDFCascade &p_sdf, const Archetype::InstanceSnaps
         WorldPos p;
         p.voxel = VoxelPos(p_p.x << p_lod, p_p.y << p_lod, p_p.z << p_lod);
         const Float3 grid{ float(i.x), float(i.y), float(i.z) };
-        const ExactNoise::Float4 want = p_sdf.with_skirt(p_sdf.sample_sdf(p_snap, list.data(), uint32_t(list.size()), ch, p, p_lod), p_lod, grid);
+        float extra = 0.0f;
+        const ExactNoise::Float4 folded = p_sdf.sample_sdf(p_snap, list.data(), uint32_t(list.size()), ch, p, p_lod, &extra);
+        const ExactNoise::Float4 want = p_sdf.with_skirt(folded, p_lod, grid, extra);
         const ExactNoise::Float4 bare = p_sdf.with_skirt(p_sdf.sdf(ch, p.voxel.y, p_lod), p_lod, grid);
         r_folded += float_bits(want.w) != float_bits(bare.w) ? 1 : 0;
         const float *g = p_got + (uint64_t(i.x) + cs * (uint64_t(i.y) + cs * uint64_t(i.z))) * 4;

@@ -244,9 +244,13 @@ uint32_t record_material(uint32_t p_material, uint32_t p_type_material, Combine 
 }
 
 Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_records, const uint32_t *p_list, uint32_t p_count,
-        const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched, const uint16_t *p_palette, uint32_t *r_material) {
+        const WorldPos &p_pos, int p_lod, bool p_box_test, bool *r_touched, const uint16_t *p_palette, uint32_t *r_material, bool *r_blobs) {
     thread_local std::vector<Float4> regs;
     Float4 r = p_r;
+    Float4 phi{ 0.0f, 0.0f, 0.0f, 0.0f }; // the moment blobs' summed occupancy
+    bool blobs = false;
+    float best = 0.0f; // the strongest blob's occupancy and palette index
+    uint32_t best_index = ChunkPalette::INHERIT_INDEX;
     for (uint32_t i = 0; i < p_count; i++) {
         const TableRecord &rec = p_records[p_list[i]];
         if (p_box_test && !in_influence_box(rec, p_pos, p_lod)) {
@@ -255,6 +259,18 @@ Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_re
         const DefRecord dr = rec.def_record();
         run_registers(p_library[rec.def].program, p_pos, p_lod, regs, &dr);
         Float4 c = regs[p_library[rec.def].program.output];
+        if (rec.op == Combine::ACCUM) {
+            phi = Float4{ phi.x + c.x, phi.y + c.y, phi.z + c.z, phi.w + c.w };
+            if (c.w > best) {
+                best = c.w;
+                best_index = p_palette ? p_palette[i] : ChunkPalette::INHERIT_INDEX;
+            }
+            blobs = true;
+            if (r_touched) {
+                *r_touched = true;
+            }
+            continue;
+        }
         c.w = c.w + band_erosion(rec.erode, rec.erode_from, p_lod); // the band rule's erosion (set_band)
         if (r_material && p_palette && p_palette[i] != ChunkPalette::INHERIT_INDEX && record_wins(r, c, rec.op)) {
             *r_material = p_palette[i];
@@ -264,7 +280,22 @@ Float4 fold_onto(const Float4 &p_r, const DefLibrary &p_library, RecordView p_re
             *r_touched = true;
         }
     }
-    return r;
+    if (r_blobs) {
+        *r_blobs = *r_blobs || blobs;
+    }
+    return blobs ? moment_surface(r, phi, p_lod, best_index, r_material) : r;
+}
+
+Float4 moment_surface(const Float4 &p_r, const Float4 &p_phi, int p_lod, uint32_t p_best, uint32_t *r_material) {
+    const float h = exact_pow2(p_lod);
+    const Float4 lift{ p_r.x - p_phi.x * h, p_r.y - p_phi.y * h, p_r.z - p_phi.z * h, p_r.w - p_phi.w * h };
+    const float n2 = p_phi.x * p_phi.x + p_phi.y * p_phi.y + p_phi.z * p_phi.z;
+    const float gh = ExactNoise::det_rsqrt(MAX(n2, MOMENT_GRAD_FLOOR)) * h;
+    const Float4 occ{ -p_phi.x * gh, -p_phi.y * gh, -p_phi.z * gh, (MOMENT_ISO - p_phi.w) * gh };
+    if (r_material && p_best != ChunkPalette::INHERIT_INDEX && p_phi.w >= MOMENT_MATERIAL_ISO) {
+        *r_material = p_best;
+    }
+    return occ.w < lift.w ? occ : lift;
 }
 
 Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_normalize) {
@@ -338,6 +369,19 @@ vec4 arch_combine(vec4 r, vec4 c, DefRecord rec) {
     precise vec4 n = vec4(-c.xyz, -c.w);
     return arch_smooth_max(r, n, uintBitsToFloat(rec.head.z), uintBitsToFloat(rec.head.w));
 }
+
+// moment_surface.
+vec4 arch_moments(vec4 r, vec4 phi, int lod, uint best, inout uint material) {
+    precise float h = exact_pow2(lod);
+    precise vec4 lift = vec4(r.x - phi.x * h, r.y - phi.y * h, r.z - phi.z * h, r.w - phi.w * h);
+    precise float n2 = phi.x * phi.x + phi.y * phi.y + phi.z * phi.z;
+    precise float gh = det_rsqrt(max(n2, MOMENT_GRAD_FLOOR)) * h;
+    precise vec4 occ = vec4(-phi.x * gh, -phi.y * gh, -phi.z * gh, (MOMENT_ISO - phi.w) * gh);
+    if (best != INHERIT_INDEXu && phi.w >= MOMENT_MATERIAL_ISO) {
+        material = best;
+    }
+    return occ.w < lift.w ? occ : lift;
+}
 )glsl";
 
 String generate_library_glsl(const DefLibrary &p_library) {
@@ -350,7 +394,12 @@ String generate_library_glsl(const DefLibrary &p_library) {
 }
 
 String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize) {
-    String code = String(GLSL_TABLE_FOLD).replace("LIMIT", itos(INPUT_LIMIT));
+    String code = String(GLSL_TABLE_FOLD)
+                          .replace("LIMIT", itos(INPUT_LIMIT))
+                          .replace("MOMENT_GRAD_FLOOR", glsl_float(MOMENT_GRAD_FLOOR))
+                          .replace("MOMENT_MATERIAL_ISO", glsl_float(MOMENT_MATERIAL_ISO))
+                          .replace("MOMENT_ISO", glsl_float(MOMENT_ISO))
+                          .replace("INHERIT_INDEX", itos(ChunkPalette::INHERIT_INDEX));
     code += "\n";
     code += generate_library_glsl(p_library);
     code += "vec4 arch_eval_instance(WorldPos p, int lod, DefRecord rec) {\n    switch (rec.head.x) {\n";
@@ -358,9 +407,13 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
         code += vformat("        case %du: return arch_%d(p, lod, rec);\n", i, i);
     }
     code += "        default: return vec4(0.0);\n    }\n}\n\n";
-    code += String(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material) {
+    code += String(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments) {
     uint off = g_sdf_chunk.id.w;
     uint n = g_sdf_chunk.anchor_hi.w;
+    precise vec4 phi = vec4(0.0);
+    bool blobs = false;
+    float best = 0.0;
+    uint best_index = INHERIT_INDEXu;
     for (uint i = 0u; i < n; i++) {
         uint word = sdf_list[off + i];
         DefRecord rec = sdf_records[word & LIST_ID_MASKu];
@@ -368,21 +421,33 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
             continue;
         }
         precise vec4 c = arch_eval_instance(p, lod, rec);
-        c.w = c.w + intBitsToFloat(rec.box_hi.w) * max(exact_pow2(lod) - intBitsToFloat(rec.anchor_hi.w), 0.0);
         uint index = word >> LIST_ID_BITSu;
+        if (rec.head.y == ACCUMu) {
+            phi = vec4(phi.x + c.x, phi.y + c.y, phi.z + c.z, phi.w + c.w);
+            if (c.w > best) {
+                best = c.w;
+                best_index = index;
+            }
+            blobs = true;
+            touched = true;
+            continue;
+        }
+        c.w = c.w + intBitsToFloat(rec.box_hi.w) * max(exact_pow2(lod) - intBitsToFloat(rec.anchor_hi.w), 0.0);
         if (index != INHERIT_INDEXu && arch_record_wins(r, c, rec.head.y)) {
             material = index;
         }
         r = arch_combine(r, c, rec);
         touched = true;
     }
-    return r;
+    moments = moments || blobs;
+    return blobs ? arch_moments(r, phi, lod, best_index, material) : r;
 }
 
 )glsl")
                     .replace("LIST_ID_MASK", itos(SDFGpuTable::LIST_ID_MASK))
                     .replace("LIST_ID_BITS", itos(SDFGpuTable::LIST_ID_BITS))
-                    .replace("INHERIT_INDEX", itos(ChunkPalette::INHERIT_INDEX));
+                    .replace("INHERIT_INDEX", itos(ChunkPalette::INHERIT_INDEX))
+                    .replace("ACCUM", itos(int(Combine::ACCUM)));
     // finish_table.
     code += "vec4 arch_finish(vec4 o, int lod) {\n";
     if (p_normalize) {
@@ -708,6 +773,24 @@ TableDefPtr make_tunnel_cube_type() {
     r = b.max(r, b.neg(b.box(l, t, t, through)));
     std::shared_ptr<TableDef> d = make_def("tunnel_cube", 2, b, r);
     d->bounds = cube_bounds;
+    return d;
+}
+
+TableDefPtr make_moment_blob_type() {
+    Builder b;
+    const Local l = b.t_local();
+    const Reg q = b.add(b.add(b.mul(b.mul(l.x, l.x), b.t_param(0)), b.mul(b.mul(l.y, l.y), b.t_param(1))), b.mul(b.mul(l.z, l.z), b.t_param(2)));
+    const Reg t = b.max(b.sub(b.constant(1.0f), q), b.constant(0.0f));
+    const Reg r = b.mul(b.mul(t, t), b.t_param(3));
+    std::shared_ptr<TableDef> d = make_def("moment_blob", 4, b, r);
+    // Zero outside the ellipsoid of semi-axes 1 / sqrt(p_i): its box. Not a distance (L = 0: the locality margin is
+    // the skirt's alone; outside its box it adds exactly 0 to phi).
+    d->bounds = [](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
+        const float s[3] = { float(1.0 / std::sqrt(double(p[0]))), float(1.0 / std::sqrt(double(p[1]))), float(1.0 / std::sqrt(double(p[2]))) };
+        r_lo = Float3{ -s[0], -s[1], -s[2] };
+        r_hi = Float3{ s[0], s[1], s[2] };
+        r_l = 0.0f;
+    };
     return d;
 }
 

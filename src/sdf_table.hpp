@@ -60,11 +60,25 @@ public:
     void set_instance_erode(float p_cells) { erode_rule.rate = p_cells; }
     // The band rule's resolution: a part is kept while its half thickness holds this many cells (Archetype::set_band).
     void set_instance_resolve(float p_cells) { erode_rule.resolve = p_cells; }
+    // The far field of the dropped instances (moment_layers.hpp; with the band rule only, default on): the blobs of their
+    // moments, one per LOD layer, cell and material, placed after the scene's records. Set before configure().
+    void set_moment_blobs(bool p_enabled) { moment_blobs = p_enabled; }
 
     // An instance erodes by at most this many cells between LOD L and L+1 (the band rule; 0 without it).
     float instance_erode_cells() const { return instance_band ? erode_rule.rate : 0.0f; }
-    // The skirts must hide the band rule's step.
-    float min_skirt_depth(const ChunkParam &, int) const override { return instance_erode_cells(); }
+    // The skirts must hide the band rule's step, and the moment blobs' when the scene places instances that can have
+    // some (asked before configure: the blobs aren't built yet): each layer's are listed at its LOD alone, so the
+    // far-field surfaces of a LOD L and a LOD L+1 chunk differ by up to MOMENT_SKIRT_CELLS cells of L (0.93 of the
+    // skirt on a 4,000-rock scatter at LOD 3 | 4, the worst measured: test_cascade_table).
+    static constexpr float MOMENT_SKIRT_CELLS = 2.5f;
+    // The locality margins (skirt_depth) take it whole; the skirt walls only where a blob touches the sample
+    // (SDFCascade's moment skirt), so the rest of the terrain keeps the band rule's.
+    float min_skirt_depth(const ChunkParam &, int) const override {
+        const bool blobs = instance_band && moment_blobs && (scatter_count > 0 || forest_count > 0 || biome_radius > 0.0);
+        return instance_erode_cells() + (blobs ? MOMENT_SKIRT_CELLS : 0.0f);
+    }
+    // The moment skirt in cells: MOMENT_SKIRT_CELLS once the table holds moment blobs, else 0.
+    float moment_skirt_cells() const { return has_moment_blobs ? MOMENT_SKIRT_CELLS : 0.0f; }
 
     SDFGpuTable *get_gpu_table() override { return &gpu; }
     using SDFBase::get_gpu_table; // the const form
@@ -137,6 +151,8 @@ private:
     Material::Library materials;
     bool instance_band = true; // --instance_band
     Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
+    bool moment_blobs = true; // --moments
+    bool has_moment_blobs = false; // add_moment_blobs placed some
 
     // Makes p_snapshot the current one (readers and the GPU table) and p_region the last edit's region.
     void publish(const std::shared_ptr<const Archetype::InstanceSnapshot> &p_snapshot, const VoxelBox &p_region);
@@ -161,6 +177,8 @@ private:
     void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats);
     // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
     void add_biomes(const Types &p_types, Dictionary &r_stats);
+    // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
+    void add_moment_blobs(int p_blob_type, Dictionary &r_stats);
     // Finishes and appends r_records (one feature) if every one fits the table (record_fit_error, the limits of a
     // runtime edit), else none (ERR naming p_what).
     bool admit(std::vector<Archetype::TableRecord> &r_records, const char *p_what);

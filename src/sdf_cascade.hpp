@@ -101,8 +101,11 @@ public:
         // steps happen at the same seam, so the sum. Without, the bare cascade's
         // skirts, bit for bit: a runtime edit on a cascade configured with no instance gets no extra depth. Flat: the
         // hard-CSG gallery's creases differ between LODs by up to a cell, so skirt_depth cells of the LOD.
-        const double erode_cells = current()->empty() ? 0.0 : SDFTable::min_skirt_depth(p_param, p_lod_count);
+        // The moment blobs' own step (SDFTable::MOMENT_SKIRT_CELLS) is added only at the samples a blob touches
+        // (moment_skirt_table, sample_sdf): everywhere else the skirt walls stay the band rule's.
+        const double erode_cells = current()->empty() ? 0.0 : SDFTable::instance_erode_cells();
         skirt_depth_table.assign(p_lod_count, 0.0f);
+        moment_skirt_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
             double amp = 0.0;
             for (const Cascade::Band &b : spec.bands) {
@@ -113,6 +116,7 @@ public:
             const double cell_m = vs * std::ldexp(1.0, l);
             const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
             skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
+            moment_skirt_table[l] = float(SDFTable::moment_skirt_cells() * cell_m);
         }
     }
 
@@ -163,15 +167,22 @@ public:
     }
 
     // sdf() with the listed instances p_list folded in (GLSL cascade_sample_sdf, bit for bit): the bare sdf() where
-    // no instance's box test passes.
+    // no instance's box test passes. *r_skirt_extra (if given): the moment skirt (metres) where a moment blob's box test
+    // passed, else 0.
     ExactNoise::Float4 sample_sdf(const Archetype::InstanceSnapshot &p_snap, const uint32_t *p_list, uint32_t p_count,
-            const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod) const {
+            const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod, float *r_skirt_extra = nullptr) const {
         const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel.y, p_lod);
+        if (r_skirt_extra) {
+            *r_skirt_extra = 0.0f;
+        }
         if (p_count > 0) {
             const float s = ExactNoise::exact_pow2(p_lod);
-            bool touched = false;
+            bool touched = false, blobs = false;
             const ExactNoise::Float4 r = Archetype::fold_onto(ExactNoise::Float4{ u.x * s, u.y * s, u.z * s, u.w * s }, *p_snap.library, p_snap.records,
-                    p_list, p_count, p_pos, p_lod, true, &touched);
+                    p_list, p_count, p_pos, p_lod, true, &touched, nullptr, nullptr, &blobs);
+            if (r_skirt_extra && blobs) {
+                *r_skirt_extra = moment_skirt_table[p_lod];
+            }
             if (touched) {
                 return Archetype::finish_table(r, p_lod, p_snap.out_scale, p_snap.normalize);
             }
@@ -180,17 +191,31 @@ public:
     }
 
     // The meshers' sdf_sample at vertex-grid point p_grid of a LOD-p_lod chunk: p_r (sdf() or sample_sdf()) plus the
-    // skirt (the cascade level pass's formula, cascade_glsl.cpp, in the same order, with the depth from skirt_depth_m).
-    ExactNoise::Float4 with_skirt(ExactNoise::Float4 r, int p_lod, const Float3 &p_grid) const {
+    // skirt (the cascade level pass's formula, cascade_glsl.cpp, in the same order, with the depth from skirt_depth_m
+    // plus p_extra, sample_sdf's moment skirt).
+    ExactNoise::Float4 with_skirt(ExactNoise::Float4 r, int p_lod, const Float3 &p_grid, float p_extra = 0.0f) const {
         if (param.skirt_size > 0 && param.skirt_depth > 0.0f) {
             const float lo = float(param.skirt_size);
             const float hi = lo + float(param.chunk_voxel_dimension());
             auto inside = [lo, hi](float p_c) { return MIN(p_c - lo, hi - p_c); };
             const float in = MIN(inside(p_grid.x), MIN(inside(p_grid.y), inside(p_grid.z)));
-            const float depth_m = skirt_depth_table[p_lod];
+            const float depth_m = skirt_depth_table[p_lod] + p_extra;
             r.w = r.w + CLAMP(-in, 0.0f, 1.0f) * depth_m;
         }
         return r;
+    }
+
+    // The skirt depth (metres) a LOD-p_lod chunk's rim gets at lattice point p_pos: skirt_depth_m plus the moment skirt
+    // where a moment blob touches it (tests: the seam step's bound).
+    float skirt_depth_at(const WorldPos &p_pos, int p_lod) const {
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
+        thread_local std::vector<uint32_t> list;
+        snap->point_candidates(p_pos.voxel, p_lod, list);
+        float ch[Cascade::CHANNELS];
+        channels_at(p_pos.voxel, p_lod, ch);
+        float extra = 0.0f;
+        sample_sdf(*snap, list.data(), uint32_t(list.size()), ch, p_pos, p_lod, &extra);
+        return skirt_depth_table[p_lod] + extra;
     }
 
     // The bare cascade's top solid voxel in the column: sphere tracing on the LOD0 distance (whole voxels, at least
@@ -265,15 +290,26 @@ float cascade_skirt_depth_m(int lod) {
     const uint t[SKIRT_N] = uint[SKIRT_N](SKIRT_TABLE);
     return uintBitsToFloat(t[lod]);
 }
+
+// The moment skirt (metres) of a LOD-lod chunk, at the samples a moment blob touches (sample_sdf).
+float cascade_moment_skirt_m(int lod) {
+    const uint t[SKIRT_N] = uint[SKIRT_N](MOMENT_SKIRT_TABLE);
+    return uintBitsToFloat(t[lod]);
+}
 )glsl";
-        String table;
-        for (size_t l = 0; l < skirt_depth_table.size(); l++) {
-            if (l) {
-                table += ", ";
+        auto table_text = [](const std::vector<float> &p_table) {
+            String table;
+            for (size_t l = 0; l < p_table.size(); l++) {
+                table += String(l ? ", " : "") + glsl_uint(float_bits(p_table[l]));
             }
-            table += glsl_uint(float_bits(skirt_depth_table[l]));
-        }
-        return code.replace("DATUM_LO", glsl_lo(datum)).replace("DATUM_HI", glsl_hi(datum)).replace("DY_LIMIT", itos(DY_LIMIT)).replace("SKIRT_N", itos(int64_t(skirt_depth_table.size()))).replace("SKIRT_TABLE", table);
+            return table;
+        };
+        return code.replace("DATUM_LO", glsl_lo(datum))
+                .replace("DATUM_HI", glsl_hi(datum))
+                .replace("DY_LIMIT", itos(DY_LIMIT))
+                .replace("SKIRT_N", itos(int64_t(skirt_depth_table.size())))
+                .replace("MOMENT_SKIRT_TABLE", table_text(moment_skirt_table))
+                .replace("SKIRT_TABLE", table_text(skirt_depth_table));
     }
 
     // The level passes' fold variant (after the table buffers): sample_sdf on the GPU, the instances of input chunk
@@ -281,14 +317,19 @@ float cascade_skirt_depth_m(int lod) {
     String get_sample_fold_glsl() const override {
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
         return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize) + R"glsl(
-vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material) {
+vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material, out float skirt_extra) {
     material = 0u;
+    skirt_extra = 0.0;
     precise vec4 u = cascade_terrain_unit(c0, p, lod);
     g_sdf_chunk = input_chunk[chunk];
     if (g_sdf_chunk.anchor_hi.w > 0) {
         precise float s = exact_pow2(lod);
         bool touched = false;
-        precise vec4 r = arch_fold(u * s, p, lod, touched, material);
+        bool moments = false;
+        precise vec4 r = arch_fold(u * s, p, lod, touched, material, moments);
+        if (moments) {
+            skirt_extra = cascade_moment_skirt_m(lod);
+        }
         if (touched) {
             return arch_finish(r, lod);
         }
@@ -315,6 +356,7 @@ private:
 
     Cascade::Spec spec;
     std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
+    std::vector<float> moment_skirt_table; // the moment skirt per LOD (metres, 0 without moment blobs), see configure()
     VoxelPos datum;
     float voxel_size = 0.5f;
 };

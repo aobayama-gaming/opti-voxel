@@ -140,8 +140,8 @@ public:
     // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
     // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
-    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material)` (material: the winning
-    // record's palette index, 0 = ground).
+    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material, out float skirt_extra)`
+    // (material: the winning record's palette index, 0 = ground; skirt_extra: metres added to the sample's skirt depth).
     virtual String get_sample_fold_glsl() const = 0;
 
     // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it

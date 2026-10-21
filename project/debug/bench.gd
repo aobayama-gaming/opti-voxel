@@ -52,6 +52,7 @@ extends Node3D
 ##   --instances=N                scatter N rocks/pillars (default 0)
 ##   --instance_area=M            side of the scatter square, metres (default 200)
 ##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
+##   --moments=0                  leave out the far field of the dropped instances (their moments' blobs)
 ##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1): the skirt, the fastest a part shrinks
 ##   --instance_resolve=F         a part is kept while its half thickness holds F cells (default 1); it erodes just before its drop
 ##   --trees=N                    a forest of about N grown trees (default 0)
@@ -198,6 +199,8 @@ func _ready() -> void:
 		terrain.archetype_instances = int(args["instances"])
 	if args.has("instance_area"):
 		terrain.archetype_instance_area = float(args["instance_area"])
+	if args.has("moments"):
+		terrain.archetype_moments = args["moments"] != "0"
 	if args.has("instance_band"):
 		terrain.archetype_band = args["instance_band"] != "0"
 	if args.has("instance_erode"):
