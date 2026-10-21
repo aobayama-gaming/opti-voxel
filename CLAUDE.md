@@ -260,8 +260,11 @@ to every change, and a reviewer may reject a PR on any of them.
   open-addressing `NodeRangeMap`, Morton-ordered levels; 1M rocks in ~1.8 s) and an overlay over the records
   edited since, rebuilt by every edit (~15 us at 1M); edited base entries are masked; past
   `InstanceSnapshot::REBASE` (2,048) edited records the base is rebuilt (unit test: the overlay lists what a
-  whole new index lists), on the main thread for now: ~1.8 s at 1M every 2,048 edited records (moving it to a
-  worker and publishing when done is the follow-up). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
+  whole new index lists) in one `WorkerThreadPool` task (`BaseRebuild`, over the records as they were: copy on
+  write keeps them) while the edits go on through the overlay and log their ids; `VoxelTerrain::_process`
+  (`SDFTable::poll_rebuild`) swaps in the finished base plus an overlay of the ids changed since, at the same
+  version (nothing re-uploaded or re-meshed). Past 2x REBASE edited ids while it runs, an edit waits for it. A
+  configure or the terrain's destruction still waits for a running build (no abort yet). Records live in `RecordStore` pages of 4,096 shared by the snapshots (copy on
   write per page); the GPU re-uploads the runs of pages changed since its version (`record_bytes` spans,
   `SDFGpuTable::upload_records`). `build_lists` runs on the worker pool; the list buffer holds batch size *
   `max_chunk_list()` (4,096) words whatever the batch's chunk count; a batch keeps the leading chunks whose lists fit

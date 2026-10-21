@@ -1,5 +1,7 @@
 #include "instance_table.hpp"
 
+#include <godot_cpp/classes/worker_thread_pool.hpp>
+
 #include <algorithm>
 #include <cmath>
 
@@ -441,46 +443,45 @@ bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
     return (base && near_layer(*base, lo, hi, lod)) || (overlay && near_layer(*overlay, lo, hi, lod));
 }
 
-std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
-        bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
+namespace {
+
+// The base over every record of p_records, as they are.
+std::shared_ptr<const IndexLayer> build_base(const DefLibrary &p_library, const RecordStore &p_records, const ChunkParam &p_param, int p_max_lod) {
+    std::vector<uint32_t> all(p_records.size());
+    for (uint32_t i = 0; i < all.size(); i++) {
+        all[i] = i;
+    }
+    return build_layer(p_library, p_records, all, p_param, p_max_lod);
+}
+
+void sort_unique(std::vector<uint32_t> &r_ids) {
+    std::sort(r_ids.begin(), r_ids.end());
+    r_ids.erase(std::unique(r_ids.begin(), r_ids.end()), r_ids.end());
+}
+
+// A snapshot of p_records at p_version, its index not built yet.
+std::shared_ptr<InstanceSnapshot> unindexed(std::shared_ptr<const DefLibrary> p_library, float p_out_scale, bool p_normalize,
+        RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
     std::shared_ptr<InstanceSnapshot> snap = std::make_shared<InstanceSnapshot>();
-    snap->library = p_library;
+    snap->library = std::move(p_library);
     snap->out_scale = p_out_scale;
     snap->normalize = p_normalize;
     snap->version = p_version;
     snap->max_lod = p_max_lod;
     snap->param = p_param;
     snap->records = std::move(p_records);
-    std::vector<uint32_t> all(snap->records.size());
-    for (uint32_t i = 0; i < all.size(); i++) {
-        all[i] = i;
-    }
-    snap->base = build_layer(*p_library, snap->records, all, p_param, p_max_lod);
-    snap->base_count = snap->records.size();
     return snap;
 }
 
-std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_previous, RecordStore p_records,
-        const std::vector<uint32_t> &p_changed, uint32_t p_version) {
-    std::vector<uint32_t> ids = p_previous.overlay_ids;
-    ids.insert(ids.end(), p_changed.begin(), p_changed.end());
-    std::sort(ids.begin(), ids.end());
-    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-    if (ids.size() > InstanceSnapshot::REBASE || !p_previous.base) {
-        return build_snapshot(p_previous.library, p_previous.out_scale, p_previous.normalize, std::move(p_records), p_previous.param,
-                p_previous.max_lod, p_version);
-    }
-    std::shared_ptr<InstanceSnapshot> snap = std::make_shared<InstanceSnapshot>();
-    snap->library = p_previous.library;
-    snap->out_scale = p_previous.out_scale;
-    snap->normalize = p_previous.normalize;
-    snap->version = p_version;
-    snap->max_lod = p_previous.max_lod;
-    snap->param = p_previous.param;
-    snap->records = std::move(p_records);
-    snap->base = p_previous.base;
-    snap->base_count = p_previous.base_count;
-    snap->overlay_ids = std::move(ids);
+// p_records over p_base (records [0, p_base_count) as they were) plus an overlay over p_ids (sorted, unique), the
+// rest of the fields from p_like.
+std::shared_ptr<const InstanceSnapshot> overlay_snapshot(const InstanceSnapshot &p_like, RecordStore p_records,
+        std::shared_ptr<const IndexLayer> p_base, uint32_t p_base_count, std::vector<uint32_t> p_ids, uint32_t p_version) {
+    std::shared_ptr<InstanceSnapshot> snap =
+            unindexed(p_like.library, p_like.out_scale, p_like.normalize, std::move(p_records), p_like.param, p_like.max_lod, p_version);
+    snap->base = std::move(p_base);
+    snap->base_count = p_base_count;
+    snap->overlay_ids = std::move(p_ids);
     for (const uint32_t i : snap->overlay_ids) {
         if (i < snap->base_count) {
             snap->masked.insert(i);
@@ -488,6 +489,89 @@ std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_
     }
     snap->overlay = build_layer(*snap->library, snap->records, snap->overlay_ids, snap->param, snap->max_lod);
     return snap;
+}
+
+} // namespace
+
+std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
+        bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
+    std::shared_ptr<InstanceSnapshot> snap = unindexed(p_library, p_out_scale, p_normalize, std::move(p_records), p_param, p_max_lod, p_version);
+    snap->base = build_base(*p_library, snap->records, p_param, p_max_lod);
+    snap->base_count = snap->records.size();
+    return snap;
+}
+
+std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_previous, RecordStore p_records,
+        const std::vector<uint32_t> &p_changed, uint32_t p_version) {
+    if (!p_previous.base) {
+        return build_snapshot(p_previous.library, p_previous.out_scale, p_previous.normalize, std::move(p_records), p_previous.param,
+                p_previous.max_lod, p_version);
+    }
+    std::vector<uint32_t> ids = p_previous.overlay_ids;
+    ids.insert(ids.end(), p_changed.begin(), p_changed.end());
+    sort_unique(ids);
+    return overlay_snapshot(p_previous, std::move(p_records), p_previous.base, p_previous.base_count, std::move(ids), p_version);
+}
+
+std::shared_ptr<const InstanceSnapshot> BaseRebuild::edit(const InstanceSnapshot &p_previous, RecordStore p_records,
+        const std::vector<uint32_t> &p_changed, uint32_t p_version) {
+    std::shared_ptr<const InstanceSnapshot> snap;
+    if (!p_previous.base) {
+        cancel(); // edit_snapshot indexes every record
+    } else if (running()) {
+        // The base being built is the records as they were when it started: these ids changed since.
+        changed.insert(changed.end(), p_changed.begin(), p_changed.end());
+        if (p_previous.overlay_ids.size() + p_changed.size() > hard_overlay) {
+            snap = take(p_previous, std::move(p_records), p_version);
+        }
+    }
+    if (!snap) {
+        snap = edit_snapshot(p_previous, std::move(p_records), p_changed, p_version);
+    }
+    if (!running() && snap->overlay_ids.size() > rebase) {
+        start(snap);
+    }
+    return snap;
+}
+
+void BaseRebuild::start(std::shared_ptr<const InstanceSnapshot> p_from) {
+    cancel();
+    from = std::move(p_from);
+    task = WorkerThreadPool::get_singleton()->add_native_task(&BaseRebuild::_run, this, false, "BaseRebuild");
+}
+
+void BaseRebuild::_run(void *p_self) {
+    BaseRebuild *self = static_cast<BaseRebuild *>(p_self);
+    self->layer = build_base(*self->from->library, self->from->records, self->from->param, self->from->max_lod);
+}
+
+bool BaseRebuild::ready() const {
+    return running() && WorkerThreadPool::get_singleton()->is_task_completed(task);
+}
+
+std::shared_ptr<const InstanceSnapshot> BaseRebuild::take(const InstanceSnapshot &p_like, RecordStore p_records, uint32_t p_version) {
+    ERR_FAIL_COND_V_MSG(!running(), nullptr, "BaseRebuild::take: no base is being built.");
+    wait();
+    sort_unique(changed);
+    std::shared_ptr<const InstanceSnapshot> snap =
+            overlay_snapshot(p_like, std::move(p_records), std::move(layer), from->records.size(), std::move(changed), p_version);
+    from.reset();
+    changed.clear();
+    return snap;
+}
+
+void BaseRebuild::cancel() {
+    wait();
+    from.reset();
+    layer.reset();
+    changed.clear();
+}
+
+void BaseRebuild::wait() {
+    if (running()) {
+        WorkerThreadPool::get_singleton()->wait_for_task_completion(task);
+        task = -1;
+    }
 }
 
 } // namespace Archetype

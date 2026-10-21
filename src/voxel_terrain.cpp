@@ -847,6 +847,7 @@ void VoxelTerrain::_process(double) {
     }
 
     const uint64_t t_process_start = now_usec();
+    sdf->poll_rebuild();
 
     if (camera != nullptr) {
         chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
