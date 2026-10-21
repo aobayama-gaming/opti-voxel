@@ -1,6 +1,8 @@
 // The far field of the archetype instances (moment_layers.hpp).
 #include "moment_layers.hpp"
 
+#include "archetype_table.hpp"
+
 #include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
@@ -41,18 +43,6 @@ bool boxes_meet(const VoxelPos &p_a, const double *p_ea, const VoxelPos &p_b, co
     return true;
 }
 
-// The amplitude's factor across a sheet (moment_layers.hpp): lambda ascending, p_amplitude the mass-keeping one.
-double sheet_gain(const double p_lambda[3], double p_filter_voxels, double p_sheet_ratio, double p_max_gain, double p_amplitude) {
-    if (p_sheet_ratio <= 0.0 || !(p_lambda[0] > 0.0) || !(p_amplitude > 0.0)) {
-        return 1.0;
-    }
-    const double f2 = p_filter_voxels * p_filter_voxels;
-    const double sheetness = std::sqrt((p_lambda[1] + f2) / (p_lambda[0] + f2)); // as the LOD sees it: a lone flat part is none
-    const double lost = std::sqrt((p_lambda[0] + f2) / p_lambda[0]);
-    const double gain = std::clamp(sheetness / p_sheet_ratio, 1.0, std::max(std::min(lost, p_max_gain), 1.0));
-    return std::max(std::min(gain, 1.0 / p_amplitude), 1.0);
-}
-
 } // namespace
 
 double MomentBlob::occupancy(const double p_offset[3]) const {
@@ -65,7 +55,58 @@ double MomentBlob::occupancy(const double p_offset[3]) const {
     return double(amplitude) * t * t;
 }
 
-MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels, double p_sheet_ratio, double p_max_gain) {
+double MomentItem::lost_share(int p_lod) const {
+    if (p_lod >= drop_lod) {
+        return 1.0;
+    }
+    const double e = erode > 0.0f ? double(band_erosion(erode, erode_from, p_lod)) : 0.0;
+    if (!(e > 0.0)) {
+        return 0.0;
+    }
+    double kept = 1.0;
+    for (int i = 0; i < 3; i++) {
+        kept *= semi[i] > 0.0f ? std::max(double(semi[i]) - e, 0.0) / double(semi[i]) : 0.0;
+    }
+    return 1.0 - kept;
+}
+
+int MomentItem::first_lost_lod() const {
+    for (int l = 0; l < drop_lod; l++) {
+        if (erode > 0.0f && band_erosion(erode, erode_from, l) > 0.0f) {
+            return l;
+        }
+    }
+    return drop_lod;
+}
+
+void prepare_moment_item(MomentItem &r_item) {
+    std::fill(r_item.semi, r_item.semi + 3, 0.0f);
+    std::fill(r_item.area, r_item.area + 6, 0.0);
+    if (r_item.moments.empty()) {
+        return;
+    }
+    double lambda[3], axes[9];
+    r_item.moments.principal(lambda, axes);
+    for (int i = 0; i < 3; i++) {
+        lambda[i] = std::max(lambda[i], 1.0 / 12.0); // at least a voxel thick
+        r_item.semi[i] = float(std::sqrt(5.0 * lambda[i]));
+    }
+    // The equal-covariance ellipsoid's silhouette along n, pi sqrt(n^T adj(5 S) n), as a quadratic form: the square root
+    // read as n^T adj n over the root of adj's mean eigenvalue (exact for a sphere, 1.22 times a long rod's side view, a
+    // rod's end view under), times the mass over the ellipsoid's volume. adj = det S^-1.
+    const double det = lambda[0] * lambda[1] * lambda[2];
+    const double adj_mean = (lambda[0] * lambda[1] + lambda[0] * lambda[2] + lambda[1] * lambda[2]) / 3.0;
+    const double scale = r_item.moments.m0 * 3.0 / (4.0 * std::sqrt(5.0)) * std::sqrt(det / adj_mean);
+    static const int PAIRS[6][2] = { { 0, 0 }, { 1, 1 }, { 2, 2 }, { 0, 1 }, { 0, 2 }, { 1, 2 } };
+    for (int k = 0; k < 6; k++) {
+        for (int i = 0; i < 3; i++) {
+            r_item.area[k] += scale / lambda[i] * axes[3 * i + PAIRS[k][0]] * axes[3 * i + PAIRS[k][1]];
+        }
+    }
+}
+
+MomentBlob make_blob(const Moments &p_cell, const double p_area[6], const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels,
+        double p_max_gain) {
     MomentBlob b;
     b.lod = p_lod;
     b.material = p_material;
@@ -84,42 +125,50 @@ MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod,
         b.inv_s2[i] = float(1.0 / (b.s[i] * b.s[i]));
     }
     const double kept_mass = p_cell.m0 * 105.0 / (32.0 * M_PI * b.s[0] * b.s[1] * b.s[2]);
-    b.amplitude = float(kept_mass * sheet_gain(lambda, p_filter_voxels, p_sheet_ratio, p_max_gain, kept_mass));
+    double amplitude = kept_mass;
+    if (p_max_gain > 1.0) {
+        // The silhouettes along the thinnest axis over the kernel's mid-plane (its peak-normalised integral pi/3 s_1 s_2).
+        const double *n = axes;
+        const double a = p_area[0] * n[0] * n[0] + p_area[1] * n[1] * n[1] + p_area[2] * n[2] * n[2] +
+                2.0 * (p_area[3] * n[0] * n[1] + p_area[4] * n[0] * n[2] + p_area[5] * n[1] * n[2]);
+        amplitude = std::max(kept_mass, std::min({ 3.0 * a / (M_PI * b.s[1] * b.s[2]), 1.0, kept_mass * p_max_gain }));
+    }
+    b.amplitude = float(amplitude);
     return b;
 }
 
 MomentJoins moment_joins(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params) {
-    std::map<uint32_t, std::vector<double>> dropped; // material -> mass dropped at each LOD (the last entry: never)
+    // material -> mass lost at each LOD (lost shares grow with the LOD), and the total last
+    std::map<uint32_t, std::vector<double>> lost;
     for (const MomentItem &item : p_items) {
         if (item.moments.empty()) {
             continue;
         }
-        std::vector<double> &d = dropped[item.material];
+        std::vector<double> &d = lost[item.material];
         d.resize(p_params.lod_max + 2, 0.0);
-        d[MIN(MAX(item.drop_lod, 0), p_params.lod_max + 1)] += item.moments.m0;
-    }
-    MomentJoins joins;
-    for (const std::pair<const uint32_t, std::vector<double>> &d : dropped) {
-        double total = 0.0, sum = 0.0;
-        for (const double m : d.second) {
-            total += m;
-        }
-        int lod = p_params.lod_max + 1;
         for (int l = 0; l <= p_params.lod_max; l++) {
-            sum += d.second[l];
-            if (sum >= p_params.min_mass_share * total) {
-                lod = l;
-                break;
+            d[l] += item.moments.m0 * item.lost_share(l);
+        }
+        d.back() += item.moments.m0;
+    }
+    auto first = [&](const std::vector<double> &p_lost, double p_share) {
+        for (int l = 0; l <= p_params.lod_max; l++) {
+            if (p_lost[l] > 0.0 && p_lost[l] >= p_share * p_lost.back()) {
+                return l;
             }
         }
-        joins[d.first] = lod;
+        return p_params.lod_max + 1;
+    };
+    MomentJoins joins;
+    for (const std::pair<const uint32_t, std::vector<double>> &d : lost) {
+        joins[d.first] = MomentJoin{ first(d.second, p_params.min_mass_share), first(d.second, p_params.cover_mass_share) };
     }
     return joins;
 }
 
 bool MomentLayers::on_layer(const MomentItem &p_item, int p_lod) const {
     const auto join = joins.find(p_item.material);
-    return !p_item.moments.empty() && p_item.drop_lod <= p_lod && join != joins.end() && join->second <= p_lod;
+    return !p_item.moments.empty() && join != joins.end() && join->second.lod <= p_lod && p_item.lost_share(p_lod) > 0.0;
 }
 
 int MomentLayers::tent(const MomentItem &p_item, const Layer &p_layer, CellKey r_keys[8], double r_weights[8]) const {
@@ -144,21 +193,26 @@ int MomentLayers::tent(const MomentItem &p_item, const Layer &p_layer, CellKey r
 void MomentLayers::resum_block(const Layer &p_layer, const CellKey &p_key, uint32_t p_block, Cell &r_cell) const {
     const int64_t c = p_layer.cell;
     const VoxelPos centre(p_key.x * c + c / 2, p_key.y * c + c / 2, p_key.z * c + c / 2);
-    Moments sum;
+    Sum sum;
     auto it = std::lower_bound(r_cell.members.begin(), r_cell.members.end(), p_block << BLOCK_SHIFT);
     for (; it != r_cell.members.end() && (*it >> BLOCK_SHIFT) == p_block; ++it) {
         const MomentItem &item = items[*it];
         CellKey keys[8];
         double weights[8];
         const int n = tent(item, p_layer, keys, weights);
+        const double lost = item.lost_share(p_layer.lod);
         for (int k = 0; k < n; k++) {
             if (keys[k] == p_key) {
                 const double offset[3] = { double(item.anchor.x - centre.x), double(item.anchor.y - centre.y), double(item.anchor.z - centre.z) };
-                sum.add(item.moments.scaled(weights[k]), offset);
+                const double w = weights[k] * lost;
+                sum.moments.add(item.moments.scaled(w), offset);
+                for (int a = 0; a < 6; a++) {
+                    sum.area[a] += w * item.area[a];
+                }
             }
         }
     }
-    if (sum.empty()) {
+    if (sum.moments.empty()) {
         r_cell.blocks.erase(p_block);
     } else {
         r_cell.blocks[p_block] = sum;
@@ -168,15 +222,18 @@ void MomentLayers::resum_block(const Layer &p_layer, const CellKey &p_key, uint3
 void MomentLayers::resum(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const {
     const int64_t c = p_layer.cell;
     const VoxelPos centre(p_key.x * c + c / 2, p_key.y * c + c / 2, p_key.z * c + c / 2);
-    Moments sum;
-    for (const std::pair<const uint32_t, Moments> &b : r_cell.blocks) {
-        sum.add(b.second);
+    Sum sum;
+    for (const std::pair<const uint32_t, Sum> &b : r_cell.blocks) {
+        sum.moments.add(b.second.moments);
+        for (int a = 0; a < 6; a++) {
+            sum.area[a] += b.second.area[a];
+        }
     }
-    // The cover takes over one doubling per LOD from the material's first layer: no seam steps more than a mass-kept one
-    // (a first layer next to the parts still drawn whole, the rock scatter's worst).
+    // The cover takes over one doubling per LOD from the LOD that has lost half the material: no seam steps more than a mass-kept one
+    // (the first layers lie next to the parts still drawn, their surfaces must stay within the skirts).
     const auto join = joins.find(p_key.material);
-    const double max_gain = join == joins.end() ? 1.0 : std::ldexp(1.0, p_layer.lod - join->second);
-    r_cell.blob = make_blob(sum, centre, p_layer.lod, p_key.material, params.filter * std::ldexp(1.0, p_layer.lod), params.sheet_ratio, max_gain);
+    const double max_gain = params.keep_cover && join != joins.end() ? std::ldexp(1.0, p_layer.lod - join->second.cover_from) : 1.0;
+    r_cell.blob = make_blob(sum.moments, sum.area, centre, p_layer.lod, p_key.material, params.filter * std::ldexp(1.0, p_layer.lod), max_gain);
     r_cell.blob.cell[0] = p_key.x;
     r_cell.blob.cell[1] = p_key.y;
     r_cell.blob.cell[2] = p_key.z;
@@ -308,6 +365,9 @@ void MomentLayers::build_layer(Layer &r_layer) {
 void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params) {
     ERR_FAIL_COND_MSG(p_params.cell_shift < 1 || p_params.lod_max + p_params.cell_shift > 60, "MomentLayers: cells of 2^(lod + cell_shift) voxels must be within [2, 2^60].");
     items = p_items;
+    for (MomentItem &item : items) {
+        prepare_moment_item(item);
+    }
     params = p_params;
     joins = moment_joins(items, params);
     layers.assign(MAX(params.lod_max - params.lod_min + 1, 0), Layer());
@@ -324,6 +384,7 @@ void MomentLayers::update(uint32_t p_id, const MomentItem &p_item, std::vector<M
     }
     const MomentItem before = items[p_id];
     items[p_id] = p_item;
+    prepare_moment_item(items[p_id]);
     for (Layer &layer : layers) {
         update_layer(layer, p_id, before, r_changes);
     }

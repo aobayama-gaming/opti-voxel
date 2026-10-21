@@ -1,5 +1,6 @@
 #include "test_common.hpp"
 
+#include "archetype_table.hpp"
 #include "moment_layers.hpp"
 
 #include <map>
@@ -92,7 +93,7 @@ TEST_CASE("Moment layers: a uniform canopy reads a near-constant occupancy, its 
     for (const int lod : { 4, 5 }) {
         MomentLayerParams params;
         params.cell_shift = 2; // cells of 4 LOD cells: the slab spans many of them at both LODs
-        params.sheet_ratio = 0.0; // the mass kept: the bird's-eye gain is the next test's
+        params.keep_cover = false; // the mass kept: the cover is the next tests'
         params.lod_min = lod;
         params.lod_max = lod;
         std::vector<MomentBlob> blobs;
@@ -160,7 +161,7 @@ TEST_CASE("Moment layers: an absolute grid, the same bits for the same items, an
         CHECK(ExactNoise::float_bits(a[i].rotation[4]) == ExactNoise::float_bits(c[i].rotation[4]));
     }
     // A lone small part (a 4-voxel pebble) far from the slab: drawn by its blobs at LOD 2, where it is about a cell, and
-    // pruned once the LOD's filter spreads it fainter than min_occupancy (from LOD 4).
+    // pruned once the LOD's filter spreads its cover fainter than min_occupancy (from LOD 5).
     std::vector<MomentItem> lone = items;
     MomentItem pebble;
     pebble.anchor = VoxelPos(100000, 40, 100000);
@@ -172,7 +173,7 @@ TEST_CASE("Moment layers: an absolute grid, the same bits for the same items, an
     build_moment_blobs(lone, params, d);
     int far_fine = 0, far_coarse = 0;
     for (const MomentBlob &blob : d) {
-        (blob.lod < 4 ? far_fine : far_coarse) += blob.anchor.x > 50000 ? 1 : 0;
+        (blob.lod < 5 ? far_fine : far_coarse) += blob.anchor.x > 50000 ? 1 : 0;
         CHECK(blob.peak_bound >= params.min_occupancy);
     }
     CHECK(far_fine > 0);
@@ -223,11 +224,11 @@ TEST_CASE("Moment layers: the pruning's cost per item stays flat as a forest of 
     CHECK(per_item[1] < 1.5 * per_item[0]);
 }
 
-TEST_CASE("Moment layers: from far away a canopy keeps its cover, a round clump its mass, whatever the up axis") {
+TEST_CASE("Moment layers: from far away a canopy keeps its cover, a lone clump fades, whatever the up axis") {
     // Spheres of radius 48 every 128 voxels across 8,192 (64 x 64): a canopy, four LOD-8 cells wide. Mass alone spreads
-    // it over the LOD's filter, thinner every LOD (it vanished from far away); across a sheet the blobs keep its
-    // occupancy instead. p_swap lays the slab in the y z plane (x and y swapped): no axis is up.
-    auto canopy_phi = [](int p_lod, double p_sheet_ratio, bool p_swap) {
+    // it over the LOD's filter, thinner every LOD (it vanished from far away); the cover keeps its occupancy. p_swap lays
+    // the slab in the y z plane (x and y swapped): no axis is up.
+    auto canopy_phi = [](int p_lod, bool p_cover, bool p_swap) {
         std::vector<MomentItem> items = sphere_slab(VoxelPos(0, 3000, 0), 64, 128.0, 48.0, 3, 1);
         if (p_swap) {
             for (MomentItem &it : items) {
@@ -235,9 +236,9 @@ TEST_CASE("Moment layers: from far away a canopy keeps its cover, a round clump 
             }
         }
         MomentLayerParams params;
-        params.lod_min = 3; // the material's first layer: the cover ramps in from there
+        params.lod_min = p_lod;
         params.lod_max = p_lod;
-        params.sheet_ratio = p_sheet_ratio;
+        params.keep_cover = p_cover;
         std::vector<MomentBlob> blobs;
         build_moment_blobs(items, params, blobs);
         double sum = 0.0;
@@ -251,18 +252,20 @@ TEST_CASE("Moment layers: from far away a canopy keeps its cover, a round clump 
         }
         return sum / n;
     };
-    const double near_mass = canopy_phi(5, 0.0, false), first_cover = canopy_phi(6, 2.0, false);
-    for (int lod = 6; lod <= 8; lod++) {
-        const double mass = canopy_phi(lod, 0.0, false), cover = canopy_phi(lod, 2.0, false), swapped = canopy_phi(lod, 2.0, true);
-        MESSAGE("LOD ", lod, ": occupancy in the canopy ", mass, " keeping the mass, ", cover, " keeping the cover (", near_mass,
-                " at LOD 5 keeping the mass), ", swapped, " laid on its side");
+    // The spheres' share of the area: pi 48^2 / 128^2.
+    const double cover = M_PI * 48.0 * 48.0 / (128.0 * 128.0);
+    for (int lod = 3; lod <= 9; lod++) {
+        const double mass = canopy_phi(lod, false, false), kept = canopy_phi(lod, true, false), swapped = canopy_phi(lod, true, true);
+        MESSAGE("LOD ", lod, ": occupancy in the canopy ", kept, " keeping the cover (", cover, "), ", mass, " keeping the mass, ", swapped,
+                " laid on its side");
         CAPTURE(lod);
-        CHECK(cover == doctest::Approx(first_cover).epsilon(0.1)); // flat across the LODs
-        CHECK(cover > near_mass);
-        CHECK(swapped == doctest::Approx(cover).epsilon(1e-4));
+        CHECK(kept == doctest::Approx(cover).epsilon(0.25)); // its cover at every LOD, over MOMENT_ISO
+        CHECK(kept > MOMENT_ISO);
+        CHECK(kept >= mass);
+        CHECK(swapped == doctest::Approx(kept).epsilon(1e-4));
     }
-    CHECK(canopy_phi(8, 0.0, false) < 0.5 * canopy_phi(8, 2.0, false)); // keeping the mass, it fades under the surface
-    // A round clump (a lone tree's crown) dropped long ago keeps its mass: no sheet, no gain.
+    CHECK(canopy_phi(8, false, false) < 0.5 * canopy_phi(8, true, false)); // keeping the mass, it fades under the surface
+    // A lone clump (four 25-voxel crowns): drawn while about resolved, under MOMENT_ISO once the filter outgrows it.
     std::vector<MomentItem> clump;
     for (int i = 0; i < 4; i++) {
         MomentItem it;
@@ -272,19 +275,50 @@ TEST_CASE("Moment layers: from far away a canopy keeps its cover, a round clump 
         it.drop_lod = 0;
         clump.push_back(it);
     }
-    for (const double ratio : { 0.0, 2.0 }) {
-        MomentLayerParams params;
-        params.lod_min = 2; // joined at LOD 2: the ramp would allow a gain of 64 at LOD 8
-        params.lod_max = 8;
-        params.min_occupancy = 0.0;
-        params.sheet_ratio = ratio;
-        std::vector<MomentBlob> blobs;
-        build_moment_blobs(clump, params, blobs);
-        double integral = 0.0;
+    MomentLayerParams params;
+    params.lod_min = 2;
+    params.lod_max = 8;
+    params.min_occupancy = 0.0;
+    std::vector<MomentBlob> blobs;
+    build_moment_blobs(clump, params, blobs);
+    double peak[9] = {};
+    for (const MomentBlob &b : blobs) {
+        peak[b.lod] = MAX(peak[b.lod], double(b.amplitude));
+    }
+    MESSAGE("lone clump: peak ", peak[2], " at LOD 2, ", peak[8], " at LOD 8");
+    CHECK(peak[2] > MOMENT_ISO);
+    CHECK(peak[8] < MOMENT_ISO);
+}
+
+TEST_CASE("Moment layers: an eroding part hands the share of its mass its erosion took to the layers, all of it at its drop") {
+    MomentItem part;
+    part.anchor = VoxelPos(0, 0, 0);
+    part.moments = sphere_moments(40.0);
+    part.material = 1;
+    part.drop_lod = 6;
+    part.erode = 1.0f;
+    part.erode_from = 16.0f; // onset LOD 4: eroded by 2^L - 16 voxels
+    prepare_moment_item(part);
+    CHECK(part.semi[0] == doctest::Approx(40.0)); // a sphere's semi-axes are its radius
+    CHECK(part.area[0] == doctest::Approx(M_PI * 1600.0)); // its silhouette along x
+    CHECK(part.first_lost_lod() == 5);
+    CHECK(part.lost_share(4) == 0.0);
+    const double e = 32.0 - 16.0;
+    CHECK(part.lost_share(5) == doctest::Approx(1.0 - std::pow((40.0 - e) / 40.0, 3)));
+    CHECK(part.lost_share(6) == 1.0);
+    // The layers hold that share of its mass (the material joins at once: it is all there is).
+    MomentLayerParams params;
+    params.lod_min = 3;
+    params.lod_max = 7;
+    params.min_occupancy = 0.0;
+    std::vector<MomentBlob> blobs;
+    build_moment_blobs({ part }, params, blobs);
+    for (int lod = params.lod_min; lod <= params.lod_max; lod++) {
+        double mass = 0.0;
         for (const MomentBlob &b : blobs) {
-            integral += b.lod == 8 ? double(b.amplitude) * 32.0 * M_PI * b.s[0] * b.s[1] * b.s[2] / 105.0 : 0.0;
+            mass += b.lod == lod ? b.mass : 0.0;
         }
-        CAPTURE(ratio);
-        CHECK(integral == doctest::Approx(4.0 * sphere_moments(25.0).m0).epsilon(1e-5));
+        CAPTURE(lod);
+        CHECK(mass == doctest::Approx(part.moments.m0 * part.lost_share(lod)).epsilon(1e-9));
     }
 }

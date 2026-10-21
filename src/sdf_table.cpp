@@ -181,16 +181,11 @@ MomentItem SDFTable::moment_item(const TableRecord &p_rec) const {
     if (p_rec.removed || is_cutter(p_rec.op) || p_rec.op == Combine::ACCUM || p_rec.max_lod == TableRecord::NEVER_DROPPED) {
         return item;
     }
-    // From the first LOD it is gone at: dropped, or eroded past its half thickness (still listed, barely drawn).
+    // The layers take what its erosion removes, then all of it from its drop on.
     item.moments = record_moments((*library)[p_rec.def], p_rec);
-    const double half = item.moments.half_thickness();
     item.drop_lod = p_rec.max_lod;
-    for (int l = 0; l < item.drop_lod; l++) {
-        if (double(band_erosion(p_rec.erode, p_rec.erode_from, l)) >= half) {
-            item.drop_lod = l;
-            break;
-        }
-    }
+    item.erode = p_rec.erode;
+    item.erode_from = p_rec.erode_from;
     return item;
 }
 
@@ -435,7 +430,7 @@ void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
     for (uint32_t i = 0; i < records.size(); i++) {
         items[i] = moment_item(records[i]);
         if (!items[i].moments.empty()) {
-            params.lod_min = MIN(params.lod_min, items[i].drop_lod);
+            params.lod_min = MIN(params.lod_min, items[i].first_lost_lod());
             weighed++;
         }
     }
