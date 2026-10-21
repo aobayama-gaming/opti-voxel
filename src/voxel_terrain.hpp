@@ -80,7 +80,7 @@ private:
     double biome_radius = 0.0;
     bool archetype_band = true;
     float archetype_erode = Archetype::ERODE_CELLS;
-    float archetype_resolve = 0.0f;
+    float archetype_resolve = Archetype::ErodeRule().resolve;
     bool legacy_trim_indices = false;
     // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
     // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
@@ -218,13 +218,13 @@ public:
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
     bool get_archetype_band() const;
-    // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): lower keeps thin parts (trunks) to
-    // coarser LODs (--instance_erode). Must be set before the node enters the tree.
+    // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): the skirt's depth and the fastest a part
+    // shrinks before its drop (--instance_erode). Must be set before the node enters the tree.
     void set_archetype_erode(float p_cells);
     float get_archetype_erode() const;
-    // The band rule's onset, cells (default 0: every part erodes from LOD 1): a part erodes only once its half
-    // thickness holds fewer cells than this, so thick parts stay whole while the grid can draw them
-    // (--instance_resolve). Must be set before the node enters the tree.
+    // The band rule's resolution, cells (default 1): a part is kept while its half thickness (its moments) holds this
+    // many cells, and erodes only just before its drop (Archetype::set_band; --instance_resolve). Must be set before
+    // the node enters the tree.
     void set_archetype_resolve(float p_cells);
     float get_archetype_resolve() const;
 

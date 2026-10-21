@@ -237,8 +237,8 @@ to every change, and a reviewer may reject a PR on any of them.
   (`ExactNoise::band_kept`, `BAND_SHIFT` = the cascade's insertion lattice: 8 samples per wavelength), on
   both back-ends. Each record has a `max_lod` (`set_band`): at LOD L its distance is
   raised by `erode * max(2^L - erode_from, 0)` voxels (`band_erosion`: `erode` cells per LOD past its onset, it
-  shrinks uniformly, GPU and CPU alike; `erode_from` = 2^onset rides in `anchor_hi.w`, 1 unless
-  `--instance_resolve`, below), and
+  shrinks uniformly, GPU and CPU alike; `erode_from` = 2^onset rides in `anchor_hi.w`; the timing is below, with
+  `--instance_resolve`), and
   it is listed only below the first LOD whose erosion reaches its depth (`band_depth`: half its box's smallest
   side times L, plus k; the smaller of the local box grown by `rotation_margin` and the world box, so a turned
   record drops at the same LOD), where the eroded shape no longer reaches zero, so the drop changes no sign. The band steps
@@ -314,15 +314,18 @@ to every change, and a reviewer may reject a PR on any of them.
   from its tip, the hull last; nothing appears with the LOD). `forest_sites`: one tree per cell of an absolute
   jittered grid. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
-  The forest has no aggregate past its hulls: past ~LOD 6 at 5 cm there is nothing, from ~LOD 3 the crowns
-  stand on trunks already eroded away. The erosion rate is `VoxelTerrain.archetype_erode` / `--instance_erode=F`
-  (cells per LOD, default `ERODE_CELLS` = 1, bench and player; the record carries it as `erode`, the skirt
-  follows it): 0.5 keeps a 0.3 m trunk to LOD 3 and fuller distant crowns, for +0.9 ms steady and +0.6 s of
-  load in the forest fly (1080p); validate / audit / discovery_audit stay ok. The onset is
-  `VoxelTerrain.archetype_resolve` / `--instance_resolve=F` (cells, default 0 = every part erodes from LOD 1):
-  a part starts eroding at the coarsest LOD whose cells still fit F times in its half thickness (`band_radius`),
-  so a part erodes only once the grid can no longer draw it whole (a 0.3 m trunk at 5 cm stays whole to LOD 2
-  at F = 1, a crown hull to LOD 5); the L | L+1 step stays `erode` cells (unit-tested), drops come later.
+  The forest has no aggregate past its hulls: past ~LOD 7 at 5 cm there is nothing. **Band timing (moments,
+  `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
+  moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum
+  per material (`span_moments`: a tree's bark and leaves). Its half thickness is the equal-covariance ellipsoid's
+  smallest semi-axis. `set_band` drops it at the later of the first LOD whose cells no longer fit `resolve` times in
+  that half thickness (`VoxelTerrain.archetype_resolve` / `--instance_resolve=F`, default 1) and the first LOD erosion
+  at `rate` from LOD 0 can make it vanish by; its onset is the latest LOD from which that erosion still reaches its
+  depth at the drop: whole while resolved, shrinking only in the LODs before its drop, `erode` cells per LOD at most
+  (unit-tested). At 5 cm (30 trees, by volume): drawn whole 98 / 93 / 61% at LODs 1 / 3 / 5 (0% when every part
+  eroded from LOD 1), drawn at all 97% at LOD 5 and 48% at LOD 6 (65% and 0%). The rate is
+  `VoxelTerrain.archetype_erode` / `--instance_erode=F` (cells per LOD, default `ERODE_CELLS` = 1, bench and player;
+  the record carries it as `erode`, the skirt follows it): a higher one moves onsets later.
   **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
   change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles the plane with cells of
   640 m rounded to 2^k voxels, and a cell keeps one site in its middle half with the kind's chance, from

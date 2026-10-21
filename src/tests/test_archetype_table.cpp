@@ -677,7 +677,7 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
                 bool explained = false;
                 for (uint32_t i : all) {
                     const TableRecord &r = banded[i];
-                    const bool changed = !r.listed_at(lod) || (lod > 0 && r.erode > 0.0f);
+                    const bool changed = !r.listed_at(lod) || band_erosion(r.erode, r.erode_from, lod) > 0.0f;
                     if (!changed) {
                         continue;
                     }
@@ -692,12 +692,12 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
             }
         }
     }
-    // Dropped only once fully eroded: erode * (2^max_lod - 1) >= depth + k.
+    // Dropped only once fully eroded, and at the first such LOD.
     for (const TableRecord &r : banded) {
         if (r.max_lod != TableRecord::NEVER_DROPPED) {
             const double depth = band_depth(lib[r.def], r);
-            CHECK(double(r.erode) * (std::ldexp(1.0, r.max_lod) - 1.0) >= depth);
-            CHECK((r.max_lod == 0 || double(r.erode) * (std::ldexp(1.0, r.max_lod - 1) - 1.0) < depth));
+            CHECK(double(band_erosion(r.erode, r.erode_from, r.max_lod)) >= depth);
+            CHECK((r.max_lod == 0 || double(band_erosion(r.erode, r.erode_from, r.max_lod - 1)) < depth));
         }
     }
     MESSAGE("band surface: ", points, " points, ", flips, " sign flips vs the reference, ", unexplained, " unexplained");
@@ -801,8 +801,9 @@ TEST_CASE("Archetype band: near_instance covers every node the brute-force no-cu
     CHECK(exempt > 1000);
 }
 
-// --instance_erode: the record carries its rate, and a slower rate drops it at the first LOD whose erosion at that
-// rate reaches its depth, never before the default's (a 6-voxel trunk: LOD 3 at 1 cell per LOD, LOD 4 at 0.5).
+// --instance_erode: the record carries its rate, and with resolve 0 a slower rate drops it at the first LOD whose
+// erosion at that rate reaches its depth, never before a faster one's (a 6-voxel trunk: LOD 3 at 1 cell per LOD, LOD 4
+// at 0.5).
 TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
     const TableDefPtr def = table_def("capsule");
     int previous = -1;
@@ -823,48 +824,78 @@ TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
     }
 }
 
-// --instance_resolve: a part erodes only from its onset, the coarsest LOD whose cells fit `resolve` times in its half
-// thickness; the step between two LODs is still at most `rate` cells, and the drop still comes once the erosion
-// reaches its depth. resolve 0 is the plain rule (onset 0).
-TEST_CASE("Archetype band: the onset keeps a part whole while its cells resolve it") {
+// The band rule's timing: a part is dropped at the later of the first LOD whose cells no longer fit `resolve` times in
+// its half thickness (its moments) and the first LOD erosion at `rate` from LOD 0 can make it vanish by; it is whole up
+// to the latest onset from which that erosion still reaches its depth at the drop, then shrinks by at most `rate` cells
+// per LOD (under the skirt), and the drop comes at the first LOD whose erosion reaches its depth.
+TEST_CASE("Archetype band: a part stays whole while its cells resolve it and erodes only before its drop") {
     const TableDefPtr def = table_def("capsule");
+    // Worked cases, a tall capsule of radius r: depth = r + 1.04 (its rotation margin; L = 1, k = 0), half thickness
+    // ~1.118 r. r 6 (depth 7.04, half 6.7), rate 1: erosion can reach 7.04 by LOD 4 (2^4 - 1); resolve 1 keeps it to
+    // LOD 2 (8 > 6.7 at LOD 3): drop 4, onset 3 (16 - 8 >= 7.04). Resolve 0.25: kept to LOD 4, drop 5, onset 4. Rate
+    // 0.5: 0.5 (16 - 1) >= 7.04, drop 4, onset 0 (0.5 (16 - 2) < 7.04). r 40 (41.04, 44.7): drop 6, onset 4 (64 - 16).
+    // r 0.75 (1.79): drop 2 (2^2 - 1 >= 1.79), onset 1 (4 - 2).
     struct Case {
         float radius;
         ErodeRule rule;
         float erode_from;
         int max_lod;
     };
-    // A capsule of radius r: band radius = depth = r + 1.04 (its rotation margin; L = 1, k = 0). r 6 (7.04), rate 1:
-    // 2^L - 1 >= 7.04 at LOD 4; resolve 1: onset 2 (4 <= 7.04 < 8), whole to LOD 2, 2^L - 4 >= 7.04 at LOD 4 too;
-    // rate 0.5: 0.5 (2^L - 4) >= 7.04 at LOD 5; resolve 2: onset 1. r 40: onset 5, 2^L - 32 >= 41.04 at LOD 7.
-    // r 0.75 (1.79): under one cell at LOD 0 already, onset 0.
-    const Case cases[] = { { 6.0f, ErodeRule{ 1.0f, 0.0f }, 1.0f, 4 }, { 6.0f, ErodeRule{ 1.0f, 1.0f }, 4.0f, 4 },
-        { 6.0f, ErodeRule{ 0.5f, 1.0f }, 4.0f, 5 }, { 6.0f, ErodeRule{ 1.0f, 2.0f }, 2.0f, 4 }, { 40.0f, ErodeRule{ 1.0f, 1.0f }, 32.0f, 7 },
-        { 0.75f, ErodeRule{ 1.0f, 1.0f }, 1.0f, 2 } };
-    for (const Case &c : cases) {
+    const Case worked[] = { { 6.0f, ErodeRule{ 1.0f, 1.0f }, 8.0f, 4 }, { 6.0f, ErodeRule{ 1.0f, 0.25f }, 16.0f, 5 },
+        { 6.0f, ErodeRule{ 0.5f, 1.0f }, 1.0f, 4 }, { 40.0f, ErodeRule{ 1.0f, 1.0f }, 16.0f, 6 }, { 0.75f, ErodeRule{ 1.0f, 1.0f }, 2.0f, 2 } };
+    for (const Case &c : worked) {
         TableRecord rec;
-        rec.anchor = VoxelPos(0, 0, 0);
         rec.params[0] = 400.0f; // tall: the radius sets the depth
         rec.params[1] = c.radius;
         finish_record(*def, rec, 1.0f, true, c.rule);
         CAPTURE(c.radius);
         CAPTURE(c.rule.rate);
         CAPTURE(c.rule.resolve);
-        CHECK(rec.erode == c.rule.rate);
         CHECK(rec.erode_from == c.erode_from);
         CHECK(int(rec.max_lod) == c.max_lod);
-        if (c.rule.resolve > 0.0f) { // the coarsest such LOD (onset 0 at the least)
-            CHECK((rec.erode_from == 1.0f || band_radius(*def, rec) >= double(c.rule.resolve) * double(rec.erode_from)));
-            CHECK(double(c.rule.resolve) * 2.0 * double(rec.erode_from) > band_radius(*def, rec));
-        }
-        for (int lod = 0; lod < 20; lod++) {
-            const float e0 = band_erosion(rec.erode, rec.erode_from, lod);
-            const float e1 = band_erosion(rec.erode, rec.erode_from, lod + 1);
-            CHECK((exact_pow2(lod) > rec.erode_from || e0 == 0.0f)); // whole up to the onset
-            CHECK(e1 - e0 <= rec.erode * exact_pow2(lod)); // at most `rate` cells of LOD L: under the skirt
-            CHECK(e1 >= e0);
-        }
-        CHECK(double(band_erosion(rec.erode, rec.erode_from, rec.max_lod)) >= band_depth(*def, rec));
-        CHECK(double(band_erosion(rec.erode, rec.erode_from, rec.max_lod - 1)) < band_depth(*def, rec));
     }
+    // The defining properties, over radii from a voxel to 1,000 and the rules around the default.
+    int64_t records = 0, kept_by_resolve = 0;
+    for (const float rate : { 0.5f, 1.0f, 2.0f }) {
+        for (const float resolve : { 0.0f, 0.5f, 1.0f, 2.0f }) {
+            for (double r = 1.0; r < 1000.0; r *= 1.37) {
+                TableRecord rec;
+                rec.params[0] = 4000.0f;
+                rec.params[1] = float(r);
+                finish_record(*def, rec, 1.0f, true, ErodeRule{ rate, resolve });
+                CAPTURE(rate);
+                CAPTURE(resolve);
+                CAPTURE(r);
+                CHECK(rec.erode == rate);
+                const double depth = band_depth(*def, rec);
+                const double half = record_moments(*def, rec).half_thickness();
+                int budget = 0;
+                while (double(rate) * (std::ldexp(1.0, budget) - 1.0) < depth) {
+                    budget++;
+                }
+                int resolved = 0;
+                while (resolve > 0.0f && double(resolve) * std::ldexp(1.0, resolved) <= half) {
+                    resolved++;
+                }
+                CHECK(int(rec.max_lod) == MAX(budget, resolved));
+                kept_by_resolve += resolved > budget ? 1 : 0;
+                const int m = rec.max_lod;
+                CHECK(double(band_erosion(rec.erode, rec.erode_from, m)) >= depth);
+                CHECK((m == 0 || double(band_erosion(rec.erode, rec.erode_from, m - 1)) < depth));
+                // The latest onset: one LOD later would not reach the depth at the drop.
+                if (2.0f * rec.erode_from < exact_pow2(m)) {
+                    CHECK(double(band_erosion(rec.erode, 2.0f * rec.erode_from, m)) < depth);
+                }
+                for (int lod = 0; lod < m; lod++) {
+                    const float e0 = band_erosion(rec.erode, rec.erode_from, lod);
+                    const float e1 = band_erosion(rec.erode, rec.erode_from, lod + 1);
+                    CHECK((exact_pow2(lod) > rec.erode_from || e0 == 0.0f)); // whole up to the onset
+                    CHECK(e1 - e0 <= rec.erode * exact_pow2(lod)); // at most `rate` cells of LOD L: under the skirt
+                }
+                records++;
+            }
+        }
+    }
+    MESSAGE("band timing: ", records, " records, ", kept_by_resolve, " kept past the erosion budget by resolve");
+    CHECK(kept_by_resolve > 0);
 }
