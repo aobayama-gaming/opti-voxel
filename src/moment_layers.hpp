@@ -25,6 +25,13 @@
 // s_i = 3 sigma_i with sigma_i^2 the cell's variance along that axis plus the LOD's filter (filter * 2^L)^2, the box
 // filter of a cell of the LOD (sigma = 1 / sqrt(12) cells by default). a = m0 * 105 / (32 pi s_x s_y s_z): its
 // integral is the cell's mass, so a uniformly filled region reads its fill fraction.
+//
+// Except across a sheet: a cell whose parts spread sheet_ratio times wider along its middle axis than along its thinnest
+// (a forest's canopy) keeps the occupancy its parts have along that axis instead of its mass. The filter grows with the
+// LOD and spread a thin canopy thinner every LOD (under MOMENT_ISO past a few: the forest vanished from far away); from
+// above, the canopy's true thickness doesn't show, its cover does. The gain is the filtered over the bare spread along the
+// thin axis, at most the sheetness / sheet_ratio (no step at the threshold) and 2^(L - the material's first layer) (the
+// cover takes over one doubling per LOD), never past a full occupancy: a round cell (a lone tree) keeps its mass. Principal axes only: no up direction.
 namespace Archetype {
 
 // One part, as the layers see it.
@@ -45,6 +52,9 @@ struct MomentLayerParams {
     // its drop on): before, its dropped parts are lone thin parts (a tree's twigs while its crown is drawn), which a blob
     // would draw back fattened to the LOD's filter, at the cost of a blob per tent corner on the fine chunks.
     double min_mass_share = 0.5;
+    // A cell this many times wider (middle over thinnest sigma) than thick keeps its occupancy across (see above); <= 0:
+    // every blob keeps its mass.
+    double sheet_ratio = 2.0;
     int lod_min = 0; // the layers built
     int lod_max = 14;
 };
@@ -67,7 +77,8 @@ struct MomentBlob {
 };
 
 // A blob of one cell's moments at layer p_lod (the kernel's frame, size and amplitude); p_anchor: the moments' anchor.
-MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels);
+MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels, double p_sheet_ratio,
+        double p_max_gain);
 
 // Per material, the first LOD that has dropped min_mass_share of its mass: the layers it joins.
 using MomentJoins = std::map<uint32_t, int>;

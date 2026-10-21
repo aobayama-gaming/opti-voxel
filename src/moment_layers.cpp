@@ -41,6 +41,18 @@ bool boxes_meet(const VoxelPos &p_a, const double *p_ea, const VoxelPos &p_b, co
     return true;
 }
 
+// The amplitude's factor across a sheet (moment_layers.hpp): lambda ascending, p_amplitude the mass-keeping one.
+double sheet_gain(const double p_lambda[3], double p_filter_voxels, double p_sheet_ratio, double p_max_gain, double p_amplitude) {
+    if (p_sheet_ratio <= 0.0 || !(p_lambda[0] > 0.0) || !(p_amplitude > 0.0)) {
+        return 1.0;
+    }
+    const double f2 = p_filter_voxels * p_filter_voxels;
+    const double sheetness = std::sqrt((p_lambda[1] + f2) / (p_lambda[0] + f2)); // as the LOD sees it: a lone flat part is none
+    const double lost = std::sqrt((p_lambda[0] + f2) / p_lambda[0]);
+    const double gain = std::clamp(sheetness / p_sheet_ratio, 1.0, std::max(std::min(lost, p_max_gain), 1.0));
+    return std::max(std::min(gain, 1.0 / p_amplitude), 1.0);
+}
+
 } // namespace
 
 double MomentBlob::occupancy(const double p_offset[3]) const {
@@ -53,7 +65,7 @@ double MomentBlob::occupancy(const double p_offset[3]) const {
     return double(amplitude) * t * t;
 }
 
-MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels) {
+MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod, uint32_t p_material, double p_filter_voxels, double p_sheet_ratio, double p_max_gain) {
     MomentBlob b;
     b.lod = p_lod;
     b.material = p_material;
@@ -71,7 +83,8 @@ MomentBlob make_blob(const Moments &p_cell, const VoxelPos &p_anchor, int p_lod,
         b.s[i] = 3.0 * std::sqrt(lambda[i] + p_filter_voxels * p_filter_voxels);
         b.inv_s2[i] = float(1.0 / (b.s[i] * b.s[i]));
     }
-    b.amplitude = float(p_cell.m0 * 105.0 / (32.0 * M_PI * b.s[0] * b.s[1] * b.s[2]));
+    const double kept_mass = p_cell.m0 * 105.0 / (32.0 * M_PI * b.s[0] * b.s[1] * b.s[2]);
+    b.amplitude = float(kept_mass * sheet_gain(lambda, p_filter_voxels, p_sheet_ratio, p_max_gain, kept_mass));
     return b;
 }
 
@@ -159,7 +172,11 @@ void MomentLayers::resum(const Layer &p_layer, const CellKey &p_key, Cell &r_cel
     for (const std::pair<const uint32_t, Moments> &b : r_cell.blocks) {
         sum.add(b.second);
     }
-    r_cell.blob = make_blob(sum, centre, p_layer.lod, p_key.material, params.filter * std::ldexp(1.0, p_layer.lod));
+    // The cover takes over one doubling per LOD from the material's first layer: no seam steps more than a mass-kept one
+    // (a first layer next to the parts still drawn whole, the rock scatter's worst).
+    const auto join = joins.find(p_key.material);
+    const double max_gain = join == joins.end() ? 1.0 : std::ldexp(1.0, p_layer.lod - join->second);
+    r_cell.blob = make_blob(sum, centre, p_layer.lod, p_key.material, params.filter * std::ldexp(1.0, p_layer.lod), params.sheet_ratio, max_gain);
     r_cell.blob.cell[0] = p_key.x;
     r_cell.blob.cell[1] = p_key.y;
     r_cell.blob.cell[2] = p_key.z;

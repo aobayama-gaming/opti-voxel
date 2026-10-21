@@ -331,7 +331,10 @@ to every change, and a reviewer may reject a PR on any of them.
   cells of L) on an absolute grid, per material, with tent weights over the 2 x 2 x 2 cells around each centroid (a
   uniform cover reads a near-constant occupancy, a thin canopy stays thin); a material joins once half its mass is
   gone (lone twigs would come back fattened). Each cell is a blob, `a max(1 - q, 0)^2` in its principal frame (the
-  record's rotation), its spread the cell's covariance plus the LOD's box filter, its integral the cell's mass; blobs
+  record's rotation), its spread the cell's covariance plus the LOD's box filter, its integral the cell's mass, except across a sheet
+(`MomentLayerParams::sheet_ratio`, 2: middle over thinnest spread, filter included): there it keeps the occupancy its
+parts have along the thin axis (a canopy reads ~0.46 at LODs 6-8 where keeping the mass faded 0.36 -> 0.13), at most
+x2 per LOD from the material's first layer (seams step no more), a round clump keeps its mass; blobs
   fainter than `MOMENT_MATERIAL_ISO` with their neighbours are pruned. They are table records (`moment_blob` type,
   `Combine::ACCUM`, listed at their LOD only: `TableRecord::min_lod`), built by `SDFTable::add_moment_blobs` after the
   scene; the fold sums them into an occupancy phi and its epilogue (`moment_surface` / GLSL `arch_moments`, bit for

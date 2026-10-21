@@ -92,6 +92,7 @@ TEST_CASE("Moment layers: a uniform canopy reads a near-constant occupancy, its 
     for (const int lod : { 4, 5 }) {
         MomentLayerParams params;
         params.cell_shift = 2; // cells of 4 LOD cells: the slab spans many of them at both LODs
+        params.sheet_ratio = 0.0; // the mass kept: the bird's-eye gain is the next test's
         params.lod_min = lod;
         params.lod_max = lod;
         std::vector<MomentBlob> blobs;
@@ -220,4 +221,70 @@ TEST_CASE("Moment layers: the pruning's cost per item stays flat as a forest of 
         MESSAGE(items.size(), " items: ", per_item[k], " box tests per item");
     }
     CHECK(per_item[1] < 1.5 * per_item[0]);
+}
+
+TEST_CASE("Moment layers: from far away a canopy keeps its cover, a round clump its mass, whatever the up axis") {
+    // Spheres of radius 48 every 128 voxels across 8,192 (64 x 64): a canopy, four LOD-8 cells wide. Mass alone spreads
+    // it over the LOD's filter, thinner every LOD (it vanished from far away); across a sheet the blobs keep its
+    // occupancy instead. p_swap lays the slab in the y z plane (x and y swapped): no axis is up.
+    auto canopy_phi = [](int p_lod, double p_sheet_ratio, bool p_swap) {
+        std::vector<MomentItem> items = sphere_slab(VoxelPos(0, 3000, 0), 64, 128.0, 48.0, 3, 1);
+        if (p_swap) {
+            for (MomentItem &it : items) {
+                std::swap(it.anchor.x, it.anchor.y);
+            }
+        }
+        MomentLayerParams params;
+        params.lod_min = 3; // the material's first layer: the cover ramps in from there
+        params.lod_max = p_lod;
+        params.sheet_ratio = p_sheet_ratio;
+        std::vector<MomentBlob> blobs;
+        build_moment_blobs(items, params, blobs);
+        double sum = 0.0;
+        int n = 0;
+        for (int u = -1600; u <= 1600; u += 160) {
+            for (int w = -1600; w <= 1600; w += 160) {
+                const VoxelPos at = p_swap ? VoxelPos(3000, u, w) : VoxelPos(u, 3000, w);
+                sum += occupancy_at(blobs, p_lod, at);
+                n++;
+            }
+        }
+        return sum / n;
+    };
+    const double near_mass = canopy_phi(5, 0.0, false), first_cover = canopy_phi(6, 2.0, false);
+    for (int lod = 6; lod <= 8; lod++) {
+        const double mass = canopy_phi(lod, 0.0, false), cover = canopy_phi(lod, 2.0, false), swapped = canopy_phi(lod, 2.0, true);
+        MESSAGE("LOD ", lod, ": occupancy in the canopy ", mass, " keeping the mass, ", cover, " keeping the cover (", near_mass,
+                " at LOD 5 keeping the mass), ", swapped, " laid on its side");
+        CAPTURE(lod);
+        CHECK(cover == doctest::Approx(first_cover).epsilon(0.1)); // flat across the LODs
+        CHECK(cover > near_mass);
+        CHECK(swapped == doctest::Approx(cover).epsilon(1e-4));
+    }
+    CHECK(canopy_phi(8, 0.0, false) < 0.5 * canopy_phi(8, 2.0, false)); // keeping the mass, it fades under the surface
+    // A round clump (a lone tree's crown) dropped long ago keeps its mass: no sheet, no gain.
+    std::vector<MomentItem> clump;
+    for (int i = 0; i < 4; i++) {
+        MomentItem it;
+        it.anchor = VoxelPos(5000 + (i & 1) * 30, 900 + (i >> 1) * 30, 5000 + ((i + 1) & 2) * 15);
+        it.moments = sphere_moments(25.0);
+        it.material = 2;
+        it.drop_lod = 0;
+        clump.push_back(it);
+    }
+    for (const double ratio : { 0.0, 2.0 }) {
+        MomentLayerParams params;
+        params.lod_min = 2; // joined at LOD 2: the ramp would allow a gain of 64 at LOD 8
+        params.lod_max = 8;
+        params.min_occupancy = 0.0;
+        params.sheet_ratio = ratio;
+        std::vector<MomentBlob> blobs;
+        build_moment_blobs(clump, params, blobs);
+        double integral = 0.0;
+        for (const MomentBlob &b : blobs) {
+            integral += b.lod == 8 ? double(b.amplitude) * 32.0 * M_PI * b.s[0] * b.s[1] * b.s[2] / 105.0 : 0.0;
+        }
+        CAPTURE(ratio);
+        CHECK(integral == doctest::Approx(4.0 * sphere_moments(25.0).m0).epsilon(1e-5));
+    }
 }

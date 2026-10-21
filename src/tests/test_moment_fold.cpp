@@ -126,7 +126,7 @@ TEST_CASE("Moment fold: the blob type's program is the blob's occupancy, in the 
     std::vector<std::array<float, 9>> rots;
     rotations(rots);
     m = m.rotated(rots.back().data());
-    const MomentBlob blob = make_blob(m, VoxelPos(int64_t(1) << 50, 77, -9000), 6, 1, 0.3 * 64.0);
+    const MomentBlob blob = make_blob(m, VoxelPos(int64_t(1) << 50, 77, -9000), 6, 1, 0.3 * 64.0, MomentLayerParams().sheet_ratio, 1.0);
     TableRecord rec;
     rec.anchor = blob.anchor;
     std::copy(blob.rotation, blob.rotation + 9, rec.rotation);
