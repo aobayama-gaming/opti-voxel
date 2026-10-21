@@ -2,6 +2,7 @@
 
 #include "cascade.hpp"
 #include "cascade_terrain.hpp"
+#include "climate.hpp"
 #include "exact_noise.hpp"
 #include "sdf_table.hpp"
 
@@ -82,8 +83,10 @@ public:
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
-        spec = CascadeTerrain::make_spec(SEED, p_lod_count + 4, STEEPNESS, channel_set, INSERT_SHIFT);
+        k_top = p_lod_count + 4;
+        spec = CascadeTerrain::make_spec(SEED, k_top, STEEPNESS, channel_set, INSERT_SHIFT);
         const double cap = MAX_AMP_M / vs;
+        amp_cap = float(cap);
         for (Cascade::Band &b : spec.bands) {
             b.amp = preset == Preset::CONTINENTS ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
         }
@@ -121,6 +124,8 @@ public:
     }
 
     const Cascade::Spec *get_cascade() const override { return &spec; }
+    // The ground a climate table is checked against and reads (Climate::parse / validate / fields_at), after configure().
+    Climate::Ground climate_ground() const { return Climate::Ground{ &spec, double(voxel_size), k_top, amp_cap }; }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Cascade::Spec &get_spec() const { return spec; }
     int64_t get_datum_y() const { return datum.y; }
@@ -359,4 +364,6 @@ private:
     std::vector<float> moment_skirt_table; // the moment skirt per LOD (metres, 0 without moment blobs), see configure()
     VoxelPos datum;
     float voxel_size = 0.5f;
+    int k_top = 0; // the coarsest octave (lod_count + 4)
+    float amp_cap = 0.0f; // MAX_AMP_M in LOD0 voxels
 };

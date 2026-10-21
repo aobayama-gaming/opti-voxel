@@ -449,6 +449,16 @@ to every change, and a reviewer may reject a PR on any of them.
   +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
   contrast / saturation values never applied (adjustments were off) and are gone. Next: a material per biome cell
   for the ground, materials inside one record (an IR change), image textures (triplanar).
+- **Climate** (`src/climate.{hpp,cpp}`, biomes PR 1: CPU only, nothing meshes from it yet): a climate is data, a JSON
+  table (format above `parse()`, example `project/climate/example.json`) checked against `SDFCascade::climate_ground()`:
+  up to `MAX_FIELDS` (8) fields, each a `field_spec()` (LINEAR4) of any octaves in the ground's range (seeds
+  `make_octave(field seed, k)`, keyed by k), plus linear terms `coef * (the ground or an earlier field)` added after its
+  cascade, in list order (the lapse is a ground term). `fields_at` is a pure function of (lattice point, m): Λ_m holds
+  the octaves k >= m + 3 of every field, a finer field reads 0 there. Biomes (<= `MAX_BIOMES`, 16): regions over any
+  fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes the
+  rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64
+  (the GPU mirror, PR 2, walks the same order). `pick`: argmax, ties by `hash_cell` of the lattice point. Amplitude
+  multipliers per (field, k) and height offsets are parsed and checked (cap, exact range), read from PR 2 on.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -466,6 +476,10 @@ to every change, and a reviewer may reject a PR on any of them.
 - `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
   `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
   channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
+- `tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N]`
+  (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice through the datum: per-biome
+  share and mean weight, per-field range, CPU us per point, `biomes_blend.png` / `biomes_pick.png` / `field_*.png`.
+  Tune a table from it before any GPU run.
 - `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4]`
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the

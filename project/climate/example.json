@@ -1,0 +1,67 @@
+{
+    "comment": "Example climate (src/climate.cpp describes the format). Tuned for 5 cm voxels and the default 15 LODs (octaves up to 26 km).",
+    "fields": [
+        {
+            "name": "temperature",
+            "bands": [{ "from_m": 3200, "to_m": 26000, "amp": 0.8, "persistence": 0.7 }],
+            "terms": [{ "source": "ground", "per_m": -0.0003 }]
+        },
+        {
+            "name": "humidity",
+            "bands": [{ "from_m": 1600, "to_m": 26000, "amp": 0.8, "persistence": 0.7 }]
+        },
+        {
+            "name": "variant",
+            "bands": [{ "from_m": 400, "to_m": 6500, "amp": 0.6, "persistence": 0.7 }]
+        },
+        {
+            "name": "patchiness",
+            "bands": [{ "from_m": 12, "to_m": 50, "amp": 0.5 }]
+        }
+    ],
+    "biomes": [
+        {
+            "name": "volcanic",
+            "where": [{ "field": "temperature", "min": 0.45, "fade": 0.1 }, { "field": "variant", "min": 0.25, "fade": 0.1 }],
+            "amp": [{ "field": "ground", "from_m": 1000, "to_m": 6500, "x": 2 }],
+            "height_m": 200,
+            "debug_color": "#c03818"
+        },
+        {
+            "name": "tundra",
+            "where": [{ "field": "temperature", "max": -0.4, "fade": 0.1 }],
+            "amp": [{ "field": "ground", "from_m": 50, "to_m": 400, "x": 0.5 }],
+            "debug_color": "#d8e4ec"
+        },
+        {
+            "name": "desert",
+            "where": [{ "field": "temperature", "min": 0.15, "fade": 0.1 }, { "field": "humidity", "max": -0.25, "fade": 0.1 }],
+            "amp": [{ "field": "ground", "from_m": 100, "to_m": 2000, "x": 0.3 }],
+            "debug_color": "#e0c070"
+        },
+        {
+            "name": "mountains",
+            "where": [{ "field": "variant", "min": 0.35, "fade": 0.15 }],
+            "amp": [{ "field": "ground", "from_m": 1000, "to_m": 13000, "x": 2 }],
+            "height_m": 300,
+            "debug_color": "#7a6a5a"
+        },
+        {
+            "name": "swamp",
+            "where": [{ "field": "humidity", "min": 0.35, "fade": 0.1 }],
+            "amp": [{ "field": "ground", "from_m": 50, "to_m": 6500, "x": 0.2 }],
+            "height_m": -30,
+            "debug_color": "#4a6040"
+        },
+        {
+            "name": "forest",
+            "where": [{ "field": "humidity", "min": 0.05, "fade": 0.15 }],
+            "debug_color": "#2f7a30"
+        },
+        {
+            "name": "plain",
+            "amp": [{ "field": "ground", "from_m": 1000, "to_m": 26000, "x": 0.3 }],
+            "debug_color": "#9cc060"
+        }
+    ]
+}

@@ -437,30 +437,36 @@ struct OctaveSet {
     std::vector<Octave> octaves;
 };
 
+// One octave of wavelength 2^p_k, its seed and lattice offset hashed from (p_seed, p_salt): the lattice is
+// shifted by a quarter to three quarters of a cell on each axis, so the zeros of nested lattices never line up.
+inline Octave make_octave(uint32_t p_seed, uint32_t p_salt, int p_k, float p_amp) {
+    Octave o;
+    o.k = p_k;
+    o.amp = p_amp;
+    const UVec3 h = pcg3d(UVec3{ p_seed, p_salt, 0x51ED270Bu });
+    o.seed = h.x;
+    auto axis_offset = [&](uint32_t p_a, uint32_t p_b) {
+        if (o.k < 2) {
+            return int64_t(0);
+        }
+        const uint64_t r = (uint64_t(p_a) << 32) | p_b;
+        return int64_t((uint64_t(1) << (o.k - 2)) + (r & ((uint64_t(1) << (o.k - 1)) - 1)));
+    };
+    const UVec3 h2 = pcg3d(h);
+    o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
+    return o;
+}
+
 // p_count octaves from wavelength 2^k_top down (lacunarity exactly 2), amplitude p_amp_top for the
-// first and times p_persistence for each next one. Seeds and offsets come from p_seed: each octave's
-// lattice is shifted by a quarter to three quarters of a cell on each axis, so the zeros of the
-// nested lattices never line up.
+// first and times p_persistence for each next one; octave i is make_octave(p_seed, i, ...).
 inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, double p_amp_top, double p_persistence) {
     OctaveSet set;
     set.is_2d = p_2d;
     double amp = p_amp_top;
     for (int i = 0; i < p_count; i++) {
-        Octave o;
-        o.k = p_k_top - i;
-        ERR_CONTINUE_MSG(o.k < 0 || o.k > MAX_K, "ExactNoise: octave wavelength out of range.");
-        const UVec3 h = pcg3d(UVec3{ p_seed, uint32_t(i), 0x51ED270Bu });
-        o.seed = h.x;
-        auto axis_offset = [&](uint32_t p_a, uint32_t p_b) {
-            if (o.k < 2) {
-                return int64_t(0);
-            }
-            const uint64_t r = (uint64_t(p_a) << 32) | p_b;
-            return int64_t((uint64_t(1) << (o.k - 2)) + (r & ((uint64_t(1) << (o.k - 1)) - 1)));
-        };
-        const UVec3 h2 = pcg3d(h);
-        o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
-        o.amp = float(amp);
+        const int k = p_k_top - i;
+        ERR_CONTINUE_MSG(k < 0 || k > MAX_K, "ExactNoise: octave wavelength out of range.");
+        const Octave o = make_octave(p_seed, uint32_t(i), k, float(amp));
         if (!in_exact_range(o.amp)) {
             ERR_PRINT(vformat("ExactNoise: octave k=%d amplitude %s outside [2^-16, 2^40]: denormals possible.", o.k, o.amp));
         }
