@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # GPU cascade harness: build (unless --no-build), run res://debug/cascade_spike.tscn, check the result.
 #
-#   tools/cascade_test.sh [--no-build] [--lods=25] [--voxel=0.5] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10]
+#   tools/cascade_test.sh [--no-build] [--lods=25] [--voxel=0.5] [--check=0|1] [--points=0|1] [--table=0|1] [--biomes=0|1] [--timing=0|1] [--runs=10]
 #                         [--sets=8,4,4c]
 #
 # check: the cascade passes (cascade_glsl.hpp) vs Cascade::run, every channel of every level and the
@@ -9,7 +9,8 @@
 # the GPU outputs (G3). points: the discoverer's point items (CascadePasses::create_points) vs Cascade::point +
 # SDFCascade::sdf, 5,120 corners per LOD near 0, +-2^60, across 2^32-voxel boundaries and lattice index 2^32
 # (D1 of the GPU discoverer). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
-# chunks' instance lists vs SDFCascade::sample_sdf + skirt (G9: the fold onto the cascade, bit for bit). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
+# chunks' instance lists vs SDFCascade::sample_sdf + skirt (G9: the fold onto the cascade, bit for bit). biomes: the example climate's per-sample ground material (the biome pick at
+# level 0) vs SDFCascade::ground_material, every LOD (G10). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
 # (G6), both channel sets (G7: 8 vs 4), each set against the plain 4 channels. Sets: 8, 4, 4c (LINEAR4 + the example
 # climate at 5 cm, its fields carried and modulating the ground), 4f (its fields without multipliers); default 8,4,4c.
 # GPU clocks are sampled during the run (nvidia-smi).
@@ -100,6 +101,11 @@ tab = r.get("table", {})
 if tab:
     lines += ["| G9 instance table | records | chunks | samples | folded | differing | ok |", "|---|---|---|---|---|---|---|",
               f"| 4 ch, LODs 0-6 | {tab['records']} | {tab['chunks']} | {tab['samples']:,} | {tab['samples_folded']:,} | {tab['samples_differing']} | {tab['ok']} |", ""]
+bio = r.get("biomes", {})
+if bio:
+    per = ", ".join(f"{k} {v:,}" for k, v in bio.get("samples_per_biome", {}).items())
+    lines += ["| G10 biome materials | chunks | samples | differing | per biome | ok |", "|---|---|---|---|---|---|",
+              f"| 4c, every LOD | {bio['chunks']} | {bio['samples']:,} | {bio['samples_differing']} | {per} | {bio['ok']} |", ""]
 t = r.get("timing", {})
 rows = t.get("rows", [])
 if rows:
@@ -149,7 +155,7 @@ if rows:
 text = "\n".join(lines)
 print(text)
 open(sys.argv[3], "w").write(text + "\n")
-for s, d in list(check.items()) + list(pts.items()):
+for s, d in list(check.items()) + list(pts.items()) + ([("biomes", bio)] if bio else []):
     for e in d.get("examples", [])[:8]:
         print(f"   example ({s} ch):", e)
 if "error" in r:

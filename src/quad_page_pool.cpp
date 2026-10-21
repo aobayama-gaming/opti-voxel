@@ -25,7 +25,7 @@ uniform usampler2D palette_tex : filter_nearest, repeat_disable;
 uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // 0 shaded, 1 normals, 2 lod, 3 page, 4 shaded + quad wireframe, 5 chunk hash,
 // 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4), 8 faceted, 9 material, 10 / 11 bark seam
-// probe (bench.gd --probe)
+// probe (bench.gd --probe), 12 biome (the materials' debug colours)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
 // Sea level in metres above the world origin: below -1e29, no height colours (VoxelTerrain sets it for
@@ -150,8 +150,10 @@ ivec2 material_texel(uint mat_id) {
 
 // A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
 // material_tex and its pattern. p: the fragment's position (metres, render space), n its normal (interpolated, not
-// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature).
-void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, out vec3 albedo,
+// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); flat_w and shade:
+// the procedural ground's slope weight (1 on gentle slopes) and contour shading, which PATTERN_GROUND (a biome's
+// ground) applies to its own colours.
+void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float flat_w, float shade, out vec3 albedo,
         out float roughness, out vec3 emission) {
     albedo = ground;
     roughness = 1.0;
@@ -165,7 +167,10 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
     albedo = m0.rgb;
     roughness = m0.a;
     emission = m1.rgb;
-    if (m1.a == MATERIAL_PATTERN_LAVA) {
+    if (m1.a == MATERIAL_PATTERN_GROUND) {
+        albedo = mix(m1.rgb, m0.rgb, flat_w) * shade; // m1.rgb: its steep albedo (no emission)
+        emission = vec3(0.0);
+    } else if (m1.a == MATERIAL_PATTERN_LAVA) {
         // Lava: a warped crust, dark seams over a glow that drifts slowly.
         vec2 q = p.xz * 0.15;
         q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
@@ -249,8 +254,8 @@ void fragment() {
     // Shaded: grass on gentle slopes, rock on steep ones, faint contour lines every 100 m (mid tones, so
     // the tonemapper keeps the relief readable).
     float up = clamp(v_world_normal.y, 0.0, 1.0);
-    vec3 rock = vec3(0.36, 0.32, 0.28);
-    vec3 albedo = mix(rock, vec3(0.24, 0.36, 0.16), smoothstep(0.8, 0.95, up));
+    float flat_w = smoothstep(0.8, 0.95, up);
+    vec3 albedo = mix(GROUND_STEEP, GROUND_FLAT, flat_w); // Material::GROUND_STEEP / GROUND_FLAT
     float contour_m = 100.0;
     if (sea_level_m > -1e29) {
         // Height colours (dark albedos: the scene's tonemapper brightens them): sea floor blue, darker with
@@ -273,7 +278,8 @@ void fragment() {
     float line = abs(fract(h + 0.5) - 0.5) / fw;
     // Contours fade out where they would be denser than ~10 pixels apart.
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
-    albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
+    float shade = mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
+    albedo *= shade;
     vec3 ground = albedo;
     vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
     // Two materials: one is shaded per fragment, the higher id where the weight towards it (the corner mask over the
@@ -293,7 +299,7 @@ void fragment() {
     float roughness;
     vec3 emission;
     float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
-    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, albedo, roughness, emission);
+    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, flat_w, shade, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -321,7 +327,14 @@ void fragment() {
     } else if (debug_view == 9) {
         albedo = vec3(0.0);
         emission = uint(mat_id) == MATERIAL_GROUND ? vec3(0.15) : hash3(vec3(float(mat_id) * 0.61 + 0.5)) * 0.8 + 0.2;
-    } else if (debug_view >= 10) {
+    } else if (debug_view == 12) {
+        // Biomes: each material's debug colour (a biome's ground carries its biome's), lit and with the contours so the
+        // relief stays readable; dark grey for the rest (instances, the ground without a climate).
+        vec4 dbg = uint(mat_id) == MATERIAL_GROUND ? vec4(0.0) : texelFetch(material_tex, material_texel(uint(mat_id)) + ivec2(MATERIAL_TEXEL_DEBUG, 0), 0);
+        albedo = (dbg.a > 0.0 ? dbg.rgb : vec3(0.06)) * shade;
+        emission = albedo * 0.3;
+        roughness = 1.0;
+    } else if (debug_view == 10 || debug_view == 11) {
         // Bark seam probe (bench.gd --probe, read by tools/bark_seams.py): bytes, written through the inverse of the
         // sRGB encoding (the bench sets a linear tonemapper, no grade, glow or fog; SPECULAR 0 below), so each
         // channel reads back as the byte. Bark fragments at full detail only, black elsewhere. 10: the grain (smooth, so
@@ -356,7 +369,7 @@ void fragment() {
     ALBEDO = albedo;
     EMISSION = emission;
     ROUGHNESS = roughness;
-    if (debug_view >= 10) {
+    if (debug_view == 10 || debug_view == 11) {
         SPECULAR = 0.0; // the probe's bytes are its emission only
     }
 }

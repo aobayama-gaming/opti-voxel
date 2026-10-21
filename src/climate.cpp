@@ -208,9 +208,11 @@ String validate(const Table &p_table, const Ground &p_ground) {
 //             "where": [ { "field": "temperature", "min": 0.5, "max": 2 (either or both), "fade": 0.1
 //                          (or "fade_min" / "fade_max") } ],
 //             "amp": [ { "field": "ground" | "<field>", "wavelength_m": 4000 | "from_m": 1000, "to_m": 20000, "x": 3 } ],
+//             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
 //             "debug_color": "#c04020" }
 //     The region is 1 between min and max, fading to 0 over the fade outside. A range of "amp" covers the
-//     octaves the field has in it. The last biome is the default: no "where".
+//     octaves the field has in it. The last biome is the default: no "where". "surface": the biome's ground colours
+//     (sRGB) on gentle and steep slopes; without it, the procedural ground's.
 namespace {
 
 class Parser {
@@ -454,8 +456,43 @@ private:
         }
     }
 
+    // A "#rrggbb" string at p_key as 0xRRGGBB.
+    uint32_t hex_color(const Dictionary &p_d, const char *p_key, const String &p_where) {
+        const String c = text(p_d, p_key, p_where);
+        bool hex = c.length() == 7 && c[0] == '#';
+        for (int i = 1; i < c.length() && hex; i++) {
+            hex = is_hex_digit(c[i]);
+        }
+        if (!hex) {
+            fail_key(p_where, p_key, "is \"#rrggbb\".");
+            return 0;
+        }
+        return uint32_t(c.substr(1).hex_to_int());
+    }
+
+    // An sRGB "#rrggbb" at p_key as a linear colour (the page shader's albedos), p_default if absent.
+    Color linear_color(const Dictionary &p_d, const char *p_key, const String &p_where, const Color &p_default) {
+        if (!p_d.has(p_key)) {
+            return p_default;
+        }
+        return srgb_to_linear(hex_color(p_d, p_key, p_where));
+    }
+
+    void surface(const Dictionary &p_d, const String &p_where, Surface &r_s) {
+        if (!keys(p_d, p_where, { "flat", "steep", "roughness" })) {
+            return;
+        }
+        r_s.flat = linear_color(p_d, "flat", p_where, r_s.flat);
+        r_s.steep = linear_color(p_d, "steep", p_where, p_d.has("flat") ? r_s.flat : r_s.steep);
+        const double roughness = number(p_d, "roughness", p_where, r_s.roughness);
+        if (error.is_empty() && !(roughness >= 0.0 && roughness <= 1.0)) {
+            fail(p_where, "roughness is in [0, 1].");
+        }
+        r_s.roughness = float(roughness);
+    }
+
     void biome(const Dictionary &p_d, int64_t p_i) {
-        if (!keys(p_d, vformat("biome %d", p_i), { "name", "where", "amp", "debug_color" })) {
+        if (!keys(p_d, vformat("biome %d", p_i), { "name", "where", "amp", "surface", "debug_color" })) {
             return;
         }
         Climate::Biome b;
@@ -471,18 +508,10 @@ private:
         for (int64_t i = 0; i < amp.size() && error.is_empty(); i++) {
             amps(dict(amp[i], amp_where), amp_where, b);
         }
-        b.debug_color = name_hash(b.name) & 0xFFFFFFu;
-        if (p_d.has("debug_color")) {
-            const String c = text(p_d, "debug_color", where);
-            bool hex = c.length() == 7 && c[0] == '#';
-            for (int i = 1; i < c.length() && hex; i++) {
-                hex = is_hex_digit(c[i]);
-            }
-            if (!hex) {
-                fail(where, "debug_color is \"#rrggbb\".");
-            }
-            b.debug_color = uint32_t(c.substr(1).hex_to_int());
+        if (p_d.has("surface")) {
+            surface(dict(p_d["surface"], where + String(" surface")), where + String(" surface"), b.surface);
         }
+        b.debug_color = p_d.has("debug_color") ? hex_color(p_d, "debug_color", where) : name_hash(b.name) & 0xFFFFFFu;
         table.biomes.push_back(b);
     }
 };
@@ -593,6 +622,28 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
     return best[ExactNoise::hash_cell(voxel, PICK_SEED) % uint32_t(count)];
 }
 
+int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m) {
+    Float4 f[MAX_FIELDS];
+    apply_terms(p_table, p_slots, f);
+    Float4 w[MAX_BIOMES];
+    weights(p_table, f, w);
+    return pick(p_table, w, p_p, p_m);
+}
+
+Color srgb_to_linear(uint32_t p_rgb) {
+    return Color::hex((p_rgb << 8) | 0xFFu).srgb_to_linear();
+}
+
+Material::Params biome_material(const Biome &p_biome) {
+    Material::Params m;
+    m.albedo = p_biome.surface.flat;
+    m.steep = p_biome.surface.steep;
+    m.roughness = p_biome.surface.roughness;
+    m.pattern = Material::PATTERN_GROUND;
+    m.debug = srgb_to_linear(p_biome.debug_color);
+    return m;
+}
+
 namespace {
 
 // The climate's Cascade::Modulation (combined_spec): per modulated band (group, level), each biome's amplitude.
@@ -661,45 +712,9 @@ private:
     Cascade::FieldRange range;
 };
 
-// flushed, dmul, dsub and edge_weight in GLSL, op for op.
-constexpr const char GLSL_CLIMATE_HELPERS[] = R"glsl(
-vec4 cl_flush(vec4 v) {
-    return vec4(abs(v.x) < FLUSH ? 0.0 : v.x, abs(v.y) < FLUSH ? 0.0 : v.y, abs(v.z) < FLUSH ? 0.0 : v.z, abs(v.w) < FLUSH ? 0.0 : v.w);
-}
-
-vec4 cl_mul(vec4 a, vec4 b) {
-    precise vec4 r;
-    r.x = a.w * b.x + b.w * a.x;
-    r.y = a.w * b.y + b.w * a.y;
-    r.z = a.w * b.z + b.w * a.z;
-    r.w = a.w * b.w;
-    return cl_flush(r);
-}
-
-vec4 cl_sub(vec4 a, vec4 b) {
-    precise vec4 r = a - b;
-    return cl_flush(r);
-}
-
-vec4 cl_edge(vec4 x, float anchor, float scale) {
-    precise float raw0 = (x.w - anchor) * scale;
-    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
-    if (!(raw > 0.0)) {
-        return vec4(0.0);
-    }
-    if (raw >= 1.0) {
-        return vec4(0.0, 0.0, 0.0, 1.0);
-    }
-    precise vec4 s0 = vec4(x.x * scale, x.y * scale, x.z * scale, raw);
-    vec4 s = cl_flush(s0);
-    precise vec4 q = vec4(s.x * -2.0, s.y * -2.0, s.z * -2.0, 3.0 - s.w * 2.0);
-    return cl_mul(cl_mul(s, s), q);
-}
-)glsl";
-
 String Modulator::glsl(const Cascade::Spec &p_spec) const {
     using ExactNoise::glsl_float;
-    String code = String(GLSL_CLIMATE_HELPERS).replace("FLUSH", glsl_float(ExactNoise::bits_float(Cascade::FLUSH_BITS)));
+    String code = glsl_helpers();
     code += "\n// Climate::Modulator::amplitudes: the field terms, the biome weights, then each modulated band's amplitude.\n";
     code += vformat("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", Cascade::MAX_GROUPS);
     code += vformat("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n    uint mask = 0u;\n    switch (m) {\n", Cascade::MAX_GROUPS);
@@ -709,25 +724,8 @@ String Modulator::glsl(const Cascade::Spec &p_spec) const {
         }
     }
     code += "    default: break;\n    }\n    if (mask == 0u) {\n        return 0u;\n    }\n";
-    auto channels = [](int p_base) { return vformat("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
-    code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + String(";\n");
-    for (size_t i = 0; i < table.fields.size(); i++) {
-        code += vformat("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));
-        for (const Term &t : table.fields[i].terms) {
-            const String src = t.source == GROUND ? String("g0") : vformat("f%d", t.source);
-            code += vformat("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
-        }
-    }
-    code += "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
-    const size_t n = table.biomes.size();
-    for (size_t b = 0; b + 1 < n; b++) {
-        code += vformat("    vec4 r%d = vec4(0.0, 0.0, 0.0, 1.0);\n", int64_t(b));
-        for (const Edge &e : table.biomes[b].edges) {
-            code += vformat("    r%d = cl_mul(r%d, cl_edge(f%d, %s, %s));\n", int64_t(b), int64_t(b), e.field, glsl_float(e.anchor), glsl_float(e.scale));
-        }
-        code += vformat("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
-    }
-    code += vformat("    vec4 w%d = rest;\n    switch (m) {\n", int64_t(n - 1));
+    code += glsl_weights(table, p_spec);
+    code += "    switch (m) {\n";
     for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
         if (entries[m].empty()) {
             continue;

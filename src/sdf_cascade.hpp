@@ -135,6 +135,35 @@ public:
     // The parsed climate (configure), null without one; why climate_data was refused, empty if it wasn't.
     const Climate::Table *get_climate() const { return climate ? &*climate : nullptr; }
     const String &get_climate_error() const { return climate_error; }
+
+    // Whether ground samples take their biome's material: a climate with fields (the pick reads them; a table without
+    // any has its one default biome, drawn as the procedural ground).
+    bool has_ground_materials() const { return climate && !climate->fields.empty(); }
+    // The palette index of a ground sample (one no record colours; 0 without ground materials): 1 + its biome (the base
+    // palette holds biome b's material, Climate::biome_material, at 1 + b), Climate::pick_slots of p_slots, the slots of
+    // lattice point p_p of Λ_m with the fields carried. The GPU's cascade_ground_material, bit for bit.
+    uint32_t ground_material(const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m) const {
+        return has_ground_materials() ? uint32_t(1 + Climate::pick_slots(*climate, p_slots, p_p, p_m)) : 0u;
+    }
+    // The same at LOD0 voxel p_voxel, a multiple of 2^lod.
+    uint32_t ground_material_at(const VoxelPos &p_voxel, int p_lod) const {
+        const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
+        float slots[Cascade::SLOTS];
+        Cascade::point_slots(spec, p, p_lod, slots, true);
+        return ground_material(slots, p, p_lod);
+    }
+
+    String get_ground_material_glsl() const override {
+        if (!has_ground_materials()) {
+            return String();
+        }
+        return Climate::pick_glsl(*climate, spec) + R"glsl(
+// SDFCascade::ground_material: 1 + the sample's biome.
+uint cascade_ground_material(Ch ch, WorldPos p) {
+    return 1u + climate_biome(ch, p);
+}
+)glsl";
+    }
     // The ground a climate table is checked against and reads (Climate::parse / validate / fields_at), after configure().
     Climate::Ground climate_ground() const { return Climate::Ground{ &spec, double(voxel_size), k_top, amp_cap }; }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
@@ -368,6 +397,7 @@ private:
     void attach_climate() {
         climate.reset();
         climate_error = String();
+        set_ground_materials({});
         if (climate_data.is_empty()) {
             return;
         }
@@ -380,6 +410,11 @@ private:
         ERR_FAIL_COND_MSG(!climate_error.is_empty(), "SDFCascade: " + climate_error);
         spec = Climate::combined_spec(table, spec);
         climate = std::move(table);
+        std::vector<std::pair<String, Material::Params>> grounds;
+        for (size_t b = 0; has_ground_materials() && b < climate->biomes.size(); b++) {
+            grounds.emplace_back("biome:" + climate->biomes[b].name, Climate::biome_material(climate->biomes[b]));
+        }
+        set_ground_materials(grounds);
     }
 
     // A unit register (unit()) with its distance in metres: sdf(), and sample_sdf() where no instance folds.

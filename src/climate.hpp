@@ -2,7 +2,9 @@
 
 #include "cascade.hpp"
 #include "exact_noise.hpp"
+#include "material_library.hpp"
 
+#include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/string.hpp>
 
@@ -12,7 +14,8 @@
 // Climate (biomes): a climate is data, read at configure: any number of scalar fields, each a set of perlin3 bands
 // carried down the Hermite cascade with the ground (combined_spec: the cascade's field groups), and biomes as regions of
 // the space of those fields whose weights modulate the amplitudes of any band (Cascade::Modulation, on the CPU and in
-// generated GLSL, bit for bit). Next: categorical picks per 3D cell for placement, materials per biome.
+// generated GLSL, bit for bit), and whose pick at each ground sample chooses its material (biome_material, SDFCascade::ground_material:
+// the cascade's level 0). Next: categorical picks per 3D cell for placement.
 //
 // Field f at lattice point p of Λ_m (fields_at): its channels in V_m(p) of the combined spec (Λ_m holds the octaves
 // k >= m + 3), then its linear terms in list order, coef * (the ground's or an earlier field's channels at the same
@@ -68,10 +71,19 @@ struct Amp {
     float mult = 1.0f;
 };
 
+// A biome's ground look (its material, biome_material): albedo on gentle slopes and on steep ones (linear colours),
+// roughness. The default is the page shader's procedural ground.
+struct Surface {
+    Color flat = Material::GROUND_FLAT;
+    Color steep = Material::GROUND_STEEP;
+    float roughness = 1.0f;
+};
+
 struct Biome {
     String name;
     std::vector<Edge> edges; // empty for the last (default) biome only
     std::vector<Amp> amps;
+    Surface surface;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };
 
@@ -135,5 +147,24 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
 // (hash % count)-th in list order, hash = ExactNoise::hash_cell(the point's LOD0 voxel, PICK_SEED): the same from every
 // LOD that has the point.
 int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p_p, int p_m);
+// The pick of a point's Cascade slots p_slots (combined_spec's layout, the fields carried: Cascade::point_slots with
+// p_all_fields, or Level::slots_at of a run carrying them): apply_terms, weights, pick.
+int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m);
+
+// 0xRRGGBB (sRGB) as a linear colour, alpha 1.
+Color srgb_to_linear(uint32_t p_rgb);
+// Biome p_biome's ground material ("biome:<name>" in the material library, SDFCascade's base palette): the procedural
+// ground (PATTERN_GROUND) in its surface's colours, its debug colour (--view=12).
+Material::Params biome_material(const Biome &p_biome);
+
+// pick of the weights in GLSL, bit for bit: `uint climate_biome(Ch pre, WorldPos p)`, pre the channels of a lattice
+// point in p_combined's GPU layout (the fields carried: V_m, the terms applied here) and p its absolute voxel. Brings
+// the dual-number helpers unless p_combined's modulation (its glsl) already defines them.
+String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
+// The pieces both generated functions share (climate_glsl.cpp): the dual-number helpers (cl_flush, cl_mul, cl_sub,
+// cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
+// of `Ch pre` (p_spec's GPU layout).
+String glsl_helpers();
+String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
 
 } // namespace Climate

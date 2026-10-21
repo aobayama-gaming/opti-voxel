@@ -56,16 +56,24 @@ static constexpr int MATERIAL_BINDING = 9;
 PackedByteArray band_table(const Cascade::Spec &p_spec);
 
 // Scratch points per chunk of buffer A (odd levels) and B (even levels >= 2), and vec4s per point (the ground's
-// channels, plus 4 per field group where the FieldRange carries any).
+// channels, plus 4 per field group where p_range, the passes' field_range, carries any).
 uint32_t scratch_points_a(int p_item_size);
 uint32_t scratch_points_b(int p_item_size);
-uint32_t vec4s_per_point(const Cascade::Spec &p_spec);
+uint32_t vec4s_per_point(const Cascade::Spec &p_spec, const Cascade::FieldRange &p_range);
+
+// Whether p_sdf's samples carry a ground material (its base palette is longer than {GROUND}: the climate's biomes).
+bool ground_materials(const SDFBase *p_sdf);
+// Where the passes of p_sdf carry the field groups: the spec's FieldRange (what its modulation reads), or with ground
+// materials, for chunk items (p_points false), every level of every LOD, so level 0 has the fields its pick reads (the
+// ground's bits are the same whether they are carried or not). Empty without field groups.
+Cascade::FieldRange field_range(const SDFBase *p_sdf, bool p_points);
 
 // The level pass compute shader (one source for every level) for p_sdf's cascade; p_debug: the variant
 // whose level 0 also stores its channels in debug_channels; p_points: point items; p_fold: level 0 folds the
 // chunks' instance lists (cascade_sample_sdf). Without, it is the bare cascade_terrain_sdf: the same bits as the
 // fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
-// (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING.
+// (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING; with ground materials
+// (ground_materials), for every chunk, a ground sample's being cascade_ground_material's (its biome's).
 // p_fields false: the ground alone (a spec with fields: the variant for the levels below its climate floor).
 String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_fields = true);
 
@@ -108,7 +116,7 @@ public:
     bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
             RID p_values);
     void free();
-    bool is_valid() const { return uniform_set[0].is_valid(); }
+    bool is_valid() const { return uniform_set[0].is_valid() || uniform_set[2].is_valid(); }
 
     // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
     int level_count(int p_min_lod) const;

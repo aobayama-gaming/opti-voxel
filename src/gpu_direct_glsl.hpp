@@ -174,9 +174,12 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
         if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {
-            // A chunk on the ground block (palette {GROUND}, or no room in the pool) is all ground: no reads, and its
-            // samples' sdf_material isn't written (the cascade only writes chunks with a list).
-            uint palette = palette_batch[chunk_idx] == PALETTE_GROUND_BLOCK ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+            // A chunk on the ground block (the base palette alone, or no room in the pool) takes the base's entries: none
+            // but ground without a climate (no reads, and its samples' sdf_material isn't written: the cascade then only
+            // writes chunks with a list), and a record's index past them is ground.
+            bool on_base = palette_batch[chunk_idx] == PALETTE_GROUND_BLOCK;
+            uint palette = on_base && !GROUND_MATERIALS ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+            palette = on_base && palette >= PALETTE_BASE_ENTRIES ? 0u : palette;
             uint word = pack_normal_oct(surface_normal) | (palette << PAGE_NORMAL_BITS);
             out_vertex = uvec4(floatBitsToUint(chunk_vertex), word + 1u);
         }

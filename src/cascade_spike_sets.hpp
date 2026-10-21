@@ -5,8 +5,8 @@
 #include <iterator>
 
 // The terrains CascadeSpike (cascade_spike.cpp) checks and times: "8" / "4" channels, "4c" LINEAR4 with the example
-// climate carried and modulating the ground, "4f" its fields without multipliers (carried nowhere on the GPU: unused
-// fields must cost nothing).
+// climate carried and modulating the ground, "4f" its fields without multipliers (carried only for the biome pick: the
+// cost of the ground materials alone).
 namespace CascadeSpikeSets {
 
 enum class SpikeSet {

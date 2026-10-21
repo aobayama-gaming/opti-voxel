@@ -174,6 +174,12 @@ struct Level {
     float at(int p_channel, const Vector3i64 &p_p) const { return ch[p_channel][box.index(p_p)]; }
     // All channels at a point, 0 for the ones the set doesn't carry.
     void channels_at(const Vector3i64 &p_p, float r_ch[CHANNELS]) const;
+    // Every slot of the point at box index p_i (the fields' too), 0 for the slots not carried: point_slots' layout.
+    void slots_at(int64_t p_i, float r_slots[SLOTS]) const {
+        for (int s = 0; s < SLOTS; s++) {
+            r_slots[s] = ch[s].empty() ? 0.0f : ch[s][size_t(p_i)];
+        }
+    }
 };
 
 // A band is one octave of perlin3 (wavelength 2^k voxels, value * amp).
@@ -189,6 +195,8 @@ struct FieldRange {
     int ceiling = -1;
 
     bool empty() const { return floor > ceiling; }
+    // Carried at every level of every run (a pick reads the fields at every chunk's level 0): no ground-only level.
+    bool everywhere() const { return floor <= 0 && ceiling >= MAX_LEVEL; }
     bool carried(int p_lod, int p_m) const { return p_m >= floor && p_lod <= ceiling; }
     // Whether a batch of LODs p_lods (min, max) carries them at level j above each item's LOD: monotone in j, so a
     // level carrying them always finds them in its parent level.

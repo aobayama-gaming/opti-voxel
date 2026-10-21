@@ -254,13 +254,18 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
     return code;
 }
 
+// vec4s holding p_channels floats: the scratch's and Ch's packing.
+uint32_t vec4s_for(int p_channels) {
+    return uint32_t(p_channels + 3) / 4;
+}
+
 // Scratch and debug buffer access (nv vec4s per point) and the x pass at a parent position. The scratch is planar:
 // vec4 v of slot s at v * plane + s, plane = the buffer's vec4s / p_stride, so the ground's loads stay contiguous
 // whatever the fields; the debug channels are per point (slot * p_stride + v). p_stride: vec4s_per_point of the whole
 // spec (the ground-only variant reads and writes the ground's planes of the same buffers).
 String storage_functions(const Spec &p_spec, int p_stride) {
     const int nch = p_spec.gpu_channels();
-    const int nv = int(CascadeGLSL::vec4s_per_point(p_spec));
+    const int nv = int(vec4s_for(nch)); // this variant's channels (the view: fields only in the fields variant)
     String code = "Ch unpack(";
     for (int v = 0; v < nv; v++) {
         code += vformat("%svec4 v%d", v ? ", " : "", v);
@@ -469,10 +474,23 @@ uint32_t scratch_points_b(int p_item_size) {
     return n * n * n;
 }
 
-uint32_t vec4s_per_point(const Spec &p_spec) {
+uint32_t vec4s_per_point(const Spec &p_spec, const FieldRange &p_range) {
     // Fields carried nowhere (an empty FieldRange) take no scratch.
-    const int channels = p_spec.field_range().empty() ? channel_count(p_spec.set) : p_spec.gpu_channels();
-    return uint32_t(channels + 3) / 4;
+    const int channels = p_range.empty() ? channel_count(p_spec.set) : p_spec.gpu_channels();
+    return vec4s_for(channels);
+}
+
+bool ground_materials(const SDFBase *p_sdf) {
+    const SDFGpuTable *table = p_sdf->get_gpu_table();
+    return table && table->base_palette().size() > 1;
+}
+
+FieldRange field_range(const SDFBase *p_sdf, bool p_points) {
+    const Spec &spec = *p_sdf->get_cascade();
+    if (spec.fields.empty()) {
+        return FieldRange();
+    }
+    return !p_points && ground_materials(p_sdf) ? FieldRange{ 0, MAX_LEVEL } : spec.field_range();
 }
 
 String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_fields) {
@@ -495,20 +513,32 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     const char *channels = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod";
     code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c, material, skirt_extra)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
-    // Only the fold writes materials, and only for chunks with a list: a chunk without one is ground, and the meshers
-    // don't read its samples' materials (its palette is the ground block, or its list is empty).
-    const bool store = p_material && p_fold;
+    // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
+    // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
+    // With them every chunk's samples get one: the winner's, or the ground's pick, read from the fields (field_range
+    // then carries them everywhere, so the fields variant is the only one CascadePasses compiles).
+    const bool grounds = ground_materials(p_sdf) && !p_points;
+    const bool store = p_material && (p_fold || grounds);
+    const bool pick = grounds && p_fields && !whole.fields.empty();
     code = code.replace("/*MATERIAL_BUFFER*/", store ? glsl_material_buffer(MATERIAL_BINDING, "writeonly") : String());
-    code = code.replace("/*MATERIAL_STORE*/", store ? "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }" : "");
+    String material_store;
+    if (store && grounds) {
+        // Air samples (w > 0, after the skirt) keep 0: the meshers read a vertex's material from its cell's solid corners.
+        material_store = String(pick ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch, p);\n    }\n    " : "") +
+                "sdf_material[sample_index] = material;";
+    } else if (store) {
+        material_store = "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }";
+    }
+    code = code.replace("/*MATERIAL_STORE*/", material_store);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? p_sdf->get_sample_fold_glsl() : String()));
     const String modulation = spec->modulation ? spec->modulation->glsl(*spec) : String();
     const bool fields = !spec->fields.empty();
-    const FieldRange range = spec->field_range();
+    const FieldRange range = field_range(p_sdf, p_points);
     const String fields_flag = fields ? String("bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n\n") : String();
-    code = code.replace("/*CASCADE*/", fields_flag + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole))) + band_functions(*spec) + modulation);
+    code = code.replace("/*CASCADE*/", fields_flag + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole, range))) + band_functions(*spec) + modulation + (pick ? p_sdf->get_ground_material_glsl() : String()));
     code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
     code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
 
@@ -561,17 +591,18 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
         RID p_output, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list, RID p_material) {
     const Spec *spec = p_sdf->get_cascade();
     rd = p_rd;
-    top = spec->top_level();
     item_size = p_item_size;
     max_chunks = p_max_items;
     const bool points = item_size == 1;
+    fields = CascadeGLSL::field_range(p_sdf, points);
+    top = spec->top_level(!fields.empty());
 
     // Variant (fields ? 2 : 0) + (fold ? 1 : 0): the bare cascade at level 0 or the instance fold (given the table's
     // buffers), with the ground alone or with the fields (where the spec's FieldRange carries them: none if empty).
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
     ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
-    fields = spec->fields.empty() ? FieldRange() : spec->field_range();
-    for (int c = 0; c < (fields.empty() ? 1 : 2); c++) {
+    // Fields carried everywhere: the ground-only variants would never run.
+    for (int c = fields.everywhere() ? 1 : 0; c < (fields.empty() ? 1 : 2); c++) {
         for (int f = 0; f < (table ? 2 : 1); f++) {
             const int v = 2 * c + f;
             const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), c == 1);
@@ -583,7 +614,7 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
         }
     }
 
-    const uint64_t vec4_bytes = 16 * CascadeGLSL::vec4s_per_point(*spec);
+    const uint64_t vec4_bytes = 16 * CascadeGLSL::vec4s_per_point(*spec, fields);
     const uint64_t bytes_a = uint64_t(max_chunks) * CascadeGLSL::scratch_points_a(item_size) * vec4_bytes;
     const uint64_t bytes_b = uint64_t(max_chunks) * CascadeGLSL::scratch_points_b(item_size) * vec4_bytes;
     if (p_share_scratch != nullptr) {
@@ -634,7 +665,7 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
             uniform_set[v] = rd->uniform_set_create((v & 1) ? fold_uniforms : uniforms, shader[v], 0);
         }
     }
-    return uniform_set[0].is_valid() && (fields.empty() || uniform_set[2].is_valid());
+    return (uniform_set[0].is_valid() || fields.everywhere()) && (fields.empty() || uniform_set[2].is_valid());
 }
 
 bool CascadePasses::_compile(int p_variant, const String &p_name, const String &p_code) {
