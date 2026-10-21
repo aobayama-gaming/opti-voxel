@@ -8,11 +8,13 @@
 #include "godot_cpp/variant/vector3.hpp"
 
 #include "chunk_math.hpp"
+#include "exact_noise.hpp"
 #include "material_library.hpp"
 #include "page_format.hpp"
 
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
+#include <array>
 #include <vector>
 
 namespace godot {
@@ -84,18 +86,6 @@ public:
     virtual Dictionary get_stats() const { return Dictionary(); }
 };
 
-// An axis-aligned box in LOD0 voxels (inclusive), the region an instance edit changed.
-struct VoxelBox {
-    VoxelPos lo;
-    VoxelPos hi;
-    bool valid = false;
-
-    bool intersects(const VoxelBox &p_o) const {
-        return valid && p_o.valid && lo.x <= p_o.hi.x && p_o.lo.x <= hi.x && lo.y <= p_o.hi.y && p_o.lo.y <= hi.y && lo.z <= p_o.hi.z &&
-                p_o.lo.z <= hi.z;
-    }
-};
-
 class SDFBase {
 public:
     // Every terrain's datum, metres of absolute y: a flat world, so far origins only show terrain at y = 0.
@@ -119,13 +109,12 @@ public:
     // the bare cascade, the GPU discoverer's point items bit for bit).
     virtual float evaluate_cull(const WorldPos &p_pos, int p_lod) const = 0;
 
+    // evaluate_cull's field at a LOD0 voxel with its gradient, both in LOD0 voxels (the forest's sites). Thread-safe.
+    virtual ExactNoise::Float4 ground_field(const VoxelPos &p_voxel) const = 0;
+
     // The unit direction upright things (trees) grow along at a LOD0 voxel: the one source of "up" for placement.
     // +y on the flat world; a planet overrides it.
-    virtual void up_at(const VoxelPos & /*p_voxel*/, double r_up[3]) const {
-        r_up[0] = 0.0;
-        r_up[1] = 1.0;
-        r_up[2] = 0.0;
-    }
+    virtual std::array<double, 3> up_at(const VoxelPos & /*p_voxel*/) const { return { 0.0, 1.0, 0.0 }; }
 
     // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
     // wave, over the WorkerThreadPool in blocks of BATCH_BLOCK points (evaluate_cull is thread-safe).

@@ -291,11 +291,14 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     std::vector<TreeSite> sites;
     const int64_t side = forest_cell_side(forest_count, forest_area, p_voxel);
     if (side > 0) {
-        // The zone: a cube of side forest_area around the ground under the scene's centre (the sites are 3D cells).
+        // The zone: the square of side forest_area around the scene's centre, over every height the ground can reach in
+        // it (4 times its half side up and down from the ground at the centre; the walk only tries the cells along the
+        // surface, so the empty air costs nothing). The scene's centre is still found down a column (ground_y).
         const int64_t x = std::llround(p_centre_x / p_voxel), z = std::llround(p_centre_z / p_voxel);
         const VoxelPos centre(x, ground_y(x, z), z);
         const int64_t half = std::llround(0.5 * forest_area / p_voxel);
-        forest_sites(centre - VoxelPos(half, half, half), centre + VoxelPos(half, half, half), side, [this](const VoxelPos &p_v) { return ground_field(p_v); }, sites);
+        const VoxelPos reach(half, 4 * half, half);
+        forest_sites(centre - reach, centre + reach, side, [this](const VoxelPos &p_v) { return ground_field(p_v); }, sites);
     }
     // Each site's tree is independent (up_at and the library are const): on the worker pool, a batch at a time (the
     // parts wait for their turn), then admitted in site order (the record ids don't change).
@@ -311,9 +314,7 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
                 TreeSite &site = sites[i + p_j];
                 grown[p_j].clear(); // empty: in a lake
                 if (!in_lake(site.base.x, site.base.z)) {
-                    double up[3];
-                    up_at(site.base, up);
-                    grow_tree(tree_species()[site.species], site.base, site.seed, p_voxel, p_types, grown[p_j], nullptr, up);
+                    grow_tree(tree_species()[site.species], site.base, up_at(site.base), site.seed, p_voxel, p_types, grown[p_j]);
                 }
             });
         }

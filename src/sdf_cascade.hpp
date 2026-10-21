@@ -227,11 +227,7 @@ public:
     // The bare cascade's top solid voxel in the column: sphere tracing on the LOD0 distance (whole voxels, at least
     // one per step) until the side flips, then the boundary between the last two points by bisection.
     int64_t ground_y(int64_t p_x, int64_t p_z) const override {
-        auto distance = [&](int64_t p_y) {
-            float ch[Cascade::CHANNELS];
-            channels_at(VoxelPos(p_x, p_y, p_z), 0, ch);
-            return unit(ch, p_y, 0).w;
-        };
+        auto distance = [&](int64_t p_y) { return ground_field(VoxelPos(p_x, p_y, p_z)).w; };
         int64_t y = datum.y;
         float d = distance(y);
         const bool start_air = d > 0.0f;

@@ -113,9 +113,6 @@ public:
     // The absolute LOD0 voxel y of the ground's top solid voxel in column (p_x, p_z), instances left out: where the
     // scenes stand.
     virtual int64_t ground_y(int64_t p_x, int64_t p_z) const = 0;
-    // The ground's field at a LOD0 voxel, instances left out: gradient and distance in LOD0 voxels (the forest's sites).
-    virtual ExactNoise::Float4 ground_field(const VoxelPos &p_voxel) const = 0;
-
     // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite, normal
     // floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level operators, and
     // a smooth radius is >= 0.

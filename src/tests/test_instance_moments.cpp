@@ -231,7 +231,7 @@ TEST_CASE("Moments: a tree's moments per material are the sum of its parts, leav
         CAPTURE(species);
         const VoxelPos base(1000, 200, -3000);
         std::vector<TableRecord> parts;
-        grow_tree(tree_species()[species], base, 0x7EE5u + uint32_t(species), 0.05, types, parts);
+        grow_tree(tree_species()[species], base, UP_Y, 0x7EE5u + uint32_t(species), 0.05, types, parts);
         CHECK(!parts.empty());
         const MaterialMoments mm = span_moments(lib, parts.data(), uint32_t(parts.size()), base);
         const Moments *bark = mm.find(Material::BARK);
