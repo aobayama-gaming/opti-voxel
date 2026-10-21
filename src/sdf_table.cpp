@@ -140,9 +140,13 @@ String SDFTable::edit_error(const float *p_rotation, const float *p_params, int 
 }
 
 void SDFTable::publish(const std::shared_ptr<const InstanceSnapshot> &p_snapshot, const VoxelBox &p_region) {
+    swap_snapshot(p_snapshot);
+    edit_box = p_region;
+}
+
+void SDFTable::swap_snapshot(const std::shared_ptr<const InstanceSnapshot> &p_snapshot) {
     std::atomic_store(&snapshot, p_snapshot);
     gpu.set_snapshot(p_snapshot);
-    edit_box = p_region;
 }
 
 int64_t SDFTable::max_instance_extent() const {
@@ -169,13 +173,19 @@ void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_aft
         }
     }
     version++;
-    rebuild.note(ids);
-    publish(edit_snapshot(*current(), records, ids, version, &rebuild), all);
+    publish(edit_snapshot(*current(), records, ids, version, rebuild), all);
 }
 
-void SDFTable::poll_rebuild(bool p_wait) {
-    if (rebuild.ready() || (p_wait && rebuild.running())) {
-        publish(rebuild.take(*current()), edit_box);
+void SDFTable::poll_rebuild() {
+    if (rebuild.ready()) {
+        finish_rebuild();
+    }
+}
+
+void SDFTable::finish_rebuild() {
+    if (rebuild.running()) {
+        const std::shared_ptr<const InstanceSnapshot> now = current();
+        swap_snapshot(rebuild.take(*now, now->records, now->version));
     }
 }
 

@@ -469,13 +469,7 @@ TEST_CASE("Archetype table: a base rebuilt on the pool lists what a whole new in
     auto place = [&](TableRecord &r_rec, uint32_t p_i, uint32_t p_salt) {
         r_rec.anchor = VoxelPos(ExactNoise::random_offset(p_i, 1, p_salt, E), ExactNoise::random_offset(p_i, 2, p_salt, E),
                 ExactNoise::random_offset(p_i, 3, p_salt, E));
-        const Bounds wb = record_world_bounds(lib[r_rec.def], r_rec);
-        for (int a = 0; a < 3; a++) {
-            r_rec.box_lo[a] = int32_t(wb.lo[a] - r_rec.anchor[a]);
-            r_rec.box_hi[a] = int32_t(wb.hi[a] - r_rec.anchor[a]);
-        }
-        r_rec.lipschitz = wb.lipschitz;
-        r_rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
+        finish_record(lib[r_rec.def], r_rec, param.skirt_depth, false);
     };
     const uint32_t n = 300;
     std::vector<TableRecord> initial(n);
@@ -488,9 +482,7 @@ TEST_CASE("Archetype table: a base rebuilt on the pool lists what a whole new in
     uint32_t version = 1;
     RecordStore store(initial, version);
     std::shared_ptr<const InstanceSnapshot> snap = build_snapshot(library, 1.0f, false, store, param, 10, version);
-    BaseRebuild rebuild;
-    rebuild.rebase = 64;
-    rebuild.hard_overlay = 96;
+    BaseRebuild rebuild(64, 96);
     int64_t starts = 0, early = 0, hard = 0, lists = 0;
     for (uint32_t step = 0; step < 6 * n; step++) {
         // Records in turn, so the overlay grows by one id per edit: a rebuild starts every ~64 edits.
@@ -502,13 +494,12 @@ TEST_CASE("Archetype table: a base rebuilt on the pool lists what a whole new in
         store.set(id, rec, version);
         const bool was_running = rebuild.running();
         const std::shared_ptr<const IndexLayer> base_before = snap->base;
-        rebuild.note({ id });
-        snap = edit_snapshot(*snap, store, { id }, version, &rebuild);
+        snap = edit_snapshot(*snap, store, { id }, version, rebuild);
         starts += !was_running && rebuild.running();
         hard += was_running && !rebuild.running() && snap->base != base_before;
         // Even rebuilds are taken early (waiting for the task), odd ones run until an edit passes hard_overlay.
         if (rebuild.running() && starts % 2 == 0 && h.y % 5u == 0u) {
-            snap = rebuild.take(*snap);
+            snap = rebuild.take(*snap, store, version);
             early++;
         }
         CHECK(snap->version == version);

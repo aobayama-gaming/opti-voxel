@@ -491,7 +491,12 @@ TEST_CASE("SDFCascade table: the edit overlay lists exactly what a whole new ind
         edits++;
         touched.push_back(uint32_t(id));
         if (h.y % 13u == 0u) {
-            sdf.poll_rebuild(h.z % 2u == 0u); // a base built on the pool lands between edits, as in _process
+            // A base built on the pool lands between edits, as in _process (or waited for).
+            if (h.z % 2u == 0u) {
+                sdf.finish_rebuild();
+            } else {
+                sdf.poll_rebuild();
+            }
         }
         if (step % 200 != 199) {
             continue;
@@ -518,7 +523,7 @@ TEST_CASE("SDFCascade table: the edit overlay lists exactly what a whole new ind
         MESSAGE("after ", edits, " edits: overlay ", snap->overlay_ids.size(), " records, base ", std::string(snap->base == first->base ? "kept" : "rebuilt"));
     }
     MESSAGE("overlay vs whole index: ", lists, " chunk lists and point queries, ", entries, " entries");
-    sdf.poll_rebuild(true);
+    sdf.finish_rebuild();
     CHECK(sdf.get_snapshot()->base != first->base); // more than REBASE records edited: rebuilt at least once
     CHECK(entries > 1000);
     // An edit sends its page, not the table.

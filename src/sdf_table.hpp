@@ -104,8 +104,10 @@ public:
     // the chunks to re-mesh.
     bool edit_affects_chunk(const ChunkId &p_chunk) const override;
     // Publishes the index base an edit started building on the pool, once it is done (main thread, every frame). The
-    // lists don't change, nor the version: nothing to upload or re-mesh. p_wait: wait for it if it runs (tests).
-    void poll_rebuild(bool p_wait = false);
+    // lists don't change, nor the version: nothing to upload or re-mesh.
+    void poll_rebuild();
+    // The same, waiting for the base if it is still being built (tests).
+    void finish_rebuild();
 
     // The current snapshot. Edits replace it on the main thread while the discoverer thread evaluates and the render
     // thread uploads: every reader takes one atomic copy and works on it.
@@ -183,6 +185,8 @@ private:
 
     // Makes p_snapshot the current one (readers and the GPU table) and p_region the last edit's region.
     void publish(const std::shared_ptr<const Archetype::InstanceSnapshot> &p_snapshot, const VoxelBox &p_region);
+    // Makes p_snapshot the current one, the last edit's region kept (a new base: the same lists).
+    void swap_snapshot(const std::shared_ptr<const Archetype::InstanceSnapshot> &p_snapshot);
     // The widest instance an edit may add (box plus twice k, voxels): 4 top-LOD chunk spans, so the index places a
     // handful of entries for it, and at most 2^29 so that box_lo minus the influence margin (clamped to INPUT_LIMIT
     // = 2^30) stays in int32 on the GPU (arch_in_box).
