@@ -78,6 +78,10 @@ struct MaterialMoments {
     std::vector<std::pair<uint32_t, Moments>> parts; // in order of first appearance
 
     void add(uint32_t p_material, const Moments &p_moments, const double p_offset[3]);
+    void add(uint32_t p_material, const Moments &p_moments) {
+        const double zero[3] = { 0.0, 0.0, 0.0 };
+        add(p_material, p_moments, zero);
+    }
     const Moments *find(uint32_t p_material) const;
 };
 

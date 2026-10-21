@@ -25,10 +25,9 @@ public:
 
     // The moments of p_site's tree grown along p_up, per material, relative to its base (voxels).
     MaterialMoments tree(const TreeSite &p_site, const UpAxis &p_up) const;
-    // A class's mean at scale 1, upright, relative to the base.
-    const MaterialMoments &mean(int p_species, int p_bucket) const { return classes[p_species * SIZE_BUCKETS + p_bucket]; }
+    // A class's mean at scale 1, upright, relative to the base (empty and ERR if there is no such class).
+    const MaterialMoments &mean(int p_species, int p_bucket) const;
     static int size_bucket(double p_scale);
-    bool empty() const { return classes.empty(); }
 
 private:
     std::vector<MaterialMoments> classes; // species-major
@@ -40,7 +39,7 @@ struct ForestGenerator {
     int64_t side = 0;
 
     // The trees whose base lies in p_query and the zone, in cell order (forest_sites: a tree's neighbours, for the
-    // spacing, are looked up past the query, so a tree is the same from any query).
+    // spacing, are looked up past the query, so a tree is the same from any query; only the zone's trees count).
     void trees(const VoxelBox &p_query, const FieldFn &p_ground, std::vector<CellSite> &r_out) const;
 };
 

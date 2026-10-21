@@ -223,10 +223,7 @@ TEST_CASE("Moments: the parallel axis theorem, rotation and the principal axes")
 
 TEST_CASE("Moments: a tree's moments per material are the sum of its parts, leaves above bark") {
     DefLibrary lib;
-    const int branch = lib.add(make_branch_type(), Material::BARK);
-    const int crown = lib.add(make_rock_type(crown_k(0.05), CROWN_SEED), Material::LEAVES);
-    const int cone = lib.add(make_cone_type(crown_k(0.05), CROWN_SEED), Material::LEAVES);
-    const TreeTypes types = crown_types(branch, crown, lib[crown], cone);
+    const TreeTypes types = add_tree_types(lib, 0.05);
     for (int species = 0; species < int(tree_species().size()); species++) {
         CAPTURE(species);
         const VoxelPos base(1000, 200, -3000);

@@ -1,5 +1,6 @@
 #include "sdf_table.hpp"
 
+#include "forest_generator.hpp"
 #include "moment_layers.hpp"
 #include "parallel_for.hpp"
 
@@ -360,6 +361,30 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     forest["records_per_tree_max"] = most;
     forest["moments"] = materials_stats;
     forest["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    if (!trees.empty()) {
+        // What the far field will read for this forest: per material, the class moments' summed volume over the trees'
+        // own (forest_generator.hpp; 1 within 0.5% in the unit test).
+        const uint64_t classes_us = Time::get_singleton()->get_ticks_usec();
+        const TreeClasses classes(*library, p_types, p_voxel);
+        double guess[2] = {};
+        for (const TreeSpan &t : trees) {
+            TreeSite site;
+            site.seed = t.seed;
+            site.species = t.species;
+            const MaterialMoments mm = classes.tree(site, UP_Y); // volumes don't turn
+            for (int i = 0; i < 2; i++) {
+                if (const Moments *m = mm.find(tree_materials[i])) {
+                    guess[i] += m->m0;
+                }
+            }
+        }
+        Dictionary class_stats;
+        for (int i = 0; i < 2; i++) {
+            class_stats[materials.name(tree_materials[i])] = volume[i] > 0.0 ? guess[i] / volume[i] : 0.0;
+        }
+        class_stats["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - classes_us) * 1e-3;
+        forest["classes"] = class_stats;
+    }
     r_stats["trees"] = forest;
 }
 
@@ -583,9 +608,7 @@ void SDFTable::build_table(int p_lod_count) {
     lib.add(make_sphere_type());
     types.capsule = lib.add(make_capsule_type());
     types.rock = lib.add(make_rock_type(ExactNoise::lattice_k(8.0, vs), ROCK_SEED));
-    const int branch = lib.add(make_branch_type(), Material::BARK);
-    const int crown = lib.add(make_rock_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
-    const int cone = lib.add(make_cone_type(crown_k(vs), CROWN_SEED), Material::LEAVES);
+    const TreeTypes tree_types = add_tree_types(lib, vs);
     if (scene == Scene::SHAPES) {
         types.holed_cube = lib.add(make_swiss_cube_type(1));
         types.die = lib.add(make_die_type());
@@ -619,7 +642,7 @@ void SDFTable::build_table(int p_lod_count) {
     Dictionary scene_stats;
     add_biomes(types, scene_stats);
     add_scatter(types);
-    add_forest(crown_types(branch, crown, lib[crown], cone), vs, SCENE_X, SCENE_Z, scene_stats);
+    add_forest(tree_types, vs, SCENE_X, SCENE_Z, scene_stats);
     add_moment_blobs(blob, scene_stats);
     gpu.set_scene_stats(scene_stats);
     edit_regions.clear();

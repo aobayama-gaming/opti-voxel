@@ -449,8 +449,16 @@ TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, in
     return t;
 }
 
+TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel) {
+    const int branch = r_library.add(make_branch_type(), Material::BARK);
+    const int crown = r_library.add(make_rock_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
+    const int cone = r_library.add(make_cone_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
+    return crown_types(branch, crown, r_library[crown], cone);
+}
+
+// Grower::grow reads the lean and azimuth from the same hash (.y, .z).
 double tree_scale(uint32_t p_seed) {
-    return 0.8 + 0.4 * unit_of(hash3(p_seed, 0x7EEu, 0u).x);
+    return TREE_SCALE_MIN + TREE_SCALE_SPAN * unit_of(hash3(p_seed, 0x7EEu, 0u).x);
 }
 
 void up_rotation(const UpAxis &p_up, float r_rows[9]) {
@@ -507,10 +515,6 @@ bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, T
 }
 
 namespace {
-
-bool cell_order(const VoxelPos &p_a, const VoxelPos &p_b) {
-    return p_a.z != p_b.z ? p_a.z < p_b.z : (p_a.y != p_b.y ? p_a.y < p_b.y : p_a.x < p_b.x);
-}
 
 const VoxelPos CORNERS[8] = { VoxelPos(0, 0, 0), VoxelPos(1, 0, 0), VoxelPos(0, 1, 0), VoxelPos(1, 1, 0), VoxelPos(0, 0, 1), VoxelPos(1, 0, 1),
     VoxelPos(0, 1, 1), VoxelPos(1, 1, 1) };
@@ -618,7 +622,8 @@ void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, c
     }
 }
 
-void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out) {
+void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out,
+        const VoxelBox *p_members) {
     // Every site of the cells next to the box's (a neighbour's site is in its own cell, which meets the grown box).
     std::vector<CellSite> all;
     const VoxelPos grow(p_side, p_side, p_side);
@@ -638,7 +643,7 @@ void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, co
                         continue; // only the neighbours before it in cell order
                     }
                     const auto it = std::lower_bound(all.begin(), all.end(), n, [](const CellSite &p_a, const VoxelPos &p_b) { return cell_order(p_a.cell, p_b); });
-                    if (it != all.end() && it->cell == n) {
+                    if (it != all.end() && it->cell == n && (!p_members || p_members->contains(it->site.base))) {
                         const VoxelPos d = it->site.base - cs.site.base;
                         crowded = std::sqrt(double(d.x) * d.x + double(d.y) * d.y + double(d.z) * d.z) < spacing;
                     }

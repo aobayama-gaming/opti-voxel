@@ -10,15 +10,19 @@ using namespace Archetype;
 
 namespace {
 
-// The types trees use with their materials, registered as SDFTable::build_table does.
+// The types trees use, as SDFTable::build_table registers them, and their classes at 5 cm (built once).
 struct ForestLibrary {
+    static constexpr double VOXEL = 0.05;
     DefLibrary lib;
     TreeTypes types;
-    explicit ForestLibrary(double p_voxel) {
-        const int branch = lib.add(make_branch_type(), Material::BARK);
-        const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
-        const int cone = lib.add(make_cone_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
-        types = crown_types(branch, crown, lib[crown], cone);
+    TreeClasses classes;
+    ForestLibrary() {
+        types = add_tree_types(lib, VOXEL);
+        classes = TreeClasses(lib, types, VOXEL);
+    }
+    static const ForestLibrary &get() {
+        static const ForestLibrary library;
+        return library;
     }
 };
 
@@ -40,9 +44,9 @@ double distance(const double *p_a, const double *p_b) {
 // relative error of its volume, of its centroid (against its spread) and of its ellipsoid's largest semi-axis; and,
 // what a far blob draws, the sum over many trees.
 TEST_CASE("Forest: a tree's class moments stand for its own, the sum over many trees closely") {
-    const double voxel = 0.05;
-    const ForestLibrary fl(voxel);
-    const TreeClasses classes(fl.lib, fl.types, voxel);
+    const ForestLibrary &fl = ForestLibrary::get();
+    const double voxel = ForestLibrary::VOXEL;
+    const TreeClasses &classes = fl.classes;
     for (int sp = 0; sp < int(tree_species().size()); sp++) {
         std::vector<double> mass_err, centre_err, axis_err;
         double true_sum[2] = {}, class_sum[2] = {};
@@ -91,9 +95,7 @@ TEST_CASE("Forest: a tree's class moments stand for its own, the sum over many t
 }
 
 TEST_CASE("Forest: a tree's class moments turn with its up and grow with its scale") {
-    const double voxel = 0.05;
-    const ForestLibrary fl(voxel);
-    const TreeClasses classes(fl.lib, fl.types, voxel);
+    const TreeClasses &classes = ForestLibrary::get().classes;
     TreeSite site;
     site.seed = 0x1234u;
     const MaterialMoments upright = classes.tree(site, UP_Y);
@@ -129,10 +131,7 @@ TEST_CASE("Forest generator: the trees of two halves are the trees of the whole"
     forest.trees(VoxelBox{ origin - VoxelPos(5000, 5000, 5000), origin + VoxelPos(5000, 5000, 5000), true }, hills, whole);
     forest.trees(VoxelBox{ origin - VoxelPos(5000, 5000, 5000), origin + VoxelPos(-1, 5000, 5000), true }, hills, halves);
     forest.trees(VoxelBox{ origin - VoxelPos(0, 5000, 5000), origin + VoxelPos(5000, 5000, 5000), true }, hills, halves);
-    auto order = [](const CellSite &p_a, const CellSite &p_b) {
-        const VoxelPos &a = p_a.cell, &b = p_b.cell;
-        return a.z != b.z ? a.z < b.z : (a.y != b.y ? a.y < b.y : a.x < b.x);
-    };
+    auto order = [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); };
     std::sort(halves.begin(), halves.end(), order);
     MESSAGE("forest: ", whole.size(), " trees whole, ", halves.size(), " from two halves");
     CHECK(whole.size() > 500);

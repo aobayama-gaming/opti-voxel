@@ -16,12 +16,7 @@ namespace {
 struct TreeLibrary {
     DefLibrary lib;
     TreeTypes types;
-    explicit TreeLibrary(double p_voxel) {
-        const int branch = lib.add(make_branch_type());
-        const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED));
-        const int cone = lib.add(make_cone_type(crown_k(p_voxel), CROWN_SEED));
-        types = crown_types(branch, crown, lib[crown], cone);
-    }
+    explicit TreeLibrary(double p_voxel) { types = add_tree_types(lib, p_voxel); }
 };
 
 std::vector<TableRecord> grow(const TreeLibrary &p_lib, const TreeSpecies &p_species, uint32_t p_seed, double p_voxel,
