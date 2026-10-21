@@ -142,8 +142,34 @@ func _ready():
 	for a in Presets.user_args():
 		if a.begins_with("--marks="):
 			marks_dir = a.trim_prefix("--marks=")
+	_setup_upscaling()
 	DirAccess.make_dir_recursive_absolute(marks_dir)
 	get_tree().auto_accept_quit = false
+
+# Godot's built-in 3D upscalers (no DLSS in 4.6): `--upscale=fsr2|fsr1|bilinear` renders the 3D at
+# `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD follows the
+# window's pixels, not the render's, so the meshes keep their detail.
+func _setup_upscaling() -> void:
+	var modes := {
+		"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
+		"fsr1": Viewport.SCALING_3D_MODE_FSR,
+		"fsr2": Viewport.SCALING_3D_MODE_FSR2,
+	}
+	var mode := ""
+	var render_scale := 0.5
+	for a in Presets.user_args():
+		if a.begins_with("--upscale="):
+			mode = a.trim_prefix("--upscale=")
+		if a.begins_with("--render_scale="):
+			render_scale = a.trim_prefix("--render_scale=").to_float()
+	if mode.is_empty():
+		return
+	if not modes.has(mode):
+		push_error("--upscale=%s: expected fsr2, fsr1 or bilinear" % mode)
+		return
+	var viewport := get_viewport()
+	viewport.scaling_3d_mode = modes[mode]
+	viewport.scaling_3d_scale = clampf(render_scale, 0.25, 2.0)
 
 func _make_hud() -> void:
 	var hud_layer := CanvasLayer.new()
