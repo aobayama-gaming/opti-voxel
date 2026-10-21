@@ -11,6 +11,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <numeric>
 #include <tuple>
 
 using namespace Archetype;
@@ -21,8 +22,8 @@ int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_
     }
     const String error = edit_error(p_rotation, p_params, p_op, p_k);
     ERR_FAIL_COND_V_MSG(!error.is_empty(), -1, "add_instance: " + error);
-    ERR_FAIL_COND_V_MSG(records.size() >= gpu.instance_capacity(), -1,
-            vformat("add_instance: the table is full (%d instances, removed ones included).", gpu.instance_capacity()));
+    ERR_FAIL_COND_V_MSG(records.size() >= gpu.table_capacity(), -1,
+            vformat("add_instance: the table is full (%d instances, removed ones included).", gpu.table_capacity()));
     TableRecord rec;
     rec.def = uint8_t(p_type);
     rec.op = Combine(p_op);
@@ -212,7 +213,7 @@ void SDFTable::update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids) 
             }
             continue;
         }
-        ERR_CONTINUE_MSG(records.size() >= gpu.instance_capacity(), "SDFTable: a moment blob left out: the table is full.");
+        ERR_CONTINUE_MSG(records.size() >= gpu.table_capacity(), "SDFTable: a moment blob left out: the table is full.");
         add_blob_record(key, rec);
         TableRecord none = rec;
         none.removed = true;
@@ -239,105 +240,83 @@ void SDFTable::blob_changed(uint32_t p_id, const TableRecord &p_old, const Table
     r_ids.push_back(p_id);
 }
 
-void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats) {
+void SDFTable::add_forest(const TreeTypes &p_types, int p_blob_type, Dictionary &r_stats) {
+    const double vs = param.voxel_size;
+    ForestField::Setup s;
+    s.generator.side = forest_cell_side(forest_count, forest_area, vs);
+    if (s.generator.side <= 0) {
+        return;
+    }
     const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
-    std::vector<CellSite> sites;
-    ForestGenerator generator;
-    generator.side = forest_cell_side(forest_count, forest_area, p_voxel);
-    if (generator.side > 0) {
-        // The zone: the square of side forest_area around the scene's centre, over every height the ground can reach in
-        // it (4 times its half side up and down from the ground at the centre; the walk only tries the cells along the
-        // surface, so the empty air costs nothing). The scene's centre is still found down a column (ground_y).
-        const int64_t x = std::llround(p_centre_x / p_voxel), z = std::llround(p_centre_z / p_voxel);
-        const VoxelPos centre(x, ground_y(x, z), z);
-        const int64_t half = std::llround(0.5 * forest_area / p_voxel);
-        const VoxelPos reach(half, 4 * half, half);
-        generator.zone = VoxelBox{ centre - reach, centre + reach, true };
-        generator.trees(generator.zone, [this](const VoxelPos &p_v) { return ground_field(p_v); }, sites);
+    // The zone: the square of side forest_area around the scene's centre, over every height the ground can reach in it (4
+    // times its half side up and down from the ground at the centre; the walks only try the cells along the surface, so
+    // the empty air costs nothing). The scene's centre is still found down a column (ground_y).
+    const int64_t x = std::llround(SCENE_X / vs), z = std::llround(SCENE_Z / vs);
+    const VoxelPos centre(x, ground_y(x, z), z);
+    const int64_t half = std::llround(0.5 * forest_area / vs);
+    const VoxelPos reach(half, 4 * half, half);
+    s.generator.zone = VoxelBox{ centre - reach, centre + reach, true };
+    s.library = library;
+    s.types = p_types;
+    s.blob_type = moment_blobs ? p_blob_type : -1;
+    s.voxel = vs;
+    s.finish = record_finish();
+    s.max_extent = max_instance_extent();
+    s.ground = [this](const VoxelPos &p_v) { return ground_field(p_v); };
+    s.up = [this](const VoxelPos &p_v) { return up_at(p_v); };
+    if (!lava_pools.empty()) {
+        s.keep_out = [this](const VoxelPos &p_v) { return in_lake(p_v.x, p_v.z); };
     }
-    // Each site's tree is independent (up_at and the library are const): on the worker pool, a batch at a time (the
-    // parts wait for their turn), then admitted in site order (the record ids don't change).
-    constexpr size_t BATCH = 4096;
-    std::vector<std::vector<TableRecord>> grown(MIN(BATCH, sites.size()));
-    int64_t most = 0;
-    // Per material (bark, leaves): the trees' summed volume and equal-covariance semi-axes (span_moments), for the means.
-    const uint32_t tree_materials[2] = { Material::BARK, Material::LEAVES };
-    double volume[2] = {}, axes[2][3] = {};
-    for (size_t i = 0; i < sites.size(); i++) {
-        if (i % BATCH == 0) {
-            parallel_for(uint32_t(MIN(BATCH, sites.size() - i)), "SDFTable::add_forest", [&](uint32_t p_j) {
-                const TreeSite &site = sites[i + p_j].site;
-                grown[p_j].clear(); // empty: in a lake
-                if (!in_lake(site.base.x, site.base.z)) {
-                    grow_tree(tree_species()[site.species], site.base, up_at(site.base), site.seed, p_voxel, p_types, grown[p_j]);
-                }
-            });
-        }
-        const TreeSite &site = sites[i].site;
-        std::vector<TableRecord> &parts = grown[i % BATCH];
-        const uint32_t first = records.size();
-        if (parts.empty() || !admit(parts, "tree")) {
-            continue;
-        }
-        trees.push_back(TreeSpan{ first, uint32_t(parts.size()), site.species, site.seed });
-        most = MAX(most, int64_t(parts.size()));
-        const MaterialMoments mm = span_moments(*library, parts.data(), uint32_t(parts.size()), site.base);
-        for (int i = 0; i < 2; i++) {
-            if (const Moments *m = mm.find(tree_materials[i])) {
-                double a[3];
-                m->semi_axes(a);
-                volume[i] += m->m0;
-                for (int j = 0; j < 3; j++) {
-                    axes[i][j] += a[j];
-                }
-            }
-        }
-    }
-    // A tree's mean weight per material (m^3, overlapping parts counted twice) and spread (semi-axes, metres).
-    Dictionary materials_stats;
-    const double per_tree = trees.empty() ? 0.0 : p_voxel / double(trees.size());
-    for (int i = 0; i < 2; i++) {
-        Dictionary d;
-        d["volume_m3_avg"] = volume[i] * per_tree * p_voxel * p_voxel;
-        d["semi_axes_m_avg"] = vformat("%.2f %.2f %.2f", axes[i][0] * per_tree, axes[i][1] * per_tree, axes[i][2] * per_tree);
-        materials_stats[materials.name(tree_materials[i])] = d;
-    }
+    s.layers.min_occupancy = MOMENT_MATERIAL_ISO; // as add_moment_blobs
+    s.lod_count = lod_count;
+    forest_field = std::make_shared<const ForestField>(s);
+    const ForestProfile &profile = forest_field->profile();
     Dictionary forest;
-    forest["count"] = int64_t(trees.size());
-    int64_t total = 0;
-    for (const TreeSpan &t : trees) {
-        total += t.count;
-    }
-    forest["records"] = total;
-    forest["records_per_tree_avg"] = trees.empty() ? 0.0 : double(total) / double(trees.size());
-    forest["records_per_tree_max"] = most;
-    forest["moments"] = materials_stats;
-    forest["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
-    if (!trees.empty()) {
-        // What the far field will read for this forest: per material, the class moments' summed volume over the trees'
-        // own (forest_generator.hpp; 1 within 0.5% in the unit test).
-        const uint64_t classes_us = Time::get_singleton()->get_ticks_usec();
-        const TreeClasses classes(*library, p_types, p_voxel);
-        double guess[2] = {};
-        for (const TreeSpan &t : trees) {
-            TreeSite site;
-            site.seed = t.seed;
-            site.species = t.species;
-            const MaterialMoments mm = classes.tree(site, UP_Y); // volumes don't turn
-            for (int i = 0; i < 2; i++) {
-                if (const Moments *m = mm.find(tree_materials[i])) {
-                    guess[i] += m->m0;
-                }
-            }
-        }
-        Dictionary class_stats;
-        for (int i = 0; i < 2; i++) {
-            class_stats[materials.name(tree_materials[i])] = volume[i] > 0.0 ? guess[i] / volume[i] : 0.0;
-        }
-        class_stats["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - classes_us) * 1e-3;
-        forest["classes"] = class_stats;
-    }
+    forest["streamed"] = true;
+    forest["requested"] = int64_t(forest_count);
+    forest["cell_m"] = double(s.generator.side) * vs;
+    forest["reach_m"] = profile.reach * vs;
+    forest["lod_end"] = int64_t(profile.lod_end);
+    forest["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3; // the profile's samples
     r_stats["trees"] = forest;
+}
+
+bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_min_corner_m) const {
+    const std::shared_ptr<const InstanceSnapshot> snap = current();
+    if (snap && snap->near_instance(p_node, p_lod)) {
+        return true;
+    }
+    if (!forest_field) {
+        return false;
+    }
+    // The corners are the bare ground's distance: the node holds a point within its band of the ground, so within the
+    // band plus the reach of the forest's records when it can hold one (the corner test's own slope bound).
+    const int64_t reach = forest_field->ground_reach(p_lod);
+    if (reach == 0 || double(p_min_corner_m) > 2.0 * double(ChunkMath::world_chunk_size(p_node, param)) + double(reach) * param.voxel_size) {
+        return false;
+    }
+    const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
+    const VoxelPos lo = ChunkMath::chunk_min_voxel(p_node, param);
+    return VoxelBox{ lo, lo + VoxelPos(span, span, span), true }.clipped(forest_field->setup().generator.zone.grown(reach)).valid;
+}
+
+RecordView SDFTable::point_records(const InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list) const {
+    if (!forest_stream) {
+        return RecordView(p_snap.records);
+    }
+    thread_local std::vector<TableRecord> flat;
+    flat.clear();
+    const auto edits = std::lower_bound(r_list.begin(), r_list.end(), scene_end); // the candidates are in id order
+    for (auto it = r_list.begin(); it != edits; ++it) {
+        flat.push_back(p_snap.records[*it]);
+    }
+    forest_stream->point_records(p_voxel, p_lod, flat);
+    for (auto it = edits; it != r_list.end(); ++it) {
+        flat.push_back(p_snap.records[*it]);
+    }
+    r_list.resize(flat.size());
+    std::iota(r_list.begin(), r_list.end(), 0u);
+    return RecordView(flat.data());
 }
 
 void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
@@ -585,7 +564,8 @@ void SDFTable::build_table(int p_lod_count) {
     moment_blob_type = -1;
     blob_ids.clear();
     moment_layers = MomentLayers();
-    trees.clear();
+    forest_field.reset();
+    forest_stream.reset();
     lava_pools.clear();
     if (scene == Scene::SHAPES) {
         add_shapes(types);
@@ -594,12 +574,19 @@ void SDFTable::build_table(int p_lod_count) {
     Dictionary scene_stats;
     add_biomes(types, scene_stats);
     add_scatter(types);
-    add_forest(tree_types, vs, SCENE_X, SCENE_Z, scene_stats);
+    add_forest(tree_types, blob, scene_stats);
     add_moment_blobs(blob, scene_stats);
     gpu.set_scene_stats(scene_stats);
     edit_regions.clear();
     // The GPU buffers hold the scene plus room for runtime edits (the mesher reads this at init).
     gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
+    // The streamed forest's slots after the table's records, within the list word's ids.
+    scene_end = records.size();
+    if (forest_field) {
+        const uint32_t base = gpu.table_capacity();
+        forest_stream = std::make_shared<ForestStream>(forest_field, param, base, MIN(forest_slots, SDFGpuTable::LIST_ID_MASK + 1 - base));
+    }
+    gpu.set_stream(forest_stream, scene_end);
     version++;
     publish(build_snapshot(library, float(vs), true, records, param, lod_count - 1, version), VoxelBox());
 }

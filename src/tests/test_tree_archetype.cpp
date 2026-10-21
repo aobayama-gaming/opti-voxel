@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <numeric>
 
 using namespace Archetype;
 using ExactNoise::float_bits;
@@ -478,7 +479,7 @@ TEST_CASE("Tree: grown along a turned up, the tree lies along it") {
     CHECK(cones > 0);
 }
 
-TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, evaluate() stays the fold") {
+TEST_CASE("SDFCascade forest: the streamed trees fold into evaluate(), trunks are solid") {
     ChunkParam param;
     param.voxel_size = 0.05f;
     SDFCascade sdf;
@@ -486,45 +487,65 @@ TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, eva
     sdf.set_moment_blobs(false); // the trees' records alone
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);
-    const std::vector<TreeSpan> &trees = sdf.get_trees();
     const auto snap = sdf.get_snapshot();
-    CHECK(trees.size() > 20);
-    uint32_t next = 0;
-    for (const TreeSpan &t : trees) {
-        CHECK(t.first == next);
-        CHECK(t.count > 0);
-        next += t.count;
+    const ForestField *field = sdf.get_forest();
+    CHECK(field != nullptr);
+    if (!field) {
+        return;
     }
-    CHECK(snap->records.size() == next);
+    CHECK(snap->records.size() == 0); // nothing placed at configure: the forest is streamed
     for (int i = 0; i < sdf.get_library().size(); i++) {
         CHECK(sdf.get_library()[i].program.validate(18).is_empty());
     }
+    // Every tree of the zone: a group of a LOD-0 tree tile, its first record its first trunk segment.
+    const VoxelBox zone = field->setup().generator.zone;
+    std::vector<FieldKey> tiles;
+    field->keys(zone.lo, zone.hi, 0, tiles);
     // Inside each tree's first trunk segment, a quarter of the way up its axis (the LOD0 voxel: the cascade's lattice):
-    // solid at LOD 0, and the point's candidates hold the segment.
-    std::vector<uint32_t> list;
-    int64_t solid = 0;
-    for (const TreeSpan &t : trees) {
-        const TableRecord &rec = snap->records[t.first];
-        CHECK(rec.def == 3); // the branch type, after sphere, capsule and rock
-        const double h = rec.params[0];
-        WorldPos p;
-        for (int j = 0; j < 3; j++) {
-            p.voxel[j] = int64_t(std::floor(double(rec.anchor[j]) + 0.25 * h * double(rec.rotation[3 + j])));
+    // solid at LOD 0, and evaluate() is the fold of every key's records there, in key order (what the meshers list).
+    int64_t trees = 0, solid = 0;
+    std::vector<FieldKey> keys;
+    std::vector<uint32_t> hit, ids;
+    std::vector<TableRecord> records;
+    for (const FieldKey &tile : tiles) {
+        FieldContent c;
+        field->content(tile, c);
+        for (const FieldContent::Group &g : c.groups) {
+            const TableRecord &rec = c.records[g.first];
+            CHECK(rec.def == 3); // the branch type, after sphere, capsule and rock
+            const double h = rec.params[0];
+            WorldPos p;
+            for (int j = 0; j < 3; j++) {
+                p.voxel[j] = int64_t(std::floor(double(rec.anchor[j]) + 0.25 * h * double(rec.rotation[3 + j])));
+            }
+            records.clear();
+            field->keys(p.voxel, p.voxel, 0, keys);
+            for (const FieldKey &k : keys) {
+                FieldContent kc;
+                field->content(k, kc);
+                hit.clear();
+                kc.meeting(p.voxel, p.voxel, 0, hit);
+                for (const uint32_t i : hit) {
+                    records.push_back(kc.records[i]);
+                }
+            }
+            ids.resize(records.size());
+            std::iota(ids.begin(), ids.end(), 0u);
+            const float value = sdf.evaluate(p, 0);
+            float ch[Cascade::CHANNELS];
+            sdf.channels_at(p.voxel, 0, ch);
+            const Float4 r = sdf.sample_sdf(*snap, RecordView(records.data()), ids.data(), uint32_t(ids.size()), ch, p, 0);
+            CHECK(float_bits(value) == float_bits(r.w));
+            CHECK(std::isfinite(r.x));
+            CHECK(std::isfinite(r.y));
+            CHECK(std::isfinite(r.z));
+            solid += value < 0.0f ? 1 : 0;
+            trees++;
         }
-        snap->point_candidates(p.voxel, 0, list);
-        CHECK(std::find(list.begin(), list.end(), t.first) != list.end());
-        const float value = sdf.evaluate(p, 0);
-        float ch[Cascade::CHANNELS];
-        sdf.channels_at(p.voxel, 0, ch);
-        const Float4 r = sdf.sample_sdf(*snap, list.data(), uint32_t(list.size()), ch, p, 0);
-        CHECK(float_bits(value) == float_bits(r.w));
-        CHECK(std::isfinite(r.x));
-        CHECK(std::isfinite(r.y));
-        CHECK(std::isfinite(r.z));
-        solid += value < 0.0f ? 1 : 0;
     }
-    MESSAGE("forest: ", trees.size(), " trees, ", snap->records.size(), " records, ", solid, " trunks solid at LOD 0");
-    CHECK(solid == int64_t(trees.size()));
+    MESSAGE("forest: ", trees, " trees in ", tiles.size(), " LOD-0 tree tiles, ", solid, " trunks solid at LOD 0");
+    CHECK(trees > 20);
+    CHECK(solid == trees);
 }
 
 // What the band rule leaves of a forest at each LOD, weighted by volume (record_moments): the share of the trees'

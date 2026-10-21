@@ -388,7 +388,7 @@ void compare_table_chunk(const SDFCascade &p_sdf, const Archetype::InstanceSnaps
         p.voxel = VoxelPos(p_p.x << p_lod, p_p.y << p_lod, p_p.z << p_lod);
         const Float3 grid{ float(i.x), float(i.y), float(i.z) };
         float extra = 0.0f;
-        const ExactNoise::Float4 folded = p_sdf.sample_sdf(p_snap, list.data(), uint32_t(list.size()), ch, p, p_lod, &extra);
+        const ExactNoise::Float4 folded = p_sdf.sample_sdf(p_snap, p_snap.records, list.data(), uint32_t(list.size()), ch, p, p_lod, &extra);
         const ExactNoise::Float4 want = p_sdf.with_skirt(folded, p_lod, grid, extra);
         const ExactNoise::Float4 bare = p_sdf.with_skirt(p_sdf.sdf(ch, p.voxel.y, p_lod), p_lod, grid);
         r_folded += float_bits(want.w) != float_bits(bare.w) ? 1 : 0;
@@ -421,8 +421,8 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
     const RID records = p_rd->storage_buffer_create(uint64_t(table->instance_capacity()) * table->record_size());
     const RID list = p_rd->storage_buffer_create(uint64_t(MAX_BATCH) * table->max_chunk_list() * 4);
-    uint32_t version = 0;
-    SDFGpuTable::upload_records(p_rd, records, table->record_bytes(UINT32_MAX, version));
+    uint64_t version = 0;
+    SDFGpuTable::upload_records(p_rd, records, table->record_bytes(SDFGpuTable::NOTHING_SENT, version));
     CascadePasses passes;
     Checks checks;
     int64_t folded = 0;

@@ -371,11 +371,10 @@ uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::ve
     r_rest.assign(r_chunks.begin() + kept, r_chunks.end());
     r_chunks.resize(kept);
     r_ids.resize(int64_t(kept) * GPUFrame::CHUNK_INPUT_BYTES);
-    const uint32_t version = table->version();
-    if (version != sent_table_version) {
+    if (table->upload_version() != sent_table_version) {
         r_records = table->record_bytes(sent_table_version, sent_table_version);
     }
-    return version;
+    return table->version();
 }
 
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages,
@@ -717,9 +716,16 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     ChunkId chunk;
     bool remesh = false;
     HashSet<ChunkId, Vector3i64Hasher> remeshes; // popped from remesh_queue: they go back there if they wait
+    std::vector<std::pair<ChunkId, bool>> waiting; // not ready (SDFGpuTable::chunk_ready), with their remesh flag
+    SDFGpuTable *table = sdf->get_gpu_table();
     // With a budget the batch stops once its estimate reaches what's left (a frame dispatches at least
     // one chunk: budget_left starts > 0).
-    while (chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk, &remesh)) {
+    while (chunks.size() < settings.batch_size && estimate < r_budget_us && waiting.size() < SDFGpuTable::WAITING_POPS_MAX && _pop_queue(chunk, &remesh)) {
+        if (!table->chunk_ready(chunk)) {
+            waiting.push_back({ chunk, remesh });
+            stats.residency_waits++;
+            continue;
+        }
         chunks.push_back(chunk);
         if (remesh) {
             remeshes.insert(chunk);
@@ -728,6 +734,10 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
         if (lod >= 0 && lod < lod_count) {
             estimate += cost_model.estimate(lod);
         }
+    }
+    // Back in their queues, in reverse: they pop first again, in the same order.
+    for (auto it = waiting.rbegin(); it != waiting.rend(); ++it) {
+        _requeue(it->first, it->second);
     }
     if (chunks.empty()) {
         return false;
@@ -1277,6 +1287,7 @@ Dictionary GPUDirectMesher::get_stats() {
     d["overflow_chunks"] = (int64_t)stats.overflow_chunks;
     d["overflow_requeued"] = (int64_t)stats.overflow_requeued;
     d["list_requeued"] = (int64_t)stats.list_requeued;
+    d["residency_waits"] = (int64_t)stats.residency_waits;
     d["audit_batches"] = (int64_t)stats.audit_batches;
     d["missing_neighbor"] = (int64_t)stats.missing_neighbor;
     d["nan_vertices"] = (int64_t)stats.nan_vertices;

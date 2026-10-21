@@ -120,7 +120,7 @@ private:
     RID buffer_table_list;
     RID buffer_material; // per sample: its palette index (cascade level 0 -> third pass)
     uint64_t table_list_capacity = 0; // bytes
-    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last handed to the worker
+    uint64_t sent_table_version = SDFGpuTable::NOTHING_SENT; // main thread: the upload version last handed to the worker
     std::vector<ChunkId> in_flight_ids; // main thread: the chunks of the batch handed to the worker
     // Uniform set
 

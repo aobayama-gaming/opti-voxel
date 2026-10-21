@@ -28,7 +28,7 @@ public:
     static constexpr uint64_t GRACE_FRAMES = 16;
     static constexpr int MAX_RUNNING = 48; // keys computed at once
     static constexpr int64_t INPUT_CACHE_RECORDS = int64_t(4) << 20; // the LOD-0 tree tiles kept for their readers, in records
-    static constexpr size_t DEMAND_CACHE_KEYS = 256; // contents computed for CPU evaluations of keys not resident
+    static constexpr int64_t DEMAND_CACHE_RECORDS = int64_t(1) << 20; // the contents CPU evaluations computed, in records
 
     ForestStream(std::shared_ptr<const ForestField> p_field, const ChunkParam &p_param, uint32_t p_slot_base, uint32_t p_slot_capacity);
     ~ForestStream(); // waits for the keys being computed
@@ -51,8 +51,8 @@ public:
     const RecordStore &slots() const { return slot_store; }
     uint32_t version() const { return slot_version; }
 
-    // CPU evaluation, any thread: the streamed records whose box test at p_lod can pass at p_voxel, in key order, appended
-    // (copies). A key not resident is computed here (a small cache keeps it): the same records.
+    // CPU evaluation, any thread but the worker pool's (a key not resident is computed here, on the pool; a small cache
+    // keeps it): the streamed records whose box test at p_lod can pass at p_voxel, in key order, appended (copies).
     void point_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) const;
 
     Dictionary get_stats() const;
@@ -102,7 +102,13 @@ private:
     std::map<uint32_t, uint32_t> free_runs; // first slot -> count, below the store's size
     int64_t cached_records = 0; // the contents kept (inputs and not yet placed)
     mutable std::mutex mutex; // main-thread changes vs point_records on other threads
-    mutable std::map<FieldKey, std::shared_ptr<const FieldContent>> demand;
+    struct Demand {
+        std::shared_ptr<const FieldContent> content;
+        uint64_t used = 0; // demand_clock when last read
+    };
+    mutable std::map<FieldKey, Demand> demand; // least recently read dropped past DEMAND_CACHE_RECORDS
+    mutable uint64_t demand_clock = 0;
+    mutable int64_t demand_records = 0;
 
     struct Stats {
         int64_t computed = 0;
@@ -129,6 +135,12 @@ private:
     // Frees the slots of the least recently used placed entries not asked for in GRACE_FRAMES until p_count fit.
     bool make_room(uint32_t p_count, uint32_t &r_slot);
     void trim_cache();
+    // A key's content for a CPU evaluation (under the mutex): kept (an input), back from its slots or computed, its
+    // inputs the same way; cached in demand.
+    const FieldContent &on_demand(const FieldKey &p_key) const;
+    // Past DEMAND_CACHE_RECORDS, drops the least recently read contents down to half of it (between evaluations: no
+    // reference into it is held then).
+    void trim_demand() const;
     int64_t slots_used() const;
 };
 

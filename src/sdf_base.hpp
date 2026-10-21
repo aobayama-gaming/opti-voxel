@@ -41,16 +41,29 @@ public:
     // The statement assigning g_sdf_chunk from the current chunk (the mesher's main()).
     virtual String glsl_set_chunk() const = 0;
 
-    // The snapshot version the GPU should mirror (record uploads are skipped while it is unchanged).
+    // The snapshot version: an edit bumps it (the chunks it re-meshes require it).
     virtual uint32_t version() const = 0;
+    // What the GPU's records mirror: the snapshot version and the streamed records' (record uploads are skipped while
+    // it is unchanged).
+    virtual uint64_t upload_version() const { return version(); }
+    // No record sent yet: record_bytes() sends them all.
+    static constexpr uint64_t NOTHING_SENT = UINT64_MAX;
     virtual uint32_t instance_count() const = 0;
     // How many instances the GPU buffers are sized for (runtime edits only append; more is refused).
     virtual uint32_t instance_capacity() const { return instance_count(); }
-    // The encoded DefRecords of the current snapshot changed since p_have_version (UINT32_MAX: none sent yet,
-    // all of them), as spans for upload_records(): uint32 span count, then per span its byte offset in the
-    // buffer, its byte size and the bytes. r_version is the version they are: one snapshot for both, whatever
-    // edits land meanwhile. An edit re-sends the pages it changed, not the table.
-    virtual PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const = 0;
+    // The encoded DefRecords changed since upload version p_have_version (NOTHING_SENT: all of them), as spans for
+    // upload_records(): uint32 span count, then per span its byte offset in the buffer, its byte size and the bytes.
+    // r_version is the upload version they are: one snapshot for both, whatever edits land meanwhile. An edit re-sends
+    // the pages it changed, not the table.
+    virtual PackedByteArray record_bytes(uint64_t p_have_version, uint64_t &r_version) const = 0;
+    // Main thread. Whether the records a chunk lists are all there (a streamed forest computes them on the worker pool);
+    // the meshers skip a chunk until it is, so a chunk's content never depends on what was resident when.
+    virtual bool chunk_ready(const ChunkId & /*p_chunk*/) { return true; }
+    // The chunks a mesher's batch passes over while they aren't ready (put back in their queue in order): a frame
+    // doesn't walk the whole queue while the forest streams in, and their records are asked for in queue order.
+    static constexpr uint32_t WAITING_POPS_MAX = 256;
+    // Main thread, once per frame: the streamed records' progress.
+    virtual void poll() {}
     // Writes record_bytes()' spans into the records buffer (on the device that owns it).
     static void upload_records(RenderingDevice *p_rd, const RID &p_buffer, const PackedByteArray &p_spans) {
         int64_t at = 4;
@@ -150,8 +163,9 @@ public:
 
     // The discoverer's no-cull rule: a node whose box intersects any instance's influence box (grown by
     // the cull band, 2 chunk sizes at the node's LOD) must never be culled, whatever the corners say.
-    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes).
-    virtual bool cull_exempt(const ChunkId &p_node, int p_lod) const = 0;
+    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes). p_min_corner_m: the
+    // smallest |evaluate_cull| at the node's corners (metres; over the cull band, else it isn't asked).
+    virtual bool cull_exempt(const ChunkId &p_node, int p_lod, float p_min_corner_m) const = 0;
 
     // Runtime instance edits. rotation (9 floats, row major) and params (8 floats) may be null (identity / zero).
     // p_op is a Combine. Returns the new instance id (>= 0) or -1. When any edit succeeds, last_edit_box() holds

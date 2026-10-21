@@ -131,6 +131,9 @@ public:
 
     // The keys whose records' box test at p_lod can pass somewhere in [p_lo, p_hi] (LOD0 voxels, inclusive), in key order.
     void keys(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, std::vector<FieldKey> &r_out) const;
+    // How far from the ground the records listed at p_lod or finer reach with their influence margins (voxels; 0: none):
+    // the discoverer keeps a node of the zone whose corners are this close to the ground (SDFTable::cull_exempt).
+    int64_t ground_reach(int p_lod) const;
     // keys() over a chunk's samples.
     void chunk_keys(const ChunkId &p_chunk, const ChunkParam &p_param, std::vector<FieldKey> &r_out) const;
     // The keys p_key's content reads (a coarser tree tile: its LOD-0 tile; a part layer's blob tile: the LOD-0 tree tiles
@@ -150,6 +153,7 @@ private:
     bool has_blobs = false;
     int first_layer = 0;
     float blob_margin_c = 0.0f; // a blob record's locality margin (its type's, the table's skirt)
+    std::vector<int64_t> ground_reaches; // ground_reach per LOD
     mutable std::atomic<bool> profile_reported{ false };
 
     // Appends the keys (p_kind, p_lod) of the tiles of p_side voxels that meet p_box and the zone grown by p_zone_grow,
@@ -157,6 +161,9 @@ private:
     void append_tiles(int p_kind, int p_lod, int64_t p_side, const VoxelBox &p_box, int64_t p_zone_grow, std::vector<FieldKey> &r_out) const;
     // How far a layer's blobs can reach from their tile's box (voxels; the influence margin at the layer excluded).
     int64_t blob_reach(int p_layer) const;
+    // How far a tile's records can pass a box test from its box at a LOD: a tree tile's (from its bases), a blob tile's.
+    int64_t tree_grow(int p_lod) const;
+    int64_t blob_grow(int p_layer) const;
     VoxelBox tile_box(const FieldKey &p_key) const;
     // A LOD-0 tree tile grows its trees; a coarser one keeps the parts of its LOD-0 tile's listed at its LOD.
     void tree_tile(const FieldKey &p_key, FieldContent &r_out, const Lookup &p_inputs) const;

@@ -3,6 +3,8 @@
 #include "archetype_gpu_table.hpp"
 #include "archetype_table.hpp"
 #include "biome_features.hpp"
+#include "forest_field.hpp"
+#include "forest_stream.hpp"
 #include "instance_table.hpp"
 #include "moment_layers.hpp"
 #include "sdf_base.hpp"
@@ -43,12 +45,18 @@ public:
         scatter_area = p_area;
     }
     // A forest of about p_count grown trees (tree_archetype.hpp) in a square of side p_area (metres) around
-    // (SCENE_X, SCENE_Z) (--trees / --tree_area). Set before configure().
+    // (SCENE_X, SCENE_Z) (--trees / --tree_area), streamed (forest_field.hpp, forest_stream.hpp): its records are
+    // computed for the chunks being meshed, not placed at configure. Set before configure().
     void set_forest(int p_count, double p_area) {
         forest_count = p_count;
         forest_area = p_area;
     }
-    const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
+    // The streamed forest's records held at once (GPU slots of RECORD_BYTES each). Set before configure().
+    static constexpr uint32_t FOREST_SLOTS = uint32_t(2) << 20;
+    void set_forest_slots(uint32_t p_slots) { forest_slots = p_slots; }
+    // The forest's field and residency (null without a forest).
+    const Archetype::ForestField *get_forest() const { return forest_field.get(); }
+    Archetype::ForestStream *get_forest_stream() const { return forest_stream.get(); }
     // The moment blobs a whole rebuild of the current records would make, with the joins the table was built with: what
     // the edits' incremental updates must match (tests).
     void moment_blobs_reference(std::vector<Archetype::MomentBlob> &r_out) const;
@@ -89,11 +97,13 @@ public:
     using SDFBase::get_gpu_table; // the const form
 
     // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box, band or
-    // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp).
-    bool cull_exempt(const ChunkId &p_node, int p_lod) const override {
-        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        return snap && snap->near_instance(p_node, p_lod);
-    }
+    // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp). The streamed forest's
+    // records aren't in the index: a node of its zone is kept while its corners are within the band plus the forest's
+    // reach from the ground (ForestField::ground_reach; the corners read the bare ground).
+    bool cull_exempt(const ChunkId &p_node, int p_lod, float p_min_corner_m) const override;
+
+    // Whether the scene has instances (placed records or a forest): the cascade's skirts take the band rule's step.
+    bool places_instances() const { return !current()->empty() || forest_field; }
 
     // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the records when
     // it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh.
@@ -110,6 +120,11 @@ public:
     std::shared_ptr<const Archetype::InstanceSnapshot> get_snapshot() const { return current(); }
     const Archetype::DefLibrary &get_library() const { return *library; }
 
+    // What a point folds at p_lod, in the meshers' list order. r_list: the snapshot's candidates in
+    // (point_candidates), the list to fold out. Without a forest, p_snap's records; with one, copies of the scene's
+    // candidates, the forest's records (ForestStream::point_records) and the edits', in a buffer of this thread's,
+    // valid until its next call.
+    Archetype::RecordView point_records(const Archetype::InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list) const;
     // The absolute LOD0 voxel y of the ground's top solid voxel in column (p_x, p_z), instances left out: where the
     // scenes stand.
     virtual int64_t ground_y(int64_t p_x, int64_t p_z) const = 0;
@@ -156,7 +171,10 @@ private:
     double scatter_area = 200.0; // --instance_area (metres)
     int forest_count = 0; // --trees
     double forest_area = 60.0; // --tree_area (metres)
-    std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
+    uint32_t forest_slots = FOREST_SLOTS;
+    std::shared_ptr<const Archetype::ForestField> forest_field;
+    std::shared_ptr<Archetype::ForestStream> forest_stream;
+    uint32_t scene_end = 0; // the records placed at configure (the edits' ids follow)
     double biome_radius = 0.0; // --biomes (metres)
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
@@ -195,8 +213,9 @@ private:
     void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw);
     void add_shapes(const Types &p_types);
     void add_scatter(const Types &p_types);
-    // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.
-    void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats);
+    // The forest's field (forest_count trees in the forest_area square around the scene's centre) and its stats; the
+    // stream is made once the table's capacity is known.
+    void add_forest(const Archetype::TreeTypes &p_types, int p_blob_type, Dictionary &r_stats);
     // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
     void add_biomes(const Types &p_types, Dictionary &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.

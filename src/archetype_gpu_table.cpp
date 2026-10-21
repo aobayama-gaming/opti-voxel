@@ -27,31 +27,47 @@ String GpuTable::glsl_set_chunk() const {
     return "\n    g_sdf_chunk = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size];";
 }
 
-PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_version) const {
+PackedByteArray GpuTable::record_bytes(uint64_t p_have_version, uint64_t &r_version) const {
     const std::shared_ptr<const InstanceSnapshot> s = snapshot();
     PackedByteArray bytes;
-    r_version = s ? s->version : 0u;
+    r_version = upload_version();
     if (!s) {
         return bytes;
     }
-    // The buffer is sized for capacity() up front; only the pages changed since the GPU's version go up.
+    // The buffer is sized for instance_capacity() up front; only the pages changed since the GPU's version go up: the
+    // snapshot's, then the slots' at slot_base on.
     ERR_FAIL_COND_V_MSG(s->records.size() > capacity, bytes, vformat("GpuTable: %d instances, over the GPU capacity of %d.", s->records.size(), capacity));
+    const bool all = p_have_version == NOTHING_SENT;
+    struct Span {
+        const RecordStore *store;
+        uint32_t first, count, at; // records: first in the store, how many, first in the buffer
+    };
+    std::vector<Span> spans;
     std::vector<std::pair<uint32_t, uint32_t>> runs;
-    s->records.changed_since(p_have_version, runs);
-    int64_t total = 4;
+    s->records.changed_since(all ? UINT32_MAX : uint32_t(p_have_version >> 32), runs);
     for (const std::pair<uint32_t, uint32_t> &r : runs) {
-        total += 8 + int64_t(r.second) * RECORD_BYTES;
+        spans.push_back(Span{ &s->records, r.first, r.second, r.first });
+    }
+    if (stream) {
+        stream->slots().changed_since(all ? UINT32_MAX : uint32_t(p_have_version), runs);
+        for (const std::pair<uint32_t, uint32_t> &r : runs) {
+            spans.push_back(Span{ &stream->slots(), r.first, r.second, stream->slot_base() + r.first });
+        }
+    }
+    int64_t total = 4;
+    for (const Span &sp : spans) {
+        total += 8 + int64_t(sp.count) * RECORD_BYTES;
     }
     bytes.resize(total);
-    bytes.encode_u32(0, uint32_t(runs.size()));
+    bytes.encode_u32(0, uint32_t(spans.size()));
     int64_t at = 4;
-    for (const std::pair<uint32_t, uint32_t> &r : runs) {
-        bytes.encode_u32(at, r.first * RECORD_BYTES);
-        bytes.encode_u32(at + 4, r.second * RECORD_BYTES);
-        PackedByteArray span;
-        span.resize(int64_t(r.second) * RECORD_BYTES);
-        for (uint32_t i = 0; i < r.second; i++) {
-            encode_record(span, i, s->records[r.first + i]);
+    PackedByteArray span;
+    for (const Span &sp : spans) {
+        bytes.encode_u32(at, sp.at * RECORD_BYTES);
+        bytes.encode_u32(at + 4, sp.count * RECORD_BYTES);
+        span.resize(int64_t(sp.count) * RECORD_BYTES);
+        for (uint32_t i = 0; i < sp.count; i++) {
+            encode_record(span, i, (*sp.store)[sp.first + i]);
         }
         std::memcpy(bytes.ptrw() + at + 8, span.ptr(), span.size());
         at += 8 + span.size();
@@ -67,7 +83,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     if (r_palettes) {
         r_palettes->assign(p_chunks.size(), std::vector<uint32_t>{ Material::GROUND });
     }
-    if (!snap || snap->empty()) {
+    if (!snap || (snap->empty() && !stream)) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
         for (const ChunkId &c : p_chunks) {
             list_stats.chunks[MIN(MAX(ChunkMath::get_lod(c), 0), ChunkMath::MAX_LOD_NUMBERS - 1)]++;
@@ -80,6 +96,8 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     // list words come out packed (SDFGpuTable::list_word).
     struct Job {
         const InstanceSnapshot *snap;
+        const ForestStream *stream;
+        uint32_t scene_end;
         const ChunkId *chunks;
         std::vector<uint32_t> *lists;
         std::vector<uint32_t> *palettes;
@@ -87,12 +105,19 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
         static void run(void *p_job, uint32_t p_i) {
             const Job &job = *static_cast<const Job *>(p_job);
             std::vector<uint32_t> &list = job.lists[p_i];
-            job.snap->chunk_list(job.chunks[p_i], list);
+            job.snap->chunk_list(job.chunks[p_i], list); // in id order
+            const RecordView records = job.stream ? RecordView(job.snap->records, &job.stream->slots(), job.stream->slot_base()) : RecordView(job.snap->records);
+            if (job.stream) {
+                thread_local std::vector<uint32_t> streamed;
+                streamed.clear();
+                job.stream->chunk_list(job.chunks[p_i], streamed);
+                list.insert(std::lower_bound(list.begin(), list.end(), job.scene_end), streamed.begin(), streamed.end());
+            }
             thread_local std::vector<uint32_t> materials;
             thread_local std::vector<uint16_t> indices;
             materials.resize(list.size());
             for (size_t k = 0; k < list.size(); k++) {
-                materials[k] = job.snap->records[list[k]].material;
+                materials[k] = records[list[k]].material;
             }
             job.fits[p_i] = ChunkPalette::build(materials.data(), uint32_t(list.size()), job.palettes[p_i], indices);
             for (size_t k = 0; k < list.size(); k++) {
@@ -103,7 +128,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<std::vector<uint32_t>> lists(p_chunks.size());
     std::vector<std::vector<uint32_t>> palettes(p_chunks.size());
     std::vector<uint8_t> fits(p_chunks.size(), 1);
-    Job job{ snap.get(), p_chunks.data(), lists.data(), palettes.data(), fits.data() };
+    Job job{ snap.get(), stream.get(), scene_end, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
     if (p_chunks.size() > 1) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
         pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
@@ -184,6 +209,9 @@ Dictionary GpuTable::get_stats() const {
         per_lod[itos(lod)] = l;
     }
     d["list_len_per_lod"] = per_lod;
+    if (stream) {
+        d["stream"] = stream->get_stats();
+    }
     d.merge(scene_stats.duplicate(true)); // a copy: a Dictionary is shared by reference
     return d;
 }

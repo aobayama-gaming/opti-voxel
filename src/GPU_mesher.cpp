@@ -892,8 +892,14 @@ void GPUMesher::process_queue() {
     uint32_t count = 0;
     int min_lod = 64;
     ChunkId new_chunk;
+    SDFGpuTable *table = sdf->get_gpu_table();
+    std::vector<ChunkId> waiting; // not ready (SDFGpuTable::chunk_ready): back in remesh_queue, which holds first meshes too
 
-    while (count < chunk_batch_number && _pop_queue(new_chunk)) {
+    while (count < chunk_batch_number && waiting.size() < SDFGpuTable::WAITING_POPS_MAX && _pop_queue(new_chunk)) {
+        if (!table->chunk_ready(new_chunk)) {
+            waiting.push_back(new_chunk);
+            continue;
+        }
         working_generation.insert(new_chunk);
 
         GPUFrame::encode_chunk_input(new_batch, count, new_chunk, chunk_param);
@@ -903,6 +909,9 @@ void GPUMesher::process_queue() {
 
         count++;
     }
+    for (const ChunkId &chunk : waiting) {
+        remesh_queue[ChunkMath::get_lod(chunk)]->insert(chunk);
+    }
 
     if (count > 0) {
         PackedByteArray table_list;
@@ -911,7 +920,6 @@ void GPUMesher::process_queue() {
         for (uint32_t i = 0; i < count; i++) {
             in_flight_ids.push_back(unpacked_chunks[i].chunk_id);
         }
-        SDFGpuTable *table = sdf->get_gpu_table();
         std::vector<std::vector<uint32_t>> palettes;
         const uint32_t kept = table->build_lists(in_flight_ids, chunk_param, new_batch, table_list, uint32_t(table_list_capacity / 4), &palettes);
         // The chunks whose lists didn't fit the buffer go first in a later batch (remesh_queue holds first meshes too,
@@ -930,7 +938,7 @@ void GPUMesher::process_queue() {
             min_lod = MIN(min_lod, ChunkMath::get_lod(in_flight_ids[i]));
             unpacked_chunks[i].palette = std::move(palettes[i]);
         }
-        if (table->version() != sent_table_version) {
+        if (table->upload_version() != sent_table_version) {
             table_records = table->record_bytes(sent_table_version, sent_table_version);
         }
         mutex->lock();

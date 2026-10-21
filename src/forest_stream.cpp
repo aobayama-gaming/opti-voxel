@@ -137,8 +137,9 @@ void ForestStream::poll() {
         }
     }
     // The waiting keys whose inputs are all there go to the queue (an input asked for again if it was dropped meanwhile).
-    std::vector<FieldKey> still;
-    for (const FieldKey &k : waiting) {
+    std::vector<FieldKey> check; // request() may add to waiting (an input made room meanwhile): not iterated
+    check.swap(waiting);
+    for (const FieldKey &k : check) {
         std::vector<FieldKey> inputs;
         field().inputs(k, inputs);
         bool all = true;
@@ -150,10 +151,9 @@ void ForestStream::poll() {
             entries.at(k).state = Entry::QUEUED;
             queued.push_back(k);
         } else {
-            still.push_back(k);
+            waiting.push_back(k);
         }
     }
-    waiting.swap(still);
     while (running < MAX_RUNNING && !queued.empty()) {
         const FieldKey k = queued.front();
         queued.pop_front();
@@ -168,7 +168,11 @@ void ForestStream::poll() {
 bool ForestStream::place(Entry &r_entry) {
     uint32_t slot = 0;
     if (r_entry.count > 0 && !allocate(r_entry.count, slot) && !make_room(r_entry.count, slot)) {
-        stats.slots_full++;
+        if (stats.slots_full++ == 0) {
+            ERR_PRINT(vformat("ForestStream: %d records don't fit the %d slots, even past the keys asked for in the last %d frames: the chunks "
+                              "needing them wait (raise SDFTable::set_forest_slots).",
+                    r_entry.count, capacity, GRACE_FRAMES));
+        }
         return false;
     }
     if (r_entry.count > 0) {
@@ -306,7 +310,7 @@ void ForestStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_o
 
 void ForestStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) const {
     const std::lock_guard<std::mutex> lock(mutex);
-    const InlineParallelFor inline_loops; // maybe on a pool thread
+    trim_demand(); // before any reference into it is held
     std::vector<FieldKey> keys;
     field().keys(p_voxel, p_voxel, p_lod, keys);
     std::vector<uint32_t> hit;
@@ -320,20 +324,53 @@ void ForestStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vector
             }
             continue;
         }
-        auto d = demand.find(k);
-        if (d == demand.end()) {
-            if (demand.size() >= DEMAND_CACHE_KEYS) {
-                demand.clear();
-            }
-            auto c = std::make_shared<FieldContent>();
-            field().content(k, *c);
-            demand_computed++;
-            d = demand.emplace(k, std::move(c)).first;
-        }
-        d->second->meeting(p_voxel, p_voxel, p_lod, hit);
+        const FieldContent &c = on_demand(k);
+        c.meeting(p_voxel, p_voxel, p_lod, hit);
         for (const uint32_t i : hit) {
-            r_out.push_back(d->second->records[i]);
+            r_out.push_back(c.records[i]);
         }
+    }
+}
+
+const FieldContent &ForestStream::on_demand(const FieldKey &p_key) const {
+    const auto it = entries.find(p_key);
+    if (it != entries.end() && it->second.content) {
+        return *it->second.content;
+    }
+    const auto d = demand.find(p_key);
+    if (d != demand.end()) {
+        d->second.used = ++demand_clock;
+        return *d->second.content;
+    }
+    std::shared_ptr<const FieldContent> c;
+    if (it != entries.end() && it->second.placed) {
+        c = from_slots(slot_store, it->second.slot, it->second.count, it->second.groups);
+    } else {
+        auto computed = std::make_shared<FieldContent>();
+        field().content(p_key, *computed, [this](const FieldKey &p_k) { return &on_demand(p_k); });
+        demand_computed++;
+        c = std::move(computed);
+    }
+    demand_records += int64_t(c->records.size());
+    return *demand.emplace(p_key, Demand{ std::move(c), ++demand_clock }).first->second.content; // std::map: references stay valid
+}
+
+void ForestStream::trim_demand() const {
+    if (demand_records <= DEMAND_CACHE_RECORDS) {
+        return;
+    }
+    std::vector<std::pair<uint64_t, FieldKey>> old;
+    for (const std::pair<const FieldKey, Demand> &kv : demand) {
+        old.push_back({ kv.second.used, kv.first });
+    }
+    std::sort(old.begin(), old.end(), [](const std::pair<uint64_t, FieldKey> &p_a, const std::pair<uint64_t, FieldKey> &p_b) { return p_a.first < p_b.first; });
+    for (const std::pair<uint64_t, FieldKey> &o : old) {
+        if (demand_records <= DEMAND_CACHE_RECORDS / 2) {
+            break;
+        }
+        const auto it = demand.find(o.second);
+        demand_records -= int64_t(it->second.content->records.size());
+        demand.erase(it);
     }
 }
 

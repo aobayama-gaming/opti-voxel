@@ -23,6 +23,11 @@ struct Forest {
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
         sdf.configure(param, 18);
     }
+    // Built once per setting: the tests share them (and the keys their evaluations computed).
+    static const Forest &get(bool p_moments) {
+        static const Forest with(true), without(false);
+        return p_moments ? with : without;
+    }
     // The highest solid lattice point of LOD p_lod in column (x, z), scanning down from p_top (LOD0 voxels).
     int64_t top_solid(int64_t p_x, int64_t p_z, int64_t p_top, int p_lod) const {
         const int64_t unit = int64_t(1) << p_lod;
@@ -35,11 +40,12 @@ struct Forest {
     }
 };
 
-// A 5 cm forest of 120 trees, with or without its moment blobs, and its trees' record ids.
-void small_forest(SDFCascade &r_sdf, bool p_moments, std::vector<uint32_t> &r_parts) {
+// A 5 cm scatter of 200 rocks and pillars (the table's own records: a streamed forest's trees aren't instances), with or
+// without its moment blobs, and their record ids.
+void small_scatter(SDFCascade &r_sdf, bool p_moments, std::vector<uint32_t> &r_parts) {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    r_sdf.set_forest(120, 60.0);
+    r_sdf.set_scatter(200, 60.0);
     r_sdf.set_moment_blobs(p_moments);
     param.skirt_depth = MAX(param.skirt_depth, r_sdf.min_skirt_depth(param, 18));
     r_sdf.configure(param, 18);
@@ -51,8 +57,8 @@ void small_forest(SDFCascade &r_sdf, bool p_moments, std::vector<uint32_t> &r_pa
     }
 }
 
-// Edit p_step of a scripted sequence: a tree part removed, one moved by up to 10 m, or a 1-3 m sphere added near the
-// forest; its time (microseconds).
+// Edit p_step of a scripted sequence: a record removed, one moved by up to 10 m, or a 1-3 m sphere added near the
+// scatter; its time (microseconds).
 int64_t edit_step(SDFCascade &p_sdf, const std::vector<uint32_t> &p_parts, uint32_t p_step) {
     const int64_t cx = std::llround(SDFTable::SCENE_X / 0.05), cz = std::llround(SDFTable::SCENE_Z / 0.05);
     const auto t0 = std::chrono::steady_clock::now();
@@ -76,7 +82,7 @@ int64_t edit_step(SDFCascade &p_sdf, const std::vector<uint32_t> &p_parts, uint3
 TEST_CASE("Moment edits: after adds, moves and removes the table holds the blobs a whole rebuild makes") {
     SDFCascade sdf;
     std::vector<uint32_t> parts;
-    small_forest(sdf, true, parts);
+    small_scatter(sdf, true, parts);
     int64_t compared = 0;
     int64_t edit_us = 0;
     for (uint32_t step = 0; step < 40; step++) {
@@ -110,7 +116,7 @@ TEST_CASE("Moment edits: after adds, moves and removes the table holds the blobs
     // The same edits without the blobs: what they add to an edit.
     SDFCascade bare;
     std::vector<uint32_t> bare_parts;
-    small_forest(bare, false, bare_parts);
+    small_scatter(bare, false, bare_parts);
     int64_t bare_us = 0;
     for (uint32_t step = 0; step < 40; step++) {
         bare_us += edit_step(bare, bare_parts, step);
@@ -185,23 +191,13 @@ TEST_CASE("Moment fold: the far-field surface lifts the ground, draws the canopy
 }
 
 TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at the blobs' LOD only") {
-    const Forest with(true), without(false);
+    const Forest &with = Forest::get(true), &without = Forest::get(false);
     const int64_t cx = std::llround(SDFTable::SCENE_X / 0.05), cz = std::llround(SDFTable::SCENE_Z / 0.05);
-    const std::shared_ptr<const InstanceSnapshot> snap = with.sdf.get_snapshot();
-    int64_t blobs = 0;
-    int64_t per_lod[32] = {};
-    for (uint32_t i = 0; i < snap->records.size(); i++) {
-        if (snap->records[i].op == Combine::ACCUM) {
-            blobs++;
-            per_lod[snap->records[i].min_lod]++;
-        }
+    const ForestField *field = with.sdf.get_forest();
+    CHECK(field != nullptr);
+    if (!field) {
+        return;
     }
-    std::string layers;
-    for (int l = 0; l < 18; l++) {
-        layers += " " + std::to_string(per_lod[l]);
-    }
-    MESSAGE("forest: ", snap->records.size(), " records, ", blobs, " moment blobs; per LOD:", layers);
-    CHECK(blobs > 0);
     for (const int lod : { 6, 7, 8 }) {
         int canopy = 0, bare = 0, columns = 0;
         for (int i = 0; i < 24; i++) {
@@ -218,22 +214,32 @@ TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at t
         if (lod >= 7) {
             CHECK(bare == 0); // every crown dropped: nothing left without the blobs (at LOD 6 some are still drawn)
         }
-        // The chunks over the forest list blobs of their own LOD only.
-        std::vector<uint32_t> list;
-        snap->chunk_list(ChunkMath::chunk_at_voxel(VoxelPos(cx, with.sdf.ground_y(cx, cz), cz), lod, with.param), list);
+        // The chunk over the forest's centre lists blobs of its own LOD only (its keys' records meeting its samples).
+        const ChunkId chunk = ChunkMath::chunk_at_voxel(VoxelPos(cx, with.sdf.ground_y(cx, cz), cz), lod, with.param);
+        VoxelPos lo, hi;
+        chunk_sample_box(chunk, with.param, lo, hi);
+        std::vector<FieldKey> keys;
+        field->chunk_keys(chunk, with.param, keys);
         int listed = 0;
-        for (const uint32_t id : list) {
-            if (snap->records[id].op == Combine::ACCUM) {
-                CHECK(int(snap->records[id].min_lod) == lod);
-                listed++;
+        for (const FieldKey &k : keys) {
+            FieldContent c;
+            field->content(k, c);
+            std::vector<uint32_t> hit;
+            c.meeting(lo, hi, lod, hit);
+            for (const uint32_t i : hit) {
+                if (c.records[i].op == Combine::ACCUM) {
+                    CHECK(int(c.records[i].min_lod) == lod);
+                    listed++;
+                }
             }
         }
+        MESSAGE("LOD ", lod, ": the centre chunk lists ", listed, " blobs");
         CHECK(listed > 0);
     }
 }
 
 TEST_CASE("Moment fold: the forest never thins out from its parts to its blobs") {
-    const Forest with(true), without(false);
+    const Forest &with = Forest::get(true), &without = Forest::get(false);
     const int64_t cx = std::llround(SDFTable::SCENE_X / 0.05), cz = std::llround(SDFTable::SCENE_Z / 0.05);
     // The same 48 columns of the middle 60 m at every LOD: the share with a canopy (solid 5 m above the ground) and
     // its mean height. The blobs taking only the parts gone whole left a trough (26 of 48 at LOD 5, 34 at LOD 2): the
@@ -260,4 +266,6 @@ TEST_CASE("Moment fold: the forest never thins out from its parts to its blobs")
         CAPTURE(lod);
         CHECK(canopy * 10 >= reference * 9);
     }
+    MESSAGE("forest keys computed for the CPU evaluations: ", int64_t(with.sdf.get_forest_stream()->get_stats()["evaluate_computed"]), " with blobs, ",
+            int64_t(without.sdf.get_forest_stream()->get_stats()["evaluate_computed"]), " without");
 }

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <string>
 #include <thread>
 
@@ -32,7 +33,7 @@ Float4 sample_with(const SDFCascade &p_sdf, const InstanceSnapshot &p_snap, cons
     p_sdf.channels_at(p_voxel, p_lod, ch);
     WorldPos p;
     p.voxel = p_voxel;
-    return p_sdf.sample_sdf(p_snap, p_list.data(), uint32_t(p_list.size()), ch, p, p_lod);
+    return p_sdf.sample_sdf(p_snap, p_snap.records, p_list.data(), uint32_t(p_list.size()), ch, p, p_lod);
 }
 
 // The bare cascade at a LOD-p_lod lattice point (metres).
@@ -45,13 +46,14 @@ float bare_sdf(const SDFCascade &p_sdf, const VoxelPos &p_voxel, int p_lod) {
 using ChunkMath::chunk_at_voxel;
 
 // Whether an instance whose box test passes at p_voxel at LOD p_lod is dropped at p_lod + 1 (the band rule).
-bool dropped_at(const std::shared_ptr<const InstanceSnapshot> &p_snap, const VoxelPos &p_voxel, int p_lod) {
+bool dropped_at(const SDFCascade &p_sdf, const std::shared_ptr<const InstanceSnapshot> &p_snap, const VoxelPos &p_voxel, int p_lod) {
     thread_local std::vector<uint32_t> list;
     p_snap->point_candidates(p_voxel, p_lod, list);
+    const RecordView records = p_sdf.point_records(*p_snap, p_voxel, p_lod, list); // the streamed forest's too
     WorldPos p;
     p.voxel = p_voxel;
     for (uint32_t i : list) {
-        const TableRecord &rec = p_snap->records[i];
+        const TableRecord &rec = records[i];
         // A moment blob is listed at one LOD by design, not dropped: its step is the skirt's to hide.
         if (rec.op != Combine::ACCUM && !rec.listed_at(p_lod + 1) && in_influence_box(rec, p, p_lod)) {
             return true;
@@ -190,7 +192,7 @@ TEST_CASE("SDFCascade table: runtime edits on the cascade") {
     CHECK(t.sdf.last_edit_box().valid);
     CHECK(t.sdf.edit_affects_chunk(chunk_at_voxel(p.voxel, 0, t.param)));
     CHECK(!t.sdf.edit_affects_chunk(chunk_at_voxel(p.voxel + VoxelPos(5000, 0, 0), 0, t.param)));
-    CHECK(t.sdf.cull_exempt(chunk_at_voxel(p.voxel, 2, t.param), 2));
+    CHECK(t.sdf.cull_exempt(chunk_at_voxel(p.voxel, 2, t.param), 2, FLT_MAX));
     CHECK(t.sdf.remove_instance(id));
     CHECK(t.sdf.evaluate(p, 0) > 0.0f);
 }
@@ -211,7 +213,7 @@ TEST_CASE("SDFCascade table: evaluating on another thread while the main thread 
             WorldPos p;
             p.voxel = VoxelPos(v.x & mask, v.y & mask, v.z & mask);
             (void)t.sdf.evaluate(p, lod);
-            (void)t.sdf.cull_exempt(ChunkId(1, 1, 1), 0);
+            (void)t.sdf.cull_exempt(ChunkId(1, 1, 1), 0, FLT_MAX);
             i++;
             evaluations.fetch_add(1);
         }
@@ -360,7 +362,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
                     shared.voxel = VoxelPos(column.x, y + d, column.z);
                     // The outer chunk's skirt there: its LOD's, plus the moment skirt where a moment blob touches the point.
                     const double depth_m = double(sdf.skirt_depth_at(shared, step > 0.0 ? lod : lod + 1));
-                    if (step > depth_m && dropped_at(snap, VoxelPos(column.x, y + d, column.z), lod)) {
+                    if (step > depth_m && dropped_at(sdf, snap, VoxelPos(column.x, y + d, column.z), lod)) {
                         // A record listed at L, dropped at L+1: no skirt bounds that step, but the drop leaves at most
                         // `erode` cells of L of it (set_band), which the fine rim's skirt lifts to air: sealed.
                         CHECK(fine + double(sdf.skirt_depth_m(lod)) >= 0.0);
@@ -518,12 +520,12 @@ TEST_CASE("SDFCascade table: the edit overlay lists exactly what a whole new ind
     CHECK(sdf.get_snapshot()->base != first->base); // more than REBASE records edited: rebuilt at least once
     CHECK(entries > 1000);
     // An edit sends its page, not the table.
-    uint32_t v = 0;
-    const uint32_t before = sdf.get_snapshot()->version;
+    uint64_t v = 0;
+    const uint64_t before = sdf.get_gpu_table()->upload_version();
     const float params[8] = { 4.0f, 0, 0, 0, 0, 0, 0, 0 };
     CHECK(sdf.add_instance(0, VoxelPos(-100, y0, -300), nullptr, params, 0, 0.0f) >= 0);
     const PackedByteArray bytes = sdf.get_gpu_table()->record_bytes(before, v);
-    CHECK(v == before + 1);
+    CHECK(v == before + (uint64_t(1) << 32)); // the snapshot's version, in the high word
     CHECK(bytes.decode_u32(0) == 1u);
     CHECK(bytes.size() <= 4 + 8 + int64_t(RecordStore::PAGE) * RECORD_BYTES);
     // Two edits far apart in id (the first record, and an add on the last page) are two runs, not the records between

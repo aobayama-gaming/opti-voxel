@@ -160,6 +160,18 @@ ForestField::ForestField(const Setup &p_setup) :
         unit.rotation[0] = unit.rotation[4] = unit.rotation[8] = 1.0f;
         blob_margin_c = blob_record(*set.library, set.blob_type, unit, set.finish.skirt_depth).margin_c;
     }
+    // A base lies within a voxel of the ground (cell_site), a blob's cell within a cell of the trees' reach; the largest
+    // over the LOD and the finer ones (a culled node hides its subtree).
+    int64_t r = 0;
+    for (int l = 0; l < set.lod_count; l++) {
+        if (l < prof.lod_end) {
+            r = MAX(r, tree_grow(l) + 1);
+        }
+        if (has_layer(l)) {
+            r = MAX(r, int64_t(std::ceil(prof.reach)) + layer_cell(l) + blob_grow(l) + 1);
+        }
+        ground_reaches.push_back(r);
+    }
 }
 
 int64_t ForestField::blob_tile_cells(int p_layer) const {
@@ -207,18 +219,27 @@ void ForestField::keys(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, st
         return;
     }
     const VoxelBox box{ p_lo, p_hi, true };
-    const int64_t reach = int64_t(std::ceil(prof.reach));
     // Every tile whose content can pass a box test in the box: a tree tile's records lie within its box grown by the
     // reach, and its bases in the zone; a blob tile's within blob_reach, its cells within a cell of the trees' reach.
     if (p_lod < prof.lod_end) {
-        const int64_t grow = reach + influence_margin(bounds_record(prof.k_max, prof.margin_max), p_lod);
-        append_tiles(FieldKey::TREES, p_lod, tree_tile_side(), box.grown(grow), 0, r_out);
+        append_tiles(FieldKey::TREES, p_lod, tree_tile_side(), box.grown(tree_grow(p_lod)), 0, r_out);
     }
     if (has_layer(p_lod)) {
         const int64_t c = layer_cell(p_lod);
-        const int64_t grow = blob_reach(p_lod) + influence_margin(bounds_record(0.0f, blob_margin_c), p_lod);
-        append_tiles(FieldKey::BLOBS, p_lod, blob_tile_cells(p_lod) * c, box.grown(grow), reach + c, r_out);
+        append_tiles(FieldKey::BLOBS, p_lod, blob_tile_cells(p_lod) * c, box.grown(blob_grow(p_lod)), int64_t(std::ceil(prof.reach)) + c, r_out);
     }
+}
+
+int64_t ForestField::tree_grow(int p_lod) const {
+    return int64_t(std::ceil(prof.reach)) + influence_margin(bounds_record(prof.k_max, prof.margin_max), p_lod);
+}
+
+int64_t ForestField::blob_grow(int p_layer) const {
+    return blob_reach(p_layer) + influence_margin(bounds_record(0.0f, blob_margin_c), p_layer);
+}
+
+int64_t ForestField::ground_reach(int p_lod) const {
+    return ground_reaches.empty() ? 0 : ground_reaches[MIN(MAX(p_lod, 0), int(ground_reaches.size()) - 1)];
 }
 
 void ForestField::chunk_keys(const ChunkId &p_chunk, const ChunkParam &p_param, std::vector<FieldKey> &r_out) const {

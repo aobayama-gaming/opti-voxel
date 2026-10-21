@@ -213,7 +213,7 @@ private:
     RID buffer_table_records;
     RID buffer_table_list;
     uint64_t table_list_capacity = 0; // bytes
-    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last bound to a dispatch
+    uint64_t sent_table_version = SDFGpuTable::NOTHING_SENT; // main thread: the upload version last bound to a dispatch
     RID shaders[COMPUTE_PASSES];
     RID pipelines[COMPUTE_PASSES];
     RID uniform_set;
@@ -278,6 +278,7 @@ private:
         uint64_t overflow_chunks = 0;
         uint64_t overflow_requeued = 0; // chunks sent back to the queue because their batch overflowed
         uint64_t list_requeued = 0; // chunks sent back before dispatch: their instance list didn't fit the batch's buffer
+        uint64_t residency_waits = 0; // pops of a chunk whose streamed records weren't resident yet (put back)
         uint64_t audit_batches = 0;
         uint64_t dispatch_frames = 0; // frames that dispatched at least one batch
         uint64_t in_flight_max = 0; // mesh + audit batches waiting for their directory

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "forest_stream.hpp"
 #include "instance_table.hpp"
 #include "sdf_base.hpp"
 
@@ -26,17 +27,29 @@ public:
     String glsl_buffers(int p_record_binding, int p_list_binding) const override;
     String glsl_set_chunk() const override;
 
+    // Main thread, before the meshers start: a streamed forest (forest_stream.hpp), its records at ids from
+    // p_stream->slot_base() on (past the table's capacity); a chunk lists the snapshot's records below p_scene_end (the
+    // scene placed at configure), then the forest's, then the edits' (subtractions cut trees). Null: none.
+    void set_stream(std::shared_ptr<ForestStream> p_stream, uint32_t p_scene_end) {
+        stream = std::move(p_stream);
+        scene_end = p_scene_end;
+    }
+    const ForestStream *get_stream() const { return stream.get(); }
+
     uint32_t version() const override {
         const std::shared_ptr<const InstanceSnapshot> s = snapshot();
         return s ? s->version : 0u;
     }
+    uint64_t upload_version() const override { return uint64_t(version()) << 32 | (stream ? stream->version() : 0u); }
     uint32_t instance_count() const override {
         const std::shared_ptr<const InstanceSnapshot> s = snapshot();
         return s ? uint32_t(s->records.size()) : 0u;
     }
-    // The buffers are sized for this many instances up front (runtime edits only append). Raised by
-    // --instance_capacity for a large scatter.
-    uint32_t instance_capacity() const override { return capacity; }
+    // The buffers are sized for this many instances up front: the table's (runtime edits only append; raised by
+    // --instance_capacity for a large scatter) and the streamed forest's slots.
+    uint32_t instance_capacity() const override { return capacity + (stream ? stream->slot_capacity() : 0u); }
+    // The table's own records (the scene's and the edits'), the streamed slots' ids start there.
+    uint32_t table_capacity() const { return capacity; }
     void set_capacity(uint32_t p_capacity) {
         // A list word holds the record id in LIST_ID_BITS: past it, clamped (the table then refuses more records).
         if (p_capacity > LIST_ID_MASK + 1) {
@@ -45,7 +58,13 @@ public:
         }
         capacity = p_capacity;
     }
-    PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const override;
+    PackedByteArray record_bytes(uint64_t p_have_version, uint64_t &r_version) const override;
+    bool chunk_ready(const ChunkId &p_chunk) override { return !stream || stream->ready(p_chunk); }
+    void poll() override {
+        if (stream) {
+            stream->poll();
+        }
+    }
     uint32_t record_size() const override { return RECORD_BYTES; }
 
     uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
@@ -71,7 +90,9 @@ private:
     };
     mutable ListStats list_stats;
     std::shared_ptr<const InstanceSnapshot> snap;
-    uint32_t capacity = 16384; // the GPU record/list buffers hold this many instances
+    uint32_t capacity = 16384; // the GPU record buffer holds this many of the table's records, then the slots
+    std::shared_ptr<ForestStream> stream;
+    uint32_t scene_end = 0;
     Dictionary scene_stats;
 };
 
