@@ -352,6 +352,19 @@ to every change, and a reviewer may reject a PR on any of them.
   2-8% of the trees', supports 1.2-1.4x, mean peak 12-14% low (layers 6-7; at layer 5, a cell of a few trees, proxies
   made blobs twice as wide as the twigs' thin ones: hence the part layers). `parallel_for` runs inline on a thread holding
   an `InlineParallelFor` (a pool task computing a key).
+  **The streamed forest** (`src/forest_stream.*`): `--trees` no longer places records at configure; `SDFTable` builds
+  the field and a `ForestStream`, and the forest's records live in GPU slots past the table's capacity
+  (`SDFTable::FOREST_SLOTS` = 2M records, `SDFGpuTable::set_stream`). A mesher pops a chunk only once
+  `SDFBase::chunk_ready` (every key it lists resident), else puts it back (at most `WAITING_POPS_MAX` per batch), so a
+  chunk's list is a pure function of its id. A chunk lists the scene's records, then its keys' slots in key order, then
+  the edits'. Keys are computed on the stream's own threads (half the hardware threads), inputs first (LOD-0 tree tiles
+  kept in an `INPUT_CACHE_RECORDS` cache); slots are freed least recently asked first, never within `GRACE_FRAMES`.
+  The bookkeeping is event-driven: workers push finished keys, a key counts its missing inputs, a waiting chunk counts
+  its unplaced keys and is checked in full again only every `RECHECK_FRAMES`, so the main thread's cost follows what
+  landed (1M trees: the load went from never finishing to 102 s). The CPU `evaluate` reads the same records
+  (`point_records`, computed on demand when not resident). The discoverer's no-cull rule keeps the forest's nodes whose
+  corners are within its `ground_reach` of the ground. Presets `forest5cm_1m` (5 x 5 km) and `forest5cm_41m` (32 km);
+  `stats.json` `table.stream`: keys computed per kind / LOD, slots, waits, main-thread ms.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum
