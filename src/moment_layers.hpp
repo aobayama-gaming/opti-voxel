@@ -162,11 +162,12 @@ private:
         bool placed = false; // in the bins (or the wide set): it has a blob
     };
     using Bin = std::tuple<int64_t, int64_t, int64_t>;
+    using Near = std::pair<CellKey, const Cell *>; // a cell and where it lives (map nodes don't move)
     struct Layer {
         int lod = 0;
         int64_t cell = 0; // voxels
         std::map<CellKey, Cell> cells;
-        std::map<Bin, std::vector<CellKey>> bins; // the blobs whose support box meets each bin of BIN_CELLS cells
+        std::map<Bin, std::vector<Near>> bins; // the blobs whose support box meets each bin of BIN_CELLS cells
         std::set<CellKey> wide; // the blobs whose box meets more than WIDE_BINS bins
     };
     // A blob is filed in every bin its support box meets, so two boxes that meet share a bin. A blob over more than
@@ -180,7 +181,7 @@ private:
     MomentLayerParams params;
     MomentJoins joins;
     std::vector<Layer> layers; // lod_min .. lod_max
-    mutable uint64_t box_tests = 0;
+    uint64_t box_tests = 0;
 
     bool on_layer(const MomentItem &p_item, int p_lod) const;
     // The cells p_item's tent touches on p_layer with a weight > 0, and the weights.
@@ -194,10 +195,14 @@ private:
     bool bin_range(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], Bin &r_lo, Bin &r_hi) const;
     void place(Layer &r_layer, const CellKey &p_key, Cell &r_cell);
     void unplace(Layer &r_layer, const CellKey &p_key, Cell &r_cell);
-    // The cells whose blob support box may meet one at p_anchor with half extents p_extent (a superset, sorted).
-    void candidates(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], std::vector<CellKey> &r_out) const;
-    // The cell's pruning bound and verdict from the current blobs.
-    void judge(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const;
+    // The cells whose blob support box may meet one at p_anchor with half extents p_extent (a superset, sorted by key).
+    void candidates(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], std::vector<Near> &r_out) const;
+    // The cell's pruning bound and verdict from the current blobs; the box tests it ran.
+    uint64_t judge(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const;
+    // A build, in two steps: the members (reads only the items: the layers fill theirs side by side), then the sums,
+    // the bins and the pruning (each cell's on the worker pool, the bins in cell order).
+    void fill_members(Layer &r_layer) const;
+    void finish_layer(Layer &r_layer);
     void build_layer(Layer &r_layer);
     // update() on one layer: item p_id was p_before (items[p_id] holds its new state).
     void update_layer(Layer &layer, uint32_t p_id, const MomentItem &p_before, std::vector<MomentBlobChange> &r_changes);

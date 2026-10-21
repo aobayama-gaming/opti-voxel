@@ -447,7 +447,7 @@ void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_ce
                 continue;
             }
             TreeSite site;
-            site.base = VoxelPos(x, p_ground_y(x, z), z);
+            site.base = VoxelPos(x, p_ground_y ? p_ground_y(x, z) : 0, z);
             site.seed = h.z;
             site.species = int((h.z >> 16) % species);
             r_out.push_back(site);
