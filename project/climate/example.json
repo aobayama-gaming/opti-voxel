@@ -24,7 +24,6 @@
             "name": "volcanic",
             "where": [{ "field": "temperature", "min": 0.45, "fade": 0.1 }, { "field": "variant", "min": 0.25, "fade": 0.1 }],
             "amp": [{ "field": "ground", "from_m": 1000, "to_m": 6500, "x": 2 }],
-            "height_m": 200,
             "debug_color": "#c03818"
         },
         {
@@ -43,14 +42,12 @@
             "name": "mountains",
             "where": [{ "field": "variant", "min": 0.35, "fade": 0.15 }],
             "amp": [{ "field": "ground", "from_m": 1000, "to_m": 13000, "x": 2 }],
-            "height_m": 300,
             "debug_color": "#7a6a5a"
         },
         {
             "name": "swamp",
             "where": [{ "field": "humidity", "min": 0.35, "fade": 0.1 }],
             "amp": [{ "field": "ground", "from_m": 50, "to_m": 6500, "x": 0.2 }],
-            "height_m": -30,
             "debug_color": "#4a6040"
         },
         {

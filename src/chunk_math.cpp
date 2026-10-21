@@ -41,6 +41,18 @@ ChunkId ChunkMath::get_parent_from_child(const ChunkId &coord) {
             get_parent_from_child(coord.z));
 }
 
+Vector2i ChunkMath::lod_range(const std::vector<ChunkId> &p_chunks) {
+    if (p_chunks.empty()) {
+        return Vector2i();
+    }
+    Vector2i r(get_lod(p_chunks[0]), get_lod(p_chunks[0]));
+    for (const ChunkId &c : p_chunks) {
+        const int lod = get_lod(c);
+        r = Vector2i(MIN(r.x, lod), MAX(r.y, lod));
+    }
+    return r;
+}
+
 int ChunkMath::get_lod(const ChunkId &coord) {
     // The LOD of a chunk is the index of the lowest set bit of its coordinates (x is enough).
     if (coord.x == 0) {

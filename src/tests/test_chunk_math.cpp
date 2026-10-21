@@ -67,6 +67,12 @@ TEST_CASE("ChunkMath: LOD and size come from the lowest set bit") {
     CHECK(ChunkMath::get_lod_size(ChunkId(1, 1, 1)) == 1);
 }
 
+TEST_CASE("ChunkMath: a batch's LOD range") {
+    CHECK(ChunkMath::lod_range({}) == Vector2i(0, 0));
+    CHECK(ChunkMath::lod_range({ ChunkId(-8, 8, 24) }) == Vector2i(3, 3));
+    CHECK(ChunkMath::lod_range({ ChunkId(2, 6, -2), ChunkId(1, 3, -5), ChunkId(-8, 8, 24), ChunkId(4, 4, 4) }) == Vector2i(0, 3));
+}
+
 TEST_CASE("ChunkMath: ancestor at a target LOD") {
     CHECK(ChunkMath::get_parent_from_child_until(ChunkId(1, 1, 1), 3) == ChunkId(8, 8, 8));
     CHECK(ChunkMath::get_parent_from_child_until(ChunkId(-1, 1, -3), 2) == ChunkId(-4, 4, -4));

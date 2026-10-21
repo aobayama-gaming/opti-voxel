@@ -449,16 +449,35 @@ to every change, and a reviewer may reject a PR on any of them.
   +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
   contrast / saturation values never applied (adjustments were off) and are gone. Next: a material per biome cell
   for the ground, materials inside one record (an IR change), image textures (triplanar).
-- **Climate** (`src/climate.{hpp,cpp}`, biomes PR 1: CPU only, nothing meshes from it yet): a climate is data, a JSON
-  table (format above `parse()`, example `project/climate/example.json`) checked against `SDFCascade::climate_ground()`:
-  up to `MAX_FIELDS` (8) fields, each a `field_spec()` (LINEAR4) of any octaves in the ground's range (seeds
-  `make_octave(field seed, k)`, keyed by k), plus linear terms `coef * (the ground or an earlier field)` added after its
-  cascade, in list order (the lapse is a ground term). `fields_at` is a pure function of (lattice point, m): Λ_m holds
-  the octaves k >= m + 3 of every field, a finer field reads 0 there. Biomes (<= `MAX_BIOMES`, 16): regions over any
-  fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes the
-  rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64
-  (the GPU mirror, PR 2, walks the same order). `pick`: argmax, ties by `hash_cell` of the lattice point. Amplitude
-  multipliers per (field, k) and height offsets are parsed and checked (cap, exact range), read from PR 2 on.
+- **Climate** (`src/climate.{hpp,cpp}`; `VoxelTerrain.climate_path` / `--climate=PATH`, bench and player; off by
+  default): a climate is data, a JSON table (format above `parse()`, example `project/climate/example.json`, tuned for
+  5 cm: at 0.5 m its x2 mountains exceed the cap and the table is refused) checked against
+  `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (8) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
+  the ground's range (seeds `make_octave(field seed, k)`, keyed by k), plus linear terms `coef * (the ground or an earlier
+  field)` applied after the cascade, in list order (the lapse is a ground term). Biomes (<= `MAX_BIOMES`, 16): regions
+  over any fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes
+  the rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64.
+  `pick`: argmax, ties by `hash_cell` of the absolute voxel (the same from every LOD). No per-biome mean height: one
+  lattice can't carry it without the coarser LODs missing it (a step no skirt hides); it needs its own design.
+  **In the cascade** (`Climate::combined_spec`): the fields are `Spec::fields`, LINEAR4 groups carried with the ground
+  (`Cascade::field_slot`: after the ground's 8 slots on the CPU, after its 4 channels on the GPU: `Spec::gpu_base`, `Spec::slot_of_gpu`).
+  A band some biome multiplies is modulated (`Cascade::Modulation`, `Climate::Modulator`): at each point of its level,
+  from the channels before that level's insertions (H(V_{m+1}): no band reads one of its own level), A = sum_b w_b amp_b
+  and the band inserts A n, slopes n.s (A 2^-3) + n.w dA. `fields_at` reads V_m of the combined spec, so it is a pure
+  function of (lattice point, m). `SDFCascade` skirts take the largest amplitude any biome gives an octave
+  (`Climate::max_amp`). On the GPU the climate code is generated from the table (`Modulator::glsl`, op for op) and
+  `CascadePasses` compiles a ground-only variant and a fields variant (`level_shader(..., p_fields)`, the scratch planar:
+  vec4 v of every slot together, so the ground's loads stay contiguous): a chunk of LOD L carries its fields at level m
+  only where `Cascade::FieldRange::carried` (m >= the finest modulated ground level, L <= the coarsest; the CPU's ground
+  queries follow it too, `fields_at` carries them everywhere), and a dispatch takes the fields variant where
+  `FieldRange::batch` says (`record_level`'s `p_lods`, the batch's LOD range). Cost
+  (CascadeSpike, 128-chunk batches, example climate): fields without multipliers 1.00x; with them 1.09x at LODs 0-4,
+  1.00x at 20-24, 2.2-3.5x at LODs 8-16 (their own level is modulated: the weights run on every sample, +9-19 us per
+  chunk, once per mesh). The bigger `Ch` (20 floats) is what made a single shader 1.4x everywhere (registers, not work).
+  Forest5cm fly: steady +2%, tree placement +190 ms (the CPU traces carry the fields), the first run of a new table
+  pays its shaders' compile (cold pipeline cache). Checks: `cascade_test.sh --sets=4,4f,4c` (G1 on the carried
+  channels, G3 except at the ceiling, points), `discovery_audit.sh -- --voxel=0.05 --climate=... --discovery_compare=1`,
+  `origin_parity.sh --voxel=0.05 -- ... --climate=...`, a validated / audited bench load.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -480,11 +499,11 @@ to every change, and a reviewer may reject a PR on any of them.
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice through the datum: per-biome
   share and mean weight, per-field range, CPU us per point, `biomes_blend.png` / `biomes_pick.png` / `field_*.png`.
   Tune a table from it before any GPU run.
-- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4]`
+- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
-  both channel sets (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
+  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers) (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
   `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade
   with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample_sdf` + skirt (`--table`, G9); GPU timestamps of the passes for
   single-LOD batches of 128 at LOD 0, 4, ... 24 (G6, G7). Report: `<run>/cascade.md`. Run it after touching

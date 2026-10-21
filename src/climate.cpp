@@ -1,5 +1,7 @@
 #include "climate.hpp"
 
+#include <godot_cpp/classes/file_access.hpp>
+#include <godot_cpp/classes/json.hpp>
 #include <godot_cpp/variant/array.hpp>
 
 #include <algorithm>
@@ -35,8 +37,8 @@ bool moderate(double p_v) {
     return std::isfinite(p_v) && a >= std::ldexp(1.0, -40) && a <= std::ldexp(1.0, 40);
 }
 
-const Cascade::Band *find_band(const Cascade::Spec &p_spec, int p_k) {
-    for (const Cascade::Band &b : p_spec.bands) {
+const Cascade::Band *find_band(const std::vector<Cascade::Band> &p_bands, int p_k) {
+    for (const Cascade::Band &b : p_bands) {
         if (b.k == p_k) {
             return &b;
         }
@@ -44,12 +46,12 @@ const Cascade::Band *find_band(const Cascade::Spec &p_spec, int p_k) {
     return nullptr;
 }
 
-// The spec a term or multiplier source names: the ground's, a field's, or null.
-const Cascade::Spec *spec_of(const Table &p_table, const Ground &p_ground, int p_source) {
+// The bands a term or multiplier source names: the ground's, a field's, or null.
+const std::vector<Cascade::Band> *bands_of(const Table &p_table, const Ground &p_ground, int p_source) {
     if (p_source == GROUND) {
-        return p_ground.spec;
+        return p_ground.spec ? &p_ground.spec->bands : nullptr;
     }
-    return p_source >= 0 && p_source < int(p_table.fields.size()) ? &p_table.fields[size_t(p_source)].spec : nullptr;
+    return p_source >= 0 && p_source < int(p_table.fields.size()) ? &p_table.fields[size_t(p_source)].bands : nullptr;
 }
 
 template <typename T>
@@ -71,15 +73,11 @@ String validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
     if (name_taken_before(p_table.fields, size_t(p_i))) {
         return where + String("the name is used twice.");
     }
-    const Cascade::Spec base = field_spec();
-    if (f.spec.set != base.set || f.spec.insert_shift != base.insert_shift || f.spec.top != base.top) {
-        return where + String("a field's spec is field_spec() plus its bands.");
-    }
-    for (const Cascade::Band &b : f.spec.bands) {
+    for (const Cascade::Band &b : f.bands) {
         if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.k_max) {
             return where + vformat("octave k = %d is outside the ground's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.k_max);
         }
-        if (find_band(f.spec, b.k) != &b) {
+        if (find_band(f.bands, b.k) != &b) {
             return where + vformat("octave k = %d is listed twice.", b.k);
         }
         if (!ExactNoise::in_exact_range(b.amp)) {
@@ -90,7 +88,7 @@ String validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
         if (t.source != GROUND && (t.source < 0 || t.source >= p_i)) {
             return where + String("a term reads the ground or an earlier field only.");
         }
-        if (spec_of(p_table, p_ground, t.source) == nullptr) {
+        if (bands_of(p_table, p_ground, t.source) == nullptr) {
             return where + String("a term reads the ground, and there is none.");
         }
         if (!moderate(t.coef)) {
@@ -101,8 +99,8 @@ String validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
 }
 
 String validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_amp) {
-    const Cascade::Spec *spec = spec_of(p_table, p_ground, p_amp.field);
-    const Cascade::Band *band = spec ? find_band(*spec, p_amp.k) : nullptr;
+    const std::vector<Cascade::Band> *bands = bands_of(p_table, p_ground, p_amp.field);
+    const Cascade::Band *band = bands ? find_band(*bands, p_amp.k) : nullptr;
     if (band == nullptr) {
         return vformat("an amplitude multiplier names octave k = %d of a field that doesn't have it.", p_amp.k);
     }
@@ -145,9 +143,6 @@ String validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground) 
         if (!err.is_empty()) {
             return where + err;
         }
-    }
-    if (!std::isfinite(b.height) || std::fabs(b.height) > p_ground.amp_cap) {
-        return where + String("the height offset exceeds the ground's amplitude cap.");
     }
     return String();
 }
@@ -213,7 +208,7 @@ String validate(const Table &p_table, const Ground &p_ground) {
 //             "where": [ { "field": "temperature", "min": 0.5, "max": 2 (either or both), "fade": 0.1
 //                          (or "fade_min" / "fade_max") } ],
 //             "amp": [ { "field": "ground" | "<field>", "wavelength_m": 4000 | "from_m": 1000, "to_m": 20000, "x": 3 } ],
-//             "height_m": 150, "debug_color": "#c04020" }
+//             "debug_color": "#c04020" }
 //     The region is 1 between min and max, fading to 0 over the fade outside. A range of "amp" covers the
 //     octaves the field has in it. The last biome is the default: no "where".
 namespace {
@@ -362,7 +357,7 @@ private:
         const double amp = number(p_d, "amp", p_where);
         const double persistence = number(p_d, "persistence", p_where, 1.0);
         for (int k = hi; k >= lo; k--) {
-            r_f.spec.bands.push_back(ExactNoise::make_octave(r_f.seed, uint32_t(k), k, float(amp * std::pow(persistence, hi - k))));
+            r_f.bands.push_back(ExactNoise::make_octave(r_f.seed, uint32_t(k), k, float(amp * std::pow(persistence, hi - k))));
         }
     }
 
@@ -398,7 +393,7 @@ private:
         for (int64_t i = 0; i < band_list.size() && error.is_empty(); i++) {
             bands(dict(band_list[i], band_where), band_where, f);
         }
-        std::stable_sort(f.spec.bands.begin(), f.spec.bands.end(), [](const Cascade::Band &p_a, const Cascade::Band &p_b) { return p_a.k > p_b.k; });
+        std::stable_sort(f.bands.begin(), f.bands.end(), [](const Cascade::Band &p_a, const Cascade::Band &p_b) { return p_a.k > p_b.k; });
         const Array terms = array(p_d, "terms", where);
         const String term_where = where + String(" term");
         for (int64_t i = 0; i < terms.size() && error.is_empty(); i++) {
@@ -439,8 +434,8 @@ private:
         }
         const int f = source(text(p_d, "field", p_where), p_where, true, int(table.fields.size()), "the ground or a field");
         const float mult = float(number(p_d, "x", p_where));
-        const Cascade::Spec *spec = spec_of(table, ground, f);
-        if (!error.is_empty() || spec == nullptr) {
+        const std::vector<Cascade::Band> *bands = bands_of(table, ground, f);
+        if (!error.is_empty() || bands == nullptr) {
             fail(p_where, "no such field.");
             return;
         }
@@ -449,7 +444,7 @@ private:
             return;
         }
         const size_t before = r_b.amps.size();
-        for (const Cascade::Band &band : spec->bands) {
+        for (const Cascade::Band &band : *bands) {
             if (band.k >= lo && band.k <= hi) {
                 r_b.amps.push_back(Amp{ f, band.k, mult });
             }
@@ -460,7 +455,7 @@ private:
     }
 
     void biome(const Dictionary &p_d, int64_t p_i) {
-        if (!keys(p_d, vformat("biome %d", p_i), { "name", "where", "amp", "height_m", "debug_color" })) {
+        if (!keys(p_d, vformat("biome %d", p_i), { "name", "where", "amp", "debug_color" })) {
             return;
         }
         Climate::Biome b;
@@ -476,7 +471,6 @@ private:
         for (int64_t i = 0; i < amp.size() && error.is_empty(); i++) {
             amps(dict(amp[i], amp_where), amp_where, b);
         }
-        b.height = float(number(p_d, "height_m", where, 0.0) / ground.voxel_size);
         b.debug_color = name_hash(b.name) & 0xFFFFFFu;
         if (p_d.has("debug_color")) {
             const String c = text(p_d, "debug_color", where);
@@ -509,27 +503,55 @@ String parse(const Dictionary &p_data, const Ground &p_ground, Table &r_table) {
     return err;
 }
 
-void fields_at(const Table &p_table, const Ground &p_ground, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {
-    float ground_ch[Cascade::CHANNELS];
-    bool ground_done = false;
+void apply_terms(const Table &p_table, const float p_slots[Cascade::SLOTS], Float4 r_fields[MAX_FIELDS]) {
     for (int i = 0; i < MAX_FIELDS; i++) {
         r_fields[i] = Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
     }
+    const Float4 ground = to_float4(p_slots);
     for (size_t i = 0; i < p_table.fields.size(); i++) {
-        const Field &field = p_table.fields[i];
-        float ch[Cascade::CHANNELS];
-        Cascade::point_into(field.spec, p_p, p_m, ch);
-        Float4 f = to_float4(ch);
-        for (const Term &t : field.terms) {
-            if (t.source == GROUND && !ground_done) {
-                Cascade::point_into(*p_ground.spec, p_p, p_m, ground_ch);
-                ground_done = true;
-            }
-            const Float4 s = t.source == GROUND ? to_float4(ground_ch) : r_fields[t.source];
+        Float4 f = to_float4(p_slots + Cascade::field_slot(int(i)));
+        for (const Term &t : p_table.fields[i].terms) {
+            const Float4 s = t.source == GROUND ? ground : r_fields[t.source];
             f = flushed(Float4{ f.x + s.x * t.coef, f.y + s.y * t.coef, f.z + s.z * t.coef, f.w + s.w * t.coef });
         }
         r_fields[i] = f;
     }
+}
+
+String load(const String &p_path, Dictionary &r_data) {
+    const Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ);
+    if (f.is_null()) {
+        return "climate: cannot read " + p_path + String(".");
+    }
+    const Variant data = JSON::parse_string(f->get_as_text());
+    if (data.get_type() != Variant::DICTIONARY || Dictionary(data).is_empty()) {
+        return "climate: " + p_path + String(" is not a JSON object with a table.");
+    }
+    r_data = data;
+    return String();
+}
+
+float biome_amp(const Biome &p_biome, int p_field, const Cascade::Band &p_band) {
+    for (const Amp &e : p_biome.amps) {
+        if (e.field == p_field && e.k == p_band.k) {
+            return float(double(e.mult) * double(p_band.amp));
+        }
+    }
+    return p_band.amp;
+}
+
+float max_amp(const Table &p_table, int p_field, const Cascade::Band &p_band) {
+    float m = p_table.biomes.empty() ? p_band.amp : 0.0f;
+    for (const Climate::Biome &b : p_table.biomes) {
+        m = MAX(m, biome_amp(b, p_field, p_band));
+    }
+    return m;
+}
+
+void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {
+    float slots[Cascade::SLOTS];
+    Cascade::point_slots(p_combined, p_p, p_m, slots, true);
+    apply_terms(p_table, slots, r_fields);
 }
 
 void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w[MAX_BIOMES]) {
@@ -569,6 +591,178 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
     const int64_t step = int64_t(1) << p_m;
     const Vector3i64 voxel(p_p.x * step, p_p.y * step, p_p.z * step);
     return best[ExactNoise::hash_cell(voxel, PICK_SEED) % uint32_t(count)];
+}
+
+namespace {
+
+// The climate's Cascade::Modulation (combined_spec): per modulated band (group, level), each biome's amplitude.
+class Modulator : public Cascade::Modulation {
+public:
+    Modulator(const Table &p_table, const Cascade::Spec &p_spec) :
+            table(p_table) {
+        for (int g = 0; g < p_spec.group_count(); g++) {
+            for (const Cascade::Band &band : p_spec.group_bands(g)) {
+                Entry e{ g, std::vector<float>(table.biomes.size(), band.amp) };
+                bool any = false;
+                for (size_t b = 0; b < table.biomes.size(); b++) {
+                    e.amp[b] = biome_amp(table.biomes[b], g - 1, band); // group g is field g - 1, the ground GROUND
+                    for (const Amp &a : table.biomes[b].amps) {
+                        any = any || (a.field == g - 1 && a.k == band.k);
+                    }
+                }
+                const int m = p_spec.insert_level(band);
+                if (any && m >= 0 && m <= Cascade::MAX_LEVEL) {
+                    entries[m].push_back(e);
+                    mask[m] |= 1u << g;
+                    // Only the ground reaches the mesh: the fields are carried for the ground's modulated levels.
+                    if (g == 0) {
+                        range.floor = MIN(range.floor, m);
+                        range.ceiling = MAX(range.ceiling, m);
+                    }
+                }
+            }
+        }
+    }
+
+    bool any() const {
+        return std::any_of(std::begin(mask), std::end(mask), [](uint32_t p_m) { return p_m != 0u; });
+    }
+
+    uint32_t modulated(int p_m) const override { return p_m >= 0 && p_m <= Cascade::MAX_LEVEL ? mask[p_m] : 0u; }
+    Cascade::FieldRange field_range() const override { return range; }
+
+    void amplitudes(int p_m, const float p_pre[Cascade::SLOTS], Float4 r_amp[Cascade::MAX_GROUPS]) const override {
+        Float4 f[MAX_FIELDS];
+        apply_terms(table, p_pre, f);
+        Float4 w[MAX_BIOMES];
+        weights(table, f, w);
+        for (const Entry &e : entries[p_m]) {
+            Float4 a{ 0.0f, 0.0f, 0.0f, 0.0f };
+            for (size_t b = 0; b < e.amp.size(); b++) {
+                if (e.amp[b] != 0.0f) {
+                    const float k = e.amp[b];
+                    a = Float4{ a.x + w[b].x * k, a.y + w[b].y * k, a.z + w[b].z * k, a.w + w[b].w * k };
+                }
+            }
+            r_amp[e.group] = flushed(a);
+        }
+    }
+
+    String glsl(const Cascade::Spec &p_spec) const override;
+
+private:
+    struct Entry {
+        int group = 0;
+        std::vector<float> amp; // per biome
+    };
+    Table table;
+    std::vector<Entry> entries[Cascade::MAX_LEVEL + 1];
+    uint32_t mask[Cascade::MAX_LEVEL + 1] = {};
+    Cascade::FieldRange range;
+};
+
+// flushed, dmul, dsub and edge_weight in GLSL, op for op.
+constexpr const char GLSL_CLIMATE_HELPERS[] = R"glsl(
+vec4 cl_flush(vec4 v) {
+    return vec4(abs(v.x) < FLUSH ? 0.0 : v.x, abs(v.y) < FLUSH ? 0.0 : v.y, abs(v.z) < FLUSH ? 0.0 : v.z, abs(v.w) < FLUSH ? 0.0 : v.w);
+}
+
+vec4 cl_mul(vec4 a, vec4 b) {
+    precise vec4 r;
+    r.x = a.w * b.x + b.w * a.x;
+    r.y = a.w * b.y + b.w * a.y;
+    r.z = a.w * b.z + b.w * a.z;
+    r.w = a.w * b.w;
+    return cl_flush(r);
+}
+
+vec4 cl_sub(vec4 a, vec4 b) {
+    precise vec4 r = a - b;
+    return cl_flush(r);
+}
+
+vec4 cl_edge(vec4 x, float anchor, float scale) {
+    precise float raw0 = (x.w - anchor) * scale;
+    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
+    if (!(raw > 0.0)) {
+        return vec4(0.0);
+    }
+    if (raw >= 1.0) {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    precise vec4 s0 = vec4(x.x * scale, x.y * scale, x.z * scale, raw);
+    vec4 s = cl_flush(s0);
+    precise vec4 q = vec4(s.x * -2.0, s.y * -2.0, s.z * -2.0, 3.0 - s.w * 2.0);
+    return cl_mul(cl_mul(s, s), q);
+}
+)glsl";
+
+String Modulator::glsl(const Cascade::Spec &p_spec) const {
+    using ExactNoise::glsl_float;
+    String code = String(GLSL_CLIMATE_HELPERS).replace("FLUSH", glsl_float(ExactNoise::bits_float(Cascade::FLUSH_BITS)));
+    code += "\n// Climate::Modulator::amplitudes: the field terms, the biome weights, then each modulated band's amplitude.\n";
+    code += vformat("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", Cascade::MAX_GROUPS);
+    code += vformat("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n    uint mask = 0u;\n    switch (m) {\n", Cascade::MAX_GROUPS);
+    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+        if (mask[m] != 0u) {
+            code += vformat("    case %d: mask = %du; break;\n", m, int64_t(mask[m]));
+        }
+    }
+    code += "    default: break;\n    }\n    if (mask == 0u) {\n        return 0u;\n    }\n";
+    auto channels = [](int p_base) { return vformat("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
+    code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + String(";\n");
+    for (size_t i = 0; i < table.fields.size(); i++) {
+        code += vformat("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));
+        for (const Term &t : table.fields[i].terms) {
+            const String src = t.source == GROUND ? String("g0") : vformat("f%d", t.source);
+            code += vformat("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
+        }
+    }
+    code += "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
+    const size_t n = table.biomes.size();
+    for (size_t b = 0; b + 1 < n; b++) {
+        code += vformat("    vec4 r%d = vec4(0.0, 0.0, 0.0, 1.0);\n", int64_t(b));
+        for (const Edge &e : table.biomes[b].edges) {
+            code += vformat("    r%d = cl_mul(r%d, cl_edge(f%d, %s, %s));\n", int64_t(b), int64_t(b), e.field, glsl_float(e.anchor), glsl_float(e.scale));
+        }
+        code += vformat("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
+    }
+    code += vformat("    vec4 w%d = rest;\n    switch (m) {\n", int64_t(n - 1));
+    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+        if (entries[m].empty()) {
+            continue;
+        }
+        code += vformat("    case %d: {\n", m);
+        for (const Entry &e : entries[m]) {
+            code += "        { precise vec4 a = vec4(0.0);";
+            for (size_t b = 0; b < e.amp.size(); b++) {
+                if (e.amp[b] != 0.0f) {
+                    code += vformat(" a = a + w%d * %s;", int64_t(b), glsl_float(e.amp[b]));
+                }
+            }
+            code += vformat(" amp[%d] = cl_flush(a); }\n", e.group);
+        }
+        code += "        break;\n    }\n";
+    }
+    code += "    default: break;\n    }\n    return mask;\n}\n";
+    return code;
+}
+
+} // namespace
+
+Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground) {
+    Cascade::Spec spec = p_ground;
+    spec.fields.clear();
+    spec.modulation.reset();
+    for (const Field &f : p_table.fields) {
+        spec.fields.push_back(f.bands);
+    }
+    std::shared_ptr<Modulator> mod = std::make_shared<Modulator>(p_table, spec);
+    if (mod->any()) {
+        ERR_FAIL_COND_V_MSG(spec.set != Cascade::ChannelSet::LINEAR4, spec, "Climate: amplitude multipliers need a LINEAR4 ground; the climate is carried unmodulated.");
+        spec.modulation = mod;
+    }
+    return spec;
 }
 
 } // namespace Climate

@@ -59,7 +59,7 @@ void main() {
     ChunkFrame f = chunk_frame(input_chunk[pc.chunk_base + c], chunk_param);
     int lod = f.lod;
     int m = lod + pc.j;
-    int top = max(pc.top, lod);
+/*FIELDS_FLAG*/    int top = max(pc.top, lod);
     if (m > top) {
         return; // above T: zero, nothing stored, the chunk starts lower
     }
@@ -123,11 +123,7 @@ void main() {
     i64_shl(p.lo, p.hi, m);
     p.frac = vec3(0.0);
 
-    CascadeBand band = bands[m];
-    if (band.info.x != 0u) {
-        ch = insert_band(ch, p, band);
-    }
-    ch = flush(ch);
+/*INSERT_BANDS*/    ch = flush(ch);
 
     uint slot = c * n * n * n + local;
     if (pc.j > 0) {
@@ -194,9 +190,9 @@ String flt(float p_f) {
     return ExactNoise::glsl_float(p_f);
 }
 
-// Ch and hermite_x/y/z for a channel set (from Cascade::PAIRS).
-String hermite_functions(ChannelSet p_set) {
-    const int nch = channel_count(p_set);
+// Ch and hermite_x/y/z for a spec's groups (from Cascade::PAIRS, the CPU's axis_rule per group).
+String hermite_functions(const Spec &p_spec) {
+    const int nch = p_spec.gpu_channels();
     String code = vformat("struct Ch { float c[%d]; };\n\n", nch);
     code += "Ch ch_zero() {\n    Ch r;\n";
     for (int c = 0; c < nch; c++) {
@@ -226,19 +222,31 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
             mid_code += vformat("        hmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_v, p_s, p_s, p_v, p_s);
             copy_code += vformat("        hcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_s, p_v, p_s);
         };
-        if (p_set == ChannelSet::HERMITE8) {
-            for (const auto &pr : PAIRS[axis]) {
-                pair(pr[0], pr[1]);
+        for (int g = 0; g < p_spec.group_count(); g++) {
+            const int base = p_spec.gpu_base(g);
+            if (g == 1) {
+                // The fields only where something reads them (Cascade::FieldRange).
+                mid_code += "        if (g_fields) {\n";
+                copy_code += "        if (g_fields) {\n";
             }
-        } else {
+            if (p_spec.group_set(g) == ChannelSet::HERMITE8) {
+                for (const auto &pr : PAIRS[axis]) {
+                    pair(base + pr[0], base + pr[1]);
+                }
+                continue;
+            }
             // LINEAR4: value + the axis slope by the Hermite rule, the transverse slopes linear.
-            pair(VALUE, DX + axis);
-            for (int s = DX; s <= DZ; s++) {
-                if (s != DX + axis) {
+            pair(base + VALUE, base + DX + axis);
+            for (int s = base + DX; s <= base + DZ; s++) {
+                if (s != base + DX + axis) {
                     mid_code += vformat("        { precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", s, s, s);
                     copy_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
                 }
             }
+        }
+        if (p_spec.group_count() > 1) {
+            mid_code += "        }\n";
+            copy_code += "        }\n";
         }
         code += vformat("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r;\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
                 mid_code, copy_code);
@@ -246,10 +254,13 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
     return code;
 }
 
-// Scratch and debug buffer access (nv vec4s per point) and the x pass at a parent position.
-String storage_functions(ChannelSet p_set) {
-    const int nch = channel_count(p_set);
-    const int nv = int(CascadeGLSL::vec4s_per_point(p_set));
+// Scratch and debug buffer access (nv vec4s per point) and the x pass at a parent position. The scratch is planar:
+// vec4 v of slot s at v * plane + s, plane = the buffer's vec4s / p_stride, so the ground's loads stay contiguous
+// whatever the fields; the debug channels are per point (slot * p_stride + v). p_stride: vec4s_per_point of the whole
+// spec (the ground-only variant reads and writes the ground's planes of the same buffers).
+String storage_functions(const Spec &p_spec, int p_stride) {
+    const int nch = p_spec.gpu_channels();
+    const int nv = int(CascadeGLSL::vec4s_per_point(p_spec));
     String code = "Ch unpack(";
     for (int v = 0; v < nv; v++) {
         code += vformat("%svec4 v%d", v ? ", " : "", v);
@@ -262,24 +273,33 @@ String storage_functions(ChannelSet p_set) {
     code += "Ch load(bool from_a, uint slot) {\n";
     String args_a;
     String args_b;
+    // vec4s from ground_vecs on are the fields' (4 channels each), read only where g_fields.
+    const int ground_vecs = p_spec.gpu_base(1) / 4;
     for (int v = 0; v < nv; v++) {
-        args_a += vformat("%sscratch_a[slot * %du + %du]", v ? ", " : "", nv, v);
-        args_b += vformat("%sscratch_b[slot * %du + %du]", v ? ", " : "", nv, v);
+        const char *sep = v ? ", " : "";
+        if (v < ground_vecs) {
+            args_a += vformat("%sscratch_a[%du * plane_a + slot]", sep, v);
+            args_b += vformat("%sscratch_b[%du * plane_b + slot]", sep, v);
+        } else {
+            args_a += vformat("%s(g_fields ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, v);
+            args_b += vformat("%s(g_fields ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, v);
+        }
     }
-    code += vformat("    if (from_a) {\n        return unpack(%s);\n    }\n    return unpack(%s);\n}\n\n", args_a, args_b);
+    const String planes = vformat("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_stride, p_stride);
+    code += planes + vformat("    if (from_a) {\n        return unpack(%s);\n    }\n    return unpack(%s);\n}\n\n", args_a, args_b);
     String vecs;
     for (int v = 0; v < nv; v++) {
         vecs += vformat("    vec4 v%d = vec4(r.c[%d], r.c[%d], r.c[%d], r.c[%d]);\n", v, 4 * v, 4 * v + 1, 4 * v + 2, 4 * v + 3);
     }
-    code += "void store(int odd, uint slot, Ch r) {\n" + vecs;
+    code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
     for (int v = 0; v < nv; v++) {
-        code += vformat("    if (odd != 0) {\n        scratch_a[slot * %du + %du] = v%d;\n    } else {\n        scratch_b[slot * %du + %du] = v%d;\n    }\n", nv, v, v,
-                nv, v, v);
+        const String guard = v < ground_vecs ? String() : String("    if (g_fields)\n");
+        code += guard + vformat("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", v, v, v, v);
     }
     code += "}\n\n";
     code += "void store_debug(uint slot, Ch r) {\n" + vecs;
     for (int v = 0; v < nv; v++) {
-        code += vformat("    debug_channels[slot * %du + %du] = v%d;\n", nv, v, v);
+        code += vformat("    debug_channels[slot * %du + %du] = v%d;\n", p_stride, v, v);
     }
     code += "}\n\n";
     // The x pass at parent position q (and q + x on a midpoint).
@@ -296,28 +316,70 @@ String storage_functions(ChannelSet p_set) {
     return code;
 }
 
-// Cascade::insert_bands for one band (o = channel * factor[order], ch = ch + o: two roundings, precise)
-// and Cascade::flush_value.
-String band_functions(ChannelSet p_set) {
-    const int nch = channel_count(p_set);
-    String code = "Ch insert_band(Ch ch, WorldPos p, CascadeBand band) {\n";
-    if (p_set == ChannelSet::HERMITE8) {
-        code += "    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz, c0, c1);\n";
-        code += "    float n[8] = float[8](c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w);\n";
-    } else {
-        // perlin3 returns (d/dx, d/dy, d/dz, value): the same bits as perlin3_cross's first four channels.
-        code += "    vec4 g = perlin3(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n";
-        code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
+// Cascade's insert_point for group g's band: insert_band_<g> at its constant amplitude (o = channel * factor[order],
+// ch = ch + o: two roundings, precise), insert_band_mod_<g> at a modulated one (Cascade::modulated_channels, the same
+// order); and Cascade::flush_value.
+String band_functions(const Spec &p_spec) {
+    const int nch = p_spec.gpu_channels();
+    String code;
+    for (int g = 0; g < p_spec.group_count(); g++) {
+        const int base = p_spec.gpu_base(g);
+        const ChannelSet set = p_spec.group_set(g);
+        code += vformat("Ch insert_band_%d(Ch ch, WorldPos p, CascadeBand band) {\n", g);
+        if (set == ChannelSet::HERMITE8) {
+            code += "    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz, c0, c1);\n";
+            code += "    float n[8] = float[8](c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w);\n";
+        } else {
+            // perlin3 returns (d/dx, d/dy, d/dz, value): the same bits as perlin3_cross's first four channels.
+            code += "    vec4 g = perlin3(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n";
+            code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
+        }
+        for (int c = 0; c < channel_count(set); c++) {
+            code += vformat("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), base + c,
+                    base + c);
+        }
+        code += "    return ch;\n}\n\n";
+        if (p_spec.modulation && set == ChannelSet::LINEAR4) {
+            code += vformat("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g);
+            code += "    vec4 g = perlin3(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n";
+            code += vformat("    precise float aws = amp.w * %s;\n", flt(ExactNoise::exact_pow2(-p_spec.insert_shift)));
+            code += vformat("    { precise float o = g.w * amp.w; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", base, base);
+            static const char *AXES = "xyz";
+            for (int a = 0; a < 3; a++) {
+                code += vformat("    { precise float o = g.%c * aws + g.w * amp.%c; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", AXES[a], AXES[a], base + 1 + a,
+                        base + 1 + a);
+            }
+            code += "    return ch;\n}\n\n";
+        }
     }
-    for (int c = 0; c < nch; c++) {
-        code += vformat("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), c, c);
-    }
-    code += "    return ch;\n}\n\n";
     code += "Ch flush(Ch ch) {\n";
     for (int c = 0; c < nch; c++) {
         code += vformat("    ch.c[%d] = abs(ch.c[%d]) < %s ? 0.0 : ch.c[%d];\n", c, c, flt(ExactNoise::bits_float(FLUSH_BITS)), c);
     }
     code += "    return ch;\n}\n";
+    return code;
+}
+
+// The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
+// insertion, then each group's band of level m (bands[group * BAND_ENTRIES + m]).
+String insert_code(const Spec &p_spec) {
+    String code;
+    if (p_spec.modulation) {
+        code += vformat("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp);\n", MAX_GROUPS);
+    }
+    for (int g = 0; g < p_spec.group_count(); g++) {
+        if (p_spec.group_bands(g).empty()) {
+            continue;
+        }
+        code += vformat("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_fields) " : "",
+                g * CascadeGLSL::BAND_ENTRIES);
+        if (p_spec.modulation && p_spec.group_set(g) == ChannelSet::LINEAR4) {
+            code += vformat("            ch = ((modulated >> %du) & 1u) != 0u ? insert_band_mod_%d(ch, p, band, amp[%d]) : insert_band_%d(ch, p, band);\n", g, g, g, g);
+        } else {
+            code += vformat("            ch = insert_band_%d(ch, p, band);\n", g);
+        }
+        code += "        }\n    }\n";
+    }
     return code;
 }
 
@@ -371,26 +433,28 @@ uint cascade_vertex_material(uvec3 gid) {
 PackedByteArray band_table(const Spec &p_spec) {
     using namespace WorldCoord;
     PackedByteArray bytes;
-    bytes.resize(BAND_ENTRIES * BAND_BYTES);
+    bytes.resize(int64_t(p_spec.group_count()) * BAND_ENTRIES * BAND_BYTES);
     bytes.fill(0);
-    for (const Band &b : p_spec.bands) {
-        const int m = p_spec.insert_level(b);
-        ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, vformat("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
-        const int64_t base = int64_t(m) * BAND_BYTES;
-        ERR_CONTINUE_MSG(bytes.decode_u32(base + 48) != 0, vformat("CascadeGLSL: two bands on lattice %d (the GPU table holds one per level).", m));
-        for (int o = 0; o < 4; o++) {
-            // Cascade's BandFactors, the same float product.
-            bytes.encode_float(base + 4 * o, b.amp * ExactNoise::exact_pow2(-p_spec.insert_shift * o));
+    for (int g = 0; g < p_spec.group_count(); g++) {
+        for (const Band &b : p_spec.group_bands(g)) {
+            const int m = p_spec.insert_level(b);
+            ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, vformat("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
+            const int64_t base = (int64_t(g) * BAND_ENTRIES + m) * BAND_BYTES;
+            ERR_CONTINUE_MSG(bytes.decode_u32(base + 48) != 0, vformat("CascadeGLSL: two bands on lattice %d (the GPU table holds one per level).", m));
+            for (int o = 0; o < 4; o++) {
+                // Cascade's BandFactors, the same float product.
+                bytes.encode_float(base + 4 * o, b.amp * ExactNoise::exact_pow2(-p_spec.insert_shift * o));
+            }
+            bytes.encode_u32(base + 16, lo32(b.offset.x));
+            bytes.encode_u32(base + 20, lo32(b.offset.y));
+            bytes.encode_u32(base + 24, lo32(b.offset.z));
+            bytes.encode_s32(base + 32, hi32(b.offset.x));
+            bytes.encode_s32(base + 36, hi32(b.offset.y));
+            bytes.encode_s32(base + 40, hi32(b.offset.z));
+            bytes.encode_u32(base + 48, 1);
+            bytes.encode_u32(base + 52, b.seed);
+            bytes.encode_u32(base + 56, uint32_t(b.k));
         }
-        bytes.encode_u32(base + 16, lo32(b.offset.x));
-        bytes.encode_u32(base + 20, lo32(b.offset.y));
-        bytes.encode_u32(base + 24, lo32(b.offset.z));
-        bytes.encode_s32(base + 32, hi32(b.offset.x));
-        bytes.encode_s32(base + 36, hi32(b.offset.y));
-        bytes.encode_s32(base + 40, hi32(b.offset.z));
-        bytes.encode_u32(base + 48, 1);
-        bytes.encode_u32(base + 52, b.seed);
-        bytes.encode_u32(base + 56, uint32_t(b.k));
     }
     return bytes;
 }
@@ -405,12 +469,21 @@ uint32_t scratch_points_b(int p_item_size) {
     return n * n * n;
 }
 
-uint32_t vec4s_per_point(ChannelSet p_set) {
-    return uint32_t(channel_count(p_set) + 3) / 4;
+uint32_t vec4s_per_point(const Spec &p_spec) {
+    // Fields carried nowhere (an empty FieldRange) take no scratch.
+    const int channels = p_spec.field_range().empty() ? channel_count(p_spec.set) : p_spec.gpu_channels();
+    return uint32_t(channels + 3) / 4;
 }
 
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material) {
-    const Spec *spec = p_sdf->get_cascade();
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_fields) {
+    const Spec &whole = *p_sdf->get_cascade();
+    // Without the fields: the ground alone (its Ch, its bands, no modulation) on the whole spec's scratch planes.
+    Spec view = whole;
+    if (!p_fields) {
+        view.fields.clear();
+        view.modulation.reset();
+    }
+    const Spec *spec = &view;
     ERR_FAIL_COND_V_MSG(p_debug && p_points, String(), "CascadeGLSL: point items have no debug variant.");
     const SDFGpuTable *table = p_sdf->get_gpu_table();
     ERR_FAIL_COND_V_MSG((p_fold || p_material) && p_points, String(), "CascadeGLSL: only chunk items fold or carry a material.");
@@ -431,7 +504,14 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? p_sdf->get_sample_fold_glsl() : String()));
-    code = code.replace("/*CASCADE*/", hermite_functions(spec->set) + storage_functions(spec->set) + band_functions(spec->set));
+    const String modulation = spec->modulation ? spec->modulation->glsl(*spec) : String();
+    const bool fields = !spec->fields.empty();
+    const FieldRange range = spec->field_range();
+    const String fields_flag = fields ? String("bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n\n") : String();
+    code = code.replace("/*CASCADE*/", fields_flag + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole))) + band_functions(*spec) + modulation);
+    code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
+    code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
+
     code = code.replace("/*DEBUG_STORE*/", p_debug ? "store_debug(sample_index, ch); // CascadeSpike variant" : "");
     return code;
 }
@@ -486,35 +566,24 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     max_chunks = p_max_items;
     const bool points = item_size == 1;
 
-    // Variant 0: the bare cascade at level 0; variant 1 (given the table's buffers): the instance fold.
+    // Variant (fields ? 2 : 0) + (fold ? 1 : 0): the bare cascade at level 0 or the instance fold (given the table's
+    // buffers), with the ground alone or with the fields (where the spec's FieldRange carries them: none if empty).
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
     ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
-    const int variants = table ? 2 : 1; // a fold variant that fails to compile leaves the bare one working
-    for (int v = 0; v < variants; v++) {
-        const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1, p_material.is_valid());
-        RDUtils::dump_shader(String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (v == 1 ? "_fold" : ""), code);
-        Ref<RDShaderSource> source;
-        source.instantiate();
-        source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
-        Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-        const String error = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-        if (!error.is_empty()) {
-            UtilityFunctions::printerr("--- SDF SHADER COMPILATION FAILED (CascadePasses) ---");
-            UtilityFunctions::printerr("ERROR MESSAGE:\n", error);
-            const PackedStringArray lines = code.split("\n");
-            for (int i = 0; i < lines.size(); i++) {
-                UtilityFunctions::printerr(String::num_int64(i + 1) + " | " + lines[i]);
+    fields = spec->fields.empty() ? FieldRange() : spec->field_range();
+    for (int c = 0; c < (fields.empty() ? 1 : 2); c++) {
+        for (int f = 0; f < (table ? 2 : 1); f++) {
+            const int v = 2 * c + f;
+            const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), c == 1);
+            const String name = String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") +
+                    (c == 1 ? "_fields" : "");
+            if (!_compile(v, name, code) && f == 0) {
+                return false; // a fold variant that fails leaves the bare one working (record_level ERRs once)
             }
-            if (v == 0) {
-                return false;
-            }
-            break; // the bare terrain still works; a fold asked for later ERRs (record_level)
         }
-        shader[v] = rd->shader_create_from_spirv(spirv);
-        pipeline[v] = rd->compute_pipeline_create(shader[v]);
     }
 
-    const uint64_t vec4_bytes = 16 * CascadeGLSL::vec4s_per_point(spec->set);
+    const uint64_t vec4_bytes = 16 * CascadeGLSL::vec4s_per_point(*spec);
     const uint64_t bytes_a = uint64_t(max_chunks) * CascadeGLSL::scratch_points_a(item_size) * vec4_bytes;
     const uint64_t bytes_b = uint64_t(max_chunks) * CascadeGLSL::scratch_points_b(item_size) * vec4_bytes;
     if (p_share_scratch != nullptr) {
@@ -554,20 +623,53 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     if (p_material.is_valid()) {
         uniforms.push_back(make_uniform(CascadeGLSL::MATERIAL_BINDING, p_material, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     }
-    uniform_set[0] = rd->uniform_set_create(uniforms, shader[0], 0);
-    if (shader[1].is_valid()) {
-        uniforms.push_back(make_uniform(CascadeGLSL::TABLE_RECORD_BINDING, p_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-        uniforms.push_back(make_uniform(CascadeGLSL::TABLE_LIST_BINDING, p_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-        uniform_set[1] = rd->uniform_set_create(uniforms, shader[1], 0);
+    // The fold variants also bind the table's buffers.
+    TypedArray<RDUniform> fold_uniforms = uniforms.duplicate();
+    if (table) {
+        fold_uniforms.push_back(make_uniform(CascadeGLSL::TABLE_RECORD_BINDING, p_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
+        fold_uniforms.push_back(make_uniform(CascadeGLSL::TABLE_LIST_BINDING, p_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
     }
-    return uniform_set[0].is_valid();
+    for (int v = 0; v < VARIANTS; v++) {
+        if (shader[v].is_valid()) {
+            uniform_set[v] = rd->uniform_set_create((v & 1) ? fold_uniforms : uniforms, shader[v], 0);
+        }
+    }
+    return uniform_set[0].is_valid() && (fields.empty() || uniform_set[2].is_valid());
+}
+
+bool CascadePasses::_compile(int p_variant, const String &p_name, const String &p_code) {
+    RDUtils::dump_shader(p_name, p_code);
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, p_code);
+    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+    const String error = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+    if (!error.is_empty()) {
+        UtilityFunctions::printerr("--- SDF SHADER COMPILATION FAILED (CascadePasses " + p_name + ") ---");
+        UtilityFunctions::printerr("ERROR MESSAGE:\n", error);
+        const PackedStringArray lines = p_code.split("\n");
+        for (int i = 0; i < lines.size(); i++) {
+            UtilityFunctions::printerr(String::num_int64(i + 1) + " | " + lines[i]);
+        }
+        return false;
+    }
+    shader[p_variant] = rd->shader_create_from_spirv(spirv);
+    pipeline[p_variant] = rd->compute_pipeline_create(shader[p_variant]);
+    return true;
 }
 
 void CascadePasses::free() {
     if (rd == nullptr) {
         return;
     }
-    for (const RID &rid : { uniform_set[0], uniform_set[1], pipeline[0], pipeline[1], shader[0], shader[1], bands, debug_placeholder }) {
+    for (int v = 0; v < VARIANTS; v++) {
+        for (const RID &rid : { uniform_set[v], pipeline[v], shader[v] }) {
+            if (rid.is_valid()) {
+                rd->free_rid(rid);
+            }
+        }
+    }
+    for (const RID &rid : { bands, debug_placeholder }) {
         if (rid.is_valid()) {
             rd->free_rid(rid);
         }
@@ -579,7 +681,7 @@ void CascadePasses::free() {
             }
         }
     }
-    for (int v = 0; v < 2; v++) {
+    for (int v = 0; v < VARIANTS; v++) {
         uniform_set[v] = RID();
         pipeline[v] = RID();
         shader[v] = RID();
@@ -595,7 +697,7 @@ int CascadePasses::level_count(int p_min_lod) const {
     return MAX(top - p_min_lod, 0) + 1;
 }
 
-void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, bool p_fold) {
+void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, const Vector2i &p_lods, bool p_fold) {
     ERR_FAIL_COND(p_count == 0 || p_count > max_chunks);
     const uint32_t n = uint32_t(level_bound(item_size, p_j));
     PackedByteArray push;
@@ -607,12 +709,15 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, boo
     push.encode_s32(12, top);
     push.encode_u32(16, n);
     push.encode_u32(20, uint32_t(level_bound(item_size, p_j + 1)));
+    // The fields where a chunk of the batch carries them (monotone in j: a level with the fields always finds them in
+    // its parent level).
+    const int with_fields = !fields.empty() && fields.batch(p_lods, p_j) ? 2 : 0;
     bool fold = p_j == 0 && p_fold;
-    if (fold && !uniform_set[1].is_valid()) {
+    if (fold && !uniform_set[with_fields + 1].is_valid()) {
         ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
         fold = false;
     }
-    const int v = fold ? 1 : 0;
+    const int v = with_fields + (fold ? 1 : 0);
     const int64_t list = rd->compute_list_begin();
     rd->compute_list_bind_compute_pipeline(list, pipeline[v]);
     rd->compute_list_bind_uniform_set(list, uniform_set[v], 0);
@@ -626,11 +731,11 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, boo
     rd->compute_list_end();
 }
 
-void CascadePasses::record_all(int p_min_lod, uint32_t p_count, bool p_fold) {
+void CascadePasses::record_all(const Vector2i &p_lods, uint32_t p_count, bool p_fold) {
     for (uint32_t base = 0; base < p_count; base += max_chunks) {
         const uint32_t count = MIN(max_chunks, p_count - base);
-        for (int j = level_count(p_min_lod) - 1; j >= 0; j--) {
-            record_level(j, base, count, p_fold);
+        for (int j = level_count(p_lods.x) - 1; j >= 0; j--) {
+            record_level(j, base, count, p_lods, p_fold);
         }
     }
 }

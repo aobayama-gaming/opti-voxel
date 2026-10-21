@@ -423,7 +423,7 @@ void GPUMesher::_execute_whole_pipeline() {
         PackedByteArray local_table_list = input_table_list;
         PackedByteArray local_table_records = input_table_records;
         const uint32_t local_count = batch_count;
-        const int local_min_lod = batch_min_lod;
+        const Vector2i local_lods = batch_lods;
         mutex->unlock();
 
         if (should_exit) {
@@ -431,7 +431,7 @@ void GPUMesher::_execute_whole_pipeline() {
         }
 
         const uint64_t t_batch_start = now_usec();
-        _execute_gpu_pipeline(local_chunk_id, local_count, local_min_lod, local_table_list, local_table_records);
+        _execute_gpu_pipeline(local_chunk_id, local_count, local_lods, local_table_list, local_table_records);
 
         mutex->lock();
         stats.batch_total.add(now_usec() - t_batch_start);
@@ -553,7 +553,7 @@ uint32_t GPUMesher::_get_flat_index_z(Vector3i cell) {
     return cell.x + cell.y * chunk_param.chunk_size + cell.z * chunk_param.chunk_size * chunk_param.chunk_size;
 }
 
-void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
+void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, const Vector2i &p_lods, const PackedByteArray &p_table_list,
         const PackedByteArray &p_table_records) {
     // The instance table (archetype instances): the records the main thread captured with this batch's
     // lists (same snapshot) when they changed, then the lists.
@@ -579,7 +579,7 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
     // render_chunk). A cascade that failed to build runs nothing.
     const bool run_passes = cascade->is_valid();
     if (run_passes && p_count > 0) {
-        cascade->record_all(p_min_lod, p_count, !p_table_list.is_empty()); // no instance listed: the bare cascade
+        cascade->record_all(p_lods, p_count, !p_table_list.is_empty()); // no instance listed: the bare cascade
     }
 
     // --- GPU SUBMISSION PIPELINE ---
@@ -885,14 +885,12 @@ void GPUMesher::process_queue() {
     unpacked_chunks.resize(chunk_batch_number);
 
     uint32_t count = 0;
-    int min_lod = 64;
     ChunkId new_chunk;
 
     while (count < chunk_batch_number && _pop_queue(new_chunk)) {
         working_generation.insert(new_chunk);
 
         GPUFrame::encode_chunk_input(new_batch, count, new_chunk, chunk_param);
-        min_lod = MIN(min_lod, ChunkMath::get_lod(new_chunk));
 
         unpacked_chunks[count].chunk_id = new_chunk;
 
@@ -920,9 +918,7 @@ void GPUMesher::process_queue() {
         }
         in_flight_ids.resize(kept);
         count = kept;
-        min_lod = 64;
         for (uint32_t i = 0; i < count; i++) {
-            min_lod = MIN(min_lod, ChunkMath::get_lod(in_flight_ids[i]));
             unpacked_chunks[i].palette = std::move(palettes[i]);
         }
         if (table->version() != sent_table_version) {
@@ -933,7 +929,7 @@ void GPUMesher::process_queue() {
         input_table_list = table_list;
         input_table_records = table_records;
         batch_count = count;
-        batch_min_lod = min_lod;
+        batch_lods = ChunkMath::lod_range(in_flight_ids);
         worker_available = false;
         mutex->unlock();
 

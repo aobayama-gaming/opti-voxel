@@ -6,7 +6,9 @@
 #include "exact_noise.hpp"
 #include "sdf_table.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <optional>
 
 // The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain (VoxelTerrain.terrain_mode 1,
 // --terrain=cascade): a 3D height field of perlin3 octaves carried down the Hermite cascade, octaves from
@@ -39,6 +41,11 @@ public:
     // 8-channel passes cost 1.30x the 4-channel ones (1.29 vs 1.00 ms per batch of 128 LOD-0 chunks).
     // HERMITE8 stays implemented and proven (tools/cascade_test.sh checks both).
     Cascade::ChannelSet channel_set = Cascade::ChannelSet::LINEAR4;
+
+    // Set before configure(): a climate table (Climate::parse's format), empty for none. configure() parses it against
+    // this ground and carries its fields in the cascade (Climate::combined_spec), the ground's octaves modulated by the
+    // biomes' multipliers; a table it refuses is an ERR and no climate.
+    Dictionary climate_data;
 
     // Set before configure(). DEFAULT: every octave at STEEPNESS (capped at MAX_AMP_M). CONTINENTS:
     // the same octaves with an amplitude per wavelength (continent_amp_m), so continents, ocean basins and
@@ -95,6 +102,7 @@ public:
         }
         datum = VoxelPos(0, std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : DATUM_M) / vs), 0);
         voxel_size = p_param.voxel_size;
+        attach_climate();
         build_table(p_lod_count);
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
         // from this chunk's by one octave: k = L + 2 (a finer neighbour's extra one) or k = L + 3 (the one
@@ -113,7 +121,7 @@ public:
             double amp = 0.0;
             for (const Cascade::Band &b : spec.bands) {
                 if (b.k == l + 2 || b.k == l + 3) {
-                    amp = MAX(amp, double(b.amp));
+                    amp = MAX(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
                 }
             }
             const double cell_m = vs * std::ldexp(1.0, l);
@@ -124,6 +132,9 @@ public:
     }
 
     const Cascade::Spec *get_cascade() const override { return &spec; }
+    // The parsed climate (configure), null without one; why climate_data was refused, empty if it wasn't.
+    const Climate::Table *get_climate() const { return climate ? &*climate : nullptr; }
+    const String &get_climate_error() const { return climate_error; }
     // The ground a climate table is checked against and reads (Climate::parse / validate / fields_at), after configure().
     Climate::Ground climate_ground() const { return Climate::Ground{ &spec, double(voxel_size), k_top, amp_cap }; }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
@@ -353,6 +364,24 @@ private:
         return true;
     }
 
+    // The climate_data table on the ground spec (configure, after the ground's bands and voxel size).
+    void attach_climate() {
+        climate.reset();
+        climate_error = String();
+        if (climate_data.is_empty()) {
+            return;
+        }
+        Climate::Table table;
+        climate_error = Climate::parse(climate_data, climate_ground(), table);
+        const bool multiplied = std::any_of(table.biomes.begin(), table.biomes.end(), [](const Climate::Biome &p_b) { return !p_b.amps.empty(); });
+        if (climate_error.is_empty() && multiplied && spec.set != Cascade::ChannelSet::LINEAR4) {
+            climate_error = "climate: amplitude multipliers need the LINEAR4 ground (channel_set).";
+        }
+        ERR_FAIL_COND_MSG(!climate_error.is_empty(), "SDFCascade: " + climate_error);
+        spec = Climate::combined_spec(table, spec);
+        climate = std::move(table);
+    }
+
     // A unit register (unit()) with its distance in metres: sdf(), and sample_sdf() where no instance folds.
     ExactNoise::Float4 metres(const ExactNoise::Float4 &p_u, int p_lod) const {
         const float to_m = voxel_size * ExactNoise::exact_pow2(p_lod);
@@ -365,5 +394,7 @@ private:
     VoxelPos datum;
     float voxel_size = 0.5f;
     int k_top = 0; // the coarsest octave (lod_count + 4)
+    std::optional<Climate::Table> climate;
+    String climate_error;
     float amp_cap = 0.0f; // MAX_AMP_M in LOD0 voxels
 };

@@ -1,5 +1,6 @@
 #include "test_common.hpp"
 
+#include "cascade_glsl.hpp"
 #include "climate.hpp"
 #include "sdf_cascade.hpp"
 
@@ -35,6 +36,14 @@ struct GroundFixture {
         ground = sdf.climate_ground();
     }
 };
+
+// A field's bands alone as a cascade spec (the reference of its group in the combined spec).
+Cascade::Spec own_spec(const Field &p_field) {
+    Cascade::Spec spec;
+    spec.set = Cascade::ChannelSet::LINEAR4;
+    spec.bands = p_field.bands;
+    return spec;
+}
 
 String parse_json(const String &p_json, const Ground &p_ground, Table &r_table) {
     const Variant v = JSON::parse_string(p_json);
@@ -111,19 +120,18 @@ TEST_CASE("Climate: the example preset parses at 5 cm and 15 LODs, and is refuse
     CLIMATE_REQUIRE(t.biomes.size() == 7);
     // 3.2 km .. 26 km at 5 cm: k = 16 .. 19, coarsest first, amplitude 0.8 times 0.7 per finer octave.
     const Field &temp = t.fields[0];
-    CLIMATE_REQUIRE(temp.spec.bands.size() == 4);
-    CHECK(temp.spec.bands.front().k == 19);
-    CHECK(temp.spec.bands.back().k == 16);
-    CHECK(temp.spec.bands[1].amp == float(0.8 * 0.7));
+    CLIMATE_REQUIRE(temp.bands.size() == 4);
+    CHECK(temp.bands.front().k == 19);
+    CHECK(temp.bands.back().k == 16);
+    CHECK(temp.bands[1].amp == float(0.8 * 0.7));
     CLIMATE_REQUIRE(temp.terms.size() == 1);
     CHECK(temp.terms[0].source == GROUND);
     CHECK(temp.terms[0].coef == float(-0.0003 * g.ground.voxel_size));
     // Seeds are keyed by k: the same octave of the same field always gets the same lattice.
-    CHECK(temp.spec.bands[0].seed == ExactNoise::make_octave(temp.seed, 19u, 19, 1.0f).seed);
+    CHECK(temp.bands[0].seed == ExactNoise::make_octave(temp.seed, 19u, 19, 1.0f).seed);
     CHECK(t.biomes.back().name == "plain");
     CHECK(t.biomes.back().edges.empty());
     CHECK(t.biomes[0].debug_color == 0xC03818u);
-    CHECK(t.biomes[0].height == float(200.0 / g.ground.voxel_size));
     // Ground multipliers name ground octaves: 1 km .. 6.5 km = k 14 .. 17.
     CHECK(t.biomes[0].amps.size() == 4);
 
@@ -158,7 +166,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 1, "x": 2}]}]})", "doesn't have it" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 4000, "to_m": 9000, "x": 50}]}]})", "out of range" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4000, "x": -1}]}]})", ">= 0" },
-        { R"({"biomes": [{"name": "a", "height_m": 1e7}]})", "amplitude cap" },
+        { R"({"biomes": [{"name": "a", "height_m": 100}]})", "unknown key 'height_m'" },
         { R"({"biomes": [{"name": "a", "debug_color": "red"}]})", "#rrggbb" },
         { R"({"biomes": [{"name": "a", "debug_color": "#-00001"}]})", "#rrggbb" },
         { R"({"fields": [{"name": "t", "bands": [{"from_m": 1, "to_m": 1e30, "amp": 1}]}], "biomes": [{"name": "a"}]})", "outside [0, 62]" },
@@ -299,6 +307,10 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
             {"name": "c", "terms": [{"source": "ground", "per_m": 0.001}, {"source": "b", "x": 2}]}],
             "biomes": [{"name": "x"}]})",
                             g.ground, t) == String());
+    // No multiplier: the combined spec carries the fields, unmodulated, its ground the bare one.
+    const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
+    CHECK(spec.fields.size() == 3);
+    CHECK(spec.modulation == nullptr);
     // Lattice indices: times 2^13 (the finest point at m = 12, doubled) they stay within +-2^60 voxels.
     const int64_t bases[] = { 0, 12345, (int64_t(1) << 32) - 3, -(int64_t(1) << 47) + 7, (int64_t(1) << 47) - 11 };
     int coherent = 0;
@@ -306,13 +318,13 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
         for (const int m : { 0, 3, 7, 12 }) {
             const Vector3i64 p(base, -base / 3 + 5, 7 - base);
             Float4 r[MAX_FIELDS];
-            fields_at(t, g.ground, p, m, r);
+            fields_at(t, spec, p, m, r);
             // Field a is its own spec; b adds -0.25 a; c is 0.001 * 0.05 ground + 2 b, in that order.
             float ch[Cascade::CHANNELS], gc[Cascade::CHANNELS];
-            Cascade::point_into(t.fields[0].spec, p, m, ch);
+            Cascade::point_into(own_spec(t.fields[0]), p, m, ch);
             CHECK(float_bits(r[0].w) == float_bits(ch[Cascade::VALUE]));
             CHECK(float_bits(r[0].x) == float_bits(ch[Cascade::DX]));
-            Cascade::point_into(t.fields[1].spec, p, m, ch);
+            Cascade::point_into(own_spec(t.fields[1]), p, m, ch);
             CHECK(float_bits(r[1].w) == float_bits(Cascade::flush_value(ch[Cascade::VALUE] + r[0].w * -0.25f)));
             Cascade::point_into(*g.ground.spec, p, m, gc);
             const float c0 = Cascade::flush_value(0.0f + gc[Cascade::VALUE] * float(0.001 * g.ground.voxel_size));
@@ -325,9 +337,9 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
             // point 2p is a copy of Λ_{m+1}'s p, the same value and half the gradient (lattice units).
             if (m < 11) {
                 Float4 fine[MAX_FIELDS];
-                fields_at(t, g.ground, Vector3i64(p.x * 2, p.y * 2, p.z * 2), m, fine);
+                fields_at(t, spec, Vector3i64(p.x * 2, p.y * 2, p.z * 2), m, fine);
                 Float4 coarse[MAX_FIELDS];
-                fields_at(t, g.ground, p, m + 1, coarse);
+                fields_at(t, spec, p, m + 1, coarse);
                 for (int f = 0; f < 2; f++) {
                     CHECK(float_bits(fine[f].w) == float_bits(coarse[f].w));
                     CHECK(float_bits(fine[f].y) == float_bits(coarse[f].y * 0.5f));
@@ -337,4 +349,172 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
         }
     }
     CHECK(coherent == 15);
+}
+
+namespace {
+
+int64_t differing_floats(const float *p_a, const float *p_b, int p_n) {
+    int64_t n = 0;
+    for (int i = 0; i < p_n; i++) {
+        n += float_bits(p_a[i]) != float_bits(p_b[i]);
+    }
+    return n;
+}
+
+// Every lattice point of a box on Λ_lod vs Cascade::point_slots, every slot: the box run and the point query agree bit
+// for bit (the GPU's chunks and the discoverer's points).
+int64_t box_point_mismatches(const Cascade::Spec &p_spec, const Vector3i64 &p_lo, int p_n, int p_lod) {
+    Cascade::Box box;
+    box.lo[0] = p_lo.x;
+    box.lo[1] = p_lo.y;
+    box.lo[2] = p_lo.z;
+    for (int a = 0; a < 3; a++) {
+        box.hi[a] = box.lo[a] + p_n - 1;
+    }
+    const Cascade::Level l = Cascade::run(p_spec, box, p_lod);
+    int64_t bad = 0;
+    Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
+        float slots[Cascade::SLOTS];
+        Cascade::point_slots(p_spec, p_p, p_lod, slots);
+        for (int s = 0; s < Cascade::SLOTS; s++) {
+            if (!l.ch[s].empty()) {
+                bad += float_bits(l.ch[s][size_t(p_i)]) != float_bits(slots[s]);
+            }
+        }
+    });
+    return bad;
+}
+
+} // namespace
+
+TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit for bit") {
+    GroundFixture g(0.05, 15);
+    const Cascade::Spec &bare = *g.ground.spec;
+    // Fields without multipliers: carried, the ground untouched.
+    Table carried;
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}],
+            "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})",
+                            g.ground, carried) == String());
+    // Only the default biome, x1 on every ground octave: modulated, A = 1 * amp exactly and dA = 0, so n A and
+    // n.s (A 2^-3) + n.w dA give the constant band's bits (adding a zero product changes nothing).
+    Table neutral;
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}],
+            "biomes": [{"name": "only", "amp": [{"field": "ground", "from_m": 0.4, "to_m": 30000, "x": 1}]}]})",
+                            g.ground, neutral) == String());
+    const Cascade::Spec specs[] = { combined_spec(carried, bare), combined_spec(neutral, bare) };
+    CHECK(specs[0].modulation == nullptr);
+    CHECK(specs[1].modulation != nullptr);
+    int64_t compared = 0, differing = 0;
+    for (const Cascade::Spec &spec : specs) {
+        for (const int lod : { 0, 2, 6, 11 }) {
+            for (const int64_t base : { int64_t(0), int64_t(-77), (int64_t(1) << 32) - 5, -(int64_t(1) << 45) + 3 }) {
+                const Vector3i64 p(base, base / 7 + 3, -base + 11);
+                float want[Cascade::CHANNELS], got[Cascade::CHANNELS];
+                Cascade::point_into(bare, p, lod, want);
+                Cascade::point_into(spec, p, lod, got);
+                compared++;
+                differing += differing_floats(want, got, 4);
+            }
+        }
+    }
+    CHECK(compared == 32);
+    CHECK(differing == 0);
+}
+
+TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slot, and the amplitude follows the biomes") {
+    GroundFixture g(0.05, 15);
+    const String json = FileAccess::open("res://climate/example.json", FileAccess::READ)->get_as_text();
+    Table t;
+    CLIMATE_REQUIRE(parse_json(json, g.ground, t) == String());
+    const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
+    CLIMATE_REQUIRE(spec.modulation != nullptr);
+    CHECK(spec.fields.size() == 4);
+    int64_t bad = 0;
+    for (const int lod : { 0, 3, 8 }) {
+        for (const int64_t base : { int64_t(5), (int64_t(1) << 32) - 2, -(int64_t(1) << 44) }) {
+            bad += box_point_mismatches(spec, Vector3i64(base, -3, base / 3), 3, lod);
+        }
+    }
+    CHECK(bad == 0);
+    // Ground queries carry the fields only where FieldRange says; with all of them carried the ground is the same bits.
+    const Cascade::FieldRange range = spec.field_range();
+    CHECK(range.floor == 7); // 50 m at 5 cm: k = 10, inserted on Λ_7
+    CHECK(range.ceiling == 16); // 26 km: k = 19
+    int64_t ground_differs = 0;
+    for (const int lod : { 0, 6, 7, 12, 16, 17 }) {
+        for (int i = 0; i < 16; i++) {
+            const Vector3i64 p(int64_t(i) * 7919 - 50000, 3 - i, int64_t(i) * -104729);
+            float part[Cascade::SLOTS], all[Cascade::SLOTS];
+            Cascade::point_slots(spec, p, lod, part);
+            Cascade::point_slots(spec, p, lod, all, true);
+            ground_differs += differing_floats(part, all, 4);
+            CHECK((part[Cascade::field_slot(0)] == 0.0f) == !range.carried(lod, lod)); // the fields only where carried
+        }
+    }
+    CHECK(ground_differs == 0);
+    // The ground differs from the bare one where a biome multiplies its octaves: heights along a line at Λ_6.
+    int differ = 0;
+    for (int i = 0; i < 64; i++) {
+        const Vector3i64 p(int64_t(i) * 997, 0, int64_t(i) * -1301);
+        float a[Cascade::CHANNELS], b[Cascade::CHANNELS];
+        Cascade::point_into(*g.ground.spec, p, 6, a);
+        Cascade::point_into(spec, p, 6, b);
+        differ += float_bits(a[Cascade::VALUE]) != float_bits(b[Cascade::VALUE]);
+        CHECK(std::isfinite(b[Cascade::VALUE]));
+    }
+    CHECK(differ > 48);
+}
+
+TEST_CASE("Climate: carried only where the ground needs it, refused where it can't apply") {
+    GroundFixture g(0.05, 15);
+    // Multipliers on a field's octaves only: the ground never reads the fields, so they are carried nowhere (no field
+    // scratch, no fields variant) and its top lattice is the ground's.
+    Table t;
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
+            {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}],
+            "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
+                       {"name": "b"}]})",
+                            g.ground, t) == String());
+    const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
+    CHECK(spec.modulation != nullptr); // fields_at still sees h modulated
+    CHECK(spec.field_range().empty());
+    CHECK(CascadeGLSL::vec4s_per_point(spec) == 1);
+    CHECK(spec.top_level() == g.ground.spec->top_level());
+    // A flat ground (no band) with fields: no top lattice from them either.
+    Cascade::Spec flat = spec;
+    flat.bands.clear();
+    CHECK(flat.top_level() == -1);
+    CHECK(flat.top_level(true) >= 0);
+    // A table that can't modulate: an empty one, and multipliers on an 8-channel ground.
+    Dictionary empty;
+    CHECK(load("res://climate/does_not_exist.json", empty).contains("cannot read"));
+    SDFCascade h8;
+    h8.channel_set = Cascade::ChannelSet::HERMITE8;
+    CLIMATE_REQUIRE(load("res://climate/example.json", h8.climate_data) == String());
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    h8.configure(param, 15);
+    CHECK(h8.get_climate() == nullptr);
+    CHECK(h8.get_climate_error().contains("LINEAR4"));
+    CHECK(h8.get_spec().fields.empty());
+}
+
+TEST_CASE("Cascade: bands of one group on one lattice add up in list order (box and point alike)") {
+    Cascade::Spec one;
+    one.set = Cascade::ChannelSet::LINEAR4;
+    one.bands = { ExactNoise::make_octave(11u, 0u, 9, 40.0f) };
+    Cascade::Spec two = one;
+    two.bands.push_back(ExactNoise::make_octave(12u, 0u, 9, 25.0f)); // the same lattice Λ_6
+    int64_t same = 0, mismatches = 0;
+    for (int i = 0; i < 32; i++) {
+        const Vector3i64 p(i * 37 - 500, i * 11, 900 - i * 23);
+        float a[Cascade::CHANNELS], b[Cascade::CHANNELS], c[Cascade::CHANNELS];
+        Cascade::point_into(one, p, 2, a);
+        Cascade::point_into(two, p, 2, b);
+        Cascade::point(two, p, 2, c);
+        same += differing_floats(a, b, 4) == 0;
+        mismatches += differing_floats(b, c, 4);
+    }
+    CHECK(same < 4); // the second band counts
+    CHECK(mismatches == 0);
 }

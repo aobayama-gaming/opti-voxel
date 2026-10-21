@@ -28,7 +28,7 @@ struct Sampled {
 };
 
 // The slice: pixel (column j, row i) is lattice point (j - n / 2, datum, i - n / 2) of Λ_m (x right, z down).
-Sampled sample(const Table &p_table, const Ground &p_ground, int64_t p_datum_y, int p_m, int p_n) {
+Sampled sample(const Table &p_table, const Cascade::Spec &p_spec, int64_t p_datum_y, int p_m, int p_n) {
     Sampled s;
     s.nf = int(p_table.fields.size());
     s.nb = int(p_table.biomes.size());
@@ -43,7 +43,7 @@ Sampled sample(const Table &p_table, const Ground &p_ground, int64_t p_datum_y, 
             const Vector3i64 p(int64_t(j) - p_n / 2, y, int64_t(p_row) - p_n / 2);
             Float4 f[MAX_FIELDS];
             Float4 w[MAX_BIOMES];
-            fields_at(p_table, p_ground, p, p_m, f);
+            fields_at(p_table, p_spec, p, p_m, f);
             weights(p_table, f, w);
             s.picks[i] = pick(p_table, w, p, p_m);
             for (int c = 0; c < s.nf; c++) {
@@ -102,7 +102,7 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
 }
 
 // The field table (octaves, min / mean / max) and one grey map per field (-max|v| .. +max|v|).
-String field_section(const Table &p_table, const Sampled &p_s, int p_n, int p_m, const String &p_dir, Array &r_images) {
+String field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sampled &p_s, int p_n, int p_m, const String &p_dir, Array &r_images) {
     const int64_t points = int64_t(p_n) * p_n;
     String md = "| field | octaves (k) | min | mean | max |\n|---|---|---|---|---|\n";
     for (int f = 0; f < p_s.nf; f++) {
@@ -113,9 +113,9 @@ String field_section(const Table &p_table, const Sampled &p_s, int p_n, int p_m,
             hi = MAX(hi, v(i));
             sum += v(i);
         }
-        const Cascade::Spec &spec = p_table.fields[size_t(f)].spec;
-        String ks = spec.bands.empty() ? String("-") : vformat("%d .. %d", spec.bands.back().k, spec.bands.front().k);
-        if (spec.bands.empty() || spec.insert_level(spec.bands.front()) < p_m) {
+        const std::vector<Cascade::Band> &bands = p_table.fields[size_t(f)].bands;
+        String ks = bands.empty() ? String("-") : vformat("%d .. %d", bands.back().k, bands.front().k);
+        if (bands.empty() || p_spec.insert_level(bands.front()) < p_m) {
             ks += vformat(" (all inserted below lattice %d: only its terms here)", p_m);
         }
         md += vformat("| %s | %s | %s | %s | %s |\n", p_table.fields[size_t(f)].name, ks, String::num(lo, 3), String::num(sum / double(points), 3),
@@ -144,25 +144,24 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     ChunkParam param;
     param.voxel_size = float(p_voxel_size);
     SDFCascade sdf;
-    sdf.configure(param, p_lods);
-    const Ground ground = sdf.climate_ground();
-
-    const Ref<FileAccess> in = FileAccess::open(p_climate_path, FileAccess::READ);
-    ERR_FAIL_COND_V_MSG(in.is_null(), report, "ClimateReport: cannot read " + p_climate_path);
-    const Variant data = JSON::parse_string(in->get_as_text());
-    ERR_FAIL_COND_V_MSG(data.get_type() != Variant::DICTIONARY, report, "ClimateReport: " + p_climate_path + String(" is not a JSON object."));
-    Table table;
-    const String err = parse(data, ground, table);
+    String err = load(p_climate_path, sdf.climate_data);
+    if (err.is_empty()) {
+        sdf.configure(param, p_lods);
+        err = sdf.get_climate_error();
+    }
     if (!err.is_empty()) {
         report["error"] = err;
         ERR_FAIL_V_MSG(report, "ClimateReport: " + err);
     }
+    ERR_FAIL_NULL_V_MSG(sdf.get_climate(), report, "ClimateReport: no climate.");
+    const Table &table = *sdf.get_climate();
+    const Ground ground = sdf.climate_ground();
 
     const int n = MAX(p_size, 16);
     const int m = MAX(0, int(std::floor(std::log2(p_extent_km * 1000.0 / n / ground.voxel_size))));
     const double spacing_m = std::ldexp(ground.voxel_size, m);
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
-    const Sampled s = sample(table, ground, sdf.get_datum_y(), m, n);
+    const Sampled s = sample(table, sdf.get_spec(), sdf.get_datum_y(), m, n);
     const double us_per_point = double(Time::get_singleton()->get_ticks_usec() - t0) / (double(n) * n);
 
     String md = "# Climate report\n\n";
@@ -172,7 +171,7 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
             String::num(us_per_point, 2));
     Array images;
     md += biome_section(table, s, n, p_out_dir, images) + String("\n");
-    md += field_section(table, s, n, m, p_out_dir, images);
+    md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
     md += "\nImages (x right, z down): ";
     for (int64_t i = 0; i < images.size(); i++) {
         md += String(i ? ", " : "") + "`" + String(images[i]).get_file() + String("`");
