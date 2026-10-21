@@ -331,7 +331,10 @@ to every change, and a reviewer may reject a PR on any of them.
   cells of L) on an absolute grid, per material, with tent weights over the 2 x 2 x 2 cells around each centroid (a
   uniform cover reads a near-constant occupancy, a thin canopy stays thin); a material joins once half its mass is
   gone (lone twigs would come back fattened). Each cell is a blob, `a max(1 - q, 0)^2` in its principal frame (the
-  record's rotation), its spread the cell's covariance plus the LOD's box filter, its integral the cell's mass; blobs
+  record's rotation), its spread the cell's covariance plus the LOD's box filter, its integral the cell's mass, except across a sheet
+(`MomentLayerParams::sheet_ratio`, 2: middle over thinnest spread, filter included): there it keeps the occupancy its
+parts have along the thin axis (a canopy reads ~0.46 at LODs 6-8 where keeping the mass faded 0.36 -> 0.13), at most
+x2 per LOD from the material's first layer (seams step no more), a round clump keeps its mass; blobs
   fainter than `MOMENT_MATERIAL_ISO` with their neighbours are pruned. They are table records (`moment_blob` type,
   `Combine::ACCUM`, listed at their LOD only: `TableRecord::min_lod`), built by `SDFTable::add_moment_blobs` after the
   scene; the fold sums them into an occupancy phi and its epilogue (`moment_surface` / GLSL `arch_moments`, bit for
@@ -346,7 +349,18 @@ to every change, and a reviewer may reject a PR on any of them.
   A dense 5 cm forest keeps a canopy over most columns at LODs 6-8 (unit test); from 1,100 m the forest5cm square
   is a canopy instead of nothing (`bench.sh --preset=forest5cm --cam_pos=-50,320,750 --above_ground=1100 --pitch=-55
   --yaw=0 [--moments=0]`). `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
-  `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms. Runtime edits don't update them yet.
+  `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms. **Edits** keep the blobs exact:
+  `Archetype::MomentLayers` holds each cell's members (by record id), their partial sums per block of 256 ids and the
+  pruning verdict; an edit moves its record between the cells its old and new tents touch, re-sums one block per cell
+  and re-judges the blobs whose box meets a changed one (bounds are summed in cell order), so the table holds the same
+  bits as a build of the edited records with the same joins (unit test: 6,829 blobs over 40 edits). The changed blobs go
+  through the edit's snapshot like any record (`SDFTable::update_moment_blobs`); `edit_affects_chunk` re-meshes each at
+  its LOD only (`EditRegion`). ~8 ms per edit on a 120-tree table in the debug build (0.17 without the blobs); the
+  forest5cm edit scenario re-meshes 6% more chunks; validate / audit / discovery_audit stay ok. The joins and the first
+  layer are frozen at the build: a material the build didn't have, or a part gone below its first layer, joins at the
+  next `configure`. A blob that vanishes keeps its record id for its key (removed, reused when it comes back: edits
+  don't eat the instance capacity). Coarse cells hold nearly every part: their member lists cost memory (~4 B per part
+  per cell its tent touches) and an O(parts) insert / erase per edit (TODO: per-block member lists would bound it).
   **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
   change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles the plane with cells of
   640 m rounded to 2^k voxels, and a cell keeps one site in its middle half with the kind's chance, from
