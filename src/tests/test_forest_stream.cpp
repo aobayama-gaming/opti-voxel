@@ -220,3 +220,55 @@ TEST_CASE("ForestStream: a point's records are its keys', resident or computed o
     MESSAGE(points, " points, ", records, " records; ", int64_t(cold.get_stats()["evaluate_computed"]), " keys computed on demand");
     CHECK(records > 0);
 }
+
+// The main thread's cost follows what changed: a poll with nothing landing doesn't look at the keys held, and a chunk
+// still waiting is checked in full once per RECHECK_FRAMES (the 1M load spent its frames rescanning both).
+TEST_CASE("ForestStream: an idle poll is cheap, a waiting chunk is checked in full once per RECHECK_FRAMES") {
+    const StreamFixture &fx = StreamFixture::get();
+    ForestStream stream(fx.field, fx.param, 0, uint32_t(1) << 22);
+    CHECK(settle(stream, fx.chunks));
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int f = 0; f < 1000; f++) {
+        stream.poll();
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    MESSAGE("1000 idle polls over ", int64_t(stream.get_stats()["keys"]), " keys: ", ms, " ms");
+    CHECK(ms < 5.0);
+    // One slot: the chunk's keys never fit, it waits forever.
+    ChunkId waiting = fx.chunks[0];
+    for (const ChunkId &c : fx.chunks) {
+        waiting = fx.key_records(c) > fx.key_records(waiting) ? c : waiting;
+    }
+    ForestStream tiny(fx.field, fx.param, 0, 1);
+    const int frames = 1000;
+    for (int f = 0; f < frames; f++) {
+        tiny.poll();
+        CHECK_FALSE(tiny.ready(waiting));
+    }
+    const int64_t checks = int64_t(tiny.get_stats()["chunk_full_checks"]);
+    MESSAGE(frames, " frames asking a waiting chunk: ", checks, " full checks");
+    CHECK(checks <= frames / int64_t(ForestStream::RECHECK_FRAMES) + 1);
+}
+
+// An input dropped from the cache is computed again for the next key that needs it: with a cache of one record, the
+// LOD-0 tree tiles a chunk's blob keys read age out before the next chunk asks for them, and its lists still hold the
+// field's records.
+TEST_CASE("ForestStream: inputs dropped from a tiny cache are computed again for their dependents") {
+    const StreamFixture &fx = StreamFixture::get();
+    ForestStream stream(fx.field, fx.param, 0, uint32_t(1) << 22, 1);
+    for (const ChunkId &c : fx.chunks) {
+        if (ChunkMath::get_lod(c) < 2) {
+            continue; // a LOD-0 chunk lists the LOD-0 tiles: placed, not cached
+        }
+        CAPTURE(ChunkMath::get_lod(c));
+        CHECK(settle(stream, { c }));
+        CHECK(same_records(streamed(stream, c), fx.direct(c)));
+        for (uint64_t f = 0; f <= ForestStream::GRACE_FRAMES; f++) {
+            stream.poll(); // nobody asks: the inputs age past the grace and are trimmed
+        }
+    }
+    const Dictionary stats = stream.get_stats();
+    MESSAGE(int64_t(stats["cache_trimmed"]), " inputs trimmed, ", int64_t(stats["computed"]), " keys computed for ", int64_t(stats["keys"]), " kept");
+    CHECK(int64_t(stats["cache_trimmed"]) > 0);
+    CHECK(int64_t(stats["lists_missing"]) == 0);
+}

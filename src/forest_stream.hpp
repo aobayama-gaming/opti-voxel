@@ -28,11 +28,17 @@ namespace Archetype {
 class ForestStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
-    static constexpr int MAX_RUNNING = 48; // keys handed to the workers at once
+    static constexpr int JOBS_PER_WORKER = 32; // keys handed to the workers at once, per worker
+    // A chunk still waiting for its keys is checked in full again at most every RECHECK_FRAMES (its keys stay asked for
+    // within the grace); between, ready() answers from the keys placed since. A wait not asked for in WAIT_DROP_FRAMES
+    // is dropped.
+    static constexpr uint64_t RECHECK_FRAMES = GRACE_FRAMES / 2;
+    static constexpr uint64_t WAIT_DROP_FRAMES = 64;
     static constexpr int64_t INPUT_CACHE_RECORDS = int64_t(4) << 20; // the LOD-0 tree tiles kept for their readers, in records
     static constexpr int64_t DEMAND_CACHE_RECORDS = int64_t(1) << 20; // the contents CPU evaluations computed, in records
 
-    ForestStream(std::shared_ptr<const ForestField> p_field, const ChunkParam &p_param, uint32_t p_slot_base, uint32_t p_slot_capacity);
+    ForestStream(std::shared_ptr<const ForestField> p_field, const ChunkParam &p_param, uint32_t p_slot_base, uint32_t p_slot_capacity,
+            int64_t p_input_cache_records = INPUT_CACHE_RECORDS);
     ~ForestStream(); // waits for the keys being computed, the others are dropped
 
     const ForestField &field() const { return *field_ptr; }
@@ -40,9 +46,11 @@ public:
     uint32_t slot_capacity() const { return capacity; }
 
     // Main thread. Whether every key the chunk lists is resident; asks for the ones that aren't (the meshers ask in queue
-    // order: the first asked are computed first).
+    // order: the first asked are computed first). A chunk found waiting is answered from the count of its keys placed
+    // since (no key looked at) until RECHECK_FRAMES have passed, then checked in full again.
     bool ready(const ChunkId &p_chunk);
-    // Main thread, once per frame: lands the computed keys, starts the next ones.
+    // Main thread, once per frame: lands the keys the workers finished (their dependents queued once their last input is
+    // there), starts the queued ones. Its cost follows what landed, not what the stream holds.
     void poll();
 
     // The ids (slot_base + slot) of the chunk's streamed records whose box test can pass at its samples, in key order.
@@ -63,13 +71,15 @@ private:
     struct KeyHash {
         size_t operator()(const FieldKey &p_k) const;
     };
+    struct ChunkHash {
+        size_t operator()(const ChunkId &p_c) const { return Vector3i64Hasher::hash(p_c); }
+    };
     struct Job {
         const ForestField *field = nullptr;
         FieldKey key;
         std::vector<std::pair<FieldKey, std::shared_ptr<const FieldContent>>> inputs;
         std::shared_ptr<FieldContent> out;
         uint64_t usec = 0;
-        std::atomic<bool> done{ false };
         void run();
     };
     struct Entry {
@@ -88,6 +98,16 @@ private:
         bool listed = false; // a chunk lists it: it goes in slots
         uint64_t used = 0; // the frame it was last asked for
         std::unique_ptr<Job> job;
+        int missing = 0; // WAITING: its inputs not there yet
+        std::vector<FieldKey> dependents; // the keys waiting for it (as an input), told when it lands
+        std::vector<std::pair<ChunkId, uint32_t>> waiters; // the chunks waiting for it (with their wait's gen), told when it is placed
+    };
+    // A chunk ready() found waiting: how many of its keys weren't placed at its last full check, minus those placed since.
+    struct ChunkWait {
+        int missing = 0;
+        uint32_t gen = 0; // bumped by every full check: older waiters are ignored
+        uint64_t checked = 0; // the frame of the last full check
+        uint64_t asked = 0; // the frame ready() last asked
     };
 
     std::shared_ptr<const ForestField> field_ptr;
@@ -100,15 +120,19 @@ private:
     std::mutex job_mutex;
     std::condition_variable job_cv;
     std::deque<Job *> jobs; // handed out, not started
+    std::vector<FieldKey> finished; // computed, to land (under job_mutex)
     bool stopping = false;
     void work();
-    std::deque<FieldKey> queued; // to start, in the order asked
-    std::vector<FieldKey> waiting; // for inputs
+    std::deque<FieldKey> queued; // to start, in the order their inputs arrived
     int running = 0;
+    int max_running = 0;
+    int64_t cache_limit = INPUT_CACHE_RECORDS;
+    std::unordered_map<ChunkId, ChunkWait, ChunkHash> chunk_waits;
     uint64_t frame = 0;
     RecordStore slot_store;
     uint32_t slot_version = 0;
     std::map<uint32_t, uint32_t> free_runs; // first slot -> count, below the store's size
+    int64_t free_slots = 0; // the sum of free_runs
     int64_t cached_records = 0; // the contents kept (inputs and not yet placed)
     mutable std::mutex mutex; // main-thread changes vs point_records on other threads
     struct Demand {
@@ -134,6 +158,11 @@ private:
         int64_t ready_waits = 0;
         int64_t asked_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t waited_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t full_checks = 0; // ready() calls that looked at every key of their chunk
+        int64_t trimmed = 0; // inputs dropped from the cache
+        uint64_t poll_usec_max = 0;
+        uint64_t poll_usec = 0;
+        uint64_t ready_usec = 0;
     };
     Stats stats;
     mutable std::atomic<int64_t> lists_missing{ 0 }; // keys a list needed that weren't resident (should stay 0)
@@ -141,8 +170,12 @@ private:
 
     // The key's entry, asked for now (created and its inputs asked for if new).
     Entry &request(const FieldKey &p_key, bool p_listed);
+    // Counts the key's inputs not there yet (asking for them) and registers it as their dependent; queues it if none.
+    void wait_for_inputs(const FieldKey &p_key, Entry &r_entry);
     void start(const FieldKey &p_key, Entry &r_entry);
     void land(Entry &r_entry);
+    // ready()'s full check: every key of the chunk asked for; the ones not placed get the chunk as a waiter.
+    bool check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait);
     // Copies a ready entry's records into slots (false: no room).
     bool place(Entry &r_entry);
     bool allocate(uint32_t p_count, uint32_t &r_slot);

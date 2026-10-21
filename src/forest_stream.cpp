@@ -42,7 +42,6 @@ void ForestStream::Job::run() {
         return nullptr; // computed there
     });
     usec = now_usec() - t0;
-    done.store(true, std::memory_order_release);
 }
 
 void ForestStream::work() {
@@ -58,12 +57,16 @@ void ForestStream::work() {
             jobs.pop_front();
         }
         job->run();
+        const std::lock_guard<std::mutex> lock(job_mutex);
+        finished.push_back(job->key); // poll() lands it (the job is the entry's: it lives until then)
     }
 }
 
-ForestStream::ForestStream(std::shared_ptr<const ForestField> p_field, const ChunkParam &p_param, uint32_t p_slot_base, uint32_t p_slot_capacity) :
-        field_ptr(std::move(p_field)), param(p_param), base(p_slot_base), capacity(p_slot_capacity) {
+ForestStream::ForestStream(std::shared_ptr<const ForestField> p_field, const ChunkParam &p_param, uint32_t p_slot_base, uint32_t p_slot_capacity,
+        int64_t p_input_cache_records) :
+        field_ptr(std::move(p_field)), param(p_param), base(p_slot_base), capacity(p_slot_capacity), cache_limit(p_input_cache_records) {
     const unsigned n = MAX(2u, std::thread::hardware_concurrency() / 2);
+    max_running = int(n) * JOBS_PER_WORKER;
     for (unsigned i = 0; i < n; i++) {
         workers.emplace_back(&ForestStream::work, this);
     }
@@ -85,12 +88,7 @@ ForestStream::Entry &ForestStream::request(const FieldKey &p_key, bool p_listed)
     Entry &e = it->second; // references survive the rehashes of the requests below
     e.used = frame;
     if (fresh) {
-        std::vector<FieldKey> inputs;
-        field().inputs(p_key, inputs);
-        for (const FieldKey &k : inputs) {
-            request(k, false);
-        }
-        waiting.push_back(p_key); // poll() queues it once its inputs are there
+        wait_for_inputs(p_key, e);
     }
     if (p_listed) {
         e.listed = true;
@@ -101,21 +99,64 @@ ForestStream::Entry &ForestStream::request(const FieldKey &p_key, bool p_listed)
     return e;
 }
 
+void ForestStream::wait_for_inputs(const FieldKey &p_key, Entry &r_entry) {
+    std::vector<FieldKey> inputs;
+    field().inputs(p_key, inputs);
+    r_entry.state = Entry::WAITING;
+    r_entry.missing = 0;
+    for (const FieldKey &k : inputs) {
+        Entry &in = request(k, false);
+        if (in.state != Entry::READY || (!in.content && !in.placed)) {
+            r_entry.missing++;
+            in.dependents.push_back(p_key); // land() counts it down
+        }
+    }
+    if (r_entry.missing == 0) {
+        r_entry.state = Entry::QUEUED;
+        queued.push_back(p_key);
+    }
+}
+
 bool ForestStream::ready(const ChunkId &p_chunk) {
+    const uint64_t t0 = now_usec();
     const std::lock_guard<std::mutex> lock(mutex);
-    thread_local std::vector<FieldKey> keys;
-    field().chunk_keys(p_chunk, param, keys);
-    bool all = true;
-    for (const FieldKey &k : keys) {
-        const Entry &e = request(k, true);
-        all = all && e.state == Entry::READY && e.placed;
+    const auto [it, fresh] = chunk_waits.try_emplace(p_chunk);
+    ChunkWait &w = it->second;
+    w.asked = frame;
+    // A chunk still missing keys since its last full check answers at once (its keys were asked for then).
+    const bool all = (!fresh && w.missing > 0 && frame - w.checked < RECHECK_FRAMES) ? false : check_chunk(p_chunk, w);
+    if (all) {
+        chunk_waits.erase(it);
     }
     stats.ready_asked++;
     stats.ready_waits += !all;
     const int lod = MIN(MAX(ChunkMath::get_lod(p_chunk), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
     stats.asked_by_lod[lod]++;
     stats.waited_by_lod[lod] += !all;
+    stats.ready_usec += now_usec() - t0;
     return all;
+}
+
+bool ForestStream::check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait) {
+    stats.full_checks++;
+    r_wait.gen++; // the waiters of older checks no longer count
+    r_wait.checked = frame;
+    r_wait.missing = 0;
+    thread_local std::vector<FieldKey> keys;
+    field().chunk_keys(p_chunk, param, keys);
+    for (const FieldKey &k : keys) {
+        Entry &e = request(k, true);
+        if (e.state == Entry::READY && e.placed) {
+            continue;
+        }
+        r_wait.missing++;
+        if (!e.waiters.empty() && e.waiters.back().first == p_chunk) {
+            e.waiters.back().second = r_wait.gen;
+        } else {
+            e.waiters.push_back({ p_chunk, r_wait.gen }); // place() counts it down
+        }
+    }
+    return r_wait.missing == 0;
 }
 
 void ForestStream::start(const FieldKey &p_key, Entry &r_entry) {
@@ -128,8 +169,7 @@ void ForestStream::start(const FieldKey &p_key, Entry &r_entry) {
     for (const FieldKey &k : inputs) {
         const Entry &in = request(k, false);
         if (in.state != Entry::READY || (!in.content && !in.placed)) {
-            r_entry.state = Entry::WAITING; // an input made room meanwhile: computed again first
-            waiting.push_back(p_key);
+            wait_for_inputs(p_key, r_entry); // an input made room meanwhile: computed again first
             return;
         }
         job.inputs.push_back({ k, in.content ? in.content : from_slots(slot_store, in.slot, in.count, in.groups) });
@@ -158,38 +198,37 @@ void ForestStream::land(Entry &r_entry) {
     r_entry.job.reset();
     r_entry.state = Entry::READY;
     cached_records += r_entry.count;
+    // The keys waiting for it as an input: queued once it was their last.
+    std::vector<FieldKey> dependents;
+    dependents.swap(r_entry.dependents);
+    for (const FieldKey &d : dependents) {
+        const auto it = entries.find(d);
+        if (it != entries.end() && it->second.state == Entry::WAITING && it->second.missing > 0 && --it->second.missing == 0) {
+            it->second.state = Entry::QUEUED;
+            queued.push_back(d);
+        }
+    }
     if (r_entry.listed) {
         place(r_entry);
     }
 }
 
 void ForestStream::poll() {
+    const uint64_t t0 = now_usec();
     const std::lock_guard<std::mutex> lock(mutex);
     frame++;
-    for (std::pair<const FieldKey, Entry> &kv : entries) {
-        if (kv.second.state == Entry::RUNNING && kv.second.job->done.load(std::memory_order_acquire)) {
-            land(kv.second);
+    std::vector<FieldKey> done;
+    {
+        const std::lock_guard<std::mutex> job_lock(job_mutex);
+        done.swap(finished);
+    }
+    for (const FieldKey &k : done) {
+        const auto it = entries.find(k); // a running entry is never dropped
+        if (it != entries.end() && it->second.state == Entry::RUNNING) {
+            land(it->second);
         }
     }
-    // The waiting keys whose inputs are all there go to the queue (an input asked for again if it was dropped meanwhile).
-    std::vector<FieldKey> check; // request() may add to waiting (an input made room meanwhile): not iterated
-    check.swap(waiting);
-    for (const FieldKey &k : check) {
-        std::vector<FieldKey> inputs;
-        field().inputs(k, inputs);
-        bool all = true;
-        for (const FieldKey &i : inputs) {
-            const Entry &in = request(i, false);
-            all = all && in.state == Entry::READY && (in.content || in.placed);
-        }
-        if (all) {
-            entries.at(k).state = Entry::QUEUED;
-            queued.push_back(k);
-        } else {
-            waiting.push_back(k);
-        }
-    }
-    while (running < MAX_RUNNING && !queued.empty()) {
+    while (running < max_running && !queued.empty()) {
         const FieldKey k = queued.front();
         queued.pop_front();
         const auto it = entries.find(k);
@@ -198,6 +237,14 @@ void ForestStream::poll() {
         }
     }
     trim_cache();
+    if (frame % WAIT_DROP_FRAMES == 0) {
+        for (auto it = chunk_waits.begin(); it != chunk_waits.end();) {
+            it = it->second.asked + WAIT_DROP_FRAMES < frame ? chunk_waits.erase(it) : std::next(it); // left the queues
+        }
+    }
+    const uint64_t dt = now_usec() - t0;
+    stats.poll_usec += dt;
+    stats.poll_usec_max = MAX(stats.poll_usec_max, dt);
 }
 
 bool ForestStream::place(Entry &r_entry) {
@@ -229,6 +276,14 @@ bool ForestStream::place(Entry &r_entry) {
     r_entry.content.reset();
     stats.placed++;
     stats.slots_peak = MAX(stats.slots_peak, slots_used());
+    // The chunks waiting for it, counted down (a waiter from an older full check of its chunk no longer counts).
+    for (const std::pair<ChunkId, uint32_t> &w : r_entry.waiters) {
+        const auto it = chunk_waits.find(w.first);
+        if (it != chunk_waits.end() && it->second.gen == w.second && it->second.missing > 0) {
+            it->second.missing--;
+        }
+    }
+    r_entry.waiters.clear();
     return true;
 }
 
@@ -237,6 +292,7 @@ bool ForestStream::allocate(uint32_t p_count, uint32_t &r_slot) {
         if (it->second >= p_count) {
             r_slot = it->first;
             const uint32_t rest = it->second - p_count;
+            free_slots -= p_count;
             free_runs.erase(it);
             if (rest > 0) {
                 free_runs[r_slot + p_count] = rest;
@@ -255,6 +311,7 @@ void ForestStream::release(uint32_t p_slot, uint32_t p_count) {
     if (p_count == 0) {
         return;
     }
+    free_slots += p_count;
     auto it = free_runs.emplace(p_slot, p_count).first;
     const auto next = std::next(it);
     if (next != free_runs.end() && it->first + it->second == next->first) {
@@ -280,20 +337,26 @@ bool ForestStream::make_room(uint32_t p_count, uint32_t &r_slot) {
     std::sort(old.begin(), old.end(), [](const std::pair<uint64_t, FieldKey> &p_a, const std::pair<uint64_t, FieldKey> &p_b) {
         return p_a.first != p_b.first ? p_a.first < p_b.first : p_a.second < p_b.second;
     });
+    // Past the request, a sixteenth of the pool more is freed: the scan above runs once per that much churn.
+    const int64_t slack = int64_t(capacity / 16);
+    int64_t freed = 0;
+    bool got = false;
     for (const std::pair<uint64_t, FieldKey> &o : old) {
         const auto it = entries.find(o.second);
         release(it->second.slot, it->second.count);
+        freed += it->second.count;
         entries.erase(it); // asked for again, it is computed again (the same records)
         stats.evicted++;
-        if (allocate(p_count, r_slot)) {
-            return true;
+        got = got || allocate(p_count, r_slot);
+        if (got && freed >= slack) {
+            break;
         }
     }
-    return false;
+    return got;
 }
 
 void ForestStream::trim_cache() {
-    if (cached_records <= INPUT_CACHE_RECORDS) {
+    if (cached_records <= cache_limit) {
         return;
     }
     std::vector<std::pair<uint64_t, FieldKey>> old;
@@ -306,21 +369,18 @@ void ForestStream::trim_cache() {
         return p_a.first != p_b.first ? p_a.first < p_b.first : p_a.second < p_b.second;
     });
     for (const std::pair<uint64_t, FieldKey> &o : old) {
-        if (cached_records <= INPUT_CACHE_RECORDS) {
+        if (cached_records <= cache_limit * 3 / 4) { // down to 3/4: the scan above runs once per quarter of the cache
             break;
         }
         const auto it = entries.find(o.second);
         cached_records -= it->second.count;
+        stats.trimmed++;
         entries.erase(it);
     }
 }
 
 int64_t ForestStream::slots_used() const {
-    int64_t free = 0;
-    for (const std::pair<const uint32_t, uint32_t> &r : free_runs) {
-        free += r.second;
-    }
-    return int64_t(slot_store.size()) - free;
+    return int64_t(slot_store.size()) - free_slots;
 }
 
 void ForestStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const {
@@ -411,10 +471,11 @@ void ForestStream::trim_demand() const {
 
 Dictionary ForestStream::get_stats() const {
     const std::lock_guard<std::mutex> lock(mutex);
-    int64_t placed = 0, ready = 0;
+    int64_t placed = 0, ready = 0, waiting = 0;
     for (const std::pair<const FieldKey, Entry> &kv : entries) {
         placed += kv.second.placed;
         ready += kv.second.state == Entry::READY;
+        waiting += kv.second.state == Entry::WAITING;
     }
     Dictionary d;
     d["keys"] = int64_t(entries.size());
@@ -422,7 +483,13 @@ Dictionary ForestStream::get_stats() const {
     d["keys_placed"] = placed;
     d["keys_running"] = int64_t(running);
     d["keys_queued"] = int64_t(queued.size());
-    d["keys_waiting"] = int64_t(waiting.size());
+    d["keys_waiting"] = waiting;
+    d["chunk_waits"] = int64_t(chunk_waits.size());
+    d["chunk_full_checks"] = stats.full_checks;
+    d["cache_trimmed"] = stats.trimmed;
+    d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
+    d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
+    d["ready_ms_total"] = double(stats.ready_usec) / 1000.0;
     d["computed"] = stats.computed;
     d["compute_ms_avg"] = stats.computed > 0 ? double(stats.compute_usec) / 1000.0 / double(stats.computed) : 0.0;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
