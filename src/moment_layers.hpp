@@ -97,6 +97,8 @@ public:
 
     const MomentJoins &get_joins() const { return joins; }
     size_t item_count() const { return items.size(); }
+    // The box tests the pruning has run so far (builds and updates): its cost, per item flat at a fixed density.
+    uint64_t pruning_tests() const { return box_tests; }
 
 private:
     struct CellKey {
@@ -121,11 +123,13 @@ private:
         int lod = 0;
         int64_t cell = 0; // voxels
         std::map<CellKey, Cell> cells;
-        std::map<Bin, std::vector<CellKey>> bins; // the near blobs by bin of 2 NEAR_CELLS cells
-        std::set<CellKey> wide; // the blobs reaching further than NEAR_CELLS cells
+        std::map<Bin, std::vector<CellKey>> bins; // the blobs whose support box meets each bin of BIN_CELLS cells
+        std::set<CellKey> wide; // the blobs whose box meets more than WIDE_BINS bins
     };
-    // Blobs reaching at most this many cells from their anchor (nearly all) are binned; the rest are tested by every blob.
-    static constexpr int64_t NEAR_CELLS = 2;
+    // A blob is filed in every bin its support box meets, so two boxes that meet share a bin. A blob over more than
+    // WIDE_BINS bins (none in a forest: a tall trunk's blob spans tens) is tested by every blob instead.
+    static constexpr int64_t BIN_CELLS = 4;
+    static constexpr double WIDE_BINS = 512.0;
     // A blob under this many times min_occupancy on its own is a sliver of a part's tent.
     static constexpr double SLIVER = 1.0 / 16.0;
 
@@ -133,6 +137,7 @@ private:
     MomentLayerParams params;
     MomentJoins joins;
     std::vector<Layer> layers; // lod_min .. lod_max
+    mutable uint64_t box_tests = 0;
 
     bool on_layer(const MomentItem &p_item, int p_lod) const;
     // The cells p_item's tent touches on p_layer with a weight > 0, and the weights.
@@ -141,7 +146,9 @@ private:
     void resum_block(const Layer &p_layer, const CellKey &p_key, uint32_t p_block, Cell &r_cell) const;
     // The cell's blob from its block sums (in block order), and its extents.
     void resum(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const;
-    Bin bin_of(const Layer &p_layer, const VoxelPos &p_v) const;
+    // The bins a support box at p_anchor with half extents p_extent meets (r_lo .. r_hi per axis); false when they are
+    // more than WIDE_BINS.
+    bool bin_range(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], Bin &r_lo, Bin &r_hi) const;
     void place(Layer &r_layer, const CellKey &p_key, Cell &r_cell);
     void unplace(Layer &r_layer, const CellKey &p_key, Cell &r_cell);
     // The cells whose blob support box may meet one at p_anchor with half extents p_extent (a superset, sorted).

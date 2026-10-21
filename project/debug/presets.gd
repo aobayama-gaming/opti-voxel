@@ -7,6 +7,9 @@ const PRESETS := {
 	# starts --altitude metres above the ground (the bench ignores that one).
 	"forest5cm": ["--trees=4000", "--tree_area=316", "--voxel=0.05", "--lod_error=2", "--altitude=20",
 		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
+	# forest5cm ten times wider in area at the same density (one tree per 25 m^2): 40,000 trees on 1 km.
+	"forest5cm_x10": ["--trees=40000", "--tree_area=1000", "--voxel=0.05", "--lod_error=2", "--altitude=20",
+		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
 	# Biome features (lava lakes, floating islands) within 2 km of the scene centre. The bench camera looks at a
 	# lava lake from 60 m up, two floating islands behind it.
 	"biomes": ["--biomes=2", "--cam_pos=-560,2650,850", "--above_ground=60", "--yaw=45", "--pitch=-18"],

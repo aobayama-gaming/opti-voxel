@@ -166,48 +166,81 @@ void MomentLayers::resum(const Layer &p_layer, const CellKey &p_key, Cell &r_cel
     support_extent(r_cell.blob, r_cell.extent);
 }
 
-MomentLayers::Bin MomentLayers::bin_of(const Layer &p_layer, const VoxelPos &p_v) const {
-    const int64_t bin = 2 * NEAR_CELLS * p_layer.cell;
-    return Bin(WorldCoord::floor_div(p_v.x, bin), WorldCoord::floor_div(p_v.y, bin), WorldCoord::floor_div(p_v.z, bin));
+bool MomentLayers::bin_range(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], Bin &r_lo, Bin &r_hi) const {
+    // The box's integer hull: a point where two boxes meet floors into both hulls, so into a bin both are filed in.
+    const int64_t bin = BIN_CELLS * p_layer.cell;
+    int64_t lo[3], hi[3];
+    double bins = 1.0;
+    for (int a = 0; a < 3; a++) {
+        const double e = std::ceil(p_extent[a]);
+        if (!(e < double(bin) * WIDE_BINS)) {
+            return false;
+        }
+        lo[a] = WorldCoord::floor_div(p_anchor[a] - int64_t(e), bin);
+        hi[a] = WorldCoord::floor_div(p_anchor[a] + int64_t(e), bin);
+        bins *= double(hi[a] - lo[a] + 1);
+    }
+    r_lo = Bin(lo[0], lo[1], lo[2]);
+    r_hi = Bin(hi[0], hi[1], hi[2]);
+    return bins <= WIDE_BINS;
 }
 
 void MomentLayers::place(Layer &r_layer, const CellKey &p_key, Cell &r_cell) {
-    if (MAX(r_cell.extent[0], MAX(r_cell.extent[1], r_cell.extent[2])) > double(NEAR_CELLS * r_layer.cell)) {
+    Bin lo, hi;
+    if (!bin_range(r_layer, r_cell.blob.anchor, r_cell.extent, lo, hi)) {
         r_layer.wide.insert(p_key);
     } else {
-        r_layer.bins[bin_of(r_layer, r_cell.blob.anchor)].push_back(p_key);
+        for (int64_t x = std::get<0>(lo); x <= std::get<0>(hi); x++) {
+            for (int64_t y = std::get<1>(lo); y <= std::get<1>(hi); y++) {
+                for (int64_t z = std::get<2>(lo); z <= std::get<2>(hi); z++) {
+                    r_layer.bins[Bin(x, y, z)].push_back(p_key);
+                }
+            }
+        }
     }
     r_cell.placed = true;
 }
 
 void MomentLayers::unplace(Layer &r_layer, const CellKey &p_key, Cell &r_cell) {
     r_cell.placed = false;
-    if (r_layer.wide.erase(p_key)) {
+    Bin lo, hi;
+    if (!bin_range(r_layer, r_cell.blob.anchor, r_cell.extent, lo, hi)) {
+        r_layer.wide.erase(p_key);
         return;
     }
-    const auto it = r_layer.bins.find(bin_of(r_layer, r_cell.blob.anchor));
-    if (it != r_layer.bins.end()) {
-        it->second.erase(std::remove(it->second.begin(), it->second.end(), p_key), it->second.end());
-        if (it->second.empty()) {
-            r_layer.bins.erase(it);
+    for (int64_t x = std::get<0>(lo); x <= std::get<0>(hi); x++) {
+        for (int64_t y = std::get<1>(lo); y <= std::get<1>(hi); y++) {
+            for (int64_t z = std::get<2>(lo); z <= std::get<2>(hi); z++) {
+                const auto it = r_layer.bins.find(Bin(x, y, z));
+                if (it == r_layer.bins.end()) {
+                    continue;
+                }
+                it->second.erase(std::remove(it->second.begin(), it->second.end(), p_key), it->second.end());
+                if (it->second.empty()) {
+                    r_layer.bins.erase(it);
+                }
+            }
         }
     }
 }
 
 void MomentLayers::candidates(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], std::vector<CellKey> &r_out) const {
     r_out.clear();
-    if (MAX(p_extent[0], MAX(p_extent[1], p_extent[2])) > double(NEAR_CELLS * p_layer.cell)) {
+    Bin lo, hi;
+    if (!bin_range(p_layer, p_anchor, p_extent, lo, hi)) {
         for (const std::pair<const CellKey, Cell> &c : p_layer.cells) {
             r_out.push_back(c.first); // a wide blob may meet any
         }
         return;
     }
-    // Two near blobs that meet are within 2 NEAR_CELLS cells: neighbouring bins.
-    const auto [bx, by, bz] = bin_of(p_layer, p_anchor);
-    for (int k = 0; k < 27; k++) {
-        const auto it = p_layer.bins.find(Bin(bx + k % 3 - 1, by + k / 3 % 3 - 1, bz + k / 9 - 1));
-        if (it != p_layer.bins.end()) {
-            r_out.insert(r_out.end(), it->second.begin(), it->second.end());
+    for (int64_t x = std::get<0>(lo); x <= std::get<0>(hi); x++) {
+        for (int64_t y = std::get<1>(lo); y <= std::get<1>(hi); y++) {
+            for (int64_t z = std::get<2>(lo); z <= std::get<2>(hi); z++) {
+                const auto it = p_layer.bins.find(Bin(x, y, z));
+                if (it != p_layer.bins.end()) {
+                    r_out.insert(r_out.end(), it->second.begin(), it->second.end());
+                }
+            }
         }
     }
     r_out.insert(r_out.end(), p_layer.wide.begin(), p_layer.wide.end());
@@ -218,6 +251,7 @@ void MomentLayers::candidates(const Layer &p_layer, const VoxelPos &p_anchor, co
 void MomentLayers::judge(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const {
     thread_local std::vector<CellKey> near;
     candidates(p_layer, r_cell.blob.anchor, r_cell.extent, near);
+    box_tests += near.size();
     double sum = 0.0; // in cell order: the same bits whichever way the bins were filled
     for (const CellKey &k : near) {
         const Cell &o = k == p_key ? r_cell : p_layer.cells.at(k);

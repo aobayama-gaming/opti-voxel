@@ -186,3 +186,38 @@ TEST_CASE("Moment layers: an absolute grid, the same bits for the same items, an
         CHECK(slab > 0);
     }
 }
+
+TEST_CASE("Moment layers: the pruning's cost per item stays flat as a forest of tall trunks grows at a fixed density") {
+    // 5 cm voxels: 20 m trunks 5 m apart under 6 m crowns. A trunk's blob reaches tens of fine cells up and down; the
+    // pruning once tested such blobs against every blob of the layer (a 40,000-tree forest never finished loading).
+    auto field = [](int p_n) {
+        std::vector<MomentItem> items;
+        for (int i = 0; i < p_n * p_n; i++) {
+            MomentItem trunk;
+            trunk.anchor = VoxelPos(int64_t(i % p_n) * 100, 200, int64_t(i / p_n) * 100);
+            trunk.moments = cylinder_moments(200.0, 8.0);
+            trunk.material = 1;
+            trunk.drop_lod = 1;
+            MomentItem crown = trunk;
+            crown.anchor.y = 450;
+            crown.moments = sphere_moments(60.0);
+            crown.material = 2;
+            crown.drop_lod = 3;
+            items.push_back(trunk);
+            items.push_back(crown);
+        }
+        return items;
+    };
+    MomentLayerParams params;
+    params.lod_min = 1;
+    params.lod_max = 8;
+    double per_item[2];
+    for (int k = 0; k < 2; k++) {
+        const std::vector<MomentItem> items = field(16 << k);
+        MomentLayers layers;
+        layers.build(items, params);
+        per_item[k] = double(layers.pruning_tests()) / double(items.size());
+        MESSAGE(items.size(), " items: ", per_item[k], " box tests per item");
+    }
+    CHECK(per_item[1] < 1.5 * per_item[0]);
+}
