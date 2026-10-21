@@ -3,6 +3,7 @@
 #include "archetype_gpu_table.hpp"
 #include "archetype_table.hpp"
 #include "biome_features.hpp"
+#include "forest_generator.hpp"
 #include "instance_table.hpp"
 #include "moment_layers.hpp"
 #include "sdf_base.hpp"

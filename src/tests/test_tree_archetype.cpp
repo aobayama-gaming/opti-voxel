@@ -291,6 +291,17 @@ bool same_sites(const std::vector<CellSite> &p_a, const std::vector<TreeSite> &p
     return true;
 }
 
+// forest_sites' trees without their cells.
+std::vector<TreeSite> forest_trees(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field) {
+    std::vector<CellSite> cells;
+    forest_sites(p_lo, p_hi, p_side, p_field, cells);
+    std::vector<TreeSite> out;
+    for (const CellSite &cs : cells) {
+        out.push_back(cs.site);
+    }
+    return out;
+}
+
 // The smallest distance between two of p_sites (voxels).
 double closest_pair(const std::vector<TreeSite> &p_sites) {
     double best = 1e30;
@@ -316,8 +327,7 @@ TEST_CASE("Tree sites: on flat ground, one tree per column of cells, on the surf
     const VoxelPos origin(-3000, 6017, 1200);
     const FieldFn flat = plane_field(origin, 0.0, 1.0, 0.0);
     const VoxelPos lo = origin - VoxelPos(2000, 2000, 2000), hi = origin + VoxelPos(2000, 2000, 2000);
-    std::vector<TreeSite> sites;
-    forest_sites(lo, hi, side, flat, sites);
+    const std::vector<TreeSite> sites = forest_trees(lo, hi, side, flat);
     const int64_t columns = (4000 / side) * (4000 / side);
     MESSAGE("flat: ", sites.size(), " trees for ", columns, " columns of cells");
     CHECK(int64_t(sites.size()) >= columns * 9 / 10);
@@ -356,8 +366,7 @@ TEST_CASE("Tree sites: the octree walk finds every cell's tree (brute force), on
             CHECK(std::fabs((*f)(s.site.base).w) <= 1.0f);
         }
         // The forest keeps them SITE_SPACING cells apart, dropping a few (a projection brings two cells' sites together).
-        std::vector<TreeSite> forest;
-        forest_sites(lo, hi, side, *f, forest);
+        const std::vector<TreeSite> forest = forest_trees(lo, hi, side, *f);
         MESSAGE("spaced: ", forest.size(), " of ", walked.size(), ", closest pair ", closest_pair(forest) / double(side), " cells (raw ",
                 closest_pair(brute) / double(side), ")");
         CHECK(forest.size() >= walked.size() * 9 / 10);
@@ -395,9 +404,8 @@ TEST_CASE("Tree sites: a cell holds the same tree whatever the query box") {
     const int64_t side = 100;
     const VoxelPos origin(500, 300, -700);
     const FieldFn slope = plane_field(origin, 0.6, 0.8, 0.0);
-    std::vector<TreeSite> a, b;
-    forest_sites(origin - VoxelPos(1500, 1500, 1500), origin + VoxelPos(1500, 1500, 1500), side, slope, a);
-    forest_sites(origin - VoxelPos(300, 900, 2500), origin + VoxelPos(2600, 1100, 400), side, slope, b);
+    const std::vector<TreeSite> a = forest_trees(origin - VoxelPos(1500, 1500, 1500), origin + VoxelPos(1500, 1500, 1500), side, slope);
+    const std::vector<TreeSite> b = forest_trees(origin - VoxelPos(300, 900, 2500), origin + VoxelPos(2600, 1100, 400), side, slope);
     int64_t shared = 0;
     for (const TreeSite &s : a) {
         for (const TreeSite &t : b) {

@@ -38,6 +38,8 @@ struct Moments {
     }
     // Weight times: m0 and S scale, the centroid stays.
     Moments scaled(double p_weight) const;
+    // The same solid p_factor times larger about the anchor: m0 * f^3, c * f, S * f^5.
+    Moments resized(double p_factor) const;
     // The same solid seen through p_r, a world -> local rotation: from the local frame to the world axes, c' = R^T c,
     // S' = R^T S R.
     Moments rotated(const float *p_r) const;

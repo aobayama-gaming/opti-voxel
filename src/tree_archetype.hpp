@@ -82,6 +82,14 @@ struct TreeStem {
 using UpAxis = std::array<double, 3>;
 inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
 
+// The rotation (rows: absolute to local) whose local y is p_up: the smallest one taking +y to it, the identity for
+// UP_Y (a cone tier's, a tree's moments far away).
+void up_rotation(const UpAxis &p_up, float r_rows[9]);
+
+// A tree's size factor, drawn first from its seed: every length of the tree is its species' times it (so its volume
+// goes as its cube).
+double tree_scale(uint32_t p_seed);
+
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
 // boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the
 // trunk grows along, and the cone tiers' axis; the tree is grown in absolute axes, joints on whole voxels (UP_Y: the
@@ -139,6 +147,6 @@ inline constexpr double SURFACE_NODE_SIDES = 2.0;
 // The forest in [p_lo, p_hi]: surface_sites without the sites within SITE_SPACING cells of a neighbouring cell's site
 // that comes first in cell order (the projection can bring two cells' sites together). Still a pure function of the
 // cell: the neighbours come from the box grown by a cell.
-void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<TreeSite> &r_out);
+void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out);
 
 } // namespace Archetype

@@ -73,6 +73,17 @@ constexpr int MAX_ORDER = 2;
 constexpr double ROTATION_FLUSH = 0x1p-24;
 constexpr uint32_t FOREST_SEED = 0xF0E57u;
 
+// A record's rotation from its local axes in absolute coordinates (the rows: absolute to local).
+void rotation_rows(const Vec &p_x, const Vec &p_y, const Vec &p_z, float r_rows[9]) {
+    const Vec rows[3] = { p_x, p_y, p_z };
+    for (int i = 0; i < 3; i++) {
+        const double c[3] = { rows[i].x, rows[i].y, rows[i].z };
+        for (int j = 0; j < 3; j++) {
+            r_rows[3 * i + j] = std::fabs(c[j]) < ROTATION_FLUSH ? 0.0f : float(c[j]);
+        }
+    }
+}
+
 struct Stem {
     Vec p0; // voxels from the tree's base, whole voxels
     Vec dir; // unit
@@ -105,7 +116,7 @@ public:
 
     void grow() {
         const ExactNoise::UVec3 h = hash3(seed, 0x7EEu, 0u);
-        scale = 0.8 + 0.4 * unit_of(h.x);
+        scale = tree_scale(seed);
         Stem trunk;
         trunk.r0 = v(s.trunk_radius);
         trunk.p0 = snap(up * -trunk.r0); // sunk by its radius: the flare blends it into the ground
@@ -318,17 +329,6 @@ private:
 
     VoxelPos anchor_of(const Vec &p_p) const { return base + VoxelPos(std::llround(p_p.x), std::llround(p_p.y), std::llround(p_p.z)); }
 
-    // A record's rotation from its local axes in absolute coordinates (the rows: absolute to local).
-    static void set_rotation(TableRecord &r_rec, const Vec &p_x, const Vec &p_y, const Vec &p_z) {
-        const Vec rows[3] = { p_x, p_y, p_z };
-        for (int i = 0; i < 3; i++) {
-            const double c[3] = { rows[i].x, rows[i].y, rows[i].z };
-            for (int j = 0; j < 3; j++) {
-                r_rec.rotation[3 * i + j] = std::fabs(c[j]) < ROTATION_FLUSH ? 0.0f : float(c[j]);
-            }
-        }
-    }
-
     void add_branch(const Vec &p_a, const Vec &p_b, double p_ra, double p_rb, double p_k) {
         const Vec seg = p_b - p_a;
         const double h = length(seg);
@@ -343,7 +343,7 @@ private:
         const Vec d = seg * (1.0 / h);
         Vec e0, e2;
         normal_frame(d, e0, e2);
-        set_rotation(rec, e0, d, e2);
+        rotation_rows(e0, d, e2, rec.rotation);
         rec.params[0] = float(h);
         rec.params[1] = float(p_ra);
         rec.params[2] = float((p_rb - p_ra) / h);
@@ -355,8 +355,8 @@ private:
     // the top one's apex at the trunk's tip, radii from crown_radius down to hull_taper times it.
     void add_tiers(const std::vector<Joint> &p_joints) {
         const int n = s.cone_tiers;
-        Vec tier_x, tier_z;
-        up_frame(up, tier_x, tier_z); // the tiers stand along up
+        float tiers[9]; // the tiers stand along up
+        up_rotation(UpAxis{ up.x, up.y, up.z }, tiers);
         const double length = v(s.height) * (1.0 - s.crown_base);
         const double spacing = length / double(n + 1);
         for (int i = 0; i < n; i++) {
@@ -371,7 +371,7 @@ private:
             rec.op = Combine::SMOOTH_UNION;
             rec.set_k(float(s.crown_smooth * r));
             rec.anchor = anchor_of(snap(point_at(p_joints, t)));
-            set_rotation(rec, tier_x, up, tier_z);
+            std::copy(tiers, tiers + 9, rec.rotation);
             rec.params[0] = float(r);
             rec.params[1] = float(height);
             rec.params[2] = float(height / slant); // cos of the half angle
@@ -447,6 +447,17 @@ TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, in
     t.crown_amp = slope > 0.0 ? float(CROWN_BUMP / slope) : 0.0f;
     t.crown_dent = float(double(t.crown_amp) * (double(hi.x) - 1.0));
     return t;
+}
+
+double tree_scale(uint32_t p_seed) {
+    return 0.8 + 0.4 * unit_of(hash3(p_seed, 0x7EEu, 0u).x);
+}
+
+void up_rotation(const UpAxis &p_up, float r_rows[9]) {
+    const Vec up{ p_up[0], p_up[1], p_up[2] };
+    Vec x, z;
+    up_frame(up, x, z);
+    rotation_rows(x, up, z, r_rows);
 }
 
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
@@ -607,7 +618,7 @@ void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, c
     }
 }
 
-void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<TreeSite> &r_out) {
+void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out) {
     // Every site of the cells next to the box's (a neighbour's site is in its own cell, which meets the grown box).
     std::vector<CellSite> all;
     const VoxelPos grow(p_side, p_side, p_side);
@@ -635,7 +646,7 @@ void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, co
             }
         }
         if (!crowded) {
-            r_out.push_back(cs.site);
+            r_out.push_back(cs);
         }
     }
 }
