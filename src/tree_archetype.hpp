@@ -2,6 +2,7 @@
 
 #include "archetype_table.hpp"
 
+#include <array>
 #include <functional>
 #include <vector>
 
@@ -77,10 +78,16 @@ struct TreeStem {
     std::vector<double> children;
 };
 
+// A unit direction in absolute axes (SDFBase::up_at).
+using UpAxis = std::array<double, 3>;
+inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
+
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
-// boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. Deterministic in (species,
-// seed, voxel); p_base only translates it. The stems, in the order they were grown, go to r_stems if given.
-void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
+// boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the
+// trunk grows along, and the cone tiers' axis; the tree is grown in absolute axes, joints on whole voxels (UP_Y: the
+// records from before trees had an up axis, bit for bit). Deterministic in (species, up, seed, voxel); p_base only
+// translates it. The stems, in the order they were grown, go to r_stems if given.
+void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
         std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems = nullptr);
 
 // A tree in the table: its records are the ids [first, first + count), grown from (species, seed).
@@ -98,10 +105,40 @@ struct TreeSite {
     int species = 0;
 };
 
-// About p_count trees in the square of side p_area_m metres centred on (p_centre_x_m, p_centre_z_m): one per cell
-// of an absolute grid of cells (side p_area_m / sqrt(p_count), whole voxels), jittered within it by a hash of the
-// cell. The same cell holds the same tree whatever the square. p_ground_y(x, z) gives the base's y at a column.
-void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_centre_z_m, double p_voxel,
-        const GroundFn &p_ground_y, std::vector<TreeSite> &r_out); // p_ground_y null: base.y 0 (the caller traces it)
+// The ground's field at a LOD0 voxel: the gradient (x, y, z) and the distance (w), both in LOD0 voxels. Thread-safe.
+using FieldFn = std::function<ExactNoise::Float4(const VoxelPos &)>;
+
+// The side (LOD0 voxels) of the forest's cells for about p_count trees on p_area_m^2 of flat ground: one tree per
+// cell crossed by the surface. 0 for no forest.
+int64_t forest_cell_side(int p_count, double p_area_m, double p_voxel);
+
+// Newton steps that move a cell's jittered voxel onto the ground (cell_site).
+inline constexpr int SITE_STEPS = 4;
+// Two trees stand at least this many cells apart (forest_sites).
+inline constexpr double SITE_SPACING = 0.3;
+
+// The tree of the 3D cell p_cell (cells of p_side LOD0 voxels on the absolute grid): the cell's hashed voxel in its
+// middle 70% moved onto the field's zero by up to SITE_STEPS Newton steps on whole voxels (none over two cell sides).
+// It exists when that voxel ends within a voxel of the surface and inside the cell (a surface point has one owner).
+// Seed and species from the cell's hash. A pure function of the cell and the field: the same from any query and any
+// origin.
+bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, TreeSite &r_site);
+
+// cell_site of every cell meeting [p_lo, p_hi] (LOD0 voxels, inclusive) whose base lies in it, with its cell, in cell
+// order (z, y, x). The cells tried come from an absolute octree walk (nodes of p_side * 2^k voxels, aligned on their
+// own multiples, the coarsest one holding the box) that keeps a node while one of its corners is within
+// SURFACE_NODE_SIDES node sides of the surface (the discoverer's cull rule), each corner evaluated once. On the worker
+// pool (not from inside a pool task).
+struct CellSite {
+    VoxelPos cell;
+    TreeSite site;
+};
+void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out);
+inline constexpr double SURFACE_NODE_SIDES = 2.0;
+
+// The forest in [p_lo, p_hi]: surface_sites without the sites within SITE_SPACING cells of a neighbouring cell's site
+// that comes first in cell order (the projection can bring two cells' sites together). Still a pure function of the
+// cell: the neighbours come from the box grown by a cell.
+void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<TreeSite> &r_out);
 
 } // namespace Archetype

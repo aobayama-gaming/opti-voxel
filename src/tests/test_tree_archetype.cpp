@@ -27,7 +27,7 @@ struct TreeLibrary {
 std::vector<TableRecord> grow(const TreeLibrary &p_lib, const TreeSpecies &p_species, uint32_t p_seed, double p_voxel,
         const VoxelPos &p_base = VoxelPos(), std::vector<TreeStem> *r_stems = nullptr) {
     std::vector<TableRecord> out;
-    grow_tree(p_species, p_base, p_seed, p_voxel, p_lib.types, out, r_stems);
+    grow_tree(p_species, p_base, UP_Y, p_seed, p_voxel, p_lib.types, out, r_stems);
     return out;
 }
 
@@ -255,45 +255,224 @@ TEST_CASE("Tree: a smaller budget cuts the thinnest stems, the rest is unchanged
     }
 }
 
-TEST_CASE("Tree: forest sites fill the square, apart, the same tree per absolute cell") {
-    const double voxel = 0.05;
-    auto ground = [](int64_t p_x, int64_t p_z) { return (p_x * 3 + p_z) % 17; };
-    std::vector<TreeSite> a, b, again;
-    forest_sites(400, 100.0, -50.0, -150.0, voxel, ground, a);
-    forest_sites(400, 100.0, -50.0, -150.0, voxel, ground, again);
-    forest_sites(400, 100.0, 0.0, -150.0, voxel, ground, b); // half a square east
-    MESSAGE("forest: ", a.size(), " sites for 400 asked");
-    CHECK(a.size() >= 320);
-    CHECK(a.size() <= 480);
-    CHECK(a.size() == again.size());
-    if (a.size() != again.size()) {
-        return;
-    }
-    const int64_t cell = std::llround(100.0 / 20.0 / voxel);
-    int64_t shared = 0;
-    for (size_t i = 0; i < a.size(); i++) {
-        CHECK(a[i].base == again[i].base);
-        CHECK(a[i].seed == again[i].seed);
-        CHECK(a[i].base.x >= std::llround(-100.0 / voxel));
-        CHECK(a[i].base.x <= std::llround(0.0 / voxel));
-        CHECK(a[i].base.z >= std::llround(-200.0 / voxel));
-        CHECK(a[i].base.z <= std::llround(-100.0 / voxel));
-        CHECK(a[i].base.y == ground(a[i].base.x, a[i].base.z));
-        CHECK(a[i].species >= 0);
-        CHECK(a[i].species < int(tree_species().size()));
-        for (size_t j = i + 1; j < a.size(); j++) {
-            const double dx = double(a[i].base.x - a[j].base.x), dz = double(a[i].base.z - a[j].base.z);
-            CHECK(std::sqrt(dx * dx + dz * dz) >= 0.3 * double(cell) - 2.0);
+// The sites of every cell meeting [p_lo, p_hi], cell by cell: what surface_sites' walk must find.
+std::vector<TreeSite> brute_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field) {
+    std::vector<TreeSite> out;
+    for (int64_t z = WorldCoord::floor_div(p_lo.z, p_side); z <= WorldCoord::floor_div(p_hi.z, p_side); z++) {
+        for (int64_t y = WorldCoord::floor_div(p_lo.y, p_side); y <= WorldCoord::floor_div(p_hi.y, p_side); y++) {
+            for (int64_t x = WorldCoord::floor_div(p_lo.x, p_side); x <= WorldCoord::floor_div(p_hi.x, p_side); x++) {
+                TreeSite site;
+                if (!cell_site(VoxelPos(x, y, z), p_side, p_field, site)) {
+                    continue;
+                }
+                bool inside = true;
+                for (int a = 0; a < 3; a++) {
+                    inside = inside && site.base[a] >= p_lo[a] && site.base[a] <= p_hi[a];
+                }
+                if (inside) {
+                    out.push_back(site);
+                }
+            }
         }
-        for (const TreeSite &s : b) {
-            if (s.base == a[i].base) {
-                CHECK(s.seed == a[i].seed);
-                CHECK(s.species == a[i].species);
+    }
+    return out;
+}
+
+bool same_sites(const std::vector<CellSite> &p_a, const std::vector<TreeSite> &p_b) {
+    if (p_a.size() != p_b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < p_a.size(); i++) {
+        const TreeSite &s = p_a[i].site;
+        if (!(s.base == p_b[i].base) || s.seed != p_b[i].seed || s.species != p_b[i].species) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The smallest distance between two of p_sites (voxels).
+double closest_pair(const std::vector<TreeSite> &p_sites) {
+    double best = 1e30;
+    for (size_t i = 0; i < p_sites.size(); i++) {
+        for (size_t j = i + 1; j < p_sites.size(); j++) {
+            const VoxelPos d = p_sites[i].base - p_sites[j].base;
+            best = MIN(best, std::sqrt(double(d.x) * d.x + double(d.y) * d.y + double(d.z) * d.z));
+        }
+    }
+    return best;
+}
+
+// A plane through p_origin with unit normal (p_nx, p_ny, p_nz), as a field in LOD0 voxels.
+FieldFn plane_field(const VoxelPos &p_origin, double p_nx, double p_ny, double p_nz) {
+    return [=](const VoxelPos &p_v) {
+        const double w = double(p_v.x - p_origin.x) * p_nx + double(p_v.y - p_origin.y) * p_ny + double(p_v.z - p_origin.z) * p_nz;
+        return ExactNoise::Float4{ float(p_nx), float(p_ny), float(p_nz), float(w) };
+    };
+}
+
+TEST_CASE("Tree sites: on flat ground, one tree per column of cells, on the surface") {
+    const int64_t side = 100;
+    const VoxelPos origin(-3000, 6017, 1200);
+    const FieldFn flat = plane_field(origin, 0.0, 1.0, 0.0);
+    const VoxelPos lo = origin - VoxelPos(2000, 2000, 2000), hi = origin + VoxelPos(2000, 2000, 2000);
+    std::vector<TreeSite> sites;
+    forest_sites(lo, hi, side, flat, sites);
+    const int64_t columns = (4000 / side) * (4000 / side);
+    MESSAGE("flat: ", sites.size(), " trees for ", columns, " columns of cells");
+    CHECK(int64_t(sites.size()) >= columns * 9 / 10);
+    CHECK(int64_t(sites.size()) <= columns + 4 * (4000 / side) + 1);
+    std::vector<VoxelPos> cells;
+    for (const TreeSite &s : sites) {
+        CHECK(std::abs(s.base.y - origin.y) <= 1);
+        CHECK(s.species >= 0);
+        CHECK(s.species < int(tree_species().size()));
+        cells.push_back(VoxelPos(WorldCoord::floor_div(s.base.x, side), 0, WorldCoord::floor_div(s.base.z, side)));
+    }
+    std::sort(cells.begin(), cells.end(), [](const VoxelPos &p_a, const VoxelPos &p_b) { return p_a.x != p_b.x ? p_a.x < p_b.x : p_a.z < p_b.z; });
+    CHECK(std::adjacent_find(cells.begin(), cells.end()) == cells.end()); // one per column
+}
+
+TEST_CASE("Tree sites: the octree walk finds every cell's tree (brute force), on hills and a 60 degree slope") {
+    const int64_t side = 80;
+    const VoxelPos origin(int64_t(1) << 40, -517, -(int64_t(1) << 33));
+    const double tau = 6.283185307179586;
+    const FieldFn hills = [origin, tau](const VoxelPos &p_v) {
+        const double amp = 60.0, wave = 1500.0;
+        const double x = double(p_v.x - origin.x);
+        const double w = double(p_v.y - origin.y) - amp * std::sin(tau * x / wave);
+        return ExactNoise::Float4{ float(-amp * tau / wave * std::cos(tau * x / wave)), 1.0f, 0.0f, float(w) };
+    };
+    const FieldFn slope = plane_field(origin, std::sin(1.0471975511965976), std::cos(1.0471975511965976), 0.0);
+    const VoxelPos lo = origin - VoxelPos(1200, 1300, 1200), hi = origin + VoxelPos(1200, 1300, 1200);
+    for (const FieldFn *f : { &hills, &slope }) {
+        std::vector<CellSite> walked;
+        surface_sites(lo, hi, side, *f, walked);
+        const std::vector<TreeSite> brute = brute_sites(lo, hi, side, *f);
+        MESSAGE("walk ", walked.size(), " trees, brute force ", brute.size());
+        CHECK(walked.size() > 100);
+        CHECK(same_sites(walked, brute));
+        for (const CellSite &s : walked) {
+            CHECK(std::fabs((*f)(s.site.base).w) <= 1.0f);
+        }
+        // The forest keeps them SITE_SPACING cells apart, dropping a few (a projection brings two cells' sites together).
+        std::vector<TreeSite> forest;
+        forest_sites(lo, hi, side, *f, forest);
+        MESSAGE("spaced: ", forest.size(), " of ", walked.size(), ", closest pair ", closest_pair(forest) / double(side), " cells (raw ",
+                closest_pair(brute) / double(side), ")");
+        CHECK(forest.size() >= walked.size() * 9 / 10);
+        CHECK(closest_pair(forest) >= SITE_SPACING * double(side));
+    }
+}
+
+// The rule the walk shares with the discoverer (a corner within 2 node sides) holds for a distance-like field; the
+// cascade's LOD0 field is a first-order height-field estimate with every fine octave in it. On the real ground at 5 cm
+// the walk must still find every cell's tree.
+TEST_CASE("Tree sites: on the cascade ground, the octree walk finds every cell's tree (brute force)") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    SDFCascade sdf;
+    sdf.configure(param, 18);
+    const int64_t side = 100;
+    const FieldFn ground = [&sdf](const VoxelPos &p_v) { return sdf.ground_field(p_v); };
+    int64_t total = 0;
+    for (const int64_t x : { int64_t(-1000), int64_t(250000), int64_t(-3700000) }) {
+        const int64_t z = x / 3 + 40000;
+        const VoxelPos centre(x, sdf.ground_y(x, z), z);
+        const VoxelPos reach(1000, 4000, 1000);
+        std::vector<CellSite> walked;
+        surface_sites(centre - reach, centre + reach, side, ground, walked);
+        const std::vector<TreeSite> brute = brute_sites(centre - reach, centre + reach, side, ground);
+        MESSAGE("cascade at x ", x, ": walk ", walked.size(), " trees, brute force ", brute.size());
+        CHECK(walked.size() > 100);
+        CHECK(same_sites(walked, brute));
+        total += int64_t(walked.size());
+    }
+    CHECK(total > 300);
+}
+
+TEST_CASE("Tree sites: a cell holds the same tree whatever the query box") {
+    const int64_t side = 100;
+    const VoxelPos origin(500, 300, -700);
+    const FieldFn slope = plane_field(origin, 0.6, 0.8, 0.0);
+    std::vector<TreeSite> a, b;
+    forest_sites(origin - VoxelPos(1500, 1500, 1500), origin + VoxelPos(1500, 1500, 1500), side, slope, a);
+    forest_sites(origin - VoxelPos(300, 900, 2500), origin + VoxelPos(2600, 1100, 400), side, slope, b);
+    int64_t shared = 0;
+    for (const TreeSite &s : a) {
+        for (const TreeSite &t : b) {
+            if (s.base == t.base) {
+                CHECK(s.seed == t.seed);
+                CHECK(s.species == t.species);
                 shared++;
             }
         }
     }
-    CHECK(shared > int64_t(a.size()) / 3);
+    MESSAGE("query boxes: ", a.size(), " and ", b.size(), " trees, ", shared, " in both");
+    CHECK(shared > 50);
+}
+
+uint64_t fnv(uint64_t p_h, const void *p_data, size_t p_size) {
+    const unsigned char *b = static_cast<const unsigned char *>(p_data);
+    for (size_t i = 0; i < p_size; i++) {
+        p_h = (p_h ^ b[i]) * 0x100000001B3ull;
+    }
+    return p_h;
+}
+
+// Every field grow_tree sets along +y, every species at two voxel sizes, several seeds and bases. Pinned when trees took
+// an up axis (feature/tree-frame); that change kept dev's records: the tests growing trees at fixed bases printed the
+// same numbers before and after it.
+TEST_CASE("Tree: grown along +y, the records are pinned") {
+    uint64_t h = 0xCBF29CE484222325ull;
+    int64_t records = 0;
+    for (const double voxel : { 0.05, 0.5 }) {
+        const TreeLibrary tl(voxel);
+        for (int sp = 0; sp < int(tree_species().size()); sp++) {
+            for (uint32_t seed = 0; seed < 6; seed++) {
+                const VoxelPos base(int64_t(seed) * 977 - 3000, int64_t(seed) * -31 + 17, int64_t(1) << (20 + seed));
+                for (const TableRecord &r : grow(tl, tree_species()[sp], 0x5EEDu * (seed + 1) + uint32_t(sp), voxel, base)) {
+                    h = fnv(h, &r.def, sizeof(r.def));
+                    h = fnv(h, &r.op, sizeof(r.op));
+                    h = fnv(h, &r.k, sizeof(r.k));
+                    h = fnv(h, &r.inv_k, sizeof(r.inv_k));
+                    const int64_t a[3] = { r.anchor.x, r.anchor.y, r.anchor.z };
+                    h = fnv(h, a, sizeof(a));
+                    h = fnv(h, r.rotation, sizeof(r.rotation));
+                    h = fnv(h, r.params, sizeof(r.params));
+                    h = fnv(h, &r.salt, sizeof(r.salt));
+                    records++;
+                }
+            }
+        }
+    }
+    MESSAGE("tree pin: ", records, " records, hash ", h);
+    CHECK(records == 896);
+    CHECK(h == 7225423438707016970ull);
+}
+
+TEST_CASE("Tree: grown along a turned up, the tree lies along it") {
+    const double voxel = 0.05;
+    const TreeLibrary tl(voxel);
+    const VoxelPos base(123, -456, 789);
+    int cones = 0;
+    for (int sp = 0; sp < int(tree_species().size()); sp++) {
+        std::vector<TableRecord> turned;
+        grow_tree(tree_species()[sp], base, UpAxis{ 1.0, 0.0, 0.0 }, 0xABCu + uint32_t(sp), voxel, tl.types, turned);
+        int64_t reach_x = 0, reach_y = 0;
+        for (const TableRecord &r : turned) {
+            reach_x = MAX(reach_x, r.anchor.x - base.x);
+            reach_y = MAX(reach_y, std::abs(r.anchor.y - base.y));
+            if (int(r.def) == tl.types.cone) {
+                cones++;
+                CHECK(r.rotation[3] == 1.0f); // the cone's axis (the middle row) is up
+                CHECK(r.rotation[4] == 0.0f);
+                CHECK(r.rotation[5] == 0.0f);
+            }
+        }
+        CHECK(reach_x > 2 * reach_y); // the tree grows along +x
+    }
+    CHECK(cones > 0);
 }
 
 TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, evaluate() stays the fold") {

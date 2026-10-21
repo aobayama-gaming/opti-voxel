@@ -59,6 +59,21 @@ struct Vector3i64 {
 using ChunkId = Vector3i64;
 using VoxelPos = Vector3i64;
 
+// An axis-aligned box in LOD0 voxels (inclusive): an instance edit's region, a query box.
+struct VoxelBox {
+    VoxelPos lo;
+    VoxelPos hi;
+    bool valid = false;
+
+    bool intersects(const VoxelBox &p_o) const {
+        return valid && p_o.valid && lo.x <= p_o.hi.x && p_o.lo.x <= hi.x && lo.y <= p_o.hi.y && p_o.lo.y <= hi.y && lo.z <= p_o.hi.z &&
+                p_o.lo.z <= hi.z;
+    }
+    bool contains(const VoxelPos &p_v) const {
+        return valid && lo.x <= p_v.x && p_v.x <= hi.x && lo.y <= p_v.y && p_v.y <= hi.y && lo.z <= p_v.z && p_v.z <= hi.z;
+    }
+};
+
 // For godot HashMap / HashSet. Folds each int64 to 32 bits (high word scrambled in), then the same
 // murmur chain as godot's Vector3i hasher.
 struct Vector3i64Hasher {
