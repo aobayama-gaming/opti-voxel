@@ -185,10 +185,10 @@ private:
     // The band rule, unless set_instance_band(false) (VoxelTerrain: --instance_band=0, and the shapes gallery: its ladder
     // is sized one cube per LOD, and eroding the thin frames tears them).
     void finish_record(Archetype::TableRecord &r_rec) const;
+    Archetype::RecordFinish record_finish() const;
     // The changed record's margins and LODs, then a new snapshot (the previous base plus the edited records'
     // overlay) over the edit region.
     void finish_edit(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id);
-    static VoxelBox record_box(const Archetype::TableRecord &p_rec);
     float voxels(double p_metres) const;
     // A record of type p_type at (p_x, p_z) metres, p_dy_m above the ground there, turned by p_yaw about y, smooth
     // radius p_k_m metres, appended.
@@ -201,11 +201,6 @@ private:
     void add_biomes(const Types &p_types, Dictionary &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
     void add_moment_blobs(int p_blob_type, Dictionary &r_stats);
-    // A record's moment item: its moments, material and the first LOD it is gone at (dropped, or eroded past its half
-    // thickness); empty moments for one that weighs nothing (removed, a cutter, a blob, never dropped).
-    Archetype::MomentItem moment_item(const Archetype::TableRecord &p_rec) const;
-    // A blob's record (op ACCUM, listed at its layer's LOD alone).
-    Archetype::TableRecord blob_record(const Archetype::MomentBlob &p_blob) const;
     // After record p_id changed: its item updated in the moment layers (MomentLayers::update) and the kept blobs that
     // changed applied to the table (added, replaced, removed): their ids appended to r_ids, their regions to edit_regions.
     void update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids);

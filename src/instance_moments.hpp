@@ -24,6 +24,9 @@ inline void local_to_world(const float *p_r, const double p_q[3], double r_w[3])
     }
 }
 
+// A symmetric tensor (xx yy zz xy xz yz) from a local frame to the world axes: R^T S R, p_r the world -> local rotation.
+void rotate_symmetric(const double p_s[6], const float *p_r, double r_out[6]);
+
 struct Moments {
     double m0 = 0.0;
     double c[3] = {}; // centroid (voxels), relative to the owner's anchor

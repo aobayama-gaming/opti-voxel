@@ -333,6 +333,20 @@ to every change, and a reviewer may reject a PR on any of them.
   of its spread, largest semi-axis 0.2-0.9%; summed over 400 trees within 0.5% (one class per species: the broadleaf's
   leaves 5% light, the record budget cuts big trees' clumps). `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
+  **The forest field** (`src/forest_field.*`, pure, CPU): a forest as keys whose records are a pure function of the key
+  (`FieldKey`: kind, LOD, tile), what streaming loads per chunk (`keys(box, lod)`, conservative: unit-tested to miss no
+  record that can reach the box). A tree tile of LOD L (8 forest cells per side): the parts listed at L of the trees
+  whose base lies in it (39 parts per tree at LOD 0, 8 at LOD 6, 1.4 at LOD 7 at 5 cm: the hull and cone tiers stay
+  listed to LOD 7, so the forest is parts out to the LOD-7 ring). A blob tile of layer L (4 layer cells per side, at
+  least a tree tile wide): its cells' kept blobs from a `MomentLayers` build of the items around it (5 cells past it:
+  tents and pruning neighbours) with the joins fixed by the `ForestProfile` (`TreeSamples`, the classes' samples,
+  finished like table records: reach, `lod_end`, joins, the mean tree's lost moments per LOD). Part layers (a cell under
+  3 forest cells: layers 2-5 at 5 cm) read the grown parts: bit for bit a whole build's blobs (unit test, 80k blobs at
+  layer 2). Above, proxies: one per half layer cell along the surface (`surface_sites`), the mean tree's lost moments
+  times the trees its patch holds in the zone: the cost per tile is the same at any layer and tree count; mass within
+  2-8% of the trees', supports 1.2-1.4x, mean peak 12-14% low (layers 6-7; at layer 5, a cell of a few trees, proxies
+  made blobs twice as wide as the twigs' thin ones: hence the part layers). `parallel_for` runs inline on a thread holding
+  an `InlineParallelFor` (a pool task computing a key).
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum

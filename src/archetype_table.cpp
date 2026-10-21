@@ -878,4 +878,9 @@ String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int6
     return String();
 }
 
+void finish_table_record(const DefLibrary &p_library, const RecordFinish &p_finish, TableRecord &r_record) {
+    r_record.material = record_material(r_record.material, p_library.material(r_record.def), r_record.op);
+    finish_record(p_library[r_record.def], r_record, p_finish.skirt_depth, p_finish.band, p_finish.rule);
+}
+
 } // namespace Archetype
