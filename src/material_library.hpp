@@ -40,7 +40,7 @@ static constexpr uint32_t INHERIT = UINT32_MAX - 1;
 enum Pattern : int {
     PATTERN_NONE = 0,
     PATTERN_LAVA = 1, // a warped crust: dark seams over a drifting glow
-    PATTERN_BARK = 2, // plates and grooves along world up, knots (a solid texture, the page shader's bark_height)
+    PATTERN_BARK = 2, // plates and grooves along world up, knots (a 3D noise, the page shader's bark_grain)
 };
 
 struct Params {
