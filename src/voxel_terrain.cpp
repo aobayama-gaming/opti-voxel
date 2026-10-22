@@ -937,6 +937,11 @@ void VoxelTerrain::_process(double) {
     }
     process_stats.compact.add(now_usec() - t0);
 
+    // The stalled chunks hide the sub-cubes their replacements cover. After compaction: the rows are current.
+    t0 = now_usec();
+    visual_mesh_data.push_coverage();
+    process_stats.coverage.add(now_usec() - t0);
+
     if ((debug_gpu_profile && exec_time % 15 == 0) || debug_gpu_profile_frames) {
         if (!gpu_profiler) {
             gpu_profiler = memnew(GPUProfiler);
@@ -1215,7 +1220,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
     Dictionary destroy;
     destroy["leaving"] = (int64_t)visual_mesh_data.leaving.size();
     destroy["leaving_max"] = vs.leaving_max;
-    destroy["stalled"] = (int64_t)visual_mesh_data.stall_count.size();
+    destroy["stalled"] = (int64_t)visual_mesh_data.stalled.size();
     destroy["rescans"] = vs.rescans;
     destroy["rescan_reanchored"] = vs.rescan_reanchored;
     destroy["rescan_ms_total"] = vs.rescan_usec / 1000.0;
@@ -1224,6 +1229,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     destroy["verify_mismatches"] = vs.verify_mismatches;
     destroy["delta_mismatches"] = vs.delta_mismatches;
     destroy["octree_violations"] = vs.octree_violations;
+    destroy["coverage_hidden_subcubes"] = visual_mesh_data.hidden_subcubes(); // now
+    destroy["coverage_written"] = vs.coverage_written;
+    destroy["coverage_written_max"] = vs.coverage_written_max;
     d["destroy"] = destroy;
 
     if (gpu_profiler) {

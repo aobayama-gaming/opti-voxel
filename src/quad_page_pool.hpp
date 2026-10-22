@@ -81,6 +81,10 @@ public:
     void rt_kill_range(int p_page, uint32_t p_offset, uint32_t p_count);
     // Copies p_rows groups (texture rows) from one page to another (different) page.
     void rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_row, uint32_t p_dst_row, uint32_t p_rows);
+    // Writes header texels 1 and 2 (PageFormat::encode_coverage) of chunks' rows: (page, first row, rows, 64-bit mask,
+    // z low word | palette << 32) per chunk. A chunk's rows are at most a page's.
+    static constexpr int HIDDEN_WRITE_WORDS = 5;
+    void rt_set_hidden(const PackedInt64Array &p_writes);
 
 private:
     struct Page {
@@ -115,6 +119,10 @@ private:
     // render thread only
     std::vector<PageRT> rt_pages;
     RID rt_zero_texture;
+    // Header texels 1 and 2 per row, a page's rows tall, one per round of an rt_set_hidden call (created on demand):
+    // filled with texture_update (whole layers only) from rt_hidden_bytes, then each chunk's run is copied into its rows.
+    std::vector<RID> rt_hidden_staging;
+    PackedByteArray rt_hidden_bytes;
 
     int _create_page(int p_index = -1);
     int64_t _alive_pages() const { return (int64_t)pages.size() - (int64_t)trimmed_pages.size(); } // with resources

@@ -291,7 +291,7 @@ Float4 moment_surface(const Float4 &p_r, const Float4 &p_phi, int p_lod, uint32_
     const Float4 lift{ p_r.x - p_phi.x * h, p_r.y - p_phi.y * h, p_r.z - p_phi.z * h, p_r.w - p_phi.w * h };
     const float n2 = p_phi.x * p_phi.x + p_phi.y * p_phi.y + p_phi.z * p_phi.z;
     const float gh = ExactNoise::det_rsqrt(MAX(n2, MOMENT_GRAD_FLOOR)) * h;
-    const Float4 occ{ -p_phi.x * gh, -p_phi.y * gh, -p_phi.z * gh, (MOMENT_ISO - p_phi.w) * gh };
+    const Float4 occ{ -p_phi.x * gh, -p_phi.y * gh, -p_phi.z * gh, MAX((MOMENT_ISO - p_phi.w) * gh, -(MOMENT_DEPTH_CELLS * h)) };
     if (r_material && p_best != ChunkPalette::INHERIT_INDEX && p_phi.w >= MOMENT_MATERIAL_ISO) {
         *r_material = p_best;
     }
@@ -376,7 +376,7 @@ vec4 arch_moments(vec4 r, vec4 phi, int lod, uint best, inout uint material) {
     precise vec4 lift = vec4(r.x - phi.x * h, r.y - phi.y * h, r.z - phi.z * h, r.w - phi.w * h);
     precise float n2 = phi.x * phi.x + phi.y * phi.y + phi.z * phi.z;
     precise float gh = det_rsqrt(max(n2, MOMENT_GRAD_FLOOR)) * h;
-    precise vec4 occ = vec4(-phi.x * gh, -phi.y * gh, -phi.z * gh, (MOMENT_ISO - phi.w) * gh);
+    precise vec4 occ = vec4(-phi.x * gh, -phi.y * gh, -phi.z * gh, max((MOMENT_ISO - phi.w) * gh, -(MOMENT_DEPTH_CELLS * h)));
     if (best != INHERIT_INDEXu && phi.w >= MOMENT_MATERIAL_ISO) {
         material = best;
     }
@@ -396,6 +396,7 @@ String generate_library_glsl(const DefLibrary &p_library) {
 String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize) {
     String code = String(GLSL_TABLE_FOLD)
                           .replace("LIMIT", itos(INPUT_LIMIT))
+                          .replace("MOMENT_DEPTH_CELLS", glsl_float(MOMENT_DEPTH_CELLS))
                           .replace("MOMENT_GRAD_FLOOR", glsl_float(MOMENT_GRAD_FLOOR))
                           .replace("MOMENT_MATERIAL_ISO", glsl_float(MOMENT_MATERIAL_ISO))
                           .replace("MOMENT_ISO", glsl_float(MOMENT_ISO))

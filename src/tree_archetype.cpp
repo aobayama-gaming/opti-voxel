@@ -1,8 +1,6 @@
 // Trees as archetype-table instances (tree_archetype.hpp).
 #include "tree_archetype.hpp"
 
-#include "parallel_for.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <queue>
@@ -71,7 +69,6 @@ constexpr int MAX_REFINE = 3;
 constexpr int MAX_ORDER = 2;
 // Rotation components smaller than this are 0 (keeps every product of the program in the exact domain).
 constexpr double ROTATION_FLUSH = 0x1p-24;
-constexpr uint32_t FOREST_SEED = 0xF0E57u;
 
 struct Stem {
     Vec p0; // voxels from the tree's base, whole voxels
@@ -454,190 +451,8 @@ void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxi
     Grower(p_species, p_base, p_seed, p_voxel, p_types, r_out, r_stems, Vec{ p_up[0], p_up[1], p_up[2] }).grow();
 }
 
-int64_t forest_cell_side(int p_count, double p_area_m, double p_voxel) {
-    if (p_count <= 0 || !(p_area_m > 0.0)) {
-        return 0;
-    }
-    return MAX<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
-}
-
-bool cell_site(const VoxelPos &p_cell, int64_t p_side, const FieldFn &p_field, TreeSite &r_site) {
-    const uint32_t key = ExactNoise::hash_cell(p_cell, FOREST_SEED);
-    const ExactNoise::UVec3 h = hash3(key, 0x51E5u, 0u);
-    const ExactNoise::UVec3 g = hash3(key, 0x51E5u, 1u);
-    const uint32_t u[3] = { h.x, h.y, g.x };
-    const VoxelBox cell{ p_cell * p_side, p_cell * p_side + VoxelPos(p_side - 1, p_side - 1, p_side - 1), true };
-    VoxelPos q;
-    for (int a = 0; a < 3; a++) {
-        q[a] = cell.lo[a] + p_side / 2 + std::llround((unit_of(u[a]) - 0.5) * 0.7 * double(p_side));
-    }
-    ExactNoise::Float4 f = p_field(q);
-    for (int i = 0; i < SITE_STEPS && !(std::fabs(f.w) <= 1.0f); i++) {
-        const double g2 = double(f.x) * f.x + double(f.y) * f.y + double(f.z) * f.z;
-        const double s = -double(f.w) / g2;
-        // A step longer than two cells leaves the cell anyway (and a flat gradient would overflow the voxel).
-        if (!(g2 > 0.0) || !(std::fabs(s) * std::sqrt(g2) <= 2.0 * double(p_side))) {
-            return false;
-        }
-        const VoxelPos step(std::llround(s * f.x), std::llround(s * f.y), std::llround(s * f.z));
-        if (step == VoxelPos()) {
-            break;
-        }
-        q += step;
-        f = p_field(q);
-    }
-    if (!(std::fabs(f.w) <= 1.0f) || !cell.contains(q)) {
-        return false; // not on the surface, or the surface point belongs to another cell
-    }
-    r_site.base = q;
-    r_site.seed = h.z;
-    r_site.species = int((h.z >> 16) % uint32_t(tree_species().size()));
-    return true;
-}
-
-namespace {
-
-bool cell_order(const VoxelPos &p_a, const VoxelPos &p_b) {
-    return p_a.z != p_b.z ? p_a.z < p_b.z : (p_a.y != p_b.y ? p_a.y < p_b.y : p_a.x < p_b.x);
-}
-
-const VoxelPos CORNERS[8] = { VoxelPos(0, 0, 0), VoxelPos(1, 0, 0), VoxelPos(0, 1, 0), VoxelPos(1, 1, 0), VoxelPos(0, 0, 1), VoxelPos(1, 0, 1),
-    VoxelPos(0, 1, 1), VoxelPos(1, 1, 1) };
-
-// The nodes of side p_n (voxels) meeting p_box, in node units.
-std::vector<VoxelPos> nodes_meeting(const VoxelBox &p_box, int64_t p_n) {
-    VoxelPos a, b;
-    for (int i = 0; i < 3; i++) {
-        a[i] = WorldCoord::floor_div(p_box.lo[i], p_n);
-        b[i] = WorldCoord::floor_div(p_box.hi[i], p_n);
-    }
-    std::vector<VoxelPos> nodes;
-    for (int64_t z = a.z; z <= b.z; z++) {
-        for (int64_t y = a.y; y <= b.y; y++) {
-            for (int64_t x = a.x; x <= b.x; x++) {
-                nodes.emplace_back(x, y, z);
-            }
-        }
-    }
-    return nodes;
-}
-
-// Which of p_nodes (side p_n) have a corner within SURFACE_NODE_SIDES node sides of the surface: each corner, shared by
-// up to 8 nodes, evaluated once (as the discoverer does).
-std::vector<uint8_t> near_surface(const std::vector<VoxelPos> &p_nodes, int64_t p_n, const FieldFn &p_field) {
-    std::vector<VoxelPos> corners;
-    corners.reserve(p_nodes.size() * 8);
-    for (const VoxelPos &node : p_nodes) {
-        for (const VoxelPos &c : CORNERS) {
-            corners.push_back(node + c);
-        }
-    }
-    std::sort(corners.begin(), corners.end(), cell_order);
-    corners.erase(std::unique(corners.begin(), corners.end()), corners.end());
-    std::vector<uint8_t> close(corners.size(), 0);
-    const double limit = SURFACE_NODE_SIDES * double(p_n);
-    parallel_for(uint32_t(corners.size()), "near_surface", [&](uint32_t p_i) { close[p_i] = std::fabs(double(p_field(corners[p_i] * p_n).w)) <= limit; });
-    std::vector<uint8_t> near(p_nodes.size(), 0);
-    for (size_t i = 0; i < p_nodes.size(); i++) {
-        for (const VoxelPos &c : CORNERS) {
-            const VoxelPos corner = p_nodes[i] + c;
-            if (close[std::lower_bound(corners.begin(), corners.end(), corner, cell_order) - corners.begin()]) {
-                near[i] = 1;
-                break;
-            }
-        }
-    }
-    return near;
-}
-
-// The cells (of p_side voxels) meeting p_box that the surface may cross, in cell order: an absolute octree walk from the
-// coarsest level whose node holds the box, keeping a node while near_surface.
-std::vector<VoxelPos> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field) {
-    int64_t extent = 1;
-    for (int a = 0; a < 3; a++) {
-        extent = MAX(extent, p_box.hi[a] - p_box.lo[a] + 1);
-    }
-    int level = 0; // p_side << level >= extent, without overflowing
-    while (level < 62 && ((extent - 1) >> level) >= p_side) {
-        level++;
-    }
-    std::vector<VoxelPos> nodes = nodes_meeting(p_box, p_side << level);
-    std::vector<VoxelPos> kept;
-    for (;; level--) {
-        const std::vector<uint8_t> near = near_surface(nodes, p_side << level, p_field);
-        kept.clear();
-        for (size_t i = 0; i < nodes.size(); i++) {
-            if (near[i]) {
-                kept.push_back(nodes[i]);
-            }
-        }
-        if (level == 0) {
-            break;
-        }
-        nodes.clear();
-        const int64_t m = p_side << (level - 1);
-        for (const VoxelPos &k : kept) {
-            for (const VoxelPos &c : CORNERS) {
-                const VoxelPos child = k * 2 + c;
-                if (VoxelBox{ child * m, child * m + VoxelPos(m - 1, m - 1, m - 1), true }.intersects(p_box)) {
-                    nodes.push_back(child);
-                }
-            }
-        }
-    }
-    std::sort(kept.begin(), kept.end(), cell_order);
-    return kept;
-}
-
-} // namespace
-
-void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<CellSite> &r_out) {
-    if (p_side <= 0) {
-        return;
-    }
-    const VoxelBox box{ p_lo, p_hi, true };
-    const std::vector<VoxelPos> cells = surface_cells(box, p_side, p_field);
-    std::vector<TreeSite> found(cells.size());
-    std::vector<uint8_t> ok(cells.size(), 0);
-    parallel_for(uint32_t(cells.size()), "surface_sites", [&](uint32_t p_i) { ok[p_i] = cell_site(cells[p_i], p_side, p_field, found[p_i]); });
-    for (size_t i = 0; i < cells.size(); i++) {
-        if (ok[i] && box.contains(found[i].base)) {
-            r_out.push_back(CellSite{ cells[i], found[i] });
-        }
-    }
-}
-
-void forest_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, std::vector<TreeSite> &r_out) {
-    // Every site of the cells next to the box's (a neighbour's site is in its own cell, which meets the grown box).
-    std::vector<CellSite> all;
-    const VoxelPos grow(p_side, p_side, p_side);
-    surface_sites(p_lo - grow, p_hi + grow, p_side, p_field, all);
-    const VoxelBox box{ p_lo, p_hi, true };
-    const double spacing = SITE_SPACING * double(p_side);
-    for (const CellSite &cs : all) {
-        if (!box.contains(cs.site.base)) {
-            continue;
-        }
-        bool crowded = false;
-        for (int64_t dz = -1; dz <= 1 && !crowded; dz++) {
-            for (int64_t dy = -1; dy <= 1 && !crowded; dy++) {
-                for (int64_t dx = -1; dx <= 1 && !crowded; dx++) {
-                    const VoxelPos n = cs.cell + VoxelPos(dx, dy, dz);
-                    if (!cell_order(n, cs.cell)) {
-                        continue; // only the neighbours before it in cell order
-                    }
-                    const auto it = std::lower_bound(all.begin(), all.end(), n, [](const CellSite &p_a, const VoxelPos &p_b) { return cell_order(p_a.cell, p_b); });
-                    if (it != all.end() && it->cell == n) {
-                        const VoxelPos d = it->site.base - cs.site.base;
-                        crowded = std::sqrt(double(d.x) * d.x + double(d.y) * d.y + double(d.z) * d.z) < spacing;
-                    }
-                }
-            }
-        }
-        if (!crowded) {
-            r_out.push_back(cs.site);
-        }
-    }
+int tree_species_of(uint32_t p_variant) {
+    return int(p_variant % uint32_t(tree_species().size()));
 }
 
 } // namespace Archetype

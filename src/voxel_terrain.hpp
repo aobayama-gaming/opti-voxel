@@ -156,13 +156,14 @@ private:
         TimingStat mesher_collect; // get_results
         TimingStat destroy_chunks; // VoxelState::destroy_marked
         TimingStat compact; // GPUDirectMesher::compact
+        TimingStat coverage; // VoxelState::push_coverage
 
         // The sections by name, for the reports.
         std::vector<std::pair<const char *, const TimingStat *>> sections() const {
             return { { "total", &process_total }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
                 { "destroy_from_scan", &destroy_from_scan }, { "destroy_verify", &destroy_verify },
                 { "mesher_dispatch", &mesher_dispatch }, { "mesher_collect", &mesher_collect },
-                { "destroy_chunks", &destroy_chunks }, { "compact", &compact } };
+                { "destroy_chunks", &destroy_chunks }, { "compact", &compact }, { "coverage", &coverage } };
         }
     } process_stats;
 
