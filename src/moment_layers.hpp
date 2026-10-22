@@ -49,9 +49,11 @@ struct MomentItem {
     // Its erosion (archetype_table.hpp band_erosion; erode 0: whole until its drop).
     float erode = 0.0f;
     float erode_from = 1.0f;
-    // Set by the layers from the moments: the ellipsoid's semi-axes (ascending) and the area tensor (xx yy zz xy xz yz).
+    // Set by the layers from the moments: the ellipsoid's semi-axes (ascending) and the area tensor (xx yy zz xy xz yz),
+    // unless area_given (an aggregate of many parts, a far proxy: their summed silhouettes, not one ellipsoid's).
     float semi[3] = {};
     double area[6] = {};
+    bool area_given = false;
 
     // The share of its mass the LOD no longer draws (0 .. 1).
     double lost_share(int p_lod) const;
@@ -98,7 +100,7 @@ struct MomentBlob {
     double occupancy(const double p_offset[3]) const;
 };
 
-// The semi-axes and area tensor of p_item from its moments.
+// The semi-axes and area tensor (unless area_given) of p_item from its moments.
 void prepare_moment_item(MomentItem &r_item);
 
 // A blob of one cell's moments and area tensor at layer p_lod (the kernel's frame, size and amplitude); p_anchor: the

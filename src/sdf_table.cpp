@@ -467,11 +467,9 @@ void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
     }
     const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
     moment_blob_type = p_blob_type;
-    MomentLayerParams params;
+    MomentLayerParams params = moment_params();
     params.lod_min = lod_count;
     params.lod_max = lod_count - 1;
-    // Fainter, even with its neighbours, than what draws a material: it would only lift the surface by an eighth of a cell.
-    params.min_occupancy = MOMENT_MATERIAL_ISO;
     std::vector<MomentItem> items(records.size());
     int64_t weighed = 0;
     for (uint32_t i = 0; i < records.size(); i++) {
@@ -507,6 +505,27 @@ void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
     if (refused > 0) {
         ERR_PRINT(vformat("SDFTable: %d moment blobs left out (too wide, or the table is full).", refused));
     }
+}
+
+MomentLayerParams SDFTable::moment_params() const {
+    MomentLayerParams params;
+    // Fainter, even with its neighbours, than what draws a material: it would only lift the surface by an eighth of a cell.
+    params.min_occupancy = MOMENT_MATERIAL_ISO;
+    return params;
+}
+
+ScatterSource::Setup SDFTable::source_setup(const Source &p_source, uint32_t p_id) const {
+    ScatterSource::Setup s;
+    s.id = p_id;
+    s.library = library;
+    s.scatter = p_source.scatter;
+    s.blob_type = moment_blobs && instance_band ? blob_type : -1;
+    s.finish = record_finish();
+    s.layers = moment_params();
+    s.max_extent = max_instance_extent();
+    s.chunk_voxels = param.chunk_voxel_dimension();
+    s.lod_count = lod_count;
+    return s;
 }
 
 bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
@@ -596,6 +615,7 @@ void SDFTable::build_table(int p_lod_count) {
         types.biome = Biome::add_types(lib, vs);
     }
     const int blob = lib.add(make_moment_blob_type());
+    blob_type = blob;
     library = std::make_shared<const DefLibrary>(lib);
     for (int i = 0; i < library->size(); i++) {
         const String error = (*library)[i].program.validate(p_lod_count);
