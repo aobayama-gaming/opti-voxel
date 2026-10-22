@@ -15,6 +15,8 @@ struct ChunkOutput;
 struct ChunkReleaser {
     virtual ~ChunkReleaser() = default;
     virtual void release_chunk(const ChunkOutput &p_chunk) = 0;
+    // The chunk's hidden sub-cubes (PageFormat's coverage texel; 0 draws all), from its current rows.
+    virtual void set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) = 0;
 };
 
 struct ChunkOutput {
