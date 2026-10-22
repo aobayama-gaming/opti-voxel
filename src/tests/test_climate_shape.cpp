@@ -423,7 +423,7 @@ TEST_CASE("Climate shape: every landform table loads") {
 // is within the outer chunk's skirt depth, the cap lifted (the bound itself; the cap is a cost choice). Height terms and
 // terraces read the fields at each chunk's own level 0, so their steps come from the fields' L+2 / L+3 octaves.
 TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the skirt depth with ground terms") {
-    for (const char *path : { "res://climate/shaped_test.json", "res://climate/example.json", "res://climate/landforms/cliff.json" }) {
+    for (const char *path : { "res://climate/shaped_test.json", "res://climate/example.json", "res://climate/landforms/cliff.json", "res://climate/region_test.json" }) {
         CAPTURE(path);
         ClimateSDF c(path, 15, 1e6f);
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);

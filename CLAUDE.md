@@ -481,7 +481,7 @@ to every change, and a reviewer may reject a PR on any of them.
   `climate_glsl.cpp`; `VoxelTerrain.climate_path` / `--climate=PATH`, bench and player; off by
   default): a climate is data, a JSON table (format above `parse()`, example `project/climate/example.json`, tuned for
   5 cm: at 0.5 m its x2 mountains exceed the cap and the table is refused) checked against
-  `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (8) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
+  `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (24) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
   the ground's range (seeds `make_octave(field seed, k)`, keyed by k; a `from_m` .. `to_m` range of bands or multipliers
   keeps the octaves the LOD count has, each at the same amplitude, so one table covers the whole spectrum at 15 and 25
   LODs; a single wavelength outside is refused), plus linear terms `coef * (the ground or an earlier
@@ -551,7 +551,7 @@ to every change, and a reviewer may reject a PR on any of them.
   values' finite differences against 2.5% plain, and a multifractal's state streaked). The `Modulation` returns a
   `Cascade::BandMod` per group: three amplitudes, the state, the warp, a feature mask. (2) **Multifractal** (`"multifractal":
   gain`): the octave is weighted by `clamp(gain (1 - c))`, c a band-less field group (`Modulation::state_group`, the
-  table's fields + 1, so at most 7 fields) that the ground's band overwrites with the complement of its weighted
+  table's fields + 1, so at most 23 fields) that the ground's band overwrites with the complement of its weighted
   uncentred signal (Musgrave's ridged multifractal: gain 2 + ridged; hybrid: 1 + plain + offset). (3) **Warp**
   (`"warp_m"` + three `"warp_fields"`): the band's noise is read at the point displaced by the fields' values (int64 +
   fraction, `WARP_LIMIT`), its gradient by the chain rule (the fields' gradients). Slope damping (Quilez, de Carpentier)
@@ -604,6 +604,12 @@ to every change, and a reviewer may reject a PR on any of them.
     needles, and folds where dh/dy passes 1. On the Mont Blanc match, unstretched: 8.7 m at the 100 m octave against
     2.6 m real, 0.4% of slopes over 75°, spectrum score 0.40 (folds 0.05%). A stretch of 4 from 100 m up: 2.3 m, none,
     0.13.
+- **Regions** (`"regions"`, `Climate::Region`, `Climate::edges_value` / `glsl_edges_value`, evaluated by the ground only: `ground_value` / `climate_ground`, over `Table::gated`):
+  a named product of edges, for several landforms in one table picked by macro climate fields. A biome's `"region"` puts
+  its edges first; a height term's multiplies the term (a curve required: `ground_step` adds the gate's step).
+  `region_test.json` (CascadeSpike set `4r`, 11 field groups) equals `valley.json` bit for bit in its cold core. The
+  field group cap is 24 (the GPU's arrays are sized per spec); every group is carried at every point. Details:
+  `docs/landforms.md`, "Using a landform in a world".
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -634,7 +640,7 @@ to every change, and a reviewer may reject a PR on any of them.
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
-  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers) (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
+  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers; `4r` the two-landform region table) (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
   `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade
   with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample_sdf` + skirt (`--table`, G9); the
   example climate's per-sample biome material vs `SDFCascade::ground_material`, every LOD (`--biomes`, G10); GPU timestamps of the passes for

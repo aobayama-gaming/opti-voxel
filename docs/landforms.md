@@ -204,9 +204,31 @@ slice puts amplitude into the fine octaves that a heightmap doesn't have, and wh
 
 ## Using a landform in a world
 
-Each table is a whole climate. Several landforms in one world are several biomes of one table, each behind its edges
-on shared fields. Height terms apply everywhere, so a landform that lifts its own ground (the cliff's scarp, the
-island's cone) can't yet be kept to its biome: that needs per-biome height terms, with a skirt bound of their own.
+Each table is a whole climate. A world puts several landforms in one table, each behind a **region** of macro climate
+fields (temperature, humidity, wind):
+
+```json
+"regions": [{"name": "cold", "where": [{"field": "temperature", "max": 0.0, "fade": 0.05}]}],
+"heights": [{"field": "valley", "height_m": 2100, "curve": [...], "region": "cold"}],
+"biomes":  [{"name": "floor", "region": "cold", "where": [{"field": "valley", "min": 0.19, "fade": 0.02}], ...}]
+```
+
+- A biome's `region` puts the region's edges before its own.
+- A height term's `region` multiplies the term by the region. So the trough, the cliff or the coast exists only in its
+  region. The term needs a curve: the skirts bound its step with the region's.
+- Keep each landform's feature fields as they are: its edges and curve points are tuned to their quantiles.
+- In a region's core the landform is its standalone table, bit for bit. `project/climate/region_test.json` (the valley
+  behind "cold", the cliff's and the mangrove's terms behind "warm") equals `valley.json` there: 3,493 points at LODs
+  0, 3 and 7, every SDF value and pick the same (`test_climate_regions.cpp`).
+- The core starts some way inside the region's edge. The modulation reads the biome weights at the cascade's coarser
+  lattices, which sit kilometres apart for a 13 km axis. Leave room for that when laying regions out.
+- Across a border the two halves of a landform fade at slightly different places: the height terms read the region at
+  the sample, the octave multipliers at those coarser lattices. One evaluation point for both would need the region
+  carried down the cascade like a field.
+- A table carries at most 24 field groups (`Cascade::MAX_FIELD_GROUPS`). Only the CPU's slot arrays are sized by it; the
+  GPU code is generated per table.
+- Every field group is carried at every point, so a world pays for all its landforms everywhere. Skipping the groups
+  whose region is 0 over a whole chunk is a per-chunk reduced SDF, with its own design.
 
 ## On a planet base
 
