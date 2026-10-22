@@ -19,7 +19,8 @@ namespace Climate {
 //                      | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional), shape (optional) } ],
 //             "terms": [ { "source": "ground", "per_m": -0.002 } | { "source": "<earlier field>", "x": 0.5 } ] }
 //   stretch: { "from_m": 100, "to_m": 30000000 (or "wavelength_m"), "stretch_y": 4 }: the ground's octaves in range
-//           read their noise at y / 4 (their wavelength along y 4 times theirs along x and z); a field band takes
+//           read their noise squeezed 4 times along the base's up (y on the flat world: their wavelength along it 4
+//           times the tangent ones); a field band takes
 //           "stretch_y" too. A power of two; octave k takes at most 2^(k - 3) of it (BaseSurface::stretched: a range's finest
 //           octaves are stretched less), and no octave is stretched twice. The ground is a 3D noise
 //           whose vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs (steep

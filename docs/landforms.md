@@ -8,8 +8,8 @@ terraces and stretched octaves. This page explains:
 - what each landform takes, with the real and generated statistics side by side;
 - which tool fits which feature: what worked and what didn't.
 
-The results, as comparison sheets and in-engine screenshots, are outside the repo in
-`~/Drive/perso/opti-voxel/landforms-2026-10-22/`.
+The tools write their heightmaps and comparison sheets under `bench/results/` (gitignored): `fetch_dem.py` to
+`bench/results/landforms/dem/` unless `--out=DIR`, `match.py` to `bench/results/<site>-match/` unless `--out=DIR`.
 
 ## The loop
 
@@ -19,7 +19,7 @@ The results, as comparison sheets and in-engine screenshots, are outside the rep
    5 cm voxels, so the engine can sample the same grid: 25.6 m or 51.2 m, 512 x 512.
 2. **Generated data.** `tools/climate_report.sh --lattice=M` samples a climate table on lattice Λ_M, each column at
    its ground surface, using the CPU cascade at a few µs per point.
-   - It writes `heights.f32`: metres above the datum.
+   - It writes `heights.f32`: metres above the base (the flat world's datum).
    - It also writes `fields.f32` (the field values), `dhdy.f32` (the ground's vertical slope) and `picks.u8`.
 3. **Comparison.** `uv run tools/landforms/compare.py --real=SITE --gen=RUN` (statistics in `terrain_stats.py`)
    prints the table below and draws a sheet with:
@@ -161,7 +161,7 @@ The ground is 3D noise, so dh/dy is as large as dh/dx. Wherever a landform is st
 - **Before stretching:** 6% of the mountain's columns had dh/dy > 1. Those are needles and overhangs, and 18 m of
   spurious amplitude at 100 m, against 2.6 m real.
 - **The fix, `ground_stretch` / `"stretch_y"`.** The noise is read at y / 2^j.
-  - Octave k's wavelength along y becomes 2^(k+j), at most 2^(2k−3), so its insertion lattice divides exactly.
+  - Octave k's wavelength along the base's up (y on the flat world) becomes 2^(k+j), at most 2^(2k−3), so its insertion lattice divides exactly.
   - Its y gradient is scaled back by 2^−j.
   - It is bit-exact on the GPU (CascadeSpike 4s).
 - **Result:** with a stretch of 4 from 100 m up, the mountain folds on 0% of its columns, and its spectrum score drops
@@ -189,7 +189,7 @@ The ground is 3D noise, so dh/dy is as large as dh/dx. Wherever a landform is st
 ### Limits found, and what would close them
 
 - **Anisotropy.** Real ranges and dunes run in one direction: anisotropy 1.4-2.4 against 1.0-1.1 generated. Linear
-  dunes and parallel ranges need an anisotropic octave, stretched in x or z like y now is.
+  dunes and parallel ranges need an anisotropic octave, stretched along a tangent direction like the up one now is.
 - **Drowned and glacial valleys.** Moorea's bays and the Alps' troughs are erosion, i.e. flow. The research note's
   erosion filter (Johansen 2026, point-evaluated) is the reference to port.
 - **Tiny relief.** Mangrove blobs and dune ripples under a metre are invisible from more than a few metres up. They
@@ -200,6 +200,16 @@ The ground is 3D noise, so dh/dy is as large as dh/dx. Wherever a landform is st
 
 ## Using a landform in a world
 
-Each table is a whole climate. To put several landforms in one world, take each one's biome (its multipliers, shapes,
-warps) into one table behind region edges. Then lay its height terms on its own fields, and make the fields shared
-by the biomes' edges.
+Each table is a whole climate. Several landforms in one world are several biomes of one table, each behind its edges
+on shared fields. Height terms apply everywhere, so a landform that lifts its own ground (the cliff's scarp, the
+island's cone) can't yet be kept to its biome: that needs per-biome height terms, with a skirt bound of their own.
+
+## On a planet base
+
+The ground reads its altitude and up from the base surface (`src/base_surface.hpp`), so the tables carry over to a
+sphere unchanged:
+
+- **Reads the base:** the ground's distance (`d_base`, `n`), the stretched octaves (squeezed along `n`, not y), the
+  climate report (a tangent-plane grid traced down `n`) and the player's `--spawn` (tangent coordinates).
+- **Still assumes y:** `SDFTable::ground_y` (column traces for the instance scenes' centres), the forest's and the rock
+  scatter's xz zones, and the biome features' xz cells (lakes, islands). They move to the base with the planet PR.

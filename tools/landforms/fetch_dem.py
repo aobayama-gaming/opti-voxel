@@ -8,7 +8,8 @@ data bucket copernicus-dem-30m), cropped to each site's square and resampled bil
 
     uv run tools/landforms/fetch_dem.py [--out=DIR] [--cache=DIR] [site ...]
 
-Writes <out>/<site>.npy (float32 metres above sea level, row 0 north) and <out>/<site>.json (name, centre, spacing).
+Writes <out>/<site>.npy (float32 metres above sea level, row 0 north) and <out>/<site>.json (name, centre, spacing);
+--out defaults to <repo>/bench/results/landforms/dem, where compare.py and match.py read them.
 Tiles are cached in --cache (default ~/.cache/opti-voxel/dem): one 1x1 degree GeoTIFF of ~30 m each.
 """
 import json
@@ -93,7 +94,7 @@ def main() -> None:
     opts = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
     here = Path(__file__).resolve().parent
     sites = json.loads((here / "sites.json").read_text())["sites"]
-    out = Path(opts.get("out", Path.home() / "Drive/perso/opti-voxel/landforms-2026-10-22/dem")).expanduser()
+    out = Path(opts.get("out", here.parents[1] / "bench/results/landforms/dem")).expanduser()  # compare.DEM_DIR
     cache = Path(opts.get("cache", Path.home() / ".cache/opti-voxel/dem")).expanduser()
     for key in args or sites:
         fetch(key, sites[key], out, cache)

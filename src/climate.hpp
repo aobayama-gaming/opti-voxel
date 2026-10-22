@@ -159,7 +159,7 @@ struct Table {
     std::vector<Field> fields;
     std::vector<Biome> biomes;
     std::vector<HeightTerm> heights;
-    // (k, stretch) of the ground's octaves stretched along y ("ground_stretch": Band::stretch, combined_spec).
+    // (k, stretch) of the ground's octaves stretched along the base's up ("ground_stretch": Band::stretch, combined_spec).
     std::vector<std::pair<int, int>> ground_stretch;
 
     int field_index(const String &p_name) const;
@@ -168,7 +168,7 @@ struct Table {
     // Whether the ground at a sample is more than the cascade's (height terms or terraces: ground_value).
     bool has_ground_terms() const;
     bool has_terraces() const;
-    // Whether a field band or a ground octave is stretched along y.
+    // Whether a field band or a ground octave is stretched along the base's up.
     bool has_stretch() const;
 };
 

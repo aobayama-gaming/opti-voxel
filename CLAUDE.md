@@ -579,9 +579,12 @@ to every change, and a reviewer may reject a PR on any of them.
   - `match.py` fits one multiplier per octave, `--hypso` a height remap, `--texture` a biome without its features.
   - The findings (which tool for which feature) are in the doc.
 
-  **Stretched octaves** (`"ground_stretch"`, a band's `"stretch_y"`; `Band::stretch`, at most k − 3; `Cascade::stretched`
-  / GLSL `cascade_stretched`, the band table's `info.w`): the noise is read at y / 2^j and its y gradient scaled by
-  2^−j. A table without stretch generates the same shader text (the `plain.json` pin).
+  **Stretched octaves** (`"ground_stretch"`, a band's `"stretch_y"`; `Band::stretch`, at most k − 3; the band table's
+  `info.w`): through the base (`BaseSurface::stretched` / `stretch_gradient`), the noise is read at p − (1 − 2^-j) d n
+  and its gradient's up component scaled by 2^−j. Flat: datum + (y − datum) / 2^j exactly (GLSL `base_stretched`),
+  centred on the datum; sphere: the base sample's float offset (`base_stretched_at`, CPU and GLSL with FrameSpike's
+  `stretched_sphere`; its GPU path needs the planet PR's regions). A table without stretch generates the same shader
+  text (the `plain.json` pin).
   - Why: the ground is 3D, so a steep landform's dh/dy passes 1 and folds into needles. That happened on 6% of the
     Mont Blanc match's columns. A stretch of 4 from 100 m up removes them: 0%, and the spectrum score went 0.50 → 0.17.
   - A climate whose only biome modulates the ground with no field now takes the modulated GPU variant

@@ -28,7 +28,8 @@ import numpy as np  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import terrain_stats as ts  # noqa: E402
 
-DEM_DIR = Path.home() / "Drive/perso/opti-voxel/landforms-2026-10-22/dem"
+# fetch_dem.py's default --out: under the repo's (gitignored) bench results.
+DEM_DIR = Path(__file__).resolve().parents[2] / "bench/results/landforms/dem"
 
 
 def load_real(site: str, dem: Path) -> tuple[np.ndarray, float, str]:
