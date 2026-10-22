@@ -240,13 +240,14 @@ private:
     // Main thread: a chunk popped for a batch it couldn't go in (overflow, or its list didn't fit) back in its queue:
     // remesh_queue (p_remesh) or chunk_queue.
     void _requeue(const ChunkId &p_chunk, bool p_remesh);
-    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages, int p_min_lod,
+    // p_lods: the batch's smallest and largest LOD (the cascade's level count, its fields' variant).
+    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages, const Vector2i &p_lods,
             const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch);
-    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
+    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, const Vector2i &p_lods,
             const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Pass 0: the cascade's levels (timestamps "<prefix>_c<group>" after each level group
     // when p_prefix is not empty), folding the instances when the batch's list p_list holds any.
-    void _rt_record_samples(uint32_t p_count, int p_min_lod, const String &p_prefix, const PackedByteArray &p_list);
+    void _rt_record_samples(uint32_t p_count, const Vector2i &p_lods, const String &p_prefix, const PackedByteArray &p_list);
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);

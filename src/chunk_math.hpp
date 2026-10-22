@@ -3,6 +3,7 @@
 #include "world_coord.hpp"
 
 #include <algorithm>
+#include <vector>
 
 using namespace godot;
 
@@ -91,6 +92,8 @@ ChunkId get_parent_from_child(const ChunkId &coord, int &lod);
 ChunkId get_parent_from_child(const ChunkId &coord);
 
 int get_lod(const ChunkId &coord);
+// The smallest and largest LOD of p_chunks ((0, 0) for none): a batch's, for the cascade passes.
+Vector2i lod_range(const std::vector<ChunkId> &p_chunks);
 int64_t get_lod_size(const ChunkId &coord);
 
 ChunkId get_parent_from_child_until(const ChunkId &coord, int target_lod);
