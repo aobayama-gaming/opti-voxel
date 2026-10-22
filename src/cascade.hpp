@@ -1,7 +1,7 @@
 #pragma once
 
-#include "chunk_math.hpp"
 #include "base_surface.hpp"
+#include "chunk_math.hpp"
 #include "exact_noise.hpp"
 
 #include <cmath>

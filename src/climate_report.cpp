@@ -26,15 +26,20 @@ struct Sampled {
     std::vector<float> fields;
     std::vector<float> weights;
     std::vector<int> picks;
-    std::vector<int64_t> ground_y; // LOD0 voxels: the column's surface, or the datum
+    // The pick at the coarsest modulated level (Spec::field_range's ceiling) over the same point, or -1 (no modulation, or
+    // the slice's lattice is that coarse): the climate the ground's coarsest modulated octave reads (the LOD rule).
+    std::vector<int> coarse_picks;
+    int coarse_m = -1;
+    std::vector<double> altitude; // LOD0 voxels above the base: the column's surface, or 0 (the tangent plane)
     // The ground channels (SDFCascade::ground_channels) at the column's lattice point: height (LOD0 voxels) and its x / z
     // slopes per lattice spacing; fdx / fdz the central differences of the heights of its 4 neighbours at the same y.
     std::vector<float> h, gx, gz, fdx, fdz;
-    std::vector<float> dhdy; // dh/dy at the lattice point (per voxel: past 1, the surface folds over)
+    std::vector<float> dhdy; // dh along the base's up at the lattice point (per voxel: past 1, the surface folds over)
 };
 
-// The slice: pixel (column j, row i) is the column (j - n / 2, i - n / 2) + p_c of Λ_m (x right, z down), at the
-// lattice point at or below its ground surface (p_surface: SDFCascade::ground_y), else at the datum's.
+// The slice: pixel (column j, row i) is the point (j - n / 2, i - n / 2) + p_c lattice spacings of Λ_m along the base's
+// tangent plane (BaseSurface::tangent_point: x right, z down), traced down the base's up to the ground (p_surface:
+// SDFCascade::ground_along) or left on the plane, then floored to Λ_m (on the flat base: the lattice point at or below).
 Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, int p_m, int p_n, const Vector2i &p_c) {
     Sampled s;
     s.nf = int(p_table.fields.size());
@@ -43,7 +48,12 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.fields.resize(points * s.nf);
     s.weights.resize(points * s.nb);
     s.picks.resize(points);
-    s.ground_y.resize(points);
+    s.coarse_picks.assign(points, -1);
+    const Cascade::FieldRange range = p_sdf.get_spec().field_range();
+    if (!range.empty() && range.ceiling > p_m) {
+        s.coarse_m = range.ceiling;
+    }
+    s.altitude.resize(points);
     s.h.resize(points);
     s.gx.resize(points);
     s.gz.resize(points);
@@ -51,13 +61,17 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.fdz.resize(points);
     s.dhdy.resize(points);
     const int64_t step = int64_t(1) << p_m;
+    const BaseSurface &base = p_sdf.get_base();
     parallel_for(uint32_t(p_n), "climate_report", [&](uint32_t p_row) {
         for (int j = 0; j < p_n; j++) {
             const size_t i = size_t(p_row) * p_n + j;
             const int64_t x = int64_t(j) - p_n / 2 + p_c.x;
             const int64_t z = int64_t(p_row) - p_n / 2 + p_c.y;
-            s.ground_y[i] = p_surface ? p_sdf.ground_y(x * step, z * step) : p_sdf.get_datum_y();
-            const Vector3i64 p(x, WorldCoord::floor_div(s.ground_y[i], step), z);
+            const VoxelPos top = base.tangent_point(x * step, z * step);
+            const VoxelPos g = p_surface ? p_sdf.ground_along(top) : top;
+            s.altitude[i] = base.altitude(g);
+            const Vector3i64 p(WorldCoord::floor_div(g.x, step), WorldCoord::floor_div(g.y, step), WorldCoord::floor_div(g.z, step));
+            const UpAxis up = base.up_dir(g);
             State st;
             float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
             Cascade::point_slots(p_sdf.get_spec(), p, p_m, slots, true);
@@ -68,7 +82,8 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             s.h[i] = ch[Cascade::VALUE];
             s.gx[i] = ch[Cascade::DX];
             s.gz[i] = ch[Cascade::DZ];
-            s.dhdy[i] = float(double(ch[Cascade::DY]) * std::ldexp(1.0, -p_m));
+            const double dhdn = double(ch[Cascade::DX]) * up[0] + double(ch[Cascade::DY]) * up[1] + double(ch[Cascade::DZ]) * up[2];
+            s.dhdy[i] = float(dhdn * std::ldexp(1.0, -p_m));
             auto height = [&](int64_t p_dx, int64_t p_dz) {
                 float c[Cascade::CHANNELS];
                 p_sdf.channels_at(VoxelPos((p.x + p_dx) * step, p.y * step, (p.z + p_dz) * step), p_m, c);
@@ -77,6 +92,14 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             s.fdx[i] = float((height(1, 0) - height(-1, 0)) * 0.5);
             s.fdz[i] = float((height(0, 1) - height(0, -1)) * 0.5);
             s.picks[i] = pick(p_table, w, p, p_m);
+            if (s.coarse_m >= 0) {
+                const int64_t up = int64_t(1) << (s.coarse_m - p_m);
+                const Vector3i64 q(WorldCoord::floor_div(p.x, up), WorldCoord::floor_div(p.y, up), WorldCoord::floor_div(p.z, up));
+                State cs;
+                Cascade::point_slots(p_sdf.get_spec(), q, s.coarse_m, slots, true);
+                state(p_table, slots, cs);
+                s.coarse_picks[i] = pick(p_table, cs.w, q, s.coarse_m);
+            }
             for (int c = 0; c < s.nf; c++) {
                 s.fields[i * s.nf + c] = f[c].w;
             }
@@ -122,7 +145,19 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
             picked[i * 3 + c] = uint8_t(channel(p_table.biomes[size_t(pb)].debug_color, c));
         }
     }
-    String md = "| biome | picked | mean weight | debug colour |\n|---|---|---|---|\n";
+    // Pick drift: the mesh's ground octaves read the climate low-passed at their own level, the pick reads level 0, so
+    // the two maps differ near borders. Its share shows the gap a table's tuning would otherwise hide.
+    String md;
+    if (p_s.coarse_m >= 0) {
+        int64_t drift = 0;
+        for (int64_t i = 0; i < points; i++) {
+            drift += p_s.picks[size_t(i)] != p_s.coarse_picks[size_t(i)] ? 1 : 0;
+        }
+        md += vformat("Pick drift: %s%% of the points pick another biome at lattice %d (the coarsest modulated level: what the ground's "
+                      "coarsest modulated octave reads) than at the slice's.\n\n",
+                String::num(100.0 * double(drift) / double(points), 2), p_s.coarse_m);
+    }
+    md += "| biome | picked | mean weight | debug colour |\n|---|---|---|---|\n";
     for (int b = 0; b < p_s.nb; b++) {
         md += vformat("| %s | %s%% | %s | #%06x |\n", p_table.biomes[size_t(b)].name, String::num(100.0 * double(count[size_t(b)]) / double(points), 1),
                 String::num(sum[size_t(b)] / double(points), 3), int64_t(p_table.biomes[size_t(b)].debug_color));
@@ -133,7 +168,8 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
 }
 
 // Where each pair of biomes meets, the spot nearest the slice's centre: a pick and its right or lower neighbour
-// differ; the spot is the first of the two (metres, y its ground), with the player flag that spawns above it.
+// differ; the spot is the first of the two (tangent-plane metres, its ground's altitude), with the player flag that
+// spawns above it.
 String border_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const Vector2i &p_c) {
     struct Spot {
         int64_t d2 = INT64_MAX;
@@ -158,7 +194,7 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
             }
         }
     }
-    String md = "| biomes | x m | ground y m | z m | player |\n|---|---|---|---|---|\n";
+    String md = "| biomes | x m | altitude m | z m | player |\n|---|---|---|---|---|\n";
     for (int a = 0; a < p_s.nb; a++) {
         for (int b = a + 1; b < p_s.nb; b++) {
             const Spot &spot = best[size_t(a) * p_s.nb + b];
@@ -168,7 +204,7 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
             const int64_t x = int64_t(std::llround(double(int64_t(spot.i % size_t(p_n)) - p_n / 2 + p_c.x) * p_spacing_m));
             const int64_t z = int64_t(std::llround(double(int64_t(spot.i / size_t(p_n)) - p_n / 2 + p_c.y) * p_spacing_m));
             md += vformat("| %s / %s | %d | %d | %d | `--spawn=%d,%d` |\n", p_table.biomes[size_t(a)].name, p_table.biomes[size_t(b)].name, x,
-                    int64_t(std::llround(double(p_s.ground_y[spot.i]) * p_voxel_m)), z, x, z);
+                    int64_t(std::llround(p_s.altitude[spot.i] * p_voxel_m)), z, x, z);
         }
     }
     return md;
@@ -220,7 +256,7 @@ String shading_section(const Table &p_table, const Sampled &p_s, int p_n, int p_
                 err[b] += std::fabs(double(p_s.gx[i]) - fdx) + std::fabs(double(p_s.gz[i]) - fdz);
                 norm[b] += std::fabs(fdx) + std::fabs(fdz);
             }
-            // Land: its height between 0 (the datum, the sea level) and the slice's top; below the datum, sea blues.
+            // Land: its height between 0 (the base, the sea level) and the slice's top; below the base, sea blues.
             const double hv = double(p_s.h[i]);
             const double t = hv >= 0.0 ? hv / MAX(hi, 1e-9) : -1.0 - hv / MIN(lo, -1e-9);
             const double sf = shade(fdx * to_slope, fdz * to_slope);
@@ -275,7 +311,7 @@ String field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sa
 String relief_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const String &p_dir,
         Array &r_images) {
     const int64_t points = int64_t(p_n) * p_n;
-    auto height = [&](int64_t p_i) { return double(p_s.ground_y[size_t(p_i)]) * p_voxel_m; };
+    auto height = [&](int64_t p_i) { return p_s.altitude[size_t(p_i)] * p_voxel_m; };
     std::vector<double> sum(size_t(p_s.nb), 0.0), sum2(size_t(p_s.nb), 0.0), slope(size_t(p_s.nb), 0.0);
     std::vector<int64_t> count(size_t(p_s.nb), 0), pairs(size_t(p_s.nb), 0);
     double lo = INFINITY, hi = -INFINITY;
@@ -295,7 +331,7 @@ String relief_section(const Table &p_table, const Sampled &p_s, int p_n, double 
             }
         }
     }
-    String md = vformat("Ground height over the slice: %s .. %s m.\n\n| biome | mean height m | height std m | mean slope (m/m) |\n|---|---|---|---|\n",
+    String md = vformat("Ground altitude over the slice: %s .. %s m.\n\n| biome | mean altitude m | height std m | mean slope (m/m) |\n|---|---|---|---|\n",
             String::num(lo, 0), String::num(hi, 0));
     for (int b = 0; b < p_s.nb; b++) {
         const double c = double(MAX(count[size_t(b)], int64_t(1)));
@@ -331,15 +367,15 @@ void store(const String &p_path, const std::vector<T> &p_v) {
 }
 
 // The heightmap for tools/landforms (compare.py, match.py): heights.f32 (float32 little endian, row-major, row = z, metres
-// above the datum), fields.f32 (the fields' values, point-major like Sampled::fields), dhdy.f32 (the ground's dh/dy: the 3D
-// noise's vertical slope, past 1 an overhang), picks.u8 (the picked biome) and
+// above the base), fields.f32 (the fields' values, point-major like Sampled::fields), dhdy.f32 (the ground's dh along the
+// base's up: the 3D noise's vertical slope, past 1 an overhang), picks.u8 (the picked biome) and
 // heights.json (n, spacing, the table, the centre in metres, the field and biome names, the cascade constants match.py's
 // amplitude cap reads).
-void write_heights(const String &p_dir, const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, int64_t p_datum_y,
-        const String &p_climate, const Vector2i &p_c) {
-    std::vector<float> h(p_s.ground_y.size());
+void write_heights(const String &p_dir, const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const String &p_climate,
+        const Vector2i &p_c) {
+    std::vector<float> h(p_s.altitude.size());
     for (size_t i = 0; i < h.size(); i++) {
-        h[i] = float(double(p_s.ground_y[i] - p_datum_y) * p_voxel_m);
+        h[i] = float(p_s.altitude[i] * p_voxel_m);
     }
     store(p_dir.path_join("heights.f32"), h);
     store(p_dir.path_join("fields.f32"), p_s.fields);
@@ -409,7 +445,7 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     String md = "# Climate report\n\n";
     md += vformat("`%s` at %s m voxels, %d LODs: %d fields, %d biomes. Slice %s, %d x %d points of lattice %d (%s m apart, "
                   "%s km across). CPU: %s us per point (ground trace + fields + weights + pick, over the worker pool).\n\n",
-            p_climate_path, String::num(ground.voxel_size, 6), p_lods, s.nf, s.nb, p_surface ? "on the ground surface" : "through the datum", n, n, m, String::num(spacing_m, 2), String::num(n * spacing_m / 1000.0, 1),
+            p_climate_path, String::num(ground.voxel_size, 6), p_lods, s.nf, s.nb, p_surface ? "on the ground surface" : "on the base's tangent plane", n, n, m, String::num(spacing_m, 2), String::num(n * spacing_m / 1000.0, 1),
             String::num(us_per_point, 2));
     Array images;
     md += biome_section(table, s, n, p_out_dir, images) + String("\n");
@@ -417,8 +453,8 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + String("\n");
     md += shading_section(table, s, n, m, p_out_dir, images) + String("\n");
     md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
-    if (p_surface) { // a datum slice has no surface heights
-        write_heights(p_out_dir, table, s, n, spacing_m, ground.voxel_size, sdf.get_datum_y(), p_climate_path, c);
+    if (p_surface) { // a tangent-plane slice has no surface heights
+        write_heights(p_out_dir, table, s, n, spacing_m, ground.voxel_size, p_climate_path, c);
     }
     md += "\nImages (x right, z down): ";
     for (int64_t i = 0; i < images.size(); i++) {

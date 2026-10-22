@@ -120,6 +120,47 @@ String validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_a
     return p_amp.mult == 0.0f || ok ? String() : vformat("octave k = %d: the modulated amplitude %s (shaped) is out of range.", p_amp.k, amp);
 }
 
+// max |value| of group p_source (GROUND or a field): its bands' largest amplitudes times their shapes' bounds, plus its
+// terms' |coef| times their sources' bounds.
+double value_bound(const Table &p_table, const Ground &p_ground, int p_source) {
+    const std::vector<Cascade::Band> *bands = bands_of(p_table, p_ground, p_source);
+    double b = 0.0;
+    if (bands != nullptr) {
+        for (const Cascade::Band &band : *bands) {
+            b += double(max_amp(p_table, p_source, band));
+        }
+    }
+    if (p_source != GROUND) {
+        for (const Term &t : p_table.fields[size_t(p_source)].terms) {
+            b += std::fabs(double(t.coef)) * value_bound(p_table, p_ground, t.source);
+        }
+    }
+    return b;
+}
+
+String validate_height(const Table &p_table, const Ground &p_ground, const HeightTerm &p_h) {
+    if (p_h.field < 0 || p_h.field >= int(p_table.fields.size())) {
+        return "climate: a height term reads a field that doesn't exist.";
+    }
+    if (!moderate(p_h.coef)) {
+        return vformat("climate: height term coefficient %s outside [2^-40, 2^40] voxels.", p_h.coef);
+    }
+    const String &name = p_table.fields[size_t(p_h.field)].name;
+    const double range = value_bound(p_table, p_ground, p_h.field);
+    // A curve flat over the field's whole range (its points all past the values the field reaches) is a constant.
+    if (p_h.has_curve && (double(p_h.curve.x.front()) > range || double(p_h.curve.x.back()) < -range)) {
+        return vformat("climate: the height term on '%s' has its curve's points outside the field's values (|%s| <= %s): it would be a constant.", name,
+                name, range);
+    }
+    // The term's largest value: in the exact range, and under the ground's amplitude cap (what the skirts and the
+    // cascade's own bands are held to).
+    const double bound = std::fabs(double(p_h.coef)) * (p_h.has_curve ? double(curve_bound(p_h.curve)) : range);
+    if (bound > p_ground.amp_cap || (bound > 0.0 && !ExactNoise::in_exact_range(float(bound)))) {
+        return vformat("climate: the height term on '%s' reaches %s voxels, over the ground's cap of %s.", name, bound, p_ground.amp_cap);
+    }
+    return String();
+}
+
 String validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground) {
     const Biome &b = p_table.biomes[p_i];
     if (b.name.is_empty()) {
@@ -208,11 +249,9 @@ String validate(const Table &p_table, const Ground &p_ground) {
         return vformat("climate: a multifractal carries its state as a field group: at most %d fields.", Cascade::MAX_FIELD_GROUPS - 1);
     }
     for (const HeightTerm &h : p_table.heights) {
-        if (h.field < 0 || h.field >= int(p_table.fields.size())) {
-            return "climate: a height term reads a field that doesn't exist.";
-        }
-        if (!moderate(h.coef)) {
-            return vformat("climate: height term coefficient %s outside [2^-40, 2^40] voxels.", h.coef);
+        const String err = validate_height(p_table, p_ground, h);
+        if (!err.is_empty()) {
+            return err;
         }
     }
     return String();

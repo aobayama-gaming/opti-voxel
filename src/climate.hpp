@@ -118,6 +118,8 @@ struct Curve {
 Curve make_curve(const std::vector<double> &p_x, const std::vector<double> &p_y);
 // max |curve'| (skirts).
 float curve_slope_bound(const Curve &p_curve);
+// max |curve| (its cubic segments overshoot their points; validate's height term bound).
+float curve_bound(const Curve &p_curve);
 
 // A height term: the ground at each sample adds coef * curve(field) (LOD0 voxels; no curve: coef * field). Applied
 // after the cascade (ground_value), so every LOD has it: what lifts land with a field (libnoise's continents).
@@ -217,7 +219,8 @@ const Amp *find_amp(const Biome &p_biome, int p_field, int p_k);
 Shape band_shape(const Table &p_table, const Biome *p_biome, int p_field, int p_k);
 // The skirt's band step at LOD p_lod (LOD0 voxels) with the table's ground terms, from the cascade's p_ground_amp: plus
 // each height term's |coef| times its curve's slope bound times its field's step (its largest L+2 / L+3 octave and its
-// terms' sources' steps), all times 2 with terraces (their slope bound).
+// terms' sources' steps); with terraces, all times 2 (their slope bound) plus the terrace blend's change with the
+// weights (each terraced biome's weight step, from its edges' fields, times a quarter of its terrace step).
 double ground_step(const Table &p_table, int p_lod, double p_ground_amp);
 
 // The field values of the channels p_slots (a point's Cascade slots, combined_spec's layout): each field's own

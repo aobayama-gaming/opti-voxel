@@ -54,6 +54,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
+    ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
@@ -459,6 +460,13 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     WorldPos p = WorldCoord::offset_pos(origin, offset);
     p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
     return sdf->evaluate(p, 0);
+}
+
+Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
+    const double vs = double(chunk_param.voxel_size);
+    const VoxelPos p = sdf->get_base().tangent_point(std::llround(double(p_tangent_m.x) / vs), std::llround(double(p_tangent_m.y) / vs));
+    const VoxelPos origin = chunk_param.origin_voxel();
+    return Vector3(real_t(double(p.x - origin.x) * vs), real_t(double(p.y - origin.y) * vs), real_t(double(p.z - origin.z) * vs));
 }
 
 int VoxelTerrain::get_lod_numbers() const {

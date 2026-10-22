@@ -118,7 +118,21 @@ double ground_step(const Table &p_table, int p_lod, double p_ground_amp) {
     for (const HeightTerm &t : p_table.heights) {
         amp += std::fabs(double(t.coef)) * (t.has_curve ? double(curve_slope_bound(t.curve)) : 1.0) * field_step(p_table, t.field, p_lod, p_ground_amp);
     }
-    return p_table.has_terraces() ? 2.0 * amp : amp;
+    if (!p_table.has_terraces()) {
+        return amp;
+    }
+    // ground = h + sum_b w_b (T_b(h) - h). T's slope is in [0, 2] and the weights sum to 1: the h part moves by at most
+    // 2 amp. The weights' own change moves it by |dw_b| |T_b(h) - h|, and |T_b(h) - h| = step |t^2 - t| <= step / 4.
+    // w_b = rest_b r_b, each a product of edge smoothsteps in [0, 1] (slope 1.5 per unit of scale (field - anchor)), so
+    // |dw_b| <= the sum over the edges of biomes 0..b (the last biome: every other one's) of 1.5 |scale| field_step.
+    double edges = 0.0, blend = 0.0;
+    for (const Biome &b : p_table.biomes) {
+        for (const Edge &e : b.edges) {
+            edges += 1.5 * std::fabs(double(e.scale)) * field_step(p_table, e.field, p_lod, p_ground_amp);
+        }
+        blend += edges * 0.25 * double(b.terrace.step);
+    }
+    return 2.0 * amp + blend;
 }
 
 void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {

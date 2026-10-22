@@ -228,6 +228,22 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "damp": 4}]}]})")).contains("unknown key 'damp'"));
     CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0], [0, 1]]}], "biomes": [{"name": "a"}]})")).contains("increase"));
     CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0]]}], "biomes": [{"name": "a"}]})")).contains("2 points"));
+    // A curve the field never reaches is a constant; a term over the ground's amplitude cap would outgrow the skirts' model.
+    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 10, "curve": [[100, 0], [200, 1]]}], "biomes": [{"name": "a"}]})"))
+                    .contains("a constant"));
+    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 5000, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})"))
+                    .contains("over the ground's cap"));
+    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 100, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})")) == String());
+    // An offset is a constant term: inserted without its mean, it only counts in a multifractal's state (ridged's scales
+    // its |n| too).
+    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "billow", "offset": 0.5}]}]})"))
+                    .contains("only counts in a multifractal"));
+    CHECK(err(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1, "offset": 0.5}]}], "biomes": [{"name": "a"}]})")
+                    .contains("only counts in a multifractal"));
+    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "multifractal": 1, "offset": 0.5}]}]})")) ==
+            String());
+    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "ridged", "offset": 0.8}]}]})")) ==
+            String());
     CHECK(err(f1 + String(R"("biomes": [{"name": "a", "terrace": {"step_m": -1}}]})")).contains("terrace"));
     CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "coeffs": [1, 2]}]}]})")).contains("4 numbers"));
     CHECK(err(R"({"fields": [{"name": "d", "noise": "cell", "bands": [{"wavelength_m": 25, "amp": 1, "shape": "ridged"}]}], "biomes": [{"name": "a"}]})")
@@ -400,5 +416,52 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
     for (const bool points : { false, true }) {
         CHECK(CascadeGLSL::field_range(&sdf, points).everywhere());
         CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true).contains("climate_ground("));
+    }
+}
+
+// The skirt bound (Climate::ground_step) on tables with ground terms (terraces: the example and shaped_test; the cliff's
+// 700 m height term): at the samples a LOD L and a LOD L+1 chunk share (Λ_{L+1}) near the LOD-L surface, the field step
+// is within the outer chunk's skirt depth, the cap lifted (the bound itself; the cap is a cost choice). Height terms and
+// terraces read the fields at each chunk's own level 0, so their steps come from the fields' L+2 / L+3 octaves.
+TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the skirt depth with ground terms") {
+    for (const char *path : { "res://climate/shaped_test.json", "res://climate/example.json", "res://climate/landforms/cliff.json" }) {
+        CAPTURE(path);
+        ClimateSDF c(path, 15, 1e6f);
+        CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
+        CHECK(c.sdf.get_climate()->has_ground_terms());
+        const double vs = 0.05;
+        for (const int lod : { 0, 3, 6, 9, 12 }) {
+            CAPTURE(lod);
+            const int64_t unit = int64_t(2) << lod; // Λ_{L+1}
+            const int64_t window = 512 * unit;
+            auto at = [&](const VoxelPos &p_column, int64_t p_y, int p_lod) {
+                return double(c.sdf.evaluate(WorldPos{ VoxelPos(p_column.x, p_y, p_column.z), Float3() }, p_lod));
+            };
+            double worst = 0.0;
+            int64_t points = 0;
+            for (uint32_t i = 0; i < 48; i++) {
+                const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x7E44u });
+                const VoxelPos column(WorldCoord::floor_div(int64_t(h.x % uint32_t(window)) - window / 2, unit) * unit, 0,
+                        WorldCoord::floor_div(int64_t(h.y % uint32_t(window)) - window / 2, unit) * unit);
+                // The LOD-L surface on Λ_{L+1}, from the LOD-0 ground: scan down from a few cells above it.
+                const int64_t ground = c.sdf.ground_y(column.x, column.z);
+                int64_t y = WorldCoord::floor_div(ground, unit) * unit + 8 * unit;
+                for (int s = 0; s < 64 && at(column, y - unit, lod) > 0.0; s++) {
+                    y -= unit;
+                }
+                for (int64_t d = -2 * unit; d <= 2 * unit; d += unit) {
+                    const double fine = at(column, y + d, lod);
+                    if (std::fabs(fine) > vs * std::ldexp(1.0, lod)) {
+                        continue; // only near the surface, where the skirt has to hide the step
+                    }
+                    const double step = at(column, y + d, lod + 1) - fine;
+                    worst = MAX(worst, std::fabs(step) / double(c.sdf.skirt_depth_m(step > 0.0 ? lod : lod + 1)));
+                    points++;
+                }
+            }
+            MESSAGE(std::string(path), ": LOD ", lod, " | ", lod + 1, ": ", points, " shared samples near the surface, worst step ", worst, " of the skirt depth");
+            CHECK(points > 20);
+            CHECK(worst <= 1.0);
+        }
     }
 }

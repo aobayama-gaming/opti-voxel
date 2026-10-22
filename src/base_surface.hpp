@@ -81,6 +81,12 @@ public:
     ExactNoise::Float4 at(const VoxelPos &p_voxel, int p_lod) const;
     // The unit up direction at a LOD0 voxel, in double (placement: SDFBase::up_at).
     UpAxis up_dir(const VoxelPos &p_voxel) const;
+    // The altitude of a LOD0 voxel above the base, LOD0 voxels in double (reports, placement; not the SDF's float path).
+    double altitude(const VoxelPos &p_voxel) const;
+    // The point (p_u, p_v) LOD0 voxels along x and z of the base's reference tangent plane: FLAT the datum plane through
+    // the world's (0, 0) column, SPHERE the plane touching the sphere at its +y pole. Reports sample it and trace along -up
+    // (SDFCascade::ground_along); the player's --spawn takes these coordinates.
+    VoxelPos tangent_point(int64_t p_u, int64_t p_v) const;
 
     // The region holding a point at a LOD: its cell id (p >> (L + REGION_SHIFT)).
     static Vector3i64 region_cell(const VoxelPos &p_voxel, int p_lod);

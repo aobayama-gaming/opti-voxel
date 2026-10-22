@@ -453,7 +453,7 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
             {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}], )";
     CHECK(parse_json(fields + String(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
                        {"name": "b"}]})"),
-                  g.ground, t)
+            g.ground, t)
                     .contains("needs a ground multiplier too"));
     // Fields without any multiplier (a pick only): carried nowhere in the ground's runs (no field scratch, no fields
     // variant), and its top lattice is the ground's.
@@ -584,7 +584,7 @@ TEST_CASE("Cascade: one band per group and lattice") {
     GroundFixture g(0.05, 15);
     Table t;
     CHECK(parse_json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1}, {"wavelength_m": 400, "amp": 2}]}], "biomes": [{"name": "a"}]})",
-                  g.ground, t)
+            g.ground, t)
                     .contains("twice"));
     Cascade::Spec one;
     one.set = Cascade::ChannelSet::LINEAR4;

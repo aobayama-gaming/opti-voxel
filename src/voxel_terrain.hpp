@@ -268,6 +268,9 @@ public:
     // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain, for the
     // clip planes above 15 LODs.
     double get_sdf_at(const Vector3 &p_render_pos) const;
+    // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
+    // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
+    Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;

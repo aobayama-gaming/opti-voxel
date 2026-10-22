@@ -61,6 +61,17 @@ float curve_slope_bound(const Curve &p_curve) {
     return float(m);
 }
 
+float curve_bound(const Curve &p_curve) {
+    double m = std::fabs(double(p_curve.y_last));
+    for (size_t i = 0; i < p_curve.p.size(); i++) {
+        for (int j = 0; j <= 64; j++) {
+            const double a = j / 64.0;
+            m = std::max(m, std::fabs(((p_curve.p[i] * a + p_curve.q[i]) * a + p_curve.r[i]) * a + p_curve.s[i]));
+        }
+    }
+    return float(m);
+}
+
 bool Table::has_state() const {
     return std::any_of(biomes.begin(), biomes.end(),
             [](const Biome &p_b) { return std::any_of(p_b.amps.begin(), p_b.amps.end(), [](const Amp &p_a) { return p_a.gain > 0.0f; }); });

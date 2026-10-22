@@ -97,7 +97,7 @@
  "heights": [
   {
    "field": "continent",
-   "height_m": 2048,
+   "height_m": 2000,
    "curve": [
     [
      -2.1,

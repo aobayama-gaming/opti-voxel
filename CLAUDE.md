@@ -605,10 +605,10 @@ to every change, and a reviewer may reject a PR on any of them.
   `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
   channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
 - `tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
-  (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice, each column at its ground
-  surface (`--surface=0`: a slice through the datum, kilometres off the ground at 25 LODs): per-biome share and mean
-  weight, where each pair of biomes meets nearest the centre with the player's `--spawn=X,Z` (metres), per-field range,
-  the ground under each biome (mean height, height std, mean slope), CPU us per point, `biomes_blend.png` /
+  (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
+  surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
+  weight, where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
+  the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
   `biomes_pick.png` / `ground_height.png` / `field_*.png`, and `heights.f32` + `heights.json` for `tools/landforms`.
   Tune a table from it before any GPU run. To match a real heightmap: `uv run tools/landforms/match.py SITE TABLE --fit=3`
   (`docs/landforms.md`).
@@ -720,7 +720,7 @@ to every change, and a reviewer may reject a PR on any of them.
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
   8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids),
   10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`), 12 biome (each material's debug colour: a climate's
-  biomes; B toggles it in the player). The player's `--spawn=X,Z` (metres) starts it above that column.
+  biomes; B toggles it in the player). The player's `--spawn=U,V` (metres along the base's tangent plane, `VoxelTerrain.get_tangent_position`) starts it above that point.
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,

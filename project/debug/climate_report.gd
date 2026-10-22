@@ -4,7 +4,7 @@ extends Node
 ##   tools/climate_report.sh   (or: godot --headless --path project res://debug/climate_report.tscn -- --out=DIR)
 ## Args: --out=<dir> (required), --climate=<res:// or absolute path> (default res://climate/example.json),
 ## --voxel=<m> (0.05), --lods=<n> (15), --extent_km=<km> (60), --size=<points per side> (512),
-## --surface=<0|1> (1: each column at its ground surface; 0: a slice through the datum), --center=<x,z> (metres, 0,0),
+## --surface=<0|1> (1: each point of the base's tangent plane traced down to its ground; 0: the plane itself), --center=<u,v> (tangent metres, 0,0),
 ## --lattice=<m> (the lattice Λ_m sampled, 2^m voxels apart, in place of the extent's)
 
 

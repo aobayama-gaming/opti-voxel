@@ -203,8 +203,9 @@ private:
         return h;
     }
 
-    // A shape (shape, scale, offset or coeffs) of an entry: the plain one without any.
-    bool shape(const Dictionary &p_d, const String &p_where, Shape &r_s) {
+    // A shape (shape, scale, offset or coeffs) of an entry: the plain one without any. p_state: the entry weights its
+    // octave by the multifractal state, the only reader of a shape's constant term.
+    bool shape(const Dictionary &p_d, const String &p_where, bool p_state, Shape &r_s) {
         if (p_d.has("coeffs")) {
             const Array c = array(p_d, "coeffs", p_where);
             if (c.size() != 4 || p_d.has("shape")) {
@@ -227,6 +228,12 @@ private:
         const double a = number(p_d, "scale", p_where, 1.0);
         const bool ridged = name == "ridged";
         const double o = number(p_d, "offset", p_where, ridged ? 1.0 : 0.0);
+        // Plain, billow and square: the offset is the constant term, inserted without its mean (Cascade::NOISE_*_MEAN):
+        // only a multifractal's state reads it. Ridged's (o - |a n|)^2 also scales |n| by it.
+        if (p_d.has("offset") && !ridged && !p_state) {
+            fail(p_where, "'offset' only counts in a multifractal (a plain, billow or square band is inserted without its mean).");
+            return true;
+        }
         // plain a n + o, billow 2 |a n| - 1 + o, ridged (o - |a n|)^2, square (a n)^2 + o.
         if (name == "plain") {
             r_s = Shape{ { float(o), float(a), 0.0f, 0.0f } };
@@ -288,7 +295,7 @@ private:
         const double amp = number(p_d, "amp", p_where);
         const double persistence = number(p_d, "persistence", p_where, 1.0);
         Shape sh;
-        shape(p_d, p_where, sh);
+        shape(p_d, p_where, false, sh);
         // A range keeps the ground's octaves (another LOD count keeps another part of it, each octave at the same
         // amplitude); a single wavelength outside them is refused by validate().
         const bool range = lo != hi;
@@ -433,7 +440,7 @@ private:
         Amp proto;
         proto.field = source(text(p_d, "field", p_where), p_where, true, int(table.fields.size()), "the ground or a field");
         proto.mult = float(number(p_d, "x", p_where, 1.0));
-        proto.has_shape = shape(p_d, p_where, proto.shape);
+        proto.has_shape = shape(p_d, p_where, p_d.has("multifractal"), proto.shape);
         proto.gain = float(number(p_d, "multifractal", p_where, 0.0));
         proto.warp = float(number(p_d, "warp_m", p_where, 0.0) / ground.voxel_size);
         const Array wf = array(p_d, "warp_fields", p_where);

@@ -290,6 +290,22 @@ TEST_CASE("BaseSurface: a sphere the radius form can't hold is refused") {
     CHECK(BaseSurface::sphere(VoxelPos(g + 5, -1, 3 * g), EARTH_R).centre() == VoxelPos(g, -g, 3 * g));
 }
 
+// The reports' frame: the reference tangent plane and the altitude above the base.
+TEST_CASE("BaseSurface: the tangent plane and the altitude") {
+    const BaseSurface flat = BaseSurface::flat(6000);
+    CHECK(flat.tangent_point(-7, 11) == VoxelPos(-7, 6000, 11));
+    CHECK(flat.altitude(VoxelPos(5, 6123, -9)) == 123.0);
+    const BaseSurface s = BaseSurface::sphere(CENTRES[1], EARTH_R);
+    const VoxelPos pole = s.tangent_point(0, 0);
+    CHECK(std::fabs(s.altitude(pole)) <= 0.5);
+    const UpAxis up = s.up_dir(pole);
+    CHECK(up[1] == doctest::Approx(1.0).epsilon(1e-12));
+    // 10 km along the plane: it rises above the sphere by sqrt(R^2 + u^2) - R.
+    const int64_t u = 200000;
+    const double rise = std::sqrt(EARTH_R * EARTH_R + double(u) * double(u)) - EARTH_R;
+    CHECK(s.altitude(s.tangent_point(u, 0)) == doctest::Approx(rise).epsilon(1e-6));
+}
+
 // A stretched octave's point on the flat base: datum + (y - datum) / 2^j, exact, negative y and far points included, a
 // fraction that rounds to 1 carried; the gradient's y over 2^j.
 TEST_CASE("BaseSurface: the flat stretch is datum + (y - datum) / 2^j, exactly") {
