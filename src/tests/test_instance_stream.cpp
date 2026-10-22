@@ -337,6 +337,60 @@ TEST_CASE("Instance stream: with the slots full, a chunk answers LATER until roo
     CHECK(lists_right(fx, *stream, mirror, b));
 }
 
+TEST_CASE("Instance stream: past the pending keys' cap a chunk needing a new key answers LATER, then goes through") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ChunkId a = fx.chunk(-300, -300), b = fx.chunk(300, 300);
+    InstanceStream::Settings settings;
+    settings.pending = 1;
+    std::unique_ptr<InstanceStream> stream = fx.stream(settings);
+    Mirror mirror;
+
+    // A frame asks for one new key and what it reads, then answers LATER: the next frame, once it landed, asks for another.
+    CHECK(stream->admit(a, 0, 1) == InstanceStream::LATER);
+    const int64_t first = stat(*stream, "keys");
+    CHECK(stream->admit(b, 0, 2) == InstanceStream::LATER);
+    CHECK(stat(*stream, "keys") == first); // nothing new asked for past the cap
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    InstanceStream::Admit answer_a = InstanceStream::LATER, answer_b = InstanceStream::LATER;
+    for (int frame = 0; frame < 64 && (answer_a != InstanceStream::READY || answer_b != InstanceStream::READY); frame++) {
+        stream->poll();
+        stream->take_ready(0, back);
+        answer_a = stream->admit(a, 0, 1);
+        answer_b = stream->admit(b, 0, 2);
+    }
+    CHECK(answer_a == InstanceStream::READY);
+    CHECK(answer_b == InstanceStream::READY);
+    mirror.update(*stream);
+    CHECK(lists_right(fx, *stream, mirror, a));
+    CHECK(lists_right(fx, *stream, mirror, b));
+}
+
+TEST_CASE("Instance stream: making room for inputs evicts the inputs, never a placed key") {
+    const StreamFixture &fx = StreamFixture::get();
+    // Their keys read finer ones: inputs, not placed. c's placed keys are older than d's inputs.
+    const ChunkId c = fx.chunk(-300, -300, 2), d = fx.chunk(300, 300, 2);
+    InstanceStream::Settings settings;
+    settings.input_records = 0;
+    std::unique_ptr<InstanceStream> stream = fx.stream(settings);
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    for (const ChunkId &chunk : { c, d }) {
+        InstanceStream::Admit answer = InstanceStream::LATER;
+        for (int frame = 0; frame < 16 && answer != InstanceStream::READY; frame++) {
+            answer = stream->admit(chunk, 0, 1);
+            stream->poll();
+            stream->take_ready(0, back);
+        }
+        CHECK(answer == InstanceStream::READY);
+    }
+    const int64_t computed = stat(*stream, "computed");
+    for (int frame = 0; frame < 2 * int(InstanceStream::GRACE_FRAMES); frame++) {
+        stream->poll();
+    }
+    CHECK(stat(*stream, "evicted") > 0); // the inputs went
+    CHECK(stream->admit(c, 0, 1) == InstanceStream::READY);
+    CHECK(stat(*stream, "computed") == computed);
+}
+
 TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with the same lists") {
     const StreamFixture &fx = StreamFixture::get();
     std::unique_ptr<InstanceStream> stream = std::make_unique<InstanceStream>(std::vector<std::shared_ptr<const ScatterSource>>{ fx.source }, fx.param,

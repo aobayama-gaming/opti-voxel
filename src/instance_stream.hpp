@@ -58,7 +58,10 @@ public:
     static constexpr uint32_t SLOTS_MIN = uint32_t(1) << 16;
     static constexpr uint32_t SLOTS_MAX = uint32_t(1) << 21;
     static constexpr int64_t INPUT_RECORDS = int64_t(1) << 21; // the records of ready keys not in slots (inputs), kept at most
-    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // keys kept at most (the empty ones count)
+    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys kept at most (the empty ones count)
+    // Keys asked for and not landed at most: past it admit() answers LATER for a chunk needing a new key, so the meshers
+    // stop popping (else a frame parks the whole queue: millions of keys waiting, the ones in view behind them).
+    static constexpr size_t PENDING_MAX = size_t(1) << 12;
     static constexpr size_t LOG_MAX = size_t(1) << 16; // placements uploads_since() can replay; a reader further behind gets them all
 
     struct Settings {
@@ -66,12 +69,13 @@ public:
         uint32_t slot_capacity = SLOTS_MIN;
         int64_t input_records = INPUT_RECORDS;
         size_t entries = ENTRIES_MAX;
+        size_t pending = PENDING_MAX;
         size_t log = LOG_MAX;
     };
     enum Admit {
         READY, // every key placed: mesh it now
         PARKED, // the stream keeps it until its keys land (take_ready)
-        LATER, // a key finds no slot: stop popping this frame, ask again later
+        LATER, // a key finds no slot, or too many keys are computing: stop popping this frame, ask again later
     };
     // A placed key's records, sent to the GPU table from record id first.
     struct Upload {
@@ -186,6 +190,7 @@ private:
     Entry *newest = nullptr; // the LRU list's ends
     Entry *oldest = nullptr;
     uint64_t frame = 0;
+    size_t pending = 0; // entries not READY (never evicted)
 
     std::mutex job_mutex; // the drain tasks' queues
     std::deque<std::unique_ptr<Job>> jobs; // to run
@@ -235,8 +240,9 @@ private:
     bool place(Entry &r_entry);
     bool allocate(uint32_t p_count, uint32_t &r_slot);
     void release(uint32_t p_slot, uint32_t p_count);
-    // Evicts the oldest entry if it is out of its grace (false: none can go).
-    bool evict_oldest();
+    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest not placed (making room
+    // for inputs: evicting a placed key frees none, and asked for again it recomputes every key under it).
+    bool evict_oldest(bool p_inputs = false);
     void pin(Entry &r_entry);
     void unpin(Entry &r_entry);
     void touch(Entry &r_entry);

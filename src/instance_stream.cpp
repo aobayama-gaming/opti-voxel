@@ -156,6 +156,10 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
         chunk_keys(p_chunk, keys);
         int missing = 0;
         for (const SourceKey &k : keys) {
+            if (pending >= settings.pending && entries.find(k) == entries.end()) {
+                answer = LATER; // its keys asked for so far stay, computed meanwhile
+                break;
+            }
             const Entry &e = request(k, true);
             if (!e.placed && e.state == Entry::READY) {
                 answer = LATER; // no slot for it (the keys asked for so far stay in their grace)
@@ -223,6 +227,7 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
     const auto [it, fresh] = entries.try_emplace(p_key);
     Entry &e = it->second;
     if (fresh) {
+        pending++;
         e.key = p_key;
         thread_local std::vector<SourceKey> in;
         source(p_key).inputs(p_key, in);
@@ -296,7 +301,11 @@ void InstanceStream::poll() {
         request(k, false); // kept resident while viewed, started if missing
     }
     viewed.clear();
-    while ((entries.size() > settings.entries || input_records > settings.input_records) && evict_oldest()) {
+    for (;;) {
+        const bool too_many = entries.size() - pending > settings.entries;
+        if (!(too_many || input_records > settings.input_records) || !evict_oldest(!too_many)) {
+            break;
+        }
     }
     const uint64_t dt = now_usec() - t0;
     stats.poll_usec += dt;
@@ -313,6 +322,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     e.content = std::move(p_job->out);
     e.count = uint32_t(e.content->records.size());
     e.state = Entry::READY;
+    pending--;
     input_records += e.count;
     std::vector<std::pair<SourceKey, uint32_t>> dependents;
     dependents.swap(e.dependents);
@@ -420,8 +430,18 @@ void InstanceStream::release(uint32_t p_slot, uint32_t p_count) {
     }
 }
 
-bool InstanceStream::evict_oldest() {
+bool InstanceStream::evict_oldest(bool p_inputs) {
     Entry *e = oldest;
+    for (Entry *last = newest; p_inputs && e != nullptr && e->placed && e != last;) {
+        // Passed over once: to the newest end (its used kept), so the next eviction doesn't walk it again.
+        Entry *const placed = e;
+        e = e->newer;
+        lru_unlink(*placed);
+        lru_link(*placed);
+    }
+    if (p_inputs && e != nullptr && e->placed) {
+        return false; // only placed keys left
+    }
     if (e == nullptr || e->used + GRACE_FRAMES >= frame) {
         return false; // the rest is newer
     }
