@@ -301,9 +301,16 @@ to every change, and a reviewer may reject a PR on any of them.
   `instance_capacity()` instances up front (default 16384 or the scatter + 4096, removed ones count); an add
   past it is refused. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
-  discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter N rocks and pillars in a
-  square of side M metres around (-50, -150) m (`SDFTable::SCENE_X / Z`, set before the node enters the tree),
-  default 0.
+  discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter about N rocks and pillars
+  in a square of side M metres around (-50, -150) m (`SDFTable::SCENE_X / Z`, set before the node enters the tree),
+  default 0: one per cell site (`SCATTER_SITE_SALT`), a rock or a pillar by the site's variant, turned to `up_at`.
+  **Sources (`src/cell_scatter.*`):** the scatter and the forest are two `CellScatter`s {salt, zone, side, ground, up,
+  accept, generate}: a site's records are a pure function of its cell, so two halves of a zone give the whole
+  (unit-tested). `SDFTable::get_sources()`, placed whole at configure by `add_source` (stats under
+  `get_debug_stats()["table"]["scatter" | "trees"]`: count, records per site, moments per material). `SourceProfile`
+  reads `SAMPLES` (256) hashed sites at the origin: reach, `lod_end`, k / margin max (times `REACH_SAFETY` 1.25), joins,
+  records per site and the mass lost per LOD (what a far proxy stands for); unit-tested to bound every record of the
+  forest and the scatter (`covers`).
   **Trees (step 5, `src/tree_archetype.*`):** a tree is a contiguous run of plain records, all smooth union
   (`SDFTable::get_trees()`: `TreeSpan` first id + count), no change to the IR, the fold or the meshers.
   Library types 3 `branch` (a tapered capsule {height, radius, slope}, slope = (r1 - r0) / height from the
@@ -329,9 +336,9 @@ to every change, and a reviewer may reject a PR on any of them.
   unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). Still column-based (flat debt): the scene's centre (`ground_y`) and the lake keep-out
-  (`in_lake(x, z)`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
+  (`in_lake(x, z)`, the sources' `accept`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
   every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
-  (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
+  (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per site.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum

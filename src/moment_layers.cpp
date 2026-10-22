@@ -533,6 +533,36 @@ void MomentLayers::rebuild(std::vector<MomentBlob> &r_out) const {
     fresh.kept(r_out);
 }
 
+MomentItem record_item(const DefLibrary &p_library, const TableRecord &p_record) {
+    MomentItem item;
+    item.anchor = p_record.anchor;
+    item.material = p_record.material;
+    if (p_record.removed || is_cutter(p_record.op) || p_record.op == Combine::ACCUM || p_record.max_lod == TableRecord::NEVER_DROPPED) {
+        return item;
+    }
+    // The layers take what its erosion removes, then all of it from its drop on.
+    item.moments = record_moments(p_library[p_record.def], p_record);
+    item.drop_lod = p_record.max_lod;
+    item.erode = p_record.erode;
+    item.erode_from = p_record.erode_from;
+    return item;
+}
+
+TableRecord blob_record(const DefLibrary &p_library, int p_blob_type, const MomentBlob &p_blob, float p_skirt_depth) {
+    TableRecord rec;
+    rec.def = uint8_t(p_blob_type);
+    rec.op = Combine::ACCUM;
+    rec.anchor = p_blob.anchor;
+    std::copy(p_blob.rotation, p_blob.rotation + 9, rec.rotation);
+    std::copy(p_blob.inv_s2, p_blob.inv_s2 + 3, rec.params);
+    rec.params[3] = p_blob.amplitude;
+    rec.material = p_blob.material;
+    finish_record(p_library[rec.def], rec, p_skirt_depth, false);
+    rec.min_lod = uint8_t(p_blob.lod);
+    rec.max_lod = uint8_t(p_blob.lod + 1);
+    return rec;
+}
+
 void build_moment_blobs(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, std::vector<MomentBlob> &r_out) {
     MomentLayers layers;
     layers.build(p_items, p_params);

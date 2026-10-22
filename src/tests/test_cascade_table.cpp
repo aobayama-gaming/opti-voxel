@@ -77,7 +77,9 @@ TEST_CASE("SDFCascade table: ground_y is the bare cascade's top solid voxel") {
 TEST_CASE("SDFCascade table: the scatter stands on the ground, folded at lattice points; far from it the bare cascade, bit for bit") {
     ScatteredCascade t(200);
     const auto snap = t.sdf.get_snapshot();
-    CHECK(snap->records.size() == 200);
+    // One site per cell of the ground: about the count asked.
+    CHECK(snap->records.size() >= 150);
+    CHECK(snap->records.size() <= 250);
     std::vector<uint32_t> list;
     int64_t pillars = 0;
     for (uint32_t i = 0; i < snap->records.size(); i++) {
@@ -94,7 +96,9 @@ TEST_CASE("SDFCascade table: the scatter stands on the ground, folded at lattice
         CHECK(std::find(list.begin(), list.end(), i) != list.end());
         pillars++;
     }
-    CHECK(pillars == 100);
+    MESSAGE("scatter: ", snap->records.size(), " records, ", pillars, " pillars");
+    CHECK(pillars * 10 >= int64_t(snap->records.size()) * 3); // about half: the site's variant picks
+    CHECK(pillars * 10 <= int64_t(snap->records.size()) * 7);
     // 4 km away, at LODs 0-6: no candidate, the bare sdf().
     for (int lod = 0; lod <= 6; lod++) {
         for (int i = 0; i < 16; i++) {
