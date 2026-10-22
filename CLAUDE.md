@@ -318,16 +318,19 @@ to every change, and a reviewer may reject a PR on any of them.
   upper trunk (the last on its tip) and a clump at each leaf stem's tip, smooth-unioned at half their radius
   into one mass; segments and clumps the hull always covers are skipped.
   Nothing is LOD-specific: the band rule is the LOD rule (thin parts erode away first, a tapered branch
-  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come): `cell_site` moves a
-  cell's hashed voxel onto the ground's zero (`SDFBase::ground_field`, `evaluate_cull`'s field with its gradient;
-  Newton steps on whole voxels) and keeps it if it stays in the cell (one owner per surface point); `surface_sites`
-  tries only the cells an absolute octree walk keeps near the surface (the discoverer's corner rule, corners evaluated
-  once; unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade); `forest_sites` drops a
-  site within `SITE_SPACING` (0.3) cells of an earlier neighbour's (projection brings sites together). A tree grows along
+  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
+  source, salted: `TREE_SITE_SALT` for the forest, the species is the site's variant): `cell_site` reads the coarse field
+  (`SDFBase::ground_field(voxel, lod)`, `evaluate_cull`'s field with its gradient; at `site_lod` a lattice sample extended
+  along its gradient) at the cell's centre, projects the cell's hashed voxel on that plane, keeps it if it lands in the
+  cell's middle part (`SITE_INNER` 0.15 off each side across the normal: neighbours stay 0.3 cells apart with no
+  neighbour pass), then snaps it onto the LOD-0 ground (`SNAP_STEPS` Newton steps on whole voxels, one owner per surface
+  point); `surface_sites` tries only the cells an absolute octree walk keeps, one coarse reading per node centre, while
+  its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes): ~9 evaluations per site, 1 per empty box;
+  unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). Still column-based (flat debt): the scene's centre (`ground_y`) and the lake keep-out
   (`in_lake(x, z)`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
-  every tree: forest5cm is another forest than before PR B. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
+  every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second

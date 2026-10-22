@@ -305,7 +305,7 @@ VoxelBox SDFTable::record_box(const TableRecord &p_rec) {
 
 void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats) {
     const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
-    std::vector<TreeSite> sites;
+    std::vector<CellSite> sites;
     const int64_t side = forest_cell_side(forest_count, forest_area, p_voxel);
     if (side > 0) {
         // The zone: the square of side forest_area around the scene's centre, over every height the ground can reach in
@@ -315,7 +315,7 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
         const VoxelPos centre(x, ground_y(x, z), z);
         const int64_t half = std::llround(0.5 * forest_area / p_voxel);
         const VoxelPos reach(half, 4 * half, half);
-        forest_sites(centre - reach, centre + reach, side, [this](const VoxelPos &p_v) { return ground_field(p_v); }, sites);
+        surface_sites(centre - reach, centre + reach, side, TREE_SITE_SALT, [this](const VoxelPos &p_v, int p_lod) { return ground_field(p_v, p_lod); }, sites);
     }
     // Each site's tree is independent (up_at and the library are const): on the worker pool, a batch at a time (the
     // parts wait for their turn), then admitted in site order (the record ids don't change).
@@ -328,20 +328,20 @@ void SDFTable::add_forest(const TreeTypes &p_types, double p_voxel, double p_cen
     for (size_t i = 0; i < sites.size(); i++) {
         if (i % BATCH == 0) {
             parallel_for(uint32_t(MIN(BATCH, sites.size() - i)), "SDFTable::add_forest", [&](uint32_t p_j) {
-                TreeSite &site = sites[i + p_j];
+                const Site &site = sites[i + p_j].site;
                 grown[p_j].clear(); // empty: in a lake
                 if (!in_lake(site.base.x, site.base.z)) {
-                    grow_tree(tree_species()[site.species], site.base, up_at(site.base), site.seed, p_voxel, p_types, grown[p_j]);
+                    grow_tree(tree_species()[tree_species_of(site.variant)], site.base, up_at(site.base), site.seed, p_voxel, p_types, grown[p_j]);
                 }
             });
         }
-        const TreeSite &site = sites[i];
+        const Site &site = sites[i].site;
         std::vector<TableRecord> &parts = grown[i % BATCH];
         const uint32_t first = records.size();
         if (parts.empty() || !admit(parts, "tree")) {
             continue;
         }
-        trees.push_back(TreeSpan{ first, uint32_t(parts.size()), site.species, site.seed });
+        trees.push_back(TreeSpan{ first, uint32_t(parts.size()), tree_species_of(site.variant), site.seed });
         most = MAX(most, int64_t(parts.size()));
         const MaterialMoments mm = span_moments(*library, parts.data(), uint32_t(parts.size()), site.base);
         for (int i = 0; i < 2; i++) {
