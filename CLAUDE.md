@@ -615,12 +615,23 @@ to every change, and a reviewer may reject a PR on any of them.
   delta and every destroy check against it and ERRORs on a difference (unit test: the randomized run in
   `test_chunk_memory.cpp`). Run a fly with it after touching `chunk_memory`, the discoverer's publish or
   the meshers' result path. `destroy.rescans` counts the rare pass over the dirty set (a stale result).
+- Coverage (the split rule per sub-cube): a stalled chunk stays loaded until its last dirty descendant lands, but
+  it stops drawing where the chunks replacing it already have. `VoxelState::stalled` (a `Stall` per stalled chunk)
+  counts the dirty chunks anchored to it, in total (the split rule) and in each of its 4x4x4 sub-cubes
+  (`subcube.hpp`, `ChunkMath::subcube_bits`; `--destroy_verify` and the randomized test check it against the full
+  recompute); `hidden_mask` = the sub-cubes at 0. `push_coverage` (after compaction) hands the changed masks to the
+  chunks' `ChunkReleaser` owner; the direct mesher writes them, at its next `process_queue`, into header texel 2 of
+  the chunk's rows and flags them in texel 1's palette word (`PageFormat::COVERAGE_FLAG`: unflagged rows skip the
+  fetch; `QuadPagePool::rt_set_hidden`: a staging texture + `texture_copy`, since `texture_update` writes whole
+  layers), so kills, fresh pages and the emit pass clear it and compaction carries it. The page shader collapses a quad
+  whose 4 corners all lie in hidden sub-cubes (overlap at the cut, never a gap). View 13 draws the hidden quads
+  magenta and the stalled chunks' still drawn ones orange. `destroy.coverage_*` in the stats.
 - Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
   8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids),
-  10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`).
+  10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`), 13 coverage (hidden quads magenta, see Coverage).
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
@@ -682,6 +693,9 @@ to every change, and a reviewer may reject a PR on any of them.
 - Never call `multimesh_set_buffer` / `multimesh_instance_*` / `multimesh_get_buffer` on a page: it
   creates a CPU cache that overwrites GPU-written data. `multimesh_get_*_rd_rid` from the main thread
   blocks: only call it on the render thread.
+- `texture_update` of one texture several times in a frame, each followed by a `texture_copy` out of it: the copies
+  read the last contents (measured: the coverage masks of a multi-round flush went to the wrong rows, the hidden quads
+  mostly never showed). One staging texture per upload within a frame (`QuadPagePool::rt_set_hidden`).
 - Many MB of `texture_get_data_async` in one frame crashes 4.6.3 (download staging overflow):
   throttle readbacks (validator/auditor do 2 pages per frame).
 - An interrupted scons (session moved, killed shell) can leave 0-byte `.os` files that scons later
