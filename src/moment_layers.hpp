@@ -1,5 +1,6 @@
 #pragma once
 
+#include "archetype_table.hpp"
 #include "instance_moments.hpp"
 #include "world_coord.hpp"
 
@@ -207,6 +208,12 @@ private:
     // update() on one layer: item p_id was p_before (items[p_id] holds its new state).
     void update_layer(Layer &layer, uint32_t p_id, const MomentItem &p_before, std::vector<MomentBlobChange> &r_changes);
 };
+
+// A record's item: its moments, material and the first LOD it is gone at (dropped, or eroded past its half thickness);
+// empty moments for one that weighs nothing (removed, a cutter, a blob, never dropped).
+MomentItem record_item(const DefLibrary &p_library, const TableRecord &p_record);
+// A blob's record (op ACCUM, type p_blob_type, listed at its layer's LOD alone).
+TableRecord blob_record(const DefLibrary &p_library, int p_blob_type, const MomentBlob &p_blob, float p_skirt_depth);
 
 // The kept blobs of p_items' layers (a MomentLayers build), in (lod, cell, material) order.
 void build_moment_blobs(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, std::vector<MomentBlob> &r_out);
