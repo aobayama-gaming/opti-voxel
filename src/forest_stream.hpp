@@ -59,10 +59,12 @@ public:
     // since (no key looked at); it is checked in full again once they are all placed, or after RECHECK_FRAMES (the safety
     // net: a key evicted or refused meanwhile).
     bool ready(const ChunkId &p_chunk);
-    // Main thread, after the meshers' batches: ready()'s full check for a chunk queued further on (the meshers walk their
-    // queues in pop order), uncounted, so the workers compute ahead of the batches; the batch's ready() then answers from
-    // its wait. A chunk is checked again after RECHECK_FRAMES at the earliest. False once the workers hold
-    // IN_FLIGHT_USEC_PER_WORKER or the frame's PREFETCH_USEC_MAX is spent: the walk stops there. Only the order keys are
+    // Main thread, after the meshers' batches: asks for the keys of a chunk queued further on (the meshers walk their queues
+    // in pop order), so the workers compute ahead of the batches' ready(). Unlike a waiting full check it pins nothing (a far
+    // chunk's keys stay evictable) and registers no wait (its ready() checks in full, once). A chunk is asked again after
+    // RECHECK_FRAMES at the earliest. False once the workers hold IN_FLIGHT_USEC_PER_WORKER or the frame's
+    // PREFETCH_USEC_MAX is spent, checked before each chunk: the walk stops there, so `queued` holds at most one chunk's
+    // keys past what the workers hold and the batches' own keys don't wait behind a backlog. Only the order keys are
     // computed in changes, not what a chunk lists.
     bool prefetch(const ChunkId &p_chunk);
     // Main thread, once per frame: lands the keys the workers finished (their dependents queued once their last input is
@@ -143,6 +145,7 @@ private:
     std::deque<FieldKey> queued; // to start, in the order their inputs arrived
     int running = 0; // stats only: in_flight_usec gates the starts
     int64_t in_flight_usec = 0; // the running jobs' estimates
+    std::unordered_map<ChunkId, uint64_t, ChunkHash> prefetched; // the frame each chunk was last prefetched
     uint64_t prefetch_usec_frame = 0;
     int64_t cache_limit = INPUT_CACHE_RECORDS;
     std::unordered_map<ChunkId, ChunkWait, ChunkHash> chunk_waits;
@@ -178,7 +181,7 @@ private:
         int64_t asked_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t waited_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t full_checks = 0; // ready() calls that looked at every key of their chunk
-        int64_t prefetched = 0; // prefetch()'s full checks (also in full_checks)
+        int64_t prefetched = 0; // chunks whose keys prefetch() asked for
         uint64_t prefetch_usec = 0;
         int64_t trimmed = 0; // inputs dropped from the cache
         int64_t swept = 0; // empty keys dropped

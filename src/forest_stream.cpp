@@ -142,11 +142,15 @@ bool ForestStream::prefetch(const ChunkId &p_chunk) {
     if (in_flight_usec >= int64_t(workers.size()) * IN_FLIGHT_USEC_PER_WORKER || prefetch_usec_frame >= PREFETCH_USEC_MAX) {
         return false;
     }
-    const auto [it, fresh] = chunk_waits.try_emplace(p_chunk);
-    ChunkWait &w = it->second;
-    if (fresh || frame - w.checked >= RECHECK_FRAMES) {
-        w.asked = frame;
-        check_chunk(p_chunk, w); // all placed: kept, missing 0, so its ready() checks in full (and finds it ready)
+    const auto [it, fresh] = prefetched.try_emplace(p_chunk, frame);
+    // A chunk ready() found waiting has its keys asked for (and held) already.
+    if ((fresh || it->second + RECHECK_FRAMES <= frame) && chunk_waits.find(p_chunk) == chunk_waits.end()) {
+        it->second = frame;
+        thread_local std::vector<FieldKey> keys;
+        field().chunk_keys(p_chunk, param, keys);
+        for (const FieldKey &k : keys) {
+            request(k, true);
+        }
         stats.prefetched++;
         start_queued();
     }
@@ -178,10 +182,10 @@ bool ForestStream::check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait) {
             e.waiters.push_back({ p_chunk, r_wait.gen }); // place() counts it down
         }
     }
-    // Waiting: asked for until the chunk's next full check, within the grace meanwhile. Ready: back to now (request() keeps
-    // the later of the two), else a meshed chunk's keys stayed out of eviction RECHECK_FRAMES longer.
-    for (Entry *e : seen) {
-        e->used = r_wait.missing > 0 ? frame + RECHECK_FRAMES : frame;
+    if (r_wait.missing > 0) {
+        for (Entry *e : seen) {
+            e->used = frame + RECHECK_FRAMES; // asked for until the chunk's next full check: within the grace meanwhile
+        }
     }
     return r_wait.missing == 0;
 }
@@ -283,6 +287,9 @@ void ForestStream::poll() {
     if (frame % WAIT_DROP_FRAMES == 0) {
         for (auto it = chunk_waits.begin(); it != chunk_waits.end();) {
             it = it->second.asked + WAIT_DROP_FRAMES < frame ? chunk_waits.erase(it) : std::next(it); // left the queues
+        }
+        for (auto it = prefetched.begin(); it != prefetched.end();) {
+            it = it->second + RECHECK_FRAMES <= frame ? prefetched.erase(it) : std::next(it); // would be asked again anyway
         }
     }
     const uint64_t dt = now_usec() - t0;

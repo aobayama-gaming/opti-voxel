@@ -265,3 +265,11 @@ TEST_CASE("ChunkMath: load_queue puts the view cone first, then the finest LOD")
     CHECK(ChunkMath::load_queue(ChunkId(-1000, 8, 8), lods, view) == lods + 3);
     CHECK(ChunkMath::load_queue(ChunkId(-39, 1, 1), lods, ScanView()) == 0); // no view: LOD order
 }
+
+TEST_CASE("ChunkMath: lod_slot clamps a LOD into the per-LOD stat arrays") {
+    CHECK(ChunkMath::lod_slot(-1) == 0);
+    CHECK(ChunkMath::lod_slot(0) == 0);
+    CHECK(ChunkMath::lod_slot(7) == 7);
+    CHECK(ChunkMath::lod_slot(ChunkMath::MAX_LOD_NUMBERS - 1) == ChunkMath::MAX_LOD_NUMBERS - 1);
+    CHECK(ChunkMath::lod_slot(ChunkMath::MAX_LOD_NUMBERS) == ChunkMath::MAX_LOD_NUMBERS - 1);
+}

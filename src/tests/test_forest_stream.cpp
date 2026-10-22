@@ -167,9 +167,10 @@ TEST_CASE("ForestStream: under a small slot pool the keys are evicted and comput
             CHECK(settle(stream, { c }));
             CHECK(same_records(streamed(stream, c), fx.direct(c)));
             checked++;
-            // Nobody asks: the chunk's keys age past the grace. (A chunk that had waited kept its keys RECHECK_FRAMES past
-            // its ready check: the next chunk found no room, a timing-dependent refusal.)
-            for (uint64_t f = 0; f <= ForestStream::GRACE_FRAMES; f++) {
+            // Nobody asks: the chunk's keys age past the grace, and past the RECHECK_FRAMES a waiting check holds them for
+            // (by design: until that chunk's next check). Aging past the grace only left them held whenever the chunk's last
+            // check had waited, and the next chunk found no room: a timing-dependent refusal.
+            for (uint64_t f = 0; f <= ForestStream::RECHECK_FRAMES + ForestStream::GRACE_FRAMES; f++) {
                 stream.poll();
             }
         }

@@ -879,7 +879,11 @@ bool GPUMesher::get_results(VoxelState &output) {
 }
 
 void GPUMesher::process_queue() {
-    _prefetch(); // before the batch: its pops are asked anyway, and the worker is busy most frames
+    _dispatch_batch();
+    _prefetch(); // every frame, the worker busy or not
+}
+
+void GPUMesher::_dispatch_batch() {
     if (!_is_available())
         return;
 
