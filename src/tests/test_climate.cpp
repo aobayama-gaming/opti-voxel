@@ -184,6 +184,21 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"fields": [{"name": "t", "seed": 1e20}], "biomes": [{"name": "a"}]})", "whole number" },
         { R"({"fields": [{"name": "t", "seed": 7.9}], "biomes": [{"name": "a"}]})", "whole number" },
         { R"({"fields": [{"name": "temp/2"}], "biomes": [{"name": "a"}]})", "identifier" },
+        { R"({"fields": [{"name": "t"}], "heights": [{"field": "t", "height_m": 1, "region": "r"}], "biomes": [{"name": "a"}]})", "'r' is not a region" },
+        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}],
+              "heights": [{"field": "t", "height_m": 1, "region": "r"}], "biomes": [{"name": "a"}]})",
+                "a gated term takes a curve" },
+        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]},
+              {"name": "r", "where": [{"field": "t", "max": 0, "fade": 1}]}], "biomes": [{"name": "a"}]})",
+                "used twice" },
+        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": []}], "biomes": [{"name": "a"}]})", "at least one edge" },
+        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r/2", "where": [{"field": "t", "min": 0, "fade": 1}]}], "biomes": [{"name": "a"}]})",
+                "identifier" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "region": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}, {"name": "b"}]})",
+                "'r' is not a region" },
+        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}],
+              "biomes": [{"name": "a", "region": "r"}]})",
+                "the last biome is the default" },
     };
     for (const Case &c : cases) {
         CAPTURE(c.json);
@@ -200,6 +215,12 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         many += vformat("%s{\"name\": \"f%d\"}", i ? ", " : "", i);
     }
     CHECK(parse_json(many + R"(], "biomes": [{"name": "a"}]})", g.ground, t).contains(vformat("at most %d", MAX_FIELDS)));
+    // A table whose gated list no longer matches its height terms (edited after parse) is refused, not read stale.
+    CHECK(parse_json(R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}],
+              "biomes": [{"name": "a"}]})",
+                  g.ground, t) == String());
+    t.heights.push_back(HeightTerm{ 0, 1.0f, true, make_curve({ -1.0, 1.0 }, { -1.0, 1.0 }), 0 });
+    CHECK(validate(t, g.ground).contains("Table::gated"));
 }
 
 // max_ground_mult is validate's cap (climate_report exports it for tools/landforms/match.py): just under it parses,

@@ -12,8 +12,8 @@ namespace Climate {
 
 // The format (JSON; distances in metres, rounded to whole octaves 2^k voxels; "comment" keys are ignored, any
 // other unknown key is an error):
-//   { "fields": [ field... ], "heights": [ height... ] (optional), "ground_stretch": [ stretch... ] (optional),
-//     "biomes": [ biome..., default biome ] }
+//   { "fields": [ field... ], "regions": [ region... ] (optional), "heights": [ height... ] (optional),
+//     "ground_stretch": [ stretch... ] (optional), "biomes": [ biome..., default biome ] }
 //   field:  { "name": "temperature", "seed": 7 (optional, else a hash of the name), "noise": "perlin" | "cell" (optional),
 //             "bands": [ { "wavelength_m": 5000, "amp": 1, shape (optional), "stretch_y": 1 (optional) }
 //                      | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional), shape (optional) } ],
@@ -29,15 +29,19 @@ namespace Climate {
 //   shape:  "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
 //           2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A band
 //           inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
-//   height: { "field": "continent", "height_m": 2048, "curve": [[x, y], ...] (optional, x increasing) }: the ground
-//           adds height_m * curve(field) at each sample (libnoise's Curve), height_m * field without a curve.
+//   region: { "name": "cold", "where": [ edge... ] (a biome's "where") }: a part of the fields' space, for several
+//           landforms in one table (macro climate fields as its edges). A biome's or a height's "region" names one.
+//   height: { "field": "continent", "height_m": 2048, "curve": [[x, y], ...] (optional, x increasing),
+//             "region": "cold" (optional, with a curve) }: the ground adds height_m * curve(field) at each sample
+//           (libnoise's Curve), height_m * field without a curve, times the region's value with one (1 in its core,
+//           0 outside its fades: a landform's cliff, trough or coast only in its region).
 //     A cell noise field ("noise": "cell") is Worley F1 (ExactNoise::cell3), plain bands only: read through a height
 //     term (dunes, cells).
 //     A range is every octave from from_m to to_m that the ground has (its octaves depend on the LOD count: the
 //     table covers the whole spectrum at any count), amp at to_m (the coarsest) times persistence per finer octave.
 //     Octave k's seed and lattice are make_octave(field seed, k): editing one band leaves the others' unchanged.
 //     A ground term reads the ground's height above the datum (per metre); a field term that field's value.
-//   biome:  { "name": "volcanic",
+//   biome:  { "name": "volcanic", "region": "warm" (optional: its edges come before the biome's own),
 //             "where": [ { "field": "temperature", "min": 0.5, "max": 2 (either or both), "fade": 0.1
 //                          (or "fade_min" / "fade_max") } ],
 //             "amp": [ { "field": "ground" | "<field>", "wavelength_m": 4000 | "from_m": 1000, "to_m": 20000, "x": 3 (default 1),
@@ -66,7 +70,7 @@ public:
     String error;
 
     void run(const Dictionary &p_data) {
-        if (!keys(p_data, "climate", { "fields", "biomes", "heights", "ground_stretch" })) {
+        if (!keys(p_data, "climate", { "fields", "regions", "biomes", "heights", "ground_stretch" })) {
             return;
         }
         const Array stretch = array(p_data, "ground_stretch", "climate");
@@ -77,6 +81,10 @@ public:
         for (int64_t i = 0; i < fields.size() && error.is_empty(); i++) {
             field(dict(fields[i], vformat("field %d", i)), i);
         }
+        const Array regions = array(p_data, "regions", "climate");
+        for (int64_t i = 0; i < regions.size() && error.is_empty(); i++) {
+            region(dict(regions[i], vformat("region %d", i)), i);
+        }
         const Array heights = array(p_data, "heights", "climate");
         for (int64_t i = 0; i < heights.size() && error.is_empty(); i++) {
             height(dict(heights[i], vformat("height %d", i)), vformat("height %d", i));
@@ -85,6 +93,7 @@ public:
         for (int64_t i = 0; i < biomes.size() && error.is_empty(); i++) {
             biome(dict(biomes[i], vformat("biome %d", i)), i);
         }
+        table.gated = gated_regions(table);
     }
 
 private:
@@ -370,13 +379,15 @@ private:
         table.fields.push_back(f);
     }
 
-    // { "field": f, "height_m": H, "curve": [[x, y], ...] (optional) }: the ground adds H * curve(f) (H * f).
+    // { "field": f, "height_m": H, "curve": [[x, y], ...] (optional), "region": r (optional) }: the ground adds
+    // H * curve(f) (H * f), times region r.
     void height(const Dictionary &p_d, const String &p_where) {
-        if (!keys(p_d, p_where, { "field", "height_m", "curve" })) {
+        if (!keys(p_d, p_where, { "field", "height_m", "curve", "region" })) {
             return;
         }
         HeightTerm h;
         h.field = source(text(p_d, "field", p_where), p_where, false, int(table.fields.size()), "a field");
+        h.region = p_d.has("region") ? region_ref(text(p_d, "region", p_where), p_where) : -1;
         h.coef = float(number(p_d, "height_m", p_where) / ground.voxel_size);
         if (p_d.has("curve")) {
             const Array pts = array(p_d, "curve", p_where);
@@ -409,7 +420,7 @@ private:
         table.heights.push_back(h);
     }
 
-    void edges(const Dictionary &p_d, const String &p_where, Climate::Biome &r_b) {
+    void edges(const Dictionary &p_d, const String &p_where, std::vector<Edge> &r_edges) {
         if (!keys(p_d, p_where, { "field", "min", "max", "fade", "fade_min", "fade_max" })) {
             return;
         }
@@ -428,10 +439,34 @@ private:
                 fail(p_where, "the fade must be > 0.");
                 return;
             }
-            r_b.edges.push_back(Edge{ f, float(number(p_d, p_bound, p_where) - p_sign * w), float(p_sign / w) });
+            r_edges.push_back(Edge{ f, float(number(p_d, p_bound, p_where) - p_sign * w), float(p_sign / w) });
         };
         side("min", "fade_min", 1.0);
         side("max", "fade_max", -1.0);
+    }
+
+    void region(const Dictionary &p_d, int64_t p_i) {
+        const String at = vformat("region %d", p_i);
+        if (!keys(p_d, at, { "name", "where" })) {
+            return;
+        }
+        Region r;
+        r.name = text(p_d, "name", at);
+        const String where = "region '" + r.name + String("' where");
+        const Array sides = array(p_d, "where", where);
+        for (int64_t i = 0; i < sides.size() && error.is_empty(); i++) {
+            edges(dict(sides[i], where), where, r.edges);
+        }
+        table.regions.push_back(r);
+    }
+
+    // The region a name refers to (declared under "regions"), -1 and an error otherwise.
+    int region_ref(const String &p_name, const String &p_where) {
+        const int r = table.region_index(p_name);
+        if (r < 0) {
+            fail(p_where, "'" + p_name + String("' is not a region."));
+        }
+        return r;
     }
 
     void amps(const Dictionary &p_d, const String &p_where, Climate::Biome &r_b) {
@@ -516,16 +551,22 @@ private:
     }
 
     void biome(const Dictionary &p_d, int64_t p_i) {
-        if (!keys(p_d, vformat("biome %d", p_i), { "name", "where", "amp", "terrace", "surface", "debug_color" })) {
+        if (!keys(p_d, vformat("biome %d", p_i), { "name", "region", "where", "amp", "terrace", "surface", "debug_color" })) {
             return;
         }
         Climate::Biome b;
         b.name = text(p_d, "name", vformat("biome %d", p_i));
         const String where = "biome '" + b.name + String("'");
-        const Array regions = array(p_d, "where", where);
+        if (p_d.has("region")) {
+            const int r = region_ref(text(p_d, "region", where), where);
+            if (r >= 0) {
+                b.edges = table.regions[size_t(r)].edges;
+            }
+        }
+        const Array sides = array(p_d, "where", where);
         const String edge_where = where + String(" where");
-        for (int64_t i = 0; i < regions.size() && error.is_empty(); i++) {
-            edges(dict(regions[i], edge_where), edge_where, b);
+        for (int64_t i = 0; i < sides.size() && error.is_empty(); i++) {
+            edges(dict(sides[i], edge_where), edge_where, b.edges);
         }
         const Array amp = array(p_d, "amp", where);
         const String amp_where = where + String(" amp");

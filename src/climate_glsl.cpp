@@ -83,13 +83,19 @@ String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const Str
     code += "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
     const size_t n = p_table.biomes.size();
     for (size_t b = 0; b + 1 < n; b++) {
-        code += vformat("    vec4 r%d = vec4(0.0, 0.0, 0.0, 1.0);\n", int64_t(b));
-        for (const Edge &e : p_table.biomes[b].edges) {
-            code += vformat("    r%d = cl_mul(r%d, cl_edge(f%d, %s, %s));\n", int64_t(b), int64_t(b), e.field, glsl_float(e.anchor), glsl_float(e.scale));
-        }
+        code += glsl_edges_value(vformat("r%d", int64_t(b)), p_table.biomes[b].edges);
         code += vformat("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
     }
     code += vformat("    vec4 w%d = rest;\n", int64_t(n - 1));
+    return code;
+}
+
+String glsl_edges_value(const String &p_var, const std::vector<Edge> &p_edges) {
+    using ExactNoise::glsl_float;
+    String code = "    vec4 " + p_var + String(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
+    for (const Edge &e : p_edges) {
+        code += vformat("    %s = cl_mul(%s, cl_edge(f%d, %s, %s));\n", p_var, p_var, e.field, glsl_float(e.anchor), glsl_float(e.scale));
+    }
     return code;
 }
 

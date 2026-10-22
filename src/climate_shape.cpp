@@ -205,9 +205,13 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
         apply_terms(p_table, p_slots, st.fields);
     }
     const Float4 *f = st.fields;
+    Float4 region[MAX_REGIONS];
+    for (const int r : p_table.gated) {
+        region[r] = edges_value(p_table.regions[size_t(r)].edges, f);
+    }
     for (const HeightTerm &t : p_table.heights) {
-        const Float4 v = t.has_curve ? eval_curve(t.curve, f[t.field]) : f[t.field];
-        h = dadd(h, dscale(v, t.coef));
+        const Float4 v = dscale(t.has_curve ? eval_curve(t.curve, f[t.field]) : f[t.field], t.coef);
+        h = dadd(h, t.region >= 0 ? dmul(region[t.region], v) : v);
     }
     if (!p_table.has_terraces()) {
         return h;
@@ -236,11 +240,14 @@ String ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
     code += "\n// Climate::ground_value: the cascade's ground, the height terms, then the biomes' terraces; (value, gradient).\n";
     code += "vec4 climate_ground(Ch ch) {\n";
     code += glsl_weights(p_table, p_combined, "ch");
+    for (const int r : p_table.gated) {
+        code += glsl_edges_value(vformat("rg%d", r), p_table.regions[size_t(r)].edges);
+    }
     code += "    vec4 h = g0;\n";
     for (size_t i = 0; i < p_table.heights.size(); i++) {
         const HeightTerm &t = p_table.heights[i];
-        const String v = t.has_curve ? vformat("cl_curve%d(f%d)", int64_t(i), t.field) : vformat("f%d", t.field);
-        code += vformat("    h = cl_add(h, cl_scale(%s, %s));\n", v, glsl_float(t.coef));
+        const String v = vformat("cl_scale(%s, %s)", t.has_curve ? vformat("cl_curve%d(f%d)", int64_t(i), t.field) : vformat("f%d", t.field), glsl_float(t.coef));
+        code += vformat("    h = cl_add(h, %s);\n", t.region >= 0 ? vformat("cl_mul(rg%d, %s)", t.region, v) : v);
     }
     code += "    vec4 base = h;\n";
     for (size_t b = 0; b < p_table.biomes.size(); b++) {

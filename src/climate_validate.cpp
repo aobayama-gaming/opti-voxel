@@ -142,6 +142,9 @@ String validate_height(const Table &p_table, const Ground &p_ground, const Heigh
     if (p_h.field < 0 || p_h.field >= int(p_table.fields.size())) {
         return "climate: a height term reads a field that doesn't exist.";
     }
+    if (p_h.region >= int(p_table.regions.size()) || (p_h.region >= 0 && !p_h.has_curve)) {
+        return "climate: a height term's region must exist, and a gated term takes a curve (bounded: its skirt step).";
+    }
     if (!moderate(p_h.coef)) {
         return vformat("climate: height term coefficient %s outside [2^-40, 2^40] voxels.", p_h.coef);
     }
@@ -161,6 +164,35 @@ String validate_height(const Table &p_table, const Ground &p_ground, const Heigh
     return String();
 }
 
+// A biome's or a region's edges: existing fields, bounds and fades in range.
+String validate_edges(const Table &p_table, const std::vector<Edge> &p_edges) {
+    for (const Edge &e : p_edges) {
+        if (e.field < 0 || e.field >= int(p_table.fields.size())) {
+            return "an edge reads a field that doesn't exist.";
+        }
+        if ((e.anchor != 0.0f && !moderate(e.anchor)) || !moderate(e.scale)) {
+            return vformat("edge on '%s': bound or fade out of range.", p_table.fields[size_t(e.field)].name);
+        }
+    }
+    return String();
+}
+
+String validate_region(const Table &p_table, size_t p_i) {
+    const Region &r = p_table.regions[p_i];
+    if (!r.name.is_valid_ascii_identifier()) {
+        return vformat("climate region %d: the name must be an identifier (letters, digits, _).", int64_t(p_i));
+    }
+    const String where = "climate region '" + r.name + String("': ");
+    if (name_taken_before(p_table.regions, p_i)) {
+        return where + String("the name is used twice.");
+    }
+    if (r.edges.empty()) {
+        return where + String("a region has at least one edge.");
+    }
+    const String err = validate_edges(p_table, r.edges);
+    return err.is_empty() ? String() : where + err;
+}
+
 String validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground) {
     const Biome &b = p_table.biomes[p_i];
     if (b.name.is_empty()) {
@@ -172,15 +204,11 @@ String validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground) 
     }
     const bool last = p_i + 1 == p_table.biomes.size();
     if (last != b.edges.empty()) {
-        return where + String(last ? "the last biome is the default: no region." : "only the last biome (the default) has no region.");
+        return where + String(last ? "the last biome is the default: no edges and no region." : "only the last biome (the default) has no edges.");
     }
-    for (const Edge &e : b.edges) {
-        if (e.field < 0 || e.field >= int(p_table.fields.size())) {
-            return where + String("an edge reads a field that doesn't exist.");
-        }
-        if ((e.anchor != 0.0f && !moderate(e.anchor)) || !moderate(e.scale)) {
-            return where + vformat("edge on '%s': bound or fade out of range.", p_table.fields[size_t(e.field)].name);
-        }
+    const String err = validate_edges(p_table, b.edges);
+    if (!err.is_empty()) {
+        return where + err;
     }
     if (b.terrace.step != 0.0f && !(moderate(b.terrace.step) && b.terrace.step > 0.0f)) {
         return where + String("the terrace step must be > 0.");
@@ -208,8 +236,20 @@ String validate(const Table &p_table, const Ground &p_ground) {
     if (p_table.biomes.empty() || p_table.biomes.size() > size_t(MAX_BIOMES)) {
         return vformat("climate: %d biomes, 1 to %d.", int64_t(p_table.biomes.size()), MAX_BIOMES);
     }
+    if (p_table.regions.size() > size_t(MAX_REGIONS)) {
+        return vformat("climate: %d regions, at most %d.", int64_t(p_table.regions.size()), MAX_REGIONS);
+    }
+    if (p_table.gated != gated_regions(p_table)) {
+        return "climate: Table::gated is not the regions the height terms name (set it with gated_regions).";
+    }
     for (int i = 0; i < int(p_table.fields.size()); i++) {
         const String err = validate_field(p_table, i, p_ground);
+        if (!err.is_empty()) {
+            return err;
+        }
+    }
+    for (size_t i = 0; i < p_table.regions.size(); i++) {
+        const String err = validate_region(p_table, i);
         if (!err.is_empty()) {
             return err;
         }
