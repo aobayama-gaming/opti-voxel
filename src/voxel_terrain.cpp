@@ -729,6 +729,8 @@ void VoxelTerrain::_ready() {
             skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
         }
         direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
+        const UpAxis up = sdf->up_at(VoxelPos(0, sdf->get_datum_y(), 0));
+        direct_mesher->get_pool()->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
         if (sdf->preset == SDFCascade::Preset::CONTINENTS) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
             const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;

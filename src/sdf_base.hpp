@@ -88,9 +88,6 @@ public:
 
 class SDFBase {
 public:
-    // Every terrain's datum, metres of absolute y: a flat world, so far origins only show terrain at y = 0.
-    static constexpr double DATUM_M = 300.0;
-
     virtual ~SDFBase() = default;
 
     // Called once before any thread uses the SDF (VoxelTerrain::_ready). Chunks exist at LODs
@@ -114,7 +111,7 @@ public:
 
     // The unit direction upright things (trees) grow along at a LOD0 voxel: the one source of "up" for placement.
     // +y on the flat world; a planet overrides it.
-    virtual std::array<double, 3> up_at(const VoxelPos & /*p_voxel*/) const { return { 0.0, 1.0, 0.0 }; }
+    virtual UpAxis up_at(const VoxelPos & /*p_voxel*/) const { return UP_Y; }
 
     // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
     // wave, over the WorkerThreadPool in blocks of BATCH_BLOCK points (evaluate_cull is thread-safe).

@@ -78,10 +78,6 @@ struct TreeStem {
     std::vector<double> children;
 };
 
-// A unit direction in absolute axes (SDFBase::up_at).
-using UpAxis = std::array<double, 3>;
-inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
-
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
 // boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the
 // trunk grows along, and the cone tiers' axis; the tree is grown in absolute axes, joints on whole voxels (UP_Y: the

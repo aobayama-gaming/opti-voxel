@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "exact_noise.hpp"
+#include "exact_noise_glsl.hpp"
 #include "material_library.hpp"
 #include "world_coord.hpp"
 
@@ -31,6 +32,9 @@ uniform float voxel_size = 0.5;
 // Sea level in metres above the world origin: below -1e29, no height colours (VoxelTerrain sets it for
 // the continents preset).
 uniform float sea_level_m = -1e30;
+// The base surface's up (BaseSurface::up_dir), which the slope colours read: +y on the flat world. A sphere base will
+// need it per vertex.
+uniform vec3 base_up = vec3(0.0, 1.0, 0.0);
 // World origin in chunk-id units, low 32 bits: positions are drawn relative to it.
 uniform ivec3 origin_chunk_lo = ivec3(0);
 uniform int chunk_size = 32;
@@ -248,7 +252,7 @@ void vertex() {
 void fragment() {
     // Shaded: grass on gentle slopes, rock on steep ones, faint contour lines every 100 m (mid tones, so
     // the tonemapper keeps the relief readable).
-    float up = clamp(v_world_normal.y, 0.0, 1.0);
+    float up = clamp(dot(v_world_normal, base_up), 0.0, 1.0);
     vec3 rock = vec3(0.36, 0.32, 0.28);
     vec3 albedo = mix(rock, vec3(0.24, 0.36, 0.16), smoothstep(0.8, 0.95, up));
     float contour_m = 100.0;

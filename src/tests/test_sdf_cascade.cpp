@@ -71,7 +71,7 @@ TEST_CASE("Cascade: closed-form level boxes equal the iterated parent boxes, wit
     }
 }
 
-// SDFCascade::evaluate is Cascade::point + height_sdf + metres, bit for bit, on lattice points of every LOD.
+// SDFCascade::evaluate is Cascade::point + height_sdf over its base + metres, bit for bit, on lattice points of every LOD.
 TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bit") {
     for (const int lods : { 15, 25 }) {
         ChunkParam param;
@@ -95,8 +95,7 @@ TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bi
                 const float got = sdf.evaluate(pos, lod);
                 float ch[CHANNELS];
                 point(spec, lattice, lod, ch);
-                const float dy = float(WorldCoord::sat_diff(pos.voxel.y, sdf.get_datum_y(), SDFCascade::DY_LIMIT)) * exact_pow2(-lod);
-                const ExactNoise::Float4 h = CascadeTerrain::height_sdf(ch, lod, dy);
+                const ExactNoise::Float4 h = CascadeTerrain::height_sdf(ch, lod, sdf.get_base().at(pos.voxel, lod));
                 const float want = h.w * (param.voxel_size * exact_pow2(lod));
                 compared++;
                 differing += float_bits(got) != float_bits(want);
@@ -215,4 +214,45 @@ TEST_CASE("CascadeGLSL: point items encode the corner as the chunk anchor, at it
     }
     // Off the corner grid: refused (prints one expected error).
     CHECK(!CascadeGLSL::encode_point_input(bytes, 0, VoxelPos(14, 0, 0), 0, pp));
+}
+
+// The default terrain's bits, pinned: every register component of the bare cascade (sdf, through the ground's base
+// surface) and evaluate() at lattice points near the ground of every preset, at 0.5 m and 5 cm, near 0 and +-2^60.
+// The hash was taken on dev before the base surface (PR "base surface"): a change of formula that moves one bit fails.
+TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
+    uint64_t hash = 0xCBF29CE484222325ull;
+    auto mix = [&hash](float p_v) {
+        hash = (hash ^ float_bits(p_v)) * 0x100000001B3ull;
+    };
+    int samples = 0;
+    for (const SDFCascade::Preset preset : { SDFCascade::Preset::DEFAULT, SDFCascade::Preset::CONTINENTS, SDFCascade::Preset::FLAT }) {
+        for (const float voxel : { 0.5f, 0.05f }) {
+            ChunkParam param;
+            param.voxel_size = voxel;
+            SDFCascade sdf;
+            sdf.preset = preset;
+            sdf.configure(param, 25);
+            const int64_t datum = sdf.get_datum_y();
+            for (const int64_t base : { int64_t(0), int64_t(12345), (int64_t(1) << 60) - 4000, -(int64_t(1) << 60) + 77 }) {
+                for (int lod = 0; lod < 25; lod += 2) {
+                    const int64_t step = int64_t(1) << lod;
+                    for (int i = -3; i <= 3; i++) {
+                        WorldPos pos;
+                        pos.voxel = VoxelPos(WorldCoord::floor_div(base, step) + i, WorldCoord::floor_div(datum, step) + 5 * i, 2 - i) * step;
+                        float ch[CHANNELS];
+                        sdf.channels_at(pos.voxel, lod, ch);
+                        const ExactNoise::Float4 r = sdf.sdf(ch, pos.voxel, lod);
+                        mix(r.x);
+                        mix(r.y);
+                        mix(r.z);
+                        mix(r.w);
+                        mix(sdf.evaluate(pos, lod));
+                        samples++;
+                    }
+                }
+            }
+        }
+    }
+    CHECK(samples == 3 * 2 * 4 * 13 * 7);
+    CHECK(hash == 8152475153248233737ull);
 }

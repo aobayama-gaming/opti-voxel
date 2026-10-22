@@ -4,9 +4,12 @@
 
 #include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
+#include "base_surface.hpp"
+#include "cascade_terrain.hpp"
 #include "chunk_math.hpp"
 #include "chunk_palette.hpp"
 #include "exact_noise.hpp"
+#include "exact_noise_glsl.hpp"
 #include "frame_probe.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
@@ -105,7 +108,91 @@ double octave_step_bound(int p_k, double p_g) {
     return p_g * std::ldexp(1.0, -MIN(p_k, 24)) + std::ldexp(1.0, -20);
 }
 
-// The two fBms the noise probes check (ExactNoise::reference_fbm2d / 3d), in every probe set's shader. Their
+// The base probes' sphere: radius 2^32 - 1000.5 voxels around (2^31, -2^32, 0), so the probe points near the origins'
+// y = 0 sit near its surface, the far ones saturate.
+BaseSurface sphere_probe_base() {
+    return BaseSurface::sphere(VoxelPos(int64_t(1) << 31, -(int64_t(1) << 32), 0), 4294967296.0 - 1000.5);
+}
+
+// The flat base probe's datum (LOD0 voxels).
+constexpr int64_t PROBE_FLAT_DATUM = 600;
+// probe_region: its hash, then 10 values f = (u >> F_SHIFT) - F_BIAS times F_SCALE in [-1, 1), d = f * D_SCALE, H = f * H_SCALE.
+constexpr uint32_t PROBE_REGION_SEED = 0xBA5Eu;
+constexpr uint32_t PROBE_REGION_SALT = 0x5EEDu;
+constexpr uint32_t PROBE_REGION_F_SHIFT = 9;
+constexpr int32_t PROBE_REGION_F_BIAS = 1 << (31 - PROBE_REGION_F_SHIFT);
+constexpr int PROBE_REGION_F_EXP = -(31 - PROBE_REGION_F_SHIFT);
+constexpr float PROBE_REGION_D_SCALE = 64.0f;
+constexpr int PROBE_REGION_H_EXP = -8;
+
+// A region from a hash of its cell: the probe's stand-in for the CPU's double regions (the GPU only evaluates the
+// form). Values in [-1, 1) scaled by powers of two: d up to 64 cells, n ~ 1, H ~ 2^-8.
+BaseSurface::Region probe_region(const VoxelPos &p_voxel, int p_lod) {
+    const uint32_t h = ExactNoise::hash_cell(BaseSurface::region_cell(p_voxel, p_lod), PROBE_REGION_SEED);
+    float f[10];
+    for (uint32_t i = 0; i < 10; i++) {
+        const uint32_t u = ExactNoise::pcg3d(ExactNoise::UVec3{ h, i, PROBE_REGION_SALT }).x;
+        f[i] = float(int32_t(u >> PROBE_REGION_F_SHIFT) - PROBE_REGION_F_BIAS) * ExactNoise::exact_pow2(PROBE_REGION_F_EXP);
+    }
+    BaseSurface::Region r;
+    r.d = f[0] * PROBE_REGION_D_SCALE;
+    for (int a = 0; a < 3; a++) {
+        r.n[a] = f[1 + a];
+    }
+    for (int i = 0; i < 6; i++) {
+        r.h[i] = f[4 + i] * ExactNoise::exact_pow2(PROBE_REGION_H_EXP);
+    }
+    return r;
+}
+
+// GLSL of probe_region and the base probes' functions (probe_base_glsl brings the bases and GLSL_HEIGHT_SDF first).
+constexpr const char PROBE_BASE_GLSL[] = R"glsl(
+BaseRegion probe_region(WorldPos p, int lod) {
+    uvec3 lo = p.lo;
+    ivec3 hi = p.hi;
+    i64_asr(lo, hi, lod + REGION_SHIFT);
+    uint h = hash_cell(lo, hi, REGION_SEED);
+    float f[10];
+    for (uint i = 0u; i < 10u; i++) {
+        uint u = pcg3d(uvec3(h, i, REGION_SALT)).x;
+        f[i] = float(int(u >> F_SHIFTu) - F_BIAS) * exact_pow2(F_EXP);
+    }
+    BaseRegion r;
+    r.d = f[0] * D_SCALE;
+    r.n = vec3(f[1], f[2], f[3]);
+    r.h_diag = vec3(f[4], f[5], f[6]) * exact_pow2(H_EXP);
+    r.h_off = vec3(f[7], f[8], f[9]) * exact_pow2(H_EXP);
+    return r;
+}
+vec4 probe_base_flat_fn(WorldPos p, int lod) {
+    vec4 n = noise_fbm3d(p, lod);
+    return height_sdf(vec4(n.w, n.x, n.y, 0.0), base_at(p, lod), lod);
+}
+vec4 probe_base_curvature_fn(WorldPos p, int lod) {
+    return base_curvature(p, lod, probe_region(p, lod));
+}
+vec4 probe_base_radius_fn(WorldPos p, int lod) {
+    return base_radius(p, lod);
+}
+)glsl";
+
+// The bases, height_sdf and PROBE_BASE_GLSL with its constants (ProbeNoise::glsl, in every probe set's shader).
+String probe_base_glsl() {
+    using ExactNoise::glsl_float;
+    using ExactNoise::glsl_uint;
+    return BaseSurface::flat(PROBE_FLAT_DATUM).glsl() + sphere_probe_base().glsl() + CascadeTerrain::GLSL_HEIGHT_SDF +
+            String(PROBE_BASE_GLSL)
+                    .replace("REGION_SHIFT", itos(BaseSurface::REGION_SHIFT))
+                    .replace("REGION_SEED", glsl_uint(PROBE_REGION_SEED))
+                    .replace("REGION_SALT", glsl_uint(PROBE_REGION_SALT))
+                    .replace("F_SHIFT", itos(PROBE_REGION_F_SHIFT))
+                    .replace("F_BIAS", itos(PROBE_REGION_F_BIAS))
+                    .replace("F_EXP", itos(PROBE_REGION_F_EXP))
+                    .replace("D_SCALE", glsl_float(PROBE_REGION_D_SCALE))
+                    .replace("H_EXP", itos(PROBE_REGION_H_EXP));
+}
+
+// The two fBms the noise probes check (and the base probes' GLSL) (ExactNoise::reference_fbm2d / 3d), in every probe set's shader. Their
 // octaves also place the continuity lines.
 struct ProbeNoise {
     ExactNoise::OctaveSet fbm2d;
@@ -115,7 +202,8 @@ struct ProbeNoise {
             fbm2d(ExactNoise::reference_fbm2d(p_voxel)),
             fbm3d(ExactNoise::reference_fbm3d(p_voxel)) {}
 
-    String glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d); }
+    // Also the base probes' functions (they read noise_fbm3d), so each probe set's shader has every helper.
+    String glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d) + probe_base_glsl(); }
 };
 
 // A probe set (a new noise or SDF term adds its entries here; one table, shared by every origin).
@@ -316,6 +404,24 @@ void probe_octave_cell(WorldPos p, uint b) {
         p.continuity_bound = fbm_bound(*set, which == 0 ? 6.0 : 4.0);
         p.continuity_word = 3;
         probes.push_back(p);
+    }
+    // The base surface (base_surface.hpp): the flat base under a height (CascadeTerrain::height_sdf, a zero slope
+    // included: the sign of t's zeros), a sphere's curvature form on hashed regions and its radius form, at every LOD.
+    {
+        const BaseSurface flat = BaseSurface::flat(PROBE_FLAT_DATUM);
+        const BaseSurface sphere = sphere_probe_base();
+        const OctaveSet *set = &p_noise.fbm3d;
+        probes.push_back(lod_probe("base_flat", "probe_base_flat_fn", [flat, set](const WorldPos &q, int p_lod) {
+            const Float4 n = fbm(*set, q, p_lod);
+            float ch[Cascade::CHANNELS] = {};
+            ch[Cascade::VALUE] = n.w;
+            ch[Cascade::DX] = n.x;
+            ch[Cascade::DY] = n.y;
+            return CascadeTerrain::height_sdf(ch, p_lod, flat.at(q.voxel, p_lod));
+        }));
+        probes.push_back(lod_probe("base_curvature", "probe_base_curvature_fn",
+                [](const WorldPos &q, int p_lod) { return BaseSurface::curvature_form(q.voxel, p_lod, probe_region(q.voxel, p_lod)); }));
+        probes.push_back(lod_probe("base_radius", "probe_base_radius_fn", [sphere](const WorldPos &q, int p_lod) { return sphere.radius_form(q.voxel, p_lod); }));
     }
     return probes;
 }
@@ -539,7 +645,7 @@ void build_cases(OriginRun &r_run, const ProbeNoise &p_noise) {
             }
         }
     }
-    const int64_t datum_voxel = std::llround(SDFBase::DATUM_M / param.voxel_size);
+    const int64_t datum_voxel = std::llround(BaseSurface::DATUM_M / param.voxel_size);
     for (int64_t c : centres) {
         const size_t begin = r_run.cases.size();
         for (int64_t v = c - 40; v <= c + 40; v++) {

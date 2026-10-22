@@ -2,6 +2,7 @@
 
 #include "chunk_math.hpp"
 #include "exact_noise.hpp"
+#include "exact_noise_glsl.hpp"
 
 #include <cmath>
 
