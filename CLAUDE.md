@@ -325,9 +325,10 @@ to every change, and a reviewer may reject a PR on any of them.
   **Stream (`src/instance_stream.*`):** `InstanceStream` holds the keys asked for in one table (empty ones
   too) with an intrusive LRU: `admit(chunk, owner, tag)` answers READY (every key placed), PARKED (its keys pinned;
   `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
-  tasks on Godot's pool at low priority (`StreamExecutor`, inline in the tests; `low_priority_thread_ratio` 0.5), a key's
-  inputs handed to it as shared pointers; `poll()` lands them (2 ms a frame) and places the listed ones in slots past the
-  table's capacity, logged per placement (`uploads_since(seq)`; a reader past the log gets every placed key). Eviction:
+  tasks on Godot's pool at low priority (`StreamExecutor`, run by `poll()` in the tests; `low_priority_thread_ratio` 0.5), a
+  key's inputs handed to it as shared pointers; the task lands each key under the stream's lock (its dependents start at once
+  on the same task: landing on the main thread, 2 ms a frame, held forest5cm's 135k keys ~900 frames) and places the listed
+  ones in slots past the table's capacity (`chunk_list` reads under a shared lock), logged per placement (`uploads_since(seq)`; a reader past the log gets every placed key). Eviction:
   oldest first, never pinned or asked for in the last `GRACE_FRAMES` (16). `point_records`: resident keys, else computed and
   dropped. Unit tests: park / return order, pins and grace, slot reuse with the log, slots full -> LATER with no deadlock.
   **Wiring:** `SDFTable` owns the stream over its valid sources (`add_stream`; `~SDFCascade` stops it first: its tasks read

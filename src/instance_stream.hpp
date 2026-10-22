@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -25,30 +26,35 @@
 // go when room is needed (slots, inputs kept, entries), none asked for in the last GRACE_FRAMES (a batch in flight
 // still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
 //
-// Main thread: admit(), take_ready(), poll(), uploads_since(). chunk_list() reads while the main thread waits (build_lists
-// on the pool); point_records() from any thread. Keys are computed by drain tasks of the executor (Godot's pool at low
-// priority), never under the stream's lock.
+// Main thread: admit(), take_ready(), poll(), uploads_since(). chunk_list() reads under a shared lock (build_lists on the
+// pool); point_records() from any thread. Keys are computed by drain tasks of the executor (Godot's pool at low priority),
+// never under the stream's lock, and landed by them under it: a key's dependents start at once, on the same task.
 namespace Archetype {
 
-// Runs the stream's drain tasks: Godot's worker pool at low priority (pool()), or at once on the calling thread (tests).
+// Runs the stream's drain tasks: Godot's worker pool at low priority (pool()), or on the thread calling reap() (tests: a
+// key asked for is computed and landed by the next poll()).
 class StreamExecutor {
 public:
     virtual ~StreamExecutor() = default;
     // How many drain tasks may run side by side.
     virtual int workers() const { return 1; }
-    // Runs p_task, now or later, on any thread.
-    virtual void run(std::function<void()> p_task) { p_task(); }
-    // Releases the finished tasks; p_wait: waits for all of them first.
-    virtual void reap(bool /* p_wait */) {}
+    // Runs p_task later, on any thread. Called from any thread, the stream's lock maybe held.
+    virtual void run(std::function<void()> p_task);
+    // Releases the finished tasks (here: runs the queued ones); p_wait: waits for all of them first. The stream's lock not
+    // held (a drain task takes it).
+    virtual void reap(bool p_wait);
 
     // Godot's WorkerThreadPool, low priority (threading/worker_pool/low_priority_thread_ratio of its threads).
     static std::unique_ptr<StreamExecutor> pool();
+
+private:
+    std::mutex queue_mutex;
+    std::vector<std::function<void()>> queued;
 };
 
 class InstanceStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
-    static constexpr uint64_t POLL_USEC_MAX = 2000; // poll()'s landing time per frame, at most
     static constexpr uint32_t SLOTS_MIN = uint32_t(1) << 16;
     static constexpr uint32_t SLOTS_MAX = uint32_t(1) << 21;
     static constexpr int64_t INPUT_RECORDS = int64_t(1) << 21; // the records of ready keys not in slots (inputs), kept at most
@@ -93,8 +99,8 @@ public:
     void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out);
     // Main thread: p_owner's chunks parked and not taken back yet.
     size_t parked_count(uint64_t p_owner) const;
-    // Main thread, once per frame: lands what the drain tasks finished (POLL_USEC_MAX, the rest the next frame), placing
-    // the listed keys and starting the keys whose last input landed, then evicts down to the limits.
+    // Main thread, once per frame: releases the finished drain tasks (keys land as they finish: placed if listed, their
+    // dependents started), then evicts down to the limits.
     void poll();
 
     // The record ids of the chunk's streamed records whose box test can pass at its samples, in key order, appended, and
@@ -171,7 +177,7 @@ private:
     Settings settings;
     std::unique_ptr<StreamExecutor> executor;
 
-    mutable std::mutex mutex; // the main thread's changes vs point_records
+    mutable std::shared_mutex mutex; // the stream's state: the main thread and the drain tasks change it, the lists read it
     std::unordered_map<SourceKey, Entry, KeyHash> entries; // references stay valid across rehashes
     Entry *newest = nullptr; // the LRU list's ends
     Entry *oldest = nullptr;
@@ -179,9 +185,7 @@ private:
 
     std::mutex job_mutex; // the drain tasks' queues
     std::deque<std::unique_ptr<Job>> jobs; // to run
-    std::vector<std::unique_ptr<Job>> finished; // run, to land
     int draining = 0; // drain tasks started and not done
-    std::deque<std::unique_ptr<Job>> landing; // taken from finished, landed by poll() within its budget
 
     std::unordered_map<ParkKey, Parked, ParkHash> parked;
     std::vector<ParkKey> ready_chunks; // parked chunks to hand back
@@ -204,7 +208,6 @@ private:
         int64_t slots_full = 0; // placements refused: no room even after evicting
         int64_t slots_peak = 0;
         int64_t admitted[3] = {}; // per Admit answer
-        int64_t landed_late = 0; // landings left to the next poll (budget spent)
         uint64_t poll_usec = 0;
         uint64_t poll_usec_max = 0;
         uint64_t admit_usec = 0;

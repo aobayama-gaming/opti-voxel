@@ -10,7 +10,7 @@ using namespace Archetype;
 namespace {
 
 // A cheap source: one sphere of 4-8 voxels per 16-voxel cell site on a flat ground far from the origin, no blobs. The
-// stream runs its keys inline (the base executor), so a key computed when asked for lands at the next poll().
+// stream runs its keys on the thread calling poll() (the base executor), so a key asked for lands by the next poll().
 struct StreamFixture {
     std::shared_ptr<const ScatterSource> source;
     ChunkParam param;
@@ -139,7 +139,8 @@ TEST_CASE("Instance stream: parked chunks come back once their keys land, in par
     std::unique_ptr<InstanceStream> stream = fx.stream(settings);
     Mirror mirror;
 
-    // A LOD-1 chunk's part tile reads the LOD-0 tiles under it: two polls. A LOD-0 chunk's tiles: one.
+    // A key and the keys waiting on it land within one poll: a LOD-1 chunk's part tile starts once the LOD-0 tiles
+    // under it land, on the same drain.
     const ChunkId coarse = fx.chunk(-200, -200, 1), fine = fx.chunk(200, 200), other = fx.chunk(-200, 200);
     CHECK(stream->admit(coarse, 0, 11) == InstanceStream::PARKED);
     CHECK(stream->admit(fine, 0, 22) == InstanceStream::PARKED);
@@ -154,24 +155,24 @@ TEST_CASE("Instance stream: parked chunks come back once their keys land, in par
     stream->poll();
     CHECK(stream->admit(other, 0, 33) == InstanceStream::PARKED);
     stream->take_ready(0, back);
-    CHECK(back.size() == 1);
-    if (!(back.size() == 1)) {
-        return;
-    }
-    CHECK(back[0] == std::make_pair(fine, uint64_t(23)));
-    stream->take_ready(7, back); // to its owner only
-    CHECK(back.size() == 1);
-    CHECK(stream->parked_count(7) == 0);
-
-    // The coarse chunk lands with the next poll, the other one too: handed back in park order.
-    stream->poll();
-    stream->take_ready(0, back);
-    CHECK(back.size() == 2);
+    CHECK(back.size() == 2); // handed back in park order
     if (!(back.size() == 2)) {
         return;
     }
     CHECK(back[0] == std::make_pair(coarse, uint64_t(11)));
-    CHECK(back[1] == std::make_pair(other, uint64_t(33)));
+    CHECK(back[1] == std::make_pair(fine, uint64_t(23)));
+    stream->take_ready(7, back); // to its owner only
+    CHECK(back.size() == 1);
+    CHECK(stream->parked_count(7) == 0);
+
+    // Parked after the poll: back with the next one.
+    stream->poll();
+    stream->take_ready(0, back);
+    CHECK(back.size() == 1);
+    if (!(back.size() == 1)) {
+        return;
+    }
+    CHECK(back[0] == std::make_pair(other, uint64_t(33)));
 
     mirror.update(*stream);
     for (const ChunkId &c : { coarse, fine, other }) {

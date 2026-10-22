@@ -21,17 +21,31 @@ public:
     void run(std::function<void()> p_task) override {
         auto task = std::make_unique<Task>(Task{ std::move(p_task) });
         const int64_t id = WorkerThreadPool::get_singleton()->add_native_task(&Task::call, task.get(), false, "InstanceStream");
+        const std::lock_guard<std::mutex> lock(task_mutex);
         tasks.emplace_back(id, std::move(task));
     }
     void reap(bool p_wait) override {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        for (size_t i = 0; i < tasks.size();) {
-            if (p_wait || pool->is_task_completed(tasks[i].first)) {
-                pool->wait_for_task_completion(tasks[i].first); // releases its id
-                tasks[i] = std::move(tasks.back());
-                tasks.pop_back();
-            } else {
-                i++;
+        for (;;) {
+            std::vector<std::pair<int64_t, std::unique_ptr<Task>>> done;
+            {
+                const std::lock_guard<std::mutex> lock(task_mutex);
+                for (size_t i = 0; i < tasks.size();) {
+                    if (p_wait || pool->is_task_completed(tasks[i].first)) {
+                        done.push_back(std::move(tasks[i]));
+                        tasks[i] = std::move(tasks.back());
+                        tasks.pop_back();
+                    } else {
+                        i++;
+                    }
+                }
+            }
+            // Released without the lock: a running task (p_wait) may start others meanwhile, taken by the next round.
+            for (const std::pair<int64_t, std::unique_ptr<Task>> &t : done) {
+                pool->wait_for_task_completion(t.first); // releases its id
+            }
+            if (!p_wait || done.empty()) {
+                return;
             }
         }
     }
@@ -41,13 +55,35 @@ private:
         std::function<void()> fn;
         static void call(void *p_task) { static_cast<Task *>(p_task)->fn(); }
     };
-    std::vector<std::pair<int64_t, std::unique_ptr<Task>>> tasks; // main thread only
+    std::mutex task_mutex; // run() is called from the drain tasks too
+    std::vector<std::pair<int64_t, std::unique_ptr<Task>>> tasks;
 };
 
 } // namespace
 
 std::unique_ptr<StreamExecutor> StreamExecutor::pool() {
     return std::make_unique<PoolExecutor>();
+}
+
+void StreamExecutor::run(std::function<void()> p_task) {
+    const std::lock_guard<std::mutex> lock(queue_mutex);
+    queued.push_back(std::move(p_task));
+}
+
+void StreamExecutor::reap(bool /* p_wait */) {
+    for (;;) {
+        std::vector<std::function<void()>> now;
+        {
+            const std::lock_guard<std::mutex> lock(queue_mutex);
+            now.swap(queued);
+        }
+        if (now.empty()) {
+            return;
+        }
+        for (const std::function<void()> &task : now) {
+            task();
+        }
+    }
 }
 
 size_t InstanceStream::KeyHash::operator()(const SourceKey &p_k) const {
@@ -107,7 +143,7 @@ void InstanceStream::chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &
 
 InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) {
     const uint64_t t0 = now_usec();
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::unique_lock<std::shared_mutex> lock(mutex);
     Admit answer = READY;
     const ParkKey park{ p_chunk, p_owner };
     const auto it = parked.find(park);
@@ -149,7 +185,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
 }
 
 void InstanceStream::take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::unique_lock<std::shared_mutex> lock(mutex);
     r_out.clear();
     // p_owner's first, in park order; the other owners' stay.
     const auto others = std::stable_partition(ready_chunks.begin(), ready_chunks.end(), [p_owner](const ParkKey &p_k) { return p_k.owner == p_owner; });
@@ -166,7 +202,7 @@ void InstanceStream::take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId,
 }
 
 size_t InstanceStream::parked_count(uint64_t p_owner) const {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::shared_lock<std::shared_mutex> lock(mutex);
     size_t n = 0;
     for (const std::pair<const ParkKey, Parked> &p : parked) {
         n += p.first.owner == p_owner;
@@ -245,34 +281,18 @@ void InstanceStream::drain() {
             jobs.pop_front();
         }
         job->run();
-        const std::lock_guard<std::mutex> lock(job_mutex);
-        finished.push_back(std::move(job));
+        const std::unique_lock<std::shared_mutex> lock(mutex);
+        land(std::move(job)); // the keys it completes join jobs: this loop takes them
     }
 }
 
 void InstanceStream::poll() {
     const uint64_t t0 = now_usec();
-    const std::lock_guard<std::mutex> lock(mutex);
+    executor->reap(false); // before the lock: the tests' executor runs its drain tasks here
+    const std::unique_lock<std::shared_mutex> lock(mutex);
     frame++;
-    {
-        const std::lock_guard<std::mutex> job_lock(job_mutex);
-        for (std::unique_ptr<Job> &j : finished) {
-            landing.push_back(std::move(j));
-        }
-        finished.clear();
-    }
-    for (int landed = 0; !landing.empty(); landed++) {
-        if (landed > 0 && now_usec() - t0 >= POLL_USEC_MAX) {
-            stats.landed_late += int64_t(landing.size());
-            break;
-        }
-        std::unique_ptr<Job> job = std::move(landing.front());
-        landing.pop_front();
-        land(std::move(job));
-    }
     while ((entries.size() > settings.entries || input_records > settings.input_records) && evict_oldest()) {
     }
-    executor->reap(false);
     const uint64_t dt = now_usec() - t0;
     stats.poll_usec += dt;
     stats.poll_usec_max = MAX(stats.poll_usec_max, dt);
@@ -459,6 +479,7 @@ void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r
     VoxelPos lo, hi;
     chunk_sample_box(p_chunk, param, lo, hi);
     const int lod = ChunkMath::get_lod(p_chunk);
+    const std::shared_lock<std::shared_mutex> lock(mutex); // drain tasks land meanwhile
     for (const SourceKey &k : keys) {
         const auto it = entries.find(k);
         if (it == entries.end() || !it->second.placed) {
@@ -485,7 +506,7 @@ void InstanceStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vect
             std::shared_ptr<const SourceContent> content;
             std::vector<std::shared_ptr<const SourceContent>> inputs; // the resident ones (the others computed with it)
             {
-                const std::lock_guard<std::mutex> lock(mutex);
+                const std::shared_lock<std::shared_mutex> lock(mutex);
                 const auto it = entries.find(k);
                 if (it != entries.end() && it->second.state == Entry::READY) {
                     content = it->second.content;
@@ -518,12 +539,12 @@ void InstanceStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vect
 }
 
 uint64_t InstanceStream::placements() const {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::shared_lock<std::shared_mutex> lock(mutex);
     return placement_seq;
 }
 
 void InstanceStream::uploads_since(uint64_t p_seq, std::vector<Upload> &r_out) const {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::shared_lock<std::shared_mutex> lock(mutex);
     r_out.clear();
     if (p_seq >= placement_seq) {
         return;
@@ -554,7 +575,7 @@ void InstanceStream::uploads_since(uint64_t p_seq, std::vector<Upload> &r_out) c
 }
 
 Dictionary InstanceStream::get_stats() const {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::shared_lock<std::shared_mutex> lock(mutex);
     int64_t placed = 0, ready = 0, running = 0, waiting = 0;
     for (const std::pair<const SourceKey, Entry> &kv : entries) {
         placed += kv.second.placed;
@@ -575,7 +596,6 @@ Dictionary InstanceStream::get_stats() const {
     d["admit_ms_total"] = double(stats.admit_usec) / 1000.0;
     d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
     d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
-    d["landed_late"] = stats.landed_late;
     d["computed"] = stats.computed;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
     Dictionary by;
