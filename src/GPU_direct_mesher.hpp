@@ -99,6 +99,7 @@ public:
     void compact(VoxelState &r_state);
 
     void release_chunk(const ChunkOutput &p_chunk) override;
+    void set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) override;
 
     // Discovery audit: quad counts of chunks that are not loaded. Passes sdf, edges and vertices only,
     // nothing is written to pages, nothing becomes loaded. Batches run only when the mesh queue is empty.
@@ -178,6 +179,9 @@ private:
     // Kills collected during the frame, flushed to the render thread once.
     PackedInt32Array pending_kill_pages;
     PackedInt64Array pending_kill_ranges; // offset, count pairs (quads)
+    // Hidden sub-cubes set since the last _flush_hidden: page, first row, rows, mask, z low word | palette << 32
+    // (QuadPagePool::rt_set_hidden).
+    PackedInt64Array pending_hidden;
 
     Ref<Mutex> mutex; // guards `completed`, `audit_completed`, `measured_batches` and the render-thread timing stats
     std::vector<CompletedBatch> completed;
@@ -266,6 +270,7 @@ private:
     bool _dispatch_mesh_batch(double &r_budget_us);
     bool _dispatch_audit_batch();
     void _flush_kills();
+    void _flush_hidden();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
     void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
@@ -284,6 +289,7 @@ private:
         uint64_t missing_neighbor = 0;
         uint64_t nan_vertices = 0;
         uint64_t kills = 0;
+        uint64_t hidden_rows = 0; // rows whose coverage texel was rewritten (set_hidden)
         uint64_t pages_returned_unused = 0;
         uint64_t compact_rounds = 0;
         uint64_t compact_skipped = 0; // windows with nothing to gain (pages marked settled)

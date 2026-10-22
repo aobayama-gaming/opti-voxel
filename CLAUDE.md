@@ -319,16 +319,19 @@ to every change, and a reviewer may reject a PR on any of them.
   upper trunk (the last on its tip) and a clump at each leaf stem's tip, smooth-unioned at half their radius
   into one mass; segments and clumps the hull always covers are skipped.
   Nothing is LOD-specific: the band rule is the LOD rule (thin parts erode away first, a tapered branch
-  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come): `cell_site` moves a
-  cell's hashed voxel onto the ground's zero (`SDFBase::ground_field`, `evaluate_cull`'s field with its gradient;
-  Newton steps on whole voxels) and keeps it if it stays in the cell (one owner per surface point); `surface_sites`
-  tries only the cells an absolute octree walk keeps near the surface (the discoverer's corner rule, corners evaluated
-  once; unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade); `forest_sites` drops a
-  site within `SITE_SPACING` (0.3) cells of an earlier neighbour's (projection brings sites together). A tree grows along
+  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
+  source, salted: `TREE_SITE_SALT` for the forest, the species is the site's variant): `cell_site` reads the coarse field
+  (`SDFBase::ground_field(voxel, lod)`, `evaluate_cull`'s field with its gradient; at `site_lod` a lattice sample extended
+  along its gradient) at the cell's centre, projects the cell's hashed voxel on that plane, keeps it if it lands in the
+  cell's middle part (`SITE_INNER` 0.15 off each side across the normal: neighbours stay 0.3 cells apart with no
+  neighbour pass), then snaps it onto the LOD-0 ground (`SNAP_STEPS` Newton steps on whole voxels, one owner per surface
+  point); `surface_sites` tries only the cells an absolute octree walk keeps, one coarse reading per node centre, while
+  its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes): ~9 evaluations per site, 1 per empty box;
+  unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). Still column-based (flat debt): the scene's centre (`ground_y`) and the lake keep-out
   (`in_lake(x, z)`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
-  every tree: forest5cm is another forest than before PR B. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
+  every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per tree.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
@@ -579,12 +582,23 @@ to every change, and a reviewer may reject a PR on any of them.
   delta and every destroy check against it and ERRORs on a difference (unit test: the randomized run in
   `test_chunk_memory.cpp`). Run a fly with it after touching `chunk_memory`, the discoverer's publish or
   the meshers' result path. `destroy.rescans` counts the rare pass over the dirty set (a stale result).
+- Coverage (the split rule per sub-cube): a stalled chunk stays loaded until its last dirty descendant lands, but
+  it stops drawing where the chunks replacing it already have. `VoxelState::stalled` (a `Stall` per stalled chunk)
+  counts the dirty chunks anchored to it, in total (the split rule) and in each of its 4x4x4 sub-cubes
+  (`subcube.hpp`, `ChunkMath::subcube_bits`; `--destroy_verify` and the randomized test check it against the full
+  recompute); `hidden_mask` = the sub-cubes at 0. `push_coverage` (after compaction) hands the changed masks to the
+  chunks' `ChunkReleaser` owner; the direct mesher writes them, at its next `process_queue`, into header texel 2 of
+  the chunk's rows and flags them in texel 1's palette word (`PageFormat::COVERAGE_FLAG`: unflagged rows skip the
+  fetch; `QuadPagePool::rt_set_hidden`: a staging texture + `texture_copy`, since `texture_update` writes whole
+  layers), so kills, fresh pages and the emit pass clear it and compaction carries it. The page shader collapses a quad
+  whose 4 corners all lie in hidden sub-cubes (overlap at the cut, never a gap). View 13 draws the hidden quads
+  magenta and the stalled chunks' still drawn ones orange. `destroy.coverage_*` in the stats.
 - Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
   8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids),
-  10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`).
+  10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`), 13 coverage (hidden quads magenta, see Coverage).
 - `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
@@ -646,6 +660,9 @@ to every change, and a reviewer may reject a PR on any of them.
 - Never call `multimesh_set_buffer` / `multimesh_instance_*` / `multimesh_get_buffer` on a page: it
   creates a CPU cache that overwrites GPU-written data. `multimesh_get_*_rd_rid` from the main thread
   blocks: only call it on the render thread.
+- `texture_update` of one texture several times in a frame, each followed by a `texture_copy` out of it: the copies
+  read the last contents (measured: the coverage masks of a multi-round flush went to the wrong rows, the hidden quads
+  mostly never showed). One staging texture per upload within a frame (`QuadPagePool::rt_set_hidden`).
 - Many MB of `texture_get_data_async` in one frame crashes 4.6.3 (download staging overflow):
   throttle readbacks (validator/auditor do 2 pages per frame).
 - An interrupted scons (session moved, killed shell) can leave 0-byte `.os` files that scons later
