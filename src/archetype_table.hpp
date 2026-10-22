@@ -56,11 +56,14 @@ enum class Combine : uint8_t {
 // The far field drawn from the moment blobs (moment_layers.hpp) a chunk lists: with phi their summed occupancy (value
 // and gradient) and h = 2^lod, F = min(r - h phi, (MOMENT_ISO - phi) h / max(|grad phi|, MOMENT_ISO / 64)). The first
 // term lifts the surface under mass too thin to draw (phi < MOMENT_ISO: by at most that many cells), the second draws a surface of its own
-// where the occupancy reaches MOMENT_ISO (a canopy), a first-order distance (64 cells where phi is flat). MOMENT_ISO is
+// where the occupancy reaches MOMENT_ISO (a canopy), a first-order distance (64 cells where phi is flat), at most
+// MOMENT_DEPTH_CELLS deep: at a near-flat maximum of phi just over the iso it read 10 cells next to a sample one cell
+// away on the surface (a step no skirt hides), and no 1-Lipschitz field reads past one cell next to a crossing. MOMENT_ISO is
 // an opacity more than a volume: a canopy half its crowns' volume reads opaque from afar. The samples where phi >= half
 // of it take the strongest blob's material.
 inline constexpr float MOMENT_ISO = 0.25f;
 inline constexpr float MOMENT_MATERIAL_ISO = 0.5f * MOMENT_ISO;
+inline constexpr float MOMENT_DEPTH_CELLS = 2.0f;
 inline constexpr float MOMENT_GRAD_FLOOR = (MOMENT_ISO / 64.0f) * (MOMENT_ISO / 64.0f); // of |grad phi|^2, per cell
 
 // The operators that cut the register instead of adding to it.
