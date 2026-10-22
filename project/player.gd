@@ -73,6 +73,13 @@ func _enter_tree() -> void:
 			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
+		if a.begins_with("--spawn="):  # --spawn=X,Z: metres from the world origin (tools/climate_report.sh lists biome borders, origin 0)
+			var xz := a.trim_prefix("--spawn=").split(",")
+			if xz.size() == 2:
+				position.x = xz[0].to_float()
+				position.z = xz[1].to_float()
+			else:
+				push_error("player: --spawn=%s (expected X,Z in metres)" % a.trim_prefix("--spawn="))
 		if a.begins_with("--voxel=") and terrain:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
@@ -119,6 +126,8 @@ func _enter_tree() -> void:
 			terrain.archetype_tree_area = a.trim_prefix("--tree_area=").to_float()
 		if a.begins_with("--biomes=") and terrain:
 			terrain.biome_radius = 1000.0 * a.trim_prefix("--biomes=").to_float()
+		if a.begins_with("--climate=") and terrain:
+			terrain.climate_path = a.trim_prefix("--climate=")
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 
@@ -263,11 +272,18 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
 
-	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted, material.
+	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted,
+	# material, biome (12; 10 / 11 are the bench's bark probe). B toggles the biome view.
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_V:
 		var terrain := _terrain()
 		if terrain:
-			terrain.debug_view = (terrain.debug_view + 1) % 10
+			var views := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+			terrain.debug_view = views[(views.find(terrain.debug_view) + 1) % views.size()]
+			print("debug view ", terrain.debug_view)
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_B:
+		var terrain := _terrain()
+		if terrain:
+			terrain.debug_view = 0 if terrain.debug_view == 12 else 12
 			print("debug view ", terrain.debug_view)
 
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:

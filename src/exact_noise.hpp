@@ -118,14 +118,23 @@ inline UVec3 cell_salt(int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed
     return pcg3d(UVec3{ uint32_t(p_hx) ^ p_seed, uint32_t(p_hy) ^ (p_seed ^ SALT_Y), uint32_t(p_hz) ^ (p_seed ^ SALT_Z) });
 }
 
-inline uint32_t hash_words(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
+// A cell's three hash words (the cell noise's feature point); hash_cell is the first.
+inline UVec3 hash_words3(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
     const UVec3 s = cell_salt(p_hx, p_hy, p_hz, p_seed);
-    return pcg3d(UVec3{ p_lx ^ s.x, p_ly ^ s.y, p_lz ^ s.z }).x;
+    return pcg3d(UVec3{ p_lx ^ s.x, p_ly ^ s.y, p_lz ^ s.z });
+}
+
+inline uint32_t hash_words(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
+    return hash_words3(p_lx, p_ly, p_lz, p_hx, p_hy, p_hz, p_seed).x;
+}
+
+inline UVec3 hash_cell3(const Vector3i64 &p_cell, uint32_t p_seed) {
+    using namespace WorldCoord;
+    return hash_words3(lo32(p_cell.x), lo32(p_cell.y), lo32(p_cell.z), hi32(p_cell.x), hi32(p_cell.y), hi32(p_cell.z), p_seed);
 }
 
 inline uint32_t hash_cell(const Vector3i64 &p_cell, uint32_t p_seed) {
-    using namespace WorldCoord;
-    return hash_words(lo32(p_cell.x), lo32(p_cell.y), lo32(p_cell.z), hi32(p_cell.x), hi32(p_cell.y), hi32(p_cell.z), p_seed);
+    return hash_cell3(p_cell, p_seed).x;
 }
 
 inline uint32_t hash_cell_2d(int64_t p_x, int64_t p_z, uint32_t p_seed) {
@@ -405,6 +414,44 @@ inline float det_rsqrt(float p_x) {
     return y;
 }
 
+// The cell noise's mean F1 (unit test: measured on 2^20 random points within 1%).
+inline constexpr float CELL_MEAN = 0.5203f;
+// The cell noise's smallest squared distance into det_rsqrt (2^-40, a normal float): its bits, shared with the GLSL.
+inline constexpr uint32_t CELL_MIN_D2_BITS = 0x2B800000u;
+
+// Cell noise (Worley F1) at wavelength 2^k voxels: one feature point per cell, jittered over the whole cell by
+// hash_cell3 (24-bit), the distance to the nearest of the 3 x 3 x 3 cells around the position's, minus CELL_MEAN:
+// (d/dx, d/dy, d/dz per cell, value), value in about [-0.5, 0.5]. Its gradient is the unit vector away from the
+// feature point (a cone at each one, a crease where two are equally near: carried by the cascade, 25-100 m dunes measure
+// 7.2% gradient error against 2.5% for perlin3, no streaks, climate_report.sh). The distance is d2 det_rsqrt(max(d2,
+// 2^-40)): + - * only. GLSL twin: GLSL_CELL3 (FrameSpike probes cell3_k*).
+inline Float4 cell3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
+    const OctaveCell c = octave_cell(p_pos, p_k, p_offset);
+    const float scale = bits_float(FADE_FLUSH_BITS); // 2^-24
+    const float f[3] = { float(c.q.x) * scale, float(c.q.y) * scale, float(c.q.z) * scale };
+    float best = 16.0f;
+    float e_best[3] = { 0.0f, 0.0f, 0.0f };
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                const UVec3 h = hash_cell3(c.cell + Vector3i64(dx, dy, dz), p_seed);
+                const float e[3] = { (float(dx) + float(h.x >> 8) * scale) - f[0], (float(dy) + float(h.y >> 8) * scale) - f[1],
+                    (float(dz) + float(h.z >> 8) * scale) - f[2] };
+                const float d2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+                if (d2 < best) {
+                    best = d2;
+                    e_best[0] = e[0];
+                    e_best[1] = e[1];
+                    e_best[2] = e[2];
+                }
+            }
+        }
+    }
+    const float min_d2 = bits_float(CELL_MIN_D2_BITS);
+    const float rs = det_rsqrt(best > min_d2 ? best : min_d2);
+    return Float4{ -(e_best[0] * rs), -(e_best[1] * rs), -(e_best[2] * rs), best * rs - CELL_MEAN };
+}
+
 // Fractal sum. Octave i: wavelength 2^k voxels, value * amp. At LOD L the gradient is per voxel of
 // that LOD: derivative per cell * amp * 2^(L-k) (gradient_factor), an exact power-of-two rescale of
 // the gradient per LOD0 voxel, so L only changes its exponent.
@@ -413,6 +460,9 @@ struct Octave {
     uint32_t seed = 0;
     Vector3i64 offset;
     float amp = 0.0f;
+    // Cascade bands only (Cascade::stretched): the octave's wavelength along y is 2^(k + stretch), at most 2^(2k - 3)
+    // (the band's insertion lattice divides exactly). 0: isotropic, the only case anything else evaluates.
+    int stretch = 0;
 };
 
 inline float gradient_factor(const Octave &p_octave, int p_lod) {
@@ -437,30 +487,36 @@ struct OctaveSet {
     std::vector<Octave> octaves;
 };
 
+// One octave of wavelength 2^p_k, its seed and lattice offset hashed from (p_seed, p_salt): the lattice is
+// shifted by a quarter to three quarters of a cell on each axis, so the zeros of nested lattices never line up.
+inline Octave make_octave(uint32_t p_seed, uint32_t p_salt, int p_k, float p_amp) {
+    Octave o;
+    o.k = p_k;
+    o.amp = p_amp;
+    const UVec3 h = pcg3d(UVec3{ p_seed, p_salt, 0x51ED270Bu });
+    o.seed = h.x;
+    auto axis_offset = [&](uint32_t p_a, uint32_t p_b) {
+        if (o.k < 2) {
+            return int64_t(0);
+        }
+        const uint64_t r = (uint64_t(p_a) << 32) | p_b;
+        return int64_t((uint64_t(1) << (o.k - 2)) + (r & ((uint64_t(1) << (o.k - 1)) - 1)));
+    };
+    const UVec3 h2 = pcg3d(h);
+    o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
+    return o;
+}
+
 // p_count octaves from wavelength 2^k_top down (lacunarity exactly 2), amplitude p_amp_top for the
-// first and times p_persistence for each next one. Seeds and offsets come from p_seed: each octave's
-// lattice is shifted by a quarter to three quarters of a cell on each axis, so the zeros of the
-// nested lattices never line up.
+// first and times p_persistence for each next one; octave i is make_octave(p_seed, i, ...).
 inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, double p_amp_top, double p_persistence) {
     OctaveSet set;
     set.is_2d = p_2d;
     double amp = p_amp_top;
     for (int i = 0; i < p_count; i++) {
-        Octave o;
-        o.k = p_k_top - i;
-        ERR_CONTINUE_MSG(o.k < 0 || o.k > MAX_K, "ExactNoise: octave wavelength out of range.");
-        const UVec3 h = pcg3d(UVec3{ p_seed, uint32_t(i), 0x51ED270Bu });
-        o.seed = h.x;
-        auto axis_offset = [&](uint32_t p_a, uint32_t p_b) {
-            if (o.k < 2) {
-                return int64_t(0);
-            }
-            const uint64_t r = (uint64_t(p_a) << 32) | p_b;
-            return int64_t((uint64_t(1) << (o.k - 2)) + (r & ((uint64_t(1) << (o.k - 1)) - 1)));
-        };
-        const UVec3 h2 = pcg3d(h);
-        o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
-        o.amp = float(amp);
+        const int k = p_k_top - i;
+        ERR_CONTINUE_MSG(k < 0 || k > MAX_K, "ExactNoise: octave wavelength out of range.");
+        const Octave o = make_octave(p_seed, uint32_t(i), k, float(amp));
         if (!in_exact_range(o.amp)) {
             ERR_PRINT(vformat("ExactNoise: octave k=%d amplitude %s outside [2^-16, 2^40]: denormals possible.", o.k, o.amp));
         }

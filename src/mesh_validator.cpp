@@ -18,6 +18,7 @@ struct Tri {
     Vector3 p[3];
     Vector3 n[3];
     uint32_t m[3] = {}; // global materials
+    Vector3 centroid() const { return (p[0] + p[1] + p[2]) / 3.0f; }
 };
 
 // The GPU meshes the samples with their skirt, not the bare SDF: past the chunk bounds it adds up to
@@ -70,7 +71,7 @@ void write_obj(const String &p_path, const std::vector<Tri> &p_tris, const Chunk
 std::vector<MeshValidator::Target> MeshValidator::pick_targets(const std::vector<Target> &p_candidates, int p_count) {
     std::vector<Target> sets[2];
     for (const Target &t : p_candidates) {
-        sets[t.palette.palette && t.palette.palette->size() > 1 ? 1 : 0].push_back(t);
+        sets[t.palette.offset != PaletteAlloc::GROUND_BLOCK ? 1 : 0].push_back(t); // records' materials past the base
     }
     const int with_materials = MIN(p_count / 2, (int)sets[1].size());
     const int counts[2] = { MIN(p_count - with_materials, (int)sets[0].size()), with_materials };
@@ -227,8 +228,9 @@ void MeshValidator::_compare() {
     int64_t sliver_normals_skipped = 0; // matched sliver triangles: normal partners are ambiguous
     int64_t bad_headers = 0; // groups of a chunk whose header names another chunk or palette block
     int64_t material_samples = 0, material_records = 0, material_mismatch = 0; // per paired vertex
+    int64_t ambiguous_materials = 0; // mismatches next to a corner within the tolerance of the surface
     auto record = [&](const char *p_kind, const ChunkId &p_chunk, const Tri &p_tri, float p_cell, double p_extra) {
-        const Vector3 c = (p_tri.p[0] + p_tri.p[1] + p_tri.p[2]) / 3.0f;
+        const Vector3 c = p_tri.centroid();
         const double near_zero = min_abs_sdf_cells(sdf, p_chunk, c, chunk_param, p_cell);
         unexplained += near_zero > 1e-3 ? 1 : 0;
         if (anomalies.size() >= 40) {
@@ -314,7 +316,7 @@ void MeshValidator::_compare() {
         HashMap<Vector3i, std::vector<int>> grid;
         for (int i = 0; i < (int)direct.size(); i++) {
             const Tri &d = direct[i];
-            grid[key((d.p[0] + d.p[1] + d.p[2]) / 3.0f)].push_back(i);
+            grid[key(d.centroid())].push_back(i);
         }
         // A quad smaller than the tolerance matches any triangle of its neighbourhood, so the greedy
         // one-to-one pass below can strand a triangle whose partner was taken by a neighbour, or leave
@@ -326,9 +328,9 @@ void MeshValidator::_compare() {
                     p_t.p[2].distance_to(p_t.p[0]) <= 2.0f * tol;
         };
         auto near_any = [&](const Tri &p_t, const std::vector<Tri> &p_others, bool p_same_winding) {
-            const Vector3 c = (p_t.p[0] + p_t.p[1] + p_t.p[2]) / 3.0f;
+            const Vector3 c = p_t.centroid();
             for (const Tri &o : p_others) {
-                if (((o.p[0] + o.p[1] + o.p[2]) / 3.0f).distance_to(c) > 3.0f * tol) {
+                if (o.centroid().distance_to(c) > 3.0f * tol) {
                     continue;
                 }
                 for (int flip = 0; flip < (p_same_winding ? 1 : 2); flip++) {
@@ -354,7 +356,7 @@ void MeshValidator::_compare() {
         std::vector<int> legacy_left; // unmatched after the one-to-one pass
         for (int li = 0; li < (int)legacy_tris.size(); li++) {
             const Tri &l = legacy_tris[li];
-            const Vector3i k0 = key((l.p[0] + l.p[1] + l.p[2]) / 3.0f);
+            const Vector3i k0 = key(l.centroid());
             int best = -1;
             bool best_flipped = false;
             int best_rot = 0;
@@ -408,7 +410,7 @@ void MeshValidator::_compare() {
             if (flipped) {
                 record("winding_flipped", t.chunk_id, l, cell, 0.0);
             } else if (chunk_matched % 4000 == 1 && baseline_sdf.size() < 200) {
-                const Vector3 c = (l.p[0] + l.p[1] + l.p[2]) / 3.0f;
+                const Vector3 c = l.centroid();
                 baseline_sdf.push_back(min_abs_sdf_cells(sdf, t.chunk_id, c, chunk_param, cell));
             }
             max_pos_err_cells = MAX(max_pos_err_cells, best_err);
@@ -420,15 +422,25 @@ void MeshValidator::_compare() {
                 sliver_normals_skipped++;
                 continue;
             }
+            double near_zero = -1.0; // the triangle's min_abs_sdf_cells, at its first material mismatch
             for (int k = 0; k < 3; k++) {
                 const int dk = best_flipped ? (best_rot + 3 - k) % 3 : (best_rot + k) % 3;
                 // The same vertex (cell) on both sides: the same samples, the same vertex_material rule.
                 material_samples++;
                 material_records += l.m[k] != Material::GROUND ? 1 : 0;
                 if (l.m[k] != d.m[dk]) {
-                    material_mismatch++;
-                    if (material_mismatch <= 8) {
-                        record("material_mismatch", t.chunk_id, l, cell, double(d.m[dk]));
+                    // Next to a corner closer to the surface than the tolerance, the cells around it put their
+                    // vertices within the tolerance of each other (a sliver's case): the pairing may cross cells, whose
+                    // materials differ at a biome border. Both meshers share cascade_vertex_material, and CascadeSpike's
+                    // G10 checks the per-sample pick bit for bit.
+                    near_zero = near_zero < 0.0 ? min_abs_sdf_cells(sdf, t.chunk_id, l.centroid(), chunk_param, cell) : near_zero;
+                    if (near_zero < tol) {
+                        ambiguous_materials++;
+                    } else {
+                        material_mismatch++;
+                        if (material_mismatch <= 8) {
+                            record("material_mismatch", t.chunk_id, l, cell, double(d.m[dk]));
+                        }
                     }
                 }
                 if (l.n[k] == Vector3() || d.n[dk] == Vector3()) {
@@ -530,6 +542,9 @@ void MeshValidator::_compare() {
     report["material_samples"] = material_samples;
     report["material_records"] = material_records; // paired vertices whose material is not the ground
     report["material_mismatch"] = material_mismatch;
+    report["ambiguous_materials"] = ambiguous_materials;
+    // Ambiguous materials are rare (a few in 400k samples at biome borders): more is a real mismatch hiding there.
     report["ok"] = legacy_tris_total > 0 && legacy_tris_total == direct_tris_total && unexplained == 0 && bad_headers == 0 && material_mismatch == 0 &&
-            (double)(matched + ambiguous_slivers) / legacy_tris_total > 0.9999 && (normal_samples == 0 || sum_normal_err_deg / normal_samples < 0.5);
+            ambiguous_materials * 10000 <= material_samples && (double)(matched + ambiguous_slivers) / legacy_tris_total > 0.9999 &&
+            (normal_samples == 0 || sum_normal_err_deg / normal_samples < 0.5);
 }

@@ -51,6 +51,10 @@ public:
     uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
             uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const override;
 
+    const std::vector<uint32_t> &base_palette() const override { return base; }
+    // Configure only, before the meshers start.
+    void set_base_palette(const std::vector<uint32_t> &p_base) { base = p_base; }
+
     Dictionary get_stats() const override;
     // The scene's own numbers (the forest), merged into get_stats(). Main thread, before the meshers start.
     void set_scene_stats(const Dictionary &p_stats) { scene_stats = p_stats; }
@@ -72,6 +76,7 @@ private:
     mutable ListStats list_stats;
     std::shared_ptr<const InstanceSnapshot> snap;
     uint32_t capacity = 16384; // the GPU record/list buffers hold this many instances
+    std::vector<uint32_t> base{ Material::GROUND };
     Dictionary scene_stats;
 };
 

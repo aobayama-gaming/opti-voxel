@@ -3,6 +3,8 @@
 // The GPU side of exact_noise.hpp: its GLSL text (the CPU functions and their GLSL generators stay there). Spliced
 // after the frame functions (WorldPos), before the terrain SDF.
 
+#include "exact_noise.hpp"
+
 // GLSL_EXACT_NOISE is spliced from these fragments, so GLSL perlin3_cross (GLSL_PERLIN3_CROSS) shares
 // perlin3's cell setup and value / gradient code while GLSL_EXACT_NOISE stays byte-identical (unit test).
 // Raw string macros: adjacent literals concatenate at compile time.
@@ -257,6 +259,47 @@ void perlin3_cross(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi, out vec4 
     c1 = vec4(cxy, cxz, cyz, cxyz);
 }
 )glsl";
+
+// GLSL twin of ExactNoise::cell3 (after GLSL_EXACT_NOISE: octave_cell, cell_salt, det_rsqrt). The neighbour cells' high
+// words take the carry or borrow of their low words.
+inline String glsl_cell3() {
+    return String(R"glsl(
+int cell3_carry(int d, uint lo, uint base) {
+    return d > 0 && lo < base ? 1 : (d < 0 && lo > base ? -1 : 0);
+}
+
+vec4 cell3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
+    OctaveCell c = octave_cell(p, k, olo, ohi);
+    precise vec3 f = vec3(c.q) * uintBitsToFloat(FADE_FLUSH_BITS);
+    precise float best = 16.0;
+    precise vec3 eb = vec3(0.0);
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                ivec3 d = ivec3(dx, dy, dz);
+                uvec3 lo = c.lo + uvec3(d);
+                ivec3 hi = c.hi + ivec3(cell3_carry(dx, lo.x, c.lo.x), cell3_carry(dy, lo.y, c.lo.y), cell3_carry(dz, lo.z, c.lo.z));
+                uvec3 h = pcg3d(lo ^ cell_salt(hi, seed));
+                precise vec3 e = (vec3(d) + vec3(h >> 8u) * uintBitsToFloat(FADE_FLUSH_BITS)) - f;
+                precise float d2 = e.x * e.x + e.y * e.y + e.z * e.z;
+                if (d2 < best) {
+                    best = d2;
+                    eb = e;
+                }
+            }
+        }
+    }
+    precise float min_d2 = uintBitsToFloat(CELL_MIN_D2_BITS);
+    precise float rs = det_rsqrt(best > min_d2 ? best : min_d2);
+    precise vec3 g = -(eb * rs);
+    precise float value = best * rs - CELL_MEAN;
+    return vec4(g, value);
+}
+)glsl")
+            .replace("CELL_MEAN", ExactNoise::glsl_float(ExactNoise::CELL_MEAN))
+            .replace("CELL_MIN_D2_BITS", ExactNoise::glsl_uint(ExactNoise::CELL_MIN_D2_BITS))
+            .replace("FADE_FLUSH_BITS", ExactNoise::glsl_uint(ExactNoise::FADE_FLUSH_BITS));
+}
 
 #undef OV_GLSL_PCG3D
 #undef OV_GLSL_NOISE_HEAD

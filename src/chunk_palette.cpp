@@ -7,9 +7,12 @@
 
 namespace ChunkPalette {
 
-bool build(const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> &r_palette, std::vector<uint16_t> &r_index) {
+bool build(const std::vector<uint32_t> &p_base, const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> &r_palette,
+        std::vector<uint16_t> &r_index) {
+    r_index.assign(p_count, 0);
     r_palette.assign(1, Material::GROUND);
-    r_index.resize(p_count);
+    ERR_FAIL_COND_V(p_base.empty() || p_base.size() > MAX_ENTRIES || p_base[0] != Material::GROUND, false);
+    r_palette = p_base;
     bool fits = true;
     for (uint32_t i = 0; i < p_count; i++) {
         const uint32_t m = p_materials[i];
@@ -34,6 +37,10 @@ bool build(const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> 
     return fits;
 }
 
+String glsl_base(const std::vector<uint32_t> &p_base) {
+    return vformat("const uint PALETTE_BASE_ENTRIES = %du;\nconst bool GROUND_MATERIALS = %s;\n", int64_t(p_base.size()), p_base.size() > 1 ? "true" : "false");
+}
+
 } // namespace ChunkPalette
 
 int PaletteAlloc::order_for(uint32_t p_entries) {
@@ -44,13 +51,13 @@ int PaletteAlloc::order_for(uint32_t p_entries) {
     return order;
 }
 
-void PaletteAlloc::reset(uint32_t p_capacity) {
+void PaletteAlloc::reset(uint32_t p_capacity, uint32_t p_ground_entries) {
     ERR_FAIL_COND_MSG(p_capacity < 2 * MAX_BLOCK || (p_capacity & (p_capacity - 1)) != 0, "PaletteAlloc: capacity must be a power of two >= 2 blocks of MAX_BLOCK.");
     cap = p_capacity;
     used_entries = 0;
     free_lists.assign(order_for(cap) + 1, std::set<uint32_t>());
     free_lists.back().insert(0);
-    const int64_t ground = alloc(MIN_BLOCK); // the lowest free block: offset 0
+    const int64_t ground = alloc(p_ground_entries); // the lowest free block: offset 0
     DEV_ASSERT(ground == GROUND_BLOCK);
     (void)ground;
 }

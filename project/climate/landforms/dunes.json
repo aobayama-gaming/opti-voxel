@@ -1,0 +1,111 @@
+{
+ "comment": "Sand dunes, matched to the Namib Sand Sea's star dunes (tools/landforms: site dunes): a spectrum peaked at 1.6 km, sharp crests, slopes up to the sand's angle of repose, a third of the area flat between the dunes. Ridged octaves from 100 m to 1.6 km (the crests), warped by a third of their wavelength (the arms bend), a weak plain spectrum above; a height remap (elev) fit to the real hypsometry flattens the interdunes.",
+ "fields": [
+  {
+   "name": "wx",
+   "seed": 305,
+   "bands": [
+    {"from_m": 400, "to_m": 3277, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wy",
+   "seed": 306,
+   "bands": [
+    {"from_m": 400, "to_m": 3277, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wz",
+   "seed": 307,
+   "bands": [
+    {"from_m": 400, "to_m": 3277, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "elev",
+   "terms": [
+    {"source": "ground", "per_m": 0.01}
+   ]
+  }
+ ],
+ "heights": [
+  {
+   "field": "elev",
+   "height_m": 100,
+   "curve": [
+    [-2.43436, 7.39301],
+    [-1.98352, 7.39301],
+    [-1.53268, 7.19952],
+    [-1.08185, 6.84277],
+    [-0.63101, 6.43708],
+    [-0.18018, 6.09733],
+    [0.27066, 6.00362],
+    [0.72149, 6.11632],
+    [1.17233, 6.22903],
+    [1.62316, 6.34174],
+    [2.074, 6.45445],
+    [2.52484, 6.45445]
+   ]
+  }
+ ],
+ "biomes": [
+  {
+   "name": "dunes",
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 3.2, "x": 0.05, "shape": "ridged"},
+    {"field": "ground", "from_m": 6.4, "to_m": 51.2, "x": 0.05},
+    {
+     "field": "ground",
+     "wavelength_m": 102.4,
+     "x": 0.0887,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 34.1,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 204.8,
+     "x": 0.3974,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 68.3,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 409.6,
+     "x": 0.6603,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 136.5,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 819.2,
+     "x": 0.9014,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 273.1,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 1638.4,
+     "x": 1.2707,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 546.1,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {"field": "ground", "wavelength_m": 3276.8, "x": 0.365},
+    {"field": "ground", "wavelength_m": 6553.6, "x": 0.0548},
+    {"field": "ground", "from_m": 13107.2, "to_m": 30000000, "x": 0.004}
+   ],
+   "surface": {"flat": "#e0a060", "steep": "#c88848", "roughness": 1},
+   "debug_color": "#e8a050"
+  }
+ ]
+}

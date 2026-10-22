@@ -74,7 +74,7 @@ extends Node3D
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
-##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material)
+##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material 12 biome)
 ##   --grade=0                    no colour grading (the scene's LUT, res://grade_lut.png, tools/make_lut.py)
 ##   --probe=PREFIX               direct: once loaded, PREFIX_shaded.png, then the bark seam probe views 10 and 11
 ##                                as PREFIX_10.png and PREFIX_11.png, raw (tools/bark_seams.sh)
@@ -219,6 +219,8 @@ func _ready() -> void:
 		terrain.archetype_tree_area = float(args["tree_area"])
 	if args.has("biomes"):
 		terrain.biome_radius = 1000.0 * float(args["biomes"])
+	if args.has("climate"):
+		terrain.climate_path = args["climate"]
 	terrain.terrain_mode = terrains[terrain_arg]
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"

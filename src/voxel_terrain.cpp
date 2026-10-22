@@ -32,6 +32,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_tree_area"), &VoxelTerrain::get_archetype_tree_area);
     ClassDB::bind_method(D_METHOD("set_biome_radius", "metres"), &VoxelTerrain::set_biome_radius);
     ClassDB::bind_method(D_METHOD("get_biome_radius"), &VoxelTerrain::get_biome_radius);
+    ClassDB::bind_method(D_METHOD("set_climate_path", "path"), &VoxelTerrain::set_climate_path);
+    ClassDB::bind_method(D_METHOD("get_climate_path"), &VoxelTerrain::get_climate_path);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
     ClassDB::bind_method(D_METHOD("set_archetype_moments", "enabled"), &VoxelTerrain::set_archetype_moments);
@@ -120,6 +122,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000,1"), "set_archetype_trees", "get_archetype_trees");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
+    ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_moments"), "set_archetype_moments", "get_archetype_moments");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
@@ -349,6 +352,15 @@ void VoxelTerrain::set_biome_radius(double p_metres) {
 
 double VoxelTerrain::get_biome_radius() const {
     return biome_radius;
+}
+
+void VoxelTerrain::set_climate_path(const String &p_path) {
+    ERR_FAIL_COND_MSG(started, "climate_path must be set before the terrain enters the tree.");
+    climate_path = p_path;
+}
+
+String VoxelTerrain::get_climate_path() const {
+    return climate_path;
 }
 
 void VoxelTerrain::set_archetype_band(bool p_enabled) {
@@ -658,6 +670,13 @@ void VoxelTerrain::_ready() {
     sdf->set_scatter(archetype_instances, archetype_instance_area);
     sdf->set_forest(archetype_trees, archetype_tree_area);
     sdf->set_biome_radius(biome_radius);
+    if (!climate_path.is_empty()) {
+        // Parsed and checked by configure() (an ERR there: no climate).
+        const String err = Climate::load(climate_path, sdf->climate_data);
+        if (!err.is_empty()) {
+            ERR_PRINT("VoxelTerrain: " + err + String(" No climate."));
+        }
+    }
     sdf->set_instance_band(archetype_band && terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_moment_blobs(archetype_moments);
     sdf->set_instance_erode(archetype_erode);
@@ -1143,6 +1162,14 @@ Dictionary VoxelTerrain::get_debug_stats() {
     d["world_origin"] = origin;
     if (sdf) {
         d["table"] = sdf->get_gpu_table()->get_stats();
+        if (const Climate::Table *climate = sdf->get_climate()) {
+            Dictionary c;
+            c["path"] = climate_path;
+            c["fields"] = int64_t(climate->fields.size());
+            c["biomes"] = int64_t(climate->biomes.size());
+            c["modulated"] = sdf->get_cascade()->modulation != nullptr;
+            d["climate"] = c;
+        }
     }
     d["frames"] = (int64_t)exec_time;
     d["load_complete"] = is_load_complete();

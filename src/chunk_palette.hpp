@@ -2,14 +2,17 @@
 
 #include "page_format.hpp"
 
+#include <godot_cpp/variant/string.hpp>
+
 #include <cstdint>
 #include <set>
 #include <vector>
 
 // A chunk's material palette: the distinct global materials (material_library.hpp) its samples can take, so a
-// corner stores a PageFormat::PALETTE_BITS index into it instead of a global id. Entry 0 is always
-// Material::GROUND (a sample no instance won), then the listed records' materials in list order (lists are in
-// record id order, so a chunk's palette is deterministic).
+// corner stores a PageFormat::PALETTE_BITS index into it instead of a global id. It starts with the table's base
+// palette (SDFGpuTable::base_palette: entry 0 Material::GROUND, then each biome's material with a climate: what a sample
+// no instance colours takes), then the listed records' materials in list order (lists are in record id order, so a
+// chunk's palette is deterministic).
 namespace ChunkPalette {
 
 // A palette holds MAX_ENTRIES materials; the last index is a list word's for a Material::INHERIT record: the fold
@@ -17,25 +20,31 @@ namespace ChunkPalette {
 static constexpr uint32_t MAX_ENTRIES = PageFormat::PALETTE_SIZE - 1;
 static constexpr uint32_t INHERIT_INDEX = MAX_ENTRIES;
 
-// p_materials[i]: the material of the chunk's list entry i. r_palette: the global ids; r_index[i]: entry i's
-// palette index (INHERIT_INDEX for Material::INHERIT, which takes no entry). Returns false when the chunk names
-// more than MAX_ENTRIES materials: the entries past the palette take index 0 (they draw as ground).
-bool build(const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> &r_palette, std::vector<uint16_t> &r_index);
+// p_base: the base palette (1 to MAX_ENTRIES entries, the first GROUND). p_materials[i]: the material of the chunk's
+// list entry i. r_palette: the global ids; r_index[i]: entry i's palette index (a material of the base takes its base
+// entry; INHERIT_INDEX for Material::INHERIT, which takes no entry). Returns false when the chunk names more than
+// MAX_ENTRIES materials: the entries past the palette take index 0 (they draw as ground).
+bool build(const std::vector<uint32_t> &p_base, const uint32_t *p_materials, uint32_t p_count, std::vector<uint32_t> &r_palette,
+        std::vector<uint16_t> &r_index);
+
+// The meshers' vertex passes' view of a base palette: PALETTE_BASE_ENTRIES (its length) and GROUND_MATERIALS (longer
+// than {GROUND}: every chunk's samples carry a material, CascadeGLSL::ground_materials).
+String glsl_base(const std::vector<uint32_t> &p_base);
 
 } // namespace ChunkPalette
 
 // Allocates the palettes' blocks in the GPU palette texture: a buddy allocator over [0, capacity) entries, blocks
 // of MIN_BLOCK << order entries, aligned to their size (a block never straddles a texture row of MAX_BLOCK
-// entries). The first MIN_BLOCK entries are reserved: the shared {GROUND} palette (GROUND_BLOCK), which needs no
-// upload since the texture starts zeroed.
+// entries). The first block is reserved: the shared base palette (GROUND_BLOCK, SDFGpuTable::base_palette), whose
+// entry 0 needs no upload since the texture starts zeroed.
 class PaletteAlloc {
 public:
     static constexpr uint32_t MIN_BLOCK = 16;
     static constexpr uint32_t MAX_BLOCK = PageFormat::PALETTE_SIZE; // a whole palette
     static constexpr uint32_t GROUND_BLOCK = 0;
 
-    // p_capacity: a power of two, at least 2 * MAX_BLOCK entries.
-    void reset(uint32_t p_capacity);
+    // p_capacity: a power of two, at least 2 * MAX_BLOCK entries; p_ground_entries (1..MAX_BLOCK): the base palette's.
+    void reset(uint32_t p_capacity, uint32_t p_ground_entries = 1);
     // The offset of a block holding p_entries (1..MAX_BLOCK), or -1 when full.
     int64_t alloc(uint32_t p_entries);
     // Frees a block from alloc() (the same p_entries). GROUND_BLOCK is never freed.

@@ -1,0 +1,113 @@
+{
+ "comment": "Majestic mountains, matched to the Mont Blanc massif (tools/landforms: site mountain). Plain 6.5 and 13 km octaves, warped by a quarter of their wavelength, lay out sinuous ranges; ridged multifractal octaves from 3.2 km to 200 m (gain 2: detail grows on the crests, valleys stay smooth) carve the aretes; one multiplier per octave, fit by match.py, and a height remap (elev) fit to the real hypsometry. Finer octaves ridged and weak: rock detail.",
+ "fields": [
+  {
+   "name": "wx",
+   "seed": 105,
+   "bands": [
+    {"from_m": 1600, "to_m": 13107, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wy",
+   "seed": 106,
+   "bands": [
+    {"from_m": 1600, "to_m": 13107, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wz",
+   "seed": 107,
+   "bands": [
+    {"from_m": 1600, "to_m": 13107, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "elev",
+   "terms": [
+    {"source": "ground", "per_m": 0.0005}
+   ]
+  }
+ ],
+ "heights": [
+  {
+   "field": "elev",
+   "height_m": 2000,
+   "curve": [
+    [-1.69552, 1.80569],
+    [-1.41067, 1.80569],
+    [-1.12582, 1.63079],
+    [-0.84097, 1.45677],
+    [-0.55612, 1.32986],
+    [-0.27127, 1.17851],
+    [0.01358, 1.05276],
+    [0.29843, 0.97436],
+    [0.58328, 0.97225],
+    [0.86813, 0.91935],
+    [1.15298, 0.99056],
+    [1.43783, 0.99056]
+   ]
+  }
+ ],
+ "ground_stretch": [
+  {"from_m": 100.0, "to_m": 30000000, "stretch_y": 4.0}
+ ],
+ "biomes": [
+  {
+   "name": "mountain",
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 102.4, "x": 0.5, "shape": "ridged"},
+    {
+     "field": "ground",
+     "wavelength_m": 204.8,
+     "x": 1.5765,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 51.2,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 409.6,
+     "x": 1.9913,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 102.4,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 819.2,
+     "x": 2.5173,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 204.8,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 1638.4,
+     "x": 2.8412,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 409.6,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 3276.8,
+     "x": 3.2585,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 819.2,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {"field": "ground", "wavelength_m": 6553.6, "x": 2.4677, "warp_m": 1638.4, "warp_fields": ["wx", "wy", "wz"]},
+    {"field": "ground", "wavelength_m": 13107.2, "x": 1.96, "warp_m": 3276.8, "warp_fields": ["wx", "wy", "wz"]},
+    {"field": "ground", "from_m": 26214.4, "to_m": 30000000, "x": 0.02}
+   ],
+   "surface": {"flat": "#8c867c", "steep": "#5c564e"},
+   "debug_color": "#7a6a5a"
+  }
+ ]
+}

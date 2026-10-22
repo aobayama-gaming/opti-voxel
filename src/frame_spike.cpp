@@ -1,6 +1,8 @@
 #include "frame_spike.hpp"
 
 #include "biome_features.hpp"
+#include "cascade.hpp"
+#include "cascade_shaped_glsl.hpp"
 
 #include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
@@ -83,6 +85,9 @@ constexpr int I64_SHIFTS[] = { 0, 1, 5, 31, 32, 33, 47, 63 };
 constexpr int I64_SHIFT_COUNT = int(sizeof(I64_SHIFTS) / sizeof(I64_SHIFTS[0]));
 constexpr int32_t I64_ADDS[] = { 0, 1, -1, -896, 2147483647, -2147483647 - 1 };
 constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
+// Stretch factors (log2) of the stretched-band probe: 1 to Climate::MAX_STRETCH.
+constexpr int STRETCHES[] = { 1, 3, 8 };
+constexpr int STRETCH_COUNT = int(sizeof(STRETCHES) / sizeof(STRETCHES[0]));
 // Hash-random points per origin, besides the fixed grid; fuzzed archetype programs and how many probes
 // share one shader (one dispatch per set and origin).
 constexpr int RANDOM_POINTS = 1024;
@@ -268,6 +273,53 @@ void probe_octave_cell(WorldPos p, uint b) {
             return true;
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
+        p.continuity_word = 3;
+        probes.push_back(p);
+    }
+    {
+        // A stretched band's position (Cascade::stretched / cascade_stretched): y over 2^j with the frame's int64
+        // helpers, across low-word wraps and at far origins.
+        Probe p;
+        p.name = "stretched";
+        p.words = 3 * STRETCH_COUNT;
+        p.glsl = CascadeShapedGLSL::stretch_helper() + String("void probe_stretched(WorldPos p, uint b) {\n");
+        for (int i = 0; i < STRETCH_COUNT; i++) {
+            p.glsl += vformat("    { WorldPos q = cascade_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
+                              "results[b + %du] = floatBitsToUint(q.frac.y); }\n",
+                    STRETCHES[i], 3 * i, 3 * i + 1, 3 * i + 2);
+        }
+        p.glsl += "}\n";
+        p.cpu = [](const WorldPos &q, uint32_t *r) {
+            for (int i = 0; i < STRETCH_COUNT; i++) {
+                const WorldPos s = Cascade::stretched(q, STRETCHES[i]);
+                r[3 * i] = lo32(s.voxel.y);
+                r[3 * i + 1] = uint32_t(hi32(s.voxel.y));
+                r[3 * i + 2] = float_bits(s.frac.y);
+            }
+            return true;
+        };
+        probes.push_back(p);
+    }
+    // The cell noise (the climate's cell fields), at the same wavelengths: F1 is 1-Lipschitz per cell.
+    for (int k : PERLIN3_KS) {
+        Probe p;
+        p.name = vformat("cell3_k%d", k);
+        p.words = 4;
+        p.is_float = true;
+        const Vector3i64 o = test_offset(k);
+        const uint32_t seed = 0x3000u + uint32_t(k);
+        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = cell3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed), glsl_lo(o),
+                glsl_hi(o));
+        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
+        p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
+            const Float4 v = cell3(q, k, seed, o);
+            r[0] = float_bits(v.x);
+            r[1] = float_bits(v.y);
+            r[2] = float_bits(v.z);
+            r[3] = float_bits(v.w);
+            return true;
+        };
+        p.continuity_bound = octave_step_bound(k, 1.5);
         p.continuity_word = 3;
         probes.push_back(p);
     }
@@ -838,7 +890,7 @@ String probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_probe
     }
     String code = String(SHADER_TEMPLATE);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + glsl_cell3());
     code = code.replace("/*NOISE*/", p_noise.glsl());
     code = code.replace("/*PROBES*/", probes_glsl);
     return code.replace("/*PROBE_CALLS*/", probe_calls);

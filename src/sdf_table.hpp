@@ -127,6 +127,15 @@ protected:
     // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
     // (metres). Call from configure(), after SDFBase's and once ground_y works.
     void build_table(int p_lod_count);
+    // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
+    // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.
+    void set_ground_materials(const std::vector<std::pair<String, Material::Params>> &p_ground) {
+        std::vector<uint32_t> base{ Material::GROUND };
+        for (const std::pair<String, Material::Params> &m : p_ground) {
+            base.push_back(materials.set(m.first, m.second));
+        }
+        gpu.set_base_palette(base);
+    }
 
 private:
     // The library indices the scenes place.
