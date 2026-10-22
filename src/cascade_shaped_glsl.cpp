@@ -17,6 +17,42 @@ const char *noise_function(const Spec &p_spec, int p_group) {
     return ((p_spec.cell_groups >> p_group) & 1u) ? "cell3" : "perlin3";
 }
 
+String noise_code(const Spec &p_spec, int p_group, const String &p_pos) {
+    const String args = ", int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n";
+    if (!p_spec.stretched(p_group)) {
+        return vformat("    vec4 g = %s(", noise_function(p_spec, p_group)) + p_pos + args;
+    }
+    return vformat("    vec4 g = %s(cascade_stretched(", noise_function(p_spec, p_group)) + p_pos + String(", int(band.info.w))") + args +
+            "    { precise float gy = g.y * exact_pow2(-int(band.info.w)); g.y = gy; }\n";
+}
+
+String stretch_helper() {
+    return R"glsl(
+// Cascade::stretched: y divided by 2^j (1 <= j <= MAX_STRETCH < 32) with the frame's int64 helpers, the remainder to the
+// fraction (carried at 1).
+WorldPos cascade_stretched(WorldPos p, int j) {
+    if (j == 0) {
+        return p;
+    }
+    WorldPos q = p;
+    uint rem = p.lo.y & ((1u << uint(j)) - 1u);
+    uvec3 lo = uvec3(0u, p.lo.y, 0u);
+    ivec3 hi = ivec3(0, p.hi.y, 0);
+    i64_asr(lo, hi, j);
+    precise float f = (float(rem) + p.frac.y) * exact_pow2(-j);
+    if (f >= 1.0) {
+        i64_add(lo, hi, ivec3(0, 1, 0));
+        f = 0.0;
+    }
+    q.lo.y = lo.y;
+    q.hi.y = hi.y;
+    q.frac.y = f;
+    return q;
+}
+
+)glsl";
+}
+
 // Cascade::BandMod, smooth_abs and warped (cascade.cpp), op for op; after the climate's shared helpers (cl_flush, cl_mul).
 String shaped_helpers() {
     using ExactNoise::glsl_float;
@@ -70,15 +106,14 @@ String shaped_band_function(const Spec &p_spec, int p_group) {
     String code = vformat("Ch insert_band_shaped_%d(Ch ch, WorldPos p, CascadeBand band, BandMod md, int m) {\n", p_group);
     if (used & MOD_WARP) {
         code += "    bool warp = (md.features & " + itos(MOD_WARP) + String("u) != 0u;\n");
-        code += vformat("    vec4 g = %s(warp ? cascade_warped(p, md.warp) : p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n",
-                noise_function(p_spec, p_group));
+        code += noise_code(p_spec, p_group, "warp ? cascade_warped(p, md.warp) : p");
         code += "    if (warp) {\n        precise float tv = exact_pow2(-m);\n        vec3 d = g.xyz;\n        vec3 o;\n";
         code += "        for (int b = 0; b < 3; b++) {\n            precise float s = 0.0;\n            for (int a = 0; a < 3; a++) {\n";
         code += "                precise float j0 = md.warp[a][b] * tv;\n                float j = abs(j0) < " + flush + String(" ? 0.0 : j0;\n");
         code += "                precise float t = j * d[a];\n                s = s + (abs(t) < " + flush + String(" ? 0.0 : t);\n            }\n");
         code += "            o[b] = d[b] + (abs(s) < " + flush + String(" ? 0.0 : s);\n        }\n        g = vec4(o, g.w);\n    }\n");
     } else {
-        code += vformat("    vec4 g = %s(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n", noise_function(p_spec, p_group));
+        code += noise_code(p_spec, p_group, "p");
     }
     code += "    precise float aws = md.amp[0].w * " + slope + String(";\n    precise vec4 o;\n");
     code += "    o.w = g.w * md.amp[0].w;\n    o.x = g.x * aws + g.w * md.amp[0].x;\n    o.y = g.y * aws + g.w * md.amp[0].y;\n    o.z = g.z * aws + g.w * md.amp[0].z;\n";

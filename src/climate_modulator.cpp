@@ -317,6 +317,11 @@ String Modulator::glsl(const Cascade::Spec &p_spec) const {
 
 Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground) {
     Cascade::Spec spec = p_ground;
+    for (Cascade::Band &b : spec.bands) {
+        for (const std::pair<int, int> &s : p_table.ground_stretch) {
+            b.stretch = s.first == b.k ? s.second : b.stretch;
+        }
+    }
     spec.fields.clear();
     spec.modulation.reset();
     spec.cell_groups = 0;

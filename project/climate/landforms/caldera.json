@@ -1,0 +1,176 @@
+{
+ "comment": "A caldera, matched to Crater Lake (tools/landforms: site caldera): a flat lake 600 m under a ring of cliffs, outer flanks falling to the plain. A height term on a 26 km cell noise field (Worley F1: the distance to a cell's centre) with a flat floor, a steep inner wall and a concave outer flank; the cell field stretched in y so the ring stays round at every height, plus a 1.6-6.5 km noise (ring) so the rim is no circle. The lake biome (the floor) is flat water, the flanks ridged octaves warped by a quarter of their wavelength (one multiplier per octave, fit by match.py).",
+ "fields": [
+  {
+   "name": "crater",
+   "seed": 901,
+   "noise": "cell",
+   "bands": [
+    {"wavelength_m": 26214.4, "amp": 1.0, "stretch_y": 8}
+   ]
+  },
+  {
+   "name": "wx",
+   "seed": 905,
+   "bands": [
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wy",
+   "seed": 906,
+   "bands": [
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wz",
+   "seed": 907,
+   "bands": [
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "ring",
+   "seed": 902,
+   "bands": [
+    {"from_m": 1600, "to_m": 6554, "amp": 0.03, "persistence": 0.7, "stretch_y": 8}
+   ],
+   "terms": [
+    {"source": "crater", "x": 1}
+   ]
+  }
+ ],
+ "ground_stretch": [
+  {"from_m": 100, "to_m": 30000000, "stretch_y": 4}
+ ],
+ "heights": [
+  {
+   "field": "ring",
+   "height_m": 800,
+   "curve": [
+    [-0.55, 0.0],
+    [-0.54, 0.0],
+    [-0.53, 0.0],
+    [-0.52, 0.0],
+    [-0.51, 0.0],
+    [-0.5, 0.0],
+    [-0.49, 0.0],
+    [-0.48, 0.0],
+    [-0.47, 0.0],
+    [-0.46, 0.0],
+    [-0.45, 0.0],
+    [-0.44, 0.0],
+    [-0.43, 0.0],
+    [-0.42, 0.0],
+    [-0.41, 0.0],
+    [-0.4, 0.0],
+    [-0.39, 0.0],
+    [-0.38, 0.0],
+    [-0.37, 0.0],
+    [-0.36, 0.0],
+    [-0.35, 0.11719],
+    [-0.34, 0.375],
+    [-0.33, 0.63281],
+    [-0.32, 0.75],
+    [-0.31, 0.65788],
+    [-0.3, 0.60036],
+    [-0.29, 0.55124],
+    [-0.28, 0.5069],
+    [-0.27, 0.4658],
+    [-0.26, 0.42712],
+    [-0.25, 0.39033],
+    [-0.24, 0.35509],
+    [-0.23, 0.32115],
+    [-0.22, 0.28832],
+    [-0.21, 0.25647],
+    [-0.2, 0.22547],
+    [-0.19, 0.19525],
+    [-0.18, 0.16571],
+    [-0.17, 0.1368],
+    [-0.16, 0.10846],
+    [-0.15, 0.08065],
+    [-0.14, 0.05332],
+    [-0.13, 0.02645],
+    [-0.12, 0.0],
+    [-0.11, 0.0],
+    [-0.1, 0.0],
+    [-0.09, 0.0],
+    [-0.08, 0.0],
+    [-0.07, 0.0],
+    [-0.06, 0.0],
+    [-0.05, 0.0]
+   ]
+  }
+ ],
+ "biomes": [
+  {
+   "name": "lake",
+   "where": [
+    {"field": "ring", "max": -0.365, "fade": 0.005}
+   ],
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 30000000, "x": 0.002}
+   ],
+   "surface": {"flat": "#1c4a78", "steep": "#1c4a78", "roughness": 0.2},
+   "debug_color": "#1c4a78"
+  },
+  {
+   "name": "flank",
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 51.2, "x": 0.3, "shape": "ridged"},
+    {
+     "field": "ground",
+     "wavelength_m": 102.4,
+     "x": 0.4378,
+     "shape": "ridged",
+     "warp_m": 25.6,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 204.8,
+     "x": 0.3338,
+     "shape": "ridged",
+     "warp_m": 51.2,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 409.6,
+     "x": 0.2365,
+     "shape": "ridged",
+     "warp_m": 102.4,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 819.2,
+     "x": 0.4817,
+     "shape": "ridged",
+     "warp_m": 204.8,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 1638.4,
+     "x": 0.169,
+     "shape": "ridged",
+     "warp_m": 409.6,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 3276.8,
+     "x": 0.111,
+     "shape": "ridged",
+     "warp_m": 819.2,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0.01}
+   ],
+   "surface": {"flat": "#6a6a50", "steep": "#5a4c44"},
+   "debug_color": "#7a6a50"
+  }
+ ]
+}

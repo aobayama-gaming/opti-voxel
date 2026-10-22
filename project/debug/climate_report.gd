@@ -4,7 +4,8 @@ extends Node
 ##   tools/climate_report.sh   (or: godot --headless --path project res://debug/climate_report.tscn -- --out=DIR)
 ## Args: --out=<dir> (required), --climate=<res:// or absolute path> (default res://climate/example.json),
 ## --voxel=<m> (0.05), --lods=<n> (15), --extent_km=<km> (60), --size=<points per side> (512),
-## --surface=<0|1> (1: each column at its ground surface; 0: a slice through the datum), --center=<x,z> (metres, 0,0)
+## --surface=<0|1> (1: each column at its ground surface; 0: a slice through the datum), --center=<x,z> (metres, 0,0),
+## --lattice=<m> (the lattice Λ_m sampled, 2^m voxels apart, in place of the extent's)
 
 
 func _center(p_text: String) -> Vector2:
@@ -22,7 +23,8 @@ func _ready() -> void:
 	add_child(report_node)
 	var report: Dictionary = report_node.run(args.get("out", "user://climate"), args.get("climate", "res://climate/example.json"),
 			float(args.get("voxel", "0.05")), int(args.get("lods", "15")), float(args.get("extent_km", "60")),
-			int(args.get("size", "512")), args.get("surface", "1") != "0", _center(args.get("center", "0,0")))
+			int(args.get("size", "512")), args.get("surface", "1") != "0", _center(args.get("center", "0,0")),
+			int(args.get("lattice", "-1")))
 	print("CLIMATE: ", JSON.stringify(report))
 	report_node.queue_free()
 	await get_tree().process_frame

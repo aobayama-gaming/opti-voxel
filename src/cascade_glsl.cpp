@@ -323,7 +323,7 @@ String storage_functions(const Spec &p_spec, int p_stride) {
     return code;
 }
 
-using CascadeShapedGLSL::noise_function;
+using CascadeShapedGLSL::noise_code;
 using CascadeShapedGLSL::shaped;
 using CascadeShapedGLSL::shaped_band_function;
 using CascadeShapedGLSL::shaped_helpers;
@@ -333,7 +333,7 @@ using CascadeShapedGLSL::shaped_helpers;
 // order); and Cascade::flush_value.
 String band_functions(const Spec &p_spec) {
     const int nch = p_spec.gpu_channels();
-    String code;
+    String code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper() : String();
     for (int g = 0; g < p_spec.group_count(); g++) {
         const int base = p_spec.gpu_base(g);
         const ChannelSet set = p_spec.group_set(g);
@@ -343,7 +343,7 @@ String band_functions(const Spec &p_spec) {
             code += "    float n[8] = float[8](c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w);\n";
         } else {
             // perlin3 returns (d/dx, d/dy, d/dz, value): the same bits as perlin3_cross's first four channels.
-            code += vformat("    vec4 g = %s(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n", noise_function(p_spec, g));
+            code += noise_code(p_spec, g, "p");
             code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
         }
         for (int c = 0; c < channel_count(set); c++) {
@@ -355,7 +355,7 @@ String band_functions(const Spec &p_spec) {
             code += shaped_band_function(p_spec, g);
         } else if (p_spec.modulation && set == ChannelSet::LINEAR4) {
             code += vformat("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g);
-            code += vformat("    vec4 g = %s(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n", noise_function(p_spec, g));
+            code += noise_code(p_spec, g, "p");
             code += vformat("    precise float aws = amp.w * %s;\n", flt(ExactNoise::exact_pow2(-p_spec.insert_shift)));
             code += vformat("    { precise float o = g.w * amp.w; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", base, base);
             static const char *AXES = "xyz";
@@ -474,6 +474,7 @@ PackedByteArray band_table(const Spec &p_spec) {
             bytes.encode_u32(base + 48, 1);
             bytes.encode_u32(base + 52, b.seed);
             bytes.encode_u32(base + 56, uint32_t(b.k));
+            bytes.encode_u32(base + 60, uint32_t(b.stretch));
         }
     }
     return bytes;
@@ -502,10 +503,9 @@ bool ground_materials(const SDFBase *p_sdf) {
 
 FieldRange field_range(const SDFBase *p_sdf, bool p_points) {
     const Spec &spec = *p_sdf->get_cascade();
-    if (spec.fields.empty()) {
-        return FieldRange();
-    }
-    // Ground terms read the fields at every sample, point items too.
+    // The climate variant (modulation, ground terms, the pick where there are fields) wherever a level needs it: a one-biome
+    // table without fields still modulates the ground, and a terrace is a ground term. Ground terms read the fields at
+    // every sample, point items too.
     const bool everywhere = (!p_points && ground_materials(p_sdf)) || p_sdf->has_ground_terms();
     return everywhere ? FieldRange{ 0, MAX_LEVEL } : spec.field_range();
 }

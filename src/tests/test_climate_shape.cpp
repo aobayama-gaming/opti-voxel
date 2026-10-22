@@ -12,7 +12,6 @@
 using namespace Climate;
 using ExactNoise::float_bits;
 
-
 namespace {
 
 uint64_t fnv(uint64_t p_h, uint32_t p_v) {
@@ -103,7 +102,6 @@ Dictionary shaped_table() {
     CHECK(load("res://climate/shaped_test.json", d) == String());
     return d;
 }
-
 
 struct ShapedSDF {
     SDFCascade sdf;
@@ -321,4 +319,94 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
     CHECK(parse(bad, g.climate_ground(), t).contains("true or false"));
     Dictionary(Array(bad["biomes"])[1])["terrace"] = JSON::parse_string(R"({"step_m": 0})");
     CHECK(parse(bad, g.climate_ground(), t).contains("terrace step"));
+}
+
+// Stretched bands (ground_stretch, stretch_y): the octaves in range carry their stretch (at most k - 3), the ground's
+// vertical slope drops against its horizontal one (the noise read at y / 4), and bad factors are refused. Box runs and
+// point queries agree on the stretched table: the first test of this file runs on it.
+TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
+    ShapedSDF s;
+    CLIMATE_REQUIRE(s.sdf.get_climate() != nullptr);
+    const Cascade::Spec &spec = s.sdf.get_spec();
+    CHECK(spec.stretched());
+    const int k100 = ExactNoise::lattice_k(100.0, 0.05);
+    int stretched = 0;
+    for (const Cascade::Band &b : spec.bands) {
+        CHECK(b.stretch == (b.k >= k100 ? MIN(2, b.k - ExactNoise::BAND_SHIFT) : 0));
+        stretched += b.stretch != 0;
+    }
+    CHECK(stretched > 0);
+    CHECK(spec.fields[size_t(s.sdf.get_climate()->field_index("dunes"))].front().stretch == 2);
+
+    Dictionary flat = shaped_table();
+    flat.erase("ground_stretch");
+    SDFCascade iso;
+    iso.climate_data = flat;
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    iso.configure(param, 15);
+    CLIMATE_REQUIRE(iso.get_climate() != nullptr);
+    // Mean |dh/dy| / mean |dh/dx| at the ground surface of 24 x 24 columns of Λ_8.
+    auto ratio = [](const SDFCascade &p_sdf) {
+        const int m = 8;
+        double dy = 0.0, dx = 0.0;
+        for (int i = 0; i < 24; i++) {
+            for (int j = 0; j < 24; j++) {
+                const int64_t x = int64_t(j * 37) << m, z = int64_t(i * 41) << m;
+                const int64_t y = WorldCoord::floor_div(p_sdf.ground_y(x, z), int64_t(1) << m) << m;
+                float ch[Cascade::CHANNELS];
+                p_sdf.channels_at(VoxelPos(x, y, z), m, ch);
+                dy += std::fabs(double(ch[Cascade::DY]));
+                dx += std::fabs(double(ch[Cascade::DX]));
+            }
+        }
+        return dy / MAX(dx, 1e-30);
+    };
+    const double r_iso = ratio(iso), r_stretched = ratio(s.sdf);
+    MESSAGE("mean |dh/dy| / |dh/dx|: isotropic ", r_iso, ", stretched by 4 ", r_stretched);
+    CHECK(r_stretched < 0.6 * r_iso);
+
+    Table t;
+    for (const double bad : { 3.0, 0.5, 1024.0 }) {
+        Dictionary d = shaped_table();
+        Dictionary(Array(d["ground_stretch"])[0])["stretch_y"] = bad;
+        CHECK(parse(d, s.sdf.climate_ground(), t).contains("power of two"));
+    }
+}
+
+// A table with no field (one biome multiplying the ground's octaves, project/climate/fieldless_test.json) modulates
+// the ground: the GPU passes take the variant with the modulation at its levels (CascadeGLSL::field_range not empty).
+// It was empty with no field group, and the GPU drew the bare ground under the CPU's flat desert (CascadeSpike 4d).
+TEST_CASE("Climate shape: a modulation without fields takes the modulated GPU variant") {
+    SDFCascade sdf;
+    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == String());
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    sdf.configure(param, 15);
+    CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
+    CHECK(sdf.get_spec().fields.empty());
+    CHECK(sdf.get_spec().modulation != nullptr);
+    for (const bool points : { false, true }) {
+        const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, points);
+        CHECK_FALSE(range.empty());
+        const String code = CascadeGLSL::level_shader(&sdf, false, points, false, !points, true);
+        CHECK((code.contains("cascade_mods(") || code.contains("cascade_amplitudes(")));
+    }
+}
+
+// The same without fields, with a terrace (a ground term): climate_ground runs at every sample, so every level takes the
+// climate variant (the early return for a table without fields skipped that rule: the GPU drew the terrace-less ground).
+TEST_CASE("Climate shape: ground terms without fields take the climate variant at every level") {
+    SDFCascade sdf;
+    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == String());
+    Dictionary(Array(sdf.climate_data["biomes"])[0])["terrace"] = JSON::parse_string(R"({"step_m": 4})");
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    sdf.configure(param, 15);
+    CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
+    CHECK(sdf.has_ground_terms());
+    for (const bool points : { false, true }) {
+        CHECK(CascadeGLSL::field_range(&sdf, points).everywhere());
+        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true).contains("climate_ground("));
+    }
 }

@@ -191,6 +191,9 @@ String validate(const Table &p_table, const Ground &p_ground) {
             return err;
         }
     }
+    if (p_table.has_stretch() && (p_ground.spec == nullptr || p_ground.spec->set != Cascade::ChannelSet::LINEAR4)) {
+        return "climate: stretched bands need a LINEAR4 ground.";
+    }
     if (p_table.has_state() && p_table.fields.size() + 1 > size_t(Cascade::MAX_FIELD_GROUPS)) {
         return vformat("climate: a multifractal carries its state as a field group: at most %d fields.", Cascade::MAX_FIELD_GROUPS - 1);
     }
@@ -207,11 +210,19 @@ String validate(const Table &p_table, const Ground &p_ground) {
 
 // The format (JSON; distances in metres, rounded to whole octaves 2^k voxels; "comment" keys are ignored, any
 // other unknown key is an error):
-//   { "fields": [ field... ], "heights": [ height... ] (optional), "biomes": [ biome..., default biome ] }
+//   { "fields": [ field... ], "heights": [ height... ] (optional), "ground_stretch": [ stretch... ] (optional),
+//     "biomes": [ biome..., default biome ] }
 //   field:  { "name": "temperature", "seed": 7 (optional, else a hash of the name), "noise": "perlin" | "cell" (optional),
-//             "bands": [ { "wavelength_m": 5000, "amp": 1, shape (optional) }
+//             "bands": [ { "wavelength_m": 5000, "amp": 1, shape (optional), "stretch_y": 1 (optional) }
 //                      | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional), shape (optional) } ],
 //             "terms": [ { "source": "ground", "per_m": -0.002 } | { "source": "<earlier field>", "x": 0.5 } ] }
+//   stretch: { "from_m": 100, "to_m": 30000000 (or "wavelength_m"), "stretch_y": 4 }: the ground's octaves in range
+//           read their noise at y / 4 (their wavelength along y 4 times theirs along x and z); a field band takes
+//           "stretch_y" too. A power of two; octave k takes at most 2^(k - 3) of it (Cascade::stretched: a range's finest
+//           octaves are stretched less), and no octave is stretched twice. The ground is a 3D noise
+//           whose vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs (steep
+//           landforms: mountains, cliff faces, valley walls, tools/landforms); stretched octaves keep it a height field
+//           where they dominate.
 //   shape:  "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
 //           2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A band
 //           inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
@@ -252,8 +263,12 @@ public:
     String error;
 
     void run(const Dictionary &p_data) {
-        if (!keys(p_data, "climate", { "fields", "biomes", "heights" })) {
+        if (!keys(p_data, "climate", { "fields", "biomes", "heights", "ground_stretch" })) {
             return;
+        }
+        const Array stretch = array(p_data, "ground_stretch", "climate");
+        for (int64_t i = 0; i < stretch.size() && error.is_empty(); i++) {
+            ground_stretch(dict(stretch[i], vformat("ground_stretch %d", i)), vformat("ground_stretch %d", i));
         }
         const Array fields = array(p_data, "fields", "climate");
         for (int64_t i = 0; i < fields.size() && error.is_empty(); i++) {
@@ -425,12 +440,49 @@ private:
         return true;
     }
 
+    // "stretch_y": a power of two >= 1 (1: none), as log2; octave k's at most k - the insertion shift (its insertion
+    // lattice divides exactly, Cascade::stretched).
+    int stretch(const Dictionary &p_d, const String &p_where) {
+        const double s = number(p_d, "stretch_y", p_where, 1.0);
+        const int j = int(std::lround(std::log2(std::max(s, 1.0))));
+        if (!(s >= 1.0 && s <= std::ldexp(1.0, MAX_STRETCH) && std::ldexp(1.0, j) == s)) {
+            fail(p_where, vformat("'stretch_y' is a power of two in [1, 2^%d].", MAX_STRETCH));
+            return 0;
+        }
+        return j;
+    }
+
+    static int octave_stretch(int p_j, int p_k) { return std::max(0, std::min(p_j, p_k - ExactNoise::BAND_SHIFT)); }
+
+    // { "from_m": 100, "to_m": 30000000 | "wavelength_m": 400, "stretch_y": 4 }: the ground's octaves in range read
+    // their noise at y / stretch.
+    void ground_stretch(const Dictionary &p_d, const String &p_where) {
+        int lo = 0, hi = 0;
+        if (!keys(p_d, p_where, { "wavelength_m", "from_m", "to_m", "stretch_y" }) || !octave_range(p_d, p_where, lo, hi)) {
+            return;
+        }
+        const int j = stretch(p_d, p_where);
+        for (int k = lo; k <= hi; k++) {
+            for (const std::pair<int, int> &s : table.ground_stretch) {
+                if (s.first == k) {
+                    fail(p_where, vformat("octave k = %d is stretched twice.", k));
+                    return;
+                }
+            }
+            const int s = octave_stretch(j, k);
+            if (s > 0) {
+                table.ground_stretch.emplace_back(k, s);
+            }
+        }
+    }
+
     void bands(const Dictionary &p_d, const String &p_where, Field &r_f) {
         int lo = 0, hi = 0;
-        if (!keys(p_d, p_where, { "wavelength_m", "from_m", "to_m", "amp", "persistence", "shape", "scale", "offset", "coeffs" }) ||
+        if (!keys(p_d, p_where, { "wavelength_m", "from_m", "to_m", "amp", "persistence", "shape", "scale", "offset", "coeffs", "stretch_y" }) ||
                 !octave_range(p_d, p_where, lo, hi)) {
             return;
         }
+        const int j = stretch(p_d, p_where);
         const double amp = number(p_d, "amp", p_where);
         const double persistence = number(p_d, "persistence", p_where, 1.0);
         Shape sh;
@@ -443,6 +495,7 @@ private:
                 continue;
             }
             r_f.bands.push_back(ExactNoise::make_octave(r_f.seed, uint32_t(k), k, float(amp * std::pow(persistence, hi - k))));
+            r_f.bands.back().stretch = octave_stretch(j, k);
             r_f.shapes.push_back(sh);
         }
     }

@@ -1,6 +1,8 @@
 #include "frame_spike.hpp"
 
 #include "biome_features.hpp"
+#include "cascade.hpp"
+#include "cascade_shaped_glsl.hpp"
 
 #include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
@@ -80,6 +82,9 @@ constexpr int I64_SHIFTS[] = { 0, 1, 5, 31, 32, 33, 47, 63 };
 constexpr int I64_SHIFT_COUNT = int(sizeof(I64_SHIFTS) / sizeof(I64_SHIFTS[0]));
 constexpr int32_t I64_ADDS[] = { 0, 1, -1, -896, 2147483647, -2147483647 - 1 };
 constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
+// Stretch factors (log2) of the stretched-band probe: 1 to Climate::MAX_STRETCH.
+constexpr int STRETCHES[] = { 1, 3, 8 };
+constexpr int STRETCH_COUNT = int(sizeof(STRETCHES) / sizeof(STRETCHES[0]));
 // Hash-random points per origin, besides the fixed grid; fuzzed archetype programs and how many probes
 // share one shader (one dispatch per set and origin).
 constexpr int RANDOM_POINTS = 1024;
@@ -181,6 +186,30 @@ void probe_octave_cell(WorldPos p, uint b) {
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
         p.continuity_word = 3;
+        probes.push_back(p);
+    }
+    {
+        // A stretched band's position (Cascade::stretched / cascade_stretched): y over 2^j with the frame's int64
+        // helpers, across low-word wraps and at far origins.
+        Probe p;
+        p.name = "stretched";
+        p.words = 3 * STRETCH_COUNT;
+        p.glsl = CascadeShapedGLSL::stretch_helper() + String("void probe_stretched(WorldPos p, uint b) {\n");
+        for (int i = 0; i < STRETCH_COUNT; i++) {
+            p.glsl += vformat("    { WorldPos q = cascade_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
+                              "results[b + %du] = floatBitsToUint(q.frac.y); }\n",
+                    STRETCHES[i], 3 * i, 3 * i + 1, 3 * i + 2);
+        }
+        p.glsl += "}\n";
+        p.cpu = [](const WorldPos &q, uint32_t *r) {
+            for (int i = 0; i < STRETCH_COUNT; i++) {
+                const WorldPos s = Cascade::stretched(q, STRETCHES[i]);
+                r[3 * i] = lo32(s.voxel.y);
+                r[3 * i + 1] = uint32_t(hi32(s.voxel.y));
+                r[3 * i + 2] = float_bits(s.frac.y);
+            }
+            return true;
+        };
         probes.push_back(p);
     }
     // The cell noise (the climate's cell fields), at the same wavelengths: F1 is 1-Lipschitz per cell.

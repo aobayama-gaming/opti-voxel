@@ -45,6 +45,8 @@ inline Float4 to_float4(const float p_ch[Cascade::CHANNELS]) {
 
 inline constexpr int MAX_FIELDS = 8;
 inline constexpr int MAX_BIOMES = 16;
+// "stretch_y" at most 2^MAX_STRETCH (Band::stretch).
+inline constexpr int MAX_STRETCH = 8;
 // A term's or an amplitude's source that is not a field: the ground cascade.
 inline constexpr int GROUND = -1;
 // Seed of the pick's tie-break hash (ExactNoise::hash_cell of the lattice point).
@@ -155,6 +157,8 @@ struct Table {
     std::vector<Field> fields;
     std::vector<Biome> biomes;
     std::vector<HeightTerm> heights;
+    // (k, stretch) of the ground's octaves stretched along y ("ground_stretch": Band::stretch, combined_spec).
+    std::vector<std::pair<int, int>> ground_stretch;
 
     int field_index(const String &p_name) const;
     // Whether a biome weights a band by the multifractal state: the combined spec carries one more field group for it.
@@ -162,6 +166,8 @@ struct Table {
     // Whether the ground at a sample is more than the cascade's (height terms or terraces: ground_value).
     bool has_ground_terms() const;
     bool has_terraces() const;
+    // Whether a field band or a ground octave is stretched along y.
+    bool has_stretch() const;
 };
 
 // What a table is checked against and reads: the ground cascade (SDFCascade::climate_ground). Ground() is no ground:

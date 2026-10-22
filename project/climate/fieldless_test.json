@@ -1,0 +1,23 @@
+{
+ "comment": "A modulation with no field (one biome multiplying the ground's octaves), for the tests (test_climate_shape.cpp, CascadeSpike set 4d): the flat desert landform before its gravel patches.",
+ "fields": [],
+ "biomes": [
+  {
+   "name": "desert",
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 1.6, "x": 0.04, "shape": "billow"},
+    {"field": "ground", "from_m": 3.2, "to_m": 51.2, "x": 0.02},
+    {"field": "ground", "wavelength_m": 102.4, "x": 0.0539},
+    {"field": "ground", "wavelength_m": 204.8, "x": 0.018},
+    {"field": "ground", "wavelength_m": 409.6, "x": 0.0234},
+    {"field": "ground", "wavelength_m": 819.2, "x": 0.0258},
+    {"field": "ground", "wavelength_m": 1638.4, "x": 0.0137},
+    {"field": "ground", "wavelength_m": 3276.8, "x": 0.0144},
+    {"field": "ground", "wavelength_m": 6553.6, "x": 0.0207},
+    {"field": "ground", "from_m": 13107.2, "to_m": 30000000, "x": 0.004}
+   ],
+   "surface": {"flat": "#d8b98a", "steep": "#b08860"},
+   "debug_color": "#e0c080"
+  }
+ ]
+}

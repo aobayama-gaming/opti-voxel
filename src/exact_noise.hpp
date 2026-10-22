@@ -457,6 +457,9 @@ struct Octave {
     uint32_t seed = 0;
     Vector3i64 offset;
     float amp = 0.0f;
+    // Cascade bands only (Cascade::stretched): the octave's wavelength along y is 2^(k + stretch), at most 2^(2k - 3)
+    // (the band's insertion lattice divides exactly). 0: isotropic, the only case anything else evaluates.
+    int stretch = 0;
 };
 
 inline float gradient_factor(const Octave &p_octave, int p_lod) {

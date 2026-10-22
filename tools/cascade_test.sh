@@ -13,7 +13,8 @@
 # level 0) vs SDFCascade::ground_material, every LOD (G10). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
 # (G6), both channel sets (G7: 8 vs 4), each set against the plain 4 channels. Sets: 8, 4, 4c (LINEAR4 + the example
 # climate at 5 cm, its fields carried and modulating the ground), 4f (its fields without multipliers), 4p (the plain climate: the
-# example before shaped bands), 4s (the shaped test table: every shaped-band operation); default 8,4,4c.
+# example before shaped bands), 4s (the shaped test table: every shaped-band operation), 4d (fieldless_test.json: a
+# modulation with no field); default 8,4,4c.
 # GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.
@@ -147,7 +148,7 @@ if rows:
     if "8" in sets and "4" in sets:
         lines.append(f"G7: 8 ch / 4 ch over all LODs = {total('8') / total('4'):.3f} (keep 8 unless > 1.15)")
     for s in ratios:
-        if s in ("4c", "4f", "4p", "4s") and "4" in sets:
+        if s in ("4c", "4f", "4p", "4s", "4d") and "4" in sets:
             lines.append(f"{s} ch / 4 ch over all LODs = {total(s) / total('4'):.3f} (the climate's cost)")
     lines.append("")
     lines.append("Per level (last run, ms, j = top ... 0):")

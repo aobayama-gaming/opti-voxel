@@ -1,0 +1,120 @@
+{
+ "comment": "Blobby mangrove, matched to the Sundarbans (tools/landforms: site mangrove): flat islands about 5 m up, their canopy and mud a blobby billow texture, cut by tidal channels at sea level. Each channel size is one ridged octave of its own field (a single octave's zero crossings are clean meandering lines; summed octaves turn into a web of rings) through a height term with a sharp bank and a flat bottom: 6.5 km channels about 800 m wide that also lift the land to +5 m, and 1.6 km creeks about 80 m wide. One multiplier per ground octave, fit by match.py.",
+ "fields": [
+  {
+   "name": "channels",
+   "seed": 401,
+   "bands": [
+    {"wavelength_m": 6553.6, "amp": 1.0, "shape": "ridged"}
+   ]
+  },
+  {
+   "name": "creeks",
+   "seed": 402,
+   "bands": [
+    {"wavelength_m": 1638.4, "amp": 1.0, "shape": "ridged"}
+   ]
+  }
+ ],
+ "heights": [
+  {
+   "field": "channels",
+   "height_m": 5,
+   "curve": [
+    [0.1, 1.0],
+    [0.10938, 1.0],
+    [0.11875, 1.0],
+    [0.12812, 1.0],
+    [0.1375, 1.0],
+    [0.14688, 1.0],
+    [0.15625, 1.0],
+    [0.16563, 1.0],
+    [0.175, 0.79688],
+    [0.18438, -0.04935],
+    [0.19375, -0.3],
+    [0.20312, -0.3],
+    [0.2125, -0.3],
+    [0.22187, -0.3],
+    [0.23125, -0.3],
+    [0.24063, -0.3],
+    [0.25, -0.3]
+   ]
+  },
+  {
+   "field": "creeks",
+   "height_m": 5,
+   "curve": [
+    [0.15, 0.0],
+    [0.15625, 0.0],
+    [0.1625, 0.0],
+    [0.16875, 0.0],
+    [0.175, 0.0],
+    [0.18125, 0.0],
+    [0.1875, 0.0],
+    [0.19375, 0.0],
+    [0.2, 0.0],
+    [0.20625, 0.0],
+    [0.2125, -0.00725],
+    [0.21875, -0.75178],
+    [0.225, -1.0],
+    [0.23125, -1.0],
+    [0.2375, -1.0],
+    [0.24375, -1.0],
+    [0.25, -1.0]
+   ]
+  }
+ ],
+ "biomes": [
+  {
+   "name": "channel",
+   "where": [
+    {"field": "channels", "min": 0.17, "fade": 0.01}
+   ],
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 25.6, "x": 0.06, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 51.2, "x": 0.02, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 102.4, "x": 0.0152, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 204.8, "x": 0.0098, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 409.6, "x": 0.0071, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 819.2, "x": 0.0018, "shape": "plain"},
+    {"field": "ground", "from_m": 1638.4, "to_m": 3276.8, "x": 0.002},
+    {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
+   ],
+   "surface": {"flat": "#4a5038", "steep": "#4a4030", "roughness": 0.3},
+   "debug_color": "#30506a"
+  },
+  {
+   "name": "creek",
+   "where": [
+    {"field": "creeks", "min": 0.212, "fade": 0.004}
+   ],
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 25.6, "x": 0.06, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 51.2, "x": 0.02, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 102.4, "x": 0.0152, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 204.8, "x": 0.0098, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 409.6, "x": 0.0071, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 819.2, "x": 0.0018, "shape": "plain"},
+    {"field": "ground", "from_m": 1638.4, "to_m": 3276.8, "x": 0.002},
+    {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
+   ],
+   "surface": {"flat": "#4a5038", "steep": "#4a4030", "roughness": 0.3},
+   "debug_color": "#40607a"
+  },
+  {
+   "name": "mangrove",
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 25.6, "x": 0.06, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 51.2, "x": 0.02, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 102.4, "x": 0.0152, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 204.8, "x": 0.0098, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 409.6, "x": 0.0071, "shape": "billow"},
+    {"field": "ground", "wavelength_m": 819.2, "x": 0.0018, "shape": "plain"},
+    {"field": "ground", "from_m": 1638.4, "to_m": 3276.8, "x": 0.002},
+    {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
+   ],
+   "surface": {"flat": "#4a5a2c", "steep": "#4a3c2c", "roughness": 1},
+   "debug_color": "#3c6a3c"
+  }
+ ]
+}

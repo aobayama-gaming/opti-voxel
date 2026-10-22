@@ -66,6 +66,12 @@ bool Table::has_state() const {
             [](const Biome &p_b) { return std::any_of(p_b.amps.begin(), p_b.amps.end(), [](const Amp &p_a) { return p_a.gain > 0.0f; }); });
 }
 
+bool Table::has_stretch() const {
+    return !ground_stretch.empty() || std::any_of(fields.begin(), fields.end(), [](const Field &p_f) {
+        return std::any_of(p_f.bands.begin(), p_f.bands.end(), [](const Cascade::Band &p_b) { return p_b.stretch != 0; });
+    });
+}
+
 bool Table::has_terraces() const {
     return std::any_of(biomes.begin(), biomes.end(), [](const Biome &p_b) { return p_b.terrace.step > 0.0f; });
 }

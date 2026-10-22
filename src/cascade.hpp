@@ -240,6 +240,12 @@ struct FieldRange {
 // finer octaves read (the multifractals' previous octave). All of it dual numbers, flushed like dmul.
 struct Spec;
 
+// p_pos with y divided by 2^p_j (1 <= p_j <= 31): the floor to the voxel, the remainder (+ the fraction, times 2^-p_j) to
+// the fraction (a sum that rounds to 1 carries). A stretched band reads its noise there (Band::stretch); at its insertion
+// lattice points (multiples of 2^(k - shift) voxels, p_j <= k - shift) the division is exact. GLSL: cascade_stretched
+// (CascadeShapedGLSL::stretch_helper), FrameSpike's stretch probe.
+WorldPos stretched(const WorldPos &p_pos, int p_j);
+
 // BandMod::features bits.
 inline constexpr uint32_t MOD_ABS = 1u;
 inline constexpr uint32_t MOD_SQ = 2u;
@@ -314,6 +320,9 @@ struct Spec {
     uint32_t cell_groups = 0;
 
     int insert_level(const Band &p_band) const { return p_band.k - insert_shift; }
+    // Some band of group p_group (any group: -1) is stretched along y (Band::stretch): its GLSL inserts go through
+    // cascade_stretched.
+    bool stretched(int p_group = -1) const;
     int top_level(bool p_all_fields = false) const;
     int group_count() const { return 1 + int(fields.size()); }
     const std::vector<Band> &group_bands(int p_group) const { return p_group == 0 ? bands : fields[size_t(p_group - 1)]; }
