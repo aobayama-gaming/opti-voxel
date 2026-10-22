@@ -10,6 +10,7 @@
 #include "climate_report.hpp"
 #include "frame_spike.hpp"
 #include "quad_pool_spike.hpp"
+#include "voxel_sky.hpp"
 #include "voxel_terrain.hpp"
 
 #ifdef OPTI_VOXEL_TESTS
@@ -23,6 +24,7 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
         return;
     }
     GDREGISTER_CLASS(VoxelTerrain);
+    GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
     GDREGISTER_CLASS(FrameSpike);
     GDREGISTER_CLASS(CascadeReport);

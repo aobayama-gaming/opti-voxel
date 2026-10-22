@@ -42,6 +42,7 @@ enum Pattern : int {
     PATTERN_LAVA = 1, // a warped crust: dark seams over a drifting glow
     PATTERN_BARK = 2, // plates and grooves along world up, knots (a 3D noise, the page shader's bark_grain)
     PATTERN_GROUND = 3, // the procedural ground (slope blend, contours) in the material's colours: albedo flat, steep on slopes
+    PATTERN_LEAVES = 4, // a canopy: clumps of leaves (a 3D noise at two scales), lighter where the surface faces up
 };
 
 // The page shader's procedural ground (GROUND): albedo on gentle slopes and on steep ones (linear), the default of a

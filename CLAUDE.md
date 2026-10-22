@@ -488,7 +488,8 @@ to every change, and a reviewer may reject a PR on any of them.
   the batch's results for the chunks that loaded nothing); a `{GROUND}` palette, or one that finds no room (`full`),
   uses block 0 and draws as ground. The page shader reads header -> palette -> id -> `material_tex`
   (`Material::Library::make_image`, owned by the mesher) for corners of index > 0, and replaces the ground colours with
-  the material's albedo, roughness and emission (lava: `PATTERN_LAVA`'s crust; `material_shading`). **Blend:** corner A (the
+  the material's albedo, roughness and emission (lava: `PATTERN_LAVA`'s crust, leaves: `PATTERN_LEAVES`' clumps;
+  `material_shading`). **Blend:** corner A (the
   provoking vertex) reads the quad's other corners: a = its material, b = the first other one, plus a mask of the corners
   (B, C, D) that are not a, packed above b's id (flat `ivec2 v_materials`); the fragment interpolates the mask over the
   base quad's uv (no new interpolant) and shades the higher id of the pair where the weight towards it, jittered by a
@@ -517,6 +518,23 @@ to every change, and a reviewer may reject a PR on any of them.
   +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
   contrast / saturation values never applied (adjustments were off) and are gone. The ground's material per biome:
   **Biome materials** below. Next: materials inside one record (an IR change), image textures (triplanar).
+- **Look (sky, fog, clouds, surface detail).** The scenes (`main_scene*.tscn`, `debug/bench.tscn`) share one environment:
+  a sun at 28 degrees (warm, `light_angular_distance` 0.53 so the sky draws its disk), exponential fog with aerial
+  perspective (`fog_aerial_perspective` 0.8: the fog takes the sky's colour in that direction, `fog_density` 0.00025: a
+  quarter at 1 km), SSAO / SSIL, the grading LUT. `VoxelSky` (`src/voxel_sky.*`, a sibling of the terrain and the
+  WorldEnvironment) installs the sky shader at ready: Godot's PhysicalSkyMaterial (MIT) with a **cloud layer** over it, a
+  plane at `cloud_height_m` reading `cloud_texture` (`project/clouds.png`, `tools/make_clouds.py`: tileable spectral
+  noise, rank-normalised so `cloud_cover` is the fraction covered) once per `cloud_scale_m`, carried by `cloud_wind`. The
+  page shader splices the same GLSL (`VoxelSky::glsl_clouds`: uniforms, `cloud_hit` / `cloud_uv` / `cloud_density`) and
+  its `light()` (Lambert, no specular: every material has roughness 1) cuts the sun by `cloud_shadow` where the
+  fragment's ray to the sun crosses a cloud, so a shadow lies under its cloud. `VoxelSky` hands the terrain the
+  uniforms through `VoxelTerrain.set_page_params(Dictionary)` (kept until the pool exists); a scene without a VoxelSky
+  keeps the defaults (no texture = black = no clouds, `cloud_shadow` 0). **Surface detail**, all procedural, world-space
+  value noise (the same at every LOD): `ground_detail` on the procedural ground and `PATTERN_GROUND` (a tint over ~20 m,
+  patches of ~2 m, a grain of 6 cm that fades past 2 pixels per feature), `PATTERN_LEAVES` on the leaves (clumps of
+  0.5 m from dark to yellowish green, 8 cm leaves, darker undersides). Not done yet, in order: water (a sea plane with a
+  depth shader), triplanar image textures per material, grass, height fog (the ground spans kilometres on the
+  cascade terrains: a fixed fog height is wrong there), time of day.
 - **Climate** (`src/climate.{hpp,cpp}`, `climate_modulator.cpp`, `climate_parse.cpp` / `climate_validate.cpp`,
   `climate_glsl.cpp`; `VoxelTerrain.climate_path` / `--climate=PATH`, bench and player; off by
   default): a climate is data, a JSON table (format above `parse()`, example `project/climate/example.json`, tuned for

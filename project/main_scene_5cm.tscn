@@ -2,11 +2,12 @@
 
 [ext_resource type="PackedScene" uid="uid://bwfx7fd23et6q" path="res://player.tscn" id="1_0f027"]
 [ext_resource type="CompressedTexture3D" uid="uid://ds6l17gi5l72p" path="res://grade_lut.png" id="2_lut"]
+[ext_resource type="Texture2D" path="res://clouds.png" id="3_clouds"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_o3jxj"]
+[sub_resource type="PhysicalSkyMaterial" id="PhysicalSkyMaterial_o3jxj"]
 
 [sub_resource type="Sky" id="Sky_0f027"]
-sky_material = SubResource("ProceduralSkyMaterial_o3jxj")
+sky_material = SubResource("PhysicalSkyMaterial_o3jxj")
 
 [sub_resource type="Environment" id="Environment_2c62f"]
 background_mode = 2
@@ -14,6 +15,13 @@ sky = SubResource("Sky_0f027")
 tonemap_mode = 3
 ssao_enabled = true
 ssil_enabled = true
+fog_enabled = true
+fog_light_color = Color(0.72, 0.79, 0.9, 1)
+fog_light_energy = 1.0
+fog_sun_scatter = 0.35
+fog_density = 0.00025
+fog_aerial_perspective = 0.8
+fog_sky_affect = 0.3
 volumetric_fog_length = 0.01
 adjustment_enabled = true
 adjustment_color_correction = ExtResource("2_lut")
@@ -30,17 +38,16 @@ direct_gpu_budget_ms = 4.0
 environment = SubResource("Environment_2c62f")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1631923561]
-transform = Transform3D(1, 0, 0, 0, 0.4865185, 0.8736703, 0, -0.8736703, 0.4865185, -66.45923, 327.95663, -100.27897)
+transform = Transform3D(0.8, 0.2816829, -0.5297686, 0, 0.8829476, 0.4694716, 0.6, -0.3755773, 0.7063581, -66.45923, 327.95663, -100.27897)
+light_color = Color(1, 0.93, 0.83, 1)
+light_energy = 1.3
+light_angular_distance = 0.53
 shadow_enabled = true
 directional_shadow_mode = 0
 directional_shadow_max_distance = 1000.0
 
-[node name="OmniLight3D" type="OmniLight3D" parent="." unique_id=779051083]
-transform = Transform3D(0.78290236, -0.046740375, 0.6203865, 0.17624733, 0.9729865, -0.14911139, -0.5966581, 0.2260811, 0.7699912, -52.76399, 312.44696, -95.64208)
-light_color = Color(1, 0, 1, 1)
-light_energy = 2.143
-light_size = 0.707
-omni_range = 30.463577
+[node name="VoxelSky" type="VoxelSky" parent="." unique_id=1791203346]
+cloud_texture = ExtResource("3_clouds")
 
 [node name="Player" parent="." unique_id=108500663 instance=ExtResource("1_0f027")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -52.76399, 354.6702, -95.64208)
