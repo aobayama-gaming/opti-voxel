@@ -879,6 +879,7 @@ bool GPUMesher::get_results(VoxelState &output) {
 }
 
 void GPUMesher::process_queue() {
+    _prefetch(); // before the batch: its pops are asked anyway, and the worker is busy most frames
     if (!_is_available())
         return;
 
@@ -953,6 +954,22 @@ void GPUMesher::process_queue() {
         mutex->unlock();
 
         semaphore->post(); // wake up the worker thread
+    }
+}
+
+void GPUMesher::_prefetch() {
+    SDFGpuTable *table = sdf->get_gpu_table();
+    for (const std::vector<LODHashSet *> *queues : { &remesh_queue, &chunk_queue }) {
+        for (const LODHashSet *queue : *queues) {
+            if (queue == nullptr) {
+                continue;
+            }
+            for (const ChunkId &chunk : *queue) { // pop order
+                if (!table->prefetch(chunk)) {
+                    return;
+                }
+            }
+        }
     }
 }
 

@@ -261,6 +261,8 @@ private:
 
     // r_remesh (if given): whether the chunk came from remesh_queue.
     bool _pop_queue(ChunkId &r_chunk, bool *r_remesh = nullptr);
+    // The queued chunks to SDFGpuTable::prefetch, in pop order, until it has enough.
+    void _prefetch();
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
     // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
     bool _dispatch_mesh_batch(double &r_budget_us);

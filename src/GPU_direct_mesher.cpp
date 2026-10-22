@@ -675,6 +675,20 @@ void GPUDirectMesher::process_queue() {
             stats.budget_frame_estimate.add(uint64_t(budget_us - budget_left));
         }
     }
+    _prefetch();
+}
+
+void GPUDirectMesher::_prefetch() {
+    SDFGpuTable *table = sdf->get_gpu_table();
+    for (const std::vector<std::vector<ChunkId>> *queues : { &remesh_queue, &chunk_queue }) {
+        for (const std::vector<ChunkId> &queue : *queues) {
+            for (auto it = queue.rbegin(); it != queue.rend(); ++it) { // pop order
+                if (!table->prefetch(*it)) {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 void GPUDirectMesher::_update_cost_model() {

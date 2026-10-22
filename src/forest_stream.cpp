@@ -66,7 +66,7 @@ ForestStream::ForestStream(std::shared_ptr<const ForestField> p_field, const Chu
         int64_t p_input_cache_records) :
         field_ptr(std::move(p_field)), param(p_param), base(p_slot_base), capacity(p_slot_capacity), cache_limit(p_input_cache_records) {
     const unsigned n = MAX(2u, std::thread::hardware_concurrency() / 2);
-    max_running = int(n) * JOBS_PER_WORKER;
+    in_flight_limit = int64_t(n) * IN_FLIGHT_USEC_PER_WORKER;
     for (unsigned i = 0; i < n; i++) {
         workers.emplace_back(&ForestStream::work, this);
     }
@@ -130,11 +130,35 @@ bool ForestStream::ready(const ChunkId &p_chunk) {
     }
     stats.ready_asked++;
     stats.ready_waits += !all;
-    const int lod = MIN(MAX(ChunkMath::get_lod(p_chunk), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
+    const int lod = lod_index(ChunkMath::get_lod(p_chunk));
     stats.asked_by_lod[lod]++;
     stats.waited_by_lod[lod] += !all;
     stats.ready_usec += now_usec() - t0;
     return all;
+}
+
+bool ForestStream::prefetch(const ChunkId &p_chunk) {
+    const uint64_t t0 = now_usec();
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (in_flight_usec >= in_flight_limit || prefetch_usec_frame >= PREFETCH_USEC_MAX) {
+        return false;
+    }
+    const auto [it, fresh] = prefetched.try_emplace(p_chunk, frame);
+    // A chunk ready() found waiting has its keys asked for already.
+    if ((fresh || it->second + RECHECK_FRAMES <= frame) && chunk_waits.find(p_chunk) == chunk_waits.end()) {
+        it->second = frame;
+        thread_local std::vector<FieldKey> keys;
+        field().chunk_keys(p_chunk, param, keys);
+        for (const FieldKey &k : keys) {
+            request(k, true);
+        }
+        stats.prefetched++;
+        start_queued();
+    }
+    const uint64_t dt = now_usec() - t0;
+    prefetch_usec_frame += dt;
+    stats.prefetch_usec += dt;
+    return true;
 }
 
 bool ForestStream::check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait) {
@@ -182,6 +206,7 @@ void ForestStream::start(const FieldKey &p_key, Entry &r_entry) {
         }
         job.inputs.push_back({ k, in.content ? in.content : from_slots(slot_store, in.slot, in.count, in.groups) });
     }
+    job.estimate = estimate_usec(p_key);
     r_entry.job = std::move(job_ptr);
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
@@ -190,14 +215,33 @@ void ForestStream::start(const FieldKey &p_key, Entry &r_entry) {
     job_cv.notify_one();
     r_entry.state = Entry::RUNNING;
     running++;
+    in_flight_usec += job.estimate;
+}
+
+void ForestStream::start_queued() {
+    while (in_flight_usec < in_flight_limit && !queued.empty()) {
+        const FieldKey k = queued.front();
+        queued.pop_front();
+        const auto it = entries.find(k);
+        if (it != entries.end() && it->second.state == Entry::QUEUED) {
+            start(k, it->second);
+        }
+    }
+}
+
+int64_t ForestStream::estimate_usec(const FieldKey &p_key) const {
+    const int lod = lod_index(p_key.lod);
+    const int64_t n = stats.by_count[p_key.kind][lod];
+    return n > 0 ? MAX(stats.by_usec[p_key.kind][lod] / n, int64_t(1)) : UNKNOWN_KEY_USEC;
 }
 
 void ForestStream::land(Entry &r_entry) {
     running--;
+    in_flight_usec -= r_entry.job->estimate;
     stats.computed++;
     stats.compute_usec += int64_t(r_entry.job->usec);
     const FieldKey &key = r_entry.job->key;
-    const int lod = MIN(MAX(key.lod, 0), ChunkMath::MAX_LOD_NUMBERS - 1);
+    const int lod = lod_index(key.lod);
     stats.by_count[key.kind][lod]++;
     stats.by_usec[key.kind][lod] += int64_t(r_entry.job->usec);
     stats.by_records[key.kind][lod] += int64_t(r_entry.job->out->records.size());
@@ -225,6 +269,7 @@ void ForestStream::poll() {
     const uint64_t t0 = now_usec();
     const std::lock_guard<std::mutex> lock(mutex);
     frame++;
+    prefetch_usec_frame = 0;
     std::vector<FieldKey> done;
     {
         const std::lock_guard<std::mutex> job_lock(job_mutex);
@@ -236,14 +281,7 @@ void ForestStream::poll() {
             land(it->second);
         }
     }
-    while (running < max_running && !queued.empty()) {
-        const FieldKey k = queued.front();
-        queued.pop_front();
-        const auto it = entries.find(k);
-        if (it != entries.end() && it->second.state == Entry::QUEUED) {
-            start(k, it->second);
-        }
-    }
+    start_queued();
     trim_cache();
     if (entries.size() > sweep_at) {
         sweep_empty();
@@ -251,6 +289,9 @@ void ForestStream::poll() {
     if (frame % WAIT_DROP_FRAMES == 0) {
         for (auto it = chunk_waits.begin(); it != chunk_waits.end();) {
             it = it->second.asked + WAIT_DROP_FRAMES < frame ? chunk_waits.erase(it) : std::next(it); // left the queues
+        }
+        for (auto it = prefetched.begin(); it != prefetched.end();) {
+            it = it->second + RECHECK_FRAMES <= frame ? prefetched.erase(it) : std::next(it); // would be asked again anyway
         }
     }
     const uint64_t dt = now_usec() - t0;
@@ -504,6 +545,9 @@ Dictionary ForestStream::get_stats() const {
     d["keys_waiting"] = waiting;
     d["chunk_waits"] = int64_t(chunk_waits.size());
     d["chunk_full_checks"] = stats.full_checks;
+    d["chunks_prefetched"] = stats.prefetched;
+    d["prefetch_ms_total"] = double(stats.prefetch_usec) / 1000.0;
+    d["in_flight_ms"] = double(in_flight_usec) / 1000.0;
     d["cache_trimmed"] = stats.trimmed;
     d["keys_swept"] = stats.swept;
     d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;

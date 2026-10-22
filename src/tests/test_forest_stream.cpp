@@ -167,8 +167,10 @@ TEST_CASE("ForestStream: under a small slot pool the keys are evicted and comput
             CHECK(settle(stream, { c }));
             CHECK(same_records(streamed(stream, c), fx.direct(c)));
             checked++;
-            for (uint64_t f = 0; f <= ForestStream::GRACE_FRAMES; f++) {
-                stream.poll(); // nobody asks: the chunk's keys age past the grace
+            // Nobody asks: the chunk's keys age past the grace, and past the RECHECK_FRAMES a waiting check keeps them for
+            // (aging them past the grace only left them held whenever the chunk's last check had waited: a refusal).
+            for (uint64_t f = 0; f <= ForestStream::RECHECK_FRAMES + ForestStream::GRACE_FRAMES; f++) {
+                stream.poll();
             }
         }
     }
@@ -291,5 +293,37 @@ TEST_CASE("ForestStream: empty keys are swept past the grace and computed again 
     const Dictionary stats = stream.get_stats();
     MESSAGE(int64_t(stats["keys_swept"]), " empty keys swept, ", int64_t(stats["keys"]), " kept, ", int64_t(stats["computed"]), " computed");
     CHECK(int64_t(stats["keys_swept"]) > 0);
+    CHECK(int64_t(stats["lists_missing"]) == 0);
+}
+
+// The meshers prefetch the chunks queued past their batch: with nothing asking ready(), the workers compute every key a
+// prefetched chunk lists, so its first ask finds it ready, with the field's records.
+TEST_CASE("ForestStream: a prefetched chunk is ready at its first ask, the same records") {
+    const StreamFixture &fx = StreamFixture::get();
+    ForestStream stream(fx.field, fx.param, 0, uint32_t(1) << 22);
+    bool idle = false;
+    for (int f = 0; f < 20000 && !idle; f++) {
+        stream.poll();
+        for (const ChunkId &c : fx.chunks) {
+            if (!stream.prefetch(c)) {
+                break; // enough work handed out this frame: the meshers' walk stops
+            }
+        }
+        const Dictionary s = stream.get_stats();
+        idle = f > int(ForestStream::RECHECK_FRAMES) && int64_t(s["keys_running"]) == 0 && int64_t(s["keys_queued"]) == 0 &&
+                int64_t(s["keys_waiting"]) == 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(idle);
+    for (const ChunkId &c : fx.chunks) {
+        CAPTURE(ChunkMath::get_lod(c));
+        CHECK(stream.ready(c));
+        CHECK(same_records(streamed(stream, c), fx.direct(c)));
+    }
+    const Dictionary stats = stream.get_stats();
+    MESSAGE(int64_t(stats["chunks_prefetched"]), " prefetches, ", int64_t(stats["computed"]), " keys computed, ", double(stats["prefetch_ms_total"]),
+            " ms of main thread");
+    CHECK(int64_t(stats["chunks_waited"]) == 0);
+    CHECK(int64_t(stats["chunks_prefetched"]) >= int64_t(fx.chunks.size()));
     CHECK(int64_t(stats["lists_missing"]) == 0);
 }

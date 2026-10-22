@@ -61,6 +61,7 @@ public:
     }
     PackedByteArray record_bytes(uint64_t p_have_version, uint64_t &r_version) const override;
     bool chunk_ready(const ChunkId &p_chunk) override { return !stream || stream->ready(p_chunk); }
+    bool prefetch(const ChunkId &p_chunk) override { return stream && stream->prefetch(p_chunk); }
     void poll() override {
         if (stream) {
             stream->poll();

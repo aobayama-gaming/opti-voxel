@@ -28,7 +28,13 @@ namespace Archetype {
 class ForestStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
-    static constexpr int JOBS_PER_WORKER = 32; // keys handed to the workers at once, per worker
+    // The keys handed to the workers at once: about this much estimated work per worker (each kind and LOD's mean so far,
+    // UNKNOWN_KEY_USEC before the first). A job counts until poll() lands it, once per frame: 32 jobs per worker emptied in
+    // 5 ms of a 16 ms frame on the 1M load (tree tiles take 0.16 ms), the workers idle the rest of it.
+    static constexpr int64_t IN_FLIGHT_USEC_PER_WORKER = 40000;
+    static constexpr int64_t UNKNOWN_KEY_USEC = 1000;
+    // prefetch()'s main-thread time per frame, at most.
+    static constexpr uint64_t PREFETCH_USEC_MAX = 2000;
     // A waiting chunk's full check again after RECHECK_FRAMES at most (ready()); its keys count as asked for until then. A
     // full check every GRACE_FRAMES / 2 was 49% of the main thread on the 1M load (a LOD-7 chunk lists hundreds of keys).
     // A wait not asked for in WAIT_DROP_FRAMES is dropped.
@@ -53,6 +59,11 @@ public:
     // since (no key looked at); it is checked in full again once they are all placed, or after RECHECK_FRAMES (the safety
     // net: a key evicted or refused meanwhile).
     bool ready(const ChunkId &p_chunk);
+    // Main thread, after the meshers' batches: asks for the keys of a chunk queued further on (the meshers walk their queues
+    // in pop order), so the workers compute ahead of the batches' ready(); a chunk is asked again after RECHECK_FRAMES at
+    // the earliest. False once the workers hold IN_FLIGHT_USEC_PER_WORKER or the frame's PREFETCH_USEC_MAX is spent: the
+    // walk stops there. Only the order keys are computed in changes, not what a chunk lists.
+    bool prefetch(const ChunkId &p_chunk);
     // Main thread, once per frame: lands the keys the workers finished (their dependents queued once their last input is
     // there), starts the queued ones. Its cost follows what landed, not what the stream holds.
     void poll();
@@ -84,6 +95,7 @@ private:
         std::vector<std::pair<FieldKey, std::shared_ptr<const FieldContent>>> inputs;
         std::shared_ptr<FieldContent> out;
         uint64_t usec = 0;
+        int64_t estimate = 0; // estimate_usec() when started
         void run();
     };
     struct Entry {
@@ -129,7 +141,10 @@ private:
     void work();
     std::deque<FieldKey> queued; // to start, in the order their inputs arrived
     int running = 0;
-    int max_running = 0;
+    int64_t in_flight_usec = 0; // the running jobs' estimates
+    int64_t in_flight_limit = 0;
+    std::unordered_map<ChunkId, uint64_t, ChunkHash> prefetched; // the frame each chunk was last prefetched
+    uint64_t prefetch_usec_frame = 0;
     int64_t cache_limit = INPUT_CACHE_RECORDS;
     std::unordered_map<ChunkId, ChunkWait, ChunkHash> chunk_waits;
     size_t sweep_at = SWEEP_MIN_KEYS;
@@ -164,6 +179,8 @@ private:
         int64_t asked_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t waited_by_lod[ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t full_checks = 0; // ready() calls that looked at every key of their chunk
+        int64_t prefetched = 0; // chunks whose keys prefetch() asked for
+        uint64_t prefetch_usec = 0;
         int64_t trimmed = 0; // inputs dropped from the cache
         int64_t swept = 0; // empty keys dropped
         uint64_t poll_usec_max = 0;
@@ -179,6 +196,11 @@ private:
     // Counts the key's inputs not there yet (asking for them) and registers it as their dependent; queues it if none.
     void wait_for_inputs(const FieldKey &p_key, Entry &r_entry);
     void start(const FieldKey &p_key, Entry &r_entry);
+    // Starts queued keys while the workers hold less than in_flight_limit.
+    void start_queued();
+    // A key's expected compute time: its kind and LOD's mean so far.
+    int64_t estimate_usec(const FieldKey &p_key) const;
+    static int lod_index(int p_lod) { return MIN(MAX(p_lod, 0), ChunkMath::MAX_LOD_NUMBERS - 1); }
     void land(Entry &r_entry);
     // ready()'s full check: every key of the chunk asked for; the ones not placed get the chunk as a waiter.
     bool check_chunk(const ChunkId &p_chunk, ChunkWait &r_wait);

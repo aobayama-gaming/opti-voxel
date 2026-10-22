@@ -160,6 +160,8 @@ private:
 
     // r_from: the queue it was taken from.
     bool _pop_queue(ChunkId &new_chunk, LODHashSet **r_from = nullptr);
+    // The queued chunks to SDFGpuTable::prefetch, in pop order, until it has enough.
+    void _prefetch();
 
     bool _is_available();
 
