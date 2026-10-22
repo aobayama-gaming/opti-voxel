@@ -129,17 +129,8 @@ public:
     int64_t get_datum_y() const { return datum.y; }
 
     // Lattice points only: frac 0 and every coordinate a multiple of 2^lod (ERR otherwise, and 0).
-    float evaluate(const WorldPos &p_pos, int p_lod) const override {
-        if (!on_lattice(p_pos, p_lod)) {
-            return 0.0f;
-        }
-        float ch[Cascade::CHANNELS];
-        channels_at(p_pos.voxel, p_lod, ch);
-        thread_local std::vector<uint32_t> list;
-        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        const Archetype::RecordView records = point_list(*snap, p_pos.voxel, p_lod, list);
-        return sample_sdf(*snap, records, list.data(), uint32_t(list.size()), ch, p_pos, p_lod).w;
-    }
+    float evaluate(const WorldPos &p_pos, int p_lod) const override { return evaluate_at(p_pos, p_lod, false); }
+    float evaluate_view(const WorldPos &p_pos, int p_lod) const override { return evaluate_at(p_pos, p_lod, true); }
 
     // The discoverer's corners: the bare cascade, as its GPU point items (a node near an instance is never culled).
     float evaluate_cull(const WorldPos &p_pos, int p_lod) const override {
@@ -354,6 +345,19 @@ vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint mater
     }
 
 private:
+    // evaluate / evaluate_view (p_view: SDFTable::point_list's).
+    float evaluate_at(const WorldPos &p_pos, int p_lod, bool p_view) const {
+        if (!on_lattice(p_pos, p_lod)) {
+            return 0.0f;
+        }
+        float ch[Cascade::CHANNELS];
+        channels_at(p_pos.voxel, p_lod, ch);
+        thread_local std::vector<uint32_t> list;
+        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
+        const Archetype::RecordView records = point_list(*snap, p_pos.voxel, p_lod, list, p_view);
+        return sample_sdf(*snap, records, list.data(), uint32_t(list.size()), ch, p_pos, p_lod).w;
+    }
+
     // ERR and false unless p_pos is a point of Λ_lod (frac 0, voxel a multiple of 2^lod).
     static bool on_lattice(const WorldPos &p_pos, int p_lod) {
         const int64_t mask = (int64_t(1) << p_lod) - 1;

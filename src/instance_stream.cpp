@@ -144,6 +144,7 @@ void InstanceStream::chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &
 InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) {
     const uint64_t t0 = now_usec();
     const std::unique_lock<std::shared_mutex> lock(mutex);
+    stats.admit_wait_usec += now_usec() - t0;
     Admit answer = READY;
     const ParkKey park{ p_chunk, p_owner };
     const auto it = parked.find(park);
@@ -291,6 +292,10 @@ void InstanceStream::poll() {
     executor->reap(false); // before the lock: the tests' executor runs its drain tasks here
     const std::unique_lock<std::shared_mutex> lock(mutex);
     frame++;
+    for (const SourceKey &k : viewed) {
+        request(k, false); // kept resident while viewed, started if missing
+    }
+    viewed.clear();
     while ((entries.size() > settings.entries || input_records > settings.input_records) && evict_oldest()) {
     }
     const uint64_t dt = now_usec() - t0;
@@ -497,6 +502,29 @@ void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r
     }
 }
 
+void InstanceStream::view_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) {
+    std::vector<SourceKey> keys;
+    std::vector<uint32_t> hit;
+    for (const std::shared_ptr<const ScatterSource> &s : sources) {
+        s->keys(p_voxel, p_voxel, p_lod, keys);
+        // Shared: the drain tasks land under the lock, a writer here would queue behind them. poll() asks for the keys.
+        const std::shared_lock<std::shared_mutex> lock(mutex);
+        for (const SourceKey &k : keys) {
+            viewed.push_back(k);
+            const auto it = entries.find(k);
+            if (it == entries.end() || it->second.state != Entry::READY) {
+                view_missing++;
+                continue;
+            }
+            hit.clear();
+            it->second.content->meeting(p_voxel, p_voxel, p_lod, hit);
+            for (const uint32_t i : hit) {
+                r_out.push_back(it->second.content->records[i]);
+            }
+        }
+    }
+}
+
 void InstanceStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) const {
     std::vector<SourceKey> keys, in;
     std::vector<uint32_t> hit;
@@ -594,6 +622,7 @@ Dictionary InstanceStream::get_stats() const {
     d["admit_parked"] = stats.admitted[PARKED];
     d["admit_later"] = stats.admitted[LATER];
     d["admit_ms_total"] = double(stats.admit_usec) / 1000.0;
+    d["admit_wait_ms_total"] = double(stats.admit_wait_usec) / 1000.0;
     d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
     d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
     d["computed"] = stats.computed;
@@ -620,6 +649,7 @@ Dictionary InstanceStream::get_stats() const {
     d["input_records"] = input_records;
     d["lists_missing"] = lists_missing.load();
     d["point_computed"] = point_computed.load();
+    d["view_missing"] = view_missing;
     return d;
 }
 

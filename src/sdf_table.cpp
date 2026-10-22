@@ -217,7 +217,7 @@ void SDFTable::poll() {
     }
 }
 
-RecordView SDFTable::point_list(const InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list) const {
+RecordView SDFTable::point_list(const InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list, bool p_view) const {
     p_snap.point_candidates(p_voxel, p_lod, r_list);
     if (!stream) {
         return RecordView(p_snap.records);
@@ -226,7 +226,13 @@ RecordView SDFTable::point_list(const InstanceSnapshot &p_snap, const VoxelPos &
     flat.clear();
     compose_list(
             r_list, gpu.get_scene_end(), [&](uint32_t p_id) { flat.push_back(p_snap.records[p_id]); },
-            [&] { stream->point_records(p_voxel, p_lod, flat); });
+            [&] {
+                if (p_view) {
+                    stream->view_records(p_voxel, p_lod, flat);
+                } else {
+                    stream->point_records(p_voxel, p_lod, flat);
+                }
+            });
     r_list.resize(flat.size());
     std::iota(r_list.begin(), r_list.end(), 0u);
     return RecordView(flat.data());

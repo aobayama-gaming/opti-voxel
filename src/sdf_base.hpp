@@ -114,6 +114,9 @@ public:
     // distance in metres, negative inside. The LOD only sets the unit of the internal gradients (per
     // voxel of that LOD), the distance is the same at every LOD.
     virtual float evaluate(const WorldPos &p_pos, int p_lod) const = 0;
+    // evaluate for the camera's per-frame queries (clip planes, the player's altitude and dig ray): main thread, never
+    // computes streamed instances there (those not resident yet are left out until they land).
+    virtual float evaluate_view(const WorldPos &p_pos, int p_lod) const { return evaluate(p_pos, p_lod); }
 
     // The value the discoverer's cull reads at a corner, leaving out what cull_exempt() covers anyway (SDFCascade:
     // the bare cascade, the GPU discoverer's point items bit for bit).

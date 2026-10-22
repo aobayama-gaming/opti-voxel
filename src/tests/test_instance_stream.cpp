@@ -189,6 +189,28 @@ TEST_CASE("Instance stream: parked chunks come back once their keys land, in par
     CHECK(stat(*stream, "point_computed") == 0);
     stream->point_records(fx.origin + VoxelPos(400, 0, -400), 0, cpu);
     CHECK(stat(*stream, "point_computed") > 0);
+
+    // The camera's queries compute nothing on their thread: a key not resident is left out, asked for by the next poll,
+    // and once it has landed (the one after) the records are point_records'. A grid of voxels away from the chunks asked for.
+    const int64_t computed = stat(*stream, "point_computed");
+    size_t records = 0;
+    for (int64_t z = -600; z <= -200; z += 100) {
+        for (int64_t x = 200; x <= 600; x += 100) {
+            const VoxelPos v = fx.origin + VoxelPos(x, 0, z);
+            std::vector<TableRecord> view, point;
+            stream->view_records(v, 0, view);
+            stream->poll();
+            stream->poll();
+            view.clear();
+            stream->view_records(v, 0, view);
+            stream->point_records(v, 0, point);
+            CHECK(view.size() == point.size());
+            records += point.size();
+        }
+    }
+    CHECK(stat(*stream, "point_computed") == computed); // every key resident by then
+    CHECK(stat(*stream, "view_missing") > 0);
+    CHECK(records > 0);
 }
 
 TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicted, the others are") {

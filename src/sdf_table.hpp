@@ -122,7 +122,9 @@ public:
     const Archetype::InstanceStream *get_stream() const { return stream.get(); }
     // The records the CPU folds at p_voxel for a LOD-p_lod sample, in fold order (compose_list): r_list indexes the
     // returned view, valid until the next call on this thread. Any thread.
-    Archetype::RecordView point_list(const Archetype::InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list) const;
+    // p_view: the streamed keys not landed yet are left out instead of computed (InstanceStream::view_records; main thread).
+    Archetype::RecordView point_list(const Archetype::InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list,
+            bool p_view = false) const;
 
     // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the records when
     // it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh.

@@ -458,7 +458,7 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     const double offset[3] = { double(p_render_pos.x) / vs, double(p_render_pos.y) / vs, double(p_render_pos.z) / vs };
     WorldPos p = WorldCoord::offset_pos(origin, offset);
     p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
-    return sdf->evaluate(p, 0);
+    return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident
 }
 
 int VoxelTerrain::get_lod_numbers() const {

@@ -110,6 +110,10 @@ public:
     // The streamed records whose box test at p_lod can pass at p_voxel, in key order, appended (copies): a resident key's,
     // else computed here and dropped (counted). Any thread (on the pool's, its loops run inline).
     void point_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) const;
+    // point_records without computing on the caller's thread, under the shared lock: only the landed keys' records are
+    // appended; the next poll() asks for the keys (kept resident while viewed, the missing ones started on the pool). Main
+    // thread (the camera's queries).
+    void view_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out);
 
     // The placement log: every placement bumps placements(). uploads_since(p_seq) hands the keys placed after p_seq that
     // still hold their slots, in placement order (a later one may reuse an earlier one's slots); p_seq older than the log
@@ -211,10 +215,13 @@ private:
         uint64_t poll_usec = 0;
         uint64_t poll_usec_max = 0;
         uint64_t admit_usec = 0;
+        uint64_t admit_wait_usec = 0; // of admit_usec: waiting for the lock (drain tasks landing)
     };
     Stats stats;
     mutable std::atomic<int64_t> lists_missing{ 0 }; // keys a list needed that weren't placed (stays 0)
     mutable std::atomic<int64_t> point_computed{ 0 }; // point_records' keys computed (not resident)
+    int64_t view_missing = 0; // view_records' keys not landed yet (left out)
+    std::vector<SourceKey> viewed; // view_records' keys since the last poll (main thread), asked for by it
 
     const ScatterSource &source(const SourceKey &p_key) const { return *sources[p_key.source]; }
     // Every source's keys of the chunk, in key order.
