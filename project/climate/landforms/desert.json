@@ -9,6 +9,9 @@
    ]
   }
  ],
+ "ground_stretch": [
+  {"from_m": 100.0, "to_m": 30000000, "stretch_y": 4.0}
+ ],
  "biomes": [
   {
    "name": "serir",
@@ -22,7 +25,8 @@
     {"field": "ground", "wavelength_m": 1638.4, "x": 0.0137},
     {"field": "ground", "wavelength_m": 3276.8, "x": 0.0144},
     {"field": "ground", "wavelength_m": 6553.6, "x": 0.0207},
-    {"field": "ground", "from_m": 13107.2, "to_m": 30000000, "x": 0.004}
+    {"field": "ground", "from_m": 13107.2, "to_m": 52428.8, "x": 0.004},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#9c8468", "steep": "#7c6450", "roughness": 1},
    "debug_color": "#9c8468",
@@ -35,14 +39,15 @@
    "amp": [
     {"field": "ground", "from_m": 0.4, "to_m": 1.6, "x": 0.04, "shape": "billow"},
     {"field": "ground", "from_m": 3.2, "to_m": 51.2, "x": 0.02},
-    {"field": "ground", "wavelength_m": 102.4, "x": 0.0553},
-    {"field": "ground", "wavelength_m": 204.8, "x": 0.012},
-    {"field": "ground", "wavelength_m": 409.6, "x": 0.0256},
-    {"field": "ground", "wavelength_m": 819.2, "x": 0.0266},
-    {"field": "ground", "wavelength_m": 1638.4, "x": 0.0107},
-    {"field": "ground", "wavelength_m": 3276.8, "x": 0.0153},
+    {"field": "ground", "wavelength_m": 102.4, "x": 0.0636},
+    {"field": "ground", "wavelength_m": 204.8, "x": 0.0075},
+    {"field": "ground", "wavelength_m": 409.6, "x": 0.0254},
+    {"field": "ground", "wavelength_m": 819.2, "x": 0.0276},
+    {"field": "ground", "wavelength_m": 1638.4, "x": 0.0082},
+    {"field": "ground", "wavelength_m": 3276.8, "x": 0.0161},
     {"field": "ground", "wavelength_m": 6553.6, "x": 0.0209},
-    {"field": "ground", "from_m": 13107.2, "to_m": 30000000, "x": 0.004}
+    {"field": "ground", "from_m": 13107.2, "to_m": 52428.8, "x": 0.004},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#d8b98a", "steep": "#b08860"},
    "debug_color": "#e0c080"

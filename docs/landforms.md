@@ -61,17 +61,22 @@ with no table: every octave at wavelength / 8.
 
 | landform | real site | spectrum | slopes ° | hypsometry | curvature | bare spectrum / slopes |
 |---|---|---|---|---|---|---|
-| mountain | Mont Blanc massif (51.2 m) | 0.13 | 3.3 | 0.07 | 0.11 | 1.26 / 13.4 |
-| flat desert | Selima Sand Sheet (25.6 m) | 0.18 | 0.02 | 0.03 | 0.10 | 5.48 / 17.0 |
-| dunes | Namib Sand Sea, star dunes (25.6 m) | 0.21 | 2.0 | 0.05 | 0.69 | 1.08 / 7.8 |
+| mountain | Mont Blanc massif (51.2 m) | 0.06 | 2.7 | 0.05 | 0.13 | 1.26 / 13.4 |
+| flat desert | Selima Sand Sheet (25.6 m) | 0.23 | 0.02 | 0.03 | 0.10 | 5.48 / 17.0 |
+| dunes | Namib Sand Sea, star dunes (25.6 m) | 0.10 | 1.8 | 0.01 | 0.53 | 1.08 / 7.8 |
 | mangrove | Sundarbans (25.6 m) | 0.46 | 0.47 | 0.41 | 0.25 | 4.26 / 16.6 |
-| island | Moorea (51.2 m) | 0.25 | 1.8 | 0.27 | 0.64 | 0.51 / 13.4 |
-| cliff | Drakensberg Amphitheatre (25.6 m) | 1.02 | 2.6 | 0.18 | 0.42 | 0.69 / 3.6 |
-| valley | Yosemite Valley (25.6 m) | 0.33 | 1.8 | 0.10 | 0.33 | 1.45 / 4.6 |
-| caldera | Crater Lake (25.6 m) | 0.60 | 3.0 | 0.14 | 0.39 | 0.83 / 8.3 |
+| island | Moorea (51.2 m), `--center=36000,34100` | 0.24 | 1.8 | 0.21 | 0.32 | 0.51 / 13.4 |
+| cliff | Drakensberg Amphitheatre (25.6 m) | 1.15 | 2.6 | 0.09 | 0.04 | 0.69 / 3.6 |
+| valley | Yosemite Valley (25.6 m) | 0.35 | 2.0 | 0.08 | 0.24 | 1.45 / 4.6 |
+| caldera | Crater Lake (25.6 m), `--center=-11059,-22323` | 0.66 | 3.4 | 0.15 | 0.36 | 0.83 / 8.3 |
+
+Scored with `match.py SITE TABLE --fit=0`, centred on the slice's (0, 0) unless the table names a `--center`: a cell
+noise feature (the island's cone, the crater) sits wherever its cell put it, so those two are scored on it. The tables
+were last changed for the world (below): shared warp and `elev` fields, one stretch, the continental octaves off, then
+mountain's and dunes' remaps and octaves refit.
 
 **Where the bare ground scores better, the statistics can't see the feature.**
-- **Cliff:** the bare ground's spectrum score (0.69) beats the cliff table's (1.02). The Drakensberg's dissected lowland
+- **Cliff:** the bare ground's spectrum score (0.69) beats the cliff table's (1.15). The Drakensberg's dissected lowland
   is close to self-similar, and the 700 m step the table adds puts energy into every octave.
 - **Valley and caldera:** the bare ground wins on hypsometry (valley 0.08 against 0.10, caldera 0.08 against 0.14).
 - **The reason:** the bare ground has no plateau, no trough and no crater at all. The scores measure texture and
@@ -229,6 +234,40 @@ fields (temperature, humidity, wind):
   GPU code is generated per table.
 - Every field group is carried at every point, so a world pays for all its landforms everywhere. Skipping the groups
   whose region is 0 over a whole chunk is a per-chunk reduced SDF, with its own design.
+
+### The landform world
+
+`project/climate/world.json` holds the eight landforms, at 25 LODs and 5 cm. It is generated:
+`uv run tools/landforms/world.py` composes it from the landform tables, which stay the one source (refit a table, run it
+again).
+
+- **Regions** are boxes of three macro axes: temperature and humidity (419 + 210 km octaves) and wind (210 + 105 km).
+  The boundaries are the axes' quartiles and medians over the ground (`world.py --axes=RUN` on a report 3,355 km
+  across), so each landform gets its planned share:
+
+  |  | humid | dry |
+  |---|---|---|
+  | cold | mountain | mountain |
+  | cool | valley | caldera |
+  | warm | island | cliff |
+  | hot | mangrove | dunes (windy), desert (calm) |
+
+- Two neighbours share a boundary: one fades out where the other fades in, over 0.04 of the axis. Mountain's biome is the
+  default (no edges): it takes what the priority layering leaves in the transitions.
+- **Shared fields.** A field defined the same way in several tables is one field of the world; one defined differently
+  is renamed `<landform>_<name>`. To fit the budget the tables share one warp triple (caldera's seeds) and one `elev`
+  (mountain's scale, dunes' remap curve rescaled): 16 fields, 17 groups with the multifractal state, 15 biomes.
+- **One stretch:** 4 from 100 m, on every table (desert, dunes and mangrove had none: dunes' octaves were refit under it).
+- **The continental octaves are off.** A ground octave reads the climate of the octaves coarser than itself, so octaves
+  at or above the axes' finest wavelength (104,857.6 m) are inserted before the axes exist: no region can gate them.
+  Every landform turns them off (multiplier 0; they were at 0-2% already), and `world.py` refuses a table that doesn't.
+  `elev` reads the ground's own height, so mountain's and dunes' remaps were refit after that.
+- **The cores are the tables.** Where a region is exactly 1 with each axis moved by 0.05 (0.1 for wind, whose finest
+  octave is twice as fine), every SDF value and pick of the world equals the landform's own table:
+  `test_climate_regions.cpp`, 14 to 2,066 points per landform over 800 km at LODs 0 and 6. Closer to a border, the
+  modulation's reads at the cascade's coarser lattices fall in the fade.
+- **Visiting.** `climate_report.sh --climate=res://climate/world.json --lods=25 --lattice=15 --size=512` lists each
+  region's core share and its core point nearest the centre, with the player's `--spawn`.
 
 ## On a planet base
 

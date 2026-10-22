@@ -11,21 +11,21 @@
   },
   {
    "name": "wx",
-   "seed": 605,
+   "seed": 905,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wy",
-   "seed": 606,
+   "seed": 906,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wz",
-   "seed": 607,
+   "seed": 907,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
@@ -77,7 +77,8 @@
     {"field": "ground", "wavelength_m": 819.2, "x": 1.0336, "shape": "billow"},
     {"field": "ground", "wavelength_m": 1638.4, "x": 1.1281, "shape": "billow"},
     {"field": "ground", "wavelength_m": 3276.8, "x": 0.5723, "shape": "billow"},
-    {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0.01}
+    {"field": "ground", "from_m": 6553.6, "to_m": 52428.8, "x": 0.01},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#8a8a58", "steep": "#6a5444"},
    "debug_color": "#a09060"
@@ -141,7 +142,8 @@
      "warp_fields": ["wx", "wy", "wz"]
     },
     {"field": "ground", "wavelength_m": 6553.6, "x": 0.6749},
-    {"field": "ground", "from_m": 13107.2, "to_m": 30000000, "x": 0.01}
+    {"field": "ground", "from_m": 13107.2, "to_m": 52428.8, "x": 0.01},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#5c8040", "steep": "#5c5040"},
    "debug_color": "#508040"

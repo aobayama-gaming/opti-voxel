@@ -36,6 +36,39 @@ Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_F
     return r;
 }
 
+bool region_core(const Table &p_table, int p_region, const Float4 p_fields[MAX_FIELDS], float p_margin) {
+    const std::vector<Edge> &edges = p_table.regions[size_t(p_region)].edges;
+    if (!(edges_value(edges, p_fields).w == 1.0f)) {
+        return false;
+    }
+    // An edge field's finest octave (-1 without bands: a field of terms only, no doubling), and the slowest of those (the
+    // margin's reference).
+    const auto finest = [&](const Edge &p_e) {
+        int k = -1;
+        for (const Cascade::Band &b : p_table.fields[size_t(p_e.field)].bands) {
+            k = k < 0 ? b.k : std::min(k, b.k);
+        }
+        return k;
+    };
+    int slowest = -1;
+    for (const Edge &e : edges) {
+        slowest = std::max(slowest, finest(e));
+    }
+    for (size_t i = 0; i < edges.size(); i++) {
+        const int k = finest(edges[i]);
+        const float margin = std::ldexp(p_margin, k < 0 ? 0 : slowest - k);
+        for (const float d : { -margin, margin }) {
+            Float4 g[MAX_FIELDS];
+            std::copy(p_fields, p_fields + MAX_FIELDS, g);
+            g[edges[i].field].w += d;
+            if (!(edges_value(edges, g).w == 1.0f)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 std::vector<int> gated_regions(const Table &p_table) {
     std::vector<int> r;
     for (int i = 0; i < int(p_table.regions.size()); i++) {

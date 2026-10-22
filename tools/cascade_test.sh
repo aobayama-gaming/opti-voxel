@@ -14,7 +14,8 @@
 # (G6), both channel sets (G7: 8 vs 4), each set against the plain 4 channels. Sets: 8, 4, 4c (LINEAR4 + the example
 # climate at 5 cm, its fields carried and modulating the ground), 4f (its fields without multipliers), 4p (the plain climate: the
 # example before shaped bands), 4s (the shaped test table: every shaped-band operation), 4d (fieldless_test.json: a
-# modulation with no field), 4r (region_test.json: two landforms behind regions, 11 field groups); default 8,4,4c.
+# modulation with no field), 4r (region_test.json: two landforms behind regions, 11 field groups), 4w (world.json: the eight landforms, 17 groups;
+# run it with --lods=25); default 8,4,4c.
 # GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.

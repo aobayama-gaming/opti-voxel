@@ -11,21 +11,21 @@
   },
   {
    "name": "wx",
-   "seed": 705,
+   "seed": 905,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wy",
-   "seed": 706,
+   "seed": 906,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wz",
-   "seed": 707,
+   "seed": 907,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
@@ -71,7 +71,8 @@
    ],
    "amp": [
     {"field": "ground", "from_m": 0.4, "to_m": 51.2, "x": 0.1, "shape": "billow"},
-    {"field": "ground", "from_m": 102.4, "to_m": 30000000, "x": 0.01}
+    {"field": "ground", "from_m": 102.4, "to_m": 52428.8, "x": 0.01},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#6a8a3c", "steep": "#7a7468"},
    "debug_color": "#70a040"
@@ -130,7 +131,8 @@
      "to_m": 3276.8
     },
     {"field": "ground", "x": 0.2, "from_m": 6553.6, "to_m": 6553.6},
-    {"field": "ground", "from_m": 13107.2, "to_m": 30000000, "x": 0.01}
+    {"field": "ground", "from_m": 13107.2, "to_m": 52428.8, "x": 0.01},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#8c8a80", "steep": "#a8a49a"},
    "debug_color": "#9a9488"

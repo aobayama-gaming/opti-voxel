@@ -64,6 +64,9 @@
    ]
   }
  ],
+ "ground_stretch": [
+  {"from_m": 100.0, "to_m": 30000000, "stretch_y": 4.0}
+ ],
  "biomes": [
   {
    "name": "channel",
