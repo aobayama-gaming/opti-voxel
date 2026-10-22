@@ -1,17 +1,21 @@
 #pragma once
 
+#include "base_surface.hpp"
 #include "cascade.hpp"
 #include "cascade_terrain.hpp"
+#include "climate.hpp"
 #include "exact_noise.hpp"
 #include "sdf_table.hpp"
 
 #include <cmath>
+#include <optional>
 
 // The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain (VoxelTerrain.terrain_mode 1,
 // --terrain=cascade): a 3D height field of perlin3 octaves carried down the Hermite cascade, octaves from
 // k = 3 (8 voxels, inserted on Λ_0) up to k = lod_count + 4, steepness 1/8, amplitudes capped at 3.3 km,
 // 4 channels (value + gradient, see channel_set),
-// surface at datum + h with the datum at SDFBase::DATUM_M. A function of the absolute position only.
+// surface at altitude h over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function of the
+// absolute position only.
 //
 // The cascade only exists on lattice points: a LOD-L chunk's samples are the points of Λ_L, computed by
 // the meshers' cascade passes (cascade_glsl.hpp) bit for bit like Cascade::run, and evaluate() takes the
@@ -29,15 +33,17 @@ public:
     static constexpr int INSERT_SHIFT = 3;
     // CascadeTerrain::EARTH_MAX_AMP (2^16 voxels) at 5 cm voxels.
     static constexpr double MAX_AMP_M = CascadeTerrain::EARTH_MAX_AMP * 0.05;
-    // Saturation of the height above the datum (LOD0 voxels). A saturated |SDF| only makes chunk
-    // discovery keep more chunks, never drop one, but it must stay several cells of the largest LOD.
-    static constexpr int32_t DY_LIMIT = 1 << 30;
 
     // Set before configure(). LINEAR4 (value + gradient) is the meshed set: by the design's criterion G7
     // (keep 8 channels unless they cost > 15% more GPU time than 4), measured with CascadeSpike: the
     // 8-channel passes cost 1.30x the 4-channel ones (1.29 vs 1.00 ms per batch of 128 LOD-0 chunks).
     // HERMITE8 stays implemented and proven (tools/cascade_test.sh checks both).
     Cascade::ChannelSet channel_set = Cascade::ChannelSet::LINEAR4;
+
+    // Set before configure(): a climate table (Climate::parse's format), empty for none. configure() parses it against
+    // this ground and carries its fields in the cascade (Climate::combined_spec), the ground's octaves modulated by the
+    // biomes' multipliers; a table it refuses is an ERR and no climate.
+    Dictionary climate_data;
 
     // Set before configure(). DEFAULT: every octave at STEEPNESS (capped at MAX_AMP_M). CONTINENTS:
     // the same octaves with an amplitude per wavelength (continent_amp_m), so continents, ocean basins and
@@ -50,7 +56,7 @@ public:
     Preset preset = Preset::DEFAULT;
     // The flat preset's ground: 50 m below the datum, halfway between the page shader's 100 m contour lines. On one
     // (300 m), a flat ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
-    static constexpr double FLAT_GROUND_M = DATUM_M - 50.0;
+    static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
 
     // Amplitude (metres) of the octave of wavelength p_wavelength_m in the continents preset.
     static double continent_amp_m(double p_wavelength_m) {
@@ -82,16 +88,19 @@ public:
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
-        spec = CascadeTerrain::make_spec(SEED, p_lod_count + 4, STEEPNESS, channel_set, INSERT_SHIFT);
+        k_top = p_lod_count + 4;
+        spec = CascadeTerrain::make_spec(SEED, k_top, STEEPNESS, channel_set, INSERT_SHIFT);
         const double cap = MAX_AMP_M / vs;
+        amp_cap = float(cap);
         for (Cascade::Band &b : spec.bands) {
             b.amp = preset == Preset::CONTINENTS ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
         }
         if (preset == Preset::FLAT) {
             spec.bands.clear(); // no top lattice either: a chunk's run is its own level
         }
-        datum = VoxelPos(0, std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : DATUM_M) / vs), 0);
+        base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
         voxel_size = p_param.voxel_size;
+        attach_climate();
         build_table(p_lod_count);
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
         // from this chunk's by one octave: k = L + 2 (a finer neighbour's extra one) or k = L + 3 (the one
@@ -107,12 +116,7 @@ public:
         skirt_depth_table.assign(p_lod_count, 0.0f);
         moment_skirt_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
-            double amp = 0.0;
-            for (const Cascade::Band &b : spec.bands) {
-                if (b.k == l + 2 || b.k == l + 3) {
-                    amp = MAX(amp, double(b.amp));
-                }
-            }
+            const double amp = octave_step(l);
             const double cell_m = vs * std::ldexp(1.0, l);
             const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
             skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
@@ -120,10 +124,30 @@ public:
         }
     }
 
+    // The ground's band step between LOD p_lod and p_lod + 1 (LOD0 voxels): its largest L+2 / L+3 octave, the climate's
+    // largest multiplier of it.
+    double octave_step(int p_lod) const {
+        double amp = 0.0;
+        for (const Cascade::Band &b : spec.bands) {
+            if (b.k == p_lod + 2 || b.k == p_lod + 3) {
+                amp = MAX(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
+            }
+        }
+        return amp;
+    }
+
     const Cascade::Spec *get_cascade() const override { return &spec; }
+    // The parsed climate (configure), null without one; why climate_data was refused, empty if it wasn't.
+    const Climate::Table *get_climate() const { return climate ? &*climate : nullptr; }
+    const String &get_climate_error() const { return climate_error; }
+
+    // The ground a climate table is checked against and reads (Climate::parse / validate / fields_at), after configure().
+    Climate::Ground climate_ground() const { return Climate::Ground{ &spec, double(voxel_size), k_top, amp_cap }; }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Cascade::Spec &get_spec() const { return spec; }
-    int64_t get_datum_y() const { return datum.y; }
+    int64_t get_datum_y() const { return base.datum_y(); }
+    const BaseSurface &get_base() const { return base; }
+    UpAxis up_at(const VoxelPos &p_voxel) const override { return base.up_dir(p_voxel); }
 
     // Lattice points only: frac 0 and every coordinate a multiple of 2^lod (ERR otherwise, and 0).
     float evaluate(const WorldPos &p_pos, int p_lod) const override {
@@ -145,7 +169,7 @@ public:
         }
         float ch[Cascade::CHANNELS];
         channels_at(p_pos.voxel, p_lod, ch);
-        return sdf(ch, p_pos.voxel.y, p_lod).w;
+        return sdf(ch, p_pos.voxel, p_lod).w;
     }
 
     // The channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod (Cascade::point_into).
@@ -153,17 +177,15 @@ public:
         Cascade::point_into(spec, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod, r_ch);
     }
 
-    // CascadeTerrain::height_sdf of the channels of Λ_lod at a point of absolute height p_voxel_y: the unit
-    // gradient and the distance in voxels of LOD p_lod (GLSL cascade_terrain_unit, bit for bit).
-    ExactNoise::Float4 unit(const float p_ch[Cascade::CHANNELS], int64_t p_voxel_y, int p_lod) const {
-        const float s = ExactNoise::exact_pow2(-p_lod);
-        const float dy = float(WorldCoord::sat_diff(p_voxel_y, datum.y, DY_LIMIT)) * s;
-        return CascadeTerrain::height_sdf(p_ch, p_lod, dy);
+    // CascadeTerrain::height_sdf of the channels of Λ_lod over the base at LOD0 voxel p_voxel: the unit gradient
+    // and the distance in voxels of LOD p_lod (GLSL cascade_terrain_unit, bit for bit).
+    ExactNoise::Float4 unit(const float p_ch[Cascade::CHANNELS], const VoxelPos &p_voxel, int p_lod) const {
+        return CascadeTerrain::height_sdf(p_ch, p_lod, base.at(p_voxel, p_lod));
     }
 
     // The bare cascade's SDF, the distance in metres (GLSL cascade_terrain_sdf, bit for bit).
-    ExactNoise::Float4 sdf(const float p_ch[Cascade::CHANNELS], int64_t p_voxel_y, int p_lod) const {
-        return metres(unit(p_ch, p_voxel_y, p_lod), p_lod);
+    ExactNoise::Float4 sdf(const float p_ch[Cascade::CHANNELS], const VoxelPos &p_voxel, int p_lod) const {
+        return metres(unit(p_ch, p_voxel, p_lod), p_lod);
     }
 
     // sdf() with the listed instances p_list folded in (GLSL cascade_sample_sdf, bit for bit): the bare sdf() where
@@ -171,7 +193,7 @@ public:
     // passed, else 0.
     ExactNoise::Float4 sample_sdf(const Archetype::InstanceSnapshot &p_snap, const uint32_t *p_list, uint32_t p_count,
             const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod, float *r_skirt_extra = nullptr) const {
-        const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel.y, p_lod);
+        const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel, p_lod);
         if (r_skirt_extra) {
             *r_skirt_extra = 0.0f;
         }
@@ -223,7 +245,7 @@ public:
         const VoxelPos at((p_voxel.x + half) >> p_lod << p_lod, (p_voxel.y + half) >> p_lod << p_lod, (p_voxel.z + half) >> p_lod << p_lod);
         float ch[Cascade::CHANNELS];
         channels_at(at, p_lod, ch);
-        ExactNoise::Float4 f = unit(ch, at.y, p_lod);
+        ExactNoise::Float4 f = unit(ch, at, p_lod);
         const VoxelPos d = p_voxel - at;
         f.w = f.w * ExactNoise::exact_pow2(p_lod) + f.x * float(d.x) + f.y * float(d.y) + f.z * float(d.z);
         return f;
@@ -233,14 +255,14 @@ public:
     // one per step) until the side flips, then the boundary between the last two points by bisection.
     int64_t ground_y(int64_t p_x, int64_t p_z) const override {
         auto distance = [&](int64_t p_y) { return ground_field(VoxelPos(p_x, p_y, p_z), 0).w; };
-        int64_t y = datum.y;
+        int64_t y = base.datum_y();
         float d = distance(y);
         const bool start_air = d > 0.0f;
         int64_t other = y;
         bool flipped = false;
         for (int i = 0; i < 4096 && !flipped; i++) {
             const float step = std::floor(std::fabs(d));
-            other = y + (start_air ? -1 : 1) * MAX<int64_t>(1, int64_t(MIN(step, float(DY_LIMIT))));
+            other = y + (start_air ? -1 : 1) * MAX<int64_t>(1, int64_t(MIN(step, float(BaseSurface::ALT_LIMIT))));
             d = distance(other);
             flipped = (d > 0.0f) != start_air;
             if (!flipped) {
@@ -265,18 +287,10 @@ public:
     // cascade_terrain_sdf is sdf(), for the discoverer's point items and the batches with no instance listed.
     String get_glsl_code() const override {
         using namespace ExactNoise;
-        String code = R"glsl(
-// CascadeTerrain::height_sdf (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
+        String code = base.glsl() + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
+// CascadeTerrain::height_sdf over the base (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
 vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
-    precise float s = exact_pow2(-lod);
-    int sy = sat_diff(p, DATUM_LO, DATUM_HI, DY_LIMIT).y;
-    precise float dy = float(sy) * s;
-    precise float h = c0.x * s;
-    precise float tx = -(c0.y * s);
-    precise float ty = 1.0 - c0.z * s;
-    precise float tz = -(c0.w * s);
-    precise float tr = det_rsqrt(tx * tx + ty * ty + tz * tz);
-    return vec4(tx * tr, ty * tr, tz * tr, (dy - h) * tr);
+    return height_sdf(c0, base_at(p, lod), lod);
 }
 
 // SDFCascade::metres: the distance of a unit register in metres.
@@ -311,10 +325,7 @@ float cascade_moment_skirt_m(int lod) {
             }
             return table;
         };
-        return code.replace("DATUM_LO", glsl_lo(datum))
-                .replace("DATUM_HI", glsl_hi(datum))
-                .replace("DY_LIMIT", itos(DY_LIMIT))
-                .replace("SKIRT_N", itos(int64_t(skirt_depth_table.size())))
+        return code.replace("SKIRT_N", itos(int64_t(skirt_depth_table.size())))
                 .replace("MOMENT_SKIRT_TABLE", table_text(moment_skirt_table))
                 .replace("SKIRT_TABLE", table_text(skirt_depth_table));
     }
@@ -355,6 +366,20 @@ private:
         return true;
     }
 
+    // The climate_data table on the ground spec (configure, after the ground's bands and voxel size).
+    void attach_climate() {
+        climate.reset();
+        climate_error = String();
+        if (climate_data.is_empty()) {
+            return;
+        }
+        Climate::Table table;
+        climate_error = Climate::parse(climate_data, climate_ground(), table);
+        ERR_FAIL_COND_MSG(!climate_error.is_empty(), "SDFCascade: " + climate_error);
+        spec = Climate::combined_spec(table, spec);
+        climate = std::move(table);
+    }
+
     // A unit register (unit()) with its distance in metres: sdf(), and sample_sdf() where no instance folds.
     ExactNoise::Float4 metres(const ExactNoise::Float4 &p_u, int p_lod) const {
         const float to_m = voxel_size * ExactNoise::exact_pow2(p_lod);
@@ -364,6 +389,10 @@ private:
     Cascade::Spec spec;
     std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
     std::vector<float> moment_skirt_table; // the moment skirt per LOD (metres, 0 without moment blobs), see configure()
-    VoxelPos datum;
+    BaseSurface base; // the ground's reference: flat at the datum (configure)
     float voxel_size = 0.5f;
+    int k_top = 0; // the coarsest octave (lod_count + 4)
+    std::optional<Climate::Table> climate;
+    String climate_error;
+    float amp_cap = 0.0f; // MAX_AMP_M in LOD0 voxels
 };

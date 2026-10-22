@@ -20,7 +20,8 @@ iterate past a warning, never to commit one.
   ```
   Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
   opens the main scene headless: the terrain finds no RenderingDevice, prints one ERROR and stays
-  empty (it used to segfault in `QuadPagePool::_rt_create_page`; CI now fails on a crashing import).
+  empty (it used to segfault in `QuadPagePool::_rt_create_page`). A fresh import may abort at exit (Godot 4.6.3,
+  dev too): CI runs it a second time, which must exit 0 with `extension_list.cfg` written.
 - When a feature is done and its checks pass, commit, push and open the PR into `dev` without waiting
   to be asked. Don't merge it: the user reviews and merges.
 - Perf PRs carry a measured before/after table and name the new bottlenecks.
@@ -136,7 +137,7 @@ to every change, and a reviewer may reject a PR on any of them.
   projection loses its far plane and the light culler ERRORs every frame. The validator doesn't compare
   the normals of sliver triangles (all edges within 2 * tol): around a lone near-zero corner a whole
   closed sheet fits inside the tolerance and the vertex pairing is arbitrary (frequent at far LODs).
-- Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE`): `hash_cell` = PCG3D of the cell's low
+- Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE` in `exact_noise_glsl.hpp`): `hash_cell` = PCG3D of the cell's low
   words salted by a PCG3D of its high words and the seed (cells 2^32 apart don't collide);
   `perlin3` / `perlin2` = one octave of gradient noise with wavelength exactly 2^k LOD0 voxels
   (`cell = (voxel + offset) >> k`, the in-cell position as 24-bit fixed point, quintic fade, analytic
@@ -148,8 +149,21 @@ to every change, and a reviewer may reject a PR on any of them.
 - Every terrain is a function of the absolute position: the same world point gives the same value from
   any origin. Heights and depths are in LOD0 voxels, gradients and distances in voxels of the chunk's
   LOD, and they return metres. Parameters are metres rounded to 2^k voxels in `configure()`, so another
-  voxel size is another world. Flat world: the datum (`SDFBase::DATUM_M`) is absolute y ~ 300 m, so far
+  voxel size is another world. Flat world: the datum (`BaseSurface::DATUM_M`) is absolute y ~ 300 m, so far
   origins only show terrain with y = 0.
+- Base surface (`src/base_surface.{hpp,cpp}`, design note `planet-base-curvature-2026-10-22.md`): the ground's
+  reference, not a constraint (the terrain stays 3D). `BaseSurface::at(voxel, lod)` = (up n, altitude) in voxels of
+  the LOD, read by `CascadeTerrain::height_sdf` (t = n - grad h, distance (altitude - h) / |t|, GLSL
+  `GLSL_HEIGHT_SDF`). `FLAT` (the world today) is the saturated int64 datum difference with up (-0, 1, -0), so
+  the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
+  `SPHERE` (not wired into a world yet: regions per chunk, discoverer, camera altitude come with the planet PR):
+  below `switch_lod` (12) the curvature form d(c) + n.δ + 1/2 δ^T H δ around the centre of the point's region
+  (the cell of 2^(L+6) voxels holding it, from the point and the LOD only), d(c), n, H from the CPU in double
+  (`make_region` takes any base's exact value, gradient and Hessian: the unit test runs a torus); from it the
+  radius form |p - centre| - R in float32 (`det_rsqrt`), the centre snapped to 2^31 voxels so (p - c) >> L is exact.
+  Measured at Earth radius / 5 cm (`test_base_surface.cpp`): curvature 7e-6 cells at LODs 0-11, < 1% to LOD 16;
+  radius < 0.4% from LOD 12; the forms' gap at the switch 0.35%. FrameSpike's `base_*` probes check the GLSL
+  bit for bit. The page shader's slope colours read `base_up` (a uniform, +y).
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 - Hermite cascade (`src/cascade.hpp`: CPU reference, the oracle; `src/cascade_glsl.{hpp,cpp}`: the GPU
   passes, bit-identical to it): each noise band (octave k) is inserted once on the lattice Λ_{k-3}
@@ -461,8 +475,53 @@ to every change, and a reviewer may reject a PR on any of them.
   amplifies the last bit), the bark's horizontal lines. **Grading:** the scenes' Environment has adjustments on and a 32^3 LUT
   (`res://grade_lut.png`, a Texture3D of 32 slices, written by `tools/make_lut.py`: lifted cool shadows, warm mids,
   +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
-  contrast / saturation values never applied (adjustments were off) and are gone. Next: a material per biome cell
-  for the ground, materials inside one record (an IR change), image textures (triplanar).
+  contrast / saturation values never applied (adjustments were off) and are gone. Next: the ground's material per
+  biome (the climate's pick), materials inside one record (an IR change), image textures (triplanar).
+- **Climate** (`src/climate.{hpp,cpp}`, `climate_modulator.cpp`, `climate_parse.cpp` / `climate_validate.cpp`,
+  `climate_glsl.cpp`; `VoxelTerrain.climate_path` / `--climate=PATH`, bench and player; off by
+  default): a climate is data, a JSON table (format above `parse()`, example `project/climate/example.json`, tuned for
+  5 cm: at 0.5 m its x2 mountains exceed the cap and the table is refused) checked against
+  `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (8) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
+  the ground's range (seeds `make_octave(field seed, k)`, keyed by k; a `from_m` .. `to_m` range of bands or multipliers
+  keeps the octaves the LOD count has, each at the same amplitude, so one table covers the whole spectrum at 15 and 25
+  LODs; a single wavelength outside is refused), plus linear terms `coef * (the ground or an earlier
+  field)` applied after the cascade, in list order (the lapse is a ground term). Biomes (<= `MAX_BIOMES`, 16): regions
+  over any fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes
+  the rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64.
+  `pick`: argmax, ties by `hash_cell` of the absolute voxel (the same from every LOD). **One climate:** every reader
+  (the modulation, the pick) goes through `Climate::state` (field terms, then weights; GLSL `glsl_weights`),
+  and what reaches it is the LOD rule: octave k reads the climate of its insertion level before that level's
+  insertions, the pick reads level 0. No per-biome mean height: one
+  lattice can't carry it without the coarser LODs missing it (a step no skirt hides); it needs its own design.
+  **In the cascade** (`Climate::combined_spec`): the fields are `Spec::fields`, LINEAR4 groups carried with the ground
+  (`Cascade::field_slot`: after the ground's 8 slots on the CPU, after its 4 channels on the GPU: `Spec::gpu_base`, `Spec::slot_of_gpu`).
+  A band some biome multiplies is modulated (`Cascade::Modulation`, `Climate::Modulator`): at each point of its level,
+  from the channels before that level's insertions (H(V_{m+1}): no band reads one of its own level), A = sum_b w_b amp_b
+  and the band inserts A n, slopes n.s (A 2^-3) + n.w dA. So ground octave k follows the biome map of the fields'
+  octaves coarser than k only: a region shapes the ground up to about its own size (a plain patch inside a mountain
+  region keeps the region's big octaves), and flattening the continental octaves takes continental regions. The
+  example's fields have km and continental octaves (to the top) and every biome multiplies the whole spectrum (raising
+  stops at the 3.3 km cap): at 25 LODs, mountain slopes 4-5x the plain's on 26 and 210 km squares (a plain alone:
+  slope 0.018, from 0.19 bare); the old example's few-octave multipliers moved slopes 0-45%, mountains +2%.
+  `fields_at` reads V_m of the combined spec, so it is a pure
+  function of (lattice point, m). `SDFCascade` skirts take the largest amplitude any biome gives an octave
+  (`Climate::max_amp`). On the GPU the climate code is generated from the table (`Modulator::glsl`, op for op) and
+  `CascadePasses` compiles a ground-only variant and a fields variant (`level_shader(..., p_fields)`, the scratch planar:
+  vec4 v of every slot together, so the ground's loads stay contiguous): a chunk of LOD L carries its fields at level m
+  only where `Cascade::FieldRange::carried` (m >= the finest modulated ground level, L <= the coarsest; the CPU's ground
+  queries follow it too, `fields_at` carries them everywhere), and a dispatch takes the fields variant where
+  `FieldRange::batch` says (`record_level`'s `p_lods`, the batch's LOD range). Cost
+  (CascadeSpike, 128-chunk batches, example climate): fields without multipliers 1.00x; with them 1.09x at LODs 0-4,
+  1.00x at 20-24, 2.2-3.5x at LODs 8-16 (their own level is modulated: the weights run on every sample, +9-19 us per
+  chunk, once per mesh). The bigger `Ch` (20 floats) is what made a single shader 1.4x everywhere (registers, not work).
+  Forest5cm fly: steady +2%, tree placement +190 ms (the CPU traces carry the fields), the first run of a new table
+  pays its shaders' compile (cold pipeline cache). A biome that multiplies the ground with no field still takes the
+  modulated variant (`CascadeGLSL::field_range` keys on the modulation, not on the fields; set `4d`,
+  `fieldless_test.json`, a unit test): the GPU drew the bare ground under a flat desert before. Refused: a field's
+  multiplier without a ground one (it would never reach the mesh), two bands of one group on one level, multipliers on
+  a non-LINEAR4 ground (checked once, in `validate`). Checks: `cascade_test.sh --sets=4,4f,4c` (G1 on the carried
+  channels, G3 except at the ceiling, points), `discovery_audit.sh -- --voxel=0.05 --climate=... --discovery_compare=1`,
+  `origin_parity.sh --voxel=0.05 -- ... --climate=...`, a validated / audited bench load.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -480,11 +539,11 @@ to every change, and a reviewer may reject a PR on any of them.
 - `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
   `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
   channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
-- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4]`
+- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
-  both channel sets (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
+  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers) (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
   `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade
   with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample_sdf` + skirt (`--table`, G9); GPU timestamps of the passes for
   single-LOD batches of 128 at LOD 0, 4, ... 24 (G6, G7). Report: `<run>/cascade.md`. Run it after touching

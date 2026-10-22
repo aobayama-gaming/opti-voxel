@@ -5,6 +5,7 @@
 #include <godot_cpp/variant/variant.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -88,6 +89,10 @@ struct Vector3i64Hasher {
         return hash_fmix32(h);
     }
 };
+
+// A unit direction in absolute axes, double (SDFBase::up_at, BaseSurface::up_dir).
+using UpAxis = std::array<double, 3>;
+inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
 
 // Plain float32 triple: the CPU mirror of GPU float math must stay float32 even in
 // precision=double builds (where godot's Vector3 is double).

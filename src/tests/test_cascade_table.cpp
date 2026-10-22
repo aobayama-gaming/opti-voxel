@@ -39,7 +39,7 @@ Float4 sample_with(const SDFCascade &p_sdf, const InstanceSnapshot &p_snap, cons
 float bare_sdf(const SDFCascade &p_sdf, const VoxelPos &p_voxel, int p_lod) {
     float ch[Cascade::CHANNELS];
     p_sdf.channels_at(p_voxel, p_lod, ch);
-    return p_sdf.sdf(ch, p_voxel.y, p_lod).w;
+    return p_sdf.sdf(ch, p_voxel, p_lod).w;
 }
 
 using ChunkMath::chunk_at_voxel;
