@@ -252,10 +252,12 @@ void VoxelState::_stall_add(const ChunkId &p_loaded, const ChunkId &p_dirty, int
     const uint64_t before = stall ? stall->hidden() : 0;
     if (!stall) {
         stall = &stalled.insert(p_loaded, Stall())->value;
+        stall->since = frame;
     }
     stall->add(ChunkMath::subcube_bits(p_loaded, p_dirty), p_delta);
     uint64_t after = 0;
     if (stall->count == 0) {
+        stats.handoff_frames.add(frame - stall->since);
         stalled.erase(p_loaded);
     } else {
         after = stall->hidden();

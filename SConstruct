@@ -57,6 +57,9 @@ env.Append(CPPPATH=["src/"])
 # -march=native have FMA). MSVC does not contract unless asked to.
 if not env.get("is_msvc", False):
     env.Append(CCFLAGS=["-ffp-contract=off"])
+# tools/cpu_profile.sh builds with debug_symbols=yes (unstripped): frame pointers let `perf record -g` unwind our frames.
+if env["debug_symbols"] and not env.get("is_msvc", False):
+    env.Append(CCFLAGS=["-fno-omit-frame-pointer"])
 sources = Glob("src/*.cpp")
 
 # Unit tests (src/tests/, doctest) ship in debug builds only; tools/unit_test.sh runs them.

@@ -712,7 +712,18 @@ to every change, and a reviewer may reject a PR on any of them.
   `--profile=1`: a per-frame profile, `<run>/profile.json` and `profile.md` (`tools/profile_report.py <run>`):
   per phase the wall frame time, each `VoxelTerrain::_process` section, the GPU and render-thread CPU per
   renderer pass and mesher step, and what the frames over 16.7 ms spend against the others (see Gotchas for
-  how the per-pass timestamps are obtained).
+  how the per-pass timestamps are obtained). It also tabulates, from `stats.json`, the stream per phase
+  (`table.stream`: keys computed / evicted per kind and LOD in `computed_by_key`, worker busy, admit / poll / land /
+  evict ms, `park_frames`, the gate's `stale_parked`, `destroy.handoff_frames`: frames a stalled parent stays drawn,
+  {count, p50, p95, max}, cumulative) and `mesher.gpu_by_list_words` (GPU µs per batch by its list words, log2 bins).
+  `_process` sections: `stream_poll`, and `gate_admit` / `build_lists` / `record_bytes` inside `mesher_dispatch`.
+- `tools/cpu_profile.sh [--no-build] [--sampler=perf|eu-stack|auto] -- <bench.sh args>`: builds with
+  `debug_symbols=yes` (+ frame pointers; the next plain build recompiles everything), samples the bench's Godot
+  (perf at 499 Hz on-CPU, else eu-stack every 0.5 s, wall clock, which stalls the frames) and writes `<run>/cpu.md`
+  (`tools/cpu_report.py`): top self symbols of the main thread and of the other threads, top inclusive ones.
+- `bench.gd --scenario=approach`: loads 1,500 m above and 2 km behind the start (`--approach_from`, `--approach_out`,
+  along -X), flies straight to it in `--approach_seconds=20` without waiting, then settle / steady;
+  `--approach_shots=DIR` saves a shot per second in the run's `--view` (run it twice for shaded | LOD).
 - `--validate=N` (direct): re-meshes N loaded chunks with the legacy mesher and compares
   triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies.
   The terrain SDF is bit-exact, so both meshers see the same signs (no winding flips at |SDF| ~ 0).

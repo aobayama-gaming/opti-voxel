@@ -149,11 +149,16 @@ private:
 
     struct ProcessStats {
         TimingStat process_total;
+        TimingStat stream_poll; // SDFBase::poll (the streamed keys landed, the stream's evictions)
         TimingStat scan_ingest; // get_scanned_chunks + add_scan_chunk + send_chunk
         TimingStat scan_apply; // part of scan_ingest: VoxelState::add_scan_chunk (the scan delta)
         TimingStat destroy_from_scan; // VoxelState::update_destroy
         TimingStat destroy_verify; // VoxelState::verify_against_full (--destroy_verify)
         TimingStat mesher_dispatch; // process_queue
+        // Parts of mesher_dispatch (the mesher's DispatchTimes, per frame).
+        TimingStat gate_admit; // ChunkGate::admit
+        TimingStat build_lists; // SDFGpuTable::build_lists
+        TimingStat record_bytes; // SDFGpuTable::record_bytes
         TimingStat mesher_collect; // get_results
         TimingStat destroy_chunks; // VoxelState::destroy_marked
         TimingStat compact; // GPUDirectMesher::compact
@@ -161,12 +166,16 @@ private:
 
         // The sections by name, for the reports.
         std::vector<std::pair<const char *, const TimingStat *>> sections() const {
-            return { { "total", &process_total }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
+            return { { "total", &process_total }, { "stream_poll", &stream_poll }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
                 { "destroy_from_scan", &destroy_from_scan }, { "destroy_verify", &destroy_verify },
-                { "mesher_dispatch", &mesher_dispatch }, { "mesher_collect", &mesher_collect },
+                { "mesher_dispatch", &mesher_dispatch }, { "gate_admit", &gate_admit }, { "build_lists", &build_lists },
+                { "record_bytes", &record_bytes }, { "mesher_collect", &mesher_collect },
                 { "destroy_chunks", &destroy_chunks }, { "compact", &compact }, { "coverage", &coverage } };
         }
     } process_stats;
+    DispatchTimes last_dispatch_times; // the mesher's, at the previous frame
+    // The mesher's dispatch sub-timers since the previous frame, into their sections.
+    void _record_dispatch_times(const DispatchTimes &p_now);
 
 public:
     void _ready() override;

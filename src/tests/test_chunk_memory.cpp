@@ -116,6 +116,26 @@ TEST_CASE("VoxelState: a stalled parent hides the sub-cubes of its children as t
     CHECK(state.to_destroy_chunk.has(parent));
 }
 
+TEST_CASE("VoxelState: the hand-off latency runs from a parent's first stalled sub-cube to its last child") {
+    VoxelState state = make_state();
+    state.frame = 10;
+    load(state, { PARENT });
+    const std::vector<ChunkId> children = children_of(PARENT);
+    scan(state, children); // frame 10: the parent stalls
+    update(state);
+    CHECK(state.stats.handoff_frames.count() == 0);
+    state.frame = 15;
+    load(state, std::vector<ChunkId>(children.begin(), children.end() - 1));
+    update(state);
+    CHECK(state.stats.handoff_frames.count() == 0); // one child still missing
+    state.frame = 27;
+    load(state, { children.back() });
+    update(state);
+    CHECK(state.stats.handoff_frames.count() == 1);
+    CHECK(state.stats.handoff_frames.max() == 17);
+    CHECK(state.stats.handoff_frames.percentile(0.5) == 17);
+}
+
 TEST_CASE("VoxelState: children stay until their parent is loaded (merge)") {
     VoxelState state = make_state();
     const std::vector<ChunkId> children = children_of(PARENT);

@@ -788,6 +788,7 @@ void VoxelTerrain::_ready() {
                 scenario);
         gpu_mesher->set_trim_indices(legacy_trim_indices);
     }
+    last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
 
     if (camera != nullptr) {
         chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
@@ -883,13 +884,22 @@ void VoxelTerrain::_apply_instance_edit() {
     edit_stats.apply.add(now_usec() - t0);
 }
 
+void VoxelTerrain::_record_dispatch_times(const DispatchTimes &p_now) {
+    process_stats.gate_admit.add(p_now.gate_admit - last_dispatch_times.gate_admit);
+    process_stats.build_lists.add(p_now.build_lists - last_dispatch_times.build_lists);
+    process_stats.record_bytes.add(p_now.record_bytes - last_dispatch_times.record_bytes);
+    last_dispatch_times = p_now;
+}
+
 void VoxelTerrain::_process(double) {
     if (!started) {
         return;
     }
 
     const uint64_t t_process_start = now_usec();
+    visual_mesh_data.frame = exec_time;
     sdf->poll(); // an edit's rebuilt index base, the streamed keys computed since the last frame (before the meshers ask)
+    process_stats.stream_poll.add(now_usec() - t_process_start);
 
     if (camera != nullptr) {
         chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
@@ -940,6 +950,7 @@ void VoxelTerrain::_process(double) {
         gpu_mesher->process_queue();
     }
     process_stats.mesher_dispatch.add(now_usec() - t0);
+    _record_dispatch_times(direct_mesher ? direct_mesher->get_dispatch_times() : gpu_mesher->get_dispatch_times());
 
     t0 = now_usec();
     const bool results = direct_mesher ? direct_mesher->get_results(visual_mesh_data) : gpu_mesher->get_results(visual_mesh_data);
@@ -1253,6 +1264,8 @@ Dictionary VoxelTerrain::get_debug_stats() {
     destroy["coverage_hidden_subcubes"] = visual_mesh_data.hidden_subcubes(); // now
     destroy["coverage_written"] = vs.coverage_written;
     destroy["coverage_written_max"] = vs.coverage_written_max;
+    // Frames a stalled parent stays drawn over its children (first stalled sub-cube to the last cleared), cumulative.
+    destroy["handoff_frames"] = vs.handoff_frames.to_dict();
     d["destroy"] = destroy;
 
     if (gpu_profiler) {

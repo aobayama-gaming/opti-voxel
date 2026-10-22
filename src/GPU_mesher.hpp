@@ -153,6 +153,7 @@ private:
 
     LODHashSet working_generation;
     ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
+    DispatchTimes dispatch_times; // gate_admit read from the gate
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
@@ -202,4 +203,10 @@ public:
     void set_dual_contouring(bool p_enable) { dual_contouring = p_enable; }
 
     Dictionary get_stats();
+    // Main thread: the dispatch's sub-timers since the start (VoxelTerrain's sections).
+    DispatchTimes get_dispatch_times() const {
+        DispatchTimes t = dispatch_times;
+        t.gate_admit = gate.admit_usec;
+        return t;
+    }
 };

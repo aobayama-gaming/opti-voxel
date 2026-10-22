@@ -146,6 +146,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
     const std::unique_lock<std::shared_mutex> lock(mutex);
     stats.admit_wait_usec += now_usec() - t0;
     Admit answer = READY;
+    const int64_t created_before = stats.keys_created;
     const ParkKey park{ p_chunk, p_owner };
     const auto it = parked.find(park);
     if (it != parked.end()) {
@@ -172,6 +173,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
             Parked &p = parked[park];
             p.tag = p_tag;
             p.seq = ++park_seq;
+            p.frame = frame;
             p.missing = missing;
             p.keys = keys;
             for (const SourceKey &k : keys) {
@@ -185,6 +187,9 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
         }
     }
     stats.admitted[answer]++;
+    const int64_t created = stats.keys_created - created_before;
+    stats.admit_keys_created += created;
+    stats.admit_keys_created_max = MAX(stats.admit_keys_created_max, created);
     stats.admit_usec += now_usec() - t0;
     return answer;
 }
@@ -220,6 +225,7 @@ void InstanceStream::hand_back(const ParkKey &p_park) {
     if (it != parked.end() && !it->second.done) {
         it->second.done = true;
         ready_chunks.push_back(p_park);
+        stats.park_frames.add(frame - it->second.frame);
     }
 }
 
@@ -228,6 +234,7 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
     Entry &e = it->second;
     if (fresh) {
         pending++;
+        stats.keys_created++;
         e.key = p_key;
         thread_local std::vector<SourceKey> in;
         source(p_key).inputs(p_key, in);
@@ -265,6 +272,7 @@ void InstanceStream::start(Entry &r_entry) {
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
         jobs.push_back(std::move(job));
+        stats.jobs_queued_max = MAX(stats.jobs_queued_max, int64_t(jobs.size())); // under the stream's lock too
         spawn = draining < executor->workers();
         draining += spawn;
     }
@@ -301,18 +309,22 @@ void InstanceStream::poll() {
         request(k, false); // kept resident while viewed, started if missing
     }
     viewed.clear();
+    const uint64_t t_evict = now_usec();
     for (;;) {
         const bool too_many = entries.size() - pending > settings.entries;
         if (!(too_many || input_records > settings.input_records) || !evict_oldest(!too_many)) {
             break;
         }
     }
-    const uint64_t dt = now_usec() - t0;
+    const uint64_t t_end = now_usec();
+    stats.evict_usec += t_end - t_evict;
+    const uint64_t dt = t_end - t0;
     stats.poll_usec += dt;
     stats.poll_usec_max = MAX(stats.poll_usec_max, dt);
 }
 
 void InstanceStream::land(std::unique_ptr<Job> p_job) {
+    const uint64_t t0 = now_usec();
     Entry &e = entries.find(p_job->key)->second; // running: never evicted
     const int lod = CLAMP(p_job->key.lod, 0, ChunkMath::MAX_LOD_NUMBERS - 1);
     stats.computed++;
@@ -340,6 +352,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
         e.used = MAX(e.used, frame);
         lru_link(e);
     }
+    stats.land_usec += now_usec() - t0;
 }
 
 bool InstanceStream::place(Entry &r_entry) {
@@ -453,6 +466,7 @@ bool InstanceStream::evict_oldest(bool p_inputs) {
         input_records -= e->count;
     }
     stats.evicted++;
+    stats.evicted_by[e->key.kind][CLAMP(e->key.lod, 0, ChunkMath::MAX_LOD_NUMBERS - 1)]++;
     const SourceKey key = e->key; // asked for again, it is computed again (the same records)
     entries.erase(key);
     return true;
@@ -645,6 +659,14 @@ Dictionary InstanceStream::get_stats() const {
     d["admit_wait_ms_total"] = double(stats.admit_wait_usec) / 1000.0;
     d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
     d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
+    d["evict_ms_total"] = double(stats.evict_usec) / 1000.0;
+    d["land_ms_total"] = double(stats.land_usec) / 1000.0;
+    d["keys_created"] = stats.keys_created;
+    d["admit_keys_created"] = stats.admit_keys_created;
+    d["admit_keys_created_max"] = stats.admit_keys_created_max;
+    d["jobs_queued_max"] = stats.jobs_queued_max;
+    d["park_frames"] = stats.park_frames.to_dict();
+    d["workers"] = int64_t(executor->workers());
     d["computed"] = stats.computed;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
     Dictionary by;
@@ -655,6 +677,7 @@ Dictionary InstanceStream::get_stats() const {
                 Dictionary k;
                 k["count"] = n;
                 k["ms_avg"] = double(stats.usec_by[kind][lod]) / 1000.0 / double(n);
+                k["evicted"] = stats.evicted_by[kind][lod];
                 by[vformat("%s %d", kind == SourceKey::PARTS ? "parts" : "blobs", lod)] = k;
             }
         }
