@@ -222,7 +222,9 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
         // than its top (the sky light that a real canopy gets more of from above than SSAO shows).
         float clump = value_noise(p * (1.0 / 0.55));
         float leaf_w = 1.0 - smoothstep(0.02, 0.05, footprint);
-        float leaf = leaf_w > 0.0 ? value_noise(p * (1.0 / 0.08) + 3.0) - 0.5 : 0.0;
+        // The leaves flutter: their noise drifts with the wind's wobble (a shimmer over the swaying surface).
+        vec3 flutter = wind_sway_m > 0.0 ? 0.4 * sin(TIME * vec3(2.9, 2.3, 3.4) + p.yzx * 3.0) : vec3(0.0);
+        float leaf = leaf_w > 0.0 ? value_noise(p * (1.0 / 0.08) + 3.0 + flutter) - 0.5 : 0.0;
         vec3 shade_color = mix(m0.rgb * vec3(0.55, 0.6, 0.6), m0.rgb * vec3(1.45, 1.3, 0.8), clump);
         float up_w = 0.75 + 0.25 * clamp(dot(n, base_up) * inversesqrt(max(dot(n, n), 1e-8)), 0.0, 1.0);
         albedo = shade_color * (1.0 + leaf_w * 0.45 * leaf) * up_w;
@@ -248,6 +250,13 @@ void vertex() {
     vec3 chunk_min = vec3(rel) * (chunk_world_dim * 0.5) - vec3(size * 0.5);
     vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
+    // Wind: leaf corners sway (wind_sway, a pure function of the position: shared corners agree). Only up to LOD 2:
+    // farther the amplitude is under a pixel, and the corner's material costs a palette and a material fetch.
+    uint palette_index = page_decode_palette(c);
+    if (palette_index != 0u && lod <= 2 && wind_sway_m > 0.0
+            && texelFetch(material_tex, material_texel(corner_material(h1, palette_index)) + ivec2(1, 0), 0).a == MATERIAL_PATTERN_LEAVES) {
+        world += wind_sway(world);
+    }
     // Coverage (page_format.hpp, header texel 2): a quad whose 4 corners all lie in hidden sub-cubes collapses to one
     // point, so a cut overlaps the chunks replacing it instead of leaving a gap. Every corner of the quad decides alike.
     // Only the rows flagged in texel 1 read texel 2.
@@ -273,7 +282,7 @@ void vertex() {
     // material in one quad (three meeting inside one cell) draws as b.
     v_materials = ivec2(0);
     if (corner == 0) {
-        uint ia = page_decode_palette(c);
+        uint ia = palette_index;
         uint ib = ia;
         uint mask = 0u;
         for (int k = 1; k < 4; k++) {

@@ -18,6 +18,7 @@ uniform float cloud_scale_m = 6000.0;
 uniform float cloud_cover = 0.0;
 uniform vec2 cloud_wind = vec2(0.0);
 uniform float cloud_shadow = 0.0;
+uniform float wind_sway_m = 0.0;
 
 // Where a ray from p along dir meets the cloud layer, in the layer's xz (dir.y away from 0: the callers test it).
 vec2 cloud_hit(vec3 p, vec3 dir) {
@@ -34,6 +35,19 @@ vec2 cloud_uv(vec2 xz) {
 float cloud_density(float texel) {
     float edge = 1.0 - cloud_cover;
     return smoothstep(edge - 0.1, edge + 0.2, texel);
+}
+// Wind sway: a world-space displacement, a pure function of the position and TIME, so every quad sharing a corner
+// moves it alike and the mesh stays watertight. A gust wave of ~6 m travelling with cloud_wind, its strength breathing
+// over ~23 m, plus a finer wobble of ~1 m; wind_sway_m is the amplitude (0: still). The page shader applies it to leaf
+// corners only: bark has no per-tree pivot to bend around (the pages don't carry one).
+vec3 wind_sway(vec3 p) {
+    float speed = max(length(cloud_wind), 1.0);
+    vec2 dir = cloud_wind / speed;
+    float phase = dot(p.xz, dir) - speed * TIME;
+    float gust = sin(phase * (6.2832 / 6.0)) * (0.6 + 0.4 * sin(phase * (6.2832 / 23.0) + p.y * 0.3));
+    vec3 wobble = vec3(sin(dot(p, vec3(7.1, 5.3, 6.7)) + TIME * 3.1), sin(dot(p, vec3(5.9, 7.7, 4.3)) + TIME * 2.3),
+            sin(dot(p, vec3(6.3, 4.9, 7.9)) + TIME * 2.7));
+    return wind_sway_m * (gust * vec3(dir.x, 0.15, dir.y) + 0.35 * wobble);
 }
 )glsl";
 
@@ -141,12 +155,15 @@ void VoxelSky::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_cloud_wind"), &VoxelSky::get_cloud_wind);
     ClassDB::bind_method(D_METHOD("set_cloud_shadow", "strength"), &VoxelSky::set_cloud_shadow);
     ClassDB::bind_method(D_METHOD("get_cloud_shadow"), &VoxelSky::get_cloud_shadow);
+    ClassDB::bind_method(D_METHOD("set_wind_sway_m", "metres"), &VoxelSky::set_wind_sway_m);
+    ClassDB::bind_method(D_METHOD("get_wind_sway_m"), &VoxelSky::get_wind_sway_m);
     ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "cloud_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_cloud_texture", "get_cloud_texture");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_height_m", PROPERTY_HINT_RANGE, "100,20000,10"), "set_cloud_height_m", "get_cloud_height_m");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_scale_m", PROPERTY_HINT_RANGE, "100,100000,10"), "set_cloud_scale_m", "get_cloud_scale_m");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_cover", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_cloud_cover", "get_cloud_cover");
     ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "cloud_wind"), "set_cloud_wind", "get_cloud_wind");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_shadow", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_cloud_shadow", "get_cloud_shadow");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "wind_sway_m", PROPERTY_HINT_RANGE, "0,1,0.005"), "set_wind_sway_m", "get_wind_sway_m");
 }
 
 void VoxelSky::set_cloud_texture(const Ref<Texture2D> &p_texture) {
@@ -203,6 +220,15 @@ float VoxelSky::get_cloud_shadow() const {
     return cloud_shadow;
 }
 
+void VoxelSky::set_wind_sway_m(float p_metres) {
+    wind_sway_m = MAX(p_metres, 0.0f);
+    _apply();
+}
+
+float VoxelSky::get_wind_sway_m() const {
+    return wind_sway_m;
+}
+
 Dictionary VoxelSky::cloud_params() const {
     Dictionary params;
     params["cloud_tex"] = cloud_texture.is_valid() ? cloud_texture->get_rid() : RID();
@@ -211,6 +237,7 @@ Dictionary VoxelSky::cloud_params() const {
     params["cloud_cover"] = cloud_cover;
     params["cloud_wind"] = cloud_wind;
     params["cloud_shadow"] = cloud_shadow;
+    params["wind_sway_m"] = wind_sway_m;
     return params;
 }
 

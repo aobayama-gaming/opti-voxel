@@ -37,6 +37,8 @@ public:
     Vector2 get_cloud_wind() const;
     void set_cloud_shadow(float p_strength);
     float get_cloud_shadow() const;
+    void set_wind_sway_m(float p_metres);
+    float get_wind_sway_m() const;
 
     // The cloud uniforms as the page shader takes them (VoxelTerrain::set_page_params).
     Dictionary cloud_params() const;
@@ -55,6 +57,7 @@ private:
     float cloud_cover = 0.4f; // fraction of the sky covered
     Vector2 cloud_wind = Vector2(9.0f, 3.0f); // m/s
     float cloud_shadow = 0.7f; // how much of the sun a cloud takes from the ground, 0 = no shadows
+    float wind_sway_m = 0.03f; // the leaves' sway amplitude (the page shader's wind_sway), 0 = still
 
     Ref<Shader> shader;
     Ref<ShaderMaterial> material;
