@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <numeric>
 #include <tuple>
 
 using namespace Archetype;
@@ -22,8 +23,8 @@ int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_
     }
     const String error = edit_error(p_rotation, p_params, p_op, p_k);
     ERR_FAIL_COND_V_MSG(!error.is_empty(), -1, "add_instance: " + error);
-    ERR_FAIL_COND_V_MSG(records.size() >= gpu.instance_capacity(), -1,
-            vformat("add_instance: the table is full (%d instances, removed ones included).", gpu.instance_capacity()));
+    ERR_FAIL_COND_V_MSG(records.size() >= gpu.table_capacity(), -1,
+            vformat("add_instance: the table is full (%d instances, removed ones included).", gpu.table_capacity()));
     TableRecord rec;
     rec.def = uint8_t(p_type);
     rec.op = Combine(p_op);
@@ -167,6 +168,82 @@ void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_aft
     publish(rebuild.edit(*current(), records, ids, version), all);
 }
 
+bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const {
+    const std::shared_ptr<const InstanceSnapshot> snap = current();
+    if (snap && snap->near_instance(p_node, p_lod)) {
+        return true;
+    }
+    // The corners are the bare ground's distance: the node holds a point within its band of the ground, so within the
+    // band plus the reach of a source's records when it can hold one (the corner test's own slope bound).
+    const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
+    const VoxelPos lo = ChunkMath::chunk_min_voxel(p_node, param);
+    const VoxelBox node{ lo, lo + VoxelPos(span, span, span), true };
+    for (const std::shared_ptr<const ScatterSource> &s : streamed) {
+        const int64_t reach = s->ground_reach(p_lod);
+        if (reach > 0 && double(p_past_band_m) <= double(reach) * param.voxel_size && node.clipped(s->setup().scatter.zone.grown(reach)).valid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+SDFBase::Admit SDFTable::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) {
+    if (!stream) {
+        return Admit::READY;
+    }
+    switch (stream->admit(p_chunk, p_owner, p_tag)) {
+        case InstanceStream::READY:
+            return Admit::READY;
+        case InstanceStream::PARKED:
+            return Admit::PARKED;
+        case InstanceStream::LATER:
+            break;
+    }
+    return Admit::LATER;
+}
+
+void SDFTable::take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) {
+    if (stream) {
+        stream->take_ready(p_owner, r_out);
+    } else {
+        r_out.clear();
+    }
+}
+
+void SDFTable::poll() {
+    poll_rebuild();
+    if (stream) {
+        stream->poll();
+    }
+}
+
+RecordView SDFTable::point_list(const InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list, bool p_view) const {
+    p_snap.point_candidates(p_voxel, p_lod, r_list);
+    if (!stream) {
+        return RecordView(p_snap.records);
+    }
+    thread_local std::vector<TableRecord> flat;
+    flat.clear();
+    compose_list(
+            r_list, gpu.get_scene_end(), [&](uint32_t p_id) { flat.push_back(p_snap.records[p_id]); },
+            [&] {
+                if (p_view) {
+                    stream->view_records(p_voxel, p_lod, flat);
+                } else {
+                    stream->point_records(p_voxel, p_lod, flat);
+                }
+            });
+    r_list.resize(flat.size());
+    std::iota(r_list.begin(), r_list.end(), 0u);
+    return RecordView(flat.data());
+}
+
+void SDFTable::stop_streaming() {
+    gpu.set_capacity(gpu.table_capacity());
+    stream.reset(); // the last reference: waits for its drain tasks
+    streamed.clear();
+}
+
 void SDFTable::poll_rebuild() {
     if (rebuild.ready()) {
         finish_rebuild();
@@ -223,7 +300,7 @@ void SDFTable::update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids) 
             }
             continue;
         }
-        ERR_CONTINUE_MSG(records.size() >= gpu.instance_capacity(), "SDFTable: a moment blob left out: the table is full.");
+        ERR_CONTINUE_MSG(records.size() >= gpu.table_capacity(), "SDFTable: a moment blob left out: the table is full.");
         add_blob_record(key, rec);
         TableRecord none = rec;
         none.removed = true;
@@ -345,7 +422,7 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, Dicti
         const Site &site = sites[i].site;
         std::vector<TableRecord> &parts = grown[i % BATCH];
         const uint32_t first = records.size();
-        if (parts.empty() || !admit(parts, p_name)) {
+        if (parts.empty() || !admit_records(parts, p_name)) {
             continue;
         }
         if (r_spans) {
@@ -383,6 +460,36 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, Dicti
     d["moments"] = materials_stats;
     d["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
     r_stats[p_name] = d;
+}
+
+void SDFTable::add_stream(uint32_t p_slot_base, Dictionary &r_stats) {
+    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
+    for (const Source &source : sources) {
+        if (!source.scatter.valid()) {
+            continue;
+        }
+        const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+        streamed.push_back(std::make_shared<const ScatterSource>(source_setup(source, uint32_t(streamed.size()))));
+        const SourceProfile &prof = streamed.back()->profile();
+        Dictionary d;
+        d["streamed"] = true;
+        d["records_per_site_avg"] = prof.records_per_site;
+        d["reach_m"] = prof.reach * param.voxel_size;
+        d["lod_end"] = prof.lod_end;
+        d["profile_ms"] = double(Time::get_singleton()->get_ticks_usec() - t0) * 1e-3;
+        r_stats[source.name] = d;
+    }
+    if (streamed.empty()) {
+        return;
+    }
+    InstanceStream::Settings settings;
+    settings.slot_base = p_slot_base;
+    settings.slot_capacity = MIN<uint32_t>(InstanceStream::slot_budget(streamed), SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
+    stream = std::make_shared<InstanceStream>(streamed, param, settings, StreamExecutor::pool());
+    Dictionary d;
+    d["slots"] = int64_t(settings.slot_capacity);
+    d["setup_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    r_stats["stream_setup"] = d;
 }
 
 void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
@@ -432,7 +539,7 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
             too_steep++;
             continue;
         }
-        if (!admit(placed[i].records, "biome feature")) {
+        if (!admit_records(placed[i].records, "biome feature")) {
             continue;
         }
         const Biome::Placed &p = placed[i];
@@ -538,7 +645,7 @@ bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
     return false;
 }
 
-bool SDFTable::admit(std::vector<TableRecord> &r_records, const char *p_what) {
+bool SDFTable::admit_records(std::vector<TableRecord> &r_records, const char *p_what) {
     ERR_FAIL_COND_V_MSG(records.size() + r_records.size() > uint32_t(SDFGpuTable::LIST_ID_MASK) + 1, false,
             vformat("SDFTable: %s left out: the table holds at most %d instances (SDFGpuTable::LIST_ID_BITS).", p_what, SDFGpuTable::LIST_ID_MASK + 1));
     for (const TableRecord &rec : r_records) {
@@ -571,7 +678,7 @@ void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_para
     rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
     // The same limits as a runtime edit (a gallery cube past 4 top-LOD chunk spans with few LODs).
     std::vector<TableRecord> one{ rec };
-    admit(one, "scene record");
+    admit_records(one, "scene record");
 }
 
 void SDFTable::add_shapes(const Types &p_types) {
@@ -625,6 +732,7 @@ void SDFTable::build_table(int p_lod_count) {
     }
     lod_count = p_lod_count;
 
+    stop_streaming(); // its tasks read the old sources
     rebuild.cancel(); // a base of the old records
     records.clear();
     has_moment_blobs = false;
@@ -641,13 +749,19 @@ void SDFTable::build_table(int p_lod_count) {
     Dictionary scene_stats;
     add_biomes(types, scene_stats);
     sources = { Source{ "scatter", scatter_source(types) }, Source{ "trees", forest_source(tree_types) } };
-    add_source(sources[0].scatter, sources[0].name, scene_stats);
-    add_source(sources[1].scatter, sources[1].name, scene_stats, &trees);
+    if (!stream_sources) {
+        add_source(sources[0].scatter, sources[0].name, scene_stats);
+        add_source(sources[1].scatter, sources[1].name, scene_stats, &trees);
+    }
     add_moment_blobs(blob, scene_stats);
-    gpu.set_scene_stats(scene_stats);
     edit_regions.clear();
-    // The GPU buffers hold the scene plus room for runtime edits (the mesher reads this at init).
-    gpu.set_capacity(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u));
+    // The GPU buffers hold the scene plus room for runtime edits, then the streamed slots (the mesher reads this at init).
+    const uint32_t capacity = MIN<uint32_t>(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u), SDFGpuTable::LIST_ID_MASK + 1);
+    if (stream_sources) {
+        add_stream(capacity, scene_stats);
+    }
+    gpu.set_capacity(capacity, stream);
+    gpu.set_scene(scene_stats, records.size());
     version++;
     publish(build_snapshot(library, float(vs), true, records, param, lod_count - 1, version), VoxelBox());
 }

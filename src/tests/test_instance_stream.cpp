@@ -10,7 +10,7 @@ using namespace Archetype;
 namespace {
 
 // A cheap source: one sphere of 4-8 voxels per 16-voxel cell site on a flat ground far from the origin, no blobs. The
-// stream runs its keys inline (the base executor), so a key computed when asked for lands at the next poll().
+// stream runs its keys on the thread calling poll() (the base executor), so a key asked for lands by the next poll().
 struct StreamFixture {
     std::shared_ptr<const ScatterSource> source;
     ChunkParam param;
@@ -139,37 +139,44 @@ TEST_CASE("Instance stream: parked chunks come back once their keys land, in par
     std::unique_ptr<InstanceStream> stream = fx.stream(settings);
     Mirror mirror;
 
-    // A LOD-1 chunk's part tile reads the LOD-0 tiles under it: two polls. A LOD-0 chunk's tiles: one.
+    // A key and the keys waiting on it land within one poll: a LOD-1 chunk's part tile starts once the LOD-0 tiles
+    // under it land, on the same drain.
     const ChunkId coarse = fx.chunk(-200, -200, 1), fine = fx.chunk(200, 200), other = fx.chunk(-200, 200);
-    CHECK(stream->admit(coarse, 11) == InstanceStream::PARKED);
-    CHECK(stream->admit(fine, 22) == InstanceStream::PARKED);
-    CHECK(stream->admit(fine, 23) == InstanceStream::PARKED); // asked again: still parked, the new tag
+    CHECK(stream->admit(coarse, 0, 11) == InstanceStream::PARKED);
+    CHECK(stream->admit(fine, 0, 22) == InstanceStream::PARKED);
+    CHECK(stream->admit(fine, 0, 23) == InstanceStream::PARKED); // asked again: still parked, the new tag
+    CHECK(stream->admit(fine, 7, 70) == InstanceStream::PARKED); // another mesher's: parked apart
+    CHECK(stream->parked_count(0) == 2);
+    CHECK(stream->parked_count(7) == 1);
     std::vector<std::pair<ChunkId, uint64_t>> back;
-    stream->take_ready(back);
+    stream->take_ready(0, back);
     CHECK(back.empty());
 
     stream->poll();
-    CHECK(stream->admit(other, 33) == InstanceStream::PARKED);
-    stream->take_ready(back);
-    CHECK(back.size() == 1);
-    if (!(back.size() == 1)) {
-        return;
-    }
-    CHECK(back[0] == std::make_pair(fine, uint64_t(23)));
-
-    // The coarse chunk lands with the next poll, the other one too: handed back in park order.
-    stream->poll();
-    stream->take_ready(back);
-    CHECK(back.size() == 2);
+    CHECK(stream->admit(other, 0, 33) == InstanceStream::PARKED);
+    stream->take_ready(0, back);
+    CHECK(back.size() == 2); // handed back in park order
     if (!(back.size() == 2)) {
         return;
     }
     CHECK(back[0] == std::make_pair(coarse, uint64_t(11)));
-    CHECK(back[1] == std::make_pair(other, uint64_t(33)));
+    CHECK(back[1] == std::make_pair(fine, uint64_t(23)));
+    stream->take_ready(7, back); // to its owner only
+    CHECK(back.size() == 1);
+    CHECK(stream->parked_count(7) == 0);
+
+    // Parked after the poll: back with the next one.
+    stream->poll();
+    stream->take_ready(0, back);
+    CHECK(back.size() == 1);
+    if (!(back.size() == 1)) {
+        return;
+    }
+    CHECK(back[0] == std::make_pair(other, uint64_t(33)));
 
     mirror.update(*stream);
     for (const ChunkId &c : { coarse, fine, other }) {
-        CHECK(stream->admit(c, 0) == InstanceStream::READY);
+        CHECK(stream->admit(c, 0, 0) == InstanceStream::READY);
         CHECK(lists_right(fx, *stream, mirror, c));
     }
     CHECK_FALSE(fx.expected(fine).empty());
@@ -182,6 +189,28 @@ TEST_CASE("Instance stream: parked chunks come back once their keys land, in par
     CHECK(stat(*stream, "point_computed") == 0);
     stream->point_records(fx.origin + VoxelPos(400, 0, -400), 0, cpu);
     CHECK(stat(*stream, "point_computed") > 0);
+
+    // The camera's queries compute nothing on their thread: a key not resident is left out, asked for by the next poll,
+    // and once it has landed (the one after) the records are point_records'. A grid of voxels away from the chunks asked for.
+    const int64_t computed = stat(*stream, "point_computed");
+    size_t records = 0;
+    for (int64_t z = -600; z <= -200; z += 100) {
+        for (int64_t x = 200; x <= 600; x += 100) {
+            const VoxelPos v = fx.origin + VoxelPos(x, 0, z);
+            std::vector<TableRecord> view, point;
+            stream->view_records(v, 0, view);
+            stream->poll();
+            stream->poll();
+            view.clear();
+            stream->view_records(v, 0, view);
+            stream->point_records(v, 0, point);
+            CHECK(view.size() == point.size());
+            records += point.size();
+        }
+    }
+    CHECK(stat(*stream, "point_computed") == computed); // every key resident by then
+    CHECK(stat(*stream, "view_missing") > 0);
+    CHECK(records > 0);
 }
 
 TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicted, the others are") {
@@ -192,15 +221,15 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
     Mirror mirror;
 
     const ChunkId graced = fx.chunk(300, 300), parked = fx.chunk(-300, 300);
-    CHECK(stream->admit(graced, 2) == InstanceStream::PARKED);
+    CHECK(stream->admit(graced, 0, 2) == InstanceStream::PARKED);
     stream->poll();
     std::vector<std::pair<ChunkId, uint64_t>> back;
-    stream->take_ready(back);
+    stream->take_ready(0, back);
     CHECK(back.size() == 1);
     if (!(back.size() == 1)) {
         return;
     }
-    CHECK(stream->admit(graced, 2) == InstanceStream::READY);
+    CHECK(stream->admit(graced, 0, 2) == InstanceStream::READY);
 
     // Within the grace, nothing goes; the mirror's lists stay whole.
     for (uint64_t f = 0; f < InstanceStream::GRACE_FRAMES; f++) {
@@ -211,7 +240,7 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
     CHECK(lists_right(fx, *stream, mirror, graced));
 
     // A chunk parked over keys not computed yet pins them, landed or not; the graced chunk's keys go once its grace is over.
-    CHECK(stream->admit(parked, 3) == InstanceStream::PARKED);
+    CHECK(stream->admit(parked, 0, 3) == InstanceStream::PARKED);
     for (uint64_t f = 0; f < 4; f++) {
         stream->poll();
     }
@@ -219,21 +248,21 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
     fx.source->chunk_keys(parked, fx.param, keys);
     CHECK(stat(*stream, "evicted") > 0);
     CHECK(stat(*stream, "keys") == int64_t(keys.size()));
-    stream->take_ready(back);
+    stream->take_ready(0, back);
     CHECK(back.size() == 1);
     if (!(back.size() == 1)) {
         return;
     } // its keys landed and stayed: pinned
     CHECK(back[0].first == parked);
     mirror.update(*stream);
-    CHECK(stream->admit(parked, 3) == InstanceStream::READY);
+    CHECK(stream->admit(parked, 0, 3) == InstanceStream::READY);
     CHECK(lists_right(fx, *stream, mirror, parked));
     // The graced chunk's keys were evicted: asked again, they are computed again (the same records).
-    CHECK(stream->admit(graced, 2) == InstanceStream::PARKED);
+    CHECK(stream->admit(graced, 0, 2) == InstanceStream::PARKED);
     stream->poll();
-    stream->take_ready(back);
+    stream->take_ready(0, back);
     mirror.update(*stream);
-    CHECK(stream->admit(graced, 2) == InstanceStream::READY);
+    CHECK(stream->admit(graced, 0, 2) == InstanceStream::READY);
     CHECK(lists_right(fx, *stream, mirror, graced));
 }
 
@@ -249,14 +278,14 @@ TEST_CASE("Instance stream: evicted keys' slots are reused, and the placement lo
 
     std::vector<std::pair<ChunkId, uint64_t>> back;
     for (const ChunkId &chunk : { a, b, c }) {
-        CHECK(stream->admit(chunk, 0) == InstanceStream::PARKED);
+        CHECK(stream->admit(chunk, 0, 0) == InstanceStream::PARKED);
         stream->poll();
-        stream->take_ready(back);
+        stream->take_ready(0, back);
         CHECK(back.size() == 1);
         if (!(back.size() == 1)) {
             return;
         }
-        CHECK(stream->admit(chunk, 0) == InstanceStream::READY);
+        CHECK(stream->admit(chunk, 0, 0) == InstanceStream::READY);
         live.update(*stream);
         CHECK(lists_right(fx, *stream, live, chunk));
         CHECK(stat(*stream, "slots_used") <= int64_t(settings.slot_capacity));
@@ -280,17 +309,17 @@ TEST_CASE("Instance stream: with the slots full, a chunk answers LATER until roo
     Mirror mirror;
 
     // Both park, their keys land together: the first parked takes the slots, the other is handed back without them.
-    CHECK(stream->admit(a, 1) == InstanceStream::PARKED);
-    CHECK(stream->admit(b, 2) == InstanceStream::PARKED);
+    CHECK(stream->admit(a, 0, 1) == InstanceStream::PARKED);
+    CHECK(stream->admit(b, 0, 2) == InstanceStream::PARKED);
     stream->poll();
     std::vector<std::pair<ChunkId, uint64_t>> back;
-    stream->take_ready(back);
+    stream->take_ready(0, back);
     CHECK(back.size() == 2);
     if (!(back.size() == 2)) {
         return;
     }
-    CHECK(stream->admit(a, 1) == InstanceStream::READY);
-    CHECK(stream->admit(b, 2) == InstanceStream::LATER);
+    CHECK(stream->admit(a, 0, 1) == InstanceStream::READY);
+    CHECK(stream->admit(b, 0, 2) == InstanceStream::LATER);
     CHECK(stat(*stream, "slots_full") > 0);
     CHECK(stat(*stream, "chunks_parked") == 0); // nothing pinned while it waits
 
@@ -299,13 +328,67 @@ TEST_CASE("Instance stream: with the slots full, a chunk answers LATER until roo
     InstanceStream::Admit answer = InstanceStream::LATER;
     for (; frames < 4 * int(InstanceStream::GRACE_FRAMES) && answer != InstanceStream::READY; frames++) {
         stream->poll();
-        stream->take_ready(back);
-        answer = stream->admit(b, 2);
+        stream->take_ready(0, back);
+        answer = stream->admit(b, 0, 2);
     }
     CHECK(answer == InstanceStream::READY);
     CHECK(frames > int(InstanceStream::GRACE_FRAMES) - 2);
     mirror.update(*stream);
     CHECK(lists_right(fx, *stream, mirror, b));
+}
+
+TEST_CASE("Instance stream: past the pending keys' cap a chunk needing a new key answers LATER, then goes through") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ChunkId a = fx.chunk(-300, -300), b = fx.chunk(300, 300);
+    InstanceStream::Settings settings;
+    settings.pending = 1;
+    std::unique_ptr<InstanceStream> stream = fx.stream(settings);
+    Mirror mirror;
+
+    // A frame asks for one new key and what it reads, then answers LATER: the next frame, once it landed, asks for another.
+    CHECK(stream->admit(a, 0, 1) == InstanceStream::LATER);
+    const int64_t first = stat(*stream, "keys");
+    CHECK(stream->admit(b, 0, 2) == InstanceStream::LATER);
+    CHECK(stat(*stream, "keys") == first); // nothing new asked for past the cap
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    InstanceStream::Admit answer_a = InstanceStream::LATER, answer_b = InstanceStream::LATER;
+    for (int frame = 0; frame < 64 && (answer_a != InstanceStream::READY || answer_b != InstanceStream::READY); frame++) {
+        stream->poll();
+        stream->take_ready(0, back);
+        answer_a = stream->admit(a, 0, 1);
+        answer_b = stream->admit(b, 0, 2);
+    }
+    CHECK(answer_a == InstanceStream::READY);
+    CHECK(answer_b == InstanceStream::READY);
+    mirror.update(*stream);
+    CHECK(lists_right(fx, *stream, mirror, a));
+    CHECK(lists_right(fx, *stream, mirror, b));
+}
+
+TEST_CASE("Instance stream: making room for inputs evicts the inputs, never a placed key") {
+    const StreamFixture &fx = StreamFixture::get();
+    // Their keys read finer ones: inputs, not placed. c's placed keys are older than d's inputs.
+    const ChunkId c = fx.chunk(-300, -300, 2), d = fx.chunk(300, 300, 2);
+    InstanceStream::Settings settings;
+    settings.input_records = 0;
+    std::unique_ptr<InstanceStream> stream = fx.stream(settings);
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    for (const ChunkId &chunk : { c, d }) {
+        InstanceStream::Admit answer = InstanceStream::LATER;
+        for (int frame = 0; frame < 16 && answer != InstanceStream::READY; frame++) {
+            answer = stream->admit(chunk, 0, 1);
+            stream->poll();
+            stream->take_ready(0, back);
+        }
+        CHECK(answer == InstanceStream::READY);
+    }
+    const int64_t computed = stat(*stream, "computed");
+    for (int frame = 0; frame < 2 * int(InstanceStream::GRACE_FRAMES); frame++) {
+        stream->poll();
+    }
+    CHECK(stat(*stream, "evicted") > 0); // the inputs went
+    CHECK(stream->admit(c, 0, 1) == InstanceStream::READY);
+    CHECK(stat(*stream, "computed") == computed);
 }
 
 TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with the same lists") {
@@ -314,20 +397,20 @@ TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with
             InstanceStream::Settings(), StreamExecutor::pool());
     const std::vector<ChunkId> chunks = { fx.chunk(-200, -200, 1), fx.chunk(200, 200), fx.chunk(-200, 200), fx.chunk(300, -300, 1) };
     for (const ChunkId &c : chunks) {
-        CHECK(stream->admit(c, 0) == InstanceStream::PARKED);
+        CHECK(stream->admit(c, 0, 0) == InstanceStream::PARKED);
     }
     std::vector<std::pair<ChunkId, uint64_t>> back, all;
     const uint64_t t0 = now_usec();
     while (all.size() < chunks.size() && now_usec() - t0 < 30000000) {
         stream->poll();
-        stream->take_ready(back);
+        stream->take_ready(0, back);
         all.insert(all.end(), back.begin(), back.end());
     }
     CHECK(all.size() == chunks.size());
     Mirror mirror;
     mirror.update(*stream);
     for (const ChunkId &c : chunks) {
-        CHECK(stream->admit(c, 0) == InstanceStream::READY);
+        CHECK(stream->admit(c, 0, 0) == InstanceStream::READY);
         CHECK(lists_right(fx, *stream, mirror, c));
     }
 }

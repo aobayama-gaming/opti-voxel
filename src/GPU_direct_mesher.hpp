@@ -6,6 +6,7 @@
 #include <godot_cpp/templates/hash_map.hpp>
 #include <godot_cpp/templates/hash_set.hpp>
 
+#include "chunk_gate.hpp"
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
@@ -105,7 +106,7 @@ public:
     void audit_count_chunks(const std::vector<ChunkId> &p_chunks);
     // Counts that came back since the last call (consumed by get_results()).
     void take_audit_counts(std::vector<std::pair<ChunkId, uint32_t>> &r_counts);
-    bool is_audit_idle() const { return audit_queue.empty() && audit_in_flight.is_empty(); }
+    bool is_audit_idle() const { return audit_queue.empty() && audit_in_flight.is_empty() && gate.idle(ChunkGate::AUDIT); }
 
     void set_debug_view(int p_view);
     // Dual contouring of Hermite data (DC-lite) in the vertex pass: sharp UNION / SUBTRACT creases
@@ -169,6 +170,8 @@ private:
     HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
     HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
     LODHashSet working_generation;
+    ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
+    bool gate_later = false; // this frame, a chunk found no room for its records: no more popping
 
     uint32_t next_batch_id = 0;
     HashMap<uint32_t, InFlightBatch> in_flight;
@@ -213,7 +216,7 @@ private:
     RID buffer_table_records;
     RID buffer_table_list;
     uint64_t table_list_capacity = 0; // bytes
-    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last bound to a dispatch
+    SDFGpuTable::UploadCursor sent_records; // main thread: the records last bound to a dispatch
     RID shaders[COMPUTE_PASSES];
     RID pipelines[COMPUTE_PASSES];
     RID uniform_set;
@@ -228,7 +231,7 @@ private:
     void _queue_remesh(const ChunkId &p_chunk);
     void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Main thread: the batch's instance lists (patched into r_ids), the chunks' palettes (if r_palettes) and, if
-    // the table changed since the last dispatch, the records it changed (SDFGpuTable::record_bytes spans). Returns
+    // the records changed since the last dispatch, those that did (SDFGpuTable::record_bytes spans). Returns
     // the table version they are. The lists fill the list buffer at most: r_chunks keeps the leading chunks that
     // fit, r_rest gets the others (r_ids shrunk to match) for the caller to queue again.
     uint32_t _table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,

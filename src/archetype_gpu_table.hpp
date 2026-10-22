@@ -1,8 +1,10 @@
 #pragma once
 
+#include "instance_stream.hpp"
 #include "instance_table.hpp"
 #include "sdf_base.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 
@@ -14,6 +16,18 @@ namespace Archetype {
 // The DefRecord struct, the sdf_records / sdf_list buffers at these bindings and the global g_sdf_chunk (the
 // chunk being sampled): what the generated fold reads (generate_fold_glsl).
 String glsl_table_buffers(int p_record_binding, int p_list_binding);
+
+// The fold order of a list, the GPU's (build_lists) and the CPU's (SDFTable::point_list) alike: the scene's records
+// (snapshot ids below p_scene_end), the streamed ones, then the edits' (added since the scene), so an edit carves the
+// streamed records too. p_ids: a snapshot list, in id order; p_scene(id) takes a snapshot id, p_streamed() appends the
+// streamed records.
+template <typename Scene, typename Streamed>
+void compose_list(const std::vector<uint32_t> &p_ids, uint32_t p_scene_end, Scene p_scene, Streamed p_streamed) {
+    const auto edits = std::lower_bound(p_ids.begin(), p_ids.end(), p_scene_end);
+    std::for_each(p_ids.begin(), edits, p_scene);
+    p_streamed();
+    std::for_each(edits, p_ids.end(), p_scene);
+}
 
 class GpuTable : public SDFGpuTable {
 public:
@@ -34,26 +48,29 @@ public:
         const std::shared_ptr<const InstanceSnapshot> s = snapshot();
         return s ? uint32_t(s->records.size()) : 0u;
     }
-    // The buffers are sized for this many instances up front (runtime edits only append). Raised by
-    // --instance_capacity for a large scatter.
-    uint32_t instance_capacity() const override { return capacity; }
-    void set_capacity(uint32_t p_capacity) {
-        // A list word holds the record id in LIST_ID_BITS: past it, clamped (the table then refuses more records).
-        if (p_capacity > LIST_ID_MASK + 1) {
-            ERR_PRINT(vformat("GpuTable: a capacity of %d instances is over the list word's %d: clamped.", p_capacity, LIST_ID_MASK + 1));
-            p_capacity = LIST_ID_MASK + 1;
-        }
-        capacity = p_capacity;
-    }
-    PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const override;
+    // The buffers are sized for the table's records (runtime edits only append) and the streamed slots past them.
+    uint32_t instance_capacity() const override { return capacity + slots; }
+    // The table's records at most (the streamed slots start there).
+    uint32_t table_capacity() const { return capacity; }
+    // Main thread, before the meshers start: the table's capacity and the streamed sources (null: none), whose slots
+    // start at p_capacity. A list word holds the record id in LIST_ID_BITS: past it, the slots then the table are
+    // clamped (the table then refuses more records).
+    void set_capacity(uint32_t p_capacity, std::shared_ptr<const InstanceStream> p_stream = nullptr);
+    UploadCursor upload_cursor() const override;
+    PackedByteArray record_bytes(const UploadCursor &p_have, UploadCursor &r_now) const override;
     uint32_t record_size() const override { return RECORD_BYTES; }
 
     uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
             uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const override;
 
     Dictionary get_stats() const override;
-    // The scene's own numbers (the forest), merged into get_stats(). Main thread, before the meshers start.
-    void set_scene_stats(const Dictionary &p_stats) { scene_stats = p_stats; }
+    // The scene's own numbers (the forest), merged into get_stats(), and the snapshot ids below p_scene_end the scene's
+    // (compose_list). Main thread, before the meshers start.
+    void set_scene(const Dictionary &p_stats, uint32_t p_scene_end) {
+        scene_stats = p_stats;
+        scene_end = p_scene_end;
+    }
+    uint32_t get_scene_end() const { return scene_end; }
 
 private:
     // Main thread only (build_lists is called by the meshers' dispatch on the main thread).
@@ -71,7 +88,10 @@ private:
     };
     mutable ListStats list_stats;
     std::shared_ptr<const InstanceSnapshot> snap;
-    uint32_t capacity = 16384; // the GPU record/list buffers hold this many instances
+    uint32_t capacity = 16384; // the table's records the GPU buffer holds
+    uint32_t slots = 0; // the streamed records' slots, past capacity
+    std::shared_ptr<const InstanceStream> stream;
+    uint32_t scene_end = 0;
     Dictionary scene_stats;
 };
 

@@ -21,17 +21,31 @@ public:
     void run(std::function<void()> p_task) override {
         auto task = std::make_unique<Task>(Task{ std::move(p_task) });
         const int64_t id = WorkerThreadPool::get_singleton()->add_native_task(&Task::call, task.get(), false, "InstanceStream");
+        const std::lock_guard<std::mutex> lock(task_mutex);
         tasks.emplace_back(id, std::move(task));
     }
     void reap(bool p_wait) override {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        for (size_t i = 0; i < tasks.size();) {
-            if (p_wait || pool->is_task_completed(tasks[i].first)) {
-                pool->wait_for_task_completion(tasks[i].first); // releases its id
-                tasks[i] = std::move(tasks.back());
-                tasks.pop_back();
-            } else {
-                i++;
+        for (;;) {
+            std::vector<std::pair<int64_t, std::unique_ptr<Task>>> done;
+            {
+                const std::lock_guard<std::mutex> lock(task_mutex);
+                for (size_t i = 0; i < tasks.size();) {
+                    if (p_wait || pool->is_task_completed(tasks[i].first)) {
+                        done.push_back(std::move(tasks[i]));
+                        tasks[i] = std::move(tasks.back());
+                        tasks.pop_back();
+                    } else {
+                        i++;
+                    }
+                }
+            }
+            // Released without the lock: a running task (p_wait) may start others meanwhile, taken by the next round.
+            for (const std::pair<int64_t, std::unique_ptr<Task>> &t : done) {
+                pool->wait_for_task_completion(t.first); // releases its id
+            }
+            if (!p_wait || done.empty()) {
+                return;
             }
         }
     }
@@ -41,13 +55,35 @@ private:
         std::function<void()> fn;
         static void call(void *p_task) { static_cast<Task *>(p_task)->fn(); }
     };
-    std::vector<std::pair<int64_t, std::unique_ptr<Task>>> tasks; // main thread only
+    std::mutex task_mutex; // run() is called from the drain tasks too
+    std::vector<std::pair<int64_t, std::unique_ptr<Task>>> tasks;
 };
 
 } // namespace
 
 std::unique_ptr<StreamExecutor> StreamExecutor::pool() {
     return std::make_unique<PoolExecutor>();
+}
+
+void StreamExecutor::run(std::function<void()> p_task) {
+    const std::lock_guard<std::mutex> lock(queue_mutex);
+    queued.push_back(std::move(p_task));
+}
+
+void StreamExecutor::reap(bool /* p_wait */) {
+    for (;;) {
+        std::vector<std::function<void()>> now;
+        {
+            const std::lock_guard<std::mutex> lock(queue_mutex);
+            now.swap(queued);
+        }
+        if (now.empty()) {
+            return;
+        }
+        for (const std::function<void()> &task : now) {
+            task();
+        }
+    }
 }
 
 size_t InstanceStream::KeyHash::operator()(const SourceKey &p_k) const {
@@ -105,11 +141,13 @@ void InstanceStream::chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &
     }
 }
 
-InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_tag) {
+InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) {
     const uint64_t t0 = now_usec();
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::unique_lock<std::shared_mutex> lock(mutex);
+    stats.admit_wait_usec += now_usec() - t0;
     Admit answer = READY;
-    const auto it = parked.find(p_chunk);
+    const ParkKey park{ p_chunk, p_owner };
+    const auto it = parked.find(park);
     if (it != parked.end()) {
         it->second.tag = p_tag;
         answer = PARKED;
@@ -118,6 +156,10 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_t
         chunk_keys(p_chunk, keys);
         int missing = 0;
         for (const SourceKey &k : keys) {
+            if (pending >= settings.pending && entries.find(k) == entries.end()) {
+                answer = LATER; // its keys asked for so far stay, computed meanwhile
+                break;
+            }
             const Entry &e = request(k, true);
             if (!e.placed && e.state == Entry::READY) {
                 answer = LATER; // no slot for it (the keys asked for so far stay in their grace)
@@ -127,7 +169,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_t
         }
         if (answer == READY && missing > 0) {
             // Every key asked for this frame is in its grace or not ready: none went meanwhile.
-            Parked &p = parked[p_chunk];
+            Parked &p = parked[park];
             p.tag = p_tag;
             p.seq = ++park_seq;
             p.missing = missing;
@@ -136,7 +178,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_t
                 Entry &e = entries.find(k)->second;
                 pin(e);
                 if (!e.placed) {
-                    e.waiters.push_back({ p_chunk, p.seq }); // place() counts it down
+                    e.waiters.push_back({ park, p.seq }); // place() counts it down
                 }
             }
             answer = PARKED;
@@ -147,26 +189,37 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_t
     return answer;
 }
 
-void InstanceStream::take_ready(std::vector<std::pair<ChunkId, uint64_t>> &r_out) {
-    const std::lock_guard<std::mutex> lock(mutex);
+void InstanceStream::take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) {
+    const std::unique_lock<std::shared_mutex> lock(mutex);
     r_out.clear();
-    std::sort(ready_chunks.begin(), ready_chunks.end(), [this](const ChunkId &p_a, const ChunkId &p_b) { return parked[p_a].seq < parked[p_b].seq; });
-    for (const ChunkId &c : ready_chunks) {
-        const auto it = parked.find(c);
+    // p_owner's first, in park order; the other owners' stay.
+    const auto others = std::stable_partition(ready_chunks.begin(), ready_chunks.end(), [p_owner](const ParkKey &p_k) { return p_k.owner == p_owner; });
+    std::sort(ready_chunks.begin(), others, [this](const ParkKey &p_a, const ParkKey &p_b) { return parked[p_a].seq < parked[p_b].seq; });
+    for (auto c = ready_chunks.begin(); c != others; ++c) {
+        const auto it = parked.find(*c);
         for (const SourceKey &k : it->second.keys) {
             unpin(entries.find(k)->second); // pinned: still there
         }
-        r_out.push_back({ c, it->second.tag });
+        r_out.push_back({ c->chunk, it->second.tag });
         parked.erase(it);
     }
-    ready_chunks.clear();
+    ready_chunks.erase(ready_chunks.begin(), others);
 }
 
-void InstanceStream::hand_back(const ChunkId &p_chunk) {
-    const auto it = parked.find(p_chunk);
+size_t InstanceStream::parked_count(uint64_t p_owner) const {
+    const std::shared_lock<std::shared_mutex> lock(mutex);
+    size_t n = 0;
+    for (const std::pair<const ParkKey, Parked> &p : parked) {
+        n += p.first.owner == p_owner;
+    }
+    return n;
+}
+
+void InstanceStream::hand_back(const ParkKey &p_park) {
+    const auto it = parked.find(p_park);
     if (it != parked.end() && !it->second.done) {
         it->second.done = true;
-        ready_chunks.push_back(p_chunk);
+        ready_chunks.push_back(p_park);
     }
 }
 
@@ -174,6 +227,7 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
     const auto [it, fresh] = entries.try_emplace(p_key);
     Entry &e = it->second;
     if (fresh) {
+        pending++;
         e.key = p_key;
         thread_local std::vector<SourceKey> in;
         source(p_key).inputs(p_key, in);
@@ -233,34 +287,26 @@ void InstanceStream::drain() {
             jobs.pop_front();
         }
         job->run();
-        const std::lock_guard<std::mutex> lock(job_mutex);
-        finished.push_back(std::move(job));
+        const std::unique_lock<std::shared_mutex> lock(mutex);
+        land(std::move(job)); // the keys it completes join jobs: this loop takes them
     }
 }
 
 void InstanceStream::poll() {
     const uint64_t t0 = now_usec();
-    const std::lock_guard<std::mutex> lock(mutex);
+    executor->reap(false); // before the lock: the tests' executor runs its drain tasks here
+    const std::unique_lock<std::shared_mutex> lock(mutex);
     frame++;
-    {
-        const std::lock_guard<std::mutex> job_lock(job_mutex);
-        for (std::unique_ptr<Job> &j : finished) {
-            landing.push_back(std::move(j));
-        }
-        finished.clear();
+    for (const SourceKey &k : viewed) {
+        request(k, false); // kept resident while viewed, started if missing
     }
-    for (int landed = 0; !landing.empty(); landed++) {
-        if (landed > 0 && now_usec() - t0 >= POLL_USEC_MAX) {
-            stats.landed_late += int64_t(landing.size());
+    viewed.clear();
+    for (;;) {
+        const bool too_many = entries.size() - pending > settings.entries;
+        if (!(too_many || input_records > settings.input_records) || !evict_oldest(!too_many)) {
             break;
         }
-        std::unique_ptr<Job> job = std::move(landing.front());
-        landing.pop_front();
-        land(std::move(job));
     }
-    while ((entries.size() > settings.entries || input_records > settings.input_records) && evict_oldest()) {
-    }
-    executor->reap(false);
     const uint64_t dt = now_usec() - t0;
     stats.poll_usec += dt;
     stats.poll_usec_max = MAX(stats.poll_usec_max, dt);
@@ -276,6 +322,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     e.content = std::move(p_job->out);
     e.count = uint32_t(e.content->records.size());
     e.state = Entry::READY;
+    pending--;
     input_records += e.count;
     std::vector<std::pair<SourceKey, uint32_t>> dependents;
     dependents.swap(e.dependents);
@@ -309,7 +356,7 @@ bool InstanceStream::place(Entry &r_entry) {
                         r_entry.count, settings.slot_capacity, GRACE_FRAMES));
             }
             // Its parked chunks go back to their mesher (their pins released, room comes back): asked again, LATER.
-            for (const std::pair<ChunkId, uint64_t> &w : r_entry.waiters) {
+            for (const std::pair<ParkKey, uint64_t> &w : r_entry.waiters) {
                 const auto it = parked.find(w.first);
                 if (it != parked.end() && it->second.seq == w.second) {
                     hand_back(w.first);
@@ -329,7 +376,7 @@ bool InstanceStream::place(Entry &r_entry) {
     input_records -= r_entry.count;
     stats.placed++;
     stats.slots_peak = MAX(stats.slots_peak, slots_used());
-    for (const std::pair<ChunkId, uint64_t> &w : r_entry.waiters) {
+    for (const std::pair<ParkKey, uint64_t> &w : r_entry.waiters) {
         const auto it = parked.find(w.first);
         if (it != parked.end() && it->second.seq == w.second && --it->second.missing == 0) {
             hand_back(w.first);
@@ -383,8 +430,18 @@ void InstanceStream::release(uint32_t p_slot, uint32_t p_count) {
     }
 }
 
-bool InstanceStream::evict_oldest() {
+bool InstanceStream::evict_oldest(bool p_inputs) {
     Entry *e = oldest;
+    for (Entry *last = newest; p_inputs && e != nullptr && e->placed && e != last;) {
+        // Passed over once: to the newest end (its used kept), so the next eviction doesn't walk it again.
+        Entry *const placed = e;
+        e = e->newer;
+        lru_unlink(*placed);
+        lru_link(*placed);
+    }
+    if (p_inputs && e != nullptr && e->placed) {
+        return false; // only placed keys left
+    }
     if (e == nullptr || e->used + GRACE_FRAMES >= frame) {
         return false; // the rest is newer
     }
@@ -441,12 +498,13 @@ void InstanceStream::lru_unlink(Entry &r_entry) {
     r_entry.in_lru = false;
 }
 
-void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const {
+void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out, std::vector<uint32_t> *r_materials) const {
     thread_local std::vector<SourceKey> keys;
     chunk_keys(p_chunk, keys);
     VoxelPos lo, hi;
     chunk_sample_box(p_chunk, param, lo, hi);
     const int lod = ChunkMath::get_lod(p_chunk);
+    const std::shared_lock<std::shared_mutex> lock(mutex); // drain tasks land meanwhile
     for (const SourceKey &k : keys) {
         const auto it = entries.find(k);
         if (it == entries.end() || !it->second.placed) {
@@ -456,7 +514,33 @@ void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r
         const size_t from = r_out.size();
         it->second.content->meeting(lo, hi, lod, r_out);
         for (size_t i = from; i < r_out.size(); i++) {
+            if (r_materials) {
+                r_materials->push_back(it->second.content->records[r_out[i]].material);
+            }
             r_out[i] += settings.slot_base + it->second.slot;
+        }
+    }
+}
+
+void InstanceStream::view_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) {
+    std::vector<SourceKey> keys;
+    std::vector<uint32_t> hit;
+    for (const std::shared_ptr<const ScatterSource> &s : sources) {
+        s->keys(p_voxel, p_voxel, p_lod, keys);
+        // Shared: the drain tasks land under the lock, a writer here would queue behind them. poll() asks for the keys.
+        const std::shared_lock<std::shared_mutex> lock(mutex);
+        for (const SourceKey &k : keys) {
+            viewed.push_back(k);
+            const auto it = entries.find(k);
+            if (it == entries.end() || it->second.state != Entry::READY) {
+                view_missing++;
+                continue;
+            }
+            hit.clear();
+            it->second.content->meeting(p_voxel, p_voxel, p_lod, hit);
+            for (const uint32_t i : hit) {
+                r_out.push_back(it->second.content->records[i]);
+            }
         }
     }
 }
@@ -470,7 +554,7 @@ void InstanceStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vect
             std::shared_ptr<const SourceContent> content;
             std::vector<std::shared_ptr<const SourceContent>> inputs; // the resident ones (the others computed with it)
             {
-                const std::lock_guard<std::mutex> lock(mutex);
+                const std::shared_lock<std::shared_mutex> lock(mutex);
                 const auto it = entries.find(k);
                 if (it != entries.end() && it->second.state == Entry::READY) {
                     content = it->second.content;
@@ -503,12 +587,12 @@ void InstanceStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vect
 }
 
 uint64_t InstanceStream::placements() const {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::shared_lock<std::shared_mutex> lock(mutex);
     return placement_seq;
 }
 
 void InstanceStream::uploads_since(uint64_t p_seq, std::vector<Upload> &r_out) const {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::shared_lock<std::shared_mutex> lock(mutex);
     r_out.clear();
     if (p_seq >= placement_seq) {
         return;
@@ -539,7 +623,7 @@ void InstanceStream::uploads_since(uint64_t p_seq, std::vector<Upload> &r_out) c
 }
 
 Dictionary InstanceStream::get_stats() const {
-    const std::lock_guard<std::mutex> lock(mutex);
+    const std::shared_lock<std::shared_mutex> lock(mutex);
     int64_t placed = 0, ready = 0, running = 0, waiting = 0;
     for (const std::pair<const SourceKey, Entry> &kv : entries) {
         placed += kv.second.placed;
@@ -558,9 +642,9 @@ Dictionary InstanceStream::get_stats() const {
     d["admit_parked"] = stats.admitted[PARKED];
     d["admit_later"] = stats.admitted[LATER];
     d["admit_ms_total"] = double(stats.admit_usec) / 1000.0;
+    d["admit_wait_ms_total"] = double(stats.admit_wait_usec) / 1000.0;
     d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
     d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
-    d["landed_late"] = stats.landed_late;
     d["computed"] = stats.computed;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
     Dictionary by;
@@ -585,6 +669,7 @@ Dictionary InstanceStream::get_stats() const {
     d["input_records"] = input_records;
     d["lists_missing"] = lists_missing.load();
     d["point_computed"] = point_computed.load();
+    d["view_missing"] = view_missing;
     return d;
 }
 

@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -25,34 +26,42 @@
 // go when room is needed (slots, inputs kept, entries), none asked for in the last GRACE_FRAMES (a batch in flight
 // still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
 //
-// Main thread: admit(), take_ready(), poll(), uploads_since(). chunk_list() reads while the main thread waits (build_lists
-// on the pool); point_records() from any thread. Keys are computed by drain tasks of the executor (Godot's pool at low
-// priority), never under the stream's lock.
+// Main thread: admit(), take_ready(), poll(), uploads_since(). chunk_list() reads under a shared lock (build_lists on the
+// pool); point_records() from any thread. Keys are computed by drain tasks of the executor (Godot's pool at low priority),
+// never under the stream's lock, and landed by them under it: a key's dependents start at once, on the same task.
 namespace Archetype {
 
-// Runs the stream's drain tasks: Godot's worker pool at low priority (pool()), or at once on the calling thread (tests).
+// Runs the stream's drain tasks: Godot's worker pool at low priority (pool()), or on the thread calling reap() (tests: a
+// key asked for is computed and landed by the next poll()).
 class StreamExecutor {
 public:
     virtual ~StreamExecutor() = default;
     // How many drain tasks may run side by side.
     virtual int workers() const { return 1; }
-    // Runs p_task, now or later, on any thread.
-    virtual void run(std::function<void()> p_task) { p_task(); }
-    // Releases the finished tasks; p_wait: waits for all of them first.
-    virtual void reap(bool /* p_wait */) {}
+    // Runs p_task later, on any thread. Called from any thread, the stream's lock maybe held.
+    virtual void run(std::function<void()> p_task);
+    // Releases the finished tasks (here: runs the queued ones); p_wait: waits for all of them first. The stream's lock not
+    // held (a drain task takes it).
+    virtual void reap(bool p_wait);
 
     // Godot's WorkerThreadPool, low priority (threading/worker_pool/low_priority_thread_ratio of its threads).
     static std::unique_ptr<StreamExecutor> pool();
+
+private:
+    std::mutex queue_mutex;
+    std::vector<std::function<void()>> queued;
 };
 
 class InstanceStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
-    static constexpr uint64_t POLL_USEC_MAX = 2000; // poll()'s landing time per frame, at most
     static constexpr uint32_t SLOTS_MIN = uint32_t(1) << 16;
     static constexpr uint32_t SLOTS_MAX = uint32_t(1) << 21;
     static constexpr int64_t INPUT_RECORDS = int64_t(1) << 21; // the records of ready keys not in slots (inputs), kept at most
-    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // keys kept at most (the empty ones count)
+    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys kept at most (the empty ones count)
+    // Keys asked for and not landed at most: past it admit() answers LATER for a chunk needing a new key, so the meshers
+    // stop popping (else a frame parks the whole queue: millions of keys waiting, the ones in view behind them).
+    static constexpr size_t PENDING_MAX = size_t(1) << 12;
     static constexpr size_t LOG_MAX = size_t(1) << 16; // placements uploads_since() can replay; a reader further behind gets them all
 
     struct Settings {
@@ -60,12 +69,13 @@ public:
         uint32_t slot_capacity = SLOTS_MIN;
         int64_t input_records = INPUT_RECORDS;
         size_t entries = ENTRIES_MAX;
+        size_t pending = PENDING_MAX;
         size_t log = LOG_MAX;
     };
     enum Admit {
         READY, // every key placed: mesh it now
         PARKED, // the stream keeps it until its keys land (take_ready)
-        LATER, // a key finds no slot: stop popping this frame, ask again later
+        LATER, // a key finds no slot, or too many keys are computing: stop popping this frame, ask again later
     };
     // A placed key's records, sent to the GPU table from record id first.
     struct Upload {
@@ -85,22 +95,29 @@ public:
     uint32_t slot_capacity() const { return settings.slot_capacity; }
 
     // Main thread. Asks for every key the chunk lists (the first asked are computed first). PARKED: the stream pins the
-    // chunk's keys and hands it back through take_ready() with p_tag once they are placed; asked again meanwhile, it stays
-    // parked (with the new tag).
-    Admit admit(const ChunkId &p_chunk, uint64_t p_tag);
-    // Main thread: the parked chunks whose keys are all placed, or which lost a key's slot (asked again, they answer
+    // chunk's keys and hands it back to p_owner (a mesher: each has its own parked chunks) through take_ready() with p_tag
+    // once they are placed; asked again meanwhile, it stays parked (with the new tag).
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag);
+    // Main thread: p_owner's parked chunks whose keys are all placed, or which lost a key's slot (asked again, they answer
     // LATER until there is room), with their tags, in the order they were parked.
-    void take_ready(std::vector<std::pair<ChunkId, uint64_t>> &r_out);
-    // Main thread, once per frame: lands what the drain tasks finished (POLL_USEC_MAX, the rest the next frame), placing
-    // the listed keys and starting the keys whose last input landed, then evicts down to the limits.
+    void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out);
+    // Main thread: p_owner's chunks parked and not taken back yet.
+    size_t parked_count(uint64_t p_owner) const;
+    // Main thread, once per frame: releases the finished drain tasks (keys land as they finish: placed if listed, their
+    // dependents started), then evicts down to the limits.
     void poll();
 
-    // The record ids of the chunk's streamed records whose box test can pass at its samples, in key order. Every key
-    // placed (admit() said READY), else the missing ones are left out and counted (lists_missing).
-    void chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const;
+    // The record ids of the chunk's streamed records whose box test can pass at its samples, in key order, appended, and
+    // their materials to r_materials (if given). Every key placed (admit() said READY), else the missing ones are left out
+    // and counted (lists_missing).
+    void chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out, std::vector<uint32_t> *r_materials = nullptr) const;
     // The streamed records whose box test at p_lod can pass at p_voxel, in key order, appended (copies): a resident key's,
     // else computed here and dropped (counted). Any thread (on the pool's, its loops run inline).
     void point_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) const;
+    // point_records without computing on the caller's thread, under the shared lock: only the landed keys' records are
+    // appended; the next poll() asks for the keys (kept resident while viewed, the missing ones started on the pool). Main
+    // thread (the camera's queries).
+    void view_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out);
 
     // The placement log: every placement bumps placements(). uploads_since(p_seq) hands the keys placed after p_seq that
     // still hold their slots, in placement order (a later one may reuse an earlier one's slots); p_seq older than the log
@@ -114,8 +131,14 @@ private:
     struct KeyHash {
         size_t operator()(const SourceKey &p_k) const;
     };
-    struct ChunkHash {
-        size_t operator()(const ChunkId &p_c) const { return Vector3i64Hasher::hash(p_c); }
+    // A parked chunk: the same chunk parked by two meshers is two of them.
+    struct ParkKey {
+        ChunkId chunk;
+        uint64_t owner = 0;
+        bool operator==(const ParkKey &p_o) const { return chunk == p_o.chunk && owner == p_o.owner; }
+    };
+    struct ParkHash {
+        size_t operator()(const ParkKey &p_k) const { return Vector3i64Hasher::hash(p_k.chunk) ^ size_t(p_k.owner * 0x9E3779B97F4A7C15ull); }
     };
     struct Job {
         const ScatterSource *source = nullptr;
@@ -137,7 +160,7 @@ private:
         std::vector<std::shared_ptr<const SourceContent>> inputs; // WAITING: those landed so far
         int missing = 0; // WAITING: its inputs not landed
         std::vector<std::pair<SourceKey, uint32_t>> dependents; // not READY: the keys waiting for it (and its input index)
-        std::vector<std::pair<ChunkId, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
+        std::vector<std::pair<ParkKey, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
         uint32_t slot = 0;
         uint32_t count = 0;
         bool listed = false; // a chunk lists it: it goes in slots
@@ -162,20 +185,19 @@ private:
     Settings settings;
     std::unique_ptr<StreamExecutor> executor;
 
-    mutable std::mutex mutex; // the main thread's changes vs point_records
+    mutable std::shared_mutex mutex; // the stream's state: the main thread and the drain tasks change it, the lists read it
     std::unordered_map<SourceKey, Entry, KeyHash> entries; // references stay valid across rehashes
     Entry *newest = nullptr; // the LRU list's ends
     Entry *oldest = nullptr;
     uint64_t frame = 0;
+    size_t pending = 0; // entries not READY (never evicted)
 
     std::mutex job_mutex; // the drain tasks' queues
     std::deque<std::unique_ptr<Job>> jobs; // to run
-    std::vector<std::unique_ptr<Job>> finished; // run, to land
     int draining = 0; // drain tasks started and not done
-    std::deque<std::unique_ptr<Job>> landing; // taken from finished, landed by poll() within its budget
 
-    std::unordered_map<ChunkId, Parked, ChunkHash> parked;
-    std::vector<ChunkId> ready_chunks; // parked chunks to hand back
+    std::unordered_map<ParkKey, Parked, ParkHash> parked;
+    std::vector<ParkKey> ready_chunks; // parked chunks to hand back
     uint64_t park_seq = 0;
 
     std::map<uint32_t, uint32_t> free_runs; // first slot -> count, below slots_end
@@ -195,14 +217,16 @@ private:
         int64_t slots_full = 0; // placements refused: no room even after evicting
         int64_t slots_peak = 0;
         int64_t admitted[3] = {}; // per Admit answer
-        int64_t landed_late = 0; // landings left to the next poll (budget spent)
         uint64_t poll_usec = 0;
         uint64_t poll_usec_max = 0;
         uint64_t admit_usec = 0;
+        uint64_t admit_wait_usec = 0; // of admit_usec: waiting for the lock (drain tasks landing)
     };
     Stats stats;
     mutable std::atomic<int64_t> lists_missing{ 0 }; // keys a list needed that weren't placed (stays 0)
     mutable std::atomic<int64_t> point_computed{ 0 }; // point_records' keys computed (not resident)
+    int64_t view_missing = 0; // view_records' keys not landed yet (left out)
+    std::vector<SourceKey> viewed; // view_records' keys since the last poll (main thread), asked for by it
 
     const ScatterSource &source(const SourceKey &p_key) const { return *sources[p_key.source]; }
     // Every source's keys of the chunk, in key order.
@@ -216,15 +240,16 @@ private:
     bool place(Entry &r_entry);
     bool allocate(uint32_t p_count, uint32_t &r_slot);
     void release(uint32_t p_slot, uint32_t p_count);
-    // Evicts the oldest entry if it is out of its grace (false: none can go).
-    bool evict_oldest();
+    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest not placed (making room
+    // for inputs: evicting a placed key frees none, and asked for again it recomputes every key under it).
+    bool evict_oldest(bool p_inputs = false);
     void pin(Entry &r_entry);
     void unpin(Entry &r_entry);
     void touch(Entry &r_entry);
     void lru_link(Entry &r_entry);
     void lru_unlink(Entry &r_entry);
     // A parked chunk handed back by take_ready().
-    void hand_back(const ChunkId &p_chunk);
+    void hand_back(const ParkKey &p_park);
     int64_t slots_used() const { return int64_t(slots_end) - free_slots; }
 };
 

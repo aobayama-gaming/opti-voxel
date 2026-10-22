@@ -109,6 +109,8 @@ func _enter_tree() -> void:
 			terrain.archetype_moments = false
 		if a == "--instance_band=0" and terrain:
 			terrain.archetype_band = false
+		if a == "--stream=0" and terrain:
+			terrain.archetype_stream = false
 		if a.begins_with("--instance_erode=") and terrain:
 			terrain.archetype_erode = a.trim_prefix("--instance_erode=").to_float()
 		if a.begins_with("--instance_resolve=") and terrain:

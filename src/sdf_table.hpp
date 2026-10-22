@@ -52,8 +52,13 @@ public:
         forest_count = p_count;
         forest_area = p_area;
     }
+    // Whether the scatter and the forest stream (instance_stream.hpp: their keys computed as the chunks ask for them, their
+    // records in GPU slots past the table's), else placed whole in the table at configure (the reference; the tests that
+    // edit their records). Set before configure().
+    void set_stream_sources(bool p_enabled) { stream_sources = p_enabled; }
+    // The forest's trees, in id order (placed whole only).
     const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
-    // The procedural sources the scene placed (cell_scatter.hpp), by name: "scatter", "trees" (empty without them).
+    // The procedural sources of the scene (cell_scatter.hpp), by name: "scatter", "trees" (empty without them).
     struct Source {
         const char *name = "";
         Archetype::CellScatter scatter;
@@ -103,11 +108,23 @@ public:
     using SDFBase::get_gpu_table; // the const form
 
     // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box, band or
-    // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp).
-    bool cull_exempt(const ChunkId &p_node, int p_lod) const override {
-        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        return snap && snap->near_instance(p_node, p_lod);
-    }
+    // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp). A streamed source's records
+    // stand on the ground: a node of its zone is kept while its corners are within the records' ground_reach of it.
+    bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const override;
+
+    // The streamed sources' gating (InstanceStream::admit; every chunk READY without them).
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) override;
+    void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) override;
+    size_t parked_count(uint64_t p_owner) const override { return stream ? stream->parked_count(p_owner) : 0; }
+    // poll_rebuild(), then the stream's poll.
+    void poll() override;
+    // The streamed sources (null when none streams).
+    const Archetype::InstanceStream *get_stream() const { return stream.get(); }
+    // The records the CPU folds at p_voxel for a LOD-p_lod sample, in fold order (compose_list): r_list indexes the
+    // returned view, valid until the next call on this thread. Any thread.
+    // p_view: the streamed keys not landed yet are left out instead of computed (InstanceStream::view_records; main thread).
+    Archetype::RecordView point_list(const Archetype::InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list,
+            bool p_view = false) const;
 
     // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the records when
     // it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh.
@@ -141,6 +158,8 @@ protected:
     // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
     // (metres). Call from configure(), after SDFBase's and once ground_y works.
     void build_table(int p_lod_count);
+    // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
+    void stop_streaming();
 
 private:
     // The library indices the scenes place.
@@ -178,6 +197,9 @@ private:
     double forest_area = 60.0; // --tree_area (metres)
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
     std::vector<Source> sources;
+    bool stream_sources = true; // --stream
+    std::vector<std::shared_ptr<const Archetype::ScatterSource>> streamed; // the valid sources, by their id
+    std::shared_ptr<Archetype::InstanceStream> stream; // the gpu table shares it
     double biome_radius = 0.0; // --biomes (metres)
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
@@ -231,6 +253,8 @@ private:
     // Every site of p_source in its zone, appended to the records (each a contiguous run, kept whole or left out), and
     // its stats under r_stats[p_name]; the sites' runs to r_spans if given.
     void add_source(const Archetype::CellScatter &p_source, const char *p_name, Dictionary &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
+    // The sources as keys of a stream whose slots start at p_slot_base, and their stats.
+    void add_stream(uint32_t p_slot_base, Dictionary &r_stats);
     // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
     void add_biomes(const Types &p_types, Dictionary &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
@@ -246,7 +270,7 @@ private:
     void blob_changed(uint32_t p_id, const Archetype::TableRecord &p_old, const Archetype::TableRecord &p_new, int p_lod, std::vector<uint32_t> &r_ids);
     // Finishes and appends r_records (one feature) if every one fits the table (record_fit_error, the limits of a
     // runtime edit), else none (ERR naming p_what).
-    bool admit(std::vector<Archetype::TableRecord> &r_records, const char *p_what);
+    bool admit_records(std::vector<Archetype::TableRecord> &r_records, const char *p_what);
     // Whether column (p_x, p_z) is in or near a lava lake (Biome::LAKE_KEEP_OUT radii): no tree or rock there (the
     // sources' accept). Column-based: the climate stack's per-cell picks replace it.
     bool in_lake(int64_t p_x, int64_t p_z) const;
