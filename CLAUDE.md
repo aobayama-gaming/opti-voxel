@@ -319,6 +319,14 @@ to every change, and a reviewer may reject a PR on any of them.
   `MARGIN_CELLS` (`PRUNE_CELLS` + 1) cells and judges its own cells (`MomentLayerParams::judged`): on part layers the
   LOD-0 tiles' records (the whole build's blobs bit for bit, unit test), above them proxies (unsnapped `surface_sites`,
   2 per cell side, the profile's lost moments: mass within 10%). `SDFTable::source_setup` gives a source's setup.
+  **Stream (`src/instance_stream.*`, not wired yet):** `InstanceStream` holds the keys asked for in one table (empty ones
+  too) with an intrusive LRU: `admit(chunk, tag)` answers READY (every key placed), PARKED (its keys pinned; `take_ready()`
+  hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
+  tasks on Godot's pool at low priority (`StreamExecutor`, inline in the tests; `low_priority_thread_ratio` 0.5), a key's
+  inputs handed to it as shared pointers; `poll()` lands them (2 ms a frame) and places the listed ones in slots past the
+  table's capacity, logged per placement (`uploads_since(seq)`; a reader past the log gets every placed key). Eviction:
+  oldest first, never pinned or asked for in the last `GRACE_FRAMES` (16). `point_records`: resident keys, else computed and
+  dropped. Unit tests: park / return order, pins and grace, slot reuse with the log, slots full -> LATER with no deadlock.
   **Trees (step 5, `src/tree_archetype.*`):** a tree is a contiguous run of plain records, all smooth union
   (`SDFTable::get_trees()`: `TreeSpan` first id + count), no change to the IR, the fold or the meshers.
   Library types 3 `branch` (a tapered capsule {height, radius, slope}, slope = (r1 - r0) / height from the
