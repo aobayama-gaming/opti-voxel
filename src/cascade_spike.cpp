@@ -472,27 +472,14 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     return d;
 }
 
-// G10 (biome materials): the meshers' cascade passes on a climate set (4c and the other sets asked), every LOD's batch: each sample's
+// G10 (biome materials): the meshers' cascade passes on the example climate (set 4c), every LOD's batch: each sample's
 // sdf_material (no instance: the ground's pick, cascade_ground_material, at the solid samples) against SDFCascade::ground_material of the CPU
 // run's level slots (the fields carried everywhere, like the chunk passes), bit for bit; and how many biomes showed.
-// Empty for a set without a climate (8, 4) or with fewer than 3 biomes (nothing for ok to count); a climate set whose
-// table was refused fails.
-Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
+Dictionary check_biomes(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_param) {
     Dictionary d;
-    if (p_set == SpikeSet::H8 || p_set == SpikeSet::L4) {
-        return d;
-    }
     ChunkParam param = p_param;
     SDFCascade sdf;
-    configure_variant(sdf, p_set, p_lods, param);
-    if (sdf.get_climate() == nullptr) {
-        d["ok"] = false;
-        d["error"] = "the climate was refused: " + sdf.get_climate_error();
-        return d;
-    }
-    if (sdf.get_climate()->biomes.size() < 3) {
-        return d;
-    }
+    configure_variant(sdf, SpikeSet::L4C, p_lods, param);
     const int cs = param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
     const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
@@ -872,25 +859,11 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
         report["table"] = d;
     }
     if (bool(p_options.get("biomes", true))) {
-        // The example climate always, and every other set asked whose climate has biomes to pick.
-        Dictionary biomes;
-        std::vector<SpikeSet> climates = { SpikeSet::L4C };
-        for (const SpikeSet set : sets) {
-            if (std::find(climates.begin(), climates.end(), set) == climates.end()) {
-                climates.push_back(set);
-            }
-        }
-        for (const SpikeSet set : climates) {
-            const uint64_t t0 = now_usec();
-            Dictionary d = check_biomes(rd, set, lods, param);
-            if (d.is_empty()) {
-                continue;
-            }
-            d["seconds"] = double(now_usec() - t0) / 1e6;
-            ok = ok && bool(d["ok"]);
-            biomes[set_label(set)] = d;
-        }
-        report["biomes"] = biomes;
+        const uint64_t t0 = now_usec();
+        Dictionary d = check_biomes(rd, lods, param);
+        d["seconds"] = double(now_usec() - t0) / 1e6;
+        ok = ok && bool(d["ok"]);
+        report["biomes"] = d;
     }
     if (bool(p_options.get("points", true))) {
         Dictionary points_report;

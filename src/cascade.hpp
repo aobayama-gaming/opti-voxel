@@ -83,13 +83,10 @@ inline constexpr int MAX_LEVEL = ExactNoise::MAX_K;
 
 // Field groups (Spec::fields, the climate): LINEAR4 channel sets carried down with the ground, each after the
 // ground's CHANNELS slots: field f's channel c is Level slot field_slot(f, c). Group 0 is the ground, 1 + f field f.
-// The GPU code is generated per spec (Spec::group_count), so the cap only sizes the CPU's slot arrays: a world of
-// several landforms (project/climate/region_test.json) carries more than 8 groups.
-inline constexpr int MAX_FIELD_GROUPS = 24;
+inline constexpr int MAX_FIELD_GROUPS = 8;
 // Bands one group may insert on one lattice (they add up in list order); a modulated group has one.
 inline constexpr int MAX_LEVEL_BANDS = 4;
 inline constexpr int MAX_GROUPS = 1 + MAX_FIELD_GROUPS;
-static_assert(MAX_GROUPS <= 32, "group masks (Modulation::modulated, Spec::cell_groups) are 32-bit");
 inline constexpr int SLOTS = CHANNELS + 4 * MAX_FIELD_GROUPS;
 constexpr int field_slot(int p_field, int p_channel = VALUE) {
     return CHANNELS + 4 * p_field + p_channel;

@@ -28,12 +28,13 @@ Float4 edge_weight(const Edge &p_edge, const Float4 &p_x) {
 
 } // namespace
 
-Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_FIELDS]) {
-    Float4 r{ 0.0f, 0.0f, 0.0f, 1.0f };
-    for (const Edge &e : p_edges) {
-        r = dmul(r, edge_weight(e, p_fields[e.field]));
+int Table::field_index(const String &p_name) const {
+    for (size_t i = 0; i < fields.size(); i++) {
+        if (fields[i].name == p_name) {
+            return int(i);
+        }
     }
-    return r;
+    return -1;
 }
 
 void apply_terms(const Table &p_table, const float p_slots[Cascade::SLOTS], Float4 r_fields[MAX_FIELDS]) {
@@ -116,16 +117,6 @@ double ground_step(const Table &p_table, int p_lod, double p_ground_amp) {
     double amp = p_ground_amp;
     for (const HeightTerm &t : p_table.heights) {
         amp += std::fabs(double(t.coef)) * (t.has_curve ? double(curve_slope_bound(t.curve)) : 1.0) * field_step(p_table, t.field, p_lod, p_ground_amp);
-        if (t.region >= 0) {
-            // r v steps by at most |r| |dv| + |v| |dr|, |r| <= 1: the term's own step above, plus its bound times the
-            // region's (a smoothstep's slope is at most 1.5 |scale|, a product of values in [0, 1] adds its factors', and
-            // r stays in [0, 1]: at most 1).
-            double region = 0.0;
-            for (const Edge &e : p_table.regions[size_t(t.region)].edges) {
-                region += 1.5 * std::fabs(double(e.scale)) * field_step(p_table, e.field, p_lod, p_ground_amp);
-            }
-            amp += std::fabs(double(t.coef)) * double(curve_value_bound(t.curve)) * std::min(region, 1.0);
-        }
     }
     return p_table.has_terraces() ? 2.0 * amp : amp;
 }
@@ -143,7 +134,11 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
     Float4 rest{ 0.0f, 0.0f, 0.0f, 1.0f };
     const size_t n = p_table.biomes.size();
     for (size_t b = 0; b + 1 < n; b++) {
-        r_w[b] = dmul(rest, edges_value(p_table.biomes[b].edges, p_fields));
+        Float4 r{ 0.0f, 0.0f, 0.0f, 1.0f };
+        for (const Edge &e : p_table.biomes[b].edges) {
+            r = dmul(r, edge_weight(e, p_fields[e.field]));
+        }
+        r_w[b] = dmul(rest, r);
         rest = dsub(rest, r_w[b]);
     }
     if (n > 0) {

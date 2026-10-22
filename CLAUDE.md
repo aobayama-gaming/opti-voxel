@@ -477,7 +477,7 @@ to every change, and a reviewer may reject a PR on any of them.
 - **Climate** (`src/climate.{hpp,cpp}`; `VoxelTerrain.climate_path` / `--climate=PATH`, bench and player; off by
   default): a climate is data, a JSON table (format above `parse()`, example `project/climate/example.json`, tuned for
   5 cm: at 0.5 m its x2 mountains exceed the cap and the table is refused) checked against
-  `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (= `Cascade::MAX_FIELD_GROUPS`, 24) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
+  `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (8) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
   the ground's range (seeds `make_octave(field seed, k)`, keyed by k; a `from_m` .. `to_m` range of bands or multipliers
   keeps the octaves the LOD count has, each at the same amplitude, so one table covers the whole spectrum at 15 and 25
   LODs; a single wavelength outside is refused), plus linear terms `coef * (the ground or an earlier
@@ -587,12 +587,6 @@ to every change, and a reviewer may reject a PR on any of them.
   - A climate whose only biome modulates the ground with no field now takes the modulated GPU variant
     (`CascadeGLSL::field_range`). Before, the GPU drew the bare ground under a flat desert. Regression: CascadeSpike set
     `4d`, `fieldless_test.json` and a unit test.
-- **Regions** (`"regions"`, `Climate::Region`, `Climate::edges_value` / `glsl_edges_value`): a named product of edges, for
-  several landforms in one table picked by macro climate fields. A biome's `"region"` puts its edges first; a height
-  term's multiplies the term (a curve required: `ground_step` adds the gate's step). `region_test.json` (CascadeSpike
-  set `4r`, 11 field groups) equals `valley.json` bit for bit in its cold core. The field group cap is 24 (the GPU's
-  arrays are sized per spec); every group is carried at every point. Details and the world's next steps:
-  `docs/landforms.md`, "Using a landform in a world".
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL

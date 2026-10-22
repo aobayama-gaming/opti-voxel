@@ -61,10 +61,9 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
     CHECK(h == 16354123549857880415ull);
-    // The modulation's arrays are sized by the spec's group count (4 here), not the cap: with the sizes put back to the
-    // old cap's 9, these texts hash to the pins they had before.
-    CHECK(chunk_text == 1773918487833129905ull);
-    CHECK(point_text == 10794965615656541817ull);
+    // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
+    CHECK(chunk_text == 433764742010390961ull);
+    CHECK(point_text == 10506806479769159991ull);
 }
 
 // The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its
@@ -241,19 +240,6 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     }
     full += "], \"biomes\": [{\"name\": \"a\", \"amp\": [{\"field\": \"ground\", \"from_m\": 1, \"to_m\": 100, \"multifractal\": 2}]}]}";
     CHECK(err(full).contains(vformat("at most %d fields", MAX_FIELDS - 1)));
-    // Regions: declared, unique, with edges; a gated height term has a curve; the default biome takes none.
-    const String cold = R"("regions": [{"name": "cold", "where": [{"field": "t", "max": 0, "fade": 0.1}]}], )";
-    const String curve = R"("curve": [[0, 0], [1, 1]])";
-    CHECK(err(f1 + cold + String(R"("biomes": [{"name": "a", "region": "warm"}, {"name": "b"}]})")).contains("'warm' is not a region"));
-    CHECK(err(f1 + cold + String(R"("heights": [{"field": "t", "height_m": 10, "region": "warm", )") + curve + String(R"(}], "biomes": [{"name": "a"}]})"))
-                    .contains("'warm' is not a region"));
-    CHECK(err(f1 + cold + String(R"("heights": [{"field": "t", "height_m": 10, "region": "cold"}], "biomes": [{"name": "a"}]})")).contains("takes a curve"));
-    CHECK(err(f1 + cold + String(R"("biomes": [{"name": "a", "region": "cold"}]})")).contains("the default"));
-    CHECK(err(f1 + String(R"("regions": [{"name": "c", "where": []}], "biomes": [{"name": "a"}]})")).contains("at least one edge"));
-    CHECK(err(f1 + String(R"("regions": [{"name": "c", "where": [{"field": "t", "min": 0, "fade": 0.1}]}, {"name": "c", "where": [{"field": "t", "min": 0, "fade": 0.1}]}], "biomes": [{"name": "a"}]})"))
-                    .contains("used twice"));
-    CHECK(err(f1 + cold + String(R"("heights": [{"field": "t", "height_m": 10, "region": "cold", )") + curve + String(R"(}], "biomes": [{"name": "a", "region": "cold"}, {"name": "b"}]})")) ==
-            String());
 }
 
 TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and box runs equal point queries") {

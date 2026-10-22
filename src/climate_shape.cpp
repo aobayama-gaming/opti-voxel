@@ -49,32 +49,16 @@ Curve make_curve(const std::vector<double> &p_x, const std::vector<double> &p_y)
     return c;
 }
 
-namespace {
-
-// max |p_f(segment i, a)| over 65 points of each segment, a in [0, 1], and p_seed.
-template <typename F>
-float max_over_segments(const Curve &p_curve, double p_seed, F p_f) {
-    double m = p_seed;
+float curve_slope_bound(const Curve &p_curve) {
+    double m = 0.0;
     for (size_t i = 0; i < p_curve.p.size(); i++) {
         for (int j = 0; j <= 64; j++) {
-            m = std::max(m, std::fabs(p_f(i, j / 64.0)));
+            const double a = j / 64.0;
+            const double d = ((3.0 * p_curve.p[i] * a + 2.0 * p_curve.q[i]) * a + p_curve.r[i]) * p_curve.inv[i];
+            m = std::max(m, std::fabs(d));
         }
     }
     return float(m);
-}
-
-} // namespace
-
-float curve_slope_bound(const Curve &p_curve) {
-    return max_over_segments(p_curve, 0.0, [&](size_t p_i, double p_a) {
-        return ((3.0 * p_curve.p[p_i] * p_a + 2.0 * p_curve.q[p_i]) * p_a + p_curve.r[p_i]) * p_curve.inv[p_i];
-    });
-}
-
-float curve_value_bound(const Curve &p_curve) {
-    // The segments reach every point but the last one (constant past the ends).
-    return max_over_segments(p_curve, std::fabs(double(p_curve.y_last)),
-            [&](size_t p_i, double p_a) { return ((p_curve.p[p_i] * p_a + p_curve.q[p_i]) * p_a + p_curve.r[p_i]) * p_a + p_curve.s[p_i]; });
 }
 
 bool Table::has_state() const {
@@ -201,16 +185,6 @@ String curve_glsl(const Curve &p_c, int p_i) {
 
 } // namespace
 
-std::vector<int> gated_regions(const Table &p_table) {
-    std::vector<int> r;
-    for (int i = 0; i < int(p_table.regions.size()); i++) {
-        if (std::any_of(p_table.heights.begin(), p_table.heights.end(), [&](const HeightTerm &p_t) { return p_t.region == i; })) {
-            r.push_back(i);
-        }
-    }
-    return r;
-}
-
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
     Float4 h = to_float4(p_slots);
     if (!p_table.has_ground_terms()) {
@@ -218,13 +192,9 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
     }
     Float4 f[MAX_FIELDS];
     apply_terms(p_table, p_slots, f);
-    Float4 region[MAX_REGIONS];
-    for (const int r : gated_regions(p_table)) {
-        region[r] = edges_value(p_table.regions[size_t(r)].edges, f);
-    }
     for (const HeightTerm &t : p_table.heights) {
-        const Float4 v = dscale(t.has_curve ? eval_curve(t.curve, f[t.field]) : f[t.field], t.coef);
-        h = dadd(h, t.region >= 0 ? dmul(region[t.region], v) : v);
+        const Float4 v = t.has_curve ? eval_curve(t.curve, f[t.field]) : f[t.field];
+        h = dadd(h, dscale(v, t.coef));
     }
     if (!p_table.has_terraces()) {
         return h;
@@ -254,14 +224,11 @@ String ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
     code += "\n// Climate::ground_value: the cascade's ground, the height terms, then the biomes' terraces; (value, gradient).\n";
     code += "vec4 climate_ground(Ch pre) {\n";
     code += glsl_weights(p_table, p_combined);
-    for (const int r : gated_regions(p_table)) {
-        code += glsl_edges_value(vformat("rg%d", r), p_table.regions[size_t(r)].edges);
-    }
     code += "    vec4 h = g0;\n";
     for (size_t i = 0; i < p_table.heights.size(); i++) {
         const HeightTerm &t = p_table.heights[i];
-        const String v = vformat("cl_scale(%s, %s)", t.has_curve ? vformat("cl_curve%d(f%d)", int64_t(i), t.field) : vformat("f%d", t.field), glsl_float(t.coef));
-        code += vformat("    h = cl_add(h, %s);\n", t.region >= 0 ? vformat("cl_mul(rg%d, %s)", t.region, v) : v);
+        const String v = t.has_curve ? vformat("cl_curve%d(f%d)", int64_t(i), t.field) : vformat("f%d", t.field);
+        code += vformat("    h = cl_add(h, cl_scale(%s, %s));\n", v, glsl_float(t.coef));
     }
     code += "    vec4 base = h;\n";
     for (size_t b = 0; b < p_table.biomes.size(); b++) {

@@ -9,7 +9,7 @@
 // cost of the ground materials alone), "4p" the plain climate (the example before shaped bands: amplitudes only), "4s"
 // the shaped test table (every shaped-band operation: shapes, the multifractal state, warps, cell noise, height terms,
 // terraces), "4d" project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
-// field group), "4r" project/climate/region_test.json (two landforms behind regions, gated height terms, 11 groups).
+// field group).
 namespace CascadeSpikeSets {
 
 enum class SpikeSet {
@@ -20,9 +20,8 @@ enum class SpikeSet {
     L4P,
     L4S,
     L4D,
-    L4R,
 };
-inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d", "4r" };
+inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d" };
 
 // The example climate is tuned for 5 cm voxels (its modulated octaves stay under the cap there).
 inline constexpr float CLIMATE_VOXEL = 0.05f;
@@ -39,11 +38,7 @@ inline bool parse_variant(const String &p_label, SpikeSet &r_set) {
             return true;
         }
     }
-    String labels;
-    for (const char *l : SET_LABELS) {
-        labels += String(labels.is_empty() ? "" : ", ") + l;
-    }
-    ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + String("' (") + labels + String(")."));
+    ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + String("' (8, 4, 4c, 4f, 4p, 4s, 4d)."));
 }
 
 // p_sdf configured for p_v (r_param: the variant's chunk parameters).
@@ -55,7 +50,6 @@ inline void configure_variant(SDFCascade &p_sdf, SpikeSet p_v, int p_lods, Chunk
         const char *path = p_v == SpikeSet::L4P ? "res://climate/plain.json"
                 : p_v == SpikeSet::L4S          ? "res://climate/shaped_test.json"
                 : p_v == SpikeSet::L4D          ? "res://climate/fieldless_test.json"
-                : p_v == SpikeSet::L4R          ? "res://climate/region_test.json"
                                                 : "res://climate/example.json";
         const String err = Climate::load(path, data);
         ERR_FAIL_COND_MSG(!err.is_empty(), "CascadeSpike: " + err);
