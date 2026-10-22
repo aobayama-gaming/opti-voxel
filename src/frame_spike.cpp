@@ -1,6 +1,8 @@
 #include "frame_spike.hpp"
 
 #include "biome_features.hpp"
+#include "cascade.hpp"
+#include "climate.hpp"
 
 #include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
@@ -83,6 +85,9 @@ constexpr int I64_SHIFTS[] = { 0, 1, 5, 31, 32, 33, 47, 63 };
 constexpr int I64_SHIFT_COUNT = int(sizeof(I64_SHIFTS) / sizeof(I64_SHIFTS[0]));
 constexpr int32_t I64_ADDS[] = { 0, 1, -1, -896, 2147483647, -2147483647 - 1 };
 constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
+// Stretch factors (log2) of the stretched-band probe: 1 to Climate::MAX_STRETCH.
+constexpr int STRETCHES[] = { 1, 3, Climate::MAX_STRETCH };
+constexpr int STRETCH_COUNT = int(sizeof(STRETCHES) / sizeof(STRETCHES[0]));
 // Hash-random points per origin, besides the fixed grid; fuzzed archetype programs and how many probes
 // share one shader (one dispatch per set and origin).
 constexpr int RANDOM_POINTS = 1024;
@@ -114,8 +119,10 @@ BaseSurface sphere_probe_base() {
     return BaseSurface::sphere(VoxelPos(int64_t(1) << 31, -(int64_t(1) << 32), 0), 4294967296.0 - 1000.5);
 }
 
-// The flat base probe's datum (LOD0 voxels).
+// The flat base probe's datum (LOD0 voxels): not a multiple of the stretches, so their remainders reach the fraction.
 constexpr int64_t PROBE_FLAT_DATUM = 600;
+// The LOD of the sphere stretch probe's base sample.
+constexpr int PROBE_STRETCH_LOD = 3;
 // probe_region: its hash, then 10 values f = (u >> F_SHIFT) - F_BIAS times F_SCALE in [-1, 1), d = f * D_SCALE, H = f * H_SCALE.
 constexpr uint32_t PROBE_REGION_SEED = 0xBA5Eu;
 constexpr uint32_t PROBE_REGION_SALT = 0x5EEDu;
@@ -268,6 +275,96 @@ void probe_octave_cell(WorldPos p, uint b) {
             return true;
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
+        p.continuity_word = 3;
+        probes.push_back(p);
+    }
+    {
+        // A stretched band's position on the flat base (BaseSurface::stretched / base_stretched): datum + (y - datum) over
+        // 2^j with the frame's int64 helpers, across low-word wraps and at far origins (the datum not a multiple of 2^j).
+        Probe p;
+        p.name = "stretched";
+        p.words = 3 * STRETCH_COUNT;
+        const BaseSurface flat = BaseSurface::flat(PROBE_FLAT_DATUM);
+        p.glsl = flat.glsl_stretch() + String("void probe_stretched(WorldPos p, uint b) {\n");
+        for (int i = 0; i < STRETCH_COUNT; i++) {
+            p.glsl += vformat("    { WorldPos q = base_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
+                              "results[b + %du] = floatBitsToUint(q.frac.y); }\n",
+                    STRETCHES[i], 3 * i, 3 * i + 1, 3 * i + 2);
+        }
+        p.glsl += "}\n";
+        p.cpu = [flat](const WorldPos &q, uint32_t *r) {
+            for (int i = 0; i < STRETCH_COUNT; i++) {
+                const WorldPos s = flat.stretched(q, STRETCHES[i], Float4{}, 0);
+                r[3 * i] = lo32(s.voxel.y);
+                r[3 * i + 1] = uint32_t(hi32(s.voxel.y));
+                r[3 * i + 2] = float_bits(s.frac.y);
+            }
+            return true;
+        };
+        probes.push_back(p);
+    }
+    {
+        // On a sphere (BaseSurface::stretched / base_stretched_at, stretch_gradient / base_stretch_gradient_at): the point
+        // moved by the base sample's float offset, the gradient's up component scaled, the sample from a hashed region at
+        // LOD PROBE_STRETCH_LOD.
+        Probe p;
+        p.name = "stretched_sphere";
+        p.words = 13 * STRETCH_COUNT;
+        const BaseSurface sphere = sphere_probe_base();
+        p.glsl = sphere.glsl_stretch() + String("void probe_stretched_sphere(WorldPos p, uint b) {\n");
+        p.glsl += vformat("    int m = int(params.lod_bias) + %d;\n    vec4 base = base_curvature(p, m, probe_region(p, m));\n", PROBE_STRETCH_LOD);
+        p.glsl += "    vec4 g = noise_fbm3d(p, 0);\n";
+        for (int i = 0; i < STRETCH_COUNT; i++) {
+            p.glsl += vformat("    { WorldPos q = base_stretched_at(p, %d, base, m); vec4 h = base_stretch_gradient_at(g, %d, base); uint o = b + %du;\n", STRETCHES[i],
+                    STRETCHES[i], 13 * i);
+            p.glsl += "      for (int a = 0; a < 3; a++) { results[o + uint(a)] = q.lo[a]; results[o + 3u + uint(a)] = uint(q.hi[a]); results[o + 6u + uint(a)] = floatBitsToUint(q.frac[a]); }\n";
+            p.glsl += "      for (int a = 0; a < 4; a++) { results[o + 9u + uint(a)] = floatBitsToUint(h[a]); } }\n";
+        }
+        p.glsl += "}\n";
+        const OctaveSet *set = &p_noise.fbm3d;
+        p.cpu = [sphere, set](const WorldPos &q, uint32_t *r) {
+            const Float4 base = BaseSurface::curvature_form(q.voxel, PROBE_STRETCH_LOD, probe_region(q.voxel, PROBE_STRETCH_LOD));
+            const Float4 g = fbm(*set, q, 0);
+            for (int i = 0; i < STRETCH_COUNT; i++) {
+                const WorldPos s = sphere.stretched(q, STRETCHES[i], base, PROBE_STRETCH_LOD);
+                const Float4 h = sphere.stretch_gradient(g, STRETCHES[i], base);
+                uint32_t *o = r + 13 * i;
+                for (int a = 0; a < 3; a++) {
+                    o[a] = lo32(s.voxel[a]);
+                    o[3 + a] = uint32_t(hi32(s.voxel[a]));
+                }
+                o[6] = float_bits(s.frac.x);
+                o[7] = float_bits(s.frac.y);
+                o[8] = float_bits(s.frac.z);
+                o[9] = float_bits(h.x);
+                o[10] = float_bits(h.y);
+                o[11] = float_bits(h.z);
+                o[12] = float_bits(h.w);
+            }
+            return true;
+        };
+        probes.push_back(p);
+    }
+    // The cell noise (the climate's cell fields), at the same wavelengths: F1 is 1-Lipschitz per cell.
+    for (int k : PERLIN3_KS) {
+        Probe p;
+        p.name = vformat("cell3_k%d", k);
+        p.words = 4;
+        p.is_float = true;
+        const Vector3i64 o = test_offset(k);
+        const uint32_t seed = 0x3000u + uint32_t(k);
+        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = cell3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed), glsl_lo(o),
+                glsl_hi(o));
+        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
+        p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
+            const Float4 v = cell3(q, k, seed, o);
+            r[0] = float_bits(v.x);
+            r[1] = float_bits(v.y);
+            r[2] = float_bits(v.z);
+            r[3] = float_bits(v.w);
+            return true;
+        };
+        p.continuity_bound = octave_step_bound(k, 1.5);
         p.continuity_word = 3;
         probes.push_back(p);
     }
@@ -838,7 +935,7 @@ String probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_probe
     }
     String code = String(SHADER_TEMPLATE);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + glsl_cell3());
     code = code.replace("/*NOISE*/", p_noise.glsl());
     code = code.replace("/*PROBES*/", probes_glsl);
     return code.replace("/*PROBE_CALLS*/", probe_calls);

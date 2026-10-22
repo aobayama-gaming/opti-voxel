@@ -305,3 +305,83 @@ TEST_CASE("BaseSurface: the tangent plane and the altitude") {
     const double rise = std::sqrt(EARTH_R * EARTH_R + double(u) * double(u)) - EARTH_R;
     CHECK(s.altitude(s.tangent_point(u, 0)) == doctest::Approx(rise).epsilon(1e-6));
 }
+
+// A stretched octave's point on the flat base: datum + (y - datum) / 2^j, exact, negative y and far points included, a
+// fraction that rounds to 1 carried; the gradient's y over 2^j.
+TEST_CASE("BaseSurface: the flat stretch is datum + (y - datum) / 2^j, exactly") {
+    const int64_t datum = 6000; // 300 m at 5 cm: not a multiple of 2^j
+    const BaseSurface b = BaseSurface::flat(datum);
+    int checked = 0;
+    for (const int j : { 1, 3, 8, 20 }) {
+        for (const int64_t y : { int64_t(0), int64_t(5999), int64_t(6000), int64_t(-1), int64_t(-123457), (int64_t(1) << 40) + 3, -(int64_t(1) << 60) + 7 }) {
+            for (const float frac : { 0.0f, 0.25f, 1.0f - 1.0f / 16777216.0f }) {
+                WorldPos p;
+                p.voxel = VoxelPos(11, y, -13);
+                p.frac = Float3{ 0.5f, frac, 0.0f };
+                const WorldPos s = b.stretched(p, j, ExactNoise::Float4{}, 0);
+                CHECK(s.voxel.x == 11);
+                CHECK(s.voxel.z == -13);
+                CHECK(s.frac.x == 0.5f);
+                CHECK(s.frac.y >= 0.0f);
+                CHECK(s.frac.y < 1.0f);
+                // (y - datum + frac) / 2^j, exact in long double, against the stretched point's offset from the datum.
+                const long double want = std::ldexp((long double)(y - datum) + (long double)frac, -j);
+                const long double got = (long double)(s.voxel.y - datum) + (long double)s.frac.y;
+                CHECK(std::fabs(double(got - want)) <= std::ldexp(1.0, -24));
+                checked++;
+            }
+        }
+    }
+    CHECK(checked == 4 * 7 * 3);
+    // The carry: remainder 2^j - 1 plus a fraction just under 1 rounds to 1.
+    WorldPos p;
+    p.voxel = VoxelPos(0, datum + 255, 0);
+    p.frac = Float3{ 0.0f, 1.0f - 1.0f / 16777216.0f, 0.0f };
+    const WorldPos s = b.stretched(p, 8, ExactNoise::Float4{}, 0);
+    CHECK(s.voxel.y == datum + 1);
+    CHECK(s.frac.y == 0.0f);
+    const ExactNoise::Float4 g = b.stretch_gradient(ExactNoise::Float4{ 0.3f, -0.7f, 0.1f, 0.5f }, 3, ExactNoise::Float4{});
+    CHECK(g.x == 0.3f);
+    CHECK(g.y == -0.7f * 0.125f);
+    CHECK(g.z == 0.1f);
+    CHECK(g.w == 0.5f);
+}
+
+// On a sphere: the point moves by (1 - 2^-j) d n (d, n: the base sample), the gradient's up component scales by 2^-j.
+TEST_CASE("BaseSurface: the sphere stretch moves the point along the base's up") {
+    const BaseSurface b = BaseSurface::sphere(CENTRES[2], EARTH_R);
+    const Vector3i64 c = b.centre();
+    double worst_move = 0.0, worst_grad = 0.0;
+    for (uint32_t i = 0; i < 300; i++) {
+        double dir[3];
+        direction(i, 0x57E7u, dir);
+        const int m = int(i % 6);
+        const double alt = (double(i % 23) - 11.0) * 40.0; // up to 440 voxels off the surface
+        WorldPos p;
+        p.voxel = lattice_point(c, dir, EARTH_R + alt, m);
+        p.frac = Float3{ 0.125f, 0.5f, 0.875f };
+        const ExactNoise::Float4 base = b.stretch_base(p.voxel, m);
+        for (const int j : { 1, 3, 8 }) {
+            const WorldPos s = b.stretched(p, j, base, m);
+            const double k = (1.0 - std::ldexp(1.0, -j)) * double(base.w) * std::ldexp(1.0, m);
+            const double n[3] = { double(base.x), double(base.y), double(base.z) };
+            const double frac_p[3] = { 0.125, 0.5, 0.875 };
+            const double frac_s[3] = { double(s.frac.x), double(s.frac.y), double(s.frac.z) };
+            for (int a = 0; a < 3; a++) {
+                const double moved = double(s.voxel[a] - p.voxel[a]) + frac_s[a] - frac_p[a];
+                worst_move = MAX(worst_move, std::fabs(moved + k * n[a]));
+                CHECK(frac_s[a] >= 0.0);
+                CHECK(frac_s[a] < 1.0);
+            }
+            const ExactNoise::Float4 g{ 0.3f, -0.7f, 0.1f, 0.5f };
+            const ExactNoise::Float4 h = b.stretch_gradient(g, j, base);
+            const double gn = 0.3 * n[0] - 0.7 * n[1] + 0.1 * n[2];
+            const double hn = double(h.x) * n[0] + double(h.y) * n[1] + double(h.z) * n[2];
+            worst_grad = MAX(worst_grad, std::fabs(hn - std::ldexp(gn, -j)));
+            CHECK(h.w == 0.5f);
+        }
+    }
+    MESSAGE("sphere stretch: worst move error ", worst_move, " voxels, worst up-gradient error ", worst_grad);
+    CHECK(worst_move < 1e-3);
+    CHECK(worst_grad < 1e-5);
+}

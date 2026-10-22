@@ -148,6 +148,14 @@ public:
     // splices after its channel code, defining `uint cascade_ground_material(Ch ch, WorldPos p)`, the palette index of a
     // sample no record colours (ch: its channels on Λ_L, the fields carried; p: its absolute point). Empty otherwise.
     virtual String get_ground_material_glsl() const { return String(); }
+    // Whether a sample's ground is more than the cascade's ground channels (a climate's height terms or terraces): then
+    // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
+    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample.
+    virtual bool has_ground_terms() const { return false; }
+    virtual String get_ground_glsl() const { return String(); }
+    // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
+    // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
+    virtual String get_climate_helpers_glsl() const { return String(); }
 
     // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it
     // into their samples. The const form only reads (the shader text, the sizes).

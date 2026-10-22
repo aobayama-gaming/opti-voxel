@@ -99,6 +99,7 @@ public:
             spec.bands.clear(); // no top lattice either: a chunk's run is its own level
         }
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
+        spec.base = base; // a climate's stretched octaves stretch along it
         voxel_size = p_param.voxel_size;
         attach_climate();
         build_table(p_lod_count);
@@ -116,7 +117,10 @@ public:
         skirt_depth_table.assign(p_lod_count, 0.0f);
         moment_skirt_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
-            const double amp = octave_step(l);
+            double amp = octave_step(l);
+            if (has_ground_terms()) {
+                amp = Climate::ground_step(*climate, l, amp);
+            }
             const double cell_m = vs * std::ldexp(1.0, l);
             const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
             skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
@@ -125,7 +129,7 @@ public:
     }
 
     // The ground's band step between LOD p_lod and p_lod + 1 (LOD0 voxels): its largest L+2 / L+3 octave, the climate's
-    // largest multiplier of it.
+    // largest multiplier of it. The skirts take it, plus the climate's ground terms (Climate::ground_step).
     double octave_step(int p_lod) const {
         double amp = 0.0;
         for (const Cascade::Band &b : spec.bands) {
@@ -200,9 +204,40 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
         return sdf(ch, p_pos.voxel, p_lod).w;
     }
 
-    // The channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod (Cascade::point_into).
+    // The ground channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod: Cascade::point_into, through
+    // ground_channels where the climate has ground terms (the fields carried).
     void channels_at(const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
-        Cascade::point_into(spec, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod, r_ch);
+        const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
+        if (!has_ground_terms()) {
+            Cascade::point_into(spec, p, p_lod, r_ch);
+            return;
+        }
+        float slots[Cascade::SLOTS];
+        Cascade::point_slots(spec, p, p_lod, slots, true);
+        ground_channels(slots, r_ch);
+    }
+
+    // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_ground_terms): the
+    // samples then read the fields (carried at every level, CPU and GPU, point items too).
+    bool has_ground_terms() const override { return ground_terms; }
+    // The ground channels of a point's slots p_slots (the fields carried): Climate::ground_value, or the cascade's
+    // ground channels as they are (GLSL: climate_ground, get_ground_glsl).
+    void ground_channels(const float p_slots[Cascade::SLOTS], float r_ch[Cascade::CHANNELS]) const {
+        for (int c = 0; c < Cascade::CHANNELS; c++) {
+            r_ch[c] = c < Cascade::channel_count(spec.set) ? p_slots[c] : 0.0f;
+        }
+        if (has_ground_terms()) {
+            const ExactNoise::Float4 g = Climate::ground_value(*climate, p_slots);
+            r_ch[Cascade::VALUE] = g.w;
+            r_ch[Cascade::DX] = g.x;
+            r_ch[Cascade::DY] = g.y;
+            r_ch[Cascade::DZ] = g.z;
+        }
+    }
+
+    String get_ground_glsl() const override { return has_ground_terms() ? Climate::ground_glsl(*climate, spec) : String(); }
+    String get_climate_helpers_glsl() const override {
+        return climate && Climate::splices_helpers(*climate, spec) ? Climate::shared_helpers_glsl() : String();
     }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod over the base at LOD0 voxel p_voxel: the unit gradient
@@ -407,6 +442,7 @@ private:
     // The climate_data table on the ground spec (configure, after the ground's bands and voxel size).
     void attach_climate() {
         climate.reset();
+        ground_terms = false;
         climate_error = String();
         set_ground_materials({});
         if (climate_data.is_empty()) {
@@ -417,6 +453,7 @@ private:
         ERR_FAIL_COND_MSG(!climate_error.is_empty(), "SDFCascade: " + climate_error);
         spec = Climate::combined_spec(table, spec);
         climate = std::move(table);
+        ground_terms = climate->has_ground_terms();
         std::vector<std::pair<String, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < climate->biomes.size(); b++) {
             grounds.emplace_back("biome:" + climate->biomes[b].name, Climate::biome_material(climate->biomes[b]));
@@ -437,6 +474,7 @@ private:
     float voxel_size = 0.5f;
     int k_top = 0; // the coarsest octave (lod_count + 4)
     std::optional<Climate::Table> climate;
+    bool ground_terms = false; // climate->has_ground_terms(), read per sample
     String climate_error;
     float amp_cap = 0.0f; // MAX_AMP_M in LOD0 voxels
 };

@@ -489,7 +489,7 @@ to every change, and a reviewer may reject a PR on any of them.
   over any fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes
   the rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64.
   `pick`: argmax, ties by `hash_cell` of the absolute voxel (the same from every LOD). **One climate:** every reader
-  (the modulation, the pick, the report) goes through `Climate::state` (field terms, then weights; GLSL `glsl_weights`),
+  (the modulation, the pick, the terraces, the report) goes through `Climate::state` (field terms, then weights; GLSL `glsl_weights`),
   and what reaches it is the LOD rule: octave k reads the climate of its insertion level before that level's
   insertions, the pick and the report read level 0 (the report's pick drift shows the gap). No per-biome mean height: one
   lattice can't carry it without the coarser LODs missing it (a step no skirt hides); it needs its own design.
@@ -541,6 +541,58 @@ to every change, and a reviewer may reject a PR on any of them.
   example (2 runs, GPU at 1.5 GHz): load +2%, SDF pass per batch +10-13%, steady render GPU +0%, fly p50 +11%
   (the climate vs none, earlier and throttled: steady render GPU +6%, SDF pass +19%). `--view=12` (B in the player, V cycles to it) paints each biome its
   debug colour. A field no edge, term or multiplier reads is carried anyway: leave it out of the table.
+- **Shaped bands** (`src/climate_modulator.cpp`, `src/climate_shape.cpp`, GLSL `src/cascade_shaped_glsl.cpp`; the table keys above
+  `Climate::parse`, `src/climate_parse.cpp`): libnoise's
+  complex planet's operations as cascade data, every one optional per biome and band range, CPU and generated GLSL op
+  for op. (1) A band's **shape** `c0 + cn n + cabs |n| + csq n^2` (`Climate::Shape`: plain, billow, ridged, square,
+  scale / offset, or coeffs) is inserted without its mean (`Cascade::NOISE_ABS_MEAN` / `NOISE_SQ_MEAN`, measured: a
+  coarser LOD dropping the band makes no per-biome step); `|n|` is `Cascade::smooth_abs`, `sqrt(n^2 + 0.01) - 0.1`
+  (with the bare kink the Hermite subdivision rang along the lattice axes: ridged bands' gradient channels 21% off the
+  values' finite differences against 2.5% plain, and a multifractal's state streaked). The `Modulation` returns a
+  `Cascade::BandMod` per group: three amplitudes, the state, the warp, a feature mask. (2) **Multifractal** (`"multifractal":
+  gain`): the octave is weighted by `clamp(gain (1 - c))`, c a band-less field group (`Modulation::state_group`, the
+  table's fields + 1, so at most 7 fields) that the ground's band overwrites with the complement of its weighted
+  uncentred signal (Musgrave's ridged multifractal: gain 2 + ridged; hybrid: 1 + plain + offset). (3) **Warp**
+  (`"warp_m"` + three `"warp_fields"`): the band's noise is read at the point displaced by the fields' values (int64 +
+  fraction, `WARP_LIMIT`), its gradient by the chain rule (the fields' gradients). Slope damping (Quilez, de Carpentier)
+  and the swiss turbulence's warp by the ground's slope were built and dropped: their own gradient needs the ground's
+  second derivatives, which LINEAR4 doesn't carry, and without it the finer levels' values streak (climate report:
+  6-13% gradient error, visible lines). (4) **Height terms** (`"heights"`: `height_m * curve(field)`, libnoise's Curve)
+  and per-biome **terraces** (libnoise's Terrace, blended by the weight) are added to the ground at each sample,
+  after the cascade (`Climate::ground_value` / GLSL `climate_ground`, through `SDFCascade::ground_channels` on every
+  path: chunk samples, point items, `ground_y`, the report); the fields are then carried at every level, point items
+  too (`CascadeGLSL::field_range`), and the skirts take the terms' step (`Climate::ground_step`: the height fields'
+  terms, twice that with terraces for their slope, plus the terrace blend's change with the weights, each terraced biome's
+  weight step times a quarter of its step; unit test: the L | L+1 step stays within the skirt on the example and
+  `shaped_test.json`). Refused: an `"offset"` without a multifractal (plain, billow and square bands are inserted without
+  their mean, so only the state reads it), a curve the field's values never reach, a height term over the ground's
+  amplitude cap. That is what
+  lifts land per region (the per-biome mean height the plain cascade couldn't do). (5) **Cell noise** (`"noise":
+  "cell"`): Worley F1 over 3 x 3 x 3 jittered cells (`ExactNoise::cell3` / `glsl_cell3`, FrameSpike's `cell3_k*`),
+  centred by `CELL_MEAN`, read through height terms; creased (cones, cell borders), it measures 7.2% gradient error on
+  25-100 m dunes, no streaks. A table without these keys is the old path bit for bit (unit
+  test: `project/climate/plain.json`, the example before them, pins every slot, the SDF, the skirts and both level
+  shaders' text). `project/climate/example.json` is now a world composed like libnoise's (continent curve, a twisted
+  terrain type choosing ridged-multifractal mountains lifted inland, billow hills, terraced badlands, low plains,
+  ridged river channels, three warp fields); `shaped_test.json` exercises every operation (CascadeSpike set `4s`; `4p`
+  the plain table). The look target, a numpy port of libnoise's graph, and the gallery of the techniques are outside
+  the repo (`~/Drive/perso/opti-voxel/terrain-research-2026-10-21/`). Checks: CascadeSpike 4c / 4p / 4s G1, G3, points
+  and G10 (0 differing), FrameSpike, discovery audit (11 poses, compare) and origin parity on the example climate, a
+  validated forest5cm load. Cost (128-chunk batches): the example's passes 4.2-4.5x the bare cascade at LODs 0-8,
+  5.6-6.5x at 12-24 (the plain example 2.0-3.9x): 7 fields + the state carried, and level 0 computes the weights three
+  times (modulation, height terms, pick: one shared evaluation is the obvious next step). Forest5cm vs the plain example
+  (2 runs, GPU throttled 73% both sides): SDF pass per batch +17%, load +31%, steady render GPU +12% (+8% triangles:
+  rougher ground), fly p50 out -1%, back -10%. `climate_report.sh` gained `ground_shaded.png` / `ground_normals.png`
+  (hillshade from the heights and from the gradient channels), the per-biome gradient error, sea colours and
+  `--center=U,V`.
+- **Stretched octaves** (`"ground_stretch"`, a band's `"stretch_y"`; `Band::stretch`, at most k − 3; the band table's
+  `info.w`): through the base (`BaseSurface::stretched` / `stretch_gradient`), the noise is read at p − (1 − 2^-j) d n
+  and its gradient's up component scaled by 2^−j. Flat: datum + (y − datum) / 2^j exactly (GLSL `base_stretched`),
+  centred on the datum; sphere: the base sample's float offset (`base_stretched_at`, CPU and GLSL with FrameSpike's
+  `stretched_sphere`; its GPU path needs the planet PR's regions). A table without stretch generates the same shader
+  text (the `plain.json` pin).
+  - Why: the ground is 3D, so a steep landform's dh/dy passes 1 and folds into needles; a stretch of 4 from 100 m up
+    removes them.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL

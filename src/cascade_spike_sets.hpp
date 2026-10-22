@@ -6,7 +6,9 @@
 
 // The terrains CascadeSpike (cascade_spike.cpp) checks and times: "8" / "4" channels, "4c" LINEAR4 with the example
 // climate carried and modulating the ground, "4f" its fields without multipliers (carried only for the biome pick: the
-// cost of the ground materials alone), "4d" project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
+// cost of the ground materials alone), "4p" the plain climate (the example before shaped bands: amplitudes only), "4s"
+// the shaped test table (every shaped-band operation: shapes, the multifractal state, warps, cell noise, height terms,
+// terraces), "4d" project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
 // field group).
 namespace CascadeSpikeSets {
 
@@ -15,9 +17,11 @@ enum class SpikeSet {
     L4,
     L4C,
     L4F,
+    L4P,
+    L4S,
     L4D,
 };
-inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4d" };
+inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d" };
 
 // The example climate is tuned for 5 cm voxels (its modulated octaves stay under the cap there).
 inline constexpr float CLIMATE_VOXEL = 0.05f;
@@ -34,7 +38,7 @@ inline bool parse_variant(const String &p_label, SpikeSet &r_set) {
             return true;
         }
     }
-    ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + String("' (8, 4, 4c, 4f, 4d)."));
+    ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + String("' (8, 4, 4c, 4f, 4p, 4s, 4d)."));
 }
 
 // p_sdf configured for p_v (r_param: the variant's chunk parameters).
@@ -43,7 +47,10 @@ inline void configure_variant(SDFCascade &p_sdf, SpikeSet p_v, int p_lods, Chunk
     if (p_v != SpikeSet::H8 && p_v != SpikeSet::L4) {
         r_param.voxel_size = CLIMATE_VOXEL;
         Dictionary data;
-        const char *path = p_v == SpikeSet::L4D ? "res://climate/fieldless_test.json" : "res://climate/example.json";
+        const char *path = p_v == SpikeSet::L4P ? "res://climate/plain.json"
+                : p_v == SpikeSet::L4S          ? "res://climate/shaped_test.json"
+                : p_v == SpikeSet::L4D          ? "res://climate/fieldless_test.json"
+                                                : "res://climate/example.json";
         const String err = Climate::load(path, data);
         if (!err.is_empty()) {
             ERR_PRINT("CascadeSpike: " + err + String(" (the set runs without its climate)"));

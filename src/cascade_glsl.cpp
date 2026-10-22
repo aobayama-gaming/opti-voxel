@@ -1,6 +1,8 @@
 #include "cascade_glsl.hpp"
 
+#include "cascade_shaped_glsl.hpp"
 #include "chunk_palette.hpp"
+
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "gpu_frame.hpp"
@@ -184,7 +186,7 @@ constexpr ItemFills POINT_FILLS = {
     uint local = gl_GlobalInvocationID.x % (n * n * n);
 )glsl",
     "0",
-    R"glsl(    precise vec4 r = cascade_terrain_sdf(vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod);
+    R"glsl(    precise vec4 r = cascade_terrain_sdf(/*GROUND_C0*/, p, lod);
     sdf_value[sample_index] = r.w;)glsl",
 };
 
@@ -323,14 +325,17 @@ String storage_functions(const Spec &p_spec, int p_stride) {
     return code;
 }
 
+using CascadeShapedGLSL::noise_code;
+using CascadeShapedGLSL::shaped;
+using CascadeShapedGLSL::shaped_band_function;
+using CascadeShapedGLSL::shaped_helpers;
+
 // Cascade's insert_point for group g's band: insert_band_<g> at its constant amplitude (o = channel * factor[order],
 // ch = ch + o: two roundings, precise), insert_band_mod_<g> at a modulated one (Cascade::modulated_channels, the same
 // order); and Cascade::flush_value.
 String band_functions(const Spec &p_spec) {
     const int nch = p_spec.gpu_channels();
-    // perlin3 returns (d/dx, d/dy, d/dz, value): the same bits as perlin3_cross's first four channels.
-    const String perlin3 = "    vec4 g = perlin3(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n";
-    String code;
+    String code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper(p_spec) : String();
     for (int g = 0; g < p_spec.group_count(); g++) {
         const int base = p_spec.gpu_base(g);
         const ChannelSet set = p_spec.group_set(g);
@@ -339,15 +344,20 @@ String band_functions(const Spec &p_spec) {
             code += "    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz, c0, c1);\n";
             code += "    float n[8] = float[8](c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w);\n";
         } else {
-            code += perlin3 + String("    float n[4] = float[4](g.w, g.x, g.y, g.z);\n");
+            // perlin3 returns (d/dx, d/dy, d/dz, value): the same bits as perlin3_cross's first four channels.
+            code += noise_code(p_spec, g, "p");
+            code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
         }
         for (int c = 0; c < channel_count(set); c++) {
             code += vformat("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), base + c,
                     base + c);
         }
         code += "    return ch;\n}\n\n";
-        if (p_spec.modulation && set == ChannelSet::LINEAR4) {
-            code += vformat("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g) + perlin3;
+        if (shaped(p_spec) && set == ChannelSet::LINEAR4 && p_spec.modulation->group_features(g) != 0u) {
+            code += shaped_band_function(p_spec, g);
+        } else if (p_spec.modulation && set == ChannelSet::LINEAR4) {
+            code += vformat("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g);
+            code += noise_code(p_spec, g, "p");
             code += vformat("    precise float aws = amp.w * %s;\n", flt(ExactNoise::exact_pow2(-p_spec.insert_shift)));
             code += vformat("    { precise float o = g.w * amp.w; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", base, base);
             static const char *AXES = "xyz";
@@ -371,7 +381,9 @@ String band_functions(const Spec &p_spec) {
 // insertion, then each group's band of level m (bands[group * BAND_ENTRIES + m]).
 String insert_code(const Spec &p_spec) {
     String code;
-    if (p_spec.modulation) {
+    if (shaped(p_spec)) {
+        code += vformat("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod);\n", p_spec.group_count());
+    } else if (p_spec.modulation) {
         code += vformat("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp);\n", p_spec.group_count());
     }
     for (int g = 0; g < p_spec.group_count(); g++) {
@@ -380,7 +392,11 @@ String insert_code(const Spec &p_spec) {
         }
         code += vformat("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_fields) " : "",
                 g * CascadeGLSL::BAND_ENTRIES);
-        if (p_spec.modulation && p_spec.group_set(g) == ChannelSet::LINEAR4) {
+        if (shaped(p_spec) && p_spec.group_set(g) == ChannelSet::LINEAR4) {
+            const bool own = p_spec.modulation->group_features(g) != 0u;
+            const String call = own ? vformat("insert_band_shaped_%d(ch, p, band, mod[%d], m)", g, g) : vformat("insert_band_mod_%d(ch, p, band, mod[%d].amp[0])", g, g);
+            code += vformat("            ch = ((modulated >> %du) & 1u) != 0u ? %s : insert_band_%d(ch, p, band);\n", g, call, g);
+        } else if (p_spec.modulation && p_spec.group_set(g) == ChannelSet::LINEAR4) {
             code += vformat("            ch = ((modulated >> %du) & 1u) != 0u ? insert_band_mod_%d(ch, p, band, amp[%d]) : insert_band_%d(ch, p, band);\n", g, g, g, g);
         } else {
             code += vformat("            ch = insert_band_%d(ch, p, band);\n", g);
@@ -461,6 +477,7 @@ PackedByteArray band_table(const Spec &p_spec) {
             bytes.encode_u32(base + 48, 1);
             bytes.encode_u32(base + 52, b.seed);
             bytes.encode_u32(base + 56, uint32_t(b.k));
+            bytes.encode_u32(base + 60, uint32_t(b.stretch));
         }
     }
     return bytes;
@@ -489,9 +506,10 @@ bool ground_materials(const SDFBase *p_sdf) {
 
 FieldRange field_range(const SDFBase *p_sdf, bool p_points) {
     const Spec &spec = *p_sdf->get_cascade();
-    // The climate variant (modulation, the pick where there are fields) wherever a level needs it: a one-biome table
-    // without fields still modulates the ground.
-    const bool everywhere = !p_points && ground_materials(p_sdf);
+    // The climate variant (modulation, ground terms, the pick where there are fields) wherever a level needs it: a one-biome
+    // table without fields still modulates the ground, and a terrace is a ground term. Ground terms read the fields at
+    // every sample, point items too.
+    const bool everywhere = (!p_points && ground_materials(p_sdf)) || p_sdf->has_ground_terms();
     return everywhere ? FieldRange{ 0, MAX_LEVEL } : spec.field_range();
 }
 
@@ -509,7 +527,12 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*ITEM_INDEX*/", fills.item_index);
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
-    const String channels = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod";
+    // The sample's ground channels: the cascade's, or climate_ground's with ground terms (the fields variant only: their
+    // field range is every level, so it is the only one compiled).
+    const String ground = p_fields && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl() : String();
+    const String c0 = ground.is_empty() ? String("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : String("climate_ground(ch)");
+    code = code.replace("/*GROUND_C0*/", c0);
+    const String channels = c0 + String(", p, lod");
     code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c, material, skirt_extra)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
     // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
     // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
@@ -530,13 +553,16 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*MATERIAL_STORE*/", material_store);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : String()));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? p_sdf->get_sample_fold_glsl() : String()));
     const String modulation = spec->modulation ? spec->modulation->glsl(*spec) : String();
     const bool fields = !spec->fields.empty();
     const FieldRange range = field_range(p_sdf, p_points);
     const String fields_flag = fields ? String("bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n\n") : String();
-    code = code.replace("/*CASCADE*/", fields_flag + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole, range))) + band_functions(*spec) + modulation + (pick ? p_sdf->get_ground_material_glsl() : String()));
+    // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
+    // every generated function that uses them.
+    const String helpers = (p_fields ? p_sdf->get_climate_helpers_glsl() : String()) + (shaped(*spec) ? shaped_helpers() : String());
+    code = code.replace("/*CASCADE*/", fields_flag + helpers + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole, range))) + band_functions(*spec) + modulation + (pick ? p_sdf->get_ground_material_glsl() : String()) + ground);
     code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
     code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
 
