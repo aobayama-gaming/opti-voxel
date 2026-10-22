@@ -171,6 +171,11 @@ TEST_CASE("Moment fold: the far-field surface lifts the ground, draws the canopy
     CHECK(flat.w > 0.0f);
     CHECK(flat.w <= 64.0f * h * 1.0001f); // 64 cells where phi is flat
     CHECK(material == 0); // under MOMENT_MATERIAL_ISO: the ground's
+    // Phi over the iso at a near-flat maximum (32 cells first-order): inside, at most MOMENT_DEPTH_CELLS deep (the first-order distance read
+    // 10 cells there, next to samples on the surface: a LOD step past the skirt in the 5 cm forest).
+    const Float4 crest = moment_surface(air, Float4{ 0.0f, 0.0f, 0.0f, 1.5f * MOMENT_ISO }, lod, 7, &material);
+    CHECK(crest.w < 0.0f);
+    CHECK(crest.w == -MOMENT_DEPTH_CELLS * h);
     // Near the ground, under MOMENT_ISO, the lift: phi lowers the field by phi cells (the surface rises), and from
     // MOMENT_MATERIAL_ISO on the sample takes the blob's material.
     material = 0;

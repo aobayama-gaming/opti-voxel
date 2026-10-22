@@ -1,6 +1,10 @@
 
 #include "chunk_math.hpp"
 
+#include "subcube.hpp"
+
+#include <godot_cpp/core/error_macros.hpp>
+
 #include <cmath>
 
 using WorldCoord::ctz64;
@@ -51,6 +55,33 @@ int ChunkMath::get_lod(const ChunkId &coord) {
 
 int64_t ChunkMath::get_lod_size(const ChunkId &coord) {
     return int64_t(1) << get_lod(coord);
+}
+
+uint64_t ChunkMath::subcube_bits(const ChunkId &p_ancestor, const ChunkId &p_descendant) {
+    const int la = get_lod(p_ancestor);
+    const int ld = get_lod(p_descendant);
+    ERR_FAIL_COND_V(ld >= la || int(Subcube::AXIS_BITS) > la + 1, 0);
+    ERR_FAIL_COND_V(get_parent_from_child_until(p_descendant, la) != p_ancestor, 0);
+    // Units from the ancestor's low corner, in [0, 2^(la+1)); a sub-cube spans 2^shift of them.
+    const int shift = la + 1 - int(Subcube::AXIS_BITS);
+    const int64_t half = get_lod_size(p_descendant);
+    const int64_t a_half = get_lod_size(p_ancestor);
+    const ChunkId local = p_descendant - p_ancestor + ChunkId(a_half, a_half, a_half);
+    uint32_t lo[3], hi[3];
+    for (int a = 0; a < 3; a++) {
+        const int64_t v = local[a];
+        lo[a] = uint32_t((v - half) >> shift);
+        hi[a] = uint32_t((v + half - 1) >> shift);
+    }
+    uint64_t bits = 0;
+    for (uint32_t z = lo[2]; z <= hi[2]; z++) {
+        for (uint32_t y = lo[1]; y <= hi[1]; y++) {
+            for (uint32_t x = lo[0]; x <= hi[0]; x++) {
+                bits |= uint64_t(1) << Subcube::bit(x, y, z);
+            }
+        }
+    }
+    return bits;
 }
 
 ChunkId ChunkMath::get_parent_from_child_until(const ChunkId &coord, int target_lod) {
