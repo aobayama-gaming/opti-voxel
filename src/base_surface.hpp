@@ -96,6 +96,21 @@ public:
     static ExactNoise::Float4 curvature_form(const VoxelPos &p_voxel, int p_lod, const Region &p_region);
     ExactNoise::Float4 radius_form(const VoxelPos &p_voxel, int p_lod) const;
 
+    // A stretched octave (the climate's "stretch_y", Band::stretch) reads its noise at p' = p - (1 - 2^-j) d_base(p) n(p):
+    // its wavelength along the base's up 2^j times the tangential ones, whatever the base. FLAT: datum + (y - datum) / 2^j,
+    // exact (the floor to the voxel, the remainder plus the fraction times 2^-j to the fraction, carried at 1). SPHERE: the
+    // float offset of the base sample p_b (stretch_base) split into whole voxels and a fraction, each axis clamped to
+    // STRETCH_LIMIT voxels. GLSL: base_stretched (FLAT), base_stretched_at (SPHERE).
+    static constexpr float STRETCH_LIMIT = 1073741824.0f; // 2^30 voxels: whole floats, an int32 offset
+    // The base sample a stretch reads at LOD0 voxel p_voxel, LOD p_m (the band's insertion lattice): at(); nothing on FLAT.
+    ExactNoise::Float4 stretch_base(const VoxelPos &p_voxel, int p_m) const;
+    WorldPos stretched(const WorldPos &p_pos, int p_j, const ExactNoise::Float4 &p_b, int p_m) const;
+    // The noise's gradient back through the stretch: its up component times 2^-j. FLAT: g.y * 2^-j exactly; SPHERE:
+    // g - (1 - 2^-j) (g.n) n, n = p_b's up. GLSL: base_stretch_gradient (FLAT), base_stretch_gradient_at (SPHERE).
+    ExactNoise::Float4 stretch_gradient(const ExactNoise::Float4 &p_g, int p_j, const ExactNoise::Float4 &p_b) const;
+    // The stretch's GLSL (the cascade's band functions splice it for a stretched spec; after the int64 helpers).
+    String glsl_stretch() const;
+
     // FLAT: `vec4 base_at(WorldPos p, int lod)`. SPHERE: `struct BaseRegion`, `vec4 base_curvature(WorldPos p,
     // int lod, BaseRegion r)` and `vec4 base_radius(WorldPos p, int lod)`. TODO: a SPHERE's base_at (the form picked
     // by the LOD like at()) needs the chunk's regions on the GPU; it comes with the planet PR that uploads them. After the frame functions, the int64 helpers (SPHERE) and GLSL_EXACT_NOISE (det_rsqrt).

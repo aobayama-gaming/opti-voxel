@@ -99,6 +99,7 @@ public:
             spec.bands.clear(); // no top lattice either: a chunk's run is its own level
         }
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
+        spec.base = base; // a climate's stretched octaves stretch along it
         voxel_size = p_param.voxel_size;
         attach_climate();
         build_table(p_lod_count);

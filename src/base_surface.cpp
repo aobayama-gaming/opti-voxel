@@ -149,6 +149,136 @@ Float4 BaseSurface::flat_form(const VoxelPos &p_voxel, int p_lod) const {
     return Float4{ -0.0f, 1.0f, -0.0f, alt };
 }
 
+Float4 BaseSurface::stretch_base(const VoxelPos &p_voxel, int p_m) const {
+    return base_kind == Kind::FLAT ? Float4{} : at(p_voxel, p_m);
+}
+
+WorldPos BaseSurface::stretched(const WorldPos &p_pos, int p_j, const Float4 &p_b, int p_m) const {
+    WorldPos pos = p_pos;
+    if (p_j == 0) {
+        return pos;
+    }
+    if (base_kind == Kind::FLAT) {
+        const int64_t rel = p_pos.voxel.y - anchor.y;
+        const int64_t q = WorldCoord::floor_div(rel, int64_t(1) << p_j);
+        const float rest = float(rel - q * (int64_t(1) << p_j));
+        float f = (rest + p_pos.frac.y) * exact_pow2(-p_j);
+        pos.voxel.y = anchor.y + q;
+        if (f >= 1.0f) {
+            pos.voxel.y += 1;
+            f = 0.0f;
+        }
+        pos.frac.y = f;
+        return pos;
+    }
+    const float k = (1.0f - exact_pow2(-p_j)) * p_b.w * exact_pow2(p_m);
+    const float off[3] = { CLAMP(k * p_b.x, -STRETCH_LIMIT, STRETCH_LIMIT), CLAMP(k * p_b.y, -STRETCH_LIMIT, STRETCH_LIMIT),
+        CLAMP(k * p_b.z, -STRETCH_LIMIT, STRETCH_LIMIT) };
+    float *frac[3] = { &pos.frac.x, &pos.frac.y, &pos.frac.z };
+    for (int a = 0; a < 3; a++) {
+        const float fl = std::floor(off[a]);
+        const float r = off[a] - fl;
+        float f = *frac[a] - r;
+        int64_t d = -int64_t(fl);
+        if (f < 0.0f) {
+            f = f + 1.0f;
+            d -= 1;
+        }
+        if (f >= 1.0f) {
+            f = 0.0f;
+            d += 1;
+        }
+        pos.voxel[a] += d;
+        *frac[a] = f;
+    }
+    return pos;
+}
+
+Float4 BaseSurface::stretch_gradient(const Float4 &p_g, int p_j, const Float4 &p_b) const {
+    if (base_kind == Kind::FLAT) {
+        return Float4{ p_g.x, p_g.y * exact_pow2(-p_j), p_g.z, p_g.w };
+    }
+    const float c = (1.0f - exact_pow2(-p_j)) * (p_g.x * p_b.x + p_g.y * p_b.y + p_g.z * p_b.z);
+    return Float4{ p_g.x - c * p_b.x, p_g.y - c * p_b.y, p_g.z - c * p_b.z, p_g.w };
+}
+
+String BaseSurface::glsl_stretch() const {
+    using namespace ExactNoise;
+    if (base_kind == Kind::FLAT) {
+        return String(R"glsl(
+// BaseSurface::stretched on the flat base: datum + (y - datum) / 2^j, the remainder to the fraction (carried at 1).
+WorldPos base_stretched(WorldPos p, int j) {
+    if (j == 0) {
+        return p;
+    }
+    WorldPos q = p;
+    uvec3 lo = uvec3(0u, p.lo.y, 0u);
+    ivec3 hi = ivec3(0, p.hi.y, 0);
+    i64_sub(lo, hi, DATUM_LO, DATUM_HI);
+    uint rem = lo.y & ((1u << uint(j)) - 1u);
+    i64_asr(lo, hi, j);
+    i64_sub(lo, hi, NEG_DATUM_LO, NEG_DATUM_HI);
+    precise float f = (float(rem) + p.frac.y) * exact_pow2(-j);
+    if (f >= 1.0) {
+        i64_add(lo, hi, ivec3(0, 1, 0));
+        f = 0.0;
+    }
+    q.lo.y = lo.y;
+    q.hi.y = hi.y;
+    q.frac.y = f;
+    return q;
+}
+
+// BaseSurface::stretch_gradient on the flat base.
+vec4 base_stretch_gradient(vec4 g, int j) {
+    precise float gy = g.y * exact_pow2(-j);
+    return vec4(g.x, gy, g.z, g.w);
+}
+)glsl")
+                .replace("NEG_DATUM_LO", glsl_lo(VoxelPos(0, -anchor.y, 0)))
+                .replace("NEG_DATUM_HI", glsl_hi(VoxelPos(0, -anchor.y, 0)))
+                .replace("DATUM_LO", glsl_lo(VoxelPos(0, anchor.y, 0)))
+                .replace("DATUM_HI", glsl_hi(VoxelPos(0, anchor.y, 0)));
+    }
+    return String(R"glsl(
+// BaseSurface::stretched on a sphere, b its sample at LOD m (stretch_base).
+WorldPos base_stretched_at(WorldPos p, int j, vec4 b, int m) {
+    if (j == 0) {
+        return p;
+    }
+    precise float k = (1.0 - exact_pow2(-j)) * b.w * exact_pow2(m);
+    precise vec3 off = clamp(vec3(k * b.x, k * b.y, k * b.z), vec3(-STRETCH_LIMIT), vec3(STRETCH_LIMIT));
+    WorldPos q = p;
+    ivec3 d;
+    for (int a = 0; a < 3; a++) {
+        float fl = floor(off[a]);
+        precise float r = off[a] - fl;
+        precise float f = p.frac[a] - r;
+        d[a] = -int(fl);
+        if (f < 0.0) {
+            f = f + 1.0;
+            d[a] -= 1;
+        }
+        if (f >= 1.0) {
+            f = 0.0;
+            d[a] += 1;
+        }
+        q.frac[a] = f;
+    }
+    i64_add(q.lo, q.hi, d);
+    return q;
+}
+
+// BaseSurface::stretch_gradient on a sphere.
+vec4 base_stretch_gradient_at(vec4 g, int j, vec4 b) {
+    precise float c = (1.0 - exact_pow2(-j)) * (g.x * b.x + g.y * b.y + g.z * b.z);
+    precise vec3 o = vec3(g.x - c * b.x, g.y - c * b.y, g.z - c * b.z);
+    return vec4(o, g.w);
+}
+)glsl")
+            .replace("STRETCH_LIMIT", glsl_float(STRETCH_LIMIT));
+}
+
 String BaseSurface::glsl() const {
     using namespace ExactNoise;
     if (base_kind == Kind::FLAT) {

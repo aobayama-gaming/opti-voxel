@@ -119,8 +119,10 @@ BaseSurface sphere_probe_base() {
     return BaseSurface::sphere(VoxelPos(int64_t(1) << 31, -(int64_t(1) << 32), 0), 4294967296.0 - 1000.5);
 }
 
-// The flat base probe's datum (LOD0 voxels).
+// The flat base probe's datum (LOD0 voxels): not a multiple of the stretches, so their remainders reach the fraction.
 constexpr int64_t PROBE_FLAT_DATUM = 600;
+// The LOD of the sphere stretch probe's base sample.
+constexpr int PROBE_STRETCH_LOD = 3;
 // probe_region: its hash, then 10 values f = (u >> F_SHIFT) - F_BIAS times F_SCALE in [-1, 1), d = f * D_SCALE, H = f * H_SCALE.
 constexpr uint32_t PROBE_REGION_SEED = 0xBA5Eu;
 constexpr uint32_t PROBE_REGION_SALT = 0x5EEDu;
@@ -277,24 +279,67 @@ void probe_octave_cell(WorldPos p, uint b) {
         probes.push_back(p);
     }
     {
-        // A stretched band's position (Cascade::stretched / cascade_stretched): y over 2^j with the frame's int64
-        // helpers, across low-word wraps and at far origins.
+        // A stretched band's position on the flat base (BaseSurface::stretched / base_stretched): datum + (y - datum) over
+        // 2^j with the frame's int64 helpers, across low-word wraps and at far origins (the datum not a multiple of 2^j).
         Probe p;
         p.name = "stretched";
         p.words = 3 * STRETCH_COUNT;
-        p.glsl = CascadeShapedGLSL::stretch_helper() + String("void probe_stretched(WorldPos p, uint b) {\n");
+        const BaseSurface flat = BaseSurface::flat(PROBE_FLAT_DATUM);
+        p.glsl = flat.glsl_stretch() + String("void probe_stretched(WorldPos p, uint b) {\n");
         for (int i = 0; i < STRETCH_COUNT; i++) {
-            p.glsl += vformat("    { WorldPos q = cascade_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
+            p.glsl += vformat("    { WorldPos q = base_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
                               "results[b + %du] = floatBitsToUint(q.frac.y); }\n",
                     STRETCHES[i], 3 * i, 3 * i + 1, 3 * i + 2);
         }
         p.glsl += "}\n";
-        p.cpu = [](const WorldPos &q, uint32_t *r) {
+        p.cpu = [flat](const WorldPos &q, uint32_t *r) {
             for (int i = 0; i < STRETCH_COUNT; i++) {
-                const WorldPos s = Cascade::stretched(q, STRETCHES[i]);
+                const WorldPos s = flat.stretched(q, STRETCHES[i], Float4{}, 0);
                 r[3 * i] = lo32(s.voxel.y);
                 r[3 * i + 1] = uint32_t(hi32(s.voxel.y));
                 r[3 * i + 2] = float_bits(s.frac.y);
+            }
+            return true;
+        };
+        probes.push_back(p);
+    }
+    {
+        // On a sphere (BaseSurface::stretched / base_stretched_at, stretch_gradient / base_stretch_gradient_at): the point
+        // moved by the base sample's float offset, the gradient's up component scaled, the sample from a hashed region at
+        // LOD PROBE_STRETCH_LOD.
+        Probe p;
+        p.name = "stretched_sphere";
+        p.words = 13 * STRETCH_COUNT;
+        const BaseSurface sphere = sphere_probe_base();
+        p.glsl = sphere.glsl_stretch() + String("void probe_stretched_sphere(WorldPos p, uint b) {\n");
+        p.glsl += vformat("    int m = int(params.lod_bias) + %d;\n    vec4 base = base_curvature(p, m, probe_region(p, m));\n", PROBE_STRETCH_LOD);
+        p.glsl += "    vec4 g = noise_fbm3d(p, 0);\n";
+        for (int i = 0; i < STRETCH_COUNT; i++) {
+            p.glsl += vformat("    { WorldPos q = base_stretched_at(p, %d, base, m); vec4 h = base_stretch_gradient_at(g, %d, base); uint o = b + %du;\n", STRETCHES[i],
+                    STRETCHES[i], 13 * i);
+            p.glsl += "      for (int a = 0; a < 3; a++) { results[o + uint(a)] = q.lo[a]; results[o + 3u + uint(a)] = uint(q.hi[a]); results[o + 6u + uint(a)] = floatBitsToUint(q.frac[a]); }\n";
+            p.glsl += "      for (int a = 0; a < 4; a++) { results[o + 9u + uint(a)] = floatBitsToUint(h[a]); } }\n";
+        }
+        p.glsl += "}\n";
+        const OctaveSet *set = &p_noise.fbm3d;
+        p.cpu = [sphere, set](const WorldPos &q, uint32_t *r) {
+            const Float4 base = BaseSurface::curvature_form(q.voxel, PROBE_STRETCH_LOD, probe_region(q.voxel, PROBE_STRETCH_LOD));
+            const Float4 g = fbm(*set, q, 0);
+            for (int i = 0; i < STRETCH_COUNT; i++) {
+                const WorldPos s = sphere.stretched(q, STRETCHES[i], base, PROBE_STRETCH_LOD);
+                const Float4 h = sphere.stretch_gradient(g, STRETCHES[i], base);
+                uint32_t *o = r + 13 * i;
+                for (int a = 0; a < 3; a++) {
+                    o[a] = lo32(s.voxel[a]);
+                    o[3 + a] = uint32_t(hi32(s.voxel[a]));
+                }
+                o[6] = float_bits(s.frac.x);
+                o[7] = float_bits(s.frac.y);
+                o[8] = float_bits(s.frac.z);
+                o[9] = float_bits(h.x);
+                o[10] = float_bits(h.y);
+                o[11] = float_bits(h.z);
+                o[12] = float_bits(h.w);
             }
             return true;
         };

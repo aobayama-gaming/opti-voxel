@@ -334,7 +334,7 @@ using CascadeShapedGLSL::shaped_helpers;
 // order); and Cascade::flush_value.
 String band_functions(const Spec &p_spec) {
     const int nch = p_spec.gpu_channels();
-    String code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper() : String();
+    String code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper(p_spec) : String();
     for (int g = 0; g < p_spec.group_count(); g++) {
         const int base = p_spec.gpu_base(g);
         const ChannelSet set = p_spec.group_set(g);

@@ -20,7 +20,7 @@ namespace Climate {
 //             "terms": [ { "source": "ground", "per_m": -0.002 } | { "source": "<earlier field>", "x": 0.5 } ] }
 //   stretch: { "from_m": 100, "to_m": 30000000 (or "wavelength_m"), "stretch_y": 4 }: the ground's octaves in range
 //           read their noise at y / 4 (their wavelength along y 4 times theirs along x and z); a field band takes
-//           "stretch_y" too. A power of two; octave k takes at most 2^(k - 3) of it (Cascade::stretched: a range's finest
+//           "stretch_y" too. A power of two; octave k takes at most 2^(k - 3) of it (BaseSurface::stretched: a range's finest
 //           octaves are stretched less), and no octave is stretched twice. The ground is a 3D noise
 //           whose vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs (steep
 //           landforms: mountains, cliff faces, valley walls, tools/landforms); stretched octaves keep it a height field
@@ -243,7 +243,7 @@ private:
     }
 
     // "stretch_y": a power of two >= 1 (1: none), as log2; octave k's at most k - the insertion shift (its insertion
-    // lattice divides exactly, Cascade::stretched).
+    // lattice divides exactly, BaseSurface::stretched).
     int stretch(const Dictionary &p_d, const String &p_where) {
         const double s = number(p_d, "stretch_y", p_where, 1.0);
         const int j = int(std::lround(std::log2(std::max(s, 1.0))));

@@ -103,32 +103,18 @@ WorldPos band_pos(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p)
 
 } // namespace
 
-WorldPos stretched(const WorldPos &p_pos, int p_j) {
-    WorldPos pos = p_pos;
-    const int64_t y = WorldCoord::floor_div(p_pos.voxel.y, int64_t(1) << p_j);
-    const float rest = float(p_pos.voxel.y - y * (int64_t(1) << p_j));
-    float f = (rest + p_pos.frac.y) * ExactNoise::exact_pow2(-p_j);
-    pos.voxel.y = y;
-    if (f >= 1.0f) {
-        pos.voxel.y += 1;
-        f = 0.0f;
-    }
-    pos.frac.y = f;
-    return pos;
-}
-
 namespace {
 
-// Group p_group's noise at p_pos: perlin3, or cell3 for a cell group (Spec::cell_groups). A stretched band reads it at
-// y / 2^stretch, its y gradient scaled back by 2^-stretch (per cell of 2^k voxels, like x and z).
+// Group p_group's noise at p_pos: perlin3, or cell3 for a cell group (Spec::cell_groups). A stretched band reads it
+// stretched along the base's up (BaseSurface::stretched, the base sample at the band's insertion lattice), its gradient
+// back through the stretch (per cell of 2^k voxels).
 ExactNoise::Float4 band_noise(const Spec &p_spec, int p_group, const Band &p_band, const WorldPos &p_pos) {
-    const WorldPos pos = p_band.stretch > 0 ? stretched(p_pos, p_band.stretch) : p_pos;
-    ExactNoise::Float4 n = ((p_spec.cell_groups >> p_group) & 1u) ? ExactNoise::cell3(pos, p_band.k, p_band.seed, p_band.offset)
-                                                                  : ExactNoise::perlin3(pos, p_band.k, p_band.seed, p_band.offset);
-    if (p_band.stretch > 0) {
-        n.y = n.y * ExactNoise::exact_pow2(-p_band.stretch);
-    }
-    return n;
+    const bool stretch = p_band.stretch > 0;
+    const ExactNoise::Float4 b = stretch ? p_spec.base.stretch_base(p_pos.voxel, p_spec.insert_level(p_band)) : ExactNoise::Float4{};
+    const WorldPos pos = stretch ? p_spec.base.stretched(p_pos, p_band.stretch, b, p_spec.insert_level(p_band)) : p_pos;
+    const ExactNoise::Float4 n = ((p_spec.cell_groups >> p_group) & 1u) ? ExactNoise::cell3(pos, p_band.k, p_band.seed, p_band.offset)
+                                                                        : ExactNoise::perlin3(pos, p_band.k, p_band.seed, p_band.offset);
+    return stretch ? p_spec.base.stretch_gradient(n, p_band.stretch, b) : n;
 }
 
 void band_channels(const Spec &p_spec, int p_group, const Band &p_band, const BandFactors &p_factors, const Vector3i64 &p_p, float r_ch[CHANNELS]) {

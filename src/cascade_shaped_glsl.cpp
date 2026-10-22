@@ -22,35 +22,15 @@ String noise_code(const Spec &p_spec, int p_group, const String &p_pos) {
     if (!p_spec.stretched(p_group)) {
         return vformat("    vec4 g = %s(", noise_function(p_spec, p_group)) + p_pos + args;
     }
-    return vformat("    vec4 g = %s(cascade_stretched(", noise_function(p_spec, p_group)) + p_pos + String(", int(band.info.w))") + args +
-            "    { precise float gy = g.y * exact_pow2(-int(band.info.w)); g.y = gy; }\n";
+    return vformat("    vec4 g = %s(base_stretched(", noise_function(p_spec, p_group)) + p_pos + String(", int(band.info.w))") + args +
+            "    g = base_stretch_gradient(g, int(band.info.w));\n";
 }
 
-String stretch_helper() {
-    return R"glsl(
-// Cascade::stretched: y divided by 2^j (1 <= j <= MAX_STRETCH < 32) with the frame's int64 helpers, the remainder to the
-// fraction (carried at 1).
-WorldPos cascade_stretched(WorldPos p, int j) {
-    if (j == 0) {
-        return p;
-    }
-    WorldPos q = p;
-    uint rem = p.lo.y & ((1u << uint(j)) - 1u);
-    uvec3 lo = uvec3(0u, p.lo.y, 0u);
-    ivec3 hi = ivec3(0, p.hi.y, 0);
-    i64_asr(lo, hi, j);
-    precise float f = (float(rem) + p.frac.y) * exact_pow2(-j);
-    if (f >= 1.0) {
-        i64_add(lo, hi, ivec3(0, 1, 0));
-        f = 0.0;
-    }
-    q.lo.y = lo.y;
-    q.hi.y = hi.y;
-    q.frac.y = f;
-    return q;
-}
-
-)glsl";
+String stretch_helper(const Spec &p_spec) {
+    // TODO: a sphere's stretch needs its regions on the GPU (base_stretched_at with the band's base sample): the planet
+    // PR that uploads them.
+    ERR_FAIL_COND_V_MSG(p_spec.base.kind() != BaseSurface::Kind::FLAT, String(), "CascadeGLSL: a stretched band on a sphere base has no GPU path yet.");
+    return p_spec.base.glsl_stretch();
 }
 
 // Cascade::BandMod, smooth_abs and warped (cascade.cpp), op for op; after the climate's shared helpers (cl_flush, cl_mul).
