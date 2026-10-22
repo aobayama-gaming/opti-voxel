@@ -97,6 +97,11 @@ int64_t get_lod_size(const ChunkId &coord);
 
 ChunkId get_parent_from_child_until(const ChunkId &coord, int target_lod);
 
+// The sub-cubes of p_ancestor (Subcube::AXIS^3 of them, bits Subcube::bit) that its descendant
+// p_descendant overlaps: one when at least two LODs finer, the 8 of an octant for a child (and below a LOD-1 ancestor,
+// whose sub-cubes are smaller than a LOD0 chunk).
+uint64_t subcube_bits(const ChunkId &p_ancestor, const ChunkId &p_descendant);
+
 // Edge length of the chunk in metres (a size, not a position).
 float world_chunk_size(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 
