@@ -10,11 +10,11 @@
 # SDFCascade::sdf, 5,120 corners per LOD near 0, +-2^60, across 2^32-voxel boundaries and lattice index 2^32
 # (D1 of the GPU discoverer). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
 # chunks' instance lists vs SDFCascade::sample_sdf + skirt (G9: the fold onto the cascade, bit for bit). biomes: the example climate's per-sample ground material (the biome pick at
-# level 0) vs SDFCascade::ground_material, every LOD (G10). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
+# level 0) vs SDFCascade::ground_material, every LOD (G10, on 4c and every other climate set asked). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
 # (G6), both channel sets (G7: 8 vs 4), each set against the plain 4 channels. Sets: 8, 4, 4c (LINEAR4 + the example
 # climate at 5 cm, its fields carried and modulating the ground), 4f (its fields without multipliers), 4p (the plain climate: the
 # example before shaped bands), 4s (the shaped test table: every shaped-band operation), 4d (fieldless_test.json: a
-# modulation with no field); default 8,4,4c.
+# modulation with no field), 4r (region_test.json: two landforms behind regions, 11 field groups); default 8,4,4c.
 # GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.
@@ -105,9 +105,14 @@ if tab:
               f"| 4 ch, LODs 0-6 | {tab['records']} | {tab['chunks']} | {tab['samples']:,} | {tab['samples_folded']:,} | {tab['samples_differing']} | {tab['ok']} |", ""]
 bio = r.get("biomes", {})
 if bio:
-    per = ", ".join(f"{k} {v:,}" for k, v in bio.get("samples_per_biome", {}).items())
-    lines += ["| G10 biome materials | chunks | samples | differing | per biome | ok |", "|---|---|---|---|---|---|",
-              f"| 4c, every LOD | {bio['chunks']} | {bio['samples']:,} | {bio['samples_differing']} | {per} | {bio['ok']} |", ""]
+    lines += ["| G10 biome materials | chunks | samples | differing | per biome | ok |", "|---|---|---|---|---|---|"]
+    for s, d in bio.items():
+        if "error" in d:
+            lines.append(f"| {s}, every LOD | - | - | - | {d['error']} | {d['ok']} |")
+            continue
+        per = ", ".join(f"{k} {v:,}" for k, v in d.get("samples_per_biome", {}).items())
+        lines.append(f"| {s}, every LOD | {d['chunks']} | {d['samples']:,} | {d['samples_differing']} | {per} | {d['ok']} |")
+    lines.append("")
 t = r.get("timing", {})
 rows = t.get("rows", [])
 if rows:
@@ -148,7 +153,7 @@ if rows:
     if "8" in sets and "4" in sets:
         lines.append(f"G7: 8 ch / 4 ch over all LODs = {total('8') / total('4'):.3f} (keep 8 unless > 1.15)")
     for s in ratios:
-        if s in ("4c", "4f", "4p", "4s", "4d") and "4" in sets:
+        if s not in ("8", "4") and "4" in sets:
             lines.append(f"{s} ch / 4 ch over all LODs = {total(s) / total('4'):.3f} (the climate's cost)")
     lines.append("")
     lines.append("Per level (last run, ms, j = top ... 0):")
@@ -157,7 +162,7 @@ if rows:
 text = "\n".join(lines)
 print(text)
 open(sys.argv[3], "w").write(text + "\n")
-for s, d in list(check.items()) + list(pts.items()) + ([("biomes", bio)] if bio else []):
+for s, d in list(check.items()) + list(pts.items()) + [("biomes " + k, v) for k, v in bio.items()]:
     for e in d.get("examples", [])[:8]:
         print(f"   example ({s} ch):", e)
 if "error" in r:

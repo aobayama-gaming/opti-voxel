@@ -118,12 +118,7 @@ public:
         skirt_depth_table.assign(p_lod_count, 0.0f);
         moment_skirt_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
-            double amp = 0.0;
-            for (const Cascade::Band &b : spec.bands) {
-                if (b.k == l + 2 || b.k == l + 3) {
-                    amp = MAX(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
-                }
-            }
+            double amp = octave_step(l);
             if (has_ground_terms()) {
                 amp = Climate::ground_step(*climate, l, amp);
             }
@@ -132,6 +127,18 @@ public:
             skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
             moment_skirt_table[l] = float(SDFTable::moment_skirt_cells() * cell_m);
         }
+    }
+
+    // The ground's band step between LOD p_lod and p_lod + 1 (LOD0 voxels): its largest L+2 / L+3 octave, the climate's
+    // largest multiplier of it. The skirts take it, plus the climate's ground terms (Climate::ground_step).
+    double octave_step(int p_lod) const {
+        double amp = 0.0;
+        for (const Cascade::Band &b : spec.bands) {
+            if (b.k == p_lod + 2 || b.k == p_lod + 3) {
+                amp = MAX(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
+            }
+        }
+        return amp;
     }
 
     const Cascade::Spec *get_cascade() const override { return &spec; }

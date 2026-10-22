@@ -200,7 +200,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
     for (int i = 0; i <= MAX_FIELDS; i++) {
         many += vformat("%s{\"name\": \"f%d\"}", i ? ", " : "", i);
     }
-    CHECK(parse_json(many + R"(], "biomes": [{"name": "a"}]})", g.ground, t).contains("at most 8"));
+    CHECK(parse_json(many + R"(], "biomes": [{"name": "a"}]})", g.ground, t).contains(vformat("at most %d", MAX_FIELDS)));
 }
 
 TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denormals, gradients by the chain rule") {

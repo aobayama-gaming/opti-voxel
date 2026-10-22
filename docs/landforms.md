@@ -200,6 +200,47 @@ The ground is 3D noise, so dh/dy is as large as dh/dx. Wherever a landform is st
 
 ## Using a landform in a world
 
-Each table is a whole climate. To put several landforms in one world, take each one's biome (its multipliers, shapes,
-warps) into one table behind region edges. Then lay its height terms on its own fields, and make the fields shared
-by the biomes' edges.
+Each table is a whole climate. A world puts several landforms in one table, each behind a **region** of macro climate
+fields (temperature, humidity, wind):
+
+```json
+"regions": [{"name": "cold", "where": [{"field": "temperature", "max": 0.0, "fade": 0.05}]}],
+"heights": [{"field": "valley", "height_m": 2100, "curve": [...], "region": "cold"}],
+"biomes":  [{"name": "floor", "region": "cold", "where": [{"field": "valley", "min": 0.19, "fade": 0.02}], ...}]
+```
+
+- A biome's `region` puts the region's edges before its own.
+- A height term's `region` multiplies the term by the region. So the trough, the cliff or the coast exists only in its
+  region, and the term needs a curve (the skirts bound it).
+- Keep each landform's feature fields as they are: its edges and curve points are tuned to their quantiles.
+- In a region's core the landform is its standalone table bit for bit: `project/climate/region_test.json` (the valley
+  behind "cold", the cliff's and the mangrove's terms behind "warm") equals `valley.json` there.
+- The core starts some way inside the region's edge. The modulation reads the biome weights at the cascade's coarser
+  lattices, which sit kilometres apart for a 13 km axis. Leave room for that when laying regions out.
+- Across a border the two halves of a landform fade at slightly different places: the height terms read the region
+  at the sample, the octave multipliers at those coarser lattices. One evaluation point for both would need the region
+  carried down the cascade like a field.
+
+What is left before the eight landforms make one world:
+
+1. **The field budget.** The eight tables need 8 feature fields, 3 warp triples, 2 `elev` fields and the multifractal
+   state, plus the climate axes. A table carries at most 24 field groups. Next step: refit the landforms onto shared
+   fields: one warp triple, one `elev`, the desert's patches on a warp field. That leaves about 16 groups.
+2. **The ground's stretch** is one setting for the whole table. Use 4 from 100 m for every landform, and re-score the
+   flat ones.
+3. **The coarse octaves.** The climate axes can't gate the ground octaves at or above their own wavelength. Every biome
+   takes the same multiplier there.
+4. **The world table.** Temperature and humidity at 210 + 419 km, and wind at 105 + 210 km (25 LODs). Each landform
+   takes a box of that space:
+
+   |  | humid | dry |
+   |---|---|---|
+   | cold | mountain | mountain |
+   | cool | valley | caldera |
+   | warm | island | cliff |
+   | hot | mangrove | dunes (windy), desert (calm) |
+
+   A report then gives each region's area, its neighbours, and a spawn point in its core.
+5. **Cost.** Every field group is carried at every point. 16 groups cost roughly 8 times the bare cascade at near LODs.
+   The fix is to skip the groups whose region is 0 over a whole chunk. That is a per-chunk reduced SDF, which needs its
+   own design.

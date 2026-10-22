@@ -379,9 +379,9 @@ String band_functions(const Spec &p_spec) {
 String insert_code(const Spec &p_spec) {
     String code;
     if (shaped(p_spec)) {
-        code += vformat("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod);\n", MAX_GROUPS);
+        code += vformat("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod);\n", p_spec.group_count());
     } else if (p_spec.modulation) {
-        code += vformat("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp);\n", MAX_GROUPS);
+        code += vformat("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp);\n", p_spec.group_count());
     }
     for (int g = 0; g < p_spec.group_count(); g++) {
         if (p_spec.group_bands(g).empty()) {

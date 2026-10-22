@@ -10,6 +10,7 @@
 #include <cmath>
 
 using namespace Climate;
+using ClimateTest::ClimateSDF;
 using ExactNoise::float_bits;
 
 namespace {
@@ -30,17 +31,6 @@ uint64_t fnv_text(const String &p_s) {
     return h;
 }
 
-// An SDFCascade with the climate file p_path at 5 cm and p_lods LODs.
-struct ClimateSDF {
-    SDFCascade sdf;
-    ClimateSDF(const char *p_path, int p_lods) {
-        CHECK(load(p_path, sdf.climate_data) == String());
-        ChunkParam param;
-        param.voxel_size = 0.05f;
-        sdf.configure(param, p_lods);
-    }
-};
-
 } // namespace
 
 // The climate before shaped bands (project/climate/plain.json, a copy of the example as it was) keeps its bits: every
@@ -56,8 +46,9 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
             const Vector3i64 p(int64_t(i) * 7919 - 50000, (c.sdf.get_datum_y() >> lod) + 3 - i, int64_t(i) * -104729 + (int64_t(1) << 33));
             float slots[Cascade::SLOTS];
             Cascade::point_slots(spec, p, lod, slots, true);
-            for (const float s : slots) {
-                h = fnv(h, float_bits(s));
+            // The carried slots only: the pin doesn't depend on the field group cap.
+            for (int s = 0; s < Cascade::field_slot(int(spec.fields.size())); s++) {
+                h = fnv(h, float_bits(slots[s]));
             }
             const WorldPos pos{ VoxelPos(p.x << lod, p.y << lod, p.z << lod), Float3() };
             h = fnv(h, float_bits(c.sdf.evaluate(pos, lod)));
@@ -69,9 +60,11 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, true));
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
-    CHECK(h == 1453408696410019935ull);
-    CHECK(chunk_text == 13644669600284393270ull);
-    CHECK(point_text == 5642094461605378908ull);
+    CHECK(h == 16354123549857880415ull);
+    // The modulation's arrays are sized by the spec's group count (4 here), not the cap: with the sizes put back to the
+    // old cap's 9, these texts hash to the pins they had before.
+    CHECK(chunk_text == 1773918487833129905ull);
+    CHECK(point_text == 10794965615656541817ull);
 }
 
 // The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its
@@ -241,13 +234,26 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     CHECK(err(R"({"fields": [{"name": "d", "noise": "cell", "bands": [{"wavelength_m": 25, "amp": 1, "shape": "ridged"}]}], "biomes": [{"name": "a"}]})")
                     .contains("cell noise"));
     CHECK(err(R"({"fields": [{"name": "d", "noise": "simplex", "bands": []}], "biomes": [{"name": "a"}]})").contains("perlin or cell"));
-    // A multifractal's state takes a field group: 8 fields leave it none.
-    String eight = "{\"fields\": [";
-    for (int i = 0; i < 8; i++) {
-        eight += vformat("%s{\"name\": \"f%d\", \"bands\": [{\"wavelength_m\": 400, \"amp\": 1}]}", i ? ", " : "", i);
+    // A multifractal's state takes a field group: MAX_FIELDS fields leave it none.
+    String full = "{\"fields\": [";
+    for (int i = 0; i < MAX_FIELDS; i++) {
+        full += vformat("%s{\"name\": \"f%d\", \"bands\": [{\"wavelength_m\": 400, \"amp\": 1}]}", i ? ", " : "", i);
     }
-    eight += "], \"biomes\": [{\"name\": \"a\", \"amp\": [{\"field\": \"ground\", \"from_m\": 1, \"to_m\": 100, \"multifractal\": 2}]}]}";
-    CHECK(err(eight).contains("at most 7 fields"));
+    full += "], \"biomes\": [{\"name\": \"a\", \"amp\": [{\"field\": \"ground\", \"from_m\": 1, \"to_m\": 100, \"multifractal\": 2}]}]}";
+    CHECK(err(full).contains(vformat("at most %d fields", MAX_FIELDS - 1)));
+    // Regions: declared, unique, with edges; a gated height term has a curve; the default biome takes none.
+    const String cold = R"("regions": [{"name": "cold", "where": [{"field": "t", "max": 0, "fade": 0.1}]}], )";
+    const String curve = R"("curve": [[0, 0], [1, 1]])";
+    CHECK(err(f1 + cold + String(R"("biomes": [{"name": "a", "region": "warm"}, {"name": "b"}]})")).contains("'warm' is not a region"));
+    CHECK(err(f1 + cold + String(R"("heights": [{"field": "t", "height_m": 10, "region": "warm", )") + curve + String(R"(}], "biomes": [{"name": "a"}]})"))
+                    .contains("'warm' is not a region"));
+    CHECK(err(f1 + cold + String(R"("heights": [{"field": "t", "height_m": 10, "region": "cold"}], "biomes": [{"name": "a"}]})")).contains("takes a curve"));
+    CHECK(err(f1 + cold + String(R"("biomes": [{"name": "a", "region": "cold"}]})")).contains("the default"));
+    CHECK(err(f1 + String(R"("regions": [{"name": "c", "where": []}], "biomes": [{"name": "a"}]})")).contains("at least one edge"));
+    CHECK(err(f1 + String(R"("regions": [{"name": "c", "where": [{"field": "t", "min": 0, "fade": 0.1}]}, {"name": "c", "where": [{"field": "t", "min": 0, "fade": 0.1}]}], "biomes": [{"name": "a"}]})"))
+                    .contains("used twice"));
+    CHECK(err(f1 + cold + String(R"("heights": [{"field": "t", "height_m": 10, "region": "cold", )") + curve + String(R"(}], "biomes": [{"name": "a", "region": "cold"}, {"name": "b"}]})")) ==
+            String());
 }
 
 TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and box runs equal point queries") {

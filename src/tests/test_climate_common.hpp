@@ -3,8 +3,10 @@
 #include "test_common.hpp"
 
 #include "cascade.hpp"
+#include "climate.hpp"
+#include "sdf_cascade.hpp"
 
-// What the climate tests share (test_climate.cpp, test_climate_shape.cpp).
+// What the climate tests share (test_climate.cpp, test_climate_shape.cpp, test_climate_regions.cpp).
 
 // doctest's REQUIRE needs exceptions: a failed check ends the test case.
 #define CLIMATE_REQUIRE(p_cond) \
@@ -16,6 +18,31 @@
     } while (0)
 
 namespace ClimateTest {
+
+// An SDFCascade with a climate table (a file, res:// or absolute, or its data) at 5 cm and p_lods LODs.
+struct ClimateSDF {
+    SDFCascade sdf;
+    ClimateSDF(const char *p_path, int p_lods) {
+        CHECK(Climate::load(p_path, sdf.climate_data) == String());
+        configure(p_lods);
+    }
+    ClimateSDF(const Dictionary &p_data, int p_lods) {
+        sdf.climate_data = p_data;
+        configure(p_lods);
+    }
+
+private:
+    void configure(int p_lods) {
+        ChunkParam param;
+        param.voxel_size = 0.05f;
+        sdf.configure(param, p_lods);
+    }
+};
+
+// Lattice point p_p of Λ_lod as a WorldPos.
+inline WorldPos lattice_pos(const Vector3i64 &p_p, int p_lod) {
+    return WorldPos{ VoxelPos(p_p.x << p_lod, p_p.y << p_lod, p_p.z << p_lod), Float3() };
+}
 
 inline int64_t differing_floats(const float *p_a, const float *p_b, int p_n) {
     int64_t n = 0;

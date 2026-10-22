@@ -214,8 +214,8 @@ String Modulator::glsl_plain(const Cascade::Spec &p_spec) const {
     using ExactNoise::glsl_float;
     String code = splices_helpers(table, p_spec) ? String() : glsl_helpers();
     code += "\n// Climate::Modulator::amplitudes: the field terms, the biome weights, then each modulated band's amplitude.\n";
-    code += vformat("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", Cascade::MAX_GROUPS);
-    code += vformat("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", Cascade::MAX_GROUPS);
+    code += vformat("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", p_spec.group_count());
+    code += vformat("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", p_spec.group_count());
     code += mask_switch(mask);
     code += glsl_weights(table, p_spec);
     code += "    switch (m) {\n";
@@ -287,8 +287,8 @@ String Modulator::glsl(const Cascade::Spec &p_spec) const {
     using ExactNoise::glsl_float;
     String code = GLSL_MULTIFRACTAL; // after the shared helpers, spliced by the level shader (splices_helpers)
     code += "\n// Climate::Modulator::modulate: the field terms, the biome weights, then each modulated band's BandMod.\n";
-    code += vformat("uint cascade_mods(int m, Ch pre, out BandMod mod[%d]) {\n", Cascade::MAX_GROUPS);
-    code += vformat("    for (int g = 0; g < %d; g++) {\n        mod[g].features = 0u;\n", Cascade::MAX_GROUPS);
+    code += vformat("uint cascade_mods(int m, Ch pre, out BandMod mod[%d]) {\n", p_spec.group_count());
+    code += vformat("    for (int g = 0; g < %d; g++) {\n        mod[g].features = 0u;\n", p_spec.group_count());
     code += "        for (int t = 0; t < 3; t++) {\n            mod[g].amp[t] = vec4(0.0);\n            mod[g].warp[t] = vec4(0.0);\n        }\n";
     code += "        for (int t = 0; t < 4; t++) {\n            mod[g].state[t] = vec4(0.0);\n        }\n    }\n";
     code += mask_switch(mask);
