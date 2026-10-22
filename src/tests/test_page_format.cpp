@@ -52,8 +52,8 @@ float angle_deg(const Vector3 &p_a, const Vector3 &p_b) {
 } // namespace
 
 TEST_CASE("PageFormat: layout constants") {
-    CHECK(TEX_WIDTH == 258);
-    CHECK(ROW_BYTES == 258 * 8);
+    CHECK(TEX_WIDTH == 259);
+    CHECK(ROW_BYTES == 259 * 8);
     CHECK(pos_frac_bits(32) == 8);
     CHECK(pos_scale(32) == 256.0f);
     CHECK(pos_frac_bits(16) == 9);
@@ -68,6 +68,9 @@ TEST_CASE("PageFormat: the GLSL side uses the same constants") {
         CHECK(glsl.contains(vformat("const uint PAGE_POS_BITS = %du;", POS_BITS)));
         CHECK(glsl.contains(vformat("const uint PAGE_NORMAL_AXIS_BITS = %du;", NORMAL_AXIS_BITS)));
         CHECK(glsl.contains(vformat("const uint PAGE_PALETTE_LANE_BITS = %du;", PALETTE_LANE_BITS)));
+        CHECK(glsl.contains(vformat("const uint PAGE_COVERAGE_TEXEL = %du;", COVERAGE_TEXEL)));
+        CHECK(glsl.contains(vformat("const uint PAGE_COVERAGE_AXIS = %du;", Subcube::AXIS)));
+        CHECK(glsl.contains(vformat("const uint QUAD_INDEX_BITS = %du;", QUAD_INDEX_BITS)));
         CHECK_FALSE(glsl.contains("#define"));
     }
     // GLSL page_pos_scale(32): POS_BITS - (findMSB(31) + 1) fractional bits, like pos_frac_bits.
@@ -92,6 +95,33 @@ TEST_CASE("PageFormat: group header keeps the low words of the chunk id and the 
             CHECK(header_palette(row_data) == block);
         }
     }
+}
+
+TEST_CASE("PageFormat: the coverage texel holds the hidden mask, flagged in the palette word") {
+    std::vector<uint16_t> row_data(TEX_WIDTH * TEXEL_CHANNELS, 0);
+    const Vector3i chunk(-3, 70000, -2147483647);
+    const uint32_t block = 0x12345670u;
+    store_group_header(row_data.data(), chunk, block);
+    CHECK(header_hidden(row_data.data()) == 0);
+    // What rt_set_hidden copies into texels 1 and 2: the chunk and palette unchanged, the flag, the mask.
+    for (const uint64_t mask : { uint64_t(0x8000'0001'f00d'0002ull), uint64_t(1), uint64_t(0) }) {
+        CAPTURE(mask);
+        encode_coverage(row_data.data() + TEXEL_CHANNELS, chunk.z, block, mask);
+        CHECK(header_chunk(row_data.data()) == chunk);
+        CHECK(header_palette(row_data.data()) == block);
+        CHECK(header_hidden(row_data.data()) == mask);
+        CHECK(((row_data[7] & (COVERAGE_FLAG >> 16)) != 0) == (mask != 0));
+    }
+    // A hidden mask without the flag (a row the emit pass rewrote) reads as nothing hidden.
+    row_data[COVERAGE_TEXEL * TEXEL_CHANNELS] = 1;
+    CHECK(header_hidden(row_data.data()) == 0);
+    CHECK(COVERAGE_TEXEL < HEADER_TEXELS);
+    CHECK(glsl_decode().contains("& ~PAGE_COVERAGE_FLAG"));
+    CHECK(Subcube::bit(1, 0, 0) == 1);
+    CHECK(Subcube::bit(0, 1, 0) == Subcube::AXIS);
+    CHECK(Subcube::bit(Subcube::AXIS - 1, Subcube::AXIS - 1, Subcube::AXIS - 1) == 63);
+    // The GLSL test reads the same bit.
+    CHECK(glsl_decode().contains("uint bit = s.x + PAGE_COVERAGE_AXIS * (s.y + PAGE_COVERAGE_AXIS * s.z);"));
 }
 
 TEST_CASE("PageFormat: position, palette and normal fields don't leak into each other") {

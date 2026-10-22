@@ -2,6 +2,8 @@
 
 #include "debug_log.hpp"
 
+#include <algorithm>
+
 void VoxelState::add_scan_chunk(std::unique_ptr<LODHashSet> p_scanned_chunk, const ScanDelta &p_delta) {
     p_scanned_chunk->max_lod = dirty_chunk.max_lod;
     if (verify) {
@@ -43,9 +45,12 @@ void VoxelState::add_new_loaded(ChunkOutput &new_output) {
     }
     ChunkOutput *old = loaded_chunk.getptr(id);
     if (old) {
-        // Loaded again: the sets don't change.
+        // Loaded again: the sets don't change, but its new rows hide nothing yet.
         old->free();
         *old = new_output;
+        if (stalled.has(id)) {
+            coverage_changed.insert(id);
+        }
         return;
     }
 
@@ -69,7 +74,7 @@ void VoxelState::update_destroy() {
     stats.leaving_max = MAX(stats.leaving_max, int64_t(leaving.size()));
     for (const ChunkId &id : leaving) {
         // Split: a dirty descendant still needs it.
-        if (stall_count.has(id)) {
+        if (stalled.has(id)) {
             continue;
         }
         // Merge: an ancestor replacing it is still being generated.
@@ -84,20 +89,19 @@ void VoxelState::update_destroy() {
     }
 }
 
-void VoxelState::compute_destroy_full(ChunkHashMap &r_to_destroy, StallCountMap *r_stall_count) const {
+void VoxelState::compute_destroy_full(ChunkHashMap &r_to_destroy, StallMap *r_stalled) const {
     // A loaded chunk stays while one of its descendants is still being generated (split).
-    StallCountMap local_stall;
-    StallCountMap &stall_chunk = r_stall_count ? *r_stall_count : local_stall;
+    StallMap local_stalled;
+    StallMap &stall_chunk = r_stalled ? *r_stalled : local_stalled;
     stall_chunk.clear();
     for (const ChunkId &scan_pos : dirty_chunk) {
         ChunkId parent_id = scan_pos;
         if (loaded_chunk.find_ancestor(parent_id) >= 0) {
-            int32_t *count = stall_chunk.getptr(parent_id);
-            if (count) {
-                (*count)++;
-            } else {
-                stall_chunk.insert(parent_id, 1);
+            Stall *stall = stall_chunk.getptr(parent_id);
+            if (!stall) {
+                stall = &stall_chunk.insert(parent_id, Stall())->value;
             }
+            stall->add(ChunkMath::subcube_bits(parent_id, scan_pos), 1);
         }
     }
 
@@ -125,18 +129,18 @@ void VoxelState::compute_destroy_full(ChunkHashMap &r_to_destroy, StallCountMap 
 
 int64_t VoxelState::verify_against_full() {
     ChunkHashMap full_destroy;
-    StallCountMap full_stall;
-    compute_destroy_full(full_destroy, &full_stall);
+    StallMap full_stalled;
+    compute_destroy_full(full_destroy, &full_stalled);
 
     int64_t mismatches = 0;
     mismatches += full_destroy.size() == to_destroy_chunk.size() ? 0 : 1;
     for (const KeyValue<ChunkId, ChunkOutput> &kv : full_destroy) {
         mismatches += to_destroy_chunk.has(kv.key) ? 0 : 1;
     }
-    mismatches += full_stall.size() == stall_count.size() ? 0 : 1;
-    for (const KeyValue<ChunkId, int32_t> &kv : full_stall) {
-        const int32_t *count = stall_count.getptr(kv.key);
-        mismatches += count && *count == kv.value ? 0 : 1;
+    mismatches += full_stalled.size() == stalled.size() ? 0 : 1;
+    for (const KeyValue<ChunkId, Stall> &kv : full_stalled) {
+        const Stall *stall = stalled.getptr(kv.key);
+        mismatches += stall && *stall == kv.value ? 0 : 1;
     }
     // dirty = scan - loaded, leaving = loaded - scan.
     int64_t dirty_expected = 0;
@@ -166,11 +170,52 @@ void VoxelState::destroy_marked() {
         loaded_chunk.erase(kv.key);
         leaving.erase(kv.key);
         // No dirty chunk has it as anchor (update_destroy's split rule), so no anchor changes.
-        if (verify && stall_count.has(kv.key)) {
+        if (verify && stalled.has(kv.key)) {
             stats.verify_mismatches++;
         }
     }
     to_destroy_chunk.clear();
+}
+
+void VoxelState::push_coverage() {
+    int64_t written = 0;
+    for (const ChunkId &id : coverage_changed) {
+        const ChunkOutput *output = loaded_chunk.getptr(id);
+        if (!output || !output->owner || output->quad_count == 0) {
+            continue;
+        }
+        output->owner->set_hidden(*output, hidden_mask(id));
+        written++;
+    }
+    coverage_changed.clear();
+    stats.coverage_written += written;
+    stats.coverage_written_max = MAX(stats.coverage_written_max, written);
+}
+
+uint64_t VoxelState::hidden_mask(const ChunkId &p_loaded) const {
+    const Stall *stall = stalled.getptr(p_loaded);
+    return stall ? stall->hidden() : 0;
+}
+
+int64_t VoxelState::hidden_subcubes() const {
+    int64_t total = 0;
+    for (const KeyValue<ChunkId, Stall> &kv : stalled) {
+        total += WorldCoord::popcount64(kv.value.hidden());
+    }
+    return total;
+}
+
+void Stall::add(uint64_t p_bits, int32_t p_delta) {
+    count += p_delta;
+    for (uint64_t bits = p_bits; bits != 0; bits &= bits - 1) {
+        const int b = WorldCoord::ctz64(bits);
+        n[b] += p_delta;
+        waiting = n[b] > 0 ? waiting | uint64_t(1) << b : waiting & ~(uint64_t(1) << b);
+    }
+}
+
+bool Stall::operator==(const Stall &p_o) const {
+    return count == p_o.count && waiting == p_o.waiting && std::equal(n, n + 64, p_o.n);
 }
 
 void VoxelState::clear() {
@@ -180,7 +225,8 @@ void VoxelState::clear() {
     loaded_chunk.clear();
     to_destroy_chunk.clear();
     dirty_anchor.clear();
-    stall_count.clear();
+    stalled.clear();
+    coverage_changed.clear();
     leaving.clear();
     set_max_lod(max_lod);
 }
@@ -189,27 +235,33 @@ void VoxelState::_anchor(const ChunkId &p_dirty) {
     ChunkId parent_id = p_dirty;
     if (loaded_chunk.find_ancestor(parent_id) >= 0) {
         dirty_anchor.insert(p_dirty, parent_id);
-        _stall_add(parent_id, 1);
+        _stall_add(parent_id, p_dirty, 1);
     }
 }
 
 void VoxelState::_unanchor(const ChunkId &p_dirty) {
     const ChunkId *anchor = dirty_anchor.getptr(p_dirty);
     if (anchor) {
-        _stall_add(*anchor, -1);
+        _stall_add(*anchor, p_dirty, -1);
         dirty_anchor.erase(p_dirty);
     }
 }
 
-void VoxelState::_stall_add(const ChunkId &p_loaded, int32_t p_count) {
-    int32_t *count = stall_count.getptr(p_loaded);
-    if (!count) {
-        stall_count.insert(p_loaded, p_count);
-        return;
+void VoxelState::_stall_add(const ChunkId &p_loaded, const ChunkId &p_dirty, int32_t p_delta) {
+    Stall *stall = stalled.getptr(p_loaded);
+    const uint64_t before = stall ? stall->hidden() : 0;
+    if (!stall) {
+        stall = &stalled.insert(p_loaded, Stall())->value;
     }
-    *count += p_count;
-    if (*count == 0) {
-        stall_count.erase(p_loaded);
+    stall->add(ChunkMath::subcube_bits(p_loaded, p_dirty), p_delta);
+    uint64_t after = 0;
+    if (stall->count == 0) {
+        stalled.erase(p_loaded);
+    } else {
+        after = stall->hidden();
+    }
+    if (after != before) {
+        coverage_changed.insert(p_loaded);
     }
 }
 
@@ -227,15 +279,13 @@ void VoxelState::_rescan_below(const ChunkId &p_loaded) {
             if (ChunkMath::get_lod(*anchor) < lod) {
                 continue; // a loaded chunk between the two is nearer
             }
-            _stall_add(*anchor, -1);
+            _stall_add(*anchor, id, -1);
             *anchor = p_loaded;
         } else {
             dirty_anchor.insert(id, p_loaded);
         }
+        _stall_add(p_loaded, id, 1);
         moved++;
-    }
-    if (moved > 0) {
-        _stall_add(p_loaded, moved);
     }
     stats.rescans++;
     stats.rescan_reanchored += moved;

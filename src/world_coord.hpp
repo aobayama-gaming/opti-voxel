@@ -153,6 +153,15 @@ inline int32_t sat_diff(int64_t p_a, int64_t p_b, int32_t p_limit) {
     return int32_t(d < -p_limit ? -p_limit : (d > p_limit ? p_limit : d));
 }
 
+// Number of set bits.
+inline int popcount64(uint64_t p_v) {
+#if defined(_MSC_VER)
+    return int(__popcnt64(p_v));
+#else
+    return __builtin_popcountll(p_v);
+#endif
+}
+
 // Index of the lowest set bit, p_v != 0.
 inline int ctz64(uint64_t p_v) {
 #if defined(_MSC_VER)

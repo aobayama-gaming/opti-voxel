@@ -653,6 +653,7 @@ void GPUDirectMesher::process_queue() {
     _update_dirty_bounds();
     // Before acquiring pages too: a kill must not land on a page reused by this frame's batches.
     _flush_kills();
+    _flush_hidden();
 
     // Batches of one frame share the scratch buffers, the staging texture and the status buffer: the
     // render graph orders them like batches of consecutive frames (each readback copies its own data
@@ -1018,6 +1019,25 @@ void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
     pending_kill_ranges.push_back(p_chunk.quad_count);
 }
 
+void GPUDirectMesher::set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) {
+    ERR_FAIL_INDEX(p_chunk.page, (int)page_state.size());
+    pending_hidden.push_back(p_chunk.page);
+    pending_hidden.push_back(p_chunk.quad_offset / QuadPagePool::QUAD_GROUP);
+    pending_hidden.push_back(groups_of(p_chunk.quad_count));
+    pending_hidden.push_back(int64_t(p_mask));
+    pending_hidden.push_back(int64_t(WorldCoord::lo32(p_chunk.chunk_id.z)) | int64_t(p_chunk.palette.offset) << 32);
+    stats.hidden_rows += groups_of(p_chunk.quad_count);
+}
+
+void GPUDirectMesher::_flush_hidden() {
+    if (pending_hidden.is_empty()) {
+        return;
+    }
+    // Recorded after the last compaction (VoxelState::push_coverage), flushed before the next one moves rows.
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(pool, &QuadPagePool::rt_set_hidden).bind(pending_hidden));
+    pending_hidden = PackedInt64Array();
+}
+
 void GPUDirectMesher::compact(VoxelState &r_state) {
     // Kills recorded this frame must reach the GPU before any page is copied, reused or freed.
     _flush_kills();
@@ -1280,6 +1300,7 @@ Dictionary GPUDirectMesher::get_stats() {
     d["missing_neighbor"] = (int64_t)stats.missing_neighbor;
     d["nan_vertices"] = (int64_t)stats.nan_vertices;
     d["kills"] = (int64_t)stats.kills;
+    d["hidden_rows"] = (int64_t)stats.hidden_rows;
     d["pages_returned_unused"] = (int64_t)stats.pages_returned_unused;
     // Quad slots the vertex shader runs on (whole groups of live pages): dead and padding included.
     d["drawn_quad_slots"] = drawn_groups * QuadPagePool::QUAD_GROUP;
