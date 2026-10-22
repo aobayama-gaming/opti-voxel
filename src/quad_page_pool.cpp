@@ -61,6 +61,7 @@ varying float v_height; // metres above the world origin (shaded view: contour l
 // over v_quad_uv, so the blend adds no interpolant: triangles are smaller than a pixel here, every attribute the
 // fragment reads costs setup per triangle.
 varying flat ivec2 v_materials;
+varying vec3 v_world_pos; // the fragment's position (metres, render space), set by fragment() for light()
 
 vec3 hash3(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -331,6 +332,7 @@ void fragment() {
     // Contours fade out where they would be denser than ~10 pixels apart.
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
     vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    v_world_pos = p;
     float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
     vec3 shade = ground_detail(p, footprint) * mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
     albedo *= shade;
@@ -437,9 +439,8 @@ void light() {
     float sun = 1.0;
     if (LIGHT_IS_DIRECTIONAL && cloud_shadow > 0.0) {
         vec3 to_sun = mat3(INV_VIEW_MATRIX) * LIGHT;
-        if (to_sun.y > 0.05) {
-            vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
-            sun = 1.0 - cloud_shadow * cloud_density(texture(cloud_tex, cloud_uv(cloud_hit(p, to_sun))).r);
+        if (to_sun.y > 0.05) { // VERTEX is not readable in light(): the fragment's position comes through v_world_pos
+            sun = 1.0 - cloud_shadow * cloud_density(texture(cloud_tex, cloud_uv(cloud_hit(v_world_pos, to_sun))).r);
         }
     }
     DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;
