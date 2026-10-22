@@ -110,7 +110,8 @@
     {"field": "ring", "max": -0.365, "fade": 0.005}
    ],
    "amp": [
-    {"field": "ground", "from_m": 0.4, "to_m": 30000000, "x": 0.002}
+    {"field": "ground", "from_m": 0.4, "to_m": 52428.8, "x": 0.002},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#1c4a78", "steep": "#1c4a78", "roughness": 0.2},
    "debug_color": "#1c4a78"
@@ -167,7 +168,8 @@
      "warp_m": 819.2,
      "warp_fields": ["wx", "wy", "wz"]
     },
-    {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0.01}
+    {"field": "ground", "from_m": 6553.6, "to_m": 52428.8, "x": 0.01},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#6a6a50", "steep": "#5a4c44"},
    "debug_color": "#7a6a50"

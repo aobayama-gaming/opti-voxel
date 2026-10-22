@@ -3,23 +3,23 @@
  "fields": [
   {
    "name": "wx",
-   "seed": 105,
+   "seed": 905,
    "bands": [
-    {"from_m": 1600, "to_m": 13107, "amp": 0.5, "persistence": 0.6}
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wy",
-   "seed": 106,
+   "seed": 906,
    "bands": [
-    {"from_m": 1600, "to_m": 13107, "amp": 0.5, "persistence": 0.6}
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wz",
-   "seed": 107,
+   "seed": 907,
    "bands": [
-    {"from_m": 1600, "to_m": 13107, "amp": 0.5, "persistence": 0.6}
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
@@ -34,18 +34,18 @@
    "field": "elev",
    "height_m": 2000,
    "curve": [
-    [-1.69552, 0.44317],
-    [-1.41067, 0.44317],
-    [-1.12582, 0.26827],
-    [-0.84097, 0.09425],
-    [-0.55612, -0.03266],
-    [-0.27127, -0.18401],
-    [0.01358, -0.30976],
-    [0.29843, -0.38816],
-    [0.58328, -0.39027],
-    [0.86813, -0.44317],
-    [1.15298, -0.37196],
-    [1.43783, -0.37196]
+    [-1.91421, 0.5651],
+    [-1.59918, 0.5651],
+    [-1.28415, 0.35394],
+    [-0.96912, 0.14629],
+    [-0.65409, -0.01204],
+    [-0.33906, -0.15798],
+    [-0.02403, -0.29801],
+    [0.291, -0.4175],
+    [0.60603, -0.48187],
+    [0.92106, -0.5651],
+    [1.23609, -0.48634],
+    [1.55112, -0.48634]
    ]
   }
  ],
@@ -60,7 +60,7 @@
     {
      "field": "ground",
      "wavelength_m": 204.8,
-     "x": 1.5765,
+     "x": 1.8466,
      "shape": "ridged",
      "multifractal": 2,
      "warp_m": 51.2,
@@ -69,7 +69,7 @@
     {
      "field": "ground",
      "wavelength_m": 409.6,
-     "x": 1.9913,
+     "x": 2.26,
      "shape": "ridged",
      "multifractal": 2,
      "warp_m": 102.4,
@@ -78,7 +78,7 @@
     {
      "field": "ground",
      "wavelength_m": 819.2,
-     "x": 2.5173,
+     "x": 2.8759,
      "shape": "ridged",
      "multifractal": 2,
      "warp_m": 204.8,
@@ -87,7 +87,7 @@
     {
      "field": "ground",
      "wavelength_m": 1638.4,
-     "x": 2.8412,
+     "x": 3.3821,
      "shape": "ridged",
      "multifractal": 2,
      "warp_m": 409.6,
@@ -96,15 +96,16 @@
     {
      "field": "ground",
      "wavelength_m": 3276.8,
-     "x": 3.2585,
+     "x": 3.9996,
      "shape": "ridged",
      "multifractal": 2,
      "warp_m": 819.2,
      "warp_fields": ["wx", "wy", "wz"]
     },
-    {"field": "ground", "wavelength_m": 6553.6, "x": 2.4677, "warp_m": 1638.4, "warp_fields": ["wx", "wy", "wz"]},
+    {"field": "ground", "wavelength_m": 6553.6, "x": 2.7864, "warp_m": 1638.4, "warp_fields": ["wx", "wy", "wz"]},
     {"field": "ground", "wavelength_m": 13107.2, "x": 1.96, "warp_m": 3276.8, "warp_fields": ["wx", "wy", "wz"]},
-    {"field": "ground", "from_m": 26214.4, "to_m": 30000000, "x": 0.02}
+    {"field": "ground", "from_m": 26214.4, "to_m": 52428.8, "x": 0.02},
+    {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#8c867c", "steep": "#5c564e"},
    "debug_color": "#7a6a5a"

@@ -1,6 +1,7 @@
 #include "test_climate_common.hpp"
 
 #include <cmath>
+#include <memory>
 
 // Regions (Climate::Region): several landforms in one table, each behind a part of the fields' space, its height terms
 // gated by it. project/climate/region_test.json holds valley.json's fields, stretch, height term and biomes behind a
@@ -154,4 +155,49 @@ TEST_CASE("Climate regions: ground_step bounds a gated term's step between LODs"
         CHECK(bound >= ground_step(ungated, lod, amp));
     }
     CHECK(ground_step(t, 15, 0.0) > ground_step(ungated, 15, 0.0));
+}
+
+// The landform world (project/climate/world.json, tools/landforms/world.py): every landform's region core
+// (Climate::region_core) is its own table, its SDF and its pick (by name). Points over 800 km at LODs 0 and 6.
+TEST_CASE("Climate regions: the world's landform cores are their own tables") {
+    ClimateSDF world("res://climate/world.json", 25);
+    CLIMATE_REQUIRE(world.sdf.get_climate() != nullptr);
+    const Table &wt = *world.sdf.get_climate();
+    CLIMATE_REQUIRE(wt.regions.size() == 8);
+    std::vector<std::unique_ptr<ClimateSDF>> own;
+    for (const Region &r : wt.regions) {
+        own.push_back(std::make_unique<ClimateSDF>(("res://climate/landforms/" + r.name + ".json").utf8().get_data(), 25));
+        CLIMATE_REQUIRE(own.back()->sdf.get_climate() != nullptr);
+    }
+    int core[8] = {}, differ[8] = {}, picks[8] = {};
+    for (const int lod : { 0, 6 }) {
+        for (int i = 0; i < 80 * 80; i++) {
+            const int64_t x = int64_t(i % 80) * 200003 - 8000000;
+            const int64_t z = int64_t(i / 80) * 199999 - 8000000;
+            const int64_t y = world.sdf.get_datum_y() + int64_t(i % 17) * 1999 - 16000;
+            const Vector3i64 p(x >> lod, y >> lod, z >> lod);
+            float ws[Cascade::SLOTS];
+            Cascade::point_slots(world.sdf.get_spec(), p, lod, ws, true);
+            Float4 f[MAX_FIELDS];
+            apply_terms(wt, ws, f);
+            for (int r = 0; r < 8; r++) {
+                if (!region_core(wt, r, f)) {
+                    continue;
+                }
+                const SDFCascade &o = own[size_t(r)]->sdf;
+                core[r]++;
+                differ[r] += float_bits(world.sdf.evaluate(lattice_pos(p, lod), lod)) != float_bits(o.evaluate(lattice_pos(p, lod), lod));
+                float os[Cascade::SLOTS];
+                Cascade::point_slots(o.get_spec(), p, lod, os, true);
+                picks[r] += wt.biomes[size_t(pick_slots(wt, ws, p, lod))].name == o.get_climate()->biomes[size_t(pick_slots(*o.get_climate(), os, p, lod))].name;
+            }
+        }
+    }
+    for (int r = 0; r < 8; r++) {
+        MESSAGE(std::string(wt.regions[size_t(r)].name.utf8().get_data()), " core: ", core[r], " points, ", differ[r], " SDF values differ, ", picks[r],
+                " picks agree");
+        CHECK(core[r] >= 10);
+        CHECK(differ[r] == 0);
+        CHECK(picks[r] == core[r]);
+    }
 }

@@ -176,6 +176,20 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
     return md;
 }
 
+// The cells of a spot (slice pixel p_i): x m | altitude m | z m | the player flag that spawns above it.
+String spot_cells(const Sampled &p_s, size_t p_i, int p_n, double p_spacing_m, double p_voxel_m, const Vector2i &p_c) {
+    const Vector2i64 c = slice_point(p_i, p_n, p_c);
+    const int64_t x = int64_t(std::llround(double(c.x) * p_spacing_m));
+    const int64_t z = int64_t(std::llround(double(c.y) * p_spacing_m));
+    return vformat(" %d | %d | %d | `--spawn=%d,%d` |", x, int64_t(std::llround(p_s.altitude[p_i] * p_voxel_m)), z, x, z);
+}
+
+// The squared distance of slice pixel p_i to the slice's centre, in pixels.
+int64_t centre_d2(size_t p_i, int p_n) {
+    const int64_t dx = int64_t(p_i % size_t(p_n)) - p_n / 2, dz = int64_t(p_i / size_t(p_n)) - p_n / 2;
+    return dx * dx + dz * dz;
+}
+
 // Where each pair of biomes meets, the spot nearest the slice's centre: a pick and its right or lower neighbour
 // differ; the spot is the first of the two (tangent-plane metres, its ground's altitude), with the player flag that
 // spawns above it.
@@ -188,7 +202,7 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
     for (int r = 0; r < p_n; r++) {
         for (int j = 0; j < p_n; j++) {
             const size_t i = size_t(r) * p_n + j;
-            const int64_t dx = j - p_n / 2, dz = r - p_n / 2;
+            const int64_t d2 = centre_d2(i, p_n);
             const int right = j + 1 < p_n ? p_s.picks[i + 1] : p_s.picks[i];
             const int below = r + 1 < p_n ? p_s.picks[i + size_t(p_n)] : p_s.picks[i];
             for (const int o : { right, below }) {
@@ -197,8 +211,8 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
                 }
                 const int a = MIN(o, p_s.picks[i]), b = MAX(o, p_s.picks[i]);
                 Spot &spot = best[size_t(a) * p_s.nb + b];
-                if (dx * dx + dz * dz < spot.d2) {
-                    spot = Spot{ dx * dx + dz * dz, i };
+                if (d2 < spot.d2) {
+                    spot = Spot{ d2, i };
                 }
             }
         }
@@ -210,12 +224,45 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
             if (spot.d2 == INT64_MAX) {
                 continue;
             }
-            const Vector2i64 c = slice_point(spot.i, p_n, p_c);
-            const int64_t x = int64_t(std::llround(double(c.x) * p_spacing_m));
-            const int64_t z = int64_t(std::llround(double(c.y) * p_spacing_m));
-            md += vformat("| %s / %s | %d | %d | %d | `--spawn=%d,%d` |\n", p_table.biomes[size_t(a)].name, p_table.biomes[size_t(b)].name, x,
-                    int64_t(std::llround(p_s.altitude[spot.i] * p_voxel_m)), z, x, z);
+            md += vformat("| %s / %s |", p_table.biomes[size_t(a)].name, p_table.biomes[size_t(b)].name) +
+                    spot_cells(p_s, spot.i, p_n, p_spacing_m, p_voxel_m, p_c) + String("\n");
         }
+    }
+    return md;
+}
+
+// Each region (a landform's part of a world table): its mean value over the slice, the share of its core (region_core:
+// there the landform is its own table's, bit for bit), and the core point nearest the slice's centre with the player flag
+// that spawns above it. From the slice's field values (no gradient). Empty without regions.
+String region_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const Vector2i &p_c) {
+    if (p_table.regions.empty()) {
+        return String();
+    }
+    String md = "| region | mean | core | core nearest the centre: x m | altitude m | z m | player |\n|---|---|---|---|---|---|---|\n";
+    for (int r = 0; r < int(p_table.regions.size()); r++) {
+        double sum = 0.0;
+        int64_t core = 0, best_d2 = INT64_MAX;
+        size_t best = 0;
+        for (size_t i = 0; i < size_t(p_n) * p_n; i++) {
+            Float4 f[MAX_FIELDS];
+            for (int k = 0; k < p_s.nf; k++) {
+                f[k].w = p_s.fields[i * size_t(p_s.nf) + size_t(k)];
+            }
+            sum += double(edges_value(p_table.regions[size_t(r)].edges, f).w);
+            if (!region_core(p_table, r, f)) {
+                continue;
+            }
+            core++;
+            const int64_t d2 = centre_d2(i, p_n);
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best = i;
+            }
+        }
+        const double points = double(p_n) * p_n;
+        md += vformat("| %s | %.3f | %.1f%% |", p_table.regions[size_t(r)].name, sum / points, 100.0 * double(core) / points);
+        md += core == 0 ? String(" - | - | - | - |") : spot_cells(p_s, best, p_n, p_spacing_m, p_voxel_m, p_c);
+        md += "\n";
     }
     return md;
 }
@@ -467,6 +514,8 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     Array images;
     md += biome_section(table, s, n, p_out_dir, images) + String("\n");
     md += border_section(table, s, n, spacing_m, ground.voxel_size, c) + String("\n");
+    const String regions = region_section(table, s, n, spacing_m, ground.voxel_size, c);
+    md += regions.is_empty() ? String() : regions + String("\n");
     md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + String("\n");
     md += shading_section(table, s, n, m, p_out_dir, images) + String("\n");
     md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);

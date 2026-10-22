@@ -590,6 +590,10 @@ to every change, and a reviewer may reject a PR on any of them.
   - `compare.py` and `terrain_stats.py` give octave amplitudes, slope percentiles, hypsometry, curvature skew,
     anisotropy and the share of folded columns, plus a sheet.
   - `match.py` fits one multiplier per octave, `--hypso` a height remap, `--texture` a biome without its features.
+  - `world.py` composes them into `project/climate/world.json` (25 LODs): each landform behind a region of temperature x
+    humidity x wind, shared fields merged, the continental octaves (>= the axes' finest, 105 km) off in every table.
+    Each region's core equals its own table, bit for bit (`test_climate_regions.cpp`); `climate_report.sh` lists a
+    core `--spawn` per region.
   - The findings (which tool for which feature) are in the doc.
 - **Stretched octaves** (`"ground_stretch"`, a band's `"stretch_y"`; `Band::stretch`, at most k − 3; the band table's
   `info.w`): through the base (`BaseSurface::stretched` / `stretch_gradient`), the noise is read at p − (1 − 2^-j) d n

@@ -269,6 +269,12 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
 // The product of the edges' smoothsteps on the field channels p_fields (dual numbers, in list order): a biome's indicator
 // r_b, a region's value. 1 without edges.
 Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_FIELDS]);
+// Whether region p_region is exactly 1 on the field values p_fields (only .w is read) with each of its fields moved by
+// +-p_margin, one at a time; the margin doubles per octave a field's finest band is under the finest band of the region's
+// slowest field (it moves faster across the ground). A core deep enough that the modulation's reads at the cascade's
+// coarser lattices, kilometres apart, stay in it too: there a world's landform is its own table (docs/landforms.md).
+inline constexpr float CORE_MARGIN = 0.05f;
+bool region_core(const Table &p_table, int p_region, const Float4 p_fields[MAX_FIELDS], float p_margin = CORE_MARGIN);
 // The regions some height term is gated by, in index order (parse stores them in Table::gated).
 std::vector<int> gated_regions(const Table &p_table);
 

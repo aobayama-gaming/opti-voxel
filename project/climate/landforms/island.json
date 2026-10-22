@@ -11,21 +11,21 @@
   },
   {
    "name": "wx",
-   "seed": 505,
+   "seed": 905,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wy",
-   "seed": 506,
+   "seed": 906,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]
   },
   {
    "name": "wz",
-   "seed": 507,
+   "seed": 907,
    "bands": [
     {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
    ]

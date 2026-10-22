@@ -32,7 +32,7 @@
   },
   {
    "name": "wx",
-   "seed": 705,
+   "seed": 905,
    "bands": [
     {
      "from_m": 800,
@@ -44,7 +44,7 @@
   },
   {
    "name": "wy",
-   "seed": 706,
+   "seed": 906,
    "bands": [
     {
      "from_m": 800,
@@ -56,7 +56,7 @@
   },
   {
    "name": "wz",
-   "seed": 707,
+   "seed": 907,
    "bands": [
     {
      "from_m": 800,
