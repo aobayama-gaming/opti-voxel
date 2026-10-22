@@ -582,14 +582,25 @@ to every change, and a reviewer may reject a PR on any of them.
   rougher ground), fly p50 out -1%, back -10%. `climate_report.sh` gained `ground_shaded.png` / `ground_normals.png`
   (hillshade from the heights and from the gradient channels), the per-biome gradient error, sea colours and
   `--center=U,V`.
+- **Landforms** (`project/climate/landforms/*.json`, `docs/landforms.md`, `tools/landforms/`): mountain, flat desert,
+  dunes, mangrove, island, cliff, valley and caldera tables, each matched against a real Copernicus GLO-30 heightmap.
+  - `fetch_dem.py` downloads the public AWS tiles; the sites are in `sites.json`.
+  - `climate_report.sh --lattice=M` samples the table on the same grid and writes `heights.f32` / `fields.f32` /
+    `dhdy.f32` / `picks.u8` plus `heights.json`.
+  - `compare.py` and `terrain_stats.py` give octave amplitudes, slope percentiles, hypsometry, curvature skew,
+    anisotropy and the share of folded columns, plus a sheet.
+  - `match.py` fits one multiplier per octave, `--hypso` a height remap, `--texture` a biome without its features.
+  - The findings (which tool for which feature) are in the doc.
 - **Stretched octaves** (`"ground_stretch"`, a band's `"stretch_y"`; `Band::stretch`, at most k − 3; the band table's
   `info.w`): through the base (`BaseSurface::stretched` / `stretch_gradient`), the noise is read at p − (1 − 2^-j) d n
   and its gradient's up component scaled by 2^−j. Flat: datum + (y − datum) / 2^j exactly (GLSL `base_stretched`),
   centred on the datum; sphere: the base sample's float offset (`base_stretched_at`, CPU and GLSL with FrameSpike's
   `stretched_sphere`; its GPU path needs the planet PR's regions). A table without stretch generates the same shader
   text (the `plain.json` pin).
-  - Why: the ground is 3D, so a steep landform's dh/dy passes 1 and folds into needles; a stretch of 4 from 100 m up
-    removes them.
+  - Why: the ground is 3D, so moving up a column the surface meets other noise: amplitude a heightmap doesn't have,
+    needles, and folds where dh/dy passes 1. On the Mont Blanc match, unstretched: 8.7 m at the 100 m octave against
+    2.6 m real, 0.4% of slopes over 75°, spectrum score 0.40 (folds 0.05%). A stretch of 4 from 100 m up: 2.3 m, none,
+    0.13.
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
@@ -607,13 +618,15 @@ to every change, and a reviewer may reject a PR on any of them.
 - `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
   `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
   channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
-- `tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1]`
+- `tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
   weight, the pick drift (the share of points whose pick at the coarsest modulated level differs: what the ground's
   coarsest modulated octave reads vs the material), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
-  `biomes_pick.png` / `ground_height.png` / `field_*.png`. Tune a table from it before any GPU run.
+  `biomes_pick.png` / `ground_height.png` / `field_*.png`, and `heights.f32` + `heights.json` for `tools/landforms`.
+  Tune a table from it before any GPU run. To match a real heightmap: `uv run tools/landforms/match.py SITE TABLE --fit=3`
+  (`docs/landforms.md`).
 - `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the

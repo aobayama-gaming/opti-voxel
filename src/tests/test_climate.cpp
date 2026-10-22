@@ -202,6 +202,25 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
     CHECK(parse_json(many + R"(], "biomes": [{"name": "a"}]})", g.ground, t).contains(vformat("at most %d", MAX_FIELDS)));
 }
 
+// max_ground_mult is validate's cap (climate_report exports it for tools/landforms/match.py): just under it parses,
+// just over it is refused, for a plain and a shaped band.
+TEST_CASE("Climate: max_ground_mult is the largest multiplier validate accepts") {
+    GroundFixture g(0.5, 15);
+    for (const char *shape : { "plain", "ridged" }) {
+        CAPTURE(shape);
+        auto table = [&](double p_x) {
+            return vformat(R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4096, "x": %s, "shape": "%s"}]}]})", p_x,
+                    shape);
+        };
+        Table t;
+        CLIMATE_REQUIRE(parse_json(table(1.0), g.ground, t) == String());
+        const double cap = max_ground_mult(t, g.ground, t.biomes[0], t.biomes[0].amps[0].k);
+        CHECK(cap > 1.0);
+        CHECK(parse_json(table(0.99 * cap), g.ground, t) == String());
+        CHECK(parse_json(table(1.01 * cap), g.ground, t).contains("out of range"));
+    }
+}
+
 TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denormals, gradients by the chain rule") {
     std::mt19937 rng(0xC11A7Eu);
     std::uniform_real_distribution<float> value(-1.5f, 1.5f);

@@ -83,7 +83,7 @@ String validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
     return String();
 }
 
-String validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_amp) {
+String validate_amp(const Table &p_table, const Ground &p_ground, const Biome &p_biome, const Amp &p_amp) {
     const std::vector<Cascade::Band> *bands = bands_of(p_table, p_ground, p_amp.field);
     const Cascade::Band *band = bands ? find_band(*bands, p_amp.k) : nullptr;
     if (band == nullptr) {
@@ -112,8 +112,8 @@ String validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_a
     }
     // The inserted amplitude: the multiplier's, each shape term's in the exact range, the shaped band under the ground's cap.
     const double amp = double(p_amp.mult) * double(band->amp);
-    const Shape shape = p_amp.has_shape ? p_amp.shape : band_shape(p_table, nullptr, p_amp.field, p_amp.k);
-    bool ok = ExactNoise::in_exact_range(float(amp)) && (p_amp.field != GROUND || amp * double(shape_bound(shape)) <= p_ground.amp_cap);
+    const Shape shape = band_shape(p_table, &p_biome, p_amp.field, p_amp.k);
+    bool ok = ExactNoise::in_exact_range(float(amp)) && (p_amp.field != GROUND || double(p_amp.mult) <= max_ground_mult(p_table, p_ground, p_biome, p_amp.k));
     for (int t = 1; t < 4 && ok; t++) {
         ok = shape.c[t] == 0.0f || ExactNoise::in_exact_range(float(amp * std::fabs(double(shape.c[t]))));
     }
@@ -191,7 +191,7 @@ String validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground) 
                 return where + vformat("octave k = %d of one field has two multipliers.", b.amps[j].k);
             }
         }
-        const String err = validate_amp(p_table, p_ground, b.amps[j]);
+        const String err = validate_amp(p_table, p_ground, b, b.amps[j]);
         if (!err.is_empty()) {
             return where + err;
         }
@@ -262,6 +262,15 @@ const std::vector<Cascade::Band> *bands_of(const Table &p_table, const Ground &p
         return p_ground.spec ? &p_ground.spec->bands : nullptr;
     }
     return p_source >= 0 && p_source < int(p_table.fields.size()) ? &p_table.fields[size_t(p_source)].bands : nullptr;
+}
+
+double max_ground_mult(const Table &p_table, const Ground &p_ground, const Biome &p_biome, int p_k) {
+    const Cascade::Band *band = p_ground.spec ? find_band(p_ground.spec->bands, p_k) : nullptr;
+    if (band == nullptr) {
+        return 0.0;
+    }
+    const double unit = double(band->amp) * double(shape_bound(band_shape(p_table, &p_biome, GROUND, p_k)));
+    return unit > 0.0 ? double(p_ground.amp_cap) / unit : INFINITY;
 }
 
 } // namespace Climate

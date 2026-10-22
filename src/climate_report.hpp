@@ -14,7 +14,8 @@ using namespace godot;
 // biomes meets nearest the centre with the player's --spawn, the ground under each biome, per-field range, CPU time per
 // point),
 // biomes_blend.png (debug colours weighted), biomes_pick.png (the picked biome) and field_<name>.png (each field,
-// grey, -max|v| .. +max|v|). Run: tools/climate_report.sh
+// grey, -max|v| .. +max|v|) and heights.f32 / heights.json (the surface heights, for tools/landforms/compare.py).
+// p_lattice >= 0 sets m (the extent is then p_size * 2^m voxels). Run: tools/climate_report.sh
 class ClimateReport : public Node {
     GDCLASS(ClimateReport, Node)
 
@@ -23,5 +24,5 @@ protected:
 
 public:
     Dictionary run(const String &p_out_dir, const String &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size, bool p_surface,
-            const Vector2 &p_center);
+            const Vector2 &p_center, int p_lattice = -1);
 };

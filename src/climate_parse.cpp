@@ -24,7 +24,7 @@ namespace Climate {
 //           "stretch_y" too. A power of two; octave k takes at most 2^(k - 3) of it (BaseSurface::stretched: a range's finest
 //           octaves are stretched less), and no octave is stretched twice. The ground is a 3D noise
 //           whose vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs (steep
-//           landforms: mountains, cliff faces, valley walls); stretched octaves keep it a height field
+//           landforms: mountains, cliff faces, valley walls, tools/landforms); stretched octaves keep it a height field
 //           where they dominate.
 //   shape:  "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
 //           2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A band
