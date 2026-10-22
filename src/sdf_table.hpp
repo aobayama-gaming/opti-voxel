@@ -161,6 +161,16 @@ protected:
     // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
     void stop_streaming();
 
+    // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
+    // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.
+    void set_ground_materials(const std::vector<std::pair<String, Material::Params>> &p_ground) {
+        std::vector<uint32_t> base{ Material::GROUND };
+        for (const std::pair<String, Material::Params> &m : p_ground) {
+            base.push_back(materials.set(m.first, m.second));
+        }
+        gpu.set_base_palette(base);
+    }
+
 private:
     // The library indices the scenes place.
     struct Types {

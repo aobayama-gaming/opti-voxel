@@ -68,7 +68,7 @@ bool DiscovererGPU::_run_batch(const VoxelPos *p_points, uint32_t p_count, int p
     const String name_begin = String("disc_b") + serial;
     const String name_end = String("disc_e") + serial;
     rd->capture_timestamp(name_begin);
-    passes.record_all(p_lod, p_count);
+    passes.record_all(Vector2i(p_lod, p_lod), p_count);
     rd->capture_timestamp(name_end);
     rd->submit();
     rd->sync();

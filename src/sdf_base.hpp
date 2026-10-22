@@ -83,6 +83,11 @@ public:
     // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name.
     virtual uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
             uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const = 0;
+    // The entries every chunk palette starts with (ChunkPalette::build): {GROUND}, or with a climate GROUND then each
+    // biome's material, a ground sample's palette index being 1 + its biome (SDFCascade::ground_material). Longer than
+    // one: every chunk's samples carry a material (the cascade writes it, both meshers read it), and the palette pool's
+    // ground block holds these entries.
+    virtual const std::vector<uint32_t> &base_palette() const = 0;
 
     // The average list a batch's chunks may carry: the meshers size their list buffer for batch size * this.
     static constexpr uint32_t MAX_CHUNK_LIST = 4096;
@@ -98,9 +103,6 @@ public:
 
 class SDFBase {
 public:
-    // Every terrain's datum, metres of absolute y: a flat world, so far origins only show terrain at y = 0.
-    static constexpr double DATUM_M = 300.0;
-
     virtual ~SDFBase() = default;
 
     // Called once before any thread uses the SDF (VoxelTerrain::_ready). Chunks exist at LODs
@@ -129,7 +131,7 @@ public:
 
     // The unit direction upright things (trees) grow along at a LOD0 voxel: the one source of "up" for placement.
     // +y on the flat world; a planet overrides it.
-    virtual std::array<double, 3> up_at(const VoxelPos & /*p_voxel*/) const { return { 0.0, 1.0, 0.0 }; }
+    virtual UpAxis up_at(const VoxelPos & /*p_voxel*/) const { return UP_Y; }
 
     // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
     // wave, over the WorkerThreadPool in blocks of BATCH_BLOCK points (evaluate_cull is thread-safe).
@@ -155,6 +157,18 @@ public:
     // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material, out float skirt_extra)`
     // (material: the winning record's palette index, 0 = ground; skirt_extra: metres added to the sample's skirt depth).
     virtual String get_sample_fold_glsl() const = 0;
+    // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes' fields variant
+    // splices after its channel code, defining `uint cascade_ground_material(Ch ch, WorldPos p)`, the palette index of a
+    // sample no record colours (ch: its channels on Λ_L, the fields carried; p: its absolute point). Empty otherwise.
+    virtual String get_ground_material_glsl() const { return String(); }
+    // Whether a sample's ground is more than the cascade's ground channels (a climate's height terms or terraces): then
+    // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
+    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample.
+    virtual bool has_ground_terms() const { return false; }
+    virtual String get_ground_glsl() const { return String(); }
+    // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
+    // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
+    virtual String get_climate_helpers_glsl() const { return String(); }
 
     // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it
     // into their samples. The const form only reads (the shader text, the sizes).

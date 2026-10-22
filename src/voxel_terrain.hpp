@@ -78,6 +78,7 @@ private:
     int archetype_trees = 0;
     double archetype_tree_area = 60.0;
     double biome_radius = 0.0;
+    String climate_path;
     bool archetype_band = true;
     bool archetype_stream = true;
     bool archetype_moments = true;
@@ -156,13 +157,14 @@ private:
         TimingStat mesher_collect; // get_results
         TimingStat destroy_chunks; // VoxelState::destroy_marked
         TimingStat compact; // GPUDirectMesher::compact
+        TimingStat coverage; // VoxelState::push_coverage
 
         // The sections by name, for the reports.
         std::vector<std::pair<const char *, const TimingStat *>> sections() const {
             return { { "total", &process_total }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
                 { "destroy_from_scan", &destroy_from_scan }, { "destroy_verify", &destroy_verify },
                 { "mesher_dispatch", &mesher_dispatch }, { "mesher_collect", &mesher_collect },
-                { "destroy_chunks", &destroy_chunks }, { "compact", &compact } };
+                { "destroy_chunks", &destroy_chunks }, { "compact", &compact }, { "coverage", &coverage } };
         }
     } process_stats;
 
@@ -216,6 +218,10 @@ public:
     // SDFTable::SCENE_X / Z, 0 for none (--biomes=KM). Set before the node enters the tree.
     void set_biome_radius(double p_metres);
     double get_biome_radius() const;
+    // A climate table (JSON, src/climate.cpp's format: res:// or absolute), carried by the cascade and modulating the
+    // ground's octaves per biome; empty for none (--climate=PATH). Set before the node enters the tree.
+    void set_climate_path(const String &p_path);
+    String get_climate_path() const;
     // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
@@ -268,6 +274,9 @@ public:
     // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain, for the
     // clip planes above 15 LODs.
     double get_sdf_at(const Vector3 &p_render_pos) const;
+    // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
+    // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
+    Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;

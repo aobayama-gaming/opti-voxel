@@ -63,6 +63,10 @@ public:
     uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
             uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const override;
 
+    const std::vector<uint32_t> &base_palette() const override { return base; }
+    // Configure only, before the meshers start.
+    void set_base_palette(const std::vector<uint32_t> &p_base) { base = p_base; }
+
     Dictionary get_stats() const override;
     // The scene's own numbers (the forest), merged into get_stats(), and the snapshot ids below p_scene_end the scene's
     // (compose_list). Main thread, before the meshers start.
@@ -92,6 +96,7 @@ private:
     uint32_t slots = 0; // the streamed records' slots, past capacity
     std::shared_ptr<const InstanceStream> stream;
     uint32_t scene_end = 0;
+    std::vector<uint32_t> base{ Material::GROUND };
     Dictionary scene_stats;
 };
 

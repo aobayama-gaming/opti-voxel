@@ -25,6 +25,7 @@ var base_near := 0.05
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
+var spawn_tangent = null  # --spawn=U,V: metres along the base's tangent plane (Vector2), null: the scene's spawn
 var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
 var smoothed_altitude := 0.0  # 0: not read yet
 const ALTITUDE_TAU := 0.2  # seconds: the altitude reading's time constant, in log space
@@ -73,6 +74,14 @@ func _enter_tree() -> void:
 			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
+		# --spawn=U,V: metres along the base's tangent plane (VoxelTerrain.get_tangent_position; the flat world's x, z
+		# from its (0, 0) column, origin 0); tools/climate_report.sh lists biome borders in these coordinates.
+		if a.begins_with("--spawn="):
+			var uv := a.trim_prefix("--spawn=").split(",")
+			if uv.size() == 2:
+				spawn_tangent = Vector2(uv[0].to_float(), uv[1].to_float())
+			else:
+				push_error("player: --spawn=%s (expected U,V in metres)" % a.trim_prefix("--spawn="))
 		if a.begins_with("--voxel=") and terrain:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
@@ -121,6 +130,8 @@ func _enter_tree() -> void:
 			terrain.archetype_tree_area = a.trim_prefix("--tree_area=").to_float()
 		if a.begins_with("--biomes=") and terrain:
 			terrain.biome_radius = 1000.0 * a.trim_prefix("--biomes=").to_float()
+		if a.begins_with("--climate=") and terrain:
+			terrain.climate_path = a.trim_prefix("--climate=")
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 
@@ -131,6 +142,8 @@ func _ready():
 		base_near = camera.near
 	if terrain and terrain.terrain_mode != 4:  # the shapes gallery keeps the scene's spawn
 		altitude_terrain = terrain
+		if spawn_tangent != null:
+			global_position = terrain.get_tangent_position(spawn_tangent)
 		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
@@ -265,11 +278,18 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
 
-	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted, material.
+	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted,
+	# material, biome (12; 10 / 11 are the bench's bark probe). B toggles the biome view.
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_V:
 		var terrain := _terrain()
 		if terrain:
-			terrain.debug_view = (terrain.debug_view + 1) % 10
+			var views := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+			terrain.debug_view = views[(views.find(terrain.debug_view) + 1) % views.size()]
+			print("debug view ", terrain.debug_view)
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_B:
+		var terrain := _terrain()
+		if terrain:
+			terrain.debug_view = 0 if terrain.debug_view == 12 else 12
 			print("debug view ", terrain.debug_view)
 
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:

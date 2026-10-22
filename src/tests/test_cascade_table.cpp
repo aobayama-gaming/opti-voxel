@@ -43,7 +43,7 @@ Float4 sample_with(const SDFCascade &p_sdf, const InstanceSnapshot &p_snap, cons
 float bare_sdf(const SDFCascade &p_sdf, const VoxelPos &p_voxel, int p_lod) {
     float ch[Cascade::CHANNELS];
     p_sdf.channels_at(p_voxel, p_lod, ch);
-    return p_sdf.sdf(ch, p_voxel.y, p_lod).w;
+    return p_sdf.sdf(ch, p_voxel, p_lod).w;
 }
 
 using ChunkMath::chunk_at_voxel;
@@ -781,7 +781,7 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
             const float from_list = sdf.sample_sdf(*snap, RecordView(gpu.data()), list.data(), uint32_t(list.size()), ch, p, lod).w;
             const float from_point = sdf.evaluate(p, lod);
             CHECK(float_bits(from_list) == float_bits(from_point));
-            folded += from_list != sdf.sdf(ch, p.voxel.y, lod).w;
+            folded += from_list != sdf.sdf(ch, p.voxel, lod).w;
             points++;
         }
     }

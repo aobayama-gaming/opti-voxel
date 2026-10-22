@@ -5,6 +5,7 @@
 #include <godot_cpp/variant/variant.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -113,6 +114,10 @@ struct Vector3i64Hasher {
     }
 };
 
+// A unit direction in absolute axes, double (SDFBase::up_at, BaseSurface::up_dir).
+using UpAxis = std::array<double, 3>;
+inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
+
 // Plain float32 triple: the CPU mirror of GPU float math must stay float32 even in
 // precision=double builds (where godot's Vector3 is double).
 struct Float3 {
@@ -170,6 +175,15 @@ inline int64_t floor_div(int64_t p_a, int64_t p_b) {
 inline int32_t sat_diff(int64_t p_a, int64_t p_b, int32_t p_limit) {
     const int64_t d = p_a - p_b;
     return int32_t(d < -p_limit ? -p_limit : (d > p_limit ? p_limit : d));
+}
+
+// Number of set bits.
+inline int popcount64(uint64_t p_v) {
+#if defined(_MSC_VER)
+    return int(__popcnt64(p_v));
+#else
+    return __builtin_popcountll(p_v);
+#endif
 }
 
 // Index of the lowest set bit, p_v != 0.

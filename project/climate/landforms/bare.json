@@ -1,0 +1,5 @@
+{
+ "comment": "The bare ground (every octave at wavelength / 8), the baseline the landform tables reshape.",
+ "fields": [],
+ "biomes": [ { "name": "bare", "debug_color": "#808080" } ]
+}

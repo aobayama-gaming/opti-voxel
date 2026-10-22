@@ -30,17 +30,34 @@ TEST_CASE("Material::Library: built-ins in order, names unique, image layout") {
     CHECK(img->get_pixel(Material::TEXELS * Material::BARK + 1, 0).a == float(Material::PATTERN_BARK));
 }
 
+const std::vector<uint32_t> GROUND_BASE{ Material::GROUND };
+
 TEST_CASE("ChunkPalette: ground first, distinct ids in list order, indices point back") {
     const uint32_t mats[] = { 7, Material::GROUND, 3, 7, 3, 9 };
     std::vector<uint32_t> palette;
     std::vector<uint16_t> index;
-    CHECK(ChunkPalette::build(mats, 6, palette, index));
+    CHECK(ChunkPalette::build(GROUND_BASE, mats, 6, palette, index));
     CHECK(palette == std::vector<uint32_t>{ Material::GROUND, 7, 3, 9 });
     for (uint32_t i = 0; i < 6; i++) {
         CHECK(palette[index[i]] == mats[i]);
     }
-    CHECK(ChunkPalette::build(nullptr, 0, palette, index));
-    CHECK(palette == std::vector<uint32_t>{ Material::GROUND });
+    CHECK(ChunkPalette::build(GROUND_BASE, nullptr, 0, palette, index));
+    CHECK(palette == GROUND_BASE);
+}
+
+TEST_CASE("ChunkPalette: a climate's base palette comes first, a record's material in it takes its entry") {
+    const std::vector<uint32_t> base{ Material::GROUND, 40, 41, 42 }; // GROUND, then one material per biome
+    const uint32_t mats[] = { 7, 41, Material::GROUND, 7 };
+    std::vector<uint32_t> palette;
+    std::vector<uint16_t> index;
+    CHECK(ChunkPalette::build(base, mats, 4, palette, index));
+    CHECK(palette == std::vector<uint32_t>{ Material::GROUND, 40, 41, 42, 7 });
+    CHECK(index == std::vector<uint16_t>{ 4, 2, 0, 4 });
+    CHECK(ChunkPalette::build(base, nullptr, 0, palette, index));
+    CHECK(palette == base);
+    // A base must start with GROUND (index 0: a sample no record colours, before the pick).
+    const std::vector<uint32_t> bad{ 40, Material::GROUND };
+    CHECK_FALSE(ChunkPalette::build(bad, mats, 4, palette, index)); // ERR
 }
 
 TEST_CASE("ChunkPalette: past MAX_ENTRIES materials the rest draws as ground") {
@@ -50,7 +67,7 @@ TEST_CASE("ChunkPalette: past MAX_ENTRIES materials the rest draws as ground") {
     }
     std::vector<uint32_t> palette;
     std::vector<uint16_t> index;
-    CHECK_FALSE(ChunkPalette::build(mats.data(), uint32_t(mats.size()), palette, index));
+    CHECK_FALSE(ChunkPalette::build(GROUND_BASE, mats.data(), uint32_t(mats.size()), palette, index));
     CHECK(palette.size() == ChunkPalette::MAX_ENTRIES);
     CHECK(index[ChunkPalette::MAX_ENTRIES - 2] == ChunkPalette::MAX_ENTRIES - 1); // material 510 is the last that fits
     CHECK(index[ChunkPalette::MAX_ENTRIES - 1] == 0);
@@ -61,7 +78,7 @@ TEST_CASE("ChunkPalette: INHERIT takes the reserved index and no entry") {
     const uint32_t mats[] = { Material::INHERIT, 7, Material::INHERIT };
     std::vector<uint32_t> palette;
     std::vector<uint16_t> index;
-    CHECK(ChunkPalette::build(mats, 3, palette, index));
+    CHECK(ChunkPalette::build(GROUND_BASE, mats, 3, palette, index));
     CHECK(palette == std::vector<uint32_t>{ Material::GROUND, 7 });
     CHECK(index == std::vector<uint16_t>{ uint16_t(ChunkPalette::INHERIT_INDEX), 1, uint16_t(ChunkPalette::INHERIT_INDEX) });
 }
@@ -108,6 +125,31 @@ TEST_CASE("PaletteAlloc: aligned blocks, the ground block reserved, frees merge 
         big++;
     }
     CHECK(big == 4096 / 512 - 1);
+}
+
+TEST_CASE("PaletteAlloc: a base palette of 17 entries (16 biomes) reserves a 32-entry ground block") {
+    PaletteAlloc a;
+    a.reset(4096, 17);
+    CHECK(a.used() == 32);
+    const int64_t first = a.alloc(1);
+    CHECK(first >= 32); // past the ground block
+    a.free(uint32_t(first), 1);
+    CHECK(a.used() == 32);
+}
+
+TEST_CASE("Material::Library: set adds a material once, then replaces its parameters") {
+    Material::Library lib;
+    Material::Params p;
+    p.pattern = Material::PATTERN_GROUND;
+    p.debug = Color(1, 0, 0, 1);
+    const uint32_t id = lib.set("biome:a", p);
+    CHECK(id == Material::BUILTIN_COUNT);
+    p.debug = Color(0, 1, 0, 1);
+    CHECK(lib.set("biome:a", p) == id);
+    CHECK(lib.size() == Material::BUILTIN_COUNT + 1);
+    const Ref<Image> img = lib.make_image();
+    CHECK(img->get_pixel(Material::TEXELS * int(id) + 1, 0).a == float(Material::PATTERN_GROUND));
+    CHECK(img->get_pixel(Material::TEXELS * int(id) + Material::TEXEL_DEBUG, 0).g == doctest::Approx(1.0));
 }
 
 TEST_CASE("Fold material: the record that wins the sample gives it its palette index") {

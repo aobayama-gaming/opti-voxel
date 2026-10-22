@@ -21,10 +21,6 @@ struct Site {
     uint32_t variant = 0;
 };
 
-// A unit direction in absolute axes (SDFBase::up_at): what upright things grow along.
-using UpAxis = std::array<double, 3>;
-inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
-
 // The ground's field at a LOD0 voxel as LOD p_lod sees it: the gradient (x, y, z) and the distance (w), both in LOD0
 // voxels. LOD 0 is the field itself; a coarser LOD extends its nearest lattice sample along its gradient (one cheap
 // evaluation, the octaves the LOD drops left out). Thread-safe.

@@ -4,6 +4,8 @@
 #include <godot_cpp/variant/vector3.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
+#include "subcube.hpp"
+
 #include <cmath>
 #include <cstdint>
 
@@ -17,8 +19,15 @@ using namespace godot;
 //   texel 0          (x lo, x hi, y lo, y hi)  group header: low 32 bits of the id of the chunk owning
 //   texel 1          (z lo, z hi, b lo, b hi)  every quad of the row (chunks start on a group, so rows
 //                                               never mix chunks), and b the offset of the chunk's palette
-//                                               block in the palette texture (palette_pool.hpp)
-//   texel 2 + 4q + k corner k of quad q
+//                                               block in the palette texture (palette_pool.hpp), its bit 31
+//                                               (COVERAGE_FLAG) set when texel 2 hides something
+//   texel 2          (h0, h1, h2, h3)          the chunk's hidden sub-cubes, 64 bits h0 | h1 << 16 | ...: the
+//                                               chunk split in sub-cubes (subcube.hpp), bit Subcube::bit set
+//                                               where its replacements have landed (coverage, VoxelState); a
+//                                               quad whose 4 corners are all in hidden sub-cubes isn't drawn.
+//                                               0 (what the emit pass, kills and fresh pages write) draws all.
+//                                               Only read when the flag is set: rows without one cost no fetch
+//   texel 3 + 4q + k corner k of quad q
 // A corner is its position in the chunk's vertex grid (the grid the SDF is sampled on, skirt
 // included) as 3 x POS_BITS fixed point, a PALETTE_BITS palette index p spread over the top bits of the
 // three position channels, and its normal n = nx | ny << 8 as 2 x 8-bit octahedral:
@@ -29,7 +38,12 @@ using namespace godot;
 namespace PageFormat {
 
 static constexpr uint32_t QUAD_GROUP = 64;
-static constexpr uint32_t HEADER_TEXELS = 2;
+static constexpr uint32_t QUAD_INDEX_BITS = 6; // a quad's index within its group
+static_assert(1u << QUAD_INDEX_BITS == QUAD_GROUP, "QUAD_INDEX_BITS indexes a group");
+static constexpr uint32_t HEADER_TEXELS = 3;
+static constexpr uint32_t COVERAGE_TEXEL = 2; // the hidden sub-cubes (above)
+// In texel 1's palette word: palette offsets stay far below it (a texture is at most 16,384 rows of 512 entries).
+static constexpr uint32_t COVERAGE_FLAG = 1u << 31;
 static constexpr uint32_t TEX_WIDTH = HEADER_TEXELS + QUAD_GROUP * 4; // texels per row
 static constexpr uint32_t TEXEL_CHANNELS = 4; // uint16 each
 static constexpr uint32_t CORNER_BYTES = 8;
@@ -74,8 +88,38 @@ inline Vector3i header_chunk(const uint16_t *p_row) {
 }
 
 inline uint32_t header_palette(const uint16_t *p_row) {
-    return uint32_t(p_row[6]) | uint32_t(p_row[7]) << 16;
+    return (uint32_t(p_row[6]) | uint32_t(p_row[7]) << 16) & ~COVERAGE_FLAG;
 }
+
+// The palette texture's channels (TEXEL_CHANNELS per texel, row-major rows of PALETTE_TEX_WIDTH): entry p_e holds p_id,
+// two 16-bit words per id, two ids per texel (the GLSL page_palette_texel_value's layout).
+inline void encode_palette_entry(uint16_t *r_texture, uint32_t p_e, uint32_t p_id) {
+    r_texture[2 * size_t(p_e)] = uint16_t(p_id & 0xFFFFu);
+    r_texture[2 * size_t(p_e) + 1] = uint16_t(p_id >> 16);
+}
+
+inline uint64_t header_hidden(const uint16_t *p_row) {
+    if ((p_row[7] & (COVERAGE_FLAG >> 16)) == 0) {
+        return 0;
+    }
+    const uint16_t *h = p_row + COVERAGE_TEXEL * TEXEL_CHANNELS;
+    return uint64_t(h[0]) | uint64_t(h[1]) << 16 | uint64_t(h[2]) << 32 | uint64_t(h[3]) << 48;
+}
+
+// Header texels 1 and 2 of a chunk's rows (z low word p_z_lo, palette block p_palette) hiding p_mask: what
+// QuadPagePool::rt_set_hidden writes, the flag set iff the mask isn't 0.
+inline void encode_coverage(uint16_t r_texels[2 * TEXEL_CHANNELS], int32_t p_z_lo, uint32_t p_palette, uint64_t p_mask) {
+    const uint32_t z = uint32_t(p_z_lo);
+    const uint32_t b = p_palette | (p_mask != 0 ? COVERAGE_FLAG : 0);
+    r_texels[0] = uint16_t(z & 65535u);
+    r_texels[1] = uint16_t(z >> 16);
+    r_texels[2] = uint16_t(b & 65535u);
+    r_texels[3] = uint16_t(b >> 16);
+    for (uint32_t i = 0; i < TEXEL_CHANNELS; i++) {
+        r_texels[TEXEL_CHANNELS + i] = uint16_t(p_mask >> (16 * i));
+    }
+}
+static_assert(COVERAGE_TEXEL == 2, "encode_coverage writes texels 1 and 2");
 
 // Corner k of quad q (q = slot within the page) as its four channels.
 inline const uint16_t *corner(const uint16_t *p_page, uint32_t p_quad, int p_k) {
@@ -112,7 +156,9 @@ inline String glsl_constants() {
     const struct {
         const char *name;
         uint32_t value;
-    } constants[] = { { "QUAD_GROUP", QUAD_GROUP }, { "HEADER_TEXELS", HEADER_TEXELS }, { "TEX_WIDTH", TEX_WIDTH },
+    } constants[] = { { "QUAD_GROUP", QUAD_GROUP }, { "QUAD_INDEX_BITS", QUAD_INDEX_BITS }, { "HEADER_TEXELS", HEADER_TEXELS }, { "TEX_WIDTH", TEX_WIDTH },
+        { "PAGE_COVERAGE_TEXEL", COVERAGE_TEXEL }, { "PAGE_COVERAGE_AXIS", Subcube::AXIS },
+        { "PAGE_COVERAGE_FLAG", COVERAGE_FLAG },
         { "PAGE_POS_BITS", POS_BITS }, { "PAGE_POS_MASK", POS_MASK }, { "PAGE_NORMAL_AXIS_BITS", NORMAL_AXIS_BITS },
         { "PAGE_NORMAL_AXIS_MAX", NORMAL_AXIS_MAX }, { "PAGE_NORMAL_BITS", NORMAL_BITS },
         { "PAGE_PALETTE_LANE_BITS", PALETTE_LANE_BITS }, { "PALETTE_TEX_WIDTH", PALETTE_TEX_WIDTH } };
@@ -147,7 +193,19 @@ uint page_decode_palette(uvec4 c) {
 
 // The palette block offset in header texel 1 (palette_pool.hpp), the GLSL header_palette.
 uint page_header_palette(uvec4 h1) {
-    return h1.z | (h1.w << 16u);
+    return (h1.z | (h1.w << 16u)) & ~PAGE_COVERAGE_FLAG;
+}
+
+// Whether header texel 2 hides something (PageFormat::COVERAGE_FLAG in texel 1).
+bool page_header_has_coverage(uvec4 h1) {
+    return (h1.w & (PAGE_COVERAGE_FLAG >> 16u)) != 0u;
+}
+
+// Sub-cube s (in [0, PAGE_COVERAGE_AXIS)^3) hidden in header texel 2's mask (Subcube::bit).
+bool page_subcube_hidden(uvec4 h2, uvec3 s) {
+    uint bit = s.x + PAGE_COVERAGE_AXIS * (s.y + PAGE_COVERAGE_AXIS * s.z);
+    uint word = bit < 32u ? (h2.x | (h2.y << 16u)) : (h2.z | (h2.w << 16u));
+    return ((word >> (bit & 31u)) & 1u) != 0u;
 }
 
 // Palette entry e (block offset + palette index): the palette texel holding it, and its id in that texel.
@@ -201,6 +259,7 @@ void store_group_header(uint group, ivec3 chunk, uint palette_block) {
     uvec3 c = uvec3(chunk);
     imageStore(staging, ivec2(0, group), uvec4(c.x & 65535u, c.x >> 16u, c.y & 65535u, c.y >> 16u));
     imageStore(staging, ivec2(1, group), uvec4(c.z & 65535u, c.z >> 16u, palette_block & 65535u, palette_block >> 16u));
+    imageStore(staging, ivec2(PAGE_COVERAGE_TEXEL, group), uvec4(0u)); // nothing hidden
 }
 
 )glsl";

@@ -1,0 +1,721 @@
+{
+ "comment": "Two landforms behind complementary temperature regions, for the tests (test_climate_regions.cpp, CascadeSpike set 4r): the valley (valley.json's fields, seeds, stretch, height term and biomes, gated to 'cold': its core is valley.json bit for bit) and the cliff's scarp plus the mangrove's channels (gated to 'warm'). 9 fields and the multifractal state: more field groups than the old cap of 8.",
+ "fields": [
+  {
+   "name": "temperature",
+   "seed": 1001,
+   "bands": [
+    {
+     "wavelength_m": 13107.2,
+     "amp": 1.0
+    }
+   ]
+  },
+  {
+   "name": "valley",
+   "seed": 701,
+   "bands": [
+    {
+     "wavelength_m": 13107.2,
+     "amp": 1.0,
+     "shape": "ridged",
+     "stretch_y": 8.0
+    },
+    {
+     "from_m": 200,
+     "to_m": 1638.4,
+     "amp": 0.012,
+     "persistence": 0.7,
+     "stretch_y": 8
+    }
+   ]
+  },
+  {
+   "name": "wx",
+   "seed": 905,
+   "bands": [
+    {
+     "from_m": 800,
+     "to_m": 6554,
+     "amp": 0.5,
+     "persistence": 0.6
+    }
+   ]
+  },
+  {
+   "name": "wy",
+   "seed": 906,
+   "bands": [
+    {
+     "from_m": 800,
+     "to_m": 6554,
+     "amp": 0.5,
+     "persistence": 0.6
+    }
+   ]
+  },
+  {
+   "name": "wz",
+   "seed": 907,
+   "bands": [
+    {
+     "from_m": 800,
+     "to_m": 6554,
+     "amp": 0.5,
+     "persistence": 0.6
+    }
+   ]
+  },
+  {
+   "name": "scarp",
+   "seed": 601,
+   "bands": [
+    {
+     "from_m": 3277,
+     "to_m": 13107,
+     "amp": 1.0,
+     "persistence": 0.6,
+     "stretch_y": 8.0
+    },
+    {
+     "from_m": 100,
+     "to_m": 1638.4,
+     "amp": 0.02,
+     "persistence": 0.7,
+     "stretch_y": 8
+    }
+   ]
+  },
+  {
+   "name": "channels",
+   "seed": 401,
+   "bands": [
+    {
+     "wavelength_m": 6553.6,
+     "amp": 1.0,
+     "shape": "ridged"
+    }
+   ]
+  },
+  {
+   "name": "creeks",
+   "seed": 402,
+   "bands": [
+    {
+     "wavelength_m": 1638.4,
+     "amp": 1.0,
+     "shape": "ridged"
+    }
+   ]
+  },
+  {
+   "name": "patch",
+   "seed": 801,
+   "bands": [
+    {
+     "from_m": 1600,
+     "to_m": 6554,
+     "amp": 1.0,
+     "persistence": 0.6
+    }
+   ]
+  }
+ ],
+ "regions": [
+  {
+   "name": "cold",
+   "where": [
+    {
+     "field": "temperature",
+     "max": 0.0,
+     "fade": 0.05
+    }
+   ]
+  },
+  {
+   "name": "warm",
+   "where": [
+    {
+     "field": "temperature",
+     "min": 0.05,
+     "fade": 0.05
+    }
+   ]
+  }
+ ],
+ "heights": [
+  {
+   "field": "valley",
+   "height_m": 2100,
+   "curve": [
+    [
+     0.05,
+     1.0
+    ],
+    [
+     0.06,
+     1.0
+    ],
+    [
+     0.07,
+     1.0
+    ],
+    [
+     0.08,
+     1.0
+    ],
+    [
+     0.09,
+     1.0
+    ],
+    [
+     0.1,
+     1.0
+    ],
+    [
+     0.11,
+     1.0
+    ],
+    [
+     0.12,
+     1.0
+    ],
+    [
+     0.13,
+     1.0
+    ],
+    [
+     0.14,
+     1.0
+    ],
+    [
+     0.15,
+     1.0
+    ],
+    [
+     0.16,
+     0.95538
+    ],
+    [
+     0.17,
+     0.84899
+    ],
+    [
+     0.18,
+     0.72201
+    ],
+    [
+     0.19,
+     0.61562
+    ],
+    [
+     0.2,
+     0.571
+    ],
+    [
+     0.21,
+     0.571
+    ],
+    [
+     0.22,
+     0.571
+    ],
+    [
+     0.23,
+     0.571
+    ],
+    [
+     0.24,
+     0.571
+    ],
+    [
+     0.25,
+     0.571
+    ]
+   ],
+   "region": "cold"
+  },
+  {
+   "field": "scarp",
+   "height_m": 700,
+   "curve": [
+    [
+     -0.1,
+     0.0
+    ],
+    [
+     -0.09,
+     0.0
+    ],
+    [
+     -0.08,
+     0.0
+    ],
+    [
+     -0.07,
+     0.0
+    ],
+    [
+     -0.06,
+     0.0
+    ],
+    [
+     -0.05,
+     0.0
+    ],
+    [
+     -0.04,
+     0.0
+    ],
+    [
+     -0.03,
+     0.0
+    ],
+    [
+     -0.02,
+     0.0
+    ],
+    [
+     -0.01,
+     0.15625
+    ],
+    [
+     0.0,
+     0.5
+    ],
+    [
+     0.01,
+     0.84375
+    ],
+    [
+     0.02,
+     1.0
+    ],
+    [
+     0.03,
+     1.0
+    ],
+    [
+     0.04,
+     1.0
+    ],
+    [
+     0.05,
+     1.0
+    ],
+    [
+     0.06,
+     1.0
+    ],
+    [
+     0.07,
+     1.0
+    ],
+    [
+     0.08,
+     1.0
+    ],
+    [
+     0.09,
+     1.0
+    ],
+    [
+     0.1,
+     1.0
+    ]
+   ],
+   "region": "warm"
+  },
+  {
+   "field": "channels",
+   "height_m": 5,
+   "curve": [
+    [
+     0.1,
+     1.0
+    ],
+    [
+     0.10938,
+     1.0
+    ],
+    [
+     0.11875,
+     1.0
+    ],
+    [
+     0.12812,
+     1.0
+    ],
+    [
+     0.1375,
+     1.0
+    ],
+    [
+     0.14688,
+     1.0
+    ],
+    [
+     0.15625,
+     1.0
+    ],
+    [
+     0.16563,
+     1.0
+    ],
+    [
+     0.175,
+     0.79688
+    ],
+    [
+     0.18438,
+     -0.04935
+    ],
+    [
+     0.19375,
+     -0.3
+    ],
+    [
+     0.20312,
+     -0.3
+    ],
+    [
+     0.2125,
+     -0.3
+    ],
+    [
+     0.22187,
+     -0.3
+    ],
+    [
+     0.23125,
+     -0.3
+    ],
+    [
+     0.24063,
+     -0.3
+    ],
+    [
+     0.25,
+     -0.3
+    ]
+   ],
+   "region": "warm"
+  }
+ ],
+ "ground_stretch": [
+  {
+   "from_m": 100.0,
+   "to_m": 30000000,
+   "stretch_y": 4.0
+  }
+ ],
+ "biomes": [
+  {
+   "name": "floor",
+   "where": [
+    {
+     "field": "valley",
+     "min": 0.19,
+     "fade": 0.02
+    }
+   ],
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 51.2,
+     "x": 0.1,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "from_m": 102.4,
+     "to_m": 30000000,
+     "x": 0.01
+    }
+   ],
+   "surface": {
+    "flat": "#6a8a3c",
+    "steep": "#7a7468"
+   },
+   "debug_color": "#70a040",
+   "region": "cold"
+  },
+  {
+   "name": "plateau",
+   "where": [
+    {
+     "field": "scarp",
+     "min": 0.03,
+     "fade": 0.02
+    }
+   ],
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 51.2,
+     "x": 0.3,
+     "shape": "ridged"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 102.4,
+     "x": 0.1399,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 204.8,
+     "x": 0.5774,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 409.6,
+     "x": 1.312,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 819.2,
+     "x": 1.0336,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 1638.4,
+     "x": 1.1281,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 3276.8,
+     "x": 0.5723,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "from_m": 6553.6,
+     "to_m": 30000000,
+     "x": 0.01
+    }
+   ],
+   "surface": {
+    "flat": "#8a8a58",
+    "steep": "#6a5444"
+   },
+   "debug_color": "#a09060",
+   "region": "warm"
+  },
+  {
+   "name": "lowland",
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 51.2,
+     "x": 0.4,
+     "shape": "ridged"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 102.4,
+     "x": 0.2331,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 25.6,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 204.8,
+     "x": 0.9624,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 51.2,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 409.6,
+     "x": 2.1867,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 102.4,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 819.2,
+     "x": 1.7227,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 204.8,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 1638.4,
+     "x": 1.8802,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 409.6,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 3276.8,
+     "x": 0.9538,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 819.2,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 6553.6,
+     "x": 0.6749
+    },
+    {
+     "field": "ground",
+     "from_m": 13107.2,
+     "to_m": 30000000,
+     "x": 0.01
+    }
+   ],
+   "surface": {
+    "flat": "#5c8040",
+    "steep": "#5c5040"
+   },
+   "debug_color": "#508040",
+   "region": "warm"
+  },
+  {
+   "name": "upland",
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 51.2,
+     "x": 0.4,
+     "shape": "ridged"
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 102.4,
+     "x": 0.2942,
+     "shape": "billow",
+     "warp_m": 25.6,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 204.8,
+     "x": 1.0489,
+     "shape": "billow",
+     "warp_m": 51.2,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 409.6,
+     "x": 1.4436,
+     "shape": "billow",
+     "warp_m": 102.4,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 819.2,
+     "x": 0.9921,
+     "shape": "billow",
+     "warp_m": 204.8,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 1638.4,
+     "x": 0.7137,
+     "shape": "billow",
+     "warp_m": 409.6,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "x": 0.4,
+     "shape": "billow",
+     "warp_m": 819.2,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ],
+     "from_m": 3276.8,
+     "to_m": 3276.8
+    },
+    {
+     "field": "ground",
+     "x": 0.2,
+     "from_m": 6553.6,
+     "to_m": 6553.6
+    },
+    {
+     "field": "ground",
+     "from_m": 13107.2,
+     "to_m": 30000000,
+     "x": 0.01
+    }
+   ],
+   "surface": {
+    "flat": "#8c8a80",
+    "steep": "#a8a49a"
+   },
+   "debug_color": "#9a9488"
+  }
+ ]
+}

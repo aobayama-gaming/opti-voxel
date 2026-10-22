@@ -26,10 +26,23 @@ uint32_t Library::add(const String &p_name, const Params &p_params) {
     return size() - 1;
 }
 
+uint32_t Library::set(const String &p_name, const Params &p_params) {
+    const uint32_t existing = find(p_name);
+    if (existing == UINT32_MAX) {
+        return add(p_name, p_params);
+    }
+    params[existing] = p_params;
+    return existing;
+}
+
 String glsl_constants() {
     return vformat("const uint MATERIAL_TEXELS = %du;\nconst uint MATERIALS_PER_ROW = %du;\nconst uint MATERIAL_GROUND = %du;\n"
-                   "const uint MATERIAL_ID_BITS = %du;\nconst float MATERIAL_PATTERN_LAVA = %d.0;\nconst float MATERIAL_PATTERN_BARK = %d.0;\n",
-            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, ID_BITS, int(PATTERN_LAVA), int(PATTERN_BARK));
+                   "const uint MATERIAL_ID_BITS = %du;\nconst float MATERIAL_PATTERN_LAVA = %d.0;\nconst float MATERIAL_PATTERN_BARK = %d.0;\n"
+                   "const float MATERIAL_PATTERN_GROUND = %d.0;\nconst int MATERIAL_TEXEL_DEBUG = %d;\n"
+                   "const vec3 GROUND_FLAT = vec3(%s, %s, %s);\nconst vec3 GROUND_STEEP = vec3(%s, %s, %s);\n",
+            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, ID_BITS, int(PATTERN_LAVA), int(PATTERN_BARK), int(PATTERN_GROUND), TEXEL_DEBUG,
+            String::num(GROUND_FLAT.r), String::num(GROUND_FLAT.g), String::num(GROUND_FLAT.b), String::num(GROUND_STEEP.r),
+            String::num(GROUND_STEEP.g), String::num(GROUND_STEEP.b));
 }
 
 uint32_t Library::find(const String &p_name) const {
@@ -50,8 +63,10 @@ Ref<Image> Library::make_image() const {
     for (uint32_t m = 0; m < size(); m++) {
         const Params &p = params[m];
         const int64_t at = (int64_t(m / IMAGE_MATERIALS_PER_ROW) * width + TEXELS * (m % IMAGE_MATERIALS_PER_ROW)) * 4;
-        const float texels[8] = { p.albedo.r, p.albedo.g, p.albedo.b, p.roughness, p.emission.r, p.emission.g, p.emission.b, float(p.pattern) };
-        for (int i = 0; i < 8; i++) {
+        const Color e = p.pattern == PATTERN_GROUND ? p.steep : p.emission;
+        const float texels[TEXELS * 4] = { p.albedo.r, p.albedo.g, p.albedo.b, p.roughness, e.r, e.g, e.b, float(p.pattern), p.debug.r, p.debug.g,
+            p.debug.b, p.debug.a };
+        for (int i = 0; i < TEXELS * 4; i++) {
             data.set(at + i, texels[i]);
         }
     }

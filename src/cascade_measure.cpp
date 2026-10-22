@@ -1,5 +1,6 @@
 #include "cascade_measure.hpp"
 
+#include "base_surface.hpp"
 #include "cascade_terrain.hpp"
 
 #include <godot_cpp/core/math.hpp>
@@ -33,8 +34,10 @@ void height_normals(const Level &p_level, const Vector3i64 &p_p, const ExactNois
     p_level.channels_at(p_p, v);
     const float cc[CHANNELS] = { v[VALUE] * amp, v[DX] * amp, v[DY] * amp, v[DZ] * amp };
     const float ca[CHANNELS] = { p_perlin.w * amp, p_perlin.x * rs, p_perlin.y * rs, p_perlin.z * rs };
-    r_cascaded = CascadeTerrain::height_sdf(cc, 0, 0.0f);
-    r_analytic = CascadeTerrain::height_sdf(ca, 0, 0.0f);
+    // Over a flat base at altitude 0.
+    const ExactNoise::Float4 base = BaseSurface::flat(0).at(VoxelPos(), 0);
+    r_cascaded = CascadeTerrain::height_sdf(cc, 0, base);
+    r_analytic = CascadeTerrain::height_sdf(ca, 0, base);
 }
 
 ChunkId random_chunk(int p_lod, uint32_t p_seed, int p_index) {

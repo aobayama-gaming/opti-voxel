@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "exact_noise.hpp"
+#include "exact_noise_glsl.hpp"
 #include "material_library.hpp"
 #include "world_coord.hpp"
 
@@ -25,12 +26,16 @@ uniform usampler2D palette_tex : filter_nearest, repeat_disable;
 uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // 0 shaded, 1 normals, 2 lod, 3 page, 4 shaded + quad wireframe, 5 chunk hash,
 // 6 group (INSTANCE_ID), 7 quad index within the group (VERTEX_ID / 4), 8 faceted, 9 material, 10 / 11 bark seam
-// probe (bench.gd --probe)
+// probe (bench.gd --probe), 12 biome (the materials' debug colours), 13 coverage (the quads a stalled chunk hides are
+// drawn magenta, those it still draws orange)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
 // Sea level in metres above the world origin: below -1e29, no height colours (VoxelTerrain sets it for
 // the continents preset).
 uniform float sea_level_m = -1e30;
+// The base surface's up (BaseSurface::up_dir), which the slope colours read: +y on the flat world. A sphere base will
+// need it per vertex.
+uniform vec3 base_up = vec3(0.0, 1.0, 0.0);
 // World origin in chunk-id units, low 32 bits: positions are drawn relative to it.
 uniform ivec3 origin_chunk_lo = ivec3(0);
 uniform int chunk_size = 32;
@@ -45,7 +50,7 @@ varying vec3 v_world_normal;
 varying vec2 v_quad_uv;
 varying flat float v_lod;
 varying flat vec3 v_chunk;
-varying flat ivec2 v_ids;
+varying flat ivec2 v_ids; // INSTANCE_ID, quad index | coverage << QUAD_INDEX_BITS (0 drawn, 1 stalled, 2 hidden)
 varying float v_height; // metres above the world origin (shaded view: contour lines)
 // The quad's two materials, from the provoking corner A: x = A's (global id), y = the other one's | its corner mask
 // << MATERIAL_ID_BITS (bit k, k = 1..3: corner k is not A's material). The fragment's weight is the mask interpolated
@@ -150,8 +155,10 @@ ivec2 material_texel(uint mat_id) {
 
 // A material's shading: the ground's procedural albedo (computed once by the caller), or its parameters from
 // material_tex and its pattern. p: the fragment's position (metres, render space), n its normal (interpolated, not
-// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature).
-void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, out vec3 albedo,
+// normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); flat_w and shade:
+// the procedural ground's slope weight (1 on gentle slopes) and contour shading, which PATTERN_GROUND (a biome's
+// ground) applies to its own colours.
+void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float flat_w, float shade, out vec3 albedo,
         out float roughness, out vec3 emission) {
     albedo = ground;
     roughness = 1.0;
@@ -165,7 +172,10 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
     albedo = m0.rgb;
     roughness = m0.a;
     emission = m1.rgb;
-    if (m1.a == MATERIAL_PATTERN_LAVA) {
+    if (m1.a == MATERIAL_PATTERN_GROUND) {
+        albedo = mix(m1.rgb, m0.rgb, flat_w) * shade; // m1.rgb: its steep albedo (no emission)
+        emission = vec3(0.0);
+    } else if (m1.a == MATERIAL_PATTERN_LAVA) {
         // Lava: a warped crust, dark seams over a glow that drifts slowly.
         vec2 q = p.xz * 0.15;
         q += vec2(sin(q.y * 1.7 + TIME * 0.15), sin(q.x * 1.3 - TIME * 0.11));
@@ -208,6 +218,24 @@ void vertex() {
     vec3 chunk_min = vec3(rel) * (chunk_world_dim * 0.5) - vec3(size * 0.5);
     vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
+    // Coverage (page_format.hpp, header texel 2): a quad whose 4 corners all lie in hidden sub-cubes collapses to one
+    // point, so a cut overlaps the chunks replacing it instead of leaving a gap. Every corner of the quad decides alike.
+    // Only the rows flagged in texel 1 read texel 2.
+    int coverage = 0;
+    if (page_header_has_coverage(h1)) {
+        uvec4 h2 = texelFetch(quad_tex, ivec2(int(PAGE_COVERAGE_TEXEL), INSTANCE_ID), 0);
+        int first = int(HEADER_TEXELS) + (VERTEX_ID & ~3);
+        bool hidden = true;
+        for (int k = 0; k < 4; k++) {
+            vec3 lk = page_decode_local(texelFetch(quad_tex, ivec2(first + k, INSTANCE_ID), 0), pos_scale);
+            ivec3 sub = ivec3(floor((lk - float(skirt_size)) * float(PAGE_COVERAGE_AXIS) / voxel_dim));
+            hidden = hidden && page_subcube_hidden(h2, uvec3(clamp(sub, ivec3(0), ivec3(int(PAGE_COVERAGE_AXIS) - 1))));
+        }
+        coverage = hidden ? 2 : 1;
+        if (hidden && debug_view != 13) {
+            world = chunk_min;
+        }
+    }
     vec3 n = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
     // The quad's materials: a = corner A's, b = the first other one in B, C, D (a when uniform), and which corners
     // are not a. Flat values come from the provoking corner, A in both triangles: only A reads the other corners (the
@@ -229,7 +257,7 @@ void vertex() {
     }
 
     v_world_normal = n;
-    v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4);
+    v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4 | coverage << int(QUAD_INDEX_BITS));
     v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
     v_lod = float(lod);
     v_chunk = vec3(rel);
@@ -248,9 +276,9 @@ void vertex() {
 void fragment() {
     // Shaded: grass on gentle slopes, rock on steep ones, faint contour lines every 100 m (mid tones, so
     // the tonemapper keeps the relief readable).
-    float up = clamp(v_world_normal.y, 0.0, 1.0);
-    vec3 rock = vec3(0.36, 0.32, 0.28);
-    vec3 albedo = mix(rock, vec3(0.24, 0.36, 0.16), smoothstep(0.8, 0.95, up));
+    float up = clamp(dot(v_world_normal, base_up), 0.0, 1.0);
+    float flat_w = smoothstep(0.8, 0.95, up);
+    vec3 albedo = mix(GROUND_STEEP, GROUND_FLAT, flat_w); // Material::GROUND_STEEP / GROUND_FLAT
     float contour_m = 100.0;
     if (sea_level_m > -1e29) {
         // Height colours (dark albedos: the scene's tonemapper brightens them): sea floor blue, darker with
@@ -273,7 +301,8 @@ void fragment() {
     float line = abs(fract(h + 0.5) - 0.5) / fw;
     // Contours fade out where they would be denser than ~10 pixels apart.
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
-    albedo *= mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
+    float shade = mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
+    albedo *= shade;
     vec3 ground = albedo;
     vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
     // Two materials: one is shaded per fragment, the higher id where the weight towards it (the corner mask over the
@@ -293,7 +322,7 @@ void fragment() {
     float roughness;
     vec3 emission;
     float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
-    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, albedo, roughness, emission);
+    material_shading(uint(mat_id), ground, p, v_world_normal, footprint, flat_w, shade, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -311,7 +340,8 @@ void fragment() {
         emission = hash3(vec3(float(v_ids.x) + 0.5)) * 0.8 + 0.2;
     } else if (debug_view == 7) {
         albedo = vec3(0.0);
-        emission = vec3(float(v_ids.y) / 63.0, 0.2, 1.0 - float(v_ids.y) / 63.0);
+        float quad = float(v_ids.y & int(QUAD_GROUP - 1u));
+        emission = vec3(quad / 63.0, 0.2, 1.0 - quad / 63.0);
     } else if (debug_view == 8) {
         // Faceted: one clay colour, each triangle lit by its own plane (the vertex normals, shared across a
         // crease, smear the shading of sharp edges).
@@ -321,7 +351,17 @@ void fragment() {
     } else if (debug_view == 9) {
         albedo = vec3(0.0);
         emission = uint(mat_id) == MATERIAL_GROUND ? vec3(0.15) : hash3(vec3(float(mat_id) * 0.61 + 0.5)) * 0.8 + 0.2;
-    } else if (debug_view >= 10) {
+    } else if (debug_view == 12) {
+        // Biomes: each material's debug colour (a biome's ground carries its biome's), lit and with the contours so the
+        // relief stays readable; dark grey for the rest (instances, the ground without a climate).
+        vec4 dbg = uint(mat_id) == MATERIAL_GROUND ? vec4(0.0) : texelFetch(material_tex, material_texel(uint(mat_id)) + ivec2(MATERIAL_TEXEL_DEBUG, 0), 0);
+        albedo = (dbg.a > 0.0 ? dbg.rgb : vec3(0.06)) * shade;
+        emission = albedo * 0.3;
+        roughness = 1.0;
+    } else if (debug_view == 13) {
+        int coverage = v_ids.y >> int(QUAD_INDEX_BITS);
+        albedo = coverage == 2 ? vec3(0.9, 0.1, 0.9) : (coverage == 1 ? vec3(1.0, 0.5, 0.0) : albedo);
+    } else if (debug_view == 10 || debug_view == 11) {
         // Bark seam probe (bench.gd --probe, read by tools/bark_seams.py): bytes, written through the inverse of the
         // sRGB encoding (the bench sets a linear tonemapper, no grade, glow or fog; SPECULAR 0 below), so each
         // channel reads back as the byte. Bark fragments at full detail only, black elsewhere. 10: the grain (smooth, so
@@ -356,7 +396,7 @@ void fragment() {
     ALBEDO = albedo;
     EMISSION = emission;
     ROUGHNESS = roughness;
-    if (debug_view >= 10) {
+    if (debug_view == 10 || debug_view == 11) {
         SPECULAR = 0.0; // the probe's bytes are its emission only
     }
 }
@@ -607,6 +647,56 @@ void QuadPagePool::rt_copy_rows(int p_src_page, int p_dst_page, uint32_t p_src_r
             Vector3(0, p_dst_row, 0), Vector3(TEX_WIDTH, p_rows, 1), 0, 0, 0, 0);
 }
 
+void QuadPagePool::rt_set_hidden(const PackedInt64Array &p_writes) {
+    RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
+    const uint32_t rows = get_page_rows();
+    constexpr uint32_t ROW_CHANNELS = 2 * PageFormat::TEXEL_CHANNELS; // texels 1 and 2
+    rt_hidden_bytes.resize(rows * ROW_CHANNELS * sizeof(uint16_t));
+    // Rounds of chunks whose rows fit a staging texture: fill it, then copy each chunk's run out. Each round of the
+    // call has its own texture: the uploads of one frame all land before its copies run, so a texture updated twice
+    // in a frame would hand every copy its last contents.
+    size_t round = 0;
+    for (int64_t begin = 0; begin < p_writes.size(); round++) {
+        if (round == rt_hidden_staging.size()) {
+            Ref<RDTextureFormat> format;
+            format.instantiate();
+            format->set_format(TEX_FORMAT);
+            format->set_width(2);
+            format->set_height(rows);
+            format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
+            Ref<RDTextureView> view;
+            view.instantiate();
+            rt_hidden_staging.push_back(rd->texture_create(format, view));
+        }
+        const RID staging = rt_hidden_staging[round];
+        uint16_t *texels = reinterpret_cast<uint16_t *>(rt_hidden_bytes.ptrw());
+        uint32_t used = 0;
+        int64_t end = begin;
+        for (; end + HIDDEN_WRITE_WORDS <= p_writes.size() && used + uint32_t(p_writes[end + 2]) <= rows; end += HIDDEN_WRITE_WORDS) {
+            const uint64_t header = uint64_t(p_writes[end + 4]);
+            uint16_t row_texels[ROW_CHANNELS];
+            PageFormat::encode_coverage(row_texels, int32_t(uint32_t(header)), uint32_t(header >> 32), uint64_t(p_writes[end + 3]));
+            for (uint32_t r = 0; r < uint32_t(p_writes[end + 2]); r++, used++) {
+                memcpy(texels + used * ROW_CHANNELS, row_texels, sizeof(row_texels));
+            }
+        }
+        ERR_FAIL_COND_MSG(end == begin, "QuadPagePool: a chunk with more rows than a page.");
+        rd->texture_update(staging, 0, rt_hidden_bytes);
+        uint32_t at = 0;
+        for (int64_t i = begin; i < end; i += HIDDEN_WRITE_WORDS) {
+            const uint32_t first_row = uint32_t(p_writes[i + 1]);
+            const uint32_t count = uint32_t(p_writes[i + 2]);
+            const PageRD page_rd = rt_get_page_rd(int(p_writes[i]));
+            if (page_rd.texture.is_valid() && first_row + count <= rows) {
+                rd->texture_copy(staging, page_rd.texture, Vector3(0, at, 0),
+                        Vector3(PageFormat::COVERAGE_TEXEL - 1, first_row, 0), Vector3(2, count, 1), 0, 0, 0, 0);
+            }
+            at += count;
+        }
+        begin = end;
+    }
+}
+
 Dictionary QuadPagePool::get_stats() const {
     Dictionary d;
     const int64_t alive = _alive_pages();
@@ -655,6 +745,9 @@ void QuadPagePool::_rt_destroy() {
     rt_pages.clear();
     if (rt_zero_texture.is_valid()) {
         rd->free_rid(rt_zero_texture);
+    }
+    for (const RID &staging : rt_hidden_staging) {
+        rd->free_rid(staging);
     }
     memdelete(this);
 }

@@ -100,6 +100,7 @@ public:
     void compact(VoxelState &r_state);
 
     void release_chunk(const ChunkOutput &p_chunk) override;
+    void set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) override;
 
     // Discovery audit: quad counts of chunks that are not loaded. Passes sdf, edges and vertices only,
     // nothing is written to pages, nothing becomes loaded. Batches run only when the mesh queue is empty.
@@ -181,6 +182,9 @@ private:
     // Kills collected during the frame, flushed to the render thread once.
     PackedInt32Array pending_kill_pages;
     PackedInt64Array pending_kill_ranges; // offset, count pairs (quads)
+    // Hidden sub-cubes set since the last _flush_hidden: page, first row, rows, mask, z low word | palette << 32
+    // (QuadPagePool::rt_set_hidden).
+    PackedInt64Array pending_hidden;
 
     Ref<Mutex> mutex; // guards `completed`, `audit_completed`, `measured_batches` and the render-thread timing stats
     std::vector<CompletedBatch> completed;
@@ -239,13 +243,14 @@ private:
     // Main thread: a chunk popped for a batch it couldn't go in (overflow, or its list didn't fit) back in its queue:
     // remesh_queue (p_remesh) or chunk_queue.
     void _requeue(const ChunkId &p_chunk, bool p_remesh);
-    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages, int p_min_lod,
+    // p_lods: the batch's smallest and largest LOD (the cascade's level count, its fields' variant).
+    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages, const Vector2i &p_lods,
             const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch);
-    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
+    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, const Vector2i &p_lods,
             const PackedByteArray &p_list, const PackedByteArray &p_records);
     // Pass 0: the cascade's levels (timestamps "<prefix>_c<group>" after each level group
     // when p_prefix is not empty), folding the instances when the batch's list p_list holds any.
-    void _rt_record_samples(uint32_t p_count, int p_min_lod, const String &p_prefix, const PackedByteArray &p_list);
+    void _rt_record_samples(uint32_t p_count, const Vector2i &p_lods, const String &p_prefix, const PackedByteArray &p_list);
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);
@@ -269,6 +274,7 @@ private:
     bool _dispatch_mesh_batch(double &r_budget_us);
     bool _dispatch_audit_batch();
     void _flush_kills();
+    void _flush_hidden();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
     void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
@@ -287,6 +293,7 @@ private:
         uint64_t missing_neighbor = 0;
         uint64_t nan_vertices = 0;
         uint64_t kills = 0;
+        uint64_t hidden_rows = 0; // rows whose coverage texel was rewritten (set_hidden)
         uint64_t pages_returned_unused = 0;
         uint64_t compact_rounds = 0;
         uint64_t compact_skipped = 0; // windows with nothing to gain (pages marked settled)

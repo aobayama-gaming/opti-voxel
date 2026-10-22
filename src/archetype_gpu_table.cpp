@@ -103,7 +103,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
     if (r_palettes) {
-        r_palettes->assign(p_chunks.size(), std::vector<uint32_t>{ Material::GROUND });
+        r_palettes->assign(p_chunks.size(), base);
     }
     if ((!snap || snap->empty()) && !stream) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
@@ -120,6 +120,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
         const InstanceSnapshot *snap;
         const InstanceStream *stream;
         uint32_t scene_end;
+        const std::vector<uint32_t> *base;
         const ChunkId *chunks;
         std::vector<uint32_t> *lists;
         std::vector<uint32_t> *palettes;
@@ -146,7 +147,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
                             job.stream->chunk_list(chunk, list, &materials);
                         }
                     });
-            job.fits[p_i] = ChunkPalette::build(materials.data(), uint32_t(list.size()), job.palettes[p_i], indices);
+            job.fits[p_i] = ChunkPalette::build(*job.base, materials.data(), uint32_t(list.size()), job.palettes[p_i], indices);
             for (size_t k = 0; k < list.size(); k++) {
                 list[k] = list_word(list[k], indices[k]);
             }
@@ -155,7 +156,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<std::vector<uint32_t>> lists(p_chunks.size());
     std::vector<std::vector<uint32_t>> palettes(p_chunks.size());
     std::vector<uint8_t> fits(p_chunks.size(), 1);
-    Job job{ snap.get(), stream.get(), scene_end, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
+    Job job{ snap.get(), stream.get(), scene_end, &base, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
     if (p_chunks.size() > 1) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
         pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
@@ -189,13 +190,13 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
             ERR_PRINT(vformat("GpuTable: a LOD %d chunk's list of %d instances is over the %d words of the buffer: truncated (wrong surface there).",
                     lod, int64_t(indices.size()), int64_t(budget)));
             indices.resize(budget);
-            // Its palette came from the whole list: it draws as ground (the cascade writes no material for a cut list
-            // it may not hold, and both meshers then read none).
-            palettes[i].assign(1, Material::GROUND);
+            // Its palette came from the whole list: it draws as its base (on the ground block; both meshers read a record's
+            // index past the base as ground, and without a climate read none).
+            palettes[i] = base;
         }
-        const int64_t base = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
-        r_chunk_ids.encode_u32(base + 12, uint32_t(words.size()));
-        r_chunk_ids.encode_s32(base + 28, int32_t(indices.size()));
+        const int64_t input_at = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
+        r_chunk_ids.encode_u32(input_at + 12, uint32_t(words.size()));
+        r_chunk_ids.encode_s32(input_at + 28, int32_t(indices.size()));
         words.insert(words.end(), indices.begin(), indices.end());
         if (r_palettes) {
             (*r_palettes)[i] = std::move(palettes[i]);

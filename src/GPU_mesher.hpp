@@ -74,7 +74,7 @@ private:
     bool result_available = false;
     bool exit_thread = false;
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
-    int batch_min_lod = 0; // smallest LOD of the current batch (cascade levels to run)
+    Vector2i batch_lods; // smallest and largest LOD of the current batch (cascade levels and variants to run)
     bool trim_indices = false; // drop the zero padding at the end of the index buffer (legacy bug)
     // Dual contouring of Hermite data (DC-lite) in the vertex pass (gpu_glsl.hpp). Set before
     // initialize(): the worker compiles the vertex shader there.
@@ -156,7 +156,7 @@ private:
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
-    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
+    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, const Vector2i &p_lods, const PackedByteArray &p_table_list,
             const PackedByteArray &p_table_records);
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();

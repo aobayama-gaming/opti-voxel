@@ -32,6 +32,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_tree_area"), &VoxelTerrain::get_archetype_tree_area);
     ClassDB::bind_method(D_METHOD("set_biome_radius", "metres"), &VoxelTerrain::set_biome_radius);
     ClassDB::bind_method(D_METHOD("get_biome_radius"), &VoxelTerrain::get_biome_radius);
+    ClassDB::bind_method(D_METHOD("set_climate_path", "path"), &VoxelTerrain::set_climate_path);
+    ClassDB::bind_method(D_METHOD("get_climate_path"), &VoxelTerrain::get_climate_path);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
     ClassDB::bind_method(D_METHOD("set_archetype_stream", "enabled"), &VoxelTerrain::set_archetype_stream);
@@ -54,6 +56,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
+    ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
@@ -122,6 +125,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000000,1"), "set_archetype_trees", "get_archetype_trees");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
+    ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_moments"), "set_archetype_moments", "get_archetype_moments");
@@ -154,7 +158,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "direct_compaction"), "set_direct_compaction", "get_direct_compaction");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direct_compact_max_extent", PROPERTY_HINT_RANGE, "1,1000000"), "set_direct_compact_max_extent", "get_direct_compact_max_extent");
     ADD_GROUP("Debug", "");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk,Group,Quad index,Faceted,Material"), "set_debug_view", "get_debug_view");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded:0,Normals:1,LOD:2,Page:3,Wireframe:4,Chunk:5,Group:6,Quad index:7,Faceted:8,Material:9,Biome:12"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile_frames"), "set_debug_gpu_profile_frames", "get_debug_gpu_profile_frames");
@@ -354,6 +358,15 @@ double VoxelTerrain::get_biome_radius() const {
     return biome_radius;
 }
 
+void VoxelTerrain::set_climate_path(const String &p_path) {
+    ERR_FAIL_COND_MSG(started, "climate_path must be set before the terrain enters the tree.");
+    climate_path = p_path;
+}
+
+String VoxelTerrain::get_climate_path() const {
+    return climate_path;
+}
+
 void VoxelTerrain::set_archetype_band(bool p_enabled) {
     ERR_FAIL_COND_MSG(started, "archetype_band must be set before the terrain enters the tree.");
     archetype_band = p_enabled;
@@ -459,6 +472,13 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     WorldPos p = WorldCoord::offset_pos(origin, offset);
     p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
     return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident
+}
+
+Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
+    const double vs = double(chunk_param.voxel_size);
+    const VoxelPos p = sdf->get_base().tangent_point(std::llround(double(p_tangent_m.x) / vs), std::llround(double(p_tangent_m.y) / vs));
+    const VoxelPos origin = chunk_param.origin_voxel();
+    return Vector3(real_t(double(p.x - origin.x) * vs), real_t(double(p.y - origin.y) * vs), real_t(double(p.z - origin.z) * vs));
 }
 
 int VoxelTerrain::get_lod_numbers() const {
@@ -671,6 +691,13 @@ void VoxelTerrain::_ready() {
     sdf->set_forest(archetype_trees, archetype_tree_area);
     sdf->set_stream_sources(archetype_stream);
     sdf->set_biome_radius(biome_radius);
+    if (!climate_path.is_empty()) {
+        // Parsed and checked by configure() (an ERR there: no climate).
+        const String err = Climate::load(climate_path, sdf->climate_data);
+        if (!err.is_empty()) {
+            ERR_PRINT("VoxelTerrain: " + err + String(" No climate."));
+        }
+    }
     sdf->set_instance_band(archetype_band && terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_moment_blobs(archetype_moments);
     sdf->set_instance_erode(archetype_erode);
@@ -742,6 +769,8 @@ void VoxelTerrain::_ready() {
             skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
         }
         direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
+        const UpAxis up = sdf->up_at(VoxelPos(0, sdf->get_datum_y(), 0));
+        direct_mesher->get_pool()->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
         if (sdf->preset == SDFCascade::Preset::CONTINENTS) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
             const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;
@@ -928,6 +957,11 @@ void VoxelTerrain::_process(double) {
         direct_mesher->compact(visual_mesh_data);
     }
     process_stats.compact.add(now_usec() - t0);
+
+    // The stalled chunks hide the sub-cubes their replacements cover. After compaction: the rows are current.
+    t0 = now_usec();
+    visual_mesh_data.push_coverage();
+    process_stats.coverage.add(now_usec() - t0);
 
     if ((debug_gpu_profile && exec_time % 15 == 0) || debug_gpu_profile_frames) {
         if (!gpu_profiler) {
@@ -1154,6 +1188,14 @@ Dictionary VoxelTerrain::get_debug_stats() {
     d["world_origin"] = origin;
     if (sdf) {
         d["table"] = sdf->get_gpu_table()->get_stats();
+        if (const Climate::Table *climate = sdf->get_climate()) {
+            Dictionary c;
+            c["path"] = climate_path;
+            c["fields"] = int64_t(climate->fields.size());
+            c["biomes"] = int64_t(climate->biomes.size());
+            c["modulated"] = sdf->get_cascade()->modulation != nullptr;
+            d["climate"] = c;
+        }
     }
     d["frames"] = (int64_t)exec_time;
     d["load_complete"] = is_load_complete();
@@ -1199,7 +1241,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
     Dictionary destroy;
     destroy["leaving"] = (int64_t)visual_mesh_data.leaving.size();
     destroy["leaving_max"] = vs.leaving_max;
-    destroy["stalled"] = (int64_t)visual_mesh_data.stall_count.size();
+    destroy["stalled"] = (int64_t)visual_mesh_data.stalled.size();
     destroy["rescans"] = vs.rescans;
     destroy["rescan_reanchored"] = vs.rescan_reanchored;
     destroy["rescan_ms_total"] = vs.rescan_usec / 1000.0;
@@ -1208,6 +1250,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     destroy["verify_mismatches"] = vs.verify_mismatches;
     destroy["delta_mismatches"] = vs.delta_mismatches;
     destroy["octree_violations"] = vs.octree_violations;
+    destroy["coverage_hidden_subcubes"] = visual_mesh_data.hidden_subcubes(); // now
+    destroy["coverage_written"] = vs.coverage_written;
+    destroy["coverage_written_max"] = vs.coverage_written_max;
     d["destroy"] = destroy;
 
     if (gpu_profiler) {
