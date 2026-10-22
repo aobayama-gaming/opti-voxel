@@ -187,6 +187,9 @@ struct Ground {
 // (ExactNoise::gradient_range_error): the cascade flushes what falls under 2^-64.
 String validate(const Table &p_table, const Ground &p_ground);
 
+// The bands a term's or a multiplier's source names: the ground's (GROUND), a field's, or null.
+const std::vector<Cascade::Band> *bands_of(const Table &p_table, const Ground &p_ground, int p_source);
+
 // The table of a JSON-like Dictionary (units in metres; the format is described above parse() in climate.cpp),
 // validated; on error r_table is left empty and the error returned.
 String parse(const Dictionary &p_data, const Ground &p_ground, Table &r_table);
