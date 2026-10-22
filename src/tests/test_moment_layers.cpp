@@ -322,3 +322,52 @@ TEST_CASE("Moment layers: an eroding part hands the share of its mass its erosio
         CHECK(mass == doctest::Approx(part.moments.m0 * part.lost_share(lod)).epsilon(1e-9));
     }
 }
+
+// The pruning reads the cells within PRUNE_CELLS of a blob's own: a tile judged alone, from the items whose centroid lies
+// within PRUNE_CELLS + 1 cells of it (the others emptied, so the ids and their blocks stay), keeps a whole build's blobs.
+TEST_CASE("Moment layers: a judged tile keeps what a whole build keeps inside it, bit for bit") {
+    const std::vector<MomentItem> items = sphere_slab(VoxelPos(5, 40, -9), 24, 18.0, 5.0, 2, 3);
+    MomentLayerParams params;
+    params.lod_min = params.lod_max = 3;
+    std::vector<MomentBlob> whole;
+    build_moment_blobs(items, params, whole);
+    const int64_t cell = int64_t(1) << (3 + params.cell_shift);
+    const VoxelBox tile{ VoxelPos(-1, 0, -1), VoxelPos(0, 0, 0), true }; // cells
+    const int64_t reach = (MomentLayers::PRUNE_CELLS + 1) * cell;
+    std::vector<MomentItem> near = items;
+    for (MomentItem &it : near) {
+        bool inside = true;
+        for (int a = 0; a < 3; a++) {
+            const double at = double(it.anchor[a]) + it.moments.c[a];
+            inside = inside && at >= double(tile.lo[a] * cell - reach) && at < double((tile.hi[a] + 1) * cell + reach);
+        }
+        if (!inside) {
+            it.moments = Moments();
+        }
+    }
+    params.judged = tile;
+    MomentLayers layers;
+    MomentLayers reference;
+    MomentLayerParams unjudged = params;
+    unjudged.judged = VoxelBox();
+    reference.build(items, unjudged);
+    layers.build(near, params, &reference.get_joins());
+    std::vector<MomentBlob> got;
+    layers.kept(got);
+    int64_t expected = 0, same = 0;
+    for (const MomentBlob &w : whole) {
+        if (!tile.contains(VoxelPos(w.cell[0], w.cell[1], w.cell[2]))) {
+            continue;
+        }
+        expected++;
+        for (const MomentBlob &g : got) {
+            same += g.cell[0] == w.cell[0] && g.cell[1] == w.cell[1] && g.cell[2] == w.cell[2] && g.anchor == w.anchor &&
+                    ExactNoise::float_bits(g.amplitude) == ExactNoise::float_bits(w.amplitude) &&
+                    ExactNoise::float_bits(g.inv_s2[0]) == ExactNoise::float_bits(w.inv_s2[0]);
+        }
+    }
+    MESSAGE("tile: ", got.size(), " blobs, whole build ", expected, " inside it, ", same, " identical");
+    CHECK(expected > 0);
+    CHECK(int64_t(got.size()) == expected);
+    CHECK(same == expected);
+}
