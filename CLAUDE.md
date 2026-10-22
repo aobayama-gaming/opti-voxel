@@ -20,7 +20,8 @@ iterate past a warning, never to commit one.
   ```
   Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
   opens the main scene headless: the terrain finds no RenderingDevice, prints one ERROR and stays
-  empty (it used to segfault in `QuadPagePool::_rt_create_page`; CI now fails on a crashing import).
+  empty (it used to segfault in `QuadPagePool::_rt_create_page`). A fresh import may abort at exit (Godot 4.6.3,
+  dev too): CI runs it a second time, which must exit 0 with `extension_list.cfg` written.
 - When a feature is done and its checks pass, commit, push and open the PR into `dev` without waiting
   to be asked. Don't merge it: the user reviews and merges.
 - Perf PRs carry a measured before/after table and name the new bottlenecks.
