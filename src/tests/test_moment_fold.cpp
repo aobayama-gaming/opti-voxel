@@ -19,6 +19,7 @@ struct Forest {
     explicit Forest(bool p_moments) {
         param.voxel_size = 0.05f;
         sdf.set_forest(400, 100.0);
+        sdf.set_stream_sources(false); // the whole build's blobs, the table's records
         sdf.set_moment_blobs(p_moments);
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
         sdf.configure(param, 18);
@@ -40,6 +41,7 @@ void small_forest(SDFCascade &r_sdf, bool p_moments, std::vector<uint32_t> &r_pa
     ChunkParam param;
     param.voxel_size = 0.05f;
     r_sdf.set_forest(120, 60.0);
+    r_sdf.set_stream_sources(false); // its records are edited by id
     r_sdf.set_moment_blobs(p_moments);
     param.skirt_depth = MAX(param.skirt_depth, r_sdf.min_skirt_depth(param, 18));
     r_sdf.configure(param, 18);

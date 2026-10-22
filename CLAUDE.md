@@ -274,7 +274,8 @@ to every change, and a reviewer may reject a PR on any of them.
   `get_debug_stats()["table"]`: list length avg / max per LOD,
   list build ms. `SDFBase::cull_exempt` (`near_instance`, from the index: per-LOD occupancy + coarser
   nodes' boxes) feeds the discoverer's no-cull rule, band or not: a node near an instance's box is never
-  culled (asked only when the corners would cull). FrameSpike's table probe checks the library + fold (with
+  culled (asked only when the corners would cull; a streamed source's node also while its nearest corner is within
+  `ground_reach(lod)` past the cull band, in its zone). FrameSpike's table probe checks the library + fold (with
   erosion) GPU == CPU. **To add a
   library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
   bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
@@ -298,20 +299,22 @@ to every change, and a reviewer may reject a PR on any of them.
   page, are killed (else the old surface stays drawn); an edit also requires the new version from the
   chunks in flight for their first mesh (not loaded yet, so not listed). `remesh_queue` holds a chunk once. `add_new_loaded` drops a
   pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
-  `instance_capacity()` instances up front (default 16384 or the scatter + 4096, removed ones count); an add
-  past it is refused. The bench's
+  `instance_capacity()` records up front: the table's `table_capacity()` (default 16384 or the scene + 4096, removed ones
+  count; an add past it is refused), then the streamed slots. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
   discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter about N rocks and pillars
   in a square of side M metres around (-50, -150) m (`SDFTable::SCENE_X / Z`, set before the node enters the tree),
   default 0: one per cell site (`SCATTER_SITE_SALT`), a rock or a pillar by the site's variant, turned to `up_at`.
   **Sources (`src/cell_scatter.*`):** the scatter and the forest are two `CellScatter`s {salt, zone, side, ground, up,
   accept, generate}: a site's records are a pure function of its cell, so two halves of a zone give the whole
-  (unit-tested). `SDFTable::get_sources()`, placed whole at configure by `add_source` (stats under
-  `get_debug_stats()["table"]["scatter" | "trees"]`: count, records per site, moments per material). `SourceProfile`
+  (unit-tested). `SDFTable::get_sources()`, streamed (below; stats under `get_debug_stats()["table"]["scatter" | "trees"]`:
+  the profile, and `["stream"]`), or with `--stream=0` (`VoxelTerrain.archetype_stream`, bench and player) placed whole in
+  the table at configure by `add_source` (count, records per site, moments per material; the reference, and the tests that
+  edit their records by id). Biome features and the shapes gallery stay table records (whole-build blobs). `SourceProfile`
   reads `SAMPLES` (256) hashed sites at the origin: reach, `lod_end`, k / margin max (times `REACH_SAFETY` 1.25), joins,
   records per site and the mass lost per LOD (what a far proxy stands for); unit-tested to bound every record of the
   forest and the scatter (`covers`).
-  **Keys (`src/scatter_source.*`, not wired yet):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS, lod,
+  **Keys (`src/scatter_source.*`):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS, lod,
   tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
   `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. PARTS is a pyramid: a LOD-0 tile (8 source cells) grows its
   sites and keeps every record; LOD L's side doubles until it holds 2 chunks and it keeps what its 1 or 8 L - 1 tiles list
@@ -319,14 +322,27 @@ to every change, and a reviewer may reject a PR on any of them.
   `MARGIN_CELLS` (`PRUNE_CELLS` + 1) cells and judges its own cells (`MomentLayerParams::judged`): on part layers the
   LOD-0 tiles' records (the whole build's blobs bit for bit, unit test), above them proxies (unsnapped `surface_sites`,
   2 per cell side, the profile's lost moments: mass within 10%). `SDFTable::source_setup` gives a source's setup.
-  **Stream (`src/instance_stream.*`, not wired yet):** `InstanceStream` holds the keys asked for in one table (empty ones
-  too) with an intrusive LRU: `admit(chunk, tag)` answers READY (every key placed), PARKED (its keys pinned; `take_ready()`
-  hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
+  **Stream (`src/instance_stream.*`):** `InstanceStream` holds the keys asked for in one table (empty ones
+  too) with an intrusive LRU: `admit(chunk, owner, tag)` answers READY (every key placed), PARKED (its keys pinned;
+  `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
   tasks on Godot's pool at low priority (`StreamExecutor`, inline in the tests; `low_priority_thread_ratio` 0.5), a key's
   inputs handed to it as shared pointers; `poll()` lands them (2 ms a frame) and places the listed ones in slots past the
   table's capacity, logged per placement (`uploads_since(seq)`; a reader past the log gets every placed key). Eviction:
   oldest first, never pinned or asked for in the last `GRACE_FRAMES` (16). `point_records`: resident keys, else computed and
   dropped. Unit tests: park / return order, pins and grace, slot reuse with the log, slots full -> LATER with no deadlock.
+  **Wiring:** `SDFTable` owns the stream over its valid sources (`add_stream`; `~SDFCascade` stops it first: its tasks read
+  `ground_field`). The meshers gate every chunk they pop through `SDFBase::admit / take_ready / parked_count`, called by
+  `ChunkGate` (`src/chunk_gate.hpp`, both meshers): one owner per mesher and queue kind (chunk, remesh, discovery audit),
+  the scan generation as the tag (a first mesh parked before the last `send_chunk` is dropped: that scan queued again the
+  ones it wants), a parked chunk keeps its mesher from idle. A chunk is meshed only once all its keys are placed, so its
+  content never depends on what streamed when. `GpuTable` lists in `compose_list` order, the same for the CPU's points
+  (`SDFTable::point_list`): the scene's records (ids below `scene_end`), the streamed ones (slots past `table_capacity()`),
+  then the edits', so an edit carves streamed records too; the records go up from an `UploadCursor` {snapshot version,
+  placement seq} (`record_bytes`: the snapshot's changed pages and the keys placed since). `VoxelTerrain::_process` calls
+  `SDFBase::poll()` (the stream, then `poll_rebuild`) before the meshers. Unit tests: a streamed chunk's list folds like
+  the CPU's point (`evaluate`) bit for bit, with the uploaded spans; the LOD L | L+1 field step stays in the skirt on the
+  streamed scatter and forest. Presets `forest5cm_1m` (1M trees on 5 x 5 km) and `forest5cm_41m` (41M on 32 x 32 km): the
+  stream computes what the view asks for, so their configure is forest5cm's.
   **Trees (step 5, `src/tree_archetype.*`):** a tree is a contiguous run of plain records, all smooth union
   (`SDFTable::get_trees()`: `TreeSpan` first id + count), no change to the IR, the fold or the meshers.
   Library types 3 `branch` (a tapered capsule {height, radius, slope}, slope = (r1 - r0) / height from the

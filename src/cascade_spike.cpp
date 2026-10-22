@@ -409,6 +409,7 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     ChunkParam param = p_param;
     SDFCascade sdf;
     sdf.set_scatter(600, 160.0);
+    sdf.set_stream_sources(false); // placed whole: the chunks' lists are the snapshot's (the streamed ones: unit tests)
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
     sdf.configure(param, p_lods);
     const std::shared_ptr<const Archetype::InstanceSnapshot> snap = sdf.get_snapshot();
@@ -421,8 +422,8 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
     const RID records = p_rd->storage_buffer_create(uint64_t(table->instance_capacity()) * table->record_size());
     const RID list = p_rd->storage_buffer_create(uint64_t(MAX_BATCH) * table->max_chunk_list() * 4);
-    uint32_t version = 0;
-    SDFGpuTable::upload_records(p_rd, records, table->record_bytes(UINT32_MAX, version));
+    SDFGpuTable::UploadCursor sent;
+    SDFGpuTable::upload_records(p_rd, records, table->record_bytes(sent, sent));
     CascadePasses passes;
     Checks checks;
     int64_t folded = 0;

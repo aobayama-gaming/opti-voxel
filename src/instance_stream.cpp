@@ -105,11 +105,12 @@ void InstanceStream::chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &
     }
 }
 
-InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_tag) {
+InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) {
     const uint64_t t0 = now_usec();
     const std::lock_guard<std::mutex> lock(mutex);
     Admit answer = READY;
-    const auto it = parked.find(p_chunk);
+    const ParkKey park{ p_chunk, p_owner };
+    const auto it = parked.find(park);
     if (it != parked.end()) {
         it->second.tag = p_tag;
         answer = PARKED;
@@ -127,7 +128,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_t
         }
         if (answer == READY && missing > 0) {
             // Every key asked for this frame is in its grace or not ready: none went meanwhile.
-            Parked &p = parked[p_chunk];
+            Parked &p = parked[park];
             p.tag = p_tag;
             p.seq = ++park_seq;
             p.missing = missing;
@@ -136,7 +137,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_t
                 Entry &e = entries.find(k)->second;
                 pin(e);
                 if (!e.placed) {
-                    e.waiters.push_back({ p_chunk, p.seq }); // place() counts it down
+                    e.waiters.push_back({ park, p.seq }); // place() counts it down
                 }
             }
             answer = PARKED;
@@ -147,26 +148,37 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_t
     return answer;
 }
 
-void InstanceStream::take_ready(std::vector<std::pair<ChunkId, uint64_t>> &r_out) {
+void InstanceStream::take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) {
     const std::lock_guard<std::mutex> lock(mutex);
     r_out.clear();
-    std::sort(ready_chunks.begin(), ready_chunks.end(), [this](const ChunkId &p_a, const ChunkId &p_b) { return parked[p_a].seq < parked[p_b].seq; });
-    for (const ChunkId &c : ready_chunks) {
-        const auto it = parked.find(c);
+    // p_owner's first, in park order; the other owners' stay.
+    const auto others = std::stable_partition(ready_chunks.begin(), ready_chunks.end(), [p_owner](const ParkKey &p_k) { return p_k.owner == p_owner; });
+    std::sort(ready_chunks.begin(), others, [this](const ParkKey &p_a, const ParkKey &p_b) { return parked[p_a].seq < parked[p_b].seq; });
+    for (auto c = ready_chunks.begin(); c != others; ++c) {
+        const auto it = parked.find(*c);
         for (const SourceKey &k : it->second.keys) {
             unpin(entries.find(k)->second); // pinned: still there
         }
-        r_out.push_back({ c, it->second.tag });
+        r_out.push_back({ c->chunk, it->second.tag });
         parked.erase(it);
     }
-    ready_chunks.clear();
+    ready_chunks.erase(ready_chunks.begin(), others);
 }
 
-void InstanceStream::hand_back(const ChunkId &p_chunk) {
-    const auto it = parked.find(p_chunk);
+size_t InstanceStream::parked_count(uint64_t p_owner) const {
+    const std::lock_guard<std::mutex> lock(mutex);
+    size_t n = 0;
+    for (const std::pair<const ParkKey, Parked> &p : parked) {
+        n += p.first.owner == p_owner;
+    }
+    return n;
+}
+
+void InstanceStream::hand_back(const ParkKey &p_park) {
+    const auto it = parked.find(p_park);
     if (it != parked.end() && !it->second.done) {
         it->second.done = true;
-        ready_chunks.push_back(p_chunk);
+        ready_chunks.push_back(p_park);
     }
 }
 
@@ -309,7 +321,7 @@ bool InstanceStream::place(Entry &r_entry) {
                         r_entry.count, settings.slot_capacity, GRACE_FRAMES));
             }
             // Its parked chunks go back to their mesher (their pins released, room comes back): asked again, LATER.
-            for (const std::pair<ChunkId, uint64_t> &w : r_entry.waiters) {
+            for (const std::pair<ParkKey, uint64_t> &w : r_entry.waiters) {
                 const auto it = parked.find(w.first);
                 if (it != parked.end() && it->second.seq == w.second) {
                     hand_back(w.first);
@@ -329,7 +341,7 @@ bool InstanceStream::place(Entry &r_entry) {
     input_records -= r_entry.count;
     stats.placed++;
     stats.slots_peak = MAX(stats.slots_peak, slots_used());
-    for (const std::pair<ChunkId, uint64_t> &w : r_entry.waiters) {
+    for (const std::pair<ParkKey, uint64_t> &w : r_entry.waiters) {
         const auto it = parked.find(w.first);
         if (it != parked.end() && it->second.seq == w.second && --it->second.missing == 0) {
             hand_back(w.first);
@@ -441,7 +453,7 @@ void InstanceStream::lru_unlink(Entry &r_entry) {
     r_entry.in_lru = false;
 }
 
-void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const {
+void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out, std::vector<uint32_t> *r_materials) const {
     thread_local std::vector<SourceKey> keys;
     chunk_keys(p_chunk, keys);
     VoxelPos lo, hi;
@@ -456,6 +468,9 @@ void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r
         const size_t from = r_out.size();
         it->second.content->meeting(lo, hi, lod, r_out);
         for (size_t i = from; i < r_out.size(); i++) {
+            if (r_materials) {
+                r_materials->push_back(it->second.content->records[r_out[i]].material);
+            }
             r_out[i] += settings.slot_base + it->second.slot;
         }
     }

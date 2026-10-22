@@ -85,19 +85,22 @@ public:
     uint32_t slot_capacity() const { return settings.slot_capacity; }
 
     // Main thread. Asks for every key the chunk lists (the first asked are computed first). PARKED: the stream pins the
-    // chunk's keys and hands it back through take_ready() with p_tag once they are placed; asked again meanwhile, it stays
-    // parked (with the new tag).
-    Admit admit(const ChunkId &p_chunk, uint64_t p_tag);
-    // Main thread: the parked chunks whose keys are all placed, or which lost a key's slot (asked again, they answer
+    // chunk's keys and hands it back to p_owner (a mesher: each has its own parked chunks) through take_ready() with p_tag
+    // once they are placed; asked again meanwhile, it stays parked (with the new tag).
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag);
+    // Main thread: p_owner's parked chunks whose keys are all placed, or which lost a key's slot (asked again, they answer
     // LATER until there is room), with their tags, in the order they were parked.
-    void take_ready(std::vector<std::pair<ChunkId, uint64_t>> &r_out);
+    void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out);
+    // Main thread: p_owner's chunks parked and not taken back yet.
+    size_t parked_count(uint64_t p_owner) const;
     // Main thread, once per frame: lands what the drain tasks finished (POLL_USEC_MAX, the rest the next frame), placing
     // the listed keys and starting the keys whose last input landed, then evicts down to the limits.
     void poll();
 
-    // The record ids of the chunk's streamed records whose box test can pass at its samples, in key order. Every key
-    // placed (admit() said READY), else the missing ones are left out and counted (lists_missing).
-    void chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const;
+    // The record ids of the chunk's streamed records whose box test can pass at its samples, in key order, appended, and
+    // their materials to r_materials (if given). Every key placed (admit() said READY), else the missing ones are left out
+    // and counted (lists_missing).
+    void chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out, std::vector<uint32_t> *r_materials = nullptr) const;
     // The streamed records whose box test at p_lod can pass at p_voxel, in key order, appended (copies): a resident key's,
     // else computed here and dropped (counted). Any thread (on the pool's, its loops run inline).
     void point_records(const VoxelPos &p_voxel, int p_lod, std::vector<TableRecord> &r_out) const;
@@ -114,8 +117,14 @@ private:
     struct KeyHash {
         size_t operator()(const SourceKey &p_k) const;
     };
-    struct ChunkHash {
-        size_t operator()(const ChunkId &p_c) const { return Vector3i64Hasher::hash(p_c); }
+    // A parked chunk: the same chunk parked by two meshers is two of them.
+    struct ParkKey {
+        ChunkId chunk;
+        uint64_t owner = 0;
+        bool operator==(const ParkKey &p_o) const { return chunk == p_o.chunk && owner == p_o.owner; }
+    };
+    struct ParkHash {
+        size_t operator()(const ParkKey &p_k) const { return Vector3i64Hasher::hash(p_k.chunk) ^ size_t(p_k.owner * 0x9E3779B97F4A7C15ull); }
     };
     struct Job {
         const ScatterSource *source = nullptr;
@@ -137,7 +146,7 @@ private:
         std::vector<std::shared_ptr<const SourceContent>> inputs; // WAITING: those landed so far
         int missing = 0; // WAITING: its inputs not landed
         std::vector<std::pair<SourceKey, uint32_t>> dependents; // not READY: the keys waiting for it (and its input index)
-        std::vector<std::pair<ChunkId, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
+        std::vector<std::pair<ParkKey, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
         uint32_t slot = 0;
         uint32_t count = 0;
         bool listed = false; // a chunk lists it: it goes in slots
@@ -174,8 +183,8 @@ private:
     int draining = 0; // drain tasks started and not done
     std::deque<std::unique_ptr<Job>> landing; // taken from finished, landed by poll() within its budget
 
-    std::unordered_map<ChunkId, Parked, ChunkHash> parked;
-    std::vector<ChunkId> ready_chunks; // parked chunks to hand back
+    std::unordered_map<ParkKey, Parked, ParkHash> parked;
+    std::vector<ParkKey> ready_chunks; // parked chunks to hand back
     uint64_t park_seq = 0;
 
     std::map<uint32_t, uint32_t> free_runs; // first slot -> count, below slots_end
@@ -224,7 +233,7 @@ private:
     void lru_link(Entry &r_entry);
     void lru_unlink(Entry &r_entry);
     // A parked chunk handed back by take_ready().
-    void hand_back(const ChunkId &p_chunk);
+    void hand_back(const ParkKey &p_park);
     int64_t slots_used() const { return int64_t(slots_end) - free_slots; }
 };
 

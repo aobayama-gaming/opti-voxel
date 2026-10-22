@@ -315,6 +315,7 @@ void GPUMesher::initialize(
         int lod_numbers,
         RID p_scenario) {
     sdf = p_sdf;
+    gate.bind(p_sdf, this);
     chunk_param = p_chunk_param;
     chunk_batch_number = p_chunk_batch_number;
     scenario = p_scenario;
@@ -413,6 +414,11 @@ void GPUMesher::_initialize_gpu_compute() {
 
 void GPUMesher::_execute_whole_pipeline() {
     _initialize_gpu_compute();
+    // Only now may process_queue build a batch: it sizes the lists by table_list_capacity, set above (before, a batch's
+    // lists were cut to 0 words).
+    mutex->lock();
+    worker_available = true;
+    mutex->unlock();
     VLOG(1, "GPUMesher : Worker started");
 
     while (true) {
@@ -498,7 +504,7 @@ bool GPUMesher::is_idle() {
     mutex->lock();
     const bool idle = worker_available && !result_available;
     mutex->unlock();
-    if (!idle) {
+    if (!idle || !gate.idle(ChunkGate::CHUNK) || !gate.idle(ChunkGate::REMESH)) {
         return false;
     }
     for (const LODHashSet *q : remesh_queue) {
@@ -874,6 +880,8 @@ bool GPUMesher::get_results(VoxelState &output) {
 }
 
 void GPUMesher::process_queue() {
+    // The parked chunks whose records came, back in their queues (every frame, the worker busy or not).
+    gate.take_ready([this](const ChunkId &p_chunk, ChunkGate::Kind p_kind) { _requeue(p_chunk, p_kind == ChunkGate::REMESH); });
     if (!_is_available())
         return;
 
@@ -888,7 +896,16 @@ void GPUMesher::process_queue() {
     int min_lod = 64;
     ChunkId new_chunk;
 
-    while (count < chunk_batch_number && _pop_queue(new_chunk)) {
+    bool remesh = false;
+    while (count < chunk_batch_number && _pop_queue(new_chunk, &remesh)) {
+        const SDFBase::Admit admit = gate.admit(new_chunk, remesh ? ChunkGate::REMESH : ChunkGate::CHUNK);
+        if (admit == SDFBase::Admit::LATER) {
+            _requeue(new_chunk, remesh);
+            break;
+        }
+        if (admit == SDFBase::Admit::PARKED) {
+            continue; // the gate hands it back
+        }
         working_generation.insert(new_chunk);
 
         GPUFrame::encode_chunk_input(new_batch, count, new_chunk, chunk_param);
@@ -925,8 +942,8 @@ void GPUMesher::process_queue() {
             min_lod = MIN(min_lod, ChunkMath::get_lod(in_flight_ids[i]));
             unpacked_chunks[i].palette = std::move(palettes[i]);
         }
-        if (table->version() != sent_table_version) {
-            table_records = table->record_bytes(sent_table_version, sent_table_version);
+        if (table->upload_cursor() != sent_records) {
+            table_records = table->record_bytes(sent_records, sent_records);
         }
         mutex->lock();
         input_chunk_id = new_batch;
@@ -941,7 +958,7 @@ void GPUMesher::process_queue() {
     }
 }
 
-bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
+bool GPUMesher::_pop_queue(ChunkId &new_chunk, bool *r_remesh) {
     // Instance edits first, finest LOD first (as GPUDirectMesher::_pop_queue).
     for (const std::vector<LODHashSet *> *queues : { &remesh_queue, &chunk_queue }) {
         for (LODHashSet *queue : *queues) {
@@ -951,10 +968,24 @@ bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
             LODHashSet::Iterator it = queue->begin();
             new_chunk = *it;
             queue->remove(it);
+            if (r_remesh) {
+                *r_remesh = queues == &remesh_queue;
+            }
             return true;
         }
     }
     return false;
+}
+
+void GPUMesher::_requeue(const ChunkId &p_chunk, bool p_remesh) {
+    const int lod = ChunkMath::get_lod(p_chunk);
+    if (lod < 0 || lod >= lod_count) {
+        return;
+    }
+    LODHashSet *queue = p_remesh ? remesh_queue[lod] : chunk_queue[ChunkMath::load_queue(p_chunk, lod_count, load_view)];
+    if (queue != nullptr) {
+        queue->insert(p_chunk);
+    }
 }
 
 void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
@@ -976,6 +1007,8 @@ void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
 }
 
 void GPUMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_view) {
+    load_view = p_view;
+    gate.next_scan();
     for (LODHashSet *q : chunk_queue) {
         q->clear();
     }

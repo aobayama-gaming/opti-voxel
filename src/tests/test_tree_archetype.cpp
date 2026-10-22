@@ -318,6 +318,7 @@ TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, eva
     param.voxel_size = 0.05f;
     SDFCascade sdf;
     sdf.set_forest(30, 40.0);
+    sdf.set_stream_sources(false); // the trees' spans
     sdf.set_moment_blobs(false); // the trees' records alone
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);

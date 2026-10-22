@@ -33,6 +33,9 @@ public:
     // discovery keep more chunks, never drop one, but it must stay several cells of the largest LOD.
     static constexpr int32_t DY_LIMIT = 1 << 30;
 
+    // The stream's tasks read ground_field: stopped before this class's members go.
+    ~SDFCascade() override { stop_streaming(); }
+
     // Set before configure(). LINEAR4 (value + gradient) is the meshed set: by the design's criterion G7
     // (keep 8 channels unless they cost > 15% more GPU time than 4), measured with CascadeSpike: the
     // 8-channel passes cost 1.30x the 4-channel ones (1.29 vs 1.00 ms per batch of 128 LOD-0 chunks).
@@ -103,7 +106,7 @@ public:
         // hard-CSG gallery's creases differ between LODs by up to a cell, so skirt_depth cells of the LOD.
         // The moment blobs' own step (SDFTable::MOMENT_SKIRT_CELLS) is added only at the samples a blob touches
         // (moment_skirt_table, sample_sdf): everywhere else the skirt walls stay the band rule's.
-        const double erode_cells = current()->empty() ? 0.0 : SDFTable::instance_erode_cells();
+        const double erode_cells = current()->empty() && !get_stream() ? 0.0 : SDFTable::instance_erode_cells();
         skirt_depth_table.assign(p_lod_count, 0.0f);
         moment_skirt_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
@@ -134,8 +137,8 @@ public:
         channels_at(p_pos.voxel, p_lod, ch);
         thread_local std::vector<uint32_t> list;
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        snap->point_candidates(p_pos.voxel, p_lod, list);
-        return sample_sdf(*snap, list.data(), uint32_t(list.size()), ch, p_pos, p_lod).w;
+        const Archetype::RecordView records = point_list(*snap, p_pos.voxel, p_lod, list);
+        return sample_sdf(*snap, records, list.data(), uint32_t(list.size()), ch, p_pos, p_lod).w;
     }
 
     // The discoverer's corners: the bare cascade, as its GPU point items (a node near an instance is never culled).
@@ -166,10 +169,14 @@ public:
         return metres(unit(p_ch, p_voxel_y, p_lod), p_lod);
     }
 
-    // sdf() with the listed instances p_list folded in (GLSL cascade_sample_sdf, bit for bit): the bare sdf() where
-    // no instance's box test passes. *r_skirt_extra (if given): the moment skirt (metres) where a moment blob's box test
-    // passed, else 0.
+    // sdf() with the listed instances p_list of p_records folded in (GLSL cascade_sample_sdf, bit for bit): the bare
+    // sdf() where no instance's box test passes. *r_skirt_extra (if given): the moment skirt (metres) where a moment
+    // blob's box test passed, else 0.
     ExactNoise::Float4 sample_sdf(const Archetype::InstanceSnapshot &p_snap, const uint32_t *p_list, uint32_t p_count,
+            const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod, float *r_skirt_extra = nullptr) const {
+        return sample_sdf(p_snap, p_snap.records, p_list, p_count, p_ch, p_pos, p_lod, r_skirt_extra);
+    }
+    ExactNoise::Float4 sample_sdf(const Archetype::InstanceSnapshot &p_snap, Archetype::RecordView p_records, const uint32_t *p_list, uint32_t p_count,
             const float p_ch[Cascade::CHANNELS], const WorldPos &p_pos, int p_lod, float *r_skirt_extra = nullptr) const {
         const ExactNoise::Float4 u = unit(p_ch, p_pos.voxel.y, p_lod);
         if (r_skirt_extra) {
@@ -178,7 +185,7 @@ public:
         if (p_count > 0) {
             const float s = ExactNoise::exact_pow2(p_lod);
             bool touched = false, blobs = false;
-            const ExactNoise::Float4 r = Archetype::fold_onto(ExactNoise::Float4{ u.x * s, u.y * s, u.z * s, u.w * s }, *p_snap.library, p_snap.records,
+            const ExactNoise::Float4 r = Archetype::fold_onto(ExactNoise::Float4{ u.x * s, u.y * s, u.z * s, u.w * s }, *p_snap.library, p_records,
                     p_list, p_count, p_pos, p_lod, true, &touched, nullptr, nullptr, &blobs);
             if (r_skirt_extra && blobs) {
                 *r_skirt_extra = moment_skirt_table[p_lod];
@@ -210,11 +217,11 @@ public:
     float skirt_depth_at(const WorldPos &p_pos, int p_lod) const {
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
         thread_local std::vector<uint32_t> list;
-        snap->point_candidates(p_pos.voxel, p_lod, list);
+        const Archetype::RecordView records = point_list(*snap, p_pos.voxel, p_lod, list);
         float ch[Cascade::CHANNELS];
         channels_at(p_pos.voxel, p_lod, ch);
         float extra = 0.0f;
-        sample_sdf(*snap, list.data(), uint32_t(list.size()), ch, p_pos, p_lod, &extra);
+        sample_sdf(*snap, records, list.data(), uint32_t(list.size()), ch, p_pos, p_lod, &extra);
         return skirt_depth_table[p_lod] + extra;
     }
 
