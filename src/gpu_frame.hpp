@@ -104,17 +104,23 @@ WorldPos world_pos_from_grid(ChunkFrame f, vec3 grid, ChunkParam cp) {
     return p;
 }
 
+// An int64 (low word, high word) saturated to [-limit, limit] (limit < 2^31). CPU mirror: the clamp of
+// WorldCoord::sat_diff.
+ivec3 sat_words(uvec3 lo, ivec3 hi, int limit) {
+    ivec3 s = ivec3(lo);
+    // The value fits in an int32 iff the high word is the sign extension of the low word.
+    bvec3 fits = equal(hi, s >> 31);
+    ivec3 inside = clamp(s, ivec3(-limit), ivec3(limit));
+    ivec3 outside = mix(ivec3(-limit), ivec3(limit), greaterThanEqual(hi, ivec3(0)));
+    return mix(outside, inside, fits);
+}
+
 // p - anchor in voxels (integer part), saturated to [-limit, limit] (limit < 2^31): the exact 64-bit
 // difference wherever it is small. CPU mirror: WorldCoord::sat_diff.
 ivec3 sat_diff(WorldPos p, uvec3 anchor_lo, ivec3 anchor_hi, int limit) {
     uvec3 dlo = p.lo - anchor_lo;
     ivec3 dhi = p.hi - anchor_hi - ivec3(lessThan(p.lo, anchor_lo));
-    ivec3 s = ivec3(dlo);
-    // The difference fits in an int32 iff the high word is the sign extension of the low word.
-    bvec3 fits = equal(dhi, s >> 31);
-    ivec3 inside = clamp(s, ivec3(-limit), ivec3(limit));
-    ivec3 outside = mix(ivec3(-limit), ivec3(limit), greaterThanEqual(dhi, ivec3(0)));
-    return mix(outside, inside, fits);
+    return sat_words(dlo, dhi, limit);
 }
 
 )glsl";

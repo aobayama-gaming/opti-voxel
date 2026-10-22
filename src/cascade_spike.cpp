@@ -278,7 +278,7 @@ private:
             ch[k] = p_level.ch[k][p_cpu_i];
         }
         const int lod = chunks[p_chunk].lod;
-        const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p.y * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
+        const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
         const float w[4] = { want.x, want.y, want.z, want.w };
         checks.samples++;
         for (int k = 0; k < 4; k++) {
@@ -390,7 +390,7 @@ void compare_table_chunk(const SDFCascade &p_sdf, const Archetype::InstanceSnaps
         float extra = 0.0f;
         const ExactNoise::Float4 folded = p_sdf.sample_sdf(p_snap, list.data(), uint32_t(list.size()), ch, p, p_lod, &extra);
         const ExactNoise::Float4 want = p_sdf.with_skirt(folded, p_lod, grid, extra);
-        const ExactNoise::Float4 bare = p_sdf.with_skirt(p_sdf.sdf(ch, p.voxel.y, p_lod), p_lod, grid);
+        const ExactNoise::Float4 bare = p_sdf.with_skirt(p_sdf.sdf(ch, p.voxel, p_lod), p_lod, grid);
         r_folded += float_bits(want.w) != float_bits(bare.w) ? 1 : 0;
         const float *g = p_got + (uint64_t(i.x) + cs * (uint64_t(i.y) + cs * uint64_t(i.z))) * 4;
         r_checks.samples++;
@@ -668,7 +668,7 @@ Dictionary check_points(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, con
             const VoxelPos &v = points[i];
             float ch[CHANNELS];
             point(sdf.get_spec(), Vector3i64(v.x >> lod, v.y >> lod, v.z >> lod), lod, ch);
-            const float want = sdf.sdf(ch, v.y, lod).w;
+            const float want = sdf.sdf(ch, v, lod).w;
             compared++;
             if (float_bits(want) != float_bits(got[i])) {
                 lod_differing++;

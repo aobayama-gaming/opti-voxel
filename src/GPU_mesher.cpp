@@ -28,6 +28,7 @@
 
 #include "cascade_glsl.hpp"
 #include "exact_noise.hpp"
+#include "exact_noise_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "material_library.hpp"

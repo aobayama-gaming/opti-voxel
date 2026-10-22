@@ -137,7 +137,7 @@ to every change, and a reviewer may reject a PR on any of them.
   projection loses its far plane and the light culler ERRORs every frame. The validator doesn't compare
   the normals of sliver triangles (all edges within 2 * tol): around a lone near-zero corner a whole
   closed sheet fits inside the tolerance and the vertex pairing is arbitrary (frequent at far LODs).
-- Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE`): `hash_cell` = PCG3D of the cell's low
+- Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE` in `exact_noise_glsl.hpp`): `hash_cell` = PCG3D of the cell's low
   words salted by a PCG3D of its high words and the seed (cells 2^32 apart don't collide);
   `perlin3` / `perlin2` = one octave of gradient noise with wavelength exactly 2^k LOD0 voxels
   (`cell = (voxel + offset) >> k`, the in-cell position as 24-bit fixed point, quintic fade, analytic
@@ -149,8 +149,21 @@ to every change, and a reviewer may reject a PR on any of them.
 - Every terrain is a function of the absolute position: the same world point gives the same value from
   any origin. Heights and depths are in LOD0 voxels, gradients and distances in voxels of the chunk's
   LOD, and they return metres. Parameters are metres rounded to 2^k voxels in `configure()`, so another
-  voxel size is another world. Flat world: the datum (`SDFBase::DATUM_M`) is absolute y ~ 300 m, so far
+  voxel size is another world. Flat world: the datum (`BaseSurface::DATUM_M`) is absolute y ~ 300 m, so far
   origins only show terrain with y = 0.
+- Base surface (`src/base_surface.{hpp,cpp}`, design note `planet-base-curvature-2026-10-22.md`): the ground's
+  reference, not a constraint (the terrain stays 3D). `BaseSurface::at(voxel, lod)` = (up n, altitude) in voxels of
+  the LOD, read by `CascadeTerrain::height_sdf` (t = n - grad h, distance (altitude - h) / |t|, GLSL
+  `GLSL_HEIGHT_SDF`). `FLAT` (the world today) is the saturated int64 datum difference with up (-0, 1, -0), so
+  the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
+  `SPHERE` (not wired into a world yet: regions per chunk, discoverer, camera altitude come with the planet PR):
+  below `switch_lod` (12) the curvature form d(c) + n.δ + 1/2 δ^T H δ around the centre of the point's region
+  (the cell of 2^(L+6) voxels holding it, from the point and the LOD only), d(c), n, H from the CPU in double
+  (`make_region` takes any base's exact value, gradient and Hessian: the unit test runs a torus); from it the
+  radius form |p - centre| - R in float32 (`det_rsqrt`), the centre snapped to 2^31 voxels so (p - c) >> L is exact.
+  Measured at Earth radius / 5 cm (`test_base_surface.cpp`): curvature 7e-6 cells at LODs 0-11, < 1% to LOD 16;
+  radius < 0.4% from LOD 12; the forms' gap at the switch 0.35%. FrameSpike's `base_*` probes check the GLSL
+  bit for bit. The page shader's slope colours read `base_up` (a uniform, +y).
 - Morton keys are relative to the origin: batch/page locality only within ±2^20 ids of it.
 - Hermite cascade (`src/cascade.hpp`: CPU reference, the oracle; `src/cascade_glsl.{hpp,cpp}`: the GPU
   passes, bit-identical to it): each noise band (octave k) is inserted once on the lattice Λ_{k-3}
