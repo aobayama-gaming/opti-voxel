@@ -532,7 +532,11 @@ to every change, and a reviewer may reject a PR on any of them.
   keeps the defaults (no texture = black = no clouds, `cloud_shadow` 0). **Surface detail**, all procedural, world-space
   value noise (the same at every LOD): `ground_detail` on the procedural ground and `PATTERN_GROUND` (a tint over ~20 m,
   patches of ~2 m, a grain of 6 cm that fades past 2 pixels per feature), `PATTERN_LEAVES` on the leaves (clumps of
-  0.5 m from dark to yellowish green, 8 cm leaves, darker undersides). Not done yet, in order: water (a sea plane with a
+  0.5 m from dark to yellowish green, 8 cm leaves, darker undersides). **Wind** (`VoxelSky.wind_sway_m`, 3 cm; 0 =
+  still): the vertex stage moves leaf corners by `wind_sway` (a gust wave riding `cloud_wind` plus a finer wobble, a
+  pure function of the position and TIME: shared corners agree, the mesh stays watertight) up to LOD 2, where each
+  tree corner pays a palette and a material fetch, and the leaf pattern's noise drifts (a shimmer). Bark stays still:
+  the pages carry no per-tree pivot to bend a trunk around. Cost unmeasured. Not done yet, in order: water (a sea plane with a
   depth shader), triplanar image textures per material, grass, height fog (the ground spans kilometres on the
   cascade terrains: a fixed fog height is wrong there), time of day.
 - **Climate** (`src/climate.{hpp,cpp}`, `climate_modulator.cpp`, `climate_parse.cpp` / `climate_validate.cpp`,
