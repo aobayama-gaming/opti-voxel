@@ -328,8 +328,7 @@ void GPUDirectMesher::_rt_read_timestamps() {
     mutex->unlock();
 }
 
-void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const String &p_prefix,
-        const PackedByteArray &p_list) {
+void GPUDirectMesher::_rt_record_samples(uint32_t p_count, const Vector2i &p_lods, const String &p_prefix, const PackedByteArray &p_list) {
     // One list per level (the render graph orders them through the scratch buffers); timestamps "_c0", "_c1",
     // "_c2" after the groups j >= 3, j = 2 and j = 1, empty groups included.
     auto mark = [&](int p_group) {
@@ -337,20 +336,20 @@ void GPUDirectMesher::_rt_record_samples(uint32_t p_count, int p_min_lod, const 
             rd->capture_timestamp(p_prefix + String("_c") + String::num_int64(p_group));
         }
     };
-    int j = cascade->level_count(p_min_lod) - 1;
+    int j = cascade->level_count(p_lods.x) - 1;
     for (; j >= 3; j--) {
-        cascade->record_level(j, 0, p_count);
+        cascade->record_level(j, 0, p_count, p_lods);
     }
     mark(0);
     if (j == 2) {
-        cascade->record_level(j--, 0, p_count);
+        cascade->record_level(j--, 0, p_count, p_lods);
     }
     mark(1);
     if (j == 1) {
-        cascade->record_level(j--, 0, p_count);
+        cascade->record_level(j--, 0, p_count, p_lods);
     }
     mark(2);
-    cascade->record_level(0, 0, p_count, !p_list.is_empty()); // no instance listed: the bare cascade
+    cascade->record_level(0, 0, p_count, p_lods, !p_list.is_empty()); // no instance listed: the bare cascade
 }
 
 void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records) {
@@ -380,7 +379,7 @@ uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::ve
 }
 
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages,
-        int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch) {
+        const Vector2i &p_lods, const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch) {
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
@@ -412,7 +411,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 
     const String prefix = "vx" + String::num_int64(p_batch_id);
     rd->capture_timestamp(prefix + String("_begin"));
-    _rt_record_samples(p_count, p_min_lod, prefix, p_list);
+    _rt_record_samples(p_count, p_lods, prefix, p_list);
     rd->capture_timestamp(prefix + String("_p0"));
     for (int i = 0; i < COMPUTE_PASSES; i++) {
         // One list per pass so a timestamp can sit between passes; the render graph orders them.
@@ -445,7 +444,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     mutex->unlock();
 }
 
-void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
+void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, const Vector2i &p_lods,
         const PackedByteArray &p_list, const PackedByteArray &p_records) {
     if (!uniform_set.is_valid()) {
         return;
@@ -470,7 +469,7 @@ void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uin
         { g, 3 * g, g * p_count },
         { g, g, g * p_count },
     };
-    _rt_record_samples(p_count, p_min_lod, String(), p_list);
+    _rt_record_samples(p_count, p_lods, String(), p_list);
     for (int i = 0; i < 2; i++) {
         const int64_t list = rd->compute_list_begin();
         rd->compute_list_bind_compute_pipeline(list, pipelines[i]);
@@ -759,7 +758,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch.dispatch_frame = frame;
     std::vector<uint32_t> lod_counts(lod_count, 0);
     estimate = 0.0;
-    int min_lod = ChunkMath::get_lod(chunks[0]);
+    const Vector2i lods = ChunkMath::lod_range(chunks);
     AABB bounds = _chunk_aabb(chunks[0]);
     for (const ChunkId &c : chunks) {
         const int lod = ChunkMath::get_lod(c);
@@ -767,7 +766,6 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
             lod_counts[lod]++;
             estimate += cost_model.estimate(lod);
         }
-        min_lod = MIN(min_lod, lod);
         bounds.merge_with(_chunk_aabb(c));
         working_generation.insert(c);
     }
@@ -794,7 +792,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
-                    .bind(batch_id, ids, count, pages, min_lod, list, records, palette_batch));
+                    .bind(batch_id, ids, count, pages, lods, list, records, palette_batch));
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
@@ -812,10 +810,9 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
 
     PackedByteArray ids;
     ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
-    int min_lod = ChunkMath::get_lod(chunks[0]);
+    const Vector2i lods = ChunkMath::lod_range(chunks);
     for (size_t i = 0; i < chunks.size(); i++) {
         GPUFrame::encode_chunk_input(ids, (int64_t)i, chunks[i], chunk_param);
-        min_lod = MIN(min_lod, ChunkMath::get_lod(chunks[i]));
     }
     PackedByteArray list;
     PackedByteArray records;
@@ -826,7 +823,7 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
     audit_in_flight[batch_id] = chunks;
     stats.audit_batches++;
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch_count)
-                    .bind(ids, (uint32_t)chunks.size(), batch_id, min_lod, list, records));
+                    .bind(ids, (uint32_t)chunks.size(), batch_id, lods, list, records));
     return true;
 }
 

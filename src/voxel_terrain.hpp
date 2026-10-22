@@ -78,6 +78,7 @@ private:
     int archetype_trees = 0;
     double archetype_tree_area = 60.0;
     double biome_radius = 0.0;
+    String climate_path;
     bool archetype_band = true;
     bool archetype_moments = true;
     float archetype_erode = Archetype::ERODE_CELLS;
@@ -216,6 +217,10 @@ public:
     // SDFTable::SCENE_X / Z, 0 for none (--biomes=KM). Set before the node enters the tree.
     void set_biome_radius(double p_metres);
     double get_biome_radius() const;
+    // A climate table (JSON, src/climate.cpp's format: res:// or absolute), carried by the cascade and modulating the
+    // ground's octaves per biome; empty for none (--climate=PATH). Set before the node enters the tree.
+    void set_climate_path(const String &p_path);
+    String get_climate_path() const;
     // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
