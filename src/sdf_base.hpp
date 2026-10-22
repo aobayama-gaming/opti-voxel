@@ -62,8 +62,8 @@ public:
     // The chunks a mesher's batch passes over while they aren't ready (put back in their queue in order): a frame
     // doesn't walk the whole queue while the forest streams in, and their records are asked for in queue order.
     static constexpr uint32_t WAITING_POPS_MAX = 256;
-    // Main thread, after a frame's batches: the meshers hand their queued chunks in pop order while it returns true, so the
-    // streamed records of the chunks they'll ask for next are computed ahead (the batches only ask WAITING_POPS_MAX).
+    // Main thread, after a frame's batches: the meshers hand their queued chunks in pop order while it returns true (the
+    // batches only ask WAITING_POPS_MAX; ForestStream::prefetch).
     virtual bool prefetch(const ChunkId & /*p_chunk*/) { return false; }
     // Main thread, once per frame: the streamed records' progress.
     virtual void poll() {}

@@ -86,7 +86,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     if (!snap || (snap->empty() && !stream)) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
         for (const ChunkId &c : p_chunks) {
-            list_stats.chunks[MIN(MAX(ChunkMath::get_lod(c), 0), ChunkMath::MAX_LOD_NUMBERS - 1)]++;
+            list_stats.chunks[ChunkMath::lod_slot(ChunkMath::get_lod(c))]++;
         }
         list_stats.batches++;
         list_stats.build_usec += int64_t(now_usec() - t0);
@@ -145,7 +145,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
             list_stats.split++; // this chunk and the rest go in a later batch
             break;
         }
-        const int lod = MIN(MAX(ChunkMath::get_lod(p_chunks[i]), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
+        const int lod = ChunkMath::lod_slot(ChunkMath::get_lod(p_chunks[i]));
         list_stats.chunks[lod]++;
         list_stats.entries[lod] += int64_t(indices.size());
         list_stats.longest[lod] = MAX(list_stats.longest[lod], int64_t(indices.size()));

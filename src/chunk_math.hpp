@@ -83,6 +83,8 @@ namespace ChunkMath {
 
 // The most LODs a terrain has (0 .. MAX_LOD_NUMBERS - 1): the GPU reads a chunk's LOD from its id's low 32 bits.
 inline constexpr int MAX_LOD_NUMBERS = 31;
+// A LOD clamped into per-LOD stat arrays of MAX_LOD_NUMBERS.
+constexpr int lod_slot(int p_lod) { return p_lod < 0 ? 0 : (p_lod >= MAX_LOD_NUMBERS ? MAX_LOD_NUMBERS - 1 : p_lod); }
 
 int64_t get_parent_from_child(int64_t coord, int &lod);
 int64_t get_parent_from_child(int64_t coord);
