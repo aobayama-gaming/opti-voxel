@@ -32,6 +32,7 @@
                 { "field": "ground", "from_m": 0.4, "to_m": 25, "x": 1.5 },
                 { "field": "ground", "from_m": 50, "to_m": 13000, "x": 2 }
             ],
+            "surface": { "flat": "#2c2622", "steep": "#1a1614", "roughness": 0.9 },
             "debug_color": "#c03818"
         },
         {
@@ -41,6 +42,7 @@
                 { "field": "ground", "from_m": 0.4, "to_m": 400, "x": 0.4 },
                 { "field": "ground", "from_m": 800, "to_m": 30000000, "x": 0.6 }
             ],
+            "surface": { "flat": "#e4ecf0", "steep": "#70747a", "roughness": 0.7 },
             "debug_color": "#d8e4ec"
         },
         {
@@ -51,6 +53,7 @@
                 { "field": "ground", "from_m": 50, "to_m": 200, "x": 0.8 },
                 { "field": "ground", "from_m": 400, "to_m": 30000000, "x": 0.12 }
             ],
+            "surface": { "flat": "#d8b878", "steep": "#a8703c" },
             "debug_color": "#e0c070"
         },
         {
@@ -61,6 +64,7 @@
                 { "field": "ground", "from_m": 50, "to_m": 6500, "x": 2.5 },
                 { "field": "ground", "wavelength_m": 13000, "x": 2 }
             ],
+            "surface": { "flat": "#8c867c", "steep": "#5c564e" },
             "debug_color": "#7a6a5a"
         },
         {
@@ -70,12 +74,14 @@
                 { "field": "ground", "from_m": 0.4, "to_m": 3, "x": 0.4 },
                 { "field": "ground", "from_m": 6, "to_m": 30000000, "x": 0.04 }
             ],
+            "surface": { "flat": "#4a5428", "steep": "#3c3424", "roughness": 0.6 },
             "debug_color": "#4a6040"
         },
         {
             "name": "forest",
             "where": [{ "field": "humidity", "min": 0.05, "fade": 0.15 }],
             "amp": [{ "field": "ground", "from_m": 1600, "to_m": 30000000, "x": 0.6 }],
+            "surface": { "flat": "#2c5a1c", "steep": "#4c4234" },
             "debug_color": "#2f7a30"
         },
         {
@@ -84,6 +90,7 @@
                 { "field": "ground", "from_m": 0.4, "to_m": 12, "x": 0.3 },
                 { "field": "ground", "from_m": 25, "to_m": 30000000, "x": 0.08 }
             ],
+            "surface": { "flat": "#82a440", "steep": "#6c5c44" },
             "debug_color": "#9cc060"
         }
     ]

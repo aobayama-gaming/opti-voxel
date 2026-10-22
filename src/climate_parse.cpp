@@ -25,12 +25,14 @@ namespace Climate {
 //             "where": [ { "field": "temperature", "min": 0.5, "max": 2 (either or both), "fade": 0.1
 //                          (or "fade_min" / "fade_max") } ],
 //             "amp": [ { "field": "ground" | "<field>", "wavelength_m": 4000 | "from_m": 1000, "to_m": 20000, "x": 3 (default 1) } ],
-//             "debug_color": "#c04020" (optional, else a hash of the name: reports) }
+//             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
+//             "debug_color": "#c04020" }
 //     The region is 1 between min and max, fading to 0 over the fade outside. A range of "amp" covers the
 //     octaves the field has in it (none, past the ground's octaves at this LOD count). Octave k reads the weights
 //     from the fields' octaves coarser than k only (Cascade::Modulation): a region shapes the ground's octaves up to
 //     about the size of its fields' octaves, so flattening the continental octaves takes continental regions. The
-//     last biome is the default: no "where".
+//     last biome is the default: no "where". "surface": the biome's ground colours
+//     (sRGB) on gentle and steep slopes; without it, the procedural ground's.
 namespace {
 
 class Parser {
@@ -304,8 +306,29 @@ private:
         return uint32_t(c.substr(1).hex_to_int());
     }
 
+    // An sRGB "#rrggbb" at p_key as a linear colour (the page shader's albedos), p_default if absent.
+    Color linear_color(const Dictionary &p_d, const char *p_key, const String &p_where, const Color &p_default) {
+        if (!p_d.has(p_key)) {
+            return p_default;
+        }
+        return srgb_to_linear(hex_color(p_d, p_key, p_where));
+    }
+
+    void surface(const Dictionary &p_d, const String &p_where, Surface &r_s) {
+        if (!keys(p_d, p_where, { "flat", "steep", "roughness" })) {
+            return;
+        }
+        r_s.flat = linear_color(p_d, "flat", p_where, r_s.flat);
+        r_s.steep = linear_color(p_d, "steep", p_where, p_d.has("flat") ? r_s.flat : r_s.steep);
+        const double roughness = number(p_d, "roughness", p_where, r_s.roughness);
+        if (error.is_empty() && !(roughness >= 0.0 && roughness <= 1.0)) {
+            fail(p_where, "roughness is in [0, 1].");
+        }
+        r_s.roughness = float(roughness);
+    }
+
     void biome(const Dictionary &p_d, int64_t p_i) {
-        if (!keys(p_d, vformat("biome %d", p_i), { "name", "where", "amp", "debug_color" })) {
+        if (!keys(p_d, vformat("biome %d", p_i), { "name", "where", "amp", "surface", "debug_color" })) {
             return;
         }
         Climate::Biome b;
@@ -320,6 +343,9 @@ private:
         const String amp_where = where + String(" amp");
         for (int64_t i = 0; i < amp.size() && error.is_empty(); i++) {
             amps(dict(amp[i], amp_where), amp_where, b);
+        }
+        if (p_d.has("surface")) {
+            surface(dict(p_d["surface"], where + String(" surface")), where + String(" surface"), b.surface);
         }
         b.debug_color = p_d.has("debug_color") ? hex_color(p_d, "debug_color", where) : name_hash(b.name) & 0xFFFFFFu;
         table.biomes.push_back(b);

@@ -124,4 +124,24 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
     return best[ExactNoise::hash_cell(voxel, PICK_SEED) % uint32_t(count)];
 }
 
+int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m) {
+    State s;
+    state(p_table, p_slots, s);
+    return pick(p_table, s.w, p_p, p_m);
+}
+
+Color srgb_to_linear(uint32_t p_rgb) {
+    return Color::hex((p_rgb << 8) | 0xFFu).srgb_to_linear();
+}
+
+Material::Params biome_material(const Biome &p_biome) {
+    Material::Params m;
+    m.albedo = p_biome.surface.flat;
+    m.steep = p_biome.surface.steep;
+    m.roughness = p_biome.surface.roughness;
+    m.pattern = Material::PATTERN_GROUND;
+    m.debug = srgb_to_linear(p_biome.debug_color);
+    return m;
+}
+
 } // namespace Climate

@@ -54,6 +54,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
+    ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
@@ -154,7 +155,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "direct_compaction"), "set_direct_compaction", "get_direct_compaction");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direct_compact_max_extent", PROPERTY_HINT_RANGE, "1,1000000"), "set_direct_compact_max_extent", "get_direct_compact_max_extent");
     ADD_GROUP("Debug", "");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,LOD,Page,Wireframe,Chunk,Group,Quad index,Faceted,Material"), "set_debug_view", "get_debug_view");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded:0,Normals:1,LOD:2,Page:3,Wireframe:4,Chunk:5,Group:6,Quad index:7,Faceted:8,Material:9,Biome:12"), "set_debug_view", "get_debug_view");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "log_level", PROPERTY_HINT_RANGE, "0,3"), "set_log_level", "get_log_level");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile"), "set_debug_gpu_profile", "get_debug_gpu_profile");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_gpu_profile_frames"), "set_debug_gpu_profile_frames", "get_debug_gpu_profile_frames");
@@ -459,6 +460,13 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     WorldPos p = WorldCoord::offset_pos(origin, offset);
     p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
     return sdf->evaluate(p, 0);
+}
+
+Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
+    const double vs = double(chunk_param.voxel_size);
+    const VoxelPos p = sdf->get_base().tangent_point(std::llround(double(p_tangent_m.x) / vs), std::llround(double(p_tangent_m.y) / vs));
+    const VoxelPos origin = chunk_param.origin_voxel();
+    return Vector3(real_t(double(p.x - origin.x) * vs), real_t(double(p.y - origin.y) * vs), real_t(double(p.z - origin.z) * vs));
 }
 
 int VoxelTerrain::get_lod_numbers() const {

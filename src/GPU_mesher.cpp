@@ -118,7 +118,8 @@ void main() {
     // 2. Inject the dynamic code
     const SDFGpuTable *table = sdf->get_gpu_table();
     const String bindings = String(GLSL_BUFFER_BINDING).replace("/*GLSL_MATERIAL_BUFFER*/", CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly")) +
-            table->glsl_buffers(6, 7) + vformat("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT);
+            table->glsl_buffers(6, 7) +
+            vformat("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT) + ChunkPalette::glsl_base(table->base_palette());
     const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
     const String set_chunk = table->glsl_set_chunk();
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
@@ -295,9 +296,9 @@ if (active_edge_count > 0) {
     output_point[global_point_idx].b = int(packed_normal);
     
     // Store chunk index and mask in 'c' 
-    // (and the vertex's palette index at POINT_PALETTE_SHIFT; a chunk without a list is all ground, its samples'
-    // materials unwritten)
-    uint palette = input_chunk[chunk_idx].anchor_hi.w == 0 ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+    // (and the vertex's palette index at POINT_PALETTE_SHIFT; without a climate's base palette a chunk without a list
+    // is all ground, its samples' materials unwritten)
+    uint palette = input_chunk[chunk_idx].anchor_hi.w == 0 && !GROUND_MATERIALS ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
     output_point[global_point_idx].c = int((chunk_idx & 0xFFFF) | (quad_mask << 16) | (palette << POINT_PALETTE_SHIFT));
     
     // Store localized point address in 'd'

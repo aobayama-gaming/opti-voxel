@@ -1,7 +1,7 @@
 #include "climate.hpp"
 
 // The climate's GLSL, generated from a table op for op with its CPU code in climate.cpp: the dual-number helpers, the
-// field terms and biome weights.
+// field terms and biome weights, and the pick.
 namespace Climate {
 
 namespace {
@@ -72,6 +72,28 @@ String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const Str
         code += vformat("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
     }
     code += vformat("    vec4 w%d = rest;\n", int64_t(n - 1));
+    return code;
+}
+
+String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
+    String code = p_combined.modulation ? String() : glsl_helpers();
+    code += "\n// Climate::pick of the weights of the channels ch (V_m) at the absolute point p (a lattice point).\nuint climate_biome(Ch ch, WorldPos p) {\n";
+    code += glsl_weights(p_table, p_combined, "ch");
+    // The largest weight's bits and how many biomes share them, then the (hash % count)-th of those in list order: the
+    // CPU's incremental list holds exactly them (nothing exceeds the last best, so it is never reset after it).
+    code += "    float best = w0.w;\n    uint count = 1u;\n";
+    const int64_t n = int64_t(p_table.biomes.size());
+    for (int64_t b = 1; b < n; b++) {
+        code += vformat("    if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n        count++;\n    } else if (w%d.w > best) {\n        best = w%d.w;\n"
+                        "        count = 1u;\n    }\n",
+                b, b, b);
+    }
+    code += vformat("    uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, %du) %% count;\n", int64_t(PICK_SEED));
+    for (int64_t b = 0; b < n; b++) {
+        code += vformat("    if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n        if (k == 0u) {\n            return %du;\n        }\n        k--;\n    }\n", b,
+                b);
+    }
+    code += "    return 0u;\n}\n";
     return code;
 }
 

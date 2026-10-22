@@ -1,5 +1,6 @@
 #include "cascade_glsl.hpp"
 
+#include "chunk_palette.hpp"
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "gpu_frame.hpp"
@@ -481,10 +482,17 @@ uint32_t vec4s_per_point(const Spec &p_spec, const FieldRange &p_range) {
     return vec4s_for(channels);
 }
 
+bool ground_materials(const SDFBase *p_sdf) {
+    const SDFGpuTable *table = p_sdf->get_gpu_table();
+    return table && ChunkPalette::has_ground_materials(table->base_palette());
+}
+
 FieldRange field_range(const SDFBase *p_sdf, bool p_points) {
-    (void)p_points;
-    // Keyed on the modulation, not on the fields: a one-biome table without fields still modulates the ground.
-    return p_sdf->get_cascade()->field_range();
+    const Spec &spec = *p_sdf->get_cascade();
+    // The climate variant (modulation, the pick where there are fields) wherever a level needs it: a one-biome table
+    // without fields still modulates the ground.
+    const bool everywhere = !p_points && ground_materials(p_sdf);
+    return everywhere ? FieldRange{ 0, MAX_LEVEL } : spec.field_range();
 }
 
 String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_fields) {
@@ -503,9 +511,23 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     const String channels = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3]), p, lod";
     code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, pc.chunk_base + c, material, skirt_extra)", channels) : vformat("cascade_terrain_sdf(%s)", channels));
-    const bool store = p_material && p_fold;
+    // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
+    // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
+    // With them every chunk's samples get one: the winner's, or the ground's pick, read from the fields (field_range
+    // then carries them everywhere, so the fields variant is the only one CascadePasses compiles).
+    const bool grounds = ground_materials(p_sdf) && !p_points;
+    const bool store = p_material && (p_fold || grounds);
+    const bool pick = grounds && p_fields && !whole.fields.empty();
     code = code.replace("/*MATERIAL_BUFFER*/", store ? glsl_material_buffer(MATERIAL_BINDING, "writeonly") : String());
-    code = code.replace("/*MATERIAL_STORE*/", store ? "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }" : "");
+    String material_store;
+    if (store && grounds) {
+        // Air samples (w > 0, after the skirt) keep 0: the meshers read a vertex's material from its cell's solid corners.
+        material_store = String(pick ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch, p);\n    }\n    " : "") +
+                "sdf_material[sample_index] = material;";
+    } else if (store) {
+        material_store = "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }";
+    }
+    code = code.replace("/*MATERIAL_STORE*/", material_store);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
@@ -514,7 +536,7 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     const bool fields = !spec->fields.empty();
     const FieldRange range = field_range(p_sdf, p_points);
     const String fields_flag = fields ? String("bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n\n") : String();
-    code = code.replace("/*CASCADE*/", fields_flag + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole, range))) + band_functions(*spec) + modulation);
+    code = code.replace("/*CASCADE*/", fields_flag + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole, range))) + band_functions(*spec) + modulation + (pick ? p_sdf->get_ground_material_glsl() : String()));
     code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
     code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
 

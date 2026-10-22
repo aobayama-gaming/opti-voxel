@@ -70,7 +70,7 @@ void write_obj(const String &p_path, const std::vector<Tri> &p_tris, const Chunk
 std::vector<MeshValidator::Target> MeshValidator::pick_targets(const std::vector<Target> &p_candidates, int p_count) {
     std::vector<Target> sets[2];
     for (const Target &t : p_candidates) {
-        sets[t.palette.palette && t.palette.palette->size() > 1 ? 1 : 0].push_back(t);
+        sets[t.palette.offset != PaletteAlloc::GROUND_BLOCK ? 1 : 0].push_back(t); // records' materials past the base
     }
     const int with_materials = MIN(p_count / 2, (int)sets[1].size());
     const int counts[2] = { MIN(p_count - with_materials, (int)sets[0].size()), with_materials };

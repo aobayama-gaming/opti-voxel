@@ -120,8 +120,8 @@ public:
     SetChecker(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) :
             rd(p_rd), set(p_set), lods(p_lods), param(p_param), checks(r_checks) {
         configure_variant(sdf, p_set, p_lods, param);
-        // The channels the GPU carries (an empty FieldRange: the ground's only): the chunk passes' range
-        // (CascadeGLSL::field_range); the CPU's runs carry the same.
+        // The channels the GPU carries (an empty FieldRange: the ground's only): the chunk passes' range, every level with
+        // the biome pick (CascadeGLSL::field_range); the CPU's runs carry the same.
         range = CascadeGLSL::field_range(&sdf, false);
         all_fields = range.everywhere();
         nch = range.empty() ? channel_count(sdf.get_spec().set) : sdf.get_spec().gpu_channels();
@@ -472,6 +472,92 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     return d;
 }
 
+// G10 (biome materials): the meshers' cascade passes on the example climate (set 4c), every LOD's batch: each sample's
+// sdf_material (no instance: the ground's pick, cascade_ground_material, at the solid samples) against SDFCascade::ground_material of the CPU
+// run's level slots (the fields carried everywhere, like the chunk passes), bit for bit; and how many biomes showed.
+Dictionary check_biomes(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_param) {
+    Dictionary d;
+    ChunkParam param = p_param;
+    SDFCascade sdf;
+    configure_variant(sdf, SpikeSet::L4C, p_lods, param);
+    const int cs = param.chunk_size;
+    const uint64_t cells = uint64_t(cs) * cs * cs;
+    const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(param);
+    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
+    const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
+    const RID materials = p_rd->storage_buffer_create(MAX_BATCH * cells * 4);
+    CascadePasses passes;
+    Checks checks;
+    std::vector<int64_t> seen(Climate::MAX_BIOMES + 1, 0);
+    if (!CascadeGLSL::ground_materials(&sdf) ||
+            !passes.create(p_rd, &sdf, param, MAX_BATCH, input, param_ubo, samples, RID(), nullptr, RID(), RID(), materials)) {
+        checks.example("no ground materials, or the cascade passes failed to compile");
+        checks.samples_differing++;
+    }
+    for (int lod = 0; lod < p_lods && passes.is_valid(); lod++) {
+        std::vector<Pair> pairs;
+        const std::vector<TestChunk> chunks = batch_chunks(lod, p_lods, param, pairs);
+        PackedByteArray ids;
+        ids.resize(int64_t(chunks.size()) * GPUFrame::CHUNK_INPUT_BYTES);
+        Vector2i lods(64, 0);
+        for (size_t c = 0; c < chunks.size(); c++) {
+            GPUFrame::encode_chunk_input(ids, int64_t(c), chunks[c].id, param);
+            lods = Vector2i(MIN(lods.x, chunks[c].lod), MAX(lods.y, chunks[c].lod));
+        }
+        p_rd->buffer_update(input, 0, ids.size(), ids);
+        passes.record_all(lods, uint32_t(chunks.size()));
+        p_rd->submit();
+        p_rd->sync();
+        const PackedByteArray got_bytes = p_rd->buffer_get_data(materials, 0, chunks.size() * cells * 4);
+        const uint32_t *got = reinterpret_cast<const uint32_t *>(got_bytes.ptr());
+        for (size_t c = 0; c < chunks.size(); c++) {
+            const int l = chunks[c].lod;
+            const Box box = chunk_box(chunks[c].id, param);
+            const Level level = Cascade::run(sdf.get_spec(), box, l, nullptr, Source(), true);
+            for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
+                const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
+                float slots[SLOTS];
+                level.slots_at(p_cpu_i, slots);
+                // Air samples (the sample with its skirt above 0) keep 0: no vertex reads them.
+                const ExactNoise::Float4 r = sdf.with_skirt(sdf.sdf(slots, p_p * (int64_t(1) << l), l), l, Float3{ float(i.x), float(i.y), float(i.z) });
+                const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(slots, p_p, l);
+                const uint32_t g = got[c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))];
+                seen[MIN(want, uint32_t(Climate::MAX_BIOMES))]++;
+                checks.samples++;
+                if (g != want) {
+                    checks.samples_differing++;
+                    if (checks.wants_example()) {
+                        checks.example(vformat("LOD %d chunk %s (%s) sample %s: gpu %d cpu %d", l, WorldCoord::to_string(chunks[c].id), chunks[c].place,
+                                WorldCoord::to_string(i), g, want));
+                    }
+                }
+            });
+        }
+        checks.chunks += int64_t(chunks.size());
+    }
+    passes.free();
+    for (const RID &rid : { input, param_ubo, samples, materials }) {
+        p_rd->free_rid(rid);
+    }
+    Dictionary per_biome;
+    int biomes = 0;
+    for (size_t m = 1; m < seen.size(); m++) {
+        if (seen[m] > 0) {
+            per_biome[sdf.get_climate()->biomes[m - 1].name] = seen[m];
+            biomes++;
+        }
+    }
+    d["chunks"] = checks.chunks;
+    d["samples"] = checks.samples;
+    d["samples_differing"] = checks.samples_differing;
+    d["samples_per_biome"] = per_biome;
+    d["examples"] = checks.examples;
+    d["samples_air"] = seen[0]; // no pick there
+    d["ok"] = checks.samples_differing == 0 && seen[0] < checks.samples && biomes >= 3;
+    return d;
+}
+
 double median(std::vector<double> p_v) {
     if (p_v.empty()) {
         return 0.0;
@@ -769,6 +855,13 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
         d["seconds"] = double(now_usec() - t0) / 1e6;
         ok = ok && bool(d["ok"]);
         report["table"] = d;
+    }
+    if (bool(p_options.get("biomes", true))) {
+        const uint64_t t0 = now_usec();
+        Dictionary d = check_biomes(rd, lods, param);
+        d["seconds"] = double(now_usec() - t0) / 1e6;
+        ok = ok && bool(d["ok"]);
+        report["biomes"] = d;
     }
     if (bool(p_options.get("points", true))) {
         Dictionary points_report;

@@ -483,6 +483,101 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     CHECK(h8.get_spec().fields.empty());
 }
 
+TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample pick (box runs equal point queries)") {
+    SDFCascade sdf;
+    CLIMATE_REQUIRE(load("res://climate/example.json", sdf.climate_data) == String());
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    sdf.configure(param, 15);
+    CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
+    const Table &t = *sdf.get_climate();
+    const std::vector<uint32_t> base = sdf.get_gpu_table()->base_palette();
+    CLIMATE_REQUIRE(base.size() == 1 + t.biomes.size());
+    CHECK(base[0] == Material::GROUND);
+    CHECK(CascadeGLSL::ground_materials(&sdf));
+    for (size_t b = 0; b < t.biomes.size(); b++) {
+        const Material::Params &m = sdf.get_materials()[base[1 + b]];
+        CHECK(sdf.get_materials().name(base[1 + b]) == "biome:" + t.biomes[b].name);
+        CHECK(m.pattern == Material::PATTERN_GROUND);
+        CHECK(m.debug.a == 1.0f);
+    }
+    // "#d8b878" (desert, sRGB) as a linear albedo.
+    const int desert = 2;
+    CHECK(t.biomes[desert].name == "desert");
+    CHECK(t.biomes[desert].surface.flat.r == doctest::Approx(Color(216 / 255.0, 0, 0).srgb_to_linear().r));
+    // A reconfigure keeps the materials' ids (Library::set) and the chunk passes carry the fields everywhere.
+    sdf.configure(param, 15);
+    CHECK(sdf.get_gpu_table()->base_palette() == base);
+    const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, false);
+    CHECK(range.floor == 0);
+    CHECK(range.ceiling == Cascade::MAX_LEVEL);
+    CHECK(CascadeGLSL::field_range(&sdf, true).floor == sdf.get_spec().field_range().floor); // point items: the spec's
+
+    // The pick of a box run's level slots (what the GPU's level 0 reads) equals the point query, at several LODs and
+    // origins; over a wide coarse slice the example climate shows several biomes.
+    const Cascade::Spec &spec = sdf.get_spec();
+    int64_t points = 0, mismatches = 0;
+    for (const int lod : { 0, 3, 8, 13 }) {
+        for (const int64_t origin : { int64_t(0), (int64_t(1) << 40) + 12345, -(int64_t(1) << 33) }) {
+            Cascade::Box box;
+            for (int a = 0; a < 3; a++) {
+                box.lo[a] = (a == 1 ? (sdf.get_datum_y() >> lod) : (origin >> lod)) - 3;
+                box.hi[a] = box.lo[a] + 5;
+            }
+            const Cascade::Level level = Cascade::run(spec, box, lod, nullptr, Cascade::Source(), true);
+            Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
+                float slots[Cascade::SLOTS];
+                level.slots_at(p_i, slots);
+                const VoxelPos v(p_p.x << lod, p_p.y << lod, p_p.z << lod);
+                points++;
+                mismatches += sdf.ground_material(slots, p_p, lod) != sdf.ground_material_at(v, lod);
+            });
+        }
+    }
+    CHECK(points > 0);
+    CHECK(mismatches == 0);
+    std::vector<int> seen(t.biomes.size() + 1, 0);
+    const int lod = 12;
+    for (int i = 0; i < 24; i++) {
+        for (int j = 0; j < 24; j++) {
+            const VoxelPos v(int64_t(i - 12) << (lod + 3), sdf.get_datum_y() >> lod << lod, int64_t(j - 12) << (lod + 3));
+            const uint32_t m = sdf.ground_material_at(v, lod);
+            CLIMATE_REQUIRE((m >= 1 && m < base.size()));
+            seen[m]++;
+        }
+    }
+    CHECK(std::count_if(seen.begin(), seen.end(), [](int p_n) { return p_n > 0; }) >= 3);
+
+    // Malformed surfaces.
+    GroundFixture g(0.05, 15);
+    Table bad;
+    CHECK(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"flat": "green"}}]})", g.ground, bad).contains("#rrggbb"));
+    CHECK(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"roughness": 2}}]})", g.ground, bad).contains("roughness"));
+    CHECK(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"shiny": 1}}]})", g.ground, bad).contains("unknown key"));
+    // A surface's steep colour: the given flat without its own, the procedural ground's rock without either.
+    Table s;
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"roughness": 0.5}}]})", g.ground, s) == String());
+    CHECK(s.biomes[0].surface.steep == Material::GROUND_STEEP);
+    CHECK(s.biomes[0].surface.flat == Material::GROUND_FLAT);
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"flat": "#ff0000"}}]})", g.ground, s) == String());
+    CHECK(s.biomes[0].surface.steep == s.biomes[0].surface.flat);
+    // A climate without fields (one default biome): no pick to make, so no ground materials (CPU and GPU alike).
+    SDFCascade fieldless;
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a"}]})", g.ground, s) == String());
+    fieldless.climate_data = JSON::parse_string(R"({"fields": [], "biomes": [{"name": "a"}]})");
+    fieldless.configure(param, 15);
+    CLIMATE_REQUIRE(fieldless.get_climate() != nullptr);
+    CHECK_FALSE(fieldless.has_ground_materials());
+    CHECK(fieldless.get_gpu_table()->base_palette() == std::vector<uint32_t>{ Material::GROUND });
+    CHECK(fieldless.get_ground_material_glsl().is_empty());
+    // Without a climate: the base palette is GROUND alone, and no ground material GLSL.
+    SDFCascade plain;
+    plain.configure(param, 15);
+    CHECK(plain.get_gpu_table()->base_palette() == std::vector<uint32_t>{ Material::GROUND });
+    CHECK(plain.get_ground_material_glsl().is_empty());
+    CHECK(Climate::pick_glsl(t, spec).contains("uint climate_biome(Ch ch, WorldPos p)"));
+}
+
 // One octave per group and lattice: a second band of one group on one lattice is refused by validate, and the cascade
 // ignores it (ERR) in a spec built by hand, box and point alike.
 TEST_CASE("Cascade: one band per group and lattice") {
