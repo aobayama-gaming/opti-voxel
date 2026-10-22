@@ -311,6 +311,14 @@ to every change, and a reviewer may reject a PR on any of them.
   reads `SAMPLES` (256) hashed sites at the origin: reach, `lod_end`, k / margin max (times `REACH_SAFETY` 1.25), joins,
   records per site and the mass lost per LOD (what a far proxy stands for); unit-tested to bound every record of the
   forest and the scatter (`covers`).
+  **Keys (`src/scatter_source.*`, not wired yet):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS, lod,
+  tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
+  `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. PARTS is a pyramid: a LOD-0 tile (8 source cells) grows its
+  sites and keeps every record; LOD L's side doubles until it holds 2 chunks and it keeps what its 1 or 8 L - 1 tiles list
+  at L. A BLOBS tile (8 layer cells, at least a part tile and 2 chunks) builds the layers on the items within
+  `MARGIN_CELLS` (`PRUNE_CELLS` + 1) cells and judges its own cells (`MomentLayerParams::judged`): on part layers the
+  LOD-0 tiles' records (the whole build's blobs bit for bit, unit test), above them proxies (unsnapped `surface_sites`,
+  2 per cell side, the profile's lost moments: mass within 10%). `SDFTable::source_setup` gives a source's setup.
   **Trees (step 5, `src/tree_archetype.*`):** a tree is a contiguous run of plain records, all smooth union
   (`SDFTable::get_trees()`: `TreeSpan` first id + count), no change to the IR, the fold or the meshers.
   Library types 3 `branch` (a tapered capsule {height, radius, slope}, slope = (r1 - r0) / height from the

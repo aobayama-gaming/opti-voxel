@@ -82,7 +82,9 @@ int MomentItem::first_lost_lod() const {
 
 void prepare_moment_item(MomentItem &r_item) {
     std::fill(r_item.semi, r_item.semi + 3, 0.0f);
-    std::fill(r_item.area, r_item.area + 6, 0.0);
+    if (!r_item.area_given) {
+        std::fill(r_item.area, r_item.area + 6, 0.0);
+    }
     if (r_item.moments.empty()) {
         return;
     }
@@ -91,6 +93,9 @@ void prepare_moment_item(MomentItem &r_item) {
     for (int i = 0; i < 3; i++) {
         lambda[i] = std::max(lambda[i], 1.0 / 12.0); // at least a voxel thick
         r_item.semi[i] = float(std::sqrt(5.0 * lambda[i]));
+    }
+    if (r_item.area_given) {
+        return;
     }
     // The equal-covariance ellipsoid's silhouette along n, pi sqrt(n^T adj(5 S) n), as a quadratic form: the square root
     // read as n^T adj n over the root of adj's mean eigenvalue (exact for a sphere, 1.22 times a long rod's side view, a

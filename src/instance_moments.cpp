@@ -77,11 +77,9 @@ Moments Moments::scaled(double p_weight) const {
     return r;
 }
 
-Moments Moments::rotated(const float *p_r) const {
-    Moments out = *this;
-    local_to_world(p_r, c, out.c);
+void rotate_symmetric(const double p_s[6], const float *p_r, double r_out[6]) {
     double m[9], t[9], w[9];
-    to_matrix(s, m);
+    to_matrix(p_s, m);
     // t = S R, w = R^T t.
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
@@ -93,7 +91,13 @@ Moments Moments::rotated(const float *p_r) const {
             w[3 * i + j] = double(p_r[i]) * t[j] + double(p_r[3 + i]) * t[3 + j] + double(p_r[6 + i]) * t[6 + j];
         }
     }
-    from_matrix(w, out.s);
+    from_matrix(w, r_out);
+}
+
+Moments Moments::rotated(const float *p_r) const {
+    Moments out = *this;
+    local_to_world(p_r, c, out.c);
+    rotate_symmetric(s, p_r, out.s);
     return out;
 }
 

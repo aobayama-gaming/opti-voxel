@@ -6,6 +6,7 @@
 #include "cell_scatter.hpp"
 #include "instance_table.hpp"
 #include "moment_layers.hpp"
+#include "scatter_source.hpp"
 #include "sdf_base.hpp"
 #include "tree_archetype.hpp"
 
@@ -58,6 +59,8 @@ public:
         Archetype::CellScatter scatter;
     };
     const std::vector<Source> &get_sources() const { return sources; }
+    // A source as a field of keys (scatter_source.hpp), with the table's library, finish, moment layers and limits.
+    Archetype::ScatterSource::Setup source_setup(const Source &p_source, uint32_t p_id) const;
     // How the table finishes its records (the band rule unless set_instance_band(false), the erosion, the skirt).
     Archetype::RecordFinish record_finish() const;
     // The moment blobs a whole rebuild of the current records would make, with the joins the table was built with: what
@@ -191,6 +194,9 @@ private:
         bool operator<(const BlobKey &p_o) const;
     };
     int moment_blob_type = -1; // -1: no moment layers
+    int blob_type = -1; // the library's moment blob type (whether or not the table has layers)
+    // The moment layers' parameters (the LOD range left to the caller).
+    Archetype::MomentLayerParams moment_params() const;
     Archetype::MomentLayers moment_layers;
     std::map<BlobKey, uint32_t> blob_ids;
 
