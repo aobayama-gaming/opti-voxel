@@ -3,6 +3,7 @@
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
+#include "cascade_spike_sets.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
@@ -17,6 +18,7 @@
 #include <vector>
 
 using namespace Cascade;
+using namespace CascadeSpikeSets;
 using ExactNoise::bits_float;
 using ExactNoise::exact_pow2;
 using ExactNoise::float_bits;
@@ -112,23 +114,22 @@ struct Checks {
     }
 };
 
-String set_label(ChannelSet p_set) {
-    return p_set == ChannelSet::HERMITE8 ? "8" : "4";
-}
-
 // One channel set: every batch through the GPU passes level by level, compared with Cascade::run.
 class SetChecker {
 public:
-    SetChecker(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) :
+    SetChecker(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) :
             rd(p_rd), set(p_set), lods(p_lods), param(p_param), checks(r_checks) {
-        sdf.channel_set = p_set;
-        sdf.configure(p_param, p_lods);
-        nch = channel_count(p_set);
-        nv = CascadeGLSL::vec4s_per_point(p_set);
+        configure_variant(sdf, p_set, p_lods, param);
+        // The channels the GPU carries (an empty FieldRange: the ground's only): the chunk passes' range
+        // (CascadeGLSL::field_range); the CPU's runs carry the same.
+        range = CascadeGLSL::field_range(&sdf, false);
+        all_fields = range.everywhere();
+        nch = range.empty() ? channel_count(sdf.get_spec().set) : sdf.get_spec().gpu_channels();
+        nv = CascadeGLSL::vec4s_per_point(sdf.get_spec(), range);
         cs = p_param.chunk_size;
         cells = uint64_t(cs) * cs * cs;
         input = rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
-        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_param);
+        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(param);
         param_ubo = rd->uniform_buffer_create(param_bytes.size(), param_bytes);
         samples = rd->storage_buffer_create(MAX_BATCH * cells * 16);
         debug = rd->storage_buffer_create(MAX_BATCH * cells * nv * 16);
@@ -161,13 +162,15 @@ public:
 
 private:
     RenderingDevice *rd;
-    ChannelSet set;
+    SpikeSet set;
     int lods;
     ChunkParam param;
     Checks &checks;
     SDFCascade sdf;
     int nch = 0;
     uint32_t nv = 0;
+    FieldRange range;
+    bool all_fields = false;
     int cs = 0;
     uint64_t cells = 0;
     RID input;
@@ -192,27 +195,31 @@ private:
         PackedByteArray ids;
         ids.resize(count * GPUFrame::CHUNK_INPUT_BYTES);
         int min_lod = 64;
+        int max_lod = 0;
         for (uint32_t c = 0; c < count; c++) {
             boxes[c] = chunk_box(chunks[c].id, param);
-            Cascade::run(sdf.get_spec(), boxes[c], chunks[c].lod, &cpu[c]);
+            Cascade::run(sdf.get_spec(), boxes[c], chunks[c].lod, &cpu[c], Source(), all_fields);
             GPUFrame::encode_chunk_input(ids, c, chunks[c].id, param);
             min_lod = MIN(min_lod, chunks[c].lod);
+            max_lod = MAX(max_lod, chunks[c].lod);
             checks.chunks_per_lod.set(chunks[c].lod, checks.chunks_per_lod[chunks[c].lod] + 1);
         }
         checks.chunks += count;
         rd->buffer_update(input, 0, ids.size(), ids);
         PackedByteArray final_channels;
         for (int j = passes.level_count(min_lod) - 1; j >= 0; j--) {
-            passes.record_level(j, 0, count);
+            passes.record_level(j, 0, count, Vector2i(min_lod, max_lod));
             if (j == 0) {
-                debug_passes.record_level(0, 0, count);
+                debug_passes.record_level(0, 0, count, Vector2i(min_lod, max_lod));
             }
             rd->submit();
             rd->sync();
             const uint64_t n = uint64_t(level_bound(cs, j));
             const uint64_t bytes = count * n * n * n * nv * 16;
             if (j > 0) {
-                compare_level(j, rd->buffer_get_data((j & 1) ? passes.get_scratch_a() : passes.get_scratch_b(), 0, bytes), PackedByteArray());
+                // The scratch is planar (vec4 v of every slot together): the whole buffer.
+                const PackedByteArray scratch = rd->buffer_get_data((j & 1) ? passes.get_scratch_a() : passes.get_scratch_b());
+                compare_level(j, scratch, PackedByteArray(), uint64_t(scratch.size()) / 16 / nv);
                 continue;
             }
             final_channels = rd->buffer_get_data(debug, 0, bytes);
@@ -230,12 +237,15 @@ private:
     }
 
     // Level j of every chunk of the batch (GPU layout: x fastest, stride level_bound(j)) against the CPU's
-    // (x slowest); at j = 0 also the samples against SDFCascade::sdf + skirt of the CPU channels.
-    void compare_level(int p_j, const PackedByteArray &p_data, const PackedByteArray &p_samples) {
+    // (x slowest); at j = 0 also the samples against SDFCascade::sdf + skirt of the CPU channels. p_plane: the planar
+    // scratch's plane (vec4s), 0 for the per-point debug channels.
+    void compare_level(int p_j, const PackedByteArray &p_data, const PackedByteArray &p_samples, uint64_t p_plane = 0) {
         const float *gpu = reinterpret_cast<const float *>(p_data.ptr());
         const uint64_t n = uint64_t(level_bound(cs, p_j));
         const uint64_t points = n * n * n;
-        const int top = sdf.get_spec().top_level();
+        const int top = sdf.get_spec().top_level(all_fields);
+        // The fields only where the range carries them (the ground everywhere), on the GPU and the CPU alike.
+        const int ground_ch = channel_count(sdf.get_spec().set);
         for (uint32_t c = 0; c < uint32_t(chunks.size()); c++) {
             const int lod_c = chunks[c].lod;
             const int top_c = MAX(top, lod_c);
@@ -251,9 +261,9 @@ private:
             for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
                 const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
                 const uint64_t slot = c * points + uint64_t(i.x) + n * (uint64_t(i.y) + n * uint64_t(i.z));
-                for (int ch = 0; ch < nch; ch++) {
-                    const float want = level.ch[ch][size_t(p_cpu_i)];
-                    const float got = gpu[slot * nv * 4 + ch];
+                for (int ch = 0; ch < (range.carried(lod_c, m) ? nch : ground_ch); ch++) {
+                    const float want = level.ch[sdf.get_spec().slot_of_gpu(ch)][size_t(p_cpu_i)];
+                    const float got = p_plane > 0 ? gpu[(uint64_t(ch / 4) * p_plane + slot) * 4 + ch % 4] : gpu[slot * nv * 4 + ch];
                     checks.values++;
                     if (float_bits(want) != float_bits(got)) {
                         differing++;
@@ -274,7 +284,7 @@ private:
 
     void compare_sample(uint32_t p_chunk, const Level &p_level, const Vector3i64 &p_p, const Vector3i64 &p_grid, size_t p_cpu_i, const float *p_got) {
         float ch[CHANNELS] = {};
-        for (int k = 0; k < nch; k++) {
+        for (int k = 0; k < channel_count(sdf.get_spec().set); k++) {
             ch[k] = p_level.ch[k][p_cpu_i];
         }
         const int lod = chunks[p_chunk].lod;
@@ -300,6 +310,11 @@ private:
         const Box &cb = boxes[p_pair.child];
         const Box &pb = boxes[p_pair.parent];
         const int lod = chunks[p_pair.child].lod;
+        // A child modulated at its own level reads the parent's fields, which the parent chunk (LOD + 1) doesn't carry past
+        // the climate ceiling: no prediction from its readback there.
+        if (spec.modulation && spec.modulation->modulated(lod) != 0u && !range.carried(lod + 1, lod + 1)) {
+            return;
+        }
         auto at = [&](size_t p_chunk, const Box &p_box, const Vector3i64 &p_p, int p_ch) {
             const uint64_t slot = p_chunk * cells + uint64_t(p_p.x - p_box.lo[0]) + uint64_t(cs) * (uint64_t(p_p.y - p_box.lo[1]) + uint64_t(cs) * uint64_t(p_p.z - p_box.lo[2]));
             return p_channels[slot * nv * 4 + p_ch];
@@ -309,22 +324,18 @@ private:
             if (((p_p.x | p_p.y | p_p.z) & 1) != 0 || !pb.contains(q)) {
                 return;
             }
-            float expect[CHANNELS] = {};
+            // H(V_{L+1}) at a copy point (every slot, the fields' too), then Λ_L's insertions (Cascade::insert_at).
+            float expect[SLOTS] = {};
+            const int n0 = channel_count(spec.set);
             for (int ch = 0; ch < nch; ch++) {
-                expect[ch] = at(p_pair.parent, pb, q, ch) * exact_pow2(-channel_order(ch));
+                const int local = ch < n0 ? ch : (ch - n0) % 4;
+                expect[spec.slot_of_gpu(ch)] = at(p_pair.parent, pb, q, ch) * exact_pow2(-channel_order(local));
             }
-            for (const Band &band : spec.bands) {
-                if (spec.insert_level(band) == lod) {
-                    float o[CHANNELS];
-                    band_channels(spec, band, p_p, o);
-                    for (int ch = 0; ch < nch; ch++) {
-                        expect[ch] = expect[ch] + o[ch];
-                    }
-                }
-            }
+            insert_at(spec, lod, p_p, expect);
             checks.relation_points++;
-            for (int ch = 0; ch < nch; ch++) {
-                if (float_bits(flush_value(expect[ch])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
+            const int compared = range.carried(lod, lod) ? nch : n0; // the fields where carried
+            for (int ch = 0; ch < compared; ch++) {
+                if (float_bits(flush_value(expect[spec.slot_of_gpu(ch)])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
                     checks.relation_differing++;
                     if (checks.wants_example()) {
                         checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, WorldCoord::to_string(chunks[p_pair.child].id),
@@ -337,7 +348,7 @@ private:
     }
 };
 
-void check_set(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) {
+void check_set(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) {
     SetChecker checker(p_rd, p_set, p_lods, p_param, r_checks);
     checker.run();
 }
@@ -437,7 +448,7 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
         if (!words.is_empty()) {
             p_rd->buffer_update(list, 0, words.size(), words);
         }
-        passes.record_all(lod, uint32_t(ids.size()), true); // the fold variant, empty lists included (the bare bits there)
+        passes.record_all(Vector2i(lod, lod), uint32_t(ids.size()), true); // the fold variant, empty lists included (the bare bits there)
         p_rd->submit();
         p_rd->sync();
         const PackedByteArray got_bytes = p_rd->buffer_get_data(samples, 0, ids.size() * cells * 16);
@@ -482,7 +493,7 @@ BatchTime time_batch(RenderingDevice *p_rd, CascadePasses &p_passes, int p_lod, 
     const int levels = p_passes.level_count(p_lod);
     p_rd->capture_timestamp(p_prefix + String("b"));
     for (int j = levels - 1; j >= 0; j--) {
-        p_passes.record_level(j, 0, TIMING_CHUNKS);
+        p_passes.record_level(j, 0, TIMING_CHUNKS, Vector2i(p_lod, p_lod));
         p_rd->capture_timestamp(p_prefix + itos(j));
     }
     const uint64_t t0 = now_usec();
@@ -527,7 +538,7 @@ BatchTime time_batch(RenderingDevice *p_rd, CascadePasses &p_passes, int p_lod, 
 }
 
 // G6 / G7: GPU time of every level for single-LOD batches of 128 chunks.
-Dictionary timing(RenderingDevice *p_rd, const std::vector<ChannelSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
+Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
     const int cs = p_param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
     const RID input = p_rd->storage_buffer_create(TIMING_CHUNKS * GPUFrame::CHUNK_INPUT_BYTES);
@@ -536,10 +547,10 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<ChannelSet> &p_sets, 
     const RID samples = p_rd->storage_buffer_create(TIMING_CHUNKS * cells * 16);
     std::vector<std::unique_ptr<SDFCascade>> sdfs;
     std::vector<std::unique_ptr<CascadePasses>> passes;
-    for (const ChannelSet set : p_sets) {
+    for (const SpikeSet set : p_sets) {
         sdfs.push_back(std::make_unique<SDFCascade>());
-        sdfs.back()->channel_set = set;
-        sdfs.back()->configure(p_param, p_lods);
+        ChunkParam param = p_param;
+        configure_variant(*sdfs.back(), set, p_lods, param); // the same chunks, only the metres differ
         passes.push_back(std::make_unique<CascadePasses>());
         passes.back()->create(p_rd, sdfs.back().get(), p_param, TIMING_CHUNKS, input, param_ubo, samples);
     }
@@ -616,14 +627,14 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<ChannelSet> &p_sets, 
 // Cascade::point + SDFCascade::sdf, the bits of the metres value. Per LOD 0-24, 5 places x 1024 corners of that
 // LOD's corner grid (multiples of 28 * 2^L voxels): near 0, +2^60, -2^60, straddling 2^32-voxel boundaries, and
 // around lattice index 2^32 (voxel 2^(32 + L)). One batch per LOD, like a discoverer wave.
-Dictionary check_points(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, const ChunkParam &p_param) {
+Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
     constexpr int PER_PLACE = 1024;
     constexpr int PLACES = 5;
     constexpr uint32_t MAX_POINTS = PER_PLACE * PLACES;
     SDFCascade sdf;
-    sdf.channel_set = p_set;
-    sdf.configure(p_param, p_lods);
-    const ChunkParam pp = CascadeGLSL::point_param(p_param);
+    ChunkParam param = p_param;
+    configure_variant(sdf, p_set, p_lods, param);
+    const ChunkParam pp = CascadeGLSL::point_param(param);
     const RID input = p_rd->storage_buffer_create(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
     const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(pp);
     const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
@@ -658,7 +669,7 @@ Dictionary check_points(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, con
             }
         }
         p_rd->buffer_update(input, 0, bytes.size(), bytes);
-        passes.record_all(lod, uint32_t(points.size()));
+        passes.record_all(Vector2i(lod, lod), uint32_t(points.size()));
         p_rd->submit();
         p_rd->sync();
         const PackedByteArray got_bytes = p_rd->buffer_get_data(values, 0, points.size() * sizeof(float));
@@ -667,7 +678,7 @@ Dictionary check_points(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, con
         for (size_t i = 0; i < points.size(); i++) {
             const VoxelPos &v = points[i];
             float ch[CHANNELS];
-            point(sdf.get_spec(), Vector3i64(v.x >> lod, v.y >> lod, v.z >> lod), lod, ch);
+            sdf.channels_at(v, lod, ch); // Cascade::point's bits, through the ground terms
             const float want = sdf.sdf(ch, v, lod).w;
             compared++;
             if (float_bits(want) != float_bits(got[i])) {
@@ -707,9 +718,12 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
     const int lods = int(p_options.get("lods", 25));
     ChunkParam param;
     param.voxel_size = float(p_options.get("voxel", 0.5));
-    std::vector<ChannelSet> sets;
-    for (const String &s : String(p_options.get("sets", "8,4")).split(",")) {
-        sets.push_back(s == "4" ? ChannelSet::LINEAR4 : ChannelSet::HERMITE8);
+    std::vector<SpikeSet> sets;
+    for (const String &s : String(p_options.get("sets", "8,4,4c")).split(",")) {
+        SpikeSet set;
+        if (parse_variant(s, set)) {
+            sets.push_back(set);
+        }
     }
     RenderingDevice *rd = RenderingServer::get_singleton()->create_local_rendering_device();
     if (!rd) {
@@ -719,7 +733,7 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
     bool ok = true;
     if (bool(p_options.get("check", true))) {
         Dictionary checks_report;
-        for (const ChannelSet set : sets) {
+        for (const SpikeSet set : sets) {
             Checks checks;
             const uint64_t t0 = now_usec();
             check_set(rd, set, lods, param, checks);
@@ -758,7 +772,7 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
     }
     if (bool(p_options.get("points", true))) {
         Dictionary points_report;
-        for (const ChannelSet set : sets) {
+        for (const SpikeSet set : sets) {
             const uint64_t t0 = now_usec();
             Dictionary d = check_points(rd, set, lods, param);
             d["seconds"] = double(now_usec() - t0) / 1e6;
