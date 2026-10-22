@@ -3,7 +3,8 @@
 
     tools/cpu_report.py <run dir> [top, default 40]
 
-Reads <run>/perf.script.txt (perf script -F comm,pid,tid,ip,sym,dso: on-CPU samples) or <run>/stacks.txt
+Reads <run>/perf.data through perf script (-F comm,pid,tid,ip,sym,dso, streamed: on-CPU samples), or a kept
+<run>/perf.script.txt, or <run>/stacks.txt
 (cpu_profile.sh's eu-stack loop: every thread every 0.5 s, wall clock; samples whose top frames wait in the kernel are
 counted as waiting and left out of the tables; perf's are all kept). Tables: samples per thread, the top self symbols (leaf frames) of the
 main thread (tid == pid) and of the other threads together, the top inclusive symbols (a symbol counted once per
@@ -12,6 +13,7 @@ sample it appears in) of every thread. Unnamed frames read "[unknown] <module>".
 import collections
 import os
 import re
+import subprocess
 import sys
 
 # Leaf frames of a thread blocked in the kernel (eu-stack samples every thread, running or not).
@@ -121,16 +123,25 @@ def thread_summary(samples, waiting):
     return out + [""]
 
 
+def perf_script_lines(data):
+    """perf script's output for perf.data, streamed (a 1M run's is ~1 GB as text: it is not kept on disk)."""
+    proc = subprocess.Popen(["perf", "script", "-i", data, "-F", "comm,pid,tid,ip,sym,dso"], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, errors="replace")
+    yield from proc.stdout
+    proc.wait()
+
+
 def report(run, top=40):
-    script, stacks = os.path.join(run, "perf.script.txt"), os.path.join(run, "stacks.txt")
-    if os.path.exists(script):
+    data, script, stacks = os.path.join(run, "perf.data"), os.path.join(run, "perf.script.txt"), os.path.join(run, "stacks.txt")
+    if os.path.exists(data) or os.path.exists(script):
         source = "perf (on-CPU samples)"
-        samples = list(parse_perf_script(open(script, errors="replace")))
+        lines = open(script, errors="replace") if os.path.exists(script) else perf_script_lines(data)
+        samples = list(parse_perf_script(lines))
     elif os.path.exists(stacks):
         source = "eu-stack (wall-clock samples of every thread)"
         samples = list(parse_eu_stack(open(stacks, errors="replace")))
     else:
-        return f"# CPU: {os.path.basename(run)}\n\nn/a: no perf.script.txt or stacks.txt\n"
+        return f"# CPU: {os.path.basename(run)}\n\nn/a: no perf.data, perf.script.txt or stacks.txt\n"
     on_cpu = source.startswith("perf")  # perf samples running threads only
     waiting = [] if on_cpu else [s for s in samples if is_waiting(s)]
     busy = samples if on_cpu else [s for s in samples if not is_waiting(s)]

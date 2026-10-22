@@ -721,6 +721,8 @@ to every change, and a reviewer may reject a PR on any of them.
   `debug_symbols=yes` (+ frame pointers; the next plain build recompiles everything), samples the bench's Godot
   (perf at 499 Hz on-CPU, else eu-stack every 0.5 s, wall clock, which stalls the frames) and writes `<run>/cpu.md`
   (`tools/cpu_report.py`): top self symbols of the main thread and of the other threads, top inclusive ones.
+  perf at 499 Hz slows a 1M load by ~40%: shares from the sampled run, times from an unsampled one. The 1M profile of
+  2026-10-23 and its ranked causes: `docs/forest-1m-profile.md`.
 - `bench.gd --scenario=approach`: loads 1,500 m above and 2 km behind the start (`--approach_from`, `--approach_out`,
   along -X), flies straight to it in `--approach_seconds=20` without waiting, then settle / steady;
   `--approach_shots=DIR` saves a shot per second in the run's `--view` (run it twice for shaded | LOD).
