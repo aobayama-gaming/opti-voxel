@@ -36,6 +36,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_climate_path"), &VoxelTerrain::get_climate_path);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
+    ClassDB::bind_method(D_METHOD("set_archetype_stream", "enabled"), &VoxelTerrain::set_archetype_stream);
+    ClassDB::bind_method(D_METHOD("get_archetype_stream"), &VoxelTerrain::get_archetype_stream);
     ClassDB::bind_method(D_METHOD("set_archetype_moments", "enabled"), &VoxelTerrain::set_archetype_moments);
     ClassDB::bind_method(D_METHOD("get_archetype_moments"), &VoxelTerrain::get_archetype_moments);
     ClassDB::bind_method(D_METHOD("set_archetype_erode", "cells"), &VoxelTerrain::set_archetype_erode);
@@ -120,11 +122,12 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_instances", PROPERTY_HINT_RANGE, "0,1000000,1"), "set_archetype_instances", "get_archetype_instances");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000,1"), "set_archetype_trees", "get_archetype_trees");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,100000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000000,1"), "set_archetype_trees", "get_archetype_trees");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_moments"), "set_archetype_moments", "get_archetype_moments");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_resolve", PROPERTY_HINT_RANGE, "0,8,0.25"), "set_archetype_resolve", "get_archetype_resolve");
@@ -373,6 +376,15 @@ bool VoxelTerrain::get_archetype_band() const {
     return archetype_band;
 }
 
+void VoxelTerrain::set_archetype_stream(bool p_enabled) {
+    ERR_FAIL_COND_MSG(started, "archetype_stream must be set before the terrain enters the tree.");
+    archetype_stream = p_enabled;
+}
+
+bool VoxelTerrain::get_archetype_stream() const {
+    return archetype_stream;
+}
+
 void VoxelTerrain::set_archetype_moments(bool p_enabled) {
     ERR_FAIL_COND_MSG(started, "archetype_moments must be set before the terrain enters the tree.");
     archetype_moments = p_enabled;
@@ -459,7 +471,7 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     const double offset[3] = { double(p_render_pos.x) / vs, double(p_render_pos.y) / vs, double(p_render_pos.z) / vs };
     WorldPos p = WorldCoord::offset_pos(origin, offset);
     p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
-    return sdf->evaluate(p, 0);
+    return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident
 }
 
 Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
@@ -677,6 +689,7 @@ void VoxelTerrain::_ready() {
     }
     sdf->set_scatter(archetype_instances, archetype_instance_area);
     sdf->set_forest(archetype_trees, archetype_tree_area);
+    sdf->set_stream_sources(archetype_stream);
     sdf->set_biome_radius(biome_radius);
     if (!climate_path.is_empty()) {
         // Parsed and checked by configure() (an ERR there: no climate).
@@ -876,7 +889,7 @@ void VoxelTerrain::_process(double) {
     }
 
     const uint64_t t_process_start = now_usec();
-    sdf->poll_rebuild();
+    sdf->poll(); // an edit's rebuilt index base, the streamed keys computed since the last frame (before the meshers ask)
 
     if (camera != nullptr) {
         chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());

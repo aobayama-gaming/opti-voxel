@@ -80,6 +80,7 @@ private:
     double biome_radius = 0.0;
     String climate_path;
     bool archetype_band = true;
+    bool archetype_stream = true;
     bool archetype_moments = true;
     float archetype_erode = Archetype::ERODE_CELLS;
     float archetype_resolve = Archetype::ErodeRule().resolve;
@@ -225,6 +226,10 @@ public:
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
     bool get_archetype_band() const;
+    // The scatter and the forest stream (default on: their keys computed as the chunks ask for them,
+    // instance_stream.hpp); false places them whole at configure (--stream=0). Must be set before the node enters the tree.
+    void set_archetype_stream(bool p_enabled);
+    bool get_archetype_stream() const;
     // The far field of the dropped instances (default on): their moments, per LOD, as blobs the coarse chunks fold into a
     // surface (moment_layers.hpp; --moments=0 to leave it out). Must be set before the node enters the tree.
     void set_archetype_moments(bool p_enabled);

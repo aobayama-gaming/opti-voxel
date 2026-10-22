@@ -70,6 +70,17 @@ constexpr int MAX_ORDER = 2;
 // Rotation components smaller than this are 0 (keeps every product of the program in the exact domain).
 constexpr double ROTATION_FLUSH = 0x1p-24;
 
+// A record's rotation from its local axes in absolute coordinates (the rows: absolute to local).
+void rotation_rows(float r_rows[9], const Vec &p_x, const Vec &p_y, const Vec &p_z) {
+    const Vec rows[3] = { p_x, p_y, p_z };
+    for (int i = 0; i < 3; i++) {
+        const double c[3] = { rows[i].x, rows[i].y, rows[i].z };
+        for (int j = 0; j < 3; j++) {
+            r_rows[3 * i + j] = std::fabs(c[j]) < ROTATION_FLUSH ? 0.0f : float(c[j]);
+        }
+    }
+}
+
 struct Stem {
     Vec p0; // voxels from the tree's base, whole voxels
     Vec dir; // unit
@@ -315,17 +326,6 @@ private:
 
     VoxelPos anchor_of(const Vec &p_p) const { return base + VoxelPos(std::llround(p_p.x), std::llround(p_p.y), std::llround(p_p.z)); }
 
-    // A record's rotation from its local axes in absolute coordinates (the rows: absolute to local).
-    static void set_rotation(TableRecord &r_rec, const Vec &p_x, const Vec &p_y, const Vec &p_z) {
-        const Vec rows[3] = { p_x, p_y, p_z };
-        for (int i = 0; i < 3; i++) {
-            const double c[3] = { rows[i].x, rows[i].y, rows[i].z };
-            for (int j = 0; j < 3; j++) {
-                r_rec.rotation[3 * i + j] = std::fabs(c[j]) < ROTATION_FLUSH ? 0.0f : float(c[j]);
-            }
-        }
-    }
-
     void add_branch(const Vec &p_a, const Vec &p_b, double p_ra, double p_rb, double p_k) {
         const Vec seg = p_b - p_a;
         const double h = length(seg);
@@ -340,7 +340,7 @@ private:
         const Vec d = seg * (1.0 / h);
         Vec e0, e2;
         normal_frame(d, e0, e2);
-        set_rotation(rec, e0, d, e2);
+        rotation_rows(rec.rotation, e0, d, e2);
         rec.params[0] = float(h);
         rec.params[1] = float(p_ra);
         rec.params[2] = float((p_rb - p_ra) / h);
@@ -368,7 +368,7 @@ private:
             rec.op = Combine::SMOOTH_UNION;
             rec.set_k(float(s.crown_smooth * r));
             rec.anchor = anchor_of(snap(point_at(p_joints, t)));
-            set_rotation(rec, tier_x, up, tier_z);
+            rotation_rows(rec.rotation, tier_x, up, tier_z);
             rec.params[0] = float(r);
             rec.params[1] = float(height);
             rec.params[2] = float(height / slant); // cos of the half angle
@@ -444,6 +444,20 @@ TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, in
     t.crown_amp = slope > 0.0 ? float(CROWN_BUMP / slope) : 0.0f;
     t.crown_dent = float(double(t.crown_amp) * (double(hi.x) - 1.0));
     return t;
+}
+
+TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel) {
+    const int branch = r_library.add(make_branch_type(), Material::BARK);
+    const int crown = r_library.add(make_rock_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
+    const int cone = r_library.add(make_cone_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
+    return crown_types(branch, crown, r_library[crown], cone);
+}
+
+void up_rotation(const UpAxis &p_up, float r_rows[9]) {
+    const Vec up{ p_up[0], p_up[1], p_up[2] };
+    Vec x, z;
+    up_frame(up, x, z);
+    rotation_rows(r_rows, x, up, z);
 }
 
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,

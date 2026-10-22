@@ -41,16 +41,26 @@ public:
     // The statement assigning g_sdf_chunk from the current chunk (the mesher's main()).
     virtual String glsl_set_chunk() const = 0;
 
-    // The snapshot version the GPU should mirror (record uploads are skipped while it is unchanged).
+    // The snapshot version: an edit bumps it (the chunks it re-meshes require it).
     virtual uint32_t version() const = 0;
     virtual uint32_t instance_count() const = 0;
-    // How many instances the GPU buffers are sized for (runtime edits only append; more is refused).
+    // How many records the GPU buffer is sized for: the table's (runtime edits only append; more is refused), then the
+    // streamed records' slots.
     virtual uint32_t instance_capacity() const { return instance_count(); }
-    // The encoded DefRecords of the current snapshot changed since p_have_version (UINT32_MAX: none sent yet,
-    // all of them), as spans for upload_records(): uint32 span count, then per span its byte offset in the
-    // buffer, its byte size and the bytes. r_version is the version they are: one snapshot for both, whatever
-    // edits land meanwhile. An edit re-sends the pages it changed, not the table.
-    virtual PackedByteArray record_bytes(uint32_t p_have_version, uint32_t &r_version) const = 0;
+    // What a mesher's records buffer holds: the snapshot version it was sent and the streamed placements
+    // (InstanceStream::placements) it has seen.
+    struct UploadCursor {
+        uint32_t snap_version = UINT32_MAX; // UINT32_MAX: nothing sent yet
+        uint64_t slot_seq = 0;
+        bool operator==(const UploadCursor &p_o) const { return snap_version == p_o.snap_version && slot_seq == p_o.slot_seq; }
+        bool operator!=(const UploadCursor &p_o) const { return !(*this == p_o); }
+    };
+    // The cursor of the records now: a mesher whose own differs calls record_bytes().
+    virtual UploadCursor upload_cursor() const { return UploadCursor{ version(), 0 }; }
+    // The encoded DefRecords changed since p_have, as spans for upload_records(): uint32 span count, then per span its
+    // byte offset in the buffer, its byte size and the bytes; r_now is the cursor they bring it to (one snapshot,
+    // whatever edits land meanwhile). An edit re-sends the pages it changed, a placement its key's slots.
+    virtual PackedByteArray record_bytes(const UploadCursor &p_have, UploadCursor &r_now) const = 0;
     // Writes record_bytes()' spans into the records buffer (on the device that owns it).
     static void upload_records(RenderingDevice *p_rd, const RID &p_buffer, const PackedByteArray &p_spans) {
         int64_t at = 4;
@@ -106,6 +116,9 @@ public:
     // distance in metres, negative inside. The LOD only sets the unit of the internal gradients (per
     // voxel of that LOD), the distance is the same at every LOD.
     virtual float evaluate(const WorldPos &p_pos, int p_lod) const = 0;
+    // evaluate for the camera's per-frame queries (clip planes, the player's altitude and dig ray): main thread, never
+    // computes streamed instances there (those not resident yet are left out until they land).
+    virtual float evaluate_view(const WorldPos &p_pos, int p_lod) const { return evaluate(p_pos, p_lod); }
 
     // The value the discoverer's cull reads at a corner, leaving out what cull_exempt() covers anyway (SDFCascade:
     // the bare cascade, the GPU discoverer's point items bit for bit).
@@ -166,8 +179,26 @@ public:
 
     // The discoverer's no-cull rule: a node whose box intersects any instance's influence box (grown by
     // the cull band, 2 chunk sizes at the node's LOD) must never be culled, whatever the corners say.
-    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes).
-    virtual bool cull_exempt(const ChunkId &p_node, int p_lod) const = 0;
+    // This makes the cull independent of the slope bound (steep, rotated or subtracted shapes). p_past_band_m: how far
+    // the smallest |evaluate_cull| at the node's corners is past the cull band (metres, > 0, else it isn't asked).
+    virtual bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const = 0;
+
+    // Mesher gating (SDFTable's streamed sources): a chunk is meshed once every record it lists is in the GPU table, so
+    // its surface never depends on what had streamed in when.
+    enum class Admit {
+        READY, // mesh it now
+        PARKED, // kept: take_ready() hands it back once its records are there
+        LATER, // no room for its records now: queue it again and stop popping this frame
+    };
+    // Main thread, for each chunk a mesher pops (p_owner: the mesher; p_tag comes back with the chunk).
+    virtual Admit admit(const ChunkId & /*p_chunk*/, uint64_t /*p_owner*/, uint64_t /*p_tag*/) { return Admit::READY; }
+    // Main thread: p_owner's parked chunks now ready (or to ask again), with their tags, in the order they were parked.
+    virtual void take_ready(uint64_t /*p_owner*/, std::vector<std::pair<ChunkId, uint64_t>> &r_out) { r_out.clear(); }
+    // Main thread: p_owner's chunks parked (a mesher holding some isn't idle).
+    virtual size_t parked_count(uint64_t /*p_owner*/) const { return 0; }
+    // Main thread, once per frame before the meshers: what the streamed sources computed since, the index base an edit
+    // rebuilt.
+    virtual void poll() {}
 
     // Runtime instance edits. rotation (9 floats, row major) and params (8 floats) may be null (identity / zero).
     // p_op is a Combine. Returns the new instance id (>= 0) or -1. When any edit succeeds, last_edit_box() holds

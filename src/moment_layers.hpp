@@ -1,10 +1,10 @@
 #pragma once
 
+#include "archetype_table.hpp"
 #include "instance_moments.hpp"
 #include "world_coord.hpp"
 
 #include <map>
-#include <set>
 #include <tuple>
 #include <vector>
 
@@ -49,9 +49,11 @@ struct MomentItem {
     // Its erosion (archetype_table.hpp band_erosion; erode 0: whole until its drop).
     float erode = 0.0f;
     float erode_from = 1.0f;
-    // Set by the layers from the moments: the ellipsoid's semi-axes (ascending) and the area tensor (xx yy zz xy xz yz).
+    // Set by the layers from the moments: the ellipsoid's semi-axes (ascending) and the area tensor (xx yy zz xy xz yz),
+    // unless area_given (an aggregate of many parts, a far proxy: their summed silhouettes, not one ellipsoid's).
     float semi[3] = {};
     double area[6] = {};
+    bool area_given = false;
 
     // The share of its mass the LOD no longer draws (0 .. 1).
     double lost_share(int p_lod) const;
@@ -76,6 +78,9 @@ struct MomentLayerParams {
     bool keep_cover = true;
     int lod_min = 0; // the layers built
     int lod_max = 14;
+    // Valid: only the cells whose index (on the layer's grid) lies in it are judged, so kept (a tile's own cells; the
+    // others only sum, for their neighbours' bounds). Not for updates.
+    VoxelBox judged;
 };
 
 // A blob of layer lod: a record-to-be (SDFTable places it in the table).
@@ -95,7 +100,7 @@ struct MomentBlob {
     double occupancy(const double p_offset[3]) const;
 };
 
-// The semi-axes and area tensor of p_item from its moments.
+// The semi-axes and area tensor (unless area_given) of p_item from its moments.
 void prepare_moment_item(MomentItem &r_item);
 
 // A blob of one cell's moments and area tensor at layer p_lod (the kernel's frame, size and amplitude); p_anchor: the
@@ -119,13 +124,16 @@ struct MomentBlobChange {
 };
 
 // The layers of a set of items, kept up to date as the items change. Each cell holds its members (the items its tent
-// touches, by id), its blob and whether the pruning keeps it. A blob's pruning bound sums the amplitudes of the blobs whose
-// support box meets its own, in cell order: an update re-sums the cells an item leaves or joins and recomputes the bounds
-// around them, and lands on the same bits as a build of the items as they now are (with the same joins).
+// touches, by id), its blob and whether the pruning keeps it. A blob's pruning bound sums the amplitudes of the blobs of
+// the cells within PRUNE_CELLS of its own (any material) whose support box meets its own, in key order: a cell's verdict
+// only reads its neighbours, so the items within PRUNE_CELLS + 1 cells of a region (their tents) decide its blobs. An
+// update re-sums the cells an item leaves or joins and judges their neighbours again, and lands on the same bits as a
+// build of the items as they now are (with the same joins).
 class MomentLayers {
 public:
     // Every layer from p_items (indexed by id), with the joins they give.
-    void build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params);
+    // p_joins: fixed ones (a tile of a source: its items alone don't know the source's), else the items'.
+    void build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, const MomentJoins *p_joins = nullptr);
     // Item p_id (the table grows as needed) becomes p_item; the kept blobs that appeared, changed or vanished are appended
     // to r_changes.
     void update(uint32_t p_id, const MomentItem &p_item, std::vector<MomentBlobChange> &r_changes);
@@ -137,6 +145,8 @@ public:
     const MomentJoins &get_joins() const { return joins; }
     size_t item_count() const { return items.size(); }
     // The box tests the pruning has run so far (builds and updates): its cost, per item flat at a fixed density.
+    // A blob's bound reads the cells within this many cells of its own.
+    static constexpr int64_t PRUNE_CELLS = 1;
     uint64_t pruning_tests() const { return box_tests; }
 
 private:
@@ -159,21 +169,13 @@ private:
         MomentBlob blob;
         double extent[3] = {}; // its support's world-axis half extents
         bool kept = false;
-        bool placed = false; // in the bins (or the wide set): it has a blob
+        bool summed = false; // its blob is its members' (a cell an update just made has none yet)
     };
-    using Bin = std::tuple<int64_t, int64_t, int64_t>;
-    using Near = std::pair<CellKey, const Cell *>; // a cell and where it lives (map nodes don't move)
     struct Layer {
         int lod = 0;
         int64_t cell = 0; // voxels
         std::map<CellKey, Cell> cells;
-        std::map<Bin, std::vector<Near>> bins; // the blobs whose support box meets each bin of BIN_CELLS cells
-        std::set<CellKey> wide; // the blobs whose box meets more than WIDE_BINS bins
     };
-    // A blob is filed in every bin its support box meets, so two boxes that meet share a bin. A blob over more than
-    // WIDE_BINS bins (none in a forest: a tall trunk's blob spans tens) is tested by every blob instead.
-    static constexpr int64_t BIN_CELLS = 4;
-    static constexpr double WIDE_BINS = 512.0;
     // A blob under this many times min_occupancy on its own is a sliver of a part's tent.
     static constexpr double SLIVER = 1.0 / 16.0;
 
@@ -190,23 +192,25 @@ private:
     void resum_block(const Layer &p_layer, const CellKey &p_key, uint32_t p_block, Cell &r_cell) const;
     // The cell's blob from its block sums (in block order), and its extents.
     void resum(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const;
-    // The bins a support box at p_anchor with half extents p_extent meets (r_lo .. r_hi per axis); false when they are
-    // more than WIDE_BINS.
-    bool bin_range(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], Bin &r_lo, Bin &r_hi) const;
-    void place(Layer &r_layer, const CellKey &p_key, Cell &r_cell);
-    void unplace(Layer &r_layer, const CellKey &p_key, Cell &r_cell);
-    // The cells whose blob support box may meet one at p_anchor with half extents p_extent (a superset, sorted by key).
-    void candidates(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], std::vector<Near> &r_out) const;
-    // The cell's pruning bound and verdict from the current blobs; the box tests it ran.
+    // p_fn(key, cell) for every cell within PRUNE_CELLS of p_key (any material), in key order.
+    template <typename F>
+    static void for_neighbours(const Layer &p_layer, const CellKey &p_key, F &&p_fn);
+    // The cell's pruning bound and verdict from its neighbours' blobs; the box tests it ran.
     uint64_t judge(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const;
-    // A build, in two steps: the members (reads only the items: the layers fill theirs side by side), then the sums,
-    // the bins and the pruning (each cell's on the worker pool, the bins in cell order).
+    // A build, in two steps: the members (reads only the items: the layers fill theirs side by side), then the sums and
+    // the pruning (each cell's on the worker pool).
     void fill_members(Layer &r_layer) const;
     void finish_layer(Layer &r_layer);
     void build_layer(Layer &r_layer);
     // update() on one layer: item p_id was p_before (items[p_id] holds its new state).
     void update_layer(Layer &layer, uint32_t p_id, const MomentItem &p_before, std::vector<MomentBlobChange> &r_changes);
 };
+
+// A record's item: its moments, material and the first LOD it is gone at (dropped, or eroded past its half thickness);
+// empty moments for one that weighs nothing (removed, a cutter, a blob, never dropped).
+MomentItem record_item(const DefLibrary &p_library, const TableRecord &p_record);
+// A blob's record (op ACCUM, type p_blob_type, listed at its layer's LOD alone).
+TableRecord blob_record(const DefLibrary &p_library, int p_blob_type, const MomentBlob &p_blob, float p_skirt_depth);
 
 // The kept blobs of p_items' layers (a MomentLayers build), in (lod, cell, material) order.
 void build_moment_blobs(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, std::vector<MomentBlob> &r_out);

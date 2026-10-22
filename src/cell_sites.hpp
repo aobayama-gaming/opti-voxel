@@ -3,6 +3,7 @@
 #include "exact_noise.hpp"
 #include "world_coord.hpp"
 
+#include <array>
 #include <functional>
 #include <vector>
 

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstring>
 #include <string>
 #include <thread>
 
@@ -13,13 +15,15 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// A configured cascade terrain with the --instances scatter (rocks and pillars around SDFTable::SCENE_X / Z).
+// A configured cascade terrain with the --instances scatter (rocks and pillars around SDFTable::SCENE_X / Z), placed
+// whole in the table: these tests are the index's, they count its records and lists and edit them by id.
 // The scatter's records alone (p_moments false): the tests count records and lists; the moment blobs have their own.
 struct ScatteredCascade {
     ChunkParam param;
     SDFCascade sdf;
     explicit ScatteredCascade(int p_count, double p_area = 200.0, int p_lods = 15, bool p_moments = false) {
         sdf.set_scatter(p_count, p_area);
+        sdf.set_stream_sources(false);
         sdf.set_moment_blobs(p_moments);
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
         sdf.configure(param, p_lods);
@@ -44,14 +48,59 @@ float bare_sdf(const SDFCascade &p_sdf, const VoxelPos &p_voxel, int p_lod) {
 
 using ChunkMath::chunk_at_voxel;
 
-// Whether an instance whose box test passes at p_voxel at LOD p_lod is dropped at p_lod + 1 (the band rule).
-bool dropped_at(const std::shared_ptr<const InstanceSnapshot> &p_snap, const VoxelPos &p_voxel, int p_lod) {
+// Admits p_chunks to the stream (a test's own owner) until every one is READY: their keys are then resident, and the
+// CPU's point folds read them (else every point computes its keys and drops them). True when all got there.
+bool make_resident(SDFCascade &r_sdf, const std::vector<ChunkId> &p_chunks) {
+    constexpr uint64_t OWNER = 1;
+    std::vector<ChunkId> retry; // LATER: asked again
+    for (const ChunkId &c : p_chunks) {
+        if (r_sdf.admit(c, OWNER, 0) == SDFBase::Admit::LATER) {
+            retry.push_back(c);
+        }
+    }
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    for (int i = 0; i < 100000 && (r_sdf.parked_count(OWNER) > 0 || !retry.empty()); i++) {
+        r_sdf.poll();
+        r_sdf.take_ready(OWNER, back);
+        for (const std::pair<ChunkId, uint64_t> &b : back) {
+            retry.push_back(b.first);
+        }
+        std::vector<ChunkId> again;
+        for (const ChunkId &c : retry) {
+            if (r_sdf.admit(c, OWNER, 0) == SDFBase::Admit::LATER) {
+                again.push_back(c);
+            }
+        }
+        retry.swap(again);
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    return r_sdf.parked_count(OWNER) == 0 && retry.empty();
+}
+
+// The LOD-p_lod chunks whose span meets [p_lo, p_hi] (LOD0 voxels).
+std::vector<ChunkId> chunks_over(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, const ChunkParam &p_param) {
+    const ChunkId a = chunk_at_voxel(p_lo, p_lod, p_param), b = chunk_at_voxel(p_hi, p_lod, p_param);
+    const int64_t step = int64_t(2) << p_lod;
+    std::vector<ChunkId> out;
+    for (int64_t x = a.x; x <= b.x; x += step) {
+        for (int64_t y = a.y; y <= b.y; y += step) {
+            for (int64_t z = a.z; z <= b.z; z += step) {
+                out.push_back(ChunkId(x, y, z));
+            }
+        }
+    }
+    return out;
+}
+
+// Whether an instance whose box test passes at p_voxel at LOD p_lod is dropped at p_lod + 1 (the band rule), the streamed
+// ones included.
+bool dropped_at(const SDFCascade &p_sdf, const std::shared_ptr<const InstanceSnapshot> &p_snap, const VoxelPos &p_voxel, int p_lod) {
     thread_local std::vector<uint32_t> list;
-    p_snap->point_candidates(p_voxel, p_lod, list);
+    const RecordView records = p_sdf.point_list(*p_snap, p_voxel, p_lod, list);
     WorldPos p;
     p.voxel = p_voxel;
     for (uint32_t i : list) {
-        const TableRecord &rec = p_snap->records[i];
+        const TableRecord &rec = records[i];
         // A moment blob is listed at one LOD by design, not dropped: its step is the skirt's to hide.
         if (rec.op != Combine::ACCUM && !rec.listed_at(p_lod + 1) && in_influence_box(rec, p, p_lod)) {
             return true;
@@ -77,7 +126,9 @@ TEST_CASE("SDFCascade table: ground_y is the bare cascade's top solid voxel") {
 TEST_CASE("SDFCascade table: the scatter stands on the ground, folded at lattice points; far from it the bare cascade, bit for bit") {
     ScatteredCascade t(200);
     const auto snap = t.sdf.get_snapshot();
-    CHECK(snap->records.size() == 200);
+    // One site per cell of the ground: about the count asked.
+    CHECK(snap->records.size() >= 150);
+    CHECK(snap->records.size() <= 250);
     std::vector<uint32_t> list;
     int64_t pillars = 0;
     for (uint32_t i = 0; i < snap->records.size(); i++) {
@@ -94,7 +145,9 @@ TEST_CASE("SDFCascade table: the scatter stands on the ground, folded at lattice
         CHECK(std::find(list.begin(), list.end(), i) != list.end());
         pillars++;
     }
-    CHECK(pillars == 100);
+    MESSAGE("scatter: ", snap->records.size(), " records, ", pillars, " pillars");
+    CHECK(pillars * 10 >= int64_t(snap->records.size()) * 3); // about half: the site's variant picks
+    CHECK(pillars * 10 <= int64_t(snap->records.size()) * 7);
     // 4 km away, at LODs 0-6: no candidate, the bare sdf().
     for (int lod = 0; lod <= 6; lod++) {
         for (int i = 0; i < 16; i++) {
@@ -190,7 +243,7 @@ TEST_CASE("SDFCascade table: runtime edits on the cascade") {
     CHECK(t.sdf.last_edit_box().valid);
     CHECK(t.sdf.edit_affects_chunk(chunk_at_voxel(p.voxel, 0, t.param)));
     CHECK(!t.sdf.edit_affects_chunk(chunk_at_voxel(p.voxel + VoxelPos(5000, 0, 0), 0, t.param)));
-    CHECK(t.sdf.cull_exempt(chunk_at_voxel(p.voxel, 2, t.param), 2));
+    CHECK(t.sdf.cull_exempt(chunk_at_voxel(p.voxel, 2, t.param), 2, 0.0f));
     CHECK(t.sdf.remove_instance(id));
     CHECK(t.sdf.evaluate(p, 0) > 0.0f);
 }
@@ -211,7 +264,7 @@ TEST_CASE("SDFCascade table: evaluating on another thread while the main thread 
             WorldPos p;
             p.voxel = VoxelPos(v.x & mask, v.y & mask, v.z & mask);
             (void)t.sdf.evaluate(p, lod);
-            (void)t.sdf.cull_exempt(ChunkId(1, 1, 1), 0);
+            (void)t.sdf.cull_exempt(ChunkId(1, 1, 1), 0, 0.0f);
             i++;
             evaluations.fetch_add(1);
         }
@@ -311,9 +364,13 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
         uint32_t columns;
         double above_m; // above the tallest instance
         ErodeRule rule;
+        bool stream;
     };
-    const Scene scenes[] = { { "4,000-rock scatter", 0.5f, 4000, 0, 200.0, 300, 12.0, ErodeRule() },
-        { "forest", 0.05f, 0, 60, 40.0, 100, 26.0, ErodeRule() }, { "forest, resolve 1, rate 0.5", 0.05f, 0, 60, 40.0, 100, 26.0, ErodeRule{ 0.5f, 1.0f } } };
+    // Placed whole (the table's blobs) and streamed (the keys' records and blob tiles).
+    const Scene scenes[] = { { "4,000-rock scatter", 0.5f, 4000, 0, 200.0, 300, 12.0, ErodeRule(), false },
+        { "4,000-rock scatter, streamed", 0.5f, 4000, 0, 200.0, 300, 12.0, ErodeRule(), true },
+        { "forest, streamed", 0.05f, 0, 60, 40.0, 100, 26.0, ErodeRule(), true },
+        { "forest, resolve 1, rate 0.5, streamed", 0.05f, 0, 60, 40.0, 100, 26.0, ErodeRule{ 0.5f, 1.0f }, true } };
     for (const Scene &scene : scenes) {
         CAPTURE(scene.name);
         ChunkParam param;
@@ -321,6 +378,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
         SDFCascade sdf;
         sdf.set_scatter(scene.rocks, scene.area_m);
         sdf.set_forest(scene.trees, scene.area_m);
+        sdf.set_stream_sources(scene.stream);
         sdf.set_instance_erode(scene.rule.rate);
         sdf.set_instance_resolve(scene.rule.resolve);
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 15));
@@ -328,8 +386,19 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
         const int64_t window = std::llround(scene.area_m / double(scene.voxel));
         const VoxelPos centre(std::llround(SDFTable::SCENE_X / double(scene.voxel)), 0, std::llround(SDFTable::SCENE_Z / double(scene.voxel)));
         const int64_t above = std::llround(scene.above_m / double(scene.voxel));
+        const int64_t ground_c = sdf.ground_y(centre.x, centre.z);
         for (int lod = 0; lod <= 6; lod++) {
             CAPTURE(lod);
+            if (scene.stream) {
+                // The keys of every chunk the columns' samples fall in, at both LODs (the ground within a window's
+                // quarter of the centre's).
+                const VoxelPos lo(centre.x - window / 2 - 1, ground_c - above - window / 4, centre.z - window / 2 - 1);
+                const VoxelPos hi(centre.x + window / 2 + 1, ground_c + above + window / 4, centre.z + window / 2 + 1);
+                std::vector<ChunkId> chunks = chunks_over(lo, hi, lod, param);
+                const std::vector<ChunkId> coarse = chunks_over(lo, hi, lod + 1, param);
+                chunks.insert(chunks.end(), coarse.begin(), coarse.end());
+                CHECK(make_resident(sdf, chunks));
+            }
             const int64_t unit = int64_t(2) << lod; // Λ_{L+1}
             auto at = [&](const VoxelPos &p_column, int64_t p_y, int p_lod) {
                 WorldPos p;
@@ -360,7 +429,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
                     shared.voxel = VoxelPos(column.x, y + d, column.z);
                     // The outer chunk's skirt there: its LOD's, plus the moment skirt where a moment blob touches the point.
                     const double depth_m = double(sdf.skirt_depth_at(shared, step > 0.0 ? lod : lod + 1));
-                    if (step > depth_m && dropped_at(snap, VoxelPos(column.x, y + d, column.z), lod)) {
+                    if (step > depth_m && dropped_at(sdf, snap, VoxelPos(column.x, y + d, column.z), lod)) {
                         // A record listed at L, dropped at L+1: no skirt bounds that step, but the drop leaves at most
                         // `erode` cells of L of it (set_band), which the fine rim's skirt lifts to air: sealed.
                         CHECK(fine + double(sdf.skirt_depth_m(lod)) >= 0.0);
@@ -527,12 +596,12 @@ TEST_CASE("SDFCascade table: the edit overlay lists exactly what a whole new ind
     CHECK(sdf.get_snapshot()->base != first->base); // more than REBASE records edited: rebuilt at least once
     CHECK(entries > 1000);
     // An edit sends its page, not the table.
-    uint32_t v = 0;
     const uint32_t before = sdf.get_snapshot()->version;
     const float params[8] = { 4.0f, 0, 0, 0, 0, 0, 0, 0 };
     CHECK(sdf.add_instance(0, VoxelPos(-100, y0, -300), nullptr, params, 0, 0.0f) >= 0);
-    const PackedByteArray bytes = sdf.get_gpu_table()->record_bytes(before, v);
-    CHECK(v == before + 1);
+    SDFGpuTable::UploadCursor now;
+    const PackedByteArray bytes = sdf.get_gpu_table()->record_bytes(SDFGpuTable::UploadCursor{ before, 0 }, now);
+    CHECK(now.snap_version == before + 1);
     CHECK(bytes.decode_u32(0) == 1u);
     CHECK(bytes.size() <= 4 + 8 + int64_t(RecordStore::PAGE) * RECORD_BYTES);
     // Two edits far apart in id (the first record, and an add on the last page) are two runs, not the records between
@@ -623,4 +692,103 @@ TEST_CASE("SDFCascade table: a batch keeps the chunks whose lists fit the buffer
     CHECK(table->build_lists(chunks, t.param, ids, words, uint32_t(want[0].size() - 1)) == 1u);
     CHECK(ids.decode_s32(28) == int32_t(want[0].size() - 1));
     CHECK(int64_t(table->get_stats()["list_truncated"]) == truncated0 + 1);
+}
+
+// A streamed source's chunk: its list (build_lists) is the scene's records, then the streamed ones (slots past the
+// table's capacity), then the edits', and folded from the records the GPU holds (record_bytes: the snapshot and the
+// placed keys' slots) it gives the CPU's point fold (evaluate) bit for bit at every sample: one compose_list for both,
+// and a sample stays a pure function of the point.
+TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points: scene, streamed, then edit records") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    SDFCascade sdf;
+    sdf.set_forest(30, 40.0);
+    param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
+    sdf.configure(param, 18);
+    const InstanceStream *stream = sdf.get_stream();
+    CHECK(stream != nullptr);
+    if (stream == nullptr) {
+        return;
+    }
+    const int64_t x = std::llround(SDFTable::SCENE_X / 0.05), z = std::llround(SDFTable::SCENE_Z / 0.05);
+    const VoxelPos centre(x, sdf.ground_y(x, z), z);
+    // An edit over the centre: a sphere smooth-unioned into the canopy, after the streamed records in fold order.
+    const uint32_t scene_end = sdf.get_snapshot()->records.size();
+    const float sphere[8] = { 30.0f, 0, 0, 0, 0, 0, 0, 0 };
+    const int edit = sdf.add_instance(0, centre + VoxelPos(0, 60, 0), nullptr, sphere, int(Combine::SMOOTH_UNION), 8.0f);
+    CHECK(edit >= int(scene_end));
+
+    SDFGpuTable *table = sdf.get_gpu_table();
+    int64_t streamed = 0, edits = 0, folded = 0, points = 0, mismatches = 0;
+    for (int lod = 0; lod <= 6; lod++) {
+        CAPTURE(lod);
+        const std::vector<ChunkId> chunks{ chunk_at_voxel(centre + VoxelPos(0, 40, 0), lod, param) };
+        CHECK(make_resident(sdf, chunks));
+        PackedByteArray ids, words;
+        ids.resize(GPUFrame::CHUNK_INPUT_BYTES);
+        GPUFrame::encode_chunk_input(ids, 0, chunks[0], param);
+        CHECK(table->build_lists(chunks, param, ids, words, 1u << 20) == 1u); // room for any list
+        std::vector<uint32_t> list(ids.decode_s32(28));
+        int phase = 0; // 0 scene, 1 streamed, 2 edits: never back
+        for (size_t k = 0; k < list.size(); k++) {
+            list[k] = words.decode_u32(int64_t(k) * 4) & SDFGpuTable::LIST_ID_MASK;
+            const int p = list[k] < scene_end ? 0 : (list[k] >= stream->slot_base() ? 1 : 2);
+            CHECK(p >= phase);
+            phase = p;
+            streamed += p == 1;
+            edits += p == 2;
+        }
+        // The records as the GPU holds them: every span record_bytes sends from nothing, the slots' after the snapshot's.
+        std::vector<TableRecord> gpu(table->instance_capacity());
+        const std::shared_ptr<const InstanceSnapshot> snap = sdf.get_snapshot();
+        for (uint32_t i = 0; i < snap->records.size(); i++) {
+            gpu[i] = snap->records[i];
+        }
+        std::vector<InstanceStream::Upload> uploads;
+        stream->uploads_since(0, uploads);
+        for (const InstanceStream::Upload &u : uploads) {
+            std::copy(u.content->records.begin(), u.content->records.end(), gpu.begin() + u.first);
+        }
+        SDFGpuTable::UploadCursor now;
+        const PackedByteArray spans = table->record_bytes(SDFGpuTable::UploadCursor(), now);
+        CHECK(now == table->upload_cursor());
+        int64_t at = 4;
+        PackedByteArray one;
+        one.resize(RECORD_BYTES);
+        for (uint32_t s = 0; s < spans.decode_u32(0); s++) {
+            const uint32_t first = spans.decode_u32(at) / RECORD_BYTES, count = spans.decode_u32(at + 4) / RECORD_BYTES;
+            for (uint32_t i = 0; i < count; i++) {
+                encode_record(one, 0, gpu[first + i]);
+                mismatches += std::memcmp(one.ptr(), spans.ptr() + at + 8 + int64_t(i) * RECORD_BYTES, RECORD_BYTES) != 0;
+            }
+            at += 8 + int64_t(count) * RECORD_BYTES;
+        }
+        // Samples near the surface of the chunk's columns, on its lattice and in its sample box.
+        VoxelPos lo, hi;
+        chunk_sample_box(chunks[0], param, lo, hi);
+        const int64_t unit = int64_t(1) << lod;
+        for (uint32_t i = 0; i < 1500; i++) {
+            const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x57EAu });
+            WorldPos p;
+            p.voxel.x = WorldCoord::floor_div(lo.x + int64_t(h.x % uint32_t(hi.x - lo.x + 1)), unit) * unit;
+            p.voxel.z = WorldCoord::floor_div(lo.z + int64_t(h.y % uint32_t(hi.z - lo.z + 1)), unit) * unit;
+            p.voxel.y = WorldCoord::floor_div(sdf.ground_y(p.voxel.x, p.voxel.z) + int64_t(h.z % 400u) - 40, unit) * unit;
+            if (p.voxel.x < lo.x || p.voxel.y < lo.y || p.voxel.z < lo.z || p.voxel.x > hi.x || p.voxel.y > hi.y || p.voxel.z > hi.z) {
+                continue;
+            }
+            float ch[Cascade::CHANNELS];
+            sdf.channels_at(p.voxel, lod, ch);
+            const float from_list = sdf.sample_sdf(*snap, RecordView(gpu.data()), list.data(), uint32_t(list.size()), ch, p, lod).w;
+            const float from_point = sdf.evaluate(p, lod);
+            CHECK(float_bits(from_list) == float_bits(from_point));
+            folded += from_list != sdf.sdf(ch, p.voxel, lod).w;
+            points++;
+        }
+    }
+    MESSAGE("streamed lists: ", points, " samples (", folded, " folded), ", streamed, " streamed and ", edits, " edit entries");
+    CHECK(mismatches == 0);
+    CHECK(streamed > 100);
+    CHECK(edits >= 3);
+    CHECK(folded > 500);
+    CHECK(int64_t(sdf.get_gpu_table()->get_stats()["stream"].operator Dictionary()["lists_missing"]) == 0);
 }

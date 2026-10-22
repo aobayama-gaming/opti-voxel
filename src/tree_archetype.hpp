@@ -3,7 +3,6 @@
 #include "archetype_table.hpp"
 #include "cell_sites.hpp"
 
-#include <array>
 #include <vector>
 
 // Trees as archetype-table instances (archetype step 5, v1). A tree is a contiguous run of ordinary
@@ -77,6 +76,13 @@ struct TreeStem {
     double r_end = 0.0;
     std::vector<double> children;
 };
+
+// The library types trees use (branch, crown, cone), added to r_library as SDFTable::build_table does.
+TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel);
+
+// The rotation (rows: absolute to local) whose local y is the unit p_up: the smallest turn from +y (the identity for
+// UP_Y), the frame trees grow in.
+void up_rotation(const UpAxis &p_up, float r_rows[9]);
 
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
 // boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the

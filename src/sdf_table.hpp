@@ -3,8 +3,10 @@
 #include "archetype_gpu_table.hpp"
 #include "archetype_table.hpp"
 #include "biome_features.hpp"
+#include "cell_scatter.hpp"
 #include "instance_table.hpp"
 #include "moment_layers.hpp"
+#include "scatter_source.hpp"
 #include "sdf_base.hpp"
 #include "tree_archetype.hpp"
 
@@ -19,6 +21,8 @@
 class SDFTable : public SDFBase {
 public:
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
+    // The scatter's cell sites (cell_sites.hpp; the forest's is Archetype::TREE_SITE_SALT).
+    static constexpr uint32_t SCATTER_SITE_SALT = 0x5CA77u;
     // The scatter's and the forest's centre (metres, x and z), in front of the main_scene spawn.
     static constexpr double SCENE_X = -50.0;
     static constexpr double SCENE_Z = -150.0;
@@ -36,8 +40,8 @@ public:
     // Set before configure().
     void set_scene(Scene p_scene) { scene = p_scene; }
 
-    // A deterministic scatter of p_count rocks and pillars in a square of side p_area (metres) around
-    // (SCENE_X, SCENE_Z) (--instances / --instance_area). Set before configure().
+    // A scatter of about p_count rocks and pillars in a square of side p_area (metres) around (SCENE_X, SCENE_Z), one
+    // per cell of the ground (--instances / --instance_area). Set before configure().
     void set_scatter(int p_count, double p_area) {
         scatter_count = p_count;
         scatter_area = p_area;
@@ -48,7 +52,22 @@ public:
         forest_count = p_count;
         forest_area = p_area;
     }
+    // Whether the scatter and the forest stream (instance_stream.hpp: their keys computed as the chunks ask for them, their
+    // records in GPU slots past the table's), else placed whole in the table at configure (the reference; the tests that
+    // edit their records). Set before configure().
+    void set_stream_sources(bool p_enabled) { stream_sources = p_enabled; }
+    // The forest's trees, in id order (placed whole only).
     const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
+    // The procedural sources of the scene (cell_scatter.hpp), by name: "scatter", "trees" (empty without them).
+    struct Source {
+        const char *name = "";
+        Archetype::CellScatter scatter;
+    };
+    const std::vector<Source> &get_sources() const { return sources; }
+    // A source as a field of keys (scatter_source.hpp), with the table's library, finish, moment layers and limits.
+    Archetype::ScatterSource::Setup source_setup(const Source &p_source, uint32_t p_id) const;
+    // How the table finishes its records (the band rule unless set_instance_band(false), the erosion, the skirt).
+    Archetype::RecordFinish record_finish() const;
     // The moment blobs a whole rebuild of the current records would make, with the joins the table was built with: what
     // the edits' incremental updates must match (tests).
     void moment_blobs_reference(std::vector<Archetype::MomentBlob> &r_out) const;
@@ -89,11 +108,23 @@ public:
     using SDFBase::get_gpu_table; // the const form
 
     // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box, band or
-    // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp).
-    bool cull_exempt(const ChunkId &p_node, int p_lod) const override {
-        const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        return snap && snap->near_instance(p_node, p_lod);
-    }
+    // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp). A streamed source's records
+    // stand on the ground: a node of its zone is kept while its corners are within the records' ground_reach of it.
+    bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const override;
+
+    // The streamed sources' gating (InstanceStream::admit; every chunk READY without them).
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) override;
+    void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) override;
+    size_t parked_count(uint64_t p_owner) const override { return stream ? stream->parked_count(p_owner) : 0; }
+    // poll_rebuild(), then the stream's poll.
+    void poll() override;
+    // The streamed sources (null when none streams).
+    const Archetype::InstanceStream *get_stream() const { return stream.get(); }
+    // The records the CPU folds at p_voxel for a LOD-p_lod sample, in fold order (compose_list): r_list indexes the
+    // returned view, valid until the next call on this thread. Any thread.
+    // p_view: the streamed keys not landed yet are left out instead of computed (InstanceStream::view_records; main thread).
+    Archetype::RecordView point_list(const Archetype::InstanceSnapshot &p_snap, const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_list,
+            bool p_view = false) const;
 
     // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the records when
     // it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh.
@@ -127,6 +158,9 @@ protected:
     // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
     // (metres). Call from configure(), after SDFBase's and once ground_y works.
     void build_table(int p_lod_count);
+    // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
+    void stop_streaming();
+
     // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
     // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.
     void set_ground_materials(const std::vector<std::pair<String, Material::Params>> &p_ground) {
@@ -172,6 +206,10 @@ private:
     int forest_count = 0; // --trees
     double forest_area = 60.0; // --tree_area (metres)
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
+    std::vector<Source> sources;
+    bool stream_sources = true; // --stream
+    std::vector<std::shared_ptr<const Archetype::ScatterSource>> streamed; // the valid sources, by their id
+    std::shared_ptr<Archetype::InstanceStream> stream; // the gpu table shares it
     double biome_radius = 0.0; // --biomes (metres)
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
@@ -188,6 +226,9 @@ private:
         bool operator<(const BlobKey &p_o) const;
     };
     int moment_blob_type = -1; // -1: no moment layers
+    int blob_type = -1; // the library's moment blob type (whether or not the table has layers)
+    // The moment layers' parameters (the LOD range left to the caller).
+    Archetype::MomentLayerParams moment_params() const;
     Archetype::MomentLayers moment_layers;
     std::map<BlobKey, uint32_t> blob_ids;
 
@@ -205,24 +246,29 @@ private:
     // The changed record's margins and LODs, then a new snapshot (the previous base plus the edited records'
     // overlay) over the edit region.
     void finish_edit(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id);
-    static VoxelBox record_box(const Archetype::TableRecord &p_rec);
     float voxels(double p_metres) const;
     // A record of type p_type at (p_x, p_z) metres, p_dy_m above the ground there, turned by p_yaw about y, smooth
     // radius p_k_m metres, appended.
     void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw);
     void add_shapes(const Types &p_types);
-    void add_scatter(const Types &p_types);
-    // The forest's trees, appended to the records (each a contiguous run), and its stats for the table's report.
-    void add_forest(const Archetype::TreeTypes &p_types, double p_voxel, double p_centre_x, double p_centre_z, Dictionary &r_stats);
+    // The sources the scene places: a box of side p_area_m around the scene's centre, over every height the ground can
+    // reach in it (4 times its half side up and down from the ground at the centre; the walk only tries the cells along
+    // the surface, so the empty air costs nothing), out of the lakes.
+    Archetype::CellScatter scene_source(uint32_t p_salt, int p_count, double p_area_m) const;
+    // The forest's (--trees): grown trees, the species from the site's variant.
+    Archetype::CellScatter forest_source(const Archetype::TreeTypes &p_types) const;
+    // The scatter's (--instances): a rock (even variant: a bumpy ball sunk 0.4 of its radius) or a pillar (a capsule)
+    // per site, turned to the up there, 1 to 4 m across.
+    Archetype::CellScatter scatter_source(const Types &p_types) const;
+    // Every site of p_source in its zone, appended to the records (each a contiguous run, kept whole or left out), and
+    // its stats under r_stats[p_name]; the sites' runs to r_spans if given.
+    void add_source(const Archetype::CellScatter &p_source, const char *p_name, Dictionary &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
+    // The sources as keys of a stream whose slots start at p_slot_base, and their stats.
+    void add_stream(uint32_t p_slot_base, Dictionary &r_stats);
     // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
     void add_biomes(const Types &p_types, Dictionary &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
     void add_moment_blobs(int p_blob_type, Dictionary &r_stats);
-    // A record's moment item: its moments, material and the first LOD it is gone at (dropped, or eroded past its half
-    // thickness); empty moments for one that weighs nothing (removed, a cutter, a blob, never dropped).
-    Archetype::MomentItem moment_item(const Archetype::TableRecord &p_rec) const;
-    // A blob's record (op ACCUM, listed at its layer's LOD alone).
-    Archetype::TableRecord blob_record(const Archetype::MomentBlob &p_blob) const;
     // After record p_id changed: its item updated in the moment layers (MomentLayers::update) and the kept blobs that
     // changed applied to the table (added, replaced, removed): their ids appended to r_ids, their regions to edit_regions.
     void update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids);
@@ -234,8 +280,9 @@ private:
     void blob_changed(uint32_t p_id, const Archetype::TableRecord &p_old, const Archetype::TableRecord &p_new, int p_lod, std::vector<uint32_t> &r_ids);
     // Finishes and appends r_records (one feature) if every one fits the table (record_fit_error, the limits of a
     // runtime edit), else none (ERR naming p_what).
-    bool admit(std::vector<Archetype::TableRecord> &r_records, const char *p_what);
-    // Whether column (p_x, p_z) is in or near a lava lake (Biome::LAKE_KEEP_OUT radii): no tree or rock there.
+    bool admit_records(std::vector<Archetype::TableRecord> &r_records, const char *p_what);
+    // Whether column (p_x, p_z) is in or near a lava lake (Biome::LAKE_KEEP_OUT radii): no tree or rock there (the
+    // sources' accept). Column-based: the climate stack's per-cell picks replace it.
     bool in_lake(int64_t p_x, int64_t p_z) const;
     // The biome sites listed in the table's stats (the counts cover all of them).
     static constexpr int SITES_LISTED_MAX = 256;

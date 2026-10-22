@@ -27,31 +27,69 @@ String GpuTable::glsl_set_chunk() const {
     return "\n    g_sdf_chunk = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size];";
 }
 
-PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_version) const {
+void GpuTable::set_capacity(uint32_t p_capacity, std::shared_ptr<const InstanceStream> p_stream) {
+    const uint64_t most = uint64_t(LIST_ID_MASK) + 1;
+    uint64_t want = p_stream ? p_stream->slot_capacity() : 0u;
+    if (p_capacity + want > most) {
+        ERR_PRINT(vformat("GpuTable: %d records plus %d streamed slots are over the list word's %d: clamped.", p_capacity, want, most));
+        p_capacity = uint32_t(MIN<uint64_t>(p_capacity, most));
+        want = most - p_capacity;
+    }
+    capacity = p_capacity;
+    slots = uint32_t(want);
+    stream = std::move(p_stream);
+}
+
+SDFGpuTable::UploadCursor GpuTable::upload_cursor() const {
+    const std::shared_ptr<const InstanceSnapshot> s = snapshot();
+    return UploadCursor{ s ? s->version : 0u, stream ? stream->placements() : 0u };
+}
+
+PackedByteArray GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor &r_now) const {
+    const UploadCursor have = p_have; // the caller may pass its own cursor for both
     const std::shared_ptr<const InstanceSnapshot> s = snapshot();
     PackedByteArray bytes;
-    r_version = s ? s->version : 0u;
+    r_now = UploadCursor{ s ? s->version : 0u, stream ? stream->placements() : 0u };
     if (!s) {
         return bytes;
     }
-    // The buffer is sized for capacity() up front; only the pages changed since the GPU's version go up.
+    // The buffer is sized for instance_capacity() up front; only the snapshot's pages changed since the GPU's version
+    // go up, and the keys placed since (their slots, past the table's records).
     ERR_FAIL_COND_V_MSG(s->records.size() > capacity, bytes, vformat("GpuTable: %d instances, over the GPU capacity of %d.", s->records.size(), capacity));
-    std::vector<std::pair<uint32_t, uint32_t>> runs;
-    s->records.changed_since(p_have_version, runs);
+    struct Span {
+        uint32_t first = 0;
+        uint32_t count = 0;
+        const TableRecord *flat = nullptr; // null: the snapshot's records from first
+    };
+    std::vector<Span> spans;
+    if (have.snap_version != r_now.snap_version) {
+        std::vector<std::pair<uint32_t, uint32_t>> runs;
+        s->records.changed_since(have.snap_version, runs);
+        for (const std::pair<uint32_t, uint32_t> &r : runs) {
+            spans.push_back(Span{ r.first, r.second, nullptr });
+        }
+    }
+    std::vector<InstanceStream::Upload> uploads; // keeps the contents alive while they are encoded
+    if (stream && have.slot_seq != r_now.slot_seq) {
+        stream->uploads_since(have.slot_seq, uploads);
+        for (const InstanceStream::Upload &u : uploads) {
+            spans.push_back(Span{ u.first, uint32_t(u.content->records.size()), u.content->records.data() });
+        }
+    }
     int64_t total = 4;
-    for (const std::pair<uint32_t, uint32_t> &r : runs) {
-        total += 8 + int64_t(r.second) * RECORD_BYTES;
+    for (const Span &sp : spans) {
+        total += 8 + int64_t(sp.count) * RECORD_BYTES;
     }
     bytes.resize(total);
-    bytes.encode_u32(0, uint32_t(runs.size()));
+    bytes.encode_u32(0, uint32_t(spans.size()));
     int64_t at = 4;
-    for (const std::pair<uint32_t, uint32_t> &r : runs) {
-        bytes.encode_u32(at, r.first * RECORD_BYTES);
-        bytes.encode_u32(at + 4, r.second * RECORD_BYTES);
-        PackedByteArray span;
-        span.resize(int64_t(r.second) * RECORD_BYTES);
-        for (uint32_t i = 0; i < r.second; i++) {
-            encode_record(span, i, s->records[r.first + i]);
+    PackedByteArray span;
+    for (const Span &sp : spans) {
+        bytes.encode_u32(at, sp.first * RECORD_BYTES);
+        bytes.encode_u32(at + 4, sp.count * RECORD_BYTES);
+        span.resize(int64_t(sp.count) * RECORD_BYTES);
+        for (uint32_t i = 0; i < sp.count; i++) {
+            encode_record(span, i, sp.flat ? sp.flat[i] : s->records[sp.first + i]);
         }
         std::memcpy(bytes.ptrw() + at + 8, span.ptr(), span.size());
         at += 8 + span.size();
@@ -67,7 +105,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     if (r_palettes) {
         r_palettes->assign(p_chunks.size(), base);
     }
-    if (!snap || snap->empty()) {
+    if ((!snap || snap->empty()) && !stream) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
         for (const ChunkId &c : p_chunks) {
             list_stats.chunks[MIN(MAX(ChunkMath::get_lod(c), 0), ChunkMath::MAX_LOD_NUMBERS - 1)]++;
@@ -80,6 +118,8 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     // list words come out packed (SDFGpuTable::list_word).
     struct Job {
         const InstanceSnapshot *snap;
+        const InstanceStream *stream;
+        uint32_t scene_end;
         const std::vector<uint32_t> *base;
         const ChunkId *chunks;
         std::vector<uint32_t> *lists;
@@ -87,14 +127,26 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
         uint8_t *fits;
         static void run(void *p_job, uint32_t p_i) {
             const Job &job = *static_cast<const Job *>(p_job);
+            const ChunkId &chunk = job.chunks[p_i];
             std::vector<uint32_t> &list = job.lists[p_i];
-            job.snap->chunk_list(job.chunks[p_i], list);
+            thread_local std::vector<uint32_t> ids;
             thread_local std::vector<uint32_t> materials;
             thread_local std::vector<uint16_t> indices;
-            materials.resize(list.size());
-            for (size_t k = 0; k < list.size(); k++) {
-                materials[k] = job.snap->records[list[k]].material;
+            ids.clear();
+            if (job.snap) {
+                job.snap->chunk_list(chunk, ids);
             }
+            list.clear();
+            materials.clear();
+            compose_list(
+                    ids, job.scene_end, [&](uint32_t p_id) {
+                        list.push_back(p_id);
+                        materials.push_back(job.snap->records[p_id].material); },
+                    [&] {
+                        if (job.stream) {
+                            job.stream->chunk_list(chunk, list, &materials);
+                        }
+                    });
             job.fits[p_i] = ChunkPalette::build(*job.base, materials.data(), uint32_t(list.size()), job.palettes[p_i], indices);
             for (size_t k = 0; k < list.size(); k++) {
                 list[k] = list_word(list[k], indices[k]);
@@ -104,7 +156,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<std::vector<uint32_t>> lists(p_chunks.size());
     std::vector<std::vector<uint32_t>> palettes(p_chunks.size());
     std::vector<uint8_t> fits(p_chunks.size(), 1);
-    Job job{ snap.get(), &base, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
+    Job job{ snap.get(), stream.get(), scene_end, &base, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
     if (p_chunks.size() > 1) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
         pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
@@ -165,6 +217,9 @@ Dictionary GpuTable::get_stats() const {
     const std::shared_ptr<const InstanceSnapshot> s = snapshot();
     d["records"] = s ? int64_t(s->records.size()) : int64_t(0);
     d["capacity"] = int64_t(capacity);
+    if (stream) {
+        d["stream"] = stream->get_stats();
+    }
     d["max_chunk_list"] = int64_t(max_chunk_list());
     d["list_batches"] = list_stats.batches;
     d["list_build_ms_avg"] = list_stats.batches > 0 ? double(list_stats.build_usec) / 1000.0 / double(list_stats.batches) : 0.0;

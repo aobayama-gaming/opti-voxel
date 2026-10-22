@@ -7,6 +7,7 @@
 #include <godot_cpp/classes/semaphore.hpp>
 #include <godot_cpp/classes/thread.hpp>
 
+#include "chunk_gate.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
 #include "lod_structures.hpp"
@@ -69,7 +70,7 @@ private:
     //worker availability
     Ref<Mutex> mutex;
     Ref<Semaphore> semaphore;
-    bool worker_available = true;
+    bool worker_available = false; // set by the worker once its device and buffers exist (process_queue sizes lists by them)
     bool result_available = false;
     bool exit_thread = false;
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
@@ -120,7 +121,7 @@ private:
     RID buffer_table_list;
     RID buffer_material; // per sample: its palette index (cascade level 0 -> third pass)
     uint64_t table_list_capacity = 0; // bytes
-    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last handed to the worker
+    SDFGpuTable::UploadCursor sent_records; // main thread: the records last handed to the worker
     std::vector<ChunkId> in_flight_ids; // main thread: the chunks of the batch handed to the worker
     // Uniform set
 
@@ -144,12 +145,14 @@ private:
 
     // One set per ChunkMath::load_queue: in the view cone first, then by LOD.
     std::vector<LODHashSet *> chunk_queue;
+    ScanView load_view; // the view of the last send_chunk, for the chunks queued again
     int lod_count = 0;
     // Instance edits' re-meshes (loaded chunks), popped before chunk_queue. Kept apart because send_chunk
     // rebuilds chunk_queue from each scan's dirty chunks, which a loaded chunk isn't.
     std::vector<LODHashSet *> remesh_queue;
 
     LODHashSet working_generation;
+    ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
@@ -158,7 +161,10 @@ private:
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
-    bool _pop_queue(ChunkId &new_chunk);
+    // r_remesh (if given): whether the chunk came from remesh_queue.
+    bool _pop_queue(ChunkId &new_chunk, bool *r_remesh = nullptr);
+    // A popped chunk back in its queue.
+    void _requeue(const ChunkId &p_chunk, bool p_remesh);
 
     bool _is_available();
 

@@ -16,12 +16,7 @@ namespace {
 struct TreeLibrary {
     DefLibrary lib;
     TreeTypes types;
-    explicit TreeLibrary(double p_voxel) {
-        const int branch = lib.add(make_branch_type());
-        const int crown = lib.add(make_rock_type(crown_k(p_voxel), CROWN_SEED));
-        const int cone = lib.add(make_cone_type(crown_k(p_voxel), CROWN_SEED));
-        types = crown_types(branch, crown, lib[crown], cone);
-    }
+    explicit TreeLibrary(double p_voxel) { types = add_tree_types(lib, p_voxel); }
 };
 
 std::vector<TableRecord> grow(const TreeLibrary &p_lib, const TreeSpecies &p_species, uint32_t p_seed, double p_voxel,
@@ -323,6 +318,7 @@ TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, eva
     param.voxel_size = 0.05f;
     SDFCascade sdf;
     sdf.set_forest(30, 40.0);
+    sdf.set_stream_sources(false); // the trees' spans
     sdf.set_moment_blobs(false); // the trees' records alone
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);

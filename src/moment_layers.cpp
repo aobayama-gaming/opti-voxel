@@ -82,7 +82,9 @@ int MomentItem::first_lost_lod() const {
 
 void prepare_moment_item(MomentItem &r_item) {
     std::fill(r_item.semi, r_item.semi + 3, 0.0f);
-    std::fill(r_item.area, r_item.area + 6, 0.0);
+    if (!r_item.area_given) {
+        std::fill(r_item.area, r_item.area + 6, 0.0);
+    }
     if (r_item.moments.empty()) {
         return;
     }
@@ -91,6 +93,9 @@ void prepare_moment_item(MomentItem &r_item) {
     for (int i = 0; i < 3; i++) {
         lambda[i] = std::max(lambda[i], 1.0 / 12.0); // at least a voxel thick
         r_item.semi[i] = float(std::sqrt(5.0 * lambda[i]));
+    }
+    if (r_item.area_given) {
+        return;
     }
     // The equal-covariance ellipsoid's silhouette along n, pi sqrt(n^T adj(5 S) n), as a quadratic form: the square root
     // read as n^T adj n over the root of adj's mean eigenvalue (exact for a sphere, 1.22 times a long rod's side view, a
@@ -241,101 +246,34 @@ void MomentLayers::resum(const Layer &p_layer, const CellKey &p_key, Cell &r_cel
     support_extent(r_cell.blob, r_cell.extent);
 }
 
-bool MomentLayers::bin_range(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], Bin &r_lo, Bin &r_hi) const {
-    // The box's integer hull: a point where two boxes meet floors into both hulls, so into a bin both are filed in.
-    const int64_t bin = BIN_CELLS * p_layer.cell;
-    int64_t lo[3], hi[3];
-    double bins = 1.0;
-    for (int a = 0; a < 3; a++) {
-        const double e = std::ceil(p_extent[a]);
-        if (!(e < double(bin) * WIDE_BINS)) {
-            return false;
-        }
-        lo[a] = WorldCoord::floor_div(p_anchor[a] - int64_t(e), bin);
-        hi[a] = WorldCoord::floor_div(p_anchor[a] + int64_t(e), bin);
-        bins *= double(hi[a] - lo[a] + 1);
-    }
-    r_lo = Bin(lo[0], lo[1], lo[2]);
-    r_hi = Bin(hi[0], hi[1], hi[2]);
-    return bins <= WIDE_BINS;
-}
-
-void MomentLayers::place(Layer &r_layer, const CellKey &p_key, Cell &r_cell) {
-    Bin lo, hi;
-    if (!bin_range(r_layer, r_cell.blob.anchor, r_cell.extent, lo, hi)) {
-        r_layer.wide.insert(p_key);
-    } else {
-        for (int64_t x = std::get<0>(lo); x <= std::get<0>(hi); x++) {
-            for (int64_t y = std::get<1>(lo); y <= std::get<1>(hi); y++) {
-                for (int64_t z = std::get<2>(lo); z <= std::get<2>(hi); z++) {
-                    r_layer.bins[Bin(x, y, z)].push_back(Near(p_key, &r_cell));
+template <typename F>
+void MomentLayers::for_neighbours(const Layer &p_layer, const CellKey &p_key, F &&p_fn) {
+    for (int64_t dx = -PRUNE_CELLS; dx <= PRUNE_CELLS; dx++) {
+        for (int64_t dy = -PRUNE_CELLS; dy <= PRUNE_CELLS; dy++) {
+            for (int64_t dz = -PRUNE_CELLS; dz <= PRUNE_CELLS; dz++) {
+                const CellKey at{ p_key.x + dx, p_key.y + dy, p_key.z + dz, 0 };
+                for (auto it = p_layer.cells.lower_bound(at); it != p_layer.cells.end() && it->first.x == at.x && it->first.y == at.y && it->first.z == at.z;
+                        ++it) {
+                    p_fn(it->first, it->second);
                 }
             }
         }
     }
-    r_cell.placed = true;
-}
-
-void MomentLayers::unplace(Layer &r_layer, const CellKey &p_key, Cell &r_cell) {
-    r_cell.placed = false;
-    Bin lo, hi;
-    if (!bin_range(r_layer, r_cell.blob.anchor, r_cell.extent, lo, hi)) {
-        r_layer.wide.erase(p_key);
-        return;
-    }
-    for (int64_t x = std::get<0>(lo); x <= std::get<0>(hi); x++) {
-        for (int64_t y = std::get<1>(lo); y <= std::get<1>(hi); y++) {
-            for (int64_t z = std::get<2>(lo); z <= std::get<2>(hi); z++) {
-                const auto it = r_layer.bins.find(Bin(x, y, z));
-                if (it == r_layer.bins.end()) {
-                    continue;
-                }
-                it->second.erase(std::remove_if(it->second.begin(), it->second.end(), [&](const Near &p_n) { return p_n.first == p_key; }), it->second.end());
-                if (it->second.empty()) {
-                    r_layer.bins.erase(it);
-                }
-            }
-        }
-    }
-}
-
-void MomentLayers::candidates(const Layer &p_layer, const VoxelPos &p_anchor, const double p_extent[3], std::vector<Near> &r_out) const {
-    r_out.clear();
-    Bin lo, hi;
-    if (!bin_range(p_layer, p_anchor, p_extent, lo, hi)) {
-        for (const std::pair<const CellKey, Cell> &c : p_layer.cells) {
-            r_out.push_back(Near(c.first, &c.second)); // a wide blob may meet any
-        }
-        return;
-    }
-    for (int64_t x = std::get<0>(lo); x <= std::get<0>(hi); x++) {
-        for (int64_t y = std::get<1>(lo); y <= std::get<1>(hi); y++) {
-            for (int64_t z = std::get<2>(lo); z <= std::get<2>(hi); z++) {
-                const auto it = p_layer.bins.find(Bin(x, y, z));
-                if (it != p_layer.bins.end()) {
-                    r_out.insert(r_out.end(), it->second.begin(), it->second.end());
-                }
-            }
-        }
-    }
-    for (const CellKey &k : p_layer.wide) {
-        r_out.push_back(Near(k, &p_layer.cells.at(k)));
-    }
-    std::sort(r_out.begin(), r_out.end(), [](const Near &p_a, const Near &p_b) { return p_a.first < p_b.first; });
-    r_out.erase(std::unique(r_out.begin(), r_out.end(), [](const Near &p_a, const Near &p_b) { return p_a.first == p_b.first; }), r_out.end());
 }
 
 uint64_t MomentLayers::judge(const Layer &p_layer, const CellKey &p_key, Cell &r_cell) const {
-    thread_local std::vector<Near> near;
-    candidates(p_layer, r_cell.blob.anchor, r_cell.extent, near);
-    double sum = 0.0; // in cell order: the same bits whichever way the bins were filled
-    for (const Near &n : near) {
-        const Cell &o = n.first == p_key ? r_cell : *n.second;
-        sum += boxes_meet(r_cell.blob.anchor, r_cell.extent, o.blob.anchor, o.extent) ? double(o.blob.amplitude) : 0.0;
-    }
+    double sum = 0.0; // in key order: the same bits whichever cells were judged first
+    uint64_t tests = 0;
+    for_neighbours(p_layer, p_key, [&](const CellKey &p_k, const Cell &p_c) {
+        const Cell &o = p_k == p_key ? r_cell : p_c;
+        if (o.summed) {
+            tests++;
+            sum += boxes_meet(r_cell.blob.anchor, r_cell.extent, o.blob.anchor, o.extent) ? double(o.blob.amplitude) : 0.0;
+        }
+    });
     r_cell.blob.peak_bound = sum;
     r_cell.kept = sum >= params.min_occupancy && double(r_cell.blob.amplitude) >= SLIVER * params.min_occupancy;
-    return near.size();
+    return tests;
 }
 
 void MomentLayers::fill_members(Layer &r_layer) const {
@@ -368,11 +306,14 @@ void MomentLayers::finish_layer(Layer &r_layer) {
             }
         }
         resum(r_layer, c.first, c.second);
+        c.second.summed = true;
     });
-    for (std::pair<const CellKey, Cell> *c : cells) {
-        place(r_layer, c->first, c->second);
+    if (params.judged.valid) {
+        cells.erase(std::remove_if(cells.begin(), cells.end(),
+                            [this](const std::pair<const CellKey, Cell> *p_c) { return !params.judged.contains(VoxelPos(p_c->first.x, p_c->first.y, p_c->first.z)); }),
+                cells.end());
     }
-    // Each verdict reads the other blobs, writes only its own.
+    // Each verdict reads its neighbours' blobs, writes only its own.
     std::vector<uint64_t> tests(cells.size());
     parallel_for(uint32_t(cells.size()), "MomentLayers::pruning", [&](uint32_t p_i) { tests[p_i] = judge(r_layer, cells[p_i]->first, cells[p_i]->second); });
     for (const uint64_t t : tests) {
@@ -385,14 +326,14 @@ void MomentLayers::build_layer(Layer &r_layer) {
     finish_layer(r_layer);
 }
 
-void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params) {
+void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, const MomentJoins *p_joins) {
     ERR_FAIL_COND_MSG(p_params.cell_shift < 1 || p_params.lod_max + p_params.cell_shift > 60, "MomentLayers: cells of 2^(lod + cell_shift) voxels must be within [2, 2^60].");
     items = p_items;
     for (MomentItem &item : items) {
         prepare_moment_item(item);
     }
     params = p_params;
-    joins = moment_joins(items, params);
+    joins = p_joins ? *p_joins : moment_joins(items, params);
     layers.assign(MAX(params.lod_max - params.lod_min + 1, 0), Layer());
     for (size_t i = 0; i < layers.size(); i++) {
         layers[i].lod = params.lod_min + int(i);
@@ -445,30 +386,15 @@ void MomentLayers::update_layer(Layer &layer, uint32_t p_id, const MomentItem &p
         }
         std::sort(dirty.begin(), dirty.end());
         dirty.erase(std::unique(dirty.begin(), dirty.end()), dirty.end());
-        // Re-sum them; every blob whose box meets one of theirs, before or after, is judged again.
-        std::vector<CellKey> affected = dirty;
-        std::vector<Near> near;
-        // The blobs whose box meets a box (their bound reads its amplitude). The bins hold placed cells only, and a cell
-        // leaves them before it is erased.
-        auto meeting = [&](const VoxelPos &p_anchor, const double *p_extent) {
-            candidates(layer, p_anchor, p_extent, near);
-            for (const Near &n : near) {
-                if (boxes_meet(p_anchor, p_extent, n.second->blob.anchor, n.second->extent)) {
-                    affected.push_back(n.first);
-                }
-            }
-        };
+        // Re-sum them; the cells within PRUNE_CELLS of one, whose bounds read it, are judged again.
         std::map<CellKey, std::pair<bool, MomentBlob>> was; // kept and blob before, for the changes
         for (const CellKey &k : dirty) {
             Cell &cell = layer.cells[k];
-            const bool existed = cell.placed;
-            if (existed) {
+            if (cell.summed) {
                 was[k] = { cell.kept, cell.blob };
-                meeting(cell.blob.anchor, cell.extent);
-                unplace(layer, k, cell);
             }
             if (cell.members.empty()) {
-                if (existed && cell.kept) {
+                if (cell.summed && cell.kept) {
                     MomentBlobChange gone;
                     gone.blob = cell.blob;
                     r_changes.push_back(gone);
@@ -478,13 +404,11 @@ void MomentLayers::update_layer(Layer &layer, uint32_t p_id, const MomentItem &p
             }
             resum_block(layer, k, p_id >> BLOCK_SHIFT, cell);
             resum(layer, k, cell);
-            place(layer, k, cell);
+            cell.summed = true;
         }
+        std::vector<CellKey> affected;
         for (const CellKey &k : dirty) {
-            const auto it = layer.cells.find(k);
-            if (it != layer.cells.end()) {
-                meeting(it->second.blob.anchor, it->second.extent);
-            }
+            for_neighbours(layer, k, [&](const CellKey &p_k, const Cell &) { affected.push_back(p_k); });
         }
         std::sort(affected.begin(), affected.end());
         affected.erase(std::unique(affected.begin(), affected.end()), affected.end());
@@ -531,6 +455,36 @@ void MomentLayers::rebuild(std::vector<MomentBlob> &r_out) const {
         fresh.build_layer(fresh.layers[i]);
     }
     fresh.kept(r_out);
+}
+
+MomentItem record_item(const DefLibrary &p_library, const TableRecord &p_record) {
+    MomentItem item;
+    item.anchor = p_record.anchor;
+    item.material = p_record.material;
+    if (p_record.removed || is_cutter(p_record.op) || p_record.op == Combine::ACCUM || p_record.max_lod == TableRecord::NEVER_DROPPED) {
+        return item;
+    }
+    // The layers take what its erosion removes, then all of it from its drop on.
+    item.moments = record_moments(p_library[p_record.def], p_record);
+    item.drop_lod = p_record.max_lod;
+    item.erode = p_record.erode;
+    item.erode_from = p_record.erode_from;
+    return item;
+}
+
+TableRecord blob_record(const DefLibrary &p_library, int p_blob_type, const MomentBlob &p_blob, float p_skirt_depth) {
+    TableRecord rec;
+    rec.def = uint8_t(p_blob_type);
+    rec.op = Combine::ACCUM;
+    rec.anchor = p_blob.anchor;
+    std::copy(p_blob.rotation, p_blob.rotation + 9, rec.rotation);
+    std::copy(p_blob.inv_s2, p_blob.inv_s2 + 3, rec.params);
+    rec.params[3] = p_blob.amplitude;
+    rec.material = p_blob.material;
+    finish_record(p_library[rec.def], rec, p_skirt_depth, false);
+    rec.min_lod = uint8_t(p_blob.lod);
+    rec.max_lod = uint8_t(p_blob.lod + 1);
+    return rec;
 }
 
 void build_moment_blobs(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, std::vector<MomentBlob> &r_out) {

@@ -92,6 +92,7 @@ static uint64_t morton_key(const ChunkId &p_chunk, const ChunkId &p_origin) {
 
 void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings) {
     sdf = p_sdf;
+    gate.bind(p_sdf, this);
     chunk_param = p_chunk_param;
     scenario = p_scenario;
     settings = p_settings;
@@ -372,11 +373,10 @@ uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::ve
     r_rest.assign(r_chunks.begin() + kept, r_chunks.end());
     r_chunks.resize(kept);
     r_ids.resize(int64_t(kept) * GPUFrame::CHUNK_INPUT_BYTES);
-    const uint32_t version = table->version();
-    if (version != sent_table_version) {
-        r_records = table->record_bytes(sent_table_version, sent_table_version);
+    if (table->upload_cursor() != sent_records) {
+        r_records = table->record_bytes(sent_records, sent_records);
     }
-    return version;
+    return table->version();
 }
 
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages,
@@ -649,6 +649,15 @@ void GPUDirectMesher::_flush_kills() {
 
 void GPUDirectMesher::process_queue() {
     frame++;
+    // The parked chunks whose records came, back in their queues: they pop first.
+    gate.take_ready([this](const ChunkId &p_chunk, ChunkGate::Kind p_kind) {
+        if (p_kind == ChunkGate::AUDIT) {
+            audit_queue.push_back(p_chunk);
+        } else {
+            _requeue(p_chunk, p_kind == ChunkGate::REMESH);
+        }
+    });
+    gate_later = false;
     // Before acquiring pages: a page released since it was marked must not be touched.
     _update_dirty_bounds();
     // Before acquiring pages too: a kill must not land on a page reused by this frame's batches.
@@ -721,7 +730,15 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     HashSet<ChunkId, Vector3i64Hasher> remeshes; // popped from remesh_queue: they go back there if they wait
     // With a budget the batch stops once its estimate reaches what's left (a frame dispatches at least
     // one chunk: budget_left starts > 0).
-    while (chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk, &remesh)) {
+    while (!gate_later && chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk, &remesh)) {
+        const SDFBase::Admit admit = gate.admit(chunk, remesh ? ChunkGate::REMESH : ChunkGate::CHUNK);
+        if (admit == SDFBase::Admit::LATER) {
+            _requeue(chunk, remesh);
+            gate_later = true;
+        }
+        if (admit != SDFBase::Admit::READY) {
+            continue; // parked: the gate hands it back
+        }
         chunks.push_back(chunk);
         if (remesh) {
             remeshes.insert(chunk);
@@ -805,9 +822,22 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
     if (audit_queue.empty()) {
         return false;
     }
-    const size_t n = MIN((size_t)settings.batch_size, audit_queue.size());
-    std::vector<ChunkId> chunks(audit_queue.end() - n, audit_queue.end());
-    audit_queue.resize(audit_queue.size() - n);
+    std::vector<ChunkId> chunks;
+    while (!gate_later && chunks.size() < settings.batch_size && !audit_queue.empty()) {
+        const ChunkId chunk = audit_queue.back();
+        audit_queue.pop_back();
+        const SDFBase::Admit admit = gate.admit(chunk, ChunkGate::AUDIT);
+        if (admit == SDFBase::Admit::LATER) {
+            audit_queue.push_back(chunk);
+            gate_later = true;
+        }
+        if (admit == SDFBase::Admit::READY) {
+            chunks.push_back(chunk);
+        }
+    }
+    if (chunks.empty()) {
+        return false;
+    }
 
     PackedByteArray ids;
     ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
@@ -1200,6 +1230,7 @@ void GPUDirectMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_v
     // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
     // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
     load_view = p_view;
+    gate.next_scan();
     std::vector<std::vector<std::pair<uint64_t, ChunkId>>> keyed(chunk_queue.size());
     for (const ChunkId &chunk_pos : p_chunks) {
         const int lod = ChunkMath::get_lod(chunk_pos);
@@ -1231,8 +1262,8 @@ bool GPUDirectMesher::is_idle() {
             return false;
         }
     }
-    // Re-meshes queued by an edit or by a stale result (get_results) are pending work too.
-    return remesh_queued.is_empty();
+    // Re-meshes queued by an edit or by a stale result (get_results) are pending work too, and the parked chunks.
+    return remesh_queued.is_empty() && gate.idle(ChunkGate::CHUNK) && gate.idle(ChunkGate::REMESH);
 }
 
 void GPUDirectMesher::set_debug_view(int p_view) {
@@ -1296,6 +1327,8 @@ Dictionary GPUDirectMesher::get_stats() {
     d["overflow_chunks"] = (int64_t)stats.overflow_chunks;
     d["overflow_requeued"] = (int64_t)stats.overflow_requeued;
     d["list_requeued"] = (int64_t)stats.list_requeued;
+    d["admit_parked"] = (int64_t)gate.parked;
+    d["admit_later"] = (int64_t)gate.later;
     d["audit_batches"] = (int64_t)stats.audit_batches;
     d["missing_neighbor"] = (int64_t)stats.missing_neighbor;
     d["nan_vertices"] = (int64_t)stats.nan_vertices;
