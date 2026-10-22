@@ -6,7 +6,7 @@
 #include "climate.hpp"
 #include "sdf_cascade.hpp"
 
-// What the climate tests share (test_climate.cpp).
+// What the climate tests share (test_climate.cpp, test_climate_shape.cpp).
 
 // doctest's REQUIRE needs exceptions: a failed check ends the test case.
 #define CLIMATE_REQUIRE(p_cond) \
@@ -19,22 +19,26 @@
 
 namespace ClimateTest {
 
-// An SDFCascade with a climate table (a file, res:// or absolute, or its data) at 5 cm and p_lods LODs.
+// An SDFCascade with a climate table (a file, res:// or absolute, or its data) at 5 cm and p_lods LODs; p_skirt_cells
+// caps the skirts (ChunkParam::skirt_depth), the default's when negative.
 struct ClimateSDF {
     SDFCascade sdf;
-    ClimateSDF(const char *p_path, int p_lods) {
+    ClimateSDF(const char *p_path, int p_lods, float p_skirt_cells = -1.0f) {
         CHECK(Climate::load(p_path, sdf.climate_data) == String());
-        configure(p_lods);
+        configure(p_lods, p_skirt_cells);
     }
     ClimateSDF(const Dictionary &p_data, int p_lods) {
         sdf.climate_data = p_data;
-        configure(p_lods);
+        configure(p_lods, -1.0f);
     }
 
 private:
-    void configure(int p_lods) {
+    void configure(int p_lods, float p_skirt_cells) {
         ChunkParam param;
         param.voxel_size = 0.05f;
+        if (p_skirt_cells >= 0.0f) {
+            param.skirt_depth = p_skirt_cells;
+        }
         sdf.configure(param, p_lods);
     }
 };

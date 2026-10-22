@@ -66,12 +66,72 @@ float biome_amp(const Biome &p_biome, int p_field, const Cascade::Band &p_band) 
     return a ? float(double(a->mult) * double(p_band.amp)) : p_band.amp;
 }
 
+Shape band_shape(const Table &p_table, const Biome *p_biome, int p_field, int p_k) {
+    const Amp *a = p_biome ? find_amp(*p_biome, p_field, p_k) : nullptr;
+    if (a && a->has_shape) {
+        return a->shape;
+    }
+    Shape own;
+    if (p_field != GROUND) {
+        const Field &f = p_table.fields[size_t(p_field)];
+        for (size_t i = 0; i < f.bands.size(); i++) {
+            own = f.bands[i].k == p_k ? f.shapes[i] : own;
+        }
+    }
+    return own;
+}
+
 float max_amp(const Table &p_table, int p_field, const Cascade::Band &p_band) {
-    float m = p_table.biomes.empty() ? p_band.amp : 0.0f;
+    // A cell field's bands are plain (validate) but its values reach CELL_BOUND, past perlin3's 1.
+    const bool cell = p_field != GROUND && p_table.fields[size_t(p_field)].cell;
+    auto bound = [&](const Biome *p_biome) { return cell ? ExactNoise::CELL_BOUND : shape_bound(band_shape(p_table, p_biome, p_field, p_band.k)); };
+    float m = p_table.biomes.empty() ? p_band.amp * bound(nullptr) : 0.0f;
     for (const Climate::Biome &b : p_table.biomes) {
-        m = MAX(m, biome_amp(b, p_field, p_band));
+        m = MAX(m, biome_amp(b, p_field, p_band) * bound(&b));
     }
     return m;
+}
+
+namespace {
+
+// Field p_field's step between LOD p_lod and p_lod + 1: its largest L+2 / L+3 octave, plus each term's |coef| times its
+// source's step (the ground's p_ground_amp, or an earlier field's).
+double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_amp) {
+    const Field &f = p_table.fields[size_t(p_field)];
+    double amp = 0.0;
+    for (const Cascade::Band &b : f.bands) {
+        if (b.k == p_lod + 2 || b.k == p_lod + 3) {
+            amp = MAX(amp, double(max_amp(p_table, p_field, b)));
+        }
+    }
+    for (const Term &t : f.terms) {
+        amp += std::fabs(double(t.coef)) * (t.source == GROUND ? p_ground_amp : field_step(p_table, t.source, p_lod, p_ground_amp));
+    }
+    return amp;
+}
+
+} // namespace
+
+double ground_step(const Table &p_table, int p_lod, double p_ground_amp) {
+    double amp = p_ground_amp;
+    for (const HeightTerm &t : p_table.heights) {
+        amp += std::fabs(double(t.coef)) * (t.has_curve ? double(curve_slope_bound(t.curve)) : 1.0) * field_step(p_table, t.field, p_lod, p_ground_amp);
+    }
+    if (!p_table.has_terraces()) {
+        return amp;
+    }
+    // ground = h + sum_b w_b (T_b(h) - h). T's slope is in [0, 2] and the weights sum to 1: the h part moves by at most
+    // 2 amp. The weights' own change moves it by |dw_b| |T_b(h) - h|, and |T_b(h) - h| = step |t^2 - t| <= step / 4.
+    // w_b = rest_b r_b, each a product of edge smoothsteps in [0, 1] (slope 1.5 per unit of scale (field - anchor)), so
+    // |dw_b| <= the sum over the edges of biomes 0..b (the last biome: every other one's) of 1.5 |scale| field_step.
+    double edges = 0.0, blend = 0.0;
+    for (const Biome &b : p_table.biomes) {
+        for (const Edge &e : b.edges) {
+            edges += 1.5 * std::fabs(double(e.scale)) * field_step(p_table, e.field, p_lod, p_ground_amp);
+        }
+        blend += edges * 0.25 * double(b.terrace.step);
+    }
+    return 2.0 * amp + blend;
 }
 
 void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {

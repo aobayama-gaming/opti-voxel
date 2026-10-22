@@ -102,9 +102,9 @@ TEST_CASE("Climate: make_fbm's octaves are make_octave keyed by their index") {
     }
 }
 
-TEST_CASE("Climate: the example parses at 5 cm at any LOD count, its ranges keeping the ground's octaves") {
+TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at 5 cm at any LOD count, its ranges keeping the ground's octaves") {
     Dictionary data;
-    CLIMATE_REQUIRE(load("res://climate/example.json", data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == String());
     GroundFixture g(0.05, 15);
     Table t;
     CHECK(parse(data, g.ground, t) == String());
@@ -402,7 +402,7 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
 TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slot, and the amplitude follows the biomes") {
     GroundFixture g(0.05, 15);
     Dictionary data;
-    CLIMATE_REQUIRE(load("res://climate/example.json", data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == String());
     Table t;
     CLIMATE_REQUIRE(parse(data, g.ground, t) == String());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
@@ -474,7 +474,7 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     CHECK(load("res://climate/does_not_exist.json", empty).contains("cannot read"));
     SDFCascade h8;
     h8.channel_set = Cascade::ChannelSet::HERMITE8;
-    CLIMATE_REQUIRE(load("res://climate/example.json", h8.climate_data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", h8.climate_data) == String());
     ChunkParam param;
     param.voxel_size = 0.05f;
     h8.configure(param, 15);
@@ -485,7 +485,7 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
 
 TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample pick (box runs equal point queries)") {
     SDFCascade sdf;
-    CLIMATE_REQUIRE(load("res://climate/example.json", sdf.climate_data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", sdf.climate_data) == String());
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);

@@ -85,9 +85,7 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             state(p_table, slots, st); // fields_at, then the weights
             const Float4 *f = st.fields;
             const Float4 *w = st.w;
-            for (int c = 0; c < Cascade::CHANNELS; c++) {
-                ch[c] = slots[c];
-            }
+            p_sdf.ground_channels(slots, ch);
             s.h[i] = ch[Cascade::VALUE];
             s.gx[i] = ch[Cascade::DX];
             s.gz[i] = ch[Cascade::DZ];
