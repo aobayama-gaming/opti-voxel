@@ -268,10 +268,15 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
         return skirt_depth_table[p_lod] + extra;
     }
 
-    ExactNoise::Float4 ground_field(const VoxelPos &p_voxel) const override {
+    ExactNoise::Float4 ground_field(const VoxelPos &p_voxel, int p_lod) const override {
+        const int64_t half = p_lod > 0 ? int64_t(1) << (p_lod - 1) : 0;
+        const VoxelPos at((p_voxel.x + half) >> p_lod << p_lod, (p_voxel.y + half) >> p_lod << p_lod, (p_voxel.z + half) >> p_lod << p_lod);
         float ch[Cascade::CHANNELS];
-        channels_at(p_voxel, 0, ch);
-        return unit(ch, p_voxel, 0);
+        channels_at(at, p_lod, ch);
+        ExactNoise::Float4 f = unit(ch, at, p_lod);
+        const VoxelPos d = p_voxel - at;
+        f.w = f.w * ExactNoise::exact_pow2(p_lod) + f.x * float(d.x) + f.y * float(d.y) + f.z * float(d.z);
+        return f;
     }
 
     // The bare cascade's top solid voxel on the line from p_start down the base's up there (the voxel t steps along it,
@@ -283,7 +288,7 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
             return VoxelPos(p_start.x - std::llround(double(p_t) * up[0]), p_start.y - std::llround(double(p_t) * up[1]),
                     p_start.z - std::llround(double(p_t) * up[2]));
         };
-        auto distance = [&](int64_t p_t) { return ground_field(at(p_t)).w; };
+        auto distance = [&](int64_t p_t) { return ground_field(at(p_t), 0).w; };
         int64_t t = 0;
         float d = distance(t);
         const bool start_air = d > 0.0f;
