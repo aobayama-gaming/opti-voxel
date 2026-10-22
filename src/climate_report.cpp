@@ -12,6 +12,7 @@
 #include <godot_cpp/core/class_db.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 using namespace Climate;
@@ -33,6 +34,7 @@ struct Sampled {
     // The ground channels (SDFCascade::ground_channels) at the column's lattice point: height (LOD0 voxels) and its x / z
     // slopes per lattice spacing; fdx / fdz the central differences of the heights of its 4 neighbours at the same y.
     std::vector<float> h, gx, gz, fdx, fdz;
+    std::vector<float> dhdy; // dh along the base's up at the lattice point (per voxel: past 1, the surface folds over)
 };
 
 // Pixel p_i of the slice (row-major, p_n per row) as its point on the tangent plane, in lattice spacings: (column, row)
@@ -67,6 +69,7 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.gz.resize(points);
     s.fdx.resize(points);
     s.fdz.resize(points);
+    s.dhdy.resize(points);
     const int64_t step = int64_t(1) << p_m;
     const BaseSurface &base = p_sdf.get_base();
     parallel_for(uint32_t(p_n), "climate_report", [&](uint32_t p_row) {
@@ -79,6 +82,7 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             const VoxelPos g = p_surface ? p_sdf.ground_along(top) : top;
             s.altitude[i] = base.altitude(g);
             const Vector3i64 p(WorldCoord::floor_div(g.x, step), WorldCoord::floor_div(g.y, step), WorldCoord::floor_div(g.z, step));
+            const UpAxis up = base.up_dir(g);
             State st;
             float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
             Cascade::point_slots(p_sdf.get_spec(), p, p_m, slots, true);
@@ -89,6 +93,8 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             s.h[i] = ch[Cascade::VALUE];
             s.gx[i] = ch[Cascade::DX];
             s.gz[i] = ch[Cascade::DZ];
+            const double dhdn = double(ch[Cascade::DX]) * up[0] + double(ch[Cascade::DY]) * up[1] + double(ch[Cascade::DZ]) * up[2];
+            s.dhdy[i] = float(dhdn * std::ldexp(1.0, -p_m));
             auto height = [&](int64_t p_dx, int64_t p_dz) {
                 float c[Cascade::CHANNELS];
                 p_sdf.channels_at(VoxelPos((p.x + p_dx) * step, p.y * step, (p.z + p_dz) * step), p_m, c);
@@ -353,14 +359,75 @@ String relief_section(const Table &p_table, const Sampled &p_s, int p_n, double 
     return md;
 }
 
+void store(const String &p_path, const PackedByteArray &p_bytes) {
+    const Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::WRITE);
+    ERR_FAIL_COND_MSG(f.is_null(), "ClimateReport: cannot write " + p_path);
+    f->store_buffer(p_bytes);
+}
+
+// A vector's bytes (little endian on every target this builds for).
+template <typename T>
+void store(const String &p_path, const std::vector<T> &p_v) {
+    PackedByteArray bytes;
+    bytes.resize(int64_t(p_v.size() * sizeof(T)));
+    if (!p_v.empty()) {
+        memcpy(bytes.ptrw(), p_v.data(), size_t(bytes.size()));
+    }
+    store(p_path, bytes);
+}
+
+// The heightmap for tools/landforms (compare.py, match.py): heights.f32 (float32 little endian, row-major, row = z, metres
+// above the base), fields.f32 (the fields' values, point-major like Sampled::fields), dhdy.f32 (the ground's dh along the
+// base's up: the 3D noise's vertical slope, past 1 an overhang), picks.u8 (the picked biome) and
+// heights.json (n, spacing, the table, the centre in metres, the field and biome names, the cascade constants match.py's
+// amplitude cap reads).
+void write_heights(const String &p_dir, const Table &p_table, const Ground &p_ground, const Sampled &p_s, int p_n, double p_spacing_m, const String &p_climate,
+        const Vector2i &p_c) {
+    const double voxel_m = p_ground.voxel_size;
+    std::vector<float> h(p_s.altitude.size());
+    for (size_t i = 0; i < h.size(); i++) {
+        h[i] = float(p_s.altitude[i] * voxel_m);
+    }
+    store(p_dir.path_join("heights.f32"), h);
+    store(p_dir.path_join("fields.f32"), p_s.fields);
+    store(p_dir.path_join("dhdy.f32"), p_s.dhdy);
+    store(p_dir.path_join("picks.u8"), std::vector<uint8_t>(p_s.picks.begin(), p_s.picks.end()));
+    Array field_names, biome_names;
+    for (const Field &f : p_table.fields) {
+        field_names.push_back(f.name);
+    }
+    // match.py's multiplier cap: per biome, [wavelength m, the largest x] of each ground octave it multiplies.
+    Dictionary max_x;
+    for (const Climate::Biome &b : p_table.biomes) {
+        biome_names.push_back(b.name);
+        Array caps;
+        for (const Amp &a : b.amps) {
+            const double cap = a.field == GROUND ? max_ground_mult(p_table, p_ground, b, a.k) : INFINITY;
+            if (std::isfinite(cap)) {
+                caps.push_back(Array::make(std::ldexp(voxel_m, a.k), cap));
+            }
+        }
+        max_x[b.name] = caps;
+    }
+    Dictionary meta;
+    meta["fields"] = field_names;
+    meta["biomes"] = biome_names;
+    meta["n"] = p_n;
+    meta["spacing_m"] = p_spacing_m;
+    meta["climate"] = p_climate;
+    meta["center_m"] = Array::make(double(p_c.x) * p_spacing_m, double(p_c.y) * p_spacing_m);
+    meta["max_x"] = max_x;
+    store(p_dir.path_join("heights.json"), JSON::stringify(meta, " ").to_utf8_buffer());
+}
+
 } // namespace
 
 void ClimateReport::_bind_methods() {
-    ClassDB::bind_method(D_METHOD("run", "out_dir", "climate_path", "voxel_size", "lods", "extent_km", "size", "surface", "center"), &ClimateReport::run);
+    ClassDB::bind_method(D_METHOD("run", "out_dir", "climate_path", "voxel_size", "lods", "extent_km", "size", "surface", "center", "lattice"), &ClimateReport::run);
 }
 
 Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size, bool p_surface,
-        const Vector2 &p_center) {
+        const Vector2 &p_center, int p_lattice) {
     Dictionary report;
     report["ok"] = false;
     DirAccess::make_dir_recursive_absolute(p_out_dir);
@@ -381,7 +448,11 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     const Ground ground = sdf.climate_ground();
 
     const int n = MAX(p_size, 16);
-    const int m = MAX(0, int(std::floor(std::log2(p_extent_km * 1000.0 / n / ground.voxel_size))));
+    if (p_lattice > sdf.get_spec().top_level()) {
+        report["error"] = vformat("--lattice=%d: above the cascade's top lattice %d.", p_lattice, sdf.get_spec().top_level());
+        ERR_FAIL_V_MSG(report, "ClimateReport: " + String(report["error"]));
+    }
+    const int m = p_lattice >= 0 ? p_lattice : MAX(0, int(std::floor(std::log2(p_extent_km * 1000.0 / n / ground.voxel_size))));
     const double spacing_m = std::ldexp(ground.voxel_size, m);
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
     const Vector2i c(int(std::llround(p_center.x / spacing_m)), int(std::llround(p_center.y / spacing_m)));
@@ -399,6 +470,9 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + String("\n");
     md += shading_section(table, s, n, m, p_out_dir, images) + String("\n");
     md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
+    if (p_surface) { // a tangent-plane slice has no surface heights
+        write_heights(p_out_dir, table, ground, s, n, spacing_m, p_climate_path, c);
+    }
     md += "\nImages (x right, z down): ";
     for (int64_t i = 0; i < images.size(); i++) {
         md += String(i ? ", " : "") + "`" + String(images[i]).get_file() + String("`");

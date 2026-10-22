@@ -1,0 +1,159 @@
+{
+ "comment": "A volcanic island, matched to Moorea (tools/landforms: site island): one eroded volcano 1.2 km high in a sea covering 80% of the map. The volcano is a height term on a 26 km cell noise field (Worley F1: the distance to the nearest cell's centre, one cone per cell; cut by the 3D cells' slice, the cones vary in size: an archipelago) plus a 1.6-13 km noise (coast: the shore no longer a circle) with a concave profile, a reef flat and a shallow shelf; the island biome (fading out 300 m up the cone: valleys deeper than the cone below them would ring the island with a moat) erodes it with ridged multifractal octaves from 100 m to 3.2 km warped by a quarter of their wavelength (one multiplier per octave, fit by match.py); the sea biome is flat. The datum is the sea level.",
+ "fields": [
+  {
+   "name": "isle",
+   "seed": 501,
+   "noise": "cell",
+   "bands": [
+    {"wavelength_m": 26214.4, "amp": 1.0}
+   ]
+  },
+  {
+   "name": "wx",
+   "seed": 505,
+   "bands": [
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wy",
+   "seed": 506,
+   "bands": [
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "wz",
+   "seed": 507,
+   "bands": [
+    {"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}
+   ]
+  },
+  {
+   "name": "coast",
+   "seed": 502,
+   "bands": [
+    {"from_m": 1600, "to_m": 13107, "amp": 0.07, "persistence": 0.7}
+   ],
+   "terms": [
+    {"source": "isle", "x": 1}
+   ]
+  }
+ ],
+ "heights": [
+  {
+   "field": "coast",
+   "height_m": 1100,
+   "curve": [
+    [-0.6, 1.64255],
+    [-0.575, 1.42908],
+    [-0.55, 1.22695],
+    [-0.525, 1.03661],
+    [-0.5, 0.85856],
+    [-0.475, 0.6934],
+    [-0.45, 0.54184],
+    [-0.425, 0.40474],
+    [-0.4, 0.28322],
+    [-0.375, 0.17874],
+    [-0.35, 0.09343],
+    [-0.325, 0.03082],
+    [-0.3, -0.0],
+    [-0.275, -0.00341],
+    [-0.25, -0.006],
+    [-0.225, -0.006],
+    [-0.2, -0.006],
+    [-0.175, -0.006],
+    [-0.15, -0.006],
+    [-0.125, -0.006],
+    [-0.1, -0.006],
+    [-0.075, -0.006],
+    [-0.05, -0.006],
+    [-0.025, -0.006],
+    [0.0, -0.006]
+   ]
+  }
+ ],
+ "ground_stretch": [
+  {"from_m": 100.0, "to_m": 30000000, "stretch_y": 4.0}
+ ],
+ "biomes": [
+  {
+   "name": "island",
+   "where": [
+    {"field": "coast", "max": -0.41, "fade": 0.06}
+   ],
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 51.2, "x": 0.3, "shape": "ridged"},
+    {
+     "field": "ground",
+     "wavelength_m": 102.4,
+     "x": 0.5,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 25.6,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 204.8,
+     "x": 1.8379,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 51.2,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 409.6,
+     "x": 1.9011,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 102.4,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 819.2,
+     "x": 4.5012,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 204.8,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 1638.4,
+     "x": 2.1876,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 409.6,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 3276.8,
+     "x": 4.2512,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 819.2,
+     "warp_fields": ["wx", "wy", "wz"]
+    },
+    {"field": "ground", "wavelength_m": 6553.6, "x": 0.0229},
+    {"field": "ground", "wavelength_m": 13107.2, "x": 0.0014},
+    {"field": "ground", "from_m": 26214.4, "to_m": 30000000, "x": 0}
+   ],
+   "surface": {"flat": "#4c7a34", "steep": "#5c5044"},
+   "debug_color": "#4c8a3c"
+  },
+  {
+   "name": "sea",
+   "amp": [
+    {"field": "ground", "from_m": 0.4, "to_m": 25.6, "x": 0.03, "shape": "billow"},
+    {"field": "ground", "from_m": 51.2, "to_m": 30000000, "x": 0}
+   ],
+   "surface": {"flat": "#2a5878", "steep": "#2a5878", "roughness": 0.2},
+   "debug_color": "#3060a0"
+  }
+ ]
+}

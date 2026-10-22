@@ -1,0 +1,16 @@
+{
+ "comment": "Reference landforms: Copernicus GLO-30 DSM crops (fetch_dem.py). lat / lon the centre (degrees), size_km the square's side, spacing_m the grid (a power of two of 5 cm voxels, so climate_report.sh --lattice=log2(spacing / 0.05) samples the same grid). The DSM is the top of the canopy where there is forest.",
+ "sites": {
+  "mountain": { "name": "Mont Blanc massif, Alps", "lat": 45.88, "lon": 6.92, "size_km": 26.2, "spacing_m": 51.2 },
+  "mangrove": { "name": "Sundarbans, Bangladesh", "lat": 21.85, "lon": 89.35, "size_km": 13.1, "spacing_m": 25.6 },
+  "desert": { "name": "Selima Sand Sheet, Sudan / Egypt", "lat": 21.6, "lon": 29.4, "size_km": 13.1, "spacing_m": 25.6 },
+  "dunes": { "name": "Namib Sand Sea star dunes, Namibia", "lat": -24.75, "lon": 15.42, "size_km": 13.1, "spacing_m": 25.6 },
+  "megadunes": { "name": "Badain Jaran megadunes, China", "lat": 39.75, "lon": 102.4, "size_km": 13.1, "spacing_m": 25.6 },
+  "island": { "name": "Moorea, French Polynesia", "lat": -17.535, "lon": -149.835, "size_km": 26.2, "spacing_m": 51.2 },
+  "cliff": { "name": "Drakensberg Amphitheatre escarpment, South Africa", "lat": -28.70, "lon": 28.92, "size_km": 13.1, "spacing_m": 25.6 },
+  "seacliff": { "name": "Cliffs of Moher, Ireland", "lat": 52.95, "lon": -9.40, "size_km": 6.55, "spacing_m": 12.8 },
+  "valley": { "name": "Yosemite Valley, California", "lat": 37.735, "lon": -119.58, "size_km": 13.1, "spacing_m": 25.6 },
+  "caldera": { "name": "Crater Lake, Oregon", "lat": 42.94, "lon": -122.11, "size_km": 13.1, "spacing_m": 25.6 },
+  "tundra": { "name": "Thermokarst lakes, Alaska North Slope", "lat": 70.30, "lon": -155.0, "size_km": 13.1, "spacing_m": 25.6 }
+ }
+}

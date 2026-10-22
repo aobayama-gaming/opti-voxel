@@ -218,6 +218,10 @@ const Amp *find_amp(const Biome &p_biome, int p_field, int p_k);
 // The shape biome p_biome (null: none) gives octave p_k of p_field: its entry's, else the band's own (a field's
 // Field::shapes, the ground's plain). What the modulation inserts and max_amp bounds.
 Shape band_shape(const Table &p_table, const Biome *p_biome, int p_field, int p_k);
+// The largest multiplier biome p_biome may give the ground's octave p_k: its shaped amplitude under the ground's cap
+// (validate refuses more; tools/landforms/match.py caps its fits with it, from climate_report's heights.json). 0 without
+// such a band, infinite for a shape bounded by 0.
+double max_ground_mult(const Table &p_table, const Ground &p_ground, const Biome &p_biome, int p_k);
 // The skirt's band step at LOD p_lod (LOD0 voxels) with the table's ground terms, from the cascade's p_ground_amp: plus
 // each height term's |coef| times its curve's slope bound times its field's step (its largest L+2 / L+3 octave and its
 // terms' sources' steps); with terraces, all times 2 (their slope bound) plus the terrace blend's change with the
