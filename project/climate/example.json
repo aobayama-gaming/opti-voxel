@@ -1,97 +1,356 @@
 {
-    "comment": "Example climate (src/climate.cpp describes the format). Tuned for 5 cm voxels at any LOD count: ranges keep the octaves the ground has (up to 26 km at 15 LODs, 26,000 km at 25). Each field has local octaves (km) and continental ones, so every ground octave has a biome map at its own scale, and every biome shapes the whole spectrum: amplitudes past the ground's 3.3 km cap can only go down.",
-    "fields": [
-        {
-            "name": "temperature",
-            "bands": [
-                { "from_m": 3200, "to_m": 26000, "amp": 0.5, "persistence": 0.7 },
-                { "from_m": 52000, "to_m": 30000000, "amp": 0.35 }
-            ],
-            "terms": [{ "source": "ground", "per_m": -0.00003 }]
-        },
-        {
-            "name": "humidity",
-            "bands": [
-                { "from_m": 1600, "to_m": 26000, "amp": 0.5, "persistence": 0.7 },
-                { "from_m": 52000, "to_m": 30000000, "amp": 0.35 }
-            ]
-        },
-        {
-            "name": "variant",
-            "bands": [
-                { "from_m": 400, "to_m": 6500, "amp": 0.35, "persistence": 0.7 },
-                { "from_m": 13000, "to_m": 30000000, "amp": 0.2 }
-            ]
-        }
+ "comment": "A world composed like libnoise's complex planet (complexplanet.cpp), with the cascade's shaped bands: a continent field lifted by libnoise's continent curve, a terrain-type field (the continents, twisted) choosing mountains (ridged multifractal, lifted inland), hills (billow), badlands (terraced) and plains (low billow), ridged river channels, turbulence from three warp fields. Tuned for 5 cm voxels; ranges keep the octaves the ground has at any LOD count.",
+ "fields": [
+  {
+   "name": "continent",
+   "seed": 209,
+   "bands": [
+    {
+     "from_m": 13000,
+     "to_m": 30000000,
+     "amp": 1.0,
+     "persistence": 0.75
+    }
+   ]
+  },
+  {
+   "name": "terrain",
+   "seed": 102,
+   "bands": [
+    {
+     "from_m": 3200,
+     "to_m": 30000000,
+     "amp": 0.12,
+     "persistence": 0.75
+    }
+   ],
+   "terms": [
+    {
+     "source": "continent",
+     "x": 1.0
+    }
+   ]
+  },
+  {
+   "name": "badland",
+   "seed": 103,
+   "bands": [
+    {
+     "from_m": 6500,
+     "to_m": 30000000,
+     "amp": 1.0,
+     "persistence": 0.7
+    }
+   ]
+  },
+  {
+   "name": "rivers",
+   "seed": 104,
+   "bands": [
+    {
+     "from_m": 26000.0,
+     "to_m": 200000.0,
+     "amp": 0.6,
+     "persistence": 0.6,
+     "shape": "ridged",
+     "scale": 2
+    }
+   ]
+  },
+  {
+   "name": "wx",
+   "seed": 105,
+   "bands": [
+    {
+     "from_m": 200,
+     "to_m": 3200,
+     "amp": 0.5,
+     "persistence": 0.6
+    }
+   ]
+  },
+  {
+   "name": "wy",
+   "seed": 106,
+   "bands": [
+    {
+     "from_m": 200,
+     "to_m": 3200,
+     "amp": 0.5,
+     "persistence": 0.6
+    }
+   ]
+  },
+  {
+   "name": "wz",
+   "seed": 107,
+   "bands": [
+    {
+     "from_m": 200,
+     "to_m": 3200,
+     "amp": 0.5,
+     "persistence": 0.6
+    }
+   ]
+  }
+ ],
+ "heights": [
+  {
+   "field": "continent",
+   "height_m": 2048,
+   "curve": [
+    [
+     -2.1,
+     -1.625
     ],
-    "biomes": [
-        {
-            "name": "volcanic",
-            "where": [{ "field": "temperature", "min": 0.3, "fade": 0.08 }, { "field": "variant", "min": 0.25, "fade": 0.1 }],
-            "amp": [
-                { "field": "ground", "from_m": 0.4, "to_m": 25, "x": 1.5 },
-                { "field": "ground", "from_m": 50, "to_m": 13000, "x": 2 }
-            ],
-            "surface": { "flat": "#2c2622", "steep": "#1a1614", "roughness": 0.9 },
-            "debug_color": "#c03818"
-        },
-        {
-            "name": "tundra",
-            "where": [{ "field": "temperature", "max": -0.25, "fade": 0.08 }],
-            "amp": [
-                { "field": "ground", "from_m": 0.4, "to_m": 400, "x": 0.4 },
-                { "field": "ground", "from_m": 800, "to_m": 30000000, "x": 0.6 }
-            ],
-            "surface": { "flat": "#e4ecf0", "steep": "#70747a", "roughness": 0.7 },
-            "debug_color": "#d8e4ec"
-        },
-        {
-            "name": "desert",
-            "where": [{ "field": "temperature", "min": 0.1, "fade": 0.08 }, { "field": "humidity", "max": -0.15, "fade": 0.08 }],
-            "amp": [
-                { "field": "ground", "from_m": 0.4, "to_m": 25, "x": 0.15 },
-                { "field": "ground", "from_m": 50, "to_m": 200, "x": 0.8 },
-                { "field": "ground", "from_m": 400, "to_m": 30000000, "x": 0.12 }
-            ],
-            "surface": { "flat": "#d8b878", "steep": "#a8703c" },
-            "debug_color": "#e0c070"
-        },
-        {
-            "name": "mountains",
-            "where": [{ "field": "variant", "min": 0.45, "fade": 0.1 }],
-            "amp": [
-                { "field": "ground", "from_m": 3, "to_m": 25, "x": 1.5 },
-                { "field": "ground", "from_m": 50, "to_m": 6500, "x": 2.5 },
-                { "field": "ground", "wavelength_m": 13000, "x": 2 }
-            ],
-            "surface": { "flat": "#8c867c", "steep": "#5c564e" },
-            "debug_color": "#7a6a5a"
-        },
-        {
-            "name": "swamp",
-            "where": [{ "field": "humidity", "min": 0.25, "fade": 0.08 }],
-            "amp": [
-                { "field": "ground", "from_m": 0.4, "to_m": 3, "x": 0.4 },
-                { "field": "ground", "from_m": 6, "to_m": 30000000, "x": 0.04 }
-            ],
-            "surface": { "flat": "#4a5428", "steep": "#3c3424", "roughness": 0.6 },
-            "debug_color": "#4a6040"
-        },
-        {
-            "name": "forest",
-            "where": [{ "field": "humidity", "min": 0.05, "fade": 0.15 }],
-            "amp": [{ "field": "ground", "from_m": 1600, "to_m": 30000000, "x": 0.6 }],
-            "surface": { "flat": "#2c5a1c", "steep": "#4c4234" },
-            "debug_color": "#2f7a30"
-        },
-        {
-            "name": "plain",
-            "amp": [
-                { "field": "ground", "from_m": 0.4, "to_m": 12, "x": 0.3 },
-                { "field": "ground", "from_m": 25, "to_m": 30000000, "x": 0.08 }
-            ],
-            "surface": { "flat": "#82a440", "steep": "#6c5c44" },
-            "debug_color": "#9cc060"
-        }
+    [
+     -1.1,
+     -1.375
+    ],
+    [
+     -0.1,
+     -0.375
+    ],
+    [
+     -0.0375,
+     0.125
+    ],
+    [
+     0.025,
+     0.25
+    ],
+    [
+     0.15,
+     1
+    ],
+    [
+     0.4,
+     0.25
+    ],
+    [
+     0.65,
+     0.25
+    ],
+    [
+     0.9,
+     0.5
+    ],
+    [
+     1.9,
+     0.5
     ]
+   ]
+  },
+  {
+   "field": "terrain",
+   "height_m": 1500,
+   "curve": [
+    [
+     0.0,
+     0
+    ],
+    [
+     0.07,
+     0
+    ],
+    [
+     0.2,
+     1
+    ],
+    [
+     0.5,
+     1.5
+    ]
+   ]
+  },
+  {
+   "field": "rivers",
+   "height_m": -60.0,
+   "curve": [
+    [
+     -1,
+     0
+    ],
+    [
+     0.15,
+     0
+    ],
+    [
+     0.3,
+     0.6
+    ],
+    [
+     0.45,
+     1
+    ],
+    [
+     1,
+     1
+    ]
+   ]
+  }
+ ],
+ "biomes": [
+  {
+   "name": "mountains",
+   "where": [
+    {
+     "field": "terrain",
+     "min": 0.12,
+     "fade": 0.05
+    }
+   ],
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 800,
+     "x": 1.2,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 80,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "from_m": 1600,
+     "to_m": 6500,
+     "x": 2.5,
+     "shape": "ridged",
+     "multifractal": 2,
+     "warp_m": 80,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "wavelength_m": 13000,
+     "x": 1.5,
+     "shape": "ridged",
+     "multifractal": 2
+    },
+    {
+     "field": "ground",
+     "from_m": 26000,
+     "to_m": 30000000,
+     "x": 0.15
+    }
+   ],
+   "surface": {
+    "flat": "#8c867c",
+    "steep": "#5c564e"
+   },
+   "debug_color": "#7a6a5a"
+  },
+  {
+   "name": "badlands",
+   "where": [
+    {
+     "field": "badland",
+     "min": 0.3,
+     "fade": 0.05
+    },
+    {
+     "field": "continent",
+     "min": -0.04,
+     "fade": 0.03
+    }
+   ],
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 1600,
+     "x": 0.7,
+     "shape": "billow",
+     "warp_m": 40,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "from_m": 3200,
+     "to_m": 30000000,
+     "x": 0.1
+    }
+   ],
+   "terrace": {
+    "step_m": 40
+   },
+   "surface": {
+    "flat": "#b8643a",
+    "steep": "#7c3c24"
+   },
+   "debug_color": "#c06030"
+  },
+  {
+   "name": "hills",
+   "where": [
+    {
+     "field": "terrain",
+     "min": 0.0,
+     "fade": 0.04
+    }
+   ],
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 3200,
+     "x": 0.8,
+     "shape": "billow",
+     "warp_m": 60,
+     "warp_fields": [
+      "wx",
+      "wy",
+      "wz"
+     ]
+    },
+    {
+     "field": "ground",
+     "from_m": 6500,
+     "to_m": 30000000,
+     "x": 0.1
+    }
+   ],
+   "surface": {
+    "flat": "#6c8a3c",
+    "steep": "#5c5040"
+   },
+   "debug_color": "#80a050"
+  },
+  {
+   "name": "plains",
+   "amp": [
+    {
+     "field": "ground",
+     "from_m": 0.4,
+     "to_m": 800,
+     "x": 0.3,
+     "shape": "billow"
+    },
+    {
+     "field": "ground",
+     "from_m": 1600,
+     "to_m": 30000000,
+     "x": 0.04
+    }
+   ],
+   "surface": {
+    "flat": "#82a440",
+    "steep": "#6c5c44"
+   },
+   "debug_color": "#9cc060"
+  }
+ ]
 }

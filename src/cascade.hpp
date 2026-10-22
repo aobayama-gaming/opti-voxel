@@ -113,6 +113,30 @@ inline void hermite_mid(float p_a, float p_b, float p_sa, float p_sb, float &r_v
 inline float flush_value(float p_v) {
     return std::fabs(p_v) < ExactNoise::bits_float(FLUSH_BITS) ? 0.0f : p_v;
 }
+// flush_value's threshold as a GLSL literal (the generated code's flushes).
+inline String glsl_flush() {
+    return ExactNoise::glsl_float(ExactNoise::bits_float(FLUSH_BITS));
+}
+
+// Dual numbers (x, y, z: gradient, w: value), every result flushed under 2^-64: inputs 0 or >= 2^-64, so a product's
+// denormal part never reaches a result (the climate's exactness note, climate.hpp). The GLSL twins are cl_flush,
+// cl_mul, cl_sub (climate_glsl.cpp).
+inline ExactNoise::Float4 dflush(const ExactNoise::Float4 &p_a) {
+    return ExactNoise::Float4{ flush_value(p_a.x), flush_value(p_a.y), flush_value(p_a.z), flush_value(p_a.w) };
+}
+inline ExactNoise::Float4 dmul(const ExactNoise::Float4 &p_a, const ExactNoise::Float4 &p_b) {
+    return dflush(ExactNoise::Float4{ p_a.w * p_b.x + p_b.w * p_a.x, p_a.w * p_b.y + p_b.w * p_a.y, p_a.w * p_b.z + p_b.w * p_a.z, p_a.w * p_b.w });
+}
+inline ExactNoise::Float4 dsub(const ExactNoise::Float4 &p_a, const ExactNoise::Float4 &p_b) {
+    return dflush(ExactNoise::Float4{ p_a.x - p_b.x, p_a.y - p_b.y, p_a.z - p_b.z, p_a.w - p_b.w });
+}
+inline ExactNoise::Float4 dadd(const ExactNoise::Float4 &p_a, const ExactNoise::Float4 &p_b) {
+    return dflush(ExactNoise::Float4{ p_a.x + p_b.x, p_a.y + p_b.y, p_a.z + p_b.z, p_a.w + p_b.w });
+}
+// p_a times the constant p_k.
+inline ExactNoise::Float4 dscale(const ExactNoise::Float4 &p_a, float p_k) {
+    return dflush(ExactNoise::Float4{ p_a.x * p_k, p_a.y * p_k, p_a.z * p_k, p_a.w * p_k });
+}
 
 // A box of lattice indices, bounds included.
 struct Box {
@@ -206,9 +230,47 @@ struct FieldRange {
 // Per-point band amplitudes (the climate's biome weights, climate.hpp). At every point of Λ_m, before that level's
 // insertions, the amplitude of each modulated group's band on Λ_m is computed from the point's channels: from
 // H(V_{m+1}) only, so no band reads one inserted at its own level and the groups can modulate each other in any order.
-// A modulated band inserts value A n and slopes A dn + n dA (LINEAR4 groups only): n = perlin3, A = (dA, A) per
+// A modulated band inserts value A n and slopes A dn + n dA (LINEAR4 groups only): n = the noise, A = (dA, A) per
 // lattice spacing of Λ_m.
+//
+// Shaped bands (BandMod::features): the band also inserts A_abs (|n| - NOISE_ABS_MEAN) and A_sq (n^2 - NOISE_SQ_MEAN),
+// the means taken out so a coarser LOD dropping the band (mean 0) makes no step; its noise may be read at the point
+// displaced by a warp (LOD0 voxels, the warp's gradient applied to the noise's by the chain rule); and the ground's
+// band may overwrite the state group's channels (state_group) with S_1 + S_n n + S_abs |n| + S_sq n^2: the state its
+// finer octaves read (the multifractals' previous octave). All of it dual numbers, flushed like dmul.
 struct Spec;
+
+// BandMod::features bits.
+inline constexpr uint32_t MOD_ABS = 1u;
+inline constexpr uint32_t MOD_SQ = 2u;
+inline constexpr uint32_t MOD_STATE = 4u;
+inline constexpr uint32_t MOD_WARP = 8u;
+// |n| of a shaped band is smoothed: sabs(n) = sqrt(n^2 + e^2) - e, e = SMOOTH_ABS_E. A crease at n = 0 is finer than
+// the 8 samples per wavelength a band is carried by: the Hermite subdivision rings along the lattice axes around it,
+// and the gradient channels miss it (measured, the climate report: 16-21% gradient error on ridged bands, 2.5% plain;
+// a multifractal's state streaks). e = 0.1 is about how far n moves between two samples.
+inline constexpr float SMOOTH_ABS_E = 0.1f;
+// sabs of a dual n (gradient per lattice spacing): (n.g n / r, (n^2 + e^2) r - e), r = det_rsqrt(n^2 + e^2), from n^2
+// (dmul(n, n)). Products flushed.
+inline ExactNoise::Float4 smooth_abs(const ExactNoise::Float4 &p_n, const ExactNoise::Float4 &p_n2) {
+    const float q = p_n2.w + SMOOTH_ABS_E * SMOOTH_ABS_E;
+    const float r = ExactNoise::det_rsqrt(q);
+    const float d = flush_value(p_n.w * r);
+    return dflush(ExactNoise::Float4{ p_n.x * d, p_n.y * d, p_n.z * d, q * r - SMOOTH_ABS_E });
+}
+// E[sabs(n)] and E[n^2] of ExactNoise::perlin3 (unit test: measured on 2^20 random points within 1%).
+inline constexpr float NOISE_ABS_MEAN = 0.1527f;
+inline constexpr float NOISE_SQ_MEAN = 0.0728f;
+// |W| bound of a warp (LOD0 voxels): its floor stays an exact float.
+inline constexpr float WARP_LIMIT = 4194304.0f; // 2^22
+
+// One modulated group's band on Λ_m at a point. Float4 = (gradient per lattice spacing of Λ_m, value).
+struct BandMod {
+    uint32_t features = 0;
+    ExactNoise::Float4 amp[3] = {}; // on n, |n| - NOISE_ABS_MEAN, n^2 - NOISE_SQ_MEAN
+    ExactNoise::Float4 state[4] = {}; // the state group's new channels, on 1, n, |n|, n^2 (MOD_STATE, the ground only)
+    ExactNoise::Float4 warp[3] = {}; // displacement per axis, LOD0 voxels (MOD_WARP)
+};
 
 struct Modulation {
     virtual ~Modulation() = default;
@@ -217,11 +279,21 @@ struct Modulation {
     // The finest and coarsest level with a modulated ground band (FieldRange: only the ground reaches the mesh; a field
     // band modulated elsewhere only changes the fields where they are carried, Climate's fields_at).
     virtual FieldRange field_range() const = 0;
-    // r_amp[g] for every modulated group g of Λ_m, from p_pre: the point's Level slots after subdivision, before Λ_m's
-    // insertions. Float4 = (gradient per lattice spacing of Λ_m, value).
-    virtual void amplitudes(int p_m, const float p_pre[SLOTS], ExactNoise::Float4 r_amp[MAX_GROUPS]) const = 0;
-    // The same in GLSL, bit for bit: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])` returning
-    // modulated(m), pre in p_spec's GPU layout (Spec::gpu_base).
+    // r_mod[g] for every modulated group g of Λ_m, from p_pre: the point's Level slots after subdivision, before Λ_m's
+    // insertions.
+    virtual void modulate(int p_m, const float p_pre[SLOTS], BandMod r_mod[MAX_GROUPS]) const = 0;
+    // The field group the ground's MOD_STATE band overwrites, or -1 (a band-less group: nothing else writes it).
+    virtual int state_group() const { return -1; }
+    // Whether any band uses a BandMod feature: else the GLSL is the plain amplitudes' (the same text as before them).
+    virtual bool shaped() const { return false; }
+    // The features group p_group's bands use at some level (the union): its GLSL insert has the code for them only.
+    virtual uint32_t group_features(int p_group) const {
+        (void)p_group;
+        return 0u;
+    }
+    // The same in GLSL, bit for bit. Not shaped: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])`
+    // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
+    // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base).
     virtual String glsl(const Spec &p_spec) const = 0;
 };
 
@@ -238,6 +310,8 @@ struct Spec {
     std::vector<std::vector<Band>> fields;
     // Null: every band at its constant amplitude. A modulated ground needs LINEAR4.
     std::shared_ptr<const Modulation> modulation;
+    // Bit g: group g's bands are cell noise (ExactNoise::cell3, field groups only) instead of perlin3.
+    uint32_t cell_groups = 0;
 
     int insert_level(const Band &p_band) const { return p_band.k - insert_shift; }
     int top_level(bool p_all_fields = false) const;

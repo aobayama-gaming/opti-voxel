@@ -45,7 +45,25 @@ vec4 cl_edge(vec4 x, float anchor, float scale) {
 } // namespace
 
 String glsl_helpers() {
-    return String(GLSL_CLIMATE_HELPERS).replace("FLUSH", ExactNoise::glsl_float(ExactNoise::bits_float(Cascade::FLUSH_BITS)));
+    return String(GLSL_CLIMATE_HELPERS).replace("FLUSH", Cascade::glsl_flush());
+}
+
+bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined) {
+    return (p_combined.modulation && p_combined.modulation->shaped()) || p_table.has_ground_terms();
+}
+
+String shared_helpers_glsl() {
+    return glsl_helpers() + R"glsl(
+vec4 cl_add(vec4 a, vec4 b) {
+    precise vec4 r = a + b;
+    return cl_flush(r);
+}
+
+vec4 cl_scale(vec4 a, float k) {
+    precise vec4 r = a * k;
+    return cl_flush(r);
+}
+)glsl";
 }
 
 String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
@@ -74,7 +92,7 @@ String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
 }
 
 String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
-    String code = p_combined.modulation ? String() : glsl_helpers();
+    String code = p_combined.modulation || splices_helpers(p_table, p_combined) ? String() : glsl_helpers();
     code += "\n// Climate::pick of the weights of the channels pre at the absolute point p (a lattice point).\nuint climate_biome(Ch pre, WorldPos p) {\n";
     code += glsl_weights(p_table, p_combined);
     // The largest weight's bits and how many biomes share them, then the (hash % count)-th of those in list order: the

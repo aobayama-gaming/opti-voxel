@@ -123,7 +123,7 @@ public:
         // The channels the GPU carries (an empty FieldRange: the ground's only): the chunk passes' range, every level with
         // the biome pick (CascadeGLSL::field_range); the CPU's runs carry the same.
         range = CascadeGLSL::field_range(&sdf, false);
-        all_fields = CascadeGLSL::ground_materials(&sdf);
+        all_fields = range.everywhere();
         nch = range.empty() ? channel_count(sdf.get_spec().set) : sdf.get_spec().gpu_channels();
         nv = CascadeGLSL::vec4s_per_point(sdf.get_spec(), range);
         cs = p_param.chunk_size;
@@ -283,10 +283,10 @@ private:
     }
 
     void compare_sample(uint32_t p_chunk, const Level &p_level, const Vector3i64 &p_p, const Vector3i64 &p_grid, size_t p_cpu_i, const float *p_got) {
-        float ch[CHANNELS] = {};
-        for (int k = 0; k < channel_count(sdf.get_spec().set); k++) {
-            ch[k] = p_level.ch[k][p_cpu_i];
-        }
+        // The sample's ground channels (the climate's ground terms on the slots, SDFCascade::ground_channels).
+        float slots[SLOTS], ch[CHANNELS];
+        p_level.slots_at(int64_t(p_cpu_i), slots);
+        sdf.ground_channels(slots, ch);
         const int lod = chunks[p_chunk].lod;
         const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p.y * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
         const float w[4] = { want.x, want.y, want.z, want.w };
@@ -520,7 +520,9 @@ Dictionary check_biomes(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_p
                 float slots[SLOTS];
                 level.slots_at(p_cpu_i, slots);
                 // Air samples (the sample with its skirt above 0) keep 0: no vertex reads them.
-                const ExactNoise::Float4 r = sdf.with_skirt(sdf.sdf(slots, p_p.y << l, l), l, Float3{ float(i.x), float(i.y), float(i.z) });
+                float ch[CHANNELS];
+                sdf.ground_channels(slots, ch);
+                const ExactNoise::Float4 r = sdf.with_skirt(sdf.sdf(ch, p_p.y << l, l), l, Float3{ float(i.x), float(i.y), float(i.z) });
                 const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(slots, p_p, l);
                 const uint32_t g = got[c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))];
                 seen[MIN(want, uint32_t(Climate::MAX_BIOMES))]++;
@@ -764,7 +766,7 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
         for (size_t i = 0; i < points.size(); i++) {
             const VoxelPos &v = points[i];
             float ch[CHANNELS];
-            point(sdf.get_spec(), Vector3i64(v.x >> lod, v.y >> lod, v.z >> lod), lod, ch);
+            sdf.channels_at(v, lod, ch); // Cascade::point's bits, through the ground terms
             const float want = sdf.sdf(ch, v.y, lod).w;
             compared++;
             if (float_bits(want) != float_bits(got[i])) {

@@ -26,11 +26,14 @@ struct Sampled {
     std::vector<float> weights;
     std::vector<int> picks;
     std::vector<int64_t> ground_y; // LOD0 voxels: the column's surface, or the datum
+    // The ground channels (SDFCascade::ground_channels) at the column's lattice point: height (LOD0 voxels) and its x / z
+    // slopes per lattice spacing; fdx / fdz the central differences of the heights of its 4 neighbours at the same y.
+    std::vector<float> h, gx, gz, fdx, fdz;
 };
 
-// The slice: pixel (column j, row i) is the column (j - n / 2, i - n / 2) of Λ_m (x right, z down), at the lattice
-// point at or below its ground surface (p_surface: SDFCascade::ground_y), else at the datum's.
-Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, int p_m, int p_n) {
+// The slice: pixel (column j, row i) is the column (j - n / 2, i - n / 2) + p_c of Λ_m (x right, z down), at the
+// lattice point at or below its ground surface (p_surface: SDFCascade::ground_y), else at the datum's.
+Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, int p_m, int p_n, const Vector2i &p_c) {
     Sampled s;
     s.nf = int(p_table.fields.size());
     s.nb = int(p_table.biomes.size());
@@ -39,17 +42,35 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.weights.resize(points * s.nb);
     s.picks.resize(points);
     s.ground_y.resize(points);
+    s.h.resize(points);
+    s.gx.resize(points);
+    s.gz.resize(points);
+    s.fdx.resize(points);
+    s.fdz.resize(points);
     const int64_t step = int64_t(1) << p_m;
     parallel_for(uint32_t(p_n), "climate_report", [&](uint32_t p_row) {
         for (int j = 0; j < p_n; j++) {
             const size_t i = size_t(p_row) * p_n + j;
-            const int64_t x = int64_t(j) - p_n / 2;
-            const int64_t z = int64_t(p_row) - p_n / 2;
+            const int64_t x = int64_t(j) - p_n / 2 + p_c.x;
+            const int64_t z = int64_t(p_row) - p_n / 2 + p_c.y;
             s.ground_y[i] = p_surface ? p_sdf.ground_y(x * step, z * step) : p_sdf.get_datum_y();
             const Vector3i64 p(x, WorldCoord::floor_div(s.ground_y[i], step), z);
             Float4 f[MAX_FIELDS];
             Float4 w[MAX_BIOMES];
-            fields_at(p_table, p_sdf.get_spec(), p, p_m, f);
+            float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
+            Cascade::point_slots(p_sdf.get_spec(), p, p_m, slots, true);
+            apply_terms(p_table, slots, f); // fields_at
+            p_sdf.ground_channels(slots, ch);
+            s.h[i] = ch[Cascade::VALUE];
+            s.gx[i] = ch[Cascade::DX];
+            s.gz[i] = ch[Cascade::DZ];
+            auto height = [&](int64_t p_dx, int64_t p_dz) {
+                float c[Cascade::CHANNELS];
+                p_sdf.channels_at(VoxelPos((p.x + p_dx) * step, p.y * step, (p.z + p_dz) * step), p_m, c);
+                return double(c[Cascade::VALUE]);
+            };
+            s.fdx[i] = float((height(1, 0) - height(-1, 0)) * 0.5);
+            s.fdz[i] = float((height(0, 1) - height(0, -1)) * 0.5);
             weights(p_table, f, w);
             s.picks[i] = pick(p_table, w, p, p_m);
             for (int c = 0; c < s.nf; c++) {
@@ -109,7 +130,7 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
 
 // Where each pair of biomes meets, the spot nearest the slice's centre: a pick and its right or lower neighbour
 // differ; the spot is the first of the two (metres, y its ground), with the player flag that spawns above it.
-String border_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m) {
+String border_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const Vector2i &p_c) {
     struct Spot {
         int64_t d2 = INT64_MAX;
         size_t i = 0;
@@ -140,11 +161,77 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
             if (spot.d2 == INT64_MAX) {
                 continue;
             }
-            const int64_t x = int64_t(std::llround(double(int64_t(spot.i % size_t(p_n)) - p_n / 2) * p_spacing_m));
-            const int64_t z = int64_t(std::llround(double(int64_t(spot.i / size_t(p_n)) - p_n / 2) * p_spacing_m));
+            const int64_t x = int64_t(std::llround(double(int64_t(spot.i % size_t(p_n)) - p_n / 2 + p_c.x) * p_spacing_m));
+            const int64_t z = int64_t(std::llround(double(int64_t(spot.i / size_t(p_n)) - p_n / 2 + p_c.y) * p_spacing_m));
             md += vformat("| %s / %s | %d | %d | %d | `--spawn=%d,%d` |\n", p_table.biomes[size_t(a)].name, p_table.biomes[size_t(b)].name, x,
                     int64_t(std::llround(double(p_s.ground_y[spot.i]) * p_voxel_m)), z, x, z);
         }
+    }
+    return md;
+}
+
+// The ground's look and its gradient channels: a hillshade on height colours from the heights' finite differences
+// (ground_shaded.png, the geometry) and one from the gradient channels (ground_normals.png, what the mesh's normals
+// read), and per biome the gradient channels' error against the finite differences (at the same y): small where the
+// gradient is the values' (the differences' own error: bands are sampled 8 times per wavelength), larger where a band
+// has a crease the lattice can't resolve or a term leaves its own gradient out (how slope damping was measured and
+// dropped, climate.hpp).
+String shading_section(const Table &p_table, const Sampled &p_s, int p_n, int p_m, const String &p_dir, Array &r_images) {
+    const int64_t points = int64_t(p_n) * p_n;
+    double lo = INFINITY, hi = -INFINITY;
+    for (int64_t i = 0; i < points; i++) {
+        lo = MIN(lo, double(p_s.h[size_t(i)]));
+        hi = MAX(hi, double(p_s.h[size_t(i)]));
+    }
+    const double to_slope = std::ldexp(1.0, -p_m); // per lattice spacing -> per voxel
+    std::vector<double> err(size_t(p_s.nb), 0.0), norm(size_t(p_s.nb), 0.0);
+    PackedByteArray fd_img, g_img;
+    fd_img.resize(points * 3);
+    g_img.resize(points * 3);
+    // Height colours: land (t in [0, 1]) low green, mid olive and brown, high grey-white; sea (t in [-1, 0): -1 the
+    // deepest) light to dark blue.
+    auto colour = [&](double p_t, int p_c) {
+        static const double STOPS[4][3] = { { 70, 110, 60 }, { 140, 150, 90 }, { 130, 105, 80 }, { 235, 235, 240 } };
+        static const double SEA[2][3] = { { 30, 50, 110 }, { 90, 140, 190 } };
+        if (p_t < 0.0) {
+            const double u = CLAMP(p_t + 1.0, 0.0, 1.0);
+            return SEA[0][p_c] + (SEA[1][p_c] - SEA[0][p_c]) * u;
+        }
+        const double t = CLAMP(p_t, 0.0, 1.0) * 3.0;
+        const int k = MIN(int(t), 2);
+        return STOPS[k][p_c] + (STOPS[k + 1][p_c] - STOPS[k][p_c]) * (t - k);
+    };
+    auto shade = [](double p_sx, double p_sz) {
+        const double nx = -p_sx, ny = 1.0, nz = -p_sz;
+        const double ln = std::sqrt(nx * nx + ny * ny + nz * nz);
+        return MAX(0.0, (nx * -0.577 + ny * 0.577 + nz * -0.577) / ln);
+    };
+    for (int r = 0; r < p_n; r++) {
+        for (int j = 0; j < p_n; j++) {
+            const size_t i = size_t(r) * p_n + j;
+            const double fdx = double(p_s.fdx[i]);
+            const double fdz = double(p_s.fdz[i]);
+            {
+                const size_t b = size_t(p_s.picks[i]);
+                err[b] += std::fabs(double(p_s.gx[i]) - fdx) + std::fabs(double(p_s.gz[i]) - fdz);
+                norm[b] += std::fabs(fdx) + std::fabs(fdz);
+            }
+            // Land: its height between 0 (the datum, the sea level) and the slice's top; below the datum, sea blues.
+            const double hv = double(p_s.h[i]);
+            const double t = hv >= 0.0 ? hv / MAX(hi, 1e-9) : -1.0 - hv / MIN(lo, -1e-9);
+            const double sf = shade(fdx * to_slope, fdz * to_slope);
+            const double sg = shade(double(p_s.gx[i]) * to_slope, double(p_s.gz[i]) * to_slope);
+            for (int c = 0; c < 3; c++) {
+                fd_img[i * 3 + c] = uint8_t(CLAMP(std::lround(colour(t, c) * (0.3 + 0.9 * sf)), 0L, 255L));
+                g_img[i * 3 + c] = uint8_t(CLAMP(std::lround(colour(t, c) * (0.3 + 0.9 * sg)), 0L, 255L));
+            }
+        }
+    }
+    r_images.push_back(save(p_dir, "ground_shaded.png", p_n, fd_img));
+    r_images.push_back(save(p_dir, "ground_normals.png", p_n, g_img));
+    String md = "Gradient channels vs the heights' finite differences (at the column's y, L1 relative error):\n\n| biome | gradient error |\n|---|---|\n";
+    for (int b = 0; b < p_s.nb; b++) {
+        md += vformat("| %s | %s |\n", p_table.biomes[size_t(b)].name, norm[size_t(b)] > 0.0 ? String::num(err[size_t(b)] / norm[size_t(b)], 3) : String("-"));
     }
     return md;
 }
@@ -225,10 +312,11 @@ String relief_section(const Table &p_table, const Sampled &p_s, int p_n, double 
 } // namespace
 
 void ClimateReport::_bind_methods() {
-    ClassDB::bind_method(D_METHOD("run", "out_dir", "climate_path", "voxel_size", "lods", "extent_km", "size", "surface"), &ClimateReport::run);
+    ClassDB::bind_method(D_METHOD("run", "out_dir", "climate_path", "voxel_size", "lods", "extent_km", "size", "surface", "center"), &ClimateReport::run);
 }
 
-Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size, bool p_surface) {
+Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size, bool p_surface,
+        const Vector2 &p_center) {
     Dictionary report;
     report["ok"] = false;
     DirAccess::make_dir_recursive_absolute(p_out_dir);
@@ -252,7 +340,8 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     const int m = MAX(0, int(std::floor(std::log2(p_extent_km * 1000.0 / n / ground.voxel_size))));
     const double spacing_m = std::ldexp(ground.voxel_size, m);
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
-    const Sampled s = sample(table, sdf, p_surface, m, n);
+    const Vector2i c(int(std::llround(p_center.x / spacing_m)), int(std::llround(p_center.y / spacing_m)));
+    const Sampled s = sample(table, sdf, p_surface, m, n, c);
     const double us_per_point = double(Time::get_singleton()->get_ticks_usec() - t0) / (double(n) * n);
 
     String md = "# Climate report\n\n";
@@ -262,8 +351,9 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
             String::num(us_per_point, 2));
     Array images;
     md += biome_section(table, s, n, p_out_dir, images) + String("\n");
-    md += border_section(table, s, n, spacing_m, ground.voxel_size) + String("\n");
+    md += border_section(table, s, n, spacing_m, ground.voxel_size, c) + String("\n");
     md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + String("\n");
+    md += shading_section(table, s, n, m, p_out_dir, images) + String("\n");
     md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
     md += "\nImages (x right, z down): ";
     for (int64_t i = 0; i < images.size(); i++) {

@@ -118,14 +118,23 @@ inline UVec3 cell_salt(int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed
     return pcg3d(UVec3{ uint32_t(p_hx) ^ p_seed, uint32_t(p_hy) ^ (p_seed ^ SALT_Y), uint32_t(p_hz) ^ (p_seed ^ SALT_Z) });
 }
 
-inline uint32_t hash_words(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
+// A cell's three hash words (the cell noise's feature point); hash_cell is the first.
+inline UVec3 hash_words3(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
     const UVec3 s = cell_salt(p_hx, p_hy, p_hz, p_seed);
-    return pcg3d(UVec3{ p_lx ^ s.x, p_ly ^ s.y, p_lz ^ s.z }).x;
+    return pcg3d(UVec3{ p_lx ^ s.x, p_ly ^ s.y, p_lz ^ s.z });
+}
+
+inline uint32_t hash_words(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
+    return hash_words3(p_lx, p_ly, p_lz, p_hx, p_hy, p_hz, p_seed).x;
+}
+
+inline UVec3 hash_cell3(const Vector3i64 &p_cell, uint32_t p_seed) {
+    using namespace WorldCoord;
+    return hash_words3(lo32(p_cell.x), lo32(p_cell.y), lo32(p_cell.z), hi32(p_cell.x), hi32(p_cell.y), hi32(p_cell.z), p_seed);
 }
 
 inline uint32_t hash_cell(const Vector3i64 &p_cell, uint32_t p_seed) {
-    using namespace WorldCoord;
-    return hash_words(lo32(p_cell.x), lo32(p_cell.y), lo32(p_cell.z), hi32(p_cell.x), hi32(p_cell.y), hi32(p_cell.z), p_seed);
+    return hash_cell3(p_cell, p_seed).x;
 }
 
 inline uint32_t hash_cell_2d(int64_t p_x, int64_t p_z, uint32_t p_seed) {
@@ -403,6 +412,41 @@ inline float det_rsqrt(float p_x) {
     y = y * (1.5f - hx * y * y);
     y = y * (1.5f - hx * y * y);
     return y;
+}
+
+// The cell noise's mean F1 (unit test: measured on 2^20 random points within 1%).
+inline constexpr float CELL_MEAN = 0.5203f;
+
+// Cell noise (Worley F1) at wavelength 2^k voxels: one feature point per cell, jittered over the whole cell by
+// hash_cell3 (24-bit), the distance to the nearest of the 3 x 3 x 3 cells around the position's, minus CELL_MEAN:
+// (d/dx, d/dy, d/dz per cell, value), value in about [-0.5, 0.5]. Its gradient is the unit vector away from the
+// feature point (a cone at each one, a crease where two are equally near: carried by the cascade, 25-100 m dunes measure
+// 7.2% gradient error against 2.5% for perlin3, no streaks, climate_report.sh). The distance is d2 det_rsqrt(max(d2,
+// 2^-40)): + - * only. GLSL twin: GLSL_CELL3 (FrameSpike probes cell3_k*).
+inline Float4 cell3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
+    const OctaveCell c = octave_cell(p_pos, p_k, p_offset);
+    const float scale = bits_float(FADE_FLUSH_BITS); // 2^-24
+    const float f[3] = { float(c.q.x) * scale, float(c.q.y) * scale, float(c.q.z) * scale };
+    float best = 16.0f;
+    float e_best[3] = { 0.0f, 0.0f, 0.0f };
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                const UVec3 h = hash_cell3(c.cell + Vector3i64(dx, dy, dz), p_seed);
+                const float e[3] = { (float(dx) + float(h.x >> 8) * scale) - f[0], (float(dy) + float(h.y >> 8) * scale) - f[1],
+                    (float(dz) + float(h.z >> 8) * scale) - f[2] };
+                const float d2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+                if (d2 < best) {
+                    best = d2;
+                    e_best[0] = e[0];
+                    e_best[1] = e[1];
+                    e_best[2] = e[2];
+                }
+            }
+        }
+    }
+    const float rs = det_rsqrt(best > 0x1p-40f ? best : 0x1p-40f);
+    return Float4{ -(e_best[0] * rs), -(e_best[1] * rs), -(e_best[2] * rs), best * rs - CELL_MEAN };
 }
 
 // Fractal sum. Octave i: wavelength 2^k voxels, value * amp. At LOD L the gradient is per voxel of
@@ -804,6 +848,44 @@ void perlin3_cross(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi, out vec4 
     c1 = vec4(cxy, cxz, cyz, cxyz);
 }
 )glsl";
+
+// GLSL twin of ExactNoise::cell3 (after GLSL_EXACT_NOISE: octave_cell, cell_salt, det_rsqrt). The neighbour cells' high
+// words take the carry or borrow of their low words.
+inline String glsl_cell3() {
+    return String(R"glsl(
+int cell3_carry(int d, uint lo, uint base) {
+    return d > 0 && lo < base ? 1 : (d < 0 && lo > base ? -1 : 0);
+}
+
+vec4 cell3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
+    OctaveCell c = octave_cell(p, k, olo, ohi);
+    precise vec3 f = vec3(c.q) * uintBitsToFloat(0x33800000u);
+    precise float best = 16.0;
+    precise vec3 eb = vec3(0.0);
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                ivec3 d = ivec3(dx, dy, dz);
+                uvec3 lo = c.lo + uvec3(d);
+                ivec3 hi = c.hi + ivec3(cell3_carry(dx, lo.x, c.lo.x), cell3_carry(dy, lo.y, c.lo.y), cell3_carry(dz, lo.z, c.lo.z));
+                uvec3 h = pcg3d(lo ^ cell_salt(hi, seed));
+                precise vec3 e = (vec3(d) + vec3(h >> 8u) * uintBitsToFloat(0x33800000u)) - f;
+                precise float d2 = e.x * e.x + e.y * e.y + e.z * e.z;
+                if (d2 < best) {
+                    best = d2;
+                    eb = e;
+                }
+            }
+        }
+    }
+    precise float rs = det_rsqrt(best > uintBitsToFloat(0x2B800000u) ? best : uintBitsToFloat(0x2B800000u));
+    precise vec3 g = -(eb * rs);
+    precise float value = best * rs - CELL_MEAN;
+    return vec4(g, value);
+}
+)glsl")
+            .replace("CELL_MEAN", ExactNoise::glsl_float(ExactNoise::CELL_MEAN));
+}
 
 #undef OV_GLSL_PCG3D
 #undef OV_GLSL_NOISE_HEAD

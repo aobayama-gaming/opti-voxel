@@ -183,6 +183,29 @@ void probe_octave_cell(WorldPos p, uint b) {
         p.continuity_word = 3;
         probes.push_back(p);
     }
+    // The cell noise (the climate's cell fields), at the same wavelengths: F1 is 1-Lipschitz per cell.
+    for (int k : PERLIN3_KS) {
+        Probe p;
+        p.name = vformat("cell3_k%d", k);
+        p.words = 4;
+        p.is_float = true;
+        const Vector3i64 o = test_offset(k);
+        const uint32_t seed = 0x3000u + uint32_t(k);
+        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = cell3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed), glsl_lo(o),
+                glsl_hi(o));
+        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
+        p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
+            const Float4 v = cell3(q, k, seed, o);
+            r[0] = float_bits(v.x);
+            r[1] = float_bits(v.y);
+            r[2] = float_bits(v.z);
+            r[3] = float_bits(v.w);
+            return true;
+        };
+        p.continuity_bound = octave_step_bound(k, 1.5);
+        p.continuity_word = 3;
+        probes.push_back(p);
+    }
     for (int k : PERLIN2_KS) {
         Probe p;
         p.name = vformat("perlin2_k%d", k);
@@ -732,7 +755,7 @@ String probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_probe
     }
     String code = String(SHADER_TEMPLATE);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + glsl_cell3());
     code = code.replace("/*NOISE*/", p_noise.glsl());
     code = code.replace("/*PROBES*/", probes_glsl);
     return code.replace("/*PROBE_CALLS*/", probe_calls);

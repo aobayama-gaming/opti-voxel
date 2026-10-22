@@ -101,10 +101,16 @@ WorldPos band_pos(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p)
     return pos;
 }
 
-void band_channels(const Spec &p_spec, ChannelSet p_set, const Band &p_band, const BandFactors &p_factors, const Vector3i64 &p_p, float r_ch[CHANNELS]) {
+// Group p_group's noise at p_pos: perlin3, or cell3 for a cell group (Spec::cell_groups).
+ExactNoise::Float4 band_noise(const Spec &p_spec, int p_group, const Band &p_band, const WorldPos &p_pos) {
+    return ((p_spec.cell_groups >> p_group) & 1u) ? ExactNoise::cell3(p_pos, p_band.k, p_band.seed, p_band.offset)
+                                                  : ExactNoise::perlin3(p_pos, p_band.k, p_band.seed, p_band.offset);
+}
+
+void band_channels(const Spec &p_spec, int p_group, const Band &p_band, const BandFactors &p_factors, const Vector3i64 &p_p, float r_ch[CHANNELS]) {
     const WorldPos pos = band_pos(p_spec, p_band, p_p);
     const float *factor = p_factors.f;
-    if (p_set == ChannelSet::HERMITE8) {
+    if (p_spec.group_set(p_group) == ChannelSet::HERMITE8) {
         const ExactNoise::Channels8 n = ExactNoise::perlin3_cross(pos, p_band.k, p_band.seed, p_band.offset);
         for (int c = 0; c < CHANNELS; c++) {
             r_ch[c] = n.c[c] * factor[channel_order(c)];
@@ -112,22 +118,91 @@ void band_channels(const Spec &p_spec, ChannelSet p_set, const Band &p_band, con
         return;
     }
     // The same bits as perlin3_cross's first four channels, without the cross derivatives.
-    const ExactNoise::Float4 n = ExactNoise::perlin3(pos, p_band.k, p_band.seed, p_band.offset);
+    const ExactNoise::Float4 n = band_noise(p_spec, p_group, p_band, pos);
     r_ch[VALUE] = n.w * factor[0];
     r_ch[DX] = n.x * factor[1];
     r_ch[DY] = n.y * factor[1];
     r_ch[DZ] = n.z * factor[1];
 }
 
-// A modulated band's 4 channels (amplitude p_amp, Modulation): value n.w A, slope n.s (A p_slope) + n.w dA, p_slope =
-// 2^-shift, in that order (the GPU's insert_band_mod).
-void modulated_channels(const Spec &p_spec, const Band &p_band, const ExactNoise::Float4 &p_amp, float p_slope, const Vector3i64 &p_p, float r_o[4]) {
-    const ExactNoise::Float4 n = ExactNoise::perlin3(band_pos(p_spec, p_band, p_p), p_band.k, p_band.seed, p_band.offset);
-    const float aws = p_amp.w * p_slope;
-    r_o[VALUE] = n.w * p_amp.w;
-    r_o[DX] = n.x * aws + n.w * p_amp.x;
-    r_o[DY] = n.y * aws + n.w * p_amp.y;
-    r_o[DZ] = n.z * aws + n.w * p_amp.z;
+// p_pos displaced by the warp's values (LOD0 voxels, clamped to WARP_LIMIT): the floor to the voxel, the rest to the
+// fraction (below 1: a rest that rounds to 1 carries).
+WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
+    WorldPos pos = p_pos;
+    float *frac[3] = { &pos.frac.x, &pos.frac.y, &pos.frac.z };
+    for (int a = 0; a < 3; a++) {
+        const float w = CLAMP(p_warp[a].w, -WARP_LIMIT, WARP_LIMIT);
+        float fl = std::floor(w);
+        float rest = w - fl;
+        if (rest >= 1.0f) {
+            fl = fl + 1.0f;
+            rest = 0.0f;
+        }
+        pos.voxel[a] += int64_t(fl);
+        *frac[a] = rest;
+    }
+    return pos;
+}
+
+// A modulated band's 4 channels (BandMod p_mod, Modulation), p_slope = 2^-shift. The plain term in the order of the
+// GPU's insert_band_mod: value n.w A, slope n.s (A p_slope) + n.w dA; the shaped terms (insert_band_shaped) added to it
+// as flushed dual products, and r_state (MOD_STATE) the state's new channels.
+void modulated_channels(const Spec &p_spec, int p_group, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4],
+        ExactNoise::Float4 *r_state) {
+    using ExactNoise::Float4;
+    WorldPos pos = band_pos(p_spec, p_band, p_p);
+    const bool warp = (p_mod.features & MOD_WARP) != 0u;
+    if (warp) {
+        pos = warped(pos, p_mod.warp);
+    }
+    Float4 n = band_noise(p_spec, p_group, p_band, pos);
+    if (warp) {
+        // The chain rule through the displacement: dn' = (I + J)^T dn, J_ab = dW_a / dx_b per voxel (the warp's gradient
+        // per lattice spacing of Λ_m times 2^-m), each product flushed.
+        const float to_voxel = ExactNoise::exact_pow2(-p_spec.insert_level(p_band));
+        const float d[3] = { n.x, n.y, n.z };
+        float out[3];
+        for (int b = 0; b < 3; b++) {
+            float s = 0.0f;
+            for (int a = 0; a < 3; a++) {
+                const float grad[3] = { p_mod.warp[a].x, p_mod.warp[a].y, p_mod.warp[a].z };
+                s = s + flush_value(flush_value(grad[b] * to_voxel) * d[a]);
+            }
+            out[b] = d[b] + flush_value(s);
+        }
+        n = Float4{ out[0], out[1], out[2], n.w };
+    }
+    const Float4 &amp = p_mod.amp[0];
+    const float aws = amp.w * p_slope;
+    r_o[VALUE] = n.w * amp.w;
+    r_o[DX] = n.x * aws + n.w * amp.x;
+    r_o[DY] = n.y * aws + n.w * amp.y;
+    r_o[DZ] = n.z * aws + n.w * amp.z;
+    if ((p_mod.features & (MOD_ABS | MOD_SQ | MOD_STATE)) == 0u) {
+        return;
+    }
+    // n, |n| and n^2 as duals, gradients per lattice spacing.
+    const Float4 nd = dflush(Float4{ n.x * p_slope, n.y * p_slope, n.z * p_slope, n.w });
+    const Float4 n2 = dmul(nd, nd);
+    const Float4 an = (p_mod.features & (MOD_ABS | MOD_STATE)) ? smooth_abs(nd, n2) : Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
+    Float4 shaped{ 0.0f, 0.0f, 0.0f, 0.0f };
+    if (p_mod.features & MOD_ABS) {
+        shaped = dadd(shaped, dmul(p_mod.amp[1], dsub(an, Float4{ 0.0f, 0.0f, 0.0f, NOISE_ABS_MEAN })));
+    }
+    if (p_mod.features & MOD_SQ) {
+        shaped = dadd(shaped, dmul(p_mod.amp[2], dsub(n2, Float4{ 0.0f, 0.0f, 0.0f, NOISE_SQ_MEAN })));
+    }
+    r_o[VALUE] = r_o[VALUE] + shaped.w;
+    r_o[DX] = r_o[DX] + shaped.x;
+    r_o[DY] = r_o[DY] + shaped.y;
+    r_o[DZ] = r_o[DZ] + shaped.z;
+    if ((p_mod.features & MOD_STATE) && r_state) {
+        Float4 s = p_mod.state[0];
+        s = dadd(s, dmul(p_mod.state[1], nd));
+        s = dadd(s, dmul(p_mod.state[2], an));
+        s = dadd(s, dmul(p_mod.state[3], n2));
+        *r_state = s;
+    }
 }
 
 // The bands of Λ_m of the first p_groups groups (in list order), their constant factors and the modulated groups: set
@@ -170,7 +245,7 @@ void insert_constant_bands(const Spec &p_spec, const LevelBands &p_lb, const Box
         for (int i = 0; i < p_lb.count[g]; i++) {
             for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
                 float o[CHANNELS];
-                band_channels(p_spec, set, *p_lb.band[g][i], p_lb.factors[g][i], p_p, o);
+                band_channels(p_spec, g, *p_lb.band[g][i], p_lb.factors[g][i], p_p, o);
                 for (int c = 0; c < channel_count(set); c++) {
                     float &v = p_at(base + c, p_i);
                     v = v + o[c];
@@ -182,18 +257,19 @@ void insert_constant_bands(const Spec &p_spec, const LevelBands &p_lb, const Box
 
 // Adds Λ_m's bands at lattice point p_p to its slots r_ch (before: H(V_{m+1}), what the modulation reads).
 void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vector3i64 &p_p, float r_ch[SLOTS]) {
-    ExactNoise::Float4 amp[MAX_GROUPS];
+    BandMod mod[MAX_GROUPS];
     if (p_lb.modulated != 0u) {
-        p_spec.modulation->amplitudes(p_m, r_ch, amp);
+        p_spec.modulation->modulate(p_m, r_ch, mod);
     }
     // Every band's channels from the channels before the level's insertions, then the adds (a modulated group has one).
     float o[MAX_GROUPS][MAX_LEVEL_BANDS][CHANNELS];
+    ExactNoise::Float4 state{ 0.0f, 0.0f, 0.0f, 0.0f };
     for (int g = 0; g < p_lb.groups; g++) {
         for (int i = 0; i < p_lb.count[g]; i++) {
             if ((p_lb.modulated >> g) & 1u) {
-                modulated_channels(p_spec, *p_lb.band[g][i], amp[g], p_lb.slope, p_p, o[g][i]);
+                modulated_channels(p_spec, g, *p_lb.band[g][i], mod[g], p_lb.slope, p_p, o[g][i], g == 0 ? &state : nullptr);
             } else {
-                band_channels(p_spec, p_spec.group_set(g), *p_lb.band[g][i], p_lb.factors[g][i], p_p, o[g][i]);
+                band_channels(p_spec, g, *p_lb.band[g][i], p_lb.factors[g][i], p_p, o[g][i]);
             }
         }
     }
@@ -204,6 +280,15 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
                 r_ch[base + c] = r_ch[base + c] + o[g][i][c];
             }
         }
+    }
+    // The state group is overwritten, not added to (a band-less group: nothing else writes it).
+    const int sg = p_spec.modulation ? p_spec.modulation->state_group() : -1;
+    if ((p_lb.modulated & 1u) && (mod[0].features & MOD_STATE) && sg > 0 && sg < p_lb.groups) {
+        const int base = group_slot(sg);
+        r_ch[base + VALUE] = state.w;
+        r_ch[base + DX] = state.x;
+        r_ch[base + DY] = state.y;
+        r_ch[base + DZ] = state.z;
     }
 }
 
@@ -346,7 +431,7 @@ void count_points(const Spec &p_spec, const Box &p_box, int p_lod, Stats &r_stat
 }
 
 void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p, float r_ch[CHANNELS]) {
-    band_channels(p_spec, p_spec.set, p_band, BandFactors(p_spec, p_band), p_p, r_ch);
+    band_channels(p_spec, 0, p_band, BandFactors(p_spec, p_band), p_p, r_ch);
 }
 
 void insert_bands(const Spec &p_spec, Level &r_level) {

@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_climate_common.hpp"
 
 #include "cascade_glsl.hpp"
 #include "climate.hpp"
@@ -11,16 +11,9 @@
 #include <random>
 
 using namespace Climate;
+using ClimateTest::box_point_mismatches;
+using ClimateTest::differing_floats;
 using ExactNoise::float_bits;
-
-// doctest's REQUIRE needs exceptions: a failed check ends the test case.
-#define CLIMATE_REQUIRE(p_cond) \
-    do {                        \
-        CHECK(p_cond);          \
-        if (!(p_cond)) {        \
-            return;             \
-        }                       \
-    } while (0)
 
 namespace {
 
@@ -109,8 +102,8 @@ TEST_CASE("Climate: make_fbm's octaves are make_octave keyed by their index") {
     }
 }
 
-TEST_CASE("Climate: the example preset parses at 5 cm at any LOD count, its ranges keeping the ground's octaves") {
-    const Ref<FileAccess> f = FileAccess::open("res://climate/example.json", FileAccess::READ);
+TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at 5 cm at any LOD count, its ranges keeping the ground's octaves") {
+    const Ref<FileAccess> f = FileAccess::open("res://climate/plain.json", FileAccess::READ);
     CLIMATE_REQUIRE(f.is_valid());
     const String json = f->get_as_text();
     GroundFixture g(0.05, 15);
@@ -371,38 +364,6 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
 
 namespace {
 
-int64_t differing_floats(const float *p_a, const float *p_b, int p_n) {
-    int64_t n = 0;
-    for (int i = 0; i < p_n; i++) {
-        n += float_bits(p_a[i]) != float_bits(p_b[i]);
-    }
-    return n;
-}
-
-// Every lattice point of a box on Λ_lod vs Cascade::point_slots, every slot: the box run and the point query agree bit
-// for bit (the GPU's chunks and the discoverer's points).
-int64_t box_point_mismatches(const Cascade::Spec &p_spec, const Vector3i64 &p_lo, int p_n, int p_lod) {
-    Cascade::Box box;
-    box.lo[0] = p_lo.x;
-    box.lo[1] = p_lo.y;
-    box.lo[2] = p_lo.z;
-    for (int a = 0; a < 3; a++) {
-        box.hi[a] = box.lo[a] + p_n - 1;
-    }
-    const Cascade::Level l = Cascade::run(p_spec, box, p_lod);
-    int64_t bad = 0;
-    Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
-        float slots[Cascade::SLOTS];
-        Cascade::point_slots(p_spec, p_p, p_lod, slots);
-        for (int s = 0; s < Cascade::SLOTS; s++) {
-            if (!l.ch[s].empty()) {
-                bad += float_bits(l.ch[s][size_t(p_i)]) != float_bits(slots[s]);
-            }
-        }
-    });
-    return bad;
-}
-
 } // namespace
 
 TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit for bit") {
@@ -441,7 +402,7 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
 
 TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slot, and the amplitude follows the biomes") {
     GroundFixture g(0.05, 15);
-    const String json = FileAccess::open("res://climate/example.json", FileAccess::READ)->get_as_text();
+    const String json = FileAccess::open("res://climate/plain.json", FileAccess::READ)->get_as_text();
     Table t;
     CLIMATE_REQUIRE(parse_json(json, g.ground, t) == String());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
@@ -508,7 +469,7 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     CHECK(load("res://climate/does_not_exist.json", empty).contains("cannot read"));
     SDFCascade h8;
     h8.channel_set = Cascade::ChannelSet::HERMITE8;
-    CLIMATE_REQUIRE(load("res://climate/example.json", h8.climate_data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", h8.climate_data) == String());
     ChunkParam param;
     param.voxel_size = 0.05f;
     h8.configure(param, 15);
@@ -519,7 +480,7 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
 
 TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample pick (box runs equal point queries)") {
     SDFCascade sdf;
-    CLIMATE_REQUIRE(load("res://climate/example.json", sdf.climate_data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", sdf.climate_data) == String());
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);

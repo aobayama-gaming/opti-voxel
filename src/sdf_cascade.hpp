@@ -124,6 +124,9 @@ public:
                     amp = MAX(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
                 }
             }
+            if (has_ground_terms()) {
+                amp = Climate::ground_step(*climate, l, amp);
+            }
             const double cell_m = vs * std::ldexp(1.0, l);
             const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
             skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
@@ -193,9 +196,40 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
         return sdf(ch, p_pos.voxel.y, p_lod).w;
     }
 
-    // The channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod (Cascade::point_into).
+    // The ground channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod: Cascade::point_into, through
+    // ground_channels where the climate has ground terms (the fields carried).
     void channels_at(const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
-        Cascade::point_into(spec, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod, r_ch);
+        const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
+        if (!has_ground_terms()) {
+            Cascade::point_into(spec, p, p_lod, r_ch);
+            return;
+        }
+        float slots[Cascade::SLOTS];
+        Cascade::point_slots(spec, p, p_lod, slots, true);
+        ground_channels(slots, r_ch);
+    }
+
+    // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_ground_terms): the
+    // samples then read the fields (carried at every level, CPU and GPU, point items too).
+    bool has_ground_terms() const override { return climate && climate->has_ground_terms(); }
+    // The ground channels of a point's slots p_slots (the fields carried): Climate::ground_value, or the cascade's
+    // ground channels as they are (GLSL: climate_ground, get_ground_glsl).
+    void ground_channels(const float p_slots[Cascade::SLOTS], float r_ch[Cascade::CHANNELS]) const {
+        for (int c = 0; c < Cascade::CHANNELS; c++) {
+            r_ch[c] = c < Cascade::channel_count(spec.set) ? p_slots[c] : 0.0f;
+        }
+        if (has_ground_terms()) {
+            const ExactNoise::Float4 g = Climate::ground_value(*climate, p_slots);
+            r_ch[Cascade::VALUE] = g.w;
+            r_ch[Cascade::DX] = g.x;
+            r_ch[Cascade::DY] = g.y;
+            r_ch[Cascade::DZ] = g.z;
+        }
+    }
+
+    String get_ground_glsl() const override { return has_ground_terms() ? Climate::ground_glsl(*climate, spec) : String(); }
+    String get_climate_helpers_glsl() const override {
+        return climate && Climate::splices_helpers(*climate, spec) ? Climate::shared_helpers_glsl() : String();
     }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod at a point of absolute height p_voxel_y: the unit
