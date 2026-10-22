@@ -82,6 +82,21 @@ UpAxis BaseSurface::up_dir(const VoxelPos &p_voxel) const {
     return { v[0] / len, v[1] / len, v[2] / len };
 }
 
+double BaseSurface::altitude(const VoxelPos &p_voxel) const {
+    if (base_kind == Kind::FLAT) {
+        return double(p_voxel.y - anchor.y);
+    }
+    double v[3];
+    return offset(p_voxel, anchor, v) - radius;
+}
+
+VoxelPos BaseSurface::tangent_point(int64_t p_u, int64_t p_v) const {
+    if (base_kind == Kind::FLAT) {
+        return VoxelPos(p_u, anchor.y, p_v);
+    }
+    return VoxelPos(anchor.x + p_u, anchor.y + std::llround(radius), anchor.z + p_v);
+}
+
 Vector3i64 BaseSurface::region_cell(const VoxelPos &p_voxel, int p_lod) {
     const int s = p_lod + REGION_SHIFT;
     return Vector3i64(p_voxel.x >> s, p_voxel.y >> s, p_voxel.z >> s);

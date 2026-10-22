@@ -5,8 +5,8 @@
 #include <iterator>
 
 // The terrains CascadeSpike (cascade_spike.cpp) checks and times: "8" / "4" channels, "4c" LINEAR4 with the example
-// climate carried and modulating the ground, "4f" its fields without multipliers (no modulation: nothing carries them
-// until a biome pick reads them, so the bare ground's cost), "4d" project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
+// climate carried and modulating the ground, "4f" its fields without multipliers (carried only for the biome pick: the
+// cost of the ground materials alone), "4d" project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
 // field group).
 namespace CascadeSpikeSets {
 

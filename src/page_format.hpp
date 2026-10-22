@@ -91,6 +91,13 @@ inline uint32_t header_palette(const uint16_t *p_row) {
     return (uint32_t(p_row[6]) | uint32_t(p_row[7]) << 16) & ~COVERAGE_FLAG;
 }
 
+// The palette texture's channels (TEXEL_CHANNELS per texel, row-major rows of PALETTE_TEX_WIDTH): entry p_e holds p_id,
+// two 16-bit words per id, two ids per texel (the GLSL page_palette_texel_value's layout).
+inline void encode_palette_entry(uint16_t *r_texture, uint32_t p_e, uint32_t p_id) {
+    r_texture[2 * size_t(p_e)] = uint16_t(p_id & 0xFFFFu);
+    r_texture[2 * size_t(p_e) + 1] = uint16_t(p_id >> 16);
+}
+
 inline uint64_t header_hidden(const uint16_t *p_row) {
     if ((p_row[7] & (COVERAGE_FLAG >> 16)) == 0) {
         return 0;

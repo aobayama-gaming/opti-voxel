@@ -121,7 +121,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     material_texture = ImageTexture::create_from_image(sdf->get_materials().make_image());
     pool->set_material_param("material_tex", material_texture->get_rid());
     page_state.resize(pool->get_page_count());
-    palettes.initialize(settings.palette_capacity);
+    palettes.initialize(settings.palette_capacity, sdf->get_gpu_table()->base_palette());
 
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_initialize));
 }
@@ -145,7 +145,8 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
                     vformat("layout(set = 0, binding = %d, rgba16ui) uniform restrict writeonly uimage2D palette_image;\n"
                             "layout(set = 0, binding = %d, std430) restrict readonly buffer PaletteBatch { uint palette_batch[]; };\n"
                             "const uint PALETTE_GROUND_BLOCK = %du;\n",
-                            PALETTE_IMAGE_BINDING, PALETTE_BATCH_BINDING, PaletteAlloc::GROUND_BLOCK));
+                            PALETTE_IMAGE_BINDING, PALETTE_BATCH_BINDING, PaletteAlloc::GROUND_BLOCK) +
+                    ChunkPalette::glsl_base(table->base_palette()));
     shader = shader.replace("/*GLSL_PALETTE_BATCH*/", PalettePool::glsl_batch());
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
@@ -453,7 +454,7 @@ void GPUDirectMesher::_rt_dispatch_count(const PackedByteArray &p_chunk_ids, uin
     rd->buffer_update(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids);
     rd->buffer_clear(buffer_chunk_dir, 0, p_count * 16);
     rd->buffer_clear(buffer_status, 0, status_size_bytes);
-    // Counting only: every chunk on the ground block, no texel (the vertex pass then reads no material).
+    // Counting only: every chunk on the ground block, no texel (only the base palette's materials are read).
     rd->buffer_clear(buffer_palette_batch, 0, (uint64_t(p_count) + 1) * 4);
 
     PackedByteArray push;

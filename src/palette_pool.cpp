@@ -10,16 +10,6 @@
 
 #include <cstring>
 
-namespace {
-
-// The palette of every chunk on the ground block.
-const std::shared_ptr<const std::vector<uint32_t>> &ground_palette() {
-    static const std::shared_ptr<const std::vector<uint32_t>> palette = std::make_shared<const std::vector<uint32_t>>(1, Material::GROUND);
-    return palette;
-}
-
-} // namespace
-
 uint64_t PalettePool::batch_bytes(uint32_t p_batch_size) {
     const uint64_t texels = uint64_t(p_batch_size) * PageFormat::PALETTE_TEX_WIDTH; // every chunk a whole palette
     return (uint64_t(p_batch_size) + 1 + texels * BATCH_TEXEL_WORDS) * 4;
@@ -37,8 +27,13 @@ void write_palette_texel(uint t) {
             BATCH_TEXEL_WORDS);
 }
 
-void PalettePool::initialize(uint32_t p_capacity) {
-    alloc.reset(p_capacity);
+void PalettePool::initialize(uint32_t p_capacity, const std::vector<uint32_t> &p_base) {
+    const bool valid = !p_base.empty() && p_base.size() <= PaletteAlloc::MAX_BLOCK;
+    if (!valid) {
+        ERR_PRINT("PalettePool: a base palette of 1 to MAX_BLOCK entries is required: {GROUND} instead.");
+    }
+    base = std::make_shared<const std::vector<uint32_t>>(valid ? p_base : std::vector<uint32_t>(1, Material::GROUND));
+    alloc.reset(p_capacity, uint32_t(base->size()));
     blocks_live = 0;
     full = 0;
 }
@@ -51,14 +46,14 @@ PackedByteArray PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_p
     for (uint32_t i = 0; i < chunks; i++) {
         std::vector<uint32_t> &palette = p_palettes[i];
         Block &b = r_blocks[i];
-        b.palette = ground_palette();
-        if (palette.size() <= 1) {
+        b.palette = base;
+        if (palette.size() <= base->size()) { // the base alone (a chunk palette starts with it): the ground block
             continue;
         }
         const int64_t offset = alloc.alloc(uint32_t(palette.size()));
         if (offset < 0) {
             full++;
-            ERR_PRINT_ONCE("PalettePool: no room for a chunk palette (palette_capacity): it draws as ground.");
+            ERR_PRINT_ONCE("PalettePool: no room for a chunk palette (palette_capacity): it draws as its base.");
             continue;
         }
         b.offset = uint32_t(offset);
@@ -106,8 +101,16 @@ void PalettePool::rt_create(RenderingDevice *p_rd) {
             RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT); // copy-to: texture_clear
     Ref<RDTextureView> view;
     view.instantiate();
-    texture = p_rd->texture_create(format, view);
-    p_rd->texture_clear(texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+    // Zeroes (an entry reads GROUND), and the ground block's base palette.
+    PackedByteArray data;
+    data.resize(int64_t(PageFormat::PALETTE_TEX_WIDTH) * rows() * PageFormat::TEXEL_CHANNELS * 2);
+    data.fill(0);
+    for (size_t e = 0; e < base->size(); e++) {
+        PageFormat::encode_palette_entry(reinterpret_cast<uint16_t *>(data.ptrw()), PaletteAlloc::GROUND_BLOCK + uint32_t(e), (*base)[e]);
+    }
+    TypedArray<PackedByteArray> layers;
+    layers.push_back(data);
+    texture = p_rd->texture_create(format, view, layers);
     rs_texture = RenderingServer::get_singleton()->texture_rd_create(texture);
 }
 

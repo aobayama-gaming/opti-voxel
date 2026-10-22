@@ -141,6 +141,34 @@ public:
     const Climate::Table *get_climate() const { return climate ? &*climate : nullptr; }
     const String &get_climate_error() const { return climate_error; }
 
+    // Whether ground samples take their biome's material: a climate with fields (the pick reads them; a table without
+    // any has its one default biome, drawn as the procedural ground).
+    bool has_ground_materials() const { return climate && !climate->fields.empty(); }
+    // The palette index of a ground sample (one no record colours; 0 without ground materials): 1 + its biome (the base
+    // palette holds biome b's material, Climate::biome_material, at 1 + b), Climate::pick_slots of p_slots, the slots of
+    // lattice point p_p of Λ_m with the fields carried. The GPU's cascade_ground_material, bit for bit.
+    uint32_t ground_material(const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m) const {
+        return has_ground_materials() ? uint32_t(1 + Climate::pick_slots(*climate, p_slots, p_p, p_m)) : 0u;
+    }
+    // The same at LOD0 voxel p_voxel, a multiple of 2^lod.
+    uint32_t ground_material_at(const VoxelPos &p_voxel, int p_lod) const {
+        const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
+        float slots[Cascade::SLOTS];
+        Cascade::point_slots(spec, p, p_lod, slots, true);
+        return ground_material(slots, p, p_lod);
+    }
+
+    String get_ground_material_glsl() const override {
+        if (!has_ground_materials()) {
+            return String();
+        }
+        return Climate::pick_glsl(*climate, spec) + R"glsl(
+// SDFCascade::ground_material: 1 + the sample's biome.
+uint cascade_ground_material(Ch ch, WorldPos p) {
+    return 1u + climate_biome(ch, p);
+}
+)glsl";
+    }
     // The ground a climate table is checked against and reads (Climate::parse / validate / fields_at), after configure().
     Climate::Ground climate_ground() const { return Climate::Ground{ &spec, double(voxel_size), k_top, amp_cap }; }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
@@ -251,38 +279,48 @@ public:
         return f;
     }
 
-    // The bare cascade's top solid voxel in the column: sphere tracing on the LOD0 distance (whole voxels, at least
-    // one per step) until the side flips, then the boundary between the last two points by bisection.
-    int64_t ground_y(int64_t p_x, int64_t p_z) const override {
-        auto distance = [&](int64_t p_y) { return ground_field(VoxelPos(p_x, p_y, p_z), 0).w; };
-        int64_t y = base.datum_y();
-        float d = distance(y);
+    // The bare cascade's top solid voxel on the line from p_start down the base's up there (the voxel t steps along it,
+    // each axis rounded: on the flat base the column): sphere tracing on the LOD0 distance (whole steps, at least one)
+    // until the side flips, then the boundary between the last two points by bisection.
+    VoxelPos ground_along(const VoxelPos &p_start) const {
+        const UpAxis up = base.up_dir(p_start);
+        auto at = [&](int64_t p_t) {
+            return VoxelPos(p_start.x - std::llround(double(p_t) * up[0]), p_start.y - std::llround(double(p_t) * up[1]),
+                    p_start.z - std::llround(double(p_t) * up[2]));
+        };
+        auto distance = [&](int64_t p_t) { return ground_field(at(p_t), 0).w; };
+        int64_t t = 0;
+        float d = distance(t);
         const bool start_air = d > 0.0f;
-        int64_t other = y;
+        int64_t other = t;
         bool flipped = false;
         for (int i = 0; i < 4096 && !flipped; i++) {
             const float step = std::floor(std::fabs(d));
-            other = y + (start_air ? -1 : 1) * MAX<int64_t>(1, int64_t(MIN(step, float(BaseSurface::ALT_LIMIT))));
+            other = t + (start_air ? 1 : -1) * MAX<int64_t>(1, int64_t(MIN(step, float(BaseSurface::ALT_LIMIT))));
             d = distance(other);
             flipped = (d > 0.0f) != start_air;
             if (!flipped) {
-                y = other;
+                t = other;
             }
         }
-        ERR_FAIL_COND_V_MSG(!flipped, y, vformat("SDFCascade::ground_y: no surface found in column (%d, %d) within 4096 steps.", p_x, p_z));
-        // solid = !(d > 0), the meshers' side rule; lo solid, hi air.
-        int64_t lo = start_air ? other : y;
-        int64_t hi = start_air ? y : other;
-        while (hi - lo > 1) {
-            const int64_t mid = lo + (hi - lo) / 2;
+        ERR_FAIL_COND_V_MSG(!flipped, at(t), vformat("SDFCascade::ground_along: no surface found from %s within 4096 steps.", WorldCoord::to_string(p_start)));
+        // solid = !(d > 0), the meshers' side rule; solid deeper (larger t) than air.
+        int64_t solid = start_air ? other : t;
+        int64_t air = start_air ? t : other;
+        while (solid - air > 1) {
+            const int64_t mid = solid - (solid - air) / 2;
             if (distance(mid) > 0.0f) {
-                hi = mid;
+                air = mid;
             } else {
-                lo = mid;
+                solid = mid;
             }
         }
-        return lo;
+        return at(solid);
     }
+
+    // The flat world's column (x, z): ground_along from the datum. TODO: the table's scenes still place by columns
+    // (SDFTable::ground_y); a sphere needs them on ground_along.
+    int64_t ground_y(int64_t p_x, int64_t p_z) const override { return ground_along(VoxelPos(p_x, base.datum_y(), p_z)).y; }
 
     // cascade_terrain_sdf is sdf(), for the discoverer's point items and the batches with no instance listed.
     String get_glsl_code() const override {
@@ -370,6 +408,7 @@ private:
     void attach_climate() {
         climate.reset();
         climate_error = String();
+        set_ground_materials({});
         if (climate_data.is_empty()) {
             return;
         }
@@ -378,6 +417,11 @@ private:
         ERR_FAIL_COND_MSG(!climate_error.is_empty(), "SDFCascade: " + climate_error);
         spec = Climate::combined_spec(table, spec);
         climate = std::move(table);
+        std::vector<std::pair<String, Material::Params>> grounds;
+        for (size_t b = 0; has_ground_materials() && b < climate->biomes.size(); b++) {
+            grounds.emplace_back("biome:" + climate->biomes[b].name, Climate::biome_material(climate->biomes[b]));
+        }
+        set_ground_materials(grounds);
     }
 
     // A unit register (unit()) with its distance in metres: sdf(), and sample_sdf() where no instance folds.
