@@ -369,7 +369,8 @@ String band_functions(const Spec &p_spec) {
     }
     code += "Ch flush(Ch ch) {\n";
     for (int c = 0; c < nch; c++) {
-        code += vformat("    ch.c[%d] = abs(ch.c[%d]) < %s ? 0.0 : ch.c[%d];\n", c, c, glsl_flush(), c);
+        const String v = vformat("ch.c[%d]", c);
+        code += "    " + v + " = " + glsl_flush_of(v) + ";\n";
     }
     code += "    return ch;\n}\n";
     return code;

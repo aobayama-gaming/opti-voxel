@@ -228,12 +228,23 @@ void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vect
 // Biome weights (value and gradient) of the field channels p_fields, r_w[b] for biome b.
 void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w[MAX_BIOMES]);
 
+// The climate at a point, the one every reader goes through: the modulation, the pick, the ground's terraces and the
+// report. The field values of a point's slots p_slots (apply_terms), then the biome weights (weights); GLSL twin:
+// glsl_weights. What reaches it is one rule, the LOD rule: octave k of a modulated group reads the climate of its
+// insertion level before that level's insertions (H(V_{m+1}): the climate low-passed at k, Cascade::Modulation); the pick
+// and the report read level 0 (V_0, everything the cascade carries).
+struct State {
+    Float4 fields[MAX_FIELDS];
+    Float4 w[MAX_BIOMES];
+};
+void state(const Table &p_table, const float p_slots[Cascade::SLOTS], State &r_state);
+
 // The ground at a sample (climate_shape.cpp): the cascade's ground channels of p_slots (a point's slots, the fields
 // carried), plus each height term in list order, then h + sum_b w_b (terrace_b(h) - h) over the biomes with terraces.
 // Dual numbers like the fields (gradient per lattice spacing, value in LOD0 voxels); the terms read the cascade's
 // ground, not this one. Without height terms or terraces, the cascade's channels, bit for bit.
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
-// The same in GLSL: `vec4 climate_ground(Ch pre)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
+// The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
 // shared helpers (splices_helpers is true with ground terms).
 String ground_glsl(const Table &p_table, const Cascade::Spec &p_combined);
 
@@ -251,7 +262,7 @@ Color srgb_to_linear(uint32_t p_rgb);
 // ground (PATTERN_GROUND) in its surface's colours, its debug colour (--view=12).
 Material::Params biome_material(const Biome &p_biome);
 
-// pick of the weights in GLSL, bit for bit: `uint climate_biome(Ch pre, WorldPos p)`, pre the channels of a lattice
+// pick of the weights in GLSL, bit for bit: `uint climate_biome(Ch ch, WorldPos p)`, ch the channels of a lattice
 // point in p_combined's GPU layout (the fields carried: V_m, the terms applied here) and p its absolute voxel. Brings
 // the dual-number helpers unless p_combined's modulation (its glsl) already defines them.
 String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
@@ -259,7 +270,8 @@ String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
 // cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
 // of `Ch pre` (p_spec's GPU layout).
 String glsl_helpers();
-String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
+// p_ch: the Ch variable they read ("pre" in the modulation, before a level's insertions; "ch" in the pick and the ground).
+String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const String &p_ch = "pre");
 // Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a
 // shaped modulation or ground terms. Else each generator brings glsl_helpers as before them (the plain text).
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined);

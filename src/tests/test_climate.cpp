@@ -446,16 +446,21 @@ TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slo
 
 TEST_CASE("Climate: carried only where the ground needs it, refused where it can't apply") {
     GroundFixture g(0.05, 15);
-    // Multipliers on a field's octaves only: the ground never reads the fields, so they are carried nowhere (no field
-    // scratch, no fields variant) and its top lattice is the ground's.
+    // Multipliers on a field's octaves only would never reach the mesh (the fields are carried where the ground is
+    // modulated): refused.
     Table t;
-    CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
-            {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}],
-            "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
-                       {"name": "b"}]})",
-                            g.ground, t) == String());
+    const String fields = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
+            {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}], )";
+    CHECK(parse_json(fields + String(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
+                       {"name": "b"}]})"),
+                  g.ground, t)
+                    .contains("needs a ground multiplier too"));
+    // Fields without any multiplier (a pick only): carried nowhere in the ground's runs (no field scratch, no fields
+    // variant), and its top lattice is the ground's.
+    CLIMATE_REQUIRE(parse_json(fields + String(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})"), g.ground, t) ==
+            String());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
-    CHECK(spec.modulation != nullptr); // fields_at still sees h modulated
+    CHECK(spec.modulation == nullptr);
     CHECK(spec.field_range().empty());
     CHECK(CascadeGLSL::vec4s_per_point(spec, spec.field_range()) == 1);
     CHECK(spec.top_level() == g.ground.spec->top_level());
@@ -570,25 +575,30 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
     plain.configure(param, 15);
     CHECK(plain.get_gpu_table()->base_palette() == std::vector<uint32_t>{ Material::GROUND });
     CHECK(plain.get_ground_material_glsl().is_empty());
-    CHECK(Climate::pick_glsl(t, spec).contains("uint climate_biome(Ch pre, WorldPos p)"));
+    CHECK(Climate::pick_glsl(t, spec).contains("uint climate_biome(Ch ch, WorldPos p)"));
 }
 
-TEST_CASE("Cascade: bands of one group on one lattice add up in list order (box and point alike)") {
+// One octave per group and lattice: a second band of one group on one lattice is refused by validate, and the cascade
+// ignores it (ERR) in a spec built by hand, box and point alike.
+TEST_CASE("Cascade: one band per group and lattice") {
+    GroundFixture g(0.05, 15);
+    Table t;
+    CHECK(parse_json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1}, {"wavelength_m": 400, "amp": 2}]}], "biomes": [{"name": "a"}]})",
+                  g.ground, t)
+                    .contains("twice"));
     Cascade::Spec one;
     one.set = Cascade::ChannelSet::LINEAR4;
     one.bands = { ExactNoise::make_octave(11u, 0u, 9, 40.0f) };
     Cascade::Spec two = one;
     two.bands.push_back(ExactNoise::make_octave(12u, 0u, 9, 25.0f)); // the same lattice Λ_6
-    int64_t same = 0, mismatches = 0;
+    int64_t mismatches = 0;
     for (int i = 0; i < 32; i++) {
         const Vector3i64 p(i * 37 - 500, i * 11, 900 - i * 23);
         float a[Cascade::CHANNELS], b[Cascade::CHANNELS], c[Cascade::CHANNELS];
         Cascade::point_into(one, p, 2, a);
         Cascade::point_into(two, p, 2, b);
         Cascade::point(two, p, 2, c);
-        same += differing_floats(a, b, 4) == 0;
-        mismatches += differing_floats(b, c, 4);
+        mismatches += differing_floats(a, b, 4) + differing_floats(a, c, 4);
     }
-    CHECK(same < 4); // the second band counts
     CHECK(mismatches == 0);
 }

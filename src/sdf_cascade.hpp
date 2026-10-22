@@ -7,7 +7,6 @@
 #include "exact_noise.hpp"
 #include "sdf_table.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -434,10 +433,6 @@ private:
         }
         Climate::Table table;
         climate_error = Climate::parse(climate_data, climate_ground(), table);
-        const bool multiplied = std::any_of(table.biomes.begin(), table.biomes.end(), [](const Climate::Biome &p_b) { return !p_b.amps.empty(); });
-        if (climate_error.is_empty() && multiplied && spec.set != Cascade::ChannelSet::LINEAR4) {
-            climate_error = "climate: amplitude multipliers need the LINEAR4 ground (channel_set).";
-        }
         ERR_FAIL_COND_MSG(!climate_error.is_empty(), "SDFCascade: " + climate_error);
         spec = Climate::combined_spec(table, spec);
         climate = std::move(table);

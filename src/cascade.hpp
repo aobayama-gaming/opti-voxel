@@ -84,8 +84,6 @@ inline constexpr int MAX_LEVEL = ExactNoise::MAX_K;
 // Field groups (Spec::fields, the climate): LINEAR4 channel sets carried down with the ground, each after the
 // ground's CHANNELS slots: field f's channel c is Level slot field_slot(f, c). Group 0 is the ground, 1 + f field f.
 inline constexpr int MAX_FIELD_GROUPS = 8;
-// Bands one group may insert on one lattice (they add up in list order); a modulated group has one.
-inline constexpr int MAX_LEVEL_BANDS = 4;
 inline constexpr int MAX_GROUPS = 1 + MAX_FIELD_GROUPS;
 inline constexpr int SLOTS = CHANNELS + 4 * MAX_FIELD_GROUPS;
 constexpr int field_slot(int p_field, int p_channel = VALUE) {
@@ -116,6 +114,11 @@ inline float flush_value(float p_v) {
 // flush_value's threshold as a GLSL literal (the generated code's flushes).
 inline String glsl_flush() {
     return ExactNoise::glsl_float(ExactNoise::bits_float(FLUSH_BITS));
+}
+// flush_value of the GLSL expression p_expr (a variable: it is read twice), a conditional without parentheses: the
+// generators' one flush.
+inline String glsl_flush_of(const String &p_expr) {
+    return "abs(" + p_expr + String(") < ") + glsl_flush() + String(" ? 0.0 : ") + p_expr;
 }
 
 // Dual numbers (x, y, z: gradient, w: value), every result flushed under 2^-64: inputs 0 or >= 2^-64, so a product's

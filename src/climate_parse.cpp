@@ -191,7 +191,29 @@ String validate(const Table &p_table, const Ground &p_ground) {
             return err;
         }
     }
-    if (p_table.has_stretch() && (p_ground.spec == nullptr || p_ground.spec->set != Cascade::ChannelSet::LINEAR4)) {
+    // The one check of the ground's channel set (Cascade's checked_top only guards a malformed spec): a modulated band
+    // inserts value and gradient (LINEAR4), and perlin3_cross has no stretch.
+    const bool linear4 = p_ground.spec != nullptr && p_ground.spec->set == Cascade::ChannelSet::LINEAR4;
+    const bool multiplied = std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [](const Biome &p_b) { return !p_b.amps.empty(); });
+    if (multiplied && p_ground.spec != nullptr && !linear4) {
+        return "climate: amplitude multipliers need the LINEAR4 ground (channel_set).";
+    }
+    // A field's multiplier only reaches the mesh through the ground's modulation (the fields are carried where a ground
+    // band is modulated, FieldRange): without one it would be ignored.
+    const auto multiplies = [&p_table](bool p_ground_band) {
+        for (const Biome &b : p_table.biomes) {
+            for (const Amp &a : b.amps) {
+                if ((a.field == GROUND) == p_ground_band) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    if (multiplies(false) && !multiplies(true)) {
+        return "climate: a field's amplitude multiplier needs a ground multiplier too (the fields only reach the mesh through it).";
+    }
+    if (p_table.has_stretch() && !linear4) {
         return "climate: stretched bands need a LINEAR4 ground.";
     }
     if (p_table.has_state() && p_table.fields.size() + 1 > size_t(Cascade::MAX_FIELD_GROUPS)) {

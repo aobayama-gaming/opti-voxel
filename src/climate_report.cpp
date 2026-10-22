@@ -58,11 +58,12 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             const int64_t z = int64_t(p_row) - p_n / 2 + p_c.y;
             s.ground_y[i] = p_surface ? p_sdf.ground_y(x * step, z * step) : p_sdf.get_datum_y();
             const Vector3i64 p(x, WorldCoord::floor_div(s.ground_y[i], step), z);
-            Float4 f[MAX_FIELDS];
-            Float4 w[MAX_BIOMES];
+            State st;
             float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
             Cascade::point_slots(p_sdf.get_spec(), p, p_m, slots, true);
-            apply_terms(p_table, slots, f); // fields_at
+            state(p_table, slots, st); // fields_at, then the weights
+            const Float4 *f = st.fields;
+            const Float4 *w = st.w;
             p_sdf.ground_channels(slots, ch);
             s.h[i] = ch[Cascade::VALUE];
             s.gx[i] = ch[Cascade::DX];
@@ -75,7 +76,6 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             };
             s.fdx[i] = float((height(1, 0) - height(-1, 0)) * 0.5);
             s.fdz[i] = float((height(0, 1) - height(0, -1)) * 0.5);
-            weights(p_table, f, w);
             s.picks[i] = pick(p_table, w, p, p_m);
             for (int c = 0; c < s.nf; c++) {
                 s.fields[i * s.nf + c] = f[c].w;

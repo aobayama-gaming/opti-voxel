@@ -154,10 +154,6 @@ vec4 cl_terrace(vec4 h, float step, float inv_step, bool invert) {
 }
 )glsl";
 
-String glsl_flush_of(const String &p_expr) {
-    return "(abs(" + p_expr + String(") < FLUSH ? 0.0 : ") + p_expr + String(")");
-}
-
 // eval_curve as `vec4 cl_curve<p_i>(vec4 x)`, the segment chosen by the same compares.
 String curve_glsl(const Curve &p_c, int p_i) {
     using ExactNoise::glsl_float;
@@ -172,13 +168,13 @@ String curve_glsl(const Curve &p_c, int p_i) {
         code += vformat(" x0 = %s; inv = %s; p = %s; q = %s; r = %s; s = %s; }", glsl_float(p_c.x[i]), glsl_float(p_c.inv[i]), glsl_float(p_c.p[i]),
                 glsl_float(p_c.q[i]), glsl_float(p_c.r[i]), glsl_float(p_c.s[i]));
     }
-    code += "\n    precise float a0 = (x.w - x0) * inv;\n    precise float a = " + glsl_flush_of("a0") + String(";\n");
-    code += "    precise float t0 = p * a;\n    precise float v = " + glsl_flush_of("t0") + String(" + q;\n");
-    code += "    precise float t1 = v * a;\n    v = " + glsl_flush_of("t1") + String(" + r;\n");
-    code += "    precise float t2 = v * a;\n    v = " + glsl_flush_of("t2") + String(" + s;\n");
-    code += "    precise float u0 = (p * 3.0) * a;\n    precise float d = " + glsl_flush_of("u0") + String(" + q * 2.0;\n");
-    code += "    precise float u1 = d * a;\n    d = " + glsl_flush_of("u1") + String(" + r;\n");
-    code += "    precise float u2 = d * inv;\n    d = " + glsl_flush_of("u2") + String(";\n");
+    code += "\n    precise float a0 = (x.w - x0) * inv;\n    precise float a = (" + Cascade::glsl_flush_of("a0") + String(");\n");
+    code += "    precise float t0 = p * a;\n    precise float v = (" + Cascade::glsl_flush_of("t0") + String(") + q;\n");
+    code += "    precise float t1 = v * a;\n    v = (" + Cascade::glsl_flush_of("t1") + String(") + r;\n");
+    code += "    precise float t2 = v * a;\n    v = (" + Cascade::glsl_flush_of("t2") + String(") + s;\n");
+    code += "    precise float u0 = (p * 3.0) * a;\n    precise float d = (" + Cascade::glsl_flush_of("u0") + String(") + q * 2.0;\n");
+    code += "    precise float u1 = d * a;\n    d = (" + Cascade::glsl_flush_of("u1") + String(") + r;\n");
+    code += "    precise float u2 = d * inv;\n    d = (" + Cascade::glsl_flush_of("u2") + String(");\n");
     code += "    precise vec4 res = vec4(x.x * d, x.y * d, x.z * d, v);\n    return cl_flush(res);\n}\n";
     return code;
 }
@@ -190,8 +186,14 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
     if (!p_table.has_ground_terms()) {
         return h;
     }
-    Float4 f[MAX_FIELDS];
-    apply_terms(p_table, p_slots, f);
+    // The fields only, the weights with terraces (the same values: state).
+    State st;
+    if (p_table.has_terraces()) {
+        state(p_table, p_slots, st);
+    } else {
+        apply_terms(p_table, p_slots, st.fields);
+    }
+    const Float4 *f = st.fields;
     for (const HeightTerm &t : p_table.heights) {
         const Float4 v = t.has_curve ? eval_curve(t.curve, f[t.field]) : f[t.field];
         h = dadd(h, dscale(v, t.coef));
@@ -199,8 +201,7 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
     if (!p_table.has_terraces()) {
         return h;
     }
-    Float4 w[MAX_BIOMES];
-    weights(p_table, f, w);
+    const Float4 *w = st.w;
     const Float4 base = h;
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
         const Terrace &t = p_table.biomes[b].terrace;
@@ -222,8 +223,8 @@ String ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
         }
     }
     code += "\n// Climate::ground_value: the cascade's ground, the height terms, then the biomes' terraces; (value, gradient).\n";
-    code += "vec4 climate_ground(Ch pre) {\n";
-    code += glsl_weights(p_table, p_combined);
+    code += "vec4 climate_ground(Ch ch) {\n";
+    code += glsl_weights(p_table, p_combined, "ch");
     code += "    vec4 h = g0;\n";
     for (size_t i = 0; i < p_table.heights.size(); i++) {
         const HeightTerm &t = p_table.heights[i];

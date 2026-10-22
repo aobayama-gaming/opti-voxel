@@ -146,6 +146,11 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
     }
 }
 
+void state(const Table &p_table, const float p_slots[Cascade::SLOTS], State &r_state) {
+    apply_terms(p_table, p_slots, r_state.fields);
+    weights(p_table, r_state.fields, r_state.w);
+}
+
 int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p_p, int p_m) {
     int best[MAX_BIOMES];
     int count = 0;
@@ -167,11 +172,9 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
 }
 
 int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m) {
-    Float4 f[MAX_FIELDS];
-    apply_terms(p_table, p_slots, f);
-    Float4 w[MAX_BIOMES];
-    weights(p_table, f, w);
-    return pick(p_table, w, p_p, p_m);
+    State s;
+    state(p_table, p_slots, s);
+    return pick(p_table, s.w, p_p, p_m);
 }
 
 Color srgb_to_linear(uint32_t p_rgb) {

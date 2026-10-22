@@ -69,10 +69,10 @@ public:
         if (p_m < 0 || p_m > Cascade::MAX_LEVEL || entries[p_m].empty()) {
             return;
         }
-        Float4 f[MAX_FIELDS];
-        apply_terms(table, p_pre, f);
-        Float4 w[MAX_BIOMES];
-        weights(table, f, w);
+        State st;
+        Climate::state(table, p_pre, st);
+        const Float4 *f = st.fields;
+        const Float4 *w = st.w;
         const Float4 c = state >= 0 ? to_float4(p_pre + Cascade::field_slot(state - 1)) : Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
         for (const Entry &e : entries[p_m]) {
             BandMod &o = r_mod[e.group];
@@ -334,8 +334,7 @@ Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground)
     }
     std::shared_ptr<Modulator> mod = std::make_shared<Modulator>(p_table, spec);
     if (mod->any()) {
-        ERR_FAIL_COND_V_MSG(spec.set != Cascade::ChannelSet::LINEAR4, spec, "Climate: amplitude multipliers need a LINEAR4 ground; the climate is carried unmodulated.");
-        spec.modulation = mod;
+        spec.modulation = mod; // a LINEAR4 ground: validate refuses multipliers on another
     }
     return spec;
 }

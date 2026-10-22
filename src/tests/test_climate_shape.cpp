@@ -62,7 +62,7 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
     CHECK(h == 16354123549857880415ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
-    CHECK(chunk_text == 433764742010390961ull);
+    CHECK(chunk_text == 585642622528421550ull);
     CHECK(point_text == 10506806479769159991ull);
 }
 
@@ -171,7 +171,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     CHECK(mismatches == 0);
     CHECK(lifted == points);
     CHECK(CascadeGLSL::field_range(&s.sdf, true).everywhere()); // point items read the fields too
-    CHECK(s.sdf.get_ground_glsl().contains("vec4 climate_ground(Ch pre)"));
+    CHECK(s.sdf.get_ground_glsl().contains("vec4 climate_ground(Ch ch)"));
     // The skirts take the height terms' step: deeper than the same ground without them where a term's field has
     // octaves (dunes: 25 m, k = 9 at 5 cm, LODs 6-7), the cap (skirt_depth cells) lifted.
     ShapedSDF deep(15, 1e6f);

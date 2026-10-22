@@ -66,10 +66,12 @@ vec4 cl_scale(vec4 a, float k) {
 )glsl";
 }
 
-String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
+String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const String &p_ch) {
     using ExactNoise::glsl_float;
     String code;
-    auto channels = [](int p_base) { return vformat("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
+    auto channels = [&p_ch](int p_base) {
+        return vformat("vec4(%s.c[%d], %s.c[%d], %s.c[%d], %s.c[%d])", p_ch, p_base + 1, p_ch, p_base + 2, p_ch, p_base + 3, p_ch, p_base);
+    };
     code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + String(";\n");
     for (size_t i = 0; i < p_table.fields.size(); i++) {
         code += vformat("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));
@@ -93,8 +95,8 @@ String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
 
 String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
     String code = p_combined.modulation || splices_helpers(p_table, p_combined) ? String() : glsl_helpers();
-    code += "\n// Climate::pick of the weights of the channels pre at the absolute point p (a lattice point).\nuint climate_biome(Ch pre, WorldPos p) {\n";
-    code += glsl_weights(p_table, p_combined);
+    code += "\n// Climate::pick of the weights of the channels ch (V_m) at the absolute point p (a lattice point).\nuint climate_biome(Ch ch, WorldPos p) {\n";
+    code += glsl_weights(p_table, p_combined, "ch");
     // The largest weight's bits and how many biomes share them, then the (hash % count)-th of those in list order: the
     // CPU's incremental list holds exactly them (nothing exceeds the last best, so it is never reset after it).
     code += "    float best = w0.w;\n    uint count = 1u;\n";

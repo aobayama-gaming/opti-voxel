@@ -101,7 +101,6 @@ String shaped_band_function(const Spec &p_spec, int p_group) {
     using ExactNoise::glsl_float;
     const int base = p_spec.gpu_base(p_group);
     const uint32_t used = p_spec.modulation->group_features(p_group);
-    const String flush = glsl_flush();
     const String slope = glsl_float(ExactNoise::exact_pow2(-p_spec.insert_shift));
     String code = vformat("Ch insert_band_shaped_%d(Ch ch, WorldPos p, CascadeBand band, BandMod md, int m) {\n", p_group);
     if (used & MOD_WARP) {
@@ -109,9 +108,9 @@ String shaped_band_function(const Spec &p_spec, int p_group) {
         code += noise_code(p_spec, p_group, "warp ? cascade_warped(p, md.warp) : p");
         code += "    if (warp) {\n        precise float tv = exact_pow2(-m);\n        vec3 d = g.xyz;\n        vec3 o;\n";
         code += "        for (int b = 0; b < 3; b++) {\n            precise float s = 0.0;\n            for (int a = 0; a < 3; a++) {\n";
-        code += "                precise float j0 = md.warp[a][b] * tv;\n                float j = abs(j0) < " + flush + String(" ? 0.0 : j0;\n");
-        code += "                precise float t = j * d[a];\n                s = s + (abs(t) < " + flush + String(" ? 0.0 : t);\n            }\n");
-        code += "            o[b] = d[b] + (abs(s) < " + flush + String(" ? 0.0 : s);\n        }\n        g = vec4(o, g.w);\n    }\n");
+        code += "                precise float j0 = md.warp[a][b] * tv;\n                float j = " + glsl_flush_of("j0") + String(";\n");
+        code += "                precise float t = j * d[a];\n                s = s + (" + glsl_flush_of("t") + String(");\n            }\n");
+        code += "            o[b] = d[b] + (" + glsl_flush_of("s") + String(");\n        }\n        g = vec4(o, g.w);\n    }\n");
     } else {
         code += noise_code(p_spec, p_group, "p");
     }

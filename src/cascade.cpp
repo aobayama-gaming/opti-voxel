@@ -233,13 +233,12 @@ void modulated_channels(const Spec &p_spec, int p_group, const Band &p_band, con
     }
 }
 
-// The bands of Λ_m of the first p_groups groups (in list order), their constant factors and the modulated groups: set
-// up once per level.
+// The band of Λ_m of each of the first p_groups groups (at most one: one octave per group and lattice, Climate::validate
+// refuses a second), its constant factors and the modulated groups: set up once per level.
 struct LevelBands {
     int groups = 0;
-    const Band *band[MAX_GROUPS][MAX_LEVEL_BANDS] = {};
-    BandFactors factors[MAX_GROUPS][MAX_LEVEL_BANDS];
-    int count[MAX_GROUPS] = {};
+    const Band *band[MAX_GROUPS] = {}; // null: the group inserts nothing on Λ_m
+    BandFactors factors[MAX_GROUPS];
     uint32_t modulated = 0;
     float slope = 1.0f; // 2^-shift, a modulated band's slope factor
     bool any = false;
@@ -251,10 +250,9 @@ struct LevelBands {
                 if (p_spec.insert_level(b) != p_m) {
                     continue;
                 }
-                ERR_CONTINUE_MSG(count[g] == MAX_LEVEL_BANDS, vformat("Cascade: more than %d bands of one group on lattice %d.", MAX_LEVEL_BANDS, p_m));
-                band[g][count[g]] = &b;
-                factors[g][count[g]] = BandFactors(p_spec, b);
-                count[g]++;
+                ERR_CONTINUE_MSG(band[g] != nullptr, vformat("Cascade: two bands of one group on lattice %d.", p_m));
+                band[g] = &b;
+                factors[g] = BandFactors(p_spec, b);
                 any = true;
             }
         }
@@ -263,23 +261,24 @@ struct LevelBands {
     }
 };
 
-// Adds each of p_lb's constant-amplitude bands to a level's channels, band by band (groups' slots are disjoint, a
-// group's bands add up in list order: the same ops as point by point). p_at(slot, i) is the channel at point i.
+// Adds each of p_lb's constant-amplitude bands to a level's channels, band by band (groups' slots are disjoint: the same
+// ops as point by point). p_at(slot, i) is the channel at point i.
 template <typename At>
 void insert_constant_bands(const Spec &p_spec, const LevelBands &p_lb, const Box &p_box, At p_at) {
     for (int g = 0; g < p_lb.groups; g++) {
+        if (p_lb.band[g] == nullptr) {
+            continue;
+        }
         const ChannelSet set = p_spec.group_set(g);
         const int base = group_slot(g);
-        for (int i = 0; i < p_lb.count[g]; i++) {
-            for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
-                float o[CHANNELS];
-                band_channels(p_spec, g, *p_lb.band[g][i], p_lb.factors[g][i], p_p, o);
-                for (int c = 0; c < channel_count(set); c++) {
-                    float &v = p_at(base + c, p_i);
-                    v = v + o[c];
-                }
-            });
-        }
+        for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
+            float o[CHANNELS];
+            band_channels(p_spec, g, *p_lb.band[g], p_lb.factors[g], p_p, o);
+            for (int c = 0; c < channel_count(set); c++) {
+                float &v = p_at(base + c, p_i);
+                v = v + o[c];
+            }
+        });
     }
 }
 
@@ -289,24 +288,26 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
     if (p_lb.modulated != 0u) {
         p_spec.modulation->modulate(p_m, r_ch, mod);
     }
-    // Every band's channels from the channels before the level's insertions, then the adds (a modulated group has one).
-    float o[MAX_GROUPS][MAX_LEVEL_BANDS][CHANNELS];
+    // Every band's channels from the channels before the level's insertions, then the adds.
+    float o[MAX_GROUPS][CHANNELS];
     ExactNoise::Float4 state{ 0.0f, 0.0f, 0.0f, 0.0f };
     for (int g = 0; g < p_lb.groups; g++) {
-        for (int i = 0; i < p_lb.count[g]; i++) {
-            if ((p_lb.modulated >> g) & 1u) {
-                modulated_channels(p_spec, g, *p_lb.band[g][i], mod[g], p_lb.slope, p_p, o[g][i], g == 0 ? &state : nullptr);
-            } else {
-                band_channels(p_spec, g, *p_lb.band[g][i], p_lb.factors[g][i], p_p, o[g][i]);
-            }
+        if (p_lb.band[g] == nullptr) {
+            continue;
+        }
+        if ((p_lb.modulated >> g) & 1u) {
+            modulated_channels(p_spec, g, *p_lb.band[g], mod[g], p_lb.slope, p_p, o[g], g == 0 ? &state : nullptr);
+        } else {
+            band_channels(p_spec, g, *p_lb.band[g], p_lb.factors[g], p_p, o[g]);
         }
     }
     for (int g = 0; g < p_lb.groups; g++) {
+        if (p_lb.band[g] == nullptr) {
+            continue;
+        }
         const int base = group_slot(g);
-        for (int i = 0; i < p_lb.count[g]; i++) {
-            for (int c = 0; c < channel_count(p_spec.group_set(g)); c++) {
-                r_ch[base + c] = r_ch[base + c] + o[g][i][c];
-            }
+        for (int c = 0; c < channel_count(p_spec.group_set(g)); c++) {
+            r_ch[base + c] = r_ch[base + c] + o[g][c];
         }
     }
     // The state group is overwritten, not added to (a band-less group: nothing else writes it).
@@ -329,6 +330,26 @@ void for_each_slot(ChannelSet p_set, int p_fields, F p_f) {
     for (int s = CHANNELS; s < field_slot(p_fields); s++) {
         p_f(s);
     }
+}
+
+// Λ_m's insertions on the points of p_box carrying ground set p_set and p_fields field groups (a Level of run() or a
+// point's SmallLevel): the constant bands band by band, or, with a modulated group, point by point (insert_point reads
+// the point's slots before the insertions). p_at(slot, i) is the channel at point i.
+template <typename At>
+void insert_level(const Spec &p_spec, const LevelBands &p_lb, ChannelSet p_set, int p_fields, int p_m, const Box &p_box, At p_at) {
+    if (!p_lb.any) {
+        return;
+    }
+    if (p_lb.modulated == 0u) {
+        insert_constant_bands(p_spec, p_lb, p_box, p_at);
+        return;
+    }
+    for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
+        float ch[SLOTS] = {};
+        for_each_slot(p_set, p_fields, [&](int p_s) { ch[p_s] = p_at(p_s, p_i); });
+        insert_point(p_spec, p_lb, p_m, p_p, ch);
+        for_each_slot(p_set, p_fields, [&](int p_s) { p_at(p_s, p_i) = ch[p_s]; });
+    });
 }
 
 // The field groups a run down to p_lod carries at level p_m (FieldRange, or all of them).
@@ -478,19 +499,7 @@ void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p
 
 void insert_bands(const Spec &p_spec, Level &r_level) {
     const LevelBands lb(p_spec, r_level.m, 1 + r_level.fields);
-    if (!lb.any) {
-        return;
-    }
-    if (lb.modulated == 0u) {
-        insert_constant_bands(p_spec, lb, r_level.box, [&](int p_s, int64_t p_i) -> float & { return r_level.ch[p_s][p_i]; });
-        return;
-    }
-    for_each_point(r_level.box, [&](const Vector3i64 &p_p, int64_t p_i) {
-        float ch[SLOTS] = {};
-        for_each_slot(r_level.set, r_level.fields, [&](int p_s) { ch[p_s] = r_level.ch[p_s][p_i]; });
-        insert_point(p_spec, lb, r_level.m, p_p, ch);
-        for_each_slot(r_level.set, r_level.fields, [&](int p_s) { r_level.ch[p_s][p_i] = ch[p_s]; });
-    });
+    insert_level(p_spec, lb, r_level.set, r_level.fields, r_level.m, r_level.box, [&](int p_s, int64_t p_i) -> float & { return r_level.ch[p_s][p_i]; });
 }
 
 void insert_at(const Spec &p_spec, int p_m, const Vector3i64 &p_p, float r_slots[SLOTS]) {
@@ -628,16 +637,7 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
         // insert_bands(), then flush().
         const LevelBands lb(p_spec, l, 1 + fields);
         const int64_t count = cur->box.count();
-        if (lb.any && lb.modulated == 0u) {
-            insert_constant_bands(p_spec, lb, cur->box, [&](int p_s, int64_t p_i) -> float & { return cur->ch[p_s][p_i]; });
-        } else if (lb.any) {
-            for_each_point(cur->box, [&](const Vector3i64 &p_q, int64_t p_i) {
-                float ch[SLOTS] = {};
-                for_each_slot(p_spec.set, fields, [&](int p_s) { ch[p_s] = cur->ch[p_s][p_i]; });
-                insert_point(p_spec, lb, l, p_q, ch);
-                for_each_slot(p_spec.set, fields, [&](int p_s) { cur->ch[p_s][p_i] = ch[p_s]; });
-            });
-        }
+        insert_level(p_spec, lb, p_spec.set, fields, l, cur->box, [&](int p_s, int64_t p_i) -> float & { return cur->ch[p_s][p_i]; });
         for_each_slot(p_spec.set, fields, [&](int p_s) {
             for (int64_t i = 0; i < count; i++) {
                 cur->ch[p_s][i] = flush_value(cur->ch[p_s][i]);
