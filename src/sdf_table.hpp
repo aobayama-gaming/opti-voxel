@@ -4,6 +4,7 @@
 #include "archetype_table.hpp"
 #include "biome_features.hpp"
 #include "cell_scatter.hpp"
+#include "field_gpu.hpp"
 #include "instance_table.hpp"
 #include "moment_layers.hpp"
 #include "scatter_source.hpp"
@@ -129,6 +130,23 @@ public:
     void poll() override;
     // The streamed sources (null when none streams).
     const Archetype::InstanceStream *get_stream() const { return stream.get(); }
+
+    // The site walks' field on the GPU (VoxelTerrain.walk_gpu, FieldGPU): attached once its service is ready (main
+    // thread), the stream then walks WALK_BATCH_GPU keys per drain task (a reconfigure keeps it); null detaches it. The
+    // sources read it through ground_field_batch, the CPU's ground_field where it is not attached or fails.
+    static constexpr size_t WALK_BATCH_GPU = 64;
+    // Fewer readings than this go to the CPU's field even with the GPU attached: a submission's round trip (~3 ms) costs
+    // more (a walk alone, an expansion's tile listing, at its coarse levels).
+    static constexpr int GPU_MIN_POINTS = 32;
+    void attach_field_gpu(std::shared_ptr<FieldGPU> p_gpu);
+    // The walk keys per drain task with the GPU attached (default WALK_BATCH_GPU). Set before configure().
+    void set_walk_batch_gpu(size_t p_keys) { walk_batch_gpu = MAX(p_keys, size_t(1)); }
+    // Every batch the GPU answers read again on the CPU, ERR on a difference (debug: --walk_verify).
+    void set_walk_verify(bool p_verify) { walk_verify = p_verify; }
+    // ground_field at many points, bit for bit (CellScatter::ground_batch). Thread-safe.
+    void ground_field_batch(const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) const;
+    // The GPU field's stats (FieldGPU::get_stats) and the verify counts; empty when none is attached.
+    Dictionary walk_gpu_stats() const;
     // The records the CPU folds at p_voxel for a LOD-p_lod sample, in fold order (compose_list): r_list indexes the
     // returned view, valid until the next call on this thread. Any thread.
     // p_view: the streamed keys not landed yet are left out instead of computed (InstanceStream::view_records; main thread).
@@ -220,6 +238,11 @@ private:
     int64_t stream_part_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES; // --stream_part_sides
     std::vector<std::shared_ptr<const Archetype::ScatterSource>> streamed; // the valid sources, by their id
     std::shared_ptr<Archetype::InstanceStream> stream; // the gpu table shares it
+    std::shared_ptr<FieldGPU> field_gpu; // read by the drain tasks: std::atomic_load / atomic_store
+    bool walk_verify = false;
+    size_t walk_batch_gpu = WALK_BATCH_GPU;
+    mutable std::atomic<int64_t> verified_points{ 0 };
+    mutable std::atomic<int64_t> verify_differences{ 0 };
     double biome_radius = 0.0; // --biomes (metres)
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;

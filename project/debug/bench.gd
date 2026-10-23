@@ -104,6 +104,9 @@ extends Node3D
 ##   --discoverer=cpu|gpu         VoxelTerrain.discoverer_mode: where the cull test's corners are evaluated
 ##                                (default: gpu for the cascade terrain, cpu otherwise)
 ##   --discovery_compare=1        discoverer: diff every scan against a fresh CPU scan, ERROR on a difference
+##   --walk_gpu=0|1               VoxelTerrain.walk_gpu: the streamed sources' site walks read the ground on the GPU (default 1)
+##   --walk_batch=N               site walks: walk keys a drain task walks together on the GPU field (default 64)
+##   --walk_verify=1              site walks: every batch of the GPU's readings read again on the CPU, ERROR on a difference
 ##   --discovery_audit=1          direct: after steady, rebuild the scan without culling and count the
 ##                                quads of every culled chunk on the GPU (any quad = a miss = a hole)
 ##
@@ -262,6 +265,11 @@ func _ready() -> void:
 		terrain.discovery_cache = args["discovery_cache"] == "1"
 	terrain.discovery_verify = args.get("discovery_verify", "0") == "1"
 	terrain.destroy_verify = args.get("destroy_verify", "0") == "1"
+	if args.has("walk_gpu"):
+		terrain.walk_gpu = int(args["walk_gpu"])
+	terrain.walk_verify = args.get("walk_verify", "0") == "1"
+	if args.has("walk_batch"):
+		terrain.walk_batch = int(args["walk_batch"])
 	if args.has("discoverer"):
 		var discoverers := {"cpu": 0, "gpu": 1}
 		if not discoverers.has(args["discoverer"]):

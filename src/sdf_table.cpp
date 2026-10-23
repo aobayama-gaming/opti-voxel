@@ -246,6 +246,48 @@ void SDFTable::stop_streaming() {
     streamed.clear();
 }
 
+void SDFTable::attach_field_gpu(std::shared_ptr<FieldGPU> p_gpu) {
+    std::atomic_store(&field_gpu, p_gpu);
+    if (stream) {
+        stream->set_walk_batch(p_gpu ? walk_batch_gpu : 1);
+    }
+}
+
+void SDFTable::ground_field_batch(const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) const {
+    const Archetype::FieldBatchFn cpu = Archetype::batch_of([this](const VoxelPos &p_v, int p_lod) { return ground_field(p_v, p_lod); });
+    const std::shared_ptr<FieldGPU> gpu = std::atomic_load(&field_gpu);
+    if (!gpu || p_count < GPU_MIN_POINTS || !gpu->ground_field(p_voxels, p_lods, p_count, r_out)) {
+        cpu(p_voxels, p_lods, p_count, r_out);
+        return;
+    }
+    if (walk_verify) {
+        std::vector<ExactNoise::Float4> want(static_cast<size_t>(p_count));
+        cpu(p_voxels, p_lods, p_count, want.data());
+        int64_t differing = 0;
+        for (int i = 0; i < p_count; i++) {
+            if (!ExactNoise::same_bits(r_out[i], want[i])) {
+                if (differing++ == 0) {
+                    ERR_PRINT(vformat("FieldGPU: voxel %s at LOD %d: GPU (%s %s %s %s), CPU (%s %s %s %s).", godot_str(p_voxels[i]), p_lods[i], r_out[i].x, r_out[i].y,
+                            r_out[i].z, r_out[i].w, want[i].x, want[i].y, want[i].z, want[i].w));
+                }
+            }
+        }
+        verified_points += p_count;
+        verify_differences += differing;
+    }
+}
+
+Dictionary SDFTable::walk_gpu_stats() const {
+    const std::shared_ptr<FieldGPU> gpu = std::atomic_load(&field_gpu);
+    if (!gpu) {
+        return Dictionary();
+    }
+    Dictionary d = gpu->get_stats();
+    d["verified_points"] = verified_points.load();
+    d["verify_differences"] = verify_differences.load();
+    return d;
+}
+
 void SDFTable::poll_rebuild() {
     if (rebuild.ready()) {
         finish_rebuild();
@@ -347,6 +389,9 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
         s.zone = VoxelBox{ centre - reach, centre + reach, true };
     }
     s.ground = [this](const VoxelPos &p_v, int p_lod) { return ground_field(p_v, p_lod); };
+    s.ground_batch = [this](const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) {
+        ground_field_batch(p_voxels, p_lods, p_count, r_out);
+    };
     s.up = [this](const VoxelPos &p_v) { return up_at(p_v); };
     if (!lava_pools.empty()) {
         s.accept = [this](const VoxelPos &p_v) { return !in_lake(p_v.x, p_v.z); };
@@ -486,6 +531,7 @@ void SDFTable::add_stream(uint32_t p_slot_base, Dictionary &r_stats) {
     }
     InstanceStream::Settings settings;
     settings.slot_base = p_slot_base;
+    settings.walk_batch = std::atomic_load(&field_gpu) ? walk_batch_gpu : 1;
     settings.slot_capacity = MIN<uint32_t>(InstanceStream::slot_budget(streamed), SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
     stream = std::make_shared<InstanceStream>(streamed, param, settings, StreamExecutor::pool());
     Dictionary d;

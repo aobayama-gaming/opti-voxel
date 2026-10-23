@@ -83,6 +83,7 @@ bool CascadePointsGPU::cull_values(const VoxelPos *p_points, int p_count, int p_
 }
 
 bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, uint32_t p_count, ExactNoise::Float4 *r_out, BatchStats &r_stats) {
+    const uint64_t t0 = now_usec();
     // The batch's LOD range: every item runs its own levels (one above another's is zero until its own top).
     Vector2i lods(ChunkMath::MAX_LOD_NUMBERS, 0);
     uint8_t *items = input_bytes.ptrw();
@@ -100,8 +101,10 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
     rd->capture_timestamp(name_begin);
     passes.record_all(lods, p_count);
     rd->capture_timestamp(name_end);
+    const uint64_t t_recorded = now_usec();
     rd->submit();
     rd->sync();
+    const uint64_t t_synced = now_usec();
 
     // A local device's timestamps are readable once its frame is synced, and only until the next frame begins:
     // buffer_get_data flushes one, so read them first.
@@ -127,5 +130,8 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
     std::memcpy(r_out, out.ptr(), size_t(bytes));
     r_stats.batches++;
     r_stats.readback_bytes += bytes;
+    r_stats.record_ms += double(t_recorded - t0) / 1000.0;
+    r_stats.sync_ms += double(t_synced - t_recorded) / 1000.0;
+    r_stats.readback_ms += double(now_usec() - t_synced) / 1000.0;
     return true;
 }

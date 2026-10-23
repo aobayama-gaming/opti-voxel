@@ -60,6 +60,10 @@ PackedByteArray band_table(const Cascade::Spec &p_spec);
 uint32_t scratch_points_a(int p_item_size);
 uint32_t scratch_points_b(int p_item_size);
 uint32_t vec4s_per_point(const Cascade::Spec &p_spec, const Cascade::FieldRange &p_range);
+// The bytes of one scratch point of p_sdf's passes (16 B per vec4 of vec4s_per_point over field_range(p_sdf, p_points)),
+// and the scratch of one point item (scratch_points_a(1) + scratch_points_b(1) of them): what sizes a batch of point items.
+uint64_t scratch_point_bytes(const SDFBase *p_sdf, bool p_points);
+uint64_t point_scratch_bytes(const SDFBase *p_sdf);
 
 // Whether p_sdf's samples carry a ground material (its base palette is longer than {GROUND}: the climate's biomes).
 bool ground_materials(const SDFBase *p_sdf);

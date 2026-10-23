@@ -25,6 +25,10 @@ public:
         int batches = 0; // submissions (at most max_points points each)
         double gpu_ms = 0.0; // GPU timestamps around the levels, summed over the batches; -1 if one did not come back
         int64_t readback_bytes = 0;
+        // Wall clock of the batches' steps on the calling thread: encode + upload + record, submit + sync, readback.
+        double record_ms = 0.0;
+        double sync_ms = 0.0;
+        double readback_ms = 0.0;
     };
 
     // p_sdf: a cascade terrain (false otherwise), configured with p_param; p_max_points: the points per batch (the

@@ -22,7 +22,7 @@ var base_near := 0.05
 # `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|shapes`
 # its terrain_mode (the Hermite cascade terrain, the default, its continents preset, or its flat preset under the
 # hard-CSG shapes gallery) and
-# `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
+# `-- --discoverer=cpu|gpu` its discoverer_mode, `-- --walk_gpu=0|1` its walk_gpu: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
 var spawn_tangent = null  # --spawn=U,V: metres along the base's tangent plane (Vector2), null: the scene's spawn
@@ -68,6 +68,8 @@ func _enter_tree() -> void:
 				terrain.discoverer_mode = modes[mode]
 			else:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
+		if a.begins_with("--walk_gpu=") and terrain:
+			terrain.walk_gpu = a.trim_prefix("--walk_gpu=").to_int()
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
 		if a == "--terrain=shapes" and terrain:

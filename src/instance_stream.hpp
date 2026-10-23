@@ -96,6 +96,7 @@ public:
         // Walk keys (site and proxy tiles) a drain task computes in one go (ScatterSource::walk_tiles: a round of the
         // field's readings for all of them): its walk job and the next ready ones of the same source in rank order. 1
         // walks each alone (the CPU field: one task per tile keeps the workers busy); a batched field (a GPU) wants many.
+        // set_walk_batch changes it while the stream runs.
         size_t walk_batch = 1;
     };
     enum Admit {
@@ -114,6 +115,8 @@ public:
     InstanceStream(std::vector<std::shared_ptr<const ScatterSource>> p_sources, const ChunkParam &p_param, const Settings &p_settings,
             std::unique_ptr<StreamExecutor> p_executor);
     ~InstanceStream(); // stop(), then waits for the drain tasks running
+    // Settings::walk_batch from now on (the jobs already taken keep theirs). Any thread.
+    void set_walk_batch(size_t p_keys) { walk_batch = MAX(p_keys, size_t(1)); }
     // No job starts or lands from now on: the queued ones are dropped, a running one lands nothing (its expansion would
     // queue its subtree for nobody). The destructor's first step.
     void stop();
@@ -337,6 +340,7 @@ private:
     // A parked chunk's keys unpinned (and forgotten: unpinned once).
     void release_pins(Parked &r_parked);
     void drain();
+    std::atomic<size_t> walk_batch{ 1 }; // Settings::walk_batch, then set_walk_batch's
     // drain()'s walk batches (Settings::walk_batch): the queue's next walk jobs of r_batch[0]'s source into r_batch (job_mutex
     // held), then their contents in one ScatterSource::walk_tiles.
     static constexpr size_t WALK_LOOK = 4; // queue entries looked at per batch slot
