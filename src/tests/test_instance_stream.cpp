@@ -436,6 +436,21 @@ TEST_CASE("Instance stream: evicting for input records leaves the LRU order, the
     InstanceStream::Settings settings;
     settings.input_records = 0;
     settings.entries = keys_and_inputs(fx, all); // a's keys and v1's fit, one more key is over
+    // What the assertions below rest on: v2's keys and inputs fit in a's site tiles, the least recently used, so the cap
+    // evicts none of a's part tiles (a fixture change breaking it fails here, for this reason).
+    std::vector<SourceKey> a_keys, a_sites, v2_keys;
+    fx.source->chunk_keys(a, fx.param, a_keys);
+    for (const SourceKey &k : a_keys) {
+        fx.source->inputs(k, one);
+        a_sites.insert(a_sites.end(), one.begin(), one.end());
+    }
+    std::sort(a_sites.begin(), a_sites.end());
+    a_sites.erase(std::unique(a_sites.begin(), a_sites.end()), a_sites.end());
+    fx.source->keys(v2, v2, 0, v2_keys);
+    CHECK(keys_and_inputs(fx, v2_keys) <= a_sites.size());
+    if (!(keys_and_inputs(fx, v2_keys) <= a_sites.size())) {
+        return;
+    }
     std::unique_ptr<InstanceStream> stream = fx.stream(settings);
     std::vector<std::pair<ChunkId, uint64_t>> back;
     InstanceStream::Admit answer = InstanceStream::LATER;
@@ -527,4 +542,16 @@ TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with
         CHECK(stream->admit(c, 0, 0) == InstanceStream::READY);
         CHECK(lists_right(fx, *stream, mirror, c));
     }
+}
+
+TEST_CASE("Instance stream: a walk key off its grid walks nothing (a site tile above LOD 0, proxies on a part layer)") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ScatterSource &f = *fx.source;
+    const int64_t side = f.part_tile_side(0);
+    const VoxelPos tile(WorldCoord::floor_div(fx.origin.x, side), WorldCoord::floor_div(fx.origin.y, side), WorldCoord::floor_div(fx.origin.z, side));
+    const SourceKey sites{ f.setup().id, SourceKey::SITES, 0, tile };
+    CHECK_FALSE(fx.content(sites).sites.empty()); // the fixture's ground crosses it
+    CHECK(fx.content(SourceKey{ f.setup().id, SourceKey::SITES, 1, tile }).sites.empty());
+    CHECK(f.part_layer(0));
+    CHECK(fx.content(SourceKey{ f.setup().id, SourceKey::PROXIES, 0, tile }).sites.empty());
 }

@@ -96,6 +96,7 @@ public:
     // blobs, bit for bit; the streamed sources take proxies from the source cell on (their tiles read fewer part tiles).
     static constexpr int64_t PART_CELL_SIDES = 3;
     static constexpr int64_t STREAM_PART_CELL_SIDES = 1;
+    static constexpr int64_t STREAM_PART_CELL_SIDES_MAX = 8; // VoxelTerrain.archetype_stream_part_sides at most
     static constexpr uint32_t PROXY_SALT = 0x9A0C5u; // the proxies' sites: the source's salt xor this
 
     struct Setup {
