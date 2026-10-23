@@ -130,7 +130,9 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_stream_part_sides", PROPERTY_HINT_RANGE, "1,8,1"), "set_archetype_stream_part_sides",
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_stream_part_sides", PROPERTY_HINT_RANGE,
+                         vformat("1,%d,1", Archetype::ScatterSource::STREAM_PART_CELL_SIDES_MAX)),
+            "set_archetype_stream_part_sides",
             "get_archetype_stream_part_sides");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_moments"), "set_archetype_moments", "get_archetype_moments");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
@@ -391,7 +393,9 @@ bool VoxelTerrain::get_archetype_stream() const {
 
 void VoxelTerrain::set_archetype_stream_part_sides(int p_sides) {
     ERR_FAIL_COND_MSG(started, "archetype_stream_part_sides must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_sides < 1, "archetype_stream_part_sides must be at least 1 source cell.");
+    // Past it, far layers become part layers whose blob tiles read cubically many LOD-0 part tiles.
+    ERR_FAIL_COND_MSG(p_sides < 1 || p_sides > int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES_MAX),
+            vformat("archetype_stream_part_sides must be within [1, %d] source cells.", Archetype::ScatterSource::STREAM_PART_CELL_SIDES_MAX));
     archetype_stream_part_sides = p_sides;
 }
 

@@ -13,6 +13,26 @@ namespace Archetype {
 
 namespace {
 
+// p_fn(tile index) for every tile of side p_side meeting p_box, z y x; none for an invalid box.
+template <typename F>
+void for_each_tile(const VoxelBox &p_box, int64_t p_side, F p_fn) {
+    if (!p_box.valid) {
+        return;
+    }
+    VoxelPos lo, hi;
+    for (int a = 0; a < 3; a++) {
+        lo[a] = WorldCoord::floor_div(p_box.lo[a], p_side);
+        hi[a] = WorldCoord::floor_div(p_box.hi[a], p_side);
+    }
+    for (int64_t z = lo.z; z <= hi.z; z++) {
+        for (int64_t y = lo.y; y <= hi.y; y++) {
+            for (int64_t x = lo.x; x <= hi.x; x++) {
+                p_fn(VoxelPos(x, y, z));
+            }
+        }
+    }
+}
+
 // A record with the largest smooth radius and locality margin of a set (its influence_margin is theirs at most), over
 // p_box (none: only the margin counts), listed below p_max_lod: a group's box test passes wherever a member's can.
 TableRecord bounds_record(float p_k, float p_margin_c, const VoxelBox &p_box = VoxelBox(), int p_max_lod = TableRecord::NEVER_DROPPED) {
@@ -145,22 +165,8 @@ int64_t ScatterSource::ground_reach(int p_lod) const {
 }
 
 void ScatterSource::append_tiles(int p_kind, int p_lod, int64_t p_side, const VoxelBox &p_box, int64_t p_zone_grow, std::vector<SourceKey> &r_out) const {
-    const VoxelBox box = p_box.clipped(set.scatter.zone.grown(p_zone_grow));
-    if (!box.valid) {
-        return;
-    }
-    VoxelPos lo, hi;
-    for (int a = 0; a < 3; a++) {
-        lo[a] = WorldCoord::floor_div(box.lo[a], p_side);
-        hi[a] = WorldCoord::floor_div(box.hi[a], p_side);
-    }
-    for (int64_t z = lo.z; z <= hi.z; z++) {
-        for (int64_t y = lo.y; y <= hi.y; y++) {
-            for (int64_t x = lo.x; x <= hi.x; x++) {
-                r_out.push_back(SourceKey{ set.id, p_kind, p_lod, VoxelPos(x, y, z) });
-            }
-        }
-    }
+    for_each_tile(p_box.clipped(set.scatter.zone.grown(p_zone_grow)), p_side,
+            [&](const VoxelPos &p_tile) { r_out.push_back(SourceKey{ set.id, p_kind, p_lod, p_tile }); });
 }
 
 void ScatterSource::keys(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, std::vector<SourceKey> &r_out) const {
@@ -213,19 +219,7 @@ void ScatterSource::append_part_sites(const VoxelPos &p_tile, int p_lod, std::ve
         return;
     }
     // The L - 1 tiles inside this one (1 or 8) that meet the zone.
-    const int64_t side = part_tile_side(p_lod - 1);
-    VoxelPos lo, hi;
-    for (int a = 0; a < 3; a++) {
-        lo[a] = WorldCoord::floor_div(box.lo[a], side);
-        hi[a] = WorldCoord::floor_div(box.hi[a], side);
-    }
-    for (int64_t z = lo.z; z <= hi.z; z++) {
-        for (int64_t y = lo.y; y <= hi.y; y++) {
-            for (int64_t x = lo.x; x <= hi.x; x++) {
-                append_part_sites(VoxelPos(x, y, z), p_lod - 1, r_out);
-            }
-        }
-    }
+    for_each_tile(box, part_tile_side(p_lod - 1), [&](const VoxelPos &p_sub) { append_part_sites(p_sub, p_lod - 1, r_out); });
 }
 
 const SourceContent &ScatterSource::input(const SourceKey &p_key, const Inputs &p_inputs, size_t p_i, SourceContent &r_local) const {
@@ -245,7 +239,11 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
         part_tile(p_key, p_inputs, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         blob_tile(p_key, p_inputs, r_out);
-    } else if (p_key.kind == SourceKey::SITES || (p_key.kind == SourceKey::PROXIES && has_layer(p_key.lod))) {
+    } else if (p_key.kind == SourceKey::SITES || p_key.kind == SourceKey::PROXIES) {
+        // A site tile is on the LOD-0 part grid, a proxy tile on a far layer's blob grid (inputs()): any other walks a
+        // box no key reads (a part layer's proxies: a full walk for nothing).
+        const bool walked = p_key.kind == SourceKey::SITES ? p_key.lod == 0 : has_layer(p_key.lod) && !part_layer(p_key.lod);
+        ERR_FAIL_COND_MSG(!walked, vformat("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(p_key.kind), p_key.lod));
         walk_tile(p_key, r_out);
     }
 }
