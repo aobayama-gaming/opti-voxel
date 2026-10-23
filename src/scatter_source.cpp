@@ -310,12 +310,12 @@ void ScatterSource::walk_tiles(const SourceKey *p_keys, size_t p_count, SourceCo
         walks[i].out = &r_outs[i]->sites; // no cell (walks nothing) unless it is one of ours
         // A site tile is on the LOD-0 part grid, a proxy tile on a far layer's blob grid (inputs()): any other walks a
         // box no key reads (a part layer's proxies: a full walk for nothing).
+        if (part_sides.empty() || key.source != set.id) {
+            continue;
+        }
         const bool walked = key.kind == SourceKey::SITES ? key.lod == 0 : has_layer(key.lod) && !part_layer(key.lod);
         if (!walked) {
             ERR_PRINT(vformat("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(key.kind), key.lod));
-            continue;
-        }
-        if (part_sides.empty() || key.source != set.id) {
             continue;
         }
         if (key.kind == SourceKey::SITES) {
@@ -438,7 +438,8 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
         });
         std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
     } else if (region.valid) {
-        surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, sites, false, proxy_level(p_key.lod)); // in cell order
+        const SiteWalk walk{ region, g, s.salt ^ PROXY_SALT, false, proxy_level(p_key.lod), &sites }; // in cell order
+        surface_sites_many(&walk, 1, s.field_batch());
     }
     const double side = double(s.side);
     for (const CellSite &cs : sites) {

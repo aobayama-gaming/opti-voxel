@@ -362,19 +362,35 @@ void surface_sites_many(const SiteWalk *p_walks, size_t p_count, const FieldBatc
         sides[w] = p_walks[w].side;
     }
     walk_cells(walks, p_field, r_stats);
-    std::vector<Candidate> candidates;
-    std::vector<uint32_t> snapped;
+    // Every kept cell's candidate (over the pool: a whole zone keeps millions), then the ones that exist.
+    std::vector<Candidate> all;
     for (size_t w = 0; w < p_count; w++) {
         for (const WalkCell &k : walks[w].kept) {
             Candidate c;
             c.cell = k.cell;
             c.walk = w;
-            if (site_candidate(k.cell, sides[w], p_walks[w].salt, k.centre, c.site)) {
-                if (p_walks[w].snap) {
-                    snapped.push_back(uint32_t(candidates.size()));
-                }
-                candidates.push_back(c);
+            all.push_back(c);
+        }
+    }
+    std::vector<uint8_t> exists(all.size());
+    std::vector<ExactNoise::Float4> centres;
+    for (const CellWalk &w : walks) {
+        for (const WalkCell &k : w.kept) {
+            centres.push_back(k.centre);
+        }
+    }
+    parallel_for(uint32_t(all.size()), "site_candidates", [&](uint32_t p_i) {
+        const size_t w = all[p_i].walk;
+        exists[p_i] = site_candidate(all[p_i].cell, sides[w], p_walks[w].salt, centres[p_i], all[p_i].site);
+    });
+    std::vector<Candidate> candidates;
+    std::vector<uint32_t> snapped;
+    for (size_t i = 0; i < all.size(); i++) {
+        if (exists[i]) {
+            if (p_walks[all[i].walk].snap) {
+                snapped.push_back(uint32_t(candidates.size()));
             }
+            candidates.push_back(all[i]);
         }
     }
     snap_candidates(candidates, std::move(snapped), sides.data(), p_field, r_stats);
