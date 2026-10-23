@@ -21,7 +21,8 @@
 // of its id whatever streamed when, and no chunk is meshed twice because a key arrived late.
 //
 // One entry per key asked for, in one table: computing (its inputs first: a part tile reads the site tiles inside it, a
-// part layer's blob tile the LOD-0 part tiles around it, a far layer's its proxy tile), then ready with its content,
+// part layer's blob tile the LOD-0 part tiles around it, a far layer's the proxy tiles around it; a key's first job lists
+// them on a drain task, which asks for them: admit() creates a chunk's own keys only), then ready with its content,
 // which a listed key copies into slots: the GPU table's records from slot_base on, sent through the placement log
 // (uploads_since). Keys without records (the walks, empty tiles) stay entries like the others. Ready entries not pinned
 // by a parked chunk are on a least-recently-used list (the walks on one of their own), and those also holding input records
@@ -50,6 +51,8 @@ public:
     // Releases the finished tasks (here: runs the queued ones); p_wait: waits for all of them first. The stream's lock not
     // held (a drain task takes it).
     virtual void reap(bool p_wait);
+    // Whether a drain task takes another job (tests: a budget of jobs per poll(), the rest left for the next one).
+    virtual bool more() { return true; }
 
     // Godot's WorkerThreadPool, low priority (threading/worker_pool/low_priority_thread_ratio of its threads).
     static std::unique_ptr<StreamExecutor> pool();
@@ -165,6 +168,8 @@ private:
     struct Job {
         const ScatterSource *source = nullptr;
         SourceKey key;
+        bool expand = false; // its inputs not known yet: lists them first (input_keys), computes only if there are none
+        std::vector<SourceKey> input_keys;
         std::vector<std::shared_ptr<const SourceContent>> inputs; // aligned with source->inputs(key)
         std::shared_ptr<SourceContent> out;
         uint64_t usec = 0;
@@ -181,7 +186,7 @@ private:
     struct Entry {
         enum State {
             WAITING, // for its inputs
-            RUNNING,
+            RUNNING, // its job queued or computing (the first one lists its inputs: expanded)
             READY,
         };
         SourceKey key;
@@ -189,6 +194,7 @@ private:
         std::shared_ptr<const SourceContent> content; // READY
         std::vector<std::shared_ptr<const SourceContent>> inputs; // WAITING: those landed so far
         int missing = 0; // WAITING: its inputs not landed
+        bool expanded = false; // its inputs listed (on a drain task) and asked for
         std::vector<std::pair<SourceKey, uint32_t>> dependents; // not READY: the keys waiting for it (and its input index)
         std::vector<std::pair<ParkKey, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
         uint32_t slot = 0;
@@ -261,8 +267,9 @@ private:
         int64_t evicted = 0;
         int64_t evicted_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD: computed / (computed - evicted) = recompute ratio
         int64_t keys_created = 0; // entries created by request(), inputs included
-        int64_t admit_keys_created = 0; // of keys_created: by admit()
+        int64_t admit_keys_created = 0; // of keys_created: by admit() (a chunk's own keys: their inputs come on the workers)
         int64_t admit_keys_created_max = 0; // by one admit()
+        int64_t keys_expanded = 0; // keys whose first job listed inputs (asked for when it landed)
         int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
         int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank
         int64_t stale_handed_back = 0; // parked chunks set_tag() forgot (a newer scan doesn't want them)
@@ -288,9 +295,14 @@ private:
     const ScatterSource &source(const SourceKey &p_key) const { return *sources[p_key.source]; }
     // Every source's keys of the chunk, in key order.
     void chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &r_out) const;
-    // The key's entry, asked for now at p_rank (created and its inputs asked for if new; placed if listed and ready).
+    // The key's entry, asked for now at p_rank (created if new, its job queued: a drain task lists its inputs; placed if
+    // listed and ready).
     Entry &request(const SourceKey &p_key, bool p_listed, uint64_t p_rank);
+    // A key's first job listed inputs: asked for at its rank, it waits for them (or runs again at once if all are ready).
+    void expand(Entry &r_entry, std::vector<SourceKey> &&p_inputs);
     void start(Entry &r_entry);
+    // Whether to run one more drain task (jobs queued, fewer than the executor's workers draining); job_mutex held.
+    bool claim_drain();
     // Not READY: its rank lowered to p_rank if better; RUNNING, its job moved if still queued (keeping its order among
     // equal ranks), WAITING, its inputs not landed too.
     void improve(Entry &r_entry, uint64_t p_rank);

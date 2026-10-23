@@ -352,7 +352,9 @@ tile reads those its region meets, `proxy_region`, and sorts their sites in it b
   89% of the tiles, 3% of the evaluations; the ground tiles ~330 each), so no emptiness test runs before it.
   **Stream (`src/instance_stream.*`):** `InstanceStream` holds the keys asked for in one table (empty ones
   too) with an intrusive LRU: `admit(chunk, owner, tag, rank)` answers READY (every key placed), PARKED (its keys pinned;
-  `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
+  `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). `admit` creates the chunk's own keys only (`admit_keys_created_max`): a key's
+  first job, on a drain task, lists its inputs (`keys_expanded`) and `expand()` asks for them at its rank under the lock, the
+  key running again once they land (`HeldExecutor::steps` in the tests stops a drain after N jobs). Keys are computed by drain
   tasks on Godot's pool at low priority (`StreamExecutor`, run by `poll()` in the tests; `low_priority_thread_ratio` 0.5), a
   key's inputs handed to it as shared pointers; the task lands each key under the stream's lock (its dependents start at once
   on the same task: landing on the main thread, 2 ms a frame, held forest5cm's 135k keys ~900 frames) and places the listed
