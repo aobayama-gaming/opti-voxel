@@ -11,6 +11,10 @@
 #include "quad_pool_spike.hpp"
 #include "voxel_terrain.hpp"
 
+#include "ov/on_error.hpp"
+
+#include "debug_log.hpp"
+
 #ifdef OPTI_VOXEL_TESTS
 #include "tests/unit_tests.hpp"
 #endif
@@ -21,6 +25,11 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+    // The core's engine-free error sink reports like the ERR_* macros did: one line in the Godot
+    // console, with the core file and line it came from.
+    ov::set_error_sink([](const char *p_file, int p_line, const char *p_message) {
+        ERR_PRINT(vformat("%s:%d: %s", p_file, p_line, p_message));
+    });
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(QuadPoolSpike);
     GDREGISTER_CLASS(FrameSpike);
