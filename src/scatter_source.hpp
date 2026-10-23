@@ -12,11 +12,13 @@
 // time, the same. A chunk asks for the keys whose records may reach it at its LOD (keys()) and folds their records in key
 // order.
 //
-// - A site tile (SourceKey::SITES): a site walk, no records (the costly part: the ground evaluated cell by cell, small
-//   and kept resident). At LOD 0, on the LOD-0 part-tile grid: the sites whose base lies in the tile (CellScatter::sites).
-//   At a far layer L > 0, on its blob-tile grid: the proxies' walk of the tile's region (far_items). No chunk lists one.
+// - Walks, no records (the costly part: the ground evaluated cell by cell; small, kept resident), never listed by a chunk:
+//   - a site tile (SourceKey::SITES, lod 0), on the LOD-0 part-tile grid: the sites whose base lies in the tile
+//     (CellScatter::sites);
+//   - a proxy tile (SourceKey::PROXIES) of a far layer L, on its blob-tile grid: the proxies' walk of the blob tile's
+//     region (far_items).
 // - A part tile of LOD L (SourceKey::PARTS): a cube of part_tile_side(L) voxels, its side PART_TILE_CELLS source cells
-//   doubled until it holds two chunks of the LOD. It grows the sites of the LOD-0 site tiles inside it (CellScatter::grow,
+//   doubled until it holds two chunks of the LOD. It grows the sites of the site tiles inside it and the zone (CellScatter::grow,
 //   finished like the table's), recursively by its 1 or 8 L - 1 tiles (z y x) down to LOD 0, and keeps one group
 //   per site: at LOD 0 every record (a record no LOD lists still weighs in the blobs), coarser the ones listed at L. A LOD
 //   whose side is a finer LOD's has no key of its own: its chunks read that LOD's (part_key_lod) and filter at their LOD.
@@ -30,7 +32,7 @@
 //     another order;
 //   - the layers above: a cell holds several sites, then thousands, and reading every record is out of the question: the
 //     items are proxies, one per cell of 1 / PROXY_PER_CELL layer cell along the surface (surface_sites, unsnapped, the
-//     tile's SITES input), each what the profile's mean site has lost at the layer times the sites its patch of ground
+//     tile's PROXIES input), each what the profile's mean site has lost at the layer times the sites its patch of ground
 //     holds in the zone. Their cost per tile is the same at any layer and any site count.
 namespace Archetype {
 
@@ -39,19 +41,20 @@ struct SourceKey {
         PARTS,
         BLOBS,
         SITES,
+        PROXIES,
         KIND_COUNT,
     };
     static const char *kind_name(int p_kind) {
-        static constexpr const char *NAMES[KIND_COUNT] = { "parts", "blobs", "sites" };
+        static constexpr const char *NAMES[KIND_COUNT] = { "parts", "blobs", "sites", "proxies" };
         return NAMES[p_kind];
     }
     uint32_t source = 0; // its source's id (ScatterSource::Setup::id)
     int kind = PARTS;
-    int lod = 0; // the LOD its records are listed at (a blob tile or a far layer's site tile: its layer)
+    int lod = 0; // the LOD its records are listed at (a blob or proxy tile: its layer; a site tile: 0)
     VoxelPos tile; // the tile's index on its kind's grid at that LOD
 
-    // Fold order: by source, the part tiles, then the blob tiles, each LOD by LOD, tiles in cell order (the site tiles
-    // last: never folded).
+    // Fold order: by source, the part tiles, then the blob tiles, each LOD by LOD, tiles in cell order (the walks last:
+    // never folded).
     bool operator<(const SourceKey &p_o) const {
         if (source != p_o.source) {
             return source < p_o.source;
@@ -71,7 +74,7 @@ struct SourceContent {
     };
     std::vector<TableRecord> records;
     std::vector<Group> groups;
-    std::vector<CellSite> sites; // a site tile's (no records), in cell order
+    std::vector<CellSite> sites; // a site or proxy tile's (no records), in cell order
     int64_t out_of_profile = 0; // sites with a record past the profile (reach, LODs, margins: chunks may miss it; stays 0)
 
     // Appends the indices (into records) of the records whose box test at p_lod can pass in [p_lo, p_hi].
@@ -131,8 +134,9 @@ public:
     // How far from the ground the records listed at p_lod or finer reach with their influence margins (voxels; 0: none):
     // the discoverer keeps a node of the zone whose corners are this close to the ground (SDFTable::cull_exempt).
     int64_t ground_reach(int p_lod) const;
-    // The keys p_key's content reads: a part tile the LOD-0 site tiles inside it (recursively by L - 1 tiles, z y x), a part
-    // layer's blob tile the LOD-0 part tiles around it (key order), a far layer's (L > 0) its site tile; none otherwise.
+    // The keys p_key's content reads: a part tile the site tiles inside it that meet the zone (recursively by L - 1 tiles,
+    // z y x), a part layer's blob tile the LOD-0 part tiles around it (key order), a far layer's its proxy tile; none
+    // otherwise.
     void inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out) const;
 
     // The contents of inputs(p_key), in its order; an entry missing or null is computed here (the same).
@@ -162,13 +166,14 @@ private:
     int64_t blob_grow(int p_layer) const;
     // Input p_i of p_inputs, else computed into r_local.
     const SourceContent &input(const SourceKey &p_key, const Inputs &p_inputs, size_t p_i, SourceContent &r_local) const;
-    // Appends the LOD-0 site tiles inside part tile p_tile of LOD p_lod: recursively its L - 1 tiles, z y x.
+    // Appends the site tiles inside part tile p_tile of LOD p_lod that meet the zone: recursively its L - 1 tiles meeting
+    // it, z y x.
     void append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const;
     // The side of a layer's proxy cells (voxels).
     int64_t proxy_side(int p_layer) const { return MAX<int64_t>(1, layer_cell(p_layer) / PROXY_PER_CELL); }
-    // The proxies' sites a far layer's blob tile reads: the walk over its cells and MARGIN_CELLS past them, in the zone.
-    void proxy_sites(const SourceKey &p_key, std::vector<CellSite> &r_out) const;
-    void site_tile(const SourceKey &p_key, SourceContent &r_out) const;
+    // A walk's sites: a site tile's, or a proxy tile's (the walk over its blob tile's cells and MARGIN_CELLS past them, in
+    // the zone).
+    void walk_tile(const SourceKey &p_key, SourceContent &r_out) const;
     // A part tile grows the sites of its inputs: every record at LOD 0, the ones listed at its LOD coarser.
     void part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const;
     // Grows one site into a group of r_out (the records listed at p_lod; all of them: p_lod < 0), unless the table would

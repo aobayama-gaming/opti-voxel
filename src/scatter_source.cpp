@@ -117,8 +117,7 @@ int64_t ScatterSource::blob_tile_cells(int p_layer) const {
 }
 
 VoxelBox ScatterSource::tile_box(const SourceKey &p_key) const {
-    // A LOD-0 site tile is on the LOD-0 part tiles' grid, a far layer's on its blob tiles'.
-    const bool parts_grid = p_key.kind == SourceKey::PARTS || (p_key.kind == SourceKey::SITES && p_key.lod == 0);
+    const bool parts_grid = p_key.kind == SourceKey::PARTS || p_key.kind == SourceKey::SITES;
     const int64_t side = parts_grid ? part_tile_side(p_key.lod) : blob_tile_cells(p_key.lod) * layer_cell(p_key.lod);
     return VoxelBox{ p_key.tile * side, p_key.tile * side + VoxelPos(side - 1, side - 1, side - 1), true };
 }
@@ -198,23 +197,32 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
         // The LOD-0 part tiles whose records can have their centroid in the tile's cells or MARGIN_CELLS past them.
         const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod));
         append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof.reach))), 0, r_out);
-    } else if (p_key.kind == SourceKey::BLOBS && p_key.lod > 0 && has_layer(p_key.lod)) {
-        // A far layer's proxy walk (a far layer 0 walks itself: SITES 0 is the part tiles' walk).
-        r_out.push_back(SourceKey{ set.id, SourceKey::SITES, p_key.lod, p_key.tile });
+    } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
+        // A far layer: its proxies' walk.
+        r_out.push_back(SourceKey{ set.id, SourceKey::PROXIES, p_key.lod, p_key.tile });
     }
 }
 
 void ScatterSource::append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const {
+    const VoxelBox box = tile_box(SourceKey{ set.id, SourceKey::PARTS, p_lod, p_tile }).clipped(set.scatter.zone);
+    if (!box.valid) {
+        return; // no base in it: an empty walk
+    }
     if (p_lod <= 0) {
         r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_tile });
         return;
     }
-    // The L - 1 tiles inside this one (the sides are equal or twice: 1 or 8).
-    const int64_t n = part_tile_side(p_lod) / part_tile_side(p_lod - 1);
-    for (int64_t z = 0; z < n; z++) {
-        for (int64_t y = 0; y < n; y++) {
-            for (int64_t x = 0; x < n; x++) {
-                append_part_sites(p_tile * n + VoxelPos(x, y, z), p_lod - 1, r_out);
+    // The L - 1 tiles inside this one (1 or 8) that meet the zone.
+    const int64_t side = part_tile_side(p_lod - 1);
+    VoxelPos lo, hi;
+    for (int a = 0; a < 3; a++) {
+        lo[a] = WorldCoord::floor_div(box.lo[a], side);
+        hi[a] = WorldCoord::floor_div(box.hi[a], side);
+    }
+    for (int64_t z = lo.z; z <= hi.z; z++) {
+        for (int64_t y = lo.y; y <= hi.y; y++) {
+            for (int64_t x = lo.x; x <= hi.x; x++) {
+                append_part_sites(VoxelPos(x, y, z), p_lod - 1, r_out);
             }
         }
     }
@@ -237,16 +245,22 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
         part_tile(p_key, p_inputs, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         blob_tile(p_key, p_inputs, r_out);
-    } else if (p_key.kind == SourceKey::SITES) {
-        site_tile(p_key, r_out);
+    } else if (p_key.kind == SourceKey::SITES || (p_key.kind == SourceKey::PROXIES && has_layer(p_key.lod))) {
+        walk_tile(p_key, r_out);
     }
 }
 
-void ScatterSource::site_tile(const SourceKey &p_key, SourceContent &r_out) const {
-    if (p_key.lod == 0) {
-        set.scatter.sites(tile_box(p_key), r_out.sites);
-    } else if (has_layer(p_key.lod) && !part_layer(p_key.lod)) {
-        proxy_sites(p_key, r_out.sites);
+void ScatterSource::walk_tile(const SourceKey &p_key, SourceContent &r_out) const {
+    const CellScatter &s = set.scatter;
+    if (p_key.kind == SourceKey::SITES) {
+        s.sites(tile_box(p_key), r_out.sites);
+        return;
+    }
+    const int64_t g = proxy_side(p_key.lod);
+    // A proxy outside the zone weighs nothing: the walk stops a cell past it.
+    const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod) + int64_t(std::ceil(prof.reach))).clipped(s.zone.grown(g));
+    if (region.valid) {
+        surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, r_out.sites, false); // a proxy's base needn't be on the LOD-0 ground
     }
 }
 
@@ -315,16 +329,6 @@ void ScatterSource::near_items(const SourceKey &p_key, const Inputs &p_inputs, s
     }
 }
 
-void ScatterSource::proxy_sites(const SourceKey &p_key, std::vector<CellSite> &r_out) const {
-    const int64_t g = proxy_side(p_key.lod);
-    const CellScatter &s = set.scatter;
-    // A proxy outside the zone weighs nothing: the walk stops a cell past it.
-    const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod) + int64_t(std::ceil(prof.reach))).clipped(s.zone.grown(g));
-    if (region.valid) {
-        surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, r_out, false); // a proxy's base needn't be on the LOD-0 ground
-    }
-}
-
 void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, std::vector<MomentItem> &r_items) const {
     // One proxy per surface cell of g voxels: the sites of its patch of ground ((g / side)^2 cells' worth, one site per
     // source cell on flat ground, times the share of the cell inside the zone), each what the mean site has lost at the
@@ -333,15 +337,10 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
     const int64_t g = proxy_side(p_key.lod);
     const CellScatter &s = set.scatter;
     SourceContent local;
-    const std::vector<CellSite> *sites = &local.sites;
-    if (p_key.lod > 0) {
-        sites = &input(SourceKey{ set.id, SourceKey::SITES, p_key.lod, p_key.tile }, p_inputs, 0, local).sites;
-    } else {
-        proxy_sites(p_key, local.sites); // SITES 0 is the part tiles' walk
-    }
+    const std::vector<CellSite> &sites = input(SourceKey{ set.id, SourceKey::PROXIES, p_key.lod, p_key.tile }, p_inputs, 0, local).sites;
     const double side = double(s.side);
     const SourceProfile::Lost &lost = prof.lost[p_key.lod];
-    for (const CellSite &cs : *sites) {
+    for (const CellSite &cs : sites) {
         const VoxelPos &base = cs.site.base;
         double inside = 1.0;
         for (int a = 0; a < 3; a++) {

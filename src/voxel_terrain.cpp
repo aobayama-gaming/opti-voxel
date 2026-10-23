@@ -38,6 +38,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
     ClassDB::bind_method(D_METHOD("set_archetype_stream", "enabled"), &VoxelTerrain::set_archetype_stream);
     ClassDB::bind_method(D_METHOD("get_archetype_stream"), &VoxelTerrain::get_archetype_stream);
+    ClassDB::bind_method(D_METHOD("set_archetype_stream_part_sides", "sides"), &VoxelTerrain::set_archetype_stream_part_sides);
+    ClassDB::bind_method(D_METHOD("get_archetype_stream_part_sides"), &VoxelTerrain::get_archetype_stream_part_sides);
     ClassDB::bind_method(D_METHOD("set_archetype_moments", "enabled"), &VoxelTerrain::set_archetype_moments);
     ClassDB::bind_method(D_METHOD("get_archetype_moments"), &VoxelTerrain::get_archetype_moments);
     ClassDB::bind_method(D_METHOD("set_archetype_erode", "cells"), &VoxelTerrain::set_archetype_erode);
@@ -128,6 +130,8 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_stream_part_sides", PROPERTY_HINT_RANGE, "1,8,1"), "set_archetype_stream_part_sides",
+            "get_archetype_stream_part_sides");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_moments"), "set_archetype_moments", "get_archetype_moments");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_resolve", PROPERTY_HINT_RANGE, "0,8,0.25"), "set_archetype_resolve", "get_archetype_resolve");
@@ -383,6 +387,16 @@ void VoxelTerrain::set_archetype_stream(bool p_enabled) {
 
 bool VoxelTerrain::get_archetype_stream() const {
     return archetype_stream;
+}
+
+void VoxelTerrain::set_archetype_stream_part_sides(int p_sides) {
+    ERR_FAIL_COND_MSG(started, "archetype_stream_part_sides must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_sides < 1, "archetype_stream_part_sides must be at least 1 source cell.");
+    archetype_stream_part_sides = p_sides;
+}
+
+int VoxelTerrain::get_archetype_stream_part_sides() const {
+    return archetype_stream_part_sides;
 }
 
 void VoxelTerrain::set_archetype_moments(bool p_enabled) {
@@ -690,6 +704,7 @@ void VoxelTerrain::_ready() {
     sdf->set_scatter(archetype_instances, archetype_instance_area);
     sdf->set_forest(archetype_trees, archetype_tree_area);
     sdf->set_stream_sources(archetype_stream);
+    sdf->set_stream_part_sides(archetype_stream_part_sides);
     sdf->set_biome_radius(biome_radius);
     if (!climate_path.is_empty()) {
         // Parsed and checked by configure() (an ERR there: no climate).

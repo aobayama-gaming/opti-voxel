@@ -387,6 +387,9 @@ bool InstanceStream::place(Entry &r_entry) {
     r_entry.slot = slot;
     r_entry.placed = true;
     input_records -= r_entry.count;
+    if (r_entry.lru_inputs.in) {
+        chain_inputs.unlink(r_entry); // its records are in slots now
+    }
     stats.placed++;
     stats.slots_peak = MAX(stats.slots_peak, slots_used());
     for (const std::pair<ParkKey, uint64_t> &w : r_entry.waiters) {
@@ -444,18 +447,7 @@ void InstanceStream::release(uint32_t p_slot, uint32_t p_count) {
 }
 
 bool InstanceStream::evict_oldest(bool p_inputs) {
-    const auto frees_none = [](const Entry *p_e) { return p_e->placed || p_e->count == 0; }; // no input records
-    Entry *e = oldest;
-    for (Entry *last = newest; p_inputs && e != nullptr && frees_none(e) && e != last;) {
-        // Passed over once: to the newest end (its used kept), so the next eviction doesn't walk it again.
-        Entry *const kept = e;
-        e = e->newer;
-        lru_unlink(*kept);
-        lru_link(*kept);
-    }
-    if (p_inputs && e != nullptr && frees_none(e)) {
-        return false; // only placed keys and site tiles left
-    }
+    Entry *e = (p_inputs ? chain_inputs : chain_all).oldest;
     if (e == nullptr || e->used + GRACE_FRAMES >= frame) {
         return false; // the rest is newer
     }
@@ -475,14 +467,14 @@ bool InstanceStream::evict_oldest(bool p_inputs) {
 
 void InstanceStream::touch(Entry &r_entry) {
     r_entry.used = MAX(r_entry.used, frame);
-    if (r_entry.in_lru && newest != &r_entry) {
+    if (r_entry.lru_all.in && chain_all.newest != &r_entry) {
         lru_unlink(r_entry);
         lru_link(r_entry);
     }
 }
 
 void InstanceStream::pin(Entry &r_entry) {
-    if (r_entry.pins++ == 0 && r_entry.in_lru) {
+    if (r_entry.pins++ == 0 && r_entry.lru_all.in) {
         lru_unlink(r_entry);
     }
 }
@@ -494,23 +486,40 @@ void InstanceStream::unpin(Entry &r_entry) {
     }
 }
 
-void InstanceStream::lru_link(Entry &r_entry) {
-    r_entry.older = newest;
-    r_entry.newer = nullptr;
+void InstanceStream::Chain::link(Entry &r_entry) {
+    Links &l = r_entry.*links;
+    l.older = newest;
+    l.newer = nullptr;
     if (newest != nullptr) {
-        newest->newer = &r_entry;
+        (newest->*links).newer = &r_entry;
     } else {
         oldest = &r_entry;
     }
     newest = &r_entry;
-    r_entry.in_lru = true;
+    l.in = true;
+}
+
+void InstanceStream::Chain::unlink(Entry &r_entry) {
+    Links &l = r_entry.*links;
+    (l.older != nullptr ? (l.older->*links).newer : oldest) = l.newer;
+    (l.newer != nullptr ? (l.newer->*links).older : newest) = l.older;
+    l = Links();
+}
+
+void InstanceStream::lru_link(Entry &r_entry) {
+    chain_all.link(r_entry);
+    if (!r_entry.placed && r_entry.count > 0) {
+        chain_inputs.link(r_entry);
+    }
 }
 
 void InstanceStream::lru_unlink(Entry &r_entry) {
-    (r_entry.older != nullptr ? r_entry.older->newer : oldest) = r_entry.newer;
-    (r_entry.newer != nullptr ? r_entry.newer->older : newest) = r_entry.older;
-    r_entry.older = r_entry.newer = nullptr;
-    r_entry.in_lru = false;
+    if (r_entry.lru_all.in) {
+        chain_all.unlink(r_entry);
+    }
+    if (r_entry.lru_inputs.in) {
+        chain_inputs.unlink(r_entry);
+    }
 }
 
 void InstanceStream::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out, std::vector<uint32_t> *r_materials) const {

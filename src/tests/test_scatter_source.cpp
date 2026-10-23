@@ -154,6 +154,23 @@ std::vector<VoxelPos> tiles_over(const VoxelBox &p_box, int64_t p_side) {
     return out;
 }
 
+// The LOD-0 tiles inside part tile p_tile of LOD p_lod in the record pyramid's order: its 1 or 8 L - 1 tiles, z y x,
+// recursively (the zone left out).
+void pyramid_tiles(const ScatterSource &p_f, int p_lod, const VoxelPos &p_tile, std::vector<VoxelPos> &r_out) {
+    if (p_lod == 0) {
+        r_out.push_back(p_tile);
+        return;
+    }
+    const int64_t n = p_f.part_tile_side(p_lod) / p_f.part_tile_side(p_lod - 1);
+    for (int64_t z = 0; z < n; z++) {
+        for (int64_t y = 0; y < n; y++) {
+            for (int64_t x = 0; x < n; x++) {
+                pyramid_tiles(p_f, p_lod - 1, p_tile * n + VoxelPos(x, y, z), r_out);
+            }
+        }
+    }
+}
+
 using Cell = std::tuple<int64_t, int64_t, int64_t, uint32_t>;
 Cell cell_of(const MomentBlob &p_b) {
     return Cell(p_b.cell[0], p_b.cell[1], p_b.cell[2], p_b.material);
@@ -211,8 +228,7 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
         const int key_lod = f.part_key_lod(lod);
         CHECK(f.part_tile_side(key_lod) == f.part_tile_side(lod));
         CHECK(key_lod == (f.part_tile_side(lod) == f.part_tile_side(0) ? 0 : lod));
-        const int64_t n = f.part_tile_side(lod) / f.part_tile_side(0);
-        int64_t listed = 0, held = 0;
+        int64_t listed = 0, held = 0, inputs = 0, cube = 0;
         for (const std::vector<TableRecord> &w : whole) {
             listed += std::count_if(w.begin(), w.end(), [lod](const TableRecord &p_r) { return p_r.listed_at(lod); });
         }
@@ -220,15 +236,27 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
             CHECK(k.lod == key_lod);
             std::vector<SourceKey> in;
             f.inputs(k, in);
-            CHECK(int64_t(in.size()) == n * n * n);
-            CHECK(std::all_of(in.begin(), in.end(), [](const SourceKey &p_i) { return p_i.kind == SourceKey::SITES && p_i.lod == 0; }));
+            // Exactly the LOD-0 tiles of its cube meeting the zone, in the pyramid's order.
+            std::vector<VoxelPos> all;
+            pyramid_tiles(f, k.lod, k.tile, all);
+            std::vector<SourceKey> want;
+            for (const VoxelPos &t : all) {
+                const SourceKey site{ 3, SourceKey::SITES, 0, t };
+                if (f.tile_box(site).intersects(fx.zone())) {
+                    want.push_back(site);
+                }
+            }
+            CHECK(in == want);
+            inputs += int64_t(in.size());
+            cube += int64_t(all.size());
             const SourceContent &c = fx.content(k);
             held += std::count_if(c.records.begin(), c.records.end(), [lod](const TableRecord &p_r) { return p_r.listed_at(lod); });
             if (key_lod == lod) {
                 CHECK(std::all_of(c.records.begin(), c.records.end(), [lod](const TableRecord &p_r) { return p_r.listed_at(lod); }));
             }
         }
-        MESSAGE("LOD ", lod, ": tile ", f.part_tile_side(lod), " voxels (key LOD ", key_lod, "), ", double(held) / double(groups), " records per site");
+        MESSAGE("LOD ", lod, ": tile ", f.part_tile_side(lod), " voxels (key LOD ", key_lod, "), ", double(held) / double(groups), " records per site, ", inputs,
+                " site tiles read of ", cube);
         CHECK(held == listed);
     }
 }
@@ -620,7 +648,7 @@ TEST_CASE("Scatter source: the chunks' lists through the stream are the record p
     CHECK(int64_t(stream.get_stats()["lists_missing"]) == 0);
 }
 
-// A LOD-0 site tile is the walk of its box; a far layer's blob tile reads its site tile and is what it computes alone.
+// A site tile is the walk of its box; a far layer's blob tile reads its proxy tile and is what it computes alone.
 TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
     const SourceFixture &fx = SourceFixture::get();
     const ScatterSource &f = fx.f();
@@ -649,7 +677,7 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
 
     const ScatterSource &streamed = SourceFixture::streamed().f();
     int layers = 0;
-    for (int layer = 1; layer < streamed.setup().lod_count; layer++) {
+    for (int layer = 0; layer < streamed.setup().lod_count; layer++) {
         if (!streamed.has_layer(layer) || streamed.part_layer(layer)) {
             continue;
         }
@@ -662,7 +690,7 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
                 continue;
             }
             streamed.inputs(k, in);
-            CHECK((in.size() == 1 && in[0] == SourceKey{ 3, SourceKey::SITES, layer, k.tile }));
+            CHECK((in.size() == 1 && in[0] == SourceKey{ 3, SourceKey::PROXIES, layer, k.tile }));
             SourceContent walk, with, alone;
             streamed.content(in[0], {}, walk);
             streamed.content(k, { &walk }, with);
@@ -671,7 +699,7 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
             alike += same_content(with, alone);
             blobs += int64_t(with.records.size());
         }
-        MESSAGE("layer ", layer, ": ", checked, " far blob tiles, ", blobs, " blobs, ", alike, " the same without their site tile");
+        MESSAGE("layer ", layer, ": ", checked, " far blob tiles, ", blobs, " blobs, ", alike, " the same without their proxy tile");
         CHECK(alike == checked);
     }
     CHECK(layers >= 2);

@@ -118,8 +118,9 @@ def stream_keys_table(name, st, prev):
     out = [f"#### {name}: keys per kind and LOD", "",
            "| key | computed | evicted | computed (cumul.) | evicted (cumul.) | recompute ratio (cumul.) | ms avg |",
            "|---|---|---|---|---|---|---|"]
-    kinds = {"sites": 0, "parts": 1, "blobs": 2}  # SourceKey::kind_name: the walks, the records grown from them, the blobs
-    for key in sorted(by, key=lambda k: (kinds.get(k.split()[0], 3), int(k.split()[1]))):
+    # SourceKey::kind_name: the walks, the records grown from them, the blobs.
+    kinds = {"sites": 0, "proxies": 1, "parts": 2, "blobs": 3}
+    for key in sorted(by, key=lambda k: (kinds.get(k.split()[0], len(kinds)), int(k.split()[1]))):
         k, p = by[key], prev_by.get(key, {})
         c, e = k.get("count", 0), k.get("evicted")
         ratio = f"{c / (c - e):.2f}" if e is not None and c > e else ("n/a" if e is None else "inf")

@@ -81,6 +81,7 @@ private:
     String climate_path;
     bool archetype_band = true;
     bool archetype_stream = true;
+    int archetype_stream_part_sides = int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES);
     bool archetype_moments = true;
     float archetype_erode = Archetype::ERODE_CELLS;
     float archetype_resolve = Archetype::ErodeRule().resolve;
@@ -239,6 +240,11 @@ public:
     // instance_stream.hpp); false places them whole at configure (--stream=0). Must be set before the node enters the tree.
     void set_archetype_stream(bool p_enabled);
     bool get_archetype_stream() const;
+    // The streamed sources' moment layers read the records while their cell is under this many source cells, above it
+    // proxies (default 1; 3 = the whole build's blobs, ScatterSource::PART_CELL_SIDES; --stream_part_sides). Must be set
+    // before the node enters the tree.
+    void set_archetype_stream_part_sides(int p_sides);
+    int get_archetype_stream_part_sides() const;
     // The far field of the dropped instances (default on): their moments, per LOD, as blobs the coarse chunks fold into a
     // surface (moment_layers.hpp; --moments=0 to leave it out). Must be set before the node enters the tree.
     void set_archetype_moments(bool p_enabled);
