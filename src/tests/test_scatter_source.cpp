@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
 #include <tuple>
 
 using namespace Archetype;
@@ -533,6 +534,16 @@ private:
     }
 };
 
+// The same sites, cell by cell, in the same order.
+bool same_sites(const std::vector<CellSite> &p_a, const std::vector<CellSite> &p_b) {
+    bool equal = p_a.size() == p_b.size();
+    for (size_t i = 0; equal && i < p_a.size(); i++) {
+        const CellSite &a = p_a[i], &b = p_b[i];
+        equal = a.cell == b.cell && a.site.base == b.site.base && a.site.seed == b.site.seed && a.site.variant == b.site.variant;
+    }
+    return equal;
+}
+
 bool same_content(const SourceContent &p_a, const SourceContent &p_b) {
     if (p_a.records.size() != p_b.records.size() || p_a.groups.size() != p_b.groups.size() || p_a.out_of_profile != p_b.out_of_profile) {
         return false;
@@ -590,11 +601,20 @@ TEST_CASE("Scatter source: the chunks' lists through the stream are the record p
         pyramids.emplace_back(*s);
     }
     Mirror mirror;
+    std::set<SourceKey> proxy_tiles; // every proxy tile the chunks' blob tiles read
     for (int lod = 0; lod <= 7; lod++) {
         CAPTURE(lod);
         int64_t chunks = 0, right = 0, records = 0;
         for (int64_t i = 0; i < 25; i++) {
             const ChunkId chunk = ChunkMath::chunk_at_voxel(fx.origin + VoxelPos(-1100 + 550 * (i % 5), 0, -1100 + 550 * (i / 5)), lod, fx.param);
+            for (const std::shared_ptr<const ScatterSource> &s : fx.sources) {
+                std::vector<SourceKey> keys, in;
+                s->chunk_keys(chunk, fx.param, keys);
+                for (const SourceKey &k : keys) {
+                    s->inputs(k, in);
+                    std::copy_if(in.begin(), in.end(), std::inserter(proxy_tiles, proxy_tiles.end()), [](const SourceKey &p_k) { return p_k.kind == SourceKey::PROXIES; });
+                }
+            }
             InstanceStream::Admit answer = InstanceStream::LATER;
             std::vector<std::pair<ChunkId, uint64_t>> back;
             for (int frame = 0; frame < 8 && answer != InstanceStream::READY; frame++) {
@@ -646,9 +666,20 @@ TEST_CASE("Scatter source: the chunks' lists through the stream are the record p
         CHECK(right == chunks);
     }
     CHECK(int64_t(stream.get_stats()["lists_missing"]) == 0);
+    // A proxy tile shared by several blob tiles is walked once (resident while they wait, and after).
+    const Dictionary by = stream.get_stats()["computed_by_key"];
+    int64_t walked = 0;
+    for (int layer = 0; layer < ChunkMath::MAX_LOD_NUMBERS; layer++) {
+        const String name = vformat("proxies %d", layer);
+        walked += by.has(name) ? int64_t(Dictionary(by[name])["count"]) : 0;
+    }
+    MESSAGE(int64_t(proxy_tiles.size()), " proxy tiles read, ", walked, " walks");
+    CHECK(proxy_tiles.size() > 4);
+    CHECK(walked == int64_t(proxy_tiles.size()));
 }
 
-// A site tile is the walk of its box; a far layer's blob tile reads its proxy tile and is what it computes alone.
+// A site tile is the walk of its box; a far layer's blob tile reads the proxy tiles around it, whose sites in its region
+// are the walk of the region itself (the one walk a blob tile did before), and is what it computes alone.
 TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
     const SourceFixture &fx = SourceFixture::get();
     const ScatterSource &f = fx.f();
@@ -662,13 +693,8 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
             surface_sites(box.lo, box.hi, sc.side, sc.salt, sc.ground, walk);
         }
         const SourceContent &c = fx.content(key);
-        bool equal = c.records.empty() && c.groups.empty() && c.sites.size() == walk.size();
-        for (size_t i = 0; equal && i < walk.size(); i++) {
-            const CellSite &a = c.sites[i], &b = walk[i];
-            equal = a.cell == b.cell && a.site.base == b.site.base && a.site.seed == b.site.seed && a.site.variant == b.site.variant;
-        }
         tiles++;
-        same += equal;
+        same += c.records.empty() && c.groups.empty() && same_sites(c.sites, walk);
         sites += int64_t(walk.size());
     }
     MESSAGE(tiles, " LOD-0 site tiles, ", sites, " sites, ", same, " identical");
@@ -682,25 +708,52 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
             continue;
         }
         layers++;
+        const int64_t g = MAX<int64_t>(1, streamed.layer_cell(layer) / ScatterSource::PROXY_PER_CELL);
+        const int64_t reach = int64_t(std::ceil(streamed.profile().reach));
         std::vector<SourceKey> keys, in;
         streamed.keys(fx.zone().lo, fx.zone().hi, layer, keys);
-        int64_t blobs = 0, alike = 0, checked = 0;
+        std::map<SourceKey, SourceContent> walks;
+        int64_t blobs = 0, alike = 0, checked = 0, reads = 0, regions_same = 0, proxies = 0;
         for (const SourceKey &k : keys) {
             if (k.kind != SourceKey::BLOBS) {
                 continue;
             }
             streamed.inputs(k, in);
-            CHECK((in.size() == 1 && in[0] == SourceKey{ 3, SourceKey::PROXIES, layer, k.tile }));
-            SourceContent walk, with, alone;
-            streamed.content(in[0], {}, walk);
-            streamed.content(k, { &walk }, with);
+            ScatterSource::Inputs raw;
+            std::vector<CellSite> gathered;
+            const VoxelBox region = streamed.tile_box(k).grown(ScatterSource::MARGIN_CELLS * streamed.layer_cell(layer) + reach).clipped(sc.zone.grown(g));
+            for (const SourceKey &p : in) {
+                CHECK((p.kind == SourceKey::PROXIES && p.lod == layer));
+                auto it = walks.find(p);
+                if (it == walks.end()) {
+                    it = walks.emplace(p, SourceContent()).first;
+                    streamed.content(p, {}, it->second);
+                    proxies += int64_t(it->second.sites.size());
+                }
+                raw.push_back(&it->second);
+                std::copy_if(it->second.sites.begin(), it->second.sites.end(), std::back_inserter(gathered),
+                        [&region](const CellSite &p_s) { return region.contains(p_s.site.base); });
+            }
+            reads += int64_t(in.size());
+            // The old one-region walk.
+            std::vector<CellSite> walk;
+            if (region.valid) {
+                surface_sites(region.lo, region.hi, g, sc.salt ^ ScatterSource::PROXY_SALT, sc.ground, walk, false);
+            }
+            std::sort(gathered.begin(), gathered.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
+            regions_same += same_sites(gathered, walk);
+            SourceContent with, alone;
+            streamed.content(k, raw, with);
             streamed.content(k, {}, alone);
             checked++;
             alike += same_content(with, alone);
             blobs += int64_t(with.records.size());
         }
-        MESSAGE("layer ", layer, ": ", checked, " far blob tiles, ", blobs, " blobs, ", alike, " the same without their proxy tile");
+        MESSAGE("layer ", layer, ": ", checked, " far blob tiles, ", blobs, " blobs, ", int64_t(walks.size()), " proxy tiles (", proxies, " proxies) read ",
+                reads, " times, ", regions_same, " regions' walks identical, ", alike, " the same without their proxy tiles");
+        CHECK(regions_same == checked);
         CHECK(alike == checked);
+        CHECK(reads > int64_t(walks.size())); // shared
     }
     CHECK(layers >= 2);
 }
