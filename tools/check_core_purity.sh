@@ -21,6 +21,8 @@ core_files=(
     src/ov/on_error.hpp
     src/ov/bytes.hpp
     src/world_coord.hpp
+    src/subcube.hpp
+    src/latency_hist.hpp
     src/chunk_math.hpp
     src/chunk_math.cpp
     src/page_format.hpp

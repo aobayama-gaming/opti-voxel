@@ -50,6 +50,10 @@ for a in "${PASS[@]}"; do
         spec="${a#--shot=}"; when="${spec%%:*}"; path="${spec#*:}"
         [[ "$path" != /* ]] && path="$RUN_DIR/$path"
         ARGS+=("--shot=$when:$path")
+    elif [[ "$a" == --rise_shots=* || "$a" == --approach_shots=* ]]; then
+        key="${a%%=*}"; path="${a#*=}"
+        [[ "$path" != /* ]] && path="$RUN_DIR/$path"
+        ARGS+=("$key=$path")
     else
         ARGS+=("$a")
     fi

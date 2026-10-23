@@ -1,6 +1,9 @@
 
 #include "chunk_math.hpp"
 
+#include "ov/on_error.hpp"
+#include "subcube.hpp"
+
 #include <cmath>
 
 using WorldCoord::ctz64;
@@ -41,6 +44,18 @@ ChunkId ChunkMath::get_parent_from_child(const ChunkId &coord) {
             get_parent_from_child(coord.z));
 }
 
+ov::ivec2 ChunkMath::lod_range(const std::vector<ChunkId> &p_chunks) {
+    if (p_chunks.empty()) {
+        return ov::ivec2();
+    }
+    ov::ivec2 r(get_lod(p_chunks[0]), get_lod(p_chunks[0]));
+    for (const ChunkId &c : p_chunks) {
+        const int lod = get_lod(c);
+        r = ov::ivec2(std::min(r.x, lod), std::max(r.y, lod));
+    }
+    return r;
+}
+
 int ChunkMath::get_lod(const ChunkId &coord) {
     // The LOD of a chunk is the index of the lowest set bit of its coordinates (x is enough).
     if (coord.x == 0) {
@@ -51,6 +66,33 @@ int ChunkMath::get_lod(const ChunkId &coord) {
 
 int64_t ChunkMath::get_lod_size(const ChunkId &coord) {
     return int64_t(1) << get_lod(coord);
+}
+
+uint64_t ChunkMath::subcube_bits(const ChunkId &p_ancestor, const ChunkId &p_descendant) {
+    const int la = get_lod(p_ancestor);
+    const int ld = get_lod(p_descendant);
+    OV_ERR_FAIL_COND_V_MSG(ld >= la || int(Subcube::AXIS_BITS) > la + 1, 0, "subcube_bits: not a descendant at least AXIS_BITS finer.");
+    OV_ERR_FAIL_COND_V_MSG(get_parent_from_child_until(p_descendant, la) != p_ancestor, 0, "subcube_bits: not an ancestor.");
+    // Units from the ancestor's low corner, in [0, 2^(la+1)); a sub-cube spans 2^shift of them.
+    const int shift = la + 1 - int(Subcube::AXIS_BITS);
+    const int64_t half = get_lod_size(p_descendant);
+    const int64_t a_half = get_lod_size(p_ancestor);
+    const ChunkId local = p_descendant - p_ancestor + ChunkId(a_half, a_half, a_half);
+    uint32_t lo[3], hi[3];
+    for (int a = 0; a < 3; a++) {
+        const int64_t v = local[a];
+        lo[a] = uint32_t((v - half) >> shift);
+        hi[a] = uint32_t((v + half - 1) >> shift);
+    }
+    uint64_t bits = 0;
+    for (uint32_t z = lo[2]; z <= hi[2]; z++) {
+        for (uint32_t y = lo[1]; y <= hi[1]; y++) {
+            for (uint32_t x = lo[0]; x <= hi[0]; x++) {
+                bits |= uint64_t(1) << Subcube::bit(x, y, z);
+            }
+        }
+    }
+    return bits;
 }
 
 ChunkId ChunkMath::get_parent_from_child_until(const ChunkId &coord, int target_lod) {
@@ -76,6 +118,13 @@ VoxelPos ChunkMath::chunk_min_voxel(const ChunkId &chunk_coord, const ChunkParam
     return (chunk_coord - ChunkId(lod_size, lod_size, lod_size)) * chunk_param.half_chunk_voxels();
 }
 
+ChunkId ChunkMath::chunk_at_voxel(const VoxelPos &p_voxel, int p_lod, const ChunkParam &chunk_param) {
+    const int64_t span = int64_t(chunk_param.chunk_voxel_dimension()) << p_lod;
+    const int64_t unit = int64_t(1) << p_lod;
+    auto axis = [&](int64_t p_v) { return (WorldCoord::floor_div(p_v, span) * 2 + 1) * unit; };
+    return ChunkId(axis(p_voxel.x), axis(p_voxel.y), axis(p_voxel.z));
+}
+
 VoxelPos ChunkMath::chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
     return chunk_coord * chunk_param.half_chunk_voxels();
 }
@@ -98,7 +147,11 @@ Float3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size,
 } // namespace
 
 Float3 ChunkMath::chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
-    const Vector3i64 rel = chunk_center_voxel(chunk_coord, chunk_param) - chunk_param.origin_voxel();
+    return voxel_to_render(chunk_center_voxel(chunk_coord, chunk_param), chunk_param);
+}
+
+Float3 ChunkMath::voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param) {
+    const Vector3i64 rel = p_voxel - chunk_param.origin_voxel();
     const double vs = double(chunk_param.voxel_size);
     return Float3{ float(double(rel.x) * vs), float(double(rel.y) * vs), float(double(rel.z) * vs) };
 }

@@ -8,6 +8,7 @@
 #include <godot_cpp/classes/semaphore.hpp>
 #include <godot_cpp/classes/thread.hpp>
 
+#include "chunk_gate.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
 #include "lod_structures.hpp"
@@ -22,6 +23,10 @@ struct UnpackChunk {
     PackedVector3Array output_points;
     PackedVector3Array output_normals;
     PackedInt32Array output_triangles;
+    // Per point: its global material (material_library.hpp), from the chunk's palette. A float vertex channel
+    // (ARRAY_CUSTOM0, R float: ids < Material::MAX_MATERIALS are exact) the validator compares.
+    PackedFloat32Array output_materials;
+    std::vector<uint32_t> palette; // the chunk's palette (build_lists), main thread -> worker with the batch
 
     uint32_t point_offset = 0; // used to fill the array
     uint32_t index_count = 0; // indices actually written by the CPU triangulation
@@ -40,6 +45,7 @@ struct UnpackChunk {
     void resize(int point_number, int triangles_number) {
         output_points.resize(point_number);
         output_normals.resize(point_number);
+        output_materials.resize(point_number);
         quad_masks.resize(point_number);
         point_cells.resize(point_number);
 
@@ -65,11 +71,11 @@ private:
     //worker availability
     Ref<Mutex> mutex;
     Ref<Semaphore> semaphore;
-    bool worker_available = true;
+    bool worker_available = false; // set by the worker once its device and buffers exist (process_queue sizes lists by them)
     bool result_available = false;
     bool exit_thread = false;
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
-    int batch_min_lod = 0; // smallest LOD of the current batch (cascade levels to run)
+    Vector2i batch_lods; // smallest and largest LOD of the current batch (cascade levels and variants to run)
     bool trim_indices = false; // drop the zero padding at the end of the index buffer (legacy bug)
     // Dual contouring of Hermite data (DC-lite) in the vertex pass (gpu_glsl.hpp). Set before
     // initialize(): the worker compiles the vertex shader there.
@@ -114,43 +120,53 @@ private:
     // The instance table's buffers (archetype instances), on the local device.
     RID buffer_table_records;
     RID buffer_table_list;
+    RID buffer_material; // per sample: its palette index (cascade level 0 -> third pass)
     uint64_t table_list_capacity = 0; // bytes
-    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last handed to the worker
+    SDFGpuTable::UploadCursor sent_records; // main thread: the records last handed to the worker
     std::vector<ChunkId> in_flight_ids; // main thread: the chunks of the batch handed to the worker
     // Uniform set
 
     RID uniform_set;
 
-    RID shader_first_pass;
     RID shader_second_pass;
     RID shader_third_pass;
 
-    RID pipeline_first_pass;
     RID pipeline_second_pass;
     RID pipeline_third_pass;
 
-    // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 1, in sub-batches of at most
+    // The cascade passes: pass 1 (the samples), in sub-batches of at most
     // CASCADE_MAX_CHUNKS chunks (its scratch, ~92 KB per chunk with 4 channels, is not sized for 1024).
     static constexpr uint32_t CASCADE_MAX_CHUNKS = 128;
+    // sdf_material's binding (after the table's 6, 7), and the palette index's place in a point's word c: above the
+    // chunk index (16 bits) and the quad mask (4), within an int.
+    static constexpr int MATERIAL_BINDING = 8;
+    static constexpr uint32_t POINT_PALETTE_SHIFT = 20;
+    static_assert(POINT_PALETTE_SHIFT + PageFormat::PALETTE_BITS <= 31, "a point's word c is an int");
     CascadePasses *cascade = nullptr;
 
     // One set per ChunkMath::load_queue: in the view cone first, then by LOD.
     std::vector<LODHashSet *> chunk_queue;
+    ScanView load_view; // the view of the last send_chunk, for the chunks queued again
     int lod_count = 0;
     // Instance edits' re-meshes (loaded chunks), popped before chunk_queue. Kept apart because send_chunk
     // rebuilds chunk_queue from each scan's dirty chunks, which a loaded chunk isn't.
     std::vector<LODHashSet *> remesh_queue;
 
     LODHashSet working_generation;
+    ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
+    DispatchTimes dispatch_times; // gate_admit read from the gate
 
     RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
 
-    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
+    void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, const Vector2i &p_lods, const PackedByteArray &p_table_list,
             const PackedByteArray &p_table_records);
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
-    bool _pop_queue(ChunkId &new_chunk);
+    // r_kind: REMESH from remesh_queue, else CHUNK; r_queue: its index in its queue list (ChunkGate::next's pop).
+    bool _pop_queue(ChunkId &new_chunk, ChunkGate::Kind &r_kind, int &r_queue);
+    // A popped chunk back in its queue.
+    void _requeue(const ChunkId &p_chunk, bool p_remesh);
 
     bool _is_available();
 
@@ -188,4 +204,10 @@ public:
     void set_dual_contouring(bool p_enable) { dual_contouring = p_enable; }
 
     Dictionary get_stats();
+    // Main thread: the dispatch's sub-timers since the start (VoxelTerrain's sections).
+    DispatchTimes get_dispatch_times() const {
+        DispatchTimes t = dispatch_times;
+        t.gate_admit = gate.admit_usec;
+        return t;
+    }
 };

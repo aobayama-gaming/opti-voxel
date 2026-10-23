@@ -73,6 +73,9 @@ jobs:
         run: |
           export GODOT=~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64
           # The import registers the extension (headless, the terrain prints one ERROR and stays empty).
-          "$GODOT" --headless --path project --import > import.log 2>&1 || { tail -30 import.log; exit 1; }
+          # A fresh import can abort at exit in Godot 4.6.3 (dev reproduces it), after
+          # the import is done: run it again, and the second run, on an imported project, must exit 0.
+          "$GODOT" --headless --path project --import > import.log 2>&1 ||
+            "$GODOT" --headless --path project --import > import.log 2>&1 || { tail -30 import.log; exit 1; }
           test -f project/.godot/extension_list.cfg || { tail -30 import.log; exit 1; }
           tools/unit_test.sh --no-build

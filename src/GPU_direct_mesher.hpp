@@ -6,6 +6,7 @@
 #include <godot_cpp/templates/hash_map.hpp>
 #include <godot_cpp/templates/hash_set.hpp>
 
+#include "chunk_gate.hpp"
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
@@ -13,6 +14,7 @@
 #include "lod_structures.hpp"
 #include "quad_page_pool.hpp"
 #include "sdf_base.hpp"
+#include <godot_cpp/classes/image_texture.hpp>
 
 #include <vector>
 
@@ -43,6 +45,12 @@ class CascadePasses;
 
 class GPUDirectMesher : public Object, public ChunkReleaser {
 public:
+    // The mesher's own compute passes: edges, vertices, reserve, emit (the samples are the cascade passes).
+    static constexpr int COMPUTE_PASSES = 4;
+    // The mesher set's bindings past the table's (8, 9): sdf_material, the palette texture, the batch's palettes.
+    static constexpr int MATERIAL_BINDING = 10;
+    static constexpr int PALETTE_IMAGE_BINDING = 11;
+    static constexpr int PALETTE_BATCH_BINDING = 12;
     // A batch captures up to 10 GPU timestamps; Godot keeps 256 per frame by default
     // (debug/settings/profiler/max_timestamp_query_elements), shared with the renderer and the discoverer.
     static constexpr uint32_t MAX_BATCHES_PER_FRAME = 16;
@@ -70,6 +78,10 @@ public:
         // Free pages kept allocated (0 = max_in_flight batches' worth: max_in_flight * pages_per_batch),
         // so the next batches don't recreate the pages the previous ones returned.
         uint32_t spare_pages = 0;
+        // Entries of the palette texture (PalettePool, 4 B each; a power of two): the loaded chunks' palettes.
+        uint32_t palette_capacity = 1u << 21;
+        // Chunks asked of the SDF's gating per frame at most (every answer counts; 0 = 4 * batch_size, ChunkGate::begin_frame).
+        uint32_t max_admits_per_frame = 0;
     };
 
     void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings);
@@ -90,13 +102,14 @@ public:
     void compact(VoxelState &r_state);
 
     void release_chunk(const ChunkOutput &p_chunk) override;
+    void set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) override;
 
     // Discovery audit: quad counts of chunks that are not loaded. Passes sdf, edges and vertices only,
     // nothing is written to pages, nothing becomes loaded. Batches run only when the mesh queue is empty.
     void audit_count_chunks(const std::vector<ChunkId> &p_chunks);
     // Counts that came back since the last call (consumed by get_results()).
     void take_audit_counts(std::vector<std::pair<ChunkId, uint32_t>> &r_counts);
-    bool is_audit_idle() const { return audit_queue.empty() && audit_in_flight.is_empty(); }
+    bool is_audit_idle() const { return audit_queue.empty() && audit_in_flight.is_empty() && gate.idle(ChunkGate::AUDIT); }
 
     void set_debug_view(int p_view);
     // Dual contouring of Hermite data (DC-lite) in the vertex pass: sharp UNION / SUBTRACT creases
@@ -104,11 +117,18 @@ public:
     // initialize(): the render thread compiles the vertex shader in _rt_initialize.
     void set_dual_contouring(bool p_enable) { dual_contouring = p_enable; }
     Dictionary get_stats();
+    // Main thread: the dispatch's sub-timers since the start (VoxelTerrain's sections).
+    DispatchTimes get_dispatch_times() const {
+        DispatchTimes t = dispatch_times;
+        t.gate_admit = gate.admit_usec;
+        return t;
+    }
     QuadPagePool *get_pool() const { return pool; }
 
 private:
     struct InFlightBatch {
         std::vector<ChunkId> chunks;
+        std::vector<PalettePool::Block> palettes; // per chunk, placed at dispatch
         std::vector<int> pages;
         uint64_t dispatch_frame = 0;
         uint32_t table_version = 0; // the instance table version the batch was recomputed from
@@ -145,6 +165,8 @@ private:
     bool dual_contouring = false;
 
     QuadPagePool *pool = nullptr;
+    PalettePool palettes; // blocks: main thread; texture: render thread
+    Ref<ImageTexture> material_texture; // the pages' material_tex (a material param holds its RID only)
 
     // One queue per ChunkMath::load_queue (in the view cone first, then by LOD), each sorted by descending
     // Morton key: pop_back() walks space along the Morton curve, so a batch's chunks stay close together.
@@ -157,6 +179,7 @@ private:
     godot::HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
     godot::HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
     LODHashSet working_generation;
+    ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
 
     uint32_t next_batch_id = 0;
     godot::HashMap<uint32_t, InFlightBatch> in_flight;
@@ -166,6 +189,9 @@ private:
     // Kills collected during the frame, flushed to the render thread once.
     PackedInt32Array pending_kill_pages;
     PackedInt64Array pending_kill_ranges; // offset, count pairs (quads)
+    // Hidden sub-cubes set since the last _flush_hidden: page, first row, rows, mask, z low word | palette << 32
+    // (QuadPagePool::rt_set_hidden).
+    PackedInt64Array pending_hidden;
 
     Ref<Mutex> mutex; // guards `completed`, `audit_completed`, `measured_batches` and the render-thread timing stats
     std::vector<CompletedBatch> completed;
@@ -178,12 +204,32 @@ private:
     uint64_t frame = 0;
 
     // GPU budget (Settings::gpu_budget_ms). The render thread hands each batch's measured GPU time
-    // (us, timestamps begin..copy) to `measured_batches` (under mutex); the main thread matches it with
-    // the batch's chunks per LOD and corrects the model.
+    // (us, timestamps begin..copy, and its sdf pass) to `measured_batches` (under mutex); the main thread matches it
+    // with the batch's chunks per LOD and corrects the model, and bins it by the batch's list words (stats).
+    struct BatchCost {
+        std::vector<uint32_t> lod_counts;
+        uint32_t list_words = 0; // the batch's instance list (Σ of its chunks' list lengths)
+    };
+    struct MeasuredBatch {
+        uint32_t batch_id = 0;
+        uint64_t total_us = 0; // begin..copy
+        uint64_t sdf_us = 0; // pass 0: the cascade and the table fold
+    };
     GPUCostModel cost_model;
-    godot::HashMap<uint32_t, std::vector<uint32_t>> batch_lod_counts;
-    std::vector<std::pair<uint32_t, uint64_t>> measured_batches;
+    godot::HashMap<uint32_t, BatchCost> batch_costs;
+    std::vector<MeasuredBatch> measured_batches;
     void _update_cost_model();
+    // GPU time per batch by its list words: bin b holds the batches of [2^(b-1), 2^b) words (bin 0: none).
+    struct ListWordsBin {
+        uint64_t batches = 0;
+        uint64_t words = 0;
+        uint64_t sdf_us = 0;
+        uint64_t total_us = 0;
+    };
+    static constexpr int LIST_WORD_BINS = 33;
+    ListWordsBin gpu_by_list_words[LIST_WORD_BINS];
+    Array _gpu_by_list_words_stats() const;
+    DispatchTimes dispatch_times; // gate_admit read from the gate
 
     // ---- render thread only ----
     RenderingDevice *rd = nullptr;
@@ -195,16 +241,18 @@ private:
     RID buffer_chunk_param;
     RID staging_texture;
     RID buffer_status;
+    RID buffer_material; // per sample: its palette index (cascade level 0 -> vertex pass)
+    RID buffer_palette_batch; // the batch's PalettePool::place_batch payload
     // The instance table's buffers (archetype instances): records + the current batch's list.
     RID buffer_table_records;
     RID buffer_table_list;
     uint64_t table_list_capacity = 0; // bytes
-    uint32_t sent_table_version = UINT32_MAX; // main thread: the records version last bound to a dispatch
-    RID shaders[5];
-    RID pipelines[5];
+    SDFGpuTable::UploadCursor sent_records; // main thread: the records last bound to a dispatch
+    RID shaders[COMPUTE_PASSES];
+    RID pipelines[COMPUTE_PASSES];
     RID uniform_set;
     uint32_t status_size_bytes = 0;
-    // Cascade terrain (sdf->get_cascade()): the cascade passes replace pass 0 (sdf).
+    // The cascade passes: the samples (stat / timestamp pass 0).
     CascadePasses *cascade = nullptr;
     uint64_t cascade_scratch_bytes = 0; // under `mutex` (get_stats reads it on the main thread)
     uint64_t timestamps_frame_read = UINT64_MAX; // RD frame whose captured timestamps were consumed
@@ -213,16 +261,23 @@ private:
     RID _rt_compile(const char *p_pass, const char *p_name);
     void _queue_remesh(const ChunkId &p_chunk);
     void _rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records);
-    // Main thread: the batch's instance lists (patched into r_ids) and, if the table changed since the last
-    // dispatch, the records it changed (SDFGpuTable::record_bytes spans). Returns the table version they are.
-    uint32_t _table_payload(const std::vector<ChunkId> &p_chunks, PackedByteArray &r_ids, PackedByteArray &r_list, PackedByteArray &r_records);
-    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count,
-            const PackedInt32Array &p_pages, int p_min_lod, const PackedByteArray &p_list, const PackedByteArray &p_records);
-    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, int p_min_lod,
+    // Main thread: the batch's instance lists (patched into r_ids), the chunks' palettes (if r_palettes) and, if
+    // the records changed since the last dispatch, those that did (SDFGpuTable::record_bytes spans). Returns
+    // the table version they are. The lists fill the list buffer at most: r_chunks keeps the leading chunks that
+    // fit, r_rest gets the others (r_ids shrunk to match) for the caller to queue again.
+    uint32_t _table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
+            PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr);
+    // Main thread: a chunk popped for a batch it couldn't go in (overflow, or its list didn't fit) back in its queue:
+    // remesh_queue (p_remesh) or chunk_queue.
+    void _requeue(const ChunkId &p_chunk, bool p_remesh);
+    // p_lods: the batch's smallest and largest LOD (the cascade's level count, its fields' variant).
+    void _rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p_chunk_ids, uint32_t p_count, const PackedInt32Array &p_pages, const Vector2i &p_lods,
+            const PackedByteArray &p_list, const PackedByteArray &p_records, const PackedByteArray &p_palette_batch);
+    void _rt_dispatch_count(const PackedByteArray &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, const Vector2i &p_lods,
             const PackedByteArray &p_list, const PackedByteArray &p_records);
-    // Pass 0: the sdf pass, or the cascade's levels (timestamps "<prefix>_c<group>" after each level group
-    // when p_prefix is not empty).
-    void _rt_record_samples(uint32_t p_count, int p_min_lod, const PackedByteArray &p_push, const String &p_prefix);
+    // Pass 0: the cascade's levels (timestamps "<prefix>_c<group>" after each level group
+    // when p_prefix is not empty), folding the instances when the batch's list p_list holds any.
+    void _rt_record_samples(uint32_t p_count, const Vector2i &p_lods, const String &p_prefix, const PackedByteArray &p_list);
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);
@@ -239,12 +294,22 @@ private:
     // completion assembly (render thread writes, main thread consumes; under mutex)
     godot::HashMap<uint32_t, CompletedBatch> partial;
 
-    bool _pop_queue(ChunkId &r_chunk);
+    // r_kind: REMESH from remesh_queue, else CHUNK and r_queue its chunk_queue index (ChunkGate::next's pop).
+    bool _pop_queue(ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue);
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
     // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
     bool _dispatch_mesh_batch(double &r_budget_us);
+    // A mesh batch's chunks, admitted until their estimate (their LODs and list bounds) reaches p_budget_us; r_bounds: each
+    // one's list bound.
+    void _pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
+            HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds);
+    // A batch's lists (their lengths in p_ids, after build_lists, of which p_streamed streamed words per chunk) against its
+    // chunks' bounds, per LOD, into the cost model; the bounds' sum.
+    uint64_t _observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids, const std::vector<uint32_t> &p_streamed,
+            const HashMap<ChunkId, uint64_t, Vector3i64Hasher> &p_bounds);
     bool _dispatch_audit_batch();
     void _flush_kills();
+    void _flush_hidden();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
     void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
@@ -256,12 +321,14 @@ private:
         uint64_t quads_emitted = 0;
         uint64_t overflow_chunks = 0;
         uint64_t overflow_requeued = 0; // chunks sent back to the queue because their batch overflowed
+        uint64_t list_requeued = 0; // chunks sent back before dispatch: their instance list didn't fit the batch's buffer
         uint64_t audit_batches = 0;
         uint64_t dispatch_frames = 0; // frames that dispatched at least one batch
         uint64_t in_flight_max = 0; // mesh + audit batches waiting for their directory
         uint64_t missing_neighbor = 0;
         uint64_t nan_vertices = 0;
         uint64_t kills = 0;
+        uint64_t hidden_rows = 0; // rows whose coverage texel was rewritten (set_hidden)
         uint64_t pages_returned_unused = 0;
         uint64_t compact_rounds = 0;
         uint64_t compact_skipped = 0; // windows with nothing to gain (pages marked settled)
@@ -288,5 +355,8 @@ private:
         TimingStat budget_frame_estimate; // estimated GPU time of the mesh batches dispatched in a frame
         double model_ratio_sum = 0.0; // measured / estimated GPU time of the batches matched
         uint64_t model_ratio_count = 0;
+        uint64_t list_words_total = 0; // instance list words of the mesh batches dispatched
+        uint64_t list_words_max = 0; // in one batch
+        uint64_t list_bound_total = 0; // their chunks' list bounds (SDFBase::admit): the estimate before the lists
     } stats;
 };

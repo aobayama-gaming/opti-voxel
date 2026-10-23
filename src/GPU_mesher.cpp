@@ -29,9 +29,14 @@
 
 #include "cascade_glsl.hpp"
 #include "exact_noise.hpp"
+#include "exact_noise_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
+#include "material_library.hpp"
+#include "page_format.hpp"
 #include "rd_utils.hpp"
+
+#include <cstring>
 
 static constexpr const char GLSL_BUFFER_BINDING[] = R"glsl(
 layout(set = 0, binding = 0, std430) restrict buffer AtomicCounter {
@@ -57,6 +62,9 @@ layout(set = 0, binding = 4, std430) restrict buffer OutputPoint {
 layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
     ChunkParam chunk_param;
 };
+
+// Per sample: its chunk palette index (written by the cascade's level 0 for chunks with a list).
+/*GLSL_MATERIAL_BUFFER*/
 
 uint get_flat_index_z(uvec3 cell_coordinate) {
     return cell_coordinate.x + (cell_coordinate.y * chunk_param.chunk_size) + (cell_coordinate.z * chunk_param.chunk_size * chunk_param.chunk_size);
@@ -84,14 +92,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 /*GLSL_HELPER_FUNCTION*/
 
-//Will inject vec4 terrain_sdf(WorldPos p, int lod)
-/*GLSL_TERRAIN_SDF*/
-
-vec4 evaluate_sdf(WorldPos p, int lod) {
-    return terrain_sdf(p, lod);
-}
-
-/*GLSL_SKIRT_SDF*/
+/*GLSL_VERTEX_GRADIENT*/
 
 /*GLSL_QEF_VERTEX*/
 
@@ -116,21 +117,18 @@ void main() {
     const String pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : String(algorithm_pass);
 
     // 2. Inject the dynamic code
-    String bindings = GLSL_BUFFER_BINDING;
-    String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE);
-    String set_chunk;
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        bindings += table->glsl_buffers(6, 7);
-        helpers += GPUFrame::glsl_int64();
-        set_chunk = table->glsl_set_chunk();
-    }
+    const SDFGpuTable *table = sdf->get_gpu_table();
+    const String bindings = String(GLSL_BUFFER_BINDING).replace("/*GLSL_MATERIAL_BUFFER*/", CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly")) +
+            table->glsl_buffers(6, 7) +
+            vformat("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT) + ChunkPalette::glsl_base(table->base_palette());
+    const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
+    const String set_chunk = table->glsl_set_chunk();
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_BUFFER_BINDING*/", bindings);
     shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
-    shader = shader.replace("/*GLSL_TERRAIN_SDF*/", sdf->get_glsl_code());
     shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
     shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
-    shader = CascadeGLSL::fill_mesher_pass(shader, sdf, pass, p_name == "third");
+    shader = CascadeGLSL::fill_mesher_pass(shader, pass);
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
     // 3. Create a Shader Source object
@@ -167,12 +165,6 @@ void main() {
 
     return shader_rid;
 }
-
-static constexpr const char GLSL_FIRST_PASS[] = R"glsl(
-
-sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = skirt_sdf(chunk,vec3(cell_chunk_coordinate),chunk_param);
-
-)glsl";
 
 static constexpr const char GLSL_SECOND_PASS[] = R"glsl(
 
@@ -271,7 +263,7 @@ if (active_edge_count > 0) {
 
     vec3 chunk_vertex = local_vertex+vec3(cell_chunk_coordinate);
 
-    vec3 surface_normal = vertex_normal(vec3(0.0), skirt_sdf(chunk,chunk_vertex,chunk_param).xyz);
+    vec3 surface_normal = vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
     uint packed_normal = packSnorm4x8(vec4(surface_normal, 0.0));
 
     // 3. Triangle Metadata (3 bit mask for X/Y/Z quad generation in Dual Contouring/Surface nets)
@@ -305,7 +297,10 @@ if (active_edge_count > 0) {
     output_point[global_point_idx].b = int(packed_normal);
     
     // Store chunk index and mask in 'c' 
-    output_point[global_point_idx].c = int((chunk_idx & 0xFFFF) | (quad_mask << 16));
+    // (and the vertex's palette index at POINT_PALETTE_SHIFT; without a climate's base palette a chunk without a list
+    // is all ground, its samples' materials unwritten)
+    uint palette = input_chunk[chunk_idx].anchor_hi.w == 0 && !GROUND_MATERIALS ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+    output_point[global_point_idx].c = int((chunk_idx & 0xFFFF) | (quad_mask << 16) | (palette << POINT_PALETTE_SHIFT));
     
     // Store localized point address in 'd'
     output_point[global_point_idx].d = int(get_flat_index_z(cell_chunk_coordinate));
@@ -323,6 +318,7 @@ void GPUMesher::initialize(
         int lod_numbers,
         RID p_scenario) {
     sdf = p_sdf;
+    gate.bind(p_sdf, this);
     chunk_param = p_chunk_param;
     chunk_batch_number = p_chunk_batch_number;
     scenario = p_scenario;
@@ -363,8 +359,10 @@ void GPUMesher::_initialize_gpu_compute() {
     buffer_edge_intersect = rd->storage_buffer_create(chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(float_t) * 3 * chunk_batch_number, empty_data);
 
     // One PointMetadata per cell, 4 x uint32: position (3 x uint8), normal (snorm 3 x 8), chunk index
-    // | quad mask << 16, cell index.
+    // | quad mask << 16 | palette index << POINT_PALETTE_SHIFT, cell index.
     buffer_output_point = rd->storage_buffer_create(4 * chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(uint32_t) * chunk_batch_number, empty_data);
+    // One palette index per sample, like sdf_sample (the cascade's level 0 writes it).
+    buffer_material = rd->storage_buffer_create(chunk_batch_number * chunk_param.chunk_size * chunk_param.chunk_size * chunk_param.chunk_size * sizeof(uint32_t));
 
     // Injection of Chunk Param in the uniform
     // std140 ChunkParam, laid out by GPUFrame.
@@ -391,39 +389,39 @@ void GPUMesher::_initialize_gpu_compute() {
     uniforms.push_back(create_storage_uniform(4, buffer_output_point));
     uniforms.push_back(create_storage_uniform(5, buffer_chunk_param, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
 
-    if (SDFGpuTable *table = sdf->get_gpu_table()) {
-        // Sized for the capacity up front; the records arrive with the first batch (process_queue).
-        buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
-        const uint64_t list_words = uint64_t(chunk_batch_number) * table->max_chunk_list(); // no list is longer (build_lists)
-        table_list_capacity = list_words * 4;
-        buffer_table_list = rd->storage_buffer_create(table_list_capacity);
-        uniforms.push_back(create_storage_uniform(6, buffer_table_records));
-        uniforms.push_back(create_storage_uniform(7, buffer_table_list));
-    }
+    // The table, sized for the capacity up front; the records arrive with the first batch (process_queue).
+    const SDFGpuTable *table = sdf->get_gpu_table();
+    buffer_table_records = rd->storage_buffer_create(uint64_t(MAX<uint32_t>(table->instance_capacity(), 1u)) * table->record_size());
+    table_list_capacity = uint64_t(chunk_batch_number) * table->max_chunk_list() * 4; // no list is longer (build_lists)
+    buffer_table_list = rd->storage_buffer_create(table_list_capacity);
+    uniforms.push_back(create_storage_uniform(6, buffer_table_records));
+    uniforms.push_back(create_storage_uniform(7, buffer_table_list));
+    uniforms.push_back(create_storage_uniform(MATERIAL_BINDING, buffer_material));
 
-    shader_first_pass = compile_dynamic_shader(GLSL_FIRST_PASS, "first");
     shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS, "second");
     shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS, "third");
-
-    //first step pipeline
-    pipeline_first_pass = rd->compute_pipeline_create(shader_first_pass);
     pipeline_second_pass = rd->compute_pipeline_create(shader_second_pass);
     pipeline_third_pass = rd->compute_pipeline_create(shader_third_pass);
 
-    //since we assume all uniform for all the pass we do this
-    uniform_set = rd->uniform_set_create(uniforms, shader_first_pass, 0);
+    // Both passes declare the same bindings: one set serves them.
+    uniform_set = rd->uniform_set_create(uniforms, shader_second_pass, 0);
 
-    if (sdf->get_cascade() != nullptr) {
-        cascade = memnew(CascadePasses);
-        if (!cascade->create(rd, sdf, chunk_param, MIN(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param, buffer_sdf_sample)) {
-            ERR_PRINT("GPUMesher: the cascade passes failed to compile: no pass runs (empty meshes).");
-        }
-        VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");
+    // Pass 1 (the samples) is the cascade passes.
+    cascade = memnew(CascadePasses);
+    if (!cascade->create(rd, sdf, chunk_param, MIN(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param, buffer_sdf_sample,
+                RID(), nullptr, buffer_table_records, buffer_table_list, buffer_material)) {
+        ERR_PRINT("GPUMesher: the cascade passes failed to compile: no pass runs (empty meshes).");
     }
+    VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");
 }
 
 void GPUMesher::_execute_whole_pipeline() {
     _initialize_gpu_compute();
+    // Only now may process_queue build a batch: it sizes the lists by table_list_capacity, set above (before, a batch's
+    // lists were cut to 0 words).
+    mutex->lock();
+    worker_available = true;
+    mutex->unlock();
     VLOG(1, "GPUMesher : Worker started");
 
     while (true) {
@@ -434,7 +432,7 @@ void GPUMesher::_execute_whole_pipeline() {
         PackedByteArray local_table_list = input_table_list;
         PackedByteArray local_table_records = input_table_records;
         const uint32_t local_count = batch_count;
-        const int local_min_lod = batch_min_lod;
+        const Vector2i local_lods = batch_lods;
         mutex->unlock();
 
         if (should_exit) {
@@ -442,7 +440,7 @@ void GPUMesher::_execute_whole_pipeline() {
         }
 
         const uint64_t t_batch_start = now_usec();
-        _execute_gpu_pipeline(local_chunk_id, local_count, local_min_lod, local_table_list, local_table_records);
+        _execute_gpu_pipeline(local_chunk_id, local_count, local_lods, local_table_list, local_table_records);
 
         mutex->lock();
         stats.batch_total.add(now_usec() - t_batch_start);
@@ -462,11 +460,10 @@ void GPUMesher::_execute_whole_pipeline() {
         cascade = nullptr;
     }
     RID resources[] = {
-        uniform_set, pipeline_first_pass, pipeline_second_pass, pipeline_third_pass,
-        shader_first_pass, shader_second_pass, shader_third_pass,
+        uniform_set, pipeline_second_pass, pipeline_third_pass, shader_second_pass, shader_third_pass,
         buffer_input_chunk_id, buffer_atomic_counter, buffer_sdf_sample,
         buffer_edge_intersect, buffer_output_point, buffer_chunk_param,
-        buffer_table_records, buffer_table_list
+        buffer_table_records, buffer_table_list, buffer_material
     };
     for (const RID &rid : resources) {
         if (rid.is_valid()) {
@@ -510,7 +507,7 @@ bool GPUMesher::is_idle() {
     mutex->lock();
     const bool idle = worker_available && !result_available;
     mutex->unlock();
-    if (!idle) {
+    if (!idle || !gate.idle(ChunkGate::CHUNK) || !gate.idle(ChunkGate::REMESH)) {
         return false;
     }
     for (const LODHashSet *q : remesh_queue) {
@@ -565,18 +562,16 @@ uint32_t GPUMesher::_get_flat_index_z(Vector3i cell) {
     return cell.x + cell.y * chunk_param.chunk_size + cell.z * chunk_param.chunk_size * chunk_param.chunk_size;
 }
 
-void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, int p_min_lod, const PackedByteArray &p_table_list,
+void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, const Vector2i &p_lods, const PackedByteArray &p_table_list,
         const PackedByteArray &p_table_records) {
     // The instance table (archetype instances): the records the main thread captured with this batch's
     // lists (same snapshot) when they changed, then the lists.
-    if (buffer_table_records.is_valid()) {
-        if (!p_table_records.is_empty()) {
-            SDFGpuTable::upload_records(rd, buffer_table_records, p_table_records);
-        }
-        if (!p_table_list.is_empty()) {
-            ERR_FAIL_COND_MSG(uint64_t(p_table_list.size()) > table_list_capacity, "GPUMesher: batch instance list over its buffer.");
-            rd->buffer_update(buffer_table_list, 0, p_table_list.size(), p_table_list);
-        }
+    if (!p_table_records.is_empty()) {
+        SDFGpuTable::upload_records(rd, buffer_table_records, p_table_records);
+    }
+    if (!p_table_list.is_empty()) {
+        ERR_FAIL_COND_MSG(uint64_t(p_table_list.size()) > table_list_capacity, "GPUMesher: batch instance list over its buffer.");
+        rd->buffer_update(buffer_table_list, 0, p_table_list.size(), p_table_list);
     }
     // 1. RESET ATOMIC COUNTERS TO 0
     rd->buffer_clear(buffer_atomic_counter, 0, 2 * (1 + chunk_batch_number) * sizeof(uint32_t));
@@ -588,15 +583,13 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
     // 2. put the input inside
     rd->buffer_update(buffer_input_chunk_id, 0, p_chunk_id.size(), p_chunk_id);
 
-    // Cascade terrain: pass 1 is the cascade's levels for the batch's real chunks (their own compute lists,
-    // ordered before the passes below by the render graph). Slots past the batch keep stale samples: they
-    // are computed but never used (see render_chunk).
-    const bool cascade_samples = cascade != nullptr && cascade->is_valid();
-    if (cascade_samples && p_count > 0) {
-        cascade->record_all(p_min_lod, p_count);
+    // Pass 1 is the cascade's levels for the batch's real chunks (their own compute lists, ordered before the passes
+    // below by the render graph). Slots past the batch keep stale samples: they are computed but never used (see
+    // render_chunk). A cascade that failed to build runs nothing.
+    const bool run_passes = cascade->is_valid();
+    if (run_passes && p_count > 0) {
+        cascade->record_all(p_lods, p_count, !p_table_list.is_empty()); // no instance listed: the bare cascade
     }
-    // A cascade that failed to build must not fall back to pass 1 (its terrain_sdf is a NaN stub).
-    const bool run_passes = cascade == nullptr || cascade_samples;
 
     // --- GPU SUBMISSION PIPELINE ---
     int64_t compute_list = rd->compute_list_begin();
@@ -604,15 +597,6 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
     rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0); // bind for all pass actually
 
     uint32_t dispatch_size = chunk_param.chunk_size / 8;
-
-    if (cascade == nullptr) {
-        // ---- PASS 1: Sample SDF Distances ----
-        rd->compute_list_bind_compute_pipeline(compute_list, pipeline_first_pass);
-        rd->compute_list_dispatch(compute_list, dispatch_size, dispatch_size, dispatch_size * chunk_batch_number);
-
-        // Barrier: Wait for Pass 1 to finish writing to sdf_sample
-        rd->compute_list_add_barrier(compute_list);
-    }
 
     if (run_passes) {
         // ---- PASS 2: Calculate Edge Intersections ----
@@ -701,11 +685,15 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
             // --- Unpack Metadata (c) ---
             uint32_t chunk_idx = c & 0xFFFF; // Changed to uint32_t for safe array indexing
             uint8_t quad_mask = (c >> 16) & 0xF;
+            const uint32_t palette_index = (c >> POINT_PALETTE_SHIFT) & (PageFormat::PALETTE_SIZE - 1);
+            const std::vector<uint32_t> &palette = unpacked_chunks[chunk_idx].palette;
+            const uint32_t material = palette_index < palette.size() ? palette[palette_index] : Material::GROUND;
 
             // Fill the unpack chunk points and normals
             uint32_t pt_idx = unpacked_chunks[chunk_idx].point_offset++;
             unpacked_chunks[chunk_idx].output_points.set(pt_idx, local_vertex);
             unpacked_chunks[chunk_idx].output_normals.set(pt_idx, surface_normal);
+            unpacked_chunks[chunk_idx].output_materials.set(pt_idx, float(material));
             unpacked_chunks[chunk_idx].quad_masks[pt_idx] = quad_mask;
             unpacked_chunks[chunk_idx].point_cells.set(pt_idx, int32_t(flat_idx));
             unpacked_chunks[chunk_idx].index_storage[flat_idx] = pt_idx;
@@ -843,9 +831,11 @@ void GPUMesher::render_chunk() {
         arrays[Mesh::ARRAY_VERTEX] = chunk.output_points;
         arrays[Mesh::ARRAY_INDEX] = chunk.output_triangles;
         arrays[Mesh::ARRAY_NORMAL] = chunk.output_normals;
+        arrays[Mesh::ARRAY_CUSTOM0] = chunk.output_materials;
 
         chunk.mesh_rid = rs->mesh_create();
-        rs->mesh_add_surface_from_arrays(chunk.mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
+        rs->mesh_add_surface_from_arrays(chunk.mesh_rid, RenderingServer::PRIMITIVE_TRIANGLES, arrays, Array(), Dictionary(),
+                RenderingServer::ARRAY_CUSTOM_R_FLOAT << RenderingServer::ARRAY_FORMAT_CUSTOM0_SHIFT);
 
         chunk.instance_rid = rs->instance_create();
         DebugLog::chunk_rids_created++;
@@ -893,6 +883,8 @@ bool GPUMesher::get_results(VoxelState &output) {
 }
 
 void GPUMesher::process_queue() {
+    // The parked chunks whose records came, back in their queues (every frame, the worker busy or not).
+    gate.take_ready([this](const ChunkId &p_chunk, ChunkGate::Kind p_kind) { _requeue(p_chunk, p_kind == ChunkGate::REMESH); });
     if (!_is_available())
         return;
 
@@ -904,14 +896,16 @@ void GPUMesher::process_queue() {
     unpacked_chunks.resize(chunk_batch_number);
 
     uint32_t count = 0;
-    int min_lod = 64;
     ChunkId new_chunk;
 
-    while (count < chunk_batch_number && _pop_queue(new_chunk)) {
+    ChunkGate::Kind kind = ChunkGate::CHUNK;
+    const auto pop = [this](ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue) { return _pop_queue(r_chunk, r_kind, r_queue); };
+    const auto requeue = [this](const ChunkId &p_chunk, ChunkGate::Kind p_kind) { _requeue(p_chunk, p_kind == ChunkGate::REMESH); };
+    gate.begin_frame(0); // one batch at a time: the batch size bounds the admits
+    while (count < chunk_batch_number && gate.next(new_chunk, kind, pop, requeue)) {
         working_generation.insert(new_chunk);
 
         GPUFrame::encode_chunk_input(new_batch, count, new_chunk, chunk_param);
-        min_lod = MIN(min_lod, ChunkMath::get_lod(new_chunk));
 
         unpacked_chunks[count].chunk_id = new_chunk;
 
@@ -925,18 +919,36 @@ void GPUMesher::process_queue() {
         for (uint32_t i = 0; i < count; i++) {
             in_flight_ids.push_back(unpacked_chunks[i].chunk_id);
         }
-        if (SDFGpuTable *table = sdf->get_gpu_table()) {
-            table->build_lists(in_flight_ids, chunk_param, new_batch, table_list);
-            if (table->version() != sent_table_version) {
-                table_records = table->record_bytes(sent_table_version, sent_table_version);
-            }
+        SDFGpuTable *table = sdf->get_gpu_table();
+        std::vector<std::vector<uint32_t>> palettes;
+        const uint64_t t_lists = now_usec();
+        const uint32_t kept = table->build_lists(in_flight_ids, chunk_param, new_batch, table_list, uint32_t(table_list_capacity / 4), &palettes);
+        dispatch_times.build_lists += now_usec() - t_lists;
+        // The chunks whose lists didn't fit the buffer go first in a later batch (remesh_queue holds first meshes too,
+        // remesh_chunks puts the batch in flight there).
+        for (uint32_t i = kept; i < count; i++) {
+            const ChunkId &chunk = in_flight_ids[i];
+            working_generation.erase(chunk);
+            remesh_queue[ChunkMath::get_lod(chunk)]->insert(chunk);
+            unpacked_chunks[i] = UnpackChunk();
+            std::memset(new_batch.ptrw() + int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES, 0, GPUFrame::CHUNK_INPUT_BYTES); // an unused slot
+        }
+        in_flight_ids.resize(kept);
+        count = kept;
+        for (uint32_t i = 0; i < count; i++) {
+            unpacked_chunks[i].palette = std::move(palettes[i]);
+        }
+        if (table->upload_cursor() != sent_records) {
+            const uint64_t t_records = now_usec();
+            table_records = table->record_bytes(sent_records, sent_records);
+            dispatch_times.record_bytes += now_usec() - t_records;
         }
         mutex->lock();
         input_chunk_id = new_batch;
         input_table_list = table_list;
         input_table_records = table_records;
         batch_count = count;
-        batch_min_lod = min_lod;
+        batch_lods = godot_v2i(ChunkMath::lod_range(in_flight_ids));
         worker_available = false;
         mutex->unlock();
 
@@ -944,20 +956,34 @@ void GPUMesher::process_queue() {
     }
 }
 
-bool GPUMesher::_pop_queue(ChunkId &new_chunk) {
+bool GPUMesher::_pop_queue(ChunkId &new_chunk, ChunkGate::Kind &r_kind, int &r_queue) {
     // Instance edits first, finest LOD first (as GPUDirectMesher::_pop_queue).
     for (const std::vector<LODHashSet *> *queues : { &remesh_queue, &chunk_queue }) {
-        for (LODHashSet *queue : *queues) {
+        for (size_t q = 0; q < queues->size(); q++) {
+            LODHashSet *queue = (*queues)[q];
             if (queue == nullptr || queue->is_empty()) {
                 continue;
             }
             LODHashSet::Iterator it = queue->begin();
             new_chunk = *it;
             queue->remove(it);
+            r_kind = queues == &remesh_queue ? ChunkGate::REMESH : ChunkGate::CHUNK;
+            r_queue = int(q);
             return true;
         }
     }
     return false;
+}
+
+void GPUMesher::_requeue(const ChunkId &p_chunk, bool p_remesh) {
+    const int lod = ChunkMath::get_lod(p_chunk);
+    if (lod < 0 || lod >= lod_count) {
+        return;
+    }
+    LODHashSet *queue = p_remesh ? remesh_queue[lod] : chunk_queue[ChunkMath::load_queue(p_chunk, lod_count, load_view)];
+    if (queue != nullptr) {
+        queue->insert(p_chunk);
+    }
 }
 
 void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
@@ -979,6 +1005,8 @@ void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
 }
 
 void GPUMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_view) {
+    load_view = p_view;
+    gate.next_scan(p_chunks, [this, &p_view](const ChunkId &p_chunk) { return ChunkMath::load_queue(p_chunk, lod_count, p_view); });
     for (LODHashSet *q : chunk_queue) {
         q->clear();
     }
@@ -988,7 +1016,7 @@ void GPUMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_view) {
         if (lod < 0 || lod >= lod_count) {
             continue;
         }
-        if (!working_generation.has(chunk_pos)) {
+        if (!working_generation.has(chunk_pos) && !gate.keeps(chunk_pos)) {
             chunk_queue[ChunkMath::load_queue(chunk_pos, lod_count, p_view)]->insert(chunk_pos);
         }
     }

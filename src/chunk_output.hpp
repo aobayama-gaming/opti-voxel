@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "godot_cpp/variant/variant.hpp"
+#include "palette_pool.hpp"
 #include "world_coord.hpp"
 #include <godot_cpp/classes/rendering_server.hpp>
 
@@ -14,6 +15,8 @@ struct ChunkOutput;
 struct ChunkReleaser {
     virtual ~ChunkReleaser() = default;
     virtual void release_chunk(const ChunkOutput &p_chunk) = 0;
+    // The chunk's hidden sub-cubes (PageFormat's coverage texel; 0 draws all), from its current rows.
+    virtual void set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) = 0;
 };
 
 struct ChunkOutput {
@@ -28,6 +31,7 @@ struct ChunkOutput {
     int32_t page = -1;
     uint32_t quad_offset = 0;
     uint32_t quad_count = 0;
+    PalettePool::Block palette; // the chunk's material palette (its offset is in the rows' headers)
 
     void free() {
         if (owner) {

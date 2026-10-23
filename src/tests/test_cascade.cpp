@@ -30,13 +30,6 @@ bool same_bits(const float *p_a, const float *p_b, int p_n) {
     return true;
 }
 
-// The LOD-L chunk whose interior holds LOD0 voxel p_voxel.
-ChunkId chunk_holding(const Vector3i64 &p_voxel, int p_lod, const ChunkParam &p_param) {
-    const int64_t span = (p_param.half_chunk_voxels() * 2) << p_lod;
-    auto axis = [&](int64_t p_v) { return WorldCoord::floor_div(p_v, span) * span / p_param.half_chunk_voxels() + (int64_t(1) << p_lod); };
-    return ChunkId(axis(p_voxel.x), axis(p_voxel.y), axis(p_voxel.z));
-}
-
 const Level *find_level(const std::vector<Level> &p_levels, int p_m) {
     for (const Level &l : p_levels) {
         if (l.m == p_m) {
@@ -145,7 +138,7 @@ TEST_CASE("Cascade: the same lattice point gives the same bits from chunks of ev
                     }
                     previous = lod;
                     std::vector<Level> levels;
-                    run(spec, chunk_box(chunk_holding(lattice * step, lod, param), param), lod, &levels);
+                    run(spec, chunk_box(ChunkMath::chunk_at_voxel(lattice * step, lod, param), param), lod, &levels);
                     const Level *l = find_level(levels, m);
                     const bool found = l != nullptr && l->box.contains(lattice);
                     CHECK(found);

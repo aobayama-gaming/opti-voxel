@@ -16,26 +16,28 @@ var yaw: float = 0.0
 var marks_dir := "user://marks"
 var mark_index := 0
 var pending_audit := {}  # the mark waiting for its discovery audit report
-var far_lods_terrain: Node = null  # set above 15 LODs: clip planes follow the altitude
+var clip_terrain: Node = null  # the clip planes follow the altitude (Presets.clip_planes)
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|archetypes|shapes`
-# its terrain_mode (the Hermite cascade terrain, the default, its continents demo preset, the archetype IR demo, or its
+# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|shapes`
+# its terrain_mode (the Hermite cascade terrain, the default, its continents preset, or its flat preset under the
 # hard-CSG shapes gallery) and
 # `-- --discoverer=cpu|gpu` its discoverer_mode: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
-var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (cascade terrains)
-var cascade_terrain: Node = null  # set on the cascade terrains
-var cached_altitude := 0.0
-var altitude_age := 1.0
+var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
+var spawn_tangent = null  # --spawn=U,V: metres along the base's tangent plane (Vector2), null: the scene's spawn
+var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
+var smoothed_altitude := 0.0  # 0: not read yet
+const ALTITUDE_TAU := 0.2  # seconds: the altitude reading's time constant, in log space
+const FLY_RATE := 1.0  # altitudes per second
 
-# ---- Archetype dig tools (archetype table terrains, --terrain=archetypes|shapes) -------------------
+# ---- Archetype dig tools (the instance table: every terrain) ---------------------------------------
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
 # of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
 # by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press
 # (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release. Both only act while the mouse is captured. They use VoxelTerrain.add_instance /
-# move_instance / remove_instance; other terrains refuse the edits.
-const CAPSULE_TYPE := 1        # SDFArchetype's library: 0 sphere, 1 capsule, 2 rock (create_scene)
+# move_instance / remove_instance.
+const CAPSULE_TYPE := 1        # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
 const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
@@ -52,6 +54,7 @@ var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 
 func _enter_tree() -> void:
+	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
 	for a in Presets.user_args():
 		if a.begins_with("--lods=") and terrain:
@@ -67,12 +70,18 @@ func _enter_tree() -> void:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
-		if a == "--terrain=archetypes" and terrain:
-			terrain.terrain_mode = 3
 		if a == "--terrain=shapes" and terrain:
 			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
+		# --spawn=U,V: metres along the base's tangent plane (VoxelTerrain.get_tangent_position; the flat world's x, z
+		# from its (0, 0) column, origin 0); tools/climate_report.sh lists biome borders in these coordinates.
+		if a.begins_with("--spawn="):
+			var uv := a.trim_prefix("--spawn=").split(",")
+			if uv.size() == 2:
+				spawn_tangent = Vector2(uv[0].to_float(), uv[1].to_float())
+			else:
+				push_error("player: --spawn=%s (expected U,V in metres)" % a.trim_prefix("--spawn="))
 		if a.begins_with("--voxel=") and terrain:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
@@ -87,6 +96,8 @@ func _enter_tree() -> void:
 			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
+		if a == "--grade=0":
+			Presets.ungrade(get_parent())
 		if a.begins_with("--dig_radius="):
 			dig_radius = a.trim_prefix("--dig_radius=").to_float()
 		if a.begins_with("--dig_length="):
@@ -103,27 +114,38 @@ func _enter_tree() -> void:
 			terrain.archetype_instances = a.trim_prefix("--instances=").to_int()
 		if a.begins_with("--instance_area=") and terrain:
 			terrain.archetype_instance_area = a.trim_prefix("--instance_area=").to_float()
+		if a == "--moments=0" and terrain:
+			terrain.archetype_moments = false
 		if a == "--instance_band=0" and terrain:
 			terrain.archetype_band = false
+		if a == "--stream=0" and terrain:
+			terrain.archetype_stream = false
+		if a.begins_with("--stream_part_sides=") and terrain:
+			terrain.archetype_stream_part_sides = a.trim_prefix("--stream_part_sides=").to_int()
 		if a.begins_with("--instance_erode=") and terrain:
 			terrain.archetype_erode = a.trim_prefix("--instance_erode=").to_float()
+		if a.begins_with("--instance_resolve=") and terrain:
+			terrain.archetype_resolve = a.trim_prefix("--instance_resolve=").to_float()
 		if a.begins_with("--trees=") and terrain:
 			terrain.archetype_trees = a.trim_prefix("--trees=").to_int()
 		if a.begins_with("--tree_area=") and terrain:
 			terrain.archetype_tree_area = a.trim_prefix("--tree_area=").to_float()
+		if a.begins_with("--biomes=") and terrain:
+			terrain.biome_radius = 1000.0 * a.trim_prefix("--biomes=").to_float()
+		if a.begins_with("--climate=") and terrain:
+			terrain.climate_path = a.trim_prefix("--climate=")
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 
 func _ready():
-	# Clip planes: the scene's at the default LOD count; above 15 LODs they follow the altitude
-	# (_process): near = altitude / 1000, far = near * 2^21 capped at the discoverer's load range.
-	# Godot's float projection loses its far plane past far/near ~2^24 (the light culler ERRORs).
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
-	if terrain and terrain.lod_numbers > 15:
-		far_lods_terrain = terrain
+	if terrain:
+		clip_terrain = terrain
 		base_near = camera.near
-	if terrain and terrain.terrain_mode < 3:  # the cascade terrains; the archetype scenes keep the scene's spawn
-		cascade_terrain = terrain
+	if terrain and terrain.terrain_mode != 4:  # the shapes gallery keeps the scene's spawn
+		altitude_terrain = terrain
+		if spawn_tangent != null:
+			global_position = terrain.get_tangent_position(spawn_tangent)
 		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
@@ -140,6 +162,32 @@ func _ready():
 			marks_dir = a.trim_prefix("--marks=")
 	DirAccess.make_dir_recursive_absolute(marks_dir)
 	get_tree().auto_accept_quit = false
+
+# Godot's built-in 3D upscalers (no DLSS in 4.6): `--upscale=fsr2|fsr1|bilinear` renders the 3D at
+# `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD's pixel error
+# is in render pixels, so 0.5 draws the meshes of twice the error. FSR 2 needs `--render-thread safe`: on the separate
+# render thread Godot 4.6.3 exits silently while loading its shaders.
+func _setup_upscaling() -> void:
+	var modes := {
+		"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
+		"fsr1": Viewport.SCALING_3D_MODE_FSR,
+		"fsr2": Viewport.SCALING_3D_MODE_FSR2,
+	}
+	var mode := ""
+	var render_scale := 0.5
+	for a in Presets.user_args():
+		if a.begins_with("--upscale="):
+			mode = a.trim_prefix("--upscale=")
+		if a.begins_with("--render_scale="):
+			render_scale = a.trim_prefix("--render_scale=").to_float()
+	if mode.is_empty():
+		return
+	if not modes.has(mode):
+		push_error("--upscale=%s: expected fsr2, fsr1 or bilinear" % mode)
+		return
+	var viewport := get_viewport()
+	viewport.scaling_3d_mode = modes[mode]
+	viewport.scaling_3d_scale = clampf(render_scale, 0.25, 2.0)
 
 func _make_hud() -> void:
 	var hud_layer := CanvasLayer.new()
@@ -232,11 +280,18 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
 
-	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted.
+	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted,
+	# material, biome (12; 10 / 11 are the bench's bark probe). B toggles the biome view.
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_V:
 		var terrain := _terrain()
 		if terrain:
-			terrain.debug_view = (terrain.debug_view + 1) % 9
+			var views := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+			terrain.debug_view = views[(views.find(terrain.debug_view) + 1) % views.size()]
+			print("debug view ", terrain.debug_view)
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_B:
+		var terrain := _terrain()
+		if terrain:
+			terrain.debug_view = 0 if terrain.debug_view == 12 else 12
 			print("debug view ", terrain.debug_view)
 
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
@@ -354,10 +409,8 @@ last edit %d chunks, apply %.2f ms" % [
 func _process(delta: float) -> void:
 	_update_drag()
 	_update_hud(delta)
-	if far_lods_terrain:
-		var altitude: float = absf(far_lods_terrain.get_sdf_at(camera.global_position))
-		camera.near = maxf(base_near, altitude / 1000.0)
-		camera.far = minf(far_lods_terrain.get_load_radius(), camera.near * 2097152.0)
+	if clip_terrain:
+		Presets.clip_planes(camera, clip_terrain, base_near)
 	if not pending_audit.is_empty():
 		var report: Dictionary = _terrain().get_discovery_audit_report()
 		if not report.is_empty():
@@ -381,12 +434,14 @@ func _process(delta: float) -> void:
 
 	var direction = (transform.basis * input_dir).normalized()
 	var move_speed := speed
-	if cascade_terrain:
-		# Cascade terrain: kilometre-scale relief, fly faster when high (half the altitude per second).
-		# The altitude is a CPU cascade point query: refreshed 4 times per second.
-		altitude_age += delta
-		if altitude_age >= 0.25:
-			altitude_age = 0.0
-			cached_altitude = absf(cascade_terrain.get_sdf_at(camera.global_position))
-		move_speed = maxf(speed, cached_altitude * 0.5)
+	if altitude_terrain:
+		# Cascade terrain: kilometre-scale relief, fly faster when high (FLY_RATE altitudes per second, at least
+		# `speed`). The altitude is a CPU cascade point query, every frame; only the reading is smoothed (a canopy
+		# or a ridge passing under steps it), in log space and briefly: a longer lag on the speed itself left a climb
+		# at half speed for seconds.
+		var altitude := maxf(absf(altitude_terrain.get_sdf_at(camera.global_position)), 0.01)
+		if smoothed_altitude <= 0.0:
+			smoothed_altitude = altitude
+		smoothed_altitude *= pow(altitude / smoothed_altitude, 1.0 - exp(-delta / ALTITUDE_TAU))
+		move_speed = maxf(speed, smoothed_altitude * FLY_RATE)
 	position += direction * move_speed * delta

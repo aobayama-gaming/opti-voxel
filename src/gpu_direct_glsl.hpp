@@ -36,9 +36,10 @@ layout(set = 0, binding = 3, std430) restrict buffer EdgeIntersect {
     float edge_intersect[];
 };
 
-// Dense per cell: xyz position in the chunk's vertex grid, w = oct22 normal + 1 (0 = no vertex)
+// Dense per cell: xyz the float bits of the position in the chunk's vertex grid, w = the corner word
+// (octahedral normal | palette index << PAGE_NORMAL_BITS) + 1 (0 = no vertex)
 layout(set = 0, binding = 4, std430) restrict buffer CellVertex {
-    vec4 cell_vertex[];
+    uvec4 cell_vertex[];
 };
 
 layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
@@ -46,10 +47,15 @@ layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
 };
 
 // K pages stacked vertically, one group of quads per row (page_format.hpp).
-#define QUAD_GROUP 64u
 layout(set = 0, binding = 6, rgba16ui) uniform restrict writeonly uimage2D staging;
 
 /*GLSL_PAGE_FORMAT*/
+
+// A cell_vertex entry as a page corner.
+uvec4 encode_cell_vertex(uvec4 v, float pos_scale) {
+    uint word = v.w - 1u;
+    return encode_corner(uintBitsToFloat(v.xyz), word & ((1u << PAGE_NORMAL_BITS) - 1u), word >> PAGE_NORMAL_BITS, pos_scale);
+}
 
 // Debug/status counters + per page fill (instance count), read back asynchronously.
 #define STATUS_TOTAL_QUADS 0
@@ -62,12 +68,18 @@ layout(set = 0, binding = 7, std430) restrict buffer Status {
     uint status[];
 };
 
+// sdf_material (per sample, its chunk palette index), the palette texture and the batch's palette payload
+// (GPUDirectMesher::glsl_material_bindings).
+/*GLSL_MATERIAL_BINDINGS*/
+
 layout(push_constant, std430) uniform BatchParams {
     uint batch_count;
     uint page_count;
     uint page_capacity;
     uint pad;
 } batch;
+
+/*GLSL_PALETTE_BATCH*/
 
 uint get_flat_index_z(uvec3 cell_coordinate) {
     return cell_coordinate.x + (cell_coordinate.y * chunk_param.chunk_size) + (cell_coordinate.z * chunk_param.chunk_size * chunk_param.chunk_size);
@@ -78,12 +90,6 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
     uint local_idx = local_c.x + (local_c.y * cs) + (local_c.z * cs * cs);
     return (chunk_idx * 3 * cs * cs * cs) + (axis * cs * cs * cs) + local_idx;
 }
-
-)glsl";
-
-inline constexpr const char GLSL_DIRECT_PASS_SDF[] = R"glsl(
-
-sdf_sample[get_flat_index_z(gl_GlobalInvocationID)] = skirt_sdf(chunk,vec3(cell_chunk_coordinate),chunk_param);
 
 )glsl";
 
@@ -116,13 +122,13 @@ if (cell_chunk_coordinate[axis] < chunk_param.chunk_size - 1) {
 
 // Vertex placement identical to legacy pass 3 (mass point of edge crossings, normal from the SDF
 // gradient at the vertex), stored densely per cell in chunk-local vertex coordinates; quantised
-// only when written to the page (1/512 cell, legacy uses a coarser grid).
+// only when written to the page (1/256 cell, legacy uses a coarser grid).
 inline constexpr const char GLSL_DIRECT_PASS_VERTICES[] = R"glsl(
 
 uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
 uint flat_idx = get_flat_index_z(gl_GlobalInvocationID);
 uint quads_here = 0u;
-vec4 out_vertex = vec4(0.0);
+uvec4 out_vertex = uvec4(0u);
 
 if (gl_LocalInvocationIndex == 0u) {
     wg_quad_count = 0u;
@@ -164,11 +170,18 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
     if (active_edge_count > 0) {
         local_vertex /= float(active_edge_count);
         vec3 chunk_vertex = local_vertex + vec3(cell_chunk_coordinate);
-        vec3 surface_normal = vertex_normal(vec3(0.0), skirt_sdf(chunk, chunk_vertex, chunk_param).xyz);
+        vec3 surface_normal = vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
         if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {
-            out_vertex = vec4(chunk_vertex, float(pack_normal_oct22(surface_normal)) + 1.0);
+            // A chunk on the ground block (the base palette alone, or no room in the pool) takes the base's entries: none
+            // but ground without a climate (no reads, and its samples' sdf_material isn't written: the cascade then only
+            // writes chunks with a list), and a record's index past them is ground.
+            bool on_base = palette_batch[chunk_idx] == PALETTE_GROUND_BLOCK;
+            uint palette = on_base && !GROUND_MATERIALS ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
+            palette = on_base && palette >= PALETTE_BASE_ENTRIES ? 0u : palette;
+            uint word = pack_normal_oct(surface_normal) | (palette << PAGE_NORMAL_BITS);
+            out_vertex = uvec4(floatBitsToUint(chunk_vertex), word + 1u);
         }
 
         // Count exactly the quads the emit pass will produce (same rules as the CPU triangulation).
@@ -237,10 +250,13 @@ inline constexpr const char GLSL_DIRECT_PASS_EMIT[] = R"glsl(
 
 uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
 uint flat_idx = get_flat_index_z(gl_GlobalInvocationID);
+// The batch's new palettes, a texel per thread (the headers below name their blocks; the page shader reads them
+// after this pass).
+write_palette_texel(flat_idx);
 uvec4 dir = chunk_dir[chunk_idx];
-vec4 v0 = cell_vertex[flat_idx];
+uvec4 v0 = cell_vertex[flat_idx];
 
-if (v0.w > 0.0 && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
+if (v0.w > 0u && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
     ivec3 c = cell_chunk_coordinate;
     bool origin_solid = !(sdf_sample[flat_idx].w > 0.0); // same side rule as the edge pass
     uint sx = 1u;
@@ -257,32 +273,32 @@ if (v0.w > 0.0 && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk
         else { ok = c.x > 0 && c.y > 0; s1 = sx; s2 = sy; a_first = false; } // legacy: emit_quad(p0, p2, p1, p3)
         if (!ok) continue;
 
-        vec4 v1 = cell_vertex[flat_idx - s1];
-        vec4 v2 = cell_vertex[flat_idx - s2];
-        vec4 v3 = cell_vertex[flat_idx - s1 - s2];
-        if (!(v1.w > 0.0 && v2.w > 0.0 && v3.w > 0.0)) {
+        uvec4 v1 = cell_vertex[flat_idx - s1];
+        uvec4 v2 = cell_vertex[flat_idx - s2];
+        uvec4 v3 = cell_vertex[flat_idx - s1 - s2];
+        if (!(v1.w > 0u && v2.w > 0u && v3.w > 0u)) {
             atomicAdd(status[STATUS_MISSING_NEIGHBOR], 1u);
             continue;
         }
         // emit_quad arguments (a, b, c, d)
-        vec4 qa = v0;
-        vec4 qb = a_first ? v1 : v2;
-        vec4 qc = a_first ? v2 : v1;
-        vec4 qd = v3;
+        uvec4 qa = v0;
+        uvec4 qb = a_first ? v1 : v2;
+        uvec4 qc = a_first ? v2 : v1;
+        uvec4 qd = v3;
         if (!origin_solid) { // negative winding: swap b and c
-            vec4 tmp = qb; qb = qc; qc = tmp;
+            uvec4 tmp = qb; qb = qc; qc = tmp;
         }
         uint slot = dir.z + atomicAdd(chunk_dir[chunk_idx].y, 1u);
         // The chunk starts on a group (reserve pass), so its slots cover each of its groups' first
         // slot exactly once.
         if (slot % QUAD_GROUP == 0u) {
-            store_group_header(slot / QUAD_GROUP, chunk_id);
+            store_group_header(slot / QUAD_GROUP, chunk_id, palette_batch[chunk_idx]);
         }
         float pos_scale = page_pos_scale(chunk_param.chunk_size);
-        store_corner(slot, 0u, encode_corner(qa.xyz, uint(qa.w - 1.0), pos_scale));
-        store_corner(slot, 1u, encode_corner(qb.xyz, uint(qb.w - 1.0), pos_scale));
-        store_corner(slot, 2u, encode_corner(qc.xyz, uint(qc.w - 1.0), pos_scale));
-        store_corner(slot, 3u, encode_corner(qd.xyz, uint(qd.w - 1.0), pos_scale));
+        store_corner(slot, 0u, encode_cell_vertex(qa, pos_scale));
+        store_corner(slot, 1u, encode_cell_vertex(qb, pos_scale));
+        store_corner(slot, 2u, encode_cell_vertex(qc, pos_scale));
+        store_corner(slot, 3u, encode_cell_vertex(qd, pos_scale));
     }
 }
 

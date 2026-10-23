@@ -8,7 +8,7 @@
 
 using namespace godot;
 
-// The discoverer's corner SDF on the GPU (VoxelTerrain.discoverer_mode 1, cascade terrains): the cascade
+// The discoverer's corner SDF on the GPU (VoxelTerrain.discoverer_mode 1, the default): the cascade
 // passes with point items (CascadePasses::create_points), bit for bit SDFBase::evaluate at the same corners.
 //
 // It owns a local RenderingDevice, created and freed by the discoverer thread (ChunkDiscoverer::discovery_loop,
@@ -26,7 +26,7 @@ public:
         int64_t readback_bytes = 0;
     };
 
-    // On the thread that will use it. False (nothing kept) if the SDF has no cascade, there is no local
+    // On the thread that will use it. False (nothing kept) if there is no local
     // device (headless, Compatibility renderer) or the passes fail to build.
     bool create(const SDFBase *p_sdf, const ChunkParam &p_param);
     void free();

@@ -1,6 +1,7 @@
 #include "test_common.hpp"
 
 #include "chunk_math.hpp"
+#include "subcube.hpp"
 
 #include <cstring>
 
@@ -67,9 +68,46 @@ TEST_CASE("ChunkMath: LOD and size come from the lowest set bit") {
     CHECK(ChunkMath::get_lod_size(ChunkId(1, 1, 1)) == 1);
 }
 
+TEST_CASE("ChunkMath: a batch's LOD range") {
+    CHECK(ChunkMath::lod_range({}) == ov::ivec2(0, 0));
+    CHECK(ChunkMath::lod_range({ ChunkId(-8, 8, 24) }) == ov::ivec2(3, 3));
+    CHECK(ChunkMath::lod_range({ ChunkId(2, 6, -2), ChunkId(1, 3, -5), ChunkId(-8, 8, 24), ChunkId(4, 4, 4) }) == ov::ivec2(0, 3));
+}
+
 TEST_CASE("ChunkMath: ancestor at a target LOD") {
     CHECK(ChunkMath::get_parent_from_child_until(ChunkId(1, 1, 1), 3) == ChunkId(8, 8, 8));
     CHECK(ChunkMath::get_parent_from_child_until(ChunkId(-1, 1, -3), 2) == ChunkId(-4, 4, -4));
+}
+
+TEST_CASE("ChunkMath: subcube_bits are the ancestor's sub-cubes a descendant overlaps") {
+    const uint32_t axis = Subcube::AXIS;
+    auto bit = [](uint32_t x, uint32_t y, uint32_t z) { return uint64_t(1) << Subcube::bit(x, y, z); };
+    // LOD 3 ancestor at (8, 8, 8): ids (0, 16) per axis, sub-cubes of 4 ids.
+    const ChunkId a(8, 8, 8);
+    CHECK(ChunkMath::subcube_bits(a, ChunkId(1, 1, 1)) == bit(0, 0, 0)); // LOD 0, the low corner
+    CHECK(ChunkMath::subcube_bits(a, ChunkId(15, 1, 13)) == bit(axis - 1, 0, axis - 1));
+    CHECK(ChunkMath::subcube_bits(a, ChunkId(6, 10, 2)) == bit(1, 2, 0)); // LOD 1: one sub-cube
+    // A child (LOD 2) covers the 2x2x2 sub-cubes of its octant.
+    uint64_t octant = 0;
+    for (uint32_t i = 0; i < 8; i++) {
+        octant |= bit(2 + (i & 1), i >> 1 & 1, 2 + (i >> 2));
+    }
+    CHECK(ChunkMath::subcube_bits(a, ChunkId(12, 4, 12)) == octant);
+    // Below a LOD-1 ancestor, a LOD0 child is 2x2x2 sub-cubes too.
+    CHECK(WorldCoord::popcount64(ChunkMath::subcube_bits(ChunkId(2, 2, 2), ChunkId(1, 3, 1))) == 8);
+    // Negative ids and a deep descendant: a LOD-10 ancestor and a LOD-5 chunk inside its (-x, +y, -z) corner.
+    const ChunkId big(-3 * 1024, 1024, -1024);
+    const ChunkId deep = big + ChunkId(-1024 + 32, 1024 - 32, -1024 + 32);
+    CHECK(ChunkMath::get_lod(deep) == 5);
+    CHECK(ChunkMath::subcube_bits(big, deep) == bit(0, axis - 1, 0));
+    // The 8 children of a chunk together cover every sub-cube once.
+    uint64_t all = 0;
+    for (int i = 0; i < 8; i++) {
+        const uint64_t b = ChunkMath::subcube_bits(a, a + ChunkId((i & 1) ? 4 : -4, (i & 2) ? 4 : -4, (i & 4) ? 4 : -4));
+        CHECK((all & b) == 0);
+        all |= b;
+    }
+    CHECK(all == ~uint64_t(0));
 }
 
 TEST_CASE("ChunkMath: chunk corners and centres in LOD0 voxels") {
@@ -82,6 +120,28 @@ TEST_CASE("ChunkMath: chunk corners and centres in LOD0 voxels") {
     // A LOD1 chunk covers its two LOD0 children on each axis.
     CHECK(ChunkMath::chunk_min_voxel(ChunkId(2, 2, 2), param) == VoxelPos(0, 0, 0));
     CHECK(ChunkMath::chunk_center_voxel(ChunkId(2, 2, 2), param) == VoxelPos(28, 28, 28));
+}
+
+TEST_CASE("ChunkMath: chunk_at_voxel is the chunk whose span holds the voxel") {
+    const ChunkParam param;
+    const int64_t far = int64_t(1) << 60;
+    for (int lod = 0; lod <= 30; lod += 3) {
+        const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
+        for (const int64_t base : { int64_t(0), int64_t(-1), far - 77, -far + 5, (int64_t(1) << 32) - 3 }) {
+            for (const int64_t d : { int64_t(0), int64_t(1), span - 1, span, -span }) {
+                const VoxelPos v(base + d, -(base + d), base / 2 - d);
+                const ChunkId id = ChunkMath::chunk_at_voxel(v, lod, param);
+                CAPTURE(lod);
+                CAPTURE(v);
+                CHECK(ChunkMath::get_lod(id) == lod);
+                const VoxelPos lo = ChunkMath::chunk_min_voxel(id, param);
+                for (int a = 0; a < 3; a++) {
+                    CHECK(lo[a] <= v[a]);
+                    CHECK(v[a] < lo[a] + span);
+                }
+            }
+        }
+    }
 }
 
 TEST_CASE("ChunkMath: chunk_at_render finds the chunk whose centre was rendered") {

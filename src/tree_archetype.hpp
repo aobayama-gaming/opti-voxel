@@ -1,8 +1,9 @@
 #pragma once
 
 #include "archetype_table.hpp"
+#include "cell_scatter.hpp"
+#include "cell_sites.hpp"
 
-#include <functional>
 #include <vector>
 
 // Trees as archetype-table instances (archetype step 5, v1). A tree is a contiguous run of ordinary
@@ -12,10 +13,11 @@
 //   children fork off at hashed points with radii from the pipe model (r^2 of the parent >= the sum of the
 //   children's r^2 plus the tip's);
 // - a crown hull (1-3 spheres along the upper trunk) and a clump at the tip of every leaf stem (the `crown`
-//   type: a rock with bumps of about CROWN_WAVELENGTH_M).
-// Nothing in it depends on the LOD: the band rule (set_band) is the LOD rule. Each record erodes by one cell
-// per LOD and is dropped once gone, so the thin parts leave first (a tapered branch loses its tip first) and the
-// hull last, and no part appears with the LOD: the records listed at LOD L+1 are a subset of those at L. The
+//   type: a rock with bumps of about CROWN_WAVELENGTH_M), or for a conifer a few stacked cones with the same
+//   bumps (the `cone` type).
+// Nothing in it depends on the LOD: the band rule (set_band) is the LOD rule. Each record stays whole while the
+// grid resolves it, erodes in the LODs just before its drop and is dropped once gone, so the thin parts leave first
+// and the hull last, and no part appears with the LOD: the records listed at LOD L+1 are a subset of those at L. The
 // generation is CPU work done once (double math, hashes of the tree's seed and each part's path); the GPU reads
 // the records as data. Branch segments start and end on whole voxels, so a segment's end is the next one's anchor.
 namespace Archetype {
@@ -29,6 +31,8 @@ struct TreeSpecies {
     double crown_radius = 3.5; // the limbs' reach
     double hull_ratio = 0.55; // hull sphere radius / crown_radius
     int hull_spheres = 2; // along the trunk, between the crown base and the top
+    double hull_taper = 1.0; // the top hull sphere's (or tier's) radius / the bottom one's
+    int cone_tiers = 0; // > 0: the crown is that many stacked cones (a conifer) instead of hull spheres
     int limbs = 6; // order-1 stems on the trunk
     int twigs = 2; // order-2 stems on each limb
     double limb_angle = 0.9; // a child's angle from its parent's axis
@@ -37,11 +41,12 @@ struct TreeSpecies {
     double tip_ratio = 0.2; // and at least this (the pipe model's floor)
     double twig_length = 0.5; // order-2 length / parent length
     double tortuosity = 0.15; // a midpoint moves by up to this times its segment's length
+    double trunk_tortuosity = 0.05; // the same for the trunk
     double segment_ratio = 10.0; // a segment is split while longer than this many radii
-    double clump_ratio = 0.3; // clump radius / crown_radius
-    double flare = 1.0; // the trunk's smooth union with the ground, times its radius
+    double clump_ratio = 0.38; // clump radius / crown_radius
+    double flare = 2.0; // the trunk's smooth union with the ground, times its radius
     double fork_smooth = 0.5; // a child's smooth union with its parent, times its radius
-    double crown_smooth = 0.2; // the hull's and clumps' smooth union, times their radius
+    double crown_smooth = 0.5; // the hull's and clumps' smooth union, times their radius: one foliage mass
     int budget = 96; // records per tree: the thinnest stems are cut first
 };
 
@@ -51,18 +56,19 @@ const std::vector<TreeSpecies> &tree_species();
 // The crown type: make_rock_type(crown_k(voxel), CROWN_SEED). Its bump amplitude is set so that the bumps add
 // CROWN_BUMP to its Lipschitz bound (the band depth, the locality margin and the list lengths grow with it).
 inline constexpr uint32_t CROWN_SEED = 0xC40Du;
-inline constexpr double CROWN_WAVELENGTH_M = 2.0;
-inline constexpr double CROWN_BUMP = 0.5;
+inline constexpr double CROWN_WAVELENGTH_M = 0.8;
+inline constexpr double CROWN_BUMP = 1.5;
 int crown_k(double p_voxel);
 
 // The library types trees use and the crown type's numbers, read from its bounds (crown_types).
 struct TreeTypes {
     int branch = -1; // make_branch_type()
     int crown = -1; // the crown type
+    int cone = -1; // make_cone_type(crown_k(voxel), CROWN_SEED): its bumps are the crown's
     float crown_amp = 0.0f; // its amp param: the bumps add CROWN_BUMP to L
     float crown_dent = 0.0f; // how far the bumps can reach inside its radius (voxels)
 };
-TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def);
+TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, int p_cone = -1);
 
 // One stem as grown (tests): its order, base and tip radius and the radii of the children forking off it (voxels).
 struct TreeStem {
@@ -72,11 +78,43 @@ struct TreeStem {
     std::vector<double> children;
 };
 
+// The library types trees use (branch, crown, cone), added to r_library as SDFTable::build_table does.
+TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel);
+
+// The rotation (rows: absolute to local) whose local y is the unit p_up: the smallest turn from +y (the identity for
+// UP_Y), the frame trees grow in.
+void up_rotation(const UpAxis &p_up, float r_rows[9]);
+
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
-// boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. Deterministic in (species,
-// seed, voxel); p_base only translates it. The stems, in the order they were grown, go to r_stems if given.
-void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
-        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems = nullptr);
+// boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the
+// trunk grows along, and the cone tiers' axis; the tree is grown in absolute axes, joints on whole voxels (UP_Y: the
+// records from before trees had an up axis, bit for bit). Deterministic in (species, up, seed, voxel); p_base only
+// translates it. The stems, in the order they were grown, go to r_stems if given.
+// p_hull_only: the hull spheres (or the cone tiers) alone, grown from the trunk's polyline as the full growth grows them
+// (the same joints, the same hashes: bit-identical to the full growth's hull records); no branch, child or clump is grown,
+// and r_stems holds the trunk only. What a far part tile needs from tree_hull_only_lod on.
+void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
+        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems = nullptr, bool p_hull_only = false);
+
+// The largest records a tree of the species can grow, unfinished, at the origin, upright. Radii are padded by
+// TREE_BOUND_PAD: a real segment's Lipschitz bound 1 + slope^2 / 2 and a turned record's rotation margin raise its band
+// depth over the bound's by less than that (both under 0.1%). Every record of every tree of the species is no larger than
+// one of these: finishing them bounds the trees' band (tree_hull_only_lod) and their fit in the table.
+inline constexpr double TREE_BOUND_PAD = 1.02;
+struct TreeBounds {
+    TableRecord trunk; // the thickest branch segment (a child is never thicker than its parent where it forks)
+    bool has_clump = false; // the species has limbs
+    TableRecord clump; // the largest clump (a leaf stem's tip)
+    TableRecord hull; // the largest hull sphere or cone tier
+};
+TreeBounds tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeTypes &p_types);
+
+// The first LOD at which the full growth of any tree of the species lists nothing but its hull (or tiers): the larger
+// max_lod of the trunk and clump bounds (tree_bounds) finished with p_finish. max_lod grows with a part's size (the band
+// depth and the resolve test both grow with its radius and length; unit-tested), so no thinner branch and no smaller clump
+// is listed from there on. A part tile at that LOD or above grows its trees hull-only, bit for bit the full growth's listed
+// records. 255 (TableRecord::NEVER_DROPPED) without the band rule: never hull-only.
+int tree_hull_only_lod(const TreeSpecies &p_species, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types);
 
 // A tree in the table: its records are the ids [first, first + count), grown from (species, seed).
 struct TreeSpan {
@@ -86,17 +124,16 @@ struct TreeSpan {
     uint32_t seed = 0;
 };
 
-// Where a tree stands: the bottom of its trunk (absolute LOD0 voxel), its seed and species.
-struct TreeSite {
-    VoxelPos base;
-    uint32_t seed = 0;
-    int species = 0;
-};
+// The salt of the forest's cell sites (cell_sites.hpp); a site's species is its variant modulo the species count.
+inline constexpr uint32_t TREE_SITE_SALT = 0xF0E57u;
+int tree_species_of(uint32_t p_variant);
 
-// About p_count trees in the square of side p_area_m metres centred on (p_centre_x_m, p_centre_z_m): one per cell
-// of an absolute grid of cells (side p_area_m / sqrt(p_count), whole voxels), jittered within it by a hash of the
-// cell. The same cell holds the same tree whatever the square. p_ground_y(x, z) gives the base's y at a column.
-void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_centre_z_m, double p_voxel,
-        const std::function<int64_t(int64_t, int64_t)> &p_ground_y, std::vector<TreeSite> &r_out);
+// Makes r_scatter a forest's (the rest of it, zone, ground, up, accept, is the caller's): the salt, generate (a tree of the
+// site's species, hull-only from the species' tree_hull_only_lod under p_finish), one class per species (the far moments
+// per species) and the profile key of the tree set ("trees:" + voxel + species count + type ids: every forest of that
+// voxel size shares one profile). A site is refused whole when a record of it doesn't fit the table (p_max_extent): a
+// species whose bounds don't fit never grows hull-only (ERR), so a refusal never depends on the LOD.
+void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types,
+        int64_t p_max_extent);
 
 } // namespace Archetype

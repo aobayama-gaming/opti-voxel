@@ -6,7 +6,9 @@
 Per phase: the frame (wall clock), the main thread (VoxelTerrain::_process by section),
 the GPU per renderer pass and mesher step, the render thread's CPU, then the frames over budget against the
 others. GPU frames are matched to main-thread frames by frame number, with the offset that best correlates
-the GPU total with the frame time (printed).
+the GPU total with the frame time (printed). Then, from stats.json: the streamed instances per phase (keys computed /
+evicted per kind and LOD, worker busy, main-thread stream time, park and hand-off latencies) and the mesher's GPU
+time per batch against its instance list words. Stats missing from older runs read n/a.
 """
 import json
 import os
@@ -66,6 +68,110 @@ def best_offset(main, gpu_by_frame):
         if c > best[1]:
             best = (off, c)
     return best
+
+
+def stream_of(terrain):
+    return (terrain or {}).get("table", {}).get("stream")
+
+
+def num(d, key):
+    v = (d or {}).get(key)
+    return v if isinstance(v, (int, float)) else None
+
+
+def delta(cur, prev, key):
+    a, b = num(cur, key), num(prev, key) if prev is not None else 0
+    return None if a is None or b is None else a - b
+
+
+def fmt(v, digits=1):
+    if v is None:
+        return "n/a"
+    return f"{v:.{digits}f}" if isinstance(v, float) else str(v)
+
+
+def latency(d):
+    """{count, p50, p95, max} as 'p50 / p95 / max (count)'."""
+    if not isinstance(d, dict) or "count" not in d:
+        return "n/a"
+    return f"{d['p50']} / {d['p95']} / {d['max']} ({d['count']})"
+
+
+def stream_phase_row(name, ph, prev_terrain):
+    t = ph.get("terrain", {})
+    st, prev = stream_of(t), stream_of(prev_terrain) if prev_terrain else None
+    wall = ph.get("wall_ms", 0.0)
+    compute = delta(st, prev, "compute_ms_total")
+    workers = num(st, "workers")
+    busy = f"{compute / wall / workers:.0%}" if compute is not None and workers and wall else "n/a"
+    cells = [fmt(wall, 0), fmt(delta(st, prev, "computed")), fmt(delta(st, prev, "evicted")), busy,
+             fmt(delta(st, prev, "admit_ms_total")), fmt(delta(st, prev, "poll_ms_total")), fmt(delta(st, prev, "land_ms_total")),
+             fmt(delta(st, prev, "evict_ms_total")), fmt(delta(st, prev, "admit_keys_created")), fmt(num(st, "admit_keys_created_max")),
+             fmt(num(st, "jobs_queued_max")), fmt(delta(st, prev, "jobs_reranked")), latency((st or {}).get("park_frames")),
+             fmt(delta(st, prev, "stale_handed_back")), fmt(delta(st, prev, "keys_dropped")), fmt(delta(st, prev, "jobs_dropped")),
+             latency(t.get("destroy", {}).get("handoff_frames"))]
+    return f"| {name} | " + " | ".join(cells) + " |"
+
+
+def stream_keys_table(name, st, prev):
+    by, prev_by = (st or {}).get("computed_by_key", {}), (prev or {}).get("computed_by_key", {})
+    out = [f"#### {name}: keys per kind and LOD", "",
+           "| key | computed | evicted | computed (cumul.) | evicted (cumul.) | recompute ratio (cumul.) | ms avg |",
+           "|---|---|---|---|---|---|---|"]
+    # SourceKey::kind_name: the walks, the records grown from them, the blobs.
+    kinds = {"sites": 0, "proxies": 1, "parts": 2, "blobs": 3}
+    for key in sorted(by, key=lambda k: (kinds.get(k.split()[0], len(kinds)), int(k.split()[1]))):
+        k, p = by[key], prev_by.get(key, {})
+        c, e = k.get("count", 0), k.get("evicted")
+        ratio = f"{c / (c - e):.2f}" if e is not None and c > e else ("n/a" if e is None else "inf")
+        de = None if e is None else e - p.get("evicted", 0)
+        out.append(f"| {key} | {c - p.get('count', 0)} | {fmt(de)} | {c} | {fmt(e)} | {ratio} | {k.get('ms_avg', 0):.3f} |")
+    return out + ["", f"Walks resident (cap InstanceStream::WALKS_MAX): {fmt(num(st, 'walks_ready'))}", ""]
+
+
+def stream_report(stats, phases):
+    """Per phase (deltas from the previous phase's end; percentiles and maxima cumulative): the stream's work."""
+    out = ["## Streamed instances", ""]
+    if not any(stream_of(stats["phases"].get(p, {}).get("terrain")) for p in phases):
+        return out + ["n/a (no instance stream in this run)", ""]
+    out += ["Worker busy = compute ms / phase wall ms / workers. Latencies p50 / p95 / max (count), cumulative "
+            "since the start: park = stream frames from a chunk's park to its hand-back, hand-off = frames a stalled "
+            "parent stays drawn over its children.", "",
+            "| phase | wall ms | computed | evicted | worker busy | admit ms | poll ms | land ms | evict ms | keys created "
+            "by admits | max per admit | jobs queued max | jobs reranked | park frames | stale forgotten | keys dropped | "
+            "jobs dropped | hand-off frames |",
+            "|" + "---|" * 18]
+    prev, tables = None, []
+    for p in phases:
+        ph = stats["phases"].get(p)
+        if not ph:
+            continue
+        out.append(stream_phase_row(p, ph, prev))
+        tables += stream_keys_table(p, stream_of(ph.get("terrain")), stream_of(prev))
+        prev = ph.get("terrain")
+    return out + [""] + tables
+
+
+def list_words_report(stats):
+    """The mesher's GPU time per batch by its instance list words (log2 bins), over the whole run."""
+    mesher = stats.get("final_terrain", {}).get("mesher", {})
+    bins = mesher.get("gpu_by_list_words")
+    out = ["## Mesher GPU per batch vs list words", ""]
+    if not bins:
+        return out + ["n/a (no gpu_by_list_words in this run)", ""]
+    # GPUCostModel: a word's cost, and the share of the chunks' list bounds (their keys' records) the lists held.
+    words, bound = num(mesher, "list_words_total"), num(mesher, "list_bound_total")
+    per_lod = lambda key, digits: " / ".join(f"{v:.{digits}f}" for v in mesher.get(key) or []) or "n/a"
+    out += [f"Cost model: {fmt(num(mesher, 'cost_us_per_word'), 3)} us per word; per LOD, list share {per_lod('cost_list_share', 3)}, "
+            f"words per chunk past it {per_lod('cost_words_per_chunk', 0)}; "
+            f"words / bounds over the run {fmt(words / bound if words is not None and bound else None, 3)}", ""]
+    out += ["| list words | batches | words avg | sdf pass us avg | batch us avg | sdf us per 1k words |",
+            "|---|---|---|---|---|---|"]
+    for b in bins:
+        per_k = 1000.0 * b["sdf_us_avg"] / b["words_avg"] if b["words_avg"] else 0.0
+        out.append(f"| {b['words_lo']}-{b['words_hi']} | {b['batches']} | {b['words_avg']:.0f} | {b['sdf_us_avg']:.0f} | "
+                   f"{b['total_us_avg']:.0f} | {per_k:.1f} |")
+    return out + [""]
 
 
 def main():
@@ -154,7 +260,10 @@ def main():
                   "| | over budget | within | difference |", "|---|---|---|---|"]
             lines = [("frame (wall)", lambda m: m["wall_ms"], None),
                      ("main: terrain total", lambda m: m["terrain"].get("total", 0), None),
+                     ("main: terrain stream_poll", lambda m: m["terrain"].get("stream_poll", 0), None),
                      ("main: terrain mesher_dispatch", lambda m: m["terrain"].get("mesher_dispatch", 0), None),
+                     ("main: terrain gate_admit", lambda m: m["terrain"].get("gate_admit", 0), None),
+                     ("main: terrain build_lists", lambda m: m["terrain"].get("build_lists", 0), None),
                      ("main: terrain scan_apply", lambda m: m["terrain"].get("scan_apply", 0), None),
                      ("main: terrain compact", lambda m: m["terrain"].get("compact", 0), None),
                      ("GPU total", None, lambda g: g["gpu_total_ms"]),
@@ -169,6 +278,8 @@ def main():
         sections_out += s + [""]
 
     out += summary + [""] + sections_out
+    out += stream_report(stats, phases)
+    out += list_words_report(stats)
     print("\n".join(out))
 
 

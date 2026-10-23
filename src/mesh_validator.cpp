@@ -3,6 +3,7 @@
 
 #include "GPU_mesher.hpp"
 #include "debug_log.hpp"
+#include "material_library.hpp"
 #include "page_format.hpp"
 #include "quad_page_pool.hpp"
 
@@ -18,11 +19,13 @@ namespace {
 struct Tri {
     Vector3 p[3];
     Vector3 n[3];
+    uint32_t m[3] = {}; // global materials
 };
 
-// The GPU meshes skirt_sdf (gpu_glsl.hpp), not the bare SDF: past the chunk bounds it adds up to
-// skirt_depth cells. Same formula here, so the corners are judged on the field that was meshed.
-double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param) {
+// The GPU meshes the samples with their skirt, not the bare SDF: past the chunk bounds it adds up to
+// p_depth_cells (SDFBase::skirt_depth_m in cells). Same formula here, so the corners are judged on the field that
+// was meshed.
+double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param, double p_depth_cells) {
     if (p_param.skirt_size <= 0 || p_param.skirt_depth <= 0.0f) {
         return 0.0;
     }
@@ -30,7 +33,7 @@ double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param) {
     const double hi = lo + double(p_param.chunk_voxel_dimension());
     auto inside = [lo, hi](double c) { return MIN(c - lo, hi - c); };
     const double d = MIN(inside(p_corner.x), MIN(inside(p_corner.y), inside(p_corner.z)));
-    return CLAMP(-d, 0.0, 1.0) * double(p_param.skirt_depth);
+    return CLAMP(-d, 0.0, 1.0) * p_depth_cells;
 }
 
 // Smallest |SDF| (CPU evaluation, in cells) over the grid corners of the cell holding `p_grid` (a
@@ -39,10 +42,12 @@ double skirt_offset_cells(const Float3 &p_corner, const ChunkParam &p_param) {
 double min_abs_sdf_cells(SDFBase *p_sdf, const ChunkId &p_chunk, const Vector3 &p_grid, const ChunkParam &p_param, float p_cell) {
     const Vector3i base((int)std::floor(p_grid.x), (int)std::floor(p_grid.y), (int)std::floor(p_grid.z));
     double best = 1e30;
+    const int lod = ChunkMath::get_lod(p_chunk);
+    const double depth_cells = double(p_sdf->skirt_depth_m(lod)) / p_cell;
     for (int i = 0; i < 8; i++) {
         const Float3 corner{ float(base.x + (i & 1)), float(base.y + ((i >> 1) & 1)), float(base.z + ((i >> 2) & 1)) };
-        const double sdf_cells = (double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param), ChunkMath::get_lod(p_chunk)) / p_cell;
-        best = MIN(best, std::abs(sdf_cells + skirt_offset_cells(corner, p_param)));
+        const double sdf_cells = (double)p_sdf->evaluate(ChunkMath::sample_pos(p_chunk, corner, p_param), lod) / p_cell;
+        best = MIN(best, std::abs(sdf_cells + skirt_offset_cells(corner, p_param, depth_cells)));
     }
     return best;
 }
@@ -63,6 +68,22 @@ void write_obj(const String &p_path, const std::vector<Tri> &p_tris, const Chunk
 }
 
 } // namespace
+
+std::vector<MeshValidator::Target> MeshValidator::pick_targets(const std::vector<Target> &p_candidates, int p_count) {
+    std::vector<Target> sets[2];
+    for (const Target &t : p_candidates) {
+        sets[t.palette.offset != PaletteAlloc::GROUND_BLOCK ? 1 : 0].push_back(t); // records' materials past the base
+    }
+    const int with_materials = MIN(p_count / 2, (int)sets[1].size());
+    const int counts[2] = { MIN(p_count - with_materials, (int)sets[0].size()), with_materials };
+    std::vector<Target> targets;
+    for (int s = 0; s < 2; s++) {
+        for (int i = 0; i < counts[s]; i++) {
+            targets.push_back(sets[s][(size_t)i * sets[s].size() / counts[s]]);
+        }
+    }
+    return targets;
+}
 
 void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers,
         QuadPagePool *p_pool, const String &p_dump_dir, bool p_dual_contouring) {
@@ -206,7 +227,8 @@ void MeshValidator::_compare() {
     PackedFloat64Array baseline_sdf; // same measure on ordinary matched triangles
     int64_t unexplained = 0;
     int64_t sliver_normals_skipped = 0; // matched sliver triangles: normal partners are ambiguous
-    int64_t bad_headers = 0; // groups of a chunk whose header names another chunk
+    int64_t bad_headers = 0; // groups of a chunk whose header names another chunk or palette block
+    int64_t material_samples = 0, material_records = 0, material_mismatch = 0; // per paired vertex
     auto record = [&](const char *p_kind, const ChunkId &p_chunk, const Tri &p_tri, float p_cell, double p_extra) {
         const Vector3 c = (p_tri.p[0] + p_tri.p[1] + p_tri.p[2]) / 3.0f;
         const double near_zero = min_abs_sdf_cells(sdf, p_chunk, c, chunk_param, p_cell);
@@ -241,20 +263,27 @@ void MeshValidator::_compare() {
             const uint16_t *page = reinterpret_cast<const uint16_t *>(bytes.ptr());
             const uint32_t rows = bytes.size() / PageFormat::ROW_BYTES;
             const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
+            const std::vector<uint32_t> &palette = *t.palette.palette;
             for (uint32_t q = t.offset; q < t.offset + t.count && q / PageFormat::QUAD_GROUP < rows; q++) {
-                if (q % PageFormat::QUAD_GROUP == 0 && PageFormat::header_chunk(PageFormat::row(page, q / PageFormat::QUAD_GROUP)) != chunk_lo) {
-                    bad_headers++;
+                if (q % PageFormat::QUAD_GROUP == 0) {
+                    const uint16_t *row = PageFormat::row(page, q / PageFormat::QUAD_GROUP);
+                    if (PageFormat::header_chunk(row) != chunk_lo || PageFormat::header_palette(row) != t.palette.offset) {
+                        bad_headers++;
+                    }
                 }
                 Vector3 p[4];
                 Vector3 n[4];
+                uint32_t m[4];
                 for (int k = 0; k < 4; k++) {
                     const uint16_t *c = PageFormat::corner(page, q, k);
                     const Float3 loc = PageFormat::decode_local(c, scale);
                     p[k] = Vector3(loc.x, loc.y, loc.z);
                     n[k] = PageFormat::is_zero(c) ? Vector3() : godot_v3(PageFormat::decode_normal(c));
+                    const uint32_t index = PageFormat::decode_palette(c);
+                    m[k] = index < palette.size() ? palette[index] : UINT32_MAX; // out of the palette: never matches
                 }
-                direct.push_back({ { p[0], p[1], p[3] }, { n[0], n[1], n[3] } });
-                direct.push_back({ { p[0], p[3], p[2] }, { n[0], n[3], n[2] } });
+                direct.push_back({ { p[0], p[1], p[3] }, { n[0], n[1], n[3] }, { m[0], m[1], m[3] } });
+                direct.push_back({ { p[0], p[3], p[2] }, { n[0], n[3], n[2] }, { m[0], m[3], m[2] } });
             }
         }
 
@@ -267,11 +296,13 @@ void MeshValidator::_compare() {
                 const PackedVector3Array v = arrays[Mesh::ARRAY_VERTEX];
                 const PackedVector3Array vn = arrays[Mesh::ARRAY_NORMAL];
                 const PackedInt32Array idx = arrays[Mesh::ARRAY_INDEX];
+                const PackedFloat32Array vm = arrays[Mesh::ARRAY_CUSTOM0]; // GPUMesher: the global material, R float
                 for (int i = 0; i + 2 < idx.size(); i += 3) {
                     Tri tri;
                     for (int k = 0; k < 3; k++) {
                         tri.p[k] = v[idx[i + k]];
                         tri.n[k] = vn.size() == v.size() ? vn[idx[i + k]].normalized() : Vector3();
+                        tri.m[k] = vm.size() == v.size() ? uint32_t(vm[idx[i + k]]) : UINT32_MAX - 1;
                     }
                     legacy_tris.push_back(tri);
                 }
@@ -394,6 +425,15 @@ void MeshValidator::_compare() {
             }
             for (int k = 0; k < 3; k++) {
                 const int dk = best_flipped ? (best_rot + 3 - k) % 3 : (best_rot + k) % 3;
+                // The same vertex (cell) on both sides: the same samples, the same vertex_material rule.
+                material_samples++;
+                material_records += l.m[k] != Material::GROUND ? 1 : 0;
+                if (l.m[k] != d.m[dk]) {
+                    material_mismatch++;
+                    if (material_mismatch <= 8) {
+                        record("material_mismatch", t.chunk_id, l, cell, double(d.m[dk]));
+                    }
+                }
                 if (l.n[k] == Vector3() || d.n[dk] == Vector3()) {
                     continue;
                 }
@@ -490,6 +530,9 @@ void MeshValidator::_compare() {
     // clearly non-zero corner is a real bug.
     report["unexplained_anomalies"] = unexplained;
     report["bad_group_headers"] = bad_headers;
-    report["ok"] = legacy_tris_total > 0 && legacy_tris_total == direct_tris_total && unexplained == 0 && bad_headers == 0 &&
+    report["material_samples"] = material_samples;
+    report["material_records"] = material_records; // paired vertices whose material is not the ground
+    report["material_mismatch"] = material_mismatch;
+    report["ok"] = legacy_tris_total > 0 && legacy_tris_total == direct_tris_total && unexplained == 0 && bad_headers == 0 && material_mismatch == 0 &&
             (double)(matched + ambiguous_slivers) / legacy_tris_total > 0.9999 && (normal_samples == 0 || sum_normal_err_deg / normal_samples < 0.5);
 }

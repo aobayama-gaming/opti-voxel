@@ -4,6 +4,7 @@
 #include "chunk_math.hpp"
 #include "ov/containers.hpp"
 
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -21,7 +22,8 @@
 // Two index layers: the base, built once over the whole table (a million instances take seconds), and an
 // overlay over the records edited since, rebuilt by every edit (milliseconds). A base entry whose record
 // was edited is masked; the overlay holds its current state. Lists merge both in id order, so the fold is
-// the same as from one index over the whole table. Past REBASE edited records, an edit rebuilds the base.
+// the same as from one index over the whole table. Past REBASE edited records the base is rebuilt, on the
+// worker pool while edits go on (BaseRebuild).
 namespace Archetype {
 
 struct IndexRange {
@@ -62,7 +64,6 @@ private:
 
 // One layer of the index over a set of records (flat arrays: no allocation per node).
 struct IndexLayer {
-    std::vector<uint32_t> unbounded; // instances with an unbounded box: listed by every chunk
     // node -> the instances stored at it (stored_ids[begin, begin + count))
     NodeRangeMap stored_at;
     std::vector<uint32_t> stored_ids;
@@ -73,11 +74,11 @@ struct IndexLayer {
     std::vector<std::vector<ChunkId>> occupied;
 
     bool is_occupied(const ChunkId &p_node, int p_lod) const;
+    bool empty() const { return stored_ids.empty(); }
 };
 
 struct InstanceSnapshot {
     std::shared_ptr<const DefLibrary> library;
-    Program ground; // the ground register (archetype_table.hpp fold)
     float out_scale = 1.0f;
     bool normalize = true;
     uint32_t version = 0;
@@ -91,6 +92,9 @@ struct InstanceSnapshot {
     ov::HashSet<uint32_t> masked; // the base ids among overlay_ids: their base entries are stale
 
     static constexpr uint32_t REBASE = 2048;
+
+    // No instance indexed (none placed, or every one removed and rebased away): every list is empty.
+    bool empty() const { return (!base || base->empty()) && (!overlay || overlay->empty()); }
 
     // The instances whose box test can pass at one of the chunk's samples, in id order.
     void chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> &r_out) const;
@@ -116,17 +120,52 @@ void chunk_sample_box(const ChunkId &p_chunk, const ChunkParam &p_param, VoxelPo
 bool influence_meets(const TableRecord &p_record, int p_lod, const VoxelPos &p_lo, const VoxelPos &p_hi);
 
 // Builds the snapshot with a base index over every record. Deterministic. p_max_lod bounds the octree depth.
-std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
-        float p_out_scale, bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version);
-inline std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, const Program &p_ground,
-        float p_out_scale, bool p_normalize, const std::vector<TableRecord> &p_records, const ChunkParam &p_param, int p_max_lod,
-        uint32_t p_version) {
-    return build_snapshot(p_library, p_ground, p_out_scale, p_normalize, RecordStore(p_records, p_version), p_param, p_max_lod, p_version);
+std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
+        bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version);
+inline std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
+        bool p_normalize, const std::vector<TableRecord> &p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
+    return build_snapshot(p_library, p_out_scale, p_normalize, RecordStore(p_records, p_version), p_param, p_max_lod, p_version);
 }
 
 // The next snapshot after an edit of the records p_changed (added, moved or removed; p_records is the table
-// after it): the previous base is kept and the overlay rebuilt, or past REBASE edited records, a new base.
+// after it): the previous base kept, the overlay rebuilt over every record edited since it.
 std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_previous, RecordStore p_records,
         const std::vector<uint32_t> &p_changed, uint32_t p_version);
+
+// When the base is rebuilt: edit() is edit_snapshot plus, past `rebase` edited ids, a new base built in one
+// background task (std::async) over the records as they are then (copy on write keeps them unchanged), while later edits
+// grow the overlay and are logged; once ready(), take() gives the records now over that base plus an overlay of the
+// ids changed since: the same lists as a whole new base. Main thread only, except the task itself.
+class BaseRebuild {
+public:
+    // Past p_rebase edited ids an edit starts a base. Past p_hard_overlay while one is being built, an edit waits for
+    // it instead of growing the overlay (an overlay costs ~1.8 us per id to rebuild, every edit: 7 ms at 4,096).
+    explicit BaseRebuild(uint32_t p_rebase = InstanceSnapshot::REBASE, uint32_t p_hard_overlay = 2 * InstanceSnapshot::REBASE) :
+            rebase(p_rebase), hard_overlay(p_hard_overlay) {}
+    ~BaseRebuild() { cancel(); }
+    BaseRebuild(const BaseRebuild &) = delete;
+    BaseRebuild &operator=(const BaseRebuild &) = delete;
+
+    std::shared_ptr<const InstanceSnapshot> edit(const InstanceSnapshot &p_previous, RecordStore p_records,
+            const std::vector<uint32_t> &p_changed, uint32_t p_version);
+    bool running() const { return task.valid(); }
+    bool ready() const;
+    // Waits for the task if it isn't done (null and ERR if none runs). p_like gives the snapshot's fields, p_records
+    // and p_version the table now: the version is kept, the records didn't change (nothing re-uploaded or re-meshed).
+    std::shared_ptr<const InstanceSnapshot> take(const InstanceSnapshot &p_like, RecordStore p_records, uint32_t p_version);
+    // Waits for the task and drops its base (configure, destruction).
+    void cancel();
+
+private:
+    void start(std::shared_ptr<const InstanceSnapshot> p_from);
+    void wait();
+
+    const uint32_t rebase;
+    const uint32_t hard_overlay;
+    std::future<void> task;
+    std::shared_ptr<const InstanceSnapshot> from; // the records the base indexes
+    std::shared_ptr<const IndexLayer> layer;
+    std::vector<uint32_t> changed; // since start(), unsorted, may repeat
+};
 
 } // namespace Archetype

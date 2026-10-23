@@ -25,8 +25,6 @@
 #include "mesh_validator.hpp"
 #include "page_auditor.hpp"
 
-//debug
-#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
 using namespace godot;
@@ -64,7 +62,7 @@ private:
     bool debug_gpu_profile_frames = false; // record every captured frame (GPUProfiler::take_frames)
     Dictionary validation_report;
 
-    SDFBase *sdf = memnew(SDFCascade);
+    SDFCascade *sdf = memnew(SDFCascade); // the one terrain: the cascade ground under the instance table
 
     VoxelState visual_mesh_data;
 
@@ -79,8 +77,14 @@ private:
     double archetype_instance_area = 200.0;
     int archetype_trees = 0;
     double archetype_tree_area = 60.0;
+    double biome_radius = 0.0;
+    String climate_path;
     bool archetype_band = true;
+    bool archetype_stream = true;
+    int archetype_stream_part_sides = int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES);
+    bool archetype_moments = true;
     float archetype_erode = Archetype::ERODE_CELLS;
+    float archetype_resolve = Archetype::ErodeRule().resolve;
     bool legacy_trim_indices = false;
     // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
     // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
@@ -92,11 +96,12 @@ private:
     VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
     GPUDirectMesher::Settings direct_settings;
     int debug_view = 0;
+    Dictionary page_params; // page shader uniforms set from outside (VoxelSky's clouds), applied when the pool exists
     int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
     bool discovery_cache = true;
     bool discovery_verify = false;
     bool destroy_verify = false;
-    int discoverer_mode = -1; // -1 auto: GPU for a cascade terrain, CPU otherwise
+    int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made)
     bool discovery_compare = false;
 
     bool started = false;
@@ -146,23 +151,33 @@ private:
 
     struct ProcessStats {
         TimingStat process_total;
+        TimingStat stream_poll; // SDFBase::poll (the streamed keys landed, the stream's evictions)
         TimingStat scan_ingest; // get_scanned_chunks + add_scan_chunk + send_chunk
         TimingStat scan_apply; // part of scan_ingest: VoxelState::add_scan_chunk (the scan delta)
         TimingStat destroy_from_scan; // VoxelState::update_destroy
         TimingStat destroy_verify; // VoxelState::verify_against_full (--destroy_verify)
         TimingStat mesher_dispatch; // process_queue
+        // Parts of mesher_dispatch (the mesher's DispatchTimes, per frame).
+        TimingStat gate_admit; // ChunkGate::admit
+        TimingStat build_lists; // SDFGpuTable::build_lists
+        TimingStat record_bytes; // SDFGpuTable::record_bytes
         TimingStat mesher_collect; // get_results
         TimingStat destroy_chunks; // VoxelState::destroy_marked
         TimingStat compact; // GPUDirectMesher::compact
+        TimingStat coverage; // VoxelState::push_coverage
 
         // The sections by name, for the reports.
         std::vector<std::pair<const char *, const TimingStat *>> sections() const {
-            return { { "total", &process_total }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
+            return { { "total", &process_total }, { "stream_poll", &stream_poll }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
                 { "destroy_from_scan", &destroy_from_scan }, { "destroy_verify", &destroy_verify },
-                { "mesher_dispatch", &mesher_dispatch }, { "mesher_collect", &mesher_collect },
-                { "destroy_chunks", &destroy_chunks }, { "compact", &compact } };
+                { "mesher_dispatch", &mesher_dispatch }, { "gate_admit", &gate_admit }, { "build_lists", &build_lists },
+                { "record_bytes", &record_bytes }, { "mesher_collect", &mesher_collect },
+                { "destroy_chunks", &destroy_chunks }, { "compact", &compact }, { "coverage", &coverage } };
         }
     } process_stats;
+    DispatchTimes last_dispatch_times; // the mesher's, at the previous frame
+    // The mesher's dispatch sub-timers since the previous frame, into their sections.
+    void _record_dispatch_times(const DispatchTimes &p_now);
 
 public:
     void _ready() override;
@@ -172,9 +187,9 @@ public:
     void set_pipeline_mode(int p_mode);
     int get_pipeline_mode() const;
 
-    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 3 the archetype
-    // IR's demo scene (SDFArchetype, --terrain=archetypes), 4 its shapes gallery (SDFArchetype::shapes,
-    // --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy (removed): saved scenes keep their numbers.
+    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 4 its flat preset under
+    // the shapes gallery (SDFTable::Scene::SHAPES, --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy and 3
+    // the archetype demo on an fBm ground (SDFArchetype), both removed: saved scenes keep their numbers.
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 
@@ -198,26 +213,52 @@ public:
     void set_world_origin_z(int64_t p_voxel);
     int64_t get_world_origin_z() const;
 
-    // Archetype demo scene: a deterministic scatter of --instances rocks and pillars in a square of side
-    // --instance_area metres around the fixed objects. Must be set before the node enters the tree.
+    // A deterministic scatter of --instances rocks and pillars on the ground, in a square of side
+    // --instance_area metres around SDFTable::SCENE_X / Z. Must be set before the node enters the tree.
     void set_archetype_instances(int p_count);
     int get_archetype_instances() const;
     void set_archetype_instance_area(double p_area);
     double get_archetype_instance_area() const;
-    // Archetype demo scene: a forest of about --trees grown trees (tree_archetype.hpp) in a square of side
-    // --tree_area metres around the demo objects. Set before the node enters the tree.
+    // A forest of about --trees grown trees (tree_archetype.hpp) in a square of side
+    // --tree_area metres around SDFTable::SCENE_X / Z. Set before the node enters the tree.
     void set_archetype_trees(int p_count);
     int get_archetype_trees() const;
     void set_archetype_tree_area(double p_area);
     double get_archetype_tree_area() const;
+    // The biome features (biome_features.hpp: lava lakes, floating islands) within this many metres of
+    // SDFTable::SCENE_X / Z, 0 for none (--biomes=KM). Set before the node enters the tree.
+    void set_biome_radius(double p_metres);
+    double get_biome_radius() const;
+    // A climate table (JSON, src/climate.cpp's format: res:// or absolute), carried by the cascade and modulating the
+    // ground's octaves per biome; empty for none (--climate=PATH). Set before the node enters the tree.
+    void set_climate_path(const String &p_path);
+    String get_climate_path() const;
     // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
     bool get_archetype_band() const;
-    // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): lower keeps thin parts (trunks) to
-    // coarser LODs (--instance_erode). Must be set before the node enters the tree.
+    // The scatter and the forest stream (default on: their keys computed as the chunks ask for them,
+    // instance_stream.hpp); false places them whole at configure (--stream=0). Must be set before the node enters the tree.
+    void set_archetype_stream(bool p_enabled);
+    bool get_archetype_stream() const;
+    // The streamed sources' moment layers read the records while their cell is under this many source cells, above it
+    // proxies (default 1; 3 = the whole build's blobs, ScatterSource::PART_CELL_SIDES; --stream_part_sides). Must be set
+    // before the node enters the tree.
+    void set_archetype_stream_part_sides(int p_sides);
+    int get_archetype_stream_part_sides() const;
+    // The far field of the dropped instances (default on): their moments, per LOD, as blobs the coarse chunks fold into a
+    // surface (moment_layers.hpp; --moments=0 to leave it out). Must be set before the node enters the tree.
+    void set_archetype_moments(bool p_enabled);
+    bool get_archetype_moments() const;
+    // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): the skirt's depth and the fastest a part
+    // shrinks before its drop (--instance_erode). Must be set before the node enters the tree.
     void set_archetype_erode(float p_cells);
     float get_archetype_erode() const;
+    // The band rule's resolution, cells (default 1): a part is kept while its half thickness (its moments) holds this
+    // many cells, and erodes only just before its drop (Archetype::set_band; --instance_resolve). Must be set before
+    // the node enters the tree.
+    void set_archetype_resolve(float p_cells);
+    float get_archetype_resolve() const;
 
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);
@@ -249,6 +290,9 @@ public:
     // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain, for the
     // clip planes above 15 LODs.
     double get_sdf_at(const Vector3 &p_render_pos) const;
+    // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
+    // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
+    Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;
@@ -303,9 +347,8 @@ public:
     // the full recompute (VoxelState::verify_against_full), ERROR on a difference.
     void set_destroy_verify(bool p_enable);
     bool get_destroy_verify() const;
-    // Where the discoverer evaluates the corners of its cull test: -1 auto (GPU when the terrain is a cascade,
-    // CPU otherwise), 0 CPU, 1 GPU (DiscovererGPU, a local device on the discoverer thread; CPU with a warning
-    // if it can't be created or the terrain has no cascade). Both give the same scans.
+    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 (and -1, auto) GPU (DiscovererGPU, a
+    // local device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
     void set_discoverer_mode(int p_mode);
     int get_discoverer_mode() const;
     // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).
@@ -315,6 +358,8 @@ public:
     // GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);
     int get_debug_view() const;
+    // GPU Direct: page shader uniforms by name (VoxelSky hands the cloud layer's over), kept across the pool's creation.
+    void set_page_params(const Dictionary &p_params);
 
     void set_log_level(int p_level);
     int get_log_level() const;

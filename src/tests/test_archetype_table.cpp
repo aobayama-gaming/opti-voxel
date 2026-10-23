@@ -1,6 +1,5 @@
 #include "test_common.hpp"
 
-#include "archetype_instance.hpp"
 #include "archetype_table.hpp"
 #include "instance_table.hpp"
 
@@ -16,8 +15,7 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// p_anchor + an offset in [-p_range, p_range)^3 voxels, fraction in steps of 2^-18 (as
-// test_archetype_instance.cpp).
+// p_anchor + an offset in [-p_range, p_range)^3 voxels, fraction in steps of 2^-18.
 WorldPos random_point(const VoxelPos &p_anchor, double p_range, uint32_t p_i, uint32_t p_seed) {
     const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_i, p_seed, 0x1A57u });
     WorldPos p;
@@ -39,45 +37,6 @@ uint32_t noise_salt(uint32_t p_seed) {
 constexpr int ROCK_K = 10;
 constexpr uint32_t ROCK_SEED = 0x50C4u;
 
-// The compiled (PR 1) equivalent of each library type: the same ops with constant sizes and a local
-// frame (compile() re-frames it at the instance's anchor and rotation).
-std::shared_ptr<Def> ref_def(const std::string &p_type, const float *p_params) {
-    Builder b;
-    const Local l = b.local();
-    Reg r = -1;
-    if (p_type == "sphere") {
-        r = b.sphere(l, p_params[0]);
-    } else if (p_type == "box") {
-        r = b.box(l, p_params[0], p_params[1], p_params[2]);
-    } else if (p_type == "capsule") {
-        r = b.capsule(l, p_params[0], p_params[1]);
-    } else if (p_type == "branch") {
-        const Reg yc = b.clamp(l.y, b.constant(0.0f), b.constant(p_params[0]));
-        const Reg len = b.length(l.x, b.sub(l.y, yc), l.z);
-        r = b.sub(len, b.add(b.constant(p_params[1]), b.mul(b.constant(p_params[2]), yc)));
-    } else if (p_type == "cylinder") {
-        r = b.cylinder(l, p_params[0], p_params[1]);
-    } else if (p_type == "rock") {
-        Reg noise = b.constant(0.0f);
-        for (int i = 0; i < 3; i++) {
-            noise = b.add(noise, b.perlin3(ROCK_K + i, ROCK_SEED + uint32_t(i), Vector3i64(), float(std::ldexp(1.0, -i))));
-        }
-        r = b.add(b.sphere(l, p_params[0]), b.mul(noise, p_params[1]));
-    } else { // swiss_cube
-        Reg box = b.box(l, p_params[0], p_params[1], p_params[2]);
-        for (int i = 0; i < 4; i++) {
-            const double a = 2.0 * M_PI * double(i) / 4.0;
-            const Local q{ b.sub(l.x, b.constant(float(std::cos(a)) * p_params[3])), l.y,
-                b.sub(l.z, b.constant(float(std::sin(a)) * p_params[3])) };
-            box = b.max(box, b.neg(b.sphere(q, p_params[4])));
-        }
-        r = box;
-    }
-    std::shared_ptr<Def> d = std::make_shared<Def>();
-    d->program = b.finish(r);
-    return d;
-}
-
 TableDefPtr table_def(const std::string &p_type) {
     if (p_type == "sphere") {
         return make_sphere_type();
@@ -97,101 +56,35 @@ TableDefPtr table_def(const std::string &p_type) {
     if (p_type == "rock") {
         return make_rock_type(ROCK_K, ROCK_SEED);
     }
+    if (p_type == "holed_cube") {
+        return make_swiss_cube_type(1);
+    }
+    if (p_type == "die") {
+        return make_die_type();
+    }
+    if (p_type == "stairs") {
+        return make_stairs_type();
+    }
+    if (p_type == "tunnel_cube") {
+        return make_tunnel_cube_type();
+    }
+    if (p_type == "basin") {
+        return make_basin_type(ROCK_K, ROCK_SEED);
+    }
+    if (p_type == "island") {
+        return make_island_type(ROCK_K, ROCK_SEED);
+    }
     return make_swiss_cube_type(4);
 }
 
-// A small set of rotations: identity, a yaw, and a full rotation (a rotation of 0.5 rad about (1, 2, 3)).
-void rotations(std::vector<std::array<float, 9>> &r_out) {
-    r_out.push_back({ 1, 0, 0, 0, 1, 0, 0, 0, 1 });
-    const float c = float(std::cos(0.7)), s = float(std::sin(0.7));
-    r_out.push_back({ c, 0, -s, 0, 1, 0, s, 0, c });
-    const double axis[3] = { 1, 2, 3 };
-    const double n = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
-    const double x = axis[0] / n, y = axis[1] / n, z = axis[2] / n;
-    const double a = 0.5, ca = std::cos(a), sa = std::sin(a), t = 1.0 - ca;
-    const float m[9] = { float(t * x * x + ca), float(t * x * y - sa * z), float(t * x * z + sa * y), float(t * x * y + sa * z),
-        float(t * y * y + ca), float(t * y * z - sa * x), float(t * x * z - sa * y), float(t * y * z + sa * x),
-        float(t * z * z + ca) };
-    r_out.push_back({ m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8] });
-}
+struct TypeCase {
+    std::string name;
+    float params[8];
+};
 
-} // namespace
-
-TEST_CASE("Archetype table: a table Def matches the compiled (PR 1) program per type, rotation and anchor") {
-    struct Type {
-        std::string name;
-        float params[5];
-    };
-    const std::vector<Type> types = {
-        { "sphere", { 7.0f, 0, 0, 0, 0 } },
-        { "box", { 6.0f, 4.0f, 9.0f, 0, 0 } },
-        { "capsule", { 20.0f, 3.0f, 0, 0, 0 } },
-        { "branch", { 20.0f, 3.0f, -0.1f, 0, 0 } },
-        { "cylinder", { 8.0f, 5.0f, 0, 0, 0 } },
-        { "rock", { 12.0f, 2.0f, 0, 0, 0 } },
-        { "swiss_cube", { 10.0f, 10.0f, 10.0f, 5.0f, 4.0f } },
-    };
-    const int64_t P32 = int64_t(1) << 32;
-    const VoxelPos anchors[] = { VoxelPos(), VoxelPos(P32 - 3, -P32 + 2, P32 - 1),
-        VoxelPos((int64_t(1) << 60) - 1001, 5, -(int64_t(1) << 60) + 999) };
-    std::vector<std::array<float, 9>> rots;
-    rotations(rots);
-    DefLibrary lib;
-    std::vector<int> def_index;
-    for (const Type &t : types) {
-        def_index.push_back(lib.add(table_def(t.name)));
-    }
-    int64_t compared = 0;
-    for (size_t ti = 0; ti < types.size(); ti++) {
-        const Type &t = types[ti];
-        const Program &table_prog = lib[def_index[ti]].program;
-        CHECK(table_prog.validate(25).empty());
-        for (size_t ai = 0; ai < sizeof(anchors) / sizeof(anchors[0]); ai++) {
-            const VoxelPos &a = anchors[ai];
-            for (size_t ri = 0; ri < rots.size(); ri++) {
-                const std::array<float, 9> &rot = rots[ri];
-                Instance inst;
-                inst.def = ref_def(t.name, t.params);
-                inst.anchor = a;
-                std::copy(rot.begin(), rot.end(), inst.rotation);
-                inst.seed = 3;
-                Compiled c = compile(inst);
-                CHECK(c.error.is_empty());
-                const Program &compiled = c.program;
-                TableRecord rec;
-                rec.def = uint8_t(def_index[ti]);
-                rec.anchor = a;
-                std::copy(rot.begin(), rot.end(), rec.rotation);
-                std::memcpy(rec.params, t.params, sizeof(rec.params));
-                rec.salt = noise_salt(inst.seed);
-                const DefRecord dr = rec.def_record();
-                for (uint32_t i = 0; i < 400; i++) {
-                    const WorldPos p = random_point(a, 40.0, i, uint32_t(ti + 1));
-                    for (const int lod : { 0, 3, 24 }) {
-                        const Float4 x = run(compiled, p, lod);
-                        const Float4 y = run(table_prog, p, lod, &dr);
-                        CAPTURE(t.name);
-                        if (!same_bits(x, y)) {
-                            MESSAGE(t.name, " ai=", ai, " ri=", ri, " lod=", lod, ": compiled w=", x.w, " table w=", y.w);
-                        }
-                        CHECK(same_bits(x, y));
-                        compared++;
-                    }
-                }
-            }
-        }
-    }
-    MESSAGE("table vs compiled (value and gradient): ", compared, " comparisons");
-}
-
-// The contract the locality rule and the band rule rest on, for every library type in its own frame: outside the
-// local box its bounds give, the value is at least the distance to that box, and |grad| <= L everywhere.
-TEST_CASE("Archetype table: every library type's box and Lipschitz bound hold") {
-    struct Type {
-        std::string name;
-        float params[5];
-    };
-    const std::vector<Type> types = {
+// Every library type, with typical params (voxels).
+const std::vector<TypeCase> &type_cases() {
+    static const std::vector<TypeCase> cases = {
         { "sphere", { 7.0f, 0, 0, 0, 0 } },
         { "box", { 6.0f, 4.0f, 9.0f, 0, 0 } },
         { "capsule", { 20.0f, 3.0f, 0, 0, 0 } },
@@ -200,8 +93,80 @@ TEST_CASE("Archetype table: every library type's box and Lipschitz bound hold") 
         { "cylinder", { 8.0f, 5.0f, 0, 0, 0 } },
         { "rock", { 12.0f, 2.0f, 0, 0, 0 } },
         { "swiss_cube", { 10.0f, 10.0f, 10.0f, 5.0f, 4.0f } },
+        { "holed_cube", { 16.0f, 16.0f, 16.0f, 0.0f, 19.2f } },
+        { "die", { 12.0f, 0, 0, 0, 0 } },
+        { "stairs", { 8.0f, 2.0f, 2.0f, 0, 0 } },
+        { "tunnel_cube", { 12.0f, 5.0f, 0, 0, 0 } },
+        { "basin", { 9.0f, 14.0f, 0.5f, 0, 0 } },
+        { "island", { 14.0f, 15.4f, 0.739940f, 0.672673f, 25.43f, 21.23f, 0.5f } },
     };
-    for (const Type &t : types) {
+    return cases;
+}
+
+} // namespace
+
+// The record carries the frame: the same local point (offset and fraction) gives the same bits at an anchor near 0,
+// across the 2^32 low-word wrap and near 2^60, for every type, rotation and LOD (the noise lattice follows the
+// anchor, INPUT is the exact sat_diff).
+TEST_CASE("Archetype table: perlin3 octaves stay within the bounds the noisy types' boxes use") {
+    float vmax = 0.0f;
+    float gmax = 0.0f;
+    for (uint32_t i = 0; i < 200000; i++) {
+        const WorldPos p = random_point(VoxelPos(int64_t(i) << 20, 0, -int64_t(i) * 977), 4096.0, i, 5);
+        const ExactNoise::Float4 n = ExactNoise::perlin3(p, 4, i * 31u, Vector3i64());
+        vmax = MAX(vmax, std::fabs(n.w));
+        gmax = MAX(gmax, std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z));
+    }
+    MESSAGE("perlin3 max |value| ", vmax, " |grad| per cell ", gmax);
+    CHECK(vmax <= PERLIN3_MAX);
+    CHECK(gmax <= PERLIN3_GRAD_MAX);
+}
+
+TEST_CASE("Archetype table: a library type gives the same bits for the same local point at any anchor") {
+    const int64_t P32 = int64_t(1) << 32;
+    const VoxelPos anchors[] = { VoxelPos(), VoxelPos(P32 - 3, -P32 + 2, P32 - 1),
+        VoxelPos((int64_t(1) << 60) - 1001, 5, -(int64_t(1) << 60) + 999) };
+    std::vector<std::array<float, 9>> rots;
+    rotations(rots);
+    int64_t compared = 0;
+    for (const TypeCase &t : type_cases()) {
+        const TableDefPtr def = table_def(t.name);
+        CHECK(def->program.validate(25).empty());
+        for (const std::array<float, 9> &rot : rots) {
+            TableRecord rec;
+            std::copy(rot.begin(), rot.end(), rec.rotation);
+            std::memcpy(rec.params, t.params, sizeof(t.params));
+            rec.salt = noise_salt(3);
+            for (uint32_t i = 0; i < 300; i++) {
+                const WorldPos local = random_point(VoxelPos(), 40.0, i, 0x7AB1u);
+                const int lods[3] = { 0, 3, 24 };
+                Float4 first[3] = {};
+                for (size_t ai = 0; ai < sizeof(anchors) / sizeof(anchors[0]); ai++) {
+                    rec.anchor = anchors[ai];
+                    const DefRecord dr = rec.def_record();
+                    WorldPos p = local;
+                    p.voxel = local.voxel + anchors[ai];
+                    for (int li = 0; li < 3; li++) {
+                        const Float4 r = run(def->program, p, lods[li], &dr);
+                        if (ai == 0) {
+                            first[li] = r;
+                        } else {
+                            CAPTURE(t.name);
+                            CHECK(same_bits(first[li], r));
+                            compared++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    MESSAGE("anchors: ", compared, " comparisons");
+}
+
+// The contract the locality rule and the band rule rest on, for every library type in its own frame: outside the
+// local box its bounds give, the value is at least the distance to that box, and |grad| <= L everywhere.
+TEST_CASE("Archetype table: every library type's box and Lipschitz bound hold") {
+    for (const TypeCase &t : type_cases()) {
         const TableDefPtr def = table_def(t.name);
         Float3 lo{}, hi{};
         float lipschitz = 0.0f;
@@ -243,34 +208,6 @@ TEST_CASE("Archetype table: every library type's box and Lipschitz bound hold") 
         CHECK(outside > 1000);
         CHECK(violations == 0);
     }
-}
-
-TEST_CASE("Archetype: a child of a rotated instance turns with its parent") {
-    Instance inst;
-    inst.def = box_def(20.0f, 20.0f, 20.0f);
-    inst.set_rotation_y(0.6);
-    Instance::Child c;
-    c.instance.def = sphere_def(3.0f);
-    c.instance.anchor = VoxelPos(10, 0, 0);
-    inst.children.push_back(c);
-    Compiled cc = compile(inst);
-    CHECK(cc.error.is_empty());
-    CHECK(cc.nodes.size() == 2);
-    // R = yaw(0.6), world -> local: R^T (10, 0, 0) = (10 cos 0.6, 0, -10 sin 0.6).
-    const int64_t cx = std::llround(10.0 * std::cos(0.6));
-    const int64_t cz = std::llround(-10.0 * std::sin(0.6));
-    const Bounds &child = cc.nodes[0].bounds;
-    MESSAGE("child box x [", child.lo.x, ", ", child.hi.x, "] z [", child.lo.z, ", ", child.hi.z, "], centre (", cx, ", ", cz, ")");
-    CHECK(cx != 10); // the axis-aligned placement would be (10, 0, 0)
-    const int64_t ccx = (child.lo.x + child.hi.x) / 2;
-    const int64_t ccz = (child.lo.z + child.hi.z) / 2;
-    CHECK(ccx - cx <= 2);
-    CHECK(cx - ccx <= 2);
-    CHECK(ccz - cz <= 2);
-    CHECK(cz - ccz <= 2);
-    // The old (world-axes) placement would centre the child at (10, 0, 0), far from the rotation.
-    const bool old_center = (ccx == 10) && (ccz == 0);
-    CHECK_FALSE(old_center);
 }
 
 TEST_CASE("Archetype table: the locality rule changes F only far from the surface, never its sign") {
@@ -334,8 +271,7 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
     }
     // A positive ground (air everywhere): a dropped far instance can then undercut the running value and
     // change F, which is what the rule's harmlessness claim is about.
-    Builder gb;
-    const Program ground = gb.finish(gb.constant(1000.0f));
+    const Float4 ground{ 0.0f, 0.0f, 0.0f, 1000.0f };
     std::vector<uint32_t> list(records.size());
     for (uint32_t i = 0; i < list.size(); i++) {
         list[i] = i;
@@ -357,8 +293,8 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
         const double range = half + 4.0 * double(near.margin_c) + 64.0;
         const WorldPos p = i % 5 == 0 ? random_point(VoxelPos(), 1.2e6, i, 0xB0Du) : random_point(near.anchor, range, i, 0xB0Du);
         for (const int lod : { 0, 4, 12 }) {
-            const Float4 a = fold(ground, lib, records.data(), list.data(), uint32_t(list.size()), p, lod, true);
-            const Float4 b = fold(ground, lib, records.data(), list.data(), uint32_t(list.size()), p, lod, false);
+            const Float4 a = fold_onto(ground, lib, records.data(), list.data(), uint32_t(list.size()), p, lod, true);
+            const Float4 b = fold_onto(ground, lib, records.data(), list.data(), uint32_t(list.size()), p, lod, false);
             points++;
             if ((a.w > 0.0f) != (b.w > 0.0f)) {
                 sign_flips++;
@@ -385,8 +321,7 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
     lib.add(make_sphere_type());
     lib.add(make_box_type());
     lib.add(make_capsule_type());
-    Builder gb;
-    const Program ground = gb.finish(gb.constant(80.0f));
+    const Float4 ground{ 0.0f, 0.0f, 0.0f, 80.0f };
     ChunkParam param;
     param.voxel_size = 1.0f;
 
@@ -455,7 +390,7 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
             }
         }
 
-        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 12, step + 1);
+        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), 1.0f, false, records, param, 12, step + 1);
         // The whole table in id order, the brute-force reference.
         std::vector<uint32_t> all;
         for (uint32_t i = 0; i < records.size(); i++) {
@@ -473,8 +408,8 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
             p.frac = Float3{};
             for (const int lod : { 0, 3, 8 }) {
                 snap->point_candidates(v, lod, candidates);
-                const Float4 indexed = fold(ground, lib, records.data(), candidates.data(), uint32_t(candidates.size()), p, lod, true);
-                const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
+                const Float4 indexed = fold_onto(ground, lib, records.data(), candidates.data(), uint32_t(candidates.size()), p, lod, true);
+                const Float4 brute = fold_onto(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
                 CHECK(same_bits(indexed, brute));
                 checked++;
             }
@@ -485,8 +420,8 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
                 const WorldPos p = random_point(records[q].anchor, 24.0, j, step * 977u + q);
                 for (const int lod : { 0, 3, 8 }) {
                     snap->point_candidates(p.voxel, lod, candidates);
-                    const Float4 indexed = fold(ground, lib, records.data(), candidates.data(), uint32_t(candidates.size()), p, lod, true);
-                    const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
+                    const Float4 indexed = fold_onto(ground, lib, records.data(), candidates.data(), uint32_t(candidates.size()), p, lod, true);
+                    const Float4 brute = fold_onto(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
                     CHECK(same_bits(indexed, brute));
                     for (uint32_t r : all) {
                         if (in_influence_box(records[r], p, lod)) {
@@ -510,8 +445,8 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
             const int lod = ChunkMath::get_lod(key);
             WorldPos p;
             p.voxel = ChunkMath::chunk_min_voxel(key, param);
-            const Float4 from_chunk = fold(ground, lib, records.data(), cl.data(), uint32_t(cl.size()), p, lod, true);
-            const Float4 brute = fold(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
+            const Float4 from_chunk = fold_onto(ground, lib, records.data(), cl.data(), uint32_t(cl.size()), p, lod, true);
+            const Float4 brute = fold_onto(ground, lib, records.data(), all.data(), uint32_t(all.size()), p, lod, true);
             CHECK(same_bits(from_chunk, brute));
         }
     }
@@ -519,6 +454,79 @@ TEST_CASE("Archetype table: random add / remove / move keep the index equal to a
             " points next to an instance");
     CHECK(checked > 0);
     CHECK(near_points > 10000);
+}
+
+// The base rebuilt on the pool while edits go on: whether it is taken early (waiting for the task), late, or by an
+// edit past hard_overlay, every snapshot lists what a whole new index over its records lists, at its own version.
+TEST_CASE("Archetype table: a base rebuilt on the pool lists what a whole new index lists") {
+    DefLibrary lib;
+    lib.add(make_sphere_type());
+    lib.add(make_box_type());
+    const std::shared_ptr<const DefLibrary> library = std::make_shared<const DefLibrary>(lib);
+    ChunkParam param;
+    param.voxel_size = 1.0f;
+    const int64_t E = 1 << 12;
+    auto place = [&](TableRecord &r_rec, uint32_t p_i, uint32_t p_salt) {
+        r_rec.anchor = VoxelPos(ExactNoise::random_offset(p_i, 1, p_salt, E), ExactNoise::random_offset(p_i, 2, p_salt, E),
+                ExactNoise::random_offset(p_i, 3, p_salt, E));
+        finish_record(lib[r_rec.def], r_rec, param.skirt_depth, false);
+    };
+    const uint32_t n = 300;
+    std::vector<TableRecord> initial(n);
+    for (uint32_t i = 0; i < n; i++) {
+        initial[i].def = uint8_t(i % 2u);
+        initial[i].params[0] = 2.0f + float(i % 5u);
+        initial[i].params[1] = 2.0f;
+        place(initial[i], i, 7u);
+    }
+    uint32_t version = 1;
+    RecordStore store(initial, version);
+    std::shared_ptr<const InstanceSnapshot> snap = build_snapshot(library, 1.0f, false, store, param, 10, version);
+    BaseRebuild rebuild(64, 96);
+    int64_t starts = 0, early = 0, hard = 0, lists = 0;
+    for (uint32_t step = 0; step < 6 * n; step++) {
+        // Records in turn, so the overlay grows by one id per edit: a rebuild starts every ~64 edits.
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ step, 0xBA5Eu, 0x0A51u });
+        const uint32_t id = (step * 7u) % n;
+        TableRecord rec = store[id];
+        place(rec, step, 11u);
+        version++;
+        store.set(id, rec, version);
+        const bool was_running = rebuild.running();
+        const std::shared_ptr<const IndexLayer> base_before = snap->base;
+        snap = rebuild.edit(*snap, store, { id }, version);
+        starts += !was_running && rebuild.running();
+        hard += was_running && !rebuild.running() && snap->base != base_before;
+        // Even rebuilds are taken early (waiting for the task), odd ones run until an edit passes hard_overlay.
+        if (rebuild.running() && starts % 2 == 0 && h.y % 5u == 0u) {
+            snap = rebuild.take(*snap, store, version);
+            early++;
+        }
+        CHECK(snap->version == version);
+        if (step % 7u != 0u) {
+            continue;
+        }
+        const std::shared_ptr<const InstanceSnapshot> whole = build_snapshot(library, 1.0f, false, store, param, 10, version);
+        std::vector<uint32_t> a, b;
+        for (uint32_t i = 0; i < 24; i++) {
+            const VoxelPos &v = store[(i * 7919u + step) % n].anchor;
+            for (int lod = 0; lod <= 5; lod++) {
+                const ChunkId c = ChunkMath::chunk_at_voxel(v, lod, param);
+                snap->chunk_list(c, a);
+                whole->chunk_list(c, b);
+                CHECK(a == b);
+                snap->point_candidates(v, lod, a);
+                whole->point_candidates(v, lod, b);
+                CHECK(a == b);
+                CHECK(snap->near_instance(c, lod));
+                lists++;
+            }
+        }
+    }
+    MESSAGE("pool rebuilds: ", starts, " started, ", early, " taken early, ", hard, " taken past hard_overlay; ", lists, " list comparisons");
+    CHECK(starts > 1);
+    CHECK(early > 0);
+    CHECK(hard > 0);
 }
 
 TEST_CASE("Archetype table: encode_record lays the GPU DefRecord out at the documented offsets") {
@@ -566,8 +574,7 @@ TEST_CASE("Archetype table: a chunk lists every instance its samples can see, at
     param.voxel_size = 1.0f;
     int64_t samples = 0, box_hits = 0;
     for (const Combine op : { Combine::UNION, Combine::SUBTRACT }) {
-        Builder gb;
-        const Program ground = gb.finish(gb.constant(op == Combine::UNION ? 3.0f : -3.0f));
+        const Float4 ground{ 0.0f, 0.0f, 0.0f, op == Combine::UNION ? 3.0f : -3.0f };
         for (const float r : { 3.0f, 10.0f }) {
             for (const int64_t gap : { 2, 6, 16, 40 }) {
                 // A sphere just below the x = 0 chunk boundary (a boundary at every LOD).
@@ -582,7 +589,7 @@ TEST_CASE("Archetype table: a chunk lists every instance its samples can see, at
                 }
                 rec.margin_c = 2.0f * wb.lipschitz + param.skirt_depth;
                 const std::vector<TableRecord> records = { rec };
-                auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 12, 1);
+                auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), 1.0f, false, records, param, 12, 1);
                 const uint32_t all[1] = { 0 };
                 for (int lod = 0; lod <= 5; lod++) {
                     const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
@@ -599,8 +606,8 @@ TEST_CASE("Archetype table: a chunk lists every instance its samples can see, at
                                     const WorldPos p = ChunkMath::sample_pos(c, Float3{ float(i), float(j), float(k) }, param);
                                     samples++;
                                     box_hits += in_influence_box(rec, p, lod) ? 1 : 0;
-                                    const Float4 a = fold(ground, lib, records.data(), cl.data(), uint32_t(cl.size()), p, lod);
-                                    const Float4 b = fold(ground, lib, records.data(), all, 1, p, lod);
+                                    const Float4 a = fold_onto(ground, lib, records.data(), cl.data(), uint32_t(cl.size()), p, lod);
+                                    const Float4 b = fold_onto(ground, lib, records.data(), all, 1, p, lod);
                                     CHECK(same_bits(a, b));
                                 }
                             }
@@ -615,14 +622,6 @@ TEST_CASE("Archetype table: a chunk lists every instance its samples can see, at
 }
 
 namespace {
-
-// The LOD-p_lod chunk id holding LOD0 voxel p_v (instance_table.cpp's chunk_at_voxel).
-ChunkId chunk_holding(const VoxelPos &p_v, int p_lod, const ChunkParam &p_param) {
-    const int64_t span = int64_t(p_param.chunk_voxel_dimension()) << p_lod;
-    const int64_t unit = int64_t(1) << p_lod;
-    return ChunkId((WorldCoord::floor_div(p_v.x, span) * 2 + 1) * unit, (WorldCoord::floor_div(p_v.y, span) * 2 + 1) * unit,
-            (WorldCoord::floor_div(p_v.z, span) * 2 + 1) * unit);
-}
 
 // Spheres and boxes over six decades of size (1 to 2^20 voxels), unions and subtracts, some smooth, some
 // removed, around p_centre: the band rule's test table.
@@ -661,21 +660,19 @@ TEST_CASE("Archetype band: chunk lists and point candidates equal the brute forc
     DefLibrary lib;
     lib.add(make_sphere_type());
     lib.add(make_box_type());
-    Builder gb;
-    const Program ground = gb.finish(gb.constant(5.0f));
     ChunkParam param;
     param.voxel_size = 1.0f;
     int64_t lists = 0, entries = 0, dropped_somewhere = 0;
     for (const VoxelPos &centre : { VoxelPos(), VoxelPos(int64_t(1) << 50, -(int64_t(1) << 33), 12345) }) {
         const std::vector<TableRecord> records = band_table(lib, centre, 80, 7u, true);
-        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 14, 1);
+        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), 1.0f, false, records, param, 14, 1);
         for (const TableRecord &r : records) {
             dropped_somewhere += r.max_lod != TableRecord::NEVER_DROPPED ? 1 : 0;
         }
         std::vector<uint32_t> got, want;
         for (uint32_t q = 0; q < records.size(); q++) {
             for (int lod = 0; lod <= 13; lod++) {
-                const ChunkId c = chunk_holding(records[q].anchor, lod, param);
+                const ChunkId c = ChunkMath::chunk_at_voxel(records[q].anchor, lod, param);
                 const int64_t step = int64_t(2) << lod;
                 for (int n = 0; n < 27; n += 2) {
                     const ChunkId chunk = c + ChunkId((n % 3 - 1) * step, (n / 3 % 3 - 1) * step, (n / 9 - 1) * step);
@@ -719,9 +716,8 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
     DefLibrary lib;
     lib.add(make_sphere_type());
     lib.add(make_box_type());
-    Builder gb;
-    const Local l = gb.local(gb.anchor(VoxelPos(0, 0, 0)));
-    const Program ground = gb.finish(l.y); // the plane y = 0
+    // The plane y = 0.
+    auto ground = [](const WorldPos &p_p) { return Float4{ 0.0f, 1.0f, 0.0f, float(p_p.voxel.y) + p_p.frac.y }; };
     const VoxelPos centre(0, 0, 0);
     const std::vector<TableRecord> banded = band_table(lib, centre, 60, 11u, true);
     const std::vector<TableRecord> reference = band_table(lib, centre, 60, 11u, false);
@@ -747,8 +743,8 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
                         listed.push_back(i);
                     }
                 }
-                const Float4 fb = fold(ground, lib, banded.data(), listed.data(), uint32_t(listed.size()), p, lod);
-                const Float4 fr = fold(ground, lib, reference.data(), all.data(), uint32_t(all.size()), p, lod);
+                const Float4 fb = fold_onto(ground(p), lib, banded.data(), listed.data(), uint32_t(listed.size()), p, lod);
+                const Float4 fr = fold_onto(ground(p), lib, reference.data(), all.data(), uint32_t(all.size()), p, lod);
                 points++;
                 if ((fb.w > 0.0f) == (fr.w > 0.0f)) {
                     continue;
@@ -757,7 +753,7 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
                 bool explained = false;
                 for (uint32_t i : all) {
                     const TableRecord &r = banded[i];
-                    const bool changed = !r.listed_at(lod) || (lod > 0 && r.erode > 0.0f);
+                    const bool changed = !r.listed_at(lod) || band_erosion(r.erode, r.erode_from, lod) > 0.0f;
                     if (!changed) {
                         continue;
                     }
@@ -772,12 +768,12 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
             }
         }
     }
-    // Dropped only once fully eroded: erode * (2^max_lod - 1) >= depth + k.
+    // Dropped only once fully eroded, and at the first such LOD.
     for (const TableRecord &r : banded) {
         if (r.max_lod != TableRecord::NEVER_DROPPED) {
             const double depth = band_depth(lib[r.def], r);
-            CHECK(double(r.erode) * (std::ldexp(1.0, r.max_lod) - 1.0) >= depth);
-            CHECK((r.max_lod == 0 || double(r.erode) * (std::ldexp(1.0, r.max_lod - 1) - 1.0) < depth));
+            CHECK(double(band_erosion(r.erode, r.erode_from, r.max_lod)) >= depth);
+            CHECK((r.max_lod == 0 || double(band_erosion(r.erode, r.erode_from, r.max_lod - 1)) < depth));
         }
     }
     MESSAGE("band surface: ", points, " points, ", flips, " sign flips vs the reference, ", unexplained, " unexplained");
@@ -839,18 +835,16 @@ TEST_CASE("Archetype band: near_instance covers every node the brute-force no-cu
     DefLibrary lib;
     lib.add(make_sphere_type());
     lib.add(make_box_type());
-    Builder gb;
-    const Program ground = gb.finish(gb.constant(5.0f));
     ChunkParam param;
     param.voxel_size = 1.0f;
     int64_t nodes = 0, exempt = 0, extra = 0;
     for (const VoxelPos &centre : { VoxelPos(), VoxelPos(-(int64_t(1) << 45), 77, int64_t(1) << 38) }) {
         const std::vector<TableRecord> records = band_table(lib, centre, 60, 23u, true);
-        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), ground, 1.0f, false, records, param, 14, 1);
+        auto snap = build_snapshot(std::make_shared<const DefLibrary>(lib), 1.0f, false, records, param, 14, 1);
         for (uint32_t q = 0; q < records.size(); q++) {
             for (int lod = 0; lod <= 14; lod++) {
                 const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
-                const ChunkId c = chunk_holding(records[q].anchor, lod, param);
+                const ChunkId c = ChunkMath::chunk_at_voxel(records[q].anchor, lod, param);
                 const int64_t step = int64_t(2) << lod;
                 for (int n = 0; n < 125; n += 3) {
                     const ChunkId node = c + ChunkId((n % 5 - 2) * step, (n / 5 % 5 - 2) * step, (n / 25 - 2) * step);
@@ -883,8 +877,9 @@ TEST_CASE("Archetype band: near_instance covers every node the brute-force no-cu
     CHECK(exempt > 1000);
 }
 
-// --instance_erode: the record carries its rate, and a slower rate drops it at the first LOD whose erosion at that
-// rate reaches its depth, never before the default's (a 6-voxel trunk: LOD 3 at 1 cell per LOD, LOD 4 at 0.5).
+// --instance_erode: the record carries its rate, and with resolve 0 a slower rate drops it at the first LOD whose
+// erosion at that rate reaches its depth, never before a faster one's (a 6-voxel trunk: LOD 3 at 1 cell per LOD, LOD 4
+// at 0.5).
 TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
     const TableDefPtr def = table_def("capsule");
     int previous = -1;
@@ -893,7 +888,7 @@ TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
         rec.anchor = VoxelPos(0, 0, 0);
         rec.params[0] = 200.0f; // tall: the radius sets the depth
         rec.params[1] = 6.0f;
-        finish_record(*def, rec, 1.0f, true, rate);
+        finish_record(*def, rec, 1.0f, true, ErodeRule{ rate, 0.0f });
         CAPTURE(rate);
         CHECK(rec.erode == rate);
         const double depth = band_depth(*def, rec);
@@ -903,4 +898,80 @@ TEST_CASE("Archetype band: the erosion rate sets erode and the drop LOD") {
         CHECK(lod >= previous);
         previous = lod;
     }
+}
+
+// The band rule's timing: a part is dropped at the later of the first LOD whose cells no longer fit `resolve` times in
+// its half thickness (its moments) and the first LOD erosion at `rate` from LOD 0 can make it vanish by; it is whole up
+// to the latest onset from which that erosion still reaches its depth at the drop, then shrinks by at most `rate` cells
+// per LOD (under the skirt), and the drop comes at the first LOD whose erosion reaches its depth.
+TEST_CASE("Archetype band: a part stays whole while its cells resolve it and erodes only before its drop") {
+    const TableDefPtr def = table_def("capsule");
+    // Worked cases, a tall capsule of radius r: depth = r + 1.04 (its rotation margin; L = 1, k = 0), half thickness
+    // ~1.118 r. r 6 (depth 7.04, half 6.7), rate 1: erosion can reach 7.04 by LOD 4 (2^4 - 1); resolve 1 keeps it to
+    // LOD 2 (8 > 6.7 at LOD 3): drop 4, onset 3 (16 - 8 >= 7.04). Resolve 0.25: kept to LOD 4, drop 5, onset 4. Rate
+    // 0.5: 0.5 (16 - 1) >= 7.04, drop 4, onset 0 (0.5 (16 - 2) < 7.04). r 40 (41.04, 44.7): drop 6, onset 4 (64 - 16).
+    // r 0.75 (1.79): drop 2 (2^2 - 1 >= 1.79), onset 1 (4 - 2).
+    struct Case {
+        float radius;
+        ErodeRule rule;
+        float erode_from;
+        int max_lod;
+    };
+    const Case worked[] = { { 6.0f, ErodeRule{ 1.0f, 1.0f }, 8.0f, 4 }, { 6.0f, ErodeRule{ 1.0f, 0.25f }, 16.0f, 5 },
+        { 6.0f, ErodeRule{ 0.5f, 1.0f }, 1.0f, 4 }, { 40.0f, ErodeRule{ 1.0f, 1.0f }, 16.0f, 6 }, { 0.75f, ErodeRule{ 1.0f, 1.0f }, 2.0f, 2 } };
+    for (const Case &c : worked) {
+        TableRecord rec;
+        rec.params[0] = 400.0f; // tall: the radius sets the depth
+        rec.params[1] = c.radius;
+        finish_record(*def, rec, 1.0f, true, c.rule);
+        CAPTURE(c.radius);
+        CAPTURE(c.rule.rate);
+        CAPTURE(c.rule.resolve);
+        CHECK(rec.erode_from == c.erode_from);
+        CHECK(int(rec.max_lod) == c.max_lod);
+    }
+    // The defining properties, over radii from a voxel to 1,000 and the rules around the default.
+    int64_t records = 0, kept_by_resolve = 0;
+    for (const float rate : { 0.5f, 1.0f, 2.0f }) {
+        for (const float resolve : { 0.0f, 0.5f, 1.0f, 2.0f }) {
+            for (double r = 1.0; r < 1000.0; r *= 1.37) {
+                TableRecord rec;
+                rec.params[0] = 4000.0f;
+                rec.params[1] = float(r);
+                finish_record(*def, rec, 1.0f, true, ErodeRule{ rate, resolve });
+                CAPTURE(rate);
+                CAPTURE(resolve);
+                CAPTURE(r);
+                CHECK(rec.erode == rate);
+                const double depth = band_depth(*def, rec);
+                const double half = record_moments(*def, rec).half_thickness();
+                int budget = 0;
+                while (double(rate) * (std::ldexp(1.0, budget) - 1.0) < depth) {
+                    budget++;
+                }
+                int resolved = 0;
+                while (resolve > 0.0f && double(resolve) * std::ldexp(1.0, resolved) <= half) {
+                    resolved++;
+                }
+                CHECK(int(rec.max_lod) == MAX(budget, resolved));
+                kept_by_resolve += resolved > budget ? 1 : 0;
+                const int m = rec.max_lod;
+                CHECK(double(band_erosion(rec.erode, rec.erode_from, m)) >= depth);
+                CHECK((m == 0 || double(band_erosion(rec.erode, rec.erode_from, m - 1)) < depth));
+                // The latest onset: one LOD later would not reach the depth at the drop.
+                if (2.0f * rec.erode_from < exact_pow2(m)) {
+                    CHECK(double(band_erosion(rec.erode, 2.0f * rec.erode_from, m)) < depth);
+                }
+                for (int lod = 0; lod < m; lod++) {
+                    const float e0 = band_erosion(rec.erode, rec.erode_from, lod);
+                    const float e1 = band_erosion(rec.erode, rec.erode_from, lod + 1);
+                    CHECK((exact_pow2(lod) > rec.erode_from || e0 == 0.0f)); // whole up to the onset
+                    CHECK(e1 - e0 <= rec.erode * exact_pow2(lod)); // at most `rate` cells of LOD L: under the skirt
+                }
+                records++;
+            }
+        }
+    }
+    MESSAGE("band timing: ", records, " records, ", kept_by_resolve, " kept past the erosion budget by resolve");
+    CHECK(kept_by_resolve > 0);
 }

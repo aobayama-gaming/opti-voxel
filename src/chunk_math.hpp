@@ -3,6 +3,7 @@
 #include "world_coord.hpp"
 
 #include <algorithm>
+#include <vector>
 
 // The core's world/chunk math. The render-space helpers (chunk_render_center, grid_to_render*) work
 // in metres relative to the world origin and return Float3 (world_coord.hpp): float32 triples, the
@@ -93,9 +94,16 @@ ChunkId get_parent_from_child(const ChunkId &coord, int &lod);
 ChunkId get_parent_from_child(const ChunkId &coord);
 
 int get_lod(const ChunkId &coord);
+// The smallest and largest LOD of p_chunks ((0, 0) for none): a batch's, for the cascade passes.
+ov::ivec2 lod_range(const std::vector<ChunkId> &p_chunks);
 int64_t get_lod_size(const ChunkId &coord);
 
 ChunkId get_parent_from_child_until(const ChunkId &coord, int target_lod);
+
+// The sub-cubes of p_ancestor (Subcube::AXIS^3 of them, bits Subcube::bit) that its descendant
+// p_descendant overlaps: one when at least two LODs finer, the 8 of an octant for a child (and below a LOD-1 ancestor,
+// whose sub-cubes are smaller than a LOD0 chunk).
+uint64_t subcube_bits(const ChunkId &p_ancestor, const ChunkId &p_descendant);
 
 // Edge length of the chunk in metres (a size, not a position).
 float world_chunk_size(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
@@ -103,10 +111,14 @@ float world_chunk_size(const ChunkId &chunk_coord, const ChunkParam &chunk_param
 // LOD0 voxel of the chunk's minimum corner (vertex grid index skirt_size) and of its centre.
 VoxelPos chunk_min_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 VoxelPos chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
+// The LOD-p_lod chunk whose span [chunk_min_voxel, + span) holds LOD0 voxel p_voxel.
+ChunkId chunk_at_voxel(const VoxelPos &p_voxel, int p_lod, const ChunkParam &chunk_param);
 
 // Render space (the engine's space): metres relative to the world origin. Only these helpers produce
 // metres. Float3 in / Float3 out: engine call sites convert from their own real_t triples explicitly.
 Float3 chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
+// An LOD0 voxel (its lower corner).
+Float3 voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param);
 // A point of the chunk's vertex grid (the grid the SDF is sampled on, skirt included).
 Float3 grid_to_render(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param);
 // Same from a page header, which only carries the low 32 bits of the id (mirrors the page shader).

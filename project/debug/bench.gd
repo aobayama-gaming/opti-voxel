@@ -7,15 +7,30 @@ extends Node3D
 ##   --mode=legacy|direct         pipeline (default legacy)
 ##   --preset=NAME                a named argument set (debug/presets.gd; forest5cm = the perf target),
 ##                                explicit arguments override it
-##   --scenario=load|fly|turn|turn_walk|edit|dig load: load + steady phase. fly: load, fly out and back, settle, steady.
+##   --scenario=load|fly|turn|turn_walk|edit|dig|rise|approach load: load + steady phase. fly: load, fly out and back, settle, steady.
 ##                                turn: load, --turns=N full turns of the camera's yaw (default 1), --turn_seconds
 ##                                each (default 8), settle, steady
 ##                                turn_walk: turn, then walk --walk=M metres (default 300) straight ahead,
 ##                                level, in --walk_seconds (default 6), settle, steady
 ##                                edit: load, then N instance edits (add / move / remove) then settle, steady
 ##                                dig: load, then K dig holes along the view, a scripted drag, settle, steady
+##                                rise: load, then one phase per --altitudes step (rise_<i>): the camera at that
+##                                height above the terrain under the start position (same view), until loaded
+##                                approach: load at a far pose (--approach_from above and --approach_out behind the start,
+##                                against the fly direction, looking at the start), fly straight to the start at constant
+##                                speed in --approach_seconds without waiting for loads (unlike rise), then the start's
+##                                pitch / yaw, settle, steady
+##   --approach_from=M            approach scenario: metres above the start pose (default 1500)
+##   --approach_out=M             approach scenario: metres from the start along -X, the fly's -direction (default 2000)
+##   --approach_seconds=S         approach scenario: wall-clock duration of the flight (default 20)
+##   --approach_shots=DIR         approach scenario: a screenshot every --approach_shot_every seconds (default 1),
+##                                DIR/approach_<i>_<S>s.png (relative to the run dir), in the --view of the run: run it
+##                                twice (--view=0, --view=2) for shaded and LOD sheets, as rise does
+##   --altitudes=M,M,...          rise scenario: metres above the terrain (default 20,50,100,200,400,800,1600,3200,6400,13000)
+##   --rise_shots=DIR             rise scenario: a screenshot per step, DIR/rise_<i>_<M>m.png (relative to the run dir)
 ##   --edits=N                    edit scenario: number of edits (default 100)
 ##   --digs=K                     dig scenario: number of scripted right-click holes (default 8)
+##   --dig_ahead=M                dig scenario: metres from the camera to the first hole (default 20)
 ##   --drag_s=S                   dig scenario: wall-clock seconds of scripted drag (tube re-placed every frame, default 2)
 ##   --steady=N                   frames measured after load completes (default 300)
 ##   --fly_seconds=S              wall-clock duration of the outbound leg (same again for return, default 10)
@@ -25,7 +40,7 @@ extends Node3D
 ##   --max_frames=N               hard cap; run is marked timed_out (default 20000)
 ##   --pitch=DEG                  camera pitch (default -20)
 ##   --yaw=DEG                    camera yaw (default 0, looking down -Z); player.gd hole marks print both
-##   --shot=<when>:<path.png>     repeatable. when = loaded | steady_end | fly_end | <frame number>
+##   --shot=<when>:<path.png>     repeatable. when = loaded | steady_end | fly_end | approach_end | <frame number>
 ##   --out=<path.json>            stats output
 ##   --log=N                      VoxelTerrain.log_level
 ##   --profile=1                  per-frame profile to profile.json next to --out: main thread (frame time, each
@@ -43,18 +58,26 @@ extends Node3D
 ##   --mesher_budget=MS           direct: estimated GPU ms of mesh batches per frame (default 0 = whole batches)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
-##   --terrain=cascade|continents|archetypes|shapes
+##   --terrain=cascade|continents|shapes
 ##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
-##                                SDFCascade; continents: its preset; archetypes: the archetype IR demo, SDFArchetype;
-##                                shapes: its hard-CSG gallery on a flat ground, SDFArchetype::shapes)
-##   --instances=N                archetypes: scatter N rocks/pillars around the demo objects (default 0)
-##   --instance_area=M            archetypes: side of the scatter square, metres (default 200)
-##   --instance_band=0            archetypes: keep every instance at every LOD (no band rule; the reference)
-##   --instance_erode=F           archetypes: the band rule's erosion, cells per LOD (default 1; 0.5 keeps trunks a LOD longer)
-##   --trees=N                    archetypes: a forest of about N grown trees around the demo objects (default 0)
-##   --tree_area=M                archetypes: side of the forest square, metres (default 60)
-##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31). Above 15 the far plane
-##                                covers the discoverer's load range (the cascade's octaves reach k = N + 4)
+##                                SDFCascade; continents: its continents preset; shapes: its flat preset under the
+##                                hard-CSG shapes gallery, SDFTable::Scene::SHAPES)
+##   Instances (around x -50 z -150 m, on the ground):
+##   --instances=N                scatter N rocks/pillars (default 0)
+##   --instance_area=M            side of the scatter square, metres (default 200)
+##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
+##   --stream=0                   place the scatter and the forest whole at configure instead of streaming them
+##   --stream_part_sides=N        streamed moment layers read the records while their cell is under N source cells,
+##                                proxies above (default 1; 3 = the whole build's blobs)
+##   --moments=0                  leave out the far field of the dropped instances (their moments' blobs)
+##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1): the skirt, the fastest a part shrinks
+##   --instance_resolve=F         a part is kept while its half thickness holds F cells (default 1); it erodes just before its drop
+##   --trees=N                    a forest of about N grown trees (default 0)
+##   --tree_area=M                side of the forest square, metres (default 60)
+##   --biomes=KM                  lava lakes and floating islands of the biome cells within KM km (default 0)
+##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31; the cascade's octaves reach k = N + 4).
+##                                The clip planes follow the altitude at every LOD count, as in the player
+##                                (Presets.clip_planes: far up to the discoverer's load range)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --lod_error_back=F           error outside the view cone, reached behind the camera (default 0 = lod_error)
 ##   --lod_view_margin=DEG        view cone = the frustum's diagonal half-FOV + DEG (default 20)
@@ -64,7 +87,10 @@ extends Node3D
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
 ##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
-##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk)
+##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material 12 biome)
+##   --grade=0                    no colour grading (the scene's LUT, res://grade_lut.png, tools/make_lut.py)
+##   --probe=PREFIX               direct: once loaded, PREFIX_shaded.png, then the bark seam probe views 10 and 11
+##                                as PREFIX_10.png and PREFIX_11.png, raw (tools/bark_seams.sh)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
 ##                                distance, iterated; negative: below it). Default 50 on the cascade terrains,
@@ -93,8 +119,12 @@ var args := {}
 var shots := []  # [[when, path], ...]
 var terrain
 var camera: Camera3D
+var base_near := 0.05  # the scene's near plane, the clip planes' floor
 var start_pos: Vector3
 var walk_from: Vector3  # turn_walk: where the walk starts
+var start_rot: Vector3  # approach: the start pose's rotation (degrees), restored on arrival
+var approach_from_pos: Vector3  # approach: where the flight starts
+var approach_shot_next := 0  # approach: the next screenshot's index
 var vp_rid: RID
 
 var frame := 0
@@ -172,16 +202,18 @@ func _ready() -> void:
 	if args.has("max_in_flight"):
 		terrain.direct_max_in_flight = int(args["max_in_flight"])
 	terrain.debug_view = int(args.get("view", "0"))
+	if args.get("grade", "1") == "0":
+		Presets.ungrade(self)
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
 	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
 	if args.has("voxel"):
 		terrain.voxel_size = float(args["voxel"])
 	if args.has("lods"):
 		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"cascade": 1, "continents": 2, "archetypes": 3, "shapes": 4}
+	var terrains := {"cascade": 1, "continents": 2, "shapes": 4}
 	var terrain_arg: String = args.get("terrain", "cascade")
 	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected cascade, continents, archetypes or shapes)" % terrain_arg)
+		push_error("BENCH: unknown --terrain=%s (expected cascade, continents or shapes)" % terrain_arg)
 		set_process(false)
 		get_tree().quit(1)
 		return
@@ -189,14 +221,26 @@ func _ready() -> void:
 		terrain.archetype_instances = int(args["instances"])
 	if args.has("instance_area"):
 		terrain.archetype_instance_area = float(args["instance_area"])
+	if args.has("moments"):
+		terrain.archetype_moments = args["moments"] != "0"
 	if args.has("instance_band"):
 		terrain.archetype_band = args["instance_band"] != "0"
+	if args.has("stream"):
+		terrain.archetype_stream = args["stream"] != "0"
+	if args.has("stream_part_sides"):
+		terrain.archetype_stream_part_sides = int(args["stream_part_sides"])
 	if args.has("instance_erode"):
 		terrain.archetype_erode = float(args["instance_erode"])
+	if args.has("instance_resolve"):
+		terrain.archetype_resolve = float(args["instance_resolve"])
 	if args.has("trees"):
 		terrain.archetype_trees = int(args["trees"])
 	if args.has("tree_area"):
 		terrain.archetype_tree_area = float(args["tree_area"])
+	if args.has("biomes"):
+		terrain.biome_radius = 1000.0 * float(args["biomes"])
+	if args.has("climate"):
+		terrain.climate_path = args["climate"]
 	terrain.terrain_mode = terrains[terrain_arg]
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"
@@ -245,21 +289,14 @@ func _ready() -> void:
 				child.global_position += shift
 		start_pos = camera.global_position
 	add_child(terrain)
-	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode >= 3 or args.has("cam_pos") else "50")
+	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 4 or args.has("cam_pos") else "50")
 	if above_ground != "":
-		# Raise or lower the camera (and the fly path) to this height above the terrain under it.
-		var h := float(above_ground)
-		for i in 32:
-			var d: float = terrain.get_sdf_at(camera.global_position)
-			if absf(d - h) < maxf(1.0, h * 0.05):
-				break
-			camera.global_position.y += h - d
+		_place_above_ground(float(above_ground))  # the fly path starts there too
 		start_pos = camera.global_position
-		print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, terrain.get_sdf_at(camera.global_position)])
-	# The scene's clip planes at the default LOD count, so pictures don't change; with more LODs they
-	# follow the camera's altitude (see _clip_planes), set once at the pose.
-	if terrain.lod_numbers > 15:
-		_clip_planes(camera, camera.near)
+	if args.get("scenario", "load") == "approach":
+		_place_for_approach()
+	base_near = camera.near
+	Presets.clip_planes(camera, terrain, base_near)
 
 
 	_begin_phase("load")
@@ -311,6 +348,50 @@ func _end_phase() -> void:
 	_take_shots(phase + "_end")
 
 
+## Approach scenario: the camera loads at the far pose, looking at the start pose it will fly to (the direction from
+## any point of the straight flight to its end is the same: the orientation stays).
+func _place_for_approach() -> void:
+	start_rot = camera.rotation_degrees
+	approach_from_pos = start_pos + Vector3(-float(args.get("approach_out", "2000")), float(args.get("approach_from", "1500")), 0)
+	camera.global_position = approach_from_pos
+	camera.look_at(start_pos, Vector3.UP)
+	print("BENCH: approach from %s to %s" % [approach_from_pos, start_pos])
+
+
+## Approach scenario, one frame: the camera on the straight line at constant speed, a screenshot every
+## --approach_shot_every seconds; true on arrival (the start pose's position and rotation set).
+func _run_approach() -> bool:
+	var elapsed := (Time.get_ticks_usec() - phase_start_usec) * 1e-6
+	var t := elapsed / float(args.get("approach_seconds", "20"))
+	camera.global_position = approach_from_pos.lerp(start_pos, minf(t, 1.0))
+	var every := float(args.get("approach_shot_every", "1"))
+	if args.has("approach_shots") and elapsed >= approach_shot_next * every:
+		_save_shot("%s/approach_%02d_%ds.png" % [args["approach_shots"], approach_shot_next, int(approach_shot_next * every)])
+		approach_shot_next += 1
+	if t < 1.0:
+		return false
+	camera.global_position = start_pos
+	camera.rotation_degrees = start_rot
+	return true
+
+
+## Raise or lower the camera to p_height metres above the terrain under it (SDF distance, iterated).
+func _place_above_ground(p_height: float) -> void:
+	for i in 32:
+		var d: float = terrain.get_sdf_at(camera.global_position)
+		if absf(d - p_height) < maxf(1.0, p_height * 0.05):
+			break
+		camera.global_position.y += p_height - d
+	print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, terrain.get_sdf_at(camera.global_position)])
+
+
+func _altitudes() -> PackedFloat64Array:
+	var out := PackedFloat64Array()
+	for a in args.get("altitudes", "20,50,100,200,400,800,1600,3200,6400,13000").split(","):
+		out.append(float(a))
+	return out
+
+
 ## LOD0 voxel of a render-space position: the int64 world origin plus a small rounded offset (the origin
 ## never goes through a float).
 func _voxel_of(pos: Vector3, vt: float) -> Array:
@@ -349,7 +430,7 @@ func _run_edits() -> void:
 # 1.5 m radius) starting along the view, one per frame, then the left-click tube for --drag_s seconds: a
 # 20 m SUBTRACT capsule from 0.5 m ahead of the camera whose direction sweeps 10 degrees either side
 # (re-placed every frame, as when the player turns), then removed.
-const CAPSULE_TYPE := 1  # SDFArchetype's library: 0 sphere, 1 capsule, 2 rock
+const CAPSULE_TYPE := 1  # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
 
 
 func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: float, op: int, id: int) -> int:
@@ -372,7 +453,7 @@ func _run_dig() -> void:
 	var fwd := -camera.global_transform.basis.z
 	var digs := int(args.get("digs", "8"))
 	if digs_done < digs:
-		_dig_capsule(vt, camera.global_position + fwd * (20.0 + digs_done * 6.0), fwd, 6.0, 1.5, 3, -1)
+		_dig_capsule(vt, camera.global_position + fwd * (float(args.get("dig_ahead", "20")) + digs_done * 6.0), fwd, 6.0, 1.5, 3, -1)
 		digs_done += 1
 		drag_start_usec = Time.get_ticks_usec()
 		return
@@ -405,6 +486,7 @@ func _process(delta: float) -> void:
 
 	if terrain.debug_gpu_profile_frames:
 		_record_profile(delta)
+	Presets.clip_planes(camera, terrain, base_near)
 
 	_take_shots(str(frame))
 
@@ -418,6 +500,8 @@ func _process(delta: float) -> void:
 			if terrain.is_load_complete():
 				_end_phase()
 				_take_shots("loaded")
+				if args.has("probe"):
+					_take_probe(args["probe"])
 				if args.get("scenario", "load") == "fly":
 					_begin_phase("fly_out")
 				elif args.get("scenario", "load") in ["turn", "turn_walk"]:
@@ -427,6 +511,10 @@ func _process(delta: float) -> void:
 					_begin_phase("edit")
 				elif args.get("scenario", "load") == "dig":
 					_begin_phase("dig")
+				elif args.get("scenario", "load") == "rise":
+					_begin_phase("rise_0")
+				elif args.get("scenario", "load") == "approach":
+					_begin_phase("approach")
 				else:
 					_begin_phase("steady")
 		"dig":
@@ -463,6 +551,10 @@ func _process(delta: float) -> void:
 				_end_phase()
 				_take_shots("walk_end")
 				_begin_phase("settle")
+		"approach":
+			if _run_approach():
+				_end_phase()  # its shots: approach_end
+				_begin_phase("settle")
 		"fly_out":
 			camera.global_position = start_pos + Vector3(fly_dist, 0, 0) * minf(leg, 1.0)
 			if leg >= 1.0:
@@ -475,6 +567,19 @@ func _process(delta: float) -> void:
 				_end_phase()
 				_take_shots("fly_end")
 				_begin_phase("settle")
+		var p when p.begins_with("rise_"):
+			# The camera moves on the step's first frame, once the last step's screenshot is drawn; a step
+			# ends loaded (a few frames in, so the scan is the new pose's).
+			var step := int(p.trim_prefix("rise_"))
+			var altitudes := _altitudes()
+			if phase_frame == 1:
+				camera.global_position = start_pos
+				_place_above_ground(altitudes[step])
+			elif phase_frame > 4 and terrain.is_load_complete():
+				_end_phase()
+				if args.has("rise_shots"):
+					_save_shot("%s/rise_%d_%dm.png" % [args["rise_shots"], step, int(altitudes[step])])
+				_begin_phase("rise_%d" % (step + 1) if step + 1 < altitudes.size() else "steady")
 		"settle":
 			if terrain.is_load_complete():
 				_end_phase()
@@ -538,10 +643,35 @@ func _next_check() -> void:
 func _take_shots(when: String) -> void:
 	for shot in shots:
 		if shot[0] == when:
+			_save_shot(shot[1])
+
+
+func _save_shot(p_path: String) -> void:
+	await RenderingServer.frame_post_draw
+	DirAccess.make_dir_recursive_absolute(p_path.get_base_dir())
+	get_viewport().get_texture().get_image().save_png(p_path)
+	print("BENCH: screenshot -> %s" % p_path)
+
+
+## --probe=PREFIX: a shaded shot, then the bark seam probe views (the page shader's 10 and 11) with the environment
+## made raw (linear tonemapper, no grade, glow or fog), so each pixel reads back as the bytes the shader wrote.
+func _take_probe(p_prefix: String) -> void:
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(p_prefix + "_shaded.png")
+	var env: Environment = ($WorldEnvironment as WorldEnvironment).environment
+	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	env.tonemap_exposure = 1.0
+	env.adjustment_enabled = false
+	env.glow_enabled = false
+	env.fog_enabled = false
+	env.volumetric_fog_enabled = false
+	for view in [10, 11]:
+		terrain.debug_view = view
+		for i in 3:
 			await RenderingServer.frame_post_draw
-			var img := get_viewport().get_texture().get_image()
-			img.save_png(shot[1])
-			print("BENCH: screenshot %s -> %s" % [when, shot[1]])
+		var path := "%s_%d.png" % [p_prefix, view]
+		get_viewport().get_texture().get_image().save_png(path)
+		print("BENCH: probe view %d -> %s" % [view, path])
 
 
 ## --profile=1: this frame's main-thread times (VoxelTerrain sections as the difference of their running totals)
@@ -657,10 +787,3 @@ static func _summary(values: Array) -> Dictionary:
 	}
 
 
-# Above 15 LODs: near = altitude / 1000 (altitude = |SDF| at the camera, at least the scene's near),
-# far = near * 2^21 capped at the discoverer's load range. Godot's float projection loses its far
-# plane past far/near ~2^24 (the light culler then ERRORs every frame), so far/near stays at 2^21.
-func _clip_planes(cam: Camera3D, base_near: float) -> void:
-	var altitude: float = absf(terrain.get_sdf_at(cam.global_position))
-	cam.near = maxf(base_near, altitude / 1000.0)
-	cam.far = minf(terrain.get_load_radius(), cam.near * 2097152.0)

@@ -31,7 +31,7 @@ using godot::vformat;
 //                          a LOD L: the value is unscaled, the gradient is per voxel of LOD L (2^L
 //                          LOD0 voxels), each octave's derivative per cell times amp * 2^(L-k).
 //
-// Exactness rules (the CPU mirror below is op for op the GLSL of GLSL_EXACT_NOISE):
+// Exactness rules (the CPU mirror below is op for op the GLSL of GLSL_EXACT_NOISE, exact_noise_glsl.hpp):
 //   - uint32 wrapping arithmetic only for the hash (CPU uint32_t, never int: signed overflow is UB).
 //   - Float math uses only correctly rounded operations: + - *, compares, min/max/clamp, floor, and
 //     int <-> float of values below 2^24. No mix / dot / length / normalize / sqrt / division builtins
@@ -70,6 +70,12 @@ inline float bits_float(uint32_t p_u) {
     return f;
 }
 
+// Every bit of a value and its gradient (the sign of a zero included).
+inline bool same_bits(const Float4 &p_a, const Float4 &p_b) {
+    return float_bits(p_a.x) == float_bits(p_b.x) && float_bits(p_a.y) == float_bits(p_b.y) && float_bits(p_a.z) == float_bits(p_b.z) &&
+            float_bits(p_a.w) == float_bits(p_b.w);
+}
+
 // 2^e as a float, -126 <= e <= 127 (exact: built from the exponent bits, like exact_pow2 in GLSL).
 inline float exact_pow2(int p_e) {
     return bits_float(uint32_t(p_e + 127) << 23);
@@ -105,19 +111,40 @@ inline int64_t random_offset(uint32_t p_a, uint32_t p_b, uint32_t p_c, int64_t p
     return int64_t(((uint64_t(h.x) << 32) | h.y) % uint64_t(2 * p_range + 1)) - p_range;
 }
 
+// CPU placement (trees, biome features): a hash of three words, and its top 24 bits as a double in [0, 1).
+inline UVec3 hash3(uint32_t p_a, uint32_t p_b, uint32_t p_c) {
+    return pcg3d(UVec3{ p_a, p_b, p_c });
+}
+inline double unit_of(uint32_t p_bits) {
+    return double(p_bits >> 8) * 0x1p-24;
+}
+// The k of a 2^k-voxel lattice nearest p_metres at voxel size p_voxel (bump and cell sizes in metres).
+inline int lattice_k(double p_metres, double p_voxel) {
+    return int(std::lround(std::log2(p_metres / p_voxel)));
+}
+
 // Salt of a block of 2^32 x 2^32 x 2^32 cells: its high words and the seed.
 inline UVec3 cell_salt(int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
     return pcg3d(UVec3{ uint32_t(p_hx) ^ p_seed, uint32_t(p_hy) ^ (p_seed ^ SALT_Y), uint32_t(p_hz) ^ (p_seed ^ SALT_Z) });
 }
 
-inline uint32_t hash_words(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
+// A cell's three hash words (the cell noise's feature point); hash_cell is the first.
+inline UVec3 hash_words3(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
     const UVec3 s = cell_salt(p_hx, p_hy, p_hz, p_seed);
-    return pcg3d(UVec3{ p_lx ^ s.x, p_ly ^ s.y, p_lz ^ s.z }).x;
+    return pcg3d(UVec3{ p_lx ^ s.x, p_ly ^ s.y, p_lz ^ s.z });
+}
+
+inline uint32_t hash_words(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, int32_t p_hy, int32_t p_hz, uint32_t p_seed) {
+    return hash_words3(p_lx, p_ly, p_lz, p_hx, p_hy, p_hz, p_seed).x;
+}
+
+inline UVec3 hash_cell3(const Vector3i64 &p_cell, uint32_t p_seed) {
+    using namespace WorldCoord;
+    return hash_words3(lo32(p_cell.x), lo32(p_cell.y), lo32(p_cell.z), hi32(p_cell.x), hi32(p_cell.y), hi32(p_cell.z), p_seed);
 }
 
 inline uint32_t hash_cell(const Vector3i64 &p_cell, uint32_t p_seed) {
-    using namespace WorldCoord;
-    return hash_words(lo32(p_cell.x), lo32(p_cell.y), lo32(p_cell.z), hi32(p_cell.x), hi32(p_cell.y), hi32(p_cell.z), p_seed);
+    return hash_cell3(p_cell, p_seed).x;
 }
 
 inline uint32_t hash_cell_2d(int64_t p_x, int64_t p_z, uint32_t p_seed) {
@@ -397,6 +424,46 @@ inline float det_rsqrt(float p_x) {
     return y;
 }
 
+// The cell noise's mean F1 (unit test: measured on 2^20 random points within 1%).
+inline constexpr float CELL_MEAN = 0.5203f;
+// The cell noise's largest |value|: F1 is at most sqrt(3) (the position's own cell holds a feature point), minus the mean.
+inline constexpr float CELL_BOUND = 1.7320509f - CELL_MEAN;
+// The cell noise's smallest squared distance into det_rsqrt (2^-40, a normal float): its bits, shared with the GLSL.
+inline constexpr uint32_t CELL_MIN_D2_BITS = 0x2B800000u;
+
+// Cell noise (Worley F1) at wavelength 2^k voxels: one feature point per cell, jittered over the whole cell by
+// hash_cell3 (24-bit), the distance to the nearest of the 3 x 3 x 3 cells around the position's, minus CELL_MEAN:
+// (d/dx, d/dy, d/dz per cell, value), value in about [-0.5, 0.5]. Its gradient is the unit vector away from the
+// feature point (a cone at each one, a crease where two are equally near: carried by the cascade, 25-100 m dunes measure
+// 7.2% gradient error against 2.5% for perlin3, no streaks, climate_report.sh). The distance is d2 det_rsqrt(max(d2,
+// 2^-40)): + - * only. GLSL twin: GLSL_CELL3 (FrameSpike probes cell3_k*).
+inline Float4 cell3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
+    const OctaveCell c = octave_cell(p_pos, p_k, p_offset);
+    const float scale = bits_float(FADE_FLUSH_BITS); // 2^-24
+    const float f[3] = { float(c.q.x) * scale, float(c.q.y) * scale, float(c.q.z) * scale };
+    float best = 16.0f;
+    float e_best[3] = { 0.0f, 0.0f, 0.0f };
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                const UVec3 h = hash_cell3(c.cell + Vector3i64(dx, dy, dz), p_seed);
+                const float e[3] = { (float(dx) + float(h.x >> 8) * scale) - f[0], (float(dy) + float(h.y >> 8) * scale) - f[1],
+                    (float(dz) + float(h.z >> 8) * scale) - f[2] };
+                const float d2 = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+                if (d2 < best) {
+                    best = d2;
+                    e_best[0] = e[0];
+                    e_best[1] = e[1];
+                    e_best[2] = e[2];
+                }
+            }
+        }
+    }
+    const float min_d2 = bits_float(CELL_MIN_D2_BITS);
+    const float rs = det_rsqrt(best > min_d2 ? best : min_d2);
+    return Float4{ -(e_best[0] * rs), -(e_best[1] * rs), -(e_best[2] * rs), best * rs - CELL_MEAN };
+}
+
 // Fractal sum. Octave i: wavelength 2^k voxels, value * amp. At LOD L the gradient is per voxel of
 // that LOD: derivative per cell * amp * 2^(L-k) (gradient_factor), an exact power-of-two rescale of
 // the gradient per LOD0 voxel, so L only changes its exponent.
@@ -405,6 +472,9 @@ struct Octave {
     uint32_t seed = 0;
     Vector3i64 offset;
     float amp = 0.0f;
+    // Cascade bands only (BaseSurface::stretched): the octave's wavelength along the base's up is 2^(k + stretch), at most 2^(2k - 3)
+    // (the band's insertion lattice divides exactly). 0: isotropic, the only case anything else evaluates.
+    int stretch = 0;
 };
 
 inline float gradient_factor(const Octave &p_octave, int p_lod) {
@@ -429,33 +499,39 @@ struct OctaveSet {
     std::vector<Octave> octaves;
 };
 
+// One octave of wavelength 2^p_k, its seed and lattice offset hashed from (p_seed, p_salt): the lattice is
+// shifted by a quarter to three quarters of a cell on each axis, so the zeros of nested lattices never line up.
+inline Octave make_octave(uint32_t p_seed, uint32_t p_salt, int p_k, float p_amp) {
+    Octave o;
+    o.k = p_k;
+    o.amp = p_amp;
+    const UVec3 h = pcg3d(UVec3{ p_seed, p_salt, 0x51ED270Bu });
+    o.seed = h.x;
+    auto axis_offset = [&](uint32_t p_a, uint32_t p_b) {
+        if (o.k < 2) {
+            return int64_t(0);
+        }
+        const uint64_t r = (uint64_t(p_a) << 32) | p_b;
+        return int64_t((uint64_t(1) << (o.k - 2)) + (r & ((uint64_t(1) << (o.k - 1)) - 1)));
+    };
+    const UVec3 h2 = pcg3d(h);
+    o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
+    return o;
+}
+
 // p_count octaves from wavelength 2^k_top down (lacunarity exactly 2), amplitude p_amp_top for the
-// first and times p_persistence for each next one. Seeds and offsets come from p_seed: each octave's
-// lattice is shifted by a quarter to three quarters of a cell on each axis, so the zeros of the
-// nested lattices never line up.
+// first and times p_persistence for each next one; octave i is make_octave(p_seed, i, ...).
 inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, double p_amp_top, double p_persistence) {
     OctaveSet set;
     set.is_2d = p_2d;
     double amp = p_amp_top;
     for (int i = 0; i < p_count; i++) {
-        Octave o;
-        o.k = p_k_top - i;
-        if (o.k < 0 || o.k > MAX_K) {
+        const int k = p_k_top - i;
+        if (k < 0 || k > MAX_K) {
             ov::report_error(__FILE__, __LINE__, "ExactNoise: octave wavelength out of range.");
             continue;
         }
-        const UVec3 h = pcg3d(UVec3{ p_seed, uint32_t(i), 0x51ED270Bu });
-        o.seed = h.x;
-        auto axis_offset = [&](uint32_t p_a, uint32_t p_b) {
-            if (o.k < 2) {
-                return int64_t(0);
-            }
-            const uint64_t r = (uint64_t(p_a) << 32) | p_b;
-            return int64_t((uint64_t(1) << (o.k - 2)) + (r & ((uint64_t(1) << (o.k - 1)) - 1)));
-        };
-        const UVec3 h2 = pcg3d(h);
-        o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
-        o.amp = float(amp);
+        const Octave o = make_octave(p_seed, uint32_t(i), k, float(amp));
         if (!in_exact_range(o.amp)) {
             ov::report_error(__FILE__, __LINE__, ov::format("ExactNoise: octave k=%d amplitude %s outside [2^-16, 2^40]: denormals possible.", o.k, o.amp));
         }
@@ -463,6 +539,15 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
         amp *= p_persistence;
     }
     return set;
+}
+
+// The two fBms FrameSpike's noise probes and the unit tests check at voxel size p_voxel (metres): a 2D one
+// (wavelength 286 m, 5 octaves, 37.5 m) and a 3D one (125 m, 3 octaves).
+inline OctaveSet reference_fbm2d(double p_voxel) {
+    return make_fbm(true, 0xA2C4E7u, lattice_k(1.0 / 0.0035, p_voxel), 5, 50.0 / p_voxel * 0.75, 0.5);
+}
+inline OctaveSet reference_fbm3d(double p_voxel) {
+    return make_fbm(false, 0xCA7E5u, lattice_k(125.0, p_voxel), 3, 4.0 / 3.0, 0.5);
 }
 
 // Checks the gradient factors at the LODs [0, p_lod_count) the set is evaluated at (configure time):
@@ -529,260 +614,3 @@ inline String glsl_fbm(const String &p_name, const OctaveSet &p_set) {
 }
 
 } // namespace ExactNoise
-
-// GLSL_EXACT_NOISE is spliced from these fragments, so GLSL perlin3_cross (GLSL_PERLIN3_CROSS) shares
-// perlin3's cell setup and value / gradient code while GLSL_EXACT_NOISE stays byte-identical (unit test).
-// Raw string macros: adjacent literals concatenate at compile time.
-#define OV_GLSL_NOISE_HEAD R"glsl(
-
-uvec3 pcg3d(uvec3 v) {
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.z;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    v ^= v >> 16u;
-    v.x += v.y * v.z;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    return v;
-}
-
-uvec3 cell_salt(ivec3 hi, uint seed) {
-    return pcg3d(uvec3(hi) ^ uvec3(seed, seed ^ 0x9E3779B9u, seed ^ 0x85EBCA6Bu));
-}
-
-uint hash_cell(uvec3 lo, ivec3 hi, uint seed) {
-    return pcg3d(lo ^ cell_salt(hi, seed)).x;
-}
-
-float exact_pow2(int e) {
-    return uintBitsToFloat(uint(e + 127) << 23u);
-}
-
-// See ExactNoise::octave_axis. 0 <= k <= 62; a literal at every call site, so the branches fold.
-void octave_axis(uint lo, int hi, float frac, int k, uint olo, int ohi, out uint clo, out int chi, out uint q) {
-    uint vlo = lo + olo;
-    int vhi = hi + ohi + int(vlo < lo);
-    uint uhi = uint(vhi);
-    if (k == 0) {
-        clo = vlo;
-        chi = vhi;
-    } else if (k < 32) {
-        clo = (vlo >> uint(k)) | (uhi << uint(32 - k));
-        chi = vhi >> k;
-    } else {
-        clo = uint(vhi >> (k - 32));
-        chi = vhi >> 31;
-    }
-    if (k <= 24) {
-        uint rem = vlo & ((1u << uint(k)) - 1u);
-        precise float scaled = frac * exact_pow2(24 - k);
-        q = (rem << uint(24 - k)) | uint(floor(scaled));
-    } else {
-        int s = k - 24;
-        uint bits = s < 32 ? ((vlo >> uint(s)) | (uhi << uint(32 - s))) : (uhi >> uint(s - 32));
-        q = bits & 0xFFFFFFu;
-    }
-}
-
-struct OctaveCell { uvec3 lo; ivec3 hi; uvec3 q; };
-
-OctaveCell octave_cell(WorldPos p, int k, uvec3 olo, ivec3 ohi) {
-    OctaveCell c;
-    octave_axis(p.lo.x, p.hi.x, p.frac.x, k, olo.x, ohi.x, c.lo.x, c.hi.x, c.q.x);
-    octave_axis(p.lo.y, p.hi.y, p.frac.y, k, olo.y, ohi.y, c.lo.y, c.hi.y, c.q.y);
-    octave_axis(p.lo.z, p.hi.z, p.frac.z, k, olo.z, ohi.z, c.lo.z, c.hi.z, c.q.z);
-    return c;
-}
-
-// See ExactNoise::grad3 / grad2 (selects, no table).
-vec3 grad3(uint i) {
-    float sa = (i & 1u) != 0u ? -1.0 : 1.0;
-    float sb = (i & 2u) != 0u ? -1.0 : 1.0;
-    uint plane = i >> 2u;
-    vec3 g = i < 14u ? vec3(sa, sb, 0.0) : vec3(0.0, sb, sa);
-    g = plane == 1u ? vec3(sa, 0.0, sb) : g;
-    g = plane == 2u ? vec3(0.0, sa, sb) : g;
-    return g;
-}
-
-vec2 grad2(uint i) {
-    float a = (i & 1u) != 0u ? 2.0 : 1.0;
-    float b = (i & 1u) != 0u ? 1.0 : 2.0;
-    return vec2((i & 2u) != 0u ? -a : a, (i & 4u) != 0u ? -b : b);
-}
-
-vec3 fade3(vec3 f) {
-    precise vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    return mix(u, vec3(0.0), lessThan(u, vec3(uintBitsToFloat(0x33800000u))));
-}
-
-vec3 dfade3(vec3 f) {
-    precise vec3 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
-    return mix(du, vec3(0.0), lessThan(du, vec3(uintBitsToFloat(0x33800000u))));
-}
-
-// Corner hashes of a cell: hash_cell of each corner. The corners share the cell's high words (and so
-// one salt) unless a low word carries, i.e. the cell sits on a 2^32 boundary: one branch per cell,
-// not per corner.
-vec3 corner_grad(uvec3 lo, uvec3 salt) {
-    return grad3(pcg3d(lo ^ salt).x >> 28u);
-}
-
-vec4 perlin3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
-)glsl"
-// perlin3's cell setup: fades u, du, corner gradients ga..gh, coefficients k0..k7.
-#define OV_GLSL_PERLIN3_SETUP R"glsl(    OctaveCell c = octave_cell(p, k, olo, ohi);
-    precise vec3 f = vec3(c.q) * uintBitsToFloat(0x33800000u);
-    precise vec3 u = fade3(f);
-    precise vec3 du = dfade3(f);
-
-    uvec3 lo1 = c.lo + 1u;
-    bvec3 carry = equal(lo1, uvec3(0u));
-    ivec3 hi1 = c.hi + ivec3(carry);
-    uvec3 s000 = cell_salt(c.hi, seed);
-    uvec3 s100 = s000, s010 = s000, s110 = s000, s001 = s000, s101 = s000, s011 = s000, s111 = s000;
-    if (any(carry)) {
-        s100 = cell_salt(ivec3(hi1.x, c.hi.y, c.hi.z), seed);
-        s010 = cell_salt(ivec3(c.hi.x, hi1.y, c.hi.z), seed);
-        s110 = cell_salt(ivec3(hi1.x, hi1.y, c.hi.z), seed);
-        s001 = cell_salt(ivec3(c.hi.x, c.hi.y, hi1.z), seed);
-        s101 = cell_salt(ivec3(hi1.x, c.hi.y, hi1.z), seed);
-        s011 = cell_salt(ivec3(c.hi.x, hi1.y, hi1.z), seed);
-        s111 = cell_salt(hi1, seed);
-    }
-    vec3 ga = corner_grad(c.lo, s000);
-    vec3 gb = corner_grad(uvec3(lo1.x, c.lo.y, c.lo.z), s100);
-    vec3 gc = corner_grad(uvec3(c.lo.x, lo1.y, c.lo.z), s010);
-    vec3 gd = corner_grad(uvec3(lo1.x, lo1.y, c.lo.z), s110);
-    vec3 ge = corner_grad(uvec3(c.lo.x, c.lo.y, lo1.z), s001);
-    vec3 gf = corner_grad(uvec3(lo1.x, c.lo.y, lo1.z), s101);
-    vec3 gg = corner_grad(uvec3(c.lo.x, lo1.y, lo1.z), s011);
-    vec3 gh = corner_grad(lo1, s111);
-
-    precise vec3 f1 = f - 1.0;
-    precise float va = ga.x * f.x + ga.y * f.y + ga.z * f.z;
-    precise float vb = gb.x * f1.x + gb.y * f.y + gb.z * f.z;
-    precise float vc = gc.x * f.x + gc.y * f1.y + gc.z * f.z;
-    precise float vd = gd.x * f1.x + gd.y * f1.y + gd.z * f.z;
-    precise float ve = ge.x * f.x + ge.y * f.y + ge.z * f1.z;
-    precise float vf = gf.x * f1.x + gf.y * f.y + gf.z * f1.z;
-    precise float vg = gg.x * f.x + gg.y * f1.y + gg.z * f1.z;
-    precise float vh = gh.x * f1.x + gh.y * f1.y + gh.z * f1.z;
-
-    precise float k0 = va;
-    precise float k1 = vb - va;
-    precise float k2 = vc - va;
-    precise float k3 = ve - va;
-    precise float k4 = va - vb - vc + vd;
-    precise float k5 = va - vc - ve + vg;
-    precise float k6 = va - vb - ve + vf;
-    precise float k7 = -va + vb + vc - vd + ve - vf - vg + vh;
-
-)glsl"
-// perlin3's value and gradient per cell: value, g1..g7, d.
-#define OV_GLSL_PERLIN3_VALUE_GRADIENT R"glsl(    precise float value = k0 + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z;
-    precise vec3 g1 = gb - ga;
-    precise vec3 g2 = gc - ga;
-    precise vec3 g3 = ge - ga;
-    precise vec3 g4 = ga - gb - gc + gd;
-    precise vec3 g5 = ga - gc - ge + gg;
-    precise vec3 g6 = ga - gb - ge + gf;
-    precise vec3 g7 = -ga + gb + gc - gd + ge - gf - gg + gh;
-    precise vec3 interp = ga + g1 * u.x + g2 * u.y + g3 * u.z + g4 * u.x * u.y + g5 * u.y * u.z + g6 * u.z * u.x + g7 * u.x * u.y * u.z;
-    precise vec3 fd = vec3(k1, k2, k3) + u.yzx * vec3(k4, k5, k6) + u.zxy * vec3(k6, k4, k5) + k7 * u.yzx * u.zxy;
-    precise vec3 d = interp + du * fd;
-)glsl"
-#define OV_GLSL_NOISE_TAIL R"glsl(    return vec4(d, value);
-}
-
-uint hash_cell_2d(uint lx, int hx, uint lz, int hz, uint seed) {
-    return hash_cell(uvec3(lx, lz, 0x6A09E667u), ivec3(hx, hz, 0), seed);
-}
-
-vec4 perlin2(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
-    uint cxl, czl, qx, qz;
-    int cxh, czh;
-    octave_axis(p.lo.x, p.hi.x, p.frac.x, k, olo.x, ohi.x, cxl, cxh, qx);
-    octave_axis(p.lo.z, p.hi.z, p.frac.z, k, olo.z, ohi.z, czl, czh, qz);
-    precise vec2 f = vec2(qx, qz) * uintBitsToFloat(0x33800000u);
-    precise vec2 u = fade3(vec3(f, 0.0)).xy;
-    precise vec2 du = dfade3(vec3(f, 0.0)).xy;
-
-    uint cxl1 = cxl + 1u;
-    int cxh1 = cxh + int(cxl1 == 0u);
-    uint czl1 = czl + 1u;
-    int czh1 = czh + int(czl1 == 0u);
-    // Same salt sharing as perlin3.
-    uvec3 s00 = cell_salt(ivec3(cxh, czh, 0), seed);
-    uvec3 s10 = s00, s01 = s00, s11 = s00;
-    if (cxl1 == 0u || czl1 == 0u) {
-        s10 = cell_salt(ivec3(cxh1, czh, 0), seed);
-        s01 = cell_salt(ivec3(cxh, czh1, 0), seed);
-        s11 = cell_salt(ivec3(cxh1, czh1, 0), seed);
-    }
-    vec2 ga = grad2(pcg3d(uvec3(cxl, czl, 0x6A09E667u) ^ s00).x >> 29u);
-    vec2 gb = grad2(pcg3d(uvec3(cxl1, czl, 0x6A09E667u) ^ s10).x >> 29u);
-    vec2 gc = grad2(pcg3d(uvec3(cxl, czl1, 0x6A09E667u) ^ s01).x >> 29u);
-    vec2 gd = grad2(pcg3d(uvec3(cxl1, czl1, 0x6A09E667u) ^ s11).x >> 29u);
-
-    precise vec2 f1 = f - 1.0;
-    precise float va = ga.x * f.x + ga.y * f.y;
-    precise float vb = gb.x * f1.x + gb.y * f.y;
-    precise float vc = gc.x * f.x + gc.y * f1.y;
-    precise float vd = gd.x * f1.x + gd.y * f1.y;
-    precise float k1 = vb - va;
-    precise float k2 = vc - va;
-    precise float k3 = va - vb - vc + vd;
-    precise float value = va + k1 * u.x + k2 * u.y + k3 * u.x * u.y;
-    precise vec2 g1 = gb - ga;
-    precise vec2 g2 = gc - ga;
-    precise vec2 g3 = ga - gb - gc + gd;
-    precise vec2 interp = ga + g1 * u.x + g2 * u.y + g3 * u.x * u.y;
-    precise vec2 fd = vec2(k1, k2) + k3 * u.yx;
-    precise vec2 d = interp + du * fd;
-    return vec4(d.x, 0.0, d.y, value);
-}
-
-float det_rsqrt(float x) {
-    precise float y = uintBitsToFloat(0x5F375A86u - (floatBitsToUint(x) >> 1u));
-    precise float hx = x * 0.5;
-    y = y * (1.5 - hx * y * y);
-    y = y * (1.5 - hx * y * y);
-    y = y * (1.5 - hx * y * y);
-    return y;
-}
-
-)glsl"
-
-// After the frame functions (WorldPos), before the terrain SDF.
-inline constexpr const char GLSL_EXACT_NOISE[] = OV_GLSL_NOISE_HEAD OV_GLSL_PERLIN3_SETUP OV_GLSL_PERLIN3_VALUE_GRADIENT OV_GLSL_NOISE_TAIL;
-
-// GLSL twin of ExactNoise::perlin3_cross (after GLSL_EXACT_NOISE; only the cascade's shaders include it):
-// c0 = (value, d/dx, d/dy, d/dz), c1 = (d2/dxdy, d2/dxdz, d2/dydz, d3/dxdydz) per cell. c0 has perlin3's
-// bits (same code). gx[j] of the CPU is gj.x here.
-inline constexpr const char GLSL_PERLIN3_CROSS[] = R"glsl(
-void perlin3_cross(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi, out vec4 c0, out vec4 c1) {
-)glsl" OV_GLSL_PERLIN3_SETUP OV_GLSL_PERLIN3_VALUE_GRADIENT R"glsl(
-    precise float ux = u.x;
-    precise float uy = u.y;
-    precise float uz = u.z;
-    precise float dux = du.x;
-    precise float duy = du.y;
-    precise float duz = du.z;
-    precise float cxy = duy * (g2.x + g4.x * ux + g5.x * uz + g7.x * ux * uz) + dux * (g1.y + g4.y * uy + g6.y * uz + g7.y * uy * uz) +
-            dux * duy * (k4 + k7 * uz);
-    precise float cxz = duz * (g3.x + g6.x * ux + g5.x * uy + g7.x * ux * uy) + dux * (g1.z + g4.z * uy + g6.z * uz + g7.z * uy * uz) +
-            dux * duz * (k6 + k7 * uy);
-    precise float cyz = duz * (g3.y + g5.y * uy + g6.y * ux + g7.y * ux * uy) + duy * (g2.z + g4.z * ux + g5.z * uz + g7.z * ux * uz) +
-            duy * duz * (k5 + k7 * ux);
-    precise float cxyz = duy * duz * (g5.x + g7.x * ux) + dux * duz * (g6.y + g7.y * uy) + dux * duy * (g4.z + g7.z * uz) + dux * duy * duz * k7;
-    c0 = vec4(value, d);
-    c1 = vec4(cxy, cxz, cyz, cxyz);
-}
-)glsl";
-
-#undef OV_GLSL_NOISE_HEAD
-#undef OV_GLSL_PERLIN3_SETUP
-#undef OV_GLSL_PERLIN3_VALUE_GRADIENT
-#undef OV_GLSL_NOISE_TAIL

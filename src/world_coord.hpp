@@ -4,6 +4,7 @@
 #include "ov/murmur3.hpp"
 #include "ov/types.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -54,6 +55,45 @@ struct Vector3i64 {
 using ChunkId = Vector3i64;
 using VoxelPos = Vector3i64;
 
+// An axis-aligned box in LOD0 voxels (inclusive): an instance edit's region, a query box.
+struct VoxelBox {
+    VoxelPos lo;
+    VoxelPos hi;
+    bool valid = false;
+
+    bool intersects(const VoxelBox &p_o) const {
+        return valid && p_o.valid && lo.x <= p_o.hi.x && p_o.lo.x <= hi.x && lo.y <= p_o.hi.y && p_o.lo.y <= hi.y && lo.z <= p_o.hi.z &&
+                p_o.lo.z <= hi.z;
+    }
+    bool contains(const VoxelPos &p_v) const {
+        return valid && lo.x <= p_v.x && p_v.x <= hi.x && lo.y <= p_v.y && p_v.y <= hi.y && lo.z <= p_v.z && p_v.z <= hi.z;
+    }
+    // The part of this box inside p_o (invalid if they don't meet).
+    VoxelBox clipped(const VoxelBox &p_o) const {
+        VoxelBox r;
+        r.valid = intersects(p_o);
+        for (int a = 0; a < 3; a++) {
+            r.lo[a] = lo[a] > p_o.lo[a] ? lo[a] : p_o.lo[a];
+            r.hi[a] = hi[a] < p_o.hi[a] ? hi[a] : p_o.hi[a];
+        }
+        return r;
+    }
+    // The smallest box holding this one and p_o (either one if the other is invalid).
+    VoxelBox merged(const VoxelBox &p_o) const {
+        if (!valid || !p_o.valid) {
+            return valid ? *this : p_o;
+        }
+        VoxelBox r = *this;
+        for (int a = 0; a < 3; a++) {
+            r.lo[a] = lo[a] < p_o.lo[a] ? lo[a] : p_o.lo[a];
+            r.hi[a] = hi[a] > p_o.hi[a] ? hi[a] : p_o.hi[a];
+        }
+        return r;
+    }
+    // This box grown by p_by voxels on every side.
+    VoxelBox grown(int64_t p_by) const { return VoxelBox{ lo - VoxelPos(p_by, p_by, p_by), hi + VoxelPos(p_by, p_by, p_by), valid }; }
+};
+
 // For the core's hash containers. Folds each int64 to 32 bits (high word scrambled in), then the
 // same murmur chain the fold feeds (ov/murmur3.hpp, vendored from godot's hashfuncs): the hash
 // values are exactly those of the pre-de-Godot code.
@@ -69,6 +109,10 @@ struct Vector3i64Hasher {
         return ov::fmix32(h);
     }
 };
+
+// A unit direction in absolute axes, double (SDFBase::up_at, BaseSurface::up_dir).
+using UpAxis = std::array<double, 3>;
+inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
 
 // Plain float32 triple: the CPU mirror of GPU float math must stay float32 even in
 // precision=double builds (where godot's Vector3 is double).
@@ -142,6 +186,15 @@ inline int32_t sat_diff(int64_t p_a, int64_t p_b, int32_t p_limit) {
     return int32_t(d < -p_limit ? -p_limit : (d > p_limit ? p_limit : d));
 }
 
+// Number of set bits.
+inline int popcount64(uint64_t p_v) {
+#if defined(_MSC_VER)
+    return int(__popcnt64(p_v));
+#else
+    return __builtin_popcountll(p_v);
+#endif
+}
+
 // Index of the lowest set bit, p_v != 0.
 inline int ctz64(uint64_t p_v) {
 #if defined(_MSC_VER)
@@ -151,6 +204,19 @@ inline int ctz64(uint64_t p_v) {
 #else
     return __builtin_ctzll(p_v);
 #endif
+}
+
+// p_anchor plus an offset in voxels (double), canonical: the floor goes to the voxel, the rest to the fraction,
+// kept below 1 (a fraction that rounds up to 1.0f in float is clamped).
+inline WorldPos offset_pos(const VoxelPos &p_anchor, const double p_offset[3]) {
+    WorldPos p;
+    float *frac[3] = { &p.frac.x, &p.frac.y, &p.frac.z };
+    for (int a = 0; a < 3; a++) {
+        const double fl = std::floor(p_offset[a]);
+        p.voxel[a] = p_anchor[a] + int64_t(fl);
+        *frac[a] = float(p_offset[a] - fl) < 1.0f ? float(p_offset[a] - fl) : 0.99999994f;
+    }
+    return p;
 }
 
 // "(x, y, z)", the same text godot's Vector3i shows. Reports carry int64 ids as strings because

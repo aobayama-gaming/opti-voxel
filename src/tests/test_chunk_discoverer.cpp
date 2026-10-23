@@ -1,17 +1,17 @@
 #include "test_common.hpp"
 
 #include "chunk_discoverer.hpp"
-#include "sdf_archetype.hpp"
 #include "sdf_cascade.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <memory>
 
 namespace {
 
-// The discoverer's walk before the wave walk (recursive, depth first, one SDF call per corner with an early
-// exit on the first near corner), kept as the reference the wave walk must reproduce.
+// The discoverer's walk before the wave walk (recursive, depth first, one SDF call per corner), kept as the
+// reference the wave walk must reproduce.
 struct ReferenceWalk {
     const ChunkParam &param;
     const SDFBase &sdf;
@@ -24,17 +24,14 @@ struct ReferenceWalk {
         const VoxelPos center = ChunkMath::chunk_center_voxel(p_chunk, param);
         const int64_t half_voxels = ChunkMath::get_lod_size(p_chunk) * param.half_chunk_voxels();
         const int lod = ChunkMath::get_lod(p_chunk);
-        if (sdf.cull_exempt(p_chunk, lod)) {
-            return false; // the no-cull rule near instances (SDFBase::cull_exempt)
-        }
+        float nearest = FLT_MAX;
         for (int corner = 0; corner < 8; ++corner) {
             WorldPos corner_pos;
             corner_pos.voxel = center + VoxelPos((corner & 1) ? half_voxels : -half_voxels, (corner & 2) ? half_voxels : -half_voxels, (corner & 4) ? half_voxels : -half_voxels);
-            if (std::abs(sdf.evaluate(corner_pos, lod)) <= chunk_outer_radius) {
-                return false;
-            }
+            nearest = MIN(nearest, std::abs(sdf.evaluate_cull(corner_pos, lod)));
         }
-        return true;
+        // The no-cull rule near instances (SDFBase::cull_exempt), asked when the corners would cull.
+        return nearest > chunk_outer_radius && !sdf.cull_exempt(p_chunk, lod, nearest - chunk_outer_radius);
     }
 
     void walk(const ChunkId &p_camera, const ChunkId &p_node, LODHashSet &r_set) {
@@ -138,10 +135,11 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
 
 } // namespace
 
-TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFArchetype, 15 and 25 LODs)") {
+TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCascade with instances: cull_exempt, 15 and 25 LODs)") {
     for (const int lods : { 15, 25 }) {
         CAPTURE(lods);
-        SDFArchetype sdf;
+        SDFCascade sdf;
+        sdf.set_scatter(400, 200.0);
         compare_walks(sdf, lods);
     }
 }

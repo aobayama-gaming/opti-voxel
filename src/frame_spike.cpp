@@ -1,13 +1,22 @@
 #include "frame_spike.hpp"
 #include "godot_conv.hpp"
 
+#include "biome_features.hpp"
+#include "cascade.hpp"
+#include "climate.hpp"
+
+#include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
+#include "base_surface.hpp"
+#include "cascade_terrain.hpp"
 #include "chunk_math.hpp"
+#include "chunk_palette.hpp"
 #include "exact_noise.hpp"
+#include "exact_noise_glsl.hpp"
 #include "frame_probe.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
-#include "sdf_archetype.hpp"
+#include "page_format.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -77,6 +86,9 @@ constexpr int I64_SHIFTS[] = { 0, 1, 5, 31, 32, 33, 47, 63 };
 constexpr int I64_SHIFT_COUNT = int(sizeof(I64_SHIFTS) / sizeof(I64_SHIFTS[0]));
 constexpr int32_t I64_ADDS[] = { 0, 1, -1, -896, 2147483647, -2147483647 - 1 };
 constexpr int I64_ADD_COUNT = int(sizeof(I64_ADDS) / sizeof(I64_ADDS[0]));
+// Stretch factors (log2) of the stretched-band probe: 1 to Climate::MAX_STRETCH.
+constexpr int STRETCHES[] = { 1, 3, Climate::MAX_STRETCH };
+constexpr int STRETCH_COUNT = int(sizeof(STRETCHES) / sizeof(STRETCHES[0]));
 // Hash-random points per origin, besides the fixed grid; fuzzed archetype programs and how many probes
 // share one shader (one dispatch per set and origin).
 constexpr int RANDOM_POINTS = 1024;
@@ -102,18 +114,104 @@ double octave_step_bound(int p_k, double p_g) {
     return p_g * std::ldexp(1.0, -MIN(p_k, 24)) + std::ldexp(1.0, -20);
 }
 
-// The two fBms the noise probes check, a 2D one (the archetype ground's mountains) and a 3D one (perlin3
-// octaves, like the archetype rocks' bumps), in every probe set's shader. Their octaves also place the
-// continuity lines.
+// The base probes' sphere: radius 2^32 - 1000.5 voxels around (2^31, -2^32, 0), so the probe points near the origins'
+// y = 0 sit near its surface, the far ones saturate.
+BaseSurface sphere_probe_base() {
+    return BaseSurface::sphere(VoxelPos(int64_t(1) << 31, -(int64_t(1) << 32), 0), 4294967296.0 - 1000.5);
+}
+
+// The flat base probe's datum (LOD0 voxels): not a multiple of the stretches, so their remainders reach the fraction.
+constexpr int64_t PROBE_FLAT_DATUM = 600;
+// The LOD of the sphere stretch probe's base sample.
+constexpr int PROBE_STRETCH_LOD = 3;
+// probe_region: its hash, then 10 values f = (u >> F_SHIFT) - F_BIAS times F_SCALE in [-1, 1), d = f * D_SCALE, H = f * H_SCALE.
+constexpr uint32_t PROBE_REGION_SEED = 0xBA5Eu;
+constexpr uint32_t PROBE_REGION_SALT = 0x5EEDu;
+constexpr uint32_t PROBE_REGION_F_SHIFT = 9;
+constexpr int32_t PROBE_REGION_F_BIAS = 1 << (31 - PROBE_REGION_F_SHIFT);
+constexpr int PROBE_REGION_F_EXP = -(31 - PROBE_REGION_F_SHIFT);
+constexpr float PROBE_REGION_D_SCALE = 64.0f;
+constexpr int PROBE_REGION_H_EXP = -8;
+
+// A region from a hash of its cell: the probe's stand-in for the CPU's double regions (the GPU only evaluates the
+// form). Values in [-1, 1) scaled by powers of two: d up to 64 cells, n ~ 1, H ~ 2^-8.
+BaseSurface::Region probe_region(const VoxelPos &p_voxel, int p_lod) {
+    const uint32_t h = ExactNoise::hash_cell(BaseSurface::region_cell(p_voxel, p_lod), PROBE_REGION_SEED);
+    float f[10];
+    for (uint32_t i = 0; i < 10; i++) {
+        const uint32_t u = ExactNoise::pcg3d(ExactNoise::UVec3{ h, i, PROBE_REGION_SALT }).x;
+        f[i] = float(int32_t(u >> PROBE_REGION_F_SHIFT) - PROBE_REGION_F_BIAS) * ExactNoise::exact_pow2(PROBE_REGION_F_EXP);
+    }
+    BaseSurface::Region r;
+    r.d = f[0] * PROBE_REGION_D_SCALE;
+    for (int a = 0; a < 3; a++) {
+        r.n[a] = f[1 + a];
+    }
+    for (int i = 0; i < 6; i++) {
+        r.h[i] = f[4 + i] * ExactNoise::exact_pow2(PROBE_REGION_H_EXP);
+    }
+    return r;
+}
+
+// GLSL of probe_region and the base probes' functions (probe_base_glsl brings the bases and GLSL_HEIGHT_SDF first).
+constexpr const char PROBE_BASE_GLSL[] = R"glsl(
+BaseRegion probe_region(WorldPos p, int lod) {
+    uvec3 lo = p.lo;
+    ivec3 hi = p.hi;
+    i64_asr(lo, hi, lod + REGION_SHIFT);
+    uint h = hash_cell(lo, hi, REGION_SEED);
+    float f[10];
+    for (uint i = 0u; i < 10u; i++) {
+        uint u = pcg3d(uvec3(h, i, REGION_SALT)).x;
+        f[i] = float(int(u >> F_SHIFTu) - F_BIAS) * exact_pow2(F_EXP);
+    }
+    BaseRegion r;
+    r.d = f[0] * D_SCALE;
+    r.n = vec3(f[1], f[2], f[3]);
+    r.h_diag = vec3(f[4], f[5], f[6]) * exact_pow2(H_EXP);
+    r.h_off = vec3(f[7], f[8], f[9]) * exact_pow2(H_EXP);
+    return r;
+}
+vec4 probe_base_flat_fn(WorldPos p, int lod) {
+    vec4 n = noise_fbm3d(p, lod);
+    return height_sdf(vec4(n.w, n.x, n.y, 0.0), base_at(p, lod), lod);
+}
+vec4 probe_base_curvature_fn(WorldPos p, int lod) {
+    return base_curvature(p, lod, probe_region(p, lod));
+}
+vec4 probe_base_radius_fn(WorldPos p, int lod) {
+    return base_radius(p, lod);
+}
+)glsl";
+
+// The bases, height_sdf and PROBE_BASE_GLSL with its constants (ProbeNoise::glsl, in every probe set's shader).
+String probe_base_glsl() {
+    using ExactNoise::glsl_float;
+    using ExactNoise::glsl_uint;
+    return BaseSurface::flat(PROBE_FLAT_DATUM).glsl() + sphere_probe_base().glsl() + CascadeTerrain::GLSL_HEIGHT_SDF +
+            String(PROBE_BASE_GLSL)
+                    .replace("REGION_SHIFT", itos(BaseSurface::REGION_SHIFT))
+                    .replace("REGION_SEED", glsl_uint(PROBE_REGION_SEED))
+                    .replace("REGION_SALT", glsl_uint(PROBE_REGION_SALT))
+                    .replace("F_SHIFT", itos(PROBE_REGION_F_SHIFT))
+                    .replace("F_BIAS", itos(PROBE_REGION_F_BIAS))
+                    .replace("F_EXP", itos(PROBE_REGION_F_EXP))
+                    .replace("D_SCALE", glsl_float(PROBE_REGION_D_SCALE))
+                    .replace("H_EXP", itos(PROBE_REGION_H_EXP));
+}
+
+// The two fBms the noise probes check (and the base probes' GLSL) (ExactNoise::reference_fbm2d / 3d), in every probe set's shader. Their
+// octaves also place the continuity lines.
 struct ProbeNoise {
     ExactNoise::OctaveSet fbm2d;
     ExactNoise::OctaveSet fbm3d;
 
     explicit ProbeNoise(double p_voxel) :
-            fbm2d(SDFArchetype::height_fbm(p_voxel)),
-            fbm3d(ExactNoise::make_fbm(false, 0xCA7E5u, SDFArchetype::k_of(125.0, p_voxel), 3, 4.0 / 3.0, 0.5)) {}
+            fbm2d(ExactNoise::reference_fbm2d(p_voxel)),
+            fbm3d(ExactNoise::reference_fbm3d(p_voxel)) {}
 
-    String glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d); }
+    // Also the base probes' functions (they read noise_fbm3d), so each probe set's shader has every helper.
+    String glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d) + probe_base_glsl(); }
 };
 
 // A probe set (a new noise or SDF term adds its entries here; one table, shared by every origin).
@@ -178,6 +276,96 @@ void probe_octave_cell(WorldPos p, uint b) {
             return true;
         };
         p.continuity_bound = octave_step_bound(k, 4.0);
+        p.continuity_word = 3;
+        probes.push_back(p);
+    }
+    {
+        // A stretched band's position on the flat base (BaseSurface::stretched / base_stretched): datum + (y - datum) over
+        // 2^j with the frame's int64 helpers, across low-word wraps and at far origins (the datum not a multiple of 2^j).
+        Probe p;
+        p.name = "stretched";
+        p.words = 3 * STRETCH_COUNT;
+        const BaseSurface flat = BaseSurface::flat(PROBE_FLAT_DATUM);
+        p.glsl = flat.glsl_stretch() + String("void probe_stretched(WorldPos p, uint b) {\n");
+        for (int i = 0; i < STRETCH_COUNT; i++) {
+            p.glsl += vformat("    { WorldPos q = base_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
+                              "results[b + %du] = floatBitsToUint(q.frac.y); }\n",
+                    STRETCHES[i], 3 * i, 3 * i + 1, 3 * i + 2);
+        }
+        p.glsl += "}\n";
+        p.cpu = [flat](const WorldPos &q, uint32_t *r) {
+            for (int i = 0; i < STRETCH_COUNT; i++) {
+                const WorldPos s = flat.stretched(q, STRETCHES[i], Float4{}, 0);
+                r[3 * i] = lo32(s.voxel.y);
+                r[3 * i + 1] = uint32_t(hi32(s.voxel.y));
+                r[3 * i + 2] = float_bits(s.frac.y);
+            }
+            return true;
+        };
+        probes.push_back(p);
+    }
+    {
+        // On a sphere (BaseSurface::stretched / base_stretched_at, stretch_gradient / base_stretch_gradient_at): the point
+        // moved by the base sample's float offset, the gradient's up component scaled, the sample from a hashed region at
+        // LOD PROBE_STRETCH_LOD.
+        Probe p;
+        p.name = "stretched_sphere";
+        p.words = 13 * STRETCH_COUNT;
+        const BaseSurface sphere = sphere_probe_base();
+        p.glsl = sphere.glsl_stretch() + String("void probe_stretched_sphere(WorldPos p, uint b) {\n");
+        p.glsl += vformat("    int m = int(params.lod_bias) + %d;\n    vec4 base = base_curvature(p, m, probe_region(p, m));\n", PROBE_STRETCH_LOD);
+        p.glsl += "    vec4 g = noise_fbm3d(p, 0);\n";
+        for (int i = 0; i < STRETCH_COUNT; i++) {
+            p.glsl += vformat("    { WorldPos q = base_stretched_at(p, %d, base, m); vec4 h = base_stretch_gradient_at(g, %d, base); uint o = b + %du;\n", STRETCHES[i],
+                    STRETCHES[i], 13 * i);
+            p.glsl += "      for (int a = 0; a < 3; a++) { results[o + uint(a)] = q.lo[a]; results[o + 3u + uint(a)] = uint(q.hi[a]); results[o + 6u + uint(a)] = floatBitsToUint(q.frac[a]); }\n";
+            p.glsl += "      for (int a = 0; a < 4; a++) { results[o + 9u + uint(a)] = floatBitsToUint(h[a]); } }\n";
+        }
+        p.glsl += "}\n";
+        const OctaveSet *set = &p_noise.fbm3d;
+        p.cpu = [sphere, set](const WorldPos &q, uint32_t *r) {
+            const Float4 base = BaseSurface::curvature_form(q.voxel, PROBE_STRETCH_LOD, probe_region(q.voxel, PROBE_STRETCH_LOD));
+            const Float4 g = fbm(*set, q, 0);
+            for (int i = 0; i < STRETCH_COUNT; i++) {
+                const WorldPos s = sphere.stretched(q, STRETCHES[i], base, PROBE_STRETCH_LOD);
+                const Float4 h = sphere.stretch_gradient(g, STRETCHES[i], base);
+                uint32_t *o = r + 13 * i;
+                for (int a = 0; a < 3; a++) {
+                    o[a] = lo32(s.voxel[a]);
+                    o[3 + a] = uint32_t(hi32(s.voxel[a]));
+                }
+                o[6] = float_bits(s.frac.x);
+                o[7] = float_bits(s.frac.y);
+                o[8] = float_bits(s.frac.z);
+                o[9] = float_bits(h.x);
+                o[10] = float_bits(h.y);
+                o[11] = float_bits(h.z);
+                o[12] = float_bits(h.w);
+            }
+            return true;
+        };
+        probes.push_back(p);
+    }
+    // The cell noise (the climate's cell fields), at the same wavelengths: F1 is 1-Lipschitz per cell.
+    for (int k : PERLIN3_KS) {
+        Probe p;
+        p.name = vformat("cell3_k%d", k);
+        p.words = 4;
+        p.is_float = true;
+        const Vector3i64 o = test_offset(k);
+        const uint32_t seed = 0x3000u + uint32_t(k);
+        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = cell3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed), glsl_lo(o),
+                glsl_hi(o));
+        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
+        p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
+            const Float4 v = cell3(q, k, seed, o);
+            r[0] = float_bits(v.x);
+            r[1] = float_bits(v.y);
+            r[2] = float_bits(v.z);
+            r[3] = float_bits(v.w);
+            return true;
+        };
+        p.continuity_bound = octave_step_bound(k, 1.5);
         p.continuity_word = 3;
         probes.push_back(p);
     }
@@ -314,6 +502,24 @@ void probe_octave_cell(WorldPos p, uint b) {
         p.continuity_bound = fbm_bound(*set, which == 0 ? 6.0 : 4.0);
         p.continuity_word = 3;
         probes.push_back(p);
+    }
+    // The base surface (base_surface.hpp): the flat base under a height (CascadeTerrain::height_sdf, a zero slope
+    // included: the sign of t's zeros), a sphere's curvature form on hashed regions and its radius form, at every LOD.
+    {
+        const BaseSurface flat = BaseSurface::flat(PROBE_FLAT_DATUM);
+        const BaseSurface sphere = sphere_probe_base();
+        const OctaveSet *set = &p_noise.fbm3d;
+        probes.push_back(lod_probe("base_flat", "probe_base_flat_fn", [flat, set](const WorldPos &q, int p_lod) {
+            const Float4 n = fbm(*set, q, p_lod);
+            float ch[Cascade::CHANNELS] = {};
+            ch[Cascade::VALUE] = n.w;
+            ch[Cascade::DX] = n.x;
+            ch[Cascade::DY] = n.y;
+            return CascadeTerrain::height_sdf(ch, p_lod, flat.at(q.voxel, p_lod));
+        }));
+        probes.push_back(lod_probe("base_curvature", "probe_base_curvature_fn",
+                [](const WorldPos &q, int p_lod) { return BaseSurface::curvature_form(q.voxel, p_lod, probe_region(q.voxel, p_lod)); }));
+        probes.push_back(lod_probe("base_radius", "probe_base_radius_fn", [sphere](const WorldPos &q, int p_lod) { return sphere.radius_form(q.voxel, p_lod); }));
     }
     return probes;
 }
@@ -537,7 +743,7 @@ void build_cases(OriginRun &r_run, const ProbeNoise &p_noise) {
             }
         }
     }
-    const int64_t datum_voxel = std::llround(SDFBase::DATUM_M / param.voxel_size);
+    const int64_t datum_voxel = std::llround(BaseSurface::DATUM_M / param.voxel_size);
     for (int64_t c : centres) {
         const size_t begin = r_run.cases.size();
         for (int64_t v = c - 40; v <= c + 40; v++) {
@@ -730,7 +936,7 @@ String probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_probe
     }
     String code = String(SHADER_TEMPLATE);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + glsl_cell3());
     code = code.replace("/*NOISE*/", p_noise.glsl());
     code = code.replace("/*PROBES*/", probes_glsl);
     return code.replace("/*PROBE_CALLS*/", probe_calls);
@@ -879,8 +1085,9 @@ bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector
 struct TableProbeData {
     Archetype::DefLibrary library;
     std::vector<Archetype::TableRecord> records;
-    Archetype::Program ground;
+    Archetype::Float4 ground{ 0.0f, 0.0f, 0.0f, 2.0f }; // the register the fold starts from
     std::vector<uint32_t> list;
+    std::vector<uint16_t> palette; // list entry i's palette index (the GPU reads it from the list word)
 };
 
 // The records sit a few voxels from probe sample points (one run's case each), so the fold and the
@@ -895,8 +1102,9 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
     t.library.add(make_cylinder_type());
     t.library.add(make_rock_type(8, 0x1234u));
     t.library.add(make_branch_type());
-    Builder gb;
-    t.ground = gb.finish(gb.constant(2.0f));
+    t.library.add(make_cone_type(6, 0x4321u));
+    t.library.add(make_basin_type(5, Biome::BASIN_SEED));
+    t.library.add(make_island_type(5, Biome::ISLAND_SEED));
     for (uint32_t i = 0; i < 64; i++) {
         const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0x7AB1u, 0x9E37u });
         TableRecord rec;
@@ -933,10 +1141,31 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
                 rec.params[0] = 6.0f + float(i % 5);
                 rec.params[1] = 1.5f;
                 break;
-            default:
+            case 5:
                 rec.params[0] = 14.0f;
                 rec.params[1] = 2.5f;
                 rec.params[2] = -0.1f;
+                break;
+            case 6: // a cone of radius 8, height 20: cos = 20 / sqrt(464), sin = 8 / sqrt(464)
+                rec.params[0] = 8.0f;
+                rec.params[1] = 20.0f;
+                rec.params[2] = 0.928477f;
+                rec.params[3] = 0.371391f;
+                rec.params[4] = 1.0f + float(i % 3);
+                break;
+            case 7: // a basin of radius 10, half height 6
+                rec.params[0] = 6.0f;
+                rec.params[1] = 10.0f;
+                rec.params[2] = 1.0f + float(i % 2);
+                break;
+            default: // an island of radius 10, a 3-voxel cap (dome radius 18.17, drop 15.17), its cone 11 deep
+                rec.params[0] = 10.0f;
+                rec.params[1] = 11.0f;
+                rec.params[2] = 0.739940f;
+                rec.params[3] = 0.672673f;
+                rec.params[4] = 18.166667f;
+                rec.params[5] = 15.166667f;
+                rec.params[6] = 1.0f + float(i % 2);
                 break;
         }
         rec.salt = i == 0 ? 0u : ExactNoise::pcg3d(ExactNoise::UVec3{ i + 1, 0x5EEDu, 0u }).x;
@@ -947,13 +1176,47 @@ TableProbeData make_table_probe_data(const std::vector<OriginRun> &p_runs) {
         }
         rec.lipschitz = wb.lipschitz;
         rec.margin_c = 2.0f * wb.lipschitz + 2.0f;
-        // The band rule's erosion (erode * (2^lod - 1), on both sides), on most records.
+        // The band rule's erosion (erode * max(2^lod - erode_from, 0), on both sides), on most records, with
+        // onsets 0, 1 and 5.
         rec.erode = (i % 4u) != 0u ? Archetype::ERODE_CELLS : 0.0f;
+        rec.erode_from = (i % 3u) == 0u ? 1.0f : ((i % 3u) == 1u ? 2.0f : 32.0f);
+        t.records.push_back(rec);
+    }
+    // Moment blobs (Combine::ACCUM) among them: their occupancy summed, the far-field surface (moment_surface) on the
+    // register, near the same sample points.
+    const int blob = t.library.add(make_moment_blob_type());
+    for (uint32_t i = 0; i < 16; i++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, 0xB10Bu, 0x51u });
+        TableRecord rec;
+        rec.def = uint8_t(blob);
+        rec.op = Combine::ACCUM;
+        const OriginRun &run = p_runs[i % p_runs.size()];
+        const Case &near = run.cases[(size_t(i) * 4099u + 17u) % run.cases.size()];
+        rec.anchor = ChunkMath::sample_pos(near.chunk, near.grid, run.param).voxel + VoxelPos(int64_t(h.x % 7u) - 3, int64_t(h.y % 7u) - 3, 0);
+        const double yaw = double(h.z >> 8) * 1e-4;
+        const float cy = float(std::cos(yaw)), sy = float(std::sin(yaw));
+        const float rot[9] = { cy, 0.0f, -sy, 0.0f, 1.0f, 0.0f, sy, 0.0f, cy };
+        std::copy(rot, rot + 9, rec.rotation);
+        for (int a = 0; a < 3; a++) {
+            const float s = 3.0f + float((h.x >> (8 * a)) % 12u);
+            rec.params[a] = 1.0f / (s * s);
+        }
+        rec.params[3] = 0.1f + 0.08f * float(h.z % 16u);
+        const Bounds wb = record_world_bounds(t.library[rec.def], rec);
+        for (int a = 0; a < 3; a++) {
+            rec.box_lo[a] = int32_t(wb.lo[a] - rec.anchor[a]);
+            rec.box_hi[a] = int32_t(wb.hi[a] - rec.anchor[a]);
+        }
+        rec.lipschitz = wb.lipschitz;
+        rec.margin_c = 2.0f * wb.lipschitz + 2.0f;
         t.records.push_back(rec);
     }
     t.list.resize(t.records.size());
+    t.palette.resize(t.records.size());
     for (uint32_t i = 0; i < t.list.size(); i++) {
         t.list[i] = i;
+        // Non-zero: a win shows. Every fifth record inherits: the fold skips it on both sides.
+        t.palette[i] = i % 5u == 4u ? uint16_t(ChunkPalette::INHERIT_INDEX) : uint16_t(1 + (i * 37u) % (ChunkPalette::MAX_ENTRIES - 1));
     }
     return t;
 }
@@ -963,15 +1226,13 @@ constexpr const char TABLE_SHADER[] = R"glsl(#version 450
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 /*STRUCTS*/
-/*DEF_RECORD*/
 
 struct Sample { ChunkInput chunk; vec4 grid; };
 
 layout(set = 0, binding = 0, std430) restrict readonly buffer Samples { Sample samples[]; };
 layout(set = 0, binding = 1, std430) restrict writeonly buffer Results { uint results[]; };
 layout(set = 0, binding = 2, std140) uniform ChunkParamUniform { ChunkParam chunk_param; };
-layout(set = 0, binding = 3, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };
-layout(set = 0, binding = 4, std430) restrict readonly buffer DefList { uint sdf_list[]; };
+/*TABLE_BUFFERS*/
 layout(push_constant, std430) uniform Params { uint count; uint words; uint lod_bias; uint pad1; } params;
 
 /*HELPERS*/
@@ -994,20 +1255,32 @@ void main() {
 int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, Dictionary &r_report) {
     const TableProbeData table = make_table_probe_data(p_runs);
     const uint32_t count = uint32_t(table.records.size());
+    // Per probe LOD: the 4 floats of the fold, then the winner's palette index (record_wins).
+    constexpr uint32_t PER_LOD = 5;
     String lod_calls;
     for (int j = 0; j < PROBE_LOD_COUNT; j++) {
         lod_calls += vformat("    {\n    precise vec4 v = terrain_sdf(p, int(params.lod_bias) + %d);\n", PROBE_LODS[j]);
         for (int k = 0; k < 4; k++) {
-            lod_calls += vformat("    { uint u = floatBitsToUint(v[%d]); results[b + %du + %du] = (u << 1u) == 0u ? 0u : u; }\n", k, 4 * j, k);
+            lod_calls += vformat("    { uint u = floatBitsToUint(v[%d]); results[b + %du + %du] = (u << 1u) == 0u ? 0u : u; }\n", k, PER_LOD * j, k);
         }
+        lod_calls += vformat("    results[b + %du + 4u] = g_material;\n", PER_LOD * j);
         lod_calls += "    }\n";
     }
     String code = String(TABLE_SHADER);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*DEF_RECORD*/", String(Archetype::GLSL_DEF_RECORD_STRUCT));
+    code = code.replace("/*TABLE_BUFFERS*/", Archetype::glsl_table_buffers(3, 4));
     code = code.replace("/*HELPERS*/",
             String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE));
-    code = code.replace("/*TERRAIN*/", Archetype::generate_table_sdf(table.ground, table.library, 1.0f, false));
+    const Archetype::Float4 &g = table.ground;
+    code = code.replace("/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + vformat(R"glsl(uint g_material;
+vec4 terrain_sdf(WorldPos p, int lod) {
+    bool touched = false;
+    g_material = 0u;
+    bool moments = false;
+    return arch_finish(arch_fold(vec4(%s, %s, %s, %s), p, lod, touched, g_material, moments), lod);
+}
+)glsl",
+                                                                                                           ExactNoise::glsl_float(g.x), ExactNoise::glsl_float(g.y), ExactNoise::glsl_float(g.z), ExactNoise::glsl_float(g.w)));
     code = code.replace("/*LOD_CALLS*/", lod_calls);
 
     Ref<RDShaderSource> source;
@@ -1035,14 +1308,16 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     PackedByteArray list_bytes;
     list_bytes.resize(int64_t(table.list.size()) * 4);
     for (size_t i = 0; i < table.list.size(); i++) {
-        list_bytes.encode_u32(int64_t(i) * 4, table.list[i]);
+        list_bytes.encode_u32(int64_t(i) * 4, SDFGpuTable::list_word(table.list[i], table.palette[i]));
     }
     const RID buffer_list = p_rd->storage_buffer_create(list_bytes.size(), list_bytes);
 
-    const uint32_t words = 4 * PROBE_LOD_COUNT;
+    const uint32_t words = PER_LOD * PROBE_LOD_COUNT;
     int64_t mismatches = 0;
+    int64_t won = 0; // samples (per LOD) where a record wins the fold: the material path is exercised
     int64_t samples = 0;
     int64_t near = 0; // samples inside an instance's influence box at the finest probe LOD
+    int64_t in_blob = 0; // samples inside a moment blob's box there
     std::vector<uint32_t> want(words);
     for (const OriginRun &run : p_runs) {
         const uint32_t n = uint32_t(run.cases.size());
@@ -1094,17 +1369,26 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
         for (uint32_t i = 0; i < n; i++) {
             const WorldPos pos = ChunkMath::sample_pos(run.cases[i].chunk, run.cases[i].grid, run.param);
             for (int j = 0; j < PROBE_LOD_COUNT; j++) {
-                const Archetype::Float4 r = Archetype::fold(table.ground, table.library, table.records.data(), table.list.data(),
-                        uint32_t(table.list.size()), pos, PROBE_LODS[j]);
-                want[4 * j + 0] = Archetype::zero_canonical(float_bits(r.x));
-                want[4 * j + 1] = Archetype::zero_canonical(float_bits(r.y));
-                want[4 * j + 2] = Archetype::zero_canonical(float_bits(r.z));
-                want[4 * j + 3] = Archetype::zero_canonical(float_bits(r.w));
+                uint32_t material = 0;
+                const Archetype::Float4 r = Archetype::fold_onto(table.ground, table.library, table.records.data(), table.list.data(),
+                        uint32_t(table.list.size()), pos, PROBE_LODS[j], true, nullptr, table.palette.data(), &material);
+                want[PER_LOD * j + 0] = Archetype::zero_canonical(float_bits(r.x));
+                want[PER_LOD * j + 1] = Archetype::zero_canonical(float_bits(r.y));
+                want[PER_LOD * j + 2] = Archetype::zero_canonical(float_bits(r.z));
+                want[PER_LOD * j + 3] = Archetype::zero_canonical(float_bits(r.w));
+                want[PER_LOD * j + 4] = material;
+                won += material != 0;
             }
             samples++;
             for (const Archetype::TableRecord &rec : table.records) {
                 if (Archetype::in_influence_box(rec, pos, PROBE_LODS[0])) {
                     near++;
+                    break;
+                }
+            }
+            for (const Archetype::TableRecord &rec : table.records) {
+                if (rec.op == Archetype::Combine::ACCUM && Archetype::in_influence_box(rec, pos, PROBE_LODS[0])) {
+                    in_blob++; // the moment blobs' sum and surface run here
                     break;
                 }
             }
@@ -1130,7 +1414,9 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     p_rd->free_rid(shader);
     r_report["table_samples"] = samples;
     r_report["table_near_samples"] = near;
+    r_report["table_blob_samples"] = in_blob;
     r_report["table_mismatch"] = mismatches;
+    r_report["table_material_won"] = won;
     return mismatches == 0 ? 1 : 0;
 }
 
@@ -1192,18 +1478,8 @@ Dictionary FrameSpike::run() {
 
     // Probe sets, one shader each: the frame / noise table, then the archetype probes.
     std::vector<std::vector<Probe>> sets = { make_probes(noise) };
-    // The archetype probes, the demo terrain's compiled (PR 1) program first (its anchors are absolute,
-    // near 0). The table probes follow the archetype ones (see make_table_probes).
-    Archetype::Compiled demo_compiled = Archetype::compile(SDFArchetype::scene(voxel_size));
-    if (!demo_compiled.error.is_empty()) {
-        UtilityFunctions::printerr("FrameSpike: demo scene: " + demo_compiled.error);
-    }
-    demo_compiled.program.normalize = true;
-    demo_compiled.program.out_scale = 0.5f;
-    std::vector<Probe> arch = { ArchetypeProbes::probe("demo", demo_compiled.program, true) };
-    for (Probe &probe : ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS)) {
-        arch.push_back(probe);
-    }
+    // The archetype probes. The table probes follow them (see make_table_probes).
+    std::vector<Probe> arch = ArchetypeProbes::make(anchors, frame_anchors, ARCH_SHAPE_SIZE, FUZZ_PROGRAMS);
     int64_t set_glsl = 0;
     for (const Probe &probe : arch) {
         if (sets.size() == 1 || sets.back().size() == PROBES_PER_SET || set_glsl + probe.glsl.length() > MAX_SET_GLSL) {
@@ -1270,7 +1546,9 @@ Dictionary FrameSpike::run() {
     }
     report["probe_mismatch"] = probe_report;
     report["examples"] = checks.examples;
-    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_mismatch"]) == 0 &&
+    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_blob_samples"]) > 0 &&
+            int64_t(report["table_mismatch"]) == 0 &&
+            int64_t(report["table_material_won"]) > 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
             checks.worldpos_mismatch == 0 && checks.anchor_mismatch == 0 && checks.pair_cpu_mismatch == 0 && checks.pair_gpu_mismatch == 0 &&
             checks.continuity_violations == 0 && checks.cross_origin_mismatch == 0 && checks.cpu_failed == 0 && probe_total == 0 &&

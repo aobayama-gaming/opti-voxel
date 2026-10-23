@@ -7,8 +7,10 @@
 
 #include "cascade_report.hpp"
 #include "cascade_spike.hpp"
+#include "climate_report.hpp"
 #include "frame_spike.hpp"
 #include "quad_pool_spike.hpp"
+#include "voxel_sky.hpp"
 #include "voxel_terrain.hpp"
 
 #include "ov/on_error.hpp"
@@ -31,10 +33,12 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
         ERR_PRINT(vformat("%s:%d: %s", p_file, p_line, p_message));
     });
     GDREGISTER_CLASS(VoxelTerrain);
+    GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
     GDREGISTER_CLASS(FrameSpike);
     GDREGISTER_CLASS(CascadeReport);
     GDREGISTER_CLASS(CascadeSpike);
+    GDREGISTER_CLASS(ClimateReport);
 #ifdef OPTI_VOXEL_TESTS
     GDREGISTER_CLASS(UnitTests);
 #endif

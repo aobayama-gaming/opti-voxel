@@ -22,3 +22,7 @@ config/icon="res://icon.svg"
 [rendering]
 
 driver/threads/thread_model=2
+
+[threading]
+
+worker_pool/low_priority_thread_ratio=0.5

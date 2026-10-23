@@ -82,6 +82,60 @@ TEST_CASE("VoxelState: a parent stays until all its children are loaded (split)"
     CHECK(state.to_destroy_chunk.size() == 1);
 }
 
+TEST_CASE("VoxelState: a stalled parent hides the sub-cubes of its children as they land (coverage)") {
+    VoxelState state = make_state();
+    const ChunkId parent(8, 8, 8); // LOD 3
+    load(state, { parent });
+    std::vector<ChunkId> children = children_of(parent);
+    // One child split once more: its 8 LOD-1 children stand in its place in the scan.
+    std::vector<ChunkId> scanned(children.begin() + 1, children.end());
+    const std::vector<ChunkId> grandchildren = children_of(children[0]);
+    scanned.insert(scanned.end(), grandchildren.begin(), grandchildren.end());
+    scan(state, scanned);
+    update(state);
+    CHECK(state.hidden_mask(parent) == 0); // every sub-cube still waits
+    CHECK(state.coverage_changed.has(parent));
+    state.coverage_changed.clear();
+
+    uint64_t expected = 0;
+    for (size_t i = 0; i < scanned.size(); i++) {
+        load(state, { scanned[i] });
+        update(state);
+        expected |= ChunkMath::subcube_bits(parent, scanned[i]);
+        if (i + 1 < scanned.size()) {
+            CHECK(state.hidden_mask(parent) == expected);
+            CHECK(state.coverage_changed.has(parent));
+            CHECK(state.to_destroy_chunk.is_empty());
+        }
+        state.coverage_changed.clear();
+    }
+    CHECK(expected == ~uint64_t(0));
+    // The last one landed: the parent is no longer stalled, hides nothing, and goes.
+    CHECK(state.hidden_mask(parent) == 0);
+    CHECK(state.stalled.is_empty());
+    CHECK(state.to_destroy_chunk.has(parent));
+}
+
+TEST_CASE("VoxelState: the hand-off latency runs from a parent's first stalled sub-cube to its last child") {
+    VoxelState state = make_state();
+    state.frame = 10;
+    load(state, { PARENT });
+    const std::vector<ChunkId> children = children_of(PARENT);
+    scan(state, children); // frame 10: the parent stalls
+    update(state);
+    CHECK(state.stats.handoff_frames.count() == 0);
+    state.frame = 15;
+    load(state, std::vector<ChunkId>(children.begin(), children.end() - 1));
+    update(state);
+    CHECK(state.stats.handoff_frames.count() == 0); // one child still missing
+    state.frame = 27;
+    load(state, { children.back() });
+    update(state);
+    CHECK(state.stats.handoff_frames.count() == 1);
+    CHECK(state.stats.handoff_frames.max() == 17);
+    CHECK(state.stats.handoff_frames.percentile(0.5) == 17);
+}
+
 TEST_CASE("VoxelState: children stay until their parent is loaded (merge)") {
     VoxelState state = make_state();
     const std::vector<ChunkId> children = children_of(PARENT);
@@ -144,8 +198,25 @@ void sim_scan_node(const ChunkId &p_node, int p_lod, const double p_camera[3], d
     }
 }
 
+// The rows of the chunks as the GPU holds them: each output is a fresh row range (its serial in quad_offset) that
+// hides nothing until set_hidden writes it, and is gone once released.
+struct MockPages : ChunkReleaser {
+    ov::HashMap<uint32_t, uint64_t, ov::DefaultHash> rows;
+    uint32_t next = 0;
+
+    void load(ChunkOutput &r_out) {
+        r_out.owner = this;
+        r_out.quad_count = 1;
+        r_out.quad_offset = next++;
+        rows.insert(r_out.quad_offset, 0);
+    }
+    void release_chunk(const ChunkOutput &p_chunk) override { rows.erase(p_chunk.quad_offset); }
+    void set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) override { rows[p_chunk.quad_offset] = p_mask; }
+};
+
 struct Sim {
     std::mt19937_64 rng;
+    MockPages pages;
     VoxelState state;
     double camera[3] = { 0.0, 0.0, 0.0 };
     double split = 2.0;
@@ -236,6 +307,7 @@ struct Sim {
         const size_t i = size_t(uniform(int(in_flight.size())));
         ChunkOutput out;
         out.chunk_id = in_flight[i];
+        pages.load(out);
         in_flight[i] = in_flight.back();
         in_flight.pop_back();
         in_flight_set.erase(out.chunk_id);
@@ -255,6 +327,13 @@ struct Sim {
         }
         destroyed += state.to_destroy_chunk.size();
         state.destroy_marked();
+        // After compaction (none here): every loaded chunk's rows hide what its coverage says.
+        state.push_coverage();
+        for (const auto &kv : state.loaded_chunk) {
+            const uint64_t *row = pages.rows.getptr(kv.second.quad_offset);
+            failures += row && *row == state.hidden_mask(kv.first) ? 0 : 1;
+        }
+        failures += pages.rows.size() == state.loaded_chunk.size() ? 0 : 1;
     }
 
     // The incremental destroy check against the full recompute (which also checks dirty = scan - loaded

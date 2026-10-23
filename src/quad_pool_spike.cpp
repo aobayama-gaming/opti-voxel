@@ -27,8 +27,6 @@ layout(push_constant, std430) uniform Params {
     vec4 grid;        // xyz: world position of its vertex (0, 0, 0), w: its cell size
 } params;
 
-#define QUAD_GROUP 64u
-
 /*GLSL_PAGE_FORMAT*/
 
 float height(vec2 xz) { return params.origin_size.y + 3.0 * sin(xz.x * 0.3) * cos(xz.y * 0.3); }
@@ -41,7 +39,7 @@ vec3 surf_normal(vec2 xz) {
 
 void put_corner(uint slot, uint k, vec2 xz) {
     vec3 local = (surf(xz) - params.grid.xyz) / params.grid.w;
-    store_corner(slot, k, encode_corner(local, pack_normal_oct22(surf_normal(xz)), page_pos_scale(32)));
+    store_corner(slot, k, encode_corner(local, pack_normal_oct(surf_normal(xz)), 0u, page_pos_scale(32)));
 }
 
 void main() {
@@ -64,7 +62,7 @@ void main() {
     }
     uint slot = atomicAdd(counter[0], 1u);
     if (slot % QUAD_GROUP == 0u) {
-        store_group_header(slot / QUAD_GROUP, params.chunk.xyz);
+        store_group_header(slot / QUAD_GROUP, params.chunk.xyz, 0u);
     }
     put_corner(slot, 0u, base);
     put_corner(slot, 1u, c1);
@@ -121,7 +119,7 @@ void QuadPoolSpike::_rt_run(int p_page) {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     ERR_FAIL_NULL_MSG(rd, "QuadPoolSpike: no RenderingDevice (Compatibility renderer?)");
 
-    String code = String(SPIKE_COMPUTE).replace("/*GLSL_PAGE_FORMAT*/", GLSL_PAGE_FORMAT);
+    String code = String(SPIKE_COMPUTE).replace("/*GLSL_PAGE_FORMAT*/", godot_str(PageFormat::glsl_encode()));
     Ref<RDShaderSource> source;
     source.instantiate();
     source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
@@ -347,7 +345,7 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
     r["duplicated_cells"] = duplicated;
     r["dirty_tail_floats"] = dirty_tail;
     r["write_ok"] = (int)command.decode_u32(4) == (int)((quad_count + 63) / 64) && (int)command.decode_u32(0) == 64 * 6 &&
-            max_pos_err < pos_tolerance && max_normal_err_deg < 0.5 && bad == 0 && bad_headers == 0 && missing == 0 &&
+            max_pos_err < pos_tolerance && max_normal_err_deg < PageFormat::NORMAL_MAX_ERROR_DEG && bad == 0 && bad_headers == 0 && missing == 0 &&
             duplicated == 0 && dirty_tail == 0;
 }
 
