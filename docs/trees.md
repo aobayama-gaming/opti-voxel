@@ -16,7 +16,14 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   upper trunk (the last on its tip) and a clump at each leaf stem's tip, smooth-unioned at half their radius
   into one mass; segments and clumps the hull always covers are skipped.
   Nothing is LOD-specific: the band rule is the LOD rule (thin parts erode away first, a tapered branch
-  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
+  from its tip, the hull last; nothing appears with the LOD). **Hull-only growth:** `CellScatter::generate` takes the
+  chunk LOD (-1: all) and returns the records listed there as a subset of the full growth; from
+  `tree_hull_only_lod(species)` (the larger `max_lod` of the species' largest trunk segment and clump, `tree_bounds`
+  padded by `TREE_BOUND_PAD`; `max_lod` grows with a part's size, unit-tested) only the hull or tiers are listed, so the
+  forest grows the trunk's polyline and the hull alone (`grow_tree(..., hull_only)`), bit-identical to the full growth's
+  listed records (unit test: 1,000 trees, every LOD from there; tight at 5 cm: 8 / 7 / 5 for the three species, a LOD
+  late at 0.5 m). `set_forest_scatter` is the forest's generate, classes and profile key, for the table and the tests; a
+  species whose `tree_bounds` don't fit the table never grows hull-only (a site's refusal never depends on the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
   source, salted: `TREE_SITE_SALT` for the forest, the species is the site's variant): `cell_site` reads the coarse field
   (`SDFBase::ground_field(voxel, lod)`, `evaluate_cull`'s field with its gradient; at `site_lod` a lattice sample extended
   along its gradient) at the cell's centre, projects the cell's hashed voxel on that plane, keeps it if it lands in the

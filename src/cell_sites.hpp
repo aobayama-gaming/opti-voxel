@@ -70,6 +70,12 @@ struct CellSite {
 };
 void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, std::vector<CellSite> &r_out,
         bool p_snap = true, int p_min_level = 0);
+// The nodes of p_side << p_level voxels (in node units, cell order) meeting [p_lo, p_hi] that surface_sites' walk from
+// p_min_level keeps down to that level: a node it drops holds no site of a box walked from p_min_level (a node's verdict
+// is its centre's reading, whatever the box). Every node meeting the box when the walk would start at p_level or below.
+// Same pool rule as surface_sites.
+void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, int p_level, int p_min_level,
+        std::vector<VoxelPos> &r_out);
 // The level surface_sites starts a box at: the coarsest whose nodes (p_side << level voxels) hold its extent.
 int walk_level(const VoxelBox &p_box, int64_t p_side);
 inline constexpr double SITE_SLACK = 0.25;

@@ -20,7 +20,7 @@
 // the keys' (a pure function of each key) and its list folds them in key order, so a chunk's content is a pure function
 // of its id whatever streamed when, and no chunk is meshed twice because a key arrived late.
 //
-// One entry per key asked for, in one table: computing (its inputs first: a part tile reads the site tiles inside it, a
+// One entry per key asked for, in one table: computing (its inputs first: a LOD-0 part tile reads its site tile, a
 // part layer's blob tile the LOD-0 part tiles around it, a far layer's the proxy tiles around it; a key's first job lists
 // them on a drain task, which asks for them: admit() creates a chunk's own keys only), then ready with its content,
 // which a listed key copies into slots: the GPU table's records from slot_base on, sent through the placement log
@@ -74,8 +74,8 @@ public:
     static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys with records kept at most (the empty ones count, the walks don't)
     // Landed walks (site and proxy tiles) kept at most: enough for the view's whole zone to stay resident (a walk evicted is
     // walked again). An entry is ~450 B (Entry 272, its map node and key ~70, the content 80 + its control block 16) plus 56
-    // per site (CellSite). The 1M forest (5 x 5 km at 5 cm, 40 m site tiles): 125^2 columns, the LOD-6/7 part tiles asking
-    // 16-32 site tiles tall per column, ~500k walks (225 MB) and its 1M sites (56 MB); the cap bounds them to ~500 MB.
+    // per site (CellSite). The 1M forest (5 x 5 km at 5 cm, 40 m site tiles): 125^2 columns, a few site tiles tall each
+    // (the LOD-0 part tiles' only: a coarser part tile walks its own box), its 1M sites 56 MB; the cap bounds them to ~500 MB.
     static constexpr size_t WALKS_MAX = size_t(1) << 20;
     // Keys asked for (by a chunk or the camera) and not landed at most: past it admit() answers LATER for a chunk needing a
     // new key, so the meshers stop popping (else a frame parks the whole queue: millions of keys waiting). The inputs an

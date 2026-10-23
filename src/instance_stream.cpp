@@ -448,7 +448,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     Entry &e = entries.find(p_job->key)->second; // running: never evicted
     if (p_job->expand && !p_job->input_keys.empty()) {
         stats.compute_usec += int64_t(p_job->usec); // the workers' time
-        stats.expand_usec += int64_t(p_job->usec); // of which listing inputs (a coarse part tile's walks its subtree)
+        stats.expand_usec += int64_t(p_job->usec); // of which listing inputs
         // Dropped while it listed them (an orphan): erased if still unneeded, no input asked for.
         if (e.orphan) {
             e.state = Entry::WAITING;
@@ -715,22 +715,24 @@ void InstanceStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vect
         s->keys(p_voxel, p_voxel, p_lod, keys);
         for (const SourceKey &k : keys) {
             std::shared_ptr<const SourceContent> content;
-            std::vector<std::shared_ptr<const SourceContent>> inputs; // the resident ones (the others computed with it)
             {
                 const std::shared_lock<std::shared_mutex> lock(mutex);
                 const auto it = entries.find(k);
                 if (it != entries.end() && it->second.state == Entry::READY) {
                     content = it->second.content;
-                } else {
-                    s->inputs(k, in);
+                }
+            }
+            if (!content) {
+                const InlineParallelFor inline_loops; // maybe a pool task (the discoverer's batches)
+                s->inputs(k, in); // a coarse part tile's walks to its site tiles: out of the lock
+                std::vector<std::shared_ptr<const SourceContent>> inputs; // the resident ones (the others computed with it)
+                {
+                    const std::shared_lock<std::shared_mutex> lock(mutex);
                     for (const SourceKey &i : in) {
                         const auto input = entries.find(i);
                         inputs.push_back(input != entries.end() && input->second.state == Entry::READY ? input->second.content : nullptr);
                     }
                 }
-            }
-            if (!content) {
-                const InlineParallelFor inline_loops; // maybe a pool task (the discoverer's batches)
                 ScatterSource::Inputs raw;
                 for (const std::shared_ptr<const SourceContent> &i : inputs) {
                     raw.push_back(i.get());

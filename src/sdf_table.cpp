@@ -356,9 +356,7 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
 CellScatter SDFTable::forest_source(const TreeTypes &p_types) const {
     CellScatter s = scene_source(TREE_SITE_SALT, forest_count, forest_area);
     const double vs = param.voxel_size;
-    s.generate = [p_types, vs](const Site &p_site, const UpAxis &p_up, std::vector<TableRecord> &r_out) {
-        grow_tree(tree_species()[tree_species_of(p_site.variant)], p_site.base, p_up, p_site.seed, vs, p_types, r_out);
-    };
+    set_forest_scatter(s, vs, *library, record_finish(), p_types, max_instance_extent());
     return s;
 }
 
@@ -366,7 +364,7 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
     CellScatter s = scene_source(SCATTER_SITE_SALT, scatter_count, scatter_area);
     const float vs = param.voxel_size;
     const int rock = p_types.rock, capsule = p_types.capsule;
-    s.generate = [rock, capsule, vs](const Site &p_site, const UpAxis &p_up, std::vector<TableRecord> &r_out) {
+    s.generate = [rock, capsule, vs](const Site &p_site, const UpAxis &p_up, int, std::vector<TableRecord> &r_out) { // one record: the same at every LOD
         const ExactNoise::UVec3 h = ExactNoise::hash3(p_site.seed, 0x5CA7u, 0x7E12u);
         const float r = (1.0f + float(h.x % 300u) * 0.01f) / vs; // voxels
         const bool is_rock = (p_site.variant & 1u) == 0u;
@@ -417,7 +415,7 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, Dicti
         if (i % BATCH == 0) {
             parallel_for(uint32_t(MIN(BATCH, sites.size() - i)), "SDFTable::add_source", [&](uint32_t p_j) {
                 grown[p_j].clear();
-                p_source.grow(sites[i + p_j].site, grown[p_j]);
+                p_source.grow(sites[i + p_j].site, -1, grown[p_j]);
             });
         }
         const Site &site = sites[i].site;
@@ -477,6 +475,8 @@ void SDFTable::add_stream(uint32_t p_slot_base, Dictionary &r_stats) {
         d["records_per_site_avg"] = prof.records_per_site;
         d["reach_m"] = prof.reach * param.voxel_size;
         d["lod_end"] = prof.lod_end;
+        d["profile_classes"] = int64_t(prof.lost.size());
+        d["profile_shared"] = streamed.back()->profile_shared();
         d["profile_ms"] = double(Time::get_singleton()->get_ticks_usec() - t0) * 1e-3;
         r_stats[source.name] = d;
     }

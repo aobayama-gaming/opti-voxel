@@ -124,11 +124,19 @@ struct WalkCell {
     ExactNoise::Float4 centre;
 };
 
-// The cells (of p_side voxels) meeting p_box that the surface may cross, in cell order: an absolute octree walk from the
-// coarsest level whose node holds the box (at least p_min_level), keeping a node while the coarse plane at its centre
-// crosses it (plane_meets).
-std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field, int p_min_level) {
+// The nodes of p_side << p_stop_level voxels meeting p_box that the surface may cross, in cell order: an absolute octree
+// walk from the coarsest level whose node holds the box (at least p_min_level), keeping a node while the coarse plane at
+// its centre crosses it (plane_meets). Every node meeting the box when the walk would start at p_stop_level or below (no
+// reading: their centres' fields are left unset).
+std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field, int p_min_level, int p_stop_level = 0) {
     int level = MAX(walk_level(p_box, p_side), MIN(p_min_level, 62));
+    if (p_stop_level > 0 && level <= p_stop_level) {
+        std::vector<WalkCell> all;
+        for (const VoxelPos &n : nodes_meeting(p_box, p_side << p_stop_level)) {
+            all.push_back(WalkCell{ n, ExactNoise::Float4() });
+        }
+        return all; // nodes_meeting's order is z y x: cell order
+    }
     std::vector<VoxelPos> nodes = nodes_meeting(p_box, p_side << level);
     std::vector<WalkCell> kept;
     std::vector<ExactNoise::Float4> fields;
@@ -142,7 +150,7 @@ std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const
                 kept.push_back(WalkCell{ nodes[i], fields[i] });
             }
         }
-        if (level == 0) {
+        if (level == p_stop_level) {
             break;
         }
         nodes.clear();
@@ -172,6 +180,16 @@ int walk_level(const VoxelBox &p_box, int64_t p_side) {
         level++;
     }
     return level;
+}
+
+void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, int p_level, int p_min_level,
+        std::vector<VoxelPos> &r_out) {
+    if (p_side <= 0 || p_level < 0 || p_level > 62) {
+        return;
+    }
+    for (const WalkCell &c : surface_cells(VoxelBox{ p_lo, p_hi, true }, p_side, p_field, p_min_level, p_level)) {
+        r_out.push_back(c.cell);
+    }
 }
 
 bool cell_site(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, Site &r_site) {

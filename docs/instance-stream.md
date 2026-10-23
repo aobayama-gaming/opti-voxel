@@ -8,9 +8,14 @@
   the profile, and `["stream"]`), or with `--stream=0` (`VoxelTerrain.archetype_stream`, bench and player) placed whole in
   the table at configure by `add_source` (count, records per site, moments per material; the reference, and the tests that
   edit their records by id). Biome features and the shapes gallery stay table records (whole-build blobs). `SourceProfile`
-  reads `SAMPLES` (256) hashed sites at the origin: reach, `lod_end`, k / margin max (times `REACH_SAFETY` 1.25), joins,
-  records per site and the mass lost per LOD (what a far proxy stands for); unit-tested to bound every record of the
-  forest and the scatter (`covers`).
+  reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes`: a site's class is its variant
+  modulo it, the forest's species; class c sampled with hashed variants of class c, one class bit for bit as before): reach, `lod_end`, k / margin max (times
+  `REACH_SAFETY` 1.25), joins and records per site over every sample, the mass lost per LOD per class (`lost_of(class,
+  lod)`: what a far proxy of a site of that class stands for; `blob_reach` takes the widest class's); unit-tested to bound
+  every record of the forest and the scatter (`covers`). A source with a `profile_key` (the forest's: voxel size, species
+  count, type ids) takes its profile from a process-wide registry keyed by it plus the salt, finish, layer params and LOD
+  count: every forest of a voxel size shares one, whatever its zone or density (stats `profile_classes`,
+  `profile_shared`).
   **Keys (`src/scatter_source.*`):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS | SITES | PROXIES,
   lod, tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
   `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. SITES and PROXIES hold a walk and no records
@@ -19,9 +24,17 @@
   `proxy_zone`, from `proxy_level`: an unclipped region's octree level; a far blob tile reads the tiles its `proxy_region`
   meets and sorts their sites in it by cell: the region's walk from that level by construction, `surface_sites`'
   `p_min_level`, unit-tested on the cascade too; the old blobs bit for bit where the zone doesn't clip the region). A
-  PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of the `SITES` tiles inside it that meet the
-  zone (clipped on all 3 axes: up to (2^(L-3))^3 otherwise, mostly air), in the old record pyramid's z y x order (kept as
-  the unit tests' oracle: bit-identical tiles and lists): every record at LOD 0, those listed at L coarser. A LOD with the
+  PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of its box: at LOD 0 those of its `SITES`
+  tile (its one input: the near layers read it), coarser the site tiles of its cube that can hold a site, merged in cell
+  order. Every walk of a source starts at its zone's level (`CellScatter::sites`: `surface_sites`' `p_min_level` =
+  `walk_level(zone, side)`), so a box keeps exactly the sites the zone's walk keeps in it (a box's own level is coarser for
+  a wider box and may prune a cell a finer start keeps); a site tile is a node of that walk (`site_level`: the LOD-0 tile
+  side over the cell side), so the walk stopped there (`CellScatter::site_tiles`, `surface_nodes`: a few coarse readings,
+  in the key's expansion job) names the tiles a coarse tile asks for, and a tile it drops walks to no site. The 1M
+  forest's LOD 6-7 tiles asked 4,096 site tiles each as jobs before (758k jobs, 98 s of workers); one walk of the coarse
+  box per tile was measured slower still (145 s: every LOD re-walked and re-snapped its sites, serially in one job). Every record at LOD 0, those listed at L coarser, grown from the forest's
+  `hull_only_lod` hull-only (Trees, below); the record pyramid (LOD-0 tiles' groups merged in cell order, each filtered at
+  L) is the unit tests' oracle: bit-identical tiles and lists. A LOD with the
   LOD-0 side (1-3 at 5 cm) has no PARTS key: `keys()` emits `part_key_lod(L)`'s and the chunk's `meeting` filters at L.
   A BLOBS tile (8 layer cells, at least a part tile and 2 chunks) builds the layers on the items within
   `MARGIN_CELLS` (`PRUNE_CELLS` + 1) cells and judges its own cells (`MomentLayerParams::judged`): on part layers the
@@ -29,7 +42,8 @@
   2 per cell side, the profile's lost moments: mass within 10%). Part layers are those under `Setup::part_cell_sides`
   source cells: 3 by default (the whole build's blobs), `VoxelTerrain.archetype_stream_part_sides` /
   `--stream_part_sides=N` for the streamed sources (default 1: proxies from the source cell on; the 2 switched layers:
-  mass within 20%, peak within 40%, unit test; 3 = the exact layers). The stream keeps three LRU chains: the evictable
+  mass within 20%, peak within 40%, 45% on a layer losing bark only (layer 4 at 41%: peaks far under the iso), unit test;
+  3 = the exact layers). The stream keeps three LRU chains: the evictable
   keys with records (slots, the entries cap `ENTRIES_MAX`), the walks (`WALKS_MAX` 2^20, `Settings::walks`: ~450 B per
   walk + 56 per site, the 1M zone's ~500k stay resident; `walks_ready`) and those holding input records (not placed,
   count > 0: the inputs cap pops its oldest in O(1), the walks and placed keys never relinked); `computed_by_key` names
