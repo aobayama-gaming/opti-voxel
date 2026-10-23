@@ -8,11 +8,13 @@
 // the batches' timestamps: a batch is estimated as the sum of its chunks' LOD costs plus its list words times the cost of
 // a word; a measured batch scales each of them (the LODs it holds and the words) by measured / estimated, in proportion to
 // its share of the estimate. A LOD never measured takes the nearest measured LOD's cost (DEFAULT_US before any measure);
-// its first measure is what the measured time leaves once the words are paid.
+// its first measure is what the measured time leaves once the words are paid, within MAX_SCALE of the borrowed cost when
+// words are in the batch (a word cost far off would otherwise hand the LOD the whole error).
 //
 // Before its list is built, a chunk only knows a bound of its words (the streamed records of the keys it reads:
-// SDFBase::admit): it is expected to list list_share of it (the batches' list words over their bounds) plus
-// words_per_chunk (what the batches list past that: the scene's own records, all of a list without streamed sources).
+// SDFBase::admit): it is expected to list list_share[lod] of it (its LOD's list words over their bounds: a fine chunk meets
+// a sliver of its part tiles, a coarse one most of them) plus words_per_chunk[lod] (what they list past that: the scene's
+// own records, all of a list without streamed sources).
 struct GPUCostModel {
     static constexpr double DEFAULT_US = 60.0; // a forest batch at 5 cm: ~7 ms for 128 chunks
     // The sdf pass per list word: the 1M forest's batches fit 5,842 + 1.004 x words us (docs/forest-1m-profile.md).
@@ -23,7 +25,11 @@ struct GPUCostModel {
     // A word's cost stays within this factor of WORD_US: batches with the same words per chunk can't tell it from the LODs'.
     static constexpr double WORD_RANGE = 64.0;
 
-    void resize(int p_lods) { us_per_chunk.assign(std::max(p_lods, 0), -1.0); }
+    void resize(int p_lods) {
+        us_per_chunk.assign(std::max(p_lods, 0), -1.0);
+        list_share.assign(std::max(p_lods, 0), 1.0);
+        words_per_chunk.assign(std::max(p_lods, 0), 0.0);
+    }
     int lods() const { return (int)us_per_chunk.size(); }
     bool measured(int p_lod) const { return p_lod >= 0 && p_lod < lods() && us_per_chunk[p_lod] >= 0.0; }
 
@@ -42,7 +48,10 @@ struct GPUCostModel {
         return DEFAULT_US;
     }
     // A chunk not batched yet: its LOD's cost plus the words its bound p_bound (SDFBase::admit) is expected to list.
-    double estimate_chunk(int p_lod, uint64_t p_bound) const { return estimate(p_lod) + (double(p_bound) * list_share + words_per_chunk) * us_per_word; }
+    double estimate_chunk(int p_lod, uint64_t p_bound) const {
+        const bool in = p_lod >= 0 && p_lod < lods();
+        return estimate(p_lod) + (double(p_bound) * (in ? list_share[p_lod] : 1.0) + (in ? words_per_chunk[p_lod] : 0.0)) * us_per_word;
+    }
 
     // p_counts[lod] = the batch's chunks at that LOD; p_words: its list's words.
     double estimate(const std::vector<uint32_t> &p_counts, uint64_t p_words = 0) const {
@@ -62,7 +71,10 @@ struct GPUCostModel {
         // A LOD's first measure replaces the borrowed cost with what the words leave of the measure (at least the chunks'
         // share of it); a measured cost, and the words', only move a damped, bounded step.
         const double chunks = e - words;
-        const double first = chunks > 0.0 ? std::max(p_measured_us - words, p_measured_us * chunks / e) / chunks : 1.0;
+        // With words in the batch, within MAX_SCALE of the borrowed cost: the words' cost may be far off. Without, the
+        // measure is the LODs' alone (a first LOD may well cost 10x its neighbour's).
+        const double leftover = chunks > 0.0 ? std::max(p_measured_us - words, p_measured_us * chunks / e) / chunks : 1.0;
+        const double first = p_words > 0 ? std::clamp(leftover, 1.0 / MAX_SCALE, MAX_SCALE) : leftover;
         const double scale = std::clamp(p_measured_us / e, 1.0 / MAX_SCALE, MAX_SCALE);
         std::vector<double> next = us_per_chunk;
         for (int lod = 0; lod < (int)p_counts.size() && lod < lods(); lod++) {
@@ -76,21 +88,21 @@ struct GPUCostModel {
         us_per_chunk = std::move(next);
         us_per_word = std::clamp(us_per_word * (1.0 + RATE * (words / e) * (scale - 1.0)), WORD_US / WORD_RANGE, WORD_US * WORD_RANGE);
     }
-    // A batch's list: p_words for p_chunks chunks whose bounds summed to p_bound.
-    void observe_list(uint64_t p_bound, uint64_t p_words, uint32_t p_chunks) {
-        if (p_chunks == 0) {
+    // A batch's lists at LOD p_lod: p_words for p_chunks chunks whose bounds summed to p_bound.
+    void observe_list(int p_lod, uint64_t p_bound, uint64_t p_words, uint32_t p_chunks) {
+        if (p_chunks == 0 || p_lod < 0 || p_lod >= lods()) {
             return;
         }
-        const double rest = std::max(0.0, double(p_words) - double(p_bound) * list_share) / double(p_chunks);
-        words_per_chunk += RATE * (rest - words_per_chunk);
+        double &share = list_share[p_lod];
+        const double rest = std::max(0.0, double(p_words) - double(p_bound) * share) / double(p_chunks);
+        words_per_chunk[p_lod] += RATE * (rest - words_per_chunk[p_lod]);
         if (p_bound > 0) {
-            const double share = std::clamp(double(p_words) / double(p_bound), LIST_SHARE_MIN, LIST_SHARE_MAX);
-            list_share += RATE * (share - list_share);
+            share += RATE * (std::clamp(double(p_words) / double(p_bound), LIST_SHARE_MIN, LIST_SHARE_MAX) - share);
         }
     }
 
     std::vector<double> us_per_chunk; // < 0: never measured
     double us_per_word = WORD_US;
-    double list_share = 1.0; // a bound's words that reach the list (1: the bound, until a list says otherwise)
-    double words_per_chunk = 0.0; // a chunk's words past its bound's share
+    std::vector<double> list_share; // per LOD: a bound's words that reach the list (1: the bound, until a list says otherwise)
+    std::vector<double> words_per_chunk; // per LOD: a chunk's words past its bound's share
 };

@@ -708,7 +708,7 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
             continue;
         }
         layers++;
-        const int64_t g = MAX<int64_t>(1, streamed.layer_cell(layer) / ScatterSource::PROXY_PER_CELL);
+        const int64_t g = streamed.proxy_side(layer);
         std::vector<SourceKey> keys, in;
         streamed.keys(fx.zone().lo, fx.zone().hi, layer, keys);
         std::map<SourceKey, SourceContent> walks;
@@ -720,7 +720,7 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
             streamed.inputs(k, in);
             ScatterSource::Inputs raw;
             std::vector<CellSite> gathered;
-            const VoxelBox region = streamed.proxy_region(k, true);
+            const VoxelBox region = streamed.proxy_region(k);
             for (const SourceKey &p : in) {
                 CHECK((p.kind == SourceKey::PROXIES && p.lod == layer));
                 auto it = walks.find(p);
@@ -734,10 +734,10 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
                         [&region](const CellSite &p_s) { return region.contains(p_s.site.base); });
             }
             reads += int64_t(in.size());
-            // The old one-region walk.
+            // The one-region walk from the same level (an unclipped region's: the old walk, where the zone doesn't clip it).
             std::vector<CellSite> walk;
             if (region.valid) {
-                surface_sites(region.lo, region.hi, g, sc.salt ^ ScatterSource::PROXY_SALT, sc.ground, walk, false);
+                surface_sites(region.lo, region.hi, g, sc.salt ^ ScatterSource::PROXY_SALT, sc.ground, walk, false, streamed.proxy_level(layer));
             }
             std::sort(gathered.begin(), gathered.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
             regions_same += same_sites(gathered, walk);

@@ -303,6 +303,9 @@ private:
     // one's list bound.
     void _pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
             HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds);
+    // A batch's lists (their lengths in p_ids, after build_lists) against its chunks' bounds, per LOD, into the cost model;
+    // the bounds' sum.
+    uint64_t _observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids, const HashMap<ChunkId, uint64_t, Vector3i64Hasher> &p_bounds);
     bool _dispatch_audit_batch();
     void _flush_kills();
     void _flush_hidden();

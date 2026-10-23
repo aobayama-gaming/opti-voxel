@@ -24,6 +24,9 @@ namespace GPUFrame {
 
 static constexpr uint32_t CHUNK_PARAM_BYTES = 48;
 static constexpr uint32_t CHUNK_INPUT_BYTES = 32;
+// A ChunkInput's .w words: its instance list's offset (id.w) and length (anchor_hi.w), written by build_lists.
+static constexpr uint32_t CHUNK_LIST_OFFSET_AT = 12;
+static constexpr uint32_t CHUNK_LIST_COUNT_AT = 28;
 
 inline PackedByteArray chunk_param_bytes(const ChunkParam &p_param) {
     using namespace WorldCoord;
@@ -52,11 +55,11 @@ inline void encode_chunk_input(PackedByteArray &r_bytes, int64_t p_index, const 
     r_bytes.encode_u32(base + 0, lo32(p_chunk.x));
     r_bytes.encode_u32(base + 4, lo32(p_chunk.y));
     r_bytes.encode_u32(base + 8, lo32(p_chunk.z));
-    r_bytes.encode_u32(base + 12, 0);
+    r_bytes.encode_u32(base + CHUNK_LIST_OFFSET_AT, 0);
     r_bytes.encode_s32(base + 16, hi32(anchor.x));
     r_bytes.encode_s32(base + 20, hi32(anchor.y));
     r_bytes.encode_s32(base + 24, hi32(anchor.z));
-    r_bytes.encode_s32(base + 28, 0);
+    r_bytes.encode_s32(base + CHUNK_LIST_COUNT_AT, 0);
 }
 
 } // namespace GPUFrame

@@ -161,8 +161,9 @@ def list_words_report(stats):
         return out + ["n/a (no gpu_by_list_words in this run)", ""]
     # GPUCostModel: a word's cost, and the share of the chunks' list bounds (their keys' records) the lists held.
     words, bound = num(mesher, "list_words_total"), num(mesher, "list_bound_total")
-    out += [f"Cost model: {fmt(num(mesher, 'cost_us_per_word'), 3)} us per word, list share {fmt(num(mesher, 'cost_list_share'), 3)}, "
-            f"{fmt(num(mesher, 'cost_words_per_chunk'), 0)} words per chunk past it; "
+    per_lod = lambda key, digits: " / ".join(f"{v:.{digits}f}" for v in mesher.get(key) or []) or "n/a"
+    out += [f"Cost model: {fmt(num(mesher, 'cost_us_per_word'), 3)} us per word; per LOD, list share {per_lod('cost_list_share', 3)}, "
+            f"words per chunk past it {per_lod('cost_words_per_chunk', 0)}; "
             f"words / bounds over the run {fmt(words / bound if words is not None and bound else None, 3)}", ""]
     out += ["| list words | batches | words avg | sdf pass us avg | batch us avg | sdf us per 1k words |",
             "|---|---|---|---|---|---|"]

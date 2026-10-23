@@ -59,14 +59,19 @@ bool cell_site(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const Fi
 // and keeps the node while the plane it gives crosses the node, give or take SITE_SLACK cells plus SITE_BEND node sides
 // (the ground bends away from the plane, and the cascade's field changes faster than its gradient over tens of metres);
 // a kept cell's reading is the one cell_site uses. An empty box costs one evaluation. Without p_snap, the sites stay on
-// the coarse plane (no LOD-0 evaluation: far proxies, which only weigh where the sites are). On the worker pool (not
-// from inside a pool task, unless it holds an InlineParallelFor).
+// the coarse plane (no LOD-0 evaluation: far proxies, which only weigh where the sites are). The walk starts at level
+// p_min_level at least: two boxes walked from the same level (each node at it holding them) test the same nodes over every
+// cell they share, so they keep the same sites there, by construction (a box's own level depends on its extent, and a
+// coarser ancestor may prune a cell a finer start keeps). On the worker pool (not from inside a pool task, unless it holds
+// an InlineParallelFor).
 struct CellSite {
     VoxelPos cell;
     Site site;
 };
 void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, std::vector<CellSite> &r_out,
-        bool p_snap = true);
+        bool p_snap = true, int p_min_level = 0);
+// The level surface_sites starts a box at: the coarsest whose nodes (p_side << level voxels) hold its extent.
+int walk_level(const VoxelBox &p_box, int64_t p_side);
 inline constexpr double SITE_SLACK = 0.25;
 inline constexpr double SITE_BEND = 0.25;
 

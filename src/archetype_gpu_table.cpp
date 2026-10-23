@@ -195,8 +195,8 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
             palettes[i] = base;
         }
         const int64_t input_at = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
-        r_chunk_ids.encode_u32(input_at + 12, uint32_t(words.size()));
-        r_chunk_ids.encode_s32(input_at + 28, int32_t(indices.size()));
+        r_chunk_ids.encode_u32(input_at + GPUFrame::CHUNK_LIST_OFFSET_AT, uint32_t(words.size()));
+        r_chunk_ids.encode_s32(input_at + GPUFrame::CHUNK_LIST_COUNT_AT, int32_t(indices.size()));
         words.insert(words.end(), indices.begin(), indices.end());
         if (r_palettes) {
             (*r_palettes)[i] = std::move(palettes[i]);

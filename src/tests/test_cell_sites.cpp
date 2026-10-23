@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <iterator>
 
 using namespace Archetype;
 
@@ -267,4 +268,45 @@ TEST_CASE("Cell sites: an air tile's walk costs one evaluation, a ground tile's 
     CHECK(tiles[2] > tiles[0] + tiles[1]); // most of a part tile's footprint is air
     CHECK(cost[2] == tiles[2]);
     CHECK(cost[0] > 10 * tiles[0]);
+}
+
+// Tiles walked from a box's level keep, over each tile, the sites the box's own walk keeps: on the cascade ground, where
+// the field is far from its planes (the prune's slack is a heuristic there, so only the shared start makes it exact). The
+// far proxies' tiles rest on it (ScatterSource::proxy_level).
+TEST_CASE("Cell sites: tiles walked from a box's level keep the box walk's sites, on the cascade ground") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    SDFCascade sdf;
+    sdf.configure(param, 18);
+    const FieldFn ground = [&](const VoxelPos &p_v, int p_lod) { return sdf.ground_field(p_v, p_lod); };
+    const int64_t side = 50, tile = 16 * side; // a far layer's proxies: cells of half a layer cell, tiles of 16 of them
+    int64_t sites = 0;
+    for (const int64_t x0 : { int64_t(-3700000), int64_t(250000), int64_t(1200000) }) {
+        const int64_t z0 = x0 / 3 + 40000;
+        const VoxelPos t0(WorldCoord::floor_div(x0, tile) - 1, WorldCoord::floor_div(sdf.ground_y(x0, z0), tile) - 1, WorldCoord::floor_div(z0, tile) - 1);
+        // A region off the tile grid (a blob tile grown by its margin), its walk, and its tiles' walks from its level.
+        const VoxelBox region{ t0 * tile + VoxelPos(tile / 3, tile / 5, tile / 7), (t0 + VoxelPos(3, 3, 3)) * tile - VoxelPos(tile / 4, tile / 6, tile / 9), true };
+        const int level = walk_level(region, side);
+        std::vector<CellSite> whole, tiles;
+        surface_sites(region.lo, region.hi, side, SALT, ground, whole, false, level);
+        for (int64_t z = 0; z < 3; z++) {
+            for (int64_t y = 0; y < 3; y++) {
+                for (int64_t x = 0; x < 3; x++) {
+                    const VoxelPos lo = (t0 + VoxelPos(x, y, z)) * tile;
+                    std::vector<CellSite> one;
+                    surface_sites(lo, lo + VoxelPos(tile - 1, tile - 1, tile - 1), side, SALT, ground, one, false, level);
+                    std::copy_if(one.begin(), one.end(), std::back_inserter(tiles), [&region](const CellSite &p_s) { return region.contains(p_s.site.base); });
+                }
+            }
+        }
+        std::sort(tiles.begin(), tiles.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
+        std::vector<Site> want;
+        for (const CellSite &cs : whole) {
+            want.push_back(cs.site);
+        }
+        CAPTURE(x0);
+        CHECK(same_sites(tiles, want));
+        sites += int64_t(whole.size());
+    }
+    CHECK(sites > 100);
 }

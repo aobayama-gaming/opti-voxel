@@ -743,6 +743,51 @@ TEST_CASE("Instance stream: admit creates a chunk's own keys, a drain task asks 
     CHECK(stat(*stream, "lists_missing") == 0);
 }
 
+// The pending cap counts the keys chunks and the camera ask for: the inputs their expansions ask for (a coarse part tile's
+// site tiles: thousands) don't turn the next chunk's admit into LATER.
+TEST_CASE("Instance stream: an expansion's pending inputs don't count against the pending cap") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ScatterSource &f = *fx.source;
+    int lod = 1;
+    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
+        lod++;
+    }
+    const ChunkId a = fx.chunk(-200, -200, lod), b = fx.chunk(300, 300);
+    CHECK(disjoint(fx, { a, b }));
+    size_t a_reading = 0;
+    const size_t a_own = own_keys(fx, a, &a_reading), b_own = own_keys(fx, b);
+    const size_t a_inputs = keys_and_inputs(fx, a) - a_own;
+    // a's waiting keys and b's fill the cap exactly; a's waiting keys and their inputs alone are past it.
+    InstanceStream::Settings settings;
+    settings.pending = a_reading + b_own;
+    CHECK((a_own <= settings.pending && a_reading + a_inputs > settings.pending));
+    HeldExecutor *held = nullptr;
+    auto executor = std::make_unique<HeldExecutor>();
+    held = executor.get();
+    std::unique_ptr<InstanceStream> stream = fx.stream(settings, std::move(executor));
+    held->held = false;
+    held->steps = int64_t(a_own); // a's keys list their inputs, none of which runs
+    CHECK(stream->admit(a, 0, 1, 1) == InstanceStream::PARKED);
+    stream->poll();
+    CHECK(stat(*stream, "keys_pending_inputs") == int64_t(a_inputs));
+    CHECK(stat(*stream, "keys_pending_asked") == int64_t(a_reading));
+    CHECK(stream->admit(b, 0, 1, 2) == InstanceStream::PARKED);
+    CHECK(stat(*stream, "admit_later_pending") == 0);
+    // Past the cap of asked keys, a chunk needing a new key answers LATER, counted.
+    const ChunkId c = fx.chunk(-300, 300);
+    CHECK(disjoint(fx, { a, b, c }));
+    CHECK(stream->admit(c, 0, 1, 3) == InstanceStream::LATER);
+    CHECK(stat(*stream, "admit_later_pending") == 1);
+    held->steps = -1;
+    stream->poll();
+    stream->poll();
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    stream->take_ready(0, back);
+    CHECK(back.size() == 2);
+    CHECK(stat(*stream, "keys_pending_asked") == 0);
+    CHECK(stat(*stream, "keys_pending_inputs") == 0);
+}
+
 TEST_CASE("Instance stream: an input not landed runs at the best rank of the keys waiting for it") {
     const StreamFixture &fx = StreamFixture::get();
     const ScatterSource &f = *fx.source;

@@ -205,8 +205,8 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
         append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof.reach))), 0, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         // A far layer: the proxy tiles its region meets (each walked once, shared by the blob tiles around it).
-        const int64_t c = layer_cell(p_key.lod);
-        append_tiles(SourceKey::PROXIES, p_key.lod, blob_tile_cells(p_key.lod) * c, proxy_region(p_key, false), proxy_side(p_key.lod), r_out);
+        for_each_tile(proxy_region(p_key), blob_tile_cells(p_key.lod) * layer_cell(p_key.lod),
+                [&](const VoxelPos &p_tile) { r_out.push_back(SourceKey{ set.id, SourceKey::PROXIES, p_key.lod, p_tile }); });
     }
 }
 
@@ -255,17 +255,25 @@ void ScatterSource::walk_tile(const SourceKey &p_key, SourceContent &r_out) cons
         s.sites(tile_box(p_key), r_out.sites);
         return;
     }
-    const int64_t g = proxy_side(p_key.lod);
-    // A proxy outside the zone weighs nothing: the walk stops a cell past it.
-    const VoxelBox region = tile_box(p_key).clipped(s.zone.grown(g));
-    if (region.valid) {
-        surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, r_out.sites, false); // a proxy's base needn't be on the LOD-0 ground
+    // From the regions' level: the sites a tile keeps are those a region walk keeps over it (surface_sites).
+    const VoxelBox box = tile_box(p_key).clipped(proxy_zone(p_key.lod));
+    if (box.valid) {
+        surface_sites(box.lo, box.hi, proxy_side(p_key.lod), s.salt ^ PROXY_SALT, s.ground, r_out.sites, false, // a proxy's base needn't be on the LOD-0 ground
+                proxy_level(p_key.lod));
     }
 }
 
-VoxelBox ScatterSource::proxy_region(const SourceKey &p_key, bool p_clipped) const {
-    const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod) + int64_t(std::ceil(prof.reach)));
-    return p_clipped ? region.clipped(set.scatter.zone.grown(proxy_side(p_key.lod))) : region;
+int64_t ScatterSource::proxy_grow(int p_layer) const {
+    return MARGIN_CELLS * layer_cell(p_layer) + int64_t(std::ceil(prof.reach));
+}
+
+VoxelBox ScatterSource::proxy_region(const SourceKey &p_key) const {
+    return tile_box(p_key).grown(proxy_grow(p_key.lod)).clipped(proxy_zone(p_key.lod));
+}
+
+int ScatterSource::proxy_level(int p_layer) const {
+    // Every tile's region before the zone clips it has the same extent: the level of any of them.
+    return walk_level(tile_box(SourceKey{ set.id, SourceKey::BLOBS, p_layer, VoxelPos() }).grown(proxy_grow(p_layer)), proxy_side(p_layer));
 }
 
 void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
@@ -340,9 +348,9 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
     // cells as the sites do (spreading each over its patch as well made the blobs 1.6-2 times too wide).
     const int64_t g = proxy_side(p_key.lod);
     const CellScatter &s = set.scatter;
-    // The proxy tiles' sites in the region, in cell order: a proxy is a pure function of its cell, so this is the walk of
-    // the region itself (unit test), and the layers sum the items in the same order.
-    const VoxelBox region = proxy_region(p_key, true);
+    // The proxy tiles' sites in the region, in cell order: the tiles walk from the regions' level (proxy_level), so this is
+    // the region's own walk from it (surface_sites), and the layers sum the items in the same order.
+    const VoxelBox region = proxy_region(p_key);
     std::vector<SourceKey> tiles;
     inputs(p_key, tiles);
     std::vector<CellSite> sites;

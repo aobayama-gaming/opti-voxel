@@ -96,8 +96,9 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
         int missing = 0;
         uint64_t words = 0;
         for (const SourceKey &k : keys) {
-            if (pending >= settings.pending && entries.find(k) == entries.end()) {
+            if (pending_asked >= settings.pending && entries.find(k) == entries.end()) {
                 answer = LATER; // its keys asked for so far stay, computed meanwhile
+                stats.later_pending++;
                 break;
             }
             const Entry &e = request(k, true, p_rank);
@@ -219,7 +220,7 @@ void InstanceStream::hand_back(const ParkKey &p_park) {
     }
 }
 
-InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_listed, uint64_t p_rank) {
+InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_listed, uint64_t p_rank, std::vector<Entry *> *r_input_jobs) {
     const auto [it, fresh] = entries.try_emplace(p_key);
     Entry &e = it->second;
     if (fresh) {
@@ -227,10 +228,18 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
         stats.keys_created++;
         e.key = p_key;
         e.rank = p_rank;
-        start(e); // its job lists its inputs first, on a drain task (expand())
+        if (r_input_jobs) {
+            r_input_jobs->push_back(&e); // the expansion queues them together
+        } else {
+            start(e); // its job lists its inputs first, on a drain task (expand())
+        }
     } else {
         e.orphan = false;
         improve(e, p_rank);
+    }
+    if (!r_input_jobs && !e.asked && e.state != Entry::READY) {
+        e.asked = true; // asked for by a chunk or the camera: counts against the pending cap
+        pending_asked++;
     }
     touch(e);
     e.listed = e.listed || p_listed;
@@ -247,8 +256,10 @@ void InstanceStream::expand(Entry &r_entry, std::vector<SourceKey> &&p_inputs) {
     r_entry.inputs.assign(r_entry.input_keys.size(), nullptr);
     r_entry.missing = 0;
     stats.keys_expanded++;
+    thread_local std::vector<Entry *> fresh; // the new inputs: their jobs queued at once (one job_mutex take, one wake)
+    fresh.clear();
     for (uint32_t i = 0; i < r_entry.input_keys.size(); i++) {
-        Entry &input = request(r_entry.input_keys[i], false, r_entry.rank); // try_emplace: r_entry stays valid
+        Entry &input = request(r_entry.input_keys[i], false, r_entry.rank, &fresh); // try_emplace: r_entry stays valid
         if (input.state == Entry::READY) {
             r_entry.inputs[i] = input.content;
         } else {
@@ -257,34 +268,55 @@ void InstanceStream::expand(Entry &r_entry, std::vector<SourceKey> &&p_inputs) {
         }
     }
     if (r_entry.missing == 0) {
-        start(r_entry);
+        fresh.push_back(&r_entry);
     }
+    start(fresh.data(), fresh.size()); // none evicted meanwhile: not READY
 }
 
 void InstanceStream::start(Entry &r_entry) {
-    auto job = std::make_unique<Job>();
-    job->source = &source(r_entry.key);
-    job->key = r_entry.key;
-    job->expand = !r_entry.expanded;
-    job->inputs = std::move(r_entry.inputs);
-    r_entry.inputs.clear();
-    r_entry.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
-    r_entry.state = Entry::RUNNING;
+    Entry *one = &r_entry;
+    start(&one, 1);
+}
+
+void InstanceStream::start(Entry *const *p_entries, size_t p_count) {
+    if (p_count == 0) {
+        return;
+    }
+    bool spawn = false;
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
-        r_entry.job_seq = ++job_seq;
-        jobs.emplace(JobKey(r_entry.rank, r_entry.job_seq), std::move(job));
+        for (size_t i = 0; i < p_count; i++) {
+            Entry &e = *p_entries[i];
+            auto job = std::make_unique<Job>();
+            job->source = &source(e.key);
+            job->key = e.key;
+            job->expand = !e.expanded;
+            job->inputs = std::move(e.inputs);
+            e.inputs.clear();
+            e.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
+            e.state = Entry::RUNNING;
+            e.job_seq = ++job_seq;
+            jobs.emplace(JobKey(e.rank, e.job_seq), std::move(job));
+        }
         stats.jobs_queued_max = MAX(stats.jobs_queued_max, int64_t(jobs.size())); // under the stream's lock too
+        spawn = claim_drain();
     }
-    wake();
+    if (spawn) {
+        executor->run([this] { drain(); });
+    }
+}
+
+bool InstanceStream::claim_drain() {
+    const bool spawn = !jobs.empty() && draining < executor->workers();
+    draining += spawn;
+    return spawn;
 }
 
 void InstanceStream::wake() {
     bool spawn = false;
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
-        spawn = !jobs.empty() && draining < executor->workers();
-        draining += spawn;
+        spawn = claim_drain();
     }
     if (spawn) {
         executor->run([this] { drain(); });
@@ -316,21 +348,22 @@ void InstanceStream::improve(Entry &r_entry, uint64_t p_rank) {
     stats.jobs_reranked++;
 }
 
-void InstanceStream::drop_unneeded(Entry &r_entry) {
+bool InstanceStream::drop_unneeded(Entry &r_entry) {
     // Asked for this frame (the keys of an admit answered LATER, the camera's queries): kept, computed meanwhile.
     if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty() || r_entry.used == frame) {
-        return;
+        return false;
     }
     if (r_entry.state == Entry::RUNNING) {
         const std::lock_guard<std::mutex> lock(job_mutex);
         if (jobs.erase(JobKey(r_entry.rank, r_entry.job_seq)) == 0) {
             r_entry.orphan = true; // a drain task took it: it lands into its grace (listing its inputs: dropped then)
-            return;
+            return false;
         }
         stats.jobs_dropped++;
     }
     const SourceKey key = r_entry.key;
     const std::vector<SourceKey> inputs = std::move(r_entry.input_keys); // WAITING: its inputs, landed or not
+    pending_asked -= r_entry.asked;
     entries.erase(key); // never on an LRU list (not READY)
     pending--;
     stats.keys_dropped++;
@@ -343,6 +376,7 @@ void InstanceStream::drop_unneeded(Entry &r_entry) {
         deps.erase(std::remove(deps.begin(), deps.end(), std::make_pair(key, i)), deps.end());
         drop_unneeded(it->second);
     }
+    return true;
 }
 
 void InstanceStream::drain() {
@@ -396,10 +430,11 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     if (p_job->expand && !p_job->input_keys.empty()) {
         stats.compute_usec += int64_t(p_job->usec); // the workers' time
         stats.expand_usec += int64_t(p_job->usec); // of which listing inputs (a coarse part tile's walks its subtree)
-        if (e.orphan && e.pins == 0 && e.dependents.empty() && e.used != frame) {
-            e.state = Entry::WAITING; // dropped while it listed them, and still unneeded: erased, no input asked for
-            drop_unneeded(e);
-        } else {
+        // Dropped while it listed them (an orphan): erased if still unneeded, no input asked for.
+        if (e.orphan) {
+            e.state = Entry::WAITING;
+        }
+        if (!e.orphan || !drop_unneeded(e)) {
             expand(e, std::move(p_job->input_keys));
         }
         stats.land_usec += now_usec() - t0;
@@ -414,6 +449,8 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     e.count = uint32_t(e.content->records.size());
     e.state = Entry::READY;
     pending--;
+    pending_asked -= e.asked;
+    e.asked = false;
     walks_ready += e.key.walk();
     input_records += e.count;
     std::vector<std::pair<SourceKey, uint32_t>> dependents;
@@ -725,73 +762,6 @@ void InstanceStream::uploads_since(uint64_t p_seq, std::vector<Upload> &r_out) c
             upload(it->second);
         }
     }
-}
-
-Dictionary InstanceStream::get_stats() const {
-    const std::shared_lock<std::shared_mutex> lock(mutex);
-    int64_t placed = 0, ready = 0, running = 0, waiting = 0;
-    for (const std::pair<const SourceKey, Entry> &kv : entries) {
-        placed += kv.second.placed;
-        ready += kv.second.state == Entry::READY;
-        running += kv.second.state == Entry::RUNNING;
-        waiting += kv.second.state == Entry::WAITING;
-    }
-    Dictionary d;
-    d["keys"] = int64_t(entries.size());
-    d["keys_ready"] = ready;
-    d["keys_placed"] = placed;
-    d["keys_running"] = running;
-    d["keys_waiting"] = waiting;
-    d["chunks_parked"] = int64_t(parked.size());
-    d["admit_ready"] = stats.admitted[READY];
-    d["admit_parked"] = stats.admitted[PARKED];
-    d["admit_later"] = stats.admitted[LATER];
-    d["admit_ms_total"] = double(stats.admit_usec) / 1000.0;
-    d["admit_wait_ms_total"] = double(stats.admit_wait_usec) / 1000.0;
-    d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
-    d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
-    d["evict_ms_total"] = double(stats.evict_usec) / 1000.0;
-    d["land_ms_total"] = double(stats.land_usec) / 1000.0;
-    d["keys_created"] = stats.keys_created;
-    d["admit_keys_created"] = stats.admit_keys_created;
-    d["admit_keys_created_max"] = stats.admit_keys_created_max;
-    d["keys_expanded"] = stats.keys_expanded;
-    d["expand_ms_total"] = double(stats.expand_usec) / 1000.0;
-    d["jobs_queued_max"] = stats.jobs_queued_max;
-    d["jobs_reranked"] = stats.jobs_reranked;
-    d["stale_handed_back"] = stats.stale_handed_back;
-    d["keys_dropped"] = stats.keys_dropped;
-    d["jobs_dropped"] = stats.jobs_dropped;
-    d["park_frames"] = stats.park_frames.to_dict();
-    d["workers"] = int64_t(executor->workers());
-    d["computed"] = stats.computed;
-    d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
-    Dictionary by;
-    for (int kind = 0; kind < SourceKey::KIND_COUNT; kind++) {
-        for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
-            const int64_t n = stats.computed_by[kind][lod];
-            if (n > 0) {
-                Dictionary k;
-                k["count"] = n;
-                k["ms_avg"] = double(stats.usec_by[kind][lod]) / 1000.0 / double(n);
-                k["evicted"] = stats.evicted_by[kind][lod];
-                by[vformat("%s %d", SourceKey::kind_name(kind), lod)] = k;
-            }
-        }
-    }
-    d["computed_by_key"] = by;
-    d["placed"] = stats.placed;
-    d["evicted"] = stats.evicted;
-    d["slots_used"] = slots_used();
-    d["slots_peak"] = stats.slots_peak;
-    d["slots_capacity"] = int64_t(settings.slot_capacity);
-    d["slots_full"] = stats.slots_full;
-    d["input_records"] = input_records;
-    d["walks_ready"] = int64_t(walks_ready);
-    d["lists_missing"] = lists_missing.load();
-    d["point_computed"] = point_computed.load();
-    d["view_missing"] = view_missing;
-    return d;
 }
 
 } // namespace Archetype

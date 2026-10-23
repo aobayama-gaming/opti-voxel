@@ -74,9 +74,11 @@ public:
     // per site (CellSite). The 1M forest (5 x 5 km at 5 cm, 40 m site tiles): 125^2 columns, the LOD-6/7 part tiles asking
     // 16-32 site tiles tall per column, ~500k walks (225 MB) and its 1M sites (56 MB); the cap bounds them to ~500 MB.
     static constexpr size_t WALKS_MAX = size_t(1) << 20;
-    // Keys asked for and not landed at most: past it admit() answers LATER for a chunk needing a new key, so the meshers
-    // stop popping (else a frame parks the whole queue: millions of keys waiting). 2^12 when the jobs ran in the order
-    // asked (the ones in view behind the rest); ranked, the view's run first whatever is queued behind them.
+    // Keys asked for (by a chunk or the camera) and not landed at most: past it admit() answers LATER for a chunk needing a
+    // new key, so the meshers stop popping (else a frame parks the whole queue: millions of keys waiting). The inputs an
+    // expansion asks for don't count: they need no slot and never answer LATER, and each asked key brings its subtree at
+    // most. 2^12 when the jobs ran in the order asked (the ones in view behind the rest); ranked, the view's run first
+    // whatever is queued behind them.
     static constexpr size_t PENDING_MAX = size_t(1) << 14;
     static constexpr size_t LOG_MAX = size_t(1) << 16; // placements uploads_since() can replay; a reader further behind gets them all
 
@@ -196,6 +198,7 @@ private:
         int missing = 0; // WAITING: its inputs not landed
         bool expanded = false; // its inputs listed (on a drain task) and asked for
         bool orphan = false; // RUNNING: drop_unneeded() found its job taken (asked for again: cleared)
+        bool asked = false; // not READY, asked for by a chunk or the camera: counted in pending_asked
         std::vector<std::pair<SourceKey, uint32_t>> dependents; // not READY: the keys waiting for it (and its input index)
         std::vector<std::pair<ParkKey, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
         uint32_t slot = 0;
@@ -241,6 +244,7 @@ private:
     Chain chain_inputs{ &Entry::lru_inputs }; // the entries evicted for input records
     uint64_t frame = 0;
     size_t pending = 0; // entries not READY (never evicted)
+    size_t pending_asked = 0; // of pending: asked for by a chunk or the camera (Settings::pending caps them)
     size_t walks_ready = 0; // walk entries READY
 
     std::mutex job_mutex; // the drain tasks' queues
@@ -272,6 +276,7 @@ private:
         int64_t admit_keys_created_max = 0; // by one admit()
         int64_t keys_expanded = 0; // keys whose first job listed inputs (asked for when it landed)
         int64_t expand_usec = 0; // of compute_usec: those jobs (listing the inputs)
+        int64_t later_pending = 0; // admits answered LATER at the pending cap
         int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
         int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank
         int64_t stale_handed_back = 0; // parked chunks set_tag() forgot (a newer scan doesn't want them)
@@ -298,19 +303,24 @@ private:
     // Every source's keys of the chunk, in key order.
     void chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &r_out) const;
     // The key's entry, asked for now at p_rank (created if new, its job queued: a drain task lists its inputs; placed if
-    // listed and ready).
-    Entry &request(const SourceKey &p_key, bool p_listed, uint64_t p_rank);
+    // listed and ready). r_input_jobs: an expansion's input (outside the pending cap), a new one's job left to the caller
+    // (appended).
+    Entry &request(const SourceKey &p_key, bool p_listed, uint64_t p_rank, std::vector<Entry *> *r_input_jobs = nullptr);
     // A key's first job listed inputs: asked for at its rank, it waits for them (or runs again at once if all are ready).
     void expand(Entry &r_entry, std::vector<SourceKey> &&p_inputs);
     void start(Entry &r_entry);
+    // Queues the entries' jobs under one job_mutex take, then wakes a drain task if needed.
+    void start(Entry *const *p_entries, size_t p_count);
+    // Whether to run one more drain task (jobs queued, fewer than the executor's workers draining); job_mutex held.
+    bool claim_drain();
     // Runs one more drain task if jobs are queued and fewer than the executor's workers drain them.
     void wake();
     // Not READY: its rank lowered to p_rank if better; RUNNING, its job moved if still queued (keeping its order among
     // equal ranks), WAITING, its inputs not landed too.
     void improve(Entry &r_entry, uint64_t p_rank);
-    // Not READY, unpinned, no key waiting for it, not asked for this frame, its job not started: erased, and its inputs
-    // then left alone too.
-    void drop_unneeded(Entry &r_entry);
+    // Not READY, unpinned, no key waiting for it, not asked for this frame, its job not started: erased (true), and its
+    // inputs then left alone too.
+    bool drop_unneeded(Entry &r_entry);
     // A parked chunk's keys unpinned (and forgotten: unpinned once).
     void release_pins(Parked &r_parked);
     void drain();

@@ -125,16 +125,10 @@ struct WalkCell {
 };
 
 // The cells (of p_side voxels) meeting p_box that the surface may cross, in cell order: an absolute octree walk from the
-// coarsest level whose node holds the box, keeping a node while the coarse plane at its centre crosses it (plane_meets).
-std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field) {
-    int64_t extent = 1;
-    for (int a = 0; a < 3; a++) {
-        extent = MAX(extent, p_box.hi[a] - p_box.lo[a] + 1);
-    }
-    int level = 0; // p_side << level >= extent, without overflowing
-    while (level < 62 && ((extent - 1) >> level) >= p_side) {
-        level++;
-    }
+// coarsest level whose node holds the box (at least p_min_level), keeping a node while the coarse plane at its centre
+// crosses it (plane_meets).
+std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field, int p_min_level) {
+    int level = MAX(walk_level(p_box, p_side), MIN(p_min_level, 62));
     std::vector<VoxelPos> nodes = nodes_meeting(p_box, p_side << level);
     std::vector<WalkCell> kept;
     std::vector<ExactNoise::Float4> fields;
@@ -168,17 +162,29 @@ std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const
 
 } // namespace
 
+int walk_level(const VoxelBox &p_box, int64_t p_side) {
+    int64_t extent = 1;
+    for (int a = 0; a < 3; a++) {
+        extent = MAX(extent, p_box.hi[a] - p_box.lo[a] + 1);
+    }
+    int level = 0; // p_side << level >= extent, without overflowing
+    while (level < 62 && ((extent - 1) >> level) >= p_side) {
+        level++;
+    }
+    return level;
+}
+
 bool cell_site(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, Site &r_site) {
     return site_of(p_cell, p_side, p_salt, centre_field(p_cell, p_side, p_side, p_field), p_field, true, r_site);
 }
 
 void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, std::vector<CellSite> &r_out,
-        bool p_snap) {
+        bool p_snap, int p_min_level) {
     if (p_side <= 0) {
         return;
     }
     const VoxelBox box{ p_lo, p_hi, true };
-    const std::vector<WalkCell> cells = surface_cells(box, p_side, p_field);
+    const std::vector<WalkCell> cells = surface_cells(box, p_side, p_field, p_min_level);
     std::vector<Site> found(cells.size());
     std::vector<uint8_t> ok(cells.size(), 0);
     parallel_for(uint32_t(cells.size()), "surface_sites",

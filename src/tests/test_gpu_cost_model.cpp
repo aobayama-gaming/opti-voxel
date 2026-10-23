@@ -88,25 +88,51 @@ TEST_CASE("GPUCostModel: a chunk's word bound counts at the share the lists reac
     m.resize(1);
     CHECK(m.estimate_chunk(0, 1000) == doctest::Approx(GPUCostModel::DEFAULT_US + 1000.0)); // the bound until a list says otherwise
     for (int i = 0; i < 60; i++) {
-        m.observe_list(100000, 10000, 10); // the lists hold a tenth of the bounds
+        m.observe_list(0, 100000, 10000, 10); // the lists hold a tenth of the bounds
     }
-    CHECK(m.list_share == doctest::Approx(0.1).epsilon(0.01));
-    CHECK(m.words_per_chunk == doctest::Approx(0.0).epsilon(0.01));
+    CHECK(m.list_share[0] == doctest::Approx(0.1).epsilon(0.01));
+    CHECK(m.words_per_chunk[0] == doctest::Approx(0.0).epsilon(0.01));
     CHECK(m.estimate_chunk(0, 1000) == doctest::Approx(GPUCostModel::DEFAULT_US + 100.0).epsilon(0.01));
     for (int i = 0; i < 200; i++) {
-        m.observe_list(1, 1000000, 1); // a bound far below the list: the share bounded
+        m.observe_list(0, 1, 1000000, 1); // a bound far below the list: the share bounded
     }
-    CHECK(m.list_share <= GPUCostModel::LIST_SHARE_MAX);
+    CHECK(m.list_share[0] <= GPUCostModel::LIST_SHARE_MAX);
 
     // No streamed source: every chunk's bound is 0, its words the lists' mean.
     GPUCostModel s;
     s.resize(1);
     for (int i = 0; i < 60; i++) {
-        s.observe_list(0, 5000, 10);
+        s.observe_list(0, 0, 5000, 10);
     }
-    CHECK(s.list_share == 1.0);
-    CHECK(s.words_per_chunk == doctest::Approx(500.0).epsilon(0.01));
+    CHECK(s.list_share[0] == 1.0);
+    CHECK(s.words_per_chunk[0] == doctest::Approx(500.0).epsilon(0.01));
     CHECK(s.estimate_chunk(0, 0) == doctest::Approx(GPUCostModel::DEFAULT_US + 500.0).epsilon(0.01));
-    s.observe_list(0, 500, 0); // no chunk: ignored
-    CHECK(s.words_per_chunk == doctest::Approx(500.0).epsilon(0.01));
+    s.observe_list(0, 0, 500, 0); // no chunk: ignored
+    CHECK(s.words_per_chunk[0] == doctest::Approx(500.0).epsilon(0.01));
+}
+
+TEST_CASE("GPUCostModel: a LOD's first measure stays within MAX_SCALE of its borrowed cost when the word cost is off") {
+    for (const double seed : { 4.0, 64.0 }) {
+        CAPTURE(seed);
+        GPUCostModel m;
+        m.resize(4);
+        m.us_per_word = seed * GPUCostModel::WORD_US; // the true word cost is WORD_US
+        m.observe({ 0, 0, 0, 10 }, 10 * 100.0 + 5000 * GPUCostModel::WORD_US, 5000); // the true chunk cost is 100 us
+        CHECK(m.measured(3));
+        CHECK(m.estimate(3) >= GPUCostModel::DEFAULT_US / GPUCostModel::MAX_SCALE - 1e-9);
+        CHECK(m.estimate(3) <= GPUCostModel::DEFAULT_US * GPUCostModel::MAX_SCALE + 1e-9);
+    }
+}
+
+TEST_CASE("GPUCostModel: each LOD learns its own share of a bound") {
+    GPUCostModel m;
+    m.resize(6);
+    for (int i = 0; i < 60; i++) {
+        m.observe_list(0, 100000, 5000, 10); // a fine chunk meets a sliver of its tiles
+        m.observe_list(5, 100000, 80000, 10); // a coarse one most of them
+    }
+    CHECK(m.list_share[0] == doctest::Approx(0.05).epsilon(0.01));
+    CHECK(m.list_share[5] == doctest::Approx(0.8).epsilon(0.01));
+    CHECK(m.list_share[3] == 1.0); // never seen: the bound
+    CHECK(m.estimate_chunk(5, 1000) - m.estimate(5) == doctest::Approx(800.0 * m.us_per_word).epsilon(0.01));
 }

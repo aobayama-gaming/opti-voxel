@@ -756,6 +756,27 @@ void GPUDirectMesher::_pop_batch(double p_budget_us, std::vector<ChunkId> &r_chu
     }
 }
 
+uint64_t GPUDirectMesher::_observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids,
+        const HashMap<ChunkId, uint64_t, Vector3i64Hasher> &p_bounds) {
+    std::vector<uint64_t> bounds(lod_count, 0), words(lod_count, 0);
+    std::vector<uint32_t> counts(lod_count, 0);
+    uint64_t total = 0;
+    for (size_t i = 0; i < p_chunks.size(); i++) {
+        const uint64_t bound = p_bounds.has(p_chunks[i]) ? p_bounds[p_chunks[i]] : 0;
+        total += bound;
+        const int lod = ChunkMath::get_lod(p_chunks[i]);
+        if (lod >= 0 && lod < lod_count) {
+            counts[lod]++;
+            bounds[lod] += bound;
+            words[lod] += uint64_t(MAX(0, p_ids.decode_s32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_COUNT_AT)));
+        }
+    }
+    for (int lod = 0; lod < lod_count; lod++) {
+        cost_model.observe_list(lod, bounds[lod], words[lod], counts[lod]);
+    }
+    return total;
+}
+
 bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     std::vector<ChunkId> chunks;
     chunks.reserve(settings.batch_size);
@@ -790,7 +811,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch.dispatch_frame = frame;
     std::vector<uint32_t> lod_counts(lod_count, 0);
     const uint32_t list_words = uint32_t(list.size() / 4);
-    uint64_t list_bound = 0;
+    const uint64_t list_bound = _observe_lists(chunks, ids, bounds);
     const Vector2i lods = ChunkMath::lod_range(chunks);
     AABB box = _chunk_aabb(chunks[0]);
     for (const ChunkId &c : chunks) {
@@ -798,11 +819,9 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
         if (lod >= 0 && lod < lod_count) {
             lod_counts[lod]++;
         }
-        list_bound += bounds[c];
         box.merge_with(_chunk_aabb(c));
         working_generation.insert(c);
     }
-    cost_model.observe_list(list_bound, list_words, uint32_t(chunks.size()));
     r_budget_us -= cost_model.estimate(lod_counts, list_words);
     const PackedByteArray palette_batch = palettes.place_batch(chunk_palettes, batch.palettes);
 
@@ -1346,8 +1365,13 @@ Dictionary GPUDirectMesher::get_stats() {
     d["cost_us_per_chunk"] = cost_us;
     // A list word's cost (us), the share of the chunks' list bounds (their keys' records) their lists hold, and their words past it.
     d["cost_us_per_word"] = cost_model.us_per_word;
-    d["cost_list_share"] = cost_model.list_share;
-    d["cost_words_per_chunk"] = cost_model.words_per_chunk;
+    PackedFloat64Array list_share, words_per_chunk;
+    for (int lod = 0; lod < cost_model.lods(); lod++) {
+        list_share.push_back(cost_model.list_share[lod]);
+        words_per_chunk.push_back(cost_model.words_per_chunk[lod]);
+    }
+    d["cost_list_share"] = list_share; // per LOD
+    d["cost_words_per_chunk"] = words_per_chunk;
     d["list_bound_total"] = (int64_t)stats.list_bound_total;
     d["chunks_meshed"] = (int64_t)stats.chunks_meshed;
     d["quads_emitted"] = (int64_t)stats.quads_emitted;

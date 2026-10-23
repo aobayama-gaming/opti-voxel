@@ -98,8 +98,9 @@ to every change, and a reviewer may reject a PR on any of them.
   a batch short. The estimate is `GPUCostModel` (`src/gpu_cost_model.hpp`): µs per chunk per LOD plus µs per list
   word (seeded 1.0, the 1M fit), corrected from each batch's timestamps (measured / estimated ~1.05 on the forest; a
   LOD-3 forest chunk costs 200-300 µs, a treeless one ~15). Before its list a chunk's words are its keys' records
-  (`SDFBase::admit`'s bound, through `ChunkGate::next`) times `list_share` (the lists' words over their bounds) plus
-  `words_per_chunk` (the rest: the scene's records, every word without a stream); stats `cost_us_per_word`,
+  (`SDFBase::admit`'s bound, through `ChunkGate::next`) times `list_share[lod]` (its LOD's list words over their bounds)
+  plus `words_per_chunk[lod]` (the rest: the scene's records, every word without a stream); a LOD's first measure is
+  clamped to `MAX_SCALE` when the batch has words; stats `cost_us_per_word`,
   `cost_list_share`, `cost_words_per_chunk`, `list_bound_total`. Forest fly at error 2: frame p50 27.8 -> 11.9 ms, at the price of a slower first load
   (3.0 -> 5.0 s) and merges lagging while moving (coarse parents queue behind the fine chunks: 2x the chunks
   loaded mid-fly). Ordering the queue by displayed error instead (the loaded ancestor's 2^lod / distance, merges
@@ -335,8 +336,10 @@ to every change, and a reviewer may reject a PR on any of them.
   lod, tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
   `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. SITES and PROXIES hold a walk and no records
   (`SourceContent::sites`, never listed, kept resident: the walk is ~80% of a part tile's CPU): `SITES` (lod 0) on the
-  LOD-0 part-tile grid (8 source cells), `PROXIES L` on far layer L's blob grid (the proxies' walk of its own tile; a far blob
-tile reads those its region meets, `proxy_region`, and sorts their sites in it by cell: the region's one walk, unit test). A
+  LOD-0 part-tile grid (8 source cells), `PROXIES L` on far layer L's blob grid (the proxies' walk of its own tile in
+  `proxy_zone`, from `proxy_level`: an unclipped region's octree level; a far blob tile reads the tiles its `proxy_region`
+  meets and sorts their sites in it by cell: the region's walk from that level by construction, `surface_sites`'
+  `p_min_level`, unit-tested on the cascade too; the old blobs bit for bit where the zone doesn't clip the region). A
   PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of the `SITES` tiles inside it that meet the
   zone (clipped on all 3 axes: up to (2^(L-3))^3 otherwise, mostly air), in the old record pyramid's z y x order (kept as
   the unit tests' oracle: bit-identical tiles and lists): every record at LOD 0, those listed at L coarser. A LOD with the
@@ -373,7 +376,9 @@ tile reads those its region meets, `proxy_region`, and sorts their sites in it b
   (`stale_handed_back`), and the keys then needed by no pin or dependent and not asked for this frame are erased if their
   job hasn't started (`keys_dropped`, of which `jobs_dropped` were queued; a dropped waiting key leaves its inputs'
   `dependents`).
-  `PENDING_MAX` 2^14 (2^12 under the FIFO). `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
+  `PENDING_MAX` 2^14 (2^12 under the FIFO) caps the keys chunks and the camera ask for (`keys_pending_asked`), not the
+  inputs expansions ask for (`keys_pending_inputs`); `admit_later_pending` counts the LATER answers at the cap. An
+  expansion queues its new inputs' jobs under one `job_mutex` take. `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
   requeue loop; `begin_frame(cap)` closes a frame at a LATER (`admit_later`) or at `cap` PARKED / LATER answers
   (`admit_capped_frames`; READY ones ask for no key; direct: `max_admits_per_frame`, 0 = 4 x batch_size). Unit tests: park / return order, pins and grace,
   slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag` (kept, forgotten, dropped jobs), the gate's cap.
