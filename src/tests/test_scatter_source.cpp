@@ -67,7 +67,7 @@ struct SourceFixture {
         s.max_extent = int64_t(1) << 29; // SDFTable::max_instance_extent() at 15 LODs and up
         s.part_cell_sides = p_part_cell_sides;
         CellScatter &c = s.scatter;
-        set_forest_scatter(c, VOXEL, *lib, s.finish, types); // SDFTable::forest_source's
+        set_forest_scatter(c, VOXEL, *lib, s.finish, types, s.max_extent); // SDFTable::forest_source's
         if (p_species >= 0) {
             const std::function<void(const Site &, const UpAxis &, int, std::vector<TableRecord> &)> mixed = c.generate;
             c.generate = [mixed, p_species](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
@@ -76,7 +76,6 @@ struct SourceFixture {
                 mixed(one, p_up, p_lod, r_out);
             };
             c.classes = 1;
-            c.class_of = nullptr;
             c.profile_key.clear();
         }
         c.side = 100;
@@ -373,10 +372,10 @@ static void check_proxy_layers(const SourceFixture &fx, bool p_gate = true) {
                 " blobs, ", int64_t(whole.size()), " from the records; mean peak ", proxy_amp, " vs ", truth_amp);
         // The layers the streamed sources switch to proxies (a cell of 1-3 source cells: few sites per proxy) are looser: on
         // this forest, with the per-species moments, bark mass 0.97 and 1.15, peak 0.59 and 0.97 at layers 4 and 5 (0.62 and
-        // 0.78 with one mean tree). Layer 4 only loses bark, its mean peak (0.015 of 0.025) far under the material iso (0.125):
-        // neither side draws there, hence its 0.45.
+        // 0.78 with one mean tree). A switched layer losing bark only (layer 4: thin trunks, mean peak 0.015 of 0.025, far
+        // under the material iso 0.125, so neither side draws there) gets 0.45.
         const bool switched = f.layer_cell(layer) < ScatterSource::PART_CELL_SIDES * f.setup().scatter.side;
-        const double mass_tol = switched ? 0.2 : 0.1, peak_tol = switched ? 0.45 : 0.25;
+        const double mass_tol = switched ? 0.2 : 0.1, peak_tol = switched ? (truth[1] == 0.0 ? 0.45 : 0.4) : 0.25;
         if (!p_gate) {
             continue;
         }
@@ -427,14 +426,13 @@ TEST_CASE("Scatter source: one profile per tree set, per-species far moments") {
     ScatterSource::Setup coarse = other;
     coarse.blob_type = lib->add(make_moment_blob_type()); // the fixture's library order
     coarse.library = lib;
-    set_forest_scatter(coarse.scatter, 0.1, *lib, coarse.finish, types);
+    set_forest_scatter(coarse.scatter, 0.1, *lib, coarse.finish, types, coarse.max_extent);
     const ScatterSource c(coarse);
     CHECK(&c.profile() != &f.profile());
 
     // The mixed mean: one class, hashed variants (the profile before classes).
     ScatterSource::Setup mixed = f.setup();
     mixed.scatter.classes = 1;
-    mixed.scatter.class_of = nullptr;
     mixed.scatter.profile_key.clear();
     const ScatterSource m(mixed);
     CHECK_FALSE(m.profile_shared());

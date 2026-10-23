@@ -1,9 +1,10 @@
 // Trees as archetype-table instances (tree_archetype.hpp).
 #include "tree_archetype.hpp"
 
+#include <godot_cpp/core/error_macros.hpp>
+
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <queue>
 #include <string>
 
@@ -494,64 +495,71 @@ void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxi
     Grower(p_species, p_base, p_seed, p_voxel, p_types, r_out, r_stems, Vec{ p_up[0], p_up[1], p_up[2] }, p_hull_only).grow();
 }
 
-void tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeTypes &p_types, std::vector<TableRecord> &r_out) {
+TreeBounds tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeTypes &p_types) {
     const TreeSpecies &s = p_species;
+    TreeBounds b;
     const double v = SCALE_MAX / p_voxel; // metres to voxels at the largest scale
     // The trunk's base segment: radius v(trunk_radius) with the flare's k; its height at most the trunk's length (v(height)
     // + r0, the sinking) plus a voxel at each snapped end. Every other segment is thinner (the taper, the pipe model) with
     // a smaller k (the fork smooth of a thinner child, or none).
     const double r0 = v * s.trunk_radius * TREE_BOUND_PAD;
-    r_out.push_back(branch_record(p_types, v * s.height + r0 + 2.0, r0, 0.0, s.flare * r0));
-    if (s.limbs > 0) {
+    b.trunk = branch_record(p_types, v * s.height + r0 + 2.0, r0, 0.0, s.flare * r0);
+    b.has_clump = s.limbs > 0;
+    if (b.has_clump) {
         // A leaf stem's clump: v(crown_radius * clump_ratio) times its hashed 0.8-1.2 (grow_stem).
         const double r = v * s.crown_radius * s.clump_ratio * 1.2 * TREE_BOUND_PAD;
-        r_out.push_back(crown_record(p_types, r, s.crown_smooth * r, 0u));
+        b.clump = crown_record(p_types, r, s.crown_smooth * r, 0u);
     }
     const double taper = MAX(1.0, s.hull_taper);
     if (s.cone_tiers > 0) {
         // A tier: v(crown_radius) times the taper and its hashed 0.9-1.1, twice the tiers' spacing high (add_tiers).
         const double r = v * s.crown_radius * taper * 1.1 * TREE_BOUND_PAD;
-        r_out.push_back(cone_record(p_types, r, 2.0 * v * s.height * (1.0 - s.crown_base) / double(s.cone_tiers + 1), s.crown_smooth * r, 0u));
+        b.hull = cone_record(p_types, r, 2.0 * v * s.height * (1.0 - s.crown_base) / double(s.cone_tiers + 1), s.crown_smooth * r, 0u);
     } else {
         const double r = v * s.crown_radius * s.hull_ratio * taper * TREE_BOUND_PAD;
-        r_out.push_back(crown_record(p_types, r, s.crown_smooth * r, 0u));
+        b.hull = crown_record(p_types, r, s.crown_smooth * r, 0u);
     }
+    return b;
 }
 
 int tree_hull_only_lod(const TreeSpecies &p_species, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types) {
-    std::vector<TableRecord> bounds;
-    tree_bounds(p_species, p_voxel, p_types, bounds);
-    int lod = 0;
-    for (size_t i = 0; i < bounds.size() && i < 2; i++) { // the trunk and the clump (the hull is what stays)
-        if (i == 1 && bounds[i].def != uint8_t(p_types.crown)) {
-            break; // no clump: [1] is the hull
-        }
-        finish_table_record(p_library, p_finish, bounds[i]);
-        lod = MAX(lod, int(bounds[i].max_lod));
+    TreeBounds b = tree_bounds(p_species, p_voxel, p_types);
+    finish_table_record(p_library, p_finish, b.trunk);
+    int lod = int(b.trunk.max_lod);
+    if (b.has_clump) {
+        finish_table_record(p_library, p_finish, b.clump);
+        lod = MAX(lod, int(b.clump.max_lod));
     }
-    return lod;
+    return lod; // the hull is what stays
 }
 
 int tree_species_of(uint32_t p_variant) {
     return int(p_variant % uint32_t(tree_species().size()));
 }
 
-void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types) {
+void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types,
+        int64_t p_max_extent) {
     std::vector<int> hull_lod;
     for (const TreeSpecies &species : tree_species()) {
-        hull_lod.push_back(tree_hull_only_lod(species, p_voxel, p_library, p_finish, p_types));
+        const TreeBounds b = tree_bounds(species, p_voxel, p_types);
+        bool fits = true;
+        for (const TableRecord *rec : { &b.trunk, &b.clump, &b.hull }) {
+            const bool counts = rec != &b.clump || b.has_clump;
+            const String error = counts ? record_fit_error(p_library[rec->def], *rec, p_max_extent) : String();
+            if (!error.is_empty()) {
+                ERR_PRINT("set_forest_scatter: a tree of a species may not fit the table, it never grows hull-only: " + error);
+                fits = false;
+            }
+        }
+        hull_lod.push_back(fits ? tree_hull_only_lod(species, p_voxel, p_library, p_finish, p_types) : int(TableRecord::NEVER_DROPPED));
     }
     r_scatter.salt = TREE_SITE_SALT;
     r_scatter.generate = [p_types, p_voxel, hull_lod](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
         const int species = tree_species_of(p_site.variant);
         grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, p_voxel, p_types, r_out, nullptr, p_lod >= hull_lod[species]);
     };
-    r_scatter.classes = uint32_t(tree_species().size());
-    r_scatter.class_of = [](uint32_t p_variant) { return uint32_t(tree_species_of(p_variant)); };
-    uint64_t voxel_bits = 0;
-    std::memcpy(&voxel_bits, &p_voxel, sizeof(voxel_bits));
-    r_scatter.profile_key = "trees:" + std::to_string(voxel_bits) + ":" + std::to_string(tree_species().size()) + ":" + std::to_string(p_types.branch) + "," +
-            std::to_string(p_types.crown) + "," + std::to_string(p_types.cone);
+    r_scatter.classes = uint32_t(tree_species().size()); // class_index = tree_species_of
+    r_scatter.profile_key = "trees:" + key_bits(p_voxel) + key_bits(tree_species().size()) + key_bits(p_types.branch) + key_bits(p_types.crown) + key_bits(p_types.cone);
 }
 
 } // namespace Archetype

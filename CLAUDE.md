@@ -330,8 +330,8 @@ to every change, and a reviewer may reject a PR on any of them.
   the profile, and `["stream"]`), or with `--stream=0` (`VoxelTerrain.archetype_stream`, bench and player) placed whole in
   the table at configure by `add_source` (count, records per site, moments per material; the reference, and the tests that
   edit their records by id). Biome features and the shapes gallery stay table records (whole-build blobs). `SourceProfile`
-  reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes` / `class_of`: the forest's species,
-  class c sampled with variant c; the scatter has one class, hashed variants): reach, `lod_end`, k / margin max (times
+  reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes`: a site's class is its variant
+  modulo it, the forest's species; class c sampled with hashed variants of class c, one class bit for bit as before): reach, `lod_end`, k / margin max (times
   `REACH_SAFETY` 1.25), joins and records per site over every sample, the mass lost per LOD per class (`lost_of(class,
   lod)`: what a far proxy of a site of that class stands for; `blob_reach` takes the widest class's); unit-tested to bound
   every record of the forest and the scatter (`covers`). A source with a `profile_key` (the forest's: voxel size, species
@@ -359,8 +359,8 @@ to every change, and a reviewer may reject a PR on any of them.
   2 per cell side, the profile's lost moments: mass within 10%). Part layers are those under `Setup::part_cell_sides`
   source cells: 3 by default (the whole build's blobs), `VoxelTerrain.archetype_stream_part_sides` /
   `--stream_part_sides=N` for the streamed sources (default 1: proxies from the source cell on; the 2 switched layers:
-  mass within 20%, peak within 45%, unit test (layer 4 at 41%: bark only, peaks far under the iso); 3 = the exact
-  layers). The stream keeps three LRU chains: the evictable
+  mass within 20%, peak within 40%, 45% on a layer losing bark only (layer 4 at 41%: peaks far under the iso), unit test;
+  3 = the exact layers). The stream keeps three LRU chains: the evictable
   keys with records (slots, the entries cap `ENTRIES_MAX`), the walks (`WALKS_MAX` 2^20, `Settings::walks`: ~450 B per
   walk + 56 per site, the 1M zone's ~500k stay resident; `walks_ready`) and those holding input records (not placed,
   count > 0: the inputs cap pops its oldest in O(1), the walks and placed keys never relinked); `computed_by_key` names
@@ -428,7 +428,8 @@ to every change, and a reviewer may reject a PR on any of them.
   padded by `TREE_BOUND_PAD`; `max_lod` grows with a part's size, unit-tested) only the hull or tiers are listed, so the
   forest grows the trunk's polyline and the hull alone (`grow_tree(..., hull_only)`), bit-identical to the full growth's
   listed records (unit test: 1,000 trees, every LOD from there; tight at 5 cm: 8 / 7 / 5 for the three species, a LOD
-  late at 0.5 m). `set_forest_scatter` is the forest's generate, classes and profile key, for the table and the tests. Sites are 3D cells (planets come; `src/cell_sites.*`, any
+  late at 0.5 m). `set_forest_scatter` is the forest's generate, classes and profile key, for the table and the tests; a
+  species whose `tree_bounds` don't fit the table never grows hull-only (a site's refusal never depends on the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
   source, salted: `TREE_SITE_SALT` for the forest, the species is the site's variant): `cell_site` reads the coarse field
   (`SDFBase::ground_field(voxel, lod)`, `evaluate_cull`'s field with its gradient; at `site_lod` a lattice sample extended
   along its gradient) at the cell's centre, projects the cell's hashed voxel on that plane, keeps it if it lands in the

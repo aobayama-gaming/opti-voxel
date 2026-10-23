@@ -356,17 +356,7 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
 CellScatter SDFTable::forest_source(const TreeTypes &p_types) const {
     CellScatter s = scene_source(TREE_SITE_SALT, forest_count, forest_area);
     const double vs = param.voxel_size;
-    // Per species, that its largest tree fits the table: a site is refused whole on any record that doesn't, so the
-    // hull-only growth must never see a tree the full growth refuses (none is).
-    for (const TreeSpecies &species : tree_species()) {
-        std::vector<TableRecord> bounds;
-        tree_bounds(species, vs, p_types, bounds);
-        for (const TableRecord &rec : bounds) {
-            const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
-            ERR_CONTINUE_MSG(!fit.is_empty(), "SDFTable: a tree species may not fit the table: " + fit);
-        }
-    }
-    set_forest_scatter(s, vs, *library, record_finish(), p_types);
+    set_forest_scatter(s, vs, *library, record_finish(), p_types, max_instance_extent());
     return s;
 }
 

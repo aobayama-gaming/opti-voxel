@@ -192,7 +192,7 @@ private:
     void proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const;
     // How far a far blob tile's region reaches past its box.
     int64_t proxy_grow(int p_layer) const;
-    // A walk's sites: a site or part tile's (its box, in the zone), or a proxy tile's (its own box, in proxy_zone).
+    // A walk's sites: a site tile's, or a proxy tile's (its own box, in proxy_zone).
     void walk_tile(const SourceKey &p_key, SourceContent &r_out) const;
     // A part tile grows the sites of its input (LOD 0) or of its own walk (coarser): every record at LOD 0, the ones
     // listed at its LOD coarser.

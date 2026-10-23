@@ -4,6 +4,7 @@
 #include "moment_layers.hpp"
 
 #include <array>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <string>
@@ -28,17 +29,16 @@ struct CellScatter {
     // hull-only trees) reads it; one that doesn't ignores it. Thread-safe.
     std::function<void(const Site &, const UpAxis &, int p_lod, std::vector<TableRecord> &)> generate;
 
-    // The site classes the far moments are kept per (the forest: a tree's species): class_of(variant) in [0, classes)
-    // (empty: 0). SourceProfile samples class c with variant c, so class_of(c) must be c.
+    // The site classes the far moments are kept per: a site's class is its variant modulo classes (the forest: a tree's
+    // species, tree_species_of).
     uint32_t classes = 1;
-    std::function<uint32_t(uint32_t p_variant)> class_of;
     // Sources with the same key share one SourceProfile (ScatterSource's registry): their generate gives the same records
     // for the same site whatever their zone, ground or density (the profile samples sites at the origin, upright). Empty: a
     // profile of its own.
     std::string profile_key;
 
     bool valid() const { return zone.valid && side > 0 && ground && up && generate; }
-    uint32_t class_index(uint32_t p_variant) const { return class_of ? class_of(p_variant) : 0u; }
+    uint32_t class_index(uint32_t p_variant) const { return classes > 1 ? p_variant % classes : 0u; }
     // The accepted sites whose base lies in p_query and the zone, in cell order (surface_sites; p_snap false: on the
     // coarse plane). On the worker pool (not from inside a pool task, unless it holds an InlineParallelFor).
     void sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap = true) const;
@@ -69,7 +69,6 @@ struct SourceProfile {
         double variance = 0.0; // the largest eigenvalue of a material's covariance
     };
     std::vector<std::vector<Lost>> lost; // per class, per LOD
-    int lod_count = 0;
 
     // What a site of class p_class (CellScatter::class_index) has lost at p_lod.
     const Lost &lost_of(uint32_t p_class, int p_lod) const { return lost[MIN<size_t>(p_class, lost.size() - 1)][p_lod]; }
@@ -82,5 +81,14 @@ struct SourceProfile {
     // Whether a finished record of a site at p_base is within the profile (keys trust it: a record past it may be missed).
     bool covers(const VoxelPos &p_base, const TableRecord &p_record) const;
 };
+
+// The bits of a value as text, for a profile key (CellScatter::profile_key and the registry's): equal only for equal values.
+template <typename T>
+std::string key_bits(const T &p_v) {
+    static_assert(sizeof(T) <= 8, "key_bits: a scalar");
+    uint64_t b = 0;
+    std::memcpy(&b, &p_v, sizeof(T));
+    return std::to_string(b) + ",";
+}
 
 } // namespace Archetype

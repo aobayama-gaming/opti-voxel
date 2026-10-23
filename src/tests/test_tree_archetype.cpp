@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include "test_stream_common.hpp"
+
 #include "sdf_cascade.hpp"
 #include "tree_archetype.hpp"
 
@@ -28,7 +30,7 @@ std::vector<TableRecord> grow(const TreeLibrary &p_lib, const TreeSpecies &p_spe
 
 // A unit up turned from +y by a hashed angle (up to ~1.2 rad) about a hashed azimuth.
 UpAxis turned_up(uint32_t p_a, uint32_t p_b) {
-    const double angle = 1.2 * ExactNoise::unit_of(p_a), azimuth = 6.283185307179586 * ExactNoise::unit_of(p_b);
+    const double angle = 1.2 * ExactNoise::unit_of(p_a), azimuth = Math_TAU * ExactNoise::unit_of(p_b);
     return UpAxis{ std::sin(angle) * std::cos(azimuth), std::cos(angle), std::sin(angle) * std::sin(azimuth) };
 }
 
@@ -369,6 +371,19 @@ TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, eva
     CHECK(solid == int64_t(trees.size()));
 }
 
+// The last max_lod of p_make(x) finished, x from p_lo while <= p_hi by steps of 10%, checking it never decreases.
+template <typename F>
+int check_monotone(const TreeLibrary &p_tl, const RecordFinish &p_finish, double p_lo, double p_hi, F p_make) {
+    int last = 0;
+    for (double x = p_lo; x <= p_hi; x *= 1.1) {
+        TableRecord rec = p_make(x);
+        finish_table_record(p_tl.lib, p_finish, rec);
+        CHECK(int(rec.max_lod) >= last);
+        last = int(rec.max_lod);
+    }
+    return last;
+}
+
 // Every record of a tree is a branch no thicker than the trunk's base or a crown no larger than the largest clump or hull
 // sphere: tree_bounds names them, and max_lod grows with a part's size, so the bounds' max_lod bounds every part's.
 TEST_CASE("Tree band: max_lod is non-decreasing in a branch's and a crown's size, and the species' bounds cover every part") {
@@ -377,53 +392,35 @@ TEST_CASE("Tree band: max_lod is non-decreasing in a branch's and a crown's size
         const TreeLibrary tl(voxel);
         const RecordFinish finish{ 3.34f, true, ErodeRule() };
         // Radii over three decades, and lengths over two at a fixed radius.
-        int last = 0;
-        for (double r = 0.5; r <= 500.0; r *= 1.1) {
-            TableRecord branch;
-            branch.def = uint8_t(tl.types.branch);
-            branch.params[0] = float(20.0 * r);
-            branch.params[1] = float(r);
-            branch.set_k(float(2.0 * r));
-            finish_table_record(tl.lib, finish, branch);
-            CHECK(int(branch.max_lod) >= last);
-            last = int(branch.max_lod);
-        }
-        CHECK(last > 3);
-        last = 0;
-        for (double r = 0.5; r <= 500.0; r *= 1.1) {
-            TableRecord crown;
-            crown.def = uint8_t(tl.types.crown);
-            crown.params[0] = float(r);
-            crown.params[1] = tl.types.crown_amp;
-            crown.set_k(float(0.5 * r));
-            finish_table_record(tl.lib, finish, crown);
-            CHECK(int(crown.max_lod) >= last);
-            last = int(crown.max_lod);
-        }
-        CHECK(last > 3);
-        last = 0;
-        for (double h = 4.0; h <= 400.0; h *= 1.1) {
-            TableRecord branch;
-            branch.def = uint8_t(tl.types.branch);
-            branch.params[0] = float(h);
-            branch.params[1] = 4.0f;
-            branch.set_k(8.0f);
-            finish_table_record(tl.lib, finish, branch);
-            CHECK(int(branch.max_lod) >= last);
-            last = int(branch.max_lod);
-        }
+        auto branch = [&](double p_h, double p_r, double p_k) {
+            TableRecord rec;
+            rec.def = uint8_t(tl.types.branch);
+            rec.params[0] = float(p_h);
+            rec.params[1] = float(p_r);
+            rec.set_k(float(p_k));
+            return rec;
+        };
+        CHECK(check_monotone(tl, finish, 0.5, 500.0, [&](double p_r) { return branch(20.0 * p_r, p_r, 2.0 * p_r); }) > 3);
+        CHECK(check_monotone(tl, finish, 0.5, 500.0, [&](double p_r) {
+            TableRecord rec;
+            rec.def = uint8_t(tl.types.crown);
+            rec.params[0] = float(p_r);
+            rec.params[1] = tl.types.crown_amp;
+            rec.set_k(float(0.5 * p_r));
+            return rec;
+        }) > 3);
+        check_monotone(tl, finish, 4.0, 400.0, [&](double p_h) { return branch(p_h, 4.0, 8.0); });
         // The bounds: every part of 200 trees per species, any up, has a max_lod at most its bound's.
         for (size_t sp = 0; sp < tree_species().size(); sp++) {
             CAPTURE(sp);
             const TreeSpecies &species = tree_species()[sp];
-            std::vector<TableRecord> bounds;
-            tree_bounds(species, voxel, tl.types, bounds);
-            CHECK(bounds.size() == (species.limbs > 0 ? 3u : 2u));
-            int branch_lod = 0, crown_lod = 0;
-            for (TableRecord &b : bounds) {
-                finish_table_record(tl.lib, finish, b);
-                (b.def == tl.types.branch ? branch_lod : crown_lod) = MAX(b.def == tl.types.branch ? branch_lod : crown_lod, int(b.max_lod));
-            }
+            TreeBounds b = tree_bounds(species, voxel, tl.types);
+            CHECK(b.has_clump == (species.limbs > 0));
+            finish_table_record(tl.lib, finish, b.trunk);
+            finish_table_record(tl.lib, finish, b.clump);
+            finish_table_record(tl.lib, finish, b.hull);
+            const int branch_lod = int(b.trunk.max_lod);
+            const int crown_lod = MAX(int(b.hull.max_lod), b.has_clump ? int(b.clump.max_lod) : 0);
             int over = 0;
             for (uint32_t seed = 1; seed <= 200; seed++) {
                 const ExactNoise::UVec3 h = ExactNoise::hash3(seed, 0x0Du, 0x11Fu);
@@ -480,23 +477,21 @@ TEST_CASE("Tree: hull-only growth is the full growth's records listed from hull_
                     at++;
                 }
                 trees++;
+                const auto listed = [](const std::vector<TableRecord> &p_records, int p_lod) {
+                    std::vector<const TableRecord *> out;
+                    for (const TableRecord &rec : p_records) {
+                        if (rec.listed_at(p_lod)) {
+                            out.push_back(&rec);
+                        }
+                    }
+                    return out;
+                };
                 bool identical = true;
                 for (int lod = hull_lod; lod < LODS; lod++) {
-                    std::vector<const TableRecord *> a, b;
-                    for (const TableRecord &rec : full) {
-                        if (rec.listed_at(lod)) {
-                            a.push_back(&rec);
-                        }
-                    }
-                    for (const TableRecord &rec : hull) {
-                        if (rec.listed_at(lod)) {
-                            b.push_back(&rec);
-                        }
-                    }
+                    const std::vector<const TableRecord *> a = listed(full, lod), b = listed(hull, lod);
                     identical = identical && a.size() == b.size();
                     for (size_t i = 0; identical && i < a.size(); i++) {
-                        identical = same_part(*a[i], *b[i], VoxelPos()) && a[i]->max_lod == b[i]->max_lod && a[i]->min_lod == b[i]->min_lod &&
-                                float_bits(a[i]->erode_from) == float_bits(b[i]->erode_from) && a[i]->material == b[i]->material;
+                        identical = StreamTest::same_bits(*a[i], *b[i]);
                     }
                     listed_at_hull_lod += lod == hull_lod ? int64_t(a.size()) : 0;
                 }

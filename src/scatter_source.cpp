@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cstring>
 #include <map>
 #include <mutex>
 #include <string>
@@ -77,15 +76,6 @@ void append_group(const TableRecord *p_records, uint32_t p_count, int p_lod, Sou
 
 std::atomic<bool> profile_reported{ false };
 
-// The bits of a value, as text: a key part that is equal only for equal values.
-template <typename T>
-std::string bits_of(const T &p_v) {
-    static_assert(sizeof(T) <= 8);
-    uint64_t b = 0;
-    std::memcpy(&b, &p_v, sizeof(T));
-    return std::to_string(b) + ",";
-}
-
 // The profiles read so far, by their key: two sources of one key take the same object. Kept for the process (a profile is a
 // few KB per class and LOD; the keys are the tree sets configured).
 std::mutex profiles_mutex;
@@ -100,11 +90,15 @@ std::shared_ptr<const SourceProfile> profile_for(const ScatterSource::Setup &p_s
     if (s.profile_key.empty()) {
         return read();
     }
+    // Every field the profile reads (the layers' LOD range and judged box are set by the profile itself). A field added to
+    // these structs must join the key, or two setups differing in it would share a profile: the sizes trip first.
+    static_assert(sizeof(RecordFinish) == 16 && sizeof(ErodeRule) == 8, "profile_for: a RecordFinish field to add to the key");
+    static_assert(sizeof(MomentLayerParams) == 112, "profile_for: a MomentLayerParams field to add to the key (or to say it is the profile's own)");
     const MomentLayerParams &l = p_setup.layers;
     const RecordFinish &f = p_setup.finish;
-    const std::string key = s.profile_key + "|" + bits_of(s.salt) + bits_of(s.classes) + "|" + bits_of(f.skirt_depth) + bits_of(f.band) + bits_of(f.rule.rate) +
-            bits_of(f.rule.resolve) + "|" + bits_of(l.cell_shift) + bits_of(l.filter) + bits_of(l.min_occupancy) + bits_of(l.min_mass_share) +
-            bits_of(l.cover_mass_share) + bits_of(l.keep_cover) + "|" + bits_of(p_setup.lod_count);
+    const std::string key = s.profile_key + "|" + key_bits(s.salt) + key_bits(s.classes) + "|" + key_bits(f.skirt_depth) + key_bits(f.band) +
+            key_bits(f.rule.rate) + key_bits(f.rule.resolve) + "|" + key_bits(l.cell_shift) + key_bits(l.filter) + key_bits(l.min_occupancy) +
+            key_bits(l.min_mass_share) + key_bits(l.cover_mass_share) + key_bits(l.keep_cover) + "|" + key_bits(p_setup.lod_count);
     const std::lock_guard<std::mutex> lock(profiles_mutex);
     std::shared_ptr<const SourceProfile> &slot = profiles[key];
     r_shared = slot != nullptr;
@@ -293,8 +287,7 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
 
 void ScatterSource::walk_tile(const SourceKey &p_key, SourceContent &r_out) const {
     const CellScatter &s = set.scatter;
-    if (p_key.kind == SourceKey::SITES || p_key.kind == SourceKey::PARTS) {
-        // The same call for a site tile and a coarse part tile: the part tile's walk is the union of the site tiles'.
+    if (p_key.kind == SourceKey::SITES) {
         s.sites(tile_box(p_key), r_out.sites);
         return;
     }
@@ -320,23 +313,24 @@ int ScatterSource::proxy_level(int p_layer) const {
 }
 
 void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
-    std::vector<SourceKey> in;
-    inputs(p_key, in);
     std::vector<TableRecord> grown;
-    auto grow_all = [&](const SourceContent &p_sites) {
-        for (const CellSite &cs : p_sites.sites) {
-            grow_site(cs, p_key.lod > 0 ? p_key.lod : -1, grown, r_out);
-        }
-    };
     if (p_key.lod > 0) {
-        // One walk of its own box (the LOD-0 site tiles' union, in cell order), pruned at the coarse levels where the
-        // tile is air: the 8^L site tiles it asked before cost a job each, most of them empty.
-        SourceContent walk;
-        walk_tile(p_key, walk);
-        grow_all(walk);
+        // One walk of its own box, the call a site tile makes: the LOD-0 site tiles' union, in cell order, pruned at the
+        // coarse levels where the tile is air (the 8^L site tiles it asked before cost a job each, most of them empty).
+        std::vector<CellSite> sites;
+        set.scatter.sites(tile_box(p_key), sites);
+        for (const CellSite &cs : sites) {
+            grow_site(cs, p_key.lod, grown, r_out);
+        }
         return;
     }
-    for_each_input(in, p_inputs, grow_all);
+    std::vector<SourceKey> in;
+    inputs(p_key, in);
+    for_each_input(in, p_inputs, [&](const SourceContent &p_sites) {
+        for (const CellSite &cs : p_sites.sites) {
+            grow_site(cs, -1, grown, r_out);
+        }
+    });
 }
 
 void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<TableRecord> &r_grown, SourceContent &r_out) const {

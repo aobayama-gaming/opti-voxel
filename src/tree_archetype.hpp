@@ -96,14 +96,18 @@ void up_rotation(const UpAxis &p_up, float r_rows[9]);
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
         std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems = nullptr, bool p_hull_only = false);
 
-// The largest records a tree of the species can grow, unfinished, at the origin, upright: [0] a trunk segment (the
-// thickest branch: a child is never thicker than its parent where it forks), [1] a clump (the largest, if the species
-// has limbs: a leaf stem's tip), then a hull sphere or a cone tier. Radii are padded by TREE_BOUND_PAD: a real segment's
-// Lipschitz bound 1 + slope^2 / 2 and a turned record's rotation margin raise its band depth over the bound's by less
-// than that (both under 0.1%). Every record of every tree of the species is no larger than one of these: finishing
-// them bounds the trees' band (tree_hull_only_lod) and their fit in the table.
+// The largest records a tree of the species can grow, unfinished, at the origin, upright. Radii are padded by
+// TREE_BOUND_PAD: a real segment's Lipschitz bound 1 + slope^2 / 2 and a turned record's rotation margin raise its band
+// depth over the bound's by less than that (both under 0.1%). Every record of every tree of the species is no larger than
+// one of these: finishing them bounds the trees' band (tree_hull_only_lod) and their fit in the table.
 inline constexpr double TREE_BOUND_PAD = 1.02;
-void tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeTypes &p_types, std::vector<TableRecord> &r_out);
+struct TreeBounds {
+    TableRecord trunk; // the thickest branch segment (a child is never thicker than its parent where it forks)
+    bool has_clump = false; // the species has limbs
+    TableRecord clump; // the largest clump (a leaf stem's tip)
+    TableRecord hull; // the largest hull sphere or cone tier
+};
+TreeBounds tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeTypes &p_types);
 
 // The first LOD at which the full growth of any tree of the species lists nothing but its hull (or tiers): the larger
 // max_lod of the trunk and clump bounds (tree_bounds) finished with p_finish. max_lod grows with a part's size (the band
@@ -125,9 +129,11 @@ inline constexpr uint32_t TREE_SITE_SALT = 0xF0E57u;
 int tree_species_of(uint32_t p_variant);
 
 // Makes r_scatter a forest's (the rest of it, zone, ground, up, accept, is the caller's): the salt, generate (a tree of the
-// site's species, hull-only from the species' tree_hull_only_lod under p_finish), one class per species (class_of =
-// tree_species_of: the far moments per species) and the profile key of the tree set ("trees:" + voxel + species count +
-// type ids: every forest of that voxel size shares one profile).
-void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types);
+// site's species, hull-only from the species' tree_hull_only_lod under p_finish), one class per species (the far moments
+// per species) and the profile key of the tree set ("trees:" + voxel + species count + type ids: every forest of that
+// voxel size shares one profile). A site is refused whole when a record of it doesn't fit the table (p_max_extent): a
+// species whose bounds don't fit never grows hull-only (ERR), so a refusal never depends on the LOD.
+void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types,
+        int64_t p_max_extent);
 
 } // namespace Archetype

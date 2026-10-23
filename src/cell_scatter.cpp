@@ -36,17 +36,15 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
         int p_lod_count) {
     ERR_FAIL_COND_MSG(!p_scatter.generate || p_scatter.classes == 0, "SourceProfile: no generate or no class.");
     const uint32_t classes = p_scatter.classes;
-    for (uint32_t c = 0; c < classes && classes > 1; c++) {
-        ERR_CONTINUE_MSG(p_scatter.class_index(c) != c, vformat("SourceProfile: variant %d is not of class %d: that class's far moments are another's.", c, c));
-    }
-    // Class c's samples are SAMPLES sites of variant c (one class: hashed variants, as before classes); hashed seeds.
+    // Class c's samples are SAMPLES sites with hashed seeds and hashed variants of class c (one class: the variants before
+    // classes, bit for bit).
     const int total = SAMPLES * int(classes);
     std::vector<std::vector<TableRecord>> parts(total);
     std::vector<std::vector<MomentItem>> items(total);
     parallel_for(uint32_t(total), "SourceProfile", [&](uint32_t p_j) {
         const uint32_t c = p_j / uint32_t(SAMPLES);
         const ExactNoise::UVec3 h = ExactNoise::hash3(p_j % uint32_t(SAMPLES), p_scatter.salt, 0x9E0F11Eu ^ c);
-        const uint32_t variant = classes > 1 ? c : h.y >> 16;
+        const uint32_t variant = c + classes * (h.y >> 16);
         p_scatter.generate(Site{ VoxelPos(), h.x, variant }, UP_Y, -1, parts[p_j]); // the full growth: reach, lod_end and the joins need every record
         for (TableRecord &rec : parts[p_j]) {
             finish_table_record(p_library, p_finish, rec);
@@ -57,7 +55,6 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
     });
     // In sample order: the same bits however the pool ran.
     const double share = 1.0 / double(SAMPLES); // of its class
-    lod_count = p_lod_count;
     lost.assign(classes, std::vector<Lost>(p_lod_count));
     std::vector<MomentItem> all;
     size_t records = 0;
@@ -128,6 +125,7 @@ double SourceProfile::lost_variance(int p_lod) const {
 bool SourceProfile::covers(const VoxelPos &p_base, const TableRecord &p_record) const {
     const VoxelBox reach_box = VoxelBox{ p_base, p_base, true }.grown(int64_t(std::floor(reach)));
     const VoxelBox b = record_box(p_record);
+    const int lod_count = lost.empty() ? 0 : int(lost.front().size());
     const int listed_end = p_record.max_lod == TableRecord::NEVER_DROPPED ? lod_count : int(p_record.max_lod);
     return reach_box.contains(b.lo) && reach_box.contains(b.hi) && listed_end <= lod_end && p_record.k <= k_max && p_record.margin_c <= margin_max;
 }
