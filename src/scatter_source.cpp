@@ -301,7 +301,7 @@ void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, So
 void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<TableRecord> &r_grown, SourceContent &r_out) const {
     const DefLibrary &lib = *set.library;
     r_grown.clear();
-    set.scatter.grow(p_site.site, r_grown);
+    set.scatter.grow(p_site.site, p_lod, r_grown); // a coarse LOD may grow less (the records listed there, bit for bit)
     // The table's limits (SDFTable::admit): a site with a record it would refuse is left out whole.
     if (std::any_of(r_grown.begin(), r_grown.end(), [&](const TableRecord &p_r) { return !record_fit_error(lib[p_r.def], p_r, set.max_extent).is_empty(); })) {
         return;

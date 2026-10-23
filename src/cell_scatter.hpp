@@ -21,15 +21,18 @@ struct CellScatter {
     FieldFn ground; // thread-safe
     std::function<UpAxis(const VoxelPos &)> up; // thread-safe
     std::function<bool(const VoxelPos &)> accept; // whether a base may hold a site (empty: every one); thread-safe
-    // A site's records grown along p_up (op, k, anchor, rotation, params, material, salt set; not finished). Thread-safe.
-    std::function<void(const Site &, const UpAxis &, std::vector<TableRecord> &)> generate;
+    // A site's records grown along p_up (op, k, anchor, rotation, params, material, salt set; not finished), for the chunks
+    // of LOD p_lod: every record listed there, in the full growth's order, a subset of the full growth bit for bit (the
+    // caller filters once they are finished); -1: the full growth. A source that grows less for a coarse LOD (the forest's
+    // hull-only trees) reads it; one that doesn't ignores it. Thread-safe.
+    std::function<void(const Site &, const UpAxis &, int p_lod, std::vector<TableRecord> &)> generate;
 
     bool valid() const { return zone.valid && side > 0 && ground && up && generate; }
     // The accepted sites whose base lies in p_query and the zone, in cell order (surface_sites; p_snap false: on the
     // coarse plane). On the worker pool (not from inside a pool task, unless it holds an InlineParallelFor).
     void sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap = true) const;
-    // A site's records along the up at its base.
-    void grow(const Site &p_site, std::vector<TableRecord> &r_out) const { generate(p_site, up(p_site.base), r_out); }
+    // A site's records along the up at its base, for LOD p_lod (generate; -1: all).
+    void grow(const Site &p_site, int p_lod, std::vector<TableRecord> &r_out) const { generate(p_site, up(p_site.base), p_lod, r_out); }
 };
 
 // What a source's sites are as a whole, read from samples of its generate (SAMPLES hashed sites at the origin, upright,

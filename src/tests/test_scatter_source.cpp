@@ -78,8 +78,14 @@ struct SourceFixture {
                 float(amp * tau / wave * std::sin(tau * x / wave) * std::sin(tau * z / wave)), float(w) };
         };
         c.up = [](const VoxelPos &) { return UP_Y; };
-        c.generate = [types](const Site &p_site, const UpAxis &p_up, std::vector<TableRecord> &r_out) { // SDFTable::forest_source's
-            grow_tree(tree_species()[tree_species_of(p_site.variant)], p_site.base, p_up, p_site.seed, VOXEL, types, r_out);
+        // SDFTable::forest_source's: hull-only trees from each species' hull_only_lod (the pyramid test is the end-to-end gate).
+        std::vector<int> hull_lod;
+        for (const TreeSpecies &species : tree_species()) {
+            hull_lod.push_back(tree_hull_only_lod(species, VOXEL, *lib, s.finish, types));
+        }
+        c.generate = [types, hull_lod](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+            const int species = tree_species_of(p_site.variant);
+            grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, VOXEL, types, r_out, nullptr, p_lod >= hull_lod[species]);
         };
         source = std::make_shared<ScatterSource>(s);
         cache = KeyCache(source.get());
@@ -198,7 +204,7 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
     f.setup().scatter.sites(fx.zone(), sites);
     std::vector<std::vector<TableRecord>> whole(sites.size());
     for (size_t i = 0; i < sites.size(); i++) {
-        f.setup().scatter.grow(sites[i].site, whole[i]);
+        f.setup().scatter.grow(sites[i].site, -1, whole[i]);
         for (TableRecord &r : whole[i]) {
             finish_table_record(*f.setup().library, f.setup().finish, r);
         }
@@ -456,7 +462,7 @@ struct SceneFixture {
         rocks.blob_type = -1;
         rocks.scatter.salt = 0x40C5u;
         rocks.scatter.side = 40;
-        rocks.scatter.generate = [sphere](const Site &p_site, const UpAxis &, std::vector<TableRecord> &r_out) {
+        rocks.scatter.generate = [sphere](const Site &p_site, const UpAxis &, int, std::vector<TableRecord> &r_out) {
             TableRecord r;
             r.def = uint8_t(sphere);
             r.anchor = p_site.base;
@@ -525,7 +531,7 @@ private:
         set.scatter.sites(f.tile_box(SourceKey{ set.id, SourceKey::PARTS, 0, p_tile }), sites);
         for (const CellSite &cs : sites) {
             std::vector<TableRecord> grown;
-            set.scatter.grow(cs.site, grown);
+            set.scatter.grow(cs.site, -1, grown); // the full growth: the oracle filters it per LOD
             if (std::any_of(grown.begin(), grown.end(), [&](const TableRecord &p_r) { return !record_fit_error((*set.library)[p_r.def], p_r, set.max_extent).is_empty(); })) {
                 continue;
             }

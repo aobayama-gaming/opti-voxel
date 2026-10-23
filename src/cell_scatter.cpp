@@ -39,7 +39,7 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
     std::vector<std::vector<MomentItem>> items(SAMPLES);
     parallel_for(uint32_t(SAMPLES), "SourceProfile", [&](uint32_t p_i) {
         const ExactNoise::UVec3 h = ExactNoise::hash3(uint32_t(p_i), p_scatter.salt, 0x9E0F11Eu);
-        p_scatter.generate(Site{ VoxelPos(), h.x, h.y >> 16 }, UP_Y, parts[p_i]);
+        p_scatter.generate(Site{ VoxelPos(), h.x, h.y >> 16 }, UP_Y, -1, parts[p_i]); // the full growth: reach, lod_end and the joins need every record
         for (TableRecord &rec : parts[p_i]) {
             finish_table_record(p_library, p_finish, rec);
             MomentItem item = record_item(p_library, rec);

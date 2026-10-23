@@ -63,7 +63,7 @@ struct StreamFixture {
         const int64_t oy = origin.y;
         c.ground = [oy](const VoxelPos &p_v, int) { return ExactNoise::Float4{ 0.0f, 1.0f, 0.0f, float(p_v.y - oy) }; };
         c.up = [](const VoxelPos &) { return UP_Y; };
-        c.generate = [sphere](const Site &p_site, const UpAxis &, std::vector<TableRecord> &r_out) {
+        c.generate = [sphere](const Site &p_site, const UpAxis &, int, std::vector<TableRecord> &r_out) {
             TableRecord r;
             r.def = uint8_t(sphere);
             r.anchor = p_site.base;
