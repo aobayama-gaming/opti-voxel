@@ -38,6 +38,24 @@ TEST_CASE("ov::format: the printf family the core uses") {
     // Literals: %% is one percent, and no following argument is consumed by it.
     CHECK(ov::format("100%%") == "100%");
     CHECK(ov::format("50%%: %d", 7) == "50%: 7");
+    // Floats take a double (no 64-bit length letters: %llf would read a long double).
+    CHECK(ov::format("%.2f|%e|%g", 1.5, 2.0f, 0.25) == "1.50|2.000000e+00|0.25");
+    // %s applies its flags, width and precision to the text.
+    CHECK(ov::format("%-6s|%4s|%.2s", "ab", 7, "xyz") == "ab    |   7|xy");
+}
+
+TEST_CASE("ov::format: a spec / argument mismatch is reported, never silent") {
+    static int errors = 0;
+    errors = 0;
+    const ov::ErrorSink previous = ov::error_sink();
+    ov::set_error_sink([](const char *, int, const char *) { errors++; });
+    CHECK(ov::format("%d %d", 1) == "1 %d"); // not enough arguments
+    CHECK(errors == 1);
+    CHECK(ov::format("abc", 7) == "abc"); // more arguments than conversions: stops at the end
+    CHECK(errors == 2);
+    CHECK(ov::format("%ld|%d", 5L, 6) == "%ld|6"); // unsupported conversion: verbatim, argument consumed
+    CHECK(errors == 3);
+    ov::set_error_sink(previous);
 }
 
 TEST_CASE("ov::ivec3: the int32 triple at core edges") {

@@ -53,7 +53,7 @@ grep_clean() {
         return 1
     fi
     local hits
-    hits=$(grep -nE '#include[[:space:]]*<godot|\bgodot::[A-Za-z_]' "$f" 2>/dev/null)
+    hits=$(grep -nE '#include[[:space:]]*[<"]godot|\bgodot::[A-Za-z_]|using[[:space:]]+namespace[[:space:]]+godot' "$f" 2>/dev/null)
     if [ -n "$hits" ]; then
         echo "core file $f mentions godot code:"
         echo "$hits"

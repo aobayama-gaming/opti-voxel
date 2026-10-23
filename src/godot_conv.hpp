@@ -17,7 +17,7 @@
 #include <cstring>
 
 inline godot::String godot_str(const ov::str &p_s) {
-    return godot::String(p_s.c_str());
+    return godot::String::utf8(p_s.c_str(), int64_t(p_s.size()));
 }
 
 // An int64 id or voxel as report text (WorldCoord::to_string).

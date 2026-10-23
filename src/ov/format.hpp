@@ -63,16 +63,23 @@ inline str spec_text(const char *p_spec, const char *p_conv, const char *p_tail,
 
 } // namespace detail
 
-// Terminal case (no more arguments): the rest of the format string is literal text.
+// Terminal case (no more arguments): the rest of the format string is literal text; a conversion
+// left in it has no argument (reported, rendered verbatim).
 inline str format(const char *p_fmt) {
     str out;
     const size_t len = std::char_traits<char>::length(p_fmt);
     out.reserve(len);
+    bool missing = false;
     for (const char *p = p_fmt; *p; p++) {
         out += *p;
         if (*p == '%' && p[1] == '%') {
             p++; // "%%" is one literal percent
+        } else if (*p == '%') {
+            missing = true;
         }
+    }
+    if (missing) {
+        report_error(__FILE__, __LINE__, "ov::format: not enough arguments for the conversions.");
     }
     return out;
 }
@@ -100,7 +107,8 @@ inline str format_one(const char *p_fmt, const T &p_head, const char *&p_next) {
     }
     const char conv = *s;
     const char *spec_begin = p_fmt; // includes '%'
-    const char tail[4] = { 'l', 'l', conv, '\0' }; // the 64-bit length letters + the conversion char
+    const char tail[4] = { 'l', 'l', conv, '\0' }; // integers: the 64-bit length letters + the conversion char
+    const char float_tail[2] = { conv, '\0' }; // floats: a double, no length letters (%llf is long double)
 
     // A spec too long for the format buffer is malformed for our call sites: report, render verbatim
     // and consume the argument.
@@ -127,7 +135,7 @@ inline str format_one(const char *p_fmt, const T &p_head, const char *&p_next) {
     } else if (conv == 'f' || conv == 'F' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G') {
         if constexpr (std::is_arithmetic_v<D>) {
             p_next = s + 1;
-            return detail::spec_text(spec_begin, s, tail, double(p_head));
+            return detail::spec_text(spec_begin, s, float_tail, double(p_head));
         }
     } else if (conv == 'c') {
         if constexpr (std::is_integral_v<D>) {
@@ -135,6 +143,12 @@ inline str format_one(const char *p_fmt, const T &p_head, const char *&p_next) {
             return str(1, char(p_head));
         }
     } else if (conv == 's') {
+        if (s - spec_begin > 1) {
+            // Flags, width or precision: pad / cut the plain text with printf's own %s.
+            const str text = format_one("%s", p_head, p_next);
+            p_next = s + 1;
+            return detail::spec_text(spec_begin, s, "s", text.c_str());
+        }
         if constexpr (std::is_same_v<D, str>) {
             p_next = s + 1;
             return p_head;
@@ -162,7 +176,9 @@ inline str format_one(const char *p_fmt, const T &p_head, const char *&p_next) {
             return std::to_string(p_head);
         }
     } else {
-        // An unknown conversion char: verbatim, no argument consumed, no re-match on the next scan.
+        // An unknown conversion char (a length modifier such as %ld, godot's %v): reported, rendered
+        // verbatim; it consumes its argument like any other conversion.
+        report_error(__FILE__, __LINE__, "ov::format: unsupported conversion, rendered verbatim.");
         p_next = s + 1;
         return str(p_fmt, s + 1);
     }
@@ -187,6 +203,10 @@ inline str format(const char *p_fmt, const T &p_head, const TRest &...p_rest) {
             p++; // the second % of "%%"
         }
         p++;
+    }
+    if (*p == '\0') {
+        report_error(__FILE__, __LINE__, "ov::format: more arguments than conversions, the rest ignored.");
+        return out;
     }
     const char *next = nullptr;
     out += format_one(p, p_head, next);
