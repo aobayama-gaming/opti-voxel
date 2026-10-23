@@ -197,7 +197,7 @@ void GPUDirectMesher::_rt_initialize() {
     status_size_bytes = ((STATUS_HEADER_UINTS + settings.pages_per_batch) * 4 + 15) / 16 * 16;
     buffer_status = rd->storage_buffer_create(status_size_bytes);
 
-    const PackedByteArray param_data = GPUFrame::chunk_param_bytes(chunk_param);
+    const PackedByteArray param_data = GPUFrame::chunk_param_bytes_packed(chunk_param);
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     for (int i = 0; i < 5; i++) {

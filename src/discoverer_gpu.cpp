@@ -19,7 +19,7 @@ bool DiscovererGPU::create(const SDFBase *p_sdf, const ChunkParam &p_param) {
     const uint64_t t_device = now_usec();
     point_param = CascadeGLSL::point_param(p_param);
     input = rd->storage_buffer_create(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(point_param);
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(point_param);
     param_ubo = rd->uniform_buffer_create(param_bytes.size(), param_bytes);
     values = rd->storage_buffer_create(MAX_POINTS * sizeof(float));
     if (!passes.create_points(rd, p_sdf, point_param, MAX_POINTS, input, param_ubo, values)) {

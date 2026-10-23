@@ -751,7 +751,7 @@ PackedByteArray dispatch(RenderingDevice *p_rd, RID p_shader, RID p_pipeline, co
         samples.encode_float(i * SAMPLE_BYTES + 40, p_run.cases[i].grid.z);
         samples.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
     }
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_run.param);
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(p_run.param);
     const RID buffer_samples = p_rd->storage_buffer_create(samples.size(), samples);
     const RID buffer_results = p_rd->storage_buffer_create(count * p_words * 4);
     const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
@@ -1061,7 +1061,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
             samples_bytes.encode_float(i * SAMPLE_BYTES + 40, run.cases[i].grid.z);
             samples_bytes.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
         }
-        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(run.param);
+        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(run.param);
         const RID buffer_samples = p_rd->storage_buffer_create(samples_bytes.size(), samples_bytes);
         const RID buffer_results = p_rd->storage_buffer_create(uint64_t(n) * words * 4);
         const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);

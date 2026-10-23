@@ -136,7 +136,7 @@ public:
         cs = p_param.chunk_size;
         cells = uint64_t(cs) * cs * cs;
         input = rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
-        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_param);
+        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(p_param);
         param_ubo = rd->uniform_buffer_create(param_bytes.size(), param_bytes);
         samples = rd->storage_buffer_create(MAX_BATCH * cells * 16);
         debug = rd->storage_buffer_create(MAX_BATCH * cells * nv * 16);
@@ -420,7 +420,7 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<ChannelSet> &p_sets, 
     const int cs = p_param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
     const RID input = p_rd->storage_buffer_create(TIMING_CHUNKS * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_param);
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(p_param);
     const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
     const RID samples = p_rd->storage_buffer_create(TIMING_CHUNKS * cells * 16);
     std::vector<std::unique_ptr<SDFCascade>> sdfs;
@@ -514,7 +514,7 @@ Dictionary check_points(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, con
     sdf.configure(p_param, p_lods);
     const ChunkParam pp = CascadeGLSL::point_param(p_param);
     const RID input = p_rd->storage_buffer_create(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(pp);
+    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(pp);
     const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
     const RID values = p_rd->storage_buffer_create(MAX_POINTS * sizeof(float));
     CascadePasses passes;
