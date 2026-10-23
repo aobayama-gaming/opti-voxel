@@ -16,6 +16,7 @@
  */
 
 #include "GPU_mesher.hpp"
+#include "godot_conv.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -859,7 +860,7 @@ void GPUMesher::render_chunk() {
 
         rs->instance_set_transform(
                 chunk.instance_rid,
-                Transform3D(scaled_basis, ChunkMath::grid_to_render(chunk.chunk_id, Vector3(), chunk_param)));
+                Transform3D(scaled_basis, godot_v3(ChunkMath::grid_to_render(chunk.chunk_id, Float3{}, chunk_param))));
     }
 }
 

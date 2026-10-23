@@ -2,6 +2,7 @@
 
 #include "archetype_table.hpp"
 #include "chunk_math.hpp"
+#include "ov/containers.hpp"
 
 #include <godot_cpp/templates/hash_map.hpp>
 #include <godot_cpp/templates/hash_set.hpp>
@@ -90,7 +91,7 @@ struct InstanceSnapshot {
     uint32_t base_count = 0;
     std::shared_ptr<const IndexLayer> overlay; // over overlay_ids, their current state
     std::vector<uint32_t> overlay_ids; // sorted: every record edited (added, moved, removed) since the base
-    HashSet<uint32_t> masked; // the base ids among overlay_ids: their base entries are stale
+    ov::HashSet<uint32_t> masked; // the base ids among overlay_ids: their base entries are stale
 
     static constexpr uint32_t REBASE = 2048;
 

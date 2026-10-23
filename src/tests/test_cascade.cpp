@@ -139,7 +139,7 @@ TEST_CASE("Cascade: the same lattice point gives the same bits from chunks of ev
                 float expect[CHANNELS];
                 point(spec, lattice, m, expect);
                 int previous = -1;
-                for (const int lod : { 0, m / 2, MAX(m - 1, 0), m }) {
+                for (const int lod : { 0, m / 2, std::max(m - 1, 0), m }) {
                     if (lod == previous) {
                         continue;
                     }
@@ -273,8 +273,8 @@ TEST_CASE("Cascade: carried slopes agree with finite differences of the carried 
         for_each_point(inner, [&](const Vector3i64 &p_p, int64_t) {
             for (int a = 0; a < 3; a++) {
                 const double fd = (double(v.at(VALUE, p_p + e[a])) - double(v.at(VALUE, p_p - e[a]))) * 0.5;
-                worst = MAX(worst, std::fabs(fd - v.at(DX + a, p_p)));
-                scale = MAX(scale, std::fabs(double(v.at(DX + a, p_p))));
+                worst = std::max(worst, std::fabs(fd - v.at(DX + a, p_p)));
+                scale = std::max(scale, std::fabs(double(v.at(DX + a, p_p))));
             }
         });
         CAPTURE(int(set));

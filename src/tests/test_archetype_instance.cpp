@@ -36,7 +36,7 @@ Program scene_program(const Instance &p_root) {
     CHECK(c.error.is_empty());
     c.program.normalize = true;
     c.program.out_scale = 0.5f;
-    CHECK(c.program.validate(25).is_empty());
+    CHECK(c.program.validate(25).empty());
     return c.program;
 }
 
@@ -286,9 +286,9 @@ TEST_CASE("SDFArchetype table: valid at 0.5 m and 5 cm voxels, evaluate() is the
         SDFArchetype sdf;
         sdf.configure(param, 25);
         const Program &ground = sdf.get_ground();
-        CHECK(ground.validate(25).is_empty());
+        CHECK(ground.validate(25).empty());
         for (int i = 0; i < sdf.get_library().size(); i++) {
-            CHECK(sdf.get_library()[i].program.validate(25).is_empty());
+            CHECK(sdf.get_library()[i].program.validate(25).empty());
         }
         CHECK(sdf.get_snapshot());
         CHECK(sdf.get_snapshot()->records.size() == 8); // 4 rocks + 3 trunks + 1 cave
@@ -356,7 +356,7 @@ TEST_CASE("SDFArchetype: the shapes gallery is valid, its ground flat, its cubes
     const double vs = param.voxel_size;
     SDFArchetype sdf(SDFArchetype::Scene::SHAPES);
     sdf.configure(param, 25);
-    CHECK(sdf.get_ground().validate(25).is_empty());
+    CHECK(sdf.get_ground().validate(25).empty());
     const Instance scene = SDFArchetype::shapes(vs);
     CHECK(compile(scene).error.is_empty());
     // The SDF (metres) at p_anchor + (p_x, p_y, p_z) metres.

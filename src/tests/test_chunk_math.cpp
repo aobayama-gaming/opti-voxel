@@ -101,7 +101,7 @@ TEST_CASE("ChunkMath: grid_to_render_lo32 matches grid_to_render across a low-wo
     // What the page shader does from a header (low words only) must land where the CPU puts it.
     ChunkParam param;
     param.origin_chunk = snapped_origin((int64_t(1) << 32) - (int64_t(1) << 16), 0, -(int64_t(1) << 35));
-    const Vector3 grid(5.5, 2.0, 30.0);
+    const Float3 grid{ 5.5f, 2.0f, 30.0f };
     for (const ChunkId offset : { ChunkId(1, 1, 1), ChunkId(131073, -5, 7), ChunkId(-131071, 9, -1), ChunkId(131080, 8, -8) }) {
         const ChunkId chunk = param.origin_chunk + offset;
         CAPTURE(chunk);
@@ -127,8 +127,8 @@ TEST_CASE("ChunkMath: sample_pos gives the same WorldPos from every chunk reachi
 TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the view cone") {
     ScanView view;
     view.camera_chunk = ChunkId(1, 1, 1);
-    view.forward = Vector3(0, 0, -1);
-    view.set_half_angle(Math_PI / 4.0);
+    view.forward = Float3{ 0.0f, 0.0f, -1.0f };
+    view.set_half_angle(WorldCoord::PI / 4.0);
     const double r0 = ChunkMath::chunk_bounding_radius(0);
     CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, -99), 0, view) == 0.0); // on the axis
     CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, view) == doctest::Approx(100.0 - r0)); // behind: the apex
@@ -139,15 +139,15 @@ TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the
             doctest::Approx(view.camera_chunk.distance_to(far_behind) - ChunkMath::chunk_bounding_radius(3)));
 
     ScanView none = view;
-    none.forward = Vector3();
+    none.forward = Float3{};
     CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, none) == 0.0); // no direction: all in view
 
     // Past 90 degrees (a wide margin): the axis is inside, only the back cone is out.
     ScanView wide = view;
-    wide.set_half_angle(Math::deg_to_rad(120.0));
+    wide.set_half_angle(godot::Math::deg_to_rad(120.0));
     CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, -99), 0, wide) == 0.0);
     CHECK(ChunkMath::view_cone_gap(ChunkId(101, 1, 1), 0, wide) == 0.0);
-    CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, wide) == doctest::Approx(100.0 * std::sin(Math::deg_to_rad(60.0)) - r0));
+    CHECK(ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, wide) == doctest::Approx(100.0 * std::sin(godot::Math::deg_to_rad(60.0)) - r0));
     // The default half-angle (pi): every chunk is in the cone.
     ScanView all = view;
     all.cos_half_angle = ScanView().cos_half_angle;
@@ -157,7 +157,8 @@ TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the
     }
 
     // 1-Lipschitz in the centre: the LOD rule's balance relies on it.
-    view.forward = Vector3(0.3f, -0.5f, 0.8f).normalized();
+    const godot::Vector3 f3 = godot::Vector3(0.3f, -0.5f, 0.8f).normalized();
+    view.forward = Float3{ f3.x, f3.y, f3.z };
     Lcg rng{ 12345 };
     auto next = [&rng]() { return rng.next(); };
     for (int i = 0; i < 2000; i++) {
@@ -172,15 +173,15 @@ TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the
 TEST_CASE("ChunkMath: lod_cone_gap is the least faded gap to the remembered cones") {
     ScanView view;
     view.camera_chunk = ChunkId(1, 1, 1);
-    view.forward = Vector3(0, 0, -1);
-    view.set_half_angle(Math::deg_to_rad(70.0));
+    view.forward = Float3{ 0.0f, 0.0f, -1.0f };
+    view.set_half_angle(godot::Math::deg_to_rad(70.0));
     CHECK(ChunkMath::lod_cone_gap(ChunkId(1, 1, 101), 0, view) == ChunkMath::view_cone_gap(ChunkId(1, 1, 101), 0, view)); // no memory
     // Views from the camera chunk and from spots it walked away from (sorted by fade, as remember_view does).
     const ScanView::ViewMemory memories[] = {
-        { ChunkId(1, 1, 1), Vector3(0, 0, -1), 0.0 },
-        { ChunkId(1, 1, 1), Vector3(1, 0, 0), 0.0 },
-        { ChunkId(-39, 3, 41), Vector3(0.3f, -0.8f, 0.5f).normalized(), 10.0 },
-        { ChunkId(201, -7, 1), Vector3(-0.6f, 0.1f, 0.7f).normalized(), 150.0 },
+        { ChunkId(1, 1, 1), Float3{ 0.0f, 0.0f, -1.0f }, 0.0 },
+        { ChunkId(1, 1, 1), Float3{ 1.0f, 0.0f, 0.0f }, 0.0 },
+        { ChunkId(-39, 3, 41), Float3{ 0.3f, -0.8f, 0.5f }.normalized(), 10.0 },
+        { ChunkId(201, -7, 1), Float3{ -0.6f, 0.1f, 0.7f }.normalized(), 150.0 },
     };
     for (const ScanView::ViewMemory &m : memories) {
         view.memories[view.memory_count++] = m;
@@ -195,7 +196,7 @@ TEST_CASE("ChunkMath: lod_cone_gap is the least faded gap to the remembered cone
             ScanView one = view;
             one.camera_chunk = m.apex;
             one.forward = m.dir;
-            want = MIN(want, m.fade + ChunkMath::view_cone_gap(a, 0, one));
+            want = std::min(want, m.fade + ChunkMath::view_cone_gap(a, 0, one));
         }
         CAPTURE(a);
         CHECK(ChunkMath::lod_cone_gap(a, 0, view) == want);
@@ -219,8 +220,8 @@ TEST_CASE("ChunkMath: view_cone_half_angle is the diagonal half-FOV plus the mar
 TEST_CASE("ChunkMath: lod_distance grows away from the view cone, up to the back error") {
     ScanView view;
     view.camera_chunk = ChunkId(1, 1, 1);
-    view.forward = Vector3(0, 0, -1);
-    view.set_half_angle(Math_PI / 4.0);
+    view.forward = Float3{ 0.0f, 0.0f, -1.0f };
+    view.set_half_angle(WorldCoord::PI / 4.0);
     const ChunkId ahead(4, 4, -500);
     const ChunkId behind(4, 4, 500);
     const float r2 = ChunkMath::chunk_bounding_radius(2);
@@ -234,8 +235,8 @@ TEST_CASE("ChunkMath: lod_distance grows away from the view cone, up to the back
 TEST_CASE("ChunkMath: load_queue puts the view cone first, then the finest LOD") {
     ScanView view;
     view.camera_chunk = ChunkId(1, 1, 1);
-    view.forward = Vector3(1, 0, 0);
-    view.set_half_angle(Math::deg_to_rad(60.0));
+    view.forward = Float3{ 1.0f, 0.0f, 0.0f };
+    view.set_half_angle(godot::Math::deg_to_rad(60.0));
     const int lods = 15;
     CHECK(ChunkMath::load_queue(ChunkId(41, 1, 1), lods, view) == 0);
     CHECK(ChunkMath::load_queue(ChunkId(1000, 8, 8), lods, view) == 3);

@@ -1,4 +1,5 @@
 #include "cascade_spike.hpp"
+#include "godot_conv.hpp"
 
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
@@ -266,7 +267,7 @@ private:
                         differing++;
                         if (checks.wants_example()) {
                             checks.example(vformat("set %s LOD %d chunk %s (%s) level m=%d point %s channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
-                                    WorldCoord::to_string(chunks[c].id), chunks[c].place, m, WorldCoord::to_string(p_p), ch, got, want, float_bits(got), float_bits(want)));
+                                    godot_str(WorldCoord::to_string(chunks[c].id)), chunks[c].place, m, godot_str(WorldCoord::to_string(p_p)), ch, got, want, float_bits(got), float_bits(want)));
                         }
                     }
                 }
@@ -293,7 +294,7 @@ private:
                 checks.samples_differing++;
                 if (checks.wants_example()) {
                     checks.example(vformat("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
-                            WorldCoord::to_string(chunks[p_chunk].id), WorldCoord::to_string(p_grid), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
+                            godot_str(WorldCoord::to_string(chunks[p_chunk].id)), godot_str(WorldCoord::to_string(p_grid)), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
                 }
                 return;
             }
@@ -334,8 +335,8 @@ private:
                 if (float_bits(flush_value(expect[ch])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
                     checks.relation_differing++;
                     if (checks.wants_example()) {
-                        checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, WorldCoord::to_string(chunks[p_pair.child].id),
-                                WorldCoord::to_string(p_p), ch));
+                        checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, godot_str(WorldCoord::to_string(chunks[p_pair.child].id)),
+                                godot_str(WorldCoord::to_string(p_p)), ch));
                     }
                     return;
                 }
@@ -561,7 +562,7 @@ Dictionary check_points(RenderingDevice *p_rd, ChannelSet p_set, int p_lods, con
             if (float_bits(want) != float_bits(got[i])) {
                 lod_differing++;
                 if (examples.size() < 24) {
-                    examples.push_back(vformat("set %s LOD %d point %s: gpu %s cpu %s (bits %x / %x)", set_label(p_set), lod, WorldCoord::to_string(v), got[i], want,
+                    examples.push_back(vformat("set %s LOD %d point %s: gpu %s cpu %s (bits %x / %x)", set_label(p_set), lod, godot_str(WorldCoord::to_string(v)), got[i], want,
                             float_bits(got[i]), float_bits(want)));
                 }
             }

@@ -1,4 +1,5 @@
 #include "page_auditor.hpp"
+#include "godot_conv.hpp"
 
 #include "chunk_math.hpp"
 #include "debug_log.hpp"
@@ -109,7 +110,7 @@ void PageAuditor::_analyse() {
     int64_t drawn_slots = 0, live = 0, dead_zero = 0, stale = 0, partial = 0, broken = 0, bad_header = 0;
     const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
     double max_edge = 0.0;
-    Vector3 max_edge_at;
+    Float3 max_edge_at;
     int64_t pages_with_stale = 0, pages_with_partial = 0;
     Array samples;
     // Per chunk: quad count and the wrapping sum of the quad hashes. The order of the quads inside a
@@ -142,7 +143,7 @@ void PageAuditor::_analyse() {
             }
             const bool in_live = r < ranges.size() && q >= ranges[r].offset;
             // Headers carry the low 32 bits of the chunk id.
-            const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(page, q / QuadPagePool::QUAD_GROUP));
+            const ov::ivec3 chunk = PageFormat::header_chunk(PageFormat::row(page, q / QuadPagePool::QUAD_GROUP));
             if (in_live && q % QuadPagePool::QUAD_GROUP == 0 && chunk != WorldCoord::lo32_i(ranges[r].chunk)) {
                 bad_header++;
             }
@@ -150,7 +151,8 @@ void PageAuditor::_analyse() {
             Vector3 p[4]; // in the chunk's vertex grid
             for (int k = 0; k < 4; k++) {
                 const uint16_t *c = PageFormat::corner(page, q, k);
-                p[k] = PageFormat::decode_local(c, scale);
+                const Float3 loc = PageFormat::decode_local(c, scale);
+                p[k] = Vector3(loc.x, loc.y, loc.z);
                 zero_corners += PageFormat::is_zero(c) ? 1 : 0;
             }
             if (zero_corners > 0 && zero_corners < 4) {
@@ -179,10 +181,10 @@ void PageAuditor::_analyse() {
             if (zero_corners == 0) {
                 const int lod = chunk.x == 0 ? 0 : WorldCoord::ctz64(WorldCoord::lo32(chunk.x));
                 const double cell = std::ldexp(double(chunk_param.voxel_size), lod);
-                const double e = cell * MAX(MAX(p[0].distance_to(p[1]), p[0].distance_to(p[2])), MAX(p[3].distance_to(p[1]), p[3].distance_to(p[2])));
+                const double e = cell * std::max(std::max(p[0].distance_to(p[1]), p[0].distance_to(p[2])), std::max(p[3].distance_to(p[1]), p[3].distance_to(p[2])));
                 if (e > max_edge) {
                     max_edge = e;
-                    max_edge_at = ChunkMath::grid_to_render_lo32(chunk, p[0], chunk_param);
+                    max_edge_at = ChunkMath::grid_to_render_lo32(chunk, Float3{ p[0].x, p[0].y, p[0].z }, chunk_param);
                 }
             }
         }
@@ -200,11 +202,11 @@ void PageAuditor::_analyse() {
     report["pages_with_stale"] = pages_with_stale;
     report["pages_with_partial"] = pages_with_partial;
     report["max_quad_edge_m"] = max_edge;
-    report["max_quad_edge_at"] = max_edge_at;
+    report["max_quad_edge_at"] = godot_v3(max_edge_at);
     report["partial_samples"] = samples;
     Dictionary chunk_digests;
     for (const KeyValue<ChunkId, std::pair<int64_t, uint64_t>> &kv : digests) {
-        chunk_digests[WorldCoord::to_string(kv.key)] = vformat("%d:%s", kv.value.first, String::num_uint64(kv.value.second, 16));
+        chunk_digests[godot_str(WorldCoord::to_string(kv.key))] = vformat("%d:%s", kv.value.first, String::num_uint64(kv.value.second, 16));
     }
     report["chunk_digests"] = chunk_digests;
     report["ok"] = stale == 0 && partial == 0 && broken == 0 && bad_header == 0;

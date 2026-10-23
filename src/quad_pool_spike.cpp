@@ -1,4 +1,5 @@
 #include "quad_pool_spike.hpp"
+#include "godot_conv.hpp"
 
 #include "debug_log.hpp"
 #include "page_format.hpp"
@@ -95,10 +96,12 @@ void QuadPoolSpike::_ready() {
 
     // Corners are stored relative to one chunk: the smallest one whose vertex grid holds the sheet.
     const AABB sheet(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size));
-    sheet_chunk = ChunkMath::chunk_at_render(sheet.get_center(), chunk_param);
+    const Vector3 sheet_center = sheet.get_center();
+    sheet_chunk = ChunkMath::chunk_at_render(Float3{ sheet_center.x, sheet_center.y, sheet_center.z }, chunk_param);
     for (int lod = 0; lod < 24; lod++) {
-        const Vector3 lo = ChunkMath::grid_to_render(sheet_chunk, Vector3(), chunk_param);
-        const Vector3 hi = ChunkMath::grid_to_render(sheet_chunk, Vector3(1, 1, 1) * (chunk_param.chunk_size - 1), chunk_param);
+        const Vector3 lo = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{}, chunk_param));
+        const Vector3 grid_hi{ float(chunk_param.chunk_size - 1), float(chunk_param.chunk_size - 1), float(chunk_param.chunk_size - 1) };
+        const Vector3 hi = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{ grid_hi.x, grid_hi.y, grid_hi.z }, chunk_param));
         if (AABB(lo, hi - lo).encloses(sheet)) {
             break;
         }
@@ -156,8 +159,8 @@ void QuadPoolSpike::_rt_run(int p_page) {
     uniforms.push_back(u1);
     rt_uniform_set = rd->uniform_set_create(uniforms, rt_shader, 0);
 
-    const Vector3 grid = ChunkMath::grid_to_render(sheet_chunk, Vector3(), chunk_param);
-    const Vector3i sheet_chunk_lo = WorldCoord::lo32_i(sheet_chunk);
+    const Vector3 grid = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{}, chunk_param));
+    const ov::ivec3 sheet_chunk_lo = WorldCoord::lo32_i(sheet_chunk);
     PackedByteArray push;
     push.resize(64);
     push.fill(0);
@@ -261,7 +264,7 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
     r["indirect_index_count"] = command.decode_u32(0);
     r["indirect_group_count"] = command.decode_u32(4);
     r["texture_bytes_read"] = bytes.size();
-    r["sheet_chunk"] = WorldCoord::to_string(sheet_chunk);
+    r["sheet_chunk"] = godot_str(WorldCoord::to_string(sheet_chunk));
 
     const float step = sheet_size / side;
     auto height = [&](float x, float z) { return sheet_origin.y + 3.0f * std::sin(x * 0.3f) * std::cos(z * 0.3f); };
@@ -285,8 +288,8 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
         bad_headers += PageFormat::header_chunk(PageFormat::row(data, g)) != WorldCoord::lo32_i(sheet_chunk) ? 1 : 0;
     }
     auto world_of = [&](uint32_t slot, int k) {
-        const Vector3i chunk = PageFormat::header_chunk(PageFormat::row(data, slot / PageFormat::QUAD_GROUP));
-        return ChunkMath::grid_to_render_lo32(chunk, PageFormat::decode_local(PageFormat::corner(data, slot, k), scale), chunk_param);
+        const ov::ivec3 chunk = PageFormat::header_chunk(PageFormat::row(data, slot / PageFormat::QUAD_GROUP));
+        return godot_v3(ChunkMath::grid_to_render_lo32(chunk, PageFormat::decode_local(PageFormat::corner(data, slot, k), scale), chunk_param));
     };
     for (uint32_t slot = 0; slot < quad_count && slot / PageFormat::QUAD_GROUP < rows; slot++) {
         if (PageFormat::is_zero(PageFormat::corner(data, slot, 0))) {
@@ -313,8 +316,8 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
         for (int k = 0; k < 4; k++) {
             const Vector3 got = world_of(slot, k);
             max_pos_err = MAX(max_pos_err, (double)got.distance_to(surf(c[k].x, c[k].y)));
-            const Vector3 n = PageFormat::decode_normal(PageFormat::corner(data, slot, k));
-            const double ang = Math::rad_to_deg(std::acos(CLAMP(n.dot(surf_normal(c[k].x, c[k].y)), -1.0f, 1.0f)));
+            const Float3 n = PageFormat::decode_normal(PageFormat::corner(data, slot, k));
+            const double ang = Math::rad_to_deg(std::acos(std::clamp(godot_v3(n).dot(surf_normal(c[k].x, c[k].y)), -1.0f, 1.0f)));
             max_normal_err_deg = MAX(max_normal_err_deg, ang);
         }
     }

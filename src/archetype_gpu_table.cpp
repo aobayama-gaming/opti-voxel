@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
+#include "ov/bytes.hpp"
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <algorithm>
@@ -40,13 +41,13 @@ PackedByteArray GpuTable::record_bytes(uint32_t p_have_version, uint32_t &r_vers
     for (const std::pair<uint32_t, uint32_t> &r : runs) {
         bytes.encode_u32(at, r.first * RECORD_BYTES);
         bytes.encode_u32(at + 4, r.second * RECORD_BYTES);
-        PackedByteArray span;
-        span.resize(int64_t(r.second) * RECORD_BYTES);
+        ov::bytes span;
+        span.resize(size_t(r.second) * RECORD_BYTES);
         for (uint32_t i = 0; i < r.second; i++) {
             encode_record(span, i, s->records[r.first + i]);
         }
-        std::memcpy(bytes.ptrw() + at + 8, span.ptr(), span.size());
-        at += 8 + span.size();
+        std::memcpy(bytes.ptrw() + at + 8, span.data(), span.size());
+        at += 8 + int64_t(span.size());
     }
     return bytes;
 }

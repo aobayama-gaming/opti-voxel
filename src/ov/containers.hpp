@@ -42,13 +42,24 @@ public:
     void reserve(size_t p_count) { m_map.reserve(p_count); }
 
     void insert(const TKey &p_key, const TValue &p_value) { m_map.insert_or_assign(p_key, p_value); }
+    // godot's operator[]: default-constructs a missing key's value.
+    TValue &operator[](const TKey &p_key) { return m_map[p_key]; }
     bool has(const TKey &p_key) const { return m_map.find(p_key) != m_map.end(); }
     TValue *getptr(const TKey &p_key) { return m_map.count(p_key) ? &m_map.find(p_key)->second : nullptr; }
     const TValue *getptr(const TKey &p_key) const { return m_map.count(p_key) ? &m_map.find(p_key)->second : nullptr; }
     bool erase(const TKey &p_key) { return m_map.erase(p_key) != 0; }
 };
 
-template <typename TKey, typename THasher, typename TEqual = std::equal_to<TKey>>
+// The godot default: HashMapHasherDefault's spirit, over std::hash (membership-only sets in the core:
+// uint32 ids). Iteration layout is not part of the contract.
+struct DefaultHash {
+    template <typename T>
+    static uint32_t hash(const T &p_v) {
+        return uint32_t(std::hash<T>{}(p_v));
+    }
+};
+
+template <typename TKey, typename THasher = DefaultHash, typename TEqual = std::equal_to<TKey>>
 class HashSet {
     using Set = std::unordered_set<TKey, HasherAdapter<TKey, THasher>, TEqual>;
     Set m_set;
@@ -70,6 +81,8 @@ public:
     void insert(const TKey &p_key) { m_set.insert(p_key); }
     bool has(const TKey &p_key) const { return m_set.count(p_key) != 0; }
     bool erase(const TKey &p_key) { return m_set.erase(p_key) != 0; }
+    // godot's remove(const Iterator &): erase at the iterator, no return value.
+    void remove(const Iterator &p_it) { m_set.erase(p_it); }
 };
 
 } // namespace ov

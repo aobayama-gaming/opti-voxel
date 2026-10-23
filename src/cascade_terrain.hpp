@@ -26,7 +26,7 @@ inline constexpr double EARTH_MAX_AMP = 65536.0; // 2^16 voxels: 3.3 km at 5 cm
 inline Cascade::Spec earth(Cascade::ChannelSet p_set) {
     Cascade::Spec spec = make_spec(0xEA27u, 29, 0.125, p_set, 3);
     for (Cascade::Band &b : spec.bands) {
-        b.amp = float(MIN(double(b.amp), EARTH_MAX_AMP));
+        b.amp = float(std::min(double(b.amp), EARTH_MAX_AMP));
     }
     return spec;
 }

@@ -2,11 +2,9 @@
 
 #include "chunk_math.hpp"
 #include "chunk_output.hpp"
-#include "godot_cpp/templates/hash_set.hpp"
+#include "ov/containers.hpp"
 
 #include <vector>
-
-using namespace godot;
 
 // Nearest strict ancestor of r_chunk that p_set holds, searching the LODs below p_max_lod (the LODs
 // chunks exist at). Returns its LOD and sets r_chunk to it, or returns -1 and leaves r_chunk alone.
@@ -28,14 +26,14 @@ int find_ancestor_in(const T &p_set, ChunkId &r_chunk, int p_max_lod) {
 }
 
 // Chunk ids (chunk centres, see chunk_math.hpp).
-class LODHashSet : public HashSet<ChunkId, Vector3i64Hasher> {
+class LODHashSet : public ov::HashSet<ChunkId, Vector3i64Hasher> {
 public:
     int max_lod = 0; // chunks exist at LODs [0, max_lod)
 
     int find_ancestor(ChunkId &r_chunk) const { return find_ancestor_in(*this, r_chunk, max_lod); }
 };
 
-class ChunkHashMap : public HashMap<ChunkId, ChunkOutput, Vector3i64Hasher> {
+class ChunkHashMap : public ov::HashMap<ChunkId, ChunkOutput, Vector3i64Hasher> {
 public:
     int max_lod = 0; // chunks exist at LODs [0, max_lod)
 
@@ -123,7 +121,7 @@ inline void face_lod_jumps(const LODHashSet &p_scan, int p_max_lod, std::vector<
                 if (other < 0) {
                     continue;
                 }
-                const size_t jump = size_t(ABS(other - lod));
+                const size_t jump = size_t(std::abs(other - lod));
                 if (r_faces.size() <= jump) {
                     r_faces.resize(jump + 1, 0);
                 }

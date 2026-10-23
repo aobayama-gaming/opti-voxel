@@ -1,4 +1,5 @@
 #include "GPU_direct_mesher.hpp"
+#include "godot_conv.hpp"
 
 #include "cascade_glsl.hpp"
 #include "exact_noise.hpp"
@@ -119,7 +120,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     pool->set_material_param("skirt_size", chunk_param.skirt_size);
     pool->set_material_param("pos_scale", PageFormat::pos_scale(chunk_param.chunk_size));
     // Render positions are relative to the world origin (low words, wrapping).
-    pool->set_material_param("origin_chunk_lo", WorldCoord::lo32_i(chunk_param.origin_chunk));
+    pool->set_material_param("origin_chunk_lo", godot_v3i(WorldCoord::lo32_i(chunk_param.origin_chunk)));
     page_state.resize(pool->get_page_count());
 
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_initialize));
@@ -544,7 +545,7 @@ void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const Packed
 }
 
 AABB GPUDirectMesher::_chunk_aabb(const ChunkId &p_chunk) const {
-    const Vector3 center = ChunkMath::chunk_render_center(p_chunk, chunk_param);
+    const Vector3 center = godot_v3(ChunkMath::chunk_render_center(p_chunk, chunk_param));
     const float size = ChunkMath::world_chunk_size(p_chunk, chunk_param);
     // Skirt cells extend past the chunk bounds; be generous rather than cull visible geometry.
     const float margin = size * 0.25f;
@@ -1126,7 +1127,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
                 out->page = page;
                 out->quad_offset = moved.offset;
             } else {
-                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", WorldCoord::to_string(m.chunk.id)));
+                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", godot_str(WorldCoord::to_string(m.chunk.id))));
             }
         }
         group_counts.append_array({ page, (int)d.groups });

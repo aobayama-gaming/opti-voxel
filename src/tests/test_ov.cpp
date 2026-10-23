@@ -54,10 +54,10 @@ TEST_CASE("ov::murmur3: the vendored chain mirrors godot's hashfuncs") {
     // The one-32 chain and the final mix, from godot's HASH_MURMUR3_SEED 0x7F07C65. Pinned so the
     // vendored copy cannot drift: Vector3i64Hasher's hashes (and every container's layout) stay
     // exactly those of the pre-de-Godot code.
-    CHECK(ov::murmur3_one_32(0u) == hash_murmur3_one_32(0u));
-    CHECK(ov::murmur3_one_32(0x9E3779B9u, 0xF00D) == hash_murmur3_one_32(0x9E3779B9u, 0xF00D));
-    CHECK(ov::fmix32(0x7F07C65u) == hash_fmix32(0x7F07C65u));
-    CHECK(ov::fmix32(0x12345678u) == hash_fmix32(0x12345678u));
+    CHECK(ov::murmur3_one_32(0u) == godot::hash_murmur3_one_32(0u));
+    CHECK(ov::murmur3_one_32(0x9E3779B9u, 0xF00D) == godot::hash_murmur3_one_32(0x9E3779B9u, 0xF00D));
+    CHECK(ov::fmix32(0x7F07C65u) == godot::hash_fmix32(0x7F07C65u));
+    CHECK(ov::fmix32(0x12345678u) == godot::hash_fmix32(0x12345678u));
 }
 
 TEST_CASE("ov::HashMap: the godot call surface") {

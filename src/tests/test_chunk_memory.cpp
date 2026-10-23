@@ -186,7 +186,7 @@ struct Sim {
             }
         } else {
             for (double &c : camera) {
-                c = CLAMP(c + double(uniform(7) - 3), -world, world);
+                c = std::clamp(c + double(uniform(7) - 3), -world, world);
             }
         }
         if (uniform(30) == 0) {
@@ -247,8 +247,8 @@ struct Sim {
     // The frame's destroy check, then (like _process) the frame's results, then the destruction.
     void frame() {
         update(state);
-        for (const KeyValue<ChunkId, ChunkOutput> &kv : state.to_destroy_chunk) {
-            failures += state.loaded_chunk.has(kv.key) && !state.scanned_chunk->has(kv.key) ? 0 : 1;
+        for (const auto &kv : state.to_destroy_chunk) {
+            failures += state.loaded_chunk.has(kv.first) && !state.scanned_chunk->has(kv.first) ? 0 : 1;
         }
         for (int n = uniform(3); n > 0 && !in_flight.empty(); n--) {
             result();

@@ -2,7 +2,17 @@
 
 #include "world_coord.hpp"
 
+// GLSL text builders (glsl_float .. glsl_fbm) still speak godot's String: they feed the GLSL splice
+// files (archetype_glsl, cascade_glsl), which convert wholesale in the GLSL-text-pipeline change.
+// The rest of this header is engine-free.
 #include <godot_cpp/variant/string.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
+
+using godot::String;
+using godot::vformat;
+
+#include "ov/format.hpp"
+#include "ov/on_error.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -430,7 +440,10 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
     for (int i = 0; i < p_count; i++) {
         Octave o;
         o.k = p_k_top - i;
-        ERR_CONTINUE_MSG(o.k < 0 || o.k > MAX_K, "ExactNoise: octave wavelength out of range.");
+        if (o.k < 0 || o.k > MAX_K) {
+            ov::report_error(__FILE__, __LINE__, "ExactNoise: octave wavelength out of range.");
+            continue;
+        }
         const UVec3 h = pcg3d(UVec3{ p_seed, uint32_t(i), 0x51ED270Bu });
         o.seed = h.x;
         auto axis_offset = [&](uint32_t p_a, uint32_t p_b) {
@@ -444,7 +457,7 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
         o.offset = Vector3i64(axis_offset(h.y, h2.x), axis_offset(h.z, h2.y), axis_offset(h2.z, h.x));
         o.amp = float(amp);
         if (!in_exact_range(o.amp)) {
-            ERR_PRINT(vformat("ExactNoise: octave k=%d amplitude %s outside [2^-16, 2^40]: denormals possible.", o.k, o.amp));
+            ov::report_error(__FILE__, __LINE__, ov::format("ExactNoise: octave k=%d amplitude %s outside [2^-16, 2^40]: denormals possible.", o.k, o.amp));
         }
         set.octaves.push_back(o);
         amp *= p_persistence;
@@ -454,16 +467,16 @@ inline OctaveSet make_fbm(bool p_2d, uint32_t p_seed, int p_k_top, int p_count, 
 
 // Checks the gradient factors at the LODs [0, p_lod_count) the set is evaluated at (configure time):
 // an error message, empty if they are all in range.
-inline String gradient_range_error(const OctaveSet &p_set, int p_lod_count) {
+inline ov::str gradient_range_error(const OctaveSet &p_set, int p_lod_count) {
     for (const Octave &o : p_set.octaves) {
         for (int lod = 0; lod < p_lod_count; lod++) {
             if (!in_exact_range(gradient_factor(o, lod))) {
-                return vformat("ExactNoise: octave k=%d amplitude %s at LOD %d: gradient factor %s outside [2^-16, 2^40], denormals possible.",
+                return ov::format("ExactNoise: octave k=%d amplitude %s at LOD %d: gradient factor %s outside [2^-16, 2^40], denormals possible.",
                         o.k, o.amp, lod, gradient_factor(o, lod));
             }
         }
     }
-    return String();
+    return ov::str();
 }
 
 // Value and gradient per voxel of LOD p_lod (see Octave).

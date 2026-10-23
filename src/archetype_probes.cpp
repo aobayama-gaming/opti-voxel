@@ -18,7 +18,7 @@ Probe probe(const String &p_name, const Program &p_program, bool p_trace) {
     p.is_float = true;
     String lods;
     for (int i = 0; i < PROBE_LOD_COUNT; i++) {
-        lods += (i ? ", " : "") + itos(PROBE_LODS[i]);
+        lods += (i ? ", " : "") + godot::itos(PROBE_LODS[i]);
     }
     p.glsl = generate_glsl(p_program, p.name, p_trace);
     p.glsl += vformat(R"glsl(void probe_%s(WorldPos p, uint b) {

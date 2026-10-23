@@ -26,11 +26,11 @@ using str = std::string;
 
 namespace detail {
 
-// Shortest text that round-trips the value at full precision (godot's plain float text: 1, 0.25,
-// 0.33333333333333), trailing zeros dropped.
+// Shortest text that round-trips the value (godot's plain float text: 1, 0.25, 0.33333333333333):
+// ascending significant-digit counts, first one that round-trips wins, trailing zeros dropped.
 inline str num_text(double p_v) {
     char buf[64];
-    for (int digits = 17; digits > 0; digits--) {
+    for (int digits = 1; digits <= 17; digits++) {
         const int n = std::snprintf(buf, sizeof(buf), "%.*g", digits, p_v);
         if (n <= 0) {
             continue;
@@ -100,7 +100,7 @@ inline str format_one(const char *p_fmt, const T &p_head, const char *&p_next) {
     }
     const char conv = *s;
     const char *spec_begin = p_fmt; // includes '%'
-    const char tail[4] = {'l', 'l', conv, '\0'}; // the 64-bit length letters + the conversion char
+    const char tail[4] = { 'l', 'l', conv, '\0' }; // the 64-bit length letters + the conversion char
 
     // A spec too long for the format buffer is malformed for our call sites: report, render verbatim
     // and consume the argument.

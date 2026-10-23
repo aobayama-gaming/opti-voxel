@@ -154,12 +154,12 @@ private:
     // Instance edits: their chunks, dispatched before chunk_queue, finest LOD first. send_chunk() does
     // not touch this. required_version is the table version a chunk must be re-meshed from (staleness).
     std::vector<std::vector<ChunkId>> remesh_queue;
-    HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
-    HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
+    godot::HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
+    godot::HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
     LODHashSet working_generation;
 
     uint32_t next_batch_id = 0;
-    HashMap<uint32_t, InFlightBatch> in_flight;
+    godot::HashMap<uint32_t, InFlightBatch> in_flight;
     std::vector<PageState> page_state; // indexed by pool page
     std::vector<int> dirty_bounds_pages;
 
@@ -171,7 +171,7 @@ private:
     std::vector<CompletedBatch> completed;
 
     std::vector<ChunkId> audit_queue;
-    HashMap<uint32_t, std::vector<ChunkId>> audit_in_flight;
+    godot::HashMap<uint32_t, std::vector<ChunkId>> audit_in_flight;
     std::vector<CompletedBatch> audit_completed; // directory only
     std::vector<std::pair<ChunkId, uint32_t>> audit_counts;
 
@@ -181,7 +181,7 @@ private:
     // (us, timestamps begin..copy) to `measured_batches` (under mutex); the main thread matches it with
     // the batch's chunks per LOD and corrects the model.
     GPUCostModel cost_model;
-    HashMap<uint32_t, std::vector<uint32_t>> batch_lod_counts;
+    godot::HashMap<uint32_t, std::vector<uint32_t>> batch_lod_counts;
     std::vector<std::pair<uint32_t, uint64_t>> measured_batches;
     void _update_cost_model();
 
@@ -237,7 +237,7 @@ private:
     bool rt_destroying = false;
 
     // completion assembly (render thread writes, main thread consumes; under mutex)
-    HashMap<uint32_t, CompletedBatch> partial;
+    godot::HashMap<uint32_t, CompletedBatch> partial;
 
     bool _pop_queue(ChunkId &r_chunk);
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left

@@ -1,6 +1,8 @@
 // Trees as archetype-table instances (tree_archetype.hpp).
 #include "tree_archetype.hpp"
 
+#include <algorithm>
+
 #include <cmath>
 #include <queue>
 
@@ -176,7 +178,7 @@ private:
             }
             sum = keep_thick();
         }
-        r_end = MAX(MIN(std::sqrt(MAX(p_stem.r0 * p_stem.r0 - sum, 0.0)), s.end_ratio * p_stem.r0), s.tip_ratio * p_stem.r0);
+        r_end = std::max(std::min(std::sqrt(std::max(p_stem.r0 * p_stem.r0 - sum, 0.0)), s.end_ratio * p_stem.r0), s.tip_ratio * p_stem.r0);
         return forks;
     }
 
@@ -193,7 +195,7 @@ private:
         const Joint root{ p_stem.p0, 0.0 };
         const Joint tip{ snap(p_stem.p0 + p_stem.dir * p_stem.length), 1.0 };
         std::vector<Joint> joints{ root };
-        refine(p_stem, radius_at, root, tip, 1u, MAX(MAX_REFINE - p_stem.order, 0), joints);
+        refine(p_stem, radius_at, root, tip, 1u, std::max(MAX_REFINE - p_stem.order, 0), joints);
 
         if (p_stem.order == 0) {
             // The hull: spheres on the trunk's polyline, between the crown base and the top.
@@ -217,7 +219,7 @@ private:
             child.p0 = snap(point_at(joints, f.t));
             child.dir = turn(direction_at(joints, f.t), f.angle, f.azimuth);
             child.length = f.length;
-            child.r0 = MIN(f.r, radius_at(f.t)); // never thicker than the parent where it forks
+            child.r0 = std::min(f.r, radius_at(f.t)); // never thicker than the parent where it forks
             child.path = f.path;
             child.seq = ++seq;
             if (child.r0 >= MIN_RADIUS) {
@@ -242,7 +244,7 @@ private:
     void refine(const Stem &p_stem, const R &p_radius_at, Joint p_a, Joint p_b, uint32_t p_node, int p_levels, std::vector<Joint> &r_joints) const {
         const Vec seg = p_b.p - p_a.p;
         const double l = length(seg);
-        if (p_levels == 0 || l <= s.segment_ratio * MAX(p_radius_at(p_a.t), p_radius_at(p_b.t))) {
+        if (p_levels == 0 || l <= s.segment_ratio * std::max(p_radius_at(p_a.t), p_radius_at(p_b.t))) {
             r_joints.push_back(p_b);
             return;
         }
@@ -388,7 +390,7 @@ void forest_sites(int p_count, double p_area_m, double p_centre_x_m, double p_ce
     if (p_count <= 0 || !(p_area_m > 0.0)) {
         return;
     }
-    const int64_t cell = MAX<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
+    const int64_t cell = std::max<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
     const int64_t half = std::llround(0.5 * p_area_m / p_voxel);
     const int64_t x0 = std::llround(p_centre_x_m / p_voxel) - half, x1 = x0 + 2 * half;
     const int64_t z0 = std::llround(p_centre_z_m / p_voxel) - half, z1 = z0 + 2 * half;

@@ -1,10 +1,19 @@
 #include "chunk_discoverer.hpp"
+#include "godot_conv.hpp"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+
+// The core headers no longer leak `using namespace godot` (the de-Godot sweep): this engine-fitted
+// file names godot's map types explicitly.
+using godot::HashMap;
+using godot::HashSet;
+using godot::KeyValue;
 
 #include <algorithm>
 #include <chrono>
@@ -475,8 +484,9 @@ ScanView ChunkDiscoverer::get_view() {
 
 ScanView ChunkDiscoverer::make_view(const Vector3 &p_pos, const Vector3 &p_forward) const {
     ScanView v;
-    v.camera_chunk = ChunkMath::chunk_at_render(p_pos, chunk_param);
-    v.forward = p_forward.length_squared() > 0.0f ? p_forward.normalized() : Vector3();
+    v.camera_chunk = ChunkMath::chunk_at_render(Float3{ p_pos.x, p_pos.y, p_pos.z }, chunk_param);
+    const Vector3 f = p_forward.length_squared() > 0.0f ? p_forward.normalized() : Vector3();
+    v.forward = Float3{ f.x, f.y, f.z };
     v.set_half_angle(cone_half_angle);
     v.back_scale = back_scale;
     return v;
@@ -503,7 +513,7 @@ bool ChunkDiscoverer::view_changed(const ScanView &p_scanned, const ScanView &p_
 }
 
 ChunkDiscoverer::Remembered ChunkDiscoverer::remember_view(ScanView &r_view, double p_memory_distance) {
-    if (r_view.back_scale == 0.0 || r_view.forward == Vector3()) {
+    if (r_view.back_scale == 0.0 || r_view.forward == Float3{}) {
         r_view.memory_count = 0; // the set doesn't depend on the direction
         return REMEMBERED_KNOWN;
     }
@@ -517,7 +527,7 @@ ChunkDiscoverer::Remembered ChunkDiscoverer::remember_view(ScanView &r_view, dou
     Remembered result = REMEMBERED_ADDED;
     int slot = -1;
     for (int i = 0; i < r_view.memory_count && slot < 0; i++) {
-        if (r_view.memories[i].apex == r_view.camera_chunk && !turned_past(r_view.memories[i].dir, r_view.forward)) {
+        if (r_view.memories[i].apex == r_view.camera_chunk && !turned_past(godot_v3(r_view.memories[i].dir), godot_v3(r_view.forward))) {
             slot = i;
             result = REMEMBERED_KNOWN;
         }
@@ -566,12 +576,12 @@ void ChunkDiscoverer::set_camera(const Vector3 &p_pos, const Vector3 &p_forward)
         camera_change_usec = now_usec();
         mutex->unlock();
         semaphore->post();
-        VLOG(2, "new view:", WorldCoord::to_string(new_view.camera_chunk), " ", new_view.forward, " memories ", new_view.memory_count);
+        VLOG(2, "new view:", godot_str(WorldCoord::to_string(new_view.camera_chunk)), " ", godot_v3(new_view.forward), " memories ", new_view.memory_count);
         return;
     }
     // Same chunk and memories, in the same order: keep the use times for eviction.
     view.copy_memories_from(new_view);
-    if (turned_past(new_view.forward, view.forward)) {
+    if (turned_past(godot_v3(new_view.forward), godot_v3(view.forward))) {
         // A turn that doesn't change the scanned set (back_scale 0, or towards a remembered view): no
         // rescan, but the next scan (camera chunk, instance edit) orders the meshers' queues by the current
         // direction.
@@ -604,7 +614,7 @@ void ChunkDiscoverer::_compare_with_cpu(const ScanView &p_view, const LODHashSet
     }
     if (only_here + only_cpu > 0) {
         ERR_PRINT(vformat("ChunkDiscoverer: --discovery_compare: the %s scan around %s differs from the CPU scan: %d chunks only in it, %d only in the CPU's.",
-                gpu ? "GPU" : "CPU", WorldCoord::to_string(p_view.camera_chunk), only_here, only_cpu));
+                gpu ? "GPU" : "CPU", godot_str(WorldCoord::to_string(p_view.camera_chunk)), only_here, only_cpu));
     }
     mutex->lock();
     stats.compare_scans++;

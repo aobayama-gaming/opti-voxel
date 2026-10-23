@@ -13,7 +13,7 @@ double Bounds::distance(const WorldPos &p_pos) const {
     for (int a = 0; a < 3; a++) {
         const double below = double(lo[a] - p_pos.voxel[a]) - double(frac[a]);
         const double above = double(p_pos.voxel[a] - hi[a]) + double(frac[a]);
-        const double d = MAX(0.0, MAX(below, above));
+        const double d = std::max(0.0, std::max(below, above));
         d2 += d * d;
     }
     return std::sqrt(d2);
@@ -165,7 +165,7 @@ double volume(const Bounds &p_b) {
 Reg combine(Builder &p_b, Reg p_parent, Bounds &r_bounds, const Instance::Child &p_child, Reg p_child_reg, const Bounds &p_cb,
         const VoxelPos &p_child_anchor, const float *p_child_rotation) {
     const Bounds a = r_bounds;
-    const float l = MAX(a.lipschitz, p_cb.lipschitz);
+    const float l = std::max(a.lipschitz, p_cb.lipschitz);
     switch (p_child.op) {
         case Combine::UNION:
             r_bounds = hull(a, p_cb);
@@ -274,7 +274,7 @@ double rotation_margin(Float3 p_lo, Float3 p_hi) {
     double reach = 0.0;
     for (int c = 0; c < 8; c++) {
         const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
-        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
+        reach = std::max(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
     }
     return 1.0 + 1e-4 * reach;
 }
@@ -293,8 +293,8 @@ Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded,
         const double q[3] = { (c & 1) ? p_hi.x : p_lo.x, (c & 2) ? p_hi.y : p_lo.y, (c & 4) ? p_hi.z : p_lo.z };
         for (int j = 0; j < 3; j++) {
             const double w = double(p_r[j]) * q[0] + double(p_r[3 + j]) * q[1] + double(p_r[6 + j]) * q[2];
-            lo[j] = MIN(lo[j], w);
-            hi[j] = MAX(hi[j], w);
+            lo[j] = std::min(lo[j], w);
+            hi[j] = std::max(hi[j], w);
         }
     }
     const double margin = rotation_margin(p_lo, p_hi);
@@ -308,10 +308,10 @@ Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, bool p_bounded,
 Bounds hull(const Bounds &p_a, const Bounds &p_b) {
     Bounds r;
     r.bounded = p_a.bounded && p_b.bounded;
-    r.lipschitz = MAX(p_a.lipschitz, p_b.lipschitz);
+    r.lipschitz = std::max(p_a.lipschitz, p_b.lipschitz);
     for (int j = 0; j < 3; j++) {
-        r.lo[j] = MIN(p_a.lo[j], p_b.lo[j]);
-        r.hi[j] = MAX(p_a.hi[j], p_b.hi[j]);
+        r.lo[j] = std::min(p_a.lo[j], p_b.lo[j]);
+        r.hi[j] = std::max(p_a.hi[j], p_b.hi[j]);
     }
     return r;
 }

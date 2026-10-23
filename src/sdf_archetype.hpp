@@ -82,14 +82,14 @@ public:
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         create_scene(p_param.voxel_size, p_lod_count);
-        const String ground_error = current()->ground.validate(p_lod_count);
-        if (!ground_error.is_empty()) {
-            ERR_PRINT(ground_error);
+        const ov::str ground_error = current()->ground.validate(p_lod_count);
+        if (!ground_error.empty()) {
+            ERR_PRINT(ground_error.c_str());
         }
         for (int i = 0; i < library->size(); i++) {
-            const String error = (*library)[i].program.validate(p_lod_count);
-            if (!error.is_empty()) {
-                ERR_PRINT(vformat("Archetype library type %d: ", i) + error);
+            const ov::str error = (*library)[i].program.validate(p_lod_count);
+            if (!error.empty()) {
+                ERR_PRINT(vformat("Archetype library type %d: ", i) + error.c_str());
             }
         }
     }

@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include "ov/containers.hpp"
+
 #include <godot_cpp/templates/hash_set.hpp>
 
 #include <climits>
@@ -46,8 +48,8 @@ TEST_CASE("WorldCoord: lo32 differences wrap, exact under 2^31") {
     const int64_t b = (int64_t(1) << 32) + 5;
     CHECK(as_i32(lo32(b) - lo32(a)) == 8);
     CHECK(as_i32(lo32(a) - lo32(b)) == -8);
-    CHECK(lo32_i(Vector3i64(b, a, -1)) == Vector3i(5, -3, -1));
-    CHECK(hi32_i(Vector3i64(b, a, -1)) == Vector3i(1, 0, -1));
+    CHECK(lo32_i(Vector3i64(b, a, -1)) == ov::ivec3(5, -3, -1));
+    CHECK(hi32_i(Vector3i64(b, a, -1)) == ov::ivec3(1, 0, -1));
 }
 
 TEST_CASE("WorldCoord: Vector3i64 arithmetic") {
@@ -60,7 +62,8 @@ TEST_CASE("WorldCoord: Vector3i64 arithmetic") {
     c += b;
     CHECK(c == a + b);
     CHECK(a != b);
-    CHECK(Vector3i64(Vector3i(4, -5, 6)) == Vector3i64(4, -5, 6));
+    const godot::Vector3i gi(4, -5, 6); // the engine-side conversion stays field-wise explicit
+    CHECK(Vector3i64(gi.x, gi.y, gi.z) == Vector3i64(4, -5, 6));
     CHECK(Vector3i64(0, 0, 0).distance_to(Vector3i64(3, 4, 0)) == 5.0);
 }
 
@@ -70,7 +73,7 @@ TEST_CASE("WorldCoord: the hasher tells apart ids that differ only in their high
     CHECK(Vector3i64Hasher::hash(a) == Vector3i64Hasher::hash(Vector3i64(1, 2, 3)));
     CHECK(Vector3i64Hasher::hash(a) != Vector3i64Hasher::hash(b));
 
-    HashSet<Vector3i64, Vector3i64Hasher> set;
+    ov::HashSet<Vector3i64, Vector3i64Hasher> set;
     set.insert(a);
     set.insert(b);
     CHECK(set.size() == 2);
@@ -79,5 +82,5 @@ TEST_CASE("WorldCoord: the hasher tells apart ids that differ only in their high
 }
 
 TEST_CASE("WorldCoord: to_string keeps the full int64") {
-    CHECK(to_string(Vector3i64(1, -2, int64_t(3000000000000))) == String("(1, -2, 3000000000000)"));
+    CHECK(to_string(Vector3i64(1, -2, int64_t(3000000000000))) == "(1, -2, 3000000000000)");
 }

@@ -1,14 +1,11 @@
 #pragma once
 
 #include "chunk_output.hpp"
-#include "godot_cpp/variant/variant.hpp"
 #include "lod_structures.hpp"
 
 #include <memory>
 
-using namespace godot;
-
-using StallCountMap = HashMap<ChunkId, int32_t, Vector3i64Hasher>;
+using StallCountMap = ov::HashMap<ChunkId, int32_t, Vector3i64Hasher>;
 
 // What the main thread knows of the chunks: the scan, the loaded set, and which loaded chunks can go.
 // The destroy rule (a chunk outside the scan goes once nothing still being generated needs it) is kept
@@ -32,7 +29,7 @@ struct VoxelState {
     ChunkHashMap to_destroy_chunk;
 
     // Dirty chunk -> its nearest loaded ancestor, for the dirty chunks that have one.
-    HashMap<ChunkId, ChunkId, Vector3i64Hasher> dirty_anchor;
+    ov::HashMap<ChunkId, ChunkId, Vector3i64Hasher> dirty_anchor;
     // Loaded chunk -> how many dirty chunks have it as nearest loaded ancestor (only counts > 0). Split
     // rule: those stay.
     StallCountMap stall_count;

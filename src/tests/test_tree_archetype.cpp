@@ -304,7 +304,7 @@ TEST_CASE("SDFArchetype forest: the trees are table records, trunks are solid, e
     }
     CHECK(snap->records.size() == next);
     for (int i = 0; i < sdf.get_library().size(); i++) {
-        CHECK(sdf.get_library()[i].program.validate(18).is_empty());
+        CHECK(sdf.get_library()[i].program.validate(18).empty());
     }
     // Inside each tree's first trunk segment, a quarter of the way up its axis: solid at LOD 0, and the point's
     // candidates hold the segment.

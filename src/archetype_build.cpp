@@ -316,7 +316,7 @@ struct Fuzz {
     // Mostly a recent register (deep chains), sometimes any.
     int pick() {
         const int n = int(regs.size());
-        return rng.below(10) < 7 ? n - 1 - rng.below(MIN(n, 6)) : rng.below(n);
+        return rng.below(10) < 7 ? n - 1 - rng.below(std::min(n, 6)) : rng.below(n);
     }
     void input(int p_anchors) {
         // Scaled by 2^-12 .. 2^-20: points within ~2^17 voxels of the anchor give values up to 2^5, a saturated
@@ -373,15 +373,15 @@ void Fuzz::step(int p_anchors) {
             push(b.abs(a), ma);
             break;
         case 7:
-            push(b.min(a, r_b), MAX(ma, mb));
+            push(b.min(a, r_b), std::max(ma, mb));
             break;
         case 8:
-            push(b.max(a, r_b), MAX(ma, mb));
+            push(b.max(a, r_b), std::max(ma, mb));
             break;
         case 9: {
             const int ic = pick();
             const int id = pick();
-            push(b.select(a, r_b, regs[ic], regs[id]), MAX(mag[ic], mag[id]));
+            push(b.select(a, r_b, regs[ic], regs[id]), std::max(mag[ic], mag[id]));
             break;
         }
         case 10:
@@ -414,7 +414,7 @@ Program random_program(uint32_t p_seed, const std::vector<VoxelPos> &p_anchors, 
         f.b.anchor(a);
     }
     // Builder::anchor merges equal anchors: draw from the program's own.
-    const int anchors = MAX(int(f.b.program.anchors.size()), 1);
+    const int anchors = std::max(int(f.b.program.anchors.size()), 1);
     f.input(anchors);
     f.input(anchors);
     f.noise(true);

@@ -1,6 +1,6 @@
 #include "chunk_memory.hpp"
 
-#include "debug_log.hpp"
+#include <algorithm>
 
 void VoxelState::add_scan_chunk(std::unique_ptr<LODHashSet> p_scanned_chunk, const ScanDelta &p_delta) {
     p_scanned_chunk->max_lod = dirty_chunk.max_lod;
@@ -66,7 +66,7 @@ void VoxelState::add_new_loaded(ChunkOutput &new_output) {
 
 void VoxelState::update_destroy() {
     to_destroy_chunk.clear();
-    stats.leaving_max = MAX(stats.leaving_max, int64_t(leaving.size()));
+    stats.leaving_max = std::max(stats.leaving_max, int64_t(leaving.size()));
     for (const ChunkId &id : leaving) {
         // Split: a dirty descendant still needs it.
         if (stall_count.has(id)) {
@@ -105,21 +105,21 @@ void VoxelState::compute_destroy_full(ChunkHashMap &r_to_destroy, StallCountMap 
 
     // Anything loaded but not stalled can be safely destroyed.
     for (ChunkHashMap::ConstIterator it = loaded_chunk.begin(); it != loaded_chunk.end(); ++it) {
-        if (scanned_chunk->has(it->key)) {
+        if (scanned_chunk->has(it->first)) {
             continue;
         }
 
-        if (stall_chunk.has(it->key)) {
+        if (stall_chunk.has(it->first)) {
             continue;
         }
 
         // ... and stays while an ancestor replacing it is still being generated (merge).
-        ChunkId parent_id = it->key;
+        ChunkId parent_id = it->first;
         if (dirty_chunk.find_ancestor(parent_id) >= 0) {
             continue;
         }
 
-        r_to_destroy.insert(it->key, it->value);
+        r_to_destroy.insert(it->first, it->second);
     }
 }
 
@@ -130,13 +130,13 @@ int64_t VoxelState::verify_against_full() {
 
     int64_t mismatches = 0;
     mismatches += full_destroy.size() == to_destroy_chunk.size() ? 0 : 1;
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : full_destroy) {
-        mismatches += to_destroy_chunk.has(kv.key) ? 0 : 1;
+    for (const auto &kv : full_destroy) {
+        mismatches += to_destroy_chunk.has(kv.first) ? 0 : 1;
     }
     mismatches += full_stall.size() == stall_count.size() ? 0 : 1;
-    for (const KeyValue<ChunkId, int32_t> &kv : full_stall) {
-        const int32_t *count = stall_count.getptr(kv.key);
-        mismatches += count && *count == kv.value ? 0 : 1;
+    for (const auto &kv : full_stall) {
+        const int32_t *count = stall_count.getptr(kv.first);
+        mismatches += count && *count == kv.second ? 0 : 1;
     }
     // dirty = scan - loaded, leaving = loaded - scan.
     int64_t dirty_expected = 0;
@@ -147,10 +147,10 @@ int64_t VoxelState::verify_against_full() {
     }
     mismatches += int64_t(dirty_chunk.size()) == dirty_expected ? 0 : 1;
     int64_t leaving_expected = 0;
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : loaded_chunk) {
-        const bool out = !scanned_chunk->has(kv.key);
+    for (const auto &kv : loaded_chunk) {
+        const bool out = !scanned_chunk->has(kv.first);
         leaving_expected += out ? 1 : 0;
-        mismatches += leaving.has(kv.key) == out ? 0 : 1;
+        mismatches += leaving.has(kv.first) == out ? 0 : 1;
     }
     mismatches += int64_t(leaving.size()) == leaving_expected ? 0 : 1;
 
@@ -160,13 +160,13 @@ int64_t VoxelState::verify_against_full() {
 }
 
 void VoxelState::destroy_marked() {
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : to_destroy_chunk) {
-        ChunkOutput output = kv.value;
+    for (const auto &kv : to_destroy_chunk) {
+        ChunkOutput output = kv.second;
         output.free();
-        loaded_chunk.erase(kv.key);
-        leaving.erase(kv.key);
+        loaded_chunk.erase(kv.first);
+        leaving.erase(kv.first);
         // No dirty chunk has it as anchor (update_destroy's split rule), so no anchor changes.
-        if (verify && stall_count.has(kv.key)) {
+        if (verify && stall_count.has(kv.first)) {
             stats.verify_mismatches++;
         }
     }
@@ -262,7 +262,6 @@ void VoxelState::_verify_delta(const LODHashSet &p_new, const ScanDelta &p_delta
     }
     stats.octree_violations += violations;
     if (mismatches > 0 || violations > 0) {
-        ERR_PRINT(String("VoxelState: scan delta check: ") + String::num_int64(mismatches) + " delta mismatches, " +
-                String::num_int64(violations) + " scanned chunks with a scanned ancestor.");
+        ov::report_error(__FILE__, __LINE__, ov::format("VoxelState: scan delta check: %d delta mismatches, %d scanned chunks with a scanned ancestor.", mismatches, violations));
     }
 }

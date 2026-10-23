@@ -194,7 +194,7 @@ void place_instances(const DefLibrary &p_library, const RecordStore &p_records, 
         }
         double size = 0.0;
         for (int a = 0; a < 3; a++) {
-            size = MAX(size, double(wb.hi[a] - wb.lo[a]));
+            size = std::max(size, double(wb.hi[a] - wb.lo[a]));
         }
         // Once, in the node holding its centre: its grown box is at most a node wide there, so the chunks
         // whose samples it meets are near that node at every LOD (gather). Wider than a node even at the top
@@ -388,7 +388,7 @@ void InstanceSnapshot::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> 
 }
 
 void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_out) const {
-    const int lod = MIN(MAX(p_lod, 0), max_lod);
+    const int lod = std::min(std::max(p_lod, 0), max_lod);
     gather(chunk_at_voxel(p_voxel, lod, param), lod, p_voxel, p_voxel, r_out);
 }
 
@@ -438,7 +438,7 @@ bool InstanceSnapshot::near_layer(const IndexLayer &p_layer, const VoxelPos &p_l
 }
 
 bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
-    const int lod = MIN(MAX(p_lod, 0), max_lod);
+    const int lod = std::min(std::max(p_lod, 0), max_lod);
     const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
     const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);
     const VoxelPos lo = min - VoxelPos(2 * span, 2 * span, 2 * span);

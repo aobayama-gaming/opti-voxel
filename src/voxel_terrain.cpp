@@ -1,4 +1,5 @@
 #include "voxel_terrain.hpp"
+#include "godot_conv.hpp"
 #include "rd_utils.hpp"
 #include <cmath>
 #include <godot_cpp/classes/engine.hpp>
@@ -618,7 +619,7 @@ void VoxelTerrain::_ready() {
                 WorldCoord::floor_div(world_origin_request.y, root_voxels) * root_units,
                 WorldCoord::floor_div(world_origin_request.z, root_voxels) * root_units);
         if (chunk_param.origin_voxel() != world_origin_request) {
-            VLOG(1, "VoxelTerrain: world origin snapped to ", WorldCoord::to_string(chunk_param.origin_voxel()), " voxels");
+            VLOG(1, "VoxelTerrain: world origin snapped to ", godot_str(WorldCoord::to_string(chunk_param.origin_voxel())), " voxels");
         }
     }
 
@@ -803,9 +804,9 @@ void VoxelTerrain::_apply_instance_edit() {
     // The loaded chunks whose samples the edit can change: their box grown by the locality margin at
     // their LOD meets the edit's region.
     std::vector<ChunkId> remesh;
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
-        if (sdf->edit_affects_chunk(kv.key)) {
-            remesh.push_back(kv.key);
+    for (const auto &kv : visual_mesh_data.loaded_chunk) {
+        if (sdf->edit_affects_chunk(kv.first)) {
+            remesh.push_back(kv.first);
         }
     }
     if (direct_mesher) {
@@ -937,13 +938,13 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
     ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_validate needs pipeline_mode = GPU Direct.");
     ERR_FAIL_COND_V_MSG(validator, false, "A validation is already running.");
     std::vector<MeshValidator::Target> candidates;
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
-        if (kv.value.owner) {
+    for (const auto &kv : visual_mesh_data.loaded_chunk) {
+        if (kv.second.owner) {
             MeshValidator::Target t;
-            t.chunk_id = kv.key;
-            t.page = kv.value.page;
-            t.offset = kv.value.quad_offset;
-            t.count = kv.value.quad_count;
+            t.chunk_id = kv.first;
+            t.page = kv.second.page;
+            t.offset = kv.second.quad_offset;
+            t.count = kv.second.quad_count;
             candidates.push_back(t);
         }
     }
@@ -969,17 +970,17 @@ bool VoxelTerrain::debug_audit_pages() {
     ERR_FAIL_COND_V_MSG(auditor, false, "An audit is already running.");
     HashMap<int, int> index_of_page;
     std::vector<PageAuditor::PageInfo> pages;
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
-        if (!kv.value.owner) {
+    for (const auto &kv : visual_mesh_data.loaded_chunk) {
+        if (!kv.second.owner) {
             continue;
         }
-        if (!index_of_page.has(kv.value.page)) {
-            index_of_page[kv.value.page] = pages.size();
+        if (!index_of_page.has(kv.second.page)) {
+            index_of_page[kv.second.page] = pages.size();
             PageAuditor::PageInfo info;
-            info.page = kv.value.page;
+            info.page = kv.second.page;
             pages.push_back(info);
         }
-        pages[index_of_page[kv.value.page]].live.push_back({ kv.value.quad_offset, kv.value.quad_count, kv.key });
+        pages[index_of_page[kv.second.page]].live.push_back({ kv.second.quad_offset, kv.second.quad_count, kv.first });
     }
     audit_report = Dictionary();
     auditor = memnew(PageAuditor);
@@ -1032,7 +1033,7 @@ bool VoxelTerrain::debug_audit_discovery() {
     discovery_audit.start_usec = t0;
     discovery_audit.expected = (int64_t)culled.size();
     Dictionary base;
-    base["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
+    base["camera_chunk"] = godot_str(WorldCoord::to_string(scan_view.camera_chunk));
     base["cull_mode"] = discovery_cull_mode;
     base["reference"] = (int64_t)reference.size();
     base["reference_nodes_visited"] = counters.nodes_visited;
@@ -1065,7 +1066,7 @@ void VoxelTerrain::_poll_discovery_audit() {
         discovery_audit.misses_by_lod[lod] = int64_t(discovery_audit.misses_by_lod.get(lod, 0)) + 1;
         if (discovery_audit.miss_examples.size() < 20) {
             Dictionary e;
-            e["id"] = WorldCoord::to_string(c.first);
+            e["id"] = godot_str(WorldCoord::to_string(c.first));
             e["lod"] = lod;
             e["quads"] = (int64_t)c.second;
             e["distance_chunks"] = scan_view.camera_chunk.distance_to(c.first);
@@ -1101,7 +1102,7 @@ bool VoxelTerrain::is_load_complete() {
     // after _ready is otherwise "loaded" with the first scan while the next one is still running.
     // The view of the last set_camera (_process) carries the remembered views; a camera moved since is
     // caught by its chunk, a turn since by the next frame.
-    if (camera != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(camera->get_global_position(), chunk_param) != scan_view.camera_chunk)) {
+    if (camera != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(Float3{ camera->get_global_position().x, camera->get_global_position().y, camera->get_global_position().z }, chunk_param) != scan_view.camera_chunk)) {
         return false;
     }
     if (direct_mesher) {
@@ -1119,9 +1120,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     d["pipeline_mode"] = (int)pipeline_mode;
     d["terrain_mode"] = terrain_mode;
     Dictionary origin;
-    origin["requested_voxel"] = WorldCoord::to_string(world_origin_request);
-    origin["voxel"] = WorldCoord::to_string(chunk_param.origin_voxel());
-    origin["chunk"] = WorldCoord::to_string(chunk_param.origin_chunk);
+    origin["requested_voxel"] = godot_str(WorldCoord::to_string(world_origin_request));
+    origin["voxel"] = godot_str(WorldCoord::to_string(chunk_param.origin_voxel()));
+    origin["chunk"] = godot_str(WorldCoord::to_string(chunk_param.origin_chunk));
     d["world_origin"] = origin;
     if (SDFGpuTable *table = sdf ? sdf->get_gpu_table() : nullptr) {
         d["table"] = table->get_stats();
@@ -1134,10 +1135,10 @@ Dictionary VoxelTerrain::get_debug_stats() {
     int64_t live_triangles = 0;
     int64_t drawn_triangles = 0;
     int64_t non_empty_chunks = 0;
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
-        live_triangles += kv.value.triangle_count;
-        drawn_triangles += kv.value.drawn_triangles;
-        non_empty_chunks += kv.value.triangle_count > 0 ? 1 : 0;
+    for (const auto &kv : visual_mesh_data.loaded_chunk) {
+        live_triangles += kv.second.triangle_count;
+        drawn_triangles += kv.second.drawn_triangles;
+        non_empty_chunks += kv.second.triangle_count > 0 ? 1 : 0;
     }
 
     Dictionary chunks;
@@ -1148,8 +1149,8 @@ Dictionary VoxelTerrain::get_debug_stats() {
     // Settle check: once the load is complete both must be 0 (a scanned chunk not loaded is a hole).
     int64_t loaded_not_scanned = 0;
     int64_t scanned_not_loaded = 0;
-    for (const KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
-        loaded_not_scanned += visual_mesh_data.scanned_chunk->has(kv.key) ? 0 : 1;
+    for (const auto &kv : visual_mesh_data.loaded_chunk) {
+        loaded_not_scanned += visual_mesh_data.scanned_chunk->has(kv.first) ? 0 : 1;
     }
     for (const ChunkId &id : *visual_mesh_data.scanned_chunk) {
         scanned_not_loaded += visual_mesh_data.loaded_chunk.has(id) ? 0 : 1;
@@ -1224,8 +1225,8 @@ void VoxelTerrain::_teardown() {
     chunk_discoverer = nullptr;
 
     // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
-    for (KeyValue<ChunkId, ChunkOutput> &kv : visual_mesh_data.loaded_chunk) {
-        kv.value.free();
+    for (auto &kv : visual_mesh_data.loaded_chunk) {
+        kv.second.free();
     }
     visual_mesh_data.loaded_chunk.clear();
 
