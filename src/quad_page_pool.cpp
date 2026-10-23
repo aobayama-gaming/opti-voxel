@@ -4,6 +4,7 @@
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "material_library.hpp"
+#include "voxel_sky.hpp"
 #include "world_coord.hpp"
 
 #include <godot_cpp/classes/mesh.hpp>
@@ -19,6 +20,9 @@ render_mode skip_vertex_transform, cull_back;
 
 // (RenderingServer::shader_set_code does not run the preprocessor: no #define here.)
 /*GLSL_PAGE_DECODE*/
+// The cloud layer's uniforms and functions (VoxelSky::glsl_clouds, the same text as the sky shader's): the sun's
+// light in light() is cut where a cloud lies between the fragment and the sun.
+/*GLSL_CLOUDS*/
 
 uniform usampler2D quad_tex : filter_nearest, repeat_disable;
 // The chunks' palettes (palette_pool.hpp) and the materials' parameters (Material::Library::make_image).
@@ -57,6 +61,7 @@ varying float v_height; // metres above the world origin (shaded view: contour l
 // over v_quad_uv, so the blend adds no interpolant: triangles are smaller than a pixel here, every attribute the
 // fragment reads costs setup per triangle.
 varying flat ivec2 v_materials;
+varying vec3 v_world_pos; // the fragment's position (metres, render space), set by fragment() for light()
 
 vec3 hash3(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -138,6 +143,21 @@ vec3 bark_point(vec3 p, vec3 n) {
     return vec3(u.x, p.y, u.y);
 }
 
+// The ground's surface detail, a multiplier on its albedo (the procedural ground's and a biome's PATTERN_GROUND):
+// a slow tint over ~20 m between a cooler and a warmer shade, patches of ~2 m, and a grain of ~6 cm that fades out
+// past 2 pixels per feature. Without it a flat biome is one colour to the horizon. World-space noise: the same at
+// every LOD. p: the fragment's position (metres), footprint: metres per pixel there.
+vec3 ground_detail(vec3 p, float footprint) {
+    float macro = value_noise(p * (1.0 / 19.0));
+    vec3 d = mix(vec3(0.86, 0.88, 0.94), vec3(1.10, 1.06, 0.98), macro);
+    d *= 0.92 + 0.16 * value_noise(p * (1.0 / 2.3) + 7.0);
+    float grain_w = 1.0 - smoothstep(0.015, 0.04, footprint);
+    if (grain_w > 0.0) {
+        d *= 1.0 + grain_w * 0.18 * (value_noise(p * (1.0 / 0.06)) - 0.5);
+    }
+    return d;
+}
+
 // A corner's material: its chunk's palette block (header h1), its index in it, its id (palette). Index 0 is always
 // the ground: no fetch (most corners).
 uint corner_material(uvec4 h1, uint index) {
@@ -158,7 +178,7 @@ ivec2 material_texel(uint mat_id) {
 // normalised); footprint: metres per pixel there (patterns fade out below a few pixels per feature); flat_w and shade:
 // the procedural ground's slope weight (1 on gentle slopes) and contour shading, which PATTERN_GROUND (a biome's
 // ground) applies to its own colours.
-void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float flat_w, float shade, out vec3 albedo,
+void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint, float flat_w, vec3 shade, out vec3 albedo,
         out float roughness, out vec3 emission) {
     albedo = ground;
     roughness = 1.0;
@@ -196,6 +216,18 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, float footprint,
             knot_albedo = m0.rgb * mix(0.35, 0.7, ring);
         }
         albedo = mix(mix(m0.rgb * 0.5, m0.rgb * 1.4, plate), knot_albedo, knot_weight);
+    } else if (m1.a == MATERIAL_PATTERN_LEAVES) {
+        // Leaves: clumps of ~0.5 m, each a shade of the material's green from dark to yellowish, with ~8 cm leaves
+        // inside them that fade out past 2 pixels per leaf; the underside and the sides of a canopy are darker
+        // than its top (the sky light that a real canopy gets more of from above than SSAO shows).
+        float clump = value_noise(p * (1.0 / 0.55));
+        float leaf_w = 1.0 - smoothstep(0.02, 0.05, footprint);
+        // The leaves flutter: their noise drifts with the wind's wobble (a shimmer over the swaying surface).
+        vec3 flutter = wind_sway_m > 0.0 ? 0.4 * sin(TIME * vec3(2.9, 2.3, 3.4) + p.yzx * 3.0) : vec3(0.0);
+        float leaf = leaf_w > 0.0 ? value_noise(p * (1.0 / 0.08) + 3.0 + flutter) - 0.5 : 0.0;
+        vec3 shade_color = mix(m0.rgb * vec3(0.55, 0.6, 0.6), m0.rgb * vec3(1.45, 1.3, 0.8), clump);
+        float up_w = 0.75 + 0.25 * clamp(dot(n, base_up) * inversesqrt(max(dot(n, n), 1e-8)), 0.0, 1.0);
+        albedo = shade_color * (1.0 + leaf_w * 0.45 * leaf) * up_w;
     }
 }
 
@@ -218,6 +250,13 @@ void vertex() {
     vec3 chunk_min = vec3(rel) * (chunk_world_dim * 0.5) - vec3(size * 0.5);
     vec3 local = page_decode_local(c, pos_scale);
     vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
+    // Wind: leaf corners sway (wind_sway, a pure function of the position: shared corners agree). Only up to LOD 2:
+    // farther the amplitude is under a pixel, and the corner's material costs a palette and a material fetch.
+    uint palette_index = page_decode_palette(c);
+    if (palette_index != 0u && lod <= 2 && wind_sway_m > 0.0
+            && texelFetch(material_tex, material_texel(corner_material(h1, palette_index)) + ivec2(1, 0), 0).a == MATERIAL_PATTERN_LEAVES) {
+        world += wind_sway(world);
+    }
     // Coverage (page_format.hpp, header texel 2): a quad whose 4 corners all lie in hidden sub-cubes collapses to one
     // point, so a cut overlaps the chunks replacing it instead of leaving a gap. Every corner of the quad decides alike.
     // Only the rows flagged in texel 1 read texel 2.
@@ -243,7 +282,7 @@ void vertex() {
     // material in one quad (three meeting inside one cell) draws as b.
     v_materials = ivec2(0);
     if (corner == 0) {
-        uint ia = page_decode_palette(c);
+        uint ia = palette_index;
         uint ib = ia;
         uint mask = 0u;
         for (int k = 1; k < 4; k++) {
@@ -301,10 +340,12 @@ void fragment() {
     float line = abs(fract(h + 0.5) - 0.5) / fw;
     // Contours fade out where they would be denser than ~10 pixels apart.
     float contour = 1.0 - smoothstep(0.03, 0.1, fw);
-    float shade = mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
+    vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    v_world_pos = p;
+    float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
+    vec3 shade = ground_detail(p, footprint) * mix(1.0 - 0.35 * contour, 1.0, smoothstep(0.0, 1.5, line));
     albedo *= shade;
     vec3 ground = albedo;
-    vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
     // Two materials: one is shaded per fragment, the higher id where the weight towards it (the corner mask over the
     // quad), jittered by a noise of about a cell (of this LOD), passes 1/2, so the border wanders instead of following
     // the cell grid. Towards the higher id, not towards b: two quads sharing an edge may hold the pair in either
@@ -321,7 +362,6 @@ void fragment() {
     }
     float roughness;
     vec3 emission;
-    float footprint = -VERTEX.z * 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y); // metres per pixel
     material_shading(uint(mat_id), ground, p, v_world_normal, footprint, flat_w, shade, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
@@ -400,6 +440,20 @@ void fragment() {
         SPECULAR = 0.0; // the probe's bytes are its emission only
     }
 }
+
+// Lambert (Godot's default diffuse: LIGHT_COLOR carries the PI; the albedo is applied after), with the sun cut by
+// the cloud layer where the fragment's ray to the sun crosses a cloud: the shadow of the cloud the sky shader draws
+// there. The terrain's materials have a roughness of 1, so the specular lobe is left out.
+void light() {
+    float sun = 1.0;
+    if (LIGHT_IS_DIRECTIONAL && cloud_shadow > 0.0) {
+        vec3 to_sun = mat3(INV_VIEW_MATRIX) * LIGHT;
+        if (to_sun.y > 0.05) { // VERTEX is not readable in light(): the fragment's position comes through v_world_pos
+            sun = 1.0 - cloud_shadow * cloud_density(texture(cloud_tex, cloud_uv(cloud_hit(v_world_pos, to_sun))).r);
+        }
+    }
+    DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;
+}
 )gdshader";
 
 void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t p_initial_pages, float p_voxel_size) {
@@ -430,7 +484,10 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     rs->mesh_add_surface_from_arrays(base_mesh, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
 
     shader = rs->shader_create();
-    rs->shader_set_code(shader, String(PAGE_SHADER).replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + Material::glsl_constants() + GLSL_PCG3D));
+    rs->shader_set_code(shader,
+            String(PAGE_SHADER)
+                    .replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + Material::glsl_constants() + GLSL_PCG3D)
+                    .replace("/*GLSL_CLOUDS*/", VoxelSky::glsl_clouds()));
     material_params["voxel_size"] = voxel_size;
 
     for (uint32_t i = 0; i < p_initial_pages; i++) {

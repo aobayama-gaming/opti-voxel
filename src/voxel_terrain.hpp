@@ -96,6 +96,7 @@ private:
     VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
     GPUDirectMesher::Settings direct_settings;
     int debug_view = 0;
+    Dictionary page_params; // page shader uniforms set from outside (VoxelSky's clouds), applied when the pool exists
     int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
     bool discovery_cache = true;
     bool discovery_verify = false;
@@ -357,6 +358,8 @@ public:
     // GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);
     int get_debug_view() const;
+    // GPU Direct: page shader uniforms by name (VoxelSky hands the cloud layer's over), kept across the pool's creation.
+    void set_page_params(const Dictionary &p_params);
 
     void set_log_level(int p_level);
     int get_log_level() const;

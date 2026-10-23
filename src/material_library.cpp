@@ -10,7 +10,7 @@ Library::Library() {
     // Dark albedos: the scene's tonemapper brightens them (like the ground's).
     add("ground", Params());
     add("bark", Params{ Color(0.17, 0.11, 0.07), 0.9f, Color(0, 0, 0), PATTERN_BARK });
-    add("leaves", Params{ Color(0.07, 0.17, 0.05), 0.9f, Color(0, 0, 0), PATTERN_NONE });
+    add("leaves", Params{ Color(0.07, 0.17, 0.05), 0.9f, Color(0, 0, 0), PATTERN_LEAVES });
     add("lava", Params{ Color(0.03, 0.015, 0.01), 1.0f, Color(1.1, 0.24, 0.02), PATTERN_LAVA });
     add("scorched_rock", Params{ Color(0.09, 0.075, 0.065), 1.0f, Color(0, 0, 0), PATTERN_NONE });
     add("island_rock", Params{ Color(0.30, 0.27, 0.22), 1.0f, Color(0, 0, 0), PATTERN_NONE });
@@ -38,9 +38,10 @@ uint32_t Library::set(const String &p_name, const Params &p_params) {
 String glsl_constants() {
     return vformat("const uint MATERIAL_TEXELS = %du;\nconst uint MATERIALS_PER_ROW = %du;\nconst uint MATERIAL_GROUND = %du;\n"
                    "const uint MATERIAL_ID_BITS = %du;\nconst float MATERIAL_PATTERN_LAVA = %d.0;\nconst float MATERIAL_PATTERN_BARK = %d.0;\n"
-                   "const float MATERIAL_PATTERN_GROUND = %d.0;\nconst int MATERIAL_TEXEL_DEBUG = %d;\n"
+                   "const float MATERIAL_PATTERN_GROUND = %d.0;\nconst float MATERIAL_PATTERN_LEAVES = %d.0;\nconst int MATERIAL_TEXEL_DEBUG = %d;\n"
                    "const vec3 GROUND_FLAT = vec3(%s, %s, %s);\nconst vec3 GROUND_STEEP = vec3(%s, %s, %s);\n",
-            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, ID_BITS, int(PATTERN_LAVA), int(PATTERN_BARK), int(PATTERN_GROUND), TEXEL_DEBUG,
+            TEXELS, IMAGE_MATERIALS_PER_ROW, GROUND, ID_BITS, int(PATTERN_LAVA), int(PATTERN_BARK), int(PATTERN_GROUND), int(PATTERN_LEAVES),
+            TEXEL_DEBUG,
             String::num(GROUND_FLAT.r), String::num(GROUND_FLAT.g), String::num(GROUND_FLAT.b), String::num(GROUND_STEEP.r),
             String::num(GROUND_STEEP.g), String::num(GROUND_STEEP.b));
 }

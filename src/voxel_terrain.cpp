@@ -92,6 +92,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_direct_compact_max_extent"), &VoxelTerrain::get_direct_compact_max_extent);
     ClassDB::bind_method(D_METHOD("set_debug_view", "view"), &VoxelTerrain::set_debug_view);
     ClassDB::bind_method(D_METHOD("get_debug_view"), &VoxelTerrain::get_debug_view);
+    ClassDB::bind_method(D_METHOD("set_page_params", "params"), &VoxelTerrain::set_page_params);
     ClassDB::bind_method(D_METHOD("set_log_level", "level"), &VoxelTerrain::set_log_level);
     ClassDB::bind_method(D_METHOD("get_log_level"), &VoxelTerrain::get_log_level);
     ClassDB::bind_method(D_METHOD("is_load_complete"), &VoxelTerrain::is_load_complete);
@@ -664,6 +665,16 @@ int VoxelTerrain::get_debug_view() const {
     return debug_view;
 }
 
+void VoxelTerrain::set_page_params(const Dictionary &p_params) {
+    Array keys = p_params.keys();
+    for (int i = 0; i < keys.size(); i++) {
+        page_params[keys[i]] = p_params[keys[i]];
+        if (direct_mesher) {
+            direct_mesher->get_pool()->set_material_param(keys[i], p_params[keys[i]]);
+        }
+    }
+}
+
 void VoxelTerrain::set_log_level(int p_level) {
     DebugLog::level.store(p_level);
 }
@@ -795,6 +806,7 @@ void VoxelTerrain::_ready() {
             const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;
             direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
         }
+        set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     } else {
         gpu_mesher = memnew(GPUMesher);
 
