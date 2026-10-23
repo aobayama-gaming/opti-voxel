@@ -20,12 +20,13 @@
 // the keys' (a pure function of each key) and its list folds them in key order, so a chunk's content is a pure function
 // of its id whatever streamed when, and no chunk is meshed twice because a key arrived late.
 //
-// One entry per key asked for, in one table: computing (its inputs first: a coarser part tile reads the tiles under it, a
-// part layer's blob tile the LOD-0 part tiles around it), then ready with its content, which a listed key copies into
-// slots: the GPU table's records from slot_base on, sent through the placement log (uploads_since). Keys without records
-// stay entries like the others. Ready entries not pinned by a parked chunk are on a least-recently-used list; the oldest
-// go when room is needed (slots, inputs kept, entries), none asked for in the last GRACE_FRAMES (a batch in flight
-// still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
+// One entry per key asked for, in one table: computing (its inputs first: a part tile reads the site tiles inside it, a
+// part layer's blob tile the LOD-0 part tiles around it, a far layer's its proxy tile), then ready with its content,
+// which a listed key copies into slots: the GPU table's records from slot_base on, sent through the placement log
+// (uploads_since). Keys without records (the walks, empty tiles) stay entries like the others. Ready entries not pinned
+// by a parked chunk are on a least-recently-used list, and those also holding input records (not placed, count > 0) on a
+// second one; the oldest go when room is needed (slots and entries: the first list, inputs kept: the second), none asked
+// for in the last GRACE_FRAMES (a batch in flight still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
 //
 // Main thread: admit(), take_ready(), poll(), uploads_since(). chunk_list() reads under a shared lock (build_lists on the
 // pool); point_records() from any thread. Keys are computed by drain tasks of the executor (Godot's pool at low priority),
@@ -149,6 +150,13 @@ private:
         uint64_t usec = 0;
         void run();
     };
+    struct Entry;
+    // An entry's place in an LRU list.
+    struct Links {
+        Entry *older = nullptr;
+        Entry *newer = nullptr;
+        bool in = false;
+    };
     struct Entry {
         enum State {
             WAITING, // for its inputs
@@ -169,9 +177,16 @@ private:
         uint64_t placement = 0; // its placement's sequence number
         uint64_t used = 0; // the frame it was last asked for
         int pins = 0; // parked chunks holding it
-        Entry *older = nullptr; // the LRU list (READY, unpinned)
-        Entry *newer = nullptr;
-        bool in_lru = false;
+        Links lru_all; // READY, unpinned
+        Links lru_inputs; // also not placed, with records
+    };
+    // An LRU list over one of the entries' Links, oldest first.
+    struct Chain {
+        Links Entry::*links;
+        Entry *newest = nullptr;
+        Entry *oldest = nullptr;
+        void link(Entry &r_entry);
+        void unlink(Entry &r_entry);
     };
     struct Parked {
         uint64_t tag = 0;
@@ -189,8 +204,8 @@ private:
 
     mutable std::shared_mutex mutex; // the stream's state: the main thread and the drain tasks change it, the lists read it
     std::unordered_map<SourceKey, Entry, KeyHash> entries; // references stay valid across rehashes
-    Entry *newest = nullptr; // the LRU list's ends
-    Entry *oldest = nullptr;
+    Chain chain_all{ &Entry::lru_all }; // the entries evicted for slots and entries
+    Chain chain_inputs{ &Entry::lru_inputs }; // the entries evicted for input records
     uint64_t frame = 0;
     size_t pending = 0; // entries not READY (never evicted)
 
@@ -212,11 +227,11 @@ private:
     struct Stats {
         int64_t computed = 0;
         int64_t compute_usec = 0;
-        int64_t computed_by[2][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD
-        int64_t usec_by[2][ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t computed_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD
+        int64_t usec_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t placed = 0;
         int64_t evicted = 0;
-        int64_t evicted_by[2][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD: computed / (computed - evicted) = recompute ratio
+        int64_t evicted_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD: computed / (computed - evicted) = recompute ratio
         int64_t keys_created = 0; // entries created by request(), inputs included
         int64_t admit_keys_created = 0; // of keys_created: by admit()
         int64_t admit_keys_created_max = 0; // by one admit()
@@ -250,12 +265,13 @@ private:
     bool place(Entry &r_entry);
     bool allocate(uint32_t p_count, uint32_t &r_slot);
     void release(uint32_t p_slot, uint32_t p_count);
-    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest not placed (making room
-    // for inputs: evicting a placed key frees none, and asked for again it recomputes every key under it).
+    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest holding input records
+    // (evicting a placed key or a walk frees none, and asked for again it is computed again).
     bool evict_oldest(bool p_inputs = false);
     void pin(Entry &r_entry);
     void unpin(Entry &r_entry);
     void touch(Entry &r_entry);
+    // Links an entry newest on its lists (the inputs' one if it holds input records), unlinks it from both.
     void lru_link(Entry &r_entry);
     void lru_unlink(Entry &r_entry);
     // A parked chunk handed back by take_ready().

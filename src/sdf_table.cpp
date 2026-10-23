@@ -632,6 +632,7 @@ ScatterSource::Setup SDFTable::source_setup(const Source &p_source, uint32_t p_i
     s.max_extent = max_instance_extent();
     s.chunk_voxels = param.chunk_voxel_dimension();
     s.lod_count = lod_count;
+    s.part_cell_sides = stream_part_sides;
     return s;
 }
 

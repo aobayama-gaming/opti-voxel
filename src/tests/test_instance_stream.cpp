@@ -1,11 +1,15 @@
 #include "test_common.hpp"
 
+#include "test_stream_common.hpp"
+
 #include "debug_log.hpp"
 #include "instance_stream.hpp"
 
+#include <algorithm>
 #include <map>
 
 using namespace Archetype;
+using StreamTest::Mirror;
 
 namespace {
 
@@ -84,23 +88,6 @@ struct StreamFixture {
     }
 };
 
-// The GPU table's streamed records, as a reader of the placement log keeps them.
-struct Mirror {
-    uint64_t cursor = 0;
-    std::vector<TableRecord> records; // by record id - slot_base
-
-    void update(const InstanceStream &p_stream) {
-        std::vector<InstanceStream::Upload> ups;
-        p_stream.uploads_since(cursor, ups);
-        cursor = p_stream.placements();
-        for (const InstanceStream::Upload &u : ups) {
-            const uint32_t at = u.first - p_stream.slot_base();
-            records.resize(std::max(records.size(), size_t(at + u.content->records.size())));
-            std::copy(u.content->records.begin(), u.content->records.end(), records.begin() + at);
-        }
-    }
-};
-
 bool same(const TableRecord &p_a, const TableRecord &p_b) {
     return p_a.def == p_b.def && p_a.anchor == p_b.anchor && p_a.params[0] == p_b.params[0] && p_a.max_lod == p_b.max_lod && p_a.min_lod == p_b.min_lod;
 }
@@ -126,6 +113,30 @@ int64_t stat(const InstanceStream &p_stream, const char *p_name) {
     return int64_t(p_stream.get_stats()[p_name]);
 }
 
+// A field of computed_by_key's entry p_key ("sites 0"), 0 if none was computed.
+int64_t key_stat(const InstanceStream &p_stream, const char *p_key, const char *p_field) {
+    const Dictionary by = p_stream.get_stats()["computed_by_key"];
+    return by.has(p_key) ? int64_t(Dictionary(by[p_key])[p_field]) : 0;
+}
+
+// p_keys and their inputs, each once.
+size_t keys_and_inputs(const StreamFixture &p_fx, std::vector<SourceKey> p_keys) {
+    std::vector<SourceKey> in;
+    for (size_t i = 0, n = p_keys.size(); i < n; i++) {
+        p_fx.source->inputs(p_keys[i], in);
+        p_keys.insert(p_keys.end(), in.begin(), in.end());
+    }
+    std::sort(p_keys.begin(), p_keys.end());
+    return size_t(std::unique(p_keys.begin(), p_keys.end()) - p_keys.begin());
+}
+
+// The chunk's keys and their inputs, each once.
+size_t keys_and_inputs(const StreamFixture &p_fx, const ChunkId &p_chunk) {
+    std::vector<SourceKey> keys;
+    p_fx.source->chunk_keys(p_chunk, p_fx.param, keys);
+    return keys_and_inputs(p_fx, keys);
+}
+
 } // namespace
 
 TEST_CASE("Instance stream: parked chunks come back once their keys land, in park order, and list their keys' records") {
@@ -139,8 +150,8 @@ TEST_CASE("Instance stream: parked chunks come back once their keys land, in par
     std::unique_ptr<InstanceStream> stream = fx.stream(settings);
     Mirror mirror;
 
-    // A key and the keys waiting on it land within one poll: a LOD-1 chunk's part tile starts once the LOD-0 tiles
-    // under it land, on the same drain.
+    // A key and the keys waiting on it land within one poll: a part tile starts once the site tiles it grows land, on the
+    // same drain.
     const ChunkId coarse = fx.chunk(-200, -200, 1), fine = fx.chunk(200, 200), other = fx.chunk(-200, 200);
     CHECK(stream->admit(coarse, 0, 11) == InstanceStream::PARKED);
     CHECK(stream->admit(fine, 0, 22) == InstanceStream::PARKED);
@@ -239,12 +250,12 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
     }
     CHECK(stream->admit(graced, 0, 2) == InstanceStream::READY);
 
-    // Within the grace, nothing goes; the mirror's lists stay whole.
+    // Within the grace, no listed key goes (its site tiles may: asked for a frame before); the mirror's lists stay whole.
     for (uint64_t f = 0; f < InstanceStream::GRACE_FRAMES; f++) {
         stream->poll();
     }
     mirror.update(*stream);
-    CHECK(stat(*stream, "evicted") == 0);
+    CHECK(key_stat(*stream, "parts 0", "evicted") == 0);
     CHECK(lists_right(fx, *stream, mirror, graced));
 
     // A chunk parked over keys not computed yet pins them, landed or not; the graced chunk's keys go once its grace is over.
@@ -252,10 +263,8 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
     for (uint64_t f = 0; f < 4; f++) {
         stream->poll();
     }
-    std::vector<SourceKey> keys;
-    fx.source->chunk_keys(parked, fx.param, keys);
     CHECK(stat(*stream, "evicted") > 0);
-    CHECK(stat(*stream, "keys") == int64_t(keys.size()));
+    CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, parked))); // its site tiles still in their grace
     stream->take_ready(0, back);
     CHECK(back.size() == 1);
     if (!(back.size() == 1)) {
@@ -273,6 +282,7 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
         evicted += int64_t(Dictionary(by_key[kinds[i]])["evicted"]);
     }
     CHECK(evicted == stat(*stream, "evicted"));
+    CHECK(key_stat(*stream, "sites 0", "evicted") > 0); // the entries cap evicts the site tiles too
     // The graced chunk's keys were evicted: asked again, they are computed again (the same records).
     CHECK(stream->admit(graced, 0, 2) == InstanceStream::PARKED);
     stream->poll();
@@ -381,30 +391,133 @@ TEST_CASE("Instance stream: past the pending keys' cap a chunk needing a new key
     CHECK(lists_right(fx, *stream, mirror, b));
 }
 
-TEST_CASE("Instance stream: making room for inputs evicts the inputs, never a placed key") {
+TEST_CASE("Instance stream: making room for inputs evicts the records not placed, never a placed key or a site tile") {
     const StreamFixture &fx = StreamFixture::get();
-    // Their keys read finer ones: inputs, not placed. c's placed keys are older than d's inputs.
-    const ChunkId c = fx.chunk(-300, -300, 2), d = fx.chunk(300, 300, 2);
+    // c's keys read site tiles (no records); the camera's view of a voxel far from it asks for a LOD-0 tile not listed: its
+    // records are the only inputs.
+    const ChunkId c = fx.chunk(-300, -300, 2);
     InstanceStream::Settings settings;
     settings.input_records = 0;
     std::unique_ptr<InstanceStream> stream = fx.stream(settings);
     std::vector<std::pair<ChunkId, uint64_t>> back;
-    for (const ChunkId &chunk : { c, d }) {
-        InstanceStream::Admit answer = InstanceStream::LATER;
-        for (int frame = 0; frame < 16 && answer != InstanceStream::READY; frame++) {
-            answer = stream->admit(chunk, 0, 1);
-            stream->poll();
-            stream->take_ready(0, back);
-        }
-        CHECK(answer == InstanceStream::READY);
+    InstanceStream::Admit answer = InstanceStream::LATER;
+    for (int frame = 0; frame < 16 && answer != InstanceStream::READY; frame++) {
+        answer = stream->admit(c, 0, 1);
+        stream->poll();
+        stream->take_ready(0, back);
     }
+    CHECK(answer == InstanceStream::READY);
+    std::vector<TableRecord> view;
+    stream->view_records(fx.origin + VoxelPos(400, 0, 400), 0, view);
+    stream->poll(); // asks for it
+    stream->poll(); // it lands
+    CHECK(stat(*stream, "input_records") > 0);
     const int64_t computed = stat(*stream, "computed");
     for (int frame = 0; frame < 2 * int(InstanceStream::GRACE_FRAMES); frame++) {
         stream->poll();
     }
-    CHECK(stat(*stream, "evicted") > 0); // the inputs went
+    CHECK(stat(*stream, "input_records") == 0);
+    CHECK(key_stat(*stream, "parts 0", "evicted") > 0); // the viewed tile went
+    CHECK(key_stat(*stream, "sites 0", "evicted") == 0); // the site tiles stay: evicting them frees no record
     CHECK(stream->admit(c, 0, 1) == InstanceStream::READY);
     CHECK(stat(*stream, "computed") == computed);
+}
+
+// Evicting for input records takes the oldest key holding them and moves nothing else: the entries cap then still finds the
+// least recently used keys first.
+TEST_CASE("Instance stream: evicting for input records leaves the LRU order, the entries cap evicts the oldest first") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ChunkId a = fx.chunk(-300, -300, 2);
+    const VoxelPos v1 = fx.origin + VoxelPos(400, 0, 400), v2 = fx.origin + VoxelPos(400, 0, -400);
+    std::vector<SourceKey> all, one;
+    fx.source->chunk_keys(a, fx.param, all);
+    fx.source->keys(v1, v1, 0, one);
+    all.insert(all.end(), one.begin(), one.end());
+    InstanceStream::Settings settings;
+    settings.input_records = 0;
+    settings.entries = keys_and_inputs(fx, all); // a's keys and v1's fit, one more key is over
+    // What the assertions below rest on: v2's keys and inputs fit in a's site tiles, the least recently used, so the cap
+    // evicts none of a's part tiles (a fixture change breaking it fails here, for this reason).
+    std::vector<SourceKey> a_keys, a_sites, v2_keys;
+    fx.source->chunk_keys(a, fx.param, a_keys);
+    for (const SourceKey &k : a_keys) {
+        fx.source->inputs(k, one);
+        a_sites.insert(a_sites.end(), one.begin(), one.end());
+    }
+    std::sort(a_sites.begin(), a_sites.end());
+    a_sites.erase(std::unique(a_sites.begin(), a_sites.end()), a_sites.end());
+    fx.source->keys(v2, v2, 0, v2_keys);
+    CHECK(keys_and_inputs(fx, v2_keys) <= a_sites.size());
+    if (!(keys_and_inputs(fx, v2_keys) <= a_sites.size())) {
+        return;
+    }
+    std::unique_ptr<InstanceStream> stream = fx.stream(settings);
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    InstanceStream::Admit answer = InstanceStream::LATER;
+    for (int frame = 0; frame < 16 && answer != InstanceStream::READY; frame++) {
+        answer = stream->admit(a, 0, 1);
+        stream->poll();
+        stream->take_ready(0, back);
+    }
+    CHECK(answer == InstanceStream::READY);
+    for (uint64_t f = 0; f < InstanceStream::GRACE_FRAMES + 2; f++) {
+        stream->poll(); // a's keys out of their grace
+    }
+    // v1's tile lands unplaced: the inputs' eviction finds it in its grace (and leaves a's keys where they are).
+    std::vector<TableRecord> view;
+    stream->view_records(v1, 0, view);
+    stream->poll();
+    stream->poll();
+    CHECK(stat(*stream, "input_records") > 0);
+    CHECK(stat(*stream, "evicted") == 0);
+    // v2's keys go over the entries cap: a's site tiles go, the least recently used, never v1's or v2's keys in their grace.
+    stream->view_records(v2, 0, view);
+    stream->poll();
+    stream->poll();
+    CHECK(stat(*stream, "evicted") > 0);
+    CHECK(key_stat(*stream, "sites 0", "evicted") == stat(*stream, "evicted"));
+    CHECK(key_stat(*stream, "parts 0", "evicted") == 0);
+    CHECK(key_stat(*stream, "parts 2", "evicted") == 0); // a's part tiles, used after their site tiles
+}
+
+// A LOD sharing the LOD-0 tile side has no part key of its own: its chunks read the LOD-0 keys and keep what is listed at
+// their LOD.
+TEST_CASE("Instance stream: a chunk of a LOD with the LOD-0 tile side lists the LOD-0 keys' records listed at its LOD") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ScatterSource &f = *fx.source;
+    int lod = 0;
+    while (lod + 1 < f.profile().lod_end && f.part_tile_side(lod + 1) == f.part_tile_side(0)) {
+        lod++;
+    }
+    CHECK(lod >= 1);
+    CHECK(f.part_key_lod(lod) == 0);
+    CHECK(f.part_key_lod(lod + 1) == lod + 1);
+    const ChunkId chunk = fx.chunk(200, -200, lod);
+    std::vector<SourceKey> keys;
+    f.chunk_keys(chunk, fx.param, keys);
+    CHECK_FALSE(keys.empty());
+    CHECK(std::all_of(keys.begin(), keys.end(), [](const SourceKey &p_k) { return p_k.kind == SourceKey::PARTS && p_k.lod == 0; }));
+
+    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    CHECK(stream->admit(chunk, 0, 0) == InstanceStream::PARKED);
+    stream->poll();
+    stream->take_ready(0, back);
+    CHECK(stream->admit(chunk, 0, 0) == InstanceStream::READY);
+    CHECK(key_stat(*stream, vformat("parts %d", lod).utf8().get_data(), "count") == 0);
+    Mirror mirror;
+    mirror.update(*stream);
+    CHECK(lists_right(fx, *stream, mirror, chunk));
+    // Its list: the LOD-0 keys' records listed at its LOD, and not all of them.
+    std::vector<uint32_t> ids;
+    stream->chunk_list(chunk, ids);
+    CHECK_FALSE(ids.empty());
+    size_t all = 0;
+    for (const SourceKey &k : keys) {
+        all += fx.content(k).records.size();
+    }
+    CHECK(ids.size() < all);
+    CHECK(std::all_of(ids.begin(), ids.end(), [&](uint32_t p_id) { return mirror.records[p_id - stream->slot_base()].listed_at(lod); }));
 }
 
 TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with the same lists") {
@@ -429,4 +542,16 @@ TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with
         CHECK(stream->admit(c, 0, 0) == InstanceStream::READY);
         CHECK(lists_right(fx, *stream, mirror, c));
     }
+}
+
+TEST_CASE("Instance stream: a walk key off its grid walks nothing (a site tile above LOD 0, proxies on a part layer)") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ScatterSource &f = *fx.source;
+    const int64_t side = f.part_tile_side(0);
+    const VoxelPos tile(WorldCoord::floor_div(fx.origin.x, side), WorldCoord::floor_div(fx.origin.y, side), WorldCoord::floor_div(fx.origin.z, side));
+    const SourceKey sites{ f.setup().id, SourceKey::SITES, 0, tile };
+    CHECK_FALSE(fx.content(sites).sites.empty()); // the fixture's ground crosses it
+    CHECK(fx.content(SourceKey{ f.setup().id, SourceKey::SITES, 1, tile }).sites.empty());
+    CHECK(f.part_layer(0));
+    CHECK(fx.content(SourceKey{ f.setup().id, SourceKey::PROXIES, 0, tile }).sites.empty());
 }

@@ -67,6 +67,8 @@ extends Node3D
 ##   --instance_area=M            side of the scatter square, metres (default 200)
 ##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
 ##   --stream=0                   place the scatter and the forest whole at configure instead of streaming them
+##   --stream_part_sides=N        streamed moment layers read the records while their cell is under N source cells,
+##                                proxies above (default 1; 3 = the whole build's blobs)
 ##   --moments=0                  leave out the far field of the dropped instances (their moments' blobs)
 ##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1): the skirt, the fastest a part shrinks
 ##   --instance_resolve=F         a part is kept while its half thickness holds F cells (default 1); it erodes just before its drop
@@ -225,6 +227,8 @@ func _ready() -> void:
 		terrain.archetype_band = args["instance_band"] != "0"
 	if args.has("stream"):
 		terrain.archetype_stream = args["stream"] != "0"
+	if args.has("stream_part_sides"):
+		terrain.archetype_stream_part_sides = int(args["stream_part_sides"])
 	if args.has("instance_erode"):
 		terrain.archetype_erode = float(args["instance_erode"])
 	if args.has("instance_resolve"):

@@ -56,6 +56,9 @@ public:
     // records in GPU slots past the table's), else placed whole in the table at configure (the reference; the tests that
     // edit their records). Set before configure().
     void set_stream_sources(bool p_enabled) { stream_sources = p_enabled; }
+    // The streamed sources' part layers: those whose cell is under this many source cells read the records (1 by default:
+    // proxies from the source cell on; ScatterSource::PART_CELL_SIDES: the whole build's blobs). Set before configure().
+    void set_stream_part_sides(int64_t p_sides) { stream_part_sides = p_sides; }
     // The forest's trees, in id order (placed whole only).
     const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
     // The procedural sources of the scene (cell_scatter.hpp), by name: "scatter", "trees" (empty without them).
@@ -208,6 +211,7 @@ private:
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
     std::vector<Source> sources;
     bool stream_sources = true; // --stream
+    int64_t stream_part_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES; // --stream_part_sides
     std::vector<std::shared_ptr<const Archetype::ScatterSource>> streamed; // the valid sources, by their id
     std::shared_ptr<Archetype::InstanceStream> stream; // the gpu table shares it
     double biome_radius = 0.0; // --biomes (metres)

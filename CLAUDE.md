@@ -328,14 +328,24 @@ to every change, and a reviewer may reject a PR on any of them.
   reads `SAMPLES` (256) hashed sites at the origin: reach, `lod_end`, k / margin max (times `REACH_SAFETY` 1.25), joins,
   records per site and the mass lost per LOD (what a far proxy stands for); unit-tested to bound every record of the
   forest and the scatter (`covers`).
-  **Keys (`src/scatter_source.*`):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS, lod,
-  tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
-  `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. PARTS is a pyramid: a LOD-0 tile (8 source cells) grows its
-  sites and keeps every record; LOD L's side doubles until it holds 2 chunks and it keeps what its 1 or 8 L - 1 tiles list
-  at L. A BLOBS tile (8 layer cells, at least a part tile and 2 chunks) builds the layers on the items within
+  **Keys (`src/scatter_source.*`):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS | SITES | PROXIES,
+  lod, tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
+  `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. SITES and PROXIES hold a walk and no records
+  (`SourceContent::sites`, never listed, kept resident: the walk is ~80% of a part tile's CPU): `SITES` (lod 0) on the
+  LOD-0 part-tile grid (8 source cells), `PROXIES L` on far layer L's blob grid (the proxies' walk, `far_items`' input). A
+  PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of the `SITES` tiles inside it that meet the
+  zone (clipped on all 3 axes: up to (2^(L-3))^3 otherwise, mostly air), in the old record pyramid's z y x order (kept as
+  the unit tests' oracle: bit-identical tiles and lists): every record at LOD 0, those listed at L coarser. A LOD with the
+  LOD-0 side (1-3 at 5 cm) has no PARTS key: `keys()` emits `part_key_lod(L)`'s and the chunk's `meeting` filters at L.
+  A BLOBS tile (8 layer cells, at least a part tile and 2 chunks) builds the layers on the items within
   `MARGIN_CELLS` (`PRUNE_CELLS` + 1) cells and judges its own cells (`MomentLayerParams::judged`): on part layers the
   LOD-0 tiles' records (the whole build's blobs bit for bit, unit test), above them proxies (unsnapped `surface_sites`,
-  2 per cell side, the profile's lost moments: mass within 10%). `SDFTable::source_setup` gives a source's setup.
+  2 per cell side, the profile's lost moments: mass within 10%). Part layers are those under `Setup::part_cell_sides`
+  source cells: 3 by default (the whole build's blobs), `VoxelTerrain.archetype_stream_part_sides` /
+  `--stream_part_sides=N` for the streamed sources (default 1: proxies from the source cell on; the 2 switched layers:
+  mass within 20%, peak within 40%, unit test; 3 = the exact layers). The stream keeps two LRU chains: all evictable
+  entries (slots, the entries cap) and those holding input records (not placed, count > 0: the inputs cap pops its oldest
+  in O(1), the walks and placed keys never relinked); `computed_by_key` names `sites 0` and `proxies L`.
   **Stream (`src/instance_stream.*`):** `InstanceStream` holds the keys asked for in one table (empty ones
   too) with an intrusive LRU: `admit(chunk, owner, tag)` answers READY (every key placed), PARKED (its keys pinned;
   `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
