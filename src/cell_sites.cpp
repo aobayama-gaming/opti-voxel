@@ -1,6 +1,7 @@
 // Procedural sites on the ground (cell_sites.hpp).
 #include "cell_sites.hpp"
 
+#include "ov/containers.hpp"
 #include "parallel_for.hpp"
 
 #include <algorithm>
@@ -25,9 +26,9 @@ int site_lod(int64_t p_side) {
 
 namespace {
 
-// The coarse field at the centre of node p_node (in units of its side p_n) of a walk over cells of p_side.
-ExactNoise::Float4 centre_field(const VoxelPos &p_node, int64_t p_n, int64_t p_side, const FieldFn &p_field) {
-    return p_field(p_node * p_n + VoxelPos(p_n / 2, p_n / 2, p_n / 2), site_lod(p_side));
+// The centre of node p_node (in units of its side p_n): where the walk reads the coarse field.
+VoxelPos node_centre(const VoxelPos &p_node, int64_t p_n) {
+    return p_node * p_n + VoxelPos(p_n / 2, p_n / 2, p_n / 2);
 }
 
 // Whether the plane of p_f (the field at a node's centre, extended along its gradient) crosses the node of side p_n,
@@ -50,15 +51,18 @@ bool newton_step(const ExactNoise::Float4 &p_f, const VoxelPos &p_at, int64_t p_
     return true;
 }
 
-// cell_site with the coarse field at the cell's centre given (the walk read it); without p_snap the site stays on the
-// coarse plane.
-bool site_of(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const ExactNoise::Float4 &p_centre, const FieldFn &p_field, bool p_snap,
-        Site &r_site) {
+VoxelBox cell_box(const VoxelPos &p_cell, int64_t p_side) {
+    return VoxelBox{ p_cell * p_side, p_cell * p_side + VoxelPos(p_side - 1, p_side - 1, p_side - 1), true };
+}
+
+// The site of p_cell before the snap, from the coarse field at the cell's centre (the walk read it): the hashed voxel
+// projected on that plane, which must land in the cell's middle part (it exists), with the cell's seed and variant.
+bool site_candidate(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const ExactNoise::Float4 &p_centre, Site &r_site) {
     const uint32_t key = ExactNoise::hash_cell(p_cell, p_salt);
     const ExactNoise::UVec3 h = ExactNoise::hash3(key, 0x51E5u, 0u);
     const ExactNoise::UVec3 g = ExactNoise::hash3(key, 0x51E5u, 1u);
     const uint32_t u[3] = { h.x, h.y, g.x };
-    const VoxelBox cell{ p_cell * p_side, p_cell * p_side + VoxelPos(p_side - 1, p_side - 1, p_side - 1), true };
+    const VoxelBox cell = cell_box(p_cell, p_side);
     // The middle part spares the axis closest to the ground's normal.
     const float n[3] = { std::fabs(p_centre.x), std::fabs(p_centre.y), std::fabs(p_centre.z) };
     const int normal_axis = n[1] >= n[0] && n[1] >= n[2] ? 1 : (n[0] >= n[2] ? 0 : 2);
@@ -74,28 +78,64 @@ bool site_of(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const Exac
     for (int a = 0; a < 3; a++) {
         q[a] = cell.lo[a] + p_side / 2 + std::llround((ExactNoise::unit_of(u[a]) - 0.5) * 0.7 * double(p_side));
     }
-    // Whether the site exists: the hashed voxel projected on the coarse plane at the cell's centre lands in the middle part.
     if (!newton_step(p_centre, cell.lo + VoxelPos(p_side / 2, p_side / 2, p_side / 2), p_side, q) || !middle.contains(q)) {
         return false;
-    }
-    // Snapped onto the LOD-0 ground, within the cell.
-    if (p_snap) {
-        ExactNoise::Float4 f = p_field(q, 0);
-        for (int i = 0; i < SNAP_STEPS && !(std::fabs(f.w) <= 1.0f); i++) {
-            if (!newton_step(f, q, p_side, q)) {
-                return false;
-            }
-            f = p_field(q, 0);
-        }
-        if (!(std::fabs(f.w) <= 1.0f) || !cell.contains(q)) {
-            return false;
-        }
     }
     r_site.base = q;
     r_site.seed = h.z;
     r_site.variant = h.z >> 16;
     return true;
 }
+
+// One round's readings: the distinct (voxel, LOD) the walks ask for, read in one call of the field.
+class Readings {
+public:
+    uint32_t ask(const VoxelPos &p_voxel, int p_lod) {
+        asked++;
+        ov::HashMap<VoxelPos, uint32_t, Vector3i64Hasher> *at = nullptr;
+        for (std::pair<int, ov::HashMap<VoxelPos, uint32_t, Vector3i64Hasher>> &l : index) {
+            if (l.first == p_lod) {
+                at = &l.second;
+            }
+        }
+        if (at == nullptr) {
+            index.emplace_back(p_lod, ov::HashMap<VoxelPos, uint32_t, Vector3i64Hasher>());
+            at = &index.back().second;
+        }
+        if (const uint32_t *known = at->getptr(p_voxel)) {
+            return *known;
+        }
+        const uint32_t i = uint32_t(points.size());
+        at->insert(p_voxel, i);
+        points.push_back(p_voxel);
+        lods.push_back(p_lod);
+        return i;
+    }
+    // Reads what was asked (no call for nothing), then the next round starts empty.
+    void read(const FieldBatchFn &p_field, WalkStats *r_stats) {
+        values.resize(points.size());
+        if (!points.empty()) {
+            p_field(points.data(), lods.data(), int(points.size()), values.data());
+        }
+        if (r_stats) {
+            r_stats->rounds += points.empty() ? 0 : 1;
+            r_stats->readings += asked;
+            r_stats->unique += int64_t(points.size());
+        }
+        index.clear();
+        points.clear();
+        lods.clear();
+        asked = 0;
+    }
+    const ExactNoise::Float4 &value(uint32_t p_i) const { return values[p_i]; }
+
+private:
+    std::vector<std::pair<int, ov::HashMap<VoxelPos, uint32_t, Vector3i64Hasher>>> index; // per LOD (a few per round)
+    std::vector<VoxelPos> points;
+    std::vector<int> lods;
+    std::vector<ExactNoise::Float4> values;
+    int64_t asked = 0;
+};
 
 const VoxelPos CORNERS[8] = { VoxelPos(0, 0, 0), VoxelPos(1, 0, 0), VoxelPos(0, 1, 0), VoxelPos(1, 1, 0), VoxelPos(0, 0, 1), VoxelPos(1, 0, 1),
     VoxelPos(0, 1, 1), VoxelPos(1, 1, 1) };
@@ -124,51 +164,153 @@ struct WalkCell {
     ExactNoise::Float4 centre;
 };
 
-// The nodes of p_side << p_stop_level voxels meeting p_box that the surface may cross, in cell order: an absolute octree
-// walk from the coarsest level whose node holds the box (at least p_min_level), keeping a node while the coarse plane at
-// its centre crosses it (plane_meets). Every node meeting the box when the walk would start at p_stop_level or below (no
-// reading: their centres' fields are left unset).
-std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field, int p_min_level, int p_stop_level = 0) {
-    int level = std::max(walk_level(p_box, p_side), std::min(p_min_level, 62));
-    if (p_stop_level > 0 && level <= p_stop_level) {
-        std::vector<WalkCell> all;
-        for (const VoxelPos &n : nodes_meeting(p_box, p_side << p_stop_level)) {
-            all.push_back(WalkCell{ n, ExactNoise::Float4() });
-        }
-        return all; // nodes_meeting's order is z y x: cell order
-    }
-    std::vector<VoxelPos> nodes = nodes_meeting(p_box, p_side << level);
+// One box's walk of the nodes of side << stop meeting it that the surface may cross: an absolute octree walk from the
+// coarsest level whose node holds the box (at least the start level asked), keeping a node while the coarse plane at
+// its centre crosses it (plane_meets). Once done, kept holds its cells in cell order. Walked from the stop level or
+// below, every node meeting the box, with no reading (their centres' fields left unset).
+struct CellWalk {
+    VoxelBox box;
+    int64_t side = 0;
+    int level = 0;
+    int stop = 0;
+    std::vector<VoxelPos> nodes; // the level's
+    std::vector<uint32_t> asked; // their readings in the round
     std::vector<WalkCell> kept;
-    std::vector<ExactNoise::Float4> fields;
-    for (;; level--) {
-        const int64_t n = p_side << level;
-        fields.resize(nodes.size());
-        parallel_for(uint32_t(nodes.size()), "surface_cells", [&](uint32_t p_i) { fields[p_i] = centre_field(nodes[p_i], n, p_side, p_field); });
+    bool done = false;
+
+    CellWalk(const VoxelBox &p_box, int64_t p_side, int p_min_level, int p_stop_level) : box(p_box), side(p_side), stop(p_stop_level) {
+        if (p_side <= 0) {
+            done = true;
+            return;
+        }
+        level = std::max(walk_level(p_box, p_side), std::min(p_min_level, 62));
+        if (p_stop_level > 0 && level <= p_stop_level) {
+            for (const VoxelPos &n : nodes_meeting(p_box, p_side << p_stop_level)) {
+                kept.push_back(WalkCell{ n, ExactNoise::Float4() }); // nodes_meeting's order is z y x: cell order
+            }
+            done = true;
+            return;
+        }
+        nodes = nodes_meeting(p_box, p_side << level);
+    }
+
+    void ask(Readings &r_readings) {
+        const int64_t n = side << level;
+        asked.resize(nodes.size());
+        for (size_t i = 0; i < nodes.size(); i++) {
+            asked[i] = r_readings.ask(node_centre(nodes[i], n), site_lod(side));
+        }
+    }
+
+    // The round's readings in: keep the level's nodes the plane crosses, then their children meeting the box.
+    void step(const Readings &p_readings) {
+        const int64_t n = side << level;
         kept.clear();
         for (size_t i = 0; i < nodes.size(); i++) {
-            if (plane_meets(fields[i], n, p_side)) {
-                kept.push_back(WalkCell{ nodes[i], fields[i] });
+            const ExactNoise::Float4 &f = p_readings.value(asked[i]);
+            if (plane_meets(f, n, side)) {
+                kept.push_back(WalkCell{ nodes[i], f });
             }
         }
-        if (level == p_stop_level) {
-            break;
+        if (level == stop) {
+            std::sort(kept.begin(), kept.end(), [](const WalkCell &p_a, const WalkCell &p_b) { return cell_order(p_a.cell, p_b.cell); });
+            done = true;
+            return;
         }
         nodes.clear();
         const int64_t m = n / 2;
         for (const WalkCell &k : kept) {
             for (const VoxelPos &c : CORNERS) {
                 const VoxelPos child = k.cell * 2 + c;
-                if (VoxelBox{ child * m, child * m + VoxelPos(m - 1, m - 1, m - 1), true }.intersects(p_box)) {
+                if (VoxelBox{ child * m, child * m + VoxelPos(m - 1, m - 1, m - 1), true }.intersects(box)) {
                     nodes.push_back(child);
                 }
             }
         }
+        level--;
     }
-    std::sort(kept.begin(), kept.end(), [](const WalkCell &p_a, const WalkCell &p_b) { return cell_order(p_a.cell, p_b.cell); });
-    return kept;
+};
+
+// Every walk to its stop level, a round per level for all of them.
+void walk_cells(std::vector<CellWalk> &r_walks, const FieldBatchFn &p_field, WalkStats *r_stats) {
+    Readings readings;
+    for (;;) {
+        bool any = false;
+        for (CellWalk &w : r_walks) {
+            if (!w.done) {
+                w.ask(readings);
+                any = true;
+            }
+        }
+        if (!any) {
+            return;
+        }
+        readings.read(p_field, r_stats);
+        for (CellWalk &w : r_walks) {
+            if (!w.done) {
+                w.step(readings);
+            }
+        }
+    }
+}
+
+// A site of a walk's kept cell before its snap.
+struct Candidate {
+    VoxelPos cell;
+    int64_t side = 0;
+    Site site;
+    bool snap = true;
+    bool alive = true;
+    bool read = true; // asks for a reading this round
+    uint32_t asked = 0;
+    ExactNoise::Float4 f;
+};
+
+// The candidates to snap (snap set) moved onto the LOD-0 ground, a round per step for all of them: read at its base,
+// SNAP_STEPS Newton steps on whole voxels while it is more than a voxel away, each read again; it stays alive if it
+// ends within a voxel of the ground and inside its cell (a surface point has one owner).
+void snap_candidates(std::vector<Candidate> &r_candidates, const FieldBatchFn &p_field, WalkStats *r_stats) {
+    Readings readings;
+    auto read_round = [&]() {
+        bool any = false;
+        for (Candidate &c : r_candidates) {
+            if (c.snap && c.alive && c.read) {
+                c.asked = readings.ask(c.site.base, 0);
+                any = true;
+            }
+        }
+        readings.read(p_field, r_stats);
+        for (Candidate &c : r_candidates) {
+            if (c.snap && c.alive && c.read) {
+                c.f = readings.value(c.asked);
+            }
+        }
+        return any;
+    };
+    bool any = read_round();
+    for (int i = 0; i < SNAP_STEPS && any; i++) {
+        for (Candidate &c : r_candidates) {
+            c.read = c.snap && c.alive && !(std::fabs(c.f.w) <= 1.0f);
+            if (c.read && !newton_step(c.f, c.site.base, c.side, c.site.base)) {
+                c.alive = false;
+            }
+        }
+        any = read_round();
+    }
+    for (Candidate &c : r_candidates) {
+        if (c.snap && c.alive) {
+            c.alive = std::fabs(c.f.w) <= 1.0f && cell_box(c.cell, c.side).contains(c.site.base);
+        }
+    }
 }
 
 } // namespace
+
+FieldBatchFn batch_of(const FieldFn &p_field) {
+    return [p_field](const VoxelPos *p_points, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) {
+        parallel_for(uint32_t(p_count), "field_batch", [&](uint32_t p_i) { r_out[p_i] = p_field(p_points[p_i], p_lods[p_i]); });
+    };
+}
 
 int walk_level(const VoxelBox &p_box, int64_t p_side) {
     int64_t extent = 1;
@@ -187,31 +329,59 @@ void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, c
     if (p_side <= 0 || p_level < 0 || p_level > 62) {
         return;
     }
-    for (const WalkCell &c : surface_cells(VoxelBox{ p_lo, p_hi, true }, p_side, p_field, p_min_level, p_level)) {
+    std::vector<CellWalk> walk{ CellWalk(VoxelBox{ p_lo, p_hi, true }, p_side, p_min_level, p_level) };
+    walk_cells(walk, batch_of(p_field), nullptr);
+    for (const WalkCell &c : walk[0].kept) {
         r_out.push_back(c.cell);
     }
 }
 
 bool cell_site(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, Site &r_site) {
-    return site_of(p_cell, p_side, p_salt, centre_field(p_cell, p_side, p_side, p_field), p_field, true, r_site);
+    std::vector<Candidate> c(1);
+    c[0].cell = p_cell;
+    c[0].side = p_side;
+    if (!site_candidate(p_cell, p_side, p_salt, p_field(node_centre(p_cell, p_side), site_lod(p_side)), c[0].site)) {
+        return false;
+    }
+    snap_candidates(c, batch_of(p_field), nullptr);
+    r_site = c[0].site;
+    return c[0].alive;
+}
+
+void surface_sites_many(const SiteWalk *p_walks, size_t p_count, const FieldBatchFn &p_field, WalkStats *r_stats) {
+    std::vector<CellWalk> walks;
+    walks.reserve(p_count);
+    for (size_t w = 0; w < p_count; w++) {
+        walks.emplace_back(p_walks[w].box, p_walks[w].side, p_walks[w].min_level, 0);
+    }
+    walk_cells(walks, p_field, r_stats);
+    std::vector<Candidate> candidates;
+    std::vector<size_t> walk_of;
+    for (size_t w = 0; w < p_count; w++) {
+        for (const WalkCell &k : walks[w].kept) {
+            Candidate c;
+            c.cell = k.cell;
+            c.side = p_walks[w].side;
+            c.snap = p_walks[w].snap;
+            if (site_candidate(k.cell, c.side, p_walks[w].salt, k.centre, c.site)) {
+                candidates.push_back(c);
+                walk_of.push_back(w);
+            }
+        }
+    }
+    snap_candidates(candidates, p_field, r_stats);
+    for (size_t i = 0; i < candidates.size(); i++) {
+        const SiteWalk &w = p_walks[walk_of[i]];
+        if (candidates[i].alive && w.box.contains(candidates[i].site.base)) {
+            w.out->push_back(CellSite{ candidates[i].cell, candidates[i].site });
+        }
+    }
 }
 
 void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, std::vector<CellSite> &r_out,
         bool p_snap, int p_min_level) {
-    if (p_side <= 0) {
-        return;
-    }
-    const VoxelBox box{ p_lo, p_hi, true };
-    const std::vector<WalkCell> cells = surface_cells(box, p_side, p_field, p_min_level);
-    std::vector<Site> found(cells.size());
-    std::vector<uint8_t> ok(cells.size(), 0);
-    parallel_for(uint32_t(cells.size()), "surface_sites",
-            [&](uint32_t p_i) { ok[p_i] = site_of(cells[p_i].cell, p_side, p_salt, cells[p_i].centre, p_field, p_snap, found[p_i]); });
-    for (size_t i = 0; i < cells.size(); i++) {
-        if (ok[i] && box.contains(found[i].base)) {
-            r_out.push_back(CellSite{ cells[i].cell, found[i] });
-        }
-    }
+    const SiteWalk walk{ VoxelBox{ p_lo, p_hi, true }, p_side, p_salt, p_snap, p_min_level, &r_out };
+    surface_sites_many(&walk, 1, batch_of(p_field));
 }
 
 } // namespace Archetype

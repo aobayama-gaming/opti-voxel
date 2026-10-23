@@ -40,6 +40,8 @@ Dictionary InstanceStream::get_stats() const {
     d["expand_ms_total"] = double(stats.expand_usec) / 1000.0;
     d["jobs_queued_max"] = stats.jobs_queued_max;
     d["jobs_reranked"] = stats.jobs_reranked;
+    d["walk_batches"] = stats.walk_batches;
+    d["walk_batch_keys"] = stats.walk_batch_keys;
     d["stale_handed_back"] = stats.stale_handed_back;
     d["keys_dropped"] = stats.keys_dropped;
     d["jobs_dropped"] = stats.jobs_dropped;

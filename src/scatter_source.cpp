@@ -296,25 +296,43 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         blob_tile(p_key, p_inputs, r_out);
     } else if (p_key.walk()) {
-        // A site tile is on the LOD-0 part grid, a proxy tile on a far layer's blob grid (inputs()): any other walks a
-        // box no key reads (a part layer's proxies: a full walk for nothing).
-        const bool walked = p_key.kind == SourceKey::SITES ? p_key.lod == 0 : has_layer(p_key.lod) && !part_layer(p_key.lod);
-        ERR_FAIL_COND_MSG(!walked, vformat("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(p_key.kind), p_key.lod));
-        walk_tile(p_key, r_out);
+        SourceContent *out = &r_out;
+        walk_tiles(&p_key, 1, &out);
     }
 }
 
-void ScatterSource::walk_tile(const SourceKey &p_key, SourceContent &r_out) const {
+void ScatterSource::walk_tiles(const SourceKey *p_keys, size_t p_count, SourceContent *const *r_outs) const {
     const CellScatter &s = set.scatter;
-    if (p_key.kind == SourceKey::SITES) {
-        s.sites(tile_box(p_key), r_out.sites);
-        return;
+    std::vector<SiteWalk> walks(p_count);
+    for (size_t i = 0; i < p_count; i++) {
+        const SourceKey &key = p_keys[i];
+        *r_outs[i] = SourceContent();
+        walks[i] = SiteWalk{ VoxelBox(), 0, 0, false, 0, &r_outs[i]->sites }; // no walk unless it is one of ours
+        // A site tile is on the LOD-0 part grid, a proxy tile on a far layer's blob grid (inputs()): any other walks a
+        // box no key reads (a part layer's proxies: a full walk for nothing).
+        const bool walked = key.kind == SourceKey::SITES ? key.lod == 0 : key.kind == SourceKey::PROXIES && has_layer(key.lod) && !part_layer(key.lod);
+        if (part_sides.empty() || key.source != set.id || !walked) {
+            if (!walked) {
+                ERR_PRINT(vformat("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(key.kind), key.lod));
+            }
+            continue;
+        }
+        if (key.kind == SourceKey::SITES) {
+            walks[i] = s.site_walk(tile_box(key), &r_outs[i]->sites);
+            continue;
+        }
+        // From the regions' level: the sites a tile keeps are those a region walk keeps over it (surface_sites); a proxy's
+        // base needn't be on the LOD-0 ground.
+        const VoxelBox box = tile_box(key).clipped(proxy_zone(key.lod));
+        if (box.valid) {
+            walks[i] = SiteWalk{ box, proxy_side(key.lod), s.salt ^ PROXY_SALT, false, proxy_level(key.lod), &r_outs[i]->sites };
+        }
     }
-    // From the regions' level: the sites a tile keeps are those a region walk keeps over it (surface_sites).
-    const VoxelBox box = tile_box(p_key).clipped(proxy_zone(p_key.lod));
-    if (box.valid) {
-        surface_sites(box.lo, box.hi, proxy_side(p_key.lod), s.salt ^ PROXY_SALT, s.ground, r_out.sites, false, // a proxy's base needn't be on the LOD-0 ground
-                proxy_level(p_key.lod));
+    surface_sites_many(walks.data(), p_count, s.field_batch());
+    for (size_t i = 0; i < p_count; i++) {
+        if (p_keys[i].kind == SourceKey::SITES) {
+            s.accept_sites(r_outs[i]->sites, 0);
+        }
     }
 }
 

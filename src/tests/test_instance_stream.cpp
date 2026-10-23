@@ -691,6 +691,44 @@ TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with
     }
 }
 
+// Walk keys computed together (Settings::walk_batch: a round of readings for all of them, ScatterSource::walk_tiles) land
+// the same contents as alone: the chunks come back with the same lists, on the pool, and batches did run.
+TEST_CASE("Instance stream: walk keys walked in batches land the same contents as alone") {
+    const StreamFixture &fx = StreamFixture::get();
+    InstanceStream::Settings settings;
+    settings.walk_batch = 16;
+    std::unique_ptr<InstanceStream> stream = fx.stream(settings, StreamExecutor::pool());
+    std::vector<ChunkId> chunks;
+    for (int64_t x = -300; x <= 300; x += 150) {
+        for (int64_t z = -300; z <= 300; z += 150) {
+            chunks.push_back(fx.chunk(x, z, (x + z) % 300 == 0 ? 1 : 0));
+        }
+    }
+    for (const ChunkId &c : chunks) {
+        stream->admit(c, 0, 0, 0);
+    }
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    size_t ready = 0;
+    const uint64_t t0 = now_usec();
+    while (ready < chunks.size() && now_usec() - t0 < 60000000) {
+        stream->poll();
+        ready = 0;
+        for (const ChunkId &c : chunks) {
+            ready += stream->admit(c, 0, 0, 0) == InstanceStream::READY ? 1 : 0;
+        }
+        stream->take_ready(0, back);
+    }
+    CHECK(ready == chunks.size());
+    Mirror mirror;
+    mirror.update(*stream);
+    for (const ChunkId &c : chunks) {
+        CHECK(lists_right(fx, *stream, mirror, c));
+    }
+    CHECK(stat(*stream, "walk_batches") > 0);
+    CHECK(stat(*stream, "walk_batch_keys") > stat(*stream, "walk_batches"));
+    MESSAGE(stat(*stream, "walk_batches"), " walk batches of ", stat(*stream, "walk_batch_keys"), " keys");
+}
+
 TEST_CASE("Instance stream: jobs run by rank, then in the order asked") {
     const StreamFixture &fx = StreamFixture::get();
     const ChunkId a = fx.chunk(-300, -300), b = fx.chunk(300, 300), c = fx.chunk(-300, 300);

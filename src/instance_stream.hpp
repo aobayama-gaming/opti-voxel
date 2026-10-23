@@ -93,6 +93,10 @@ public:
         size_t walks = WALKS_MAX;
         size_t pending = PENDING_MAX;
         size_t log = LOG_MAX;
+        // Walk keys (site and proxy tiles) a drain task computes in one go (ScatterSource::walk_tiles: a round of the
+        // field's readings for all of them): its walk job and the next ready ones of the same source in rank order. 1
+        // walks each alone (the CPU field: one task per tile keeps the workers busy); a batched field (a GPU) wants many.
+        size_t walk_batch = 1;
     };
     enum Admit {
         READY, // every key placed: mesh it now
@@ -286,6 +290,8 @@ private:
         int64_t later_pending = 0; // admits answered LATER at the pending cap
         int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
         int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank
+        int64_t walk_batches = 0; // walk jobs computed together (Settings::walk_batch), and the keys they held
+        int64_t walk_batch_keys = 0;
         int64_t stale_handed_back = 0; // parked chunks set_tag() forgot (a newer scan doesn't want them)
         int64_t keys_dropped = 0; // keys set_tag() left unneeded, erased before their job started
         int64_t jobs_dropped = 0; // of keys_dropped: their job queued (the others were waiting for inputs)
@@ -331,6 +337,11 @@ private:
     // A parked chunk's keys unpinned (and forgotten: unpinned once).
     void release_pins(Parked &r_parked);
     void drain();
+    // drain()'s walk batches (Settings::walk_batch): the queue's next walk jobs of r_batch[0]'s source into r_batch (job_mutex
+    // held), then their contents in one ScatterSource::walk_tiles.
+    static constexpr size_t WALK_LOOK = 4; // queue entries looked at per batch slot
+    void take_walks(std::vector<std::unique_ptr<Job>> &r_batch);
+    static void run_walks(std::vector<std::unique_ptr<Job>> &r_batch);
     void land(std::unique_ptr<Job> p_job);
     // Gives a ready listed entry its slots and logs it (false: no room even after evicting).
     bool place(Entry &r_entry);

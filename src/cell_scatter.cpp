@@ -11,14 +11,23 @@
 namespace Archetype {
 
 void CellScatter::sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap) const {
+    const size_t first = r_out.size();
+    const SiteWalk walk = site_walk(p_query, &r_out, p_snap);
+    surface_sites_many(&walk, 1, field_batch());
+    accept_sites(r_out, first);
+}
+
+SiteWalk CellScatter::site_walk(const VoxelBox &p_query, std::vector<CellSite> *r_out, bool p_snap) const {
     const VoxelBox box = p_query.clipped(zone);
     if (!box.valid || !valid()) {
-        return;
+        return SiteWalk{ box, 0, salt, p_snap, 0, r_out };
     }
-    const size_t first = r_out.size();
-    surface_sites(box.lo, box.hi, side, salt, ground, r_out, p_snap, walk_level(zone, side));
+    return SiteWalk{ box, side, salt, p_snap, walk_level(zone, side), r_out };
+}
+
+void CellScatter::accept_sites(std::vector<CellSite> &r_sites, size_t p_first) const {
     if (accept) {
-        r_out.erase(std::remove_if(r_out.begin() + first, r_out.end(), [this](const CellSite &p_s) { return !accept(p_s.site.base); }), r_out.end());
+        r_sites.erase(std::remove_if(r_sites.begin() + p_first, r_sites.end(), [this](const CellSite &p_s) { return !accept(p_s.site.base); }), r_sites.end());
     }
 }
 

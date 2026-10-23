@@ -396,24 +396,69 @@ bool InstanceStream::drop_unneeded(Entry &r_entry) {
 
 void InstanceStream::drain() {
     const InlineParallelFor inline_loops; // a pool task: the site walks' and layers' loops run here
+    std::vector<std::unique_ptr<Job>> batch;
     for (;;) {
-        std::unique_ptr<Job> job;
+        batch.clear();
         {
             const std::lock_guard<std::mutex> lock(job_mutex);
             if (jobs.empty() || stopping || !executor->more()) {
                 draining--;
                 return;
             }
-            job = std::move(jobs.begin()->second);
+            batch.push_back(std::move(jobs.begin()->second));
             jobs.erase(jobs.begin());
+            if (settings.walk_batch > 1 && batch[0]->key.walk()) {
+                take_walks(batch);
+            }
         }
-        job->run();
-        executor->landing();
-        if (stopping) {
-            continue; // nobody reads it: no landing (an expansion would queue its subtree)
+        if (batch.size() == 1) {
+            batch[0]->run();
+        } else {
+            run_walks(batch);
         }
-        const std::unique_lock<std::shared_mutex> lock(mutex);
-        land(std::move(job)); // the keys it completes join jobs: this loop takes them
+        for (size_t i = 0; i < batch.size(); i++) {
+            executor->landing();
+            if (stopping) {
+                continue; // nobody reads it: no landing (an expansion would queue its subtree)
+            }
+            const std::unique_lock<std::shared_mutex> lock(mutex);
+            if (i == 0 && batch.size() > 1) {
+                stats.walk_batches++;
+                stats.walk_batch_keys += int64_t(batch.size());
+            }
+            land(std::move(batch[i])); // the keys it completes join jobs: this loop takes them
+        }
+    }
+}
+
+void InstanceStream::take_walks(std::vector<std::unique_ptr<Job>> &r_batch) {
+    // The queue's next walk jobs of the same source, in rank order, looking a few batches deep (the others stay for the
+    // other tasks). A walk key has no input: its first job computes it.
+    const ScatterSource *source = r_batch[0]->source;
+    size_t looked = 0;
+    for (auto it = jobs.begin(); it != jobs.end() && r_batch.size() < settings.walk_batch && looked < WALK_LOOK * settings.walk_batch; looked++) {
+        if (it->second->key.walk() && it->second->source == source && it->second->inputs.empty()) {
+            r_batch.push_back(std::move(it->second));
+            it = jobs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void InstanceStream::run_walks(std::vector<std::unique_ptr<Job>> &r_batch) {
+    const uint64_t t0 = now_usec();
+    std::vector<SourceKey> keys;
+    std::vector<SourceContent *> outs;
+    for (std::unique_ptr<Job> &job : r_batch) {
+        job->out = std::make_shared<SourceContent>();
+        keys.push_back(job->key);
+        outs.push_back(job->out.get());
+    }
+    r_batch[0]->source->walk_tiles(keys.data(), keys.size(), outs.data());
+    const uint64_t each = (now_usec() - t0) / r_batch.size();
+    for (std::unique_ptr<Job> &job : r_batch) {
+        job->usec = each; // their compute time shared
     }
 }
 
