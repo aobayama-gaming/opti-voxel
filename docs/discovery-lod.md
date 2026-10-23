@@ -26,6 +26,12 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   `setup_lod` gets min(N, `lod_numbers`) levels, so its top LOD is N - 1 and the scan grid (the load radius, the
   camera's far plane) shrinks with it. The terrain keeps `lod_numbers` (root span, the octaves a climate needs:
   `world.json` wants 25); with the 5 cm scene, N = 10 loads ~13.6 km, where the fog leaves ~3%.
+- Error per LOD (`VoxelTerrain.lod_pixel_errors`, `--lod_errors=4,4,2,1,1` in bench.gd and the main scene; empty by
+  default): entry L replaces `lod_pixel_error` in LOD L's distance (0 or past the list: `lod_pixel_error`). LOD L's
+  band runs from LOD L-1's distance to its own, so a finer error than the LOD below widens it (more of its chunks)
+  and a coarser one narrows it: at 2x coarser it vanishes (`setup_lod` warns). On a ground, a band holds about
+  (1/e_L^2 - 1/(4 e_{L-1}^2)) / (3/16) times the chunks of the uniform error-2 band. The back ratio
+  (`lod_pixel_error_back / lod_pixel_error`) applies on top. Check a new profile with `--discovery_audit=1`.
 - View-dependent LOD (`VoxelTerrain.lod_pixel_error_back` / `lod_view_margin_deg`, `--lod_error_back=F
   --lod_view_margin=DEG` in bench.gd and the main scene; off by default): a scan carries a `ScanView` (camera
   chunk, forward, the view cone = the frustum's diagonal half-FOV + margin, `back_scale` = back / front error - 1).

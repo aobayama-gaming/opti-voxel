@@ -92,6 +92,7 @@ private:
     bool dual_contouring = false;
     float lod_pixel_error = 2.0f;
     float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
+    PackedFloat32Array lod_pixel_errors; // per LOD, replaces lod_pixel_error (0 or past the end: lod_pixel_error)
     float lod_view_margin_deg = 20.0f;
     float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
     VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
@@ -271,6 +272,11 @@ public:
     // this one behind the camera (0 or <= lod_pixel_error: off). See lod_view_memory_m for turning.
     void set_lod_pixel_error_back(float p_error);
     float get_lod_pixel_error_back() const;
+    // The error of each LOD (index = LOD; 0 or past the end: lod_pixel_error), which sets how many of its chunks
+    // load: e.g. {4, 4, 2, 1, 1} has fewer LOD 0-1 chunks and more LOD 3-4 ones. lod_pixel_error_back stays a ratio
+    // to lod_pixel_error, applied on top. An error 2x coarser than the LOD below leaves that LOD no band (warned).
+    void set_lod_pixel_errors(const PackedFloat32Array &p_errors);
+    PackedFloat32Array get_lod_pixel_errors() const;
     // The view cone: the frustum's diagonal half-FOV plus this margin, in degrees (at least
     // ChunkDiscoverer::RESCAN_TURN_DEG, the most the remembered view axis lags the camera's). It keeps lod_pixel_error
     // around the view while turning (a turn of ChunkDiscoverer::RESCAN_TURN_DEG rescans), and the meshers

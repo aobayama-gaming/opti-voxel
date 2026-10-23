@@ -80,6 +80,7 @@ extends Node3D
 ##                                (Presets.clip_planes: far up to the discoverer's load range)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --lod_error_back=F           error outside the view cone, reached behind the camera (default 0 = lod_error)
+##   --lod_errors=F,F,...         error per LOD from LOD 0 (0 or past the list: lod_error); sets each LOD's chunk count
 ##   --lod_view_margin=DEG        view cone = the frustum's diagonal half-FOV + DEG (default 20)
 ##   --lod_view_memory=M          a view keeps the front error until the camera is M metres from where it
 ##                                had it (default -1: where LOD 2 starts, 0 = off)
@@ -252,6 +253,8 @@ func _ready() -> void:
 		terrain.direct_compact_max_extent = float(args["compact_extent"])
 	if args.has("lod_error"):
 		terrain.lod_pixel_error = float(args["lod_error"])
+	if args.has("lod_errors"):
+		terrain.lod_pixel_errors = PackedFloat32Array(Array(str(args["lod_errors"]).split(",")).map(func(e): return e.to_float()))
 	if args.has("lod_error_back"):
 		terrain.lod_pixel_error_back = float(args["lod_error_back"])
 	if args.has("lod_view_margin"):
