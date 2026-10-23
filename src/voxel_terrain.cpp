@@ -706,7 +706,7 @@ void VoxelTerrain::_ready() {
                 WorldCoord::floor_div(world_origin_request.y, root_voxels) * root_units,
                 WorldCoord::floor_div(world_origin_request.z, root_voxels) * root_units);
         if (chunk_param.origin_voxel() != world_origin_request) {
-            VLOG(1, "VoxelTerrain: world origin snapped to ", godot_str(WorldCoord::to_string(chunk_param.origin_voxel())), " voxels");
+            VLOG(1, "VoxelTerrain: world origin snapped to ", godot_str(chunk_param.origin_voxel()), " voxels");
         }
     }
 
@@ -1138,7 +1138,7 @@ bool VoxelTerrain::debug_audit_discovery() {
     discovery_audit.start_usec = t0;
     discovery_audit.expected = (int64_t)culled.size();
     Dictionary base;
-    base["camera_chunk"] = godot_str(WorldCoord::to_string(scan_view.camera_chunk));
+    base["camera_chunk"] = godot_str(scan_view.camera_chunk);
     base["cull_mode"] = discovery_cull_mode;
     base["reference"] = (int64_t)reference.size();
     base["reference_nodes_visited"] = counters.nodes_visited;
@@ -1171,7 +1171,7 @@ void VoxelTerrain::_poll_discovery_audit() {
         discovery_audit.misses_by_lod[lod] = int64_t(discovery_audit.misses_by_lod.get(lod, 0)) + 1;
         if (discovery_audit.miss_examples.size() < 20) {
             Dictionary e;
-            e["id"] = godot_str(WorldCoord::to_string(c.first));
+            e["id"] = godot_str(c.first);
             e["lod"] = lod;
             e["quads"] = (int64_t)c.second;
             e["distance_chunks"] = scan_view.camera_chunk.distance_to(c.first);
@@ -1207,7 +1207,7 @@ bool VoxelTerrain::is_load_complete() {
     // after _ready is otherwise "loaded" with the first scan while the next one is still running.
     // The view of the last set_camera (_process) carries the remembered views; a camera moved since is
     // caught by its chunk, a turn since by the next frame.
-    if (camera != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(Float3{ camera->get_global_position().x, camera->get_global_position().y, camera->get_global_position().z }, chunk_param) != scan_view.camera_chunk)) {
+    if (camera != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(ov_f3(camera->get_global_position()), chunk_param) != scan_view.camera_chunk)) {
         return false;
     }
     if (direct_mesher) {
@@ -1225,9 +1225,9 @@ Dictionary VoxelTerrain::get_debug_stats() {
     d["pipeline_mode"] = (int)pipeline_mode;
     d["terrain_mode"] = terrain_mode;
     Dictionary origin;
-    origin["requested_voxel"] = godot_str(WorldCoord::to_string(world_origin_request));
-    origin["voxel"] = godot_str(WorldCoord::to_string(chunk_param.origin_voxel()));
-    origin["chunk"] = godot_str(WorldCoord::to_string(chunk_param.origin_chunk));
+    origin["requested_voxel"] = godot_str(world_origin_request);
+    origin["voxel"] = godot_str(chunk_param.origin_voxel());
+    origin["chunk"] = godot_str(chunk_param.origin_chunk);
     d["world_origin"] = origin;
     if (sdf) {
         d["table"] = sdf->get_gpu_table()->get_stats();

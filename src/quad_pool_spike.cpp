@@ -95,11 +95,11 @@ void QuadPoolSpike::_ready() {
     // Corners are stored relative to one chunk: the smallest one whose vertex grid holds the sheet.
     const AABB sheet(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size));
     const Vector3 sheet_center = sheet.get_center();
-    sheet_chunk = ChunkMath::chunk_at_render(Float3{ sheet_center.x, sheet_center.y, sheet_center.z }, chunk_param);
+    sheet_chunk = ChunkMath::chunk_at_render(ov_f3(sheet_center), chunk_param);
     for (int lod = 0; lod < 24; lod++) {
         const Vector3 lo = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{}, chunk_param));
         const Vector3 grid_hi{ float(chunk_param.chunk_size - 1), float(chunk_param.chunk_size - 1), float(chunk_param.chunk_size - 1) };
-        const Vector3 hi = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{ grid_hi.x, grid_hi.y, grid_hi.z }, chunk_param));
+        const Vector3 hi = godot_v3(ChunkMath::grid_to_render(sheet_chunk, ov_f3(grid_hi), chunk_param));
         if (AABB(lo, hi - lo).encloses(sheet)) {
             break;
         }
@@ -262,7 +262,7 @@ void QuadPoolSpike::_verify_write(Dictionary &r) {
     r["indirect_index_count"] = command.decode_u32(0);
     r["indirect_group_count"] = command.decode_u32(4);
     r["texture_bytes_read"] = bytes.size();
-    r["sheet_chunk"] = godot_str(WorldCoord::to_string(sheet_chunk));
+    r["sheet_chunk"] = godot_str(sheet_chunk);
 
     const float step = sheet_size / side;
     auto height = [&](float x, float z) { return sheet_origin.y + 3.0f * std::sin(x * 0.3f) * std::cos(z * 0.3f); };

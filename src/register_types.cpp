@@ -27,10 +27,9 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
-    // The core's engine-free error sink reports like the ERR_* macros did: one line in the Godot
-    // console, with the core file and line it came from.
+    // The core's engine-free error sink: an ERROR line in the Godot console at the core's file and line.
     ov::set_error_sink([](const char *p_file, int p_line, const char *p_message) {
-        ERR_PRINT(vformat("%s:%d: %s", p_file, p_line, p_message));
+        _err_print_error("core", p_file, p_line, p_message);
     });
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(VoxelSky);

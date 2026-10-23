@@ -243,7 +243,7 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
 
 // Bytes of one DefRecord in the GPU buffer (10 x vec4, all 16-byte aligned).
 inline constexpr uint32_t RECORD_BYTES = 160;
-void encode_record(ov::bytes &r_bytes, uint32_t p_index, const TableRecord &p_record);
+void encode_record(uint8_t *r_slot, const TableRecord &p_record);
 
 // M(lod) = ceil(min(k + margin_c * 2^lod, INPUT_LIMIT)) + 2 voxels: the influence box's growth at p_lod.
 // The CPU and the GPU (arch_in_box) compute the same float expression, so the same branch.

@@ -544,12 +544,11 @@ TEST_CASE("Archetype table: encode_record lays the GPU DefRecord out at the docu
     rec.box_lo[0] = -7;
     rec.box_hi[2] = 11;
     rec.margin_c = 6.0f;
-    ov::bytes bytes;
-    bytes.resize(RECORD_BYTES);
-    encode_record(bytes, 0, rec);
-    auto decode_u32 = [&bytes](int64_t p_at) { uint32_t v; std::memcpy(&v, bytes.data() + p_at, 4); return v; };
-    auto decode_s32 = [&bytes](int64_t p_at) { int32_t v; std::memcpy(&v, bytes.data() + p_at, 4); return v; };
-    auto decode_float = [&bytes](int64_t p_at) { float v; std::memcpy(&v, bytes.data() + p_at, 4); return v; };
+    ov::bytes bytes(RECORD_BYTES);
+    encode_record(bytes.data(), rec);
+    auto decode_u32 = [&bytes](int64_t p_at) { return ov::get_u32(bytes.data() + p_at); };
+    auto decode_s32 = [&bytes](int64_t p_at) { return ov::get_s32(bytes.data() + p_at); };
+    auto decode_float = [&bytes](int64_t p_at) { return ov::get_f32(bytes.data() + p_at); };
     CHECK(decode_u32(0) == 2u);
     CHECK(decode_u32(4) == uint32_t(Combine::SMOOTH_SUBTRACT));
     CHECK(decode_float(8) == rec.k);

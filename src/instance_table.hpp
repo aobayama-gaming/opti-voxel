@@ -2,7 +2,6 @@
 
 #include "archetype_table.hpp"
 #include "chunk_math.hpp"
-#include "ov/containers.hpp"
 
 #include <future>
 #include <memory>
@@ -89,7 +88,7 @@ struct InstanceSnapshot {
     uint32_t base_count = 0;
     std::shared_ptr<const IndexLayer> overlay; // over overlay_ids, their current state
     std::vector<uint32_t> overlay_ids; // sorted: every record edited (added, moved, removed) since the base
-    ov::HashSet<uint32_t> masked; // the base ids among overlay_ids: their base entries are stale
+    size_t masked_end = 0; // overlay_ids[0, masked_end) are base ids: their base entries are stale
 
     static constexpr uint32_t REBASE = 2048;
 

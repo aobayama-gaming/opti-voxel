@@ -1,6 +1,7 @@
 #include "test_common.hpp"
 
 #include "chunk_math.hpp"
+#include "godot_conv.hpp"
 #include "subcube.hpp"
 
 #include <cstring>
@@ -218,7 +219,7 @@ TEST_CASE("ChunkMath: view_cone_gap is the distance from a chunk's sphere to the
 
     // 1-Lipschitz in the centre: the LOD rule's balance relies on it.
     const godot::Vector3 f3 = godot::Vector3(0.3f, -0.5f, 0.8f).normalized();
-    view.forward = Float3{ f3.x, f3.y, f3.z };
+    view.forward = ov_f3(f3);
     Lcg rng{ 12345 };
     auto next = [&rng]() { return rng.next(); };
     for (int i = 0; i < 2000; i++) {

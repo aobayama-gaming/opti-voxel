@@ -35,19 +35,10 @@ inline void report_error(const char *p_file, int p_line, const std::string &p_me
 
 // The core's ERR_* replacements: same condition / return semantics as godot's macros, message
 // through the sink. __FILE__ stays relative to src/ (compiled from the project root).
-#define OV_ERR_COND_MSG(p_cond, p_msg)               \
-    if (p_cond) {                                    \
-        ov::report_error(__FILE__, __LINE__, p_msg); \
-    }
-
-#define OV_ERR_FAIL_COND_MSG(p_cond, p_msg)          \
-    if (p_cond) {                                    \
-        ov::report_error(__FILE__, __LINE__, p_msg); \
-        return;                                      \
-    }
-
-#define OV_ERR_FAIL_COND_V_MSG(p_cond, p_ret, p_msg) \
-    if (p_cond) {                                    \
-        ov::report_error(__FILE__, __LINE__, p_msg); \
-        return p_ret;                                \
-    }
+#define OV_ERR_FAIL_COND_V_MSG(p_cond, p_ret, p_msg)     \
+    do {                                                 \
+        if (p_cond) {                                    \
+            ov::report_error(__FILE__, __LINE__, p_msg); \
+            return p_ret;                                \
+        }                                                \
+    } while (0)

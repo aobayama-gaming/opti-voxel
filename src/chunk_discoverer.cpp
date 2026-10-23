@@ -484,9 +484,9 @@ ScanView ChunkDiscoverer::get_view() {
 
 ScanView ChunkDiscoverer::make_view(const Vector3 &p_pos, const Vector3 &p_forward) const {
     ScanView v;
-    v.camera_chunk = ChunkMath::chunk_at_render(Float3{ p_pos.x, p_pos.y, p_pos.z }, chunk_param);
+    v.camera_chunk = ChunkMath::chunk_at_render(ov_f3(p_pos), chunk_param);
     const Vector3 f = p_forward.length_squared() > 0.0f ? p_forward.normalized() : Vector3();
-    v.forward = Float3{ f.x, f.y, f.z };
+    v.forward = ov_f3(f);
     v.set_half_angle(cone_half_angle);
     v.back_scale = back_scale;
     return v;
@@ -576,7 +576,7 @@ void ChunkDiscoverer::set_camera(const Vector3 &p_pos, const Vector3 &p_forward)
         camera_change_usec = now_usec();
         mutex->unlock();
         semaphore->post();
-        VLOG(2, "new view:", godot_str(WorldCoord::to_string(new_view.camera_chunk)), " ", godot_v3(new_view.forward), " memories ", new_view.memory_count);
+        VLOG(2, "new view:", godot_str(new_view.camera_chunk), " ", godot_v3(new_view.forward), " memories ", new_view.memory_count);
         return;
     }
     // Same chunk and memories, in the same order: keep the use times for eviction.
@@ -614,7 +614,7 @@ void ChunkDiscoverer::_compare_with_cpu(const ScanView &p_view, const LODHashSet
     }
     if (only_here + only_cpu > 0) {
         ERR_PRINT(vformat("ChunkDiscoverer: --discovery_compare: the %s scan around %s differs from the CPU scan: %d chunks only in it, %d only in the CPU's.",
-                gpu ? "GPU" : "CPU", godot_str(WorldCoord::to_string(p_view.camera_chunk)), only_here, only_cpu));
+                gpu ? "GPU" : "CPU", godot_str(p_view.camera_chunk), only_here, only_cpu));
     }
     mutex->lock();
     stats.compare_scans++;

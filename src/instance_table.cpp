@@ -354,11 +354,11 @@ void InstanceSnapshot::gather(const ChunkId &p_centre, int p_lod, const VoxelPos
                 append_range(layer->stored_at, layer->stored_ids, c + ChunkId((i % 3 - 1) * s, (i / 3 % 3 - 1) * s, (i / 9 - 1) * s), candidates);
             }
         }
-        if (layer == base.get() && !masked.is_empty()) {
+        if (layer == base.get() && masked_end > 0) {
             // The base entries of edited records are stale: the overlay holds their current state.
-            candidates.erase(std::remove_if(candidates.begin() + from, candidates.end(), [this](uint32_t p_i) { return masked.has(p_i); }),
-                    candidates.end());
-            r_out.erase(std::remove_if(r_out.begin(), r_out.end(), [this](uint32_t p_i) { return masked.has(p_i); }), r_out.end());
+            const auto masked = [this](uint32_t p_i) { return std::binary_search(overlay_ids.begin(), overlay_ids.begin() + masked_end, p_i); };
+            candidates.erase(std::remove_if(candidates.begin() + from, candidates.end(), masked), candidates.end());
+            r_out.erase(std::remove_if(r_out.begin(), r_out.end(), masked), r_out.end());
         }
     }
     std::sort(candidates.begin(), candidates.end());
@@ -481,11 +481,7 @@ std::shared_ptr<const InstanceSnapshot> overlay_snapshot(const InstanceSnapshot 
     snap->base = std::move(p_base);
     snap->base_count = p_base_count;
     snap->overlay_ids = std::move(p_ids);
-    for (const uint32_t i : snap->overlay_ids) {
-        if (i < snap->base_count) {
-            snap->masked.insert(i);
-        }
-    }
+    snap->masked_end = size_t(std::lower_bound(snap->overlay_ids.begin(), snap->overlay_ids.end(), snap->base_count) - snap->overlay_ids.begin());
     snap->overlay = build_layer(*snap->library, snap->records, snap->overlay_ids, snap->param, snap->max_lod);
     return snap;
 }

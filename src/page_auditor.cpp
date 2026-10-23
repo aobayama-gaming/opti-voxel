@@ -153,8 +153,7 @@ void PageAuditor::_analyse() {
             Vector3 p[4]; // in the chunk's vertex grid
             for (int k = 0; k < 4; k++) {
                 const uint16_t *c = PageFormat::corner(page, q, k);
-                const Float3 loc = PageFormat::decode_local(c, scale);
-                p[k] = Vector3(loc.x, loc.y, loc.z);
+                p[k] = godot_v3(PageFormat::decode_local(c, scale));
                 zero_corners += PageFormat::is_zero(c) ? 1 : 0;
                 bad_material += in_live && PageFormat::decode_palette(c) >= ranges[r].palette.palette->size() ? 1 : 0;
             }
@@ -210,7 +209,7 @@ void PageAuditor::_analyse() {
     report["partial_samples"] = samples;
     Dictionary chunk_digests;
     for (const KeyValue<ChunkId, std::pair<int64_t, uint64_t>> &kv : digests) {
-        chunk_digests[godot_str(WorldCoord::to_string(kv.key))] = vformat("%d:%s", kv.value.first, String::num_uint64(kv.value.second, 16));
+        chunk_digests[godot_str(kv.key)] = vformat("%d:%s", kv.value.first, String::num_uint64(kv.value.second, 16));
     }
     report["chunk_digests"] = chunk_digests;
     report["ok"] = stale == 0 && partial == 0 && broken == 0 && bad_header == 0 && bad_material == 0;

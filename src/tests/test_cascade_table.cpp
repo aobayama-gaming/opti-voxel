@@ -758,7 +758,7 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
         for (uint32_t s = 0; s < spans.decode_u32(0); s++) {
             const uint32_t first = spans.decode_u32(at) / RECORD_BYTES, count = spans.decode_u32(at + 4) / RECORD_BYTES;
             for (uint32_t i = 0; i < count; i++) {
-                encode_record(one, 0, gpu[first + i]);
+                encode_record(one.data(), gpu[first + i]);
                 mismatches += std::memcmp(one.data(), spans.ptr() + at + 8 + int64_t(i) * RECORD_BYTES, RECORD_BYTES) != 0;
             }
             at += 8 + int64_t(count) * RECORD_BYTES;

@@ -366,7 +366,7 @@ void GPUMesher::_initialize_gpu_compute() {
 
     // Injection of Chunk Param in the uniform
     // std140 ChunkParam, laid out by GPUFrame.
-    const PackedByteArray param_data = GPUFrame::chunk_param_bytes_packed(chunk_param);
+    const PackedByteArray param_data = godot_bytes(GPUFrame::chunk_param_bytes(chunk_param));
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     // Helper lambda to keep code clean

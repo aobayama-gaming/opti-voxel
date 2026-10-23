@@ -337,7 +337,7 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
                 t = other;
             }
         }
-        ERR_FAIL_COND_V_MSG(!flipped, at(t), vformat("SDFCascade::ground_along: no surface found from %s within 4096 steps.", godot_str(WorldCoord::to_string(p_start))));
+        ERR_FAIL_COND_V_MSG(!flipped, at(t), vformat("SDFCascade::ground_along: no surface found from %s within 4096 steps.", godot_str(p_start)));
         // solid = !(d > 0), the meshers' side rule; solid deeper (larger t) than air.
         int64_t solid = start_air ? other : t;
         int64_t air = start_air ? t : other;

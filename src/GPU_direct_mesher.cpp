@@ -209,7 +209,7 @@ void GPUDirectMesher::_rt_initialize() {
     status_size_bytes = ((STATUS_HEADER_UINTS + settings.pages_per_batch) * 4 + 15) / 16 * 16;
     buffer_status = rd->storage_buffer_create(status_size_bytes);
 
-    const PackedByteArray param_data = GPUFrame::chunk_param_bytes_packed(chunk_param);
+    const PackedByteArray param_data = godot_bytes(GPUFrame::chunk_param_bytes(chunk_param));
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     for (int i = 0; i < COMPUTE_PASSES; i++) {
@@ -1248,7 +1248,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
                 out->page = page;
                 out->quad_offset = moved.offset;
             } else {
-                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", godot_str(WorldCoord::to_string(m.chunk.id))));
+                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", godot_str(m.chunk.id)));
             }
         }
         group_counts.append_array({ page, (int)d.groups });

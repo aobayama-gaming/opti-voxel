@@ -957,7 +957,7 @@ PackedByteArray dispatch(RenderingDevice *p_rd, RID p_shader, RID p_pipeline, co
         samples.encode_float(i * SAMPLE_BYTES + 40, p_run.cases[i].grid.z);
         samples.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
     }
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(p_run.param);
+    const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(p_run.param));
     const RID buffer_samples = p_rd->storage_buffer_create(samples.size(), samples);
     const RID buffer_results = p_rd->storage_buffer_create(count * p_words * 4);
     const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
@@ -1064,7 +1064,7 @@ bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector
             r_checks.cross_origin_points++;
             if (std::memcmp(absolute.data() + i * words, absolute_ref.data() + i * words, words * sizeof(uint32_t)) != 0) {
                 r_checks.cross_origin_mismatch++;
-                r_checks.example(vformat("origin %s: absolute point %s differs from origin 0", godot_str(WorldCoord::to_string(run.param.origin_chunk)),
+                r_checks.example(vformat("origin %s: absolute point %s differs from origin 0", godot_str(run.param.origin_chunk),
                         case_str(run.cases[run.absolute_begin + i])));
             }
         }
@@ -1300,9 +1300,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
     records_bytes.resize(count * Archetype::RECORD_BYTES);
     records_bytes.fill(0);
     for (uint32_t i = 0; i < count; i++) {
-        ov::bytes rec_bytes(Archetype::RECORD_BYTES, 0);
-        Archetype::encode_record(rec_bytes, 0, table.records[i]); // one record, staged at offset 0
-        std::memcpy(records_bytes.ptrw() + int64_t(i) * Archetype::RECORD_BYTES, rec_bytes.data(), rec_bytes.size());
+        Archetype::encode_record(records_bytes.ptrw() + int64_t(i) * Archetype::RECORD_BYTES, table.records[i]);
     }
     const RID buffer_records = p_rd->storage_buffer_create(records_bytes.size(), records_bytes);
     PackedByteArray list_bytes;
@@ -1336,7 +1334,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
             samples_bytes.encode_float(i * SAMPLE_BYTES + 40, run.cases[i].grid.z);
             samples_bytes.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
         }
-        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes_packed(run.param);
+        const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(run.param));
         const RID buffer_samples = p_rd->storage_buffer_create(samples_bytes.size(), samples_bytes);
         const RID buffer_results = p_rd->storage_buffer_create(uint64_t(n) * words * 4);
         const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);

@@ -49,12 +49,12 @@ what you touch before changing it, and update it in the same PR.
 ## Code rules (keep it from turning into spaghetti)
 Most of this code is written with AI agents. These rules are what keeps it reviewable; they apply
 to every change, and a reviewer may reject a PR on any of them.
-- The core is engine-free (the liboptivoxel plan: an engine-agnostic library plus thin per-engine
-  adapters). The files in `tools/check_core_purity.sh` (src/ov/, world_coord, chunk_math,
-  page_format, lod_structures, chunk_memory, instance_table, cascade, archetype_ir, gpu_cost_model)
-  must not include godot or name its types; CI enforces it. Core types: `ov::ivec3` / `Float3` /
-  `ov::str` + `ov::format` / `ov::bytes` / `ov::HashMap|HashSet` / the `ov` error sink. Conversions
-  to engine types happen explicitly at engine call sites (`godot_conv.hpp`), never inside the core.
+- The core is engine-free (the liboptivoxel plan, `docs/liboptivoxel.md`). `tools/check_core_purity.sh`
+  (CI) compiles each of its `core_files` alone with no godot include path, and grep-checks the
+  `pending_files` (own lines converted, godot still reached through a named header). A core file uses
+  only core types (`ov::ivec2|ivec3` / `Float3` / `ov::str` + `ov::format` / `ov::bytes` /
+  `ov::HashMap|HashSet` / the `ov` error sink and `OV_ERR_*`) and `std::` (no godot `MIN` / `ERR_*`);
+  conversions to engine types happen at engine call sites (`godot_conv.hpp`), never inside the core.
   The GLSL text pipeline (exact_noise's `glsl_*`, `gpu_frame`'s `glsl_functions`, the splice files)
   still speaks godot String on purpose: it converts as one unit.
 - One source of truth for every constant and layout. Page layout lives in `page_format.hpp`, the

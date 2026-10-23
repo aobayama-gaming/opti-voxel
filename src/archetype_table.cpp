@@ -155,33 +155,32 @@ bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_
     return true;
 }
 
-void encode_record(ov::bytes &r_bytes, uint32_t p_index, const TableRecord &p_record) {
+void encode_record(uint8_t *r_slot, const TableRecord &p_record) {
     using namespace WorldCoord;
-    const int64_t base = int64_t(p_index) * RECORD_BYTES;
-    ov::encode_u32(r_bytes, base + 0, p_record.def);
-    ov::encode_u32(r_bytes, base + 4, uint32_t(p_record.op));
-    ov::encode_f32(r_bytes, base + 8, p_record.k);
-    ov::encode_f32(r_bytes, base + 12, p_record.inv_k);
-    ov::encode_u32(r_bytes, base + 16, lo32(p_record.anchor.x));
-    ov::encode_u32(r_bytes, base + 20, lo32(p_record.anchor.y));
-    ov::encode_u32(r_bytes, base + 24, lo32(p_record.anchor.z));
-    ov::encode_u32(r_bytes, base + 28, p_record.salt);
-    ov::encode_s32(r_bytes, base + 32, hi32(p_record.anchor.x));
-    ov::encode_s32(r_bytes, base + 36, hi32(p_record.anchor.y));
-    ov::encode_s32(r_bytes, base + 40, hi32(p_record.anchor.z));
-    ov::encode_f32(r_bytes, base + 44, p_record.erode_from);
+    ov::put_u32(r_slot + 0, p_record.def);
+    ov::put_u32(r_slot + 4, uint32_t(p_record.op));
+    ov::put_f32(r_slot + 8, p_record.k);
+    ov::put_f32(r_slot + 12, p_record.inv_k);
+    ov::put_u32(r_slot + 16, lo32(p_record.anchor.x));
+    ov::put_u32(r_slot + 20, lo32(p_record.anchor.y));
+    ov::put_u32(r_slot + 24, lo32(p_record.anchor.z));
+    ov::put_u32(r_slot + 28, p_record.salt);
+    ov::put_s32(r_slot + 32, hi32(p_record.anchor.x));
+    ov::put_s32(r_slot + 36, hi32(p_record.anchor.y));
+    ov::put_s32(r_slot + 40, hi32(p_record.anchor.z));
+    ov::put_f32(r_slot + 44, p_record.erode_from);
     for (int i = 0; i < 9; i++) {
-        ov::encode_f32(r_bytes, base + 48 + (i / 3) * 16 + (i % 3) * 4, p_record.rotation[i]);
+        ov::put_f32(r_slot + 48 + (i / 3) * 16 + (i % 3) * 4, p_record.rotation[i]);
     }
     for (int i = 0; i < 8; i++) {
-        ov::encode_f32(r_bytes, base + 96 + i * 4, p_record.params[i]);
+        ov::put_f32(r_slot + 96 + i * 4, p_record.params[i]);
     }
     for (int i = 0; i < 3; i++) {
-        ov::encode_s32(r_bytes, base + 128 + i * 4, p_record.box_lo[i]);
-        ov::encode_s32(r_bytes, base + 144 + i * 4, p_record.box_hi[i]);
+        ov::put_s32(r_slot + 128 + i * 4, p_record.box_lo[i]);
+        ov::put_s32(r_slot + 144 + i * 4, p_record.box_hi[i]);
     }
-    ov::encode_f32(r_bytes, base + 140, p_record.margin_c);
-    ov::encode_f32(r_bytes, base + 156, p_record.erode);
+    ov::put_f32(r_slot + 140, p_record.margin_c);
+    ov::put_f32(r_slot + 156, p_record.erode);
 }
 
 // ---- the fold ----

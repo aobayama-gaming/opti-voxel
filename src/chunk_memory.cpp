@@ -95,11 +95,7 @@ void VoxelState::compute_destroy_full(ChunkHashMap &r_to_destroy, StallMap *r_st
     for (const ChunkId &scan_pos : dirty_chunk) {
         ChunkId parent_id = scan_pos;
         if (loaded_chunk.find_ancestor(parent_id) >= 0) {
-            Stall *stall = stall_chunk.getptr(parent_id);
-            if (!stall) {
-                stall = &stall_chunk[parent_id];
-            }
-            stall->add(ChunkMath::subcube_bits(parent_id, scan_pos), 1);
+            stall_chunk[parent_id].add(ChunkMath::subcube_bits(parent_id, scan_pos), 1);
         }
     }
 

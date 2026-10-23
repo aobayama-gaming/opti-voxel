@@ -10,8 +10,8 @@ us writing Rust.
 
 ```
                  liboptivoxel (pure C++, zero engine includes; src/ov/ + the purity list)
-                 ├─ core: world_coord, chunk_math, page_format, lod_structures, chunk_memory,
-                 │        instance_table, cascade, archetype_ir, gpu_cost_model
+                 ├─ core: world_coord, chunk_math, page_format, subcube, latency_hist, gpu_cost_model
+                 │        (pending: lod_structures, chunk_memory, instance_table, archetype_ir, cascade)
                  ├─ mesher: GLSL -> SPIR-V (portable); Tint -> WGSL on web
                  ├─ GPU backends:  Godot-RD (today)  |  Dawn/WebGPU  |  wgpu interop (Bevy, zero-copy)
                  └─ C API (versioned from day one; the inner C++ API may churn behind it)
@@ -32,14 +32,20 @@ Two integration depths, both real:
 
 ## Done — PR #101 (`feature/core-std-types`)
 
-The vocabulary sweep: the files in `tools/check_core_purity.sh` (src/ov/, world_coord, chunk_math,
-page_format, lod_structures, chunk_memory, instance_table, cascade, archetype_ir, gpu_cost_model)
-build with **zero godot includes**; CI enforces the list (grows per de-Godot commit, never shrinks).
-Core vocabulary: `ov::ivec3` / `Float3` / `ov::str` + `ov::format` / `ov::bytes` / `ov::HashMap|HashSet`
-/ the ov error sink; conversions to engine types are explicit at engine call sites
-(`godot_conv.hpp`). Symmetry gates on the final commit: 132 unit cases / 1,483,770 assertions
-unchanged; check.sh unit/direct/parity/frame/discovery all PASS; parity pairs 0 differing chunks;
-FrameSpike every probe mismatch 0.
+The vocabulary sweep. `tools/check_core_purity.sh` (CI) has two lists:
+- `core_files` compile **on their own with no godot include path** (`-fsyntax-only`, no godot-cpp
+  `-I`): src/ov/, world_coord, subcube, latency_hist, chunk_math, page_format, gpu_cost_model. The list
+  grows, never shrinks.
+- `pending_files` have their own lines converted (grep-checked) but still reach godot through one
+  header: lod_structures / chunk_memory through `chunk_output.hpp` (RIDs, `debug_log`),
+  instance_table through `archetype_table.hpp` (GLSL, materials), archetype_ir through
+  `exact_noise.hpp` (the GLSL text helpers). cascade is not swept yet (godot `ERR_*`, `String`,
+  `Vector2i` in its own lines; the GLSL step).
+
+Core vocabulary: `ov::ivec2|ivec3` / `Float3` / `ov::str` + `ov::format` / `ov::bytes` (+ `put_*` /
+`get_*` at a slot pointer) / `ov::HashMap|HashSet` / the ov error sink. Conversions to engine types
+are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `ov_f3`, `godot_bytes`,
+`godot_dict`).
 
 ## Next steps, in order
 
@@ -47,7 +53,15 @@ FrameSpike every probe mismatch 0.
    `gpu_frame`'s `glsl_functions/glsl_int64`, `archetype_glsl.cpp`, `cascade_glsl.cpp`, and the
    splice sites in `frame_spike` / the meshers. Godot's `vformat` is printf-family, so call sites
    map 1:1 to `ov::format`; `String::replace` -> a small str helper. These files then join the
-   purity list. The FNV text pins (test_exact_noise, test_archetype_ir) must not move.
+   purity list. The FNV text pins (test_exact_noise, test_archetype_ir) must not move. With
+   exact_noise split, archetype_ir moves to `core_files` and cascade can be swept.
+1b. **Cut the other two chains**: `ChunkOutput` holds engine RIDs inside the core's chunk map: split
+   it into a core record (page, quads, palette, an opaque handle) and the engine-side owner, with a core
+   log sink for `debug_log`; move the index's types (`DefRecord`, boxes, bands) out of
+   `archetype_table.hpp` into a small core header.
+1c. **The containers**: `ov::HashMap|HashSet` sit on node-based `std::unordered_*` where godot's were
+   open addressing; `LODHashSet` is rebuilt every scan. If `bench_ab.sh` shows it, back them with a
+   flat table.
 2. **The GPU seam**: `sdf_base.hpp`'s `RenderingDevice*`/`RID` interface becomes the backend vtable
    (~15 ops: storage/uniform buffer create, texture create/copy, compute pipeline + list begin /
    bind / push / dispatch, buffer_update/get_data, timestamps, free). Godot-RD stays the first
@@ -66,12 +80,11 @@ grows. The spike steps open a real window (no headless RD) — warn before runni
 
 ## Gotchas hit on the way (recorded so they stay hit only once)
 
-- Staging buffers must not take the batch index: an encoder called with the batch index over a
-  one-element staging buffer writes `(count-1) * size` bytes past it — heap corruption that shows up
-  as `free(): invalid size` / garbage RIDs / SIGSEGV at pseudo-random points, with unit tests green.
-  The fixed pattern: encoders take a byte offset; staging happens at offset 0.
-- std containers rehash on insert (godot's HashMap doesn't move elements the same way): no reader
-  may depend on iteration order — readers sort by id, counters are order-independent. Doctest
+- An encoder called with the batch index over a one-element staging buffer writes `(count-1) * size`
+  bytes past it — heap corruption that shows up as `free(): invalid size` / garbage RIDs / SIGSEGV at
+  pseudo-random points, with unit tests green. The fixed pattern: encoders write one slot at a pointer
+  (`encode_chunk_input(uint8_t *)`, `encode_record(uint8_t *)`), the caller computes the slot; no staging.
+- std containers iterate in another order than godot's: no reader may depend on iteration order — readers sort by id, counters are order-independent. Doctest
   assertion *counts* can shift with iteration order without any result changing.
 - Godot's `vformat` is the printf-family `%` operator (`String % Array`): `%s` renders any Variant;
   the shim mirrors that, including `%s` of a float (shortest round-trip text).

@@ -21,11 +21,8 @@ struct ivec2 {
     constexpr bool operator!=(const ivec2 &p_o) const { return !(*this == p_o); }
 };
 
-// int32 triple, the core's word for what used to be godot's Vector3i at pure-core edges (page
-// headers, shader uniforms). Same field names and comparison ops as godot's Vector3i: only the
-// arithmetic godot gave it is not carried over, because the core never adds two int32 triples. The
-// conversion back to godot's Vector3i stays manual at engine call sites (explicit field copies), in
-// the spirit of WorldCoord::lo32_i ("a leftover int32 use must fail to compile").
+// int32 triple at the core's int32 edges (page headers, shader uniforms): fields and comparisons, no
+// arithmetic (the core never adds two). Engine call sites convert with godot_v3i (godot_conv.hpp).
 struct ivec3 {
     int32_t x = 0;
     int32_t y = 0;

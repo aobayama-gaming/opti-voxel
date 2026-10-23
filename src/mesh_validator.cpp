@@ -238,8 +238,8 @@ void MeshValidator::_compare() {
         }
         Dictionary a;
         a["kind"] = p_kind;
-        a["chunk"] = godot_str(WorldCoord::to_string(p_chunk));
-        a["centroid"] = godot_v3(ChunkMath::grid_to_render(p_chunk, Float3{ c.x, c.y, c.z }, chunk_param));
+        a["chunk"] = godot_str(p_chunk);
+        a["centroid"] = godot_v3(ChunkMath::grid_to_render(p_chunk, ov_f3(c), chunk_param));
         a["min_abs_sdf_cells"] = near_zero;
         a["extra"] = p_extra;
         anomalies.push_back(a);
@@ -276,8 +276,7 @@ void MeshValidator::_compare() {
                 uint32_t m[4];
                 for (int k = 0; k < 4; k++) {
                     const uint16_t *c = PageFormat::corner(page, q, k);
-                    const Float3 loc = PageFormat::decode_local(c, scale);
-                    p[k] = Vector3(loc.x, loc.y, loc.z);
+                    p[k] = godot_v3(PageFormat::decode_local(c, scale));
                     n[k] = PageFormat::is_zero(c) ? Vector3() : godot_v3(PageFormat::decode_normal(c));
                     const uint32_t index = PageFormat::decode_palette(c);
                     m[k] = index < palette.size() ? palette[index] : UINT32_MAX; // out of the palette: never matches
@@ -477,7 +476,7 @@ void MeshValidator::_compare() {
 
         if (!exact) {
             Dictionary c;
-            c["chunk"] = godot_str(WorldCoord::to_string(t.chunk_id));
+            c["chunk"] = godot_str(t.chunk_id);
             c["lod"] = ChunkMath::get_lod(t.chunk_id);
             c["legacy_tris"] = (int64_t)legacy_tris.size();
             c["direct_tris"] = (int64_t)direct.size();
