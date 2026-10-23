@@ -802,7 +802,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
         box.merge_with(_chunk_aabb(c));
         working_generation.insert(c);
     }
-    cost_model.observe_list(list_bound, list_words);
+    cost_model.observe_list(list_bound, list_words, uint32_t(chunks.size()));
     r_budget_us -= cost_model.estimate(lod_counts, list_words);
     const PackedByteArray palette_batch = palettes.place_batch(chunk_palettes, batch.palettes);
 
@@ -1344,9 +1344,10 @@ Dictionary GPUDirectMesher::get_stats() {
         cost_us.push_back(c);
     }
     d["cost_us_per_chunk"] = cost_us;
-    // A list word's cost (us), and the share of the chunks' list bounds (their keys' records) their lists hold.
+    // A list word's cost (us), the share of the chunks' list bounds (their keys' records) their lists hold, and their words past it.
     d["cost_us_per_word"] = cost_model.us_per_word;
     d["cost_list_share"] = cost_model.list_share;
+    d["cost_words_per_chunk"] = cost_model.words_per_chunk;
     d["list_bound_total"] = (int64_t)stats.list_bound_total;
     d["chunks_meshed"] = (int64_t)stats.chunks_meshed;
     d["quads_emitted"] = (int64_t)stats.quads_emitted;

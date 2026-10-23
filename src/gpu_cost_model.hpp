@@ -10,8 +10,9 @@
 // its share of the estimate. A LOD never measured takes the nearest measured LOD's cost (DEFAULT_US before any measure);
 // its first measure is what the measured time leaves once the words are paid.
 //
-// Before its list is built, a chunk only knows a bound of its words (the records of the keys it reads: SDFBase::admit);
-// the share of a bound that reaches the list (list_share: the batches' list words over their bounds) is corrected too.
+// Before its list is built, a chunk only knows a bound of its words (the streamed records of the keys it reads:
+// SDFBase::admit): it is expected to list list_share of it (the batches' list words over their bounds) plus
+// words_per_chunk (what the batches list past that: the scene's own records, all of a list without streamed sources).
 struct GPUCostModel {
     static constexpr double DEFAULT_US = 60.0; // a forest batch at 5 cm: ~7 ms for 128 chunks
     // The sdf pass per list word: the 1M forest's batches fit 5,842 + 1.004 x words us (docs/forest-1m-profile.md).
@@ -39,7 +40,7 @@ struct GPUCostModel {
         return DEFAULT_US;
     }
     // A chunk not batched yet: its LOD's cost plus the words its bound p_bound (SDFBase::admit) is expected to list.
-    double estimate_chunk(int p_lod, uint64_t p_bound) const { return estimate(p_lod) + double(p_bound) * list_share * us_per_word; }
+    double estimate_chunk(int p_lod, uint64_t p_bound) const { return estimate(p_lod) + (double(p_bound) * list_share + words_per_chunk) * us_per_word; }
 
     // p_counts[lod] = the batch's chunks at that LOD; p_words: its list's words.
     double estimate(const std::vector<uint32_t> &p_counts, uint64_t p_words = 0) const {
@@ -73,16 +74,21 @@ struct GPUCostModel {
         us_per_chunk = std::move(next);
         us_per_word *= 1.0 + RATE * (words / e) * (scale - 1.0);
     }
-    // A batch's list: p_words for chunks whose bounds summed to p_bound.
-    void observe_list(uint64_t p_bound, uint64_t p_words) {
-        if (p_bound == 0) {
+    // A batch's list: p_words for p_chunks chunks whose bounds summed to p_bound.
+    void observe_list(uint64_t p_bound, uint64_t p_words, uint32_t p_chunks) {
+        if (p_chunks == 0) {
             return;
         }
-        const double share = std::clamp(double(p_words) / double(p_bound), LIST_SHARE_MIN, LIST_SHARE_MAX);
-        list_share += RATE * (share - list_share);
+        const double rest = std::max(0.0, double(p_words) - double(p_bound) * list_share) / double(p_chunks);
+        words_per_chunk += RATE * (rest - words_per_chunk);
+        if (p_bound > 0) {
+            const double share = std::clamp(double(p_words) / double(p_bound), LIST_SHARE_MIN, LIST_SHARE_MAX);
+            list_share += RATE * (share - list_share);
+        }
     }
 
     std::vector<double> us_per_chunk; // < 0: never measured
     double us_per_word = WORD_US;
     double list_share = 1.0; // a bound's words that reach the list (1: the bound, until a list says otherwise)
+    double words_per_chunk = 0.0; // a chunk's words past its bound's share
 };

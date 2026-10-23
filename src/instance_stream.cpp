@@ -397,6 +397,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     const uint64_t t0 = now_usec();
     Entry &e = entries.find(p_job->key)->second; // running: never evicted
     if (p_job->expand && !p_job->input_keys.empty()) {
+        stats.compute_usec += int64_t(p_job->usec); // the workers' time (listing a coarse part tile's inputs walks its subtree)
         expand(e, std::move(p_job->input_keys));
         stats.land_usec += now_usec() - t0;
         return;

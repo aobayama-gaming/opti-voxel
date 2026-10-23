@@ -83,19 +83,30 @@ TEST_CASE("GPUCostModel: batches with short and long lists separate the chunks' 
     CHECK(m.us_per_word > word);
 }
 
-TEST_CASE("GPUCostModel: a chunk's word bound counts at the share the lists reach") {
+TEST_CASE("GPUCostModel: a chunk's word bound counts at the share the lists reach, a chunk without one at the lists' mean") {
     GPUCostModel m;
     m.resize(1);
     CHECK(m.estimate_chunk(0, 1000) == doctest::Approx(GPUCostModel::DEFAULT_US + 1000.0)); // the bound until a list says otherwise
     for (int i = 0; i < 60; i++) {
-        m.observe_list(100000, 10000); // the lists hold a tenth of the bounds
+        m.observe_list(100000, 10000, 10); // the lists hold a tenth of the bounds
     }
     CHECK(m.list_share == doctest::Approx(0.1).epsilon(0.01));
+    CHECK(m.words_per_chunk == doctest::Approx(0.0).epsilon(0.01));
     CHECK(m.estimate_chunk(0, 1000) == doctest::Approx(GPUCostModel::DEFAULT_US + 100.0).epsilon(0.01));
-    m.observe_list(0, 500); // no bound: ignored
-    CHECK(m.list_share == doctest::Approx(0.1).epsilon(0.01));
     for (int i = 0; i < 200; i++) {
-        m.observe_list(1, 1000000); // scene records only: bounded
+        m.observe_list(1, 1000000, 1); // a bound far below the list: the share bounded
     }
     CHECK(m.list_share <= GPUCostModel::LIST_SHARE_MAX);
+
+    // No streamed source: every chunk's bound is 0, its words the lists' mean.
+    GPUCostModel s;
+    s.resize(1);
+    for (int i = 0; i < 60; i++) {
+        s.observe_list(0, 5000, 10);
+    }
+    CHECK(s.list_share == 1.0);
+    CHECK(s.words_per_chunk == doctest::Approx(500.0).epsilon(0.01));
+    CHECK(s.estimate_chunk(0, 0) == doctest::Approx(GPUCostModel::DEFAULT_US + 500.0).epsilon(0.01));
+    s.observe_list(0, 500, 0); // no chunk: ignored
+    CHECK(s.words_per_chunk == doctest::Approx(500.0).epsilon(0.01));
 }
