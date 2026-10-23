@@ -83,6 +83,7 @@ extends Node3D
 ##   --lod_view_margin=DEG        view cone = the frustum's diagonal half-FOV + DEG (default 20)
 ##   --lod_view_memory=M          a view keeps the front error until the camera is M metres from where it
 ##                                had it (default -1: where LOD 2 starts, 0 = off)
+##   --view_lods=N                the discoverer loads LODs 0 .. N-1 only (its load radius; default 0 = all --lods)
 ##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
@@ -257,6 +258,8 @@ func _ready() -> void:
 		terrain.lod_view_margin_deg = float(args["lod_view_margin"])
 	if args.has("lod_view_memory"):
 		terrain.lod_view_memory_m = float(args["lod_view_memory"])
+	if args.has("view_lods"):
+		terrain.view_lods = int(args["view_lods"])
 	if args.has("skirt"):
 		terrain.skirt_depth = float(args["skirt"])
 	if args.has("discovery_cull"):

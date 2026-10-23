@@ -22,6 +22,10 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   ms, corners, unique corners, dedup ratio, per wave GPU ms, batches, readback bytes). `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
   `--camera_voxel=X,Y,Z` makes the scene (camera, lights, cam_pos) relative to that absolute voxel
   instead of the world origin.
+- View LODs (`VoxelTerrain.view_lods`, `--view_lods=N` in bench.gd and the main scene; 0 = all): the discoverer's
+  `setup_lod` gets min(N, `lod_numbers`) levels, so its top LOD is N - 1 and the scan grid (the load radius, the
+  camera's far plane) shrinks with it. The terrain keeps `lod_numbers` (root span, the octaves a climate needs:
+  `world.json` wants 25); with the 5 cm scene, N = 10 loads ~13.6 km, where the fog leaves ~3%.
 - View-dependent LOD (`VoxelTerrain.lod_pixel_error_back` / `lod_view_margin_deg`, `--lod_error_back=F
   --lod_view_margin=DEG` in bench.gd and the main scene; off by default): a scan carries a `ScanView` (camera
   chunk, forward, the view cone = the frustum's diagonal half-FOV + margin, `back_scale` = back / front error - 1).

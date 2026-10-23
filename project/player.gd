@@ -86,6 +86,8 @@ func _enter_tree() -> void:
 				push_error("player: --spawn=%s (expected U,V in metres)" % a.trim_prefix("--spawn="))
 		if a.begins_with("--voxel=") and terrain:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
+		if a.begins_with("--view_lods=") and terrain:
+			terrain.view_lods = a.trim_prefix("--view_lods=").to_int()
 		if a.begins_with("--lod_error=") and terrain:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
 		if a.begins_with("--lod_error_back=") and terrain:

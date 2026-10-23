@@ -57,6 +57,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_view_memory_m"), &VoxelTerrain::get_lod_view_memory_m);
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
+    ClassDB::bind_method(D_METHOD("set_view_lods", "count"), &VoxelTerrain::set_view_lods);
+    ClassDB::bind_method(D_METHOD("get_view_lods"), &VoxelTerrain::get_view_lods);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
     ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
@@ -151,6 +153,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "view_lods", PROPERTY_HINT_RANGE, "0,31"), "set_view_lods", "get_view_lods");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "dual_contouring"), "set_dual_contouring", "get_dual_contouring");
@@ -542,6 +545,16 @@ int VoxelTerrain::get_lod_numbers() const {
     return lod_numbers;
 }
 
+void VoxelTerrain::set_view_lods(int p_count) {
+    ERR_FAIL_COND_MSG(started, "view_lods must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_count < 0 || p_count > MAX_LOD_NUMBERS, vformat("view_lods must be in [0, %d].", MAX_LOD_NUMBERS));
+    view_lods = p_count;
+}
+
+int VoxelTerrain::get_view_lods() const {
+    return view_lods;
+}
+
 double VoxelTerrain::get_load_radius() const {
     if (chunk_discoverer == nullptr) {
         return 0.0;
@@ -818,7 +831,7 @@ void VoxelTerrain::_ready() {
 
     // The view cone holds the frustum: its half-angle is the half-FOV along the screen diagonal.
     chunk_discoverer->setup_lod(
-            lod_numbers,
+            view_lods > 0 ? MIN(view_lods, lod_numbers) : lod_numbers,
             lod_pixel_error,
             viewport_height,
             fov_rad,

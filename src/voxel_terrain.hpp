@@ -73,6 +73,7 @@ private:
     // Number of LOD levels (0 .. lod_numbers - 1). The GPU reads a chunk's LOD from the low 32 bits
     // of its id (findLSB), so at most MAX_LOD_NUMBERS.
     int lod_numbers = 15;
+    int view_lods = 0; // the LODs the discoverer loads (0 .. view_lods - 1); 0: all lod_numbers
     int archetype_instances = 0;
     double archetype_instance_area = 200.0;
     int archetype_trees = 0;
@@ -287,6 +288,10 @@ public:
     static constexpr int MAX_LOD_NUMBERS = ChunkMath::MAX_LOD_NUMBERS;
     void set_lod_numbers(int p_count);
     int get_lod_numbers() const;
+    // The discoverer's LODs, at most lod_numbers (0: all): its top LOD and so its load radius. The terrain keeps
+    // lod_numbers (the root span, the octaves a climate needs); past the radius nothing loads (fog hides it).
+    void set_view_lods(int p_count);
+    int get_view_lods() const;
     // Distance from the camera (metres) that bounds every chunk the discoverer can load: the corner of
     // its scan grid. 0 before the terrain is ready.
     double get_load_radius() const;
