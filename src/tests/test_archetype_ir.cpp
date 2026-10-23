@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include <godot_cpp/variant/string.hpp>
+
 #include "archetype_glsl.hpp"
 #include "archetype_ir.hpp"
 
@@ -67,7 +69,7 @@ double check_gradient(const Program &p_program, const std::vector<WorldPos> &p_p
         // The differences' float noise: a few ulps of the largest intermediate value, over h.
         double vmax = 0.0;
         for (const Float4 &r : regs) {
-            vmax = MAX(vmax, std::fabs(double(r.w)));
+            vmax = std::max(vmax, std::fabs(double(r.w)));
         }
         const double noise = 8.0 * vmax * std::ldexp(1.0, -23) / h;
         bool smooth = true;
@@ -76,13 +78,13 @@ double check_gradient(const Program &p_program, const std::vector<WorldPos> &p_p
         for (int a = 0; a < 3 && smooth; a++) {
             const double fwd = (double(value_at(p_program, p, a, h)) - v0) / h;
             const double bwd = (v0 - double(value_at(p_program, p, a, -h))) / h;
-            const double scale = MAX(1.0, std::fabs(double(ga[a]))) + noise;
+            const double scale = std::max(1.0, std::fabs(double(ga[a]))) + noise;
             smooth = std::fabs(fwd - bwd) < 0.02 * scale;
-            err = MAX(err, std::fabs(0.5 * (fwd + bwd) - double(ga[a])) / scale);
+            err = std::max(err, std::fabs(0.5 * (fwd + bwd) - double(ga[a])) / scale);
         }
         if (smooth) {
             checked++;
-            r_worst = MAX(r_worst, err);
+            r_worst = std::max(r_worst, err);
         }
     }
     return double(checked) / double(p_points.size());
@@ -102,7 +104,7 @@ TEST_CASE("Archetype: every op matches a hand-written float32 reference") {
         b.max(l.y, l.z), b.select(l.x, l.y, l.z, c), b.floor(l.y), b.rsqrt(b.max(b.abs(l.z), eps)), b.dist(b.mul(l.x, l.y)),
         b.perlin3(n3.k, n3.seed, n3.offset, n3.amp), b.perlin2(n2.k, n2.seed, n2.offset, n2.amp), b.add(c, l.y), b.sub(c, l.y) };
     const Program prog = b.finish(ops[0]);
-    CHECK(prog.validate(25).is_empty());
+    CHECK(prog.validate(25).empty());
 
     int compared = 0;
     for (const int lod : { 0, 3, 14 }) {
@@ -119,7 +121,7 @@ TEST_CASE("Archetype: every op matches a hand-written float32 reference") {
             const float ry = ExactNoise::det_rsqrt(gz.w);
             const float ky = -0.5f * ry * ry * ry;
             const Float4 xy{ s * y + x * 0.0f, 0.0f * y + x * s, 0.0f * y + x * 0.0f, x * y }; // a.g * b.w + a.w * b.g
-            const float q = s * ExactNoise::det_rsqrt(MAX(xy.x * xy.x + xy.y * xy.y + xy.z * xy.z, exact_pow2(-40) * s * s));
+            const float q = s * ExactNoise::det_rsqrt(std::max(xy.x * xy.x + xy.y * xy.y + xy.z * xy.z, exact_pow2(-40) * s * s));
             const Float4 p3 = ExactNoise::perlin3(p, n3.k, n3.seed, n3.offset);
             const Float4 p2 = ExactNoise::perlin2(p, n2.k, n2.seed, n2.offset);
             const float f3 = n3.amp * exact_pow2(lod - n3.k);
@@ -166,7 +168,7 @@ TEST_CASE("Archetype: the shapes are exact on axis points") {
     const Reg cylinder = b.cylinder(l, 3.0f, 2.0f);
     const Reg plane = b.plane(l, 0.0f, 1.0f, 0.0f, 2.0f);
     const Program prog = b.finish(sphere);
-    CHECK(prog.validate(25).is_empty());
+    CHECK(prog.validate(25).empty());
     struct Case {
         Reg reg;
         double x, y, z, want;
@@ -200,7 +202,7 @@ TEST_CASE("Archetype: gradients match finite differences") {
     for (size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); i++) {
         CAPTURE(i);
         const Program prog = b.finish(shapes[i]);
-        CHECK(prog.validate(25).is_empty());
+        CHECK(prog.validate(25).empty());
         double worst = 0.0;
         const double share = check_gradient(prog, points, worst);
         MESSAGE("shape ", i, ": ", share * 100.0, "% of the points smooth, worst relative error ", worst);
@@ -223,7 +225,7 @@ TEST_CASE("Archetype: gradients match finite differences") {
         const double share = check_gradient(prog, random_points(VoxelPos(), 50, 60.0, seed), worst);
         if (!has_dist && share > 0.5) {
             fuzz_checked++;
-            fuzz_worst = MAX(fuzz_worst, worst);
+            fuzz_worst = std::max(fuzz_worst, worst);
         }
     }
     MESSAGE("fuzzed programs without DIST checked by finite differences: ", fuzz_checked, ", worst relative error ", fuzz_worst);
@@ -236,7 +238,7 @@ TEST_CASE("Archetype: the IR fbm gives ExactNoise::fbm's bits") {
         const ExactNoise::OctaveSet set = ExactNoise::make_fbm(is_2d, 0x7E7A11u, 9, 5, 75.0, 0.5);
         Builder b;
         const Program prog = b.finish(b.fbm(set));
-        CHECK(prog.validate(25).is_empty());
+        CHECK(prog.validate(25).empty());
         for (const int lod : { 0, 5, 7, 14 }) {
             // The band rule keeps the octaves at least 8 cells of the LOD long (k 9..13 here: all at LOD 0 to 6,
             // k >= 10 at 7, none at 14).
@@ -277,12 +279,12 @@ TEST_CASE("Archetype: the band rule drops a noise op to +0 exactly below 8 cells
         const Reg n3 = b.perlin3(k, 0xBA5Du, Vector3i64(int64_t(1) << 41, -9, 77), 1.5f);
         const Reg n2 = b.perlin2(k, 0x2Du, Vector3i64(3, 0, -(int64_t(1) << 35)), 0.75f);
         const Program prog = b.finish(b.add(n3, n2));
-        CHECK(prog.validate(25).is_empty());
-        for (int lod = MAX(k - 5, 0); lod <= k - 1; lod++) {
+        CHECK(prog.validate(25).empty());
+        for (int lod = std::max(k - 5, 0); lod <= k - 1; lod++) {
             CAPTURE(lod);
             CHECK(ExactNoise::band_kept(k, lod) == (lod <= k - 3));
             std::vector<Float4> regs;
-            for (const WorldPos &p : random_points(FAR_ANCHOR, 64, double(int64_t(1) << MIN(k + 4, 40)), uint32_t(k * 31 + lod))) {
+            for (const WorldPos &p : random_points(FAR_ANCHOR, 64, double(int64_t(1) << std::min(k + 4, 40)), uint32_t(k * 31 + lod))) {
                 run_registers(prog, p, lod, regs);
                 if (ExactNoise::band_kept(k, lod)) {
                     const Float4 a = ExactNoise::perlin3(p, k, 0xBA5Du, Vector3i64(int64_t(1) << 41, -9, 77));
@@ -305,7 +307,7 @@ TEST_CASE("Archetype: values are the same bits at every LOD, gradients scale by 
     for (uint32_t seed = 0; seed < 100; seed++) {
         Program prog = random_program(seed, anchors, 40);
         prog.normalize = true;
-        CHECK(prog.validate(25).is_empty());
+        CHECK(prog.validate(25).empty());
         std::vector<Float4> r0, rl;
         for (const WorldPos &p : random_points(VoxelPos(), 20, 2e4, seed)) {
             points++;
@@ -342,7 +344,7 @@ TEST_CASE("Archetype: validate rejects malformed programs") {
     const Local l = b.local();
     const Reg s = b.sphere(l, 3.0f);
     const Program good = b.finish(s);
-    CHECK(good.validate(25).is_empty());
+    CHECK(good.validate(25).empty());
     const std::function<void(Program &)> breakers[] = {
         [](Program &p) { p.code[2].a = 5; }, // reads a later register (an INPUT has no operand: use an ADD)
         [](Program &p) { p.output = int(p.code.size()); },
@@ -387,9 +389,9 @@ TEST_CASE("Archetype: validate rejects malformed programs") {
         bad.code[2].a = 0;
         bad.code[2].b = 1;
         bad.code[2].flat = false;
-        CHECK(bad.validate(25).is_empty());
+        CHECK(bad.validate(25).empty());
         breaker(bad);
-        CHECK_FALSE(bad.validate(25).is_empty());
+        CHECK_FALSE(bad.validate(25).empty());
     }
 }
 
@@ -404,7 +406,7 @@ TEST_CASE("Archetype: smooth_min / smooth_max are exactly min / max beyond their
     const Reg u2 = b.smooth_min(far_shape, near_shape, 8.0f);
     const Reg m = b.smooth_max(near_shape, far_neg, 8.0f);
     const Program prog = b.finish(u);
-    CHECK(prog.validate(25).is_empty());
+    CHECK(prog.validate(25).empty());
     std::vector<Float4> regs;
     for (const int lod : { 0, 14 }) {
         for (const WorldPos &p : random_points(VoxelPos(), 500, 40.0, 21)) {
@@ -422,7 +424,7 @@ TEST_CASE("Archetype: fuzzed programs are valid and use every op") {
     for (uint32_t seed = 0; seed < 200; seed++) {
         const Program prog = random_program(seed, anchors, 40);
         CAPTURE(seed);
-        CHECK(prog.validate(25).is_empty());
+        CHECK(prog.validate(25).empty());
         CHECK(prog.code.size() <= 43);
         for (const Instr &in : prog.code) {
             seen[int(in.op)]++;
@@ -435,7 +437,7 @@ TEST_CASE("Archetype: fuzzed programs are valid and use every op") {
     // Equal anchors are merged: the inputs still read anchors of the program.
     for (uint32_t seed = 0; seed < 50; seed++) {
         CAPTURE(seed);
-        CHECK(random_program(seed, { VoxelPos(), VoxelPos(), VoxelPos(7, 0, 0) }, 40).validate(25).is_empty());
+        CHECK(random_program(seed, { VoxelPos(), VoxelPos(), VoxelPos(7, 0, 0) }, 40).validate(25).empty());
     }
 }
 
@@ -474,7 +476,7 @@ TEST_CASE("Archetype: the generated GLSL is pinned and uses exact operations onl
         decimal = decimal || (rest[i] == '.' && digit(rest[i - 1]) && digit(rest[i + 1]));
     }
     CHECK_FALSE(decimal);
-    const CharString text = all.utf8();
+    const godot::CharString text = all.utf8();
     uint32_t h = 0x811C9DC5u;
     for (int i = 0; i < text.length(); i++) {
         h = (h ^ uint8_t(text[i])) * 0x01000193u;

@@ -289,7 +289,7 @@ TEST_CASE("SDFCascade table: the shapes gallery on the flat preset: cubes holed 
     CHECK(sdf.min_skirt_depth(param, 25) == 0.0f);
     CHECK(sdf.skirt_depth_m(3) == doctest::Approx(double(param.skirt_depth) * vs * 8.0)); // full skirt_depth cells: hard creases
     for (int i = 0; i < sdf.get_library().size(); i++) {
-        CHECK(sdf.get_library()[i].program.validate(25).is_empty());
+        CHECK(sdf.get_library()[i].program.validate(25).empty());
     }
     const auto snap = sdf.get_snapshot();
     CHECK(snap->records.size() == 11); // 8 cubes, the die, the stairs, the tunnelled cube
@@ -754,13 +754,12 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
         const PackedByteArray spans = table->record_bytes(SDFGpuTable::UploadCursor(), now);
         CHECK(now == table->upload_cursor());
         int64_t at = 4;
-        PackedByteArray one;
-        one.resize(RECORD_BYTES);
+        ov::bytes one(RECORD_BYTES);
         for (uint32_t s = 0; s < spans.decode_u32(0); s++) {
             const uint32_t first = spans.decode_u32(at) / RECORD_BYTES, count = spans.decode_u32(at + 4) / RECORD_BYTES;
             for (uint32_t i = 0; i < count; i++) {
-                encode_record(one, 0, gpu[first + i]);
-                mismatches += std::memcmp(one.ptr(), spans.ptr() + at + 8 + int64_t(i) * RECORD_BYTES, RECORD_BYTES) != 0;
+                encode_record(one.data(), gpu[first + i]);
+                mismatches += std::memcmp(one.data(), spans.ptr() + at + 8 + int64_t(i) * RECORD_BYTES, RECORD_BYTES) != 0;
             }
             at += 8 + int64_t(count) * RECORD_BYTES;
         }

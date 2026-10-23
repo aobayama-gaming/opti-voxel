@@ -141,7 +141,7 @@ WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
     WorldPos pos = p_pos;
     float *frac[3] = { &pos.frac.x, &pos.frac.y, &pos.frac.z };
     for (int a = 0; a < 3; a++) {
-        const float w = CLAMP(p_warp[a].w, -WARP_LIMIT, WARP_LIMIT);
+        const float w = std::clamp(p_warp[a].w, -WARP_LIMIT, WARP_LIMIT);
         float fl = std::floor(w);
         float rest = w - fl;
         if (rest >= 1.0f) {

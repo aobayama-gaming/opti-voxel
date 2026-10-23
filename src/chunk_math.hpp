@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <vector>
 
-using namespace godot;
+// The core's world/chunk math. The render-space helpers (chunk_render_center, grid_to_render*) work
+// in metres relative to the world origin and return Float3 (world_coord.hpp): float32 triples, the
+// engine's real_t in single-precision builds. Engine call sites convert explicitly.
 
 struct ChunkParam {
     int chunk_size = 32;
@@ -43,7 +45,7 @@ struct ChunkParam {
 // first (ChunkMath::load_queue).
 struct ScanView {
     ChunkId camera_chunk;
-    Vector3 forward; // unit view axis; zero: no direction, every chunk is in the cone
+    Float3 forward; // unit view axis; zero: no direction, every chunk is in the cone
     double cos_half_angle = -1.0;
     double sin_half_angle = 0.0;
     // How much coarser the LOD rule gets away from the cone: lod_pixel_error_back / lod_pixel_error - 1.
@@ -57,7 +59,7 @@ struct ScanView {
     // remember_view): the cone around `forward`.
     struct ViewMemory {
         ChunkId apex;
-        Vector3 dir;
+        Float3 dir;
         double fade = 0.0;
         uint32_t used = 0; // memory_clock when the camera last had this view (eviction only, not compared)
     };
@@ -67,7 +69,7 @@ struct ScanView {
     uint32_t memory_clock = 0; // remember_view calls
 
     void set_half_angle(double p_rad) {
-        const double a = CLAMP(p_rad, 0.0, Math_PI);
+        const double a = std::clamp(p_rad, 0.0, WorldCoord::PI);
         cos_half_angle = std::cos(a);
         sin_half_angle = std::sin(a);
     }
@@ -93,7 +95,7 @@ ChunkId get_parent_from_child(const ChunkId &coord);
 
 int get_lod(const ChunkId &coord);
 // The smallest and largest LOD of p_chunks ((0, 0) for none): a batch's, for the cascade passes.
-Vector2i lod_range(const std::vector<ChunkId> &p_chunks);
+ov::ivec2 lod_range(const std::vector<ChunkId> &p_chunks);
 int64_t get_lod_size(const ChunkId &coord);
 
 ChunkId get_parent_from_child_until(const ChunkId &coord, int target_lod);
@@ -112,16 +114,17 @@ VoxelPos chunk_center_voxel(const ChunkId &chunk_coord, const ChunkParam &chunk_
 // The LOD-p_lod chunk whose span [chunk_min_voxel, + span) holds LOD0 voxel p_voxel.
 ChunkId chunk_at_voxel(const VoxelPos &p_voxel, int p_lod, const ChunkParam &chunk_param);
 
-// Render space (Godot space): metres relative to the world origin. Only these helpers produce metres.
-Vector3 chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
+// Render space (the engine's space): metres relative to the world origin. Only these helpers produce
+// metres. Float3 in / Float3 out: engine call sites convert from their own real_t triples explicitly.
+Float3 chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param);
 // An LOD0 voxel (its lower corner).
-Vector3 voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param);
+Float3 voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param);
 // A point of the chunk's vertex grid (the grid the SDF is sampled on, skirt included).
-Vector3 grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const ChunkParam &chunk_param);
+Float3 grid_to_render(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param);
 // Same from a page header, which only carries the low 32 bits of the id (mirrors the page shader).
-Vector3 grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &grid, const ChunkParam &chunk_param);
+Float3 grid_to_render_lo32(const ov::ivec3 &chunk_lo, const Float3 &grid, const ChunkParam &chunk_param);
 // LOD0 chunk holding a render-space position.
-ChunkId chunk_at_render(const Vector3 &render_pos, const ChunkParam &chunk_param);
+ChunkId chunk_at_render(const Float3 &render_pos, const ChunkParam &chunk_param);
 
 // Bounding sphere radius of a LOD-p_lod chunk in chunk-id units (its half extent is 2^lod).
 float chunk_bounding_radius(int p_lod);

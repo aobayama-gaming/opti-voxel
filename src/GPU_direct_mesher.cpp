@@ -1,4 +1,5 @@
 #include "GPU_direct_mesher.hpp"
+#include "godot_conv.hpp"
 
 #include "cascade_glsl.hpp"
 #include "exact_noise.hpp"
@@ -120,7 +121,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     pool->set_material_param("skirt_size", chunk_param.skirt_size);
     pool->set_material_param("pos_scale", PageFormat::pos_scale(chunk_param.chunk_size));
     // Render positions are relative to the world origin (low words, wrapping).
-    pool->set_material_param("origin_chunk_lo", WorldCoord::lo32_i(chunk_param.origin_chunk));
+    pool->set_material_param("origin_chunk_lo", godot_v3i(WorldCoord::lo32_i(chunk_param.origin_chunk)));
     // The materials' parameters (Material::Library::make_image), read by id through the chunks' palettes.
     material_texture = ImageTexture::create_from_image(sdf->get_materials().make_image());
     pool->set_material_param("material_tex", material_texture->get_rid());
@@ -143,7 +144,7 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     const String set_chunk = table->glsl_set_chunk();
     shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", bindings);
-    shader = shader.replace("/*GLSL_PAGE_FORMAT*/", PageFormat::glsl_encode());
+    shader = shader.replace("/*GLSL_PAGE_FORMAT*/", godot_str(PageFormat::glsl_encode()));
     shader = shader.replace("/*GLSL_MATERIAL_BINDINGS*/",
             CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly") +
                     vformat("layout(set = 0, binding = %d, rgba16ui) uniform restrict writeonly uimage2D palette_image;\n"
@@ -208,7 +209,7 @@ void GPUDirectMesher::_rt_initialize() {
     status_size_bytes = ((STATUS_HEADER_UINTS + settings.pages_per_batch) * 4 + 15) / 16 * 16;
     buffer_status = rd->storage_buffer_create(status_size_bytes);
 
-    const PackedByteArray param_data = GPUFrame::chunk_param_bytes(chunk_param);
+    const PackedByteArray param_data = godot_bytes(GPUFrame::chunk_param_bytes(chunk_param));
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     for (int i = 0; i < COMPUTE_PASSES; i++) {
@@ -542,7 +543,7 @@ void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const Packed
 }
 
 AABB GPUDirectMesher::_chunk_aabb(const ChunkId &p_chunk) const {
-    const Vector3 center = ChunkMath::chunk_render_center(p_chunk, chunk_param);
+    const Vector3 center = godot_v3(ChunkMath::chunk_render_center(p_chunk, chunk_param));
     const float size = ChunkMath::world_chunk_size(p_chunk, chunk_param);
     // Skirt cells extend past the chunk bounds; be generous rather than cull visible geometry.
     const float margin = size * 0.25f;
@@ -816,7 +817,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     std::vector<uint32_t> lod_counts(lod_count, 0);
     const uint32_t list_words = uint32_t(list.size() / 4);
     const uint64_t list_bound = _observe_lists(chunks, ids, streamed_words, bounds);
-    const Vector2i lods = ChunkMath::lod_range(chunks);
+    const Vector2i lods = godot_v2i(ChunkMath::lod_range(chunks));
     AABB box = _chunk_aabb(chunks[0]);
     for (const ChunkId &c : chunks) {
         const int lod = ChunkMath::get_lod(c);
@@ -886,7 +887,7 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
 
     PackedByteArray ids;
     ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
-    const Vector2i lods = ChunkMath::lod_range(chunks);
+    const Vector2i lods = godot_v2i(ChunkMath::lod_range(chunks));
     for (size_t i = 0; i < chunks.size(); i++) {
         GPUFrame::encode_chunk_input(ids, (int64_t)i, chunks[i], chunk_param);
     }
@@ -1247,7 +1248,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
                 out->page = page;
                 out->quad_offset = moved.offset;
             } else {
-                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", WorldCoord::to_string(m.chunk.id)));
+                ERR_PRINT(vformat("GPUDirectMesher: compacted chunk %s is not loaded where its page says.", godot_str(m.chunk.id)));
             }
         }
         group_counts.append_array({ page, (int)d.groups });

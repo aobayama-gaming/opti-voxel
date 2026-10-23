@@ -90,10 +90,10 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
     discoverer->set_config(param, &p_sdf);
     // The bench's 1280x720 view at lod_error 4 (a coarser tree than the default 2, to keep the test short).
     discoverer->setup_lod(p_lods, 4.0f, 720.0f, 75.0f * (3.14159265f / 180.0f));
-    const Vector3 poses[] = { Vector3(-52.76f, 330.0f, -95.64f), Vector3(3000.0f, 3200.0f, 2000.0f), Vector3(-800.0f, 6500.0f, 400.0f) };
-    for (const Vector3 &pose : poses) {
+    const godot::Vector3 poses[] = { godot::Vector3(-52.76f, 330.0f, -95.64f), godot::Vector3(3000.0f, 3200.0f, 2000.0f), godot::Vector3(-800.0f, 6500.0f, 400.0f) };
+    for (const godot::Vector3 &pose : poses) {
         CAPTURE(pose);
-        const ChunkId camera = ChunkMath::chunk_at_render(pose, param);
+        const ChunkId camera = ChunkMath::chunk_at_render(ov_f3(pose), param);
         ReferenceWalk reference{ param, p_sdf, discoverer->get_lod_distances() };
         LODHashSet want;
         reference.scan(*discoverer, camera, want);
@@ -163,12 +163,12 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
     discoverer->set_config(param, &sdf);
     // The bench's 1280x720 view, error 1 in the view cone and 4 behind (the main_scene case).
-    const float fov = Math::deg_to_rad(75.0f);
-    discoverer->setup_lod(lods, 1.0f, 720.0f, fov, 4.0f, ChunkMath::view_cone_half_angle(fov, 16.0f / 9.0f, Math::deg_to_rad(20.0f)));
-    const Vector3 pose(3000.0f, 3200.0f, 2000.0f); // near the 15-LOD cascade ground
+    const float fov = godot::Math::deg_to_rad(75.0f);
+    discoverer->setup_lod(lods, 1.0f, 720.0f, fov, 4.0f, ChunkMath::view_cone_half_angle(fov, 16.0f / 9.0f, godot::Math::deg_to_rad(20.0f)));
+    const godot::Vector3 pose(3000.0f, 3200.0f, 2000.0f); // near the 15-LOD cascade ground
     size_t split_x_size = 0; // forward +x: the set of the split, and of the front error (reused below)
     size_t front_x_size = 0;
-    for (const Vector3 &forward : { Vector3(1, 0, 0), Vector3(0.3f, -0.8f, 0.5f), Vector3(-0.2f, 0.3f, -1.0f) }) {
+    for (const godot::Vector3 &forward : { godot::Vector3(1, 0, 0), godot::Vector3(0.3f, -0.8f, 0.5f), godot::Vector3(-0.2f, 0.3f, -1.0f) }) {
         CAPTURE(forward);
         const ScanView split = discoverer->make_view(pose, forward);
         CHECK(split.back_scale == doctest::Approx(3.0));
@@ -197,7 +197,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
         CHECK(set_difference(got_in, want_in) == 0);
         CHECK(split_counters.out_of_view > 0);
         CHECK(got.size() < want.size());
-        if (forward == Vector3(1, 0, 0)) {
+        if (forward == godot::Vector3(1, 0, 0)) {
             split_x_size = got.size();
             front_x_size = want.size();
         }
@@ -212,17 +212,18 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     // 1-Lipschitz (each term is a distance to a cone plus a constant), so face neighbours stay within one
     // LOD, and the set lies between the current view's alone and the front error's.
     {
-        ScanView looked = discoverer->make_view(pose, Vector3(1, 0, 0));
+        ScanView looked = discoverer->make_view(pose, godot::Vector3(1, 0, 0));
         const double memory_distance = 30.0;
         const ChunkId spot = looked.camera_chunk - ChunkId(64, 0, 0); // 64 units back along x
         for (int i = 0; i < 9; i++) {
-            looked.forward = Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(40.0f * i));
+            const godot::Vector3 f = godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(40.0f * i));
+            looked.forward = ov_f3(f);
             ScanView there = looked;
             there.camera_chunk = spot;
             ChunkDiscoverer::remember_view(there, memory_distance);
             looked.copy_memories_from(there);
         }
-        looked.forward = Vector3(1, 0, 0);
+        looked.forward = Float3{ 1.0f, 0.0f, 0.0f };
         CHECK(ChunkDiscoverer::remember_view(looked, memory_distance) == ChunkDiscoverer::REMEMBERED_ADDED);
         CHECK(looked.memory_count == 10);
         CHECK(looked.memories[0].fade == 0.0);
@@ -239,7 +240,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
 
     // Without memory, a turn rescans past RESCAN_TURN_DEG, and only when the LOD rule depends on the direction.
     auto turned = [&](const ScanView &p_from, float p_degrees, double p_back_scale) {
-        ScanView v = discoverer->make_view(pose, Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(p_degrees)));
+        ScanView v = discoverer->make_view(pose, godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(p_degrees)));
         v.back_scale = p_back_scale;
         v.copy_memories_from(p_from);
         ChunkDiscoverer::remember_view(v, 0.0);
@@ -260,10 +261,11 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
 TEST_CASE("ChunkDiscoverer: remembered views stop the rescans of a camera turning in place") {
     auto turn = [](ScanView &r_view, double p_memory_distance, int p_degrees, int &r_changes) {
         r_changes = 0;
-        const int start = int(std::lround(Math::rad_to_deg(std::atan2(-r_view.forward.z, r_view.forward.x))));
+        const int start = int(std::lround(godot::Math::rad_to_deg(std::atan2(-r_view.forward.z, r_view.forward.x))));
         for (int deg = start + 1; deg <= start + p_degrees; deg++) {
             ScanView next = r_view;
-            next.forward = Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(float(deg)));
+            const godot::Vector3 dir = godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(float(deg)));
+            next.forward = ov_f3(dir);
             CHECK(ChunkDiscoverer::remember_view(next, p_memory_distance) != ChunkDiscoverer::REMEMBERED_REPLACED);
             if (ChunkDiscoverer::view_changed(r_view, next)) {
                 r_changes++;
@@ -273,7 +275,7 @@ TEST_CASE("ChunkDiscoverer: remembered views stop the rescans of a camera turnin
     };
     ScanView view;
     view.camera_chunk = ChunkId(1, 1, 1);
-    view.forward = Vector3(1, 0, 0);
+    view.forward = Float3{ 1.0f, 0.0f, 0.0f };
     view.back_scale = 3.0;
     const double memory_distance = 30.0;
     CHECK(ChunkDiscoverer::remember_view(view, memory_distance) == ChunkDiscoverer::REMEMBERED_ADDED);
@@ -292,7 +294,8 @@ TEST_CASE("ChunkDiscoverer: remembered views stop the rescans of a camera turnin
     int changes = 0;
     for (int deg = 1; deg <= 360; deg++) {
         ScanView next = off;
-        next.forward = Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(float(deg)));
+        const godot::Vector3 dir = godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(float(deg)));
+        next.forward = ov_f3(dir);
         ChunkDiscoverer::remember_view(next, 0.0);
         CHECK(next.memory_count == 1);
         if (ChunkDiscoverer::view_changed(off, next)) {
@@ -324,7 +327,7 @@ TEST_CASE("ChunkDiscoverer: remembered views stop the rescans of a camera turnin
     // Full: a new view evicts the most faded one (a view of the turn, the farthest).
     CHECK(view.memory_count == ScanView::MAX_VIEW_MEMORIES);
     ScanView next = view;
-    next.forward = Vector3(0, 0, 1);
+    next.forward = Float3{ 0.0f, 0.0f, 1.0f };
     CHECK(ChunkDiscoverer::remember_view(next, memory_distance) == ChunkDiscoverer::REMEMBERED_REPLACED);
     CHECK(next.memory_count == ScanView::MAX_VIEW_MEMORIES);
 }
@@ -334,7 +337,7 @@ TEST_CASE("ChunkDiscoverer: remembered views stop the rescans of a camera turnin
 TEST_CASE("ChunkDiscoverer: remember_view re-sorts the fades of a known view") {
     ScanView view;
     view.back_scale = 3.0;
-    view.forward = Vector3(1, 0, 0);
+    view.forward = Float3{ 1.0f, 0.0f, 0.0f };
     const double memory_distance = 10.0;
     for (int64_t x : { int64_t(1), int64_t(201) }) { // out to x = 201, a view at each end
         view.camera_chunk = ChunkId(x, 1, 1);
@@ -350,27 +353,27 @@ TEST_CASE("ChunkDiscoverer: remember_view re-sorts the fades of a known view") {
 
 // Full, with every fade 0 (looking around in place): the least recently used view goes, not the newest.
 TEST_CASE("ChunkDiscoverer: a full memory replaces the least recently used view") {
-    std::vector<Vector3> dirs;
+    std::vector<godot::Vector3> dirs;
     for (int yaw = 0; yaw < 360; yaw += 9) {
-        dirs.push_back(Vector3(1, 0, 0).rotated(Vector3(0, 1, 0), Math::deg_to_rad(float(yaw))));
+        dirs.push_back(godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(float(yaw))));
     }
     for (int yaw = 0; int(dirs.size()) < ScanView::MAX_VIEW_MEMORIES + 2; yaw += 13) { // 9.2 degrees apart at 45 degrees up
-        dirs.push_back(Vector3(1, 1, 0).normalized().rotated(Vector3(0, 1, 0), Math::deg_to_rad(float(yaw))));
+        dirs.push_back(godot::Vector3(1, 1, 0).normalized().rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(float(yaw))));
     }
     ScanView view;
     view.back_scale = 3.0;
     view.camera_chunk = ChunkId(1, 1, 1);
-    auto look = [&view](const Vector3 &p_dir) {
-        view.forward = p_dir;
+    auto look = [&view](const godot::Vector3 &p_dir) {
+        view.forward = ov_f3(p_dir);
         return ChunkDiscoverer::remember_view(view, 30.0);
     };
     for (int i = 0; i < ScanView::MAX_VIEW_MEMORIES; i++) {
         CHECK(look(dirs[i]) == ChunkDiscoverer::REMEMBERED_ADDED);
     }
     CHECK(look(dirs[0]) == ChunkDiscoverer::REMEMBERED_KNOWN); // dirs[1] is now the least recently used
-    auto has = [&view](const Vector3 &p_dir) {
+    auto has = [&view](const godot::Vector3 &p_dir) {
         for (int i = 0; i < view.memory_count; i++) {
-            if (view.memories[i].dir == p_dir) {
+            if (view.memories[i].dir == ov_f3(p_dir)) {
                 return true;
             }
         }

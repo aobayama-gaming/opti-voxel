@@ -21,7 +21,7 @@ double angle_deg(const ExactNoise::Float4 &p_a, const ExactNoise::Float4 &p_b) {
     const double cx = ay * bz - az * by;
     const double cy = az * bx - ax * bz;
     const double cz = ax * by - ay * bx;
-    return Math::rad_to_deg(std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), ax * bx + ay * by + az * bz));
+    return godot::Math::rad_to_deg(std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), ax * bx + ay * by + az * bz));
 }
 
 void height_normals(const Level &p_level, const Vector3i64 &p_p, const ExactNoise::Float4 &p_perlin, int p_k, int p_steepness_log2,
@@ -74,16 +74,16 @@ Fidelity measure_fidelity(const Spec &p_spec, int p_k, int p_boxes, int p_size, 
             pos.voxel = p_p;
             const ExactNoise::Float4 a = ExactNoise::perlin3(pos, p_k, band.seed, band.offset);
             const double dv = double(v.ch[VALUE][p_i]) - double(a.w);
-            f.value_max = MAX(f.value_max, std::fabs(dv));
+            f.value_max = std::max(f.value_max, std::fabs(dv));
             sq += dv * dv;
             const double ex = double(v.ch[DX][p_i] * to_cell) - a.x;
             const double ey = double(v.ch[DY][p_i] * to_cell) - a.y;
             const double ez = double(v.ch[DZ][p_i] * to_cell) - a.z;
-            f.slope_max = MAX(f.slope_max, std::sqrt(ex * ex + ey * ey + ez * ez));
+            f.slope_max = std::max(f.slope_max, std::sqrt(ex * ex + ey * ey + ez * ez));
             for (int s = 0; s < STEEPNESS_COUNT; s++) {
                 ExactNoise::Float4 tc, ta;
                 height_normals(v, p_p, a, p_k, STEEPNESS_LOG2[s], tc, ta);
-                f.normal_max_deg[s] = MAX(f.normal_max_deg[s], angle_deg(tc, ta));
+                f.normal_max_deg[s] = std::max(f.normal_max_deg[s], angle_deg(tc, ta));
             }
             f.points++;
         });
@@ -106,7 +106,7 @@ Cost measure_cost(const Spec &p_spec, int p_lod, int p_chunks, uint32_t p_seed, 
         }
         const int64_t t = stats.total();
         total += double(t);
-        c.points_max = MAX(c.points_max, t);
+        c.points_max = std::max(c.points_max, t);
         if (i == 0) {
             for (int m = p_lod; m <= MAX_LEVEL && stats.points[m] > 0; m++) {
                 c.first_levels.push_back(stats.points[m]);

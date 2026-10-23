@@ -13,6 +13,10 @@
 #include "voxel_sky.hpp"
 #include "voxel_terrain.hpp"
 
+#include "ov/on_error.hpp"
+
+#include "debug_log.hpp"
+
 #ifdef OPTI_VOXEL_TESTS
 #include "tests/unit_tests.hpp"
 #endif
@@ -23,6 +27,10 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+    // The core's engine-free error sink: an ERROR line in the Godot console at the core's file and line.
+    ov::set_error_sink([](const char *p_file, int p_line, const char *p_message) {
+        _err_print_error("core", p_file, p_line, p_message);
+    });
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);

@@ -1,9 +1,8 @@
 
 #include "chunk_math.hpp"
 
+#include "ov/on_error.hpp"
 #include "subcube.hpp"
-
-#include <godot_cpp/core/error_macros.hpp>
 
 #include <cmath>
 
@@ -45,14 +44,14 @@ ChunkId ChunkMath::get_parent_from_child(const ChunkId &coord) {
             get_parent_from_child(coord.z));
 }
 
-Vector2i ChunkMath::lod_range(const std::vector<ChunkId> &p_chunks) {
+ov::ivec2 ChunkMath::lod_range(const std::vector<ChunkId> &p_chunks) {
     if (p_chunks.empty()) {
-        return Vector2i();
+        return ov::ivec2();
     }
-    Vector2i r(get_lod(p_chunks[0]), get_lod(p_chunks[0]));
+    ov::ivec2 r(get_lod(p_chunks[0]), get_lod(p_chunks[0]));
     for (const ChunkId &c : p_chunks) {
         const int lod = get_lod(c);
-        r = Vector2i(MIN(r.x, lod), MAX(r.y, lod));
+        r = ov::ivec2(std::min(r.x, lod), std::max(r.y, lod));
     }
     return r;
 }
@@ -72,8 +71,8 @@ int64_t ChunkMath::get_lod_size(const ChunkId &coord) {
 uint64_t ChunkMath::subcube_bits(const ChunkId &p_ancestor, const ChunkId &p_descendant) {
     const int la = get_lod(p_ancestor);
     const int ld = get_lod(p_descendant);
-    ERR_FAIL_COND_V(ld >= la || int(Subcube::AXIS_BITS) > la + 1, 0);
-    ERR_FAIL_COND_V(get_parent_from_child_until(p_descendant, la) != p_ancestor, 0);
+    OV_ERR_FAIL_COND_V_MSG(ld >= la || int(Subcube::AXIS_BITS) > la + 1, 0, "subcube_bits: not a descendant at least AXIS_BITS finer.");
+    OV_ERR_FAIL_COND_V_MSG(get_parent_from_child_until(p_descendant, la) != p_ancestor, 0, "subcube_bits: not an ancestor.");
     // Units from the ancestor's low corner, in [0, 2^(la+1)); a sub-cube spans 2^shift of them.
     const int shift = la + 1 - int(Subcube::AXIS_BITS);
     const int64_t half = get_lod_size(p_descendant);
@@ -133,35 +132,36 @@ VoxelPos ChunkMath::chunk_center_voxel(const ChunkId &chunk_coord, const ChunkPa
 namespace {
 
 // Render position of a vertex-grid point, from the chunk's minimum corner in voxels relative to the
-// origin (exact integers, small). Double precision: the result is converted to Godot's real_t last.
-Vector3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size, const Vector3 &p_grid, const ChunkParam &p_param) {
+// origin (exact integers, small). Double precision: the result is converted to float32 last.
+Float3 _grid_point_render(const Vector3i64 &p_min_rel_voxel, int64_t p_lod_size, const Float3 &p_grid, const ChunkParam &p_param) {
     const double ls = double(p_lod_size);
     const double vs = double(p_param.voxel_size);
     const double skirt = double(p_param.skirt_size);
-    return Vector3(
-            real_t((double(p_min_rel_voxel.x) + (double(p_grid.x) - skirt) * ls) * vs),
-            real_t((double(p_min_rel_voxel.y) + (double(p_grid.y) - skirt) * ls) * vs),
-            real_t((double(p_min_rel_voxel.z) + (double(p_grid.z) - skirt) * ls) * vs));
+    return Float3{
+        float((double(p_min_rel_voxel.x) + (double(p_grid.x) - skirt) * ls) * vs),
+        float((double(p_min_rel_voxel.y) + (double(p_grid.y) - skirt) * ls) * vs),
+        float((double(p_min_rel_voxel.z) + (double(p_grid.z) - skirt) * ls) * vs),
+    };
 }
 
 } // namespace
 
-Vector3 ChunkMath::chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
+Float3 ChunkMath::chunk_render_center(const ChunkId &chunk_coord, const ChunkParam &chunk_param) {
     return voxel_to_render(chunk_center_voxel(chunk_coord, chunk_param), chunk_param);
 }
 
-Vector3 ChunkMath::voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param) {
+Float3 ChunkMath::voxel_to_render(const VoxelPos &p_voxel, const ChunkParam &chunk_param) {
     const Vector3i64 rel = p_voxel - chunk_param.origin_voxel();
     const double vs = double(chunk_param.voxel_size);
-    return Vector3(real_t(double(rel.x) * vs), real_t(double(rel.y) * vs), real_t(double(rel.z) * vs));
+    return Float3{ float(double(rel.x) * vs), float(double(rel.y) * vs), float(double(rel.z) * vs) };
 }
 
-Vector3 ChunkMath::grid_to_render(const ChunkId &chunk_coord, const Vector3 &grid, const ChunkParam &chunk_param) {
+Float3 ChunkMath::grid_to_render(const ChunkId &chunk_coord, const Float3 &grid, const ChunkParam &chunk_param) {
     const Vector3i64 min_rel = chunk_min_voxel(chunk_coord, chunk_param) - chunk_param.origin_voxel();
     return _grid_point_render(min_rel, get_lod_size(chunk_coord), grid, chunk_param);
 }
 
-Vector3 ChunkMath::grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &grid, const ChunkParam &chunk_param) {
+Float3 ChunkMath::grid_to_render_lo32(const ov::ivec3 &chunk_lo, const Float3 &grid, const ChunkParam &chunk_param) {
     using namespace WorldCoord;
     // Wrapping difference of the low words: exact while the chunk is within 2^31 ids of the origin.
     const Vector3i64 rel(
@@ -174,12 +174,12 @@ Vector3 ChunkMath::grid_to_render_lo32(const Vector3i &chunk_lo, const Vector3 &
     return _grid_point_render(min_rel, lod_size, grid, chunk_param);
 }
 
-ChunkId ChunkMath::chunk_at_render(const Vector3 &render_pos, const ChunkParam &chunk_param) {
+ChunkId ChunkMath::chunk_at_render(const Float3 &render_pos, const ChunkParam &chunk_param) {
     // Cells of one LOD0 chunk, relative to the origin; LOD0 chunk centers are odd: ..., -3, -1, 1, 3, ...
     const double dim = double(chunk_param.chunk_world_dimension());
-    auto cell = [dim](real_t p_v) {
+    auto cell = [dim](float p_v) {
         const double c = std::floor(double(p_v) / dim);
-        return int64_t(CLAMP(c, -1e15, 1e15));
+        return int64_t(std::clamp(c, -1e15, 1e15));
     };
     return chunk_param.origin_chunk + ChunkId(cell(render_pos.x) * 2 + 1, cell(render_pos.y) * 2 + 1, cell(render_pos.z) * 2 + 1);
 }
@@ -211,7 +211,7 @@ float ChunkMath::chunk_bounding_radius(int p_lod) {
 
 namespace {
 // Gap from the bounding sphere of a LOD-p_lod chunk, at p_v from the apex, to the cone around unit axis p_f.
-double cone_gap(double vx, double vy, double vz, const Vector3 &p_f, int p_lod, const ScanView &p_view) {
+double cone_gap(double vx, double vy, double vz, const Float3 &p_f, int p_lod, const ScanView &p_view) {
     const double fx = p_f.x;
     const double fy = p_f.y;
     const double fz = p_f.z;
@@ -236,7 +236,7 @@ double cone_gap(double vx, double vy, double vz, const Vector3 &p_f, int p_lod, 
 } //namespace
 
 double ChunkMath::view_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
-    if (p_view.forward == Vector3()) {
+    if (p_view.forward == Float3{}) {
         return 0.0;
     }
     return cone_gap(double(p_chunk.x - p_view.camera_chunk.x), double(p_chunk.y - p_view.camera_chunk.y), double(p_chunk.z - p_view.camera_chunk.z),
@@ -264,7 +264,7 @@ double ChunkMath::lod_cone_gap(const ChunkId &p_chunk, int p_lod, const ScanView
     double best = INFINITY;
     // Sorted by fade: once a fade alone reaches the best gap, no later memory can beat it.
     for (int i = 0; i < p_view.memory_count && p_view.memories[i].fade < best; i++) {
-        best = MIN(best, memory_gap(p_chunk, p_lod, p_view, p_view.memories[i]));
+        best = std::min(best, memory_gap(p_chunk, p_lod, p_view, p_view.memories[i]));
     }
     return best;
 }

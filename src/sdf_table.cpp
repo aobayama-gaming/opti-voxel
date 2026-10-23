@@ -1,5 +1,6 @@
 #include "sdf_table.hpp"
 
+#include "godot_conv.hpp"
 #include "moment_layers.hpp"
 #include "parallel_for.hpp"
 
@@ -727,7 +728,7 @@ void SDFTable::build_table(int p_lod_count) {
     blob_type = blob;
     library = std::make_shared<const DefLibrary>(lib);
     for (int i = 0; i < library->size(); i++) {
-        const String error = (*library)[i].program.validate(p_lod_count);
+        const String error = godot_str((*library)[i].program.validate(p_lod_count));
         if (!error.is_empty()) {
             ERR_PRINT(vformat("Archetype library type %d: ", i) + error);
         }

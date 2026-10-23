@@ -9,6 +9,8 @@
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/semaphore.hpp>
 #include <godot_cpp/classes/thread.hpp>
+#include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
 
 #include <memory>
 #include <vector>
@@ -57,7 +59,7 @@ public:
             bool outside = false;
             uint32_t last_scan = 0;
         };
-        HashMap<ChunkId, Entry, Vector3i64Hasher> entries;
+        godot::HashMap<ChunkId, Entry, Vector3i64Hasher> entries;
         uint32_t scan_index = 0;
         bool verify = false; // recompute the verdict on every hit and count mismatches
     };

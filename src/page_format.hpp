@@ -1,15 +1,11 @@
 #pragma once
 
-#include <godot_cpp/variant/string.hpp>
-#include <godot_cpp/variant/vector3.hpp>
-#include <godot_cpp/variant/vector3i.hpp>
+#include "world_coord.hpp"
 
 #include "subcube.hpp"
 
 #include <cmath>
 #include <cstdint>
-
-using namespace godot;
 
 // Page texture layout (8 bytes per corner), shared by the compute passes (PageFormat::glsl_encode), the
 // page shader (PageFormat::glsl_decode, quad_page_pool.cpp) and the CPU-side readers (validator, auditor, spike).
@@ -82,8 +78,8 @@ inline const uint16_t *row(const uint16_t *p_page, uint32_t p_group) {
     return p_page + p_group * TEX_WIDTH * TEXEL_CHANNELS;
 }
 
-inline Vector3i header_chunk(const uint16_t *p_row) {
-    return Vector3i((int32_t)(p_row[0] | (uint32_t)p_row[1] << 16), (int32_t)(p_row[2] | (uint32_t)p_row[3] << 16),
+inline ov::ivec3 header_chunk(const uint16_t *p_row) {
+    return ov::ivec3((int32_t)(p_row[0] | (uint32_t)p_row[1] << 16), (int32_t)(p_row[2] | (uint32_t)p_row[3] << 16),
             (int32_t)(p_row[4] | (uint32_t)p_row[5] << 16));
 }
 
@@ -126,8 +122,9 @@ inline const uint16_t *corner(const uint16_t *p_page, uint32_t p_quad, int p_k) 
     return row(p_page, p_quad / QUAD_GROUP) + (HEADER_TEXELS + (p_quad % QUAD_GROUP) * 4 + p_k) * TEXEL_CHANNELS;
 }
 
-inline Vector3 decode_local(const uint16_t *p_corner, float p_pos_scale) {
-    return Vector3(float(p_corner[0] & POS_MASK), float(p_corner[1] & POS_MASK), float(p_corner[2] & POS_MASK)) / p_pos_scale;
+inline Float3 decode_local(const uint16_t *p_corner, float p_pos_scale) {
+    return Float3{ float(p_corner[0] & POS_MASK) / p_pos_scale, float(p_corner[1] & POS_MASK) / p_pos_scale,
+        float(p_corner[2] & POS_MASK) / p_pos_scale };
 }
 
 inline uint32_t decode_palette(const uint16_t *p_corner) {
@@ -135,15 +132,15 @@ inline uint32_t decode_palette(const uint16_t *p_corner) {
             uint32_t(p_corner[2] >> POS_BITS) << (2 * PALETTE_LANE_BITS);
 }
 
-inline Vector3 decode_normal(const uint16_t *p_corner) {
+inline Float3 decode_normal(const uint16_t *p_corner) {
     const uint32_t p = p_corner[3];
     const float fx = float(p & NORMAL_AXIS_MAX) / float(NORMAL_AXIS_MAX) * 2.0f - 1.0f;
     const float fy = float(p >> NORMAL_AXIS_BITS) / float(NORMAL_AXIS_MAX) * 2.0f - 1.0f;
-    Vector3 n(fx, fy, 1.0f - std::abs(fx) - std::abs(fy));
-    const float t = n.z < 0.0f ? -n.z : 0.0f;
-    n.x += n.x >= 0.0f ? -t : t;
-    n.y += n.y >= 0.0f ? -t : t;
-    return n.normalized();
+    const float fz = 1.0f - std::abs(fx) - std::abs(fy);
+    const float t = fz < 0.0f ? -fz : 0.0f;
+    const float nx = fx + (fx >= 0.0f ? -t : t);
+    const float ny = fy + (fy >= 0.0f ? -t : t);
+    return Float3{ nx, ny, fz }.normalized();
 }
 
 inline bool is_zero(const uint16_t *p_corner) {
@@ -151,8 +148,8 @@ inline bool is_zero(const uint16_t *p_corner) {
 }
 
 // The constants above as GLSL (compute shaders and the page shader: `const`, no #define).
-inline String glsl_constants() {
-    String s;
+inline ov::str glsl_constants() {
+    ov::str s;
     const struct {
         const char *name;
         uint32_t value;
@@ -163,7 +160,7 @@ inline String glsl_constants() {
         { "PAGE_NORMAL_AXIS_MAX", NORMAL_AXIS_MAX }, { "PAGE_NORMAL_BITS", NORMAL_BITS },
         { "PAGE_PALETTE_LANE_BITS", PALETTE_LANE_BITS }, { "PALETTE_TEX_WIDTH", PALETTE_TEX_WIDTH } };
     for (const auto &c : constants) {
-        s += String("const uint ") + c.name + " = " + itos(c.value) + "u;\n";
+        s += ov::format("const uint %s = %uu;\n", c.name, c.value);
     }
     return s;
 }
@@ -267,12 +264,12 @@ void store_group_header(uint group, ivec3 chunk, uint palette_block) {
 namespace PageFormat {
 
 // Everything a compute pass writing pages needs, after its staging image binding (the decoders too: palette addressing).
-inline String glsl_encode() {
+inline ov::str glsl_encode() {
     return glsl_constants() + GLSL_PAGE_DECODE + GLSL_PAGE_ENCODE;
 }
 
 // Everything the page shader needs to read corners.
-inline String glsl_decode() {
+inline ov::str glsl_decode() {
     return glsl_constants() + GLSL_PAGE_DECODE;
 }
 

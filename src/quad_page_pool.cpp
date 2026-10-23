@@ -3,6 +3,7 @@
 #include "debug_log.hpp"
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
+#include "godot_conv.hpp"
 #include "material_library.hpp"
 #include "voxel_sky.hpp"
 #include "world_coord.hpp"
@@ -486,7 +487,7 @@ void QuadPagePool::initialize(RID p_scenario, uint32_t p_page_capacity, uint32_t
     shader = rs->shader_create();
     rs->shader_set_code(shader,
             String(PAGE_SHADER)
-                    .replace("/*GLSL_PAGE_DECODE*/", PageFormat::glsl_decode() + Material::glsl_constants() + GLSL_PCG3D)
+                    .replace("/*GLSL_PAGE_DECODE*/", godot_str(PageFormat::glsl_decode()) + Material::glsl_constants() + GLSL_PCG3D)
                     .replace("/*GLSL_CLOUDS*/", VoxelSky::glsl_clouds()));
     material_params["voxel_size"] = voxel_size;
 

@@ -176,13 +176,13 @@ private:
     // Instance edits: their chunks, dispatched before chunk_queue, finest LOD first. send_chunk() does
     // not touch this. required_version is the table version a chunk must be re-meshed from (staleness).
     std::vector<std::vector<ChunkId>> remesh_queue;
-    HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
-    HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
+    godot::HashMap<ChunkId, uint32_t, Vector3i64Hasher> required_version;
+    godot::HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
     LODHashSet working_generation;
     ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
 
     uint32_t next_batch_id = 0;
-    HashMap<uint32_t, InFlightBatch> in_flight;
+    godot::HashMap<uint32_t, InFlightBatch> in_flight;
     std::vector<PageState> page_state; // indexed by pool page
     std::vector<int> dirty_bounds_pages;
 
@@ -197,7 +197,7 @@ private:
     std::vector<CompletedBatch> completed;
 
     std::vector<ChunkId> audit_queue;
-    HashMap<uint32_t, std::vector<ChunkId>> audit_in_flight;
+    godot::HashMap<uint32_t, std::vector<ChunkId>> audit_in_flight;
     std::vector<CompletedBatch> audit_completed; // directory only
     std::vector<std::pair<ChunkId, uint32_t>> audit_counts;
 
@@ -216,7 +216,7 @@ private:
         uint64_t sdf_us = 0; // pass 0: the cascade and the table fold
     };
     GPUCostModel cost_model;
-    HashMap<uint32_t, BatchCost> batch_costs;
+    godot::HashMap<uint32_t, BatchCost> batch_costs;
     std::vector<MeasuredBatch> measured_batches;
     void _update_cost_model();
     // GPU time per batch by its list words: bin b holds the batches of [2^(b-1), 2^b) words (bin 0: none).
@@ -292,7 +292,7 @@ private:
     bool rt_destroying = false;
 
     // completion assembly (render thread writes, main thread consumes; under mutex)
-    HashMap<uint32_t, CompletedBatch> partial;
+    godot::HashMap<uint32_t, CompletedBatch> partial;
 
     // r_kind: REMESH from remesh_queue, else CHUNK and r_queue its chunk_queue index (ChunkGate::next's pop).
     bool _pop_queue(ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue);

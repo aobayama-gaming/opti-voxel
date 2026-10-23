@@ -16,6 +16,7 @@
  */
 
 #include "GPU_mesher.hpp"
+#include "godot_conv.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -365,7 +366,7 @@ void GPUMesher::_initialize_gpu_compute() {
 
     // Injection of Chunk Param in the uniform
     // std140 ChunkParam, laid out by GPUFrame.
-    const PackedByteArray param_data = GPUFrame::chunk_param_bytes(chunk_param);
+    const PackedByteArray param_data = godot_bytes(GPUFrame::chunk_param_bytes(chunk_param));
     buffer_chunk_param = rd->uniform_buffer_create(param_data.size(), param_data);
 
     // Helper lambda to keep code clean
@@ -849,7 +850,7 @@ void GPUMesher::render_chunk() {
 
         rs->instance_set_transform(
                 chunk.instance_rid,
-                Transform3D(scaled_basis, ChunkMath::grid_to_render(chunk.chunk_id, Vector3(), chunk_param)));
+                Transform3D(scaled_basis, godot_v3(ChunkMath::grid_to_render(chunk.chunk_id, Float3{}, chunk_param))));
     }
 }
 
@@ -947,7 +948,7 @@ void GPUMesher::process_queue() {
         input_table_list = table_list;
         input_table_records = table_records;
         batch_count = count;
-        batch_lods = ChunkMath::lod_range(in_flight_ids);
+        batch_lods = godot_v2i(ChunkMath::lod_range(in_flight_ids));
         worker_available = false;
         mutex->unlock();
 

@@ -3,7 +3,7 @@
 #include "exact_noise.hpp"
 #include "world_coord.hpp"
 
-#include <godot_cpp/variant/string.hpp>
+#include "ov/format.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -112,7 +112,7 @@ struct Program {
     // Empty if the program is well formed: operands before their use, register budget, flat flags,
     // constants finite and not denormal, noise amplitudes and gradient factors amp * 2^(lod - k) in
     // [2^-16, 2^40] at the LODs [0, p_lod_count) (ExactNoise::in_exact_range).
-    String validate(int p_lod_count) const;
+    ov::str validate(int p_lod_count) const;
     // Sum of op_cost: a relative GPU cost (multiply-adds, a noise octave counted from its body).
     int cost() const;
 };

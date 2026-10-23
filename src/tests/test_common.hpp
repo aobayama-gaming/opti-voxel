@@ -18,7 +18,7 @@ namespace doctest {
 
 template <>
 struct StringMaker<Vector3i64> {
-    static doctest::String convert(const Vector3i64 &p_v) { return WorldCoord::to_string(p_v).utf8().get_data(); }
+    static doctest::String convert(const Vector3i64 &p_v) { return WorldCoord::to_string(p_v).c_str(); }
 };
 
 template <>

@@ -2,6 +2,7 @@
 
 #include "chunk_math.hpp"
 #include <godot_cpp/core/object.hpp>
+#include <godot_cpp/templates/hash_map.hpp>
 
 #include <godot_cpp/classes/mutex.hpp>
 #include <godot_cpp/classes/semaphore.hpp>
@@ -30,7 +31,7 @@ struct UnpackChunk {
     uint32_t point_offset = 0; // used to fill the array
     uint32_t index_count = 0; // indices actually written by the CPU triangulation
 
-    HashMap<uint32_t, uint32_t> index_storage;
+    godot::HashMap<uint32_t, uint32_t> index_storage;
 
     PackedInt32Array quad_masks;
     // Cell (flat index) of each point. The triangulation must not derive it from the quantised position:

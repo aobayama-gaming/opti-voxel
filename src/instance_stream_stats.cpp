@@ -1,6 +1,8 @@
 // The stream's counters (instance_stream.hpp).
 #include "instance_stream.hpp"
 
+#include "godot_conv.hpp"
+
 namespace Archetype {
 
 Dictionary InstanceStream::get_stats() const {
@@ -41,7 +43,7 @@ Dictionary InstanceStream::get_stats() const {
     d["stale_handed_back"] = stats.stale_handed_back;
     d["keys_dropped"] = stats.keys_dropped;
     d["jobs_dropped"] = stats.jobs_dropped;
-    d["park_frames"] = stats.park_frames.to_dict();
+    d["park_frames"] = godot_dict(stats.park_frames);
     d["workers"] = int64_t(executor->workers());
     d["computed"] = stats.computed;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;

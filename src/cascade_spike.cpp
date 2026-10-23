@@ -1,4 +1,5 @@
 #include "cascade_spike.hpp"
+#include "godot_conv.hpp"
 
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
@@ -129,7 +130,7 @@ public:
         cs = p_param.chunk_size;
         cells = uint64_t(cs) * cs * cs;
         input = rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
-        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(param);
+        const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(param));
         param_ubo = rd->uniform_buffer_create(param_bytes.size(), param_bytes);
         samples = rd->storage_buffer_create(MAX_BATCH * cells * 16);
         debug = rd->storage_buffer_create(MAX_BATCH * cells * nv * 16);
@@ -269,7 +270,7 @@ private:
                         differing++;
                         if (checks.wants_example()) {
                             checks.example(vformat("set %s LOD %d chunk %s (%s) level m=%d point %s channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
-                                    WorldCoord::to_string(chunks[c].id), chunks[c].place, m, WorldCoord::to_string(p_p), ch, got, want, float_bits(got), float_bits(want)));
+                                    godot_str(chunks[c].id), chunks[c].place, m, godot_str(p_p), ch, got, want, float_bits(got), float_bits(want)));
                         }
                     }
                 }
@@ -296,7 +297,7 @@ private:
                 checks.samples_differing++;
                 if (checks.wants_example()) {
                     checks.example(vformat("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
-                            WorldCoord::to_string(chunks[p_chunk].id), WorldCoord::to_string(p_grid), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
+                            godot_str(chunks[p_chunk].id), godot_str(p_grid), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
                 }
                 return;
             }
@@ -338,8 +339,8 @@ private:
                 if (float_bits(flush_value(expect[spec.slot_of_gpu(ch)])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
                     checks.relation_differing++;
                     if (checks.wants_example()) {
-                        checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, WorldCoord::to_string(chunks[p_pair.child].id),
-                                WorldCoord::to_string(p_p), ch));
+                        checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, godot_str(chunks[p_pair.child].id),
+                                godot_str(p_p), ch));
                     }
                     return;
                 }
@@ -408,8 +409,8 @@ void compare_table_chunk(const SDFCascade &p_sdf, const Archetype::InstanceSnaps
         if (!ExactNoise::same_bits(want, ExactNoise::Float4{ g[0], g[1], g[2], g[3] })) {
             r_checks.samples_differing++;
             if (r_checks.wants_example()) {
-                r_checks.example(vformat("LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", p_lod, WorldCoord::to_string(p_id),
-                        WorldCoord::to_string(i), g[0], g[1], g[2], g[3], want.x, want.y, want.z, want.w));
+                r_checks.example(vformat("LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", p_lod, godot_str(p_id),
+                        godot_str(i), g[0], g[1], g[2], g[3], want.x, want.y, want.z, want.w));
             }
         }
     });
@@ -428,7 +429,7 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     const int cs = param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
     const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(param);
+    const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(param));
     const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
     const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
     const RID records = p_rd->storage_buffer_create(uint64_t(table->instance_capacity()) * table->record_size());
@@ -497,7 +498,7 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     const int cs = param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
     const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(param);
+    const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(param));
     const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
     const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
     const RID materials = p_rd->storage_buffer_create(MAX_BATCH * cells * 4);
@@ -544,8 +545,8 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
                 if (g != want) {
                     checks.samples_differing++;
                     if (checks.wants_example()) {
-                        checks.example(vformat("LOD %d chunk %s (%s) sample %s: gpu %d cpu %d", l, WorldCoord::to_string(chunks[c].id), chunks[c].place,
-                                WorldCoord::to_string(i), g, want));
+                        checks.example(vformat("LOD %d chunk %s (%s) sample %s: gpu %d cpu %d", l, godot_str(chunks[c].id), chunks[c].place,
+                                godot_str(i), g, want));
                     }
                 }
             });
@@ -644,7 +645,7 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, in
     const int cs = p_param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
     const RID input = p_rd->storage_buffer_create(TIMING_CHUNKS * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_param);
+    const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(p_param));
     const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
     const RID samples = p_rd->storage_buffer_create(TIMING_CHUNKS * cells * 16);
     std::vector<std::unique_ptr<SDFCascade>> sdfs;
@@ -738,7 +739,7 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     configure_variant(sdf, p_set, p_lods, param);
     const ChunkParam pp = CascadeGLSL::point_param(param);
     const RID input = p_rd->storage_buffer_create(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(pp);
+    const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(pp));
     const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
     const RID values = p_rd->storage_buffer_create(MAX_POINTS * sizeof(float));
     CascadePasses passes;
@@ -786,7 +787,7 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
             if (float_bits(want) != float_bits(got[i])) {
                 lod_differing++;
                 if (examples.size() < 24) {
-                    examples.push_back(vformat("set %s LOD %d point %s: gpu %s cpu %s (bits %x / %x)", set_label(p_set), lod, WorldCoord::to_string(v), got[i], want,
+                    examples.push_back(vformat("set %s LOD %d point %s: gpu %s cpu %s (bits %x / %x)", set_label(p_set), lod, godot_str(v), got[i], want,
                             float_bits(got[i]), float_bits(want)));
                 }
             }

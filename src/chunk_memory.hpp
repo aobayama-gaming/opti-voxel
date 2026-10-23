@@ -1,13 +1,10 @@
 #pragma once
 
 #include "chunk_output.hpp"
-#include "godot_cpp/variant/variant.hpp"
 #include "latency_hist.hpp"
 #include "lod_structures.hpp"
 
 #include <memory>
-
-using namespace godot;
 
 // A stalled chunk: the dirty chunks that have it as nearest loaded ancestor (split rule: it stays), in total and
 // per sub-cube they overlap (ChunkMath::subcube_bits, bit order Subcube::bit).
@@ -23,7 +20,7 @@ struct Stall {
     uint64_t hidden() const { return ~waiting; }
     bool operator==(const Stall &p_o) const;
 };
-using StallMap = HashMap<ChunkId, Stall, Vector3i64Hasher>;
+using StallMap = ov::HashMap<ChunkId, Stall, Vector3i64Hasher>;
 
 // What the main thread knows of the chunks: the scan, the loaded set, and which loaded chunks can go.
 // The destroy rule (a chunk outside the scan goes once nothing still being generated needs it) is kept
@@ -47,13 +44,13 @@ struct VoxelState {
     ChunkHashMap to_destroy_chunk;
 
     // Dirty chunk -> its nearest loaded ancestor, for the dirty chunks that have one.
-    HashMap<ChunkId, ChunkId, Vector3i64Hasher> dirty_anchor;
+    ov::HashMap<ChunkId, ChunkId, Vector3i64Hasher> dirty_anchor;
     // Loaded chunk -> its Stall, for the loaded chunks some dirty chunk has as nearest loaded ancestor.
     StallMap stalled;
     // Loaded and not scanned: the only chunks that can be destroyed.
     LODHashSet leaving;
     // Chunks whose hidden_mask changed (or that were re-meshed into new rows) since push_coverage.
-    HashSet<ChunkId, Vector3i64Hasher> coverage_changed;
+    ov::HashSet<ChunkId, Vector3i64Hasher> coverage_changed;
 
     // The caller's frame counter (VoxelTerrain::_process), for the hand-off latency.
     uint64_t frame = 0;

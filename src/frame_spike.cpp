@@ -1,4 +1,5 @@
 #include "frame_spike.hpp"
+#include "godot_conv.hpp"
 
 #include "biome_features.hpp"
 #include "cascade.hpp"
@@ -595,7 +596,7 @@ struct OriginRun {
 };
 
 String case_str(const Case &p_case) {
-    return vformat("chunk %s grid (%s, %s, %s)", to_string(p_case.chunk), p_case.grid.x, p_case.grid.y, p_case.grid.z);
+    return vformat("chunk %s grid (%s, %s, %s)", godot_str(to_string(p_case.chunk)), p_case.grid.x, p_case.grid.y, p_case.grid.z);
 }
 
 // The LOD0 chunk holding voxel p_voxel, and the vertex-grid coordinate of that voxel in it.
@@ -785,7 +786,7 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_
         Checks &r_checks) {
     const ChunkParam &param = p_run.param;
     const uint32_t *res = reinterpret_cast<const uint32_t *>(p_results.ptr());
-    const String origin = to_string(param.origin_chunk);
+    const String origin = godot_str(to_string(param.origin_chunk));
     std::vector<uint32_t> want(p_words);
     for (size_t i = 0; i < p_run.cases.size(); i++) {
         const Case &c = p_run.cases[i];
@@ -800,13 +801,13 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_
         if (std::memcmp(want_pos, g, sizeof(want_pos)) != 0) {
             r_checks.worldpos_mismatch++;
             r_checks.example(vformat("origin %s %s: WorldPos gpu lo (%d %d %d) hi (%d %d %d) cpu voxel %s frac (%s %s %s)", origin,
-                    case_str(c), g[0], g[1], g[2], as_i32(g[3]), as_i32(g[4]), as_i32(g[5]), to_string(pos.voxel), pos.frac.x,
+                    case_str(c), g[0], g[1], g[2], as_i32(g[3]), as_i32(g[4]), as_i32(g[5]), godot_str(to_string(pos.voxel)), pos.frac.x,
                     pos.frac.y, pos.frac.z));
         }
         if (g[9] != lo32(anchor.x) || g[10] != lo32(anchor.y) || g[11] != lo32(anchor.z)) {
             r_checks.anchor_mismatch++;
             r_checks.example(vformat("origin %s %s: anchor_lo gpu (%d %d %d) cpu %s", origin, case_str(c), g[9], g[10], g[11],
-                    to_string(anchor)));
+                    godot_str(to_string(anchor))));
         }
         uint32_t w = FIXED_WORDS;
         for (size_t k = 0; k < p_probes.size(); k++) {
@@ -820,9 +821,9 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_
                     r_checks.probe_mismatch[p_first + k]++;
                     if (probe.is_float) {
                         r_checks.example(vformat("origin %s %s voxel %s: probe %s[%d] gpu %s cpu %s (bits %x / %x)", origin, case_str(c),
-                                to_string(pos.voxel), probe.name, j, bits_float(g[w + j]), bits_float(want[j]), g[w + j], want[j]));
+                                godot_str(to_string(pos.voxel)), probe.name, j, bits_float(g[w + j]), bits_float(want[j]), g[w + j], want[j]));
                     } else {
-                        r_checks.example(vformat("origin %s %s voxel %s: probe %s[%d] gpu %x cpu %x", origin, case_str(c), to_string(pos.voxel),
+                        r_checks.example(vformat("origin %s %s voxel %s: probe %s[%d] gpu %x cpu %x", origin, case_str(c), godot_str(to_string(pos.voxel)),
                                 probe.name, j, g[w + j], want[j]));
                     }
                     break;
@@ -894,17 +895,17 @@ void check_cpu(Checks &r_checks) {
         const int64_t s = int64_t(1) << lod;
         const bool contained = std::abs(double(c.x - p.x)) + s <= 2 * s && std::abs(double(c.y - p.y)) + s <= 2 * s &&
                 std::abs(double(c.z - p.z)) + s <= 2 * s;
-        expect(contained && parent_lod == lod + 1 && ChunkMath::get_lod(p) == lod + 1, "parent of " + to_string(c) + " is " + to_string(p));
+        expect(contained && parent_lod == lod + 1 && ChunkMath::get_lod(p) == lod + 1, "parent of " + godot_str(to_string(c)) + " is " + godot_str(to_string(p)));
     }
     // chunk_at_render: the render position lies inside the chunk's bounds.
     ChunkParam param;
     param.origin_chunk = ChunkId(int64_t(7) << 31, -(int64_t(3) << 31), int64_t(66523) << 31);
-    const Vector3 m(13.3f, 307.9f, -52.1f);
+    const Float3 m{ 13.3f, 307.9f, -52.1f };
     const ChunkId c = ChunkMath::chunk_at_render(m, param);
-    const Vector3 lo = ChunkMath::grid_to_render(c, Vector3(2, 2, 2), param);
-    const Vector3 hi = ChunkMath::grid_to_render(c, Vector3(30, 30, 30), param);
+    const Float3 lo = ChunkMath::grid_to_render(c, Float3{ 2.0f, 2.0f, 2.0f }, param);
+    const Float3 hi = ChunkMath::grid_to_render(c, Float3{ 30.0f, 30.0f, 30.0f }, param);
     expect(ChunkMath::get_lod(c) == 0 && lo.x <= m.x && m.x < hi.x && lo.y <= m.y && m.y < hi.y && lo.z <= m.z && m.z < hi.z,
-            "chunk_at_render " + to_string(c));
+            "chunk_at_render " + godot_str(to_string(c)));
     // Octave decomposition: floor, negative values, k > 32.
     int64_t cell;
     uint32_t q;
@@ -956,7 +957,7 @@ PackedByteArray dispatch(RenderingDevice *p_rd, RID p_shader, RID p_pipeline, co
         samples.encode_float(i * SAMPLE_BYTES + 40, p_run.cases[i].grid.z);
         samples.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
     }
-    const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(p_run.param);
+    const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(p_run.param));
     const RID buffer_samples = p_rd->storage_buffer_create(samples.size(), samples);
     const RID buffer_results = p_rd->storage_buffer_create(count * p_words * 4);
     const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
@@ -1013,7 +1014,7 @@ void check_relative(const OriginRun &p_run, const std::vector<Probe> &p_probes, 
                     r_checks.relative_points++;
                     if (std::memcmp(g, r_ref.data() + n, probe.words * sizeof(uint32_t)) != 0) {
                         r_checks.relative_mismatch++;
-                        r_checks.example(vformat("origin %s: %s at random point %s differs from the first origin", to_string(p_run.param.origin_chunk),
+                        r_checks.example(vformat("origin %s: %s at random point %s differs from the first origin", godot_str(to_string(p_run.param.origin_chunk)),
                                 probe.name, case_str(p_run.cases[i])));
                     }
                 }
@@ -1063,7 +1064,7 @@ bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector
             r_checks.cross_origin_points++;
             if (std::memcmp(absolute.data() + i * words, absolute_ref.data() + i * words, words * sizeof(uint32_t)) != 0) {
                 r_checks.cross_origin_mismatch++;
-                r_checks.example(vformat("origin %s: absolute point %s differs from origin 0", WorldCoord::to_string(run.param.origin_chunk),
+                r_checks.example(vformat("origin %s: absolute point %s differs from origin 0", godot_str(run.param.origin_chunk),
                         case_str(run.cases[run.absolute_begin + i])));
             }
         }
@@ -1299,7 +1300,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
     records_bytes.resize(count * Archetype::RECORD_BYTES);
     records_bytes.fill(0);
     for (uint32_t i = 0; i < count; i++) {
-        Archetype::encode_record(records_bytes, i, table.records[i]);
+        Archetype::encode_record(records_bytes.ptrw() + int64_t(i) * Archetype::RECORD_BYTES, table.records[i]);
     }
     const RID buffer_records = p_rd->storage_buffer_create(records_bytes.size(), records_bytes);
     PackedByteArray list_bytes;
@@ -1333,7 +1334,7 @@ vec4 terrain_sdf(WorldPos p, int lod) {
             samples_bytes.encode_float(i * SAMPLE_BYTES + 40, run.cases[i].grid.z);
             samples_bytes.encode_float(i * SAMPLE_BYTES + 44, 0.0f);
         }
-        const PackedByteArray param_bytes = GPUFrame::chunk_param_bytes(run.param);
+        const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(run.param));
         const RID buffer_samples = p_rd->storage_buffer_create(samples_bytes.size(), samples_bytes);
         const RID buffer_results = p_rd->storage_buffer_create(uint64_t(n) * words * 4);
         const RID buffer_param = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
@@ -1393,8 +1394,8 @@ vec4 terrain_sdf(WorldPos p, int lod) {
                 if (res[i * words + k] != want[k]) {
                     mismatches++;
                     if (mismatches < 8) {
-                        UtilityFunctions::printerr(vformat("FrameSpike table: origin %s chunk %s: word %d gpu %x cpu %x", to_string(run.param.origin_chunk),
-                                to_string(run.cases[i].chunk), k, res[i * words + k], want[k]));
+                        UtilityFunctions::printerr(vformat("FrameSpike table: origin %s chunk %s: word %d gpu %x cpu %x", godot_str(to_string(run.param.origin_chunk)),
+                                godot_str(to_string(run.cases[i].chunk)), k, res[i * words + k], want[k]));
                     }
                     break;
                 }

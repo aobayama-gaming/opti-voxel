@@ -63,7 +63,7 @@ private:
     uint64_t start_usec = 0;
 
     Ref<Mutex> mutex;
-    HashMap<int, PackedByteArray> page_data; // page -> texture bytes
+    godot::HashMap<int, PackedByteArray> page_data; // page -> texture bytes
     int pages_requested = 0;
     // Pages still to read back. Requested a few per frame: queuing many MB of async texture
     // downloads in one frame overruns the engine's download staging blocks (crashes in 4.6.3).

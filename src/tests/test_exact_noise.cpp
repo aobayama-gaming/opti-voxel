@@ -204,17 +204,17 @@ TEST_CASE("ExactNoise: the fBm gradient at LOD L is exactly 2^L times the one at
 
 TEST_CASE("ExactNoise: gradient_range_error flags factors outside [2^-16, 2^40] at the evaluated LODs") {
     // The fBms the terrains use, up to LOD 24.
-    CHECK(gradient_range_error(fbm2d(), 25).is_empty());
-    CHECK(gradient_range_error(fbm3d(), 25).is_empty());
+    CHECK(gradient_range_error(fbm2d(), 25).empty());
+    CHECK(gradient_range_error(fbm3d(), 25).empty());
     // amp 2^30 at k = 0: 2^40 at LOD 10, 2^41 at LOD 11.
     const OctaveSet steep = make_fbm(false, 1, 0, 1, std::ldexp(1.0, 30), 0.5);
-    CHECK(gradient_range_error(steep, 11).is_empty());
-    CHECK_FALSE(gradient_range_error(steep, 12).is_empty());
+    CHECK(gradient_range_error(steep, 11).empty());
+    CHECK_FALSE(gradient_range_error(steep, 12).empty());
     // amp 1 at k = 20: 2^-20 at LOD 0; amp 16: 2^-16 at LOD 0.
     OctaveSet gentle = make_fbm(true, 1, 20, 1, 1.0, 0.5);
-    CHECK_FALSE(gradient_range_error(gentle, 1).is_empty());
+    CHECK_FALSE(gradient_range_error(gentle, 1).empty());
     gentle.octaves[0].amp = exact_pow2(4);
-    CHECK(gradient_range_error(gentle, 15).is_empty());
+    CHECK(gradient_range_error(gentle, 15).empty());
 }
 
 // Regression guard for the refactors of perlin3 (the cascade's perlin3_cross shares its setup): a
@@ -270,7 +270,7 @@ TEST_CASE("ExactNoise: perlin3_cross extends perlin3 with cross derivatives matc
         const double errors[] = { std::fabs((yp.c[1] - ym.c[1]) * 0.5f * n - c.c[4]), std::fabs((zp.c[1] - zm.c[1]) * 0.5f * n - c.c[5]),
             std::fabs((zp.c[2] - zm.c[2]) * 0.5f * n - c.c[6]), std::fabs((zp.c[4] - zm.c[4]) * 0.5f * n - c.c[7]) };
         for (const double e : errors) {
-            worst = MAX(worst, e);
+            worst = std::max(worst, e);
         }
     }
     MESSAGE("perlin3_cross vs finite differences (per cell, h = 1/64 cell): max error ", worst);

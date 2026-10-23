@@ -8,7 +8,7 @@ using ExactNoise::glsl_float;
 namespace {
 
 String r(Reg p_reg) {
-    return "r" + itos(p_reg);
+    return "r" + godot::itos(p_reg);
 }
 
 String flat_vec(const String &p_value) {
@@ -62,18 +62,18 @@ String statement(const Program &p_program, int p_i) {
     const Instr &in = p_program.code[p_i];
     String out = "    precise vec4 " + r(p_i) + " = ";
     String a = in.a >= 0 ? r(in.a) : String();
-    String id = itos(p_i);
+    String id = godot::itos(p_i);
     switch (in.op) {
         case Op::CONST:
             return out + flat_vec(glsl_float(in.value)) + ";\n";
         case Op::PARAM:
             return out + flat_vec(glsl_float(p_program.params[in.index])) + ";\n";
         case Op::T_PARAM:
-            return out + flat_vec("rec.params[" + itos(in.index) + "]") + ";\n";
+            return out + flat_vec("rec.params[" + godot::itos(in.index) + "]") + ";\n";
         case Op::T_INPUT: {
             // Mirror of eval_special's T_INPUT: sat_diff on the record's anchor, the full rotation.
-            const String row = "rec.rot[" + itos(in.axis) + "]";
-            return "    precise ivec3 d" + id + " = sat_diff(p, rec.anchor_lo.xyz, rec.anchor_hi.xyz, " + itos(INPUT_LIMIT) + ");\n" +
+            const String row = "rec.rot[" + godot::itos(in.axis) + "]";
+            return "    precise ivec3 d" + id + " = sat_diff(p, rec.anchor_lo.xyz, rec.anchor_hi.xyz, " + godot::itos(INPUT_LIMIT) + ");\n" +
                     "    precise float qx" + id + " = float(d" + id + ".x) + p.frac.x;\n" +
                     "    precise float qy" + id + " = float(d" + id + ".y) + p.frac.y;\n" +
                     "    precise float qz" + id + " = float(d" + id + ".z) + p.frac.z;\n" + out + "vec4(s * " + row + ".x, s * " + row +
@@ -84,7 +84,7 @@ String statement(const Program &p_program, int p_i) {
             const char *axis = in.axis == 0 ? "x" : (in.axis == 1 ? "y" : "z");
             String g = in.axis == 0 ? "s, 0.0, 0.0" : (in.axis == 1 ? "0.0, s, 0.0" : "0.0, 0.0, s");
             return out + "vec4(" + g + ", float(sat_diff(p, " + ExactNoise::glsl_lo(anchor) + ", " + ExactNoise::glsl_hi(anchor) + ", " +
-                    itos(INPUT_LIMIT) + ")." + axis + ") + p.frac." + axis + ");\n";
+                    godot::itos(INPUT_LIMIT) + ")." + axis + ") + p.frac." + axis + ");\n";
         }
         case Op::MIN:
             return out + r(in.b) + ".w < " + a + ".w ? " + r(in.b) + " : " + a + ";\n";

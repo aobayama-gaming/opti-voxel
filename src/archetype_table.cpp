@@ -3,6 +3,8 @@
 #include "chunk_palette.hpp"
 #include "sdf_base.hpp"
 
+#include "ov/bytes.hpp"
+
 #include <cmath>
 #include <cstring>
 
@@ -40,14 +42,14 @@ void RecordStore::push_back(const TableRecord &p_record, uint32_t p_version) {
     }
     Page &page = own(uint32_t(pages.size() - 1));
     page.r.push_back(p_record);
-    page.version = MAX(page.version, p_version);
+    page.version = std::max(page.version, p_version);
     count++;
 }
 
 void RecordStore::set(uint32_t p_i, const TableRecord &p_record, uint32_t p_version) {
     Page &page = own(p_i / PAGE);
     page.r[p_i % PAGE] = p_record;
-    page.version = MAX(page.version, p_version);
+    page.version = std::max(page.version, p_version);
 }
 
 void RecordStore::changed_since(uint32_t p_version, std::vector<std::pair<uint32_t, uint32_t>> &r_runs) const {
@@ -57,7 +59,7 @@ void RecordStore::changed_since(uint32_t p_version, std::vector<std::pair<uint32
             continue;
         }
         const uint32_t first = p * PAGE;
-        const uint32_t end = MIN(count, (p + 1) * PAGE);
+        const uint32_t end = std::min(count, (p + 1) * PAGE);
         if (!r_runs.empty() && r_runs.back().first + r_runs.back().second == first) {
             r_runs.back().second = end - r_runs.back().first;
         } else {
@@ -74,7 +76,7 @@ int DefLibrary::add(const TableDefPtr &p_def, uint32_t p_material) {
 
 int influence_margin(const TableRecord &p_record, int p_lod) {
     // Clamped before the conversion: a float above INT_MAX converts to anything (CPU) or saturates (GPU).
-    const float m = MIN(p_record.k + p_record.margin_c * exact_pow2(p_lod), float(INPUT_LIMIT));
+    const float m = std::min(p_record.k + p_record.margin_c * exact_pow2(p_lod), float(INPUT_LIMIT));
     return int(std::ceil(m)) + 2;
 }
 
@@ -85,9 +87,9 @@ double band_radius(const TableDef &p_def, const TableRecord &p_record) {
     Float3 lo{}, hi{};
     float lipschitz = 1.0f;
     p_def.bounds(p_record.params, lo, hi, lipschitz);
-    double side = MIN(MIN(double(hi.x) - double(lo.x), double(hi.y) - double(lo.y)), double(hi.z) - double(lo.z)) + 2.0 * rotation_margin(lo, hi);
+    double side = std::min(std::min(double(hi.x) - double(lo.x), double(hi.y) - double(lo.y)), double(hi.z) - double(lo.z)) + 2.0 * rotation_margin(lo, hi);
     for (int a = 0; a < 3; a++) {
-        side = MIN(side, double(p_record.box_hi[a]) - double(p_record.box_lo[a]));
+        side = std::min(side, double(p_record.box_hi[a]) - double(p_record.box_lo[a]));
     }
     return 0.5 * side;
 }
@@ -153,33 +155,32 @@ bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_
     return true;
 }
 
-void encode_record(PackedByteArray &r_bytes, uint32_t p_index, const TableRecord &p_record) {
+void encode_record(uint8_t *r_slot, const TableRecord &p_record) {
     using namespace WorldCoord;
-    const int64_t base = int64_t(p_index) * RECORD_BYTES;
-    r_bytes.encode_u32(base + 0, p_record.def);
-    r_bytes.encode_u32(base + 4, uint32_t(p_record.op));
-    r_bytes.encode_float(base + 8, p_record.k);
-    r_bytes.encode_float(base + 12, p_record.inv_k);
-    r_bytes.encode_u32(base + 16, lo32(p_record.anchor.x));
-    r_bytes.encode_u32(base + 20, lo32(p_record.anchor.y));
-    r_bytes.encode_u32(base + 24, lo32(p_record.anchor.z));
-    r_bytes.encode_u32(base + 28, p_record.salt);
-    r_bytes.encode_s32(base + 32, hi32(p_record.anchor.x));
-    r_bytes.encode_s32(base + 36, hi32(p_record.anchor.y));
-    r_bytes.encode_s32(base + 40, hi32(p_record.anchor.z));
-    r_bytes.encode_float(base + 44, p_record.erode_from);
+    ov::put_u32(r_slot + 0, p_record.def);
+    ov::put_u32(r_slot + 4, uint32_t(p_record.op));
+    ov::put_f32(r_slot + 8, p_record.k);
+    ov::put_f32(r_slot + 12, p_record.inv_k);
+    ov::put_u32(r_slot + 16, lo32(p_record.anchor.x));
+    ov::put_u32(r_slot + 20, lo32(p_record.anchor.y));
+    ov::put_u32(r_slot + 24, lo32(p_record.anchor.z));
+    ov::put_u32(r_slot + 28, p_record.salt);
+    ov::put_s32(r_slot + 32, hi32(p_record.anchor.x));
+    ov::put_s32(r_slot + 36, hi32(p_record.anchor.y));
+    ov::put_s32(r_slot + 40, hi32(p_record.anchor.z));
+    ov::put_f32(r_slot + 44, p_record.erode_from);
     for (int i = 0; i < 9; i++) {
-        r_bytes.encode_float(base + 48 + (i / 3) * 16 + (i % 3) * 4, p_record.rotation[i]);
+        ov::put_f32(r_slot + 48 + (i / 3) * 16 + (i % 3) * 4, p_record.rotation[i]);
     }
     for (int i = 0; i < 8; i++) {
-        r_bytes.encode_float(base + 96 + i * 4, p_record.params[i]);
+        ov::put_f32(r_slot + 96 + i * 4, p_record.params[i]);
     }
     for (int i = 0; i < 3; i++) {
-        r_bytes.encode_s32(base + 128 + i * 4, p_record.box_lo[i]);
-        r_bytes.encode_s32(base + 144 + i * 4, p_record.box_hi[i]);
+        ov::put_s32(r_slot + 128 + i * 4, p_record.box_lo[i]);
+        ov::put_s32(r_slot + 144 + i * 4, p_record.box_hi[i]);
     }
-    r_bytes.encode_float(base + 140, p_record.margin_c);
-    r_bytes.encode_float(base + 156, p_record.erode);
+    ov::put_f32(r_slot + 140, p_record.margin_c);
+    ov::put_f32(r_slot + 156, p_record.erode);
 }
 
 // ---- the fold ----
@@ -305,7 +306,7 @@ Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_no
     }
     const float n2 = p_out.x * p_out.x + p_out.y * p_out.y + p_out.z * p_out.z;
     const float s = exact_pow2(p_lod);
-    const float gr = ExactNoise::det_rsqrt(MAX(n2, exact_pow2(GRAD_FLOOR_EXP) * s * s));
+    const float gr = ExactNoise::det_rsqrt(std::max(n2, exact_pow2(GRAD_FLOOR_EXP) * s * s));
     return Float4{ p_out.x * gr, p_out.y * gr, p_out.z * gr, v };
 }
 
@@ -387,7 +388,7 @@ vec4 arch_moments(vec4 r, vec4 phi, int lod, uint best, inout uint material) {
 String generate_library_glsl(const DefLibrary &p_library) {
     String code = "// Archetype library: one function per type, reading the instance's DefRecord.\n";
     for (int i = 0; i < p_library.size(); i++) {
-        code += generate_def_glsl(p_library[i].program, "arch_" + itos(i), false);
+        code += generate_def_glsl(p_library[i].program, "arch_" + godot::itos(i), false);
         code += "\n";
     }
     return code;
@@ -538,7 +539,7 @@ TableDefPtr make_branch_type() {
     const Reg r = b.sub(len, b.add(b.t_param(1), b.mul(b.t_param(2), yc)));
     std::shared_ptr<TableDef> d = make_def("branch", 3, b, r);
     d->bounds = [](const float *p, Float3 &r_lo, Float3 &r_hi, float &r_l) {
-        const float rad = MAX(p[1], p[1] + p[2] * p[0]);
+        const float rad = std::max(p[1], p[1] + p[2] * p[0]);
         r_lo = Float3{ -rad, -rad, -rad };
         r_hi = Float3{ rad, p[0] + rad, rad };
         r_l = 1.0f + 0.5f * p[2] * p[2];
@@ -868,7 +869,7 @@ String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int6
     }
     // Any rotation keeps the box inside the sphere through its farthest corner.
     double reach2 = 0.0;
-    const float far[3] = { MAX(std::fabs(lo.x), std::fabs(hi.x)), MAX(std::fabs(lo.y), std::fabs(hi.y)), MAX(std::fabs(lo.z), std::fabs(hi.z)) };
+    const float far[3] = { std::max(std::fabs(lo.x), std::fabs(hi.x)), std::max(std::fabs(lo.y), std::fabs(hi.y)), std::max(std::fabs(lo.z), std::fabs(hi.z)) };
     for (float f : far) {
         reach2 += double(f) * double(f);
     }

@@ -1,8 +1,5 @@
 #pragma once
 
-#include <godot_cpp/variant/dictionary.hpp>
-#include <godot_cpp/variant/variant.hpp>
-
 #include <algorithm>
 #include <cstdint>
 
@@ -59,16 +56,6 @@ public:
         return largest;
     }
     void clear() { *this = LatencyHist(); }
-
-    // { count, p50, p95, max }, the reports' form.
-    godot::Dictionary to_dict() const {
-        godot::Dictionary d;
-        d["count"] = int64_t(n);
-        d["p50"] = int64_t(percentile(0.5));
-        d["p95"] = int64_t(percentile(0.95));
-        d["max"] = int64_t(largest);
-        return d;
-    }
 
 private:
     uint64_t counts[BUCKETS] = {};

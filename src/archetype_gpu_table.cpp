@@ -3,6 +3,7 @@
 #include "chunk_palette.hpp"
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
+#include "ov/bytes.hpp"
 #include "page_format.hpp"
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
@@ -83,16 +84,14 @@ PackedByteArray GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor 
     bytes.resize(total);
     bytes.encode_u32(0, uint32_t(spans.size()));
     int64_t at = 4;
-    PackedByteArray span;
     for (const Span &sp : spans) {
         bytes.encode_u32(at, sp.first * RECORD_BYTES);
         bytes.encode_u32(at + 4, sp.count * RECORD_BYTES);
-        span.resize(int64_t(sp.count) * RECORD_BYTES);
+        uint8_t *out = bytes.ptrw() + at + 8;
         for (uint32_t i = 0; i < sp.count; i++) {
-            encode_record(span, i, sp.flat ? sp.flat[i] : s->records[sp.first + i]);
+            encode_record(out + size_t(i) * RECORD_BYTES, sp.flat ? sp.flat[i] : s->records[sp.first + i]);
         }
-        std::memcpy(bytes.ptrw() + at + 8, span.ptr(), span.size());
-        at += 8 + span.size();
+        at += 8 + int64_t(sp.count) * RECORD_BYTES;
     }
     return bytes;
 }

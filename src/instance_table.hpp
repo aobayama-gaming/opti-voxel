@@ -3,9 +3,7 @@
 #include "archetype_table.hpp"
 #include "chunk_math.hpp"
 
-#include <godot_cpp/templates/hash_map.hpp>
-#include <godot_cpp/templates/hash_set.hpp>
-
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -90,7 +88,7 @@ struct InstanceSnapshot {
     uint32_t base_count = 0;
     std::shared_ptr<const IndexLayer> overlay; // over overlay_ids, their current state
     std::vector<uint32_t> overlay_ids; // sorted: every record edited (added, moved, removed) since the base
-    HashSet<uint32_t> masked; // the base ids among overlay_ids: their base entries are stale
+    size_t masked_end = 0; // overlay_ids[0, masked_end) are base ids: their base entries are stale
 
     static constexpr uint32_t REBASE = 2048;
 
@@ -134,7 +132,7 @@ std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_
         const std::vector<uint32_t> &p_changed, uint32_t p_version);
 
 // When the base is rebuilt: edit() is edit_snapshot plus, past `rebase` edited ids, a new base built in one
-// WorkerThreadPool task over the records as they are then (copy on write keeps them unchanged), while later edits
+// background task (std::async) over the records as they are then (copy on write keeps them unchanged), while later edits
 // grow the overlay and are logged; once ready(), take() gives the records now over that base plus an overlay of the
 // ids changed since: the same lists as a whole new base. Main thread only, except the task itself.
 class BaseRebuild {
@@ -149,7 +147,7 @@ public:
 
     std::shared_ptr<const InstanceSnapshot> edit(const InstanceSnapshot &p_previous, RecordStore p_records,
             const std::vector<uint32_t> &p_changed, uint32_t p_version);
-    bool running() const { return task >= 0; }
+    bool running() const { return task.valid(); }
     bool ready() const;
     // Waits for the task if it isn't done (null and ERR if none runs). p_like gives the snapshot's fields, p_records
     // and p_version the table now: the version is kept, the records didn't change (nothing re-uploaded or re-meshed).
@@ -159,12 +157,11 @@ public:
 
 private:
     void start(std::shared_ptr<const InstanceSnapshot> p_from);
-    static void _run(void *p_self);
     void wait();
 
     const uint32_t rebase;
     const uint32_t hard_overlay;
-    int64_t task = -1;
+    std::future<void> task;
     std::shared_ptr<const InstanceSnapshot> from; // the records the base indexes
     std::shared_ptr<const IndexLayer> layer;
     std::vector<uint32_t> changed; // since start(), unsorted, may repeat

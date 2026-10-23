@@ -12,7 +12,7 @@ int64_t forest_cell_side(int p_count, double p_area_m, double p_voxel) {
     if (p_count <= 0 || !(p_area_m > 0.0)) {
         return 0;
     }
-    return MAX<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
+    return std::max<int64_t>(1, std::llround(p_area_m / std::sqrt(double(p_count)) / p_voxel));
 }
 
 int site_lod(int64_t p_side) {
@@ -129,7 +129,7 @@ struct WalkCell {
 // its centre crosses it (plane_meets). Every node meeting the box when the walk would start at p_stop_level or below (no
 // reading: their centres' fields are left unset).
 std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const FieldFn &p_field, int p_min_level, int p_stop_level = 0) {
-    int level = MAX(walk_level(p_box, p_side), MIN(p_min_level, 62));
+    int level = std::max(walk_level(p_box, p_side), std::min(p_min_level, 62));
     if (p_stop_level > 0 && level <= p_stop_level) {
         std::vector<WalkCell> all;
         for (const VoxelPos &n : nodes_meeting(p_box, p_side << p_stop_level)) {
@@ -173,7 +173,7 @@ std::vector<WalkCell> surface_cells(const VoxelBox &p_box, int64_t p_side, const
 int walk_level(const VoxelBox &p_box, int64_t p_side) {
     int64_t extent = 1;
     for (int a = 0; a < 3; a++) {
-        extent = MAX(extent, p_box.hi[a] - p_box.lo[a] + 1);
+        extent = std::max(extent, p_box.hi[a] - p_box.lo[a] + 1);
     }
     int level = 0; // p_side << level >= extent, without overflowing
     while (level < 62 && ((extent - 1) >> level) >= p_side) {

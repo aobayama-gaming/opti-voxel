@@ -1,9 +1,15 @@
 #pragma once
 
 #include "chunk_math.hpp"
+#include "ov/bytes.hpp"
 
+// The byte layouts are engine-free (ov::bytes); the GLSL text builders (glsl_functions, glsl_int64)
+// still speak godot's String until the GLSL text pipeline converts as one unit.
+#include <godot_cpp/core/error_macros.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
+
+using godot::String;
 
 // The integer frame (world_coord.hpp) on the GPU, shared by both meshers and the FrameSpike harness.
 //
@@ -28,38 +34,41 @@ static constexpr uint32_t CHUNK_INPUT_BYTES = 32;
 static constexpr uint32_t CHUNK_LIST_OFFSET_AT = 12;
 static constexpr uint32_t CHUNK_LIST_COUNT_AT = 28;
 
-inline PackedByteArray chunk_param_bytes(const ChunkParam &p_param) {
+inline ov::bytes chunk_param_bytes(const ChunkParam &p_param) {
     using namespace WorldCoord;
     const VoxelPos origin = p_param.origin_voxel();
-    PackedByteArray bytes;
-    bytes.resize(CHUNK_PARAM_BYTES);
-    bytes.fill(0);
-    bytes.encode_s32(0, p_param.chunk_size);
-    bytes.encode_float(4, p_param.voxel_size);
-    bytes.encode_s32(8, p_param.skirt_size);
-    bytes.encode_float(12, p_param.skirt_depth);
-    bytes.encode_u32(16, lo32(origin.x));
-    bytes.encode_u32(20, lo32(origin.y));
-    bytes.encode_u32(24, lo32(origin.z));
-    bytes.encode_s32(32, hi32(origin.x));
-    bytes.encode_s32(36, hi32(origin.y));
-    bytes.encode_s32(40, hi32(origin.z));
+    ov::bytes bytes(CHUNK_PARAM_BYTES, 0);
+    ov::put_s32(bytes.data() + 0, p_param.chunk_size);
+    ov::put_f32(bytes.data() + 4, p_param.voxel_size);
+    ov::put_s32(bytes.data() + 8, p_param.skirt_size);
+    ov::put_f32(bytes.data() + 12, p_param.skirt_depth);
+    ov::put_u32(bytes.data() + 16, lo32(origin.x));
+    ov::put_u32(bytes.data() + 20, lo32(origin.y));
+    ov::put_u32(bytes.data() + 24, lo32(origin.z));
+    ov::put_s32(bytes.data() + 32, hi32(origin.x));
+    ov::put_s32(bytes.data() + 36, hi32(origin.y));
+    ov::put_s32(bytes.data() + 40, hi32(origin.z));
     return bytes;
 }
 
-// Writes chunk p_index of a ChunkInput array (r_bytes must hold it).
-inline void encode_chunk_input(PackedByteArray &r_bytes, int64_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
+// Writes one ChunkInput (CHUNK_INPUT_BYTES) at r_slot. THE one layout of the GPU's ChunkInput.
+inline void encode_chunk_input(uint8_t *r_slot, const ChunkId &p_chunk, const ChunkParam &p_param) {
     using namespace WorldCoord;
     const VoxelPos anchor = ChunkMath::chunk_min_voxel(p_chunk, p_param);
-    const int64_t base = p_index * CHUNK_INPUT_BYTES;
-    r_bytes.encode_u32(base + 0, lo32(p_chunk.x));
-    r_bytes.encode_u32(base + 4, lo32(p_chunk.y));
-    r_bytes.encode_u32(base + 8, lo32(p_chunk.z));
-    r_bytes.encode_u32(base + CHUNK_LIST_OFFSET_AT, 0);
-    r_bytes.encode_s32(base + 16, hi32(anchor.x));
-    r_bytes.encode_s32(base + 20, hi32(anchor.y));
-    r_bytes.encode_s32(base + 24, hi32(anchor.z));
-    r_bytes.encode_s32(base + CHUNK_LIST_COUNT_AT, 0);
+    ov::put_u32(r_slot + 0, lo32(p_chunk.x));
+    ov::put_u32(r_slot + 4, lo32(p_chunk.y));
+    ov::put_u32(r_slot + 8, lo32(p_chunk.z));
+    ov::put_u32(r_slot + CHUNK_LIST_OFFSET_AT, 0);
+    ov::put_s32(r_slot + 16, hi32(anchor.x));
+    ov::put_s32(r_slot + 20, hi32(anchor.y));
+    ov::put_s32(r_slot + 24, hi32(anchor.z));
+    ov::put_s32(r_slot + CHUNK_LIST_COUNT_AT, 0);
+}
+
+// Chunk p_index of a batch's PackedByteArray.
+inline void encode_chunk_input(godot::PackedByteArray &r_bytes, int64_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
+    ERR_FAIL_COND_MSG(p_index < 0 || (p_index + 1) * CHUNK_INPUT_BYTES > r_bytes.size(), "encode_chunk_input: chunk past the batch buffer.");
+    encode_chunk_input(r_bytes.ptrw() + p_index * CHUNK_INPUT_BYTES, p_chunk, p_param);
 }
 
 } // namespace GPUFrame

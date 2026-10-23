@@ -8,6 +8,7 @@ namespace Archetype {
 using ExactNoise::det_rsqrt;
 using ExactNoise::exact_pow2;
 using ExactNoise::float_bits;
+using ov::format;
 
 namespace {
 
@@ -27,7 +28,7 @@ bool finite_not_denormal(float p_f) {
 // (GLSL: inv_grad_length in archetype_glsl.cpp).
 float inv_grad_length(const Float4 &p_v, float p_s) {
     const float n2 = p_v.x * p_v.x + p_v.y * p_v.y + p_v.z * p_v.z;
-    return det_rsqrt(MAX(n2, exact_pow2(GRAD_FLOOR_EXP) * p_s * p_s));
+    return det_rsqrt(std::max(n2, exact_pow2(GRAD_FLOOR_EXP) * p_s * p_s));
 }
 
 // ADD, SUB, MUL, NEG, ABS: the dual-number rules, flat operands' terms skipped (GLSL: emit_arith).
@@ -254,12 +255,12 @@ int Program::cost() const {
     return total;
 }
 
-String Program::validate(int p_lod_count) const {
+ov::str Program::validate(int p_lod_count) const {
     if (code.empty() || code.size() > size_t(MAX_REGISTERS)) {
-        return vformat("Archetype: %d instructions (1 to %d).", int64_t(code.size()), MAX_REGISTERS);
+        return format("Archetype: %d instructions (1 to %d).", int64_t(code.size()), MAX_REGISTERS);
     }
     if (output < 0 || output >= Reg(code.size())) {
-        return vformat("Archetype: output register %d out of range.", output);
+        return format("Archetype: output register %d out of range.", output);
     }
     if (!finite_not_denormal(out_scale) || out_scale == 0.0f) {
         return "Archetype: out_scale must be a normal float.";
@@ -267,54 +268,54 @@ String Program::validate(int p_lod_count) const {
     for (Reg i = 0; i < Reg(code.size()); i++) {
         const Instr &in = code[i];
         if (uint8_t(in.op) > uint8_t(Op::T_PERLIN2)) {
-            return vformat("Archetype: instruction %d: unknown op %d.", i, int(in.op));
+            return format("Archetype: instruction %d: unknown op %d.", i, int(in.op));
         }
         const Reg operands[4] = { in.a, in.b, in.c, in.d };
         for (int j = 0; j < op_arity(in.op); j++) {
             if (operands[j] < 0 || operands[j] >= i) {
-                return vformat("Archetype: instruction %d reads register %d (not computed before it).", i, operands[j]);
+                return format("Archetype: instruction %d reads register %d (not computed before it).", i, operands[j]);
             }
         }
         if (in.flat != is_flat(in, code)) {
-            return vformat("Archetype: instruction %d has a wrong flat flag.", i);
+            return format("Archetype: instruction %d has a wrong flat flag.", i);
         }
         if (in.op == Op::INPUT && (in.axis > 2 || in.index < 0 || in.index >= int(anchors.size()))) {
-            return vformat("Archetype: instruction %d: bad input axis or anchor.", i);
+            return format("Archetype: instruction %d: bad input axis or anchor.", i);
         }
         if (in.op == Op::PARAM && (in.index < 0 || in.index >= int(params.size()))) {
-            return vformat("Archetype: instruction %d: parameter %d out of range.", i, in.index);
+            return format("Archetype: instruction %d: parameter %d out of range.", i, in.index);
         }
         if (in.op == Op::T_INPUT && in.axis > 2) {
-            return vformat("Archetype: instruction %d: bad table input axis.", i);
+            return format("Archetype: instruction %d: bad table input axis.", i);
         }
         if (in.op == Op::T_PARAM && (in.index < 0 || in.index >= 8)) {
-            return vformat("Archetype: instruction %d: table parameter %d out of range (0 to 7).", i, in.index);
+            return format("Archetype: instruction %d: table parameter %d out of range (0 to 7).", i, in.index);
         }
         if (in.op == Op::DIST && code[in.a].flat) {
-            return vformat("Archetype: instruction %d: DIST of a flat register.", i);
+            return format("Archetype: instruction %d: DIST of a flat register.", i);
         }
         if (in.op == Op::RSQRT) {
             // det_rsqrt reads the bits: a zero would give different non-zero results for -0 and +0.
             const Instr &g = code[in.a];
             auto positive = [&](Reg p_r) { return code[p_r].op == Op::CONST && code[p_r].value > 0.0f; };
             if (g.op != Op::MAX || !(positive(g.a) || positive(g.b))) {
-                return vformat("Archetype: instruction %d: RSQRT of a register that isn't max(x, c > 0).", i);
+                return format("Archetype: instruction %d: RSQRT of a register that isn't max(x, c > 0).", i);
             }
         }
         if ((in.op == Op::CONST || in.op == Op::PERLIN3 || in.op == Op::PERLIN2 || in.op == Op::T_PERLIN3 || in.op == Op::T_PERLIN2) &&
                 !finite_not_denormal(in.value)) {
-            return vformat("Archetype: instruction %d: constant %s is denormal or not finite.", i, in.value);
+            return format("Archetype: instruction %d: constant %s is denormal or not finite.", i, in.value);
         }
         if (in.op == Op::PERLIN3 || in.op == Op::PERLIN2 || in.op == Op::T_PERLIN3 || in.op == Op::T_PERLIN2) {
             ExactNoise::OctaveSet set;
             set.octaves.push_back(ExactNoise::Octave{ in.k, in.seed, in.offset, in.value });
             if (in.k < 0 || in.k > ExactNoise::MAX_K || !ExactNoise::in_exact_range(in.value)) {
-                return vformat("Archetype: instruction %d: noise k=%d amplitude %s out of range.", i, in.k, in.value);
+                return format("Archetype: instruction %d: noise k=%d amplitude %s out of range.", i, in.k, in.value);
             }
             // Only at the LODs the band rule evaluates it at.
-            const String error = ExactNoise::gradient_range_error(set, MIN(p_lod_count, in.k - ExactNoise::BAND_SHIFT + 1));
-            if (!error.is_empty()) {
-                return vformat("Archetype: instruction %d: ", i) + error;
+            const ov::str error = ExactNoise::gradient_range_error(set, std::min(p_lod_count, in.k - ExactNoise::BAND_SHIFT + 1));
+            if (!error.empty()) {
+                return format("Archetype: instruction %d: ", i) + error;
             }
         }
     }
@@ -330,7 +331,7 @@ String Program::validate(int p_lod_count) const {
             }
         }
     }
-    return String();
+    return ov::str();
 }
 
 void run_registers(const Program &p_program, const WorldPos &p_pos, int p_lod, std::vector<Float4> &r_regs, const DefRecord *p_record) {

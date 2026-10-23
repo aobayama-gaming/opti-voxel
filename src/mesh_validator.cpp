@@ -1,4 +1,5 @@
 #include "mesh_validator.hpp"
+#include "godot_conv.hpp"
 
 #include "GPU_mesher.hpp"
 #include "debug_log.hpp"
@@ -9,6 +10,7 @@
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
+#include <godot_cpp/templates/hash_set.hpp>
 
 #include <cmath>
 
@@ -56,7 +58,7 @@ void write_obj(const String &p_path, const std::vector<Tri> &p_tris, const Chunk
     ERR_FAIL_COND(f.is_null());
     for (const Tri &t : p_tris) {
         for (int k = 0; k < 3; k++) {
-            const Vector3 p = ChunkMath::grid_to_render(p_chunk, t.p[k], p_param);
+            const Vector3 p = godot_v3(ChunkMath::grid_to_render(p_chunk, Float3{ t.p[k].x, t.p[k].y, t.p[k].z }, p_param));
             f->store_line(vformat("v %f %f %f", p.x, p.y, p.z));
         }
     }
@@ -101,7 +103,7 @@ void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, 
     // Same vertex placement as the direct side, or every triangle mismatches (two copies of one
     // function: see gpu_glsl.hpp).
     legacy->set_dual_contouring(p_dual_contouring);
-    legacy->initialize(sdf, chunk_param, MAX((int)targets.size(), 1), p_lod_numbers, legacy_scenario);
+    legacy->initialize(sdf, chunk_param, std::max((int)targets.size(), 1), p_lod_numbers, legacy_scenario);
     legacy->set_trim_indices(true);
     LODHashSet chunks;
     chunks.max_lod = p_lod_numbers;
@@ -111,7 +113,7 @@ void MeshValidator::start(const std::vector<Target> &p_targets, SDFBase *p_sdf, 
     legacy->send_chunk(chunks, ScanView()); // no view: LOD order
 
     // Direct side: read back every page holding a target.
-    HashSet<int> pages;
+    godot::HashSet<int> pages;
     for (const Target &t : targets) {
         pages.insert(t.page);
     }
@@ -177,8 +179,8 @@ void MeshValidator::_release_legacy() {
     if (!legacy) {
         return;
     }
-    for (KeyValue<ChunkId, ChunkOutput> &kv : legacy_state.loaded_chunk) {
-        kv.value.free();
+    for (auto &kv : legacy_state.loaded_chunk) {
+        kv.second.free();
     }
     legacy_state.loaded_chunk.clear();
     legacy->stop();
@@ -236,8 +238,8 @@ void MeshValidator::_compare() {
         }
         Dictionary a;
         a["kind"] = p_kind;
-        a["chunk"] = WorldCoord::to_string(p_chunk);
-        a["centroid"] = ChunkMath::grid_to_render(p_chunk, c, chunk_param);
+        a["chunk"] = godot_str(p_chunk);
+        a["centroid"] = godot_v3(ChunkMath::grid_to_render(p_chunk, ov_f3(c), chunk_param));
         a["min_abs_sdf_cells"] = near_zero;
         a["extra"] = p_extra;
         anomalies.push_back(a);
@@ -250,7 +252,7 @@ void MeshValidator::_compare() {
         const float lod_size = float(ChunkMath::get_lod_size(t.chunk_id));
         const float cell = chunk_param.voxel_size * lod_size;
         const float tol = 0.02f + 1e-4f / cell;
-        const Vector3i chunk_lo = WorldCoord::lo32_i(t.chunk_id);
+        const ov::ivec3 chunk_lo = WorldCoord::lo32_i(t.chunk_id);
 
         // --- direct triangles from the page texture: 4 corners per quad, triangles A,B,D / A,D,C
         std::vector<Tri> direct;
@@ -274,8 +276,8 @@ void MeshValidator::_compare() {
                 uint32_t m[4];
                 for (int k = 0; k < 4; k++) {
                     const uint16_t *c = PageFormat::corner(page, q, k);
-                    p[k] = PageFormat::decode_local(c, scale);
-                    n[k] = PageFormat::is_zero(c) ? Vector3() : PageFormat::decode_normal(c);
+                    p[k] = godot_v3(PageFormat::decode_local(c, scale));
+                    n[k] = PageFormat::is_zero(c) ? Vector3() : godot_v3(PageFormat::decode_normal(c));
                     const uint32_t index = PageFormat::decode_palette(c);
                     m[k] = index < palette.size() ? palette[index] : UINT32_MAX; // out of the palette: never matches
                 }
@@ -474,7 +476,7 @@ void MeshValidator::_compare() {
 
         if (!exact) {
             Dictionary c;
-            c["chunk"] = WorldCoord::to_string(t.chunk_id);
+            c["chunk"] = godot_str(t.chunk_id);
             c["lod"] = ChunkMath::get_lod(t.chunk_id);
             c["legacy_tris"] = (int64_t)legacy_tris.size();
             c["direct_tris"] = (int64_t)direct.size();

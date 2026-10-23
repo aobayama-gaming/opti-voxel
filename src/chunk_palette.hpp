@@ -33,7 +33,7 @@ inline bool has_ground_materials(const std::vector<uint32_t> &p_base) {
     return p_base.size() > 1;
 }
 // The meshers' vertex passes' view of a base palette: PALETTE_BASE_ENTRIES (its length) and GROUND_MATERIALS.
-String glsl_base(const std::vector<uint32_t> &p_base);
+godot::String glsl_base(const std::vector<uint32_t> &p_base);
 
 } // namespace ChunkPalette
 

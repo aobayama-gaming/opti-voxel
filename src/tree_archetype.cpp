@@ -260,7 +260,7 @@ private:
             }
             sum = keep_thick();
         }
-        r_end = MAX(MIN(std::sqrt(MAX(p_stem.r0 * p_stem.r0 - sum, 0.0)), s.end_ratio * p_stem.r0), s.tip_ratio * p_stem.r0);
+        r_end = std::max(std::min(std::sqrt(std::max(p_stem.r0 * p_stem.r0 - sum, 0.0)), s.end_ratio * p_stem.r0), s.tip_ratio * p_stem.r0);
         return forks;
     }
 
@@ -277,7 +277,7 @@ private:
         const Joint root{ p_stem.p0, 0.0 };
         const Joint tip{ snap(p_stem.p0 + p_stem.dir * p_stem.length), 1.0 };
         std::vector<Joint> joints{ root };
-        refine(p_stem, radius_at, root, tip, 1u, MAX(MAX_REFINE - p_stem.order, 0), joints);
+        refine(p_stem, radius_at, root, tip, 1u, std::max(MAX_REFINE - p_stem.order, 0), joints);
 
         if (p_stem.order == 0 && s.cone_tiers > 0) {
             trunk_joints = joints;
@@ -313,7 +313,7 @@ private:
             child.p0 = snap(point_at(joints, f.t));
             child.dir = turn(direction_at(joints, f.t), f.angle, f.azimuth);
             child.length = f.length;
-            child.r0 = MIN(f.r, radius_at(f.t)); // never thicker than the parent where it forks
+            child.r0 = std::min(f.r, radius_at(f.t)); // never thicker than the parent where it forks
             child.path = f.path;
             child.seq = ++seq;
             if (child.r0 >= MIN_RADIUS) {
@@ -338,7 +338,7 @@ private:
     void refine(const Stem &p_stem, const R &p_radius_at, Joint p_a, Joint p_b, uint32_t p_node, int p_levels, std::vector<Joint> &r_joints) const {
         const Vec seg = p_b.p - p_a.p;
         const double l = length(seg);
-        if (p_levels == 0 || l <= s.segment_ratio * MAX(p_radius_at(p_a.t), p_radius_at(p_b.t))) {
+        if (p_levels == 0 || l <= s.segment_ratio * std::max(p_radius_at(p_a.t), p_radius_at(p_b.t))) {
             r_joints.push_back(p_b);
             return;
         }

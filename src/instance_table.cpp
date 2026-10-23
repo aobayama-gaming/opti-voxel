@@ -1,8 +1,7 @@
 #include "instance_table.hpp"
 
-#include <godot_cpp/classes/worker_thread_pool.hpp>
-
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace Archetype {
@@ -184,13 +183,13 @@ void place_instances(const DefLibrary &p_library, const RecordStore &p_records, 
         const Bounds wb = record_world_bounds(p_library[rec.def], rec);
         double size = 0.0;
         for (int a = 0; a < 3; a++) {
-            size = MAX(size, double(wb.hi[a] - wb.lo[a]));
+            size = std::max(size, double(wb.hi[a] - wb.lo[a]));
         }
         // Once, in the node holding its centre: its grown box is at most a node wide there, so the chunks
         // whose samples it meets are near that node at every LOD (gather). Wider than a node even at the top
         // LOD: in every node its grown box touches.
         // Never finer than the first LOD that lists it (a moment blob is listed at one LOD only).
-        const int lod = MIN(MAX(instance_lod(size, rec.k, rec.margin_c, p_param, p_max_lod), int(rec.min_lod)), p_max_lod);
+        const int lod = std::min(std::max(instance_lod(size, rec.k, rec.margin_c, p_param, p_max_lod), int(rec.min_lod)), p_max_lod);
         const double m = double(rec.k) + double(rec.margin_c) * std::ldexp(1.0, lod);
         const int64_t half = int64_t(1) << lod;
         const int64_t span = int64_t(p_param.chunk_voxel_dimension()) * half;
@@ -355,11 +354,11 @@ void InstanceSnapshot::gather(const ChunkId &p_centre, int p_lod, const VoxelPos
                 append_range(layer->stored_at, layer->stored_ids, c + ChunkId((i % 3 - 1) * s, (i / 3 % 3 - 1) * s, (i / 9 - 1) * s), candidates);
             }
         }
-        if (layer == base.get() && !masked.is_empty()) {
+        if (layer == base.get() && masked_end > 0) {
             // The base entries of edited records are stale: the overlay holds their current state.
-            candidates.erase(std::remove_if(candidates.begin() + from, candidates.end(), [this](uint32_t p_i) { return masked.has(p_i); }),
-                    candidates.end());
-            r_out.erase(std::remove_if(r_out.begin(), r_out.end(), [this](uint32_t p_i) { return masked.has(p_i); }), r_out.end());
+            const auto masked = [this](uint32_t p_i) { return std::binary_search(overlay_ids.begin(), overlay_ids.begin() + masked_end, p_i); };
+            candidates.erase(std::remove_if(candidates.begin() + from, candidates.end(), masked), candidates.end());
+            r_out.erase(std::remove_if(r_out.begin(), r_out.end(), masked), r_out.end());
         }
     }
     std::sort(candidates.begin(), candidates.end());
@@ -381,7 +380,7 @@ void InstanceSnapshot::chunk_list(const ChunkId &p_chunk, std::vector<uint32_t> 
 }
 
 void InstanceSnapshot::point_candidates(const VoxelPos &p_voxel, int p_lod, std::vector<uint32_t> &r_out) const {
-    const int lod = MIN(MAX(p_lod, 0), max_lod);
+    const int lod = std::min(std::max(p_lod, 0), max_lod);
     gather(chunk_at_voxel(p_voxel, lod, param), lod, p_voxel, p_voxel, r_out);
 }
 
@@ -435,7 +434,7 @@ bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
     if (empty()) {
         return false; // a terrain without instances asks this for every culled node
     }
-    const int lod = MIN(MAX(p_lod, 0), max_lod);
+    const int lod = std::min(std::max(p_lod, 0), max_lod);
     const int64_t span = int64_t(param.chunk_voxel_dimension()) << lod;
     const VoxelPos min = ChunkMath::chunk_min_voxel(p_node, param);
     const VoxelPos lo = min - VoxelPos(2 * span, 2 * span, 2 * span);
@@ -482,11 +481,7 @@ std::shared_ptr<const InstanceSnapshot> overlay_snapshot(const InstanceSnapshot 
     snap->base = std::move(p_base);
     snap->base_count = p_base_count;
     snap->overlay_ids = std::move(p_ids);
-    for (const uint32_t i : snap->overlay_ids) {
-        if (i < snap->base_count) {
-            snap->masked.insert(i);
-        }
-    }
+    snap->masked_end = size_t(std::lower_bound(snap->overlay_ids.begin(), snap->overlay_ids.end(), snap->base_count) - snap->overlay_ids.begin());
     snap->overlay = build_layer(*snap->library, snap->records, snap->overlay_ids, snap->param, snap->max_lod);
     return snap;
 }
@@ -537,20 +532,15 @@ std::shared_ptr<const InstanceSnapshot> BaseRebuild::edit(const InstanceSnapshot
 void BaseRebuild::start(std::shared_ptr<const InstanceSnapshot> p_from) {
     cancel();
     from = std::move(p_from);
-    task = WorkerThreadPool::get_singleton()->add_native_task(&BaseRebuild::_run, this, false, "BaseRebuild");
-}
-
-void BaseRebuild::_run(void *p_self) {
-    BaseRebuild *self = static_cast<BaseRebuild *>(p_self);
-    self->layer = build_base(*self->from->library, self->from->records, self->from->param, self->from->max_lod);
+    task = std::async(std::launch::async, [this] { layer = build_base(*from->library, from->records, from->param, from->max_lod); });
 }
 
 bool BaseRebuild::ready() const {
-    return running() && WorkerThreadPool::get_singleton()->is_task_completed(task);
+    return running() && task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 }
 
 std::shared_ptr<const InstanceSnapshot> BaseRebuild::take(const InstanceSnapshot &p_like, RecordStore p_records, uint32_t p_version) {
-    ERR_FAIL_COND_V_MSG(!running(), nullptr, "BaseRebuild::take: no base is being built.");
+    OV_ERR_FAIL_COND_V_MSG(!running(), nullptr, "BaseRebuild::take: no base is being built.");
     wait();
     sort_unique(changed);
     std::shared_ptr<const InstanceSnapshot> snap =
@@ -569,8 +559,7 @@ void BaseRebuild::cancel() {
 
 void BaseRebuild::wait() {
     if (running()) {
-        WorkerThreadPool::get_singleton()->wait_for_task_completion(task);
-        task = -1;
+        task.get();
     }
 }
 

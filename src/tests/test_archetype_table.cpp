@@ -131,7 +131,7 @@ TEST_CASE("Archetype table: a library type gives the same bits for the same loca
     int64_t compared = 0;
     for (const TypeCase &t : type_cases()) {
         const TableDefPtr def = table_def(t.name);
-        CHECK(def->program.validate(25).is_empty());
+        CHECK(def->program.validate(25).empty());
         for (const std::array<float, 9> &rot : rots) {
             TableRecord rec;
             std::copy(rot.begin(), rot.end(), rec.rotation);
@@ -179,7 +179,7 @@ TEST_CASE("Archetype table: every library type's box and Lipschitz bound hold") 
         const double box_hi[3] = { hi.x, hi.y, hi.z };
         double half = 0.0;
         for (int a = 0; a < 3; a++) {
-            half = MAX(half, MAX(std::fabs(box_lo[a]), std::fabs(box_hi[a])));
+            half = std::max(half, std::max(std::fabs(box_lo[a]), std::fabs(box_hi[a])));
         }
         int64_t outside = 0, violations = 0;
         double worst_margin = INFINITY, worst_slope = 0.0;
@@ -190,17 +190,17 @@ TEST_CASE("Archetype table: every library type's box and Lipschitz bound hold") 
             double d2 = 0.0;
             for (int a = 0; a < 3; a++) {
                 const double q = double(p.voxel[a]) + frac[a];
-                const double e = MAX(MAX(box_lo[a] - q, q - box_hi[a]), 0.0);
+                const double e = std::max(std::max(box_lo[a] - q, q - box_hi[a]), 0.0);
                 d2 += e * e;
             }
             const double d = std::sqrt(d2);
             if (d > 0.0) {
                 outside++;
-                worst_margin = MIN(worst_margin, double(r.w) - d);
+                worst_margin = std::min(worst_margin, double(r.w) - d);
                 violations += double(r.w) < d - 1e-4 * (d + 1.0) ? 1 : 0;
             }
             const double g = std::sqrt(double(r.x) * r.x + double(r.y) * r.y + double(r.z) * r.z);
-            worst_slope = MAX(worst_slope, g / double(lipschitz));
+            worst_slope = std::max(worst_slope, g / double(lipschitz));
             violations += g > double(lipschitz) * (1.0 + 1e-5) ? 1 : 0;
         }
         CAPTURE(t.name);
@@ -278,7 +278,7 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
     }
     float lmax = 1.0f;
     for (const TableRecord &r : records) {
-        lmax = MAX(lmax, r.lipschitz);
+        lmax = std::max(lmax, r.lipschitz);
     }
     int64_t equal = 0, differ = 0, sign_flips = 0, points = 0;
     for (uint32_t i = 0; i < 60000; i++) {
@@ -288,7 +288,7 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
         const Bounds wb = record_world_bounds(lib[near.def], near);
         double half = 0.0;
         for (int a = 0; a < 3; a++) {
-            half = MAX(half, double(wb.hi[a] - wb.lo[a]) * 0.5);
+            half = std::max(half, double(wb.hi[a] - wb.lo[a]) * 0.5);
         }
         const double range = half + 4.0 * double(near.margin_c) + 64.0;
         const WorldPos p = i % 5 == 0 ? random_point(VoxelPos(), 1.2e6, i, 0xB0Du) : random_point(near.anchor, range, i, 0xB0Du);
@@ -306,7 +306,7 @@ TEST_CASE("Archetype table: the locality rule changes F only far from the surfac
             } else {
                 differ++;
                 // Any difference must be far from the surface: the smaller |value| must exceed the band.
-                CHECK(MAX(std::fabs(a.w), std::fabs(b.w)) > threshold);
+                CHECK(std::max(std::fabs(a.w), std::fabs(b.w)) > threshold);
             }
         }
     }
@@ -544,21 +544,23 @@ TEST_CASE("Archetype table: encode_record lays the GPU DefRecord out at the docu
     rec.box_lo[0] = -7;
     rec.box_hi[2] = 11;
     rec.margin_c = 6.0f;
-    PackedByteArray bytes;
-    bytes.resize(RECORD_BYTES);
-    encode_record(bytes, 0, rec);
-    CHECK(bytes.decode_u32(0) == 2u);
-    CHECK(bytes.decode_u32(4) == uint32_t(Combine::SMOOTH_SUBTRACT));
-    CHECK(bytes.decode_float(8) == rec.k);
-    CHECK(bytes.decode_u32(16) == WorldCoord::lo32(rec.anchor.x));
-    CHECK(bytes.decode_u32(28) == rec.salt);
-    CHECK(bytes.decode_s32(32) == WorldCoord::hi32(rec.anchor.x));
-    CHECK(bytes.decode_float(48) == 0.5f);
-    CHECK(bytes.decode_float(48 + 16 + 4) == 1.0f); // rotation[4] = row 1, col 1
-    CHECK(bytes.decode_float(96 + 3 * 4) == 9.0f);
-    CHECK(bytes.decode_s32(128) == -7);
-    CHECK(bytes.decode_s32(144 + 8) == 11);
-    CHECK(bytes.decode_float(140) == 6.0f);
+    ov::bytes bytes(RECORD_BYTES);
+    encode_record(bytes.data(), rec);
+    auto decode_u32 = [&bytes](int64_t p_at) { return ov::get_u32(bytes.data() + p_at); };
+    auto decode_s32 = [&bytes](int64_t p_at) { return ov::get_s32(bytes.data() + p_at); };
+    auto decode_float = [&bytes](int64_t p_at) { return ov::get_f32(bytes.data() + p_at); };
+    CHECK(decode_u32(0) == 2u);
+    CHECK(decode_u32(4) == uint32_t(Combine::SMOOTH_SUBTRACT));
+    CHECK(decode_float(8) == rec.k);
+    CHECK(decode_u32(16) == WorldCoord::lo32(rec.anchor.x));
+    CHECK(decode_u32(28) == rec.salt);
+    CHECK(decode_s32(32) == WorldCoord::hi32(rec.anchor.x));
+    CHECK(decode_float(48) == 0.5f);
+    CHECK(decode_float(48 + 16 + 4) == 1.0f); // rotation[4] = row 1, col 1
+    CHECK(decode_float(96 + 3 * 4) == 9.0f);
+    CHECK(decode_s32(128) == -7);
+    CHECK(decode_s32(144 + 8) == 11);
+    CHECK(decode_float(140) == 6.0f);
 }
 
 // A chunk's samples reach past its span (the skirt overhang), and at a coarser LOD than an instance's
@@ -729,7 +731,7 @@ TEST_CASE("Archetype band: the surface moves only inside instances eroded or dro
         const TableRecord &near = banded[q];
         double extent = 0.0;
         for (int a = 0; a < 3; a++) {
-            extent = MAX(extent, double(near.box_hi[a] - near.box_lo[a]));
+            extent = std::max(extent, double(near.box_hi[a] - near.box_lo[a]));
         }
         for (int lod = 0; lod <= 20; lod += 2) {
             for (uint32_t j = 0; j < 200; j++) {
@@ -809,7 +811,7 @@ TEST_CASE("Archetype band: a record's drop LOD does not depend on its rotation")
             finish_record(*def, rec, 1.0f, true);
             double side = 1e30;
             for (int a = 0; a < 3; a++) {
-                side = MIN(side, double(rec.box_hi[a] - rec.box_lo[a]));
+                side = std::min(side, double(rec.box_hi[a] - rec.box_lo[a]));
             }
             const int world_lod = first_lod(0.5 * side * double(rec.lipschitz) + double(rec.k));
             CAPTURE(name);

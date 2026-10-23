@@ -1,9 +1,8 @@
 #pragma once
 
-#include <godot_cpp/templates/hashfuncs.hpp>
-#include <godot_cpp/variant/string.hpp>
-#include <godot_cpp/variant/variant.hpp>
-#include <godot_cpp/variant/vector3i.hpp>
+#include "ov/format.hpp"
+#include "ov/murmur3.hpp"
+#include "ov/types.hpp"
 
 #include <array>
 #include <cmath>
@@ -13,8 +12,6 @@
 #if defined(_MSC_VER)
 #include <intrin.h>
 #endif
-
-using namespace godot;
 
 // Integer world frame. Every absolute position is an int64: chunk ids (chunk-id units, see
 // chunk_math.hpp) and LOD0 voxel coordinates. Floats only hold small offsets: WorldPos::frac, and
@@ -30,9 +27,7 @@ struct Vector3i64 {
     constexpr Vector3i64() = default;
     constexpr Vector3i64(int64_t p_x, int64_t p_y, int64_t p_z) :
             x(p_x), y(p_y), z(p_z) {}
-    // No conversion back to Vector3i: a leftover int32 use must fail to compile (see lo32_i).
-    explicit constexpr Vector3i64(const Vector3i &p_v) :
-            x(p_v.x), y(p_v.y), z(p_v.z) {}
+    // No conversion back to an int32 triple: a leftover int32 use must fail to compile (see lo32_i).
 
     constexpr Vector3i64 operator+(const Vector3i64 &p_o) const { return Vector3i64(x + p_o.x, y + p_o.y, z + p_o.z); }
     constexpr Vector3i64 operator-(const Vector3i64 &p_o) const { return Vector3i64(x - p_o.x, y - p_o.y, z - p_o.z); }
@@ -99,18 +94,19 @@ struct VoxelBox {
     VoxelBox grown(int64_t p_by) const { return VoxelBox{ lo - VoxelPos(p_by, p_by, p_by), hi + VoxelPos(p_by, p_by, p_by), valid }; }
 };
 
-// For godot HashMap / HashSet. Folds each int64 to 32 bits (high word scrambled in), then the same
-// murmur chain as godot's Vector3i hasher.
+// For the core's hash containers. Folds each int64 to 32 bits (high word scrambled in), then the
+// same murmur chain the fold feeds (ov/murmur3.hpp, vendored from godot's hashfuncs): the hash
+// values are exactly those of the pre-de-Godot code.
 struct Vector3i64Hasher {
-    static _FORCE_INLINE_ uint32_t fold(int64_t p_v) {
+    static inline uint32_t fold(int64_t p_v) {
         const uint64_t u = uint64_t(p_v);
         return uint32_t(u) ^ (uint32_t(u >> 32) * 0x9E3779B1u);
     }
-    static _FORCE_INLINE_ uint32_t hash(const Vector3i64 &p_v) {
-        uint32_t h = hash_murmur3_one_32(fold(p_v.x));
-        h = hash_murmur3_one_32(fold(p_v.y), h);
-        h = hash_murmur3_one_32(fold(p_v.z), h);
-        return hash_fmix32(h);
+    static inline uint32_t hash(const Vector3i64 &p_v) {
+        uint32_t h = ov::murmur3_one_32(fold(p_v.x));
+        h = ov::murmur3_one_32(fold(p_v.y), h);
+        h = ov::murmur3_one_32(fold(p_v.z), h);
+        return ov::fmix32(h);
     }
 };
 
@@ -124,6 +120,16 @@ struct Float3 {
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
+
+    constexpr bool operator==(const Float3 &p_o) const { return x == p_o.x && y == p_o.y && z == p_o.z; }
+    constexpr bool operator!=(const Float3 &p_o) const { return !(*this == p_o); }
+
+    // godot Vector3::normalized's float form: divide each component by the length, no reciprocal
+    // trick (the CPU mirrors of the page shader must stay op for op, see PageFormat::decode_normal).
+    Float3 normalized() const {
+        const float l = std::sqrt(x * x + y * y + z * z);
+        return Float3{ x / l, y / l, z / l };
+    }
 };
 
 // An absolute position: an integer LOD0 voxel plus a fraction of a voxel in [0, 1). Canonical: the
@@ -137,6 +143,9 @@ namespace WorldCoord {
 
 // World origins are bounded so that int64 voxel arithmetic around them never overflows.
 inline constexpr int64_t MAX_ABS_ORIGIN_VOXEL = int64_t(1) << 60;
+
+// PI as godot's Math_PI carried it (the core's trig constants don't come from the engine).
+inline constexpr double PI = 3.14159265358979323846;
 
 inline uint32_t lo32(int64_t p_v) {
     return uint32_t(uint64_t(p_v));
@@ -153,12 +162,12 @@ inline int32_t hi32(int64_t p_v) {
 }
 
 // The low 32 bits as an int32 bit pattern: what page headers and shader uniforms carry.
-inline Vector3i lo32_i(const Vector3i64 &p_v) {
-    return Vector3i(as_i32(lo32(p_v.x)), as_i32(lo32(p_v.y)), as_i32(lo32(p_v.z)));
+inline ov::ivec3 lo32_i(const Vector3i64 &p_v) {
+    return ov::ivec3(as_i32(lo32(p_v.x)), as_i32(lo32(p_v.y)), as_i32(lo32(p_v.z)));
 }
 
-inline Vector3i hi32_i(const Vector3i64 &p_v) {
-    return Vector3i(hi32(p_v.x), hi32(p_v.y), hi32(p_v.z));
+inline ov::ivec3 hi32_i(const Vector3i64 &p_v) {
+    return ov::ivec3(hi32(p_v.x), hi32(p_v.y), hi32(p_v.z));
 }
 
 // Floor division, p_b > 0.
@@ -210,10 +219,10 @@ inline WorldPos offset_pos(const VoxelPos &p_anchor, const double p_offset[3]) {
     return p;
 }
 
-// "(x, y, z)", the same text JSON shows for a Vector3i. Reports carry int64 ids as strings because
+// "(x, y, z)", the same text godot's Vector3i shows. Reports carry int64 ids as strings because
 // godot's JSON parser reads numbers back as doubles.
-inline String to_string(const Vector3i64 &p_v) {
-    return vformat("(%d, %d, %d)", p_v.x, p_v.y, p_v.z);
+inline ov::str to_string(const Vector3i64 &p_v) {
+    return ov::format("(%d, %d, %d)", p_v.x, p_v.y, p_v.z);
 }
 
 } // namespace WorldCoord

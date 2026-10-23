@@ -49,8 +49,8 @@ private:
     std::vector<PageInfo> pages;
     size_t next_request = 0;
     Ref<Mutex> mutex;
-    HashMap<int, PackedByteArray> data;
-    HashMap<int, uint32_t> groups; // indirect group counts
+    godot::HashMap<int, PackedByteArray> data;
+    godot::HashMap<int, uint32_t> groups; // indirect group counts
     Dictionary report;
     bool done = false;
     // Render thread only.

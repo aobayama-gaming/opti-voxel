@@ -201,7 +201,7 @@ void sim_scan_node(const ChunkId &p_node, int p_lod, const double p_camera[3], d
 // The rows of the chunks as the GPU holds them: each output is a fresh row range (its serial in quad_offset) that
 // hides nothing until set_hidden writes it, and is gone once released.
 struct MockPages : ChunkReleaser {
-    HashMap<uint32_t, uint64_t> rows;
+    ov::HashMap<uint32_t, uint64_t, ov::DefaultHash> rows;
     uint32_t next = 0;
 
     void load(ChunkOutput &r_out) {
@@ -257,7 +257,7 @@ struct Sim {
             }
         } else {
             for (double &c : camera) {
-                c = CLAMP(c + double(uniform(7) - 3), -world, world);
+                c = std::clamp(c + double(uniform(7) - 3), -world, world);
             }
         }
         if (uniform(30) == 0) {
@@ -319,8 +319,8 @@ struct Sim {
     // The frame's destroy check, then (like _process) the frame's results, then the destruction.
     void frame() {
         update(state);
-        for (const KeyValue<ChunkId, ChunkOutput> &kv : state.to_destroy_chunk) {
-            failures += state.loaded_chunk.has(kv.key) && !state.scanned_chunk->has(kv.key) ? 0 : 1;
+        for (const auto &kv : state.to_destroy_chunk) {
+            failures += state.loaded_chunk.has(kv.first) && !state.scanned_chunk->has(kv.first) ? 0 : 1;
         }
         for (int n = uniform(3); n > 0 && !in_flight.empty(); n--) {
             result();
@@ -329,9 +329,9 @@ struct Sim {
         state.destroy_marked();
         // After compaction (none here): every loaded chunk's rows hide what its coverage says.
         state.push_coverage();
-        for (const KeyValue<ChunkId, ChunkOutput> &kv : state.loaded_chunk) {
-            const uint64_t *row = pages.rows.getptr(kv.value.quad_offset);
-            failures += row && *row == state.hidden_mask(kv.key) ? 0 : 1;
+        for (const auto &kv : state.loaded_chunk) {
+            const uint64_t *row = pages.rows.getptr(kv.second.quad_offset);
+            failures += row && *row == state.hidden_mask(kv.first) ? 0 : 1;
         }
         failures += pages.rows.size() == state.loaded_chunk.size() ? 0 : 1;
     }
