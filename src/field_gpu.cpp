@@ -129,9 +129,11 @@ void FieldGPU::loop(const SDFBase *p_sdf, ChunkParam p_param, uint64_t p_scratch
             batches.sync_ms += stats.sync_ms;
             batches.readback_ms += stats.readback_ms;
             if (stats.gpu_ms > 0.0) {
-                // The points' cost, smoothed; the cap follows it.
-                const double measured = stats.gpu_ms * 1000.0 / double(voxels.size());
-                us_per_point = us_per_point > 0.0 ? 0.8 * us_per_point + 0.2 * measured : measured;
+                // The points' cost: the smoothed GPU time over the smoothed points (weighted by points: a small submission
+                // timed behind the renderer's work weighs what its points do); the cap follows it.
+                recent_gpu_ms = recent_points > 0.0 ? 0.8 * recent_gpu_ms + 0.2 * stats.gpu_ms : stats.gpu_ms;
+                recent_points = recent_points > 0.0 ? 0.8 * recent_points + 0.2 * double(voxels.size()) : double(voxels.size());
+                us_per_point = recent_gpu_ms * 1000.0 / recent_points;
                 cap = uint32_t(CLAMP(SUBMIT_GPU_MS * 1000.0 / us_per_point, double(MIN_POINTS), double(batch)));
             }
         }

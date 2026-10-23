@@ -71,6 +71,8 @@ private:
     double init_ms = 0.0;
     double scratch_mb = 0.0;
     double us_per_point = 0.0; // measured (GPU timestamps / points), 0 until the first submission
+    double recent_gpu_ms = 0.0; // the submissions' GPU time and points, smoothed (us_per_point is their ratio)
+    double recent_points = 0.0;
     int64_t points = 0;
     TimingStat submissions; // the thread's, wall clock
     TimingStat waits; // the callers', queued to answered
