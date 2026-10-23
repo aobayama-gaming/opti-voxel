@@ -13,6 +13,16 @@ using StreamTest::Mirror;
 
 namespace {
 
+// The inline executor, held: while held, reap() runs nothing, so a poll() turns the frame without landing a key.
+struct HeldExecutor : StreamExecutor {
+    bool held = true;
+    void reap(bool p_wait) override {
+        if (!held || p_wait) {
+            StreamExecutor::reap(p_wait);
+        }
+    }
+};
+
 // A cheap source: one sphere of 4-8 voxels per 16-voxel cell site on a flat ground far from the origin, no blobs. The
 // stream runs its keys on the thread calling poll() (the base executor), so a key asked for lands by the next poll().
 struct StreamFixture {
@@ -48,8 +58,17 @@ struct StreamFixture {
         return fixture;
     }
 
-    std::unique_ptr<InstanceStream> stream(InstanceStream::Settings p_settings) const {
-        return std::make_unique<InstanceStream>(std::vector<std::shared_ptr<const ScatterSource>>{ source }, param, p_settings, std::make_unique<StreamExecutor>());
+    std::unique_ptr<InstanceStream> stream(InstanceStream::Settings p_settings, std::unique_ptr<StreamExecutor> p_executor = nullptr) const {
+        if (!p_executor) {
+            p_executor = std::make_unique<StreamExecutor>();
+        }
+        return std::make_unique<InstanceStream>(std::vector<std::shared_ptr<const ScatterSource>>{ source }, param, p_settings, std::move(p_executor));
+    }
+    // A stream on a held executor (r_held: to release it).
+    std::unique_ptr<InstanceStream> held_stream(HeldExecutor *&r_held) const {
+        auto executor = std::make_unique<HeldExecutor>();
+        r_held = executor.get();
+        return stream(InstanceStream::Settings(), std::move(executor));
     }
     ChunkId chunk(int64_t p_x, int64_t p_z, int p_lod = 0) const { return ChunkMath::chunk_at_voxel(origin + VoxelPos(p_x, 0, p_z), p_lod, param); }
 
@@ -179,6 +198,11 @@ bool disjoint(const StreamFixture &p_fx, const std::vector<ChunkId> &p_chunks) {
         each += keys_and_inputs(p_fx, c);
     }
     return keys_and_inputs(p_fx, all) == each;
+}
+
+// A scan's set_tag rank: no chunk wanted.
+int64_t forget_all(const ChunkId &) {
+    return -1;
 }
 
 } // namespace
@@ -645,21 +669,28 @@ TEST_CASE("Instance stream: set_tag forgets the owner's chunks parked under an o
     const StreamFixture &fx = StreamFixture::get();
     const ChunkId old_chunk = fx.chunk(-300, -300), current = fx.chunk(300, 300), other = fx.chunk(-300, 300);
     CHECK(disjoint(fx, { old_chunk, current, other }));
-    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
+    HeldExecutor *held = nullptr;
+    std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
     CHECK(stream->admit(old_chunk, 0, 1, 1) == InstanceStream::PARKED);
     CHECK(stream->admit(current, 0, 2, 5) == InstanceStream::PARKED);
     CHECK(stream->admit(other, 7, 1, 5) == InstanceStream::PARKED); // another owner's: its tags are its own
+    stream->poll(); // a frame later, nothing landed
 
     std::vector<ChunkId> kept;
-    stream->set_tag(0, 2, [](const ChunkId &) { return false; }, kept);
+    stream->set_tag(0, 2, forget_all, [&](const ChunkId &p_chunk) { kept.push_back(p_chunk); });
     CHECK(kept.empty());
     CHECK(stream->parked_count(0) == 1);
     CHECK(stream->parked_count(7) == 1);
     CHECK(stat(*stream, "stale_handed_back") == 1);
-    // None of its keys had started: all dropped, its site tiles with them.
-    CHECK(stat(*stream, "jobs_dropped") == int64_t(keys_and_inputs(fx, old_chunk)));
+    // None of its keys had started: all erased, its site tiles with them; the site tiles' jobs were queued, the part
+    // tiles were waiting for them.
+    std::vector<SourceKey> keys;
+    fx.source->chunk_keys(old_chunk, fx.param, keys);
+    CHECK(stat(*stream, "keys_dropped") == int64_t(keys_and_inputs(fx, old_chunk)));
+    CHECK(stat(*stream, "jobs_dropped") == int64_t(keys_and_inputs(fx, old_chunk) - keys.size()));
     CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, current) + keys_and_inputs(fx, other)));
 
+    held->held = false;
     stream->poll();
     std::vector<std::pair<ChunkId, uint64_t>> back;
     stream->take_ready(0, back); // the forgotten chunk never comes back
@@ -682,21 +713,35 @@ TEST_CASE("Instance stream: set_tag forgets the owner's chunks parked under an o
     CHECK(lists_right(fx, *stream, mirror, old_chunk));
 }
 
-TEST_CASE("Instance stream: set_tag keeps parked, under the new tag, the chunks the scan still wants") {
+TEST_CASE("Instance stream: set_tag drops no key asked for this frame (a chunk answered LATER keeps what it asked for)") {
     const StreamFixture &fx = StreamFixture::get();
-    const ChunkId wanted = fx.chunk(-300, -300), dropped = fx.chunk(300, 300);
     std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
-    CHECK(stream->admit(wanted, 0, 1, 1) == InstanceStream::PARKED);
+    CHECK(stream->admit(fx.chunk(-300, -300), 0, 1, 1) == InstanceStream::PARKED);
+    stream->set_tag(0, 2, forget_all, [](const ChunkId &) {}); // the same frame
+    CHECK(stat(*stream, "stale_handed_back") == 1);
+    CHECK(stat(*stream, "keys_dropped") == 0);
+}
+
+TEST_CASE("Instance stream: set_tag keeps parked the chunks the scan still wants, under the new tag at the new rank") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ChunkId wanted = fx.chunk(-300, -300), dropped = fx.chunk(300, 300), fresh = fx.chunk(-300, 300);
+    CHECK(disjoint(fx, { wanted, dropped, fresh }));
+    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
+    CHECK(stream->admit(wanted, 0, 1, 4) == InstanceStream::PARKED);
     CHECK(stream->admit(dropped, 0, 1, 1) == InstanceStream::PARKED);
+    CHECK(stream->admit(fresh, 0, 2, 2) == InstanceStream::PARKED); // the new scan's
     std::vector<ChunkId> kept;
-    stream->set_tag(0, 2, [&](const ChunkId &p_chunk) { return p_chunk == wanted; }, kept);
+    // The camera turned: the kept chunk is now in the cone, rank 1.
+    stream->set_tag(0, 2, [&](const ChunkId &p_chunk) { return p_chunk == wanted ? int64_t(1) : int64_t(-1); }, [&](const ChunkId &p_chunk) { kept.push_back(p_chunk); });
     CHECK(kept == std::vector<ChunkId>{ wanted });
-    CHECK(stream->parked_count(0) == 1);
+    CHECK(stream->parked_count(0) == 2);
+    CHECK(stat(*stream, "jobs_reranked") > 0);
     stream->poll();
+    CHECK(placed_before(fx, wanted, fresh, placement_order(*stream))); // its queued jobs moved ahead
     std::vector<std::pair<ChunkId, uint64_t>> back;
     stream->take_ready(0, back);
-    CHECK(back.size() == 1);
-    if (!(back.size() == 1)) {
+    CHECK(back.size() == 2);
+    if (!(back.size() == 2)) {
         return;
     }
     CHECK(back[0] == std::make_pair(wanted, uint64_t(2)));
@@ -713,15 +758,17 @@ TEST_CASE("Instance stream: a dropped waiting key leaves its inputs' dependents;
     }
     const ChunkId coarse = fx.chunk(200, 200, lod), fine = fx.chunk(200, 200);
     CHECK_FALSE(disjoint(fx, { coarse, fine })); // they share site tiles
-    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
+    HeldExecutor *held = nullptr;
+    std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
     CHECK(stream->admit(coarse, 0, 1, 1) == InstanceStream::PARKED);
     CHECK(stream->admit(fine, 0, 2, 2) == InstanceStream::PARKED);
-    std::vector<ChunkId> kept;
-    stream->set_tag(0, 2, [](const ChunkId &) { return false; }, kept); // the fine chunk is the new scan's already
-    CHECK(kept.empty());
+    stream->poll();
+    stream->set_tag(0, 2, forget_all, [](const ChunkId &) {}); // the fine chunk is the new scan's already
     // The coarse part tiles (waiting) and the site tiles only they read went; the shared ones stay, still to run.
+    CHECK(stat(*stream, "keys_dropped") > stat(*stream, "jobs_dropped"));
     CHECK(stat(*stream, "jobs_dropped") > 0);
     CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, fine)));
+    held->held = false;
     stream->poll();
     std::vector<std::pair<ChunkId, uint64_t>> back;
     stream->take_ready(0, back);

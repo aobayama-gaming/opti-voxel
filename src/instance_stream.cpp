@@ -226,17 +226,28 @@ size_t InstanceStream::parked_count(uint64_t p_owner) const {
     return n;
 }
 
-void InstanceStream::set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<bool(const ChunkId &)> &p_wanted, std::vector<ChunkId> &r_kept) {
+void InstanceStream::set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<int64_t(const ChunkId &)> &p_rank,
+        const std::function<void(const ChunkId &)> &p_kept) {
     const std::unique_lock<std::shared_mutex> lock(mutex);
-    r_kept.clear();
     std::vector<SourceKey> released;
     for (auto it = parked.begin(); it != parked.end();) {
         Parked &p = it->second;
         if (it->first.owner != p_owner || p.tag >= p_tag) {
             ++it;
-        } else if (p_wanted(it->first.chunk)) {
-            p.tag = p_tag; // its keys keep coming; asked again it improves its rank
-            r_kept.push_back(it->first.chunk);
+            continue;
+        }
+        const int64_t rank = p_rank(it->first.chunk);
+        if (rank >= 0) {
+            p.tag = p_tag;
+            // A better rank moves its queued jobs ahead; a worse one leaves them where they are (the order is only a
+            // priority: a job runs early, never wrong), and the next better ask compares against it.
+            if (uint64_t(rank) < p.rank) {
+                for (const SourceKey &k : p.keys) {
+                    improve(entries.find(k)->second, uint64_t(rank)); // pinned: still there
+                }
+            }
+            p.rank = uint64_t(rank);
+            p_kept(it->first.chunk);
             ++it;
         } else {
             released.insert(released.end(), p.keys.begin(), p.keys.end());
@@ -353,7 +364,8 @@ void InstanceStream::improve(Entry &r_entry, uint64_t p_rank) {
 }
 
 void InstanceStream::drop_unneeded(Entry &r_entry) {
-    if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty() || r_entry.viewed == frame) {
+    // Asked for this frame (the keys of an admit answered LATER, the camera's queries): kept, computed meanwhile.
+    if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty() || r_entry.used == frame) {
         return;
     }
     if (r_entry.state == Entry::RUNNING) {
@@ -361,12 +373,13 @@ void InstanceStream::drop_unneeded(Entry &r_entry) {
         if (jobs.erase(JobKey(r_entry.rank, r_entry.job_seq)) == 0) {
             return; // a drain task took it: it lands into its grace
         }
+        stats.jobs_dropped++;
     }
     const SourceKey key = r_entry.key;
     const std::vector<SourceKey> inputs = std::move(r_entry.input_keys); // WAITING: its inputs, landed or not
     entries.erase(key); // never on an LRU list (not READY)
     pending--;
-    stats.jobs_dropped++;
+    stats.keys_dropped++;
     for (uint32_t i = 0; i < inputs.size(); i++) {
         const auto it = entries.find(inputs[i]);
         if (it == entries.end() || it->second.state == Entry::READY) {
@@ -403,7 +416,7 @@ void InstanceStream::poll() {
     const std::unique_lock<std::shared_mutex> lock(mutex);
     frame++;
     for (const SourceKey &k : viewed) {
-        request(k, false, 0).viewed = frame; // kept resident while viewed, started if missing, first
+        request(k, false, 0); // kept resident while viewed, started if missing, first
     }
     viewed.clear();
     const uint64_t t_evict = now_usec();
@@ -774,6 +787,7 @@ Dictionary InstanceStream::get_stats() const {
     d["jobs_queued_max"] = stats.jobs_queued_max;
     d["jobs_reranked"] = stats.jobs_reranked;
     d["stale_handed_back"] = stats.stale_handed_back;
+    d["keys_dropped"] = stats.keys_dropped;
     d["jobs_dropped"] = stats.jobs_dropped;
     d["park_frames"] = stats.park_frames.to_dict();
     d["workers"] = int64_t(executor->workers());

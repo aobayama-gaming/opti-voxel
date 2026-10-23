@@ -1005,7 +1005,7 @@ void GPUMesher::remesh_chunks(const std::vector<ChunkId> &p_chunks) {
 
 void GPUMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_view) {
     load_view = p_view;
-    gate.next_scan(p_chunks);
+    gate.next_scan(p_chunks, [this, &p_view](const ChunkId &p_chunk) { return ChunkMath::load_queue(p_chunk, lod_count, p_view); });
     for (LODHashSet *q : chunk_queue) {
         q->clear();
     }

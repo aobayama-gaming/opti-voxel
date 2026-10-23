@@ -357,13 +357,15 @@ to every change, and a reviewer may reject a PR on any of them.
   dropped. Jobs run by (rank, order asked) (`jobs`: a map under `job_mutex`, a drain task pops `begin()`): `ChunkGate`
   passes re-meshes 0, a first mesh 1 + its `load_queue` (the mesher's pop order), audits `AUDIT_RANK`; a key's rank is
   the best of its requesters', inherited by its inputs not landed, a queued job asked better is re-keyed (`jobs_reranked`).
-  `set_tag(owner, tag, wanted, kept)` (`ChunkGate::next_scan(scan)`, the CHUNK owner only): the chunks parked under an
-  older scan that the new one holds are retagged in place (`ChunkGate::keeps`: `send_chunk` doesn't queue them again),
-  the others are forgotten, unpinned (`stale_handed_back`), and the keys then needed by no pin, dependent or view query
-  are erased if their job hasn't started (`jobs_dropped`; a dropped waiting key leaves its inputs' `dependents`).
+  `set_tag(owner, tag, rank, kept)` (`ChunkGate::next_scan(scan, load_queue)`, the CHUNK owner only): the chunks parked
+  under an older scan that the new one holds are retagged in place at their new rank (a better one re-keys their queued
+  jobs; `ChunkGate::keeps`: `send_chunk` doesn't queue them again), the others are forgotten, unpinned
+  (`stale_handed_back`), and the keys then needed by no pin or dependent and not asked for this frame are erased if their
+  job hasn't started (`keys_dropped`, of which `jobs_dropped` were queued; a dropped waiting key leaves its inputs'
+  `dependents`).
   `PENDING_MAX` 2^14 (2^12 under the FIFO). `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
-  requeue loop; `begin_frame(cap)` closes a frame at a LATER or at `cap` PARKED / LATER answers (READY ones ask for no
-  key; direct: `max_admits_per_frame`, 0 = 4 x batch_size; `admit_capped_frames`). Unit tests: park / return order, pins and grace,
+  requeue loop; `begin_frame(cap)` closes a frame at a LATER (`admit_later`) or at `cap` PARKED / LATER answers
+  (`admit_capped_frames`; READY ones ask for no key; direct: `max_admits_per_frame`, 0 = 4 x batch_size). Unit tests: park / return order, pins and grace,
   slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag` (kept, forgotten, dropped jobs), the gate's cap.
   **Wiring:** `SDFTable` owns the stream over its valid sources (`add_stream`; `~SDFCascade` stops it first: its tasks read
   `ground_field`). The meshers gate every chunk they pop through `SDFBase::admit / take_ready / parked_count`, called by

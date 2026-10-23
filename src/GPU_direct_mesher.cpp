@@ -1242,7 +1242,7 @@ void GPUDirectMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_v
     // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
     // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
     load_view = p_view;
-    gate.next_scan(p_chunks);
+    gate.next_scan(p_chunks, [this, &p_view](const ChunkId &p_chunk) { return ChunkMath::load_queue(p_chunk, lod_count, p_view); });
     std::vector<std::vector<std::pair<uint64_t, ChunkId>>> keyed(chunk_queue.size());
     for (const ChunkId &chunk_pos : p_chunks) {
         const int lod = ChunkMath::get_lod(chunk_pos);
@@ -1341,7 +1341,6 @@ Dictionary GPUDirectMesher::get_stats() {
     d["list_requeued"] = (int64_t)stats.list_requeued;
     d["admit_parked"] = (int64_t)gate.parked;
     d["admit_later"] = (int64_t)gate.later;
-    d["stale_parked"] = (int64_t)gate.stale;
     d["admit_capped_frames"] = (int64_t)gate.capped_frames;
     d["max_admits_per_frame"] = (int64_t)settings.max_admits_per_frame;
     d["list_words_total"] = (int64_t)stats.list_words_total;

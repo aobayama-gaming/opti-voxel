@@ -117,11 +117,10 @@ public:
 
     // The streamed sources' gating (InstanceStream::admit; every chunk READY without them).
     Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank) override;
-    void set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<bool(const ChunkId &)> &p_wanted, std::vector<ChunkId> &r_kept) override {
+    void set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<int64_t(const ChunkId &)> &p_rank,
+            const std::function<void(const ChunkId &)> &p_kept) override {
         if (stream) {
-            stream->set_tag(p_owner, p_tag, p_wanted, r_kept);
-        } else {
-            r_kept.clear();
+            stream->set_tag(p_owner, p_tag, p_rank, p_kept);
         }
     }
     void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) override;

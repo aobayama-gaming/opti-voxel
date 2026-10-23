@@ -108,12 +108,12 @@ public:
     // take_ready() with p_tag once they are placed; asked again meanwhile, it stays parked (with the new tag, its keys at
     // the better rank).
     Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank);
-    // Main thread: p_owner's tags from now on are p_tag or later. Its chunks parked under an older tag that p_wanted(chunk)
-    // keeps take p_tag in place (r_kept: they come back through take_ready, the caller doesn't queue them again); the
-    // others are forgotten, their keys unpinned (stale_handed_back), and the keys then left with no parked chunk, no
-    // waiting key and no camera query this frame are dropped if their job hasn't started (jobs_dropped; a running one
-    // lands into its grace).
-    void set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<bool(const ChunkId &)> &p_wanted, std::vector<ChunkId> &r_kept);
+    // Main thread: p_owner's tags from now on are p_tag or later. Its chunks parked under an older tag with p_rank(chunk)
+    // >= 0 take p_tag and that rank in place (p_kept(chunk): they come back through take_ready, the caller doesn't queue
+    // them again); the others (-1) are forgotten, their keys unpinned (stale_handed_back), and the keys then left with no
+    // parked chunk, no waiting key and no ask this frame are erased (keys_dropped) if their job hasn't started
+    // (jobs_dropped: taken out of the queue; a running one lands into its grace).
+    void set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<int64_t(const ChunkId &)> &p_rank, const std::function<void(const ChunkId &)> &p_kept);
     // Main thread: p_owner's parked chunks whose keys are all placed, or which lost a key's slot (asked again, they answer
     // LATER until there is room), with their tags, in the order they were parked.
     void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out);
@@ -191,7 +191,6 @@ private:
         bool placed = false;
         uint64_t placement = 0; // its placement's sequence number
         uint64_t used = 0; // the frame it was last asked for
-        uint64_t viewed = ~uint64_t(0); // the frame poll() last asked for it for view_records (none yet: never a frame)
         uint64_t rank = 0; // not READY: the best of its requesters' (request())
         std::vector<SourceKey> input_keys; // WAITING: source.inputs(key), e.inputs' order (cleared once started)
         uint64_t job_seq = 0; // RUNNING: its job's key in jobs is (rank, job_seq) until a drain task takes it
@@ -259,7 +258,8 @@ private:
         int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
         int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank
         int64_t stale_handed_back = 0; // parked chunks set_tag() forgot (a newer scan doesn't want them)
-        int64_t jobs_dropped = 0; // keys set_tag() left unneeded, erased before their job started
+        int64_t keys_dropped = 0; // keys set_tag() left unneeded, erased before their job started
+        int64_t jobs_dropped = 0; // of keys_dropped: their job queued (the others were waiting for inputs)
         uint64_t land_usec = 0; // land() and its place(), under the lock
         uint64_t evict_usec = 0; // poll()'s eviction loop
         LatencyHist park_frames; // poll() frames from a chunk's park to its hand-back
@@ -286,8 +286,8 @@ private:
     // Not READY: its rank lowered to p_rank if better; RUNNING, its job moved if still queued (keeping its order among
     // equal ranks), WAITING, its inputs not landed too.
     void improve(Entry &r_entry, uint64_t p_rank);
-    // Not READY, unpinned, no key waiting for it, not viewed this frame, its job not started: erased, and its inputs then
-    // left alone too.
+    // Not READY, unpinned, no key waiting for it, not asked for this frame, its job not started: erased, and its inputs
+    // then left alone too.
     void drop_unneeded(Entry &r_entry);
     // A parked chunk's keys unpinned (and forgotten: unpinned once).
     void release_pins(Parked &r_parked);

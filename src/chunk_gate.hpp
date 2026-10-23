@@ -19,8 +19,8 @@ struct DispatchTimes {
 // A mesher's side of the SDF's gating (SDFBase::admit): each chunk it pops is asked for, and a parked one comes back
 // through take_ready() into the queue it came from. One owner per queue kind (the mesher's address plus the kind: a
 // pointer is aligned, so it stays apart from any other mesher's), the scan generation as the tag: at a new scan the first
-// meshes parked that it still wants stay parked under it, the others are forgotten by the SDF; re-meshes and audits keep
-// their tag. The rank is the mesher's pop order: re-meshes, then the first meshes by load queue, audits last.
+// meshes parked that it still wants stay parked under it at their new rank, the others are forgotten by the SDF;
+// re-meshes and audits keep their tag. The rank is the mesher's pop order: re-meshes, then the first meshes by load queue, audits last.
 class ChunkGate {
 public:
     enum Kind {
@@ -34,16 +34,17 @@ public:
         sdf = p_sdf;
         base = uint64_t(uintptr_t(p_mesher));
     }
-    // A new scan replaces the chunk queue (send_chunk): the first meshes parked that p_scan holds stay parked (keeps():
-    // not to queue again, take_ready() brings them back), the others are forgotten.
-    void next_scan(const LODHashSet &p_scan) {
+    // A new scan replaces the chunk queue (send_chunk): the first meshes parked that p_scan holds stay parked at the rank
+    // of their new load queue p_queue(chunk) (keeps(): not to queue again, take_ready() brings them back), the others are
+    // forgotten.
+    template <typename F>
+    void next_scan(const LODHashSet &p_scan, F p_queue) {
         scan++;
         kept.clear();
         if (sdf) {
-            sdf->set_tag(base + CHUNK, scan, [&p_scan](const ChunkId &p_chunk) { return p_scan.has(p_chunk); }, kept_list);
-            for (const ChunkId &c : kept_list) {
-                kept.insert(c);
-            }
+            sdf->set_tag(
+                    base + CHUNK, scan, [&](const ChunkId &p_chunk) { return p_scan.has(p_chunk) ? int64_t(rank(CHUNK, p_queue(p_chunk))) : int64_t(-1); },
+                    [this](const ChunkId &p_chunk) { kept.insert(p_chunk); });
         }
     }
     // A chunk of the last scan still parked (next_scan).
@@ -76,11 +77,11 @@ public:
         admit_usec += now_usec() - t0;
         if (a != SDFBase::Admit::READY) {
             frame_admits++;
+            closed = closed || a == SDFBase::Admit::LATER; // later counts it
             if (!closed && max_admits > 0 && frame_admits >= max_admits) {
-                capped_frames++; // the cap reached, by a LATER too
+                capped_frames++;
                 closed = true;
             }
-            closed = closed || a == SDFBase::Admit::LATER;
         }
         parked += a == SDFBase::Admit::PARKED;
         later += a == SDFBase::Admit::LATER;
@@ -109,11 +110,7 @@ public:
         for (int k = 0; k < KINDS; k++) {
             sdf->take_ready(base + k, ready);
             for (const std::pair<ChunkId, uint64_t> &r : ready) {
-                if (k != CHUNK || r.second == scan) {
-                    p_requeue(r.first, Kind(k));
-                } else {
-                    stale++;
-                }
+                p_requeue(r.first, Kind(k)); // next_scan retagged or forgot every older first mesh
             }
         }
     }
@@ -122,7 +119,6 @@ public:
 
     uint64_t parked = 0; // admits answered PARKED
     uint64_t later = 0; // admits answered LATER (no room: popping stopped)
-    uint64_t stale = 0; // first meshes handed back under an older scan (dropped; next_scan leaves none)
     uint64_t admit_usec = 0; // in admit()
     uint64_t capped_frames = 0; // frames whose admits stopped at begin_frame's cap
 
@@ -134,6 +130,5 @@ private:
     uint32_t frame_admits = 0;
     bool closed = true; // this frame: a LATER, or the cap reached (begin_frame opens it)
     std::vector<std::pair<ChunkId, uint64_t>> ready;
-    std::vector<ChunkId> kept_list;
-    LODHashSet kept;
+    LODHashSet kept; // the last scan's parked chunks (next_scan)
 };

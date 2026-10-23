@@ -87,7 +87,7 @@ TEST_CASE("ChunkGate: a frame's popping stops at the cap of parked chunks; next_
     LODHashSet scan;
     const ChunkId still = row(centre, 8, 56, param)[7];
     scan.insert(still);
-    gate.next_scan(scan);
+    gate.next_scan(scan, [](const ChunkId &) { return 0; });
     CHECK(gate.keeps(still));
     CHECK(sdf.parked_count(uint64_t(uintptr_t(&gate)) + ChunkGate::CHUNK) == 1);
 }
