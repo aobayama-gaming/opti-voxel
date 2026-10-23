@@ -116,7 +116,13 @@ public:
     bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const override;
 
     // The streamed sources' gating (InstanceStream::admit; every chunk READY without them).
-    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag) override;
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank) override;
+    void set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<int64_t(const ChunkId &)> &p_rank,
+            const std::function<void(const ChunkId &)> &p_kept) override {
+        if (stream) {
+            stream->set_tag(p_owner, p_tag, p_rank, p_kept);
+        }
+    }
     void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out) override;
     size_t parked_count(uint64_t p_owner) const override { return stream ? stream->parked_count(p_owner) : 0; }
     // poll_rebuild(), then the stream's poll.

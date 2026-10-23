@@ -103,6 +103,9 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     if (settings.spare_pages == 0) {
         settings.spare_pages = settings.max_in_flight * settings.pages_per_batch;
     }
+    if (settings.max_admits_per_frame == 0) {
+        settings.max_admits_per_frame = 4 * settings.batch_size;
+    }
     mutex.instantiate();
 
     lod_count = p_lod_numbers;
@@ -567,7 +570,7 @@ void GPUDirectMesher::_update_dirty_bounds() {
     dirty_bounds_pages.clear();
 }
 
-bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, bool *r_remesh) {
+bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue) {
     // Instance edits first, finest LOD first: the chunk under the edit is what the user is looking at.
     for (std::vector<ChunkId> &queue : remesh_queue) {
         if (queue.empty()) {
@@ -577,20 +580,18 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, bool *r_remesh) {
         queue.pop_back();
         remesh_queued.erase(r_chunk);
         stats.remesh_pops++;
-        if (r_remesh) {
-            *r_remesh = true;
-        }
+        r_kind = ChunkGate::REMESH;
         return true;
     }
-    for (std::vector<ChunkId> &queue : chunk_queue) {
+    for (size_t q = 0; q < chunk_queue.size(); q++) {
+        std::vector<ChunkId> &queue = chunk_queue[q];
         if (queue.empty()) {
             continue;
         }
         r_chunk = queue.back();
         queue.pop_back();
-        if (r_remesh) {
-            *r_remesh = false;
-        }
+        r_kind = ChunkGate::CHUNK;
+        r_queue = int(q);
         return true;
     }
     return false;
@@ -662,7 +663,7 @@ void GPUDirectMesher::process_queue() {
             _requeue(p_chunk, p_kind == ChunkGate::REMESH);
         }
     });
-    gate_later = false;
+    gate.begin_frame(settings.max_admits_per_frame);
     // Before acquiring pages: a page released since it was marked must not be touched.
     _update_dirty_bounds();
     // Before acquiring pages too: a kill must not land on a page reused by this frame's batches.
@@ -737,21 +738,15 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     chunks.reserve(settings.batch_size);
     double estimate = 0.0;
     ChunkId chunk;
-    bool remesh = false;
+    ChunkGate::Kind kind = ChunkGate::CHUNK;
     HashSet<ChunkId, Vector3i64Hasher> remeshes; // popped from remesh_queue: they go back there if they wait
+    const auto pop = [this](ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue) { return _pop_queue(r_chunk, r_kind, r_queue); };
+    const auto requeue = [this](const ChunkId &p_chunk, ChunkGate::Kind p_kind) { _requeue(p_chunk, p_kind == ChunkGate::REMESH); };
     // With a budget the batch stops once its estimate reaches what's left (a frame dispatches at least
     // one chunk: budget_left starts > 0).
-    while (!gate_later && chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk, &remesh)) {
-        const SDFBase::Admit admit = gate.admit(chunk, remesh ? ChunkGate::REMESH : ChunkGate::CHUNK);
-        if (admit == SDFBase::Admit::LATER) {
-            _requeue(chunk, remesh);
-            gate_later = true;
-        }
-        if (admit != SDFBase::Admit::READY) {
-            continue; // parked: the gate hands it back
-        }
+    while (chunks.size() < settings.batch_size && estimate < r_budget_us && gate.next(chunk, kind, pop, requeue)) {
         chunks.push_back(chunk);
-        if (remesh) {
+        if (kind == ChunkGate::REMESH) {
             remeshes.insert(chunk);
         }
         const int lod = ChunkMath::get_lod(chunk);
@@ -837,17 +832,20 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
         return false;
     }
     std::vector<ChunkId> chunks;
-    while (!gate_later && chunks.size() < settings.batch_size && !audit_queue.empty()) {
-        const ChunkId chunk = audit_queue.back();
+    ChunkId chunk;
+    ChunkGate::Kind kind = ChunkGate::AUDIT;
+    const auto pop = [this](ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &) {
+        if (audit_queue.empty()) {
+            return false;
+        }
+        r_chunk = audit_queue.back();
+        r_kind = ChunkGate::AUDIT;
         audit_queue.pop_back();
-        const SDFBase::Admit admit = gate.admit(chunk, ChunkGate::AUDIT);
-        if (admit == SDFBase::Admit::LATER) {
-            audit_queue.push_back(chunk);
-            gate_later = true;
-        }
-        if (admit == SDFBase::Admit::READY) {
-            chunks.push_back(chunk);
-        }
+        return true;
+    };
+    const auto requeue = [this](const ChunkId &p_chunk, ChunkGate::Kind) { audit_queue.push_back(p_chunk); };
+    while (chunks.size() < settings.batch_size && gate.next(chunk, kind, pop, requeue)) {
+        chunks.push_back(chunk);
     }
     if (chunks.empty()) {
         return false;
@@ -1244,14 +1242,14 @@ void GPUDirectMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_v
     // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
     // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
     load_view = p_view;
-    gate.next_scan();
+    gate.next_scan(p_chunks, [this, &p_view](const ChunkId &p_chunk) { return ChunkMath::load_queue(p_chunk, lod_count, p_view); });
     std::vector<std::vector<std::pair<uint64_t, ChunkId>>> keyed(chunk_queue.size());
     for (const ChunkId &chunk_pos : p_chunks) {
         const int lod = ChunkMath::get_lod(chunk_pos);
         if (lod < 0 || lod >= lod_count) {
             continue;
         }
-        if (!working_generation.has(chunk_pos)) {
+        if (!working_generation.has(chunk_pos) && !gate.keeps(chunk_pos)) {
             keyed[ChunkMath::load_queue(chunk_pos, lod_count, p_view)].push_back({ morton_key(chunk_pos, chunk_param.origin_chunk), chunk_pos });
         }
     }
@@ -1343,7 +1341,8 @@ Dictionary GPUDirectMesher::get_stats() {
     d["list_requeued"] = (int64_t)stats.list_requeued;
     d["admit_parked"] = (int64_t)gate.parked;
     d["admit_later"] = (int64_t)gate.later;
-    d["stale_parked"] = (int64_t)gate.stale;
+    d["admit_capped_frames"] = (int64_t)gate.capped_frames;
+    d["max_admits_per_frame"] = (int64_t)settings.max_admits_per_frame;
     d["list_words_total"] = (int64_t)stats.list_words_total;
     d["list_words_max"] = (int64_t)stats.list_words_max;
     d["gpu_by_list_words"] = _gpu_by_list_words_stats();

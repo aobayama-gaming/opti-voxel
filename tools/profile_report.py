@@ -104,11 +104,11 @@ def stream_phase_row(name, ph, prev_terrain):
     compute = delta(st, prev, "compute_ms_total")
     workers = num(st, "workers")
     busy = f"{compute / wall / workers:.0%}" if compute is not None and workers and wall else "n/a"
-    mesher, prev_mesher = t.get("mesher", {}), (prev_terrain or {}).get("mesher") if prev_terrain else None
     cells = [fmt(wall, 0), fmt(delta(st, prev, "computed")), fmt(delta(st, prev, "evicted")), busy,
              fmt(delta(st, prev, "admit_ms_total")), fmt(delta(st, prev, "poll_ms_total")), fmt(delta(st, prev, "land_ms_total")),
              fmt(delta(st, prev, "evict_ms_total")), fmt(delta(st, prev, "admit_keys_created")), fmt(num(st, "admit_keys_created_max")),
-             fmt(num(st, "jobs_queued_max")), latency((st or {}).get("park_frames")), fmt(delta(mesher, prev_mesher, "stale_parked")),
+             fmt(num(st, "jobs_queued_max")), fmt(delta(st, prev, "jobs_reranked")), latency((st or {}).get("park_frames")),
+             fmt(delta(st, prev, "stale_handed_back")), fmt(delta(st, prev, "keys_dropped")), fmt(delta(st, prev, "jobs_dropped")),
              latency(t.get("destroy", {}).get("handoff_frames"))]
     return f"| {name} | " + " | ".join(cells) + " |"
 
@@ -138,8 +138,9 @@ def stream_report(stats, phases):
             "since the start: park = stream frames from a chunk's park to its hand-back, hand-off = frames a stalled "
             "parent stays drawn over its children.", "",
             "| phase | wall ms | computed | evicted | worker busy | admit ms | poll ms | land ms | evict ms | keys created "
-            "by admits | max per admit | FIFO max | park frames | stale parked | hand-off frames |",
-            "|" + "---|" * 15]
+            "by admits | max per admit | jobs queued max | jobs reranked | park frames | stale forgotten | keys dropped | "
+            "jobs dropped | hand-off frames |",
+            "|" + "---|" * 18]
     prev, tables = None, []
     for p in phases:
         ph = stats["phases"].get(p)
