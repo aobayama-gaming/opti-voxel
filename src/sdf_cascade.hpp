@@ -302,15 +302,27 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
         return skirt_depth_table[p_lod] + extra;
     }
 
-    ExactNoise::Float4 ground_field(const VoxelPos &p_voxel, int p_lod) const override {
+    // ground_field in three steps, the middle one the GPU's (CascadePasses::create_fields, FieldPointsGPU): the lattice
+    // point it reads (the nearest point of Λ_lod, ties up), the unit register there, and its extension to the voxel.
+    static VoxelPos ground_lattice(const VoxelPos &p_voxel, int p_lod) {
         const int64_t half = p_lod > 0 ? int64_t(1) << (p_lod - 1) : 0;
-        const VoxelPos at((p_voxel.x + half) >> p_lod << p_lod, (p_voxel.y + half) >> p_lod << p_lod, (p_voxel.z + half) >> p_lod << p_lod);
+        return VoxelPos((p_voxel.x + half) >> p_lod << p_lod, (p_voxel.y + half) >> p_lod << p_lod, (p_voxel.z + half) >> p_lod << p_lod);
+    }
+    ExactNoise::Float4 ground_unit(const VoxelPos &p_at, int p_lod) const {
         float ch[Cascade::CHANNELS];
-        channels_at(at, p_lod, ch);
-        ExactNoise::Float4 f = unit(ch, at, p_lod);
-        const VoxelPos d = p_voxel - at;
-        f.w = f.w * ExactNoise::exact_pow2(p_lod) + f.x * float(d.x) + f.y * float(d.y) + f.z * float(d.z);
-        return f;
+        channels_at(p_at, p_lod, ch);
+        return unit(ch, p_at, p_lod);
+    }
+    // The unit register p_unit read at p_at, extended along its gradient to p_voxel: the distance in LOD0 voxels.
+    static ExactNoise::Float4 extend_field(ExactNoise::Float4 p_unit, const VoxelPos &p_at, const VoxelPos &p_voxel, int p_lod) {
+        const VoxelPos d = p_voxel - p_at;
+        p_unit.w = p_unit.w * ExactNoise::exact_pow2(p_lod) + p_unit.x * float(d.x) + p_unit.y * float(d.y) + p_unit.z * float(d.z);
+        return p_unit;
+    }
+
+    ExactNoise::Float4 ground_field(const VoxelPos &p_voxel, int p_lod) const override {
+        const VoxelPos at = ground_lattice(p_voxel, p_lod);
+        return extend_field(ground_unit(at, p_lod), at, p_voxel, p_lod);
     }
 
     // The bare cascade's top solid voxel on the line from p_start down the base's up there (the voxel t steps along it,

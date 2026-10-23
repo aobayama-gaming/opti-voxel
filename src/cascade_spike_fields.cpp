@@ -1,0 +1,170 @@
+#include "cascade_spike_fields.hpp"
+
+#include "field_points_gpu.hpp"
+#include "godot_conv.hpp"
+
+#include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/packed_int64_array.hpp>
+
+#include <algorithm>
+
+using namespace godot;
+using namespace CascadeSpikeSets;
+using ExactNoise::Float4;
+using ExactNoise::same_bits;
+
+namespace CascadeSpikeFields {
+
+namespace {
+
+constexpr int PER_PLACE = 1024;
+constexpr int PLACES = 5;
+constexpr int FIELD_LODS[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24 };
+constexpr uint32_t TIMING_SIZES[] = { 1024, 4096, 16384, 65536 };
+constexpr int TIMING_LODS[] = { 0, 5 };
+
+String text(const Float4 &p_f) {
+    return vformat("(%s %s %s %s)", p_f.x, p_f.y, p_f.z, p_f.w);
+}
+
+// Voxel p_index of place p_place at LOD p_lod: within 64 LOD cells of its base (any voxel, so any lattice index).
+VoxelPos test_voxel(int p_lod, int p_place, int p_index) {
+    const int64_t P32 = int64_t(1) << 32;
+    const int64_t boundaries[] = { P32, -P32, 3 * P32, -5 * P32 };
+    const int64_t bases[PLACES] = { 0, (int64_t(1) << 60) - 123457, -(int64_t(1) << 60) + 54321, 0, int64_t(1) << MIN(32 + p_lod, 60) };
+    VoxelPos v;
+    for (int a = 0; a < 3; a++) {
+        const int64_t base = p_place == 3 ? boundaries[(p_index + a) % 4] : bases[p_place];
+        v[a] = base + ExactNoise::random_offset(uint32_t(p_lod), uint32_t(p_place * PER_PLACE + p_index), uint32_t(a) + 0xF1E1u, int64_t(64) << p_lod);
+    }
+    return v;
+}
+
+double median(std::vector<double> p_v) {
+    if (p_v.empty()) {
+        return 0.0;
+    }
+    std::sort(p_v.begin(), p_v.end());
+    return p_v[p_v.size() / 2];
+}
+
+} // namespace
+
+Dictionary check_fields(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
+    SDFCascade sdf;
+    ChunkParam param = p_param;
+    configure_variant(sdf, p_set, p_lods, param);
+    std::vector<VoxelPos> voxels;
+    std::vector<int> lods;
+    for (const int lod : FIELD_LODS) {
+        if (lod >= p_lods) {
+            continue;
+        }
+        for (int place = 0; place < PLACES; place++) {
+            for (int i = 0; i < PER_PLACE; i++) {
+                voxels.push_back(test_voxel(lod, place, i));
+                lods.push_back(lod);
+            }
+        }
+    }
+    Dictionary d;
+    Array examples;
+    int64_t differing = 0;
+    int64_t compared = 0;
+    PackedInt64Array per_lod;
+    FieldPointsGPU gpu;
+    FieldPointsGPU::BatchStats stats;
+    std::vector<VoxelPos> lattice(voxels.size());
+    std::vector<Float4> units(voxels.size());
+    std::vector<Float4> fields(voxels.size());
+    for (size_t i = 0; i < voxels.size(); i++) {
+        lattice[i] = SDFCascade::ground_lattice(voxels[i], lods[i]);
+    }
+    // One batch of every LOD: items of different LODs side by side.
+    const bool ran = gpu.create(p_rd, &sdf, param, uint32_t(voxels.size())) && gpu.units(lattice.data(), lods.data(), int(voxels.size()), units.data(), stats) &&
+            gpu.ground_field(voxels.data(), lods.data(), int(voxels.size()), fields.data(), stats);
+    if (!ran) {
+        examples.push_back("the field passes failed (compile or run)");
+        differing++;
+    }
+    for (size_t first = 0; ran && first < voxels.size(); first += PLACES * PER_PLACE) {
+        int64_t lod_differing = 0;
+        for (size_t i = first; i < first + PLACES * PER_PLACE; i++) {
+            const Float4 want_unit = sdf.ground_unit(lattice[i], lods[i]);
+            const Float4 want_field = sdf.ground_field(voxels[i], lods[i]);
+            compared++;
+            if (!same_bits(units[i], want_unit) || !same_bits(fields[i], want_field)) {
+                lod_differing++;
+                if (examples.size() < 24) {
+                    examples.push_back(vformat("set %s LOD %d voxel %s: unit gpu %s cpu %s, field gpu %s cpu %s", set_label(p_set), lods[i], godot_str(voxels[i]),
+                            text(units[i]), text(want_unit), text(fields[i]), text(want_field)));
+                }
+            }
+        }
+        differing += lod_differing;
+        per_lod.push_back(lod_differing);
+    }
+    d["points"] = compared;
+    d["differing"] = differing;
+    d["differing_per_lod"] = per_lod;
+    d["batches"] = stats.batches;
+    d["gpu_ms"] = stats.gpu_ms;
+    d["scratch_mb"] = double(gpu.scratch_bytes()) / 1048576.0;
+    d["examples"] = examples;
+    d["ok"] = ran && differing == 0 && compared == int64_t(voxels.size());
+    gpu.free();
+    return d;
+}
+
+Dictionary field_timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
+    Dictionary out;
+    Array rows;
+    for (const SpikeSet set : p_sets) {
+        SDFCascade sdf;
+        ChunkParam param = p_param;
+        configure_variant(sdf, set, p_lods, param);
+        FieldPointsGPU gpu;
+        const uint32_t most = TIMING_SIZES[std::size(TIMING_SIZES) - 1];
+        if (!gpu.create(p_rd, &sdf, param, most)) {
+            out["error_" + set_label(set)] = "the field passes failed to compile";
+            continue;
+        }
+        out["scratch_mb_" + set_label(set)] = double(gpu.scratch_bytes()) / 1048576.0;
+        std::vector<VoxelPos> points(most);
+        std::vector<int> lods(most);
+        std::vector<Float4> values(most);
+        for (const int lod : TIMING_LODS) {
+            for (uint32_t i = 0; i < most; i++) {
+                points[i] = SDFCascade::ground_lattice(test_voxel(lod, int(i % 3), int(i % PER_PLACE)) + VoxelPos(int64_t(i / PER_PLACE) << (lod + 7), 0, 0), lod);
+                lods[i] = lod;
+            }
+            for (const uint32_t size : TIMING_SIZES) {
+                std::vector<double> gpu_ms;
+                // One warm-up run, then p_runs timed ones.
+                for (int r = -1; r < p_runs; r++) {
+                    FieldPointsGPU::BatchStats stats;
+                    if (!gpu.units(points.data(), lods.data(), int(size), values.data(), stats)) {
+                        break;
+                    }
+                    if (r >= 0 && stats.gpu_ms >= 0.0) {
+                        gpu_ms.push_back(stats.gpu_ms);
+                    }
+                }
+                Dictionary row;
+                row["set"] = set_label(set);
+                row["lod"] = lod;
+                row["points"] = int64_t(size);
+                row["gpu_ms_median"] = median(gpu_ms);
+                row["us_per_point"] = median(gpu_ms) * 1000.0 / double(size);
+                row["gpu_runs"] = int64_t(gpu_ms.size());
+                rows.push_back(row);
+            }
+        }
+        gpu.free();
+    }
+    out["rows"] = rows;
+    out["runs"] = p_runs;
+    return out;
+}
+
+} // namespace CascadeSpikeFields

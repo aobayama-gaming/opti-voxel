@@ -216,6 +216,64 @@ TEST_CASE("CascadeGLSL: point items encode the corner as the chunk anchor, at it
     CHECK(!CascadeGLSL::encode_point_input(bytes, 0, VoxelPos(14, 0, 0), 0, pp));
 }
 
+// A field item carries its lattice point's words and its LOD as they are: any point of Λ_L, odd indices included (the
+// site walk's readings), unlike a point item's corner grid.
+TEST_CASE("CascadeGLSL: field items carry any lattice point and its LOD") {
+    uint8_t slot[GPUFrame::CHUNK_INPUT_BYTES];
+    const int64_t bases[] = { 0, -(int64_t(1) << 32) - 1, (int64_t(1) << 60) - 99999, -(int64_t(1) << 60) + 777 };
+    for (const int lod : { 0, 1, 5, 24 }) {
+        for (const int64_t base : bases) {
+            const VoxelPos p = SDFCascade::ground_lattice(VoxelPos(base, base + 3, -base), lod) + VoxelPos(int64_t(1) << lod, 0, 0);
+            GPUFrame::encode_field_item(slot, p, lod);
+            CHECK(ov::get_u32(slot + GPUFrame::FIELD_LOD_AT) == uint32_t(lod));
+            for (int a = 0; a < 3; a++) {
+                CAPTURE(lod);
+                CAPTURE(a);
+                CHECK(ov::get_u32(slot + 4 * a) == WorldCoord::lo32(p[a]));
+                CHECK(ov::get_s32(slot + 16 + 4 * a) == WorldCoord::hi32(p[a]));
+            }
+        }
+    }
+}
+
+// ground_field is its three steps (the GPU's field points read the middle one): the nearest lattice point (ties up), the
+// unit register there, the extension along its gradient; a coarse LOD's reading is a lattice point's.
+TEST_CASE("SDFCascade: ground_field = extend_field(ground_unit(ground_lattice))") {
+    SDFCascade sdf;
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    sdf.configure(param, 25);
+    CHECK(SDFCascade::ground_lattice(VoxelPos(15, 16, 17), 5) == VoxelPos(0, 32, 32));
+    CHECK(SDFCascade::ground_lattice(VoxelPos(-17, -16, -15), 5) == VoxelPos(-32, 0, 0));
+    for (const int lod : { 0, 3, 5, 8 }) {
+        for (int i = 0; i < 64; i++) {
+            const VoxelPos v(ExactNoise::random_offset(uint32_t(lod), uint32_t(i), 1, 1 << 20), 6000 + ExactNoise::random_offset(uint32_t(lod), uint32_t(i), 2, 256),
+                    ExactNoise::random_offset(uint32_t(lod), uint32_t(i), 3, 1 << 20));
+            const VoxelPos at = SDFCascade::ground_lattice(v, lod);
+            CHECK(ExactNoise::same_bits(sdf.ground_field(v, lod), SDFCascade::extend_field(sdf.ground_unit(at, lod), at, v, lod)));
+        }
+    }
+}
+
+// The field pass: the level template with the field fill (frame from the item, the unit register out), the chunk and point
+// passes' text unchanged (pinned in test_climate_shape.cpp), and a batch that fits its scratch budget.
+TEST_CASE("CascadeGLSL: the field pass writes the unit register from the item's own frame") {
+    SDFCascade sdf;
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    sdf.configure(param, 25);
+    const String code = CascadeGLSL::level_shader(&sdf, false, CascadeGLSL::Items::FIELDS);
+    CHECK(code.contains("field_value[sample_index] = r;"));
+    CHECK(code.contains("cascade_terrain_unit("));
+    CHECK(code.contains("f.lod = int(item.id.w);"));
+    CHECK(!code.contains("/*ITEM_FRAME*/"));
+    CHECK(CascadeGLSL::level_shader(&sdf, false, CascadeGLSL::Items::POINTS).contains("chunk_frame(input_chunk[pc.chunk_base + c], chunk_param)"));
+    const uint32_t n = CascadeGLSL::field_points_for_scratch(&sdf, 64ull << 20);
+    CHECK(n > 1000);
+    CHECK(CascadeGLSL::field_points_for_scratch(&sdf, 128ull << 20) >= 2 * n - 1);
+    CHECK(CascadeGLSL::field_points_for_scratch(&sdf, 1) == 1);
+}
+
 // The default terrain's bits, pinned: every register component of the bare cascade (sdf, through the ground's base
 // surface) and evaluate() at lattice points near the ground of every preset, at 0.5 m and 5 cm, near 0 and +-2^60.
 // The hash was taken on dev before the base surface (PR "base surface"): a change of formula that moves one bit fails.

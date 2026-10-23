@@ -71,6 +71,24 @@ inline void encode_chunk_input(godot::PackedByteArray &r_bytes, int64_t p_index,
     encode_chunk_input(r_bytes.ptrw() + p_index * CHUNK_INPUT_BYTES, p_chunk, p_param);
 }
 
+// A field item's LOD, in the ChunkInput word a chunk's list offset takes (id.w).
+static constexpr uint32_t FIELD_LOD_AT = CHUNK_LIST_OFFSET_AT;
+
+// Writes one field item (CHUNK_INPUT_BYTES) at r_slot: a point of Λ_lod (p_point a multiple of 2^lod, any index), its
+// low words where a chunk's id goes, its high words where a chunk's anchor's go, and the LOD itself in id.w (the
+// GPU's field_frame, CascadeGLSL's field items: no id, so no corner-grid restriction).
+inline void encode_field_item(uint8_t *r_slot, const VoxelPos &p_point, int p_lod) {
+    using namespace WorldCoord;
+    ov::put_u32(r_slot + 0, lo32(p_point.x));
+    ov::put_u32(r_slot + 4, lo32(p_point.y));
+    ov::put_u32(r_slot + 8, lo32(p_point.z));
+    ov::put_u32(r_slot + FIELD_LOD_AT, uint32_t(p_lod));
+    ov::put_s32(r_slot + 16, hi32(p_point.x));
+    ov::put_s32(r_slot + 20, hi32(p_point.y));
+    ov::put_s32(r_slot + 24, hi32(p_point.z));
+    ov::put_s32(r_slot + CHUNK_LIST_COUNT_AT, 0);
+}
+
 } // namespace GPUFrame
 
 // Before the bindings (ChunkInput is a buffer element type).

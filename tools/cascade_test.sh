@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # GPU cascade harness: build (unless --no-build), run res://debug/cascade_spike.tscn, check the result.
 #
-#   tools/cascade_test.sh [--no-build] [--lods=25] [--voxel=0.5] [--check=0|1] [--points=0|1] [--table=0|1] [--biomes=0|1] [--timing=0|1] [--runs=10]
+#   tools/cascade_test.sh [--no-build] [--lods=25] [--voxel=0.5] [--check=0|1] [--points=0|1] [--fields=0|1] [--table=0|1] [--biomes=0|1] [--timing=0|1] [--runs=10]
 #                         [--sets=8,4,4c]
 #
 # check: the cascade passes (cascade_glsl.hpp) vs Cascade::run, every channel of every level and the
 # sdf_sample, chunks of every LOD near 0, +-2^60 and across 2^32 boundaries (G1), and the LOD relation on
 # the GPU outputs (G3). points: the discoverer's point items (CascadePasses::create_points) vs Cascade::point +
 # SDFCascade::sdf, 5,120 corners per LOD near 0, +-2^60, across 2^32-voxel boundaries and lattice index 2^32
-# (D1 of the GPU discoverer). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
+# (D1 of the GPU discoverer). fields: the site walk's field points (CascadePasses::create_fields) vs SDFCascade::ground_unit /
+# ground_field, one mixed-LOD batch of 5,120 voxels per LOD (0-8, 12, 16, 24), and their GPU ms per batch of 1k-64k points
+# at LOD 0 and 5 (F1, F2). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
 # chunks' instance lists vs SDFCascade::sample_sdf + skirt (G9: the fold onto the cascade, bit for bit). biomes: the example climate's per-sample ground material (the biome pick at
 # level 0) vs SDFCascade::ground_material, every LOD (G10, on 4c and every other climate set asked). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
 # (G6), both channel sets (G7: 8 vs 4), each set against the plain 4 channels. Sets: 8, 4, 4c (LINEAR4 + the example
@@ -100,6 +102,19 @@ if pts:
     for s, d in pts.items():
         lines.append(f"| {s} ch | {d['points']:,} | {d['points_per_lod']:,} | {d['differing']} | {d['scratch_mb']:.2f} | {d['ok']} |")
     lines.append("")
+fld = {k: v for k, v in r.get("fields", {}).items() if k != "timing"}
+if fld:
+    lines += ["| F1 field points (mixed LODs) | points | differing | batches | scratch MB | ok |", "|---|---|---|---|---|---|"]
+    for s, d in fld.items():
+        lines.append(f"| {s} ch | {d['points']:,} | {d['differing']} | {d['batches']} | {d['scratch_mb']:.1f} | {d['ok']} |")
+    lines.append("")
+ft = r.get("fields", {}).get("timing", {})
+if ft.get("rows"):
+    lines += [f"F2 field points, GPU ms per single-LOD batch (median of {ft.get('runs')} runs):", "",
+              "| set | LOD | points | GPU ms | us / point |", "|---|---|---|---|---|"]
+    for x in ft["rows"]:
+        lines.append(f"| {x['set']} ch | {x['lod']} | {x['points']:,} | {x['gpu_ms_median']:.3f} | {x['us_per_point']:.3f} |")
+    lines.append("")
 tab = r.get("table", {})
 if tab:
     lines += ["| G9 instance table | records | chunks | samples | folded | differing | ok |", "|---|---|---|---|---|---|---|",
@@ -163,7 +178,7 @@ if rows:
 text = "\n".join(lines)
 print(text)
 open(sys.argv[3], "w").write(text + "\n")
-for s, d in list(check.items()) + list(pts.items()) + [("biomes " + k, v) for k, v in bio.items()]:
+for s, d in list(check.items()) + list(pts.items()) + [("fields " + k, v) for k, v in fld.items()] + [("biomes " + k, v) for k, v in bio.items()]:
     for e in d.get("examples", [])[:8]:
         print(f"   example ({s} ch):", e)
 if "error" in r:

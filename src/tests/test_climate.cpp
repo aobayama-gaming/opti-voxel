@@ -657,6 +657,6 @@ TEST_CASE("Climate: a modulation without fields takes the modulated GPU variant"
     for (const bool points : { false, true }) {
         const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, points);
         CHECK_FALSE(range.empty());
-        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true).contains("cascade_amplitudes("));
+        CHECK(CascadeGLSL::level_shader(&sdf, false, points ? CascadeGLSL::Items::POINTS : CascadeGLSL::Items::CHUNKS, false, !points, true).contains("cascade_amplitudes("));
     }
 }

@@ -57,8 +57,8 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     for (int l = 0; l < 15; l++) {
         h = fnv(h, float_bits(c.sdf.skirt_depth_m(l)));
     }
-    const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, true));
-    const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
+    const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, CascadeGLSL::Items::CHUNKS, false, true, true));
+    const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, CascadeGLSL::Items::POINTS));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
     CHECK(h == 16354123549857880415ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
@@ -302,7 +302,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
         CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
         for (const bool points : { false, true }) {
             for (const bool fields : { false, true }) {
-                const String code = CascadeGLSL::level_shader(&sdf, false, points, false, !points, fields);
+                const String code = CascadeGLSL::level_shader(&sdf, false, points ? CascadeGLSL::Items::POINTS : CascadeGLSL::Items::CHUNKS, false, !points, fields);
                 variants++;
                 for (const char *name : NAMES) {
                     const String call = String(name) + "(";
@@ -400,7 +400,7 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
     CHECK(sdf.has_ground_terms());
     for (const bool points : { false, true }) {
         CHECK(CascadeGLSL::field_range(&sdf, points).everywhere());
-        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true).contains("climate_ground("));
+        CHECK(CascadeGLSL::level_shader(&sdf, false, points ? CascadeGLSL::Items::POINTS : CascadeGLSL::Items::CHUNKS, false, !points, true).contains("climate_ground("));
     }
 }
 

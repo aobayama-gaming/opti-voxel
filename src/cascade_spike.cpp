@@ -4,6 +4,7 @@
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
+#include "cascade_spike_fields.hpp"
 #include "cascade_spike_sets.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
@@ -904,6 +905,18 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
             points_report[set_label(set)] = d;
         }
         report["points"] = points_report;
+    }
+    if (bool(p_options.get("fields", true))) {
+        Dictionary fields_report;
+        for (const SpikeSet set : sets) {
+            const uint64_t t0 = now_usec();
+            Dictionary d = CascadeSpikeFields::check_fields(rd, set, lods, param);
+            d["seconds"] = double(now_usec() - t0) / 1e6;
+            ok = ok && bool(d["ok"]);
+            fields_report[set_label(set)] = d;
+        }
+        fields_report["timing"] = CascadeSpikeFields::field_timing(rd, sets, lods, param, int(p_options.get("runs", 10)));
+        report["fields"] = fields_report;
     }
     if (bool(p_options.get("timing", true))) {
         report["timing"] = timing(rd, sets, lods, param, int(p_options.get("runs", 10)));
