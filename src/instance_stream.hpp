@@ -109,7 +109,10 @@ public:
     // p_sources[i] has the setup id i.
     InstanceStream(std::vector<std::shared_ptr<const ScatterSource>> p_sources, const ChunkParam &p_param, const Settings &p_settings,
             std::unique_ptr<StreamExecutor> p_executor);
-    ~InstanceStream(); // waits for the drain tasks running; the keys not started are dropped
+    ~InstanceStream(); // stop(), then waits for the drain tasks running
+    // No job starts or lands from now on: the queued ones are dropped, a running one lands nothing (its expansion would
+    // queue its subtree for nobody). The destructor's first step.
+    void stop();
 
     // Σ over the sources of the sites their zone holds times the records per site, twice, within [SLOTS_MIN, SLOTS_MAX].
     static uint32_t slot_budget(const std::vector<std::shared_ptr<const ScatterSource>> &p_sources);
@@ -254,6 +257,7 @@ private:
     std::map<JobKey, std::unique_ptr<Job>> jobs; // to run, first first
     uint64_t job_seq = 0; // under the stream's lock (start() is only called holding it)
     int draining = 0; // drain tasks started and not done
+    std::atomic<bool> stopping{ false }; // stop()
 
     std::unordered_map<ParkKey, Parked, ParkHash> parked;
     std::vector<ParkKey> ready_chunks; // parked chunks to hand back
@@ -321,8 +325,8 @@ private:
     // Not READY: its rank lowered to p_rank if better; RUNNING, its job moved if still queued (keeping its order among
     // equal ranks), WAITING, its inputs not landed too.
     void improve(Entry &r_entry, uint64_t p_rank);
-    // Not READY, unpinned, no key waiting for it, not asked for this frame, its job not started: erased (true), and its
-    // inputs then left alone too.
+    // Not READY, unpinned, no key waiting for it, not asked for this frame (unless an orphan landing), its job not started:
+    // erased (true), and its inputs then left alone too. Its job taken by a drain task: an orphan (dropped when it lands).
     bool drop_unneeded(Entry &r_entry);
     // A parked chunk's keys unpinned (and forgotten: unpinned once).
     void release_pins(Parked &r_parked);

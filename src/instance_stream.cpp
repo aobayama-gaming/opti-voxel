@@ -41,11 +41,14 @@ InstanceStream::InstanceStream(std::vector<std::shared_ptr<const ScatterSource>>
 }
 
 InstanceStream::~InstanceStream() {
-    {
-        const std::lock_guard<std::mutex> lock(job_mutex);
-        jobs.clear(); // the running drain tasks find nothing more
-    }
+    stop();
     executor->reap(true);
+}
+
+void InstanceStream::stop() {
+    stopping = true; // a job computing lands nothing (no expansion, no dependent started)
+    const std::lock_guard<std::mutex> lock(job_mutex);
+    jobs.clear(); // the running drain tasks find nothing more
 }
 
 uint32_t InstanceStream::slot_budget(const std::vector<std::shared_ptr<const ScatterSource>> &p_sources) {
@@ -352,17 +355,26 @@ void InstanceStream::improve(Entry &r_entry, uint64_t p_rank) {
 }
 
 bool InstanceStream::drop_unneeded(Entry &r_entry) {
-    // Asked for this frame (the keys of an admit answered LATER, the camera's queries): kept, computed meanwhile.
-    if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty() || r_entry.used == frame) {
+    if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty()) {
         return false;
     }
+    // Asked for this frame (the keys of an admit answered LATER, the camera's queries): kept, computed meanwhile. Not an
+    // orphan landing: dropped since it was asked (asked again, it is no orphan).
+    const bool asked_now = r_entry.used == frame && !r_entry.orphan;
     if (r_entry.state == Entry::RUNNING) {
         const std::lock_guard<std::mutex> lock(job_mutex);
-        if (jobs.erase(JobKey(r_entry.rank, r_entry.job_seq)) == 0) {
+        const auto job = jobs.find(JobKey(r_entry.rank, r_entry.job_seq));
+        if (job == jobs.end()) {
             r_entry.orphan = true; // a drain task took it: it lands into its grace (listing its inputs: dropped then)
             return false;
         }
+        if (asked_now) {
+            return false;
+        }
+        jobs.erase(job);
         stats.jobs_dropped++;
+    } else if (asked_now) {
+        return false;
     }
     const SourceKey key = r_entry.key;
     const std::vector<SourceKey> inputs = std::move(r_entry.input_keys); // WAITING: its inputs, landed or not
@@ -388,7 +400,7 @@ void InstanceStream::drain() {
         std::unique_ptr<Job> job;
         {
             const std::lock_guard<std::mutex> lock(job_mutex);
-            if (jobs.empty() || !executor->more()) {
+            if (jobs.empty() || stopping || !executor->more()) {
                 draining--;
                 return;
             }
@@ -397,6 +409,9 @@ void InstanceStream::drain() {
         }
         job->run();
         executor->landing();
+        if (stopping) {
+            continue; // nobody reads it: no landing (an expansion would queue its subtree)
+        }
         const std::unique_lock<std::shared_mutex> lock(mutex);
         land(std::move(job)); // the keys it completes join jobs: this loop takes them
     }

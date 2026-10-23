@@ -210,8 +210,7 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
 }
 
 void ScatterSource::proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const {
-    for_each_tile(p_region, blob_tile_cells(p_layer) * layer_cell(p_layer),
-            [&](const VoxelPos &p_tile) { r_out.push_back(SourceKey{ set.id, SourceKey::PROXIES, p_layer, p_tile }); });
+    append_tiles(SourceKey::PROXIES, p_layer, blob_tile_cells(p_layer) * layer_cell(p_layer), p_region, proxy_side(p_layer), r_out); // in proxy_zone
 }
 
 void ScatterSource::append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const {

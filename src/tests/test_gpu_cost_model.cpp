@@ -150,7 +150,30 @@ TEST_CASE("GPUCostModel: each LOD learns its own share of a bound") {
     }
     CHECK(m.list_share[0] == doctest::Approx(0.05).epsilon(0.01));
     CHECK(m.list_share[5] == doctest::Approx(0.8).epsilon(0.01));
-    CHECK(m.list_share[3] < 0.0); // never seen: the bound
-    CHECK(m.estimate_chunk(3, 1000) - m.estimate(3) == doctest::Approx(1000.0 * m.us_per_word));
+    CHECK(m.list_share[3] < 0.0); // never seen: the nearest LOD's share (5, at 2 LODs; 0 is at 3)
+    CHECK(m.estimate_chunk(3, 1000) - m.estimate(3) == doctest::Approx(800.0 * m.us_per_word).epsilon(0.01));
     CHECK(m.estimate_chunk(5, 1000) - m.estimate(5) == doctest::Approx(800.0 * m.us_per_word).epsilon(0.01));
+}
+
+TEST_CASE("GPUCostModel: a LOD with no list yet borrows the nearest LOD's share, the whole bound when none has one") {
+    GPUCostModel m;
+    m.resize(8);
+    CHECK(m.estimate_chunk(6, 9000) - m.estimate(6) == doctest::Approx(9000.0 * m.us_per_word));
+    m.observe_list(5, 1000, 300, 0, 1); // LOD 5's lists hold 0.3 of their bounds
+    CHECK(m.estimate_chunk(6, 9000) - m.estimate(6) == doctest::Approx(0.3 * 9000.0 * m.us_per_word));
+    CHECK(m.estimate_chunk(2, 9000) - m.estimate(2) == doctest::Approx(0.3 * 9000.0 * m.us_per_word));
+}
+
+TEST_CASE("GPUCostModel: a batch with a LOD's first measure moves that LOD only") {
+    GPUCostModel m;
+    m.resize(3);
+    m.observe({ 10, 0, 0 }, 600.0); // LOD 0: 60 us, measured
+    m.us_per_word = 4.0 * GPUCostModel::WORD_US; // 4x off
+    const double lod0 = m.estimate(0);
+    m.observe({ 10, 10, 0 }, 600.0 + 1000.0 + 20000.0 * GPUCostModel::WORD_US, 20000); // LOD 1 new, long lists
+    CHECK(m.measured(1));
+    CHECK(m.estimate(0) == lod0);
+    CHECK(m.us_per_word == 4.0 * GPUCostModel::WORD_US);
+    CHECK(m.estimate(1) >= lod0 / GPUCostModel::MAX_SCALE - 1e-9); // the clamp: the words' error isn't all the LOD's
+    CHECK(m.estimate(1) <= lod0 * GPUCostModel::MAX_SCALE + 1e-9);
 }

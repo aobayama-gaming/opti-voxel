@@ -820,12 +820,15 @@ TEST_CASE("Instance stream: an orphan's input listing is dropped when it lands, 
     CHECK(!in.empty()); // its first job lists inputs
     const auto forget = [](const ChunkId &) { return int64_t(-1); };
     const auto none = [](const ChunkId &) {};
-    for (int variant = 0; variant < 3; variant++) {
+    // Variant 3: the chunk forgotten in the frame it asked for its keys (a scan change), its listing job running.
+    for (int variant = 0; variant < 4; variant++) {
         CAPTURE(variant);
         HeldExecutor *held = nullptr;
         std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
         CHECK(stream->admit(c, 0, 1, 1) == InstanceStream::PARKED);
-        stream->poll(); // held: the frame turns (keys asked for this frame are never dropped)
+        if (variant != 3) {
+            stream->poll(); // held: the frame turns
+        }
         held->held = false;
         if (variant == 2) {
             held->steps = int64_t(own); // the expansions: the site tiles queued
@@ -839,6 +842,14 @@ TEST_CASE("Instance stream: an orphan's input listing is dropped when it lands, 
             }
         };
         stream->poll();
+        if (variant == 3) {
+            // The keys asked for this frame and still queued stay (an admit answered LATER keeps them); the orphan goes.
+            CHECK(stat(*stream, "keys") == int64_t(own) - 1);
+            CHECK(stat(*stream, "keys_expanded") == 0);
+            CHECK(stat(*stream, "keys_dropped") == 1);
+            CHECK(stat(*stream, "keys_pending_asked") == int64_t(own) - 1);
+            continue;
+        }
         if (variant == 0) {
             CHECK(stat(*stream, "keys") == 0);
             CHECK(stat(*stream, "keys_dropped") == int64_t(own));
@@ -862,6 +873,28 @@ TEST_CASE("Instance stream: an orphan's input listing is dropped when it lands, 
         CHECK(stat(*stream, "keys_pending_asked") == 0);
         CHECK(stat(*stream, "keys_pending_inputs") == 0);
     }
+}
+
+// Stopping (the destructor's first step) while a key's job lists its inputs: it lands nothing, so no subtree is queued for
+// a stream being destroyed.
+TEST_CASE("Instance stream: a job landing after stop() queues nothing") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ScatterSource &f = *fx.source;
+    int lod = 1;
+    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
+        lod++;
+    }
+    const ChunkId c = fx.chunk(-200, -200, lod);
+    HeldExecutor *held = nullptr;
+    std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
+    CHECK(stream->admit(c, 0, 1, 1) == InstanceStream::PARKED);
+    held->held = false;
+    held->before_land = [&] { stream->stop(); };
+    stream->poll();
+    stream->poll();
+    CHECK(stat(*stream, "keys_expanded") == 0);
+    CHECK(stat(*stream, "computed") == 0);
+    CHECK(stat(*stream, "keys") == int64_t(own_keys(fx, c))); // nothing created past the chunk's own keys
 }
 
 TEST_CASE("Instance stream: an input not landed runs at the best rank of the keys waiting for it") {
