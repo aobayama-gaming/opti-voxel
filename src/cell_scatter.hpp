@@ -45,6 +45,9 @@ struct CellScatter {
     // box's own level depends on its extent, and a coarser start may prune a cell a finer one keeps). On the worker pool
     // (not from inside a pool task, unless it holds an InlineParallelFor).
     void sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap = true) const;
+    // The tiles of side << p_level voxels (tile units, cell order) meeting p_query and the zone that can hold a site: the
+    // nodes the zone-level walk keeps at that level (surface_nodes; a few readings per tile, no snap). Pool rule of sites().
+    void site_tiles(const VoxelBox &p_query, int p_level, std::vector<VoxelPos> &r_out) const;
     // A site's records along the up at its base, for LOD p_lod (generate; -1: all).
     void grow(const Site &p_site, int p_lod, std::vector<TableRecord> &r_out) const { generate(p_site, up(p_site.base), p_lod, r_out); }
 };

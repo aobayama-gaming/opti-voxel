@@ -262,7 +262,7 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
             std::vector<SourceKey> in;
             f.inputs(k, in);
             // The LOD-0 site tiles of its cube meeting the zone, in the pyramid's order: a LOD-0 part tile reads its own, a
-            // coarser one none, its one walk giving the union of theirs (a walk is a pure function of the cell), in cell order.
+            // coarser one those the zone's walk keeps at their level: every one with a site among them, the others air.
             std::vector<VoxelPos> all;
             pyramid_tiles(f, k.lod, k.tile, all);
             std::vector<SourceKey> site_tiles;
@@ -278,12 +278,13 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
             if (k.lod == 0) {
                 CHECK(in == site_tiles);
             } else {
-                CHECK(in.empty());
-                std::sort(from_tiles.begin(), from_tiles.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
-                std::vector<CellSite> own;
-                f.setup().scatter.sites(f.tile_box(k), own);
-                CHECK(same_sites(own, from_tiles));
-                walked += int64_t(own.size());
+                CHECK(std::is_sorted(in.begin(), in.end(), [](const SourceKey &p_a, const SourceKey &p_b) { return cell_order(p_a.tile, p_b.tile); }));
+                for (const SourceKey &site : site_tiles) {
+                    const bool asked = std::find(in.begin(), in.end(), site) != in.end();
+                    CHECK((asked || fx.content(site).sites.empty()));
+                }
+                CHECK(std::all_of(in.begin(), in.end(), [&](const SourceKey &p_s) { return std::find(site_tiles.begin(), site_tiles.end(), p_s) != site_tiles.end(); }));
+                walked += int64_t(from_tiles.size());
             }
             inputs += int64_t(in.size());
             cube += int64_t(all.size());
@@ -294,9 +295,9 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
             }
         }
         MESSAGE("LOD ", lod, ": tile ", f.part_tile_side(lod), " voxels (key LOD ", key_lod, "), ", double(held) / double(groups), " records per site, ", inputs,
-                " site tiles read of ", cube, ", ", walked, " sites walked by the coarse tiles");
+                " site tiles read of ", cube, ", ", walked, " sites read by the coarse tiles");
         CHECK(held == listed);
-        CHECK((key_lod == 0 || (inputs == 0 && walked == groups)));
+        CHECK((key_lod == 0 || walked == groups));
     }
 }
 

@@ -21,9 +21,9 @@
 //   doubled until it holds two chunks of the LOD. It grows the sites of its box in the zone (CellScatter::grow, finished
 //   like the table's) and keeps one group per site: at LOD 0 every record (a record no LOD lists still weighs in the
 //   blobs), coarser the ones listed at L. A LOD-0 tile reads its site tile (1:1: the near layers read the sites through
-//   it); a coarser one walks its own box once (every walk of the source starts at the zone's level, CellScatter::sites:
-//   the union of the site tiles' sites bit for bit), in cell order, instead of asking the 8^L site tiles of its cube
-//   (mostly air) as jobs. A LOD whose side
+//   it); a coarser one reads the site tiles of its cube that can hold a site (the zone-level walk stopped at their level,
+//   CellScatter::site_tiles: a few readings per tile, no air tile asked for) and merges them in cell order, so every LOD
+//   shares the site tiles' walks and snaps. A LOD whose side
 //   is a finer LOD's has no key of its own: its chunks read that LOD's (part_key_lod) and filter at their LOD. A chunk
 //   reads a few keys at any LOD; none from the profile's lod_end on.
 // - A blob tile of layer L (SourceKey::BLOBS): a cube of blob_tile_cells(L) layer-L cells (moment_layers.hpp); its
@@ -93,7 +93,7 @@ struct SourceContent {
 
 class ScatterSource {
 public:
-    static constexpr int64_t PART_TILE_CELLS = 8; // source cells per LOD-0 part tile side
+    static constexpr int64_t PART_TILE_CELLS = 8; // source cells per LOD-0 part tile side, at least
     static constexpr int64_t BLOB_TILE_CELLS = 8; // layer cells per blob tile side, at least
     static constexpr int64_t MARGIN_CELLS = MomentLayers::PRUNE_CELLS + 1; // the cells past its own a blob tile reads
     static constexpr int64_t PROXY_PER_CELL = 2; // far proxies per layer cell side
@@ -154,8 +154,9 @@ public:
     // the discoverer keeps a node of the zone whose corners are this close to the ground (SDFTable::cull_exempt).
     int64_t ground_reach(int p_lod) const;
     // The keys p_key's content reads: a LOD-0 part tile its site tile (if it meets the zone), a part layer's blob tile the
-    // LOD-0 part tiles around it (key order), a far layer's the proxy tiles its region meets (proxy_region, key order);
-    // none otherwise (a coarser part tile walks its own box).
+    // LOD-0 part tiles around it (key order), a far layer's the proxy tiles its region meets (proxy_region, key order), a
+    // coarser part tile the site tiles of its cube the zone's walk keeps (key order); none otherwise. A coarse part tile's
+    // walks its site tiles' octree down to their level: on the worker pool (not from a pool task without InlineParallelFor).
     void inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out) const;
 
     // The contents of inputs(p_key), in its order; an entry missing or null is computed here (the same).
@@ -173,6 +174,7 @@ private:
     int first_layer = 0;
     float blob_margin_c = 0.0f; // a blob record's locality margin (its type's, the table's skirt)
     std::vector<int64_t> part_sides; // part_tile_side per LOD
+    int site_level = 0; // a site tile is a node of this level of the sites' walk: part_tile_side(0) = scatter side << it
     std::vector<int> part_key_lods; // part_key_lod per LOD
     std::vector<int64_t> ground_reaches; // ground_reach per LOD
 

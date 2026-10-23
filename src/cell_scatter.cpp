@@ -22,6 +22,13 @@ void CellScatter::sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, b
     }
 }
 
+void CellScatter::site_tiles(const VoxelBox &p_query, int p_level, std::vector<VoxelPos> &r_out) const {
+    const VoxelBox box = p_query.clipped(zone);
+    if (box.valid && valid()) {
+        surface_nodes(box.lo, box.hi, side, ground, p_level, walk_level(zone, side), r_out);
+    }
+}
+
 namespace {
 
 double largest_variance(const Moments &p_m) {

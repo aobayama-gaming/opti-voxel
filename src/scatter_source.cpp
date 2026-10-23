@@ -157,6 +157,9 @@ ScatterSource::ScatterSource(const Setup &p_setup) :
         part_key_lods.push_back(l > 0 && side == part_sides.back() ? part_key_lods.back() : l);
         part_sides.push_back(side);
     }
+    while (!part_sides.empty() && (set.scatter.side << site_level) < part_sides[0]) {
+        site_level++; // PART_TILE_CELLS doubled: a power of two of source cells
+    }
     // A base lies within a voxel of the ground (cell_site), a blob's cell within a cell of the records' reach; the largest
     // over the LOD and the finer ones (a culled node hides its subtree).
     int64_t r = 0;
@@ -239,9 +242,19 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
         return;
     }
     if (p_key.kind == SourceKey::PARTS) {
-        // A LOD-0 tile reads its site tile when a base can lie in it; a coarser one walks its own box (part_tile).
-        if (p_key.lod == 0 && tile_box(p_key).intersects(set.scatter.zone)) {
-            r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_key.tile });
+        // A LOD-0 tile reads its site tile when a base can lie in it; a coarser one the site tiles of its cube the zone's
+        // walk keeps (CellScatter::site_tiles: the walk stopped at their level, so no air tile is asked for). A site tile
+        // is a node of that walk (site_level), and a tile it drops walks to no site from the same level.
+        if (p_key.lod == 0) {
+            if (tile_box(p_key).intersects(set.scatter.zone)) {
+                r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_key.tile });
+            }
+        } else {
+            std::vector<VoxelPos> tiles;
+            set.scatter.site_tiles(tile_box(p_key), site_level, tiles);
+            for (const VoxelPos &t : tiles) {
+                r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, t });
+            }
         }
     } else if (p_key.kind == SourceKey::BLOBS && part_layer(p_key.lod)) {
         // The LOD-0 part tiles whose records can have their centroid in the tile's cells or MARGIN_CELLS past them.
@@ -319,25 +332,18 @@ int ScatterSource::proxy_level(int p_layer) const {
 }
 
 void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
-    std::vector<TableRecord> grown;
-    if (p_key.lod > 0) {
-        // One walk of its own box, from the zone's level as every walk of the source (CellScatter::sites): exactly the
-        // sites of the LOD-0 site tiles inside it, in cell order, the air pruned at the coarse levels (the 8^L site tiles
-        // it asked before cost a job each, most of them empty).
-        std::vector<CellSite> sites;
-        set.scatter.sites(tile_box(p_key), sites);
-        for (const CellSite &cs : sites) {
-            grow_site(cs, p_key.lod, grown, r_out);
-        }
-        return;
-    }
+    // Its site tiles' sites (one at LOD 0), in cell order: the whole build's order, the tiles' walks shared by every LOD.
     std::vector<SourceKey> in;
     inputs(p_key, in);
-    for_each_input(in, p_inputs, [&](const SourceContent &p_sites) {
-        for (const CellSite &cs : p_sites.sites) {
-            grow_site(cs, -1, grown, r_out);
-        }
-    });
+    std::vector<CellSite> sites;
+    for_each_input(in, p_inputs, [&](const SourceContent &p_sites) { sites.insert(sites.end(), p_sites.sites.begin(), p_sites.sites.end()); });
+    if (in.size() > 1) {
+        std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
+    }
+    std::vector<TableRecord> grown;
+    for (const CellSite &cs : sites) {
+        grow_site(cs, p_key.lod > 0 ? p_key.lod : -1, grown, r_out);
+    }
 }
 
 void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<TableRecord> &r_grown, SourceContent &r_out) const {

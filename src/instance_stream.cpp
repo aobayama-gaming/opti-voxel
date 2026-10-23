@@ -715,22 +715,24 @@ void InstanceStream::point_records(const VoxelPos &p_voxel, int p_lod, std::vect
         s->keys(p_voxel, p_voxel, p_lod, keys);
         for (const SourceKey &k : keys) {
             std::shared_ptr<const SourceContent> content;
-            std::vector<std::shared_ptr<const SourceContent>> inputs; // the resident ones (the others computed with it)
             {
                 const std::shared_lock<std::shared_mutex> lock(mutex);
                 const auto it = entries.find(k);
                 if (it != entries.end() && it->second.state == Entry::READY) {
                     content = it->second.content;
-                } else {
-                    s->inputs(k, in);
+                }
+            }
+            if (!content) {
+                const InlineParallelFor inline_loops; // maybe a pool task (the discoverer's batches)
+                s->inputs(k, in); // a coarse part tile's walks to its site tiles: out of the lock
+                std::vector<std::shared_ptr<const SourceContent>> inputs; // the resident ones (the others computed with it)
+                {
+                    const std::shared_lock<std::shared_mutex> lock(mutex);
                     for (const SourceKey &i : in) {
                         const auto input = entries.find(i);
                         inputs.push_back(input != entries.end() && input->second.state == Entry::READY ? input->second.content : nullptr);
                     }
                 }
-            }
-            if (!content) {
-                const InlineParallelFor inline_loops; // maybe a pool task (the discoverer's batches)
                 ScatterSource::Inputs raw;
                 for (const std::shared_ptr<const SourceContent> &i : inputs) {
                     raw.push_back(i.get());
