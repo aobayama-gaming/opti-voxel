@@ -109,7 +109,7 @@ def stream_phase_row(name, ph, prev_terrain):
              fmt(delta(st, prev, "admit_ms_total")), fmt(delta(st, prev, "poll_ms_total")), fmt(delta(st, prev, "land_ms_total")),
              fmt(delta(st, prev, "evict_ms_total")), fmt(delta(st, prev, "admit_keys_created")), fmt(num(st, "admit_keys_created_max")),
              fmt(num(st, "jobs_queued_max")), fmt(delta(st, prev, "jobs_reranked")), latency((st or {}).get("park_frames")),
-             fmt(delta(st, prev, "stale_handed_back")), fmt(delta(mesher, prev_mesher, "stale_parked")),
+             fmt(delta(st, prev, "stale_handed_back")), fmt(delta(st, prev, "jobs_dropped")), fmt(delta(mesher, prev_mesher, "stale_parked")),
              latency(t.get("destroy", {}).get("handoff_frames"))]
     return f"| {name} | " + " | ".join(cells) + " |"
 
@@ -139,9 +139,9 @@ def stream_report(stats, phases):
             "since the start: park = stream frames from a chunk's park to its hand-back, hand-off = frames a stalled "
             "parent stays drawn over its children.", "",
             "| phase | wall ms | computed | evicted | worker busy | admit ms | poll ms | land ms | evict ms | keys created "
-            "by admits | max per admit | jobs queued max | jobs reranked | park frames | stale handed back | stale parked | "
-            "hand-off frames |",
-            "|" + "---|" * 17]
+            "by admits | max per admit | jobs queued max | jobs reranked | park frames | stale forgotten | jobs dropped | "
+            "stale parked | hand-off frames |",
+            "|" + "---|" * 18]
     prev, tables = None, []
     for p in phases:
         ph = stats["phases"].get(p)

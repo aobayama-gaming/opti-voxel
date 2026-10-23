@@ -641,51 +641,102 @@ TEST_CASE("Instance stream: a parked chunk asked again with a better rank moves 
     CHECK(placed_before(fx, x, y, placement_order(*stream)));
 }
 
-TEST_CASE("Instance stream: set_tag hands back the owner's chunks parked under an older tag, unpinned, their jobs last") {
+TEST_CASE("Instance stream: set_tag forgets the owner's chunks parked under an older tag the scan doesn't want, and drops their jobs") {
     const StreamFixture &fx = StreamFixture::get();
     const ChunkId old_chunk = fx.chunk(-300, -300), current = fx.chunk(300, 300), other = fx.chunk(-300, 300);
     CHECK(disjoint(fx, { old_chunk, current, other }));
-    InstanceStream::Settings settings;
-    settings.entries = 0; // every key past its grace and unpinned goes at each poll
-    std::unique_ptr<InstanceStream> stream = fx.stream(settings);
+    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
     CHECK(stream->admit(old_chunk, 0, 1, 1) == InstanceStream::PARKED);
     CHECK(stream->admit(current, 0, 2, 5) == InstanceStream::PARKED);
     CHECK(stream->admit(other, 7, 1, 5) == InstanceStream::PARKED); // another owner's: its tags are its own
 
-    stream->set_tag(0, 2);
+    std::vector<ChunkId> kept;
+    stream->set_tag(0, 2, [](const ChunkId &) { return false; }, kept);
+    CHECK(kept.empty());
+    CHECK(stream->parked_count(0) == 1);
+    CHECK(stream->parked_count(7) == 1);
+    CHECK(stat(*stream, "stale_handed_back") == 1);
+    // None of its keys had started: all dropped, its site tiles with them.
+    CHECK(stat(*stream, "jobs_dropped") == int64_t(keys_and_inputs(fx, old_chunk)));
+    CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, current) + keys_and_inputs(fx, other)));
+
+    stream->poll();
     std::vector<std::pair<ChunkId, uint64_t>> back;
-    stream->take_ready(0, back); // at once, before its keys land
+    stream->take_ready(0, back); // the forgotten chunk never comes back
     CHECK(back.size() == 1);
     if (!(back.size() == 1)) {
         return;
     }
-    CHECK(back[0] == std::make_pair(old_chunk, uint64_t(1)));
-    CHECK(stream->parked_count(0) == 1);
-    CHECK(stream->parked_count(7) == 1);
-    CHECK(stat(*stream, "stale_handed_back") == 1);
-    CHECK(stat(*stream, "jobs_reranked") > 0);
-
-    // Its jobs still run (a landed key sits in its grace), after the parked chunks'.
-    stream->poll();
-    const std::vector<SourceKey> order = placement_order(*stream);
-    CHECK(placed_before(fx, current, old_chunk, order));
-    CHECK(placed_before(fx, other, old_chunk, order));
+    CHECK(back[0] == std::make_pair(current, uint64_t(2)));
+    CHECK(placed_span(fx, old_chunk, placement_order(*stream)).first == -1);
     const Dictionary park_frames = stream->get_stats()["park_frames"];
-    CHECK(int64_t(park_frames["count"]) == 2); // the stale hand-back counted apart
+    CHECK(int64_t(park_frames["count"]) == 2);
 
-    // Unpinned: its keys go past their grace, the parked chunks' (not taken back) stay.
-    for (uint64_t f = 0; f <= InstanceStream::GRACE_FRAMES + 1; f++) {
-        stream->poll();
+    // Asked again, it is computed from scratch, the same.
+    CHECK(stream->admit(old_chunk, 0, 2, 1) == InstanceStream::PARKED);
+    stream->poll();
+    stream->take_ready(0, back);
+    Mirror mirror;
+    mirror.update(*stream);
+    CHECK(stream->admit(old_chunk, 0, 2, 1) == InstanceStream::READY);
+    CHECK(lists_right(fx, *stream, mirror, old_chunk));
+}
+
+TEST_CASE("Instance stream: set_tag keeps parked, under the new tag, the chunks the scan still wants") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ChunkId wanted = fx.chunk(-300, -300), dropped = fx.chunk(300, 300);
+    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
+    CHECK(stream->admit(wanted, 0, 1, 1) == InstanceStream::PARKED);
+    CHECK(stream->admit(dropped, 0, 1, 1) == InstanceStream::PARKED);
+    std::vector<ChunkId> kept;
+    stream->set_tag(0, 2, [&](const ChunkId &p_chunk) { return p_chunk == wanted; }, kept);
+    CHECK(kept == std::vector<ChunkId>{ wanted });
+    CHECK(stream->parked_count(0) == 1);
+    stream->poll();
+    std::vector<std::pair<ChunkId, uint64_t>> back;
+    stream->take_ready(0, back);
+    CHECK(back.size() == 1);
+    if (!(back.size() == 1)) {
+        return;
     }
-    std::vector<SourceKey> keys;
-    fx.source->chunk_keys(old_chunk, fx.param, keys);
-    CHECK(key_stat(*stream, "parts 0", "evicted") == int64_t(keys.size()));
+    CHECK(back[0] == std::make_pair(wanted, uint64_t(2)));
+}
+
+// A waiting key dropped while its input is still to run: the input lands for the keys still waiting, and never reaches
+// the dropped one (it left the input's dependents).
+TEST_CASE("Instance stream: a dropped waiting key leaves its inputs' dependents; a shared input lands for the others") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ScatterSource &f = *fx.source;
+    int lod = 1;
+    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
+        lod++;
+    }
+    const ChunkId coarse = fx.chunk(200, 200, lod), fine = fx.chunk(200, 200);
+    CHECK_FALSE(disjoint(fx, { coarse, fine })); // they share site tiles
+    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings());
+    CHECK(stream->admit(coarse, 0, 1, 1) == InstanceStream::PARKED);
+    CHECK(stream->admit(fine, 0, 2, 2) == InstanceStream::PARKED);
+    std::vector<ChunkId> kept;
+    stream->set_tag(0, 2, [](const ChunkId &) { return false; }, kept); // the fine chunk is the new scan's already
+    CHECK(kept.empty());
+    // The coarse part tiles (waiting) and the site tiles only they read went; the shared ones stay, still to run.
+    CHECK(stat(*stream, "jobs_dropped") > 0);
+    CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, fine)));
+    stream->poll();
+    std::vector<std::pair<ChunkId, uint64_t>> back;
     stream->take_ready(0, back);
     CHECK(back.size() == 1);
     Mirror mirror;
     mirror.update(*stream);
-    CHECK(stream->admit(current, 0, 2, 5) == InstanceStream::READY);
-    CHECK(lists_right(fx, *stream, mirror, current));
+    CHECK(stream->admit(fine, 0, 2, 2) == InstanceStream::READY);
+    CHECK(lists_right(fx, *stream, mirror, fine));
+    // The coarse chunk asked again: computed again, its shared site tiles resident.
+    CHECK(stream->admit(coarse, 0, 2, 1) == InstanceStream::PARKED);
+    stream->poll();
+    stream->take_ready(0, back);
+    mirror.update(*stream);
+    CHECK(stream->admit(coarse, 0, 2, 1) == InstanceStream::READY);
+    CHECK(lists_right(fx, *stream, mirror, coarse));
 }
 
 TEST_CASE("Instance stream: a walk key off its grid walks nothing (a site tile above LOD 0, proxies on a part layer)") {

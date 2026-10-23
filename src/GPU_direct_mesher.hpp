@@ -294,8 +294,8 @@ private:
     // completion assembly (render thread writes, main thread consumes; under mutex)
     HashMap<uint32_t, CompletedBatch> partial;
 
-    // r_remesh (if given): whether the chunk came from remesh_queue; r_queue (if given): its chunk_queue index.
-    bool _pop_queue(ChunkId &r_chunk, bool *r_remesh = nullptr, int *r_queue = nullptr);
+    // r_kind: REMESH from remesh_queue, else CHUNK and r_queue its chunk_queue index (ChunkGate::next's pop).
+    bool _pop_queue(ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue);
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
     // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
     bool _dispatch_mesh_batch(double &r_budget_us);

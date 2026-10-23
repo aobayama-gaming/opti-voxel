@@ -357,11 +357,14 @@ to every change, and a reviewer may reject a PR on any of them.
   dropped. Jobs run by (rank, order asked) (`jobs`: a map under `job_mutex`, a drain task pops `begin()`): `ChunkGate`
   passes re-meshes 0, a first mesh 1 + its `load_queue` (the mesher's pop order), audits `AUDIT_RANK`; a key's rank is
   the best of its requesters', inherited by its inputs not landed, a queued job asked better is re-keyed (`jobs_reranked`).
-  `set_tag(owner, tag)` (`ChunkGate::next_scan`, the CHUNK owner only) hands back at once the chunks parked under an older
-  scan (`stale_handed_back`, unpinned) and sends the jobs no pin, no live dependent and no view query needs to
-  `STALE_RANK` (never dropped). `PENDING_MAX` 2^14 (2^12 under the FIFO). `ChunkGate::begin_frame(cap)` / `open()` stop a
-  frame's popping at a LATER or the cap (direct: `max_admits_per_frame`, 0 = 4 x batch_size; `admit_capped_frames`). Unit tests: park / return order, pins and grace,
-  slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag`.
+  `set_tag(owner, tag, wanted, kept)` (`ChunkGate::next_scan(scan)`, the CHUNK owner only): the chunks parked under an
+  older scan that the new one holds are retagged in place (`ChunkGate::keeps`: `send_chunk` doesn't queue them again),
+  the others are forgotten, unpinned (`stale_handed_back`), and the keys then needed by no pin, dependent or view query
+  are erased if their job hasn't started (`jobs_dropped`; a dropped waiting key leaves its inputs' `dependents`).
+  `PENDING_MAX` 2^14 (2^12 under the FIFO). `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
+  requeue loop; `begin_frame(cap)` closes a frame at a LATER or at `cap` PARKED / LATER answers (READY ones ask for no
+  key; direct: `max_admits_per_frame`, 0 = 4 x batch_size; `admit_capped_frames`). Unit tests: park / return order, pins and grace,
+  slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag` (kept, forgotten, dropped jobs), the gate's cap.
   **Wiring:** `SDFTable` owns the stream over its valid sources (`add_stream`; `~SDFCascade` stops it first: its tasks read
   `ground_field`). The meshers gate every chunk they pop through `SDFBase::admit / take_ready / parked_count`, called by
   `ChunkGate` (`src/chunk_gate.hpp`, both meshers): one owner per mesher and queue kind (chunk, remesh, discovery audit),

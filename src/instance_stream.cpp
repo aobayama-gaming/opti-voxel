@@ -226,21 +226,32 @@ size_t InstanceStream::parked_count(uint64_t p_owner) const {
     return n;
 }
 
-void InstanceStream::set_tag(uint64_t p_owner, uint64_t p_tag) {
+void InstanceStream::set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<bool(const ChunkId &)> &p_wanted, std::vector<ChunkId> &r_kept) {
     const std::unique_lock<std::shared_mutex> lock(mutex);
+    r_kept.clear();
     std::vector<SourceKey> released;
-    for (std::pair<const ParkKey, Parked> &p : parked) {
-        if (p.first.owner != p_owner || p.second.tag >= p_tag || p.second.done) {
-            continue;
+    for (auto it = parked.begin(); it != parked.end();) {
+        Parked &p = it->second;
+        if (it->first.owner != p_owner || p.tag >= p_tag) {
+            ++it;
+        } else if (p_wanted(it->first.chunk)) {
+            p.tag = p_tag; // its keys keep coming; asked again it improves its rank
+            r_kept.push_back(it->first.chunk);
+            ++it;
+        } else {
+            released.insert(released.end(), p.keys.begin(), p.keys.end());
+            release_pins(p);
+            stats.stale_handed_back++;
+            it = parked.erase(it); // its waiters' seq finds nothing
         }
-        hand_back(p.first, true);
-        released.insert(released.end(), p.second.keys.begin(), p.second.keys.end());
-        release_pins(p.second); // take_ready() has nothing left to unpin
     }
+    // take_ready() reads parked for each of them.
+    ready_chunks.erase(std::remove_if(ready_chunks.begin(), ready_chunks.end(), [this](const ParkKey &p_k) { return parked.find(p_k) == parked.end(); }),
+            ready_chunks.end());
     for (const SourceKey &k : released) {
         const auto it = entries.find(k);
         if (it != entries.end()) {
-            orphan(it->second);
+            drop_unneeded(it->second);
         }
     }
 }
@@ -252,16 +263,12 @@ void InstanceStream::release_pins(Parked &r_parked) {
     r_parked.keys.clear();
 }
 
-void InstanceStream::hand_back(const ParkKey &p_park, bool p_stale) {
+void InstanceStream::hand_back(const ParkKey &p_park) {
     const auto it = parked.find(p_park);
     if (it != parked.end() && !it->second.done) {
         it->second.done = true;
         ready_chunks.push_back(p_park);
-        if (p_stale) {
-            stats.stale_handed_back++;
-        } else {
-            stats.park_frames.add(frame - it->second.frame);
-        }
+        stats.park_frames.add(frame - it->second.frame);
     }
 }
 
@@ -273,12 +280,10 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
         stats.keys_created++;
         e.key = p_key;
         e.rank = p_rank;
-        thread_local std::vector<SourceKey> in;
-        source(p_key).inputs(p_key, in);
-        const std::vector<SourceKey> inputs = in; // the requests below reuse the thread_local
-        e.inputs.resize(inputs.size());
-        for (uint32_t i = 0; i < inputs.size(); i++) {
-            Entry &input = request(inputs[i], false, p_rank);
+        source(p_key).inputs(p_key, e.input_keys);
+        e.inputs.resize(e.input_keys.size());
+        for (uint32_t i = 0; i < e.input_keys.size(); i++) {
+            Entry &input = request(e.input_keys[i], false, p_rank); // try_emplace: e stays valid
             if (input.state == Entry::READY) {
                 e.inputs[i] = input.content;
             } else {
@@ -306,6 +311,7 @@ void InstanceStream::start(Entry &r_entry) {
     job->key = r_entry.key;
     job->inputs = std::move(r_entry.inputs);
     r_entry.inputs.clear();
+    r_entry.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
     r_entry.state = Entry::RUNNING;
     bool spawn = false;
     {
@@ -321,44 +327,19 @@ void InstanceStream::start(Entry &r_entry) {
     }
 }
 
-template <typename F>
-void InstanceStream::each_input(const Entry &p_entry, F p_fn) {
-    thread_local std::vector<SourceKey> in;
-    source(p_entry.key).inputs(p_entry.key, in);
-    const std::vector<SourceKey> inputs = in; // p_fn may recurse here
-    for (const SourceKey &k : inputs) {
-        const auto it = entries.find(k);
-        if (it != entries.end()) { // else landed, handed over and evicted since
-            p_fn(it->second);
-        }
-    }
-}
-
 void InstanceStream::improve(Entry &r_entry, uint64_t p_rank) {
     if (r_entry.state == Entry::READY || p_rank >= r_entry.rank) {
         return;
     }
-    rerank(r_entry, p_rank, [this, p_rank](Entry &r_input) { improve(r_input, p_rank); });
-}
-
-void InstanceStream::orphan(Entry &r_entry) {
-    if (r_entry.state == Entry::READY || r_entry.rank == STALE_RANK || r_entry.pins > 0 || r_entry.viewed == frame) {
-        return;
-    }
-    for (const std::pair<SourceKey, uint32_t> &d : r_entry.dependents) {
-        if (entries.find(d.first)->second.rank != STALE_RANK) { // waiting: never evicted
-            return;
-        }
-    }
-    rerank(r_entry, STALE_RANK, [this](Entry &r_input) { orphan(r_input); });
-}
-
-template <typename F>
-void InstanceStream::rerank(Entry &r_entry, uint64_t p_rank, F p_input) {
     const uint64_t old = r_entry.rank;
     r_entry.rank = p_rank;
     if (r_entry.state == Entry::WAITING) {
-        each_input(r_entry, p_input);
+        for (const SourceKey &k : r_entry.input_keys) {
+            const auto it = entries.find(k);
+            if (it != entries.end()) { // else landed, handed over and evicted since
+                improve(it->second, p_rank);
+            }
+        }
         return;
     }
     const std::lock_guard<std::mutex> lock(job_mutex);
@@ -369,6 +350,32 @@ void InstanceStream::rerank(Entry &r_entry, uint64_t p_rank, F p_input) {
     node.key() = JobKey(p_rank, r_entry.job_seq);
     jobs.insert(std::move(node));
     stats.jobs_reranked++;
+}
+
+void InstanceStream::drop_unneeded(Entry &r_entry) {
+    if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty() || r_entry.viewed == frame) {
+        return;
+    }
+    if (r_entry.state == Entry::RUNNING) {
+        const std::lock_guard<std::mutex> lock(job_mutex);
+        if (jobs.erase(JobKey(r_entry.rank, r_entry.job_seq)) == 0) {
+            return; // a drain task took it: it lands into its grace
+        }
+    }
+    const SourceKey key = r_entry.key;
+    const std::vector<SourceKey> inputs = std::move(r_entry.input_keys); // WAITING: its inputs, landed or not
+    entries.erase(key); // never on an LRU list (not READY)
+    pending--;
+    stats.jobs_dropped++;
+    for (uint32_t i = 0; i < inputs.size(); i++) {
+        const auto it = entries.find(inputs[i]);
+        if (it == entries.end() || it->second.state == Entry::READY) {
+            continue; // landed: handed over already
+        }
+        std::vector<std::pair<SourceKey, uint32_t>> &deps = it->second.dependents;
+        deps.erase(std::remove(deps.begin(), deps.end(), std::make_pair(key, i)), deps.end());
+        drop_unneeded(it->second);
+    }
 }
 
 void InstanceStream::drain() {
@@ -767,6 +774,7 @@ Dictionary InstanceStream::get_stats() const {
     d["jobs_queued_max"] = stats.jobs_queued_max;
     d["jobs_reranked"] = stats.jobs_reranked;
     d["stale_handed_back"] = stats.stale_handed_back;
+    d["jobs_dropped"] = stats.jobs_dropped;
     d["park_frames"] = stats.park_frames.to_dict();
     d["workers"] = int64_t(executor->workers());
     d["computed"] = stats.computed;
