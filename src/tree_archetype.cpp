@@ -1,9 +1,12 @@
 // Trees as archetype-table instances (tree_archetype.hpp).
 #include "tree_archetype.hpp"
 
+#include <godot_cpp/core/error_macros.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <queue>
+#include <string>
 
 namespace Archetype {
 
@@ -81,6 +84,55 @@ void rotation_rows(float r_rows[9], const Vec &p_x, const Vec &p_y, const Vec &p
     }
 }
 
+// A tree's records before their anchor and rotation: the grower's and the species' bounds (tree_bounds) alike.
+TableRecord branch_record(const TreeTypes &p_types, double p_h, double p_ra, double p_slope, double p_k) {
+    TableRecord rec;
+    rec.def = uint8_t(p_types.branch);
+    rec.op = Combine::SMOOTH_UNION;
+    rec.set_k(float(p_k));
+    rec.params[0] = float(p_h);
+    rec.params[1] = float(p_ra);
+    rec.params[2] = float(p_slope);
+    return rec;
+}
+
+TableRecord crown_record(const TreeTypes &p_types, double p_r, double p_k, uint32_t p_salt) {
+    TableRecord rec;
+    rec.def = uint8_t(p_types.crown);
+    rec.op = Combine::SMOOTH_UNION;
+    rec.set_k(float(p_k));
+    rec.params[0] = float(p_r);
+    rec.params[1] = p_types.crown_amp;
+    rec.salt = p_salt;
+    return rec;
+}
+
+TableRecord cone_record(const TreeTypes &p_types, double p_r, double p_height, double p_k, uint32_t p_salt) {
+    const double slant = std::sqrt(p_r * p_r + p_height * p_height);
+    TableRecord rec;
+    rec.def = uint8_t(p_types.cone);
+    rec.op = Combine::SMOOTH_UNION;
+    rec.set_k(float(p_k));
+    rec.params[0] = float(p_r);
+    rec.params[1] = float(p_height);
+    rec.params[2] = float(p_height / slant); // cos of the half angle
+    rec.params[3] = float(p_r / slant); // sin
+    rec.params[4] = p_types.crown_amp;
+    rec.salt = p_salt;
+    return rec;
+}
+
+// A hashed factor lo + span * unit_of(hash), below max(): the grower's and the bounds' (tree_bounds) one copy.
+struct Jitter {
+    double lo;
+    double span;
+    double of(uint32_t p_hash) const { return lo + span * unit_of(p_hash); }
+    constexpr double max() const { return lo + span; }
+};
+constexpr Jitter TREE_SCALE{ 0.8, 0.4 }; // a tree's size
+constexpr Jitter CLUMP_SIZE{ 0.8, 0.4 }; // a leaf stem's clump
+constexpr Jitter TIER_SIZE{ 0.9, 0.2 }; // a conifer's tier
+
 struct Stem {
     Vec p0; // voxels from the tree's base, whole voxels
     Vec dir; // unit
@@ -108,12 +160,12 @@ struct Sphere {
 class Grower {
 public:
     Grower(const TreeSpecies &p_species, const VoxelPos &p_base, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
-            std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems, const Vec &p_up) :
-            s(p_species), base(p_base), seed(p_seed), voxel(p_voxel), types(p_types), out(r_out), stems(r_stems), up(p_up) {}
+            std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems, const Vec &p_up, bool p_hull_only) :
+            s(p_species), base(p_base), seed(p_seed), voxel(p_voxel), types(p_types), out(r_out), stems(r_stems), up(p_up), hull_only(p_hull_only) {}
 
     void grow() {
         const ExactNoise::UVec3 h = hash3(seed, 0x7EEu, 0u);
-        scale = 0.8 + 0.4 * unit_of(h.x);
+        scale = TREE_SCALE.of(h.x);
         Stem trunk;
         trunk.r0 = v(s.trunk_radius);
         trunk.p0 = snap(up * -trunk.r0); // sunk by its radius: the flare blends it into the ground
@@ -145,6 +197,7 @@ private:
     std::vector<TableRecord> &out;
     std::vector<TreeStem> *stems;
     const Vec up; // unit: the trunk's axis before its lean, the cone tiers' axis
+    const bool hull_only; // the trunk's polyline for the hull, nothing else (grow_tree)
     double scale = 1.0;
     int left = 0;
     uint32_t seq = 0;
@@ -237,6 +290,14 @@ private:
                 hull.push_back(Sphere{ point_at(joints, t), v(s.crown_radius * s.hull_ratio) * (1.0 + (s.hull_taper - 1.0) * f) });
             }
         }
+        if (hull_only) {
+            // The hull (and the tiers) are emitted after the loop from what is set now, in both modes; the budget reserved
+            // them, so nothing grown here could have cut them.
+            if (stems) {
+                stems->push_back(info);
+            }
+            return;
+        }
         for (size_t k = 0; k + 1 < joints.size() && left > 0; k++) {
             const double ra = radius_at(joints[k].t);
             const double rb = radius_at(joints[k + 1].t);
@@ -262,7 +323,7 @@ private:
         }
         if (info.children.empty() && p_stem.order > 0 && left > 0) {
             // A leaf stem: a clump at its tip.
-            const double r = v(s.crown_radius * s.clump_ratio) * (0.8 + 0.4 * unit_of(hash3(p_stem.path, 0xC1u, 0u).x));
+            const double r = v(s.crown_radius * s.clump_ratio) * CLUMP_SIZE.of(hash3(p_stem.path, 0xC1u, 0u).x);
             const double reach = r + double(types.crown_dent); // its own bumps reach out by up to crown_dent
             if (!inside_hull(tip.p, reach, tip.p, reach)) {
                 add_crown(Sphere{ tip.p, r }, hash3(p_stem.path, 0xC1u, 1u).x);
@@ -332,18 +393,12 @@ private:
         if (h < 1.0) {
             return; // both ends snapped to one voxel
         }
-        TableRecord rec;
-        rec.def = uint8_t(types.branch);
-        rec.op = Combine::SMOOTH_UNION;
-        rec.set_k(float(p_k));
+        TableRecord rec = branch_record(types, h, p_ra, (p_rb - p_ra) / h, p_k);
         rec.anchor = anchor_of(p_a);
         const Vec d = seg * (1.0 / h);
         Vec e0, e2;
         normal_frame(d, e0, e2);
         rotation_rows(rec.rotation, e0, d, e2);
-        rec.params[0] = float(h);
-        rec.params[1] = float(p_ra);
-        rec.params[2] = float((p_rb - p_ra) / h);
         out.push_back(rec);
         left--;
     }
@@ -360,21 +415,10 @@ private:
             const double f = n > 1 ? double(i) / double(n - 1) : 0.0;
             const double t = s.crown_base + (1.0 - s.crown_base) * double(i) / double(n + 1);
             const ExactNoise::UVec3 h = hash3(seed, 0x7135u, uint32_t(i));
-            const double r = v(s.crown_radius) * (1.0 + (s.hull_taper - 1.0) * f) * (0.9 + 0.2 * unit_of(h.x));
-            const double height = 2.0 * spacing;
-            const double slant = std::sqrt(r * r + height * height);
-            TableRecord rec;
-            rec.def = uint8_t(types.cone);
-            rec.op = Combine::SMOOTH_UNION;
-            rec.set_k(float(s.crown_smooth * r));
+            const double r = v(s.crown_radius) * (1.0 + (s.hull_taper - 1.0) * f) * TIER_SIZE.of(h.x);
+            TableRecord rec = cone_record(types, r, 2.0 * spacing, s.crown_smooth * r, h.y);
             rec.anchor = anchor_of(snap(point_at(p_joints, t)));
             rotation_rows(rec.rotation, tier_x, up, tier_z);
-            rec.params[0] = float(r);
-            rec.params[1] = float(height);
-            rec.params[2] = float(height / slant); // cos of the half angle
-            rec.params[3] = float(r / slant); // sin
-            rec.params[4] = types.crown_amp;
-            rec.salt = h.y;
             out.push_back(rec);
             left--;
         }
@@ -382,14 +426,8 @@ private:
 
     // p_salt: the noise salt, a hash of the part's path (not of how many parts came before it).
     void add_crown(const Sphere &p_sphere, uint32_t p_salt) {
-        TableRecord rec;
-        rec.def = uint8_t(types.crown);
-        rec.op = Combine::SMOOTH_UNION;
-        rec.set_k(float(s.crown_smooth * p_sphere.r));
+        TableRecord rec = crown_record(types, p_sphere.r, s.crown_smooth * p_sphere.r, p_salt);
         rec.anchor = anchor_of(snap(p_sphere.c));
-        rec.params[0] = float(p_sphere.r);
-        rec.params[1] = types.crown_amp;
-        rec.salt = p_salt;
         out.push_back(rec);
         left--;
     }
@@ -461,12 +499,76 @@ void up_rotation(const UpAxis &p_up, float r_rows[9]) {
 }
 
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
-        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems) {
-    Grower(p_species, p_base, p_seed, p_voxel, p_types, r_out, r_stems, Vec{ p_up[0], p_up[1], p_up[2] }).grow();
+        std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems, bool p_hull_only) {
+    Grower(p_species, p_base, p_seed, p_voxel, p_types, r_out, r_stems, Vec{ p_up[0], p_up[1], p_up[2] }, p_hull_only).grow();
+}
+
+TreeBounds tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeTypes &p_types) {
+    const TreeSpecies &s = p_species;
+    TreeBounds b;
+    const double v = TREE_SCALE.max() / p_voxel; // metres to voxels at the largest scale
+    // The trunk's base segment: radius v(trunk_radius) with the flare's k; its height at most the trunk's length (v(height)
+    // + r0, the sinking) plus a voxel at each snapped end. Every other segment is thinner (the taper, the pipe model) with
+    // a smaller k (the fork smooth of a thinner child, or none).
+    const double r0 = v * s.trunk_radius * TREE_BOUND_PAD;
+    b.trunk = branch_record(p_types, v * s.height + r0 + 2.0, r0, 0.0, s.flare * r0);
+    b.has_clump = s.limbs > 0;
+    if (b.has_clump) {
+        // A leaf stem's clump: v(crown_radius * clump_ratio) times its hashed CLUMP_SIZE (grow_stem).
+        const double r = v * s.crown_radius * s.clump_ratio * CLUMP_SIZE.max() * TREE_BOUND_PAD;
+        b.clump = crown_record(p_types, r, s.crown_smooth * r, 0u);
+    }
+    const double taper = MAX(1.0, s.hull_taper);
+    if (s.cone_tiers > 0) {
+        // A tier: v(crown_radius) times the taper and its hashed TIER_SIZE, twice the tiers' spacing high (add_tiers).
+        const double r = v * s.crown_radius * taper * TIER_SIZE.max() * TREE_BOUND_PAD;
+        b.hull = cone_record(p_types, r, 2.0 * v * s.height * (1.0 - s.crown_base) / double(s.cone_tiers + 1), s.crown_smooth * r, 0u);
+    } else {
+        const double r = v * s.crown_radius * s.hull_ratio * taper * TREE_BOUND_PAD;
+        b.hull = crown_record(p_types, r, s.crown_smooth * r, 0u);
+    }
+    return b;
+}
+
+int tree_hull_only_lod(const TreeSpecies &p_species, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types) {
+    TreeBounds b = tree_bounds(p_species, p_voxel, p_types);
+    finish_table_record(p_library, p_finish, b.trunk);
+    int lod = int(b.trunk.max_lod);
+    if (b.has_clump) {
+        finish_table_record(p_library, p_finish, b.clump);
+        lod = MAX(lod, int(b.clump.max_lod));
+    }
+    return lod; // the hull is what stays
 }
 
 int tree_species_of(uint32_t p_variant) {
     return int(p_variant % uint32_t(tree_species().size()));
+}
+
+void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types,
+        int64_t p_max_extent) {
+    std::vector<int> hull_lod;
+    for (const TreeSpecies &species : tree_species()) {
+        const TreeBounds b = tree_bounds(species, p_voxel, p_types);
+        bool fits = true;
+        for (const TableRecord *rec : { &b.trunk, &b.clump, &b.hull }) {
+            const bool counts = rec != &b.clump || b.has_clump;
+            const String error = counts ? record_fit_error(p_library[rec->def], *rec, p_max_extent) : String();
+            if (!error.is_empty()) {
+                ERR_PRINT("set_forest_scatter: a tree of a species may not fit the table, it never grows hull-only: " + error);
+                fits = false;
+            }
+        }
+        hull_lod.push_back(fits ? tree_hull_only_lod(species, p_voxel, p_library, p_finish, p_types) : int(TableRecord::NEVER_DROPPED));
+    }
+    r_scatter.salt = TREE_SITE_SALT;
+    r_scatter.generate = [p_types, p_voxel, hull_lod](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+        const int species = tree_species_of(p_site.variant);
+        grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, p_voxel, p_types, r_out, nullptr, p_lod >= hull_lod[species]);
+    };
+    r_scatter.classes = uint32_t(tree_species().size()); // class_index = tree_species_of
+    r_scatter.profile_key = "trees:" + key_bits(p_voxel) + key_bits(tree_species().size()) + key_bits(p_types.branch) + key_bits(p_types.crown) + key_bits(p_types.cone) +
+            key_bits(p_types.crown_amp) + key_bits(p_types.crown_dent);
 }
 
 } // namespace Archetype

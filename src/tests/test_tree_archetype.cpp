@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include "test_stream_common.hpp"
+
 #include "sdf_cascade.hpp"
 #include "tree_archetype.hpp"
 
@@ -24,6 +26,12 @@ std::vector<TableRecord> grow(const TreeLibrary &p_lib, const TreeSpecies &p_spe
     std::vector<TableRecord> out;
     grow_tree(p_species, p_base, UP_Y, p_seed, p_voxel, p_lib.types, out, r_stems);
     return out;
+}
+
+// A unit up turned from +y by a hashed angle (up to ~1.2 rad) about a hashed azimuth.
+UpAxis turned_up(uint32_t p_a, uint32_t p_b) {
+    const double angle = 1.2 * ExactNoise::unit_of(p_a), azimuth = Math_TAU * ExactNoise::unit_of(p_b);
+    return UpAxis{ std::sin(angle) * std::cos(azimuth), std::cos(angle), std::sin(angle) * std::sin(azimuth) };
 }
 
 // Every field grow_tree sets, the anchor shifted by p_offset.
@@ -361,6 +369,147 @@ TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, eva
     }
     MESSAGE("forest: ", trees.size(), " trees, ", snap->records.size(), " records, ", solid, " trunks solid at LOD 0");
     CHECK(solid == int64_t(trees.size()));
+}
+
+// The last max_lod of p_make(x) finished, x from p_lo while <= p_hi by steps of 10%, checking it never decreases.
+template <typename F>
+int check_monotone(const TreeLibrary &p_tl, const RecordFinish &p_finish, double p_lo, double p_hi, F p_make) {
+    int last = 0;
+    for (double x = p_lo; x <= p_hi; x *= 1.1) {
+        TableRecord rec = p_make(x);
+        finish_table_record(p_tl.lib, p_finish, rec);
+        CHECK(int(rec.max_lod) >= last);
+        last = int(rec.max_lod);
+    }
+    return last;
+}
+
+// Every record of a tree is a branch no thicker than the trunk's base or a crown no larger than the largest clump or hull
+// sphere: tree_bounds names them, and max_lod grows with a part's size, so the bounds' max_lod bounds every part's.
+TEST_CASE("Tree band: max_lod is non-decreasing in a branch's and a crown's size, and the species' bounds cover every part") {
+    for (const double voxel : { 0.5, 0.05 }) {
+        CAPTURE(voxel);
+        const TreeLibrary tl(voxel);
+        const RecordFinish finish{ 3.34f, true, ErodeRule() };
+        // Radii over three decades, and lengths over two at a fixed radius.
+        auto branch = [&](double p_h, double p_r, double p_k) {
+            TableRecord rec;
+            rec.def = uint8_t(tl.types.branch);
+            rec.params[0] = float(p_h);
+            rec.params[1] = float(p_r);
+            rec.set_k(float(p_k));
+            return rec;
+        };
+        CHECK(check_monotone(tl, finish, 0.5, 500.0, [&](double p_r) { return branch(20.0 * p_r, p_r, 2.0 * p_r); }) > 3);
+        CHECK(check_monotone(tl, finish, 0.5, 500.0, [&](double p_r) {
+            TableRecord rec;
+            rec.def = uint8_t(tl.types.crown);
+            rec.params[0] = float(p_r);
+            rec.params[1] = tl.types.crown_amp;
+            rec.set_k(float(0.5 * p_r));
+            return rec;
+        }) > 3);
+        check_monotone(tl, finish, 4.0, 400.0, [&](double p_h) { return branch(p_h, 4.0, 8.0); });
+        // The bounds: every part of 200 trees per species, any up, has a max_lod at most its bound's.
+        for (size_t sp = 0; sp < tree_species().size(); sp++) {
+            CAPTURE(sp);
+            const TreeSpecies &species = tree_species()[sp];
+            TreeBounds b = tree_bounds(species, voxel, tl.types);
+            CHECK(b.has_clump == (species.limbs > 0));
+            finish_table_record(tl.lib, finish, b.trunk);
+            finish_table_record(tl.lib, finish, b.clump);
+            finish_table_record(tl.lib, finish, b.hull);
+            const int branch_lod = int(b.trunk.max_lod);
+            const int crown_lod = MAX(int(b.hull.max_lod), b.has_clump ? int(b.clump.max_lod) : 0);
+            int over = 0;
+            for (uint32_t seed = 1; seed <= 200; seed++) {
+                const ExactNoise::UVec3 h = ExactNoise::hash3(seed, 0x0Du, 0x11Fu);
+                const UpAxis up = ExactNoise::unit_of(h.x) < 0.5 ? UP_Y : turned_up(h.y, h.z);
+                std::vector<TableRecord> records;
+                grow_tree(species, VoxelPos(), up, seed, voxel, tl.types, records);
+                for (TableRecord &rec : records) {
+                    finish_table_record(tl.lib, finish, rec);
+                    over += int(rec.max_lod) > (rec.def == tl.types.branch ? branch_lod : crown_lod);
+                }
+            }
+            CHECK(over == 0);
+        }
+    }
+}
+
+// From a species' hull_only_lod on, the hull-only growth is exactly the full growth's listed records, bit for bit; at 5 cm,
+// below it some tree still lists a branch or a clump (the bound isn't loose by a whole LOD).
+TEST_CASE("Tree: hull-only growth is the full growth's records listed from hull_only_lod on") {
+    for (const double voxel : { 0.5, 0.05 }) {
+        CAPTURE(voxel);
+        const TreeLibrary tl(voxel);
+        const RecordFinish finish{ 3.34f, true, ErodeRule() };
+        constexpr int LODS = 15;
+        for (size_t sp = 0; sp < tree_species().size(); sp++) {
+            CAPTURE(sp);
+            const TreeSpecies &species = tree_species()[sp];
+            const int hull_lod = tree_hull_only_lod(species, voxel, tl.lib, finish, tl.types);
+            CHECK(hull_lod > 0);
+            CHECK(hull_lod < LODS);
+            int64_t trees = 0, same = 0, non_hull_below = 0, hull_records = 0, listed_at_hull_lod = 0;
+            for (uint32_t seed = 1; seed <= 334; seed++) {
+                const ExactNoise::UVec3 h = ExactNoise::hash3(seed, 0x4011u, uint32_t(sp));
+                const UpAxis up = seed % 3 == 0 ? UP_Y : turned_up(h.x, h.y);
+                std::vector<TableRecord> full, hull;
+                std::vector<TreeStem> stems;
+                grow_tree(species, VoxelPos(7, -3, 11), up, seed, voxel, tl.types, full);
+                grow_tree(species, VoxelPos(7, -3, 11), up, seed, voxel, tl.types, hull, &stems, true);
+                CHECK(stems.size() == 1); // the trunk only
+                for (TableRecord &rec : full) {
+                    finish_table_record(tl.lib, finish, rec);
+                }
+                for (TableRecord &rec : hull) {
+                    finish_table_record(tl.lib, finish, rec);
+                }
+                hull_records += int64_t(hull.size());
+                // Every hull record is a full record, in order (the hull is emitted after the loop in both modes).
+                size_t at = 0;
+                for (const TableRecord &rec : hull) {
+                    while (at < full.size() && !same_part(full[at], rec, VoxelPos())) {
+                        at++;
+                    }
+                    CHECK(at < full.size());
+                    at++;
+                }
+                trees++;
+                const auto listed = [](const std::vector<TableRecord> &p_records, int p_lod) {
+                    std::vector<const TableRecord *> out;
+                    for (const TableRecord &rec : p_records) {
+                        if (rec.listed_at(p_lod)) {
+                            out.push_back(&rec);
+                        }
+                    }
+                    return out;
+                };
+                bool identical = true;
+                for (int lod = hull_lod; lod < LODS; lod++) {
+                    const std::vector<const TableRecord *> a = listed(full, lod), b = listed(hull, lod);
+                    identical = identical && a.size() == b.size();
+                    for (size_t i = 0; identical && i < a.size(); i++) {
+                        identical = StreamTest::same_bits(*a[i], *b[i]);
+                    }
+                    listed_at_hull_lod += lod == hull_lod ? int64_t(a.size()) : 0;
+                }
+                same += identical;
+                for (const TableRecord &rec : full) {
+                    non_hull_below += rec.listed_at(hull_lod - 1) && std::none_of(hull.begin(), hull.end(), [&](const TableRecord &p_h) { return same_part(p_h, rec, VoxelPos()); });
+                }
+            }
+            MESSAGE(voxel, " m, species ", sp, ": hull-only from LOD ", hull_lod, ", ", trees, " trees, ", same, " identical from there on, ", hull_records, " hull records, ",
+                    listed_at_hull_lod, " listed at that LOD, ", non_hull_below, " non-hull records listed one LOD below");
+            CHECK(same == trees);
+            // Tight at the forest's 5 cm (trees are meant for it); at 0.5 m the padded bound of the broadleaf and the slender
+            // tree is a LOD late (they keep no branch below it either: one LOD of full growth more, never a record less).
+            if (voxel < 0.1) {
+                CHECK(non_hull_below > 0);
+            }
+        }
+    }
 }
 
 // What the band rule leaves of a forest at each LOD, weighted by volume (record_moments): the share of the trees'

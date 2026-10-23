@@ -23,7 +23,7 @@ FieldFn hills_field(const VoxelPos &p_origin) {
 }
 
 // Two spheres per site, sized by its seed, the second one up the axis.
-void two_spheres(const Site &p_site, const UpAxis &p_up, std::vector<TableRecord> &r_out) {
+void two_spheres(const Site &p_site, const UpAxis &p_up, int, std::vector<TableRecord> &r_out) {
     for (int i = 0; i < 2; i++) {
         TableRecord rec;
         rec.def = 0;
@@ -81,8 +81,8 @@ TEST_CASE("Cell scatter: two halves of a box give the whole, sites and records; 
         CHECK(halves[i].site.variant == whole[i].site.variant);
         CHECK(s.zone.contains(whole[i].site.base));
         std::vector<TableRecord> x, y;
-        s.grow(whole[i].site, x);
-        s.grow(halves[i].site, y);
+        s.grow(whole[i].site, -1, x);
+        s.grow(halves[i].site, -1, y);
         CHECK(x.size() == y.size());
         if (!(x.size() == y.size())) {
             return;
@@ -122,7 +122,7 @@ TEST_CASE("Cell scatter: the profile bounds every record of the forest and the s
         std::vector<TableRecord> grown;
         for (const CellSite &cs : sites) {
             grown.clear();
-            source.scatter.grow(cs.site, grown);
+            source.scatter.grow(cs.site, -1, grown);
             for (TableRecord &rec : grown) {
                 finish_table_record(sdf.get_library(), sdf.record_finish(), rec);
                 outside += profile.covers(cs.site.base, rec) ? 0 : 1;
@@ -137,16 +137,20 @@ TEST_CASE("Cell scatter: the profile bounds every record of the forest and the s
         CHECK(profile.lod_end > 0);
         CHECK(profile.lod_end <= 18);
         CHECK(std::fabs(mean - profile.records_per_site) <= 0.15 * profile.records_per_site);
-        // What a site has lost grows with the LOD, and from its last LOD on all of it is gone.
-        double before = 0.0;
-        for (int l = 0; l < 18; l++) {
-            double m = 0.0;
-            for (const std::pair<uint32_t, Moments> &p : profile.lost[l].moments.parts) {
-                m += p.second.m0;
+        // What a site of each class has lost grows with the LOD, and from its last LOD on all of it is gone.
+        CHECK(profile.lost.size() == source.scatter.classes);
+        for (uint32_t c = 0; c < source.scatter.classes; c++) {
+            CAPTURE(c);
+            double before = 0.0;
+            for (int l = 0; l < 18; l++) {
+                double m = 0.0;
+                for (const std::pair<uint32_t, Moments> &p : profile.lost_of(c, l).moments.parts) {
+                    m += p.second.m0;
+                }
+                CHECK(m >= before * (1.0 - 1e-9));
+                before = m;
             }
-            CHECK(m >= before * (1.0 - 1e-9));
-            before = m;
+            CHECK(before > 0.0);
         }
-        CHECK(before > 0.0);
     }
 }
