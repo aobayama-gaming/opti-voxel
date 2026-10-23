@@ -4,87 +4,11 @@
 #include "debug_log.hpp"
 #include "parallel_for.hpp"
 
-#include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
 
 namespace Archetype {
-
-namespace {
-
-class PoolExecutor : public StreamExecutor {
-public:
-    ~PoolExecutor() override { reap(true); }
-    // The pool gives low-priority tasks threading/worker_pool/low_priority_thread_ratio (0.5) of its threads.
-    int workers() const override { return MAX(1, OS::get_singleton()->get_processor_count() / 2); }
-    void run(std::function<void()> p_task) override {
-        auto task = std::make_unique<Task>(Task{ std::move(p_task) });
-        const int64_t id = WorkerThreadPool::get_singleton()->add_native_task(&Task::call, task.get(), false, "InstanceStream");
-        const std::lock_guard<std::mutex> lock(task_mutex);
-        tasks.emplace_back(id, std::move(task));
-    }
-    void reap(bool p_wait) override {
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        for (;;) {
-            std::vector<std::pair<int64_t, std::unique_ptr<Task>>> done;
-            {
-                const std::lock_guard<std::mutex> lock(task_mutex);
-                for (size_t i = 0; i < tasks.size();) {
-                    if (p_wait || pool->is_task_completed(tasks[i].first)) {
-                        done.push_back(std::move(tasks[i]));
-                        tasks[i] = std::move(tasks.back());
-                        tasks.pop_back();
-                    } else {
-                        i++;
-                    }
-                }
-            }
-            // Released without the lock: a running task (p_wait) may start others meanwhile, taken by the next round.
-            for (const std::pair<int64_t, std::unique_ptr<Task>> &t : done) {
-                pool->wait_for_task_completion(t.first); // releases its id
-            }
-            if (!p_wait || done.empty()) {
-                return;
-            }
-        }
-    }
-
-private:
-    struct Task {
-        std::function<void()> fn;
-        static void call(void *p_task) { static_cast<Task *>(p_task)->fn(); }
-    };
-    std::mutex task_mutex; // run() is called from the drain tasks too
-    std::vector<std::pair<int64_t, std::unique_ptr<Task>>> tasks;
-};
-
-} // namespace
-
-std::unique_ptr<StreamExecutor> StreamExecutor::pool() {
-    return std::make_unique<PoolExecutor>();
-}
-
-void StreamExecutor::run(std::function<void()> p_task) {
-    const std::lock_guard<std::mutex> lock(queue_mutex);
-    queued.push_back(std::move(p_task));
-}
-
-void StreamExecutor::reap(bool /* p_wait */) {
-    for (;;) {
-        std::vector<std::function<void()>> now;
-        {
-            const std::lock_guard<std::mutex> lock(queue_mutex);
-            now.swap(queued);
-        }
-        if (now.empty()) {
-            return;
-        }
-        for (const std::function<void()> &task : now) {
-            task();
-        }
-    }
-}
 
 size_t InstanceStream::KeyHash::operator()(const SourceKey &p_k) const {
     return ExactNoise::hash_cell(p_k.tile, ((p_k.source * uint32_t(SourceKey::KIND_COUNT) + uint32_t(p_k.kind)) * 64u + uint32_t(p_k.lod) + 1u) * 0x9E3779B1u);
@@ -92,6 +16,13 @@ size_t InstanceStream::KeyHash::operator()(const SourceKey &p_k) const {
 
 void InstanceStream::Job::run() {
     const uint64_t t0 = now_usec();
+    if (expand) {
+        source->inputs(key, input_keys);
+        if (!input_keys.empty()) {
+            usec = now_usec() - t0;
+            return; // land() asks for them, then the key runs again with them
+        }
+    }
     ScatterSource::Inputs raw;
     for (const std::shared_ptr<const SourceContent> &in : inputs) {
         raw.push_back(in.get());
@@ -110,11 +41,14 @@ InstanceStream::InstanceStream(std::vector<std::shared_ptr<const ScatterSource>>
 }
 
 InstanceStream::~InstanceStream() {
-    {
-        const std::lock_guard<std::mutex> lock(job_mutex);
-        jobs.clear(); // the running drain tasks find nothing more
-    }
+    stop();
     executor->reap(true);
+}
+
+void InstanceStream::stop() {
+    stopping = true; // a job computing lands nothing (no expansion, no dependent started)
+    const std::lock_guard<std::mutex> lock(job_mutex);
+    jobs.clear(); // the running drain tasks find nothing more
 }
 
 uint32_t InstanceStream::slot_budget(const std::vector<std::shared_ptr<const ScatterSource>> &p_sources) {
@@ -141,7 +75,7 @@ void InstanceStream::chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &
     }
 }
 
-InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank) {
+InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank, uint64_t *r_words) {
     const uint64_t t0 = now_usec();
     const std::unique_lock<std::shared_mutex> lock(mutex);
     stats.admit_wait_usec += now_usec() - t0;
@@ -163,9 +97,11 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
         thread_local std::vector<SourceKey> keys;
         chunk_keys(p_chunk, keys);
         int missing = 0;
+        uint64_t words = 0;
         for (const SourceKey &k : keys) {
-            if (pending >= settings.pending && entries.find(k) == entries.end()) {
+            if (pending_asked >= settings.pending && entries.find(k) == entries.end()) {
                 answer = LATER; // its keys asked for so far stay, computed meanwhile
+                stats.later_pending++;
                 break;
             }
             const Entry &e = request(k, true, p_rank);
@@ -174,6 +110,10 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
                 break;
             }
             missing += !e.placed;
+            words += e.count;
+        }
+        if (answer == READY && missing == 0 && r_words) {
+            *r_words = words;
         }
         if (answer == READY && missing > 0) {
             // Every key asked for this frame is in its grace or not ready: none went meanwhile.
@@ -283,7 +223,7 @@ void InstanceStream::hand_back(const ParkKey &p_park) {
     }
 }
 
-InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_listed, uint64_t p_rank) {
+InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_listed, uint64_t p_rank, std::vector<Entry *> *r_input_jobs) {
     const auto [it, fresh] = entries.try_emplace(p_key);
     Entry &e = it->second;
     if (fresh) {
@@ -291,22 +231,18 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
         stats.keys_created++;
         e.key = p_key;
         e.rank = p_rank;
-        source(p_key).inputs(p_key, e.input_keys);
-        e.inputs.resize(e.input_keys.size());
-        for (uint32_t i = 0; i < e.input_keys.size(); i++) {
-            Entry &input = request(e.input_keys[i], false, p_rank); // try_emplace: e stays valid
-            if (input.state == Entry::READY) {
-                e.inputs[i] = input.content;
-            } else {
-                e.missing++;
-                input.dependents.push_back({ p_key, i }); // land() hands it over
-            }
-        }
-        if (e.missing == 0) {
-            start(e);
+        if (r_input_jobs) {
+            r_input_jobs->push_back(&e); // the expansion queues them together
+        } else {
+            start(e); // its job lists its inputs first, on a drain task (expand())
         }
     } else {
+        e.orphan = false;
         improve(e, p_rank);
+    }
+    if (!r_input_jobs && !e.asked && e.state != Entry::READY) {
+        e.asked = true; // asked for by a chunk or the camera: counts against the pending cap
+        pending_asked++;
     }
     touch(e);
     e.listed = e.listed || p_listed;
@@ -316,22 +252,77 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
     return e;
 }
 
+void InstanceStream::expand(Entry &r_entry, std::vector<SourceKey> &&p_inputs) {
+    r_entry.expanded = true;
+    r_entry.state = Entry::WAITING;
+    r_entry.input_keys = std::move(p_inputs);
+    r_entry.inputs.assign(r_entry.input_keys.size(), nullptr);
+    r_entry.missing = 0;
+    stats.keys_expanded++;
+    thread_local std::vector<Entry *> fresh; // the new inputs: their jobs queued at once (one job_mutex take, one wake)
+    fresh.clear();
+    for (uint32_t i = 0; i < r_entry.input_keys.size(); i++) {
+        Entry &input = request(r_entry.input_keys[i], false, r_entry.rank, &fresh); // try_emplace: r_entry stays valid
+        if (input.state == Entry::READY) {
+            r_entry.inputs[i] = input.content;
+        } else {
+            r_entry.missing++;
+            input.dependents.push_back({ r_entry.key, i }); // land() hands it over
+        }
+    }
+    if (r_entry.missing == 0) {
+        fresh.push_back(&r_entry);
+    }
+    start(fresh.data(), fresh.size()); // none evicted meanwhile: not READY
+}
+
 void InstanceStream::start(Entry &r_entry) {
-    auto job = std::make_unique<Job>();
-    job->source = &source(r_entry.key);
-    job->key = r_entry.key;
-    job->inputs = std::move(r_entry.inputs);
-    r_entry.inputs.clear();
-    r_entry.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
-    r_entry.state = Entry::RUNNING;
+    Entry *one = &r_entry;
+    start(&one, 1);
+}
+
+void InstanceStream::start(Entry *const *p_entries, size_t p_count) {
+    if (p_count == 0) {
+        return;
+    }
+    // The jobs are made before job_mutex (the drain tasks pop under it), then merged in one pass (no allocation there).
+    std::map<JobKey, std::unique_ptr<Job>> made;
+    for (size_t i = 0; i < p_count; i++) {
+        Entry &e = *p_entries[i];
+        auto job = std::make_unique<Job>();
+        job->source = &source(e.key);
+        job->key = e.key;
+        job->expand = !e.expanded;
+        job->inputs = std::move(e.inputs);
+        e.inputs.clear();
+        e.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
+        e.state = Entry::RUNNING;
+        e.job_seq = ++job_seq;
+        made.emplace_hint(made.end(), JobKey(e.rank, e.job_seq), std::move(job));
+    }
     bool spawn = false;
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
-        r_entry.job_seq = ++job_seq;
-        jobs.emplace(JobKey(r_entry.rank, r_entry.job_seq), std::move(job));
+        jobs.merge(made);
         stats.jobs_queued_max = MAX(stats.jobs_queued_max, int64_t(jobs.size())); // under the stream's lock too
-        spawn = draining < executor->workers();
-        draining += spawn;
+        spawn = claim_drain();
+    }
+    if (spawn) {
+        executor->run([this] { drain(); });
+    }
+}
+
+bool InstanceStream::claim_drain() {
+    const bool spawn = !jobs.empty() && draining < executor->workers();
+    draining += spawn;
+    return spawn;
+}
+
+void InstanceStream::wake() {
+    bool spawn = false;
+    {
+        const std::lock_guard<std::mutex> lock(job_mutex);
+        spawn = claim_drain();
     }
     if (spawn) {
         executor->run([this] { drain(); });
@@ -363,20 +354,31 @@ void InstanceStream::improve(Entry &r_entry, uint64_t p_rank) {
     stats.jobs_reranked++;
 }
 
-void InstanceStream::drop_unneeded(Entry &r_entry) {
-    // Asked for this frame (the keys of an admit answered LATER, the camera's queries): kept, computed meanwhile.
-    if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty() || r_entry.used == frame) {
-        return;
+bool InstanceStream::drop_unneeded(Entry &r_entry) {
+    if (r_entry.state == Entry::READY || r_entry.pins > 0 || !r_entry.dependents.empty()) {
+        return false;
     }
+    // Asked for this frame (the keys of an admit answered LATER, the camera's queries): kept, computed meanwhile. Not an
+    // orphan landing: dropped since it was asked (asked again, it is no orphan).
+    const bool asked_now = r_entry.used == frame && !r_entry.orphan;
     if (r_entry.state == Entry::RUNNING) {
         const std::lock_guard<std::mutex> lock(job_mutex);
-        if (jobs.erase(JobKey(r_entry.rank, r_entry.job_seq)) == 0) {
-            return; // a drain task took it: it lands into its grace
+        const auto job = jobs.find(JobKey(r_entry.rank, r_entry.job_seq));
+        if (job == jobs.end()) {
+            r_entry.orphan = true; // a drain task took it: it lands into its grace (listing its inputs: dropped then)
+            return false;
         }
+        if (asked_now) {
+            return false;
+        }
+        jobs.erase(job);
         stats.jobs_dropped++;
+    } else if (asked_now) {
+        return false;
     }
     const SourceKey key = r_entry.key;
     const std::vector<SourceKey> inputs = std::move(r_entry.input_keys); // WAITING: its inputs, landed or not
+    pending_asked -= r_entry.asked;
     entries.erase(key); // never on an LRU list (not READY)
     pending--;
     stats.keys_dropped++;
@@ -389,6 +391,7 @@ void InstanceStream::drop_unneeded(Entry &r_entry) {
         deps.erase(std::remove(deps.begin(), deps.end(), std::make_pair(key, i)), deps.end());
         drop_unneeded(it->second);
     }
+    return true;
 }
 
 void InstanceStream::drain() {
@@ -397,7 +400,7 @@ void InstanceStream::drain() {
         std::unique_ptr<Job> job;
         {
             const std::lock_guard<std::mutex> lock(job_mutex);
-            if (jobs.empty()) {
+            if (jobs.empty() || stopping || !executor->more()) {
                 draining--;
                 return;
             }
@@ -405,6 +408,10 @@ void InstanceStream::drain() {
             jobs.erase(jobs.begin());
         }
         job->run();
+        executor->landing();
+        if (stopping) {
+            continue; // nobody reads it: no landing (an expansion would queue its subtree)
+        }
         const std::unique_lock<std::shared_mutex> lock(mutex);
         land(std::move(job)); // the keys it completes join jobs: this loop takes them
     }
@@ -421,11 +428,14 @@ void InstanceStream::poll() {
     viewed.clear();
     const uint64_t t_evict = now_usec();
     for (;;) {
-        const bool too_many = entries.size() - pending > settings.entries;
-        if (!(too_many || input_records > settings.input_records) || !evict_oldest(!too_many)) {
+        const bool too_many = int64_t(entries.size()) - int64_t(pending) - int64_t(walks_ready) > int64_t(settings.entries);
+        if (!(too_many || input_records > settings.input_records) || !evict_oldest(too_many ? chain_all : chain_inputs)) {
             break;
         }
     }
+    while (walks_ready > settings.walks && evict_oldest(chain_walks)) {
+    }
+    wake(); // the jobs a drain task left (StreamExecutor::more())
     const uint64_t t_end = now_usec();
     stats.evict_usec += t_end - t_evict;
     const uint64_t dt = t_end - t0;
@@ -436,6 +446,20 @@ void InstanceStream::poll() {
 void InstanceStream::land(std::unique_ptr<Job> p_job) {
     const uint64_t t0 = now_usec();
     Entry &e = entries.find(p_job->key)->second; // running: never evicted
+    if (p_job->expand && !p_job->input_keys.empty()) {
+        stats.compute_usec += int64_t(p_job->usec); // the workers' time
+        stats.expand_usec += int64_t(p_job->usec); // of which listing inputs (a coarse part tile's walks its subtree)
+        // Dropped while it listed them (an orphan): erased if still unneeded, no input asked for.
+        if (e.orphan) {
+            e.state = Entry::WAITING;
+        }
+        if (!e.orphan || !drop_unneeded(e)) {
+            e.orphan = false; // kept
+            expand(e, std::move(p_job->input_keys));
+        }
+        stats.land_usec += now_usec() - t0;
+        return;
+    }
     const int lod = CLAMP(p_job->key.lod, 0, ChunkMath::MAX_LOD_NUMBERS - 1);
     stats.computed++;
     stats.compute_usec += int64_t(p_job->usec);
@@ -444,7 +468,11 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     e.content = std::move(p_job->out);
     e.count = uint32_t(e.content->records.size());
     e.state = Entry::READY;
+    e.orphan = false; // lands into its grace
     pending--;
+    pending_asked -= e.asked;
+    e.asked = false;
+    walks_ready += e.key.walk();
     input_records += e.count;
     std::vector<std::pair<SourceKey, uint32_t>> dependents;
     dependents.swap(e.dependents);
@@ -469,7 +497,7 @@ bool InstanceStream::place(Entry &r_entry) {
     uint32_t slot = 0;
     if (r_entry.count > 0) {
         bool room = allocate(r_entry.count, slot);
-        while (!room && evict_oldest()) {
+        while (!room && evict_oldest(chain_all)) {
             room = allocate(r_entry.count, slot);
         }
         if (!room) {
@@ -556,12 +584,13 @@ void InstanceStream::release(uint32_t p_slot, uint32_t p_count) {
     }
 }
 
-bool InstanceStream::evict_oldest(bool p_inputs) {
-    Entry *e = (p_inputs ? chain_inputs : chain_all).oldest;
+bool InstanceStream::evict_oldest(const Chain &p_chain) {
+    Entry *e = p_chain.oldest;
     if (e == nullptr || e->used + GRACE_FRAMES >= frame) {
         return false; // the rest is newer
     }
     lru_unlink(*e);
+    walks_ready -= e->key.walk();
     if (e->placed && e->count > 0) {
         release(e->slot, e->count);
     }
@@ -577,7 +606,7 @@ bool InstanceStream::evict_oldest(bool p_inputs) {
 
 void InstanceStream::touch(Entry &r_entry) {
     r_entry.used = MAX(r_entry.used, frame);
-    if (r_entry.lru_all.in && chain_all.newest != &r_entry) {
+    if (r_entry.lru_all.in && lru_chain(r_entry).newest != &r_entry) {
         lru_unlink(r_entry);
         lru_link(r_entry);
     }
@@ -617,7 +646,7 @@ void InstanceStream::Chain::unlink(Entry &r_entry) {
 }
 
 void InstanceStream::lru_link(Entry &r_entry) {
-    chain_all.link(r_entry);
+    lru_chain(r_entry).link(r_entry);
     if (!r_entry.placed && r_entry.count > 0) {
         chain_inputs.link(r_entry);
     }
@@ -625,7 +654,7 @@ void InstanceStream::lru_link(Entry &r_entry) {
 
 void InstanceStream::lru_unlink(Entry &r_entry) {
     if (r_entry.lru_all.in) {
-        chain_all.unlink(r_entry);
+        lru_chain(r_entry).unlink(r_entry);
     }
     if (r_entry.lru_inputs.in) {
         chain_inputs.unlink(r_entry);
@@ -754,70 +783,6 @@ void InstanceStream::uploads_since(uint64_t p_seq, std::vector<Upload> &r_out) c
             upload(it->second);
         }
     }
-}
-
-Dictionary InstanceStream::get_stats() const {
-    const std::shared_lock<std::shared_mutex> lock(mutex);
-    int64_t placed = 0, ready = 0, running = 0, waiting = 0;
-    for (const std::pair<const SourceKey, Entry> &kv : entries) {
-        placed += kv.second.placed;
-        ready += kv.second.state == Entry::READY;
-        running += kv.second.state == Entry::RUNNING;
-        waiting += kv.second.state == Entry::WAITING;
-    }
-    Dictionary d;
-    d["keys"] = int64_t(entries.size());
-    d["keys_ready"] = ready;
-    d["keys_placed"] = placed;
-    d["keys_running"] = running;
-    d["keys_waiting"] = waiting;
-    d["chunks_parked"] = int64_t(parked.size());
-    d["admit_ready"] = stats.admitted[READY];
-    d["admit_parked"] = stats.admitted[PARKED];
-    d["admit_later"] = stats.admitted[LATER];
-    d["admit_ms_total"] = double(stats.admit_usec) / 1000.0;
-    d["admit_wait_ms_total"] = double(stats.admit_wait_usec) / 1000.0;
-    d["poll_ms_total"] = double(stats.poll_usec) / 1000.0;
-    d["poll_ms_max"] = double(stats.poll_usec_max) / 1000.0;
-    d["evict_ms_total"] = double(stats.evict_usec) / 1000.0;
-    d["land_ms_total"] = double(stats.land_usec) / 1000.0;
-    d["keys_created"] = stats.keys_created;
-    d["admit_keys_created"] = stats.admit_keys_created;
-    d["admit_keys_created_max"] = stats.admit_keys_created_max;
-    d["jobs_queued_max"] = stats.jobs_queued_max;
-    d["jobs_reranked"] = stats.jobs_reranked;
-    d["stale_handed_back"] = stats.stale_handed_back;
-    d["keys_dropped"] = stats.keys_dropped;
-    d["jobs_dropped"] = stats.jobs_dropped;
-    d["park_frames"] = stats.park_frames.to_dict();
-    d["workers"] = int64_t(executor->workers());
-    d["computed"] = stats.computed;
-    d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
-    Dictionary by;
-    for (int kind = 0; kind < SourceKey::KIND_COUNT; kind++) {
-        for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
-            const int64_t n = stats.computed_by[kind][lod];
-            if (n > 0) {
-                Dictionary k;
-                k["count"] = n;
-                k["ms_avg"] = double(stats.usec_by[kind][lod]) / 1000.0 / double(n);
-                k["evicted"] = stats.evicted_by[kind][lod];
-                by[vformat("%s %d", SourceKey::kind_name(kind), lod)] = k;
-            }
-        }
-    }
-    d["computed_by_key"] = by;
-    d["placed"] = stats.placed;
-    d["evicted"] = stats.evicted;
-    d["slots_used"] = slots_used();
-    d["slots_peak"] = stats.slots_peak;
-    d["slots_capacity"] = int64_t(settings.slot_capacity);
-    d["slots_full"] = stats.slots_full;
-    d["input_records"] = input_records;
-    d["lists_missing"] = lists_missing.load();
-    d["point_computed"] = point_computed.load();
-    d["view_missing"] = view_missing;
-    return d;
 }
 
 } // namespace Archetype

@@ -266,7 +266,7 @@ private:
     // the table version they are. The lists fill the list buffer at most: r_chunks keeps the leading chunks that
     // fit, r_rest gets the others (r_ids shrunk to match) for the caller to queue again.
     uint32_t _table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
-            PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes = nullptr);
+            PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr);
     // Main thread: a chunk popped for a batch it couldn't go in (overflow, or its list didn't fit) back in its queue:
     // remesh_queue (p_remesh) or chunk_queue.
     void _requeue(const ChunkId &p_chunk, bool p_remesh);
@@ -299,6 +299,14 @@ private:
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
     // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
     bool _dispatch_mesh_batch(double &r_budget_us);
+    // A mesh batch's chunks, admitted until their estimate (their LODs and list bounds) reaches p_budget_us; r_bounds: each
+    // one's list bound.
+    void _pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
+            HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds);
+    // A batch's lists (their lengths in p_ids, after build_lists, of which p_streamed streamed words per chunk) against its
+    // chunks' bounds, per LOD, into the cost model; the bounds' sum.
+    uint64_t _observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids, const std::vector<uint32_t> &p_streamed,
+            const HashMap<ChunkId, uint64_t, Vector3i64Hasher> &p_bounds);
     bool _dispatch_audit_batch();
     void _flush_kills();
     void _flush_hidden();
@@ -349,5 +357,6 @@ private:
         uint64_t model_ratio_count = 0;
         uint64_t list_words_total = 0; // instance list words of the mesh batches dispatched
         uint64_t list_words_max = 0; // in one batch
+        uint64_t list_bound_total = 0; // their chunks' list bounds (SDFBase::admit): the estimate before the lists
     } stats;
 };

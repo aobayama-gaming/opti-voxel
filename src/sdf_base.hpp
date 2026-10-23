@@ -81,9 +81,10 @@ public:
     // exceed p_capacity_words (the mesher's list buffer): returns how many leading chunks went in whole, and the
     // caller dispatches only those and queues the rest again (a LOD-6 forest chunk lists ~9k records). Only a first
     // chunk over the whole buffer is cut (ERR, counted: a wrong surface there). r_palettes (if given) gets each kept
-    // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name.
+    // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name. r_streamed (if given)
+    // gets each kept chunk's words of streamed records (the rest are the scene's and the edits').
     virtual uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
-            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const = 0;
+            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr) const = 0;
     // The entries every chunk palette starts with (ChunkPalette::build): {GROUND}, or with a climate GROUND then each
     // biome's material, a ground sample's palette index being 1 + its biome (SDFCascade::ground_material). Longer than
     // one: every chunk's samples carry a material (the cascade writes it, both meshers read it), and the palette pool's
@@ -192,8 +193,12 @@ public:
         LATER, // no room for its records now: queue it again and stop popping this frame
     };
     // Main thread, for each chunk a mesher pops (p_owner: the mesher; p_tag comes back with the chunk; p_rank: lower is
-    // served first).
-    virtual Admit admit(const ChunkId & /*p_chunk*/, uint64_t /*p_owner*/, uint64_t /*p_tag*/, uint64_t /*p_rank*/) { return Admit::READY; }
+    // served first). READY: r_words gets a bound of the words its instance list adds (the streamed records its keys hold;
+    // 0 without them).
+    virtual Admit admit(const ChunkId & /*p_chunk*/, uint64_t /*p_owner*/, uint64_t /*p_tag*/, uint64_t /*p_rank*/, uint64_t &r_words) {
+        r_words = 0;
+        return Admit::READY;
+    }
     // Main thread: p_owner's tags are p_tag or later from now on. Its chunks parked under an older one with p_rank(chunk)
     // >= 0 take p_tag and that rank (p_kept(chunk); take_ready() hands them back), the others (-1) are forgotten and the
     // records only they asked for dropped if not started.

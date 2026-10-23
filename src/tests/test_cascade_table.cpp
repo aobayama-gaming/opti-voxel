@@ -52,9 +52,10 @@ using ChunkMath::chunk_at_voxel;
 // CPU's point folds read them (else every point computes its keys and drops them). True when all got there.
 bool make_resident(SDFCascade &r_sdf, const std::vector<ChunkId> &p_chunks) {
     constexpr uint64_t OWNER = 1;
+    uint64_t words = 0;
     std::vector<ChunkId> retry; // LATER: asked again
     for (const ChunkId &c : p_chunks) {
-        if (r_sdf.admit(c, OWNER, 0, 0) == SDFBase::Admit::LATER) {
+        if (r_sdf.admit(c, OWNER, 0, 0, words) == SDFBase::Admit::LATER) {
             retry.push_back(c);
         }
     }
@@ -67,7 +68,7 @@ bool make_resident(SDFCascade &r_sdf, const std::vector<ChunkId> &p_chunks) {
         }
         std::vector<ChunkId> again;
         for (const ChunkId &c : retry) {
-            if (r_sdf.admit(c, OWNER, 0, 0) == SDFBase::Admit::LATER) {
+            if (r_sdf.admit(c, OWNER, 0, 0, words) == SDFBase::Admit::LATER) {
                 again.push_back(c);
             }
         }
@@ -665,8 +666,8 @@ TEST_CASE("SDFCascade table: a batch keeps the chunks whose lists fit the buffer
         const uint32_t kept = table->build_lists(chunks, t.param, ids, words, uint32_t(capacity), &palettes);
         size_t used = 0;
         for (uint32_t i = 0; i < kept; i++) {
-            const uint32_t offset = ids.decode_u32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + 12);
-            const int32_t count = ids.decode_s32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + 28);
+            const uint32_t offset = ids.decode_u32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_OFFSET_AT);
+            const int32_t count = ids.decode_s32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_COUNT_AT);
             CHECK(offset == used);
             CHECK(size_t(count) == want[i].size());
             for (int32_t k = 0; k < count && size_t(k) < want[i].size(); k++) {

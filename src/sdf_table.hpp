@@ -116,7 +116,7 @@ public:
     bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const override;
 
     // The streamed sources' gating (InstanceStream::admit; every chunk READY without them).
-    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank) override;
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank, uint64_t &r_words) override;
     void set_tag(uint64_t p_owner, uint64_t p_tag, const std::function<int64_t(const ChunkId &)> &p_rank,
             const std::function<void(const ChunkId &)> &p_kept) override {
         if (stream) {

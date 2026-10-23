@@ -21,12 +21,13 @@
 // of its id whatever streamed when, and no chunk is meshed twice because a key arrived late.
 //
 // One entry per key asked for, in one table: computing (its inputs first: a part tile reads the site tiles inside it, a
-// part layer's blob tile the LOD-0 part tiles around it, a far layer's its proxy tile), then ready with its content,
+// part layer's blob tile the LOD-0 part tiles around it, a far layer's the proxy tiles around it; a key's first job lists
+// them on a drain task, which asks for them: admit() creates a chunk's own keys only), then ready with its content,
 // which a listed key copies into slots: the GPU table's records from slot_base on, sent through the placement log
 // (uploads_since). Keys without records (the walks, empty tiles) stay entries like the others. Ready entries not pinned
-// by a parked chunk are on a least-recently-used list, and those also holding input records (not placed, count > 0) on a
-// second one; the oldest go when room is needed (slots and entries: the first list, inputs kept: the second), none asked
-// for in the last GRACE_FRAMES (a batch in flight still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
+// by a parked chunk are on a least-recently-used list (the walks on one of their own), and those also holding input records
+// (not placed, count > 0) on a third one; the oldest go when room is needed (slots and entries: the first list, walks: the
+// second, inputs kept: the third), none asked for in the last GRACE_FRAMES (a batch in flight still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
 //
 // Jobs run by rank (lower first; the mesher's pop order: its load queue), then in the order asked: a key's rank is the
 // best of the chunks and keys waiting for it, its inputs inherit it, and a queued job asked again with a better rank moves
@@ -50,6 +51,11 @@ public:
     // Releases the finished tasks (here: runs the queued ones); p_wait: waits for all of them first. The stream's lock not
     // held (a drain task takes it).
     virtual void reap(bool p_wait);
+    // Whether a drain task takes another job (tests: a budget of jobs per poll(), the rest left for the next one).
+    virtual bool more() { return true; }
+    // Called by a drain task between a job's run and its landing, no lock held (tests: what the main thread does while a
+    // job runs).
+    virtual void landing() {}
 
     // Godot's WorkerThreadPool, low priority (threading/worker_pool/low_priority_thread_ratio of its threads).
     static std::unique_ptr<StreamExecutor> pool();
@@ -65,10 +71,17 @@ public:
     static constexpr uint32_t SLOTS_MIN = uint32_t(1) << 16;
     static constexpr uint32_t SLOTS_MAX = uint32_t(1) << 21;
     static constexpr int64_t INPUT_RECORDS = int64_t(1) << 21; // the records of ready keys not in slots (inputs), kept at most
-    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys kept at most (the empty ones count)
-    // Keys asked for and not landed at most: past it admit() answers LATER for a chunk needing a new key, so the meshers
-    // stop popping (else a frame parks the whole queue: millions of keys waiting). 2^12 when the jobs ran in the order
-    // asked (the ones in view behind the rest); ranked, the view's run first whatever is queued behind them.
+    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys with records kept at most (the empty ones count, the walks don't)
+    // Landed walks (site and proxy tiles) kept at most: enough for the view's whole zone to stay resident (a walk evicted is
+    // walked again). An entry is ~450 B (Entry 272, its map node and key ~70, the content 80 + its control block 16) plus 56
+    // per site (CellSite). The 1M forest (5 x 5 km at 5 cm, 40 m site tiles): 125^2 columns, the LOD-6/7 part tiles asking
+    // 16-32 site tiles tall per column, ~500k walks (225 MB) and its 1M sites (56 MB); the cap bounds them to ~500 MB.
+    static constexpr size_t WALKS_MAX = size_t(1) << 20;
+    // Keys asked for (by a chunk or the camera) and not landed at most: past it admit() answers LATER for a chunk needing a
+    // new key, so the meshers stop popping (else a frame parks the whole queue: millions of keys waiting). The inputs an
+    // expansion asks for don't count: they need no slot and never answer LATER, and each asked key brings its subtree at
+    // most. 2^12 when the jobs ran in the order asked (the ones in view behind the rest); ranked, the view's run first
+    // whatever is queued behind them.
     static constexpr size_t PENDING_MAX = size_t(1) << 14;
     static constexpr size_t LOG_MAX = size_t(1) << 16; // placements uploads_since() can replay; a reader further behind gets them all
 
@@ -77,6 +90,7 @@ public:
         uint32_t slot_capacity = SLOTS_MIN;
         int64_t input_records = INPUT_RECORDS;
         size_t entries = ENTRIES_MAX;
+        size_t walks = WALKS_MAX;
         size_t pending = PENDING_MAX;
         size_t log = LOG_MAX;
     };
@@ -95,7 +109,10 @@ public:
     // p_sources[i] has the setup id i.
     InstanceStream(std::vector<std::shared_ptr<const ScatterSource>> p_sources, const ChunkParam &p_param, const Settings &p_settings,
             std::unique_ptr<StreamExecutor> p_executor);
-    ~InstanceStream(); // waits for the drain tasks running; the keys not started are dropped
+    ~InstanceStream(); // stop(), then waits for the drain tasks running
+    // No job starts or lands from now on: the queued ones are dropped, a running one lands nothing (its expansion would
+    // queue its subtree for nobody). The destructor's first step.
+    void stop();
 
     // Σ over the sources of the sites their zone holds times the records per site, twice, within [SLOTS_MIN, SLOTS_MAX].
     static uint32_t slot_budget(const std::vector<std::shared_ptr<const ScatterSource>> &p_sources);
@@ -106,8 +123,8 @@ public:
     // Main thread. Asks for every key the chunk lists, at p_rank (lower first; equal ranks in the order asked). PARKED: the
     // stream pins the chunk's keys and hands it back to p_owner (a mesher: each has its own parked chunks) through
     // take_ready() with p_tag once they are placed; asked again meanwhile, it stays parked (with the new tag, its keys at
-    // the better rank).
-    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank);
+    // the better rank). READY: r_words (if given) gets the records its keys hold, a bound of its list's length.
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank, uint64_t *r_words = nullptr);
     // Main thread: p_owner's tags from now on are p_tag or later. Its chunks parked under an older tag with p_rank(chunk)
     // >= 0 take p_tag and that rank in place (p_kept(chunk): they come back through take_ready, the caller doesn't queue
     // them again); the others (-1) are forgotten, their keys unpinned (stale_handed_back), and the keys then left with no
@@ -159,6 +176,8 @@ private:
     struct Job {
         const ScatterSource *source = nullptr;
         SourceKey key;
+        bool expand = false; // its inputs not known yet: lists them first (input_keys), computes only if there are none
+        std::vector<SourceKey> input_keys;
         std::vector<std::shared_ptr<const SourceContent>> inputs; // aligned with source->inputs(key)
         std::shared_ptr<SourceContent> out;
         uint64_t usec = 0;
@@ -175,7 +194,7 @@ private:
     struct Entry {
         enum State {
             WAITING, // for its inputs
-            RUNNING,
+            RUNNING, // its job queued or computing (the first one lists its inputs: expanded)
             READY,
         };
         SourceKey key;
@@ -183,6 +202,9 @@ private:
         std::shared_ptr<const SourceContent> content; // READY
         std::vector<std::shared_ptr<const SourceContent>> inputs; // WAITING: those landed so far
         int missing = 0; // WAITING: its inputs not landed
+        bool expanded = false; // its inputs listed (on a drain task) and asked for
+        bool orphan = false; // RUNNING: drop_unneeded() found its job taken (asked for again: cleared)
+        bool asked = false; // not READY, asked for by a chunk or the camera: counted in pending_asked
         std::vector<std::pair<SourceKey, uint32_t>> dependents; // not READY: the keys waiting for it (and its input index)
         std::vector<std::pair<ParkKey, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
         uint32_t slot = 0;
@@ -195,7 +217,7 @@ private:
         std::vector<SourceKey> input_keys; // WAITING: source.inputs(key), e.inputs' order (cleared once started)
         uint64_t job_seq = 0; // RUNNING: its job's key in jobs is (rank, job_seq) until a drain task takes it
         int pins = 0; // parked chunks holding it
-        Links lru_all; // READY, unpinned
+        Links lru_all; // READY, unpinned: on chain_walks for a walk, else on chain_all
         Links lru_inputs; // also not placed, with records
     };
     // An LRU list over one of the entries' Links, oldest first.
@@ -223,15 +245,19 @@ private:
 
     mutable std::shared_mutex mutex; // the stream's state: the main thread and the drain tasks change it, the lists read it
     std::unordered_map<SourceKey, Entry, KeyHash> entries; // references stay valid across rehashes
-    Chain chain_all{ &Entry::lru_all }; // the entries evicted for slots and entries
+    Chain chain_all{ &Entry::lru_all }; // the keys with records (or empty tiles), evicted for slots and entries
+    Chain chain_walks{ &Entry::lru_all }; // the walks, evicted for walks (no slot, no record: a cap of their own)
     Chain chain_inputs{ &Entry::lru_inputs }; // the entries evicted for input records
     uint64_t frame = 0;
     size_t pending = 0; // entries not READY (never evicted)
+    size_t pending_asked = 0; // of pending: asked for by a chunk or the camera (Settings::pending caps them)
+    size_t walks_ready = 0; // walk entries READY
 
     std::mutex job_mutex; // the drain tasks' queues
     std::map<JobKey, std::unique_ptr<Job>> jobs; // to run, first first
-    uint64_t job_seq = 0;
+    uint64_t job_seq = 0; // under the stream's lock (start() is only called holding it)
     int draining = 0; // drain tasks started and not done
+    std::atomic<bool> stopping{ false }; // stop()
 
     std::unordered_map<ParkKey, Parked, ParkHash> parked;
     std::vector<ParkKey> ready_chunks; // parked chunks to hand back
@@ -253,8 +279,11 @@ private:
         int64_t evicted = 0;
         int64_t evicted_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD: computed / (computed - evicted) = recompute ratio
         int64_t keys_created = 0; // entries created by request(), inputs included
-        int64_t admit_keys_created = 0; // of keys_created: by admit()
+        int64_t admit_keys_created = 0; // of keys_created: by admit() (a chunk's own keys: their inputs come on the workers)
         int64_t admit_keys_created_max = 0; // by one admit()
+        int64_t keys_expanded = 0; // keys whose first job listed inputs (asked for when it landed)
+        int64_t expand_usec = 0; // of compute_usec: those jobs (listing the inputs)
+        int64_t later_pending = 0; // admits answered LATER at the pending cap
         int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
         int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank
         int64_t stale_handed_back = 0; // parked chunks set_tag() forgot (a newer scan doesn't want them)
@@ -280,15 +309,25 @@ private:
     const ScatterSource &source(const SourceKey &p_key) const { return *sources[p_key.source]; }
     // Every source's keys of the chunk, in key order.
     void chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &r_out) const;
-    // The key's entry, asked for now at p_rank (created and its inputs asked for if new; placed if listed and ready).
-    Entry &request(const SourceKey &p_key, bool p_listed, uint64_t p_rank);
+    // The key's entry, asked for now at p_rank (created if new, its job queued: a drain task lists its inputs; placed if
+    // listed and ready). r_input_jobs: an expansion's input (outside the pending cap), a new one's job left to the caller
+    // (appended).
+    Entry &request(const SourceKey &p_key, bool p_listed, uint64_t p_rank, std::vector<Entry *> *r_input_jobs = nullptr);
+    // A key's first job listed inputs: asked for at its rank, it waits for them (or runs again at once if all are ready).
+    void expand(Entry &r_entry, std::vector<SourceKey> &&p_inputs);
     void start(Entry &r_entry);
+    // Queues the entries' jobs under one job_mutex take, then wakes a drain task if needed.
+    void start(Entry *const *p_entries, size_t p_count);
+    // Whether to run one more drain task (jobs queued, fewer than the executor's workers draining); job_mutex held.
+    bool claim_drain();
+    // Runs one more drain task if jobs are queued and fewer than the executor's workers drain them.
+    void wake();
     // Not READY: its rank lowered to p_rank if better; RUNNING, its job moved if still queued (keeping its order among
     // equal ranks), WAITING, its inputs not landed too.
     void improve(Entry &r_entry, uint64_t p_rank);
-    // Not READY, unpinned, no key waiting for it, not asked for this frame, its job not started: erased, and its inputs
-    // then left alone too.
-    void drop_unneeded(Entry &r_entry);
+    // Not READY, unpinned, no key waiting for it, not asked for this frame (unless an orphan landing), its job not started:
+    // erased (true), and its inputs then left alone too. Its job taken by a drain task: an orphan (dropped when it lands).
+    bool drop_unneeded(Entry &r_entry);
     // A parked chunk's keys unpinned (and forgotten: unpinned once).
     void release_pins(Parked &r_parked);
     void drain();
@@ -297,9 +336,12 @@ private:
     bool place(Entry &r_entry);
     bool allocate(uint32_t p_count, uint32_t &r_slot);
     void release(uint32_t p_slot, uint32_t p_count);
-    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest holding input records
-    // (evicting a placed key or a walk frees none, and asked for again it is computed again).
-    bool evict_oldest(bool p_inputs = false);
+    // Evicts p_chain's oldest entry if it is out of its grace (false: none can go): chain_all for slots and entries,
+    // chain_inputs for input records (evicting a placed key or a walk frees none, and asked for again it is computed again),
+    // chain_walks for walks.
+    bool evict_oldest(const Chain &p_chain);
+    // The LRU list an entry's lru_all links it on.
+    Chain &lru_chain(const Entry &p_entry) { return p_entry.key.walk() ? chain_walks : chain_all; }
     void pin(Entry &r_entry);
     void unpin(Entry &r_entry);
     void touch(Entry &r_entry);

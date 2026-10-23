@@ -98,12 +98,15 @@ PackedByteArray GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor 
 }
 
 uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
-        uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes) const {
+        uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes, std::vector<uint32_t> *r_streamed) const {
     (void)p_param;
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
     if (r_palettes) {
         r_palettes->assign(p_chunks.size(), base);
+    }
+    if (r_streamed) {
+        r_streamed->assign(p_chunks.size(), 0);
     }
     if ((!snap || snap->empty()) && !stream) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
@@ -125,6 +128,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
         std::vector<uint32_t> *lists;
         std::vector<uint32_t> *palettes;
         uint8_t *fits;
+        uint32_t *streamed;
         static void run(void *p_job, uint32_t p_i) {
             const Job &job = *static_cast<const Job *>(p_job);
             const ChunkId &chunk = job.chunks[p_i];
@@ -144,7 +148,9 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
                         materials.push_back(job.snap->records[p_id].material); },
                     [&] {
                         if (job.stream) {
+                            const size_t before = list.size();
                             job.stream->chunk_list(chunk, list, &materials);
+                            job.streamed[p_i] = uint32_t(list.size() - before);
                         }
                     });
             job.fits[p_i] = ChunkPalette::build(*job.base, materials.data(), uint32_t(list.size()), job.palettes[p_i], indices);
@@ -156,7 +162,8 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<std::vector<uint32_t>> lists(p_chunks.size());
     std::vector<std::vector<uint32_t>> palettes(p_chunks.size());
     std::vector<uint8_t> fits(p_chunks.size(), 1);
-    Job job{ snap.get(), stream.get(), scene_end, &base, p_chunks.data(), lists.data(), palettes.data(), fits.data() };
+    std::vector<uint32_t> streamed(p_chunks.size(), 0);
+    Job job{ snap.get(), stream.get(), scene_end, &base, p_chunks.data(), lists.data(), palettes.data(), fits.data(), streamed.data() };
     if (p_chunks.size() > 1) {
         WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
         pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
@@ -195,15 +202,21 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
             palettes[i] = base;
         }
         const int64_t input_at = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
-        r_chunk_ids.encode_u32(input_at + 12, uint32_t(words.size()));
-        r_chunk_ids.encode_s32(input_at + 28, int32_t(indices.size()));
+        r_chunk_ids.encode_u32(input_at + GPUFrame::CHUNK_LIST_OFFSET_AT, uint32_t(words.size()));
+        r_chunk_ids.encode_s32(input_at + GPUFrame::CHUNK_LIST_COUNT_AT, int32_t(indices.size()));
         words.insert(words.end(), indices.begin(), indices.end());
         if (r_palettes) {
             (*r_palettes)[i] = std::move(palettes[i]);
         }
+        if (r_streamed) {
+            (*r_streamed)[i] = MIN(streamed[i], uint32_t(indices.size())); // a cut list: at most what is left
+        }
     }
     if (r_palettes) {
         r_palettes->resize(kept);
+    }
+    if (r_streamed) {
+        r_streamed->resize(kept);
     }
     r_list.resize(int64_t(words.size()) * 4);
     std::memcpy(r_list.ptrw(), words.data(), words.size() * 4); // little-endian, like the GPU

@@ -95,9 +95,14 @@ to every change, and a reviewer may reject a PR on any of them.
   Chunks start on a 64-quad group and a texture row is one group, so a chunk is whole rows.
   GPU budget (`VoxelTerrain.direct_gpu_budget_ms`, `--mesher_budget=MS` in bench and player; 0 = off, 4 in
   `main_scene_5cm`): a frame dispatches mesh chunks until their estimated GPU time reaches the budget, cutting
-  a batch short. The estimate is `GPUCostModel` (`src/gpu_cost_model.hpp`): µs per chunk per LOD, corrected
-  from each batch's timestamps (measured / estimated ~1.05 on the forest; a LOD-3 forest chunk costs 200-300 µs,
-  a treeless one ~15). Forest fly at error 2: frame p50 27.8 -> 11.9 ms, at the price of a slower first load
+  a batch short. The estimate is `GPUCostModel` (`src/gpu_cost_model.hpp`): µs per chunk per LOD plus µs per list
+  word (seeded 1.0, the 1M fit), corrected from each batch's timestamps (measured / estimated ~1.05 on the forest; a
+  LOD-3 forest chunk costs 200-300 µs, a treeless one ~15). Before its list a chunk's words are its keys' records
+  (`SDFBase::admit`'s bound, through `ChunkGate::next`) times `list_share[lod]` (its LOD's streamed list words over their
+  bounds, `build_lists`' `r_streamed`) plus `words_per_chunk[lod]` (the scene's and the edits' words); a LOD's first list
+  replaces both seeds (before it, the nearest LOD's, the whole bound when none); a batch where a LOD takes its first
+  measure moves only that LOD (clamped to `MAX_SCALE` when the batch has words); stats `cost_us_per_word`,
+  `cost_list_share`, `cost_words_per_chunk`, `list_bound_total`. Forest fly at error 2: frame p50 27.8 -> 11.9 ms, at the price of a slower first load
   (3.0 -> 5.0 s) and merges lagging while moving (coarse parents queue behind the fine chunks: 2x the chunks
   loaded mid-fly). Ordering the queue by displayed error instead (the loaded ancestor's 2^lod / distance, merges
   at their own LOD) was measured worse: same GPU work, 4-6x the detail left pending at the end of a fly, +20%
@@ -332,7 +337,10 @@ to every change, and a reviewer may reject a PR on any of them.
   lod, tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
   `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. SITES and PROXIES hold a walk and no records
   (`SourceContent::sites`, never listed, kept resident: the walk is ~80% of a part tile's CPU): `SITES` (lod 0) on the
-  LOD-0 part-tile grid (8 source cells), `PROXIES L` on far layer L's blob grid (the proxies' walk, `far_items`' input). A
+  LOD-0 part-tile grid (8 source cells), `PROXIES L` on far layer L's blob grid (the proxies' walk of its own tile in
+  `proxy_zone`, from `proxy_level`: an unclipped region's octree level; a far blob tile reads the tiles its `proxy_region`
+  meets and sorts their sites in it by cell: the region's walk from that level by construction, `surface_sites`'
+  `p_min_level`, unit-tested on the cascade too; the old blobs bit for bit where the zone doesn't clip the region). A
   PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of the `SITES` tiles inside it that meet the
   zone (clipped on all 3 axes: up to (2^(L-3))^3 otherwise, mostly air), in the old record pyramid's z y x order (kept as
   the unit tests' oracle: bit-identical tiles and lists): every record at LOD 0, those listed at L coarser. A LOD with the
@@ -343,12 +351,18 @@ to every change, and a reviewer may reject a PR on any of them.
   2 per cell side, the profile's lost moments: mass within 10%). Part layers are those under `Setup::part_cell_sides`
   source cells: 3 by default (the whole build's blobs), `VoxelTerrain.archetype_stream_part_sides` /
   `--stream_part_sides=N` for the streamed sources (default 1: proxies from the source cell on; the 2 switched layers:
-  mass within 20%, peak within 40%, unit test; 3 = the exact layers). The stream keeps two LRU chains: all evictable
-  entries (slots, the entries cap) and those holding input records (not placed, count > 0: the inputs cap pops its oldest
-  in O(1), the walks and placed keys never relinked); `computed_by_key` names `sites 0` and `proxies L`.
+  mass within 20%, peak within 40%, unit test; 3 = the exact layers). The stream keeps three LRU chains: the evictable
+  keys with records (slots, the entries cap `ENTRIES_MAX`), the walks (`WALKS_MAX` 2^20, `Settings::walks`: ~450 B per
+  walk + 56 per site, the 1M zone's ~500k stay resident; `walks_ready`) and those holding input records (not placed,
+  count > 0: the inputs cap pops its oldest in O(1), the walks and placed keys never relinked); `computed_by_key` names
+  `sites 0` and `proxies L`. An air site tile's walk is one evaluation (unit test: on a LOD-7 footprint on the cascade,
+  89% of the tiles, 3% of the evaluations; the ground tiles ~330 each), so no emptiness test runs before it.
   **Stream (`src/instance_stream.*`):** `InstanceStream` holds the keys asked for in one table (empty ones
   too) with an intrusive LRU: `admit(chunk, owner, tag, rank)` answers READY (every key placed), PARKED (its keys pinned;
-  `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
+  `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). `admit` creates the chunk's own keys only (`admit_keys_created_max`): a key's
+  first job, on a drain task, lists its inputs (`keys_expanded`) and `expand()` asks for them at its rank under the lock, the
+  key running again once they land (`expand_ms_total`; a key `set_tag` dropped while its job listed them is erased then;
+  `HeldExecutor::steps` in the tests stops a drain after N jobs). Keys are computed by drain
   tasks on Godot's pool at low priority (`StreamExecutor`, run by `poll()` in the tests; `low_priority_thread_ratio` 0.5), a
   key's inputs handed to it as shared pointers; the task lands each key under the stream's lock (its dependents start at once
   on the same task: landing on the main thread, 2 ms a frame, held forest5cm's 135k keys ~900 frames) and places the listed
@@ -363,7 +377,12 @@ to every change, and a reviewer may reject a PR on any of them.
   (`stale_handed_back`), and the keys then needed by no pin or dependent and not asked for this frame are erased if their
   job hasn't started (`keys_dropped`, of which `jobs_dropped` were queued; a dropped waiting key leaves its inputs'
   `dependents`).
-  `PENDING_MAX` 2^14 (2^12 under the FIFO). `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
+  `PENDING_MAX` 2^14 (2^12 under the FIFO) caps the keys chunks and the camera ask for (`keys_pending_asked`), not the
+  inputs expansions ask for (`keys_pending_inputs`); `admit_later_pending` counts the LATER answers at the cap. An
+  expansion's new inputs' jobs are made before `job_mutex` and merged under one take. `StreamExecutor::landing()` (between
+  a job's run and its landing) lets the tests forget a chunk while its job runs (the orphan path: dropped when it lands, even
+  if asked for in the frame it was forgotten). `stop()` (the destructor's first step): a job computing lands nothing. A far blob tile
+  computed alone (`point_records`) walks its region once from `proxy_level` instead of its proxy tiles. `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
   requeue loop; `begin_frame(cap)` closes a frame at a LATER (`admit_later`) or at `cap` PARKED / LATER answers
   (`admit_capped_frames`; READY ones ask for no key; direct: `max_admits_per_frame`, 0 = 4 x batch_size). Unit tests: park / return order, pins and grace,
   slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag` (kept, forgotten, dropped jobs), the gate's cap.
