@@ -71,7 +71,7 @@ struct SourceProfile {
     std::vector<std::vector<Lost>> lost; // per class, per LOD
 
     // What a site of class p_class (CellScatter::class_index) has lost at p_lod.
-    const Lost &lost_of(uint32_t p_class, int p_lod) const { return lost[MIN<size_t>(p_class, lost.size() - 1)][p_lod]; }
+    const Lost &lost_of(uint32_t p_class, int p_lod) const;
     // The largest variance lost at p_lod over the classes.
     double lost_variance(int p_lod) const;
 

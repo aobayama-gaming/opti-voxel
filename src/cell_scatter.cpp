@@ -114,6 +114,13 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
     }
 }
 
+const SourceProfile::Lost &SourceProfile::lost_of(uint32_t p_class, int p_lod) const {
+    static const Lost none;
+    ERR_FAIL_COND_V_MSG(p_class >= lost.size() || p_lod < 0 || p_lod >= int(lost[p_class].size()), none,
+            vformat("SourceProfile: no class %d at LOD %d (the scatter's classes and the profile's disagree).", p_class, p_lod));
+    return lost[p_class][p_lod];
+}
+
 double SourceProfile::lost_variance(int p_lod) const {
     double v = 0.0;
     for (const std::vector<Lost> &per_lod : lost) {

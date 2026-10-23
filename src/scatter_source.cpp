@@ -76,6 +76,12 @@ void append_group(const TableRecord *p_records, uint32_t p_count, int p_lod, Sou
 
 std::atomic<bool> profile_reported{ false };
 
+// A refused setup's profile (empty): prof is never null.
+const std::shared_ptr<const SourceProfile> &no_profile() {
+    static const std::shared_ptr<const SourceProfile> none = std::make_shared<const SourceProfile>();
+    return none;
+}
+
 // The profiles read so far, by their key: two sources of one key take the same object. Kept for the process (a profile is a
 // few KB per class and LOD; the keys are the tree sets configured).
 std::mutex profiles_mutex;
@@ -126,7 +132,7 @@ void SourceContent::meeting(const std::vector<Group> &p_groups, RecordView p_rec
 }
 
 ScatterSource::ScatterSource(const Setup &p_setup) :
-        set(p_setup) {
+        set(p_setup), prof(no_profile()) {
     ERR_FAIL_COND_MSG(!set.library || !set.scatter.valid() || set.max_extent <= 0 || set.chunk_voxels <= 0,
             "ScatterSource: no library, valid scatter, largest extent or chunk side.");
     prof = profile_for(set, shared_profile);
@@ -315,10 +321,13 @@ int ScatterSource::proxy_level(int p_layer) const {
 void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
     std::vector<TableRecord> grown;
     if (p_key.lod > 0) {
-        // One walk of its own box, the call a site tile makes: the LOD-0 site tiles' union, in cell order, pruned at the
-        // coarse levels where the tile is air (the 8^L site tiles it asked before cost a job each, most of them empty).
+        // The walks of the LOD-0 site tiles inside it, the same calls, inline (an air tile is one evaluation, where it was a
+        // job each), then in cell order. Not one walk of its whole box: a walk starts at the level its extent picks, and a
+        // coarser start may prune a cell a site tile's keeps (surface_sites), so only the tiles' own calls give their sites.
         std::vector<CellSite> sites;
-        set.scatter.sites(tile_box(p_key), sites);
+        for_each_tile(tile_box(p_key).clipped(set.scatter.zone), part_tile_side(0),
+                [&](const VoxelPos &p_tile) { set.scatter.sites(tile_box(SourceKey{ set.id, SourceKey::SITES, 0, p_tile }), sites); });
+        std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
         for (const CellSite &cs : sites) {
             grow_site(cs, p_key.lod, grown, r_out);
         }

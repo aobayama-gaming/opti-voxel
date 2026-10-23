@@ -122,8 +122,16 @@ TableRecord cone_record(const TreeTypes &p_types, double p_r, double p_height, d
     return rec;
 }
 
-// The scale a tree's hashed factor stays under (Grower::grow: 0.8 + 0.4 * unit_of).
-constexpr double SCALE_MAX = 1.2;
+// A hashed factor lo + span * unit_of(hash), below max(): the grower's and the bounds' (tree_bounds) one copy.
+struct Jitter {
+    double lo;
+    double span;
+    double of(uint32_t p_hash) const { return lo + span * unit_of(p_hash); }
+    constexpr double max() const { return lo + span; }
+};
+constexpr Jitter TREE_SCALE{ 0.8, 0.4 }; // a tree's size
+constexpr Jitter CLUMP_SIZE{ 0.8, 0.4 }; // a leaf stem's clump
+constexpr Jitter TIER_SIZE{ 0.9, 0.2 }; // a conifer's tier
 
 struct Stem {
     Vec p0; // voxels from the tree's base, whole voxels
@@ -157,7 +165,7 @@ public:
 
     void grow() {
         const ExactNoise::UVec3 h = hash3(seed, 0x7EEu, 0u);
-        scale = 0.8 + 0.4 * unit_of(h.x);
+        scale = TREE_SCALE.of(h.x);
         Stem trunk;
         trunk.r0 = v(s.trunk_radius);
         trunk.p0 = snap(up * -trunk.r0); // sunk by its radius: the flare blends it into the ground
@@ -315,7 +323,7 @@ private:
         }
         if (info.children.empty() && p_stem.order > 0 && left > 0) {
             // A leaf stem: a clump at its tip.
-            const double r = v(s.crown_radius * s.clump_ratio) * (0.8 + 0.4 * unit_of(hash3(p_stem.path, 0xC1u, 0u).x));
+            const double r = v(s.crown_radius * s.clump_ratio) * CLUMP_SIZE.of(hash3(p_stem.path, 0xC1u, 0u).x);
             const double reach = r + double(types.crown_dent); // its own bumps reach out by up to crown_dent
             if (!inside_hull(tip.p, reach, tip.p, reach)) {
                 add_crown(Sphere{ tip.p, r }, hash3(p_stem.path, 0xC1u, 1u).x);
@@ -407,7 +415,7 @@ private:
             const double f = n > 1 ? double(i) / double(n - 1) : 0.0;
             const double t = s.crown_base + (1.0 - s.crown_base) * double(i) / double(n + 1);
             const ExactNoise::UVec3 h = hash3(seed, 0x7135u, uint32_t(i));
-            const double r = v(s.crown_radius) * (1.0 + (s.hull_taper - 1.0) * f) * (0.9 + 0.2 * unit_of(h.x));
+            const double r = v(s.crown_radius) * (1.0 + (s.hull_taper - 1.0) * f) * TIER_SIZE.of(h.x);
             TableRecord rec = cone_record(types, r, 2.0 * spacing, s.crown_smooth * r, h.y);
             rec.anchor = anchor_of(snap(point_at(p_joints, t)));
             rotation_rows(rec.rotation, tier_x, up, tier_z);
@@ -498,7 +506,7 @@ void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxi
 TreeBounds tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeTypes &p_types) {
     const TreeSpecies &s = p_species;
     TreeBounds b;
-    const double v = SCALE_MAX / p_voxel; // metres to voxels at the largest scale
+    const double v = TREE_SCALE.max() / p_voxel; // metres to voxels at the largest scale
     // The trunk's base segment: radius v(trunk_radius) with the flare's k; its height at most the trunk's length (v(height)
     // + r0, the sinking) plus a voxel at each snapped end. Every other segment is thinner (the taper, the pipe model) with
     // a smaller k (the fork smooth of a thinner child, or none).
@@ -506,14 +514,14 @@ TreeBounds tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeT
     b.trunk = branch_record(p_types, v * s.height + r0 + 2.0, r0, 0.0, s.flare * r0);
     b.has_clump = s.limbs > 0;
     if (b.has_clump) {
-        // A leaf stem's clump: v(crown_radius * clump_ratio) times its hashed 0.8-1.2 (grow_stem).
-        const double r = v * s.crown_radius * s.clump_ratio * 1.2 * TREE_BOUND_PAD;
+        // A leaf stem's clump: v(crown_radius * clump_ratio) times its hashed CLUMP_SIZE (grow_stem).
+        const double r = v * s.crown_radius * s.clump_ratio * CLUMP_SIZE.max() * TREE_BOUND_PAD;
         b.clump = crown_record(p_types, r, s.crown_smooth * r, 0u);
     }
     const double taper = MAX(1.0, s.hull_taper);
     if (s.cone_tiers > 0) {
-        // A tier: v(crown_radius) times the taper and its hashed 0.9-1.1, twice the tiers' spacing high (add_tiers).
-        const double r = v * s.crown_radius * taper * 1.1 * TREE_BOUND_PAD;
+        // A tier: v(crown_radius) times the taper and its hashed TIER_SIZE, twice the tiers' spacing high (add_tiers).
+        const double r = v * s.crown_radius * taper * TIER_SIZE.max() * TREE_BOUND_PAD;
         b.hull = cone_record(p_types, r, 2.0 * v * s.height * (1.0 - s.crown_base) / double(s.cone_tiers + 1), s.crown_smooth * r, 0u);
     } else {
         const double r = v * s.crown_radius * s.hull_ratio * taper * TREE_BOUND_PAD;
@@ -559,7 +567,8 @@ void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary
         grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, p_voxel, p_types, r_out, nullptr, p_lod >= hull_lod[species]);
     };
     r_scatter.classes = uint32_t(tree_species().size()); // class_index = tree_species_of
-    r_scatter.profile_key = "trees:" + key_bits(p_voxel) + key_bits(tree_species().size()) + key_bits(p_types.branch) + key_bits(p_types.crown) + key_bits(p_types.cone);
+    r_scatter.profile_key = "trees:" + key_bits(p_voxel) + key_bits(tree_species().size()) + key_bits(p_types.branch) + key_bits(p_types.crown) + key_bits(p_types.cone) +
+            key_bits(p_types.crown_amp) + key_bits(p_types.crown_dent);
 }
 
 } // namespace Archetype
