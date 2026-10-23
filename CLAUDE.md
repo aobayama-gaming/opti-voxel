@@ -95,9 +95,11 @@ to every change, and a reviewer may reject a PR on any of them.
   Chunks start on a 64-quad group and a texture row is one group, so a chunk is whole rows.
   GPU budget (`VoxelTerrain.direct_gpu_budget_ms`, `--mesher_budget=MS` in bench and player; 0 = off, 4 in
   `main_scene_5cm`): a frame dispatches mesh chunks until their estimated GPU time reaches the budget, cutting
-  a batch short. The estimate is `GPUCostModel` (`src/gpu_cost_model.hpp`): µs per chunk per LOD, corrected
-  from each batch's timestamps (measured / estimated ~1.05 on the forest; a LOD-3 forest chunk costs 200-300 µs,
-  a treeless one ~15). Forest fly at error 2: frame p50 27.8 -> 11.9 ms, at the price of a slower first load
+  a batch short. The estimate is `GPUCostModel` (`src/gpu_cost_model.hpp`): µs per chunk per LOD plus µs per list
+  word (seeded 1.0, the 1M fit), corrected from each batch's timestamps (measured / estimated ~1.05 on the forest; a
+  LOD-3 forest chunk costs 200-300 µs, a treeless one ~15). Before its list a chunk's words are its keys' records
+  (`SDFBase::admit`'s bound, through `ChunkGate::next`) times `list_share` (the lists' words over their bounds);
+  stats `cost_us_per_word`, `cost_list_share`, `list_bound_total`. Forest fly at error 2: frame p50 27.8 -> 11.9 ms, at the price of a slower first load
   (3.0 -> 5.0 s) and merges lagging while moving (coarse parents queue behind the fine chunks: 2x the chunks
   loaded mid-fly). Ordering the queue by displayed error instead (the loaded ancestor's 2^lod / distance, merges
   at their own LOD) was measured worse: same GPU work, 4-6x the detail left pending at the end of a fly, +20%

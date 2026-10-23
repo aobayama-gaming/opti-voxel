@@ -72,7 +72,7 @@ void InstanceStream::chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &
     }
 }
 
-InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank) {
+InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank, uint64_t *r_words) {
     const uint64_t t0 = now_usec();
     const std::unique_lock<std::shared_mutex> lock(mutex);
     stats.admit_wait_usec += now_usec() - t0;
@@ -94,6 +94,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
         thread_local std::vector<SourceKey> keys;
         chunk_keys(p_chunk, keys);
         int missing = 0;
+        uint64_t words = 0;
         for (const SourceKey &k : keys) {
             if (pending >= settings.pending && entries.find(k) == entries.end()) {
                 answer = LATER; // its keys asked for so far stay, computed meanwhile
@@ -105,6 +106,10 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
                 break;
             }
             missing += !e.placed;
+            words += e.count;
+        }
+        if (answer == READY && missing == 0 && r_words) {
+            *r_words = words;
         }
         if (answer == READY && missing > 0) {
             // Every key asked for this frame is in its grace or not ready: none went meanwhile.

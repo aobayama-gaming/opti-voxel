@@ -714,8 +714,15 @@ TEST_CASE("Instance stream: admit creates a chunk's own keys, a drain task asks 
     CHECK(back[0] == std::make_pair(c, uint64_t(1)));
     Mirror mirror;
     mirror.update(*stream);
-    CHECK(stream->admit(c, 0, 1, 3) == InstanceStream::READY);
+    // READY: the records of its keys, a bound of its list.
+    uint64_t words = 0;
+    CHECK(stream->admit(c, 0, 1, 3, &words) == InstanceStream::READY);
     CHECK(lists_right(fx, *stream, mirror, c));
+    std::vector<uint32_t> ids;
+    stream->chunk_list(c, ids);
+    CHECK(words == fx.slots(c));
+    CHECK(words >= ids.size());
+    CHECK(!ids.empty());
 
     // A chunk forgotten once its keys listed their inputs: the waiting keys go, and their inputs' queued jobs.
     held->steps = int64_t(d_own);

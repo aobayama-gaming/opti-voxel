@@ -192,8 +192,12 @@ public:
         LATER, // no room for its records now: queue it again and stop popping this frame
     };
     // Main thread, for each chunk a mesher pops (p_owner: the mesher; p_tag comes back with the chunk; p_rank: lower is
-    // served first).
-    virtual Admit admit(const ChunkId & /*p_chunk*/, uint64_t /*p_owner*/, uint64_t /*p_tag*/, uint64_t /*p_rank*/) { return Admit::READY; }
+    // served first). READY: r_words gets a bound of the words its instance list adds (the streamed records its keys hold;
+    // 0 without them).
+    virtual Admit admit(const ChunkId & /*p_chunk*/, uint64_t /*p_owner*/, uint64_t /*p_tag*/, uint64_t /*p_rank*/, uint64_t &r_words) {
+        r_words = 0;
+        return Admit::READY;
+    }
     // Main thread: p_owner's tags are p_tag or later from now on. Its chunks parked under an older one with p_rank(chunk)
     // >= 0 take p_tag and that rank (p_kept(chunk); take_ready() hands them back), the others (-1) are forgotten and the
     // records only they asked for dropped if not started.

@@ -299,6 +299,10 @@ private:
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
     // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
     bool _dispatch_mesh_batch(double &r_budget_us);
+    // A mesh batch's chunks, admitted until their estimate (their LODs and list bounds) reaches p_budget_us; r_bounds: each
+    // one's list bound.
+    void _pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
+            HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds);
     bool _dispatch_audit_batch();
     void _flush_kills();
     void _flush_hidden();
@@ -349,5 +353,6 @@ private:
         uint64_t model_ratio_count = 0;
         uint64_t list_words_total = 0; // instance list words of the mesh batches dispatched
         uint64_t list_words_max = 0; // in one batch
+        uint64_t list_bound_total = 0; // their chunks' list bounds (SDFBase::admit): the estimate before the lists
     } stats;
 };

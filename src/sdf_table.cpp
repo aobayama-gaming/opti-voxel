@@ -187,11 +187,12 @@ bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m
     return false;
 }
 
-SDFBase::Admit SDFTable::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank) {
+SDFBase::Admit SDFTable::admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank, uint64_t &r_words) {
+    r_words = 0;
     if (!stream) {
         return Admit::READY;
     }
-    switch (stream->admit(p_chunk, p_owner, p_tag, p_rank)) {
+    switch (stream->admit(p_chunk, p_owner, p_tag, p_rank, &r_words)) {
         case InstanceStream::READY:
             return Admit::READY;
         case InstanceStream::PARKED:

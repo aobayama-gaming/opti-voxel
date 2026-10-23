@@ -71,9 +71,10 @@ public:
     // Whether this frame may pop and admit another chunk: no LATER yet, the cap not reached.
     bool open() const { return !closed; }
 
-    SDFBase::Admit admit(const ChunkId &p_chunk, Kind p_kind, int p_queue = 0) {
+    // READY: r_words gets a bound of the words the chunk adds to its batch's instance list (SDFBase::admit).
+    SDFBase::Admit admit(const ChunkId &p_chunk, Kind p_kind, int p_queue, uint64_t &r_words) {
         const uint64_t t0 = now_usec();
-        const SDFBase::Admit a = sdf->admit(p_chunk, base + p_kind, scan, rank(p_kind, p_queue));
+        const SDFBase::Admit a = sdf->admit(p_chunk, base + p_kind, scan, rank(p_kind, p_queue), r_words);
         admit_usec += now_usec() - t0;
         if (a != SDFBase::Admit::READY) {
             frame_admits++;
@@ -88,13 +89,15 @@ public:
         return a;
     }
     // The next chunk to mesh: chunks come from p_pop(chunk, kind, queue) -> bool (queue: CHUNK's load queue) and are
-    // admitted until one is READY (true); a LATER one goes back through p_requeue(chunk, kind), a parked one comes back
-    // through take_ready(). False once the frame's admits close or p_pop has none.
+    // admitted until one is READY (true; r_words if given: its list's bound, admit()); a LATER one goes back through
+    // p_requeue(chunk, kind), a parked one comes back through take_ready(). False once the frame's admits close or p_pop
+    // has none.
     template <typename Pop, typename Requeue>
-    bool next(ChunkId &r_chunk, Kind &r_kind, Pop p_pop, Requeue p_requeue) {
+    bool next(ChunkId &r_chunk, Kind &r_kind, Pop p_pop, Requeue p_requeue, uint64_t *r_words = nullptr) {
         int queue = 0;
+        uint64_t words = 0;
         while (open() && p_pop(r_chunk, r_kind, queue)) {
-            const SDFBase::Admit a = admit(r_chunk, r_kind, queue);
+            const SDFBase::Admit a = admit(r_chunk, r_kind, queue, r_words ? *r_words : words);
             if (a == SDFBase::Admit::READY) {
                 return true;
             }

@@ -705,13 +705,13 @@ void GPUDirectMesher::_update_cost_model() {
         if (it == batch_costs.end()) {
             continue;
         }
-        const double estimate = cost_model.estimate(it->value.lod_counts);
+        const uint32_t words = it->value.list_words;
+        const double estimate = cost_model.estimate(it->value.lod_counts, words);
         if (estimate > 0.0) {
             stats.model_ratio_sum += m.total_us / estimate;
             stats.model_ratio_count++;
         }
-        cost_model.observe(it->value.lod_counts, (double)m.total_us);
-        const uint32_t words = it->value.list_words;
+        cost_model.observe(it->value.lod_counts, (double)m.total_us, words);
         ListWordsBin &bin = gpu_by_list_words[words == 0 ? 0 : 32 - __builtin_clz(words)];
         bin.batches++;
         bin.words += words;
@@ -733,27 +733,35 @@ void GPUDirectMesher::_update_cost_model() {
     }
 }
 
-bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
-    std::vector<ChunkId> chunks;
-    chunks.reserve(settings.batch_size);
+void GPUDirectMesher::_pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
+        HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds) {
     double estimate = 0.0;
     ChunkId chunk;
     ChunkGate::Kind kind = ChunkGate::CHUNK;
-    HashSet<ChunkId, Vector3i64Hasher> remeshes; // popped from remesh_queue: they go back there if they wait
+    uint64_t words = 0;
     const auto pop = [this](ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue) { return _pop_queue(r_chunk, r_kind, r_queue); };
     const auto requeue = [this](const ChunkId &p_chunk, ChunkGate::Kind p_kind) { _requeue(p_chunk, p_kind == ChunkGate::REMESH); };
     // With a budget the batch stops once its estimate reaches what's left (a frame dispatches at least
     // one chunk: budget_left starts > 0).
-    while (chunks.size() < settings.batch_size && estimate < r_budget_us && gate.next(chunk, kind, pop, requeue)) {
-        chunks.push_back(chunk);
+    while (r_chunks.size() < settings.batch_size && estimate < p_budget_us && gate.next(chunk, kind, pop, requeue, &words)) {
+        r_chunks.push_back(chunk);
         if (kind == ChunkGate::REMESH) {
-            remeshes.insert(chunk);
+            r_remeshes.insert(chunk);
         }
+        r_bounds.insert(chunk, words);
         const int lod = ChunkMath::get_lod(chunk);
         if (lod >= 0 && lod < lod_count) {
-            estimate += cost_model.estimate(lod);
+            estimate += cost_model.estimate_chunk(lod, words);
         }
     }
+}
+
+bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
+    std::vector<ChunkId> chunks;
+    chunks.reserve(settings.batch_size);
+    HashSet<ChunkId, Vector3i64Hasher> remeshes; // popped from remesh_queue: they go back there if they wait
+    HashMap<ChunkId, uint64_t, Vector3i64Hasher> bounds; // each chunk's list bound (SDFBase::admit)
+    _pop_batch(r_budget_us, chunks, remeshes, bounds);
     if (chunks.empty()) {
         return false;
     }
@@ -781,19 +789,21 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     InFlightBatch batch;
     batch.dispatch_frame = frame;
     std::vector<uint32_t> lod_counts(lod_count, 0);
-    estimate = 0.0;
+    const uint32_t list_words = uint32_t(list.size() / 4);
+    uint64_t list_bound = 0;
     const Vector2i lods = ChunkMath::lod_range(chunks);
-    AABB bounds = _chunk_aabb(chunks[0]);
+    AABB box = _chunk_aabb(chunks[0]);
     for (const ChunkId &c : chunks) {
         const int lod = ChunkMath::get_lod(c);
         if (lod >= 0 && lod < lod_count) {
             lod_counts[lod]++;
-            estimate += cost_model.estimate(lod);
         }
-        bounds.merge_with(_chunk_aabb(c));
+        list_bound += bounds[c];
+        box.merge_with(_chunk_aabb(c));
         working_generation.insert(c);
     }
-    r_budget_us -= estimate;
+    cost_model.observe_list(list_bound, list_words);
+    r_budget_us -= cost_model.estimate(lod_counts, list_words);
     const PackedByteArray palette_batch = palettes.place_batch(chunk_palettes, batch.palettes);
 
     PackedInt32Array pages;
@@ -804,15 +814,15 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
         }
         page_state[page] = PageState();
         // Conservative until the directory says which chunks really landed in this page.
-        pool->set_page_aabb(page, bounds);
+        pool->set_page_aabb(page, box);
         batch.pages.push_back(page);
         pages.push_back(page);
     }
 
     const uint32_t batch_id = next_batch_id++;
     const uint32_t count = chunks.size();
-    const uint32_t list_words = uint32_t(list.size() / 4);
     stats.list_words_total += list_words;
+    stats.list_bound_total += list_bound;
     stats.list_words_max = MAX(stats.list_words_max, (uint64_t)list_words);
     batch_costs[batch_id] = BatchCost{ std::move(lod_counts), list_words };
     batch.table_version = table_version;
@@ -1334,6 +1344,10 @@ Dictionary GPUDirectMesher::get_stats() {
         cost_us.push_back(c);
     }
     d["cost_us_per_chunk"] = cost_us;
+    // A list word's cost (us), and the share of the chunks' list bounds (their keys' records) their lists hold.
+    d["cost_us_per_word"] = cost_model.us_per_word;
+    d["cost_list_share"] = cost_model.list_share;
+    d["list_bound_total"] = (int64_t)stats.list_bound_total;
     d["chunks_meshed"] = (int64_t)stats.chunks_meshed;
     d["quads_emitted"] = (int64_t)stats.quads_emitted;
     d["overflow_chunks"] = (int64_t)stats.overflow_chunks;

@@ -115,8 +115,8 @@ public:
     // Main thread. Asks for every key the chunk lists, at p_rank (lower first; equal ranks in the order asked). PARKED: the
     // stream pins the chunk's keys and hands it back to p_owner (a mesher: each has its own parked chunks) through
     // take_ready() with p_tag once they are placed; asked again meanwhile, it stays parked (with the new tag, its keys at
-    // the better rank).
-    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank);
+    // the better rank). READY: r_words (if given) gets the records its keys hold, a bound of its list's length.
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank, uint64_t *r_words = nullptr);
     // Main thread: p_owner's tags from now on are p_tag or later. Its chunks parked under an older tag with p_rank(chunk)
     // >= 0 take p_tag and that rank in place (p_kept(chunk): they come back through take_ready, the caller doesn't queue
     // them again); the others (-1) are forgotten, their keys unpinned (stale_handed_back), and the keys then left with no
