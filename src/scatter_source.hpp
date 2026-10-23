@@ -48,6 +48,8 @@ struct SourceKey {
         static constexpr const char *NAMES[KIND_COUNT] = { "parts", "blobs", "sites", "proxies" };
         return NAMES[p_kind];
     }
+    // A walk (no records, never listed): a site or proxy tile.
+    bool walk() const { return kind == SITES || kind == PROXIES; }
     uint32_t source = 0; // its source's id (ScatterSource::Setup::id)
     int kind = PARTS;
     int lod = 0; // the LOD its records are listed at (a blob or proxy tile: its layer; a site tile: 0)

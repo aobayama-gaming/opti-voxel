@@ -421,10 +421,12 @@ void InstanceStream::poll() {
     viewed.clear();
     const uint64_t t_evict = now_usec();
     for (;;) {
-        const bool too_many = entries.size() - pending > settings.entries;
-        if (!(too_many || input_records > settings.input_records) || !evict_oldest(!too_many)) {
+        const bool too_many = entries.size() - pending - walks_ready > settings.entries;
+        if (!(too_many || input_records > settings.input_records) || !evict_oldest(too_many ? chain_all : chain_inputs)) {
             break;
         }
+    }
+    while (walks_ready > settings.walks && evict_oldest(chain_walks)) {
     }
     const uint64_t t_end = now_usec();
     stats.evict_usec += t_end - t_evict;
@@ -445,6 +447,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     e.count = uint32_t(e.content->records.size());
     e.state = Entry::READY;
     pending--;
+    walks_ready += e.key.walk();
     input_records += e.count;
     std::vector<std::pair<SourceKey, uint32_t>> dependents;
     dependents.swap(e.dependents);
@@ -469,7 +472,7 @@ bool InstanceStream::place(Entry &r_entry) {
     uint32_t slot = 0;
     if (r_entry.count > 0) {
         bool room = allocate(r_entry.count, slot);
-        while (!room && evict_oldest()) {
+        while (!room && evict_oldest(chain_all)) {
             room = allocate(r_entry.count, slot);
         }
         if (!room) {
@@ -556,12 +559,13 @@ void InstanceStream::release(uint32_t p_slot, uint32_t p_count) {
     }
 }
 
-bool InstanceStream::evict_oldest(bool p_inputs) {
-    Entry *e = (p_inputs ? chain_inputs : chain_all).oldest;
+bool InstanceStream::evict_oldest(const Chain &p_chain) {
+    Entry *e = p_chain.oldest;
     if (e == nullptr || e->used + GRACE_FRAMES >= frame) {
         return false; // the rest is newer
     }
     lru_unlink(*e);
+    walks_ready -= e->key.walk();
     if (e->placed && e->count > 0) {
         release(e->slot, e->count);
     }
@@ -577,7 +581,7 @@ bool InstanceStream::evict_oldest(bool p_inputs) {
 
 void InstanceStream::touch(Entry &r_entry) {
     r_entry.used = MAX(r_entry.used, frame);
-    if (r_entry.lru_all.in && chain_all.newest != &r_entry) {
+    if (r_entry.lru_all.in && lru_chain(r_entry).newest != &r_entry) {
         lru_unlink(r_entry);
         lru_link(r_entry);
     }
@@ -617,7 +621,7 @@ void InstanceStream::Chain::unlink(Entry &r_entry) {
 }
 
 void InstanceStream::lru_link(Entry &r_entry) {
-    chain_all.link(r_entry);
+    lru_chain(r_entry).link(r_entry);
     if (!r_entry.placed && r_entry.count > 0) {
         chain_inputs.link(r_entry);
     }
@@ -625,7 +629,7 @@ void InstanceStream::lru_link(Entry &r_entry) {
 
 void InstanceStream::lru_unlink(Entry &r_entry) {
     if (r_entry.lru_all.in) {
-        chain_all.unlink(r_entry);
+        lru_chain(r_entry).unlink(r_entry);
     }
     if (r_entry.lru_inputs.in) {
         chain_inputs.unlink(r_entry);
@@ -814,6 +818,7 @@ Dictionary InstanceStream::get_stats() const {
     d["slots_capacity"] = int64_t(settings.slot_capacity);
     d["slots_full"] = stats.slots_full;
     d["input_records"] = input_records;
+    d["walks_ready"] = int64_t(walks_ready);
     d["lists_missing"] = lists_missing.load();
     d["point_computed"] = point_computed.load();
     d["view_missing"] = view_missing;

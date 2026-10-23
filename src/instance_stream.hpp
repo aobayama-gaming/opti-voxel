@@ -24,9 +24,9 @@
 // part layer's blob tile the LOD-0 part tiles around it, a far layer's its proxy tile), then ready with its content,
 // which a listed key copies into slots: the GPU table's records from slot_base on, sent through the placement log
 // (uploads_since). Keys without records (the walks, empty tiles) stay entries like the others. Ready entries not pinned
-// by a parked chunk are on a least-recently-used list, and those also holding input records (not placed, count > 0) on a
-// second one; the oldest go when room is needed (slots and entries: the first list, inputs kept: the second), none asked
-// for in the last GRACE_FRAMES (a batch in flight still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
+// by a parked chunk are on a least-recently-used list (the walks on one of their own), and those also holding input records
+// (not placed, count > 0) on a third one; the oldest go when room is needed (slots and entries: the first list, walks: the
+// second, inputs kept: the third), none asked for in the last GRACE_FRAMES (a batch in flight still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
 //
 // Jobs run by rank (lower first; the mesher's pop order: its load queue), then in the order asked: a key's rank is the
 // best of the chunks and keys waiting for it, its inputs inherit it, and a queued job asked again with a better rank moves
@@ -65,7 +65,12 @@ public:
     static constexpr uint32_t SLOTS_MIN = uint32_t(1) << 16;
     static constexpr uint32_t SLOTS_MAX = uint32_t(1) << 21;
     static constexpr int64_t INPUT_RECORDS = int64_t(1) << 21; // the records of ready keys not in slots (inputs), kept at most
-    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys kept at most (the empty ones count)
+    static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys with records kept at most (the empty ones count, the walks don't)
+    // Landed walks (site and proxy tiles) kept at most: enough for the view's whole zone to stay resident (a walk evicted is
+    // walked again). An entry is ~450 B (Entry 272, its map node and key ~70, the content 80 + its control block 16) plus 56
+    // per site (CellSite). The 1M forest (5 x 5 km at 5 cm, 40 m site tiles): 125^2 columns, the LOD-6/7 part tiles asking
+    // 16-32 site tiles tall per column, ~500k walks (225 MB) and its 1M sites (56 MB); the cap bounds them to ~500 MB.
+    static constexpr size_t WALKS_MAX = size_t(1) << 20;
     // Keys asked for and not landed at most: past it admit() answers LATER for a chunk needing a new key, so the meshers
     // stop popping (else a frame parks the whole queue: millions of keys waiting). 2^12 when the jobs ran in the order
     // asked (the ones in view behind the rest); ranked, the view's run first whatever is queued behind them.
@@ -77,6 +82,7 @@ public:
         uint32_t slot_capacity = SLOTS_MIN;
         int64_t input_records = INPUT_RECORDS;
         size_t entries = ENTRIES_MAX;
+        size_t walks = WALKS_MAX;
         size_t pending = PENDING_MAX;
         size_t log = LOG_MAX;
     };
@@ -195,7 +201,7 @@ private:
         std::vector<SourceKey> input_keys; // WAITING: source.inputs(key), e.inputs' order (cleared once started)
         uint64_t job_seq = 0; // RUNNING: its job's key in jobs is (rank, job_seq) until a drain task takes it
         int pins = 0; // parked chunks holding it
-        Links lru_all; // READY, unpinned
+        Links lru_all; // READY, unpinned: on chain_walks for a walk, else on chain_all
         Links lru_inputs; // also not placed, with records
     };
     // An LRU list over one of the entries' Links, oldest first.
@@ -223,10 +229,12 @@ private:
 
     mutable std::shared_mutex mutex; // the stream's state: the main thread and the drain tasks change it, the lists read it
     std::unordered_map<SourceKey, Entry, KeyHash> entries; // references stay valid across rehashes
-    Chain chain_all{ &Entry::lru_all }; // the entries evicted for slots and entries
+    Chain chain_all{ &Entry::lru_all }; // the keys with records (or empty tiles), evicted for slots and entries
+    Chain chain_walks{ &Entry::lru_all }; // the walks, evicted for walks (no slot, no record: a cap of their own)
     Chain chain_inputs{ &Entry::lru_inputs }; // the entries evicted for input records
     uint64_t frame = 0;
     size_t pending = 0; // entries not READY (never evicted)
+    size_t walks_ready = 0; // walk entries READY
 
     std::mutex job_mutex; // the drain tasks' queues
     std::map<JobKey, std::unique_ptr<Job>> jobs; // to run, first first
@@ -297,9 +305,12 @@ private:
     bool place(Entry &r_entry);
     bool allocate(uint32_t p_count, uint32_t &r_slot);
     void release(uint32_t p_slot, uint32_t p_count);
-    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest holding input records
-    // (evicting a placed key or a walk frees none, and asked for again it is computed again).
-    bool evict_oldest(bool p_inputs = false);
+    // Evicts p_chain's oldest entry if it is out of its grace (false: none can go): chain_all for slots and entries,
+    // chain_inputs for input records (evicting a placed key or a walk frees none, and asked for again it is computed again),
+    // chain_walks for walks.
+    bool evict_oldest(const Chain &p_chain);
+    // The LRU list an entry's lru_all links it on.
+    Chain &lru_chain(const Entry &p_entry) { return p_entry.key.walk() ? chain_walks : chain_all; }
     void pin(Entry &r_entry);
     void unpin(Entry &r_entry);
     void touch(Entry &r_entry);

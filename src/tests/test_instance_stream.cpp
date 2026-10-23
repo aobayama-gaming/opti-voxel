@@ -304,6 +304,7 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
     const StreamFixture &fx = StreamFixture::get();
     InstanceStream::Settings settings;
     settings.entries = 0; // every key past its grace and unpinned goes at each poll
+    settings.walks = 0;
     std::unique_ptr<InstanceStream> stream = fx.stream(settings);
     Mirror mirror;
 
@@ -350,7 +351,7 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
         evicted += int64_t(Dictionary(by_key[kinds[i]])["evicted"]);
     }
     CHECK(evicted == stat(*stream, "evicted"));
-    CHECK(key_stat(*stream, "sites 0", "evicted") > 0); // the entries cap evicts the site tiles too
+    CHECK(key_stat(*stream, "sites 0", "evicted") > 0); // the walks' cap evicts the site tiles
     // The graced chunk's keys were evicted: asked again, they are computed again (the same records).
     CHECK(stream->admit(graced, 0, 2, 0) == InstanceStream::PARKED);
     stream->poll();
@@ -492,60 +493,77 @@ TEST_CASE("Instance stream: making room for inputs evicts the records not placed
 }
 
 // Evicting for input records takes the oldest key holding them and moves nothing else: the entries cap then still finds the
-// least recently used keys first.
-TEST_CASE("Instance stream: evicting for input records leaves the LRU order, the entries cap evicts the oldest first") {
+// least recently used keys with records first, and the walks have a cap of their own (two chains: neither cap evicts the
+// other's keys).
+TEST_CASE("Instance stream: the entries cap evicts the oldest keys with records, the walks' cap the oldest walks") {
     const StreamFixture &fx = StreamFixture::get();
     const ChunkId a = fx.chunk(-300, -300, 2);
     const VoxelPos v1 = fx.origin + VoxelPos(400, 0, 400), v2 = fx.origin + VoxelPos(400, 0, -400);
-    std::vector<SourceKey> all, one;
-    fx.source->chunk_keys(a, fx.param, all);
-    fx.source->keys(v1, v1, 0, one);
-    all.insert(all.end(), one.begin(), one.end());
-    InstanceStream::Settings settings;
-    settings.input_records = 0;
-    settings.entries = keys_and_inputs(fx, all); // a's keys and v1's fit, one more key is over
-    // What the assertions below rest on: v2's keys and inputs fit in a's site tiles, the least recently used, so the cap
-    // evicts none of a's part tiles (a fixture change breaking it fails here, for this reason).
-    std::vector<SourceKey> a_keys, a_sites, v2_keys;
+    // The keys with records and the walks of a and of v1 and v2's views (their inputs included).
+    const auto split = [&fx](std::vector<SourceKey> p_keys, size_t &r_records, size_t &r_walks) {
+        std::vector<SourceKey> in;
+        for (size_t i = 0, n = p_keys.size(); i < n; i++) {
+            fx.source->inputs(p_keys[i], in);
+            p_keys.insert(p_keys.end(), in.begin(), in.end());
+        }
+        std::sort(p_keys.begin(), p_keys.end());
+        p_keys.erase(std::unique(p_keys.begin(), p_keys.end()), p_keys.end());
+        r_walks = size_t(std::count_if(p_keys.begin(), p_keys.end(), [](const SourceKey &p_k) { return p_k.walk(); }));
+        r_records = p_keys.size() - r_walks;
+    };
+    std::vector<SourceKey> a_keys, v1_keys, v2_keys;
     fx.source->chunk_keys(a, fx.param, a_keys);
-    for (const SourceKey &k : a_keys) {
-        fx.source->inputs(k, one);
-        a_sites.insert(a_sites.end(), one.begin(), one.end());
-    }
-    std::sort(a_sites.begin(), a_sites.end());
-    a_sites.erase(std::unique(a_sites.begin(), a_sites.end()), a_sites.end());
+    fx.source->keys(v1, v1, 0, v1_keys);
     fx.source->keys(v2, v2, 0, v2_keys);
-    CHECK(keys_and_inputs(fx, v2_keys) <= a_sites.size());
-    if (!(keys_and_inputs(fx, v2_keys) <= a_sites.size())) {
+    size_t a_records = 0, a_walks = 0, v1_records = 0, v1_walks = 0, v2_records = 0, v2_walks = 0;
+    split(a_keys, a_records, a_walks);
+    split(v1_keys, v1_records, v1_walks);
+    split(v2_keys, v2_records, v2_walks);
+    // What the assertions below rest on (a fixture change breaking it fails here, for this reason).
+    CHECK((a_walks > 0 && v2_walks > 0 && v2_records <= a_records && v2_walks <= a_walks));
+    if (!(a_walks > 0 && v2_walks > 0 && v2_records <= a_records && v2_walks <= a_walks)) {
         return;
     }
-    std::unique_ptr<InstanceStream> stream = fx.stream(settings);
-    std::vector<std::pair<ChunkId, uint64_t>> back;
-    InstanceStream::Admit answer = InstanceStream::LATER;
-    for (int frame = 0; frame < 16 && answer != InstanceStream::READY; frame++) {
-        answer = stream->admit(a, 0, 1, 0);
+    for (const bool walks_cap : { false, true }) {
+        CAPTURE(walks_cap);
+        InstanceStream::Settings settings;
+        settings.input_records = 0;
+        // One cap at what a and v1 hold, the other wide: v2 goes over the first only.
+        settings.entries = walks_cap ? InstanceStream::ENTRIES_MAX : a_records + v1_records;
+        settings.walks = walks_cap ? a_walks + v1_walks : InstanceStream::WALKS_MAX;
+        std::unique_ptr<InstanceStream> stream = fx.stream(settings);
+        std::vector<std::pair<ChunkId, uint64_t>> back;
+        InstanceStream::Admit answer = InstanceStream::LATER;
+        for (int frame = 0; frame < 16 && answer != InstanceStream::READY; frame++) {
+            answer = stream->admit(a, 0, 1, 0);
+            stream->poll();
+            stream->take_ready(0, back);
+        }
+        CHECK(answer == InstanceStream::READY);
+        for (uint64_t f = 0; f < InstanceStream::GRACE_FRAMES + 2; f++) {
+            stream->poll(); // a's keys out of their grace
+        }
+        // v1's tile lands unplaced: the inputs' eviction finds it in its grace (and leaves a's keys where they are).
+        std::vector<TableRecord> view;
+        stream->view_records(v1, 0, view);
         stream->poll();
-        stream->take_ready(0, back);
+        stream->poll();
+        CHECK(stat(*stream, "input_records") > 0);
+        CHECK(stat(*stream, "evicted") == 0);
+        // v2's keys go over one cap: a's keys of that chain go, the least recently used, never v1's or v2's in their grace,
+        // never the other chain's.
+        stream->view_records(v2, 0, view);
+        stream->poll();
+        stream->poll();
+        const int64_t sites = key_stat(*stream, "sites 0", "evicted");
+        const int64_t parts = key_stat(*stream, "parts 0", "evicted") + key_stat(*stream, "parts 2", "evicted");
+        CHECK(stat(*stream, "evicted") > 0);
+        CHECK(stat(*stream, "evicted") == sites + parts);
+        CHECK((walks_cap ? parts : sites) == 0);
+        if (walks_cap) {
+            CHECK(stat(*stream, "walks_ready") == int64_t(settings.walks));
+        }
     }
-    CHECK(answer == InstanceStream::READY);
-    for (uint64_t f = 0; f < InstanceStream::GRACE_FRAMES + 2; f++) {
-        stream->poll(); // a's keys out of their grace
-    }
-    // v1's tile lands unplaced: the inputs' eviction finds it in its grace (and leaves a's keys where they are).
-    std::vector<TableRecord> view;
-    stream->view_records(v1, 0, view);
-    stream->poll();
-    stream->poll();
-    CHECK(stat(*stream, "input_records") > 0);
-    CHECK(stat(*stream, "evicted") == 0);
-    // v2's keys go over the entries cap: a's site tiles go, the least recently used, never v1's or v2's keys in their grace.
-    stream->view_records(v2, 0, view);
-    stream->poll();
-    stream->poll();
-    CHECK(stat(*stream, "evicted") > 0);
-    CHECK(key_stat(*stream, "sites 0", "evicted") == stat(*stream, "evicted"));
-    CHECK(key_stat(*stream, "parts 0", "evicted") == 0);
-    CHECK(key_stat(*stream, "parts 2", "evicted") == 0); // a's part tiles, used after their site tiles
 }
 
 // A LOD sharing the LOD-0 tile side has no part key of its own: its chunks read the LOD-0 keys and keep what is listed at

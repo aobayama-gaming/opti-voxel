@@ -240,7 +240,7 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
         part_tile(p_key, p_inputs, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         blob_tile(p_key, p_inputs, r_out);
-    } else if (p_key.kind == SourceKey::SITES || p_key.kind == SourceKey::PROXIES) {
+    } else if (p_key.walk()) {
         // A site tile is on the LOD-0 part grid, a proxy tile on a far layer's blob grid (inputs()): any other walks a
         // box no key reads (a part layer's proxies: a full walk for nothing).
         const bool walked = p_key.kind == SourceKey::SITES ? p_key.lod == 0 : has_layer(p_key.lod) && !part_layer(p_key.lod);

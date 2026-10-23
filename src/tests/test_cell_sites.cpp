@@ -1,6 +1,7 @@
 #include "test_common.hpp"
 
 #include "cell_sites.hpp"
+#include "debug_log.hpp"
 #include "sdf_cascade.hpp"
 
 #include <algorithm>
@@ -223,4 +224,47 @@ TEST_CASE("Cell sites: a cell holds the same site whatever the query box, anothe
         same += a[i].base == other[i].site.base ? 1 : 0;
     }
     CHECK(same * 10 < int64_t(a.size()));
+}
+
+// What a LOD-0 site tile's walk costs on the cascade at 5 cm (the 1M forest's cells: 100 voxels, tiles of 8 cells): the
+// tiles of a LOD-7 part tile's footprint (16^3 site tiles, most of them air), by the walk's outcome. An air tile with no
+// ground within its own node's plane slack costs the one evaluation at its centre; the ones next to the ground descend.
+TEST_CASE("Cell sites: an air tile's walk costs one evaluation, a ground tile's a few per cell") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    SDFCascade sdf;
+    sdf.configure(param, 18);
+    const int64_t side = 100, tile = 8 * side, n = 16;
+    std::atomic<int64_t> evals{ 0 };
+    const FieldFn ground = [&](const VoxelPos &p_v, int p_lod) {
+        evals++;
+        return sdf.ground_field(p_v, p_lod);
+    };
+    const int64_t x0 = 250000, z0 = 40000;
+    const int64_t ty = WorldCoord::floor_div(sdf.ground_y(x0, z0), tile) - n / 2;
+    // [0]: tiles with sites, [1]: empty tiles that descended (more than one evaluation), [2]: empty at one evaluation.
+    int64_t tiles[3] = {}, cost[3] = {}, sites = 0;
+    const uint64_t t0 = now_usec();
+    for (int64_t z = 0; z < n; z++) {
+        for (int64_t y = 0; y < n; y++) {
+            for (int64_t x = 0; x < n; x++) {
+                const VoxelPos lo = VoxelPos(WorldCoord::floor_div(x0, tile) + x, ty + y, WorldCoord::floor_div(z0, tile) + z) * tile;
+                std::vector<CellSite> found;
+                evals = 0;
+                surface_sites(lo, lo + VoxelPos(tile - 1, tile - 1, tile - 1), side, SALT, ground, found);
+                const int kind = !found.empty() ? 0 : (evals > 1 ? 1 : 2);
+                tiles[kind]++;
+                cost[kind] += evals;
+                sites += int64_t(found.size());
+            }
+        }
+    }
+    const double usec = double(now_usec() - t0);
+    const int64_t all = cost[0] + cost[1] + cost[2];
+    MESSAGE("16^3 site tiles: ", tiles[0], " with ", sites, " sites at ", double(cost[0]) / double(MAX<int64_t>(tiles[0], 1)), " evaluations each, ",
+            tiles[1], " empty that descend at ", double(cost[1]) / double(MAX<int64_t>(tiles[1], 1)), ", ", tiles[2], " air at 1; ", all,
+            " evaluations, ", usec / double(MAX<int64_t>(all, 1)), " us each");
+    CHECK(tiles[2] > tiles[0] + tiles[1]); // most of a part tile's footprint is air
+    CHECK(cost[2] == tiles[2]);
+    CHECK(cost[0] > 10 * tiles[0]);
 }

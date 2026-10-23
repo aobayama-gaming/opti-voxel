@@ -126,7 +126,7 @@ def stream_keys_table(name, st, prev):
         ratio = f"{c / (c - e):.2f}" if e is not None and c > e else ("n/a" if e is None else "inf")
         de = None if e is None else e - p.get("evicted", 0)
         out.append(f"| {key} | {c - p.get('count', 0)} | {fmt(de)} | {c} | {fmt(e)} | {ratio} | {k.get('ms_avg', 0):.3f} |")
-    return out + [""]
+    return out + ["", f"Walks resident (cap InstanceStream::WALKS_MAX): {fmt(num(st, 'walks_ready'))}", ""]
 
 
 def stream_report(stats, phases):

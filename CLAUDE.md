@@ -344,9 +344,12 @@ tile reads those its region meets, `proxy_region`, and sorts their sites in it b
   2 per cell side, the profile's lost moments: mass within 10%). Part layers are those under `Setup::part_cell_sides`
   source cells: 3 by default (the whole build's blobs), `VoxelTerrain.archetype_stream_part_sides` /
   `--stream_part_sides=N` for the streamed sources (default 1: proxies from the source cell on; the 2 switched layers:
-  mass within 20%, peak within 40%, unit test; 3 = the exact layers). The stream keeps two LRU chains: all evictable
-  entries (slots, the entries cap) and those holding input records (not placed, count > 0: the inputs cap pops its oldest
-  in O(1), the walks and placed keys never relinked); `computed_by_key` names `sites 0` and `proxies L`.
+  mass within 20%, peak within 40%, unit test; 3 = the exact layers). The stream keeps three LRU chains: the evictable
+  keys with records (slots, the entries cap `ENTRIES_MAX`), the walks (`WALKS_MAX` 2^20, `Settings::walks`: ~450 B per
+  walk + 56 per site, the 1M zone's ~500k stay resident; `walks_ready`) and those holding input records (not placed,
+  count > 0: the inputs cap pops its oldest in O(1), the walks and placed keys never relinked); `computed_by_key` names
+  `sites 0` and `proxies L`. An air site tile's walk is one evaluation (unit test: on a LOD-7 footprint on the cascade,
+  89% of the tiles, 3% of the evaluations; the ground tiles ~330 each), so no emptiness test runs before it.
   **Stream (`src/instance_stream.*`):** `InstanceStream` holds the keys asked for in one table (empty ones
   too) with an intrusive LRU: `admit(chunk, owner, tag, rank)` answers READY (every key placed), PARKED (its keys pinned;
   `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
