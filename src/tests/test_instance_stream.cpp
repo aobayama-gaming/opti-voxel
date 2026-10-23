@@ -23,7 +23,13 @@ struct HeldExecutor : StreamExecutor {
             StreamExecutor::reap(p_wait);
         }
     }
-    bool more() override { return steps < 0 || steps-- > 0; }
+    bool more() override {
+        if (steps == 0) {
+            return false;
+        }
+        steps -= steps > 0;
+        return true;
+    }
 };
 
 // A cheap source: one sphere of 4-8 voxels per 16-voxel cell site on a flat ground far from the origin, no blobs. The

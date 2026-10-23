@@ -229,6 +229,7 @@ InstanceStream::Entry &InstanceStream::request(const SourceKey &p_key, bool p_li
         e.rank = p_rank;
         start(e); // its job lists its inputs first, on a drain task (expand())
     } else {
+        e.orphan = false;
         improve(e, p_rank);
     }
     touch(e);
@@ -269,23 +270,25 @@ void InstanceStream::start(Entry &r_entry) {
     r_entry.inputs.clear();
     r_entry.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
     r_entry.state = Entry::RUNNING;
-    bool spawn = false;
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
         r_entry.job_seq = ++job_seq;
         jobs.emplace(JobKey(r_entry.rank, r_entry.job_seq), std::move(job));
         stats.jobs_queued_max = MAX(stats.jobs_queued_max, int64_t(jobs.size())); // under the stream's lock too
-        spawn = claim_drain();
+    }
+    wake();
+}
+
+void InstanceStream::wake() {
+    bool spawn = false;
+    {
+        const std::lock_guard<std::mutex> lock(job_mutex);
+        spawn = !jobs.empty() && draining < executor->workers();
+        draining += spawn;
     }
     if (spawn) {
         executor->run([this] { drain(); });
     }
-}
-
-bool InstanceStream::claim_drain() {
-    const bool spawn = !jobs.empty() && draining < executor->workers();
-    draining += spawn;
-    return spawn;
 }
 
 void InstanceStream::improve(Entry &r_entry, uint64_t p_rank) {
@@ -321,7 +324,8 @@ void InstanceStream::drop_unneeded(Entry &r_entry) {
     if (r_entry.state == Entry::RUNNING) {
         const std::lock_guard<std::mutex> lock(job_mutex);
         if (jobs.erase(JobKey(r_entry.rank, r_entry.job_seq)) == 0) {
-            return; // a drain task took it: it lands into its grace
+            r_entry.orphan = true; // a drain task took it: it lands into its grace (listing its inputs: dropped then)
+            return;
         }
         stats.jobs_dropped++;
     }
@@ -371,21 +375,14 @@ void InstanceStream::poll() {
     viewed.clear();
     const uint64_t t_evict = now_usec();
     for (;;) {
-        const bool too_many = entries.size() - pending - walks_ready > settings.entries;
+        const bool too_many = int64_t(entries.size()) - int64_t(pending) - int64_t(walks_ready) > int64_t(settings.entries);
         if (!(too_many || input_records > settings.input_records) || !evict_oldest(too_many ? chain_all : chain_inputs)) {
             break;
         }
     }
     while (walks_ready > settings.walks && evict_oldest(chain_walks)) {
     }
-    bool spawn = false;
-    {
-        const std::lock_guard<std::mutex> lock(job_mutex); // jobs a drain task left (StreamExecutor::more())
-        spawn = claim_drain();
-    }
-    if (spawn) {
-        executor->run([this] { drain(); });
-    }
+    wake(); // the jobs a drain task left (StreamExecutor::more())
     const uint64_t t_end = now_usec();
     stats.evict_usec += t_end - t_evict;
     const uint64_t dt = t_end - t0;
@@ -397,8 +394,14 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     const uint64_t t0 = now_usec();
     Entry &e = entries.find(p_job->key)->second; // running: never evicted
     if (p_job->expand && !p_job->input_keys.empty()) {
-        stats.compute_usec += int64_t(p_job->usec); // the workers' time (listing a coarse part tile's inputs walks its subtree)
-        expand(e, std::move(p_job->input_keys));
+        stats.compute_usec += int64_t(p_job->usec); // the workers' time
+        stats.expand_usec += int64_t(p_job->usec); // of which listing inputs (a coarse part tile's walks its subtree)
+        if (e.orphan && e.pins == 0 && e.dependents.empty() && e.used != frame) {
+            e.state = Entry::WAITING; // dropped while it listed them, and still unneeded: erased, no input asked for
+            drop_unneeded(e);
+        } else {
+            expand(e, std::move(p_job->input_keys));
+        }
         stats.land_usec += now_usec() - t0;
         return;
     }
@@ -753,6 +756,7 @@ Dictionary InstanceStream::get_stats() const {
     d["admit_keys_created"] = stats.admit_keys_created;
     d["admit_keys_created_max"] = stats.admit_keys_created_max;
     d["keys_expanded"] = stats.keys_expanded;
+    d["expand_ms_total"] = double(stats.expand_usec) / 1000.0;
     d["jobs_queued_max"] = stats.jobs_queued_max;
     d["jobs_reranked"] = stats.jobs_reranked;
     d["stale_handed_back"] = stats.stale_handed_back;

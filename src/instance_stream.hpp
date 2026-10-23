@@ -195,6 +195,7 @@ private:
         std::vector<std::shared_ptr<const SourceContent>> inputs; // WAITING: those landed so far
         int missing = 0; // WAITING: its inputs not landed
         bool expanded = false; // its inputs listed (on a drain task) and asked for
+        bool orphan = false; // RUNNING: drop_unneeded() found its job taken (asked for again: cleared)
         std::vector<std::pair<SourceKey, uint32_t>> dependents; // not READY: the keys waiting for it (and its input index)
         std::vector<std::pair<ParkKey, uint64_t>> waiters; // the parked chunks waiting for its placement (their park seq)
         uint32_t slot = 0;
@@ -270,6 +271,7 @@ private:
         int64_t admit_keys_created = 0; // of keys_created: by admit() (a chunk's own keys: their inputs come on the workers)
         int64_t admit_keys_created_max = 0; // by one admit()
         int64_t keys_expanded = 0; // keys whose first job listed inputs (asked for when it landed)
+        int64_t expand_usec = 0; // of compute_usec: those jobs (listing the inputs)
         int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
         int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank
         int64_t stale_handed_back = 0; // parked chunks set_tag() forgot (a newer scan doesn't want them)
@@ -301,8 +303,8 @@ private:
     // A key's first job listed inputs: asked for at its rank, it waits for them (or runs again at once if all are ready).
     void expand(Entry &r_entry, std::vector<SourceKey> &&p_inputs);
     void start(Entry &r_entry);
-    // Whether to run one more drain task (jobs queued, fewer than the executor's workers draining); job_mutex held.
-    bool claim_drain();
+    // Runs one more drain task if jobs are queued and fewer than the executor's workers drain them.
+    void wake();
     // Not READY: its rank lowered to p_rank if better; RUNNING, its job moved if still queued (keeping its order among
     // equal ranks), WAITING, its inputs not landed too.
     void improve(Entry &r_entry, uint64_t p_rank);

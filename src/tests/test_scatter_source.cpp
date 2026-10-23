@@ -709,7 +709,6 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
         }
         layers++;
         const int64_t g = MAX<int64_t>(1, streamed.layer_cell(layer) / ScatterSource::PROXY_PER_CELL);
-        const int64_t reach = int64_t(std::ceil(streamed.profile().reach));
         std::vector<SourceKey> keys, in;
         streamed.keys(fx.zone().lo, fx.zone().hi, layer, keys);
         std::map<SourceKey, SourceContent> walks;
@@ -721,7 +720,7 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
             streamed.inputs(k, in);
             ScatterSource::Inputs raw;
             std::vector<CellSite> gathered;
-            const VoxelBox region = streamed.tile_box(k).grown(ScatterSource::MARGIN_CELLS * streamed.layer_cell(layer) + reach).clipped(sc.zone.grown(g));
+            const VoxelBox region = streamed.proxy_region(k, true);
             for (const SourceKey &p : in) {
                 CHECK((p.kind == SourceKey::PROXIES && p.lod == layer));
                 auto it = walks.find(p);

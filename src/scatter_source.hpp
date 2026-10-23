@@ -129,6 +129,9 @@ public:
     // Whether a layer's blob tiles read the grown records (else proxies).
     bool part_layer(int p_layer) const { return p_layer < prof.lod_end && layer_cell(p_layer) < set.part_cell_sides * set.scatter.side; }
     VoxelBox tile_box(const SourceKey &p_key) const;
+    // The box a far layer's blob tile reads proxies in: its cells and MARGIN_CELLS past them, plus the records' reach (a
+    // proxy outside the zone grown by a proxy cell weighs nothing: p_clipped, clipped to it).
+    VoxelBox proxy_region(const SourceKey &p_key, bool p_clipped) const;
 
     // The keys whose records' box test at p_lod can pass somewhere in [p_lo, p_hi] (LOD0 voxels, inclusive), in key order.
     void keys(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, std::vector<SourceKey> &r_out) const;
@@ -174,9 +177,6 @@ private:
     void append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const;
     // The side of a layer's proxy cells (voxels).
     int64_t proxy_side(int p_layer) const { return MAX<int64_t>(1, layer_cell(p_layer) / PROXY_PER_CELL); }
-    // The box a far layer's blob tile reads proxies in: its cells and MARGIN_CELLS past them, plus the records' reach (a
-    // proxy outside the zone grown by a proxy cell weighs nothing: p_clipped, clipped to it).
-    VoxelBox proxy_region(const SourceKey &p_key, bool p_clipped) const;
     // A walk's sites: a site tile's, or a proxy tile's (its own box, in the zone grown by a proxy cell).
     void walk_tile(const SourceKey &p_key, SourceContent &r_out) const;
     // A part tile grows the sites of its inputs: every record at LOD 0, the ones listed at its LOD coarser.

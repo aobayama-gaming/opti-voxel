@@ -20,6 +20,8 @@ struct GPUCostModel {
     static constexpr double RATE = 0.25; // weight of one batch in a measured cost
     static constexpr double MAX_SCALE = 8.0; // one batch moves a cost by at most this factor
     static constexpr double LIST_SHARE_MIN = 1.0 / 1024.0, LIST_SHARE_MAX = 4.0; // a list's words over its bound
+    // A word's cost stays within this factor of WORD_US: batches with the same words per chunk can't tell it from the LODs'.
+    static constexpr double WORD_RANGE = 64.0;
 
     void resize(int p_lods) { us_per_chunk.assign(std::max(p_lods, 0), -1.0); }
     int lods() const { return (int)us_per_chunk.size(); }
@@ -72,7 +74,7 @@ struct GPUCostModel {
             next[lod] = measured(lod) ? cost * (1.0 + RATE * share * (scale - 1.0)) : cost * first;
         }
         us_per_chunk = std::move(next);
-        us_per_word *= 1.0 + RATE * (words / e) * (scale - 1.0);
+        us_per_word = std::clamp(us_per_word * (1.0 + RATE * (words / e) * (scale - 1.0)), WORD_US / WORD_RANGE, WORD_US * WORD_RANGE);
     }
     // A batch's list: p_words for p_chunks chunks whose bounds summed to p_bound.
     void observe_list(uint64_t p_bound, uint64_t p_words, uint32_t p_chunks) {
