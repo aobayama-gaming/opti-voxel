@@ -231,6 +231,24 @@ bool placed_before(const StreamFixture &p_fx, const ChunkId &p_before, const Chu
     return a.first >= 0 && b.first >= 0 && a.second < b.first;
 }
 
+// The LOD-0 chunks of a grid over the zone's middle, by their count of own keys (fewest first; ties by position): a chunk
+// in the middle of a part tile reads one, one at a tile corner four.
+std::vector<ChunkId> chunks_by_keys(const StreamFixture &p_fx) {
+    std::vector<std::pair<size_t, ChunkId>> by;
+    for (int64_t z = -400; z <= 400; z += 28) {
+        for (int64_t x = -400; x <= 400; x += 28) {
+            const ChunkId c = p_fx.chunk(x, z);
+            by.emplace_back(own_keys(p_fx, c), c);
+        }
+    }
+    std::stable_sort(by.begin(), by.end(), [](const std::pair<size_t, ChunkId> &p_a, const std::pair<size_t, ChunkId> &p_b) { return p_a.first < p_b.first; });
+    std::vector<ChunkId> out;
+    for (const std::pair<size_t, ChunkId> &c : by) {
+        out.push_back(c.second);
+    }
+    return out;
+}
+
 // Whether no two of the chunks share a key or an input.
 bool disjoint(const StreamFixture &p_fx, const std::vector<ChunkId> &p_chunks) {
     std::vector<SourceKey> all, one;
@@ -540,7 +558,7 @@ TEST_CASE("Instance stream: making room for inputs evicts the records not placed
 // other's keys).
 TEST_CASE("Instance stream: the entries cap evicts the oldest keys with records, the walks' cap the oldest walks") {
     const StreamFixture &fx = StreamFixture::get();
-    const ChunkId a = fx.chunk(-300, -300, 2);
+    const ChunkId a = fx.chunk(-300, -300); // LOD 0: its part tiles read site tiles (the walks)
     const VoxelPos v1 = fx.origin + VoxelPos(400, 0, 400), v2 = fx.origin + VoxelPos(400, 0, -400);
     // The keys with records and the walks of a and of v1 and v2's views (their inputs included).
     const auto split = [&fx](std::vector<SourceKey> p_keys, size_t &r_records, size_t &r_walks) {
@@ -599,7 +617,7 @@ TEST_CASE("Instance stream: the entries cap evicts the oldest keys with records,
         stream->poll();
         stream->poll();
         const int64_t sites = key_stat(*stream, "sites 0", "evicted");
-        const int64_t parts = key_stat(*stream, "parts 0", "evicted") + key_stat(*stream, "parts 2", "evicted");
+        const int64_t parts = key_stat(*stream, "parts 0", "evicted");
         CHECK(stat(*stream, "evicted") > 0);
         CHECK(stat(*stream, "evicted") == sites + parts);
         CHECK((walks_cap ? parts : sites) == 0);
@@ -692,12 +710,8 @@ TEST_CASE("Instance stream: jobs run by rank, then in the order asked") {
 // inputs and asks for them at the key's rank; the key runs once they have landed, and the chunk comes back.
 TEST_CASE("Instance stream: admit creates a chunk's own keys, a drain task asks for their inputs; a dropped chunk drops their jobs") {
     const StreamFixture &fx = StreamFixture::get();
-    const ScatterSource &f = *fx.source;
-    int lod = 1; // part keys of its own: their inputs are the site tiles inside them
-    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
-        lod++;
-    }
-    const ChunkId c = fx.chunk(-200, -200, lod), d = fx.chunk(200, 200, lod);
+    // LOD-0 chunks: their part tiles read their site tiles (a coarser part tile walks its own box: no inputs).
+    const ChunkId c = fx.chunk(-200, -200), d = fx.chunk(200, 200);
     CHECK(disjoint(fx, { c, d }));
     size_t c_reading = 0, d_reading = 0;
     const size_t c_own = own_keys(fx, c, &c_reading), d_own = own_keys(fx, d, &d_reading);
@@ -753,16 +767,13 @@ TEST_CASE("Instance stream: admit creates a chunk's own keys, a drain task asks 
     CHECK(stat(*stream, "lists_missing") == 0);
 }
 
-// The pending cap counts the keys chunks and the camera ask for: the inputs their expansions ask for (a coarse part tile's
-// site tiles: thousands) don't turn the next chunk's admit into LATER.
+// The pending cap counts the keys chunks and the camera ask for: the inputs their expansions ask for (a part layer's blob
+// tile: the LOD-0 part tiles around it, each with its site tile) don't turn the next chunk's admit into LATER.
 TEST_CASE("Instance stream: an expansion's pending inputs don't count against the pending cap") {
     const StreamFixture &fx = StreamFixture::get();
-    const ScatterSource &f = *fx.source;
-    int lod = 1;
-    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
-        lod++;
-    }
-    const ChunkId a = fx.chunk(-200, -200, lod), b = fx.chunk(300, 300);
+    // a: a chunk at a part tile corner (four keys, four site tiles); b: one in the middle of a tile (one key).
+    const std::vector<ChunkId> by_keys = chunks_by_keys(fx);
+    const ChunkId a = by_keys.back(), b = by_keys.front();
     CHECK(disjoint(fx, { a, b }));
     size_t a_reading = 0;
     const size_t a_own = own_keys(fx, a, &a_reading), b_own = own_keys(fx, b);
@@ -784,7 +795,10 @@ TEST_CASE("Instance stream: an expansion's pending inputs don't count against th
     CHECK(stream->admit(b, 0, 1, 2) == InstanceStream::PARKED);
     CHECK(stat(*stream, "admit_later_pending") == 0);
     // Past the cap of asked keys, a chunk needing a new key answers LATER, counted.
-    const ChunkId c = fx.chunk(-300, 300);
+    ChunkId c = b;
+    for (size_t i = 1; i + 1 < by_keys.size() && !disjoint(fx, { a, b, c }); i++) {
+        c = by_keys[i];
+    }
     CHECK(disjoint(fx, { a, b, c }));
     CHECK(stream->admit(c, 0, 1, 3) == InstanceStream::LATER);
     CHECK(stat(*stream, "admit_later_pending") == 1);
@@ -803,11 +817,7 @@ TEST_CASE("Instance stream: an expansion's pending inputs don't count against th
 TEST_CASE("Instance stream: an orphan's input listing is dropped when it lands, kept if asked again; a computed orphan lands READY") {
     const StreamFixture &fx = StreamFixture::get();
     const ScatterSource &f = *fx.source;
-    int lod = 1;
-    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
-        lod++;
-    }
-    const ChunkId c = fx.chunk(-200, -200, lod);
+    const ChunkId c = fx.chunk(-200, -200); // LOD 0: its part tiles read their site tiles
     std::vector<SourceKey> keys, in;
     f.chunk_keys(c, fx.param, keys);
     size_t reading = 0;
@@ -879,12 +889,7 @@ TEST_CASE("Instance stream: an orphan's input listing is dropped when it lands, 
 // a stream being destroyed.
 TEST_CASE("Instance stream: a job landing after stop() queues nothing") {
     const StreamFixture &fx = StreamFixture::get();
-    const ScatterSource &f = *fx.source;
-    int lod = 1;
-    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
-        lod++;
-    }
-    const ChunkId c = fx.chunk(-200, -200, lod);
+    const ChunkId c = fx.chunk(-200, -200); // LOD 0: its part tiles list their site tiles
     HeldExecutor *held = nullptr;
     std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
     CHECK(stream->admit(c, 0, 1, 1) == InstanceStream::PARKED);
@@ -899,33 +904,28 @@ TEST_CASE("Instance stream: a job landing after stop() queues nothing") {
 
 TEST_CASE("Instance stream: an input not landed runs at the best rank of the keys waiting for it") {
     const StreamFixture &fx = StreamFixture::get();
-    const ScatterSource &f = *fx.source;
-    int lod = 1; // the first LOD with part keys of its own (their inputs: the site tiles inside them)
-    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
-        lod++;
-    }
-    CHECK(lod < f.profile().lod_end);
-    // A coarse chunk asked first at rank 9 creates the site tiles a fine chunk inside it reads; a rank-5 chunk away from
-    // both; then the fine chunk at rank 2: its shared site tiles move ahead of the rank-5 chunk's keys.
-    const ChunkId coarse = fx.chunk(200, 200, lod), fine = fx.chunk(200, 200), away = fx.chunk(-400, -400);
-    CHECK(disjoint(fx, { coarse, away }));
-    CHECK(disjoint(fx, { fine, away }));
-    CHECK_FALSE(disjoint(fx, { coarse, fine })); // they share site tiles
+    // A chunk asked first at rank 9: its part tiles list their site tiles, queued at 9; a rank-5 chunk away from it; then
+    // the chunk next to the first, in the same part tile, at rank 2: the shared tiles are waiting, so their site tiles move
+    // ahead of the rank-5 chunk's keys (improve() follows a waiting key's inputs), and the two chunks land before it.
+    const ChunkId first = fx.chunk(200, 200), next = fx.chunk(200 + 28, 200), away = fx.chunk(-400, -400);
+    CHECK(disjoint(fx, { first, away }));
+    CHECK(disjoint(fx, { next, away }));
+    CHECK_FALSE(disjoint(fx, { first, next })); // they share part tiles, hence site tiles
     HeldExecutor *held = nullptr;
     std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
     held->held = false;
-    held->steps = int64_t(own_keys(fx, coarse)); // its keys list their inputs: the site tiles, queued at 9
-    CHECK(stream->admit(coarse, 0, 0, 9) == InstanceStream::PARKED);
+    held->steps = int64_t(own_keys(fx, first)); // its keys list their inputs: the site tiles, queued at 9
+    CHECK(stream->admit(first, 0, 0, 9) == InstanceStream::PARKED);
     stream->poll();
-    CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, coarse)));
+    CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, first)));
+    CHECK(stat(*stream, "jobs_reranked") == 0);
     CHECK(stream->admit(away, 0, 0, 5) == InstanceStream::PARKED);
-    CHECK(stream->admit(fine, 0, 0, 2) == InstanceStream::PARKED);
+    CHECK(stream->admit(next, 0, 0, 2) == InstanceStream::PARKED);
+    CHECK(stat(*stream, "jobs_reranked") > 0); // the waiting tiles' site tiles, moved to 2
     held->steps = -1;
     stream->poll();
-    CHECK(stat(*stream, "jobs_reranked") > 0); // the fine chunk's keys asked for the shared site tiles at 2
     const std::vector<SourceKey> order = placement_order(*stream);
-    CHECK(placed_before(fx, fine, away, order));
-    CHECK(placed_before(fx, away, coarse, order));
+    CHECK(placed_before(fx, next, away, order));
 }
 
 TEST_CASE("Instance stream: a parked chunk asked again with a better rank moves its queued jobs ahead") {
@@ -1025,25 +1025,34 @@ TEST_CASE("Instance stream: set_tag keeps parked the chunks the scan still wants
 // the dropped one (it left the input's dependents).
 TEST_CASE("Instance stream: a dropped waiting key leaves its inputs' dependents; a shared input lands for the others") {
     const StreamFixture &fx = StreamFixture::get();
-    const ScatterSource &f = *fx.source;
-    int lod = 1;
-    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
-        lod++;
+    // coarse: a LOD-0 chunk at a part tile corner (four tiles); fine: one with fewer tiles, sharing some of them (so coarse
+    // has tiles of its own, each reading its own site tile).
+    const std::vector<ChunkId> by_keys = chunks_by_keys(fx);
+    const ChunkId coarse = by_keys.back();
+    ChunkId fine = coarse;
+    for (size_t i = 0; i < by_keys.size() && (fine == coarse || disjoint(fx, { coarse, fine })); i++) {
+        fine = own_keys(fx, by_keys[i]) < own_keys(fx, coarse) ? by_keys[i] : coarse;
     }
-    const ChunkId coarse = fx.chunk(200, 200, lod), fine = fx.chunk(200, 200);
-    CHECK_FALSE(disjoint(fx, { coarse, fine })); // they share site tiles
+    CHECK_FALSE(disjoint(fx, { coarse, fine })); // they share part tiles, hence site tiles
+    CHECK(own_keys(fx, fine) < own_keys(fx, coarse));
     HeldExecutor *held = nullptr;
     std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
     CHECK(stream->admit(coarse, 0, 1, 1) == InstanceStream::PARKED);
     CHECK(stream->admit(fine, 0, 2, 1) == InstanceStream::PARKED);
     // Both chunks' keys list their inputs (queued after them, at the same rank), none of which runs yet.
     held->held = false;
-    held->steps = int64_t(own_keys(fx, coarse) + own_keys(fx, fine));
+    std::vector<SourceKey> tiles, one;
+    for (const ChunkId &c : { coarse, fine }) {
+        fx.source->chunk_keys(c, fx.param, one);
+        tiles.insert(tiles.end(), one.begin(), one.end());
+    }
+    std::sort(tiles.begin(), tiles.end());
+    held->steps = int64_t(std::unique(tiles.begin(), tiles.end()) - tiles.begin()); // the part tiles, each listing its site tile
     stream->poll();
     held->held = true;
     CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, { coarse, fine })));
     stream->set_tag(0, 2, forget_all, [](const ChunkId &) {}); // the fine chunk is the new scan's already
-    // The coarse part tiles (waiting) and the site tiles only they read went; the shared ones stay, still to run.
+    // coarse's own part tiles (waiting) and the site tiles only they read went; the shared ones stay, still to run.
     CHECK(stat(*stream, "keys_dropped") > stat(*stream, "jobs_dropped"));
     CHECK(stat(*stream, "jobs_dropped") > 0);
     CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, fine)));

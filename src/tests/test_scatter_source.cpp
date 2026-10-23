@@ -177,6 +177,16 @@ Cell cell_of(const MomentBlob &p_b) {
     return Cell(p_b.cell[0], p_b.cell[1], p_b.cell[2], p_b.material);
 }
 
+// The same sites, cell by cell, in the same order.
+bool same_sites(const std::vector<CellSite> &p_a, const std::vector<CellSite> &p_b) {
+    bool equal = p_a.size() == p_b.size();
+    for (size_t i = 0; equal && i < p_a.size(); i++) {
+        const CellSite &a = p_a[i], &b = p_b[i];
+        equal = a.cell == b.cell && a.site.base == b.site.base && a.site.seed == b.site.seed && a.site.variant == b.site.variant;
+    }
+    return equal;
+}
+
 } // namespace
 
 // The LOD-0 part tiles partition the source: each site once, its records those a whole placement gives; a coarser LOD's
@@ -229,7 +239,7 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
         const int key_lod = f.part_key_lod(lod);
         CHECK(f.part_tile_side(key_lod) == f.part_tile_side(lod));
         CHECK(key_lod == (f.part_tile_side(lod) == f.part_tile_side(0) ? 0 : lod));
-        int64_t listed = 0, held = 0, inputs = 0, cube = 0;
+        int64_t listed = 0, held = 0, inputs = 0, cube = 0, walked = 0;
         for (const std::vector<TableRecord> &w : whole) {
             listed += std::count_if(w.begin(), w.end(), [lod](const TableRecord &p_r) { return p_r.listed_at(lod); });
         }
@@ -237,17 +247,30 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
             CHECK(k.lod == key_lod);
             std::vector<SourceKey> in;
             f.inputs(k, in);
-            // Exactly the LOD-0 tiles of its cube meeting the zone, in the pyramid's order.
+            // The LOD-0 site tiles of its cube meeting the zone, in the pyramid's order: a LOD-0 part tile reads its own, a
+            // coarser one none, its one walk giving the union of theirs (a walk is a pure function of the cell), in cell order.
             std::vector<VoxelPos> all;
             pyramid_tiles(f, k.lod, k.tile, all);
-            std::vector<SourceKey> want;
+            std::vector<SourceKey> site_tiles;
+            std::vector<CellSite> from_tiles;
             for (const VoxelPos &t : all) {
                 const SourceKey site{ 3, SourceKey::SITES, 0, t };
                 if (f.tile_box(site).intersects(fx.zone())) {
-                    want.push_back(site);
+                    site_tiles.push_back(site);
+                    const std::vector<CellSite> &w = fx.content(site).sites;
+                    from_tiles.insert(from_tiles.end(), w.begin(), w.end());
                 }
             }
-            CHECK(in == want);
+            if (k.lod == 0) {
+                CHECK(in == site_tiles);
+            } else {
+                CHECK(in.empty());
+                std::sort(from_tiles.begin(), from_tiles.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
+                std::vector<CellSite> own;
+                f.setup().scatter.sites(f.tile_box(k), own);
+                CHECK(same_sites(own, from_tiles));
+                walked += int64_t(own.size());
+            }
             inputs += int64_t(in.size());
             cube += int64_t(all.size());
             const SourceContent &c = fx.content(k);
@@ -257,8 +280,9 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
             }
         }
         MESSAGE("LOD ", lod, ": tile ", f.part_tile_side(lod), " voxels (key LOD ", key_lod, "), ", double(held) / double(groups), " records per site, ", inputs,
-                " site tiles read of ", cube);
+                " site tiles read of ", cube, ", ", walked, " sites walked by the coarse tiles");
         CHECK(held == listed);
+        CHECK((key_lod == 0 || (inputs == 0 && walked == groups)));
     }
 }
 
@@ -448,9 +472,9 @@ struct SceneFixture {
     }
 };
 
-// The record pyramid the part tiles were before the site tiles: a LOD-0 tile grows its sites (cell order, every record,
-// a site the table would refuse left out); a coarser one concatenates the groups of the 1 or 8 L - 1 tiles inside it (z y
-// x), each filtered to the records listed at L. The oracle of the part tiles.
+// The record pyramid: a LOD-0 tile grows its sites (cell order, every record, a site the table would refuse left out); a
+// coarser one holds the groups of the LOD-0 tiles inside it, site by site in cell order (one walk of its box gives them in
+// that order), each filtered to the records listed at L. The oracle of the part tiles.
 class Pyramid {
 public:
     explicit Pyramid(const ScatterSource &p_source) :
@@ -460,33 +484,42 @@ public:
         const std::tuple<int, int64_t, int64_t, int64_t> at(p_lod, p_tile.x, p_tile.y, p_tile.z);
         const auto it = memo.find(at);
         if (it != memo.end()) {
-            return it->second;
+            return it->second.content;
         }
-        SourceContent c;
+        Grown c;
         if (p_lod == 0) {
             grow(p_tile, c);
         } else {
-            const int64_t n = f.part_tile_side(p_lod) / f.part_tile_side(p_lod - 1);
-            for (int64_t z = 0; z < n; z++) {
-                for (int64_t y = 0; y < n; y++) {
-                    for (int64_t x = 0; x < n; x++) {
-                        const SourceContent &under = tile(p_lod - 1, p_tile * n + VoxelPos(x, y, z));
-                        for (const SourceContent::Group &g : under.groups) {
-                            append(under.records.data() + g.first, g.count, p_lod, c);
-                        }
-                        c.out_of_profile += under.out_of_profile;
-                    }
+            // The LOD-0 tiles' groups, merged in cell order.
+            std::vector<std::pair<VoxelPos, std::pair<const Grown *, size_t>>> sites;
+            std::vector<VoxelPos> under;
+            pyramid_tiles(f, p_lod, p_tile, under);
+            for (const VoxelPos &t : under) {
+                tile(0, t);
+                const Grown &g = memo.find(std::tuple<int, int64_t, int64_t, int64_t>(0, t.x, t.y, t.z))->second;
+                for (size_t i = 0; i < g.cells.size(); i++) {
+                    sites.emplace_back(g.cells[i], std::make_pair(&g, i));
                 }
+                c.content.out_of_profile += g.content.out_of_profile;
+            }
+            std::sort(sites.begin(), sites.end(), [](const auto &p_a, const auto &p_b) { return cell_order(p_a.first, p_b.first); });
+            for (const auto &s : sites) {
+                const SourceContent::Group &g = s.second.first->content.groups[s.second.second];
+                append(s.second.first->content.records.data() + g.first, g.count, p_lod, c.content);
             }
         }
-        return memo.emplace(at, std::move(c)).first->second;
+        return memo.emplace(at, std::move(c)).first->second.content;
     }
 
 private:
+    struct Grown {
+        SourceContent content;
+        std::vector<VoxelPos> cells; // a LOD-0 tile's: per group, its site's cell
+    };
     const ScatterSource &f;
-    std::map<std::tuple<int, int64_t, int64_t, int64_t>, SourceContent> memo;
+    std::map<std::tuple<int, int64_t, int64_t, int64_t>, Grown> memo;
 
-    void grow(const VoxelPos &p_tile, SourceContent &r_out) const {
+    void grow(const VoxelPos &p_tile, Grown &r_out) const {
         const ScatterSource::Setup &set = f.setup();
         std::vector<CellSite> sites;
         set.scatter.sites(f.tile_box(SourceKey{ set.id, SourceKey::PARTS, 0, p_tile }), sites);
@@ -501,12 +534,15 @@ private:
                 finish_table_record(*set.library, set.finish, rec);
                 out = out || !f.profile().covers(cs.site.base, rec);
             }
-            append(grown.data(), uint32_t(grown.size()), -1, r_out);
-            r_out.out_of_profile += out;
+            if (append(grown.data(), uint32_t(grown.size()), -1, r_out.content)) {
+                r_out.cells.push_back(cs.cell);
+            }
+            r_out.content.out_of_profile += out;
         }
     }
-    // The records listed at p_lod (all: p_lod < 0) as one group, its bounds their union box, largest k, margin and LOD.
-    static void append(const TableRecord *p_records, uint32_t p_count, int p_lod, SourceContent &r_out) {
+    // The records listed at p_lod (all: p_lod < 0) as one group, its bounds their union box, largest k, margin and LOD;
+    // whether one was appended.
+    static bool append(const TableRecord *p_records, uint32_t p_count, int p_lod, SourceContent &r_out) {
         const uint32_t first = uint32_t(r_out.records.size());
         VoxelBox box;
         TableRecord bounds;
@@ -523,7 +559,7 @@ private:
             r_out.records.push_back(rec);
         }
         if (r_out.records.size() == first) {
-            return;
+            return false;
         }
         bounds.anchor = box.lo;
         for (int a = 0; a < 3; a++) {
@@ -531,18 +567,9 @@ private:
         }
         bounds.max_lod = uint8_t(max_lod);
         r_out.groups.push_back(SourceContent::Group{ first, uint32_t(r_out.records.size()) - first, bounds });
+        return true;
     }
 };
-
-// The same sites, cell by cell, in the same order.
-bool same_sites(const std::vector<CellSite> &p_a, const std::vector<CellSite> &p_b) {
-    bool equal = p_a.size() == p_b.size();
-    for (size_t i = 0; equal && i < p_a.size(); i++) {
-        const CellSite &a = p_a[i], &b = p_b[i];
-        equal = a.cell == b.cell && a.site.base == b.site.base && a.site.seed == b.site.seed && a.site.variant == b.site.variant;
-    }
-    return equal;
-}
 
 bool same_content(const SourceContent &p_a, const SourceContent &p_b) {
     if (p_a.records.size() != p_b.records.size() || p_a.groups.size() != p_b.groups.size() || p_a.out_of_profile != p_b.out_of_profile) {
@@ -564,8 +591,8 @@ bool same_content(const SourceContent &p_a, const SourceContent &p_b) {
 
 } // namespace
 
-// The part tiles grown from the site tiles are the record pyramid's, bit for bit, at every LOD (the LODs that no longer
-// have keys of their own included), for both sources.
+// The part tiles (the LOD-0 ones grown from their site tiles, the coarser from their own walk) are the record pyramid's,
+// bit for bit, at every LOD (the LODs that no longer have keys of their own included), for both sources.
 TEST_CASE("Scatter source: the part tiles grown from the site tiles are the record pyramid's") {
     const SceneFixture fx;
     for (const std::shared_ptr<const ScatterSource> &s : fx.sources) {

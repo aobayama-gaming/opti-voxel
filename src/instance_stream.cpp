@@ -448,7 +448,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     Entry &e = entries.find(p_job->key)->second; // running: never evicted
     if (p_job->expand && !p_job->input_keys.empty()) {
         stats.compute_usec += int64_t(p_job->usec); // the workers' time
-        stats.expand_usec += int64_t(p_job->usec); // of which listing inputs (a coarse part tile's walks its subtree)
+        stats.expand_usec += int64_t(p_job->usec); // of which listing inputs
         // Dropped while it listed them (an orphan): erased if still unneeded, no input asked for.
         if (e.orphan) {
             e.state = Entry::WAITING;

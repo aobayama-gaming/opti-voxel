@@ -18,11 +18,13 @@
 //   - a proxy tile (SourceKey::PROXIES) of a far layer L, on its blob-tile grid: the proxies' walk of its own box; a blob
 //     tile reads the proxy tiles its region meets (far_items), so each is walked once for the blob tiles around it.
 // - A part tile of LOD L (SourceKey::PARTS): a cube of part_tile_side(L) voxels, its side PART_TILE_CELLS source cells
-//   doubled until it holds two chunks of the LOD. It grows the sites of the site tiles inside it and the zone (CellScatter::grow,
-//   finished like the table's), recursively by its 1 or 8 L - 1 tiles (z y x) down to LOD 0, and keeps one group
-//   per site: at LOD 0 every record (a record no LOD lists still weighs in the blobs), coarser the ones listed at L. A LOD
-//   whose side is a finer LOD's has no key of its own: its chunks read that LOD's (part_key_lod) and filter at their LOD.
-//   A chunk reads a few keys at any LOD; none from the profile's lod_end on.
+//   doubled until it holds two chunks of the LOD. It grows the sites of its box in the zone (CellScatter::grow, finished
+//   like the table's) and keeps one group per site: at LOD 0 every record (a record no LOD lists still weighs in the
+//   blobs), coarser the ones listed at L. A LOD-0 tile reads its site tile (1:1: the near layers read the sites through
+//   it); a coarser one walks its own box once, which gives the union of the site tiles' sites inside it, bit for bit (a
+//   walk is a pure function of the cell), instead of asking the 8^L site tiles of its cube (mostly air). A LOD whose side
+//   is a finer LOD's has no key of its own: its chunks read that LOD's (part_key_lod) and filter at their LOD. A chunk
+//   reads a few keys at any LOD; none from the profile's lod_end on.
 // - A blob tile of layer L (SourceKey::BLOBS): a cube of blob_tile_cells(L) layer-L cells (moment_layers.hpp); its
 //   records are the kept blobs of its own cells, in (cell, material) order. It runs the layers on the items within
 //   MARGIN_CELLS cells of it (a cell's verdict reads the cells within PRUNE_CELLS of it, their sums the items whose tents
@@ -147,9 +149,9 @@ public:
     // How far from the ground the records listed at p_lod or finer reach with their influence margins (voxels; 0: none):
     // the discoverer keeps a node of the zone whose corners are this close to the ground (SDFTable::cull_exempt).
     int64_t ground_reach(int p_lod) const;
-    // The keys p_key's content reads: a part tile the site tiles inside it that meet the zone (recursively by L - 1 tiles,
-    // z y x), a part layer's blob tile the LOD-0 part tiles around it (key order), a far layer's the proxy tiles its
-    // region meets (proxy_region, key order); none otherwise.
+    // The keys p_key's content reads: a LOD-0 part tile its site tile (if it meets the zone), a part layer's blob tile the
+    // LOD-0 part tiles around it (key order), a far layer's the proxy tiles its region meets (proxy_region, key order);
+    // none otherwise (a coarser part tile walks its own box).
     void inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out) const;
 
     // The contents of inputs(p_key), in its order; an entry missing or null is computed here (the same).
@@ -184,14 +186,12 @@ private:
     void for_each_input(const std::vector<SourceKey> &p_keys, const Inputs &p_inputs, F p_fn) const;
     // Appends the keys of layer p_layer's proxy tiles meeting p_region, in cell order.
     void proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const;
-    // Appends the site tiles inside part tile p_tile of LOD p_lod that meet the zone: recursively its L - 1 tiles meeting
-    // it, z y x.
-    void append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const;
     // How far a far blob tile's region reaches past its box.
     int64_t proxy_grow(int p_layer) const;
-    // A walk's sites: a site tile's, or a proxy tile's (its own box, in proxy_zone).
+    // A walk's sites: a site or part tile's (its box, in the zone), or a proxy tile's (its own box, in proxy_zone).
     void walk_tile(const SourceKey &p_key, SourceContent &r_out) const;
-    // A part tile grows the sites of its inputs: every record at LOD 0, the ones listed at its LOD coarser.
+    // A part tile grows the sites of its input (LOD 0) or of its own walk (coarser): every record at LOD 0, the ones
+    // listed at its LOD coarser.
     void part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const;
     // Grows one site into a group of r_out (the records listed at p_lod; all of them: p_lod < 0), unless the table would
     // refuse one of its records; counts it out of the profile if a record is past it.

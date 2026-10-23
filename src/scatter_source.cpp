@@ -198,7 +198,10 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
         return;
     }
     if (p_key.kind == SourceKey::PARTS) {
-        append_part_sites(p_key.tile, p_key.lod, r_out);
+        // A LOD-0 tile reads its site tile when a base can lie in it; a coarser one walks its own box (part_tile).
+        if (p_key.lod == 0 && tile_box(p_key).intersects(set.scatter.zone)) {
+            r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_key.tile });
+        }
     } else if (p_key.kind == SourceKey::BLOBS && part_layer(p_key.lod)) {
         // The LOD-0 part tiles whose records can have their centroid in the tile's cells or MARGIN_CELLS past them.
         const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod));
@@ -211,19 +214,6 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
 
 void ScatterSource::proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const {
     append_tiles(SourceKey::PROXIES, p_layer, blob_tile_cells(p_layer) * layer_cell(p_layer), p_region, proxy_side(p_layer), r_out); // in proxy_zone
-}
-
-void ScatterSource::append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const {
-    const VoxelBox box = tile_box(SourceKey{ set.id, SourceKey::PARTS, p_lod, p_tile }).clipped(set.scatter.zone);
-    if (!box.valid) {
-        return; // no base in it: an empty walk
-    }
-    if (p_lod <= 0) {
-        r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_tile });
-        return;
-    }
-    // The L - 1 tiles inside this one (1 or 8) that meet the zone.
-    for_each_tile(box, part_tile_side(p_lod - 1), [&](const VoxelPos &p_sub) { append_part_sites(p_sub, p_lod - 1, r_out); });
 }
 
 const SourceContent &ScatterSource::input(const SourceKey &p_key, const Inputs &p_inputs, size_t p_i, SourceContent &r_local) const {
@@ -262,7 +252,8 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
 
 void ScatterSource::walk_tile(const SourceKey &p_key, SourceContent &r_out) const {
     const CellScatter &s = set.scatter;
-    if (p_key.kind == SourceKey::SITES) {
+    if (p_key.kind == SourceKey::SITES || p_key.kind == SourceKey::PARTS) {
+        // The same call for a site tile and a coarse part tile: the part tile's walk is the union of the site tiles'.
         s.sites(tile_box(p_key), r_out.sites);
         return;
     }
@@ -291,11 +282,20 @@ void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, So
     std::vector<SourceKey> in;
     inputs(p_key, in);
     std::vector<TableRecord> grown;
-    for_each_input(in, p_inputs, [&](const SourceContent &p_sites) {
+    auto grow_all = [&](const SourceContent &p_sites) {
         for (const CellSite &cs : p_sites.sites) {
             grow_site(cs, p_key.lod > 0 ? p_key.lod : -1, grown, r_out);
         }
-    });
+    };
+    if (p_key.lod > 0) {
+        // One walk of its own box (the LOD-0 site tiles' union, in cell order), pruned at the coarse levels where the
+        // tile is air: the 8^L site tiles it asked before cost a job each, most of them empty.
+        SourceContent walk;
+        walk_tile(p_key, walk);
+        grow_all(walk);
+        return;
+    }
+    for_each_input(in, p_inputs, grow_all);
 }
 
 void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<TableRecord> &r_grown, SourceContent &r_out) const {
