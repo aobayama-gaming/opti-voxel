@@ -26,7 +26,7 @@ Before diving into the code, the big picture:
 - **Integer frame.** No float ever holds an absolute coordinate: the GPU gets the low 32 bits of
   the ids, render positions are relative to the world origin.
 
-`CLAUDE.md` has the details (page layout, threading rules, and every gotcha already hit).
+`CLAUDE.md` has the rules and `docs/` the details (page layout, threading rules, and every gotcha already hit: `docs/gotchas.md`).
 
 ## Build
 
