@@ -35,7 +35,6 @@ void InstanceStream::Job::run() {
 InstanceStream::InstanceStream(std::vector<std::shared_ptr<const ScatterSource>> p_sources, const ChunkParam &p_param, const Settings &p_settings,
         std::unique_ptr<StreamExecutor> p_executor) :
         sources(std::move(p_sources)), param(p_param), settings(p_settings), executor(std::move(p_executor)) {
-    set_walk_batch(settings.walk_batch);
     for (size_t i = 0; i < sources.size(); i++) {
         ERR_FAIL_COND_MSG(sources[i]->setup().id != i, "InstanceStream: source ids must be their index.");
     }

@@ -112,7 +112,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_destroy_verify"), &VoxelTerrain::get_destroy_verify);
     ClassDB::bind_method(D_METHOD("set_discovery_verify", "enable"), &VoxelTerrain::set_discovery_verify);
     ClassDB::bind_method(D_METHOD("get_discovery_verify"), &VoxelTerrain::get_discovery_verify);
-    ClassDB::bind_method(D_METHOD("set_walk_gpu", "mode"), &VoxelTerrain::set_walk_gpu);
+    ClassDB::bind_method(D_METHOD("set_walk_gpu", "enable"), &VoxelTerrain::set_walk_gpu);
     ClassDB::bind_method(D_METHOD("get_walk_gpu"), &VoxelTerrain::get_walk_gpu);
     ClassDB::bind_method(D_METHOD("set_walk_verify", "enable"), &VoxelTerrain::set_walk_verify);
     ClassDB::bind_method(D_METHOD("set_walk_batch", "keys"), &VoxelTerrain::set_walk_batch);
@@ -157,7 +157,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discoverer_mode", PROPERTY_HINT_ENUM, "Auto:-1,CPU:0,GPU:1"), "set_discoverer_mode", "get_discoverer_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "walk_gpu", PROPERTY_HINT_ENUM, "Auto:-1,CPU:0,GPU:1"), "set_walk_gpu", "get_walk_gpu");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "walk_gpu"), "set_walk_gpu", "get_walk_gpu");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "walk_verify"), "set_walk_verify", "get_walk_verify");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "walk_batch", PROPERTY_HINT_RANGE, "1,4096"), "set_walk_batch", "get_walk_batch");
     ADD_GROUP("World Origin", "world_origin_");
@@ -274,13 +274,12 @@ int VoxelTerrain::get_discoverer_mode() const {
     return discoverer_mode;
 }
 
-void VoxelTerrain::set_walk_gpu(int p_mode) {
+void VoxelTerrain::set_walk_gpu(bool p_enable) {
     ERR_FAIL_COND_MSG(started, "walk_gpu must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode < -1 || p_mode > 1, "Unknown walk_gpu (-1 auto, 0 CPU, 1 GPU).");
-    walk_gpu = p_mode;
+    walk_gpu = p_enable;
 }
 
-int VoxelTerrain::get_walk_gpu() const {
+bool VoxelTerrain::get_walk_gpu() const {
     return walk_gpu;
 }
 
@@ -301,16 +300,6 @@ void VoxelTerrain::set_walk_batch(int p_keys) {
 
 int VoxelTerrain::get_walk_batch() const {
     return walk_batch;
-}
-
-void VoxelTerrain::_poll_field_gpu() {
-    if (!field_gpu_starting || field_gpu_starting->state() == FieldGPU::STARTING) {
-        return;
-    }
-    if (field_gpu_starting->state() == FieldGPU::READY) {
-        sdf->attach_field_gpu(field_gpu_starting);
-    }
-    field_gpu_starting.reset(); // attached (the table holds it), or failed (its thread warned)
 }
 
 void VoxelTerrain::set_discovery_compare(bool p_enable) {
@@ -789,10 +778,8 @@ void VoxelTerrain::_ready() {
     }
     sdf->configure(chunk_param, lod_numbers);
     sdf->set_walk_verify(walk_verify);
-    if (walk_gpu != 0 && sdf->get_stream()) {
-        // Its device and passes are made on its own thread (the shader compile): attached by _process once ready.
-        field_gpu_starting = std::make_shared<FieldGPU>();
-        field_gpu_starting->start(sdf, chunk_param, FIELD_GPU_SCRATCH_MB);
+    if (walk_gpu) {
+        sdf->start_field_gpu(chunk_param); // attached by sdf->poll() once its device is ready
     }
 
     visual_mesh_data.set_max_lod(lod_numbers);
@@ -986,7 +973,6 @@ void VoxelTerrain::_process(double) {
     const uint64_t t_process_start = now_usec();
     visual_mesh_data.frame = exec_time;
     sdf->poll(); // an edit's rebuilt index base, the streamed keys computed since the last frame (before the meshers ask)
-    _poll_field_gpu();
     process_stats.stream_poll.add(now_usec() - t_process_start);
 
     if (camera != nullptr) {
@@ -1402,9 +1388,7 @@ void VoxelTerrain::_teardown() {
     chunk_discoverer->stop();
     memdelete(chunk_discoverer);
     chunk_discoverer = nullptr;
-    // The GPU field's thread frees its device as it stops: a walk still computing falls back to the CPU's field.
-    field_gpu_starting.reset();
-    sdf->attach_field_gpu(nullptr);
+    sdf->stop_field_gpu(); // its thread frees its device; a walk still computing falls back to the CPU's field
 
     // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
     for (auto &kv : visual_mesh_data.loaded_chunk) {

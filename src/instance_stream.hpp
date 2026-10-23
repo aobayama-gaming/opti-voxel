@@ -93,11 +93,6 @@ public:
         size_t walks = WALKS_MAX;
         size_t pending = PENDING_MAX;
         size_t log = LOG_MAX;
-        // Walk keys (site and proxy tiles) a drain task computes in one go (ScatterSource::walk_tiles: a round of the
-        // field's readings for all of them): its walk job and the next ready ones of the same source in rank order. 1
-        // walks each alone (the CPU field: one task per tile keeps the workers busy); a batched field (a GPU) wants many.
-        // set_walk_batch changes it while the stream runs.
-        size_t walk_batch = 1;
     };
     enum Admit {
         READY, // every key placed: mesh it now
@@ -115,7 +110,10 @@ public:
     InstanceStream(std::vector<std::shared_ptr<const ScatterSource>> p_sources, const ChunkParam &p_param, const Settings &p_settings,
             std::unique_ptr<StreamExecutor> p_executor);
     ~InstanceStream(); // stop(), then waits for the drain tasks running
-    // Settings::walk_batch from now on (the jobs already taken keep theirs). Any thread.
+    // Walk keys (site and proxy tiles) a drain task computes in one go from now on (ScatterSource::walk_tiles: a round of
+    // the field's readings for all of them): its walk job and the next ready ones of the same source in rank order. 1
+    // (the default) walks each alone (the CPU field: one task per tile keeps the workers busy); a batched field (a GPU)
+    // wants many. Any thread; the jobs already taken keep theirs.
     void set_walk_batch(size_t p_keys) { walk_batch = MAX(p_keys, size_t(1)); }
     // No job starts or lands from now on: the queued ones are dropped, a running one lands nothing (its expansion would
     // queue its subtree for nobody). The destructor's first step.
@@ -293,7 +291,7 @@ private:
         int64_t later_pending = 0; // admits answered LATER at the pending cap
         int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
         int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank
-        int64_t walk_batches = 0; // walk jobs computed together (Settings::walk_batch), and the keys they held
+        int64_t walk_batches = 0; // walk jobs computed together (set_walk_batch), and the keys they held
         int64_t walk_batch_keys = 0;
         int64_t stale_handed_back = 0; // parked chunks set_tag() forgot (a newer scan doesn't want them)
         int64_t keys_dropped = 0; // keys set_tag() left unneeded, erased before their job started
@@ -340,8 +338,8 @@ private:
     // A parked chunk's keys unpinned (and forgotten: unpinned once).
     void release_pins(Parked &r_parked);
     void drain();
-    std::atomic<size_t> walk_batch{ 1 }; // Settings::walk_batch, then set_walk_batch's
-    // drain()'s walk batches (Settings::walk_batch): the queue's next walk jobs of r_batch[0]'s source into r_batch (job_mutex
+    std::atomic<size_t> walk_batch{ 1 }; // set_walk_batch's
+    // drain()'s walk batches (set_walk_batch): the queue's next walk jobs of r_batch[0]'s source into r_batch (job_mutex
     // held), then their contents in one ScatterSource::walk_tiles.
     static constexpr size_t WALK_LOOK = 4; // queue entries looked at per batch slot
     void take_walks(std::vector<std::unique_ptr<Job>> &r_batch);

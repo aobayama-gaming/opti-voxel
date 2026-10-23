@@ -131,13 +131,15 @@ public:
     // The streamed sources (null when none streams).
     const Archetype::InstanceStream *get_stream() const { return stream.get(); }
 
-    // The site walks' field on the GPU (VoxelTerrain.walk_gpu, FieldGPU): attached once its service is ready (main
-    // thread), the stream then walks WALK_BATCH_GPU keys per drain task (a reconfigure keeps it); null detaches it. The
-    // sources read it through ground_field_batch, the CPU's ground_field where it is not attached or fails.
+    // The lockstep site walks' field on the GPU (VoxelTerrain.walk_gpu, FieldGPU). start_field_gpu after configure() (the
+    // point passes need the configured terrain): its thread makes its device; poll() attaches it once ready (the stream
+    // then walks walk_batch_gpu keys per drain task, the sources' ground_batch reads it) and detaches it if it fails.
+    // stop_field_gpu before the terrain goes. Nothing without a stream or a cascade.
     static constexpr size_t WALK_BATCH_GPU = 64;
-    // Fewer readings than this go to the CPU's field even with the GPU attached: a submission's round trip (~3 ms) costs
-    // more (a walk alone, an expansion's tile listing, at its coarse levels).
-    static constexpr int GPU_MIN_POINTS = 32;
+    static constexpr uint32_t FIELD_GPU_SCRATCH_MB = 64;
+    void start_field_gpu(const ChunkParam &p_param);
+    void stop_field_gpu();
+    // Attached now (null detaches): the walk batch follows. poll() calls it; tests attach directly.
     void attach_field_gpu(std::shared_ptr<FieldGPU> p_gpu);
     // The walk keys per drain task with the GPU attached (default WALK_BATCH_GPU). Set before configure().
     void set_walk_batch_gpu(size_t p_keys) { walk_batch_gpu = MAX(p_keys, size_t(1)); }
@@ -145,7 +147,7 @@ public:
     void set_walk_verify(bool p_verify) { walk_verify = p_verify; }
     // ground_field at many points, bit for bit (CellScatter::ground_batch). Thread-safe.
     void ground_field_batch(const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) const;
-    // The GPU field's stats (FieldGPU::get_stats) and the verify counts; empty when none is attached.
+    // The GPU field's stats (FieldGPU::get_stats) and the verify counts; empty when none was started.
     Dictionary walk_gpu_stats() const;
     // The records the CPU folds at p_voxel for a LOD-p_lod sample, in fold order (compose_list): r_list indexes the
     // returned view, valid until the next call on this thread. Any thread.
@@ -238,7 +240,8 @@ private:
     int64_t stream_part_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES; // --stream_part_sides
     std::vector<std::shared_ptr<const Archetype::ScatterSource>> streamed; // the valid sources, by their id
     std::shared_ptr<Archetype::InstanceStream> stream; // the gpu table shares it
-    std::shared_ptr<FieldGPU> field_gpu; // read by the drain tasks: std::atomic_load / atomic_store
+    std::shared_ptr<FieldGPU> field_gpu; // attached; read by the drain tasks: std::atomic_load / atomic_store
+    std::shared_ptr<FieldGPU> field_gpu_starting; // started, not ready yet (main thread)
     bool walk_verify = false;
     size_t walk_batch_gpu = WALK_BATCH_GPU;
     mutable std::atomic<int64_t> verified_points{ 0 };

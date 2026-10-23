@@ -91,3 +91,25 @@
   the CPU's point (`evaluate`) bit for bit, with the uploaded spans; the LOD L | L+1 field step stays in the skirt on the
   streamed scatter and forest. Presets `forest5cm_1m` (1M trees on 5 x 5 km) and `forest5cm_41m` (41M on 32 x 32 km): the
   stream computes what the view asks for, so their configure is forest5cm's.
+
+## Site walks in lockstep, on the GPU
+
+The walks (`cell_sites`: an octree walk reading the ground at node centres at `site_lod`, then the LOD-0 snap) are
+`surface_sites_many`: many boxes advance a level per round and each round asks the field once (`FieldBatchFn`), a
+reading two walks share read once; the snap's `SNAP_STEPS + 1` rounds follow. A lone walk is the same code with one box.
+`ScatterSource::walk_tiles` computes many walk keys at once; a drain task takes its walk job and the queue's next walk
+jobs of the same source (`InstanceStream::set_walk_batch`, 1 by default: on the CPU field one task per tile keeps the
+workers busy).
+
+`FieldGPU` (`VoxelTerrain.walk_gpu`, `--walk_gpu=0|1`, default on): a thread owning a `LocalPointsGPU` (local device +
+`CascadePointsGPU`: any point of any LOD's lattice per item, `SDFCascade::ground_unit` bit for bit, `ground_field` composed on
+the CPU). `SDFTable::start_field_gpu` after configure (the point shader needs the configured terrain), `poll()` attaches it
+once ready (the sources' `ground_batch`, the stream's walk batch `--walk_batch`, 64) and detaches it if a batch fails.
+Only the lockstep walks read it; a lone walk (`sites`, `site_tiles`, the proxy region fallback) reads `ground` (a round trip
+per round of a few readings costs more). A submission takes every request queued, its GPU time capped at
+`SUBMIT_GPU_MS` from the µs per point its timestamps measure (the renderer shares the device); the readback rides in the
+submission (`buffer_get_data_async`). No device, a failure, or stopped: the CPU's field, the same bits. `--walk_verify=1`
+reads every GPU batch again on the CPU (ERR and the CPU's bits on a difference). Stats: `table.walk_gpu`.
+Measured (1M on `world.json`, 960x540, error 2 | back 4, mesher budget 4): load 139 -> 48 s, desert 27 -> 13 s; the GPU
+pays ~1.4 µs per reading on the 17-group climate when idle, ~5-15 in the game (the renderer shares the device).
+

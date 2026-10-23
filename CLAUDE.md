@@ -110,7 +110,7 @@ to every change, and a reviewer may reject a PR on any of them.
 | `docs/look.md` | sky, fog, clouds, surface detail, wind | scenes, page shader |
 | `docs/climate.md` | climate fields and biomes, shaped bands, stretched octaves, regions | `climate*`, `cascade_shaped_glsl*` |
 | `docs/landforms.md` | landform tables and matching real heightmaps | `project/climate/landforms/`, `tools/landforms/` |
-| `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `discoverer_gpu*`, `chunk_memory*`, `subcube.hpp` |
+| `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `local_points_gpu*`, `chunk_memory*`, `subcube.hpp` |
 | `docs/testing.md` | every check tool and bench flag in detail, debug views, hole hunting | `tools/`, `project/debug/` |
 | `docs/perf.md` | perf target, baselines, where the frame goes | |
 | `docs/gotchas.md` | engine, GPU, build and float traps already hit | |
@@ -129,7 +129,8 @@ Details and flags: `docs/testing.md`.
 
 | After touching | Run |
 |---|---|
-| `cascade*`, `exact_noise*`, `gpu_frame.hpp`, `sdf_cascade*`, `discoverer_gpu*` | `tools/cascade_test.sh` (needs a window) |
+| `cascade*`, `exact_noise*`, `gpu_frame.hpp`, `sdf_cascade*`, `cascade_points_gpu*`, `local_points_gpu*` | `tools/cascade_test.sh` (needs a window) |
+| `cell_sites*`, `field_gpu*`, `scatter_source*` walks | a 1M load with `--walk_verify=1` (`--preset=forest5cm_1m`), forest5cm `--walk_gpu=0` vs `1` chunk digests |
 | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise*`, the SDF, a new noise or SDF term | `tools/frame_test.sh` (+ an entry in `make_probes()`) |
 | the discoverer, the SDF, the cascade passes | `tools/discovery_audit.sh -- --terrain=cascade --discovery_compare=1` (and `--lods=25`) |
 | `chunk_memory`, the discoverer's publish, the meshers' result path | a fly with `--destroy_verify=1` |

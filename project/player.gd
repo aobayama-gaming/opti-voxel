@@ -69,7 +69,7 @@ func _enter_tree() -> void:
 			else:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 		if a.begins_with("--walk_gpu=") and terrain:
-			terrain.walk_gpu = a.trim_prefix("--walk_gpu=").to_int()
+			terrain.walk_gpu = a.trim_prefix("--walk_gpu=") == "1"
 		if a == "--terrain=continents" and terrain:
 			terrain.terrain_mode = 2
 		if a == "--terrain=shapes" and terrain:

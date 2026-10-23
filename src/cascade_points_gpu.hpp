@@ -20,6 +20,12 @@ using namespace godot;
 // Batches above max_points are split; the scratch is sized for them.
 class CascadePointsGPU {
 public:
+    // A batch's registers as buffer_get_data_async delivers them (the serial of the batch they belong to).
+    struct Delivery {
+        PackedByteArray bytes;
+        uint64_t serial = 0;
+    };
+
     // One call.
     struct BatchStats {
         int batches = 0; // submissions (at most max_points points each)
@@ -56,6 +62,8 @@ private:
     CascadePasses passes;
     PackedByteArray input_bytes;
     uint64_t batch_serial = 0;
+    Delivery delivery;
+    bool async_readback = true; // false once a readback didn't come with its sync: buffer_get_data
 
     bool _run_batch(const VoxelPos *p_points, const int *p_lods, uint32_t p_count, ExactNoise::Float4 *r_out, BatchStats &r_stats);
 };

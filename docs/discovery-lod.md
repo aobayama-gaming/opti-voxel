@@ -9,13 +9,14 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   (`SDFBase::evaluate_batch`; `SDFCascade` spreads it over the `WorkerThreadPool` with the
   allocation-free `Cascade::point_into`). `VoxelTerrain.discoverer_mode` / `--discoverer=cpu|gpu` (bench
   and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
-  `DiscovererGPU` (`src/discoverer_gpu.*`), runs the cascade passes on point items
-  (`CascadePasses::create_points`) on a **local RenderingDevice owned by the discoverer thread**: created
+  `LocalPointsGPU` (`src/local_points_gpu.*`, shared with the site walks' `FieldGPU`), runs the cascade passes on point
+  items (`CascadePasses::create_points`, `CascadePointsGPU::cull_values`: the unit register read back, metres on the CPU
+  with `SDFCascade::to_metres`) on a **local RenderingDevice owned by the discoverer thread**: created
   at the top of `discovery_loop` and freed there before the thread exits; no other thread may touch it,
   and it does nothing on the main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
   scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
-  (and `--lods=25`) after touching the discoverer, the cascade passes or `DiscovererGPU`.
+  (and `--lods=25`) after touching the discoverer, the cascade passes or `CascadePointsGPU`.
   `stats.json["discoverer"]`: mode, scratch MB, `gpu_init_ms` (device + shader, before the first scan),
   compare counts, first and last scan (scan / cull / walk
   ms, corners, unique corners, dedup ratio, per wave GPU ms, batches, readback bytes). `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;

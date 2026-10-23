@@ -6,7 +6,6 @@
 #include "godot_cpp/variant/variant.hpp"
 
 #include "chunk_discoverer.hpp"
-#include "field_gpu.hpp"
 
 #include "godot_cpp/classes/camera3d.hpp"
 
@@ -104,12 +103,9 @@ private:
     bool destroy_verify = false;
     int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made)
     bool discovery_compare = false;
-    int walk_gpu = -1; // -1 auto: the site walks' field on the GPU when sources stream (FieldGPU), 0 CPU
+    bool walk_gpu = true; // the streamed sources' site walks read the ground on the GPU (FieldGPU)
     bool walk_verify = false;
     int walk_batch = int(SDFTable::WALK_BATCH_GPU); // walk keys per drain task on the GPU field (--walk_batch)
-    // The FieldGPU started after configure, until _process sees it ready and attaches it to the table (or drops it).
-    std::shared_ptr<FieldGPU> field_gpu_starting;
-    static constexpr uint32_t FIELD_GPU_SCRATCH_MB = 64;
 
     bool started = false;
 
@@ -134,8 +130,6 @@ private:
     void _poll_discovery_audit();
 
     void _teardown();
-    // Attaches the FieldGPU once its thread has its device (or drops it if it has none).
-    void _poll_field_gpu();
 
     // Re-mesh the loaded chunks an instance edit can change and invalidate the discoverer's cull cache.
     void _apply_instance_edit();
@@ -356,17 +350,17 @@ public:
     // the full recompute (VoxelState::verify_against_full), ERROR on a difference.
     void set_destroy_verify(bool p_enable);
     bool get_destroy_verify() const;
-    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 (and -1, auto) GPU (DiscovererGPU, a
+    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 (and -1, auto) GPU (LocalPointsGPU, a
     // local device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
     void set_discoverer_mode(int p_mode);
     int get_discoverer_mode() const;
     // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).
     void set_discovery_compare(bool p_enable);
     bool get_discovery_compare() const;
-    // Where the streamed sources' site walks read the ground: 0 CPU, 1 (and -1, auto) GPU (FieldGPU, a local device on
-    // its own thread, attached once ready; CPU with a warning if it can't be created). Both give the same sites.
-    void set_walk_gpu(int p_mode);
-    int get_walk_gpu() const;
+    // Whether the streamed sources' site walks read the ground on the GPU (FieldGPU, a local device on its own thread,
+    // attached once ready; the CPU with a warning if it can't be created). Both give the same sites.
+    void set_walk_gpu(bool p_enable);
+    bool get_walk_gpu() const;
     // Debug: every batch of the GPU's readings read again on the CPU, ERROR on a difference (--walk_verify).
     void set_walk_verify(bool p_enable);
     bool get_walk_verify() const;

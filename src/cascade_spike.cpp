@@ -6,6 +6,7 @@
 #include "cascade_measure.hpp"
 #include "cascade_spike_points.hpp"
 #include "cascade_spike_sets.hpp"
+#include "debug_log.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
@@ -31,10 +32,6 @@ constexpr uint32_t MAX_BATCH = 128;
 constexpr int CHUNKS_PER_PLACE = 14;
 constexpr int CHILDREN = 8;
 constexpr uint32_t TIMING_CHUNKS = 128;
-
-uint64_t now_usec() {
-    return Time::get_singleton()->get_ticks_usec();
-}
 
 struct TestChunk {
     ChunkId id;

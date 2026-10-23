@@ -266,7 +266,7 @@ func _ready() -> void:
 	terrain.discovery_verify = args.get("discovery_verify", "0") == "1"
 	terrain.destroy_verify = args.get("destroy_verify", "0") == "1"
 	if args.has("walk_gpu"):
-		terrain.walk_gpu = int(args["walk_gpu"])
+		terrain.walk_gpu = args["walk_gpu"] == "1"
 	terrain.walk_verify = args.get("walk_verify", "0") == "1"
 	if args.has("walk_batch"):
 		terrain.walk_batch = int(args["walk_batch"])

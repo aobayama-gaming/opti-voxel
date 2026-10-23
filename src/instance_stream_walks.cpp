@@ -1,4 +1,4 @@
-// The streamed sources' walk batches (instance_stream.hpp, Settings::walk_batch): walk keys computed together.
+// The streamed sources' walk batches (instance_stream.hpp, set_walk_batch): walk keys computed together.
 #include "instance_stream.hpp"
 
 #include "debug_log.hpp"
