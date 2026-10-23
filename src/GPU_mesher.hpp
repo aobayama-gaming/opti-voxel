@@ -162,8 +162,8 @@ private:
     void _execute_whole_pipeline();
     void _initialize_gpu_compute();
 
-    // r_remesh (if given): whether the chunk came from remesh_queue.
-    bool _pop_queue(ChunkId &new_chunk, bool *r_remesh = nullptr);
+    // r_remesh (if given): whether the chunk came from remesh_queue; r_queue (if given): its index in its queue list.
+    bool _pop_queue(ChunkId &new_chunk, bool *r_remesh = nullptr, int *r_queue = nullptr);
     // A popped chunk back in its queue.
     void _requeue(const ChunkId &p_chunk, bool p_remesh);
 

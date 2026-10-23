@@ -103,6 +103,9 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     if (settings.spare_pages == 0) {
         settings.spare_pages = settings.max_in_flight * settings.pages_per_batch;
     }
+    if (settings.max_admits_per_frame == 0) {
+        settings.max_admits_per_frame = 4 * settings.batch_size;
+    }
     mutex.instantiate();
 
     lod_count = p_lod_numbers;
@@ -567,7 +570,7 @@ void GPUDirectMesher::_update_dirty_bounds() {
     dirty_bounds_pages.clear();
 }
 
-bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, bool *r_remesh) {
+bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, bool *r_remesh, int *r_queue) {
     // Instance edits first, finest LOD first: the chunk under the edit is what the user is looking at.
     for (std::vector<ChunkId> &queue : remesh_queue) {
         if (queue.empty()) {
@@ -582,7 +585,8 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, bool *r_remesh) {
         }
         return true;
     }
-    for (std::vector<ChunkId> &queue : chunk_queue) {
+    for (size_t q = 0; q < chunk_queue.size(); q++) {
+        std::vector<ChunkId> &queue = chunk_queue[q];
         if (queue.empty()) {
             continue;
         }
@@ -590,6 +594,9 @@ bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, bool *r_remesh) {
         queue.pop_back();
         if (r_remesh) {
             *r_remesh = false;
+        }
+        if (r_queue) {
+            *r_queue = int(q);
         }
         return true;
     }
@@ -662,7 +669,7 @@ void GPUDirectMesher::process_queue() {
             _requeue(p_chunk, p_kind == ChunkGate::REMESH);
         }
     });
-    gate_later = false;
+    gate.begin_frame(settings.max_admits_per_frame);
     // Before acquiring pages: a page released since it was marked must not be touched.
     _update_dirty_bounds();
     // Before acquiring pages too: a kill must not land on a page reused by this frame's batches.
@@ -738,14 +745,14 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     double estimate = 0.0;
     ChunkId chunk;
     bool remesh = false;
+    int queue = 0;
     HashSet<ChunkId, Vector3i64Hasher> remeshes; // popped from remesh_queue: they go back there if they wait
     // With a budget the batch stops once its estimate reaches what's left (a frame dispatches at least
     // one chunk: budget_left starts > 0).
-    while (!gate_later && chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk, &remesh)) {
-        const SDFBase::Admit admit = gate.admit(chunk, remesh ? ChunkGate::REMESH : ChunkGate::CHUNK);
+    while (gate.open() && chunks.size() < settings.batch_size && estimate < r_budget_us && _pop_queue(chunk, &remesh, &queue)) {
+        const SDFBase::Admit admit = gate.admit(chunk, remesh ? ChunkGate::REMESH : ChunkGate::CHUNK, queue);
         if (admit == SDFBase::Admit::LATER) {
             _requeue(chunk, remesh);
-            gate_later = true;
         }
         if (admit != SDFBase::Admit::READY) {
             continue; // parked: the gate hands it back
@@ -837,13 +844,12 @@ bool GPUDirectMesher::_dispatch_audit_batch() {
         return false;
     }
     std::vector<ChunkId> chunks;
-    while (!gate_later && chunks.size() < settings.batch_size && !audit_queue.empty()) {
+    while (gate.open() && chunks.size() < settings.batch_size && !audit_queue.empty()) {
         const ChunkId chunk = audit_queue.back();
         audit_queue.pop_back();
         const SDFBase::Admit admit = gate.admit(chunk, ChunkGate::AUDIT);
         if (admit == SDFBase::Admit::LATER) {
             audit_queue.push_back(chunk);
-            gate_later = true;
         }
         if (admit == SDFBase::Admit::READY) {
             chunks.push_back(chunk);
@@ -1344,6 +1350,8 @@ Dictionary GPUDirectMesher::get_stats() {
     d["admit_parked"] = (int64_t)gate.parked;
     d["admit_later"] = (int64_t)gate.later;
     d["stale_parked"] = (int64_t)gate.stale;
+    d["admit_capped_frames"] = (int64_t)gate.capped_frames;
+    d["max_admits_per_frame"] = (int64_t)settings.max_admits_per_frame;
     d["list_words_total"] = (int64_t)stats.list_words_total;
     d["list_words_max"] = (int64_t)stats.list_words_max;
     d["gpu_by_list_words"] = _gpu_by_list_words_stats();

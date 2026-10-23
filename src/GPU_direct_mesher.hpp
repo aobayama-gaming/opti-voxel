@@ -80,6 +80,8 @@ public:
         uint32_t spare_pages = 0;
         // Entries of the palette texture (PalettePool, 4 B each; a power of two): the loaded chunks' palettes.
         uint32_t palette_capacity = 1u << 21;
+        // Chunks asked of the SDF's gating per frame at most (every answer counts; 0 = 4 * batch_size, ChunkGate::begin_frame).
+        uint32_t max_admits_per_frame = 0;
     };
 
     void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, RID p_scenario, const Settings &p_settings);
@@ -178,7 +180,6 @@ private:
     HashSet<ChunkId, Vector3i64Hasher> remesh_queued; // the chunks in remesh_queue (each at most once)
     LODHashSet working_generation;
     ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
-    bool gate_later = false; // this frame, a chunk found no room for its records: no more popping
 
     uint32_t next_batch_id = 0;
     HashMap<uint32_t, InFlightBatch> in_flight;
@@ -293,8 +294,8 @@ private:
     // completion assembly (render thread writes, main thread consumes; under mutex)
     HashMap<uint32_t, CompletedBatch> partial;
 
-    // r_remesh (if given): whether the chunk came from remesh_queue.
-    bool _pop_queue(ChunkId &r_chunk, bool *r_remesh = nullptr);
+    // r_remesh (if given): whether the chunk came from remesh_queue; r_queue (if given): its chunk_queue index.
+    bool _pop_queue(ChunkId &r_chunk, bool *r_remesh = nullptr, int *r_queue = nullptr);
     // One batch each; false when there was nothing to dispatch. r_budget_us: the frame's GPU budget left
     // (estimated), reduced by the batch's estimate; the batch stops where it runs out.
     bool _dispatch_mesh_batch(double &r_budget_us);

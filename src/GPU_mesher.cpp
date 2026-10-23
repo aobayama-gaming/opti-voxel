@@ -898,14 +898,15 @@ void GPUMesher::process_queue() {
     ChunkId new_chunk;
 
     bool remesh = false;
-    while (count < chunk_batch_number && _pop_queue(new_chunk, &remesh)) {
-        const SDFBase::Admit admit = gate.admit(new_chunk, remesh ? ChunkGate::REMESH : ChunkGate::CHUNK);
+    int queue = 0;
+    gate.begin_frame(0); // one batch at a time: the batch size bounds the admits
+    while (gate.open() && count < chunk_batch_number && _pop_queue(new_chunk, &remesh, &queue)) {
+        const SDFBase::Admit admit = gate.admit(new_chunk, remesh ? ChunkGate::REMESH : ChunkGate::CHUNK, queue);
         if (admit == SDFBase::Admit::LATER) {
             _requeue(new_chunk, remesh);
-            break;
         }
-        if (admit == SDFBase::Admit::PARKED) {
-            continue; // the gate hands it back
+        if (admit != SDFBase::Admit::READY) {
+            continue; // parked: the gate hands it back; LATER: the gate is closed for this frame
         }
         working_generation.insert(new_chunk);
 
@@ -960,10 +961,11 @@ void GPUMesher::process_queue() {
     }
 }
 
-bool GPUMesher::_pop_queue(ChunkId &new_chunk, bool *r_remesh) {
+bool GPUMesher::_pop_queue(ChunkId &new_chunk, bool *r_remesh, int *r_queue) {
     // Instance edits first, finest LOD first (as GPUDirectMesher::_pop_queue).
     for (const std::vector<LODHashSet *> *queues : { &remesh_queue, &chunk_queue }) {
-        for (LODHashSet *queue : *queues) {
+        for (size_t q = 0; q < queues->size(); q++) {
+            LODHashSet *queue = (*queues)[q];
             if (queue == nullptr || queue->is_empty()) {
                 continue;
             }
@@ -972,6 +974,9 @@ bool GPUMesher::_pop_queue(ChunkId &new_chunk, bool *r_remesh) {
             queue->remove(it);
             if (r_remesh) {
                 *r_remesh = queues == &remesh_queue;
+            }
+            if (r_queue) {
+                *r_queue = int(q);
             }
             return true;
         }

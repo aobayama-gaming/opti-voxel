@@ -28,7 +28,12 @@
 // second one; the oldest go when room is needed (slots and entries: the first list, inputs kept: the second), none asked
 // for in the last GRACE_FRAMES (a batch in flight still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
 //
-// Main thread: admit(), take_ready(), poll(), uploads_since(). chunk_list() reads under a shared lock (build_lists on the
+// Jobs run by rank (lower first; the mesher's pop order: its load queue), then in the order asked: a key's rank is the
+// best of the chunks and keys waiting for it, its inputs inherit it, and a queued job asked again with a better rank moves
+// ahead. A scan's set_tag() hands back the chunks parked under an older one and sends the jobs no one waits for any more
+// last (STALE_RANK).
+//
+// Main thread: admit(), take_ready(), set_tag(), poll(), uploads_since(). chunk_list() reads under a shared lock (build_lists on the
 // pool); point_records() from any thread. Keys are computed by drain tasks of the executor (Godot's pool at low priority),
 // never under the stream's lock, and landed by them under it: a key's dependents start at once, on the same task.
 namespace Archetype {
@@ -62,8 +67,11 @@ public:
     static constexpr int64_t INPUT_RECORDS = int64_t(1) << 21; // the records of ready keys not in slots (inputs), kept at most
     static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys kept at most (the empty ones count)
     // Keys asked for and not landed at most: past it admit() answers LATER for a chunk needing a new key, so the meshers
-    // stop popping (else a frame parks the whole queue: millions of keys waiting, the ones in view behind them).
-    static constexpr size_t PENDING_MAX = size_t(1) << 12;
+    // stop popping (else a frame parks the whole queue: millions of keys waiting). 2^12 when the jobs ran in the order
+    // asked (the ones in view behind the rest); ranked, the view's run first whatever is queued behind them.
+    static constexpr size_t PENDING_MAX = size_t(1) << 14;
+    // The rank of a job no parked chunk, waiting key or camera query needs any more (set_tag): after every other.
+    static constexpr uint64_t STALE_RANK = ~uint64_t(0);
     static constexpr size_t LOG_MAX = size_t(1) << 16; // placements uploads_since() can replay; a reader further behind gets them all
 
     struct Settings {
@@ -83,6 +91,7 @@ public:
     struct Upload {
         uint32_t first = 0;
         std::shared_ptr<const SourceContent> content;
+        SourceKey key; // which key's records (the placement order: the order the keys landed)
     };
 
     // p_sources[i] has the setup id i.
@@ -96,10 +105,15 @@ public:
     uint32_t slot_base() const { return settings.slot_base; }
     uint32_t slot_capacity() const { return settings.slot_capacity; }
 
-    // Main thread. Asks for every key the chunk lists (the first asked are computed first). PARKED: the stream pins the
-    // chunk's keys and hands it back to p_owner (a mesher: each has its own parked chunks) through take_ready() with p_tag
-    // once they are placed; asked again meanwhile, it stays parked (with the new tag).
-    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag);
+    // Main thread. Asks for every key the chunk lists, at p_rank (lower first; equal ranks in the order asked). PARKED: the
+    // stream pins the chunk's keys and hands it back to p_owner (a mesher: each has its own parked chunks) through
+    // take_ready() with p_tag once they are placed; asked again meanwhile, it stays parked (with the new tag, its keys at
+    // the better rank).
+    Admit admit(const ChunkId &p_chunk, uint64_t p_owner, uint64_t p_tag, uint64_t p_rank);
+    // Main thread: p_owner's tags from now on are p_tag or later. Its chunks parked under an older tag are handed back at
+    // once (take_ready, their keys unpinned), and the jobs left with no parked chunk, no waiting key and no camera query
+    // this frame go last (STALE_RANK): never dropped, landed they sit in their grace in case they are asked again.
+    void set_tag(uint64_t p_owner, uint64_t p_tag);
     // Main thread: p_owner's parked chunks whose keys are all placed, or which lost a key's slot (asked again, they answer
     // LATER until there is room), with their tags, in the order they were parked.
     void take_ready(uint64_t p_owner, std::vector<std::pair<ChunkId, uint64_t>> &r_out);
@@ -150,6 +164,7 @@ private:
         uint64_t usec = 0;
         void run();
     };
+    using JobKey = std::pair<uint64_t, uint64_t>; // (rank, the order started)
     struct Entry;
     // An entry's place in an LRU list.
     struct Links {
@@ -176,6 +191,9 @@ private:
         bool placed = false;
         uint64_t placement = 0; // its placement's sequence number
         uint64_t used = 0; // the frame it was last asked for
+        uint64_t viewed = ~uint64_t(0); // the frame poll() last asked for it for view_records (none yet: never a frame)
+        uint64_t rank = STALE_RANK; // not READY: the best of its requesters'
+        uint64_t job_seq = 0; // RUNNING: its job's key in jobs is (rank, job_seq) until a drain task takes it
         int pins = 0; // parked chunks holding it
         Links lru_all; // READY, unpinned
         Links lru_inputs; // also not placed, with records
@@ -190,6 +208,7 @@ private:
     };
     struct Parked {
         uint64_t tag = 0;
+        uint64_t rank = 0; // the best it was asked with
         uint64_t seq = 0; // park order
         uint64_t frame = 0; // the poll() frame it was parked at (stats: park to hand-back)
         int missing = 0;
@@ -210,7 +229,8 @@ private:
     size_t pending = 0; // entries not READY (never evicted)
 
     std::mutex job_mutex; // the drain tasks' queues
-    std::deque<std::unique_ptr<Job>> jobs; // to run
+    std::map<JobKey, std::unique_ptr<Job>> jobs; // to run, first first
+    uint64_t job_seq = 0;
     int draining = 0; // drain tasks started and not done
 
     std::unordered_map<ParkKey, Parked, ParkHash> parked;
@@ -235,7 +255,9 @@ private:
         int64_t keys_created = 0; // entries created by request(), inputs included
         int64_t admit_keys_created = 0; // of keys_created: by admit()
         int64_t admit_keys_created_max = 0; // by one admit()
-        int64_t jobs_queued_max = 0; // the FIFO's depth (start)
+        int64_t jobs_queued_max = 0; // the jobs' queue depth (start)
+        int64_t jobs_reranked = 0; // queued jobs moved: asked with a better rank, or left with no one waiting (set_tag)
+        int64_t stale_handed_back = 0; // parked chunks set_tag() handed back
         uint64_t land_usec = 0; // land() and its place(), under the lock
         uint64_t evict_usec = 0; // poll()'s eviction loop
         LatencyHist park_frames; // poll() frames from a chunk's park to its hand-back
@@ -256,9 +278,22 @@ private:
     const ScatterSource &source(const SourceKey &p_key) const { return *sources[p_key.source]; }
     // Every source's keys of the chunk, in key order.
     void chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &r_out) const;
-    // The key's entry, asked for now (created and its inputs asked for if new; placed if listed and ready).
-    Entry &request(const SourceKey &p_key, bool p_listed);
+    // The key's entry, asked for now at p_rank (created and its inputs asked for if new; placed if listed and ready).
+    Entry &request(const SourceKey &p_key, bool p_listed, uint64_t p_rank);
     void start(Entry &r_entry);
+    // Not READY: its rank lowered to p_rank if better, its inputs not landed too (recursively).
+    void improve(Entry &r_entry, uint64_t p_rank);
+    // Not READY, unpinned, not viewed this frame and every key waiting for it stale: STALE_RANK, its inputs too.
+    void orphan(Entry &r_entry);
+    // p_fn(input entry) for each of the entry's inputs still in the table (WAITING: those not landed among them).
+    template <typename F>
+    void each_input(const Entry &p_entry, F p_fn);
+    // Not READY: its rank set to p_rank; RUNNING, its job moved if still queued (keeping its order among equal ranks),
+    // WAITING, p_input(input entry) for its inputs.
+    template <typename F>
+    void rerank(Entry &r_entry, uint64_t p_rank, F p_input);
+    // A parked chunk's keys unpinned (and forgotten: unpinned once).
+    void release_pins(Parked &r_parked);
     void drain();
     void land(std::unique_ptr<Job> p_job);
     // Gives a ready listed entry its slots and logs it (false: no room even after evicting).
@@ -274,8 +309,8 @@ private:
     // Links an entry newest on its lists (the inputs' one if it holds input records), unlinks it from both.
     void lru_link(Entry &r_entry);
     void lru_unlink(Entry &r_entry);
-    // A parked chunk handed back by take_ready().
-    void hand_back(const ParkKey &p_park);
+    // A parked chunk handed back by take_ready(); p_stale: by set_tag() (counted apart from park_frames).
+    void hand_back(const ParkKey &p_park, bool p_stale = false);
     int64_t slots_used() const { return int64_t(slots_end) - free_slots; }
 };
 

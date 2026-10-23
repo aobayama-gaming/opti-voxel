@@ -598,7 +598,7 @@ TEST_CASE("Scatter source: the chunks' lists through the stream are the record p
             InstanceStream::Admit answer = InstanceStream::LATER;
             std::vector<std::pair<ChunkId, uint64_t>> back;
             for (int frame = 0; frame < 8 && answer != InstanceStream::READY; frame++) {
-                answer = stream.admit(chunk, 0, 0);
+                answer = stream.admit(chunk, 0, 0, 0);
                 stream.poll();
                 stream.take_ready(0, back);
             }

@@ -347,14 +347,21 @@ to every change, and a reviewer may reject a PR on any of them.
   entries (slots, the entries cap) and those holding input records (not placed, count > 0: the inputs cap pops its oldest
   in O(1), the walks and placed keys never relinked); `computed_by_key` names `sites 0` and `proxies L`.
   **Stream (`src/instance_stream.*`):** `InstanceStream` holds the keys asked for in one table (empty ones
-  too) with an intrusive LRU: `admit(chunk, owner, tag)` answers READY (every key placed), PARKED (its keys pinned;
+  too) with an intrusive LRU: `admit(chunk, owner, tag, rank)` answers READY (every key placed), PARKED (its keys pinned;
   `take_ready(owner)` hands it back, in park order, once they are) or LATER (a key finds no slot: stop popping). Keys are computed by drain
   tasks on Godot's pool at low priority (`StreamExecutor`, run by `poll()` in the tests; `low_priority_thread_ratio` 0.5), a
   key's inputs handed to it as shared pointers; the task lands each key under the stream's lock (its dependents start at once
   on the same task: landing on the main thread, 2 ms a frame, held forest5cm's 135k keys ~900 frames) and places the listed
   ones in slots past the table's capacity (`chunk_list` reads under a shared lock), logged per placement (`uploads_since(seq)`; a reader past the log gets every placed key). Eviction:
   oldest first, never pinned or asked for in the last `GRACE_FRAMES` (16). `point_records`: resident keys, else computed and
-  dropped. Unit tests: park / return order, pins and grace, slot reuse with the log, slots full -> LATER with no deadlock.
+  dropped. Jobs run by (rank, order asked) (`jobs`: a map under `job_mutex`, a drain task pops `begin()`): `ChunkGate`
+  passes re-meshes 0, a first mesh 1 + its `load_queue` (the mesher's pop order), audits `AUDIT_RANK`; a key's rank is
+  the best of its requesters', inherited by its inputs not landed, a queued job asked better is re-keyed (`jobs_reranked`).
+  `set_tag(owner, tag)` (`ChunkGate::next_scan`, the CHUNK owner only) hands back at once the chunks parked under an older
+  scan (`stale_handed_back`, unpinned) and sends the jobs no pin, no live dependent and no view query needs to
+  `STALE_RANK` (never dropped). `PENDING_MAX` 2^14 (2^12 under the FIFO). `ChunkGate::begin_frame(cap)` / `open()` stop a
+  frame's popping at a LATER or the cap (direct: `max_admits_per_frame`, 0 = 4 x batch_size; `admit_capped_frames`). Unit tests: park / return order, pins and grace,
+  slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag`.
   **Wiring:** `SDFTable` owns the stream over its valid sources (`add_stream`; `~SDFCascade` stops it first: its tasks read
   `ground_field`). The meshers gate every chunk they pop through `SDFBase::admit / take_ready / parked_count`, called by
   `ChunkGate` (`src/chunk_gate.hpp`, both meshers): one owner per mesher and queue kind (chunk, remesh, discovery audit),

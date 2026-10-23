@@ -190,8 +190,12 @@ public:
         PARKED, // kept: take_ready() hands it back once its records are there
         LATER, // no room for its records now: queue it again and stop popping this frame
     };
-    // Main thread, for each chunk a mesher pops (p_owner: the mesher; p_tag comes back with the chunk).
-    virtual Admit admit(const ChunkId & /*p_chunk*/, uint64_t /*p_owner*/, uint64_t /*p_tag*/) { return Admit::READY; }
+    // Main thread, for each chunk a mesher pops (p_owner: the mesher; p_tag comes back with the chunk; p_rank: lower is
+    // served first).
+    virtual Admit admit(const ChunkId & /*p_chunk*/, uint64_t /*p_owner*/, uint64_t /*p_tag*/, uint64_t /*p_rank*/) { return Admit::READY; }
+    // Main thread: p_owner's tags are p_tag or later from now on; its chunks parked under an older one come back at once
+    // (take_ready) and their records go last.
+    virtual void set_tag(uint64_t /*p_owner*/, uint64_t /*p_tag*/) {}
     // Main thread: p_owner's parked chunks now ready (or to ask again), with their tags, in the order they were parked.
     virtual void take_ready(uint64_t /*p_owner*/, std::vector<std::pair<ChunkId, uint64_t>> &r_out) { r_out.clear(); }
     // Main thread: p_owner's chunks parked (a mesher holding some isn't idle).
