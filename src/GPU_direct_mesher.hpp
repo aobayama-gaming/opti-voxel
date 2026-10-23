@@ -266,7 +266,7 @@ private:
     // the table version they are. The lists fill the list buffer at most: r_chunks keeps the leading chunks that
     // fit, r_rest gets the others (r_ids shrunk to match) for the caller to queue again.
     uint32_t _table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
-            PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes = nullptr);
+            PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr);
     // Main thread: a chunk popped for a batch it couldn't go in (overflow, or its list didn't fit) back in its queue:
     // remesh_queue (p_remesh) or chunk_queue.
     void _requeue(const ChunkId &p_chunk, bool p_remesh);
@@ -303,9 +303,10 @@ private:
     // one's list bound.
     void _pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
             HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds);
-    // A batch's lists (their lengths in p_ids, after build_lists) against its chunks' bounds, per LOD, into the cost model;
-    // the bounds' sum.
-    uint64_t _observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids, const HashMap<ChunkId, uint64_t, Vector3i64Hasher> &p_bounds);
+    // A batch's lists (their lengths in p_ids, after build_lists, of which p_streamed streamed words per chunk) against its
+    // chunks' bounds, per LOD, into the cost model; the bounds' sum.
+    uint64_t _observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids, const std::vector<uint32_t> &p_streamed,
+            const HashMap<ChunkId, uint64_t, Vector3i64Hasher> &p_bounds);
     bool _dispatch_audit_batch();
     void _flush_kills();
     void _flush_hidden();

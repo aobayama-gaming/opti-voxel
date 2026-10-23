@@ -53,6 +53,9 @@ public:
     virtual void reap(bool p_wait);
     // Whether a drain task takes another job (tests: a budget of jobs per poll(), the rest left for the next one).
     virtual bool more() { return true; }
+    // Called by a drain task between a job's run and its landing, no lock held (tests: what the main thread does while a
+    // job runs).
+    virtual void landing() {}
 
     // Godot's WorkerThreadPool, low priority (threading/worker_pool/low_priority_thread_ratio of its threads).
     static std::unique_ptr<StreamExecutor> pool();
@@ -249,7 +252,7 @@ private:
 
     std::mutex job_mutex; // the drain tasks' queues
     std::map<JobKey, std::unique_ptr<Job>> jobs; // to run, first first
-    uint64_t job_seq = 0;
+    uint64_t job_seq = 0; // under the stream's lock (start() is only called holding it)
     int draining = 0; // drain tasks started and not done
 
     std::unordered_map<ParkKey, Parked, ParkHash> parked;

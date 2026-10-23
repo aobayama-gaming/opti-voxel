@@ -81,9 +81,10 @@ public:
     // exceed p_capacity_words (the mesher's list buffer): returns how many leading chunks went in whole, and the
     // caller dispatches only those and queues the rest again (a LOD-6 forest chunk lists ~9k records). Only a first
     // chunk over the whole buffer is cut (ERR, counted: a wrong surface there). r_palettes (if given) gets each kept
-    // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name.
+    // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name. r_streamed (if given)
+    // gets each kept chunk's words of streamed records (the rest are the scene's and the edits').
     virtual uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
-            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const = 0;
+            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr) const = 0;
     // The entries every chunk palette starts with (ChunkPalette::build): {GROUND}, or with a climate GROUND then each
     // biome's material, a ground sample's palette index being 1 + its biome (SDFCascade::ground_material). Longer than
     // one: every chunk's samples carry a material (the cascade writes it, both meshers read it), and the palette pool's

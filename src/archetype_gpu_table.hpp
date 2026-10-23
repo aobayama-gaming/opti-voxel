@@ -61,7 +61,7 @@ public:
     uint32_t record_size() const override { return RECORD_BYTES; }
 
     uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
-            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr) const override;
+            uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr) const override;
 
     const std::vector<uint32_t> &base_palette() const override { return base; }
     // Configure only, before the meshers start.

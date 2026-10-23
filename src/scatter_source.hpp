@@ -179,6 +179,11 @@ private:
     int64_t blob_grow(int p_layer) const;
     // Input p_i of p_inputs, else computed into r_local.
     const SourceContent &input(const SourceKey &p_key, const Inputs &p_inputs, size_t p_i, SourceContent &r_local) const;
+    // p_fn(content) for each of p_keys in order (input(): p_inputs[i], else computed).
+    template <typename F>
+    void for_each_input(const std::vector<SourceKey> &p_keys, const Inputs &p_inputs, F p_fn) const;
+    // Appends the keys of layer p_layer's proxy tiles meeting p_region, in cell order.
+    void proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const;
     // Appends the site tiles inside part tile p_tile of LOD p_lod that meet the zone: recursively its L - 1 tiles meeting
     // it, z y x.
     void append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const;

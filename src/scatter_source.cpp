@@ -205,9 +205,13 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
         append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof.reach))), 0, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         // A far layer: the proxy tiles its region meets (each walked once, shared by the blob tiles around it).
-        for_each_tile(proxy_region(p_key), blob_tile_cells(p_key.lod) * layer_cell(p_key.lod),
-                [&](const VoxelPos &p_tile) { r_out.push_back(SourceKey{ set.id, SourceKey::PROXIES, p_key.lod, p_tile }); });
+        proxy_tiles(proxy_region(p_key), p_key.lod, r_out);
     }
+}
+
+void ScatterSource::proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const {
+    for_each_tile(p_region, blob_tile_cells(p_layer) * layer_cell(p_layer),
+            [&](const VoxelPos &p_tile) { r_out.push_back(SourceKey{ set.id, SourceKey::PROXIES, p_layer, p_tile }); });
 }
 
 void ScatterSource::append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const {
@@ -229,6 +233,14 @@ const SourceContent &ScatterSource::input(const SourceKey &p_key, const Inputs &
     }
     content(p_key, Inputs(), r_local);
     return r_local;
+}
+
+template <typename F>
+void ScatterSource::for_each_input(const std::vector<SourceKey> &p_keys, const Inputs &p_inputs, F p_fn) const {
+    SourceContent local;
+    for (size_t i = 0; i < p_keys.size(); i++) {
+        p_fn(input(p_keys[i], p_inputs, i, local));
+    }
 }
 
 void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
@@ -279,13 +291,12 @@ int ScatterSource::proxy_level(int p_layer) const {
 void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
     std::vector<SourceKey> in;
     inputs(p_key, in);
-    SourceContent local;
     std::vector<TableRecord> grown;
-    for (size_t i = 0; i < in.size(); i++) {
-        for (const CellSite &cs : input(in[i], p_inputs, i, local).sites) {
+    for_each_input(in, p_inputs, [&](const SourceContent &p_sites) {
+        for (const CellSite &cs : p_sites.sites) {
             grow_site(cs, p_key.lod > 0 ? p_key.lod : -1, grown, r_out);
         }
-    }
+    });
 }
 
 void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<TableRecord> &r_grown, SourceContent &r_out) const {
@@ -315,9 +326,7 @@ void ScatterSource::near_items(const SourceKey &p_key, const Inputs &p_inputs, s
     const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod));
     std::vector<SourceKey> tiles;
     inputs(p_key, tiles);
-    SourceContent local;
-    for (size_t t = 0; t < tiles.size(); t++) {
-        const SourceContent &parts = input(tiles[t], p_inputs, t, local);
+    for_each_input(tiles, p_inputs, [&](const SourceContent &parts) {
         for (const SourceContent::Group &g : parts.groups) {
             // A record's centroid lies in its box: a site whose records' box misses the region has none in it.
             if (!record_box(g.bounds).intersects(region)) {
@@ -338,7 +347,7 @@ void ScatterSource::near_items(const SourceKey &p_key, const Inputs &p_inputs, s
                 }
             }
         }
-    }
+    });
 }
 
 void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, std::vector<MomentItem> &r_items) const {
@@ -349,20 +358,22 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
     const int64_t g = proxy_side(p_key.lod);
     const CellScatter &s = set.scatter;
     // The proxy tiles' sites in the region, in cell order: the tiles walk from the regions' level (proxy_level), so this is
-    // the region's own walk from it (surface_sites), and the layers sum the items in the same order.
+    // the region's own walk from it (surface_sites), and the layers sum the items in the same order. With a tile missing
+    // (the CPU's point evaluation computes a key alone) that one walk is cheaper than the tiles' (each a whole tile, where
+    // the region meets a sliver of most of them).
     const VoxelBox region = proxy_region(p_key);
     std::vector<SourceKey> tiles;
-    inputs(p_key, tiles);
+    proxy_tiles(region, p_key.lod, tiles);
     std::vector<CellSite> sites;
-    SourceContent local;
-    for (size_t t = 0; t < tiles.size(); t++) {
-        for (const CellSite &cs : input(tiles[t], p_inputs, t, local).sites) {
-            if (region.contains(cs.site.base)) {
-                sites.push_back(cs);
-            }
-        }
+    const bool resident = p_inputs.size() == tiles.size() && std::none_of(p_inputs.begin(), p_inputs.end(), [](const SourceContent *p_in) { return !p_in; });
+    if (resident) {
+        for_each_input(tiles, p_inputs, [&](const SourceContent &p_walk) {
+            std::copy_if(p_walk.sites.begin(), p_walk.sites.end(), std::back_inserter(sites), [&region](const CellSite &p_s) { return region.contains(p_s.site.base); });
+        });
+        std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
+    } else if (region.valid) {
+        surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, sites, false, proxy_level(p_key.lod)); // in cell order
     }
-    std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
     const double side = double(s.side);
     const SourceProfile::Lost &lost = prof.lost[p_key.lod];
     for (const CellSite &cs : sites) {

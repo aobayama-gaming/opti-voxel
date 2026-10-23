@@ -282,22 +282,25 @@ void InstanceStream::start(Entry *const *p_entries, size_t p_count) {
     if (p_count == 0) {
         return;
     }
+    // The jobs are made before job_mutex (the drain tasks pop under it), then merged in one pass (no allocation there).
+    std::map<JobKey, std::unique_ptr<Job>> made;
+    for (size_t i = 0; i < p_count; i++) {
+        Entry &e = *p_entries[i];
+        auto job = std::make_unique<Job>();
+        job->source = &source(e.key);
+        job->key = e.key;
+        job->expand = !e.expanded;
+        job->inputs = std::move(e.inputs);
+        e.inputs.clear();
+        e.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
+        e.state = Entry::RUNNING;
+        e.job_seq = ++job_seq;
+        made.emplace_hint(made.end(), JobKey(e.rank, e.job_seq), std::move(job));
+    }
     bool spawn = false;
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
-        for (size_t i = 0; i < p_count; i++) {
-            Entry &e = *p_entries[i];
-            auto job = std::make_unique<Job>();
-            job->source = &source(e.key);
-            job->key = e.key;
-            job->expand = !e.expanded;
-            job->inputs = std::move(e.inputs);
-            e.inputs.clear();
-            e.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
-            e.state = Entry::RUNNING;
-            e.job_seq = ++job_seq;
-            jobs.emplace(JobKey(e.rank, e.job_seq), std::move(job));
-        }
+        jobs.merge(made);
         stats.jobs_queued_max = MAX(stats.jobs_queued_max, int64_t(jobs.size())); // under the stream's lock too
         spawn = claim_drain();
     }
@@ -393,6 +396,7 @@ void InstanceStream::drain() {
             jobs.erase(jobs.begin());
         }
         job->run();
+        executor->landing();
         const std::unique_lock<std::shared_mutex> lock(mutex);
         land(std::move(job)); // the keys it completes join jobs: this loop takes them
     }
@@ -435,6 +439,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
             e.state = Entry::WAITING;
         }
         if (!e.orphan || !drop_unneeded(e)) {
+            e.orphan = false; // kept
             expand(e, std::move(p_job->input_keys));
         }
         stats.land_usec += now_usec() - t0;
@@ -448,6 +453,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
     e.content = std::move(p_job->out);
     e.count = uint32_t(e.content->records.size());
     e.state = Entry::READY;
+    e.orphan = false; // lands into its grace
     pending--;
     pending_asked -= e.asked;
     e.asked = false;

@@ -741,15 +741,21 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
             }
             std::sort(gathered.begin(), gathered.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
             regions_same += same_sites(gathered, walk);
-            SourceContent with, alone;
+            // Alone or with a tile missing (the CPU's point path): one walk of the region, from the same level.
+            SourceContent with, alone, partial;
             streamed.content(k, raw, with);
             streamed.content(k, {}, alone);
+            ScatterSource::Inputs missing = raw;
+            if (!missing.empty()) {
+                missing[0] = nullptr;
+            }
+            streamed.content(k, missing, partial);
             checked++;
-            alike += same_content(with, alone);
+            alike += same_content(with, alone) && same_content(with, partial);
             blobs += int64_t(with.records.size());
         }
         MESSAGE("layer ", layer, ": ", checked, " far blob tiles, ", blobs, " blobs, ", int64_t(walks.size()), " proxy tiles (", proxies, " proxies) read ",
-                reads, " times, ", regions_same, " regions' walks identical, ", alike, " the same without their proxy tiles");
+                reads, " times, ", regions_same, " regions' walks identical, ", alike, " the same without their proxy tiles (all, or one)");
         CHECK(regions_same == checked);
         CHECK(alike == checked);
         CHECK(reads > int64_t(walks.size())); // shared

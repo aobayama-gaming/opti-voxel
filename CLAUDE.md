@@ -98,9 +98,10 @@ to every change, and a reviewer may reject a PR on any of them.
   a batch short. The estimate is `GPUCostModel` (`src/gpu_cost_model.hpp`): µs per chunk per LOD plus µs per list
   word (seeded 1.0, the 1M fit), corrected from each batch's timestamps (measured / estimated ~1.05 on the forest; a
   LOD-3 forest chunk costs 200-300 µs, a treeless one ~15). Before its list a chunk's words are its keys' records
-  (`SDFBase::admit`'s bound, through `ChunkGate::next`) times `list_share[lod]` (its LOD's list words over their bounds)
-  plus `words_per_chunk[lod]` (the rest: the scene's records, every word without a stream); a LOD's first measure is
-  clamped to `MAX_SCALE` when the batch has words; stats `cost_us_per_word`,
+  (`SDFBase::admit`'s bound, through `ChunkGate::next`) times `list_share[lod]` (its LOD's streamed list words over their
+  bounds, `build_lists`' `r_streamed`) plus `words_per_chunk[lod]` (the scene's and the edits' words); a LOD's first list
+  replaces both seeds; a LOD's first measure is clamped to `MAX_SCALE` when the batch has words and leaves the word cost
+  unchanged; stats `cost_us_per_word`,
   `cost_list_share`, `cost_words_per_chunk`, `list_bound_total`. Forest fly at error 2: frame p50 27.8 -> 11.9 ms, at the price of a slower first load
   (3.0 -> 5.0 s) and merges lagging while moving (coarse parents queue behind the fine chunks: 2x the chunks
   loaded mid-fly). Ordering the queue by displayed error instead (the loaded ancestor's 2^lod / distance, merges
@@ -378,7 +379,9 @@ to every change, and a reviewer may reject a PR on any of them.
   `dependents`).
   `PENDING_MAX` 2^14 (2^12 under the FIFO) caps the keys chunks and the camera ask for (`keys_pending_asked`), not the
   inputs expansions ask for (`keys_pending_inputs`); `admit_later_pending` counts the LATER answers at the cap. An
-  expansion queues its new inputs' jobs under one `job_mutex` take. `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
+  expansion's new inputs' jobs are made before `job_mutex` and merged under one take. `StreamExecutor::landing()` (between
+  a job's run and its landing) lets the tests forget a chunk while its job runs (the orphan path). A far blob tile
+  computed alone (`point_records`) walks its region once from `proxy_level` instead of its proxy tiles. `ChunkGate::next(chunk, kind, pop, requeue)` is the meshers' pop / admit /
   requeue loop; `begin_frame(cap)` closes a frame at a LATER (`admit_later`) or at `cap` PARKED / LATER answers
   (`admit_capped_frames`; READY ones ask for no key; direct: `max_admits_per_frame`, 0 = 4 x batch_size). Unit tests: park / return order, pins and grace,
   slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag` (kept, forgotten, dropped jobs), the gate's cap.

@@ -370,11 +370,11 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
 }
 
 uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
-        PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes) {
+        PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes, std::vector<uint32_t> *r_streamed) {
     SDFGpuTable *table = sdf->get_gpu_table();
     // Main thread, like the edits: the lists and the records come from the same snapshot.
     const uint64_t t_lists = now_usec();
-    const uint32_t kept = table->build_lists(r_chunks, chunk_param, r_ids, r_list, uint32_t(table_list_capacity / 4), r_palettes);
+    const uint32_t kept = table->build_lists(r_chunks, chunk_param, r_ids, r_list, uint32_t(table_list_capacity / 4), r_palettes, r_streamed);
     dispatch_times.build_lists += now_usec() - t_lists;
     r_rest.assign(r_chunks.begin() + kept, r_chunks.end());
     r_chunks.resize(kept);
@@ -756,9 +756,9 @@ void GPUDirectMesher::_pop_batch(double p_budget_us, std::vector<ChunkId> &r_chu
     }
 }
 
-uint64_t GPUDirectMesher::_observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids,
+uint64_t GPUDirectMesher::_observe_lists(const std::vector<ChunkId> &p_chunks, const PackedByteArray &p_ids, const std::vector<uint32_t> &p_streamed,
         const HashMap<ChunkId, uint64_t, Vector3i64Hasher> &p_bounds) {
-    std::vector<uint64_t> bounds(lod_count, 0), words(lod_count, 0);
+    std::vector<uint64_t> bounds(lod_count, 0), streamed(lod_count, 0), other(lod_count, 0);
     std::vector<uint32_t> counts(lod_count, 0);
     uint64_t total = 0;
     for (size_t i = 0; i < p_chunks.size(); i++) {
@@ -768,11 +768,14 @@ uint64_t GPUDirectMesher::_observe_lists(const std::vector<ChunkId> &p_chunks, c
         if (lod >= 0 && lod < lod_count) {
             counts[lod]++;
             bounds[lod] += bound;
-            words[lod] += uint64_t(MAX(0, p_ids.decode_s32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_COUNT_AT)));
+            const uint64_t words = uint64_t(MAX(0, p_ids.decode_s32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_COUNT_AT)));
+            const uint64_t from_stream = i < p_streamed.size() ? MIN(uint64_t(p_streamed[i]), words) : 0;
+            streamed[lod] += from_stream;
+            other[lod] += words - from_stream;
         }
     }
     for (int lod = 0; lod < lod_count; lod++) {
-        cost_model.observe_list(lod, bounds[lod], words[lod], counts[lod]);
+        cost_model.observe_list(lod, bounds[lod], streamed[lod], other[lod], counts[lod]);
     }
     return total;
 }
@@ -801,7 +804,8 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     PackedByteArray records;
     std::vector<std::vector<uint32_t>> chunk_palettes;
     std::vector<ChunkId> rest;
-    const uint32_t table_version = _table_payload(chunks, rest, ids, list, records, &chunk_palettes);
+    std::vector<uint32_t> streamed_words;
+    const uint32_t table_version = _table_payload(chunks, rest, ids, list, records, &chunk_palettes, &streamed_words);
     for (const ChunkId &c : rest) {
         _requeue(c, remeshes.has(c));
         stats.list_requeued++;
@@ -811,7 +815,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch.dispatch_frame = frame;
     std::vector<uint32_t> lod_counts(lod_count, 0);
     const uint32_t list_words = uint32_t(list.size() / 4);
-    const uint64_t list_bound = _observe_lists(chunks, ids, bounds);
+    const uint64_t list_bound = _observe_lists(chunks, ids, streamed_words, bounds);
     const Vector2i lods = ChunkMath::lod_range(chunks);
     AABB box = _chunk_aabb(chunks[0]);
     for (const ChunkId &c : chunks) {

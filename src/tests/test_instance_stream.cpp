@@ -6,6 +6,7 @@
 #include "instance_stream.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 
 using namespace Archetype;
@@ -14,10 +15,19 @@ using StreamTest::Mirror;
 namespace {
 
 // The inline executor, held: while held, reap() runs nothing, so a poll() turns the frame without landing a key. Released,
-// a poll()'s drain takes at most `steps` jobs (-1: all), the rest left for the next poll().
+// a poll()'s drain takes at most `steps` jobs (-1: all), the rest left for the next poll(); before_land runs once between
+// the next job's run and its landing (what the main thread does while a drain task computes).
 struct HeldExecutor : StreamExecutor {
     bool held = true;
     int64_t steps = -1;
+    std::function<void()> before_land;
+    void landing() override {
+        if (before_land) {
+            const std::function<void()> f = std::move(before_land);
+            before_land = nullptr;
+            f();
+        }
+    }
     void reap(bool p_wait) override {
         if (!held || p_wait) {
             StreamExecutor::reap(p_wait);
@@ -786,6 +796,72 @@ TEST_CASE("Instance stream: an expansion's pending inputs don't count against th
     CHECK(back.size() == 2);
     CHECK(stat(*stream, "keys_pending_asked") == 0);
     CHECK(stat(*stream, "keys_pending_inputs") == 0);
+}
+
+// A key set_tag() drops while a drain task runs its job (an orphan): its job was taken, so it lands; an input listing is
+// then dropped (none of its inputs asked for), unless the key was asked for again meanwhile; a computed key lands READY.
+TEST_CASE("Instance stream: an orphan's input listing is dropped when it lands, kept if asked again; a computed orphan lands READY") {
+    const StreamFixture &fx = StreamFixture::get();
+    const ScatterSource &f = *fx.source;
+    int lod = 1;
+    while (lod < f.profile().lod_end && f.part_key_lod(lod) != lod) {
+        lod++;
+    }
+    const ChunkId c = fx.chunk(-200, -200, lod);
+    std::vector<SourceKey> keys, in;
+    f.chunk_keys(c, fx.param, keys);
+    size_t reading = 0;
+    const size_t own = own_keys(fx, c, &reading);
+    CHECK(!keys.empty());
+    if (keys.empty()) {
+        return;
+    }
+    f.inputs(keys[0], in);
+    CHECK(!in.empty()); // its first job lists inputs
+    const auto forget = [](const ChunkId &) { return int64_t(-1); };
+    const auto none = [](const ChunkId &) {};
+    for (int variant = 0; variant < 3; variant++) {
+        CAPTURE(variant);
+        HeldExecutor *held = nullptr;
+        std::unique_ptr<InstanceStream> stream = fx.held_stream(held);
+        CHECK(stream->admit(c, 0, 1, 1) == InstanceStream::PARKED);
+        stream->poll(); // held: the frame turns (keys asked for this frame are never dropped)
+        held->held = false;
+        if (variant == 2) {
+            held->steps = int64_t(own); // the expansions: the site tiles queued
+            stream->poll();
+        }
+        held->steps = 1;
+        held->before_land = [&] {
+            stream->set_tag(0, 2, forget, none);
+            if (variant == 1) {
+                CHECK(stream->admit(c, 0, 2, 1) == InstanceStream::PARKED); // asked again: no longer an orphan
+            }
+        };
+        stream->poll();
+        if (variant == 0) {
+            CHECK(stat(*stream, "keys") == 0);
+            CHECK(stat(*stream, "keys_dropped") == int64_t(own));
+            CHECK(stat(*stream, "jobs_dropped") == int64_t(own) - 1);
+            CHECK(stat(*stream, "keys_expanded") == 0);
+        } else if (variant == 1) {
+            CHECK(stat(*stream, "keys_expanded") == 1);
+            held->steps = -1;
+            stream->poll();
+            stream->poll();
+            std::vector<std::pair<ChunkId, uint64_t>> back;
+            stream->take_ready(0, back);
+            CHECK(back.size() == 1);
+            CHECK(stat(*stream, "keys") == int64_t(keys_and_inputs(fx, c)));
+        } else {
+            // The site tile computing, and the chunk's own keys without inputs (landed already: in their grace).
+            CHECK(stat(*stream, "keys") == int64_t(1 + own - reading));
+            CHECK(stat(*stream, "keys_ready") == int64_t(1 + own - reading));
+            CHECK(stat(*stream, "keys_dropped") > 0);
+        }
+        CHECK(stat(*stream, "keys_pending_asked") == 0);
+        CHECK(stat(*stream, "keys_pending_inputs") == 0);
+    }
 }
 
 TEST_CASE("Instance stream: an input not landed runs at the best rank of the keys waiting for it") {
