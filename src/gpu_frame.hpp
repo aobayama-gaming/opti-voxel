@@ -52,26 +52,26 @@ inline ov::bytes chunk_param_bytes(const ChunkParam &p_param) {
     return bytes;
 }
 
-// Writes chunk p_index of a ChunkInput array (r_bytes must hold it).
-inline void encode_chunk_input(ov::bytes &r_bytes, int64_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
+// Writes one ChunkInput at p_byte_offset (the chunk's slot in the batch's byte stream: the caller's
+// p_index * CHUNK_INPUT_BYTES; the buffer must hold it). THE one layout of the GPU's ChunkInput.
+inline void encode_chunk_input(ov::bytes &r_bytes, int64_t p_byte_offset, const ChunkId &p_chunk, const ChunkParam &p_param) {
     using namespace WorldCoord;
     const VoxelPos anchor = ChunkMath::chunk_min_voxel(p_chunk, p_param);
-    const int64_t base = p_index * CHUNK_INPUT_BYTES;
-    ov::encode_u32(r_bytes, base + 0, lo32(p_chunk.x));
-    ov::encode_u32(r_bytes, base + 4, lo32(p_chunk.y));
-    ov::encode_u32(r_bytes, base + 8, lo32(p_chunk.z));
-    ov::encode_u32(r_bytes, base + 12, 0);
-    ov::encode_s32(r_bytes, base + 16, hi32(anchor.x));
-    ov::encode_s32(r_bytes, base + 20, hi32(anchor.y));
-    ov::encode_s32(r_bytes, base + 24, hi32(anchor.z));
-    ov::encode_s32(r_bytes, base + 28, 0);
+    ov::encode_u32(r_bytes, p_byte_offset + 0, lo32(p_chunk.x));
+    ov::encode_u32(r_bytes, p_byte_offset + 4, lo32(p_chunk.y));
+    ov::encode_u32(r_bytes, p_byte_offset + 8, lo32(p_chunk.z));
+    ov::encode_u32(r_bytes, p_byte_offset + 12, 0);
+    ov::encode_s32(r_bytes, p_byte_offset + 16, hi32(anchor.x));
+    ov::encode_s32(r_bytes, p_byte_offset + 20, hi32(anchor.y));
+    ov::encode_s32(r_bytes, p_byte_offset + 24, hi32(anchor.z));
+    ov::encode_s32(r_bytes, p_byte_offset + 28, 0);
 }
 
 // The RD-boundary form for the engine call sites that build a PackedByteArray directly (r_bytes must
-// hold the chunk). Delegates to the ov::bytes layout and copies the bytes in.
+// hold the batch). Stages one chunk at offset 0 through the ov layout, then copies it in.
 inline void encode_chunk_input(PackedByteArray &r_bytes, int64_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
     ov::bytes tmp(CHUNK_INPUT_BYTES, 0);
-    encode_chunk_input(tmp, p_index, p_chunk, p_param);
+    encode_chunk_input(tmp, 0, p_chunk, p_param);
     std::memcpy(r_bytes.ptrw() + p_index * CHUNK_INPUT_BYTES, tmp.data(), CHUNK_INPUT_BYTES);
 }
 

@@ -1028,7 +1028,7 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     records_bytes.fill(0);
     for (uint32_t i = 0; i < count; i++) {
         ov::bytes rec_bytes(Archetype::RECORD_BYTES, 0);
-        Archetype::encode_record(rec_bytes, i, table.records[i]);
+        Archetype::encode_record(rec_bytes, 0, table.records[i]); // one record, staged at offset 0
         std::memcpy(records_bytes.ptrw() + int64_t(i) * Archetype::RECORD_BYTES, rec_bytes.data(), rec_bytes.size());
     }
     const RID buffer_records = p_rd->storage_buffer_create(records_bytes.size(), records_bytes);
