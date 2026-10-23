@@ -7,7 +7,7 @@ extends Node3D
 ##   --mode=legacy|direct         pipeline (default legacy)
 ##   --preset=NAME                a named argument set (debug/presets.gd; forest5cm = the perf target),
 ##                                explicit arguments override it
-##   --scenario=load|fly|turn|turn_walk|edit|dig|rise load: load + steady phase. fly: load, fly out and back, settle, steady.
+##   --scenario=load|fly|turn|turn_walk|edit|dig|rise|approach load: load + steady phase. fly: load, fly out and back, settle, steady.
 ##                                turn: load, --turns=N full turns of the camera's yaw (default 1), --turn_seconds
 ##                                each (default 8), settle, steady
 ##                                turn_walk: turn, then walk --walk=M metres (default 300) straight ahead,
@@ -16,6 +16,16 @@ extends Node3D
 ##                                dig: load, then K dig holes along the view, a scripted drag, settle, steady
 ##                                rise: load, then one phase per --altitudes step (rise_<i>): the camera at that
 ##                                height above the terrain under the start position (same view), until loaded
+##                                approach: load at a far pose (--approach_from above and --approach_out behind the start,
+##                                against the fly direction, looking at the start), fly straight to the start at constant
+##                                speed in --approach_seconds without waiting for loads (unlike rise), then the start's
+##                                pitch / yaw, settle, steady
+##   --approach_from=M            approach scenario: metres above the start pose (default 1500)
+##   --approach_out=M             approach scenario: metres from the start along -X, the fly's -direction (default 2000)
+##   --approach_seconds=S         approach scenario: wall-clock duration of the flight (default 20)
+##   --approach_shots=DIR         approach scenario: a screenshot every --approach_shot_every seconds (default 1),
+##                                DIR/approach_<i>_<S>s.png (relative to the run dir), in the --view of the run: run it
+##                                twice (--view=0, --view=2) for shaded and LOD sheets, as rise does
 ##   --altitudes=M,M,...          rise scenario: metres above the terrain (default 20,50,100,200,400,800,1600,3200,6400,13000)
 ##   --rise_shots=DIR             rise scenario: a screenshot per step, DIR/rise_<i>_<M>m.png (relative to the run dir)
 ##   --edits=N                    edit scenario: number of edits (default 100)
@@ -30,7 +40,7 @@ extends Node3D
 ##   --max_frames=N               hard cap; run is marked timed_out (default 20000)
 ##   --pitch=DEG                  camera pitch (default -20)
 ##   --yaw=DEG                    camera yaw (default 0, looking down -Z); player.gd hole marks print both
-##   --shot=<when>:<path.png>     repeatable. when = loaded | steady_end | fly_end | <frame number>
+##   --shot=<when>:<path.png>     repeatable. when = loaded | steady_end | fly_end | approach_end | <frame number>
 ##   --out=<path.json>            stats output
 ##   --log=N                      VoxelTerrain.log_level
 ##   --profile=1                  per-frame profile to profile.json next to --out: main thread (frame time, each
@@ -110,6 +120,9 @@ var camera: Camera3D
 var base_near := 0.05  # the scene's near plane, the clip planes' floor
 var start_pos: Vector3
 var walk_from: Vector3  # turn_walk: where the walk starts
+var start_rot: Vector3  # approach: the start pose's rotation (degrees), restored on arrival
+var approach_from_pos: Vector3  # approach: where the flight starts
+var approach_shot_next := 0  # approach: the next screenshot's index
 var vp_rid: RID
 
 var frame := 0
@@ -276,6 +289,8 @@ func _ready() -> void:
 	if above_ground != "":
 		_place_above_ground(float(above_ground))  # the fly path starts there too
 		start_pos = camera.global_position
+	if args.get("scenario", "load") == "approach":
+		_place_for_approach()
 	base_near = camera.near
 	Presets.clip_planes(camera, terrain, base_near)
 
@@ -327,6 +342,33 @@ func _end_phase() -> void:
 	print("BENCH: phase %s done: %d frames, %.0f ms, frame p50 %.2f p99 %.2f max %.2f ms" % [
 		phase, phase_frame, r["wall_ms"], r["frame_ms"]["p50"], r["frame_ms"]["p99"], r["frame_ms"]["max"]])
 	_take_shots(phase + "_end")
+
+
+## Approach scenario: the camera loads at the far pose, looking at the start pose it will fly to (the direction from
+## any point of the straight flight to its end is the same: the orientation stays).
+func _place_for_approach() -> void:
+	start_rot = camera.rotation_degrees
+	approach_from_pos = start_pos + Vector3(-float(args.get("approach_out", "2000")), float(args.get("approach_from", "1500")), 0)
+	camera.global_position = approach_from_pos
+	camera.look_at(start_pos, Vector3.UP)
+	print("BENCH: approach from %s to %s" % [approach_from_pos, start_pos])
+
+
+## Approach scenario, one frame: the camera on the straight line at constant speed, a screenshot every
+## --approach_shot_every seconds; true on arrival (the start pose's position and rotation set).
+func _run_approach() -> bool:
+	var elapsed := (Time.get_ticks_usec() - phase_start_usec) * 1e-6
+	var t := elapsed / float(args.get("approach_seconds", "20"))
+	camera.global_position = approach_from_pos.lerp(start_pos, minf(t, 1.0))
+	var every := float(args.get("approach_shot_every", "1"))
+	if args.has("approach_shots") and elapsed >= approach_shot_next * every:
+		_save_shot("%s/approach_%02d_%ds.png" % [args["approach_shots"], approach_shot_next, int(approach_shot_next * every)])
+		approach_shot_next += 1
+	if t < 1.0:
+		return false
+	camera.global_position = start_pos
+	camera.rotation_degrees = start_rot
+	return true
 
 
 ## Raise or lower the camera to p_height metres above the terrain under it (SDF distance, iterated).
@@ -467,6 +509,8 @@ func _process(delta: float) -> void:
 					_begin_phase("dig")
 				elif args.get("scenario", "load") == "rise":
 					_begin_phase("rise_0")
+				elif args.get("scenario", "load") == "approach":
+					_begin_phase("approach")
 				else:
 					_begin_phase("steady")
 		"dig":
@@ -502,6 +546,10 @@ func _process(delta: float) -> void:
 			if walked >= 1.0:
 				_end_phase()
 				_take_shots("walk_end")
+				_begin_phase("settle")
+		"approach":
+			if _run_approach():
+				_end_phase()  # its shots: approach_end
 				_begin_phase("settle")
 		"fly_out":
 			camera.global_position = start_pos + Vector3(fly_dist, 0, 0) * minf(leg, 1.0)

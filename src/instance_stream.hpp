@@ -1,5 +1,6 @@
 #pragma once
 
+#include "latency_hist.hpp"
 #include "scatter_source.hpp"
 
 #include <godot_cpp/variant/dictionary.hpp>
@@ -175,6 +176,7 @@ private:
     struct Parked {
         uint64_t tag = 0;
         uint64_t seq = 0; // park order
+        uint64_t frame = 0; // the poll() frame it was parked at (stats: park to hand-back)
         int missing = 0;
         bool done = false; // in ready_chunks
         std::vector<SourceKey> keys; // pinned
@@ -214,6 +216,14 @@ private:
         int64_t usec_by[2][ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t placed = 0;
         int64_t evicted = 0;
+        int64_t evicted_by[2][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD: computed / (computed - evicted) = recompute ratio
+        int64_t keys_created = 0; // entries created by request(), inputs included
+        int64_t admit_keys_created = 0; // of keys_created: by admit()
+        int64_t admit_keys_created_max = 0; // by one admit()
+        int64_t jobs_queued_max = 0; // the FIFO's depth (start)
+        uint64_t land_usec = 0; // land() and its place(), under the lock
+        uint64_t evict_usec = 0; // poll()'s eviction loop
+        LatencyHist park_frames; // poll() frames from a chunk's park to its hand-back
         int64_t slots_full = 0; // placements refused: no room even after evicting
         int64_t slots_peak = 0;
         int64_t admitted[3] = {}; // per Admit answer

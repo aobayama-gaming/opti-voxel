@@ -2,6 +2,7 @@
 
 #include "chunk_output.hpp"
 #include "godot_cpp/variant/variant.hpp"
+#include "latency_hist.hpp"
 #include "lod_structures.hpp"
 
 #include <memory>
@@ -14,6 +15,7 @@ struct Stall {
     int32_t count = 0;
     int32_t n[64] = {};
     uint64_t waiting = 0; // the sub-cubes with n > 0
+    uint64_t since = 0; // VoxelState::frame when it was first stalled (stats; not compared)
 
     // One dirty chunk overlapping p_bits anchored (+1) or no longer anchored (-1).
     void add(uint64_t p_bits, int32_t p_delta);
@@ -53,6 +55,9 @@ struct VoxelState {
     // Chunks whose hidden_mask changed (or that were re-meshed into new rows) since push_coverage.
     HashSet<ChunkId, Vector3i64Hasher> coverage_changed;
 
+    // The caller's frame counter (VoxelTerrain::_process), for the hand-off latency.
+    uint64_t frame = 0;
+
     // Debug (--destroy_verify): check every scan delta against the full sets, and every update_destroy
     // against compute_destroy_full.
     bool verify = false;
@@ -71,6 +76,9 @@ struct VoxelState {
         int64_t verify_mismatches = 0; // to_destroy, stall counts, dirty and leaving sets vs the full recompute
         int64_t delta_mismatches = 0; // scan deltas that don't lead from the previous scan to the new one
         int64_t octree_violations = 0; // scanned chunks with a scanned ancestor (the scan must be an octree cut)
+        // Frames from a loaded chunk's first stalled sub-cube to its last one clearing (its replacements loaded, or no
+        // longer scanned): how long a parent stays drawn over its children. Cumulative.
+        LatencyHist handoff_frames;
     } stats;
 
     // A new scan and the change from the previous one (see ScanDelta).

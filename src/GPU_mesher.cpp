@@ -925,7 +925,9 @@ void GPUMesher::process_queue() {
         }
         SDFGpuTable *table = sdf->get_gpu_table();
         std::vector<std::vector<uint32_t>> palettes;
+        const uint64_t t_lists = now_usec();
         const uint32_t kept = table->build_lists(in_flight_ids, chunk_param, new_batch, table_list, uint32_t(table_list_capacity / 4), &palettes);
+        dispatch_times.build_lists += now_usec() - t_lists;
         // The chunks whose lists didn't fit the buffer go first in a later batch (remesh_queue holds first meshes too,
         // remesh_chunks puts the batch in flight there).
         for (uint32_t i = kept; i < count; i++) {
@@ -941,7 +943,9 @@ void GPUMesher::process_queue() {
             unpacked_chunks[i].palette = std::move(palettes[i]);
         }
         if (table->upload_cursor() != sent_records) {
+            const uint64_t t_records = now_usec();
             table_records = table->record_bytes(sent_records, sent_records);
+            dispatch_times.record_bytes += now_usec() - t_records;
         }
         mutex->lock();
         input_chunk_id = new_batch;

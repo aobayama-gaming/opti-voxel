@@ -324,7 +324,8 @@ void GPUDirectMesher::_rt_read_timestamps() {
         stats.gpu_compute.add((b.pass[4] - b.begin) / 1000);
         stats.gpu_copy.add((b.copy - b.pass[4]) / 1000);
         if (b.copy > b.begin) {
-            measured_batches.push_back({ (uint32_t)kv.key, uint64_t(b.copy - b.begin) / 1000 });
+            const uint64_t sdf_ns = b.pass[0] >= b.begin ? uint64_t(b.pass[0] - b.begin) : 0;
+            measured_batches.push_back({ (uint32_t)kv.key, uint64_t(b.copy - b.begin) / 1000, sdf_ns / 1000 });
         }
     }
     mutex->unlock();
@@ -369,12 +370,16 @@ uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::ve
         PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes) {
     SDFGpuTable *table = sdf->get_gpu_table();
     // Main thread, like the edits: the lists and the records come from the same snapshot.
+    const uint64_t t_lists = now_usec();
     const uint32_t kept = table->build_lists(r_chunks, chunk_param, r_ids, r_list, uint32_t(table_list_capacity / 4), r_palettes);
+    dispatch_times.build_lists += now_usec() - t_lists;
     r_rest.assign(r_chunks.begin() + kept, r_chunks.end());
     r_chunks.resize(kept);
     r_ids.resize(int64_t(kept) * GPUFrame::CHUNK_INPUT_BYTES);
     if (table->upload_cursor() != sent_records) {
+        const uint64_t t_records = now_usec();
         r_records = table->record_bytes(sent_records, sent_records);
+        dispatch_times.record_bytes += now_usec() - t_records;
     }
     return table->version();
 }
@@ -690,33 +695,39 @@ void GPUDirectMesher::process_queue() {
 }
 
 void GPUDirectMesher::_update_cost_model() {
-    std::vector<std::pair<uint32_t, uint64_t>> measured;
+    std::vector<MeasuredBatch> measured;
     mutex->lock();
     measured.swap(measured_batches);
     mutex->unlock();
-    for (const std::pair<uint32_t, uint64_t> &m : measured) {
-        HashMap<uint32_t, std::vector<uint32_t>>::Iterator it = batch_lod_counts.find(m.first);
-        if (it == batch_lod_counts.end()) {
+    for (const MeasuredBatch &m : measured) {
+        HashMap<uint32_t, BatchCost>::Iterator it = batch_costs.find(m.batch_id);
+        if (it == batch_costs.end()) {
             continue;
         }
-        const double estimate = cost_model.estimate(it->value);
+        const double estimate = cost_model.estimate(it->value.lod_counts);
         if (estimate > 0.0) {
-            stats.model_ratio_sum += m.second / estimate;
+            stats.model_ratio_sum += m.total_us / estimate;
             stats.model_ratio_count++;
         }
-        cost_model.observe(it->value, (double)m.second);
-        batch_lod_counts.remove(it);
+        cost_model.observe(it->value.lod_counts, (double)m.total_us);
+        const uint32_t words = it->value.list_words;
+        ListWordsBin &bin = gpu_by_list_words[words == 0 ? 0 : 32 - __builtin_clz(words)];
+        bin.batches++;
+        bin.words += words;
+        bin.sdf_us += m.sdf_us;
+        bin.total_us += m.total_us;
+        batch_costs.remove(it);
     }
     // A batch whose timestamps were never captured (over the per-frame limit) is forgotten after a while.
-    if (batch_lod_counts.size() > 1024) {
+    if (batch_costs.size() > 1024) {
         std::vector<uint32_t> old;
-        for (const KeyValue<uint32_t, std::vector<uint32_t>> &kv : batch_lod_counts) {
+        for (const KeyValue<uint32_t, BatchCost> &kv : batch_costs) {
             if (next_batch_id - kv.key > 1024) {
                 old.push_back(kv.key);
             }
         }
         for (uint32_t id : old) {
-            batch_lod_counts.erase(id);
+            batch_costs.erase(id);
         }
     }
 }
@@ -805,7 +816,10 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
 
     const uint32_t batch_id = next_batch_id++;
     const uint32_t count = chunks.size();
-    batch_lod_counts[batch_id] = std::move(lod_counts);
+    const uint32_t list_words = uint32_t(list.size() / 4);
+    stats.list_words_total += list_words;
+    stats.list_words_max = MAX(stats.list_words_max, (uint64_t)list_words);
+    batch_costs[batch_id] = BatchCost{ std::move(lod_counts), list_words };
     batch.table_version = table_version;
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
@@ -1329,6 +1343,10 @@ Dictionary GPUDirectMesher::get_stats() {
     d["list_requeued"] = (int64_t)stats.list_requeued;
     d["admit_parked"] = (int64_t)gate.parked;
     d["admit_later"] = (int64_t)gate.later;
+    d["stale_parked"] = (int64_t)gate.stale;
+    d["list_words_total"] = (int64_t)stats.list_words_total;
+    d["list_words_max"] = (int64_t)stats.list_words_max;
+    d["gpu_by_list_words"] = _gpu_by_list_words_stats();
     d["audit_batches"] = (int64_t)stats.audit_batches;
     d["missing_neighbor"] = (int64_t)stats.missing_neighbor;
     d["nan_vertices"] = (int64_t)stats.nan_vertices;
@@ -1369,6 +1387,25 @@ Dictionary GPUDirectMesher::get_stats() {
     d["readback_latency_frames"] = frames;
     d["pool"] = pool->get_stats();
     return d;
+}
+
+Array GPUDirectMesher::_gpu_by_list_words_stats() const {
+    Array out;
+    for (int b = 0; b < LIST_WORD_BINS; b++) {
+        const ListWordsBin &bin = gpu_by_list_words[b];
+        if (bin.batches == 0) {
+            continue;
+        }
+        Dictionary d;
+        d["words_lo"] = b == 0 ? int64_t(0) : int64_t(1) << (b - 1);
+        d["words_hi"] = b == 0 ? int64_t(0) : (int64_t(1) << b) - 1;
+        d["batches"] = (int64_t)bin.batches;
+        d["words_avg"] = double(bin.words) / double(bin.batches);
+        d["sdf_us_avg"] = double(bin.sdf_us) / double(bin.batches);
+        d["total_us_avg"] = double(bin.total_us) / double(bin.batches);
+        out.push_back(d);
+    }
+    return out;
 }
 
 void GPUDirectMesher::destroy() {

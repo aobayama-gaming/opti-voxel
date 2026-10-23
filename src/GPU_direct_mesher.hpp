@@ -115,6 +115,12 @@ public:
     // initialize(): the render thread compiles the vertex shader in _rt_initialize.
     void set_dual_contouring(bool p_enable) { dual_contouring = p_enable; }
     Dictionary get_stats();
+    // Main thread: the dispatch's sub-timers since the start (VoxelTerrain's sections).
+    DispatchTimes get_dispatch_times() const {
+        DispatchTimes t = dispatch_times;
+        t.gate_admit = gate.admit_usec;
+        return t;
+    }
     QuadPagePool *get_pool() const { return pool; }
 
 private:
@@ -197,12 +203,32 @@ private:
     uint64_t frame = 0;
 
     // GPU budget (Settings::gpu_budget_ms). The render thread hands each batch's measured GPU time
-    // (us, timestamps begin..copy) to `measured_batches` (under mutex); the main thread matches it with
-    // the batch's chunks per LOD and corrects the model.
+    // (us, timestamps begin..copy, and its sdf pass) to `measured_batches` (under mutex); the main thread matches it
+    // with the batch's chunks per LOD and corrects the model, and bins it by the batch's list words (stats).
+    struct BatchCost {
+        std::vector<uint32_t> lod_counts;
+        uint32_t list_words = 0; // the batch's instance list (Σ of its chunks' list lengths)
+    };
+    struct MeasuredBatch {
+        uint32_t batch_id = 0;
+        uint64_t total_us = 0; // begin..copy
+        uint64_t sdf_us = 0; // pass 0: the cascade and the table fold
+    };
     GPUCostModel cost_model;
-    HashMap<uint32_t, std::vector<uint32_t>> batch_lod_counts;
-    std::vector<std::pair<uint32_t, uint64_t>> measured_batches;
+    HashMap<uint32_t, BatchCost> batch_costs;
+    std::vector<MeasuredBatch> measured_batches;
     void _update_cost_model();
+    // GPU time per batch by its list words: bin b holds the batches of [2^(b-1), 2^b) words (bin 0: none).
+    struct ListWordsBin {
+        uint64_t batches = 0;
+        uint64_t words = 0;
+        uint64_t sdf_us = 0;
+        uint64_t total_us = 0;
+    };
+    static constexpr int LIST_WORD_BINS = 33;
+    ListWordsBin gpu_by_list_words[LIST_WORD_BINS];
+    Array _gpu_by_list_words_stats() const;
+    DispatchTimes dispatch_times; // gate_admit read from the gate
 
     // ---- render thread only ----
     RenderingDevice *rd = nullptr;
@@ -320,5 +346,7 @@ private:
         TimingStat budget_frame_estimate; // estimated GPU time of the mesh batches dispatched in a frame
         double model_ratio_sum = 0.0; // measured / estimated GPU time of the batches matched
         uint64_t model_ratio_count = 0;
+        uint64_t list_words_total = 0; // instance list words of the mesh batches dispatched
+        uint64_t list_words_max = 0; // in one batch
     } stats;
 };
