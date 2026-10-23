@@ -9,6 +9,10 @@
 // may not).
 #include <godot_cpp/templates/hashfuncs.hpp>
 
+#include <algorithm>
+#include <unordered_map>
+#include <vector>
+
 // The ov support layer (src/ov/): the engine-free vocabulary the core builds on. The format shim's
 // results are pinned here because core report text and GLSL splices flow through it.
 
@@ -116,4 +120,67 @@ TEST_CASE("ov::HashSet: the godot call surface") {
     CHECK_FALSE(set.erase(6));
     CHECK(set.erase(5));
     CHECK(set.is_empty());
+}
+
+namespace {
+// 8 hash values for every key: long probe runs that wrap around the index, shifts on every erase.
+struct CollidingHasher {
+    static uint32_t hash(const uint32_t &p_v) { return (p_v % 8) * 0x9E3779B1u; }
+};
+} // namespace
+
+TEST_CASE("ov::HashMap: random inserts and erases match std::unordered_map") {
+    ov::HashMap<uint32_t, uint32_t, CollidingHasher> map;
+    std::unordered_map<uint32_t, uint32_t> oracle;
+    uint32_t state = 1;
+    for (int step = 0; step < 20000; step++) {
+        state = ov::fmix32(state + uint32_t(step));
+        const uint32_t key = state % 300;
+        switch (state >> 30) {
+            case 0:
+                CHECK(map.erase(key) == (oracle.erase(key) != 0));
+                break;
+            case 1:
+                map[key] += 1;
+                oracle[key] += 1;
+                break;
+            default:
+                map.insert(key, state);
+                oracle[key] = state;
+                break;
+        }
+        if (step % 5000 == 4999) {
+            map.clear(); // keeps the index: later inserts reuse it
+            oracle.clear();
+        }
+    }
+    CHECK(map.size() == oracle.size());
+    size_t seen = 0;
+    for (const auto &kv : map) {
+        const auto it = oracle.find(kv.first);
+        CHECK((it != oracle.end() && kv.second == it->second));
+        seen++;
+    }
+    CHECK(seen == oracle.size());
+    for (uint32_t key = 0; key < 300; key++) {
+        const uint32_t *v = map.getptr(key);
+        CHECK((v != nullptr) == (oracle.count(key) != 0));
+    }
+}
+
+TEST_CASE("ov::HashSet: remove(begin()) until empty pops every key once") {
+    ov::HashSet<uint32_t, CollidingHasher> set;
+    for (uint32_t key = 0; key < 1000; key++) {
+        set.insert(key * 7);
+    }
+    std::vector<bool> popped(1000, false);
+    while (!set.is_empty()) {
+        const uint32_t key = *set.begin();
+        set.remove(set.begin());
+        CHECK(key % 7 == 0);
+        CHECK_FALSE(popped[key / 7]);
+        popped[key / 7] = true;
+        CHECK_FALSE(set.has(key));
+    }
+    CHECK(std::count(popped.begin(), popped.end(), true) == 1000);
 }

@@ -59,9 +59,9 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
    it into a core record (page, quads, palette, an opaque handle) and the engine-side owner, with a core
    log sink for `debug_log`; move the index's types (`DefRecord`, boxes, bands) out of
    `archetype_table.hpp` into a small core header.
-1c. **The containers**: `ov::HashMap|HashSet` sit on node-based `std::unordered_*` where godot's were
-   open addressing; `LODHashSet` is rebuilt every scan. If `bench_ab.sh` shows it, back them with a
-   flat table.
+1c. ~~**The containers**~~ done: `ov::HashMap|HashSet` are flat tables (dense entries + a Robin Hood
+   index, `ov/containers.hpp`). On std's node-based `unordered_*` the forest5cm fly lost +353% scan
+   ingest and +51% `_process`; the flat table measured -27% / -12% against godot's (PR #101).
 2. **The GPU seam**: `sdf_base.hpp`'s `RenderingDevice*`/`RID` interface becomes the backend vtable
    (~15 ops: storage/uniform buffer create, texture create/copy, compute pipeline + list begin /
    bind / push / dispatch, buffer_update/get_data, timestamps, free). Godot-RD stays the first
