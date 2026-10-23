@@ -4,9 +4,6 @@
 #include "chunk_math.hpp"
 #include "ov/containers.hpp"
 
-#include <godot_cpp/templates/hash_map.hpp>
-#include <godot_cpp/templates/hash_set.hpp>
-
 #include <memory>
 #include <vector>
 
