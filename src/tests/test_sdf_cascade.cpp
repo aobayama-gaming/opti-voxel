@@ -194,7 +194,7 @@ TEST_CASE("CascadeGLSL: point items carry any lattice point and its LOD") {
     for (const int lod : { 0, 1, 5, 24 }) {
         for (const int64_t base : bases) {
             const VoxelPos p = SDFBase::ground_lattice(VoxelPos(base, base + 3, -base), lod) + VoxelPos(int64_t(1) << lod, 0, 0);
-            GPUFrame::encode_point_item(slot, p, lod);
+            CHECK(GPUFrame::encode_point_item(slot, p, lod));
             CHECK(ov::get_u32(slot + GPUFrame::POINT_LOD_AT) == uint32_t(lod));
             for (int a = 0; a < 3; a++) {
                 CAPTURE(lod);
@@ -204,6 +204,12 @@ TEST_CASE("CascadeGLSL: point items carry any lattice point and its LOD") {
             }
         }
     }
+    // Off its lattice, or a LOD the GPU can't read: refused (the GPU would read another point).
+    CHECK(!GPUFrame::encode_point_item(slot, VoxelPos(32, 33, 32), 5));
+    CHECK(!GPUFrame::encode_point_item(slot, VoxelPos(-1, 0, 0), 1));
+    CHECK(!GPUFrame::encode_point_item(slot, VoxelPos(0, 0, 0), -1));
+    CHECK(!GPUFrame::encode_point_item(slot, VoxelPos(0, 0, 0), ChunkMath::MAX_LOD_NUMBERS));
+    CHECK(GPUFrame::encode_point_item(slot, VoxelPos(-32, 32, 0), 5));
 }
 
 // ground_field is its three steps (the GPU's point items read the middle one): the nearest lattice point (ties up), the

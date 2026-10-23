@@ -77,8 +77,7 @@ Cascade::FieldRange field_range(const SDFBase *p_sdf, bool p_points);
 // p_fields false: the ground alone (a spec with fields: the variant for the levels below its climate floor).
 String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_fields = true);
 
-// The point items' ChunkParam: p_param with skirt 0 and chunk_size = the chunk's voxel dimension, so an item's box is
-// its point alone.
+// The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
 ChunkParam point_param(const ChunkParam &p_param);
 
 // The sdf_material declaration (uint per sample, indexed like sdf_sample) at p_binding, with p_access (readonly,
@@ -106,7 +105,7 @@ public:
     bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
             RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr, RID p_table_records = RID(),
             RID p_table_list = RID(), RID p_sdf_material = RID());
-    // Point items (FieldPointsGPU): p_input holds GPUFrame::encode_point_item items (any LODs), p_param_ubo the std140
+    // Point items (CascadePointsGPU): p_input holds GPUFrame::encode_point_item items (any LODs), p_param_ubo the std140
     // point_param, p_values one vec4 per item (SDFCascade::ground_unit's bits).
     bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
             RID p_values);

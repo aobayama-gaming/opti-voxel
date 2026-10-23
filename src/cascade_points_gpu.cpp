@@ -88,9 +88,8 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
     uint8_t *items = input_bytes.ptrw();
     for (uint32_t i = 0; i < p_count; i++) {
         const int lod = p_lods[i];
-        ERR_FAIL_COND_V_MSG(lod < 0 || lod >= ChunkMath::MAX_LOD_NUMBERS || ((p_points[i].x | p_points[i].y | p_points[i].z) & ((int64_t(1) << lod) - 1)), false,
+        ERR_FAIL_COND_V_MSG(!GPUFrame::encode_point_item(items + int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES, p_points[i], lod), false,
                 "CascadePointsGPU: a point must be on its LOD's lattice.");
-        GPUFrame::encode_point_item(items + int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES, p_points[i], lod);
         lods.x = MIN(lods.x, lod);
         lods.y = MAX(lods.y, lod);
     }

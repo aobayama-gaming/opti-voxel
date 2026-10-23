@@ -576,7 +576,6 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
 
 ChunkParam point_param(const ChunkParam &p_param) {
     ChunkParam p = p_param;
-    p.chunk_size = p_param.chunk_voxel_dimension();
     p.skirt_size = 0;
     return p;
 }

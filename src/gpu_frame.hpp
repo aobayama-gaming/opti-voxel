@@ -76,9 +76,13 @@ static constexpr uint32_t POINT_LOD_AT = CHUNK_LIST_OFFSET_AT;
 
 // Writes one point item (CHUNK_INPUT_BYTES) at r_slot: a point of Λ_lod (p_point a multiple of 2^lod, any index), its
 // low words where a chunk's id goes, its high words where a chunk's anchor's go, and the LOD itself in id.w (no id, so
-// no corner grid). The GPU reads it back with point_frame (glsl_point_frame).
-inline void encode_point_item(uint8_t *r_slot, const VoxelPos &p_point, int p_lod) {
+// no corner grid). The GPU reads it back with point_frame (glsl_point_frame). False (nothing written) for a point off
+// its lattice or a LOD out of [0, MAX_LOD_NUMBERS): the GPU would read another point.
+inline bool encode_point_item(uint8_t *r_slot, const VoxelPos &p_point, int p_lod) {
     using namespace WorldCoord;
+    if (p_lod < 0 || p_lod >= ChunkMath::MAX_LOD_NUMBERS || ((p_point.x | p_point.y | p_point.z) & ((int64_t(1) << p_lod) - 1)) != 0) {
+        return false;
+    }
     ov::put_u32(r_slot + 0, lo32(p_point.x));
     ov::put_u32(r_slot + 4, lo32(p_point.y));
     ov::put_u32(r_slot + 8, lo32(p_point.z));
@@ -87,6 +91,7 @@ inline void encode_point_item(uint8_t *r_slot, const VoxelPos &p_point, int p_lo
     ov::put_s32(r_slot + 20, hi32(p_point.y));
     ov::put_s32(r_slot + 24, hi32(p_point.z));
     ov::put_s32(r_slot + CHUNK_LIST_COUNT_AT, 0);
+    return true;
 }
 
 } // namespace GPUFrame

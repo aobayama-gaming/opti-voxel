@@ -67,8 +67,10 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     CascadePointsGPU gpu;
     CascadePointsGPU::BatchStats stats;
     std::vector<Float4> units(voxels.size());
-    // One batch of every LOD: items of different LODs side by side.
-    const bool ran = gpu.create(p_rd, &sdf, param, uint32_t(voxels.size())) && gpu.units(lattice.data(), lods.data(), int(voxels.size()), units.data(), stats);
+    std::vector<Float4> fields(voxels.size());
+    // One batch of every LOD: items of different LODs side by side; the registers, then the site walk's entry point.
+    const bool ran = gpu.create(p_rd, &sdf, param, uint32_t(voxels.size())) && gpu.units(lattice.data(), lods.data(), int(voxels.size()), units.data(), stats) &&
+            gpu.ground_field(voxels.data(), lods.data(), int(voxels.size()), fields.data(), stats);
     if (!ran) {
         examples.push_back("the point passes failed (compile or run)");
         differing++;
@@ -76,11 +78,11 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     for (size_t first = 0; ran && first < voxels.size(); first += PLACES * PER_PLACE) {
         int64_t lod_differing = 0;
         for (size_t i = first; i < first + PLACES * PER_PLACE; i++) {
-            // The register, the site walk's reading made of it and the discoverer's value made of it (CPU composition,
-            // CascadePointsGPU's), each against the CPU's own entry point.
+            // The register, the site walk's reading (CascadePointsGPU::ground_field) and the discoverer's value made of the
+            // register (cull_values' conversion), each against the CPU's own entry point.
             const int lod = lods[i];
             const Float4 want_unit = sdf.ground_unit(lattice[i], lod);
-            const Float4 field = SDFBase::extend_field(units[i], lattice[i], voxels[i], lod);
+            const Float4 &field = fields[i];
             const Float4 want_field = sdf.ground_field(voxels[i], lod);
             const float cull = SDFCascade::to_metres(units[i], lod, param.voxel_size).w;
             const float want_cull = sdf.evaluate_cull(WorldPos{ lattice[i], Float3() }, lod);
