@@ -347,10 +347,12 @@ to every change, and a reviewer may reject a PR on any of them.
   meets and sorts their sites in it by cell: the region's walk from that level by construction, `surface_sites`'
   `p_min_level`, unit-tested on the cascade too; the old blobs bit for bit where the zone doesn't clip the region). A
   PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of its box: at LOD 0 those of its `SITES`
-  tile (its one input: the near layers read it), coarser no input: it runs the walks of the site tiles inside it itself
-  (the same calls, so the same sites; not one walk of its whole box, which starts at a coarser level and may prune a cell
-  a site tile keeps), sorted by cell; an air tile is one evaluation (the 1M forest's LOD 6-7 tiles asked 4,096 site
-  tiles each as jobs before, 758k jobs). Every record at LOD 0, those listed at L coarser, grown from the forest's
+  tile (its one input: the near layers read it), coarser no input: one walk of its own box. Every walk of a source
+  starts at its zone's level (`CellScatter::sites`: `surface_sites`' `p_min_level` = `walk_level(zone, side)`), so a box
+  keeps exactly the sites the zone's walk keeps in it: the coarse tile's walk is its site tiles' union, and the streamed
+  sites are the whole build's (a box's own level is coarser for a wider box and may prune a cell a finer start keeps).
+  The 1M forest's LOD 6-7 tiles asked 4,096 site tiles each as jobs before (758k jobs); inlining those walks was
+  measured 6x slower (serial, redone per LOD). Every record at LOD 0, those listed at L coarser, grown from the forest's
   `hull_only_lod` hull-only (Trees, below); the record pyramid (LOD-0 tiles' groups merged in cell order, each filtered at
   L) is the unit tests' oracle: bit-identical tiles and lists. A LOD with the
   LOD-0 side (1-3 at 5 cm) has no PARTS key: `keys()` emits `part_key_lod(L)`'s and the chunk's `meeting` filters at L.

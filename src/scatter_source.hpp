@@ -21,8 +21,9 @@
 //   doubled until it holds two chunks of the LOD. It grows the sites of its box in the zone (CellScatter::grow, finished
 //   like the table's) and keeps one group per site: at LOD 0 every record (a record no LOD lists still weighs in the
 //   blobs), coarser the ones listed at L. A LOD-0 tile reads its site tile (1:1: the near layers read the sites through
-//   it); a coarser one runs the walks of the site tiles inside it itself (the same calls: their sites bit for bit), in
-//   cell order, instead of asking the 8^L site tiles of its cube as jobs (mostly air: one evaluation each). A LOD whose side
+//   it); a coarser one walks its own box once (every walk of the source starts at the zone's level, CellScatter::sites:
+//   the union of the site tiles' sites bit for bit), in cell order, instead of asking the 8^L site tiles of its cube
+//   (mostly air) as jobs. A LOD whose side
 //   is a finer LOD's has no key of its own: its chunks read that LOD's (part_key_lod) and filter at their LOD. A chunk
 //   reads a few keys at any LOD; none from the profile's lod_end on.
 // - A blob tile of layer L (SourceKey::BLOBS): a cube of blob_tile_cells(L) layer-L cells (moment_layers.hpp); its

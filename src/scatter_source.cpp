@@ -321,13 +321,11 @@ int ScatterSource::proxy_level(int p_layer) const {
 void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
     std::vector<TableRecord> grown;
     if (p_key.lod > 0) {
-        // The walks of the LOD-0 site tiles inside it, the same calls, inline (an air tile is one evaluation, where it was a
-        // job each), then in cell order. Not one walk of its whole box: a walk starts at the level its extent picks, and a
-        // coarser start may prune a cell a site tile's keeps (surface_sites), so only the tiles' own calls give their sites.
+        // One walk of its own box, from the zone's level as every walk of the source (CellScatter::sites): exactly the
+        // sites of the LOD-0 site tiles inside it, in cell order, the air pruned at the coarse levels (the 8^L site tiles
+        // it asked before cost a job each, most of them empty).
         std::vector<CellSite> sites;
-        for_each_tile(tile_box(p_key).clipped(set.scatter.zone), part_tile_side(0),
-                [&](const VoxelPos &p_tile) { set.scatter.sites(tile_box(SourceKey{ set.id, SourceKey::SITES, 0, p_tile }), sites); });
-        std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
+        set.scatter.sites(tile_box(p_key), sites);
         for (const CellSite &cs : sites) {
             grow_site(cs, p_key.lod, grown, r_out);
         }

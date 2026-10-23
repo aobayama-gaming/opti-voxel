@@ -40,7 +40,10 @@ struct CellScatter {
     bool valid() const { return zone.valid && side > 0 && ground && up && generate; }
     uint32_t class_index(uint32_t p_variant) const { return classes > 1 ? p_variant % classes : 0u; }
     // The accepted sites whose base lies in p_query and the zone, in cell order (surface_sites; p_snap false: on the
-    // coarse plane). On the worker pool (not from inside a pool task, unless it holds an InlineParallelFor).
+    // coarse plane). The walk starts at the zone's level (walk_level(zone, side)): any box keeps exactly the sites the
+    // zone's own walk keeps in it, so the site tiles, the coarse part tiles and a whole build agree by construction (a
+    // box's own level depends on its extent, and a coarser start may prune a cell a finer one keeps). On the worker pool
+    // (not from inside a pool task, unless it holds an InlineParallelFor).
     void sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap = true) const;
     // A site's records along the up at its base, for LOD p_lod (generate; -1: all).
     void grow(const Site &p_site, int p_lod, std::vector<TableRecord> &r_out) const { generate(p_site, up(p_site.base), p_lod, r_out); }

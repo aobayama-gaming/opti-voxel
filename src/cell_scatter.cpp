@@ -16,7 +16,7 @@ void CellScatter::sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, b
         return;
     }
     const size_t first = r_out.size();
-    surface_sites(box.lo, box.hi, side, salt, ground, r_out, p_snap);
+    surface_sites(box.lo, box.hi, side, salt, ground, r_out, p_snap, walk_level(zone, side));
     if (accept) {
         r_out.erase(std::remove_if(r_out.begin() + first, r_out.end(), [this](const CellSite &p_s) { return !accept(p_s.site.base); }), r_out.end());
     }
