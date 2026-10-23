@@ -2,7 +2,9 @@
 
 #include "sdf_cascade.hpp"
 
+#include <algorithm>
 #include <iterator>
+#include <vector>
 
 // The terrains CascadeSpike (cascade_spike.cpp) checks and times: "8" / "4" channels, "4c" LINEAR4 with the example
 // climate carried and modulating the ground, "4f" its fields without multipliers (carried only for the biome pick: the
@@ -46,6 +48,15 @@ inline bool parse_variant(const String &p_label, SpikeSet &r_set) {
         labels += String(labels.is_empty() ? "" : ", ") + l;
     }
     ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + String("' (") + labels + String(")."));
+}
+
+// The median of timings (0 for none).
+inline double median(std::vector<double> p_v) {
+    if (p_v.empty()) {
+        return 0.0;
+    }
+    std::sort(p_v.begin(), p_v.end());
+    return p_v[p_v.size() / 2];
 }
 
 // p_sdf configured for p_v (r_param: the variant's chunk parameters).

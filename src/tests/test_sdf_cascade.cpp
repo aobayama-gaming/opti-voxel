@@ -186,46 +186,16 @@ TEST_CASE("SDFCascade: evaluate_batch equals evaluate, bit for bit") {
     }
 }
 
-// A point item is the ChunkInput of the chunk whose anchor is the point: the GPU derives the anchor's low words
-// from the id's ((id_lo - 2^L) * half chunk, wrapping) and takes its high words as they are.
-TEST_CASE("CascadeGLSL: point items encode the corner as the chunk anchor, at its LOD") {
-    const ChunkParam param;
-    const ChunkParam pp = CascadeGLSL::point_param(param);
-    CHECK(pp.skirt_size == 0);
-    CHECK(pp.half_chunk_voxels() == param.half_chunk_voxels());
-    PackedByteArray bytes;
-    bytes.resize(GPUFrame::CHUNK_INPUT_BYTES);
-    const int64_t bases[] = { 0, -(int64_t(1) << 32), (int64_t(1) << 60) - 99999, -(int64_t(1) << 60) + 777 };
-    for (const int lod : { 0, 1, 9, 24 }) {
-        const int64_t span = param.half_chunk_voxels() << (lod + 1);
-        for (const int64_t base : bases) {
-            const VoxelPos p(WorldCoord::floor_div(base, span) * span, (WorldCoord::floor_div(base, span) - 3) * span, -WorldCoord::floor_div(base, span) * span);
-            CHECK(CascadeGLSL::encode_point_input(bytes, 0, p, lod, pp));
-            const uint32_t id_lo[3] = { uint32_t(bytes.decode_u32(0)), uint32_t(bytes.decode_u32(4)), uint32_t(bytes.decode_u32(8)) };
-            for (int a = 0; a < 3; a++) {
-                CAPTURE(lod);
-                CAPTURE(a);
-                // chunk_frame(): lod from the id's lowest set bit, anchor low word (id_lo - 2^L) * half.
-                CHECK(__builtin_ctz(id_lo[a]) == lod);
-                CHECK((id_lo[a] - (uint32_t(1) << lod)) * uint32_t(pp.half_chunk_voxels()) == WorldCoord::lo32(p[a]));
-                CHECK(bytes.decode_s32(16 + 4 * a) == WorldCoord::hi32(p[a]));
-            }
-        }
-    }
-    // Off the corner grid: refused (prints one expected error).
-    CHECK(!CascadeGLSL::encode_point_input(bytes, 0, VoxelPos(14, 0, 0), 0, pp));
-}
-
-// A field item carries its lattice point's words and its LOD as they are: any point of Λ_L, odd indices included (the
-// site walk's readings), unlike a point item's corner grid.
-TEST_CASE("CascadeGLSL: field items carry any lattice point and its LOD") {
+// A point item carries its lattice point's words and its LOD as they are: any point of Λ_L, odd indices included (the
+// site walk's readings and the discoverer's corners).
+TEST_CASE("CascadeGLSL: point items carry any lattice point and its LOD") {
     uint8_t slot[GPUFrame::CHUNK_INPUT_BYTES];
     const int64_t bases[] = { 0, -(int64_t(1) << 32) - 1, (int64_t(1) << 60) - 99999, -(int64_t(1) << 60) + 777 };
     for (const int lod : { 0, 1, 5, 24 }) {
         for (const int64_t base : bases) {
-            const VoxelPos p = SDFCascade::ground_lattice(VoxelPos(base, base + 3, -base), lod) + VoxelPos(int64_t(1) << lod, 0, 0);
-            GPUFrame::encode_field_item(slot, p, lod);
-            CHECK(ov::get_u32(slot + GPUFrame::FIELD_LOD_AT) == uint32_t(lod));
+            const VoxelPos p = SDFBase::ground_lattice(VoxelPos(base, base + 3, -base), lod) + VoxelPos(int64_t(1) << lod, 0, 0);
+            GPUFrame::encode_point_item(slot, p, lod);
+            CHECK(ov::get_u32(slot + GPUFrame::POINT_LOD_AT) == uint32_t(lod));
             for (int a = 0; a < 3; a++) {
                 CAPTURE(lod);
                 CAPTURE(a);
@@ -236,42 +206,43 @@ TEST_CASE("CascadeGLSL: field items carry any lattice point and its LOD") {
     }
 }
 
-// ground_field is its three steps (the GPU's field points read the middle one): the nearest lattice point (ties up), the
-// unit register there, the extension along its gradient; a coarse LOD's reading is a lattice point's.
-TEST_CASE("SDFCascade: ground_field = extend_field(ground_unit(ground_lattice))") {
+// ground_field is its three steps (the GPU's point items read the middle one): the nearest lattice point (ties up), the
+// unit register there, the extension along its gradient; and evaluate_cull is that register in metres.
+TEST_CASE("SDFCascade: ground_field and evaluate_cull are made of ground_unit") {
     SDFCascade sdf;
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 25);
-    CHECK(SDFCascade::ground_lattice(VoxelPos(15, 16, 17), 5) == VoxelPos(0, 32, 32));
-    CHECK(SDFCascade::ground_lattice(VoxelPos(-17, -16, -15), 5) == VoxelPos(-32, 0, 0));
+    CHECK(SDFBase::ground_lattice(VoxelPos(15, 16, 17), 5) == VoxelPos(0, 32, 32));
+    CHECK(SDFBase::ground_lattice(VoxelPos(-17, -16, -15), 5) == VoxelPos(-32, 0, 0));
     for (const int lod : { 0, 3, 5, 8 }) {
         for (int i = 0; i < 64; i++) {
             const VoxelPos v(ExactNoise::random_offset(uint32_t(lod), uint32_t(i), 1, 1 << 20), 6000 + ExactNoise::random_offset(uint32_t(lod), uint32_t(i), 2, 256),
                     ExactNoise::random_offset(uint32_t(lod), uint32_t(i), 3, 1 << 20));
-            const VoxelPos at = SDFCascade::ground_lattice(v, lod);
-            CHECK(ExactNoise::same_bits(sdf.ground_field(v, lod), SDFCascade::extend_field(sdf.ground_unit(at, lod), at, v, lod)));
+            const VoxelPos at = SDFBase::ground_lattice(v, lod);
+            const ExactNoise::Float4 u = sdf.ground_unit(at, lod);
+            CHECK(ExactNoise::same_bits(sdf.ground_field(v, lod), SDFBase::extend_field(u, at, v, lod)));
+            CHECK(ExactNoise::float_bits(sdf.evaluate_cull(WorldPos{ at, Float3() }, lod)) == ExactNoise::float_bits(SDFCascade::to_metres(u, lod, param.voxel_size).w));
         }
     }
 }
 
-// The field pass: the level template with the field fill (frame from the item, the unit register out), the chunk and point
-// passes' text unchanged (pinned in test_climate_shape.cpp), and a batch that fits its scratch budget.
-TEST_CASE("CascadeGLSL: the field pass writes the unit register from the item's own frame") {
+// The point pass: the level template with the point fill (frame from the item, the unit register out); the chunk pass's
+// text is unchanged (pinned in test_climate_shape.cpp).
+TEST_CASE("CascadeGLSL: the point pass writes the unit register from the item's own frame") {
     SDFCascade sdf;
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 25);
-    const String code = CascadeGLSL::level_shader(&sdf, false, CascadeGLSL::Items::FIELDS);
-    CHECK(code.contains("field_value[sample_index] = r;"));
+    const String code = CascadeGLSL::level_shader(&sdf, false, true);
+    CHECK(code.contains("point_value[sample_index] = r;"));
     CHECK(code.contains("cascade_terrain_unit("));
-    CHECK(code.contains("f.lod = int(item.id.w);"));
+    CHECK(code.contains("ChunkFrame f = point_frame(input_chunk[pc.chunk_base + c]);"));
+    CHECK(code.contains("ChunkFrame point_frame(ChunkInput c)"));
     CHECK(!code.contains("/*ITEM_FRAME*/"));
-    CHECK(CascadeGLSL::level_shader(&sdf, false, CascadeGLSL::Items::POINTS).contains("chunk_frame(input_chunk[pc.chunk_base + c], chunk_param)"));
-    const uint32_t n = CascadeGLSL::field_points_for_scratch(&sdf, 64ull << 20);
-    CHECK(n > 1000);
-    CHECK(CascadeGLSL::field_points_for_scratch(&sdf, 128ull << 20) >= 2 * n - 1);
-    CHECK(CascadeGLSL::field_points_for_scratch(&sdf, 1) == 1);
+    const String chunks = CascadeGLSL::level_shader(&sdf, false, false);
+    CHECK(chunks.contains("ChunkFrame f = chunk_frame(input_chunk[pc.chunk_base + c], chunk_param);"));
+    CHECK(!chunks.contains("point_frame"));
 }
 
 // The default terrain's bits, pinned: every register component of the bare cascade (sdf, through the ground's base

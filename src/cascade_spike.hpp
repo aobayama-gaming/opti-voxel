@@ -15,8 +15,8 @@ using namespace godot;
 //   - G6 / G7 timing: single-LOD batches of 128 chunks at LOD 0, 4, ... 24, every level of the cascade
 //     passes, both channel sets, interleaved runs (GPU timestamps when the device returns them, wall clock
 //     of submit + sync otherwise).
-//   - F1 / F2: the field points of the site walk (cascade_spike_fields.hpp): ground_unit / ground_field bit for bit,
-//     and their GPU ms per batch size.
+//   - D1 / D2: point items (cascade_spike_points.hpp, the discoverer's corners and the site walk's readings):
+//     ground_unit / ground_field / evaluate_cull bit for bit, and their GPU ms per batch size.
 // run() is synchronous and needs a GPU (not --headless). Run: tools/cascade_test.sh
 class CascadeSpike : public Node {
     GDCLASS(CascadeSpike, Node)
@@ -25,6 +25,6 @@ protected:
     static void _bind_methods();
 
 public:
-    // p_options: lods (25), voxel (0.5), check (true), points (true), fields (true), timing (true), runs (10), sets ("8,4").
+    // p_options: lods (25), voxel (0.5), check (true), points (true), timing (true), runs (10), sets ("8,4").
     Dictionary run(const Dictionary &p_options);
 };

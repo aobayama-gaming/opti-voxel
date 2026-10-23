@@ -130,6 +130,18 @@ public:
     // Archetype::FieldFn: LOD 0 is the field, a coarser LOD its nearest lattice sample extended along its gradient).
     // Thread-safe.
     virtual ExactNoise::Float4 ground_field(const VoxelPos &p_voxel, int p_lod) const = 0;
+    // ground_field's coarse reading in steps (the GPU's field points read the middle one, SDFCascade::ground_unit): the
+    // lattice point a LOD-p_lod reading is taken at (the nearest point of Λ_lod, ties up), then that reading p_unit (unit
+    // gradient, distance in voxels of the LOD) extended along its gradient to p_voxel, the distance in LOD0 voxels.
+    static VoxelPos ground_lattice(const VoxelPos &p_voxel, int p_lod) {
+        const int64_t half = p_lod > 0 ? int64_t(1) << (p_lod - 1) : 0;
+        return VoxelPos((p_voxel.x + half) >> p_lod << p_lod, (p_voxel.y + half) >> p_lod << p_lod, (p_voxel.z + half) >> p_lod << p_lod);
+    }
+    static ExactNoise::Float4 extend_field(ExactNoise::Float4 p_unit, const VoxelPos &p_at, const VoxelPos &p_voxel, int p_lod) {
+        const VoxelPos d = p_voxel - p_at;
+        p_unit.w = p_unit.w * ExactNoise::exact_pow2(p_lod) + p_unit.x * float(d.x) + p_unit.y * float(d.y) + p_unit.z * float(d.z);
+        return p_unit;
+    }
 
     // The unit direction upright things (trees) grow along at a LOD0 voxel: the one source of "up" for placement.
     // +y on the flat world; a planet overrides it.

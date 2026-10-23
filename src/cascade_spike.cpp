@@ -4,7 +4,7 @@
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
-#include "cascade_spike_fields.hpp"
+#include "cascade_spike_points.hpp"
 #include "cascade_spike_sets.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
@@ -576,14 +576,6 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     return d;
 }
 
-double median(std::vector<double> p_v) {
-    if (p_v.empty()) {
-        return 0.0;
-    }
-    std::sort(p_v.begin(), p_v.end());
-    return p_v[p_v.size() / 2];
-}
-
 struct BatchTime {
     double wall_ms = 0.0; // submit + sync
     double gpu_ms = -1.0; // timestamps, -1 if they did not come back
@@ -727,89 +719,6 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, in
     return out;
 }
 
-// D1 (GPU discoverer): point items through the cascade passes (CascadePasses::create_points) against
-// Cascade::point + SDFCascade::sdf, the bits of the metres value. Per LOD 0-24, 5 places x 1024 corners of that
-// LOD's corner grid (multiples of 28 * 2^L voxels): near 0, +2^60, -2^60, straddling 2^32-voxel boundaries, and
-// around lattice index 2^32 (voxel 2^(32 + L)). One batch per LOD, like a discoverer wave.
-Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
-    constexpr int PER_PLACE = 1024;
-    constexpr int PLACES = 5;
-    constexpr uint32_t MAX_POINTS = PER_PLACE * PLACES;
-    SDFCascade sdf;
-    ChunkParam param = p_param;
-    configure_variant(sdf, p_set, p_lods, param);
-    const ChunkParam pp = CascadeGLSL::point_param(param);
-    const RID input = p_rd->storage_buffer_create(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
-    const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(pp));
-    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
-    const RID values = p_rd->storage_buffer_create(MAX_POINTS * sizeof(float));
-    CascadePasses passes;
-    Dictionary d;
-    int64_t compared = 0;
-    int64_t differing = 0;
-    PackedInt64Array per_lod;
-    Array examples;
-    if (!passes.create_points(p_rd, &sdf, pp, MAX_POINTS, input, param_ubo, values)) {
-        examples.push_back("the point passes failed to compile");
-        differing++;
-    }
-    const int64_t P32 = int64_t(1) << 32;
-    const int64_t boundaries[] = { P32, -P32, 3 * P32, -5 * P32 };
-    for (int lod = 0; lod < p_lods && passes.is_valid(); lod++) {
-        const int64_t span = pp.half_chunk_voxels() << (lod + 1);
-        const int64_t bases[PLACES] = { 0, (int64_t(1) << 60) - 123457, -(int64_t(1) << 60) + 54321, 0, int64_t(1) << (32 + lod) };
-        std::vector<VoxelPos> points;
-        PackedByteArray bytes;
-        bytes.resize(MAX_POINTS * GPUFrame::CHUNK_INPUT_BYTES);
-        for (int place = 0; place < PLACES; place++) {
-            for (int i = 0; i < PER_PLACE; i++) {
-                VoxelPos v;
-                for (int a = 0; a < 3; a++) {
-                    const int64_t base = place == 3 ? boundaries[(i + a) % 4] : bases[place];
-                    v[a] = (WorldCoord::floor_div(base, span) + ExactNoise::random_offset(uint32_t(lod), uint32_t(place * PER_PLACE + i), uint32_t(a) + 0xD1u, 32)) * span;
-                }
-                CascadeGLSL::encode_point_input(bytes, int64_t(points.size()), v, lod, pp);
-                points.push_back(v);
-            }
-        }
-        p_rd->buffer_update(input, 0, bytes.size(), bytes);
-        passes.record_all(Vector2i(lod, lod), uint32_t(points.size()));
-        p_rd->submit();
-        p_rd->sync();
-        const PackedByteArray got_bytes = p_rd->buffer_get_data(values, 0, points.size() * sizeof(float));
-        const float *got = reinterpret_cast<const float *>(got_bytes.ptr());
-        int64_t lod_differing = 0;
-        for (size_t i = 0; i < points.size(); i++) {
-            const VoxelPos &v = points[i];
-            float ch[CHANNELS];
-            sdf.channels_at(v, lod, ch); // Cascade::point's bits, through the ground terms
-            const float want = sdf.sdf(ch, v, lod).w;
-            compared++;
-            if (float_bits(want) != float_bits(got[i])) {
-                lod_differing++;
-                if (examples.size() < 24) {
-                    examples.push_back(vformat("set %s LOD %d point %s: gpu %s cpu %s (bits %x / %x)", set_label(p_set), lod, godot_str(v), got[i], want,
-                            float_bits(got[i]), float_bits(want)));
-                }
-            }
-        }
-        differing += lod_differing;
-        per_lod.push_back(lod_differing);
-    }
-    d["points"] = compared;
-    d["differing"] = differing;
-    d["differing_per_lod"] = per_lod;
-    d["points_per_lod"] = int64_t(MAX_POINTS);
-    d["scratch_mb"] = double(passes.scratch_bytes()) / 1048576.0;
-    d["examples"] = examples;
-    d["ok"] = differing == 0 && compared == int64_t(p_lods) * MAX_POINTS;
-    passes.free();
-    for (const RID &rid : { input, param_ubo, values }) {
-        p_rd->free_rid(rid);
-    }
-    return d;
-}
-
 } // namespace
 
 void CascadeSpike::_bind_methods() {
@@ -899,24 +808,13 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
         Dictionary points_report;
         for (const SpikeSet set : sets) {
             const uint64_t t0 = now_usec();
-            Dictionary d = check_points(rd, set, lods, param);
+            Dictionary d = CascadeSpikePoints::check_points(rd, set, lods, param);
             d["seconds"] = double(now_usec() - t0) / 1e6;
             ok = ok && bool(d["ok"]);
             points_report[set_label(set)] = d;
         }
+        points_report["timing"] = CascadeSpikePoints::point_timing(rd, sets, lods, param, int(p_options.get("runs", 10)));
         report["points"] = points_report;
-    }
-    if (bool(p_options.get("fields", true))) {
-        Dictionary fields_report;
-        for (const SpikeSet set : sets) {
-            const uint64_t t0 = now_usec();
-            Dictionary d = CascadeSpikeFields::check_fields(rd, set, lods, param);
-            d["seconds"] = double(now_usec() - t0) / 1e6;
-            ok = ok && bool(d["ok"]);
-            fields_report[set_label(set)] = d;
-        }
-        fields_report["timing"] = CascadeSpikeFields::field_timing(rd, sets, lods, param, int(p_options.get("runs", 10)));
-        report["fields"] = fields_report;
     }
     if (bool(p_options.get("timing", true))) {
         report["timing"] = timing(rd, sets, lods, param, int(p_options.get("runs", 10)));

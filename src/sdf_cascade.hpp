@@ -241,6 +241,13 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
         return CascadeTerrain::height_sdf(p_ch, p_lod, base.at(p_voxel, p_lod));
     }
 
+    // A unit register (unit()) with its distance in metres at voxel size p_voxel_size (GLSL cascade_metres): sdf(),
+    // sample_sdf() where no instance folds, and the GPU discoverer's corners (FieldPointsGPU::cull_values).
+    static ExactNoise::Float4 to_metres(const ExactNoise::Float4 &p_u, int p_lod, float p_voxel_size) {
+        const float to_m = p_voxel_size * ExactNoise::exact_pow2(p_lod);
+        return ExactNoise::Float4{ p_u.x, p_u.y, p_u.z, p_u.w * to_m };
+    }
+
     // The bare cascade's SDF, the distance in metres (GLSL cascade_terrain_sdf, bit for bit).
     ExactNoise::Float4 sdf(const float p_ch[Cascade::CHANNELS], const VoxelPos &p_voxel, int p_lod) const {
         return metres(unit(p_ch, p_voxel, p_lod), p_lod);
@@ -302,22 +309,12 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
         return skirt_depth_table[p_lod] + extra;
     }
 
-    // ground_field in three steps, the middle one the GPU's (CascadePasses::create_fields, FieldPointsGPU): the lattice
-    // point it reads (the nearest point of Λ_lod, ties up), the unit register there, and its extension to the voxel.
-    static VoxelPos ground_lattice(const VoxelPos &p_voxel, int p_lod) {
-        const int64_t half = p_lod > 0 ? int64_t(1) << (p_lod - 1) : 0;
-        return VoxelPos((p_voxel.x + half) >> p_lod << p_lod, (p_voxel.y + half) >> p_lod << p_lod, (p_voxel.z + half) >> p_lod << p_lod);
-    }
+    // ground_field's middle step (SDFBase::ground_lattice, extend_field), the GPU's field points' bits
+    // (CascadePasses::create_points, FieldPointsGPU): the unit register at a lattice point.
     ExactNoise::Float4 ground_unit(const VoxelPos &p_at, int p_lod) const {
         float ch[Cascade::CHANNELS];
         channels_at(p_at, p_lod, ch);
         return unit(ch, p_at, p_lod);
-    }
-    // The unit register p_unit read at p_at, extended along its gradient to p_voxel: the distance in LOD0 voxels.
-    static ExactNoise::Float4 extend_field(ExactNoise::Float4 p_unit, const VoxelPos &p_at, const VoxelPos &p_voxel, int p_lod) {
-        const VoxelPos d = p_voxel - p_at;
-        p_unit.w = p_unit.w * ExactNoise::exact_pow2(p_lod) + p_unit.x * float(d.x) + p_unit.y * float(d.y) + p_unit.z * float(d.z);
-        return p_unit;
     }
 
     ExactNoise::Float4 ground_field(const VoxelPos &p_voxel, int p_lod) const override {
@@ -485,11 +482,7 @@ private:
         set_ground_materials(grounds);
     }
 
-    // A unit register (unit()) with its distance in metres: sdf(), and sample_sdf() where no instance folds.
-    ExactNoise::Float4 metres(const ExactNoise::Float4 &p_u, int p_lod) const {
-        const float to_m = voxel_size * ExactNoise::exact_pow2(p_lod);
-        return ExactNoise::Float4{ p_u.x, p_u.y, p_u.z, p_u.w * to_m };
-    }
+    ExactNoise::Float4 metres(const ExactNoise::Float4 &p_u, int p_lod) const { return to_metres(p_u, p_lod, voxel_size); }
 
     Cascade::Spec spec;
     std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
