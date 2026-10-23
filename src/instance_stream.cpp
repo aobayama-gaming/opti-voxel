@@ -87,7 +87,7 @@ void StreamExecutor::reap(bool /* p_wait */) {
 }
 
 size_t InstanceStream::KeyHash::operator()(const SourceKey &p_k) const {
-    return ExactNoise::hash_cell(p_k.tile, ((p_k.source * 2u + uint32_t(p_k.kind)) * 64u + uint32_t(p_k.lod) + 1u) * 0x9E3779B1u);
+    return ExactNoise::hash_cell(p_k.tile, ((p_k.source * uint32_t(SourceKey::KIND_COUNT) + uint32_t(p_k.kind)) * 64u + uint32_t(p_k.lod) + 1u) * 0x9E3779B1u);
 }
 
 void InstanceStream::Job::run() {
@@ -444,16 +444,17 @@ void InstanceStream::release(uint32_t p_slot, uint32_t p_count) {
 }
 
 bool InstanceStream::evict_oldest(bool p_inputs) {
+    const auto frees_none = [](const Entry *p_e) { return p_e->placed || p_e->count == 0; }; // no input records
     Entry *e = oldest;
-    for (Entry *last = newest; p_inputs && e != nullptr && e->placed && e != last;) {
+    for (Entry *last = newest; p_inputs && e != nullptr && frees_none(e) && e != last;) {
         // Passed over once: to the newest end (its used kept), so the next eviction doesn't walk it again.
-        Entry *const placed = e;
+        Entry *const kept = e;
         e = e->newer;
-        lru_unlink(*placed);
-        lru_link(*placed);
+        lru_unlink(*kept);
+        lru_link(*kept);
     }
-    if (p_inputs && e != nullptr && e->placed) {
-        return false; // only placed keys left
+    if (p_inputs && e != nullptr && frees_none(e)) {
+        return false; // only placed keys and site tiles left
     }
     if (e == nullptr || e->used + GRACE_FRAMES >= frame) {
         return false; // the rest is newer
@@ -670,7 +671,7 @@ Dictionary InstanceStream::get_stats() const {
     d["computed"] = stats.computed;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
     Dictionary by;
-    for (int kind = 0; kind < 2; kind++) {
+    for (int kind = 0; kind < SourceKey::KIND_COUNT; kind++) {
         for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
             const int64_t n = stats.computed_by[kind][lod];
             if (n > 0) {
@@ -678,7 +679,7 @@ Dictionary InstanceStream::get_stats() const {
                 k["count"] = n;
                 k["ms_avg"] = double(stats.usec_by[kind][lod]) / 1000.0 / double(n);
                 k["evicted"] = stats.evicted_by[kind][lod];
-                by[vformat("%s %d", kind == SourceKey::PARTS ? "parts" : "blobs", lod)] = k;
+                by[vformat("%s %d", SourceKey::kind_name(kind), lod)] = k;
             }
         }
     }

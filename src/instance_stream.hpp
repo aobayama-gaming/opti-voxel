@@ -20,10 +20,10 @@
 // the keys' (a pure function of each key) and its list folds them in key order, so a chunk's content is a pure function
 // of its id whatever streamed when, and no chunk is meshed twice because a key arrived late.
 //
-// One entry per key asked for, in one table: computing (its inputs first: a coarser part tile reads the tiles under it, a
-// part layer's blob tile the LOD-0 part tiles around it), then ready with its content, which a listed key copies into
-// slots: the GPU table's records from slot_base on, sent through the placement log (uploads_since). Keys without records
-// stay entries like the others. Ready entries not pinned by a parked chunk are on a least-recently-used list; the oldest
+// One entry per key asked for, in one table: computing (its inputs first: a part tile reads the LOD-0 site tiles inside
+// it, a part layer's blob tile the LOD-0 part tiles around it, a far layer's its site tile), then ready with its content,
+// which a listed key copies into slots: the GPU table's records from slot_base on, sent through the placement log
+// (uploads_since). Keys without records (the site tiles, empty tiles) stay entries like the others. Ready entries not pinned by a parked chunk are on a least-recently-used list; the oldest
 // go when room is needed (slots, inputs kept, entries), none asked for in the last GRACE_FRAMES (a batch in flight
 // still reads its slots). A key's inputs are handed to it as shared pointers when they land: an input may go meanwhile.
 //
@@ -212,11 +212,11 @@ private:
     struct Stats {
         int64_t computed = 0;
         int64_t compute_usec = 0;
-        int64_t computed_by[2][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD
-        int64_t usec_by[2][ChunkMath::MAX_LOD_NUMBERS] = {};
+        int64_t computed_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD
+        int64_t usec_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {};
         int64_t placed = 0;
         int64_t evicted = 0;
-        int64_t evicted_by[2][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD: computed / (computed - evicted) = recompute ratio
+        int64_t evicted_by[SourceKey::KIND_COUNT][ChunkMath::MAX_LOD_NUMBERS] = {}; // per kind and LOD: computed / (computed - evicted) = recompute ratio
         int64_t keys_created = 0; // entries created by request(), inputs included
         int64_t admit_keys_created = 0; // of keys_created: by admit()
         int64_t admit_keys_created_max = 0; // by one admit()
@@ -250,8 +250,9 @@ private:
     bool place(Entry &r_entry);
     bool allocate(uint32_t p_count, uint32_t &r_slot);
     void release(uint32_t p_slot, uint32_t p_count);
-    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest not placed (making room
-    // for inputs: evicting a placed key frees none, and asked for again it recomputes every key under it).
+    // Evicts the oldest entry if it is out of its grace (false: none can go). p_inputs: the oldest not placed and holding
+    // records (making room for inputs: evicting a placed key or a site tile frees none, and asked for again it is computed
+    // again).
     bool evict_oldest(bool p_inputs = false);
     void pin(Entry &r_entry);
     void unpin(Entry &r_entry);

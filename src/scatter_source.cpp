@@ -86,12 +86,14 @@ ScatterSource::ScatterSource(const Setup &p_setup) :
         unit.rotation[0] = unit.rotation[4] = unit.rotation[8] = 1.0f;
         blob_margin_c = blob_record(*set.library, set.blob_type, unit, set.finish.skirt_depth).margin_c;
     }
-    // The pyramid: each LOD's side the previous one's or twice it, so a tile covers 1 or 8 tiles of the LOD under it.
+    // Each LOD's side the previous one's or twice it, so a tile covers 1 or 8 tiles of the LOD under it; a LOD with the
+    // previous one's side reads its keys.
     int64_t side = PART_TILE_CELLS * set.scatter.side;
     for (int l = 0; l < set.lod_count; l++) {
         while (side < 2 * (set.chunk_voxels << l)) {
             side *= 2;
         }
+        part_key_lods.push_back(l > 0 && side == part_sides.back() ? part_key_lods.back() : l);
         part_sides.push_back(side);
     }
     // A base lies within a voxel of the ground (cell_site), a blob's cell within a cell of the records' reach; the largest
@@ -115,7 +117,9 @@ int64_t ScatterSource::blob_tile_cells(int p_layer) const {
 }
 
 VoxelBox ScatterSource::tile_box(const SourceKey &p_key) const {
-    const int64_t side = p_key.kind == SourceKey::PARTS ? part_tile_side(p_key.lod) : blob_tile_cells(p_key.lod) * layer_cell(p_key.lod);
+    // A LOD-0 site tile is on the LOD-0 part tiles' grid, a far layer's on its blob tiles'.
+    const bool parts_grid = p_key.kind == SourceKey::PARTS || (p_key.kind == SourceKey::SITES && p_key.lod == 0);
+    const int64_t side = parts_grid ? part_tile_side(p_key.lod) : blob_tile_cells(p_key.lod) * layer_cell(p_key.lod);
     return VoxelBox{ p_key.tile * side, p_key.tile * side + VoxelPos(side - 1, side - 1, side - 1), true };
 }
 
@@ -169,7 +173,7 @@ void ScatterSource::keys(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, 
     // Every tile whose content can pass a box test in the box: a part tile's records lie within its box grown by the
     // reach, and its bases in the zone; a blob tile's within blob_reach, its cells within a cell of the records' reach.
     if (p_lod < prof.lod_end) {
-        append_tiles(SourceKey::PARTS, p_lod, part_tile_side(p_lod), box.grown(part_grow(p_lod)), 0, r_out);
+        append_tiles(SourceKey::PARTS, part_key_lod(p_lod), part_tile_side(p_lod), box.grown(part_grow(p_lod)), 0, r_out);
     }
     if (has_layer(p_lod)) {
         const int64_t c = layer_cell(p_lod);
@@ -189,23 +193,30 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
         return;
     }
     if (p_key.kind == SourceKey::PARTS) {
-        if (p_key.lod > 0) {
-            // The L - 1 tiles inside this one (the sides are powers of two apart).
-            const int64_t n = part_tile_side(p_key.lod) / part_tile_side(p_key.lod - 1);
-            for (int64_t z = 0; z < n; z++) {
-                for (int64_t y = 0; y < n; y++) {
-                    for (int64_t x = 0; x < n; x++) {
-                        r_out.push_back(SourceKey{ set.id, SourceKey::PARTS, p_key.lod - 1, p_key.tile * n + VoxelPos(x, y, z) });
-                    }
-                }
-            }
-        }
-        return;
-    }
-    if (part_layer(p_key.lod)) {
+        append_part_sites(p_key.tile, p_key.lod, r_out);
+    } else if (p_key.kind == SourceKey::BLOBS && part_layer(p_key.lod)) {
         // The LOD-0 part tiles whose records can have their centroid in the tile's cells or MARGIN_CELLS past them.
         const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod));
         append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof.reach))), 0, r_out);
+    } else if (p_key.kind == SourceKey::BLOBS && p_key.lod > 0 && has_layer(p_key.lod)) {
+        // A far layer's proxy walk (a far layer 0 walks itself: SITES 0 is the part tiles' walk).
+        r_out.push_back(SourceKey{ set.id, SourceKey::SITES, p_key.lod, p_key.tile });
+    }
+}
+
+void ScatterSource::append_part_sites(const VoxelPos &p_tile, int p_lod, std::vector<SourceKey> &r_out) const {
+    if (p_lod <= 0) {
+        r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_tile });
+        return;
+    }
+    // The L - 1 tiles inside this one (the sides are equal or twice: 1 or 8).
+    const int64_t n = part_tile_side(p_lod) / part_tile_side(p_lod - 1);
+    for (int64_t z = 0; z < n; z++) {
+        for (int64_t y = 0; y < n; y++) {
+            for (int64_t x = 0; x < n; x++) {
+                append_part_sites(p_tile * n + VoxelPos(x, y, z), p_lod - 1, r_out);
+            }
+        }
     }
 }
 
@@ -226,46 +237,50 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
         part_tile(p_key, p_inputs, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         blob_tile(p_key, p_inputs, r_out);
+    } else if (p_key.kind == SourceKey::SITES) {
+        site_tile(p_key, r_out);
+    }
+}
+
+void ScatterSource::site_tile(const SourceKey &p_key, SourceContent &r_out) const {
+    if (p_key.lod == 0) {
+        set.scatter.sites(tile_box(p_key), r_out.sites);
+    } else if (has_layer(p_key.lod) && !part_layer(p_key.lod)) {
+        proxy_sites(p_key, r_out.sites);
     }
 }
 
 void ScatterSource::part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const {
-    if (p_key.lod > 0) {
-        std::vector<SourceKey> under;
-        inputs(p_key, under);
-        SourceContent local;
-        for (size_t i = 0; i < under.size(); i++) {
-            const SourceContent &c = input(under[i], p_inputs, i, local);
-            for (const SourceContent::Group &g : c.groups) {
-                append_group(c.records.data() + g.first, g.count, p_key.lod, r_out);
-            }
-            r_out.out_of_profile += c.out_of_profile;
+    std::vector<SourceKey> in;
+    inputs(p_key, in);
+    SourceContent local;
+    std::vector<TableRecord> grown;
+    for (size_t i = 0; i < in.size(); i++) {
+        for (const CellSite &cs : input(in[i], p_inputs, i, local).sites) {
+            grow_site(cs, p_key.lod > 0 ? p_key.lod : -1, grown, r_out);
         }
+    }
+}
+
+void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<TableRecord> &r_grown, SourceContent &r_out) const {
+    const DefLibrary &lib = *set.library;
+    r_grown.clear();
+    set.scatter.grow(p_site.site, r_grown);
+    // The table's limits (SDFTable::admit): a site with a record it would refuse is left out whole.
+    if (std::any_of(r_grown.begin(), r_grown.end(), [&](const TableRecord &p_r) { return !record_fit_error(lib[p_r.def], p_r, set.max_extent).is_empty(); })) {
         return;
     }
-    std::vector<CellSite> sites;
-    set.scatter.sites(tile_box(p_key), sites);
-    const DefLibrary &lib = *set.library;
-    std::vector<TableRecord> grown;
-    for (const CellSite &cs : sites) {
-        grown.clear();
-        set.scatter.grow(cs.site, grown);
-        // The table's limits (SDFTable::admit): a site with a record it would refuse is left out whole.
-        if (std::any_of(grown.begin(), grown.end(), [&](const TableRecord &p_r) { return !record_fit_error(lib[p_r.def], p_r, set.max_extent).is_empty(); })) {
-            continue;
-        }
-        bool out = false;
-        for (TableRecord &rec : grown) {
-            finish_table_record(lib, set.finish, rec);
-            // keys() and blob_reach() trust the profile, read from samples: a record past it may be missing from chunks.
-            out = out || !prof.covers(cs.site.base, rec);
-        }
-        append_group(grown.data(), uint32_t(grown.size()), -1, r_out);
-        if (out) {
-            r_out.out_of_profile++;
-            if (!profile_reported.exchange(true)) {
-                ERR_PRINT("ScatterSource: a site has a record past the profile (reach, last LOD or margin): the chunks it reaches may miss it.");
-            }
+    bool out = false;
+    for (TableRecord &rec : r_grown) {
+        finish_table_record(lib, set.finish, rec);
+        // keys() and blob_reach() trust the profile, read from samples: a record past it may be missing from chunks.
+        out = out || !prof.covers(p_site.site.base, rec);
+    }
+    append_group(r_grown.data(), uint32_t(r_grown.size()), p_lod, r_out);
+    if (out) {
+        r_out.out_of_profile++;
+        if (!profile_reported.exchange(true)) {
+            ERR_PRINT("ScatterSource: a site has a record past the profile (reach, last LOD or margin): the chunks it reaches may miss it.");
         }
     }
 }
@@ -300,23 +315,33 @@ void ScatterSource::near_items(const SourceKey &p_key, const Inputs &p_inputs, s
     }
 }
 
-void ScatterSource::far_items(const SourceKey &p_key, std::vector<MomentItem> &r_items) const {
+void ScatterSource::proxy_sites(const SourceKey &p_key, std::vector<CellSite> &r_out) const {
+    const int64_t g = proxy_side(p_key.lod);
+    const CellScatter &s = set.scatter;
+    // A proxy outside the zone weighs nothing: the walk stops a cell past it.
+    const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod) + int64_t(std::ceil(prof.reach))).clipped(s.zone.grown(g));
+    if (region.valid) {
+        surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, r_out, false); // a proxy's base needn't be on the LOD-0 ground
+    }
+}
+
+void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, std::vector<MomentItem> &r_items) const {
     // One proxy per surface cell of g voxels: the sites of its patch of ground ((g / side)^2 cells' worth, one site per
     // source cell on flat ground, times the share of the cell inside the zone), each what the mean site has lost at the
     // layer turned to the up there. A point mass at its site: the hashed sites, two per cell side, already spread over the
     // cells as the sites do (spreading each over its patch as well made the blobs 1.6-2 times too wide).
-    const int64_t c = layer_cell(p_key.lod);
-    const int64_t g = MAX<int64_t>(1, c / PROXY_PER_CELL);
+    const int64_t g = proxy_side(p_key.lod);
     const CellScatter &s = set.scatter;
-    // A proxy outside the zone weighs nothing: the walk stops a cell past it.
-    const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * c + int64_t(std::ceil(prof.reach))).clipped(s.zone.grown(g));
-    std::vector<CellSite> sites;
-    if (region.valid) {
-        surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, sites, false); // a proxy's base needn't be on the LOD-0 ground
+    SourceContent local;
+    const std::vector<CellSite> *sites = &local.sites;
+    if (p_key.lod > 0) {
+        sites = &input(SourceKey{ set.id, SourceKey::SITES, p_key.lod, p_key.tile }, p_inputs, 0, local).sites;
+    } else {
+        proxy_sites(p_key, local.sites); // SITES 0 is the part tiles' walk
     }
     const double side = double(s.side);
     const SourceProfile::Lost &lost = prof.lost[p_key.lod];
-    for (const CellSite &cs : sites) {
+    for (const CellSite &cs : *sites) {
         const VoxelPos &base = cs.site.base;
         double inside = 1.0;
         for (int a = 0; a < 3; a++) {
@@ -357,7 +382,7 @@ void ScatterSource::blobs(const SourceKey &p_key, const Inputs &p_inputs, std::v
     if (part_layer(p_key.lod)) {
         near_items(p_key, p_inputs, items);
     } else {
-        far_items(p_key, items);
+        far_items(p_key, p_inputs, items);
     }
     // An item tents into the cells within a cell of its centroid, which lies within two reaches of its anchor (a record's
     // anchor and centroid are both in its box, within the reach of its base): none near the tile's own cells, no blob
