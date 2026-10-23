@@ -183,7 +183,7 @@ int64_t ScatterSource::blob_tile_cells(int p_layer) const {
 VoxelBox ScatterSource::tile_box(const SourceKey &p_key) const {
     const bool parts_grid = p_key.kind == SourceKey::PARTS || p_key.kind == SourceKey::SITES;
     const int64_t side = parts_grid ? part_tile_side(p_key.lod) : blob_tile_cells(p_key.lod) * layer_cell(p_key.lod);
-    return VoxelBox{ p_key.tile * side, p_key.tile * side + VoxelPos(side - 1, side - 1, side - 1), true };
+    return VoxelBox::cube(p_key.tile, side);
 }
 
 int64_t ScatterSource::blob_reach(int p_layer) const {
@@ -307,14 +307,15 @@ void ScatterSource::walk_tiles(const SourceKey *p_keys, size_t p_count, SourceCo
     for (size_t i = 0; i < p_count; i++) {
         const SourceKey &key = p_keys[i];
         *r_outs[i] = SourceContent();
-        walks[i] = SiteWalk{ VoxelBox(), 0, 0, false, 0, &r_outs[i]->sites }; // no walk unless it is one of ours
+        walks[i].out = &r_outs[i]->sites; // no cell (walks nothing) unless it is one of ours
         // A site tile is on the LOD-0 part grid, a proxy tile on a far layer's blob grid (inputs()): any other walks a
         // box no key reads (a part layer's proxies: a full walk for nothing).
-        const bool walked = key.kind == SourceKey::SITES ? key.lod == 0 : key.kind == SourceKey::PROXIES && has_layer(key.lod) && !part_layer(key.lod);
-        if (part_sides.empty() || key.source != set.id || !walked) {
-            if (!walked) {
-                ERR_PRINT(vformat("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(key.kind), key.lod));
-            }
+        const bool walked = key.kind == SourceKey::SITES ? key.lod == 0 : has_layer(key.lod) && !part_layer(key.lod);
+        if (!walked) {
+            ERR_PRINT(vformat("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(key.kind), key.lod));
+            continue;
+        }
+        if (part_sides.empty() || key.source != set.id) {
             continue;
         }
         if (key.kind == SourceKey::SITES) {
@@ -495,7 +496,7 @@ void ScatterSource::blobs(const SourceKey &p_key, const Inputs &p_inputs, std::v
     MomentLayerParams params = set.layers;
     params.lod_min = params.lod_max = p_key.lod;
     const int64_t n = blob_tile_cells(p_key.lod);
-    params.judged = VoxelBox{ p_key.tile * n, p_key.tile * n + VoxelPos(n - 1, n - 1, n - 1), true }; // its own cells
+    params.judged = VoxelBox::cube(p_key.tile, n); // its own cells
     MomentLayers layers;
     layers.build(items, params, &prof->joins);
     layers.kept(r_out);

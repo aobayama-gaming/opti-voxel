@@ -418,15 +418,17 @@ void InstanceStream::drain() {
         }
         for (size_t i = 0; i < batch.size(); i++) {
             executor->landing();
-            if (stopping) {
-                continue; // nobody reads it: no landing (an expansion would queue its subtree)
-            }
-            const std::unique_lock<std::shared_mutex> lock(mutex);
-            if (i == 0 && batch.size() > 1) {
-                stats.walk_batches++;
-                stats.walk_batch_keys += int64_t(batch.size());
-            }
-            land(std::move(batch[i])); // the keys it completes join jobs: this loop takes them
+        }
+        if (stopping) {
+            continue; // nobody reads them: no landing (an expansion would queue its subtree)
+        }
+        const std::unique_lock<std::shared_mutex> lock(mutex);
+        if (batch.size() > 1) {
+            stats.walk_batches++;
+            stats.walk_batch_keys += int64_t(batch.size());
+        }
+        for (std::unique_ptr<Job> &job : batch) {
+            land(std::move(job)); // the keys it completes join jobs: this loop takes them
         }
     }
 }
@@ -437,7 +439,7 @@ void InstanceStream::take_walks(std::vector<std::unique_ptr<Job>> &r_batch) {
     const ScatterSource *source = r_batch[0]->source;
     size_t looked = 0;
     for (auto it = jobs.begin(); it != jobs.end() && r_batch.size() < settings.walk_batch && looked < WALK_LOOK * settings.walk_batch; looked++) {
-        if (it->second->key.walk() && it->second->source == source && it->second->inputs.empty()) {
+        if (it->second->key.walk() && it->second->source == source) {
             r_batch.push_back(std::move(it->second));
             it = jobs.erase(it);
         } else {

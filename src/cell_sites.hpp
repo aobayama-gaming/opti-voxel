@@ -79,7 +79,7 @@ void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, u
 // p_min_level keeps down to that level: a node it drops holds no site of a box walked from p_min_level (a node's verdict
 // is its centre's reading, whatever the box). Every node meeting the box when the walk would start at p_level or below.
 // Same pool rule as surface_sites.
-void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, int p_level, int p_min_level,
+void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldBatchFn &p_field, int p_level, int p_min_level,
         std::vector<VoxelPos> &r_out);
 // surface_sites of many boxes at once, each walk its own (box, cells, salt, snap, start level): the same sites, appended to
 // each walk's out in cell order. The walks advance in rounds (a level, then each snap step) and a round reads the field
