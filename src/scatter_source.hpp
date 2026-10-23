@@ -34,8 +34,8 @@
 //     another order;
 //   - the layers above: a cell holds several sites, then thousands, and reading every record is out of the question: the
 //     items are proxies, one per cell of 1 / PROXY_PER_CELL layer cell along the surface (surface_sites, unsnapped, the
-//     PROXIES tiles around it), each what the profile's mean site has lost at the layer times the sites its patch of ground
-//     holds in the zone. Their cost per tile is the same at any layer and any site count.
+//     PROXIES tiles around it), each what the profile's mean site of its class (a tree's species) has lost at the layer
+//     times the sites its patch of ground holds in the zone. Their cost per tile is the same at any layer and any site count.
 namespace Archetype {
 
 struct SourceKey {
@@ -116,10 +116,13 @@ public:
         int64_t part_cell_sides = PART_CELL_SIDES;
     };
 
-    // Reads the profile (on the worker pool).
+    // Reads the profile (on the worker pool), or takes the one a source of the same profile key already read (its scatter's
+    // profile_key, salt, finish, layers and LOD count: what the profile depends on), from a process-wide registry.
     explicit ScatterSource(const Setup &p_setup);
 
-    const SourceProfile &profile() const { return prof; }
+    const SourceProfile &profile() const { return *prof; }
+    // Whether the profile came from the registry (another source of its key read it).
+    bool profile_shared() const { return shared_profile; }
     const Setup &setup() const { return set; }
     int64_t part_tile_side(int p_lod) const { return part_sides[MIN(MAX(p_lod, 0), int(part_sides.size()) - 1)]; }
     // The LOD of the part keys a chunk of p_lod reads: the finest with its tile side.
@@ -129,7 +132,7 @@ public:
     // Whether layer p_layer has blob tiles (the joins' first LOD up to the last LOD; none without the band rule or a blob type).
     bool has_layer(int p_layer) const { return has_blobs && p_layer >= first_layer && p_layer < set.lod_count; }
     // Whether a layer's blob tiles read the grown records (else proxies).
-    bool part_layer(int p_layer) const { return p_layer < prof.lod_end && layer_cell(p_layer) < set.part_cell_sides * set.scatter.side; }
+    bool part_layer(int p_layer) const { return p_layer < prof->lod_end && layer_cell(p_layer) < set.part_cell_sides * set.scatter.side; }
     VoxelBox tile_box(const SourceKey &p_key) const;
     // The side of a layer's proxy cells (voxels).
     int64_t proxy_side(int p_layer) const { return MAX<int64_t>(1, layer_cell(p_layer) / PROXY_PER_CELL); }
@@ -163,7 +166,8 @@ public:
 
 private:
     Setup set;
-    SourceProfile prof;
+    std::shared_ptr<const SourceProfile> prof = std::make_shared<const SourceProfile>(); // never null
+    bool shared_profile = false;
     bool has_blobs = false;
     int first_layer = 0;
     float blob_margin_c = 0.0f; // a blob record's locality margin (its type's, the table's skirt)

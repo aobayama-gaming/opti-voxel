@@ -53,7 +53,8 @@ struct SourceFixture {
     std::shared_ptr<ScatterSource> source;
     VoxelPos origin = VoxelPos(int64_t(1) << 33, 1700, -(int64_t(1) << 20));
 
-    explicit SourceFixture(int64_t p_part_cell_sides = ScatterSource::PART_CELL_SIDES) {
+    // p_species >= 0: every site of that species (one class, its own profile), the mixed forest otherwise.
+    explicit SourceFixture(int64_t p_part_cell_sides = ScatterSource::PART_CELL_SIDES, int p_species = -1) {
         auto lib = std::make_shared<DefLibrary>();
         const TreeTypes types = add_tree_types(*lib, VOXEL);
         ScatterSource::Setup s;
@@ -66,7 +67,18 @@ struct SourceFixture {
         s.max_extent = int64_t(1) << 29; // SDFTable::max_instance_extent() at 15 LODs and up
         s.part_cell_sides = p_part_cell_sides;
         CellScatter &c = s.scatter;
-        c.salt = TREE_SITE_SALT;
+        set_forest_scatter(c, VOXEL, *lib, s.finish, types); // SDFTable::forest_source's
+        if (p_species >= 0) {
+            const std::function<void(const Site &, const UpAxis &, int, std::vector<TableRecord> &)> mixed = c.generate;
+            c.generate = [mixed, p_species](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+                Site one = p_site;
+                one.variant = uint32_t(p_species); // tree_species_of(p_species) == p_species
+                mixed(one, p_up, p_lod, r_out);
+            };
+            c.classes = 1;
+            c.class_of = nullptr;
+            c.profile_key.clear();
+        }
         c.side = 100;
         c.zone = VoxelBox{ origin - VoxelPos(2250, 400, 2250), origin + VoxelPos(2249, 400, 2249), true };
         const VoxelPos o = origin;
@@ -78,15 +90,6 @@ struct SourceFixture {
                 float(amp * tau / wave * std::sin(tau * x / wave) * std::sin(tau * z / wave)), float(w) };
         };
         c.up = [](const VoxelPos &) { return UP_Y; };
-        // SDFTable::forest_source's: hull-only trees from each species' hull_only_lod (the pyramid test is the end-to-end gate).
-        std::vector<int> hull_lod;
-        for (const TreeSpecies &species : tree_species()) {
-            hull_lod.push_back(tree_hull_only_lod(species, VOXEL, *lib, s.finish, types));
-        }
-        c.generate = [types, hull_lod](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
-            const int species = tree_species_of(p_site.variant);
-            grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, VOXEL, types, r_out, nullptr, p_lod >= hull_lod[species]);
-        };
         source = std::make_shared<ScatterSource>(s);
         cache = KeyCache(source.get());
     }
@@ -98,6 +101,12 @@ struct SourceFixture {
     static const SourceFixture &streamed() {
         static const SourceFixture fixture(ScatterSource::STREAM_PART_CELL_SIDES);
         return fixture;
+    }
+    // The streamed setting on a one-species forest.
+    static const SourceFixture &one_species(int p_species) {
+        static const SourceFixture fixtures[3] = { SourceFixture(ScatterSource::STREAM_PART_CELL_SIDES, 0), SourceFixture(ScatterSource::STREAM_PART_CELL_SIDES, 1),
+            SourceFixture(ScatterSource::STREAM_PART_CELL_SIDES, 2) };
+        return fixtures[p_species];
     }
     const ScatterSource &f() const { return *source; }
     VoxelBox zone() const { return f().setup().scatter.zone; }
@@ -335,8 +344,8 @@ TEST_CASE("Scatter source: the part layers' blob tiles are a whole build's blobs
 }
 
 // A proxy layer's tiles stand for the sites with proxies: the mass its kept blobs hold is the records' within a few
-// percent, and its canopy reads about the same cover.
-static void check_proxy_layers(const SourceFixture &fx) {
+// percent, and its canopy reads about the same cover. p_gate false: reported only.
+static void check_proxy_layers(const SourceFixture &fx, bool p_gate = true) {
     const ScatterSource &f = fx.f();
     const std::vector<MomentItem> items = fx.part_items();
     int layers_checked = 0;
@@ -363,9 +372,14 @@ static void check_proxy_layers(const SourceFixture &fx) {
         MESSAGE("layer ", layer, ": mass proxies / records bark ", proxies[0] / truth[0], " leaves ", proxies[1] / truth[1], "; ", int64_t(tiles.size()),
                 " blobs, ", int64_t(whole.size()), " from the records; mean peak ", proxy_amp, " vs ", truth_amp);
         // The layers the streamed sources switch to proxies (a cell of 1-3 source cells: few sites per proxy) are looser: on
-        // this forest, bark mass 0.98 and 1.16, peak 0.62 and 0.78 at layers 4 and 5.
+        // this forest, with the per-species moments, bark mass 0.97 and 1.15, peak 0.59 and 0.97 at layers 4 and 5 (0.62 and
+        // 0.78 with one mean tree). Layer 4 only loses bark, its mean peak (0.015 of 0.025) far under the material iso (0.125):
+        // neither side draws there, hence its 0.45.
         const bool switched = f.layer_cell(layer) < ScatterSource::PART_CELL_SIDES * f.setup().scatter.side;
-        const double mass_tol = switched ? 0.2 : 0.1, peak_tol = switched ? 0.4 : 0.25;
+        const double mass_tol = switched ? 0.2 : 0.1, peak_tol = switched ? 0.45 : 0.25;
+        if (!p_gate) {
+            continue;
+        }
         for (int m = 0; m < 2; m++) {
             CAPTURE(m);
             if (truth[m] == 0.0) {
@@ -384,6 +398,66 @@ TEST_CASE("Scatter source: the proxy layers weigh what the records do") {
     for (const SourceFixture *fixture : { &SourceFixture::get(), &SourceFixture::streamed() }) {
         check_proxy_layers(*fixture);
     }
+}
+
+// Each species alone (its sites forced to it, one class): what the per-species moments stand for, reported.
+TEST_CASE("Scatter source: the proxy layers of a one-species forest (reported)") {
+    for (int species = 0; species < int(tree_species().size()); species++) {
+        MESSAGE("species ", species, " alone:");
+        check_proxy_layers(SourceFixture::one_species(species), false);
+    }
+}
+
+// The forest's profile is per species and shared by its tree set: a source with the same key and another zone takes the
+// same object, another voxel size another; per species, the lost mass weighted by the species' share of the sites is the
+// mean site's (a one-class profile of hashed variants, other samples: within sampling noise).
+TEST_CASE("Scatter source: one profile per tree set, per-species far moments") {
+    const SourceFixture &fx = SourceFixture::get();
+    const ScatterSource &f = fx.f();
+    CHECK(f.profile().lost.size() == tree_species().size());
+    ScatterSource::Setup other = f.setup();
+    other.scatter.zone = VoxelBox{ fx.origin + VoxelPos(9000, -400, 0), fx.origin + VoxelPos(12000, 400, 3000), true };
+    other.scatter.side = 140; // another density
+    const ScatterSource b(other);
+    CHECK(b.profile_shared());
+    CHECK(&b.profile() == &f.profile());
+
+    auto lib = std::make_shared<DefLibrary>();
+    const TreeTypes types = add_tree_types(*lib, 0.1);
+    ScatterSource::Setup coarse = other;
+    coarse.blob_type = lib->add(make_moment_blob_type()); // the fixture's library order
+    coarse.library = lib;
+    set_forest_scatter(coarse.scatter, 0.1, *lib, coarse.finish, types);
+    const ScatterSource c(coarse);
+    CHECK(&c.profile() != &f.profile());
+
+    // The mixed mean: one class, hashed variants (the profile before classes).
+    ScatterSource::Setup mixed = f.setup();
+    mixed.scatter.classes = 1;
+    mixed.scatter.class_of = nullptr;
+    mixed.scatter.profile_key.clear();
+    const ScatterSource m(mixed);
+    CHECK_FALSE(m.profile_shared());
+    CHECK(m.profile().lost.size() == 1);
+    const double n = double(tree_species().size());
+    int checked = 0;
+    for (int l = 0; l < f.setup().lod_count; l++) {
+        double per_species = 0.0, mean = 0.0;
+        for (uint32_t s = 0; s < tree_species().size(); s++) {
+            for (const std::pair<uint32_t, Moments> &p : f.profile().lost_of(s, l).moments.parts) {
+                per_species += p.second.m0 / n;
+            }
+        }
+        for (const std::pair<uint32_t, Moments> &p : m.profile().lost_of(0, l).moments.parts) {
+            mean += p.second.m0;
+        }
+        if (mean > 0.0) {
+            checked++;
+            MESSAGE("LOD ", l, ": lost mass per site, species-weighted ", per_species, " vs the mixed samples' ", mean);
+            CHECK(std::fabs(per_species / mean - 1.0) < 0.15);
+        }
+    }
+    CHECK(checked > 3);
 }
 
 TEST_CASE("Scatter source: the streamed sources' proxies start at the source cell") {

@@ -137,16 +137,20 @@ TEST_CASE("Cell scatter: the profile bounds every record of the forest and the s
         CHECK(profile.lod_end > 0);
         CHECK(profile.lod_end <= 18);
         CHECK(std::fabs(mean - profile.records_per_site) <= 0.15 * profile.records_per_site);
-        // What a site has lost grows with the LOD, and from its last LOD on all of it is gone.
-        double before = 0.0;
-        for (int l = 0; l < 18; l++) {
-            double m = 0.0;
-            for (const std::pair<uint32_t, Moments> &p : profile.lost[l].moments.parts) {
-                m += p.second.m0;
+        // What a site of each class has lost grows with the LOD, and from its last LOD on all of it is gone.
+        CHECK(profile.lost.size() == source.scatter.classes);
+        for (uint32_t c = 0; c < source.scatter.classes; c++) {
+            CAPTURE(c);
+            double before = 0.0;
+            for (int l = 0; l < 18; l++) {
+                double m = 0.0;
+                for (const std::pair<uint32_t, Moments> &p : profile.lost_of(c, l).moments.parts) {
+                    m += p.second.m0;
+                }
+                CHECK(m >= before * (1.0 - 1e-9));
+                before = m;
             }
-            CHECK(m >= before * (1.0 - 1e-9));
-            before = m;
+            CHECK(before > 0.0);
         }
-        CHECK(before > 0.0);
     }
 }

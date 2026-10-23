@@ -8,6 +8,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstring>
+#include <map>
+#include <mutex>
+#include <string>
 
 namespace Archetype {
 
@@ -73,6 +77,43 @@ void append_group(const TableRecord *p_records, uint32_t p_count, int p_lod, Sou
 
 std::atomic<bool> profile_reported{ false };
 
+// The bits of a value, as text: a key part that is equal only for equal values.
+template <typename T>
+std::string bits_of(const T &p_v) {
+    static_assert(sizeof(T) <= 8);
+    uint64_t b = 0;
+    std::memcpy(&b, &p_v, sizeof(T));
+    return std::to_string(b) + ",";
+}
+
+// The profiles read so far, by their key: two sources of one key take the same object. Kept for the process (a profile is a
+// few KB per class and LOD; the keys are the tree sets configured).
+std::mutex profiles_mutex;
+std::map<std::string, std::shared_ptr<const SourceProfile>> profiles;
+
+// p_setup's profile from the registry, read under the lock when new (a second source of its key waits for it rather than
+// reading it again); r_shared: it was there.
+std::shared_ptr<const SourceProfile> profile_for(const ScatterSource::Setup &p_setup, bool &r_shared) {
+    r_shared = false;
+    const CellScatter &s = p_setup.scatter;
+    auto read = [&]() { return std::make_shared<const SourceProfile>(*p_setup.library, s, p_setup.finish, p_setup.layers, p_setup.lod_count); };
+    if (s.profile_key.empty()) {
+        return read();
+    }
+    const MomentLayerParams &l = p_setup.layers;
+    const RecordFinish &f = p_setup.finish;
+    const std::string key = s.profile_key + "|" + bits_of(s.salt) + bits_of(s.classes) + "|" + bits_of(f.skirt_depth) + bits_of(f.band) + bits_of(f.rule.rate) +
+            bits_of(f.rule.resolve) + "|" + bits_of(l.cell_shift) + bits_of(l.filter) + bits_of(l.min_occupancy) + bits_of(l.min_mass_share) +
+            bits_of(l.cover_mass_share) + bits_of(l.keep_cover) + "|" + bits_of(p_setup.lod_count);
+    const std::lock_guard<std::mutex> lock(profiles_mutex);
+    std::shared_ptr<const SourceProfile> &slot = profiles[key];
+    r_shared = slot != nullptr;
+    if (!slot) {
+        slot = read();
+    }
+    return slot;
+}
+
 } // namespace
 
 void SourceContent::meeting(const std::vector<Group> &p_groups, RecordView p_records, uint32_t p_first, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod,
@@ -94,10 +135,10 @@ ScatterSource::ScatterSource(const Setup &p_setup) :
         set(p_setup) {
     ERR_FAIL_COND_MSG(!set.library || !set.scatter.valid() || set.max_extent <= 0 || set.chunk_voxels <= 0,
             "ScatterSource: no library, valid scatter, largest extent or chunk side.");
-    prof = SourceProfile(*set.library, set.scatter, set.finish, set.layers, set.lod_count);
-    has_blobs = set.blob_type >= 0 && set.finish.band && !prof.joins.empty();
+    prof = profile_for(set, shared_profile);
+    has_blobs = set.blob_type >= 0 && set.finish.band && !prof->joins.empty();
     first_layer = set.lod_count;
-    for (const std::pair<const uint32_t, MomentJoin> &j : prof.joins) {
+    for (const std::pair<const uint32_t, MomentJoin> &j : prof->joins) {
         first_layer = MIN(first_layer, j.second.lod);
     }
     if (has_blobs) {
@@ -120,11 +161,11 @@ ScatterSource::ScatterSource(const Setup &p_setup) :
     // over the LOD and the finer ones (a culled node hides its subtree).
     int64_t r = 0;
     for (int l = 0; l < set.lod_count; l++) {
-        if (l < prof.lod_end) {
+        if (l < prof->lod_end) {
             r = MAX(r, part_grow(l) + 1);
         }
         if (has_layer(l)) {
-            r = MAX(r, int64_t(std::ceil(prof.reach)) + layer_cell(l) + blob_grow(l) + 1);
+            r = MAX(r, int64_t(std::ceil(prof->reach)) + layer_cell(l) + blob_grow(l) + 1);
         }
         ground_reaches.push_back(r);
     }
@@ -147,13 +188,13 @@ int64_t ScatterSource::blob_reach(int p_layer) const {
     // blob's covariance is at most a member's own plus the spread of their centroids (2 cells); its support's semi-axes
     // are 3 sigma with the layer's filter (make_blob).
     const double c = double(layer_cell(p_layer));
-    const double own = part_layer(p_layer) ? prof.part_variance : prof.lost[p_layer].variance;
+    const double own = part_layer(p_layer) ? prof->part_variance : prof->lost_variance(p_layer); // the widest class's
     const double filter = set.layers.filter * std::ldexp(1.0, p_layer);
     return int64_t(std::ceil(c + 3.0 * std::sqrt(own + 4.0 * c * c + filter * filter)));
 }
 
 int64_t ScatterSource::part_grow(int p_lod) const {
-    return int64_t(std::ceil(prof.reach)) + influence_margin(bounds_record(prof.k_max, prof.margin_max), p_lod);
+    return int64_t(std::ceil(prof->reach)) + influence_margin(bounds_record(prof->k_max, prof->margin_max), p_lod);
 }
 
 int64_t ScatterSource::blob_grow(int p_layer) const {
@@ -177,12 +218,12 @@ void ScatterSource::keys(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, 
     const VoxelBox box{ p_lo, p_hi, true };
     // Every tile whose content can pass a box test in the box: a part tile's records lie within its box grown by the
     // reach, and its bases in the zone; a blob tile's within blob_reach, its cells within a cell of the records' reach.
-    if (p_lod < prof.lod_end) {
+    if (p_lod < prof->lod_end) {
         append_tiles(SourceKey::PARTS, part_key_lod(p_lod), part_tile_side(p_lod), box.grown(part_grow(p_lod)), 0, r_out);
     }
     if (has_layer(p_lod)) {
         const int64_t c = layer_cell(p_lod);
-        append_tiles(SourceKey::BLOBS, p_lod, blob_tile_cells(p_lod) * c, box.grown(blob_grow(p_lod)), int64_t(std::ceil(prof.reach)) + c, r_out);
+        append_tiles(SourceKey::BLOBS, p_lod, blob_tile_cells(p_lod) * c, box.grown(blob_grow(p_lod)), int64_t(std::ceil(prof->reach)) + c, r_out);
     }
 }
 
@@ -205,7 +246,7 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
     } else if (p_key.kind == SourceKey::BLOBS && part_layer(p_key.lod)) {
         // The LOD-0 part tiles whose records can have their centroid in the tile's cells or MARGIN_CELLS past them.
         const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod));
-        append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof.reach))), 0, r_out);
+        append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof->reach))), 0, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         // A far layer: the proxy tiles its region meets (each walked once, shared by the blob tiles around it).
         proxy_tiles(proxy_region(p_key), p_key.lod, r_out);
@@ -237,7 +278,7 @@ void ScatterSource::content(const SourceKey &p_key, const Inputs &p_inputs, Sour
     if (part_sides.empty() || p_key.source != set.id) {
         return;
     }
-    if (p_key.kind == SourceKey::PARTS && p_key.lod < prof.lod_end) {
+    if (p_key.kind == SourceKey::PARTS && p_key.lod < prof->lod_end) {
         part_tile(p_key, p_inputs, r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         blob_tile(p_key, p_inputs, r_out);
@@ -266,7 +307,7 @@ void ScatterSource::walk_tile(const SourceKey &p_key, SourceContent &r_out) cons
 }
 
 int64_t ScatterSource::proxy_grow(int p_layer) const {
-    return MARGIN_CELLS * layer_cell(p_layer) + int64_t(std::ceil(prof.reach));
+    return MARGIN_CELLS * layer_cell(p_layer) + int64_t(std::ceil(prof->reach));
 }
 
 VoxelBox ScatterSource::proxy_region(const SourceKey &p_key) const {
@@ -310,7 +351,7 @@ void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<Tab
     for (TableRecord &rec : r_grown) {
         finish_table_record(lib, set.finish, rec);
         // keys() and blob_reach() trust the profile, read from samples: a record past it may be missing from chunks.
-        out = out || !prof.covers(p_site.site.base, rec);
+        out = out || !prof->covers(p_site.site.base, rec);
     }
     append_group(r_grown.data(), uint32_t(r_grown.size()), p_lod, r_out);
     if (out) {
@@ -374,7 +415,6 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
         surface_sites(region.lo, region.hi, g, s.salt ^ PROXY_SALT, s.ground, sites, false, proxy_level(p_key.lod)); // in cell order
     }
     const double side = double(s.side);
-    const SourceProfile::Lost &lost = prof.lost[p_key.lod];
     for (const CellSite &cs : sites) {
         const VoxelPos &base = cs.site.base;
         double inside = 1.0;
@@ -386,6 +426,8 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
             continue;
         }
         const double weight = (double(g) / side) * (double(g) / side) * inside;
+        // The proxy stands for sites of its own class (a tree's species: its proxy site's variant, hashed like a site's).
+        const SourceProfile::Lost &lost = prof->lost_of(s.class_index(cs.site.variant), p_key.lod);
         float rows[9];
         up_rotation(s.up(base), rows);
         for (const std::pair<uint32_t, Moments> &m : lost.moments.parts) {
@@ -421,7 +463,7 @@ void ScatterSource::blobs(const SourceKey &p_key, const Inputs &p_inputs, std::v
     // An item tents into the cells within a cell of its centroid, which lies within two reaches of its anchor (a record's
     // anchor and centroid are both in its box, within the reach of its base): none near the tile's own cells, no blob
     // (most tiles of a column: their region reaches the ground, their cells don't).
-    const VoxelBox near = tile_box(p_key).grown(layer_cell(p_key.lod) + 2 * int64_t(std::ceil(prof.reach)));
+    const VoxelBox near = tile_box(p_key).grown(layer_cell(p_key.lod) + 2 * int64_t(std::ceil(prof->reach)));
     if (std::none_of(items.begin(), items.end(), [&near](const MomentItem &p_i) { return near.contains(p_i.anchor); })) {
         return;
     }
@@ -430,7 +472,7 @@ void ScatterSource::blobs(const SourceKey &p_key, const Inputs &p_inputs, std::v
     const int64_t n = blob_tile_cells(p_key.lod);
     params.judged = VoxelBox{ p_key.tile * n, p_key.tile * n + VoxelPos(n - 1, n - 1, n - 1), true }; // its own cells
     MomentLayers layers;
-    layers.build(items, params, &prof.joins);
+    layers.build(items, params, &prof->joins);
     layers.kept(r_out);
 }
 

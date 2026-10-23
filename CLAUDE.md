@@ -330,9 +330,14 @@ to every change, and a reviewer may reject a PR on any of them.
   the profile, and `["stream"]`), or with `--stream=0` (`VoxelTerrain.archetype_stream`, bench and player) placed whole in
   the table at configure by `add_source` (count, records per site, moments per material; the reference, and the tests that
   edit their records by id). Biome features and the shapes gallery stay table records (whole-build blobs). `SourceProfile`
-  reads `SAMPLES` (256) hashed sites at the origin: reach, `lod_end`, k / margin max (times `REACH_SAFETY` 1.25), joins,
-  records per site and the mass lost per LOD (what a far proxy stands for); unit-tested to bound every record of the
-  forest and the scatter (`covers`).
+  reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes` / `class_of`: the forest's species,
+  class c sampled with variant c; the scatter has one class, hashed variants): reach, `lod_end`, k / margin max (times
+  `REACH_SAFETY` 1.25), joins and records per site over every sample, the mass lost per LOD per class (`lost_of(class,
+  lod)`: what a far proxy of a site of that class stands for; `blob_reach` takes the widest class's); unit-tested to bound
+  every record of the forest and the scatter (`covers`). A source with a `profile_key` (the forest's: voxel size, species
+  count, type ids) takes its profile from a process-wide registry keyed by it plus the salt, finish, layer params and LOD
+  count: every forest of a voxel size shares one, whatever its zone or density (stats `profile_classes`,
+  `profile_shared`).
   **Keys (`src/scatter_source.*`):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS | SITES | PROXIES,
   lod, tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
   `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. SITES and PROXIES hold a walk and no records
@@ -341,9 +346,12 @@ to every change, and a reviewer may reject a PR on any of them.
   `proxy_zone`, from `proxy_level`: an unclipped region's octree level; a far blob tile reads the tiles its `proxy_region`
   meets and sorts their sites in it by cell: the region's walk from that level by construction, `surface_sites`'
   `p_min_level`, unit-tested on the cascade too; the old blobs bit for bit where the zone doesn't clip the region). A
-  PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of the `SITES` tiles inside it that meet the
-  zone (clipped on all 3 axes: up to (2^(L-3))^3 otherwise, mostly air), in the old record pyramid's z y x order (kept as
-  the unit tests' oracle: bit-identical tiles and lists): every record at LOD 0, those listed at L coarser. A LOD with the
+  PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of its box: at LOD 0 those of its `SITES`
+  tile (its one input: the near layers read it), coarser its own walk (no input: one `CellScatter::sites` call over its
+  box, the union of the LOD-0 site tiles' sites in cell order, pruned where the tile is air; the 1M forest's LOD 6-7 tiles
+  asked 4,096 site tiles each before, 758k jobs). Every record at LOD 0, those listed at L coarser, grown from the forest's
+  `hull_only_lod` hull-only (Trees, below); the record pyramid (LOD-0 tiles' groups merged in cell order, each filtered at
+  L) is the unit tests' oracle: bit-identical tiles and lists. A LOD with the
   LOD-0 side (1-3 at 5 cm) has no PARTS key: `keys()` emits `part_key_lod(L)`'s and the chunk's `meeting` filters at L.
   A BLOBS tile (8 layer cells, at least a part tile and 2 chunks) builds the layers on the items within
   `MARGIN_CELLS` (`PRUNE_CELLS` + 1) cells and judges its own cells (`MomentLayerParams::judged`): on part layers the
@@ -351,7 +359,8 @@ to every change, and a reviewer may reject a PR on any of them.
   2 per cell side, the profile's lost moments: mass within 10%). Part layers are those under `Setup::part_cell_sides`
   source cells: 3 by default (the whole build's blobs), `VoxelTerrain.archetype_stream_part_sides` /
   `--stream_part_sides=N` for the streamed sources (default 1: proxies from the source cell on; the 2 switched layers:
-  mass within 20%, peak within 40%, unit test; 3 = the exact layers). The stream keeps three LRU chains: the evictable
+  mass within 20%, peak within 45%, unit test (layer 4 at 41%: bark only, peaks far under the iso); 3 = the exact
+  layers). The stream keeps three LRU chains: the evictable
   keys with records (slots, the entries cap `ENTRIES_MAX`), the walks (`WALKS_MAX` 2^20, `Settings::walks`: ~450 B per
   walk + 56 per site, the 1M zone's ~500k stay resident; `walks_ready`) and those holding input records (not placed,
   count > 0: the inputs cap pops its oldest in O(1), the walks and placed keys never relinked); `computed_by_key` names
@@ -413,7 +422,13 @@ to every change, and a reviewer may reject a PR on any of them.
   upper trunk (the last on its tip) and a clump at each leaf stem's tip, smooth-unioned at half their radius
   into one mass; segments and clumps the hull always covers are skipped.
   Nothing is LOD-specific: the band rule is the LOD rule (thin parts erode away first, a tapered branch
-  from its tip, the hull last; nothing appears with the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
+  from its tip, the hull last; nothing appears with the LOD). **Hull-only growth:** `CellScatter::generate` takes the
+  chunk LOD (-1: all) and returns the records listed there as a subset of the full growth; from
+  `tree_hull_only_lod(species)` (the larger `max_lod` of the species' largest trunk segment and clump, `tree_bounds`
+  padded by `TREE_BOUND_PAD`; `max_lod` grows with a part's size, unit-tested) only the hull or tiers are listed, so the
+  forest grows the trunk's polyline and the hull alone (`grow_tree(..., hull_only)`), bit-identical to the full growth's
+  listed records (unit test: 1,000 trees, every LOD from there; tight at 5 cm: 8 / 7 / 5 for the three species, a LOD
+  late at 0.5 m). `set_forest_scatter` is the forest's generate, classes and profile key, for the table and the tests. Sites are 3D cells (planets come; `src/cell_sites.*`, any
   source, salted: `TREE_SITE_SALT` for the forest, the species is the site's variant): `cell_site` reads the coarse field
   (`SDFBase::ground_field(voxel, lod)`, `evaluate_cull`'s field with its gradient; at `site_lod` a lattice sample extended
   along its gradient) at the cell's centre, projects the cell's hashed voxel on that plane, keeps it if it lands in the

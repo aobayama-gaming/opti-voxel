@@ -356,11 +356,9 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
 CellScatter SDFTable::forest_source(const TreeTypes &p_types) const {
     CellScatter s = scene_source(TREE_SITE_SALT, forest_count, forest_area);
     const double vs = param.voxel_size;
-    // Per species: the LOD its part tiles grow hull-only from, and that its largest tree fits the table (a site is refused
-    // whole on any record that doesn't, so the hull-only growth must never see a tree the full growth refuses: none is).
-    std::vector<int> hull_lod;
+    // Per species, that its largest tree fits the table: a site is refused whole on any record that doesn't, so the
+    // hull-only growth must never see a tree the full growth refuses (none is).
     for (const TreeSpecies &species : tree_species()) {
-        hull_lod.push_back(tree_hull_only_lod(species, vs, *library, record_finish(), p_types));
         std::vector<TableRecord> bounds;
         tree_bounds(species, vs, p_types, bounds);
         for (const TableRecord &rec : bounds) {
@@ -368,10 +366,7 @@ CellScatter SDFTable::forest_source(const TreeTypes &p_types) const {
             ERR_CONTINUE_MSG(!fit.is_empty(), "SDFTable: a tree species may not fit the table: " + fit);
         }
     }
-    s.generate = [p_types, vs, hull_lod](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
-        const int species = tree_species_of(p_site.variant);
-        grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, vs, p_types, r_out, nullptr, p_lod >= hull_lod[species]);
-    };
+    set_forest_scatter(s, vs, *library, record_finish(), p_types);
     return s;
 }
 
@@ -490,6 +485,8 @@ void SDFTable::add_stream(uint32_t p_slot_base, Dictionary &r_stats) {
         d["records_per_site_avg"] = prof.records_per_site;
         d["reach_m"] = prof.reach * param.voxel_size;
         d["lod_end"] = prof.lod_end;
+        d["profile_classes"] = int64_t(prof.lost.size());
+        d["profile_shared"] = streamed.back()->profile_shared();
         d["profile_ms"] = double(Time::get_singleton()->get_ticks_usec() - t0) * 1e-3;
         r_stats[source.name] = d;
     }

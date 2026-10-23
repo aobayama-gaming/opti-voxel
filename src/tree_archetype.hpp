@@ -1,6 +1,7 @@
 #pragma once
 
 #include "archetype_table.hpp"
+#include "cell_scatter.hpp"
 #include "cell_sites.hpp"
 
 #include <vector>
@@ -122,5 +123,11 @@ struct TreeSpan {
 // The salt of the forest's cell sites (cell_sites.hpp); a site's species is its variant modulo the species count.
 inline constexpr uint32_t TREE_SITE_SALT = 0xF0E57u;
 int tree_species_of(uint32_t p_variant);
+
+// Makes r_scatter a forest's (the rest of it, zone, ground, up, accept, is the caller's): the salt, generate (a tree of the
+// site's species, hull-only from the species' tree_hull_only_lod under p_finish), one class per species (class_of =
+// tree_species_of: the far moments per species) and the profile key of the tree set ("trees:" + voxel + species count +
+// type ids: every forest of that voxel size shares one profile).
+void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types);
 
 } // namespace Archetype

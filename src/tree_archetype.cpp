@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <queue>
+#include <string>
 
 namespace Archetype {
 
@@ -532,6 +534,24 @@ int tree_hull_only_lod(const TreeSpecies &p_species, double p_voxel, const DefLi
 
 int tree_species_of(uint32_t p_variant) {
     return int(p_variant % uint32_t(tree_species().size()));
+}
+
+void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types) {
+    std::vector<int> hull_lod;
+    for (const TreeSpecies &species : tree_species()) {
+        hull_lod.push_back(tree_hull_only_lod(species, p_voxel, p_library, p_finish, p_types));
+    }
+    r_scatter.salt = TREE_SITE_SALT;
+    r_scatter.generate = [p_types, p_voxel, hull_lod](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+        const int species = tree_species_of(p_site.variant);
+        grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, p_voxel, p_types, r_out, nullptr, p_lod >= hull_lod[species]);
+    };
+    r_scatter.classes = uint32_t(tree_species().size());
+    r_scatter.class_of = [](uint32_t p_variant) { return uint32_t(tree_species_of(p_variant)); };
+    uint64_t voxel_bits = 0;
+    std::memcpy(&voxel_bits, &p_voxel, sizeof(voxel_bits));
+    r_scatter.profile_key = "trees:" + std::to_string(voxel_bits) + ":" + std::to_string(tree_species().size()) + ":" + std::to_string(p_types.branch) + "," +
+            std::to_string(p_types.crown) + "," + std::to_string(p_types.cone);
 }
 
 } // namespace Archetype

@@ -6,6 +6,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <string>
 #include <vector>
 
 // A procedural instance source: what a zone of the ground holds, one site per 3D cell (cell_sites.hpp), each site
@@ -27,7 +28,17 @@ struct CellScatter {
     // hull-only trees) reads it; one that doesn't ignores it. Thread-safe.
     std::function<void(const Site &, const UpAxis &, int p_lod, std::vector<TableRecord> &)> generate;
 
+    // The site classes the far moments are kept per (the forest: a tree's species): class_of(variant) in [0, classes)
+    // (empty: 0). SourceProfile samples class c with variant c, so class_of(c) must be c.
+    uint32_t classes = 1;
+    std::function<uint32_t(uint32_t p_variant)> class_of;
+    // Sources with the same key share one SourceProfile (ScatterSource's registry): their generate gives the same records
+    // for the same site whatever their zone, ground or density (the profile samples sites at the origin, upright). Empty: a
+    // profile of its own.
+    std::string profile_key;
+
     bool valid() const { return zone.valid && side > 0 && ground && up && generate; }
+    uint32_t class_index(uint32_t p_variant) const { return class_of ? class_of(p_variant) : 0u; }
     // The accepted sites whose base lies in p_query and the zone, in cell order (surface_sites; p_snap false: on the
     // coarse plane). On the worker pool (not from inside a pool task, unless it holds an InlineParallelFor).
     void sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap = true) const;
@@ -35,9 +46,10 @@ struct CellScatter {
     void grow(const Site &p_site, int p_lod, std::vector<TableRecord> &r_out) const { generate(p_site, up(p_site.base), p_lod, r_out); }
 };
 
-// What a source's sites are as a whole, read from samples of its generate (SAMPLES hashed sites at the origin, upright,
-// their records finished like the table's): how far a site's records reach and what they weigh far away. Those bounds
-// let a piece of the source say which chunks it can touch without growing its neighbours.
+// What a source's sites are as a whole, read from samples of its generate (SAMPLES hashed sites per class at the origin,
+// upright, their records finished like the table's): how far a site's records reach and what they weigh far away. Those
+// bounds let a piece of the source say which chunks it can touch without growing its neighbours. The bounds are over every
+// sample; what a site has lost at a LOD is kept per class (a far proxy stands for the trees of its own species).
 struct SourceProfile {
     static constexpr int SAMPLES = 256;
     static constexpr double REACH_SAFETY = 1.25; // the samples' reach, k and margin times this: the sources' sites are not the samples
@@ -49,17 +61,23 @@ struct SourceProfile {
     double records_per_site = 0.0; // the mean over the samples
     double part_variance = 0.0; // the largest eigenvalue of a record's covariance (voxels^2)
     MomentJoins joins; // the source's (moment_joins over the samples' records)
-    // What the mean site has lost at a LOD (its records' moments times their lost shares, MomentItem::lost_share), upright,
-    // relative to its base (voxels): what a far proxy stands for, per site.
+    // What the mean site of a class has lost at a LOD (its records' moments times their lost shares,
+    // MomentItem::lost_share), upright, relative to its base (voxels): what a far proxy stands for, per site.
     struct Lost {
         MaterialMoments moments;
         std::map<uint32_t, std::array<double, 6>> area; // the lost records' summed silhouettes, per material
         double variance = 0.0; // the largest eigenvalue of a material's covariance
     };
-    std::vector<Lost> lost; // per LOD
+    std::vector<std::vector<Lost>> lost; // per class, per LOD
+    int lod_count = 0;
+
+    // What a site of class p_class (CellScatter::class_index) has lost at p_lod.
+    const Lost &lost_of(uint32_t p_class, int p_lod) const { return lost[MIN<size_t>(p_class, lost.size() - 1)][p_lod]; }
+    // The largest variance lost at p_lod over the classes.
+    double lost_variance(int p_lod) const;
 
     SourceProfile() = default;
-    // p_scatter's generate on SAMPLES sites (the rest of p_scatter unused). On the worker pool.
+    // p_scatter's generate (the full growth) on SAMPLES sites per class (the rest of p_scatter unused). On the worker pool.
     SourceProfile(const DefLibrary &p_library, const CellScatter &p_scatter, const RecordFinish &p_finish, const MomentLayerParams &p_layers, int p_lod_count);
     // Whether a finished record of a site at p_base is within the profile (keys trust it: a record past it may be missed).
     bool covers(const VoxelPos &p_base, const TableRecord &p_record) const;
