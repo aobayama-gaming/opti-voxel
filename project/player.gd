@@ -55,6 +55,7 @@ var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD; none: hidden
 var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera; F toggles it
+var pixelate := 1           # --pixelate=N; the HUD / overlay layers are scaled by 1/N to keep their on-screen size
 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
@@ -162,6 +163,7 @@ func _ready():
 		if "--overlay=video" in Presets.user_args():
 			overlay = VideoOverlay.new()
 			overlay.setup(terrain, camera)
+			overlay.scale = Vector2.ONE / pixelate
 			add_child(overlay)
 		else:
 			_make_hud()
@@ -184,7 +186,6 @@ func _ready():
 # render_scale of that: `--pixelate=2 --upscale=fsr2` draws the 3D at a quarter of the window per axis, FSR 2 brings it
 # to a half, then each pixel is doubled. The LOD reads the 3D render's size, so it follows.
 func _setup_upscaling() -> void:
-	var pixelate := 1
 	for a in Presets.user_args():
 		if a.begins_with("--pixelate="):
 			pixelate = maxi(a.trim_prefix("--pixelate=").to_int(), 1)
@@ -219,6 +220,7 @@ func _setup_upscaling() -> void:
 
 func _make_hud() -> void:
 	var hud_layer := CanvasLayer.new()
+	hud_layer.scale = Vector2.ONE / pixelate
 	add_child(hud_layer)
 	hud = Label.new()
 	hud.position = Vector2(10, 10)
