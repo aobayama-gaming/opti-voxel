@@ -15,6 +15,7 @@
 #include "voxel_sky.hpp"
 #include "voxel_terrain.hpp"
 
+#include "godot_executor.hpp"
 #include "ov/on_error.hpp"
 
 #include "debug_log.hpp"
@@ -24,6 +25,10 @@
 #endif
 
 using namespace godot;
+
+namespace {
+GodotExecutor g_executor;
+} // namespace
 
 void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
@@ -42,6 +47,8 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
         }
     });
     ov::set_clock_source([]() -> uint64_t { return Time::get_singleton()->get_ticks_usec(); });
+    // The core's tasks, loops and workers on Godot's pool and threads.
+    ov::set_executor(&g_executor);
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
@@ -58,6 +65,7 @@ void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+    ov::set_executor(nullptr);
 }
 
 extern "C" {

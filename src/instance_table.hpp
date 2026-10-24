@@ -2,8 +2,8 @@
 
 #include "archetype_record.hpp"
 #include "chunk_math.hpp"
+#include "ov/executor.hpp"
 
-#include <future>
 #include <memory>
 #include <vector>
 
@@ -134,7 +134,7 @@ std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_
         const std::vector<uint32_t> &p_changed, uint32_t p_version);
 
 // When the base is rebuilt: edit() is edit_snapshot plus, past `rebase` edited ids, a new base built in one
-// background task (std::async) over the records as they are then (copy on write keeps them unchanged), while later edits
+// background task (the core's executor, low priority) over the records as they are then (copy on write keeps them unchanged), while later edits
 // grow the overlay and are logged; once ready(), take() gives the records now over that base plus an overlay of the
 // ids changed since: the same lists as a whole new base. Main thread only, except the task itself.
 class BaseRebuild {
@@ -149,7 +149,7 @@ public:
 
     std::shared_ptr<const InstanceSnapshot> edit(const InstanceSnapshot &p_previous, RecordStore p_records,
             const std::vector<uint32_t> &p_changed, uint32_t p_version);
-    bool running() const { return task.valid(); }
+    bool running() const { return task >= 0; }
     bool ready() const;
     // Waits for the task if it isn't done (null and ERR if none runs). p_like gives the snapshot's fields, p_records
     // and p_version the table now: the version is kept, the records didn't change (nothing re-uploaded or re-meshed).
@@ -163,7 +163,7 @@ private:
 
     const uint32_t rebase;
     const uint32_t hard_overlay;
-    std::future<void> task;
+    ov::TaskId task = -1; // the base being built, -1: none
     std::shared_ptr<const InstanceSnapshot> from; // the records the base indexes
     std::shared_ptr<const IndexLayer> layer;
     std::vector<uint32_t> changed; // since start(), unsorted, may repeat

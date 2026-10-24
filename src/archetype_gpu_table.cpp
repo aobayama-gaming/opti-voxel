@@ -4,9 +4,9 @@
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
 #include "ov/bytes.hpp"
+#include "ov/executor.hpp"
 #include "page_format.hpp"
 #include "trace.hpp"
-#include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -168,8 +168,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<uint32_t> streamed(p_chunks.size(), 0);
     Job job{ snap.get(), stream.get(), scene_end, &base, p_chunks.data(), lists.data(), palettes.data(), fits.data(), streamed.data() };
     if (p_chunks.size() > 1) {
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
+        ov::executor().parallel_for(uint32_t(p_chunks.size()), "GpuTable::build_lists", &Job::run, &job);
     } else if (p_chunks.size() == 1) {
         Job::run(&job, 0);
     }

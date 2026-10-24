@@ -5,13 +5,12 @@
 #include <godot_cpp/templates/hash_map.hpp>
 
 #include <godot_cpp/classes/mutex.hpp>
-#include <godot_cpp/classes/semaphore.hpp>
-#include <godot_cpp/classes/thread.hpp>
 
 #include "chunk_gate.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
 #include "lod_structures.hpp"
+#include "ov/executor.hpp"
 #include "sdf_base.hpp"
 #include <godot_cpp/classes/rendering_server.hpp>
 
@@ -54,12 +53,12 @@ struct UnpackChunk {
 };
 
 // Legacy pipeline (pipeline_mode 1), kept as the correctness oracle of GPU Direct (MeshValidator)
-// and as its perf baseline. A worker thread owns a local RenderingDevice and runs three compute
+// and as its perf baseline. A worker owns a local RenderingDevice and runs three compute
 // passes per batch (SDF samples, edge crossings, one point per surface cell with its quad mask),
 // reads everything back and triangulates on the CPU: one mesh + instance per chunk.
 class CascadePasses;
 
-class GPUMesher : public Object, public ChunkReleaser {
+class GPUMesher : public Object, public ChunkReleaser, public ov::WorkerLoop {
 private:
     // Each chunk's mesh and instance, under its output's handle: written by the worker as it emits the chunk, freed on
     // the main thread (release_chunk), so under the mutex. Keyed by a serial handle, not the chunk id: a re-meshed
@@ -75,15 +74,14 @@ private:
     SDFBase *sdf;
     ChunkParam chunk_param;
 
-    //worker
-    Ref<Thread> worker;
+    // The worker (a worker of the core's executor): enter() makes the device, a step() per batch handed over, exit()
+    // frees the device, on its thread.
+    std::unique_ptr<ov::Worker> worker;
 
     //worker availability
     Ref<Mutex> mutex;
-    Ref<Semaphore> semaphore;
     bool worker_available = false; // set by the worker once its device and buffers exist (process_queue sizes lists by them)
     bool result_available = false;
-    bool exit_thread = false;
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
     Vector2i batch_lods; // smallest and largest LOD of the current batch (cascade levels and variants to run)
     bool trim_indices = false; // drop the zero padding at the end of the index buffer (legacy bug)
@@ -170,7 +168,10 @@ private:
 
     void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, const Vector2i &p_lods, const PackedByteArray &p_table_list,
             const PackedByteArray &p_table_records);
-    void _execute_whole_pipeline();
+    // ov::WorkerLoop.
+    void enter() override;
+    bool step() override;
+    void exit() override;
     void _initialize_gpu_compute();
 
     // r_kind: REMESH from remesh_queue, else CHUNK; r_queue: its index in its queue list (ChunkGate::next's pop).

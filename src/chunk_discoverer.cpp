@@ -140,33 +140,21 @@ bool ChunkDiscoverer::_should_split(const ScanView &p_view, const ChunkId &p_nod
 }
 
 void ChunkDiscoverer::start() {
-    worker.instantiate();
     mutex.instantiate();
-    semaphore.instantiate();
-
-    worker->start(callable_mp(this, &ChunkDiscoverer::discovery_loop), Thread::PRIORITY_NORMAL);
+    worker = ov::executor().start_worker("discoverer", *this);
 }
 
 void ChunkDiscoverer::stop() {
-    mutex->lock();
-    exit_thread = true;
-    mutex->unlock();
-
-    semaphore->post();
-
-    if (worker.is_valid()) {
-        worker->wait_to_finish();
+    if (worker) {
+        worker->stop();
+        worker.reset();
     }
-
-    worker.unref();
 }
 
-void ChunkDiscoverer::discovery_loop() {
+void ChunkDiscoverer::enter() {
     Trace::name_thread("discoverer");
-    bool has_scanned = false;
-    ScanView last_scanned_view;
-    // The previous scan, kept up to date by applying each delta (the published set leaves without a copy).
-    LODHashSet previous_scan;
+    has_scanned = false;
+    previous_scan = LODHashSet();
 
     // The GPU discoverer's local device lives on this thread only. Creating it (device + the point
     // shader's compile) delays the first scan: gpu_init_ms.
@@ -184,105 +172,97 @@ void ChunkDiscoverer::discovery_loop() {
     stats.gpu_scratch_mb = gpu ? double(gpu->scratch_bytes()) / 1048576.0 : 0.0;
     stats.gpu_init_usec = want_gpu ? now_usec() - t_init : 0;
     mutex->unlock();
+}
 
-    while (true) {
-        semaphore->wait();
-        // One post per camera chunk crossing: posts that piled up during the last scan all ask for
-        // the same thing, a scan around the latest camera chunk.
-        while (semaphore->try_wait()) {
-        }
+// One wake: wakes that piled up during the last scan all ask for the same thing, a scan around the latest camera chunk.
+bool ChunkDiscoverer::step() {
+    mutex->lock();
+    const ScanView actual_view = view;
+    const bool force_rescan = rescan_requested;
+    rescan_requested = false;
+    std::vector<VoxelBox> invalidations = std::move(pending_invalidations);
+    pending_invalidations.clear();
+    mutex->unlock();
 
-        mutex->lock();
-        bool should_exit = exit_thread;
-
-        const ScanView actual_view = view;
-        const bool force_rescan = rescan_requested;
-        rescan_requested = false;
-        std::vector<VoxelBox> invalidations = std::move(pending_invalidations);
-        pending_invalidations.clear();
-        mutex->unlock();
-
-        if (should_exit) {
-            break;
-        }
-
-        // An instance edit: drop the cull verdicts of the nodes near the changed region before the scan
-        // (the no-cull rule reads the current SDF, but the cache may hold a verdict from before).
-        if (!invalidations.empty()) {
-            std::vector<ChunkId> stale;
-            for (const KeyValue<ChunkId, CullCache::Entry> &kv : cache.entries) {
-                const int lod = ChunkMath::get_lod(kv.key);
-                const int64_t span = int64_t(chunk_param.chunk_voxel_dimension()) << lod;
-                const VoxelPos min = ChunkMath::chunk_min_voxel(kv.key, chunk_param);
-                VoxelBox node;
-                node.valid = true;
-                const int64_t grow = 2 * span; // the cull band
-                for (int a = 0; a < 3; a++) {
-                    node.lo[a] = min[a] - grow;
-                    node.hi[a] = min[a] + span + grow;
-                }
-                for (const VoxelBox &region : invalidations) {
-                    if (node.intersects(region)) {
-                        stale.push_back(kv.key);
-                        break;
-                    }
+    // An instance edit: drop the cull verdicts of the nodes near the changed region before the scan
+    // (the no-cull rule reads the current SDF, but the cache may hold a verdict from before).
+    if (!invalidations.empty()) {
+        std::vector<ChunkId> stale;
+        for (const KeyValue<ChunkId, CullCache::Entry> &kv : cache.entries) {
+            const int lod = ChunkMath::get_lod(kv.key);
+            const int64_t span = int64_t(chunk_param.chunk_voxel_dimension()) << lod;
+            const VoxelPos min = ChunkMath::chunk_min_voxel(kv.key, chunk_param);
+            VoxelBox node;
+            node.valid = true;
+            const int64_t grow = 2 * span; // the cull band
+            for (int a = 0; a < 3; a++) {
+                node.lo[a] = min[a] - grow;
+                node.hi[a] = min[a] + span + grow;
+            }
+            for (const VoxelBox &region : invalidations) {
+                if (node.intersects(region)) {
+                    stale.push_back(kv.key);
+                    break;
                 }
             }
-            for (const ChunkId &id : stale) {
-                cache.entries.erase(id);
-            }
         }
-
-        // set_camera only posts for a view that changed: an equal one is a post that piled up. Without
-        // back_scale the forward doesn't change the set: a new one alone is no reason to scan.
-        if (has_scanned && !view_changed(last_scanned_view, actual_view) && !force_rescan) {
-            mutex->lock();
-            stats.scans_skipped_same_chunk++;
-            mutex->unlock();
-            continue;
+        for (const ChunkId &id : stale) {
+            cache.entries.erase(id);
         }
-        has_scanned = true;
-        last_scanned_view = actual_view;
-
-        const uint64_t t_scan_start = now_usec();
-        std::unique_ptr<LODHashSet> new_scanned_chunk = std::make_unique<LODHashSet>();
-        ScanCounters counters;
-        cache.scan_index++;
-        int64_t evicted = 0;
-        {
-            Trace::Scope span("discoverer", "scan");
-            scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
-            evicted = _evict_cache(counters.nodes_visited);
-            span.set_arg(new_scanned_chunk->size());
-        }
-        if (counters.verify_mismatches > 0) {
-            ERR_PRINT(String("ChunkDiscoverer: ") + String::num_int64(counters.verify_mismatches) +
-                    " cached cull verdicts differ from a fresh evaluation.");
-        }
-        const uint64_t t_scan_end = now_usec();
-        if (compare) {
-            _compare_with_cpu(actual_view, *new_scanned_chunk);
-        }
-        const uint64_t t_compared = now_usec();
-
-        std::unique_ptr<ScanDelta> delta = std::make_unique<ScanDelta>();
-        {
-            OV_TRACE("discoverer", "delta");
-            ScanDelta::between(previous_scan, *new_scanned_chunk, *delta);
-            delta->apply(previous_scan);
-        }
-        const uint64_t t_delta = now_usec();
-        mutex->lock();
-        stats.delta.add(t_delta - t_compared);
-        stats.last_delta_entered = delta->entered.size();
-        stats.last_delta_left = delta->left.size();
-        stats.delta_entered_total += delta->entered.size();
-        stats.delta_left_total += delta->left.size();
-        mutex->unlock();
-
-        _publish(std::move(new_scanned_chunk), std::move(delta), actual_view, counters, evicted, t_scan_end - t_scan_start, t_delta);
     }
 
+    // set_camera only posts for a view that changed: an equal one is a post that piled up. Without
+    // back_scale the forward doesn't change the set: a new one alone is no reason to scan.
+    if (has_scanned && !view_changed(last_scanned_view, actual_view) && !force_rescan) {
+        mutex->lock();
+        stats.scans_skipped_same_chunk++;
+        mutex->unlock();
+        return false;
+    }
+    has_scanned = true;
+    last_scanned_view = actual_view;
+
+    const uint64_t t_scan_start = now_usec();
+    std::unique_ptr<LODHashSet> new_scanned_chunk = std::make_unique<LODHashSet>();
+    ScanCounters counters;
+    cache.scan_index++;
+    int64_t evicted = 0;
+    {
+        Trace::Scope span("discoverer", "scan");
+        scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
+        evicted = _evict_cache(counters.nodes_visited);
+        span.set_arg(new_scanned_chunk->size());
+    }
+    if (counters.verify_mismatches > 0) {
+        ERR_PRINT(String("ChunkDiscoverer: ") + String::num_int64(counters.verify_mismatches) +
+                " cached cull verdicts differ from a fresh evaluation.");
+    }
+    const uint64_t t_scan_end = now_usec();
+    if (compare) {
+        _compare_with_cpu(actual_view, *new_scanned_chunk);
+    }
+    const uint64_t t_compared = now_usec();
+
+    std::unique_ptr<ScanDelta> delta = std::make_unique<ScanDelta>();
+    {
+        OV_TRACE("discoverer", "delta");
+        ScanDelta::between(previous_scan, *new_scanned_chunk, *delta);
+        delta->apply(previous_scan);
+    }
+    const uint64_t t_delta = now_usec();
+    mutex->lock();
+    stats.delta.add(t_delta - t_compared);
+    stats.last_delta_entered = delta->entered.size();
+    stats.last_delta_left = delta->left.size();
+    stats.delta_entered_total += delta->entered.size();
+    stats.delta_left_total += delta->left.size();
+    mutex->unlock();
+
+    _publish(std::move(new_scanned_chunk), std::move(delta), actual_view, counters, evicted, t_scan_end - t_scan_start, t_delta);
+    return false;
+}
+
+void ChunkDiscoverer::exit() {
     if (gpu) {
         gpu->free();
         memdelete(gpu);
@@ -489,7 +469,9 @@ void ChunkDiscoverer::invalidate(const VoxelBox &p_box) {
     pending_invalidations.push_back(p_box);
     rescan_requested = true;
     mutex->unlock();
-    semaphore->post();
+    if (worker) {
+        worker->wake();
+    }
 }
 
 ScanView ChunkDiscoverer::get_view() {
@@ -592,7 +574,9 @@ void ChunkDiscoverer::set_camera(const Vector3 &p_pos, const Vector3 &p_forward)
         view = new_view;
         camera_change_usec = now_usec();
         mutex->unlock();
-        semaphore->post();
+        if (worker) {
+            worker->wake();
+        }
         VLOG(2, "new view:", godot_str(new_view.camera_chunk), " ", godot_v3(new_view.forward), " memories ", new_view.memory_count);
         return;
     }

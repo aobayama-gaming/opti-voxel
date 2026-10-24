@@ -325,11 +325,8 @@ void GPUMesher::initialize(
 
     // Worker stuff
 
-    worker.instantiate();
     mutex.instantiate();
-    semaphore.instantiate();
-
-    worker->start(callable_mp(this, &GPUMesher::_execute_whole_pipeline), Thread::PRIORITY_NORMAL);
+    worker = ov::executor().start_worker("legacy_mesher", *this);
 
     lod_count = lod_numbers;
     chunk_queue.resize(ChunkMath::load_queue_count(lod_numbers), nullptr);
@@ -415,7 +412,7 @@ void GPUMesher::_initialize_gpu_compute() {
     VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");
 }
 
-void GPUMesher::_execute_whole_pipeline() {
+void GPUMesher::enter() {
     _initialize_gpu_compute();
     // Only now may process_queue build a batch: it sizes the lists by table_list_capacity, set above (before, a batch's
     // lists were cut to 0 words).
@@ -423,35 +420,34 @@ void GPUMesher::_execute_whole_pipeline() {
     worker_available = true;
     mutex->unlock();
     VLOG(1, "GPUMesher : Worker started");
+}
 
-    while (true) {
-        semaphore->wait();
-        mutex->lock();
-        const bool should_exit = exit_thread;
-        PackedByteArray local_chunk_id = input_chunk_id;
-        PackedByteArray local_table_list = input_table_list;
-        PackedByteArray local_table_records = input_table_records;
-        const uint32_t local_count = batch_count;
-        const Vector2i local_lods = batch_lods;
+// The batch process_queue handed over (worker_available false), if any.
+bool GPUMesher::step() {
+    mutex->lock();
+    if (worker_available) {
         mutex->unlock();
-
-        if (should_exit) {
-            break;
-        }
-
-        const uint64_t t_batch_start = now_usec();
-        _execute_gpu_pipeline(local_chunk_id, local_count, local_lods, local_table_list, local_table_records);
-
-        mutex->lock();
-        stats.batch_total.add(now_usec() - t_batch_start);
-        mutex->unlock();
-
-        mutex->lock();
-        worker_available = true;
-        result_available = true;
-        mutex->unlock();
+        return false;
     }
+    PackedByteArray local_chunk_id = input_chunk_id;
+    PackedByteArray local_table_list = input_table_list;
+    PackedByteArray local_table_records = input_table_records;
+    const uint32_t local_count = batch_count;
+    const Vector2i local_lods = batch_lods;
+    mutex->unlock();
 
+    const uint64_t t_batch_start = now_usec();
+    _execute_gpu_pipeline(local_chunk_id, local_count, local_lods, local_table_list, local_table_records);
+
+    mutex->lock();
+    stats.batch_total.add(now_usec() - t_batch_start);
+    worker_available = true;
+    result_available = true;
+    mutex->unlock();
+    return false;
+}
+
+void GPUMesher::exit() {
     // The local device must be freed on the thread that created it.
     if (cascade != nullptr) {
         // Its uniform set uses the input, param and sdf buffers freed below.
@@ -476,15 +472,11 @@ void GPUMesher::_execute_whole_pipeline() {
 }
 
 void GPUMesher::stop() {
-    if (worker.is_null()) {
+    if (!worker) {
         return;
     }
-    mutex->lock();
-    exit_thread = true;
-    mutex->unlock();
-    semaphore->post();
-    worker->wait_to_finish();
-    worker.unref();
+    worker->stop();
+    worker.reset();
 
     // Free the meshes of results that were produced but never collected.
     for (ChunkOutput &out : out_queue) {
@@ -979,7 +971,7 @@ void GPUMesher::process_queue() {
         worker_available = false;
         mutex->unlock();
 
-        semaphore->post(); // wake up the worker thread
+        worker->wake();
     }
 }
 

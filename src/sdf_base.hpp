@@ -14,7 +14,7 @@
 #include "material_library.hpp"
 #include "page_format.hpp"
 
-#include <godot_cpp/classes/worker_thread_pool.hpp>
+#include "ov/executor.hpp"
 
 #include <array>
 #include <functional>
@@ -146,7 +146,7 @@ public:
     virtual UpAxis up_at(const VoxelPos & /*p_voxel*/) const { return UP_Y; }
 
     // evaluate_cull() at p_count LOD0 voxels (frac 0), the same bits: the discoverer's corners, one batch per
-    // wave, over the WorkerThreadPool in blocks of BATCH_BLOCK points (evaluate_cull is thread-safe).
+    // wave, over the executor in blocks of BATCH_BLOCK points (evaluate_cull is thread-safe).
     void evaluate_batch(const VoxelPos *p_points, int p_count, int p_lod, float *r_out) const {
         BatchJob job{ this, p_points, p_count, p_lod, r_out };
         const int blocks = (p_count + BATCH_BLOCK - 1) / BATCH_BLOCK;
@@ -156,9 +156,7 @@ public:
             }
             return;
         }
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&SDFBase::_batch_block, &job, blocks, -1, true, "SDFBase::evaluate_batch");
-        pool->wait_for_group_task_completion(id);
+        ov::executor().parallel_for(uint32_t(blocks), "SDFBase::evaluate_batch", &SDFBase::_batch_block, &job);
     }
 
     // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it

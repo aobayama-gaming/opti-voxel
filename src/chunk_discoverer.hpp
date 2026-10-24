@@ -4,11 +4,10 @@
 #include "debug_log.hpp"
 #include "local_points_gpu.hpp"
 #include "lod_structures.hpp"
+#include "ov/executor.hpp"
 #include "sdf_base.hpp"
 #include <godot_cpp/classes/mutex.hpp>
 #include <godot_cpp/classes/node.hpp>
-#include <godot_cpp/classes/semaphore.hpp>
-#include <godot_cpp/classes/thread.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
 #include <godot_cpp/templates/hash_set.hpp>
 
@@ -17,7 +16,7 @@
 
 using namespace godot;
 
-class ChunkDiscoverer : public Object {
+class ChunkDiscoverer : public Object, public ov::WorkerLoop {
 public:
     // How a node of the LOD tree is dropped as holding no surface.
     enum CullMode {
@@ -65,11 +64,16 @@ public:
     };
 
 private:
-    Ref<Thread> worker;
-
-    Ref<Semaphore> semaphore;
+    // The scans run on a worker of the core's executor (start / stop): enter(), a step() per wake (a camera chunk
+    // crossing or an edit), exit().
+    std::unique_ptr<ov::Worker> worker;
     Ref<Mutex> mutex;
-    bool exit_thread = false;
+
+    // Worker only: the last scan's view and set (kept up to date by applying each delta, so the published set leaves
+    // without a copy).
+    bool has_scanned = false;
+    ScanView last_scanned_view;
+    LODHashSet previous_scan;
 
     // non thread safe variable
     ChunkParam chunk_param = ChunkParam();
@@ -83,7 +87,7 @@ private:
     bool want_gpu = false; // discoverer_mode 1: corners on LocalPointsGPU
     static constexpr uint32_t GPU_POINTS = 65536; // corners per GPU batch (a wave above it is split)
     bool compare = false; // --discovery_compare: diff every scan against a fresh CPU scan
-    // Owned by the worker thread: created at the top of discovery_loop, freed before it returns.
+    // Owned by the worker: created in enter(), freed in exit(), on its thread.
     LocalPointsGPU *gpu = nullptr;
 
     // actively mutexed
@@ -228,7 +232,10 @@ public:
     void set_gpu(bool p_enable) { want_gpu = p_enable; }
     void set_compare(bool p_enable) { compare = p_enable; }
 
-    void discovery_loop();
+    // ov::WorkerLoop: the GPU discoverer's device (enter, exit) and one scan per wake (step).
+    void enter() override;
+    bool step() override;
+    void exit() override;
 
     // The LOD distances of `target_pixel_error`. Outside a view cone of half-angle `cone_half_angle_rad`
     // they shrink towards those of `target_pixel_error_back` (ignored unless coarser than the front error).

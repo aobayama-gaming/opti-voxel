@@ -1,34 +1,32 @@
 // The stream's drain tasks' executors (instance_stream.hpp).
 #include "instance_stream.hpp"
 
-#include <godot_cpp/classes/os.hpp>
-#include <godot_cpp/classes/worker_thread_pool.hpp>
+#include "ov/executor.hpp"
 
 namespace Archetype {
 
 namespace {
 
+// The drain tasks on the core's executor, low priority.
 class PoolExecutor : public StreamExecutor {
 public:
     ~PoolExecutor() override { reap(true); }
-    // The pool gives low-priority tasks threading/worker_pool/low_priority_thread_ratio (0.5) of its threads.
-    int workers() const override { return MAX(1, OS::get_singleton()->get_processor_count() / 2); }
+    int workers() const override { return ov::executor().concurrency(ov::Priority::LOW); }
     void run(std::function<void()> p_task) override {
-        auto task = std::make_unique<Task>(Task{ std::move(p_task) });
-        const int64_t id = WorkerThreadPool::get_singleton()->add_native_task(&Task::call, task.get(), false, "InstanceStream");
+        const ov::TaskId id = ov::executor().submit(std::move(p_task), ov::Priority::LOW, "InstanceStream");
         const std::lock_guard<std::mutex> lock(task_mutex);
-        tasks.emplace_back(id, std::move(task));
+        tasks.push_back(id);
     }
     void reap(bool p_wait) override {
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+        ov::Executor &executor = ov::executor();
         for (;;) {
-            std::vector<std::pair<int64_t, std::unique_ptr<Task>>> done;
+            std::vector<ov::TaskId> done;
             {
                 const std::lock_guard<std::mutex> lock(task_mutex);
                 for (size_t i = 0; i < tasks.size();) {
-                    if (p_wait || pool->is_task_completed(tasks[i].first)) {
-                        done.push_back(std::move(tasks[i]));
-                        tasks[i] = std::move(tasks.back());
+                    if (p_wait || executor.done(tasks[i])) {
+                        done.push_back(tasks[i]);
+                        tasks[i] = tasks.back();
                         tasks.pop_back();
                     } else {
                         i++;
@@ -36,8 +34,8 @@ public:
                 }
             }
             // Released without the lock: a running task (p_wait) may start others meanwhile, taken by the next round.
-            for (const std::pair<int64_t, std::unique_ptr<Task>> &t : done) {
-                pool->wait_for_task_completion(t.first); // releases its id
+            for (const ov::TaskId id : done) {
+                executor.wait(id);
             }
             if (!p_wait || done.empty()) {
                 return;
@@ -46,12 +44,8 @@ public:
     }
 
 private:
-    struct Task {
-        std::function<void()> fn;
-        static void call(void *p_task) { static_cast<Task *>(p_task)->fn(); }
-    };
     std::mutex task_mutex; // run() is called from the drain tasks too
-    std::vector<std::pair<int64_t, std::unique_ptr<Task>>> tasks;
+    std::vector<ov::TaskId> tasks;
 };
 
 } // namespace

@@ -1,7 +1,6 @@
 #include "instance_table.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 
 namespace Archetype {
@@ -533,11 +532,11 @@ std::shared_ptr<const InstanceSnapshot> BaseRebuild::edit(const InstanceSnapshot
 void BaseRebuild::start(std::shared_ptr<const InstanceSnapshot> p_from) {
     cancel();
     from = std::move(p_from);
-    task = std::async(std::launch::async, [this] { layer = build_base(from->records, from->param, from->max_lod); });
+    task = ov::executor().submit([this] { layer = build_base(from->records, from->param, from->max_lod); }, ov::Priority::LOW, "BaseRebuild");
 }
 
 bool BaseRebuild::ready() const {
-    return running() && task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    return running() && ov::executor().done(task);
 }
 
 std::shared_ptr<const InstanceSnapshot> BaseRebuild::take(const InstanceSnapshot &p_like, RecordStore p_records, uint32_t p_version) {
@@ -560,7 +559,8 @@ void BaseRebuild::cancel() {
 
 void BaseRebuild::wait() {
     if (running()) {
-        task.get();
+        ov::executor().wait(task);
+        task = -1;
     }
 }
 

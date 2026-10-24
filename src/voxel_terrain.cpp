@@ -1,5 +1,7 @@
 #include "voxel_terrain.hpp"
+
 #include "godot_conv.hpp"
+#include "ov/executor.hpp"
 #include "rd_utils.hpp"
 #include "trace.hpp"
 #include <cmath>
@@ -1020,6 +1022,7 @@ void VoxelTerrain::_process(double) {
 
     Section total(process_stats.process_total, "process");
     visual_mesh_data.frame = exec_time;
+    ov::executor().pump(); // an inline executor's queued tasks and woken workers (a threaded one runs them itself)
     {
         Section section(process_stats.stream_poll, "stream_poll");
         sdf->poll(); // an edit's rebuilt index base, the streamed keys computed since the last frame (before the meshers ask)
