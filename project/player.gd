@@ -52,7 +52,7 @@ var dig_k := 0.3            # smooth radius (metres)
 var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid tube); --drag_op=subtract|union
 var drag_active := false
 var left_tube := false      # --left_click=tube: left click drags the tube instead of spraying
-var spray_radius := 0.05    # --spray_radius=M
+var spray_radius := 0.1     # --spray_radius=M
 var spray_wait := 0.0       # seconds to the next spray sphere
 var drag_id := -1
 var drag_pose := []         # [anchor voxel Array, rotation]: the tube's last placed pose
