@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstring>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -794,6 +796,39 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
     CHECK(int64_t(sdf.get_gpu_table()->get_stats()["stream"].operator Dictionary()["lists_missing"]) == 0);
 }
 
+// The GLSL 4.50 reserved words (spec 3.6) a shader text uses outside its comments. glslang refuses them at pipeline
+// creation, and the cascade then falls back to the bare variant without a fold: the fold flag was named `active`.
+static std::vector<std::string> glsl_reserved_words_used(const String &p_code) {
+    static const std::set<std::string> RESERVED = { "common", "partition", "active", "asm", "class", "union", "enum",
+        "typedef", "template", "this", "resource", "goto", "inline", "noinline", "public", "static", "extern",
+        "external", "interface", "long", "short", "half", "fixed", "unsigned", "superp", "input", "output", "hvec2",
+        "hvec3", "hvec4", "fvec2", "fvec3", "fvec4", "filter", "sizeof", "cast", "namespace", "using",
+        "sampler3DRect" };
+    const std::string code = p_code.utf8().get_data();
+    std::vector<std::string> used;
+    std::string word;
+    for (size_t i = 0; i <= code.size(); i++) {
+        if (i + 1 < code.size() && code[i] == '/' && code[i + 1] == '/') {
+            i = code.find('\n', i);
+            if (i == std::string::npos) {
+                break;
+            }
+        } else if (i + 1 < code.size() && code[i] == '/' && code[i + 1] == '*') {
+            i = code.find("*/", i) + 1;
+        }
+        const char ch = i < code.size() ? code[i] : ' ';
+        if (std::isalnum(uint8_t(ch)) || ch == '_') {
+            word += ch;
+            continue;
+        }
+        if (RESERVED.count(word)) {
+            used.push_back(word);
+        }
+        word.clear();
+    }
+    return used;
+}
+
 // The fold variant's workgroups are cubes of samples with a shared list slice and barriers: every placeholder of the
 // template is filled (the fold's return after the barriers too), and the bare variants keep their returns and no
 // barrier (their text is pinned in test_climate_shape.cpp).
@@ -805,10 +840,12 @@ TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants 
             const String bare = CascadeGLSL::level_shader(&t.sdf, debug, false, false, true, fields);
             CHECK(!fold.contains("/*"));
             CHECK(!bare.contains("/*"));
-            CHECK(fold.contains("if (!active) {"));
+            CHECK(glsl_reserved_words_used(fold) == std::vector<std::string>());
+            CHECK(glsl_reserved_words_used(bare) == std::vector<std::string>());
+            CHECK(fold.contains("if (!sample_live) {"));
             CHECK(fold.contains(vformat("shared uint s_fold_word[%d];", CascadeGLSL::LOCAL_SIZE)));
             CHECK(fold.contains("arch_meets_box(group_lo, group_hi, "));
-            CHECK(!bare.contains("bool active"));
+            CHECK(!bare.contains("bool sample_live"));
             CHECK(!bare.contains("barrier()"));
         }
     }

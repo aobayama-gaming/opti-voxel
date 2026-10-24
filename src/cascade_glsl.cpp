@@ -196,7 +196,7 @@ constexpr ItemFills POINT_FILLS = {
 // The fold variant's item index (it runs at level 0 only, record_level): workgroup x is a cube of FOLD_CUBE^3 samples,
 // so that arch_fold tests the chunk's list once per cube. A sample's local index is the chunk fill's, so the scratch,
 // sdf_sample and sdf_material keep their layout. The fold has barriers, so the template's returns turn into
-// `active = false` before it (/*SKIP*/) and a return after it (/*AFTER_SAMPLE*/): every invocation reaches them.
+// `sample_live = false` before it (/*SKIP*/) and a return after it (/*AFTER_SAMPLE*/): every invocation reaches them.
 constexpr const char FOLD_ITEM_INDEX[] = R"glsl(    uint c = gl_WorkGroupID.y;
     uint n = pc.n_child;
     uint cubes = n / CUBEu;
@@ -205,7 +205,7 @@ constexpr const char FOLD_ITEM_INDEX[] = R"glsl(    uint c = gl_WorkGroupID.y;
     uvec3 cube = CUBEu * uvec3(cube_id % cubes, (cube_id / cubes) % cubes, cube_id / (cubes * cubes));
     uvec3 at = cube + uvec3(lane % CUBEu, (lane / CUBEu) % CUBEu, lane / (CUBEu * CUBEu));
     uint local = at.x + n * (at.y + n * at.z);
-    bool active = true;
+    bool sample_live = true;
 )glsl";
 
 // Point i of a level's box, (lo_m + i) << m: the template's p, for the corners of the fold variant's cube.
@@ -562,11 +562,11 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     String code = LEVEL_TEMPLATE;
     code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
     code = code.replace("/*ITEM_INDEX*/", p_fold ? String(FOLD_ITEM_INDEX).replace("CUBE", itos(FOLD_CUBE)) : String(fills.item_index));
-    code = code.replace("/*SKIP*/", p_fold ? "active = false;" : "return;");
+    code = code.replace("/*SKIP*/", p_fold ? "sample_live = false;" : "return;");
     code = code.replace("/*ITEM_FRAME*/", fills.item_frame);
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
-    code = code.replace("/*AFTER_SAMPLE*/", p_fold ? "\n    if (!active) {\n        return; // past the fold's barriers\n    }" : "");
+    code = code.replace("/*AFTER_SAMPLE*/", p_fold ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
     // The sample's ground channels: the cascade's, or climate_ground's with ground terms (the fields variant only: their
     // field range is every level, so it is the only one compiled).
     const String ground = p_fields && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl() : String();
@@ -608,8 +608,8 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
     code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
 
-    const char *debug_store = p_fold ? "if (active) store_debug(sample_index, ch); // CascadeSpike variant" : "store_debug(sample_index, ch); // CascadeSpike variant";
-    code = code.replace("/*DEBUG_STORE*/", p_debug ? debug_store : "");
+    const String debug_store = String(p_fold ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
+    code = code.replace("/*DEBUG_STORE*/", p_debug ? debug_store : String());
     return code;
 }
 
@@ -805,11 +805,9 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, con
     const int with_fields = !fields.empty() && fields.batch(p_lods, p_j) ? 2 : 0;
     bool fold = p_j == 0 && p_fold;
     if (fold && !uniform_set[with_fields + 1].is_valid()) {
-        ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
+        ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, a chunk size not a multiple of FOLD_CUBE, or it failed to compile): the bare cascade instead.");
         fold = false;
     }
-    // The fold variant's workgroups are the n^3 / LOCAL_SIZE cubes of level 0 (whole cubes: _create).
-    ERR_FAIL_COND(fold && n % CascadeGLSL::FOLD_CUBE != 0);
     const int v = with_fields + (fold ? 1 : 0);
     const int64_t list = rd->compute_list_begin();
     rd->compute_list_bind_compute_pipeline(list, pipeline[v]);

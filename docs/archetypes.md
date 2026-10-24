@@ -39,7 +39,7 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   combine) runs on the survivors in list order, the same text as FrameSpike's per-sample loop. `sat_diff` keeps the
   order, so a record a sample would fold always passes its cube's test (unit test over random records, saturated
   samples included, CPU mirror `in_influence_cube`): the bits don't change. The template's early returns become an
-  `active` flag in the fold variant, so every invocation reaches the barriers.
+  `sample_live` flag in the fold variant, so every invocation reaches the barriers.
   `SDFBase::get_gpu_table()` hands the mesher the `DefRecord` bytes (`record_bytes`, re-uploaded when the
   snapshot version changes) and the per-batch lists (`build_lists`); each mesher owns the buffers on its
   own RenderingDevice (direct bindings 8/9, legacy 6/7). **Locality rule:** an instance's influence box
