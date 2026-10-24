@@ -50,13 +50,14 @@ what you touch before changing it, and update it in the same PR.
 Most of this code is written with AI agents. These rules are what keeps it reviewable; they apply
 to every change, and a reviewer may reject a PR on any of them.
 - The core is engine-free (the liboptivoxel plan, `docs/liboptivoxel.md`). `tools/check_core_purity.sh`
-  (CI) compiles each of its `core_files` alone with no godot include path, and grep-checks the
-  `pending_files` (own lines converted, godot still reached through a named header). A core file uses
-  only core types (`ov::ivec2|ivec3` / `Float3` / `ov::str` + `ov::format` / `ov::bytes` /
-  `ov::HashMap|HashSet` / the `ov` error sink and `OV_ERR_*`) and `std::` (no godot `MIN` / `ERR_*`);
-  conversions to engine types happen at engine call sites (`godot_conv.hpp`), never inside the core.
-  The GLSL text pipeline (exact_noise's `glsl_*`, `gpu_frame`'s `glsl_functions`, the splice files)
-  still speaks godot String on purpose: it converts as one unit.
+  (CI) compiles each of its `core_files` alone with no godot include path (the list only grows). A core
+  file uses only core types (`ov::ivec2|ivec3` / `Float3` / `ov::str` + `ov::format` + `ov/str.hpp` /
+  `ov::bytes` / `ov::HashMap|HashSet` / `OV_ERR_*` / `OV_LOG` / `ov::now_usec`) and `std::` (no godot
+  `MIN` / `ERR_*`: `ov::min|max|clamp` keep their operand order); shader text is `ov::str`; conversions
+  to engine types happen at engine call sites (`godot_conv.hpp`), never inside the core.
+- Threads only through `ov::executor()` (`ov/executor.hpp`: `submit` / `wait`, `parallel_for`, a
+  `WorkerLoop` for a long-lived loop): no `Thread`, `std::thread`, `std::async` or `WorkerThreadPool`
+  outside `godot_executor` (the inline backend must stay possible: a threads=no build).
 - One source of truth for every constant and layout. Page layout lives in `page_format.hpp`, the
   integer frame in `world_coord.hpp` / `gpu_frame.hpp`. Extend those; never retype a literal (64,
   14 bits, byte offsets, binding numbers) on the C++, GLSL or shader side. GLSL gets C++ constants
@@ -67,7 +68,7 @@ to every change, and a reviewer may reject a PR on any of them.
   from GPU Direct's on purpose, it is the oracle.
 - No new `if (direct_mesher) ... else gpu_mesher` branch in `VoxelTerrain`: a mesher interface is
   planned; until then, put new mesher behaviour behind the meshers' common methods.
-- No commented-out code (git has it) and no debug prints left behind: use `VLOG`. A TODO says why
+- No commented-out code (git has it) and no debug prints left behind: use `VLOG` (`OV_LOG` in the core). A TODO says why
   and what would close it.
 - Functions over ~80 lines get split, files over ~800 lines need a reason. New debug tooling goes
   in its own class (like `MeshValidator`, `PageAuditor`), not into `VoxelTerrain`.

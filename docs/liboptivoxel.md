@@ -10,8 +10,8 @@ us writing Rust.
 
 ```
                  liboptivoxel (pure C++, zero engine includes; src/ov/ + the purity list)
-                 ├─ core: world_coord, chunk_math, page_format, subcube, latency_hist, gpu_cost_model
-                 │        (pending: lod_structures, chunk_memory, instance_table, archetype_ir, cascade)
+                 ├─ core: world_coord, chunk_math, page_format, cascade, archetype IR / records / index,
+                 │        chunk memory, the shader text; host services: ov::Executor, log, clock
                  ├─ mesher: GLSL -> SPIR-V (portable); Tint -> WGSL on web
                  ├─ GPU backends:  Godot-RD (today)  |  Dawn/WebGPU  |  wgpu interop (Bevy, zero-copy)
                  └─ C API (versioned from day one; the inner C++ API may churn behind it)
@@ -47,30 +47,38 @@ Core vocabulary: `ov::ivec2|ivec3` / `Float3` / `ov::str` + `ov::format` / `ov::
 are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `ov_f3`, `godot_bytes`,
 `godot_dict`).
 
+## Done — steps 1, 1b, 3 (`feature/de-godot-core`)
+
+- **Shader text in `ov::str`.** Every GLSL generator (exact_noise, gpu_frame, gpu_glsl, cascade, base_surface,
+  cascade_shaped_glsl, archetype_glsl, the climate's GLSL, the table's fold and library, the SDF's GLSL virtuals)
+  returns `ov::str`; `String::replace` chains are `ov::replace_all` over (key, text) pairs in the same order
+  (`ov/str.hpp`, godot's semantics). The meshers and FrameSpike convert once, at `set_stage_source`. cascade_glsl
+  splits at the device: the text stays, `CascadePasses` moves to `cascade_passes`; the level shader reads the
+  terrain through `CascadeSource` (the part of `SDFBase` it needs). The FNV text pins did not move (after a first
+  commit making four GLSL comments ASCII: `String(const char *)` reads Latin-1, so their UTF-8 was double-encoded).
+- **The chains cut.** `ChunkOutput` holds no engine resource (the legacy mesher keeps its mesh and instance under the
+  output's handle, as a `ChunkReleaser`); the table's records are `archetype_record.hpp` and the index places a record
+  by its finished box, without the library.
+- **One executor** (`ov/executor.hpp`): tasks (submit / done / wait, never on the caller), `parallel_for`, and
+  `WorkerLoop` workers (enter, a step per wake, exit, on one thread). `GodotExecutor` (WorkerThreadPool + threads) is
+  installed by register_types; the default is inline (`pump()` once per frame), the threads=no web build's.
+- **Host services**: `ov/log.hpp` (`OV_LOG`, the level `DebugLog::level` aliases) and `ov/clock.hpp` (`now_usec`,
+  Godot's ticks installed).
+
+`pending_files` is empty: 49 files compile with no godot include path.
+
 ## Next steps, in order
 
-1. **GLSL text pipeline to std::string** (one coherent commit): `exact_noise`'s `glsl_*`,
-   `gpu_frame`'s `glsl_functions/glsl_int64`, `archetype_glsl.cpp`, `cascade_glsl.cpp`, and the
-   splice sites in `frame_spike` / the meshers. Godot's `vformat` is printf-family, so call sites
-   map 1:1 to `ov::format`; `String::replace` -> a small str helper. These files then join the
-   purity list. The FNV text pins (test_exact_noise, test_archetype_ir) must not move. With
-   exact_noise split, archetype_ir moves to `core_files` and cascade can be swept.
-1b. **Cut the other two chains**: `ChunkOutput` holds engine RIDs inside the core's chunk map: split
-   it into a core record (page, quads, palette, an opaque handle) and the engine-side owner, with a core
-   log sink for `debug_log`; move the index's types (`DefRecord`, boxes, bands) out of
-   `archetype_table.hpp` into a small core header.
-1c. ~~**The containers**~~ done: `ov::HashMap|HashSet` are flat tables (dense entries + a Robin Hood
-   index, `ov/containers.hpp`). On std's node-based `unordered_*` the forest5cm fly lost +353% scan
-   ingest and +51% `_process`; the flat table measured -27% / -12% against godot's (PR #101).
-2. **The GPU seam**: `sdf_base.hpp`'s `RenderingDevice*`/`RID` interface becomes the backend vtable
+1. **The GPU seam**: `sdf_base.hpp`'s `RenderingDevice*`/`RID` interface becomes the backend vtable
    (~15 ops: storage/uniform buffer create, texture create/copy, compute pipeline + list begin /
    bind / push / dispatch, buffer_update/get_data, timestamps, free). Godot-RD stays the first
-   backend, benched with `tools/bench_ab.sh` to prove the indirection is free.
-3. **The headless Dawn/WebGPU backend + the C ABI + a web demo**: the second consumer and the
+   backend, benched with `tools/bench_ab.sh` to prove the indirection is free. With it, `level_shader` can move
+   back to taking only `CascadeSource` pieces and the frame loop (`VoxelTerrain::_process`) into an `ov::World`.
+2. **The headless Dawn/WebGPU backend + the C ABI + a web demo**: the second consumer and the
    showcase. Readback is async on WebGPU (first call returns empty; poll across frames) — the
    directory readback is already async-shaped, the legacy full readback goes. No COOP/COEP headers
    on GitHub Pages: thread + dlink support needs the coi-serviceworker trick.
-4. **The Bevy adapter**: bindings + the wgpu-device interop (Bevy's device handles into the vtable,
+3. **The Bevy adapter**: bindings + the wgpu-device interop (Bevy's device handles into the vtable,
    zero-copy); no Rust written by us.
 
 Per-PR rules: every PR keeps the gates green (unit, parity, frame when world_coord/gpu_frame/
