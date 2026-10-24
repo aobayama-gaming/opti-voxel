@@ -53,7 +53,7 @@ var edits_count := 0
 var hud: Label = null
 var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
-var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD
+var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD; none: hidden
 var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera; F toggles it
 
 func _enter_tree() -> void:
@@ -165,6 +165,7 @@ func _ready():
 			add_child(overlay)
 		else:
 			_make_hud()
+			hud_visible = not "--overlay=none" in Presets.user_args()  # a clean screen; TAB shows the HUD
 	yaw = rotation.y
 	pitch = camera.rotation.x
 	_make_flashlight("--flashlight=1" in Presets.user_args())
