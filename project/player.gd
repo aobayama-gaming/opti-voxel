@@ -42,7 +42,7 @@ const FLY_RATE := 1.0  # altitudes per second
 # move_instance / remove_instance.
 const SPHERE_TYPE := 0         # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
 const CAPSULE_TYPE := 1
-const SPRAY_PERIOD := 0.03     # seconds between two spray spheres
+const SPRAY_PERIOD := 0.03     # at least this many seconds between two spray spheres, and the last one meshed
 const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
@@ -441,10 +441,12 @@ func _spray(delta: float) -> void:
 	spray_wait -= delta
 	if spray_wait > 0.0:
 		return
-	spray_wait += SPRAY_PERIOD
+	# One sphere at a time: an edit made before the last one is meshed makes every re-mesh in flight stale,
+	# and nothing shows until the button is released.
 	var terrain := _terrain()
-	if terrain == null:
+	if terrain == null or not terrain.is_edit_settled():
 		return
+	spray_wait = SPRAY_PERIOD
 	var hit = _surface_hit(terrain, camera.global_position, -camera.global_transform.basis.z)
 	if hit == null:
 		return

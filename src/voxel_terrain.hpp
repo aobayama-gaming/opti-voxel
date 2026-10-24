@@ -393,6 +393,8 @@ public:
 
     // True once every scanned chunk is meshed and the mesher has nothing in flight.
     bool is_load_complete();
+    // The instance edits made so far are meshed (the legacy mesher: idle).
+    bool is_edit_settled();
 
     Dictionary get_debug_stats();
 

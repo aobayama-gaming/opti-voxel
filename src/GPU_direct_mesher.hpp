@@ -96,6 +96,9 @@ public:
     void process_queue();
     bool get_results(VoxelState &output);
     bool is_idle();
+    // Every instance edit so far is drawn: no re-mesh queued or parked, and no batch in flight from an older
+    // table or still carrying a chunk an edit requires.
+    bool is_edit_settled() const;
     // Re-packs sparse pages and frees spare ones. Rewrites page/offset of the moved chunks in
     // r_state.loaded_chunk, so call it after the frame's chunk destruction (to_destroy_chunk holds
     // copies) and not while something holds page ranges (validator, auditor).

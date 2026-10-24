@@ -1349,6 +1349,24 @@ bool GPUDirectMesher::is_idle() {
     return remesh_queued.is_empty() && gate.idle(ChunkGate::CHUNK) && gate.idle(ChunkGate::REMESH);
 }
 
+bool GPUDirectMesher::is_edit_settled() const {
+    if (!remesh_queued.is_empty() || !gate.idle(ChunkGate::REMESH)) {
+        return false;
+    }
+    const uint32_t version = sdf->get_gpu_table()->version();
+    for (const KeyValue<uint32_t, InFlightBatch> &kv : in_flight) {
+        if (kv.value.table_version < version) {
+            return false;
+        }
+        for (const ChunkId &chunk : kv.value.chunks) {
+            if (required_version.has(chunk)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 void GPUDirectMesher::set_debug_view(int p_view) {
     pool->set_debug_view(p_view);
 }
