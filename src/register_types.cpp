@@ -1,9 +1,11 @@
 #include "register_types.h"
 
 #include <gdextension_interface.h>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 #include "cascade_report.hpp"
 #include "cascade_spike.hpp"
@@ -31,6 +33,15 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     ov::set_error_sink([](const char *p_file, int p_line, const char *p_message) {
         _err_print_error("core", p_file, p_line, p_message);
     });
+    // Core log lines in the Godot console; core timestamps on the engine's ticks.
+    ov::set_log_sink([](int p_level, const char *p_file, int p_line, const char *p_message) {
+        if (p_level < 0) {
+            _err_print_error("core", p_file, p_line, p_message, false, true);
+        } else {
+            UtilityFunctions::print(String::utf8(p_message));
+        }
+    });
+    ov::set_clock_source([]() -> uint64_t { return Time::get_singleton()->get_ticks_usec(); });
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);

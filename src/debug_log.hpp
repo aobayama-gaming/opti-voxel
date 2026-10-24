@@ -1,16 +1,19 @@
 #pragma once
 
-#include <godot_cpp/classes/time.hpp>
+#include "ov/clock.hpp"
+#include "ov/log.hpp"
+
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <atomic>
 
 using namespace godot;
 
-// Global verbosity shared by every subsystem (set from VoxelTerrain.log_level).
-// 0 = errors only, 1 = info (lifecycle), 2 = verbose (per batch), 3 = trace.
+// Global verbosity shared by every subsystem (set from VoxelTerrain.log_level): the core's log level
+// (ov/log.hpp). 0 = errors only, 1 = info (lifecycle), 2 = verbose (per batch), 3 = trace.
 namespace DebugLog {
-inline std::atomic<int> level{ 0 };
+inline std::atomic<int> &level = ov::log_level();
 // Leak accounting for chunk render resources (mesh/instance pairs).
 inline std::atomic<int64_t> chunk_rids_created{ 0 };
 inline std::atomic<int64_t> chunk_rids_freed{ 0 };
@@ -23,9 +26,7 @@ inline std::atomic<int64_t> chunk_rids_freed{ 0 };
         }                                          \
     } while (0)
 
-inline uint64_t now_usec() {
-    return Time::get_singleton()->get_ticks_usec();
-}
+using ov::now_usec;
 
 // Accumulates a timing series (usec) without storing every sample.
 struct TimingStat {
