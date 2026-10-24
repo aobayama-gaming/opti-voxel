@@ -12,6 +12,7 @@
 #include "debug_log.hpp"
 #include "gpu_cost_model.hpp"
 #include "lod_structures.hpp"
+#include "palette_pool.hpp"
 #include "quad_page_pool.hpp"
 #include "sdf_base.hpp"
 #include <godot_cpp/classes/image_texture.hpp>

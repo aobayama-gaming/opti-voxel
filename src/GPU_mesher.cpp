@@ -503,6 +503,30 @@ void GPUMesher::stop() {
     remesh_queue.clear();
 }
 
+void GPUMesher::release_chunk(const ChunkOutput &p_chunk) {
+    mutex->lock();
+    const ChunkRids *rids = chunk_rids.getptr(p_chunk.handle);
+    const ChunkRids freed = rids ? *rids : ChunkRids();
+    chunk_rids.erase(p_chunk.handle);
+    mutex->unlock();
+    RenderingServer *rs = RenderingServer::get_singleton();
+    if (freed.instance.is_valid()) {
+        rs->free_rid(freed.instance);
+        DebugLog::chunk_rids_freed++;
+    }
+    if (freed.mesh.is_valid()) {
+        rs->free_rid(freed.mesh);
+    }
+}
+
+RID GPUMesher::mesh_of(const ChunkOutput &p_chunk) const {
+    mutex->lock();
+    const ChunkRids *rids = chunk_rids.getptr(p_chunk.handle);
+    const RID mesh = rids ? rids->mesh : RID();
+    mutex->unlock();
+    return mesh;
+}
+
 bool GPUMesher::is_idle() {
     mutex->lock();
     const bool idle = worker_available && !result_available;
@@ -789,10 +813,13 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
 
         ChunkOutput out;
         out.chunk_id = chunk.chunk_id;
-        out.mesh_rid = chunk.mesh_rid;
-        out.instance_rid = chunk.instance_rid;
         out.triangle_count = chunk.index_count / 3;
-        out.drawn_triangles = out.mesh_rid.is_valid() ? chunk.output_triangles.size() / 3 : 0;
+        out.drawn_triangles = chunk.mesh_rid.is_valid() ? chunk.output_triangles.size() / 3 : 0;
+        if (chunk.mesh_rid.is_valid() || chunk.instance_rid.is_valid()) {
+            out.owner = this;
+            out.handle = ++next_handle;
+            chunk_rids[out.handle] = ChunkRids{ chunk.mesh_rid, chunk.instance_rid };
+        }
         emitted_triangles += out.triangle_count;
 
         out_queue.push_back(out);

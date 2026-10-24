@@ -172,7 +172,7 @@ size_t unique_nodes(const std::vector<Placement> &p_sorted) {
 }
 
 // Where each record of p_ids is stored (r_by_lod, one bucket per storage LOD).
-void place_instances(const DefLibrary &p_library, const RecordStore &p_records, const std::vector<uint32_t> &p_ids, const ChunkParam &p_param,
+void place_instances(const RecordStore &p_records, const std::vector<uint32_t> &p_ids, const ChunkParam &p_param,
         int p_max_lod, std::vector<std::vector<Placement>> &r_by_lod) {
     r_by_lod.assign(p_max_lod + 1, std::vector<Placement>());
     for (const uint32_t i : p_ids) {
@@ -180,7 +180,8 @@ void place_instances(const DefLibrary &p_library, const RecordStore &p_records, 
         if (rec.removed || rec.max_lod == 0) {
             continue; // removed: kept for stable ids; dropped at every LOD: never listed
         }
-        const Bounds wb = record_world_bounds(p_library[rec.def], rec);
+        // Its finished box (finish_record: the type's box rotated, rounded out, around the anchor).
+        const VoxelBox wb = record_box(rec);
         double size = 0.0;
         for (int a = 0; a < 3; a++) {
             size = std::max(size, double(wb.hi[a] - wb.lo[a]));
@@ -267,11 +268,11 @@ void occupancy_level(const std::vector<Placement> &p_own, const MortonLess &p_le
 // stored entries, the subtree entries (that LOD's own placements plus its children's entries still listed at
 // it: a coarse node holds the instances big enough for it, not every instance under it) and the occupancy
 // (every placement climbs to the top, band or not). Each LOD merges instead of sorting (MortonLess).
-std::shared_ptr<const IndexLayer> build_layer(const DefLibrary &p_library, const RecordStore &p_records, const std::vector<uint32_t> &p_ids,
+std::shared_ptr<const IndexLayer> build_layer(const RecordStore &p_records, const std::vector<uint32_t> &p_ids,
         const ChunkParam &p_param, int p_max_lod) {
     std::shared_ptr<IndexLayer> layer = std::make_shared<IndexLayer>();
     std::vector<std::vector<Placement>> by_lod;
-    place_instances(p_library, p_records, p_ids, p_param, p_max_lod, by_lod);
+    place_instances(p_records, p_ids, p_param, p_max_lod, by_lod);
     size_t placements = 0;
     for (const std::vector<Placement> &b : by_lod) {
         placements += b.size();
@@ -445,12 +446,12 @@ bool InstanceSnapshot::near_instance(const ChunkId &p_node, int p_lod) const {
 namespace {
 
 // The base over every record of p_records, as they are.
-std::shared_ptr<const IndexLayer> build_base(const DefLibrary &p_library, const RecordStore &p_records, const ChunkParam &p_param, int p_max_lod) {
+std::shared_ptr<const IndexLayer> build_base(const RecordStore &p_records, const ChunkParam &p_param, int p_max_lod) {
     std::vector<uint32_t> all(p_records.size());
     for (uint32_t i = 0; i < all.size(); i++) {
         all[i] = i;
     }
-    return build_layer(p_library, p_records, all, p_param, p_max_lod);
+    return build_layer(p_records, all, p_param, p_max_lod);
 }
 
 void sort_unique(std::vector<uint32_t> &r_ids) {
@@ -482,7 +483,7 @@ std::shared_ptr<const InstanceSnapshot> overlay_snapshot(const InstanceSnapshot 
     snap->base_count = p_base_count;
     snap->overlay_ids = std::move(p_ids);
     snap->masked_end = size_t(std::lower_bound(snap->overlay_ids.begin(), snap->overlay_ids.end(), snap->base_count) - snap->overlay_ids.begin());
-    snap->overlay = build_layer(*snap->library, snap->records, snap->overlay_ids, snap->param, snap->max_lod);
+    snap->overlay = build_layer(snap->records, snap->overlay_ids, snap->param, snap->max_lod);
     return snap;
 }
 
@@ -491,7 +492,7 @@ std::shared_ptr<const InstanceSnapshot> overlay_snapshot(const InstanceSnapshot 
 std::shared_ptr<const InstanceSnapshot> build_snapshot(std::shared_ptr<const DefLibrary> p_library, float p_out_scale,
         bool p_normalize, RecordStore p_records, const ChunkParam &p_param, int p_max_lod, uint32_t p_version) {
     std::shared_ptr<InstanceSnapshot> snap = unindexed(p_library, p_out_scale, p_normalize, std::move(p_records), p_param, p_max_lod, p_version);
-    snap->base = build_base(*p_library, snap->records, p_param, p_max_lod);
+    snap->base = build_base(snap->records, p_param, p_max_lod);
     snap->base_count = snap->records.size();
     return snap;
 }
@@ -532,7 +533,7 @@ std::shared_ptr<const InstanceSnapshot> BaseRebuild::edit(const InstanceSnapshot
 void BaseRebuild::start(std::shared_ptr<const InstanceSnapshot> p_from) {
     cancel();
     from = std::move(p_from);
-    task = std::async(std::launch::async, [this] { layer = build_base(*from->library, from->records, from->param, from->max_lod); });
+    task = std::async(std::launch::async, [this] { layer = build_base(from->records, from->param, from->max_lod); });
 }
 
 bool BaseRebuild::ready() const {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "page_format.hpp"
+#include "palette_block.hpp"
 
 #include <godot_cpp/variant/string.hpp>
 
@@ -45,7 +46,7 @@ class PaletteAlloc {
 public:
     static constexpr uint32_t MIN_BLOCK = 16;
     static constexpr uint32_t MAX_BLOCK = PageFormat::PALETTE_SIZE; // a whole palette
-    static constexpr uint32_t GROUND_BLOCK = 0;
+    static constexpr uint32_t GROUND_BLOCK = PaletteBlock::GROUND;
 
     // p_capacity: a power of two, at least 2 * MAX_BLOCK entries; p_ground_entries (1..MAX_BLOCK): the base palette's.
     void reset(uint32_t p_capacity, uint32_t p_ground_entries = 1);

@@ -1149,7 +1149,7 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
     ERR_FAIL_COND_V_MSG(validator, false, "A validation is already running.");
     std::vector<MeshValidator::Target> candidates;
     for (const auto &kv : visual_mesh_data.loaded_chunk) {
-        if (kv.second.owner) {
+        if (kv.second.page >= 0) {
             MeshValidator::Target t;
             t.chunk_id = kv.first;
             t.page = kv.second.page;
@@ -1178,7 +1178,7 @@ bool VoxelTerrain::debug_audit_pages() {
     HashMap<int, int> index_of_page;
     std::vector<PageAuditor::PageInfo> pages;
     for (const auto &kv : visual_mesh_data.loaded_chunk) {
-        if (!kv.second.owner) {
+        if (kv.second.page < 0) {
             continue;
         }
         if (!index_of_page.has(kv.second.page)) {

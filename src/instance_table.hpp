@@ -1,6 +1,6 @@
 #pragma once
 
-#include "archetype_table.hpp"
+#include "archetype_record.hpp"
 #include "chunk_math.hpp"
 
 #include <future>
@@ -24,6 +24,8 @@
 // the same as from one index over the whole table. Past REBASE edited records the base is rebuilt, on the
 // worker pool while edits go on (BaseRebuild).
 namespace Archetype {
+
+class DefLibrary; // the snapshot carries it for the fold (archetype_table.hpp); the index reads the records alone
 
 struct IndexRange {
     uint32_t begin = 0;

@@ -59,8 +59,18 @@ struct UnpackChunk {
 // reads everything back and triangulates on the CPU: one mesh + instance per chunk.
 class CascadePasses;
 
-class GPUMesher : public Object {
+class GPUMesher : public Object, public ChunkReleaser {
 private:
+    // Each chunk's mesh and instance, under its output's handle: written by the worker as it emits the chunk, freed on
+    // the main thread (release_chunk), so under the mutex. Keyed by a serial handle, not the chunk id: a re-meshed
+    // chunk's new output exists before the old one is freed.
+    struct ChunkRids {
+        RID mesh;
+        RID instance;
+    };
+    godot::HashMap<uint64_t, ChunkRids> chunk_rids;
+    uint64_t next_handle = 0;
+
     // Constant between run
     SDFBase *sdf;
     ChunkParam chunk_param;
@@ -190,6 +200,12 @@ public:
     void remesh_chunks(const std::vector<ChunkId> &p_chunks);
 
     bool get_results(VoxelState &output);
+
+    // ChunkReleaser: frees the chunk's mesh and instance (main thread). The legacy meshes draw everything.
+    void release_chunk(const ChunkOutput &p_chunk) override;
+    void set_hidden(const ChunkOutput &, uint64_t) override {}
+    // The mesh of a chunk this mesher made (invalid for an empty one): the validator's legacy triangles.
+    RID mesh_of(const ChunkOutput &p_chunk) const;
 
     // Stops the worker thread and frees the local RenderingDevice (on the worker, which owns it).
     void stop();
