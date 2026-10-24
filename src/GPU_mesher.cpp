@@ -27,7 +27,7 @@
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 
-#include "cascade_glsl.hpp"
+#include "cascade_passes.hpp"
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "gpu_frame.hpp"
@@ -82,7 +82,7 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
 
 RID GPUMesher::compile_dynamic_shader(const String &algorithm_pass, const String &p_name) {
     // Template shared by the three passes; the placeholders are filled below.
-    String shader = R"glsl(#version 450
+    const ov::str shader_template = R"glsl(#version 450
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
@@ -114,21 +114,21 @@ void main() {
     )glsl";
 
     // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
-    const String pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : String(algorithm_pass);
+    const ov::str pass = dual_contouring && p_name == "third" ? dual_contouring_pass(ov_str(algorithm_pass)) : ov_str(algorithm_pass);
 
     // 2. Inject the dynamic code
     const SDFGpuTable *table = sdf->get_gpu_table();
-    const String bindings = String(GLSL_BUFFER_BINDING).replace("/*GLSL_MATERIAL_BUFFER*/", CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly")) +
-            table->glsl_buffers(6, 7) +
-            vformat("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT) + ChunkPalette::glsl_base(table->base_palette());
-    const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
-    const String set_chunk = table->glsl_set_chunk();
-    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    shader = shader.replace("/*GLSL_BUFFER_BINDING*/", bindings);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
-    shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
-    shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
-    shader = CascadeGLSL::fill_mesher_pass(shader, pass);
+    const ov::str bindings = ov::replace_all(GLSL_BUFFER_BINDING, "/*GLSL_MATERIAL_BUFFER*/", CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly")) +
+            table->glsl_buffers(6, 7) + ov::format("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT) +
+            ov_str(ChunkPalette::glsl_base(table->base_palette()));
+    const ov::str helpers = ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GLSL_EXACT_NOISE + GPUFrame::glsl_int64();
+    const ov::str code = ov::replace_all(shader_template,
+            { { "/*GLSL_STRUCT_DEFINITION*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS },
+                    { "/*GLSL_BUFFER_BINDING*/", bindings },
+                    { "/*GLSL_HELPER_FUNCTION*/", helpers },
+                    { "/*GLSL_SET_CHUNK*/", table->glsl_set_chunk() },
+                    { "/*GLSL_QEF_VERTEX*/", ov::str(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : "") } });
+    const String shader = godot_str(CascadeGLSL::fill_mesher_pass(code, pass));
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
     // 3. Create a Shader Source object

@@ -12,7 +12,7 @@ namespace ArchetypeProbes {
 // Program p_program as GLSL "arch_<p_name>": per LOD of PROBE_LODS, the output (4 words) and with p_trace
 // the trace hash of every register (1 word), zeros read as +0 (Archetype::zero_canonical). The CPU side flags
 // points outside the exact domain.
-Probe probe(const String &p_name, const Archetype::Program &p_program, bool p_trace);
+Probe probe(const ov::str &p_name, const Archetype::Program &p_program, bool p_trace);
 
 // Each shape builder and the fBms (a union of one copy per p_anchors, sizes p_size voxels); every shape at
 // p_frame_anchors (origin_relative: they sit at the same offset from each origin); then p_fuzz fuzzed programs

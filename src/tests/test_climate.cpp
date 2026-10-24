@@ -609,13 +609,13 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
     CLIMATE_REQUIRE(fieldless.get_climate() != nullptr);
     CHECK_FALSE(fieldless.has_ground_materials());
     CHECK(fieldless.get_gpu_table()->base_palette() == std::vector<uint32_t>{ Material::GROUND });
-    CHECK(fieldless.get_ground_material_glsl().is_empty());
+    CHECK(fieldless.get_ground_material_glsl().empty());
     // Without a climate: the base palette is GROUND alone, and no ground material GLSL.
     SDFCascade plain;
     plain.configure(param, 15);
     CHECK(plain.get_gpu_table()->base_palette() == std::vector<uint32_t>{ Material::GROUND });
-    CHECK(plain.get_ground_material_glsl().is_empty());
-    CHECK(Climate::pick_glsl(t, spec).contains("uint climate_biome(Ch ch, WorldPos p)"));
+    CHECK(plain.get_ground_material_glsl().empty());
+    CHECK(ov::contains(Climate::pick_glsl(t, spec), "uint climate_biome(Ch ch, WorldPos p)"));
 }
 
 // One octave per group and lattice: a second band of one group on one lattice is refused by validate, and the cascade
@@ -657,6 +657,6 @@ TEST_CASE("Climate: a modulation without fields takes the modulated GPU variant"
     for (const bool points : { false, true }) {
         const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, points);
         CHECK_FALSE(range.empty());
-        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true).contains("cascade_amplitudes("));
+        CHECK(ov::contains(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true), "cascade_amplitudes("));
     }
 }

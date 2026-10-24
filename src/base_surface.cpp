@@ -1,7 +1,6 @@
 #include "base_surface.hpp"
 
-#include <godot_cpp/core/error_macros.hpp>
-#include <godot_cpp/variant/variant.hpp>
+#include "ov/str.hpp"
 
 #include <cmath>
 
@@ -41,10 +40,10 @@ BaseSurface BaseSurface::flat(int64_t p_datum_y) {
 }
 
 BaseSurface BaseSurface::sphere(const VoxelPos &p_centre, double p_radius, int p_switch_lod) {
-    ERR_FAIL_COND_V_MSG(p_switch_lod < 0 || p_switch_lod > MAX_SWITCH_LOD, BaseSurface(), vformat("BaseSurface: the switch LOD must be in [0, %d].", MAX_SWITCH_LOD));
-    ERR_FAIL_COND_V_MSG(!(p_radius > 0.0) || p_radius > std::ldexp(1.0, 60), BaseSurface(), "BaseSurface: the radius must be in (0, 2^60] voxels.");
-    ERR_FAIL_COND_V_MSG(std::ldexp(p_radius, -p_switch_lod) > double(MAX_RADIUS_CELLS), BaseSurface(),
-            vformat("BaseSurface: a radius of %f voxels needs a switch LOD of at least %d (the radius form's float error).", p_radius,
+    OV_ERR_FAIL_COND_V_MSG(p_switch_lod < 0 || p_switch_lod > MAX_SWITCH_LOD, BaseSurface(), ov::format("BaseSurface: the switch LOD must be in [0, %d].", MAX_SWITCH_LOD));
+    OV_ERR_FAIL_COND_V_MSG(!(p_radius > 0.0) || p_radius > std::ldexp(1.0, 60), BaseSurface(), "BaseSurface: the radius must be in (0, 2^60] voxels.");
+    OV_ERR_FAIL_COND_V_MSG(std::ldexp(p_radius, -p_switch_lod) > double(MAX_RADIUS_CELLS), BaseSurface(),
+            ov::format("BaseSurface: a radius of %f voxels needs a switch LOD of at least %d (the radius form's float error).", p_radius,
                     int(std::ceil(std::log2(p_radius / double(MAX_RADIUS_CELLS))))));
     BaseSurface b;
     b.base_kind = Kind::SPHERE;
@@ -66,7 +65,7 @@ Float4 BaseSurface::at(const VoxelPos &p_voxel, int p_lod) const {
 }
 
 int64_t BaseSurface::datum_y() const {
-    ERR_FAIL_COND_V_MSG(base_kind != Kind::FLAT, 0, "BaseSurface: only a flat base has a datum.");
+    OV_ERR_FAIL_COND_V_MSG(base_kind != Kind::FLAT, 0, "BaseSurface: only a flat base has a datum.");
     return anchor.y;
 }
 
@@ -112,7 +111,7 @@ BaseSurface::Region BaseSurface::region(const Vector3i64 &p_cell, int p_lod) con
     // The level surface through c: d = |v| - R, n = v / |v|, H = (I - n n^T) / |v|. v is an exact int64 difference.
     const VoxelPos c = region_centre(p_cell, p_lod);
     double v[3];
-    const double len = MAX(offset(c, anchor, v), 1.0);
+    const double len = ov::max(offset(c, anchor, v), 1.0);
     const double n[3] = { v[0] / len, v[1] / len, v[2] / len };
     const double k = 1.0 / len;
     const double h[6] = { k * (1.0 - n[0] * n[0]), k * (1.0 - n[1] * n[1]), k * (1.0 - n[2] * n[2]), -k * n[0] * n[1], -k * n[0] * n[2], -k * n[1] * n[2] };
@@ -151,7 +150,7 @@ Float4 BaseSurface::radius_form(const VoxelPos &p_voxel, int p_lod) const {
     const float vx = radius_axis(p_voxel.x, anchor.x, p_lod);
     const float vy = radius_axis(p_voxel.y, anchor.y, p_lod);
     const float vz = radius_axis(p_voxel.z, anchor.z, p_lod);
-    const float ss = MAX(vx * vx + vy * vy + vz * vz, 1.0f);
+    const float ss = ov::max(vx * vx + vy * vy + vz * vz, 1.0f);
     const float r = ExactNoise::det_rsqrt(ss);
     const float rl = float(radius) * exact_pow2(-p_lod);
     return Float4{ vx * r, vy * r, vz * r, ss * r - rl };
@@ -187,8 +186,8 @@ WorldPos BaseSurface::stretched(const WorldPos &p_pos, int p_j, const Float4 &p_
         return pos;
     }
     const float k = (1.0f - exact_pow2(-p_j)) * p_b.w * exact_pow2(p_m);
-    const float off[3] = { CLAMP(k * p_b.x, -STRETCH_LIMIT, STRETCH_LIMIT), CLAMP(k * p_b.y, -STRETCH_LIMIT, STRETCH_LIMIT),
-        CLAMP(k * p_b.z, -STRETCH_LIMIT, STRETCH_LIMIT) };
+    const float off[3] = { ov::clamp(k * p_b.x, -STRETCH_LIMIT, STRETCH_LIMIT), ov::clamp(k * p_b.y, -STRETCH_LIMIT, STRETCH_LIMIT),
+        ov::clamp(k * p_b.z, -STRETCH_LIMIT, STRETCH_LIMIT) };
     float *frac[3] = { &pos.frac.x, &pos.frac.y, &pos.frac.z };
     for (int a = 0; a < 3; a++) {
         const float fl = std::floor(off[a]);
@@ -217,10 +216,10 @@ Float4 BaseSurface::stretch_gradient(const Float4 &p_g, int p_j, const Float4 &p
     return Float4{ p_g.x - c * p_b.x, p_g.y - c * p_b.y, p_g.z - c * p_b.z, p_g.w };
 }
 
-String BaseSurface::glsl_stretch() const {
+ov::str BaseSurface::glsl_stretch() const {
     using namespace ExactNoise;
     if (base_kind == Kind::FLAT) {
-        return String(R"glsl(
+        return ov::replace_all(ov::str(R"glsl(
 // BaseSurface::stretched on the flat base: datum + (y - datum) / 2^j, the remainder to the fraction (carried at 1).
 WorldPos base_stretched(WorldPos p, int j) {
     if (j == 0) {
@@ -249,13 +248,10 @@ vec4 base_stretch_gradient(vec4 g, int j) {
     precise float gy = g.y * exact_pow2(-j);
     return vec4(g.x, gy, g.z, g.w);
 }
-)glsl")
-                .replace("NEG_DATUM_LO", glsl_lo(VoxelPos(0, -anchor.y, 0)))
-                .replace("NEG_DATUM_HI", glsl_hi(VoxelPos(0, -anchor.y, 0)))
-                .replace("DATUM_LO", glsl_lo(VoxelPos(0, anchor.y, 0)))
-                .replace("DATUM_HI", glsl_hi(VoxelPos(0, anchor.y, 0)));
+)glsl"),
+                { { "NEG_DATUM_LO", glsl_lo(VoxelPos(0, -anchor.y, 0)) }, { "NEG_DATUM_HI", glsl_hi(VoxelPos(0, -anchor.y, 0)) }, { "DATUM_LO", glsl_lo(VoxelPos(0, anchor.y, 0)) }, { "DATUM_HI", glsl_hi(VoxelPos(0, anchor.y, 0)) } });
     }
-    return String(R"glsl(
+    return ov::replace_all(ov::str(R"glsl(
 // BaseSurface::stretched on a sphere, b its sample at LOD m (stretch_base).
 WorldPos base_stretched_at(WorldPos p, int j, vec4 b, int m) {
     if (j == 0) {
@@ -290,14 +286,14 @@ vec4 base_stretch_gradient_at(vec4 g, int j, vec4 b) {
     precise vec3 o = vec3(g.x - c * b.x, g.y - c * b.y, g.z - c * b.z);
     return vec4(o, g.w);
 }
-)glsl")
-            .replace("STRETCH_LIMIT", glsl_float(STRETCH_LIMIT));
+)glsl"),
+            "STRETCH_LIMIT", glsl_float(STRETCH_LIMIT));
 }
 
-String BaseSurface::glsl() const {
+ov::str BaseSurface::glsl() const {
     using namespace ExactNoise;
     if (base_kind == Kind::FLAT) {
-        return String(R"glsl(
+        return ov::replace_all(ov::str(R"glsl(
 // BaseSurface::flat_form: (up, altitude) of the plane y = datum, in voxels of LOD lod. up = (-0, 1, -0).
 vec4 base_at(WorldPos p, int lod) {
     precise float s = exact_pow2(-lod);
@@ -305,12 +301,10 @@ vec4 base_at(WorldPos p, int lod) {
     precise float alt = float(sy) * s;
     return vec4(-0.0, 1.0, -0.0, alt);
 }
-)glsl")
-                .replace("DATUM_LO", glsl_lo(anchor))
-                .replace("DATUM_HI", glsl_hi(anchor))
-                .replace("ALT_LIMIT", itos(ALT_LIMIT));
+)glsl"),
+                { { "DATUM_LO", glsl_lo(anchor) }, { "DATUM_HI", glsl_hi(anchor) }, { "ALT_LIMIT", ov::itos(ALT_LIMIT) } });
     }
-    return String(R"glsl(
+    return ov::replace_all(ov::str(R"glsl(
 // BaseSurface::Region: h_diag = (xx, yy, zz), h_off = (xy, xz, yz).
 struct BaseRegion { float d; vec3 n; vec3 h_diag; vec3 h_off; };
 
@@ -345,11 +339,6 @@ vec4 base_radius(WorldPos p, int lod) {
     precise float rl = RADIUS * exact_pow2(-lod);
     return vec4(vx * r, vy * r, vz * r, ss * r - rl);
 }
-)glsl")
-            .replace("REGION_SHIFT", itos(REGION_SHIFT))
-            .replace("REGION_HALF", itos(REGION_HALF))
-            .replace("CENTRE_LO", glsl_lo(anchor))
-            .replace("CENTRE_HI", glsl_hi(anchor))
-            .replace("RADIUS_LIMIT", itos(RADIUS_LIMIT))
-            .replace("RADIUS", glsl_float(float(radius)));
+)glsl"),
+            { { "REGION_SHIFT", ov::itos(REGION_SHIFT) }, { "REGION_HALF", ov::itos(REGION_HALF) }, { "CENTRE_LO", glsl_lo(anchor) }, { "CENTRE_HI", glsl_hi(anchor) }, { "RADIUS_LIMIT", ov::itos(RADIUS_LIMIT) }, { "RADIUS", glsl_float(float(radius)) } });
 }

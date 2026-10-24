@@ -2,8 +2,8 @@
 #include "godot_conv.hpp"
 
 #include "cascade.hpp"
-#include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
+#include "cascade_passes.hpp"
 #include "cascade_spike_points.hpp"
 #include "cascade_spike_sets.hpp"
 #include "debug_log.hpp"

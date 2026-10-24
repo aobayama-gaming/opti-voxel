@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include "godot_conv.hpp"
+
 #include "cascade_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
@@ -843,9 +845,9 @@ TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants 
     for (const bool debug : { false, true }) {
         for (const bool fields : { false, true }) {
             for (const bool material : { false, true }) {
-                const String fold = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields);
-                const String sample = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields, false);
-                const String bare = CascadeGLSL::level_shader(&t.sdf, debug, false, false, material, fields);
+                const String fold = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields));
+                const String sample = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields, false));
+                const String bare = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, false, material, fields));
                 for (const String &code : { fold, sample, bare }) {
                     CHECK(!code.contains("/*"));
                     CHECK(glsl_reserved_words_used(code) == std::vector<std::string>());

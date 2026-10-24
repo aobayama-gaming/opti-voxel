@@ -30,7 +30,7 @@ float shape_bound(const Shape &p_shape) {
 Curve make_curve(const std::vector<double> &p_x, const std::vector<double> &p_y) {
     Curve c;
     const int n = int(p_x.size());
-    auto y = [&](int p_i) { return p_y[size_t(CLAMP(p_i, 0, n - 1))]; };
+    auto y = [&](int p_i) { return p_y[size_t(ov::clamp(p_i, 0, n - 1))]; };
     for (int i = 0; i < n; i++) {
         c.x.push_back(float(p_x[size_t(i)]));
     }
@@ -166,26 +166,26 @@ vec4 cl_terrace(vec4 h, float step, float inv_step, bool invert) {
 )glsl";
 
 // eval_curve as `vec4 cl_curve<p_i>(vec4 x)`, the segment chosen by the same compares.
-String curve_glsl(const Curve &p_c, int p_i) {
+ov::str curve_glsl(const Curve &p_c, int p_i) {
     using ExactNoise::glsl_float;
     const size_t n = p_c.x.size();
-    String code = vformat("vec4 cl_curve%d(vec4 x) {\n", p_i);
-    code += vformat("    if (!(x.w > %s)) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[0]), glsl_float(p_c.s[0]));
-    code += vformat("    if (x.w >= %s) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[n - 1]), glsl_float(p_c.y_last));
+    ov::str code = ov::format("vec4 cl_curve%d(vec4 x) {\n", p_i);
+    code += ov::format("    if (!(x.w > %s)) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[0]), glsl_float(p_c.s[0]));
+    code += ov::format("    if (x.w >= %s) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[n - 1]), glsl_float(p_c.y_last));
     code += "    float x0, inv, p, q, r, s;\n";
     for (size_t i = 0; i + 1 < n; i++) {
         const bool last = i + 2 >= n;
-        code += String(i == 0 ? "    " : " else ") + (last ? String("{") : vformat("if (x.w < %s) {", glsl_float(p_c.x[i + 1])));
-        code += vformat(" x0 = %s; inv = %s; p = %s; q = %s; r = %s; s = %s; }", glsl_float(p_c.x[i]), glsl_float(p_c.inv[i]), glsl_float(p_c.p[i]),
+        code += ov::str(i == 0 ? "    " : " else ") + (last ? ov::str("{") : ov::format("if (x.w < %s) {", glsl_float(p_c.x[i + 1])));
+        code += ov::format(" x0 = %s; inv = %s; p = %s; q = %s; r = %s; s = %s; }", glsl_float(p_c.x[i]), glsl_float(p_c.inv[i]), glsl_float(p_c.p[i]),
                 glsl_float(p_c.q[i]), glsl_float(p_c.r[i]), glsl_float(p_c.s[i]));
     }
-    code += "\n    precise float a0 = (x.w - x0) * inv;\n    precise float a = (" + Cascade::glsl_flush_of("a0") + String(");\n");
-    code += "    precise float t0 = p * a;\n    precise float v = (" + Cascade::glsl_flush_of("t0") + String(") + q;\n");
-    code += "    precise float t1 = v * a;\n    v = (" + Cascade::glsl_flush_of("t1") + String(") + r;\n");
-    code += "    precise float t2 = v * a;\n    v = (" + Cascade::glsl_flush_of("t2") + String(") + s;\n");
-    code += "    precise float u0 = (p * 3.0) * a;\n    precise float d = (" + Cascade::glsl_flush_of("u0") + String(") + q * 2.0;\n");
-    code += "    precise float u1 = d * a;\n    d = (" + Cascade::glsl_flush_of("u1") + String(") + r;\n");
-    code += "    precise float u2 = d * inv;\n    d = (" + Cascade::glsl_flush_of("u2") + String(");\n");
+    code += "\n    precise float a0 = (x.w - x0) * inv;\n    precise float a = (" + Cascade::glsl_flush_of("a0") + ov::str(");\n");
+    code += "    precise float t0 = p * a;\n    precise float v = (" + Cascade::glsl_flush_of("t0") + ov::str(") + q;\n");
+    code += "    precise float t1 = v * a;\n    v = (" + Cascade::glsl_flush_of("t1") + ov::str(") + r;\n");
+    code += "    precise float t2 = v * a;\n    v = (" + Cascade::glsl_flush_of("t2") + ov::str(") + s;\n");
+    code += "    precise float u0 = (p * 3.0) * a;\n    precise float d = (" + Cascade::glsl_flush_of("u0") + ov::str(") + q * 2.0;\n");
+    code += "    precise float u1 = d * a;\n    d = (" + Cascade::glsl_flush_of("u1") + ov::str(") + r;\n");
+    code += "    precise float u2 = d * inv;\n    d = (" + Cascade::glsl_flush_of("u2") + ov::str(");\n");
     code += "    precise vec4 res = vec4(x.x * d, x.y * d, x.z * d, v);\n    return cl_flush(res);\n}\n";
     return code;
 }
@@ -227,33 +227,33 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
     return h;
 }
 
-String ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
+ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
     using ExactNoise::glsl_float;
-    const String flush = Cascade::glsl_flush();
-    String code;
-    code += String(GLSL_TERRACE).replace("FLUSH", flush);
+    const ov::str flush = Cascade::glsl_flush();
+    ov::str code;
+    code += ov::replace_all(ov::str(GLSL_TERRACE), "FLUSH", flush);
     for (size_t i = 0; i < p_table.heights.size(); i++) {
         if (p_table.heights[i].has_curve) {
-            code += curve_glsl(p_table.heights[i].curve, int(i)).replace("FLUSH", flush);
+            code += ov::replace_all(curve_glsl(p_table.heights[i].curve, int(i)), "FLUSH", flush);
         }
     }
     code += "\n// Climate::ground_value: the cascade's ground, the height terms, then the biomes' terraces; (value, gradient).\n";
     code += "vec4 climate_ground(Ch ch) {\n";
     code += glsl_weights(p_table, p_combined, "ch");
     for (const int r : p_table.gated) {
-        code += glsl_edges_value(vformat("rg%d", r), p_table.regions[size_t(r)].edges);
+        code += glsl_edges_value(ov::format("rg%d", r), p_table.regions[size_t(r)].edges);
     }
     code += "    vec4 h = g0;\n";
     for (size_t i = 0; i < p_table.heights.size(); i++) {
         const HeightTerm &t = p_table.heights[i];
-        const String v = vformat("cl_scale(%s, %s)", t.has_curve ? vformat("cl_curve%d(f%d)", int64_t(i), t.field) : vformat("f%d", t.field), glsl_float(t.coef));
-        code += vformat("    h = cl_add(h, %s);\n", t.region >= 0 ? vformat("cl_mul(rg%d, %s)", t.region, v) : v);
+        const ov::str v = ov::format("cl_scale(%s, %s)", t.has_curve ? ov::format("cl_curve%d(f%d)", int64_t(i), t.field) : ov::format("f%d", t.field), glsl_float(t.coef));
+        code += ov::format("    h = cl_add(h, %s);\n", t.region >= 0 ? ov::format("cl_mul(rg%d, %s)", t.region, v) : v);
     }
     code += "    vec4 base = h;\n";
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
         const Terrace &t = p_table.biomes[b].terrace;
         if (t.step > 0.0f) {
-            code += vformat("    h = cl_add(h, cl_mul(w%d, cl_sub(cl_terrace(base, %s, %s, %s), base)));\n", int64_t(b), glsl_float(t.step), glsl_float(t.inv_step),
+            code += ov::format("    h = cl_add(h, cl_mul(w%d, cl_sub(cl_terrace(base, %s, %s, %s), base)));\n", int64_t(b), glsl_float(t.step), glsl_float(t.inv_step),
                     t.invert ? "true" : "false");
         }
     }

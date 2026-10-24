@@ -6,7 +6,9 @@
 
 #include "format.hpp"
 
+#include <initializer_list>
 #include <string>
+#include <utility>
 
 namespace ov {
 
@@ -30,6 +32,15 @@ inline str replace_all(str p_text, const str &p_from, const str &p_to) {
     }
     out.append(p_text, from, str::npos);
     return out;
+}
+
+// The pairs replaced one after another, in order: a chain of godot replaces (a pair whose key is
+// another's prefix goes first).
+inline str replace_all(str p_text, std::initializer_list<std::pair<str, str>> p_pairs) {
+    for (const std::pair<str, str> &pair : p_pairs) {
+        p_text = replace_all(std::move(p_text), pair.first, pair.second);
+    }
+    return p_text;
 }
 
 // Non-overlapping occurrences of p_what (godot's String::count). 0 for an empty p_what.

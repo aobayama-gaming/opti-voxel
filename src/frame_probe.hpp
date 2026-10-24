@@ -1,8 +1,7 @@
 #pragma once
 
+#include "ov/format.hpp"
 #include "world_coord.hpp"
-
-#include <godot_cpp/variant/string.hpp>
 
 #include <functional>
 
@@ -10,10 +9,10 @@
 // value computed from a WorldPos on the CPU and on the GPU, `words` uint32 (floats as their bits), compared
 // bit for bit.
 struct Probe {
-    String name;
+    ov::str name;
     int words = 1;
     bool is_float = false;
-    String glsl; // defines "void probe_<name>(WorldPos p, uint b)", writing results[b + 0 .. words - 1]
+    ov::str glsl; // defines "void probe_<name>(WorldPos p, uint b)", writing results[b + 0 .. words - 1]
     // Writes the words; returns false where the evaluation left the exact domain (the archetype IR's
     // data-dependent exactness: a denormal or a huge intermediate, which the GPU could flush or round
     // differently). Those evaluations are counted apart, but they are compared and gated like the others.

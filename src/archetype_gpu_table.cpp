@@ -13,19 +13,19 @@
 
 namespace Archetype {
 
-String glsl_table_buffers(int p_record_binding, int p_list_binding) {
-    return String(GLSL_DEF_RECORD_STRUCT) +
-            vformat("\nlayout(set = 0, binding = %d, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };\n", p_record_binding) +
-            vformat("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding) +
+ov::str glsl_table_buffers(int p_record_binding, int p_list_binding) {
+    return ov::str(GLSL_DEF_RECORD_STRUCT) +
+            ov::format("\nlayout(set = 0, binding = %d, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };\n", p_record_binding) +
+            ov::format("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding) +
             "ChunkInput g_sdf_chunk; // the chunk being sampled: its list offset (id.w) and length (anchor_hi.w)\n";
 }
 
 // The virtual's implementation: glsl_table_buffers, the one source (FrameSpike splices it directly).
-String GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
+ov::str GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
     return glsl_table_buffers(p_record_binding, p_list_binding);
 }
 
-String GpuTable::glsl_set_chunk() const {
+ov::str GpuTable::glsl_set_chunk() const {
     return "\n    g_sdf_chunk = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size];";
 }
 

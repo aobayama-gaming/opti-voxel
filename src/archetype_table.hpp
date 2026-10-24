@@ -234,7 +234,7 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
 // with the library, in get_glsl_code().
 extern const char GLSL_DEF_RECORD_STRUCT[];
 
-String generate_library_glsl(const DefLibrary &p_library);
+ov::str generate_library_glsl(const DefLibrary &p_library);
 // The library, `vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments)` (fold_onto
 // over the chunk's list: g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers, a list word being the record
 // id | its palette index << SDFGpuTable::LIST_ID_BITS; touched is set when an instance passes its box test, material
@@ -244,7 +244,7 @@ String generate_library_glsl(const DefLibrary &p_library);
 // workgroup in uniform control flow, [group_lo, group_hi] holding all their p: the workgroup tests the list p_group_size
 // words at a time against that box (arch_meets_box) and each invocation folds the words that pass, in list order, with
 // the same loop body: the same bits.
-String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize, uint32_t p_group_size = 0);
+ov::str generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize, uint32_t p_group_size = 0);
 
 // Bytes of one DefRecord in the GPU buffer (10 x vec4, all 16-byte aligned).
 inline constexpr uint32_t RECORD_BYTES = 160;

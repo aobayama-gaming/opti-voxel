@@ -3,13 +3,7 @@
 #include "chunk_math.hpp"
 #include "ov/bytes.hpp"
 
-// The byte layouts are engine-free (ov::bytes); the GLSL text builders (glsl_functions, glsl_int64)
-// still speak godot's String until the GLSL text pipeline converts as one unit.
-#include <godot_cpp/core/error_macros.hpp>
-#include <godot_cpp/variant/packed_byte_array.hpp>
-#include <godot_cpp/variant/string.hpp>
-
-using godot::String;
+#include "ov/format.hpp"
 
 // The integer frame (world_coord.hpp) on the GPU, shared by both meshers and the FrameSpike harness.
 //
@@ -63,12 +57,6 @@ inline void encode_chunk_input(uint8_t *r_slot, const ChunkId &p_chunk, const Ch
     ov::put_s32(r_slot + 20, hi32(anchor.y));
     ov::put_s32(r_slot + 24, hi32(anchor.z));
     ov::put_s32(r_slot + CHUNK_LIST_COUNT_AT, 0);
-}
-
-// Chunk p_index of a batch's PackedByteArray.
-inline void encode_chunk_input(godot::PackedByteArray &r_bytes, int64_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
-    ERR_FAIL_COND_MSG(p_index < 0 || (p_index + 1) * CHUNK_INPUT_BYTES > r_bytes.size(), "encode_chunk_input: chunk past the batch buffer.");
-    encode_chunk_input(r_bytes.ptrw() + p_index * CHUNK_INPUT_BYTES, p_chunk, p_param);
 }
 
 // A point item's LOD, in the ChunkInput word a chunk's list offset takes (id.w).
@@ -247,18 +235,18 @@ void i64_sub(inout uvec3 lo, inout ivec3 hi, uvec3 wlo, ivec3 whi) {
 
 namespace GPUFrame {
 
-inline String glsl_functions() {
-    return String(GLSL_FRAME_FUNCTIONS);
+inline ov::str glsl_functions() {
+    return ov::str(GLSL_FRAME_FUNCTIONS);
 }
 
 // The point items' frame (after glsl_functions()).
-inline String glsl_point_frame() {
-    return String(GLSL_POINT_FRAME);
+inline ov::str glsl_point_frame() {
+    return ov::str(GLSL_POINT_FRAME);
 }
 
 // The int64 helpers (after glsl_functions()).
-inline String glsl_int64() {
-    return String(GLSL_FRAME_INT64_ADD) + String(GLSL_FRAME_INT64);
+inline ov::str glsl_int64() {
+    return ov::str(GLSL_FRAME_INT64_ADD) + GLSL_FRAME_INT64;
 }
 
 } // namespace GPUFrame

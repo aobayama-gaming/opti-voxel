@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cascade_glsl.hpp"
+#include "cascade_passes.hpp"
 #include "exact_noise.hpp"
 #include "sdf_base.hpp"
 

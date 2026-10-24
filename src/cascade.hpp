@@ -3,6 +3,8 @@
 #include "base_surface.hpp"
 #include "chunk_math.hpp"
 #include "exact_noise.hpp"
+#include "ov/str.hpp"
+#include "ov/types.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -118,13 +120,13 @@ inline float flush_value(float p_v) {
     return std::fabs(p_v) < ExactNoise::bits_float(FLUSH_BITS) ? 0.0f : p_v;
 }
 // flush_value's threshold as a GLSL literal (the generated code's flushes).
-inline String glsl_flush() {
+inline ov::str glsl_flush() {
     return ExactNoise::glsl_float(ExactNoise::bits_float(FLUSH_BITS));
 }
 // flush_value of the GLSL expression p_expr (a variable: it is read twice), a conditional without parentheses: the
 // generators' one flush.
-inline String glsl_flush_of(const String &p_expr) {
-    return "abs(" + p_expr + String(") < ") + glsl_flush() + String(" ? 0.0 : ") + p_expr;
+inline ov::str glsl_flush_of(const ov::str &p_expr) {
+    return "abs(" + p_expr + ") < " + glsl_flush() + " ? 0.0 : " + p_expr;
 }
 
 // Dual numbers (x, y, z: gradient, w: value), every result flushed under 2^-64: inputs 0 or >= 2^-64, so a product's
@@ -233,7 +235,7 @@ struct FieldRange {
     bool carried(int p_lod, int p_m) const { return p_m >= floor && p_lod <= ceiling; }
     // Whether a batch of LODs p_lods (min, max) carries them at level j above each item's LOD: monotone in j, so a
     // level carrying them always finds them in its parent level.
-    bool batch(const Vector2i &p_lods, int p_j) const { return p_lods.x <= ceiling && MIN(p_lods.y, ceiling) + p_j >= floor; }
+    bool batch(const ov::ivec2 &p_lods, int p_j) const { return p_lods.x <= ceiling && ov::min(p_lods.y, int32_t(ceiling)) + p_j >= floor; }
 };
 
 // Per-point band amplitudes (the climate's biome weights, climate.hpp). At every point of Λ_m, before that level's
@@ -303,7 +305,7 @@ struct Modulation {
     // The same in GLSL, bit for bit. Not shaped: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])`
     // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
     // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base).
-    virtual String glsl(const Spec &p_spec) const = 0;
+    virtual ov::str glsl(const Spec &p_spec) const = 0;
 };
 
 struct Spec {

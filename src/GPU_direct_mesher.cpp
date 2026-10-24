@@ -1,7 +1,7 @@
 #include "GPU_direct_mesher.hpp"
 #include "godot_conv.hpp"
 
-#include "cascade_glsl.hpp"
+#include "cascade_passes.hpp"
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "gpu_direct_glsl.hpp"
@@ -135,29 +135,28 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
     const bool vertex_pass = (p_pass == GLSL_DIRECT_PASS_VERTICES);
     // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
-    const String pass = dual_contouring && vertex_pass ? dual_contouring_pass(p_pass) : String(p_pass);
-    String shader = DIRECT_TEMPLATE;
+    const ov::str pass = dual_contouring && vertex_pass ? dual_contouring_pass(p_pass) : ov::str(p_pass);
     // The instance table adds the DefRecord/List buffers at 8/9, the exact int64 helpers (i64_sub, for the
     // table's noise lattice) and the ChunkInput global g_sdf_chunk.
     const SDFGpuTable *table = sdf->get_gpu_table();
-    const String bindings = String(GLSL_DIRECT_BINDINGS) + table->glsl_buffers(8, 9);
-    const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
-    const String set_chunk = table->glsl_set_chunk();
-    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    shader = shader.replace("/*GLSL_DIRECT_BINDINGS*/", bindings);
-    shader = shader.replace("/*GLSL_PAGE_FORMAT*/", godot_str(PageFormat::glsl_encode()));
-    shader = shader.replace("/*GLSL_MATERIAL_BINDINGS*/",
-            CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly") +
-                    vformat("layout(set = 0, binding = %d, rgba16ui) uniform restrict writeonly uimage2D palette_image;\n"
-                            "layout(set = 0, binding = %d, std430) restrict readonly buffer PaletteBatch { uint palette_batch[]; };\n"
-                            "const uint PALETTE_GROUND_BLOCK = %du;\n",
-                            PALETTE_IMAGE_BINDING, PALETTE_BATCH_BINDING, PaletteAlloc::GROUND_BLOCK) +
-                    ChunkPalette::glsl_base(table->base_palette()));
-    shader = shader.replace("/*GLSL_PALETTE_BATCH*/", PalettePool::glsl_batch());
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
-    shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
-    shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
-    shader = CascadeGLSL::fill_mesher_pass(shader, pass);
+    const ov::str bindings = ov::str(GLSL_DIRECT_BINDINGS) + table->glsl_buffers(8, 9);
+    const ov::str helpers = ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GLSL_EXACT_NOISE + GPUFrame::glsl_int64();
+    const ov::str material_bindings = CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly") +
+            ov::format("layout(set = 0, binding = %d, rgba16ui) uniform restrict writeonly uimage2D palette_image;\n"
+                       "layout(set = 0, binding = %d, std430) restrict readonly buffer PaletteBatch { uint palette_batch[]; };\n"
+                       "const uint PALETTE_GROUND_BLOCK = %du;\n",
+                    PALETTE_IMAGE_BINDING, PALETTE_BATCH_BINDING, PaletteAlloc::GROUND_BLOCK) +
+            ov_str(ChunkPalette::glsl_base(table->base_palette()));
+    ov::str code = ov::replace_all(DIRECT_TEMPLATE,
+            { { "/*GLSL_STRUCT_DEFINITION*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS },
+                    { "/*GLSL_DIRECT_BINDINGS*/", bindings },
+                    { "/*GLSL_PAGE_FORMAT*/", PageFormat::glsl_encode() },
+                    { "/*GLSL_MATERIAL_BINDINGS*/", material_bindings },
+                    { "/*GLSL_PALETTE_BATCH*/", ov_str(PalettePool::glsl_batch()) },
+                    { "/*GLSL_HELPER_FUNCTION*/", helpers },
+                    { "/*GLSL_SET_CHUNK*/", table->glsl_set_chunk() },
+                    { "/*GLSL_QEF_VERTEX*/", ov::str(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : "") } });
+    const String shader = godot_str(CascadeGLSL::fill_mesher_pass(code, pass));
     RDUtils::dump_shader(String("direct_") + p_name, shader);
 
     Ref<RDShaderSource> source;

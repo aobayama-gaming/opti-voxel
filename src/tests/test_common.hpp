@@ -7,6 +7,7 @@
 #include "exact_noise.hpp"
 #include "world_coord.hpp"
 
+#include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
@@ -41,6 +42,9 @@ struct StringMaker<godot::Vector3> {
 };
 
 } // namespace doctest
+
+// Test files may speak godot (the core may not): its String and vformat, unqualified as before.
+using namespace godot;
 
 using ExactNoise::same_bits;
 
