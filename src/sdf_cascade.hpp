@@ -370,7 +370,7 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
     String get_glsl_code() const override {
         using namespace ExactNoise;
         String code = base.glsl() + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
-// CascadeTerrain::height_sdf over the base (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
+// CascadeTerrain::height_sdf over the base (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Lambda_lod at p.
 vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
     return height_sdf(c0, base_at(p, lod), lod);
 }

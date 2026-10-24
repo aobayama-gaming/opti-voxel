@@ -62,9 +62,9 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
     CHECK(h == 16354123549857880415ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
-    CHECK(chunk_text == 585642622528421550ull);
+    CHECK(chunk_text == 14214915574586531715ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B).
-    CHECK(point_text == 7673647860036491862ull);
+    CHECK(point_text == 6565805260852196633ull);
 }
 
 // The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its

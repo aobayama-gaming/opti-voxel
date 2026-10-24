@@ -66,7 +66,7 @@ void main() {
     if (m > top) {
         /*SKIP*/ // above T: zero, nothing stored, the chunk starts lower
     }
-    // The chunk's box on Λ_L (Cascade::chunk_box): lo_L = anchor / 2^L - skirt, hi_L = lo_L + chunk_size - 1.
+    // The chunk's box on Lambda_L (Cascade::chunk_box): lo_L = anchor / 2^L - skirt, hi_L = lo_L + chunk_size - 1.
     uvec3 lo_lo = f.anchor_lo;
     ivec3 lo_hi = f.anchor_hi;
     i64_asr(lo_lo, lo_hi, lod);
@@ -133,7 +133,7 @@ void main() {
         store(pc.j & 1, slot, ch);
         return;
     }
-    // Λ_L: the sample.
+    // Lambda_L: the sample.
     uint sample_index = (pc.chunk_base + c) * n * n * n + local;
 /*LEVEL0_OUTPUT*/
 }

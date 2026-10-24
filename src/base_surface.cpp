@@ -314,7 +314,7 @@ vec4 base_at(WorldPos p, int lod) {
 // BaseSurface::Region: h_diag = (xx, yy, zz), h_off = (xy, xz, yz).
 struct BaseRegion { float d; vec3 n; vec3 h_diag; vec3 h_off; };
 
-// BaseSurface::curvature_form: d(c) + n.δ + 1/2 δ^T H δ around the centre of p's region at LOD lod.
+// BaseSurface::curvature_form: d(c) + n.delta + 1/2 delta^T H delta around the centre of p's region at LOD lod.
 vec4 base_curvature(WorldPos p, int lod, BaseRegion r) {
     uvec3 mask = uvec3((1u << uint(lod + REGION_SHIFT)) - 1u);
     ivec3 di = ivec3((p.lo & mask) >> uint(lod)) - ivec3(REGION_HALF);
