@@ -42,7 +42,7 @@ const FLY_RATE := 1.0  # altitudes per second
 # move_instance / remove_instance.
 const SPHERE_TYPE := 0         # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
 const CAPSULE_TYPE := 1
-const SPRAY_PERIOD := 0.1      # seconds between two spray spheres
+const SPRAY_PERIOD := 0.03     # seconds between two spray spheres
 const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
@@ -111,6 +111,10 @@ func _enter_tree() -> void:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
 		if a == "--grade=0":
 			Presets.ungrade(get_parent())
+		if a == "--ssao=0" and Presets.environment(get_parent()):
+			Presets.environment(get_parent()).ssao_enabled = false
+		if a.begins_with("--ambient=") and Presets.environment(get_parent()):
+			Presets.environment(get_parent()).ambient_light_energy = a.trim_prefix("--ambient=").to_float()
 		if a.begins_with("--dig_radius="):
 			dig_radius = a.trim_prefix("--dig_radius=").to_float()
 		if a.begins_with("--dig_length="):
@@ -262,20 +266,20 @@ func _make_flashlight(p_on: bool) -> void:
 	flashlight = SpotLight3D.new()
 	flashlight.position = Vector3(0.25, -0.2, 0.0)
 	flashlight.light_color = Color(1.0, 0.92, 0.8)
-	flashlight.light_energy = 8.0
-	flashlight.spot_range = 80.0
-	flashlight.spot_angle = 18.0
-	flashlight.spot_attenuation = 1.2
+	flashlight.light_energy = 3.0
+	flashlight.spot_range = 60.0
+	flashlight.spot_angle = 32.0
+	flashlight.spot_attenuation = 0.7
 	flashlight.shadow_enabled = true
 	flashlight.visible = p_on
 	camera.add_child(flashlight)
 	# The flood around the beam: wide, dimmer, shorter, no shadows (a second shadowed spot doubles the shadow cost).
 	var flood := SpotLight3D.new()
 	flood.light_color = flashlight.light_color
-	flood.light_energy = 2.0
-	flood.spot_range = 35.0
-	flood.spot_angle = 60.0
-	flood.spot_attenuation = 2.0
+	flood.light_energy = 1.5
+	flood.spot_range = 40.0
+	flood.spot_angle = 75.0
+	flood.spot_attenuation = 0.5
 	flashlight.add_child(flood)
 
 func _notification(what: int) -> void:

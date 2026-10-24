@@ -18,22 +18,29 @@ const PRESETS := {
 		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
 	# The look for videos (player only): forest5cm_1m on the world climate, reseeded (world_video.json = world.json with
 	# every seed + 37), at error 2 front and back, FSR 2 from 50% then 2x2 pixel blocks, the flashlight, no mesher budget
-	# and the frame-time overlay. Run with `--render-thread safe` (FSR 2).
+	# and the frame-time overlay, no SSAO and the sky's ambient light x1.5 (lighter under the trees; the LUT is kept). Run
+	# with `--render-thread safe` (FSR 2).
 	"video": ["--trees=1000000", "--tree_area=5000", "--voxel=0.05", "--lod_error=2", "--altitude=20",
 		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--lods=25",
 		"--climate=res://climate/world_video.json", "--lod_error_back=2", "--upscale=fsr2", "--render_scale=0.5",
-		"--pixelate=2", "--flashlight=1", "--mesher_budget=0", "--overlay=video"],
+		"--pixelate=2", "--flashlight=1", "--mesher_budget=0", "--overlay=video", "--ssao=0", "--ambient=1.5"],
 	# Biome features (lava lakes, floating islands) within 2 km of the scene centre. The bench camera looks at a
 	# lava lake from 60 m up, two floating islands behind it.
 	"biomes": ["--biomes=2", "--cam_pos=-560,2650,850", "--above_ground=60", "--yaw=45", "--pitch=-18"],
 }
 
 
-# --grade=0: no colour grading (the scene's LUT): adjustments off on the WorldEnvironment under p_scene_root.
-static func ungrade(p_scene_root: Node) -> void:
+# The Environment of the WorldEnvironment under p_scene_root, null without one.
+static func environment(p_scene_root: Node) -> Environment:
 	var world_env := p_scene_root.get_node_or_null("WorldEnvironment") as WorldEnvironment
-	if world_env:
-		world_env.environment.adjustment_enabled = false
+	return world_env.environment if world_env else null
+
+
+# --grade=0: no colour grading (the scene's LUT): adjustments off.
+static func ungrade(p_scene_root: Node) -> void:
+	var env := environment(p_scene_root)
+	if env:
+		env.adjustment_enabled = false
 
 
 # The camera's clip planes, called every frame by the player and the bench: near = altitude / 1000 (altitude = |SDF|
