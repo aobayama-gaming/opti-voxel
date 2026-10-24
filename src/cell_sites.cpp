@@ -32,10 +32,12 @@ VoxelPos node_centre(const VoxelPos &p_node, int64_t p_n) {
 }
 
 // Whether the plane of p_f (the field at a node's centre, extended along its gradient) crosses the node of side p_n,
-// give or take SITE_SLACK cells of p_side and SITE_BEND of the node (the ground bends away from the plane).
+// give or take SITE_SLACK cells of p_side and SITE_BEND of the node (the ground bends away from the plane), or
+// SITE_BEND_COARSE from SITE_COARSE_LEVEL up.
 bool plane_meets(const ExactNoise::Float4 &p_f, int64_t p_n, int64_t p_side) {
     const double reach = 0.5 * double(p_n) * (std::fabs(double(p_f.x)) + std::fabs(double(p_f.y)) + std::fabs(double(p_f.z)));
-    return std::fabs(double(p_f.w)) <= reach + SITE_SLACK * double(p_side) + SITE_BEND * double(p_n);
+    const double bend = p_n >= (p_side << SITE_COARSE_LEVEL) ? SITE_BEND_COARSE : SITE_BEND;
+    return std::fabs(double(p_f.w)) <= reach + SITE_SLACK * double(p_side) + bend * double(p_n);
 }
 
 // A Newton step on whole voxels from r_q for the field p_f read at p_at (extended along its gradient to r_q); false when
