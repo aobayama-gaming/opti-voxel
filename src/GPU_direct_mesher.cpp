@@ -9,6 +9,7 @@
 #include "gpu_glsl.hpp"
 #include "page_format.hpp"
 #include "rd_utils.hpp"
+#include "trace.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -336,6 +337,7 @@ void GPUDirectMesher::_rt_read_timestamps() {
 }
 
 void GPUDirectMesher::_rt_record_samples(uint32_t p_count, const Vector2i &p_lods, const String &p_prefix, const PackedByteArray &p_list) {
+    OV_TRACE("mesher", "rt_record_samples");
     // One list per level (the render graph orders them through the scratch buffers); timestamps "_c0", "_c1",
     // "_c2" after the groups j >= 3, j = 2 and j = 1, empty groups included.
     auto mark = [&](int p_group) {
@@ -360,6 +362,7 @@ void GPUDirectMesher::_rt_record_samples(uint32_t p_count, const Vector2i &p_lod
 }
 
 void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const PackedByteArray &p_records) {
+    OV_TRACE("mesher", "rt_upload_table");
     // The records the batch's lists were built against (main thread, same snapshot), when they changed.
     if (!p_records.is_empty()) {
         SDFGpuTable::upload_records(rd, buffer_table_records, p_records);
@@ -372,6 +375,7 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
 
 uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
         PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes, std::vector<uint32_t> *r_streamed) {
+    OV_TRACE("mesher", "table_payload");
     SDFGpuTable *table = sdf->get_gpu_table();
     // Main thread, like the edits: the lists and the records come from the same snapshot.
     const uint64_t t_lists = now_usec();
@@ -393,6 +397,10 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
+    Trace::name_thread("render");
+    Trace::Scope span("mesher", "rt_dispatch");
+    span.set_arg(p_count);
+    Trace::flow(Trace::Kind::FLOW_STEP, "batch", p_batch_id);
     const uint64_t t0 = now_usec();
     _rt_read_timestamps();
     _rt_upload_table(p_list, p_records);
@@ -424,6 +432,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     _rt_record_samples(p_count, p_lods, prefix, p_list);
     rd->capture_timestamp(prefix + String("_p0"));
     for (int i = 0; i < COMPUTE_PASSES; i++) {
+        OV_TRACE("mesher", "rt_record_pass");
         // One list per pass so a timestamp can sit between passes; the render graph orders them.
         const int64_t list = rd->compute_list_begin();
         rd->compute_list_bind_compute_pipeline(list, pipelines[i]);
@@ -436,6 +445,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
 
     // GPU -> GPU: quads into the page textures, used group counts into the indirect instance counts.
     for (int k = 0; k < p_pages.size(); k++) {
+        OV_TRACE("pages", "rt_copy_page");
         pool->rt_copy_page_from(p_pages[k], staging_texture, k * pool->get_page_rows());
         const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_pages[k]);
         ERR_CONTINUE_MSG(!page_rd.command.is_valid(), vformat("GPUDirectMesher: batch %d: page %d has no command buffer", p_batch_id, p_pages[k]));
@@ -502,6 +512,8 @@ void GPUDirectMesher::_rt_on_audit_directory(const PackedByteArray &p_data, uint
 }
 
 void GPUDirectMesher::_rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id) {
+    OV_TRACE("mesher", "readback");
+    Trace::flow(Trace::Kind::FLOW_STEP, "batch", p_batch_id);
     mutex->lock();
     CompletedBatch &c = partial[p_batch_id];
     c.batch_id = p_batch_id;
@@ -515,6 +527,7 @@ void GPUDirectMesher::_rt_on_directory(const PackedByteArray &p_data, uint32_t p
 }
 
 void GPUDirectMesher::_rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id) {
+    OV_TRACE("mesher", "readback");
     mutex->lock();
     CompletedBatch &c = partial[p_batch_id];
     c.batch_id = p_batch_id;
@@ -527,13 +540,17 @@ void GPUDirectMesher::_rt_on_status(const PackedByteArray &p_data, uint32_t p_ba
     _rt_readback_done();
 }
 
-void GPUDirectMesher::_rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges) {
+void GPUDirectMesher::_rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges, uint64_t p_flow) {
+    OV_TRACE("pages", "rt_kill");
+    Trace::flow(Trace::Kind::FLOW_END, "kill", p_flow);
     for (int i = 0; i < p_pages.size(); i++) {
         pool->rt_kill_range(p_pages[i], p_ranges[i * 2], p_ranges[i * 2 + 1]);
     }
 }
 
-void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts) {
+void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts, uint64_t p_flow) {
+    OV_TRACE("pages", "rt_compact");
+    Trace::flow(Trace::Kind::FLOW_END, "compact", p_flow);
     for (int i = 0; i + 4 < p_copies.size(); i += 5) {
         pool->rt_copy_rows(p_copies[i], p_copies[i + 1], p_copies[i + 2], p_copies[i + 3], p_copies[i + 4]);
     }
@@ -648,8 +665,10 @@ void GPUDirectMesher::_flush_kills() {
     if (pending_kill_pages.is_empty()) {
         return;
     }
+    OV_TRACE("pages", "flush_kills");
+    Trace::flow(Trace::Kind::FLOW_START, "kill", ++rt_posts);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_kill)
-                    .bind(pending_kill_pages, pending_kill_ranges));
+                    .bind(pending_kill_pages, pending_kill_ranges, rt_posts));
     pending_kill_pages = PackedInt32Array();
     pending_kill_ranges = PackedInt64Array();
 }
@@ -736,6 +755,7 @@ void GPUDirectMesher::_update_cost_model() {
 
 void GPUDirectMesher::_pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
         HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds) {
+    OV_TRACE("mesher", "pop_batch");
     double estimate = 0.0;
     ChunkId chunk;
     ChunkGate::Kind kind = ChunkGate::CHUNK;
@@ -790,6 +810,8 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     if (chunks.empty()) {
         return false;
     }
+    Trace::Scope span("mesher", "dispatch_batch");
+    span.set_arg(chunks.size());
     const uint64_t t0 = now_usec();
 
     // The queue already pops in Morton order; re-sorting covers re-queued overflow chunks.
@@ -852,6 +874,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch.table_version = table_version;
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
+    Trace::flow(Trace::Kind::FLOW_START, "batch", batch_id);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
                     .bind(batch_id, ids, count, pages, lods, list, records, palette_batch));
 
@@ -936,6 +959,8 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
     }
 
     for (CompletedBatch &c : done) {
+        OV_TRACE("mesher", "collect_batch");
+        Trace::flow(Trace::Kind::FLOW_END, "batch", c.batch_id);
         const uint64_t t0 = now_usec();
         HashMap<uint32_t, InFlightBatch>::Iterator it = in_flight.find(c.batch_id);
         ERR_CONTINUE(it == in_flight.end());
@@ -1063,6 +1088,7 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
 }
 
 void GPUDirectMesher::release_chunk(const ChunkOutput &p_chunk) {
+    OV_TRACE("pages", "release_chunk");
     ERR_FAIL_INDEX(p_chunk.page, (int)page_state.size());
     // Its rows are killed (or its page reset) before a batch that could reuse the block is dispatched:
     // process_queue flushes the kills first, on the render thread's FIFO.
@@ -1105,12 +1131,20 @@ void GPUDirectMesher::set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) {
     stats.hidden_rows += groups_of(p_chunk.quad_count);
 }
 
+void GPUDirectMesher::_rt_set_hidden(const PackedInt64Array &p_writes, uint64_t p_flow) {
+    OV_TRACE("pages", "rt_set_hidden");
+    Trace::flow(Trace::Kind::FLOW_END, "hidden", p_flow);
+    pool->rt_set_hidden(p_writes);
+}
+
 void GPUDirectMesher::_flush_hidden() {
     if (pending_hidden.is_empty()) {
         return;
     }
     // Recorded after the last compaction (VoxelState::push_coverage), flushed before the next one moves rows.
-    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(pool, &QuadPagePool::rt_set_hidden).bind(pending_hidden));
+    OV_TRACE("pages", "flush_hidden");
+    Trace::flow(Trace::Kind::FLOW_START, "hidden", ++rt_posts);
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_set_hidden).bind(pending_hidden, rt_posts));
     pending_hidden = PackedInt64Array();
 }
 
@@ -1150,6 +1184,7 @@ void GPUDirectMesher::compact(VoxelState &r_state) {
 }
 
 bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState &r_state) {
+    OV_TRACE("pages", "compact_pages");
     struct Move {
         uint64_t key;
         int src_page;
@@ -1255,8 +1290,9 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
         begin = d.end;
     }
     // Queued before the sources' release, so the copies read them before anything reuses them.
+    Trace::flow(Trace::Kind::FLOW_START, "compact", ++rt_posts);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_compact)
-                    .bind(copies, group_counts));
+                    .bind(copies, group_counts, rt_posts));
     for (const int page : p_pages) {
         page_state[page] = PageState();
         pool->release_page(page);
@@ -1273,6 +1309,7 @@ bool GPUDirectMesher::_compact_pages(const std::vector<int> &p_pages, VoxelState
 }
 
 void GPUDirectMesher::send_chunk(const LODHashSet &p_chunks, const ScanView &p_view) {
+    OV_TRACE("mesher", "queue_chunks");
     // Chunk ids are chunk centres in the same units at every LOD, so one Morton key orders them
     // spatially. Sorted once per scan; consecutive pops then form compact batches and pages.
     load_view = p_view;

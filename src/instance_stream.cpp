@@ -3,10 +3,12 @@
 
 #include "debug_log.hpp"
 #include "parallel_for.hpp"
+#include "trace.hpp"
 
 #include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
+#include <iterator>
 
 namespace Archetype {
 
@@ -14,7 +16,13 @@ size_t InstanceStream::KeyHash::operator()(const SourceKey &p_k) const {
     return ExactNoise::hash_cell(p_k.tile, ((p_k.source * uint32_t(SourceKey::KIND_COUNT) + uint32_t(p_k.kind)) * 64u + uint32_t(p_k.lod) + 1u) * 0x9E3779B1u);
 }
 
+// A content job's span, by its key's kind.
+static const char *const CONTENT_SPAN[] = { "content_parts", "content_blobs", "content_sites", "content_proxies" };
+static_assert(std::size(CONTENT_SPAN) == SourceKey::KIND_COUNT);
+
 void InstanceStream::Job::run() {
+    OV_TRACE("stream", expand ? "job_expand" : CONTENT_SPAN[key.kind]);
+    Trace::flow(Trace::Kind::FLOW_END, "stream_job", seq);
     const uint64_t t0 = now_usec();
     if (expand) {
         source->inputs(key, input_keys);
@@ -298,6 +306,8 @@ void InstanceStream::start(Entry *const *p_entries, size_t p_count) {
         e.input_keys = std::vector<SourceKey>(); // landed: no rank or drop walks through them any more
         e.state = Entry::RUNNING;
         e.job_seq = ++job_seq;
+        job->seq = e.job_seq;
+        Trace::flow(Trace::Kind::FLOW_START, "stream_job", job->seq);
         made.emplace_hint(made.end(), JobKey(e.rank, e.job_seq), std::move(job));
     }
     bool spawn = false;
@@ -432,6 +442,7 @@ void InstanceStream::drain() {
 }
 
 void InstanceStream::poll() {
+    OV_TRACE("stream", "poll");
     const uint64_t t0 = now_usec();
     executor->reap(false); // before the lock: the tests' executor runs its drain tasks here
     const std::unique_lock<std::shared_mutex> lock(mutex);
@@ -458,6 +469,7 @@ void InstanceStream::poll() {
 }
 
 void InstanceStream::land(std::unique_ptr<Job> p_job) {
+    OV_TRACE("stream", "land");
     const uint64_t t0 = now_usec();
     Entry &e = entries.find(p_job->key)->second; // running: never evicted
     if (p_job->expand && !p_job->input_keys.empty()) {

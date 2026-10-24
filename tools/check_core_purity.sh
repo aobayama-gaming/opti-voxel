@@ -28,6 +28,7 @@ core_files=(
     src/world_coord.hpp
     src/subcube.hpp
     src/latency_hist.hpp
+    src/trace.hpp
     src/chunk_math.hpp
     src/chunk_math.cpp
     src/page_format.hpp

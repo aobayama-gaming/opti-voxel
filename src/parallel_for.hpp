@@ -1,5 +1,7 @@
 #pragma once
 
+#include "trace.hpp"
+
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <cstdint>
@@ -15,6 +17,8 @@ void parallel_for(uint32_t p_count, const char *p_name, F &&p_fn) {
     if (p_count == 0) {
         return;
     }
+    Trace::Scope span("pool", p_name);
+    span.set_arg(p_count);
     if (parallel_for_inline) {
         for (uint32_t i = 0; i < p_count; i++) {
             p_fn(i);

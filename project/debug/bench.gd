@@ -47,7 +47,11 @@ extends Node3D
 ##                                VoxelTerrain::_process section) and, per captured frame, every
 ##                                renderer pass's GPU and render-thread CPU time. Per-pass timestamps need Godot's
 ##                                visual profiler, which needs a debugger: run through `tools/bench.sh --profile=1`.
-##   --audit=1                    direct: after steady, classify every drawn quad slot of every page;
+##   --trace=1                    engine trace from the terrain's creation to the end: trace.json next to --out (every
+##                                thread's spans and hand-offs, the GPU's passes; ui.perfetto.dev) and the phases'
+##                                start times in trace_phases.json; tools/engine_map.py <run> draws the map
+##   --trace_max=N                the trace's event cap (default 2000000, ~120 B of JSON each), the rest dropped
+##   --audit=1                   direct: after steady, classify every drawn quad slot of every page;
 ##                                writes per-chunk mesh digests to chunks.json next to --out
 ##   --validate=N                 direct: after steady, compare N chunks against the legacy mesher
 ##   --batch=N                    legacy batch size
@@ -151,6 +155,7 @@ var profile_main := []  # --profile=1: one entry per frame
 var profile_gpu := []  # --profile=1: one entry per captured renderer frame
 var profile_last_process := {}
 var profile_last_usec := 0
+var trace_phases := []  # --trace=1: {phase, start_usec}, on the trace's clock
 
 
 func _ready() -> void:
@@ -184,6 +189,8 @@ func _ready() -> void:
 			EngineDebugger.profiler_enable("visual", true)
 		else:
 			push_warning("BENCH: --profile=1 without a debugger: the renderer only times the viewport (use bench.sh --profile=1)")
+	if args.get("trace", "0") == "1":
+		terrain.debug_trace_start(int(args.get("trace_max", "2000000")))
 	var mode: String = args.get("mode", "legacy")
 	if not MODES.has(mode):
 		push_error("BENCH: unknown --mode=%s (expected legacy or direct)" % mode)
@@ -329,6 +336,7 @@ func _begin_phase(p_name: String) -> void:
 	phase = p_name
 	phase_frame = 0
 	phase_start_usec = Time.get_ticks_usec()
+	trace_phases.append({"phase": p_name, "start_usec": phase_start_usec})
 	samples[p_name] = {"frame_ms": [], "gpu_ms": [], "cpu_render_ms": [], "pending": [],
 		"draw_calls": [], "primitives": [], "draw_calls_view": [], "draw_calls_shadow": []}
 
@@ -716,6 +724,15 @@ func _finish() -> void:
 		fp.store_string(JSON.stringify({"main": profile_main, "gpu": profile_gpu,
 			"window": DisplayServer.window_get_size(), "phases": phase_results.keys()}))
 		fp.close()
+	if args.get("trace", "0") == "1" and args.has("out"):
+		var dir: String = args["out"].get_base_dir()
+		var written: Dictionary = terrain.debug_trace_write(dir.path_join("trace.json"))
+		print("BENCH: trace: %s" % JSON.stringify(written))
+		if int(written["dropped"]) > 0:
+			push_warning("BENCH: the trace dropped %d events past --trace_max" % int(written["dropped"]))
+		var ft := FileAccess.open(dir.path_join("trace_phases.json"), FileAccess.WRITE)
+		ft.store_string(JSON.stringify({"phases": trace_phases, "end_usec": Time.get_ticks_usec()}))
+		ft.close()
 	# Per-chunk mesh digests of the page audit go to their own file (thousands of entries).
 	if audit_report.has("chunk_digests"):
 		if args.has("out"):

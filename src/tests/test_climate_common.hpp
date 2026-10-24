@@ -8,14 +8,7 @@
 
 // What the climate tests share (test_climate.cpp, test_climate_shape.cpp).
 
-// doctest's REQUIRE needs exceptions: a failed check ends the test case.
-#define CLIMATE_REQUIRE(p_cond) \
-    do {                        \
-        CHECK(p_cond);          \
-        if (!(p_cond)) {        \
-            return;             \
-        }                       \
-    } while (0)
+#define CLIMATE_REQUIRE(p_cond) CHECK_OR_RETURN(p_cond)
 
 namespace ClimateTest {
 

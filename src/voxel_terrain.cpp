@@ -1,9 +1,12 @@
 #include "voxel_terrain.hpp"
 #include "godot_conv.hpp"
 #include "rd_utils.hpp"
+#include "trace.hpp"
 #include <cmath>
+#include <fstream>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -72,6 +75,9 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_debug_gpu_profile_frames", "enable"), &VoxelTerrain::set_debug_gpu_profile_frames);
     ClassDB::bind_method(D_METHOD("get_debug_gpu_profile_frames"), &VoxelTerrain::get_debug_gpu_profile_frames);
     ClassDB::bind_method(D_METHOD("take_gpu_profile_frames"), &VoxelTerrain::take_gpu_profile_frames);
+    ClassDB::bind_method(D_METHOD("debug_trace_start", "max_events"), &VoxelTerrain::debug_trace_start, DEFVAL(2000000));
+    ClassDB::bind_method(D_METHOD("debug_trace_stop"), &VoxelTerrain::debug_trace_stop);
+    ClassDB::bind_method(D_METHOD("debug_trace_write", "path"), &VoxelTerrain::debug_trace_write);
     ClassDB::bind_method(D_METHOD("get_process_times_ms"), &VoxelTerrain::get_process_times_ms);
     ClassDB::bind_method(D_METHOD("set_direct_batch_size", "size"), &VoxelTerrain::set_direct_batch_size);
     ClassDB::bind_method(D_METHOD("get_direct_batch_size"), &VoxelTerrain::get_direct_batch_size);
@@ -596,6 +602,29 @@ Array VoxelTerrain::take_gpu_profile_frames() {
     return gpu_profiler ? gpu_profiler->take_frames() : Array();
 }
 
+void VoxelTerrain::debug_trace_start(int64_t p_max_events) {
+    Trace::name_thread("main");
+    Trace::start(uint64_t(MAX(p_max_events, int64_t(1))));
+}
+
+void VoxelTerrain::debug_trace_stop() {
+    Trace::stop();
+}
+
+Dictionary VoxelTerrain::debug_trace_write(const String &p_path) {
+    const bool was = Trace::enabled();
+    Trace::stop(); // a consistent copy: no thread appends while it is written
+    const std::string json = Trace::to_json();
+    std::ofstream file(ProjectSettings::get_singleton()->globalize_path(p_path).utf8().get_data(), std::ios::binary);
+    file.write(json.data(), std::streamsize(json.size()));
+    Dictionary d;
+    d["events"] = int64_t(Trace::event_count());
+    d["dropped"] = int64_t(Trace::dropped_count());
+    d["bytes"] = file.good() ? int64_t(json.size()) : int64_t(-1);
+    Trace::recording.store(was);
+    return d;
+}
+
 Dictionary VoxelTerrain::get_process_times_ms() const {
     Dictionary d;
     for (const auto &[name, stat] : process_stats.sections()) {
@@ -965,51 +994,77 @@ void VoxelTerrain::_record_dispatch_times(const DispatchTimes &p_now) {
     last_dispatch_times = p_now;
 }
 
+namespace {
+
+// A _process section: its time goes to its stat and, while tracing, to a "terrain" span of the same name.
+class Section {
+public:
+    Section(TimingStat &r_stat, const char *p_name) :
+            stat(r_stat), span("terrain", p_name), t0(now_usec()) {}
+    ~Section() { stat.add(now_usec() - t0); }
+    Section(const Section &) = delete;
+    Section &operator=(const Section &) = delete;
+
+private:
+    TimingStat &stat;
+    const Trace::Scope span;
+    const uint64_t t0;
+};
+
+} // namespace
+
 void VoxelTerrain::_process(double) {
     if (!started) {
         return;
     }
 
-    const uint64_t t_process_start = now_usec();
+    Section total(process_stats.process_total, "process");
     visual_mesh_data.frame = exec_time;
-    sdf->poll(); // an edit's rebuilt index base, the streamed keys computed since the last frame (before the meshers ask)
-    process_stats.stream_poll.add(now_usec() - t_process_start);
+    {
+        Section section(process_stats.stream_poll, "stream_poll");
+        sdf->poll(); // an edit's rebuilt index base, the streamed keys computed since the last frame (before the meshers ask)
+    }
 
     if (camera != nullptr) {
         chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
     }
 
-    uint64_t t0 = now_usec();
-    std::unique_ptr<LODHashSet> new_scanned_chunk;
-    std::unique_ptr<ScanDelta> scan_delta;
+    {
+        Section section(process_stats.scan_ingest, "scan_ingest");
+        std::unique_ptr<LODHashSet> new_scanned_chunk;
+        std::unique_ptr<ScanDelta> scan_delta;
 
-    bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_view);
+        bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_view);
 
-    if (dirty_scan) {
-        scan_received = true;
-        destroy_dirty = true;
+        if (dirty_scan) {
+            scan_received = true;
+            destroy_dirty = true;
 
-        const uint64_t t_apply = now_usec();
-        visual_mesh_data.add_scan_chunk(std::move(new_scanned_chunk), *scan_delta);
-        process_stats.scan_apply.add(now_usec() - t_apply);
-        if (direct_mesher) {
-            direct_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
-        } else {
-            gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
+            {
+                Section apply(process_stats.scan_apply, "scan_apply");
+                visual_mesh_data.add_scan_chunk(std::move(new_scanned_chunk), *scan_delta);
+            }
+            if (direct_mesher) {
+                direct_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
+            } else {
+                gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
+            }
         }
     }
-    process_stats.scan_ingest.add(now_usec() - t0);
 
     // Only a new scan or new results change what can be destroyed.
     if (destroy_dirty) {
         destroy_dirty = false;
-        t0 = now_usec();
-        visual_mesh_data.update_destroy();
-        process_stats.destroy_from_scan.add(now_usec() - t0);
+        {
+            Section section(process_stats.destroy_from_scan, "destroy_from_scan");
+            visual_mesh_data.update_destroy();
+        }
         if (destroy_verify) {
-            t0 = now_usec();
-            const int64_t mismatches = visual_mesh_data.verify_against_full();
-            process_stats.destroy_verify.add(now_usec() - t0);
+            int64_t mismatches = 0;
+            {
+                Section section(process_stats.destroy_verify, "destroy_verify");
+                mismatches = visual_mesh_data.verify_against_full();
+            }
             if (mismatches > 0) {
                 ERR_PRINT(String("VoxelTerrain: incremental destroy check differs from the full recompute: ") + String::num_int64(mismatches) +
                         " differences (frame " + String::num_int64(exec_time) + ").");
@@ -1017,38 +1072,44 @@ void VoxelTerrain::_process(double) {
         }
     }
 
-    t0 = now_usec();
-    if (direct_mesher) {
-        direct_mesher->process_queue();
-    } else {
-        gpu_mesher->process_queue();
+    {
+        Section section(process_stats.mesher_dispatch, "mesher_dispatch");
+        if (direct_mesher) {
+            direct_mesher->process_queue();
+        } else {
+            gpu_mesher->process_queue();
+        }
     }
-    process_stats.mesher_dispatch.add(now_usec() - t0);
     _record_dispatch_times(direct_mesher ? direct_mesher->get_dispatch_times() : gpu_mesher->get_dispatch_times());
 
-    t0 = now_usec();
-    const bool results = direct_mesher ? direct_mesher->get_results(visual_mesh_data) : gpu_mesher->get_results(visual_mesh_data);
-    destroy_dirty = destroy_dirty || results;
-    process_stats.mesher_collect.add(now_usec() - t0);
+    {
+        Section section(process_stats.mesher_collect, "mesher_collect");
+        const bool results = direct_mesher ? direct_mesher->get_results(visual_mesh_data) : gpu_mesher->get_results(visual_mesh_data);
+        destroy_dirty = destroy_dirty || results;
+    }
 
-    t0 = now_usec();
-    visual_mesh_data.destroy_marked();
-    process_stats.destroy_chunks.add(now_usec() - t0);
+    {
+        Section section(process_stats.destroy_chunks, "destroy_chunks");
+        visual_mesh_data.destroy_marked();
+    }
 
     // After destruction (to_destroy_chunk holds copies of the outputs it moves), and never while the
     // validator or auditor hold page ranges.
-    t0 = now_usec();
-    if (direct_mesher && !validator && !auditor) {
-        direct_mesher->compact(visual_mesh_data);
+    {
+        Section section(process_stats.compact, "compact");
+        if (direct_mesher && !validator && !auditor) {
+            direct_mesher->compact(visual_mesh_data);
+        }
     }
-    process_stats.compact.add(now_usec() - t0);
 
     // The stalled chunks hide the sub-cubes their replacements cover. After compaction: the rows are current.
-    t0 = now_usec();
-    visual_mesh_data.push_coverage();
-    process_stats.coverage.add(now_usec() - t0);
+    {
+        Section section(process_stats.coverage, "coverage");
+        visual_mesh_data.push_coverage();
+    }
 
-    if ((debug_gpu_profile && exec_time % 15 == 0) || debug_gpu_profile_frames) {
+    // Tracing reads every captured frame (the GPU track).
+    if ((debug_gpu_profile && exec_time % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {
         if (!gpu_profiler) {
             gpu_profiler = memnew(GPUProfiler);
             gpu_profiler->set_recording(debug_gpu_profile_frames);
@@ -1075,7 +1136,6 @@ void VoxelTerrain::_process(double) {
     }
 
     exec_time++;
-    process_stats.process_total.add(now_usec() - t_process_start);
 
     if (frames_until_loaded < 0 && is_load_complete()) {
         frames_until_loaded = exec_time;

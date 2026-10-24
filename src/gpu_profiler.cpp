@@ -1,4 +1,5 @@
 #include "gpu_profiler.hpp"
+#include "trace.hpp"
 
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
@@ -11,6 +12,45 @@ bool is_mesher_name(const String &p_name) {
 
 String section_name(const String &p_name) {
     return is_mesher_name(p_name) ? "vx_" + p_name.get_slice("_", 1) : p_name;
+}
+
+// The frame's intervals as spans on the trace's GPU track, inside a "frame" span. The GPU clock is not the CPU's:
+// the frame is placed as early as it can run: every interval starting at or after the CPU time its timestamp was
+// recorded at (the render thread records, the GPU runs later) and after the previous frame (r_end: the GPU runs
+// frames one after the other), at their GPU durations. A mesh batch's copy carries the batch's flow
+// ("vx<batch>_copy"): after the render thread's dispatch, before the readback.
+void trace_frame(RenderingDevice *p_rd, const std::vector<String> &p_names, const std::vector<String> &p_labels, uint64_t &r_end) {
+    Trace::name_thread("render");
+    const uint32_t n = uint32_t(p_names.size());
+    const uint64_t gpu0 = p_rd->get_captured_timestamp_gpu_time(0);
+    uint64_t start = r_end;
+    for (uint32_t i = 0; i < n; i++) {
+        const uint64_t gpu = p_rd->get_captured_timestamp_gpu_time(i);
+        const uint64_t offset = gpu >= gpu0 ? (gpu - gpu0) / 1000 : 0;
+        const uint64_t cpu = p_rd->get_captured_timestamp_cpu_time(i);
+        start = MAX(start, cpu > offset ? cpu - offset : 0);
+    }
+    const uint64_t gpu_end = p_rd->get_captured_timestamp_gpu_time(n - 1);
+    if (gpu_end < gpu0) {
+        return;
+    }
+    const uint32_t frame = Trace::gpu_span("gpu", "frame", start, (gpu_end - gpu0) / 1000);
+    r_end = start + (gpu_end - gpu0) / 1000;
+    for (uint32_t i = 0; i < p_labels.size(); i++) {
+        const uint64_t begin = p_rd->get_captured_timestamp_gpu_time(i);
+        const uint64_t end = p_rd->get_captured_timestamp_gpu_time(i + 1);
+        if (end < begin || begin < gpu0) {
+            continue;
+        }
+        const uint64_t ts = start + (begin - gpu0) / 1000;
+        const uint64_t dur = (end - begin) / 1000;
+        const bool mesher = p_labels[i].begins_with("vx_");
+        const uint32_t pass = Trace::gpu_span(mesher ? "mesher" : "render", Trace::intern(p_labels[i].utf8().get_data()), ts, dur, 0, frame);
+        if (mesher && p_names[i + 1].ends_with("_copy")) {
+            const uint64_t batch = uint64_t(p_names[i + 1].substr(2).get_slice("_", 0).to_int());
+            Trace::gpu_flow(Trace::Kind::FLOW_STEP, "batch", batch, ts + dur / 2, pass);
+        }
+    }
 }
 
 } // namespace
@@ -69,6 +109,9 @@ void GPUProfiler::_rt_read() {
         names[i] = rd->get_captured_timestamp_name(i);
     }
     const std::vector<String> labels = gpu_interval_labels(names);
+    if (Trace::enabled()) {
+        trace_frame(rd, names, labels, trace_gpu_end);
+    }
     // A name can repeat (per viewport, per batch, "Tonemap" twice): sections accumulate. GPU time is in
     // nanoseconds, CPU time in microseconds.
     Dictionary gpu;

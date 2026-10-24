@@ -1,5 +1,6 @@
 #include "chunk_discoverer.hpp"
 #include "godot_conv.hpp"
+#include "trace.hpp"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/os.hpp>
@@ -24,6 +25,7 @@ using namespace godot;
 
 void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod,
         std::vector<uint8_t> &r_outside, WaveStats &r_wave, LocalPointsGPU *p_gpu) const {
+    OV_TRACE("discoverer", "corner_sdf");
     // The 8 corners of each node (centre +- half its size, points of Λ_lod), shared by up to 8 nodes:
     // deduplicated on their voxel, then evaluated in one batch.
     const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();
@@ -82,6 +84,8 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
 
 void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside,
         ScanCounters &r_counters, CullCache *p_cache, LocalPointsGPU *p_gpu) const {
+    Trace::Scope span("discoverer", "cull_wave");
+    span.set_arg(p_wave.size());
     WaveStats wave;
     wave.lod = p_lod;
     wave.nodes = int64_t(p_wave.size());
@@ -158,6 +162,7 @@ void ChunkDiscoverer::stop() {
 }
 
 void ChunkDiscoverer::discovery_loop() {
+    Trace::name_thread("discoverer");
     bool has_scanned = false;
     ScanView last_scanned_view;
     // The previous scan, kept up to date by applying each delta (the published set leaves without a copy).
@@ -243,8 +248,13 @@ void ChunkDiscoverer::discovery_loop() {
         std::unique_ptr<LODHashSet> new_scanned_chunk = std::make_unique<LODHashSet>();
         ScanCounters counters;
         cache.scan_index++;
-        scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
-        const int64_t evicted = _evict_cache(counters.nodes_visited);
+        int64_t evicted = 0;
+        {
+            Trace::Scope span("discoverer", "scan");
+            scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
+            evicted = _evict_cache(counters.nodes_visited);
+            span.set_arg(new_scanned_chunk->size());
+        }
         if (counters.verify_mismatches > 0) {
             ERR_PRINT(String("ChunkDiscoverer: ") + String::num_int64(counters.verify_mismatches) +
                     " cached cull verdicts differ from a fresh evaluation.");
@@ -256,8 +266,11 @@ void ChunkDiscoverer::discovery_loop() {
         const uint64_t t_compared = now_usec();
 
         std::unique_ptr<ScanDelta> delta = std::make_unique<ScanDelta>();
-        ScanDelta::between(previous_scan, *new_scanned_chunk, *delta);
-        delta->apply(previous_scan);
+        {
+            OV_TRACE("discoverer", "delta");
+            ScanDelta::between(previous_scan, *new_scanned_chunk, *delta);
+            delta->apply(previous_scan);
+        }
         const uint64_t t_delta = now_usec();
         mutex->lock();
         stats.delta.add(t_delta - t_compared);
@@ -297,7 +310,10 @@ int64_t ChunkDiscoverer::_evict_cache(int64_t p_nodes_visited) {
 
 void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ScanView &p_view,
         const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec, uint64_t p_ready_usec) {
+    OV_TRACE("discoverer", "publish");
     mutex->lock();
+    // A scan the main thread didn't take is merged into this one: its flow ends nowhere.
+    Trace::flow(Trace::Kind::FLOW_START, "scan", ++published_scans);
     const int64_t size = p_scan->size();
     scanned_chunks = std::move(p_scan);
     // The main thread hasn't taken the previous scan: its delta still leads from the last scan taken.
@@ -409,6 +425,7 @@ bool ChunkDiscoverer::get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_
     bool dirty = scanned_chunks_dirty;
 
     if (dirty) {
+        Trace::flow(Trace::Kind::FLOW_END, "scan", published_scans);
         r_scanned_chunks = std::move(scanned_chunks);
         r_delta = std::move(scanned_delta);
         r_view = scanned_view;
