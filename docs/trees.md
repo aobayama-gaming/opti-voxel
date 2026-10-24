@@ -30,8 +30,11 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   cell's middle part (`SITE_INNER` 0.15 off each side across the normal: neighbours stay 0.3 cells apart with no
   neighbour pass), then snaps it onto the LOD-0 ground (`SNAP_STEPS` Newton steps on whole voxels, one owner per surface
   point); `surface_sites` tries only the cells an absolute octree walk keeps, one coarse reading per node centre, while
-  its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes): ~9 evaluations per site, 1 per empty box;
-  unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
+  its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes, `SITE_BEND_COARSE` from nodes of 16 cells up:
+  the field is a height difference over the local slope and over-reads next to steep ground, which dropped whole tiles
+  from a forest zone's level): ~9 evaluations per site, 1 per empty box; unit-tested equal to the brute force on hills,
+  a 60 degree slope and the 5 cm cascade, and against every cell around main_scene's spawn from a 1M forest's zone level
+  (a cliff face may still lose ~1 site in 1,000). A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). Still column-based (flat debt): the scene's centre (`ground_y`) and the lake keep-out
   (`in_lake(x, z)`, the sources' `accept`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved

@@ -311,6 +311,54 @@ TEST_CASE("Cell sites: tiles walked from a box's level keep the box walk's sites
     CHECK(sites > 100);
 }
 
+// A streamed forest walks its tiles from the zone's level (cell_scatter): nodes of kilometres whose centre reads the
+// field far from the ground, where it over-reads next to steep ground. With SITE_BEND alone there, 1M trees on 7.07 km
+// (141-voxel cells) lost a third of the sites around main_scene's spawn, whole tiles of them, the spawn's own. Tiles of
+// 8 cells around it, 1M trees on 5, 6 and 7.07 km, against every cell: a cliff face may lose one, never a tile.
+TEST_CASE("Cell sites: tiles walked from a 1M forest's zone level keep every cell's site around the spawn") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    SDFCascade sdf;
+    sdf.configure(param, 15);
+    const FieldFn ground = [&](const VoxelPos &p_v, int p_lod) { return sdf.ground_field(p_v, p_lod); };
+    const double vs = 0.05;
+    const int64_t cx = std::llround(-50.0 / vs), cz = std::llround(-150.0 / vs); // SDFTable::scene_source's centre
+    const VoxelPos zone_centre(cx, sdf.ground_y(cx, cz), cz);
+    const int64_t sx = std::llround(-52.76 / vs), sz = std::llround(-95.64 / vs); // main_scene's spawn
+    for (const double area : { 5000.0, 6000.0, 7071.0 }) {
+        const int64_t side = forest_cell_side(1000000, area, vs);
+        const int64_t half = std::llround(0.5 * area / vs);
+        const VoxelPos zone_reach(half, 4 * half, half);
+        const int level = walk_level(VoxelBox{ zone_centre - zone_reach, zone_centre + zone_reach, true }, side);
+        const int64_t tile = 8 * side;
+        const VoxelPos reach(tile / 2, 2 * tile, tile / 2);
+        int64_t walked_total = 0, brute_total = 0, worst_tile = 0;
+        bool subset = true;
+        for (int64_t dz = -4; dz <= 4; dz++) {
+            for (int64_t dx = -4; dx <= 4; dx++) {
+                const int64_t x = sx + dx * tile, z = sz + dz * tile;
+                const VoxelPos c(x, sdf.ground_y(x, z), z);
+                std::vector<CellSite> walked;
+                surface_sites(c - reach, c + reach, side, SALT, ground, walked, true, level);
+                const std::vector<Site> brute = brute_sites(c - reach, c + reach, side, ground);
+                for (const CellSite &s : walked) {
+                    subset = subset && std::any_of(brute.begin(), brute.end(), [&s](const Site &p_b) { return p_b.base == s.site.base; });
+                }
+                walked_total += int64_t(walked.size());
+                brute_total += int64_t(brute.size());
+                worst_tile = MAX(worst_tile, int64_t(brute.size()) - int64_t(walked.size()));
+            }
+        }
+        MESSAGE("1M trees on ", area, " m (", side, "-voxel cells, zone level ", level, "): ", walked_total, " sites walked of ", brute_total,
+                " cells' sites, worst tile ", worst_tile, " short");
+        CAPTURE(area);
+        CHECK(subset);
+        CHECK(brute_total > 4000);
+        CHECK((brute_total - walked_total) * 1000 <= brute_total);
+        CHECK(worst_tile <= 2);
+    }
+}
+
 // Many boxes walked in lockstep (surface_sites_many) find each box's own sites, whatever walks share the rounds: site
 // tiles (snapped) and proxy tiles (unsnapped, another cell side and salt) side by side, an air box, a walk with no cell.
 // A round reads once what several walks ask (the tiles' shared ancestors), and the rounds don't grow with the boxes.

@@ -62,7 +62,8 @@ bool cell_site(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const Fi
 // order. The cells tried come from an absolute octree walk (nodes of p_side * 2^k voxels aligned on their own
 // multiples, from the coarsest level whose node holds the box) that reads the coarse field once at each node's centre
 // and keeps the node while the plane it gives crosses the node, give or take SITE_SLACK cells plus SITE_BEND node sides
-// (the ground bends away from the plane, and the cascade's field changes faster than its gradient over tens of metres);
+// (the ground bends away from the plane, and the cascade's field changes faster than its gradient over tens of metres;
+// SITE_BEND_COARSE on nodes of 16 cells and up, where the field over-reads next to steep ground);
 // a kept cell's reading is the one cell_site uses. An empty box costs one evaluation. Without p_snap, the sites stay on
 // the coarse plane (no LOD-0 evaluation: far proxies, which only weigh where the sites are). The walk starts at level
 // p_min_level at least: two boxes walked from the same level (each node at it holding them) test the same nodes over every
@@ -105,5 +106,15 @@ void surface_sites_many(const SiteWalk *p_walks, size_t p_count, const FieldBatc
 int walk_level(const VoxelBox &p_box, int64_t p_side);
 inline constexpr double SITE_SLACK = 0.25;
 inline constexpr double SITE_BEND = 0.25;
+// From nodes of SITE_COARSE_LEVEL levels above the cell (16 cells) up, the bend is SITE_BEND_COARSE node sides: the
+// field is the height difference over the slope at its own reading (CascadeTerrain::height_sdf), so a node centre over a
+// gentle patch next to a steep rise reads several times its distance (the worst measured on the 5 cm cascade: 2.3 node
+// sides past the plane, at a 900 m node). With SITE_BEND there, a walk from a forest zone's level dropped whole tiles of
+// ground (a third of the sites around main_scene's spawn at 141-voxel cells). Those levels hold few nodes: a few % more
+// readings. The finer levels, where the walk's readings are, keep SITE_BEND and can still miss a site on a cliff face
+// (~1 in 1,000 measured). One level above a site tile (ScatterSource::PART_TILE_CELLS, 8 cells): at the tile's own level
+// the coarse bend kept every tile within 4 tiles of the ground, and the 1M load computed 5x the site tiles.
+inline constexpr int SITE_COARSE_LEVEL = 4;
+inline constexpr double SITE_BEND_COARSE = 4.0;
 
 } // namespace Archetype
