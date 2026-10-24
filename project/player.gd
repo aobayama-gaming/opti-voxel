@@ -1,6 +1,7 @@
 extends Node3D
 
 const Presets = preload("res://debug/presets.gd")
+const VideoOverlay = preload("res://video_overlay.gd")
 
 var speed: float = 50.0
 var mouse_sensitivity: float = 0.002
@@ -52,6 +53,7 @@ var edits_count := 0
 var hud: Label = null
 var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
+var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD
 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
@@ -156,7 +158,12 @@ func _ready():
 			global_position.y += spawn_altitude - d
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if terrain:
-		_make_hud()
+		if "--overlay=video" in Presets.user_args():
+			overlay = VideoOverlay.new()
+			overlay.setup(terrain, camera)
+			add_child(overlay)
+		else:
+			_make_hud()
 	yaw = rotation.y
 	pitch = camera.rotation.x
 	for a in Presets.user_args():
@@ -278,6 +285,8 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_TAB:
 		hud_visible = not hud_visible
+		if overlay:
+			overlay.visible = hud_visible
 
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
