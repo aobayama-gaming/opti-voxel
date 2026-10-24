@@ -112,6 +112,7 @@ to every change, and a reviewer may reject a PR on any of them.
 | `docs/landforms.md` | landform tables and matching real heightmaps | `project/climate/landforms/`, `tools/landforms/` |
 | `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `local_points_gpu*`, `chunk_memory*`, `subcube.hpp` |
 | `docs/testing.md` | every check tool and bench flag in detail, debug views, hole hunting | `tools/`, `project/debug/` |
+| `docs/how-it-works.html` | the picture: each thread's loops in order with their counts, one mesh batch on the GPU, a chunk's life (hand-written, numbers from one traced forest fly) | |
 | `docs/perf.md` | perf target, baselines, where the frame goes | |
 | `docs/gotchas.md` | engine, GPU, build and float traps already hit | |
 | `docs/forest-1m-profile.md` | the 1M-tree load profile and its ranked causes | |

@@ -18,3 +18,11 @@ The numbers perf PRs are measured against (`tools/bench_ab.sh`, `bench.sh --prof
   Turning: geometry flat, the frames over budget are the mesher's batches. The pre-pass can't simply go:
   without it SSAO / SSIL lose their normals and shadowed surfaces turn black.
   Never build while a bench runs (thermals, see `docs/gotchas.md`).
+- **The fly's GPU frame, traced** (`bench.sh --trace=1`, run 20261024-151347, forest5cm, 1080p, fly out):
+  27.3 ms of GPU per frame against ~3 ms on the main thread. Meshing is 14.7 ms (2.65 batches of 128 chunks x ~5.5 ms),
+  Godot's drawing 12.6 (shadows 6.0, opaque 3.3, pre-pass 2.2). One dispatch dominates meshing: cascade level 0
+  with the instance fold, 11.3 ms. `gpu_by_list_words` (stats.json) splits it: a batch with empty lists runs its whole
+  cascade in 1.06 ms against 5.13 on average, so the fold is ~79% of the cascade and ~66% of meshing; it grows with
+  the batch's list (2.1 ms at ~90 records, 5.7 at ~780, 10.5 at ~5,600, 23.7 at ~22,000). Cause: `arch_fold` walks
+  the chunk's whole list for every one of its 32^3 samples, reading each 160-byte `DefRecord` to test its box, and
+  the level workgroups (64 samples in a row) can't share that test. The picture: `docs/how-it-works.html`.
