@@ -71,6 +71,29 @@ inline void encode_chunk_input(godot::PackedByteArray &r_bytes, int64_t p_index,
     encode_chunk_input(r_bytes.ptrw() + p_index * CHUNK_INPUT_BYTES, p_chunk, p_param);
 }
 
+// A point item's LOD, in the ChunkInput word a chunk's list offset takes (id.w).
+static constexpr uint32_t POINT_LOD_AT = CHUNK_LIST_OFFSET_AT;
+
+// Writes one point item (CHUNK_INPUT_BYTES) at r_slot: a point of Λ_lod (p_point a multiple of 2^lod, any index), its
+// low words where a chunk's id goes, its high words where a chunk's anchor's go, and the LOD itself in id.w (no id, so
+// no corner grid). The GPU reads it back with point_frame (glsl_point_frame). False (nothing written) for a point off
+// its lattice or a LOD out of [0, MAX_LOD_NUMBERS): the GPU would read another point.
+inline bool encode_point_item(uint8_t *r_slot, const VoxelPos &p_point, int p_lod) {
+    using namespace WorldCoord;
+    if (p_lod < 0 || p_lod >= ChunkMath::MAX_LOD_NUMBERS || ((p_point.x | p_point.y | p_point.z) & ((int64_t(1) << p_lod) - 1)) != 0) {
+        return false;
+    }
+    ov::put_u32(r_slot + 0, lo32(p_point.x));
+    ov::put_u32(r_slot + 4, lo32(p_point.y));
+    ov::put_u32(r_slot + 8, lo32(p_point.z));
+    ov::put_u32(r_slot + POINT_LOD_AT, uint32_t(p_lod));
+    ov::put_s32(r_slot + 16, hi32(p_point.x));
+    ov::put_s32(r_slot + 20, hi32(p_point.y));
+    ov::put_s32(r_slot + 24, hi32(p_point.z));
+    ov::put_s32(r_slot + CHUNK_LIST_COUNT_AT, 0);
+    return true;
+}
+
 } // namespace GPUFrame
 
 // Before the bindings (ChunkInput is a buffer element type).
@@ -133,6 +156,22 @@ ivec3 sat_diff(WorldPos p, uvec3 anchor_lo, ivec3 anchor_hi, int limit) {
     uvec3 dlo = p.lo - anchor_lo;
     ivec3 dhi = p.hi - anchor_hi - ivec3(lessThan(p.lo, anchor_lo));
     return sat_words(dlo, dhi, limit);
+}
+
+)glsl";
+
+// The frame of a point item (encode_point_item): the point is the anchor, its LOD in id.w (no id). After
+// GLSL_FRAME_FUNCTIONS, only in the point passes' shaders (the chunks' text stays as it was).
+inline constexpr const char GLSL_POINT_FRAME[] = R"glsl(
+
+ChunkFrame point_frame(ChunkInput c) {
+    ChunkFrame f;
+    f.id_lo = ivec3(0);
+    f.lod = int(c.id.w);
+    f.lod_size = 1 << f.lod;
+    f.anchor_lo = c.id.xyz;
+    f.anchor_hi = c.anchor_hi.xyz;
+    return f;
 }
 
 )glsl";
@@ -210,6 +249,11 @@ namespace GPUFrame {
 
 inline String glsl_functions() {
     return String(GLSL_FRAME_FUNCTIONS);
+}
+
+// The point items' frame (after glsl_functions()).
+inline String glsl_point_frame() {
+    return String(GLSL_POINT_FRAME);
 }
 
 // The int64 helpers (after glsl_functions()).

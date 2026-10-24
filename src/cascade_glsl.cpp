@@ -60,8 +60,7 @@ void main() {
         return;
     }
     uvec3 i = uvec3(local % n, (local / n) % n, local / (n * n));
-    ChunkFrame f = chunk_frame(input_chunk[pc.chunk_base + c], chunk_param);
-    int lod = f.lod;
+/*ITEM_FRAME*/    int lod = f.lod;
     int m = lod + pc.j;
 /*FIELDS_FLAG*/    int top = max(pc.top, lod);
     if (m > top) {
@@ -141,12 +140,12 @@ void main() {
 )glsl";
 
 // The parts of LEVEL_TEMPLATE that differ between chunk items (the meshers': 32^3 samples, workgroups x over a
-// level box, y over the chunks) and point items (the discoverer's: one value per point, the items flattened
-// over x). The chunk fills reproduce the template's text before point items, so the meshers' shaders are
-// byte-identical to it.
+// level box, y over the chunks) and point items (one register per point, the items flattened over x). The chunk fills
+// reproduce the template's text before point items, so the meshers' shaders are byte-identical to it.
 struct ItemFills {
     const char *output_buffer;
     const char *item_index;
+    const char *item_frame;
     const char *item_extent;
     const char *level0_output;
 };
@@ -157,6 +156,7 @@ constexpr ItemFills CHUNK_FILLS = {
     uint n = pc.n_child;
     uint local = gl_GlobalInvocationID.x;
 )glsl",
+    "    ChunkFrame f = chunk_frame(input_chunk[pc.chunk_base + c], chunk_param);\n",
     "chunk_param.chunk_size - 1",
     R"glsl(    /*DEBUG_STORE*/
     uint material = 0u; // the sample's palette index: ground unless the fold's winner says otherwise
@@ -177,17 +177,20 @@ constexpr ItemFills CHUNK_FILLS = {
     /*MATERIAL_STORE*/)glsl",
 };
 
-// A point item is a chunk of one sample (its anchor, skirt 0): box extent 0, the bare SDF value at Λ_L (no
-// instance folded: the discoverer never culls a node near an instance, SDFBase::cull_exempt).
+// A point item (GPUFrame::encode_point_item) is a chunk of one sample at any point of Λ_L, its frame from the item's
+// own words (point_frame), skirt 0, box extent 0: level 0 writes the bare cascade's unit register there
+// (cascade_terrain_unit: unit gradient, distance in voxels of the LOD; no instance folded: the discoverer never culls a
+// node near an instance, SDFBase::cull_exempt), SDFCascade::ground_unit's bits, 16 B per point.
 constexpr ItemFills POINT_FILLS = {
-    "layout(set = 0, binding = 2, std430) restrict writeonly buffer SDFValue { float sdf_value[]; };",
+    "layout(set = 0, binding = 2, std430) restrict writeonly buffer PointValue { vec4 point_value[]; };",
     R"glsl(    uint n = pc.n_child;
     uint c = gl_GlobalInvocationID.x / (n * n * n);
     uint local = gl_GlobalInvocationID.x % (n * n * n);
 )glsl",
+    "    ChunkFrame f = point_frame(input_chunk[pc.chunk_base + c]);\n",
     "0",
-    R"glsl(    precise vec4 r = cascade_terrain_sdf(/*GROUND_C0*/, p, lod);
-    sdf_value[sample_index] = r.w;)glsl",
+    R"glsl(    precise vec4 r = cascade_terrain_unit(/*GROUND_C0*/, p, lod);
+    point_value[sample_index] = r;)glsl",
 };
 
 String flt(float p_f) {
@@ -525,6 +528,7 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     String code = LEVEL_TEMPLATE;
     code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
     code = code.replace("/*ITEM_INDEX*/", fills.item_index);
+    code = code.replace("/*ITEM_FRAME*/", fills.item_frame);
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     // The sample's ground channels: the cascade's, or climate_ground's with ground terms (the fields variant only: their
@@ -553,7 +557,7 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*MATERIAL_STORE*/", material_store);
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : String()));
+    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : String()) + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : String()));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? p_sdf->get_sample_fold_glsl() : String()));
     const String modulation = spec->modulation ? spec->modulation->glsl(*spec) : String();
     const bool fields = !spec->fields.empty();
@@ -572,21 +576,8 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
 
 ChunkParam point_param(const ChunkParam &p_param) {
     ChunkParam p = p_param;
-    p.chunk_size = p_param.chunk_voxel_dimension();
     p.skirt_size = 0;
     return p;
-}
-
-bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPos &p_point, int p_lod, const ChunkParam &p_point_param) {
-    const int64_t half = p_point_param.half_chunk_voxels();
-    const int64_t span = half << (p_lod + 1);
-    ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0 || p_point.x % span != 0 || p_point.y % span != 0 || p_point.z % span != 0, false,
-            "CascadeGLSL: a point item must be on its LOD's corner grid.");
-    // chunk_min_voxel(id) = (id - 2^lod) * half = p_point.
-    const int64_t lod_size = int64_t(1) << p_lod;
-    const ChunkId id(p_point.x / half + lod_size, p_point.y / half + lod_size, p_point.z / half + lod_size);
-    GPUFrame::encode_chunk_input(r_bytes, p_index, id, p_point_param);
-    return true;
 }
 
 String glsl_material_buffer(int p_binding, const char *p_access) {

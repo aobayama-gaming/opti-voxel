@@ -32,12 +32,12 @@
 // with the spec. Debug variant (CascadeSpike): the last level also stores its channels; the meshers' variant
 // doesn't, so the channels the sample doesn't use are dead code there.
 //
-// Items: the meshers' are chunks (32 points per axis, box from the chunk's anchor minus the skirt). The
-// discoverer's are points (create_points): a point item is a ChunkInput whose anchor is the point itself
-// (encode_point_input), with the point instance's ChunkParam (point_param: skirt 0), so its box is that one
-// point and every level above it at most 2 points per axis (level_bound(1, j)); the items are flattened over
-// the workgroups' x (no 65,535 limit on y), and Λ_L writes the bare cascade_terrain_sdf(...).w, one float per
-// point. The meshers' shader text is the same as before point items.
+// Items: the meshers' are chunks (32 points per axis, box from the chunk's anchor minus the skirt). Point items
+// (create_points: the discoverer's corners, the site walk's readings) are any points of Λ_L at any LODs in one batch
+// (GPUFrame::encode_point_item: the point and its LOD, point_frame), with the point instance's ChunkParam (point_param:
+// skirt 0), so an item's box is that one point and every level above it at most 2 points per axis (level_bound(1, j));
+// the items are flattened over the workgroups' x (no 65,535 limit on y), and Λ_L writes the bare cascade's unit register
+// (cascade_terrain_unit, 16 B per point). The meshers' shader text is the same as before point items.
 namespace CascadeGLSL {
 
 static constexpr uint32_t BAND_BYTES = 64;
@@ -77,14 +77,8 @@ Cascade::FieldRange field_range(const SDFBase *p_sdf, bool p_points);
 // p_fields false: the ground alone (a spec with fields: the variant for the levels below its climate floor).
 String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_fields = true);
 
-// The point instance's ChunkParam: p_param with skirt 0 and chunk_size = the chunk's voxel dimension, so the
-// GPU's anchor (id - lod size) * half chunk stays the meshers' and an item's box is its anchor alone.
+// The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
 ChunkParam point_param(const ChunkParam &p_param);
-
-// Writes point item p_index (r_bytes must hold it): the LOD-p_lod chunk whose anchor is p_point, which must be
-// on that LOD's corner grid (a multiple of 2^(lod + 1) half chunks, as the discoverer's node corners are).
-// False (and an error) otherwise.
-bool encode_point_input(PackedByteArray &r_bytes, int64_t p_index, const VoxelPos &p_point, int p_lod, const ChunkParam &p_point_param);
 
 // The sdf_material declaration (uint per sample, indexed like sdf_sample) at p_binding, with p_access (readonly,
 // writeonly): the cascade writes it, the meshers' vertex passes read it.
@@ -111,8 +105,8 @@ public:
     bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
             RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr, RID p_table_records = RID(),
             RID p_table_list = RID(), RID p_sdf_material = RID());
-    // Point items (the discoverer's): p_input holds encode_point_input items, p_param_ubo the std140
-    // point_param, p_values one float per item.
+    // Point items (CascadePointsGPU): p_input holds GPUFrame::encode_point_item items (any LODs), p_param_ubo the std140
+    // point_param, p_values one vec4 per item (SDFCascade::ground_unit's bits).
     bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
             RID p_values);
     void free();

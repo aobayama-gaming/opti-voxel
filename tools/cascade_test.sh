@@ -6,9 +6,10 @@
 #
 # check: the cascade passes (cascade_glsl.hpp) vs Cascade::run, every channel of every level and the
 # sdf_sample, chunks of every LOD near 0, +-2^60 and across 2^32 boundaries (G1), and the LOD relation on
-# the GPU outputs (G3). points: the discoverer's point items (CascadePasses::create_points) vs Cascade::point +
-# SDFCascade::sdf, 5,120 corners per LOD near 0, +-2^60, across 2^32-voxel boundaries and lattice index 2^32
-# (D1 of the GPU discoverer). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
+# the GPU outputs (G3). points: point items (CascadePasses::create_points, the discoverer's corners and the site walk's
+# readings) vs SDFCascade::ground_unit, ground_field and evaluate_cull, one mixed-LOD batch of 5,120 voxels per LOD (0-8,
+# 12, 16, 24) near 0, +-2^60, across 2^32-voxel boundaries and lattice index 2^32, any lattice index (D1), and their GPU ms
+# per batch of 1k-64k points at LOD 0 and 5 (D2). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
 # chunks' instance lists vs SDFCascade::sample_sdf + skirt (G9: the fold onto the cascade, bit for bit). biomes: the example climate's per-sample ground material (the biome pick at
 # level 0) vs SDFCascade::ground_material, every LOD (G10, on 4c and every other climate set asked). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
 # (G6), both channel sets (G7: 8 vs 4), each set against the plain 4 channels. Sets: 8, 4, 4c (LINEAR4 + the example
@@ -94,11 +95,18 @@ if check:
         lines.append(f"| {s} ch | {d['chunks']} | {d['min_chunks_per_lod']} | {d['levels']} | {d['values']:,} | {d['differing']} | "
                      f"{d['samples']:,} | {d['samples_differing']} | {d['relation_points']:,} | {d['relation_differing']} | {d['ok']} |")
     lines.append("")
-pts = r.get("points", {})
+pts = {k: v for k, v in r.get("points", {}).items() if k != "timing"}
 if pts:
-    lines += ["| set | point items | per LOD | differing | scratch MB | ok |", "|---|---|---|---|---|---|"]
+    lines += ["| D1 point items (mixed LODs) | points | per LOD | differing | batches | scratch MB | ok |", "|---|---|---|---|---|---|---|"]
     for s, d in pts.items():
-        lines.append(f"| {s} ch | {d['points']:,} | {d['points_per_lod']:,} | {d['differing']} | {d['scratch_mb']:.2f} | {d['ok']} |")
+        lines.append(f"| {s} ch | {d['points']:,} | {d['points_per_lod']:,} | {d['differing']} | {d['batches']} | {d['scratch_mb']:.1f} | {d['ok']} |")
+    lines.append("")
+pt = r.get("points", {}).get("timing", {})
+if pt.get("rows"):
+    lines += [f"D2 point items, GPU ms per single-LOD batch (median of {pt.get('runs')} runs):", "",
+              "| set | LOD | points | GPU ms | us / point |", "|---|---|---|---|---|"]
+    for x in pt["rows"]:
+        lines.append(f"| {x['set']} ch | {x['lod']} | {x['points']:,} | {x['gpu_ms_median']:.3f} | {x['us_per_point']:.3f} |")
     lines.append("")
 tab = r.get("table", {})
 if tab:
