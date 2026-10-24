@@ -146,13 +146,13 @@ RID GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
                        "layout(set = 0, binding = %d, std430) restrict readonly buffer PaletteBatch { uint palette_batch[]; };\n"
                        "const uint PALETTE_GROUND_BLOCK = %du;\n",
                     PALETTE_IMAGE_BINDING, PALETTE_BATCH_BINDING, PaletteAlloc::GROUND_BLOCK) +
-            ov_str(ChunkPalette::glsl_base(table->base_palette()));
+            ChunkPalette::glsl_base(table->base_palette());
     ov::str code = ov::replace_all(DIRECT_TEMPLATE,
             { { "/*GLSL_STRUCT_DEFINITION*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS },
                     { "/*GLSL_DIRECT_BINDINGS*/", bindings },
                     { "/*GLSL_PAGE_FORMAT*/", PageFormat::glsl_encode() },
                     { "/*GLSL_MATERIAL_BINDINGS*/", material_bindings },
-                    { "/*GLSL_PALETTE_BATCH*/", ov_str(PalettePool::glsl_batch()) },
+                    { "/*GLSL_PALETTE_BATCH*/", PalettePool::glsl_batch() },
                     { "/*GLSL_HELPER_FUNCTION*/", helpers },
                     { "/*GLSL_SET_CHUNK*/", table->glsl_set_chunk() },
                     { "/*GLSL_QEF_VERTEX*/", ov::str(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : "") } });

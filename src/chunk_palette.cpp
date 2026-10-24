@@ -37,8 +37,8 @@ bool build(const std::vector<uint32_t> &p_base, const uint32_t *p_materials, uin
     return fits;
 }
 
-String glsl_base(const std::vector<uint32_t> &p_base) {
-    return vformat("const uint PALETTE_BASE_ENTRIES = %du;\nconst bool GROUND_MATERIALS = %s;\n", int64_t(p_base.size()), has_ground_materials(p_base) ? "true" : "false");
+ov::str glsl_base(const std::vector<uint32_t> &p_base) {
+    return ov::format("const uint PALETTE_BASE_ENTRIES = %du;\nconst bool GROUND_MATERIALS = %s;\n", int64_t(p_base.size()), has_ground_materials(p_base) ? "true" : "false");
 }
 
 } // namespace ChunkPalette

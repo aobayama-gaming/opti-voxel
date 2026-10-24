@@ -4,7 +4,6 @@
 #include "moment_layers.hpp"
 #include "parallel_for.hpp"
 
-#include "ov/executor.hpp"
 #include <godot_cpp/classes/time.hpp>
 
 #include <algorithm>
@@ -605,7 +604,7 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
     std::vector<uint8_t> ok(sites.size(), 0);
     Job job{ this, &p_types.biome, sites.data(), placed.data(), ok.data(), vs };
     if (!sites.empty()) {
-        ov::executor().parallel_for(uint32_t(sites.size()), "SDFTable::add_biomes", &Job::run, &job);
+        parallel_for(uint32_t(sites.size()), "SDFTable::add_biomes", [&job](uint32_t p_i) { Job::run(&job, p_i); });
     }
     Array listed;
     int64_t counts[Biome::FEATURE_COUNT] = {};

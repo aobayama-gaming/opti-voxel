@@ -4,8 +4,8 @@
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
 #include "ov/bytes.hpp"
-#include "ov/executor.hpp"
 #include "page_format.hpp"
+#include "parallel_for.hpp"
 #include "trace.hpp"
 
 #include <algorithm>
@@ -167,11 +167,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<uint8_t> fits(p_chunks.size(), 1);
     std::vector<uint32_t> streamed(p_chunks.size(), 0);
     Job job{ snap.get(), stream.get(), scene_end, &base, p_chunks.data(), lists.data(), palettes.data(), fits.data(), streamed.data() };
-    if (p_chunks.size() > 1) {
-        ov::executor().parallel_for(uint32_t(p_chunks.size()), "GpuTable::build_lists", &Job::run, &job);
-    } else if (p_chunks.size() == 1) {
-        Job::run(&job, 0);
-    }
+    parallel_for(uint32_t(p_chunks.size()), "GpuTable::build_lists", [&job](uint32_t p_i) { Job::run(&job, p_i); });
     const size_t budget = p_capacity_words;
     std::vector<uint32_t> words;
     size_t kept = 0;

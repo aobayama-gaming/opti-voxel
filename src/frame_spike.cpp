@@ -927,8 +927,8 @@ ov::str probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_prob
         r_words += probe.words;
     }
     ov::str code = ov::str(SHADER_TEMPLATE);
-    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + ov::str(GLSL_FRAME_STRUCTS));
-    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE) + ov::str(GLSL_PERLIN3_CROSS) + glsl_cell3());
+    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS);
+    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + GLSL_EXACT_NOISE + GLSL_PERLIN3_CROSS + glsl_cell3());
     code = ov::replace_all(code, "/*NOISE*/", p_noise.glsl());
     code = ov::replace_all(code, "/*PROBES*/", probes_glsl);
     return ov::replace_all(code, "/*PROBE_CALLS*/", probe_calls);
@@ -1259,9 +1259,9 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
         lod_calls += "    }\n";
     }
     ov::str code = ov::str(TABLE_SHADER);
-    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + ov::str(GLSL_FRAME_STRUCTS));
+    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS);
     code = ov::replace_all(code, "/*TABLE_BUFFERS*/", Archetype::glsl_table_buffers(3, 4));
-    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE));
+    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + GLSL_EXACT_NOISE);
     const Archetype::Float4 &g = table.ground;
     code = ov::replace_all(code, "/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + ov::format(R"glsl(uint g_material;
 vec4 terrain_sdf(WorldPos p, int lod) {

@@ -22,11 +22,10 @@ uint64_t fnv(uint64_t p_h, uint32_t p_v) {
     return p_h;
 }
 
-uint64_t fnv_text(const String &p_s) {
-    const CharString c = p_s.utf8();
+uint64_t fnv_text(const ov::str &p_s) {
     uint64_t h = 14695981039346656037ull;
-    for (int i = 0; i < c.length(); i++) {
-        h = (h ^ uint8_t(c[i])) * 1099511628211ull;
+    for (const char c : p_s) {
+        h = (h ^ uint8_t(c)) * 1099511628211ull;
     }
     return h;
 }
@@ -57,8 +56,8 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     for (int l = 0; l < 15; l++) {
         h = fnv(h, float_bits(c.sdf.skirt_depth_m(l)));
     }
-    const uint64_t chunk_text = fnv_text(godot_str(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, true)));
-    const uint64_t point_text = fnv_text(godot_str(CascadeGLSL::level_shader(&c.sdf, false, true)));
+    const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, true));
+    const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
     CHECK(h == 16354123549857880415ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).

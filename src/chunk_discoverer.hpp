@@ -155,6 +155,8 @@ private:
     bool _should_split(const ScanView &p_view, const ChunkId &p_node, int p_lod) const;
     // Drops the cached verdicts no recent scan used; the number dropped.
     int64_t _evict_cache(int64_t p_nodes_visited);
+    // Forgets the cull verdicts of the nodes whose box grown by the cull band meets one of p_regions (an edit's).
+    void _drop_stale_verdicts(const std::vector<VoxelBox> &p_regions);
     // Hands the scan over to the main thread (get_scanned_chunks) and records its stats. p_ready_usec: when
     // the scan (and its compare) finished.
     void _publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ScanView &p_view, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec,

@@ -291,5 +291,5 @@ inline constexpr const char GLSL_QEF_SURFACE_NORMAL[] = "vec3 surface_normal = v
 inline ov::str dual_contouring_pass(const ov::str &p_pass) {
     OV_ERR_FAIL_COND_V_MSG(ov::count(p_pass, GLSL_MASS_POINT_VERTEX) != 1 || ov::count(p_pass, GLSL_SURFACE_NORMAL) != 1, p_pass,
             "dual_contouring_pass: the vertex pass no longer spells its mass point or normal line.");
-    return ov::replace_all(ov::replace_all(p_pass, GLSL_MASS_POINT_VERTEX, GLSL_QEF_VERTEX_CALL), GLSL_SURFACE_NORMAL, GLSL_QEF_SURFACE_NORMAL);
+    return ov::replace_all(p_pass, { { GLSL_MASS_POINT_VERTEX, GLSL_QEF_VERTEX_CALL }, { GLSL_SURFACE_NORMAL, GLSL_QEF_SURFACE_NORMAL } });
 }

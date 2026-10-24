@@ -1,3 +1,5 @@
+// ThreadWorker out of line: inlined into a caller holding an InlineWorker behind a Worker pointer, GCC 16's speculative
+// devirtualization warned array-bounds on it (-Werror).
 #include "executor.hpp"
 
 namespace ov {

@@ -3,7 +3,7 @@
 #include "page_format.hpp"
 #include "palette_block.hpp"
 
-#include <godot_cpp/variant/string.hpp>
+#include "ov/format.hpp"
 
 #include <cstdint>
 #include <set>
@@ -34,7 +34,7 @@ inline bool has_ground_materials(const std::vector<uint32_t> &p_base) {
     return p_base.size() > 1;
 }
 // The meshers' vertex passes' view of a base palette: PALETTE_BASE_ENTRIES (its length) and GROUND_MATERIALS.
-godot::String glsl_base(const std::vector<uint32_t> &p_base);
+ov::str glsl_base(const std::vector<uint32_t> &p_base);
 
 } // namespace ChunkPalette
 

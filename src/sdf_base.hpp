@@ -14,7 +14,7 @@
 #include "material_library.hpp"
 #include "page_format.hpp"
 
-#include "ov/executor.hpp"
+#include "parallel_for.hpp"
 
 #include <array>
 #include <functional>
@@ -156,7 +156,7 @@ public:
             }
             return;
         }
-        ov::executor().parallel_for(uint32_t(blocks), "SDFBase::evaluate_batch", &SDFBase::_batch_block, &job);
+        parallel_for(uint32_t(blocks), "SDFBase::evaluate_batch", [&job](uint32_t p_block) { _batch_block(&job, p_block); });
     }
 
     // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it

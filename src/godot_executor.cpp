@@ -3,6 +3,8 @@
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
+#include <algorithm>
+
 using namespace godot;
 
 namespace {
@@ -20,8 +22,10 @@ struct PoolTask {
 } // namespace
 
 int GodotExecutor::concurrency(ov::Priority p_priority) const {
-    const int cores = OS::get_singleton()->get_processor_count();
-    return p_priority == ov::Priority::LOW ? MAX(1, cores / 2) : MAX(1, cores);
+    if (cores == 0) {
+        cores = std::max(1, OS::get_singleton()->get_processor_count());
+    }
+    return p_priority == ov::Priority::LOW ? std::max(1, cores / 2) : cores;
 }
 
 ov::TaskId GodotExecutor::submit(std::function<void()> p_task, ov::Priority p_priority, const char *p_name) {

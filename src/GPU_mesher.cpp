@@ -80,7 +80,7 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
 
 )glsl";
 
-RID GPUMesher::compile_dynamic_shader(const String &algorithm_pass, const String &p_name) {
+RID GPUMesher::compile_dynamic_shader(const char *algorithm_pass, const String &p_name) {
     // Template shared by the three passes; the placeholders are filled below.
     const ov::str shader_template = R"glsl(#version 450
 
@@ -114,13 +114,13 @@ void main() {
     )glsl";
 
     // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
-    const ov::str pass = dual_contouring && p_name == "third" ? dual_contouring_pass(ov_str(algorithm_pass)) : ov_str(algorithm_pass);
+    const ov::str pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : ov::str(algorithm_pass);
 
     // 2. Inject the dynamic code
     const SDFGpuTable *table = sdf->get_gpu_table();
     const ov::str bindings = ov::replace_all(GLSL_BUFFER_BINDING, "/*GLSL_MATERIAL_BUFFER*/", CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly")) +
             table->glsl_buffers(6, 7) + ov::format("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT) +
-            ov_str(ChunkPalette::glsl_base(table->base_palette()));
+            ChunkPalette::glsl_base(table->base_palette());
     const ov::str helpers = ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GLSL_EXACT_NOISE + GPUFrame::glsl_int64();
     const ov::str code = ov::replace_all(shader_template,
             { { "/*GLSL_STRUCT_DEFINITION*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS },

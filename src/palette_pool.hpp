@@ -35,7 +35,7 @@ public:
     static uint64_t batch_bytes(uint32_t p_batch_size);
     // The payload's reader for the emit pass: `void write_palette_texel(uint t)` (texel t of the batch's, if any),
     // after the palette_image / palette_batch bindings and PageFormat::glsl_encode().
-    static String glsl_batch();
+    static ov::str glsl_batch();
 
     // p_capacity: palette entries (a power of two).
     void initialize(uint32_t p_capacity, const std::vector<uint32_t> &p_base);

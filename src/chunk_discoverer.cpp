@@ -3,7 +3,6 @@
 #include "trace.hpp"
 
 #include <godot_cpp/classes/engine.hpp>
-#include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
@@ -174,6 +173,31 @@ void ChunkDiscoverer::enter() {
     mutex->unlock();
 }
 
+void ChunkDiscoverer::_drop_stale_verdicts(const std::vector<VoxelBox> &p_regions) {
+    std::vector<ChunkId> stale;
+    for (const KeyValue<ChunkId, CullCache::Entry> &kv : cache.entries) {
+        const int lod = ChunkMath::get_lod(kv.key);
+        const int64_t span = int64_t(chunk_param.chunk_voxel_dimension()) << lod;
+        const VoxelPos min = ChunkMath::chunk_min_voxel(kv.key, chunk_param);
+        VoxelBox node;
+        node.valid = true;
+        const int64_t grow = 2 * span; // the cull band
+        for (int a = 0; a < 3; a++) {
+            node.lo[a] = min[a] - grow;
+            node.hi[a] = min[a] + span + grow;
+        }
+        for (const VoxelBox &region : p_regions) {
+            if (node.intersects(region)) {
+                stale.push_back(kv.key);
+                break;
+            }
+        }
+    }
+    for (const ChunkId &id : stale) {
+        cache.entries.erase(id);
+    }
+}
+
 // One wake: wakes that piled up during the last scan all ask for the same thing, a scan around the latest camera chunk.
 bool ChunkDiscoverer::step() {
     mutex->lock();
@@ -187,31 +211,10 @@ bool ChunkDiscoverer::step() {
     // An instance edit: drop the cull verdicts of the nodes near the changed region before the scan
     // (the no-cull rule reads the current SDF, but the cache may hold a verdict from before).
     if (!invalidations.empty()) {
-        std::vector<ChunkId> stale;
-        for (const KeyValue<ChunkId, CullCache::Entry> &kv : cache.entries) {
-            const int lod = ChunkMath::get_lod(kv.key);
-            const int64_t span = int64_t(chunk_param.chunk_voxel_dimension()) << lod;
-            const VoxelPos min = ChunkMath::chunk_min_voxel(kv.key, chunk_param);
-            VoxelBox node;
-            node.valid = true;
-            const int64_t grow = 2 * span; // the cull band
-            for (int a = 0; a < 3; a++) {
-                node.lo[a] = min[a] - grow;
-                node.hi[a] = min[a] + span + grow;
-            }
-            for (const VoxelBox &region : invalidations) {
-                if (node.intersects(region)) {
-                    stale.push_back(kv.key);
-                    break;
-                }
-            }
-        }
-        for (const ChunkId &id : stale) {
-            cache.entries.erase(id);
-        }
+        _drop_stale_verdicts(invalidations);
     }
 
-    // set_camera only posts for a view that changed: an equal one is a post that piled up. Without
+    // set_camera only wakes for a view that changed: an equal one is a wake that piled up. Without
     // back_scale the forward doesn't change the set: a new one alone is no reason to scan.
     if (has_scanned && !view_changed(last_scanned_view, actual_view) && !force_rescan) {
         mutex->lock();

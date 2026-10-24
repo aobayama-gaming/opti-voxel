@@ -62,6 +62,7 @@ core_files=(
     src/material_ids.hpp
     src/frame_probe.hpp
     src/palette_block.hpp
+    src/chunk_palette.hpp
     src/chunk_output.hpp
     src/lod_structures.hpp
     src/chunk_memory.hpp

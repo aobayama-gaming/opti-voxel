@@ -164,7 +164,7 @@ private:
     ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
     DispatchTimes dispatch_times; // gate_admit read from the gate
 
-    RID compile_dynamic_shader(const String &algorithm_pass, const String &p_name);
+    RID compile_dynamic_shader(const char *algorithm_pass, const String &p_name);
 
     void _execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_count, const Vector2i &p_lods, const PackedByteArray &p_table_list,
             const PackedByteArray &p_table_records);
