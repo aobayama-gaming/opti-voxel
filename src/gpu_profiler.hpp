@@ -39,6 +39,7 @@ private:
     bool recording = false;
     Array frames;
     uint64_t last_frame = UINT64_MAX; // render thread only
+    uint64_t trace_gpu_end = 0; // render thread only: where the last traced GPU frame ends, usec
 
     void _rt_read();
 };

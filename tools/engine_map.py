@@ -361,7 +361,7 @@ def markdown(run, args, phases):
             out.append("")
             out.append("| flow | from | to | count | p50 ms | p95 ms |")
             out.append("|---|---|---|---:|---:|---:|")
-            for (name, a, b), lat in sorted(p.edges.items(), key=lambda kv: -len(kv[1])):
+            for (name, a, b), lat in sorted(p.edges.items(), key=lambda kv: -len(kv[1]))[:15]:
                 out.append(f"| {FLOW_TITLE.get(name, name)} | {_where(a)} | {_where(b)} | {len(lat)} | "
                            f"{fmt_ms(pct(lat, 0.5) / 1000)} | {fmt_ms(pct(lat, 0.95) / 1000)} |")
             out.append("")
