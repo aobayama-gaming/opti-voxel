@@ -223,17 +223,19 @@ fields (temperature, humidity, wind):
   region. The term needs a curve: the skirts bound its step with the region's.
 - Keep each landform's feature fields as they are: its edges and curve points are tuned to their quantiles.
 - In a region's core the landform is its standalone table, bit for bit. `project/climate/region_test.json` (the valley
-  behind "cold", the cliff's and the mangrove's terms behind "warm") equals `valley.json` there: 3,493 points at LODs
+  behind "cold", the cliff's and the mangrove's terms behind "warm") equals `valley.json` there: 4,852 points at LODs
   0, 3 and 7, every SDF value and pick the same (`test_climate_regions.cpp`).
-- The core starts some way inside the region's edge. The modulation reads the biome weights at the cascade's coarser
-  lattices, which sit kilometres apart for a 13 km axis. Leave room for that when laying regions out.
-- Across a border the two halves of a landform fade at slightly different places: the height terms read the region at
-  the sample, the octave multipliers at those coarser lattices. One evaluation point for both would need the region
-  carried down the cascade like a field.
+- The core (`Climate::core_regions`) is exact: the region is exactly 1 at every point whose climate the sample reads.
+  Each octave above the sample's reads its own lattice's, the sample's octave and terms the lattice above (`docs/climate.md`),
+  so those are the point's level boxes from the one above the sample up to the highest octave the biomes treat
+  differently. They sit kilometres apart for a 13 km axis, so the core starts some way inside the region's edge. Leave
+  room for that when laying regions out.
+- Across a border the two halves of a landform fade at slightly different places: the height terms read the region
+  derived on the level above the sample, the octave multipliers at their own coarser lattices.
 - A table carries at most 24 field groups (`Cascade::MAX_FIELD_GROUPS`). Only the CPU's slot arrays are sized by it; the
   GPU code is generated per table.
-- Every field group is carried at every point, so a world pays for all its landforms everywhere. Skipping the groups
-  whose region is 0 over a whole chunk is a per-chunk reduced SDF, with its own design.
+- Every field group is carried down to the level above the samples, so a world pays for all its landforms on those
+  levels. Skipping the groups whose region is 0 over a whole chunk is a per-chunk reduced SDF, with its own design.
 
 ### The landform world
 
@@ -262,10 +264,9 @@ again).
   at or above the axes' finest wavelength (104,857.6 m) are inserted before the axes exist: no region can gate them.
   Every landform turns them off (multiplier 0; they were at 0-2% already), and `world.py` refuses a table that doesn't.
   `elev` reads the ground's own height, so mountain's and dunes' remaps were refit after that.
-- **The cores are the tables.** Where a region is exactly 1 with each axis moved by 0.05 (0.1 for wind, whose finest
-  octave is twice as fine), every SDF value and pick of the world equals the landform's own table:
-  `test_climate_regions.cpp`, 14 to 2,066 points per landform over 800 km at LODs 0 and 6. Closer to a border, the
-  modulation's reads at the cascade's coarser lattices fall in the fade.
+- **The cores are the tables.** In a region's core (`Climate::core_regions`), every SDF value and pick of the world
+  equals the landform's own table: `test_climate_regions.cpp`, 92 to 2,476 points per landform over 800 km at LODs 0
+  and 6. Closer to a border, the climate the octaves read from the coarser lattices falls in the fade.
 - **Visiting.** `climate_report.sh --climate=res://climate/world.json --lods=25 --lattice=15 --size=512` lists each
   region's core share and its core point nearest the centre, with the player's `--spawn`.
 

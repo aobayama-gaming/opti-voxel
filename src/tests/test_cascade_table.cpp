@@ -841,11 +841,11 @@ TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants 
     ScatteredCascade t(64);
     const String point = "    p.lo = m_lo;\n    p.hi = m_hi;\n    i64_add(p.lo, p.hi, ivec3(i));\n    i64_shl(p.lo, p.hi, m);\n    p.frac = vec3(0.0);\n";
     for (const bool debug : { false, true }) {
-        for (const bool fields : { false, true }) {
+        for (const CascadeGLSL::View view : { CascadeGLSL::View::GROUND, CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
             for (const bool material : { false, true }) {
-                const String fold = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields);
-                const String sample = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields, false);
-                const String bare = CascadeGLSL::level_shader(&t.sdf, debug, false, false, material, fields);
+                const String fold = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, view);
+                const String sample = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, view, false);
+                const String bare = CascadeGLSL::level_shader(&t.sdf, debug, false, false, material, view);
                 for (const String &code : { fold, sample, bare }) {
                     CHECK(!code.contains("/*"));
                     CHECK(glsl_reserved_words_used(code) == std::vector<std::string>());

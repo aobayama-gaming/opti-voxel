@@ -389,3 +389,51 @@ TEST_CASE("Cascade: point_into equals point, bit for bit (10,240 points per LOD 
         CHECK(differing == 0);
     }
 }
+
+// Where the climate is read: a modulated band above a run's last level reads the fields at its own level, the last
+// level the carry its level above derives (Modulation::derive). A batch's variant choice (batch, batch_carry) is the
+// union of its items' (carried, carries at the last level), and the fields are monotone in the level: a level with them
+// always finds them in its parent level.
+TEST_CASE("Cascade: FieldRange carries the fields to every reader above the last level, the carry to the last") {
+    std::vector<FieldRange> ranges;
+    for (const int floor : { 0, 3, 9 }) {
+        for (const int ceiling : { floor, floor + 4, 20 }) {
+            ranges.push_back(FieldRange{ floor, ceiling, false });
+        }
+    }
+    ranges.push_back(FieldRange{ MAX_LEVEL + 1, -1, true }); // the samples' terms alone (a pick, ground terms)
+    ranges.push_back(FieldRange{ 2, 6, true });
+    int64_t checked = 0, bad = 0;
+    for (const FieldRange &r : ranges) {
+        for (int lo = 0; lo <= 24; lo += 3) {
+            for (int hi = lo; hi <= MIN(lo + 8, 24); hi += 2) {
+                for (int j = 0; j <= 26; j++) {
+                    bool fields = false, carry = false;
+                    for (int lod = lo; lod <= hi; lod++) {
+                        const int m = lod + j;
+                        fields = fields || r.carried(lod, m);
+                        carry = carry || (j == 0 && r.carries(lod, m));
+                        const bool modulated = r.floor <= m && m <= r.ceiling;
+                        // The fields never at a run's last level, at every modulated level above it.
+                        bad += r.carried(lod, lod);
+                        bad += j > 0 && modulated && !r.carried(lod, m);
+                        // The carry on the last level where it reads it (a modulated band, the samples' terms), and on the
+                        // level above, which derives it from its fields; nowhere else.
+                        const bool reads = (j == 0 && modulated) || r.sample;
+                        bad += reads && !(r.carries(lod, lod) && r.carries(lod, lod + 1) && r.carried(lod, lod + 1));
+                        bad += r.carries(lod, m) && j > 1;
+                        // Monotone: the fields at m + 1 wherever m has them.
+                        bad += r.carried(lod, m) && !r.carried(lod, m + 1);
+                    }
+                    bad += fields != r.batch(Vector2i(lo, hi), j);
+                    bad += carry != r.batch_carry(Vector2i(lo, hi), j);
+                    checked++;
+                }
+            }
+        }
+    }
+    CHECK(checked > 1000);
+    CHECK(bad == 0);
+    CHECK(FieldRange().empty());
+    CHECK_FALSE((FieldRange{ MAX_LEVEL + 1, -1, true }).empty());
+}

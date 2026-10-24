@@ -35,7 +35,8 @@ uint64_t fnv_text(const String &p_s) {
 
 // The climate before shaped bands (project/climate/plain.json, a copy of the example as it was) keeps its bits: every
 // slot of every point query, the SDF of the ground, the skirts, and the level shaders' text. A table without the new
-// keys is the old code path, op for op.
+// keys is the old code path, op for op. Re-pinned when a run's last level began reading its climate from the level
+// above's derive (Cascade::Modulation).
 TEST_CASE("Climate shape: a table without shapes keeps the bits it had before them") {
     ClimateSDF c("res://climate/plain.json", 15);
     CHECK(c.sdf.get_climate() != nullptr);
@@ -46,8 +47,11 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
             const Vector3i64 p(int64_t(i) * 7919 - 50000, (c.sdf.get_datum_y() >> lod) + 3 - i, int64_t(i) * -104729 + (int64_t(1) << 33));
             float slots[Cascade::SLOTS];
             Cascade::point_slots(spec, p, lod, slots, true);
-            // The carried slots only: the pin doesn't depend on the field group cap.
+            // The carried slots only: the pin doesn't depend on the group caps.
             for (int s = 0; s < Cascade::field_slot(int(spec.fields.size())); s++) {
+                h = fnv(h, float_bits(slots[s]));
+            }
+            for (int s = Cascade::carry_slot(0); s < Cascade::carry_slot(spec.carry_groups()); s++) {
                 h = fnv(h, float_bits(slots[s]));
             }
             const WorldPos pos{ VoxelPos(p.x << lod, p.y << lod, p.z << lod), Float3() };
@@ -57,14 +61,14 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     for (int l = 0; l < 15; l++) {
         h = fnv(h, float_bits(c.sdf.skirt_depth_m(l)));
     }
-    const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, true));
+    const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, CascadeGLSL::View::SAMPLES));
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
-    CHECK(h == 16354123549857880415ull);
+    CHECK(h == 13546445268389072586ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
-    CHECK(chunk_text == 585642622528421550ull);
+    CHECK(chunk_text == 18076969695962784086ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B).
-    CHECK(point_text == 7673647860036491862ull);
+    CHECK(point_text == 13600568492835329823ull);
 }
 
 // The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its
@@ -172,7 +176,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     CHECK(mismatches == 0);
     CHECK(lifted == points);
     CHECK(CascadeGLSL::field_range(&s.sdf, true).everywhere()); // point items read the fields too
-    CHECK(s.sdf.get_ground_glsl().contains("vec4 climate_ground(Ch ch)"));
+    CHECK(s.sdf.get_ground_glsl(s.sdf.get_spec()).contains("vec4 climate_ground(Ch ch)"));
     // The skirts take the height terms' step: deeper than the same ground without them where a term's field has
     // octaves (dunes: 25 m, k = 9 at 5 cm, LODs 6-7), the cap (skirt_depth cells) lifted.
     ShapedSDF deep(15, 1e6f);
@@ -292,7 +296,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
         Dictionary(biomes[i]).erase("terrace");
     }
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_terrace", "cascade_warped",
-        "climate_ground", "climate_biome", "cascade_mods" };
+        "climate_ground", "climate_biome", "cascade_mods", "cascade_derive" };
     int64_t variants = 0, missing = 0;
     for (const Dictionary &table : { with_terms, without }) {
         SDFCascade sdf;
@@ -302,8 +306,8 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
         sdf.configure(param, 15);
         CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
         for (const bool points : { false, true }) {
-            for (const bool fields : { false, true }) {
-                const String code = CascadeGLSL::level_shader(&sdf, false, points, false, !points, fields);
+            for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
+                const String code = CascadeGLSL::level_shader(&sdf, false, points, false, !points, view);
                 variants++;
                 for (const char *name : NAMES) {
                     const String call = String(name) + "(";
@@ -312,7 +316,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
                             code.contains(" " + call + "Ch ") || code.contains(" " + call + "int ");
                     if (called && !defined) {
                         missing++;
-                        MESSAGE("variant points=", points, " fields=", fields, ": ", name, " called, not defined");
+                        MESSAGE("variant points=", points, " view=", int(view), ": ", name, " called, not defined");
                     }
                 }
             }
@@ -401,7 +405,7 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
     CHECK(sdf.has_ground_terms());
     for (const bool points : { false, true }) {
         CHECK(CascadeGLSL::field_range(&sdf, points).everywhere());
-        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true).contains("climate_ground("));
+        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::SAMPLES).contains("climate_ground("));
     }
 }
 

@@ -30,6 +30,7 @@ struct Sampled {
     // the slice's lattice is that coarse): the climate the ground's coarsest modulated octave reads (the LOD rule).
     std::vector<int> coarse_picks;
     int coarse_m = -1;
+    std::vector<uint32_t> cores; // Climate::core_regions of the point (0 where no region is 1 at it)
     std::vector<double> altitude; // LOD0 voxels above the base: the column's surface, or 0 (the tangent plane)
     // The ground channels (SDFCascade::ground_channels) at the column's lattice point: height (LOD0 voxels) and its x / z
     // slopes per lattice spacing; fdx / fdz the central differences of the heights of its 4 neighbours at the same y.
@@ -58,6 +59,7 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.fields.resize(points * s.nf);
     s.weights.resize(points * s.nb);
     s.picks.resize(points);
+    s.cores.assign(points, 0u);
     s.coarse_picks.assign(points, -1);
     const Cascade::FieldRange range = p_sdf.get_spec().field_range();
     if (!range.empty() && range.ceiling > p_m) {
@@ -102,18 +104,22 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             };
             s.fdx[i] = float((height(1, 0) - height(-1, 0)) * 0.5);
             s.fdz[i] = float((height(0, 1) - height(0, -1)) * 0.5);
-            s.picks[i] = pick(p_table, w, p, p_m);
+            s.picks[i] = pick_slots(p_table, slots); // the samples' pick, derived on the level above
             if (s.coarse_m >= 0) {
                 const int64_t up = int64_t(1) << (s.coarse_m - p_m);
                 const Vector3i64 q(WorldCoord::floor_div(p.x, up), WorldCoord::floor_div(p.y, up), WorldCoord::floor_div(p.z, up));
                 Cascade::point_slots(p_sdf.get_spec(), q, s.coarse_m, slots, true);
-                s.coarse_picks[i] = pick_slots(p_table, slots, q, s.coarse_m);
+                s.coarse_picks[i] = pick_slots(p_table, slots);
             }
             for (int c = 0; c < s.nf; c++) {
                 s.fields[i * s.nf + c] = f[c].w;
             }
             for (int b = 0; b < s.nb; b++) {
                 s.weights[i * s.nb + b] = w[b].w;
+            }
+            // A region exactly 1 at the point first (the cheap test), then its core.
+            if (std::any_of(p_table.regions.begin(), p_table.regions.end(), [&](const Region &p_r) { return edges_value(p_r.edges, f).w == 1.0f; })) {
+                s.cores[i] = core_regions(p_table, p_sdf.get_spec(), p, p_m);
             }
         }
     });
@@ -231,9 +237,9 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
     return md;
 }
 
-// Each region (a landform's part of a world table): its mean value over the slice, the share of its core (region_core:
+// Each region (a landform's part of a world table): its mean value over the slice, the share of its core (core_regions:
 // there the landform is its own table's, bit for bit), and the core point nearest the slice's centre with the player flag
-// that spawns above it. From the slice's field values (no gradient). Empty without regions.
+// that spawns above it. Empty without regions.
 String region_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const Vector2i &p_c) {
     if (p_table.regions.empty()) {
         return String();
@@ -249,7 +255,7 @@ String region_section(const Table &p_table, const Sampled &p_s, int p_n, double 
                 f[k].w = p_s.fields[i * size_t(p_s.nf) + size_t(k)];
             }
             sum += double(edges_value(p_table.regions[size_t(r)].edges, f).w);
-            if (!region_core(p_table, r, f)) {
+            if (((p_s.cores[i] >> r) & 1u) == 0u) {
                 continue;
             }
             core++;

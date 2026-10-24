@@ -36,37 +36,77 @@ Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_F
     return r;
 }
 
-bool region_core(const Table &p_table, int p_region, const Float4 p_fields[MAX_FIELDS], float p_margin) {
-    const std::vector<Edge> &edges = p_table.regions[size_t(p_region)].edges;
-    if (!(edges_value(edges, p_fields).w == 1.0f)) {
-        return false;
-    }
-    // An edge field's finest octave (-1 without bands: a field of terms only, no doubling), and the slowest of those (the
-    // margin's reference).
-    const auto finest = [&](const Edge &p_e) {
-        int k = -1;
-        for (const Cascade::Band &b : p_table.fields[size_t(p_e.field)].bands) {
-            k = k < 0 ? b.k : std::min(k, b.k);
-        }
-        return k;
+namespace {
+
+// Whether the biomes give band p_band of p_field (GROUND or a field) different amplitudes, shapes or warps: its
+// insertion level then reads the weights.
+bool weighted(const Table &p_table, int p_field, const Cascade::Band &p_band) {
+    auto key = [&](const Biome &p_b) {
+        const Amp *a = find_amp(p_b, p_field, p_band.k);
+        const Shape s = band_shape(p_table, &p_b, p_field, p_band.k);
+        return std::vector<float>{ biome_amp(p_b, p_field, p_band), s.c[0], s.c[1], s.c[2], s.c[3], a ? a->gain : 0.0f, a ? a->warp : 0.0f,
+            float(a ? a->warp_fields[0] : -1), float(a ? a->warp_fields[1] : -1), float(a ? a->warp_fields[2] : -1) };
     };
-    int slowest = -1;
-    for (const Edge &e : edges) {
-        slowest = std::max(slowest, finest(e));
-    }
-    for (size_t i = 0; i < edges.size(); i++) {
-        const int k = finest(edges[i]);
-        const float margin = std::ldexp(p_margin, k < 0 ? 0 : slowest - k);
-        for (const float d : { -margin, margin }) {
-            Float4 g[MAX_FIELDS];
-            std::copy(p_fields, p_fields + MAX_FIELDS, g);
-            g[edges[i].field].w += d;
-            if (!(edges_value(edges, g).w == 1.0f)) {
-                return false;
+    return std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [&](const Biome &p_b) { return key(p_b) != key(p_table.biomes[0]); });
+}
+
+} // namespace
+
+int weighted_ceiling(const Table &p_table, const Cascade::Spec &p_combined) {
+    int c = -1;
+    for (int g = 0; g < p_combined.group_count(); g++) {
+        if (g > int(p_table.fields.size())) {
+            continue; // the multifractal state: no band
+        }
+        for (const Cascade::Band &b : p_combined.group_bands(g)) {
+            if (weighted(p_table, g - 1, b)) {
+                c = std::max(c, p_combined.insert_level(b));
             }
         }
     }
-    return true;
+    return c;
+}
+
+uint32_t core_regions(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_lod) {
+    uint32_t cores = (uint32_t(1) << p_table.regions.size()) - 1u;
+    // Clears the regions not exactly 1 at every point of p_level.
+    auto check = [&](const Cascade::Level &p_level) {
+        for (int64_t i = 0; i < p_level.box.count() && cores != 0u; i++) {
+            float slots[Cascade::SLOTS];
+            Float4 f[MAX_FIELDS];
+            p_level.slots_at(i, slots);
+            apply_terms(p_table, slots, f);
+            for (size_t r = 0; r < p_table.regions.size(); r++) {
+                const Float4 v = edges_value(p_table.regions[r].edges, f);
+                if (!(v.w == 1.0f && v.x == 0.0f && v.y == 0.0f && v.z == 0.0f)) {
+                    cores &= ~(uint32_t(1) << r);
+                }
+            }
+        }
+    };
+    // Cascade::run's levels down to Λ_{lod+1} with every field: a band above the last level reads its own level's
+    // channels before its insertions, the derive Λ_{lod+1}'s after them.
+    const int ceiling = weighted_ceiling(p_table, p_combined);
+    const int top = std::max(p_combined.top_level(true), p_lod + 1);
+    const std::vector<Cascade::Box> boxes = Cascade::level_boxes(Cascade::point_box(p_p), p_lod, top);
+    const int fields = int(p_combined.fields.size());
+    Cascade::Level cur;
+    for (int m = top; m > p_lod && cores != 0u; m--) {
+        if (m == top) {
+            cur.allocate(m, boxes[size_t(m - p_lod)], p_combined.set, fields);
+        } else {
+            cur = Cascade::subdivide(cur, boxes[size_t(m - p_lod)], fields, 0);
+        }
+        if (m <= ceiling) {
+            check(cur);
+        }
+        Cascade::insert_bands(p_combined, cur);
+        Cascade::flush(cur);
+        if (m == p_lod + 1) {
+            check(cur);
+        }
+    }
+    return cores;
 }
 
 std::vector<int> gated_regions(const Table &p_table) {
@@ -233,10 +273,27 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
     return best[ExactNoise::hash_cell(voxel, PICK_SEED) % uint32_t(count)];
 }
 
-int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m) {
-    State s;
-    state(p_table, p_slots, s);
-    return pick(p_table, s.w, p_p, p_m);
+SampleCarry sample_carry(const Table &p_table) {
+    SampleCarry s;
+    std::fill(std::begin(s.terrace), std::end(s.terrace), -1);
+    if (!p_table.heights.empty()) {
+        s.heights = s.count++;
+    }
+    for (size_t b = 0; b < p_table.biomes.size(); b++) {
+        if (p_table.biomes[b].terrace.step > 0.0f) {
+            s.terrace[b] = s.count++;
+        }
+    }
+    // Without fields the weights are constant: the last biome takes everything.
+    if (!p_table.fields.empty() && !p_table.biomes.empty()) {
+        s.pick = s.count++;
+    }
+    return s;
+}
+
+int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
+    const int c = sample_carry(p_table).pick;
+    return c >= 0 ? int(p_slots[Cascade::carry_slot(c)]) : int(p_table.biomes.size()) - 1;
 }
 
 Color srgb_to_linear(uint32_t p_rgb) {

@@ -3,7 +3,10 @@
 #include <algorithm>
 
 // The climate's Cascade::Modulation (combined_spec): per modulated band (group, level), how each biome shapes it, on
-// the CPU (modulate) and in generated GLSL (glsl), op for op.
+// the CPU and in generated GLSL, op for op. Above a run's last level each band reads the climate of its point's channels
+// before the level's insertions; the level above the last derives it once per point after its insertions (derive): the
+// BandMod parts of the last level's bands and its samples' terms (SampleCarry), into the carry groups H takes down,
+// where the last level's bands read their parts back (modulate).
 namespace Climate {
 
 using Cascade::BandMod;
@@ -42,10 +45,49 @@ vec4 cl_multifractal(float gain, vec4 c) {
 }
 )glsl";
 
+// A BandMod member a band reads from the carry: amp[index], state[index] or warp[index].
+enum PartKind {
+    AMP,
+    STATE,
+    WARP,
+};
+struct Part {
+    PartKind kind = AMP;
+    int index = 0;
+};
+
+const Float4 &part_of(const BandMod &p_mod, const Part &p_part) {
+    return p_part.kind == AMP ? p_mod.amp[p_part.index] : (p_part.kind == STATE ? p_mod.state[p_part.index] : p_mod.warp[p_part.index]);
+}
+
+String part_glsl(const Part &p_part) {
+    static const char *NAMES[] = { "amp", "state", "warp" };
+    return vformat("%s[%d]", NAMES[p_part.kind], p_part.index);
+}
+
+// Carry group p_c of a point's slots.
+void put_carry(float r_slots[Cascade::SLOTS], int p_c, const Float4 &p_v) {
+    r_slots[Cascade::carry_slot(p_c, Cascade::VALUE)] = p_v.w;
+    r_slots[Cascade::carry_slot(p_c, Cascade::DX)] = p_v.x;
+    r_slots[Cascade::carry_slot(p_c, Cascade::DY)] = p_v.y;
+    r_slots[Cascade::carry_slot(p_c, Cascade::DZ)] = p_v.z;
+}
+
+// The same in GLSL (carried_glsl reads it back).
+String put_carry_glsl(const Cascade::Spec &p_spec, int p_c, const String &p_v, const String &p_indent) {
+    const int b = p_spec.gpu_carry(p_c);
+    String code;
+    static const char *COMP = "wxyz";
+    for (int c = 0; c < 4; c++) {
+        code += p_indent + vformat("ch.c[%d] = %s.%c;\n", b + c, p_v, COMP[c]);
+    }
+    return code;
+}
+
 class Modulator : public Cascade::Modulation {
 public:
     Modulator(const Table &p_table, const Cascade::Spec &p_spec) :
-            table(p_table) {
+            table(p_table), sample(sample_carry(p_table)) {
         state = p_table.has_state() ? p_spec.group_count() - 1 : -1;
         for (int g = 0; g < p_spec.group_count(); g++) {
             const std::vector<Cascade::Band> &bands = p_spec.group_bands(g);
@@ -53,10 +95,25 @@ public:
                 add_entry(p_spec, g, bands[i], g == 0 ? Shape() : table.fields[size_t(g - 1)].shapes[i]);
             }
         }
+        // The carry: the samples' terms first, then each level's parts, the ground's first (entries are in group
+        // order): without the fields a last level reads only those (used, the GPU's carry).
+        carry = sample.count;
+        for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+            int c = sample.count;
+            used[m] = c;
+            for (Entry &e : entries[m]) {
+                e.carry = c;
+                c += int(e.parts.size());
+                used[m] = e.group == 0 ? c : used[m];
+            }
+            carry = std::max(carry, c);
+        }
+        range.sample = p_table.has_ground_terms();
     }
 
-    bool any() const {
-        return std::any_of(std::begin(mask), std::end(mask), [](uint32_t p_m) { return p_m != 0u; });
+    // A band some biome modulates, or a sample term: something reads the derive.
+    bool needed() const {
+        return sample.count > 0 || std::any_of(std::begin(mask), std::end(mask), [](uint32_t p_m) { return p_m != 0u; });
     }
 
     uint32_t modulated(int p_m) const override { return p_m >= 0 && p_m <= Cascade::MAX_LEVEL ? mask[p_m] : 0u; }
@@ -64,16 +121,21 @@ public:
     int state_group() const override { return state; }
     bool shaped() const override { return shaped_; }
     uint32_t group_features(int p_group) const override { return p_group >= 0 && p_group < Cascade::MAX_GROUPS ? features[p_group] : 0u; }
+    int carry_groups() const override { return carry; }
+    int copied_carry() const override { return sample.pick; }
+    int carry_used(int p_m) const override { return p_m >= 0 && p_m <= Cascade::MAX_LEVEL ? used[p_m] : sample.count; }
 
-    void modulate(int p_m, const float p_pre[Cascade::SLOTS], BandMod r_mod[Cascade::MAX_GROUPS]) const override {
+    void modulate(int p_m, bool p_carried, const float p_pre[Cascade::SLOTS], BandMod r_mod[Cascade::MAX_GROUPS]) const override {
         if (p_m < 0 || p_m > Cascade::MAX_LEVEL || entries[p_m].empty()) {
             return;
         }
+        // Above a run's last level: the climate of the point's channels before the level's insertions.
         State st;
-        Climate::state(table, p_pre, st);
-        const Float4 *f = st.fields;
-        const Float4 *w = st.w;
-        const Float4 c = state >= 0 ? to_float4(p_pre + Cascade::field_slot(state - 1)) : Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
+        Float4 c{ 0.0f, 0.0f, 0.0f, 0.0f };
+        if (!p_carried) {
+            Climate::state(table, p_pre, st);
+            c = state >= 0 ? to_float4(p_pre + Cascade::field_slot(state - 1)) : c;
+        }
         for (const Entry &e : entries[p_m]) {
             BandMod &o = r_mod[e.group];
             o = BandMod();
@@ -84,38 +146,61 @@ public:
                 }
                 continue;
             }
-            Float4 a[3] = {};
-            for (size_t b = 0; b < e.biomes.size(); b++) {
-                const BiomeBand &bb = e.biomes[b];
-                // The weight times the multifractal's.
-                const Float4 wt = bb.gain > 0.0f ? dmul(w[b], multifractal_weight(bb.gain, c)) : w[b];
-                for (int t = 0; t < 3; t++) {
-                    const float k = bb.k[t];
-                    if (k != 0.0f) {
-                        a[t] = Float4{ a[t].x + wt.x * k, a[t].y + wt.y * k, a[t].z + wt.z * k, a[t].w + wt.w * k };
-                    }
-                }
-                if (bb.gain > 0.0f) {
-                    o.state[0] = dadd(o.state[0], dsub(w[b], dscale(wt, bb.shape.c[0])));
-                    for (int t = 1; t < 4; t++) {
-                        if (bb.shape.c[t] != 0.0f) {
-                            o.state[t] = dsub(o.state[t], dscale(wt, bb.shape.c[t]));
-                        }
-                    }
-                }
-                if (bb.warp != 0.0f) {
-                    for (int ax = 0; ax < 3; ax++) {
-                        o.warp[ax] = dadd(o.warp[ax], dscale(dmul(w[b], f[bb.warp_fields[ax]]), bb.warp));
-                    }
-                }
+            if (!p_carried) {
+                o = biome_mod(e, st, c);
+                continue;
             }
-            for (int t = 0; t < 3; t++) {
-                o.amp[t] = dflush(a[t]);
+            for (size_t i = 0; i < e.parts.size(); i++) {
+                const Part &pt = e.parts[i];
+                Float4 *member = pt.kind == AMP ? o.amp : (pt.kind == STATE ? o.state : o.warp);
+                member[pt.index] = to_float4(p_pre + Cascade::carry_slot(e.carry + int(i)));
             }
         }
     }
 
-    String glsl(const Cascade::Spec &p_spec) const override;
+    void derive(int p_m, const Vector3i64 &p_p, float r_slots[Cascade::SLOTS]) const override {
+        const int next = p_m - 1;
+        const bool bands = next >= 0 && next <= Cascade::MAX_LEVEL && !entries[next].empty();
+        const bool terms = sample.count > 0;
+        if (!bands && !terms) {
+            return;
+        }
+        State st;
+        Climate::state(table, r_slots, st);
+        if (bands) {
+            const Float4 c = state >= 0 ? to_float4(r_slots + Cascade::field_slot(state - 1)) : Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
+            for (const Entry &e : entries[next]) {
+                if (e.parts.empty()) {
+                    continue;
+                }
+                const BandMod o = biome_mod(e, st, c);
+                for (size_t i = 0; i < e.parts.size(); i++) {
+                    put_carry(r_slots, e.carry + int(i), part_of(o, e.parts[i]));
+                }
+            }
+        }
+        if (!terms) {
+            return;
+        }
+        if (sample.heights >= 0) {
+            Float4 regions[MAX_REGIONS] = {};
+            for (const int r : table.gated) {
+                regions[r] = edges_value(table.regions[size_t(r)].edges, st.fields);
+            }
+            put_carry(r_slots, sample.heights, height_sum(table, st.fields, regions));
+        }
+        for (size_t b = 0; b < table.biomes.size(); b++) {
+            if (sample.terrace[b] >= 0) {
+                put_carry(r_slots, sample.terrace[b], st.w[b]);
+            }
+        }
+        if (sample.pick >= 0) {
+            put_carry(r_slots, sample.pick, Float4{ 0.0f, 0.0f, 0.0f, float(pick(table, st.w, p_p, p_m)) });
+        }
+    }
+
+    String glsl(const Cascade::Spec &p_spec, bool p_carried) const override { return p_carried ? glsl_carried(p_spec) : glsl_weighted(p_spec); }
+    String derive_glsl(const Cascade::Spec &p_spec) const override;
 
 private:
     // How one biome shapes one band: k = amplitude times the shape's n, |n|, n^2 coefficients (the inserted, centred
@@ -127,17 +212,57 @@ private:
         float warp = 0.0f;
         int warp_fields[3] = { -1, -1, -1 };
     };
-    // One modulated band: per biome, or constant (a field band's own shape, no biome naming it).
+    // One modulated band: per biome, or constant (a field band's own shape, no biome naming it). parts: the BandMod
+    // members some biome makes non-zero, carried from carry group `carry` on (the rest stay 0).
     struct Entry {
         int group = 0;
         uint32_t features = 0;
         bool constant = false;
         float k[3] = {};
         std::vector<BiomeBand> biomes;
+        std::vector<Part> parts;
+        int carry = 0;
     };
 
     static uint32_t shape_features(const float p_k[3]) {
         return (p_k[1] != 0.0f ? Cascade::MOD_ABS : 0u) | (p_k[2] != 0.0f ? Cascade::MOD_SQ : 0u);
+    }
+
+    // The band's BandMod from the climate p_st of the level above and the state's complement p_c.
+    BandMod biome_mod(const Entry &p_e, const State &p_st, const Float4 &p_c) const {
+        BandMod o;
+        o.features = p_e.features;
+        const Float4 *f = p_st.fields;
+        const Float4 *w = p_st.w;
+        Float4 a[3] = {};
+        for (size_t b = 0; b < p_e.biomes.size(); b++) {
+            const BiomeBand &bb = p_e.biomes[b];
+            // The weight times the multifractal's.
+            const Float4 wt = bb.gain > 0.0f ? dmul(w[b], multifractal_weight(bb.gain, p_c)) : w[b];
+            for (int t = 0; t < 3; t++) {
+                const float k = bb.k[t];
+                if (k != 0.0f) {
+                    a[t] = Float4{ a[t].x + wt.x * k, a[t].y + wt.y * k, a[t].z + wt.z * k, a[t].w + wt.w * k };
+                }
+            }
+            if (bb.gain > 0.0f) {
+                o.state[0] = dadd(o.state[0], dsub(w[b], dscale(wt, bb.shape.c[0])));
+                for (int t = 1; t < 4; t++) {
+                    if (bb.shape.c[t] != 0.0f) {
+                        o.state[t] = dsub(o.state[t], dscale(wt, bb.shape.c[t]));
+                    }
+                }
+            }
+            if (bb.warp != 0.0f) {
+                for (int ax = 0; ax < 3; ax++) {
+                    o.warp[ax] = dadd(o.warp[ax], dscale(dmul(w[b], f[bb.warp_fields[ax]]), bb.warp));
+                }
+            }
+        }
+        for (int t = 0; t < 3; t++) {
+            o.amp[t] = dflush(a[t]);
+        }
+        return o;
     }
 
     void add_entry(const Cascade::Spec &p_spec, int p_group, const Cascade::Band &p_band, const Shape &p_own) {
@@ -171,6 +296,7 @@ private:
                 e.features |= shape_features(bb.k) | (bb.gain > 0.0f ? Cascade::MOD_STATE : 0u) | (bb.warp != 0.0f ? Cascade::MOD_WARP : 0u);
                 e.biomes.push_back(bb);
             }
+            add_parts(e);
         }
         shaped_ = shaped_ || e.constant || e.features != 0u;
         features[p_group] |= e.features;
@@ -187,13 +313,44 @@ private:
         }
     }
 
+    // The members biome_mod can make non-zero: an amplitude some biome's k names, the state's terms with a multifractal
+    // (state[t > 0] where some multifractal biome's shape has c[t]), the warp.
+    static void add_parts(Entry &r_e) {
+        auto any = [&](auto p_pred) { return std::any_of(r_e.biomes.begin(), r_e.biomes.end(), p_pred); };
+        for (int t = 0; t < 3; t++) {
+            if (any([&](const BiomeBand &p_b) { return p_b.k[t] != 0.0f; })) {
+                r_e.parts.push_back(Part{ AMP, t });
+            }
+        }
+        if (any([](const BiomeBand &p_b) { return p_b.gain > 0.0f; })) {
+            r_e.parts.push_back(Part{ STATE, 0 });
+            for (int t = 1; t < 4; t++) {
+                if (any([&](const BiomeBand &p_b) { return p_b.gain > 0.0f && p_b.shape.c[t] != 0.0f; })) {
+                    r_e.parts.push_back(Part{ STATE, t });
+                }
+            }
+        }
+        if (any([](const BiomeBand &p_b) { return p_b.warp != 0.0f; })) {
+            for (int ax = 0; ax < 3; ax++) {
+                r_e.parts.push_back(Part{ WARP, ax });
+            }
+        }
+    }
+
+    String glsl_biome_mod(const Entry &p_e, const String &p_target) const;
+    String glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const;
+    String glsl_carried(const Cascade::Spec &p_spec) const;
+    String glsl_weighted(const Cascade::Spec &p_spec) const;
     String glsl_plain(const Cascade::Spec &p_spec) const;
     String glsl_entry(const Entry &p_e) const;
 
     Table table;
+    SampleCarry sample;
     int state = -1;
+    int carry = 0;
     bool shaped_ = false;
     std::vector<Entry> entries[Cascade::MAX_LEVEL + 1];
+    int used[Cascade::MAX_LEVEL + 1] = {}; // carry_used: the samples' terms and the ground's parts
     uint32_t mask[Cascade::MAX_LEVEL + 1] = {};
     uint32_t features[Cascade::MAX_GROUPS] = {};
     Cascade::FieldRange range;
@@ -207,6 +364,101 @@ String mask_switch(const uint32_t p_mask[Cascade::MAX_LEVEL + 1]) {
         }
     }
     return code + "    default: break;\n    }\n    if (mask == 0u) {\n        return 0u;\n    }\n";
+}
+
+// biome_mod's loop over the biomes, op for op: the amplitudes into a0 .. a2 (declared), the state and the warp into
+// p_target's state[] and warp[] (after glsl_weights and state_c).
+String Modulator::glsl_biome_mod(const Entry &p_e, const String &p_target) const {
+    using ExactNoise::glsl_float;
+    const String &o = p_target;
+    String code = "        {\n            precise vec4 a0 = vec4(0.0);\n            precise vec4 a1 = vec4(0.0);\n            precise vec4 a2 = vec4(0.0);\n";
+    for (size_t b = 0; b < p_e.biomes.size(); b++) {
+        const BiomeBand &bb = p_e.biomes[b];
+        const String wb = vformat("w%d", int64_t(b));
+        const String wt = bb.gain > 0.0f ? vformat("cl_mul(%s, cl_multifractal(%s, state_c))", wb, glsl_float(bb.gain)) : wb;
+        code += vformat("            {\n                vec4 wt = %s;\n", wt);
+        for (int t = 0; t < 3; t++) {
+            if (bb.k[t] != 0.0f) {
+                code += vformat("                a%d = a%d + wt * %s;\n", t, t, glsl_float(bb.k[t]));
+            }
+        }
+        if (bb.gain > 0.0f) {
+            code += vformat("                %sstate[0] = cl_add(%sstate[0], cl_sub(%s, cl_scale(wt, %s)));\n", o, o, wb, glsl_float(bb.shape.c[0]));
+            for (int t = 1; t < 4; t++) {
+                if (bb.shape.c[t] != 0.0f) {
+                    code += vformat("                %sstate[%d] = cl_sub(%sstate[%d], cl_scale(wt, %s));\n", o, t, o, t, glsl_float(bb.shape.c[t]));
+                }
+            }
+        }
+        if (bb.warp != 0.0f) {
+            for (int ax = 0; ax < 3; ax++) {
+                code += vformat("                %swarp[%d] = cl_add(%swarp[%d], cl_scale(cl_mul(%s, f%d), %s));\n", o, ax, o, ax, wb, bb.warp_fields[ax], glsl_float(bb.warp));
+            }
+        }
+        code += "            }\n";
+    }
+    return code;
+}
+
+// biome_mod for one entry into its carry groups (in cascade_derive).
+String Modulator::glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const {
+    String code = "        {\n            vec4 state[4] = vec4[4](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));\n";
+    code += "            vec4 warp[3] = vec4[3](vec4(0.0), vec4(0.0), vec4(0.0));\n";
+    code += glsl_biome_mod(p_e, "");
+    code += "            vec4 amp[3] = vec4[3](cl_flush(a0), cl_flush(a1), cl_flush(a2));\n";
+    for (size_t i = 0; i < p_e.parts.size(); i++) {
+        code += put_carry_glsl(p_spec, p_e.carry + int(i), part_glsl(p_e.parts[i]), "            ");
+    }
+    return code + "        }\n        }\n"; // glsl_biome_mod's block, then this one
+}
+
+String Modulator::glsl_carried(const Cascade::Spec &p_spec) const {
+    // The last level's: what the level above derived (no weights, so no helpers).
+    String code;
+    const int groups = p_spec.group_count();
+    if (!shaped_) {
+        code += "\n// Climate::Modulator::modulate: each modulated band's amplitude, carried from the level above.\n";
+        code += vformat("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", groups);
+        code += vformat("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", groups);
+    } else {
+        code += "\n// Climate::Modulator::modulate: each modulated band's BandMod, carried from the level above.\n";
+        code += vformat("uint cascade_mods(int m, Ch pre, out BandMod mod[%d]) {\n", groups);
+        code += vformat("    for (int g = 0; g < %d; g++) {\n        mod[g].features = 0u;\n", groups);
+        code += "        for (int t = 0; t < 3; t++) {\n            mod[g].amp[t] = vec4(0.0);\n            mod[g].warp[t] = vec4(0.0);\n        }\n";
+        code += "        for (int t = 0; t < 4; t++) {\n            mod[g].state[t] = vec4(0.0);\n        }\n    }\n";
+    }
+    code += mask_switch(mask);
+    code += "    switch (m) {\n";
+    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+        if (entries[m].empty()) {
+            continue;
+        }
+        code += vformat("    case %d:\n", m);
+        for (const Entry &e : entries[m]) {
+            if (e.group >= groups) {
+                continue; // a field band, in a view without the fields
+            }
+            if (!shaped_) {
+                // Plain: every entry's one part is its amplitude on n (or none: all its k are 0).
+                code += vformat("        amp[%d] = %s;\n", e.group, e.parts.empty() ? String("vec4(0.0)") : carried_glsl(p_spec, "pre", e.carry));
+                continue;
+            }
+            const String o = vformat("mod[%d]", e.group);
+            code += vformat("        %s.features = %du;\n", o, int64_t(e.features));
+            if (e.constant) {
+                for (int t = 0; t < 3; t++) {
+                    code += vformat("        %s.amp[%d] = vec4(0.0, 0.0, 0.0, %s);\n", o, t, ExactNoise::glsl_float(e.k[t]));
+                }
+                continue;
+            }
+            for (size_t i = 0; i < e.parts.size(); i++) {
+                code += vformat("        %s.%s = %s;\n", o, part_glsl(e.parts[i]), carried_glsl(p_spec, "pre", e.carry + int(i)));
+            }
+        }
+        code += "        break;\n";
+    }
+    code += "    default: break;\n    }\n    return mask;\n}\n";
+    return code;
 }
 
 // The amplitudes alone (no band shaped anywhere): the text the climate had before shaped bands.
@@ -250,37 +502,12 @@ String Modulator::glsl_entry(const Entry &p_e) const {
         }
         return code;
     }
-    code += "        {\n            precise vec4 a0 = vec4(0.0);\n            precise vec4 a1 = vec4(0.0);\n            precise vec4 a2 = vec4(0.0);\n";
-    for (size_t b = 0; b < p_e.biomes.size(); b++) {
-        const BiomeBand &bb = p_e.biomes[b];
-        const String wb = vformat("w%d", int64_t(b));
-        const String wt = bb.gain > 0.0f ? vformat("cl_mul(%s, cl_multifractal(%s, state_c))", wb, glsl_float(bb.gain)) : wb;
-        code += vformat("            {\n                vec4 wt = %s;\n", wt);
-        for (int t = 0; t < 3; t++) {
-            if (bb.k[t] != 0.0f) {
-                code += vformat("                a%d = a%d + wt * %s;\n", t, t, glsl_float(bb.k[t]));
-            }
-        }
-        if (bb.gain > 0.0f) {
-            code += vformat("                %s.state[0] = cl_add(%s.state[0], cl_sub(%s, cl_scale(wt, %s)));\n", o, o, wb, glsl_float(bb.shape.c[0]));
-            for (int t = 1; t < 4; t++) {
-                if (bb.shape.c[t] != 0.0f) {
-                    code += vformat("                %s.state[%d] = cl_sub(%s.state[%d], cl_scale(wt, %s));\n", o, t, o, t, glsl_float(bb.shape.c[t]));
-                }
-            }
-        }
-        if (bb.warp != 0.0f) {
-            for (int ax = 0; ax < 3; ax++) {
-                code += vformat("                %s.warp[%d] = cl_add(%s.warp[%d], cl_scale(cl_mul(%s, f%d), %s));\n", o, ax, o, ax, wb, bb.warp_fields[ax], glsl_float(bb.warp));
-            }
-        }
-        code += "            }\n";
-    }
+    code += glsl_biome_mod(p_e, o + String("."));
     code += vformat("            %s.amp[0] = cl_flush(a0);\n            %s.amp[1] = cl_flush(a1);\n            %s.amp[2] = cl_flush(a2);\n        }\n", o, o, o);
     return code;
 }
 
-String Modulator::glsl(const Cascade::Spec &p_spec) const {
+String Modulator::glsl_weighted(const Cascade::Spec &p_spec) const {
     if (!shaped_) {
         return glsl_plain(p_spec);
     }
@@ -313,6 +540,60 @@ String Modulator::glsl(const Cascade::Spec &p_spec) const {
     return code;
 }
 
+String Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
+    String code = curves_glsl(table);
+    code += "\n// Climate::Modulator::derive: the climate of this level's point p into the carry of the level below, a run's last (its\n";
+    code += "// ground's BandMod parts, its samples' terms: the carry_used groups, all of them written).\n";
+    code += "void cascade_derive(int m, inout Ch ch, WorldPos p) {\n    bool bands = false;\n    switch (m) {\n";
+    for (int m = 1; m <= Cascade::MAX_LEVEL; m++) {
+        if (used[m - 1] > sample.count) {
+            code += vformat("    case %d: bands = true; break;\n", m);
+        }
+    }
+    code += "    default: break;\n    }\n";
+    code += sample.count > 0 ? String() : "    if (!bands) {\n        return;\n    }\n";
+    code += glsl_weights(table, p_spec, "ch");
+    if (state >= 0) {
+        const int sb = p_spec.gpu_base(state);
+        code += vformat("    vec4 state_c = vec4(ch.c[%d], ch.c[%d], ch.c[%d], ch.c[%d]);\n", sb + 1, sb + 2, sb + 3, sb);
+    }
+    code += "    switch (m) {\n";
+    for (int m = 1; m <= Cascade::MAX_LEVEL; m++) {
+        if (used[m - 1] == sample.count) {
+            continue;
+        }
+        code += vformat("    case %d:\n", m);
+        for (const Entry &e : entries[m - 1]) {
+            if (e.group == 0 && !e.parts.empty()) {
+                code += glsl_derive_entry(e, p_spec);
+            }
+        }
+        code += "        break;\n";
+    }
+    code += "    default: break;\n    }\n";
+    if (sample.count > 0) {
+        code += "    {\n";
+        if (sample.heights >= 0) {
+            for (const int r : table.gated) {
+                code += glsl_edges_value(vformat("rg%d", r), table.regions[size_t(r)].edges);
+            }
+            code += height_sum_glsl(table, "hs");
+            code += put_carry_glsl(p_spec, sample.heights, "hs", "        ");
+        }
+        for (size_t b = 0; b < table.biomes.size(); b++) {
+            if (sample.terrace[b] >= 0) {
+                code += put_carry_glsl(p_spec, sample.terrace[b], vformat("w%d", int64_t(b)), "        ");
+            }
+        }
+        if (sample.pick >= 0) {
+            code += pick_statements_glsl(table, "pk");
+            code += put_carry_glsl(p_spec, sample.pick, "vec4(0.0, 0.0, 0.0, pk)", "        ");
+        }
+        code += "    }\n";
+    }
+    return code + "}\n";
+}
+
 } // namespace
 
 Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground) {
@@ -331,8 +612,8 @@ Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground)
         spec.fields.emplace_back(); // the multifractal state: band-less, the ground's band overwrites it
     }
     std::shared_ptr<Modulator> mod = std::make_shared<Modulator>(p_table, spec);
-    if (mod->any()) {
-        spec.modulation = mod; // a LINEAR4 ground: validate refuses multipliers on another
+    if (mod->needed()) {
+        spec.modulation = mod; // a LINEAR4 ground where a band is modulated: validate refuses multipliers on another
     }
     return spec;
 }

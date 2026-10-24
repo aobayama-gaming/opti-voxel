@@ -360,7 +360,7 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
     // No multiplier: the combined spec carries the fields, unmodulated, its ground the bare one.
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
     CHECK(spec.fields.size() == 3);
-    CHECK(spec.modulation == nullptr);
+    CHECK(spec.field_range().empty()); // a modulation for the pick's derive only: no modulated band
     // Lattice indices: times 2^13 (the finest point at m = 12, doubled) they stay within +-2^60 voxels.
     const int64_t bases[] = { 0, 12345, (int64_t(1) << 32) - 3, -(int64_t(1) << 47) + 7, (int64_t(1) << 47) - 11 };
     int coherent = 0;
@@ -420,7 +420,7 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
             "biomes": [{"name": "only", "amp": [{"field": "ground", "from_m": 0.4, "to_m": 30000, "x": 1}]}]})",
                             g.ground, neutral) == String());
     const Cascade::Spec specs[] = { combined_spec(carried, bare), combined_spec(neutral, bare) };
-    CHECK(specs[0].modulation == nullptr);
+    CHECK(specs[0].field_range().empty()); // the pick's derive only
     CHECK(specs[1].modulation != nullptr);
     int64_t compared = 0, differing = 0;
     for (const Cascade::Spec &spec : specs) {
@@ -500,7 +500,7 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     CLIMATE_REQUIRE(parse_json(fields + String(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})"), g.ground, t) ==
             String());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
-    CHECK(spec.modulation == nullptr);
+    CHECK(spec.modulation != nullptr); // the pick's derive, for the chunks' samples (CascadeGLSL::field_range)
     CHECK(spec.field_range().empty());
     CHECK(CascadeGLSL::vec4s_per_point(spec, spec.field_range()) == 1);
     CHECK(spec.top_level() == g.ground.spec->top_level());
@@ -545,13 +545,12 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
     const int desert = 2;
     CHECK(t.biomes[desert].name == "desert");
     CHECK(t.biomes[desert].surface.flat.r == doctest::Approx(Color(216 / 255.0, 0, 0).srgb_to_linear().r));
-    // A reconfigure keeps the materials' ids (Library::set) and the chunk passes carry the fields everywhere.
+    // A reconfigure keeps the materials' ids (Library::set) and the chunk passes derive the pick above every sample.
     sdf.configure(param, 15);
     CHECK(sdf.get_gpu_table()->base_palette() == base);
     const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, false);
-    CHECK(range.floor == 0);
-    CHECK(range.ceiling == Cascade::MAX_LEVEL);
-    CHECK(CascadeGLSL::field_range(&sdf, true).floor == sdf.get_spec().field_range().floor); // point items: the spec's
+    CHECK(range.everywhere());
+    CHECK(CascadeGLSL::field_range(&sdf, true).sample == sdf.get_spec().field_range().sample); // point items: the spec's
 
     // The pick of a box run's level slots (what the GPU's level 0 reads) equals the point query, at several LODs and
     // origins; over a wide coarse slice the example climate shows several biomes.
@@ -570,7 +569,7 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
                 level.slots_at(p_i, slots);
                 const VoxelPos v(p_p.x << lod, p_p.y << lod, p_p.z << lod);
                 points++;
-                mismatches += sdf.ground_material(slots, p_p, lod) != sdf.ground_material_at(v, lod);
+                mismatches += sdf.ground_material(slots) != sdf.ground_material_at(v, lod);
             });
         }
     }
@@ -609,13 +608,13 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
     CLIMATE_REQUIRE(fieldless.get_climate() != nullptr);
     CHECK_FALSE(fieldless.has_ground_materials());
     CHECK(fieldless.get_gpu_table()->base_palette() == std::vector<uint32_t>{ Material::GROUND });
-    CHECK(fieldless.get_ground_material_glsl().is_empty());
+    CHECK(fieldless.get_ground_material_glsl(fieldless.get_spec()).is_empty());
     // Without a climate: the base palette is GROUND alone, and no ground material GLSL.
     SDFCascade plain;
     plain.configure(param, 15);
     CHECK(plain.get_gpu_table()->base_palette() == std::vector<uint32_t>{ Material::GROUND });
-    CHECK(plain.get_ground_material_glsl().is_empty());
-    CHECK(Climate::pick_glsl(t, spec).contains("uint climate_biome(Ch ch, WorldPos p)"));
+    CHECK(plain.get_ground_material_glsl(plain.get_spec()).is_empty());
+    CHECK(Climate::pick_glsl(t, spec).contains("uint climate_biome(Ch ch)"));
 }
 
 // One octave per group and lattice: a second band of one group on one lattice is refused by validate, and the cascade
@@ -657,6 +656,44 @@ TEST_CASE("Climate: a modulation without fields takes the modulated GPU variant"
     for (const bool points : { false, true }) {
         const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, points);
         CHECK_FALSE(range.empty());
-        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, true).contains("cascade_amplitudes("));
+        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::FIELDS).contains("cascade_amplitudes("));
     }
+}
+
+// A run's level above its last derives its samples' climate and H carries it down (Climate's Modulator): the last level
+// carries no field, only the ground and the carry, and its pick is the one its floor parent derived (copied, not
+// interpolated).
+TEST_CASE("Climate: a run's samples read the climate derived on the level above") {
+    ClimateTest::ClimateSDF c("res://climate/example.json", 15);
+    CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
+    const Cascade::Spec &spec = c.sdf.get_spec();
+    const SampleCarry sc = sample_carry(*c.sdf.get_climate());
+    CLIMATE_REQUIRE(sc.pick >= 0);
+    CHECK(spec.carry_groups() > sc.count); // the bands' parts after the samples' terms
+    CHECK(spec.field_range().sample); // the example's terraces
+    int64_t points = 0, bad = 0;
+    for (const int lod : { 0, 4, 9 }) {
+        Cascade::Box box;
+        for (int a = 0; a < 3; a++) {
+            box.lo[a] = a == 1 ? (c.sdf.get_datum_y() >> lod) - 3 : int64_t(-5 - 1000 * lod) >> lod;
+            box.hi[a] = box.lo[a] + 6;
+        }
+        std::vector<Cascade::Level> levels;
+        Cascade::run(spec, box, lod, &levels);
+        CLIMATE_REQUIRE(levels.size() >= 2);
+        const Cascade::Level &last = levels.back();
+        const Cascade::Level &above = levels[levels.size() - 2];
+        CHECK(last.fields == 0);
+        CHECK(last.carry == spec.modulation->carry_used(lod)); // the ground's groups only
+        CHECK(last.carry < spec.carry_groups());
+        CHECK(above.fields == int(spec.fields.size()));
+        Cascade::for_each_point(last.box, [&](const Vector3i64 &p_p, int64_t p_i) {
+            const Vector3i64 q(p_p.x >> 1, p_p.y >> 1, p_p.z >> 1);
+            const float pick = last.ch[Cascade::carry_slot(sc.pick)][size_t(p_i)];
+            points++;
+            bad += float_bits(pick) != float_bits(above.ch[Cascade::carry_slot(sc.pick)][size_t(above.box.index(q))]);
+        });
+    }
+    CHECK(points == 3 * 7 * 7 * 7);
+    CHECK(bad == 0);
 }

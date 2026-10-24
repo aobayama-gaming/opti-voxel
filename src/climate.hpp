@@ -261,7 +261,7 @@ double ground_step(const Table &p_table, int p_lod, double p_ground_amp);
 void apply_terms(const Table &p_table, const float p_slots[Cascade::SLOTS], Float4 r_fields[MAX_FIELDS]);
 
 // Channels of every field at lattice point p_p of Λ_m (p_p = voxel >> m), r_fields[i] for field i: V_m of
-// p_combined (combined_spec) at the point, the fields carried at every level, then the terms.
+// p_combined (combined_spec) at the point, the fields carried at every level (the derive too), then the terms.
 void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]);
 
 // Biome weights (value and gradient) of the field channels p_fields, r_w[b] for biome b.
@@ -269,42 +269,67 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
 // The product of the edges' smoothsteps on the field channels p_fields (dual numbers, in list order): a biome's indicator
 // r_b, a region's value. 1 without edges.
 Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_FIELDS]);
-// Whether region p_region is exactly 1 on the field values p_fields (only .w is read) with each of its fields moved by
-// +-p_margin, one at a time; the margin doubles per octave a field's finest band is under the finest band of the region's
-// slowest field (it moves faster across the ground). A core deep enough that the modulation's reads at the cascade's
-// coarser lattices, kilometres apart, stay in it too: there a world's landform is its own table (docs/landforms.md).
-inline constexpr float CORE_MARGIN = 0.05f;
-bool region_core(const Table &p_table, int p_region, const Float4 p_fields[MAX_FIELDS], float p_margin = CORE_MARGIN);
+// The insertion level of the highest band (any group) the biomes give different amplitudes, shapes or warps (the
+// continental octaves a world turns off in every biome don't count): above it, no band's climate matters.
+int weighted_ceiling(const Table &p_table, const Cascade::Spec &p_combined);
+// Bit r: region r is exactly 1 (value 1, gradient 0) at every point whose climate lattice point p_p of Λ_lod reads: its
+// level boxes from Λ_{lod+1} to weighted_ceiling before their insertions (the bands above the last level), and Λ_{lod+1}'s
+// after them (the derive the last level reads), one replay of the point's cascade. There every weight a band or a sample
+// term reads is the region's biomes' alone: a world's landform is its own table, bit for bit (docs/landforms.md).
+uint32_t core_regions(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_lod);
 // The regions some height term is gated by, in index order (parse stores them in Table::gated).
 std::vector<int> gated_regions(const Table &p_table);
 
-// The climate at a point, the one every reader goes through: the modulation, the pick, the ground's terraces and the
-// report. The field values of a point's slots p_slots (apply_terms), then the biome weights (weights); GLSL twin:
-// glsl_weights. What reaches it is one rule, the LOD rule: octave k of a modulated group reads the climate of its
-// insertion level before that level's insertions (H(V_{m+1}): the climate low-passed at k, Cascade::Modulation); the pick
-// and the report read level 0 (V_0, everything the cascade carries).
+// The climate at a point, evaluated once per point of each level above a run's last (Modulator: a band's amplitude from
+// the channels before the level's insertions; the level above the last derives the last level's amplitudes and its
+// samples' terms after them) and by the report: the field values of a point's slots
+// p_slots (apply_terms), then the biome weights (weights); GLSL twin: glsl_weights. What reaches a reader is one rule,
+// the LOD rule: octave k of a modulated group, inserted on Λ_m, reads H of the climate of Λ_{m+1} after its insertions
+// (the climate low-passed at k, Cascade::Modulation); a run's samples read H of the climate of the level above them.
 struct State {
     Float4 fields[MAX_FIELDS];
     Float4 w[MAX_BIOMES];
 };
 void state(const Table &p_table, const float p_slots[Cascade::SLOTS], State &r_state);
 
-// The ground at a sample (climate_shape.cpp): the cascade's ground channels of p_slots (a point's slots, the fields
-// carried), plus each height term in list order (a gated one times its region's value, edges_value of the fields), then h + sum_b w_b (terrace_b(h) - h) over the biomes with terraces.
-// Dual numbers like the fields (gradient per lattice spacing, value in LOD0 voxels); the terms read the cascade's
-// ground, not this one. Without height terms or terraces, the cascade's channels, bit for bit.
+// The carry groups of a table's sample terms, the first of Modulation's carry (the bands' amplitudes follow): derived on
+// a run's level above its last (Cascade::Modulation::derive) and read by its samples. heights: the height
+// terms' sum; terrace[b]: biome b's weight if it has terraces; pick: the biome (its index in the value, copied from the
+// floor parent, not interpolated). -1: none.
+struct SampleCarry {
+    int heights = -1;
+    int terrace[MAX_BIOMES];
+    int pick = -1;
+    int count = 0;
+};
+SampleCarry sample_carry(const Table &p_table);
+// Carry group p_c of `Ch <p_ch>` in p_spec's GPU layout (Spec::gpu_carry) as a (gradient, value) vec4: to_float4's twin.
+String carried_glsl(const Cascade::Spec &p_spec, const String &p_ch, int p_c);
+
+// The height terms' sum (climate_shape.cpp) of the field values p_fields and the region values p_regions (edges_value of
+// the gated regions, Table::gated): coef * curve(field) per term in list order (a gated one times its region's value),
+// added up from 0. Dual numbers like the fields (gradient per lattice spacing, value in LOD0 voxels).
+Float4 height_sum(const Table &p_table, const Float4 p_fields[MAX_FIELDS], const Float4 p_regions[MAX_REGIONS]);
+// The same in GLSL: the curves' functions (curves_glsl, before), then statements defining `vec4 <p_var>` from the
+// f<i> of glsl_weights and the rg<r> of glsl_edges_value (height_sum_glsl).
+String curves_glsl(const Table &p_table);
+String height_sum_glsl(const Table &p_table, const String &p_var);
+
+// The ground at a sample: the cascade's ground channels of p_slots (a point's slots), plus the carried height terms'
+// sum, then h + sum_b w_b (terrace_b(h) - h) over the biomes with terraces, w_b carried (SampleCarry). Without height
+// terms or terraces, the cascade's channels, bit for bit.
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
 // The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
-// shared helpers (splices_helpers is true with ground terms).
+// shared helpers (splices_helpers is true with ground terms), ch in p_combined's GPU layout.
 String ground_glsl(const Table &p_table, const Cascade::Spec &p_combined);
 
 // The biome with the largest weight p_w at lattice point p_p of Λ_m; among equal weights (same bits), the
 // (hash % count)-th in list order, hash = ExactNoise::hash_cell(the point's LOD0 voxel, PICK_SEED): the same from every
-// LOD that has the point.
+// LOD that has the point. The derive picks on the level above a run's last (SampleCarry::pick).
 int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p_p, int p_m);
-// The pick of a point's Cascade slots p_slots (combined_spec's layout, the fields carried: Cascade::point_slots with
-// p_all_fields, or Level::slots_at of a run carrying them): apply_terms, weights, pick.
-int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m);
+// The carried pick of a point's Cascade slots p_slots (combined_spec's layout, the last level of a run: Cascade::point_slots
+// with p_all_fields, or Level::slots_at of a run's last level carrying the sample terms).
+int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]);
 
 // 0xRRGGBB (sRGB) as a linear colour, alpha 1.
 Color srgb_to_linear(uint32_t p_rgb);
@@ -312,10 +337,11 @@ Color srgb_to_linear(uint32_t p_rgb);
 // ground (PATTERN_GROUND) in its surface's colours, its debug colour (--view=12).
 Material::Params biome_material(const Biome &p_biome);
 
-// pick of the weights in GLSL, bit for bit: `uint climate_biome(Ch ch, WorldPos p)`, ch the channels of a lattice
-// point in p_combined's GPU layout (the fields carried: V_m, the terms applied here) and p its absolute voxel. Brings
-// the dual-number helpers unless p_combined's modulation (its glsl) already defines them.
+// The carried pick in GLSL, bit for bit: `uint climate_biome(Ch ch)`, ch the channels of a run's last level in
+// p_combined's GPU layout. The derive's pick statements (on its w<b>, at point p of Λ_m) are pick_statements_glsl,
+// assigning `float <p_var>`.
 String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
+String pick_statements_glsl(const Table &p_table, const String &p_var);
 // The pieces both generated functions share (climate_glsl.cpp): the dual-number helpers (cl_flush, cl_mul, cl_sub,
 // cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
 // of `Ch pre` (p_spec's GPU layout).

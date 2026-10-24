@@ -98,6 +98,7 @@ struct Checks {
     int64_t samples_differing = 0;
     int64_t relation_points = 0;
     int64_t relation_differing = 0;
+    int64_t relation_modulated = 0; // G3 pairs at a modulated level: no prediction (check_relation)
     int64_t chunks = 0;
     int64_t levels = 0;
     PackedInt64Array chunks_per_lod;
@@ -242,12 +243,22 @@ private:
         const float *gpu = reinterpret_cast<const float *>(p_data.ptr());
         const uint64_t n = uint64_t(level_bound(cs, p_j));
         const uint64_t points = n * n * n;
-        const int top = sdf.get_spec().top_level(all_fields);
-        // The fields only where the range carries them (the ground everywhere), on the GPU and the CPU alike.
-        const int ground_ch = channel_count(sdf.get_spec().set);
+        const Spec &spec = sdf.get_spec();
+        // The ground everywhere, the fields where the range carries them, the carry groups the last level reads on it and on
+        // the level above, which derives them (the GPU stores no other).
+        const int ground_ch = channel_count(spec.set);
+        auto compared = [&](int p_lod, int p_m, int p_ch) {
+            if (p_ch < ground_ch) {
+                return true;
+            }
+            if (p_ch < spec.gpu_carry(0)) {
+                return range.carried(p_lod, p_m);
+            }
+            return range.carries(p_lod, p_m) && (p_ch - spec.gpu_carry(0)) / FIELD_CHANNELS < spec.modulation->carry_used(p_lod);
+        };
         for (uint32_t c = 0; c < uint32_t(chunks.size()); c++) {
             const int lod_c = chunks[c].lod;
-            const int top_c = MAX(top, lod_c);
+            const int top_c = spec.run_top(lod_c, all_fields);
             const int m = lod_c + p_j;
             if (m > top_c) {
                 continue;
@@ -260,8 +271,11 @@ private:
             for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
                 const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
                 const uint64_t slot = c * points + uint64_t(i.x) + n * (uint64_t(i.y) + n * uint64_t(i.z));
-                for (int ch = 0; ch < (range.carried(lod_c, m) ? nch : ground_ch); ch++) {
-                    const float want = level.ch[sdf.get_spec().slot_of_gpu(ch)][size_t(p_cpu_i)];
+                for (int ch = 0; ch < nch; ch++) {
+                    if (!compared(lod_c, m, ch)) {
+                        continue;
+                    }
+                    const float want = level.ch[spec.slot_of_gpu(ch)][size_t(p_cpu_i)];
                     const float got = p_plane > 0 ? gpu[(uint64_t(ch / 4) * p_plane + slot) * 4 + ch % 4] : gpu[slot * nv * 4 + ch];
                     checks.values++;
                     if (float_bits(want) != float_bits(got)) {
@@ -309,9 +323,10 @@ private:
         const Box &cb = boxes[p_pair.child];
         const Box &pb = boxes[p_pair.parent];
         const int lod = chunks[p_pair.child].lod;
-        // A child modulated at its own level reads the parent's fields, which the parent chunk (LOD + 1) doesn't carry past
-        // the climate ceiling: no prediction from its readback there.
-        if (spec.modulation && spec.modulation->modulated(lod) != 0u && !range.carried(lod + 1, lod + 1)) {
+        // A child modulated at its own level reads the carry its level L + 1 derives from the fields, which the parent
+        // chunk's samples (LOD L + 1) don't carry: no prediction from its readback there.
+        if (spec.modulation && spec.modulation->modulated(lod) != 0u) {
+            checks.relation_modulated++;
             return;
         }
         auto at = [&](size_t p_chunk, const Box &p_box, const Vector3i64 &p_p, int p_ch) {
@@ -332,8 +347,8 @@ private:
             }
             insert_at(spec, lod, p_p, expect);
             checks.relation_points++;
-            const int compared = range.carried(lod, lod) ? nch : n0; // the fields where carried
-            for (int ch = 0; ch < compared; ch++) {
+            // The ground: a run's last level carries no field, and its carry is derived from the level above's.
+            for (int ch = 0; ch < n0; ch++) {
                 if (float_bits(flush_value(expect[spec.slot_of_gpu(ch)])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
                     checks.relation_differing++;
                     if (checks.wants_example()) {
@@ -474,7 +489,7 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
 
 // G10 (biome materials): the meshers' cascade passes on a climate set (4c and the other sets asked), every LOD's batch: each sample's
 // sdf_material (no instance: the ground's pick, cascade_ground_material, at the solid samples) against SDFCascade::ground_material of the CPU
-// run's level slots (the fields carried everywhere, like the chunk passes), bit for bit; and how many biomes showed.
+// run's last level slots (the pick derived on the level above, like the chunk passes), bit for bit; and how many biomes showed.
 // Empty for a set without a climate (8, 4) or with fewer than 3 biomes (nothing for ok to count); a climate set whose
 // table was refused fails.
 Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
@@ -536,7 +551,7 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
                 float ch[CHANNELS];
                 sdf.ground_channels(slots, ch);
                 const ExactNoise::Float4 r = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << l), l), l, Float3{ float(i.x), float(i.y), float(i.z) });
-                const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(slots, p_p, l);
+                const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(slots);
                 const uint32_t g = got[c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))];
                 seen[MIN(want, uint32_t(Climate::MAX_BIOMES))]++;
                 checks.samples++;
@@ -756,6 +771,7 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
             d["samples_differing"] = checks.samples_differing;
             d["relation_points"] = checks.relation_points;
             d["relation_differing"] = checks.relation_differing;
+            d["relation_modulated"] = checks.relation_modulated;
             d["chunks_per_lod"] = checks.chunks_per_lod;
             d["differing_per_lod"] = checks.differing_per_lod;
             d["examples"] = checks.examples;
@@ -765,7 +781,7 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
                 min_chunks = MIN(min_chunks, v);
             }
             d["min_chunks_per_lod"] = min_chunks;
-            const bool set_ok = checks.values > 0 && checks.samples > 0 && checks.relation_points > 0 && min_chunks >= 64 && checks.differing == 0 &&
+            const bool set_ok = checks.values > 0 && checks.samples > 0 && (checks.relation_points > 0 || checks.relation_modulated > 0) && min_chunks >= 64 && checks.differing == 0 &&
                     checks.samples_differing == 0 && checks.relation_differing == 0;
             d["ok"] = set_ok;
             ok = ok && set_ok;

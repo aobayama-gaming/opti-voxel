@@ -99,26 +99,37 @@ String glsl_edges_value(const String &p_var, const std::vector<Edge> &p_edges) {
     return code;
 }
 
-String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
-    String code = p_combined.modulation || splices_helpers(p_table, p_combined) ? String() : glsl_helpers();
-    code += "\n// Climate::pick of the weights of the channels ch (V_m) at the absolute point p (a lattice point).\nuint climate_biome(Ch ch, WorldPos p) {\n";
-    code += glsl_weights(p_table, p_combined, "ch");
+String pick_statements_glsl(const Table &p_table, const String &p_var) {
     // The largest weight's bits and how many biomes share them, then the (hash % count)-th of those in list order: the
     // CPU's incremental list holds exactly them (nothing exceeds the last best, so it is never reset after it).
-    code += "    float best = w0.w;\n    uint count = 1u;\n";
+    String code = "    float " + p_var + String(" = 0.0;\n    {\n        float best = w0.w;\n        uint count = 1u;\n");
     const int64_t n = int64_t(p_table.biomes.size());
     for (int64_t b = 1; b < n; b++) {
-        code += vformat("    if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n        count++;\n    } else if (w%d.w > best) {\n        best = w%d.w;\n"
-                        "        count = 1u;\n    }\n",
+        code += vformat("        if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            count++;\n        } else if (w%d.w > best) {\n"
+                        "            best = w%d.w;\n            count = 1u;\n        }\n",
                 b, b, b);
     }
-    code += vformat("    uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, %du) %% count;\n", int64_t(PICK_SEED));
+    code += vformat("        uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, %du) %% count;\n        bool found = false;\n", int64_t(PICK_SEED));
     for (int64_t b = 0; b < n; b++) {
-        code += vformat("    if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n        if (k == 0u) {\n            return %du;\n        }\n        k--;\n    }\n", b,
-                b);
+        code += vformat("        if (!found && floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            if (k == 0u) {\n                %s = %s;\n"
+                        "                found = true;\n            } else {\n                k--;\n            }\n        }\n",
+                b, p_var, ExactNoise::glsl_float(float(b)));
     }
-    code += "    return 0u;\n}\n";
-    return code;
+    return code + "    }\n";
+}
+
+String carried_glsl(const Cascade::Spec &p_spec, const String &p_ch, int p_c) {
+    const int b = p_spec.gpu_carry(p_c);
+    return vformat("vec4(%s.c[%d], %s.c[%d], %s.c[%d], %s.c[%d])", p_ch, b + 1, p_ch, b + 2, p_ch, b + 3, p_ch, b);
+}
+
+String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
+    const SampleCarry carry = sample_carry(p_table);
+    String code = "\n// Climate::pick_slots: the pick the level above derived (SampleCarry::pick).\nuint climate_biome(Ch ch) {\n";
+    if (carry.pick < 0) {
+        return code + vformat("    return %du;\n}\n", int64_t(p_table.biomes.size()) - 1);
+    }
+    return code + vformat("    return uint(ch.c[%d]);\n}\n", p_combined.gpu_carry(carry.pick));
 }
 
 } // namespace Climate
