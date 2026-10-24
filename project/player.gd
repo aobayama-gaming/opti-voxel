@@ -54,6 +54,7 @@ var hud: Label = null
 var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD
+var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera; F toggles it
 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
@@ -166,6 +167,7 @@ func _ready():
 			_make_hud()
 	yaw = rotation.y
 	pitch = camera.rotation.x
+	_make_flashlight("--flashlight=1" in Presets.user_args())
 	for a in Presets.user_args():
 		if a.begins_with("--marks="):
 			marks_dir = a.trim_prefix("--marks=")
@@ -208,6 +210,19 @@ func _make_hud() -> void:
 	hud.add_theme_constant_override("shadow_offset_x", 1)
 	hud.add_theme_constant_override("shadow_offset_y", 1)
 	hud_layer.add_child(hud)
+
+# A torch: a spot along the view, slightly below and right of the eye so its shadows read as cast from the hand.
+func _make_flashlight(p_on: bool) -> void:
+	flashlight = SpotLight3D.new()
+	flashlight.position = Vector3(0.25, -0.2, 0.0)
+	flashlight.light_color = Color(1.0, 0.92, 0.8)
+	flashlight.light_energy = 6.0
+	flashlight.spot_range = 60.0
+	flashlight.spot_angle = 28.0
+	flashlight.spot_attenuation = 1.2
+	flashlight.shadow_enabled = true
+	flashlight.visible = p_on
+	camera.add_child(flashlight)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -287,6 +302,9 @@ func _input(event: InputEvent) -> void:
 		hud_visible = not hud_visible
 		if overlay:
 			overlay.visible = hud_visible
+
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_F:
+		flashlight.visible = not flashlight.visible
 
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
