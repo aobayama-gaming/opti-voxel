@@ -55,7 +55,7 @@ var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD; none: hidden
 var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera; F toggles it
-var pixelate := 1           # --pixelate=N; the HUD / overlay layers are scaled by 1/N to keep their on-screen size
+var pixelate := 1           # --pixelate=N: the 3D drawn in N x N blocks, under a full-resolution HUD
 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
@@ -163,7 +163,7 @@ func _ready():
 		if "--overlay=video" in Presets.user_args():
 			overlay = VideoOverlay.new()
 			overlay.setup(terrain, camera)
-			overlay.scale = Vector2.ONE / pixelate
+			overlay.pixelate = pixelate
 			add_child(overlay)
 		else:
 			_make_hud()
@@ -181,22 +181,16 @@ func _ready():
 # `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD's pixel error
 # is in render pixels, so 0.5 draws the meshes of twice the error. FSR 2 needs `--render-thread safe`: on the separate
 # render thread Godot 4.6.3 exits silently while loading its shaders.
-# `--pixelate=N` (a fake-resolution look): the whole window (3D and HUD) renders at 1/N of its size and is blitted to
-# the screen N times larger with nearest filtering (plain pixel copies). With `--upscale=fsr2` the 3D renders at
-# render_scale of that: `--pixelate=2 --upscale=fsr2` draws the 3D at a quarter of the window per axis, FSR 2 brings it
-# to a half, then each pixel is doubled. The LOD reads the 3D render's size, so it follows.
+# `--pixelate=N` (a fake-resolution look): the 3D renders at 1/N of the 3D scale (`--pixelate=2 --upscale=fsr2`: a
+# quarter of the window per axis), is upscaled to the window, then a screen pass copies one pixel over each N x N block.
+# The HUD draws on a layer above it, at full resolution. The LOD reads the 3D render's size, so it follows.
 func _setup_upscaling() -> void:
 	for a in Presets.user_args():
 		if a.begins_with("--pixelate="):
 			pixelate = maxi(a.trim_prefix("--pixelate=").to_int(), 1)
 	if pixelate > 1:
-		var window := get_window()
-		window.content_scale_mode = Window.CONTENT_SCALE_MODE_VIEWPORT
-		window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
-		window.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_INTEGER
-		var follow := func() -> void: window.content_scale_size = window.size / pixelate
-		follow.call()
-		window.size_changed.connect(follow)
+		_make_pixel_blocks()
+		get_viewport().scaling_3d_scale = clampf(1.0 / pixelate, 0.25, 1.0)
 	var modes := {
 		"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
 		"fsr1": Viewport.SCALING_3D_MODE_FSR,
@@ -216,14 +210,36 @@ func _setup_upscaling() -> void:
 		return
 	var viewport := get_viewport()
 	viewport.scaling_3d_mode = modes[mode]
-	viewport.scaling_3d_scale = clampf(render_scale, 0.25, 2.0)
+	viewport.scaling_3d_scale = clampf(render_scale / pixelate, 0.25, 2.0)
+
+# Below the HUD (layer 1): every pixel of an N x N block takes the screen's colour at the block's first pixel.
+func _make_pixel_blocks() -> void:
+	var shader := Shader.new()
+	shader.code = """shader_type canvas_item;
+uniform sampler2D screen_tex : hint_screen_texture, filter_nearest;
+uniform float block = 2.0;
+void fragment() {
+	vec2 px = floor(FRAGCOORD.xy / block) * block + 0.5;
+	COLOR = vec4(texture(screen_tex, px * SCREEN_PIXEL_SIZE).rgb, 1.0);
+}"""
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	material.set_shader_parameter("block", float(pixelate))
+	var rect := ColorRect.new()
+	rect.material = material
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var layer := CanvasLayer.new()
+	layer.layer = 0
+	layer.add_child(rect)
+	add_child(layer)
 
 func _make_hud() -> void:
 	var hud_layer := CanvasLayer.new()
-	hud_layer.scale = Vector2.ONE / pixelate
 	add_child(hud_layer)
 	hud = Label.new()
-	hud.position = Vector2(10, 10)
+	hud.position = Vector2(8, 8)
+	hud.add_theme_font_size_override("font_size", 11)
 	hud.add_theme_color_override("font_color", Color(1, 1, 1))
 	hud.add_theme_color_override("font_shadow_color", Color(0, 0, 0))
 	hud.add_theme_constant_override("shadow_offset_x", 1)
