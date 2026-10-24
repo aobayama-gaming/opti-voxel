@@ -176,6 +176,79 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
     return md;
 }
 
+// The biomes weighing more than p_floor at slice pixel p_i, as a mask.
+uint32_t present(const Sampled &p_s, size_t p_i, float p_floor) {
+    uint32_t mask = 0u;
+    for (int b = 0; b < p_s.nb; b++) {
+        mask |= p_s.weights[p_i * p_s.nb + b] > p_floor ? 1u << b : 0u;
+    }
+    return mask;
+}
+
+// A biomes-per-chunk histogram's row: | weight > | LOD | chunks | mean | 1 | 2 | 3+ | max |.
+String chunk_biome_row(float p_floor, const String &p_lod, const std::vector<int64_t> &p_hist, int64_t p_total) {
+    double mean = 0.0;
+    int max = 0;
+    int64_t three = 0;
+    for (size_t k = 1; k < p_hist.size(); k++) {
+        mean += double(k) * double(p_hist[k]);
+        max = p_hist[k] > 0 ? int(k) : max;
+        three += k >= 3 ? p_hist[k] : 0;
+    }
+    auto pct = [&](int64_t p_c) { return String::num(100.0 * double(p_c) / double(p_total), 1); };
+    return vformat("| %s | %s | %d | %s | %s%% | %s%% | %s%% | %d |\n", String::num(p_floor, 2), p_lod, p_total, String::num(mean / double(p_total), 3), pct(p_hist[1]),
+            pct(p_hist[2]), pct(three), max);
+}
+
+// Biomes per chunk, what a chunk blending its biomes' own cascades would run: per LOD L, the slice tiled into chunks
+// (chunk_voxel_dimension voxels of L, plus the skirt on each side), each the union of the biomes weighing more than a
+// floor at the Λ_{L+3} points covering it. LODs whose Λ_{L+3} is finer than the slice get the per-point counts instead
+// (a chunk smaller than the slice's spacing sees about the biomes of one point). The floors > 0: the counts if the
+// weights under them were dropped (and the rest renormalised).
+String chunk_biome_section(const Sampled &p_s, int p_n, int p_m, int p_lods, const ChunkParam &p_param) {
+    const int64_t points = int64_t(p_n) * p_n;
+    const int64_t dim = p_param.chunk_voxel_dimension();
+    const int64_t skirt = p_param.skirt_size;
+    const int64_t span = int64_t(p_n) << p_m; // the slice in LOD0 voxels
+    String md = "Biomes per chunk (weight above the floor at the chunk's Λ_{L+3} points, skirt included):\n\n"
+                "| weight > | LOD | chunks | mean biomes | 1 | 2 | 3+ | max |\n|---|---|---|---|---|---|---|---|\n";
+    std::vector<int64_t> hist(size_t(p_s.nb) + 1, 0);
+    for (const float floor : { 0.0f, 0.01f, 0.05f }) {
+        std::fill(hist.begin(), hist.end(), 0);
+        for (int64_t i = 0; i < points; i++) {
+            hist[size_t(__builtin_popcount(present(p_s, size_t(i), floor)))]++;
+        }
+        md += chunk_biome_row(floor, vformat("< %d (points)", MAX(0, p_m - 3)), hist, points);
+        for (int lod = MAX(0, p_m - 3); lod < p_lods; lod++) {
+            const int64_t corner = int64_t(1) << (lod + 3 - p_m); // Λ_{L+3}'s spacing in slice pixels
+            const int64_t width = dim << lod; // LOD0 voxels
+            const int64_t step = int64_t(1) << (lod + 3);
+            // Chunk k spans voxels [k width - skirt 2^L, (k + 1) width + skirt 2^L]; its corners, in Λ_{L+3} indices.
+            auto lo = [&](int64_t p_k) { return WorldCoord::floor_div(p_k * width - (skirt << lod), step); };
+            auto hi = [&](int64_t p_k) { return -WorldCoord::floor_div(-((p_k + 1) * width + (skirt << lod)), step); };
+            std::fill(hist.begin(), hist.end(), 0);
+            int64_t chunks = 0;
+            for (int64_t kz = 1; hi(kz) * corner < p_n && (kz + 1) * width < span; kz++) {
+                for (int64_t kx = 1; hi(kx) * corner < p_n && (kx + 1) * width < span; kx++) {
+                    uint32_t mask = 0u;
+                    for (int64_t qz = lo(kz); qz <= hi(kz); qz++) {
+                        for (int64_t qx = lo(kx); qx <= hi(kx); qx++) {
+                            mask |= present(p_s, size_t(qz * corner * p_n + qx * corner), floor);
+                        }
+                    }
+                    hist[size_t(__builtin_popcount(mask))]++;
+                    chunks++;
+                }
+            }
+            if (chunks < 4) {
+                break;
+            }
+            md += chunk_biome_row(floor, itos(lod), hist, chunks);
+        }
+    }
+    return md;
+}
+
 // The cells of a spot (slice pixel p_i): x m | altitude m | z m | the player flag that spawns above it.
 String spot_cells(const Sampled &p_s, size_t p_i, int p_n, double p_spacing_m, double p_voxel_m, const Vector2i &p_c) {
     const Vector2i64 c = slice_point(p_i, p_n, p_c);
@@ -513,6 +586,7 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
             String::num(us_per_point, 2));
     Array images;
     md += biome_section(table, s, n, p_out_dir, images) + String("\n");
+    md += chunk_biome_section(s, n, m, p_lods, param) + String("\n");
     md += border_section(table, s, n, spacing_m, ground.voxel_size, c) + String("\n");
     const String regions = region_section(table, s, n, spacing_m, ground.voxel_size, c);
     md += regions.is_empty() ? String() : regions + String("\n");

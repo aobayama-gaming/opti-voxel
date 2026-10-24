@@ -13,7 +13,9 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
   weight, the pick drift (the share of points whose pick at the coarsest modulated level differs: what the ground's
-  coarsest modulated octave reads vs the material), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
+  coarsest modulated octave reads vs the material), the biomes per chunk at each LOD (the biomes weighing more than 0 / 0.01 /
+  0.05 at the chunk's Λ_{L+3} points: what blending each biome's own cascade would run; LODs finer than the slice's
+  lattice - 3 get the per-point counts), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
   `biomes_pick.png` / `ground_height.png` / `field_*.png`, and `heights.f32` + `heights.json` for `tools/landforms`.
   Tune a table from it before any GPU run. To match a real heightmap: `uv run tools/landforms/match.py SITE TABLE --fit=3`
