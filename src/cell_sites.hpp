@@ -25,6 +25,11 @@ struct Site {
 // voxels. LOD 0 is the field itself; a coarser LOD extends its nearest lattice sample along its gradient (one cheap
 // evaluation, the octaves the LOD drops left out). Thread-safe.
 using FieldFn = std::function<ExactNoise::Float4(const VoxelPos &, int)>;
+// A FieldFn read at many points at once: r_out[i] = field(p_points[i], p_lods[i]), bit for bit (the walk asks for a
+// whole round of readings in one call: a GPU's batch, CascadePointsGPU::ground_field). Thread-safe.
+using FieldBatchFn = std::function<void(const VoxelPos *p_points, const int *p_lods, int p_count, ExactNoise::Float4 *r_out)>;
+// p_field point by point, over the worker pool (the pool rule of surface_sites).
+FieldBatchFn batch_of(const FieldFn &p_field);
 
 // The order of cells (and their sites): z, then y, then x.
 inline bool cell_order(const VoxelPos &p_a, const VoxelPos &p_b) {
@@ -74,8 +79,28 @@ void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, u
 // p_min_level keeps down to that level: a node it drops holds no site of a box walked from p_min_level (a node's verdict
 // is its centre's reading, whatever the box). Every node meeting the box when the walk would start at p_level or below.
 // Same pool rule as surface_sites.
-void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldFn &p_field, int p_level, int p_min_level,
+void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldBatchFn &p_field, int p_level, int p_min_level,
         std::vector<VoxelPos> &r_out);
+// surface_sites of many boxes at once, each walk its own (box, cells, salt, snap, start level): the same sites, appended to
+// each walk's out in cell order. The walks advance in rounds (a level, then each snap step) and a round reads the field
+// once for all of them (p_field, one call; a reading two walks share, an ancestor node of neighbouring tiles, is read
+// once): ~levels + SNAP_STEPS + 1 calls whatever the number of boxes, so a batched field (a GPU) pays its latency per
+// round, not per box. Pool rule of surface_sites (p_field's).
+struct SiteWalk {
+    VoxelBox box;
+    int64_t side = 0;
+    uint32_t salt = 0;
+    bool snap = true;
+    int min_level = 0;
+    std::vector<CellSite> *out = nullptr;
+};
+struct WalkStats {
+    int rounds = 0; // field calls
+    int64_t readings = 0; // asked by the walks
+    int64_t unique = 0; // read (the distinct (voxel, LOD) of each round)
+};
+void surface_sites_many(const SiteWalk *p_walks, size_t p_count, const FieldBatchFn &p_field, WalkStats *r_stats = nullptr);
+
 // The level surface_sites starts a box at: the coarsest whose nodes (p_side << level voxels) hold its extent.
 int walk_level(const VoxelBox &p_box, int64_t p_side);
 inline constexpr double SITE_SLACK = 0.25;

@@ -68,6 +68,10 @@ struct VoxelBox {
     bool contains(const VoxelPos &p_v) const {
         return valid && lo.x <= p_v.x && p_v.x <= hi.x && lo.y <= p_v.y && p_v.y <= hi.y && lo.z <= p_v.z && p_v.z <= hi.z;
     }
+    // The cube of side p_side whose index is p_index (in units of p_side): voxels p_index * p_side .. + p_side - 1.
+    static VoxelBox cube(const VoxelPos &p_index, int64_t p_side) {
+        return VoxelBox{ p_index * p_side, p_index * p_side + VoxelPos(p_side - 1, p_side - 1, p_side - 1), true };
+    }
     // The part of this box inside p_o (invalid if they don't meet).
     VoxelBox clipped(const VoxelBox &p_o) const {
         VoxelBox r;

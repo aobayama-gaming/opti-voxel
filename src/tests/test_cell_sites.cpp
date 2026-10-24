@@ -310,3 +310,61 @@ TEST_CASE("Cell sites: tiles walked from a box's level keep the box walk's sites
     }
     CHECK(sites > 100);
 }
+
+// Many boxes walked in lockstep (surface_sites_many) find each box's own sites, whatever walks share the rounds: site
+// tiles (snapped) and proxy tiles (unsnapped, another cell side and salt) side by side, an air box, a walk with no cell.
+// A round reads once what several walks ask (the tiles' shared ancestors), and the rounds don't grow with the boxes.
+TEST_CASE("Cell sites: boxes walked in lockstep keep each box's sites, in rounds shared by all of them") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    SDFCascade sdf;
+    sdf.configure(param, 18);
+    const FieldFn ground = [&](const VoxelPos &p_v, int p_lod) { return sdf.ground_field(p_v, p_lod); };
+    int calls = 0;
+    const FieldBatchFn counted = [&](const VoxelPos *p_points, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) {
+        calls++;
+        batch_of(ground)(p_points, p_lods, p_count, r_out);
+    };
+    const int64_t x0 = 250000, z0 = x0 / 3 + 40000;
+    const int64_t side = 100, tile = 8 * side;
+    const VoxelBox zone{ VoxelPos(x0 - 64 * tile, -(int64_t(1) << 20), z0 - 64 * tile), VoxelPos(x0 + 64 * tile, int64_t(1) << 20, z0 + 64 * tile), true };
+    const int level = walk_level(zone, side);
+    const VoxelPos t0(WorldCoord::floor_div(x0, tile) - 2, WorldCoord::floor_div(sdf.ground_y(x0, z0), tile) - 1, WorldCoord::floor_div(z0, tile) - 2);
+    std::vector<SiteWalk> walks;
+    std::vector<std::vector<CellSite>> got(64), want(64);
+    for (int64_t z = 0; z < 4; z++) {
+        for (int64_t y = 0; y < 3; y++) {
+            for (int64_t x = 0; x < 4; x++) {
+                const VoxelPos lo = (t0 + VoxelPos(x, y, z)) * tile;
+                const VoxelBox box{ lo, lo + VoxelPos(tile - 1, tile - 1, tile - 1), true };
+                const bool proxies = (x + y + z) % 3 == 0;
+                walks.push_back(SiteWalk{ box, proxies ? side / 2 : side, proxies ? SALT ^ 0x9999u : SALT, !proxies, level, &got[walks.size()] });
+            }
+        }
+    }
+    const VoxelPos sky = (t0 + VoxelPos(0, 40, 0)) * tile;
+    walks.push_back(SiteWalk{ VoxelBox{ sky, sky + VoxelPos(tile - 1, tile - 1, tile - 1), true }, side, SALT, true, level, &got[walks.size()] });
+    walks.push_back(SiteWalk{ walks[0].box, 0, SALT, true, level, &got[walks.size()] });
+    WalkStats stats;
+    surface_sites_many(walks.data(), walks.size(), counted, &stats);
+    int64_t sites = 0;
+    for (size_t w = 0; w < walks.size(); w++) {
+        const SiteWalk &s = walks[w];
+        surface_sites(s.box.lo, s.box.hi, s.side, s.salt, ground, want[w], s.snap, s.min_level);
+        std::vector<Site> expected;
+        for (const CellSite &cs : want[w]) {
+            expected.push_back(cs.site);
+        }
+        CAPTURE(w);
+        CHECK(same_sites(got[w], expected));
+        sites += int64_t(got[w].size());
+    }
+    CHECK(sites > 50);
+    CHECK(got[walks.size() - 2].empty());
+    CHECK(got[walks.size() - 1].empty());
+    // One call per round: the levels from the zone's down to the cells, then the snap's reads.
+    CHECK(calls == stats.rounds);
+    CHECK(stats.rounds <= level + 1 + SNAP_STEPS + 1);
+    CHECK(stats.unique < stats.readings);
+    MESSAGE(walks.size(), " walks: ", stats.rounds, " rounds, ", stats.readings, " readings asked, ", stats.unique, " read");
+}

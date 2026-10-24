@@ -163,6 +163,10 @@ public:
     using Inputs = std::vector<const SourceContent *>;
     // p_key's records. Thread-safe; from inside a pool task, hold an InlineParallelFor (the site walks).
     void content(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const;
+    // The contents of p_count walk keys (site and proxy tiles, SourceKey::walk) at once: content() of each, walked in
+    // lockstep (surface_sites_many with the scatter's field_batch: a round of readings for all of them). Thread rule of
+    // content().
+    void walk_tiles(const SourceKey *p_keys, size_t p_count, SourceContent *const *r_outs) const;
     // A blob tile's kept blobs (its own cells'), in (cell, material) order: what its records are made of.
     void blobs(const SourceKey &p_key, const Inputs &p_inputs, std::vector<MomentBlob> &r_out) const;
 
@@ -195,8 +199,6 @@ private:
     void proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const;
     // How far a far blob tile's region reaches past its box.
     int64_t proxy_grow(int p_layer) const;
-    // A walk's sites: a site tile's, or a proxy tile's (its own box, in proxy_zone).
-    void walk_tile(const SourceKey &p_key, SourceContent &r_out) const;
     // A part tile grows the sites of its input (LOD 0) or of its own walk (coarser): every record at LOD 0, the ones
     // listed at its LOD coarser.
     void part_tile(const SourceKey &p_key, const Inputs &p_inputs, SourceContent &r_out) const;
