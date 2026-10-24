@@ -53,7 +53,7 @@ var edits_count := 0
 var hud: Label = null
 var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
-var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD
+var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD; none: hidden
 var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera; F toggles it
 
 func _enter_tree() -> void:
@@ -165,6 +165,7 @@ func _ready():
 			add_child(overlay)
 		else:
 			_make_hud()
+			hud_visible = not "--overlay=none" in Presets.user_args()  # a clean screen; TAB shows the HUD
 	yaw = rotation.y
 	pitch = camera.rotation.x
 	_make_flashlight("--flashlight=1" in Presets.user_args())
@@ -178,7 +179,23 @@ func _ready():
 # `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD's pixel error
 # is in render pixels, so 0.5 draws the meshes of twice the error. FSR 2 needs `--render-thread safe`: on the separate
 # render thread Godot 4.6.3 exits silently while loading its shaders.
+# `--pixelate=N` (a fake-resolution look): the whole window (3D and HUD) renders at 1/N of its size and is blitted to
+# the screen N times larger with nearest filtering (plain pixel copies). With `--upscale=fsr2` the 3D renders at
+# render_scale of that: `--pixelate=2 --upscale=fsr2` draws the 3D at a quarter of the window per axis, FSR 2 brings it
+# to a half, then each pixel is doubled. The LOD reads the 3D render's size, so it follows.
 func _setup_upscaling() -> void:
+	var pixelate := 1
+	for a in Presets.user_args():
+		if a.begins_with("--pixelate="):
+			pixelate = maxi(a.trim_prefix("--pixelate=").to_int(), 1)
+	if pixelate > 1:
+		var window := get_window()
+		window.content_scale_mode = Window.CONTENT_SCALE_MODE_VIEWPORT
+		window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
+		window.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_INTEGER
+		var follow := func() -> void: window.content_scale_size = window.size / pixelate
+		follow.call()
+		window.size_changed.connect(follow)
 	var modes := {
 		"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
 		"fsr1": Viewport.SCALING_3D_MODE_FSR,

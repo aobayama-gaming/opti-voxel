@@ -101,6 +101,9 @@ func _setting_lines() -> String:
 		res_text += " · %s from %d%%" % [upscalers[vp.scaling_3d_mode], roundi(vp.scaling_3d_scale * 100.0)]
 	elif not is_equal_approx(vp.scaling_3d_scale, 1.0):
 		res_text += " · 3D at %d%%" % roundi(vp.scaling_3d_scale * 100.0)
+	var window := get_window()
+	if window.content_scale_mode == Window.CONTENT_SCALE_MODE_VIEWPORT and window.content_scale_size.y > 0:
+		res_text += " · pixels x%d" % roundi(float(res.y) / window.content_scale_size.y)
 	var vs: float = terrain.voxel_size
 	var lods: int = terrain.lod_numbers
 	var span_m := float(ID_VOXELS) * pow(2.0, lods) * vs
