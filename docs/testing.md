@@ -68,7 +68,19 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   draws how the engine is built, without timings: `engine_structure.html`, per thread the stages nested in the stage
   that runs them in execution order, how often each runs, the hand-offs as arrows, and per stage its code (found by
   scanning `src/` for the trace points: file:line, function, the comments there and on its declaration);
-  `engine_structure.md`, the same tree as text to diff between runs, plus the trace points no run reached. A new system gets a span where its work runs and a
+  `engine_structure.md`, the same tree as text to diff between runs, plus the trace points no run reached.
+  `tools/engine_flow.py [<run>]` (run by bench.sh; needs libclang's Python bindings, `pip install --user clang`) reads
+  what each function does from the code: libclang parses every `src/` file with the build's flags and keeps, per
+  function, its loops and branches as written, its calls into `src/` in order (a virtual call lists its overrides),
+  the work it hands to another thread (a function or lambda passed to `call_on_render_thread`, a readback, `parallel_for`,
+  the stream executor, a thread start) and its RenderingDevice work (dispatches with the variables their sizes come
+  from, uploads, copies, readbacks). `engine_flow.html` starts at each thread's entry (`_process`, the discoverer's
+  loop, the render-thread callbacks...) and unfolds calls in place, a click shows the code and its callers;
+  `engine_flow.md` is every entry's outline as text. A trace point holds the rest of its block, with the run's counts
+  (per frame, or per call of the span around it) and recorded sizes (chunks per batch). Short helpers (under 4 lines,
+  nothing inside), `src/trace.*`, `src/ov/` and operators are left out; statements written by a macro
+  (`OV_ERR_FAIL_COND`) keep only their condition's calls. Clang reads our `namespace Material` under another name of the
+  same length: with `using namespace godot` it calls `Material::X` ambiguous, which GCC accepts. A new system gets a span where its work runs and a
   flow where it hands work to another thread; `_process` sections are spans through `Section`. Off, a span costs one
   atomic load.
 - `tools/cpu_profile.sh [--no-build] [--sampler=perf|eu-stack|auto] -- <bench.sh args>`: builds with

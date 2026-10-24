@@ -128,7 +128,9 @@ Details and flags: `docs/testing.md`.
   `tools/bench_ab.sh` / `bench_compare.sh` give perf tables. Correctness runs never use `--cool=1`.
 - `bench.sh --trace=1` maps the engine: `<run>/engine_structure.html` (`tools/engine_structure.py`: how it is built,
   which stage runs inside which on each thread, the hand-offs, each stage's code), `<run>/engine_map.html`
-  (`tools/engine_map.py`: which thread runs what, ms per frame, hand-offs between threads) and `trace.json` (the timeline, ui.perfetto.dev). New threaded or GPU
+  (`tools/engine_map.py`: which thread runs what, ms per frame, hand-offs between threads), `<run>/engine_flow.html`
+  (`tools/engine_flow.py`, also without a run: what each function does, read by libclang, loops / calls / hand-offs / GPU
+  dispatches, unfolded from each thread's entry) and `trace.json` (the timeline, ui.perfetto.dev). New threaded or GPU
   work gets an `OV_TRACE` span and its hand-offs a `Trace::flow` (`src/trace.hpp`).
 
 | After touching | Run |
