@@ -2,10 +2,12 @@
 // devirtualization warned array-bounds on it (-Werror).
 #include "executor.hpp"
 
+#include "../trace.hpp"
+
 namespace ov {
 
-ThreadWorker::ThreadWorker(WorkerLoop &p_loop) :
-        loop(p_loop), thread(&ThreadWorker::run, this) {}
+ThreadWorker::ThreadWorker(WorkerLoop &p_loop, const char *p_name) :
+        loop(p_loop), name(p_name), thread(&ThreadWorker::run, this) {}
 
 ThreadWorker::~ThreadWorker() {
     stop();
@@ -31,6 +33,7 @@ void ThreadWorker::stop() {
 }
 
 void ThreadWorker::run() {
+    Trace::name_thread(name.c_str());
     loop.enter();
     for (;;) {
         {

@@ -501,6 +501,7 @@ void GPUMesher::release_chunk(const ChunkOutput &p_chunk) {
     const ChunkRids freed = rids ? *rids : ChunkRids();
     chunk_rids.erase(p_chunk.handle);
     mutex->unlock();
+    ERR_FAIL_NULL_MSG(rids, "GPUMesher: a chunk released twice (its handle is unknown).");
     RenderingServer *rs = RenderingServer::get_singleton();
     if (freed.instance.is_valid()) {
         rs->free_rid(freed.instance);

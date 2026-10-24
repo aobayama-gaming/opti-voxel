@@ -1,5 +1,7 @@
 #include "climate.hpp"
 
+#include "ov/math.hpp"
+
 #include <algorithm>
 #include <cmath>
 

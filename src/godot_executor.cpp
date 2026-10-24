@@ -46,6 +46,6 @@ void GodotExecutor::parallel_for(uint32_t p_count, const char *p_name, void (*p_
     pool->wait_for_group_task_completion(pool->add_native_group_task(p_fn, p_ctx, int(p_count), -1, true, p_name));
 }
 
-std::unique_ptr<ov::Worker> GodotExecutor::start_worker(const char *, ov::WorkerLoop &p_loop) {
-    return std::make_unique<ov::ThreadWorker>(p_loop);
+std::unique_ptr<ov::Worker> GodotExecutor::start_worker(const char *p_name, ov::WorkerLoop &p_loop) {
+    return std::make_unique<ov::ThreadWorker>(p_loop, p_name);
 }

@@ -94,7 +94,7 @@ TEST_CASE("ov::InlineExecutor: a worker enters at once, steps after a wake until
 TEST_CASE("ov::ThreadWorker: enter and exit on its thread, steps after each wake") {
     CountingLoop loop;
     {
-        std::unique_ptr<ov::Worker> w = std::make_unique<ov::ThreadWorker>(loop);
+        std::unique_ptr<ov::Worker> w = std::make_unique<ov::ThreadWorker>(loop, "test_worker");
         for (int i = 0; i < 200 && loop.entered.load() == 0; i++) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

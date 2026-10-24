@@ -57,7 +57,8 @@ to every change, and a reviewer may reject a PR on any of them.
   to engine types happen at engine call sites (`godot_conv.hpp`), never inside the core.
 - Threads only through `ov::executor()` (`ov/executor.hpp`: `submit` / `wait`, `parallel_for`, a
   `WorkerLoop` for a long-lived loop): no `Thread`, `std::thread`, `std::async` or `WorkerThreadPool`
-  outside `godot_executor` (the inline backend must stay possible: a threads=no build).
+  outside the executors (`godot_executor`, `ov::ThreadWorker`; the inline backend must stay possible: a
+  threads=no build).
 - One source of truth for every constant and layout. Page layout lives in `page_format.hpp`, the
   integer frame in `world_coord.hpp` / `gpu_frame.hpp`. Extend those; never retype a literal (64,
   14 bits, byte offsets, binding numbers) on the C++, GLSL or shader side. GLSL gets C++ constants

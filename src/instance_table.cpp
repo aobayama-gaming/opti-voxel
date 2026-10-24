@@ -532,7 +532,7 @@ std::shared_ptr<const InstanceSnapshot> BaseRebuild::edit(const InstanceSnapshot
 void BaseRebuild::start(std::shared_ptr<const InstanceSnapshot> p_from) {
     cancel();
     from = std::move(p_from);
-    task = ov::executor().submit([this] { layer = build_base(from->records, from->param, from->max_lod); }, ov::Priority::LOW, "BaseRebuild");
+    task = ov::executor().submit([this] { layer = build_base(from->records, from->param, from->max_lod); }, ov::Priority::HIGH, "BaseRebuild");
 }
 
 bool BaseRebuild::ready() const {

@@ -151,7 +151,6 @@ void ChunkDiscoverer::stop() {
 }
 
 void ChunkDiscoverer::enter() {
-    Trace::name_thread("discoverer");
     has_scanned = false;
     previous_scan = LODHashSet();
 

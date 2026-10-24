@@ -4,6 +4,7 @@
 #include "ov/containers.hpp"
 #include "ov/format.hpp"
 #include "ov/log.hpp"
+#include "ov/math.hpp"
 #include "ov/murmur3.hpp"
 #include "ov/str.hpp"
 #include "ov/types.hpp"

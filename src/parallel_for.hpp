@@ -19,7 +19,7 @@ void parallel_for(uint32_t p_count, const char *p_name, F &&p_fn) {
     }
     Trace::Scope span("pool", p_name);
     span.set_arg(p_count);
-    if (parallel_for_inline) {
+    if (parallel_for_inline || p_count == 1) {
         for (uint32_t i = 0; i < p_count; i++) {
             p_fn(i);
         }

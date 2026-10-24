@@ -1,5 +1,7 @@
 #include "climate.hpp"
 
+#include "ov/math.hpp"
+
 #include <algorithm>
 
 // The climate's Cascade::Modulation (combined_spec): per modulated band (group, level), how each biome shapes it, on

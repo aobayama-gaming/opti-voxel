@@ -2,14 +2,17 @@
 
 // The core's one threading interface: one-shot tasks, data-parallel loops and long-lived workers. The engine installs
 // its backend (register_types: Godot's worker pool, godot_executor.hpp); the default runs everything on the calling
-// thread (InlineExecutor: tests, a threads=no web build). The core never starts a thread itself.
+// thread (InlineExecutor: tests, a threads=no web build). Core code never starts a thread itself: only the backends
+// do (ThreadWorker, a threaded backend's workers).
 
+#include <algorithm>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -67,7 +70,8 @@ public:
 // (executor.cpp).
 class ThreadWorker final : public Worker {
 public:
-    explicit ThreadWorker(WorkerLoop &p_loop);
+    // p_name: the thread's name in traces.
+    ThreadWorker(WorkerLoop &p_loop, const char *p_name);
     ~ThreadWorker() override;
     void wake() override;
     void stop() override;
@@ -76,6 +80,7 @@ private:
     void run();
 
     WorkerLoop &loop;
+    std::string name;
     std::mutex mutex;
     std::condition_variable signal;
     bool woken = false;
@@ -151,7 +156,15 @@ public:
             now = workers;
         }
         for (InlineWorker *w : now) {
-            w->pump();
+            // A step may stop (and free) another worker: step only those still registered.
+            bool live = false;
+            {
+                const std::lock_guard<std::mutex> lock(mutex);
+                live = std::find(workers.begin(), workers.end(), w) != workers.end();
+            }
+            if (live) {
+                w->pump();
+            }
         }
     }
 

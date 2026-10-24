@@ -65,7 +65,7 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
 - **Host services**: `ov/log.hpp` (`OV_LOG`, the level `DebugLog::level` aliases) and `ov/clock.hpp` (`now_usec`,
   Godot's ticks installed).
 
-`pending_files` is empty: 50 files compile with no godot include path.
+`pending_files` is empty: 51 files compile with no godot include path.
 
 ## Next steps, in order
 

@@ -64,7 +64,6 @@ bool FieldGPU::ground_field(const VoxelPos *p_voxels, const int *p_lods, int p_c
 }
 
 void FieldGPU::enter() {
-    Trace::name_thread("field_gpu");
     const uint64_t t0 = now_usec();
     uint64_t scratch_a = 0, scratch_b = 0;
     CascadeGLSL::scratch_bytes(sdf, 1, 1, scratch_a, scratch_b);

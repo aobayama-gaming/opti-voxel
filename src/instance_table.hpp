@@ -134,7 +134,8 @@ std::shared_ptr<const InstanceSnapshot> edit_snapshot(const InstanceSnapshot &p_
         const std::vector<uint32_t> &p_changed, uint32_t p_version);
 
 // When the base is rebuilt: edit() is edit_snapshot plus, past `rebase` edited ids, a new base built in one
-// background task (the core's executor, low priority) over the records as they are then (copy on write keeps them unchanged), while later edits
+// background task (the core's executor, high priority: the stream's drain tasks fill the low-priority threads, and
+// an edit past hard_overlay waits for it) over the records as they are then (copy on write keeps them unchanged), while later edits
 // grow the overlay and are logged; once ready(), take() gives the records now over that base plus an overlay of the
 // ids changed since: the same lists as a whole new base. Main thread only, except the task itself.
 class BaseRebuild {

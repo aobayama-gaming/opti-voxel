@@ -30,6 +30,7 @@ core_files=(
     src/ov/clock.hpp
     src/ov/executor.hpp
     src/ov/executor.cpp
+    src/ov/math.hpp
     src/world_coord.hpp
     src/subcube.hpp
     src/latency_hist.hpp

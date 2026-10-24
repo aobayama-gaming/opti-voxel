@@ -3,6 +3,7 @@
 #include "base_surface.hpp"
 #include "chunk_math.hpp"
 #include "exact_noise.hpp"
+#include "ov/math.hpp"
 #include "ov/str.hpp"
 #include "ov/types.hpp"
 
