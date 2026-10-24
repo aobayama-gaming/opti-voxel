@@ -54,7 +54,7 @@ var hud: Label = null
 var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD; none: hidden
-var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera; F toggles it
+var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera, with a wide flood; F toggles it
 var pixelate := 1           # --pixelate=N: the 3D drawn in N x N blocks, under a full-resolution HUD
 
 func _enter_tree() -> void:
@@ -251,13 +251,21 @@ func _make_flashlight(p_on: bool) -> void:
 	flashlight = SpotLight3D.new()
 	flashlight.position = Vector3(0.25, -0.2, 0.0)
 	flashlight.light_color = Color(1.0, 0.92, 0.8)
-	flashlight.light_energy = 6.0
-	flashlight.spot_range = 60.0
-	flashlight.spot_angle = 28.0
+	flashlight.light_energy = 8.0
+	flashlight.spot_range = 80.0
+	flashlight.spot_angle = 18.0
 	flashlight.spot_attenuation = 1.2
 	flashlight.shadow_enabled = true
 	flashlight.visible = p_on
 	camera.add_child(flashlight)
+	# The flood around the beam: wide, dimmer, shorter, no shadows (a second shadowed spot doubles the shadow cost).
+	var flood := SpotLight3D.new()
+	flood.light_color = flashlight.light_color
+	flood.light_energy = 2.0
+	flood.spot_range = 35.0
+	flood.spot_angle = 60.0
+	flood.spot_attenuation = 2.0
+	flashlight.add_child(flood)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
