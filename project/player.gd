@@ -36,9 +36,13 @@ const FLY_RATE := 1.0  # altitudes per second
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
 # of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
 # by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press
-# (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release. Both only act while the mouse is captured. They use VoxelTerrain.add_instance /
+# (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release (`--left_click=tube`;
+# the default left tool is the spray: held, it subtracts a --spray_radius sphere where the view hits, every SPRAY_PERIOD
+# seconds). They only act while the mouse is captured. They use VoxelTerrain.add_instance /
 # move_instance / remove_instance.
-const CAPSULE_TYPE := 1        # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
+const SPHERE_TYPE := 0         # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
+const CAPSULE_TYPE := 1
+const SPRAY_PERIOD := 0.1      # seconds between two spray spheres
 const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
@@ -47,6 +51,9 @@ var drag_radius := 1.0      # --drag_radius=M: the tube's radius (1 m = 2 m wide
 var dig_k := 0.3            # smooth radius (metres)
 var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid tube); --drag_op=subtract|union
 var drag_active := false
+var left_tube := false      # --left_click=tube: left click drags the tube instead of spraying
+var spray_radius := 0.05    # --spray_radius=M
+var spray_wait := 0.0       # seconds to the next spray sphere
 var drag_id := -1
 var drag_pose := []         # [anchor voxel Array, rotation]: the tube's last placed pose
 var edits_count := 0
@@ -114,6 +121,10 @@ func _enter_tree() -> void:
 			drag_op = 2
 		if a == "--drag_op=union":
 			drag_op = 0
+		if a == "--left_click=tube":
+			left_tube = true
+		if a.begins_with("--spray_radius="):
+			spray_radius = a.trim_prefix("--spray_radius=").to_float()
 		if a.begins_with("--drag_radius="):
 			drag_radius = a.trim_prefix("--drag_radius=").to_float()
 		if a.begins_with("--instances=") and terrain:
@@ -338,6 +349,7 @@ func _input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed and captured:
 				drag_active = true
+				spray_wait = 0.0
 			elif not event.pressed:
 				_end_drag()
 
@@ -411,8 +423,40 @@ func _dig() -> void:
 	if terrain.add_instance(CAPSULE_TYPE, p[0], p[1], p[2], _basis9(fwd), params, 3, dig_k / vt) >= 0:
 		edits_count += 1
 
-func _update_drag() -> void:
+# The surface the view hits, to a centimetre: the spray's spheres are a few cm, _raymarch stops up to 0.5 m short.
+func _surface_hit(terrain: Node, origin: Vector3, dir: Vector3) -> Variant:
+	var t := 0.0
+	while t < 200.0:
+		var d: float = terrain.get_sdf_at(origin + dir * t)
+		if d <= 0.0:
+			return origin + dir * t
+		t += maxf(d * 0.5, 0.01)
+	return null
+
+func _spray(delta: float) -> void:
+	spray_wait -= delta
+	if spray_wait > 0.0:
+		return
+	spray_wait += SPRAY_PERIOD
+	var terrain := _terrain()
+	if terrain == null:
+		return
+	var hit = _surface_hit(terrain, camera.global_position, -camera.global_transform.basis.z)
+	if hit == null:
+		return
+	var vt: float = terrain.voxel_size
+	var p := _voxel_of(terrain, hit)
+	var rot := PackedFloat32Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
+	if terrain.add_instance(SPHERE_TYPE, p[0], p[1], p[2], rot, PackedFloat32Array([spray_radius / vt]), 2, 0.0) >= 0:
+		edits_count += 1
+	else:
+		drag_active = false  # refused (the table is full): stop until the next press
+
+func _update_drag(delta: float) -> void:
 	if not drag_active:
+		return
+	if not left_tube:
+		_spray(delta)
 		return
 	var terrain := _terrain()
 	if terrain == null:
@@ -479,7 +523,7 @@ last edit %d chunks, apply %.2f ms" % [
 		int(edits.get("remesh_last", 0)), apply_ms]
 
 func _process(delta: float) -> void:
-	_update_drag()
+	_update_drag(delta)
 	_update_hud(delta)
 	if clip_terrain:
 		Presets.clip_planes(camera, clip_terrain, base_near)
