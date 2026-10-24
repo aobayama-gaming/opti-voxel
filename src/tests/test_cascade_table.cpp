@@ -1,12 +1,15 @@
 #include "test_common.hpp"
 
+#include "cascade_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstring>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -791,4 +794,76 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
     CHECK(edits >= 3);
     CHECK(folded > 500);
     CHECK(int64_t(sdf.get_gpu_table()->get_stats()["stream"].operator Dictionary()["lists_missing"]) == 0);
+}
+
+// The GLSL 4.50 words (spec 3.6) a shader text can't name a variable with and the cascade's shaders never use as
+// keywords: the reserved ones and the qualifiers a short local name could hit. glslang refuses them at pipeline
+// creation, and the cascade then falls back to the bare variant without a fold: the fold flag was named `active`.
+static std::vector<std::string> glsl_reserved_words_used(const String &p_code) {
+    static const std::set<std::string> RESERVED = { "common", "partition", "active", "asm", "class", "union", "enum",
+        "typedef", "template", "this", "resource", "goto", "inline", "noinline", "public", "static", "extern",
+        "external", "interface", "long", "short", "half", "fixed", "unsigned", "superp", "input", "output", "hvec2",
+        "hvec3", "hvec4", "fvec2", "fvec3", "fvec4", "filter", "sizeof", "cast", "namespace", "using",
+        "sampler3DRect", "sample", "patch", "subroutine", "flat", "smooth", "noperspective", "invariant", "precision",
+        "lowp", "mediump", "highp", "centroid", "attribute", "varying", "coherent", "volatile" };
+    std::string code = p_code.utf8().get_data();
+    // Comments out (an unterminated one runs to the end).
+    for (size_t i = code.find('/'); i != std::string::npos && i + 1 < code.size(); i = code.find('/', i)) {
+        if (code[i + 1] != '/' && code[i + 1] != '*') {
+            i++;
+            continue;
+        }
+        const bool block = code[i + 1] == '*';
+        const size_t end = block ? code.find("*/", i + 2) : code.find('\n', i);
+        code.erase(i, end == std::string::npos ? std::string::npos : end - i + (block ? 2 : 0));
+    }
+    std::vector<std::string> used;
+    std::string word;
+    for (size_t i = 0; i <= code.size(); i++) {
+        const char ch = i < code.size() ? code[i] : ' ';
+        if (std::isalnum(uint8_t(ch)) || ch == '_') {
+            word += ch;
+            continue;
+        }
+        if (RESERVED.count(word)) {
+            used.push_back(word);
+        }
+        word.clear();
+    }
+    return used;
+}
+
+// The fold variant's workgroups are cubes of samples with a shared list slice and barriers: every placeholder of the
+// template is filled (the fold's return after the barriers too), its cube corners are the template's point (one text,
+// twice), and the bare variants keep their returns and no barrier (their text is pinned in test_climate_shape.cpp).
+// Without whole cubes (p_cubes false) the fold runs per sample, with no barrier.
+TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants keep their text") {
+    ScatteredCascade t(64);
+    const String point = "    p.lo = m_lo;\n    p.hi = m_hi;\n    i64_add(p.lo, p.hi, ivec3(i));\n    i64_shl(p.lo, p.hi, m);\n    p.frac = vec3(0.0);\n";
+    for (const bool debug : { false, true }) {
+        for (const bool fields : { false, true }) {
+            for (const bool material : { false, true }) {
+                const String fold = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields);
+                const String sample = CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, fields, false);
+                const String bare = CascadeGLSL::level_shader(&t.sdf, debug, false, false, material, fields);
+                for (const String &code : { fold, sample, bare }) {
+                    CHECK(!code.contains("/*"));
+                    CHECK(glsl_reserved_words_used(code) == std::vector<std::string>());
+                    CHECK(code.contains(vformat("local_size_x = %d,", CascadeGLSL::LOCAL_SIZE)));
+                }
+                CHECK(fold.contains("if (!sample_live) {"));
+                CHECK(fold.contains(vformat("shared uint s_fold_word[%d];", CascadeGLSL::LOCAL_SIZE)));
+                CHECK(fold.contains("arch_meets_box(group_lo, group_hi, "));
+                CHECK(fold.count(point) == 2);
+                CHECK(bare.count(point) == 1);
+                CHECK(sample.contains("arch_fold(u * s, p, lod, "));
+                for (const String &code : { sample, bare }) {
+                    CHECK(!code.contains("bool sample_live"));
+                    CHECK(!code.contains("barrier()"));
+                }
+            }
+        }
+    }
+    CHECK(glsl_reserved_words_used("float active; /* sample */ int x; // patch\nuint flat;") == std::vector<std::string>{ "active", "flat" });
+    CHECK(glsl_reserved_words_used("uint ok; /* unterminated sample") == std::vector<std::string>());
 }

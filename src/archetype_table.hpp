@@ -239,7 +239,12 @@ String generate_library_glsl(const DefLibrary &p_library);
 // over the chunk's list: g_sdf_chunk, sdf_records, sdf_list from GpuTable::glsl_buffers, a list word being the record
 // id | its palette index << SDFGpuTable::LIST_ID_BITS; touched is set when an instance passes its box test, material
 // to the palette index of a record that wins, unless it is ChunkPalette::INHERIT_INDEX) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
-String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize);
+// p_group_size 0: each invocation walks the whole list. Otherwise (a multiple of 32, the shader's local size) it is
+// `arch_fold(vec4 r, WorldPos p, WorldPos group_lo, WorldPos group_hi, int lod, ...)`, called by every invocation of the
+// workgroup in uniform control flow, [group_lo, group_hi] holding all their p: the workgroup tests the list p_group_size
+// words at a time against that box (arch_meets_box) and each invocation folds the words that pass, in list order, with
+// the same loop body: the same bits.
+String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize, uint32_t p_group_size = 0);
 
 // Bytes of one DefRecord in the GPU buffer (10 x vec4, all 16-byte aligned).
 inline constexpr uint32_t RECORD_BYTES = 160;
@@ -252,6 +257,10 @@ int influence_margin(const TableRecord &p_record, int p_lod);
 // The locality rule: whether p_pos is inside p_record's influence box at LOD p_lod. The CPU mirror of
 // arch_in_box (same sat_diff, same integer branch).
 bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod);
+// Whether the influence box at p_lod may hold a point of [p_lo, p_hi] (the CPU mirror of arch_meets_box: the same
+// sat_diff, so it saturates where arch_in_box does). sat_diff keeps the order, so a point inside a box it rejects is
+// rejected by in_influence_box too: a workgroup's samples skip only records none of them would fold.
+bool in_influence_cube(const TableRecord &p_record, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod);
 
 // Whether record c's side wins combine4(r, c) (the sample takes the record's material): the side min / max picks,
 // and for the smooth operators the side their hard min picks. The same comparisons as the operators, so the

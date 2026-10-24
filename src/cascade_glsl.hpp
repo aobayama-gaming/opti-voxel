@@ -44,6 +44,10 @@ static constexpr uint32_t BAND_BYTES = 64;
 static constexpr int BAND_ENTRIES = Cascade::MAX_LEVEL + 1;
 static constexpr uint32_t PUSH_BYTES = 32;
 static constexpr uint32_t LOCAL_SIZE = 64;
+// The fold variant's workgroup: a cube of FOLD_CUBE^3 samples of level 0 (given a chunk size that is a multiple of it,
+// else the fold runs per sample), the box arch_fold tests the chunk's list against once per workgroup.
+static constexpr uint32_t FOLD_CUBE = 4;
+static_assert(FOLD_CUBE * FOLD_CUBE * FOLD_CUBE == LOCAL_SIZE, "CascadeGLSL: a fold workgroup is one cube of samples.");
 // The instance table's buffers in the level shader (after the cascade's own bindings 0-6).
 static constexpr int TABLE_RECORD_BINDING = 7;
 static constexpr int TABLE_LIST_BINDING = 8;
@@ -73,12 +77,14 @@ Cascade::FieldRange field_range(const SDFBase *p_sdf, bool p_points);
 
 // The level pass compute shader (one source for every level) for p_sdf's cascade; p_debug: the variant
 // whose level 0 also stores its channels in debug_channels; p_points: point items; p_fold: level 0 folds the
-// chunks' instance lists (cascade_sample_sdf). Without, it is the bare cascade_terrain_sdf: the same bits as the
-// fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
+// chunks' instance lists (cascade_sample_sdf), its workgroups cubes of FOLD_CUBE^3 samples (level 0 only; p_cubes false,
+// for a chunk size that is not a multiple of FOLD_CUBE: per sample, the chunk's own workgroups). Without, it
+// is the bare cascade_terrain_sdf: the same bits as the fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
 // (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING; with ground materials
 // (ground_materials), for every chunk, a ground sample's being cascade_ground_material's (its biome's).
 // p_fields false: the ground alone (a spec with fields: the variant for the levels below its climate floor).
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_fields = true);
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_fields = true,
+        bool p_cubes = true);
 
 // The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
 ChunkParam point_param(const ChunkParam &p_param);

@@ -18,3 +18,20 @@ The numbers perf PRs are measured against (`tools/bench_ab.sh`, `bench.sh --prof
   Turning: geometry flat, the frames over budget are the mesher's batches. The pre-pass can't simply go:
   without it SSAO / SSIL lose their normals and shadowed surfaces turn black.
   Never build while a bench runs (thermals, see `docs/gotchas.md`).
+- **Fold culled per 4x4x4 cube** (`docs/archetypes.md`, 1280x720, `bench_ab.sh`, 2 runs per side, the same bits):
+
+  | forest5cm | before | after | |
+  |---|---|---|---|
+  | fly out, frame p50 / p99 (ms) | 37.0 / 71.0 | 19.9 / 49.5 | -46% / -30% |
+  | fly back, frame p50 / p99 (ms) | 24.4 / 108 | 22.2 / 57.2 | -9% / -47% |
+  | settle after the return (ms) | 1,680 | 847 | -50% |
+  | load: time / frame p50 / p95 (ms) | 3,057 / 30.7 / 62.0 | 2,667 / 25.0 / 51.7 | -13% / -18% / -17% |
+  | mesher GPU per batch, fly (ms; SDF pass) | 7.11 (6.20) | 5.50 (4.59) | -23% (-26%) |
+  | steady frame p50 / render GPU p50, fly (ms) | 20.4 / 20.4 | 21.0 / 21.0 | +3% |
+
+  SDF pass per batch by list words (fly, us): 128-255 2,680 -> 2,390; 512-1023 6,040 -> 5,090; 2-4k 9,810 ->
+  6,350; 4-8k 11,730 -> 6,230; 8-16k 16,660 -> 8,400; 16-32k 23,800 -> 10,480; below 128 words unchanged (the slice
+  barriers cost what the cull saves). GpuCostModel `us_per_word` 1.24-1.41 -> 0.59-0.63 (clamp 1/64-64), list share
+  per LOD unchanged. The default bench (no instances) is unchanged within noise (SDF pass 1.04-1.09 ms both).
+  **Now the bottleneck:** the render GPU (steady 17.5-21 ms in the forest: the frame is the render's), and in the
+  mesher a long list still costs ~6 ms of SDF pass, now in the survivors' evaluations rather than the box tests.

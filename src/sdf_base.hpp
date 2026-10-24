@@ -168,9 +168,12 @@ public:
     // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
     virtual String get_glsl_code() const = 0;
     // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
-    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material, out float skirt_extra)`
-    // (material: the winning record's palette index, 0 = ground; skirt_extra: metres added to the sample's skirt depth).
-    virtual String get_sample_fold_glsl() const = 0;
+    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPos group_hi, uint chunk, out uint
+    // material, out float skirt_extra)` (material: the winning record's palette index, 0 = ground; skirt_extra: metres
+    // added to the sample's skirt depth), called by every invocation of a p_group_size workgroup together (it has
+    // barriers), [group_lo, group_hi] holding the workgroup's points; p_group_size 0: per sample (no barrier, the group
+    // ignored).
+    virtual String get_sample_fold_glsl(uint32_t p_group_size) const = 0;
     // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes' fields variant
     // splices after its channel code, defining `uint cascade_ground_material(Ch ch, WorldPos p)`, the palette index of a
     // sample no record colours (ch: its channels on Λ_L, the fields carried; p: its absolute point). Empty otherwise.
