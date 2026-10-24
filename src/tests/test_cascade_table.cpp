@@ -1,5 +1,6 @@
 #include "test_common.hpp"
 
+#include "cascade_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
@@ -791,4 +792,24 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
     CHECK(edits >= 3);
     CHECK(folded > 500);
     CHECK(int64_t(sdf.get_gpu_table()->get_stats()["stream"].operator Dictionary()["lists_missing"]) == 0);
+}
+
+// The fold variant's workgroups are cubes of samples with a shared list slice and barriers: every placeholder of the
+// template is filled (the fold's return after the barriers too), and the bare variants keep their returns and no
+// barrier (their text is pinned in test_climate_shape.cpp).
+TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants keep their text") {
+    ScatteredCascade t(64);
+    for (const bool debug : { false, true }) {
+        for (const bool fields : { false, true }) {
+            const String fold = CascadeGLSL::level_shader(&t.sdf, debug, false, true, true, fields);
+            const String bare = CascadeGLSL::level_shader(&t.sdf, debug, false, false, true, fields);
+            CHECK(!fold.contains("/*"));
+            CHECK(!bare.contains("/*"));
+            CHECK(fold.contains("if (!active) {"));
+            CHECK(fold.contains(vformat("shared uint s_fold_word[%d];", CascadeGLSL::LOCAL_SIZE)));
+            CHECK(fold.contains("arch_meets_box(group_lo, group_hi, "));
+            CHECK(!bare.contains("bool active"));
+            CHECK(!bare.contains("barrier()"));
+        }
+    }
 }

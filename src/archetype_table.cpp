@@ -144,15 +144,20 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
     set_band(r_record, p_def, p_band, p_rule);
 }
 
-bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {
+bool in_influence_cube(const TableRecord &p_record, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod) {
     const int m = influence_margin(p_record, p_lod);
     for (int a = 0; a < 3; a++) {
-        const int64_t d = WorldCoord::sat_diff(p_pos.voxel[a], p_record.anchor[a], INPUT_LIMIT);
-        if (d < int64_t(p_record.box_lo[a]) - m || d > int64_t(p_record.box_hi[a]) + m) {
+        const int64_t dlo = WorldCoord::sat_diff(p_lo[a], p_record.anchor[a], INPUT_LIMIT);
+        const int64_t dhi = WorldCoord::sat_diff(p_hi[a], p_record.anchor[a], INPUT_LIMIT);
+        if (dhi < int64_t(p_record.box_lo[a]) - m || dlo > int64_t(p_record.box_hi[a]) + m) {
             return false;
         }
     }
     return true;
+}
+
+bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {
+    return in_influence_cube(p_record, p_pos.voxel, p_pos.voxel, p_lod);
 }
 
 void encode_record(uint8_t *r_slot, const TableRecord &p_record) {
@@ -324,15 +329,25 @@ struct DefRecord {
 };
 )glsl";
 
-// arch_in_box / arch_smooth_min / arch_smooth_max / arch_combine: the GPU mirror of influence_margin,
-// in_influence_box and combine4. Spliced with the terrain (get_glsl_code), after the noise.
+// arch_margin / arch_meets_box / arch_in_box / arch_smooth_min / arch_smooth_max / arch_combine: the GPU mirror of
+// influence_margin, in_influence_cube, in_influence_box and combine4. Spliced with the terrain (get_glsl_code), after the noise.
 static const char GLSL_TABLE_FOLD[] = R"glsl(
 
-bool arch_in_box(WorldPos p, DefRecord rec, int lod) {
-    ivec3 d = sat_diff(p, rec.anchor_lo.xyz, rec.anchor_hi.xyz, LIMIT);
+int arch_margin(DefRecord rec, int lod) {
     precise float mf = min(uintBitsToFloat(rec.head.z) + uintBitsToFloat(rec.box_lo.w) * exact_pow2(lod), float(LIMIT));
-    int m = int(ceil(mf)) + 2;
-    return all(greaterThanEqual(d, rec.box_lo.xyz - ivec3(m))) && all(lessThanEqual(d, rec.box_hi.xyz + ivec3(m)));
+    return int(ceil(mf)) + 2;
+}
+
+// in_influence_cube: whether the influence box may hold a point of [lo, hi].
+bool arch_meets_box(WorldPos lo, WorldPos hi, DefRecord rec, int lod) {
+    ivec3 dlo = sat_diff(lo, rec.anchor_lo.xyz, rec.anchor_hi.xyz, LIMIT);
+    ivec3 dhi = sat_diff(hi, rec.anchor_lo.xyz, rec.anchor_hi.xyz, LIMIT);
+    int m = arch_margin(rec, lod);
+    return all(greaterThanEqual(dhi, rec.box_lo.xyz - ivec3(m))) && all(lessThanEqual(dlo, rec.box_hi.xyz + ivec3(m)));
+}
+
+bool arch_in_box(WorldPos p, DefRecord rec, int lod) {
+    return arch_meets_box(p, p, rec, lod);
 }
 
 vec4 arch_smooth_min(vec4 a, vec4 b, float k, float inv_k) {
@@ -394,7 +409,7 @@ String generate_library_glsl(const DefLibrary &p_library) {
     return code;
 }
 
-String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize) {
+String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize, uint32_t p_group_size) {
     String code = String(GLSL_TABLE_FOLD)
                           .replace("LIMIT", itos(INPUT_LIMIT))
                           .replace("MOMENT_DEPTH_CELLS", glsl_float(MOMENT_DEPTH_CELLS))
@@ -409,16 +424,8 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
         code += vformat("        case %du: return arch_%d(p, lod, rec);\n", i, i);
     }
     code += "        default: return vec4(0.0);\n    }\n}\n\n";
-    code += String(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments) {
-    uint off = g_sdf_chunk.id.w;
-    uint n = g_sdf_chunk.anchor_hi.w;
-    precise vec4 phi = vec4(0.0);
-    bool blobs = false;
-    float best = 0.0;
-    uint best_index = INHERIT_INDEXu;
-    for (uint i = 0u; i < n; i++) {
-        uint word = sdf_list[off + i];
-        DefRecord rec = sdf_records[word & LIST_ID_MASKu];
+    // fold_onto's loop body for list word `word` (the same text in both loops: `continue` moves to the next word).
+    const char *const FOLD_BODY = R"glsl(        DefRecord rec = sdf_records[word & LIST_ID_MASKu];
         if (!arch_in_box(p, rec, lod)) {
             continue;
         }
@@ -440,8 +447,58 @@ String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p
         }
         r = arch_combine(r, c, rec);
         touched = true;
+)glsl";
+    const char *const FOLD_LOCALS = R"glsl(uint off = g_sdf_chunk.id.w;
+    uint n = g_sdf_chunk.anchor_hi.w;
+    precise vec4 phi = vec4(0.0);
+    bool blobs = false;
+    float best = 0.0;
+    uint best_index = INHERIT_INDEXu;
+)glsl";
+    String loop;
+    if (p_group_size == 0) {
+        loop = String(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments) {
+    FOLD_LOCALS    for (uint i = 0u; i < n; i++) {
+        uint word = sdf_list[off + i];
+FOLD_BODY    }
+)glsl");
+    } else {
+        ERR_FAIL_COND_V_MSG(p_group_size % 32 != 0, String(), "generate_fold_glsl: the workgroup size must be a multiple of 32.");
+        // A slice of GROUP words: each invocation tests one against the group's box, the passes are a bit mask (word
+        // h of the mask, bit b: list index base + 32 h + b), walked lowest bit first, so in list order. n is the
+        // chunk's: the loop and its barriers are uniform.
+        loop = String(R"glsl(shared uint s_fold_word[GROUP];
+shared uint s_fold_mask[MASK_WORDS];
+
+vec4 arch_fold(vec4 r, WorldPos p, WorldPos group_lo, WorldPos group_hi, int lod, inout bool touched, inout uint material, inout bool moments) {
+    FOLD_LOCALS    uint t = gl_LocalInvocationIndex;
+    for (uint base = 0u; base < n; base += GROUPu) {
+        if (t < MASK_WORDSu) {
+            s_fold_mask[t] = 0u;
+        }
+        barrier();
+        if (base + t < n) {
+            uint word = sdf_list[off + base + t];
+            s_fold_word[t] = word;
+            if (arch_meets_box(group_lo, group_hi, sdf_records[word & LIST_ID_MASKu], lod)) {
+                atomicOr(s_fold_mask[t >> 5u], 1u << (t & 31u));
+            }
+        }
+        barrier();
+        for (uint h = 0u; h < MASK_WORDSu; h++) {
+            uint bits = s_fold_mask[h];
+            while (bits != 0u) {
+                uint word = s_fold_word[h * 32u + uint(findLSB(bits))];
+                bits &= bits - 1u;
+FOLD_BODY            }
+        }
+        barrier(); // the next slice overwrites s_fold_word / s_fold_mask
     }
-    moments = moments || blobs;
+)glsl")
+                       .replace("MASK_WORDS", itos(p_group_size / 32))
+                       .replace("GROUP", itos(p_group_size));
+    }
+    code += (loop.replace("FOLD_LOCALS", FOLD_LOCALS).replace("FOLD_BODY", FOLD_BODY) + R"glsl(    moments = moments || blobs;
     return blobs ? arch_moments(r, phi, lod, best_index, material) : r;
 }
 

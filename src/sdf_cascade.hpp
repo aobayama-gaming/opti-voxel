@@ -414,10 +414,10 @@ float cascade_moment_skirt_m(int lod) {
 
     // The level passes' fold variant (after the table buffers): sample_sdf on the GPU, the instances of input chunk
     // `chunk`'s list folded onto the register.
-    String get_sample_fold_glsl() const override {
+    String get_sample_fold_glsl(uint32_t p_group_size) const override {
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize) + R"glsl(
-vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint material, out float skirt_extra) {
+        return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize, p_group_size) + R"glsl(
+vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPos group_hi, uint chunk, out uint material, out float skirt_extra) {
     material = 0u;
     skirt_extra = 0.0;
     precise vec4 u = cascade_terrain_unit(c0, p, lod);
@@ -426,7 +426,7 @@ vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, uint chunk, out uint mater
         precise float s = exact_pow2(lod);
         bool touched = false;
         bool moments = false;
-        precise vec4 r = arch_fold(u * s, p, lod, touched, material, moments);
+        precise vec4 r = arch_fold(u * s, p, group_lo, group_hi, lod, touched, material, moments);
         if (moments) {
             skirt_extra = cascade_moment_skirt_m(lod);
         }

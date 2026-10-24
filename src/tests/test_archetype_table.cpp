@@ -974,3 +974,61 @@ TEST_CASE("Archetype band: a part stays whole while its cells resolve it and ero
     MESSAGE("band timing: ", records, " records, ", kept_by_resolve, " kept past the erosion budget by resolve");
     CHECK(kept_by_resolve > 0);
 }
+
+// The level pass's fold tests each list word once per 4x4x4 cube of samples (arch_meets_box, mirrored by
+// in_influence_cube) and folds only the words that pass: a record that any sample of the cube would fold must pass, or
+// that sample loses it. Random records over six decades of size, margins up to the INPUT_LIMIT clamp, anchors near 0,
+// across the 2^31 low-word wrap and near +-2^60, cubes at LODs 0-14 near them and past the sat_diff saturation.
+TEST_CASE("Archetype table: a cube's box test keeps every record a sample of the cube folds") {
+    const int64_t bases[5] = { 0, (int64_t(1) << 31) - 7, -(int64_t(1) << 31), (int64_t(1) << 60) - 12345, -(int64_t(1) << 60) };
+    constexpr uint32_t SEED = 0xC0BEu;
+    int64_t misses = 0, kept = 0, cube_only = 0, rejected = 0, saturated_kept = 0;
+    for (uint32_t i = 0; i < 40000; i++) {
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, SEED, 0xF01Du });
+        const int lod = int(i % 15u);
+        TableRecord rec;
+        rec.anchor = VoxelPos(bases[i % 5u], bases[(i / 5u) % 5u], bases[(i / 25u) % 5u]) +
+                VoxelPos(ExactNoise::random_offset(i, 1, SEED, 1 << 20), ExactNoise::random_offset(i, 2, SEED, 1 << 20), ExactNoise::random_offset(i, 3, SEED, 1 << 20));
+        for (int a = 0; a < 3; a++) {
+            const int32_t size = int32_t(std::ldexp(1.0 + double((h.x >> (8 * a)) & 0xFFu) / 256.0, int((h.y >> (5 * a)) % 21u)));
+            rec.box_lo[a] = -int32_t(ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(a), SEED }).x % uint32_t(size + 1));
+            rec.box_hi[a] = rec.box_lo[a] + size;
+        }
+        rec.set_k(float(h.z % 64u) * 0.25f);
+        // Some margins reach the INPUT_LIMIT clamp at the LOD: the influence box then reaches saturated samples.
+        rec.margin_c = i % 11u == 0 ? std::ldexp(1.0f, 16 + int(h.z >> 28)) : float((h.z >> 8) % 32u) * 0.25f + 0.5f;
+        const int64_t step = int64_t(1) << lod;
+        const int64_t reach = std::max({ int64_t(rec.box_hi[0]) - rec.box_lo[0], int64_t(rec.box_hi[1]) - rec.box_lo[1], int64_t(rec.box_hi[2]) - rec.box_lo[2] }) +
+                influence_margin(rec, lod) + 4 * step;
+        const int64_t range = i % 7u == 3u ? 3 * int64_t(INPUT_LIMIT) : reach;
+        VoxelPos lo;
+        for (int a = 0; a < 3; a++) {
+            lo[a] = (rec.anchor[a] + (int64_t(rec.box_lo[a]) + rec.box_hi[a]) / 2 + ExactNoise::random_offset(i, 4 + a, SEED, range)) & ~(step - 1); // on the LOD's lattice
+        }
+        const VoxelPos hi = lo + VoxelPos(3 * step, 3 * step, 3 * step);
+        bool any = false, saturated = false;
+        for (int s = 0; s < 64; s++) {
+            WorldPos p;
+            p.voxel = lo + VoxelPos(int64_t(s & 3) * step, int64_t((s >> 2) & 3) * step, int64_t(s >> 4) * step);
+            if (in_influence_box(rec, p, lod)) {
+                any = true;
+                for (int a = 0; a < 3; a++) {
+                    const int64_t d = p.voxel[a] - rec.anchor[a];
+                    saturated = saturated || d > INPUT_LIMIT || d < -INPUT_LIMIT;
+                }
+            }
+        }
+        const bool cube = in_influence_cube(rec, lo, hi, lod);
+        misses += any && !cube ? 1 : 0;
+        kept += any ? 1 : 0;
+        cube_only += cube && !any ? 1 : 0;
+        rejected += cube ? 0 : 1;
+        saturated_kept += saturated && cube ? 1 : 0;
+    }
+    MESSAGE("cube test: ", kept, " cubes with a sample inside, ", cube_only, " kept with no sample inside, ", rejected,
+            " rejected, ", saturated_kept, " kept through saturated samples");
+    CHECK(misses == 0);
+    CHECK(kept > 3000);
+    CHECK(rejected > 5000);
+    CHECK(saturated_kept > 0);
+}
