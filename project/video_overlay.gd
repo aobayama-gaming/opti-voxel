@@ -18,7 +18,6 @@ var head := 0               # next slot written in frame_ms
 var filled := 0
 var age := REFRESH_S
 var last_cam_pos = null     # Vector3 at the last refresh, null before the first
-var static_lines := ""
 var stats_line: Label
 var info: Label
 var graph: Control
@@ -79,7 +78,6 @@ func _ready() -> void:
 	box.add_child(graph)
 	info = _label(13)
 	box.add_child(info)
-	static_lines = _static_lines()
 
 func _label(p_size: int) -> Label:
 	var l := Label.new()
@@ -93,13 +91,16 @@ func _label(p_size: int) -> Label:
 	l.add_theme_constant_override("shadow_offset_y", 1)
 	return l
 
-# The settings: they don't change during a run.
-func _static_lines() -> String:
+# The settings, re-read with the rest: the window is only maximised after _ready.
+func _setting_lines() -> String:
 	var vp := get_viewport()
-	var res := vp.get_visible_rect().size
+	var res := get_window().size  # the visible rect is the project's base size under stretch, not the window's
 	var res_text := "%dx%d" % [res.x, res.y]
-	if vp.scaling_3d_mode != Viewport.SCALING_3D_MODE_BILINEAR or not is_equal_approx(vp.scaling_3d_scale, 1.0):
-		res_text += " (3D at %d%%)" % roundi(vp.scaling_3d_scale * 100.0)
+	var upscalers := {Viewport.SCALING_3D_MODE_FSR: "FSR 1", Viewport.SCALING_3D_MODE_FSR2: "FSR 2"}
+	if upscalers.has(vp.scaling_3d_mode):
+		res_text += " · %s from %d%%" % [upscalers[vp.scaling_3d_mode], roundi(vp.scaling_3d_scale * 100.0)]
+	elif not is_equal_approx(vp.scaling_3d_scale, 1.0):
+		res_text += " · 3D at %d%%" % roundi(vp.scaling_3d_scale * 100.0)
 	var vs: float = terrain.voxel_size
 	var lods: int = terrain.lod_numbers
 	var span_m := float(ID_VOXELS) * pow(2.0, lods) * vs
@@ -108,17 +109,17 @@ func _static_lines() -> String:
 	var error_text := "LOD error %s px" % _num(front)
 	if back > 0.0 and not is_equal_approx(back, front):
 		error_text = "LOD error %s px ahead, %s px behind" % [_num(front), _num(back)]
-	var scene := []
-	var trees: int = terrain.archetype_trees
-	if trees > 0:
-		scene.append("%s trees" % _thousands(trees))
-	scene.append("view %s" % _distance(terrain.get_load_radius()))
-	return "\n".join([
+	var budget: float = terrain.direct_gpu_budget_ms
+	var lines := [
 		"%s · %s" % [RenderingServer.get_video_adapter_name(), res_text],
 		"voxel %s · %d LODs over %s" % [_distance(vs), lods, _distance(span_m)],
 		error_text,
-		" · ".join(scene),
-	])
+		"mesher budget %s" % ("%s ms per frame" % _num(budget) if budget > 0.0 else "off"),
+	]
+	var trees: int = terrain.archetype_trees
+	if trees > 0:
+		lines.append("%s trees" % _thousands(trees))
+	return "\n".join(lines)
 
 func _process(delta: float) -> void:
 	frame_ms[head] = delta * 1000.0
@@ -150,7 +151,7 @@ func _refresh(p_elapsed: float) -> void:
 	var first_ms: float = s.get("ms_until_loaded", -1.0)
 	if first_ms >= 0.0:
 		load_text += " (first load %.1f s)" % (first_ms / 1000.0)
-	info.text = static_lines + "\n" + "\n".join([
+	info.text = _setting_lines() + "\n" + "\n".join([
 		"altitude %s · %d km/h" % [_distance(altitude), roundi(speed * 3.6)],
 		"%.1f M triangles · %s chunks · %s" % [
 			float(chunks.get("live_triangles", 0)) / 1e6, _thousands(int(chunks.get("loaded", 0))), load_text],
@@ -164,7 +165,9 @@ func _distance(m: float) -> String:
 		return "%d cm" % roundi(m * 100.0)
 	if absf(m) < 1000.0:
 		return "%d m" % roundi(m)
-	return "%.1f km" % (m / 1000.0)
+	if absf(m) < 1e6:
+		return "%.1f km" % (m / 1000.0)
+	return "%s km" % _thousands(roundi(m / 1000.0))
 
 func _thousands(n: int) -> String:
 	var s := str(absi(n))
