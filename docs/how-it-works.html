@@ -1,0 +1,400 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body><title>How opti-voxel works</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --bg: #f6f5f1; --surface: #ffffff; --fg: #1d1f24; --muted: #5d6270; --rule: #dcd9d0;
+  --code-bg: #efede6;
+  --disc: #6d4fc2; --main: #1f63c6; --pool: #1d8150; --rt: #c0620f; --gpu: #c22f3c;
+  --disc-bg: #6d4fc214; --main-bg: #1f63c614; --pool-bg: #1d815014; --rt-bg: #c0620f14; --gpu-bg: #c22f3c14;
+  --hl: #fff2c2;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15171c; --surface: #1d2027; --fg: #e5e6ea; --muted: #9aa0ad; --rule: #333844; --code-bg: #252a33;
+  --disc: #a68cf0; --main: #6ea6ff; --pool: #4fc78a; --rt: #f0a05a; --gpu: #ff7a85;
+  --disc-bg: #a68cf01c; --main-bg: #6ea6ff1c; --pool-bg: #4fc78a1c; --rt-bg: #f0a05a1c; --gpu-bg: #ff7a851c;
+  --hl: #4a3f1a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15171c; --surface: #1d2027; --fg: #e5e6ea; --muted: #9aa0ad; --rule: #333844; --code-bg: #252a33;
+  --disc: #a68cf0; --main: #6ea6ff; --pool: #4fc78a; --rt: #f0a05a; --gpu: #ff7a85;
+  --disc-bg: #a68cf01c; --main-bg: #6ea6ff1c; --pool-bg: #4fc78a1c; --rt-bg: #f0a05a1c; --gpu-bg: #ff7a851c;
+  --hl: #4a3f1a; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 "IBM Plex Sans", system-ui, sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 32px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; text-wrap: balance; }
+h2 { font-size: 21px; margin: 56px 0 6px; text-wrap: balance; border-top: 1px solid var(--rule); padding-top: 24px; }
+h3 { font-size: 16px; margin: 28px 0 6px; }
+p, li { max-width: 72ch; }
+.lede { font-size: 17px; color: var(--muted); max-width: 70ch; margin: 0; }
+code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.86em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.ref { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; color: var(--muted); white-space: nowrap; }
+figure { margin: 20px 0 0; }
+.scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px; }
+figcaption { color: var(--muted); font-size: 13.5px; margin-top: 8px; max-width: 90ch; }
+svg text { font-family: "IBM Plex Sans", system-ui, sans-serif; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 0; font-size: 13.5px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* thread program blocks */
+.thread { background: var(--surface); border: 1px solid var(--rule); border-left: 5px solid var(--c); border-radius: 10px; padding: 16px 18px 14px; margin-top: 18px; min-width: 0; }
+.thread > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 8px; }
+.thread > header b { color: var(--c); font-size: 16px; letter-spacing: 0.01em; }
+.thread > header span { color: var(--muted); font-size: 13.5px; }
+.t-disc { --c: var(--disc); } .t-main { --c: var(--main); } .t-pool { --c: var(--pool); } .t-rt { --c: var(--rt); } .t-gpu { --c: var(--gpu); }
+ul.prog, ul.prog ul { list-style: none; margin: 0; padding: 0; }
+ul.prog ul { margin-left: 14px; padding-left: 14px; border-left: 2px solid var(--rule); }
+ul.prog li { margin: 7px 0; max-width: none; }
+.row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.row .what { min-width: 0; flex: 1 1 340px; }
+.row .what b { font-weight: 600; }
+.chip { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; padding: 1px 7px; border-radius: 99px; background: var(--code-bg); color: var(--fg); white-space: nowrap; }
+.chip.loop { background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); font-weight: 500; }
+.chip.hand { background: var(--hl); }
+.why { color: var(--muted); font-size: 13.5px; display: block; margin-top: 1px; }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 0 18px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; margin-top: 14px; }
+.callout { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-top: 18px; }
+.callout b { color: var(--gpu); }
+.states { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; }
+.state { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 12px; font-size: 14px; max-width: 220px; }
+.state b { display: block; font-size: 14.5px; }
+.state small { color: var(--muted); font-size: 12.5px; line-height: 1.4; display: block; }
+.arrow { color: var(--muted); font-size: 18px; }
+nav.toc { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; margin-top: 18px; }
+nav.toc a { color: var(--main); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+.src { color: var(--muted); font-size: 13px; margin-top: 4px; }
+</style>
+
+<div class="wrap">
+<h1>How opti-voxel works</h1>
+<p class="lede">The whole engine on one page: which thread does what, in what order, with which loops, how many times, and where the time goes. Read from <code>src/</code> by hand and checked against the traced forest fly (<code>forest5cm</code>, error 2, run <code>20261024-151347</code>). Every step names the function to open.</p>
+<nav class="toc">
+  <a href="#picture">1 · The picture</a>
+  <a href="#scan">2 · A scan</a>
+  <a href="#frame">3 · A frame of the main thread</a>
+  <a href="#batch">4 · A mesh batch on the GPU</a>
+  <a href="#trees">5 · Trees and rocks</a>
+  <a href="#life">6 · Life of a chunk</a>
+  <a href="#cost">7 · Where the GPU frame goes</a>
+</nav>
+
+<h2 id="picture">1 · The picture</h2>
+<p>Six threads take part. The camera moving makes the <b>discoverer</b> decide which chunks should exist. The <b>main thread</b> turns the difference into a queue and sends <b>batches of up to 128 chunks</b> to the <b>render thread</b>, which records the <b>GPU</b> work. The GPU computes the terrain field (the cascade), meshes it and writes quads straight into pages that Godot draws. The CPU never sees the geometry; it only gets back a small "where did each chunk land" list about 80 ms later. Trees and rocks are computed beside all this on the <b>worker pool</b>, and a chunk waits until its trees are ready.</p>
+
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 1160 530" width="1160" role="img" aria-label="Engine data flow across six threads: camera, scan, ingest, batch pop, batch build, render-thread recording, GPU cascade and meshing, readback, collect, draw." style="max-width:none;display:block">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  </defs>
+  <g style="color:var(--fg)">
+  <!-- lanes -->
+  <rect x="0" y="8" width="1160" height="88" fill="var(--disc-bg)"/>
+  <rect x="0" y="104" width="1160" height="118" fill="var(--main-bg)"/>
+  <rect x="0" y="230" width="1160" height="88" fill="var(--pool-bg)"/>
+  <rect x="0" y="326" width="1160" height="88" fill="var(--rt-bg)"/>
+  <rect x="0" y="422" width="1160" height="100" fill="var(--gpu-bg)"/>
+  <text x="12" y="46" font-size="13" font-weight="700" fill="var(--disc)">Discoverer</text>
+  <text x="12" y="63" font-size="11.5" fill="var(--muted)">own thread</text>
+  <text x="12" y="158" font-size="13" font-weight="700" fill="var(--main)">Main thread</text>
+  <text x="12" y="175" font-size="11.5" fill="var(--muted)">_process, every frame</text>
+  <text x="12" y="268" font-size="13" font-weight="700" fill="var(--pool)">Worker pool</text>
+  <text x="12" y="285" font-size="11.5" fill="var(--muted)">15 threads + FieldGPU</text>
+  <text x="12" y="364" font-size="13" font-weight="700" fill="var(--rt)">Render thread</text>
+  <text x="12" y="381" font-size="11.5" fill="var(--muted)">Godot's</text>
+  <text x="12" y="466" font-size="13" font-weight="700" fill="var(--gpu)">GPU</text>
+  <text x="12" y="483" font-size="11.5" fill="var(--muted)">one queue</text>
+
+  <!-- boxes -->
+  <g font-size="12.5">
+    <!-- 1 camera -->
+    <rect x="140" y="132" width="130" height="62" rx="8" fill="var(--surface)" stroke="var(--main)" stroke-width="1.5"/>
+    <text x="205" y="157" text-anchor="middle" font-weight="600">① camera moved</text>
+    <text x="205" y="176" text-anchor="middle" font-size="11.5" fill="var(--muted)">set_camera</text>
+    <!-- 2 scan -->
+    <rect x="290" y="20" width="150" height="64" rx="8" fill="var(--surface)" stroke="var(--disc)" stroke-width="1.5"/>
+    <text x="365" y="45" text-anchor="middle" font-weight="600">② scan the octree</text>
+    <text x="365" y="64" text-anchor="middle" font-size="11.5" fill="var(--muted)">15 LOD waves, ~13 ms</text>
+    <!-- 3 ingest -->
+    <rect x="440" y="132" width="130" height="62" rx="8" fill="var(--surface)" stroke="var(--main)" stroke-width="1.5"/>
+    <text x="505" y="157" text-anchor="middle" font-weight="600">③ take the scan</text>
+    <text x="505" y="176" text-anchor="middle" font-size="11.5" fill="var(--muted)">queue = scan − loaded</text>
+    <!-- 4 pop -->
+    <rect x="590" y="132" width="130" height="62" rx="8" fill="var(--surface)" stroke="var(--main)" stroke-width="1.5"/>
+    <text x="655" y="157" text-anchor="middle" font-weight="600">④ pop ≤128 chunks</text>
+    <text x="655" y="176" text-anchor="middle" font-size="11.5" fill="var(--muted)">trees ready? (admit)</text>
+    <!-- 4b stream -->
+    <rect x="590" y="246" width="130" height="58" rx="8" fill="var(--surface)" stroke="var(--pool)" stroke-width="1.5"/>
+    <text x="655" y="270" text-anchor="middle" font-weight="600">tree &amp; rock jobs</text>
+    <text x="655" y="288" text-anchor="middle" font-size="11.5" fill="var(--muted)">instance stream</text>
+    <!-- 5 build -->
+    <rect x="740" y="132" width="130" height="62" rx="8" fill="var(--surface)" stroke="var(--main)" stroke-width="1.5"/>
+    <text x="805" y="157" text-anchor="middle" font-weight="600">⑤ build the batch</text>
+    <text x="805" y="176" text-anchor="middle" font-size="11.5" fill="var(--muted)">lists + 16 pages</text>
+    <!-- 5b lists -->
+    <rect x="740" y="246" width="130" height="58" rx="8" fill="var(--surface)" stroke="var(--pool)" stroke-width="1.5"/>
+    <text x="805" y="270" text-anchor="middle" font-weight="600">chunk_list ×128</text>
+    <text x="805" y="288" text-anchor="middle" font-size="11.5" fill="var(--muted)">trees per chunk</text>
+    <!-- 6 record -->
+    <rect x="860" y="342" width="140" height="58" rx="8" fill="var(--surface)" stroke="var(--rt)" stroke-width="1.5"/>
+    <text x="930" y="366" text-anchor="middle" font-weight="600">⑥ record the batch</text>
+    <text x="930" y="384" text-anchor="middle" font-size="11.5" fill="var(--muted)">rt_dispatch, ~0.07 ms</text>
+    <!-- 7 gpu -->
+    <rect x="860" y="438" width="140" height="70" rx="8" fill="var(--surface)" stroke="var(--gpu)" stroke-width="1.5"/>
+    <text x="930" y="462" text-anchor="middle" font-weight="600">⑦ cascade + mesh</text>
+    <text x="930" y="480" text-anchor="middle" font-size="11.5" fill="var(--muted)">~5.5 ms per batch</text>
+    <text x="930" y="496" text-anchor="middle" font-size="11.5" fill="var(--muted)">quads → pages</text>
+    <!-- 8 readback -->
+    <rect x="1020" y="342" width="128" height="58" rx="8" fill="var(--surface)" stroke="var(--rt)" stroke-width="1.5"/>
+    <text x="1084" y="366" text-anchor="middle" font-weight="600">⑧ readback</text>
+    <text x="1084" y="384" text-anchor="middle" font-size="11.5" fill="var(--muted)">where chunks landed</text>
+    <!-- 9 collect -->
+    <rect x="1020" y="132" width="128" height="62" rx="8" fill="var(--surface)" stroke="var(--main)" stroke-width="1.5"/>
+    <text x="1084" y="152" text-anchor="middle" font-weight="600">⑨ collect</text>
+    <text x="1084" y="170" text-anchor="middle" font-size="11.5" fill="var(--muted)">loaded · destroy old</text>
+    <text x="1084" y="185" text-anchor="middle" font-size="11.5" fill="var(--muted)">· compact pages</text>
+    <!-- 10 draw -->
+    <rect x="1020" y="438" width="128" height="70" rx="8" fill="var(--surface)" stroke="var(--gpu)" stroke-width="1.5"/>
+    <text x="1084" y="462" text-anchor="middle" font-weight="600">⑩ Godot draws</text>
+    <text x="1084" y="480" text-anchor="middle" font-size="11.5" fill="var(--muted)">pages, shadows…</text>
+    <text x="1084" y="496" text-anchor="middle" font-size="11.5" fill="var(--muted)">~12 ms per frame</text>
+  </g>
+
+  <!-- arrows -->
+  <g fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#ah)" font-size="11.5">
+    <path d="M230,132 C230,70 250,52 288,52"/>
+    <path d="M440,60 C500,60 505,90 505,130"/>
+    <path d="M570,163 L588,163"/>
+    <path d="M640,194 L640,244"/>
+    <path d="M670,244 L670,196"/>
+    <path d="M720,163 L738,163"/>
+    <path d="M805,194 L805,244"/>
+    <path d="M870,175 C910,185 930,280 930,340"/>
+    <path d="M930,400 L930,436"/>
+    <path d="M1000,458 C1040,440 1070,420 1078,402"/>
+    <path d="M1000,490 L1018,490"/>
+    <path d="M1084,342 L1084,196"/>
+    <path d="M1060,132 C1060,110 680,110 660,130" stroke-dasharray="4 4"/>
+  </g>
+  <g font-size="11.5" fill="var(--muted)">
+    <text x="236" y="98">new camera chunk</text>
+    <text x="512" y="100">publish set + delta</text>
+    <text x="574" y="225" text-anchor="end">keys missing:</text>
+    <text x="574" y="239" text-anchor="end">chunk parks</text>
+    <text x="676" y="225">keys landed:</text>
+    <text x="676" y="239">chunk returns</text>
+    <text x="811" y="225">parallel_for</text>
+    <text x="940" y="292">call_on_render_thread</text>
+    <text x="936" y="425">commands</text>
+    <text x="1090" y="276">~80 ms</text>
+    <text x="1090" y="291">after ⑤</text>
+    <text x="878" y="129">next frame (≤4 batches)</text>
+  </g>
+  </g>
+</svg>
+</div>
+<figcaption>Steps ①–⑨ are one chunk's path from "the camera moved" to "it is drawn". Each colored band is a thread; an arrow crossing bands is a hand-off between threads. Steps ③–⑤ and ⑨ all run inside the main thread's <code>_process</code>, in that order, every frame. ② runs on its own thread whenever the camera enters a new chunk (about every second frame in the fly). ⑦ and ⑩ share one GPU, which is the bottleneck (section 7).</figcaption>
+</figure>
+<div class="legend">
+  <span><i style="background:var(--disc)"></i>discoverer thread</span>
+  <span><i style="background:var(--main)"></i>main thread</span>
+  <span><i style="background:var(--pool)"></i>worker pool (+ FieldGPU thread)</span>
+  <span><i style="background:var(--rt)"></i>render thread</span>
+  <span><i style="background:var(--gpu)"></i>GPU</span>
+</div>
+
+<h3>Three words used everywhere</h3>
+<div class="grid2">
+<p><b>Chunk.</b> A cube of 28³ voxels plus a 2-voxel skirt each side: the mesher samples <b>32³ points</b> per chunk. A chunk of LOD <i>L</i> has voxels 2<sup>L</sup> times bigger (LOD 0 is 5 cm here, LOD 14 is ~820 m). A chunk id is an integer position plus its LOD. <span class="ref">chunk_math.hpp:12</span></p>
+<p><b>Scan.</b> The set of chunks that should be shown from the current camera: near chunks fine, far chunks coarse, nothing far from the surface. ~35,000 chunks, of which ~10,000 have any surface. <span class="ref">chunk_discoverer.cpp:355</span></p>
+<p><b>Page.</b> A Godot MultiMesh plus a texture that the GPU fills with quads directly. A batch takes 16 fresh pages. Chunks are packed into them, and half-empty pages are compacted later. ~750 pages live at the end of the run. <span class="ref">quad_page_pool.hpp:16</span></p>
+<p><b>Cascade.</b> How the terrain value is computed on the GPU: start from a coarse grid, then refine it level by level (each level twice as fine), adding the finer noise bands at each level, down to the chunk's own 32³ points. <span class="ref">cascade.hpp:13</span></p>
+</div>
+
+<h2 id="scan">2 · A scan: which chunks should exist</h2>
+<p>The discoverer thread sleeps until the camera enters a new chunk (or turns past a remembered view), then walks an octree from the coarsest LOD down. It's a breadth-first walk: all nodes of one LOD form one "wave", and the wave's survivors split into the next wave.</p>
+<div class="thread t-disc">
+<header><b>Discoverer thread</b><span><code>ChunkDiscoverer::discovery_loop</code> · <span class="ref">chunk_discoverer.cpp:164</span> · in the fly: 0.5 scans per frame, 13 ms each</span></header>
+<ul class="prog">
+  <li><div class="row"><span class="what"><b>wait</b> for <code>set_camera</code> to post (the main thread calls it every frame; it posts only when the camera chunk or view memory changed)</span><span class="ref">:189</span></div></li>
+  <li><div class="row"><span class="what"><b>start</b> with a grid of LOD-14 nodes around the camera (~3,400)</span><span class="ref">:371</span></div></li>
+  <li><div class="row"><span class="what"><b>for each LOD</b>, 14 down to 0 — one wave</span><span class="chip loop">×15 per scan</span><span class="ref">:381</span></div>
+    <ul>
+      <li><div class="row"><span class="what"><b>cull the wave</b>: for each node, take its 8 corners (shared corners counted once), evaluate the terrain SDF at all of them in <b>one GPU batch</b> on the discoverer's own small RenderingDevice. Nodes seen in earlier scans reuse their cached verdict and skip this.</span><span class="chip">~3,400–4,400 nodes per wave</span><span class="ref">:85, :26</span></div>
+        <span class="why">Same cascade code as the mesher, but on points only. In the fly the final scan was 100% cache hits; a fresh area costs ~1 ms per wave.</span></li>
+      <li><div class="row"><span class="what"><b>for each node</b> of the wave</span><span class="chip loop">~60,000 per scan in total</span><span class="ref">:384</span></div>
+        <ul>
+          <li><div class="row"><span class="what">|SDF| more than 2 chunk sizes at all 8 corners → <b>drop it</b> (no surface can be inside). Exception: near a tree or rock box it's never dropped (<code>cull_exempt</code>).</span><span class="chip">~17,500 dropped</span></div></li>
+          <li><div class="row"><span class="what">LOD 0, or far enough that this LOD meets the pixel error (<code>lod_split</code>, distance per LOD from the screen error) → <b>keep it as a chunk</b></span><span class="chip">~35,000 kept</span></div></li>
+          <li><div class="row"><span class="what">otherwise → <b>split</b> into its 8 children, which form the next wave</span></div></li>
+        </ul></li>
+    </ul></li>
+  <li><div class="row"><span class="what"><b>diff</b> with the previous scan: which chunks entered and which left</span><span class="chip">1.7 ms</span><span class="ref">:271</span></div></li>
+  <li><div class="row"><span class="what"><b>publish</b> the set and the delta under a mutex. If the main thread hasn't taken the last one, the deltas are merged.</span><span class="chip hand">→ main thread, step ③</span><span class="ref">:311</span></div></li>
+</ul>
+</div>
+
+<h2 id="frame">3 · One frame of the main thread</h2>
+<p>All of this is <code>VoxelTerrain::_process</code> (<span class="ref">voxel_terrain.cpp:1016</span>), in this order, every frame. In the fly it takes about 3 ms; the frame is about 22 ms, so the main thread isn't the limit.</p>
+<div class="thread t-main">
+<header><b>Main thread</b><span><code>VoxelTerrain::_process</code> · every frame · 3.0 ms in the fly, 3.9 ms during load</span></header>
+<ul class="prog">
+  <li><div class="row"><span class="what"><b>1 · stream_poll</b>: the instance stream releases finished tree jobs, keeps the keys near the camera alive, evicts old ones</span><span class="ref">instance_stream.cpp:444</span></div></li>
+  <li><div class="row"><span class="what"><b>2 · set_camera</b>: hands the camera position to the discoverer (wakes it on a new chunk)</span><span class="ref">chunk_discoverer.cpp:583</span></div></li>
+  <li><div class="row"><span class="what"><b>3 · scan_ingest</b>, only when a scan was published</span><span class="chip">25% of frames</span><span class="ref">voxel_terrain.cpp:1033</span></div>
+    <ul>
+      <li><div class="row"><span class="what">apply the delta: <b>dirty = scan − loaded</b> (chunks to mesh), and note which loaded chunks are no longer wanted</span><span class="ref">chunk_memory.cpp:5</span></div></li>
+      <li><div class="row"><span class="what"><b>rebuild the mesher's queues</b>: one queue per LOD, chunks in view first (LOD 0, 1, 2…), then out of view; inside a queue, Morton order, so consecutive chunks are neighbours</span><span class="ref">GPU_direct_mesher.cpp:1311</span></div></li>
+    </ul></li>
+  <li><div class="row"><span class="what"><b>4 · destroy_from_scan</b>: which loaded chunks may go (not in the scan, and nothing still being meshed needs them as a stand-in)</span><span class="chip">0.6 ms</span><span class="ref">chunk_memory.cpp:70</span></div></li>
+  <li><div class="row"><span class="what"><b>5 · mesher_dispatch</b> (<code>process_queue</code>)</span><span class="ref">GPU_direct_mesher.cpp:676</span></div>
+    <ul>
+      <li><div class="row"><span class="what">send pending page kills and hidden sub-cubes to the render thread</span><span class="chip hand">→ render thread</span></div></li>
+      <li><div class="row"><span class="what"><b>while</b> fewer than 4 batches this frame and not too many in flight: <b>build one batch</b></span><span class="chip loop">1.8 per frame (3.7 in load)</span><span class="ref">:702</span></div>
+        <ul>
+          <li><div class="row"><span class="what"><b>pop up to 128 chunks</b>, front of the queue first. Each popped chunk asks the instance stream whether every tree/rock key it touches is computed (<code>admit</code>):</span><span class="ref">:756, chunk_gate.hpp:96</span></div>
+            <ul>
+              <li><div class="row"><span class="what">READY → into the batch</span></div></li>
+              <li><div class="row"><span class="what">PARKED → its missing keys become jobs on the worker pool; the chunk waits there and comes back to the front of its queue when they land</span><span class="chip hand">→ worker pool, section 5</span></div></li>
+              <li><div class="row"><span class="what">LATER → too many keys pending: stop popping this frame</span></div></li>
+            </ul></li>
+          <li><div class="row"><span class="what"><b>build each chunk's instance list</b> (which tree/rock records reach it), all 128 in parallel on the pool</span><span class="chip">0.3 ms</span><span class="ref">archetype_gpu_table.cpp:103</span></div></li>
+          <li><div class="row"><span class="what">encode the chunk ids, take <b>16 fresh pages</b>, and hand everything to the render thread</span><span class="chip hand">→ render thread, section 4</span><span class="ref">:804</span></div></li>
+        </ul></li>
+    </ul></li>
+  <li><div class="row"><span class="what"><b>6 · mesher_collect</b> (<code>get_results</code>): for each batch whose readback came back</span><span class="chip loop">1.8 per frame</span><span class="ref">GPU_direct_mesher.cpp:939</span></div>
+    <ul>
+      <li><div class="row"><span class="what"><b>for each of its chunks</b>, read the directory entry (quad count, where it landed):</span><span class="chip loop">≤128</span></div>
+        <ul>
+          <li><div class="row"><span class="what">overflowed its page → queue it again; an instance edit made it stale → re-mesh; otherwise → <b>loaded</b> (page, offset, count)</span></div></li>
+        </ul></li>
+      <li><div class="row"><span class="what">pages that got no chunk go back to the pool; the rest get their exact bounds for culling</span></div></li>
+    </ul></li>
+  <li><div class="row"><span class="what"><b>7 · destroy_chunks</b>: free the chunks that were replaced (zero their quads in their page)</span><span class="chip">~45 chunks per frame</span><span class="ref">chunk_memory.cpp:160</span></div></li>
+  <li><div class="row"><span class="what"><b>8 · compact</b>: pages less than half full are copied GPU-to-GPU into fresh ones; spare pages are freed</span><span class="chip hand">→ render thread</span><span class="ref">GPU_direct_mesher.cpp:1151</span></div></li>
+  <li><div class="row"><span class="what"><b>9 · coverage</b>: a big chunk waiting for its smaller replacements hides the parts that are already covered (no double surface)</span><span class="ref">chunk_memory.cpp:174</span></div></li>
+</ul>
+</div>
+
+<h2 id="batch">4 · One mesh batch on the render thread and GPU</h2>
+<p>This is where "how many times does the cascade run per chunk" is answered. The GPU doesn't loop over chunks: <b>every dispatch covers all the chunks of the batch at once</b> (the chunk is the dispatch's third dimension). So per batch, each cascade level is <b>one dispatch</b> and each mesh pass is <b>one dispatch</b>. Every chunk goes through every level exactly once.</p>
+<div class="thread t-rt">
+<header><b>Render thread</b><span><code>GPUDirectMesher::_rt_dispatch</code> · once per batch · <span class="ref">GPU_direct_mesher.cpp:395</span> · ~0.07 ms of CPU to record</span></header>
+<ul class="prog">
+  <li><div class="row"><span class="what"><b>upload</b> the chunk ids, the instance lists and records, and the palettes; clear the counters and the staging texture</span><span class="ref">:404–413</span></div></li>
+  <li><div class="row"><span class="what"><b>cascade</b> (<code>_rt_record_samples</code>): <b>for each level j</b>, top down to 0 — one dispatch over all chunks</span><span class="chip loop">levels = top − finest LOD + 1</span><span class="ref">:339, cascade_glsl.cpp:751</span></div>
+    <ul>
+      <li><div class="row"><span class="what">level j: a grid 2<sup>j</sup> times coarser than the chunk's samples, covering the chunk plus a margin (~(32/2<sup>j</sup>)³ points per chunk). Each point = Hermite refinement of level j+1 plus the noise bands that start at this level.</span><span class="chip">≤0.15 ms per level</span></div></li>
+      <li><div class="row"><span class="what"><b>level 0</b>: the chunk's own 32³ samples, the finest bands, and the <b>fold</b>: every tree/rock in the chunk's list is evaluated and merged into the ground's value; the material is written too</span><span class="chip" style="background:color-mix(in srgb,var(--gpu) 20%,transparent)">4.3 ms per batch</span></div>
+        <span class="why">This one dispatch is 77% of the mesher's GPU time (section 7).</span></li>
+    </ul></li>
+  <li><div class="row"><span class="what"><b>mesh</b>: <b>for each of the 4 passes</b>, one dispatch over all chunks</span><span class="chip loop">×4</span><span class="ref">:434</span></div>
+    <ul>
+      <li><div class="row"><span class="what"><b>edges</b>: find where the sign changes along x, y, z between samples</span><span class="chip">0.32 ms</span></div></li>
+      <li><div class="row"><span class="what"><b>vertices</b>: one vertex per surface cell (surface nets), with its normal and material, and the quad count per chunk</span><span class="chip">0.32 ms</span></div></li>
+      <li><div class="row"><span class="what"><b>reserve</b>: a single workgroup places every chunk's quads in the 16 pages (overflow if it doesn't fit)</span><span class="chip">0.03 ms</span></div></li>
+      <li><div class="row"><span class="what"><b>emit</b>: write the quads into the staging texture</span><span class="chip">0.2 ms</span></div></li>
+    </ul></li>
+  <li><div class="row"><span class="what"><b>for each of the 16 pages</b>: copy its rows from staging into the page, and copy its quad count into the page's draw command</span><span class="chip loop">×16</span><span class="chip">0.14 ms</span><span class="ref">:447</span></div></li>
+  <li><div class="row"><span class="what"><b>two async readbacks</b>: the directory (where each chunk landed) and the status (counts, overflow). They call back on the render thread ~40 ms later, and the main thread collects them the next frame.</span><span class="chip hand">→ main thread, step 6</span><span class="ref">:459</span></div></li>
+</ul>
+</div>
+<p class="src">The pages are already drawable as soon as the GPU has copied into them. The readback is only bookkeeping (which chunk is where, so it can be destroyed or compacted later). Measured in the fly: recording → GPU done 21 ms, → readback 44 ms, → collected 4 ms: <b>~80 ms</b> from dispatch to "loaded", p50.</p>
+
+<h2 id="trees">5 · Trees and rocks: the instance stream</h2>
+<p>Trees and rocks aren't meshes. They are SDF records that the cascade's level 0 folds into the ground, so a chunk can only be meshed once it knows every record that reaches it. Those records are computed on demand, in pieces called <b>keys</b>. Each key is a pure function of its position, so the result is the same whatever order they stream in. <span class="ref">instance_stream.hpp:18, scatter_source.hpp:10</span></p>
+<div class="thread t-pool">
+<header><b>Worker pool</b><span>drain tasks of <code>InstanceStream</code> at low priority · <span class="ref">instance_stream.cpp:407</span></span></header>
+<ul class="prog">
+  <li><div class="row"><span class="what">a chunk's <code>admit</code> lists the keys it needs and asks for the missing ones; their jobs are ranked by the chunk's queue (in view and fine first)</span><span class="ref">instance_stream.cpp:86</span></div></li>
+  <li><div class="row"><span class="what"><b>while</b> there are jobs: take the best-ranked one, run it, land it (which may start its dependents right away)</span><span class="chip loop">job_expand 3.4 · content_blobs 2.0 · content_parts 1 per frame</span></div>
+    <ul>
+      <li><div class="row"><span class="what"><b>site tile</b> (walk): scan the ground cell by cell to find where trees stand. The ground readings are batched and sent to the <b>FieldGPU</b> thread, which evaluates them on its own device and answers in ~1.5 ms.</span><span class="chip hand">→ FieldGPU</span><span class="ref">field_gpu.cpp:61</span></div></li>
+      <li><div class="row"><span class="what"><b>part tile</b> (LOD L): grow the trees of the tile into records (trunk, branches, leaves as SDF shapes) at that LOD</span></div></li>
+      <li><div class="row"><span class="what"><b>blob tile</b> (far LODs): summarise many trees per cell as a few blobs (moment layers), so distant forest costs the same at any tree count</span><span class="ref">moment_layers.cpp</span></div></li>
+      <li><div class="row"><span class="what"><b>land</b>: the key's records go into slots of the GPU table; parked chunks whose last key landed go back to the front of the mesher's queue</span><span class="ref">instance_stream.cpp:472</span></div></li>
+    </ul></li>
+</ul>
+</div>
+<p class="src">During load, the pool spends ~18 ms per frame waiting for FieldGPU answers in site walks. Once the forest around the camera is resident, the stream is nearly idle in the fly (2% busy).</p>
+
+<h2 id="life">6 · Life of a chunk</h2>
+<div class="states">
+  <div class="state"><b>scanned</b><small>in the discoverer's set (step ②)</small></div><span class="arrow">→</span>
+  <div class="state"><b>dirty, queued</b><small>scan − loaded, in its LOD queue (③)</small></div><span class="arrow">→</span>
+  <div class="state"><b>parked</b> <small>only if its trees aren't computed yet (§5)</small></div><span class="arrow">→</span>
+  <div class="state"><b>in flight</b><small>in a batch on the GPU (④–⑧), ~80 ms</small></div><span class="arrow">→</span>
+  <div class="state"><b>loaded</b><small>has a page, offset and quad count (⑨)</small></div><span class="arrow">→</span>
+  <div class="state"><b>leaving</b><small>no longer in the scan; stays drawn until whatever replaces it is loaded</small></div><span class="arrow">→</span>
+  <div class="state"><b>destroyed</b><small>quads zeroed; its page gets compacted later</small></div>
+</div>
+<p>The "stays drawn until replaced" rule is why there are no holes while flying. A coarse chunk that splits into 8 finer ones keeps showing until they've landed, and <code>coverage</code> hides the parts of it that the landed ones already cover. <span class="ref">chunk_memory.hpp:25</span></p>
+
+<h2 id="cost">7 · Where the GPU frame goes (fly)</h2>
+<p>The fly is <b>GPU-bound</b>: the main thread works ~3 ms of a ~22 ms frame, while the GPU is busy 99% of the time (27.3 ms of GPU work per captured frame). Meshing and drawing share it about half and half, and one dispatch dominates the meshing half.</p>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 1100 120" width="1100" role="img" aria-label="GPU frame in the fly, 27.3 ms: level 0 cascade with tree fold 11.3 ms, other mesh passes 3.4 ms, shadows 6.0, opaque 3.3, depth pre-pass 2.2, other rendering 1.1." style="max-width:none;display:block">
+  <!-- scale: 1100px / 27.3ms ≈ 40.3 px per ms -->
+  <g font-size="12">
+    <rect x="0" y="20" width="454" height="44" fill="var(--gpu)"/>
+    <text x="8" y="47" fill="var(--surface)" font-weight="600">level 0 + tree fold · 11.3 ms</text>
+    <rect x="454" y="20" width="137" height="44" fill="color-mix(in srgb, var(--gpu) 55%, var(--surface))"/>
+    <text x="460" y="40" fill="var(--fg)">other mesh</text>
+    <text x="460" y="56" fill="var(--fg)">3.4 ms</text>
+    <rect x="591" y="20" width="242" height="44" fill="var(--rt)"/>
+    <text x="599" y="47" fill="var(--surface)" font-weight="600">shadows · 6.0 ms</text>
+    <rect x="833" y="20" width="132" height="44" fill="color-mix(in srgb, var(--rt) 65%, var(--surface))"/>
+    <text x="839" y="47" fill="var(--fg)">opaque · 3.3</text>
+    <rect x="965" y="20" width="89" height="44" fill="color-mix(in srgb, var(--rt) 40%, var(--surface))"/>
+    <text x="970" y="47" fill="var(--fg)">pre-pass 2.2</text>
+    <rect x="1054" y="20" width="46" height="44" fill="var(--rule)"/>
+    <text x="1058" y="47" fill="var(--fg)">1.1</text>
+  </g>
+  <g font-size="11.5" fill="var(--muted)">
+    <line x1="0" y1="76" x2="591" y2="76" stroke="var(--gpu)" stroke-width="2"/>
+    <text x="0" y="94">meshing 14.7 ms: 2.65 batches × ~5.5 ms</text>
+    <line x1="591" y1="76" x2="1100" y2="76" stroke="var(--rt)" stroke-width="2"/>
+    <text x="597" y="94">Godot drawing the pages 12.6 ms (17 M quads live after the load)</text>
+  </g>
+</svg>
+</div>
+<figcaption>GPU timestamps from the trace, fly-out phase (218 frames). "Other mesh" = edges 0.86 + vertices 0.86 + emit 0.54 + page copy 0.38 + cascade levels ≥1 0.68 + reserve 0.09. "1.1" = sky, SSIL, SSAO, untracked and the rest.</figcaption>
+</figure>
+
+<div class="tablebox">
+<table>
+<thead><tr><th>One batch of 128 chunks</th><th class="num">GPU ms</th><th class="num">share</th><th>dispatches</th></tr></thead>
+<tbody>
+<tr><td>cascade levels ≥ 1 (coarse grids)</td><td class="num">0.26</td><td class="num">5%</td><td>one per level</td></tr>
+<tr><td><b>cascade level 0 + tree/rock fold</b></td><td class="num"><b>4.26</b></td><td class="num"><b>77%</b></td><td>1</td></tr>
+<tr><td>edges</td><td class="num">0.32</td><td class="num">6%</td><td>1</td></tr>
+<tr><td>vertices</td><td class="num">0.32</td><td class="num">6%</td><td>1</td></tr>
+<tr><td>reserve + emit</td><td class="num">0.24</td><td class="num">4%</td><td>2</td></tr>
+<tr><td>page copies</td><td class="num">0.14</td><td class="num">3%</td><td>16 copies</td></tr>
+<tr><td><b>total</b></td><td class="num"><b>~5.5</b></td><td class="num"></td><td></td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout">
+<p style="margin:0">What this says for optimisation: in the fly, <b>the level-0 dispatch (finest noise + folding the trees into each sample) costs about as much as all of Godot's drawing</b>. Load shows the same: 17.2 of 33 ms. Shadows (6 ms) come next. Everything on the CPU, the scan included, runs on other threads and doesn't hold the frame.</p>
+<p style="margin:.6em 0 0">Ground or trees? The mesher times each batch's cascade and bins it by the batch's list length (<code>gpu_by_list_words</code> in <code>stats.json</code>). Batches with no tree in their lists run the whole cascade in <b>1.06 ms</b>, against 5.13 ms on average in the fly. So <b>the tree fold is ~79% of the cascade and ~66% of all meshing GPU</b>; the ground's finest bands are cheap. The cost follows the list: 2.1 ms at ~90 records per batch, 5.7 ms at ~780, 10.5 ms at ~5,600, 23.7 ms at ~22,000. A quarter of the batches (≥2,048 records) carry half of it.</p>
+<p style="margin:.6em 0 0">Why it's expensive: in <code>arch_fold</code> (<code>archetype_table.cpp</code>, generated GLSL) <b>every one of the chunk's 32³ samples walks the chunk's whole list</b>, reading each 160-byte record to test its box. Workgroups are 64 samples in a row, so they can't share that test. Levers: cull the list per brick of samples (4³ workgroups, the list tested once into shared memory), test boxes from a compact array before touching the full record, and fewer or lighter records at coarse LODs (per-source LOD rules, blobs sooner).</p>
+</div>
+
+<h2>How this page was made</h2>
+<p>By hand: reading <code>voxel_terrain.cpp</code>, <code>chunk_discoverer.cpp</code>, <code>GPU_direct_mesher.cpp</code>, <code>cascade_glsl.cpp</code>, <code>instance_stream.cpp</code>, <code>chunk_memory.cpp</code> and the headers that describe them. Every count and millisecond comes from the trace of run <code>20261024-151347-direct</code> (<code>engine_structure.md</code>, <code>engine_map.md</code>, <code>stats.json</code>). The flow page (<code>engine_flow.html</code>) stays the tool for zooming into one function's code once you know where you're going.</p>
+</div>
+</body></html>
