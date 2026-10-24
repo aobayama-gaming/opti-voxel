@@ -14,6 +14,15 @@
 #include <cmath>
 #include <vector>
 
+// doctest's REQUIRE needs exceptions: a failed check ends the test case.
+#define CHECK_OR_RETURN(p_cond) \
+    do {                        \
+        CHECK(p_cond);          \
+        if (!(p_cond)) {        \
+            return;             \
+        }                       \
+    } while (0)
+
 namespace doctest {
 
 template <>

@@ -1,6 +1,7 @@
 #include "field_gpu.hpp"
 
 #include "local_points_gpu.hpp"
+#include "trace.hpp"
 
 #include <vector>
 
@@ -42,6 +43,9 @@ bool FieldGPU::ground_field(const VoxelPos *p_voxels, const int *p_lods, int p_c
     r.lods = p_lods;
     r.count = p_count;
     r.out = r_out;
+    Trace::Scope span("field", "wait");
+    span.set_arg(uint64_t(p_count));
+    Trace::flow(Trace::Kind::FLOW_START, "field", uint64_t(reinterpret_cast<uintptr_t>(&r)));
     const uint64_t t0 = now_usec();
     std::unique_lock<std::mutex> lock(mutex);
     if (state_now.load() != READY) {
@@ -55,6 +59,7 @@ bool FieldGPU::ground_field(const VoxelPos *p_voxels, const int *p_lods, int p_c
 }
 
 void FieldGPU::loop(const SDFBase *p_sdf, ChunkParam p_param, uint64_t p_scratch_bytes) {
+    Trace::name_thread("field_gpu");
     const uint64_t t0 = now_usec();
     uint64_t scratch_a = 0, scratch_b = 0;
     CascadeGLSL::scratch_bytes(p_sdf, 1, 1, scratch_a, scratch_b);
@@ -101,6 +106,11 @@ void FieldGPU::loop(const SDFBase *p_sdf, ChunkParam p_param, uint64_t p_scratch
             lods.insert(lods.end(), r->lods, r->lods + r->count);
         }
         out.resize(voxels.size());
+        Trace::Scope span("field", "submit");
+        span.set_arg(voxels.size());
+        for (const Request *r : taken) {
+            Trace::flow(Trace::Kind::FLOW_END, "field", uint64_t(reinterpret_cast<uintptr_t>(r)));
+        }
         CascadePointsGPU::BatchStats stats;
         const uint64_t t_run = now_usec();
         bool good = true;

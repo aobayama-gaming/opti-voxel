@@ -13,6 +13,10 @@
 # debugger attached a GDScript error pauses the game until the timeout. BENCH_RESOLUTION (default 1280x720)
 # sets the window size.
 #
+# --trace=1 (passed on to bench.gd) records the engine trace: <run>/trace.json (every thread's spans, the hand-offs
+# between threads, the GPU's passes; open it in ui.perfetto.dev) and the map drawn from it, <run>/engine_map.html +
+# engine_map.md (tools/engine_map.py). With --profile=1 too, the GPU track has every renderer pass.
+#
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log,
@@ -243,6 +247,9 @@ PY
 
 if [[ -f "$RUN_DIR/profile.json" ]]; then
     python3 "$ROOT/tools/profile_report.py" "$RUN_DIR" > "$RUN_DIR/profile.md" && echo ">> profile: $RUN_DIR/profile.md"
+fi
+if [[ -f "$RUN_DIR/trace.json" ]]; then
+    python3 "$(dirname "$0")/engine_map.py" "$RUN_DIR" && echo ">> engine map: $RUN_DIR/engine_map.html (timeline: trace.json in ui.perfetto.dev)"
 fi
 
 echo ">> log: $RUN_DIR/godot.log  (errors=$ERRORS leak-lines=$LEAKS exit=$CODE known-engine-exit-abort=$KNOWN_EXIT_ABORT ${TEARDOWN:-})"

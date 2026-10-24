@@ -186,6 +186,7 @@ private:
         std::vector<std::shared_ptr<const SourceContent>> inputs; // aligned with source->inputs(key)
         std::shared_ptr<SourceContent> out;
         uint64_t usec = 0;
+        uint64_t seq = 0; // its entry's job_seq: the trace flow from start() to the worker running it
         void run();
     };
     using JobKey = std::pair<uint64_t, uint64_t>; // (rank, the order started)

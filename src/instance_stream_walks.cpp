@@ -2,6 +2,7 @@
 #include "instance_stream.hpp"
 
 #include "debug_log.hpp"
+#include "trace.hpp"
 
 namespace Archetype {
 
@@ -25,6 +26,11 @@ void InstanceStream::take_walks(std::vector<std::unique_ptr<Job>> &r_batch) {
 }
 
 void InstanceStream::run_walks(std::vector<std::unique_ptr<Job>> &r_batch) {
+    Trace::Scope span("stream", "walk_tiles");
+    span.set_arg(r_batch.size());
+    for (const std::unique_ptr<Job> &job : r_batch) {
+        Trace::flow(Trace::Kind::FLOW_END, "stream_job", job->seq);
+    }
     const uint64_t t0 = now_usec();
     std::vector<SourceKey> keys;
     std::vector<SourceContent *> outs;

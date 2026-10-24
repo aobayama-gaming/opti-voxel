@@ -5,6 +5,7 @@
 #include "gpu_frame.hpp"
 #include "ov/bytes.hpp"
 #include "page_format.hpp"
+#include "trace.hpp"
 #include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <algorithm>
@@ -99,6 +100,8 @@ PackedByteArray GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor 
 uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
         uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes, std::vector<uint32_t> *r_streamed) const {
     (void)p_param;
+    Trace::Scope span("table", "build_lists");
+    span.set_arg(p_chunks.size());
     const uint64_t t0 = now_usec();
     const std::shared_ptr<const InstanceSnapshot> snap = snapshot();
     if (r_palettes) {
@@ -129,6 +132,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
         uint8_t *fits;
         uint32_t *streamed;
         static void run(void *p_job, uint32_t p_i) {
+            OV_TRACE("table", "chunk_list");
             const Job &job = *static_cast<const Job *>(p_job);
             const ChunkId &chunk = job.chunks[p_i];
             std::vector<uint32_t> &list = job.lists[p_i];

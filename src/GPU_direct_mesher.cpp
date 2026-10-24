@@ -9,6 +9,7 @@
 #include "gpu_glsl.hpp"
 #include "page_format.hpp"
 #include "rd_utils.hpp"
+#include "trace.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -372,6 +373,7 @@ void GPUDirectMesher::_rt_upload_table(const PackedByteArray &p_list, const Pack
 
 uint32_t GPUDirectMesher::_table_payload(std::vector<ChunkId> &r_chunks, std::vector<ChunkId> &r_rest, PackedByteArray &r_ids, PackedByteArray &r_list,
         PackedByteArray &r_records, std::vector<std::vector<uint32_t>> *r_palettes, std::vector<uint32_t> *r_streamed) {
+    OV_TRACE("mesher", "table_payload");
     SDFGpuTable *table = sdf->get_gpu_table();
     // Main thread, like the edits: the lists and the records come from the same snapshot.
     const uint64_t t_lists = now_usec();
@@ -393,6 +395,10 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const PackedByteArray &p
     if (!uniform_set.is_valid()) {
         return; // initialization failed (already reported)
     }
+    Trace::name_thread("render");
+    Trace::Scope span("mesher", "rt_dispatch");
+    span.set_arg(p_count);
+    Trace::flow(Trace::Kind::FLOW_STEP, "batch", p_batch_id);
     const uint64_t t0 = now_usec();
     _rt_read_timestamps();
     _rt_upload_table(p_list, p_records);
@@ -502,6 +508,8 @@ void GPUDirectMesher::_rt_on_audit_directory(const PackedByteArray &p_data, uint
 }
 
 void GPUDirectMesher::_rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id) {
+    OV_TRACE("mesher", "readback");
+    Trace::flow(Trace::Kind::FLOW_STEP, "batch", p_batch_id);
     mutex->lock();
     CompletedBatch &c = partial[p_batch_id];
     c.batch_id = p_batch_id;
@@ -515,6 +523,7 @@ void GPUDirectMesher::_rt_on_directory(const PackedByteArray &p_data, uint32_t p
 }
 
 void GPUDirectMesher::_rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id) {
+    OV_TRACE("mesher", "readback");
     mutex->lock();
     CompletedBatch &c = partial[p_batch_id];
     c.batch_id = p_batch_id;
@@ -528,12 +537,14 @@ void GPUDirectMesher::_rt_on_status(const PackedByteArray &p_data, uint32_t p_ba
 }
 
 void GPUDirectMesher::_rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges) {
+    OV_TRACE("pages", "rt_kill");
     for (int i = 0; i < p_pages.size(); i++) {
         pool->rt_kill_range(p_pages[i], p_ranges[i * 2], p_ranges[i * 2 + 1]);
     }
 }
 
 void GPUDirectMesher::_rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts) {
+    OV_TRACE("pages", "rt_compact");
     for (int i = 0; i + 4 < p_copies.size(); i += 5) {
         pool->rt_copy_rows(p_copies[i], p_copies[i + 1], p_copies[i + 2], p_copies[i + 3], p_copies[i + 4]);
     }
@@ -736,6 +747,7 @@ void GPUDirectMesher::_update_cost_model() {
 
 void GPUDirectMesher::_pop_batch(double p_budget_us, std::vector<ChunkId> &r_chunks, HashSet<ChunkId, Vector3i64Hasher> &r_remeshes,
         HashMap<ChunkId, uint64_t, Vector3i64Hasher> &r_bounds) {
+    OV_TRACE("mesher", "pop_batch");
     double estimate = 0.0;
     ChunkId chunk;
     ChunkGate::Kind kind = ChunkGate::CHUNK;
@@ -790,6 +802,8 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     if (chunks.empty()) {
         return false;
     }
+    Trace::Scope span("mesher", "dispatch_batch");
+    span.set_arg(chunks.size());
     const uint64_t t0 = now_usec();
 
     // The queue already pops in Morton order; re-sorting covers re-queued overflow chunks.
@@ -852,6 +866,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch.table_version = table_version;
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
+    Trace::flow(Trace::Kind::FLOW_START, "batch", batch_id);
     RenderingServer::get_singleton()->call_on_render_thread(callable_mp(this, &GPUDirectMesher::_rt_dispatch)
                     .bind(batch_id, ids, count, pages, lods, list, records, palette_batch));
 
@@ -936,6 +951,8 @@ bool GPUDirectMesher::get_results(VoxelState &output) {
     }
 
     for (CompletedBatch &c : done) {
+        OV_TRACE("mesher", "collect_batch");
+        Trace::flow(Trace::Kind::FLOW_END, "batch", c.batch_id);
         const uint64_t t0 = now_usec();
         HashMap<uint32_t, InFlightBatch>::Iterator it = in_flight.find(c.batch_id);
         ERR_CONTINUE(it == in_flight.end());

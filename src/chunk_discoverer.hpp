@@ -97,6 +97,7 @@ private:
     std::unique_ptr<ScanDelta> scanned_delta; // last taken scan -> published scan
     ScanView scanned_view; // the view the published scan was made for
     bool scanned_chunks_dirty = false;
+    uint64_t published_scans = 0; // the published scan's number: its trace flow to the main thread
     struct Stats {
         TimingStat scan;
         TimingStat cull; // part of `scan` spent in the cull test

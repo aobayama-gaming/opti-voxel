@@ -315,6 +315,11 @@ public:
     bool get_debug_gpu_profile_frames() const;
     // The frames recorded since the last call (debug_gpu_profile_frames), see GPUProfiler::take_frames.
     Array take_gpu_profile_frames();
+    // The engine trace (trace.hpp): every thread's spans and hand-offs, the GPU's passes. Start clears it; write
+    // saves it as a Chrome trace and returns { events, dropped, bytes } (bytes -1 when the file can't be written).
+    void debug_trace_start(int64_t p_max_events);
+    void debug_trace_stop();
+    Dictionary debug_trace_write(const String &p_path);
     // { section: total ms since start } of _process, cheap enough to read every frame.
     Dictionary get_process_times_ms() const;
 
