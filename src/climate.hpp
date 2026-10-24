@@ -273,7 +273,9 @@ Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_F
 // +-p_margin, one at a time; the margin doubles per octave a field's finest band is under the finest band of the region's
 // slowest field (it moves faster across the ground). A core deep enough that the modulation's reads at the cascade's
 // coarser lattices, kilometres apart, stay in it too: there a world's landform is its own table (docs/landforms.md).
-inline constexpr float CORE_MARGIN = 0.05f;
+// Measured (test_climate_regions.cpp): 0.05 until the fold (Cascade::node_interp) moved the fields read there (about 0.1%
+// of their amplitude), which put one coarse read of world.json's valley core in a fade.
+inline constexpr float CORE_MARGIN = 0.055f;
 bool region_core(const Table &p_table, int p_region, const Float4 p_fields[MAX_FIELDS], float p_margin = CORE_MARGIN);
 // The regions some height term is gated by, in index order (parse stores them in Table::gated).
 std::vector<int> gated_regions(const Table &p_table);

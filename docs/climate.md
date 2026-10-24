@@ -34,7 +34,8 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `CascadePasses` compiles a ground-only variant and a fields variant (`level_shader(..., p_fields)`, the scratch planar:
   vec4 v of every slot together, so the ground's loads stay contiguous): a chunk of LOD L carries its fields at level m
   only where `Cascade::FieldRange::carried` (m >= the finest modulated ground level, L <= the coarsest; the CPU's ground
-  queries follow it too, `fields_at` carries them everywhere), and a dispatch takes the fields variant where
+  queries follow it too, `fields_at` carries them everywhere), a field group with bands only down to its node level
+  (its finest insertion level: below it, read from its nodes, the fold in `docs/cascade.md`), and a dispatch takes the fields variant where
   `FieldRange::batch` says (`record_level`'s `p_lods`, the batch's LOD range). Cost
   (CascadeSpike, 128-chunk batches, example climate, before the biome materials, `docs/materials.md`): fields without multipliers 1.00x; with them 1.09x at LODs 0-4,
   1.00x at 20-24, 2.2-3.5x at LODs 8-16 (their own level is modulated: the weights run on every sample, +9-19 us per
@@ -66,8 +67,8 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   6-13% gradient error, visible lines). (4) **Height terms** (`"heights"`: `height_m * curve(field)`, libnoise's Curve)
   and per-biome **terraces** (libnoise's Terrace, blended by the weight) are added to the ground at each sample,
   after the cascade (`Climate::ground_value` / GLSL `climate_ground`, through `SDFCascade::ground_channels` on every
-  path: chunk samples, point items, `ground_y`, the report); the fields are then carried at every level, point items
-  too (`CascadeGLSL::field_range`), and the skirts take the terms' step (`Climate::ground_step`: the height fields'
+  path: chunk samples, point items, `ground_y`, the report); the fields are then read at every level, point items
+  too (`CascadeGLSL::field_range`; below a group's node level from its nodes), and the skirts take the terms' step (`Climate::ground_step`: the height fields'
   terms, twice that with terraces for their slope, plus the terrace blend's change with the weights, each terraced biome's
   weight step times a quarter of its step; unit test: the L | L+1 step stays within the skirt on the example and
   `shaped_test.json`). Refused: an `"offset"` without a multifractal (plain, billow and square bands are inserted without

@@ -129,6 +129,9 @@ public:
     uint64_t scratch_bytes() const { return scratch_bytes_total; }
     uint32_t get_max_chunks() const { return max_chunks; }
     bool is_points() const { return item_size == 1; }
+    // Points per item of level j's scratch (j > 0): item c's level j starts at c times it. c n_j^3 without a fold, the
+    // buffer's whole region per item with one (CascadeFoldGLSL).
+    uint32_t item_stride(int p_j) const;
     RID get_scratch_a() const { return scratch_a; }
     RID get_scratch_b() const { return scratch_b; }
 
@@ -150,6 +153,7 @@ private:
     uint32_t max_chunks = 0;
     uint64_t scratch_bytes_total = 0;
     bool owns_scratch = true;
+    bool fold = false; // Spec::folds of the field range: fixed per-item scratch regions
 
     bool _compile(int p_variant, const String &p_name, const String &p_code);
     bool _create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo, RID p_output,

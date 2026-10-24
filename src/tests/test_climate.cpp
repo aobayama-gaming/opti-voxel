@@ -7,6 +7,7 @@
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <random>
 
@@ -36,6 +37,24 @@ Cascade::Spec own_spec(const Field &p_field) {
     spec.set = Cascade::ChannelSet::LINEAR4;
     spec.bands = p_field.bands;
     return spec;
+}
+
+// A field's channels at lattice point p_p of Λ_m as the combined spec defines them (its group's node level p_node): its
+// own spec's at or above the node level, else the fold of its own spec's nodes (Cascade::node_interp).
+void own_channels(const Cascade::Spec &p_own, int p_node, const Vector3i64 &p_p, int p_m, float r_ch[Cascade::CHANNELS]) {
+    Cascade::point_into(p_own, p_p, p_m, r_ch);
+    if (p_m >= p_node) {
+        return;
+    }
+    const Cascade::NodeCell cell = Cascade::node_cell(p_p, p_m, p_node);
+    Cascade::node_interp(
+            cell,
+            [&](int p_x, int p_y, int p_z, float r[4]) {
+                float ch[Cascade::CHANNELS];
+                Cascade::point_into(p_own, Vector3i64(cell.q.x + p_x, cell.q.y + p_y, cell.q.z + p_z), p_node, ch);
+                std::copy(ch, ch + 4, r);
+            },
+            r_ch);
 }
 
 String parse_json(const String &p_json, const Ground &p_ground, Table &r_table) {
@@ -369,12 +388,13 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
             const Vector3i64 p(base, -base / 3 + 5, 7 - base);
             Float4 r[MAX_FIELDS];
             fields_at(t, spec, p, m, r);
-            // Field a is its own spec; b adds -0.25 a; c is 0.001 * 0.05 ground + 2 b, in that order.
+            // Field a is its own spec (folded below its node level); b adds -0.25 a; c is 0.001 * 0.05 ground + 2 b, in that
+            // order.
             float ch[Cascade::CHANNELS], gc[Cascade::CHANNELS];
-            Cascade::point_into(own_spec(t.fields[0]), p, m, ch);
+            own_channels(own_spec(t.fields[0]), spec.node_level(1), p, m, ch);
             CHECK(float_bits(r[0].w) == float_bits(ch[Cascade::VALUE]));
             CHECK(float_bits(r[0].x) == float_bits(ch[Cascade::DX]));
-            Cascade::point_into(own_spec(t.fields[1]), p, m, ch);
+            own_channels(own_spec(t.fields[1]), spec.node_level(2), p, m, ch);
             CHECK(float_bits(r[1].w) == float_bits(Cascade::flush_value(ch[Cascade::VALUE] + r[0].w * -0.25f)));
             Cascade::point_into(*g.ground.spec, p, m, gc);
             const float c0 = Cascade::flush_value(0.0f + gc[Cascade::VALUE] * float(0.001 * g.ground.voxel_size));

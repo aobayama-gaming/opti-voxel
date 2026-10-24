@@ -60,11 +60,13 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, true));
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
-    CHECK(h == 16354123549857880415ull);
+    // Re-pinned with the fold (Cascade::node_interp): below their node levels (10, 12, 13) the fields are read from their
+    // nodes, and the shaders read them so.
+    CHECK(h == 5221103721844417297ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
-    CHECK(chunk_text == 585642622528421550ull);
+    CHECK(chunk_text == 13792841627295151359ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B).
-    CHECK(point_text == 7673647860036491862ull);
+    CHECK(point_text == 10076440951611135499ull);
 }
 
 // The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its

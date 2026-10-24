@@ -218,7 +218,7 @@ private:
             if (j > 0) {
                 // The scratch is planar (vec4 v of every slot together): the whole buffer.
                 const PackedByteArray scratch = rd->buffer_get_data((j & 1) ? passes.get_scratch_a() : passes.get_scratch_b());
-                compare_level(j, scratch, PackedByteArray(), uint64_t(scratch.size()) / 16 / nv);
+                compare_level(j, scratch, PackedByteArray(), uint64_t(scratch.size()) / 16 / nv, passes.item_stride(j));
                 continue;
             }
             final_channels = rd->buffer_get_data(debug, 0, bytes);
@@ -237,11 +237,13 @@ private:
 
     // Level j of every chunk of the batch (GPU layout: x fastest, stride level_bound(j)) against the CPU's
     // (x slowest); at j = 0 also the samples against SDFCascade::sdf + skirt of the CPU channels. p_plane: the planar
-    // scratch's plane (vec4s), 0 for the per-point debug channels.
-    void compare_level(int p_j, const PackedByteArray &p_data, const PackedByteArray &p_samples, uint64_t p_plane = 0) {
+    // scratch's plane (vec4s), 0 for the per-point debug channels; p_stride: the scratch's points per chunk
+    // (CascadePasses::item_stride), 0 for the debug channels (n^3). In the scratch, the groups a chunk folds at the level
+    // (Spec::folded) hold their node level's channels, not the level's: only the carried ones are compared there.
+    void compare_level(int p_j, const PackedByteArray &p_data, const PackedByteArray &p_samples, uint64_t p_plane = 0, uint64_t p_stride = 0) {
         const float *gpu = reinterpret_cast<const float *>(p_data.ptr());
         const uint64_t n = uint64_t(level_bound(cs, p_j));
-        const uint64_t points = n * n * n;
+        const uint64_t points = p_stride > 0 ? p_stride : n * n * n;
         const int top = sdf.get_spec().top_level(all_fields);
         // The fields only where the range carries them (the ground everywhere), on the GPU and the CPU alike.
         const int ground_ch = channel_count(sdf.get_spec().set);
@@ -257,10 +259,14 @@ private:
             checks.levels++;
             const Box &box = level.box;
             int64_t differing = 0;
+            const uint32_t folded = p_plane > 0 ? sdf.get_spec().folded(range, lod_c, m) : 0u;
             for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
                 const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
                 const uint64_t slot = c * points + uint64_t(i.x) + n * (uint64_t(i.y) + n * uint64_t(i.z));
                 for (int ch = 0; ch < (range.carried(lod_c, m) ? nch : ground_ch); ch++) {
+                    if (ch >= ground_ch && ((folded >> (1 + (ch - ground_ch) / FIELD_CHANNELS)) & 1u) != 0u) {
+                        continue;
+                    }
                     const float want = level.ch[sdf.get_spec().slot_of_gpu(ch)][size_t(p_cpu_i)];
                     const float got = p_plane > 0 ? gpu[(uint64_t(ch / 4) * p_plane + slot) * 4 + ch % 4] : gpu[slot * nv * 4 + ch];
                     checks.values++;

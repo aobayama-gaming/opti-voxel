@@ -222,7 +222,8 @@ using Band = ExactNoise::Octave;
 // ceiling the finest / coarsest modulated level. Only the modulation reads the fields, so nothing below the floor nor
 // in a run coarser than every modulated level needs them, and the ground is the same bits whether they are carried or
 // not. Empty (no modulation): carried nowhere. The CPU's ground queries and the GPU's passes both follow it; a query
-// for the fields themselves (Climate's fields_at) carries them everywhere.
+// for the fields themselves (Climate's fields_at) carries them everywhere. Where carried, a group below its node level
+// (Spec::node_level) is read by interpolation from its nodes instead (Spec::folded, node_interp).
 struct FieldRange {
     int floor = MAX_LEVEL + 1;
     int ceiling = -1;
@@ -326,6 +327,16 @@ struct Spec {
     BaseSurface base = BaseSurface::flat(0);
 
     int insert_level(const Band &p_band) const { return p_band.k - insert_shift; }
+    // The level group p_group exists down to as lattice values (the fold, node_interp): a field group's finest insertion
+    // level, at most NODE_MAX; 0 (carried at every level) for the ground and a band-less group (the multifractal state the
+    // ground's band writes, a field of terms only: 0 everywhere).
+    int node_level(int p_group) const;
+    // The groups a run down to p_lod reads at level p_m from their nodes instead of carrying them (bit g: group g): carried
+    // there (p_range) and p_m below their node level.
+    uint32_t folded(const FieldRange &p_range, int p_lod, int p_m) const;
+    // Whether p_range carries group p_group (any group: -1) below its node level in some run: else it is carried as before
+    // the fold.
+    bool folds(const FieldRange &p_range, int p_group = -1) const;
     // Some band of group p_group (any group: -1) is stretched along y (Band::stretch): its GLSL inserts go through
     // the base's base_stretched.
     bool stretched(int p_group = -1) const;
@@ -371,9 +382,76 @@ void insert_bands(const Spec &p_spec, Level &r_level);
 // insertions are added (a modulated band: value n.w A, slopes n.s (A 2^-shift) + n.w dA, the GPU's order).
 void insert_at(const Spec &p_spec, int p_m, const Vector3i64 &p_p, float r_slots[SLOTS]);
 
-// H of p_parent onto p_child_box, carrying the ground and p_fields field groups (-1: the parent's; at most them).
-Level subdivide(const Level &p_parent, const Box &p_child_box, int p_fields = -1);
+// H of p_parent onto p_child_box, carrying the ground and p_fields field groups (-1: the parent's; at most them). The
+// groups of p_skip (bit g: group g, Spec::folded) are left 0: the run fills them from their nodes.
+Level subdivide(const Level &p_parent, const Box &p_child_box, int p_fields = -1, uint32_t p_skip = 0u);
 void flush(Level &r_level);
+
+// The fold. Below its node level ν (Spec::node_level) a field group is not carried: a point p of Λ_m reads it from the 8
+// nodes of its cell of Λ_ν, by H's per-axis rule at the point's dyadic offset t = (p mod 2^d) 2^-d, d = ν - m, in H's
+// order (x, then y, then z): (value, slope along the axis) the cubic Hermite at t and its derivative, the transverse
+// slopes lerped, every product flushed; then the slopes times 2^-d (per spacing of Λ_m, like the carried channels) and
+// every channel flushed. An axis with t = 0 copies its low node, so at Λ_ν's own points (d copies) it gives the carried
+// cascade's bits, and one level below it H's (d = 1). Deeper it is not the iterated subdivision: LINEAR4 drops the cross
+// derivatives at every level, the one-shot interpolation once (world.json: about 0.1% of a smooth field's amplitude in
+// value, 3% in gradient, test_climate_fold.cpp; up to 13% at rare points of its ridged fields, whose creases have large
+// cross derivatives). Only + - * by correctly rounded constants: t is exact while d <= NODE_MAX, the GPU mirror is
+// generated op for op (cascade_fold_glsl.cpp).
+inline constexpr int NODE_MAX = 24;
+
+// One axis of a cell: whether t > 0 (else the low node alone) and the basis at t.
+struct NodeAxis {
+    bool mid = false;
+    float t = 0.0f;
+    float u = 1.0f; // 1 - t, the transverse lerp's low weight
+    float h[4] = {}; // the value's weights on a, slope a, b, slope b
+    float dh[4] = {}; // the derivative's (per node spacing)
+};
+NodeAxis node_axis(float p_t);
+
+// A point's cell: its low node q on Λ_ν (floor(p / 2^d)), the axes' bases and the slopes' scale 2^-d.
+struct NodeCell {
+    Vector3i64 q;
+    NodeAxis axis[3];
+    float scale = 1.0f;
+};
+NodeCell node_cell(const Vector3i64 &p_p, int p_m, int p_node);
+
+// One axis pass on a group's channels (VALUE, DX, DY, DZ): p_a the low side, p_b the high one (read only with mid).
+void node_axis_pass(const NodeAxis &p_w, int p_axis, const float p_a[4], const float p_b[4], float r_ch[4]);
+
+// The group's channels at p_cell's point; p_node(x, y, z, r_ch) reads the 4 channels of node q + (x, y, z), only the
+// nodes the mid axes need.
+template <typename Get>
+void node_interp(const NodeCell &p_cell, Get p_node, float r_ch[4]) {
+    const NodeAxis *w = p_cell.axis;
+    auto pass_x = [&](int p_y, int p_z, float r[4]) {
+        float a[4], b[4] = {};
+        p_node(0, p_y, p_z, a);
+        if (w[0].mid) {
+            p_node(1, p_y, p_z, b);
+        }
+        node_axis_pass(w[0], 0, a, b, r);
+    };
+    auto pass_y = [&](int p_z, float r[4]) {
+        float a[4], b[4] = {};
+        pass_x(0, p_z, a);
+        if (w[1].mid) {
+            pass_x(1, p_z, b);
+        }
+        node_axis_pass(w[1], 1, a, b, r);
+    };
+    float a[4], b[4] = {};
+    pass_y(0, a);
+    if (w[2].mid) {
+        pass_y(1, b);
+    }
+    node_axis_pass(w[2], 2, a, b, r_ch);
+    r_ch[VALUE] = flush_value(r_ch[VALUE]);
+    for (int c = DX; c <= DZ; c++) {
+        r_ch[c] = flush_value(r_ch[c] * p_cell.scale);
+    }
+}
 
 // Runs the cascade from the top lattice down to Λ_{p_lod} over the points of p_box (on Λ_{p_lod}).
 // r_levels (optional) receives every level, top first.

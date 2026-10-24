@@ -58,8 +58,8 @@ void axis_rule(ChannelSet p_set, int p_base, int p_axis, bool p_copy, Get p_get,
 }
 
 // One axis of H: p_in -> the same box with axis p_axis replaced by [p_lo, p_hi] (child indices), the ground and
-// p_fields field groups (<= p_in's).
-Level subdivide_axis(const Level &p_in, int p_fields, int p_axis, int64_t p_lo, int64_t p_hi) {
+// p_fields field groups (<= p_in's) but those of p_skip (left 0).
+Level subdivide_axis(const Level &p_in, int p_fields, uint32_t p_skip, int p_axis, int64_t p_lo, int64_t p_hi) {
     Box box = p_in.box;
     box.lo[p_axis] = p_lo;
     box.hi[p_axis] = p_hi;
@@ -75,6 +75,9 @@ Level subdivide_axis(const Level &p_in, int p_fields, int p_axis, int64_t p_lo, 
         }
         const int64_t ib = ia + in_stride[p_axis];
         for (int g = 0; g < 1 + p_fields; g++) {
+            if ((p_skip >> g) & 1u) {
+                continue;
+            }
             axis_rule(
                     group_set(p_in.set, g), group_slot(g), p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
                     [&](int p_s, float p_v) { out.ch[p_s][p_o] = p_v; });
@@ -436,6 +439,89 @@ int Spec::top_level(bool p_all_fields) const {
     return t;
 }
 
+int Spec::node_level(int p_group) const {
+    if (p_group == 0 || group_bands(p_group).empty()) {
+        return 0;
+    }
+    int m = NODE_MAX;
+    for (const Band &b : group_bands(p_group)) {
+        m = std::min(m, insert_level(b));
+    }
+    return std::max(m, 0);
+}
+
+uint32_t Spec::folded(const FieldRange &p_range, int p_lod, int p_m) const {
+    if (!p_range.carried(p_lod, p_m)) {
+        return 0u;
+    }
+    uint32_t mask = 0u;
+    for (int g = 1; g < group_count(); g++) {
+        mask |= p_m < node_level(g) ? 1u << g : 0u;
+    }
+    return mask;
+}
+
+bool Spec::folds(const FieldRange &p_range, int p_group) const {
+    for (int g = 1; g < group_count(); g++) {
+        if ((p_group < 0 || g == p_group) && !p_range.empty() && node_level(g) > std::max(p_range.floor, 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+NodeAxis node_axis(float p_t) {
+    NodeAxis w;
+    w.mid = p_t > 0.0f;
+    w.t = p_t;
+    w.u = 1.0f - p_t;
+    const float t = p_t;
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    w.h[0] = (t3 * 2.0f - t2 * 3.0f) + 1.0f;
+    w.h[1] = (t3 - t2 * 2.0f) + t;
+    w.h[2] = t2 * 3.0f - t3 * 2.0f;
+    w.h[3] = t3 - t2;
+    w.dh[0] = t2 * 6.0f - t * 6.0f;
+    w.dh[1] = (t2 * 3.0f - t * 4.0f) + 1.0f;
+    w.dh[2] = t * 6.0f - t2 * 6.0f;
+    w.dh[3] = t2 * 3.0f - t * 2.0f;
+    return w;
+}
+
+NodeCell node_cell(const Vector3i64 &p_p, int p_m, int p_node) {
+    NodeCell cell;
+    const int d = p_node - p_m;
+    ERR_FAIL_COND_V_MSG(d <= 0 || d > NODE_MAX, cell, "Cascade::node_cell: the node level is not 1 .. NODE_MAX levels above the point.");
+    const int64_t mask = (int64_t(1) << d) - 1;
+    const float to_t = ExactNoise::exact_pow2(-d);
+    for (int a = 0; a < 3; a++) {
+        // Two's complement: the low bits are the offset from the floor node for negative indices too.
+        cell.q[a] = p_p[a] >> d;
+        cell.axis[a] = node_axis(float(p_p[a] & mask) * to_t);
+    }
+    cell.scale = to_t;
+    return cell;
+}
+
+void node_axis_pass(const NodeAxis &p_w, int p_axis, const float p_a[4], const float p_b[4], float r_ch[4]) {
+    if (!p_w.mid) {
+        std::copy(p_a, p_a + 4, r_ch);
+        return;
+    }
+    const int s = DX + p_axis;
+    auto sum = [&](const float p_k[4]) {
+        return ((flush_value(p_k[0] * p_a[VALUE]) + flush_value(p_k[1] * p_a[s])) + flush_value(p_k[2] * p_b[VALUE])) + flush_value(p_k[3] * p_b[s]);
+    };
+    r_ch[VALUE] = sum(p_w.h);
+    r_ch[s] = sum(p_w.dh);
+    for (int c = DX; c <= DZ; c++) {
+        if (c != s) {
+            r_ch[c] = flush_value(p_w.u * p_a[c]) + flush_value(p_w.t * p_b[c]);
+        }
+    }
+}
+
 int64_t Stats::total() const {
     int64_t t = 0;
     for (const int64_t p : points) {
@@ -460,6 +546,39 @@ int checked_top(const Spec &p_spec, int p_lod, bool p_all_fields = false) {
         }
     }
     return top;
+}
+
+// The range a run carries the fields in: the spec's, or every level of every run (p_all_fields).
+FieldRange run_range(const Spec &p_spec, bool p_all_fields) {
+    return p_all_fields ? FieldRange{ 0, MAX_LEVEL } : p_spec.field_range();
+}
+
+// Whether level p_m of a run down to p_lod reads its folded groups: the run's own level (the sample's readers: the pick,
+// the ground terms) or a modulated one (the modulation reads the point before the level's insertions).
+bool fold_read(const Spec &p_spec, int p_lod, int p_m) {
+    return p_m == p_lod || (p_spec.modulation && p_spec.modulation->modulated(p_m) != 0u);
+}
+
+// Fills the folded groups p_folded (Spec::folded) of lattice point p_p of Λ_m from their nodes: p_node(g, q, r_ch) reads
+// group g's 4 channels at node q of its node level, p_slot(s) is the point's slot s. One cell per node level.
+template <typename Node, typename Slot>
+void fold_point(const Spec &p_spec, uint32_t p_folded, const Vector3i64 &p_p, int p_m, Node p_node, Slot p_slot) {
+    int node = -1;
+    NodeCell cell;
+    for (int g = 1; g < p_spec.group_count(); g++) {
+        if (((p_folded >> g) & 1u) == 0u) {
+            continue;
+        }
+        if (p_spec.node_level(g) != node) {
+            node = p_spec.node_level(g);
+            cell = node_cell(p_p, p_m, node);
+        }
+        float r[4];
+        node_interp(cell, [&](int p_x, int p_y, int p_z, float r_ch[4]) { p_node(g, Vector3i64(cell.q.x + p_x, cell.q.y + p_y, cell.q.z + p_z), r_ch); }, r);
+        for (int c = 0; c < FIELD_CHANNELS; c++) {
+            p_slot(group_slot(g) + c) = r[c];
+        }
+    }
 }
 
 } // namespace
@@ -488,12 +607,12 @@ void insert_at(const Spec &p_spec, int p_m, const Vector3i64 &p_p, float r_slots
     insert_point(p_spec, LevelBands(p_spec, p_m, p_spec.group_count()), p_m, p_p, r_slots);
 }
 
-Level subdivide(const Level &p_parent, const Box &p_child_box, int p_fields) {
+Level subdivide(const Level &p_parent, const Box &p_child_box, int p_fields, uint32_t p_skip) {
     const int fields = p_fields < 0 ? p_parent.fields : p_fields;
     ERR_FAIL_COND_V_MSG(fields > p_parent.fields, Level(), "Cascade::subdivide: more field groups than the parent carries.");
-    Level l = subdivide_axis(p_parent, fields, 0, p_child_box.lo[0], p_child_box.hi[0]);
-    l = subdivide_axis(l, fields, 1, p_child_box.lo[1], p_child_box.hi[1]);
-    l = subdivide_axis(l, fields, 2, p_child_box.lo[2], p_child_box.hi[2]);
+    Level l = subdivide_axis(p_parent, fields, p_skip, 0, p_child_box.lo[0], p_child_box.hi[0]);
+    l = subdivide_axis(l, fields, p_skip, 1, p_child_box.lo[1], p_child_box.hi[1]);
+    l = subdivide_axis(l, fields, p_skip, 2, p_child_box.lo[2], p_child_box.hi[2]);
     l.m = p_parent.m - 1;
     return l;
 }
@@ -511,18 +630,36 @@ Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r
     if (top < 0) {
         return Level();
     }
-    const FieldRange range = p_spec.field_range();
+    const FieldRange range = run_range(p_spec, p_all_fields);
     const std::vector<Box> boxes = level_boxes(p_box, p_lod, top);
+    // A fold reads its nodes from the levels above: they are kept (top first).
+    std::vector<Level> kept;
+    std::vector<Level> *levels = r_levels ? r_levels : (p_spec.folds(range) ? &kept : nullptr);
+    const size_t first = levels ? levels->size() : 0;
     Level cur;
     for (int m = top; m >= p_lod; m--) {
         const Box &box = boxes[size_t(m - p_lod)];
         // Monotone in m (FieldRange::carried): a level carries at most its parent's fields.
         const int fields = carried_fields(p_spec, range, p_lod, m, p_all_fields);
+        const uint32_t folded = p_spec.folded(range, p_lod, m);
         if (m == top) {
             cur.allocate(m, box, p_spec.set, fields);
         } else {
-            // With r_levels the previous level was moved there.
-            cur = subdivide(r_levels ? r_levels->back() : cur, box, fields);
+            // With levels the previous level was moved there.
+            cur = subdivide(levels ? levels->back() : cur, box, fields, folded);
+        }
+        if (folded != 0u && fold_read(p_spec, p_lod, m)) {
+            for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
+                fold_point(
+                        p_spec, folded, p_p, m,
+                        [&](int p_g, const Vector3i64 &p_q, float r_ch[4]) {
+                            const Level &node = (*levels)[first + size_t(top - p_spec.node_level(p_g))];
+                            for (int c = 0; c < FIELD_CHANNELS; c++) {
+                                r_ch[c] = node.at(group_slot(p_g) + c, p_q);
+                            }
+                        },
+                        [&](int p_s) -> float & { return cur.ch[p_s][size_t(p_i)]; });
+            });
         }
         if (p_source) {
             p_source(cur);
@@ -530,12 +667,12 @@ Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r
             insert_bands(p_spec, cur);
         }
         flush(cur);
-        if (r_levels) {
-            r_levels->push_back(std::move(cur));
+        if (levels) {
+            levels->push_back(std::move(cur));
         }
     }
-    if (r_levels) {
-        return r_levels->back();
+    if (levels) {
+        return levels->back();
     }
     return cur;
 }
@@ -557,8 +694,8 @@ struct SmallLevel {
 };
 
 // subdivide_axis on SmallLevels: the same index arithmetic and the same per-point ops (axis_rule), the ground of set
-// p_set and p_fields field groups.
-void subdivide_axis_small(const SmallLevel &p_in, ChannelSet p_set, int p_fields, int p_axis, int64_t p_lo, int64_t p_hi, SmallLevel &r_out) {
+// p_set and p_fields field groups but those of p_skip.
+void subdivide_axis_small(const SmallLevel &p_in, ChannelSet p_set, int p_fields, uint32_t p_skip, int p_axis, int64_t p_lo, int64_t p_hi, SmallLevel &r_out) {
     r_out.box = p_in.box;
     r_out.box.lo[p_axis] = p_lo;
     r_out.box.hi[p_axis] = p_hi;
@@ -572,12 +709,25 @@ void subdivide_axis_small(const SmallLevel &p_in, ChannelSet p_set, int p_fields
         }
         const int64_t ib = ia + in_stride[p_axis];
         for (int g = 0; g < 1 + p_fields; g++) {
+            if ((p_skip >> g) & 1u) {
+                for (int s = 0; s < FIELD_CHANNELS; s++) {
+                    r_out.ch[group_slot(g) + s][p_o] = 0.0f; // filled from the nodes where read
+                }
+                continue;
+            }
             axis_rule(
                     group_set(p_set, g), group_slot(g), p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
                     [&](int p_s, float p_v) { r_out.ch[p_s][p_o] = p_v; });
         }
     });
 }
+
+// A point's folded groups' nodes: each group's channels on its node level's box (at most POINT_AXIS per axis too), kept
+// when the walk down passes that level.
+struct SmallNodes {
+    Box box[MAX_GROUPS];
+    float ch[SLOTS][POINT_CAP];
+};
 
 } // namespace
 
@@ -589,19 +739,22 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
     if (top < 0) {
         return;
     }
-    const FieldRange range = p_spec.field_range();
+    const FieldRange range = run_range(p_spec, p_all_fields);
+    const bool folds = p_spec.folds(range);
     const Box base = point_box(p_p);
     // Ping-pong: cur holds level l, tmp the axis passes towards level l - 1.
     SmallLevel a;
     SmallLevel b;
     SmallLevel *cur = &a;
     SmallLevel *tmp = &b;
+    SmallNodes nodes;
     int fields = 0;
     for (int l = top; l >= p_m; l--) {
         // level_box == the iterated parent_box of run() (unit-tested); a point's boxes fit POINT_AXIS.
         const Box box = level_box(base, l - p_m);
         ERR_FAIL_COND_MSG(box.size(0) > POINT_AXIS || box.size(1) > POINT_AXIS || box.size(2) > POINT_AXIS, "Cascade::point_into: level box over POINT_AXIS.");
         fields = carried_fields(p_spec, range, p_m, l, p_all_fields);
+        const uint32_t folded = p_spec.folded(range, p_m, l);
         if (l == top) {
             cur->box = box;
             for_each_slot(p_spec.set, fields, [&](int p_s) {
@@ -611,10 +764,23 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
             });
         } else {
             // subdivide(): x, then y, then z.
-            subdivide_axis_small(*cur, p_spec.set, fields, 0, box.lo[0], box.hi[0], *tmp);
-            subdivide_axis_small(*tmp, p_spec.set, fields, 1, box.lo[1], box.hi[1], *cur);
-            subdivide_axis_small(*cur, p_spec.set, fields, 2, box.lo[2], box.hi[2], *tmp);
+            subdivide_axis_small(*cur, p_spec.set, fields, folded, 0, box.lo[0], box.hi[0], *tmp);
+            subdivide_axis_small(*tmp, p_spec.set, fields, folded, 1, box.lo[1], box.hi[1], *cur);
+            subdivide_axis_small(*cur, p_spec.set, fields, folded, 2, box.lo[2], box.hi[2], *tmp);
             std::swap(cur, tmp);
+        }
+        if (folded != 0u && fold_read(p_spec, p_m, l)) {
+            for_each_point(cur->box, [&](const Vector3i64 &p_p, int64_t p_i) {
+                fold_point(
+                        p_spec, folded, p_p, l,
+                        [&](int p_g, const Vector3i64 &p_q, float r_ch[4]) {
+                            const int64_t i = nodes.box[p_g].index(p_q);
+                            for (int c = 0; c < FIELD_CHANNELS; c++) {
+                                r_ch[c] = nodes.ch[group_slot(p_g) + c][i];
+                            }
+                        },
+                        [&](int p_s) -> float & { return cur->ch[p_s][p_i]; });
+            });
         }
         // insert_bands(), then flush().
         const LevelBands lb(p_spec, l, 1 + fields);
@@ -625,6 +791,15 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
                 cur->ch[p_s][i] = flush_value(cur->ch[p_s][i]);
             }
         });
+        // The groups whose node level this is, for the levels below.
+        for (int g = 1; folds && g <= fields; g++) {
+            if (p_spec.node_level(g) == l) {
+                nodes.box[g] = cur->box;
+                for (int c = 0; c < FIELD_CHANNELS; c++) {
+                    std::copy(cur->ch[group_slot(g) + c], cur->ch[group_slot(g) + c] + count, nodes.ch[group_slot(g) + c]);
+                }
+            }
+        }
     }
     for_each_slot(p_spec.set, fields, [&](int p_s) { r_slots[p_s] = cur->ch[p_s][0]; });
 }

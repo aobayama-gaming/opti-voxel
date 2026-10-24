@@ -1,5 +1,6 @@
 #include "cascade_glsl.hpp"
 
+#include "cascade_fold_glsl.hpp"
 #include "cascade_shaped_glsl.hpp"
 #include "chunk_palette.hpp"
 
@@ -92,7 +93,7 @@ void main() {
         uvec3 p0 = par >> 1u;
         bvec3 mid = equal(par & 1u, uvec3(1u));
         uint np = pc.n_parent;
-        uint pbase = c * np * np * np;
+        uint pbase = /*PARENT_BASE*/;
         // j + 1 odd: A, even: B.
         bool from_a = (pc.j & 1) == 0;
         Ch x00 = pass_x(from_a, pbase, np, p0, mid.x);
@@ -128,7 +129,7 @@ void main() {
 
 /*INSERT_BANDS*/    ch = flush(ch);
 
-    uint slot = c * n * n * n + local;
+    uint slot = /*STORE_BASE*/ + local;
     if (pc.j > 0) {
         store(pc.j & 1, slot, ch);
         return;
@@ -197,8 +198,9 @@ String flt(float p_f) {
     return ExactNoise::glsl_float(p_f);
 }
 
-// Ch and hermite_x/y/z for a spec's groups (from Cascade::PAIRS, the CPU's axis_rule per group).
-String hermite_functions(const Spec &p_spec) {
+// Ch and hermite_x/y/z for a spec's groups (from Cascade::PAIRS, the CPU's axis_rule per group); a fold group (p_range) only
+// where carried (CascadeFoldGLSL::carry_flag).
+String hermite_functions(const Spec &p_spec, const FieldRange &p_range) {
     const int nch = p_spec.gpu_channels();
     String code = vformat("struct Ch { float c[%d]; };\n\n", nch);
     code += "Ch ch_zero() {\n    Ch r;\n";
@@ -242,6 +244,11 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
                 }
                 continue;
             }
+            const String flag = CascadeFoldGLSL::carry_flag(p_spec, p_range, g);
+            if (!flag.is_empty()) {
+                mid_code += "        if (" + flag + ") {\n";
+                copy_code += "        if (" + flag + ") {\n";
+            }
             // LINEAR4: value + the axis slope by the Hermite rule, the transverse slopes linear.
             pair(base + VALUE, base + DX + axis);
             for (int s = base + DX; s <= base + DZ; s++) {
@@ -249,6 +256,10 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
                     mid_code += vformat("        { precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", s, s, s);
                     copy_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
                 }
+            }
+            if (!flag.is_empty()) {
+                mid_code += "        }\n";
+                copy_code += "        }\n";
             }
         }
         if (p_spec.group_count() > 1) {
@@ -270,7 +281,7 @@ uint32_t vec4s_for(int p_channels) {
 // vec4 v of slot s at v * plane + s, plane = the buffer's vec4s / p_stride, so the ground's loads stay contiguous
 // whatever the fields; the debug channels are per point (slot * p_stride + v). p_stride: vec4s_per_point of the whole
 // spec (the ground-only variant reads and writes the ground's planes of the same buffers).
-String storage_functions(const Spec &p_spec, int p_stride) {
+String storage_functions(const Spec &p_spec, int p_stride, const FieldRange &p_range) {
     const int nch = p_spec.gpu_channels();
     const int nv = int(vec4s_for(nch)); // this variant's channels (the view: fields only in the fields variant)
     String code = "Ch unpack(";
@@ -285,16 +296,21 @@ String storage_functions(const Spec &p_spec, int p_stride) {
     code += "Ch load(bool from_a, uint slot) {\n";
     String args_a;
     String args_b;
-    // vec4s from ground_vecs on are the fields' (4 channels each), read only where g_fields.
+    // vec4s from ground_vecs on are the fields' (4 channels each, field group 1 + v - ground_vecs), read only where g_fields
+    // (a fold group's: where it is carried, CascadeFoldGLSL::carry_flag).
     const int ground_vecs = p_spec.gpu_base(1) / 4;
+    auto field_flag = [&](int p_v) {
+        const String flag = CascadeFoldGLSL::carry_flag(p_spec, p_range, 1 + p_v - ground_vecs);
+        return flag.is_empty() ? String("g_fields") : flag;
+    };
     for (int v = 0; v < nv; v++) {
         const char *sep = v ? ", " : "";
         if (v < ground_vecs) {
             args_a += vformat("%sscratch_a[%du * plane_a + slot]", sep, v);
             args_b += vformat("%sscratch_b[%du * plane_b + slot]", sep, v);
         } else {
-            args_a += vformat("%s(g_fields ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, v);
-            args_b += vformat("%s(g_fields ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, v);
+            args_a += vformat("%s(%s ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, field_flag(v), v);
+            args_b += vformat("%s(%s ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, field_flag(v), v);
         }
     }
     const String planes = vformat("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_stride, p_stride);
@@ -305,7 +321,7 @@ String storage_functions(const Spec &p_spec, int p_stride) {
     }
     code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
     for (int v = 0; v < nv; v++) {
-        const String guard = v < ground_vecs ? String() : String("    if (g_fields)\n");
+        const String guard = v < ground_vecs ? String() : "    if (" + field_flag(v) + ")\n";
         code += guard + vformat("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", v, v, v, v);
     }
     code += "}\n\n";
@@ -568,13 +584,20 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     const String modulation = spec->modulation ? spec->modulation->glsl(*spec) : String();
     const bool fields = !spec->fields.empty();
     const FieldRange range = field_range(p_sdf, p_points);
-    const String fields_flag = fields ? String("bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n\n") : String();
+    const String fields_flag = fields ? String("bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n\n") + CascadeFoldGLSL::flag_declarations(*spec, range) : String();
+    // A fold (some field group read from its nodes below its node level): fixed per-item scratch regions in every variant
+    // (CascadeFoldGLSL), the same layout on both sides of a level.
+    const bool fold = whole.folds(range);
+    code = code.replace("/*PARENT_BASE*/", CascadeFoldGLSL::parent_base(fold));
+    code = code.replace("/*STORE_BASE*/", CascadeFoldGLSL::store_base(fold));
+    const String strides = fold ? CascadeFoldGLSL::stride_functions(p_points ? "1u" : "uint(chunk_param.chunk_size)") : String();
+    const int stride = int(vec4s_per_point(whole, range));
     // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
     // every generated function that uses them.
     const String helpers = (p_fields ? p_sdf->get_climate_helpers_glsl() : String()) + (shaped(*spec) ? shaped_helpers() : String());
-    code = code.replace("/*CASCADE*/", fields_flag + helpers + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole, range))) + band_functions(*spec) + modulation + (pick ? p_sdf->get_ground_material_glsl() : String()) + ground);
-    code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
-    code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
+    code = code.replace("/*CASCADE*/", fields_flag + helpers + strides + hermite_functions(*spec, range) + storage_functions(*spec, stride, range) + CascadeFoldGLSL::fold_functions(*spec, range, stride) + band_functions(*spec) + modulation + (pick ? p_sdf->get_ground_material_glsl() : String()) + ground);
+    code = code.replace("/*INSERT_BANDS*/", CascadeFoldGLSL::fold_calls(*spec, range) + insert_code(*spec));
+    code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) + CascadeFoldGLSL::flag_values(*spec, range) : String());
 
     code = code.replace("/*DEBUG_STORE*/", p_debug ? "store_debug(sample_index, ch); // CascadeSpike variant" : "");
     return code;
@@ -617,6 +640,7 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     const bool points = item_size == 1;
     fields = CascadeGLSL::field_range(p_sdf, points);
     top = spec->top_level(!fields.empty());
+    fold = spec->folds(fields);
 
     // Variant (fields ? 2 : 0) + (fold ? 1 : 0): the bare cascade at level 0 or the instance fold (given the table's
     // buffers), with the ground alone or with the fields (where the spec's FieldRange carries them: none if empty).
@@ -742,6 +766,14 @@ void CascadePasses::free() {
     bands = RID();
     debug_placeholder = RID();
     rd = nullptr;
+}
+
+uint32_t CascadePasses::item_stride(int p_j) const {
+    if (fold) {
+        return (p_j & 1) ? CascadeGLSL::scratch_points_a(item_size) : CascadeGLSL::scratch_points_b(item_size);
+    }
+    const uint32_t n = uint32_t(level_bound(item_size, p_j));
+    return n * n * n;
 }
 
 int CascadePasses::level_count(int p_min_lod) const {
