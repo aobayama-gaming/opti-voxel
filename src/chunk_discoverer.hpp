@@ -2,7 +2,7 @@
 
 #include "chunk_math.hpp"
 #include "debug_log.hpp"
-#include "discoverer_gpu.hpp"
+#include "local_points_gpu.hpp"
 #include "lod_structures.hpp"
 #include "sdf_base.hpp"
 #include <godot_cpp/classes/mutex.hpp>
@@ -33,7 +33,7 @@ public:
         int64_t corners = 0; // their corners, 8 per node
         int64_t unique_corners = 0; // after dedup: the SDF evaluations
         uint64_t eval_usec = 0; // the corner batch (SDF evaluations only)
-        bool gpu = false; // evaluated by DiscovererGPU
+        bool gpu = false; // evaluated by LocalPointsGPU
         int batches = 0; // GPU submissions
         double gpu_ms = 0.0; // GPU timestamps around the cascade levels (-1: not available)
         int64_t readback_bytes = 0;
@@ -80,10 +80,11 @@ private:
     CullMode cull_mode = CULL_LEGACY;
     bool use_cache = true;
     CullCache cache;
-    bool want_gpu = false; // discoverer_mode 1: corners on DiscovererGPU
+    bool want_gpu = false; // discoverer_mode 1: corners on LocalPointsGPU
+    static constexpr uint32_t GPU_POINTS = 65536; // corners per GPU batch (a wave above it is split)
     bool compare = false; // --discovery_compare: diff every scan against a fresh CPU scan
     // Owned by the worker thread: created at the top of discovery_loop, freed before it returns.
-    DiscovererGPU *gpu = nullptr;
+    LocalPointsGPU *gpu = nullptr;
 
     // actively mutexed
     ScanView view; // the camera's latest view that asked for a scan
@@ -138,10 +139,10 @@ private:
     // The cull verdicts of one wave (all nodes of LOD p_lod): cached ones from p_cache, the others from
     // their corners, deduplicated and evaluated in one batch. r_outside[i]: node i holds no surface.
     void _cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside, ScanCounters &r_counters,
-            CullCache *p_cache, DiscovererGPU *p_gpu) const;
+            CullCache *p_cache, LocalPointsGPU *p_gpu) const;
     // Fresh verdicts of nodes p_nodes (indices into p_wave, all of LOD p_lod).
     void _corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod, std::vector<uint8_t> &r_outside,
-            WaveStats &r_wave, DiscovererGPU *p_gpu) const;
+            WaveStats &r_wave, LocalPointsGPU *p_gpu) const;
     // --discovery_compare: the CPU scan with a fresh cache, diffed with p_scanned; ERROR on a difference.
     void _compare_with_cpu(const ScanView &p_view, const LODHashSet &p_scanned);
     // A node is split when its bounding sphere comes closer to the camera than its LOD's distance, the
@@ -203,7 +204,7 @@ public:
     // its surviving nodes are kept or split into the next wave by distance. The scanned set doesn't
     // depend on the visit order, so it is the one the old recursive walk gave (unit-tested).
     void scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
-            CullCache *p_cache = nullptr, DiscovererGPU *p_gpu = nullptr) const;
+            CullCache *p_cache = nullptr, LocalPointsGPU *p_gpu = nullptr) const;
     int get_max_lod() const { return lod_distances.size() - 2; }
     const PackedFloat32Array &get_lod_distances() const { return lod_distances; }
     // The scan grid (after setup_lod): top-LOD chunk centres step `r_step` ids, from -r_count to
@@ -221,7 +222,7 @@ public:
         use_cache = p_enable;
         cache.verify = p_verify;
     }
-    // Corners on the GPU (DiscovererGPU; CPU with one warning if it can't be created) and the debug diff
+    // Corners on the GPU (LocalPointsGPU; CPU with one warning if it can't be created) and the debug diff
     // against a fresh CPU scan.
     void set_gpu(bool p_enable) { want_gpu = p_enable; }
     void set_compare(bool p_enable) { compare = p_enable; }

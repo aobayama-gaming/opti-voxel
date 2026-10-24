@@ -13,7 +13,7 @@ namespace Archetype {
 void CellScatter::sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap) const {
     const size_t first = r_out.size();
     const SiteWalk walk = site_walk(p_query, &r_out, p_snap);
-    surface_sites_many(&walk, 1, field_batch());
+    surface_sites_many(&walk, 1, batch_of(ground));
     accept_sites(r_out, first);
 }
 
@@ -36,7 +36,7 @@ void CellScatter::accept_sites(std::vector<CellSite> &r_sites, size_t p_first) c
 void CellScatter::site_tiles(const VoxelBox &p_query, int p_level, std::vector<VoxelPos> &r_out) const {
     const VoxelBox box = p_query.clipped(zone);
     if (box.valid && valid()) {
-        surface_nodes(box.lo, box.hi, side, field_batch(), p_level, walk_level(zone, side), r_out);
+        surface_nodes(box.lo, box.hi, side, batch_of(ground), p_level, walk_level(zone, side), r_out);
     }
 }
 

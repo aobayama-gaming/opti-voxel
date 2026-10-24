@@ -5,9 +5,41 @@
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
+#include <godot_cpp/variant/callable_custom.hpp>
+
 #include <cstring>
 
 static_assert(sizeof(ExactNoise::Float4) == 16, "the point passes' register is a vec4");
+
+namespace {
+
+// buffer_get_data_async's callback: the batch's registers into the evaluator's delivery, tagged with the batch's serial
+// (a callback that came late, after the fallback took over, is told apart by it).
+class DeliverReadback : public CallableCustom {
+public:
+    DeliverReadback(CascadePointsGPU::Delivery *p_to, uint64_t p_serial) : to(p_to), serial(p_serial) {}
+    uint32_t hash() const override { return uint32_t(serial); }
+    String get_as_text() const override { return "CascadePointsGPU readback"; }
+    CompareEqualFunc get_compare_equal_func() const override { return &equal; }
+    CompareLessFunc get_compare_less_func() const override { return &less; }
+    bool is_valid() const override { return true; }
+    ObjectID get_object() const override { return ObjectID(); }
+    void call(const Variant **p_arguments, int p_argcount, Variant &, GDExtensionCallError &r_call_error) const override {
+        if (p_argcount >= 1) {
+            to->bytes = *p_arguments[0];
+            to->serial = serial;
+        }
+        r_call_error.error = GDEXTENSION_CALL_OK;
+    }
+
+private:
+    CascadePointsGPU::Delivery *to;
+    uint64_t serial;
+    static bool equal(const CallableCustom *p_a, const CallableCustom *p_b) { return p_a == p_b; }
+    static bool less(const CallableCustom *p_a, const CallableCustom *p_b) { return p_a < p_b; }
+};
+
+} // namespace
 
 bool CascadePointsGPU::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_points) {
     ERR_FAIL_COND_V_MSG(p_rd == nullptr || p_sdf->get_cascade() == nullptr || p_max_points == 0, false,
@@ -83,6 +115,7 @@ bool CascadePointsGPU::cull_values(const VoxelPos *p_points, int p_count, int p_
 }
 
 bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, uint32_t p_count, ExactNoise::Float4 *r_out, BatchStats &r_stats) {
+    const uint64_t t0 = now_usec();
     // The batch's LOD range: every item runs its own levels (one above another's is zero until its own top).
     Vector2i lods(ChunkMath::MAX_LOD_NUMBERS, 0);
     uint8_t *items = input_bytes.ptrw();
@@ -94,14 +127,20 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
         lods.y = MAX(lods.y, lod);
     }
     rd->buffer_update(input, 0, int64_t(p_count) * GPUFrame::CHUNK_INPUT_BYTES, input_bytes);
-    const String serial = itos(int64_t(batch_serial++));
-    const String name_begin = String("points_b") + serial;
-    const String name_end = String("points_e") + serial;
+    const uint64_t batch = ++batch_serial;
+    const String name_begin = String("points_b") + itos(int64_t(batch));
+    const String name_end = String("points_e") + itos(int64_t(batch));
     rd->capture_timestamp(name_begin);
     passes.record_all(lods, p_count);
     rd->capture_timestamp(name_end);
+    // The registers' copy rides in the same submission (its callback runs in sync()); a blocking buffer_get_data after
+    // the sync costs a second round trip on a local device (~4 ms).
+    const int64_t bytes = int64_t(p_count) * int64_t(sizeof(ExactNoise::Float4));
+    const bool queued = async_readback && rd->buffer_get_data_async(values, Callable(memnew(DeliverReadback(&delivery, batch))), 0, uint32_t(bytes)) == OK;
+    const uint64_t t_recorded = now_usec();
     rd->submit();
     rd->sync();
+    const uint64_t t_synced = now_usec();
 
     // A local device's timestamps are readable once its frame is synced, and only until the next frame begins:
     // buffer_get_data flushes one, so read them first.
@@ -121,11 +160,22 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
         r_stats.gpu_ms = -1.0;
     }
 
-    const int64_t bytes = int64_t(p_count) * int64_t(sizeof(ExactNoise::Float4));
-    const PackedByteArray out = rd->buffer_get_data(values, 0, bytes);
+    PackedByteArray out;
+    if (queued && delivery.serial == batch) {
+        out = delivery.bytes;
+    } else {
+        if (queued) {
+            WARN_PRINT("CascadePointsGPU: the readback didn't come with the sync: buffer_get_data from now on.");
+            async_readback = false;
+        }
+        out = rd->buffer_get_data(values, 0, bytes);
+    }
     ERR_FAIL_COND_V(out.size() != bytes, false);
     std::memcpy(r_out, out.ptr(), size_t(bytes));
     r_stats.batches++;
     r_stats.readback_bytes += bytes;
+    r_stats.record_ms += double(t_recorded - t0) / 1000.0;
+    r_stats.sync_ms += double(t_synced - t_recorded) / 1000.0;
+    r_stats.readback_ms += double(now_usec() - t_synced) / 1000.0;
     return true;
 }

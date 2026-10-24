@@ -87,7 +87,9 @@ Engine, GPU and float traps that already cost a debugging session each.
   shader's time goes, swap variants of the stitched GLSL and compare `gpu_pass_sdf` per batch.
 - `FrameSpike` uses a local RenderingDevice: it needs a window (not `--headless`) and an unlocked session.
 - A local RenderingDevice's timestamps (`get_captured_timestamp_*`) are readable right after `sync()` and
-  only until its next frame begins: `buffer_get_data` flushes one, so read them first (`DiscovererGPU`).
+  only until its next frame begins: `buffer_get_data` flushes one, so read them first (`CascadePointsGPU`). On a local device
+  `buffer_get_data` after `sync()` is a second round trip (~4 ms): queue `buffer_get_data_async` before `submit()`, its
+  callback runs in the `sync()` (`CascadePointsGPU::_run_batch`, a `CallableCustom`; it falls back to the blocking read if not).
 - Main-RD resources must be created/freed on the render thread; objects owning them delete
   themselves there (`destroy()` -> `_rt_destroy()`), after the render-thread work already queued
   for them (FIFO).

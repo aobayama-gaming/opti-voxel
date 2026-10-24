@@ -502,6 +502,12 @@ uint32_t vec4s_per_point(const Spec &p_spec, const FieldRange &p_range) {
     return vec4s_for(channels);
 }
 
+void scratch_bytes(const SDFBase *p_sdf, int p_item_size, uint64_t p_items, uint64_t &r_a, uint64_t &r_b) {
+    const uint64_t vec4_bytes = 16 * uint64_t(vec4s_per_point(*p_sdf->get_cascade(), field_range(p_sdf, p_item_size == 1)));
+    r_a = p_items * scratch_points_a(p_item_size) * vec4_bytes;
+    r_b = p_items * scratch_points_b(p_item_size) * vec4_bytes;
+}
+
 bool ground_materials(const SDFBase *p_sdf) {
     const SDFGpuTable *table = p_sdf->get_gpu_table();
     return table && ChunkPalette::has_ground_materials(table->base_palette());
@@ -629,9 +635,8 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
         }
     }
 
-    const uint64_t vec4_bytes = 16 * CascadeGLSL::vec4s_per_point(*spec, fields);
-    const uint64_t bytes_a = uint64_t(max_chunks) * CascadeGLSL::scratch_points_a(item_size) * vec4_bytes;
-    const uint64_t bytes_b = uint64_t(max_chunks) * CascadeGLSL::scratch_points_b(item_size) * vec4_bytes;
+    uint64_t bytes_a = 0, bytes_b = 0;
+    CascadeGLSL::scratch_bytes(p_sdf, item_size, max_chunks, bytes_a, bytes_b);
     if (p_share_scratch != nullptr) {
         ERR_FAIL_COND_V(p_share_scratch->max_chunks < max_chunks || p_share_scratch->scratch_bytes_total < bytes_a + bytes_b, false);
         scratch_a = p_share_scratch->scratch_a;

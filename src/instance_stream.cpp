@@ -407,7 +407,7 @@ void InstanceStream::drain() {
             }
             batch.push_back(std::move(jobs.begin()->second));
             jobs.erase(jobs.begin());
-            if (settings.walk_batch > 1 && batch[0]->key.walk()) {
+            if (walk_batch.load() > 1 && batch[0]->key.walk()) {
                 take_walks(batch);
             }
         }

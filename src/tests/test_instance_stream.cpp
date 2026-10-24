@@ -691,13 +691,12 @@ TEST_CASE("Instance stream: on Godot's worker pool, parked chunks come back with
     }
 }
 
-// Walk keys computed together (Settings::walk_batch: a round of readings for all of them, ScatterSource::walk_tiles) land
+// Walk keys computed together (set_walk_batch: a round of readings for all of them, ScatterSource::walk_tiles) land
 // the same contents as alone: the chunks come back with the same lists, on the pool, and batches did run.
 TEST_CASE("Instance stream: walk keys walked in batches land the same contents as alone") {
     const StreamFixture &fx = StreamFixture::get();
-    InstanceStream::Settings settings;
-    settings.walk_batch = 16;
-    std::unique_ptr<InstanceStream> stream = fx.stream(settings, StreamExecutor::pool());
+    std::unique_ptr<InstanceStream> stream = fx.stream(InstanceStream::Settings(), StreamExecutor::pool());
+    stream->set_walk_batch(16);
     std::vector<ChunkId> chunks;
     for (int64_t x = -300; x <= 300; x += 150) {
         for (int64_t z = -300; z <= 300; z += 150) {

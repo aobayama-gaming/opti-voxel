@@ -21,7 +21,10 @@ struct CellScatter {
     VoxelBox zone; // the sites' bases lie in it
     int64_t side = 0; // the cells (LOD0 voxels); 0: no site
     FieldFn ground; // thread-safe
-    FieldBatchFn ground_batch; // ground at many points in one call (a GPU's batch); empty: batch_of(ground). Thread-safe
+    // ground at many points in one call for the lockstep walks (ScatterSource::walk_tiles: a round of many tiles at once,
+    // a GPU's batch); empty: batch_of(ground). A lone walk (sites, site_tiles) reads ground: a round trip per round of a
+    // few readings costs more than they do. Thread-safe.
+    FieldBatchFn ground_batch;
     std::function<UpAxis(const VoxelPos &)> up; // thread-safe
     std::function<bool(const VoxelPos &)> accept; // whether a base may hold a site (empty: every one); thread-safe
     // A site's records grown along p_up (op, k, anchor, rotation, params, material, salt set; not finished), for the chunks
@@ -46,11 +49,11 @@ struct CellScatter {
     // box's own level depends on its extent, and a coarser start may prune a cell a finer one keeps). On the worker pool
     // (not from inside a pool task, unless it holds an InlineParallelFor).
     void sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap = true) const;
-    // sites() in its steps, for many queries walked at once (surface_sites_many with field_batch()): the walk of p_query
+    // sites() in its steps, for many queries walked at once (surface_sites_many with walk_field()): the walk of p_query
     // into r_out (side 0, nothing walked, when the query misses the zone), then accept_sites on what it appended.
     SiteWalk site_walk(const VoxelBox &p_query, std::vector<CellSite> *r_out, bool p_snap = true) const;
     void accept_sites(std::vector<CellSite> &r_sites, size_t p_first) const;
-    FieldBatchFn field_batch() const { return ground_batch ? ground_batch : batch_of(ground); }
+    FieldBatchFn walk_field() const { return ground_batch ? ground_batch : batch_of(ground); }
     // The tiles of side << p_level voxels (tile units, cell order) meeting p_query and the zone that can hold a site: the
     // nodes the zone-level walk keeps at that level (surface_nodes; a few readings per tile, no snap). Pool rule of sites().
     void site_tiles(const VoxelBox &p_query, int p_level, std::vector<VoxelPos> &r_out) const;

@@ -23,7 +23,7 @@ using godot::KeyValue;
 using namespace godot;
 
 void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod,
-        std::vector<uint8_t> &r_outside, WaveStats &r_wave, DiscovererGPU *p_gpu) const {
+        std::vector<uint8_t> &r_outside, WaveStats &r_wave, LocalPointsGPU *p_gpu) const {
     // The 8 corners of each node (centre +- half its size, points of Λ_lod), shared by up to 8 nodes:
     // deduplicated on their voxel, then evaluated in one batch.
     const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();
@@ -47,8 +47,8 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     }
     std::vector<float> values(points.size());
     const uint64_t t_eval = now_usec();
-    DiscovererGPU::BatchStats gpu_stats;
-    r_wave.gpu = p_gpu && p_gpu->evaluate(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
+    CascadePointsGPU::BatchStats gpu_stats;
+    r_wave.gpu = p_gpu && p_gpu->points().cull_values(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
     if (r_wave.gpu) {
         r_wave.batches = gpu_stats.batches;
         r_wave.gpu_ms = gpu_stats.gpu_ms;
@@ -81,7 +81,7 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
 }
 
 void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside,
-        ScanCounters &r_counters, CullCache *p_cache, DiscovererGPU *p_gpu) const {
+        ScanCounters &r_counters, CullCache *p_cache, LocalPointsGPU *p_gpu) const {
     WaveStats wave;
     wave.lod = p_lod;
     wave.nodes = int64_t(p_wave.size());
@@ -167,8 +167,8 @@ void ChunkDiscoverer::discovery_loop() {
     // shader's compile) delays the first scan: gpu_init_ms.
     const uint64_t t_init = now_usec();
     if (want_gpu) {
-        gpu = memnew(DiscovererGPU);
-        if (!gpu->create(sdf, chunk_param)) {
+        gpu = memnew(LocalPointsGPU);
+        if (!gpu->create(sdf, chunk_param, GPU_POINTS)) {
             WARN_PRINT("ChunkDiscoverer: the GPU discoverer needs a cascade terrain and a local RenderingDevice: the corners are evaluated on the CPU.");
             memdelete(gpu);
             gpu = nullptr;
@@ -337,7 +337,7 @@ void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_p
 }
 
 void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
-        CullCache *p_cache, DiscovererGPU *p_gpu) const {
+        CullCache *p_cache, LocalPointsGPU *p_gpu) const {
     const int max_lod = get_max_lod();
     int64_t max_lod_radius;
     int64_t max_lod_number;

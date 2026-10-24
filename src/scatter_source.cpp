@@ -329,7 +329,7 @@ void ScatterSource::walk_tiles(const SourceKey *p_keys, size_t p_count, SourceCo
             walks[i] = SiteWalk{ box, proxy_side(key.lod), s.salt ^ PROXY_SALT, false, proxy_level(key.lod), &r_outs[i]->sites };
         }
     }
-    surface_sites_many(walks.data(), p_count, s.field_batch());
+    surface_sites_many(walks.data(), p_count, s.walk_field());
     for (size_t i = 0; i < p_count; i++) {
         if (p_keys[i].kind == SourceKey::SITES) {
             s.accept_sites(r_outs[i]->sites, 0);
@@ -439,7 +439,7 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
         std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
     } else if (region.valid) {
         const SiteWalk walk{ region, g, s.salt ^ PROXY_SALT, false, proxy_level(p_key.lod), &sites }; // in cell order
-        surface_sites_many(&walk, 1, s.field_batch());
+        surface_sites_many(&walk, 1, batch_of(s.ground));
     }
     const double side = double(s.side);
     for (const CellSite &cs : sites) {

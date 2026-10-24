@@ -1,4 +1,4 @@
-// The streamed sources' walk batches (instance_stream.hpp, Settings::walk_batch): walk keys computed together.
+// The streamed sources' walk batches (instance_stream.hpp, set_walk_batch): walk keys computed together.
 #include "instance_stream.hpp"
 
 #include "debug_log.hpp"
@@ -10,7 +10,8 @@ void InstanceStream::take_walks(std::vector<std::unique_ptr<Job>> &r_batch) {
     // other tasks). A walk key has no input: its first job computes it.
     const ScatterSource *source = r_batch[0]->source;
     size_t looked = 0;
-    for (auto it = jobs.begin(); it != jobs.end() && r_batch.size() < settings.walk_batch && looked < WALK_LOOK * settings.walk_batch; looked++) {
+    const size_t most = walk_batch.load();
+    for (auto it = jobs.begin(); it != jobs.end() && r_batch.size() < most && looked < WALK_LOOK * most; looked++) {
         if (it->second->key.walk() && it->second->source == source) {
             if (!executor->more()) {
                 break; // the executor's budget: one job per step
