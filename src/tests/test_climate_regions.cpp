@@ -62,9 +62,8 @@ TEST_CASE("Climate regions: a table of two landforms parses into more field grou
 
 // In the cold region's core every edge is exactly 1: the valley's gated term is its ungated one, the cliff's and the
 // mangrove's add exactly 0, the warm biomes weigh exactly 0. The SDF and the pick are valley.json's, bit for bit. The
-// core is deeper than the region's edge: the modulation reads the weights at the cascade's coarser lattices (km apart for
-// a 13 km axis), whose temperature can be in the fade while the point's is not (measured: every point under -0.13 of
-// this axis is exact).
+// core (Climate::core_regions) is deeper than the region's edge: the bands read the weights derived at the cascade's
+// coarser lattices (km apart for a 13 km axis), whose temperature can be in the fade while the point's is not.
 TEST_CASE("Climate regions: a region's core is its standalone landform, bit for bit") {
     ClimateSDF world("res://climate/region_test.json", 15);
     ClimateSDF valley("res://climate/landforms/valley.json", 15);
@@ -78,18 +77,17 @@ TEST_CASE("Climate regions: a region's core is its standalone landform, bit for 
             const Vector3i64 p = sample_point(world.sdf, i, lod);
             Float4 f[MAX_FIELDS];
             fields_at(wt, world.sdf.get_spec(), p, lod, f);
-            if (!(f[0].w <= -0.15f)) {
+            if (!is_constant(edges_value(wt.regions[0].edges, f), 1.0f) || (core_regions(wt, world.sdf.get_spec(), p, lod) & 1u) == 0u) {
                 continue;
             }
-            CHECK(is_constant(edges_value(wt.regions[0].edges, f), 1.0f));
             core++;
             differ += float_bits(world.sdf.evaluate(lattice_pos(p, lod), lod)) != float_bits(valley.sdf.evaluate(lattice_pos(p, lod), lod));
             float ws[Cascade::SLOTS], vs[Cascade::SLOTS];
             Cascade::point_slots(world.sdf.get_spec(), p, lod, ws, true);
             Cascade::point_slots(valley.sdf.get_spec(), p, lod, vs, true);
             // The world's biomes: floor, plateau, lowland, upland; the valley's: floor, upland.
-            const int w = pick_slots(wt, ws, p, lod);
-            const int v = pick_slots(vt, vs, p, lod);
+            const int w = pick_slots(wt, ws);
+            const int v = pick_slots(vt, vs);
             picks += (w == 0 && v == 0) || (w == 3 && v == 1);
         }
     }
@@ -158,7 +156,7 @@ TEST_CASE("Climate regions: ground_step bounds a gated term's step between LODs"
 }
 
 // The landform world (project/climate/world.json, tools/landforms/world.py): every landform's region core
-// (Climate::region_core) is its own table, its SDF and its pick (by name). Points over 800 km at LODs 0 and 6.
+// (Climate::core_regions) is its own table, its SDF and its pick (by name). Points over 800 km at LODs 0 and 6.
 TEST_CASE("Climate regions: the world's landform cores are their own tables") {
     ClimateSDF world("res://climate/world.json", 25);
     CLIMATE_REQUIRE(world.sdf.get_climate() != nullptr);
@@ -180,8 +178,11 @@ TEST_CASE("Climate regions: the world's landform cores are their own tables") {
             Cascade::point_slots(world.sdf.get_spec(), p, lod, ws, true);
             Float4 f[MAX_FIELDS];
             apply_terms(wt, ws, f);
+            // A region exactly 1 at the point first (the cheap test), then its core.
+            const bool any = std::any_of(wt.regions.begin(), wt.regions.end(), [&](const Region &p_r) { return is_constant(edges_value(p_r.edges, f), 1.0f); });
+            const uint32_t cores = any ? core_regions(wt, world.sdf.get_spec(), p, lod) : 0u;
             for (int r = 0; r < 8; r++) {
-                if (!region_core(wt, r, f)) {
+                if (((cores >> r) & 1u) == 0u) {
                     continue;
                 }
                 const SDFCascade &o = own[size_t(r)]->sdf;
@@ -189,7 +190,7 @@ TEST_CASE("Climate regions: the world's landform cores are their own tables") {
                 differ[r] += float_bits(world.sdf.evaluate(lattice_pos(p, lod), lod)) != float_bits(o.evaluate(lattice_pos(p, lod), lod));
                 float os[Cascade::SLOTS];
                 Cascade::point_slots(o.get_spec(), p, lod, os, true);
-                picks[r] += wt.biomes[size_t(pick_slots(wt, ws, p, lod))].name == o.get_climate()->biomes[size_t(pick_slots(*o.get_climate(), os, p, lod))].name;
+                picks[r] += wt.biomes[size_t(pick_slots(wt, ws))].name == o.get_climate()->biomes[size_t(pick_slots(*o.get_climate(), os))].name;
             }
         }
     }

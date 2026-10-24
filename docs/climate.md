@@ -13,11 +13,23 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   field)` applied after the cascade, in list order (the lapse is a ground term). Biomes (<= `MAX_BIOMES`, 16): regions
   over any fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes
   the rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64.
-  `pick`: argmax, ties by `hash_cell` of the absolute voxel (the same from every LOD). **One climate:** every reader
-  (the modulation, the pick, the terraces, the report) goes through `Climate::state` (field terms, then weights; GLSL `glsl_weights`),
-  and what reaches it is the LOD rule: octave k reads the climate of its insertion level before that level's
-  insertions, the pick and the report read level 0 (the report's pick drift shows the gap). No per-biome mean height: one
-  lattice can't carry it without the coarser LODs missing it (a step no skirt hides); it needs its own design.
+  `pick`: argmax, ties by `hash_cell` of the absolute voxel (the same from every LOD). **One climate per point, none per sample:**
+  the climate (`Climate::state`: field terms, then weights; GLSL `glsl_weights`) is evaluated once per point of each
+  level above a run's last, from its channels before the level's insertions (the LOD rule: octave k on Λ_m reads the
+  climate of H(V_{m+1}), low-passed at k). A run's last level, its samples (the most points of a run), evaluates none:
+  the level above derives it once per point after its insertions (`Cascade::Modulation::derive`, `Modulator`) into the
+  carry groups (`Cascade::carry_slot`, LINEAR4 like a field): the packed `BandMod` parts of the last level's octave
+  (only the members some biome makes non-zero) and the samples' terms (`Climate::SampleCarry`: the height terms' sum,
+  the terraced biomes' weights, the pick, copied from the floor parent instead of interpolated). H carries them down
+  with the ground, and the samples interpolate. So a LOD-L chunk's samples are a pure function of (point, L), the same
+  from every chunk and point query of that LOD, but they read the last octave's climate from Λ_{L+1}: not the bits a
+  finer LOD's level L holds there (no LOD shows those; the whole octave is the step a skirt covers). The top level
+  reads a derive on an empty level above it (`Spec::run_top`). Measured why (CascadeSpike, world.json, LOD 0): the
+  samples' level was 11.7 of the 16.2 ms of a 128-chunk batch with the weights evaluated three times per sample (the
+  modulation 4.0 ms, the height terms 2.6, carrying 72 floats 3.7). Carrying the climate from every level to the next
+  instead (every level reading a derive) made the levels above the samples 2-5x dearer than the evaluation it saved
+  (they moved the fields and the carry; example.json +47%, point items +100-300%): only the last level reads one. No per-biome mean height: one lattice can't carry it without the coarser LODs
+  missing it (a step no skirt hides); it needs its own design.
   **In the cascade** (`Climate::combined_spec`): the fields are `Spec::fields`, LINEAR4 groups carried with the ground
   (`Cascade::field_slot`: after the ground's 8 slots on the CPU, after its 4 channels on the GPU: `Spec::gpu_base`, `Spec::slot_of_gpu`).
   A band some biome multiplies is modulated (`Cascade::Modulation`, `Climate::Modulator`): at each point of its level,
@@ -31,11 +43,16 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `climate_report.sh`'s relief table (height std, mean slope per biome, `ground_height.png`) measures it. `fields_at` reads V_m of the combined spec, so it is a pure
   function of (lattice point, m). `SDFCascade` skirts take the largest amplitude any biome gives an octave
   (`Climate::max_amp`). On the GPU the climate code is generated from the table (`Modulator::glsl`, op for op) and
-  `CascadePasses` compiles a ground-only variant and a fields variant (`level_shader(..., p_fields)`, the scratch planar:
-  vec4 v of every slot together, so the ground's loads stay contiguous): a chunk of LOD L carries its fields at level m
-  only where `Cascade::FieldRange::carried` (m >= the finest modulated ground level, L <= the coarsest; the CPU's ground
-  queries follow it too, `fields_at` carries them everywhere), and a dispatch takes the fields variant where
-  `FieldRange::batch` says (`record_level`'s `p_lods`, the batch's LOD range). Cost
+  `CascadePasses` compiles three views (`CascadeGLSL::View`, the scratch planar: vec4 v of every slot together, so
+  the ground's loads stay contiguous): the ground alone, the ground + fields + carry (the levels that derive) and the
+  ground + carry (a run's last level). A chunk of LOD L carries its fields at level m only where
+  `Cascade::FieldRange::carried` (m >= lowest(L): one above the finest level reading a derive, the modulated ground
+  levels or, with `sample`, the samples) and the carry where `carries` (one level lower); the CPU's ground queries
+  follow it too, `fields_at` carries them everywhere. A dispatch takes the fields view where `FieldRange::batch` says,
+  else the samples' view where `batch_carry` says (`record_level`'s `p_lods`, the batch's LOD range). A region's core is
+  exact (`Climate::core_regions`, `docs/landforms.md`). With the carry (CascadeSpike, 128-chunk batches vs dev): world.json
+  -42 to -55% at every LOD, the coarse example (4c) -27 to -33% at LODs 16-24 but +7 to +30% at LODs 0-8, where the
+  derive level (j = 1) evaluates the climate twice (before and after its insertions): the next bottleneck. Cost before the carry
   (CascadeSpike, 128-chunk batches, example climate, before the biome materials, `docs/materials.md`): fields without multipliers 1.00x; with them 1.09x at LODs 0-4,
   1.00x at 20-24, 2.2-3.5x at LODs 8-16 (their own level is modulated: the weights run on every sample, +9-19 us per
   chunk, once per mesh). The bigger `Ch` (20 floats) is what made a single shader 1.4x everywhere (registers, not work).
@@ -45,7 +62,7 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `fieldless_test.json`, a unit test): the GPU drew the bare ground under a flat desert before. Refused: a field's
   multiplier without a ground one (it would never reach the mesh), two bands of one group on one level, multipliers on
   a non-LINEAR4 ground (checked once, in `validate`). Checks: `cascade_test.sh --sets=4,4f,4c` (G1 on the carried
-  channels, G3 except at the ceiling, points), `discovery_audit.sh -- --voxel=0.05 --climate=... --discovery_compare=1`,
+  channels, G3 at the unmodulated levels, points), `discovery_audit.sh -- --voxel=0.05 --climate=... --discovery_compare=1`,
   `origin_parity.sh --voxel=0.05 -- ... --climate=...`, a validated / audited bench load.
 - **Shaped bands** (`src/climate_modulator.cpp`, `src/climate_shape.cpp`, GLSL `src/cascade_shaped_glsl.cpp`; the table keys above
   `Climate::parse`, `src/climate_parse.cpp`): libnoise's
@@ -66,8 +83,9 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   6-13% gradient error, visible lines). (4) **Height terms** (`"heights"`: `height_m * curve(field)`, libnoise's Curve)
   and per-biome **terraces** (libnoise's Terrace, blended by the weight) are added to the ground at each sample,
   after the cascade (`Climate::ground_value` / GLSL `climate_ground`, through `SDFCascade::ground_channels` on every
-  path: chunk samples, point items, `ground_y`, the report); the fields are then carried at every level, point items
-  too (`CascadeGLSL::field_range`), and the skirts take the terms' step (`Climate::ground_step`: the height fields'
+  path: chunk samples, point items, `ground_y`, the report): the terms' sum and the terraced weights derived on the
+  level above the sample (`SampleCarry`), so the fields are carried down to it, point items too
+  (`FieldRange::sample`), and the skirts take the terms' step (`Climate::ground_step`: the height fields'
   terms, twice that with terraces for their slope, plus the terrace blend's change with the weights, each terraced biome's
   weight step times a quarter of its step; unit test: the L | L+1 step stays within the skirt on the example and
   `shaped_test.json`). Refused: an `"offset"` without a multifractal (plain, billow and square bands are inserted without

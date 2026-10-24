@@ -129,7 +129,8 @@ String shaped_band_function(const Spec &p_spec, int p_group) {
     }
     code += "        o = o + sh;\n";
     const int sg = p_spec.modulation->state_group();
-    if (p_group == 0 && sg > 0 && (used & MOD_STATE)) {
+    // Without the state group (the samples' view: no field reaches below them), Cascade's insert_point writes none either.
+    if (p_group == 0 && sg > 0 && sg < p_spec.group_count() && (used & MOD_STATE)) {
         const int sb = p_spec.gpu_base(sg);
         code += "        if ((md.features & " + itos(MOD_STATE) + String("u) != 0u) {\n");
         code += "            vec4 st = md.state[0];\n            st = cl_add(st, cl_mul(md.state[1], nd));\n";

@@ -22,7 +22,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
-  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers; `4r` the two-landform region table) (G1); the LOD relation on the GPU outputs (G3); the discoverer's point items vs
+  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers; `4r` the two-landform region table) (G1); the LOD relation on the GPU outputs (G3, at the levels no climate modulates: a modulated level reads the carry its parent level derives from fields the parent chunk's samples don't carry); the discoverer's point items vs
   `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade
   with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample_sdf` + skirt (`--table`, G9); the
   example climate's per-sample biome material vs `SDFCascade::ground_material`, every LOD (`--biomes`, G10); GPU timestamps of the passes for

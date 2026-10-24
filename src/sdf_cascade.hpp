@@ -153,27 +153,27 @@ public:
     // any has its one default biome, drawn as the procedural ground).
     bool has_ground_materials() const { return climate && !climate->fields.empty(); }
     // The palette index of a ground sample (one no record colours; 0 without ground materials): 1 + its biome (the base
-    // palette holds biome b's material, Climate::biome_material, at 1 + b), Climate::pick_slots of p_slots, the slots of
-    // lattice point p_p of Λ_m with the fields carried. The GPU's cascade_ground_material, bit for bit.
-    uint32_t ground_material(const float p_slots[Cascade::SLOTS], const Vector3i64 &p_p, int p_m) const {
-        return has_ground_materials() ? uint32_t(1 + Climate::pick_slots(*climate, p_slots, p_p, p_m)) : 0u;
+    // palette holds biome b's material, Climate::biome_material, at 1 + b), Climate::pick_slots of p_slots, the slots of a
+    // run's last level (the pick the level above derived). The GPU's cascade_ground_material, bit for bit.
+    uint32_t ground_material(const float p_slots[Cascade::SLOTS]) const {
+        return has_ground_materials() ? uint32_t(1 + Climate::pick_slots(*climate, p_slots)) : 0u;
     }
     // The same at LOD0 voxel p_voxel, a multiple of 2^lod.
     uint32_t ground_material_at(const VoxelPos &p_voxel, int p_lod) const {
         const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
         float slots[Cascade::SLOTS];
         Cascade::point_slots(spec, p, p_lod, slots, true);
-        return ground_material(slots, p, p_lod);
+        return ground_material(slots);
     }
 
-    String get_ground_material_glsl() const override {
+    String get_ground_material_glsl(const Cascade::Spec &p_view) const override {
         if (!has_ground_materials()) {
             return String();
         }
-        return Climate::pick_glsl(*climate, spec) + R"glsl(
+        return Climate::pick_glsl(*climate, p_view) + R"glsl(
 // SDFCascade::ground_material: 1 + the sample's biome.
-uint cascade_ground_material(Ch ch, WorldPos p) {
-    return 1u + climate_biome(ch, p);
+uint cascade_ground_material(Ch ch) {
+    return 1u + climate_biome(ch);
 }
 )glsl";
     }
@@ -200,7 +200,7 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
     }
 
     // The ground channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod: Cascade::point_into, through
-    // ground_channels where the climate has ground terms (the fields carried).
+    // ground_channels where the climate has ground terms (the spec's FieldRange derives them above the point).
     void channels_at(const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
         const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
         if (!has_ground_terms()) {
@@ -208,15 +208,15 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
             return;
         }
         float slots[Cascade::SLOTS];
-        Cascade::point_slots(spec, p, p_lod, slots, true);
+        Cascade::point_slots(spec, p, p_lod, slots);
         ground_channels(slots, r_ch);
     }
 
     // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_ground_terms): the
-    // samples then read the fields (carried at every level, CPU and GPU, point items too).
+    // samples then read terms derived on the level above them (FieldRange::sample, CPU and GPU, point items too).
     bool has_ground_terms() const override { return ground_terms; }
-    // The ground channels of a point's slots p_slots (the fields carried): Climate::ground_value, or the cascade's
-    // ground channels as they are (GLSL: climate_ground, get_ground_glsl).
+    // The ground channels of a point's slots p_slots (a run's last level, the samples' terms carried):
+    // Climate::ground_value, or the cascade's ground channels as they are (GLSL: climate_ground, get_ground_glsl).
     void ground_channels(const float p_slots[Cascade::SLOTS], float r_ch[Cascade::CHANNELS]) const {
         for (int c = 0; c < Cascade::CHANNELS; c++) {
             r_ch[c] = c < Cascade::channel_count(spec.set) ? p_slots[c] : 0.0f;
@@ -230,7 +230,7 @@ uint cascade_ground_material(Ch ch, WorldPos p) {
         }
     }
 
-    String get_ground_glsl() const override { return has_ground_terms() ? Climate::ground_glsl(*climate, spec) : String(); }
+    String get_ground_glsl(const Cascade::Spec &p_view) const override { return has_ground_terms() ? Climate::ground_glsl(*climate, p_view) : String(); }
     String get_climate_helpers_glsl() const override {
         return climate && Climate::splices_helpers(*climate, spec) ? Climate::shared_helpers_glsl() : String();
     }

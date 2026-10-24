@@ -62,7 +62,7 @@ void main() {
     uvec3 i = uvec3(local % n, (local / n) % n, local / (n * n));
 /*ITEM_FRAME*/    int lod = f.lod;
     int m = lod + pc.j;
-/*FIELDS_FLAG*/    int top = max(pc.top, lod);
+/*FIELDS_FLAG*/    int top = max(pc.top, lod/*TOP_ABOVE*/);
     if (m > top) {
         /*SKIP*/ // above T: zero, nothing stored, the chunk starts lower
     }
@@ -127,7 +127,7 @@ void main() {
     p.frac = vec3(0.0);
 
 /*INSERT_BANDS*/    ch = flush(ch);
-
+/*DERIVE*/
     uint slot = c * n * n * n + local;
     if (pc.j > 0) {
         store(pc.j & 1, slot, ch);
@@ -227,8 +227,22 @@ String flt(float p_f) {
     return ExactNoise::glsl_float(p_f);
 }
 
-// Ch and hermite_x/y/z for a spec's groups (from Cascade::PAIRS, the CPU's axis_rule per group).
-String hermite_functions(const Spec &p_spec) {
+// `int <p_name>(int lod)`: p_value(lod) for lod 0 .. MAX_LEVEL, a C++ rule as a GLSL table (no formula retyped).
+template <typename Value>
+String level_switch(const char *p_name, Value p_value) {
+    const int last = p_value(MAX_LEVEL);
+    String code = vformat("\nint %s(int lod) {\n    switch (lod) {\n", p_name);
+    for (int l = 0; l < MAX_LEVEL; l++) {
+        if (p_value(l) != last) {
+            code += vformat("    case %d: return %d;\n", l, p_value(l));
+        }
+    }
+    return code + vformat("    default: return %d;\n    }\n}\n", last);
+}
+
+// Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (from Cascade::PAIRS,
+// the CPU's axis_rules): the first g_carry_n, the ones the level reads.
+String hermite_functions(const Spec &p_spec, bool p_carried) {
     const int nch = p_spec.gpu_channels();
     String code = vformat("struct Ch { float c[%d]; };\n\n", nch);
     code += "Ch ch_zero() {\n    Ch r;\n";
@@ -259,12 +273,29 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
             mid_code += vformat("        hmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_v, p_s, p_s, p_v, p_s);
             copy_code += vformat("        hcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_s, p_v, p_s);
         };
+        // LINEAR4 at GPU channel p_base: value + the axis slope by the Hermite rule, the transverse slopes linear.
+        auto linear4 = [&](int p_base) {
+            pair(p_base + VALUE, p_base + DX + axis);
+            for (int s = p_base + DX; s <= p_base + DZ; s++) {
+                if (s != p_base + DX + axis) {
+                    mid_code += vformat("        { precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", s, s, s);
+                    copy_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
+                }
+            }
+        };
+        // The fields and the carry only where something reads them (Cascade::FieldRange).
+        auto open = [&](const String &p_flag) {
+            mid_code += vformat("        if (%s) {\n", p_flag);
+            copy_code += vformat("        if (%s) {\n", p_flag);
+        };
+        auto close = [&]() {
+            mid_code += "        }\n";
+            copy_code += "        }\n";
+        };
         for (int g = 0; g < p_spec.group_count(); g++) {
             const int base = p_spec.gpu_base(g);
             if (g == 1) {
-                // The fields only where something reads them (Cascade::FieldRange).
-                mid_code += "        if (g_fields) {\n";
-                copy_code += "        if (g_fields) {\n";
+                open("g_fields");
             }
             if (p_spec.group_set(g) == ChannelSet::HERMITE8) {
                 for (const auto &pr : PAIRS[axis]) {
@@ -272,18 +303,30 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
                 }
                 continue;
             }
-            // LINEAR4: value + the axis slope by the Hermite rule, the transverse slopes linear.
-            pair(base + VALUE, base + DX + axis);
-            for (int s = base + DX; s <= base + DZ; s++) {
-                if (s != base + DX + axis) {
-                    mid_code += vformat("        { precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", s, s, s);
+            linear4(base);
+        }
+        if (p_spec.group_count() > 1) {
+            close();
+        }
+        const int copied = p_spec.copied_carry();
+        for (int k = 0; p_carried && k < p_spec.gpu_carry_groups(); k++) {
+            const int base = p_spec.gpu_carry(k);
+            open(vformat("g_carry_n > %du", k));
+            if (k != copied) {
+                linear4(base);
+            } else {
+                // The copied carry group: the floor parent's (Cascade's axis_rules).
+                for (int s = base; s < base + FIELD_CHANNELS; s++) {
+                    mid_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
                     copy_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
                 }
             }
+            close();
         }
-        if (p_spec.group_count() > 1) {
-            mid_code += "        }\n";
-            copy_code += "        }\n";
+        // Not carried here: 0 until a derive writes it (Cascade::Level::add_carry).
+        for (int s = p_spec.gpu_carry(0); !p_carried && s < p_spec.gpu_channels(); s++) {
+            mid_code += vformat("        r.c[%d] = 0.0;\n", s);
+            copy_code += vformat("        r.c[%d] = 0.0;\n", s);
         }
         code += vformat("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r;\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
                 mid_code, copy_code);
@@ -299,10 +342,22 @@ uint32_t vec4s_for(int p_channels) {
 // Scratch and debug buffer access (nv vec4s per point) and the x pass at a parent position. The scratch is planar:
 // vec4 v of slot s at v * plane + s, plane = the buffer's vec4s / p_stride, so the ground's loads stay contiguous
 // whatever the fields; the debug channels are per point (slot * p_stride + v). p_stride: vec4s_per_point of the whole
-// spec (the ground-only variant reads and writes the ground's planes of the same buffers).
-String storage_functions(const Spec &p_spec, int p_stride) {
+// spec, p_whole_fields its field groups (the ground-only view reads and writes the ground's planes of the same buffers,
+// the samples' view the ground's and the carry's). The carry: its first g_carry_n groups, loaded where p_carried (a run's
+// last level), stored by the level above it (the fields' view, where it derives).
+String storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, bool p_carried) {
     const int nch = p_spec.gpu_channels();
     const int nv = int(vec4s_for(nch)); // this variant's channels (the view: fields only in the fields variant)
+    // vec4s from ground_vecs on are the fields' (one per group), read only where g_fields, then the carry's (g_carry).
+    const int ground_vecs = p_spec.gpu_base(1) / 4;
+    const int field_vecs = int(p_spec.fields.size());
+    auto plane = [&](int p_v) { return p_v < ground_vecs + field_vecs ? p_v : p_v - field_vecs + p_whole_fields; };
+    auto flag = [&](int p_v) {
+        if (p_v < ground_vecs + field_vecs) {
+            return p_v < ground_vecs ? String() : String("g_fields");
+        }
+        return vformat("g_carry_n > %du", p_v - ground_vecs - field_vecs);
+    };
     String code = "Ch unpack(";
     for (int v = 0; v < nv; v++) {
         code += vformat("%svec4 v%d", v ? ", " : "", v);
@@ -315,16 +370,17 @@ String storage_functions(const Spec &p_spec, int p_stride) {
     code += "Ch load(bool from_a, uint slot) {\n";
     String args_a;
     String args_b;
-    // vec4s from ground_vecs on are the fields' (4 channels each), read only where g_fields.
-    const int ground_vecs = p_spec.gpu_base(1) / 4;
     for (int v = 0; v < nv; v++) {
         const char *sep = v ? ", " : "";
         if (v < ground_vecs) {
             args_a += vformat("%sscratch_a[%du * plane_a + slot]", sep, v);
             args_b += vformat("%sscratch_b[%du * plane_b + slot]", sep, v);
+        } else if (v >= ground_vecs + field_vecs && !p_carried) {
+            args_a += String(sep) + "vec4(0.0)"; // the derive writes it
+            args_b += String(sep) + "vec4(0.0)";
         } else {
-            args_a += vformat("%s(g_fields ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, v);
-            args_b += vformat("%s(g_fields ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, v);
+            args_a += vformat("%s(%s ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, flag(v), plane(v));
+            args_b += vformat("%s(%s ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, flag(v), plane(v));
         }
     }
     const String planes = vformat("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_stride, p_stride);
@@ -335,13 +391,14 @@ String storage_functions(const Spec &p_spec, int p_stride) {
     }
     code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
     for (int v = 0; v < nv; v++) {
-        const String guard = v < ground_vecs ? String() : String("    if (g_fields)\n");
-        code += guard + vformat("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", v, v, v, v);
+        const String f = v >= ground_vecs && v < ground_vecs + field_vecs ? String("g_fields") : flag(v);
+        const String guard = v < ground_vecs ? String() : "    if (" + f + String(")\n");
+        code += guard + vformat("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", plane(v), v, plane(v), v);
     }
     code += "}\n\n";
     code += "void store_debug(uint slot, Ch r) {\n" + vecs;
     for (int v = 0; v < nv; v++) {
-        code += vformat("    debug_channels[slot * %du + %du] = v%d;\n", p_stride, v, v);
+        code += vformat("    debug_channels[slot * %du + %du] = v%d;\n", p_stride, plane(v), v);
     }
     code += "}\n\n";
     // The x pass at parent position q (and q + x on a midpoint).
@@ -544,19 +601,62 @@ bool ground_materials(const SDFBase *p_sdf) {
 }
 
 FieldRange field_range(const SDFBase *p_sdf, bool p_points) {
-    const Spec &spec = *p_sdf->get_cascade();
-    // The climate variant (modulation, ground terms, the pick where there are fields) wherever a level needs it: a one-biome
-    // table without fields still modulates the ground, and a terrace is a ground term. Ground terms read the fields at
-    // every sample, point items too.
-    const bool everywhere = (!p_points && ground_materials(p_sdf)) || p_sdf->has_ground_terms();
-    return everywhere ? FieldRange{ 0, MAX_LEVEL } : spec.field_range();
+    // The spec's (its modulation's levels, its ground terms' samples: point items too), and the chunks' pick.
+    FieldRange range = p_sdf->get_cascade()->field_range();
+    range.sample = range.sample || (!p_points && ground_materials(p_sdf));
+    return range;
 }
 
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_fields, bool p_cubes) {
+namespace {
+
+// level_shader's cascade code for p_view's Ch (p_spec, on the whole spec's scratch planes): the flags of what the level
+// carries (Cascade::FieldRange p_range: the fields, and the carry groups g_carry_n the last level reads, loaded in the
+// samples' view, derived and stored in the fields' view at j = 1), the passes, the bands, the modulation and the derive,
+// then p_tail.
+String view_code(const String &p_code, const SDFBase *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, const String &p_tail) {
     const Spec &whole = *p_sdf->get_cascade();
-    // Without the fields: the ground alone (its Ch, its bands, no modulation) on the whole spec's scratch planes.
-    const Spec view = p_fields ? whole : whole.ground_only();
+    const bool climate = p_spec.modulation != nullptr;
+    const bool fields = p_view == View::FIELDS && climate;
+    const bool carry = climate && p_spec.gpu_carry_groups() > 0;
+    const bool carried = p_view == View::SAMPLES;
+    const bool derive = fields && carry;
+    String flags;
+    String flag_values;
+    if (fields) {
+        // FieldRange::carried(lod, m): m >= lowest(lod).
+        flags += "bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n";
+        flags += level_switch("cascade_lowest_fields", [&](int p_lod) { return p_range.lowest(p_lod); });
+        flag_values += "    g_fields = m >= cascade_lowest_fields(lod);\n";
+    }
+    if (carry) {
+        // FieldRange::carries: read on the last level, derived above it (the groups Modulation::carry_used says).
+        flags += "uint g_carry_n = 0u; // the carry groups the run's last level reads\n";
+        flags += level_switch("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; });
+        flag_values += vformat("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
+    }
+    const String modulation = climate ? p_spec.modulation->glsl(p_spec, carried) + (derive ? p_spec.modulation->derive_glsl(p_spec) : String()) : String();
+    // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
+    // every generated function that uses them.
+    const String helpers = (climate ? p_sdf->get_climate_helpers_glsl() : String()) + (shaped(p_spec) ? shaped_helpers() : String());
+    const String storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried);
+    String code = p_code.replace("/*CASCADE*/", (flags.is_empty() ? String() : flags + "\n") + helpers + hermite_functions(p_spec, carried) + storage + band_functions(p_spec) + modulation + p_tail);
+    code = code.replace("/*INSERT_BANDS*/", insert_code(p_spec));
+    code = code.replace("/*FIELDS_FLAG*/", flag_values);
+    // A chunk above the top band reading the carry starts one level higher, to derive it (Spec::run_top; an empty level,
+    // the same bits for one that doesn't).
+    code = code.replace("/*TOP_ABOVE*/", carry ? " + 1" : "");
+    // The level's climate for the level below (the samples' terms on the level above them, j = 1).
+    return code.replace("/*DERIVE*/", derive ? "    if (g_carry_n > 0u) {\n        cascade_derive(m, ch, p);\n    }\n" : "");
+}
+
+} // namespace
+
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes) {
+    const Spec &whole = *p_sdf->get_cascade();
+    // The view's Ch on the whole spec's scratch planes: the ground alone (its bands, no modulation), or without the fields.
+    const Spec view = p_view == View::FIELDS ? whole : (p_view == View::SAMPLES ? whole.without_fields() : whole.ground_only());
     const Spec *spec = &view;
+    const bool climate = spec->modulation != nullptr;
     ERR_FAIL_COND_V_MSG(p_debug && p_points, String(), "CascadeGLSL: point items have no debug variant.");
     const SDFGpuTable *table = p_sdf->get_gpu_table();
     ERR_FAIL_COND_V_MSG((p_fold || p_material) && p_points, String(), "CascadeGLSL: only chunk items fold or carry a material.");
@@ -572,9 +672,9 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
     code = code.replace("/*AFTER_SAMPLE*/", cubes ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
-    // The sample's ground channels: the cascade's, or climate_ground's with ground terms (the fields variant only: their
-    // field range is every level, so it is the only one compiled).
-    const String ground = p_fields && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl() : String();
+    // The sample's ground channels: the cascade's, or climate_ground's with ground terms (a climate view: their field
+    // range reaches every sample, so no ground-only view is compiled).
+    const String ground = climate && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl(*spec) : String();
     const String c0 = ground.is_empty() ? String("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : String("climate_ground(ch)");
     code = code.replace("/*GROUND_C0*/", c0);
     const String channels = c0 + String(", p, lod");
@@ -583,16 +683,16 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, %s, pc.chunk_base + c, material, skirt_extra)", channels, cube_box) : vformat("cascade_terrain_sdf(%s)", channels));
     // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
     // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
-    // With them every chunk's samples get one: the winner's, or the ground's pick, read from the fields (field_range
-    // then carries them everywhere, so the fields variant is the only one CascadePasses compiles).
+    // With them every chunk's samples get one: the winner's, or the ground's pick, derived on the level above (field_range
+    // then carries the climate to every sample, so no ground-only view is compiled).
     const bool grounds = ground_materials(p_sdf) && !p_points;
     const bool store = p_material && (p_fold || grounds);
-    const bool pick = grounds && p_fields && !whole.fields.empty();
+    const bool pick = grounds && climate && !whole.fields.empty();
     code = code.replace("/*MATERIAL_BUFFER*/", store ? glsl_material_buffer(MATERIAL_BINDING, "writeonly") : String());
     String material_store;
     if (store && grounds) {
         // Air samples (w > 0, after the skirt) keep 0: the meshers read a vertex's material from its cell's solid corners.
-        material_store = String(pick ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch, p);\n    }\n    " : "") +
+        material_store = String(pick ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch);\n    }\n    " : "") +
                 "sdf_material[sample_index] = material;";
     } else if (store) {
         material_store = "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }";
@@ -602,17 +702,8 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : String()) + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : String()));
     code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? (cubes ? String(LEVEL_POINT) : String()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : String()));
-    const String modulation = spec->modulation ? spec->modulation->glsl(*spec) : String();
-    const bool fields = !spec->fields.empty();
-    const FieldRange range = field_range(p_sdf, p_points);
-    const String fields_flag = fields ? String("bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n\n") : String();
-    // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
-    // every generated function that uses them.
-    const String helpers = (p_fields ? p_sdf->get_climate_helpers_glsl() : String()) + (shaped(*spec) ? shaped_helpers() : String());
-    code = code.replace("/*CASCADE*/", fields_flag + helpers + hermite_functions(*spec) + storage_functions(*spec, int(vec4s_per_point(whole, range))) + band_functions(*spec) + modulation + (pick ? p_sdf->get_ground_material_glsl() : String()) + ground);
-    code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
-    code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
-
+    const String tail = (pick ? p_sdf->get_ground_material_glsl(*spec) : String()) + ground;
+    code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, tail);
     const String debug_store = String(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
     code = code.replace("/*DEBUG_STORE*/", p_debug ? debug_store : String());
     return code;
@@ -655,20 +746,23 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     const bool points = item_size == 1;
     fields = CascadeGLSL::field_range(p_sdf, points);
     top = spec->top_level(!fields.empty());
+    carry = !fields.empty() && spec->gpu_carry_groups() > 0;
 
-    // Variant (fields ? 2 : 0) + (fold ? 1 : 0): the bare cascade at level 0 or the instance fold (given the table's
-    // buffers), with the ground alone or with the fields (where the spec's FieldRange carries them: none if empty).
+    // Variant 2 * view + (fold ? 1 : 0): the bare cascade at level 0 or the instance fold (given the table's buffers), with
+    // the ground alone, the fields and the carry, or the carry alone (CascadeGLSL::View; the climate's views where the
+    // FieldRange carries any: none if empty).
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
     ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
     // The fold variant's workgroups are cubes of level-0 samples, given whole cubes; else it folds per sample.
     const bool cubes = item_size % int(CascadeGLSL::FOLD_CUBE) == 0;
-    // Fields carried everywhere: the ground-only variants would never run.
-    for (int c = fields.everywhere() ? 1 : 0; c < (fields.empty() ? 1 : 2); c++) {
-        for (int f = 0; f < (table ? 2 : 1); f++) {
+    static const char *VIEW_NAMES[] = { "", "_fields", "_samples" };
+    // A climate everywhere: the ground-only variants would never run. The fields' view is never a last level: no fold.
+    for (int c = fields.everywhere() ? 1 : 0; c < (fields.empty() ? 1 : 3); c++) {
+        for (int f = 0; f < (table && CascadeGLSL::View(c) != CascadeGLSL::View::FIELDS ? 2 : 1); f++) {
             const int v = 2 * c + f;
-            const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), c == 1, cubes);
-            const String name = String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") +
-                    (c == 1 ? "_fields" : "");
+            const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), CascadeGLSL::View(c), cubes);
+            const String name =
+                    String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") + VIEW_NAMES[c];
             if (!_compile(v, name, code) && f == 0) {
                 return false; // a fold variant that fails leaves the bare one working (record_level ERRs once)
             }
@@ -725,7 +819,7 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
             uniform_set[v] = rd->uniform_set_create((v & 1) ? fold_uniforms : uniforms, shader[v], 0);
         }
     }
-    return (uniform_set[0].is_valid() || fields.everywhere()) && (fields.empty() || uniform_set[2].is_valid());
+    return (uniform_set[0].is_valid() || fields.everywhere()) && (fields.empty() || (uniform_set[2].is_valid() && uniform_set[4].is_valid()));
 }
 
 bool CascadePasses::_compile(int p_variant, const String &p_name, const String &p_code) {
@@ -785,7 +879,8 @@ void CascadePasses::free() {
 }
 
 int CascadePasses::level_count(int p_min_lod) const {
-    return MAX(top - p_min_lod, 0) + 1;
+    // With the carry, a level above the batch's LOD even above the top band (its chunks derive there).
+    return MAX(top - p_min_lod, carry ? 1 : 0) + 1;
 }
 
 void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, const Vector2i &p_lods, bool p_fold) {
@@ -800,15 +895,20 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, con
     push.encode_s32(12, top);
     push.encode_u32(16, n);
     push.encode_u32(20, uint32_t(level_bound(item_size, p_j + 1)));
-    // The fields where a chunk of the batch carries them (monotone in j: a level with the fields always finds them in
-    // its parent level).
-    const int with_fields = !fields.empty() && fields.batch(p_lods, p_j) ? 2 : 0;
+    // The fields where a chunk of the batch derives, else the carry where one carries it (monotone in j: a level with
+    // either always finds the fields in its parent level).
+    CascadeGLSL::View view = CascadeGLSL::View::GROUND;
+    if (!fields.empty() && fields.batch(p_lods, p_j)) {
+        view = CascadeGLSL::View::FIELDS;
+    } else if (!fields.empty() && fields.batch_carry(p_lods, p_j)) {
+        view = CascadeGLSL::View::SAMPLES;
+    }
     bool fold = p_j == 0 && p_fold;
-    if (fold && !uniform_set[with_fields + 1].is_valid()) {
+    if (fold && !uniform_set[2 * int(view) + 1].is_valid()) {
         ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
         fold = false;
     }
-    const int v = with_fields + (fold ? 1 : 0);
+    const int v = 2 * int(view) + (fold ? 1 : 0);
     const int64_t list = rd->compute_list_begin();
     rd->compute_list_bind_compute_pipeline(list, pipeline[v]);
     rd->compute_list_bind_uniform_set(list, uniform_set[v], 0);

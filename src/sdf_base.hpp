@@ -174,15 +174,23 @@ public:
     // barriers), [group_lo, group_hi] holding the workgroup's points; p_group_size 0: per sample (no barrier, the group
     // ignored).
     virtual String get_sample_fold_glsl(uint32_t p_group_size) const = 0;
-    // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes' fields variant
-    // splices after its channel code, defining `uint cascade_ground_material(Ch ch, WorldPos p)`, the palette index of a
-    // sample no record colours (ch: its channels on Λ_L, the fields carried; p: its absolute point). Empty otherwise.
-    virtual String get_ground_material_glsl() const { return String(); }
+    // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes' climate
+    // variants splice after their channel code, defining `uint cascade_ground_material(Ch ch)`, the palette index of a
+    // sample no record colours (ch: its channels on Λ_L in p_view's GPU layout, the pick the level above derived
+    // carried). Empty otherwise.
+    virtual String get_ground_material_glsl(const Cascade::Spec &p_view) const {
+        (void)p_view;
+        return String();
+    }
     // Whether a sample's ground is more than the cascade's ground channels (a climate's height terms or terraces): then
-    // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
-    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample.
+    // the cascade level passes derive the terms on the level above every sample, point items too, and splice
+    // get_ground_glsl after their channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value,
+    // gradient) of a sample, ch in p_view's GPU layout.
     virtual bool has_ground_terms() const { return false; }
-    virtual String get_ground_glsl() const { return String(); }
+    virtual String get_ground_glsl(const Cascade::Spec &p_view) const {
+        (void)p_view;
+        return String();
+    }
     // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
     // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
     virtual String get_climate_helpers_glsl() const { return String(); }

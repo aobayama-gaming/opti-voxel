@@ -294,6 +294,15 @@ String validate(const Table &p_table, const Ground &p_ground) {
             return err;
         }
     }
+    // What a level derives for the one below (the samples' terms, then one level's band parts) fits the carry.
+    if (p_ground.spec != nullptr) {
+        const int carry = combined_spec(p_table, *p_ground.spec).carry_groups();
+        if (carry > Cascade::MAX_CARRY) {
+            return vformat("climate: a level derives %d carry groups for the one below, more than the %d the cascade carries (fewer modulated bands "
+                           "per level, terraced biomes, or shaped / warped multipliers).",
+                    carry, Cascade::MAX_CARRY);
+        }
+    }
     return String();
 }
 

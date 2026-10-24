@@ -70,10 +70,19 @@ void scratch_bytes(const SDFBase *p_sdf, int p_item_size, uint64_t p_items, uint
 
 // Whether p_sdf's samples carry a ground material (its base palette is longer than {GROUND}: the climate's biomes).
 bool ground_materials(const SDFBase *p_sdf);
-// Where the passes of p_sdf carry the field groups: the spec's FieldRange (what its modulation reads), or with ground
-// materials, for chunk items (p_points false), every level of every LOD, so level 0 has the fields its pick reads (the
-// ground's bits are the same whether they are carried or not). Empty without field groups.
+// Where the passes of p_sdf carry the field groups and the carry: the spec's FieldRange (what its modulation and ground
+// terms read), with ground materials, for chunk items (p_points false), the samples' terms too (the pick, derived on the
+// level above every sample; the ground's bits are the same whether they are carried or not). Empty without a climate.
 Cascade::FieldRange field_range(const SDFBase *p_sdf, bool p_points);
+
+// The channels a level shader carries: the ground alone (the levels no climate reaches), the ground, the fields and
+// the carry (the levels that derive the climate for the level below), or the ground and the carry (a run's last level,
+// its samples: what they read is derived on the level above).
+enum class View {
+    GROUND,
+    FIELDS,
+    SAMPLES,
+};
 
 // The level pass compute shader (one source for every level) for p_sdf's cascade; p_debug: the variant
 // whose level 0 also stores its channels in debug_channels; p_points: point items; p_fold: level 0 folds the
@@ -82,8 +91,8 @@ Cascade::FieldRange field_range(const SDFBase *p_sdf, bool p_points);
 // is the bare cascade_terrain_sdf: the same bits as the fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
 // (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING; with ground materials
 // (ground_materials), for every chunk, a ground sample's being cascade_ground_material's (its biome's).
-// p_fields false: the ground alone (a spec with fields: the variant for the levels below its climate floor).
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_fields = true,
+// p_view: the channels it carries (View; a spec without a climate has only GROUND, which FIELDS equals).
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, View p_view = View::FIELDS,
         bool p_cubes = true);
 
 // The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
@@ -119,7 +128,7 @@ public:
     bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
             RID p_values);
     void free();
-    bool is_valid() const { return uniform_set[0].is_valid() || uniform_set[2].is_valid(); }
+    bool is_valid() const { return uniform_set[0].is_valid() || uniform_set[2].is_valid() || uniform_set[4].is_valid(); }
 
     // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
     int level_count(int p_min_lod) const;
@@ -140,9 +149,9 @@ public:
 
 private:
     RenderingDevice *rd = nullptr;
-    // [(fields ? 2 : 0) + (fold ? 1 : 0)]: the bare level-0 output or the instance fold (given the table's buffers), the
-    // ground alone or with the fields (where the spec's FieldRange carries any).
-    static constexpr int VARIANTS = 4;
+    // [2 * view + (fold ? 1 : 0)]: the bare level-0 output or the instance fold (given the table's buffers), view the
+    // CascadeGLSL::View (the fields and the samples' views where the FieldRange carries any).
+    static constexpr int VARIANTS = 6;
     RID shader[VARIANTS];
     RID pipeline[VARIANTS];
     RID uniform_set[VARIANTS];
@@ -152,6 +161,7 @@ private:
     RID bands;
     RID debug_placeholder;
     int top = 0;
+    bool carry = false; // some run's last level reads carry groups (Spec::gpu_carry_groups)
     int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items
     uint32_t max_chunks = 0;
     uint64_t scratch_bytes_total = 0;
