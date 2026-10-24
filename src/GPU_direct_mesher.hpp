@@ -182,6 +182,7 @@ private:
     ChunkGate gate; // the SDF's gating of the popped chunks (streamed records)
 
     uint32_t next_batch_id = 0;
+    uint64_t rt_posts = 0; // kills, compactions and hidden masks posted to the render thread (their trace flow ids)
     godot::HashMap<uint32_t, InFlightBatch> in_flight;
     std::vector<PageState> page_state; // indexed by pool page
     std::vector<int> dirty_bounds_pages;
@@ -281,8 +282,10 @@ private:
     void _rt_on_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_audit_directory(const PackedByteArray &p_data, uint32_t p_batch_id);
     void _rt_on_status(const PackedByteArray &p_data, uint32_t p_batch_id);
-    void _rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges);
-    void _rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts);
+    // p_flow: the trace's hand-off id (rt_posts when it was posted).
+    void _rt_kill(const PackedInt32Array &p_pages, const PackedInt64Array &p_ranges, uint64_t p_flow);
+    void _rt_compact(const PackedInt32Array &p_copies, const PackedInt32Array &p_group_counts, uint64_t p_flow);
+    void _rt_set_hidden(const PackedInt64Array &p_writes, uint64_t p_flow);
     void _rt_read_timestamps();
     void _rt_destroy();
     // Async readback callbacks are not skipped when their object is freed (docs/gotchas.md): _rt_destroy

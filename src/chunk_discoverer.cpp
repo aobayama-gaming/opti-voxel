@@ -25,6 +25,7 @@ using namespace godot;
 
 void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod,
         std::vector<uint8_t> &r_outside, WaveStats &r_wave, LocalPointsGPU *p_gpu) const {
+    OV_TRACE("discoverer", "corner_sdf");
     // The 8 corners of each node (centre +- half its size, points of Λ_lod), shared by up to 8 nodes:
     // deduplicated on their voxel, then evaluated in one batch.
     const int64_t half_voxels = (int64_t(1) << p_lod) * chunk_param.half_chunk_voxels();

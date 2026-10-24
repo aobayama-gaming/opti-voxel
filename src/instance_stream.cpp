@@ -8,6 +8,7 @@
 #include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
+#include <iterator>
 
 namespace Archetype {
 
@@ -15,8 +16,12 @@ size_t InstanceStream::KeyHash::operator()(const SourceKey &p_k) const {
     return ExactNoise::hash_cell(p_k.tile, ((p_k.source * uint32_t(SourceKey::KIND_COUNT) + uint32_t(p_k.kind)) * 64u + uint32_t(p_k.lod) + 1u) * 0x9E3779B1u);
 }
 
+// A content job's span, by its key's kind.
+static const char *const CONTENT_SPAN[] = { "content_parts", "content_blobs", "content_sites", "content_proxies" };
+static_assert(std::size(CONTENT_SPAN) == SourceKey::KIND_COUNT);
+
 void InstanceStream::Job::run() {
-    OV_TRACE("stream", expand ? "job_expand" : "job_content");
+    OV_TRACE("stream", expand ? "job_expand" : CONTENT_SPAN[key.kind]);
     Trace::flow(Trace::Kind::FLOW_END, "stream_job", seq);
     const uint64_t t0 = now_usec();
     if (expand) {

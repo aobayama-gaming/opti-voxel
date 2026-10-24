@@ -45,6 +45,9 @@ FLOW_TITLE = {
     "batch": "mesh batch",
     "stream_job": "stream job",
     "field": "field request",
+    "kill": "page kills",
+    "compact": "page compaction",
+    "hidden": "hidden sub-cubes",
 }
 # Renderer and mesher GPU section names, as tools/profile_report.py reads them.
 GPU_LABEL = {
@@ -73,15 +76,18 @@ def pct(values, q):
 # ---------------------------------------------------------------------------------------------------------- reading
 
 def read_trace(path):
-    """(thread names {tid: name}, spans {tid: [(ts, dur, cat, name, n)]}, flow points [(ph, name, id, ts, tid)])."""
+    """(thread names {tid: name}, spans {tid: [(ts, dur, cat, name, n, seq, parent)]},
+    flow points [(ph, name, id, ts, tid, parent)]). seq / parent: the span's number on its thread and the one it runs in
+    (0 at the top), recorded by the engine (trace.hpp): the call tree doesn't depend on the clock's resolution."""
     names, spans, flows = {}, defaultdict(list), []
 
     def take(e):
         ph = e.get("ph")
+        args = e.get("args", {})
         if ph == "X":
-            spans[e["tid"]].append((e["ts"], e["dur"], e["cat"], e["name"], e.get("args", {}).get("n", 0)))
+            spans[e["tid"]].append((e["ts"], e["dur"], e["cat"], e["name"], args.get("n", 0), args["s"], args["p"]))
         elif ph in ("s", "t", "f"):
-            flows.append((ph, e["name"], e["id"], e["ts"], e["tid"]))
+            flows.append((ph, e["name"], e["id"], e["ts"], e["tid"], args["p"]))
         elif ph == "M" and e.get("name") == "thread_name":
             names[e["tid"]] = e["args"]["name"]
 
@@ -126,6 +132,8 @@ class Phase:
         self.edges = defaultdict(list)  # (flow, (lane, path), (lane, path)) -> [latency usec]
         self.flow_total = defaultdict(list)  # flow -> [first point to last point, usec] of finished chains
         self.flow_unfinished = defaultdict(int)
+        # (lane, parent path) -> {(a, b): parent calls in which child a first started before child b}
+        self.sibling_order = defaultdict(lambda: defaultdict(int))
 
     @property
     def frames(self):
@@ -145,62 +153,48 @@ def analyse(names, spans, flows, phases):
         return phases[i] if i >= 0 else None
 
     whole = Phase("all", min(starts) if starts else 0, max(p.end for p in phases) if phases else 0)
-    # Per thread: the spans' paths by nesting, then the flow points' enclosing spans by a sweep.
-    enclosing = {}  # (tid, ts, kind index) -> (lane, path)
-    points_by_tid = defaultdict(list)
-    for i, (ph, name, fid, ts, tid) in enumerate(flows):
-        points_by_tid[tid].append((ts, i))
+    # Per thread: each span's path from its parent's (a parent starts first: a smaller seq), then each flow point's
+    # enclosing span by its parent.
+    path_of = {}  # (tid, seq) -> path = ((cat, name), ...)
     for tid, list_ in spans.items():
         lane = lane_of(names.get(tid, "worker"))
-        list_.sort(key=lambda s: (s[0], -s[1]))
-        stack = []  # the open spans, outermost first
-        paths = []
-        child_time = [0.0] * len(list_)
-        parent = [-1] * len(list_)
-        for k, (ts, dur, cat, name, n) in enumerate(list_):
-            # Sorted by start: the parent is the innermost open span that still holds this one's end.
-            while stack and list_[stack[-1]][0] + list_[stack[-1]][1] < ts + dur:
-                stack.pop()
-            parent[k] = stack[-1] if stack else -1
-            paths.append((paths[parent[k]] if parent[k] >= 0 else ()) + ((cat, name),))
-            if parent[k] >= 0:
-                child_time[parent[k]] += dur
-            stack.append(k)
-        for k, (ts, dur, cat, name, n) in enumerate(list_):
-            path = paths[k]
+        list_.sort(key=lambda s: s[5])
+        child_time = defaultdict(float)
+        kids = defaultdict(dict)  # parent seq -> its children's (cat, name), in the order they first started
+        for ts, dur, cat, name, n, seq, parent in list_:
+            path_of[(tid, seq)] = path_of.get((tid, parent), ()) + ((cat, name),)
+            child_time[parent] += dur
+            if parent:
+                kids[parent].setdefault((cat, name), None)
+        for parent, order in kids.items():
+            if len(order) > 1 and (tid, parent) in path_of:
+                counts = whole.sibling_order[(lane, path_of[(tid, parent)])]
+                order = list(order)
+                for i, a in enumerate(order):
+                    for b in order[i + 1:]:
+                        counts[(a, b)] += 1
+        for ts, dur, cat, name, n, seq, parent in list_:
+            path = path_of[(tid, seq)]
             for p in (phase_of(ts), whole):
                 if p is None:
                     continue
                 node = p.nodes[(lane, path)]
                 node.total += dur
-                node.self += max(dur - child_time[k], 0)
+                node.self += max(dur - child_time[seq], 0)
                 node.durs.append(dur)
                 p.lane_threads[lane].add(tid)
-                if parent[k] < 0 and path != (("gpu", "frame"),):
+                if parent == 0 and path != (("gpu", "frame"),):
                     p.lane_busy[lane] += dur
                 if path == (("terrain", "process"),):
                     p.process_starts.append(ts)
                 if path == (("gpu", "frame"),):
                     p.gpu_frames += 1
                     p.lane_busy[lane] += dur
-        # The innermost span holding each flow point of this thread.
-        order = sorted(range(len(list_)), key=lambda k: (list_[k][0], -list_[k][1]))
-        pts = sorted(points_by_tid.get(tid, []))
-        j, open_ = 0, []
-        for ts, i in pts:
-            while j < len(order) and list_[order[j]][0] <= ts:
-                open_.append(order[j])
-                j += 1
-            open_ = [k for k in open_ if list_[k][0] + list_[k][1] >= ts]
-            inner = max(open_, key=lambda k: (list_[k][0], -list_[k][1]), default=None)
-            enclosing[i] = (lane, paths[inner] if inner is not None else ())
-    for tid, pts in points_by_tid.items():
-        lane = lane_of(names.get(tid, "worker"))
-        for ts, i in pts:
-            enclosing.setdefault(i, (lane, ()))
+    # A span that closed after the trace was written isn't in it: a point inside it counts at its thread's top.
+    enclosing = [(lane_of(names.get(tid, "worker")), path_of.get((tid, parent), ())) for ph, name, fid, ts, tid, parent in flows]
 
     chains = defaultdict(list)
-    for i, (ph, name, fid, ts, tid) in enumerate(flows):
+    for i, (ph, name, fid, ts, tid, parent) in enumerate(flows):
         chains[(name, fid)].append((ts, "stf".index(ph), i))
     for (name, fid), pts in chains.items():
         # A chain: s, then t..., then f; an id can be reused once its chain ended (field requests on the stack).
@@ -384,7 +378,36 @@ PAD = 16
 SYSTEM_TOKEN = {"terrain": "--c-terrain", "mesher": "--c-mesher", "discoverer": "--c-disc", "stream": "--c-stream",
                 "table": "--c-table", "pool": "--c-pool", "field": "--c-field", "pages": "--c-pages",
                 "render": "--c-render", "gpu": "--c-render"}
-FLOW_TOKEN = {"scan": "--c-disc", "batch": "--c-mesher", "stream_job": "--c-stream", "field": "--c-field"}
+FLOW_TOKEN = {"scan": "--c-disc", "batch": "--c-mesher", "stream_job": "--c-stream", "field": "--c-field",
+              "kill": "--c-pages", "compact": "--c-pages", "hidden": "--c-pages"}
+# Fonts, colour tokens (light, dark) and the page frame, shared with engine_structure.py. Opens a <style> block.
+THEME_HEAD = '''<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #f4f6f8; --surface: #ffffff; --lane: #eaeef2; --fg: #17202a; --muted: #5b6876; --rule: #d3dae1;
+  --c-terrain: #4f7cac; --c-mesher: #c0663a; --c-disc: #6c8f3d; --c-stream: #8a5aa8; --c-table: #b08a2e;
+  --c-pool: #7d8a96; --c-field: #2f8f8a; --c-pages: #a0525e; --c-render: #5a6fc0;
+  --ok: #2f7d4f; --warn: #a86a12; --bad: #b23b3b;
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif; --font-data: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11161c; --surface: #18202a; --lane: #1d2631; --fg: #e3e9ef; --muted: #93a1b0; --rule: #2c3846;
+  --c-terrain: #6f9bd0; --c-mesher: #e08a5c; --c-disc: #8fb85a; --c-stream: #b183cf; --c-table: #d4ad4c;
+  --c-pool: #9aa7b3; --c-field: #4fb8b2; --c-pages: #cf7682; --c-render: #8597e6;
+  --ok: #5cb57f; --warn: #d79a3c; --bad: #e06a6a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #11161c; --surface: #18202a; --lane: #1d2631; --fg: #e3e9ef; --muted: #93a1b0; --rule: #2c3846;
+  --c-terrain: #6f9bd0; --c-mesher: #e08a5c; --c-disc: #8fb85a; --c-stream: #b183cf; --c-table: #d4ad4c;
+  --c-pool: #9aa7b3; --c-field: #4fb8b2; --c-pages: #cf7682; --c-render: #8597e6;
+  --ok: #5cb57f; --warn: #d79a3c; --bad: #e06a6a; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
+h1 { font-size: 1.35rem; font-weight: 600; margin: 0; text-wrap: balance; }
+.meta { color: var(--muted); font-family: var(--font-data); font-size: 12px; }
+.help { color: var(--muted); max-width: 72ch; margin: 6px 0 14px; }
+'''
 
 
 def esc(s):
@@ -536,33 +559,8 @@ def html_page(run, args, phases):
                      for k, v in FLOW_TITLE.items()) + '<span class="key-note">arrow label: median hand-off latency</span>'
     return f'''<title>Engine Map · {esc(run_name)}</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<style>
+{THEME_HEAD}
 /* Layout: a header strip, one swimlane per thread drawn to the 16.7 ms frame budget, then the tables. */
-:root {{
-  --bg: #f4f6f8; --surface: #ffffff; --lane: #eaeef2; --fg: #17202a; --muted: #5b6876; --rule: #d3dae1;
-  --c-terrain: #4f7cac; --c-mesher: #c0663a; --c-disc: #6c8f3d; --c-stream: #8a5aa8; --c-table: #b08a2e;
-  --c-pool: #7d8a96; --c-field: #2f8f8a; --c-pages: #a0525e; --c-render: #5a6fc0;
-  --ok: #2f7d4f; --warn: #a86a12; --bad: #b23b3b;
-  --font-ui: "IBM Plex Sans", system-ui, sans-serif; --font-data: "IBM Plex Mono", ui-monospace, monospace;
-}}
-@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
-  --bg: #11161c; --surface: #18202a; --lane: #1d2631; --fg: #e3e9ef; --muted: #93a1b0; --rule: #2c3846;
-  --c-terrain: #6f9bd0; --c-mesher: #e08a5c; --c-disc: #8fb85a; --c-stream: #b183cf; --c-table: #d4ad4c;
-  --c-pool: #9aa7b3; --c-field: #4fb8b2; --c-pages: #cf7682; --c-render: #8597e6;
-  --ok: #5cb57f; --warn: #d79a3c; --bad: #e06a6a; color-scheme: dark; }} }}
-:root[data-theme="dark"] {{
-  --bg: #11161c; --surface: #18202a; --lane: #1d2631; --fg: #e3e9ef; --muted: #93a1b0; --rule: #2c3846;
-  --c-terrain: #6f9bd0; --c-mesher: #e08a5c; --c-disc: #8fb85a; --c-stream: #b183cf; --c-table: #d4ad4c;
-  --c-pool: #9aa7b3; --c-field: #4fb8b2; --c-pages: #cf7682; --c-render: #8597e6;
-  --ok: #5cb57f; --warn: #d79a3c; --bad: #e06a6a; color-scheme: dark; }}
-body {{ background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font-ui);
-  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
-  padding-block: 20px 40px; }}
-header {{ display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }}
-h1 {{ font-size: 1.35rem; font-weight: 600; margin: 0; text-wrap: balance; }}
-.meta {{ color: var(--muted); font-family: var(--font-data); font-size: 12px; }}
-.help {{ color: var(--muted); max-width: 72ch; margin: 6px 0 14px; }}
 .tabs {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }}
 .tab input {{ position: absolute; opacity: 0; }}
 .tab span {{ display: inline-block; padding: 4px 12px; border: 1px solid var(--rule); border-radius: 999px;

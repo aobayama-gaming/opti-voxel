@@ -15,7 +15,9 @@
 #
 # --trace=1 (passed on to bench.gd) records the engine trace: <run>/trace.json (every thread's spans, the hand-offs
 # between threads, the GPU's passes; open it in ui.perfetto.dev) and the map drawn from it, <run>/engine_map.html +
-# engine_map.md (tools/engine_map.py). With --profile=1 too, the GPU track has every renderer pass.
+# engine_map.md (tools/engine_map.py), and how the engine is built, <run>/engine_structure.html + .md
+# (tools/engine_structure.py: which stage runs inside which on each thread, the hand-offs, each stage's code). With
+# --profile=1 too, the GPU track has every renderer pass.
 #
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
@@ -250,6 +252,7 @@ if [[ -f "$RUN_DIR/profile.json" ]]; then
 fi
 if [[ -f "$RUN_DIR/trace.json" ]]; then
     python3 "$(dirname "$0")/engine_map.py" "$RUN_DIR" && echo ">> engine map: $RUN_DIR/engine_map.html (timeline: trace.json in ui.perfetto.dev)"
+    python3 "$(dirname "$0")/engine_structure.py" "$RUN_DIR" && echo ">> engine structure: $RUN_DIR/engine_structure.html"
 fi
 
 echo ">> log: $RUN_DIR/godot.log  (errors=$ERRORS leak-lines=$LEAKS exit=$CODE known-engine-exit-abort=$KNOWN_EXIT_ABORT ${TEARDOWN:-})"

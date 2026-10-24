@@ -34,7 +34,7 @@ void trace_frame(RenderingDevice *p_rd, const std::vector<String> &p_names, cons
     if (gpu_end < gpu0) {
         return;
     }
-    Trace::gpu_span("gpu", "frame", start, (gpu_end - gpu0) / 1000);
+    const uint32_t frame = Trace::gpu_span("gpu", "frame", start, (gpu_end - gpu0) / 1000);
     r_end = start + (gpu_end - gpu0) / 1000;
     for (uint32_t i = 0; i < p_labels.size(); i++) {
         const uint64_t begin = p_rd->get_captured_timestamp_gpu_time(i);
@@ -45,10 +45,10 @@ void trace_frame(RenderingDevice *p_rd, const std::vector<String> &p_names, cons
         const uint64_t ts = start + (begin - gpu0) / 1000;
         const uint64_t dur = (end - begin) / 1000;
         const bool mesher = p_labels[i].begins_with("vx_");
-        Trace::gpu_span(mesher ? "mesher" : "render", Trace::intern(p_labels[i].utf8().get_data()), ts, dur);
+        const uint32_t pass = Trace::gpu_span(mesher ? "mesher" : "render", Trace::intern(p_labels[i].utf8().get_data()), ts, dur, 0, frame);
         if (mesher && p_names[i + 1].ends_with("_copy")) {
             const uint64_t batch = uint64_t(p_names[i + 1].substr(2).get_slice("_", 0).to_int());
-            Trace::gpu_flow(Trace::Kind::FLOW_STEP, "batch", batch, ts + dur / 2);
+            Trace::gpu_flow(Trace::Kind::FLOW_STEP, "batch", batch, ts + dur / 2, pass);
         }
     }
 }

@@ -28,6 +28,7 @@ struct Registry {
     std::mutex mutex;
     std::vector<std::unique_ptr<Buffer>> buffers;
     Buffer gpu;
+    uint32_t gpu_seq = 0; // under gpu.mutex
     std::atomic<uint64_t> count{ 0 };
     std::atomic<uint64_t> dropped{ 0 };
     std::atomic<uint64_t> max_events{ 0 };
@@ -95,12 +96,14 @@ void append_event(std::string &r_out, const Event &p_e, uint32_t p_tid) {
     append_escaped(r_out, p_e.name);
     r_out += "\",\"pid\":1,\"tid\":" + std::to_string(p_tid) + ",\"ts\":" + std::to_string(p_e.ts_usec);
     if (p_e.kind == Kind::SPAN) {
-        r_out += ",\"dur\":" + std::to_string(p_e.dur_usec);
+        r_out += ",\"dur\":" + std::to_string(p_e.dur_usec) + ",\"args\":{\"s\":" + std::to_string(p_e.seq) +
+                ",\"p\":" + std::to_string(p_e.parent);
         if (p_e.id != 0) {
-            r_out += ",\"args\":{\"n\":" + std::to_string(p_e.id) + "}";
+            r_out += ",\"n\":" + std::to_string(p_e.id);
         }
+        r_out += "}";
     } else {
-        r_out += ",\"id\":" + std::to_string(p_e.id);
+        r_out += ",\"id\":" + std::to_string(p_e.id) + ",\"args\":{\"p\":" + std::to_string(p_e.parent) + "}";
         if (p_e.kind == Kind::FLOW_END) {
             r_out += ",\"bp\":\"e\""; // binds to the span it lands in, not the next one
         }
@@ -173,19 +176,25 @@ void record(const Event &p_event) {
 
 void flow(Kind p_kind, const char *p_name, uint64_t p_id) {
     if (enabled()) {
-        record(Event{ "flow", p_name, now_usec(), 0, p_id, p_kind });
+        record(Event{ "flow", p_name, now_usec(), 0, p_id, p_kind, 0, open_span });
     }
 }
 
-void gpu_span(const char *p_system, const char *p_name, uint64_t p_ts_usec, uint64_t p_dur_usec, uint64_t p_id) {
-    if (enabled() && admit()) {
-        push(registry().gpu, Event{ p_system, p_name, p_ts_usec, p_dur_usec, p_id, Kind::SPAN });
+uint32_t gpu_span(const char *p_system, const char *p_name, uint64_t p_ts_usec, uint64_t p_dur_usec, uint64_t p_id,
+        uint32_t p_parent) {
+    if (!enabled() || !admit()) {
+        return 0;
     }
+    Registry &r = registry();
+    const std::lock_guard<std::mutex> lock(r.gpu.mutex);
+    const uint32_t seq = ++r.gpu_seq;
+    r.gpu.events.push_back(Event{ p_system, p_name, p_ts_usec, p_dur_usec, p_id, Kind::SPAN, seq, p_parent });
+    return seq;
 }
 
-void gpu_flow(Kind p_kind, const char *p_name, uint64_t p_id, uint64_t p_ts_usec) {
+void gpu_flow(Kind p_kind, const char *p_name, uint64_t p_id, uint64_t p_ts_usec, uint32_t p_parent) {
     if (enabled() && admit()) {
-        push(registry().gpu, Event{ "flow", p_name, p_ts_usec, 0, p_id, p_kind });
+        push(registry().gpu, Event{ "flow", p_name, p_ts_usec, 0, p_id, p_kind, 0, p_parent });
     }
 }
 

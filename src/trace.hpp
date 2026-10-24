@@ -27,12 +27,18 @@ struct Event {
     uint64_t dur_usec;
     uint64_t id; // a flow's id, a span's argument (chunks in a batch, points in a request)
     Kind kind;
+    uint32_t seq; // a span's number on its track, from 1 (0 for a flow point)
+    uint32_t parent; // the span it runs in (its seq), 0 at the top: the call tree, exact at any clock resolution
 };
 
 inline std::atomic<bool> recording{ false };
 inline bool enabled() {
     return recording.load(std::memory_order_relaxed);
 }
+
+// The calling thread's innermost open span (its seq) and the last seq it handed out.
+inline thread_local uint32_t open_span = 0;
+inline thread_local uint32_t last_span = 0;
 
 // Clears what was recorded and starts recording (at most p_max_events, the rest counted as dropped).
 void start(uint64_t p_max_events = 2'000'000);
@@ -48,9 +54,11 @@ const char *intern(const std::string &p_name);
 uint64_t now_usec();
 void record(const Event &p_event);
 void flow(Kind p_kind, const char *p_name, uint64_t p_id);
-// A span on the GPU track (its timestamps converted to the CPU clock by the caller).
-void gpu_span(const char *p_system, const char *p_name, uint64_t p_ts_usec, uint64_t p_dur_usec, uint64_t p_id = 0);
-void gpu_flow(Kind p_kind, const char *p_name, uint64_t p_id, uint64_t p_ts_usec);
+// A span on the GPU track (its timestamps converted to the CPU clock by the caller), inside p_parent (a seq this
+// returned, 0 at the top). Returns its seq, 0 when not recorded.
+uint32_t gpu_span(const char *p_system, const char *p_name, uint64_t p_ts_usec, uint64_t p_dur_usec, uint64_t p_id = 0,
+        uint32_t p_parent = 0);
+void gpu_flow(Kind p_kind, const char *p_name, uint64_t p_id, uint64_t p_ts_usec, uint32_t p_parent);
 
 // Everything recorded, as a Chrome trace (JSON object format: traceEvents + thread names + otherData).
 std::string to_json();
@@ -59,10 +67,20 @@ std::string to_json();
 class Scope {
 public:
     Scope(const char *p_system, const char *p_name) :
-            system(p_system), name(p_name), begin(enabled() ? now_usec() : 0) {}
+            system(p_system), name(p_name) {
+        if (enabled()) {
+            begin = now_usec();
+            seq = ++last_span;
+            parent = open_span;
+            open_span = seq;
+        }
+    }
     ~Scope() {
-        if (begin != 0 && enabled()) {
-            record(Event{ system, name, begin, now_usec() - begin, arg, Kind::SPAN });
+        if (begin != 0) {
+            open_span = parent;
+            if (enabled()) {
+                record(Event{ system, name, begin, now_usec() - begin, arg, Kind::SPAN, seq, parent });
+            }
         }
     }
     void set_arg(uint64_t p_arg) { arg = p_arg; }
@@ -72,8 +90,10 @@ public:
 private:
     const char *system;
     const char *name;
-    uint64_t begin;
+    uint64_t begin = 0;
     uint64_t arg = 0;
+    uint32_t seq = 0;
+    uint32_t parent = 0;
 };
 
 } // namespace Trace

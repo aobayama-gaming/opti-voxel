@@ -100,11 +100,47 @@ TEST_CASE("Trace: spans and a flow across two named threads") {
     CHECK(int64_t(start[0]["ts"]) <= int64_t(producer[0]["ts"]) + int64_t(producer[0]["dur"]));
 }
 
+TEST_CASE("Trace: spans and flow points name the span they run in") {
+    Trace::start();
+    {
+        OV_TRACE("test", "outer");
+        {
+            // Siblings that start and end within the same microsecond: only the parent ids tell them apart.
+            OV_TRACE("test", "first");
+        }
+        {
+            OV_TRACE("test", "second");
+            Trace::flow(Trace::Kind::FLOW_START, "nested", 1);
+        }
+    }
+    CHECK(Trace::open_span == 0); // every span closed
+    Trace::stop();
+
+    const Array all = trace_events();
+    const auto arg = [](const Dictionary &p_e, const char *p_key) { return int64_t(Dictionary(p_e["args"])[p_key]); };
+    const std::vector<Dictionary> outer = events(all, "X", "outer");
+    const std::vector<Dictionary> first = events(all, "X", "first");
+    const std::vector<Dictionary> second = events(all, "X", "second");
+    const std::vector<Dictionary> point = events(all, "s", "nested");
+    CHECK_OR_RETURN(outer.size() == 1);
+    CHECK_OR_RETURN(first.size() == 1);
+    CHECK_OR_RETURN(second.size() == 1);
+    CHECK_OR_RETURN(point.size() == 1);
+    CHECK(arg(outer[0], "p") == 0);
+    CHECK(arg(first[0], "p") == arg(outer[0], "s"));
+    CHECK(arg(second[0], "p") == arg(outer[0], "s"));
+    CHECK(arg(first[0], "s") != arg(second[0], "s"));
+    CHECK(arg(point[0], "p") == arg(second[0], "s"));
+}
+
 TEST_CASE("Trace: GPU spans go to the GPU track") {
     Trace::start();
-    Trace::gpu_span("render", Trace::intern("Render \"Opaque\" Pass"), 1000, 250);
-    Trace::gpu_flow(Trace::Kind::FLOW_STEP, "batch", 3, 1100);
+    const uint32_t frame = Trace::gpu_span("gpu", "frame", 900, 600);
+    const uint32_t opaque = Trace::gpu_span("render", Trace::intern("Render \"Opaque\" Pass"), 1000, 250, 0, frame);
+    Trace::gpu_flow(Trace::Kind::FLOW_STEP, "batch", 3, 1100, opaque);
     Trace::stop();
+    CHECK(frame != 0);
+    CHECK(opaque != frame);
     const Array all = trace_events();
     const int64_t gpu_tid = tid_named(all, "GPU");
     CHECK_OR_RETURN(gpu_tid >= 0);
@@ -113,6 +149,7 @@ TEST_CASE("Trace: GPU spans go to the GPU track") {
     CHECK(int64_t(pass[0]["tid"]) == gpu_tid);
     CHECK(int64_t(pass[0]["ts"]) == 1000);
     CHECK(int64_t(pass[0]["dur"]) == 250);
+    CHECK(int64_t(Dictionary(pass[0]["args"])["p"]) == frame);
     const std::vector<Dictionary> step = events(all, "t", "batch");
     CHECK_OR_RETURN(step.size() == 1);
     CHECK(int64_t(step[0]["tid"]) == gpu_tid);

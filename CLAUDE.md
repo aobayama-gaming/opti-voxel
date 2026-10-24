@@ -126,8 +126,9 @@ Details and flags: `docs/testing.md`.
 - CI runs format, the `-Werror` build and the unit tests; everything that needs a GPU stays local.
 - `tools/bench.sh` runs the bench scene (`--scenario=load|fly|turn|edit|approach`, `--preset=`, `--profile=1`);
   `tools/bench_ab.sh` / `bench_compare.sh` give perf tables. Correctness runs never use `--cool=1`.
-- `bench.sh --trace=1` maps the engine: `<run>/engine_map.html` (`tools/engine_map.py`: which thread runs what, ms
-  per frame, hand-offs between threads) and `trace.json` (the timeline, ui.perfetto.dev). New threaded or GPU
+- `bench.sh --trace=1` maps the engine: `<run>/engine_structure.html` (`tools/engine_structure.py`: how it is built,
+  which stage runs inside which on each thread, the hand-offs, each stage's code), `<run>/engine_map.html`
+  (`tools/engine_map.py`: which thread runs what, ms per frame, hand-offs between threads) and `trace.json` (the timeline, ui.perfetto.dev). New threaded or GPU
   work gets an `OV_TRACE` span and its hand-offs a `Trace::flow` (`src/trace.hpp`).
 
 | After touching | Run |

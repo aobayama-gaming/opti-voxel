@@ -60,9 +60,15 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   `OV_TRACE(system, stage)` spans, a GPU track (every captured frame's intervals: the mesher's `vx_*` always, every
   renderer pass with `--profile=1`, placed as early as their recording allows) and flows for the hand-offs (`scan`
   discoverer -> main, `batch` main -> render -> GPU -> readback -> main, `stream_job` start -> worker, `field` worker ->
-  FieldGPU). `tools/engine_map.py <run>` (run by bench.sh) draws `engine_map.html` (a lane per thread, each stage's
+  FieldGPU, `kill` / `compact` / `hidden` main -> render). Each span records its parent (the span open on its thread
+  when it started) and each flow point the span it is in: the call tree is exact whatever the clock's resolution.
+  `tools/engine_map.py <run>` (run by bench.sh) draws `engine_map.html` (a lane per thread, each stage's
   ms per frame against the 16.7 ms budget, the hand-offs as arrows with their median latency, per phase) and
-  `engine_map.md` (hot spots by self time, hand-off latencies). A new system gets a span where its work runs and a
+  `engine_map.md` (hot spots by self time, hand-off latencies). `tools/engine_structure.py <run>` (run by bench.sh)
+  draws how the engine is built, without timings: `engine_structure.html`, per thread the stages nested in the stage
+  that runs them in execution order, how often each runs, the hand-offs as arrows, and per stage its code (found by
+  scanning `src/` for the trace points: file:line, function, the comments there and on its declaration);
+  `engine_structure.md`, the same tree as text to diff between runs, plus the trace points no run reached. A new system gets a span where its work runs and a
   flow where it hands work to another thread; `_process` sections are spans through `Section`. Off, a span costs one
   atomic load.
 - `tools/cpu_profile.sh [--no-build] [--sampler=perf|eu-stack|auto] -- <bench.sh args>`: builds with
