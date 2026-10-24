@@ -32,8 +32,8 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   `g_sdf_chunk` (the chunk's list offset in `id.w`, count in `anchor_hi.w`), all declared by
   `Archetype::glsl_table_buffers` (the one source, also FrameSpike's).
   **Culled per cube:** in the level pass (`generate_fold_glsl(..., group_size)`, the cascade's fold variant) a
-  workgroup is a 4x4x4 cube of level-0 samples (`CascadeGLSL::FOLD_CUBE`; the chunk size must be a multiple of it,
-  else no fold variant). The workgroup tests the list 64 words at a time against the cube's box (`arch_meets_box`:
+  workgroup is a 4x4x4 cube of level-0 samples (`CascadeGLSL::FOLD_CUBE`; for a chunk size that is
+  not a multiple of it, the fold runs per sample, as before). The workgroup tests the list 64 words at a time against the cube's box (`arch_meets_box`:
   `sat_diff` of the cube's first and last samples vs the influence box), the words that pass go to a shared bit
   mask, and every sample walks the mask lowest bit first: the per-sample loop body (`arch_in_box`, the eval, the
   combine) runs on the survivors in list order, the same text as FrameSpike's per-sample loop. `sat_diff` keeps the

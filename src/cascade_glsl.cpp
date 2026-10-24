@@ -20,7 +20,7 @@ namespace {
 
 constexpr const char LEVEL_TEMPLATE[] = R"glsl(#version 450
 
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = /*LOCAL_SIZE*/, local_size_y = 1, local_size_z = 1) in;
 
 /*STRUCTS*/
 
@@ -197,6 +197,8 @@ constexpr ItemFills POINT_FILLS = {
 // so that arch_fold tests the chunk's list once per cube. A sample's local index is the chunk fill's, so the scratch,
 // sdf_sample and sdf_material keep their layout. The fold has barriers, so the template's returns turn into
 // `sample_live = false` before it (/*SKIP*/) and a return after it (/*AFTER_SAMPLE*/): every invocation reaches them.
+// A skipped lane still reads its chunk's frame: record_level dispatches exactly n^3 / LOCAL_SIZE = cubes^3 workgroups
+// by chunk_count, so c and local stay in range (a padded dispatch would have to clamp them first).
 constexpr const char FOLD_ITEM_INDEX[] = R"glsl(    uint c = gl_WorkGroupID.y;
     uint n = pc.n_child;
     uint cubes = n / CUBEu;
@@ -550,7 +552,7 @@ FieldRange field_range(const SDFBase *p_sdf, bool p_points) {
     return everywhere ? FieldRange{ 0, MAX_LEVEL } : spec.field_range();
 }
 
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_fields) {
+String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_fields, bool p_cubes) {
     const Spec &whole = *p_sdf->get_cascade();
     // Without the fields: the ground alone (its Ch, its bands, no modulation) on the whole spec's scratch planes.
     const Spec view = p_fields ? whole : whole.ground_only();
@@ -559,22 +561,25 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     const SDFGpuTable *table = p_sdf->get_gpu_table();
     ERR_FAIL_COND_V_MSG((p_fold || p_material) && p_points, String(), "CascadeGLSL: only chunk items fold or carry a material.");
     const ItemFills &fills = p_points ? POINT_FILLS : CHUNK_FILLS;
+    // The fold per cube of samples (FOLD_ITEM_INDEX), or per sample (the chunk's item index) without whole cubes.
+    const bool cubes = p_fold && p_cubes;
     String code = LEVEL_TEMPLATE;
+    code = code.replace("/*LOCAL_SIZE*/", itos(LOCAL_SIZE));
     code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
-    code = code.replace("/*ITEM_INDEX*/", p_fold ? String(FOLD_ITEM_INDEX).replace("CUBE", itos(FOLD_CUBE)) : String(fills.item_index));
-    code = code.replace("/*SKIP*/", p_fold ? "sample_live = false;" : "return;");
+    code = code.replace("/*ITEM_INDEX*/", cubes ? String(FOLD_ITEM_INDEX).replace("CUBE", itos(FOLD_CUBE)) : String(fills.item_index));
+    code = code.replace("/*SKIP*/", cubes ? "sample_live = false;" : "return;");
     code = code.replace("/*ITEM_FRAME*/", fills.item_frame);
     code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
     code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
-    code = code.replace("/*AFTER_SAMPLE*/", p_fold ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
+    code = code.replace("/*AFTER_SAMPLE*/", cubes ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
     // The sample's ground channels: the cascade's, or climate_ground's with ground terms (the fields variant only: their
     // field range is every level, so it is the only one compiled).
     const String ground = p_fields && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl() : String();
     const String c0 = ground.is_empty() ? String("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : String("climate_ground(ch)");
     code = code.replace("/*GROUND_C0*/", c0);
     const String channels = c0 + String(", p, lod");
-    // The fold's workgroup box: its cube's first and last samples.
-    const String cube_box = vformat("level_point(m_lo, m_hi, cube, m), level_point(m_lo, m_hi, cube + %du, m)", FOLD_CUBE - 1);
+    // The fold's workgroup box: its cube's first and last samples (the sample itself per sample).
+    const String cube_box = cubes ? vformat("level_point(m_lo, m_hi, cube, m), level_point(m_lo, m_hi, cube + %du, m)", FOLD_CUBE - 1) : String("p, p");
     code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, %s, pc.chunk_base + c, material, skirt_extra)", channels, cube_box) : vformat("cascade_terrain_sdf(%s)", channels));
     // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
     // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
@@ -596,7 +601,7 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
     code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
     code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : String()) + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : String()));
-    code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? String(LEVEL_POINT) + p_sdf->get_sample_fold_glsl(LOCAL_SIZE) : String()));
+    code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? (cubes ? String(LEVEL_POINT) : String()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : String()));
     const String modulation = spec->modulation ? spec->modulation->glsl(*spec) : String();
     const bool fields = !spec->fields.empty();
     const FieldRange range = field_range(p_sdf, p_points);
@@ -608,7 +613,7 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     code = code.replace("/*INSERT_BANDS*/", insert_code(*spec));
     code = code.replace("/*FIELDS_FLAG*/", fields ? vformat("    g_fields = m >= %d && lod <= %d; // FieldRange::carried\n", range.floor, range.ceiling) : String());
 
-    const String debug_store = String(p_fold ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
+    const String debug_store = String(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
     code = code.replace("/*DEBUG_STORE*/", p_debug ? debug_store : String());
     return code;
 }
@@ -655,18 +660,13 @@ bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_i
     // buffers), with the ground alone or with the fields (where the spec's FieldRange carries them: none if empty).
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
     ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
-    // The fold variant's workgroups are cubes of level-0 samples: without whole cubes, no fold variant (the bare cascade
-    // alone, record_level ERRs once).
-    bool fold = table;
-    if (fold && item_size % int(CascadeGLSL::FOLD_CUBE) != 0) {
-        ERR_PRINT(vformat("CascadePasses: chunk size %d is not a multiple of %d: no instance fold.", item_size, CascadeGLSL::FOLD_CUBE));
-        fold = false;
-    }
+    // The fold variant's workgroups are cubes of level-0 samples, given whole cubes; else it folds per sample.
+    const bool cubes = item_size % int(CascadeGLSL::FOLD_CUBE) == 0;
     // Fields carried everywhere: the ground-only variants would never run.
     for (int c = fields.everywhere() ? 1 : 0; c < (fields.empty() ? 1 : 2); c++) {
-        for (int f = 0; f < (fold ? 2 : 1); f++) {
+        for (int f = 0; f < (table ? 2 : 1); f++) {
             const int v = 2 * c + f;
-            const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), c == 1);
+            const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), c == 1, cubes);
             const String name = String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") +
                     (c == 1 ? "_fields" : "");
             if (!_compile(v, name, code) && f == 0) {
@@ -805,7 +805,7 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, con
     const int with_fields = !fields.empty() && fields.batch(p_lods, p_j) ? 2 : 0;
     bool fold = p_j == 0 && p_fold;
     if (fold && !uniform_set[with_fields + 1].is_valid()) {
-        ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, a chunk size not a multiple of FOLD_CUBE, or it failed to compile): the bare cascade instead.");
+        ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
         fold = false;
     }
     const int v = with_fields + (fold ? 1 : 0);

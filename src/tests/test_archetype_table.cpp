@@ -1,6 +1,7 @@
 #include "test_common.hpp"
 
 #include "archetype_table.hpp"
+#include "cascade_glsl.hpp"
 #include "instance_table.hpp"
 
 #include <algorithm>
@@ -975,7 +976,7 @@ TEST_CASE("Archetype band: a part stays whole while its cells resolve it and ero
     CHECK(kept_by_resolve > 0);
 }
 
-// The level pass's fold tests each list word once per 4x4x4 cube of samples (arch_meets_box, mirrored by
+// The level pass's fold tests each list word once per cube of FOLD_CUBE^3 samples (arch_meets_box, mirrored by
 // in_influence_cube) and folds only the words that pass: a record that any sample of the cube would fold must pass, or
 // that sample loses it. Random records over six decades of size, margins up to the INPUT_LIMIT clamp, anchors near 0,
 // across the 2^31 low-word wrap and near +-2^60, cubes at LODs 0-14 near them and past the sat_diff saturation.
@@ -1005,11 +1006,12 @@ TEST_CASE("Archetype table: a cube's box test keeps every record a sample of the
         for (int a = 0; a < 3; a++) {
             lo[a] = (rec.anchor[a] + (int64_t(rec.box_lo[a]) + rec.box_hi[a]) / 2 + ExactNoise::random_offset(i, 4 + a, SEED, range)) & ~(step - 1); // on the LOD's lattice
         }
-        const VoxelPos hi = lo + VoxelPos(3 * step, 3 * step, 3 * step);
+        constexpr int64_t CUBE = CascadeGLSL::FOLD_CUBE;
+        const VoxelPos hi = lo + VoxelPos((CUBE - 1) * step, (CUBE - 1) * step, (CUBE - 1) * step);
         bool any = false, saturated = false;
-        for (int s = 0; s < 64; s++) {
+        for (int64_t s = 0; s < CUBE * CUBE * CUBE; s++) {
             WorldPos p;
-            p.voxel = lo + VoxelPos(int64_t(s & 3) * step, int64_t((s >> 2) & 3) * step, int64_t(s >> 4) * step);
+            p.voxel = lo + VoxelPos(s % CUBE * step, s / CUBE % CUBE * step, s / (CUBE * CUBE) * step);
             if (in_influence_box(rec, p, lod)) {
                 any = true;
                 for (int a = 0; a < 3; a++) {
