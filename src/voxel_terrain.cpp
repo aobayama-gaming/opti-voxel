@@ -103,6 +103,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_log_level", "level"), &VoxelTerrain::set_log_level);
     ClassDB::bind_method(D_METHOD("get_log_level"), &VoxelTerrain::get_log_level);
     ClassDB::bind_method(D_METHOD("is_load_complete"), &VoxelTerrain::is_load_complete);
+    ClassDB::bind_method(D_METHOD("is_edit_settled"), &VoxelTerrain::is_edit_settled);
     ClassDB::bind_method(D_METHOD("get_debug_stats"), &VoxelTerrain::get_debug_stats);
     ClassDB::bind_method(D_METHOD("debug_validate", "count", "dump_dir"), &VoxelTerrain::debug_validate, DEFVAL(String()));
     ClassDB::bind_method(D_METHOD("get_validation_report"), &VoxelTerrain::get_validation_report);
@@ -1314,6 +1315,16 @@ bool VoxelTerrain::is_load_complete() {
     }
     if (direct_mesher) {
         return direct_mesher->is_idle();
+    }
+    return gpu_mesher->is_idle();
+}
+
+bool VoxelTerrain::is_edit_settled() {
+    if (!started) {
+        return false;
+    }
+    if (direct_mesher) {
+        return direct_mesher->is_edit_settled();
     }
     return gpu_mesher->is_idle();
 }

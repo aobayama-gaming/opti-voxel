@@ -36,9 +36,13 @@ const FLY_RATE := 1.0  # altitudes per second
 # Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
 # of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
 # by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press
-# (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release. Both only act while the mouse is captured. They use VoxelTerrain.add_instance /
+# (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release (`--left_click=tube`;
+# the default left tool is the spray: held, it subtracts a --spray_radius sphere where the view hits, every SPRAY_PERIOD
+# seconds). They only act while the mouse is captured. They use VoxelTerrain.add_instance /
 # move_instance / remove_instance.
-const CAPSULE_TYPE := 1        # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
+const SPHERE_TYPE := 0         # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
+const CAPSULE_TYPE := 1
+const SPRAY_PERIOD := 0.03     # at least this many seconds between two spray spheres, and the last one meshed
 const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
 var dig_radius := 1.5       # --dig_radius=M
 var dig_length := 6.0       # --dig_length=M
@@ -47,6 +51,9 @@ var drag_radius := 1.0      # --drag_radius=M: the tube's radius (1 m = 2 m wide
 var dig_k := 0.3            # smooth radius (metres)
 var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid tube); --drag_op=subtract|union
 var drag_active := false
+var left_tube := false      # --left_click=tube: left click drags the tube instead of spraying
+var spray_radius := 0.1     # --spray_radius=M
+var spray_wait := 0.0       # seconds to the next spray sphere
 var drag_id := -1
 var drag_pose := []         # [anchor voxel Array, rotation]: the tube's last placed pose
 var edits_count := 0
@@ -54,7 +61,8 @@ var hud: Label = null
 var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
 var overlay: CanvasLayer = null  # --overlay=video: the frame-time graph and scene facts, in place of the HUD; none: hidden
-var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera; F toggles it
+var flashlight: SpotLight3D = null  # --flashlight=1: a shadowed spot carried by the camera, with a wide flood; F toggles it
+var pixelate := 1           # --pixelate=N: the 3D drawn in N x N blocks, under a full-resolution HUD
 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
@@ -103,6 +111,10 @@ func _enter_tree() -> void:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
 		if a == "--grade=0":
 			Presets.ungrade(get_parent())
+		if a == "--ssao=0" and Presets.environment(get_parent()):
+			Presets.environment(get_parent()).ssao_enabled = false
+		if a.begins_with("--ambient=") and Presets.environment(get_parent()):
+			Presets.environment(get_parent()).ambient_light_energy = a.trim_prefix("--ambient=").to_float()
 		if a.begins_with("--dig_radius="):
 			dig_radius = a.trim_prefix("--dig_radius=").to_float()
 		if a.begins_with("--dig_length="):
@@ -113,6 +125,10 @@ func _enter_tree() -> void:
 			drag_op = 2
 		if a == "--drag_op=union":
 			drag_op = 0
+		if a == "--left_click=tube":
+			left_tube = true
+		if a.begins_with("--spray_radius="):
+			spray_radius = a.trim_prefix("--spray_radius=").to_float()
 		if a.begins_with("--drag_radius="):
 			drag_radius = a.trim_prefix("--drag_radius=").to_float()
 		if a.begins_with("--instances=") and terrain:
@@ -162,6 +178,7 @@ func _ready():
 		if "--overlay=video" in Presets.user_args():
 			overlay = VideoOverlay.new()
 			overlay.setup(terrain, camera)
+			overlay.pixelate = pixelate
 			add_child(overlay)
 		else:
 			_make_hud()
@@ -179,23 +196,16 @@ func _ready():
 # `--render_scale=F` (default 0.5 per axis: a quarter of the pixels) and upscales to the window. The LOD's pixel error
 # is in render pixels, so 0.5 draws the meshes of twice the error. FSR 2 needs `--render-thread safe`: on the separate
 # render thread Godot 4.6.3 exits silently while loading its shaders.
-# `--pixelate=N` (a fake-resolution look): the whole window (3D and HUD) renders at 1/N of its size and is blitted to
-# the screen N times larger with nearest filtering (plain pixel copies). With `--upscale=fsr2` the 3D renders at
-# render_scale of that: `--pixelate=2 --upscale=fsr2` draws the 3D at a quarter of the window per axis, FSR 2 brings it
-# to a half, then each pixel is doubled. The LOD reads the 3D render's size, so it follows.
+# `--pixelate=N` (a fake-resolution look): the 3D renders at 1/N of the 3D scale (`--pixelate=2 --upscale=fsr2`: a
+# quarter of the window per axis), is upscaled to the window, then a screen pass copies one pixel over each N x N block.
+# The HUD draws on a layer above it, at full resolution. The LOD reads the 3D render's size, so it follows.
 func _setup_upscaling() -> void:
-	var pixelate := 1
 	for a in Presets.user_args():
 		if a.begins_with("--pixelate="):
 			pixelate = maxi(a.trim_prefix("--pixelate=").to_int(), 1)
 	if pixelate > 1:
-		var window := get_window()
-		window.content_scale_mode = Window.CONTENT_SCALE_MODE_VIEWPORT
-		window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
-		window.content_scale_stretch = Window.CONTENT_SCALE_STRETCH_INTEGER
-		var follow := func() -> void: window.content_scale_size = window.size / pixelate
-		follow.call()
-		window.size_changed.connect(follow)
+		_make_pixel_blocks()
+		get_viewport().scaling_3d_scale = clampf(1.0 / pixelate, 0.25, 1.0)
 	var modes := {
 		"bilinear": Viewport.SCALING_3D_MODE_BILINEAR,
 		"fsr1": Viewport.SCALING_3D_MODE_FSR,
@@ -215,13 +225,36 @@ func _setup_upscaling() -> void:
 		return
 	var viewport := get_viewport()
 	viewport.scaling_3d_mode = modes[mode]
-	viewport.scaling_3d_scale = clampf(render_scale, 0.25, 2.0)
+	viewport.scaling_3d_scale = clampf(render_scale / pixelate, 0.25, 2.0)
+
+# Below the HUD (layer 1): every pixel of an N x N block takes the screen's colour at the block's first pixel.
+func _make_pixel_blocks() -> void:
+	var shader := Shader.new()
+	shader.code = """shader_type canvas_item;
+uniform sampler2D screen_tex : hint_screen_texture, filter_nearest;
+uniform float block = 2.0;
+void fragment() {
+	vec2 px = floor(FRAGCOORD.xy / block) * block + 0.5;
+	COLOR = vec4(texture(screen_tex, px * SCREEN_PIXEL_SIZE).rgb, 1.0);
+}"""
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	material.set_shader_parameter("block", float(pixelate))
+	var rect := ColorRect.new()
+	rect.material = material
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var layer := CanvasLayer.new()
+	layer.layer = 0
+	layer.add_child(rect)
+	add_child(layer)
 
 func _make_hud() -> void:
 	var hud_layer := CanvasLayer.new()
 	add_child(hud_layer)
 	hud = Label.new()
-	hud.position = Vector2(10, 10)
+	hud.position = Vector2(8, 8)
+	hud.add_theme_font_size_override("font_size", 11)
 	hud.add_theme_color_override("font_color", Color(1, 1, 1))
 	hud.add_theme_color_override("font_shadow_color", Color(0, 0, 0))
 	hud.add_theme_constant_override("shadow_offset_x", 1)
@@ -233,13 +266,21 @@ func _make_flashlight(p_on: bool) -> void:
 	flashlight = SpotLight3D.new()
 	flashlight.position = Vector3(0.25, -0.2, 0.0)
 	flashlight.light_color = Color(1.0, 0.92, 0.8)
-	flashlight.light_energy = 6.0
+	flashlight.light_energy = 3.0
 	flashlight.spot_range = 60.0
-	flashlight.spot_angle = 28.0
-	flashlight.spot_attenuation = 1.2
+	flashlight.spot_angle = 32.0
+	flashlight.spot_attenuation = 0.7
 	flashlight.shadow_enabled = true
 	flashlight.visible = p_on
 	camera.add_child(flashlight)
+	# The flood around the beam: wide, dimmer, shorter, no shadows (a second shadowed spot doubles the shadow cost).
+	var flood := SpotLight3D.new()
+	flood.light_color = flashlight.light_color
+	flood.light_energy = 1.5
+	flood.spot_range = 40.0
+	flood.spot_angle = 75.0
+	flood.spot_attenuation = 0.5
+	flashlight.add_child(flood)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -312,6 +353,7 @@ func _input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed and captured:
 				drag_active = true
+				spray_wait = 0.0
 			elif not event.pressed:
 				_end_drag()
 
@@ -385,8 +427,42 @@ func _dig() -> void:
 	if terrain.add_instance(CAPSULE_TYPE, p[0], p[1], p[2], _basis9(fwd), params, 3, dig_k / vt) >= 0:
 		edits_count += 1
 
-func _update_drag() -> void:
+# The surface the view hits, to a centimetre: the spray's spheres are a few cm, _raymarch stops up to 0.5 m short.
+func _surface_hit(terrain: Node, origin: Vector3, dir: Vector3) -> Variant:
+	var t := 0.0
+	while t < 200.0:
+		var d: float = terrain.get_sdf_at(origin + dir * t)
+		if d <= 0.0:
+			return origin + dir * t
+		t += maxf(d * 0.5, 0.01)
+	return null
+
+func _spray(delta: float) -> void:
+	spray_wait -= delta
+	if spray_wait > 0.0:
+		return
+	# One sphere at a time: an edit made before the last one is meshed makes every re-mesh in flight stale,
+	# and nothing shows until the button is released.
+	var terrain := _terrain()
+	if terrain == null or not terrain.is_edit_settled():
+		return
+	spray_wait = SPRAY_PERIOD
+	var hit = _surface_hit(terrain, camera.global_position, -camera.global_transform.basis.z)
+	if hit == null:
+		return
+	var vt: float = terrain.voxel_size
+	var p := _voxel_of(terrain, hit)
+	var rot := PackedFloat32Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
+	if terrain.add_instance(SPHERE_TYPE, p[0], p[1], p[2], rot, PackedFloat32Array([spray_radius / vt]), 2, 0.0) >= 0:
+		edits_count += 1
+	else:
+		drag_active = false  # refused (the table is full): stop until the next press
+
+func _update_drag(delta: float) -> void:
 	if not drag_active:
+		return
+	if not left_tube:
+		_spray(delta)
 		return
 	var terrain := _terrain()
 	if terrain == null:
@@ -453,7 +529,7 @@ last edit %d chunks, apply %.2f ms" % [
 		int(edits.get("remesh_last", 0)), apply_ms]
 
 func _process(delta: float) -> void:
-	_update_drag()
+	_update_drag(delta)
 	_update_hud(delta)
 	if clip_terrain:
 		Presets.clip_planes(camera, clip_terrain, base_near)

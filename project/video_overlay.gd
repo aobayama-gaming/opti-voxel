@@ -6,7 +6,7 @@ extends CanvasLayer
 # Record with a screen recorder: Godot's --write-movie runs on a fixed time step, so the graph would show nothing real.
 
 const SAMPLES := 300        # frames in the graph: 5 s at 60 fps, one pixel each
-const GRAPH_H := 56.0
+const GRAPH_H := 40.0
 const GRAPH_MAX_MS := 50.0  # the top of the graph; longer frames are clipped
 const REFRESH_S := 0.25
 const ID_VOXELS := 14       # voxels per chunk-id unit (half a LOD0 chunk): the root span is 14 * 2^lod_numbers
@@ -21,6 +21,7 @@ var last_cam_pos = null     # Vector3 at the last refresh, null before the first
 var stats_line: Label
 var info: Label
 var graph: Control
+var pixelate := 1           # the player's --pixelate=N, for the resolution line
 
 class Graph:
 	extends Control
@@ -44,7 +45,7 @@ class Graph:
 		for g in [[1000.0 / 60.0, "60"], [1000.0 / 30.0, "30"]]:
 			var y: float = h - h * g[0] / GRAPH_MAX_MS
 			draw_dashed_line(Vector2(0, y), Vector2(size.x, y), Color(1, 1, 1, 0.45), 1.0, 4.0)
-			draw_string(font, Vector2(size.x + 4, y + 4), g[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.7))
+			draw_string(font, Vector2(size.x + 4, y + 4), g[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(1, 1, 1, 0.7))
 
 	func _color(ms: float) -> Color:
 		if ms <= 1000.0 / 58.0:
@@ -60,23 +61,23 @@ func setup(p_terrain: Node, p_camera: Camera3D) -> void:
 func _ready() -> void:
 	frame_ms.resize(SAMPLES)
 	var panel := PanelContainer.new()
-	panel.position = Vector2(12, 12)
+	panel.position = Vector2(8, 8)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0, 0, 0, 0.55)
-	style.set_corner_radius_all(6)
-	style.set_content_margin_all(10)
+	style.set_corner_radius_all(4)
+	style.set_content_margin_all(6)
 	panel.add_theme_stylebox_override("panel", style)
 	add_child(panel)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
+	box.add_theme_constant_override("separation", 4)
 	panel.add_child(box)
-	stats_line = _label(15)
+	stats_line = _label(11)
 	box.add_child(stats_line)
 	graph = Graph.new()
 	graph.overlay = self
 	graph.custom_minimum_size = Vector2(SAMPLES + 22, GRAPH_H)  # room for the 60 / 30 labels
 	box.add_child(graph)
-	info = _label(13)
+	info = _label(10)
 	box.add_child(info)
 
 func _label(p_size: int) -> Label:
@@ -101,9 +102,8 @@ func _setting_lines() -> String:
 		res_text += " · %s from %d%%" % [upscalers[vp.scaling_3d_mode], roundi(vp.scaling_3d_scale * 100.0)]
 	elif not is_equal_approx(vp.scaling_3d_scale, 1.0):
 		res_text += " · 3D at %d%%" % roundi(vp.scaling_3d_scale * 100.0)
-	var window := get_window()
-	if window.content_scale_mode == Window.CONTENT_SCALE_MODE_VIEWPORT and window.content_scale_size.y > 0:
-		res_text += " · pixels x%d" % roundi(float(res.y) / window.content_scale_size.y)
+	if pixelate > 1:
+		res_text += " · pixels x%d" % pixelate
 	var vs: float = terrain.voxel_size
 	var lods: int = terrain.lod_numbers
 	var span_m := float(ID_VOXELS) * pow(2.0, lods) * vs
