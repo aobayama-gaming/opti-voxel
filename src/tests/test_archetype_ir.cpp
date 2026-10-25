@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include "godot_conv.hpp"
+
 #include <godot_cpp/variant/string.hpp>
 
 #include "archetype_glsl.hpp"
@@ -448,7 +450,7 @@ TEST_CASE("Archetype: the generated GLSL is pinned and uses exact operations onl
     String all;
     for (uint32_t seed = 0; seed < 20; seed++) {
         const Program prog = random_program(seed, anchors, 40);
-        const String code = generate_glsl(prog, vformat("f%d", seed), (seed & 1u) != 0);
+        const String code = godot_str(generate_glsl(prog, ov::format("f%d", seed), (seed & 1u) != 0));
         // One statement per instruction.
         CHECK(code.count("    precise vec4 r") == int(prog.code.size()));
         all += code;
@@ -462,7 +464,7 @@ TEST_CASE("Archetype: the generated GLSL is pinned and uses exact operations onl
     Program prog = b.finish(b.dist(b.add(y, b.fbm(ExactNoise::make_fbm(true, 5u, 8, 3, 10.0, 0.5)))));
     prog.normalize = true;
     prog.out_scale = 0.5f;
-    all += generate_glsl(prog, "shapes");
+    all += godot_str(generate_glsl(prog, "shapes"));
     const String without_det = all.replace("det_rsqrt(", "");
     for (const char *banned : { "/", "mix(", "sqrt(", "normalize(", "length(", "dot(", "fma(", "#" }) {
         CAPTURE(std::string(banned));

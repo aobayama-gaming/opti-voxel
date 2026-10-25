@@ -15,7 +15,7 @@ namespace Archetype {
 
 // The DefRecord struct, the sdf_records / sdf_list buffers at these bindings and the global g_sdf_chunk (the
 // chunk being sampled): what the generated fold reads (generate_fold_glsl).
-String glsl_table_buffers(int p_record_binding, int p_list_binding);
+ov::str glsl_table_buffers(int p_record_binding, int p_list_binding);
 
 // The fold order of a list, the GPU's (build_lists) and the CPU's (SDFTable::point_list) alike: the scene's records
 // (snapshot ids below p_scene_end), the streamed ones, then the edits' (added since the scene), so an edit carves the
@@ -37,8 +37,8 @@ public:
     void set_snapshot(const std::shared_ptr<const InstanceSnapshot> &p_snapshot) { std::atomic_store(&snap, p_snapshot); }
     std::shared_ptr<const InstanceSnapshot> snapshot() const { return std::atomic_load(&snap); }
 
-    String glsl_buffers(int p_record_binding, int p_list_binding) const override;
-    String glsl_set_chunk() const override;
+    ov::str glsl_buffers(int p_record_binding, int p_list_binding) const override;
+    ov::str glsl_set_chunk() const override;
 
     uint32_t version() const override {
         const std::shared_ptr<const InstanceSnapshot> s = snapshot();

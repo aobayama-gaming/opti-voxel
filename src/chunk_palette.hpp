@@ -1,8 +1,9 @@
 #pragma once
 
 #include "page_format.hpp"
+#include "palette_block.hpp"
 
-#include <godot_cpp/variant/string.hpp>
+#include "ov/format.hpp"
 
 #include <cstdint>
 #include <set>
@@ -33,7 +34,7 @@ inline bool has_ground_materials(const std::vector<uint32_t> &p_base) {
     return p_base.size() > 1;
 }
 // The meshers' vertex passes' view of a base palette: PALETTE_BASE_ENTRIES (its length) and GROUND_MATERIALS.
-godot::String glsl_base(const std::vector<uint32_t> &p_base);
+ov::str glsl_base(const std::vector<uint32_t> &p_base);
 
 } // namespace ChunkPalette
 
@@ -45,7 +46,7 @@ class PaletteAlloc {
 public:
     static constexpr uint32_t MIN_BLOCK = 16;
     static constexpr uint32_t MAX_BLOCK = PageFormat::PALETTE_SIZE; // a whole palette
-    static constexpr uint32_t GROUND_BLOCK = 0;
+    static constexpr uint32_t GROUND_BLOCK = PaletteBlock::GROUND;
 
     // p_capacity: a power of two, at least 2 * MAX_BLOCK entries; p_ground_entries (1..MAX_BLOCK): the base palette's.
     void reset(uint32_t p_capacity, uint32_t p_ground_entries = 1);

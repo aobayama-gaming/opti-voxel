@@ -15,8 +15,8 @@ uint64_t PalettePool::batch_bytes(uint32_t p_batch_size) {
     return (uint64_t(p_batch_size) + 1 + texels * BATCH_TEXEL_WORDS) * 4;
 }
 
-String PalettePool::glsl_batch() {
-    return vformat(R"glsl(
+ov::str PalettePool::glsl_batch() {
+    return ov::format(R"glsl(
 void write_palette_texel(uint t) {
     if (t < palette_batch[batch.batch_count]) {
         uint at = batch.batch_count + 1u + %du * t;

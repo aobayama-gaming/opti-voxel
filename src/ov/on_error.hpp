@@ -42,3 +42,33 @@ inline void report_error(const char *p_file, int p_line, const std::string &p_me
             return p_ret;                                \
         }                                                \
     } while (0)
+
+#define OV_ERR_FAIL_COND_MSG(p_cond, p_msg)              \
+    do {                                                 \
+        if (p_cond) {                                    \
+            ov::report_error(__FILE__, __LINE__, p_msg); \
+            return;                                      \
+        }                                                \
+    } while (0)
+
+#define OV_ERR_FAIL_MSG(p_msg)                       \
+    do {                                             \
+        ov::report_error(__FILE__, __LINE__, p_msg); \
+        return;                                      \
+    } while (0)
+
+#define OV_ERR_FAIL_V_MSG(p_ret, p_msg)              \
+    do {                                             \
+        ov::report_error(__FILE__, __LINE__, p_msg); \
+        return p_ret;                                \
+    } while (0)
+
+// Inside a loop: report and skip to the next iteration.
+#define OV_ERR_CONTINUE_MSG(p_cond, p_msg)           \
+    if (p_cond) {                                    \
+        ov::report_error(__FILE__, __LINE__, p_msg); \
+        continue;                                    \
+    } else                                           \
+        ((void)0)
+
+#define OV_ERR_PRINT(p_msg) ov::report_error(__FILE__, __LINE__, p_msg)

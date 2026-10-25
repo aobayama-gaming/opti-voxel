@@ -60,7 +60,7 @@ if not env.get("is_msvc", False):
 # tools/cpu_profile.sh builds with debug_symbols=yes (unstripped): frame pointers let `perf record -g` unwind our frames.
 if env["debug_symbols"] and not env.get("is_msvc", False):
     env.Append(CCFLAGS=["-fno-omit-frame-pointer"])
-sources = Glob("src/*.cpp")
+sources = Glob("src/*.cpp") + Glob("src/ov/*.cpp")
 
 # Unit tests (src/tests/, doctest) ship in debug builds only; tools/unit_test.sh runs them.
 if env["target"] != "template_release":

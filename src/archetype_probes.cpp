@@ -10,18 +10,18 @@ namespace ArchetypeProbes {
 using namespace Archetype;
 using ExactNoise::float_bits;
 
-Probe probe(const String &p_name, const Program &p_program, bool p_trace) {
+Probe probe(const ov::str &p_name, const Program &p_program, bool p_trace) {
     Probe p;
     const int stride = p_trace ? 5 : 4;
     p.name = "arch_" + p_name;
     p.words = stride * PROBE_LOD_COUNT;
     p.is_float = true;
-    String lods;
+    ov::str lods;
     for (int i = 0; i < PROBE_LOD_COUNT; i++) {
-        lods += (i ? ", " : "") + godot::itos(PROBE_LODS[i]);
+        lods += (i ? ", " : "") + ov::itos(PROBE_LODS[i]);
     }
     p.glsl = generate_glsl(p_program, p.name, p_trace);
-    p.glsl += vformat(R"glsl(void probe_%s(WorldPos p, uint b) {
+    p.glsl += ov::format(R"glsl(void probe_%s(WorldPos p, uint b) {
     const int lods[%d] = int[%d](%s);
     for (uint i = 0u; i < %du; i++) {
         %s
@@ -116,7 +116,7 @@ const Shape SHAPES[] = {
 std::vector<Probe> make(const std::vector<VoxelPos> &p_anchors, const std::vector<VoxelPos> &p_frame_anchors, float p_size, int p_fuzz) {
     std::vector<Probe> probes;
     // A union of p_shapes, one copy per anchor of p_at.
-    auto shapes_probe = [&](const String &p_name, const std::vector<const Shape *> &p_shapes, const std::vector<VoxelPos> &p_at, bool p_trace) {
+    auto shapes_probe = [&](const ov::str &p_name, const std::vector<const Shape *> &p_shapes, const std::vector<VoxelPos> &p_at, bool p_trace) {
         Builder b;
         Reg u = -1;
         for (const VoxelPos &a : p_at) {
@@ -143,7 +143,7 @@ std::vector<Probe> make(const std::vector<VoxelPos> &p_anchors, const std::vecto
     frames.origin_relative = true;
     probes.push_back(frames);
     for (int i = 0; i < p_fuzz; i++) {
-        probes.push_back(probe(vformat("fuzz_%d", i), random_program(uint32_t(i), p_anchors, 8 + i % 33), true));
+        probes.push_back(probe(ov::format("fuzz_%d", i), random_program(uint32_t(i), p_anchors, 8 + i % 33), true));
     }
     return probes;
 }

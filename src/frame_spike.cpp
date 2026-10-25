@@ -185,19 +185,11 @@ vec4 probe_base_radius_fn(WorldPos p, int lod) {
 )glsl";
 
 // The bases, height_sdf and PROBE_BASE_GLSL with its constants (ProbeNoise::glsl, in every probe set's shader).
-String probe_base_glsl() {
+ov::str probe_base_glsl() {
     using ExactNoise::glsl_float;
     using ExactNoise::glsl_uint;
     return BaseSurface::flat(PROBE_FLAT_DATUM).glsl() + sphere_probe_base().glsl() + CascadeTerrain::GLSL_HEIGHT_SDF +
-            String(PROBE_BASE_GLSL)
-                    .replace("REGION_SHIFT", itos(BaseSurface::REGION_SHIFT))
-                    .replace("REGION_SEED", glsl_uint(PROBE_REGION_SEED))
-                    .replace("REGION_SALT", glsl_uint(PROBE_REGION_SALT))
-                    .replace("F_SHIFT", itos(PROBE_REGION_F_SHIFT))
-                    .replace("F_BIAS", itos(PROBE_REGION_F_BIAS))
-                    .replace("F_EXP", itos(PROBE_REGION_F_EXP))
-                    .replace("D_SCALE", glsl_float(PROBE_REGION_D_SCALE))
-                    .replace("H_EXP", itos(PROBE_REGION_H_EXP));
+            ov::replace_all(ov::str(PROBE_BASE_GLSL), { { "REGION_SHIFT", ov::itos(BaseSurface::REGION_SHIFT) }, { "REGION_SEED", glsl_uint(PROBE_REGION_SEED) }, { "REGION_SALT", glsl_uint(PROBE_REGION_SALT) }, { "F_SHIFT", ov::itos(PROBE_REGION_F_SHIFT) }, { "F_BIAS", ov::itos(PROBE_REGION_F_BIAS) }, { "F_EXP", ov::itos(PROBE_REGION_F_EXP) }, { "D_SCALE", glsl_float(PROBE_REGION_D_SCALE) }, { "H_EXP", ov::itos(PROBE_REGION_H_EXP) } });
 }
 
 // The two fBms the noise probes check (and the base probes' GLSL) (ExactNoise::reference_fbm2d / 3d), in every probe set's shader. Their
@@ -211,7 +203,7 @@ struct ProbeNoise {
             fbm3d(ExactNoise::reference_fbm3d(p_voxel)) {}
 
     // Also the base probes' functions (they read noise_fbm3d), so each probe set's shader has every helper.
-    String glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d) + probe_base_glsl(); }
+    ov::str glsl() const { return ExactNoise::glsl_fbm("noise_fbm2d", fbm2d) + ExactNoise::glsl_fbm("noise_fbm3d", fbm3d) + probe_base_glsl(); }
 };
 
 // A probe set (a new noise or SDF term adds its entries here; one table, shared by every origin).
@@ -245,7 +237,7 @@ void probe_octave_cell(WorldPos p, uint b) {
 )glsl";
         for (int i = 0; i < p.words; i++) {
             const Vector3i64 o = test_offset(CELL_KS[i]);
-            p.glsl += vformat("    results[b + %du] = fold_cell(octave_cell(p, %d, %s, %s));\n", i, CELL_KS[i], glsl_lo(o), glsl_hi(o));
+            p.glsl += ov::format("    results[b + %du] = fold_cell(octave_cell(p, %d, %s, %s));\n", i, CELL_KS[i], glsl_lo(o), glsl_hi(o));
         }
         p.glsl += "}\n";
         p.cpu = [](const WorldPos &q, uint32_t *r) {
@@ -259,12 +251,12 @@ void probe_octave_cell(WorldPos p, uint b) {
     }
     for (int k : PERLIN3_KS) {
         Probe p;
-        p.name = vformat("perlin3_k%d", k);
+        p.name = ov::format("perlin3_k%d", k);
         p.words = 4;
         p.is_float = true;
         const Vector3i64 o = test_offset(k);
         const uint32_t seed = 0x1000u + uint32_t(k);
-        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = perlin3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed),
+        p.glsl = ov::format("void probe_%s(WorldPos p, uint b) {\n    vec4 v = perlin3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed),
                 glsl_lo(o), glsl_hi(o));
         p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
         p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
@@ -286,10 +278,10 @@ void probe_octave_cell(WorldPos p, uint b) {
         p.name = "stretched";
         p.words = 3 * STRETCH_COUNT;
         const BaseSurface flat = BaseSurface::flat(PROBE_FLAT_DATUM);
-        p.glsl = flat.glsl_stretch() + String("void probe_stretched(WorldPos p, uint b) {\n");
+        p.glsl = flat.glsl_stretch() + ov::str("void probe_stretched(WorldPos p, uint b) {\n");
         for (int i = 0; i < STRETCH_COUNT; i++) {
-            p.glsl += vformat("    { WorldPos q = base_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
-                              "results[b + %du] = floatBitsToUint(q.frac.y); }\n",
+            p.glsl += ov::format("    { WorldPos q = base_stretched(p, %d); results[b + %du] = q.lo.y; results[b + %du] = uint(q.hi.y); "
+                                 "results[b + %du] = floatBitsToUint(q.frac.y); }\n",
                     STRETCHES[i], 3 * i, 3 * i + 1, 3 * i + 2);
         }
         p.glsl += "}\n";
@@ -312,11 +304,11 @@ void probe_octave_cell(WorldPos p, uint b) {
         p.name = "stretched_sphere";
         p.words = 13 * STRETCH_COUNT;
         const BaseSurface sphere = sphere_probe_base();
-        p.glsl = sphere.glsl_stretch() + String("void probe_stretched_sphere(WorldPos p, uint b) {\n");
-        p.glsl += vformat("    int m = int(params.lod_bias) + %d;\n    vec4 base = base_curvature(p, m, probe_region(p, m));\n", PROBE_STRETCH_LOD);
+        p.glsl = sphere.glsl_stretch() + ov::str("void probe_stretched_sphere(WorldPos p, uint b) {\n");
+        p.glsl += ov::format("    int m = int(params.lod_bias) + %d;\n    vec4 base = base_curvature(p, m, probe_region(p, m));\n", PROBE_STRETCH_LOD);
         p.glsl += "    vec4 g = noise_fbm3d(p, 0);\n";
         for (int i = 0; i < STRETCH_COUNT; i++) {
-            p.glsl += vformat("    { WorldPos q = base_stretched_at(p, %d, base, m); vec4 h = base_stretch_gradient_at(g, %d, base); uint o = b + %du;\n", STRETCHES[i],
+            p.glsl += ov::format("    { WorldPos q = base_stretched_at(p, %d, base, m); vec4 h = base_stretch_gradient_at(g, %d, base); uint o = b + %du;\n", STRETCHES[i],
                     STRETCHES[i], 13 * i);
             p.glsl += "      for (int a = 0; a < 3; a++) { results[o + uint(a)] = q.lo[a]; results[o + 3u + uint(a)] = uint(q.hi[a]); results[o + 6u + uint(a)] = floatBitsToUint(q.frac[a]); }\n";
             p.glsl += "      for (int a = 0; a < 4; a++) { results[o + 9u + uint(a)] = floatBitsToUint(h[a]); } }\n";
@@ -349,12 +341,12 @@ void probe_octave_cell(WorldPos p, uint b) {
     // The cell noise (the climate's cell fields), at the same wavelengths: F1 is 1-Lipschitz per cell.
     for (int k : PERLIN3_KS) {
         Probe p;
-        p.name = vformat("cell3_k%d", k);
+        p.name = ov::format("cell3_k%d", k);
         p.words = 4;
         p.is_float = true;
         const Vector3i64 o = test_offset(k);
         const uint32_t seed = 0x3000u + uint32_t(k);
-        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = cell3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed), glsl_lo(o),
+        p.glsl = ov::format("void probe_%s(WorldPos p, uint b) {\n    vec4 v = cell3(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed), glsl_lo(o),
                 glsl_hi(o));
         p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
         p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
@@ -371,12 +363,12 @@ void probe_octave_cell(WorldPos p, uint b) {
     }
     for (int k : PERLIN2_KS) {
         Probe p;
-        p.name = vformat("perlin2_k%d", k);
+        p.name = ov::format("perlin2_k%d", k);
         p.words = 4;
         p.is_float = true;
         const Vector3i64 o = test_offset(k);
         const uint32_t seed = 0x2000u + uint32_t(k);
-        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 v = perlin2(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed),
+        p.glsl = ov::format("void probe_%s(WorldPos p, uint b) {\n    vec4 v = perlin2(p, %d, %s, %s, %s);\n", p.name, k, glsl_uint(seed),
                 glsl_lo(o), glsl_hi(o));
         p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(v[i]); }\n}\n";
         p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
@@ -393,12 +385,12 @@ void probe_octave_cell(WorldPos p, uint b) {
     }
     for (int k : CROSS_KS) {
         Probe p;
-        p.name = vformat("perlin3_cross_k%d", k);
+        p.name = ov::format("perlin3_cross_k%d", k);
         p.words = 8;
         p.is_float = true;
         const Vector3i64 o = test_offset(k);
         const uint32_t seed = 0x3000u + uint32_t(k);
-        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, %d, %s, %s, %s, c0, c1);\n", p.name,
+        p.glsl = ov::format("void probe_%s(WorldPos p, uint b) {\n    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, %d, %s, %s, %s, c0, c1);\n", p.name,
                 k, glsl_uint(seed), glsl_lo(o), glsl_hi(o));
         p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(c0[i]); results[b + 4u + i] = floatBitsToUint(c1[i]); }\n}\n";
         p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
@@ -422,13 +414,13 @@ void probe_octave_cell(WorldPos p, uint b) {
                  "void probe_i64(WorldPos p, uint b) {\n";
         for (int i = 0; i < I64_SHIFT_COUNT; i++) {
             const int s = I64_SHIFTS[i];
-            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_asr(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i);
-            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_asr_ceil(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i + 6);
-            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_shl(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i + 12);
+            p.glsl += ov::format("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_asr(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i);
+            p.glsl += ov::format("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_asr_ceil(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i + 6);
+            p.glsl += ov::format("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_shl(lo, hi, %d); probe_i64_store(lo, hi, b + %du); }\n", s, 18 * i + 12);
         }
         for (int i = 0; i < I64_ADD_COUNT; i++) {
-            p.glsl += vformat("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_add(lo, hi, ivec3(%s)); probe_i64_store(lo, hi, b + %du); }\n",
-                    I64_ADDS[i] == INT32_MIN ? String("-2147483647 - 1") : itos(I64_ADDS[i]), 18 * I64_SHIFT_COUNT + 6 * i);
+            p.glsl += ov::format("    { uvec3 lo = p.lo; ivec3 hi = p.hi; i64_add(lo, hi, ivec3(%s)); probe_i64_store(lo, hi, b + %du); }\n",
+                    I64_ADDS[i] == INT32_MIN ? ov::str("-2147483647 - 1") : ov::itos(I64_ADDS[i]), 18 * I64_SHIFT_COUNT + 6 * i);
         }
         p.glsl += "}\n";
         p.cpu = [](const WorldPos &q, uint32_t *r) {
@@ -472,15 +464,15 @@ void probe_octave_cell(WorldPos p, uint b) {
         }
         return b;
     };
-    auto lod_probe = [](const String &p_name, const String &p_fn, std::function<Float4(const WorldPos &, int)> p_cpu) {
+    auto lod_probe = [](const ov::str &p_name, const ov::str &p_fn, std::function<Float4(const WorldPos &, int)> p_cpu) {
         Probe p;
         p.name = p_name;
         p.words = 4 * PROBE_LOD_COUNT;
         p.is_float = true;
-        p.glsl = vformat("void probe_%s(WorldPos p, uint b) {\n", p_name);
+        p.glsl = ov::format("void probe_%s(WorldPos p, uint b) {\n", p_name);
         for (int i = 0; i < PROBE_LOD_COUNT; i++) {
-            p.glsl += vformat("    vec4 v%d = %s(p, int(params.lod_bias) + %d);\n", i, p_fn, PROBE_LODS[i]);
-            p.glsl += vformat("    for (uint i = 0u; i < 4u; i++) { results[b + %du + i] = floatBitsToUint(v%d[i]); }\n", 4 * i, i);
+            p.glsl += ov::format("    vec4 v%d = %s(p, int(params.lod_bias) + %d);\n", i, p_fn, PROBE_LODS[i]);
+            p.glsl += ov::format("    for (uint i = 0u; i < 4u; i++) { results[b + %du + i] = floatBitsToUint(v%d[i]); }\n", 4 * i, i);
         }
         p.glsl += "}\n";
         p.cpu = [p_cpu](const WorldPos &q, uint32_t *r) {
@@ -497,7 +489,7 @@ void probe_octave_cell(WorldPos p, uint b) {
     };
     for (int which = 0; which < 2; which++) {
         const OctaveSet *set = which == 0 ? &p_noise.fbm2d : &p_noise.fbm3d;
-        const String name = which == 0 ? "noise_fbm2d" : "noise_fbm3d";
+        const ov::str name = which == 0 ? "noise_fbm2d" : "noise_fbm3d";
         Probe p = lod_probe(name, name, [set](const WorldPos &q, int p_lod) { return fbm(*set, q, p_lod); });
         p.continuity_bound = fbm_bound(*set, which == 0 ? 6.0 : 4.0);
         p.continuity_word = 3;
@@ -821,10 +813,10 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_
                     r_checks.probe_mismatch[p_first + k]++;
                     if (probe.is_float) {
                         r_checks.example(vformat("origin %s %s voxel %s: probe %s[%d] gpu %s cpu %s (bits %x / %x)", origin, case_str(c),
-                                godot_str(to_string(pos.voxel)), probe.name, j, bits_float(g[w + j]), bits_float(want[j]), g[w + j], want[j]));
+                                godot_str(to_string(pos.voxel)), godot_str(probe.name), j, bits_float(g[w + j]), bits_float(want[j]), g[w + j], want[j]));
                     } else {
                         r_checks.example(vformat("origin %s %s voxel %s: probe %s[%d] gpu %x cpu %x", origin, case_str(c), godot_str(to_string(pos.voxel)),
-                                probe.name, j, g[w + j], want[j]));
+                                godot_str(probe.name), j, g[w + j], want[j]));
                     }
                     break;
                 }
@@ -867,7 +859,7 @@ void check_run(const OriginRun &p_run, const std::vector<Probe> &p_probes, size_
                     const float s1 = bits_float(res[i * p_words + w + probe.continuity_word]);
                     if (!(std::abs(double(s1) - double(s0)) <= probe.continuity_bound)) {
                         r_checks.continuity_violations++;
-                        r_checks.example(vformat("origin %s: %s jumps %s -> %s (bound %s) at %s", origin, probe.name, s0, s1,
+                        r_checks.example(vformat("origin %s: %s jumps %s -> %s (bound %s) at %s", origin, godot_str(probe.name), s0, s1,
                                 probe.continuity_bound, case_str(p_run.cases[i])));
                     }
                 }
@@ -925,21 +917,21 @@ void check_cpu(Checks &r_checks) {
 }
 
 // The probe shader of one probe set: SHADER_TEMPLATE with the frame, the noise and the probes.
-String probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_probes, uint32_t &r_words) {
+ov::str probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_probes, uint32_t &r_words) {
     r_words = FIXED_WORDS;
-    String probes_glsl;
-    String probe_calls;
+    ov::str probes_glsl;
+    ov::str probe_calls;
     for (const Probe &probe : p_probes) {
         probes_glsl += probe.glsl;
-        probe_calls += vformat("    probe_%s(p, b + %du);\n", probe.name, (int64_t)r_words);
+        probe_calls += ov::format("    probe_%s(p, b + %du);\n", probe.name, (int64_t)r_words);
         r_words += probe.words;
     }
-    String code = String(SHADER_TEMPLATE);
-    code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + glsl_cell3());
-    code = code.replace("/*NOISE*/", p_noise.glsl());
-    code = code.replace("/*PROBES*/", probes_glsl);
-    return code.replace("/*PROBE_CALLS*/", probe_calls);
+    ov::str code = ov::str(SHADER_TEMPLATE);
+    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS);
+    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + GLSL_EXACT_NOISE + GLSL_PERLIN3_CROSS + glsl_cell3());
+    code = ov::replace_all(code, "/*NOISE*/", p_noise.glsl());
+    code = ov::replace_all(code, "/*PROBES*/", probes_glsl);
+    return ov::replace_all(code, "/*PROBE_CALLS*/", probe_calls);
 }
 
 // One dispatch of a probe pipeline over an origin's cases: the results, p_words per case.
@@ -1015,7 +1007,7 @@ void check_relative(const OriginRun &p_run, const std::vector<Probe> &p_probes, 
                     if (std::memcmp(g, r_ref.data() + n, probe.words * sizeof(uint32_t)) != 0) {
                         r_checks.relative_mismatch++;
                         r_checks.example(vformat("origin %s: %s at random point %s differs from the first origin", godot_str(to_string(p_run.param.origin_chunk)),
-                                probe.name, case_str(p_run.cases[i])));
+                                godot_str(probe.name), case_str(p_run.cases[i])));
                     }
                 }
                 n += probe.words;
@@ -1033,7 +1025,7 @@ bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector
     uint32_t words = 0;
     Ref<RDShaderSource> source;
     source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, probe_shader(p_noise, p_probes, words));
+    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, godot_str(probe_shader(p_noise, p_probes, words)));
     Ref<RDShaderSPIRV> spirv = p_rd->shader_compile_spirv_from_source(source);
     const String err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
     if (!err.is_empty()) {
@@ -1072,7 +1064,7 @@ bool run_set(RenderingDevice *p_rd, const ProbeNoise &p_noise, const std::vector
     p_rd->free_rid(pipeline);
     p_rd->free_rid(shader);
     UtilityFunctions::print(vformat("FrameSpike: %d probes from %s, %d words per sample: compile %d ms, run and check %d ms", int64_t(p_probes.size()),
-            p_probes[0].name, words, int64_t(t1 - t0), int64_t(Time::get_singleton()->get_ticks_msec() - t1)));
+            godot_str(p_probes[0].name), words, int64_t(t1 - t0), int64_t(Time::get_singleton()->get_ticks_msec() - t1)));
     return true;
 }
 
@@ -1257,22 +1249,21 @@ int run_table_set(RenderingDevice *p_rd, const std::vector<OriginRun> &p_runs, D
     const uint32_t count = uint32_t(table.records.size());
     // Per probe LOD: the 4 floats of the fold, then the winner's palette index (record_wins).
     constexpr uint32_t PER_LOD = 5;
-    String lod_calls;
+    ov::str lod_calls;
     for (int j = 0; j < PROBE_LOD_COUNT; j++) {
-        lod_calls += vformat("    {\n    precise vec4 v = terrain_sdf(p, int(params.lod_bias) + %d);\n", PROBE_LODS[j]);
+        lod_calls += ov::format("    {\n    precise vec4 v = terrain_sdf(p, int(params.lod_bias) + %d);\n", PROBE_LODS[j]);
         for (int k = 0; k < 4; k++) {
-            lod_calls += vformat("    { uint u = floatBitsToUint(v[%d]); results[b + %du + %du] = (u << 1u) == 0u ? 0u : u; }\n", k, PER_LOD * j, k);
+            lod_calls += ov::format("    { uint u = floatBitsToUint(v[%d]); results[b + %du + %du] = (u << 1u) == 0u ? 0u : u; }\n", k, PER_LOD * j, k);
         }
-        lod_calls += vformat("    results[b + %du + 4u] = g_material;\n", PER_LOD * j);
+        lod_calls += ov::format("    results[b + %du + 4u] = g_material;\n", PER_LOD * j);
         lod_calls += "    }\n";
     }
-    String code = String(TABLE_SHADER);
-    code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*TABLE_BUFFERS*/", Archetype::glsl_table_buffers(3, 4));
-    code = code.replace("/*HELPERS*/",
-            String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE));
+    ov::str code = ov::str(TABLE_SHADER);
+    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS);
+    code = ov::replace_all(code, "/*TABLE_BUFFERS*/", Archetype::glsl_table_buffers(3, 4));
+    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + GLSL_EXACT_NOISE);
     const Archetype::Float4 &g = table.ground;
-    code = code.replace("/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + vformat(R"glsl(uint g_material;
+    code = ov::replace_all(code, "/*TERRAIN*/", Archetype::generate_fold_glsl(table.library, 1.0f, false) + ov::format(R"glsl(uint g_material;
 vec4 terrain_sdf(WorldPos p, int lod) {
     bool touched = false;
     g_material = 0u;
@@ -1280,12 +1271,12 @@ vec4 terrain_sdf(WorldPos p, int lod) {
     return arch_finish(arch_fold(vec4(%s, %s, %s, %s), p, lod, touched, g_material, moments), lod);
 }
 )glsl",
-                                                                                                           ExactNoise::glsl_float(g.x), ExactNoise::glsl_float(g.y), ExactNoise::glsl_float(g.z), ExactNoise::glsl_float(g.w)));
-    code = code.replace("/*LOD_CALLS*/", lod_calls);
+                                                                                                                    ExactNoise::glsl_float(g.x), ExactNoise::glsl_float(g.y), ExactNoise::glsl_float(g.z), ExactNoise::glsl_float(g.w)));
+    code = ov::replace_all(code, "/*LOD_CALLS*/", lod_calls);
 
     Ref<RDShaderSource> source;
     source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
+    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, godot_str(code));
     Ref<RDShaderSPIRV> spirv = p_rd->shader_compile_spirv_from_source(source);
     const String err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
     if (!err.is_empty()) {
@@ -1490,7 +1481,7 @@ Dictionary FrameSpike::run() {
     std::vector<String> names;
     for (const std::vector<Probe> &set : sets) {
         for (const Probe &probe : set) {
-            names.push_back(probe.name);
+            names.push_back(godot_str(probe.name));
         }
     }
     checks.probe_mismatch.assign(names.size(), 0);

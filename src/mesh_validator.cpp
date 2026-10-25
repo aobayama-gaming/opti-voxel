@@ -289,9 +289,9 @@ void MeshValidator::_compare() {
         // --- legacy triangles: the mesh vertices already are vertex-grid coordinates
         std::vector<Tri> legacy_tris;
         if (legacy_state.loaded_chunk.has(t.chunk_id)) {
-            const ChunkOutput &out = legacy_state.loaded_chunk[t.chunk_id];
-            if (out.mesh_rid.is_valid()) {
-                const Array arrays = rs->mesh_surface_get_arrays(out.mesh_rid, 0);
+            const RID mesh = legacy->mesh_of(legacy_state.loaded_chunk[t.chunk_id]);
+            if (mesh.is_valid()) {
+                const Array arrays = rs->mesh_surface_get_arrays(mesh, 0);
                 const PackedVector3Array v = arrays[Mesh::ARRAY_VERTEX];
                 const PackedVector3Array vn = arrays[Mesh::ARRAY_NORMAL];
                 const PackedInt32Array idx = arrays[Mesh::ARRAY_INDEX];

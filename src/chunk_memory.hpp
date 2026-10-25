@@ -3,6 +3,7 @@
 #include "chunk_output.hpp"
 #include "latency_hist.hpp"
 #include "lod_structures.hpp"
+#include "ov/clock.hpp"
 
 #include <memory>
 

@@ -425,8 +425,8 @@ TEST_CASE("Cascade: FieldRange carries the fields to every reader above the last
                         // Monotone: the fields at m + 1 wherever m has them.
                         bad += r.carried(lod, m) && !r.carried(lod, m + 1);
                     }
-                    bad += fields != r.batch(Vector2i(lo, hi), j);
-                    bad += carry != r.batch_carry(Vector2i(lo, hi), j);
+                    bad += fields != r.batch(ov::ivec2(lo, hi), j);
+                    bad += carry != r.batch_carry(ov::ivec2(lo, hi), j);
                     checked++;
                 }
             }

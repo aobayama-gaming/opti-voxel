@@ -1,7 +1,7 @@
 #pragma once
 
-#include <godot_cpp/core/error_macros.hpp>
-#include <godot_cpp/variant/string.hpp>
+#include "ov/on_error.hpp"
+#include "ov/str.hpp"
 
 // GLSL snippets shared by the compute meshers (GPU_mesher legacy path and GPU_direct_mesher).
 // They are stitched together at runtime by each mesher's compile step.
@@ -288,8 +288,8 @@ inline constexpr const char GLSL_QEF_SURFACE_NORMAL[] = "vec3 surface_normal = v
 
 // A mesher's vertex pass with dual contouring (GLSL_QEF_VERTEX must be in the shader). A pass that
 // doesn't spell each line exactly once is returned unchanged, with an error: it meshes Surface Nets.
-inline godot::String dual_contouring_pass(const godot::String &p_pass) {
-    ERR_FAIL_COND_V_MSG(p_pass.count(GLSL_MASS_POINT_VERTEX) != 1 || p_pass.count(GLSL_SURFACE_NORMAL) != 1, p_pass,
+inline ov::str dual_contouring_pass(const ov::str &p_pass) {
+    OV_ERR_FAIL_COND_V_MSG(ov::count(p_pass, GLSL_MASS_POINT_VERTEX) != 1 || ov::count(p_pass, GLSL_SURFACE_NORMAL) != 1, p_pass,
             "dual_contouring_pass: the vertex pass no longer spells its mass point or normal line.");
-    return p_pass.replace(GLSL_MASS_POINT_VERTEX, GLSL_QEF_VERTEX_CALL).replace(GLSL_SURFACE_NORMAL, GLSL_QEF_SURFACE_NORMAL);
+    return ov::replace_all(p_pass, { { GLSL_MASS_POINT_VERTEX, GLSL_QEF_VERTEX_CALL }, { GLSL_SURFACE_NORMAL, GLSL_QEF_SURFACE_NORMAL } });
 }

@@ -13,71 +13,10 @@ namespace Archetype {
 using ExactNoise::exact_pow2;
 using ExactNoise::glsl_float;
 
-DefRecord TableRecord::def_record() const {
-    DefRecord r;
-    r.anchor = anchor;
-    std::memcpy(r.rotation, rotation, sizeof(r.rotation));
-    std::memcpy(r.params, params, sizeof(r.params));
-    r.salt = salt;
-    return r;
-}
-
-RecordStore::RecordStore(const std::vector<TableRecord> &p_records, uint32_t p_version) {
-    for (const TableRecord &r : p_records) {
-        push_back(r, p_version);
-    }
-}
-
-RecordStore::Page &RecordStore::own(uint32_t p_page) {
-    if (pages[p_page].use_count() > 1) {
-        pages[p_page] = std::make_shared<Page>(*pages[p_page]); // a snapshot shares it: copy on write
-    }
-    return *pages[p_page];
-}
-
-void RecordStore::push_back(const TableRecord &p_record, uint32_t p_version) {
-    if (count % PAGE == 0) {
-        pages.push_back(std::make_shared<Page>());
-        pages.back()->r.reserve(PAGE);
-    }
-    Page &page = own(uint32_t(pages.size() - 1));
-    page.r.push_back(p_record);
-    page.version = std::max(page.version, p_version);
-    count++;
-}
-
-void RecordStore::set(uint32_t p_i, const TableRecord &p_record, uint32_t p_version) {
-    Page &page = own(p_i / PAGE);
-    page.r[p_i % PAGE] = p_record;
-    page.version = std::max(page.version, p_version);
-}
-
-void RecordStore::changed_since(uint32_t p_version, std::vector<std::pair<uint32_t, uint32_t>> &r_runs) const {
-    r_runs.clear();
-    for (uint32_t p = 0; p < pages.size(); p++) {
-        if (p_version != UINT32_MAX && pages[p]->version <= p_version) {
-            continue;
-        }
-        const uint32_t first = p * PAGE;
-        const uint32_t end = std::min(count, (p + 1) * PAGE);
-        if (!r_runs.empty() && r_runs.back().first + r_runs.back().second == first) {
-            r_runs.back().second = end - r_runs.back().first;
-        } else {
-            r_runs.push_back({ first, end - first });
-        }
-    }
-}
-
 int DefLibrary::add(const TableDefPtr &p_def, uint32_t p_material) {
     list.push_back(p_def);
     materials.push_back(p_material);
     return int(list.size() - 1);
-}
-
-int influence_margin(const TableRecord &p_record, int p_lod) {
-    // Clamped before the conversion: a float above INT_MAX converts to anything (CPU) or saturates (GPU).
-    const float m = std::min(p_record.k + p_record.margin_c * exact_pow2(p_lod), float(INPUT_LIMIT));
-    return int(std::ceil(m)) + 2;
 }
 
 namespace {
@@ -142,22 +81,6 @@ void finish_record(const TableDef &p_def, TableRecord &r_record, float p_skirt_d
     r_record.lipschitz = wb.lipschitz;
     r_record.margin_c = 2.0f * wb.lipschitz + p_skirt_depth;
     set_band(r_record, p_def, p_band, p_rule);
-}
-
-bool in_influence_cube(const TableRecord &p_record, const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod) {
-    const int m = influence_margin(p_record, p_lod);
-    for (int a = 0; a < 3; a++) {
-        const int64_t dlo = WorldCoord::sat_diff(p_lo[a], p_record.anchor[a], INPUT_LIMIT);
-        const int64_t dhi = WorldCoord::sat_diff(p_hi[a], p_record.anchor[a], INPUT_LIMIT);
-        if (dhi < int64_t(p_record.box_lo[a]) - m || dlo > int64_t(p_record.box_hi[a]) + m) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool in_influence_box(const TableRecord &p_record, const WorldPos &p_pos, int p_lod) {
-    return in_influence_cube(p_record, p_pos.voxel, p_pos.voxel, p_lod);
 }
 
 void encode_record(uint8_t *r_slot, const TableRecord &p_record) {
@@ -400,10 +323,10 @@ vec4 arch_moments(vec4 r, vec4 phi, int lod, uint best, inout uint material) {
 }
 )glsl";
 
-String generate_library_glsl(const DefLibrary &p_library) {
-    String code = "// Archetype library: one function per type, reading the instance's DefRecord.\n";
+ov::str generate_library_glsl(const DefLibrary &p_library) {
+    ov::str code = "// Archetype library: one function per type, reading the instance's DefRecord.\n";
     for (int i = 0; i < p_library.size(); i++) {
-        code += generate_def_glsl(p_library[i].program, "arch_" + godot::itos(i), false);
+        code += generate_def_glsl(p_library[i].program, "arch_" + ov::itos(i), false);
         code += "\n";
     }
     return code;
@@ -411,7 +334,7 @@ String generate_library_glsl(const DefLibrary &p_library) {
 
 // arch_fold: fold_onto per sample (p_group_size 0), or per workgroup of p_group_size samples, its list tested once
 // against the group's box; the same loop body text either way.
-static String fold_loop_glsl(uint32_t p_group_size) {
+static ov::str fold_loop_glsl(uint32_t p_group_size) {
     // fold_onto's loop body for list word `word` (the same text in both loops: `continue` moves to the next word).
     const char *const FOLD_BODY = R"glsl(        DefRecord rec = sdf_records[word & LIST_ID_MASKu];
         if (!arch_in_box(p, rec, lod)) {
@@ -443,19 +366,19 @@ static String fold_loop_glsl(uint32_t p_group_size) {
     float best = 0.0;
     uint best_index = INHERIT_INDEXu;
 )glsl";
-    String loop;
+    ov::str loop;
     if (p_group_size == 0) {
-        loop = String(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments) {
+        loop = ov::str(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments) {
     FOLD_LOCALS    for (uint i = 0u; i < n; i++) {
         uint word = sdf_list[off + i];
 FOLD_BODY    }
 )glsl");
     } else {
-        ERR_FAIL_COND_V_MSG(p_group_size % 32 != 0, String(), "generate_fold_glsl: the workgroup size must be a multiple of 32.");
+        OV_ERR_FAIL_COND_V_MSG(p_group_size % 32 != 0, ov::str(), "generate_fold_glsl: the workgroup size must be a multiple of 32.");
         // A slice of GROUP words: each invocation tests one against the group's box, the passes are a bit mask (word
         // h of the mask, bit b: list index base + 32 h + b), walked lowest bit first, so in list order. n is the
         // chunk's: the loop and its barriers are uniform.
-        loop = String(R"glsl(shared uint s_fold_word[GROUP];
+        loop = ov::replace_all(ov::str(R"glsl(shared uint s_fold_word[GROUP];
 shared uint s_fold_mask[MASK_WORDS];
 
 vec4 arch_fold(vec4 r, WorldPos p, WorldPos group_lo, WorldPos group_hi, int lod, inout bool touched, inout uint material, inout bool moments) {
@@ -482,37 +405,26 @@ FOLD_BODY            }
         }
         barrier(); // the next slice overwrites s_fold_word / s_fold_mask
     }
-)glsl")
-                       .replace("MASK_WORDS", itos(p_group_size / 32))
-                       .replace("GROUP", itos(p_group_size));
+)glsl"),
+                { { "MASK_WORDS", ov::itos(p_group_size / 32) }, { "GROUP", ov::itos(p_group_size) } });
     }
-    return (loop.replace("FOLD_LOCALS", FOLD_LOCALS).replace("FOLD_BODY", FOLD_BODY) + R"glsl(    moments = moments || blobs;
+    return (ov::replace_all(loop, { { "FOLD_LOCALS", FOLD_LOCALS }, { "FOLD_BODY", FOLD_BODY } }) + R"glsl(    moments = moments || blobs;
     return blobs ? arch_moments(r, phi, lod, best_index, material) : r;
 }
 
 )glsl");
 }
 
-String generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize, uint32_t p_group_size) {
-    String code = String(GLSL_TABLE_FOLD)
-                          .replace("LIMIT", itos(INPUT_LIMIT))
-                          .replace("MOMENT_DEPTH_CELLS", glsl_float(MOMENT_DEPTH_CELLS))
-                          .replace("MOMENT_GRAD_FLOOR", glsl_float(MOMENT_GRAD_FLOOR))
-                          .replace("MOMENT_MATERIAL_ISO", glsl_float(MOMENT_MATERIAL_ISO))
-                          .replace("MOMENT_ISO", glsl_float(MOMENT_ISO))
-                          .replace("INHERIT_INDEX", itos(ChunkPalette::INHERIT_INDEX));
+ov::str generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize, uint32_t p_group_size) {
+    ov::str code = ov::replace_all(ov::str(GLSL_TABLE_FOLD), { { "LIMIT", ov::itos(INPUT_LIMIT) }, { "MOMENT_DEPTH_CELLS", glsl_float(MOMENT_DEPTH_CELLS) }, { "MOMENT_GRAD_FLOOR", glsl_float(MOMENT_GRAD_FLOOR) }, { "MOMENT_MATERIAL_ISO", glsl_float(MOMENT_MATERIAL_ISO) }, { "MOMENT_ISO", glsl_float(MOMENT_ISO) }, { "INHERIT_INDEX", ov::itos(ChunkPalette::INHERIT_INDEX) } });
     code += "\n";
     code += generate_library_glsl(p_library);
     code += "vec4 arch_eval_instance(WorldPos p, int lod, DefRecord rec) {\n    switch (rec.head.x) {\n";
     for (int i = 0; i < p_library.size(); i++) {
-        code += vformat("        case %du: return arch_%d(p, lod, rec);\n", i, i);
+        code += ov::format("        case %du: return arch_%d(p, lod, rec);\n", i, i);
     }
     code += "        default: return vec4(0.0);\n    }\n}\n\n";
-    code += fold_loop_glsl(p_group_size)
-                    .replace("LIST_ID_MASK", itos(SDFGpuTable::LIST_ID_MASK))
-                    .replace("LIST_ID_BITS", itos(SDFGpuTable::LIST_ID_BITS))
-                    .replace("INHERIT_INDEX", itos(ChunkPalette::INHERIT_INDEX))
-                    .replace("ACCUM", itos(int(Combine::ACCUM)));
+    code += ov::replace_all(fold_loop_glsl(p_group_size), { { "LIST_ID_MASK", ov::itos(SDFGpuTable::LIST_ID_MASK) }, { "LIST_ID_BITS", ov::itos(SDFGpuTable::LIST_ID_BITS) }, { "INHERIT_INDEX", ov::itos(ChunkPalette::INHERIT_INDEX) }, { "ACCUM", ov::itos(int(Combine::ACCUM)) } });
     // finish_table.
     code += "vec4 arch_finish(vec4 o, int lod) {\n";
     if (p_normalize) {

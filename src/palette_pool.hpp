@@ -3,6 +3,7 @@
 #include "chunk_palette.hpp"
 #include "material_library.hpp"
 #include "page_format.hpp"
+#include "palette_block.hpp"
 
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -26,12 +27,7 @@ using namespace godot;
 // pass writes the batch's texels (glsl_batch) as it writes the headers that name them.
 class PalettePool {
 public:
-    // A chunk's block: where its palette is in the texture, and the palette (the CPU mirror the validator and the
-    // auditor read; a block holds palette->size() entries).
-    struct Block {
-        uint32_t offset = PaletteAlloc::GROUND_BLOCK;
-        std::shared_ptr<const std::vector<uint32_t>> palette;
-    };
+    using Block = PaletteBlock;
 
     // The batch payload's layout (uint words): per chunk of the batch its block offset, then the number of texels
     // to write, then BATCH_TEXEL_WORDS words per texel (its even entry, the id of that entry, the id of the next).
@@ -39,7 +35,7 @@ public:
     static uint64_t batch_bytes(uint32_t p_batch_size);
     // The payload's reader for the emit pass: `void write_palette_texel(uint t)` (texel t of the batch's, if any),
     // after the palette_image / palette_batch bindings and PageFormat::glsl_encode().
-    static String glsl_batch();
+    static ov::str glsl_batch();
 
     // p_capacity: palette entries (a power of two).
     void initialize(uint32_t p_capacity, const std::vector<uint32_t> &p_base);

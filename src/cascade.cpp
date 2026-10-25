@@ -136,7 +136,7 @@ void band_channels(const Spec &p_spec, int p_group, const Band &p_band, const Ba
     if (p_spec.group_set(p_group) == ChannelSet::HERMITE8) {
         if (p_band.stretch != 0) {
             std::fill(r_ch, r_ch + CHANNELS, 0.0f);
-            ERR_FAIL_MSG("Cascade: a stretched band needs LINEAR4 (perlin3_cross has no stretch).");
+            OV_ERR_FAIL_MSG("Cascade: a stretched band needs LINEAR4 (perlin3_cross has no stretch).");
         }
         const ExactNoise::Channels8 n = ExactNoise::perlin3_cross(pos, p_band.k, p_band.seed, p_band.offset);
         for (int c = 0; c < CHANNELS; c++) {
@@ -250,7 +250,7 @@ struct LevelBands {
                 if (p_spec.insert_level(b) != p_m) {
                     continue;
                 }
-                ERR_CONTINUE_MSG(band[g] != nullptr, vformat("Cascade: two bands of one group on lattice %d.", p_m));
+                OV_ERR_CONTINUE_MSG(band[g] != nullptr, ov::format("Cascade: two bands of one group on lattice %d.", p_m));
                 band[g] = &b;
                 factors[g] = BandFactors(p_spec, b);
                 any = true;
@@ -439,7 +439,7 @@ void Level::add_carry(int p_carry) {
     for (int s = carry_slot(carry); s < carry_slot(p_carry); s++) {
         ch[s].assign(size_t(box.count()), 0.0f);
     }
-    carry = MAX(carry, p_carry);
+    carry = ov::max(carry, p_carry);
 }
 
 void Level::allocate(int p_m, const Box &p_box, ChannelSet p_set, int p_fields, int p_carry) {
@@ -518,14 +518,14 @@ namespace {
 int checked_top(const Spec &p_spec, int p_lod, bool p_all_fields = false) {
     const FieldRange range = p_spec.field_range();
     const int top = p_spec.run_top(p_lod, p_all_fields);
-    ERR_FAIL_COND_V_MSG(p_lod < 0 || top > MAX_LEVEL, -1, "Cascade: lattice level out of range.");
-    ERR_FAIL_COND_V_MSG(int(p_spec.fields.size()) > MAX_FIELD_GROUPS, -1, "Cascade: too many field groups.");
-    ERR_FAIL_COND_V_MSG(range.floor <= range.ceiling && p_spec.set != ChannelSet::LINEAR4, -1, "Cascade: modulation needs a LINEAR4 ground.");
-    ERR_FAIL_COND_V_MSG(p_spec.carry_groups() > MAX_CARRY, -1, "Cascade: too many carry groups.");
+    OV_ERR_FAIL_COND_V_MSG(p_lod < 0 || top > MAX_LEVEL, -1, "Cascade: lattice level out of range.");
+    OV_ERR_FAIL_COND_V_MSG(int(p_spec.fields.size()) > MAX_FIELD_GROUPS, -1, "Cascade: too many field groups.");
+    OV_ERR_FAIL_COND_V_MSG(range.floor <= range.ceiling && p_spec.set != ChannelSet::LINEAR4, -1, "Cascade: modulation needs a LINEAR4 ground.");
+    OV_ERR_FAIL_COND_V_MSG(p_spec.carry_groups() > MAX_CARRY, -1, "Cascade: too many carry groups.");
     const bool fields = p_all_fields || !range.empty();
     for (int g = 0; g < (fields ? p_spec.group_count() : 1); g++) {
         for (const Band &b : p_spec.group_bands(g)) {
-            ERR_FAIL_COND_V_MSG(p_spec.insert_level(b) > top, -1, vformat("Cascade: band k=%d is inserted above the top lattice %d.", b.k, top));
+            OV_ERR_FAIL_COND_V_MSG(p_spec.insert_level(b) > top, -1, ov::format("Cascade: band k=%d is inserted above the top lattice %d.", b.k, top));
         }
     }
     return top;
@@ -561,7 +561,7 @@ void insert_at(const Spec &p_spec, int p_m, const Vector3i64 &p_p, float r_slots
 Level subdivide(const Level &p_parent, const Box &p_child_box, int p_fields, int p_carry) {
     const int fields = p_fields < 0 ? p_parent.fields : p_fields;
     const int carry = p_carry < 0 ? p_parent.carry : p_carry;
-    ERR_FAIL_COND_V_MSG(fields > p_parent.fields || carry > p_parent.carry, Level(), "Cascade::subdivide: more groups than the parent carries.");
+    OV_ERR_FAIL_COND_V_MSG(fields > p_parent.fields || carry > p_parent.carry, Level(), "Cascade::subdivide: more groups than the parent carries.");
     Level l = subdivide_axis(p_parent, fields, carry, 0, p_child_box.lo[0], p_child_box.hi[0]);
     l = subdivide_axis(l, fields, carry, 1, p_child_box.lo[1], p_child_box.hi[1]);
     l = subdivide_axis(l, fields, carry, 2, p_child_box.lo[2], p_child_box.hi[2]);
@@ -679,7 +679,7 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
     for (int l = top; l >= p_m; l--) {
         // level_box == the iterated parent_box of run() (unit-tested); a point's boxes fit POINT_AXIS.
         const Box box = level_box(base, l - p_m);
-        ERR_FAIL_COND_MSG(box.size(0) > POINT_AXIS || box.size(1) > POINT_AXIS || box.size(2) > POINT_AXIS, "Cascade::point_into: level box over POINT_AXIS.");
+        OV_ERR_FAIL_COND_MSG(box.size(0) > POINT_AXIS || box.size(1) > POINT_AXIS || box.size(2) > POINT_AXIS, "Cascade::point_into: level box over POINT_AXIS.");
         fields = carried_fields(p_spec, range, p_m, l, p_all_fields);
         carry = l == p_m ? run : 0;
         if (l == top) {

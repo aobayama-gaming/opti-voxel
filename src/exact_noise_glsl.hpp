@@ -4,6 +4,7 @@
 // after the frame functions (WorldPos), before the terrain SDF.
 
 #include "exact_noise.hpp"
+#include "ov/str.hpp"
 
 // GLSL_EXACT_NOISE is spliced from these fragments, so GLSL perlin3_cross (GLSL_PERLIN3_CROSS) shares
 // perlin3's cell setup and value / gradient code while GLSL_EXACT_NOISE stays byte-identical (unit test).
@@ -262,8 +263,8 @@ void perlin3_cross(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi, out vec4 
 
 // GLSL twin of ExactNoise::cell3 (after GLSL_EXACT_NOISE: octave_cell, cell_salt, det_rsqrt; and the int64 helpers:
 // i64_add, the neighbour cells' carry or borrow).
-inline String glsl_cell3() {
-    return String(R"glsl(
+inline ov::str glsl_cell3() {
+    return ov::replace_all(ov::str(R"glsl(
 vec4 cell3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
     OctaveCell c = octave_cell(p, k, olo, ohi);
     precise vec3 f = vec3(c.q) * uintBitsToFloat(FADE_FLUSH_BITS);
@@ -292,10 +293,8 @@ vec4 cell3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
     precise float value = best * rs - CELL_MEAN;
     return vec4(g, value);
 }
-)glsl")
-            .replace("CELL_MEAN", ExactNoise::glsl_float(ExactNoise::CELL_MEAN))
-            .replace("CELL_MIN_D2_BITS", ExactNoise::glsl_uint(ExactNoise::CELL_MIN_D2_BITS))
-            .replace("FADE_FLUSH_BITS", ExactNoise::glsl_uint(ExactNoise::FADE_FLUSH_BITS));
+)glsl"),
+            { { "CELL_MEAN", ExactNoise::glsl_float(ExactNoise::CELL_MEAN) }, { "CELL_MIN_D2_BITS", ExactNoise::glsl_uint(ExactNoise::CELL_MIN_D2_BITS) }, { "FADE_FLUSH_BITS", ExactNoise::glsl_uint(ExactNoise::FADE_FLUSH_BITS) } });
 }
 
 #undef OV_GLSL_PCG3D
