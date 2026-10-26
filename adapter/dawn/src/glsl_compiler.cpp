@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <map>
 #include <mutex>
+#include <regex>
 
 namespace ov::dawn {
 
@@ -137,14 +138,17 @@ void drop_non_readable(std::vector<uint32_t> &r_spirv) {
 
 } // namespace
 
-CompiledShader compile_glsl(const std::string &p_source, ShaderStage p_stage) {
+CompiledShader compile_glsl(const std::string &p_source, ShaderStage p_stage, bool p_push_as_uniform) {
     static std::once_flag s_init;
     std::call_once(s_init, [] { glslang::InitializeProcess(); });
 
     const EShLanguage stage = p_stage == ShaderStage::VERTEX ? EShLangVertex : (p_stage == ShaderStage::FRAGMENT ? EShLangFragment : EShLangCompute);
     CompiledShader out;
     glslang::TShader shader(stage);
-    const char *source = p_source.c_str();
+    // The engine's push blocks are scalars only: std140 gives them the std430 offsets.
+    static const std::regex s_push(R"(layout\s*\(\s*push_constant\s*(,\s*std430\s*)?\))");
+    const std::string text = p_push_as_uniform ? std::regex_replace(p_source, s_push, "layout(set = 1, binding = 0, std140)") : p_source;
+    const char *source = text.c_str();
     shader.setStrings(&source, 1);
     shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
     shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_2);

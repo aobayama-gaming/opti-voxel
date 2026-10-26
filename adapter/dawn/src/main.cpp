@@ -1,4 +1,5 @@
-// The Dawn adapter's host: the engine on a headless Dawn device.
+// The Dawn adapter's host: the engine on a Dawn device (native, or the browser's WebGPU: web/build.sh, the page's URL
+// query gives the flags).
 //
 //   ov_dawn            brings the device up
 //   ov_dawn --check                   runs the engine's GPU device check (GPUDeviceCheck)
@@ -40,11 +41,13 @@ bool flag(const char *p_arg, const char *p_name, std::string &r_value) {
 }
 
 // The core's tasks and workers on threads (Godot's equivalent: register_types installs GodotExecutor), for main's
-// whole run: the engine objects are gone before it ends.
+// whole run: the engine objects are gone before it ends. The web build has no threads yet: the core's InlineExecutor.
 struct InstalledPool {
+#ifndef __EMSCRIPTEN__
     ov::ThreadPoolExecutor pool;
     InstalledPool() { ov::set_executor(&pool); }
     ~InstalledPool() { ov::set_executor(nullptr); }
+#endif
 };
 
 int print_report(const ov::Value &p_report) {
@@ -56,7 +59,7 @@ int print_report(const ov::Value &p_report) {
 
 int main(int argc, char **argv) {
     ov::log_level() = ov::LOG_INFO;
-    const InstalledPool installed;
+    [[maybe_unused]] const InstalledPool installed;
     ov::dawn::DawnContext context;
     if (!context.initialize()) {
         return 1;

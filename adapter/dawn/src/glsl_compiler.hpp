@@ -29,6 +29,8 @@ enum class ShaderStage {
     FRAGMENT,
 };
 
-CompiledShader compile_glsl(const std::string &p_source, ShaderStage p_stage = ShaderStage::COMPUTE);
+// p_push_as_uniform: the push constant block becomes a uniform block at set 1, binding 0 (a device without immediates:
+// DawnDevice feeds it from a ring buffer).
+CompiledShader compile_glsl(const std::string &p_source, ShaderStage p_stage = ShaderStage::COMPUTE, bool p_push_as_uniform = false);
 
 } // namespace ov::dawn

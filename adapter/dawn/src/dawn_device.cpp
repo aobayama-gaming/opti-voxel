@@ -1,7 +1,13 @@
 #include "dawn_device.hpp"
 
+#include "shader_module.hpp"
+
 #include "ov/log.hpp"
 #include "ov/on_error.hpp"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -21,6 +27,17 @@ uint64_t align256(uint64_t p_size) {
     return (p_size + 255) & ~uint64_t(255);
 }
 
+// Push data per submission without immediates: PUSH_RING_SLOTS dispatches, then a submission.
+constexpr uint32_t PUSH_RING_SLOTS = 1024;
+
+// Waits for the GPU's callbacks: a browser delivers them only between tasks, so the wasm suspends (JSPI) meanwhile.
+void wait_for_events(const wgpu::Instance &p_instance) {
+    p_instance.ProcessEvents();
+#ifdef __EMSCRIPTEN__
+    emscripten_sleep(0);
+#endif
+}
+
 wgpu::TextureFormat wgpu_format(gpu::TextureFormat p_format) {
     switch (p_format) {
         case gpu::TextureFormat::RGBA16_UINT:
@@ -34,7 +51,42 @@ wgpu::TextureFormat wgpu_format(gpu::TextureFormat p_format) {
 DawnDevice::DawnDevice(DawnContext &p_context) : context(p_context) {
     wgpu::Limits limits{};
     context.device.GetLimits(&limits);
-    push_size_limit = std::min<uint32_t>(limits.maxImmediateSize, gpu::PUSH_MAX);
+#ifdef __EMSCRIPTEN__
+    immediates = false; // Tint's WGSL would need the immediate address space, which not every browser has
+#else
+    immediates = limits.maxImmediateSize > 0;
+#endif
+    if (immediates) {
+        push_size_limit = std::min<uint32_t>(limits.maxImmediateSize, gpu::PUSH_MAX);
+        return;
+    }
+    // The push blocks as a uniform at set 1 (compile_glsl), one dynamic offset per dispatch.
+    push_size_limit = gpu::PUSH_MAX;
+    push_stride = std::max<uint32_t>(limits.minUniformBufferOffsetAlignment, gpu::PUSH_MAX);
+    wgpu::BindGroupLayoutEntry entry{};
+    entry.binding = 0;
+    entry.visibility = wgpu::ShaderStage::Compute;
+    entry.buffer.type = wgpu::BufferBindingType::Uniform;
+    entry.buffer.hasDynamicOffset = true;
+    entry.buffer.minBindingSize = gpu::PUSH_MAX;
+    wgpu::BindGroupLayoutDescriptor layout_desc{};
+    layout_desc.entryCount = 1;
+    layout_desc.entries = &entry;
+    push_layout = context.device.CreateBindGroupLayout(&layout_desc);
+    wgpu::BufferDescriptor ring_desc{};
+    ring_desc.label = "push ring";
+    ring_desc.size = uint64_t(push_stride) * PUSH_RING_SLOTS;
+    ring_desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    push_ring = context.device.CreateBuffer(&ring_desc);
+    wgpu::BindGroupEntry group_entry{};
+    group_entry.binding = 0;
+    group_entry.buffer = push_ring;
+    group_entry.size = gpu::PUSH_MAX;
+    wgpu::BindGroupDescriptor group_desc{};
+    group_desc.layout = push_layout;
+    group_desc.entryCount = 1;
+    group_desc.entries = &group_entry;
+    push_group = context.device.CreateBindGroup(&group_desc);
 }
 
 DawnDevice::~DawnDevice() {
@@ -63,6 +115,11 @@ wgpu::CommandEncoder &DawnDevice::_encoder() {
 void DawnDevice::_submit() {
     if (!recorded) {
         return;
+    }
+    if (!push_data.empty()) {
+        // Lands after the earlier submissions and before these commands, which read it.
+        context.queue.WriteBuffer(push_ring, 0, push_data.data(), push_data.size());
+        push_data.clear();
     }
     const wgpu::CommandBuffer commands = encoder.Finish();
     context.queue.Submit(1, &commands);
@@ -116,14 +173,14 @@ gpu::Buffer DawnDevice::_create_buffer(wgpu::BufferUsage p_usage, uint64_t p_siz
     wgpu::BufferDescriptor desc{};
     desc.size = std::max<uint64_t>(align4(p_size), 4);
     desc.usage = wgpu::BufferUsage::CopyDst | p_usage;
-    desc.mappedAtCreation = true; // zeros, or the data
+    desc.mappedAtCreation = p_data != nullptr && p_size > 0; // else zeros: WebGPU zero-initialises buffers
     Entry entry;
     entry.buffer = context.device.CreateBuffer(&desc);
     OV_ERR_FAIL_COND_V_MSG(!entry.buffer, gpu::Buffer(), ov::format("DawnDevice: no buffer of %d bytes.", int64_t(p_size)));
-    if (p_data != nullptr && p_size > 0) {
+    if (desc.mappedAtCreation) {
         std::memcpy(entry.buffer.GetMappedRange(0, desc.size), p_data, size_t(p_size));
+        entry.buffer.Unmap();
     }
-    entry.buffer.Unmap();
     return gpu::Buffer{ _add(std::move(entry)) };
 }
 
@@ -239,20 +296,19 @@ void DawnDevice::copy_texture(gpu::Texture p_from, gpu::Texture p_to, uint32_t p
 }
 
 gpu::Pipeline DawnDevice::create_compute_pipeline(const str &p_name, const str &p_glsl, str &r_error) {
-    CompiledShader shader = compile_glsl(p_glsl);
+    CompiledShader shader = compile_glsl(p_glsl, ShaderStage::COMPUTE, !immediates);
     if (!shader.error.empty()) {
         r_error = shader.error;
         return gpu::Pipeline();
     }
-    wgpu::ShaderSourceSPIRV spirv{};
-    spirv.codeSize = uint32_t(shader.spirv.size());
-    spirv.code = shader.spirv.data();
     // Validation errors (SPIR-V Tint rejects, a layout mismatch) come back through an error scope.
     context.device.PushErrorScope(wgpu::ErrorFilter::Validation);
-    wgpu::ShaderModuleDescriptor module_desc{};
-    module_desc.nextInChain = &spirv;
-    module_desc.label = p_name.c_str();
-    const wgpu::ShaderModule module = context.device.CreateShaderModule(&module_desc);
+    const wgpu::ShaderModule module = create_spirv_module(context.device, shader.spirv.data(), shader.spirv.size(), p_name.c_str());
+    if (!module) {
+        context.device.PopErrorScope(wgpu::CallbackMode::AllowSpontaneous, [](wgpu::PopErrorScopeStatus, wgpu::ErrorType, wgpu::StringView) {});
+        r_error = "no WGSL for the shader (see the log)";
+        return gpu::Pipeline();
+    }
 
     // The layout of every buffer and image the shader declares (an automatic one drops the unused ones, which the
     // engine binds).
@@ -280,9 +336,10 @@ gpu::Pipeline DawnDevice::create_compute_pipeline(const str &p_name, const str &
     entry.bindings = std::move(shader.bindings);
 
     wgpu::PipelineLayoutDescriptor pipeline_layout_desc{};
-    pipeline_layout_desc.bindGroupLayoutCount = 1;
-    pipeline_layout_desc.bindGroupLayouts = &entry.layout;
-    pipeline_layout_desc.immediateSize = push_size_limit;
+    const wgpu::BindGroupLayout group_layouts[2] = { entry.layout, push_layout };
+    pipeline_layout_desc.bindGroupLayoutCount = immediates ? 1 : 2;
+    pipeline_layout_desc.bindGroupLayouts = group_layouts;
+    pipeline_layout_desc.immediateSize = immediates ? push_size_limit : 0;
     wgpu::ComputePipelineDescriptor desc{};
     desc.label = p_name.c_str();
     desc.layout = context.device.CreatePipelineLayout(&pipeline_layout_desc);
@@ -341,10 +398,23 @@ void DawnDevice::dispatch(gpu::Pipeline p_pipeline, gpu::BindSet p_set, const vo
     const Entry *pipeline = _get(p_pipeline);
     const Entry *set = _get(p_set);
     OV_ERR_FAIL_COND_MSG(pipeline == nullptr || set == nullptr || p_push_size > push_size_limit, "DawnDevice: dispatch of an unknown pipeline or set, or too many push bytes.");
+    uint32_t push_offset = 0;
+    if (!immediates) {
+        if (push_data.size() >= size_t(push_stride) * PUSH_RING_SLOTS) {
+            _submit(); // the ring is full: its data goes with the dispatches recorded so far
+        }
+        push_offset = uint32_t(push_data.size());
+        push_data.resize(push_data.size() + push_stride, 0);
+        if (p_push_size > 0) {
+            std::memcpy(push_data.data() + push_offset, p_push, p_push_size);
+        }
+    }
     const wgpu::ComputePassEncoder pass = _encoder().BeginComputePass();
     pass.SetPipeline(pipeline->pipeline);
     pass.SetBindGroup(0, set->group);
-    if (p_push_size > 0) {
+    if (!immediates) {
+        pass.SetBindGroup(1, push_group, 1, &push_offset);
+    } else if (p_push_size > 0) {
         pass.SetImmediates(0, p_push, p_push_size);
     }
     pass.DispatchWorkgroups(p_x, p_y, p_z);
@@ -459,7 +529,7 @@ void DawnDevice::sync() {
     context.instance.WaitAny(context.queue.OnSubmittedWorkDone(wgpu::CallbackMode::WaitAnyOnly, [](wgpu::QueueWorkDoneStatus, wgpu::StringView) {}),
             std::numeric_limits<uint64_t>::max());
     while (std::any_of(pending.begin(), pending.end(), [](const std::unique_ptr<Pending> &p) { return !p->mapped; })) {
-        context.instance.ProcessEvents();
+        wait_for_events(context.instance);
     }
     _deliver();
 }

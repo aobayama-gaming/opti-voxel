@@ -15,6 +15,7 @@
 #include <iterator>
 
 #include "fsr3_shaders.hpp"
+#include "shader_module.hpp"
 
 namespace ov::dawn {
 namespace {
@@ -276,7 +277,9 @@ Fsr3Upscaler::Fsr3Upscaler(wgpu::Device p_device, wgpu::Instance p_instance, uin
                             int(p_message.length), p_message.data);
                 }
             });
-    device.Tick();
+#ifndef __EMSCRIPTEN__
+    device.Tick(); // a browser delivers the scope's result between tasks, after this returns
+#endif
 
     // Every pass is required: a missing one would silently corrupt the upscaled image, so the
     // upscaler reports itself unavailable and the caller falls back to a plain upscale.
@@ -785,14 +788,7 @@ bool Fsr3Upscaler::CreatePipelines() {
 bool Fsr3Upscaler::CreatePass(const uint32_t *p_spirv, uint32_t p_spirv_words,
         const Binding *p_bindings, uint32_t p_binding_count,
         const char *p_label, Pass &r_pass) {
-    wgpu::ShaderSourceSPIRV source = {};
-    source.codeSize = p_spirv_words;
-    source.code = p_spirv;
-
-    wgpu::ShaderModuleDescriptor module_desc = {};
-    module_desc.nextInChain = &source;
-    module_desc.label = p_label;
-    wgpu::ShaderModule module = device.CreateShaderModule(&module_desc);
+    wgpu::ShaderModule module = ov::dawn::create_spirv_module(device, p_spirv, p_spirv_words, p_label);
     if (!module) {
         return false;
     }
@@ -1059,7 +1055,13 @@ bool Fsr3Upscaler::Dispatch(wgpu::CommandEncoder &p_encoder, const Fsr3Inputs &p
 
     // Recorded into the encoder (not the queue) so that several frames can be recorded
     // into one command encoder without the later writes clobbering the earlier dispatches.
+    // A browser has no encoder writes: the queue's, which land before this frame's
+    // submission (the viewer records one frame per encoder).
+#ifdef __EMSCRIPTEN__
+    device.GetQueue().WriteBuffer(constants_buffer, 0, &constants, sizeof(constants));
+#else
     p_encoder.WriteBuffer(constants_buffer, 0, &constants, sizeof(constants));
+#endif
 
     // --- reset of the temporal history ---
     if (reset) {
