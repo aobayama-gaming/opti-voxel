@@ -1,6 +1,9 @@
 #include "register_types.h"
 
 #include <gdextension_interface.h>
+
+#include <cstring>
+#include <godot_cpp/classes/dir_access.hpp>
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -8,9 +11,9 @@
 #include <godot_cpp/godot.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-#include "cascade_report.hpp"
+#include "cascade_report_node.hpp"
 #include "cascade_spike.hpp"
-#include "climate_report.hpp"
+#include "climate_report_node.hpp"
 #include "frame_spike.hpp"
 #include "quad_pool_spike.hpp"
 #include "voxel_sky.hpp"
@@ -65,9 +68,13 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
         if (f.is_null()) {
             return false;
         }
-        f->store_string(godot_str(p_text));
+        PackedByteArray bytes;
+        bytes.resize(int64_t(p_text.size()));
+        std::memcpy(bytes.ptrw(), p_text.data(), p_text.size());
+        f->store_buffer(bytes);
         return true;
     });
+    ov::set_dir_maker([](const ov::str &p_path) { return DirAccess::make_dir_recursive_absolute(godot_str(p_path)) == OK; });
     // The core's tasks, loops and workers on Godot's pool and threads.
     ov::set_executor(&g_executor);
     ov::gpu::set_local_device_factory(&RDDevice::create_local);
@@ -75,9 +82,9 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
     GDREGISTER_CLASS(FrameSpike);
-    GDREGISTER_CLASS(CascadeReport);
+    GDREGISTER_CLASS(CascadeReportNode);
     GDREGISTER_CLASS(CascadeSpike);
-    GDREGISTER_CLASS(ClimateReport);
+    GDREGISTER_CLASS(ClimateReportNode);
 #ifdef OPTI_VOXEL_TESTS
     GDREGISTER_CLASS(UnitTests);
 #endif

@@ -55,6 +55,16 @@ public:
 
     static Value array() { return Value(Array()); }
     static Value object() { return Value(Object()); }
+    // An array of p_values' elements (numbers, bools, text).
+    template <typename T>
+    static Value array_of(const std::vector<T> &p_values) {
+        Array out;
+        out.reserve(p_values.size());
+        for (const T &v : p_values) {
+            out.emplace_back(v);
+        }
+        return Value(std::move(out));
+    }
 
     Type get_type() const { return type; }
     bool is_nil() const { return type == NIL; }
@@ -101,6 +111,11 @@ public:
         return v ? *v : nil();
     }
     const Value &operator[](const char *p_key) const { return (*this)[str(p_key)]; }
+    // The key's value, or p_default when missing (godot's get).
+    Value get(const str &p_key, const Value &p_default) const {
+        const Value *v = _find(p_key);
+        return v ? *v : p_default;
+    }
     // The key's value, appended (nil) when missing: godot's d["key"] = v.
     Value &operator[](const str &p_key) {
         _own(OBJECT);

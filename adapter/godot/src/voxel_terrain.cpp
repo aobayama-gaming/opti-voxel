@@ -198,141 +198,141 @@ void VoxelTerrain::_bind_methods() {
 }
 
 void VoxelTerrain::set_pipeline_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(started, "pipeline_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "pipeline_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode != PIPELINE_GPU_LEGACY && p_mode != PIPELINE_GPU_DIRECT,
             "pipeline_mode must be 1 (GPU Legacy) or 2 (GPU Direct).");
-    pipeline_mode = (PipelineMode)p_mode;
+    cfg().pipeline_mode = ov::World::PipelineMode(p_mode);
 }
 
 int VoxelTerrain::get_pipeline_mode() const {
-    return pipeline_mode;
+    return cfg().pipeline_mode;
 }
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(started, "terrain_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "terrain_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode != 1 && p_mode != 2 && p_mode != 4, "terrain_mode must be 1 (cascade), 2 (continents preset) or 4 (shapes gallery).");
-    terrain_mode = p_mode;
+    cfg().terrain_mode = p_mode;
 }
 
 int VoxelTerrain::get_terrain_mode() const {
-    return terrain_mode;
+    return cfg().terrain_mode;
 }
 
 void VoxelTerrain::set_legacy_batch_size(int p_size) {
-    ERR_FAIL_COND_MSG(started, "legacy_batch_size must be set before the terrain enters the tree.");
-    legacy_batch_size = p_size;
+    ERR_FAIL_COND_MSG(world.is_started(), "legacy_batch_size must be set before the terrain enters the tree.");
+    cfg().legacy_batch_size = p_size;
 }
 
 int VoxelTerrain::get_legacy_batch_size() const {
-    return legacy_batch_size;
+    return cfg().legacy_batch_size;
 }
 
 void VoxelTerrain::set_voxel_size(float p_size) {
-    ERR_FAIL_COND_MSG(started, "voxel_size must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "voxel_size must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_size <= 0.0f, "voxel_size must be positive.");
-    chunk_param.voxel_size = p_size;
+    cfg().chunk_param.voxel_size = p_size;
 }
 
 float VoxelTerrain::get_voxel_size() const {
-    return chunk_param.voxel_size;
+    return cfg().chunk_param.voxel_size;
 }
 
 void VoxelTerrain::set_discovery_cull_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(started, "discovery_cull_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "discovery_cull_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode < ChunkDiscoverer::CULL_NONE || p_mode > ChunkDiscoverer::CULL_LEGACY, "Unknown discovery_cull_mode.");
-    discovery_cull_mode = p_mode;
+    cfg().discovery_cull_mode = p_mode;
 }
 
 int VoxelTerrain::get_discovery_cull_mode() const {
-    return discovery_cull_mode;
+    return cfg().discovery_cull_mode;
 }
 
 void VoxelTerrain::set_discovery_cache(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "discovery_cache must be set before the terrain enters the tree.");
-    discovery_cache = p_enable;
+    ERR_FAIL_COND_MSG(world.is_started(), "discovery_cache must be set before the terrain enters the tree.");
+    cfg().discovery_cache = p_enable;
 }
 
 bool VoxelTerrain::get_discovery_cache() const {
-    return discovery_cache;
+    return cfg().discovery_cache;
 }
 
 void VoxelTerrain::set_discovery_verify(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "discovery_verify must be set before the terrain enters the tree.");
-    discovery_verify = p_enable;
+    ERR_FAIL_COND_MSG(world.is_started(), "discovery_verify must be set before the terrain enters the tree.");
+    cfg().discovery_verify = p_enable;
 }
 
 bool VoxelTerrain::get_discovery_verify() const {
-    return discovery_verify;
+    return cfg().discovery_verify;
 }
 
 void VoxelTerrain::set_destroy_verify(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "destroy_verify must be set before the terrain enters the tree.");
-    destroy_verify = p_enable;
+    ERR_FAIL_COND_MSG(world.is_started(), "destroy_verify must be set before the terrain enters the tree.");
+    cfg().destroy_verify = p_enable;
 }
 
 bool VoxelTerrain::get_destroy_verify() const {
-    return destroy_verify;
+    return cfg().destroy_verify;
 }
 
 void VoxelTerrain::set_discoverer_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(started, "discoverer_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "discoverer_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode < -1 || p_mode > 1, "Unknown discoverer_mode (-1 auto, 0 CPU, 1 GPU).");
-    discoverer_mode = p_mode;
+    cfg().discoverer_mode = p_mode;
 }
 
 int VoxelTerrain::get_discoverer_mode() const {
-    return discoverer_mode;
+    return cfg().discoverer_mode;
 }
 
 void VoxelTerrain::set_walk_gpu(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "walk_gpu must be set before the terrain enters the tree.");
-    walk_gpu = p_enable;
+    ERR_FAIL_COND_MSG(world.is_started(), "walk_gpu must be set before the terrain enters the tree.");
+    cfg().walk_gpu = p_enable;
 }
 
 bool VoxelTerrain::get_walk_gpu() const {
-    return walk_gpu;
+    return cfg().walk_gpu;
 }
 
 void VoxelTerrain::set_walk_verify(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "walk_verify must be set before the terrain enters the tree.");
-    walk_verify = p_enable;
+    ERR_FAIL_COND_MSG(world.is_started(), "walk_verify must be set before the terrain enters the tree.");
+    cfg().walk_verify = p_enable;
 }
 
 bool VoxelTerrain::get_walk_verify() const {
-    return walk_verify;
+    return cfg().walk_verify;
 }
 
 void VoxelTerrain::set_walk_batch(int p_keys) {
-    ERR_FAIL_COND_MSG(started, "walk_batch must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "walk_batch must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_keys < 1, "walk_batch must be at least 1.");
-    walk_batch = p_keys;
+    cfg().walk_batch = p_keys;
 }
 
 int VoxelTerrain::get_walk_batch() const {
-    return walk_batch;
+    return cfg().walk_batch;
 }
 
 void VoxelTerrain::set_discovery_compare(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "discovery_compare must be set before the terrain enters the tree.");
-    discovery_compare = p_enable;
+    ERR_FAIL_COND_MSG(world.is_started(), "discovery_compare must be set before the terrain enters the tree.");
+    cfg().discovery_compare = p_enable;
 }
 
 bool VoxelTerrain::get_discovery_compare() const {
-    return discovery_compare;
+    return cfg().discovery_compare;
 }
 
 void VoxelTerrain::set_skirt_depth(float p_depth) {
-    ERR_FAIL_COND_MSG(started, "skirt_depth must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "skirt_depth must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_depth < 0.0f, "skirt_depth must not be negative.");
-    chunk_param.skirt_depth = p_depth;
+    cfg().chunk_param.skirt_depth = p_depth;
 }
 
 float VoxelTerrain::get_skirt_depth() const {
-    return chunk_param.skirt_depth;
+    return cfg().chunk_param.skirt_depth;
 }
 
 bool VoxelTerrain::_can_set_world_origin(int64_t p_voxel) const {
-    ERR_FAIL_COND_V_MSG(started, false, "world_origin must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_V_MSG(world.is_started(), false, "world_origin must be set before the terrain enters the tree.");
     ERR_FAIL_COND_V_MSG(p_voxel > WorldCoord::MAX_ABS_ORIGIN_VOXEL || p_voxel < -WorldCoord::MAX_ABS_ORIGIN_VOXEL, false,
             "world_origin must be within +-2^60 voxels.");
     return true;
@@ -340,247 +340,317 @@ bool VoxelTerrain::_can_set_world_origin(int64_t p_voxel) const {
 
 void VoxelTerrain::set_world_origin_x(int64_t p_voxel) {
     if (_can_set_world_origin(p_voxel)) {
-        world_origin_request.x = p_voxel;
+        cfg().world_origin_request.x = p_voxel;
     }
 }
 
 int64_t VoxelTerrain::get_world_origin_x() const {
-    return world_origin_request.x;
+    return cfg().world_origin_request.x;
 }
 
 void VoxelTerrain::set_world_origin_y(int64_t p_voxel) {
     if (_can_set_world_origin(p_voxel)) {
-        world_origin_request.y = p_voxel;
+        cfg().world_origin_request.y = p_voxel;
     }
 }
 
 int64_t VoxelTerrain::get_world_origin_y() const {
-    return world_origin_request.y;
+    return cfg().world_origin_request.y;
 }
 
 void VoxelTerrain::set_world_origin_z(int64_t p_voxel) {
     if (_can_set_world_origin(p_voxel)) {
-        world_origin_request.z = p_voxel;
+        cfg().world_origin_request.z = p_voxel;
     }
 }
 
 int64_t VoxelTerrain::get_world_origin_z() const {
-    return world_origin_request.z;
+    return cfg().world_origin_request.z;
 }
 
 void VoxelTerrain::set_archetype_instances(int p_count) {
-    ERR_FAIL_COND_MSG(started, "archetype_instances must be set before the terrain enters the tree.");
-    archetype_instances = p_count;
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_instances must be set before the terrain enters the tree.");
+    cfg().archetype_instances = p_count;
 }
 
 int VoxelTerrain::get_archetype_instances() const {
-    return archetype_instances;
+    return cfg().archetype_instances;
 }
 
 void VoxelTerrain::set_archetype_instance_area(double p_area) {
-    ERR_FAIL_COND_MSG(started, "archetype_instance_area must be set before the terrain enters the tree.");
-    archetype_instance_area = p_area;
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_instance_area must be set before the terrain enters the tree.");
+    cfg().archetype_instance_area = p_area;
 }
 
 double VoxelTerrain::get_archetype_instance_area() const {
-    return archetype_instance_area;
+    return cfg().archetype_instance_area;
 }
 
 void VoxelTerrain::set_archetype_trees(int p_count) {
-    ERR_FAIL_COND_MSG(started, "archetype_trees must be set before the terrain enters the tree.");
-    archetype_trees = p_count;
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_trees must be set before the terrain enters the tree.");
+    cfg().archetype_trees = p_count;
 }
 
 int VoxelTerrain::get_archetype_trees() const {
-    return archetype_trees;
+    return cfg().archetype_trees;
 }
 
 void VoxelTerrain::set_archetype_tree_area(double p_area) {
-    ERR_FAIL_COND_MSG(started, "archetype_tree_area must be set before the terrain enters the tree.");
-    archetype_tree_area = p_area;
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_tree_area must be set before the terrain enters the tree.");
+    cfg().archetype_tree_area = p_area;
 }
 
 double VoxelTerrain::get_archetype_tree_area() const {
-    return archetype_tree_area;
+    return cfg().archetype_tree_area;
 }
 
 void VoxelTerrain::set_biome_radius(double p_metres) {
-    ERR_FAIL_COND_MSG(started, "biome_radius must be set before the terrain enters the tree.");
-    biome_radius = p_metres;
+    ERR_FAIL_COND_MSG(world.is_started(), "biome_radius must be set before the terrain enters the tree.");
+    cfg().biome_radius = p_metres;
 }
 
 double VoxelTerrain::get_biome_radius() const {
-    return biome_radius;
+    return cfg().biome_radius;
 }
 
 void VoxelTerrain::set_climate_path(const String &p_path) {
-    ERR_FAIL_COND_MSG(started, "climate_path must be set before the terrain enters the tree.");
-    climate_path = p_path;
+    ERR_FAIL_COND_MSG(world.is_started(), "climate_path must be set before the terrain enters the tree.");
+    cfg().climate_path = ov_str(p_path);
 }
 
 String VoxelTerrain::get_climate_path() const {
-    return climate_path;
+    return godot_str(cfg().climate_path);
 }
 
 void VoxelTerrain::set_archetype_band(bool p_enabled) {
-    ERR_FAIL_COND_MSG(started, "archetype_band must be set before the terrain enters the tree.");
-    archetype_band = p_enabled;
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_band must be set before the terrain enters the tree.");
+    cfg().archetype_band = p_enabled;
 }
 
 bool VoxelTerrain::get_archetype_band() const {
-    return archetype_band;
+    return cfg().archetype_band;
 }
 
 void VoxelTerrain::set_archetype_stream(bool p_enabled) {
-    ERR_FAIL_COND_MSG(started, "archetype_stream must be set before the terrain enters the tree.");
-    archetype_stream = p_enabled;
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_stream must be set before the terrain enters the tree.");
+    cfg().archetype_stream = p_enabled;
 }
 
 bool VoxelTerrain::get_archetype_stream() const {
-    return archetype_stream;
+    return cfg().archetype_stream;
 }
 
 void VoxelTerrain::set_archetype_stream_part_sides(int p_sides) {
-    ERR_FAIL_COND_MSG(started, "archetype_stream_part_sides must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_stream_part_sides must be set before the terrain enters the tree.");
     // Past it, far layers become part layers whose blob tiles read cubically many LOD-0 part tiles.
     ERR_FAIL_COND_MSG(p_sides < 1 || p_sides > int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES_MAX),
             vformat("archetype_stream_part_sides must be within [1, %d] source cells.", Archetype::ScatterSource::STREAM_PART_CELL_SIDES_MAX));
-    archetype_stream_part_sides = p_sides;
+    cfg().archetype_stream_part_sides = p_sides;
 }
 
 int VoxelTerrain::get_archetype_stream_part_sides() const {
-    return archetype_stream_part_sides;
+    return cfg().archetype_stream_part_sides;
 }
 
 void VoxelTerrain::set_archetype_moments(bool p_enabled) {
-    ERR_FAIL_COND_MSG(started, "archetype_moments must be set before the terrain enters the tree.");
-    archetype_moments = p_enabled;
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_moments must be set before the terrain enters the tree.");
+    cfg().archetype_moments = p_enabled;
 }
 
 bool VoxelTerrain::get_archetype_moments() const {
-    return archetype_moments;
+    return cfg().archetype_moments;
 }
 
 void VoxelTerrain::set_archetype_erode(float p_cells) {
-    ERR_FAIL_COND_MSG(started, "archetype_erode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_erode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(!(p_cells > 0.0f && p_cells <= 4.0f), "archetype_erode must be in (0, 4] cells per LOD.");
-    archetype_erode = p_cells;
+    cfg().archetype_erode = p_cells;
 }
 
 float VoxelTerrain::get_archetype_erode() const {
-    return archetype_erode;
+    return cfg().archetype_erode;
 }
 
 void VoxelTerrain::set_archetype_resolve(float p_cells) {
-    ERR_FAIL_COND_MSG(started, "archetype_resolve must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "archetype_resolve must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(!(p_cells >= 0.0f && p_cells <= 8.0f), "archetype_resolve must be in [0, 8] cells.");
-    archetype_resolve = p_cells;
+    cfg().archetype_resolve = p_cells;
 }
 
 float VoxelTerrain::get_archetype_resolve() const {
-    return archetype_resolve;
+    return cfg().archetype_resolve;
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
-    ERR_FAIL_COND_MSG(started, "lod_pixel_error must be set before the terrain enters the tree.");
-    lod_pixel_error = p_error;
+    ERR_FAIL_COND_MSG(world.is_started(), "lod_pixel_error must be set before the terrain enters the tree.");
+    cfg().lod_pixel_error = p_error;
 }
 
 float VoxelTerrain::get_lod_pixel_error() const {
-    return lod_pixel_error;
+    return cfg().lod_pixel_error;
 }
 
 void VoxelTerrain::set_lod_pixel_error_back(float p_error) {
-    ERR_FAIL_COND_MSG(started, "lod_pixel_error_back must be set before the terrain enters the tree.");
-    lod_pixel_error_back = p_error;
+    ERR_FAIL_COND_MSG(world.is_started(), "lod_pixel_error_back must be set before the terrain enters the tree.");
+    cfg().lod_pixel_error_back = p_error;
 }
 
 float VoxelTerrain::get_lod_pixel_error_back() const {
-    return lod_pixel_error_back;
+    return cfg().lod_pixel_error_back;
 }
 
 void VoxelTerrain::set_lod_view_margin_deg(float p_degrees) {
-    ERR_FAIL_COND_MSG(started, "lod_view_margin_deg must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "lod_view_margin_deg must be set before the terrain enters the tree.");
     // The remembered view axis lags the camera's by up to RESCAN_TURN_DEG: a smaller margin would leave the
     // frustum's edge outside the cone.
     ERR_FAIL_COND_MSG(!(p_degrees >= ChunkDiscoverer::RESCAN_TURN_DEG && p_degrees <= 180.0f),
             vformat("lod_view_margin_deg must be in [%d, 180].", int(ChunkDiscoverer::RESCAN_TURN_DEG)));
-    lod_view_margin_deg = p_degrees;
+    cfg().lod_view_margin_deg = p_degrees;
 }
 
 float VoxelTerrain::get_lod_view_margin_deg() const {
-    return lod_view_margin_deg;
+    return cfg().lod_view_margin_deg;
 }
 
 void VoxelTerrain::set_lod_view_memory_m(float p_metres) {
-    ERR_FAIL_COND_MSG(started, "lod_view_memory_m must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world.is_started(), "lod_view_memory_m must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(std::isnan(p_metres), "lod_view_memory_m must be a number.");
-    lod_view_memory_m = p_metres;
+    cfg().lod_view_memory_m = p_metres;
 }
 
 float VoxelTerrain::get_lod_view_memory_m() const {
-    return lod_view_memory_m;
+    return cfg().lod_view_memory_m;
+}
+
+void VoxelTerrain::set_lod_numbers(int p_count) {
+    ERR_FAIL_COND_MSG(world.is_started(), "lod_numbers must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(p_count < 1 || p_count > MAX_LOD_NUMBERS, vformat("lod_numbers must be in [1, %d].", MAX_LOD_NUMBERS));
+    cfg().lod_numbers = p_count;
+}
+
+int VoxelTerrain::get_lod_numbers() const {
+    return cfg().lod_numbers;
+}
+
+void VoxelTerrain::set_legacy_trim_indices(bool p_trim) {
+    ERR_FAIL_COND_MSG(world.is_started(), "legacy_trim_indices must be set before the terrain enters the tree.");
+    cfg().legacy_trim_indices = p_trim;
+}
+
+bool VoxelTerrain::get_legacy_trim_indices() const {
+    return cfg().legacy_trim_indices;
+}
+
+void VoxelTerrain::set_dual_contouring(bool p_enable) {
+    ERR_FAIL_COND_MSG(world.is_started(), "dual_contouring must be set before the terrain enters the tree.");
+    cfg().dual_contouring = p_enable;
+}
+
+bool VoxelTerrain::get_dual_contouring() const {
+    return cfg().dual_contouring;
+}
+
+void VoxelTerrain::set_direct_batch_size(int p_size) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_batch_size must be set before the terrain enters the tree.");
+    cfg().direct.batch_size = p_size;
+}
+
+int VoxelTerrain::get_direct_batch_size() const {
+    return cfg().direct.batch_size;
+}
+
+void VoxelTerrain::set_direct_pages_per_batch(int p_pages) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_pages_per_batch must be set before the terrain enters the tree.");
+    cfg().direct.pages_per_batch = p_pages;
+}
+
+int VoxelTerrain::get_direct_pages_per_batch() const {
+    return cfg().direct.pages_per_batch;
+}
+
+void VoxelTerrain::set_direct_batches_per_frame(int p_batches) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_batches_per_frame must be set before the terrain enters the tree.");
+    ERR_FAIL_COND(p_batches < 1 || p_batches > (int)GPUDirectMesher::MAX_BATCHES_PER_FRAME);
+    cfg().direct.max_batches_per_frame = p_batches;
+}
+
+int VoxelTerrain::get_direct_batches_per_frame() const {
+    return cfg().direct.max_batches_per_frame;
+}
+
+void VoxelTerrain::set_direct_gpu_budget_ms(float p_ms) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_gpu_budget_ms must be set before the terrain enters the tree.");
+    ERR_FAIL_COND(!(p_ms >= 0.0f)); // 0: no budget
+    cfg().direct.gpu_budget_ms = p_ms;
+}
+
+float VoxelTerrain::get_direct_gpu_budget_ms() const {
+    return cfg().direct.gpu_budget_ms;
+}
+
+void VoxelTerrain::set_direct_max_in_flight(int p_batches) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_max_in_flight must be set before the terrain enters the tree.");
+    ERR_FAIL_COND(p_batches < 0); // 0: 3 * direct_batches_per_frame
+    cfg().direct.max_in_flight = p_batches;
+}
+
+int VoxelTerrain::get_direct_max_in_flight() const {
+    return cfg().direct.max_in_flight;
+}
+
+void VoxelTerrain::set_direct_page_capacity(int p_capacity) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_page_capacity must be set before the terrain enters the tree.");
+    cfg().direct.page_capacity = p_capacity;
+}
+
+int VoxelTerrain::get_direct_page_capacity() const {
+    return cfg().direct.page_capacity;
+}
+
+void VoxelTerrain::set_direct_initial_pages(int p_pages) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_initial_pages must be set before the terrain enters the tree.");
+    cfg().direct.initial_pages = p_pages;
+}
+
+int VoxelTerrain::get_direct_initial_pages() const {
+    return cfg().direct.initial_pages;
+}
+
+void VoxelTerrain::set_direct_compaction(bool p_enable) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_compaction must be set before the terrain enters the tree.");
+    cfg().direct.compaction = p_enable;
+}
+
+bool VoxelTerrain::get_direct_compaction() const {
+    return cfg().direct.compaction;
+}
+
+void VoxelTerrain::set_direct_compact_max_extent(float p_chunks) {
+    ERR_FAIL_COND_MSG(world.is_started(), "direct_compact_max_extent must be set before the terrain enters the tree.");
+    cfg().direct.compact_max_extent = p_chunks;
+}
+
+float VoxelTerrain::get_direct_compact_max_extent() const {
+    return cfg().direct.compact_max_extent;
 }
 
 Vector3 VoxelTerrain::_camera_forward() const {
     return -camera->get_global_transform().basis.get_column(2);
 }
 
-void VoxelTerrain::set_lod_numbers(int p_count) {
-    ERR_FAIL_COND_MSG(started, "lod_numbers must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_count < 1 || p_count > MAX_LOD_NUMBERS, vformat("lod_numbers must be in [1, %d].", MAX_LOD_NUMBERS));
-    lod_numbers = p_count;
-}
-
 double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
-    const VoxelPos origin = chunk_param.origin_voxel();
-    const double vs = double(chunk_param.voxel_size);
-    const double offset[3] = { double(p_render_pos.x) / vs, double(p_render_pos.y) / vs, double(p_render_pos.z) / vs };
-    WorldPos p = WorldCoord::offset_pos(origin, offset);
-    p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
-    return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident
+    const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
+    return world.sdf_at(pos);
 }
 
 Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
-    const double vs = double(chunk_param.voxel_size);
-    const VoxelPos p = sdf->get_base().tangent_point(std::llround(double(p_tangent_m.x) / vs), std::llround(double(p_tangent_m.y) / vs));
-    const VoxelPos origin = chunk_param.origin_voxel();
-    return Vector3(real_t(double(p.x - origin.x) * vs), real_t(double(p.y - origin.y) * vs), real_t(double(p.z - origin.z) * vs));
-}
-
-int VoxelTerrain::get_lod_numbers() const {
-    return lod_numbers;
+    double pos[3];
+    world.tangent_position(double(p_tangent_m.x), double(p_tangent_m.y), pos);
+    return Vector3(real_t(pos[0]), real_t(pos[1]), real_t(pos[2]));
 }
 
 double VoxelTerrain::get_load_radius() const {
-    if (chunk_discoverer == nullptr) {
-        return 0.0;
-    }
-    // The camera is within one step of its top-LOD ancestor, the grid spans `count` steps on each
-    // side of it and each top chunk reaches one step (its half extent) past its centre.
-    int64_t step;
-    int64_t count;
-    chunk_discoverer->get_scan_grid(step, count);
-    const double ids = double((count + 2) * step) * std::sqrt(3.0);
-    return ids * double(chunk_param.half_chunk_voxels()) * double(chunk_param.voxel_size);
-}
-
-void VoxelTerrain::set_legacy_trim_indices(bool p_trim) {
-    ERR_FAIL_COND_MSG(started, "legacy_trim_indices must be set before the terrain enters the tree.");
-    legacy_trim_indices = p_trim;
-}
-
-bool VoxelTerrain::get_legacy_trim_indices() const {
-    return legacy_trim_indices;
-}
-
-void VoxelTerrain::set_dual_contouring(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "dual_contouring must be set before the terrain enters the tree.");
-    dual_contouring = p_enable;
-}
-
-bool VoxelTerrain::get_dual_contouring() const {
-    return dual_contouring;
+    return world.load_radius();
 }
 
 void VoxelTerrain::set_debug_gpu_profile(bool p_enable) {
@@ -630,110 +700,19 @@ Dictionary VoxelTerrain::debug_trace_write(const String &p_path) {
 }
 
 Dictionary VoxelTerrain::get_process_times_ms() const {
-    Dictionary d;
-    for (const auto &[name, stat] : process_stats.sections()) {
-        d[name] = stat->total / 1000.0;
-    }
-    return d;
+    return godot_dict(world.process_times_ms());
 }
 
 int VoxelTerrain::get_pending_chunk_count() const {
-    return visual_mesh_data.dirty_chunk.size();
-}
-
-void VoxelTerrain::set_direct_batch_size(int p_size) {
-    ERR_FAIL_COND_MSG(started, "direct_batch_size must be set before the terrain enters the tree.");
-    direct_settings.batch_size = p_size;
-}
-
-int VoxelTerrain::get_direct_batch_size() const {
-    return direct_settings.batch_size;
-}
-
-void VoxelTerrain::set_direct_pages_per_batch(int p_pages) {
-    ERR_FAIL_COND_MSG(started, "direct_pages_per_batch must be set before the terrain enters the tree.");
-    direct_settings.pages_per_batch = p_pages;
-}
-
-int VoxelTerrain::get_direct_pages_per_batch() const {
-    return direct_settings.pages_per_batch;
-}
-
-void VoxelTerrain::set_direct_batches_per_frame(int p_batches) {
-    ERR_FAIL_COND_MSG(started, "direct_batches_per_frame must be set before the terrain enters the tree.");
-    ERR_FAIL_COND(p_batches < 1 || p_batches > (int)GPUDirectMesher::MAX_BATCHES_PER_FRAME);
-    direct_settings.max_batches_per_frame = p_batches;
-}
-
-int VoxelTerrain::get_direct_batches_per_frame() const {
-    return direct_settings.max_batches_per_frame;
-}
-
-void VoxelTerrain::set_direct_gpu_budget_ms(float p_ms) {
-    ERR_FAIL_COND_MSG(started, "direct_gpu_budget_ms must be set before the terrain enters the tree.");
-    ERR_FAIL_COND(!(p_ms >= 0.0f)); // 0: no budget
-    direct_settings.gpu_budget_ms = p_ms;
-}
-
-float VoxelTerrain::get_direct_gpu_budget_ms() const {
-    return direct_settings.gpu_budget_ms;
-}
-
-void VoxelTerrain::set_direct_max_in_flight(int p_batches) {
-    ERR_FAIL_COND_MSG(started, "direct_max_in_flight must be set before the terrain enters the tree.");
-    ERR_FAIL_COND(p_batches < 0); // 0: 3 * direct_batches_per_frame
-    direct_settings.max_in_flight = p_batches;
-}
-
-int VoxelTerrain::get_direct_max_in_flight() const {
-    return direct_settings.max_in_flight;
-}
-
-void VoxelTerrain::set_direct_page_capacity(int p_capacity) {
-    ERR_FAIL_COND_MSG(started, "direct_page_capacity must be set before the terrain enters the tree.");
-    direct_settings.page_capacity = p_capacity;
-}
-
-int VoxelTerrain::get_direct_page_capacity() const {
-    return direct_settings.page_capacity;
-}
-
-void VoxelTerrain::set_direct_initial_pages(int p_pages) {
-    ERR_FAIL_COND_MSG(started, "direct_initial_pages must be set before the terrain enters the tree.");
-    direct_settings.initial_pages = p_pages;
-}
-
-int VoxelTerrain::get_direct_initial_pages() const {
-    return direct_settings.initial_pages;
-}
-
-void VoxelTerrain::set_direct_compaction(bool p_enable) {
-    ERR_FAIL_COND_MSG(started, "direct_compaction must be set before the terrain enters the tree.");
-    direct_settings.compaction = p_enable;
-}
-
-bool VoxelTerrain::get_direct_compaction() const {
-    return direct_settings.compaction;
-}
-
-void VoxelTerrain::set_direct_compact_max_extent(float p_chunks) {
-    ERR_FAIL_COND_MSG(started, "direct_compact_max_extent must be set before the terrain enters the tree.");
-    direct_settings.compact_max_extent = p_chunks;
-}
-
-float VoxelTerrain::get_direct_compact_max_extent() const {
-    return direct_settings.compact_max_extent;
+    return int(world.pending_chunk_count());
 }
 
 void VoxelTerrain::set_debug_view(int p_view) {
-    debug_view = p_view;
-    if (direct_mesher) {
-        direct_mesher->set_debug_view(debug_view);
-    }
+    world.set_debug_view(p_view);
 }
 
 int VoxelTerrain::get_debug_view() const {
-    return debug_view;
+    return cfg().debug_view;
 }
 
 void VoxelTerrain::set_page_params(const Dictionary &p_params) {
@@ -755,751 +734,176 @@ int VoxelTerrain::get_log_level() const {
 }
 
 void VoxelTerrain::_ready() {
-    // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
-    ERR_FAIL_COND_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, "VoxelTerrain: chunk_size - 2 * skirt_size must be even.");
-    ERR_FAIL_COND_MSG(lod_numbers < 1 || lod_numbers > MAX_LOD_NUMBERS, "VoxelTerrain: lod_numbers out of range.");
-    // Both meshers need a RenderingDevice (GPU Direct the main one, Legacy a local one, which needs it too).
-    // Without one (--headless, the Compatibility renderer) the page pool would dereference null on the
-    // render thread: the terrain stays empty instead. This also covers the editor's headless --import.
-    ERR_FAIL_NULL_MSG(RenderingServer::get_singleton()->get_rendering_device(),
-            "VoxelTerrain: no RenderingDevice (--headless or the Compatibility renderer): the terrain is disabled.");
-
-    started = true;
-    start_usec = now_usec();
-
-    // The world origin, snapped down to the root chunk span (2^lod_numbers chunk-id units): the
-    // octree around the camera, the LOD layout and the GPU low words are then the same at any origin.
-    {
-        const int64_t root_units = int64_t(1) << lod_numbers;
-        const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
-        chunk_param.origin_chunk = ChunkId(WorldCoord::floor_div(world_origin_request.x, root_voxels) * root_units,
-                WorldCoord::floor_div(world_origin_request.y, root_voxels) * root_units,
-                WorldCoord::floor_div(world_origin_request.z, root_voxels) * root_units);
-        if (chunk_param.origin_voxel() != world_origin_request) {
-            VLOG(1, "VoxelTerrain: world origin snapped to ", godot_str(chunk_param.origin_voxel()), " voxels");
-        }
-    }
-
-    // One terrain, the cascade: mode 2 is its continents preset, 4 its flat preset under the shapes gallery.
-    if (terrain_mode == 2) {
-        sdf->preset = SDFCascade::Preset::CONTINENTS;
-    } else if (terrain_mode == 4) {
-        sdf->preset = SDFCascade::Preset::FLAT;
-        sdf->set_scene(SDFTable::Scene::SHAPES);
-    }
-    sdf->set_scatter(archetype_instances, archetype_instance_area);
-    sdf->set_forest(archetype_trees, archetype_tree_area);
-    sdf->set_stream_sources(archetype_stream);
-    sdf->set_stream_part_sides(archetype_stream_part_sides);
-    sdf->set_biome_radius(biome_radius);
-    if (!climate_path.is_empty()) {
-        // Parsed and checked by configure() (an ERR there: no climate).
-        const ov::str err = Climate::load(ov_str(climate_path), sdf->climate_data);
-        if (!err.empty()) {
-            ERR_PRINT("VoxelTerrain: " + godot_str(err) + String(" No climate."));
-        }
-    }
-    sdf->set_instance_band(archetype_band && terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
-    sdf->set_moment_blobs(archetype_moments);
-    sdf->set_instance_erode(archetype_erode);
-    sdf->set_instance_resolve(archetype_resolve);
-    sdf->set_walk_batch_gpu(size_t(walk_batch));
-    const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);
-    if (chunk_param.skirt_depth < min_skirt) {
-        VLOG(1, "VoxelTerrain: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
-        chunk_param.skirt_depth = min_skirt;
-    }
-    sdf->configure(chunk_param, lod_numbers);
-    sdf->set_walk_verify(walk_verify);
-    if (walk_gpu) {
-        sdf->start_field_gpu(chunk_param); // attached by sdf->poll() once its device is ready
-    }
-
-    visual_mesh_data.set_max_lod(lod_numbers);
-    visual_mesh_data.verify = destroy_verify;
+    // Without a RenderingDevice (--headless, the Compatibility renderer, the editor's headless --import) the terrain
+    // stays empty.
+    RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
+    ERR_FAIL_NULL_MSG(rd, "VoxelTerrain: no RenderingDevice (--headless or the Compatibility renderer): the terrain is disabled.");
 
     if (Engine::get_singleton()->is_editor_hint()) {
         camera = EditorInterface::get_singleton()->get_editor_viewport_3d()->get_camera_3d();
     } else {
         camera = get_viewport()->get_camera_3d();
     }
-
-    chunk_discoverer = memnew(ChunkDiscoverer);
-
-    chunk_discoverer->set_config(chunk_param, sdf);
-    chunk_discoverer->set_cull_mode((ChunkDiscoverer::CullMode)discovery_cull_mode);
-    chunk_discoverer->set_cache(discovery_cache, discovery_verify);
-    chunk_discoverer->set_gpu(discoverer_mode != 0);
-    chunk_discoverer->set_compare(discovery_compare);
-
     // The pixel error is measured against the camera's real vertical FOV and the 3D render's height: an upscaler's
     // render scale (scaling_3d_scale) makes its pixels larger, and the LOD coarser with them.
-    float viewport_height = 1080.0f;
-    float fov_rad = Math::deg_to_rad(75.0f);
-    float aspect = 16.0f / 9.0f;
+    ov::World::Projection projection;
     if (camera != nullptr) {
         Viewport *viewport = camera->get_viewport();
         const Vector2 viewport_size = viewport->get_visible_rect().size * float(viewport->get_scaling_3d_scale());
-        viewport_height = MAX(viewport_size.y, 1.0f);
-        aspect = viewport_size.x > 0.0f ? viewport_size.x / viewport_height : aspect;
-        fov_rad = Math::deg_to_rad(float(camera->get_fov()));
+        projection.viewport_height = MAX(viewport_size.y, 1.0f);
+        projection.aspect = viewport_size.x > 0.0f ? viewport_size.x / projection.viewport_height : projection.aspect;
+        projection.fov_rad = Math::deg_to_rad(float(camera->get_fov()));
         if (camera->get_keep_aspect_mode() == Camera3D::KEEP_WIDTH && viewport_size.x > 0.0f) {
             // fov is horizontal: convert it to vertical.
-            fov_rad = 2.0f * std::atan(std::tan(fov_rad * 0.5f) * viewport_size.y / viewport_size.x);
+            projection.fov_rad = 2.0f * std::atan(std::tan(projection.fov_rad * 0.5f) * viewport_size.y / viewport_size.x);
         }
     }
 
-    // The view cone holds the frustum: its half-angle is the half-FOV along the screen diagonal.
-    chunk_discoverer->setup_lod(
-            lod_numbers,
-            lod_pixel_error,
-            viewport_height,
-            fov_rad,
-            lod_pixel_error_back,
-            ChunkMath::view_cone_half_angle(fov_rad, aspect, Math::deg_to_rad(lod_view_margin_deg)));
-    chunk_discoverer->set_view_memory(lod_view_memory_m);
-
-    chunk_discoverer->start();
-
-    scenario = get_world_3d()->get_scenario();
-
-    main_device = new RDDevice(RenderingServer::get_singleton()->get_rendering_device());
-    if (pipeline_mode == PIPELINE_GPU_DIRECT) {
-        page_host = new GodotPageHost(scenario, main_device);
-        direct_mesher = new GPUDirectMesher();
-        direct_mesher->set_dual_contouring(dual_contouring);
-        direct_mesher->initialize(sdf, chunk_param, lod_numbers, main_device, page_host, direct_settings);
-        direct_mesher->set_debug_view(debug_view);
+    main_device = new RDDevice(rd);
+    ov::World::Hosts hosts;
+    hosts.device = main_device;
+    if (cfg().pipeline_mode == ov::World::PIPELINE_GPU_DIRECT) {
+        page_host = new GodotPageHost(get_world_3d()->get_scenario(), main_device);
+        hosts.pages = page_host;
+    } else {
+        mesh_host = new GodotMeshHost(get_world_3d()->get_scenario());
+        hosts.meshes = mesh_host;
+    }
+    hosts.hidden_meshes = []() -> std::unique_ptr<MeshHost> { return std::make_unique<GodotMeshHost>(); };
+    const Float3 camera_pos = camera != nullptr ? ov_f3(camera->get_global_position()) : Float3();
+    const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
+    if (!world.start(projection, hosts, camera != nullptr ? &camera_pos : nullptr, camera != nullptr ? &camera_forward : nullptr)) {
+        return;
+    }
+    if (page_host) {
         // Skirt depth per LOD: the page shader's height colours undo the skirt push.
+        const SDFCascade &sdf = world.terrain();
         PackedFloat32Array skirt_depths;
         skirt_depths.resize(32);
         for (int l = 0; l < 32; l++) {
-            skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
+            skirt_depths.set(l, l < cfg().lod_numbers ? sdf.skirt_depth_m(l) : 0.0f);
         }
         page_host->set_material_param("skirt_depth_m", skirt_depths);
-        const UpAxis up = sdf->up_at(VoxelPos(0, sdf->get_datum_y(), 0));
+        const UpAxis up = sdf.up_at(VoxelPos(0, sdf.get_datum_y(), 0));
         page_host->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
-        if (sdf->preset == SDFCascade::Preset::CONTINENTS) {
+        if (sdf.preset == SDFCascade::Preset::CONTINENTS) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
-            const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;
+            const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf.get_datum_y(), 0), world.chunk_param()).y;
             page_host->set_material_param("sea_level_m", sea_m);
         }
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
-    } else {
-        mesh_host = new GodotMeshHost(scenario);
-        gpu_mesher = new GPUMesher();
-
-        gpu_mesher->set_dual_contouring(dual_contouring);
-        gpu_mesher->initialize(
-                sdf,
-                chunk_param,
-                legacy_batch_size, // chunk_batch
-                lod_numbers,
-                mesh_host);
-        gpu_mesher->set_trim_indices(legacy_trim_indices);
     }
-    last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
+}
 
-    if (camera != nullptr) {
-        chunk_discoverer->set_camera(ov_f3(camera->get_global_position()), ov_f3(_camera_forward()));
+// The instance edit's rotation (9 floats) and params (8): null when not given (identity / zero).
+static const float *edit_floats(const PackedFloat32Array &p_values, int p_count, float *r_out, bool p_pad) {
+    if (p_values.size() < (p_pad ? 1 : p_count)) {
+        return nullptr;
     }
-
-    VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
+    for (int i = 0; i < p_count; i++) {
+        r_out[i] = i < p_values.size() ? p_values[i] : 0.0f;
+    }
+    return r_out;
 }
 
 int VoxelTerrain::add_instance(int p_type, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation,
         const PackedFloat32Array &p_params, int p_op, float p_k) {
-    if (!sdf) {
-        return -1;
-    }
     float rot[9];
-    const float *rp = nullptr;
-    if (p_rotation.size() >= 9) {
-        for (int i = 0; i < 9; i++) {
-            rot[i] = p_rotation[i];
-        }
-        rp = rot;
-    }
     float params[8] = {};
-    const float *pp = nullptr;
-    if (!p_params.is_empty()) {
-        for (int i = 0; i < 8; i++) {
-            params[i] = i < p_params.size() ? p_params[i] : 0.0f;
-        }
-        pp = params;
-    }
-    const int id = sdf->add_instance(p_type, VoxelPos(p_x, p_y, p_z), rp, pp, p_op, p_k);
-    if (id >= 0) {
-        _apply_instance_edit();
-    }
-    return id;
+    return world.add_instance(p_type, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false), edit_floats(p_params, 8, params, true), p_op, p_k);
 }
 
 bool VoxelTerrain::remove_instance(int p_id) {
-    if (!sdf) {
-        return false;
-    }
-    const bool ok = sdf->remove_instance(p_id);
-    if (ok) {
-        _apply_instance_edit();
-    }
-    return ok;
+    return world.remove_instance(p_id);
 }
 
 bool VoxelTerrain::move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation) {
-    if (!sdf) {
-        return false;
-    }
     float rot[9];
-    const float *rp = nullptr;
-    if (p_rotation.size() >= 9) {
-        for (int i = 0; i < 9; i++) {
-            rot[i] = p_rotation[i];
-        }
-        rp = rot;
-    }
-    const bool ok = sdf->move_instance(p_id, VoxelPos(p_x, p_y, p_z), rp);
-    if (ok) {
-        _apply_instance_edit();
-    }
-    return ok;
+    return world.move_instance(p_id, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false));
 }
-
-void VoxelTerrain::_apply_instance_edit() {
-    const uint64_t t0 = now_usec();
-    const VoxelBox &box = sdf->last_edit_box();
-    if (!box.valid) {
-        return;
-    }
-    // The loaded chunks whose samples the edit can change: their box grown by the locality margin at
-    // their LOD meets the edit's region.
-    std::vector<ChunkId> remesh;
-    for (const auto &kv : visual_mesh_data.loaded_chunk) {
-        if (sdf->edit_affects_chunk(kv.first)) {
-            remesh.push_back(kv.first);
-        }
-    }
-    if (direct_mesher) {
-        direct_mesher->remesh_chunks(remesh);
-    } else if (gpu_mesher) {
-        gpu_mesher->remesh_chunks(remesh);
-    }
-    if (chunk_discoverer) {
-        chunk_discoverer->invalidate(box);
-    }
-    destroy_dirty = true;
-    edit_stats.edits++;
-    edit_stats.remesh_last = (int64_t)remesh.size();
-    edit_stats.remesh_total += (int64_t)remesh.size();
-    edit_stats.apply.add(now_usec() - t0);
-}
-
-void VoxelTerrain::_record_dispatch_times(const DispatchTimes &p_now) {
-    process_stats.gate_admit.add(p_now.gate_admit - last_dispatch_times.gate_admit);
-    process_stats.build_lists.add(p_now.build_lists - last_dispatch_times.build_lists);
-    process_stats.record_bytes.add(p_now.record_bytes - last_dispatch_times.record_bytes);
-    last_dispatch_times = p_now;
-}
-
-namespace {
-
-// A _process section: its time goes to its stat and, while tracing, to a "terrain" span of the same name.
-class Section {
-public:
-    Section(TimingStat &r_stat, const char *p_name) :
-            stat(r_stat), span("terrain", p_name), t0(now_usec()) {}
-    ~Section() { stat.add(now_usec() - t0); }
-    Section(const Section &) = delete;
-    Section &operator=(const Section &) = delete;
-
-private:
-    TimingStat &stat;
-    const Trace::Scope span;
-    const uint64_t t0;
-};
-
-} // namespace
 
 void VoxelTerrain::_process(double) {
-    if (!started) {
+    if (!world.is_started()) {
         return;
     }
-
-    Section total(process_stats.process_total, "process");
-    visual_mesh_data.frame = exec_time;
-    ov::executor().pump(); // an inline executor's queued tasks and woken workers (a threaded one runs them itself)
-    {
-        Section section(process_stats.stream_poll, "stream_poll");
-        sdf->poll(); // an edit's rebuilt index base, the streamed keys computed since the last frame (before the meshers ask)
-    }
-
     if (camera != nullptr) {
-        chunk_discoverer->set_camera(ov_f3(camera->get_global_position()), ov_f3(_camera_forward()));
+        const Float3 pos = ov_f3(camera->get_global_position());
+        const Float3 forward = ov_f3(_camera_forward());
+        world.frame(&pos, &forward);
+    } else {
+        world.frame(nullptr, nullptr);
     }
-
-    {
-        Section section(process_stats.scan_ingest, "scan_ingest");
-        std::unique_ptr<LODHashSet> new_scanned_chunk;
-        std::unique_ptr<ScanDelta> scan_delta;
-
-        bool dirty_scan = chunk_discoverer->get_scanned_chunks(new_scanned_chunk, scan_delta, scan_view);
-
-        if (dirty_scan) {
-            scan_received = true;
-            destroy_dirty = true;
-
-            {
-                Section apply(process_stats.scan_apply, "scan_apply");
-                visual_mesh_data.add_scan_chunk(std::move(new_scanned_chunk), *scan_delta);
-            }
-            if (direct_mesher) {
-                direct_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
-            } else {
-                gpu_mesher->send_chunk(visual_mesh_data.dirty_chunk, scan_view);
-            }
-        }
-    }
-
-    // Only a new scan or new results change what can be destroyed.
-    if (destroy_dirty) {
-        destroy_dirty = false;
-        {
-            Section section(process_stats.destroy_from_scan, "destroy_from_scan");
-            visual_mesh_data.update_destroy();
-        }
-        if (destroy_verify) {
-            int64_t mismatches = 0;
-            {
-                Section section(process_stats.destroy_verify, "destroy_verify");
-                mismatches = visual_mesh_data.verify_against_full();
-            }
-            if (mismatches > 0) {
-                ERR_PRINT(String("VoxelTerrain: incremental destroy check differs from the full recompute: ") + String::num_int64(mismatches) +
-                        " differences (frame " + String::num_int64(exec_time) + ").");
-            }
-        }
-    }
-
-    {
-        Section section(process_stats.mesher_dispatch, "mesher_dispatch");
-        if (direct_mesher) {
-            direct_mesher->process_queue();
-        } else {
-            gpu_mesher->process_queue();
-        }
-    }
-    _record_dispatch_times(direct_mesher ? direct_mesher->get_dispatch_times() : gpu_mesher->get_dispatch_times());
-
-    {
-        Section section(process_stats.mesher_collect, "mesher_collect");
-        const bool results = direct_mesher ? direct_mesher->get_results(visual_mesh_data) : gpu_mesher->get_results(visual_mesh_data);
-        destroy_dirty = destroy_dirty || results;
-    }
-
-    {
-        Section section(process_stats.destroy_chunks, "destroy_chunks");
-        visual_mesh_data.destroy_marked();
-    }
-
-    // After destruction (to_destroy_chunk holds copies of the outputs it moves), and never while the
-    // validator or auditor hold page ranges.
-    {
-        Section section(process_stats.compact, "compact");
-        if (direct_mesher && !validator && !auditor) {
-            direct_mesher->compact(visual_mesh_data);
-        }
-    }
-
-    // The stalled chunks hide the sub-cubes their replacements cover. After compaction: the rows are current.
-    {
-        Section section(process_stats.coverage, "coverage");
-        visual_mesh_data.push_coverage();
-    }
-
     // Tracing reads every captured frame (the GPU track).
-    if ((debug_gpu_profile && exec_time % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {
+    if ((debug_gpu_profile && world.frames() % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {
         if (!gpu_profiler) {
             gpu_profiler = memnew(GPUProfiler);
             gpu_profiler->set_recording(debug_gpu_profile_frames);
         }
         gpu_profiler->poll();
     }
-
-    if (auditor && auditor->step()) {
-        audit_report = godot_dict(auditor->get_report());
-        auditor->destroy();
-        auditor = nullptr;
-        VLOG(1, "VoxelTerrain: page audit: ", audit_report);
-    }
-
-    if (discovery_audit.running) {
-        _poll_discovery_audit();
-    }
-
-    if (validator && validator->step()) {
-        validation_report = godot_dict(validator->get_report());
-        _free_validator();
-        VLOG(1, "VoxelTerrain: validation report: ", validation_report);
-    }
-
-    exec_time++;
-
-    if (frames_until_loaded < 0 && is_load_complete()) {
-        frames_until_loaded = exec_time;
-        usec_until_loaded = now_usec() - start_usec;
-        VLOG(1, "VoxelTerrain: load complete after ", exec_time, " frames, ", usec_until_loaded / 1000.0, " ms");
-    }
 }
 
 bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
-    ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_validate needs pipeline_mode = GPU Direct.");
-    ERR_FAIL_COND_V_MSG(validator, false, "A validation is already running.");
-    std::vector<MeshValidator::Target> candidates;
-    for (const auto &kv : visual_mesh_data.loaded_chunk) {
-        if (kv.second.page >= 0) {
-            MeshValidator::Target t;
-            t.chunk_id = kv.first;
-            t.page = kv.second.page;
-            t.offset = kv.second.quad_offset;
-            t.count = kv.second.quad_count;
-            t.palette = kv.second.palette;
-            candidates.push_back(t);
-        }
-    }
-    ERR_FAIL_COND_V_MSG(candidates.empty(), false, "No non-empty loaded chunk to validate.");
-    // (hash map order is arbitrary but stable enough for a spread of LODs)
-    const std::vector<MeshValidator::Target> targets = MeshValidator::pick_targets(candidates, p_count);
-    validation_report = Dictionary();
-    validator_host = new GodotMeshHost();
-    validator = new MeshValidator();
-    validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), validator_host, ov_str(p_dump_dir), dual_contouring);
-    return true;
-}
-
-void VoxelTerrain::_free_validator() {
-    validator->destroy(); // its legacy mesher stops now (its meshes freed), the object goes on the render thread
-    validator = nullptr;
-    delete validator_host;
-    validator_host = nullptr;
+    return world.debug_validate(p_count, ov_str(p_dump_dir));
 }
 
 Dictionary VoxelTerrain::get_validation_report() const {
-    return validation_report;
+    return godot_dict(world.validation_report());
 }
 
 bool VoxelTerrain::debug_audit_pages() {
-    ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_pages needs pipeline_mode = GPU Direct.");
-    ERR_FAIL_COND_V_MSG(auditor, false, "An audit is already running.");
-    std::map<int, size_t> index_of_page;
-    std::vector<PageAuditor::PageInfo> pages;
-    for (const auto &kv : visual_mesh_data.loaded_chunk) {
-        if (kv.second.page < 0) {
-            continue;
-        }
-        if (index_of_page.count(kv.second.page) == 0) {
-            index_of_page[kv.second.page] = pages.size();
-            PageAuditor::PageInfo info;
-            info.page = kv.second.page;
-            pages.push_back(info);
-        }
-        pages[index_of_page[kv.second.page]].live.push_back({ kv.second.quad_offset, kv.second.quad_count, kv.first, kv.second.palette });
-    }
-    audit_report = Dictionary();
-    auditor = new PageAuditor();
-    auditor->start(direct_mesher->get_pool(), pages, chunk_param);
-    return true;
+    return world.debug_audit_pages();
 }
 
 Dictionary VoxelTerrain::get_audit_report() const {
-    return audit_report;
+    return godot_dict(world.audit_report());
 }
 
 bool VoxelTerrain::debug_audit_discovery() {
-    ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_discovery needs pipeline_mode = GPU Direct.");
-    ERR_FAIL_COND_V_MSG(discovery_audit.running, false, "A discovery audit is already running.");
-    ERR_FAIL_COND_V_MSG(!scan_received, false, "No scan received yet.");
-
-    const uint64_t t0 = now_usec();
-    const LODHashSet &scanned = *visual_mesh_data.scanned_chunk;
-    LODHashSet reference;
-    ChunkDiscoverer::ScanCounters counters;
-    chunk_discoverer->scan(scan_view, ChunkDiscoverer::CULL_NONE, reference, counters);
-
-    int64_t scanned_not_in_ref = 0;
-    for (const ChunkId &id : scanned) {
-        if (!reference.has(id)) {
-            scanned_not_in_ref++;
-        }
-    }
-    std::vector<ChunkId> culled;
-    for (const ChunkId &id : reference) {
-        if (!scanned.has(id)) {
-            culled.push_back(id);
-        }
-    }
-
-    // LOD difference across chunk faces (the skirt hides a jump of 1).
-    std::vector<int64_t> faces;
-    face_lod_jumps(scanned, chunk_discoverer->get_max_lod(), faces);
-    int max_jump = 0;
-    Dictionary jumps; // jump -> faces
-    for (int j = 0; j < (int)faces.size(); j++) {
-        if (faces[j] > 0) {
-            jumps[j] = faces[j];
-            max_jump = j;
-        }
-    }
-
-    discovery_audit = DiscoveryAudit();
-    discovery_audit.running = true;
-    discovery_audit.start_usec = t0;
-    discovery_audit.expected = (int64_t)culled.size();
-    Dictionary base;
-    base["camera_chunk"] = godot_str(scan_view.camera_chunk);
-    base["cull_mode"] = discovery_cull_mode;
-    base["reference"] = (int64_t)reference.size();
-    base["reference_nodes_visited"] = counters.nodes_visited;
-    base["scanned"] = (int64_t)scanned.size();
-    base["culled"] = (int64_t)culled.size();
-    base["scanned_not_in_reference"] = scanned_not_in_ref;
-    base["max_lod_jump"] = max_jump;
-    base["lod_jump_faces"] = jumps;
-    base["reference_ms"] = (now_usec() - t0) / 1000.0;
-    discovery_audit.base = base;
-    discovery_audit_report = Dictionary();
-
-    direct_mesher->audit_count_chunks(culled);
-    VLOG(1, "VoxelTerrain: discovery audit started: reference ", (int64_t)reference.size(), " chunks, scanned ",
-            (int64_t)scanned.size(), ", checking ", (int64_t)culled.size(), " culled chunks");
-    return true;
-}
-
-void VoxelTerrain::_poll_discovery_audit() {
-    std::vector<std::pair<ChunkId, uint32_t>> counts;
-    direct_mesher->take_audit_counts(counts);
-    for (const std::pair<ChunkId, uint32_t> &c : counts) {
-        discovery_audit.checked++;
-        if (c.second == 0) {
-            continue;
-        }
-        discovery_audit.misses++;
-        discovery_audit.miss_quads += c.second;
-        const int lod = ChunkMath::get_lod(c.first);
-        discovery_audit.misses_by_lod[lod] = int64_t(discovery_audit.misses_by_lod.get(lod, 0)) + 1;
-        if (discovery_audit.miss_examples.size() < 20) {
-            Dictionary e;
-            e["id"] = godot_str(c.first);
-            e["lod"] = lod;
-            e["quads"] = (int64_t)c.second;
-            e["distance_chunks"] = scan_view.camera_chunk.distance_to(c.first);
-            discovery_audit.miss_examples.push_back(e);
-        }
-    }
-    if (!direct_mesher->is_audit_idle()) {
-        return;
-    }
-    Dictionary r = discovery_audit.base.duplicate();
-    r["checked"] = discovery_audit.checked;
-    r["misses"] = discovery_audit.misses;
-    r["miss_quads"] = discovery_audit.miss_quads;
-    r["misses_by_lod"] = discovery_audit.misses_by_lod;
-    r["miss_examples"] = discovery_audit.miss_examples;
-    r["ms"] = (now_usec() - discovery_audit.start_usec) / 1000.0;
-    r["ok"] = discovery_audit.misses == 0 && discovery_audit.checked == discovery_audit.expected &&
-            int64_t(r["scanned_not_in_reference"]) == 0;
-    discovery_audit_report = r;
-    discovery_audit.running = false;
-    VLOG(1, "VoxelTerrain: discovery audit: ", r);
+    return world.debug_audit_discovery();
 }
 
 Dictionary VoxelTerrain::get_discovery_audit_report() const {
-    return discovery_audit_report;
+    return godot_dict(world.discovery_audit_report());
 }
 
 bool VoxelTerrain::is_load_complete() {
-    if (!started || !scan_received || !visual_mesh_data.dirty_chunk.is_empty()) {
-        return false;
+    if (camera == nullptr) {
+        return world.is_load_complete(nullptr);
     }
-    // The received scan must be the camera's current one: a camera moved (bench --above_ground) or turned
-    // after _ready is otherwise "loaded" with the first scan while the next one is still running.
-    // The view of the last set_camera (_process) carries the remembered views; a camera moved since is
-    // caught by its chunk, a turn since by the next frame.
-    if (camera != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(ov_f3(camera->get_global_position()), chunk_param) != scan_view.camera_chunk)) {
-        return false;
-    }
-    if (direct_mesher) {
-        return direct_mesher->is_idle();
-    }
-    return gpu_mesher->is_idle();
+    const Float3 pos = ov_f3(camera->get_global_position());
+    return world.is_load_complete(&pos);
 }
 
 bool VoxelTerrain::is_edit_settled() {
-    if (!started) {
-        return false;
-    }
-    if (direct_mesher) {
-        return direct_mesher->is_edit_settled();
-    }
-    return gpu_mesher->is_idle();
+    return world.is_edit_settled();
 }
 
 Dictionary VoxelTerrain::get_debug_stats() {
-    Dictionary d;
-    if (!started) {
-        return d;
-    }
-
-    d["pipeline_mode"] = (int)pipeline_mode;
-    d["terrain_mode"] = terrain_mode;
-    Dictionary origin;
-    origin["requested_voxel"] = godot_str(world_origin_request);
-    origin["voxel"] = godot_str(chunk_param.origin_voxel());
-    origin["chunk"] = godot_str(chunk_param.origin_chunk);
-    d["world_origin"] = origin;
-    if (sdf) {
-        Dictionary table = godot_dict(sdf->get_gpu_table()->get_stats());
-        const Dictionary walk = godot_dict(sdf->walk_gpu_stats());
-        if (!walk.is_empty()) {
-            table["walk_gpu"] = walk;
-        }
-        d["table"] = table;
-        if (const Climate::Table *climate = sdf->get_climate()) {
-            Dictionary c;
-            c["path"] = climate_path;
-            c["fields"] = int64_t(climate->fields.size());
-            c["biomes"] = int64_t(climate->biomes.size());
-            c["modulated"] = sdf->get_cascade()->modulation != nullptr;
-            d["climate"] = c;
-        }
-    }
-    d["frames"] = (int64_t)exec_time;
-    d["load_complete"] = is_load_complete();
-    d["frames_until_loaded"] = frames_until_loaded;
-    d["ms_until_loaded"] = usec_until_loaded < 0 ? -1.0 : usec_until_loaded / 1000.0;
-
-    int64_t live_triangles = 0;
-    int64_t drawn_triangles = 0;
-    int64_t non_empty_chunks = 0;
-    for (const auto &kv : visual_mesh_data.loaded_chunk) {
-        live_triangles += kv.second.triangle_count;
-        drawn_triangles += kv.second.drawn_triangles;
-        non_empty_chunks += kv.second.triangle_count > 0 ? 1 : 0;
-    }
-
-    Dictionary chunks;
-    chunks["scanned"] = (int64_t)visual_mesh_data.scanned_chunk->size();
-    chunks["loaded"] = (int64_t)visual_mesh_data.loaded_chunk.size();
-    chunks["loaded_non_empty"] = non_empty_chunks;
-    chunks["pending"] = (int64_t)visual_mesh_data.dirty_chunk.size();
-    // Settle check: once the load is complete both must be 0 (a scanned chunk not loaded is a hole).
-    int64_t loaded_not_scanned = 0;
-    int64_t scanned_not_loaded = 0;
-    for (const auto &kv : visual_mesh_data.loaded_chunk) {
-        loaded_not_scanned += visual_mesh_data.scanned_chunk->has(kv.first) ? 0 : 1;
-    }
-    for (const ChunkId &id : *visual_mesh_data.scanned_chunk) {
-        scanned_not_loaded += visual_mesh_data.loaded_chunk.has(id) ? 0 : 1;
-    }
-    chunks["loaded_not_scanned"] = loaded_not_scanned;
-    chunks["scanned_not_loaded"] = scanned_not_loaded;
-    chunks["live_triangles"] = live_triangles;
-    chunks["drawn_triangles"] = drawn_triangles;
-    d["chunks"] = chunks;
-
-    Dictionary process;
-    for (const auto &[name, stat] : process_stats.sections()) {
-        process[name] = godot_dict(stat->to_value());
-    }
-    d["process"] = process;
-
-    const VoxelState::Stats &vs = visual_mesh_data.stats;
-    Dictionary destroy;
-    destroy["leaving"] = (int64_t)visual_mesh_data.leaving.size();
-    destroy["leaving_max"] = vs.leaving_max;
-    destroy["stalled"] = (int64_t)visual_mesh_data.stalled.size();
-    destroy["rescans"] = vs.rescans;
-    destroy["rescan_reanchored"] = vs.rescan_reanchored;
-    destroy["rescan_ms_total"] = vs.rescan_usec / 1000.0;
-    destroy["verify"] = destroy_verify;
-    destroy["verify_checks"] = vs.verify_checks;
-    destroy["verify_mismatches"] = vs.verify_mismatches;
-    destroy["delta_mismatches"] = vs.delta_mismatches;
-    destroy["octree_violations"] = vs.octree_violations;
-    destroy["coverage_hidden_subcubes"] = visual_mesh_data.hidden_subcubes(); // now
-    destroy["coverage_written"] = vs.coverage_written;
-    destroy["coverage_written_max"] = vs.coverage_written_max;
-    // Frames a stalled parent stays drawn over its children (first stalled sub-cube to the last cleared), cumulative.
-    destroy["handoff_frames"] = godot_dict(to_value(vs.handoff_frames));
-    d["destroy"] = destroy;
-
-    if (gpu_profiler) {
+    Dictionary d = godot_dict(world.debug_stats());
+    if (gpu_profiler && world.is_started()) {
         d["gpu_breakdown"] = gpu_profiler->get_breakdown();
     }
-    d["chunk_rids_alive"] = DebugLog::chunk_rids_created.load() - DebugLog::chunk_rids_freed.load();
-    d["discoverer"] = godot_dict(chunk_discoverer->get_stats());
-    d["mesher"] = godot_dict(direct_mesher ? direct_mesher->get_stats() : gpu_mesher->get_stats());
-
-    Dictionary edits;
-    edits["edits"] = edit_stats.edits;
-    edits["remesh_total"] = edit_stats.remesh_total;
-    edits["remesh_last"] = edit_stats.remesh_last;
-    edits["apply"] = godot_dict(edit_stats.apply.to_value());
-    d["edits"] = edits;
-
     return d;
 }
 
 void VoxelTerrain::_teardown() {
-    if (!started) {
-        return;
-    }
-    started = false;
-
-    // Debug tools first: the validator owns a legacy mesher, and both hold pages of the direct one.
-    // A run may be in flight: they delete themselves once their readbacks have arrived.
-    if (validator) {
-        _free_validator();
-    }
-    if (auditor) {
-        auditor->destroy();
-        auditor = nullptr;
-    }
     if (gpu_profiler) {
         RDUtils::delete_on_render_thread(gpu_profiler);
         gpu_profiler = nullptr;
     }
-
-    chunk_discoverer->stop();
-    memdelete(chunk_discoverer);
-    chunk_discoverer = nullptr;
-    sdf->stop_field_gpu(); // its thread frees its device; a walk still computing falls back to the CPU's field
-
-    // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
-    for (auto &kv : visual_mesh_data.loaded_chunk) {
-        kv.second.free();
-    }
-    visual_mesh_data.loaded_chunk.clear();
-
-    if (direct_mesher) {
-        direct_mesher->destroy(); // deletes itself on the render thread
-        direct_mesher = nullptr;
+    world.stop();
+    if (page_host) {
         page_host->destroy(); // after the mesher's teardown, on the render thread too
         page_host = nullptr;
     }
-    if (gpu_mesher) {
-        gpu_mesher->stop();
-        delete gpu_mesher;
-        gpu_mesher = nullptr;
-        delete mesh_host;
-        mesh_host = nullptr;
+    delete mesh_host;
+    mesh_host = nullptr;
+    if (main_device) {
+        // Last on the render thread: everything posted before still uses it.
+        main_device->post([device = main_device]() { delete device; });
+        main_device = nullptr;
     }
-    // Last on the render thread: everything posted before still uses it.
-    main_device->post([device = main_device]() { delete device; });
-    main_device = nullptr;
-
-    VLOG(1, "VoxelTerrain: teardown, chunk instances created=", DebugLog::chunk_rids_created.load(),
-            " freed=", DebugLog::chunk_rids_freed.load());
-    visual_mesh_data.clear();
 }
 
 void VoxelTerrain::_exit_tree() {
@@ -1508,8 +912,4 @@ void VoxelTerrain::_exit_tree() {
 
 VoxelTerrain::~VoxelTerrain() {
     _teardown();
-    if (sdf) {
-        memdelete(sdf);
-        sdf = nullptr;
-    }
 }

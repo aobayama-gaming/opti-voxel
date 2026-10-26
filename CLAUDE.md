@@ -8,10 +8,14 @@ iterate past a warning, never to commit one.
 Layout: one engine, two adapters. `src/` is the engine, engine-free as a whole (`src/core_files.txt` lists every file,
 never shrunk): the GPU work goes through `ov::gpu::Device` (`gpu_device.hpp`: buffers, 2D textures, compute pipelines
 from GLSL, readbacks, `post` onto the device's thread) and the drawing through the hosts the adapter implements
-(`PageHost`: the quad pages; `MeshHost`: the legacy meshes). `adapter/godot/` is the GDExtension's Godot-only sources
-(`src/`: the node, registration, `RDDevice` on a RenderingDevice, `GodotPageHost` with the page shader,
-`GodotMeshHost`, spikes, reports) and the Godot project (`project/`: player.gd, scenes, bench); `adapter/dawn/` is the
-native WebGPU adapter (CMake, `DawnDevice`, `adapter/dawn/README.md`). Adapters stay thin: engine logic goes in `src/`,
+(`PageHost`: the quad pages; `MeshHost`: the legacy meshes). The frame loop is `ov::World` (`world.hpp`: the settings,
+`start` / `frame(camera)` / `stop`, edits, stats, the debug audits); the checks and reports are core too (`FrameCheck`,
+`CascadeCheck`, `QuadPoolCheck` on any device, `CascadeReport`, `ClimateReport`). `adapter/godot/` is the GDExtension's
+Godot-only sources (`src/`: `VoxelTerrain`, a node that maps its properties onto `ov::World::Settings` and its camera
+onto `frame`; registration; `RDDevice` on a RenderingDevice; `GodotPageHost` with the page shader; `GodotMeshHost`;
+thin spike and report nodes over the core checks) and the Godot project (`project/`: player.gd, scenes, bench);
+`adapter/dawn/` is the native WebGPU adapter (CMake, `DawnDevice`, `ov_dawn --check | --frame-check | --cascade-check`,
+`adapter/dawn/README.md`). Adapters stay thin: engine logic goes in `src/`,
 where both get it, never into one adapter.
 
 This file holds the rules. The design of each subsystem lives in `docs/` (index below): read the doc of

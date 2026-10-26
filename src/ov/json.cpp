@@ -1,6 +1,8 @@
 #include "ov/json.hpp"
 
+#include <cmath>
 #include <cstdlib>
+#include <string>
 
 namespace ov {
 
@@ -289,6 +291,89 @@ private:
 };
 
 } // namespace
+
+namespace {
+
+void write_string(const str &p_s, str &r_out) {
+    r_out += '"';
+    for (const char c : p_s) {
+        switch (c) {
+            case '"':
+                r_out += "\\\"";
+                break;
+            case '\\':
+                r_out += "\\\\";
+                break;
+            case '\n':
+                r_out += "\\n";
+                break;
+            case '\r':
+                r_out += "\\r";
+                break;
+            case '\t':
+                r_out += "\\t";
+                break;
+            default:
+                if (uint8_t(c) < 0x20) {
+                    r_out += format("\\u%04x", int(c));
+                } else {
+                    r_out += c;
+                }
+        }
+    }
+    r_out += '"';
+}
+
+void write_value(const Value &p_v, str &r_out) {
+    switch (p_v.get_type()) {
+        case Value::BOOL:
+            r_out += p_v.as_bool() ? "true" : "false";
+            break;
+        case Value::INT:
+            r_out += std::to_string(p_v.as_int());
+            break;
+        case Value::FLOAT:
+            r_out += std::isfinite(p_v.as_double()) ? detail::num_text(p_v.as_double()) : str("null");
+            break;
+        case Value::STRING:
+            write_string(p_v.as_str(), r_out);
+            break;
+        case Value::ARRAY: {
+            r_out += '[';
+            bool first = true;
+            for (const Value &e : p_v.elements()) {
+                r_out += first ? "" : ",";
+                first = false;
+                write_value(e, r_out);
+            }
+            r_out += ']';
+            break;
+        }
+        case Value::OBJECT: {
+            r_out += '{';
+            bool first = true;
+            for (const std::pair<str, Value> &e : p_v.entries()) {
+                r_out += first ? "" : ",";
+                first = false;
+                write_string(e.first, r_out);
+                r_out += ':';
+                write_value(e.second, r_out);
+            }
+            r_out += '}';
+            break;
+        }
+        default:
+            r_out += "null";
+    }
+}
+
+} // namespace
+
+str to_json(const Value &p_value) {
+    str out;
+    write_value(p_value, out);
+    return out;
+}
 
 Value parse_json(const str &p_text, str &r_error) {
     JsonParser parser(p_text);

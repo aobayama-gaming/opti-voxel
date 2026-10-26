@@ -92,6 +92,11 @@ template <typename T>
 inline str format_one(const char *p_fmt, const T &p_head, const char *&p_next) {
     // String literals arrive as char[N] under the const T&: classify through decay_t, never on T.
     using D = std::decay_t<T>;
+    // Every argument is a number, a bool, an enum or text: anything else (an engine type) is a compile error, not an
+    // empty rendering at run time.
+    static_assert(std::is_arithmetic_v<D> || std::is_enum_v<D> || std::is_same_v<D, str> || std::is_same_v<D, std::string_view> ||
+                    (std::is_pointer_v<D> && std::is_same_v<std::remove_cv_t<std::remove_pointer_t<D>>, char>),
+            "ov::format: an argument must be a number, a bool, an enum or text");
     const char *s = p_fmt + 1; // past '%'
     while (*s != '\0' && std::strchr("-+ #0", *s) != nullptr) {
         s++; // flags
