@@ -28,6 +28,7 @@ struct ViewerOptions {
     float pitch_deg = -15.0f;
     float yaw_deg = 0.0f;
     int view = 0; // 0 shaded, 1 normals, 2 LOD
+    float fly_speed = 0.0f; // metres per second straight ahead, a scripted fly on top of the controls
     DawnUpscaler::Settings upscale; // FSR or pixelate > 1: through DawnUpscaler
 };
 
