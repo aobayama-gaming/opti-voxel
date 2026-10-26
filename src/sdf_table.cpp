@@ -787,8 +787,9 @@ void SDFTable::build_table(int p_lod_count) {
     // Appended in this order: the GDScript side names the indices (CAPSULE_TYPE). The gallery's types only with it.
     DefLibrary lib;
     Types types;
-    lib.add(make_sphere_type());
+    const int sphere = lib.add(make_sphere_type());
     types.capsule = lib.add(make_capsule_type());
+    OV_ERR_FAIL_COND(sphere != SPHERE_TYPE || types.capsule != CAPSULE_TYPE);
     types.rock = lib.add(make_rock_type(ExactNoise::lattice_k(8.0, vs), ROCK_SEED));
     const TreeTypes tree_types = add_tree_types(lib, vs);
     if (scene == Scene::SHAPES) {

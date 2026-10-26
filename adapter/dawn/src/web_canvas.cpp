@@ -11,7 +11,8 @@ namespace {
 constexpr int MAX_KEYS = 32;
 
 // Installs the listeners: Module.ovInput holds the keys held (as X keysyms, window.hpp's Key), those pressed, the
-// pointer's moves while locked and the wheel steps since the last take. False without the canvas.
+// pointer's moves and buttons (MouseButton bits) while locked and the wheel steps since the last take. False without the
+// canvas.
 // clang-format off: the EM_JS bodies are JavaScript.
 EM_JS(int, ov_canvas_init, (const char *p_title), {
     const canvas = document.getElementById('canvas');
@@ -19,7 +20,7 @@ EM_JS(int, ov_canvas_init, (const char *p_title), {
         return 0;
     }
     document.title = UTF8ToString(p_title);
-    const input = { held: new Set(), pressed: new Set(), dx: 0, dy: 0, wheel: 0 };
+    const input = { held: new Set(), pressed: new Set(), dx: 0, dy: 0, wheel: 0, buttons: 0, clicks: 0 };
     Module.ovInput = input;
     const keysym = (e) => {
         const c = e.code;
@@ -40,6 +41,17 @@ EM_JS(int, ov_canvas_init, (const char *p_title), {
     window.addEventListener('keyup', (e) => input.held.delete(keysym(e)));
     window.addEventListener('blur', () => input.held.clear());
     canvas.addEventListener('click', () => { if (!locked()) canvas.requestPointerLock(); });
+    const bit = (e) => e.button === 0 ? 1 : e.button === 2 ? 2 : 0;
+    // The click that locks the pointer is not one (X11Window's rule).
+    document.addEventListener('mousedown', (e) => {
+        if (locked()) {
+            input.buttons |= bit(e);
+            input.clicks |= bit(e);
+        }
+    });
+    document.addEventListener('mouseup', (e) => { input.buttons &= ~bit(e); });
+    document.addEventListener('pointerlockchange', () => { if (!locked()) input.buttons = 0; });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('mousemove', (e) => {
         if (locked()) {
             input.dx += e.movementX;
@@ -56,9 +68,10 @@ EM_JS(int, ov_canvas_init, (const char *p_title), {
 // Resolves on the next animation frame: the browser shows the frame submitted before and runs the GPU callbacks.
 EM_ASYNC_JS(void, ov_next_frame, (), { await new Promise((resolve) => requestAnimationFrame(() => resolve())); });
 
-// The canvas's backing size follows its CSS box; then the input since the last take. Returns the number of held keys
-// written to p_held (at most MAX_KEYS), pressed ones into p_pressed (their count in *p_pressed_count).
-EM_JS(int, ov_canvas_take, (int *p_size, float *p_mouse, int *p_wheel, int *p_held, int *p_pressed, int *p_pressed_count, int p_max), {
+// The canvas's backing size follows its CSS box; then the input since the last take (p_buttons: held, pressed). Returns
+// the number of held keys written to p_held (at most MAX_KEYS), pressed ones into p_pressed (their count in
+// *p_pressed_count).
+EM_JS(int, ov_canvas_take, (int *p_size, float *p_mouse, int *p_wheel, int *p_buttons, int *p_held, int *p_pressed, int *p_pressed_count, int p_max), {
     const canvas = document.getElementById('canvas');
     const w = Math.max(1, Math.round(canvas.clientWidth));
     const h = Math.max(1, Math.round(canvas.clientHeight));
@@ -72,7 +85,9 @@ EM_JS(int, ov_canvas_take, (int *p_size, float *p_mouse, int *p_wheel, int *p_he
     HEAPF32[p_mouse >> 2] = input.dx;
     HEAPF32[(p_mouse >> 2) + 1] = input.dy;
     HEAP32[p_wheel >> 2] = input.wheel;
-    input.dx = input.dy = input.wheel = 0;
+    HEAP32[p_buttons >> 2] = input.buttons;
+    HEAP32[(p_buttons >> 2) + 1] = input.clicks;
+    input.dx = input.dy = input.wheel = input.clicks = 0;
     let n = 0;
     for (const k of input.pressed) {
         if (n < p_max) HEAP32[(p_pressed >> 2) + n++] = k;
@@ -104,13 +119,16 @@ bool WebCanvas::poll() {
     float mouse[2] = {};
     int held_keys[MAX_KEYS] = {};
     int pressed_keys[MAX_KEYS] = {};
+    int mouse_buttons[2] = {};
     int pressed_count = 0;
-    const int held_count = ov_canvas_take(size, mouse, &wheel, held_keys, pressed_keys, &pressed_count, MAX_KEYS);
+    const int held_count = ov_canvas_take(size, mouse, &wheel, mouse_buttons, held_keys, pressed_keys, &pressed_count, MAX_KEYS);
     resized = size[0] != width || size[1] != height;
     width = size[0];
     height = size[1];
     mouse_dx = mouse[0];
     mouse_dy = mouse[1];
+    buttons = unsigned(mouse_buttons[0]);
+    button_presses = unsigned(mouse_buttons[1]);
     keys.clear();
     keys.insert(held_keys, held_keys + held_count);
     presses.clear();

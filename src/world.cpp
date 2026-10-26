@@ -517,12 +517,15 @@ double World::load_radius() const {
 }
 
 double World::sdf_at(const double p_render_pos[3]) const {
-    const VoxelPos origin = config.chunk_param.origin_voxel();
+    WorldPos p;
+    p.voxel = voxel_at(p_render_pos); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
+    return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident
+}
+
+VoxelPos World::voxel_at(const double p_render_pos[3]) const {
     const double vs = double(config.chunk_param.voxel_size);
     const double offset[3] = { p_render_pos[0] / vs, p_render_pos[1] / vs, p_render_pos[2] / vs };
-    WorldPos p = WorldCoord::offset_pos(origin, offset);
-    p.frac = Float3(); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
-    return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident
+    return WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset).voxel;
 }
 
 void World::tangent_position(double p_u_m, double p_v_m, double r_render_pos[3]) const {

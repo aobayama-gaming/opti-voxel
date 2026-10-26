@@ -10,6 +10,7 @@
 #include "x11_window.hpp"
 #endif
 
+#include "dig_tool.hpp"
 #include "world.hpp"
 
 #include "ov/files.hpp"
@@ -41,14 +42,6 @@ constexpr float FLY_RATE = 1.0f;
 constexpr float ALTITUDE_TAU = 0.2f;
 constexpr float PITCH_MAX = 1.55f; // short of straight up / down: the view basis needs a horizontal right
 constexpr int VIEW_COUNT = 3; // shaded, normals, LOD
-
-Float3 cross(const Float3 &a, const Float3 &b) {
-    return Float3{ a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
-}
-
-float dot(const Float3 &a, const Float3 &b) {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
 
 // Yaw 0 looks along -z (Godot's), pitch up positive.
 struct FlyCamera {
@@ -240,6 +233,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     camera.pitch = p_options.pitch_deg * 3.14159265f / 180.0f;
     camera.yaw = p_options.yaw_deg * 3.14159265f / 180.0f;
     place_above_ground(world, camera, p_options.above_ground);
+    DigTool dig(world);
     OV_LOG(LOG_INFO, "Viewer: camera at %s m", ov::format("%.1f, %.1f, %.1f", camera.pos.x, camera.pos.y, camera.pos.z));
 
     wgpu::Texture offscreen;
@@ -286,10 +280,19 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
                 }
             }
             // The Godot player's controls (player.gd): mouse look while captured, WASD / arrows along the yaw, space up,
-            // shift down, the wheel scales the base speed, V cycles the views (1-3 pick one).
+            // shift down, the wheel scales the base speed, V cycles the views (1-3 pick one), right click digs a hole,
+            // the left button held sprays.
             camera.yaw -= window.mouse_dx * MOUSE_SENSITIVITY;
             camera.pitch = std::fmax(-PITCH_MAX, std::fmin(PITCH_MAX, camera.pitch - window.mouse_dy * MOUSE_SENSITIVITY));
             base_speed *= std::pow(1.2f, float(window.wheel));
+            if (window.button_pressed(MOUSE_RIGHT)) {
+                dig.dig(camera.pos, camera.forward());
+            }
+            if (window.button_held(MOUSE_LEFT)) {
+                dig.spray(camera.pos, camera.forward(), dt);
+            } else {
+                dig.release();
+            }
             if (window.pressed(KEY_V)) {
                 view = (view + 1) % VIEW_COUNT;
                 world.set_debug_view(view);
@@ -390,8 +393,8 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
             const float second = std::chrono::duration<float>(now - last_print).count();
             if (second > 1.0f) {
                 const double n = double(second_frames);
-                std::printf("fps %.0f  worst %.1f ms (world %.1f draw %.1f present %.1f)  per frame: world %.1f draw %.1f present %.1f ms  pages drawn %d  pending chunks %lld  camera %.0f %.0f %.0f\n",
-                        n / double(second), double(worst_ms), worst_split[0], worst_split[1], worst_split[2], world_ms / n, draw_ms / n, present_ms / n, pages.drawn_pages(), (long long)world.pending_chunk_count(),
+                std::printf("fps %.0f  worst %.1f ms (world %.1f draw %.1f present %.1f)  per frame: world %.1f draw %.1f present %.1f ms  pages drawn %d  pending chunks %lld  edits %d  camera %.0f %.0f %.0f\n",
+                        n / double(second), double(worst_ms), worst_split[0], worst_split[1], worst_split[2], world_ms / n, draw_ms / n, present_ms / n, pages.drawn_pages(), (long long)world.pending_chunk_count(), dig.edit_count(),
                         double(camera.pos.x), double(camera.pos.y), double(camera.pos.z));
                 std::fflush(stdout);
                 last_print = now;

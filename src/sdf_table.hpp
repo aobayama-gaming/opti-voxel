@@ -32,6 +32,10 @@ public:
     // The shapes gallery's centre (metres, x and z): the shapes_scene spawn.
     static constexpr double SHAPES_X = -52.0;
     static constexpr double SHAPES_Z = -95.0;
+    // The library's first types, the ones edits place (player.gd's SPHERE_TYPE / CAPSULE_TYPE, DigTool): a sphere
+    // {radius}, a capsule {height along local y, radius}, in voxels.
+    static constexpr int SPHERE_TYPE = 0;
+    static constexpr int CAPSULE_TYPE = 1;
 
     // What build_table places on the ground. PLACED: the scatter and the forest (none by default); SHAPES: the shapes
     // gallery first (hard unions, subtractions and intersections, sharp creases for dual contouring: a ladder of

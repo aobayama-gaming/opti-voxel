@@ -14,6 +14,11 @@ Display *xdisplay(void *p_display) {
     return static_cast<Display *>(p_display);
 }
 
+unsigned mouse_bit(unsigned p_xbutton) {
+    return p_xbutton == Button1 ? unsigned(MOUSE_LEFT) : p_xbutton == Button3 ? unsigned(MOUSE_RIGHT)
+                                                                              : 0u;
+}
+
 } // namespace
 
 X11Window::~X11Window() {
@@ -62,6 +67,7 @@ void X11Window::set_capture(bool p_capture) {
         XUngrabPointer(d, CurrentTime);
         XUndefineCursor(d, window);
         captured = false;
+        buttons = 0;
     }
 }
 
@@ -79,6 +85,7 @@ bool X11Window::poll() {
     mouse_dy = 0.0f;
     wheel = 0;
     presses.clear();
+    button_presses = 0;
     bool open = true;
     bool warp = false;
     while (XPending(d) > 0) {
@@ -103,9 +110,15 @@ bool X11Window::poll() {
             case ButtonPress:
                 wheel += event.xbutton.button == Button4 ? 1 : event.xbutton.button == Button5 ? -1
                                                                                                : 0;
-                if (event.xbutton.button == Button1 && !captured) {
+                if (captured) {
+                    buttons |= mouse_bit(event.xbutton.button);
+                    button_presses |= mouse_bit(event.xbutton.button);
+                } else if (event.xbutton.button == Button1) {
                     set_capture(true);
                 }
+                break;
+            case ButtonRelease:
+                buttons &= ~mouse_bit(event.xbutton.button);
                 break;
             case MotionNotify:
                 // The warp back to the centre comes back as a move to the centre: a zero delta.

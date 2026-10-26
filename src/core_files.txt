@@ -137,6 +137,8 @@ src/tree_archetype.cpp
 src/tree_archetype.hpp
 src/world.hpp
 src/world.cpp
+src/dig_tool.hpp
+src/dig_tool.cpp
 src/frame_check.hpp
 src/frame_check.cpp
 src/cascade_check.hpp

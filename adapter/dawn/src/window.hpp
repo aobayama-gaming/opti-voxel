@@ -1,7 +1,7 @@
 #pragma once
 
-// The viewer's window: a Dawn surface, the keys held and, while the mouse is captured, its moves. X11Window on Linux,
-// WebCanvas in a browser.
+// The viewer's window: a Dawn surface, the keys held and, while the mouse is captured, its moves and buttons. X11Window
+// on Linux, WebCanvas in a browser.
 
 #include <webgpu/webgpu_cpp.h>
 
@@ -26,6 +26,12 @@ enum Key : unsigned long {
     KEY_SHIFT_R = 0xffe2,
 };
 
+// The mouse buttons the viewer reads (bits of Window's button masks).
+enum MouseButton : unsigned {
+    MOUSE_LEFT = 1,
+    MOUSE_RIGHT = 2,
+};
+
 class Window {
 public:
     virtual ~Window() = default;
@@ -43,6 +49,10 @@ public:
     bool held(unsigned long p_key) const { return keys.count(p_key) != 0; }
     // A key pressed since the last poll.
     bool pressed(unsigned long p_key) const { return presses.count(p_key) != 0; }
+    // A mouse button held (or pressed and released) / pressed since the last poll, only while captured: the click that
+    // captures is not one.
+    bool button_held(MouseButton p_button) const { return ((buttons | button_presses) & p_button) != 0; }
+    bool button_pressed(MouseButton p_button) const { return (button_presses & p_button) != 0; }
 
     int width = 0;
     int height = 0;
@@ -54,6 +64,8 @@ public:
 protected:
     std::set<unsigned long> keys;
     std::set<unsigned long> presses;
+    unsigned buttons = 0; // MouseButton bits
+    unsigned button_presses = 0;
 };
 
 } // namespace ov::dawn
