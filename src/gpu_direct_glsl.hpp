@@ -18,10 +18,15 @@
 
 inline constexpr const char GLSL_DIRECT_BINDINGS[] = R"glsl(
 
-// Per chunk of the batch: x = quad count, y = emit cursor, z = base slot, w = flags
+// Per chunk of the batch, 4 words: quad count, emit cursor, base slot, flags. A flat uint array: WGSL atomics take a
+// whole word, not a vector's component (Tint fails on atomicAdd(v.x)).
 #define CHUNK_FLAG_OVERFLOW 1u
+const uint DIR_QUADS = 0u;
+const uint DIR_CURSOR = 1u;
+const uint DIR_BASE = 2u;
+const uint DIR_FLAGS = 3u;
 layout(set = 0, binding = 0, std430) restrict buffer ChunkDirectory {
-    uvec4 chunk_dir[];
+    uint chunk_dir[];
 };
 
 layout(set = 0, binding = 1, std430) restrict readonly buffer InputChunk {
@@ -171,7 +176,10 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
         local_vertex /= float(active_edge_count);
         vec3 chunk_vertex = local_vertex + vec3(cell_chunk_coordinate);
         vec3 surface_normal = vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
-        if (any(isnan(chunk_vertex)) || any(isinf(chunk_vertex)) || any(isnan(surface_normal))) {
+        // NaN or infinity: every exponent bit set (not isnan / isinf: WGSL has no NaN, Tint refuses them).
+        uvec3 vertex_exponent = floatBitsToUint(chunk_vertex) & 0x7F800000u;
+        uvec3 normal_exponent = floatBitsToUint(surface_normal) & 0x7F800000u;
+        if (any(equal(vertex_exponent, uvec3(0x7F800000u))) || any(equal(normal_exponent, uvec3(0x7F800000u)))) {
             atomicAdd(status[STATUS_NAN_VERTICES], 1u);
         } else {
             // A chunk on the ground block (the base palette alone, or no room in the pool) takes the base's entries: none
@@ -200,7 +208,7 @@ if (quads_here > 0u) {
 barrier();
 // One global atomic per workgroup (all 8x8x8 invocations of a workgroup belong to the same chunk).
 if (gl_LocalInvocationIndex == 0u && wg_quad_count > 0u) {
-    atomicAdd(chunk_dir[chunk_idx].x, wg_quad_count);
+    atomicAdd(chunk_dir[4u * chunk_idx + DIR_QUADS], wg_quad_count);
 }
 
 )glsl";
@@ -212,11 +220,11 @@ if (gl_GlobalInvocationID == uvec3(0)) {
     uint fill = 0u;
     uint total = 0u;
     for (uint i = 0u; i < batch.batch_count; i++) {
-        uint count = chunk_dir[i].x;
-        chunk_dir[i].y = 0u;
+        uint count = chunk_dir[4u * i + DIR_QUADS];
+        chunk_dir[4u * i + DIR_CURSOR] = 0u;
         if (count == 0u) {
-            chunk_dir[i].z = 0u;
-            chunk_dir[i].w = 0u;
+            chunk_dir[4u * i + DIR_BASE] = 0u;
+            chunk_dir[4u * i + DIR_FLAGS] = 0u;
             continue;
         }
         // Chunks start on a group: each one is whole texture rows, so it can be moved or zeroed
@@ -227,13 +235,13 @@ if (gl_GlobalInvocationID == uvec3(0)) {
             fill = 0u;
         }
         if (count > batch.page_capacity || page >= batch.page_count) {
-            chunk_dir[i].z = 0u;
-            chunk_dir[i].w = CHUNK_FLAG_OVERFLOW;
+            chunk_dir[4u * i + DIR_BASE] = 0u;
+            chunk_dir[4u * i + DIR_FLAGS] = CHUNK_FLAG_OVERFLOW;
             status[STATUS_OVERFLOW_CHUNKS] += 1u;
             continue;
         }
-        chunk_dir[i].z = page * batch.page_capacity + fill;
-        chunk_dir[i].w = 0u;
+        chunk_dir[4u * i + DIR_BASE] = page * batch.page_capacity + fill;
+        chunk_dir[4u * i + DIR_FLAGS] = 0u;
         fill += padded;
         total += count;
         status[STATUS_PAGE_FILL + page] = fill / QUAD_GROUP;
@@ -253,7 +261,7 @@ uint flat_idx = get_flat_index_z(gl_GlobalInvocationID);
 // The batch's new palettes, a texel per thread (the headers below name their blocks; the page shader reads them
 // after this pass).
 write_palette_texel(flat_idx);
-uvec4 dir = chunk_dir[chunk_idx];
+uvec4 dir = uvec4(chunk_dir[4u * chunk_idx], chunk_dir[4u * chunk_idx + 1u], chunk_dir[4u * chunk_idx + 2u], chunk_dir[4u * chunk_idx + 3u]);
 uvec4 v0 = cell_vertex[flat_idx];
 
 if (v0.w > 0u && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
@@ -288,7 +296,7 @@ if (v0.w > 0u && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_
         if (!origin_solid) { // negative winding: swap b and c
             uvec4 tmp = qb; qb = qc; qc = tmp;
         }
-        uint slot = dir.z + atomicAdd(chunk_dir[chunk_idx].y, 1u);
+        uint slot = dir.z + atomicAdd(chunk_dir[4u * chunk_idx + DIR_CURSOR], 1u);
         // The chunk starts on a group (reserve pass), so its slots cover each of its groups' first
         // slot exactly once.
         if (slot % QUAD_GROUP == 0u) {

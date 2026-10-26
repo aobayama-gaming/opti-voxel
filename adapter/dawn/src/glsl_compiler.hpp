@@ -23,6 +23,12 @@ struct CompiledShader {
     std::string error; // empty on success
 };
 
-CompiledShader compile_compute_glsl(const std::string &p_source);
+enum class ShaderStage {
+    COMPUTE,
+    VERTEX,
+    FRAGMENT,
+};
+
+CompiledShader compile_glsl(const std::string &p_source, ShaderStage p_stage = ShaderStage::COMPUTE);
 
 } // namespace ov::dawn

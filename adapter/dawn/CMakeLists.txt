@@ -27,10 +27,14 @@ if(NOT EXISTS "${OV_DAWN_DIR}/include/dawn/webgpu_cpp.h")
     return()
 endif()
 
-add_executable(ov_dawn src/main.cpp src/dawn_context.cpp src/dawn_device.cpp src/glsl_compiler.cpp)
+add_executable(ov_dawn src/main.cpp src/dawn_context.cpp src/dawn_device.cpp src/dawn_page_host.cpp src/glsl_compiler.cpp src/viewer.cpp
+        src/x11_window.cpp)
 set_target_properties(ov_dawn PROPERTIES CXX_STANDARD 20) # webgpu_cpp.h needs C++20; the core stays C++17 like the Godot build
 target_compile_options(ov_dawn PRIVATE -Wall -Wextra -Werror)
+# The viewer includes the World's headers, whose std::atomic_load / atomic_store of a shared_ptr (the instance snapshot)
+# C++20 deprecates; the core is C++17, where they are the way.
+set_source_files_properties(src/viewer.cpp PROPERTIES COMPILE_OPTIONS -Wno-deprecated-declarations)
 target_include_directories(ov_dawn SYSTEM PRIVATE "${OV_DAWN_DIR}/include" "${OV_GLSLANG_DIR}/include")
 set(OV_GLSLANG_LIBS glslang glslang-default-resource-limits MachineIndependent GenericCodeGen OSDependent SPIRV)
 list(TRANSFORM OV_GLSLANG_LIBS REPLACE "(.+)" "${OV_GLSLANG_DIR}/lib64/lib\\1.a")
-target_link_libraries(ov_dawn PRIVATE ov_core "${OV_DAWN_DIR}/lib64/libwebgpu_dawn.a" ${OV_GLSLANG_LIBS} -l:libvulkan.so.1 dl pthread)
+target_link_libraries(ov_dawn PRIVATE ov_core "${OV_DAWN_DIR}/lib64/libwebgpu_dawn.a" ${OV_GLSLANG_LIBS} -l:libvulkan.so.1 X11 dl pthread)
