@@ -32,31 +32,14 @@ var smoothed_altitude := 0.0  # 0: not read yet
 const ALTITUDE_TAU := 0.2  # seconds: the altitude reading's time constant, in log space
 const FLY_RATE := 1.0  # altitudes per second
 
-# ---- Archetype dig tools (the instance table: every terrain) ---------------------------------------
-# Right click digs a hole: a SMOOTH_SUBTRACT capsule starting where the view hits the ground (ray-march
-# of get_sdf_at) and running dig_length metres deeper along the view. Left click (held): a tube carried
-# by the camera, from 0.5 m ahead to drag_length metres past the surface the view hits at the press
-# (capped at DRAG_MAX_LENGTH), re-placed whenever its anchor or direction changes; removed on release (`--left_click=tube`;
-# the default left tool is the spray: held, it subtracts a --spray_radius sphere where the view hits, every SPRAY_PERIOD
-# seconds). They only act while the mouse is captured. They use VoxelTerrain.add_instance /
-# move_instance / remove_instance.
-const SPHERE_TYPE := 0         # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
-const CAPSULE_TYPE := 1
-const SPRAY_PERIOD := 0.03     # at least this many seconds between two spray spheres, and the last one meshed
-const DRAG_MAX_LENGTH := 100.0 # metres: an edit re-meshes every chunk the tube's box (old and new) meets
-var dig_radius := 1.5       # --dig_radius=M
-var dig_length := 6.0       # --dig_length=M
-var drag_length := 20.0     # --drag_length=M: how far past the surface the tube carves
-var drag_radius := 1.0      # --drag_radius=M: the tube's radius (1 m = 2 m wide)
-var dig_k := 0.3            # smooth radius (metres)
-var drag_op := 2            # Combine: 2 subtract (carves), 0 union (a solid tube); --drag_op=subtract|union
-var drag_active := false
+# ---- Dig tools (VoxelTerrain.dig_*: the core's DigTool, on the instance table) -----------------------------------
+# Right click digs a hole (a capsule from where the view meets the ground). Left click held sprays small spheres where the
+# view meets the surface, or with --left_click=tube carries a tube with the camera until the release. They only act
+# while the mouse is captured. --dig_radius= --dig_length= --spray_radius= --drag_radius= --drag_length= (metres) and
+# --drag_op=subtract|union go to VoxelTerrain.set_dig_settings.
+var dig_settings := {}
+var left_held := false
 var left_tube := false      # --left_click=tube: left click drags the tube instead of spraying
-var spray_radius := 0.1     # --spray_radius=M
-var spray_wait := 0.0       # seconds to the next spray sphere
-var drag_id := -1
-var drag_pose := []         # [anchor voxel Array, rotation]: the tube's last placed pose
-var edits_count := 0
 var hud: Label = null
 var hud_visible := true     # TAB
 var hud_age := 1.0          # seconds since the HUD's stats were read (get_debug_stats walks every chunk)
@@ -115,22 +98,13 @@ func _enter_tree() -> void:
 			Presets.environment(get_parent()).ssao_enabled = false
 		if a.begins_with("--ambient=") and Presets.environment(get_parent()):
 			Presets.environment(get_parent()).ambient_light_energy = a.trim_prefix("--ambient=").to_float()
-		if a.begins_with("--dig_radius="):
-			dig_radius = a.trim_prefix("--dig_radius=").to_float()
-		if a.begins_with("--dig_length="):
-			dig_length = a.trim_prefix("--dig_length=").to_float()
-		if a.begins_with("--drag_length="):
-			drag_length = a.trim_prefix("--drag_length=").to_float()
-		if a == "--drag_op=subtract":
-			drag_op = 2
-		if a == "--drag_op=union":
-			drag_op = 0
+		for key in ["dig_radius", "dig_length", "spray_radius", "drag_radius", "drag_length"]:
+			if a.begins_with("--%s=" % key):
+				dig_settings[key] = a.trim_prefix("--%s=" % key).to_float()
+		if a.begins_with("--drag_op="):
+			dig_settings["drag_union"] = a == "--drag_op=union"
 		if a == "--left_click=tube":
 			left_tube = true
-		if a.begins_with("--spray_radius="):
-			spray_radius = a.trim_prefix("--spray_radius=").to_float()
-		if a.begins_with("--drag_radius="):
-			drag_radius = a.trim_prefix("--drag_radius=").to_float()
 		if a.begins_with("--instances=") and terrain:
 			terrain.archetype_instances = a.trim_prefix("--instances=").to_int()
 		if a.begins_with("--instance_area=") and terrain:
@@ -157,6 +131,8 @@ func _enter_tree() -> void:
 			terrain.climate_path = a.trim_prefix("--climate=")
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
+	if terrain:
+		terrain.set_dig_settings(dig_settings)
 
 func _ready():
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
@@ -343,19 +319,17 @@ func _input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			speed /= 1.2
 
-	# Dig tools (archetype table): right click digs a hole, left click (held) drags a tube. Only while the
-	# mouse is captured: a click that gives the window focus back (after Escape) must not dig. A release
-	# always ends the drag.
+	# Dig tools: right click digs a hole, left click (held) sprays or drags the tube. Only while the mouse is captured:
+	# a click that gives the window focus back (after Escape) must not dig. A release always ends the drag.
 	if event is InputEventMouseButton:
 		var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-		if event.pressed and captured and event.button_index == MOUSE_BUTTON_RIGHT:
-			_dig()
+		var terrain := _terrain()
+		if terrain and event.pressed and captured and event.button_index == MOUSE_BUTTON_RIGHT:
+			terrain.dig_hole(camera.global_position, -camera.global_transform.basis.z)
 		elif event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed and captured:
-				drag_active = true
-				spray_wait = 0.0
-			elif not event.pressed:
-				_end_drag()
+			left_held = event.pressed and captured
+			if terrain and not event.pressed:
+				terrain.dig_release()
 
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_TAB:
 		hud_visible = not hud_visible
@@ -388,115 +362,15 @@ func _input(event: InputEvent) -> void:
 		else:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
-# The dig tools: a ray-march along the view (get_sdf_at) and the archetype edit API.
-func _raymarch(terrain: Node, origin: Vector3, dir: Vector3) -> Vector3:
-	var t := 0.0
-	while t < 200.0:
-		var p := origin + dir * t
-		var d: float = terrain.get_sdf_at(p)
-		if d < 0.5:
-			return p
-		t += maxf(absf(d) * 0.5, 0.1)
-	return origin + dir * 10.0
-
-# LOD0 voxel of a render-space position: the int64 world origin plus a small rounded offset (int64 in an
-# Array, never through a float or Vector3i).
-func _voxel_of(terrain: Node, pos: Vector3) -> Array:
-	var vt: float = terrain.voxel_size
-	return [terrain.world_origin_x + int(round(pos.x / vt)), terrain.world_origin_y + int(round(pos.y / vt)),
-			terrain.world_origin_z + int(round(pos.z / vt))]
-
-# World -> local basis (row major) with local y along fwd: the capsule's axis.
-func _basis9(fwd: Vector3) -> PackedFloat32Array:
-	var up := Vector3.UP
-	if absf(fwd.dot(up)) > 0.99:
-		up = Vector3.RIGHT
-	var right := fwd.cross(up).normalized()
-	var u2 := right.cross(fwd).normalized()
-	return PackedFloat32Array([right.x, right.y, right.z, fwd.x, fwd.y, fwd.z, u2.x, u2.y, u2.z])
-
-func _dig() -> void:
+func _update_dig(delta: float) -> void:
 	var terrain := _terrain()
-	if terrain == null:
+	if not left_held or terrain == null:
 		return
-	var vt: float = terrain.voxel_size
 	var fwd := -camera.global_transform.basis.z
-	var hit := _raymarch(terrain, camera.global_position, fwd)
-	var p := _voxel_of(terrain, hit)
-	var params := PackedFloat32Array([dig_length / vt, dig_radius / vt])
-	if terrain.add_instance(CAPSULE_TYPE, p[0], p[1], p[2], _basis9(fwd), params, 3, dig_k / vt) >= 0:
-		edits_count += 1
-
-# The surface the view hits, to a centimetre: the spray's spheres are a few cm, _raymarch stops up to 0.5 m short.
-func _surface_hit(terrain: Node, origin: Vector3, dir: Vector3) -> Variant:
-	var t := 0.0
-	while t < 200.0:
-		var d: float = terrain.get_sdf_at(origin + dir * t)
-		if d <= 0.0:
-			return origin + dir * t
-		t += maxf(d * 0.5, 0.01)
-	return null
-
-func _spray(delta: float) -> void:
-	spray_wait -= delta
-	if spray_wait > 0.0:
-		return
-	# One sphere at a time: an edit made before the last one is meshed makes every re-mesh in flight stale,
-	# and nothing shows until the button is released.
-	var terrain := _terrain()
-	if terrain == null or not terrain.is_edit_settled():
-		return
-	spray_wait = SPRAY_PERIOD
-	var hit = _surface_hit(terrain, camera.global_position, -camera.global_transform.basis.z)
-	if hit == null:
-		return
-	var vt: float = terrain.voxel_size
-	var p := _voxel_of(terrain, hit)
-	var rot := PackedFloat32Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
-	if terrain.add_instance(SPHERE_TYPE, p[0], p[1], p[2], rot, PackedFloat32Array([spray_radius / vt]), 2, 0.0) >= 0:
-		edits_count += 1
+	if left_tube:
+		terrain.dig_tube(camera.global_position, fwd)
 	else:
-		drag_active = false  # refused (the table is full): stop until the next press
-
-func _update_drag(delta: float) -> void:
-	if not drag_active:
-		return
-	if not left_tube:
-		_spray(delta)
-		return
-	var terrain := _terrain()
-	if terrain == null:
-		return
-	var vt: float = terrain.voxel_size
-	var fwd := -camera.global_transform.basis.z
-	var p := _voxel_of(terrain, camera.global_position + fwd * 0.5)
-	var rot := _basis9(fwd)
-	if drag_id < 0:
-		# The length is measured once, at the press: afterwards the ray-march would find the end of the
-		# tube's own hole and lengthen it every frame.
-		var hit := _raymarch(terrain, camera.global_position, fwd)
-		var length := clampf(camera.global_position.distance_to(hit) + drag_length, drag_length, DRAG_MAX_LENGTH)
-		var params := PackedFloat32Array([length / vt, drag_radius / vt])
-		drag_id = terrain.add_instance(CAPSULE_TYPE, p[0], p[1], p[2], rot, params, drag_op, dig_k / vt)
-		if drag_id < 0:
-			push_warning("dig: add_instance refused the tube (not the archetype terrain, or the table is full)")
-			drag_active = false
-			return
-		edits_count += 1
-	elif drag_pose[0] != p or drag_pose[1] != rot:
-		# Only when the pose changed: every edit makes the re-meshes in flight stale.
-		terrain.move_instance(drag_id, p[0], p[1], p[2], rot)
-		edits_count += 1
-	drag_pose = [p, rot]
-
-func _end_drag() -> void:
-	drag_active = false
-	drag_pose = []
-	if drag_id >= 0:
-		var terrain := _terrain()
-		if terrain:
-			terrain.remove_instance(drag_id)
-		drag_id = -1
+		terrain.dig_spray(camera.global_position, fwd, delta)
 
 func _update_hud(delta: float) -> void:
 	if hud == null:
@@ -524,12 +398,12 @@ last edit %d chunks, apply %.2f ms" % [
 		Engine.get_frames_per_second(), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0), terrain.lod_pixel_error,
 		"loaded" if s.get("load_complete", false) else "loading",
 		int(chunks.get("loaded", 0)), int(chunks.get("pending", 0)), float(chunks.get("live_triangles", 0)) / 1e6,
-		int(ms.get("queued", 0)), int(edits.get("edits", 0)), edits_count,
+		int(ms.get("queued", 0)), int(edits.get("edits", 0)), terrain.get_dig_edits(),
 		int(ms.get("remesh_queue", 0)), int(ms.get("remesh_pops", 0)), int(ms.get("remesh_stale_dropped", 0)),
 		int(edits.get("remesh_last", 0)), apply_ms]
 
 func _process(delta: float) -> void:
-	_update_drag(delta)
+	_update_dig(delta)
 	_update_hud(delta)
 	if clip_terrain:
 		Presets.clip_planes(camera, clip_terrain, base_near)
