@@ -19,7 +19,13 @@ adapter/dawn/out/ov_dawn --shot=out.png --view=2 --pitch=-35   # offscreen: a PN
 ```
 
 Options: `--size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M --pitch=DEG --yaw=DEG
---view=0|1|2 --max_frames=N`. Not there yet: instances and trees (the fold variant's barriers fail WGSL's uniformity
+--view=0|1|2 --max_frames=N`, and upscaling after Godot's `--upscale=fsr2 --render_scale=F --pixelate=N`
+(`DawnUpscaler`): `--upscale=fsr3` renders the 3D at `--render_scale` (default 0.5 per axis) and brings it to the output
+with AMD's FSR 3.1 upscaler (`fsr3.*`: the reference passes, their SPIR-V vendored in `thirdparty/fsr3`, MIT; needs
+the device's `TextureFormatsTier2`), RCAS at `--sharpness=F` (FSR's 0 .. 1, default 0.2); `--pixelate=N` makes the
+output the window over N and copies each pixel over an N x N block. FSR's depth and motion vectors come from the 3D's
+depth (the terrain is static: the camera's reprojection is the motion). The LOD reads the 3D render's pixels. The look
+of the Godot video preset: `--upscale=fsr3 --pixelate=2`. Not there yet: instances and trees (the fold variant's barriers fail WGSL's uniformity
 analysis: Tint only lifts it for WGSL source, `chromium_disable_uniformity_analysis`), materials, frustum culling, GPU
 timestamps (no budget).
 

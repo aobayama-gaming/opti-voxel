@@ -16,7 +16,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
+#include <memory>
 
 namespace ov::dawn {
 
@@ -93,17 +95,18 @@ wgpu::Texture make_target(const wgpu::Device &p_device, wgpu::TextureFormat p_fo
     return p_device.CreateTexture(&desc);
 }
 
+// The pages into p_color / p_depth; with an upscaler, its color and depth, then its passes into p_color.
 void draw_frame(const wgpu::Device &p_device, const wgpu::Queue &p_queue, const wgpu::TextureView &p_color, const wgpu::TextureView &p_depth,
-        DawnPageHost &r_pages, const PageView &p_view) {
+        DawnPageHost &r_pages, const PageView &p_view, DawnUpscaler *r_upscaler, float p_frame_seconds) {
     wgpu::RenderPassColorAttachment color{};
-    color.view = p_color;
+    color.view = r_upscaler ? r_upscaler->color_view() : p_color;
     color.loadOp = wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = { 0.78, 0.84, 0.93, 1.0 }; // the fog's sky, gamma-encoded
     wgpu::RenderPassDepthStencilAttachment depth{};
-    depth.view = p_depth;
+    depth.view = r_upscaler ? r_upscaler->depth_view() : p_depth;
     depth.depthLoadOp = wgpu::LoadOp::Clear;
-    depth.depthStoreOp = wgpu::StoreOp::Discard;
+    depth.depthStoreOp = r_upscaler ? wgpu::StoreOp::Store : wgpu::StoreOp::Discard;
     depth.depthClearValue = 0.0f;
     wgpu::RenderPassDescriptor pass_desc{};
     pass_desc.colorAttachmentCount = 1;
@@ -113,6 +116,9 @@ void draw_frame(const wgpu::Device &p_device, const wgpu::Queue &p_queue, const 
     const wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&pass_desc);
     r_pages.draw(pass, p_view);
     pass.End();
+    if (r_upscaler) {
+        r_upscaler->encode(encoder, p_color, p_frame_seconds);
+    }
     const wgpu::CommandBuffer commands = encoder.Finish();
     p_queue.Submit(1, &commands);
 }
@@ -185,8 +191,14 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
         configure(width, height);
     }
 
+    std::unique_ptr<DawnUpscaler> upscaler;
+    if (p_options.upscale.fsr || p_options.upscale.pixelate > 1) {
+        upscaler = std::make_unique<DawnUpscaler>(p_context.device, p_context.instance, format, p_options.upscale, DawnUpscaler::Camera{ NEAR_M, FOV_RAD });
+        upscaler->resize(width, height);
+        OV_ERR_FAIL_COND_V_MSG(!upscaler->ready(), 1, "Viewer: no upscaler shaders.");
+    }
     DawnDevice device(p_context);
-    DawnPageHost pages(device, format);
+    DawnPageHost pages(device, upscaler ? DawnUpscaler::COLOR_FORMAT : format);
     OV_ERR_FAIL_COND_V_MSG(!pages.ready(), 1, "Viewer: no page shader.");
 
     World world;
@@ -198,7 +210,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     s.chunk_param.voxel_size = p_options.voxel_size;
     s.debug_view = p_options.view;
     World::Projection projection;
-    projection.viewport_height = float(height);
+    projection.viewport_height = float(upscaler ? upscaler->render_height() : height); // the LOD's pixels are the 3D's
     projection.fov_rad = FOV_RAD;
     projection.aspect = float(width) / float(height);
     World::Hosts hosts;
@@ -242,6 +254,9 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
                 height = window.height;
                 configure(width, height);
                 depth = make_target(p_context.device, DawnPageHost::DEPTH_FORMAT, width, height, wgpu::TextureUsage::RenderAttachment);
+                if (upscaler) {
+                    upscaler->resize(width, height);
+                }
             }
             // The Godot player's controls (player.gd): mouse look while captured, WASD / arrows along the yaw, space up,
             // shift down, the wheel scales the base speed, V cycles the views (1-3 pick one).
@@ -286,6 +301,11 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
 
         PageView view;
         camera.view_proj(float(width) / float(height), view.view_proj);
+        if (upscaler) {
+            float unjittered[16];
+            std::memcpy(unjittered, view.view_proj, sizeof(unjittered));
+            upscaler->begin_frame(unjittered, view.view_proj);
+        }
         view.camera = camera.pos;
         view.sun = Float3{ 0.4f, 0.8f, 0.3f }.normalized();
         view.fog_m = float(world.load_radius()) * 0.15f;
@@ -302,7 +322,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
             }
             color = frame_texture.texture.CreateView();
         }
-        draw_frame(p_context.device, p_context.queue, color, depth.CreateView(), pages, view);
+        draw_frame(p_context.device, p_context.queue, color, depth.CreateView(), pages, view, upscaler.get(), dt);
         frames++;
 
         if (!shot) {
