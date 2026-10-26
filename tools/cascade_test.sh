@@ -53,7 +53,7 @@ if command -v nvidia-smi > /dev/null; then
 fi
 
 echo ">> running godot (${PASS[*]:-})"
-timeout "${CASCADE_TIMEOUT:-900}" "$GODOT" --path "$ROOT/project" --resolution 640x360 res://debug/cascade_spike.tscn -- \
+timeout "${CASCADE_TIMEOUT:-900}" "$GODOT" --path "$ROOT/adapter/godot/project" --resolution 640x360 res://debug/cascade_spike.tscn -- \
     "${PASS[@]}" --out="$RUN_DIR/cascade.json" > "$RUN_DIR/godot.log" 2>&1
 CODE=$?
 [[ -n $TELEMETRY_PID ]] && kill "$TELEMETRY_PID" 2> /dev/null

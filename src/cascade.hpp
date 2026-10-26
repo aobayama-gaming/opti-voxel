@@ -90,7 +90,7 @@ inline constexpr int MAX_LEVEL = ExactNoise::MAX_K;
 // Field groups (Spec::fields, the climate): LINEAR4 channel sets carried down with the ground, each after the
 // ground's CHANNELS slots: field f's channel c is Level slot field_slot(f, c). Group 0 is the ground, 1 + f field f.
 // The GPU code is generated per spec (Spec::group_count), so the cap only sizes the CPU's slot arrays: a world of several
-// landforms (project/climate/region_test.json) carries more than 8 groups.
+// landforms (adapter/godot/project/climate/region_test.json) carries more than 8 groups.
 inline constexpr int MAX_FIELD_GROUPS = 24;
 inline constexpr int MAX_GROUPS = 1 + MAX_FIELD_GROUPS;
 static_assert(MAX_GROUPS < 32, "group masks (Modulation::modulated, cell_groups, (1 << groups) - 1) are 32-bit");

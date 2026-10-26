@@ -2,8 +2,14 @@
 
 Godot 4.6 GDExtension (godot-cpp, 4.4 API) for an LOD voxel terrain meshed with surface nets.
 Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=template_debug -j$(nproc)`
-(installs into `project/bin/linux/`). `src/` builds with `-Wall -Wextra -Werror`: `werror=no` only to
+(installs into `adapter/godot/project/bin/linux/`). `src/` and `adapter/` build with `-Wall -Wextra -Werror`: `werror=no` only to
 iterate past a warning, never to commit one.
+
+Layout: one engine, two adapters. `src/` is the engine (`src/core_files.txt`: the part already engine-free, grown
+by every de-Godot step, never shrunk); `adapter/godot/` is the GDExtension's Godot-only sources (`src/`: node,
+registration, spikes, reports) and the Godot project (`project/`: player.gd, scenes, bench); `adapter/dawn/` is the
+native WebGPU adapter (CMake, `adapter/dawn/README.md`). Adapters stay thin: engine logic goes in `src/`, where both
+get it, never into one adapter.
 
 This file holds the rules. The design of each subsystem lives in `docs/` (index below): read the doc of
 what you touch before changing it, and update it in the same PR.
@@ -18,7 +24,7 @@ what you touch before changing it, and update it in the same PR.
   cd ../opti-voxel-worktrees/<name>
   git submodule update --init                               # godot-cpp starts empty
   scons platform=linux target=template_debug -j$(nproc)     # full build, a few minutes
-  ~/.local/bin/godot --headless --path project --import     # once: .godot/ is gitignored
+  ~/.local/bin/godot --headless --path adapter/godot/project --import     # once: .godot/ is gitignored
   tools/setup_hooks.sh                                      # once per clone: format check on commit
   ```
   Without the import, the extension isn't registered and `VoxelTerrain` doesn't exist. The import
@@ -111,9 +117,9 @@ to every change, and a reviewer may reject a PR on any of them.
 | `docs/materials.md` | per-chunk palettes, biome ground materials | `material_library*`, page shader |
 | `docs/look.md` | sky, fog, clouds, surface detail, wind | scenes, page shader |
 | `docs/climate.md` | climate fields and biomes, shaped bands, stretched octaves, regions | `climate*`, `cascade_shaped_glsl*` |
-| `docs/landforms.md` | landform tables and matching real heightmaps | `project/climate/landforms/`, `tools/landforms/` |
+| `docs/landforms.md` | landform tables and matching real heightmaps | `adapter/godot/project/climate/landforms/`, `tools/landforms/` |
 | `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `local_points_gpu*`, `chunk_memory*`, `subcube.hpp` |
-| `docs/testing.md` | every check tool and bench flag in detail, debug views, hole hunting | `tools/`, `project/debug/` |
+| `docs/testing.md` | every check tool and bench flag in detail, debug views, hole hunting | `tools/`, `adapter/godot/project/debug/` |
 | `docs/perf.md` | perf target, baselines, where the frame goes | |
 | `docs/gotchas.md` | engine, GPU, build and float traps already hit | |
 | `docs/forest-1m-profile.md` | the 1M-tree load profile and its ranked causes | |

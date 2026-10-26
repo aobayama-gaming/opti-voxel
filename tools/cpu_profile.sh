@@ -44,7 +44,7 @@ if [[ $BUILD == 1 ]]; then
         exit 1
     fi
 fi
-LIB=$(ls "$ROOT"/project/bin/linux/*.so 2>/dev/null | head -1)
+LIB=$(ls "$ROOT"/adapter/godot/project/bin/linux/*.so 2>/dev/null | head -1)
 if [[ -z "$LIB" ]] || [[ $(nm -C "$LIB" 2> /dev/null | grep -c " [Tt] ") == 0 ]]; then # not grep -q: pipefail would see nm's SIGPIPE
     echo ">> warning: $LIB has no symbols (built without debug_symbols=yes?): the extension's frames stay unnamed"
 fi
@@ -55,7 +55,7 @@ BENCH_PID=$!
 
 # The Godot process: the newest one running this project's bench scene, skipping the `timeout` wrapping it
 # (GODOT may be a wrapper script that execs the engine, so the exe is not compared to it).
-PROJECT="${BENCH_ROOT:-$ROOT}/project"
+PROJECT="${BENCH_ROOT:-$ROOT}/adapter/godot/project"
 TIMEOUT_EXE=$(readlink -f "$(command -v timeout)")
 PID=""
 for _ in $(seq 1 60); do

@@ -32,7 +32,7 @@ uint64_t fnv_text(const ov::str &p_s) {
 
 } // namespace
 
-// The climate before shaped bands (project/climate/plain.json, a copy of the example as it was) keeps its bits: every
+// The climate before shaped bands (adapter/godot/project/climate/plain.json, a copy of the example as it was) keeps its bits: every
 // slot of every point query, the SDF of the ground, the skirts, and the level shaders' text. A table without the new
 // keys is the old code path, op for op. Re-pinned when a run's last level began reading its climate from the level
 // above's derive (Cascade::Modulation).
@@ -92,7 +92,7 @@ TEST_CASE("Climate shape: NOISE_ABS_MEAN, NOISE_SQ_MEAN and CELL_MEAN are the no
 
 namespace {
 
-// Every operation at once (project/climate/shaped_test.json, CascadeSpike's set 4s too).
+// Every operation at once (adapter/godot/project/climate/shaped_test.json, CascadeSpike's set 4s too).
 Dictionary shaped_table() {
     Dictionary d;
     CHECK(load("res://climate/shaped_test.json", d) == String());
@@ -388,7 +388,7 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
     }
 }
 
-// A table with no field (one biome multiplying the ground's octaves, project/climate/fieldless_test.json) modulates
+// A table with no field (one biome multiplying the ground's octaves, adapter/godot/project/climate/fieldless_test.json) modulates
 // the ground: the GPU passes take the variant with the modulation at its levels (CascadeGLSL::field_range not empty).
 // It was empty with no field group, and the GPU drew the bare ground under the CPU's flat desert (CascadeSpike 4d).
 // The same without fields, with a terrace (a ground term): climate_ground runs at every sample, so every level takes the

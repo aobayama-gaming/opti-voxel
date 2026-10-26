@@ -33,7 +33,7 @@ if [[ $BUILD == 1 ]]; then
     fi
 fi
 
-timeout "${UNIT_TIMEOUT:-120}" "$GODOT" --headless --path "$ROOT/project" res://debug/unit_tests.tscn -- \
+timeout "${UNIT_TIMEOUT:-120}" "$GODOT" --headless --path "$ROOT/adapter/godot/project" res://debug/unit_tests.tscn -- \
     --filter="$FILTER" > "$LOG" 2>&1
 CODE=$?
 

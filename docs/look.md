@@ -7,7 +7,7 @@ The shared environment and the page shader's surface detail.
   perspective (`fog_aerial_perspective` 0.8: the fog takes the sky's colour in that direction, `fog_density` 0.00025: a
   quarter at 1 km), SSAO / SSIL, the grading LUT. `VoxelSky` (`src/voxel_sky.*`, a sibling of the terrain and the
   WorldEnvironment) installs the sky shader at ready: Godot's PhysicalSkyMaterial (MIT) with a **cloud layer** over it, a
-  plane at `cloud_height_m` reading `cloud_texture` (`project/clouds.png`, `tools/make_clouds.py`: tileable spectral
+  plane at `cloud_height_m` reading `cloud_texture` (`adapter/godot/project/clouds.png`, `tools/make_clouds.py`: tileable spectral
   noise, rank-normalised so `cloud_cover` is the fraction covered) once per `cloud_scale_m`, carried by `cloud_wind`. The
   page shader splices the same GLSL (`VoxelSky::glsl_clouds`: uniforms, `cloud_hit` / `cloud_uv` / `cloud_density`) and
   its `light()` (Lambert, no specular: every material has roughness 1) cuts the sun by `cloud_shadow` where the

@@ -4,7 +4,7 @@
 #include <memory>
 
 // Regions (Climate::Region): several landforms in one table, each behind a part of the fields' space, its height terms
-// gated by it. project/climate/region_test.json holds valley.json's fields, stretch, height term and biomes behind a
+// gated by it. adapter/godot/project/climate/region_test.json holds valley.json's fields, stretch, height term and biomes behind a
 // 'cold' region and the cliff's and the mangrove's terms behind a 'warm' one: 9 fields and the multifractal state, past
 // the old cap of 8 field groups.
 
@@ -155,7 +155,7 @@ TEST_CASE("Climate regions: ground_step bounds a gated term's step between LODs"
     CHECK(ground_step(t, 15, 0.0) > ground_step(ungated, 15, 0.0));
 }
 
-// The landform world (project/climate/world.json, tools/landforms/world.py): every landform's region core
+// The landform world (adapter/godot/project/climate/world.json, tools/landforms/world.py): every landform's region core
 // (Climate::core_regions) is its own table, its SDF and its pick (by name). Points over 800 km at LODs 0 and 6.
 TEST_CASE("Climate regions: the world's landform cores are their own tables") {
     ClimateSDF world("res://climate/world.json", 25);

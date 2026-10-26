@@ -17,7 +17,7 @@ No float ever holds an absolute coordinate. Read before touching `world_coord`, 
 - World origin: `VoxelTerrain.world_origin_x/y/z` (LOD0 voxels, |v| <= 2^60), snapped down to the
   root chunk span (2^lod_numbers ids = 458,752 voxels with the defaults). No runtime rebasing yet.
 - LOD range: `VoxelTerrain.lod_numbers` (default 15, at most 31: the GPU reads a LOD from the id's low
-  32 bits). `--lods=N` in `bench.gd` and in the main scene (`godot --path project -- --lods=25`).
+  32 bits). `--lods=N` in `bench.gd` and in the main scene (`godot --path adapter/godot/project -- --lods=25`).
   At every LOD count the camera's clip planes follow
   its altitude (`Presets.clip_planes`, every frame in the player and the bench; |SDF| at the camera,
   `VoxelTerrain.get_sdf_at`): near = altitude / 1000 (at least the scene's), far = min(near * 2^21,

@@ -1,6 +1,6 @@
 # Landforms from real heightmaps
 
-Eight landform tables in `project/climate/landforms/` were each matched against a real heightmap. They are built from
+Eight landform tables in `adapter/godot/project/climate/landforms/` were each matched against a real heightmap. They are built from
 the cascade's own tools: Perlin octaves, shaped bands, multifractal weights, field warps, height terms, cell noise,
 terraces and stretched octaves. This page explains:
 
@@ -222,7 +222,7 @@ fields (temperature, humidity, wind):
 - A height term's `region` multiplies the term by the region. So the trough, the cliff or the coast exists only in its
   region. The term needs a curve: the skirts bound its step with the region's.
 - Keep each landform's feature fields as they are: its edges and curve points are tuned to their quantiles.
-- In a region's core the landform is its standalone table, bit for bit. `project/climate/region_test.json` (the valley
+- In a region's core the landform is its standalone table, bit for bit. `adapter/godot/project/climate/region_test.json` (the valley
   behind "cold", the cliff's and the mangrove's terms behind "warm") equals `valley.json` there: 4,852 points at LODs
   0, 3 and 7, every SDF value and pick the same (`test_climate_regions.cpp`).
 - The core (`Climate::core_regions`) is exact: the region is exactly 1 at every point whose climate the sample reads.
@@ -239,7 +239,7 @@ fields (temperature, humidity, wind):
 
 ### The landform world
 
-`project/climate/world.json` holds the eight landforms, at 25 LODs and 5 cm. It is generated:
+`adapter/godot/project/climate/world.json` holds the eight landforms, at 25 LODs and 5 cm. It is generated:
 `uv run tools/landforms/world.py` composes it from the landform tables, which stay the one source (refit a table, run it
 again).
 

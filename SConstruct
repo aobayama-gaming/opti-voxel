@@ -6,7 +6,9 @@ from methods import print_error
 
 
 libname = "opti_voxel"
-projectdir = "project"
+# Two adapters of one engine: the core in src/, the Godot adapter (GDExtension + project) in adapter/godot/,
+# the Dawn adapter in adapter/dawn/ (CMake).
+projectdir = "adapter/godot/project"
 
 localEnv = Environment(tools=["default"], PLATFORM="")
 
@@ -22,7 +24,7 @@ customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
 
 opts = Variables(customs, ARGUMENTS)
-opts.Add(BoolVariable("werror", "Treat compiler warnings in src/ as errors (werror=no to iterate past them)", True))
+opts.Add(BoolVariable("werror", "Treat compiler warnings in src/ and adapter/ as errors (werror=no to iterate past them)", True))
 opts.Update(localEnv)
 
 Help(opts.GenerateHelpText(localEnv))
@@ -51,7 +53,7 @@ if not src_env.get("is_msvc", False):
         src_env.Append(CCFLAGS=["-Werror"])
 env = src_env
 
-env.Append(CPPPATH=["src/"])
+env.Append(CPPPATH=["src/", "adapter/godot/src/"])
 # The CPU mirrors of the GPU float math (ChunkMath::sample_pos, exact_noise.hpp, the terrain SDF) must
 # round exactly like the GPU's `precise` code: no FMA contraction, whatever the target (aarch64 and
 # -march=native have FMA). MSVC does not contract unless asked to.
@@ -60,7 +62,7 @@ if not env.get("is_msvc", False):
 # tools/cpu_profile.sh builds with debug_symbols=yes (unstripped): frame pointers let `perf record -g` unwind our frames.
 if env["debug_symbols"] and not env.get("is_msvc", False):
     env.Append(CCFLAGS=["-fno-omit-frame-pointer"])
-sources = Glob("src/*.cpp") + Glob("src/ov/*.cpp")
+sources = Glob("src/*.cpp") + Glob("src/ov/*.cpp") + Glob("adapter/godot/src/*.cpp")
 
 # Unit tests (src/tests/, doctest) ship in debug builds only; tools/unit_test.sh runs them.
 if env["target"] != "template_release":

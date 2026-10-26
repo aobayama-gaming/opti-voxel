@@ -33,17 +33,17 @@ Before diving into the code, the big picture:
 ```sh
 git clone --recursive <this repo>      # godot-cpp is a submodule
 scons platform=linux target=template_debug -j$(nproc)   # first build compiles godot-cpp too, a few minutes
-godot --headless --path project --import                # once: registers the extension
+godot --headless --path adapter/godot/project --import                # once: registers the extension
 tools/setup_hooks.sh                                    # once per clone: format check before each commit
 ```
 
 *The import ends with a crash in the extension when the headless editor exits. It's harmless as
-long as `project/.godot/extension_list.cfg` exists afterwards.*
+long as `adapter/godot/project/.godot/extension_list.cfg` exists afterwards.*
 
 The build treats warnings as errors (`-Wall -Wextra -Werror` on `src/`). To iterate past one, add
 `werror=no`, but fix it before committing.
 
-Then open `project/` in Godot 4.6 and run the main scene.
+Then open `adapter/godot/project/` in Godot 4.6 and run the main scene.
 
 ## Checks
 

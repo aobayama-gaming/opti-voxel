@@ -116,7 +116,7 @@ if [[ $PROFILE == 1 ]]; then
 fi
 
 echo ">> running godot (${ARGS[*]})"
-timeout "${BENCH_TIMEOUT:-600}" "$GODOT" --path "$ROOT/project" --resolution "${BENCH_RESOLUTION:-1280x720}" \
+timeout "${BENCH_TIMEOUT:-600}" "$GODOT" --path "$ROOT/adapter/godot/project" --resolution "${BENCH_RESOLUTION:-1280x720}" \
     "${DEBUG_ARGS[@]}" res://debug/bench.tscn -- "${ARGS[@]}" > "$RUN_DIR/godot.log" 2>&1
 CODE=$?
 [[ $HAVE_SMI == 1 ]] && kill "$SMI_PID" 2>/dev/null

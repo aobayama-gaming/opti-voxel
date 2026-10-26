@@ -33,7 +33,7 @@ if [[ $BUILD == 1 ]]; then
 fi
 
 ulimit -c 0
-timeout "${CASCADE_TIMEOUT:-1200}" "$GODOT" --headless --path "$ROOT/project" res://debug/cascade_report.tscn -- \
+timeout "${CASCADE_TIMEOUT:-1200}" "$GODOT" --headless --path "$ROOT/adapter/godot/project" res://debug/cascade_report.tscn -- \
     --out="$RUN_DIR" --scale="$SCALE" > "$RUN_DIR/godot.log" 2>&1
 CODE=$?
 if [[ ! -f "$RUN_DIR/report.md" ]] || ! grep -q '^CASCADE: .*"ok":true' "$RUN_DIR/godot.log"; then

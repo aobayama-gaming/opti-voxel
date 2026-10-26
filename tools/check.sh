@@ -67,7 +67,7 @@ build() {
 # shellcheck disable=SC2329
 spike() {
     local log="$ROOT/bench/results/check-spike.log"
-    timeout 300 "$GODOT" --path "$ROOT/project" --resolution 640x360 res://debug/spike.tscn > "$log" 2>&1
+    timeout 300 "$GODOT" --path "$ROOT/adapter/godot/project" --resolution 640x360 res://debug/spike.tscn > "$log" 2>&1
     local code=$?
     # Same known thread_model=2 exit abort as tools/bench.sh, accepted once the run finished.
     if [[ $code -eq 134 ]] && grep -q "BENCH: done" "$log"; then code=0; fi
