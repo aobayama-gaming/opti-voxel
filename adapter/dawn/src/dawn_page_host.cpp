@@ -95,9 +95,11 @@ void main() {
 }
 )glsl";
 
-wgpu::ShaderModule make_module(const wgpu::Device &p_device, const std::string &p_glsl, ShaderStage p_stage) {
+} // namespace
+
+wgpu::ShaderModule make_render_module(const wgpu::Device &p_device, const std::string &p_glsl, ShaderStage p_stage) {
     const CompiledShader shader = compile_glsl(p_glsl, p_stage);
-    OV_ERR_FAIL_COND_V_MSG(!shader.error.empty(), wgpu::ShaderModule(), "DawnPageHost: page shader: " + shader.error);
+    OV_ERR_FAIL_COND_V_MSG(!shader.error.empty(), wgpu::ShaderModule(), "Dawn: shader: " + shader.error);
     wgpu::ShaderSourceSPIRV spirv{};
     spirv.codeSize = uint32_t(shader.spirv.size());
     spirv.code = shader.spirv.data();
@@ -106,14 +108,12 @@ wgpu::ShaderModule make_module(const wgpu::Device &p_device, const std::string &
     return p_device.CreateShaderModule(&desc);
 }
 
-} // namespace
-
 DawnPageHost::DawnPageHost(DawnDevice &p_device, wgpu::TextureFormat p_color_format) :
         device(p_device) {
     const wgpu::Device &dev = device.get_context().device;
     const std::string header = "#version 450\n#extension GL_EXT_samplerless_texture_functions : require\n";
-    const wgpu::ShaderModule vs = make_module(dev, header + PageFormat::glsl_decode() + FRAME_BLOCK + VERTEX_SHADER, ShaderStage::VERTEX);
-    const wgpu::ShaderModule fs = make_module(dev, header + Material::glsl_constants() + FRAME_BLOCK + FRAGMENT_SHADER, ShaderStage::FRAGMENT);
+    const wgpu::ShaderModule vs = make_render_module(dev, header + PageFormat::glsl_decode() + FRAME_BLOCK + VERTEX_SHADER, ShaderStage::VERTEX);
+    const wgpu::ShaderModule fs = make_render_module(dev, header + Material::glsl_constants() + FRAME_BLOCK + FRAGMENT_SHADER, ShaderStage::FRAGMENT);
     if (!vs || !fs) {
         return;
     }

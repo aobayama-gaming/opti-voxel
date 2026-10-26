@@ -27,7 +27,7 @@ if(NOT EXISTS "${OV_DAWN_DIR}/include/dawn/webgpu_cpp.h")
     return()
 endif()
 
-add_executable(ov_dawn src/main.cpp src/dawn_context.cpp src/dawn_device.cpp src/dawn_page_host.cpp src/glsl_compiler.cpp src/viewer.cpp
+add_executable(ov_dawn src/main.cpp src/dawn_context.cpp src/dawn_device.cpp src/dawn_page_host.cpp src/dawn_upscaler.cpp src/glsl_compiler.cpp src/viewer.cpp
         src/x11_window.cpp)
 set_target_properties(ov_dawn PROPERTIES CXX_STANDARD 20) # webgpu_cpp.h needs C++20; the core stays C++17 like the Godot build
 target_compile_options(ov_dawn PRIVATE -Wall -Wextra -Werror)

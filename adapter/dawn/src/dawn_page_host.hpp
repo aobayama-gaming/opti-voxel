@@ -6,9 +6,13 @@
 
 #include <dawn/webgpu_cpp.h>
 
+#include <string>
 #include <vector>
 
 namespace ov::dawn {
+
+// A vertex or fragment shader of the engine's GLSL dialect; null (an error logged) when it doesn't compile.
+wgpu::ShaderModule make_render_module(const wgpu::Device &p_device, const std::string &p_glsl, ShaderStage p_stage);
 
 // What a frame of pages is drawn with: the camera and the light.
 struct PageView {

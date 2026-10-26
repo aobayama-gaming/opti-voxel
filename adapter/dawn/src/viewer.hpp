@@ -4,6 +4,7 @@
 // a PNG (--shot: once the load is complete, then exit).
 
 #include "dawn_context.hpp"
+#include "dawn_upscaler.hpp"
 
 #include <string>
 
@@ -22,6 +23,7 @@ struct ViewerOptions {
     float pitch_deg = -15.0f;
     float yaw_deg = 0.0f;
     int view = 0; // 0 shaded, 1 normals, 2 LOD
+    DawnUpscaler::Settings upscale; // temporal or pixelate > 1: through DawnUpscaler
 };
 
 // 0 on success, 1 on a failure (no window, no device, the shot not written).

@@ -6,11 +6,10 @@
 //   ov_dawn --cascade-check[=JSON]    the GPU cascade vs its CPU oracle (CascadeCheck; JSON: its options, e.g.
 //                                     '{"lods":15,"timing":false}')
 // Each prints its report and exits 1 on a failure.
-//   ov_dawn --viewer [options]        the terrain in a window: WASD + Q/E to fly (shift: 5x), drag the left button to
-//                                     look, 1 shaded / 2 normals / 3 LOD, Escape quits
+//   ov_dawn --viewer [options]        the terrain in a window, the Godot player's controls (README.md)
 //   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
 // Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
-// --pitch=DEG --yaw=DEG --view=0|1|2 --max_frames=N.
+// --pitch=DEG --yaw=DEG --view=0|1|2 --max_frames=N --upscale=temporal --render_scale=F --pixelate=N --sharpness=STOPS.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -81,6 +80,18 @@ int main(int argc, char **argv) {
             viewer.view = std::atoi(value.c_str());
         } else if (flag(argv[i], "--max_frames", value)) {
             viewer.max_frames = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--upscale", value)) {
+            viewer.upscale.temporal = value == "temporal";
+            if (!viewer.upscale.temporal && value != "off") {
+                std::fprintf(stderr, "--upscale=%s: expected temporal or off\n", value.c_str());
+                return 1;
+            }
+        } else if (flag(argv[i], "--render_scale", value)) {
+            viewer.upscale.render_scale = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--pixelate", value)) {
+            viewer.upscale.pixelate = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--sharpness", value)) {
+            viewer.upscale.sharpness = std::strtof(value.c_str(), nullptr);
         }
     }
     if (run_viewer) {

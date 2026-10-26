@@ -19,7 +19,12 @@ adapter/dawn/out/ov_dawn --shot=out.png --view=2 --pitch=-35   # offscreen: a PN
 ```
 
 Options: `--size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M --pitch=DEG --yaw=DEG
---view=0|1|2 --max_frames=N`. Not there yet: instances and trees (the fold variant's barriers fail WGSL's uniformity
+--view=0|1|2 --max_frames=N`, and upscaling after Godot's `--upscale=fsr2 --render_scale=F --pixelate=N`
+(`DawnUpscaler`): `--upscale=temporal` renders the 3D at `--render_scale` (default 0.5 per axis) and brings it to the
+output with a compact temporal upscaler in FSR 2 / 3's form (jittered projection, depth reprojection, clamped
+Catmull-Rom history, Lanczos-2, RCAS at `--sharpness=STOPS`, default 0.2), not AMD's shaders; `--pixelate=N` makes the
+output the window over N and copies each pixel over an N x N block. The LOD reads the 3D render's pixels. The look of
+the Godot video preset: `--upscale=temporal --pixelate=2`. Not there yet: instances and trees (the fold variant's barriers fail WGSL's uniformity
 analysis: Tint only lifts it for WGSL source, `chromium_disable_uniformity_analysis`), materials, frustum culling, GPU
 timestamps (no budget).
 
