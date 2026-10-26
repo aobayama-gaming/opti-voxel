@@ -407,9 +407,7 @@ float cascade_moment_skirt_m(int lod) {
             }
             return table;
         };
-        return ov::replace_all(code, { { "SKIRT_N", ov::itos(int64_t(skirt_depth_table.size())) },
-                                             { "MOMENT_SKIRT_TABLE", table_text(moment_skirt_table) },
-                                             { "SKIRT_TABLE", table_text(skirt_depth_table) } });
+        return ov::replace_all(code, { { "SKIRT_N", ov::itos(int64_t(skirt_depth_table.size())) }, { "MOMENT_SKIRT_TABLE", table_text(moment_skirt_table) }, { "SKIRT_TABLE", table_text(skirt_depth_table) } });
     }
 
     // The level passes' fold variant (after the table buffers): sample_sdf on the GPU, the instances of input chunk
