@@ -8,8 +8,8 @@
 // material buffer; fill_legacy_shader() splices them, exactly as GPUMesher::compile_dynamic_shader does.
 
 #include "cascade_glsl.hpp"
-#include "gpu_frame.hpp"
 #include "exact_noise_glsl.hpp"
+#include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "ov/str.hpp"
 

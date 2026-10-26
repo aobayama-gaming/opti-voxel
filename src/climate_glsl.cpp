@@ -109,13 +109,13 @@ ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var) {
     const int64_t n = int64_t(p_table.biomes.size());
     for (int64_t b = 1; b < n; b++) {
         code += ov::format("        if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            count++;\n        } else if (w%d.w > best) {\n"
-                        "            best = w%d.w;\n            count = 1u;\n        }\n",
+                           "            best = w%d.w;\n            count = 1u;\n        }\n",
                 b, b, b);
     }
     code += ov::format("        uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, %du) %% count;\n        bool found = false;\n", int64_t(PICK_SEED));
     for (int64_t b = 0; b < n; b++) {
         code += ov::format("        if (!found && floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            if (k == 0u) {\n                %s = %s;\n"
-                        "                found = true;\n            } else {\n                k--;\n            }\n        }\n",
+                           "                found = true;\n            } else {\n                k--;\n            }\n        }\n",
                 b, p_var, ExactNoise::glsl_float(float(b)));
     }
     return code + "    }\n";
