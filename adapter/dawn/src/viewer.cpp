@@ -348,6 +348,11 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
         view.camera = camera.pos;
         view.sun = Float3{ 0.4f, 0.8f, 0.3f }.normalized();
         view.fog_m = float(world.load_radius()) * 0.15f;
+        view.forward = forward;
+        const int target_h = upscaler ? upscaler->render_height() : height; // the pages' target
+        view.pixel_m = 2.0f * std::tan(FOV_RAD * 0.5f) / float(target_h);
+        // A shot stays the same picture; wrapped like Godot's TIME (an hour), so float seconds stay fine.
+        view.time_s = shot ? 0.0f : float(std::fmod(ms_since(start) / 1000.0, 3600.0));
         wgpu::SurfaceTexture frame_texture{};
         wgpu::TextureView color;
         if (shot) {

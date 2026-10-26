@@ -19,7 +19,7 @@ TEST_CASE("Material::Library: built-ins in order, names unique, image layout") {
     const uint32_t moss = lib.add("moss", Material::Params{ ov::Color(0.1, 0.2, 0.1), 0.8f, ov::Color(0, 0, 0), Material::PATTERN_NONE });
     CHECK(moss == Material::BUILTIN_COUNT);
     const Material::Library::Image img = lib.make_image();
-    CHECK(img.width == Material::TEXELS * Material::IMAGE_MATERIALS_PER_ROW);
+    CHECK(img.width == Material::TEXELS * int(lib.size()));
     CHECK(img.height == 1);
     // Texel x of row 0 (RGBA floats).
     const auto texel = [&img](int p_x) { return &img.rgba[size_t(p_x) * 4]; };

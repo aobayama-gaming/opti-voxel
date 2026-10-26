@@ -8,8 +8,9 @@ the integer frame and every noise probe (`FrameCheck`), `--cascade-check[=JSON o
 oracle (`CascadeCheck`); each prints its report as JSON.
 
 The viewer drives the core's world loop (`ov::World`, GPU Direct) with a fly camera and draws its pages with
-`DawnPageHost` (the corners decoded by the same `PageFormat` GLSL as Godot's page shader; slope colours, a sun, fog, no
-materials yet):
+`DawnPageHost` (the corners decoded by the same `PageFormat` GLSL as Godot's page shader, and the same materials:
+`page_shading_glsl.hpp`, bark, leaves, a biome's ground, the ground's detail; a sun, a sky light, fog; no contour lines, no
+wind):
 
 ```
 adapter/dawn/out/ov_dawn --viewer                          # an X11 window (XWayland), the Godot player's controls: mouse look,
@@ -27,8 +28,8 @@ output the window over N and copies each pixel over an N x N block. FSR's depth 
 depth (the terrain is static: the camera's reprojection is the motion). The LOD reads the 3D render's pixels. The look
 of the Godot video preset: `--upscale=fsr3 --pixelate=2`. The forest: `--trees=N --tree_area=M` (with `--climate=PATH`
 for a climate world), placed like Godot's `forest5cm` preset by `--trees=4000 --tree_area=316 --voxel=0.05
---cam_pos=-52,320,-95 --above_ground=5 --pitch=-5 --yaw=-90`. Not there yet: materials (the trees are slope-shaded),
-frustum culling, GPU timestamps (no budget).
+--cam_pos=-52,320,-95 --above_ground=5 --pitch=-5 --yaw=-90`. Not there yet: frustum culling, GPU timestamps (no budget),
+Godot's lighting (shadows, SSAO, the sky and its clouds, the tonemapper).
 
 ```
 cmake -S adapter/dawn -B adapter/dawn/out -G Ninja -DOV_DAWN_DIR=<dawn install prefix> -DOV_GLSLANG_DIR=<glslang install prefix>
@@ -61,8 +62,9 @@ google-chrome --ozone-platform=x11 --enable-unsafe-webgpu \
 Under Wayland its WebGPU canvas loses the device on the first frame (`vkAllocateMemory failed with
 VK_ERROR_OUT_OF_DEVICE_MEMORY`); so does headless Chrome's, whose offscreen `?shot=` still works.
 
-The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&trees=1000000&tree_area=5000` is `--viewer
---upscale=fsr3 --pixelate=2 --trees=1000000 --tree_area=5000`; `?check` (or `frame-check`, `cascade-check`) runs that
+The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&trees=1000000&tree_area=5000&voxel=0.05` is
+`--viewer --upscale=fsr3 --pixelate=2 --trees=1000000 --tree_area=5000 --voxel=0.05` (the 1M forest at 5 cm; the
+default voxel is 0.5 m); `?check` (or `frame-check`, `cascade-check`) runs that
 check and `?shot=/x.png` renders offscreen into the page's file system (`Module.FS.readFile('/x.png')`). A click locks
 the mouse, Escape frees it. `build.sh` needs emsdk (`EMSDK`, Emscripten 4.0.11 tested) and a Dawn checkout with its
 dependencies (`OV_DAWN_SRC`); `web/deps` is the CMake project that adds the SPIRV-Tools Dawn's CMake leaves out under

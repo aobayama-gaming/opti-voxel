@@ -3,6 +3,7 @@
 #include "shader_module.hpp"
 
 #include "page_format.hpp"
+#include "page_shading_glsl.hpp"
 #include "quad_page_pool.hpp"
 
 #include "ov/log.hpp"
@@ -20,19 +21,24 @@ layout(set = 0, binding = 0, std140) uniform Frame {
     ivec4 origin_chunk; // w: chunk_size
     vec4 sun;
     vec4 camera; // w: fog distance (0 none)
+    vec4 forward; // the camera's; w: metres per pixel per metre of depth
     ivec4 ints; // skirt_size, debug_view
-    vec4 floats; // pos_scale, voxel_size
+    vec4 floats; // pos_scale, voxel_size, time (seconds)
 };
+// The page, the chunks' palettes and the materials' parameters (page_shading_glsl.hpp).
+layout(set = 1, binding = 0) uniform utexture2D quad_tex;
+layout(set = 2, binding = 0) uniform utexture2D palette_tex;
+layout(set = 2, binding = 1) uniform texture2D material_tex;
 )glsl";
 
 // Corners decoded like Godot's page shader (godot_page_host.cpp) through the same PageFormat functions; a quad whose 4
-// corners lie in hidden coverage sub-cubes collapses to a point.
+// corners lie in hidden coverage sub-cubes collapses to a point. The quad's materials as Godot's: from corner A.
 constexpr const char VERTEX_SHADER[] = R"glsl(
-layout(set = 1, binding = 0) uniform utexture2D quad_tex;
-
 layout(location = 0) out vec3 v_normal;
 layout(location = 1) out vec3 v_world;
 layout(location = 2) flat out int v_lod;
+layout(location = 3) out vec2 v_quad_uv;
+layout(location = 4) flat out ivec2 v_materials;
 
 void main() {
     int vertex = gl_VertexIndex;
@@ -60,21 +66,31 @@ void main() {
             world = chunk_min;
         }
     }
+    int corner = vertex % 4; // base quad corners A, B, C, D
+    v_materials = ivec2(0);
+    if (corner == 0) {
+        v_materials = quad_materials(h1, page_decode_palette(c), int(HEADER_TEXELS) + vertex, group);
+    }
     v_normal = c != uvec4(0u) ? page_decode_normal(c) : vec3(0.0, 1.0, 0.0);
     v_world = world;
     v_lod = lod;
+    v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
     gl_Position = view_proj * vec4(world, 1.0);
 }
 )glsl";
 
-// 0 shaded (Godot's ground colours: flat on gentle slopes, steep on the others), 1 normals, 2 LOD.
+// 0 shaded (Godot's ground: flat on gentle slopes, steep on the others, its surface detail, no contour lines; the
+// materials through page_shading_glsl.hpp, still air), 1 normals, 2 LOD. A flat world: up is +y.
 constexpr const char FRAGMENT_SHADER[] = R"glsl(
 layout(location = 0) in vec3 v_normal;
 layout(location = 1) in vec3 v_world;
 layout(location = 2) flat in int v_lod;
+layout(location = 3) in vec2 v_quad_uv;
+layout(location = 4) flat in ivec2 v_materials;
 layout(location = 0) out vec4 out_color;
 
 const vec3 SKY = vec3(0.55, 0.68, 0.85);
+const vec3 UP = vec3(0.0, 1.0, 0.0);
 
 void main() {
     vec3 n = normalize(v_normal);
@@ -82,12 +98,25 @@ void main() {
     if (ints.y == 1) {
         color = n * 0.5 + 0.5;
     } else {
-        vec3 albedo = mix(GROUND_STEEP, GROUND_FLAT, smoothstep(0.8, 0.95, clamp(n.y, 0.0, 1.0)));
+        vec3 albedo;
+        float roughness;
+        vec3 emission = vec3(0.0);
         if (ints.y == 2) {
             albedo = vec3(fract(float(v_lod) * 0.37), fract(float(v_lod) * 0.61 + 0.3), fract(float(v_lod) * 0.13 + 0.6));
+        } else {
+            float flat_w = ground_flat_weight(v_normal, UP); // the interpolated normal, as Godot's
+            float footprint = max(dot(v_world - camera.xyz, forward.xyz), 0.0) * forward.w;
+            uint mat_id = fragment_material(v_materials, v_quad_uv, v_world, floats.y * exp2(float(v_lod)));
+            // The ground's detail only where it shows: the ground's and a biome ground's (bark and leaves have their own).
+            vec3 shade = vec3(1.0);
+            if (mat_id == MATERIAL_GROUND || material_pattern(mat_id) == MATERIAL_PATTERN_GROUND) {
+                shade = ground_detail(v_world, footprint);
+            }
+            vec3 ground = mix(GROUND_STEEP, GROUND_FLAT, flat_w) * shade;
+            material_shading(mat_id, ground, v_world, v_normal, UP, footprint, flat_w, shade, floats.z, 0.0, albedo, roughness, emission);
         }
         float sun_light = max(dot(n, sun.xyz), 0.0);
-        color = albedo * (sun_light * vec3(1.0, 0.95, 0.85) + SKY * (0.25 + 0.1 * n.y));
+        color = albedo * (sun_light * vec3(1.0, 0.95, 0.85) + SKY * (0.25 + 0.1 * n.y)) + emission;
         if (camera.w > 0.0) {
             float d = length(v_world - camera.xyz);
             color = mix(color, SKY, 1.0 - exp2(-d / camera.w));
@@ -109,8 +138,9 @@ DawnPageHost::DawnPageHost(DawnDevice &p_device, wgpu::TextureFormat p_color_for
         device(p_device) {
     const wgpu::Device &dev = device.get_context().device;
     const std::string header = "#version 450\n#extension GL_EXT_samplerless_texture_functions : require\n";
-    const wgpu::ShaderModule vs = make_render_module(dev, header + PageFormat::glsl_decode() + FRAME_BLOCK + VERTEX_SHADER, ShaderStage::VERTEX);
-    const wgpu::ShaderModule fs = make_render_module(dev, header + Material::glsl_constants() + FRAME_BLOCK + FRAGMENT_SHADER, ShaderStage::FRAGMENT);
+    const std::string common = header + PageFormat::glsl_decode() + Material::glsl_constants() + FRAME_BLOCK + PageShading::glsl();
+    const wgpu::ShaderModule vs = make_render_module(dev, common + VERTEX_SHADER, ShaderStage::VERTEX);
+    const wgpu::ShaderModule fs = make_render_module(dev, common + FRAGMENT_SHADER, ShaderStage::FRAGMENT);
     if (!vs || !fs) {
         return;
     }
@@ -126,7 +156,7 @@ DawnPageHost::DawnPageHost(DawnDevice &p_device, wgpu::TextureFormat p_color_for
 
     wgpu::BindGroupLayoutEntry page_entry{};
     page_entry.binding = 0;
-    page_entry.visibility = wgpu::ShaderStage::Vertex;
+    page_entry.visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment; // the shared text declares it in both stages
     page_entry.texture.sampleType = wgpu::TextureSampleType::Uint;
     page_entry.texture.viewDimension = wgpu::TextureViewDimension::e2D;
     wgpu::BindGroupLayoutDescriptor page_layout_desc{};
@@ -134,9 +164,27 @@ DawnPageHost::DawnPageHost(DawnDevice &p_device, wgpu::TextureFormat p_color_for
     page_layout_desc.entries = &page_entry;
     page_layout = dev.CreateBindGroupLayout(&page_layout_desc);
 
-    const wgpu::BindGroupLayout layouts[] = { frame_layout, page_layout };
+    wgpu::BindGroupLayoutEntry material_entries[2]{};
+    for (int i = 0; i < 2; i++) {
+        material_entries[i].binding = uint32_t(i);
+        material_entries[i].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
+        material_entries[i].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+    }
+    material_entries[0].texture.sampleType = wgpu::TextureSampleType::Uint;
+    material_entries[1].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
+    wgpu::BindGroupLayoutDescriptor material_layout_desc{};
+    material_layout_desc.entryCount = 2;
+    material_layout_desc.entries = material_entries;
+    material_layout = dev.CreateBindGroupLayout(&material_layout_desc);
+    // Until the mesher hands its own: one texel each (no palette, no material: the ground everywhere).
+    palette_placeholder = make_texture(wgpu::TextureFormat::RGBA16Uint, 1, 1);
+    palette_texture = palette_placeholder;
+    material_texture = make_texture(wgpu::TextureFormat::RGBA32Float, 1, 1);
+    _update_material_group();
+
+    const wgpu::BindGroupLayout layouts[] = { frame_layout, page_layout, material_layout };
     wgpu::PipelineLayoutDescriptor layout_desc{};
-    layout_desc.bindGroupLayoutCount = 2;
+    layout_desc.bindGroupLayoutCount = 3;
     layout_desc.bindGroupLayouts = layouts;
 
     wgpu::ColorTargetState color{};
@@ -207,14 +255,20 @@ void DawnPageHost::draw(const wgpu::RenderPassEncoder &p_pass, const PageView &p
     u.camera[1] = p_view.camera.y;
     u.camera[2] = p_view.camera.z;
     u.camera[3] = p_view.fog_m;
+    u.forward[0] = p_view.forward.x;
+    u.forward[1] = p_view.forward.y;
+    u.forward[2] = p_view.forward.z;
+    u.forward[3] = p_view.pixel_m;
     u.ints[0] = decode.skirt_size;
     u.ints[1] = debug_view;
     u.floats[0] = decode.pos_scale;
     u.floats[1] = decode.voxel_size;
+    u.floats[2] = p_view.time_s;
     device.get_context().queue.WriteBuffer(uniforms, 0, &u, sizeof(u));
 
     p_pass.SetPipeline(pipeline);
     p_pass.SetBindGroup(0, frame_group);
+    p_pass.SetBindGroup(2, material_group);
     p_pass.SetIndexBuffer(indices, wgpu::IndexFormat::Uint32);
     // Every visible page: the instance count is the GPU's (0 draws nothing). No frustum culling yet (the bounds are
     // kept for it).
@@ -252,8 +306,47 @@ void DawnPageHost::set_decode(const PageDecode &p_decode) {
     decode = p_decode;
 }
 
+wgpu::Texture DawnPageHost::make_texture(wgpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height) const {
+    wgpu::TextureDescriptor desc{};
+    desc.size = { p_width, p_height, 1 };
+    desc.format = p_format;
+    desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    return device.get_context().device.CreateTexture(&desc);
+}
+
+void DawnPageHost::_update_material_group() {
+    wgpu::BindGroupEntry entries[2]{};
+    entries[0].binding = 0;
+    entries[0].textureView = palette_texture.CreateView();
+    entries[1].binding = 1;
+    entries[1].textureView = material_texture.CreateView();
+    wgpu::BindGroupDescriptor desc{};
+    desc.layout = material_layout;
+    desc.entryCount = 2;
+    desc.entries = entries;
+    material_group = device.get_context().device.CreateBindGroup(&desc);
+}
+
 void DawnPageHost::set_materials(const Material::Library::Image &p_image) {
-    (void)p_image; // TODO: the materials' colours (sample the image like Godot's material_tex) once the palette is bound
+    if (!pipeline) {
+        return; // the page shader didn't compile (logged): nothing draws
+    }
+    wgpu::Limits limits{};
+    device.get_context().device.GetLimits(&limits);
+    OV_ERR_FAIL_COND_MSG(uint32_t(p_image.width) > limits.maxTextureDimension2D,
+            ov::format("DawnPageHost: the material image is %d texels wide, the device takes %u.", p_image.width, limits.maxTextureDimension2D));
+    if (p_image.width == 0 || p_image.height == 0) {
+        return;
+    }
+    material_texture = make_texture(wgpu::TextureFormat::RGBA32Float, uint32_t(p_image.width), uint32_t(p_image.height));
+    wgpu::TexelCopyTextureInfo dst{};
+    dst.texture = material_texture;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = uint32_t(p_image.width) * 4 * sizeof(float);
+    layout.rowsPerImage = uint32_t(p_image.height);
+    const wgpu::Extent3D size = { uint32_t(p_image.width), uint32_t(p_image.height), 1 };
+    device.get_context().queue.WriteTexture(&dst, p_image.rgba.data(), p_image.rgba.size() * sizeof(float), &layout, &size);
+    _update_material_group();
 }
 
 void DawnPageHost::set_debug_view(int p_view) {
@@ -286,7 +379,13 @@ void DawnPageHost::rt_detach_page(int p_page) {
 }
 
 void DawnPageHost::rt_set_palette_texture(gpu::Texture p_texture) {
-    (void)p_texture; // TODO: with set_materials
+    if (!pipeline) {
+        return;
+    }
+    // The mesher's (it grows by a new texture), or none (the mesher's shutdown): the placeholder again.
+    const wgpu::Texture texture = p_texture.is_valid() ? device.get_texture(p_texture) : wgpu::Texture();
+    palette_texture = texture ? texture : palette_placeholder;
+    _update_material_group();
 }
 
 } // namespace ov::dawn
