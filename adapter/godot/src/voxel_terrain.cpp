@@ -107,6 +107,12 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_log_level"), &VoxelTerrain::get_log_level);
     ClassDB::bind_method(D_METHOD("is_load_complete"), &VoxelTerrain::is_load_complete);
     ClassDB::bind_method(D_METHOD("is_edit_settled"), &VoxelTerrain::is_edit_settled);
+    ClassDB::bind_method(D_METHOD("dig_hole", "origin", "dir"), &VoxelTerrain::dig_hole);
+    ClassDB::bind_method(D_METHOD("dig_spray", "origin", "dir", "delta"), &VoxelTerrain::dig_spray);
+    ClassDB::bind_method(D_METHOD("dig_tube", "origin", "dir"), &VoxelTerrain::dig_tube);
+    ClassDB::bind_method(D_METHOD("dig_release"), &VoxelTerrain::dig_release);
+    ClassDB::bind_method(D_METHOD("get_dig_edits"), &VoxelTerrain::get_dig_edits);
+    ClassDB::bind_method(D_METHOD("set_dig_settings", "settings"), &VoxelTerrain::set_dig_settings);
     ClassDB::bind_method(D_METHOD("get_debug_stats"), &VoxelTerrain::get_debug_stats);
     ClassDB::bind_method(D_METHOD("debug_validate", "count", "dump_dir"), &VoxelTerrain::debug_validate, DEFVAL(String()));
     ClassDB::bind_method(D_METHOD("get_validation_report"), &VoxelTerrain::get_validation_report);
@@ -820,6 +826,40 @@ bool VoxelTerrain::remove_instance(int p_id) {
 bool VoxelTerrain::move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation) {
     float rot[9];
     return world.move_instance(p_id, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false));
+}
+
+bool VoxelTerrain::dig_hole(const Vector3 &p_origin, const Vector3 &p_dir) {
+    return dig_tool.dig(ov_f3(p_origin), ov_f3(p_dir));
+}
+
+void VoxelTerrain::dig_spray(const Vector3 &p_origin, const Vector3 &p_dir, double p_delta) {
+    dig_tool.spray(ov_f3(p_origin), ov_f3(p_dir), p_delta);
+}
+
+void VoxelTerrain::dig_tube(const Vector3 &p_origin, const Vector3 &p_dir) {
+    dig_tool.tube(ov_f3(p_origin), ov_f3(p_dir));
+}
+
+void VoxelTerrain::dig_release() {
+    dig_tool.release();
+}
+
+int VoxelTerrain::get_dig_edits() const {
+    return dig_tool.edit_count();
+}
+
+void VoxelTerrain::set_dig_settings(const Dictionary &p_settings) {
+    ov::DigTool::Settings &s = dig_tool.settings;
+    const std::pair<const char *, double *> metres[] = { { "dig_radius", &s.dig_radius_m }, { "dig_length", &s.dig_length_m }, { "dig_k", &s.dig_k_m },
+        { "spray_radius", &s.spray_radius_m }, { "drag_radius", &s.drag_radius_m }, { "drag_length", &s.drag_length_m } };
+    for (const auto &m : metres) {
+        if (p_settings.has(m.first)) {
+            *m.second = double(p_settings[m.first]);
+        }
+    }
+    if (p_settings.has("drag_union")) {
+        s.drag_op = bool(p_settings["drag_union"]) ? Archetype::Combine::UNION : Archetype::Combine::SUBTRACT;
+    }
 }
 
 void VoxelTerrain::_process(double) {

@@ -11,6 +11,7 @@
 #include "godot_cpp/classes/sub_viewport.hpp"
 #include "godot_cpp/classes/viewport.hpp"
 
+#include "dig_tool.hpp"
 #include "godot_mesh_host.hpp"
 #include "godot_page_host.hpp"
 #include "gpu_profiler.hpp"
@@ -37,6 +38,7 @@ protected:
 private:
     Camera3D *camera = nullptr;
     ov::World world;
+    ov::DigTool dig_tool{ world };
     ov::World::Settings &cfg() { return world.settings(); }
     const ov::World::Settings &cfg() const { return world.settings(); }
 
@@ -263,6 +265,16 @@ public:
             int p_op, float p_k);
     bool remove_instance(int p_id);
     bool move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation);
+
+    // The player's dig tools (ov::DigTool): origin and unit direction in render space. dig_spray / dig_tube every frame
+    // their button is held, dig_release when it is released. set_dig_settings takes any of dig_radius, dig_length,
+    // dig_k, spray_radius, drag_radius, drag_length (metres) and drag_union (bool: a solid tube).
+    bool dig_hole(const Vector3 &p_origin, const Vector3 &p_dir);
+    void dig_spray(const Vector3 &p_origin, const Vector3 &p_dir, double p_delta);
+    void dig_tube(const Vector3 &p_origin, const Vector3 &p_dir);
+    void dig_release();
+    int get_dig_edits() const;
+    void set_dig_settings(const Dictionary &p_settings);
 
     // True once every scanned chunk is meshed and the mesher has nothing in flight.
     bool is_load_complete();

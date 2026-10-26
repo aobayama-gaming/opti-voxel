@@ -36,10 +36,6 @@ float distance(const Float3 &p_a, const Float3 &p_b) {
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-float dot(const Float3 &p_a, const Float3 &p_b) {
-    return p_a.x * p_b.x + p_a.y * p_b.y + p_a.z * p_b.z;
-}
-
 // Zero for a zero vector.
 Float3 normalized(const Float3 &p_v) {
     return dot(p_v, p_v) == 0.0f ? Float3() : p_v.normalized();

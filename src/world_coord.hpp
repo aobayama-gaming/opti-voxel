@@ -136,6 +136,14 @@ struct Float3 {
     }
 };
 
+inline float dot(const Float3 &p_a, const Float3 &p_b) {
+    return p_a.x * p_b.x + p_a.y * p_b.y + p_a.z * p_b.z;
+}
+
+inline Float3 cross(const Float3 &p_a, const Float3 &p_b) {
+    return Float3{ p_a.y * p_b.z - p_a.z * p_b.y, p_a.z * p_b.x - p_a.x * p_b.z, p_a.x * p_b.y - p_a.y * p_b.x };
+}
+
 // An absolute position: an integer LOD0 voxel plus a fraction of a voxel in [0, 1). Canonical: the
 // same point reached from two chunks has bit-identical members (sample points have frac == 0).
 struct WorldPos {

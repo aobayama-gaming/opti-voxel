@@ -118,6 +118,8 @@ public:
     double load_radius() const;
     // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain.
     double sdf_at(const double p_render_pos[3]) const;
+    // The LOD0 voxel holding a render-space position (an edit's anchor).
+    VoxelPos voxel_at(const double p_render_pos[3]) const;
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point).
     void tangent_position(double p_u_m, double p_v_m, double r_render_pos[3]) const;
 
