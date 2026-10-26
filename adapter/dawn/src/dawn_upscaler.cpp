@@ -25,28 +25,40 @@ void main() {
 }
 )glsl";
 
-// FSR 3's inputs from the 3D's reversed infinite depth: the standard depth of the same projection with a far plane
-// (near 0, far 1; the vendored shaders' convention) and the motion vectors, the camera's alone (the terrain is static):
-// each pixel's point, unjittered, reprojected into the last frame, in render pixels from this frame to the last.
-constexpr const char PREPARE_FRAGMENT[] = R"glsl(
+// FSR 3's inputs from the 3D's reversed infinite depth. The vendored shaders are the display-resolution motion vector
+// variant: their passes read the motion at the output pixel (prepare_inputs maps each render pixel to it), so the
+// motion is an output-sized target and the depth a render-sized one, two passes on the same block.
+constexpr const char PREPARE_BLOCK[] = R"glsl(
 layout(set = 0, binding = 0, std140) uniform Prepare {
     mat4 reproject; // this frame's unjittered clip space to the last frame's
-    vec4 params; // render w, h, jitter x, y (render pixels, y down)
+    vec4 params; // output w, h, render w, h
     vec4 depth_scale; // x: far / (far - near)
 };
 layout(set = 0, binding = 1) uniform texture2D depth_tex;
-layout(location = 0) out vec2 out_motion;
-layout(location = 1) out float out_depth;
+)glsl";
+
+// The standard depth of the same projection with a far plane (near 0, far 1; the vendored shaders' convention).
+constexpr const char DEPTH_FRAGMENT[] = R"glsl(
+layout(location = 0) out float out_depth;
 
 void main() {
-    float d = texelFetch(depth_tex, ivec2(gl_FragCoord.xy), 0).r;
+    out_depth = (1.0 - texelFetch(depth_tex, ivec2(gl_FragCoord.xy), 0).r) * depth_scale.x;
+}
+)glsl";
+
+// The camera's motion alone (the terrain is static): the point under each output pixel centre (unjittered; its depth
+// from the render pixel over it) reprojected into the last frame, in output pixels from this frame to the last.
+constexpr const char MOTION_FRAGMENT[] = R"glsl(
+layout(location = 0) out vec2 out_motion;
+
+void main() {
     vec2 size = params.xy;
-    vec2 at = gl_FragCoord.xy - params.zw;
-    vec2 ndc = vec2(at.x / size.x * 2.0 - 1.0, 1.0 - at.y / size.y * 2.0);
+    ivec2 texel = min(ivec2(gl_FragCoord.xy * params.zw / size), ivec2(params.zw) - 1);
+    float d = texelFetch(depth_tex, texel, 0).r;
+    vec2 ndc = vec2(gl_FragCoord.x / size.x * 2.0 - 1.0, 1.0 - gl_FragCoord.y / size.y * 2.0);
     vec4 prev = reproject * vec4(ndc, d, 1.0);
     vec2 prev_ndc = prev.w > 0.0 ? prev.xy / prev.w : ndc;
     out_motion = (prev_ndc - ndc) * 0.5 * size * vec2(1.0, -1.0);
-    out_depth = (1.0 - d) * depth_scale.x;
 }
 )glsl";
 
@@ -263,8 +275,10 @@ void DawnUpscaler::make_pipelines(wgpu::TextureFormat p_target_format) {
         return;
     }
     prepare_layout = make_layout(device, { uniform_entry(0), texture_entry(1, wgpu::TextureSampleType::UnfilterableFloat) });
-    prepare_pipeline = make_pipeline(device, prepare_layout, PREPARE_FRAGMENT, { wgpu::TextureFormat::RG16Float, wgpu::TextureFormat::R32Float },
-            "upscaler fsr inputs");
+    depth_pipeline = make_pipeline(device, prepare_layout, (std::string(PREPARE_BLOCK) + DEPTH_FRAGMENT).c_str(), { wgpu::TextureFormat::R32Float },
+            "upscaler fsr depth");
+    motion_pipeline = make_pipeline(device, prepare_layout, (std::string(PREPARE_BLOCK) + MOTION_FRAGMENT).c_str(), { wgpu::TextureFormat::RG16Float },
+            "upscaler fsr motion");
     prepare_uniforms = make_uniforms(device, sizeof(PrepareUniforms));
 }
 
@@ -287,7 +301,7 @@ void DawnUpscaler::resize(int p_width, int p_height) {
         return;
     }
     fsr_depth = make_texture(device, wgpu::TextureFormat::R32Float, render_w, render_h, target);
-    motion = make_texture(device, wgpu::TextureFormat::RG16Float, render_w, render_h, target);
+    motion = make_texture(device, wgpu::TextureFormat::RG16Float, output_w, output_h, target);
     fsr_output = make_texture(device, wgpu::TextureFormat::RGBA16Float, output_w, output_h,
             wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::TextureBinding);
     fsr = std::make_unique<Fsr3Upscaler>(device, instance, uint32_t(render_w), uint32_t(render_h), uint32_t(output_w), uint32_t(output_h));
@@ -329,10 +343,10 @@ void DawnUpscaler::begin_frame(const float p_view_proj[16], float r_jittered[16]
         u.reproject[i] = float(reproject[i]);
         prev_view_proj[i] = current[i];
     }
-    u.params[0] = float(render_w);
-    u.params[1] = float(render_h);
-    u.params[2] = jitter[0];
-    u.params[3] = jitter[1];
+    u.params[0] = float(output_w);
+    u.params[1] = float(output_h);
+    u.params[2] = float(render_w);
+    u.params[3] = float(render_h);
     u.depth_scale[0] = FSR_FAR_M / (FSR_FAR_M - camera.near_m);
     device.GetQueue().WriteBuffer(prepare_uniforms, 0, &u, sizeof(u));
 }
@@ -344,7 +358,8 @@ void DawnUpscaler::encode(const wgpu::CommandEncoder &p_encoder, const wgpu::Tex
     p.params[2] = float(settings.fsr ? output_h : render_h);
     device.GetQueue().WriteBuffer(present_uniforms, 0, &p, sizeof(p));
     if (settings.fsr) {
-        fullscreen_pass(p_encoder, { motion.CreateView(), fsr_depth.CreateView() }, prepare_pipeline, prepare_group);
+        fullscreen_pass(p_encoder, { fsr_depth.CreateView() }, depth_pipeline, prepare_group);
+        fullscreen_pass(p_encoder, { motion.CreateView() }, motion_pipeline, prepare_group);
         Fsr3Inputs inputs;
         inputs.color = color.CreateView();
         inputs.depth = fsr_depth.CreateView();

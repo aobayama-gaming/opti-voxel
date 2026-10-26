@@ -28,6 +28,8 @@ constexpr float FOV_RAD = 75.0f * 3.14159265f / 180.0f;
 constexpr float NEAR_M = 0.1f;
 // Frames drawn after the load is complete before a shot (the last pages' instance counts land).
 constexpr int SHOT_SETTLE_FRAMES = 10;
+// With --fly, a shot's frames of flight from the completed load (one second at the shot's 60 Hz).
+constexpr int SHOT_FLY_FRAMES = 60;
 // The Godot player's flight (player.gd): metres per second, radians per pixel, altitudes per second, seconds.
 constexpr float BASE_SPEED = 50.0f;
 constexpr float MOUSE_SENSITIVITY = 0.002f;
@@ -257,7 +259,8 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     const auto ms_since = [](Clock::time_point p_from) { return std::chrono::duration<double, std::milli>(Clock::now() - p_from).count(); };
     while (true) {
         const Clock::time_point now = Clock::now();
-        const float dt = std::chrono::duration<float>(now - last).count();
+        // A shot steps a fixed 60 Hz (the same frames on every run, for a scripted fly).
+        const float dt = shot ? 1.0f / 60.0f : std::chrono::duration<float>(now - last).count();
         last = now;
         if (!shot) {
             if (!window.poll()) {
@@ -307,6 +310,8 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
                 camera.pos.y += direction.y * step;
                 camera.pos.z += direction.z * step;
             }
+        }
+        if (!shot || settled >= 0) { // a shot flies from the completed load
             camera.pos.x -= std::sin(camera.yaw) * p_options.fly_speed * dt;
             camera.pos.z -= std::cos(camera.yaw) * p_options.fly_speed * dt;
         }
@@ -380,7 +385,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
         if (settled >= 0) {
             settled++;
         }
-        if (settled >= SHOT_SETTLE_FRAMES || frames >= p_options.max_frames) {
+        if (settled >= (p_options.fly_speed > 0.0f ? SHOT_FLY_FRAMES : SHOT_SETTLE_FRAMES) || frames >= p_options.max_frames) {
             const bytes pixels = read_target(p_context, offscreen, width, height);
             const bytes png = encode_png(uint32_t(width), uint32_t(height), 4, pixels.data());
             const bool written = !pixels.empty() && write_file(p_options.shot, str(png.begin(), png.end()));

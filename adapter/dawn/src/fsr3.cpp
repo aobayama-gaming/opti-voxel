@@ -712,8 +712,8 @@ bool Fsr3Upscaler::CreatePipelines() {
         { .binding = 11, .type = BT::SamplerLinear, .resource = R::SamplerLinearClamp },
     };
 
-    // Motion vectors are render sized (low resolution motion vectors), so the accumulate
-    // pass reads the raw input motion vectors, not the dilated ones.
+    // The display-resolution motion vector variant: the accumulate pass reads the input motion
+    // vectors at the output pixel, not the dilated ones.
     static const Binding kAccumulate[] = {
         { .binding = 0, .type = BT::SampledTexture, .resource = R::InputExposure, .filterable = false },
         { .binding = 1, .type = BT::SampledTexture, .resource = R::DilatedReactiveMasks, .filterable = true },
@@ -1029,9 +1029,9 @@ bool Fsr3Upscaler::Dispatch(wgpu::CommandEncoder &p_encoder, const Fsr3Inputs &p
     fsr.view_space_to_meters_factor = 1.0f;
     SetupDeviceToViewDepth(fsr, render_w, render_h, p_inputs);
 
-    // Motion vectors are expressed in render-size pixels, so the shader scale is 1 / render.
-    fsr.motion_vector_scale[0] = 1.0f / float(render_w);
-    fsr.motion_vector_scale[1] = 1.0f / float(render_h);
+    // Motion vectors are output sized, in output pixels (the display-resolution variant): the shader scale is 1 / output.
+    fsr.motion_vector_scale[0] = 1.0f / float(upscale_w);
+    fsr.motion_vector_scale[1] = 1.0f / float(upscale_h);
     // Jitter cancellation is disabled (the shaders are the non jittered motion vector variant).
     fsr.motion_vector_jitter_cancellation[0] = 0.0f;
     fsr.motion_vector_jitter_cancellation[1] = 0.0f;
