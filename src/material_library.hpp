@@ -39,7 +39,7 @@ struct Params {
 // debug (TEXEL_DEBUG).
 static constexpr int TEXELS = 3;
 static constexpr int TEXEL_DEBUG = 2;
-// make_image()'s width in materials; a material m is at texel (TEXELS * (m % IMAGE_MATERIALS_PER_ROW) + t, m / IMAGE_MATERIALS_PER_ROW).
+// make_image()'s width in materials (narrower while there are fewer); a material m is at texel (TEXELS * (m % IMAGE_MATERIALS_PER_ROW) + t, m / IMAGE_MATERIALS_PER_ROW).
 // MAX_MATERIALS / IMAGE_MATERIALS_PER_ROW rows stay within a texture's 16,384.
 static constexpr int IMAGE_MATERIALS_PER_ROW = 4096;
 static_assert(MAX_MATERIALS / IMAGE_MATERIALS_PER_ROW <= 16384, "material_tex rows");

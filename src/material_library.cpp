@@ -1,6 +1,7 @@
 #include "material_library.hpp"
 
 #include "ov/format.hpp"
+#include "ov/math.hpp"
 #include "ov/on_error.hpp"
 #include "ov/str.hpp"
 
@@ -57,7 +58,9 @@ uint32_t Library::find(const ov::str &p_name) const {
 
 Library::Image Library::make_image() const {
     Image img;
-    img.width = TEXELS * IMAGE_MATERIALS_PER_ROW;
+    // As wide as the materials up to a full row: a few dozen fit in any device's 2D texture (WebGPU guarantees 8,192
+    // texels; a full row is 12,288).
+    img.width = TEXELS * int(ov::min(size(), uint32_t(IMAGE_MATERIALS_PER_ROW)));
     img.height = int((size() + IMAGE_MATERIALS_PER_ROW - 1) / IMAGE_MATERIALS_PER_ROW);
     img.rgba.assign(size_t(img.width) * img.height * 4, 0.0f);
     for (uint32_t m = 0; m < size(); m++) {
