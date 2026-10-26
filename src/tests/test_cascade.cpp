@@ -424,6 +424,9 @@ TEST_CASE("Cascade: FieldRange carries the fields to every reader above the last
                         bad += r.carries(lod, m) && j > 1;
                         // Monotone: the fields at m + 1 wherever m has them.
                         bad += r.carried(lod, m) && !r.carried(lod, m + 1);
+                        // Their bands inserted exactly where the level below carries them on (the lowest level's
+                        // insertions have no reader).
+                        bad += r.inserted(lod, m) != (r.carried(lod, m) && r.carried(lod, m - 1));
                     }
                     bad += fields != r.batch(ov::ivec2(lo, hi), j);
                     bad += carry != r.batch_carry(ov::ivec2(lo, hi), j);

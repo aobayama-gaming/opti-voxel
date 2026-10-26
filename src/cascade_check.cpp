@@ -251,7 +251,8 @@ private:
                 return true;
             }
             if (p_ch < spec.gpu_carry(0)) {
-                return range.carried(p_lod, p_m);
+                // Stored where a level below loads them (the CPU's all_fields run inserts them on the lowest level too).
+                return range.inserted(p_lod, p_m);
             }
             return range.carries(p_lod, p_m) && (p_ch - spec.gpu_carry(0)) / FIELD_CHANNELS < spec.modulation->carry_used(p_lod);
         };

@@ -274,8 +274,8 @@ Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_F
 // continental octaves a world turns off in every biome don't count): above it, no band's climate matters.
 int weighted_ceiling(const Table &p_table, const Cascade::Spec &p_combined);
 // Bit r: region r is exactly 1 (value 1, gradient 0) at every point whose climate lattice point p_p of Λ_lod reads: its
-// level boxes from Λ_{lod+1} to weighted_ceiling before their insertions (the bands above the last level), and Λ_{lod+1}'s
-// after them (the derive the last level reads), one replay of the point's cascade. There every weight a band or a sample
+// level boxes from Λ_{lod+1} to weighted_ceiling before their insertions (the bands above the last level, and on Λ_{lod+1}
+// the derive the last level reads), one replay of the point's cascade. There every weight a band or a sample
 // term reads is the region's biomes' alone: a world's landform is its own table, bit for bit (docs/landforms.md).
 uint32_t core_regions(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_lod);
 // The regions some height term is gated by, in index order (parse stores them in Table::gated).
@@ -283,10 +283,11 @@ std::vector<int> gated_regions(const Table &p_table);
 
 // The climate at a point, evaluated once per point of each level above a run's last (Modulator: a band's amplitude from
 // the channels before the level's insertions; the level above the last derives the last level's amplitudes and its
-// samples' terms after them) and by the report: the field values of a point's slots
+// samples' terms from the same climate) and by the report: the field values of a point's slots
 // p_slots (apply_terms), then the biome weights (weights); GLSL twin: glsl_weights. What reaches a reader is one rule,
 // the LOD rule: octave k of a modulated group, inserted on Λ_m, reads H of the climate of Λ_{m+1} after its insertions
-// (the climate low-passed at k, Cascade::Modulation); a run's samples read H of the climate of the level above them.
+// (the climate low-passed at k, Cascade::Modulation); a run's samples read H of the climate the level above them reads
+// for its own bands.
 struct State {
     Float4 fields[MAX_FIELDS];
     Float4 w[MAX_BIOMES];
@@ -347,8 +348,7 @@ ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
 // cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
 // of `Ch pre` (p_spec's GPU layout).
 ov::str glsl_helpers();
-// p_ch: the Ch variable they read ("pre" in the modulation, before a level's insertions; "ch" in the pick and the ground).
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const ov::str &p_ch = "pre");
+ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
 // edges_value as statements defining `vec4 <p_var>` from the f<i> of glsl_weights.
 ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges);
 // Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a

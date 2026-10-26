@@ -125,8 +125,8 @@ TEST_CASE("Climate regions: a gated term is absent outside its region") {
     CHECK(differ == 0);
 }
 
-// The skirts cover the step a gated term makes between two LODs where its region's own field changes: at LODs 15 and
-// 16 the temperature axis (13 km, octave 18 at 5 cm) loses its octave, so the regions jump with the valley's 2.1 km
+// The skirts cover the step a gated term makes between two LODs where its region's own field changes: at LODs 13 and
+// 14 the temperature axis (13 km, octave 18 at 5 cm) loses its octave, so the regions jump with the valley's 2.1 km
 // trough behind them. Without the gate's share in ground_step the bound is the bare term's.
 TEST_CASE("Climate regions: ground_step bounds a gated term's step between LODs") {
     ClimateSDF world("res://climate/region_test.json", 20);
@@ -137,7 +137,7 @@ TEST_CASE("Climate regions: ground_step bounds a gated term's step between LODs"
     for (HeightTerm &h : ungated.heights) {
         h.region = -1;
     }
-    for (const int lod : { 14, 15, 16 }) {
+    for (const int lod : { 13, 14, 15 }) {
         const double amp = world.sdf.octave_step(lod);
         const double bound = ground_step(t, lod, amp);
         double worst = 0.0;
@@ -152,7 +152,7 @@ TEST_CASE("Climate regions: ground_step bounds a gated term's step between LODs"
         CHECK(worst <= 2.0 * bound); // the skirts take twice the step (SDFCascade::configure)
         CHECK(bound >= ground_step(ungated, lod, amp));
     }
-    CHECK(ground_step(t, 15, 0.0) > ground_step(ungated, 15, 0.0));
+    CHECK(ground_step(t, 14, 0.0) > ground_step(ungated, 14, 0.0));
 }
 
 // The landform world (adapter/godot/project/climate/world.json, tools/landforms/world.py): every landform's region core

@@ -256,7 +256,8 @@ struct LevelBands {
                 any = true;
             }
         }
-        // A level carrying fewer groups than the spec has no modulated band (FieldRange::carried covers them).
+        // A level inserting fewer groups than the spec has no modulated band among the others (FieldRange::carried and
+        // inserted cover them).
         modulated = p_spec.modulation ? p_spec.modulation->modulated(p_m) & ((1u << groups) - 1u) : 0u;
     }
 };
@@ -355,16 +356,17 @@ void insert_level(const Spec &p_spec, const LevelBands &p_lb, ChannelSet p_set, 
     });
 }
 
-// The derive of Λ_m's points (after its insertions and flush) for Λ_{m-1}, the run's last level: Modulation::derive
-// writes each point's carry slots.
-template <typename At>
-void derive_level(const Spec &p_spec, int p_m, ChannelSet p_set, int p_fields, int p_carry, const Box &p_box, At p_at) {
+// The derive of Λ_m's points for Λ_{m-1}, the run's last level, from the slots p_at reads before Λ_m's insertions (the
+// climate its own bands read): Modulation::derive's carry slots, flushed (the GPU writes them before the level's
+// flush), given to p_put(slot, i, value).
+template <typename At, typename Put>
+void derive_level(const Spec &p_spec, int p_m, ChannelSet p_set, int p_fields, int p_carry, const Box &p_box, At p_at, Put p_put) {
     for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
         float ch[SLOTS] = {};
-        for_each_slot(p_set, p_fields, p_carry, [&](int p_s) { ch[p_s] = p_at(p_s, p_i); });
+        for_each_slot(p_set, p_fields, 0, [&](int p_s) { ch[p_s] = p_at(p_s, p_i); });
         p_spec.modulation->derive(p_m, p_p, ch);
         for (int s = carry_slot(0); s < carry_slot(p_carry); s++) {
-            p_at(s, p_i) = ch[s];
+            p_put(s, p_i, flush_value(ch[s]));
         }
     });
 }
@@ -374,7 +376,12 @@ int carried_fields(const Spec &p_spec, const FieldRange &p_range, int p_lod, int
     return p_all || p_range.carried(p_lod, p_m) ? int(p_spec.fields.size()) : 0;
 }
 
-// The carry groups of a run down to p_lod: derived on Λ_{lod+1} (added there, after its insertions) and carried to
+// Of those, the field groups whose bands level p_m inserts (FieldRange::inserted, or all of them).
+int inserted_fields(const Spec &p_spec, const FieldRange &p_range, int p_lod, int p_m, bool p_all) {
+    return p_all || p_range.inserted(p_lod, p_m) ? int(p_spec.fields.size()) : 0;
+}
+
+// The carry groups of a run down to p_lod: derived on Λ_{lod+1} (from its channels before its insertions, added after) and carried to
 // Λ_lod by H, where its last level reads them (FieldRange::reads_carry; always with p_all: a pick query).
 int run_carry(const Spec &p_spec, const FieldRange &p_range, int p_lod, bool p_all) {
     if (!p_spec.modulation) {
@@ -548,8 +555,8 @@ void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p
     band_channels(p_spec, 0, p_band, BandFactors(p_spec, p_band), p_p, r_ch);
 }
 
-void insert_bands(const Spec &p_spec, Level &r_level) {
-    const LevelBands lb(p_spec, r_level.m, 1 + r_level.fields, r_level.carry > 0);
+void insert_bands(const Spec &p_spec, Level &r_level, int p_fields) {
+    const LevelBands lb(p_spec, r_level.m, 1 + (p_fields < 0 ? r_level.fields : p_fields), r_level.carry > 0);
     insert_level(p_spec, lb, r_level.set, r_level.fields, r_level.carry, r_level.m, r_level.box,
             [&](int p_s, int64_t p_i) -> float & { return r_level.ch[p_s][p_i]; });
 }
@@ -597,15 +604,28 @@ Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r
             // With r_levels the previous level was moved there.
             cur = subdivide(r_levels ? r_levels->back() : cur, box, fields, m == p_lod ? carry : 0);
         }
+        const bool derives = m == p_lod + 1 && carry > 0;
+        std::vector<float> derived[SLOTS];
+        if (derives) {
+            for (int s = carry_slot(0); s < carry_slot(carry); s++) {
+                derived[s].resize(size_t(box.count()));
+            }
+            derive_level(
+                    p_spec, m, cur.set, cur.fields, carry, cur.box, [&](int p_s, int64_t p_i) { return cur.ch[p_s][p_i]; },
+                    [&](int p_s, int64_t p_i, float p_v) { derived[p_s][p_i] = p_v; });
+        }
         if (p_source) {
             p_source(cur);
         } else {
-            insert_bands(p_spec, cur); // the carry: only the last level holds it yet
+            // The carry: only the last level holds it yet.
+            insert_bands(p_spec, cur, inserted_fields(p_spec, range, p_lod, m, p_all_fields));
         }
         flush(cur);
-        if (m == p_lod + 1 && carry > 0) {
+        if (derives) {
             cur.add_carry(carry);
-            derive_level(p_spec, m, cur.set, cur.fields, cur.carry, cur.box, [&](int p_s, int64_t p_i) -> float & { return cur.ch[p_s][p_i]; });
+            for (int s = carry_slot(0); s < carry_slot(carry); s++) {
+                cur.ch[s] = std::move(derived[s]);
+            }
         }
         if (r_levels) {
             r_levels->push_back(std::move(cur));
@@ -696,22 +716,23 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
             subdivide_axis_small(*cur, p_spec.set, fields, carry, copied, 2, box.lo[2], box.hi[2], *tmp);
             std::swap(cur, tmp);
         }
-        // insert_bands(), flush(), then the derive (above the last level).
-        const LevelBands lb(p_spec, l, 1 + fields, carry > 0);
+        // The derive (above the last level, into the carry slots: the level's insertions and flush leave them), then
+        // insert_bands(), flush().
+        const bool derives = l == p_m + 1 && run > 0;
         const int64_t count = cur->box.count();
         const auto at = [&](int p_s, int64_t p_i) -> float & { return cur->ch[p_s][p_i]; };
+        if (derives) {
+            derive_level(p_spec, l, p_spec.set, fields, run, cur->box, at, [&](int p_s, int64_t p_i, float p_v) { cur->ch[p_s][p_i] = p_v; });
+        }
+        const LevelBands lb(p_spec, l, 1 + inserted_fields(p_spec, range, p_m, l, p_all_fields), carry > 0);
         insert_level(p_spec, lb, p_spec.set, fields, carry, l, cur->box, at);
         for_each_slot(p_spec.set, fields, carry, [&](int p_s) {
             for (int64_t i = 0; i < count; i++) {
                 cur->ch[p_s][i] = flush_value(cur->ch[p_s][i]);
             }
         });
-        if (l == p_m + 1 && run > 0) {
+        if (derives) {
             carry = run;
-            for (int s = carry_slot(0); s < carry_slot(carry); s++) {
-                std::fill(std::begin(cur->ch[s]), std::end(cur->ch[s]), 0.0f);
-            }
-            derive_level(p_spec, l, p_spec.set, fields, carry, cur->box, at);
         }
     }
     for_each_slot(p_spec.set, fields, carry, [&](int p_s) { r_slots[p_s] = cur->ch[p_s][0]; });

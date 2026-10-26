@@ -259,6 +259,9 @@ struct FieldRange {
         return p_lod <= ceiling ? ov::max(floor, p_lod + 1) : MAX_LEVEL + 2;
     }
     bool carried(int p_lod, int p_m) const { return p_m >= lowest(p_lod); }
+    // Whether level p_m inserts the fields' own bands: above lowest only. The lowest level's bands and derive read the
+    // fields before its insertions and no level below carries them, so its field octaves would reach no reader.
+    bool inserted(int p_lod, int p_m) const { return p_m > lowest(p_lod); }
     bool carries(int p_lod, int p_m) const { return (p_m == p_lod || p_m == p_lod + 1) && reads_carry(p_lod); }
     // Whether a batch of LODs p_lods (min, max) carries the fields (batch) at level j above some item's LOD (the largest
     // LOD at most the ceiling is the first to need them), and whether one of its last levels reads the carry
@@ -275,9 +278,10 @@ struct FieldRange {
 // Per-point band amplitudes (the climate's biome weights, climate.hpp). At every point of Λ_m above a run's last level,
 // before that level's insertions, the amplitude of each modulated group's band on Λ_m is computed from the point's
 // channels: from H(V_{m+1}) only, so no band reads one inserted at its own level and the groups can modulate each other
-// in any order. A run's last level Λ_L computes none: at every point of Λ_{L+1}, after its insertions, derive computes
-// from V_{L+1} the amplitudes of Λ_L's bands and the terms its samples read into the carry slots, and H carries them to
-// Λ_L (A = H(derive(V_{L+1}))): the samples, the most points of a run, only interpolate. The top level derives from a
+// in any order. A run's last level Λ_L computes none: at every point of Λ_{L+1}, from the same channels its own bands
+// read (before its insertions: one climate per point), derive computes the amplitudes of Λ_L's bands and the terms its
+// samples read into the carry slots, and H carries them to Λ_L (A = H(derive(H(V_{L+2})))): the samples, the most points
+// of a run, only interpolate. The top level derives from a
 // level above it that holds nothing (Spec::top_level). A modulated band inserts value A n and slopes A dn + n dA
 // (LINEAR4 groups only): n = the noise, A = (dA, A) per lattice spacing of Λ_m.
 //
@@ -340,8 +344,8 @@ struct Modulation {
         (void)p_m;
         return carry_groups();
     }
-    // Writes the carry slots of r_slots, the slots of lattice point p_p of Λ_m after its insertions and flush, for Λ_{m-1}
-    // as a run's last level: its bands' amplitudes and the terms its samples read.
+    // Writes the carry slots of r_slots, the slots of lattice point p_p of Λ_m before its insertions (modulate's p_pre),
+    // for Λ_{m-1} as a run's last level: its bands' amplitudes and the terms its samples read.
     virtual void derive(int p_m, const Vector3i64 &p_p, float r_slots[SLOTS]) const {
         (void)p_m;
         (void)p_p;
@@ -359,13 +363,9 @@ struct Modulation {
     // The same in GLSL, bit for bit. Not shaped: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])`
     // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
     // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
-    // samples' view (p_spec without the fields).
-    virtual ov::str glsl(const Spec &p_spec, bool p_carried) const = 0;
-    // derive in GLSL: `void cascade_derive(int m, inout Ch ch, WorldPos p)`, p_spec with the fields.
-    virtual ov::str derive_glsl(const Spec &p_spec) const {
-        (void)p_spec;
-        return ov::str();
-    }
+    // samples' view (p_spec without the fields). p_derive (the fields' view, p_spec with the carry): `inout Ch pre` and a
+    // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups.
+    virtual ov::str glsl(const Spec &p_spec, bool p_carried, bool p_derive) const = 0;
 };
 
 struct Spec {
@@ -446,10 +446,12 @@ void count_points(const Spec &p_spec, const Box &p_box, int p_lod, Stats &r_stat
 // Band channels on its insertion lattice at lattice point p: perlin3_cross per cell times
 // amp * 2^(-insert_shift |S|).
 void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p, float r_ch[CHANNELS]);
-// Adds the bands of every group r_level carries on r_level.m (modulated where the spec says) to its channels.
-// A level holding carry is its run's last (the level above gets its carry after its insertions): its modulated bands
+// Adds the bands of the ground and of p_fields field groups (-1: every one r_level carries) on r_level.m (modulated where
+// the spec says) to its channels. Without its field groups' bands a level writes no state group either.
+// A level holding carry is its run's last (the level above gets its carry after its insertions, derived from its channels
+// before them): its modulated bands
 // read it (Modulation::modulate).
-void insert_bands(const Spec &p_spec, Level &r_level);
+void insert_bands(const Spec &p_spec, Level &r_level, int p_fields = -1);
 // The same at one lattice point p_p of Λ_m: r_slots holds every slot after subdivision (H(V_{m+1})), the level's
 // insertions are added (a modulated band: value n.w A, slopes n.s (A 2^-shift) + n.w dA, the GPU's order).
 void insert_at(const Spec &p_spec, int p_m, const Vector3i64 &p_p, float r_slots[SLOTS]);
