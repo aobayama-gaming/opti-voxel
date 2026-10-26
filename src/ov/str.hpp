@@ -78,18 +78,22 @@ inline bool is_valid_ascii_identifier(const str &p_s) {
     return true;
 }
 
-// godot's String::num(p_v) (decimals -1): 14 decimals, one fewer per power of ten past 10, trailing zeros dropped.
-inline str num(double p_v) {
+// godot's String::num(p_v, p_decimals): p_decimals decimals (-1: 14, one fewer per power of ten past 10), trailing zeros
+// dropped.
+inline str num(double p_v, int p_decimals = -1) {
     if (std::isnan(p_v)) {
         return "nan";
     }
     if (std::isinf(p_v)) {
         return std::signbit(p_v) ? "-inf" : "inf";
     }
-    int decimals = 14;
-    const double abs_v = std::fabs(p_v);
-    if (abs_v > 10) {
-        decimals -= int(std::floor(std::log10(abs_v)));
+    int decimals = p_decimals;
+    if (decimals < 0) {
+        decimals = 14;
+        const double abs_v = std::fabs(p_v);
+        if (abs_v > 10) {
+            decimals -= int(std::floor(std::log10(abs_v)));
+        }
     }
     decimals = decimals > 32 ? 32 : (decimals < 0 ? 0 : decimals);
     char buf[512];

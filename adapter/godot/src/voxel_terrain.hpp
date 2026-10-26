@@ -5,40 +5,30 @@
 #include "godot_cpp/variant/packed_float32_array.hpp"
 #include "godot_cpp/variant/variant.hpp"
 
-#include "chunk_discoverer.hpp"
-
 #include "godot_cpp/classes/camera3d.hpp"
 
 #include "godot_cpp/classes/editor_interface.hpp"
 #include "godot_cpp/classes/sub_viewport.hpp"
 #include "godot_cpp/classes/viewport.hpp"
 
-#include <utility>
-#include <vector>
-
-#include "chunk_memory.hpp"
-
-#include "GPU_direct_mesher.hpp"
-#include "GPU_mesher.hpp"
-#include "debug_log.hpp"
 #include "godot_mesh_host.hpp"
 #include "godot_page_host.hpp"
 #include "gpu_profiler.hpp"
-#include "mesh_validator.hpp"
-#include "page_auditor.hpp"
 #include "rd_device.hpp"
-
-#include "sdf_cascade.hpp"
+#include "world.hpp"
 
 using namespace godot;
 
+// The terrain node: Godot's host of an ov::World. Its properties are the world's settings (set before the node enters
+// the tree); it lends the world the main RenderingDevice (RDDevice) and draws its output (GodotPageHost: GPU Direct's
+// pages; GodotMeshHost: the legacy meshes), and each frame hands it the camera.
 class VoxelTerrain : public Node3D {
     GDCLASS(VoxelTerrain, Node3D)
 
 public:
     enum PipelineMode {
-        PIPELINE_GPU_LEGACY = 1,
-        PIPELINE_GPU_DIRECT = 2,
+        PIPELINE_GPU_LEGACY = ov::World::PIPELINE_GPU_LEGACY,
+        PIPELINE_GPU_DIRECT = ov::World::PIPELINE_GPU_DIRECT,
     };
 
 protected:
@@ -46,151 +36,24 @@ protected:
 
 private:
     Camera3D *camera = nullptr;
+    ov::World world;
+    ov::World::Settings &cfg() { return world.settings(); }
+    const ov::World::Settings &cfg() const { return world.settings(); }
 
-    ChunkParam chunk_param; // ChunkParam's defaults; voxel_size and skirt_depth are properties
-
-    ChunkDiscoverer *chunk_discoverer = nullptr;
-
-    RID scenario;
-
-    // The main RenderingDevice as the core's device (used on the render thread), and the hosts drawing the meshers' output.
+    // The main RenderingDevice as the world's device (used on the render thread), and the hosts drawing its output.
     RDDevice *main_device = nullptr;
     GodotPageHost *page_host = nullptr; // GPU Direct's pages
     GodotMeshHost *mesh_host = nullptr; // the legacy meshes
 
-    GPUMesher *gpu_mesher = nullptr;
-
-    GPUDirectMesher *direct_mesher = nullptr;
-
-    MeshValidator *validator = nullptr;
-    GodotMeshHost *validator_host = nullptr; // the validator's legacy meshes, drawn in a scenario nothing renders
-    void _free_validator();
     GPUProfiler *gpu_profiler = nullptr;
-    PageAuditor *auditor = nullptr;
-    Dictionary audit_report;
     bool debug_gpu_profile = false;
     bool debug_gpu_profile_frames = false; // record every captured frame (GPUProfiler::take_frames)
-    Dictionary validation_report;
-
-    SDFCascade *sdf = memnew(SDFCascade); // the one terrain: the cascade ground under the instance table
-
-    VoxelState visual_mesh_data;
-
-    // Settings (must be set before the node enters the tree).
-    PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
-    int terrain_mode = 1;
-    int legacy_batch_size = 1024;
-    // Number of LOD levels (0 .. lod_numbers - 1). The GPU reads a chunk's LOD from the low 32 bits
-    // of its id (findLSB), so at most MAX_LOD_NUMBERS.
-    int lod_numbers = 15;
-    int archetype_instances = 0;
-    double archetype_instance_area = 200.0;
-    int archetype_trees = 0;
-    double archetype_tree_area = 60.0;
-    double biome_radius = 0.0;
-    String climate_path;
-    bool archetype_band = true;
-    bool archetype_stream = true;
-    int archetype_stream_part_sides = int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES);
-    bool archetype_moments = true;
-    float archetype_erode = Archetype::ERODE_CELLS;
-    float archetype_resolve = Archetype::ErodeRule().resolve;
-    bool legacy_trim_indices = false;
-    // Dual contouring of Hermite data (DC-lite) in the meshers' vertex pass: sharp UNION / SUBTRACT
-    // creases land on the crease instead of the Surface Nets mass point (gpu_glsl.hpp).
-    bool dual_contouring = false;
-    float lod_pixel_error = 2.0f;
-    float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
-    float lod_view_margin_deg = 20.0f;
-    float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
-    VoxelPos world_origin_request; // LOD0 voxels, snapped in _ready
-    GPUDirectMesher::Settings direct_settings;
-    int debug_view = 0;
-    Dictionary page_params; // page shader uniforms set from outside (VoxelSky's clouds), applied when the pool exists
-    int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
-    bool discovery_cache = true;
-    bool discovery_verify = false;
-    bool destroy_verify = false;
-    int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made)
-    bool discovery_compare = false;
-    bool walk_gpu = true; // the streamed sources' site walks read the ground on the GPU (FieldGPU)
-    bool walk_verify = false;
-    int walk_batch = int(SDFTable::WALK_BATCH_GPU); // walk keys per drain task on the GPU field (--walk_batch)
-
-    bool started = false;
-
-    // update_destroy is needed (a scan or mesher results arrived since it last ran).
-    bool destroy_dirty = false;
-    // View of the scan currently in visual_mesh_data.scanned_chunk.
-    ScanView scan_view;
-
-    // Discovery audit (debug_audit_discovery): quad counts of every chunk the cull dropped.
-    struct DiscoveryAudit {
-        bool running = false;
-        Dictionary base; // sizes, lod jump: filled when it starts
-        int64_t expected = 0;
-        int64_t checked = 0;
-        int64_t misses = 0;
-        int64_t miss_quads = 0;
-        Array miss_examples;
-        Dictionary misses_by_lod;
-        uint64_t start_usec = 0;
-    } discovery_audit;
-    Dictionary discovery_audit_report;
-    void _poll_discovery_audit();
+    Dictionary page_params; // page shader uniforms set from outside (VoxelSky's clouds), applied when the pages exist
 
     void _teardown();
-
-    // Re-mesh the loaded chunks an instance edit can change and invalidate the discoverer's cull cache.
-    void _apply_instance_edit();
     // The camera's view axis in render space.
     Vector3 _camera_forward() const;
-    struct EditStats {
-        int64_t edits = 0;
-        int64_t remesh_total = 0;
-        int64_t remesh_last = 0;
-        TimingStat apply; // the edit + the re-mesh enqueue
-    } edit_stats;
-
     bool _can_set_world_origin(int64_t p_voxel) const;
-
-    //debug
-
-    uint32_t exec_time = 0;
-    bool scan_received = false;
-    int64_t frames_until_loaded = -1;
-    uint64_t start_usec = 0;
-    int64_t usec_until_loaded = -1;
-
-    struct ProcessStats {
-        TimingStat process_total;
-        TimingStat stream_poll; // SDFBase::poll (the streamed keys landed, the stream's evictions)
-        TimingStat scan_ingest; // get_scanned_chunks + add_scan_chunk + send_chunk
-        TimingStat scan_apply; // part of scan_ingest: VoxelState::add_scan_chunk (the scan delta)
-        TimingStat destroy_from_scan; // VoxelState::update_destroy
-        TimingStat destroy_verify; // VoxelState::verify_against_full (--destroy_verify)
-        TimingStat mesher_dispatch; // process_queue
-        // Parts of mesher_dispatch (the mesher's DispatchTimes, per frame).
-        TimingStat gate_admit; // ChunkGate::admit
-        TimingStat build_lists; // SDFGpuTable::build_lists
-        TimingStat record_bytes; // SDFGpuTable::record_bytes
-        TimingStat mesher_collect; // get_results
-        TimingStat destroy_chunks; // VoxelState::destroy_marked
-        TimingStat compact; // GPUDirectMesher::compact
-        TimingStat coverage; // VoxelState::push_coverage
-
-        // The sections by name, for the reports.
-        std::vector<std::pair<const char *, const TimingStat *>> sections() const {
-            return { { "total", &process_total }, { "stream_poll", &stream_poll }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
-                { "destroy_from_scan", &destroy_from_scan }, { "destroy_verify", &destroy_verify },
-                { "mesher_dispatch", &mesher_dispatch }, { "gate_admit", &gate_admit }, { "build_lists", &build_lists },
-                { "record_bytes", &record_bytes }, { "mesher_collect", &mesher_collect },
-                { "destroy_chunks", &destroy_chunks }, { "compact", &compact }, { "coverage", &coverage } };
-        }
-    } process_stats;
-    DispatchTimes last_dispatch_times; // the mesher's, at the previous frame
-    // The mesher's dispatch sub-timers since the previous frame, into their sections.
-    void _record_dispatch_times(const DispatchTimes &p_now);
 
 public:
     void _ready() override;

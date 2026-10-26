@@ -1,70 +1,10 @@
 #include "quad_pool_spike.hpp"
-#include "godot_conv.hpp"
 
-#include "debug_log.hpp"
-#include "gpu_shader.hpp"
-#include "page_format.hpp"
+#include "godot_conv.hpp"
 
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
-
-#include <cmath>
-
-static constexpr const char SPIKE_COMPUTE[] = R"glsl(#version 450
-layout(local_size_x = 64) in;
-
-layout(set = 0, binding = 0, rgba16ui) uniform restrict writeonly uimage2D staging;
-layout(set = 0, binding = 1, std430) restrict buffer Counter { uint counter[]; };
-layout(push_constant, std430) uniform Params {
-    vec4 origin_size; // xyz origin, w sheet size
-    uvec4 dims;       // x = side
-    ivec4 chunk;      // xyz: the chunk the corners are stored relative to
-    vec4 grid;        // xyz: world position of its vertex (0, 0, 0), w: its cell size
-} params;
-
-/*GLSL_PAGE_FORMAT*/
-
-float height(vec2 xz) { return params.origin_size.y + 3.0 * sin(xz.x * 0.3) * cos(xz.y * 0.3); }
-vec3 surf(vec2 xz) { return vec3(xz.x, height(xz), xz.y); }
-vec3 surf_normal(vec2 xz) {
-    float dx = 0.9 * cos(xz.x * 0.3) * cos(xz.y * 0.3);
-    float dz = -0.9 * sin(xz.x * 0.3) * sin(xz.y * 0.3);
-    return normalize(vec3(-dx, 1.0, -dz));
-}
-
-void put_corner(uint slot, uint k, vec2 xz) {
-    vec3 local = (surf(xz) - params.grid.xyz) / params.grid.w;
-    store_corner(slot, k, encode_corner(local, pack_normal_oct(surf_normal(xz)), 0u, page_pos_scale(32)));
-}
-
-void main() {
-    uint side = params.dims.x;
-    uint i = gl_GlobalInvocationID.x;
-    if (i == 0u) {
-        counter[1] = (side * side + 63u) / 64u; // used groups of 64 quads
-    }
-    if (i >= side * side) {
-        return;
-    }
-    uint qx = i % side;
-    uint qz = i / side;
-    float step = params.origin_size.w / float(side);
-    vec2 base = params.origin_size.xz + vec2(qx, qz) * step;
-    vec2 c1 = base + vec2(step, 0.0);
-    vec2 c2 = base + vec2(0.0, step);
-    if (qx >= side / 2u) { // swapped winding on the right half
-        vec2 t = c1; c1 = c2; c2 = t;
-    }
-    uint slot = atomicAdd(counter[0], 1u);
-    if (slot % QUAD_GROUP == 0u) {
-        store_group_header(slot / QUAD_GROUP, params.chunk.xyz, 0u);
-    }
-    put_corner(slot, 0u, base);
-    put_corner(slot, 1u, c1);
-    put_corner(slot, 2u, c2);
-    put_corner(slot, 3u, base + vec2(step, step));
-}
-)glsl";
+#include <godot_cpp/core/class_db.hpp>
 
 void QuadPoolSpike::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_side", "side"), &QuadPoolSpike::set_side);
@@ -83,274 +23,32 @@ void QuadPoolSpike::_bind_methods() {
 }
 
 void QuadPoolSpike::_ready() {
-    mutex.instantiate();
-    ERR_FAIL_COND_MSG(side * side > page_capacity, "QuadPoolSpike: sheet does not fit in one page.");
-    ERR_FAIL_COND_MSG(KILL_B_OFFSET + KILL_B_COUNT > (uint32_t)(side * side), "QuadPoolSpike: sheet too small for the kill test.");
-
-    // Corners are stored relative to one chunk: the smallest one whose vertex grid holds the sheet.
-    const AABB sheet(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size));
-    const Vector3 sheet_center = sheet.get_center();
-    sheet_chunk = ChunkMath::chunk_at_render(ov_f3(sheet_center), chunk_param);
-    for (int lod = 0; lod < 24; lod++) {
-        const Vector3 lo = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{}, chunk_param));
-        const Vector3 grid_hi{ float(chunk_param.chunk_size - 1), float(chunk_param.chunk_size - 1), float(chunk_param.chunk_size - 1) };
-        const Vector3 hi = godot_v3(ChunkMath::grid_to_render(sheet_chunk, ov_f3(grid_hi), chunk_param));
-        if (AABB(lo, hi - lo).encloses(sheet)) {
-            break;
-        }
-        sheet_chunk = ChunkMath::get_parent_from_child(sheet_chunk);
-    }
-
-    device = new RDDevice(RenderingServer::get_singleton()->get_rendering_device());
+    RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
+    ERR_FAIL_NULL_MSG(rd, "QuadPoolSpike: no RenderingDevice (Compatibility renderer?)");
+    device = new RDDevice(rd);
     host = new GodotPageHost(get_world_3d()->get_scenario(), device);
-    host->set_material_param("voxel_size", chunk_param.voxel_size);
-    pool = new QuadPagePool();
-    pool->initialize(device, host, page_capacity, 1 + extra_pages);
-    page = pool->acquire_page();
-    pool->set_page_aabb(page, RenderBox{ ov_f3(sheet_origin - Vector3(0, 5, 0)), Float3{ sheet_size, 10.0f, sheet_size } });
-
-    const int p = page;
-    device->post([this, p]() { _rt_run(p); });
-}
-
-void QuadPoolSpike::_rt_run(int p_page) {
-    const ov::str code = ov::replace_all(SPIKE_COMPUTE, "/*GLSL_PAGE_FORMAT*/", PageFormat::glsl_encode());
-    rt_pipeline = ov::gpu::compile(*device, "quad_pool_spike", code);
-    ERR_FAIL_COND_MSG(!rt_pipeline.is_valid(), "QuadPoolSpike: SHADER COMPILATION FAILED.");
-
-    rt_staging = device->create_texture(QuadPagePool::TEX_FORMAT, QuadPagePool::TEX_WIDTH, pool->get_page_rows(),
-            ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_COPY_SRC | ov::gpu::TEXTURE_COPY_DST, nullptr);
-    device->clear_texture(rt_staging);
-    rt_counter = device->create_buffer(ov::gpu::BufferKind::STORAGE, 16, nullptr);
-    rt_uniform_set = device->create_bind_set(rt_pipeline, { ov::gpu::Binding::storage_image(0, rt_staging), { 1, ov::gpu::BufferKind::STORAGE, rt_counter } });
-
-    const Vector3 grid = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{}, chunk_param));
-    const ov::ivec3 sheet_chunk_lo = WorldCoord::lo32_i(sheet_chunk);
-    PackedByteArray push;
-    push.resize(64);
-    push.fill(0);
-    push.encode_float(0, sheet_origin.x);
-    push.encode_float(4, sheet_origin.y);
-    push.encode_float(8, sheet_origin.z);
-    push.encode_float(12, sheet_size);
-    push.encode_u32(16, side);
-    push.encode_s32(32, sheet_chunk_lo.x);
-    push.encode_s32(36, sheet_chunk_lo.y);
-    push.encode_s32(40, sheet_chunk_lo.z);
-    push.encode_float(48, grid.x);
-    push.encode_float(52, grid.y);
-    push.encode_float(56, grid.z);
-    push.encode_float(60, chunk_param.voxel_size * float(ChunkMath::get_lod_size(sheet_chunk)));
-
-    const uint32_t quad_count = side * side;
-    device->clear_buffer(rt_counter, 0, 16);
-    device->dispatch(rt_pipeline, rt_uniform_set, push.ptr(), uint32_t(push.size()), (quad_count + 63) / 64, 1, 1);
-
-    // The whole point: GPU -> GPU, the CPU never sees the quads or the count.
-    pool->rt_copy_page_from(p_page, rt_staging, 0);
-    const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_page);
-    device->copy_buffer(rt_counter, page_rd.command, 4, QuadPagePool::INDIRECT_INSTANCE_COUNT_OFFSET, 4);
-
-    // Debug verification only.
-    device->read_texture_async(page_rd.texture, [this](const ov::bytes &p_data) { _rt_on_texture(godot_bytes(p_data), 0); });
-    device->read_buffer_async(page_rd.command, 0, 20, [this](const ov::bytes &p_data) { _rt_on_command(godot_bytes(p_data)); });
-    VLOG(1, "QuadPoolSpike: dispatched ", quad_count, " quads into page ", p_page);
-}
-
-void QuadPoolSpike::_rt_kill(int p_page) {
-    pool->rt_kill_range(p_page, KILL_A_OFFSET, KILL_A_COUNT);
-    pool->rt_kill_range(p_page, KILL_B_OFFSET, KILL_B_COUNT);
-    device->read_texture_async(pool->rt_get_page_rd(p_page).texture, [this](const ov::bytes &p_data) { _rt_on_texture(godot_bytes(p_data), 1); });
-}
-
-void QuadPoolSpike::_rt_on_texture(const PackedByteArray &p_data, int p_stage) {
-    mutex->lock();
-    texture_data[p_stage] = p_data;
-    readback_ready = p_stage == 1 || !command_data.is_empty();
-    mutex->unlock();
-}
-
-void QuadPoolSpike::_rt_on_command(const PackedByteArray &p_data) {
-    mutex->lock();
-    command_data = p_data;
-    readback_ready = !texture_data[0].is_empty();
-    mutex->unlock();
+    host->set_material_param("voxel_size", ChunkParam().voxel_size); // the page shader's other defaults: chunk 32, skirt 2
+    check = new QuadPoolCheck();
+    if (!check->start(device, host, settings)) {
+        delete check;
+        check = nullptr;
+    }
 }
 
 void QuadPoolSpike::_process(double) {
-    mutex->lock();
-    const bool ready = readback_ready;
-    readback_ready = false;
-    mutex->unlock();
-    if (!ready) {
-        return;
+    if (check) {
+        check->step();
     }
-    if (stage == 0) {
-        Dictionary r;
-        _verify_write(r);
-        mutex->lock();
-        report = r;
-        mutex->unlock();
-        stage = 1;
-    } else if (stage == 2) {
-        Dictionary r = report;
-        _verify_kills(r);
-        r["ok"] = (bool)r["write_ok"] && (bool)r["kill_ok"];
-        r["pool"] = godot_dict(pool->get_stats());
-        stage = 3;
-        mutex->lock();
-        report = r;
-        mutex->unlock();
-        VLOG(1, "QuadPoolSpike report: ", ov_str(Variant(r).stringify()));
-    }
-}
-
-void QuadPoolSpike::_verify_write(Dictionary &r) {
-    mutex->lock();
-    const PackedByteArray bytes = texture_data[0];
-    const PackedByteArray command = command_data;
-    mutex->unlock();
-    const uint16_t *data = reinterpret_cast<const uint16_t *>(bytes.ptr());
-    const uint32_t rows = bytes.size() / PageFormat::ROW_BYTES;
-    const float scale = PageFormat::pos_scale(chunk_param.chunk_size);
-    // One fixed-point step, plus float rounding of the world <-> grid transforms.
-    const double pos_tolerance = chunk_param.voxel_size * double(ChunkMath::get_lod_size(sheet_chunk)) / scale + 1e-3;
-
-    const uint32_t quad_count = side * side;
-    r["expected_quads"] = quad_count;
-    r["expected_groups"] = (quad_count + 63) / 64;
-    r["indirect_index_count"] = command.decode_u32(0);
-    r["indirect_group_count"] = command.decode_u32(4);
-    r["texture_bytes_read"] = bytes.size();
-    r["sheet_chunk"] = godot_str(sheet_chunk);
-
-    const float step = sheet_size / side;
-    auto height = [&](float x, float z) { return sheet_origin.y + 3.0f * std::sin(x * 0.3f) * std::cos(z * 0.3f); };
-    auto surf = [&](float x, float z) { return Vector3(x, height(x, z), z); };
-    auto surf_normal = [&](float x, float z) {
-        const float dx = 0.9f * std::cos(x * 0.3f) * std::cos(z * 0.3f);
-        const float dz = -0.9f * std::sin(x * 0.3f) * std::sin(z * 0.3f);
-        return Vector3(-dx, 1.0f, -dz).normalized();
-    };
-
-    // Quads land in arbitrary slots (atomicAdd), so match each slot to its grid cell by corner A.
-    double max_pos_err = 0.0;
-    double max_normal_err_deg = 0.0;
-    int bad = 0;
-    PackedInt32Array seen;
-    seen.resize(quad_count);
-    seen.fill(0);
-    int bad_headers = 0;
-    const uint32_t used_groups = (quad_count + PageFormat::QUAD_GROUP - 1) / PageFormat::QUAD_GROUP;
-    for (uint32_t g = 0; g < used_groups && g < rows; g++) {
-        bad_headers += PageFormat::header_chunk(PageFormat::row(data, g)) != WorldCoord::lo32_i(sheet_chunk) ? 1 : 0;
-    }
-    auto world_of = [&](uint32_t slot, int k) {
-        const ov::ivec3 chunk = PageFormat::header_chunk(PageFormat::row(data, slot / PageFormat::QUAD_GROUP));
-        return godot_v3(ChunkMath::grid_to_render_lo32(chunk, PageFormat::decode_local(PageFormat::corner(data, slot, k), scale), chunk_param));
-    };
-    for (uint32_t slot = 0; slot < quad_count && slot / PageFormat::QUAD_GROUP < rows; slot++) {
-        if (PageFormat::is_zero(PageFormat::corner(data, slot, 0))) {
-            bad++;
-            continue;
-        }
-        const Vector3 a = world_of(slot, 0);
-        const int qx = (int)std::lround((a.x - sheet_origin.x) / step);
-        const int qz = (int)std::lround((a.z - sheet_origin.z) / step);
-        if (qx < 0 || qz < 0 || qx >= side || qz >= side) {
-            bad++;
-            continue;
-        }
-        seen.set(qz * side + qx, seen[qz * side + qx] + 1);
-        Vector2 c[4] = {
-            Vector2(sheet_origin.x + qx * step, sheet_origin.z + qz * step),
-            Vector2(sheet_origin.x + (qx + 1) * step, sheet_origin.z + qz * step),
-            Vector2(sheet_origin.x + qx * step, sheet_origin.z + (qz + 1) * step),
-            Vector2(sheet_origin.x + (qx + 1) * step, sheet_origin.z + (qz + 1) * step),
-        };
-        if (qx >= side / 2) {
-            SWAP(c[1], c[2]);
-        }
-        for (int k = 0; k < 4; k++) {
-            const Vector3 got = world_of(slot, k);
-            max_pos_err = MAX(max_pos_err, (double)got.distance_to(surf(c[k].x, c[k].y)));
-            const Float3 n = PageFormat::decode_normal(PageFormat::corner(data, slot, k));
-            const double ang = Math::rad_to_deg(std::acos(std::clamp(godot_v3(n).dot(surf_normal(c[k].x, c[k].y)), -1.0f, 1.0f)));
-            max_normal_err_deg = MAX(max_normal_err_deg, ang);
-        }
-    }
-    int missing = 0;
-    int duplicated = 0;
-    for (int i = 0; i < (int)quad_count; i++) {
-        missing += seen[i] == 0 ? 1 : 0;
-        duplicated += seen[i] > 1 ? 1 : 0;
-    }
-    // Slots past the sheet must be zero (the tail of the last group is drawn), and so must the rows
-    // past it.
-    int dirty_tail = 0;
-    for (uint32_t slot = quad_count; slot < used_groups * PageFormat::QUAD_GROUP; slot++) {
-        for (int k = 0; k < 4; k++) {
-            dirty_tail += PageFormat::is_zero(PageFormat::corner(data, slot, k)) ? 0 : 1;
-        }
-    }
-    for (uint32_t i = used_groups * PageFormat::TEX_WIDTH * PageFormat::TEXEL_CHANNELS; i < bytes.size() / 2; i++) {
-        dirty_tail += data[i] != 0 ? 1 : 0;
-    }
-    r["max_position_error"] = max_pos_err;
-    r["position_tolerance"] = pos_tolerance;
-    r["bad_group_headers"] = bad_headers;
-    r["max_normal_error_deg"] = max_normal_err_deg;
-    r["bad_quads"] = bad;
-    r["missing_cells"] = missing;
-    r["duplicated_cells"] = duplicated;
-    r["dirty_tail_floats"] = dirty_tail;
-    r["write_ok"] = (int)command.decode_u32(4) == (int)((quad_count + 63) / 64) && (int)command.decode_u32(0) == 64 * 6 &&
-            max_pos_err < pos_tolerance && max_normal_err_deg < PageFormat::NORMAL_MAX_ERROR_DEG && bad == 0 && bad_headers == 0 && missing == 0 &&
-            duplicated == 0 && dirty_tail == 0;
-}
-
-void QuadPoolSpike::_verify_kills(Dictionary &r) {
-    mutex->lock();
-    const PackedByteArray before_bytes = texture_data[0];
-    const PackedByteArray after_bytes = texture_data[1];
-    mutex->unlock();
-    const uint16_t *before = reinterpret_cast<const uint16_t *>(before_bytes.ptr());
-    const uint16_t *after = reinterpret_cast<const uint16_t *>(after_bytes.ptr());
-    // Kills zero whole rows (groups), headers included.
-    auto killed = [](uint32_t g) {
-        const uint32_t q = g * PageFormat::QUAD_GROUP;
-        return (q >= KILL_A_OFFSET && q < KILL_A_OFFSET + KILL_A_COUNT) || (q >= KILL_B_OFFSET && q < KILL_B_OFFSET + KILL_B_COUNT);
-    };
-    int not_zeroed = 0;
-    int damaged = 0;
-    const uint32_t row_channels = PageFormat::TEX_WIDTH * PageFormat::TEXEL_CHANNELS;
-    const uint32_t rows = MIN(before_bytes.size(), after_bytes.size()) / PageFormat::ROW_BYTES;
-    for (uint32_t g = 0; g < rows; g++) {
-        for (uint32_t i = g * row_channels; i < (g + 1) * row_channels; i++) {
-            if (killed(g)) {
-                not_zeroed += after[i] != 0 ? 1 : 0;
-            } else {
-                damaged += after[i] != before[i] ? 1 : 0;
-            }
-        }
-    }
-    r["kill_not_zeroed_channels"] = not_zeroed;
-    r["kill_damaged_channels"] = damaged;
-    r["kill_ok"] = rows > 0 && not_zeroed == 0 && damaged == 0;
 }
 
 Dictionary QuadPoolSpike::get_report() {
-    mutex->lock();
-    Dictionary r = report.duplicate();
-    mutex->unlock();
-    return r;
+    return check ? godot_dict(check->report()) : Dictionary();
 }
 
 void QuadPoolSpike::run_kill_test() {
-    ERR_FAIL_COND_MSG(stage != 1, "QuadPoolSpike: run_kill_test() needs a verified write first.");
-    stage = 2;
-    const int p = page;
-    device->post([this, p]() { _rt_kill(p); });
+    if (check) {
+        check->run_kill_test();
+    }
 }
 
 void QuadPoolSpike::set_debug_view(int p_view) {
@@ -360,21 +58,16 @@ void QuadPoolSpike::set_debug_view(int p_view) {
 }
 
 void QuadPoolSpike::_exit_tree() {
-    if (!pool) {
-        return;
+    if (check) {
+        check->destroy(); // the pool and the GPU objects on the render thread, then itself
+        check = nullptr;
     }
-    // Bound by value: this node may be gone by the time the render thread runs it.
-    device->post([device = device, handles = std::vector<ov::gpu::Handle>{ rt_uniform_set, rt_pipeline, rt_staging, rt_counter }]() {
-        for (const ov::gpu::Handle h : handles) {
-            if (h.is_valid()) {
-                device->free(h);
-            }
-        }
-    });
-    pool->destroy();
-    pool = nullptr;
-    host->destroy();
-    host = nullptr;
-    device->post([device = device]() { delete device; });
-    device = nullptr;
+    if (host) {
+        host->destroy();
+        host = nullptr;
+    }
+    if (device) {
+        device->post([device = device]() { delete device; });
+        device = nullptr;
+    }
 }

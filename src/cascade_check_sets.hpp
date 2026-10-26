@@ -16,7 +16,7 @@
 // terraces), "4d" adapter/godot/project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
 // field group), "4r" adapter/godot/project/climate/region_test.json (two landforms behind regions, gated height terms, 11 groups), "4w"
 // adapter/godot/project/climate/world.json (the eight landforms behind regions of three climate axes, 17 groups; tuned for 25 LODs).
-namespace CascadeSpikeSets {
+namespace CascadeCheckSets {
 
 enum class SpikeSet {
     H8,
@@ -89,4 +89,4 @@ inline void configure_variant(SDFCascade &p_sdf, SpikeSet p_v, int p_lods, Chunk
     p_sdf.configure(r_param, p_lods);
 }
 
-} // namespace CascadeSpikeSets
+} // namespace CascadeCheckSets

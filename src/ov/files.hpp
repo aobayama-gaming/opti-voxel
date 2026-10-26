@@ -6,6 +6,7 @@
 
 #include "ov/format.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -58,6 +59,28 @@ inline void set_file_writer(FileWriter p_writer) {
 
 inline bool write_file(const str &p_path, const str &p_text) {
     return file_writer() != nullptr && file_writer()(p_path, p_text);
+}
+
+// The directory p_path and its parents (a report's output); false if it can't be made.
+using DirMaker = bool (*)(const str &p_path);
+
+inline bool local_dir_maker(const str &p_path) {
+    std::error_code error;
+    std::filesystem::create_directories(p_path, error);
+    return !error;
+}
+
+inline DirMaker &dir_maker() {
+    static DirMaker s_maker = local_dir_maker;
+    return s_maker;
+}
+
+inline void set_dir_maker(DirMaker p_maker) {
+    dir_maker() = p_maker;
+}
+
+inline bool make_dirs(const str &p_path) {
+    return dir_maker() != nullptr && dir_maker()(p_path);
 }
 
 // p_dir / p_name (godot's path_join).

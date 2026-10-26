@@ -1,17 +1,13 @@
-#include "cascade_spike_points.hpp"
+#include "cascade_check_points.hpp"
 
 #include "cascade_points_gpu.hpp"
-#include "godot_conv.hpp"
 
-#include <godot_cpp/variant/packed_int64_array.hpp>
-
-using namespace godot;
-using namespace CascadeSpikeSets;
+using namespace CascadeCheckSets;
 using ExactNoise::Float4;
 using ExactNoise::float_bits;
 using ExactNoise::same_bits;
 
-namespace CascadeSpikePoints {
+namespace CascadeCheckPoints {
 
 namespace {
 
@@ -21,15 +17,15 @@ constexpr int POINT_LODS[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24 };
 constexpr uint32_t TIMING_SIZES[] = { 1024, 4096, 16384, 65536 };
 constexpr int TIMING_LODS[] = { 0, 5 };
 
-String text(const Float4 &p_f) {
-    return vformat("(%s %s %s %s)", p_f.x, p_f.y, p_f.z, p_f.w);
+ov::str text(const Float4 &p_f) {
+    return ov::format("(%s %s %s %s)", p_f.x, p_f.y, p_f.z, p_f.w);
 }
 
 // Voxel p_index of place p_place at LOD p_lod: within 64 LOD cells of its base (any voxel, so any lattice index).
 VoxelPos test_voxel(int p_lod, int p_place, int p_index) {
     const int64_t P32 = int64_t(1) << 32;
     const int64_t boundaries[] = { P32, -P32, 3 * P32, -5 * P32 };
-    const int64_t bases[PLACES] = { 0, (int64_t(1) << 60) - 123457, -(int64_t(1) << 60) + 54321, 0, int64_t(1) << MIN(32 + p_lod, 60) };
+    const int64_t bases[PLACES] = { 0, (int64_t(1) << 60) - 123457, -(int64_t(1) << 60) + 54321, 0, int64_t(1) << ov::min(32 + p_lod, 60) };
     VoxelPos v;
     for (int a = 0; a < 3; a++) {
         const int64_t base = p_place == 3 ? boundaries[(p_index + a) % 4] : bases[p_place];
@@ -40,7 +36,7 @@ VoxelPos test_voxel(int p_lod, int p_place, int p_index) {
 
 } // namespace
 
-Dictionary check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
+ov::Value check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
     SDFCascade sdf;
     ChunkParam param = p_param;
     configure_variant(sdf, p_set, p_lods, param);
@@ -59,11 +55,11 @@ Dictionary check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, c
             }
         }
     }
-    Dictionary d;
-    Array examples;
+    ov::Value d = ov::Value::object();
+    ov::Value examples = ov::Value::array();
     int64_t differing = 0;
     int64_t compared = 0;
-    PackedInt64Array per_lod;
+    std::vector<int64_t> per_lod;
     CascadePointsGPU gpu;
     CascadePointsGPU::BatchStats stats;
     std::vector<Float4> units(voxels.size());
@@ -90,7 +86,7 @@ Dictionary check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, c
             if (!same_bits(units[i], want_unit) || !same_bits(field, want_field) || float_bits(cull) != float_bits(want_cull)) {
                 lod_differing++;
                 if (examples.size() < 24) {
-                    examples.push_back(vformat("set %s LOD %d voxel %s: unit gpu %s cpu %s, field %s / %s, cull %s / %s", godot_str(set_label(p_set)), lod, godot_str(voxels[i]),
+                    examples.push_back(ov::format("set %s LOD %d voxel %s: unit gpu %s cpu %s, field %s / %s, cull %s / %s", set_label(p_set), lod, WorldCoord::to_string(voxels[i]),
                             text(units[i]), text(want_unit), text(field), text(want_field), cull, want_cull));
                 }
             }
@@ -100,7 +96,7 @@ Dictionary check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, c
     }
     d["points"] = compared;
     d["differing"] = differing;
-    d["differing_per_lod"] = per_lod;
+    d["differing_per_lod"] = ov::Value::array_of(per_lod);
     d["points_per_lod"] = int64_t(PLACES * PER_PLACE);
     d["batches"] = stats.batches;
     d["gpu_ms"] = stats.gpu_ms;
@@ -111,9 +107,9 @@ Dictionary check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, c
     return d;
 }
 
-Dictionary point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
-    Dictionary out;
-    Array rows;
+ov::Value point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
+    ov::Value out = ov::Value::object();
+    ov::Value rows = ov::Value::array();
     for (const SpikeSet set : p_sets) {
         SDFCascade sdf;
         ChunkParam param = p_param;
@@ -121,10 +117,10 @@ Dictionary point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &
         CascadePointsGPU gpu;
         const uint32_t most = TIMING_SIZES[std::size(TIMING_SIZES) - 1];
         if (!gpu.create(p_device, &sdf, param, most)) {
-            out[godot_str("error_" + set_label(set))] = "the point passes failed to compile";
+            out["error_" + set_label(set)] = "the point passes failed to compile";
             continue;
         }
-        out[godot_str("scratch_mb_" + set_label(set))] = double(gpu.scratch_bytes()) / 1048576.0;
+        out["scratch_mb_" + set_label(set)] = double(gpu.scratch_bytes()) / 1048576.0;
         std::vector<VoxelPos> points(most);
         std::vector<int> lods(most);
         std::vector<Float4> values(most);
@@ -145,8 +141,8 @@ Dictionary point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &
                         gpu_ms.push_back(stats.gpu_ms);
                     }
                 }
-                Dictionary row;
-                row["set"] = godot_str(set_label(set));
+                ov::Value row = ov::Value::object();
+                row["set"] = set_label(set);
                 row["lod"] = lod;
                 row["points"] = int64_t(size);
                 row["gpu_ms_median"] = median(gpu_ms);
@@ -162,4 +158,4 @@ Dictionary point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &
     return out;
 }
 
-} // namespace CascadeSpikePoints
+} // namespace CascadeCheckPoints

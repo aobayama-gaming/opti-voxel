@@ -1,0 +1,230 @@
+#pragma once
+
+#include "GPU_direct_mesher.hpp"
+#include "GPU_mesher.hpp"
+#include "chunk_discoverer.hpp"
+#include "chunk_memory.hpp"
+#include "debug_log.hpp"
+#include "gpu_device.hpp"
+#include "mesh_host.hpp"
+#include "mesh_validator.hpp"
+#include "page_auditor.hpp"
+#include "page_host.hpp"
+#include "sdf_cascade.hpp"
+
+#include "ov/value.hpp"
+
+#include <functional>
+#include <memory>
+#include <utility>
+#include <vector>
+
+namespace ov {
+
+// The engine: one terrain world, driven frame by frame by its host (Godot's VoxelTerrain, the Dawn adapter). It owns
+// the terrain (SDFCascade), the discoverer, a mesher and the loaded chunks (VoxelState); the host lends it a GPU device
+// and draws the meshers' output (PageHost / MeshHost). Main thread only, like the host's frame loop.
+class World {
+public:
+    enum PipelineMode {
+        PIPELINE_GPU_LEGACY = 1,
+        PIPELINE_GPU_DIRECT = 2,
+    };
+
+    // What the terrain is, set before start().
+    struct Settings {
+        PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
+        // 1 the Hermite cascade terrain, 2 its continents preset, 4 its flat preset under the shapes gallery.
+        int terrain_mode = 1;
+        int legacy_batch_size = 1024;
+        int lod_numbers = 15; // LODs 0 .. lod_numbers - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
+        ChunkParam chunk_param; // voxel_size and skirt_depth set by the host; the origin by start()
+        VoxelPos world_origin_request; // LOD0 voxels, snapped down to the root chunk span by start()
+        int archetype_instances = 0;
+        double archetype_instance_area = 200.0;
+        int archetype_trees = 0;
+        double archetype_tree_area = 60.0;
+        double biome_radius = 0.0;
+        str climate_path; // a host path (ov::read_file), empty for none
+        bool archetype_band = true;
+        bool archetype_stream = true;
+        int archetype_stream_part_sides = int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES);
+        bool archetype_moments = true;
+        float archetype_erode = Archetype::ERODE_CELLS;
+        float archetype_resolve = Archetype::ErodeRule().resolve;
+        bool legacy_trim_indices = false;
+        bool dual_contouring = false;
+        float lod_pixel_error = 2.0f;
+        float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
+        float lod_view_margin_deg = 20.0f;
+        float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
+        GPUDirectMesher::Settings direct;
+        int debug_view = 0;
+        int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
+        bool discovery_cache = true;
+        bool discovery_verify = false;
+        bool destroy_verify = false;
+        int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made), 0 CPU, 1 GPU
+        bool discovery_compare = false;
+        bool walk_gpu = true;
+        bool walk_verify = false;
+        int walk_batch = int(SDFTable::WALK_BATCH_GPU);
+    };
+
+    // The camera's projection, which the LOD distances are measured against.
+    struct Projection {
+        float viewport_height = 1080.0f; // the 3D render's height in pixels
+        float fov_rad = 0.0f; // vertical; 0: 75 degrees
+        float aspect = 16.0f / 9.0f;
+    };
+
+    // What the host lends: the main device (its thread runs the meshers' GPU work, Device::post) and the drawers.
+    struct Hosts {
+        gpu::Device *device = nullptr;
+        PageHost *pages = nullptr; // GPU Direct's pages
+        MeshHost *meshes = nullptr; // the legacy meshes
+        // The validator's legacy meshes: a MeshHost that draws nothing (debug_validate).
+        std::function<std::unique_ptr<MeshHost>()> hidden_meshes;
+    };
+
+    World();
+    ~World();
+    World(const World &) = delete;
+    World &operator=(const World &) = delete;
+
+    Settings &settings() { return config; }
+    const Settings &settings() const { return config; }
+
+    // The terrain built and the discoverer and mesher started; false (an error) without a device or with bad settings.
+    bool start(const Projection &p_projection, const Hosts &p_hosts, const Float3 *p_camera_pos, const Float3 *p_camera_forward);
+    // One frame: the camera (render space, null: none), the scans and meshes that landed, the next batches.
+    void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward);
+    // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer.
+    void stop();
+    bool is_started() const { return started; }
+
+    SDFCascade &terrain() { return *sdf; }
+    const SDFCascade &terrain() const { return *sdf; }
+    const ChunkParam &chunk_param() const { return config.chunk_param; }
+    uint32_t frames() const { return exec_time; }
+
+    // True once every scanned chunk is meshed and the mesher has nothing in flight; p_camera_pos (the camera now, null:
+    // none) must still be in the scanned camera chunk.
+    bool is_load_complete(const Float3 *p_camera_pos);
+    // The instance edits made so far are meshed (the legacy mesher: idle).
+    bool is_edit_settled();
+    int64_t pending_chunk_count() const { return int64_t(state.dirty_chunk.size()); }
+    // Distance from the camera (metres) that bounds every chunk the discoverer can load (0 before start).
+    double load_radius() const;
+    // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain.
+    double sdf_at(const double p_render_pos[3]) const;
+    // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point).
+    void tangent_position(double p_u_m, double p_v_m, double r_render_pos[3]) const;
+
+    void set_debug_view(int p_view);
+
+    // Instance edits (archetype table): the anchor in LOD0 voxels, a 9-float row-major rotation and 8 params (null:
+    // identity / zero), op a Combine. The chunks the edit can change are re-meshed, the discoverer rescans.
+    int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k);
+    bool remove_instance(int p_id);
+    bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation);
+
+    ov::Value debug_stats();
+    // { section: total ms since start } of frame(), cheap enough to read every frame.
+    ov::Value process_times_ms() const;
+
+    // GPU Direct only: re-mesh p_count loaded chunks with the legacy mesher and compare triangle by triangle (the report
+    // once done, empty until then). OBJ files of the first mismatching chunk go to p_dump_dir when it is not empty.
+    bool debug_validate(int p_count, const str &p_dump_dir);
+    const ov::Value &validation_report() const { return validation; }
+    // GPU Direct only: read back every page holding loaded chunks and classify all drawn quad slots.
+    bool debug_audit_pages();
+    const ov::Value &audit_report() const { return audit; }
+    // GPU Direct only: rebuild the current scan without culling and count the quads of every chunk the cull dropped (a
+    // culled chunk with quads is a hole). Run it with the camera still and the load complete.
+    bool debug_audit_discovery();
+    const ov::Value &discovery_audit_report() const { return discovery_audit_result; }
+
+private:
+    Settings config;
+    Hosts hosts;
+    std::unique_ptr<SDFCascade> sdf;
+    ChunkDiscoverer *chunk_discoverer = nullptr;
+    GPUMesher *gpu_mesher = nullptr;
+    GPUDirectMesher *direct_mesher = nullptr;
+    MeshValidator *validator = nullptr;
+    std::unique_ptr<MeshHost> validator_host;
+    PageAuditor *auditor = nullptr;
+    ov::Value validation = ov::Value::object();
+    ov::Value audit = ov::Value::object();
+    VoxelState state;
+
+    bool started = false;
+    // update_destroy is needed (a scan or mesher results arrived since it last ran).
+    bool destroy_dirty = false;
+    // View of the scan currently in state.scanned_chunk.
+    ScanView scan_view;
+    Float3 last_camera; // the camera of the last frame (and start)
+    bool has_camera = false;
+
+    // Discovery audit (debug_audit_discovery): quad counts of every chunk the cull dropped.
+    struct DiscoveryAudit {
+        bool running = false;
+        ov::Value base = ov::Value::object(); // sizes, lod jump: filled when it starts
+        int64_t expected = 0;
+        int64_t checked = 0;
+        int64_t misses = 0;
+        int64_t miss_quads = 0;
+        ov::Value miss_examples = ov::Value::array();
+        ov::Value misses_by_lod = ov::Value::object();
+        uint64_t start_usec = 0;
+    } discovery_audit;
+    ov::Value discovery_audit_result = ov::Value::object();
+    void _poll_discovery_audit();
+
+    void _apply_instance_edit();
+    void _free_validator();
+    struct EditStats {
+        int64_t edits = 0;
+        int64_t remesh_total = 0;
+        int64_t remesh_last = 0;
+        TimingStat apply; // the edit + the re-mesh enqueue
+    } edit_stats;
+
+    uint32_t exec_time = 0;
+    bool scan_received = false;
+    int64_t frames_until_loaded = -1;
+    uint64_t start_usec = 0;
+    int64_t usec_until_loaded = -1;
+
+    struct ProcessStats {
+        TimingStat process_total;
+        TimingStat stream_poll; // SDFBase::poll (the streamed keys landed, the stream's evictions)
+        TimingStat scan_ingest; // get_scanned_chunks + add_scan_chunk + send_chunk
+        TimingStat scan_apply; // part of scan_ingest: VoxelState::add_scan_chunk (the scan delta)
+        TimingStat destroy_from_scan; // VoxelState::update_destroy
+        TimingStat destroy_verify; // VoxelState::verify_against_full (destroy_verify)
+        TimingStat mesher_dispatch; // process_queue
+        // Parts of mesher_dispatch (the mesher's DispatchTimes, per frame).
+        TimingStat gate_admit; // ChunkGate::admit
+        TimingStat build_lists; // SDFGpuTable::build_lists
+        TimingStat record_bytes; // SDFGpuTable::record_bytes
+        TimingStat mesher_collect; // get_results
+        TimingStat destroy_chunks; // VoxelState::destroy_marked
+        TimingStat compact; // GPUDirectMesher::compact
+        TimingStat coverage; // VoxelState::push_coverage
+
+        // The sections by name, for the reports.
+        std::vector<std::pair<const char *, const TimingStat *>> sections() const {
+            return { { "total", &process_total }, { "stream_poll", &stream_poll }, { "scan_ingest", &scan_ingest }, { "scan_apply", &scan_apply },
+                { "destroy_from_scan", &destroy_from_scan }, { "destroy_verify", &destroy_verify }, { "mesher_dispatch", &mesher_dispatch },
+                { "gate_admit", &gate_admit }, { "build_lists", &build_lists }, { "record_bytes", &record_bytes },
+                { "mesher_collect", &mesher_collect }, { "destroy_chunks", &destroy_chunks }, { "compact", &compact }, { "coverage", &coverage } };
+        }
+    } process_stats;
+    DispatchTimes last_dispatch_times; // the mesher's, at the previous frame
+    // The mesher's dispatch sub-timers since the previous frame, into their sections.
+    void _record_dispatch_times(const DispatchTimes &p_now);
+};
+
+} // namespace ov

@@ -19,7 +19,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   Tune a table from it before any GPU run. To match a real heightmap: `uv run tools/landforms/match.py SITE TABLE --fit=3`
   (`docs/landforms.md`).
 - `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
-  (`CascadeSpike`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a window, ~3 min): the
+  (`CascadeSpike` over the core's `CascadeCheck`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a
+  window, ~3 min; on Dawn: `ov_dawn --cascade-check='{"timing":false}'`): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
   both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers; `4r` the two-landform region table) (G1); the LOD relation on the GPU outputs (G3, at the levels no climate modulates: a modulated level reads the carry its parent level derives from fields the parent chunk's samples don't carry); the discoverer's point items vs
@@ -109,7 +110,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`), 12 biome (each material's debug colour: a climate's
   biomes; B toggles it in the player), 13 coverage (hidden quads magenta, see Coverage). The player's `--spawn=U,V`
   (metres along the base's tangent plane, `VoxelTerrain.get_tangent_position`) starts it above that point.
-- `res://debug/spike.tscn` (`QuadPoolSpike`): isolated test of the GPU -> page path (write, indirect
+- `res://debug/spike.tscn` (`QuadPoolSpike` over the core's `QuadPoolCheck`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
 - `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
@@ -120,7 +121,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (> 100 pairs) or > 5% of same-LOD border pairs jumping. Writes `report.md` and `<pose>_seams.png` / `_shaded.png`.
   Run it after touching the bark, `value_noise` or the page shader's normals. The float hash failed it (270 pairs on
   lines on one pose); the current bark: 0.02% of pairs jump inside chunks, 3% across borders.
-- `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike`): GPU vs CPU check of the integer
+- `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike` over the core's `FrameCheck`;
+  on Dawn: `ov_dawn --frame-check[=VOXEL_M]`): GPU vs CPU check of the integer
   frame and the exact noise at 5 far origins: WorldPos and anchors, then every probe of the probe
   table bit for bit over a fixed grid plus 1,024 hash-random points per origin (hash, octave
   decomposition at k 0..62, perlin3/2, a 2D and a 3D fBm, the archetype IR's `arch_*`

@@ -2,9 +2,7 @@
 
 #include "gpu_device.hpp"
 
-#include "cascade_spike_sets.hpp"
-
-#include <godot_cpp/variant/dictionary.hpp>
+#include "cascade_check_sets.hpp"
 
 #include <vector>
 
@@ -15,10 +13,10 @@
 //     ground_field (the site walk's readings) and the metres value == evaluate_cull (the discoverer's corners).
 //   - D2 timing: GPU ms of single-LOD batches of 1k, 4k, 16k and 64k points at LOD 0 and 5 (the site walk's snap and
 //     its coarse readings at 5 cm): the batch size a GPU site walk is sized from.
-namespace CascadeSpikePoints {
+namespace CascadeCheckPoints {
 
-godot::Dictionary check_points(ov::gpu::Device *p_device, CascadeSpikeSets::SpikeSet p_set, int p_lods, const ChunkParam &p_param);
-godot::Dictionary point_timing(ov::gpu::Device *p_device, const std::vector<CascadeSpikeSets::SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param,
+ov::Value check_points(ov::gpu::Device *p_device, CascadeCheckSets::SpikeSet p_set, int p_lods, const ChunkParam &p_param);
+ov::Value point_timing(ov::gpu::Device *p_device, const std::vector<CascadeCheckSets::SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param,
         int p_runs);
 
-} // namespace CascadeSpikePoints
+} // namespace CascadeCheckPoints

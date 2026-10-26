@@ -72,8 +72,9 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
 
 1. **The GPU seam** (done): `ov::gpu::Device` (`gpu_device.hpp`: buffers, 2D textures, compute pipelines from GLSL,
    bind sets, dispatch with push constants, timestamps, readbacks, `post`), Godot's `RDDevice` and Dawn's
-   `DawnDevice`; the drawing behind `PageHost` / `MeshHost`. Next: the frame loop (`VoxelTerrain::_process`) into an
-   `ov::World`.
+   `DawnDevice`; the drawing behind `PageHost` / `MeshHost`. Then (done) the frame loop into `ov::World`
+   (`VoxelTerrain` is a property map over its settings) and the spikes into core checks any device runs
+   (`FrameCheck`, `CascadeCheck`, `QuadPoolCheck`; `ov_dawn --frame-check | --cascade-check`).
 2. **The headless Dawn/WebGPU backend + the C ABI + a web demo**: the second consumer and the
    showcase. Readback is async on WebGPU (first call returns empty; poll across frames) — the
    directory readback is already async-shaped, the legacy full readback goes. No COOP/COEP headers

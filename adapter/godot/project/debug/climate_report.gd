@@ -1,5 +1,5 @@
 extends Node
-## Climate report (ClimateReport, src/climate_report.cpp): biome and field maps of a climate table, pure CPU,
+## Climate report (ClimateReportNode -> ClimateReport, src/climate_report.cpp): biome and field maps of a climate table, pure CPU,
 ## works with --headless. Run:
 ##   tools/climate_report.sh   (or: godot --headless --path project res://debug/climate_report.tscn -- --out=DIR)
 ## Args: --out=<dir> (required), --climate=<res:// or absolute path> (default res://climate/example.json),
@@ -18,7 +18,7 @@ func _ready() -> void:
 		if a.begins_with("--"):
 			var kv: PackedStringArray = a.substr(2).split("=", true, 1)
 			args[kv[0]] = kv[1] if kv.size() > 1 else "true"
-	var report_node = ClassDB.instantiate("ClimateReport")
+	var report_node = ClassDB.instantiate("ClimateReportNode")
 	add_child(report_node)
 	var report: Dictionary = report_node.run(args.get("out", "user://climate"), args.get("climate", "res://climate/example.json"),
 			float(args.get("voxel", "0.05")), int(args.get("lods", "15")), float(args.get("extent_km", "60")),
