@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Serves the web viewer (adapter/dawn/out-web) on http://127.0.0.1:8095/ov_dawn.html, uncached.
+"""Serves the web viewer (adapter/dawn/out-web) on http://127.0.0.1:8095/ov_dawn.html, uncached and cross-origin
+isolated (COOP + COEP: a browser only gives the page threads, SharedArrayBuffer, under both).
 
 python3 adapter/dawn/web/serve.py [DIR] [PORT]
 """
@@ -16,6 +17,8 @@ mimetypes.add_type("text/javascript", ".js")
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         super().end_headers()
 
 

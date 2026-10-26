@@ -10,7 +10,7 @@
 //   ov_dawn --viewer [options]        the terrain in a window, the Godot player's controls (README.md)
 //   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
 // Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
-// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
+// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --discoverer=cpu|gpu --walk_gpu=0|1 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -41,13 +41,11 @@ bool flag(const char *p_arg, const char *p_name, std::string &r_value) {
 }
 
 // The core's tasks and workers on threads (Godot's equivalent: register_types installs GodotExecutor), for main's
-// whole run: the engine objects are gone before it ends. The web build has no threads yet: the core's InlineExecutor.
+// whole run: the engine objects are gone before it ends. In a browser the threads are Web Workers.
 struct InstalledPool {
-#ifndef __EMSCRIPTEN__
     ov::ThreadPoolExecutor pool;
     InstalledPool() { ov::set_executor(&pool); }
     ~InstalledPool() { ov::set_executor(nullptr); }
-#endif
 };
 
 int print_report(const ov::Value &p_report) {
@@ -59,7 +57,7 @@ int print_report(const ov::Value &p_report) {
 
 int main(int argc, char **argv) {
     ov::log_level() = ov::LOG_INFO;
-    [[maybe_unused]] const InstalledPool installed;
+    const InstalledPool installed;
     ov::dawn::DawnContext context;
     if (!context.initialize()) {
         return 1;
@@ -103,6 +101,21 @@ int main(int argc, char **argv) {
             viewer.view = std::atoi(value.c_str());
         } else if (flag(argv[i], "--fly", value)) {
             viewer.fly_speed = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--discoverer", value)) {
+            if (value == "cpu") {
+                viewer.discoverer_mode = 0;
+            } else if (value == "gpu") {
+                viewer.discoverer_mode = 1;
+            } else {
+                std::fprintf(stderr, "--discoverer=%s: expected cpu or gpu\n", value.c_str());
+                return 1;
+            }
+        } else if (flag(argv[i], "--walk_gpu", value)) {
+            if (value != "0" && value != "1") {
+                std::fprintf(stderr, "--walk_gpu=%s: expected 0 or 1\n", value.c_str());
+                return 1;
+            }
+            viewer.walk_gpu = value == "1";
         } else if (flag(argv[i], "--max_frames", value)) {
             viewer.max_frames = std::atoi(value.c_str());
         } else if (flag(argv[i], "--upscale", value)) {

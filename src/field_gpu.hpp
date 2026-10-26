@@ -29,6 +29,9 @@ public:
     static constexpr uint32_t MIN_POINTS = 1024;
     static constexpr uint32_t MAX_POINTS = 65536;
     static constexpr double SUBMIT_GPU_MS = 4.0;
+    // A readback's round trip past which the CPU's field is cheaper: each submission waits for one (a browser may
+    // deliver a map ~100 ms after the GPU is done: adapter/dawn/README.md).
+    static constexpr double SLOW_READBACK_MS = 30.0;
 
     enum State {
         STARTING,
@@ -70,6 +73,7 @@ private:
     // Under mutex.
     uint32_t max_points = 0;
     double init_ms = 0.0;
+    double readback_ms = 0.0; // the device's, measured by enter()
     double scratch_mb = 0.0;
     double us_per_point = 0.0; // measured (GPU timestamps / points), 0 until the first submission
     double recent_gpu_ms = 0.0; // the submissions' GPU time and points, smoothed (us_per_point is their ratio)

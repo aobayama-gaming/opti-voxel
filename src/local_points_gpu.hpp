@@ -21,6 +21,8 @@ public:
     bool is_valid() const { return device != nullptr && passes.is_valid(); }
     CascadePointsGPU &points() { return passes; }
     uint64_t scratch_bytes() const { return passes.scratch_bytes(); }
+    // A readback's round trip on its device, in milliseconds: the fastest of three of a one-word buffer, after a warm-up.
+    double readback_ms();
 
 private:
     std::unique_ptr<ov::gpu::Device> device;

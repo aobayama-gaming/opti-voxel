@@ -5,7 +5,8 @@
 #
 # Needs emsdk (EMSDK, default ~/emsdk; Emscripten 4.0.11 tested) and a Dawn checkout with its dependencies
 # (python3 tools/fetch_dawn_dependencies.py in it): OV_DAWN_SRC, default $OV_WEB_DEPS/dawn. OV_WEB_DEPS (default
-# ~/ov-web-deps) gets glslang (built from Dawn's third_party copy) and web/deps (emdawnwebgpu, Tint, SPIRV-Tools).
+# ~/ov-web-deps) gets glslang (built from Dawn's third_party copy) and web/deps (emdawnwebgpu, Tint, SPIRV-Tools), all
+# with -pthread (a threaded wasm links only objects built for shared memory).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -18,18 +19,20 @@ source "${EMSDK:-$HOME/emsdk}/emsdk_env.sh" > /dev/null 2>&1
 command -v emcmake > /dev/null || { echo "build.sh: no emcmake (set EMSDK)" >&2; exit 1; }
 [ -f "$dawn_src/CMakeLists.txt" ] || { echo "build.sh: no Dawn checkout at $dawn_src (set OV_DAWN_SRC)" >&2; exit 1; }
 
-if [ ! -f "$deps/glslang-wasm/lib/libglslang.a" ]; then
+threads=(-DCMAKE_C_FLAGS=-pthread -DCMAKE_CXX_FLAGS=-pthread)
+glslang="$deps/glslang-wasm-threads"
+if [ ! -f "$glslang/lib/libglslang.a" ]; then
     echo "== glslang (wasm)"
-    emcmake cmake -S "$dawn_src/third_party/glslang/src" -B "$deps/glslang-wasm-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX="$deps/glslang-wasm" -DENABLE_OPT=OFF -DGLSLANG_TESTS=OFF -DENABLE_GLSLANG_BINARIES=OFF \
+    emcmake cmake -S "$dawn_src/third_party/glslang/src" -B "$glslang-build" -G Ninja -DCMAKE_BUILD_TYPE=Release "${threads[@]}" \
+        -DCMAKE_INSTALL_PREFIX="$glslang" -DENABLE_OPT=OFF -DGLSLANG_TESTS=OFF -DENABLE_GLSLANG_BINARIES=OFF \
         -DGLSLANG_ENABLE_INSTALL=ON -DENABLE_HLSL=OFF -DBUILD_SHARED_LIBS=OFF > /dev/null
-    ninja -C "$deps/glslang-wasm-build" -j "$jobs" install > /dev/null
+    ninja -C "$glslang-build" -j "$jobs" install > /dev/null
 fi
 
-tint="$deps/tint-wasm"
+tint="$deps/tint-wasm-threads"
 if [ ! -f "$tint/emdawnwebgpu_pkg/emdawnwebgpu.port.py" ]; then
     echo "== emdawnwebgpu, Tint, SPIRV-Tools (wasm, several minutes)"
-    emcmake cmake -S "$here/deps" -B "$tint" -G Ninja -DCMAKE_BUILD_TYPE=Release -DDAWN_SRC="$dawn_src" \
+    emcmake cmake -S "$here/deps" -B "$tint" -G Ninja -DCMAKE_BUILD_TYPE=Release "${threads[@]}" -DDAWN_SRC="$dawn_src" \
         -DTINT_BUILD_SPV_READER=ON -DTINT_BUILD_WGSL_WRITER=ON -DTINT_BUILD_WGSL_READER=ON -DTINT_BUILD_CMD_TOOLS=OFF \
         -DTINT_BUILD_TESTS=OFF -DTINT_BUILD_GLSL_WRITER=OFF -DTINT_BUILD_HLSL_WRITER=OFF -DTINT_BUILD_MSL_WRITER=OFF \
         -DTINT_BUILD_SPV_WRITER=OFF -DDAWN_BUILD_SAMPLES=OFF -DDAWN_BUILD_TESTS=OFF > /dev/null
@@ -42,6 +45,6 @@ fi
 
 echo "== ov_dawn (wasm)"
 emcmake cmake -S "$adapter" -B "$adapter/out-web" -G Ninja -DCMAKE_BUILD_TYPE=Release -DOV_WEB_DEPS="$deps" \
-    -DOV_DAWN_SRC="$dawn_src" > /dev/null
+    -DOV_DAWN_SRC="$dawn_src" -DOV_TINT_BUILD="$tint" -DOV_GLSLANG_DIR="$glslang" > /dev/null
 ninja -C "$adapter/out-web" -j "$jobs" ov_dawn
 echo "built $adapter/out-web/ov_dawn.html: python3 $here/serve.py, then http://127.0.0.1:8095/ov_dawn.html"

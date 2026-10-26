@@ -49,6 +49,18 @@ adapter/dawn/web/build.sh                 # once: glslang, emdawnwebgpu, Tint, S
 python3 adapter/dawn/web/serve.py         # http://127.0.0.1:8095/ov_dawn.html
 ```
 
+The page uses threads, which a browser only allows on a cross-origin isolated page: any other server must send
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` as `serve.py` does. Chrome
+on Linux needs WebGPU switched on, and Vulkan, which its Wayland backend lacks, so it runs under X11 (XWayland):
+
+```
+google-chrome --ozone-platform=x11 --enable-unsafe-webgpu \
+    --enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan --use-angle=vulkan http://127.0.0.1:8095/ov_dawn.html
+```
+
+Under Wayland its WebGPU canvas loses the device on the first frame (`vkAllocateMemory failed with
+VK_ERROR_OUT_OF_DEVICE_MEMORY`); so does headless Chrome's, whose offscreen `?shot=` still works.
+
 The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&trees=1000000&tree_area=5000` is `--viewer
 --upscale=fsr3 --pixelate=2 --trees=1000000 --tree_area=5000`; `?check` (or `frame-check`, `cascade-check`) runs that
 check and `?shot=/x.png` renders offscreen into the page's file system (`Module.FS.readFile('/x.png')`). A click locks
@@ -59,16 +71,21 @@ Emscripten.
 What differs from native:
 - **The blocking waits** (device creation, error scopes, readbacks, `sync`) suspend the wasm (JSPI: Firefox 139+,
   Chrome 137+); each frame awaits the browser's animation frame (`WebCanvas`).
-- **No threads yet**: the core's `InlineExecutor`, so loads are single-threaded (the 1M forest: 43 s in Chrome against
-  4.7 s native, 87 s in Firefox, which renders at the output size: no FSR there). Threads are next (pthreads, served
-  with COOP/COEP).
+- **Threads are Web Workers** (pthreads): the core's `ThreadPoolExecutor` as natively, one worker per core started with
+  the page, and the discoverer's and the field's local devices each in their worker (a worker has its own WebGPU
+  device; its waits suspend it like the main thread's). The 1M forest (FSR 3 x2, pixelate 2, lod error 1 | 3)
+  loads in 10 s in Chrome (43 s without threads), 31 s in Firefox (89 s; no FSR there, so at the output size), 3 s
+  natively, and the frames no longer stall while it does.
+- **Slow readbacks**: Firefox 156 delivers a map ~100 ms after the GPU is done (Chrome ~9 ms, native well under 1). The
+  site walk's GPU field waits for one per submission, so `FieldGPU` times one on its device when it starts and leaves
+  the walks on the CPU past `SLOW_READBACK_MS` (30): the forest took 150 s in Firefox on the GPU field.
+  `--walk_gpu=0` keeps the field on the CPU everywhere.
 - **Push constants**: browsers have no immediates (Firefox) or not in the WGSL Tint writes: `compile_glsl` turns the
   push block into a uniform at set 1 and `DawnDevice` feeds it from a ring buffer, one 256-byte slot per dispatch.
 - **FSR 3** needs `texture-formats-tier2`: Chrome has it, Firefox not yet (pixelate only, the 3D at the output size).
 
-Tested headless here (Playwright): Firefox 156 draws the viewer at 60 fps; Chrome 154's canvas loses the device on this
-laptop's NVIDIA driver (a bare WebGPU canvas page does too: Chrome's shared images, not the engine), while its offscreen
-`?shot=` renders and matches Firefox and native Dawn pixel for pixel on the default scene.
+Tested here: Firefox 156 (headless, Playwright) draws the viewer at 60 fps; Chrome 154 under X11 too, FSR 3 included;
+Chrome's offscreen `?shot=` matches Firefox and native Dawn pixel for pixel on the default scene.
 
 Stock Tint drops SPIR-V's NoContraction (GLSL `precise`), so the driver fuses multiply-adds and the exact noise
 differs from the CPU's by a few ulps: the check's noise part fails until that is fixed. `--frame-check` also fails on

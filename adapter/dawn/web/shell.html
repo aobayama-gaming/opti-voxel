@@ -40,7 +40,11 @@
     printErr: (text) => { console.error(text); show(text); },
   };
   if (!navigator.gpu) {
-    show('No WebGPU in this browser (Firefox 141+, Chrome 113+; on Linux Chrome needs chrome://flags/#enable-unsafe-webgpu).');
+    show('No WebGPU in this browser (Firefox 141+, Chrome 113+; on Linux Chrome needs --enable-unsafe-webgpu, see README.md).');
+  } else if (!self.crossOriginIsolated) {
+    // The threaded wasm cannot start: keep this line in view rather than the module's errors.
+    show('This page needs cross-origin isolation (threads): serve it with web/serve.py, or send its COOP + COEP headers.');
+    Module.print = Module.printErr = (text) => console.error(text);
   } else if (typeof WebAssembly.Suspending !== 'function') {
     show('This browser has no JSPI (WebAssembly.Suspending): Chrome 137+ or Firefox 139+.');
   }
