@@ -47,12 +47,20 @@ The same viewer, compiled to WebAssembly against the browser's WebGPU (emdawnweb
 the wasm: the engine's GLSL goes to SPIR-V and then WGSL at run time, FSR's vendored SPIR-V too.
 
 ```
-adapter/dawn/web/build.sh                 # once: glslang, emdawnwebgpu, Tint, SPIR-V Tools for wasm (OV_WEB_DEPS)
-python3 adapter/dawn/web/serve.py         # http://127.0.0.1:8095/ov_dawn.html
+adapter/dawn/web/build.sh                 # once: Dawn, glslang, emdawnwebgpu, Tint, SPIR-V Tools for wasm (build_deps.sh)
+python3 adapter/dawn/web/serve.py         # http://127.0.0.1:8095/: the scenes (web/index.html), or /ov_dawn.html
 ```
 
 The page uses threads, which a browser only allows on a cross-origin isolated page: any other server must send
-`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` as `serve.py` does. Chrome
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` as `serve.py` does. Where the
+server can't (GitHub Pages), `web/coi-serviceworker.js` (vendored, MIT), which the page loads first, adds them from a
+service worker: the first visit reloads once, isolated (not in a private window, which has no service workers).
+
+GitHub Pages: `.github/workflows/pages.yml` builds the viewer on each pull request that touches it and publishes it on
+each push to dev, at https://aobayama-gaming.github.io/opti-voxel/ (the landing page, `web/index.html`: a few scenes as
+query strings). The wasm dependencies are cached per pin and `web/build_deps.sh` (the first build ~30 min).
+
+Chrome
 on Linux needs WebGPU switched on, and Vulkan, which its Wayland backend lacks, so it runs under X11 (XWayland):
 
 ```
@@ -67,9 +75,9 @@ The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&trees=10000
 `--viewer --upscale=fsr3 --pixelate=2 --trees=1000000 --tree_area=5000 --voxel=0.05` (the 1M forest at 5 cm; the
 default voxel is 0.5 m); `?check` (or `frame-check`, `cascade-check`) runs that
 check and `?shot=/x.png` renders offscreen into the page's file system (`Module.FS.readFile('/x.png')`). A click locks
-the mouse, Escape frees it. `build.sh` needs emsdk (`EMSDK`, Emscripten 4.0.11 tested) and a Dawn checkout with its
-dependencies (`OV_DAWN_SRC`); `web/deps` is the CMake project that adds the SPIRV-Tools Dawn's CMake leaves out under
-Emscripten.
+the mouse, Escape frees it. `build.sh` needs emsdk (`EMSDK`, at the version of `web/emsdk_version.txt`) and fetches the
+Dawn of `web/dawn_revision.txt` with its dependencies into `OV_DAWN_SRC` when there is no checkout there (it warns on
+another revision); `web/deps` is the CMake project that adds the SPIRV-Tools Dawn's CMake leaves out under Emscripten.
 
 What differs from native:
 - **The blocking waits** (device creation, error scopes, readbacks, `sync`) suspend the wasm (JSPI: Firefox 139+,

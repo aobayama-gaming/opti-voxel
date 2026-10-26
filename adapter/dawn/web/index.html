@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opti-voxel</title>
+<!-- The site's landing page (the Pages workflow publishes it next to ov_dawn.html): each scene is the viewer with its flags
+     in the query (shell.html). -->
+<style>
+  :root { --bg: #f6f5f1; --fg: #1d1d1b; --muted: #6b6a64; --card: #ffffff; --line: #dedcd4; --accent: #2f6b3a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141513; --fg: #ecebe6; --muted: #9a9890; --card: #1d1f1c; --line: #33352f; --accent: #8fc79a; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { margin: 0 0 4px; font-size: 32px; letter-spacing: -0.02em; }
+  .lead { margin: 0 0 32px; color: var(--muted); }
+  a.scene { display: block; margin: 0 0 12px; padding: 16px 18px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; color: inherit; text-decoration: none; }
+  a.scene:hover { border-color: var(--accent); }
+  a.scene b { display: block; color: var(--accent); }
+  a.scene span { color: var(--muted); font-size: 14px; }
+  h2 { margin: 36px 0 8px; font-size: 18px; }
+  p, li { color: var(--muted); }
+  code { font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>opti-voxel</h1>
+  <p class="lead">An LOD voxel terrain meshed on the GPU, in the browser through WebGPU.</p>
+
+  <div id="scenes"></div>
+
+  <h2>Controls</h2>
+  <ul>
+    <li>Click to take the mouse, Escape frees it. Mouse to look, WASD or arrows to move, Space up, Shift down, wheel for speed.</li>
+    <li>Right click digs a hole, holding the left button sprays the ground away. V cycles the debug views.</li>
+  </ul>
+
+  <h2>Browser</h2>
+  <p>Needs WebGPU and JSPI, a recent Chrome or Firefox; on Linux Chrome needs a few switches (see
+    <a href="https://github.com/aobayama-gaming/opti-voxel/tree/dev/adapter/dawn#in-a-browser">the README</a>). The first
+    visit reloads once: a service worker makes the page cross-origin isolated, which threads need.</p>
+</main>
+<script>
+  // The forest scenes take the camera of the Godot presets (adapter/godot/project/debug/presets.gd: forest5cm, video) and
+  // the review settings (FSR 3 x2, pixelate 2, lod error 1 | 3). The climate world runs 10 LODs, not the video preset's
+  // 25: a lighter load in a browser.
+  const forest = 'voxel=0.05&cam_pos=-52,320,-95&above_ground=5&pitch=-5&yaw=-90';
+  const review = 'upscale=fsr3&render_scale=0.5&pixelate=2&lod_error=1&lod_error_back=3';
+  const million = `${review}&trees=1000000&tree_area=5000&${forest}`;
+  const scenes = [
+    ['Forest', 'A million trees on 5 cm voxels, FSR 3 upscaling.', million],
+    ['Climate world', 'The same forest in a world of biomes and landforms.', `lods=10&climate=/climate/world_video.json&${million}`],
+    ['Small forest', '4,000 trees, no upscaler: for Firefox and smaller GPUs.', `pixelate=2&trees=4000&tree_area=316&${forest}`],
+    ['Continents', 'The bare terrain at 0.5 m voxels, from the ground to the horizon.', 'terrain=continents'],
+  ];
+  for (const [name, text, query] of scenes) {
+    const a = Object.assign(document.createElement('a'), { className: 'scene', href: `ov_dawn.html?${query}` });
+    a.append(Object.assign(document.createElement('b'), { textContent: name }),
+        Object.assign(document.createElement('span'), { textContent: text }));
+    document.getElementById('scenes').append(a);
+  }
+</script>
+</body>
+</html>

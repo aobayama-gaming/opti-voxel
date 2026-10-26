@@ -40,7 +40,13 @@ if(EMSCRIPTEN)
         return()
     endif()
     add_executable(ov_dawn ${OV_DAWN_SOURCES} src/web_canvas.cpp)
-    set_target_properties(ov_dawn PROPERTIES CXX_STANDARD 20 SUFFIX ".html")
+    # The site next to the page: the service worker that isolates it on a host without COOP + COEP headers (shell.html),
+    # and the landing page.
+    foreach(OV_SITE_FILE coi-serviceworker.js index.html)
+        configure_file("web/${OV_SITE_FILE}" "${CMAKE_CURRENT_BINARY_DIR}/${OV_SITE_FILE}" COPYONLY)
+    endforeach()
+    # LINK_DEPENDS: the page is linked from the shell, which CMake doesn't track as an input.
+    set_target_properties(ov_dawn PROPERTIES CXX_STANDARD 20 SUFFIX ".html" LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
     target_compile_options(ov_dawn PRIVATE -Wall -Wextra -Werror "--use-port=${OV_EMDAWNWEBGPU_PORT}")
     set_source_files_properties(src/viewer.cpp PROPERTIES COMPILE_OPTIONS -Wno-deprecated-declarations)
     target_include_directories(ov_dawn SYSTEM PRIVATE "${OV_GLSLANG_DIR}/include" "${OV_DAWN_SRC}" "${OV_DAWN_SRC}/include")

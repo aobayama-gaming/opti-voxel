@@ -1,0 +1,80 @@
+# The web viewer (adapter/dawn/web/build.sh) on GitHub Pages: built on every pull request that touches what it compiles,
+# built and published on pushes to dev. Pages can't send COOP + COEP headers, which threads need: the page isolates
+# itself through a service worker (web/coi-serviceworker.js). The wasm dependencies (glslang, emdawnwebgpu, Tint,
+# SPIRV-Tools; ~30 min) are cached per pin (web/emsdk_version.txt, web/dawn_revision.txt) and web/build_deps.sh.
+name: Web viewer
+on:
+  pull_request:
+    paths: [src/**, adapter/dawn/**, adapter/godot/project/climate/**, adapter/godot/project/grade_lut.rgb, .github/workflows/pages.yml]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env: # fixed paths: the cached builds name them
+      EMSDK: /home/runner/emsdk
+      OV_WEB_DEPS: /home/runner/ov-web-deps
+      OV_DAWN_SRC: /home/runner/dawn
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Tools
+        run: sudo apt-get install -y ninja-build
+
+      - name: Pins
+        run: echo "EMSDK_VERSION=$(cat adapter/dawn/web/emsdk_version.txt)" >> "$GITHUB_ENV"
+
+      - name: Restore emsdk
+        id: emsdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.EMSDK }}
+          key: emsdk-${{ env.EMSDK_VERSION }}
+
+      - name: emsdk
+        if: steps.emsdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$EMSDK"
+          "$EMSDK/emsdk" install "$EMSDK_VERSION"
+          "$EMSDK/emsdk" activate "$EMSDK_VERSION"
+
+      # Not cached: on every run build_deps.sh fetches the pinned Dawn with its dependencies, whose headers the viewer includes.
+      - name: Restore the wasm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OV_WEB_DEPS }}
+          key: ov-web-deps-${{ hashFiles('adapter/dawn/web/emsdk_version.txt', 'adapter/dawn/web/dawn_revision.txt', 'adapter/dawn/web/build_deps.sh', 'adapter/dawn/web/deps/CMakeLists.txt') }}
+
+      - name: Build
+        run: |
+          adapter/dawn/web/build.sh
+          mkdir site
+          cp adapter/dawn/out-web/*.{html,js,wasm,data} site/
+
+      - name: Upload
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
