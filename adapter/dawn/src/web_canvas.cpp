@@ -12,6 +12,7 @@ constexpr int MAX_KEYS = 32;
 
 // Installs the listeners: Module.ovInput holds the keys held (as X keysyms, window.hpp's Key), those pressed, the
 // pointer's moves while locked and the wheel steps since the last take. False without the canvas.
+// clang-format off: the EM_JS bodies are JavaScript.
 EM_JS(int, ov_canvas_init, (const char *p_title), {
     const canvas = document.getElementById('canvas');
     if (!canvas) {
@@ -84,6 +85,7 @@ EM_JS(int, ov_canvas_take, (int *p_size, float *p_mouse, int *p_wheel, int *p_he
     }
     return n;
 });
+// clang-format on
 
 } // namespace
 
