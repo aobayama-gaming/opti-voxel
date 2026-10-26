@@ -2,6 +2,9 @@
 
 #include "voxel_terrain.hpp"
 
+#include "godot_conv.hpp"
+#include "sky_glsl.hpp"
+
 #include <godot_cpp/classes/environment.hpp>
 #include <godot_cpp/classes/sky.hpp>
 #include <godot_cpp/classes/world_environment.hpp>
@@ -51,70 +54,20 @@ vec3 wind_sway(vec3 p) {
 }
 )glsl";
 
-// Godot's PhysicalSkyMaterial (scene/resources/sky_material.cpp, MIT), with the cloud layer blended over it.
+// Godot's PhysicalSkyMaterial (SkyGLSL: sky_glsl.hpp, shared with the Dawn viewer), with the cloud layer blended over it.
 static constexpr const char SKY_SHADER[] = R"gdshader(
 shader_type sky;
 
-uniform float rayleigh : hint_range(0, 64) = 2.0;
-uniform vec4 rayleigh_color : source_color = vec4(0.3, 0.405, 0.6, 1.0);
-uniform float mie : hint_range(0, 1) = 0.005;
-uniform float mie_eccentricity : hint_range(-1, 1) = 0.8;
-uniform vec4 mie_color : source_color = vec4(0.69, 0.729, 0.812, 1.0);
-uniform float turbidity : hint_range(0, 1000) = 10.0;
-uniform float sun_disk_scale : hint_range(0, 360) = 1.0;
-uniform vec4 ground_color : source_color = vec4(0.1, 0.07, 0.034, 1.0);
 uniform float exposure : hint_range(0, 128) = 1.0;
 /*GLSL_CLOUDS*/
-
-const vec3 UP = vec3(0.0, 1.0, 0.0);
-// Optical length at zenith for molecules and aerosols.
-const float rayleigh_zenith_size = 8.4e3;
-const float mie_zenith_size = 1.25e3;
-
-float henyey_greenstein(float cos_theta, float g) {
-    const float k = 0.0795774715459;
-    return k * (1.0 - g * g) / (pow(1.0 + g * g - 2.0 * g * cos_theta, 1.5));
-}
-
-// Light extinction along a ray at that cosine of the zenith angle, for the given coefficients.
-vec3 extinction_at(float cos_zenith, vec3 rayleigh_beta, vec3 mie_beta) {
-    float zenith = acos(max(0.0, cos_zenith));
-    float optical_mass = 1.0 / (cos(zenith) + 0.15 * pow(93.885 - degrees(zenith), -1.253));
-    return exp(-(rayleigh_beta * rayleigh_zenith_size * optical_mass + mie_beta * mie_zenith_size * optical_mass));
-}
+/*GLSL_SKY*/
 
 void sky() {
     if (!LIGHT0_ENABLED) { // no sun: black (a sky function has no return)
         COLOR = vec3(0.0);
     } else {
         vec3 sun_dir = normalize(LIGHT0_DIRECTION);
-        float zenith_angle = clamp(dot(UP, sun_dir), -1.0, 1.0);
-        float sun_energy = max(0.0, 1.0 - exp(-((PI * 0.5) - acos(zenith_angle)))) * LIGHT0_ENERGY;
-        float sun_fade = 1.0 - clamp(1.0 - exp(LIGHT0_DIRECTION.y), 0.0, 1.0);
-
-        float rayleigh_coefficient = rayleigh - (1.0 * (1.0 - sun_fade));
-        vec3 rayleigh_beta = rayleigh_coefficient * rayleigh_color.rgb * 0.0001;
-        vec3 mie_beta = turbidity * mie * mie_color.rgb * 0.000434; // Preetham
-
-        vec3 extinction = extinction_at(dot(UP, EYEDIR), rayleigh_beta, mie_beta);
-
-        float cos_theta = dot(EYEDIR, sun_dir);
-        float rayleigh_phase = (3.0 / (16.0 * PI)) * (1.0 + pow(cos_theta * 0.5 + 0.5, 2.0));
-        vec3 beta_r_theta = rayleigh_beta * rayleigh_phase;
-        float mie_phase = henyey_greenstein(cos_theta, mie_eccentricity);
-        vec3 beta_m_theta = mie_beta * mie_phase;
-
-        vec3 scatter = sun_energy * ((beta_r_theta + beta_m_theta) / (rayleigh_beta + mie_beta));
-        vec3 lin = pow(scatter * (1.0 - extinction), vec3(1.5));
-        lin *= mix(vec3(1.0), pow(scatter * extinction, vec3(0.5)), clamp(pow(1.0 - zenith_angle, 5.0), 0.0, 1.0));
-        lin *= mix(ground_color.rgb, vec3(1.0), smoothstep(-0.1, 0.1, dot(UP, EYEDIR)));
-
-        float sun_cos = cos(LIGHT0_SIZE * sun_disk_scale);
-        float sun_cos_half = cos(LIGHT0_SIZE * sun_disk_scale * 0.5);
-        float sun_disk = smoothstep(sun_cos, sun_cos_half, cos_theta);
-        vec3 l0 = (sun_energy * extinction) * sun_disk * LIGHT0_COLOR;
-
-        vec3 color = pow(lin + l0, vec3(1.0 / (1.2 + (1.2 * sun_fade)))) * exposure;
+        vec3 color = physical_sky(EYEDIR, sun_dir, LIGHT0_COLOR, LIGHT0_ENERGY, LIGHT0_SIZE, exposure);
 
         // The cloud layer where the view ray meets it (above the camera only). Two reads: the density here, and the
         // density towards the sun, which lights the edge of a cloud that thins that way. The sun's colour on the clouds
@@ -125,7 +78,10 @@ void sky() {
             float density = cloud_density(texture(cloud_tex, cloud_uv(hit)).r);
             vec2 towards_sun = hit + sun_dir.xz * (0.02 * cloud_scale_m / max(sun_dir.y, 0.15));
             float lit = 1.0 - 0.75 * cloud_density(texture(cloud_tex, cloud_uv(towards_sun)).r);
-            vec3 sun_light = LIGHT0_COLOR * extinction_at(zenith_angle, rayleigh_beta, mie_beta) * (sun_energy / max(LIGHT0_ENERGY, 1e-3));
+            vec3 rayleigh_beta;
+            vec3 mie_beta;
+            sky_betas(sun_dir, rayleigh_beta, mie_beta);
+            vec3 sun_light = LIGHT0_COLOR * sky_extinction(sun_dir.y, rayleigh_beta, mie_beta) * (sky_sun_energy(sun_dir, LIGHT0_ENERGY) / max(LIGHT0_ENERGY, 1e-3));
             vec3 cloud_color = mix(color * 1.1, sun_light * exposure, 0.85 * lit);
             color = mix(color, cloud_color, density * smoothstep(0.0, 0.08, EYEDIR.y));
         }
@@ -139,7 +95,7 @@ String VoxelSky::glsl_clouds() {
 }
 
 String VoxelSky::sky_shader_code() {
-    return String(SKY_SHADER).replace("/*GLSL_CLOUDS*/", glsl_clouds());
+    return String(SKY_SHADER).replace("/*GLSL_CLOUDS*/", glsl_clouds()).replace("/*GLSL_SKY*/", godot_str(SkyGLSL::glsl()));
 }
 
 void VoxelSky::_bind_methods() {

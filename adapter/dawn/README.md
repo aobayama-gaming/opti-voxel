@@ -9,8 +9,11 @@ oracle (`CascadeCheck`); each prints its report as JSON.
 
 The viewer drives the core's world loop (`ov::World`, GPU Direct) with a fly camera and draws its pages with
 `DawnPageHost` (the corners decoded by the same `PageFormat` GLSL as Godot's page shader, and the same materials:
-`page_shading_glsl.hpp`, bark, leaves, a biome's ground, the ground's detail; a sun, a sky light, fog; no contour lines, no
-wind):
+`page_shading_glsl.hpp`, bark, leaves, a biome's ground, the ground's detail; no contour lines, no wind), lit like Godot's
+main scenes (`dawn_look_glsl.hpp`): their sun with a shadow map (4096 texels over `--shadow_m=M`, default 250 m around the
+camera, 0 off), the sky of Godot's `VoxelSky` (`src/sky_glsl.hpp`: its PhysicalSkyMaterial, without the clouds, at 3x its
+exposure) where no page is, the fog towards it, Godot's ACES tonemapper and the grading LUT (`--grade=PATH|off`, default
+`adapter/godot/project/grade_lut.rgb`, which `tools/make_lut.py` writes next to the PNG; preloaded on the web):
 
 ```
 adapter/dawn/out/ov_dawn --viewer                          # an X11 window (XWayland), the Godot player's controls: mouse look,
@@ -30,7 +33,7 @@ depth (the terrain is static: the camera's reprojection is the motion). The LOD 
 of the Godot video preset: `--upscale=fsr3 --pixelate=2`. The forest: `--trees=N --tree_area=M` (with `--climate=PATH`
 for a climate world; the web build preloads the Godot project's climate folder at `/climate`, so the Godot video preset's world is `?lods=25&climate=/climate/world_video.json`), placed like Godot's `forest5cm` preset by `--trees=4000 --tree_area=316 --voxel=0.05
 --cam_pos=-52,320,-95 --above_ground=5 --pitch=-5 --yaw=-90`. Not there yet: frustum culling, GPU timestamps (no budget),
-Godot's lighting (shadows, SSAO, the sky and its clouds, the tonemapper).
+SSAO, the clouds, the sky's light from the sky itself (a constant haze colour stands in).
 
 ```
 cmake -S adapter/dawn -B adapter/dawn/out -G Ninja -DOV_DAWN_DIR=<dawn install prefix> -DOV_GLSLANG_DIR=<glslang install prefix>

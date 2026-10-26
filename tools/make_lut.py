@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Writes the scenes' colour-grading LUT: adapter/godot/project/grade_lut.png, a 32^3 cube as 32 slices side by side
 (1024 x 32, blue = slice, red = x, green = y), imported as a Texture3D (grade_lut.png.import: 32 horizontal
-slices) and set as Environment.adjustment_color_correction. Godot applies it after the tonemapper, sampling the
-filtered texture at uvw = colour with no half-texel remap: texel i is read at colour (i + 0.5) / N, so that is the
-colour it holds the grade of.
+slices) and set as Environment.adjustment_color_correction, and the same bytes as a raw cube for the Dawn viewer:
+grade_lut.rgb, 32^3 RGB texels, red fastest, then green, then blue (a Texture3D's x, y, z). Godot (and the Dawn
+viewer) apply it after the tonemapper, sampling the filtered texture at uvw = colour with no half-texel remap: texel i
+is read at colour (i + 0.5) / N, so that is the colour it holds the grade of.
 
 The grade (warm, leaning red, a filmic look on the tonemapper's flat output):
 - on luma only (hues keep their place): a gamma of 1.2 against the milky mids, an S-curve, lifted blacks;
@@ -102,7 +103,10 @@ def main():
             for rx in range(N):
                 px[bz * N + rx, gy] = to_byte(lut[bz][gy][rx])
     img.save(out)
-    print(out)
+    raw = os.path.splitext(out)[0] + ".rgb"
+    with open(raw, "wb") as f:
+        f.write(bytes(v for bz in range(N) for gy in range(N) for rx in range(N) for v in to_byte(lut[bz][gy][rx])))
+    print(out, raw)
 
 
 if __name__ == "__main__":

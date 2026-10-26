@@ -2,6 +2,7 @@
 
 #include "dawn_device.hpp"
 #include "dawn_page_host.hpp"
+#include "wgpu_util.hpp"
 #ifdef __EMSCRIPTEN__
 #include "web_canvas.hpp"
 
@@ -13,6 +14,7 @@
 #include "dig_tool.hpp"
 #include "world.hpp"
 
+#include "ov/color.hpp"
 #include "ov/files.hpp"
 #include "ov/json.hpp"
 #include "ov/log.hpp"
@@ -42,6 +44,15 @@ constexpr float FLY_RATE = 1.0f;
 constexpr float ALTITUDE_TAU = 0.2f;
 constexpr float PITCH_MAX = 1.55f; // short of straight up / down: the view basis needs a horizontal right
 constexpr int VIEW_COUNT = 3; // shaded, normals, LOD
+// The sun of Godot's main scenes (main_scene*.tscn, their DirectionalLight3D: the transform's z column, light_color in
+// sRGB, light_energy, light_angular_distance in degrees); the sky light's energy (a stand-in for the sky's light and
+// SSAO, tuned on the forest) and the sky's exposure (Godot's is 1: a dull grey-blue at this sun under ACES and the grade).
+constexpr Float3 SUN_DIR{ -0.5297686f, 0.4694716f, 0.7063581f };
+constexpr ov::Color SUN_COLOR_SRGB{ 1.0f, 0.93f, 0.83f };
+constexpr float SUN_ENERGY = 1.3f;
+constexpr float SUN_SIZE_DEG = 0.53f;
+constexpr float SKY_ENERGY = 0.6f;
+constexpr float SKY_EXPOSURE = 3.0f;
 
 // Yaw 0 looks along -z (Godot's), pitch up positive.
 struct FlyCamera {
@@ -53,11 +64,27 @@ struct FlyCamera {
         return Float3{ std::cos(pitch) * -std::sin(yaw), std::sin(pitch), -std::cos(pitch) * std::cos(yaw) };
     }
 
+    // The view's basis: forward, right (horizontal), up.
+    void basis(Float3 &r_f, Float3 &r_r, Float3 &r_u) const {
+        r_f = forward();
+        r_r = cross(r_f, Float3{ 0.0f, 1.0f, 0.0f }).normalized();
+        r_u = cross(r_r, r_f);
+    }
+
+    // The view's right and up, each times the tangent of half its field of view: forward + x right + y up is the ray
+    // through the clip-space point (x, y).
+    void view_rays(float p_aspect, Float3 &r_right, Float3 &r_up) const {
+        Float3 f, r, u;
+        basis(f, r, u);
+        const float t = std::tan(FOV_RAD * 0.5f);
+        r_right = Float3{ r.x * t * p_aspect, r.y * t * p_aspect, r.z * t * p_aspect };
+        r_up = Float3{ u.x * t, u.y * t, u.z * t };
+    }
+
     // Column-major view-projection: reversed depth (near 1, infinity 0).
     void view_proj(float p_aspect, float r_m[16]) const {
-        const Float3 f = forward();
-        const Float3 r = cross(f, Float3{ 0.0f, 1.0f, 0.0f }).normalized();
-        const Float3 u = cross(r, f);
+        Float3 f, r, u;
+        basis(f, r, u);
         const float view[16] = { r.x, u.x, -f.x, 0.0f, r.y, u.y, -f.y, 0.0f, r.z, u.z, -f.z, 0.0f, -dot(r, pos), -dot(u, pos), dot(f, pos), 1.0f };
         const float fy = 1.0f / std::tan(FOV_RAD * 0.5f);
         const float proj[16] = { fy / p_aspect, 0.0f, 0.0f, 0.0f, 0.0f, fy, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, NEAR_M, 0.0f };
@@ -86,22 +113,14 @@ void place_above_ground(const World &p_world, FlyCamera &r_camera, float p_above
     r_camera.pos.y += p_above;
 }
 
-wgpu::Texture make_target(const wgpu::Device &p_device, wgpu::TextureFormat p_format, int p_width, int p_height, wgpu::TextureUsage p_usage) {
-    wgpu::TextureDescriptor desc{};
-    desc.size = { uint32_t(p_width), uint32_t(p_height), 1 };
-    desc.format = p_format;
-    desc.usage = p_usage;
-    return p_device.CreateTexture(&desc);
-}
-
-// The pages into p_color / p_depth; with an upscaler, its color and depth, then its passes into p_color.
+// The sun's shadow map, then the pages and the sky into p_color / p_depth; with an upscaler, its color and depth, then
+// its passes into p_color.
 void draw_frame(const wgpu::Device &p_device, const wgpu::Queue &p_queue, const wgpu::TextureView &p_color, const wgpu::TextureView &p_depth,
         DawnPageHost &r_pages, const PageView &p_view, DawnUpscaler *r_upscaler, float p_frame_seconds) {
     wgpu::RenderPassColorAttachment color{};
     color.view = r_upscaler ? r_upscaler->color_view() : p_color;
     color.loadOp = wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
-    color.clearValue = { 0.78, 0.84, 0.93, 1.0 }; // the fog's sky, gamma-encoded
     wgpu::RenderPassDepthStencilAttachment depth{};
     depth.view = r_upscaler ? r_upscaler->depth_view() : p_depth;
     depth.depthLoadOp = wgpu::LoadOp::Clear;
@@ -112,6 +131,7 @@ void draw_frame(const wgpu::Device &p_device, const wgpu::Queue &p_queue, const 
     pass_desc.colorAttachments = &color;
     pass_desc.depthStencilAttachment = &depth;
     const wgpu::CommandEncoder encoder = p_device.CreateCommandEncoder();
+    r_pages.encode_shadow(encoder, p_view);
     const wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&pass_desc);
     r_pages.draw(pass, p_view);
     pass.End();
@@ -203,6 +223,14 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     DawnDevice device(p_context);
     DawnPageHost pages(device, upscaler ? DawnUpscaler::COLOR_FORMAT : format);
     OV_ERR_FAIL_COND_V_MSG(!pages.ready(), 1, "Viewer: no page shader.");
+    if (!p_options.grade.empty()) {
+        str grade;
+        if (!read_file(p_options.grade, grade)) {
+            OV_LOG(LOG_WARNING, "Viewer: no grade at %s (--grade=PATH or off): ungraded", p_options.grade);
+        } else {
+            pages.set_grade(grade);
+        }
+    }
 
     World world;
     World::Settings &s = world.settings();
@@ -238,9 +266,9 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
 
     wgpu::Texture offscreen;
     if (shot) {
-        offscreen = make_target(p_context.device, format, width, height, wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc);
+        offscreen = make_texture(p_context.device, format, width, height, wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc);
     }
-    wgpu::Texture depth = make_target(p_context.device, DawnPageHost::DEPTH_FORMAT, width, height, wgpu::TextureUsage::RenderAttachment);
+    wgpu::Texture depth = make_texture(p_context.device, DawnPageHost::DEPTH_FORMAT, width, height, wgpu::TextureUsage::RenderAttachment);
 
     using Clock = std::chrono::steady_clock;
     const Clock::time_point start = Clock::now();
@@ -274,7 +302,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
                 width = window.width;
                 height = window.height;
                 configure(width, height);
-                depth = make_target(p_context.device, DawnPageHost::DEPTH_FORMAT, width, height, wgpu::TextureUsage::RenderAttachment);
+                depth = make_texture(p_context.device, DawnPageHost::DEPTH_FORMAT, width, height, wgpu::TextureUsage::RenderAttachment);
                 if (upscaler) {
                     upscaler->resize(width, height);
                 }
@@ -349,9 +377,17 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
             upscaler->begin_frame(unjittered, view.view_proj);
         }
         view.camera = camera.pos;
-        view.sun = Float3{ 0.4f, 0.8f, 0.3f }.normalized();
+        view.sun = SUN_DIR.normalized();
+        const ov::Color sun_color = SUN_COLOR_SRGB.srgb_to_linear();
+        view.sun_color = Float3{ sun_color.r, sun_color.g, sun_color.b };
+        view.sun_energy = SUN_ENERGY;
+        view.sun_size = float(SUN_SIZE_DEG * WorldCoord::PI / 180.0);
+        view.sky_energy = SKY_ENERGY;
+        view.sky_exposure = SKY_EXPOSURE;
+        view.shadow_m = p_options.shadow_m;
         view.fog_m = float(world.load_radius()) * 0.15f;
         view.forward = forward;
+        camera.view_rays(float(width) / float(height), view.view_right, view.view_up);
         const int target_h = upscaler ? upscaler->render_height() : height; // the pages' target
         view.pixel_m = 2.0f * std::tan(FOV_RAD * 0.5f) / float(target_h);
         // A shot stays the same picture; wrapped like Godot's TIME (an hour), so float seconds stay fine.

@@ -10,7 +10,7 @@
 //   ov_dawn --viewer [options]        the terrain in a window, the Godot player's controls (README.md)
 //   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
 // Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
-// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --discoverer=cpu|gpu --walk_gpu=0|1 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
+// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --discoverer=cpu|gpu --walk_gpu=0|1 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS --shadow_m=M --grade=PATH|off.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -130,6 +130,10 @@ int main(int argc, char **argv) {
             viewer.upscale.pixelate = std::atoi(value.c_str());
         } else if (flag(argv[i], "--sharpness", value)) {
             viewer.upscale.sharpness = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--shadow_m", value)) {
+            viewer.shadow_m = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--grade", value)) {
+            viewer.grade = value == "off" ? "" : value;
         }
     }
     if (run_viewer) {
