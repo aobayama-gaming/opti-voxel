@@ -207,6 +207,10 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     s.terrain_mode = p_options.terrain_mode;
     s.lod_numbers = p_options.lods;
     s.lod_pixel_error = p_options.lod_error;
+    s.lod_pixel_error_back = p_options.lod_error_back;
+    s.archetype_trees = p_options.trees;
+    s.archetype_tree_area = p_options.tree_area;
+    s.climate_path = p_options.climate;
     s.chunk_param.voxel_size = p_options.voxel_size;
     s.debug_view = p_options.view;
     World::Projection projection;
@@ -220,6 +224,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
         return 1;
     }
     FlyCamera camera;
+    camera.pos = Float3{ p_options.cam_pos[0], p_options.cam_pos[1], p_options.cam_pos[2] };
     camera.pitch = p_options.pitch_deg * 3.14159265f / 180.0f;
     camera.yaw = p_options.yaw_deg * 3.14159265f / 180.0f;
     place_above_ground(world, camera, p_options.above_ground);
