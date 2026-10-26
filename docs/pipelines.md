@@ -2,11 +2,15 @@
 
 The two meshers, the GPU budget and dual contouring.
 
-- `1` GPU Legacy (`GPUMesher`): compute on a local RenderingDevice, full readback, CPU
-  triangulation, one mesh + instance per chunk. Kept as the correctness oracle and perf baseline.
-- `2` GPU Direct (`GPUDirectMesher`, default in `main_scene`): compute on the main RenderingDevice
-  (render thread, `call_on_render_thread`), quads written straight into `QuadPagePool` pages, which
-  are MultiMesh instances of 64-quad groups that pull their corners from a GPU-written RGBA16UI
+Both are core code on `ov::gpu::Device` (`gpu_device.hpp`); what draws their output is the adapter's (`PageHost`,
+`MeshHost`: Godot's in `adapter/godot/src/godot_page_host.*` and `godot_mesh_host.*`).
+
+- `1` GPU Legacy (`GPUMesher`): compute on a local device, full readback, CPU
+  triangulation, one mesh + instance per chunk (`MeshHost`). Kept as the correctness oracle and perf baseline.
+- `2` GPU Direct (`GPUDirectMesher`, default in `main_scene`): compute on the main device (Godot's main
+  RenderingDevice: its work posted to the render thread, `Device::post`), quads written straight into `QuadPagePool`
+  pages, which the host draws (Godot: MultiMesh instances of 64-quad groups, the page shader in
+  `godot_page_host.cpp`) pulling their corners from a GPU-written RGBA16UI
   texture: one row per group, a header with the owning chunk id, then 8 B per corner (chunk-local
   13-bit fixed point, 1/256 cell + a 9-bit palette index + 16-bit octahedral normal, at most ~1 degree off).
   Layout, decoders and the GLSL of both (constants substituted, no literal elsewhere): `src/page_format.hpp`. Only a ~2 KB per-batch directory comes back to the CPU (asynchronously) for bookkeeping.

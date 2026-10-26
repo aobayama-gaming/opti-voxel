@@ -7,6 +7,8 @@
 #include "field_gpu.hpp"
 #include "instance_table.hpp"
 #include "moment_layers.hpp"
+#include "ov/math.hpp"
+#include "ov/value.hpp"
 #include "scatter_source.hpp"
 #include "sdf_base.hpp"
 #include "tree_archetype.hpp"
@@ -142,13 +144,13 @@ public:
     // Attached now (null detaches): the walk batch follows. poll() calls it; tests attach directly.
     void attach_field_gpu(std::shared_ptr<FieldGPU> p_gpu);
     // The walk keys per drain task with the GPU attached (default WALK_BATCH_GPU). Set before configure().
-    void set_walk_batch_gpu(size_t p_keys) { walk_batch_gpu = MAX(p_keys, size_t(1)); }
+    void set_walk_batch_gpu(size_t p_keys) { walk_batch_gpu = ov::max(p_keys, size_t(1)); }
     // Every batch the GPU answers read again on the CPU, ERR on a difference (debug: --walk_verify).
     void set_walk_verify(bool p_verify) { walk_verify = p_verify; }
     // ground_field at many points, bit for bit (CellScatter::ground_batch). Thread-safe.
     void ground_field_batch(const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) const;
     // The GPU field's stats (FieldGPU::get_stats) and the verify counts; empty when none was started.
-    Dictionary walk_gpu_stats() const;
+    ov::Value walk_gpu_stats() const;
     // The records the CPU folds at p_voxel for a LOD-p_lod sample, in fold order (compose_list): r_list indexes the
     // returned view, valid until the next call on this thread. Any thread.
     // p_view: the streamed keys not landed yet are left out instead of computed (InstanceStream::view_records; main thread).
@@ -181,7 +183,7 @@ public:
     // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite, normal
     // floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level operators, and
     // a smooth radius is >= 0.
-    static String edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k);
+    static ov::str edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k);
 
 protected:
     // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
@@ -192,9 +194,9 @@ protected:
 
     // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
     // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.
-    void set_ground_materials(const std::vector<std::pair<String, Material::Params>> &p_ground) {
+    void set_ground_materials(const std::vector<std::pair<ov::str, Material::Params>> &p_ground) {
         std::vector<uint32_t> base{ Material::GROUND };
-        for (const std::pair<String, Material::Params> &m : p_ground) {
+        for (const std::pair<ov::str, Material::Params> &m : p_ground) {
             base.push_back(materials.set(m.first, m.second));
         }
         gpu.set_base_palette(base);
@@ -298,13 +300,13 @@ private:
     Archetype::CellScatter scatter_source(const Types &p_types) const;
     // Every site of p_source in its zone, appended to the records (each a contiguous run, kept whole or left out), and
     // its stats under r_stats[p_name]; the sites' runs to r_spans if given.
-    void add_source(const Archetype::CellScatter &p_source, const char *p_name, Dictionary &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
+    void add_source(const Archetype::CellScatter &p_source, const char *p_name, ov::Value &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
     // The sources as keys of a stream whose slots start at p_slot_base, and their stats.
-    void add_stream(uint32_t p_slot_base, Dictionary &r_stats);
+    void add_stream(uint32_t p_slot_base, ov::Value &r_stats);
     // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
-    void add_biomes(const Types &p_types, Dictionary &r_stats);
+    void add_biomes(const Types &p_types, ov::Value &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
-    void add_moment_blobs(int p_blob_type, Dictionary &r_stats);
+    void add_moment_blobs(int p_blob_type, ov::Value &r_stats);
     // After record p_id changed: its item updated in the moment layers (MomentLayers::update) and the kept blobs that
     // changed applied to the table (added, replaced, removed): their ids appended to r_ids, their regions to edit_regions.
     void update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids);

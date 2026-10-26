@@ -6,17 +6,17 @@
 #include "lod_structures.hpp"
 #include "ov/executor.hpp"
 #include "sdf_base.hpp"
-#include <godot_cpp/classes/mutex.hpp>
-#include <godot_cpp/classes/node.hpp>
-#include <godot_cpp/templates/hash_map.hpp>
-#include <godot_cpp/templates/hash_set.hpp>
+
+#include "ov/containers.hpp"
+#include "ov/math.hpp"
+#include "ov/value.hpp"
+
+#include <mutex>
 
 #include <memory>
 #include <vector>
 
-using namespace godot;
-
-class ChunkDiscoverer : public Object, public ov::WorkerLoop {
+class ChunkDiscoverer : public ov::WorkerLoop {
 public:
     // How a node of the LOD tree is dropped as holding no surface.
     enum CullMode {
@@ -58,7 +58,7 @@ public:
             bool outside = false;
             uint32_t last_scan = 0;
         };
-        godot::HashMap<ChunkId, Entry, Vector3i64Hasher> entries;
+        ov::HashMap<ChunkId, Entry, Vector3i64Hasher> entries;
         uint32_t scan_index = 0;
         bool verify = false; // recompute the verdict on every hit and count mismatches
     };
@@ -67,7 +67,7 @@ private:
     // The scans run on a worker of the core's executor (start / stop): enter(), a step() per wake (a camera chunk
     // crossing or an edit), exit().
     std::unique_ptr<ov::Worker> worker;
-    Ref<Mutex> mutex;
+    std::mutex mutex;
 
     // Worker only: the last scan's view and set (kept up to date by applying each delta, so the published set leaves
     // without a copy).
@@ -77,8 +77,8 @@ private:
 
     // non thread safe variable
     ChunkParam chunk_param = ChunkParam();
-    PackedFloat32Array lod_distances;
-    double cone_half_angle = Math_PI; // the view cone of ScanView: every node is in it by default
+    std::vector<float> lod_distances;
+    double cone_half_angle = ov::PI; // the view cone of ScanView: every node is in it by default
     double back_scale = 0.0; // ScanView::back_scale
     double memory_distance = 0.0; // chunk-id units (set_view_memory); 0: no memory
     CullMode cull_mode = CULL_LEGACY;
@@ -129,8 +129,8 @@ private:
         int64_t cache_size = 0;
         int64_t cache_evicted_total = 0;
         int64_t verify_mismatches_total = 0;
-        Dictionary first_scan; // the first scan's counters and waves (a cold cache)
-        Dictionary last_scan;
+        ov::Value first_scan = ov::Value::object(); // the first scan's counters and waves (a cold cache)
+        ov::Value last_scan = ov::Value::object();
         bool gpu_active = false;
         double gpu_scratch_mb = 0.0;
         uint64_t gpu_init_usec = 0; // local device + point shader, before the first scan
@@ -161,7 +161,7 @@ private:
     // the scan (and its compare) finished.
     void _publish(std::unique_ptr<LODHashSet> p_scan, std::unique_ptr<ScanDelta> p_delta, const ScanView &p_view, const ScanCounters &p_counters, int64_t p_evicted, uint64_t p_scan_usec,
             uint64_t p_ready_usec);
-    static Dictionary _scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec);
+    static ov::Value _scan_dict(const ScanCounters &p_counters, uint64_t p_scan_usec);
 
 public:
     void start();
@@ -171,12 +171,12 @@ public:
     // one, which asks for a rescan (when the LOD rule depends on the direction).
     static constexpr double RESCAN_TURN_DEG = 8.0;
     // The angle between unit axes p_a and p_b is over RESCAN_TURN_DEG.
-    static bool turned_past(const Vector3 &p_a, const Vector3 &p_b);
+    static bool turned_past(const Float3 &p_a, const Float3 &p_b);
     // lod_view_memory_m < 0: the memory distance is where this LOD starts.
     static constexpr int VIEW_MEMORY_AUTO_LOD = 2;
 
     // The view of a camera at render position p_pos looking along p_forward, without memories.
-    ScanView make_view(const Vector3 &p_pos, const Vector3 &p_forward) const;
+    ScanView make_view(const Float3 &p_pos, const Float3 &p_forward) const;
     // p_new needs another scan than p_scanned: another camera chunk or other memories.
     static bool view_changed(const ScanView &p_scanned, const ScanView &p_new);
     enum Remembered {
@@ -190,7 +190,7 @@ public:
     // or no forward: no memories. Static for the unit tests.
     static Remembered remember_view(ScanView &r_view, double p_memory_distance);
     // Remembers the camera's view (remember_view) and asks for a scan when the view changed (view_changed).
-    void set_camera(const Vector3 &p_pos, const Vector3 &p_forward);
+    void set_camera(const Float3 &p_pos, const Float3 &p_forward);
     // The view of the latest set_camera, memories included.
     ScanView get_view();
     // How far the camera walks from where it had a view before that view starts to fade (render metres;
@@ -212,13 +212,13 @@ public:
     // depend on the visit order, so it is the one the old recursive walk gave (unit-tested).
     void scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
             CullCache *p_cache = nullptr, LocalPointsGPU *p_gpu = nullptr) const;
-    int get_max_lod() const { return lod_distances.size() - 2; }
-    const PackedFloat32Array &get_lod_distances() const { return lod_distances; }
+    int get_max_lod() const { return int(lod_distances.size()) - 2; }
+    const std::vector<float> &get_lod_distances() const { return lod_distances; }
     // The scan grid (after setup_lod): top-LOD chunk centres step `r_step` ids, from -r_count to
     // +r_count steps around the camera's top-LOD ancestor.
     void get_scan_grid(int64_t &r_step, int64_t &r_count) const;
 
-    Dictionary get_stats();
+    ov::Value get_stats();
 
     // Must be called before start().
     void set_config(
@@ -247,5 +247,5 @@ public:
             float viewport_height = 1080.0f,
             float fov_rad = 75.0f * (3.14159265f / 180.0f),
             float target_pixel_error_back = 0.0f,
-            float cone_half_angle_rad = Math_PI);
+            float cone_half_angle_rad = float(ov::PI));
 };

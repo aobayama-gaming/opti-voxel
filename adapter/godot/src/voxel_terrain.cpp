@@ -12,6 +12,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <map>
 
 void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_pipeline_mode", "mode"), &VoxelTerrain::set_pipeline_mode);
@@ -739,8 +740,8 @@ void VoxelTerrain::set_page_params(const Dictionary &p_params) {
     Array keys = p_params.keys();
     for (int i = 0; i < keys.size(); i++) {
         page_params[keys[i]] = p_params[keys[i]];
-        if (direct_mesher) {
-            direct_mesher->get_pool()->set_material_param(keys[i], p_params[keys[i]]);
+        if (page_host) {
+            page_host->set_material_param(keys[i], p_params[keys[i]]);
         }
     }
 }
@@ -793,9 +794,9 @@ void VoxelTerrain::_ready() {
     sdf->set_biome_radius(biome_radius);
     if (!climate_path.is_empty()) {
         // Parsed and checked by configure() (an ERR there: no climate).
-        const String err = Climate::load(climate_path, sdf->climate_data);
-        if (!err.is_empty()) {
-            ERR_PRINT("VoxelTerrain: " + err + String(" No climate."));
+        const ov::str err = Climate::load(ov_str(climate_path), sdf->climate_data);
+        if (!err.empty()) {
+            ERR_PRINT("VoxelTerrain: " + godot_str(err) + String(" No climate."));
         }
     }
     sdf->set_instance_band(archetype_band && terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
@@ -862,10 +863,12 @@ void VoxelTerrain::_ready() {
 
     scenario = get_world_3d()->get_scenario();
 
+    main_device = new RDDevice(RenderingServer::get_singleton()->get_rendering_device());
     if (pipeline_mode == PIPELINE_GPU_DIRECT) {
-        direct_mesher = memnew(GPUDirectMesher);
+        page_host = new GodotPageHost(scenario, main_device);
+        direct_mesher = new GPUDirectMesher();
         direct_mesher->set_dual_contouring(dual_contouring);
-        direct_mesher->initialize(sdf, chunk_param, lod_numbers, scenario, direct_settings);
+        direct_mesher->initialize(sdf, chunk_param, lod_numbers, main_device, page_host, direct_settings);
         direct_mesher->set_debug_view(debug_view);
         // Skirt depth per LOD: the page shader's height colours undo the skirt push.
         PackedFloat32Array skirt_depths;
@@ -873,17 +876,18 @@ void VoxelTerrain::_ready() {
         for (int l = 0; l < 32; l++) {
             skirt_depths.set(l, l < lod_numbers ? sdf->skirt_depth_m(l) : 0.0f);
         }
-        direct_mesher->get_pool()->set_material_param("skirt_depth_m", skirt_depths);
+        page_host->set_material_param("skirt_depth_m", skirt_depths);
         const UpAxis up = sdf->up_at(VoxelPos(0, sdf->get_datum_y(), 0));
-        direct_mesher->get_pool()->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
+        page_host->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
         if (sdf->preset == SDFCascade::Preset::CONTINENTS) {
             // Continents preset: the page shader colours heights around sea level (the cascade's datum).
             const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf->get_datum_y(), 0), chunk_param).y;
-            direct_mesher->get_pool()->set_material_param("sea_level_m", sea_m);
+            page_host->set_material_param("sea_level_m", sea_m);
         }
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     } else {
-        gpu_mesher = memnew(GPUMesher);
+        mesh_host = new GodotMeshHost(scenario);
+        gpu_mesher = new GPUMesher();
 
         gpu_mesher->set_dual_contouring(dual_contouring);
         gpu_mesher->initialize(
@@ -891,13 +895,13 @@ void VoxelTerrain::_ready() {
                 chunk_param,
                 legacy_batch_size, // chunk_batch
                 lod_numbers,
-                scenario);
+                mesh_host);
         gpu_mesher->set_trim_indices(legacy_trim_indices);
     }
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
 
     if (camera != nullptr) {
-        chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
+        chunk_discoverer->set_camera(ov_f3(camera->get_global_position()), ov_f3(_camera_forward()));
     }
 
     VLOG(1, "VoxelTerrain: started, pipeline_mode=", (int)pipeline_mode);
@@ -1030,7 +1034,7 @@ void VoxelTerrain::_process(double) {
     }
 
     if (camera != nullptr) {
-        chunk_discoverer->set_camera(camera->get_global_position(), _camera_forward());
+        chunk_discoverer->set_camera(ov_f3(camera->get_global_position()), ov_f3(_camera_forward()));
     }
 
     {
@@ -1122,7 +1126,7 @@ void VoxelTerrain::_process(double) {
     }
 
     if (auditor && auditor->step()) {
-        audit_report = auditor->get_report();
+        audit_report = godot_dict(auditor->get_report());
         auditor->destroy();
         auditor = nullptr;
         VLOG(1, "VoxelTerrain: page audit: ", audit_report);
@@ -1133,9 +1137,8 @@ void VoxelTerrain::_process(double) {
     }
 
     if (validator && validator->step()) {
-        validation_report = validator->get_report();
-        validator->destroy();
-        validator = nullptr;
+        validation_report = godot_dict(validator->get_report());
+        _free_validator();
         VLOG(1, "VoxelTerrain: validation report: ", validation_report);
     }
 
@@ -1167,9 +1170,17 @@ bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
     // (hash map order is arbitrary but stable enough for a spread of LODs)
     const std::vector<MeshValidator::Target> targets = MeshValidator::pick_targets(candidates, p_count);
     validation_report = Dictionary();
-    validator = memnew(MeshValidator);
-    validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), p_dump_dir, dual_contouring);
+    validator_host = new GodotMeshHost();
+    validator = new MeshValidator();
+    validator->start(targets, sdf, chunk_param, lod_numbers, direct_mesher->get_pool(), validator_host, ov_str(p_dump_dir), dual_contouring);
     return true;
+}
+
+void VoxelTerrain::_free_validator() {
+    validator->destroy(); // its legacy mesher stops now (its meshes freed), the object goes on the render thread
+    validator = nullptr;
+    delete validator_host;
+    validator_host = nullptr;
 }
 
 Dictionary VoxelTerrain::get_validation_report() const {
@@ -1179,13 +1190,13 @@ Dictionary VoxelTerrain::get_validation_report() const {
 bool VoxelTerrain::debug_audit_pages() {
     ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_pages needs pipeline_mode = GPU Direct.");
     ERR_FAIL_COND_V_MSG(auditor, false, "An audit is already running.");
-    HashMap<int, int> index_of_page;
+    std::map<int, size_t> index_of_page;
     std::vector<PageAuditor::PageInfo> pages;
     for (const auto &kv : visual_mesh_data.loaded_chunk) {
         if (kv.second.page < 0) {
             continue;
         }
-        if (!index_of_page.has(kv.second.page)) {
+        if (index_of_page.count(kv.second.page) == 0) {
             index_of_page[kv.second.page] = pages.size();
             PageAuditor::PageInfo info;
             info.page = kv.second.page;
@@ -1194,7 +1205,7 @@ bool VoxelTerrain::debug_audit_pages() {
         pages[index_of_page[kv.second.page]].live.push_back({ kv.second.quad_offset, kv.second.quad_count, kv.first, kv.second.palette });
     }
     audit_report = Dictionary();
-    auditor = memnew(PageAuditor);
+    auditor = new PageAuditor();
     auditor->start(direct_mesher->get_pool(), pages, chunk_param);
     return true;
 }
@@ -1346,8 +1357,8 @@ Dictionary VoxelTerrain::get_debug_stats() {
     origin["chunk"] = godot_str(chunk_param.origin_chunk);
     d["world_origin"] = origin;
     if (sdf) {
-        Dictionary table = sdf->get_gpu_table()->get_stats();
-        const Dictionary walk = sdf->walk_gpu_stats();
+        Dictionary table = godot_dict(sdf->get_gpu_table()->get_stats());
+        const Dictionary walk = godot_dict(sdf->walk_gpu_stats());
         if (!walk.is_empty()) {
             table["walk_gpu"] = walk;
         }
@@ -1397,7 +1408,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
 
     Dictionary process;
     for (const auto &[name, stat] : process_stats.sections()) {
-        process[name] = stat->to_dict();
+        process[name] = godot_dict(stat->to_value());
     }
     d["process"] = process;
 
@@ -1418,21 +1429,21 @@ Dictionary VoxelTerrain::get_debug_stats() {
     destroy["coverage_written"] = vs.coverage_written;
     destroy["coverage_written_max"] = vs.coverage_written_max;
     // Frames a stalled parent stays drawn over its children (first stalled sub-cube to the last cleared), cumulative.
-    destroy["handoff_frames"] = godot_dict(vs.handoff_frames);
+    destroy["handoff_frames"] = godot_dict(to_value(vs.handoff_frames));
     d["destroy"] = destroy;
 
     if (gpu_profiler) {
         d["gpu_breakdown"] = gpu_profiler->get_breakdown();
     }
     d["chunk_rids_alive"] = DebugLog::chunk_rids_created.load() - DebugLog::chunk_rids_freed.load();
-    d["discoverer"] = chunk_discoverer->get_stats();
-    d["mesher"] = direct_mesher ? direct_mesher->get_stats() : gpu_mesher->get_stats();
+    d["discoverer"] = godot_dict(chunk_discoverer->get_stats());
+    d["mesher"] = godot_dict(direct_mesher ? direct_mesher->get_stats() : gpu_mesher->get_stats());
 
     Dictionary edits;
     edits["edits"] = edit_stats.edits;
     edits["remesh_total"] = edit_stats.remesh_total;
     edits["remesh_last"] = edit_stats.remesh_last;
-    edits["apply"] = edit_stats.apply.to_dict();
+    edits["apply"] = godot_dict(edit_stats.apply.to_value());
     d["edits"] = edits;
 
     return d;
@@ -1447,8 +1458,7 @@ void VoxelTerrain::_teardown() {
     // Debug tools first: the validator owns a legacy mesher, and both hold pages of the direct one.
     // A run may be in flight: they delete themselves once their readbacks have arrived.
     if (validator) {
-        validator->destroy();
-        validator = nullptr;
+        _free_validator();
     }
     if (auditor) {
         auditor->destroy();
@@ -1473,12 +1483,19 @@ void VoxelTerrain::_teardown() {
     if (direct_mesher) {
         direct_mesher->destroy(); // deletes itself on the render thread
         direct_mesher = nullptr;
+        page_host->destroy(); // after the mesher's teardown, on the render thread too
+        page_host = nullptr;
     }
     if (gpu_mesher) {
         gpu_mesher->stop();
-        memdelete(gpu_mesher);
+        delete gpu_mesher;
         gpu_mesher = nullptr;
+        delete mesh_host;
+        mesh_host = nullptr;
     }
+    // Last on the render thread: everything posted before still uses it.
+    main_device->post([device = main_device]() { delete device; });
+    main_device = nullptr;
 
     VLOG(1, "VoxelTerrain: teardown, chunk instances created=", DebugLog::chunk_rids_created.load(),
             " freed=", DebugLog::chunk_rids_freed.load());

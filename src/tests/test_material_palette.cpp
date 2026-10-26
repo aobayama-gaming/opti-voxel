@@ -16,18 +16,17 @@ TEST_CASE("Material::Library: built-ins in order, names unique, image layout") {
     CHECK(lib.find("ground") == Material::GROUND);
     CHECK(lib.find("lava") == Material::LAVA);
     CHECK(lib.find("nope") == UINT32_MAX);
-    const uint32_t moss = lib.add("moss", Material::Params{ Color(0.1, 0.2, 0.1), 0.8f, Color(0, 0, 0), Material::PATTERN_NONE });
+    const uint32_t moss = lib.add("moss", Material::Params{ ov::Color(0.1, 0.2, 0.1), 0.8f, ov::Color(0, 0, 0), Material::PATTERN_NONE });
     CHECK(moss == Material::BUILTIN_COUNT);
-    const Ref<Image> img = lib.make_image();
-    CHECK(img->get_format() == Image::FORMAT_RGBAF);
-    CHECK(img->get_width() == Material::TEXELS * Material::IMAGE_MATERIALS_PER_ROW);
-    CHECK(img->get_height() == 1);
-    const Color a = img->get_pixel(Material::TEXELS * int(moss), 0);
-    CHECK(a.g == doctest::Approx(0.2));
-    CHECK(a.a == doctest::Approx(0.8));
-    const Color lava = img->get_pixel(Material::TEXELS * Material::LAVA + 1, 0);
-    CHECK(lava.a == float(Material::PATTERN_LAVA));
-    CHECK(img->get_pixel(Material::TEXELS * Material::BARK + 1, 0).a == float(Material::PATTERN_BARK));
+    const Material::Library::Image img = lib.make_image();
+    CHECK(img.width == Material::TEXELS * Material::IMAGE_MATERIALS_PER_ROW);
+    CHECK(img.height == 1);
+    // Texel x of row 0 (RGBA floats).
+    const auto texel = [&img](int p_x) { return &img.rgba[size_t(p_x) * 4]; };
+    CHECK(texel(Material::TEXELS * int(moss))[1] == doctest::Approx(0.2));
+    CHECK(texel(Material::TEXELS * int(moss))[3] == doctest::Approx(0.8));
+    CHECK(texel(Material::TEXELS * Material::LAVA + 1)[3] == float(Material::PATTERN_LAVA));
+    CHECK(texel(Material::TEXELS * Material::BARK + 1)[3] == float(Material::PATTERN_BARK));
 }
 
 const std::vector<uint32_t> GROUND_BASE{ Material::GROUND };
@@ -141,15 +140,15 @@ TEST_CASE("Material::Library: set adds a material once, then replaces its parame
     Material::Library lib;
     Material::Params p;
     p.pattern = Material::PATTERN_GROUND;
-    p.debug = Color(1, 0, 0, 1);
+    p.debug = ov::Color(1, 0, 0, 1);
     const uint32_t id = lib.set("biome:a", p);
     CHECK(id == Material::BUILTIN_COUNT);
-    p.debug = Color(0, 1, 0, 1);
+    p.debug = ov::Color(0, 1, 0, 1);
     CHECK(lib.set("biome:a", p) == id);
     CHECK(lib.size() == Material::BUILTIN_COUNT + 1);
-    const Ref<Image> img = lib.make_image();
-    CHECK(img->get_pixel(Material::TEXELS * int(id) + 1, 0).a == float(Material::PATTERN_GROUND));
-    CHECK(img->get_pixel(Material::TEXELS * int(id) + Material::TEXEL_DEBUG, 0).g == doctest::Approx(1.0));
+    const Material::Library::Image img = lib.make_image();
+    CHECK(img.rgba[(size_t(Material::TEXELS) * id + 1) * 4 + 3] == float(Material::PATTERN_GROUND));
+    CHECK(img.rgba[(size_t(Material::TEXELS) * id + Material::TEXEL_DEBUG) * 4 + 1] == doctest::Approx(1.0));
 }
 
 TEST_CASE("Fold material: the record that wins the sample gives it its palette index") {

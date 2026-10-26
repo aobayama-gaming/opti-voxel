@@ -2,14 +2,9 @@
 #include "godot_conv.hpp"
 
 #include "debug_log.hpp"
+#include "gpu_shader.hpp"
 #include "page_format.hpp"
-#include "rd_utils.hpp"
 
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_texture_format.hpp>
-#include <godot_cpp/classes/rd_texture_view.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
 
@@ -106,56 +101,28 @@ void QuadPoolSpike::_ready() {
         sheet_chunk = ChunkMath::get_parent_from_child(sheet_chunk);
     }
 
-    pool = memnew(QuadPagePool);
-    pool->initialize(get_world_3d()->get_scenario(), page_capacity, 1 + extra_pages, chunk_param.voxel_size);
+    device = new RDDevice(RenderingServer::get_singleton()->get_rendering_device());
+    host = new GodotPageHost(get_world_3d()->get_scenario(), device);
+    host->set_material_param("voxel_size", chunk_param.voxel_size);
+    pool = new QuadPagePool();
+    pool->initialize(device, host, page_capacity, 1 + extra_pages);
     page = pool->acquire_page();
-    pool->set_page_aabb(page, AABB(sheet_origin - Vector3(0, 5, 0), Vector3(sheet_size, 10, sheet_size)));
+    pool->set_page_aabb(page, RenderBox{ ov_f3(sheet_origin - Vector3(0, 5, 0)), Float3{ sheet_size, 10.0f, sheet_size } });
 
-    RenderingServer::get_singleton()->call_on_render_thread(
-            callable_mp(this, &QuadPoolSpike::_rt_run).bind(page));
+    const int p = page;
+    device->post([this, p]() { _rt_run(p); });
 }
 
 void QuadPoolSpike::_rt_run(int p_page) {
-    RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    ERR_FAIL_NULL_MSG(rd, "QuadPoolSpike: no RenderingDevice (Compatibility renderer?)");
+    const ov::str code = ov::replace_all(SPIKE_COMPUTE, "/*GLSL_PAGE_FORMAT*/", PageFormat::glsl_encode());
+    rt_pipeline = ov::gpu::compile(*device, "quad_pool_spike", code);
+    ERR_FAIL_COND_MSG(!rt_pipeline.is_valid(), "QuadPoolSpike: SHADER COMPILATION FAILED.");
 
-    String code = String(SPIKE_COMPUTE).replace("/*GLSL_PAGE_FORMAT*/", godot_str(PageFormat::glsl_encode()));
-    Ref<RDShaderSource> source;
-    source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
-    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-    const String err = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-    ERR_FAIL_COND_MSG(!err.is_empty(), "QuadPoolSpike: SHADER COMPILATION FAILED: " + err);
-    rt_shader = rd->shader_create_from_spirv(spirv);
-    rt_pipeline = rd->compute_pipeline_create(rt_shader);
-
-    Ref<RDTextureFormat> format;
-    format.instantiate();
-    format->set_format(QuadPagePool::TEX_FORMAT);
-    format->set_width(QuadPagePool::TEX_WIDTH);
-    format->set_height(pool->get_page_rows());
-    format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_STORAGE_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-            RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT);
-    Ref<RDTextureView> view;
-    view.instantiate();
-    rt_staging = rd->texture_create(format, view);
-    rd->texture_clear(rt_staging, Color(0, 0, 0, 0), 0, 1, 0, 1);
-    rt_counter = rd->storage_buffer_create(16);
-
-    TypedArray<RDUniform> uniforms;
-    Ref<RDUniform> u0;
-    u0.instantiate();
-    u0->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-    u0->set_binding(0);
-    u0->add_id(rt_staging);
-    uniforms.push_back(u0);
-    Ref<RDUniform> u1;
-    u1.instantiate();
-    u1->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-    u1->set_binding(1);
-    u1->add_id(rt_counter);
-    uniforms.push_back(u1);
-    rt_uniform_set = rd->uniform_set_create(uniforms, rt_shader, 0);
+    rt_staging = device->create_texture(QuadPagePool::TEX_FORMAT, QuadPagePool::TEX_WIDTH, pool->get_page_rows(),
+            ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_COPY_SRC | ov::gpu::TEXTURE_COPY_DST, nullptr);
+    device->clear_texture(rt_staging);
+    rt_counter = device->create_buffer(ov::gpu::BufferKind::STORAGE, 16, nullptr);
+    rt_uniform_set = device->create_bind_set(rt_pipeline, { ov::gpu::Binding::storage_image(0, rt_staging), { 1, ov::gpu::BufferKind::STORAGE, rt_counter } });
 
     const Vector3 grid = godot_v3(ChunkMath::grid_to_render(sheet_chunk, Float3{}, chunk_param));
     const ov::ivec3 sheet_chunk_lo = WorldCoord::lo32_i(sheet_chunk);
@@ -176,31 +143,24 @@ void QuadPoolSpike::_rt_run(int p_page) {
     push.encode_float(60, chunk_param.voxel_size * float(ChunkMath::get_lod_size(sheet_chunk)));
 
     const uint32_t quad_count = side * side;
-    rd->buffer_clear(rt_counter, 0, 16);
-    const int64_t list = rd->compute_list_begin();
-    rd->compute_list_bind_compute_pipeline(list, rt_pipeline);
-    rd->compute_list_bind_uniform_set(list, rt_uniform_set, 0);
-    rd->compute_list_set_push_constant(list, push, push.size());
-    rd->compute_list_dispatch(list, (quad_count + 63) / 64, 1, 1);
-    rd->compute_list_end();
+    device->clear_buffer(rt_counter, 0, 16);
+    device->dispatch(rt_pipeline, rt_uniform_set, push.ptr(), uint32_t(push.size()), (quad_count + 63) / 64, 1, 1);
 
     // The whole point: GPU -> GPU, the CPU never sees the quads or the count.
     pool->rt_copy_page_from(p_page, rt_staging, 0);
     const QuadPagePool::PageRD page_rd = pool->rt_get_page_rd(p_page);
-    rd->buffer_copy(rt_counter, page_rd.command, 4, QuadPagePool::INDIRECT_INSTANCE_COUNT_OFFSET, 4);
+    device->copy_buffer(rt_counter, page_rd.command, 4, QuadPagePool::INDIRECT_INSTANCE_COUNT_OFFSET, 4);
 
     // Debug verification only.
-    rd->texture_get_data_async(page_rd.texture, 0, callable_mp(this, &QuadPoolSpike::_rt_on_texture).bind(0));
-    rd->buffer_get_data_async(page_rd.command, callable_mp(this, &QuadPoolSpike::_rt_on_command), 0, 20);
+    device->read_texture_async(page_rd.texture, [this](const ov::bytes &p_data) { _rt_on_texture(godot_bytes(p_data), 0); });
+    device->read_buffer_async(page_rd.command, 0, 20, [this](const ov::bytes &p_data) { _rt_on_command(godot_bytes(p_data)); });
     VLOG(1, "QuadPoolSpike: dispatched ", quad_count, " quads into page ", p_page);
 }
 
 void QuadPoolSpike::_rt_kill(int p_page) {
     pool->rt_kill_range(p_page, KILL_A_OFFSET, KILL_A_COUNT);
     pool->rt_kill_range(p_page, KILL_B_OFFSET, KILL_B_COUNT);
-    RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-    rd->texture_get_data_async(pool->rt_get_page_rd(p_page).texture, 0,
-            callable_mp(this, &QuadPoolSpike::_rt_on_texture).bind(1));
+    device->read_texture_async(pool->rt_get_page_rd(p_page).texture, [this](const ov::bytes &p_data) { _rt_on_texture(godot_bytes(p_data), 1); });
 }
 
 void QuadPoolSpike::_rt_on_texture(const PackedByteArray &p_data, int p_stage) {
@@ -236,12 +196,12 @@ void QuadPoolSpike::_process(double) {
         Dictionary r = report;
         _verify_kills(r);
         r["ok"] = (bool)r["write_ok"] && (bool)r["kill_ok"];
-        r["pool"] = pool->get_stats();
+        r["pool"] = godot_dict(pool->get_stats());
         stage = 3;
         mutex->lock();
         report = r;
         mutex->unlock();
-        VLOG(1, "QuadPoolSpike report: ", r);
+        VLOG(1, "QuadPoolSpike report: ", ov_str(Variant(r).stringify()));
     }
 }
 
@@ -389,13 +349,13 @@ Dictionary QuadPoolSpike::get_report() {
 void QuadPoolSpike::run_kill_test() {
     ERR_FAIL_COND_MSG(stage != 1, "QuadPoolSpike: run_kill_test() needs a verified write first.");
     stage = 2;
-    RenderingServer::get_singleton()->call_on_render_thread(
-            callable_mp(this, &QuadPoolSpike::_rt_kill).bind(page));
+    const int p = page;
+    device->post([this, p]() { _rt_kill(p); });
 }
 
 void QuadPoolSpike::set_debug_view(int p_view) {
-    if (pool) {
-        pool->set_debug_view(p_view);
+    if (host) {
+        host->set_debug_view(p_view);
     }
 }
 
@@ -404,7 +364,17 @@ void QuadPoolSpike::_exit_tree() {
         return;
     }
     // Bound by value: this node may be gone by the time the render thread runs it.
-    RDUtils::free_on_render_thread({ rt_uniform_set, rt_pipeline, rt_shader, rt_staging, rt_counter });
+    device->post([device = device, handles = std::vector<ov::gpu::Handle>{ rt_uniform_set, rt_pipeline, rt_staging, rt_counter }]() {
+        for (const ov::gpu::Handle h : handles) {
+            if (h.is_valid()) {
+                device->free(h);
+            }
+        }
+    });
     pool->destroy();
     pool = nullptr;
+    host->destroy();
+    host = nullptr;
+    device->post([device = device]() { delete device; });
+    device = nullptr;
 }

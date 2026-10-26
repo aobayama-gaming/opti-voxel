@@ -6,6 +6,8 @@
 
 #include "format.hpp"
 
+#include <cmath>
+#include <cstdio>
 #include <initializer_list>
 #include <string>
 #include <utility>
@@ -61,6 +63,55 @@ inline bool contains(const str &p_text, const str &p_what) {
 
 inline str itos(int64_t p_v) {
     return std::to_string(p_v);
+}
+
+// godot's String::is_valid_ascii_identifier: not empty, not starting with a digit, letters, digits and '_' only.
+inline bool is_valid_ascii_identifier(const str &p_s) {
+    if (p_s.empty() || (p_s[0] >= '0' && p_s[0] <= '9')) {
+        return false;
+    }
+    for (const char c : p_s) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// godot's String::num(p_v) (decimals -1): 14 decimals, one fewer per power of ten past 10, trailing zeros dropped.
+inline str num(double p_v) {
+    if (std::isnan(p_v)) {
+        return "nan";
+    }
+    if (std::isinf(p_v)) {
+        return std::signbit(p_v) ? "-inf" : "inf";
+    }
+    int decimals = 14;
+    const double abs_v = std::fabs(p_v);
+    if (abs_v > 10) {
+        decimals -= int(std::floor(std::log10(abs_v)));
+    }
+    decimals = decimals > 32 ? 32 : (decimals < 0 ? 0 : decimals);
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "%.*f", decimals, p_v);
+    str out(buf);
+    if (out.find('.') != str::npos) {
+        while (!out.empty() && out.back() == '0') {
+            out.pop_back();
+        }
+        if (!out.empty() && out.back() == '.') {
+            out.pop_back();
+        }
+    }
+    return out;
+}
+
+// Text pieces joined (godot's print(a, b, ...)): each through format's "%s".
+template <typename... T>
+inline str cat(const T &...p_parts) {
+    str out;
+    ((out += format("%s", p_parts)), ...);
+    return out;
 }
 
 } // namespace ov

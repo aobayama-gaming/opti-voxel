@@ -15,7 +15,7 @@ namespace {
 struct ReferenceWalk {
     const ChunkParam &param;
     const SDFBase &sdf;
-    const PackedFloat32Array &lod_distances;
+    const std::vector<float> &lod_distances;
     int64_t nodes_visited = 0;
     int64_t culled = 0;
 
@@ -170,7 +170,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     size_t front_x_size = 0;
     for (const godot::Vector3 &forward : { godot::Vector3(1, 0, 0), godot::Vector3(0.3f, -0.8f, 0.5f), godot::Vector3(-0.2f, 0.3f, -1.0f) }) {
         CAPTURE(forward);
-        const ScanView split = discoverer->make_view(pose, forward);
+        const ScanView split = discoverer->make_view(ov_f3(pose), ov_f3(forward));
         CHECK(split.back_scale == doctest::Approx(3.0));
         ScanView front = split;
         front.back_scale = 0.0;
@@ -212,7 +212,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     // 1-Lipschitz (each term is a distance to a cone plus a constant), so face neighbours stay within one
     // LOD, and the set lies between the current view's alone and the front error's.
     {
-        ScanView looked = discoverer->make_view(pose, godot::Vector3(1, 0, 0));
+        ScanView looked = discoverer->make_view(ov_f3(pose), Float3{ 1, 0, 0 });
         const double memory_distance = 30.0;
         const ChunkId spot = looked.camera_chunk - ChunkId(64, 0, 0); // 64 units back along x
         for (int i = 0; i < 9; i++) {
@@ -240,7 +240,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
 
     // Without memory, a turn rescans past RESCAN_TURN_DEG, and only when the LOD rule depends on the direction.
     auto turned = [&](const ScanView &p_from, float p_degrees, double p_back_scale) {
-        ScanView v = discoverer->make_view(pose, godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(p_degrees)));
+        ScanView v = discoverer->make_view(ov_f3(pose), ov_f3(godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(p_degrees))));
         v.back_scale = p_back_scale;
         v.copy_memories_from(p_from);
         ChunkDiscoverer::remember_view(v, 0.0);

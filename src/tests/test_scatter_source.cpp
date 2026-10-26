@@ -605,7 +605,7 @@ private:
         for (const CellSite &cs : sites) {
             std::vector<TableRecord> grown;
             set.scatter.grow(cs.site, -1, grown); // the full growth: the oracle filters it per LOD
-            if (std::any_of(grown.begin(), grown.end(), [&](const TableRecord &p_r) { return !record_fit_error((*set.library)[p_r.def], p_r, set.max_extent).is_empty(); })) {
+            if (std::any_of(grown.begin(), grown.end(), [&](const TableRecord &p_r) { return !record_fit_error((*set.library)[p_r.def], p_r, set.max_extent).empty(); })) {
                 continue;
             }
             bool out = false;
@@ -771,13 +771,12 @@ TEST_CASE("Scatter source: the chunks' lists through the stream are the record p
         MESSAGE("LOD ", lod, ": ", chunks, " chunks, ", records, " records listed, ", right, " lists identical");
         CHECK(right == chunks);
     }
-    CHECK(int64_t(stream.get_stats()["lists_missing"]) == 0);
+    CHECK(stream.get_stats()["lists_missing"].as_int() == 0);
     // A proxy tile shared by several blob tiles is walked once (resident while they wait, and after).
-    const Dictionary by = stream.get_stats()["computed_by_key"];
+    const ov::Value by = stream.get_stats()["computed_by_key"];
     int64_t walked = 0;
     for (int layer = 0; layer < ChunkMath::MAX_LOD_NUMBERS; layer++) {
-        const String name = vformat("proxies %d", layer);
-        walked += by.has(name) ? int64_t(Dictionary(by[name])["count"]) : 0;
+        walked += by[ov::format("proxies %d", layer)]["count"].as_int();
     }
     MESSAGE(int64_t(proxy_tiles.size()), " proxy tiles read, ", walked, " walks");
     CHECK(proxy_tiles.size() > 4);

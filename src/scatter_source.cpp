@@ -1,9 +1,10 @@
 // A procedural source as a field of keys (scatter_source.hpp).
 #include "scatter_source.hpp"
 
+#include "ov/format.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
 #include "tree_archetype.hpp"
-
-#include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -43,7 +44,7 @@ TableRecord bounds_record(float p_k, float p_margin_c, const VoxelBox &p_box = V
     if (p_box.valid) {
         g.anchor = p_box.lo;
         for (int a = 0; a < 3; a++) {
-            g.box_hi[a] = int32_t(MIN<int64_t>(p_box.hi[a] - p_box.lo[a], INT32_MAX));
+            g.box_hi[a] = int32_t(ov::min<int64_t>(p_box.hi[a] - p_box.lo[a], INT32_MAX));
         }
     }
     g.k = p_k;
@@ -64,9 +65,9 @@ void append_group(const TableRecord *p_records, uint32_t p_count, int p_lod, Sou
             continue;
         }
         box = box.merged(record_box(rec));
-        k = MAX(k, rec.k);
-        margin_c = MAX(margin_c, rec.margin_c);
-        max_lod = MAX(max_lod, int(rec.max_lod));
+        k = ov::max(k, rec.k);
+        margin_c = ov::max(margin_c, rec.margin_c);
+        max_lod = ov::max(max_lod, int(rec.max_lod));
         r_out.records.push_back(rec);
     }
     if (r_out.records.size() > first) {
@@ -133,13 +134,13 @@ void SourceContent::meeting(const std::vector<Group> &p_groups, RecordView p_rec
 
 ScatterSource::ScatterSource(const Setup &p_setup) :
         set(p_setup), prof(no_profile()) {
-    ERR_FAIL_COND_MSG(!set.library || !set.scatter.valid() || set.max_extent <= 0 || set.chunk_voxels <= 0,
+    OV_ERR_FAIL_COND_MSG(!set.library || !set.scatter.valid() || set.max_extent <= 0 || set.chunk_voxels <= 0,
             "ScatterSource: no library, valid scatter, largest extent or chunk side.");
     prof = profile_for(set, shared_profile);
     has_blobs = set.blob_type >= 0 && set.finish.band && !prof->joins.empty();
     first_layer = set.lod_count;
     for (const std::pair<const uint32_t, MomentJoin> &j : prof->joins) {
-        first_layer = MIN(first_layer, j.second.lod);
+        first_layer = ov::min(first_layer, j.second.lod);
     }
     if (has_blobs) {
         MomentBlob unit;
@@ -165,10 +166,10 @@ ScatterSource::ScatterSource(const Setup &p_setup) :
     int64_t r = 0;
     for (int l = 0; l < set.lod_count; l++) {
         if (l < prof->lod_end) {
-            r = MAX(r, part_grow(l) + 1);
+            r = ov::max(r, part_grow(l) + 1);
         }
         if (has_layer(l)) {
-            r = MAX(r, int64_t(std::ceil(prof->reach)) + layer_cell(l) + blob_grow(l) + 1);
+            r = ov::max(r, int64_t(std::ceil(prof->reach)) + layer_cell(l) + blob_grow(l) + 1);
         }
         ground_reaches.push_back(r);
     }
@@ -176,8 +177,8 @@ ScatterSource::ScatterSource(const Setup &p_setup) :
 
 int64_t ScatterSource::blob_tile_cells(int p_layer) const {
     const int64_t c = layer_cell(p_layer);
-    const int64_t side = MAX(PART_TILE_CELLS * set.scatter.side, 2 * (set.chunk_voxels << p_layer));
-    return MAX(BLOB_TILE_CELLS, (side + c - 1) / c);
+    const int64_t side = ov::max(PART_TILE_CELLS * set.scatter.side, 2 * (set.chunk_voxels << p_layer));
+    return ov::max(BLOB_TILE_CELLS, (side + c - 1) / c);
 }
 
 VoxelBox ScatterSource::tile_box(const SourceKey &p_key) const {
@@ -205,7 +206,7 @@ int64_t ScatterSource::blob_grow(int p_layer) const {
 }
 
 int64_t ScatterSource::ground_reach(int p_lod) const {
-    return ground_reaches.empty() ? 0 : ground_reaches[MIN(MAX(p_lod, 0), int(ground_reaches.size()) - 1)];
+    return ground_reaches.empty() ? 0 : ground_reaches[ov::min(ov::max(p_lod, 0), int(ground_reaches.size()) - 1)];
 }
 
 void ScatterSource::append_tiles(int p_kind, int p_lod, int64_t p_side, const VoxelBox &p_box, int64_t p_zone_grow, std::vector<SourceKey> &r_out) const {
@@ -315,7 +316,7 @@ void ScatterSource::walk_tiles(const SourceKey *p_keys, size_t p_count, SourceCo
         }
         const bool walked = key.kind == SourceKey::SITES ? key.lod == 0 : has_layer(key.lod) && !part_layer(key.lod);
         if (!walked) {
-            ERR_PRINT(vformat("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(key.kind), key.lod));
+            OV_ERR_PRINT(ov::format("ScatterSource: no %s tile at LOD %d.", SourceKey::kind_name(key.kind), key.lod));
             continue;
         }
         if (key.kind == SourceKey::SITES) {
@@ -370,7 +371,7 @@ void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<Tab
     r_grown.clear();
     set.scatter.grow(p_site.site, p_lod, r_grown); // a coarse LOD may grow less (the records listed there, bit for bit)
     // The table's limits (SDFTable::admit): a site with a record it would refuse is left out whole.
-    if (std::any_of(r_grown.begin(), r_grown.end(), [&](const TableRecord &p_r) { return !record_fit_error(lib[p_r.def], p_r, set.max_extent).is_empty(); })) {
+    if (std::any_of(r_grown.begin(), r_grown.end(), [&](const TableRecord &p_r) { return !record_fit_error(lib[p_r.def], p_r, set.max_extent).empty(); })) {
         return;
     }
     bool out = false;
@@ -383,7 +384,7 @@ void ScatterSource::grow_site(const CellSite &p_site, int p_lod, std::vector<Tab
     if (out) {
         r_out.out_of_profile++;
         if (!profile_reported.exchange(true)) {
-            ERR_PRINT("ScatterSource: a site has a record past the profile (reach, last LOD or margin): the chunks it reaches may miss it.");
+            OV_ERR_PRINT("ScatterSource: a site has a record past the profile (reach, last LOD or margin): the chunks it reaches may miss it.");
         }
     }
 }
@@ -447,7 +448,7 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
         double inside = 1.0;
         for (int a = 0; a < 3; a++) {
             const int64_t lo = cs.cell[a] * g;
-            inside *= double(MAX<int64_t>(0, MIN(lo + g - 1, s.zone.hi[a]) - MAX(lo, s.zone.lo[a]) + 1)) / double(g);
+            inside *= double(ov::max<int64_t>(0, ov::min(lo + g - 1, s.zone.hi[a]) - ov::max(lo, s.zone.lo[a]) + 1)) / double(g);
         }
         if (!(inside > 0.0) || (s.accept && !s.accept(base))) {
             continue;
@@ -509,7 +510,7 @@ void ScatterSource::blob_tile(const SourceKey &p_key, const Inputs &p_inputs, So
     const DefLibrary &lib = *set.library;
     for (const MomentBlob &b : kept) {
         const TableRecord rec = blob_record(lib, set.blob_type, b, set.finish.skirt_depth);
-        if (!record_fit_error(lib[rec.def], rec, set.max_extent).is_empty()) {
+        if (!record_fit_error(lib[rec.def], rec, set.max_extent).empty()) {
             continue; // refused like the table's (SDFTable::blob_fits)
         }
         r_out.groups.push_back(SourceContent::Group{ uint32_t(r_out.records.size()), 1, rec });

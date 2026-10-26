@@ -11,7 +11,7 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
   `LocalPointsGPU` (`src/local_points_gpu.*`, shared with the site walks' `FieldGPU`), runs the cascade passes on point
   items (`CascadePasses::create_points`, `CascadePointsGPU::cull_values`: the unit register read back, metres on the CPU
-  with `SDFCascade::to_metres`) on a **local RenderingDevice owned by the discoverer thread**: created
+  with `SDFCascade::to_metres`) on a **local device (`ov::gpu::create_local_device`) owned by the discoverer thread**: created
   at the top of `discovery_loop` and freed there before the thread exits; no other thread may touch it,
   and it does nothing on the main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every

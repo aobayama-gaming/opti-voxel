@@ -3,6 +3,7 @@
 #include "cell_scatter.hpp"
 #include "chunk_math.hpp"
 #include "instance_table.hpp"
+#include "ov/math.hpp"
 
 #include <memory>
 #include <vector>
@@ -125,9 +126,9 @@ public:
     // Whether the profile came from the registry (another source of its key read it).
     bool profile_shared() const { return shared_profile; }
     const Setup &setup() const { return set; }
-    int64_t part_tile_side(int p_lod) const { return part_sides[MIN(MAX(p_lod, 0), int(part_sides.size()) - 1)]; }
+    int64_t part_tile_side(int p_lod) const { return part_sides[ov::min(ov::max(p_lod, 0), int(part_sides.size()) - 1)]; }
     // The LOD of the part keys a chunk of p_lod reads: the finest with its tile side.
-    int part_key_lod(int p_lod) const { return part_key_lods[MIN(MAX(p_lod, 0), int(part_key_lods.size()) - 1)]; }
+    int part_key_lod(int p_lod) const { return part_key_lods[ov::min(ov::max(p_lod, 0), int(part_key_lods.size()) - 1)]; }
     int64_t layer_cell(int p_layer) const { return int64_t(1) << (p_layer + set.layers.cell_shift); }
     int64_t blob_tile_cells(int p_layer) const;
     // Whether layer p_layer has blob tiles (the joins' first LOD up to the last LOD; none without the band rule or a blob type).
@@ -136,7 +137,7 @@ public:
     bool part_layer(int p_layer) const { return p_layer < prof->lod_end && layer_cell(p_layer) < set.part_cell_sides * set.scatter.side; }
     VoxelBox tile_box(const SourceKey &p_key) const;
     // The side of a layer's proxy cells (voxels).
-    int64_t proxy_side(int p_layer) const { return MAX<int64_t>(1, layer_cell(p_layer) / PROXY_PER_CELL); }
+    int64_t proxy_side(int p_layer) const { return ov::max<int64_t>(1, layer_cell(p_layer) / PROXY_PER_CELL); }
     // Where a layer's proxies weigh: the zone grown by a proxy cell (outside it a proxy weighs nothing).
     VoxelBox proxy_zone(int p_layer) const { return set.scatter.zone.grown(proxy_side(p_layer)); }
     // The box a far layer's blob tile reads proxies in: its cells and MARGIN_CELLS past them, plus the records' reach, in

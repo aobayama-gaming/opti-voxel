@@ -72,3 +72,21 @@ inline void report_error(const char *p_file, int p_line, const std::string &p_me
         ((void)0)
 
 #define OV_ERR_PRINT(p_msg) ov::report_error(__FILE__, __LINE__, p_msg)
+
+// The forms without a message: godot's text for them ("Condition "<cond>" is true.").
+#define OV_ERR_FAIL_COND(p_cond) OV_ERR_FAIL_COND_MSG(p_cond, "Condition \"" #p_cond "\" is true.")
+#define OV_ERR_FAIL_COND_V(p_cond, p_ret) OV_ERR_FAIL_COND_V_MSG(p_cond, p_ret, "Condition \"" #p_cond "\" is true. Returning: " #p_ret)
+#define OV_ERR_CONTINUE(p_cond) OV_ERR_CONTINUE_MSG(p_cond, "Condition \"" #p_cond "\" is true. Continuing.")
+#define OV_ERR_FAIL_INDEX(p_index, p_size) \
+    OV_ERR_FAIL_COND_MSG((p_index) < 0 || (p_index) >= (p_size), "Index " #p_index " is out of bounds (" #p_size ").")
+#define OV_ERR_FAIL_NULL_MSG(p_ptr, p_msg) OV_ERR_FAIL_COND_MSG((p_ptr) == nullptr, p_msg)
+
+// Reported the first time this line runs only.
+#define OV_ERR_PRINT_ONCE(p_msg)                         \
+    do {                                                 \
+        static bool s_printed = false;                   \
+        if (!s_printed) {                                \
+            s_printed = true;                            \
+            ov::report_error(__FILE__, __LINE__, p_msg); \
+        }                                                \
+    } while (0)

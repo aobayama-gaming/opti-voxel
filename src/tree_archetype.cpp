@@ -1,7 +1,7 @@
 // Trees as archetype-table instances (tree_archetype.hpp).
 #include "tree_archetype.hpp"
-
-#include <godot_cpp/core/error_macros.hpp>
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -518,7 +518,7 @@ TreeBounds tree_bounds(const TreeSpecies &p_species, double p_voxel, const TreeT
         const double r = v * s.crown_radius * s.clump_ratio * CLUMP_SIZE.max() * TREE_BOUND_PAD;
         b.clump = crown_record(p_types, r, s.crown_smooth * r, 0u);
     }
-    const double taper = MAX(1.0, s.hull_taper);
+    const double taper = ov::max(1.0, s.hull_taper);
     if (s.cone_tiers > 0) {
         // A tier: v(crown_radius) times the taper and its hashed TIER_SIZE, twice the tiers' spacing high (add_tiers).
         const double r = v * s.crown_radius * taper * TIER_SIZE.max() * TREE_BOUND_PAD;
@@ -536,7 +536,7 @@ int tree_hull_only_lod(const TreeSpecies &p_species, double p_voxel, const DefLi
     int lod = int(b.trunk.max_lod);
     if (b.has_clump) {
         finish_table_record(p_library, p_finish, b.clump);
-        lod = MAX(lod, int(b.clump.max_lod));
+        lod = ov::max(lod, int(b.clump.max_lod));
     }
     return lod; // the hull is what stays
 }
@@ -553,9 +553,9 @@ void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary
         bool fits = true;
         for (const TableRecord *rec : { &b.trunk, &b.clump, &b.hull }) {
             const bool counts = rec != &b.clump || b.has_clump;
-            const String error = counts ? record_fit_error(p_library[rec->def], *rec, p_max_extent) : String();
-            if (!error.is_empty()) {
-                ERR_PRINT("set_forest_scatter: a tree of a species may not fit the table, it never grows hull-only: " + error);
+            const ov::str error = counts ? record_fit_error(p_library[rec->def], *rec, p_max_extent) : ov::str();
+            if (!error.empty()) {
+                OV_ERR_PRINT("set_forest_scatter: a tree of a species may not fit the table, it never grows hull-only: " + error);
                 fits = false;
             }
         }

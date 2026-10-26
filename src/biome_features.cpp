@@ -1,5 +1,6 @@
 // Biome features: biome cells, lava lakes and floating islands (biome_features.hpp).
 #include "biome_features.hpp"
+#include "ov/math.hpp"
 
 #include <cmath>
 #include <initializer_list>
@@ -44,8 +45,8 @@ bool ground_span(const Site &p_site, const GroundFn &p_ground_y, double p_r, int
     r_hi = INT64_MIN;
     auto sample = [&](int64_t p_x, int64_t p_z) {
         const int64_t y = p_ground_y(p_x, p_z);
-        r_lo = MIN(r_lo, y);
-        r_hi = MAX(r_hi, y);
+        r_lo = ov::min(r_lo, y);
+        r_hi = ov::max(r_hi, y);
         return double(r_hi - r_lo) <= p_limit;
     };
     for (int ring = p_rings; ring >= 1; ring--) {
@@ -86,7 +87,7 @@ bool lava_lake(const Site &p_site, const GroundFn &p_ground_y, const DefLibrary 
     if (!ground_span(p_site, p_ground_y, slab_r, 3, MAX_RIM_SPAN * r, rim_lo, rim_hi)) {
         return false;
     }
-    const int64_t lava = rim_lo - int64_t(std::ceil(MAX(3.0, LAVA_DROP * r)));
+    const int64_t lava = rim_lo - int64_t(std::ceil(ov::max(3.0, LAVA_DROP * r)));
     const int64_t bottom = lava - int64_t(std::ceil(LAVA_DEPTH * r));
     const int64_t top = rim_hi + int64_t(std::ceil(BASIN_CLEAR * r + bump));
     const int64_t half = (top - bottom + 1) / 2;
@@ -130,7 +131,7 @@ const Kind &kind(Feature p_feature) {
 }
 
 int cell_shift(Feature p_feature, double p_voxel) {
-    return MAX(4, ExactNoise::lattice_k(kind(p_feature).cell_m, p_voxel));
+    return ov::max(4, ExactNoise::lattice_k(kind(p_feature).cell_m, p_voxel));
 }
 
 Types add_types(DefLibrary &r_library, double p_voxel) {

@@ -148,13 +148,13 @@ bool lists_right(const StreamFixture &p_fx, const InstanceStream &p_stream, cons
 }
 
 int64_t stat(const InstanceStream &p_stream, const char *p_name) {
-    return int64_t(p_stream.get_stats()[p_name]);
+    return p_stream.get_stats()[p_name].as_int();
 }
 
 // A field of computed_by_key's entry p_key ("sites 0"), 0 if none was computed.
 int64_t key_stat(const InstanceStream &p_stream, const char *p_key, const char *p_field) {
-    const Dictionary by = p_stream.get_stats()["computed_by_key"];
-    return by.has(p_key) ? int64_t(Dictionary(by[p_key])[p_field]) : 0;
+    const ov::Value by = p_stream.get_stats()["computed_by_key"];
+    return by[p_key][p_field].as_int();
 }
 
 // p_keys and their inputs, each once.
@@ -315,9 +315,9 @@ TEST_CASE("Instance stream: parked chunks come back once their keys land, in par
     CHECK(back[0] == std::make_pair(other, uint64_t(33)));
     // Each parked chunk came back on the poll after its park, whose reap lands the keys before the frame turns: 0 frames,
     // 4 hand-backs.
-    const Dictionary park_frames = stream->get_stats()["park_frames"];
-    CHECK(int64_t(park_frames["count"]) == 4);
-    CHECK(int64_t(park_frames["max"]) == 0);
+    const ov::Value park_frames = stream->get_stats()["park_frames"];
+    CHECK(park_frames["count"].as_int() == 4);
+    CHECK(park_frames["max"].as_int() == 0);
     CHECK(stat(*stream, "admit_keys_created_max") > 0);
     CHECK(stat(*stream, "keys_created") >= stat(*stream, "admit_keys_created"));
     CHECK(stat(*stream, "jobs_queued_max") > 0);
@@ -405,11 +405,10 @@ TEST_CASE("Instance stream: pinned keys and keys in their grace are never evicte
     CHECK(stream->admit(parked, 0, 3, 0) == InstanceStream::READY);
     CHECK(lists_right(fx, *stream, mirror, parked));
     // The evictions per kind and LOD add up to the total.
-    const Dictionary by_key = stream->get_stats()["computed_by_key"];
+    const ov::Value by_key = stream->get_stats()["computed_by_key"];
     int64_t evicted = 0;
-    const Array kinds = by_key.keys();
-    for (int64_t i = 0; i < kinds.size(); i++) {
-        evicted += int64_t(Dictionary(by_key[kinds[i]])["evicted"]);
+    for (const std::pair<ov::str, ov::Value> &kind : by_key.entries()) {
+        evicted += kind.second["evicted"].as_int();
     }
     CHECK(evicted == stat(*stream, "evicted"));
     CHECK(key_stat(*stream, "sites 0", "evicted") > 0); // the walks' cap evicts the site tiles
@@ -651,7 +650,7 @@ TEST_CASE("Instance stream: a chunk of a LOD with the LOD-0 tile side lists the 
     stream->poll();
     stream->take_ready(0, back);
     CHECK(stream->admit(chunk, 0, 0, 0) == InstanceStream::READY);
-    CHECK(key_stat(*stream, vformat("parts %d", lod).utf8().get_data(), "count") == 0);
+    CHECK(key_stat(*stream, ov::format("parts %d", lod).c_str(), "count") == 0);
     Mirror mirror;
     mirror.update(*stream);
     CHECK(lists_right(fx, *stream, mirror, chunk));
@@ -1011,8 +1010,8 @@ TEST_CASE("Instance stream: set_tag forgets the owner's chunks parked under an o
     }
     CHECK(back[0] == std::make_pair(current, uint64_t(2)));
     CHECK(placed_span(fx, old_chunk, placement_order(*stream)).first == -1);
-    const Dictionary park_frames = stream->get_stats()["park_frames"];
-    CHECK(int64_t(park_frames["count"]) == 2);
+    const ov::Value park_frames = stream->get_stats()["park_frames"];
+    CHECK(park_frames["count"].as_int() == 2);
 
     // Asked again, it is computed from scratch, the same.
     CHECK(stream->admit(old_chunk, 0, 2, 1) == InstanceStream::PARKED);

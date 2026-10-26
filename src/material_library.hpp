@@ -1,17 +1,15 @@
 #pragma once
 
-#include <godot_cpp/classes/image.hpp>
-#include <godot_cpp/variant/color.hpp>
-#include <godot_cpp/variant/string.hpp>
-
 #include "material_ids.hpp"
+#include "ov/color.hpp"
+#include "ov/format.hpp"
 
 #include <cstdint>
 #include <vector>
 
-using namespace godot;
-
 namespace Material {
+
+using ov::Color;
 
 // Shading patterns the page shader knows (Params::pattern).
 enum Pattern : int {
@@ -47,27 +45,32 @@ static constexpr int IMAGE_MATERIALS_PER_ROW = 4096;
 static_assert(MAX_MATERIALS / IMAGE_MATERIALS_PER_ROW <= 16384, "material_tex rows");
 
 // The layout above as GLSL constants, for the page shader.
-String glsl_constants();
+ov::str glsl_constants();
 
 class Library {
 public:
     Library();
 
     // A new material; its id, or the existing id (ERR) when the name is taken, or GROUND (ERR) past MAX_MATERIALS.
-    uint32_t add(const String &p_name, const Params &p_params);
+    uint32_t add(const ov::str &p_name, const Params &p_params);
     // The material named p_name with p_params: added, or its parameters replaced (a reconfigure). Its id.
-    uint32_t set(const String &p_name, const Params &p_params);
+    uint32_t set(const ov::str &p_name, const Params &p_params);
     // The id of a named material, or UINT32_MAX.
-    uint32_t find(const String &p_name) const;
+    uint32_t find(const ov::str &p_name) const;
     uint32_t size() const { return uint32_t(params.size()); }
     const Params &operator[](uint32_t p_id) const { return params[p_id]; }
-    const String &name(uint32_t p_id) const { return names[p_id]; }
+    const ov::str &name(uint32_t p_id) const { return names[p_id]; }
 
-    // The parameters as an RGBAF image (layout above), for the page shader's material_tex.
-    Ref<Image> make_image() const;
+    // The parameters as an RGBA float image (layout above), for the page shader's material_tex.
+    struct Image {
+        int width = 0;
+        int height = 0;
+        std::vector<float> rgba; // width * height * 4
+    };
+    Image make_image() const;
 
 private:
-    std::vector<String> names;
+    std::vector<ov::str> names;
     std::vector<Params> params;
 };
 

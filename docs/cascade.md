@@ -17,7 +17,7 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
   (`GLSL_FRAME_INT64`, `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2
   parents (code generated from `Cascade::PAIRS`), ping-pong scratch A (odd j, 17^3 points per chunk) / B
   (even j >= 2, 10^3), j = 0 straight to `sdf_sample`. Bands come from a table indexed by level
-  (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per RenderingDevice; the direct mesher runs
+  (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per device (`ov::gpu::Device`); the direct mesher runs
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
 - **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): LINEAR4 slots after the field groups that a run's
   level above its last writes after its insertions and flush, and H carries to the last level like a field (the

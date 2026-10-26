@@ -1,6 +1,7 @@
 #include "register_types.h"
 
 #include <gdextension_interface.h>
+#include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
@@ -15,8 +16,11 @@
 #include "voxel_sky.hpp"
 #include "voxel_terrain.hpp"
 
+#include "godot_conv.hpp"
 #include "godot_executor.hpp"
+#include "ov/files.hpp"
 #include "ov/on_error.hpp"
+#include "rd_device.hpp"
 
 #include "debug_log.hpp"
 
@@ -47,8 +51,26 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
         }
     });
     ov::set_clock_source([]() -> uint64_t { return Time::get_singleton()->get_ticks_usec(); });
+    // The core's files through FileAccess: res:// and user:// paths.
+    ov::set_file_reader([](const ov::str &p_path, ov::str &r_text) {
+        const Ref<FileAccess> f = FileAccess::open(godot_str(p_path), FileAccess::READ);
+        if (f.is_null()) {
+            return false;
+        }
+        r_text = ov_str(f->get_as_text());
+        return true;
+    });
+    ov::set_file_writer([](const ov::str &p_path, const ov::str &p_text) {
+        const Ref<FileAccess> f = FileAccess::open(godot_str(p_path), FileAccess::WRITE);
+        if (f.is_null()) {
+            return false;
+        }
+        f->store_string(godot_str(p_text));
+        return true;
+    });
     // The core's tasks, loops and workers on Godot's pool and threads.
     ov::set_executor(&g_executor);
+    ov::gpu::set_local_device_factory(&RDDevice::create_local);
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
@@ -66,6 +88,7 @@ void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {
         return;
     }
     ov::set_executor(nullptr);
+    ov::gpu::set_local_device_factory(nullptr);
 }
 
 extern "C" {

@@ -2,16 +2,14 @@
 
 #include "debug_log.hpp"
 
-#include <godot_cpp/classes/rendering_server.hpp>
-
 bool LocalPointsGPU::create(const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_points) {
     const uint64_t t0 = now_usec();
-    rd = RenderingServer::get_singleton()->create_local_rendering_device();
-    if (rd == nullptr) {
+    device = ov::gpu::create_local_device();
+    if (device == nullptr) {
         return false;
     }
     const uint64_t t_device = now_usec();
-    if (!passes.create(rd, p_sdf, p_param, p_max_points)) {
+    if (!passes.create(device.get(), p_sdf, p_param, p_max_points)) {
         free();
         return false;
     }
@@ -21,10 +19,9 @@ bool LocalPointsGPU::create(const SDFBase *p_sdf, const ChunkParam &p_param, uin
 }
 
 void LocalPointsGPU::free() {
-    if (rd == nullptr) {
+    if (device == nullptr) {
         return;
     }
     passes.free();
-    memdelete(rd);
-    rd = nullptr;
+    device.reset();
 }

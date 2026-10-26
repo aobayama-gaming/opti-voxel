@@ -1,8 +1,9 @@
 #pragma once
 
+#include "gpu_device.hpp"
+
 #include "cascade_spike_sets.hpp"
 
-#include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 
 #include <vector>
@@ -16,8 +17,8 @@
 //     its coarse readings at 5 cm): the batch size a GPU site walk is sized from.
 namespace CascadeSpikePoints {
 
-godot::Dictionary check_points(godot::RenderingDevice *p_rd, CascadeSpikeSets::SpikeSet p_set, int p_lods, const ChunkParam &p_param);
-godot::Dictionary point_timing(godot::RenderingDevice *p_rd, const std::vector<CascadeSpikeSets::SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param,
+godot::Dictionary check_points(ov::gpu::Device *p_device, CascadeSpikeSets::SpikeSet p_set, int p_lods, const ChunkParam &p_param);
+godot::Dictionary point_timing(ov::gpu::Device *p_device, const std::vector<CascadeSpikeSets::SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param,
         int p_runs);
 
 } // namespace CascadeSpikePoints

@@ -1,4 +1,5 @@
 #include "climate_report.hpp"
+#include "godot_conv.hpp"
 
 #include "climate.hpp"
 #include "parallel_for.hpp"
@@ -174,7 +175,7 @@ String biome_section(const Table &p_table, const Sampled &p_s, int p_n, const St
     }
     md += "| biome | picked | mean weight | debug colour |\n|---|---|---|---|\n";
     for (int b = 0; b < p_s.nb; b++) {
-        md += vformat("| %s | %s%% | %s | #%06x |\n", p_table.biomes[size_t(b)].name, String::num(100.0 * double(count[size_t(b)]) / double(points), 1),
+        md += vformat("| %s | %s%% | %s | #%06x |\n", godot_str(p_table.biomes[size_t(b)].name), String::num(100.0 * double(count[size_t(b)]) / double(points), 1),
                 String::num(sum[size_t(b)] / double(points), 3), int64_t(p_table.biomes[size_t(b)].debug_color));
     }
     r_images.push_back(save(p_dir, "biomes_blend.png", p_n, blend));
@@ -230,7 +231,7 @@ String border_section(const Table &p_table, const Sampled &p_s, int p_n, double 
             if (spot.d2 == INT64_MAX) {
                 continue;
             }
-            md += vformat("| %s / %s |", p_table.biomes[size_t(a)].name, p_table.biomes[size_t(b)].name) +
+            md += vformat("| %s / %s |", godot_str(p_table.biomes[size_t(a)].name), godot_str(p_table.biomes[size_t(b)].name)) +
                     spot_cells(p_s, spot.i, p_n, p_spacing_m, p_voxel_m, p_c) + String("\n");
         }
     }
@@ -266,7 +267,7 @@ String region_section(const Table &p_table, const Sampled &p_s, int p_n, double 
             }
         }
         const double points = double(p_n) * p_n;
-        md += vformat("| %s | %.3f | %.1f%% |", p_table.regions[size_t(r)].name, sum / points, 100.0 * double(core) / points);
+        md += vformat("| %s | %.3f | %.1f%% |", godot_str(p_table.regions[size_t(r)].name), sum / points, 100.0 * double(core) / points);
         md += core == 0 ? String(" - | - | - | - |") : spot_cells(p_s, best, p_n, p_spacing_m, p_voxel_m, p_c);
         md += "\n";
     }
@@ -334,7 +335,7 @@ String shading_section(const Table &p_table, const Sampled &p_s, int p_n, int p_
     r_images.push_back(save(p_dir, "ground_normals.png", p_n, g_img));
     String md = "Gradient channels vs the heights' finite differences (at the column's y, L1 relative error):\n\n| biome | gradient error |\n|---|---|\n";
     for (int b = 0; b < p_s.nb; b++) {
-        md += vformat("| %s | %s |\n", p_table.biomes[size_t(b)].name, norm[size_t(b)] > 0.0 ? String::num(err[size_t(b)] / norm[size_t(b)], 3) : String("-"));
+        md += vformat("| %s | %s |\n", godot_str(p_table.biomes[size_t(b)].name), norm[size_t(b)] > 0.0 ? String::num(err[size_t(b)] / norm[size_t(b)], 3) : String("-"));
     }
     return md;
 }
@@ -356,7 +357,7 @@ String field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sa
         if (bands.empty() || p_spec.insert_level(bands.front()) < p_m) {
             ks += vformat(" (all inserted below lattice %d: only its terms here)", p_m);
         }
-        md += vformat("| %s | %s | %s | %s | %s |\n", p_table.fields[size_t(f)].name, ks, String::num(lo, 3), String::num(sum / double(points), 3),
+        md += vformat("| %s | %s | %s | %s | %s |\n", godot_str(p_table.fields[size_t(f)].name), ks, String::num(lo, 3), String::num(sum / double(points), 3),
                 String::num(hi, 3));
         const double range = MAX(MAX(std::fabs(lo), std::fabs(hi)), 1e-30);
         PackedByteArray grey;
@@ -364,7 +365,7 @@ String field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sa
         for (int64_t i = 0; i < points; i++) {
             grey[i * 3] = grey[i * 3 + 1] = grey[i * 3 + 2] = uint8_t(CLAMP(std::lround(127.5 + 127.5 * v(i) / range), 0L, 255L));
         }
-        r_images.push_back(save(p_dir, "field_" + p_table.fields[size_t(f)].name + String(".png"), p_n, grey));
+        r_images.push_back(save(p_dir, godot_str("field_" + p_table.fields[size_t(f)].name + ".png"), p_n, grey));
     }
     return md;
 }
@@ -399,7 +400,7 @@ String relief_section(const Table &p_table, const Sampled &p_s, int p_n, double 
     for (int b = 0; b < p_s.nb; b++) {
         const double c = double(MAX(count[size_t(b)], int64_t(1)));
         const double mean = sum[size_t(b)] / c;
-        md += vformat("| %s | %s | %s | %s |\n", p_table.biomes[size_t(b)].name, String::num(mean, 0),
+        md += vformat("| %s | %s | %s | %s |\n", godot_str(p_table.biomes[size_t(b)].name), String::num(mean, 0),
                 String::num(std::sqrt(MAX(sum2[size_t(b)] / c - mean * mean, 0.0)), 0),
                 String::num(slope[size_t(b)] / double(MAX(pairs[size_t(b)], int64_t(1))), 3));
     }
@@ -447,12 +448,12 @@ void write_heights(const String &p_dir, const Table &p_table, const Ground &p_gr
     store(p_dir.path_join("picks.u8"), std::vector<uint8_t>(p_s.picks.begin(), p_s.picks.end()));
     Array field_names, biome_names;
     for (const Field &f : p_table.fields) {
-        field_names.push_back(f.name);
+        field_names.push_back(godot_str(f.name));
     }
     // match.py's multiplier cap: per biome, [wavelength m, the largest x] of each ground octave it multiplies.
     Dictionary max_x;
     for (const Climate::Biome &b : p_table.biomes) {
-        biome_names.push_back(b.name);
+        biome_names.push_back(godot_str(b.name));
         Array caps;
         for (const Amp &a : b.amps) {
             const double cap = a.field == GROUND ? max_ground_mult(p_table, p_ground, b, a.k) : INFINITY;
@@ -460,7 +461,7 @@ void write_heights(const String &p_dir, const Table &p_table, const Ground &p_gr
                 caps.push_back(Array::make(std::ldexp(voxel_m, a.k), cap));
             }
         }
-        max_x[b.name] = caps;
+        max_x[godot_str(b.name)] = caps;
     }
     Dictionary meta;
     meta["fields"] = field_names;
@@ -487,10 +488,10 @@ Dictionary ClimateReport::run(const String &p_out_dir, const String &p_climate_p
     ChunkParam param;
     param.voxel_size = float(p_voxel_size);
     SDFCascade sdf;
-    String err = load(p_climate_path, sdf.climate_data);
+    String err = godot_str(load(ov_str(p_climate_path), sdf.climate_data));
     if (err.is_empty()) {
         sdf.configure(param, p_lods);
-        err = sdf.get_climate_error();
+        err = godot_str(sdf.get_climate_error());
     }
     if (!err.is_empty()) {
         report["error"] = err;

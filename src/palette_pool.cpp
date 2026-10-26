@@ -3,10 +3,7 @@
 #include "material_library.hpp"
 #include "quad_page_pool.hpp"
 
-#include <godot_cpp/classes/rd_texture_format.hpp>
-#include <godot_cpp/classes/rd_texture_view.hpp>
-#include <godot_cpp/classes/rendering_server.hpp>
-#include <godot_cpp/core/error_macros.hpp>
+#include "ov/on_error.hpp"
 
 #include <cstring>
 
@@ -30,7 +27,7 @@ void write_palette_texel(uint t) {
 void PalettePool::initialize(uint32_t p_capacity, const std::vector<uint32_t> &p_base) {
     const bool valid = !p_base.empty() && p_base.size() <= PaletteAlloc::MAX_BLOCK;
     if (!valid) {
-        ERR_PRINT("PalettePool: a base palette of 1 to MAX_BLOCK entries is required: {GROUND} instead.");
+        OV_ERR_PRINT("PalettePool: a base palette of 1 to MAX_BLOCK entries is required: {GROUND} instead.");
     }
     base = std::make_shared<const std::vector<uint32_t>>(valid ? p_base : std::vector<uint32_t>(1, Material::GROUND));
     alloc.reset(p_capacity, uint32_t(base->size()));
@@ -38,7 +35,7 @@ void PalettePool::initialize(uint32_t p_capacity, const std::vector<uint32_t> &p
     full = 0;
 }
 
-PackedByteArray PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_palettes, std::vector<Block> &r_blocks) {
+ov::bytes PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_palettes, std::vector<Block> &r_blocks) {
     const uint32_t chunks = uint32_t(p_palettes.size());
     r_blocks.assign(chunks, Block());
     std::vector<uint32_t> words(chunks + 1, PaletteAlloc::GROUND_BLOCK);
@@ -53,7 +50,7 @@ PackedByteArray PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_p
         const int64_t offset = alloc.alloc(uint32_t(palette.size()));
         if (offset < 0) {
             full++;
-            ERR_PRINT_ONCE("PalettePool: no room for a chunk palette (palette_capacity): it draws as its base.");
+            OV_ERR_PRINT_ONCE("PalettePool: no room for a chunk palette (palette_capacity): it draws as its base.");
             continue;
         }
         b.offset = uint32_t(offset);
@@ -67,9 +64,8 @@ PackedByteArray PalettePool::place_batch(std::vector<std::vector<uint32_t>> &p_p
         }
         b.palette = std::make_shared<const std::vector<uint32_t>>(std::move(palette));
     }
-    PackedByteArray bytes;
-    bytes.resize(int64_t(words.size()) * 4);
-    std::memcpy(bytes.ptrw(), words.data(), words.size() * 4); // little-endian, like the GPU
+    ov::bytes bytes(words.size() * 4);
+    std::memcpy(bytes.data(), words.data(), words.size() * 4); // little-endian, like the GPU
     return bytes;
 }
 
@@ -81,8 +77,8 @@ void PalettePool::release(const Block &p_block) {
     blocks_live--;
 }
 
-Dictionary PalettePool::get_stats() const {
-    Dictionary d;
+ov::Value PalettePool::get_stats() const {
+    ov::Value d = ov::Value::object();
     d["capacity"] = int64_t(alloc.capacity());
     d["used_entries"] = int64_t(alloc.used());
     d["blocks_live"] = blocks_live;
@@ -91,36 +87,20 @@ Dictionary PalettePool::get_stats() const {
     return d;
 }
 
-void PalettePool::rt_create(RenderingDevice *p_rd) {
-    Ref<RDTextureFormat> format;
-    format.instantiate();
-    format->set_format(QuadPagePool::TEX_FORMAT); // RGBA16UI, like the pages
-    format->set_width(PageFormat::PALETTE_TEX_WIDTH);
-    format->set_height(rows());
-    format->set_usage_bits(RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
-            RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT | RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT); // copy-to: texture_clear
-    Ref<RDTextureView> view;
-    view.instantiate();
+void PalettePool::rt_create(ov::gpu::Device *p_device) {
     // Zeroes (an entry reads GROUND), and the ground block's base palette.
-    PackedByteArray data;
-    data.resize(int64_t(PageFormat::PALETTE_TEX_WIDTH) * rows() * PageFormat::TEXEL_CHANNELS * 2);
-    data.fill(0);
+    std::vector<uint16_t> texels(size_t(PageFormat::PALETTE_TEX_WIDTH) * rows() * PageFormat::TEXEL_CHANNELS, 0);
     for (size_t e = 0; e < base->size(); e++) {
-        PageFormat::encode_palette_entry(reinterpret_cast<uint16_t *>(data.ptrw()), PaletteAlloc::GROUND_BLOCK + uint32_t(e), (*base)[e]);
+        PageFormat::encode_palette_entry(texels.data(), PaletteAlloc::GROUND_BLOCK + uint32_t(e), (*base)[e]);
     }
-    TypedArray<PackedByteArray> layers;
-    layers.push_back(data);
-    texture = p_rd->texture_create(format, view, layers);
-    rs_texture = RenderingServer::get_singleton()->texture_rd_create(texture);
+    // Sampled by the page shader, written by the emit pass, cleared by copies (texture_clear).
+    texture = p_device->create_texture(QuadPagePool::TEX_FORMAT, PageFormat::PALETTE_TEX_WIDTH, rows(),
+            ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_UPDATE | ov::gpu::TEXTURE_COPY_DST, texels.data());
 }
 
-void PalettePool::rt_free(RenderingDevice *p_rd) {
-    if (rs_texture.is_valid()) {
-        RenderingServer::get_singleton()->free_rid(rs_texture);
-    }
+void PalettePool::rt_free(ov::gpu::Device *p_device) {
     if (texture.is_valid()) {
-        p_rd->free_rid(texture);
+        p_device->free(texture);
     }
-    rs_texture = RID();
-    texture = RID();
+    texture = ov::gpu::Texture();
 }

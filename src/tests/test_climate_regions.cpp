@@ -39,7 +39,7 @@ Vector3i64 sample_point(const SDFCascade &p_sdf, int p_i, int p_m) {
 
 TEST_CASE("Climate regions: a table of two landforms parses into more field groups than the old cap") {
     ClimateSDF r("res://climate/region_test.json", 15);
-    CHECK(r.sdf.get_climate_error() == String());
+    CHECK(r.sdf.get_climate_error() == ov::str());
     CLIMATE_REQUIRE(r.sdf.get_climate() != nullptr);
     const Table &t = *r.sdf.get_climate();
     CHECK(t.fields.size() == 9);
@@ -102,9 +102,9 @@ TEST_CASE("Climate regions: a region's core is its standalone landform, bit for 
 TEST_CASE("Climate regions: a gated term is absent outside its region") {
     ClimateSDF world("res://climate/region_test.json", 15);
     CLIMATE_REQUIRE(world.sdf.get_climate() != nullptr);
-    Dictionary data;
-    CHECK(load("res://climate/region_test.json", data) == String());
-    Array heights = Array(data["heights"]).duplicate();
+    ov::Value data;
+    CHECK(load("res://climate/region_test.json", data) == ov::str());
+    ov::Value heights = data["heights"];
     heights.remove_at(0);
     data["heights"] = heights;
     ClimateSDF without(data, 15);
@@ -164,7 +164,7 @@ TEST_CASE("Climate regions: the world's landform cores are their own tables") {
     CLIMATE_REQUIRE(wt.regions.size() == 8);
     std::vector<std::unique_ptr<ClimateSDF>> own;
     for (const Region &r : wt.regions) {
-        own.push_back(std::make_unique<ClimateSDF>(("res://climate/landforms/" + r.name + ".json").utf8().get_data(), 25));
+        own.push_back(std::make_unique<ClimateSDF>(("res://climate/landforms/" + r.name + ".json").c_str(), 25));
         CLIMATE_REQUIRE(own.back()->sdf.get_climate() != nullptr);
     }
     int core[8] = {}, differ[8] = {}, picks[8] = {};
@@ -195,7 +195,7 @@ TEST_CASE("Climate regions: the world's landform cores are their own tables") {
         }
     }
     for (int r = 0; r < 8; r++) {
-        MESSAGE(std::string(wt.regions[size_t(r)].name.utf8().get_data()), " core: ", core[r], " points, ", differ[r], " SDF values differ, ", picks[r],
+        MESSAGE(wt.regions[size_t(r)].name, " core: ", core[r], " points, ", differ[r], " SDF values differ, ", picks[r],
                 " picks agree");
         CHECK(core[r] >= 10);
         CHECK(differ[r] == 0);

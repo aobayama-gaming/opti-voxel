@@ -2,8 +2,7 @@
 
 #include "base_surface.hpp"
 #include "cascade_terrain.hpp"
-
-#include <godot_cpp/core/math.hpp>
+#include "ov/math.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -21,7 +20,7 @@ double angle_deg(const ExactNoise::Float4 &p_a, const ExactNoise::Float4 &p_b) {
     const double cx = ay * bz - az * by;
     const double cy = az * bx - ax * bz;
     const double cz = ax * by - ay * bx;
-    return godot::Math::rad_to_deg(std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), ax * bx + ay * by + az * bz));
+    return ov::rad_to_deg(std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), ax * bx + ay * by + az * bz));
 }
 
 void height_normals(const Level &p_level, const Vector3i64 &p_p, const ExactNoise::Float4 &p_perlin, int p_k, int p_steepness_log2,

@@ -2,15 +2,14 @@
 
 #include "cascade_passes.hpp"
 #include "exact_noise.hpp"
+#include "gpu_device.hpp"
 #include "sdf_base.hpp"
 
-#include <godot_cpp/classes/rendering_device.hpp>
+#include "ov/bytes.hpp"
 
 #include <vector>
 
-using namespace godot;
-
-// The bare cascade at many points on a RenderingDevice: the cascade passes with point items (CascadePasses::create_points),
+// The bare cascade at many points on a Device: the cascade passes with point items (CascadePasses::create_points),
 // any point of Λ_lod at any LOD in one batch, bit for bit SDFCascade::ground_unit. From those registers, on the CPU:
 // SDFBase::ground_field (extended to the asked voxel, the site walk's readings) and evaluate_cull (the distance in metres,
 // the discoverer's corners).
@@ -20,9 +19,9 @@ using namespace godot;
 // Batches above max_points are split; the scratch is sized for them.
 class CascadePointsGPU {
 public:
-    // A batch's registers as buffer_get_data_async delivers them (the serial of the batch they belong to).
+    // A batch's registers as the async readback delivers them (the serial of the batch they belong to).
     struct Delivery {
-        PackedByteArray bytes;
+        ov::bytes bytes;
         uint64_t serial = 0;
     };
 
@@ -39,9 +38,9 @@ public:
 
     // p_sdf: a cascade terrain (false otherwise), configured with p_param; p_max_points: the points per batch (the
     // scratch grows with it, and with the climate's field groups). False (nothing kept) if the passes fail to build.
-    bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_points);
+    bool create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_points);
     void free();
-    bool is_valid() const { return rd != nullptr && passes.is_valid(); }
+    bool is_valid() const { return device != nullptr && passes.is_valid(); }
     uint64_t scratch_bytes() const { return passes.scratch_bytes(); }
 
     // The unit registers (SDFCascade::ground_unit) at p_count lattice points, point i of Λ_{p_lods[i]} (a multiple of
@@ -53,17 +52,17 @@ public:
     bool cull_values(const VoxelPos *p_points, int p_count, int p_lod, float *r_out, BatchStats &r_stats);
 
 private:
-    RenderingDevice *rd = nullptr;
+    ov::gpu::Device *device = nullptr;
     float voxel_size = 0.0f;
     uint32_t max_batch = 0;
-    RID input;
-    RID param_ubo;
-    RID values;
+    ov::gpu::Buffer input;
+    ov::gpu::Buffer param_ubo;
+    ov::gpu::Buffer values;
     CascadePasses passes;
-    PackedByteArray input_bytes;
+    ov::bytes input_bytes;
     uint64_t batch_serial = 0;
     Delivery delivery;
-    bool async_readback = true; // false once a readback didn't come with its sync: buffer_get_data
+    bool async_readback = true; // false once a readback didn't come with its sync: read_buffer
 
     bool _run_batch(const VoxelPos *p_points, const int *p_lods, uint32_t p_count, ExactNoise::Float4 *r_out, BatchStats &r_stats);
 };

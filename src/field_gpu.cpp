@@ -1,10 +1,12 @@
 #include "field_gpu.hpp"
 
+#include "ov/log.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
+#include "ov/value.hpp"
 #include "trace.hpp"
 
 #include <vector>
-
-using namespace godot;
 
 void FieldGPU::start(const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_scratch_mb) {
     stop();
@@ -67,7 +69,7 @@ void FieldGPU::enter() {
     const uint64_t t0 = now_usec();
     uint64_t scratch_a = 0, scratch_b = 0;
     CascadeGLSL::scratch_bytes(sdf, 1, 1, scratch_a, scratch_b);
-    batch = uint32_t(CLAMP(scratch_bytes / MAX(scratch_a + scratch_b, uint64_t(1)), uint64_t(MIN_POINTS), uint64_t(MAX_POINTS)));
+    batch = uint32_t(ov::clamp(scratch_bytes / ov::max(scratch_a + scratch_b, uint64_t(1)), uint64_t(MIN_POINTS), uint64_t(MAX_POINTS)));
     cap = batch;
     const bool ok = gpu.create(sdf, param, batch);
     {
@@ -80,7 +82,7 @@ void FieldGPU::enter() {
         }
     }
     if (!ok) {
-        WARN_PRINT("FieldGPU: no local RenderingDevice (headless, the Compatibility renderer) or the point passes failed: the site walks read the field on the CPU.");
+        OV_WARN_PRINT("FieldGPU: no local RenderingDevice (headless, the Compatibility renderer) or the point passes failed: the site walks read the field on the CPU.");
         fail_all();
     }
 }
@@ -116,7 +118,7 @@ bool FieldGPU::step() {
     const uint64_t t_run = now_usec();
     bool good = true;
     for (size_t first = 0; good && first < voxels.size(); first += cap) {
-        const int count = int(MIN(voxels.size() - first, size_t(cap)));
+        const int count = int(ov::min(voxels.size() - first, size_t(cap)));
         good = gpu.points().ground_field(voxels.data() + first, lods.data() + first, count, out.data() + first, stats);
     }
     size_t at = 0;
@@ -135,7 +137,7 @@ bool FieldGPU::step() {
         submissions.add(now_usec() - t_run);
         points += int64_t(voxels.size());
         batches.batches += stats.batches;
-        batches.gpu_ms += MAX(stats.gpu_ms, 0.0);
+        batches.gpu_ms += ov::max(stats.gpu_ms, 0.0);
         batches.record_ms += stats.record_ms;
         batches.sync_ms += stats.sync_ms;
         batches.readback_ms += stats.readback_ms;
@@ -145,12 +147,12 @@ bool FieldGPU::step() {
             recent_gpu_ms = recent_points > 0.0 ? 0.8 * recent_gpu_ms + 0.2 * stats.gpu_ms : stats.gpu_ms;
             recent_points = recent_points > 0.0 ? 0.8 * recent_points + 0.2 * double(voxels.size()) : double(voxels.size());
             us_per_point = recent_gpu_ms * 1000.0 / recent_points;
-            cap = uint32_t(CLAMP(SUBMIT_GPU_MS * 1000.0 / us_per_point, double(MIN_POINTS), double(batch)));
+            cap = uint32_t(ov::clamp(SUBMIT_GPU_MS * 1000.0 / us_per_point, double(MIN_POINTS), double(batch)));
         }
     }
     answered.notify_all();
     if (!good) {
-        ERR_PRINT("FieldGPU: a batch failed: the site walks read the field on the CPU from now on.");
+        OV_ERR_PRINT("FieldGPU: a batch failed: the site walks read the field on the CPU from now on.");
         fail_all();
         return false;
     }
@@ -162,9 +164,9 @@ void FieldGPU::exit() {
     gpu.free(); // on this thread, which made it
 }
 
-Dictionary FieldGPU::get_stats() const {
+ov::Value FieldGPU::get_stats() const {
     const std::lock_guard<std::mutex> lock(mutex);
-    Dictionary d;
+    ov::Value d = ov::Value::object();
     const State s = state_now.load();
     d["state"] = s == READY ? "ready" : (s == STARTING ? "starting" : "off");
     d["init_ms"] = init_ms;
@@ -173,8 +175,8 @@ Dictionary FieldGPU::get_stats() const {
     d["us_per_point"] = us_per_point;
     d["points"] = points;
     d["points_per_submission"] = submissions.count > 0 ? double(points) / double(submissions.count) : 0.0;
-    d["submissions"] = submissions.to_dict();
-    d["waits"] = waits.to_dict();
+    d["submissions"] = submissions.to_value();
+    d["waits"] = waits.to_value();
     d["gpu_ms"] = batches.gpu_ms;
     d["record_ms"] = batches.record_ms;
     d["sync_ms"] = batches.sync_ms;

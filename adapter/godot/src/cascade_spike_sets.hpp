@@ -2,6 +2,9 @@
 
 #include "sdf_cascade.hpp"
 
+#include "ov/on_error.hpp"
+#include "ov/value.hpp"
+
 #include <algorithm>
 #include <iterator>
 #include <vector>
@@ -31,23 +34,23 @@ inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", 
 // The example climate is tuned for 5 cm voxels (its modulated octaves stay under the cap there).
 inline constexpr float CLIMATE_VOXEL = 0.05f;
 
-inline String set_label(SpikeSet p_v) {
+inline ov::str set_label(SpikeSet p_v) {
     return SET_LABELS[int(p_v)];
 }
 
 // False (and an error) for an unknown label.
-inline bool parse_variant(const String &p_label, SpikeSet &r_set) {
+inline bool parse_variant(const ov::str &p_label, SpikeSet &r_set) {
     for (int i = 0; i < int(std::size(SET_LABELS)); i++) {
         if (p_label == SET_LABELS[i]) {
             r_set = SpikeSet(i);
             return true;
         }
     }
-    String labels;
+    ov::str labels;
     for (const char *l : SET_LABELS) {
-        labels += String(labels.is_empty() ? "" : ", ") + l;
+        labels += ov::str(labels.empty() ? "" : ", ") + l;
     }
-    ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + String("' (") + labels + String(")."));
+    OV_ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + "' (" + labels + ").");
 }
 
 // The median of timings (0 for none).
@@ -64,21 +67,21 @@ inline void configure_variant(SDFCascade &p_sdf, SpikeSet p_v, int p_lods, Chunk
     p_sdf.channel_set = p_v == SpikeSet::H8 ? Cascade::ChannelSet::HERMITE8 : Cascade::ChannelSet::LINEAR4;
     if (p_v != SpikeSet::H8 && p_v != SpikeSet::L4) {
         r_param.voxel_size = CLIMATE_VOXEL;
-        Dictionary data;
+        ov::Value data;
         const char *path = p_v == SpikeSet::L4P ? "res://climate/plain.json"
                 : p_v == SpikeSet::L4S          ? "res://climate/shaped_test.json"
                 : p_v == SpikeSet::L4D          ? "res://climate/fieldless_test.json"
                 : p_v == SpikeSet::L4R          ? "res://climate/region_test.json"
                 : p_v == SpikeSet::L4W          ? "res://climate/world.json"
                                                 : "res://climate/example.json";
-        const String err = Climate::load(path, data);
-        if (!err.is_empty()) {
-            ERR_PRINT("CascadeSpike: " + err + String(" (the set runs without its climate)"));
+        const ov::str err = Climate::load(path, data);
+        if (!err.empty()) {
+            OV_ERR_PRINT("CascadeSpike: " + err + " (the set runs without its climate)");
         }
         if (p_v == SpikeSet::L4F) {
-            const Array biomes = data["biomes"];
-            for (int64_t i = 0; i < biomes.size(); i++) {
-                Dictionary(biomes[i]).erase("amp");
+            ov::Value &biomes = data["biomes"];
+            for (size_t i = 0; i < biomes.size(); i++) {
+                biomes.at(i).erase("amp");
             }
         }
         p_sdf.climate_data = data;

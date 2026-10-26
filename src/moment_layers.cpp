@@ -2,9 +2,9 @@
 #include "moment_layers.hpp"
 
 #include "archetype_table.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
 #include "parallel_for.hpp"
-
-#include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -327,14 +327,14 @@ void MomentLayers::build_layer(Layer &r_layer) {
 }
 
 void MomentLayers::build(const std::vector<MomentItem> &p_items, const MomentLayerParams &p_params, const MomentJoins *p_joins) {
-    ERR_FAIL_COND_MSG(p_params.cell_shift < 1 || p_params.lod_max + p_params.cell_shift > 60, "MomentLayers: cells of 2^(lod + cell_shift) voxels must be within [2, 2^60].");
+    OV_ERR_FAIL_COND_MSG(p_params.cell_shift < 1 || p_params.lod_max + p_params.cell_shift > 60, "MomentLayers: cells of 2^(lod + cell_shift) voxels must be within [2, 2^60].");
     items = p_items;
     for (MomentItem &item : items) {
         prepare_moment_item(item);
     }
     params = p_params;
     joins = p_joins ? *p_joins : moment_joins(items, params);
-    layers.assign(MAX(params.lod_max - params.lod_min + 1, 0), Layer());
+    layers.assign(ov::max(params.lod_max - params.lod_min + 1, 0), Layer());
     for (size_t i = 0; i < layers.size(); i++) {
         layers[i].lod = params.lod_min + int(i);
         layers[i].cell = int64_t(1) << (layers[i].lod + params.cell_shift);

@@ -21,9 +21,12 @@
 #include "GPU_direct_mesher.hpp"
 #include "GPU_mesher.hpp"
 #include "debug_log.hpp"
+#include "godot_mesh_host.hpp"
+#include "godot_page_host.hpp"
 #include "gpu_profiler.hpp"
 #include "mesh_validator.hpp"
 #include "page_auditor.hpp"
+#include "rd_device.hpp"
 
 #include "sdf_cascade.hpp"
 
@@ -50,11 +53,18 @@ private:
 
     RID scenario;
 
+    // The main RenderingDevice as the core's device (used on the render thread), and the hosts drawing the meshers' output.
+    RDDevice *main_device = nullptr;
+    GodotPageHost *page_host = nullptr; // GPU Direct's pages
+    GodotMeshHost *mesh_host = nullptr; // the legacy meshes
+
     GPUMesher *gpu_mesher = nullptr;
 
     GPUDirectMesher *direct_mesher = nullptr;
 
     MeshValidator *validator = nullptr;
+    GodotMeshHost *validator_host = nullptr; // the validator's legacy meshes, drawn in a scenario nothing renders
+    void _free_validator();
     GPUProfiler *gpu_profiler = nullptr;
     PageAuditor *auditor = nullptr;
     Dictionary audit_report;

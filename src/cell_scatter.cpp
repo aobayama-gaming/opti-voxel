@@ -1,9 +1,10 @@
 // A procedural instance source (cell_scatter.hpp).
 #include "cell_scatter.hpp"
 
+#include "ov/format.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
 #include "parallel_for.hpp"
-
-#include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -52,7 +53,7 @@ double largest_variance(const Moments &p_m) {
 
 SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_scatter, const RecordFinish &p_finish, const MomentLayerParams &p_layers,
         int p_lod_count) {
-    ERR_FAIL_COND_MSG(!p_scatter.generate || p_scatter.classes == 0, "SourceProfile: no generate or no class.");
+    OV_ERR_FAIL_COND_MSG(!p_scatter.generate || p_scatter.classes == 0, "SourceProfile: no generate or no class.");
     const uint32_t classes = p_scatter.classes;
     // Class c's samples are SAMPLES sites with hashed seeds and hashed variants of class c (one class: the variants before
     // classes, bit for bit).
@@ -87,17 +88,17 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
                     const double v = double(rec.anchor[a] + ((corner >> a) & 1 ? rec.box_hi[a] : rec.box_lo[a]));
                     d2 += v * v;
                 }
-                reach = MAX(reach, std::sqrt(d2));
+                reach = ov::max(reach, std::sqrt(d2));
             }
-            lod_end = MAX(lod_end, rec.max_lod == TableRecord::NEVER_DROPPED ? p_lod_count : int(rec.max_lod));
-            k_max = MAX(k_max, rec.k);
-            margin_max = MAX(margin_max, rec.margin_c);
+            lod_end = ov::max(lod_end, rec.max_lod == TableRecord::NEVER_DROPPED ? p_lod_count : int(rec.max_lod));
+            k_max = ov::max(k_max, rec.k);
+            margin_max = ov::max(margin_max, rec.margin_c);
         }
         for (const MomentItem &item : items[i]) {
             if (item.moments.empty()) {
                 continue;
             }
-            part_variance = MAX(part_variance, largest_variance(item.moments));
+            part_variance = ov::max(part_variance, largest_variance(item.moments));
             const double offset[3] = { double(item.anchor.x), double(item.anchor.y), double(item.anchor.z) }; // from the base
             for (int l = 0; l < p_lod_count; l++) {
                 const double w = share * item.lost_share(l);
@@ -118,7 +119,7 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
     reach *= REACH_SAFETY;
     k_max = float(double(k_max) * REACH_SAFETY);
     margin_max = float(double(margin_max) * REACH_SAFETY); // a rock's grows with its size
-    lod_end = MIN(lod_end, p_lod_count);
+    lod_end = ov::min(lod_end, p_lod_count);
     MomentLayerParams params = p_layers;
     params.lod_min = 0;
     params.lod_max = p_lod_count - 1;
@@ -126,7 +127,7 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
     for (std::vector<Lost> &per_lod : lost) {
         for (Lost &at : per_lod) {
             for (const std::pair<uint32_t, Moments> &m : at.moments.parts) {
-                at.variance = MAX(at.variance, largest_variance(m.second));
+                at.variance = ov::max(at.variance, largest_variance(m.second));
             }
         }
     }
@@ -134,15 +135,15 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
 
 const SourceProfile::Lost &SourceProfile::lost_of(uint32_t p_class, int p_lod) const {
     static const Lost none;
-    ERR_FAIL_COND_V_MSG(p_class >= lost.size() || p_lod < 0 || p_lod >= int(lost[p_class].size()), none,
-            vformat("SourceProfile: no class %d at LOD %d (the scatter's classes and the profile's disagree).", p_class, p_lod));
+    OV_ERR_FAIL_COND_V_MSG(p_class >= lost.size() || p_lod < 0 || p_lod >= int(lost[p_class].size()), none,
+            ov::format("SourceProfile: no class %d at LOD %d (the scatter's classes and the profile's disagree).", p_class, p_lod));
     return lost[p_class][p_lod];
 }
 
 double SourceProfile::lost_variance(int p_lod) const {
     double v = 0.0;
     for (const std::vector<Lost> &per_lod : lost) {
-        v = MAX(v, per_lod[p_lod].variance);
+        v = ov::max(v, per_lod[p_lod].variance);
     }
     return v;
 }

@@ -5,11 +5,14 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 (installs into `adapter/godot/project/bin/linux/`). `src/` and `adapter/` build with `-Wall -Wextra -Werror`: `werror=no` only to
 iterate past a warning, never to commit one.
 
-Layout: one engine, two adapters. `src/` is the engine (`src/core_files.txt`: the part already engine-free, grown
-by every de-Godot step, never shrunk); `adapter/godot/` is the GDExtension's Godot-only sources (`src/`: node,
-registration, spikes, reports) and the Godot project (`project/`: player.gd, scenes, bench); `adapter/dawn/` is the
-native WebGPU adapter (CMake, `adapter/dawn/README.md`). Adapters stay thin: engine logic goes in `src/`, where both
-get it, never into one adapter.
+Layout: one engine, two adapters. `src/` is the engine, engine-free as a whole (`src/core_files.txt` lists every file,
+never shrunk): the GPU work goes through `ov::gpu::Device` (`gpu_device.hpp`: buffers, 2D textures, compute pipelines
+from GLSL, readbacks, `post` onto the device's thread) and the drawing through the hosts the adapter implements
+(`PageHost`: the quad pages; `MeshHost`: the legacy meshes). `adapter/godot/` is the GDExtension's Godot-only sources
+(`src/`: the node, registration, `RDDevice` on a RenderingDevice, `GodotPageHost` with the page shader,
+`GodotMeshHost`, spikes, reports) and the Godot project (`project/`: player.gd, scenes, bench); `adapter/dawn/` is the
+native WebGPU adapter (CMake, `DawnDevice`, `adapter/dawn/README.md`). Adapters stay thin: engine logic goes in `src/`,
+where both get it, never into one adapter.
 
 This file holds the rules. The design of each subsystem lives in `docs/` (index below): read the doc of
 what you touch before changing it, and update it in the same PR.
@@ -58,9 +61,10 @@ to every change, and a reviewer may reject a PR on any of them.
 - The core is engine-free (the liboptivoxel plan, `docs/liboptivoxel.md`). `tools/check_core_purity.sh`
   (CI) compiles each of its `core_files` alone with no godot include path (the list only grows). A core
   file uses only core types (`ov::ivec2|ivec3` / `Float3` / `ov::str` + `ov::format` + `ov/str.hpp` /
-  `ov::bytes` / `ov::HashMap|HashSet` / `OV_ERR_*` / `OV_LOG` / `ov::now_usec`) and `std::` (no godot
-  `MIN` / `ERR_*`: `ov::min|max|clamp` keep their operand order); shader text is `ov::str`; conversions
-  to engine types happen at engine call sites (`godot_conv.hpp`), never inside the core.
+  `ov::bytes` / `ov::HashMap|HashSet` / `ov::Value` (stats, reports, JSON: a value, not shared like a Dictionary) /
+  `ov::Color` / `OV_ERR_*` / `OV_LOG` / `ov::now_usec` / `ov::read_file`) and `std::` (no godot `MIN` / `ERR_*`:
+  `ov::min|max|clamp` keep their operand order and types); shader text is `ov::str`; conversions to engine types
+  happen at engine call sites (`godot_conv.hpp`: `godot_dict(ov::Value)`, `ov_f3`, ...), never inside the core.
 - Threads only through `ov::executor()` (`ov/executor.hpp`: `submit` / `wait`, `parallel_for`, a
   `WorkerLoop` for a long-lived loop): no `Thread`, `std::thread`, `std::async` or `WorkerThreadPool`
   outside the executors (`godot_executor`, `ov::ThreadWorker`; the inline backend must stay possible: a

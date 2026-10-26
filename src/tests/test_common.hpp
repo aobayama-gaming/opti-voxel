@@ -5,6 +5,7 @@
 #include <doctest.h>
 
 #include "exact_noise.hpp"
+#include "godot_conv.hpp"
 #include "world_coord.hpp"
 
 #include <godot_cpp/variant/string.hpp>
@@ -13,6 +14,7 @@
 
 #include <array>
 #include <cmath>
+#include <ostream> // doctest prints shared_ptrs through it
 #include <vector>
 
 // doctest's REQUIRE needs exceptions: a failed check ends the test case.
