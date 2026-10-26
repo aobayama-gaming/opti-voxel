@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes the cloud layer's texture: project/clouds.png, a tileable 512 x 512 grey noise read by the sky shader (the
+"""Writes the cloud layer's texture: adapter/godot/project/clouds.png, a tileable 512 x 512 grey noise read by the sky shader (the
 clouds) and by the page shader (their shadows on the ground), both through VoxelSky's GLSL (src/voxel_sky.cpp):
 the same texel at the same world point, so a shadow lies under its cloud.
 
@@ -28,7 +28,7 @@ def main() -> None:
     noise = np.real(np.fft.ifft2(amplitude * phase))
     ranks = np.argsort(np.argsort(noise.ravel())).reshape(N, N)
     uniform = (ranks + 0.5) / (N * N)
-    out = os.path.join(os.path.dirname(__file__), "..", "project", "clouds.png")
+    out = os.path.join(os.path.dirname(__file__), "..", "adapter", "godot", "project", "clouds.png")
     Image.fromarray(np.round(uniform * 255.0).astype(np.uint8), mode="L").save(out)
     print("wrote", os.path.normpath(out))
 

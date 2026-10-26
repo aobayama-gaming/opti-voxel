@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes the scenes' colour-grading LUT: project/grade_lut.png, a 32^3 cube as 32 slices side by side
+"""Writes the scenes' colour-grading LUT: adapter/godot/project/grade_lut.png, a 32^3 cube as 32 slices side by side
 (1024 x 32, blue = slice, red = x, green = y), imported as a Texture3D (grade_lut.png.import: 32 horizontal
 slices) and set as Environment.adjustment_color_correction. Godot applies it after the tonemapper, sampling the
 filtered texture at uvw = colour with no half-texel remap: texel i is read at colour (i + 0.5) / N, so that is the
@@ -94,7 +94,7 @@ def main():
         print(sys.argv[3])
         return
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "project", "grade_lut.png")
+    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "adapter", "godot", "project", "grade_lut.png")
     img = Image.new("RGB", (N * N, N))
     px = img.load()
     for bz in range(N):

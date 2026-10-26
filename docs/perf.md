@@ -2,7 +2,7 @@
 
 The numbers perf PRs are measured against (`tools/bench_ab.sh`, `bench.sh --profile=1`).
 
-- **Perf target:** `--preset=forest5cm` (`project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
+- **Perf target:** `--preset=forest5cm` (`adapter/godot/project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
   the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at error 2 (stretch: 1).
   Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene_5cm).
   Baseline on the cascade (PR #48, 1280x720, budget 4, 2 runs): steady frame p50 13.7 ms (render GPU 14.0), fly out

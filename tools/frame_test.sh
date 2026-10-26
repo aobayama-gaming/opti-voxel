@@ -32,7 +32,7 @@ if [[ $BUILD == 1 ]]; then
 fi
 
 echo ">> running godot (${PASS[*]:-})"
-timeout "${FRAME_TIMEOUT:-300}" "$GODOT" --path "$ROOT/project" --resolution 640x360 res://debug/frame_spike.tscn -- \
+timeout "${FRAME_TIMEOUT:-300}" "$GODOT" --path "$ROOT/adapter/godot/project" --resolution 640x360 res://debug/frame_spike.tscn -- \
     "${PASS[@]}" --out="$RUN_DIR/frame.json" > "$RUN_DIR/godot.log" 2>&1
 CODE=$?
 

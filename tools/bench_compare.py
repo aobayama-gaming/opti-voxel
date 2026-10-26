@@ -3,7 +3,7 @@
 
     bench_compare.py OUT.md LABEL=run_dir1,run_dir2,... LABEL2=... [--baseline=LABEL]
 
-Each run dir holds a stats.json written by project/debug/bench.gd. For every metric the
+Each run dir holds a stats.json written by adapter/godot/project/debug/bench.gd. For every metric the
 median across runs is shown, with the min-max spread, and the delta vs the baseline config.
 """
 import json

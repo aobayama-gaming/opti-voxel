@@ -38,6 +38,11 @@ jobs:
       - name: Core purity (the engine-free core stays engine-free)
         run: tools/check_core_purity.sh
 
+      - name: Core library outside Godot (the Dawn adapter's CMake; no Dawn on CI, so the core only)
+        run: |
+          cmake -S adapter/dawn -B adapter/dawn/out -DCMAKE_BUILD_TYPE=Release
+          cmake --build adapter/dawn/out -j "$(nproc)"
+
       - name: Restore .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
@@ -75,7 +80,7 @@ jobs:
           # The import registers the extension (headless, the terrain prints one ERROR and stays empty).
           # A fresh import can abort at exit in Godot 4.6.3 (dev reproduces it), after
           # the import is done: run it again, and the second run, on an imported project, must exit 0.
-          "$GODOT" --headless --path project --import > import.log 2>&1 ||
-            "$GODOT" --headless --path project --import > import.log 2>&1 || { tail -30 import.log; exit 1; }
-          test -f project/.godot/extension_list.cfg || { tail -30 import.log; exit 1; }
+          "$GODOT" --headless --path adapter/godot/project --import > import.log 2>&1 ||
+            "$GODOT" --headless --path adapter/godot/project --import > import.log 2>&1 || { tail -30 import.log; exit 1; }
+          test -f adapter/godot/project/.godot/extension_list.cfg || { tail -30 import.log; exit 1; }
           tools/unit_test.sh --no-build

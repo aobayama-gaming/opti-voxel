@@ -34,7 +34,7 @@ if [[ $BUILD == 1 ]]; then
 fi
 
 ulimit -c 0
-timeout "${CLIMATE_TIMEOUT:-600}" "$GODOT" --headless --path "$ROOT/project" res://debug/climate_report.tscn -- \
+timeout "${CLIMATE_TIMEOUT:-600}" "$GODOT" --headless --path "$ROOT/adapter/godot/project" res://debug/climate_report.tscn -- \
     --out="$RUN_DIR" "${ARGS[@]}" > "$RUN_DIR/godot.log" 2>&1
 CODE=$?
 if grep -q '^CLIMATE: .*"error":' "$RUN_DIR/godot.log"; then

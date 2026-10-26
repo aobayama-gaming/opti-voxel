@@ -3,20 +3,20 @@
 .godot/
 
 # Ignore library files but not the gdextension file
-project/bin/*
-!project/bin/android
-project/bin/android/*
-!project/bin/android/.gitkeep
-!project/bin/linux
-project/bin/linux/*
-!project/bin/linux/.gitkeep
-!project/bin/macos
-project/bin/macos/*
-!project/bin/macos/.gitkeep
-!project/bin/windows
-project/bin/windows/*
-!project/bin/windows/.gitkeep
-!project/bin/*.gdextension
+adapter/godot/project/bin/*
+!adapter/godot/project/bin/android
+adapter/godot/project/bin/android/*
+!adapter/godot/project/bin/android/.gitkeep
+!adapter/godot/project/bin/linux
+adapter/godot/project/bin/linux/*
+!adapter/godot/project/bin/linux/.gitkeep
+!adapter/godot/project/bin/macos
+adapter/godot/project/bin/macos/*
+!adapter/godot/project/bin/macos/.gitkeep
+!adapter/godot/project/bin/windows
+adapter/godot/project/bin/windows/*
+!adapter/godot/project/bin/windows/.gitkeep
+!adapter/godot/project/bin/*.gdextension
 .sconsign*.dblite
 
 # Ignore custom.py
@@ -66,3 +66,6 @@ CMakeUserPresets.json
 
 # Bench outputs (tools/bench.sh)
 bench/results/
+
+# Dawn adapter build
+adapter/dawn/out/

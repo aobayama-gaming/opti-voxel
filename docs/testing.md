@@ -37,7 +37,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~2 min).
   Prints PASS/FAIL per step. Perf numbers come from `bench_ab.sh` instead.
 - `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
-  [--view=0..7] [--validate=64] [--audit=1] [--cool=1]`: builds, runs `project/debug/bench.tscn` with a fixed
+  [--view=0..7] [--validate=64] [--audit=1] [--cool=1]`: builds, runs `adapter/godot/project/debug/bench.tscn` with a fixed
   camera, writes `bench/results/<run>/stats.json` + `godot.log` + screenshots, prints a summary.
   Exits non-zero on build failure, crashes, `ERROR` lines, leaked RIDs, and (exit 4) a requested
   validation or audit that failed. `bench/results/LAST` holds the latest run dir.
@@ -101,7 +101,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly, and with `--lods=25`
   `lods25_10km` looking down from 10 km up, `lods25_100km` at the horizon from 100 km up) and writes
   `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
-- Hole hunting: run the main scene with `godot --path project -- --marks=DIR`; H saves the camera
+- Hole hunting: run the main scene with `godot --path adapter/godot/project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,

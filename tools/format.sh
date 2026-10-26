@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# clang-format for src/, pinned so every machine (and CI) formats the same way.
+# clang-format for src/ and adapter/, pinned so every machine (and CI) formats the same way.
 #
 #   tools/format.sh [--check] [files...]
 #
-# Without files: every tracked C++ file under src/. Files outside src/ or not C++ are skipped, so a
+# Without files: every tracked C++ file under src/ and adapter/. Files outside them or not C++ are skipped, so a
 # hook can pass whatever was edited. --check changes nothing and exits 1 if a file needs formatting.
 # Runs clang-format through uvx (no system install needed): CLANG_FORMAT overrides the command.
 set -uo pipefail
@@ -22,7 +22,7 @@ done
 
 cd "$ROOT" || exit 1
 if [[ ${#FILES[@]} -eq 0 ]]; then
-    mapfile -t FILES < <(git ls-files 'src/*.cpp' 'src/*.hpp' 'src/*.h' | grep -v '^src/gen/')
+    mapfile -t FILES < <(git ls-files 'src/*.cpp' 'src/*.hpp' 'src/*.h' 'adapter/*.cpp' 'adapter/*.hpp' 'adapter/*.h' | grep -v '^src/gen/')
 fi
 
 TARGETS=()
@@ -32,7 +32,7 @@ for f in "${FILES[@]}"; do
     # Relative to the file's own checkout: a hook may pass a file from another worktree.
     top="$(git -C "$(dirname "$abs")" rev-parse --show-toplevel 2>/dev/null)" || continue
     rel="${abs#"$top"/}"
-    [[ $rel == src/* && $rel != src/gen/* && $rel =~ \.(cpp|hpp|h)$ ]] && TARGETS+=("$abs")
+    [[ ($rel == src/* || $rel == adapter/*) && $rel != src/gen/* && $rel =~ \.(cpp|hpp|h)$ ]] && TARGETS+=("$abs")
 done
 [[ ${#TARGETS[@]} -eq 0 ]] && exit 0
 

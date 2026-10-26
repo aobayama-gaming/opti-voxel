@@ -4,7 +4,7 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
 
 - **Climate** (`src/climate.{hpp,cpp}`, `climate_modulator.cpp`, `climate_parse.cpp` / `climate_validate.cpp`,
   `climate_glsl.cpp`; `VoxelTerrain.climate_path` / `--climate=PATH`, bench and player; off by
-  default): a climate is data, a JSON table (format above `parse()`, example `project/climate/example.json`, tuned for
+  default): a climate is data, a JSON table (format above `parse()`, example `adapter/godot/project/climate/example.json`, tuned for
   5 cm: at 0.5 m its x2 mountains exceed the cap and the table is refused) checked against
   `SDFCascade::climate_ground()`: up to `MAX_FIELDS` (24) fields, each a LINEAR4 cascade group (`Field::bands`) of any octaves in
   the ground's range (seeds `make_octave(field seed, k)`, keyed by k; a `from_m` .. `to_m` range of bands or multipliers
@@ -95,8 +95,8 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   "cell"`): Worley F1 over 3 x 3 x 3 jittered cells (`ExactNoise::cell3` / `glsl_cell3`, FrameSpike's `cell3_k*`),
   centred by `CELL_MEAN`, read through height terms; creased (cones, cell borders), it measures 7.2% gradient error on
   25-100 m dunes, no streaks. A table without these keys is the old path bit for bit (unit
-  test: `project/climate/plain.json`, the example before them, pins every slot, the SDF, the skirts and both level
-  shaders' text). `project/climate/example.json` is now a world composed like libnoise's (continent curve, a twisted
+  test: `adapter/godot/project/climate/plain.json`, the example before them, pins every slot, the SDF, the skirts and both level
+  shaders' text). `adapter/godot/project/climate/example.json` is now a world composed like libnoise's (continent curve, a twisted
   terrain type choosing ridged-multifractal mountains lifted inland, billow hills, terraced badlands, low plains,
   ridged river channels, three warp fields); `shaped_test.json` exercises every operation (CascadeSpike set `4s`; `4p`
   the plain table). The look target, a numpy port of libnoise's graph, and the gallery of the techniques are outside
@@ -109,7 +109,7 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   rougher ground), fly p50 out -1%, back -10%. `climate_report.sh` gained `ground_shaded.png` / `ground_normals.png`
   (hillshade from the heights and from the gradient channels), the per-biome gradient error, sea colours and
   `--center=U,V`.
-- **Landforms** (`project/climate/landforms/*.json`, `docs/landforms.md`, `tools/landforms/`): mountain, flat desert,
+- **Landforms** (`adapter/godot/project/climate/landforms/*.json`, `docs/landforms.md`, `tools/landforms/`): mountain, flat desert,
   dunes, mangrove, island, cliff, valley and caldera tables, each matched against a real Copernicus GLO-30 heightmap.
   - `fetch_dem.py` downloads the public AWS tiles; the sites are in `sites.json`.
   - `climate_report.sh --lattice=M` samples the table on the same grid and writes `heights.f32` / `fields.f32` /
@@ -117,7 +117,7 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   - `compare.py` and `terrain_stats.py` give octave amplitudes, slope percentiles, hypsometry, curvature skew,
     anisotropy and the share of folded columns, plus a sheet.
   - `match.py` fits one multiplier per octave, `--hypso` a height remap, `--texture` a biome without its features.
-  - `world.py` composes them into `project/climate/world.json` (25 LODs): each landform behind a region of temperature x
+  - `world.py` composes them into `adapter/godot/project/climate/world.json` (25 LODs): each landform behind a region of temperature x
     humidity x wind, shared fields merged, the continental octaves (>= the axes' finest, 105 km) off in every table.
     Each region's core equals its own table, bit for bit (`test_climate_regions.cpp`); `climate_report.sh` lists a
     core `--spawn` per region.

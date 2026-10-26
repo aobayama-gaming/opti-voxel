@@ -12,6 +12,6 @@ mkdir -p bench/results/play; LOG=bench/results/play/hw_$(date +%Y%m%d-%H%M%S).lo
     done
 ) &
 MON=$!
-"$HOME/.local/bin/godot" --path project "$@" > "${LOG%.log}_godot.log" 2>&1
+"$HOME/.local/bin/godot" --path adapter/godot/project "$@" > "${LOG%.log}_godot.log" 2>&1
 kill $MON
 echo "hardware log: $LOG"

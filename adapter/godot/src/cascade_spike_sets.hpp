@@ -10,9 +10,9 @@
 // climate carried and modulating the ground, "4f" its fields without multipliers (carried only for the biome pick: the
 // cost of the ground materials alone), "4p" the plain climate (the example before shaped bands: amplitudes only), "4s"
 // the shaped test table (every shaped-band operation: shapes, the multifractal state, warps, cell noise, height terms,
-// terraces), "4d" project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
-// field group), "4r" project/climate/region_test.json (two landforms behind regions, gated height terms, 11 groups), "4w"
-// project/climate/world.json (the eight landforms behind regions of three climate axes, 17 groups; tuned for 25 LODs).
+// terraces), "4d" adapter/godot/project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
+// field group), "4r" adapter/godot/project/climate/region_test.json (two landforms behind regions, gated height terms, 11 groups), "4w"
+// adapter/godot/project/climate/world.json (the eight landforms behind regions of three climate axes, 17 groups; tuned for 25 LODs).
 namespace CascadeSpikeSets {
 
 enum class SpikeSet {

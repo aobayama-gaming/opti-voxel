@@ -41,7 +41,7 @@ def generate(table: Path, site: dict, opts: dict, build: bool) -> Path:
     voxel = float(opts.get("voxel", "0.05"))
     lattice = round(math.log2(site["spacing_m"] / voxel))
     path = table.resolve()
-    res = f"res://{path.relative_to(ROOT / 'project')}" if path.is_relative_to(ROOT / "project") else str(path)
+    res = f"res://{path.relative_to(ROOT / 'adapter/godot/project')}" if path.is_relative_to(ROOT / "adapter/godot/project") else str(path)
     args = [str(ROOT / "tools/climate_report.sh"), f"--climate={res}",
             f"--voxel={voxel}", f"--lattice={lattice}", f"--size={opts.get('size', site['n'])}", f"--lods={opts.get('lods', '25')}",
             f"--center={opts.get('center', '0,0')}"]
