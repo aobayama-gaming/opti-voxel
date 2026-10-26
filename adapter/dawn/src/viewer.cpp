@@ -223,6 +223,8 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     s.climate_path = p_options.climate;
     s.chunk_param.voxel_size = p_options.voxel_size;
     s.debug_view = p_options.view;
+    s.discoverer_mode = p_options.discoverer_mode;
+    s.walk_gpu = p_options.walk_gpu;
     World::Projection projection;
     projection.viewport_height = float(upscaler ? upscaler->render_height() : height); // the LOD's pixels are the 3D's
     projection.fov_rad = FOV_RAD;

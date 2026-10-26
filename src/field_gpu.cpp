@@ -71,10 +71,18 @@ void FieldGPU::enter() {
     CascadeGLSL::scratch_bytes(sdf, 1, 1, scratch_a, scratch_b);
     batch = uint32_t(ov::clamp(scratch_bytes / ov::max(scratch_a + scratch_b, uint64_t(1)), uint64_t(MIN_POINTS), uint64_t(MAX_POINTS)));
     cap = batch;
-    const bool ok = gpu.create(sdf, param, batch);
+    bool ok = gpu.create(sdf, param, batch);
+    const double readback = ok ? gpu.readback_ms() : 0.0;
+    const bool slow = readback > SLOW_READBACK_MS;
+    if (slow) {
+        OV_LOG(ov::LOG_INFO, "FieldGPU: a readback takes %.0f ms on this device (over %.0f): the site walks read the field on the CPU.", readback, SLOW_READBACK_MS);
+        gpu.free();
+        ok = false;
+    }
     {
         const std::lock_guard<std::mutex> lock(mutex);
         init_ms = double(now_usec() - t0) / 1000.0;
+        readback_ms = readback;
         max_points = batch;
         scratch_mb = double(gpu.scratch_bytes()) / 1048576.0;
         if (ok && state_now.load() == STARTING) { // not stopped meanwhile
@@ -82,7 +90,9 @@ void FieldGPU::enter() {
         }
     }
     if (!ok) {
-        OV_WARN_PRINT("FieldGPU: no local RenderingDevice (headless, the Compatibility renderer) or the point passes failed: the site walks read the field on the CPU.");
+        if (!slow) {
+            OV_WARN_PRINT("FieldGPU: no local RenderingDevice (headless, the Compatibility renderer) or the point passes failed: the site walks read the field on the CPU.");
+        }
         fail_all();
     }
 }
@@ -170,6 +180,7 @@ ov::Value FieldGPU::get_stats() const {
     const State s = state_now.load();
     d["state"] = s == READY ? "ready" : (s == STARTING ? "starting" : "off");
     d["init_ms"] = init_ms;
+    d["readback_ms"] = readback_ms; // past SLOW_READBACK_MS the field stays on the CPU
     d["points_per_batch"] = int64_t(max_points);
     d["scratch_mb"] = scratch_mb;
     d["us_per_point"] = us_per_point;

@@ -2,7 +2,7 @@
 
 // The core's one threading interface: one-shot tasks, data-parallel loops and long-lived workers. The engine installs
 // its backend (register_types: Godot's worker pool, godot_executor.hpp); the default runs everything on the calling
-// thread (InlineExecutor: tests, a threads=no web build). Core code never starts a thread itself: only the backends
+// thread (InlineExecutor: tests). Core code never starts a thread itself: only the backends
 // do (ThreadWorker, a threaded backend's workers).
 
 #include <algorithm>

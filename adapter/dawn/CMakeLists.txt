@@ -8,6 +8,11 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+if(EMSCRIPTEN)
+    # The web build runs the core's threads as Web Workers (pthreads): every object, the dependencies' too (web/build.sh).
+    add_compile_options(-pthread)
+endif()
+
 # The core both adapters build: src/core_files.txt is the one list (tools/check_core_purity.sh reads it too).
 set(OV_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${OV_ROOT}/src/core_files.txt")
@@ -27,8 +32,8 @@ if(EMSCRIPTEN)
     # web/build.sh builds these dependencies (web/deps) and this.
     set(OV_WEB_DEPS "$ENV{HOME}/ov-web-deps" CACHE PATH "web/build.sh's dependency prefix")
     set(OV_DAWN_SRC "${OV_WEB_DEPS}/dawn" CACHE PATH "Dawn source (Tint's headers)")
-    set(OV_TINT_BUILD "${OV_WEB_DEPS}/tint-wasm" CACHE PATH "web/deps built with emcmake: emdawnwebgpu_pkg, Tint, SPIRV-Tools")
-    set(OV_GLSLANG_DIR "${OV_WEB_DEPS}/glslang-wasm" CACHE PATH "glslang built with emcmake and installed")
+    set(OV_TINT_BUILD "${OV_WEB_DEPS}/tint-wasm-threads" CACHE PATH "web/deps built with emcmake: emdawnwebgpu_pkg, Tint, SPIRV-Tools")
+    set(OV_GLSLANG_DIR "${OV_WEB_DEPS}/glslang-wasm-threads" CACHE PATH "glslang built with emcmake and installed")
     set(OV_EMDAWNWEBGPU_PORT "${OV_TINT_BUILD}/emdawnwebgpu_pkg/emdawnwebgpu.port.py")
     if(NOT EXISTS "${OV_EMDAWNWEBGPU_PORT}")
         message(STATUS "No emdawnwebgpu at ${OV_EMDAWNWEBGPU_PORT}: building the core only")
@@ -47,11 +52,14 @@ if(EMSCRIPTEN)
     list(TRANSFORM OV_GLSLANG_LIBS REPLACE "(.+)" "${OV_GLSLANG_DIR}/lib/lib\\1.a")
     file(GLOB_RECURSE OV_TINT_LIBS "${OV_TINT_BUILD}/dawn/src/tint/libtint_*.a" "${OV_TINT_BUILD}/dawn/third_party/abseil/*.a"
             "${OV_TINT_BUILD}/dawn/src/utils/*.a")
-    # JSPI: the engine's blocking waits (device creation, error scopes, readbacks) suspend the wasm while the browser runs.
-    # No threads yet: the core's InlineExecutor (no SharedArrayBuffer, so no special headers to serve it). FS: a --shot's
-    # PNG is read back from the page (Module.FS.readFile).
-    target_link_options(ov_dawn PRIVATE "--use-port=${OV_EMDAWNWEBGPU_PORT}" -sJSPI -Wno-experimental -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB
-            -sSTACK_SIZE=8MB -sENVIRONMENT=web -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=FS "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
+    # JSPI: the engine's blocking waits (device creation, error scopes, readbacks) suspend the wasm while the browser runs,
+    # on the main thread and in a worker (the discoverer's and the field's local devices are the worker's own). Threads:
+    # the workers are started with the page (a pthread only starts once the main thread yields): the pool's (one per core but
+    # the main thread's, at least one) and the viewer's two long-lived workers (discoverer, field); one more starts late. Only a cross-origin isolated page (web/serve.py's headers)
+    # gets SharedArrayBuffer. FS: a --shot's PNG is read back from the page (Module.FS.readFile).
+    target_link_options(ov_dawn PRIVATE "--use-port=${OV_EMDAWNWEBGPU_PORT}" -pthread -sJSPI -Wno-experimental
+            -Wno-pthreads-mem-growth "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency+2" -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB
+            -sSTACK_SIZE=8MB -sENVIRONMENT=web,worker -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=FS "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
     target_link_libraries(ov_dawn PRIVATE ov_core ${OV_GLSLANG_LIBS} -Wl,--start-group ${OV_TINT_LIBS}
             "${OV_TINT_BUILD}/spirv-tools/source/opt/libSPIRV-Tools-opt.a" "${OV_TINT_BUILD}/spirv-tools/source/libSPIRV-Tools.a" -Wl,--end-group)
     return()
