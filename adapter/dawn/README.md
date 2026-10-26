@@ -12,8 +12,9 @@ The viewer drives the core's world loop (`ov::World`, GPU Direct) with a fly cam
 materials yet):
 
 ```
-adapter/dawn/out/ov_dawn --viewer                          # an X11 window (XWayland): WASD + Q/E, shift 5x, drag to look,
-                                                           # 1 shaded / 2 normals / 3 LOD, Escape quits
+adapter/dawn/out/ov_dawn --viewer                          # an X11 window (XWayland), the Godot player's controls: mouse look,
+                                                           # WASD / arrows, space up, shift down, wheel speed, Escape frees the mouse
+                                                           # (a click takes it back), V cycles the views (1-3), Ctrl+Q quits
 adapter/dawn/out/ov_dawn --shot=out.png --view=2 --pitch=-35   # offscreen: a PNG once the load is complete, JSON report
 ```
 

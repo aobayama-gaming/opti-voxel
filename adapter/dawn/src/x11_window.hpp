@@ -1,7 +1,7 @@
 #pragma once
 
-// The viewer's window: plain Xlib (XWayland under a Wayland session), a Dawn surface on it, the keys held and the mouse
-// moves while its left button is down.
+// The viewer's window: plain Xlib (XWayland under a Wayland session), a Dawn surface on it, the keys held and, while the
+// mouse is captured (hidden, grabbed, warped back to the centre: Godot's MOUSE_MODE_CAPTURED), its moves.
 
 #include <dawn/webgpu_cpp.h>
 
@@ -18,7 +18,8 @@ public:
 
     // False (an error logged) without a display.
     bool open(int p_width, int p_height, const char *p_title);
-    // Handles the pending events: false once the window is closed (or Escape).
+    // Handles the pending events: false once the window is closed (or Ctrl+Q). Escape toggles the capture, a click
+    // in the window captures, losing the focus releases.
     bool poll();
     wgpu::Surface create_surface(const wgpu::Instance &p_instance) const;
 
@@ -30,8 +31,9 @@ public:
     int width = 0;
     int height = 0;
     bool resized = false; // since the last poll
-    float mouse_dx = 0.0f; // pixels moved since the last poll with the left button down
+    float mouse_dx = 0.0f; // pixels moved since the last poll, while captured
     float mouse_dy = 0.0f;
+    int wheel = 0; // wheel steps since the last poll, up positive
 
 private:
     void *display = nullptr; // Display *
@@ -39,9 +41,12 @@ private:
     unsigned long delete_atom = 0;
     std::set<unsigned long> keys;
     std::set<unsigned long> presses;
-    bool dragging = false;
-    int last_x = 0;
-    int last_y = 0;
+    unsigned long blank_cursor = 0;
+    bool want_capture = true; // the grab can only succeed once the window is mapped: retried every poll
+    bool captured = false;
+
+    void set_capture(bool p_capture);
+    void warp_to_centre();
 };
 
 } // namespace ov::dawn

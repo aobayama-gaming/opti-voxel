@@ -26,6 +26,13 @@ constexpr float FOV_RAD = 75.0f * 3.14159265f / 180.0f;
 constexpr float NEAR_M = 0.1f;
 // Frames drawn after the load is complete before a shot (the last pages' instance counts land).
 constexpr int SHOT_SETTLE_FRAMES = 10;
+// The Godot player's flight (player.gd): metres per second, radians per pixel, altitudes per second, seconds.
+constexpr float BASE_SPEED = 50.0f;
+constexpr float MOUSE_SENSITIVITY = 0.002f;
+constexpr float FLY_RATE = 1.0f;
+constexpr float ALTITUDE_TAU = 0.2f;
+constexpr float PITCH_MAX = 1.55f; // short of straight up / down: the view basis needs a horizontal right
+constexpr int VIEW_COUNT = 3; // shaded, normals, LOD
 
 Float3 cross(const Float3 &a, const Float3 &b) {
     return Float3{ a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
@@ -219,6 +226,9 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     int frames = 0;
     int settled = -1; // frames since the load completed (a shot)
     int result = 0;
+    int view = p_options.view;
+    float base_speed = BASE_SPEED;
+    float smoothed_altitude = 0.0f; // 0: not read yet
     while (true) {
         const Clock::time_point now = Clock::now();
         const float dt = std::chrono::duration<float>(now - last).count();
@@ -233,24 +243,41 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
                 configure(width, height);
                 depth = make_target(p_context.device, DawnPageHost::DEPTH_FORMAT, width, height, wgpu::TextureUsage::RenderAttachment);
             }
-            camera.yaw += window.mouse_dx * 0.003f;
-            camera.pitch = std::fmax(-1.5f, std::fmin(1.5f, camera.pitch - window.mouse_dy * 0.003f));
-            for (int v = 0; v < 3; v++) {
+            // The Godot player's controls (player.gd): mouse look while captured, WASD / arrows along the yaw, space up,
+            // shift down, the wheel scales the base speed, V cycles the views (1-3 pick one).
+            camera.yaw -= window.mouse_dx * MOUSE_SENSITIVITY;
+            camera.pitch = std::fmax(-PITCH_MAX, std::fmin(PITCH_MAX, camera.pitch - window.mouse_dy * MOUSE_SENSITIVITY));
+            base_speed *= std::pow(1.2f, float(window.wheel));
+            if (window.pressed(XK_v)) {
+                view = (view + 1) % VIEW_COUNT;
+                world.set_debug_view(view);
+            }
+            for (int v = 0; v < VIEW_COUNT; v++) {
                 if (window.pressed(XK_1 + unsigned(v))) {
-                    world.set_debug_view(v);
+                    view = v;
+                    world.set_debug_view(view);
                 }
             }
-            // Half the altitude per second (the player's), 5x with shift.
-            const double here[3] = { camera.pos.x, camera.pos.y, camera.pos.z };
-            const float speed = std::fmax(float(std::abs(world.sdf_at(here))) * 0.5f, 5.0f) * (window.held(XK_Shift_L) ? 5.0f : 1.0f) * dt;
-            const Float3 f = camera.forward();
-            const Float3 r = cross(f, Float3{ 0.0f, 1.0f, 0.0f }).normalized();
-            const float move_f = float(window.held('w')) - float(window.held('s'));
-            const float move_r = float(window.held('d')) - float(window.held('a'));
-            const float move_u = float(window.held('e')) - float(window.held('q'));
-            camera.pos.x += (f.x * move_f + r.x * move_r) * speed;
-            camera.pos.y += (f.y * move_f + move_u) * speed;
-            camera.pos.z += (f.z * move_f + r.z * move_r) * speed;
+            const auto held = [&](unsigned long p_a, unsigned long p_b) { return float(window.held(p_a) || window.held(p_b)); };
+            const float move_f = held(XK_w, XK_Up) - held(XK_s, XK_Down);
+            const float move_r = held(XK_d, XK_Right) - held(XK_a, XK_Left);
+            const float move_u = float(window.held(XK_space)) - held(XK_Shift_L, XK_Shift_R);
+            const Float3 f{ -std::sin(camera.yaw), 0.0f, -std::cos(camera.yaw) };
+            const Float3 r{ std::cos(camera.yaw), 0.0f, -std::sin(camera.yaw) };
+            Float3 direction{ f.x * move_f + r.x * move_r, move_u, f.z * move_f + r.z * move_r };
+            const float length = std::sqrt(dot(direction, direction));
+            if (length > 0.0f) {
+                // Kilometre-scale relief: FLY_RATE altitudes per second, at least the base speed; only the altitude
+                // reading is smoothed, in log space.
+                const double here[3] = { camera.pos.x, camera.pos.y, camera.pos.z };
+                const float altitude = std::fmax(float(std::abs(world.sdf_at(here))), 0.01f);
+                smoothed_altitude = smoothed_altitude <= 0.0f ? altitude
+                                                              : smoothed_altitude * std::pow(altitude / smoothed_altitude, 1.0f - std::exp(-dt / ALTITUDE_TAU));
+                const float step = std::fmax(base_speed, smoothed_altitude * FLY_RATE) * dt / length;
+                camera.pos.x += direction.x * step;
+                camera.pos.y += direction.y * step;
+                camera.pos.z += direction.z * step;
+            }
         }
 
         const Float3 forward = camera.forward();
