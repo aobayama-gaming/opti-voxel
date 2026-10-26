@@ -1,8 +1,8 @@
 #pragma once
 
-// The Dawn adapter's device: one instance, adapter, device and queue, headless (no surface).
+// The Dawn adapter's device: one instance, adapter, device and queue (native Dawn, or the browser's WebGPU in the web build).
 
-#include <dawn/webgpu_cpp.h>
+#include <webgpu/webgpu_cpp.h>
 
 namespace ov::dawn {
 

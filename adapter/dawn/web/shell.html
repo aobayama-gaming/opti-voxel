@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opti-voxel</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+  #log {
+    position: fixed; left: 0; bottom: 0; margin: 0; padding: 6px 10px; max-height: 40vh; overflow: hidden;
+    color: #eee; background: rgba(0, 0, 0, 0.55); font: 12px/1.35 monospace; white-space: pre-wrap; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1"></canvas>
+<pre id="log"></pre>
+<script>
+  // The viewer's flags from the URL: ?trees=1000000&upscale=fsr3 runs `ov_dawn --viewer --trees=1000000 --upscale=fsr3`;
+  // ?check (or frame-check, cascade-check) runs that check instead, its report in the console.
+  const log = document.getElementById('log');
+  const lines = [];
+  const show = (text) => {
+    lines.push(text);
+    if (lines.length > 3) lines.shift();
+    log.textContent = lines.join('\n');
+  };
+  const args = [];
+  for (const [key, value] of new URLSearchParams(location.search)) {
+    args.push(value === '' ? `--${key}` : `--${key}=${value}`);
+  }
+  if (!args.some((a) => /^--[a-z-]*check/.test(a))) {
+    args.unshift('--viewer');
+  }
+  var Module = {
+    arguments: args,
+    canvas: document.getElementById('canvas'),
+    print: (text) => { console.log(text); show(text); },
+    printErr: (text) => { console.error(text); show(text); },
+  };
+  if (!navigator.gpu) {
+    show('No WebGPU in this browser (Firefox 141+, Chrome 113+; on Linux Chrome needs chrome://flags/#enable-unsafe-webgpu).');
+  } else if (typeof WebAssembly.Suspending !== 'function') {
+    show('This browser has no JSPI (WebAssembly.Suspending): Chrome 137+ or Firefox 139+.');
+  }
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

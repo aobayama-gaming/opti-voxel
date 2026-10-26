@@ -2,7 +2,13 @@
 
 #include "dawn_device.hpp"
 #include "dawn_page_host.hpp"
+#ifdef __EMSCRIPTEN__
+#include "web_canvas.hpp"
+
+#include <emscripten.h>
+#else
 #include "x11_window.hpp"
+#endif
 
 #include "world.hpp"
 
@@ -10,8 +16,6 @@
 #include "ov/json.hpp"
 #include "ov/log.hpp"
 #include "ov/png.hpp"
-
-#include <X11/keysym.h>
 
 #include <chrono>
 #include <cmath>
@@ -165,7 +169,11 @@ bytes read_target(DawnContext &p_context, const wgpu::Texture &p_target, int p_w
 int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     gpu::set_local_device_factory(&DawnDevice::create_local); // the discoverer's and the field's devices
     const bool shot = !p_options.shot.empty();
+#ifdef __EMSCRIPTEN__
+    WebCanvas window;
+#else
     X11Window window;
+#endif
     wgpu::Surface surface;
     wgpu::TextureFormat format = wgpu::TextureFormat::RGBA8Unorm;
     if (!shot) {
@@ -280,20 +288,20 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
             camera.yaw -= window.mouse_dx * MOUSE_SENSITIVITY;
             camera.pitch = std::fmax(-PITCH_MAX, std::fmin(PITCH_MAX, camera.pitch - window.mouse_dy * MOUSE_SENSITIVITY));
             base_speed *= std::pow(1.2f, float(window.wheel));
-            if (window.pressed(XK_v)) {
+            if (window.pressed(KEY_V)) {
                 view = (view + 1) % VIEW_COUNT;
                 world.set_debug_view(view);
             }
             for (int v = 0; v < VIEW_COUNT; v++) {
-                if (window.pressed(XK_1 + unsigned(v))) {
+                if (window.pressed(KEY_1 + unsigned(v))) {
                     view = v;
                     world.set_debug_view(view);
                 }
             }
             const auto held = [&](unsigned long p_a, unsigned long p_b) { return float(window.held(p_a) || window.held(p_b)); };
-            const float move_f = held(XK_w, XK_Up) - held(XK_s, XK_Down);
-            const float move_r = held(XK_d, XK_Right) - held(XK_a, XK_Left);
-            const float move_u = float(window.held(XK_space)) - held(XK_Shift_L, XK_Shift_R);
+            const float move_f = held(KEY_W, KEY_UP) - held(KEY_S, KEY_DOWN);
+            const float move_r = held(KEY_D, KEY_RIGHT) - held(KEY_A, KEY_LEFT);
+            const float move_u = float(window.held(KEY_SPACE)) - held(KEY_SHIFT_L, KEY_SHIFT_R);
             const Float3 f{ -std::sin(camera.yaw), 0.0f, -std::cos(camera.yaw) };
             const Float3 r{ std::cos(camera.yaw), 0.0f, -std::sin(camera.yaw) };
             Float3 direction{ f.x * move_f + r.x * move_r, move_u, f.z * move_f + r.z * move_r };
@@ -311,6 +319,11 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
                 camera.pos.z += direction.z * step;
             }
         }
+#ifdef __EMSCRIPTEN__
+        if (shot) {
+            emscripten_sleep(0); // the browser's turn: the GPU's callbacks only land between tasks
+        }
+#endif
         if (!shot || settled >= 0) { // a shot flies from the completed load
             camera.pos.x -= std::sin(camera.yaw) * p_options.fly_speed * dt;
             camera.pos.z -= std::cos(camera.yaw) * p_options.fly_speed * dt;
@@ -356,7 +369,9 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
 
         if (!shot) {
             section = Clock::now();
-            surface.Present();
+            if (window.presents()) {
+                surface.Present();
+            }
             frame_split[2] += ms_since(section);
             present_ms += frame_split[2];
             second_frames++;

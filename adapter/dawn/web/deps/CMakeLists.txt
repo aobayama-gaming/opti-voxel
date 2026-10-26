@@ -1,0 +1,16 @@
+# Dawn (emdawnwebgpu + Tint) for Emscripten with SPIRV-Tools, which Dawn's own CMake skips under Emscripten but Tint's
+# SPIR-V reader needs.
+cmake_minimum_required(VERSION 3.22)
+project(tint_wasm C CXX)
+set(DAWN_SRC "" CACHE PATH "Dawn source, with its dependencies fetched (web/build.sh passes OV_DAWN_SRC)")
+if(NOT EXISTS "${DAWN_SRC}/CMakeLists.txt")
+    message(FATAL_ERROR "No Dawn checkout at DAWN_SRC=${DAWN_SRC}")
+endif()
+add_subdirectory(${DAWN_SRC}/third_party/spirv-headers/src spirv-headers)
+set(SPIRV_SKIP_TESTS ON CACHE BOOL "" FORCE)
+set(SPIRV_SKIP_EXECUTABLES ON CACHE BOOL "" FORCE)
+set(SKIP_SPIRV_TOOLS_INSTALL ON CACHE BOOL "" FORCE)
+set(SPIRV_WERROR OFF CACHE BOOL "" FORCE)
+set(SPIRV-Headers_SOURCE_DIR ${DAWN_SRC}/third_party/spirv-headers/src)
+add_subdirectory(${DAWN_SRC}/third_party/spirv-tools/src spirv-tools EXCLUDE_FROM_ALL)
+add_subdirectory(${DAWN_SRC} dawn EXCLUDE_FROM_ALL)

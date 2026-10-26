@@ -39,6 +39,37 @@ adapter/dawn/out/ov_dawn --check
 Dawn is built from github.com/google/dawn and installed with `cmake --install <build> --prefix <prefix>`, glslang from
 github.com/KhronosGroup/glslang the same way. Without `OV_DAWN_DIR` only the core library (`ov_core`) builds.
 
+## In a browser
+
+The same viewer, compiled to WebAssembly against the browser's WebGPU (emdawnwebgpu), with glslang and Tint linked into
+the wasm: the engine's GLSL goes to SPIR-V and then WGSL at run time, FSR's vendored SPIR-V too.
+
+```
+adapter/dawn/web/build.sh                 # once: glslang, emdawnwebgpu, Tint, SPIR-V Tools for wasm (OV_WEB_DEPS)
+python3 adapter/dawn/web/serve.py         # http://127.0.0.1:8095/ov_dawn.html
+```
+
+The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&trees=1000000&tree_area=5000` is `--viewer
+--upscale=fsr3 --pixelate=2 --trees=1000000 --tree_area=5000`; `?check` (or `frame-check`, `cascade-check`) runs that
+check and `?shot=/x.png` renders offscreen into the page's file system (`Module.FS.readFile('/x.png')`). A click locks
+the mouse, Escape frees it. `build.sh` needs emsdk (`EMSDK`, Emscripten 4.0.11 tested) and a Dawn checkout with its
+dependencies (`OV_DAWN_SRC`); `web/deps` is the CMake project that adds the SPIRV-Tools Dawn's CMake leaves out under
+Emscripten.
+
+What differs from native:
+- **The blocking waits** (device creation, error scopes, readbacks, `sync`) suspend the wasm (JSPI: Firefox 139+,
+  Chrome 137+); each frame awaits the browser's animation frame (`WebCanvas`).
+- **No threads yet**: the core's `InlineExecutor`, so loads are single-threaded (the 1M forest: 43 s in Chrome against
+  4.7 s native, 87 s in Firefox, which renders at the output size: no FSR there). Threads are next (pthreads, served
+  with COOP/COEP).
+- **Push constants**: browsers have no immediates (Firefox) or not in the WGSL Tint writes: `compile_glsl` turns the
+  push block into a uniform at set 1 and `DawnDevice` feeds it from a ring buffer, one 256-byte slot per dispatch.
+- **FSR 3** needs `texture-formats-tier2`: Chrome has it, Firefox not yet (pixelate only, the 3D at the output size).
+
+Tested headless here (Playwright): Firefox 156 draws the viewer at 60 fps; Chrome 154's canvas loses the device on this
+laptop's NVIDIA driver (a bare WebGPU canvas page does too: Chrome's shared images, not the engine), while its offscreen
+`?shot=` renders and matches Firefox and native Dawn pixel for pixel on the default scene.
+
 Stock Tint drops SPIR-V's NoContraction (GLSL `precise`), so the driver fuses multiply-adds and the exact noise
 differs from the CPU's by a few ulps: the check's noise part fails until that is fixed. `--frame-check` also fails on
 the `base_at` probes' duplicate definition, as `tools/frame_test.sh` does on dev.

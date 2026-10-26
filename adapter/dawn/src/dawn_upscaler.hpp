@@ -11,7 +11,7 @@
 
 #include "fsr3.hpp"
 
-#include <dawn/webgpu_cpp.h>
+#include <webgpu/webgpu_cpp.h>
 
 #include <memory>
 

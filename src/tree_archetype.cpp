@@ -69,7 +69,6 @@ constexpr double GOLDEN_ANGLE = 2.399963229728653;
 constexpr double MIN_RADIUS = 0.5;
 // A stem of order n is split at most MAX_REFINE - n levels deep: the trunk in up to 8 segments, limbs 4, twigs 2.
 constexpr int MAX_REFINE = 3;
-constexpr int MAX_ORDER = 2;
 // Rotation components smaller than this are 0 (keeps every product of the program in the exact domain).
 constexpr double ROTATION_FLUSH = 0x1p-24;
 

@@ -1,8 +1,9 @@
 #pragma once
 
 // ov::gpu::Device on Dawn. Commands go into one encoder, submitted when an update must land between two dispatches,
-// a readback is asked, or sync() waits. Readbacks are delivered by sync() or poll(). Timestamps: none yet. The thread
-// that uses it is its thread: post() runs at once.
+// a readback is asked, or sync() waits. Readbacks are delivered by sync() or poll(). Push constants are immediates or,
+// without them (a browser), a uniform at set 1. Timestamps: none yet. The thread that uses it is its thread: post()
+// runs at once.
 
 #include "dawn_context.hpp"
 #include "glsl_compiler.hpp"
@@ -86,6 +87,13 @@ private:
     std::map<uint64_t, Entry> entries;
     std::vector<std::unique_ptr<Pending>> pending;
     uint32_t push_size_limit = 0;
+    // Without immediates (a browser): each dispatch's push data in a slot of push_ring, written before its submission.
+    bool immediates = false;
+    uint32_t push_stride = 0;
+    wgpu::BindGroupLayout push_layout;
+    wgpu::Buffer push_ring;
+    wgpu::BindGroup push_group;
+    bytes push_data;
     wgpu::Buffer zeros; // clear_texture's source: WebGPU zero-initialises buffers; grown to the largest clear
 
     gpu::Handle _add(Entry p_entry);

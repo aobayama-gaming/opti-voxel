@@ -17,9 +17,16 @@ std::string text(wgpu::StringView p_view) {
 } // namespace
 
 bool DawnContext::initialize() {
-    const wgpu::InstanceFeatureName features[] = { wgpu::InstanceFeatureName::ShaderSourceSPIRV, wgpu::InstanceFeatureName::TimedWaitAny };
+    // The waits below block (a browser suspends the wasm meanwhile: JSPI). Only native Dawn takes SPIR-V; the web build
+    // hands it WGSL (shader_module.hpp).
+    const wgpu::InstanceFeatureName features[] = {
+        wgpu::InstanceFeatureName::TimedWaitAny,
+#ifndef __EMSCRIPTEN__
+        wgpu::InstanceFeatureName::ShaderSourceSPIRV,
+#endif
+    };
     wgpu::InstanceDescriptor instance_desc{};
-    instance_desc.requiredFeatureCount = 2;
+    instance_desc.requiredFeatureCount = sizeof(features) / sizeof(features[0]);
     instance_desc.requiredFeatures = features;
     instance = wgpu::CreateInstance(&instance_desc);
     OV_ERR_FAIL_COND_V_MSG(!instance, false, "Dawn: no instance.");
@@ -53,6 +60,12 @@ bool DawnContext::initialize() {
         device_desc.requiredFeatureCount = 1;
         device_desc.requiredFeatures = &tier2;
     }
+    device_desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
+            [](const wgpu::Device &, wgpu::DeviceLostReason p_reason, wgpu::StringView p_message) {
+                if (p_reason != wgpu::DeviceLostReason::Destroyed) {
+                    OV_ERR_PRINT(ov::format("Dawn: device lost (%d): %s", int(p_reason), text(p_message)));
+                }
+            });
     device_desc.SetUncapturedErrorCallback([](const wgpu::Device &, wgpu::ErrorType p_type, wgpu::StringView p_message) {
         OV_ERR_PRINT(ov::format("Dawn error (%d): %s", int(p_type), text(p_message)));
     });

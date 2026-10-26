@@ -1,5 +1,7 @@
 #include "dawn_page_host.hpp"
 
+#include "shader_module.hpp"
+
 #include "page_format.hpp"
 #include "quad_page_pool.hpp"
 
@@ -100,12 +102,7 @@ void main() {
 wgpu::ShaderModule make_render_module(const wgpu::Device &p_device, const std::string &p_glsl, ShaderStage p_stage) {
     const CompiledShader shader = compile_glsl(p_glsl, p_stage);
     OV_ERR_FAIL_COND_V_MSG(!shader.error.empty(), wgpu::ShaderModule(), "Dawn: shader: " + shader.error);
-    wgpu::ShaderSourceSPIRV spirv{};
-    spirv.codeSize = uint32_t(shader.spirv.size());
-    spirv.code = shader.spirv.data();
-    wgpu::ShaderModuleDescriptor desc{};
-    desc.nextInChain = &spirv;
-    return p_device.CreateShaderModule(&desc);
+    return create_spirv_module(p_device, shader.spirv.data(), shader.spirv.size(), "render");
 }
 
 DawnPageHost::DawnPageHost(DawnDevice &p_device, wgpu::TextureFormat p_color_format) :

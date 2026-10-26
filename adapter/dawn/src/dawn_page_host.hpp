@@ -4,7 +4,7 @@
 
 #include "page_host.hpp"
 
-#include <dawn/webgpu_cpp.h>
+#include <webgpu/webgpu_cpp.h>
 
 #include <string>
 #include <vector>

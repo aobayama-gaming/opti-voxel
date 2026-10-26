@@ -69,3 +69,4 @@ bench/results/
 
 # Dawn adapter build
 adapter/dawn/out/
+adapter/dawn/out-web/
