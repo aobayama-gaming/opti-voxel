@@ -11,6 +11,8 @@ src/ov/log.hpp
 src/ov/clock.hpp
 src/ov/executor.hpp
 src/ov/executor.cpp
+src/ov/thread_pool_executor.hpp
+src/ov/thread_pool_executor.cpp
 src/ov/math.hpp
 src/world_coord.hpp
 src/subcube.hpp

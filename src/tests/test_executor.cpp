@@ -2,6 +2,7 @@
 
 #include "godot_executor.hpp"
 #include "ov/executor.hpp"
+#include "ov/thread_pool_executor.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -10,7 +11,7 @@
 #include <vector>
 
 // The core's executor (ov/executor.hpp): the inline backend's contract (a task never runs on submit, a worker steps
-// only after a wake), the threaded worker, and the Godot backend the engine installs.
+// only after a wake), the threaded worker, the Godot backend the engine installs and the std::thread pool (Dawn's).
 
 namespace {
 
@@ -133,6 +134,61 @@ TEST_CASE("GodotExecutor: tasks and loops on the worker pool") {
         static void run(void *p_ctx, uint32_t p_i) { (*static_cast<Ctx *>(p_ctx)->seen)[p_i]++; }
     } ctx{ &seen };
     e.parallel_for(1000, "test", &Ctx::run, &ctx);
+    int once = 0;
+    for (const std::atomic<int> &s : seen) {
+        once += s.load() == 1;
+    }
+    CHECK(once == 1000);
+}
+
+TEST_CASE("ov::ThreadPoolExecutor: tasks, loops, LOW under its cap, waits from inside the pool") {
+    ov::ThreadPoolExecutor e(4);
+    CHECK(e.threaded());
+    CHECK(e.concurrency(ov::Priority::HIGH) == 4);
+    CHECK(e.concurrency(ov::Priority::LOW) == 2);
+    std::atomic<int> sum{ 0 };
+    std::atomic<int> low_now{ 0 };
+    std::atomic<int> low_peak{ 0 };
+    std::vector<ov::TaskId> ids;
+    for (int i = 1; i <= 16; i++) {
+        const bool low = i % 2;
+        ids.push_back(e.submit(
+                [&, i, low] {
+                    if (low) {
+                        const int now = ++low_now;
+                        int peak = low_peak.load();
+                        while (now > peak && !low_peak.compare_exchange_weak(peak, now)) {
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                        low_now--;
+                    }
+                    sum += i;
+                },
+                low ? ov::Priority::LOW : ov::Priority::HIGH, "test"));
+    }
+    for (const ov::TaskId id : ids) {
+        e.wait(id);
+    }
+    CHECK(sum == 136);
+    // The waits may run queued LOW tasks on this thread too: at most the cap plus the waiter.
+    CHECK(low_peak <= 3);
+
+    // One thread: a task waiting on another it submitted, and a parallel_for inside a task, run instead of blocking.
+    ov::ThreadPoolExecutor one(1);
+    std::vector<std::atomic<int>> seen(1000);
+    struct Ctx {
+        std::vector<std::atomic<int>> *seen;
+        static void run(void *p_ctx, uint32_t p_i) { (*static_cast<Ctx *>(p_ctx)->seen)[p_i]++; }
+    } ctx{ &seen };
+    std::atomic<int> inner{ 0 };
+    const ov::TaskId outer = one.submit(
+            [&] {
+                one.wait(one.submit([&inner] { inner++; }, ov::Priority::HIGH, "inner"));
+                one.parallel_for(1000, "test", &Ctx::run, &ctx);
+            },
+            ov::Priority::HIGH, "outer");
+    one.wait(outer);
+    CHECK(inner == 1);
     int once = 0;
     for (const std::atomic<int> &s : seen) {
         once += s.load() == 1;

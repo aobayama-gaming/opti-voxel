@@ -202,8 +202,25 @@ void DawnDevice::update_texture(gpu::Texture p_texture, const void *p_data, uint
 void DawnDevice::clear_texture(gpu::Texture p_texture) {
     const Entry *entry = _get(p_texture);
     OV_ERR_FAIL_COND_MSG(entry == nullptr || !entry->texture, "DawnDevice: clear of an unknown texture.");
-    const bytes zeros(size_t(entry->width) * entry->height * 8, 0);
-    _write_texture(*entry, zeros.data());
+    // A GPU copy in the command stream (the page textures are MBs: uploading zeros from the CPU cost the viewer
+    // 20-70 ms frames).
+    const uint64_t row_stride = align256(uint64_t(entry->width) * 8);
+    const uint64_t size = row_stride * entry->height;
+    if (!zeros || zeros.GetSize() < size) {
+        wgpu::BufferDescriptor desc{};
+        desc.label = "zeros";
+        desc.size = size;
+        desc.usage = wgpu::BufferUsage::CopySrc;
+        zeros = context.device.CreateBuffer(&desc);
+    }
+    wgpu::TexelCopyBufferInfo src{};
+    src.buffer = zeros;
+    src.layout.bytesPerRow = uint32_t(row_stride);
+    src.layout.rowsPerImage = entry->height;
+    wgpu::TexelCopyTextureInfo dst{};
+    dst.texture = entry->texture;
+    const wgpu::Extent3D extent{ entry->width, entry->height, 1 };
+    _encoder().CopyBufferToTexture(&src, &dst, &extent);
 }
 
 void DawnDevice::copy_texture(gpu::Texture p_from, gpu::Texture p_to, uint32_t p_from_x, uint32_t p_from_y, uint32_t p_to_x, uint32_t p_to_y,

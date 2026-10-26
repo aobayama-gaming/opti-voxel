@@ -9,7 +9,7 @@
 //   ov_dawn --viewer [options]        the terrain in a window, the Godot player's controls (README.md)
 //   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
 // Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
-// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
+// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -19,6 +19,7 @@
 #include "gpu_device_check.hpp"
 #include "ov/json.hpp"
 #include "ov/log.hpp"
+#include "ov/thread_pool_executor.hpp"
 #include "viewer.hpp"
 
 #include <cstdio>
@@ -38,6 +39,14 @@ bool flag(const char *p_arg, const char *p_name, std::string &r_value) {
     return true;
 }
 
+// The core's tasks and workers on threads (Godot's equivalent: register_types installs GodotExecutor), for main's
+// whole run: the engine objects are gone before it ends.
+struct InstalledPool {
+    ov::ThreadPoolExecutor pool;
+    InstalledPool() { ov::set_executor(&pool); }
+    ~InstalledPool() { ov::set_executor(nullptr); }
+};
+
 int print_report(const ov::Value &p_report) {
     std::printf("%s\n", ov::to_json(p_report).c_str());
     return p_report["ok"].as_bool() ? 0 : 1;
@@ -47,6 +56,7 @@ int print_report(const ov::Value &p_report) {
 
 int main(int argc, char **argv) {
     ov::log_level() = ov::LOG_INFO;
+    const InstalledPool installed;
     ov::dawn::DawnContext context;
     if (!context.initialize()) {
         return 1;
@@ -88,6 +98,8 @@ int main(int argc, char **argv) {
             viewer.yaw_deg = std::strtof(value.c_str(), nullptr);
         } else if (flag(argv[i], "--view", value)) {
             viewer.view = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--fly", value)) {
+            viewer.fly_speed = std::strtof(value.c_str(), nullptr);
         } else if (flag(argv[i], "--max_frames", value)) {
             viewer.max_frames = std::atoi(value.c_str());
         } else if (flag(argv[i], "--upscale", value)) {

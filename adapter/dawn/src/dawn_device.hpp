@@ -86,6 +86,7 @@ private:
     std::map<uint64_t, Entry> entries;
     std::vector<std::unique_ptr<Pending>> pending;
     uint32_t push_size_limit = 0;
+    wgpu::Buffer zeros; // clear_texture's source: WebGPU zero-initialises buffers; grown to the largest clear
 
     gpu::Handle _add(Entry p_entry);
     gpu::Buffer _create_buffer(wgpu::BufferUsage p_usage, uint64_t p_size, const void *p_data);

@@ -246,6 +246,15 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     int view = p_options.view;
     float base_speed = BASE_SPEED;
     float smoothed_altitude = 0.0f; // 0: not read yet
+    // Over the last printed second: the worst frame and where the frames' time went (ms).
+    float worst_ms = 0.0f;
+    double worst_split[3] = {}; // the worst frame's world, draw, present
+    double frame_split[3] = {}; // the last frame's
+    double world_ms = 0.0;
+    double draw_ms = 0.0;
+    double present_ms = 0.0;
+    int second_frames = 0;
+    const auto ms_since = [](Clock::time_point p_from) { return std::chrono::duration<double, std::milli>(Clock::now() - p_from).count(); };
     while (true) {
         const Clock::time_point now = Clock::now();
         const float dt = std::chrono::duration<float>(now - last).count();
@@ -298,11 +307,16 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
                 camera.pos.y += direction.y * step;
                 camera.pos.z += direction.z * step;
             }
+            camera.pos.x -= std::sin(camera.yaw) * p_options.fly_speed * dt;
+            camera.pos.z -= std::cos(camera.yaw) * p_options.fly_speed * dt;
         }
 
         const Float3 forward = camera.forward();
+        Clock::time_point section = Clock::now();
         world.frame(&camera.pos, &forward);
         device.poll(); // the meshers' work submitted before the draw reads the pages
+        frame_split[0] = ms_since(section);
+        world_ms += frame_split[0];
 
         PageView view;
         camera.view_proj(float(width) / float(height), view.view_proj);
@@ -319,7 +333,9 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
         if (shot) {
             color = offscreen.CreateView();
         } else {
+            section = Clock::now();
             surface.GetCurrentTexture(&frame_texture);
+            frame_split[2] = ms_since(section);
             if (frame_texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal &&
                     frame_texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) {
                 configure(width, height);
@@ -327,16 +343,34 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
             }
             color = frame_texture.texture.CreateView();
         }
+        section = Clock::now();
         draw_frame(p_context.device, p_context.queue, color, depth.CreateView(), pages, view, upscaler.get(), dt);
+        frame_split[1] = ms_since(section);
+        draw_ms += frame_split[1];
         frames++;
 
         if (!shot) {
+            section = Clock::now();
             surface.Present();
-            if (std::chrono::duration<float>(now - last_print).count() > 1.0f) {
-                last_print = now;
-                std::printf("frame %d  pages drawn %d  pending chunks %lld  camera %.0f %.0f %.0f\n", frames, pages.drawn_pages(),
-                        (long long)world.pending_chunk_count(), double(camera.pos.x), double(camera.pos.y), double(camera.pos.z));
+            frame_split[2] += ms_since(section);
+            present_ms += frame_split[2];
+            second_frames++;
+            const float frame_ms = float(ms_since(now)); // input and the 3D included
+            if (frame_ms > worst_ms) {
+                worst_ms = frame_ms;
+                std::memcpy(worst_split, frame_split, sizeof(worst_split));
+            }
+            const float second = std::chrono::duration<float>(now - last_print).count();
+            if (second > 1.0f) {
+                const double n = double(second_frames);
+                std::printf("fps %.0f  worst %.1f ms (world %.1f draw %.1f present %.1f)  per frame: world %.1f draw %.1f present %.1f ms  pages drawn %d  pending chunks %lld  camera %.0f %.0f %.0f\n",
+                        n / double(second), double(worst_ms), worst_split[0], worst_split[1], worst_split[2], world_ms / n, draw_ms / n, present_ms / n, pages.drawn_pages(), (long long)world.pending_chunk_count(),
+                        double(camera.pos.x), double(camera.pos.y), double(camera.pos.z));
                 std::fflush(stdout);
+                last_print = now;
+                worst_ms = 0.0f;
+                world_ms = draw_ms = present_ms = 0.0;
+                second_frames = 0;
             }
             continue;
         }
