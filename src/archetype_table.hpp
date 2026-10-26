@@ -6,8 +6,7 @@
 #include "instance_moments.hpp"
 #include "material_library.hpp"
 #include "ov/bytes.hpp"
-
-#include <godot_cpp/variant/packed_byte_array.hpp>
+#include "ov/math.hpp"
 
 #include <functional>
 #include <memory>
@@ -62,7 +61,7 @@ Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, const VoxelPos 
 // A library type: a program in the record's frame and a bounds function of its parameters.
 struct TableDef {
     Program program;
-    String name;
+    ov::str name;
     int param_count = 0;
     // Local (unrotated) box and Lipschitz bound (voxels) for the given params.
     std::function<void(const float *p_params, Float3 &r_lo, Float3 &r_hi, float &r_lipschitz)> bounds;
@@ -112,7 +111,7 @@ struct ErodeRule {
 void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, const ErodeRule &p_rule = ErodeRule());
 // The erosion at p_lod, in voxels: what both back-ends add to the record's distance.
 inline float band_erosion(float p_erode, float p_erode_from, int p_lod) {
-    return p_erode * MAX(ExactNoise::exact_pow2(p_lod) - p_erode_from, 0.0f);
+    return p_erode * ov::max(ExactNoise::exact_pow2(p_lod) - p_erode_from, 0.0f);
 }
 
 // How deep inside its shape a point can be, plus k: half its box's smallest side times L. Outside the box the
@@ -222,7 +221,7 @@ inline constexpr float MAX_RECORD_LIPSCHITZ = 1024.0f;
 // above MAX_RECORD_LIPSCHITZ, or a box (under any rotation) plus twice the smooth radius k wider than
 // p_max_extent voxels. Checked before finish_record, whose int64 / int32 conversions of the box assume it,
 // and whose index places one entry per top-LOD node the box touches.
-String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent);
+ov::str record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent);
 
 // How a table finishes its records: its skirt depth (voxels), the band rule on or off and its erosion (SDFTable's
 // --instance_band / --instance_erode / --instance_resolve).

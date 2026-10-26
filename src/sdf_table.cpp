@@ -1,10 +1,11 @@
 #include "sdf_table.hpp"
 
-#include "godot_conv.hpp"
 #include "moment_layers.hpp"
+#include "ov/format.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
+#include "ov/value.hpp"
 #include "parallel_for.hpp"
-
-#include <godot_cpp/classes/time.hpp>
 
 #include <algorithm>
 #include <array>
@@ -21,10 +22,10 @@ int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_
     if (!library || p_type < 0 || p_type >= library->size()) {
         return -1;
     }
-    const String error = edit_error(p_rotation, p_params, p_op, p_k);
-    ERR_FAIL_COND_V_MSG(!error.is_empty(), -1, "add_instance: " + error);
-    ERR_FAIL_COND_V_MSG(records.size() >= gpu.table_capacity(), -1,
-            vformat("add_instance: the table is full (%d instances, removed ones included).", gpu.table_capacity()));
+    const ov::str error = edit_error(p_rotation, p_params, p_op, p_k);
+    OV_ERR_FAIL_COND_V_MSG(!error.empty(), -1, "add_instance: " + error);
+    OV_ERR_FAIL_COND_V_MSG(records.size() >= gpu.table_capacity(), -1,
+            ov::format("add_instance: the table is full (%d instances, removed ones included).", gpu.table_capacity()));
     TableRecord rec;
     rec.def = uint8_t(p_type);
     rec.op = Combine(p_op);
@@ -36,8 +37,8 @@ int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_
     if (p_params) {
         std::copy(p_params, p_params + 8, rec.params);
     }
-    const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
-    ERR_FAIL_COND_V_MSG(!fit.is_empty(), -1, "add_instance: " + fit);
+    const ov::str fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
+    OV_ERR_FAIL_COND_V_MSG(!fit.empty(), -1, "add_instance: " + fit);
     finish_record(rec);
     records.push_back(rec, version + 1);
     finish_edit(rec, rec, record_box(rec), records.size() - 1);
@@ -48,7 +49,7 @@ bool SDFTable::remove_instance(int p_id) {
     if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
         return false;
     }
-    ERR_FAIL_COND_V_MSG(records[p_id].op == Combine::ACCUM, false, "remove_instance: a moment blob is the table's, not an instance.");
+    OV_ERR_FAIL_COND_V_MSG(records[p_id].op == Combine::ACCUM, false, "remove_instance: a moment blob is the table's, not an instance.");
     TableRecord rec = records[p_id];
     const VoxelBox region = record_box(rec);
     rec.removed = true;
@@ -61,9 +62,9 @@ bool SDFTable::move_instance(int p_id, const VoxelPos &p_anchor, const float *p_
     if (p_id < 0 || p_id >= int(records.size()) || records[p_id].removed) {
         return false;
     }
-    ERR_FAIL_COND_V_MSG(records[p_id].op == Combine::ACCUM, false, "move_instance: a moment blob is the table's, not an instance.");
-    const String error = edit_error(p_rotation, nullptr, 0, 0.0f);
-    ERR_FAIL_COND_V_MSG(!error.is_empty(), false, "move_instance: " + error);
+    OV_ERR_FAIL_COND_V_MSG(records[p_id].op == Combine::ACCUM, false, "move_instance: a moment blob is the table's, not an instance.");
+    const ov::str error = edit_error(p_rotation, nullptr, 0, 0.0f);
+    OV_ERR_FAIL_COND_V_MSG(!error.empty(), false, "move_instance: " + error);
     TableRecord rec = records[p_id];
     const TableRecord before = rec;
     const VoxelBox old_box = record_box(rec);
@@ -71,8 +72,8 @@ bool SDFTable::move_instance(int p_id, const VoxelPos &p_anchor, const float *p_
     if (p_rotation) {
         std::copy(p_rotation, p_rotation + 9, rec.rotation);
     }
-    const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
-    ERR_FAIL_COND_V_MSG(!fit.is_empty(), false, "move_instance: " + fit);
+    const ov::str fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
+    OV_ERR_FAIL_COND_V_MSG(!fit.empty(), false, "move_instance: " + fit);
     finish_record(rec);
     records.set(p_id, rec, version + 1);
     finish_edit(before, rec, old_box.merged(record_box(rec)), uint32_t(p_id));
@@ -97,7 +98,7 @@ bool SDFTable::edit_affects_chunk(const ChunkId &p_chunk) const {
         grown.margin_c = r.margin_c;
         grown.anchor = r.box.lo;
         for (int a = 0; a < 3; a++) {
-            grown.box_hi[a] = int32_t(MIN<int64_t>(r.box.hi[a] - r.box.lo[a], INT32_MAX));
+            grown.box_hi[a] = int32_t(ov::min<int64_t>(r.box.hi[a] - r.box.lo[a], INT32_MAX));
         }
         if (influence_meets(grown, lod, lo, hi)) {
             return true;
@@ -106,17 +107,17 @@ bool SDFTable::edit_affects_chunk(const ChunkId &p_chunk) const {
     return false;
 }
 
-String SDFTable::edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k) {
+ov::str SDFTable::edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k) {
     auto bad = [](float p_v) { return !std::isfinite(p_v) || (p_v != 0.0f && std::fabs(p_v) < FLT_MIN); };
     if (p_op < int(Combine::UNION) || p_op > int(Combine::SMOOTH_SUBTRACT)) {
-        return vformat("op %d is not 0 union, 1 smooth union, 2 subtract or 3 smooth subtract.", p_op);
+        return ov::format("op %d is not 0 union, 1 smooth union, 2 subtract or 3 smooth subtract.", p_op);
     }
     if (bad(p_k) || p_k < 0.0f) {
         return "k must be finite and >= 0.";
     }
     for (int i = 0; p_params && i < 8; i++) {
         if (bad(p_params[i])) {
-            return vformat("param %d is not a finite normal float.", i);
+            return ov::format("param %d is not a finite normal float.", i);
         }
     }
     if (p_rotation) {
@@ -132,7 +133,7 @@ String SDFTable::edit_error(const float *p_rotation, const float *p_params, int 
             }
         }
     }
-    return String();
+    return ov::str();
 }
 
 void SDFTable::publish(const std::shared_ptr<const InstanceSnapshot> &p_snapshot, const VoxelBox &p_region) {
@@ -147,7 +148,7 @@ void SDFTable::swap_snapshot(const std::shared_ptr<const InstanceSnapshot> &p_sn
 
 int64_t SDFTable::max_instance_extent() const {
     const int64_t top_span = int64_t(param.chunk_voxel_dimension()) << (lod_count - 1);
-    return MIN(4 * top_span, int64_t(1) << 29);
+    return ov::min(4 * top_span, int64_t(1) << 29);
 }
 
 void SDFTable::finish_record(TableRecord &r_rec) const {
@@ -157,7 +158,7 @@ void SDFTable::finish_record(TableRecord &r_rec) const {
 void SDFTable::finish_edit(const TableRecord &p_before, const TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id) {
     // The LODs the edit can change: below the larger of the record's max_lod before and after it; then the moment
     // blobs it changes, each at its layer's LOD.
-    edit_regions.assign(1, EditRegion{ p_region, MAX(p_before.k, p_after.k), MAX(p_before.margin_c, p_after.margin_c), 0, MAX(p_before.max_lod, p_after.max_lod) });
+    edit_regions.assign(1, EditRegion{ p_region, ov::max(p_before.k, p_after.k), ov::max(p_before.margin_c, p_after.margin_c), 0, ov::max(p_before.max_lod, p_after.max_lod) });
     std::vector<uint32_t> ids{ p_id };
     update_moment_blobs(p_id, ids);
     VoxelBox all = p_region;
@@ -291,7 +292,7 @@ void SDFTable::ground_field_batch(const VoxelPos *p_voxels, const int *p_lods, i
         for (int i = 0; i < p_count; i++) {
             if (!ExactNoise::same_bits(r_out[i], want[i])) {
                 if (differing++ == 0) {
-                    ERR_PRINT(vformat("FieldGPU: voxel %s at LOD %d: GPU (%s %s %s %s), CPU (%s %s %s %s).", godot_str(p_voxels[i]), p_lods[i], r_out[i].x, r_out[i].y,
+                    OV_ERR_PRINT(ov::format("FieldGPU: voxel %s at LOD %d: GPU (%s %s %s %s), CPU (%s %s %s %s).", WorldCoord::to_string(p_voxels[i]), p_lods[i], r_out[i].x, r_out[i].y,
                             r_out[i].z, r_out[i].w, want[i].x, want[i].y, want[i].z, want[i].w));
                 }
                 r_out[i] = want[i]; // the walk goes on with the oracle's bits
@@ -302,13 +303,13 @@ void SDFTable::ground_field_batch(const VoxelPos *p_voxels, const int *p_lods, i
     }
 }
 
-Dictionary SDFTable::walk_gpu_stats() const {
+ov::Value SDFTable::walk_gpu_stats() const {
     const std::shared_ptr<FieldGPU> attached = std::atomic_load(&field_gpu);
     const std::shared_ptr<FieldGPU> gpu = attached ? attached : field_gpu_starting;
     if (!gpu) {
-        return Dictionary();
+        return ov::Value::object();
     }
-    Dictionary d = gpu->get_stats();
+    ov::Value d = gpu->get_stats();
     d["verified_points"] = verified_points.load();
     d["verify_differences"] = verify_differences.load();
     return d;
@@ -370,7 +371,7 @@ void SDFTable::update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids) 
             }
             continue;
         }
-        ERR_CONTINUE_MSG(records.size() >= gpu.table_capacity(), "SDFTable: a moment blob left out: the table is full.");
+        OV_ERR_CONTINUE_MSG(records.size() >= gpu.table_capacity(), "SDFTable: a moment blob left out: the table is full.");
         add_blob_record(key, rec);
         TableRecord none = rec;
         none.removed = true;
@@ -379,7 +380,7 @@ void SDFTable::update_moment_blobs(uint32_t p_id, std::vector<uint32_t> &r_ids) 
 }
 
 bool SDFTable::blob_fits(const TableRecord &p_rec) const {
-    return record_fit_error((*library)[p_rec.def], p_rec, max_instance_extent()).is_empty() && records.size() <= uint32_t(SDFGpuTable::LIST_ID_MASK);
+    return record_fit_error((*library)[p_rec.def], p_rec, max_instance_extent()).empty() && records.size() <= uint32_t(SDFGpuTable::LIST_ID_MASK);
 }
 
 void SDFTable::add_blob_record(const BlobKey &p_key, const TableRecord &p_rec) {
@@ -393,7 +394,7 @@ void SDFTable::blob_changed(uint32_t p_id, const TableRecord &p_old, const Table
     if (!p_new.removed) {
         box = box.merged(record_box(p_new));
     }
-    edit_regions.push_back(EditRegion{ box, 0.0f, MAX(p_old.margin_c, p_new.margin_c), p_lod, p_lod + 1 });
+    edit_regions.push_back(EditRegion{ box, 0.0f, ov::max(p_old.margin_c, p_new.margin_c), p_lod, p_lod + 1 });
     r_ids.push_back(p_id);
 }
 
@@ -470,8 +471,8 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
     return s;
 }
 
-void SDFTable::add_source(const CellScatter &p_source, const char *p_name, Dictionary &r_stats, std::vector<TreeSpan> *r_spans) {
-    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
+void SDFTable::add_source(const CellScatter &p_source, const char *p_name, ov::Value &r_stats, std::vector<TreeSpan> *r_spans) {
+    const uint64_t start_us = ov::now_usec();
     std::vector<CellSite> sites;
     if (p_source.valid()) {
         p_source.sites(p_source.zone, sites);
@@ -479,13 +480,13 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, Dicti
     // Each site's records are independent (up_at and the library are const): on the worker pool, a batch at a time (the
     // records wait for their turn), then admitted in site order (the record ids don't change).
     constexpr size_t BATCH = 4096;
-    std::vector<std::vector<TableRecord>> grown(MIN(BATCH, sites.size()));
+    std::vector<std::vector<TableRecord>> grown(ov::min(BATCH, sites.size()));
     int64_t placed = 0, total = 0, most = 0;
     // Per material: the sites' summed volume and equal-covariance semi-axes (span_moments), for the means.
     std::map<uint32_t, std::pair<double, std::array<double, 3>>> per_material;
     for (size_t i = 0; i < sites.size(); i++) {
         if (i % BATCH == 0) {
-            parallel_for(uint32_t(MIN(BATCH, sites.size() - i)), "SDFTable::add_source", [&](uint32_t p_j) {
+            parallel_for(uint32_t(ov::min(BATCH, sites.size() - i)), "SDFTable::add_source", [&](uint32_t p_j) {
                 grown[p_j].clear();
                 p_source.grow(sites[i + p_j].site, -1, grown[p_j]);
             });
@@ -501,7 +502,7 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, Dicti
         }
         placed++;
         total += int64_t(parts.size());
-        most = MAX(most, int64_t(parts.size()));
+        most = ov::max(most, int64_t(parts.size()));
         const MaterialMoments mm = span_moments(*library, parts.data(), uint32_t(parts.size()), site.base);
         for (const std::pair<uint32_t, Moments> &m : mm.parts) {
             double a[3];
@@ -516,40 +517,40 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, Dicti
     // A site's mean weight per material (m^3, overlapping records counted twice) and spread (semi-axes, metres).
     const double vs = param.voxel_size;
     const double per_site = placed == 0 ? 0.0 : vs / double(placed);
-    Dictionary materials_stats;
+    ov::Value materials_stats = ov::Value::object();
     for (const std::pair<const uint32_t, std::pair<double, std::array<double, 3>>> &m : per_material) {
-        Dictionary d;
+        ov::Value d = ov::Value::object();
         d["volume_m3_avg"] = m.second.first * per_site * vs * vs;
-        d["semi_axes_m_avg"] = vformat("%.2f %.2f %.2f", m.second.second[0] * per_site, m.second.second[1] * per_site, m.second.second[2] * per_site);
+        d["semi_axes_m_avg"] = ov::format("%.2f %.2f %.2f", m.second.second[0] * per_site, m.second.second[1] * per_site, m.second.second[2] * per_site);
         materials_stats[materials.name(m.first)] = d;
     }
-    Dictionary d;
+    ov::Value d = ov::Value::object();
     d["count"] = placed;
     d["records"] = total;
     d["records_per_site_avg"] = placed == 0 ? 0.0 : double(total) / double(placed);
     d["records_per_site_max"] = most;
     d["moments"] = materials_stats;
-    d["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    d["build_ms"] = double(ov::now_usec() - start_us) * 1e-3;
     r_stats[p_name] = d;
 }
 
-void SDFTable::add_stream(uint32_t p_slot_base, Dictionary &r_stats) {
-    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
+void SDFTable::add_stream(uint32_t p_slot_base, ov::Value &r_stats) {
+    const uint64_t start_us = ov::now_usec();
     for (const Source &source : sources) {
         if (!source.scatter.valid()) {
             continue;
         }
-        const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+        const uint64_t t0 = ov::now_usec();
         streamed.push_back(std::make_shared<const ScatterSource>(source_setup(source, uint32_t(streamed.size()))));
         const SourceProfile &prof = streamed.back()->profile();
-        Dictionary d;
+        ov::Value d = ov::Value::object();
         d["streamed"] = true;
         d["records_per_site_avg"] = prof.records_per_site;
         d["reach_m"] = prof.reach * param.voxel_size;
         d["lod_end"] = prof.lod_end;
         d["profile_classes"] = int64_t(prof.lost.size());
         d["profile_shared"] = streamed.back()->profile_shared();
-        d["profile_ms"] = double(Time::get_singleton()->get_ticks_usec() - t0) * 1e-3;
+        d["profile_ms"] = double(ov::now_usec() - t0) * 1e-3;
         r_stats[source.name] = d;
     }
     if (streamed.empty()) {
@@ -557,22 +558,22 @@ void SDFTable::add_stream(uint32_t p_slot_base, Dictionary &r_stats) {
     }
     InstanceStream::Settings settings;
     settings.slot_base = p_slot_base;
-    settings.slot_capacity = MIN<uint32_t>(InstanceStream::slot_budget(streamed), SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
+    settings.slot_capacity = ov::min<uint32_t>(InstanceStream::slot_budget(streamed), SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
     stream = std::make_shared<InstanceStream>(streamed, param, settings, StreamExecutor::pool());
     if (std::atomic_load(&field_gpu)) {
         stream->set_walk_batch(walk_batch_gpu); // a reconfigure keeps the attached field
     }
-    Dictionary d;
+    ov::Value d = ov::Value::object();
     d["slots"] = int64_t(settings.slot_capacity);
-    d["setup_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    d["setup_ms"] = double(ov::now_usec() - start_us) * 1e-3;
     r_stats["stream_setup"] = d;
 }
 
-void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
+void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
     if (!(biome_radius > 0.0)) {
         return;
     }
-    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
+    const uint64_t start_us = ov::now_usec();
     const double vs = param.voxel_size;
     const int64_t cx = std::llround(SCENE_X / vs), cz = std::llround(SCENE_Z / vs);
     const int64_t r = std::llround(biome_radius / vs);
@@ -606,7 +607,7 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
     if (!sites.empty()) {
         parallel_for(uint32_t(sites.size()), "SDFTable::add_biomes", [&job](uint32_t p_i) { Job::run(&job, p_i); });
     }
-    Array listed;
+    ov::Value listed = ov::Value::array();
     int64_t counts[Biome::FEATURE_COUNT] = {};
     int64_t too_steep = 0;
     for (size_t i = 0; i < sites.size(); i++) {
@@ -622,10 +623,10 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
             lava_pools.push_back(p.pool);
         }
         counts[p.at.feature]++;
-        if (listed.size() >= SITES_LISTED_MAX) {
+        if (int64_t(listed.size()) >= int64_t(SITES_LISTED_MAX)) {
             continue;
         }
-        Dictionary d;
+        ov::Value d = ov::Value::object();
         d["kind"] = Biome::kind(p.at.feature).name;
         d["x_m"] = double(p.at.x) * vs;
         d["z_m"] = double(p.at.z) * vs;
@@ -633,21 +634,21 @@ void SDFTable::add_biomes(const Types &p_types, Dictionary &r_stats) {
         d["radius_m"] = p.at.radius * vs;
         listed.push_back(d);
     }
-    Dictionary biomes;
+    ov::Value biomes = ov::Value::object();
     for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
         biomes[Biome::kind(Biome::Feature(f)).name] = counts[f];
     }
     biomes["lakes_too_steep"] = too_steep;
-    biomes["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    biomes["build_ms"] = double(ov::now_usec() - start_us) * 1e-3;
     biomes["sites"] = listed;
     r_stats["biomes"] = biomes;
 }
 
-void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
+void SDFTable::add_moment_blobs(int p_blob_type, ov::Value &r_stats) {
     if (!moment_blobs || !instance_band) {
         return;
     }
-    const uint64_t start_us = Time::get_singleton()->get_ticks_usec();
+    const uint64_t start_us = ov::now_usec();
     moment_blob_type = p_blob_type;
     MomentLayerParams params = moment_params();
     params.lod_min = lod_count;
@@ -657,16 +658,14 @@ void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
     for (uint32_t i = 0; i < records.size(); i++) {
         items[i] = record_item(*library, records[i]);
         if (!items[i].moments.empty()) {
-            params.lod_min = MIN(params.lod_min, items[i].first_lost_lod());
+            params.lod_min = ov::min(params.lod_min, items[i].first_lost_lod());
             weighed++;
         }
     }
     moment_layers.build(items, params);
     std::vector<MomentBlob> blobs;
     moment_layers.kept(blobs);
-    Array per_lod;
-    per_lod.resize(lod_count);
-    per_lod.fill(int64_t(0));
+    std::vector<int64_t> blobs_per_lod(size_t(lod_count), 0);
     blob_ids.clear();
     int64_t refused = 0;
     for (const MomentBlob &b : blobs) {
@@ -676,16 +675,20 @@ void SDFTable::add_moment_blobs(int p_blob_type, Dictionary &r_stats) {
             continue;
         }
         add_blob_record(BlobKey{ b.lod, b.cell[0], b.cell[1], b.cell[2], b.material }, rec);
-        per_lod[b.lod] = int64_t(per_lod[b.lod]) + 1;
+        blobs_per_lod[size_t(b.lod)]++;
     }
-    Dictionary d;
+    ov::Value d = ov::Value::object();
     d["items"] = weighed;
     d["blobs"] = int64_t(blobs.size());
+    ov::Value per_lod = ov::Value::array();
+    for (const int64_t n : blobs_per_lod) {
+        per_lod.push_back(n);
+    }
     d["blobs_per_lod"] = per_lod;
-    d["build_ms"] = double(Time::get_singleton()->get_ticks_usec() - start_us) * 1e-3;
+    d["build_ms"] = double(ov::now_usec() - start_us) * 1e-3;
     r_stats["moments"] = d;
     if (refused > 0) {
-        ERR_PRINT(vformat("SDFTable: %d moment blobs left out (too wide, or the table is full).", refused));
+        OV_ERR_PRINT(ov::format("SDFTable: %d moment blobs left out (too wide, or the table is full).", refused));
     }
 }
 
@@ -722,11 +725,11 @@ bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
 }
 
 bool SDFTable::admit_records(std::vector<TableRecord> &r_records, const char *p_what) {
-    ERR_FAIL_COND_V_MSG(records.size() + r_records.size() > uint32_t(SDFGpuTable::LIST_ID_MASK) + 1, false,
-            vformat("SDFTable: %s left out: the table holds at most %d instances (SDFGpuTable::LIST_ID_BITS).", p_what, SDFGpuTable::LIST_ID_MASK + 1));
+    OV_ERR_FAIL_COND_V_MSG(records.size() + r_records.size() > uint32_t(SDFGpuTable::LIST_ID_MASK) + 1, false,
+            ov::format("SDFTable: %s left out: the table holds at most %d instances (SDFGpuTable::LIST_ID_BITS).", p_what, SDFGpuTable::LIST_ID_MASK + 1));
     for (const TableRecord &rec : r_records) {
-        const String fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
-        ERR_FAIL_COND_V_MSG(!fit.is_empty(), false, vformat("SDFTable: %s left out: ", p_what) + fit);
+        const ov::str fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
+        OV_ERR_FAIL_COND_V_MSG(!fit.empty(), false, ov::format("SDFTable: %s left out: ", p_what) + fit);
     }
     for (TableRecord &rec : r_records) {
         finish_record(rec);
@@ -764,7 +767,7 @@ void SDFTable::add_shapes(const Types &p_types) {
     for (int i = 0; i < 8; i++) {
         const double d = 80.0 * double(1 << i);
         const double h = 0.1 * d;
-        const double theta = (-45.5 + 13.0 * i) * Math_PI / 180.0;
+        const double theta = (-45.5 + 13.0 * i) * ov::PI / 180.0;
         const float params[8] = { v(h), v(h), v(h), 0, v(1.2 * h), 0, 0, 0 };
         place(Combine::UNION, 0.0, p_types.holed_cube, params, SHAPES_X + d * std::sin(theta), SHAPES_Z - d * std::cos(theta), 0.9 * h, 0.5 - theta);
     }
@@ -801,9 +804,9 @@ void SDFTable::build_table(int p_lod_count) {
     blob_type = blob;
     library = std::make_shared<const DefLibrary>(lib);
     for (int i = 0; i < library->size(); i++) {
-        const String error = godot_str((*library)[i].program.validate(p_lod_count));
-        if (!error.is_empty()) {
-            ERR_PRINT(vformat("Archetype library type %d: ", i) + error);
+        const ov::str error = (*library)[i].program.validate(p_lod_count);
+        if (!error.empty()) {
+            OV_ERR_PRINT(ov::format("Archetype library type %d: ", i) + error);
         }
     }
     lod_count = p_lod_count;
@@ -822,7 +825,7 @@ void SDFTable::build_table(int p_lod_count) {
         add_shapes(types);
     }
     // The biome features first: the scatter and the forest keep out of the lakes (their basins cut the ground away).
-    Dictionary scene_stats;
+    ov::Value scene_stats = ov::Value::object();
     add_biomes(types, scene_stats);
     sources = { Source{ "scatter", scatter_source(types) }, Source{ "trees", forest_source(tree_types) } };
     if (!stream_sources) {
@@ -832,7 +835,7 @@ void SDFTable::build_table(int p_lod_count) {
     add_moment_blobs(blob, scene_stats);
     edit_regions.clear();
     // The GPU buffers hold the scene plus room for runtime edits, then the streamed slots (the mesher reads this at init).
-    const uint32_t capacity = MIN<uint32_t>(MAX<uint32_t>(16384u, uint32_t(records.size()) + 4096u), SDFGpuTable::LIST_ID_MASK + 1);
+    const uint32_t capacity = ov::min<uint32_t>(ov::max<uint32_t>(16384u, uint32_t(records.size()) + 4096u), SDFGpuTable::LIST_ID_MASK + 1);
     if (stream_sources) {
         add_stream(capacity, scene_stats);
     }

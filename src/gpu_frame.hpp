@@ -59,6 +59,12 @@ inline void encode_chunk_input(uint8_t *r_slot, const ChunkId &p_chunk, const Ch
     ov::put_s32(r_slot + CHUNK_LIST_COUNT_AT, 0);
 }
 
+// Chunk p_index of a batch's bytes (sized for it).
+inline void encode_chunk_input(ov::bytes &r_bytes, size_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
+    OV_ERR_FAIL_COND_MSG((p_index + 1) * CHUNK_INPUT_BYTES > r_bytes.size(), "encode_chunk_input: chunk past the batch buffer.");
+    encode_chunk_input(r_bytes.data() + p_index * CHUNK_INPUT_BYTES, p_chunk, p_param);
+}
+
 // A point item's LOD, in the ChunkInput word a chunk's list offset takes (id.w).
 static constexpr uint32_t POINT_LOD_AT = CHUNK_LIST_OFFSET_AT;
 

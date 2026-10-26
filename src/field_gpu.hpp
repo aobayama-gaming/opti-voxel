@@ -5,9 +5,8 @@
 #include "exact_noise.hpp"
 #include "local_points_gpu.hpp"
 #include "ov/executor.hpp"
+#include "ov/value.hpp"
 #include "sdf_base.hpp"
-
-#include <godot_cpp/variant/dictionary.hpp>
 
 #include <atomic>
 #include <condition_variable>
@@ -50,7 +49,7 @@ public:
     // the service is not ready (or failed meanwhile): r_out is then incomplete and the caller reads the CPU's field.
     bool ground_field(const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out);
 
-    godot::Dictionary get_stats() const;
+    ov::Value get_stats() const;
 
 private:
     struct Request {

@@ -605,9 +605,9 @@ TEST_CASE("SDFCascade table: the edit overlay lists exactly what a whole new ind
     const float params[8] = { 4.0f, 0, 0, 0, 0, 0, 0, 0 };
     CHECK(sdf.add_instance(0, VoxelPos(-100, y0, -300), nullptr, params, 0, 0.0f) >= 0);
     SDFGpuTable::UploadCursor now;
-    const PackedByteArray bytes = sdf.get_gpu_table()->record_bytes(SDFGpuTable::UploadCursor{ before, 0 }, now);
+    const ov::bytes bytes = sdf.get_gpu_table()->record_bytes(SDFGpuTable::UploadCursor{ before, 0 }, now);
     CHECK(now.snap_version == before + 1);
-    CHECK(bytes.decode_u32(0) == 1u);
+    CHECK(ov::get_u32(bytes.data()) == 1u);
     CHECK(bytes.size() <= 4 + 8 + int64_t(RecordStore::PAGE) * RECORD_BYTES);
     // Two edits far apart in id (the first record, and an add on the last page) are two runs, not the records between
     // them; consecutive pages are one.
@@ -655,27 +655,27 @@ TEST_CASE("SDFCascade table: a batch keeps the chunks whose lists fit the buffer
     if (chunks.size() < 2 || want[0].size() <= 4) {
         return;
     }
-    const auto encode = [&](PackedByteArray &r_ids) {
-        r_ids.resize(int64_t(chunks.size()) * GPUFrame::CHUNK_INPUT_BYTES);
+    const auto encode = [&](ov::bytes &r_ids) {
+        r_ids.resize(chunks.size() * GPUFrame::CHUNK_INPUT_BYTES);
         for (size_t i = 0; i < chunks.size(); i++) {
-            GPUFrame::encode_chunk_input(r_ids, int64_t(i), chunks[i], t.param);
+            GPUFrame::encode_chunk_input(r_ids, i, chunks[i], t.param);
         }
     };
-    const int64_t truncated0 = int64_t(table->get_stats()["list_truncated"]);
+    const int64_t truncated0 = table->get_stats()["list_truncated"].as_int();
     for (const size_t capacity : { total, total / 2, want[0].size() }) {
         CAPTURE(capacity);
-        PackedByteArray ids, words;
+        ov::bytes ids, words;
         encode(ids);
         std::vector<std::vector<uint32_t>> palettes;
         const uint32_t kept = table->build_lists(chunks, t.param, ids, words, uint32_t(capacity), &palettes);
         size_t used = 0;
         for (uint32_t i = 0; i < kept; i++) {
-            const uint32_t offset = ids.decode_u32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_OFFSET_AT);
-            const int32_t count = ids.decode_s32(int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_COUNT_AT);
+            const uint32_t offset = ov::get_u32(ids.data() + (int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_OFFSET_AT));
+            const int32_t count = ov::get_s32(ids.data() + (int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES + GPUFrame::CHUNK_LIST_COUNT_AT));
             CHECK(offset == used);
             CHECK(size_t(count) == want[i].size());
             for (int32_t k = 0; k < count && size_t(k) < want[i].size(); k++) {
-                CHECK((words.decode_u32(int64_t(offset + uint32_t(k)) * 4) & SDFGpuTable::LIST_ID_MASK) == want[i][k]);
+                CHECK((ov::get_u32(words.data() + (int64_t(offset + uint32_t(k)) * 4)) & SDFGpuTable::LIST_ID_MASK) == want[i][k]);
             }
             used += size_t(count);
         }
@@ -690,13 +690,13 @@ TEST_CASE("SDFCascade table: a batch keeps the chunks whose lists fit the buffer
             CHECK(kept == chunks.size());
         }
     }
-    CHECK(int64_t(table->get_stats()["list_truncated"]) == truncated0);
+    CHECK(table->get_stats()["list_truncated"].as_int() == truncated0);
     // A first list longer than the whole buffer: cut (counted), alone in its batch.
-    PackedByteArray ids, words;
+    ov::bytes ids, words;
     encode(ids);
     CHECK(table->build_lists(chunks, t.param, ids, words, uint32_t(want[0].size() - 1)) == 1u);
-    CHECK(ids.decode_s32(28) == int32_t(want[0].size() - 1));
-    CHECK(int64_t(table->get_stats()["list_truncated"]) == truncated0 + 1);
+    CHECK(ov::get_s32(ids.data() + 28) == int32_t(want[0].size() - 1));
+    CHECK(table->get_stats()["list_truncated"].as_int() == truncated0 + 1);
 }
 
 // A streamed source's chunk: its list (build_lists) is the scene's records, then the streamed ones (slots past the
@@ -729,14 +729,14 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
         CAPTURE(lod);
         const std::vector<ChunkId> chunks{ chunk_at_voxel(centre + VoxelPos(0, 40, 0), lod, param) };
         CHECK(make_resident(sdf, chunks));
-        PackedByteArray ids, words;
+        ov::bytes ids, words;
         ids.resize(GPUFrame::CHUNK_INPUT_BYTES);
         GPUFrame::encode_chunk_input(ids, 0, chunks[0], param);
         CHECK(table->build_lists(chunks, param, ids, words, 1u << 20) == 1u); // room for any list
-        std::vector<uint32_t> list(ids.decode_s32(28));
+        std::vector<uint32_t> list(ov::get_s32(ids.data() + 28));
         int phase = 0; // 0 scene, 1 streamed, 2 edits: never back
         for (size_t k = 0; k < list.size(); k++) {
-            list[k] = words.decode_u32(int64_t(k) * 4) & SDFGpuTable::LIST_ID_MASK;
+            list[k] = ov::get_u32(words.data() + (int64_t(k) * 4)) & SDFGpuTable::LIST_ID_MASK;
             const int p = list[k] < scene_end ? 0 : (list[k] >= stream->slot_base() ? 1 : 2);
             CHECK(p >= phase);
             phase = p;
@@ -755,15 +755,15 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
             std::copy(u.content->records.begin(), u.content->records.end(), gpu.begin() + u.first);
         }
         SDFGpuTable::UploadCursor now;
-        const PackedByteArray spans = table->record_bytes(SDFGpuTable::UploadCursor(), now);
+        const ov::bytes spans = table->record_bytes(SDFGpuTable::UploadCursor(), now);
         CHECK(now == table->upload_cursor());
         int64_t at = 4;
         ov::bytes one(RECORD_BYTES);
-        for (uint32_t s = 0; s < spans.decode_u32(0); s++) {
-            const uint32_t first = spans.decode_u32(at) / RECORD_BYTES, count = spans.decode_u32(at + 4) / RECORD_BYTES;
+        for (uint32_t s = 0; s < ov::get_u32(spans.data()); s++) {
+            const uint32_t first = ov::get_u32(spans.data() + at) / RECORD_BYTES, count = ov::get_u32(spans.data() + (at + 4)) / RECORD_BYTES;
             for (uint32_t i = 0; i < count; i++) {
                 encode_record(one.data(), gpu[first + i]);
-                mismatches += std::memcmp(one.data(), spans.ptr() + at + 8 + int64_t(i) * RECORD_BYTES, RECORD_BYTES) != 0;
+                mismatches += std::memcmp(one.data(), spans.data() + at + 8 + int64_t(i) * RECORD_BYTES, RECORD_BYTES) != 0;
             }
             at += 8 + int64_t(count) * RECORD_BYTES;
         }
@@ -794,7 +794,7 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
     CHECK(streamed > 100);
     CHECK(edits >= 3);
     CHECK(folded > 500);
-    CHECK(int64_t(sdf.get_gpu_table()->get_stats()["stream"].operator Dictionary()["lists_missing"]) == 0);
+    CHECK(sdf.get_gpu_table()->get_stats()["stream"]["lists_missing"].as_int() == 0);
 }
 
 // The GLSL 4.50 words (spec 3.6) a shader text can't name a variable with and the cascade's shaders never use as

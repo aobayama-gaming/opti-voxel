@@ -4,7 +4,9 @@
 #include <godot_cpp/classes/node3d.hpp>
 
 #include "chunk_math.hpp"
+#include "godot_page_host.hpp"
 #include "quad_page_pool.hpp"
+#include "rd_device.hpp"
 
 using namespace godot;
 
@@ -32,6 +34,8 @@ private:
     ChunkParam chunk_param; // the page shader's defaults (chunk 32, skirt 2, voxel 0.5)
     ChunkId sheet_chunk; // chunk the sheet's corners are stored relative to
 
+    RDDevice *device = nullptr; // the main RenderingDevice
+    GodotPageHost *host = nullptr;
     QuadPagePool *pool = nullptr;
     int page = -1;
 
@@ -45,11 +49,10 @@ private:
     Dictionary report;
 
     // render-thread resources
-    RID rt_shader;
-    RID rt_pipeline;
-    RID rt_staging;
-    RID rt_counter;
-    RID rt_uniform_set;
+    ov::gpu::Pipeline rt_pipeline;
+    ov::gpu::Texture rt_staging;
+    ov::gpu::Buffer rt_counter;
+    ov::gpu::BindSet rt_uniform_set;
 
     void _rt_run(int p_page);
     void _rt_kill(int p_page);

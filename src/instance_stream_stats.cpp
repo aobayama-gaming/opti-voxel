@@ -1,11 +1,11 @@
 // The stream's counters (instance_stream.hpp).
 #include "instance_stream.hpp"
 
-#include "godot_conv.hpp"
+#include "ov/format.hpp"
 
 namespace Archetype {
 
-Dictionary InstanceStream::get_stats() const {
+ov::Value InstanceStream::get_stats() const {
     const std::shared_lock<std::shared_mutex> lock(mutex);
     int64_t placed = 0, ready = 0, running = 0, waiting = 0;
     for (const std::pair<const SourceKey, Entry> &kv : entries) {
@@ -14,7 +14,7 @@ Dictionary InstanceStream::get_stats() const {
         running += kv.second.state == Entry::RUNNING;
         waiting += kv.second.state == Entry::WAITING;
     }
-    Dictionary d;
+    ov::Value d = ov::Value::object();
     d["keys"] = int64_t(entries.size());
     d["keys_ready"] = ready;
     d["keys_placed"] = placed;
@@ -45,20 +45,20 @@ Dictionary InstanceStream::get_stats() const {
     d["stale_handed_back"] = stats.stale_handed_back;
     d["keys_dropped"] = stats.keys_dropped;
     d["jobs_dropped"] = stats.jobs_dropped;
-    d["park_frames"] = godot_dict(stats.park_frames);
+    d["park_frames"] = to_value(stats.park_frames);
     d["workers"] = int64_t(executor->workers());
     d["computed"] = stats.computed;
     d["compute_ms_total"] = double(stats.compute_usec) / 1000.0;
-    Dictionary by;
+    ov::Value by = ov::Value::object();
     for (int kind = 0; kind < SourceKey::KIND_COUNT; kind++) {
         for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
             const int64_t n = stats.computed_by[kind][lod];
             if (n > 0) {
-                Dictionary k;
+                ov::Value k = ov::Value::object();
                 k["count"] = n;
                 k["ms_avg"] = double(stats.usec_by[kind][lod]) / 1000.0 / double(n);
                 k["evicted"] = stats.evicted_by[kind][lod];
-                by[vformat("%s %d", SourceKey::kind_name(kind), lod)] = k;
+                by[ov::format("%s %d", SourceKey::kind_name(kind), lod)] = k;
             }
         }
     }

@@ -1,29 +1,21 @@
 #pragma once
 
-#include "godot_cpp/classes/rendering_device.hpp"
-#include "godot_cpp/variant/dictionary.hpp"
-#include "godot_cpp/variant/packed_byte_array.hpp"
-#include "godot_cpp/variant/rid.hpp"
-#include "godot_cpp/variant/string.hpp"
-#include "godot_cpp/variant/vector3.hpp"
-
 #include "cascade_source.hpp"
 #include "chunk_math.hpp"
 #include "chunk_palette.hpp"
 #include "exact_noise.hpp"
+#include "gpu_device.hpp"
 #include "material_library.hpp"
 #include "page_format.hpp"
 #include "parallel_for.hpp"
 
+#include "ov/bytes.hpp"
+#include "ov/math.hpp"
+#include "ov/value.hpp"
+
 #include <array>
 #include <functional>
 #include <vector>
-
-namespace godot {
-class RenderingDevice;
-}
-
-using namespace godot;
 
 // The instance table of an SDF (archetype instances): the fixed-size DefRecord array and the per-batch
 // list of instance indices. The SDF hands out the data; each mesher owns the buffers on its own
@@ -58,14 +50,14 @@ public:
     // The encoded DefRecords changed since p_have, as spans for upload_records(): uint32 span count, then per span its
     // byte offset in the buffer, its byte size and the bytes; r_now is the cursor they bring it to (one snapshot,
     // whatever edits land meanwhile). An edit re-sends the pages it changed, a placement its key's slots.
-    virtual PackedByteArray record_bytes(const UploadCursor &p_have, UploadCursor &r_now) const = 0;
+    virtual ov::bytes record_bytes(const UploadCursor &p_have, UploadCursor &r_now) const = 0;
     // Writes record_bytes()' spans into the records buffer (on the device that owns it).
-    static void upload_records(RenderingDevice *p_rd, const RID &p_buffer, const PackedByteArray &p_spans) {
-        int64_t at = 4;
-        for (uint32_t s = 0; s < (p_spans.size() >= 4 ? p_spans.decode_u32(0) : 0u); s++) {
-            const uint32_t offset = p_spans.decode_u32(at);
-            const uint32_t size = p_spans.decode_u32(at + 4);
-            p_rd->buffer_update(p_buffer, offset, size, p_spans.slice(at + 8, at + 8 + size));
+    static void upload_records(ov::gpu::Device &p_device, ov::gpu::Buffer p_buffer, const ov::bytes &p_spans) {
+        size_t at = 4;
+        for (uint32_t s = 0; s < (p_spans.size() >= 4 ? ov::get_u32(p_spans.data()) : 0u); s++) {
+            const uint32_t offset = ov::get_u32(p_spans.data() + at);
+            const uint32_t size = ov::get_u32(p_spans.data() + at + 4);
+            p_device.update_buffer(p_buffer, offset, size, p_spans.data() + at + 8);
             at += 8 + size;
         }
     }
@@ -80,7 +72,7 @@ public:
     // chunk over the whole buffer is cut (ERR, counted: a wrong surface there). r_palettes (if given) gets each kept
     // chunk's palette (chunk_palette.hpp): the global materials its corners' palette indices name. r_streamed (if given)
     // gets each kept chunk's words of streamed records (the rest are the scene's and the edits').
-    virtual uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+    virtual uint32_t build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, ov::bytes &r_chunk_ids, ov::bytes &r_list,
             uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr) const = 0;
     // The entries every chunk palette starts with (ChunkPalette::build): {GROUND}, or with a climate GROUND then each
     // biome's material, a ground sample's palette index being 1 + its biome (SDFCascade::ground_material). Longer than
@@ -95,9 +87,9 @@ public:
     static constexpr uint32_t LIST_ID_BITS = 32 - PageFormat::PALETTE_BITS;
     static constexpr uint32_t LIST_ID_MASK = (1u << LIST_ID_BITS) - 1;
     static uint32_t list_word(uint32_t p_record, uint32_t p_palette_index) { return p_record | p_palette_index << LIST_ID_BITS; }
-    uint32_t max_chunk_list() const { return MAX<uint32_t>(MIN(instance_capacity(), MAX_CHUNK_LIST), 1u); }
+    uint32_t max_chunk_list() const { return ov::max<uint32_t>(ov::min(instance_capacity(), MAX_CHUNK_LIST), 1u); }
     // List statistics (main thread): lengths per LOD, build time, truncations.
-    virtual Dictionary get_stats() const { return Dictionary(); }
+    virtual ov::Value get_stats() const { return ov::Value::object(); }
 };
 
 class SDFBase : public CascadeSource {
@@ -247,7 +239,7 @@ private:
         const BatchJob &job = *static_cast<const BatchJob *>(p_job);
         const int begin = int(p_block) * BATCH_BLOCK;
         WorldPos pos;
-        for (int i = begin; i < MIN(job.count, begin + BATCH_BLOCK); i++) {
+        for (int i = begin; i < ov::min(job.count, begin + BATCH_BLOCK); i++) {
             pos.voxel = job.points[i];
             job.out[i] = job.sdf->evaluate_cull(pos, job.lod);
         }

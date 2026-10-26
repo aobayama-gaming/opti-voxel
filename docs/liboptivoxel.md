@@ -26,7 +26,8 @@ Two integration depths, both real:
 - **Shallow** (part of the public API): the lib computes on its own device, hands back buffers. The
   just-works path.
 - **Deep** (per-engine adapter, where the perf is): the host *lends* its device and the lib's compute
-  writes straight into host-resident resources (today: MultiMesh pages via `call_on_render_thread`;
+  writes straight into host-resident resources (today: Godot's MultiMesh pages through `PageHost`, the work posted to
+  the render thread by `Device::post`;
   Bevy: a wgpu buffer; web: an emdawnwebgpu surface). The vtable is small because the design already
   is GPU-resident with a ~2 KB readback: `acquire / create_pages / schedule / describe_draws`.
 
@@ -65,15 +66,14 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
 - **Host services**: `ov/log.hpp` (`OV_LOG`, the level `DebugLog::level` aliases) and `ov/clock.hpp` (`now_usec`,
   Godot's ticks installed).
 
-`pending_files` is empty: 51 files compile with no godot include path.
+`pending_files` is empty: every file of `src/` (132) compiles with no godot include path.
 
 ## Next steps, in order
 
-1. **The GPU seam**: `sdf_base.hpp`'s `RenderingDevice*`/`RID` interface becomes the backend vtable
-   (~15 ops: storage/uniform buffer create, texture create/copy, compute pipeline + list begin /
-   bind / push / dispatch, buffer_update/get_data, timestamps, free). Godot-RD stays the first
-   backend, benched with `tools/bench_ab.sh` to prove the indirection is free. With it, `level_shader` can move
-   back to taking only `CascadeSource` pieces and the frame loop (`VoxelTerrain::_process`) into an `ov::World`.
+1. **The GPU seam** (done): `ov::gpu::Device` (`gpu_device.hpp`: buffers, 2D textures, compute pipelines from GLSL,
+   bind sets, dispatch with push constants, timestamps, readbacks, `post`), Godot's `RDDevice` and Dawn's
+   `DawnDevice`; the drawing behind `PageHost` / `MeshHost`. Next: the frame loop (`VoxelTerrain::_process`) into an
+   `ov::World`.
 2. **The headless Dawn/WebGPU backend + the C ABI + a web demo**: the second consumer and the
    showcase. Readback is async on WebGPU (first call returns empty; poll across frames) — the
    directory readback is already async-shaped, the legacy full readback goes. No COOP/COEP headers

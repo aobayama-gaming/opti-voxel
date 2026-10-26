@@ -124,7 +124,7 @@ TEST_CASE("Tree: every part is a valid, bounded, banded record, within the budge
                     }
                 }
                 for (TableRecord &rec : records) {
-                    CHECK(SDFTable::edit_error(rec.rotation, rec.params, int(rec.op), rec.k).is_empty());
+                    CHECK(SDFTable::edit_error(rec.rotation, rec.params, int(rec.op), rec.k).empty());
                     CHECK(rec.op == Combine::SMOOTH_UNION);
                     if (rec.def == tl.types.branch) {
                         branches++;

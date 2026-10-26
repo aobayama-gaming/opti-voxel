@@ -1,4 +1,5 @@
 #include "climate.hpp"
+#include "ov/math.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -166,7 +167,7 @@ float max_amp(const Table &p_table, int p_field, const Cascade::Band &p_band) {
     auto bound = [&](const Biome *p_biome) { return cell ? ExactNoise::CELL_BOUND : shape_bound(band_shape(p_table, p_biome, p_field, p_band.k)); };
     float m = p_table.biomes.empty() ? p_band.amp * bound(nullptr) : 0.0f;
     for (const Climate::Biome &b : p_table.biomes) {
-        m = MAX(m, biome_amp(b, p_field, p_band) * bound(&b));
+        m = ov::max(m, biome_amp(b, p_field, p_band) * bound(&b));
     }
     return m;
 }
@@ -180,7 +181,7 @@ double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_
     double amp = 0.0;
     for (const Cascade::Band &b : f.bands) {
         if (b.k == p_lod + 2 || b.k == p_lod + 3) {
-            amp = MAX(amp, double(max_amp(p_table, p_field, b)));
+            amp = ov::max(amp, double(max_amp(p_table, p_field, b)));
         }
     }
     for (const Term &t : f.terms) {
@@ -296,8 +297,8 @@ int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
     return c >= 0 ? int(p_slots[Cascade::carry_slot(c)]) : int(p_table.biomes.size()) - 1;
 }
 
-Color srgb_to_linear(uint32_t p_rgb) {
-    return Color::hex((p_rgb << 8) | 0xFFu).srgb_to_linear();
+ov::Color srgb_to_linear(uint32_t p_rgb) {
+    return ov::Color::hex((p_rgb << 8) | 0xFFu).srgb_to_linear();
 }
 
 Material::Params biome_material(const Biome &p_biome) {

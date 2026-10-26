@@ -1,9 +1,8 @@
 #pragma once
 
 #include "latency_hist.hpp"
+#include "ov/math.hpp"
 #include "scatter_source.hpp"
-
-#include <godot_cpp/variant/dictionary.hpp>
 
 #include <atomic>
 #include <deque>
@@ -114,7 +113,7 @@ public:
     // the field's readings for all of them): its walk job and the next ready ones of the same source in rank order. 1
     // (the default) walks each alone (the CPU field: one task per tile keeps the workers busy); a batched field (a GPU)
     // wants many. Any thread; the jobs already taken keep theirs.
-    void set_walk_batch(size_t p_keys) { walk_batch = MAX(p_keys, size_t(1)); }
+    void set_walk_batch(size_t p_keys) { walk_batch = ov::max(p_keys, size_t(1)); }
     // No job starts or lands from now on: the queued ones are dropped, a running one lands nothing (its expansion would
     // queue its subtree for nobody). The destructor's first step.
     void stop();
@@ -163,7 +162,7 @@ public:
     uint64_t placements() const;
     void uploads_since(uint64_t p_seq, std::vector<Upload> &r_out) const;
 
-    Dictionary get_stats() const;
+    ov::Value get_stats() const;
 
 private:
     struct KeyHash {

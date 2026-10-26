@@ -5,7 +5,11 @@
 #include "cascade_terrain.hpp"
 #include "climate.hpp"
 #include "exact_noise.hpp"
-#include "godot_conv.hpp"
+#include "ov/format.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
+#include "ov/str.hpp"
+#include "ov/value.hpp"
 #include "sdf_table.hpp"
 
 #include <cmath>
@@ -47,7 +51,7 @@ public:
     // Set before configure(): a climate table (Climate::parse's format), empty for none. configure() parses it against
     // this ground and carries its fields in the cascade (Climate::combined_spec), the ground's octaves modulated by the
     // biomes' multipliers; a table it refuses is an ERR and no climate.
-    Dictionary climate_data;
+    ov::Value climate_data = ov::Value::object();
 
     // Set before configure(). DEFAULT: every octave at STEEPNESS (capped at MAX_AMP_M). CONTINENTS:
     // the same octaves with an amplitude per wavelength (continent_amp_m), so continents, ocean basins and
@@ -97,7 +101,7 @@ public:
         const double cap = MAX_AMP_M / vs;
         amp_cap = float(cap);
         for (Cascade::Band &b : spec.bands) {
-            b.amp = preset == Preset::CONTINENTS ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(MIN(double(b.amp), cap));
+            b.amp = preset == Preset::CONTINENTS ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(ov::min(double(b.amp), cap));
         }
         if (preset == Preset::FLAT) {
             spec.bands.clear(); // no top lattice either: a chunk's run is its own level
@@ -126,7 +130,7 @@ public:
                 amp = Climate::ground_step(*climate, l, amp);
             }
             const double cell_m = vs * std::ldexp(1.0, l);
-            const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : MIN(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
+            const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : ov::min(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
             skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
             moment_skirt_table[l] = float(SDFTable::moment_skirt_cells() * cell_m);
         }
@@ -138,7 +142,7 @@ public:
         double amp = 0.0;
         for (const Cascade::Band &b : spec.bands) {
             if (b.k == p_lod + 2 || b.k == p_lod + 3) {
-                amp = MAX(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
+                amp = ov::max(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
             }
         }
         return amp;
@@ -147,7 +151,7 @@ public:
     const Cascade::Spec *get_cascade() const override { return &spec; }
     // The parsed climate (configure), null without one; why climate_data was refused, empty if it wasn't.
     const Climate::Table *get_climate() const { return climate ? &*climate : nullptr; }
-    const String &get_climate_error() const { return climate_error; }
+    const ov::str &get_climate_error() const { return climate_error; }
 
     // Whether ground samples take their biome's material: a climate with fields (the pick reads them; a table without
     // any has its one default biome, drawn as the procedural ground).
@@ -288,10 +292,10 @@ uint cascade_ground_material(Ch ch) {
         if (param.skirt_size > 0 && param.skirt_depth > 0.0f) {
             const float lo = float(param.skirt_size);
             const float hi = lo + float(param.chunk_voxel_dimension());
-            auto inside = [lo, hi](float p_c) { return MIN(p_c - lo, hi - p_c); };
-            const float in = MIN(inside(p_grid.x), MIN(inside(p_grid.y), inside(p_grid.z)));
+            auto inside = [lo, hi](float p_c) { return ov::min(p_c - lo, hi - p_c); };
+            const float in = ov::min(inside(p_grid.x), ov::min(inside(p_grid.y), inside(p_grid.z)));
             const float depth_m = skirt_depth_table[p_lod] + p_extra;
-            r.w = r.w + CLAMP(-in, 0.0f, 1.0f) * depth_m;
+            r.w = r.w + ov::clamp(-in, 0.0f, 1.0f) * depth_m;
         }
         return r;
     }
@@ -339,14 +343,14 @@ uint cascade_ground_material(Ch ch) {
         bool flipped = false;
         for (int i = 0; i < 4096 && !flipped; i++) {
             const float step = std::floor(std::fabs(d));
-            other = t + (start_air ? 1 : -1) * MAX<int64_t>(1, int64_t(MIN(step, float(BaseSurface::ALT_LIMIT))));
+            other = t + (start_air ? 1 : -1) * ov::max<int64_t>(1, int64_t(ov::min(step, float(BaseSurface::ALT_LIMIT))));
             d = distance(other);
             flipped = (d > 0.0f) != start_air;
             if (!flipped) {
                 t = other;
             }
         }
-        ERR_FAIL_COND_V_MSG(!flipped, at(t), vformat("SDFCascade::ground_along: no surface found from %s within 4096 steps.", godot_str(p_start)));
+        OV_ERR_FAIL_COND_V_MSG(!flipped, at(t), ov::format("SDFCascade::ground_along: no surface found from %s within 4096 steps.", WorldCoord::to_string(p_start)));
         // solid = !(d > 0), the meshers' side rule; solid deeper (larger t) than air.
         int64_t solid = start_air ? other : t;
         int64_t air = start_air ? t : other;
@@ -455,7 +459,7 @@ private:
     // ERR and false unless p_pos is a point of Λ_lod (frac 0, voxel a multiple of 2^lod).
     static bool on_lattice(const WorldPos &p_pos, int p_lod) {
         const int64_t mask = (int64_t(1) << p_lod) - 1;
-        ERR_FAIL_COND_V_MSG(p_pos.frac.x != 0.0f || p_pos.frac.y != 0.0f || p_pos.frac.z != 0.0f || ((p_pos.voxel.x | p_pos.voxel.y | p_pos.voxel.z) & mask) != 0,
+        OV_ERR_FAIL_COND_V_MSG(p_pos.frac.x != 0.0f || p_pos.frac.y != 0.0f || p_pos.frac.z != 0.0f || ((p_pos.voxel.x | p_pos.voxel.y | p_pos.voxel.z) & mask) != 0,
                 false, "SDFCascade: the cascade only exists on lattice points (frac 0, voxel a multiple of 2^lod).");
         return true;
     }
@@ -464,18 +468,18 @@ private:
     void attach_climate() {
         climate.reset();
         ground_terms = false;
-        climate_error = String();
+        climate_error = ov::str();
         set_ground_materials({});
         if (climate_data.is_empty()) {
             return;
         }
         Climate::Table table;
         climate_error = Climate::parse(climate_data, climate_ground(), table);
-        ERR_FAIL_COND_MSG(!climate_error.is_empty(), "SDFCascade: " + climate_error);
+        OV_ERR_FAIL_COND_MSG(!climate_error.empty(), "SDFCascade: " + climate_error);
         spec = Climate::combined_spec(table, spec);
         climate = std::move(table);
         ground_terms = climate->has_ground_terms();
-        std::vector<std::pair<String, Material::Params>> grounds;
+        std::vector<std::pair<ov::str, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < climate->biomes.size(); b++) {
             grounds.emplace_back("biome:" + climate->biomes[b].name, Climate::biome_material(climate->biomes[b]));
         }
@@ -492,6 +496,6 @@ private:
     int k_top = 0; // the coarsest octave (lod_count + 4)
     std::optional<Climate::Table> climate;
     bool ground_terms = false; // climate->has_ground_terms(), read per sample
-    String climate_error;
+    ov::str climate_error;
     float amp_cap = 0.0f; // MAX_AMP_M in LOD0 voxels
 };

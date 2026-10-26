@@ -4,6 +4,10 @@
 #include "sdf_base.hpp"
 
 #include "ov/bytes.hpp"
+#include "ov/format.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
+#include "ov/str.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -64,7 +68,7 @@ void set_band(TableRecord &r_record, const TableDef &p_def, bool p_enabled, cons
         return; // deeper than 31 LODs can erode: never dropped (erode_from stays 1)
     }
     // The latest onset from which the erosion still reaches the depth at the drop (onset 0 always does).
-    int onset = MAX(drop - 1, 0);
+    int onset = ov::max(drop - 1, 0);
     while (onset > 0 && rate * (std::ldexp(1.0, drop) - std::ldexp(1.0, onset)) < depth) {
         onset--;
     }
@@ -219,8 +223,8 @@ Float4 moment_surface(const Float4 &p_r, const Float4 &p_phi, int p_lod, uint32_
     const float h = exact_pow2(p_lod);
     const Float4 lift{ p_r.x - p_phi.x * h, p_r.y - p_phi.y * h, p_r.z - p_phi.z * h, p_r.w - p_phi.w * h };
     const float n2 = p_phi.x * p_phi.x + p_phi.y * p_phi.y + p_phi.z * p_phi.z;
-    const float gh = ExactNoise::det_rsqrt(MAX(n2, MOMENT_GRAD_FLOOR)) * h;
-    const Float4 occ{ -p_phi.x * gh, -p_phi.y * gh, -p_phi.z * gh, MAX((MOMENT_ISO - p_phi.w) * gh, -(MOMENT_DEPTH_CELLS * h)) };
+    const float gh = ExactNoise::det_rsqrt(ov::max(n2, MOMENT_GRAD_FLOOR)) * h;
+    const Float4 occ{ -p_phi.x * gh, -p_phi.y * gh, -p_phi.z * gh, ov::max((MOMENT_ISO - p_phi.w) * gh, -(MOMENT_DEPTH_CELLS * h)) };
     if (r_material && p_best != ChunkPalette::INHERIT_INDEX && p_phi.w >= MOMENT_MATERIAL_ISO) {
         *r_material = p_best;
     }
@@ -641,8 +645,8 @@ TableDefPtr make_island_type(int p_k, uint32_t p_seed) {
         // with y >= -grow.
         const double cone_e = double(p[0]) + grow * (1.0 + double(p[3])) / double(p[2]);
         const double rs = double(p[4]) + grow, low = double(p[5]) - grow;
-        const double dome_e = low > 0.0 ? std::sqrt(MAX(rs * rs - low * low, 0.0)) : rs;
-        const float e = float(MAX(cone_e, dome_e));
+        const double dome_e = low > 0.0 ? std::sqrt(ov::max(rs * rs - low * low, 0.0)) : rs;
+        const float e = float(ov::max(cone_e, dome_e));
         r_lo = Float3{ -e, float(-double(p[1]) - grow), -e };
         r_hi = Float3{ e, float(double(p[4]) - double(p[5]) + grow), e };
         r_l = float(1.0 + double(p[6]) * slope);
@@ -650,7 +654,7 @@ TableDefPtr make_island_type(int p_k, uint32_t p_seed) {
     d->moments = [](const float *p) { // the hanging cone (r + y tan)^2, then the cap rd^2 - (y + drop)^2
         const double r = p[0], tan = double(p[3]) / double(p[2]), rd = p[4], drop = p[5];
         // Down to its apex (y = -r / tan) or its bottom cap, whichever comes first.
-        Moments m = revolution_moments(r * r, 2.0 * r * tan, tan * tan, MAX(-double(p[1]), -r / tan), 0.0);
+        Moments m = revolution_moments(r * r, 2.0 * r * tan, tan * tan, ov::max(-double(p[1]), -r / tan), 0.0);
         m.add(revolution_moments(rd * rd - drop * drop, -2.0 * drop, -1.0, 0.0, rd - drop));
         return m;
     };
@@ -787,7 +791,7 @@ double rotation_margin(Float3 p_lo, Float3 p_hi) {
     for (int c = 0; c < 8; c++) {
         double q[3];
         box_corner(p_lo, p_hi, c, q);
-        reach = MAX(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
+        reach = ov::max(reach, std::abs(q[0]) + std::abs(q[1]) + std::abs(q[2]));
     }
     return 1.0 + 1e-4 * reach;
 }
@@ -803,8 +807,8 @@ Bounds world_bounds(Float3 p_lo, Float3 p_hi, float p_lipschitz, const VoxelPos 
         double w[3];
         local_to_world(p_r, q, w);
         for (int j = 0; j < 3; j++) {
-            lo[j] = MIN(lo[j], w[j]);
-            hi[j] = MAX(hi[j], w[j]);
+            lo[j] = ov::min(lo[j], w[j]);
+            hi[j] = ov::max(hi[j], w[j]);
         }
     }
     const double margin = rotation_margin(p_lo, p_hi);
@@ -822,7 +826,7 @@ Bounds record_world_bounds(const TableDef &p_def, const TableRecord &p_record) {
     return world_bounds(lo, hi, lipschitz, p_record.anchor, p_record.rotation);
 }
 
-String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent) {
+ov::str record_fit_error(const TableDef &p_def, const TableRecord &p_record, int64_t p_max_extent) {
     for (int a = 0; a < 3; a++) {
         if (p_record.anchor[a] > WorldCoord::MAX_ABS_ORIGIN_VOXEL || p_record.anchor[a] < -WorldCoord::MAX_ABS_ORIGIN_VOXEL) {
             return "the anchor is beyond +-2^60 voxels.";
@@ -835,7 +839,7 @@ String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int6
     // The influence margin grows by 2 L voxels per voxel of the LOD (finish_record's margin_c): a steep field
     // would grow the box like a huge one.
     if (!(lipschitz >= 0.0f && lipschitz <= MAX_RECORD_LIPSCHITZ)) {
-        return vformat("the type's Lipschitz bound %f for these params is outside [0, %f].", lipschitz, MAX_RECORD_LIPSCHITZ);
+        return ov::format("the type's Lipschitz bound %f for these params is outside [0, %f].", lipschitz, MAX_RECORD_LIPSCHITZ);
     }
     for (const float *v : { &lo.x, &lo.y, &lo.z, &hi.x, &hi.y, &hi.z }) {
         if (!std::isfinite(*v)) {
@@ -850,9 +854,9 @@ String record_fit_error(const TableDef &p_def, const TableRecord &p_record, int6
     }
     const double extent = 2.0 * (std::sqrt(reach2) + rotation_margin(lo, hi)) + smooth;
     if (!(extent <= double(p_max_extent))) {
-        return vformat("the instance spans %.0f voxels (its box plus twice k), more than the %d the table takes.", extent, p_max_extent);
+        return ov::format("the instance spans %.0f voxels (its box plus twice k), more than the %d the table takes.", extent, p_max_extent);
     }
-    return String();
+    return ov::str();
 }
 
 void finish_table_record(const DefLibrary &p_library, const RecordFinish &p_finish, TableRecord &r_record) {

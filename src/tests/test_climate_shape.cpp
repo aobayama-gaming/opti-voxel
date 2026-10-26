@@ -93,9 +93,9 @@ TEST_CASE("Climate shape: NOISE_ABS_MEAN, NOISE_SQ_MEAN and CELL_MEAN are the no
 namespace {
 
 // Every operation at once (adapter/godot/project/climate/shaped_test.json, CascadeSpike's set 4s too).
-Dictionary shaped_table() {
-    Dictionary d;
-    CHECK(load("res://climate/shaped_test.json", d) == String());
+ov::Value shaped_table() {
+    ov::Value d;
+    CHECK(load("res://climate/shaped_test.json", d) == ov::str());
     return d;
 }
 
@@ -114,7 +114,7 @@ struct ShapedSDF {
 
 TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal point queries in every slot") {
     ShapedSDF s;
-    CHECK(s.sdf.get_climate_error() == String());
+    CHECK(s.sdf.get_climate_error() == ov::str());
     CLIMATE_REQUIRE(s.sdf.get_climate() != nullptr);
     const Table &t = *s.sdf.get_climate();
     const Cascade::Spec &spec = s.sdf.get_spec();
@@ -179,7 +179,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     // The skirts take the height terms' step: deeper than the same ground without them where a term's field has
     // octaves (dunes: 25 m, k = 9 at 5 cm, LODs 6-7), the cap (skirt_depth cells) lifted.
     ShapedSDF deep(15, 1e6f);
-    Dictionary no_terms = shaped_table();
+    ov::Value no_terms = shaped_table();
     no_terms.erase("heights");
     SDFCascade bare;
     bare.climate_data = no_terms;
@@ -218,56 +218,56 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);
     const Ground g = sdf.climate_ground();
-    auto err = [&](const String &p_json) {
+    auto err = [&](const ov::str &p_json) {
         Table t;
-        return parse(Dictionary(JSON::parse_string(p_json)), g, t);
+        return parse(ClimateTest::json(p_json), g, t);
     };
-    const String f1 = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], )";
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "spiky"}]}]})")).contains("plain, billow"));
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "t", "from_m": 400, "to_m": 800, "multifractal": 2}]}]})")).contains("ground bands only"));
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "warp_m": 1, "warp_fields": ["t"]}]}]})"))
-                    .contains("3 fields"));
+    const ov::str f1 = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], )";
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "spiky"}]}]})")), "plain, billow"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "t", "from_m": 400, "to_m": 800, "multifractal": 2}]}]})")), "ground bands only"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "warp_m": 1, "warp_fields": ["t"]}]}]})")),
+            "3 fields"));
     // A warp reads fields: the ground's slope (the swiss turbulence's) is not offered, nor its damping (climate.hpp).
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "warp_m": 1}]}]})")).contains("warp reads 3 fields"));
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "damp": 4}]}]})")).contains("unknown key 'damp'"));
-    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0], [0, 1]]}], "biomes": [{"name": "a"}]})")).contains("increase"));
-    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0]]}], "biomes": [{"name": "a"}]})")).contains("2 points"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "warp_m": 1}]}]})")), "warp reads 3 fields"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "damp": 4}]}]})")), "unknown key 'damp'"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0], [0, 1]]}], "biomes": [{"name": "a"}]})")), "increase"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0]]}], "biomes": [{"name": "a"}]})")), "2 points"));
     // A curve the field never reaches is a constant; a term over the ground's amplitude cap would outgrow the skirts' model.
-    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 10, "curve": [[100, 0], [200, 1]]}], "biomes": [{"name": "a"}]})"))
-                    .contains("a constant"));
-    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 5000, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})"))
-                    .contains("over the ground's cap"));
-    CHECK(err(f1 + String(R"("heights": [{"field": "t", "height_m": 100, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})")) == String());
+    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 10, "curve": [[100, 0], [200, 1]]}], "biomes": [{"name": "a"}]})")),
+            "a constant"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 5000, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})")),
+            "over the ground's cap"));
+    CHECK(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 100, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})")) == ov::str());
     // An offset is a constant term: inserted without its mean, it only counts in a multifractal's state (ridged's scales
     // its |n| too).
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "billow", "offset": 0.5}]}]})"))
-                    .contains("only counts in a multifractal"));
-    CHECK(err(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1, "offset": 0.5}]}], "biomes": [{"name": "a"}]})")
-                    .contains("only counts in a multifractal"));
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "coeffs": [0.5, 1, 0, 0]}]}]})"))
-                    .contains("only counts in a multifractal"));
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "multifractal": 1, "offset": 0.5}]}]})")) ==
-            String());
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "ridged", "offset": 0.8}]}]})")) ==
-            String());
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "terrace": {"step_m": -1}}]})")).contains("terrace"));
-    CHECK(err(f1 + String(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "coeffs": [1, 2]}]}]})")).contains("4 numbers"));
-    CHECK(err(R"({"fields": [{"name": "d", "noise": "cell", "bands": [{"wavelength_m": 25, "amp": 1, "shape": "ridged"}]}], "biomes": [{"name": "a"}]})")
-                    .contains("cell noise"));
-    CHECK(err(R"({"fields": [{"name": "d", "noise": "simplex", "bands": []}], "biomes": [{"name": "a"}]})").contains("perlin or cell"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "billow", "offset": 0.5}]}]})")),
+            "only counts in a multifractal"));
+    CHECK(ov::contains(err(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1, "offset": 0.5}]}], "biomes": [{"name": "a"}]})"),
+            "only counts in a multifractal"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "coeffs": [0.5, 1, 0, 0]}]}]})")),
+            "only counts in a multifractal"));
+    CHECK(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "multifractal": 1, "offset": 0.5}]}]})")) ==
+            ov::str());
+    CHECK(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "ridged", "offset": 0.8}]}]})")) ==
+            ov::str());
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "terrace": {"step_m": -1}}]})")), "terrace"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "coeffs": [1, 2]}]}]})")), "4 numbers"));
+    CHECK(ov::contains(err(R"({"fields": [{"name": "d", "noise": "cell", "bands": [{"wavelength_m": 25, "amp": 1, "shape": "ridged"}]}], "biomes": [{"name": "a"}]})"),
+            "cell noise"));
+    CHECK(ov::contains(err(R"({"fields": [{"name": "d", "noise": "simplex", "bands": []}], "biomes": [{"name": "a"}]})"), "perlin or cell"));
     // A multifractal's state takes a field group: MAX_FIELDS fields leave it none.
-    String full = "{\"fields\": [";
+    ov::str full = "{\"fields\": [";
     for (int i = 0; i < MAX_FIELDS; i++) {
-        full += vformat("%s{\"name\": \"f%d\", \"bands\": [{\"wavelength_m\": 400, \"amp\": 1}]}", i ? ", " : "", i);
+        full += ov::format("%s{\"name\": \"f%d\", \"bands\": [{\"wavelength_m\": 400, \"amp\": 1}]}", i ? ", " : "", i);
     }
     full += "], \"biomes\": [{\"name\": \"a\", \"amp\": [{\"field\": \"ground\", \"from_m\": 1, \"to_m\": 100, \"multifractal\": 2}]}]}";
-    CHECK(err(full).contains(vformat("at most %d fields", MAX_FIELDS - 1)));
+    CHECK(ov::contains(err(full), ov::format("at most %d fields", MAX_FIELDS - 1)));
 }
 
 TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and box runs equal point queries") {
     for (const int lods : { 15, 25 }) {
         ClimateSDF c("res://climate/example.json", lods);
-        CHECK(c.sdf.get_climate_error() == String());
+        CHECK(c.sdf.get_climate_error() == ov::str());
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
         const Table &t = *c.sdf.get_climate();
         CHECK(t.has_state());
@@ -287,17 +287,17 @@ TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and
 // Every level shader variant (chunks / points, with / without the fields) defines each climate helper it calls: a shaped
 // table with and without ground terms (the shared helpers are spliced once, up front; splices_helpers).
 TEST_CASE("Climate shape: every level shader variant defines the climate helpers it calls") {
-    Dictionary with_terms = shaped_table();
-    Dictionary without = shaped_table();
+    ov::Value with_terms = shaped_table();
+    ov::Value without = shaped_table();
     without.erase("heights");
-    const Array biomes = without["biomes"];
-    for (int64_t i = 0; i < biomes.size(); i++) {
-        Dictionary(biomes[i]).erase("terrace");
+    ov::Value &biomes = without["biomes"];
+    for (size_t i = 0; i < biomes.size(); i++) {
+        biomes.at(i).erase("terrace");
     }
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_terrace", "cascade_warped",
         "climate_ground", "climate_biome", "cascade_mods", "cascade_derive" };
     int64_t variants = 0, missing = 0;
-    for (const Dictionary &table : { with_terms, without }) {
+    for (const ov::Value &table : { with_terms, without }) {
         SDFCascade sdf;
         sdf.climate_data = table;
         ChunkParam param;
@@ -306,13 +306,13 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
         CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
         for (const bool points : { false, true }) {
             for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
-                const String code = godot_str(CascadeGLSL::level_shader(&sdf, false, points, false, !points, view));
+                const ov::str code = CascadeGLSL::level_shader(&sdf, false, points, false, !points, view);
                 variants++;
                 for (const char *name : NAMES) {
-                    const String call = String(name) + "(";
-                    const bool called = code.contains(call);
-                    const bool defined = code.contains(" " + call + "vec4 ") || code.contains(" " + call + "float ") || code.contains(" " + call + "WorldPos ") ||
-                            code.contains(" " + call + "Ch ") || code.contains(" " + call + "int ");
+                    const ov::str call = ov::str(name) + "(";
+                    const bool called = ov::contains(code, call);
+                    const bool defined = ov::contains(code, " " + call + "vec4 ") || ov::contains(code, " " + call + "float ") || ov::contains(code, " " + call + "WorldPos ") ||
+                            ov::contains(code, " " + call + "Ch ") || ov::contains(code, " " + call + "int ");
                     if (called && !defined) {
                         missing++;
                         MESSAGE("variant points=", points, " view=", int(view), ": ", name, " called, not defined");
@@ -324,15 +324,15 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
     CHECK(variants == 8);
     CHECK(missing == 0);
     Table t;
-    Dictionary bad = shaped_table();
-    Dictionary(Array(bad["biomes"])[1])["terrace"] = JSON::parse_string(R"({"step_m": 8, "invert": "no"})");
+    ov::Value bad = shaped_table();
+    bad["biomes"].at(1)["terrace"] = ClimateTest::json(R"({"step_m": 8, "invert": "no"})");
     SDFCascade g;
     ChunkParam param;
     param.voxel_size = 0.05f;
     g.configure(param, 15);
-    CHECK(parse(bad, g.climate_ground(), t).contains("true or false"));
-    Dictionary(Array(bad["biomes"])[1])["terrace"] = JSON::parse_string(R"({"step_m": 0})");
-    CHECK(parse(bad, g.climate_ground(), t).contains("terrace step"));
+    CHECK(ov::contains(parse(bad, g.climate_ground(), t), "true or false"));
+    bad["biomes"].at(1)["terrace"] = ClimateTest::json(R"({"step_m": 0})");
+    CHECK(ov::contains(parse(bad, g.climate_ground(), t), "terrace step"));
 }
 
 // Stretched bands (ground_stretch, stretch_y): the octaves in range carry their stretch (at most k - 3), the ground's
@@ -352,7 +352,7 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
     CHECK(stretched > 0);
     CHECK(spec.fields[size_t(s.sdf.get_climate()->field_index("dunes"))].front().stretch == 2);
 
-    Dictionary flat = shaped_table();
+    ov::Value flat = shaped_table();
     flat.erase("ground_stretch");
     SDFCascade iso;
     iso.climate_data = flat;
@@ -382,9 +382,9 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
 
     Table t;
     for (const double bad : { 3.0, 0.5, 1024.0 }) {
-        Dictionary d = shaped_table();
-        Dictionary(Array(d["ground_stretch"])[0])["stretch_y"] = bad;
-        CHECK(parse(d, s.sdf.climate_ground(), t).contains("power of two"));
+        ov::Value d = shaped_table();
+        d["ground_stretch"].at(0)["stretch_y"] = bad;
+        CHECK(ov::contains(parse(d, s.sdf.climate_ground(), t), "power of two"));
     }
 }
 
@@ -395,8 +395,8 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
 // climate variant (the early return for a table without fields skipped that rule: the GPU drew the terrace-less ground).
 TEST_CASE("Climate shape: ground terms without fields take the climate variant at every level") {
     SDFCascade sdf;
-    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == String());
-    Dictionary(Array(sdf.climate_data["biomes"])[0])["terrace"] = JSON::parse_string(R"({"step_m": 4})");
+    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == ov::str());
+    sdf.climate_data["biomes"].at(0)["terrace"] = ClimateTest::json(R"({"step_m": 4})");
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);
@@ -416,7 +416,7 @@ TEST_CASE("Climate shape: every landform table loads") {
             CAPTURE(name);
             CAPTURE(lods);
             ClimateSDF c(("res://climate/landforms/" + std::string(name) + ".json").c_str(), lods);
-            CHECK(c.sdf.get_climate_error() == String());
+            CHECK(c.sdf.get_climate_error() == ov::str());
             CHECK(c.sdf.get_climate() != nullptr);
         }
     }

@@ -1,15 +1,14 @@
 #pragma once
 
-#include <godot_cpp/classes/mutex.hpp>
-#include <godot_cpp/core/object.hpp>
-#include <godot_cpp/templates/hash_map.hpp>
-
 #include "chunk_math.hpp"
 #include "palette_pool.hpp"
 
-#include <vector>
+#include "ov/bytes.hpp"
+#include "ov/containers.hpp"
+#include "ov/value.hpp"
 
-using namespace godot;
+#include <mutex>
+#include <vector>
 
 class QuadPagePool;
 
@@ -22,7 +21,7 @@ class QuadPagePool;
 //   broken    inside a live range but has a zero corner
 // plus, per live group, whether its header names the chunk that owns it (bad_header otherwise),
 // and the longest quad edge among drawn quads.
-class PageAuditor : public Object {
+class PageAuditor {
 public:
     struct PageInfo {
         int page = -1;
@@ -38,8 +37,8 @@ public:
 
     void start(QuadPagePool *p_pool, const std::vector<PageInfo> &p_pages, const ChunkParam &p_chunk_param);
     bool step();
-    Dictionary get_report() const { return report; }
-    // Deletes this object on the render thread once its readbacks in flight have arrived: their
+    ov::Value get_report() const { return report; }
+    // Deletes this object on the device's thread once its readbacks in flight have arrived: their
     // callbacks are not skipped when the object is freed. Safe mid-audit.
     void destroy();
 
@@ -48,18 +47,18 @@ private:
     ChunkParam chunk_param;
     std::vector<PageInfo> pages;
     size_t next_request = 0;
-    Ref<Mutex> mutex;
-    godot::HashMap<int, PackedByteArray> data;
-    godot::HashMap<int, uint32_t> groups; // indirect group counts
-    Dictionary report;
+    std::mutex mutex;
+    ov::HashMap<int, ov::bytes, ov::DefaultHash> data;
+    ov::HashMap<int, uint32_t, ov::DefaultHash> groups; // indirect group counts
+    ov::Value report = ov::Value::object();
     bool done = false;
-    // Render thread only.
+    // The device's thread only.
     int rt_readbacks_in_flight = 0;
     bool rt_destroying = false;
 
     void _rt_read(int p_page);
-    void _rt_on_texture(const PackedByteArray &p_data, int p_page);
-    void _rt_on_command(const PackedByteArray &p_data, int p_page);
+    void _rt_on_texture(const ov::bytes &p_data, int p_page);
+    void _rt_on_command(const ov::bytes &p_data, int p_page);
     void _rt_readback_done();
     void _rt_destroy();
     void _analyse();

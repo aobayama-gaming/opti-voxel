@@ -16,6 +16,19 @@ uint64_t align4(uint64_t p_size) {
     return (p_size + 3) & ~uint64_t(3);
 }
 
+// A texture-buffer copy's rows: a multiple of 256 bytes.
+uint64_t align256(uint64_t p_size) {
+    return (p_size + 255) & ~uint64_t(255);
+}
+
+wgpu::TextureFormat wgpu_format(gpu::TextureFormat p_format) {
+    switch (p_format) {
+        case gpu::TextureFormat::RGBA16_UINT:
+        default:
+            return wgpu::TextureFormat::RGBA16Uint;
+    }
+}
+
 } // namespace
 
 DawnDevice::DawnDevice(DawnContext &p_context) : context(p_context) {
@@ -101,6 +114,72 @@ void DawnDevice::copy_buffer(gpu::Buffer p_from, gpu::Buffer p_to, uint64_t p_fr
     _encoder().CopyBufferToBuffer(from->buffer, p_from_offset, to->buffer, p_to_offset, align4(p_size));
 }
 
+gpu::Texture DawnDevice::create_texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage, const void *p_data) {
+    wgpu::TextureDescriptor desc{};
+    desc.size = { p_width, p_height, 1 };
+    desc.format = wgpu_format(p_format);
+    desc.usage = wgpu::TextureUsage::CopyDst; // zeroed (and cleared) by writes
+    if (p_usage & gpu::TEXTURE_SAMPLED) {
+        desc.usage |= wgpu::TextureUsage::TextureBinding;
+    }
+    if (p_usage & gpu::TEXTURE_STORAGE) {
+        desc.usage |= wgpu::TextureUsage::StorageBinding;
+    }
+    if (p_usage & gpu::TEXTURE_COPY_SRC) {
+        desc.usage |= wgpu::TextureUsage::CopySrc;
+    }
+    Entry entry;
+    entry.texture = context.device.CreateTexture(&desc);
+    OV_ERR_FAIL_COND_V_MSG(!entry.texture, gpu::Texture(), ov::format("DawnDevice: no %dx%d texture.", p_width, p_height));
+    entry.width = p_width;
+    entry.height = p_height;
+    if (p_data != nullptr) {
+        _write_texture(entry, p_data);
+    }
+    return gpu::Texture{ _add(std::move(entry)) };
+}
+
+void DawnDevice::_write_texture(const Entry &p_entry, const void *p_data) {
+    // Queue writes land before the next submission's commands: what is recorded so far goes first.
+    _submit();
+    wgpu::TexelCopyTextureInfo dst{};
+    dst.texture = p_entry.texture;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = p_entry.width * 8;
+    layout.rowsPerImage = p_entry.height;
+    const wgpu::Extent3D size{ p_entry.width, p_entry.height, 1 };
+    context.queue.WriteTexture(&dst, p_data, size_t(layout.bytesPerRow) * p_entry.height, &layout, &size);
+}
+
+void DawnDevice::update_texture(gpu::Texture p_texture, const void *p_data, uint64_t p_size) {
+    const Entry *entry = _get(p_texture);
+    OV_ERR_FAIL_COND_MSG(entry == nullptr || !entry->texture || p_size != uint64_t(entry->width) * entry->height * 8,
+            "DawnDevice: update of an unknown texture, or not its whole size.");
+    _write_texture(*entry, p_data);
+}
+
+void DawnDevice::clear_texture(gpu::Texture p_texture) {
+    const Entry *entry = _get(p_texture);
+    OV_ERR_FAIL_COND_MSG(entry == nullptr || !entry->texture, "DawnDevice: clear of an unknown texture.");
+    const bytes zeros(size_t(entry->width) * entry->height * 8, 0);
+    _write_texture(*entry, zeros.data());
+}
+
+void DawnDevice::copy_texture(gpu::Texture p_from, gpu::Texture p_to, uint32_t p_from_x, uint32_t p_from_y, uint32_t p_to_x, uint32_t p_to_y,
+        uint32_t p_width, uint32_t p_height) {
+    const Entry *from = _get(p_from);
+    const Entry *to = _get(p_to);
+    OV_ERR_FAIL_COND_MSG(from == nullptr || to == nullptr || !from->texture || !to->texture, "DawnDevice: copy of an unknown texture.");
+    wgpu::TexelCopyTextureInfo src{};
+    src.texture = from->texture;
+    src.origin = { p_from_x, p_from_y, 0 };
+    wgpu::TexelCopyTextureInfo dst{};
+    dst.texture = to->texture;
+    dst.origin = { p_to_x, p_to_y, 0 };
+    const wgpu::Extent3D size{ p_width, p_height, 1 };
+    _encoder().CopyTextureToTexture(&src, &dst, &size);
+}
+
 gpu::Pipeline DawnDevice::create_compute_pipeline(const str &p_name, const str &p_glsl, str &r_error) {
     CompiledShader shader = compile_compute_glsl(p_glsl);
     if (!shader.error.empty()) {
@@ -117,14 +196,22 @@ gpu::Pipeline DawnDevice::create_compute_pipeline(const str &p_name, const str &
     module_desc.label = p_name.c_str();
     const wgpu::ShaderModule module = context.device.CreateShaderModule(&module_desc);
 
-    // The layout of every buffer the shader declares (an automatic one drops the unused ones, which the engine binds).
+    // The layout of every buffer and image the shader declares (an automatic one drops the unused ones, which the
+    // engine binds).
     std::vector<wgpu::BindGroupLayoutEntry> layout_entries;
     for (const ShaderBinding &b : shader.bindings) {
         wgpu::BindGroupLayoutEntry e{};
         e.binding = b.binding;
         e.visibility = wgpu::ShaderStage::Compute;
-        e.buffer.type = b.uniform ? wgpu::BufferBindingType::Uniform
-                                  : (b.read_only ? wgpu::BufferBindingType::ReadOnlyStorage : wgpu::BufferBindingType::Storage);
+        if (b.image) {
+            e.storageTexture.access = b.write_only ? wgpu::StorageTextureAccess::WriteOnly
+                                                   : (b.read_only ? wgpu::StorageTextureAccess::ReadOnly : wgpu::StorageTextureAccess::ReadWrite);
+            e.storageTexture.format = wgpu::TextureFormat::RGBA16Uint;
+            e.storageTexture.viewDimension = wgpu::TextureViewDimension::e2D;
+        } else {
+            e.buffer.type = b.uniform ? wgpu::BufferBindingType::Uniform
+                                      : (b.read_only ? wgpu::BufferBindingType::ReadOnlyStorage : wgpu::BufferBindingType::Storage);
+        }
         layout_entries.push_back(e);
     }
     wgpu::BindGroupLayoutDescriptor layout_desc{};
@@ -168,12 +255,18 @@ gpu::BindSet DawnDevice::create_bind_set(gpu::Pipeline p_pipeline, const std::ve
     for (const ShaderBinding &sb : pipeline->bindings) {
         const auto it = std::find_if(p_bindings.begin(), p_bindings.end(), [&](const gpu::Binding &b) { return b.binding == sb.binding; });
         OV_ERR_FAIL_COND_V_MSG(it == p_bindings.end(), gpu::BindSet(), ov::format("DawnDevice: the shader's binding %d is not bound.", int64_t(sb.binding)));
-        const Entry *buffer = _get(it->buffer);
-        OV_ERR_FAIL_COND_V_MSG(buffer == nullptr, gpu::BindSet(), "DawnDevice: binding of an unknown buffer.");
         wgpu::BindGroupEntry e{};
         e.binding = sb.binding;
-        e.buffer = buffer->buffer;
-        e.size = buffer->buffer.GetSize();
+        if (sb.image) {
+            const Entry *image = _get(it->image);
+            OV_ERR_FAIL_COND_V_MSG(image == nullptr || !image->texture, gpu::BindSet(), "DawnDevice: binding of an unknown image.");
+            e.textureView = image->texture.CreateView();
+        } else {
+            const Entry *buffer = _get(it->buffer);
+            OV_ERR_FAIL_COND_V_MSG(buffer == nullptr || !buffer->buffer, gpu::BindSet(), "DawnDevice: binding of an unknown buffer.");
+            e.buffer = buffer->buffer;
+            e.size = buffer->buffer.GetSize();
+        }
         group_entries.push_back(e);
     }
     wgpu::BindGroupDescriptor desc{};
@@ -208,28 +301,60 @@ std::vector<gpu::Timestamp> DawnDevice::timestamps() {
     return {};
 }
 
-void DawnDevice::read_buffer_async(gpu::Buffer p_buffer, uint64_t p_offset, uint64_t p_size, gpu::Readback p_done) {
-    const Entry *entry = _get(p_buffer);
-    if (entry == nullptr || !entry->buffer || p_size == 0) {
-        p_done(bytes());
-        return;
-    }
+void DawnDevice::_read(wgpu::Buffer p_staging, uint64_t p_size, uint64_t p_row_bytes, uint64_t p_row_stride, gpu::Readback p_done) {
     std::unique_ptr<Pending> request = std::make_unique<Pending>();
-    wgpu::BufferDescriptor desc{};
-    desc.size = align4(p_size);
-    desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
-    request->staging = context.device.CreateBuffer(&desc);
+    request->staging = p_staging;
     request->size = p_size;
+    request->row_bytes = p_row_bytes;
+    request->row_stride = p_row_stride;
     request->done = std::move(p_done);
-    _encoder().CopyBufferToBuffer(entry->buffer, p_offset, request->staging, 0, desc.size);
-    _submit();
     Pending *target = request.get();
-    request->staging.MapAsync(wgpu::MapMode::Read, 0, desc.size, wgpu::CallbackMode::AllowProcessEvents,
+    p_staging.MapAsync(wgpu::MapMode::Read, 0, p_staging.GetSize(), wgpu::CallbackMode::AllowProcessEvents,
             [target](wgpu::MapAsyncStatus p_status, wgpu::StringView) {
                 target->mapped = true;
                 target->failed = p_status != wgpu::MapAsyncStatus::Success;
             });
     pending.push_back(std::move(request));
+}
+
+void DawnDevice::read_buffer_async(gpu::Buffer p_buffer, uint64_t p_offset, uint64_t p_size, gpu::Readback p_done) {
+    const Entry *entry = _get(p_buffer);
+    const uint64_t size = entry != nullptr && entry->buffer && p_size == 0 && entry->buffer.GetSize() > p_offset ? entry->buffer.GetSize() - p_offset : p_size;
+    if (entry == nullptr || !entry->buffer || size == 0) {
+        p_done(bytes());
+        return;
+    }
+    wgpu::BufferDescriptor desc{};
+    desc.size = align4(size);
+    desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
+    const wgpu::Buffer staging = context.device.CreateBuffer(&desc);
+    _encoder().CopyBufferToBuffer(entry->buffer, p_offset, staging, 0, desc.size);
+    _submit();
+    _read(staging, size, 0, 0, std::move(p_done));
+}
+
+void DawnDevice::read_texture_async(gpu::Texture p_texture, gpu::Readback p_done) {
+    const Entry *entry = _get(p_texture);
+    if (entry == nullptr || !entry->texture) {
+        p_done(bytes());
+        return;
+    }
+    const uint64_t row_bytes = uint64_t(entry->width) * 8;
+    const uint64_t row_stride = align256(row_bytes);
+    wgpu::BufferDescriptor desc{};
+    desc.size = row_stride * entry->height;
+    desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
+    const wgpu::Buffer staging = context.device.CreateBuffer(&desc);
+    wgpu::TexelCopyTextureInfo src{};
+    src.texture = entry->texture;
+    wgpu::TexelCopyBufferInfo dst{};
+    dst.buffer = staging;
+    dst.layout.bytesPerRow = uint32_t(row_stride);
+    dst.layout.rowsPerImage = entry->height;
+    const wgpu::Extent3D size{ entry->width, entry->height, 1 };
+    _encoder().CopyTextureToBuffer(&src, &dst, &size);
+    _submit();
+    _read(staging, row_bytes * entry->height, row_bytes, row_stride, std::move(p_done));
 }
 
 bytes DawnDevice::read_buffer(gpu::Buffer p_buffer, uint64_t p_offset, uint64_t p_size) {
@@ -246,8 +371,16 @@ void DawnDevice::_deliver() {
         Pending &p = *pending[n];
         bytes data;
         if (!p.failed) {
-            const uint8_t *src = static_cast<const uint8_t *>(p.staging.GetConstMappedRange(0, align4(p.size)));
-            data.assign(src, src + p.size);
+            const uint8_t *src = static_cast<const uint8_t *>(p.staging.GetConstMappedRange(0, p.staging.GetSize()));
+            if (p.row_stride == 0) {
+                data.assign(src, src + p.size);
+            } else {
+                // A texture's rows, tight.
+                for (uint64_t at = 0; at < p.size; at += p.row_bytes) {
+                    data.insert(data.end(), src, src + p.row_bytes);
+                    src += p.row_stride;
+                }
+            }
         }
         p.staging.Unmap();
         p.staging.Destroy();

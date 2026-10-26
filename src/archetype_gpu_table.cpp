@@ -4,6 +4,9 @@
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
 #include "ov/bytes.hpp"
+#include "ov/format.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
 #include "page_format.hpp"
 #include "parallel_for.hpp"
 #include "trace.hpp"
@@ -33,8 +36,8 @@ void GpuTable::set_capacity(uint32_t p_capacity, std::shared_ptr<const InstanceS
     const uint64_t most = uint64_t(LIST_ID_MASK) + 1;
     uint64_t want = p_stream ? p_stream->slot_capacity() : 0u;
     if (p_capacity + want > most) {
-        ERR_PRINT(vformat("GpuTable: %d records plus %d streamed slots are over the list word's %d: clamped.", p_capacity, want, most));
-        p_capacity = uint32_t(MIN<uint64_t>(p_capacity, most));
+        OV_ERR_PRINT(ov::format("GpuTable: %d records plus %d streamed slots are over the list word's %d: clamped.", p_capacity, want, most));
+        p_capacity = uint32_t(ov::min<uint64_t>(p_capacity, most));
         want = most - p_capacity;
     }
     capacity = p_capacity;
@@ -47,17 +50,17 @@ SDFGpuTable::UploadCursor GpuTable::upload_cursor() const {
     return UploadCursor{ s ? s->version : 0u, stream ? stream->placements() : 0u };
 }
 
-PackedByteArray GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor &r_now) const {
+ov::bytes GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor &r_now) const {
     const UploadCursor have = p_have; // the caller may pass its own cursor for both
     const std::shared_ptr<const InstanceSnapshot> s = snapshot();
-    PackedByteArray bytes;
+    ov::bytes bytes;
     r_now = UploadCursor{ s ? s->version : 0u, stream ? stream->placements() : 0u };
     if (!s) {
         return bytes;
     }
     // The buffer is sized for instance_capacity() up front; only the snapshot's pages changed since the GPU's version
     // go up, and the keys placed since (their slots, past the table's records).
-    ERR_FAIL_COND_V_MSG(s->records.size() > capacity, bytes, vformat("GpuTable: %d instances, over the GPU capacity of %d.", s->records.size(), capacity));
+    OV_ERR_FAIL_COND_V_MSG(s->records.size() > capacity, bytes, ov::format("GpuTable: %d instances, over the GPU capacity of %d.", s->records.size(), capacity));
     struct Span {
         uint32_t first = 0;
         uint32_t count = 0;
@@ -82,13 +85,13 @@ PackedByteArray GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor 
     for (const Span &sp : spans) {
         total += 8 + int64_t(sp.count) * RECORD_BYTES;
     }
-    bytes.resize(total);
-    bytes.encode_u32(0, uint32_t(spans.size()));
+    bytes.resize(size_t(total));
+    ov::put_u32(bytes.data(), uint32_t(spans.size()));
     int64_t at = 4;
     for (const Span &sp : spans) {
-        bytes.encode_u32(at, sp.first * RECORD_BYTES);
-        bytes.encode_u32(at + 4, sp.count * RECORD_BYTES);
-        uint8_t *out = bytes.ptrw() + at + 8;
+        ov::put_u32(bytes.data() + at, sp.first * RECORD_BYTES);
+        ov::put_u32(bytes.data() + at + 4, sp.count * RECORD_BYTES);
+        uint8_t *out = bytes.data() + at + 8;
         for (uint32_t i = 0; i < sp.count; i++) {
             encode_record(out + size_t(i) * RECORD_BYTES, sp.flat ? sp.flat[i] : s->records[sp.first + i]);
         }
@@ -97,7 +100,7 @@ PackedByteArray GpuTable::record_bytes(const UploadCursor &p_have, UploadCursor 
     return bytes;
 }
 
-uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, PackedByteArray &r_chunk_ids, PackedByteArray &r_list,
+uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const ChunkParam &p_param, ov::bytes &r_chunk_ids, ov::bytes &r_list,
         uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes, std::vector<uint32_t> *r_streamed) const {
     (void)p_param;
     Trace::Scope span("table", "build_lists");
@@ -113,7 +116,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     if ((!snap || snap->empty()) && !stream) {
         r_list.clear(); // every list empty: encode_chunk_input left the offsets and counts at 0
         for (const ChunkId &c : p_chunks) {
-            list_stats.chunks[MIN(MAX(ChunkMath::get_lod(c), 0), ChunkMath::MAX_LOD_NUMBERS - 1)]++;
+            list_stats.chunks[ov::min(ov::max(ChunkMath::get_lod(c), 0), ChunkMath::MAX_LOD_NUMBERS - 1)]++;
         }
         list_stats.batches++;
         list_stats.build_usec += int64_t(now_usec() - t0);
@@ -178,21 +181,21 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
             list_stats.split++; // this chunk and the rest go in a later batch
             break;
         }
-        const int lod = MIN(MAX(ChunkMath::get_lod(p_chunks[i]), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
+        const int lod = ov::min(ov::max(ChunkMath::get_lod(p_chunks[i]), 0), ChunkMath::MAX_LOD_NUMBERS - 1);
         list_stats.chunks[lod]++;
         list_stats.entries[lod] += int64_t(indices.size());
-        list_stats.longest[lod] = MAX(list_stats.longest[lod], int64_t(indices.size()));
+        list_stats.longest[lod] = ov::max(list_stats.longest[lod], int64_t(indices.size()));
         list_stats.palette_entries[lod] += int64_t(palettes[i].size());
-        list_stats.palette_longest[lod] = MAX(list_stats.palette_longest[lod], int64_t(palettes[i].size()));
+        list_stats.palette_longest[lod] = ov::max(list_stats.palette_longest[lod], int64_t(palettes[i].size()));
         if (!fits[i]) {
             list_stats.palette_truncated++;
-            ERR_PRINT(vformat("GpuTable: a LOD %d chunk names more than %d materials: the rest draw as ground.", lod, ChunkPalette::MAX_ENTRIES));
+            OV_ERR_PRINT(ov::format("GpuTable: a LOD %d chunk names more than %d materials: the rest draw as ground.", lod, ChunkPalette::MAX_ENTRIES));
         }
         // Only a list longer than the whole buffer is cut (its chunk gets a wrong surface, and the CPU's evaluate
         // disagrees there).
         if (indices.size() > budget) {
             list_stats.truncated++;
-            ERR_PRINT(vformat("GpuTable: a LOD %d chunk's list of %d instances is over the %d words of the buffer: truncated (wrong surface there).",
+            OV_ERR_PRINT(ov::format("GpuTable: a LOD %d chunk's list of %d instances is over the %d words of the buffer: truncated (wrong surface there).",
                     lod, int64_t(indices.size()), int64_t(budget)));
             indices.resize(budget);
             // Its palette came from the whole list: it draws as its base (on the ground block; both meshers read a record's
@@ -200,14 +203,14 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
             palettes[i] = base;
         }
         const int64_t input_at = int64_t(i) * GPUFrame::CHUNK_INPUT_BYTES;
-        r_chunk_ids.encode_u32(input_at + GPUFrame::CHUNK_LIST_OFFSET_AT, uint32_t(words.size()));
-        r_chunk_ids.encode_s32(input_at + GPUFrame::CHUNK_LIST_COUNT_AT, int32_t(indices.size()));
+        ov::put_u32(r_chunk_ids.data() + input_at + GPUFrame::CHUNK_LIST_OFFSET_AT, uint32_t(words.size()));
+        ov::put_s32(r_chunk_ids.data() + input_at + GPUFrame::CHUNK_LIST_COUNT_AT, int32_t(indices.size()));
         words.insert(words.end(), indices.begin(), indices.end());
         if (r_palettes) {
             (*r_palettes)[i] = std::move(palettes[i]);
         }
         if (r_streamed) {
-            (*r_streamed)[i] = MIN(streamed[i], uint32_t(indices.size())); // a cut list: at most what is left
+            (*r_streamed)[i] = ov::min(streamed[i], uint32_t(indices.size())); // a cut list: at most what is left
         }
     }
     if (r_palettes) {
@@ -216,15 +219,15 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     if (r_streamed) {
         r_streamed->resize(kept);
     }
-    r_list.resize(int64_t(words.size()) * 4);
-    std::memcpy(r_list.ptrw(), words.data(), words.size() * 4); // little-endian, like the GPU
+    r_list.resize(words.size() * 4);
+    std::memcpy(r_list.data(), words.data(), words.size() * 4); // little-endian, like the GPU
     list_stats.batches++;
     list_stats.build_usec += int64_t(now_usec() - t0);
     return uint32_t(kept);
 }
 
-Dictionary GpuTable::get_stats() const {
-    Dictionary d;
+ov::Value GpuTable::get_stats() const {
+    ov::Value d = ov::Value::object();
     const std::shared_ptr<const InstanceSnapshot> s = snapshot();
     d["records"] = s ? int64_t(s->records.size()) : int64_t(0);
     d["capacity"] = int64_t(capacity);
@@ -237,21 +240,21 @@ Dictionary GpuTable::get_stats() const {
     d["list_truncated"] = list_stats.truncated;
     d["list_split"] = list_stats.split;
     d["palette_truncated"] = list_stats.palette_truncated;
-    Dictionary per_lod;
+    ov::Value per_lod = ov::Value::object();
     for (int lod = 0; lod < ChunkMath::MAX_LOD_NUMBERS; lod++) {
         if (list_stats.chunks[lod] == 0) {
             continue;
         }
-        Dictionary l;
+        ov::Value l = ov::Value::object();
         l["chunks"] = list_stats.chunks[lod];
         l["avg"] = double(list_stats.entries[lod]) / double(list_stats.chunks[lod]);
         l["max"] = list_stats.longest[lod];
         l["palette_avg"] = double(list_stats.palette_entries[lod]) / double(list_stats.chunks[lod]);
         l["palette_max"] = list_stats.palette_longest[lod];
-        per_lod[itos(lod)] = l;
+        per_lod[ov::itos(lod)] = l;
     }
     d["list_len_per_lod"] = per_lod;
-    d.merge(scene_stats.duplicate(true)); // a copy: a Dictionary is shared by reference
+    d.merge(scene_stats);
     return d;
 }
 

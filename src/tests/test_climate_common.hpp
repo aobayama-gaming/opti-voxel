@@ -6,21 +6,31 @@
 #include "climate.hpp"
 #include "sdf_cascade.hpp"
 
+#include "ov/json.hpp"
+
 // What the climate tests share (test_climate.cpp, test_climate_shape.cpp).
 
 #define CLIMATE_REQUIRE(p_cond) CHECK_OR_RETURN(p_cond)
 
 namespace ClimateTest {
 
+// A JSON text's value (nil if it isn't one).
+inline ov::Value json(const ov::str &p_text) {
+    ov::str error;
+    const ov::Value v = ov::parse_json(p_text, error);
+    CHECK(error.empty());
+    return v;
+}
+
 // An SDFCascade with a climate table (a file, res:// or absolute, or its data) at 5 cm and p_lods LODs; p_skirt_cells
 // caps the skirts (ChunkParam::skirt_depth), the default's when negative.
 struct ClimateSDF {
     SDFCascade sdf;
     ClimateSDF(const char *p_path, int p_lods, float p_skirt_cells = -1.0f) {
-        CHECK(Climate::load(p_path, sdf.climate_data) == String());
+        CHECK(Climate::load(p_path, sdf.climate_data) == ov::str());
         configure(p_lods, p_skirt_cells);
     }
-    ClimateSDF(const Dictionary &p_data, int p_lods) {
+    ClimateSDF(const ov::Value &p_data, int p_lods) {
         sdf.climate_data = p_data;
         configure(p_lods, -1.0f);
     }

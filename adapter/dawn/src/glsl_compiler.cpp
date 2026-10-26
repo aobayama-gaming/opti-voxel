@@ -13,6 +13,7 @@ namespace ov::dawn {
 namespace {
 
 // SPIR-V opcodes, decorations and storage classes read by reflect().
+constexpr uint32_t OP_TYPE_IMAGE = 25;
 constexpr uint32_t OP_TYPE_POINTER = 32;
 constexpr uint32_t OP_VARIABLE = 59;
 constexpr uint32_t OP_DECORATE = 71;
@@ -22,13 +23,38 @@ constexpr uint32_t DECORATION_NON_WRITABLE = 24;
 constexpr uint32_t DECORATION_NON_READABLE = 25;
 constexpr uint32_t DECORATION_BINDING = 33;
 constexpr uint32_t DECORATION_DESCRIPTOR_SET = 34;
+constexpr uint32_t STORAGE_UNIFORM_CONSTANT = 0;
 constexpr uint32_t STORAGE_UNIFORM = 2;
 constexpr uint32_t STORAGE_STORAGE_BUFFER = 12;
 
-// The set-0 buffers: variable -> pointer -> struct, the struct's members all NonWritable for a readonly block.
+// The variables that are storage images (an image type with Sampled = 2, behind a UniformConstant pointer).
+std::map<uint32_t, bool> storage_images(const std::vector<uint32_t> &p_spirv) {
+    std::map<uint32_t, bool> image_types, pointer_to_image, out;
+    for (size_t i = 5; i < p_spirv.size();) {
+        const uint32_t count = p_spirv[i] >> 16;
+        const uint32_t op = p_spirv[i] & 0xFFFFu;
+        if (count == 0 || i + count > p_spirv.size()) {
+            break;
+        }
+        const uint32_t *w = &p_spirv[i];
+        if (op == OP_TYPE_IMAGE && count >= 9 && w[7] == 2) {
+            image_types[w[1]] = true;
+        } else if (op == OP_TYPE_POINTER && count >= 4 && w[2] == STORAGE_UNIFORM_CONSTANT && image_types.count(w[3])) {
+            pointer_to_image[w[1]] = true;
+        } else if (op == OP_VARIABLE && count >= 4 && pointer_to_image.count(w[1])) {
+            out[w[2]] = true;
+        }
+        i += count;
+    }
+    return out;
+}
+
+// The set-0 buffers (variable -> pointer -> struct, the struct's members all NonWritable for a readonly block) and storage
+// images.
 std::vector<ShaderBinding> reflect(const std::vector<uint32_t> &p_spirv) {
+    const std::map<uint32_t, bool> images = storage_images(p_spirv);
     std::map<uint32_t, uint32_t> binding, set, var_type, var_class, pointee, struct_members, non_writable_members;
-    std::map<uint32_t, bool> var_non_writable;
+    std::map<uint32_t, bool> var_non_writable, var_non_readable;
     for (size_t i = 5; i < p_spirv.size();) {
         const uint32_t count = p_spirv[i] >> 16;
         const uint32_t op = p_spirv[i] & 0xFFFFu;
@@ -43,6 +69,8 @@ std::vector<ShaderBinding> reflect(const std::vector<uint32_t> &p_spirv) {
                 set[w[1]] = w[3];
             } else if (w[2] == DECORATION_NON_WRITABLE) {
                 var_non_writable[w[1]] = true;
+            } else if (w[2] == DECORATION_NON_READABLE) {
+                var_non_readable[w[1]] = true;
             }
         } else if (op == OP_MEMBER_DECORATE && count >= 4 && w[3] == DECORATION_NON_WRITABLE) {
             non_writable_members[w[1]]++;
@@ -58,8 +86,20 @@ std::vector<ShaderBinding> reflect(const std::vector<uint32_t> &p_spirv) {
     }
     std::vector<ShaderBinding> out;
     for (const auto &[var, b] : binding) {
+        if ((set.count(var) ? set[var] : 0) != 0) {
+            continue;
+        }
+        if (images.count(var)) {
+            ShaderBinding sb;
+            sb.binding = b;
+            sb.image = true;
+            sb.write_only = var_non_readable[var];
+            sb.read_only = var_non_writable[var];
+            out.push_back(sb);
+            continue;
+        }
         const uint32_t storage = var_class.count(var) ? var_class[var] : 0;
-        if ((set.count(var) ? set[var] : 0) != 0 || (storage != STORAGE_UNIFORM && storage != STORAGE_STORAGE_BUFFER)) {
+        if (storage != STORAGE_UNIFORM && storage != STORAGE_STORAGE_BUFFER) {
             continue;
         }
         const uint32_t block = pointee[var_type[var]];
@@ -74,8 +114,9 @@ std::vector<ShaderBinding> reflect(const std::vector<uint32_t> &p_spirv) {
 }
 
 // WebGPU has no write-only storage buffers: a `writeonly` block (NonReadable) becomes read-write. The bits a shader
-// computes don't change, only what the validator allows.
+// computes don't change, only what the validator allows. A storage image keeps it (a write-only storage texture).
 void drop_non_readable(std::vector<uint32_t> &r_spirv) {
+    const std::map<uint32_t, bool> images = storage_images(r_spirv);
     std::vector<uint32_t> out(r_spirv.begin(), r_spirv.begin() + std::min<size_t>(5, r_spirv.size()));
     for (size_t i = 5; i < r_spirv.size();) {
         const uint32_t count = r_spirv[i] >> 16;
@@ -84,7 +125,7 @@ void drop_non_readable(std::vector<uint32_t> &r_spirv) {
             out.insert(out.end(), r_spirv.begin() + std::ptrdiff_t(i), r_spirv.end());
             break;
         }
-        const bool drop = (op == OP_DECORATE && count >= 3 && r_spirv[i + 2] == DECORATION_NON_READABLE) ||
+        const bool drop = (op == OP_DECORATE && count >= 3 && r_spirv[i + 2] == DECORATION_NON_READABLE && !images.count(r_spirv[i + 1])) ||
                 (op == OP_MEMBER_DECORATE && count >= 4 && r_spirv[i + 3] == DECORATION_NON_READABLE);
         if (!drop) {
             out.insert(out.end(), r_spirv.begin() + std::ptrdiff_t(i), r_spirv.begin() + std::ptrdiff_t(i + count));

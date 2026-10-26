@@ -40,7 +40,7 @@ VoxelPos test_voxel(int p_lod, int p_place, int p_index) {
 
 } // namespace
 
-Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
+Dictionary check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
     SDFCascade sdf;
     ChunkParam param = p_param;
     configure_variant(sdf, p_set, p_lods, param);
@@ -69,7 +69,7 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     std::vector<Float4> units(voxels.size());
     std::vector<Float4> fields(voxels.size());
     // One batch of every LOD: items of different LODs side by side; the registers, then the site walk's entry point.
-    const bool ran = gpu.create(p_rd, &sdf, param, uint32_t(voxels.size())) && gpu.units(lattice.data(), lods.data(), int(voxels.size()), units.data(), stats) &&
+    const bool ran = gpu.create(p_device, &sdf, param, uint32_t(voxels.size())) && gpu.units(lattice.data(), lods.data(), int(voxels.size()), units.data(), stats) &&
             gpu.ground_field(voxels.data(), lods.data(), int(voxels.size()), fields.data(), stats);
     if (!ran) {
         examples.push_back("the point passes failed (compile or run)");
@@ -90,7 +90,7 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
             if (!same_bits(units[i], want_unit) || !same_bits(field, want_field) || float_bits(cull) != float_bits(want_cull)) {
                 lod_differing++;
                 if (examples.size() < 24) {
-                    examples.push_back(vformat("set %s LOD %d voxel %s: unit gpu %s cpu %s, field %s / %s, cull %s / %s", set_label(p_set), lod, godot_str(voxels[i]),
+                    examples.push_back(vformat("set %s LOD %d voxel %s: unit gpu %s cpu %s, field %s / %s, cull %s / %s", godot_str(set_label(p_set)), lod, godot_str(voxels[i]),
                             text(units[i]), text(want_unit), text(field), text(want_field), cull, want_cull));
                 }
             }
@@ -111,7 +111,7 @@ Dictionary check_points(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     return d;
 }
 
-Dictionary point_timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
+Dictionary point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
     Dictionary out;
     Array rows;
     for (const SpikeSet set : p_sets) {
@@ -120,11 +120,11 @@ Dictionary point_timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_se
         configure_variant(sdf, set, p_lods, param);
         CascadePointsGPU gpu;
         const uint32_t most = TIMING_SIZES[std::size(TIMING_SIZES) - 1];
-        if (!gpu.create(p_rd, &sdf, param, most)) {
-            out["error_" + set_label(set)] = "the point passes failed to compile";
+        if (!gpu.create(p_device, &sdf, param, most)) {
+            out[godot_str("error_" + set_label(set))] = "the point passes failed to compile";
             continue;
         }
-        out["scratch_mb_" + set_label(set)] = double(gpu.scratch_bytes()) / 1048576.0;
+        out[godot_str("scratch_mb_" + set_label(set))] = double(gpu.scratch_bytes()) / 1048576.0;
         std::vector<VoxelPos> points(most);
         std::vector<int> lods(most);
         std::vector<Float4> values(most);
@@ -146,7 +146,7 @@ Dictionary point_timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_se
                     }
                 }
                 Dictionary row;
-                row["set"] = set_label(set);
+                row["set"] = godot_str(set_label(set));
                 row["lod"] = lod;
                 row["points"] = int64_t(size);
                 row["gpu_ms_median"] = median(gpu_ms);

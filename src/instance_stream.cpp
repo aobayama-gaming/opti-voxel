@@ -2,10 +2,11 @@
 #include "instance_stream.hpp"
 
 #include "debug_log.hpp"
+#include "ov/format.hpp"
+#include "ov/math.hpp"
+#include "ov/on_error.hpp"
 #include "parallel_for.hpp"
 #include "trace.hpp"
-
-#include <godot_cpp/core/error_macros.hpp>
 
 #include <algorithm>
 #include <iterator>
@@ -44,7 +45,7 @@ InstanceStream::InstanceStream(std::vector<std::shared_ptr<const ScatterSource>>
         std::unique_ptr<StreamExecutor> p_executor) :
         sources(std::move(p_sources)), param(p_param), settings(p_settings), executor(std::move(p_executor)) {
     for (size_t i = 0; i < sources.size(); i++) {
-        ERR_FAIL_COND_MSG(sources[i]->setup().id != i, "InstanceStream: source ids must be their index.");
+        OV_ERR_FAIL_COND_MSG(sources[i]->setup().id != i, "InstanceStream: source ids must be their index.");
     }
 }
 
@@ -145,7 +146,7 @@ InstanceStream::Admit InstanceStream::admit(const ChunkId &p_chunk, uint64_t p_o
     stats.admitted[answer]++;
     const int64_t created = stats.keys_created - created_before;
     stats.admit_keys_created += created;
-    stats.admit_keys_created_max = MAX(stats.admit_keys_created_max, created);
+    stats.admit_keys_created_max = ov::max(stats.admit_keys_created_max, created);
     stats.admit_usec += now_usec() - t0;
     return answer;
 }
@@ -314,7 +315,7 @@ void InstanceStream::start(Entry *const *p_entries, size_t p_count) {
     {
         const std::lock_guard<std::mutex> lock(job_mutex);
         jobs.merge(made);
-        stats.jobs_queued_max = MAX(stats.jobs_queued_max, int64_t(jobs.size())); // under the stream's lock too
+        stats.jobs_queued_max = ov::max(stats.jobs_queued_max, int64_t(jobs.size())); // under the stream's lock too
         spawn = claim_drain();
     }
     if (spawn) {
@@ -465,7 +466,7 @@ void InstanceStream::poll() {
     stats.evict_usec += t_end - t_evict;
     const uint64_t dt = t_end - t0;
     stats.poll_usec += dt;
-    stats.poll_usec_max = MAX(stats.poll_usec_max, dt);
+    stats.poll_usec_max = ov::max(stats.poll_usec_max, dt);
 }
 
 void InstanceStream::land(std::unique_ptr<Job> p_job) {
@@ -486,7 +487,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
         stats.land_usec += now_usec() - t0;
         return;
     }
-    const int lod = CLAMP(p_job->key.lod, 0, ChunkMath::MAX_LOD_NUMBERS - 1);
+    const int lod = ov::clamp(p_job->key.lod, 0, ChunkMath::MAX_LOD_NUMBERS - 1);
     stats.computed++;
     stats.compute_usec += int64_t(p_job->usec);
     stats.computed_by[p_job->key.kind][lod]++;
@@ -513,7 +514,7 @@ void InstanceStream::land(std::unique_ptr<Job> p_job) {
         place(e); // before it is on the LRU list: making room never evicts it
     }
     if (e.pins == 0) {
-        e.used = MAX(e.used, frame);
+        e.used = ov::max(e.used, frame);
         lru_link(e);
     }
     stats.land_usec += now_usec() - t0;
@@ -528,8 +529,8 @@ bool InstanceStream::place(Entry &r_entry) {
         }
         if (!room) {
             if (stats.slots_full++ == 0) {
-                ERR_PRINT(vformat("InstanceStream: %d records don't fit the %d slots, even past the keys asked for in the last %d frames: the "
-                                  "chunks needing them wait (InstanceStream::slot_budget).",
+                OV_ERR_PRINT(ov::format("InstanceStream: %d records don't fit the %d slots, even past the keys asked for in the last %d frames: the "
+                                        "chunks needing them wait (InstanceStream::slot_budget).",
                         r_entry.count, settings.slot_capacity, GRACE_FRAMES));
             }
             // Its parked chunks go back to their mesher (their pins released, room comes back): asked again, LATER.
@@ -555,7 +556,7 @@ bool InstanceStream::place(Entry &r_entry) {
         chain_inputs.unlink(r_entry); // its records are in slots now
     }
     stats.placed++;
-    stats.slots_peak = MAX(stats.slots_peak, slots_used());
+    stats.slots_peak = ov::max(stats.slots_peak, slots_used());
     for (const std::pair<ParkKey, uint64_t> &w : r_entry.waiters) {
         const auto it = parked.find(w.first);
         if (it != parked.end() && it->second.seq == w.second && --it->second.missing == 0) {
@@ -624,14 +625,14 @@ bool InstanceStream::evict_oldest(const Chain &p_chain) {
         input_records -= e->count;
     }
     stats.evicted++;
-    stats.evicted_by[e->key.kind][CLAMP(e->key.lod, 0, ChunkMath::MAX_LOD_NUMBERS - 1)]++;
+    stats.evicted_by[e->key.kind][ov::clamp(e->key.lod, 0, ChunkMath::MAX_LOD_NUMBERS - 1)]++;
     const SourceKey key = e->key; // asked for again, it is computed again (the same records)
     entries.erase(key);
     return true;
 }
 
 void InstanceStream::touch(Entry &r_entry) {
-    r_entry.used = MAX(r_entry.used, frame);
+    r_entry.used = ov::max(r_entry.used, frame);
     if (r_entry.lru_all.in && lru_chain(r_entry).newest != &r_entry) {
         lru_unlink(r_entry);
         lru_link(r_entry);
@@ -646,7 +647,7 @@ void InstanceStream::pin(Entry &r_entry) {
 
 void InstanceStream::unpin(Entry &r_entry) {
     if (--r_entry.pins == 0 && r_entry.state == Entry::READY) {
-        r_entry.used = MAX(r_entry.used, frame); // the chunk's batch reads it: its grace starts now
+        r_entry.used = ov::max(r_entry.used, frame); // the chunk's batch reads it: its grace starts now
         lru_link(r_entry);
     }
 }

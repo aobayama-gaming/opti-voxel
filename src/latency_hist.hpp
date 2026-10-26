@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ov/value.hpp"
+
 #include <algorithm>
 #include <cstdint>
 
@@ -62,3 +64,13 @@ private:
     uint64_t n = 0;
     uint64_t largest = 0;
 };
+
+// { count, p50, p95, max }, the reports' form of a LatencyHist.
+inline ov::Value to_value(const LatencyHist &p_h) {
+    ov::Value d;
+    d["count"] = int64_t(p_h.count());
+    d["p50"] = int64_t(p_h.percentile(0.5));
+    d["p95"] = int64_t(p_h.percentile(0.95));
+    d["max"] = int64_t(p_h.max());
+    return d;
+}

@@ -50,7 +50,18 @@ void main() {
 }
 )glsl";
 
+constexpr const char TEXTURE_GLSL[] = R"glsl(#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba16ui) uniform restrict writeonly uimage2D image;
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    imageStore(image, ivec2(p), uvec4(p.x, p.y, p.x ^ p.y, 7u));
+}
+)glsl";
+
 constexpr uint32_t PLUMBING_WORDS = 1000;
+constexpr uint32_t TEXTURE_W = 16;
+constexpr uint32_t TEXTURE_H = 8;
 constexpr uint32_t PLUMBING_MUL = 7;
 constexpr uint32_t PLUMBING_ADD = 11;
 constexpr uint32_t POINTS_PER_ORIGIN = 1024;
@@ -112,6 +123,61 @@ void check_plumbing(ov::gpu::Device &p_device, Report &r_report) {
         }
     }
     for (Handle h : { Handle(set), Handle(in), Handle(out), Handle(copy), Handle(uniform), Handle(unused), Handle(pipeline) }) {
+        p_device.free(h);
+    }
+}
+
+// A storage image written by a shader (A), a region of it copied into a texture made with data (B), a texture updated
+// then cleared (C); B and C read back.
+void check_textures(ov::gpu::Device &p_device, Report &r_report) {
+    using namespace ov::gpu;
+    ov::str error;
+    const Pipeline pipeline = p_device.create_compute_pipeline("gpu_check_texture", TEXTURE_GLSL, error);
+    if (!pipeline.is_valid()) {
+        r_report.error = "texture shader: " + error;
+        return;
+    }
+    const uint32_t texels = TEXTURE_W * TEXTURE_H;
+    std::vector<uint16_t> start(texels * 4), update(texels * 4);
+    for (uint32_t i = 0; i < texels * 4; i++) {
+        start[i] = uint16_t(1000 + i);
+        update[i] = uint16_t(5000 + i);
+    }
+    const Texture a = p_device.create_texture(TextureFormat::RGBA16_UINT, TEXTURE_W, TEXTURE_H, TEXTURE_STORAGE | TEXTURE_COPY_SRC | TEXTURE_COPY_DST);
+    const Texture b = p_device.create_texture(TextureFormat::RGBA16_UINT, TEXTURE_W, TEXTURE_H, TEXTURE_COPY_SRC | TEXTURE_COPY_DST, start.data());
+    const Texture c = p_device.create_texture(TextureFormat::RGBA16_UINT, TEXTURE_W, TEXTURE_H, TEXTURE_COPY_SRC | TEXTURE_COPY_DST | TEXTURE_UPDATE);
+    const BindSet set = p_device.create_bind_set(pipeline, { Binding::storage_image(0, a) });
+    p_device.clear_texture(a);
+    p_device.dispatch(pipeline, set, nullptr, 0, TEXTURE_W / 8, TEXTURE_H / 8, 1);
+    // A's 4 x 2 block at (2, 1) to (5, 3) of B.
+    p_device.copy_texture(a, b, 2, 1, 5, 3, 4, 2);
+    p_device.update_texture(c, update.data(), update.size() * 2);
+    p_device.clear_texture(c);
+    ov::bytes got_b, got_c;
+    p_device.read_texture_async(b, [&](const ov::bytes &p_data) { got_b = p_data; });
+    p_device.read_texture_async(c, [&](const ov::bytes &p_data) { got_c = p_data; });
+    p_device.sync();
+    if (got_b.size() != texels * 8 || got_c.size() != texels * 8) {
+        r_report.error = ov::format("texture readback: %d and %d bytes of %d", int64_t(got_b.size()), int64_t(got_c.size()), int64_t(texels * 8));
+    } else {
+        for (uint32_t y = 0; y < TEXTURE_H; y++) {
+            for (uint32_t x = 0; x < TEXTURE_W; x++) {
+                const bool copied = x >= 5 && x < 9 && y >= 3 && y < 5;
+                const uint32_t ax = x - 5 + 2, ay = y - 3 + 1; // the copy's source texel in A
+                for (uint32_t k = 0; k < 4; k++) {
+                    const uint32_t i = (y * TEXTURE_W + x) * 4 + k;
+                    const uint16_t from_a[4] = { uint16_t(ax), uint16_t(ay), uint16_t(ax ^ ay), 7 };
+                    uint16_t vb, vc;
+                    std::memcpy(&vb, got_b.data() + i * 2, 2);
+                    std::memcpy(&vc, got_c.data() + i * 2, 2);
+                    r_report.plumbing_checked += 2;
+                    r_report.plumbing_mismatch += vb != (copied ? from_a[k] : start[i]) ? 1 : 0;
+                    r_report.plumbing_mismatch += vc != 0 ? 1 : 0;
+                }
+            }
+        }
+    }
+    for (Handle h : { Handle(set), Handle(a), Handle(b), Handle(c), Handle(pipeline) }) {
         p_device.free(h);
     }
 }
@@ -216,6 +282,9 @@ ov::str Report::summary() const {
 Report run(ov::gpu::Device &p_device) {
     Report report;
     check_plumbing(p_device, report);
+    if (report.error.empty()) {
+        check_textures(p_device, report);
+    }
     if (report.error.empty()) {
         check_noise(p_device, report);
     }

@@ -10,7 +10,6 @@
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
-#include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -27,6 +26,11 @@ using ExactNoise::exact_pow2;
 using ExactNoise::float_bits;
 
 namespace {
+
+// A buffer's bytes as godot's (p_size 0: to its end).
+PackedByteArray read_bytes(ov::gpu::Device *p_device, ov::gpu::Buffer p_buffer, uint64_t p_offset = 0, uint64_t p_size = 0) {
+    return godot_bytes(p_device->read_buffer(p_buffer, p_offset, p_size));
+}
 
 constexpr uint32_t MAX_BATCH = 128;
 constexpr int CHUNKS_PER_PLACE = 14;
@@ -117,8 +121,8 @@ struct Checks {
 // One channel set: every batch through the GPU passes level by level, compared with Cascade::run.
 class SetChecker {
 public:
-    SetChecker(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) :
-            rd(p_rd), set(p_set), lods(p_lods), param(p_param), checks(r_checks) {
+    SetChecker(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) :
+            device(p_device), set(p_set), lods(p_lods), param(p_param), checks(r_checks) {
         configure_variant(sdf, p_set, p_lods, param);
         // The channels the GPU carries (an empty FieldRange: the ground's only): the chunk passes' range, every level with
         // the biome pick (CascadeGLSL::field_range); the CPU's runs carry the same.
@@ -128,28 +132,28 @@ public:
         nv = CascadeGLSL::vec4s_per_point(sdf.get_spec(), range);
         cs = p_param.chunk_size;
         cells = uint64_t(cs) * cs * cs;
-        input = rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
+        input = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
         const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(param));
-        param_ubo = rd->uniform_buffer_create(param_bytes.size(), param_bytes);
-        samples = rd->storage_buffer_create(MAX_BATCH * cells * 16);
-        debug = rd->storage_buffer_create(MAX_BATCH * cells * nv * 16);
-        debug_samples = rd->storage_buffer_create(MAX_BATCH * cells * 16);
+        param_ubo = device->create_buffer(ov::gpu::BufferKind::UNIFORM, param_bytes.size(), param_bytes.ptr());
+        samples = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * 16);
+        debug = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * nv * 16);
+        debug_samples = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * 16);
     }
 
     ~SetChecker() {
         debug_passes.free();
         passes.free();
-        for (const RID &rid : { input, param_ubo, samples, debug, debug_samples }) {
-            rd->free_rid(rid);
+        for (const ov::gpu::Buffer rid : { input, param_ubo, samples, debug, debug_samples }) {
+            device->free(rid);
         }
     }
 
     void run() {
         // The meshers' variant for every level and the samples; the debug variant (same scratch) re-runs
         // level 0 to read its channels.
-        if (!passes.create(rd, &sdf, param, MAX_BATCH, input, param_ubo, samples) ||
-                !debug_passes.create(rd, &sdf, param, MAX_BATCH, input, param_ubo, debug_samples, debug, &passes)) {
-            checks.example("set " + set_label(set) + ": the cascade passes failed to compile");
+        if (!passes.create(device, &sdf, param, MAX_BATCH, input, param_ubo, samples) ||
+                !debug_passes.create(device, &sdf, param, MAX_BATCH, input, param_ubo, debug_samples, debug, &passes)) {
+            checks.example("set " + godot_str(set_label(set)) + ": the cascade passes failed to compile");
             checks.differing++;
             return;
         }
@@ -161,7 +165,7 @@ public:
     }
 
 private:
-    RenderingDevice *rd;
+    ov::gpu::Device *device;
     SpikeSet set;
     int lods;
     ChunkParam param;
@@ -173,11 +177,11 @@ private:
     bool all_fields = false;
     int cs = 0;
     uint64_t cells = 0;
-    RID input;
-    RID param_ubo;
-    RID samples;
-    RID debug;
-    RID debug_samples;
+    ov::gpu::Buffer input;
+    ov::gpu::Buffer param_ubo;
+    ov::gpu::Buffer samples;
+    ov::gpu::Buffer debug;
+    ov::gpu::Buffer debug_samples;
     CascadePasses passes;
     CascadePasses debug_passes;
 
@@ -205,29 +209,28 @@ private:
             checks.chunks_per_lod.set(chunks[c].lod, checks.chunks_per_lod[chunks[c].lod] + 1);
         }
         checks.chunks += count;
-        rd->buffer_update(input, 0, ids.size(), ids);
+        device->update_buffer(input, 0, ids.size(), ids.ptr());
         PackedByteArray final_channels;
         for (int j = passes.level_count(min_lod) - 1; j >= 0; j--) {
-            passes.record_level(j, 0, count, Vector2i(min_lod, max_lod));
+            passes.record_level(j, 0, count, ov::ivec2(min_lod, max_lod));
             if (j == 0) {
-                debug_passes.record_level(0, 0, count, Vector2i(min_lod, max_lod));
+                debug_passes.record_level(0, 0, count, ov::ivec2(min_lod, max_lod));
             }
-            rd->submit();
-            rd->sync();
+            device->sync();
             const uint64_t n = uint64_t(level_bound(cs, j));
             const uint64_t bytes = count * n * n * n * nv * 16;
             if (j > 0) {
                 // The scratch is planar (vec4 v of every slot together): the whole buffer.
-                const PackedByteArray scratch = rd->buffer_get_data((j & 1) ? passes.get_scratch_a() : passes.get_scratch_b());
+                const PackedByteArray scratch = read_bytes(device, (j & 1) ? passes.get_scratch_a() : passes.get_scratch_b());
                 compare_level(j, scratch, PackedByteArray(), uint64_t(scratch.size()) / 16 / nv);
                 continue;
             }
-            final_channels = rd->buffer_get_data(debug, 0, bytes);
-            const PackedByteArray final_samples = rd->buffer_get_data(samples, 0, count * cells * 16);
+            final_channels = read_bytes(device, debug, 0, bytes);
+            const PackedByteArray final_samples = read_bytes(device, samples, 0, count * cells * 16);
             // The debug variant's samples must be the same bits as the meshers' variant's.
-            if (rd->buffer_get_data(debug_samples, 0, count * cells * 16) != final_samples) {
+            if (read_bytes(device, debug_samples, 0, count * cells * 16) != final_samples) {
                 checks.samples_differing++;
-                checks.example("set " + set_label(set) + vformat(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", p_lod));
+                checks.example("set " + godot_str(set_label(set)) + vformat(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", p_lod));
             }
             compare_level(0, final_channels, final_samples);
         }
@@ -281,7 +284,7 @@ private:
                     if (float_bits(want) != float_bits(got)) {
                         differing++;
                         if (checks.wants_example()) {
-                            checks.example(vformat("set %s LOD %d chunk %s (%s) level m=%d point %s channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
+                            checks.example(vformat("set %s LOD %d chunk %s (%s) level m=%d point %s channel %d: gpu %s cpu %s (bits %x / %x)", godot_str(set_label(set)), lod_c,
                                     godot_str(chunks[c].id), chunks[c].place, m, godot_str(p_p), ch, got, want, float_bits(got), float_bits(want)));
                         }
                     }
@@ -308,7 +311,7 @@ private:
             if (float_bits(w[k]) != float_bits(p_got[k])) {
                 checks.samples_differing++;
                 if (checks.wants_example()) {
-                    checks.example(vformat("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
+                    checks.example(vformat("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", godot_str(set_label(set)), lod,
                             godot_str(chunks[p_chunk].id), godot_str(p_grid), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
                 }
                 return;
@@ -352,7 +355,7 @@ private:
                 if (float_bits(flush_value(expect[spec.slot_of_gpu(ch)])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
                     checks.relation_differing++;
                     if (checks.wants_example()) {
-                        checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, godot_str(chunks[p_pair.child].id),
+                        checks.example(vformat("set %s G3 LOD %d child %s point %s channel %d", godot_str(set_label(set)), lod, godot_str(chunks[p_pair.child].id),
                                 godot_str(p_p), ch));
                     }
                     return;
@@ -362,8 +365,8 @@ private:
     }
 };
 
-void check_set(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) {
-    SetChecker checker(p_rd, p_set, p_lods, p_param, r_checks);
+void check_set(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, const ChunkParam &p_param, Checks &r_checks) {
+    SetChecker checker(p_device, p_set, p_lods, p_param, r_checks);
     checker.run();
 }
 
@@ -375,7 +378,7 @@ constexpr int TABLE_LODS = 7;
 
 // The LOD-p_lod chunks holding the records' anchors (at most MAX_BATCH), encoded with their lists.
 std::vector<ChunkId> table_batch(const Archetype::InstanceSnapshot &p_snap, const SDFGpuTable &p_table, int p_lod, const ChunkParam &p_param,
-        PackedByteArray &r_inputs, PackedByteArray &r_words) {
+        ov::bytes &r_inputs, ov::bytes &r_words) {
     std::vector<ChunkId> ids;
     for (uint32_t r = 0; r < p_snap.records.size() && ids.size() < MAX_BATCH; r++) {
         const ChunkId id = ChunkMath::chunk_at_voxel(p_snap.records[r].anchor, p_lod, p_param);
@@ -383,13 +386,13 @@ std::vector<ChunkId> table_batch(const Archetype::InstanceSnapshot &p_snap, cons
             ids.push_back(id);
         }
     }
-    r_inputs.resize(int64_t(ids.size()) * GPUFrame::CHUNK_INPUT_BYTES);
+    r_inputs.resize(ids.size() * GPUFrame::CHUNK_INPUT_BYTES);
     for (size_t c = 0; c < ids.size(); c++) {
-        GPUFrame::encode_chunk_input(r_inputs, int64_t(c), ids[c], p_param);
+        GPUFrame::encode_chunk_input(r_inputs.data() + c * GPUFrame::CHUNK_INPUT_BYTES, ids[c], p_param);
     }
     // The batch keeps the chunks whose lists fit the buffer (the same capacity as the list buffer below).
     ids.resize(p_table.build_lists(ids, p_param, r_inputs, r_words, MAX_BATCH * p_table.max_chunk_list()));
-    r_inputs.resize(int64_t(ids.size()) * GPUFrame::CHUNK_INPUT_BYTES);
+    r_inputs.resize(ids.size() * GPUFrame::CHUNK_INPUT_BYTES);
     return ids;
 }
 
@@ -429,7 +432,7 @@ void compare_table_chunk(const SDFCascade &p_sdf, const Archetype::InstanceSnaps
     });
 }
 
-Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_param) {
+Dictionary check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p_param) {
     Dictionary d;
     ChunkParam param = p_param;
     SDFCascade sdf;
@@ -441,32 +444,31 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
     SDFGpuTable *table = sdf.get_gpu_table();
     const int cs = param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
-    const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
+    const ov::gpu::Buffer input = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
     const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(param));
-    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
-    const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
-    const RID records = p_rd->storage_buffer_create(uint64_t(table->instance_capacity()) * table->record_size());
-    const RID list = p_rd->storage_buffer_create(uint64_t(MAX_BATCH) * table->max_chunk_list() * 4);
+    const ov::gpu::Buffer param_ubo = p_device->create_buffer(ov::gpu::BufferKind::UNIFORM, param_bytes.size(), param_bytes.ptr());
+    const ov::gpu::Buffer samples = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * 16);
+    const ov::gpu::Buffer records = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, uint64_t(table->instance_capacity()) * table->record_size());
+    const ov::gpu::Buffer list = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, uint64_t(MAX_BATCH) * table->max_chunk_list() * 4);
     SDFGpuTable::UploadCursor sent;
-    SDFGpuTable::upload_records(p_rd, records, table->record_bytes(sent, sent));
+    SDFGpuTable::upload_records(*p_device, records, table->record_bytes(sent, sent));
     CascadePasses passes;
     Checks checks;
     int64_t folded = 0;
-    if (!passes.create(p_rd, &sdf, param, MAX_BATCH, input, param_ubo, samples, RID(), nullptr, records, list)) {
+    if (!passes.create(p_device, &sdf, param, MAX_BATCH, input, param_ubo, samples, ov::gpu::Buffer(), nullptr, records, list)) {
         checks.example("the cascade passes failed to compile");
         checks.samples_differing++;
     }
     for (int lod = 0; lod < TABLE_LODS && passes.is_valid(); lod++) {
-        PackedByteArray inputs, words;
+        ov::bytes inputs, words;
         const std::vector<ChunkId> ids = table_batch(*snap, *table, lod, param, inputs, words);
-        p_rd->buffer_update(input, 0, inputs.size(), inputs);
-        if (!words.is_empty()) {
-            p_rd->buffer_update(list, 0, words.size(), words);
+        p_device->update_buffer(input, 0, inputs.size(), inputs.data());
+        if (!words.empty()) {
+            p_device->update_buffer(list, 0, words.size(), words.data());
         }
-        passes.record_all(Vector2i(lod, lod), uint32_t(ids.size()), true); // the fold variant, empty lists included (the bare bits there)
-        p_rd->submit();
-        p_rd->sync();
-        const PackedByteArray got_bytes = p_rd->buffer_get_data(samples, 0, ids.size() * cells * 16);
+        passes.record_all(ov::ivec2(lod, lod), uint32_t(ids.size()), true); // the fold variant, empty lists included (the bare bits there)
+        p_device->sync();
+        const PackedByteArray got_bytes = read_bytes(p_device, samples, 0, ids.size() * cells * 16);
         const float *got = reinterpret_cast<const float *>(got_bytes.ptr());
         for (size_t c = 0; c < ids.size(); c++) {
             compare_table_chunk(sdf, *snap, ids[c], lod, param, got + c * cells * 4, checks, folded);
@@ -474,8 +476,8 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
         checks.chunks += int64_t(ids.size());
     }
     passes.free();
-    for (const RID &rid : { input, param_ubo, samples, records, list }) {
-        p_rd->free_rid(rid);
+    for (const ov::gpu::Buffer rid : { input, param_ubo, samples, records, list }) {
+        p_device->free(rid);
     }
     d["records"] = int64_t(snap->records.size());
     d["chunks"] = checks.chunks;
@@ -492,7 +494,7 @@ Dictionary check_table(RenderingDevice *p_rd, int p_lods, const ChunkParam &p_pa
 // run's last level slots (the pick derived on the level above, like the chunk passes), bit for bit; and how many biomes showed.
 // Empty for a set without a climate (8, 4) or with fewer than 3 biomes (nothing for ok to count); a climate set whose
 // table was refused fails.
-Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
+Dictionary check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
     Dictionary d;
     if (p_set == SpikeSet::H8 || p_set == SpikeSet::L4) {
         return d;
@@ -502,7 +504,7 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     configure_variant(sdf, p_set, p_lods, param);
     if (sdf.get_climate() == nullptr) {
         d["ok"] = false;
-        d["error"] = "the climate was refused: " + sdf.get_climate_error();
+        d["error"] = godot_str("the climate was refused: " + sdf.get_climate_error());
         return d;
     }
     if (sdf.get_climate()->biomes.size() < 3) {
@@ -510,16 +512,16 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
     }
     const int cs = param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
-    const RID input = p_rd->storage_buffer_create(MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
+    const ov::gpu::Buffer input = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
     const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(param));
-    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
-    const RID samples = p_rd->storage_buffer_create(MAX_BATCH * cells * 16);
-    const RID materials = p_rd->storage_buffer_create(MAX_BATCH * cells * 4);
+    const ov::gpu::Buffer param_ubo = p_device->create_buffer(ov::gpu::BufferKind::UNIFORM, param_bytes.size(), param_bytes.ptr());
+    const ov::gpu::Buffer samples = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * 16);
+    const ov::gpu::Buffer materials = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * 4);
     CascadePasses passes;
     Checks checks;
     std::vector<int64_t> seen(Climate::MAX_BIOMES + 1, 0);
     if (!CascadeGLSL::ground_materials(&sdf) ||
-            !passes.create(p_rd, &sdf, param, MAX_BATCH, input, param_ubo, samples, RID(), nullptr, RID(), RID(), materials)) {
+            !passes.create(p_device, &sdf, param, MAX_BATCH, input, param_ubo, samples, ov::gpu::Buffer(), nullptr, ov::gpu::Buffer(), ov::gpu::Buffer(), materials)) {
         checks.example("no ground materials, or the cascade passes failed to compile");
         checks.samples_differing++;
     }
@@ -528,16 +530,15 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
         const std::vector<TestChunk> chunks = batch_chunks(lod, p_lods, param, pairs);
         PackedByteArray ids;
         ids.resize(int64_t(chunks.size()) * GPUFrame::CHUNK_INPUT_BYTES);
-        Vector2i lods(64, 0);
+        ov::ivec2 lods(64, 0);
         for (size_t c = 0; c < chunks.size(); c++) {
             GPUFrame::encode_chunk_input(ids, int64_t(c), chunks[c].id, param);
-            lods = Vector2i(MIN(lods.x, chunks[c].lod), MAX(lods.y, chunks[c].lod));
+            lods = ov::ivec2(MIN(lods.x, chunks[c].lod), MAX(lods.y, chunks[c].lod));
         }
-        p_rd->buffer_update(input, 0, ids.size(), ids);
+        p_device->update_buffer(input, 0, ids.size(), ids.ptr());
         passes.record_all(lods, uint32_t(chunks.size()));
-        p_rd->submit();
-        p_rd->sync();
-        const PackedByteArray got_bytes = p_rd->buffer_get_data(materials, 0, chunks.size() * cells * 4);
+        p_device->sync();
+        const PackedByteArray got_bytes = read_bytes(p_device, materials, 0, chunks.size() * cells * 4);
         const uint32_t *got = reinterpret_cast<const uint32_t *>(got_bytes.ptr());
         for (size_t c = 0; c < chunks.size(); c++) {
             const int l = chunks[c].lod;
@@ -567,14 +568,14 @@ Dictionary check_biomes(RenderingDevice *p_rd, SpikeSet p_set, int p_lods, const
         checks.chunks += int64_t(chunks.size());
     }
     passes.free();
-    for (const RID &rid : { input, param_ubo, samples, materials }) {
-        p_rd->free_rid(rid);
+    for (const ov::gpu::Buffer rid : { input, param_ubo, samples, materials }) {
+        p_device->free(rid);
     }
     Dictionary per_biome;
     int biomes = 0;
     for (size_t m = 1; m < seen.size(); m++) {
         if (seen[m] > 0) {
-            per_biome[sdf.get_climate()->biomes[m - 1].name] = seen[m];
+            per_biome[godot_str(sdf.get_climate()->biomes[m - 1].name)] = seen[m];
             biomes++;
         }
     }
@@ -596,17 +597,16 @@ struct BatchTime {
 };
 
 // Every level of one batch (input already uploaded), timed.
-BatchTime time_batch(RenderingDevice *p_rd, CascadePasses &p_passes, int p_lod, const String &p_prefix) {
+BatchTime time_batch(ov::gpu::Device *p_device, CascadePasses &p_passes, int p_lod, const String &p_prefix) {
     BatchTime out;
     const int levels = p_passes.level_count(p_lod);
-    p_rd->capture_timestamp(p_prefix + String("b"));
+    p_device->timestamp(ov_str(p_prefix + String("b")));
     for (int j = levels - 1; j >= 0; j--) {
-        p_passes.record_level(j, 0, TIMING_CHUNKS, Vector2i(p_lod, p_lod));
-        p_rd->capture_timestamp(p_prefix + itos(j));
+        p_passes.record_level(j, 0, TIMING_CHUNKS, ov::ivec2(p_lod, p_lod));
+        p_device->timestamp(ov_str(p_prefix + itos(j)));
     }
     const uint64_t t0 = now_usec();
-    p_rd->submit();
-    p_rd->sync();
+    p_device->sync();
     out.wall_ms = double(now_usec() - t0) / 1000.0;
     // A local device returns a frame's timestamps when that frame slot is begun again: look after the
     // sync, then after up to 3 empty frames.
@@ -614,16 +614,15 @@ BatchTime time_batch(RenderingDevice *p_rd, CascadePasses &p_passes, int p_lod, 
     std::vector<int64_t> t_level(levels, -1);
     for (int extra = 0; extra <= 3 && t_begin < 0; extra++) {
         if (extra > 0) {
-            p_rd->submit();
-            p_rd->sync();
+            p_device->sync();
         }
-        for (uint32_t i = 0; i < p_rd->get_captured_timestamps_count(); i++) {
-            const String name = p_rd->get_captured_timestamp_name(i);
+        for (const ov::gpu::Timestamp &ts : p_device->timestamps()) {
+            const String name = godot_str(ts.name);
             if (!name.begins_with(p_prefix)) {
                 continue;
             }
             const String tail = name.substr(p_prefix.length());
-            const int64_t t = p_rd->get_captured_timestamp_gpu_time(i);
+            const int64_t t = int64_t(ts.gpu_ns);
             if (tail == "b") {
                 t_begin = t;
             } else if (tail.to_int() < levels) {
@@ -646,13 +645,13 @@ BatchTime time_batch(RenderingDevice *p_rd, CascadePasses &p_passes, int p_lod, 
 }
 
 // G6 / G7: GPU time of every level for single-LOD batches of 128 chunks.
-Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
+Dictionary timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
     const int cs = p_param.chunk_size;
     const uint64_t cells = uint64_t(cs) * cs * cs;
-    const RID input = p_rd->storage_buffer_create(TIMING_CHUNKS * GPUFrame::CHUNK_INPUT_BYTES);
+    const ov::gpu::Buffer input = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, TIMING_CHUNKS * GPUFrame::CHUNK_INPUT_BYTES);
     const PackedByteArray param_bytes = godot_bytes(GPUFrame::chunk_param_bytes(p_param));
-    const RID param_ubo = p_rd->uniform_buffer_create(param_bytes.size(), param_bytes);
-    const RID samples = p_rd->storage_buffer_create(TIMING_CHUNKS * cells * 16);
+    const ov::gpu::Buffer param_ubo = p_device->create_buffer(ov::gpu::BufferKind::UNIFORM, param_bytes.size(), param_bytes.ptr());
+    const ov::gpu::Buffer samples = p_device->create_buffer(ov::gpu::BufferKind::STORAGE, TIMING_CHUNKS * cells * 16);
     std::vector<std::unique_ptr<SDFCascade>> sdfs;
     std::vector<std::unique_ptr<CascadePasses>> passes;
     for (const SpikeSet set : p_sets) {
@@ -660,7 +659,7 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, in
         ChunkParam param = p_param;
         configure_variant(*sdfs.back(), set, p_lods, param); // the same chunks, only the metres differ
         passes.push_back(std::make_unique<CascadePasses>());
-        passes.back()->create(p_rd, sdfs.back().get(), p_param, TIMING_CHUNKS, input, param_ubo, samples);
+        passes.back()->create(p_device, sdfs.back().get(), p_param, TIMING_CHUNKS, input, param_ubo, samples);
     }
     std::vector<int> lods;
     for (int lod = 0; lod < p_lods; lod += 4) {
@@ -679,11 +678,10 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, in
             for (uint32_t c = 0; c < TIMING_CHUNKS; c++) {
                 GPUFrame::encode_chunk_input(ids, c, CascadeMeasure::random_chunk(lod, 0x7133u + uint32_t(r + 2), int(c)), p_param);
             }
-            p_rd->buffer_update(input, 0, ids.size(), ids);
-            p_rd->submit();
-            p_rd->sync();
+            p_device->update_buffer(input, 0, ids.size(), ids.ptr());
+            p_device->sync();
             for (size_t si = 0; si < p_sets.size(); si++) {
-                const BatchTime t = time_batch(p_rd, *passes[si], lod, vformat("cs%d_%d_%d_", r + 2, lod, int(si)));
+                const BatchTime t = time_batch(p_device, *passes[si], lod, vformat("cs%d_%d_%d_", r + 2, lod, int(si)));
                 if (r < 0) {
                     continue;
                 }
@@ -701,7 +699,7 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, in
     for (size_t si = 0; si < p_sets.size(); si++) {
         for (size_t li = 0; li < lods.size(); li++) {
             Dictionary row;
-            row["set"] = set_label(p_sets[si]);
+            row["set"] = godot_str(set_label(p_sets[si]));
             row["lod"] = lods[li];
             row["levels"] = passes[si]->level_count(lods[li]);
             row["wall_ms_median"] = median(wall[si][li]);
@@ -716,7 +714,7 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, in
             row["gpu_ms_per_level_last"] = lv; // j = levels - 1 ... 0
             rows.push_back(row);
         }
-        out["scratch_mb_" + set_label(p_sets[si])] = double(passes[si]->scratch_bytes()) / 1048576.0;
+        out[godot_str("scratch_mb_" + set_label(p_sets[si]))] = double(passes[si]->scratch_bytes()) / 1048576.0;
     }
     out["rows"] = rows;
     out["chunks_per_batch"] = TIMING_CHUNKS;
@@ -725,8 +723,8 @@ Dictionary timing(RenderingDevice *p_rd, const std::vector<SpikeSet> &p_sets, in
     for (std::unique_ptr<CascadePasses> &p : passes) {
         p->free();
     }
-    for (const RID &rid : { input, param_ubo, samples }) {
-        p_rd->free_rid(rid);
+    for (const ov::gpu::Buffer rid : { input, param_ubo, samples }) {
+        p_device->free(rid);
     }
     return out;
 }
@@ -746,12 +744,13 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
     std::vector<SpikeSet> sets;
     for (const String &s : String(p_options.get("sets", "8,4,4c")).split(",")) {
         SpikeSet set;
-        if (parse_variant(s, set)) {
+        if (parse_variant(ov_str(s), set)) {
             sets.push_back(set);
         }
     }
-    RenderingDevice *rd = RenderingServer::get_singleton()->create_local_rendering_device();
-    if (!rd) {
+    const std::unique_ptr<ov::gpu::Device> local = ov::gpu::create_local_device();
+    ov::gpu::Device *device = local.get();
+    if (!device) {
         report["error"] = "no local RenderingDevice (headless or Compatibility renderer)";
         return report;
     }
@@ -761,7 +760,7 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
         for (const SpikeSet set : sets) {
             Checks checks;
             const uint64_t t0 = now_usec();
-            check_set(rd, set, lods, param, checks);
+            check_set(device, set, lods, param, checks);
             Dictionary d;
             d["chunks"] = checks.chunks;
             d["levels"] = checks.levels;
@@ -785,13 +784,13 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
                     checks.samples_differing == 0 && checks.relation_differing == 0;
             d["ok"] = set_ok;
             ok = ok && set_ok;
-            checks_report[set_label(set)] = d;
+            checks_report[godot_str(set_label(set))] = d;
         }
         report["check"] = checks_report;
     }
     if (bool(p_options.get("table", true))) {
         const uint64_t t0 = now_usec();
-        Dictionary d = check_table(rd, lods, param);
+        Dictionary d = check_table(device, lods, param);
         d["seconds"] = double(now_usec() - t0) / 1e6;
         ok = ok && bool(d["ok"]);
         report["table"] = d;
@@ -807,13 +806,13 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
         }
         for (const SpikeSet set : climates) {
             const uint64_t t0 = now_usec();
-            Dictionary d = check_biomes(rd, set, lods, param);
+            Dictionary d = check_biomes(device, set, lods, param);
             if (d.is_empty()) {
                 continue;
             }
             d["seconds"] = double(now_usec() - t0) / 1e6;
             ok = ok && bool(d["ok"]);
-            biomes[set_label(set)] = d;
+            biomes[godot_str(set_label(set))] = d;
         }
         report["biomes"] = biomes;
     }
@@ -821,18 +820,17 @@ Dictionary CascadeSpike::run(const Dictionary &p_options) {
         Dictionary points_report;
         for (const SpikeSet set : sets) {
             const uint64_t t0 = now_usec();
-            Dictionary d = CascadeSpikePoints::check_points(rd, set, lods, param);
+            Dictionary d = CascadeSpikePoints::check_points(device, set, lods, param);
             d["seconds"] = double(now_usec() - t0) / 1e6;
             ok = ok && bool(d["ok"]);
-            points_report[set_label(set)] = d;
+            points_report[godot_str(set_label(set))] = d;
         }
-        points_report["timing"] = CascadeSpikePoints::point_timing(rd, sets, lods, param, int(p_options.get("runs", 10)));
+        points_report["timing"] = CascadeSpikePoints::point_timing(device, sets, lods, param, int(p_options.get("runs", 10)));
         report["points"] = points_report;
     }
     if (bool(p_options.get("timing", true))) {
-        report["timing"] = timing(rd, sets, lods, param, int(p_options.get("runs", 10)));
+        report["timing"] = timing(device, sets, lods, param, int(p_options.get("runs", 10)));
     }
-    memdelete(rd);
     report["lods"] = lods;
     report["ok"] = ok;
     return report;

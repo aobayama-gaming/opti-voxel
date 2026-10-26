@@ -1,29 +1,25 @@
 #pragma once
 
 #include "chunk_palette.hpp"
+#include "gpu_device.hpp"
 #include "material_library.hpp"
 #include "page_format.hpp"
 #include "palette_block.hpp"
 
-#include <godot_cpp/classes/rendering_device.hpp>
-#include <godot_cpp/variant/dictionary.hpp>
-#include <godot_cpp/variant/packed_byte_array.hpp>
-#include <godot_cpp/variant/rid.hpp>
-#include <godot_cpp/variant/string.hpp>
+#include "ov/bytes.hpp"
+#include "ov/value.hpp"
 
 #include <memory>
 #include <vector>
 
-using namespace godot;
-
-// The loaded chunks' material palettes (chunk_palette.hpp) on the main RenderingDevice, for the page shader: one
+// The loaded chunks' material palettes (chunk_palette.hpp) on the main device, for the page shader: one
 // RGBA16UI texture, PALETTE_TEX_WIDTH texels (one whole palette) per row, 2 global ids per texel (lo, hi words of
 // each). A chunk's block offset (in entries) rides in its rows' group headers (PageFormat), a corner's palette
 // index is relative to it. A chunk whose palette is just the base one (SDFGpuTable::base_palette) uses the shared ground
 // block (no allocation, its entries written at rt_create), and so does a chunk whose palette found no room: its vertices
 // then take the base's entries, and a record's index past them material 0 (the direct vertex pass).
 //
-// Main thread: place_batch / release (the allocator). Render thread: rt_* (the texture). The direct mesher's emit
+// Main thread: place_batch / release (the allocator). Device thread: rt_* (the texture). The direct mesher's emit
 // pass writes the batch's texels (glsl_batch) as it writes the headers that name them.
 class PalettePool {
 public:
@@ -41,17 +37,16 @@ public:
     void initialize(uint32_t p_capacity, const std::vector<uint32_t> &p_base);
     // Places each chunk's palette (consumed) and returns the batch payload. A palette that finds no room draws as
     // ground (ERR once, counted).
-    PackedByteArray place_batch(std::vector<std::vector<uint32_t>> &p_palettes, std::vector<Block> &r_blocks);
+    ov::bytes place_batch(std::vector<std::vector<uint32_t>> &p_palettes, std::vector<Block> &r_blocks);
     void release(const Block &p_block);
     uint32_t rows() const { return alloc.capacity() / PageFormat::PALETTE_SIZE; }
-    Dictionary get_stats() const;
+    ov::Value get_stats() const;
 
-    // ---- render thread ----
-    // The texture (zeroed: the ground block reads GROUND) and its RenderingServer wrapper for the page shader.
-    void rt_create(RenderingDevice *p_rd);
-    void rt_free(RenderingDevice *p_rd);
-    RID rt_texture() const { return texture; }
-    RID rt_shader_texture() const { return rs_texture; }
+    // ---- device thread ----
+    // The texture (zeroed: the ground block reads GROUND), sampled by the host's page shader (PageHost).
+    void rt_create(ov::gpu::Device *p_device);
+    void rt_free(ov::gpu::Device *p_device);
+    ov::gpu::Texture rt_texture() const { return texture; }
 
 private:
     PaletteAlloc alloc;
@@ -59,6 +54,5 @@ private:
     int64_t full = 0; // palettes that found no room
     // The base palette (SDFGpuTable::base_palette): the ground block's, and the Block of every chunk on it.
     std::shared_ptr<const std::vector<uint32_t>> base = std::make_shared<const std::vector<uint32_t>>(1, Material::GROUND);
-    RID texture;
-    RID rs_texture;
+    ov::gpu::Texture texture;
 };

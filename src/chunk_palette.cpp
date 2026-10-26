@@ -1,9 +1,9 @@
 #include "chunk_palette.hpp"
 
 #include "material_library.hpp"
+#include "ov/format.hpp"
+#include "ov/on_error.hpp"
 #include "page_format.hpp"
-
-#include <godot_cpp/core/error_macros.hpp>
 
 namespace ChunkPalette {
 
@@ -11,7 +11,7 @@ bool build(const std::vector<uint32_t> &p_base, const uint32_t *p_materials, uin
         std::vector<uint16_t> &r_index) {
     r_index.assign(p_count, 0);
     r_palette.assign(1, Material::GROUND);
-    ERR_FAIL_COND_V(p_base.empty() || p_base.size() > MAX_ENTRIES || p_base[0] != Material::GROUND, false);
+    OV_ERR_FAIL_COND_V(p_base.empty() || p_base.size() > MAX_ENTRIES || p_base[0] != Material::GROUND, false);
     r_palette = p_base;
     bool fits = true;
     for (uint32_t i = 0; i < p_count; i++) {
@@ -52,18 +52,17 @@ int PaletteAlloc::order_for(uint32_t p_entries) {
 }
 
 void PaletteAlloc::reset(uint32_t p_capacity, uint32_t p_ground_entries) {
-    ERR_FAIL_COND_MSG(p_capacity < 2 * MAX_BLOCK || (p_capacity & (p_capacity - 1)) != 0, "PaletteAlloc: capacity must be a power of two >= 2 blocks of MAX_BLOCK.");
+    OV_ERR_FAIL_COND_MSG(p_capacity < 2 * MAX_BLOCK || (p_capacity & (p_capacity - 1)) != 0, "PaletteAlloc: capacity must be a power of two >= 2 blocks of MAX_BLOCK.");
     cap = p_capacity;
     used_entries = 0;
     free_lists.assign(order_for(cap) + 1, std::set<uint32_t>());
     free_lists.back().insert(0);
     const int64_t ground = alloc(p_ground_entries); // the lowest free block: offset 0
-    DEV_ASSERT(ground == GROUND_BLOCK);
-    (void)ground;
+    OV_ERR_FAIL_COND_MSG(ground != GROUND_BLOCK, "PaletteAlloc: the ground block is not at offset 0.");
 }
 
 int64_t PaletteAlloc::alloc(uint32_t p_entries) {
-    ERR_FAIL_COND_V(p_entries == 0 || p_entries > MAX_BLOCK, -1);
+    OV_ERR_FAIL_COND_V(p_entries == 0 || p_entries > MAX_BLOCK, -1);
     const int want = order_for(p_entries);
     int order = want;
     while (order < int(free_lists.size()) && free_lists[order].empty()) {
@@ -83,7 +82,7 @@ int64_t PaletteAlloc::alloc(uint32_t p_entries) {
 }
 
 void PaletteAlloc::free(uint32_t p_offset, uint32_t p_entries) {
-    ERR_FAIL_COND(p_offset == GROUND_BLOCK || p_offset >= cap);
+    OV_ERR_FAIL_COND(p_offset == GROUND_BLOCK || p_offset >= cap);
     int order = order_for(p_entries);
     used_entries -= MIN_BLOCK << order;
     uint32_t offset = p_offset;

@@ -4,11 +4,9 @@
 #include "exact_noise.hpp"
 #include "material_library.hpp"
 
+#include "ov/color.hpp"
 #include "ov/str.hpp"
-
-#include <godot_cpp/variant/color.hpp>
-#include <godot_cpp/variant/dictionary.hpp>
-#include <godot_cpp/variant/string.hpp>
+#include "ov/value.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -74,7 +72,7 @@ float shape_bound(const Shape &p_shape);
 
 // A field: its bands (a LINEAR4 cascade group, inserted like the ground's, octave k on Λ_{k - BAND_SHIFT}) and terms.
 struct Field {
-    String name;
+    ov::str name;
     uint32_t seed = 0;
     bool cell = false; // the bands are cell noise (ExactNoise::cell3), plain shape only
     std::vector<Cascade::Band> bands; // coarsest first, at most one per octave
@@ -129,7 +127,7 @@ float curve_bound(const Curve &p_curve);
 // landforms in one table, each behind its region. A biome naming it takes its edges before its own; a height term naming
 // it is multiplied by it, so the landform's features (a trough, a cliff, a coast) exist only there.
 struct Region {
-    String name;
+    ov::str name;
     std::vector<Edge> edges;
 };
 
@@ -147,8 +145,8 @@ struct HeightTerm {
 // A biome's ground look (its material, biome_material): albedo on gentle slopes and on steep ones (linear colours),
 // roughness. The default is the page shader's procedural ground.
 struct Surface {
-    Color flat = Material::GROUND_FLAT;
-    Color steep = Material::GROUND_STEEP;
+    ov::Color flat = Material::GROUND_FLAT;
+    ov::Color steep = Material::GROUND_STEEP;
     float roughness = 1.0f;
 };
 
@@ -161,7 +159,7 @@ struct Terrace {
 };
 
 struct Biome {
-    String name;
+    ov::str name;
     std::vector<Edge> edges; // empty for the last (default) biome only
     std::vector<Amp> amps;
     Terrace terrace;
@@ -171,7 +169,7 @@ struct Biome {
 
 // The index of the entry named p_name in p_list (fields, regions), -1 if none.
 template <typename T>
-int index_by_name(const std::vector<T> &p_list, const String &p_name) {
+int index_by_name(const std::vector<T> &p_list, const ov::str &p_name) {
     for (size_t i = 0; i < p_list.size(); i++) {
         if (p_list[i].name == p_name) {
             return int(i);
@@ -191,8 +189,8 @@ struct Table {
     // (k, stretch) of the ground's octaves stretched along the base's up ("ground_stretch": Band::stretch, combined_spec).
     std::vector<std::pair<int, int>> ground_stretch;
 
-    int field_index(const String &p_name) const { return index_by_name(fields, p_name); }
-    int region_index(const String &p_name) const { return index_by_name(regions, p_name); }
+    int field_index(const ov::str &p_name) const { return index_by_name(fields, p_name); }
+    int region_index(const ov::str &p_name) const { return index_by_name(regions, p_name); }
     // Whether a biome weights a band by the multifractal state: the combined spec carries one more field group for it.
     bool has_state() const;
     // Whether the ground at a sample is more than the cascade's (height terms or terraces: ground_value).
@@ -218,17 +216,18 @@ struct Ground {
 // range or 0, a ground one within the cap), regions (identifier names, unique, edges like a biome's; a gated height term
 // has a curve; Table::gated up to date). No per-LOD gradient check
 // (ExactNoise::gradient_range_error): the cascade flushes what falls under 2^-64.
-String validate(const Table &p_table, const Ground &p_ground);
+ov::str validate(const Table &p_table, const Ground &p_ground);
 
 // The bands a term's or a multiplier's source names: the ground's (GROUND), a field's, or null.
 const std::vector<Cascade::Band> *bands_of(const Table &p_table, const Ground &p_ground, int p_source);
 
-// The table of a JSON-like Dictionary (units in metres; the format is described above parse() in climate.cpp),
+// The table of a JSON object (units in metres; the format is described above parse() in climate_parse.cpp),
 // validated; on error r_table is left empty and the error returned.
-String parse(const Dictionary &p_data, const Ground &p_ground, Table &r_table);
+ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table);
 
-// The JSON object of a table file (res:// or absolute) in r_data; empty if it is readable, else the error.
-String load(const String &p_path, Dictionary &r_data);
+// The JSON object of a table file (a host path: res:// or absolute, ov::read_file) in r_data; empty if it is readable,
+// else the error.
+ov::str load(const ov::str &p_path, ov::Value &r_data);
 
 // The ground spec p_ground (LINEAR4) with the table's fields as its field groups and, if any biome names an amplitude
 // multiplier, a Modulation: every band some biome multiplies gets A = sum_b w_b amp_b at each point (amp_b = the
@@ -334,7 +333,7 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
 int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]);
 
 // 0xRRGGBB (sRGB) as a linear colour, alpha 1.
-Color srgb_to_linear(uint32_t p_rgb);
+ov::Color srgb_to_linear(uint32_t p_rgb);
 // Biome p_biome's ground material ("biome:<name>" in the material library, SDFCascade's base palette): the procedural
 // ground (PATTERN_GROUND) in its surface's colours, its debug colour (--view=12).
 Material::Params biome_material(const Biome &p_biome);

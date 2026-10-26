@@ -2,13 +2,12 @@
 
 #include "cascade_points_gpu.hpp"
 #include "chunk_math.hpp"
+#include "gpu_device.hpp"
 #include "sdf_base.hpp"
 
-#include <godot_cpp/classes/rendering_device.hpp>
+#include <memory>
 
-using namespace godot;
-
-// A local RenderingDevice with the cascade's point passes (CascadePointsGPU) on it: the discoverer's corners
+// A local Device (ov::gpu::create_local_device) with the cascade's point passes (CascadePointsGPU) on it: the discoverer's corners
 // (ChunkDiscoverer, VoxelTerrain.discoverer_mode) and the site walks' field (FieldGPU, VoxelTerrain.walk_gpu).
 //
 // One thread creates it, uses it and frees it (the discoverer's, the field service's): no main-RD resource and no
@@ -19,11 +18,11 @@ public:
     // renderer) or the passes fail to build.
     bool create(const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_points);
     void free();
-    bool is_valid() const { return rd != nullptr && passes.is_valid(); }
+    bool is_valid() const { return device != nullptr && passes.is_valid(); }
     CascadePointsGPU &points() { return passes; }
     uint64_t scratch_bytes() const { return passes.scratch_bytes(); }
 
 private:
-    RenderingDevice *rd = nullptr;
+    std::unique_ptr<ov::gpu::Device> device;
     CascadePointsGPU passes;
 };

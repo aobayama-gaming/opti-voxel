@@ -4,9 +4,6 @@
 #include "climate.hpp"
 #include "sdf_cascade.hpp"
 
-#include <godot_cpp/classes/file_access.hpp>
-#include <godot_cpp/classes/json.hpp>
-
 #include <cmath>
 #include <random>
 
@@ -38,10 +35,10 @@ Cascade::Spec own_spec(const Field &p_field) {
     return spec;
 }
 
-String parse_json(const String &p_json, const Ground &p_ground, Table &r_table) {
-    const Variant v = JSON::parse_string(p_json);
-    CHECK(v.get_type() == Variant::DICTIONARY);
-    return v.get_type() == Variant::DICTIONARY ? parse(Dictionary(v), p_ground, r_table) : String("not a JSON object");
+ov::str parse_json(const ov::str &p_json, const Ground &p_ground, Table &r_table) {
+    const ov::Value v = ClimateTest::json(p_json);
+    CHECK(v.is_object());
+    return v.is_object() ? parse(v, p_ground, r_table) : ov::str("not a JSON object");
 }
 
 bool subnormal(const Float4 &p_v) {
@@ -56,13 +53,13 @@ Table random_table(std::mt19937 &p_rng, int p_fields) {
     Table t;
     for (int f = 0; f < p_fields; f++) {
         Field field;
-        field.name = vformat("f%d", f);
+        field.name = ov::format("f%d", f);
         t.fields.push_back(field);
     }
     const int biomes = 2 + int(p_rng() % uint32_t(MAX_BIOMES - 1));
     for (int b = 0; b < biomes; b++) {
         Climate::Biome biome;
-        biome.name = vformat("b%d", b);
+        biome.name = ov::format("b%d", b);
         const int edges = b + 1 == biomes ? 0 : 1 + int(p_rng() % 4u);
         for (int e = 0; e < edges; e++) {
             const float w = fade(p_rng);
@@ -103,11 +100,11 @@ TEST_CASE("Climate: make_fbm's octaves are make_octave keyed by their index") {
 }
 
 TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at 5 cm at any LOD count, its ranges keeping the ground's octaves") {
-    Dictionary data;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == String());
+    ov::Value data;
+    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == ov::str());
     GroundFixture g(0.05, 15);
     Table t;
-    CHECK(parse(data, g.ground, t) == String());
+    CHECK(parse(data, g.ground, t) == ov::str());
     CLIMATE_REQUIRE(t.fields.size() == 3);
     CLIMATE_REQUIRE(t.biomes.size() == 7);
     // 3.2 km .. 26 km at 5 cm: k = 16 .. 19, coarsest first, amplitude 0.5 times 0.7 per finer octave; the
@@ -133,7 +130,7 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     // 25 LODs: the continental octaves k = 20 .. 29 join, each at the amplitude it has at any LOD count.
     GroundFixture g25(0.05, 25);
     Table t25;
-    CHECK(parse(data, g25.ground, t25) == String());
+    CHECK(parse(data, g25.ground, t25) == ov::str());
     CLIMATE_REQUIRE(t25.fields[0].bands.size() == 14);
     CHECK(t25.fields[0].bands.front().k == 29);
     CHECK(t25.fields[0].bands[9].k == 20);
@@ -144,11 +141,11 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     // 14 LODs: the ranges lose k = 19; a single wavelength past the top is refused.
     GroundFixture g14(0.05, 14);
     Table t14;
-    CHECK(parse(data, g14.ground, t14) == String());
+    CHECK(parse(data, g14.ground, t14) == ov::str());
     CHECK(t14.fields[0].bands.size() == 3);
     Table single;
     const char *past_top = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26000, "amp": 1}]}], "biomes": [{"name": "a"}]})";
-    CHECK(parse_json(past_top, g14.ground, single).contains("outside the ground's range"));
+    CHECK(ov::contains(parse_json(past_top, g14.ground, single), "outside the ground's range"));
 }
 
 TEST_CASE("Climate: malformed tables are refused with the reason") {
@@ -203,24 +200,24 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
     for (const Case &c : cases) {
         CAPTURE(c.json);
         Table t;
-        const String err = parse_json(c.json, g.ground, t);
-        CHECK(err.contains(c.error));
+        const ov::str err = parse_json(c.json, g.ground, t);
+        CHECK(ov::contains(err, c.error));
         CHECK(t.biomes.empty());
     }
     // A multiplier of 0 turns an octave off, and the field count is capped.
     Table t;
-    CHECK(parse_json(R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 4, "to_m": 100, "x": 0}]}]})", g.ground, t) == String());
-    String many = R"({"fields": [)";
+    CHECK(parse_json(R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 4, "to_m": 100, "x": 0}]}]})", g.ground, t) == ov::str());
+    ov::str many = R"({"fields": [)";
     for (int i = 0; i <= MAX_FIELDS; i++) {
-        many += vformat("%s{\"name\": \"f%d\"}", i ? ", " : "", i);
+        many += ov::format("%s{\"name\": \"f%d\"}", i ? ", " : "", i);
     }
-    CHECK(parse_json(many + R"(], "biomes": [{"name": "a"}]})", g.ground, t).contains(vformat("at most %d", MAX_FIELDS)));
+    CHECK(ov::contains(parse_json(many + R"(], "biomes": [{"name": "a"}]})", g.ground, t), ov::format("at most %d", MAX_FIELDS)));
     // A table whose gated list no longer matches its height terms (edited after parse) is refused, not read stale.
     CHECK(parse_json(R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}],
               "biomes": [{"name": "a"}]})",
-                  g.ground, t) == String());
+                  g.ground, t) == ov::str());
     t.heights.push_back(HeightTerm{ 0, 1.0f, true, make_curve({ -1.0, 1.0 }, { -1.0, 1.0 }), 0 });
-    CHECK(validate(t, g.ground).contains("Table::gated"));
+    CHECK(ov::contains(validate(t, g.ground), "Table::gated"));
 }
 
 // max_ground_mult is validate's cap (climate_report exports it for tools/landforms/match.py): just under it parses,
@@ -230,15 +227,15 @@ TEST_CASE("Climate: max_ground_mult is the largest multiplier validate accepts")
     for (const char *shape : { "plain", "ridged" }) {
         CAPTURE(shape);
         auto table = [&](double p_x) {
-            return vformat(R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4096, "x": %s, "shape": "%s"}]}]})", p_x,
+            return ov::format(R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4096, "x": %s, "shape": "%s"}]}]})", p_x,
                     shape);
         };
         Table t;
-        CLIMATE_REQUIRE(parse_json(table(1.0), g.ground, t) == String());
+        CLIMATE_REQUIRE(parse_json(table(1.0), g.ground, t) == ov::str());
         const double cap = max_ground_mult(t, g.ground, t.biomes[0], t.biomes[0].amps[0].k);
         CHECK(cap > 1.0);
-        CHECK(parse_json(table(0.99 * cap), g.ground, t) == String());
-        CHECK(parse_json(table(1.01 * cap), g.ground, t).contains("out of range"));
+        CHECK(parse_json(table(0.99 * cap), g.ground, t) == ov::str());
+        CHECK(ov::contains(parse_json(table(1.01 * cap), g.ground, t), "out of range"));
     }
 }
 
@@ -252,7 +249,7 @@ TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denorma
     for (int table = 0; table < 200; table++) {
         const int nf = 1 + int(rng() % uint32_t(MAX_FIELDS));
         const Table t = random_table(rng, nf);
-        CHECK(validate(t, Ground()) == String());
+        CHECK(validate(t, Ground()) == ov::str());
         for (int sample = 0; sample < 200; sample++) {
             Float4 x[MAX_FIELDS] = {};
             double xd[MAX_FIELDS] = {};
@@ -310,7 +307,7 @@ TEST_CASE("Climate: priority layering, exact 0 / 1 weights, and the pick's ties"
     };
     t.biomes = { region("inner", 0.4f, 0.6f), region("outer", 0.0f, 1.0f), Climate::Biome() };
     t.biomes[2].name = "default";
-    CLIMATE_REQUIRE(validate(t, Ground()) == String());
+    CLIMATE_REQUIRE(validate(t, Ground()) == ov::str());
     auto at = [&](float p_x, Float4 r_w[MAX_BIOMES]) {
         Float4 x[MAX_FIELDS] = {};
         x[0] = Float4{ 1.0f, 0.0f, 0.0f, p_x };
@@ -356,7 +353,7 @@ TEST_CASE("Climate: fields are pure functions of the lattice point, LOD-coherent
             {"name": "b", "bands": [{"wavelength_m": 3200, "amp": 0.5}], "terms": [{"source": "a", "x": -0.25}]},
             {"name": "c", "terms": [{"source": "ground", "per_m": 0.001}, {"source": "b", "x": 2}]}],
             "biomes": [{"name": "x"}]})",
-                            g.ground, t) == String());
+                            g.ground, t) == ov::str());
     // No multiplier: the combined spec carries the fields, unmodulated, its ground the bare one.
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
     CHECK(spec.fields.size() == 3);
@@ -412,13 +409,13 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
     Table carried;
     CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}],
             "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})",
-                            g.ground, carried) == String());
+                            g.ground, carried) == ov::str());
     // Only the default biome, x1 on every ground octave: modulated, A = 1 * amp exactly and dA = 0, so n A and
     // n.s (A 2^-3) + n.w dA give the constant band's bits (adding a zero product changes nothing).
     Table neutral;
     CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}],
             "biomes": [{"name": "only", "amp": [{"field": "ground", "from_m": 0.4, "to_m": 30000, "x": 1}]}]})",
-                            g.ground, neutral) == String());
+                            g.ground, neutral) == ov::str());
     const Cascade::Spec specs[] = { combined_spec(carried, bare), combined_spec(neutral, bare) };
     CHECK(specs[0].field_range().empty()); // the pick's derive only
     CHECK(specs[1].modulation != nullptr);
@@ -441,10 +438,10 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
 
 TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slot, and the amplitude follows the biomes") {
     GroundFixture g(0.05, 15);
-    Dictionary data;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == String());
+    ov::Value data;
+    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == ov::str());
     Table t;
-    CLIMATE_REQUIRE(parse(data, g.ground, t) == String());
+    CLIMATE_REQUIRE(parse(data, g.ground, t) == ov::str());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
     CLIMATE_REQUIRE(spec.modulation != nullptr);
     CHECK(spec.fields.size() == 3);
@@ -489,16 +486,16 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     // Multipliers on a field's octaves only would never reach the mesh (the fields are carried where the ground is
     // modulated): refused.
     Table t;
-    const String fields = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
+    const ov::str fields = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
             {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}], )";
-    CHECK(parse_json(fields + String(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
-                       {"name": "b"}]})"),
-            g.ground, t)
-                    .contains("needs a ground multiplier too"));
+    CHECK(ov::contains(parse_json(fields + R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
+                       {"name": "b"}]})",
+                               g.ground, t),
+            "needs a ground multiplier too"));
     // Fields without any multiplier (a pick only): carried nowhere in the ground's runs (no field scratch, no fields
     // variant), and its top lattice is the ground's.
-    CLIMATE_REQUIRE(parse_json(fields + String(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})"), g.ground, t) ==
-            String());
+    CLIMATE_REQUIRE(parse_json(fields + ov::str(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})"), g.ground, t) ==
+            ov::str());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
     CHECK(spec.modulation != nullptr); // the pick's derive, for the chunks' samples (CascadeGLSL::field_range)
     CHECK(spec.field_range().empty());
@@ -510,22 +507,22 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     CHECK(flat.top_level() == -1);
     CHECK(flat.top_level(true) >= 0);
     // A table that can't modulate: an empty one, and multipliers on an 8-channel ground.
-    Dictionary empty;
-    CHECK(load("res://climate/does_not_exist.json", empty).contains("cannot read"));
+    ov::Value empty;
+    CHECK(ov::contains(load("res://climate/does_not_exist.json", empty), "cannot read"));
     SDFCascade h8;
     h8.channel_set = Cascade::ChannelSet::HERMITE8;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", h8.climate_data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", h8.climate_data) == ov::str());
     ChunkParam param;
     param.voxel_size = 0.05f;
     h8.configure(param, 15);
     CHECK(h8.get_climate() == nullptr);
-    CHECK(h8.get_climate_error().contains("LINEAR4"));
+    CHECK(ov::contains(h8.get_climate_error(), "LINEAR4"));
     CHECK(h8.get_spec().fields.empty());
 }
 
 TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample pick (box runs equal point queries)") {
     SDFCascade sdf;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", sdf.climate_data) == String());
+    CLIMATE_REQUIRE(load("res://climate/plain.json", sdf.climate_data) == ov::str());
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);
@@ -544,7 +541,7 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
     // "#d8b878" (desert, sRGB) as a linear albedo.
     const int desert = 2;
     CHECK(t.biomes[desert].name == "desert");
-    CHECK(t.biomes[desert].surface.flat.r == doctest::Approx(Color(216 / 255.0, 0, 0).srgb_to_linear().r));
+    CHECK(t.biomes[desert].surface.flat.r == doctest::Approx(ov::Color(216 / 255.0, 0, 0).srgb_to_linear().r));
     // A reconfigure keeps the materials' ids (Library::set) and the chunk passes derive the pick above every sample.
     sdf.configure(param, 15);
     CHECK(sdf.get_gpu_table()->base_palette() == base);
@@ -590,20 +587,20 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
     // Malformed surfaces.
     GroundFixture g(0.05, 15);
     Table bad;
-    CHECK(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"flat": "green"}}]})", g.ground, bad).contains("#rrggbb"));
-    CHECK(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"roughness": 2}}]})", g.ground, bad).contains("roughness"));
-    CHECK(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"shiny": 1}}]})", g.ground, bad).contains("unknown key"));
+    CHECK(ov::contains(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"flat": "green"}}]})", g.ground, bad), "#rrggbb"));
+    CHECK(ov::contains(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"roughness": 2}}]})", g.ground, bad), "roughness"));
+    CHECK(ov::contains(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"shiny": 1}}]})", g.ground, bad), "unknown key"));
     // A surface's steep colour: the given flat without its own, the procedural ground's rock without either.
     Table s;
-    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"roughness": 0.5}}]})", g.ground, s) == String());
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"roughness": 0.5}}]})", g.ground, s) == ov::str());
     CHECK(s.biomes[0].surface.steep == Material::GROUND_STEEP);
     CHECK(s.biomes[0].surface.flat == Material::GROUND_FLAT);
-    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"flat": "#ff0000"}}]})", g.ground, s) == String());
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a", "surface": {"flat": "#ff0000"}}]})", g.ground, s) == ov::str());
     CHECK(s.biomes[0].surface.steep == s.biomes[0].surface.flat);
     // A climate without fields (one default biome): no pick to make, so no ground materials (CPU and GPU alike).
     SDFCascade fieldless;
-    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a"}]})", g.ground, s) == String());
-    fieldless.climate_data = JSON::parse_string(R"({"fields": [], "biomes": [{"name": "a"}]})");
+    CLIMATE_REQUIRE(parse_json(R"({"fields": [], "biomes": [{"name": "a"}]})", g.ground, s) == ov::str());
+    fieldless.climate_data = ClimateTest::json(R"({"fields": [], "biomes": [{"name": "a"}]})");
     fieldless.configure(param, 15);
     CLIMATE_REQUIRE(fieldless.get_climate() != nullptr);
     CHECK_FALSE(fieldless.has_ground_materials());
@@ -622,9 +619,9 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
 TEST_CASE("Cascade: one band per group and lattice") {
     GroundFixture g(0.05, 15);
     Table t;
-    CHECK(parse_json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1}, {"wavelength_m": 400, "amp": 2}]}], "biomes": [{"name": "a"}]})",
-            g.ground, t)
-                    .contains("twice"));
+    CHECK(ov::contains(parse_json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1}, {"wavelength_m": 400, "amp": 2}]}], "biomes": [{"name": "a"}]})",
+                               g.ground, t),
+            "twice"));
     Cascade::Spec one;
     one.set = Cascade::ChannelSet::LINEAR4;
     one.bands = { ExactNoise::make_octave(11u, 0u, 9, 40.0f) };
@@ -646,7 +643,7 @@ TEST_CASE("Cascade: one band per group and lattice") {
 // modulation, not on the fields), or the GPU draws the bare ground.
 TEST_CASE("Climate: a modulation without fields takes the modulated GPU variant") {
     SDFCascade sdf;
-    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == String());
+    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == ov::str());
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);
