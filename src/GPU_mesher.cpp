@@ -27,108 +27,25 @@
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 
-#include "cascade_glsl.hpp"
+#include "cascade_passes.hpp"
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
+#include "legacy_mesher_glsl.hpp"
 #include "material_library.hpp"
 #include "page_format.hpp"
 #include "rd_utils.hpp"
 
 #include <cstring>
 
-static constexpr const char GLSL_BUFFER_BINDING[] = R"glsl(
-layout(set = 0, binding = 0, std430) restrict buffer AtomicCounter {
-    uint atomic_counter[];
-};
-
-layout(set = 0, binding = 1, std430) restrict buffer InputChunk {
-    ChunkInput input_chunk[];
-};
-
-layout(set = 0, binding = 2, std430) restrict buffer SDFSample {
-    vec4 sdf_sample[];
-};
-
-layout(set = 0, binding = 3, std430) restrict buffer EdgeIntersect {
-    float edge_intersect[];
-};
-
-layout(set = 0, binding = 4, std430) restrict buffer OutputPoint {
-    PointMetadata output_point[];
-};
-
-layout(set = 0, binding = 5, std140) uniform ChunkParamUniform {
-    ChunkParam chunk_param;
-};
-
-// Per sample: its chunk palette index (written by the cascade's level 0 for chunks with a list).
-/*GLSL_MATERIAL_BUFFER*/
-
-uint get_flat_index_z(uvec3 cell_coordinate) {
-    return cell_coordinate.x + (cell_coordinate.y * chunk_param.chunk_size) + (cell_coordinate.z * chunk_param.chunk_size * chunk_param.chunk_size);
-}
-
-uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
-    uint cs = chunk_param.chunk_size;
-    uint local_idx = local_c.x + (local_c.y * cs) + (local_c.z * cs * cs);
-    
-    // Memory Layout: [Chunk Batch] -> [Axis 0/1/2] -> [Local Index]
-    return (chunk_idx * 3 * cs * cs * cs) + (axis * cs * cs * cs) + local_idx;
-}
-
-)glsl";
-
-RID GPUMesher::compile_dynamic_shader(const String &algorithm_pass, const String &p_name) {
-    // Template shared by the three passes; the placeholders are filled below.
-    String shader = R"glsl(#version 450
-
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
-
-/*GLSL_STRUCT_DEFINITION*/
-
-/*GLSL_BUFFER_BINDING*/
-
-/*GLSL_HELPER_FUNCTION*/
-
-/*GLSL_VERTEX_GRADIENT*/
-
-/*GLSL_QEF_VERTEX*/
-
-void main() {
-
-
-
-    ChunkFrame chunk = chunk_frame(input_chunk[gl_GlobalInvocationID.z/chunk_param.chunk_size], chunk_param);
-    ivec3 chunk_id = chunk.id_lo;/*GLSL_SET_CHUNK*/
-
-    ivec3 cell_chunk_coordinate = ivec3(
-        gl_GlobalInvocationID.x,
-        gl_GlobalInvocationID.y%chunk_param.chunk_size, // x / y / z batching
-        gl_GlobalInvocationID.z%chunk_param.chunk_size // chunk batching
-        );
-
-    /*GLSL_ALGORITHM_PASS*/
-}
-    )glsl";
-
-    // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
-    const String pass = dual_contouring && p_name == "third" ? dual_contouring_pass(algorithm_pass) : String(algorithm_pass);
-
-    // 2. Inject the dynamic code
+RID GPUMesher::compile_dynamic_shader(const char *algorithm_pass, const String &p_name) {
+    // The shared legacy shader text (src/legacy_mesher_glsl.hpp): the same text the Dawn adapter uses.
     const SDFGpuTable *table = sdf->get_gpu_table();
-    const String bindings = String(GLSL_BUFFER_BINDING).replace("/*GLSL_MATERIAL_BUFFER*/", CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly")) +
-            table->glsl_buffers(6, 7) +
-            vformat("const uint POINT_PALETTE_SHIFT = %du;\n", POINT_PALETTE_SHIFT) + ChunkPalette::glsl_base(table->base_palette());
-    const String helpers = String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + String(GLSL_EXACT_NOISE) + GPUFrame::glsl_int64();
-    const String set_chunk = table->glsl_set_chunk();
-    shader = shader.replace("/*GLSL_STRUCT_DEFINITION*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    shader = shader.replace("/*GLSL_BUFFER_BINDING*/", bindings);
-    shader = shader.replace("/*GLSL_HELPER_FUNCTION*/", helpers);
-    shader = shader.replace("/*GLSL_SET_CHUNK*/", set_chunk);
-    shader = shader.replace("/*GLSL_QEF_VERTEX*/", String(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : ""));
-    shader = CascadeGLSL::fill_mesher_pass(shader, pass);
+    const bool dc = dual_contouring && p_name == "third";
+    const ov::str code = LegacyMesherGLSL::fill_shader(algorithm_pass, table->glsl_buffers(6, 7), table->glsl_set_chunk(),
+            ChunkPalette::glsl_base(table->base_palette()), CascadeGLSL::glsl_material_buffer(MATERIAL_BINDING, "readonly"), dc);
+    const String shader = godot_str(code);
     RDUtils::dump_shader(String("legacy_") + p_name, shader);
 
     // 3. Create a Shader Source object
@@ -166,151 +83,6 @@ void main() {
     return shader_rid;
 }
 
-static constexpr const char GLSL_SECOND_PASS[] = R"glsl(
-
-uint axis = gl_GlobalInvocationID.y / chunk_param.chunk_size;
-
-if (cell_chunk_coordinate[axis] < chunk_param.chunk_size - 1) {
-
-    // global_cell is used ONLY for safely reading from the SDF buffer
-    uvec3 global_cell = uvec3(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y % chunk_param.chunk_size, gl_GlobalInvocationID.z);
-
-    uvec3 offset = uvec3(0);
-    offset[axis] = 1;
-
-    vec4 center_sdf = sdf_sample[get_flat_index_z(global_cell)];
-    vec4 offset_sdf = sdf_sample[get_flat_index_z(global_cell + offset)];
-
-    // Solid is !(w > 0) in every pass. A crossing is t > 0 downstream, so a sample of exactly 0.0
-    // must not give t = 0 (lost quad = hole); the signs differ, so the denominator is never 0.
-    if ((center_sdf.w > 0.0) != (offset_sdf.w > 0.0)) {
-        float t = max(center_sdf.w / (center_sdf.w - offset_sdf.w), 1e-6);
-        
-        // Extract chunk batch to safely write edge data
-        uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
-        
-        // Write using the strictly local cell_chunk_coordinate
-        edge_intersect[get_edge_index(chunk_idx, axis, uvec3(cell_chunk_coordinate))] = t;
-    }
-}
-
-)glsl";
-
-static constexpr const char GLSL_THIRD_PASS[] = R"glsl(
-
-if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
-
-uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
-
-// Helper to construct a local grid coordinate for neighbor cells
-#define offset(x, y, z) (uvec3(cell_chunk_coordinate) + uvec3(x, y, z))
-
-// --- X-Axis Edges ---
-float e0_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,0,0))];
-float e2_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,1,0))];
-float e4_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,0,1))];
-float e6_t = edge_intersect[get_edge_index(chunk_idx, 0, offset(0,1,1))];
-
-// --- Y-Axis Edges ---
-float e3_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(0,0,0))];
-float e1_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(1,0,0))];
-float e7_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(0,0,1))];
-float e5_t = edge_intersect[get_edge_index(chunk_idx, 1, offset(1,0,1))];
-
-// --- Z-Axis Edges ---
-float e8_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(0,0,0))];
-float e9_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(1,0,0))];
-float e11_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(0,1,0))];
-float e10_t = edge_intersect[get_edge_index(chunk_idx, 2, offset(1,1,0))];
-
-//storing results
-
-vec3 local_vertex = vec3(0.0);
-int active_edge_count = 0;
-
-// --- X-Axis Edges (varying X, static Y/Z) ---
-if (e0_t > 0.0) { local_vertex += vec3(e0_t, 0.0, 0.0); active_edge_count++; }
-if (e2_t > 0.0) { local_vertex += vec3(e2_t, 1.0, 0.0); active_edge_count++; }
-if (e4_t > 0.0) { local_vertex += vec3(e4_t, 0.0, 1.0); active_edge_count++; }
-if (e6_t > 0.0) { local_vertex += vec3(e6_t, 1.0, 1.0); active_edge_count++; }
-
-// --- Y-Axis Edges (varying Y, static X/Z) ---
-if (e3_t > 0.0) { local_vertex += vec3(0.0, e3_t, 0.0); active_edge_count++; }
-if (e1_t > 0.0) { local_vertex += vec3(1.0, e1_t, 0.0); active_edge_count++; }
-if (e7_t > 0.0) { local_vertex += vec3(0.0, e7_t, 1.0); active_edge_count++; }
-if (e5_t > 0.0) { local_vertex += vec3(1.0, e5_t, 1.0); active_edge_count++; }
-
-// --- Z-Axis Edges (varying Z, static X/Y) ---
-if (e8_t > 0.0) { local_vertex += vec3(0.0, 0.0, e8_t); active_edge_count++; }
-if (e9_t > 0.0) { local_vertex += vec3(1.0, 0.0, e9_t); active_edge_count++; }
-if (e11_t > 0.0) { local_vertex += vec3(0.0, 1.0, e11_t); active_edge_count++; }
-if (e10_t > 0.0) { local_vertex += vec3(1.0, 1.0, e10_t); active_edge_count++; }
-
-// --- Calculate Cell Centroid ---
-if (active_edge_count > 0) {
-    // Average the positions to find the center of mass
-    local_vertex /= float(active_edge_count);
-    
-    // 1. Pack Position (3 x uint8 = 24 bits)
-    // Convert 0.0->1.0 to 0->255
-    uvec3 byte_pos = uvec3(local_vertex * 255.0);
-    uint packed_pos = byte_pos.x | (byte_pos.y << 8) | (byte_pos.z << 16);
-
-    // 2. Pack Normal (using built in packSnorm4x8)
-    // Find the exact world position of our local_vertex
-    
-    // Resample the SDF to get the exact normal at this vertex
-
-    vec3 chunk_vertex = local_vertex+vec3(cell_chunk_coordinate);
-
-    vec3 surface_normal = vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
-    uint packed_normal = packSnorm4x8(vec4(surface_normal, 0.0));
-
-    // 3. Triangle Metadata (3 bit mask for X/Y/Z quad generation in Dual Contouring/Surface nets)
-    // We check if edges 0, 3, and 8 have intersections to know if this cell spawns a quad
-    uint quad_mask = 0;
-    if (e0_t > 0.0) quad_mask |= 1; // X-axis crossing quad
-    if (e3_t > 0.0) quad_mask |= 2; // Y-axis crossing quad
-    if (e8_t > 0.0) quad_mask |= 4; // Z-axis crossing quad
-
-    if (!(sdf_sample[get_flat_index_z(gl_GlobalInvocationID)].w > 0.0)) { // same side rule as the edge pass
-        quad_mask |= 8; // Store "Origin is Solid" in the 4th bit!
-    }
-
-    // 4. Update Atomic Counters    
-    // Get sparse index from global counter
-    uint global_point_idx = atomicAdd(atomic_counter[0], 1);
-    
-
-    // Increment the individual chunk counter (Index 2 + 2 * chunk_id)
-    uint local_chunk_point_idx = atomicAdd(atomic_counter[2 + 2 * chunk_idx], 1);
-
-    // Increment triangle counters (2 triangles per quad)
-    uint quad_count = bitCount(quad_mask);
-    if (quad_count > 0) {
-        atomicAdd(atomic_counter[1], quad_count * 2);
-        atomicAdd(atomic_counter[3 + 2 * chunk_idx], quad_count * 2);
-    }
-
-    // 5. Pack Metadata (Global Address + Chunk Address + Quad Mask)
-    output_point[global_point_idx].a = int(packed_pos);
-    output_point[global_point_idx].b = int(packed_normal);
-    
-    // Store chunk index and mask in 'c' 
-    // (and the vertex's palette index at POINT_PALETTE_SHIFT; without a climate's base palette a chunk without a list
-    // is all ground, its samples' materials unwritten)
-    uint palette = input_chunk[chunk_idx].anchor_hi.w == 0 && !GROUND_MATERIALS ? 0u : cascade_vertex_material(gl_GlobalInvocationID);
-    output_point[global_point_idx].c = int((chunk_idx & 0xFFFF) | (quad_mask << 16) | (palette << POINT_PALETTE_SHIFT));
-    
-    // Store localized point address in 'd'
-    output_point[global_point_idx].d = int(get_flat_index_z(cell_chunk_coordinate));
-}
-
-
-}
-
-)glsl";
-
 void GPUMesher::initialize(
         SDFBase *p_sdf,
         ChunkParam p_chunk_param,
@@ -325,11 +97,8 @@ void GPUMesher::initialize(
 
     // Worker stuff
 
-    worker.instantiate();
     mutex.instantiate();
-    semaphore.instantiate();
-
-    worker->start(callable_mp(this, &GPUMesher::_execute_whole_pipeline), Thread::PRIORITY_NORMAL);
+    worker = ov::executor().start_worker("legacy_mesher", *this);
 
     lod_count = lod_numbers;
     chunk_queue.resize(ChunkMath::load_queue_count(lod_numbers), nullptr);
@@ -398,8 +167,8 @@ void GPUMesher::_initialize_gpu_compute() {
     uniforms.push_back(create_storage_uniform(7, buffer_table_list));
     uniforms.push_back(create_storage_uniform(MATERIAL_BINDING, buffer_material));
 
-    shader_second_pass = compile_dynamic_shader(GLSL_SECOND_PASS, "second");
-    shader_third_pass = compile_dynamic_shader(GLSL_THIRD_PASS, "third");
+    shader_second_pass = compile_dynamic_shader(LegacyMesherGLSL::SECOND_PASS, "second");
+    shader_third_pass = compile_dynamic_shader(LegacyMesherGLSL::THIRD_PASS, "third");
     pipeline_second_pass = rd->compute_pipeline_create(shader_second_pass);
     pipeline_third_pass = rd->compute_pipeline_create(shader_third_pass);
 
@@ -415,7 +184,7 @@ void GPUMesher::_initialize_gpu_compute() {
     VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");
 }
 
-void GPUMesher::_execute_whole_pipeline() {
+void GPUMesher::enter() {
     _initialize_gpu_compute();
     // Only now may process_queue build a batch: it sizes the lists by table_list_capacity, set above (before, a batch's
     // lists were cut to 0 words).
@@ -423,35 +192,34 @@ void GPUMesher::_execute_whole_pipeline() {
     worker_available = true;
     mutex->unlock();
     VLOG(1, "GPUMesher : Worker started");
+}
 
-    while (true) {
-        semaphore->wait();
-        mutex->lock();
-        const bool should_exit = exit_thread;
-        PackedByteArray local_chunk_id = input_chunk_id;
-        PackedByteArray local_table_list = input_table_list;
-        PackedByteArray local_table_records = input_table_records;
-        const uint32_t local_count = batch_count;
-        const Vector2i local_lods = batch_lods;
+// The batch process_queue handed over (worker_available false), if any.
+bool GPUMesher::step() {
+    mutex->lock();
+    if (worker_available) {
         mutex->unlock();
-
-        if (should_exit) {
-            break;
-        }
-
-        const uint64_t t_batch_start = now_usec();
-        _execute_gpu_pipeline(local_chunk_id, local_count, local_lods, local_table_list, local_table_records);
-
-        mutex->lock();
-        stats.batch_total.add(now_usec() - t_batch_start);
-        mutex->unlock();
-
-        mutex->lock();
-        worker_available = true;
-        result_available = true;
-        mutex->unlock();
+        return false;
     }
+    PackedByteArray local_chunk_id = input_chunk_id;
+    PackedByteArray local_table_list = input_table_list;
+    PackedByteArray local_table_records = input_table_records;
+    const uint32_t local_count = batch_count;
+    const Vector2i local_lods = batch_lods;
+    mutex->unlock();
 
+    const uint64_t t_batch_start = now_usec();
+    _execute_gpu_pipeline(local_chunk_id, local_count, local_lods, local_table_list, local_table_records);
+
+    mutex->lock();
+    stats.batch_total.add(now_usec() - t_batch_start);
+    worker_available = true;
+    result_available = true;
+    mutex->unlock();
+    return false;
+}
+
+void GPUMesher::exit() {
     // The local device must be freed on the thread that created it.
     if (cascade != nullptr) {
         // Its uniform set uses the input, param and sdf buffers freed below.
@@ -476,15 +244,11 @@ void GPUMesher::_execute_whole_pipeline() {
 }
 
 void GPUMesher::stop() {
-    if (worker.is_null()) {
+    if (!worker) {
         return;
     }
-    mutex->lock();
-    exit_thread = true;
-    mutex->unlock();
-    semaphore->post();
-    worker->wait_to_finish();
-    worker.unref();
+    worker->stop();
+    worker.reset();
 
     // Free the meshes of results that were produced but never collected.
     for (ChunkOutput &out : out_queue) {
@@ -501,6 +265,31 @@ void GPUMesher::stop() {
         memdelete(q);
     }
     remesh_queue.clear();
+}
+
+void GPUMesher::release_chunk(const ChunkOutput &p_chunk) {
+    mutex->lock();
+    const ChunkRids *rids = chunk_rids.getptr(p_chunk.handle);
+    const ChunkRids freed = rids ? *rids : ChunkRids();
+    chunk_rids.erase(p_chunk.handle);
+    mutex->unlock();
+    ERR_FAIL_NULL_MSG(rids, "GPUMesher: a chunk released twice (its handle is unknown).");
+    RenderingServer *rs = RenderingServer::get_singleton();
+    if (freed.instance.is_valid()) {
+        rs->free_rid(freed.instance);
+        DebugLog::chunk_rids_freed++;
+    }
+    if (freed.mesh.is_valid()) {
+        rs->free_rid(freed.mesh);
+    }
+}
+
+RID GPUMesher::mesh_of(const ChunkOutput &p_chunk) const {
+    mutex->lock();
+    const ChunkRids *rids = chunk_rids.getptr(p_chunk.handle);
+    const RID mesh = rids ? rids->mesh : RID();
+    mutex->unlock();
+    return mesh;
 }
 
 bool GPUMesher::is_idle() {
@@ -789,10 +578,13 @@ void GPUMesher::_execute_gpu_pipeline(PackedByteArray p_chunk_id, uint32_t p_cou
 
         ChunkOutput out;
         out.chunk_id = chunk.chunk_id;
-        out.mesh_rid = chunk.mesh_rid;
-        out.instance_rid = chunk.instance_rid;
         out.triangle_count = chunk.index_count / 3;
-        out.drawn_triangles = out.mesh_rid.is_valid() ? chunk.output_triangles.size() / 3 : 0;
+        out.drawn_triangles = chunk.mesh_rid.is_valid() ? chunk.output_triangles.size() / 3 : 0;
+        if (chunk.mesh_rid.is_valid() || chunk.instance_rid.is_valid()) {
+            out.owner = this;
+            out.handle = ++next_handle;
+            chunk_rids[out.handle] = ChunkRids{ chunk.mesh_rid, chunk.instance_rid };
+        }
         emitted_triangles += out.triangle_count;
 
         out_queue.push_back(out);
@@ -952,7 +744,7 @@ void GPUMesher::process_queue() {
         worker_available = false;
         mutex->unlock();
 
-        semaphore->post(); // wake up the worker thread
+        worker->wake();
     }
 }
 

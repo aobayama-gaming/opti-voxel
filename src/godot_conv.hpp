@@ -3,13 +3,16 @@
 // Engine-side conversions of the core's engine-free types: explicit, at call sites, never back into
 // the core.
 
+#include "gpu_frame.hpp"
 #include "latency_hist.hpp"
 #include "ov/bytes.hpp"
 #include "world_coord.hpp"
 
+#include <godot_cpp/core/error_macros.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
+#include <godot_cpp/variant/variant.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
@@ -18,6 +21,11 @@
 
 inline godot::String godot_str(const ov::str &p_s) {
     return godot::String::utf8(p_s.c_str(), int64_t(p_s.size()));
+}
+
+inline ov::str ov_str(const godot::String &p_s) {
+    const godot::CharString utf8 = p_s.utf8();
+    return ov::str(utf8.get_data(), size_t(utf8.length()));
 }
 
 // An int64 id or voxel as report text (WorldCoord::to_string).
@@ -57,3 +65,11 @@ inline godot::Dictionary godot_dict(const LatencyHist &p_h) {
     d["max"] = int64_t(p_h.max());
     return d;
 }
+
+namespace GPUFrame {
+// Chunk p_index of a batch's PackedByteArray (the slot encoder at its slot).
+inline void encode_chunk_input(godot::PackedByteArray &r_bytes, int64_t p_index, const ChunkId &p_chunk, const ChunkParam &p_param) {
+    ERR_FAIL_COND_MSG(p_index < 0 || (p_index + 1) * CHUNK_INPUT_BYTES > r_bytes.size(), "encode_chunk_input: chunk past the batch buffer.");
+    encode_chunk_input(r_bytes.ptrw() + p_index * CHUNK_INPUT_BYTES, p_chunk, p_param);
+}
+} // namespace GPUFrame

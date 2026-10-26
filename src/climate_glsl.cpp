@@ -1,5 +1,8 @@
 #include "climate.hpp"
 
+#include "ov/math.hpp"
+#include "ov/str.hpp"
+
 // The climate's GLSL, generated from a table op for op with its CPU code in climate.cpp: the dual-number helpers, the
 // field terms and biome weights, and the pick.
 namespace Climate {
@@ -44,15 +47,15 @@ vec4 cl_edge(vec4 x, float anchor, float scale) {
 
 } // namespace
 
-String glsl_helpers() {
-    return String(GLSL_CLIMATE_HELPERS).replace("FLUSH", Cascade::glsl_flush());
+ov::str glsl_helpers() {
+    return ov::replace_all(ov::str(GLSL_CLIMATE_HELPERS), "FLUSH", Cascade::glsl_flush());
 }
 
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined) {
     return (p_combined.modulation && p_combined.modulation->shaped()) || p_table.has_ground_terms();
 }
 
-String shared_helpers_glsl() {
+ov::str shared_helpers_glsl() {
     return glsl_helpers() + R"glsl(
 vec4 cl_add(vec4 a, vec4 b) {
     precise vec4 r = a + b;
@@ -66,70 +69,70 @@ vec4 cl_scale(vec4 a, float k) {
 )glsl";
 }
 
-String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const String &p_ch) {
+ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const ov::str &p_ch) {
     using ExactNoise::glsl_float;
-    String code;
+    ov::str code;
     auto channels = [&p_ch](int p_base) {
-        return vformat("vec4(%s.c[%d], %s.c[%d], %s.c[%d], %s.c[%d])", p_ch, p_base + 1, p_ch, p_base + 2, p_ch, p_base + 3, p_ch, p_base);
+        return ov::format("vec4(%s.c[%d], %s.c[%d], %s.c[%d], %s.c[%d])", p_ch, p_base + 1, p_ch, p_base + 2, p_ch, p_base + 3, p_ch, p_base);
     };
-    code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + String(";\n");
+    code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + ov::str(";\n");
     for (size_t i = 0; i < p_table.fields.size(); i++) {
-        code += vformat("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));
+        code += ov::format("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));
         for (const Term &t : p_table.fields[i].terms) {
-            const String src = t.source == GROUND ? String("g0") : vformat("f%d", t.source);
-            code += vformat("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
+            const ov::str src = t.source == GROUND ? ov::str("g0") : ov::format("f%d", t.source);
+            code += ov::format("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
         }
     }
     code += "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
     const size_t n = p_table.biomes.size();
     for (size_t b = 0; b + 1 < n; b++) {
-        code += glsl_edges_value(vformat("r%d", int64_t(b)), p_table.biomes[b].edges);
-        code += vformat("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
+        code += glsl_edges_value(ov::format("r%d", int64_t(b)), p_table.biomes[b].edges);
+        code += ov::format("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
     }
-    code += vformat("    vec4 w%d = rest;\n", int64_t(n - 1));
+    code += ov::format("    vec4 w%d = rest;\n", int64_t(n - 1));
     return code;
 }
 
-String glsl_edges_value(const String &p_var, const std::vector<Edge> &p_edges) {
+ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges) {
     using ExactNoise::glsl_float;
-    String code = "    vec4 " + p_var + String(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
+    ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
     for (const Edge &e : p_edges) {
-        code += vformat("    %s = cl_mul(%s, cl_edge(f%d, %s, %s));\n", p_var, p_var, e.field, glsl_float(e.anchor), glsl_float(e.scale));
+        code += ov::format("    %s = cl_mul(%s, cl_edge(f%d, %s, %s));\n", p_var, p_var, e.field, glsl_float(e.anchor), glsl_float(e.scale));
     }
     return code;
 }
 
-String pick_statements_glsl(const Table &p_table, const String &p_var) {
+ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var) {
     // The largest weight's bits and how many biomes share them, then the (hash % count)-th of those in list order: the
     // CPU's incremental list holds exactly them (nothing exceeds the last best, so it is never reset after it).
-    String code = "    float " + p_var + String(" = 0.0;\n    {\n        float best = w0.w;\n        uint count = 1u;\n");
+    ov::str code = "    float " + p_var + ov::str(" = 0.0;\n    {\n        float best = w0.w;\n        uint count = 1u;\n");
     const int64_t n = int64_t(p_table.biomes.size());
     for (int64_t b = 1; b < n; b++) {
-        code += vformat("        if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            count++;\n        } else if (w%d.w > best) {\n"
-                        "            best = w%d.w;\n            count = 1u;\n        }\n",
+        code += ov::format("        if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            count++;\n        } else if (w%d.w > best) {\n"
+                           "            best = w%d.w;\n            count = 1u;\n        }\n",
                 b, b, b);
     }
-    code += vformat("        uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, %du) %% count;\n        bool found = false;\n", int64_t(PICK_SEED));
+    code += ov::format("        uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, %du) %% count;\n        bool found = false;\n", int64_t(PICK_SEED));
     for (int64_t b = 0; b < n; b++) {
-        code += vformat("        if (!found && floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            if (k == 0u) {\n                %s = %s;\n"
-                        "                found = true;\n            } else {\n                k--;\n            }\n        }\n",
+        code += ov::format("        if (!found && floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            if (k == 0u) {\n                %s = %s;\n"
+                           "                found = true;\n            } else {\n                k--;\n            }\n        }\n",
                 b, p_var, ExactNoise::glsl_float(float(b)));
     }
     return code + "    }\n";
 }
 
-String carried_glsl(const Cascade::Spec &p_spec, const String &p_ch, int p_c) {
+ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c) {
     const int b = p_spec.gpu_carry(p_c);
-    return vformat("vec4(%s.c[%d], %s.c[%d], %s.c[%d], %s.c[%d])", p_ch, b + 1, p_ch, b + 2, p_ch, b + 3, p_ch, b);
+    return ov::format("vec4(%s.c[%d], %s.c[%d], %s.c[%d], %s.c[%d])", p_ch, b + 1, p_ch, b + 2, p_ch, b + 3, p_ch, b);
 }
 
-String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
+ov::str pick_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
     const SampleCarry carry = sample_carry(p_table);
-    String code = "\n// Climate::pick_slots: the pick the level above derived (SampleCarry::pick).\nuint climate_biome(Ch ch) {\n";
+    ov::str code = "\n// Climate::pick_slots: the pick the level above derived (SampleCarry::pick).\nuint climate_biome(Ch ch) {\n";
     if (carry.pick < 0) {
-        return code + vformat("    return %du;\n}\n", int64_t(p_table.biomes.size()) - 1);
+        return code + ov::format("    return %du;\n}\n", int64_t(p_table.biomes.size()) - 1);
     }
-    return code + vformat("    return uint(ch.c[%d]);\n}\n", p_combined.gpu_carry(carry.pick));
+    return code + ov::format("    return uint(ch.c[%d]);\n}\n", p_combined.gpu_carry(carry.pick));
 }
 
 } // namespace Climate

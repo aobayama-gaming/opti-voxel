@@ -1,17 +1,15 @@
 #pragma once
 
-#include "debug_log.hpp"
-#include "godot_cpp/variant/variant.hpp"
-#include "palette_pool.hpp"
+#include "palette_block.hpp"
 #include "world_coord.hpp"
-#include <godot_cpp/classes/rendering_server.hpp>
 
-using namespace godot;
+#include <cstdint>
 
 struct ChunkOutput;
 
-// Implemented by meshers whose chunks do not own their render resources (GPUDirectMesher: the
-// chunk is a quad range inside a shared MultiMesh page).
+// The owner of a chunk's render resources: the mesher that made it (GPUDirectMesher: a quad range inside a shared
+// MultiMesh page; GPUMesher: its own mesh and instance, held under the chunk's handle). The core holds outputs and
+// hands them back to their owner to free.
 struct ChunkReleaser {
     virtual ~ChunkReleaser() = default;
     virtual void release_chunk(const ChunkOutput &p_chunk) = 0;
@@ -21,34 +19,22 @@ struct ChunkReleaser {
 
 struct ChunkOutput {
     ChunkId chunk_id;
-    RID mesh_rid;
-    RID instance_rid;
     uint32_t triangle_count = 0; // stats only: real (non-degenerate) triangles
     uint32_t drawn_triangles = 0; // stats only: triangles in the index buffer, padding included
 
-    // GPU direct path: quad range in a pool page (owner != nullptr).
+    // Who frees it (null: an empty chunk, nothing to free) and its key there (owner-defined).
     ChunkReleaser *owner = nullptr;
+    uint64_t handle = 0;
+    // GPU direct path: quad range in a pool page (page >= 0).
     int32_t page = -1;
     uint32_t quad_offset = 0;
     uint32_t quad_count = 0;
-    PalettePool::Block palette; // the chunk's material palette (its offset is in the rows' headers)
+    PaletteBlock palette; // the chunk's material palette (its offset is in the rows' headers)
 
     void free() {
         if (owner) {
             owner->release_chunk(*this);
             owner = nullptr;
-            return;
         }
-        RenderingServer *rs = RenderingServer::get_singleton();
-        // Empty chunks have no mesh/instance.
-        if (instance_rid.is_valid()) {
-            rs->free_rid(instance_rid);
-            DebugLog::chunk_rids_freed++;
-        }
-        if (mesh_rid.is_valid()) {
-            rs->free_rid(mesh_rid);
-        }
-        instance_rid = RID();
-        mesh_rid = RID();
     }
 };

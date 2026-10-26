@@ -4,6 +4,8 @@
 #include "exact_noise.hpp"
 #include "material_library.hpp"
 
+#include "ov/str.hpp"
+
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/string.hpp>
@@ -304,7 +306,7 @@ struct SampleCarry {
 };
 SampleCarry sample_carry(const Table &p_table);
 // Carry group p_c of `Ch <p_ch>` in p_spec's GPU layout (Spec::gpu_carry) as a (gradient, value) vec4: to_float4's twin.
-String carried_glsl(const Cascade::Spec &p_spec, const String &p_ch, int p_c);
+ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c);
 
 // The height terms' sum (climate_shape.cpp) of the field values p_fields and the region values p_regions (edges_value of
 // the gated regions, Table::gated): coef * curve(field) per term in list order (a gated one times its region's value),
@@ -312,8 +314,8 @@ String carried_glsl(const Cascade::Spec &p_spec, const String &p_ch, int p_c);
 Float4 height_sum(const Table &p_table, const Float4 p_fields[MAX_FIELDS], const Float4 p_regions[MAX_REGIONS]);
 // The same in GLSL: the curves' functions (curves_glsl, before), then statements defining `vec4 <p_var>` from the
 // f<i> of glsl_weights and the rg<r> of glsl_edges_value (height_sum_glsl).
-String curves_glsl(const Table &p_table);
-String height_sum_glsl(const Table &p_table, const String &p_var);
+ov::str curves_glsl(const Table &p_table);
+ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var);
 
 // The ground at a sample: the cascade's ground channels of p_slots (a point's slots), plus the carried height terms'
 // sum, then h + sum_b w_b (terrace_b(h) - h) over the biomes with terraces, w_b carried (SampleCarry). Without height
@@ -321,7 +323,7 @@ String height_sum_glsl(const Table &p_table, const String &p_var);
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
 // The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
 // shared helpers (splices_helpers is true with ground terms), ch in p_combined's GPU layout.
-String ground_glsl(const Table &p_table, const Cascade::Spec &p_combined);
+ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined);
 
 // The biome with the largest weight p_w at lattice point p_p of Λ_m; among equal weights (same bits), the
 // (hash % count)-th in list order, hash = ExactNoise::hash_cell(the point's LOD0 voxel, PICK_SEED): the same from every
@@ -340,20 +342,20 @@ Material::Params biome_material(const Biome &p_biome);
 // The carried pick in GLSL, bit for bit: `uint climate_biome(Ch ch)`, ch the channels of a run's last level in
 // p_combined's GPU layout. The derive's pick statements (on its w<b>, at point p of Λ_m) are pick_statements_glsl,
 // assigning `float <p_var>`.
-String pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
-String pick_statements_glsl(const Table &p_table, const String &p_var);
+ov::str pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
+ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
 // The pieces both generated functions share (climate_glsl.cpp): the dual-number helpers (cl_flush, cl_mul, cl_sub,
 // cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
 // of `Ch pre` (p_spec's GPU layout).
-String glsl_helpers();
+ov::str glsl_helpers();
 // p_ch: the Ch variable they read ("pre" in the modulation, before a level's insertions; "ch" in the pick and the ground).
-String glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const String &p_ch = "pre");
+ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const ov::str &p_ch = "pre");
 // edges_value as statements defining `vec4 <p_var>` from the f<i> of glsl_weights.
-String glsl_edges_value(const String &p_var, const std::vector<Edge> &p_edges);
+ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges);
 // Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a
 // shaped modulation or ground terms. Else each generator brings glsl_helpers as before them (the plain text).
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined);
 // glsl_helpers plus cl_add and cl_scale (Cascade::dadd, dscale).
-String shared_helpers_glsl();
+ov::str shared_helpers_glsl();
 
 } // namespace Climate

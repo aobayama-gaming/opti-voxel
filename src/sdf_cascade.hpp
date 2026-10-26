@@ -166,9 +166,9 @@ public:
         return ground_material(slots);
     }
 
-    String get_ground_material_glsl(const Cascade::Spec &p_view) const override {
+    ov::str get_ground_material_glsl(const Cascade::Spec &p_view) const override {
         if (!has_ground_materials()) {
-            return String();
+            return ov::str();
         }
         return Climate::pick_glsl(*climate, p_view) + R"glsl(
 // SDFCascade::ground_material: 1 + the sample's biome.
@@ -230,9 +230,9 @@ uint cascade_ground_material(Ch ch) {
         }
     }
 
-    String get_ground_glsl(const Cascade::Spec &p_view) const override { return has_ground_terms() ? Climate::ground_glsl(*climate, p_view) : String(); }
-    String get_climate_helpers_glsl() const override {
-        return climate && Climate::splices_helpers(*climate, spec) ? Climate::shared_helpers_glsl() : String();
+    ov::str get_ground_glsl(const Cascade::Spec &p_view) const override { return has_ground_terms() ? Climate::ground_glsl(*climate, p_view) : ov::str(); }
+    ov::str get_climate_helpers_glsl() const override {
+        return climate && Climate::splices_helpers(*climate, spec) ? Climate::shared_helpers_glsl() : ov::str();
     }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod over the base at LOD0 voxel p_voxel: the unit gradient
@@ -367,9 +367,9 @@ uint cascade_ground_material(Ch ch) {
 
     // cascade_terrain_sdf is sdf(), for the batches with no instance listed (point items write cascade_terrain_unit; their
     // metres come from to_metres on the CPU).
-    String get_glsl_code() const override {
+    ov::str get_glsl_code() const override {
         using namespace ExactNoise;
-        String code = base.glsl() + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
+        ov::str code = base.glsl() + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
 // CascadeTerrain::height_sdf over the base (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
 vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
     return height_sdf(c0, base_at(p, lod), lod);
@@ -401,22 +401,20 @@ float cascade_moment_skirt_m(int lod) {
 }
 )glsl";
         auto table_text = [](const std::vector<float> &p_table) {
-            String table;
+            ov::str table;
             for (size_t l = 0; l < p_table.size(); l++) {
-                table += String(l ? ", " : "") + glsl_uint(float_bits(p_table[l]));
+                table += ov::str(l ? ", " : "") + glsl_uint(float_bits(p_table[l]));
             }
             return table;
         };
-        return code.replace("SKIRT_N", itos(int64_t(skirt_depth_table.size())))
-                .replace("MOMENT_SKIRT_TABLE", table_text(moment_skirt_table))
-                .replace("SKIRT_TABLE", table_text(skirt_depth_table));
+        return ov::replace_all(code, { { "SKIRT_N", ov::itos(int64_t(skirt_depth_table.size())) }, { "MOMENT_SKIRT_TABLE", table_text(moment_skirt_table) }, { "SKIRT_TABLE", table_text(skirt_depth_table) } });
     }
 
     // The level passes' fold variant (after the table buffers): sample_sdf on the GPU, the instances of input chunk
     // `chunk`'s list folded onto the register (per workgroup box, or per sample with p_group_size 0).
-    String get_sample_fold_glsl(uint32_t p_group_size) const override {
+    ov::str get_sample_fold_glsl(uint32_t p_group_size) const override {
         const std::shared_ptr<const Archetype::InstanceSnapshot> snap = current();
-        return Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize, p_group_size) + String(R"glsl(
+        const ov::str fold = Archetype::generate_fold_glsl(*snap->library, snap->out_scale, snap->normalize, p_group_size) + R"glsl(
 vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPos group_hi, uint chunk, out uint material, out float skirt_extra) {
     material = 0u;
     skirt_extra = 0.0;
@@ -436,8 +434,8 @@ vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPo
     }
     return cascade_metres(u, lod);
 }
-)glsl")
-                                                                                                                       .replace("FOLD_GROUP ", p_group_size ? "group_lo, group_hi, " : "");
+)glsl";
+        return ov::replace_all(fold, "FOLD_GROUP ", p_group_size ? "group_lo, group_hi, " : "");
     }
 
 private:

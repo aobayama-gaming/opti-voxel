@@ -1,12 +1,10 @@
 #pragma once
 
 #include "cascade.hpp"
+#include "cascade_source.hpp"
 #include "chunk_math.hpp"
-#include "sdf_base.hpp"
-
-#include <godot_cpp/classes/rendering_device.hpp>
-#include <godot_cpp/variant/packed_byte_array.hpp>
-#include <godot_cpp/variant/string.hpp>
+#include "ov/bytes.hpp"
+#include "ov/str.hpp"
 
 // The Hermite cascade on the GPU (shared by GPUDirectMesher, GPUMesher and CascadeSpike), bit for bit what
 // Cascade::run computes on the CPU.
@@ -57,7 +55,7 @@ static constexpr int MATERIAL_BINDING = 9;
 // std430 CascadeBand[group_count * BAND_ENTRIES], group g's band of insertion level m at g * BAND_ENTRIES + m:
 // factor (amp * 2^(-shift |S|) per derivative order; unused when modulated), offset low words, offset high words,
 // info (present, seed, k). At most one band per group and level.
-PackedByteArray band_table(const Cascade::Spec &p_spec);
+ov::bytes band_table(const Cascade::Spec &p_spec);
 
 // Scratch points per chunk of buffer A (odd levels) and B (even levels >= 2), and vec4s per point (the ground's
 // channels, plus 4 per field group where p_range, the passes' field_range, carries any).
@@ -66,14 +64,14 @@ uint32_t scratch_points_b(int p_item_size);
 uint32_t vec4s_per_point(const Cascade::Spec &p_spec, const Cascade::FieldRange &p_range);
 // The scratch buffers A and B of p_sdf's passes for p_items items of p_item_size points per axis (1: point items): what
 // CascadePasses allocates, and what sizes a batch of point items.
-void scratch_bytes(const SDFBase *p_sdf, int p_item_size, uint64_t p_items, uint64_t &r_a, uint64_t &r_b);
+void scratch_bytes(const CascadeSource *p_sdf, int p_item_size, uint64_t p_items, uint64_t &r_a, uint64_t &r_b);
 
 // Whether p_sdf's samples carry a ground material (its base palette is longer than {GROUND}: the climate's biomes).
-bool ground_materials(const SDFBase *p_sdf);
+bool ground_materials(const CascadeSource *p_sdf);
 // Where the passes of p_sdf carry the field groups and the carry: the spec's FieldRange (what its modulation and ground
 // terms read), with ground materials, for chunk items (p_points false), the samples' terms too (the pick, derived on the
 // level above every sample; the ground's bits are the same whether they are carried or not). Empty without a climate.
-Cascade::FieldRange field_range(const SDFBase *p_sdf, bool p_points);
+Cascade::FieldRange field_range(const CascadeSource *p_sdf, bool p_points);
 
 // The channels a level shader carries: the ground alone (the levels no climate reaches), the ground, the fields and
 // the carry (the levels that derive the climate for the level below), or the ground and the carry (a run's last level,
@@ -92,7 +90,7 @@ enum class View {
 // (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING; with ground materials
 // (ground_materials), for every chunk, a ground sample's being cascade_ground_material's (its biome's).
 // p_view: the channels it carries (View; a spec without a climate has only GROUND, which FIELDS equals).
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, View p_view = View::FIELDS,
+ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, View p_view = View::FIELDS,
         bool p_cubes = true);
 
 // The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
@@ -100,74 +98,11 @@ ChunkParam point_param(const ChunkParam &p_param);
 
 // The sdf_material declaration (uint per sample, indexed like sdf_sample) at p_binding, with p_access (readonly,
 // writeonly): the cascade writes it, the meshers' vertex passes read it.
-String glsl_material_buffer(int p_binding, const char *p_access);
+ov::str glsl_material_buffer(int p_binding, const char *p_access);
 
 // Fills /*GLSL_VERTEX_GRADIENT*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers): the vertex
 // passes take their normal from cascade_vertex_gradient, since the cascade has no off-lattice evaluation, and
 // their material from cascade_vertex_material (the mesher declares sdf_material).
-String fill_mesher_pass(const String &p_shader, const String &p_pass);
+ov::str fill_mesher_pass(const ov::str &p_shader, const ov::str &p_pass);
 
 } // namespace CascadeGLSL
-
-// The cascade passes of one mesher on one RenderingDevice: shader, pipeline, scratch and band buffers,
-// uniform set. Not thread-safe; use it on the thread that owns the device (render thread for the main one).
-class CascadePasses {
-public:
-    // p_input (ChunkInput[]), p_param_ubo (ChunkParam std140), p_sdf_sample (vec4 per sample): the mesher's.
-    // p_max_chunks: chunks per dispatch (scratch size). p_debug: valid for the debug variant, a buffer for
-    // the last level's channels (vec4s_per_point vec4s per sample, CascadeSpike); invalid for the meshers' (a
-    // 16 B placeholder is bound). p_share_scratch: use that object's scratch buffers instead of new ones.
-    // p_table_records / p_table_list: the mesher's instance table buffers (a terrain with a table): with them, a
-    // second variant whose level 0 folds the chunks' instance lists (record_level's p_fold). p_sdf_material: the
-    // mesher's per-sample material buffer (uint per sample, indexed like sdf_sample), written by level 0 when given.
-    bool create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
-            RID p_sdf_sample, RID p_debug = RID(), const CascadePasses *p_share_scratch = nullptr, RID p_table_records = RID(),
-            RID p_table_list = RID(), RID p_sdf_material = RID());
-    // Point items (CascadePointsGPU): p_input holds GPUFrame::encode_point_item items (any LODs), p_param_ubo the std140
-    // point_param, p_values one vec4 per item (SDFCascade::ground_unit's bits).
-    bool create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input, RID p_param_ubo,
-            RID p_values);
-    void free();
-    bool is_valid() const { return uniform_set[0].is_valid() || uniform_set[2].is_valid() || uniform_set[4].is_valid(); }
-
-    // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
-    int level_count(int p_min_lod) const;
-    // Records level j for chunks [p_base, p_base + p_count) of the input (p_count <= max chunks: the scratch
-    // holds chunk p_base + i at slot i) as one compute list. p_fold: level 0 folds the chunks' instance lists (a
-    // batch with any instance listed; needs the table's buffers). Off, the bare cascade: the same bits over empty
-    // lists, without the fold's cost. p_lods: the batch's smallest and largest LOD (ChunkMath::lod_range): the
-    // fields' variant where Cascade::FieldRange::batch says.
-    void record_level(int p_j, uint32_t p_base, uint32_t p_count, const Vector2i &p_lods, bool p_fold = false);
-    // Every level, sub-batches of at most max chunks.
-    void record_all(const Vector2i &p_lods, uint32_t p_count, bool p_fold = false);
-
-    uint64_t scratch_bytes() const { return scratch_bytes_total; }
-    uint32_t get_max_chunks() const { return max_chunks; }
-    bool is_points() const { return item_size == 1; }
-    RID get_scratch_a() const { return scratch_a; }
-    RID get_scratch_b() const { return scratch_b; }
-
-private:
-    RenderingDevice *rd = nullptr;
-    // [2 * view + (fold ? 1 : 0)]: the bare level-0 output or the instance fold (given the table's buffers), view the
-    // CascadeGLSL::View (the fields and the samples' views where the FieldRange carries any).
-    static constexpr int VARIANTS = 6;
-    RID shader[VARIANTS];
-    RID pipeline[VARIANTS];
-    RID uniform_set[VARIANTS];
-    Cascade::FieldRange fields; // empty: no fields variant
-    RID scratch_a;
-    RID scratch_b;
-    RID bands;
-    RID debug_placeholder;
-    int top = 0;
-    bool carry = false; // some run's last level reads carry groups (Spec::gpu_carry_groups)
-    int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items
-    uint32_t max_chunks = 0;
-    uint64_t scratch_bytes_total = 0;
-    bool owns_scratch = true;
-
-    bool _compile(int p_variant, const String &p_name, const String &p_code);
-    bool _create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo, RID p_output,
-            RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list, RID p_material);
-};

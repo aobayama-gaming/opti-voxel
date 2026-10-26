@@ -1,6 +1,6 @@
 #include "trace.hpp"
 
-#include "debug_log.hpp"
+#include "ov/clock.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -165,7 +165,7 @@ const char *intern(const std::string &p_name) {
 }
 
 uint64_t now_usec() {
-    return ::now_usec();
+    return ov::now_usec();
 }
 
 void record(const Event &p_event) {

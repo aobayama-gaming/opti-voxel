@@ -1,18 +1,13 @@
 #include "cascade_glsl.hpp"
 
 #include "cascade_shaped_glsl.hpp"
-#include "chunk_palette.hpp"
 
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
-#include "rd_utils.hpp"
-
-#include <godot_cpp/classes/rd_shader_source.hpp>
-#include <godot_cpp/classes/rd_shader_spirv.hpp>
-#include <godot_cpp/classes/rd_uniform.hpp>
-#include <godot_cpp/variant/utility_functions.hpp>
+#include "ov/bytes.hpp"
+#include "ov/str.hpp"
 
 using namespace Cascade;
 
@@ -180,7 +175,7 @@ constexpr ItemFills CHUNK_FILLS = {
 // A point item (GPUFrame::encode_point_item) is a chunk of one sample at any point of Λ_L, its frame from the item's
 // own words (point_frame), skirt 0, box extent 0: level 0 writes the bare cascade's unit register there
 // (cascade_terrain_unit: unit gradient, distance in voxels of the LOD; no instance folded: the discoverer never culls a
-// node near an instance, SDFBase::cull_exempt), SDFCascade::ground_unit's bits, 16 B per point.
+// node near an instance, CascadeSource::cull_exempt), SDFCascade::ground_unit's bits, 16 B per point.
 constexpr ItemFills POINT_FILLS = {
     "layout(set = 0, binding = 2, std430) restrict writeonly buffer PointValue { vec4 point_value[]; };",
     R"glsl(    uint n = pc.n_child;
@@ -223,31 +218,31 @@ WorldPos level_point(uvec3 m_lo, ivec3 m_hi, uvec3 i, int m) {
 }
 )glsl";
 
-String flt(float p_f) {
+ov::str flt(float p_f) {
     return ExactNoise::glsl_float(p_f);
 }
 
 // `int <p_name>(int lod)`: p_value(lod) for lod 0 .. MAX_LEVEL, a C++ rule as a GLSL table (no formula retyped).
 template <typename Value>
-String level_switch(const char *p_name, Value p_value) {
+ov::str level_switch(const char *p_name, Value p_value) {
     const int last = p_value(MAX_LEVEL);
-    String code = vformat("\nint %s(int lod) {\n    switch (lod) {\n", p_name);
+    ov::str code = ov::format("\nint %s(int lod) {\n    switch (lod) {\n", p_name);
     for (int l = 0; l < MAX_LEVEL; l++) {
         if (p_value(l) != last) {
-            code += vformat("    case %d: return %d;\n", l, p_value(l));
+            code += ov::format("    case %d: return %d;\n", l, p_value(l));
         }
     }
-    return code + vformat("    default: return %d;\n    }\n}\n", last);
+    return code + ov::format("    default: return %d;\n    }\n}\n", last);
 }
 
 // Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (from Cascade::PAIRS,
 // the CPU's axis_rules): the first g_carry_n, the ones the level reads.
-String hermite_functions(const Spec &p_spec, bool p_carried) {
+ov::str hermite_functions(const Spec &p_spec, bool p_carried) {
     const int nch = p_spec.gpu_channels();
-    String code = vformat("struct Ch { float c[%d]; };\n\n", nch);
+    ov::str code = ov::format("struct Ch { float c[%d]; };\n\n", nch);
     code += "Ch ch_zero() {\n    Ch r;\n";
     for (int c = 0; c < nch; c++) {
-        code += vformat("    r.c[%d] = 0.0;\n", c);
+        code += ov::format("    r.c[%d] = 0.0;\n", c);
     }
     code += "    return r;\n}\n\n";
     // Cascade::hermite_copy / hermite_mid, op for op.
@@ -267,26 +262,26 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
 )glsl";
     static const char *AXIS_NAMES[3] = { "x", "y", "z" };
     for (int axis = 0; axis < 3; axis++) {
-        String mid_code;
-        String copy_code;
+        ov::str mid_code;
+        ov::str copy_code;
         auto pair = [&](int p_v, int p_s) {
-            mid_code += vformat("        hmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_v, p_s, p_s, p_v, p_s);
-            copy_code += vformat("        hcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_s, p_v, p_s);
+            mid_code += ov::format("        hmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_v, p_s, p_s, p_v, p_s);
+            copy_code += ov::format("        hcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_s, p_v, p_s);
         };
         // LINEAR4 at GPU channel p_base: value + the axis slope by the Hermite rule, the transverse slopes linear.
         auto linear4 = [&](int p_base) {
             pair(p_base + VALUE, p_base + DX + axis);
             for (int s = p_base + DX; s <= p_base + DZ; s++) {
                 if (s != p_base + DX + axis) {
-                    mid_code += vformat("        { precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", s, s, s);
-                    copy_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
+                    mid_code += ov::format("        { precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", s, s, s);
+                    copy_code += ov::format("        r.c[%d] = a.c[%d];\n", s, s);
                 }
             }
         };
         // The fields and the carry only where something reads them (Cascade::FieldRange).
-        auto open = [&](const String &p_flag) {
-            mid_code += vformat("        if (%s) {\n", p_flag);
-            copy_code += vformat("        if (%s) {\n", p_flag);
+        auto open = [&](const ov::str &p_flag) {
+            mid_code += ov::format("        if (%s) {\n", p_flag);
+            copy_code += ov::format("        if (%s) {\n", p_flag);
         };
         auto close = [&]() {
             mid_code += "        }\n";
@@ -311,24 +306,24 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
         const int copied = p_spec.copied_carry();
         for (int k = 0; p_carried && k < p_spec.gpu_carry_groups(); k++) {
             const int base = p_spec.gpu_carry(k);
-            open(vformat("g_carry_n > %du", k));
+            open(ov::format("g_carry_n > %du", k));
             if (k != copied) {
                 linear4(base);
             } else {
                 // The copied carry group: the floor parent's (Cascade's axis_rules).
                 for (int s = base; s < base + FIELD_CHANNELS; s++) {
-                    mid_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
-                    copy_code += vformat("        r.c[%d] = a.c[%d];\n", s, s);
+                    mid_code += ov::format("        r.c[%d] = a.c[%d];\n", s, s);
+                    copy_code += ov::format("        r.c[%d] = a.c[%d];\n", s, s);
                 }
             }
             close();
         }
         // Not carried here: 0 until a derive writes it (Cascade::Level::add_carry).
         for (int s = p_spec.gpu_carry(0); !p_carried && s < p_spec.gpu_channels(); s++) {
-            mid_code += vformat("        r.c[%d] = 0.0;\n", s);
-            copy_code += vformat("        r.c[%d] = 0.0;\n", s);
+            mid_code += ov::format("        r.c[%d] = 0.0;\n", s);
+            copy_code += ov::format("        r.c[%d] = 0.0;\n", s);
         }
-        code += vformat("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r;\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
+        code += ov::format("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r;\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
                 mid_code, copy_code);
     }
     return code;
@@ -345,7 +340,7 @@ uint32_t vec4s_for(int p_channels) {
 // spec, p_whole_fields its field groups (the ground-only view reads and writes the ground's planes of the same buffers,
 // the samples' view the ground's and the carry's). The carry: its first g_carry_n groups, loaded where p_carried (a run's
 // last level), stored by the level above it (the fields' view, where it derives).
-String storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, bool p_carried) {
+ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, bool p_carried) {
     const int nch = p_spec.gpu_channels();
     const int nv = int(vec4s_for(nch)); // this variant's channels (the view: fields only in the fields variant)
     // vec4s from ground_vecs on are the fields' (one per group), read only where g_fields, then the carry's (g_carry).
@@ -354,51 +349,51 @@ String storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, b
     auto plane = [&](int p_v) { return p_v < ground_vecs + field_vecs ? p_v : p_v - field_vecs + p_whole_fields; };
     auto flag = [&](int p_v) {
         if (p_v < ground_vecs + field_vecs) {
-            return p_v < ground_vecs ? String() : String("g_fields");
+            return p_v < ground_vecs ? ov::str() : ov::str("g_fields");
         }
-        return vformat("g_carry_n > %du", p_v - ground_vecs - field_vecs);
+        return ov::format("g_carry_n > %du", p_v - ground_vecs - field_vecs);
     };
-    String code = "Ch unpack(";
+    ov::str code = "Ch unpack(";
     for (int v = 0; v < nv; v++) {
-        code += vformat("%svec4 v%d", v ? ", " : "", v);
+        code += ov::format("%svec4 v%d", v ? ", " : "", v);
     }
     code += ") {\n    Ch r;\n";
     for (int c = 0; c < nch; c++) {
-        code += vformat("    r.c[%d] = v%d[%d];\n", c, c / 4, c % 4);
+        code += ov::format("    r.c[%d] = v%d[%d];\n", c, c / 4, c % 4);
     }
     code += "    return r;\n}\n\n";
     code += "Ch load(bool from_a, uint slot) {\n";
-    String args_a;
-    String args_b;
+    ov::str args_a;
+    ov::str args_b;
     for (int v = 0; v < nv; v++) {
         const char *sep = v ? ", " : "";
         if (v < ground_vecs) {
-            args_a += vformat("%sscratch_a[%du * plane_a + slot]", sep, v);
-            args_b += vformat("%sscratch_b[%du * plane_b + slot]", sep, v);
+            args_a += ov::format("%sscratch_a[%du * plane_a + slot]", sep, v);
+            args_b += ov::format("%sscratch_b[%du * plane_b + slot]", sep, v);
         } else if (v >= ground_vecs + field_vecs && !p_carried) {
-            args_a += String(sep) + "vec4(0.0)"; // the derive writes it
-            args_b += String(sep) + "vec4(0.0)";
+            args_a += ov::str(sep) + "vec4(0.0)"; // the derive writes it
+            args_b += ov::str(sep) + "vec4(0.0)";
         } else {
-            args_a += vformat("%s(%s ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, flag(v), plane(v));
-            args_b += vformat("%s(%s ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, flag(v), plane(v));
+            args_a += ov::format("%s(%s ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, flag(v), plane(v));
+            args_b += ov::format("%s(%s ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, flag(v), plane(v));
         }
     }
-    const String planes = vformat("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_stride, p_stride);
-    code += planes + vformat("    if (from_a) {\n        return unpack(%s);\n    }\n    return unpack(%s);\n}\n\n", args_a, args_b);
-    String vecs;
+    const ov::str planes = ov::format("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_stride, p_stride);
+    code += planes + ov::format("    if (from_a) {\n        return unpack(%s);\n    }\n    return unpack(%s);\n}\n\n", args_a, args_b);
+    ov::str vecs;
     for (int v = 0; v < nv; v++) {
-        vecs += vformat("    vec4 v%d = vec4(r.c[%d], r.c[%d], r.c[%d], r.c[%d]);\n", v, 4 * v, 4 * v + 1, 4 * v + 2, 4 * v + 3);
+        vecs += ov::format("    vec4 v%d = vec4(r.c[%d], r.c[%d], r.c[%d], r.c[%d]);\n", v, 4 * v, 4 * v + 1, 4 * v + 2, 4 * v + 3);
     }
     code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
     for (int v = 0; v < nv; v++) {
-        const String f = v >= ground_vecs && v < ground_vecs + field_vecs ? String("g_fields") : flag(v);
-        const String guard = v < ground_vecs ? String() : "    if (" + f + String(")\n");
-        code += guard + vformat("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", plane(v), v, plane(v), v);
+        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? ov::str("g_fields") : flag(v);
+        const ov::str guard = v < ground_vecs ? ov::str() : "    if (" + f + ov::str(")\n");
+        code += guard + ov::format("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", plane(v), v, plane(v), v);
     }
     code += "}\n\n";
     code += "void store_debug(uint slot, Ch r) {\n" + vecs;
     for (int v = 0; v < nv; v++) {
-        code += vformat("    debug_channels[slot * %du + %du] = v%d;\n", p_stride, plane(v), v);
+        code += ov::format("    debug_channels[slot * %du + %du] = v%d;\n", p_stride, plane(v), v);
     }
     code += "}\n\n";
     // The x pass at parent position q (and q + x on a midpoint).
@@ -423,13 +418,13 @@ using CascadeShapedGLSL::shaped_helpers;
 // Cascade's insert_point for group g's band: insert_band_<g> at its constant amplitude (o = channel * factor[order],
 // ch = ch + o: two roundings, precise), insert_band_mod_<g> at a modulated one (Cascade::modulated_channels, the same
 // order); and Cascade::flush_value.
-String band_functions(const Spec &p_spec) {
+ov::str band_functions(const Spec &p_spec) {
     const int nch = p_spec.gpu_channels();
-    String code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper(p_spec) : String();
+    ov::str code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper(p_spec) : ov::str();
     for (int g = 0; g < p_spec.group_count(); g++) {
         const int base = p_spec.gpu_base(g);
         const ChannelSet set = p_spec.group_set(g);
-        code += vformat("Ch insert_band_%d(Ch ch, WorldPos p, CascadeBand band) {\n", g);
+        code += ov::format("Ch insert_band_%d(Ch ch, WorldPos p, CascadeBand band) {\n", g);
         if (set == ChannelSet::HERMITE8) {
             code += "    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz, c0, c1);\n";
             code += "    float n[8] = float[8](c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w);\n";
@@ -439,20 +434,20 @@ String band_functions(const Spec &p_spec) {
             code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
         }
         for (int c = 0; c < channel_count(set); c++) {
-            code += vformat("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), base + c,
+            code += ov::format("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), base + c,
                     base + c);
         }
         code += "    return ch;\n}\n\n";
         if (shaped(p_spec) && set == ChannelSet::LINEAR4 && p_spec.modulation->group_features(g) != 0u) {
             code += shaped_band_function(p_spec, g);
         } else if (p_spec.modulation && set == ChannelSet::LINEAR4) {
-            code += vformat("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g);
+            code += ov::format("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g);
             code += noise_code(p_spec, g, "p");
-            code += vformat("    precise float aws = amp.w * %s;\n", flt(ExactNoise::exact_pow2(-p_spec.insert_shift)));
-            code += vformat("    { precise float o = g.w * amp.w; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", base, base);
+            code += ov::format("    precise float aws = amp.w * %s;\n", flt(ExactNoise::exact_pow2(-p_spec.insert_shift)));
+            code += ov::format("    { precise float o = g.w * amp.w; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", base, base);
             static const char *AXES = "xyz";
             for (int a = 0; a < 3; a++) {
-                code += vformat("    { precise float o = g.%c * aws + g.w * amp.%c; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", AXES[a], AXES[a], base + 1 + a,
+                code += ov::format("    { precise float o = g.%c * aws + g.w * amp.%c; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", AXES[a], AXES[a], base + 1 + a,
                         base + 1 + a);
             }
             code += "    return ch;\n}\n\n";
@@ -460,7 +455,7 @@ String band_functions(const Spec &p_spec) {
     }
     code += "Ch flush(Ch ch) {\n";
     for (int c = 0; c < nch; c++) {
-        const String v = vformat("ch.c[%d]", c);
+        const ov::str v = ov::format("ch.c[%d]", c);
         code += "    " + v + " = " + glsl_flush_of(v) + ";\n";
     }
     code += "    return ch;\n}\n";
@@ -469,27 +464,27 @@ String band_functions(const Spec &p_spec) {
 
 // The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
 // insertion, then each group's band of level m (bands[group * BAND_ENTRIES + m]).
-String insert_code(const Spec &p_spec) {
-    String code;
+ov::str insert_code(const Spec &p_spec) {
+    ov::str code;
     if (shaped(p_spec)) {
-        code += vformat("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod);\n", p_spec.group_count());
+        code += ov::format("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod);\n", p_spec.group_count());
     } else if (p_spec.modulation) {
-        code += vformat("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp);\n", p_spec.group_count());
+        code += ov::format("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp);\n", p_spec.group_count());
     }
     for (int g = 0; g < p_spec.group_count(); g++) {
         if (p_spec.group_bands(g).empty()) {
             continue;
         }
-        code += vformat("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_fields) " : "",
+        code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_fields) " : "",
                 g * CascadeGLSL::BAND_ENTRIES);
         if (shaped(p_spec) && p_spec.group_set(g) == ChannelSet::LINEAR4) {
             const bool own = p_spec.modulation->group_features(g) != 0u;
-            const String call = own ? vformat("insert_band_shaped_%d(ch, p, band, mod[%d], m)", g, g) : vformat("insert_band_mod_%d(ch, p, band, mod[%d].amp[0])", g, g);
-            code += vformat("            ch = ((modulated >> %du) & 1u) != 0u ? %s : insert_band_%d(ch, p, band);\n", g, call, g);
+            const ov::str call = own ? ov::format("insert_band_shaped_%d(ch, p, band, mod[%d], m)", g, g) : ov::format("insert_band_mod_%d(ch, p, band, mod[%d].amp[0])", g, g);
+            code += ov::format("            ch = ((modulated >> %du) & 1u) != 0u ? %s : insert_band_%d(ch, p, band);\n", g, call, g);
         } else if (p_spec.modulation && p_spec.group_set(g) == ChannelSet::LINEAR4) {
-            code += vformat("            ch = ((modulated >> %du) & 1u) != 0u ? insert_band_mod_%d(ch, p, band, amp[%d]) : insert_band_%d(ch, p, band);\n", g, g, g, g);
+            code += ov::format("            ch = ((modulated >> %du) & 1u) != 0u ? insert_band_mod_%d(ch, p, band, amp[%d]) : insert_band_%d(ch, p, band);\n", g, g, g, g);
         } else {
-            code += vformat("            ch = insert_band_%d(ch, p, band);\n", g);
+            code += ov::format("            ch = insert_band_%d(ch, p, band);\n", g);
         }
         code += "        }\n    }\n";
     }
@@ -543,31 +538,30 @@ uint cascade_vertex_material(uvec3 gid) {
 
 } // namespace
 
-PackedByteArray band_table(const Spec &p_spec) {
+ov::bytes band_table(const Spec &p_spec) {
     using namespace WorldCoord;
-    PackedByteArray bytes;
-    bytes.resize(int64_t(p_spec.group_count()) * BAND_ENTRIES * BAND_BYTES);
-    bytes.fill(0);
+    ov::bytes bytes(size_t(p_spec.group_count()) * BAND_ENTRIES * BAND_BYTES, 0);
     for (int g = 0; g < p_spec.group_count(); g++) {
         for (const Band &b : p_spec.group_bands(g)) {
             const int m = p_spec.insert_level(b);
-            ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, vformat("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
-            const int64_t base = (int64_t(g) * BAND_ENTRIES + m) * BAND_BYTES;
-            ERR_CONTINUE_MSG(bytes.decode_u32(base + 48) != 0, vformat("CascadeGLSL: two bands on lattice %d (the GPU table holds one per level).", m));
+            OV_ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, ov::format("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
+            const size_t base = (size_t(g) * BAND_ENTRIES + m) * BAND_BYTES;
+            uint8_t *slot = bytes.data() + base;
+            OV_ERR_CONTINUE_MSG(ov::get_u32(slot + 48) != 0, ov::format("CascadeGLSL: two bands on lattice %d (the GPU table holds one per level).", m));
             for (int o = 0; o < 4; o++) {
                 // Cascade's BandFactors, the same float product.
-                bytes.encode_float(base + 4 * o, b.amp * ExactNoise::exact_pow2(-p_spec.insert_shift * o));
+                ov::put_f32(slot + 4 * o, b.amp * ExactNoise::exact_pow2(-p_spec.insert_shift * o));
             }
-            bytes.encode_u32(base + 16, lo32(b.offset.x));
-            bytes.encode_u32(base + 20, lo32(b.offset.y));
-            bytes.encode_u32(base + 24, lo32(b.offset.z));
-            bytes.encode_s32(base + 32, hi32(b.offset.x));
-            bytes.encode_s32(base + 36, hi32(b.offset.y));
-            bytes.encode_s32(base + 40, hi32(b.offset.z));
-            bytes.encode_u32(base + 48, 1);
-            bytes.encode_u32(base + 52, b.seed);
-            bytes.encode_u32(base + 56, uint32_t(b.k));
-            bytes.encode_u32(base + 60, uint32_t(b.stretch));
+            ov::put_u32(slot + 16, lo32(b.offset.x));
+            ov::put_u32(slot + 20, lo32(b.offset.y));
+            ov::put_u32(slot + 24, lo32(b.offset.z));
+            ov::put_s32(slot + 32, hi32(b.offset.x));
+            ov::put_s32(slot + 36, hi32(b.offset.y));
+            ov::put_s32(slot + 40, hi32(b.offset.z));
+            ov::put_u32(slot + 48, 1);
+            ov::put_u32(slot + 52, b.seed);
+            ov::put_u32(slot + 56, uint32_t(b.k));
+            ov::put_u32(slot + 60, uint32_t(b.stretch));
         }
     }
     return bytes;
@@ -589,18 +583,17 @@ uint32_t vec4s_per_point(const Spec &p_spec, const FieldRange &p_range) {
     return vec4s_for(channels);
 }
 
-void scratch_bytes(const SDFBase *p_sdf, int p_item_size, uint64_t p_items, uint64_t &r_a, uint64_t &r_b) {
+void scratch_bytes(const CascadeSource *p_sdf, int p_item_size, uint64_t p_items, uint64_t &r_a, uint64_t &r_b) {
     const uint64_t vec4_bytes = 16 * uint64_t(vec4s_per_point(*p_sdf->get_cascade(), field_range(p_sdf, p_item_size == 1)));
     r_a = p_items * scratch_points_a(p_item_size) * vec4_bytes;
     r_b = p_items * scratch_points_b(p_item_size) * vec4_bytes;
 }
 
-bool ground_materials(const SDFBase *p_sdf) {
-    const SDFGpuTable *table = p_sdf->get_gpu_table();
-    return table && ChunkPalette::has_ground_materials(table->base_palette());
+bool ground_materials(const CascadeSource *p_sdf) {
+    return p_sdf->samples_carry_materials();
 }
 
-FieldRange field_range(const SDFBase *p_sdf, bool p_points) {
+FieldRange field_range(const CascadeSource *p_sdf, bool p_points) {
     // The spec's (its modulation's levels, its ground terms' samples: point items too), and the chunks' pick.
     FieldRange range = p_sdf->get_cascade()->field_range();
     range.sample = range.sample || (!p_points && ground_materials(p_sdf));
@@ -613,15 +606,15 @@ namespace {
 // carries (Cascade::FieldRange p_range: the fields, and the carry groups g_carry_n the last level reads, loaded in the
 // samples' view, derived and stored in the fields' view at j = 1), the passes, the bands, the modulation and the derive,
 // then p_tail.
-String view_code(const String &p_code, const SDFBase *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, const String &p_tail) {
+ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, const ov::str &p_tail) {
     const Spec &whole = *p_sdf->get_cascade();
     const bool climate = p_spec.modulation != nullptr;
     const bool fields = p_view == View::FIELDS && climate;
     const bool carry = climate && p_spec.gpu_carry_groups() > 0;
     const bool carried = p_view == View::SAMPLES;
     const bool derive = fields && carry;
-    String flags;
-    String flag_values;
+    ov::str flags;
+    ov::str flag_values;
     if (fields) {
         // FieldRange::carried(lod, m): m >= lowest(lod).
         flags += "bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n";
@@ -632,55 +625,54 @@ String view_code(const String &p_code, const SDFBase *p_sdf, const Spec &p_spec,
         // FieldRange::carries: read on the last level, derived above it (the groups Modulation::carry_used says).
         flags += "uint g_carry_n = 0u; // the carry groups the run's last level reads\n";
         flags += level_switch("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; });
-        flag_values += vformat("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
+        flag_values += ov::format("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
     }
-    const String modulation = climate ? p_spec.modulation->glsl(p_spec, carried) + (derive ? p_spec.modulation->derive_glsl(p_spec) : String()) : String();
+    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried) + (derive ? p_spec.modulation->derive_glsl(p_spec) : ov::str()) : ov::str();
     // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
     // every generated function that uses them.
-    const String helpers = (climate ? p_sdf->get_climate_helpers_glsl() : String()) + (shaped(p_spec) ? shaped_helpers() : String());
-    const String storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried);
-    String code = p_code.replace("/*CASCADE*/", (flags.is_empty() ? String() : flags + "\n") + helpers + hermite_functions(p_spec, carried) + storage + band_functions(p_spec) + modulation + p_tail);
-    code = code.replace("/*INSERT_BANDS*/", insert_code(p_spec));
-    code = code.replace("/*FIELDS_FLAG*/", flag_values);
+    const ov::str helpers = (climate ? p_sdf->get_climate_helpers_glsl() : ov::str()) + (shaped(p_spec) ? shaped_helpers() : ov::str());
+    const ov::str storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried);
+    ov::str code = ov::replace_all(p_code, "/*CASCADE*/", (flags.empty() ? ov::str() : flags + "\n") + helpers + hermite_functions(p_spec, carried) + storage + band_functions(p_spec) + modulation + p_tail);
+    code = ov::replace_all(code, "/*INSERT_BANDS*/", insert_code(p_spec));
+    code = ov::replace_all(code, "/*FIELDS_FLAG*/", flag_values);
     // A chunk above the top band reading the carry starts one level higher, to derive it (Spec::run_top; an empty level,
     // the same bits for one that doesn't).
-    code = code.replace("/*TOP_ABOVE*/", carry ? " + 1" : "");
+    code = ov::replace_all(code, "/*TOP_ABOVE*/", carry ? " + 1" : "");
     // The level's climate for the level below (the samples' terms on the level above them, j = 1).
-    return code.replace("/*DERIVE*/", derive ? "    if (g_carry_n > 0u) {\n        cascade_derive(m, ch, p);\n    }\n" : "");
+    return ov::replace_all(code, "/*DERIVE*/", derive ? "    if (g_carry_n > 0u) {\n        cascade_derive(m, ch, p);\n    }\n" : "");
 }
 
 } // namespace
 
-String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes) {
+ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes) {
     const Spec &whole = *p_sdf->get_cascade();
     // The view's Ch on the whole spec's scratch planes: the ground alone (its bands, no modulation), or without the fields.
     const Spec view = p_view == View::FIELDS ? whole : (p_view == View::SAMPLES ? whole.without_fields() : whole.ground_only());
     const Spec *spec = &view;
     const bool climate = spec->modulation != nullptr;
-    ERR_FAIL_COND_V_MSG(p_debug && p_points, String(), "CascadeGLSL: point items have no debug variant.");
-    const SDFGpuTable *table = p_sdf->get_gpu_table();
-    ERR_FAIL_COND_V_MSG((p_fold || p_material) && p_points, String(), "CascadeGLSL: only chunk items fold or carry a material.");
+    OV_ERR_FAIL_COND_V_MSG(p_debug && p_points, ov::str(), "CascadeGLSL: point items have no debug variant.");
+    OV_ERR_FAIL_COND_V_MSG((p_fold || p_material) && p_points, ov::str(), "CascadeGLSL: only chunk items fold or carry a material.");
     const ItemFills &fills = p_points ? POINT_FILLS : CHUNK_FILLS;
     // The fold per cube of samples (FOLD_ITEM_INDEX), or per sample (the chunk's item index) without whole cubes.
     const bool cubes = p_fold && p_cubes;
-    String code = LEVEL_TEMPLATE;
-    code = code.replace("/*LOCAL_SIZE*/", itos(LOCAL_SIZE));
-    code = code.replace("/*OUTPUT_BUFFER*/", fills.output_buffer);
-    code = code.replace("/*ITEM_INDEX*/", cubes ? String(FOLD_ITEM_INDEX).replace("CUBE", itos(FOLD_CUBE)) : String(fills.item_index));
-    code = code.replace("/*SKIP*/", cubes ? "sample_live = false;" : "return;");
-    code = code.replace("/*ITEM_FRAME*/", fills.item_frame);
-    code = code.replace("/*ITEM_EXTENT*/", fills.item_extent);
-    code = code.replace("/*LEVEL0_OUTPUT*/", fills.level0_output);
-    code = code.replace("/*AFTER_SAMPLE*/", cubes ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
+    ov::str code = LEVEL_TEMPLATE;
+    code = ov::replace_all(code, "/*LOCAL_SIZE*/", ov::itos(LOCAL_SIZE));
+    code = ov::replace_all(code, "/*OUTPUT_BUFFER*/", fills.output_buffer);
+    code = ov::replace_all(code, "/*ITEM_INDEX*/", cubes ? ov::replace_all(ov::str(FOLD_ITEM_INDEX), "CUBE", ov::itos(FOLD_CUBE)) : ov::str(fills.item_index));
+    code = ov::replace_all(code, "/*SKIP*/", cubes ? "sample_live = false;" : "return;");
+    code = ov::replace_all(code, "/*ITEM_FRAME*/", fills.item_frame);
+    code = ov::replace_all(code, "/*ITEM_EXTENT*/", fills.item_extent);
+    code = ov::replace_all(code, "/*LEVEL0_OUTPUT*/", fills.level0_output);
+    code = ov::replace_all(code, "/*AFTER_SAMPLE*/", cubes ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
     // The sample's ground channels: the cascade's, or climate_ground's with ground terms (a climate view: their field
     // range reaches every sample, so no ground-only view is compiled).
-    const String ground = climate && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl(*spec) : String();
-    const String c0 = ground.is_empty() ? String("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : String("climate_ground(ch)");
-    code = code.replace("/*GROUND_C0*/", c0);
-    const String channels = c0 + String(", p, lod");
+    const ov::str ground = climate && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl(*spec) : ov::str();
+    const ov::str c0 = ground.empty() ? ov::str("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : ov::str("climate_ground(ch)");
+    code = ov::replace_all(code, "/*GROUND_C0*/", c0);
+    const ov::str channels = c0 + ov::str(", p, lod");
     // The fold's workgroup box: its cube's first and last samples (the sample itself per sample).
-    const String cube_box = cubes ? vformat("level_point(m_lo, m_hi, cube, m), level_point(m_lo, m_hi, cube + %du, m)", FOLD_CUBE - 1) : String("p, p");
-    code = code.replace("/*SAMPLE_SDF*/", p_fold ? vformat("cascade_sample_sdf(%s, %s, pc.chunk_base + c, material, skirt_extra)", channels, cube_box) : vformat("cascade_terrain_sdf(%s)", channels));
+    const ov::str cube_box = cubes ? ov::format("level_point(m_lo, m_hi, cube, m), level_point(m_lo, m_hi, cube + %du, m)", FOLD_CUBE - 1) : ov::str("p, p");
+    code = ov::replace_all(code, "/*SAMPLE_SDF*/", p_fold ? ov::format("cascade_sample_sdf(%s, %s, pc.chunk_base + c, material, skirt_extra)", channels, cube_box) : ov::format("cascade_terrain_sdf(%s)", channels));
     // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
     // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
     // With them every chunk's samples get one: the winner's, or the ground's pick, derived on the level above (field_range
@@ -688,24 +680,24 @@ String level_shader(const SDFBase *p_sdf, bool p_debug, bool p_points, bool p_fo
     const bool grounds = ground_materials(p_sdf) && !p_points;
     const bool store = p_material && (p_fold || grounds);
     const bool pick = grounds && climate && !whole.fields.empty();
-    code = code.replace("/*MATERIAL_BUFFER*/", store ? glsl_material_buffer(MATERIAL_BINDING, "writeonly") : String());
-    String material_store;
+    code = ov::replace_all(code, "/*MATERIAL_BUFFER*/", store ? glsl_material_buffer(MATERIAL_BINDING, "writeonly") : ov::str());
+    ov::str material_store;
     if (store && grounds) {
         // Air samples (w > 0, after the skirt) keep 0: the meshers read a vertex's material from its cell's solid corners.
-        material_store = String(pick ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch);\n    }\n    " : "") +
+        material_store = ov::str(pick ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch);\n    }\n    " : "") +
                 "sdf_material[sample_index] = material;";
     } else if (store) {
         material_store = "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }";
     }
-    code = code.replace("/*MATERIAL_STORE*/", material_store);
-    code = code.replace("/*STRUCTS*/", String(GLSL_STRUCT_DEFINITION) + String(GLSL_FRAME_STRUCTS));
-    code = code.replace("/*TABLE_BUFFERS*/", p_fold ? table->glsl_buffers(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : String());
-    code = code.replace("/*HELPERS*/", String(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : String()) + GPUFrame::glsl_int64() + String(GLSL_EXACT_NOISE) + String(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : String()));
-    code = code.replace("/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? (cubes ? String(LEVEL_POINT) : String()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : String()));
-    const String tail = (pick ? p_sdf->get_ground_material_glsl(*spec) : String()) + ground;
+    code = ov::replace_all(code, "/*MATERIAL_STORE*/", material_store);
+    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + ov::str(GLSL_FRAME_STRUCTS));
+    code = ov::replace_all(code, "/*TABLE_BUFFERS*/", p_fold ? p_sdf->get_table_glsl(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : ov::str());
+    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : ov::str()) + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE) + ov::str(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : ov::str()));
+    code = ov::replace_all(code, "/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? (cubes ? ov::str(LEVEL_POINT) : ov::str()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : ov::str()));
+    const ov::str tail = (pick ? p_sdf->get_ground_material_glsl(*spec) : ov::str()) + ground;
     code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, tail);
-    const String debug_store = String(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
-    code = code.replace("/*DEBUG_STORE*/", p_debug ? debug_store : String());
+    const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
+    code = ov::replace_all(code, "/*DEBUG_STORE*/", p_debug ? debug_store : ov::str());
     return code;
 }
 
@@ -715,218 +707,12 @@ ChunkParam point_param(const ChunkParam &p_param) {
     return p;
 }
 
-String glsl_material_buffer(int p_binding, const char *p_access) {
-    return vformat("layout(set = 0, binding = %d, std430) restrict %s buffer SDFMaterial { uint sdf_material[]; };\n", p_binding, p_access);
+ov::str glsl_material_buffer(int p_binding, const char *p_access) {
+    return ov::format("layout(set = 0, binding = %d, std430) restrict %s buffer SDFMaterial { uint sdf_material[]; };\n", p_binding, p_access);
 }
 
-String fill_mesher_pass(const String &p_shader, const String &p_pass) {
-    return p_shader.replace("/*GLSL_VERTEX_GRADIENT*/", GLSL_VERTEX_GRADIENT).replace("/*GLSL_ALGORITHM_PASS*/", p_pass);
+ov::str fill_mesher_pass(const ov::str &p_shader, const ov::str &p_pass) {
+    return ov::replace_all(ov::replace_all(p_shader, "/*GLSL_VERTEX_GRADIENT*/", GLSL_VERTEX_GRADIENT), "/*GLSL_ALGORITHM_PASS*/", p_pass);
 }
 
 } // namespace CascadeGLSL
-
-bool CascadePasses::create(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, RID p_input, RID p_param_ubo,
-        RID p_sdf_sample, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list, RID p_sdf_material) {
-    return _create(p_rd, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch, p_table_records,
-            p_table_list, p_sdf_material);
-}
-
-bool CascadePasses::create_points(RenderingDevice *p_rd, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, RID p_input,
-        RID p_param_ubo, RID p_values) {
-    ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0, false, "CascadePasses: point items need CascadeGLSL::point_param (skirt 0).");
-    return _create(p_rd, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, RID(), nullptr, RID(), RID(), RID());
-}
-
-bool CascadePasses::_create(RenderingDevice *p_rd, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, RID p_input, RID p_param_ubo,
-        RID p_output, RID p_debug, const CascadePasses *p_share_scratch, RID p_table_records, RID p_table_list, RID p_material) {
-    const Spec *spec = p_sdf->get_cascade();
-    rd = p_rd;
-    item_size = p_item_size;
-    max_chunks = p_max_items;
-    const bool points = item_size == 1;
-    fields = CascadeGLSL::field_range(p_sdf, points);
-    top = spec->top_level(!fields.empty());
-    carry = !fields.empty() && spec->gpu_carry_groups() > 0;
-
-    // Variant 2 * view + (fold ? 1 : 0): the bare cascade at level 0 or the instance fold (given the table's buffers), with
-    // the ground alone, the fields and the carry, or the carry alone (CascadeGLSL::View; the climate's views where the
-    // FieldRange carries any: none if empty).
-    const bool table = p_table_records.is_valid() && p_table_list.is_valid();
-    ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
-    // The fold variant's workgroups are cubes of level-0 samples, given whole cubes; else it folds per sample.
-    const bool cubes = item_size % int(CascadeGLSL::FOLD_CUBE) == 0;
-    static const char *VIEW_NAMES[] = { "", "_fields", "_samples" };
-    // A climate everywhere: the ground-only variants would never run. The fields' view is never a last level: no fold.
-    for (int c = fields.everywhere() ? 1 : 0; c < (fields.empty() ? 1 : 3); c++) {
-        for (int f = 0; f < (table && CascadeGLSL::View(c) != CascadeGLSL::View::FIELDS ? 2 : 1); f++) {
-            const int v = 2 * c + f;
-            const String code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), CascadeGLSL::View(c), cubes);
-            const String name =
-                    String(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") + VIEW_NAMES[c];
-            if (!_compile(v, name, code) && f == 0) {
-                return false; // a fold variant that fails leaves the bare one working (record_level ERRs once)
-            }
-        }
-    }
-
-    uint64_t bytes_a = 0, bytes_b = 0;
-    CascadeGLSL::scratch_bytes(p_sdf, item_size, max_chunks, bytes_a, bytes_b);
-    if (p_share_scratch != nullptr) {
-        ERR_FAIL_COND_V(p_share_scratch->max_chunks < max_chunks || p_share_scratch->scratch_bytes_total < bytes_a + bytes_b, false);
-        scratch_a = p_share_scratch->scratch_a;
-        scratch_b = p_share_scratch->scratch_b;
-        owns_scratch = false;
-    } else {
-        scratch_a = rd->storage_buffer_create(bytes_a);
-        scratch_b = rd->storage_buffer_create(bytes_b);
-        scratch_bytes_total = bytes_a + bytes_b;
-    }
-    const PackedByteArray band_bytes = CascadeGLSL::band_table(*spec);
-    bands = rd->storage_buffer_create(band_bytes.size(), band_bytes);
-    RID debug = p_debug;
-    if (!debug.is_valid()) {
-        debug_placeholder = rd->storage_buffer_create(16);
-        debug = debug_placeholder;
-    }
-
-    auto make_uniform = [](int p_binding, RID p_rid, RenderingDevice::UniformType p_type) {
-        Ref<RDUniform> u;
-        u.instantiate();
-        u->set_uniform_type(p_type);
-        u->set_binding(p_binding);
-        u->add_id(p_rid);
-        return u;
-    };
-    TypedArray<RDUniform> uniforms;
-    uniforms.push_back(make_uniform(0, p_input, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniforms.push_back(make_uniform(1, p_param_ubo, RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER));
-    uniforms.push_back(make_uniform(2, p_output, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniforms.push_back(make_uniform(3, scratch_a, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniforms.push_back(make_uniform(4, scratch_b, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniforms.push_back(make_uniform(5, bands, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    uniforms.push_back(make_uniform(6, debug, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    if (p_material.is_valid()) {
-        uniforms.push_back(make_uniform(CascadeGLSL::MATERIAL_BINDING, p_material, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    }
-    // The fold variants also bind the table's buffers.
-    TypedArray<RDUniform> fold_uniforms = uniforms.duplicate();
-    if (table) {
-        fold_uniforms.push_back(make_uniform(CascadeGLSL::TABLE_RECORD_BINDING, p_table_records, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-        fold_uniforms.push_back(make_uniform(CascadeGLSL::TABLE_LIST_BINDING, p_table_list, RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER));
-    }
-    for (int v = 0; v < VARIANTS; v++) {
-        if (shader[v].is_valid()) {
-            uniform_set[v] = rd->uniform_set_create((v & 1) ? fold_uniforms : uniforms, shader[v], 0);
-        }
-    }
-    return (uniform_set[0].is_valid() || fields.everywhere()) && (fields.empty() || (uniform_set[2].is_valid() && uniform_set[4].is_valid()));
-}
-
-bool CascadePasses::_compile(int p_variant, const String &p_name, const String &p_code) {
-    RDUtils::dump_shader(p_name, p_code);
-    Ref<RDShaderSource> source;
-    source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, p_code);
-    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-    const String error = spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
-    if (!error.is_empty()) {
-        UtilityFunctions::printerr("--- SDF SHADER COMPILATION FAILED (CascadePasses " + p_name + ") ---");
-        UtilityFunctions::printerr("ERROR MESSAGE:\n", error);
-        const PackedStringArray lines = p_code.split("\n");
-        for (int i = 0; i < lines.size(); i++) {
-            UtilityFunctions::printerr(String::num_int64(i + 1) + " | " + lines[i]);
-        }
-        return false;
-    }
-    shader[p_variant] = rd->shader_create_from_spirv(spirv);
-    pipeline[p_variant] = rd->compute_pipeline_create(shader[p_variant]);
-    return true;
-}
-
-void CascadePasses::free() {
-    if (rd == nullptr) {
-        return;
-    }
-    for (int v = 0; v < VARIANTS; v++) {
-        for (const RID &rid : { uniform_set[v], pipeline[v], shader[v] }) {
-            if (rid.is_valid()) {
-                rd->free_rid(rid);
-            }
-        }
-    }
-    for (const RID &rid : { bands, debug_placeholder }) {
-        if (rid.is_valid()) {
-            rd->free_rid(rid);
-        }
-    }
-    if (owns_scratch) {
-        for (const RID &rid : { scratch_a, scratch_b }) {
-            if (rid.is_valid()) {
-                rd->free_rid(rid);
-            }
-        }
-    }
-    for (int v = 0; v < VARIANTS; v++) {
-        uniform_set[v] = RID();
-        pipeline[v] = RID();
-        shader[v] = RID();
-    }
-    scratch_a = RID();
-    scratch_b = RID();
-    bands = RID();
-    debug_placeholder = RID();
-    rd = nullptr;
-}
-
-int CascadePasses::level_count(int p_min_lod) const {
-    // With the carry, a level above the batch's LOD even above the top band (its chunks derive there).
-    return MAX(top - p_min_lod, carry ? 1 : 0) + 1;
-}
-
-void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, const Vector2i &p_lods, bool p_fold) {
-    ERR_FAIL_COND(p_count == 0 || p_count > max_chunks);
-    const uint32_t n = uint32_t(level_bound(item_size, p_j));
-    PackedByteArray push;
-    push.resize(CascadeGLSL::PUSH_BYTES);
-    push.fill(0);
-    push.encode_u32(0, p_base);
-    push.encode_u32(4, p_count);
-    push.encode_s32(8, p_j);
-    push.encode_s32(12, top);
-    push.encode_u32(16, n);
-    push.encode_u32(20, uint32_t(level_bound(item_size, p_j + 1)));
-    // The fields where a chunk of the batch derives, else the carry where one carries it (monotone in j: a level with
-    // either always finds the fields in its parent level).
-    CascadeGLSL::View view = CascadeGLSL::View::GROUND;
-    if (!fields.empty() && fields.batch(p_lods, p_j)) {
-        view = CascadeGLSL::View::FIELDS;
-    } else if (!fields.empty() && fields.batch_carry(p_lods, p_j)) {
-        view = CascadeGLSL::View::SAMPLES;
-    }
-    bool fold = p_j == 0 && p_fold;
-    if (fold && !uniform_set[2 * int(view) + 1].is_valid()) {
-        ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
-        fold = false;
-    }
-    const int v = 2 * int(view) + (fold ? 1 : 0);
-    const int64_t list = rd->compute_list_begin();
-    rd->compute_list_bind_compute_pipeline(list, pipeline[v]);
-    rd->compute_list_bind_uniform_set(list, uniform_set[v], 0);
-    rd->compute_list_set_push_constant(list, push, push.size());
-    if (is_points()) {
-        // Items flattened over x: item c's points are threads c * n^3 ...
-        rd->compute_list_dispatch(list, (p_count * n * n * n + CascadeGLSL::LOCAL_SIZE - 1) / CascadeGLSL::LOCAL_SIZE, 1, 1);
-    } else {
-        rd->compute_list_dispatch(list, (n * n * n + CascadeGLSL::LOCAL_SIZE - 1) / CascadeGLSL::LOCAL_SIZE, p_count, 1);
-    }
-    rd->compute_list_end();
-}
-
-void CascadePasses::record_all(const Vector2i &p_lods, uint32_t p_count, bool p_fold) {
-    for (uint32_t base = 0; base < p_count; base += max_chunks) {
-        const uint32_t count = MIN(max_chunks, p_count - base);
-        for (int j = level_count(p_lods.x) - 1; j >= 0; j--) {
-            record_level(j, base, count, p_lods, p_fold);
-        }
-    }
-}

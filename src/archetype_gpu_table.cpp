@@ -5,27 +5,27 @@
 #include "gpu_frame.hpp"
 #include "ov/bytes.hpp"
 #include "page_format.hpp"
+#include "parallel_for.hpp"
 #include "trace.hpp"
-#include <godot_cpp/classes/worker_thread_pool.hpp>
 
 #include <algorithm>
 #include <cstring>
 
 namespace Archetype {
 
-String glsl_table_buffers(int p_record_binding, int p_list_binding) {
-    return String(GLSL_DEF_RECORD_STRUCT) +
-            vformat("\nlayout(set = 0, binding = %d, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };\n", p_record_binding) +
-            vformat("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding) +
+ov::str glsl_table_buffers(int p_record_binding, int p_list_binding) {
+    return ov::str(GLSL_DEF_RECORD_STRUCT) +
+            ov::format("\nlayout(set = 0, binding = %d, std430) restrict readonly buffer DefRecords { DefRecord sdf_records[]; };\n", p_record_binding) +
+            ov::format("layout(set = 0, binding = %d, std430) restrict readonly buffer DefList { uint sdf_list[]; };\n", p_list_binding) +
             "ChunkInput g_sdf_chunk; // the chunk being sampled: its list offset (id.w) and length (anchor_hi.w)\n";
 }
 
 // The virtual's implementation: glsl_table_buffers, the one source (FrameSpike splices it directly).
-String GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
+ov::str GpuTable::glsl_buffers(int p_record_binding, int p_list_binding) const {
     return glsl_table_buffers(p_record_binding, p_list_binding);
 }
 
-String GpuTable::glsl_set_chunk() const {
+ov::str GpuTable::glsl_set_chunk() const {
     return "\n    g_sdf_chunk = input_chunk[gl_GlobalInvocationID.z / chunk_param.chunk_size];";
 }
 
@@ -167,12 +167,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
     std::vector<uint8_t> fits(p_chunks.size(), 1);
     std::vector<uint32_t> streamed(p_chunks.size(), 0);
     Job job{ snap.get(), stream.get(), scene_end, &base, p_chunks.data(), lists.data(), palettes.data(), fits.data(), streamed.data() };
-    if (p_chunks.size() > 1) {
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        pool->wait_for_group_task_completion(pool->add_native_group_task(&Job::run, &job, int(p_chunks.size()), -1, true, "GpuTable::build_lists"));
-    } else if (p_chunks.size() == 1) {
-        Job::run(&job, 0);
-    }
+    parallel_for(uint32_t(p_chunks.size()), "GpuTable::build_lists", [&job](uint32_t p_i) { Job::run(&job, p_i); });
     const size_t budget = p_capacity_words;
     std::vector<uint32_t> words;
     size_t kept = 0;

@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include "godot_conv.hpp"
+
 #include "gpu_direct_glsl.hpp"
 #include "gpu_glsl.hpp"
 
@@ -14,7 +16,7 @@ TEST_CASE("DualContouring: the vertex pass rewrite still divides the crossings b
     // A pass that no longer spells the lines would mesh Surface Nets (dual_contouring_pass errors).
     CHECK(pass.count(GLSL_MASS_POINT_VERTEX) == 1);
     CHECK(pass.count(GLSL_SURFACE_NORMAL) == 1);
-    const String dc = dual_contouring_pass(pass);
+    const String dc = godot_str(dual_contouring_pass(ov_str(pass)));
     CHECK(dc.contains("qef_vertex("));
     CHECK((dc.contains("/ float(active_edge_count)") || dc.contains("/= float(active_edge_count)")));
     // The normal at the placed vertex falls back to the Hermite normals instead of the mass point.

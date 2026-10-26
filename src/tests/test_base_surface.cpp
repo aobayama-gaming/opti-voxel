@@ -1,5 +1,8 @@
 #include "test_common.hpp"
 
+#include "godot_conv.hpp"
+#include "ov/str.hpp"
+
 #include "base_surface.hpp"
 
 #include <cmath>
@@ -114,7 +117,7 @@ TEST_CASE("BaseSurface: the flat base is the saturated datum difference, up +y")
     }
     const UpAxis up = b.up_dir(VoxelPos(1, 2, 3));
     CHECK(up[1] == 1.0);
-    CHECK(!b.glsl().contains("DATUM_LO"));
+    CHECK(!ov::contains(b.glsl(), "DATUM_LO"));
 }
 
 // Check 1 of the design note: the curvature form within 1% of a cell of the exact distance at LODs 0-16, the radius

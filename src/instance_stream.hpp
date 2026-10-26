@@ -39,7 +39,7 @@
 // never under the stream's lock, and landed by them under it: a key's dependents start at once, on the same task.
 namespace Archetype {
 
-// Runs the stream's drain tasks: Godot's worker pool at low priority (pool()), or on the thread calling reap() (tests: a
+// Runs the stream's drain tasks: the core's executor at low priority (pool(); Godot's worker pool), or on the thread calling reap() (tests: a
 // key asked for is computed and landed by the next poll()).
 class StreamExecutor {
 public:
@@ -57,7 +57,7 @@ public:
     // job runs).
     virtual void landing() {}
 
-    // Godot's WorkerThreadPool, low priority (threading/worker_pool/low_priority_thread_ratio of its threads).
+    // The core's executor, low priority (on Godot: threading/worker_pool/low_priority_thread_ratio of its pool).
     static std::unique_ptr<StreamExecutor> pool();
 
 private:

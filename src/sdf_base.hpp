@@ -7,12 +7,13 @@
 #include "godot_cpp/variant/string.hpp"
 #include "godot_cpp/variant/vector3.hpp"
 
+#include "cascade_source.hpp"
 #include "chunk_math.hpp"
+#include "chunk_palette.hpp"
 #include "exact_noise.hpp"
 #include "material_library.hpp"
 #include "page_format.hpp"
-
-#include <godot_cpp/classes/worker_thread_pool.hpp>
+#include "parallel_for.hpp"
 
 #include <array>
 #include <functional>
@@ -24,10 +25,6 @@ class RenderingDevice;
 
 using namespace godot;
 
-namespace Cascade {
-struct Spec;
-}
-
 // The instance table of an SDF (archetype instances): the fixed-size DefRecord array and the per-batch
 // list of instance indices. The SDF hands out the data; each mesher owns the buffers on its own
 // RenderingDevice (the legacy mesher runs on a local one), splices glsl_buffers() at the given bindings
@@ -38,9 +35,9 @@ public:
     virtual ~SDFGpuTable() = default;
 
     // The DefRecord struct and the two buffer declarations at the given bindings.
-    virtual String glsl_buffers(int p_record_binding, int p_list_binding) const = 0;
+    virtual ov::str glsl_buffers(int p_record_binding, int p_list_binding) const = 0;
     // The statement assigning g_sdf_chunk from the current chunk (the mesher's main()).
-    virtual String glsl_set_chunk() const = 0;
+    virtual ov::str glsl_set_chunk() const = 0;
 
     // The snapshot version: an edit bumps it (the chunks it re-meshes require it).
     virtual uint32_t version() const = 0;
@@ -103,7 +100,7 @@ public:
     virtual Dictionary get_stats() const { return Dictionary(); }
 };
 
-class SDFBase {
+class SDFBase : public CascadeSource {
 public:
     virtual ~SDFBase() = default;
 
@@ -158,42 +155,8 @@ public:
             }
             return;
         }
-        WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-        const WorkerThreadPool::GroupID id = pool->add_native_group_task(&SDFBase::_batch_block, &job, blocks, -1, true, "SDFBase::evaluate_batch");
-        pool->wait_for_group_task_completion(id);
+        parallel_for(uint32_t(blocks), "SDFBase::evaluate_batch", [&job](uint32_t p_block) { _batch_block(&job, p_block); });
     }
-
-    // GPU code spliced into the cascade passes (SDFCascade: the cascade's register, metres and skirt
-    // functions). The shader provides the chunk_param
-    // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
-    virtual String get_glsl_code() const = 0;
-    // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
-    // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPos group_hi, uint chunk, out uint
-    // material, out float skirt_extra)` (material: the winning record's palette index, 0 = ground; skirt_extra: metres
-    // added to the sample's skirt depth), called by every invocation of a p_group_size workgroup together (it has
-    // barriers), [group_lo, group_hi] holding the workgroup's points; p_group_size 0: per sample (no barrier, the group
-    // ignored).
-    virtual String get_sample_fold_glsl(uint32_t p_group_size) const = 0;
-    // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes' climate
-    // variants splice after their channel code, defining `uint cascade_ground_material(Ch ch)`, the palette index of a
-    // sample no record colours (ch: its channels on Λ_L in p_view's GPU layout, the pick the level above derived
-    // carried). Empty otherwise.
-    virtual String get_ground_material_glsl(const Cascade::Spec &p_view) const {
-        (void)p_view;
-        return String();
-    }
-    // Whether a sample's ground is more than the cascade's ground channels (a climate's height terms or terraces): then
-    // the cascade level passes derive the terms on the level above every sample, point items too, and splice
-    // get_ground_glsl after their channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value,
-    // gradient) of a sample, ch in p_view's GPU layout.
-    virtual bool has_ground_terms() const { return false; }
-    virtual String get_ground_glsl(const Cascade::Spec &p_view) const {
-        (void)p_view;
-        return String();
-    }
-    // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
-    // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
-    virtual String get_climate_helpers_glsl() const { return String(); }
 
     // The instance table's GPU buffers (SDFTable). The meshers splice and bind it, and the cascade passes fold it
     // into their samples. The const form only reads (the shader text, the sizes).
@@ -201,6 +164,16 @@ public:
     const SDFGpuTable *get_gpu_table() const { return const_cast<SDFBase *>(this)->get_gpu_table(); }
     // The materials the table's records name (TableRecord::material): the page shader's material_tex.
     virtual const Material::Library &get_materials() const = 0;
+
+    // CascadeSource: the shader text needs only these; the meshers keep their RenderingDevice work here.
+    ov::str get_table_glsl(int p_record_binding, int p_list_binding) const override {
+        const SDFGpuTable *table = get_gpu_table();
+        return table ? table->glsl_buffers(p_record_binding, p_list_binding) : ov::str();
+    }
+    bool samples_carry_materials() const override {
+        const SDFGpuTable *table = get_gpu_table();
+        return table && ChunkPalette::has_ground_materials(table->base_palette());
+    }
 
     // The discoverer's no-cull rule: a node whose box intersects any instance's influence box (grown by
     // the cull band, 2 chunk sizes at the node's LOD) must never be culled, whatever the corners say.
@@ -246,10 +219,6 @@ public:
     virtual bool edit_affects_chunk(const ChunkId &p_chunk) const = 0;
     // The region the last edit changed.
     const VoxelBox &last_edit_box() const { return edit_box; }
-
-    // The Hermite cascade's bands (never null): the meshers compute the samples with the cascade passes
-    // (cascade_glsl.hpp), and evaluate() only takes lattice points (frac 0, voxel a multiple of 2^lod).
-    virtual const Cascade::Spec *get_cascade() const = 0;
 
     // The smallest skirt depth (voxels of the chunk's LOD) this terrain needs: how far apart the surfaces of a
     // LOD L and a LOD L+1 chunk can be (a band dropped between them), so a seam shows no crack. VoxelTerrain raises

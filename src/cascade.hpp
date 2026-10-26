@@ -3,6 +3,9 @@
 #include "base_surface.hpp"
 #include "chunk_math.hpp"
 #include "exact_noise.hpp"
+#include "ov/math.hpp"
+#include "ov/str.hpp"
+#include "ov/types.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -126,13 +129,13 @@ inline float flush_value(float p_v) {
     return std::fabs(p_v) < ExactNoise::bits_float(FLUSH_BITS) ? 0.0f : p_v;
 }
 // flush_value's threshold as a GLSL literal (the generated code's flushes).
-inline String glsl_flush() {
+inline ov::str glsl_flush() {
     return ExactNoise::glsl_float(ExactNoise::bits_float(FLUSH_BITS));
 }
 // flush_value of the GLSL expression p_expr (a variable: it is read twice), a conditional without parentheses: the
 // generators' one flush.
-inline String glsl_flush_of(const String &p_expr) {
-    return "abs(" + p_expr + String(") < ") + glsl_flush() + String(" ? 0.0 : ") + p_expr;
+inline ov::str glsl_flush_of(const ov::str &p_expr) {
+    return "abs(" + p_expr + ov::str(") < ") + glsl_flush() + ov::str(" ? 0.0 : ") + p_expr;
 }
 
 // Dual numbers (x, y, z: gradient, w: value), every result flushed under 2^-64: inputs 0 or >= 2^-64, so a product's
@@ -253,20 +256,20 @@ struct FieldRange {
         if (sample) {
             return p_lod + 1;
         }
-        return p_lod <= ceiling ? MAX(floor, p_lod + 1) : MAX_LEVEL + 2;
+        return p_lod <= ceiling ? ov::max(floor, p_lod + 1) : MAX_LEVEL + 2;
     }
     bool carried(int p_lod, int p_m) const { return p_m >= lowest(p_lod); }
     bool carries(int p_lod, int p_m) const { return (p_m == p_lod || p_m == p_lod + 1) && reads_carry(p_lod); }
     // Whether a batch of LODs p_lods (min, max) carries the fields (batch) at level j above some item's LOD (the largest
     // LOD at most the ceiling is the first to need them), and whether one of its last levels reads the carry
     // (batch_carry, j = 0; level 1 writes it where it has the fields).
-    bool batch(const Vector2i &p_lods, int p_j) const {
+    bool batch(const ov::ivec2 &p_lods, int p_j) const {
         if (sample) {
             return p_j >= 1;
         }
-        return p_j >= 1 && p_lods.x <= ceiling && MIN(p_lods.y, ceiling) + p_j >= floor;
+        return p_j >= 1 && p_lods.x <= ceiling && ov::min(p_lods.y, int32_t(ceiling)) + p_j >= floor;
     }
-    bool batch_carry(const Vector2i &p_lods, int p_j) const { return p_j == 0 && (sample || (p_lods.x <= ceiling && p_lods.y >= floor)); }
+    bool batch_carry(const ov::ivec2 &p_lods, int p_j) const { return p_j == 0 && (sample || (p_lods.x <= ceiling && p_lods.y >= floor)); }
 };
 
 // Per-point band amplitudes (the climate's biome weights, climate.hpp). At every point of Λ_m above a run's last level,
@@ -357,11 +360,11 @@ struct Modulation {
     // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
     // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
     // samples' view (p_spec without the fields).
-    virtual String glsl(const Spec &p_spec, bool p_carried) const = 0;
+    virtual ov::str glsl(const Spec &p_spec, bool p_carried) const = 0;
     // derive in GLSL: `void cascade_derive(int m, inout Ch ch, WorldPos p)`, p_spec with the fields.
-    virtual String derive_glsl(const Spec &p_spec) const {
+    virtual ov::str derive_glsl(const Spec &p_spec) const {
         (void)p_spec;
-        return String();
+        return ov::str();
     }
 };
 

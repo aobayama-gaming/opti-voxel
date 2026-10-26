@@ -22,11 +22,10 @@ uint64_t fnv(uint64_t p_h, uint32_t p_v) {
     return p_h;
 }
 
-uint64_t fnv_text(const String &p_s) {
-    const CharString c = p_s.utf8();
+uint64_t fnv_text(const ov::str &p_s) {
     uint64_t h = 14695981039346656037ull;
-    for (int i = 0; i < c.length(); i++) {
-        h = (h ^ uint8_t(c[i])) * 1099511628211ull;
+    for (const char c : p_s) {
+        h = (h ^ uint8_t(c)) * 1099511628211ull;
     }
     return h;
 }
@@ -66,9 +65,9 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
     CHECK(h == 13546445268389072586ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
-    CHECK(chunk_text == 18076969695962784086ull);
+    CHECK(chunk_text == 15628555049468586349ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B).
-    CHECK(point_text == 13600568492835329823ull);
+    CHECK(point_text == 5818378642908517132ull);
 }
 
 // The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its
@@ -176,7 +175,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     CHECK(mismatches == 0);
     CHECK(lifted == points);
     CHECK(CascadeGLSL::field_range(&s.sdf, true).everywhere()); // point items read the fields too
-    CHECK(s.sdf.get_ground_glsl(s.sdf.get_spec()).contains("vec4 climate_ground(Ch ch)"));
+    CHECK(ov::contains(s.sdf.get_ground_glsl(s.sdf.get_spec()), "vec4 climate_ground(Ch ch)"));
     // The skirts take the height terms' step: deeper than the same ground without them where a term's field has
     // octaves (dunes: 25 m, k = 9 at 5 cm, LODs 6-7), the cap (skirt_depth cells) lifted.
     ShapedSDF deep(15, 1e6f);
@@ -307,7 +306,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
         CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
         for (const bool points : { false, true }) {
             for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
-                const String code = CascadeGLSL::level_shader(&sdf, false, points, false, !points, view);
+                const String code = godot_str(CascadeGLSL::level_shader(&sdf, false, points, false, !points, view));
                 variants++;
                 for (const char *name : NAMES) {
                     const String call = String(name) + "(";
@@ -405,7 +404,7 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
     CHECK(sdf.has_ground_terms());
     for (const bool points : { false, true }) {
         CHECK(CascadeGLSL::field_range(&sdf, points).everywhere());
-        CHECK(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::SAMPLES).contains("climate_ground("));
+        CHECK(ov::contains(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::SAMPLES), "climate_ground("));
     }
 }
 

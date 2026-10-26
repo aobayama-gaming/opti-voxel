@@ -262,7 +262,7 @@ void VoxelState::_stall_add(const ChunkId &p_loaded, const ChunkId &p_dirty, int
 }
 
 void VoxelState::_rescan_below(const ChunkId &p_loaded) {
-    const uint64_t t0 = now_usec();
+    const uint64_t t0 = ov::now_usec();
     const int lod = ChunkMath::get_lod(p_loaded);
     const int64_t half = int64_t(1) << lod; // a LOD-L chunk spans its centre +- 2^L ids
     int32_t moved = 0;
@@ -285,7 +285,7 @@ void VoxelState::_rescan_below(const ChunkId &p_loaded) {
     }
     stats.rescans++;
     stats.rescan_reanchored += moved;
-    stats.rescan_usec += now_usec() - t0;
+    stats.rescan_usec += ov::now_usec() - t0;
 }
 
 void VoxelState::_verify_delta(const LODHashSet &p_new, const ScanDelta &p_delta) {

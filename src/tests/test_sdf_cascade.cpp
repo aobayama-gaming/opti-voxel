@@ -1,5 +1,7 @@
 #include "test_common.hpp"
 
+#include "godot_conv.hpp"
+
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
 #include "cascade_measure.hpp"
@@ -111,7 +113,7 @@ TEST_CASE("SDFCascade: the shader stub and get_cascade") {
     SDFCascade sdf;
     sdf.configure(param, 25);
     CHECK(sdf.get_cascade() == &sdf.get_spec());
-    const String glsl = sdf.get_glsl_code();
+    const String glsl = godot_str(sdf.get_glsl_code());
     CHECK(glsl.contains("vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod)"));
     CHECK(!glsl.contains("DATUM_LO"));
 }
@@ -139,7 +141,7 @@ TEST_CASE("CascadeGLSL: the band table holds every band at its level, with the C
     SDFCascade sdf;
     sdf.configure(param, 25);
     const Spec &spec = sdf.get_spec();
-    const PackedByteArray table = CascadeGLSL::band_table(spec);
+    const PackedByteArray table = godot_bytes(CascadeGLSL::band_table(spec));
     CHECK(table.size() == CascadeGLSL::BAND_ENTRIES * int64_t(CascadeGLSL::BAND_BYTES));
     int present = 0;
     for (int m = 0; m < CascadeGLSL::BAND_ENTRIES; m++) {
@@ -240,13 +242,13 @@ TEST_CASE("CascadeGLSL: the point pass writes the unit register from the item's 
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 25);
-    const String code = CascadeGLSL::level_shader(&sdf, false, true);
+    const String code = godot_str(CascadeGLSL::level_shader(&sdf, false, true));
     CHECK(code.contains("point_value[sample_index] = r;"));
     CHECK(code.contains("cascade_terrain_unit("));
     CHECK(code.contains("ChunkFrame f = point_frame(input_chunk[pc.chunk_base + c]);"));
     CHECK(code.contains("ChunkFrame point_frame(ChunkInput c)"));
     CHECK(!code.contains("/*ITEM_FRAME*/"));
-    const String chunks = CascadeGLSL::level_shader(&sdf, false, false);
+    const String chunks = godot_str(CascadeGLSL::level_shader(&sdf, false, false));
     CHECK(chunks.contains("ChunkFrame f = chunk_frame(input_chunk[pc.chunk_base + c], chunk_param);"));
     CHECK(!chunks.contains("point_frame"));
 }

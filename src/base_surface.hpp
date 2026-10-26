@@ -3,9 +3,7 @@
 #include "exact_noise.hpp"
 #include "world_coord.hpp"
 
-#include <godot_cpp/variant/string.hpp>
-
-using namespace godot;
+#include "ov/format.hpp"
 
 // The planet base (design note planet-base-curvature-2026-10-22): a reference surface, not a constraint on the
 // terrain. At every point it gives an altitude d_base (positive above, in voxels of the chunk's LOD), an up
@@ -115,12 +113,12 @@ public:
     // g - (1 - 2^-j) (g.n) n, n = p_b's up. GLSL: base_stretch_gradient (FLAT), base_stretch_gradient_at (SPHERE).
     ExactNoise::Float4 stretch_gradient(const ExactNoise::Float4 &p_g, int p_j, const ExactNoise::Float4 &p_b) const;
     // The stretch's GLSL (the cascade's band functions splice it for a stretched spec; after the int64 helpers).
-    String glsl_stretch() const;
+    ov::str glsl_stretch() const;
 
     // FLAT: `vec4 base_at(WorldPos p, int lod)`. SPHERE: `struct BaseRegion`, `vec4 base_curvature(WorldPos p,
     // int lod, BaseRegion r)` and `vec4 base_radius(WorldPos p, int lod)`. TODO: a SPHERE's base_at (the form picked
     // by the LOD like at()) needs the chunk's regions on the GPU; it comes with the planet PR that uploads them. After the frame functions, the int64 helpers (SPHERE) and GLSL_EXACT_NOISE (det_rsqrt).
-    String glsl() const;
+    ov::str glsl() const;
 
 private:
     // A FLAT base's at() (GLSL base_at).

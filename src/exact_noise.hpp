@@ -2,15 +2,6 @@
 
 #include "world_coord.hpp"
 
-// GLSL text builders (glsl_float .. glsl_fbm) still speak godot's String: they feed the GLSL splice
-// files (archetype_glsl, cascade_glsl), which convert wholesale in the GLSL-text-pipeline change.
-// The rest of this header is engine-free.
-#include <godot_cpp/variant/string.hpp>
-#include <godot_cpp/variant/utility_functions.hpp>
-
-using godot::String;
-using godot::vformat;
-
 #include "ov/format.hpp"
 #include "ov/on_error.hpp"
 
@@ -579,21 +570,21 @@ inline Float4 fbm(const OctaveSet &p_set, const WorldPos &p_pos, int p_lod) {
 }
 
 // GLSL literal of a float, from its bits.
-inline String glsl_float(float p_f) {
-    return vformat("uintBitsToFloat(0x%08Xu)", (int64_t)float_bits(p_f));
+inline ov::str glsl_float(float p_f) {
+    return ov::format("uintBitsToFloat(0x%08Xu)", (int64_t)float_bits(p_f));
 }
 
-inline String glsl_uint(uint32_t p_u) {
-    return vformat("0x%08Xu", (int64_t)p_u);
+inline ov::str glsl_uint(uint32_t p_u) {
+    return ov::format("0x%08Xu", (int64_t)p_u);
 }
 
 // GLSL low and high words of an int64 vector.
-inline String glsl_lo(const Vector3i64 &p_v) {
+inline ov::str glsl_lo(const Vector3i64 &p_v) {
     using namespace WorldCoord;
     return "uvec3(" + glsl_uint(lo32(p_v.x)) + ", " + glsl_uint(lo32(p_v.y)) + ", " + glsl_uint(lo32(p_v.z)) + ")";
 }
 
-inline String glsl_hi(const Vector3i64 &p_v) {
+inline ov::str glsl_hi(const Vector3i64 &p_v) {
     using namespace WorldCoord;
     return "ivec3(int(" + glsl_uint(uint32_t(hi32(p_v.x))) + "), int(" + glsl_uint(uint32_t(hi32(p_v.y))) + "), int(" +
             glsl_uint(uint32_t(hi32(p_v.z))) + "))";
@@ -601,12 +592,12 @@ inline String glsl_hi(const Vector3i64 &p_v) {
 
 // GLSL "vec4 <name>(WorldPos p, int lod)", the GPU side of fbm(): straight-line code with literal
 // constants.
-inline String glsl_fbm(const String &p_name, const OctaveSet &p_set) {
-    String code = "vec4 " + p_name + "(WorldPos p, int lod) {\n    precise vec4 n = vec4(0.0);\n    precise vec4 o;\n";
+inline ov::str glsl_fbm(const ov::str &p_name, const OctaveSet &p_set) {
+    ov::str code = "vec4 " + p_name + "(WorldPos p, int lod) {\n    precise vec4 n = vec4(0.0);\n    precise vec4 o;\n";
     for (const Octave &o : p_set.octaves) {
-        code += vformat("    o = %s(p, %d, %s, %s, %s);\n", p_set.is_2d ? "perlin2" : "perlin3", o.k, glsl_uint(o.seed), glsl_lo(o.offset),
+        code += ov::format("    o = %s(p, %d, %s, %s, %s);\n", p_set.is_2d ? "perlin2" : "perlin3", o.k, glsl_uint(o.seed), glsl_lo(o.offset),
                 glsl_hi(o.offset));
-        code += vformat("    n.xyz = n.xyz + o.xyz * (%s * exact_pow2(lod - %d));\n", glsl_float(o.amp), o.k);
+        code += ov::format("    n.xyz = n.xyz + o.xyz * (%s * exact_pow2(lod - %d));\n", glsl_float(o.amp), o.k);
         code += "    n.w = n.w + o.w * " + glsl_float(o.amp) + ";\n";
     }
     code += "    return n;\n}\n";

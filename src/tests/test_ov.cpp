@@ -1,8 +1,12 @@
 #include "test_common.hpp"
 
+#include "ov/clock.hpp"
 #include "ov/containers.hpp"
 #include "ov/format.hpp"
+#include "ov/log.hpp"
+#include "ov/math.hpp"
 #include "ov/murmur3.hpp"
+#include "ov/str.hpp"
 #include "ov/types.hpp"
 
 // The murmur chain being compared against godot's, explicit (test files may include godot; the core
@@ -10,6 +14,7 @@
 #include <godot_cpp/templates/hashfuncs.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 #include <vector>
 
@@ -183,4 +188,77 @@ TEST_CASE("ov::HashSet: remove(begin()) until empty pops every key once") {
         CHECK_FALSE(set.has(key));
     }
     CHECK(std::count(popped.begin(), popped.end(), true) == 1000);
+}
+
+TEST_CASE("ov::replace_all / count: godot String's replace and count") {
+    // Left to right, no overlap, replaced text not rescanned.
+    CHECK(ov::replace_all("aaa", "aa", "b") == "ba");
+    CHECK(ov::replace_all("abab", "ab", "abab") == "abababab");
+    CHECK(ov::replace_all("x DATUM_LO NEG_DATUM_LO", "NEG_DATUM_LO", "1") == "x DATUM_LO 1");
+    CHECK(ov::replace_all("none", "zz", "y") == "none");
+    CHECK(ov::replace_all("keep", "", "y") == "keep");
+    CHECK(ov::replace_all("", "a", "b") == "");
+    CHECK(ov::count("aaaa", "aa") == 2);
+    CHECK(ov::count("abcabc", "abc") == 2);
+    CHECK(ov::count("abc", "") == 0);
+    CHECK(ov::contains("vec4 f()", "f("));
+    CHECK(!ov::contains("vec4 f()", "g("));
+    CHECK(ov::itos(-3000000000000) == "-3000000000000");
+    // The same results as godot's String methods on a splice-shaped text.
+    const char *text = "MOMENT_MATERIAL_ISO MOMENT_ISO MOMENT_ISO";
+    CHECK(ov::replace_all(ov::replace_all(text, "MOMENT_MATERIAL_ISO", "1"), "MOMENT_ISO", "2") ==
+            std::string(String(text).replace("MOMENT_MATERIAL_ISO", "1").replace("MOMENT_ISO", "2").utf8().get_data()));
+    CHECK(ov::count(text, "MOMENT_ISO") == String(text).count("MOMENT_ISO"));
+}
+
+TEST_CASE("ov::min / max / clamp: godot's MIN / MAX / CLAMP, operand for operand") {
+    const float nan = std::nanf("");
+    CHECK(ov::min(1, 2) == godot::MIN(1, 2));
+    CHECK(ov::max(1, 2) == godot::MAX(1, 2));
+    // NaN: the macro's comparison is false, so it picks the second operand (std::min picks the first).
+    CHECK(std::isnan(ov::min(1.0f, nan)) == std::isnan(godot::MIN(1.0f, nan)));
+    CHECK(std::isnan(ov::min(nan, 1.0f)) == std::isnan(godot::MIN(nan, 1.0f)));
+    CHECK(std::isnan(ov::max(1.0f, nan)) == std::isnan(godot::MAX(1.0f, nan)));
+    // Signed zeros: equal, so the second operand.
+    CHECK(std::signbit(ov::min(0.0f, -0.0f)) == std::signbit(godot::MIN(0.0f, -0.0f)));
+    CHECK(std::signbit(ov::max(-0.0f, 0.0f)) == std::signbit(godot::MAX(-0.0f, 0.0f)));
+    CHECK(ov::clamp(5, 0, 3) == godot::CLAMP(5, 0, 3));
+    CHECK(ov::clamp(-1, 0, 3) == godot::CLAMP(-1, 0, 3));
+    CHECK(std::isnan(ov::clamp(nan, 0.0f, 1.0f)) == std::isnan(godot::CLAMP(nan, 0.0f, 1.0f)));
+}
+
+namespace {
+std::vector<std::string> g_log_lines;
+void capture_sink(int p_level, const char *, int, const char *p_message) {
+    g_log_lines.push_back(std::to_string(p_level) + ":" + p_message);
+}
+} // namespace
+
+TEST_CASE("ov::log: OV_LOG filters on the level, formats only what it prints") {
+    const ov::LogSink was_sink = ov::log_sink();
+    const int was_level = ov::log_level().load();
+    g_log_lines.clear();
+    ov::set_log_sink(capture_sink);
+    ov::log_level() = 1;
+    int formatted = 0;
+    auto arg = [&formatted]() { formatted++; return 7; };
+    OV_LOG(ov::LOG_INFO, "info %d", arg());
+    OV_LOG(ov::LOG_VERBOSE, "verbose %d", arg());
+    OV_WARN_PRINT("warned");
+    ov::set_log_sink(was_sink);
+    ov::log_level() = was_level;
+    CHECK(formatted == 1);
+    CHECK(g_log_lines.size() == 2);
+    if (g_log_lines.size() != 2) {
+        return;
+    }
+    CHECK(g_log_lines[0] == "1:info 7");
+    CHECK(g_log_lines[1] == "-1:warned");
+}
+
+TEST_CASE("ov::now_usec: the installed clock, monotonic") {
+    const uint64_t a = ov::now_usec();
+    const uint64_t b = ov::now_usec();
+    CHECK(b >= a);
+    CHECK(ov::steady_usec() > 0);
 }

@@ -1,9 +1,11 @@
 #include "register_types.h"
 
 #include <gdextension_interface.h>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 #include "cascade_report.hpp"
 #include "cascade_spike.hpp"
@@ -13,6 +15,7 @@
 #include "voxel_sky.hpp"
 #include "voxel_terrain.hpp"
 
+#include "godot_executor.hpp"
 #include "ov/on_error.hpp"
 
 #include "debug_log.hpp"
@@ -23,6 +26,10 @@
 
 using namespace godot;
 
+namespace {
+GodotExecutor g_executor;
+} // namespace
+
 void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
@@ -31,6 +38,17 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     ov::set_error_sink([](const char *p_file, int p_line, const char *p_message) {
         _err_print_error("core", p_file, p_line, p_message);
     });
+    // Core log lines in the Godot console; core timestamps on the engine's ticks.
+    ov::set_log_sink([](int p_level, const char *p_file, int p_line, const char *p_message) {
+        if (p_level < 0) {
+            _err_print_error("core", p_file, p_line, p_message, false, true);
+        } else {
+            UtilityFunctions::print(String::utf8(p_message));
+        }
+    });
+    ov::set_clock_source([]() -> uint64_t { return Time::get_singleton()->get_ticks_usec(); });
+    // The core's tasks, loops and workers on Godot's pool and threads.
+    ov::set_executor(&g_executor);
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
@@ -47,6 +65,7 @@ void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+    ov::set_executor(nullptr);
 }
 
 extern "C" {

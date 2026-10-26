@@ -1,5 +1,8 @@
 #include "climate.hpp"
 
+#include "ov/math.hpp"
+#include "ov/str.hpp"
+
 #include <algorithm>
 
 // The climate's Cascade::Modulation (combined_spec): per modulated band (group, level), how each biome shapes it, on
@@ -60,9 +63,9 @@ const Float4 &part_of(const BandMod &p_mod, const Part &p_part) {
     return p_part.kind == AMP ? p_mod.amp[p_part.index] : (p_part.kind == STATE ? p_mod.state[p_part.index] : p_mod.warp[p_part.index]);
 }
 
-String part_glsl(const Part &p_part) {
+ov::str part_glsl(const Part &p_part) {
     static const char *NAMES[] = { "amp", "state", "warp" };
-    return vformat("%s[%d]", NAMES[p_part.kind], p_part.index);
+    return ov::format("%s[%d]", NAMES[p_part.kind], p_part.index);
 }
 
 // Carry group p_c of a point's slots.
@@ -74,12 +77,12 @@ void put_carry(float r_slots[Cascade::SLOTS], int p_c, const Float4 &p_v) {
 }
 
 // The same in GLSL (carried_glsl reads it back).
-String put_carry_glsl(const Cascade::Spec &p_spec, int p_c, const String &p_v, const String &p_indent) {
+ov::str put_carry_glsl(const Cascade::Spec &p_spec, int p_c, const ov::str &p_v, const ov::str &p_indent) {
     const int b = p_spec.gpu_carry(p_c);
-    String code;
+    ov::str code;
     static const char *COMP = "wxyz";
     for (int c = 0; c < 4; c++) {
-        code += p_indent + vformat("ch.c[%d] = %s.%c;\n", b + c, p_v, COMP[c]);
+        code += p_indent + ov::format("ch.c[%d] = %s.%c;\n", b + c, p_v, COMP[c]);
     }
     return code;
 }
@@ -199,8 +202,8 @@ public:
         }
     }
 
-    String glsl(const Cascade::Spec &p_spec, bool p_carried) const override { return p_carried ? glsl_carried(p_spec) : glsl_weighted(p_spec); }
-    String derive_glsl(const Cascade::Spec &p_spec) const override;
+    ov::str glsl(const Cascade::Spec &p_spec, bool p_carried) const override { return p_carried ? glsl_carried(p_spec) : glsl_weighted(p_spec); }
+    ov::str derive_glsl(const Cascade::Spec &p_spec) const override;
 
 private:
     // How one biome shapes one band: k = amplitude times the shape's n, |n|, n^2 coefficients (the inserted, centred
@@ -308,8 +311,8 @@ private:
         mask[m] |= 1u << p_group;
         // Only the ground reaches the mesh: the fields are carried for the ground's modulated levels.
         if (p_group == 0) {
-            range.floor = MIN(range.floor, m);
-            range.ceiling = MAX(range.ceiling, m);
+            range.floor = ov::min(range.floor, m);
+            range.ceiling = ov::max(range.ceiling, m);
         }
     }
 
@@ -337,12 +340,12 @@ private:
         }
     }
 
-    String glsl_biome_mod(const Entry &p_e, const String &p_target) const;
-    String glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const;
-    String glsl_carried(const Cascade::Spec &p_spec) const;
-    String glsl_weighted(const Cascade::Spec &p_spec) const;
-    String glsl_plain(const Cascade::Spec &p_spec) const;
-    String glsl_entry(const Entry &p_e) const;
+    ov::str glsl_biome_mod(const Entry &p_e, const ov::str &p_target) const;
+    ov::str glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const;
+    ov::str glsl_carried(const Cascade::Spec &p_spec) const;
+    ov::str glsl_weighted(const Cascade::Spec &p_spec) const;
+    ov::str glsl_plain(const Cascade::Spec &p_spec) const;
+    ov::str glsl_entry(const Entry &p_e) const;
 
     Table table;
     SampleCarry sample;
@@ -356,11 +359,11 @@ private:
     Cascade::FieldRange range;
 };
 
-String mask_switch(const uint32_t p_mask[Cascade::MAX_LEVEL + 1]) {
-    String code = "    uint mask = 0u;\n    switch (m) {\n";
+ov::str mask_switch(const uint32_t p_mask[Cascade::MAX_LEVEL + 1]) {
+    ov::str code = "    uint mask = 0u;\n    switch (m) {\n";
     for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
         if (p_mask[m] != 0u) {
-            code += vformat("    case %d: mask = %du; break;\n", m, int64_t(p_mask[m]));
+            code += ov::format("    case %d: mask = %du; break;\n", m, int64_t(p_mask[m]));
         }
     }
     return code + "    default: break;\n    }\n    if (mask == 0u) {\n        return 0u;\n    }\n";
@@ -368,31 +371,31 @@ String mask_switch(const uint32_t p_mask[Cascade::MAX_LEVEL + 1]) {
 
 // biome_mod's loop over the biomes, op for op: the amplitudes into a0 .. a2 (declared), the state and the warp into
 // p_target's state[] and warp[] (after glsl_weights and state_c).
-String Modulator::glsl_biome_mod(const Entry &p_e, const String &p_target) const {
+ov::str Modulator::glsl_biome_mod(const Entry &p_e, const ov::str &p_target) const {
     using ExactNoise::glsl_float;
-    const String &o = p_target;
-    String code = "        {\n            precise vec4 a0 = vec4(0.0);\n            precise vec4 a1 = vec4(0.0);\n            precise vec4 a2 = vec4(0.0);\n";
+    const ov::str &o = p_target;
+    ov::str code = "        {\n            precise vec4 a0 = vec4(0.0);\n            precise vec4 a1 = vec4(0.0);\n            precise vec4 a2 = vec4(0.0);\n";
     for (size_t b = 0; b < p_e.biomes.size(); b++) {
         const BiomeBand &bb = p_e.biomes[b];
-        const String wb = vformat("w%d", int64_t(b));
-        const String wt = bb.gain > 0.0f ? vformat("cl_mul(%s, cl_multifractal(%s, state_c))", wb, glsl_float(bb.gain)) : wb;
-        code += vformat("            {\n                vec4 wt = %s;\n", wt);
+        const ov::str wb = ov::format("w%d", int64_t(b));
+        const ov::str wt = bb.gain > 0.0f ? ov::format("cl_mul(%s, cl_multifractal(%s, state_c))", wb, glsl_float(bb.gain)) : wb;
+        code += ov::format("            {\n                vec4 wt = %s;\n", wt);
         for (int t = 0; t < 3; t++) {
             if (bb.k[t] != 0.0f) {
-                code += vformat("                a%d = a%d + wt * %s;\n", t, t, glsl_float(bb.k[t]));
+                code += ov::format("                a%d = a%d + wt * %s;\n", t, t, glsl_float(bb.k[t]));
             }
         }
         if (bb.gain > 0.0f) {
-            code += vformat("                %sstate[0] = cl_add(%sstate[0], cl_sub(%s, cl_scale(wt, %s)));\n", o, o, wb, glsl_float(bb.shape.c[0]));
+            code += ov::format("                %sstate[0] = cl_add(%sstate[0], cl_sub(%s, cl_scale(wt, %s)));\n", o, o, wb, glsl_float(bb.shape.c[0]));
             for (int t = 1; t < 4; t++) {
                 if (bb.shape.c[t] != 0.0f) {
-                    code += vformat("                %sstate[%d] = cl_sub(%sstate[%d], cl_scale(wt, %s));\n", o, t, o, t, glsl_float(bb.shape.c[t]));
+                    code += ov::format("                %sstate[%d] = cl_sub(%sstate[%d], cl_scale(wt, %s));\n", o, t, o, t, glsl_float(bb.shape.c[t]));
                 }
             }
         }
         if (bb.warp != 0.0f) {
             for (int ax = 0; ax < 3; ax++) {
-                code += vformat("                %swarp[%d] = cl_add(%swarp[%d], cl_scale(cl_mul(%s, f%d), %s));\n", o, ax, o, ax, wb, bb.warp_fields[ax], glsl_float(bb.warp));
+                code += ov::format("                %swarp[%d] = cl_add(%swarp[%d], cl_scale(cl_mul(%s, f%d), %s));\n", o, ax, o, ax, wb, bb.warp_fields[ax], glsl_float(bb.warp));
             }
         }
         code += "            }\n";
@@ -401,8 +404,8 @@ String Modulator::glsl_biome_mod(const Entry &p_e, const String &p_target) const
 }
 
 // biome_mod for one entry into its carry groups (in cascade_derive).
-String Modulator::glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const {
-    String code = "        {\n            vec4 state[4] = vec4[4](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));\n";
+ov::str Modulator::glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const {
+    ov::str code = "        {\n            vec4 state[4] = vec4[4](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));\n";
     code += "            vec4 warp[3] = vec4[3](vec4(0.0), vec4(0.0), vec4(0.0));\n";
     code += glsl_biome_mod(p_e, "");
     code += "            vec4 amp[3] = vec4[3](cl_flush(a0), cl_flush(a1), cl_flush(a2));\n";
@@ -412,18 +415,18 @@ String Modulator::glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spe
     return code + "        }\n        }\n"; // glsl_biome_mod's block, then this one
 }
 
-String Modulator::glsl_carried(const Cascade::Spec &p_spec) const {
+ov::str Modulator::glsl_carried(const Cascade::Spec &p_spec) const {
     // The last level's: what the level above derived (no weights, so no helpers).
-    String code;
+    ov::str code;
     const int groups = p_spec.group_count();
     if (!shaped_) {
         code += "\n// Climate::Modulator::modulate: each modulated band's amplitude, carried from the level above.\n";
-        code += vformat("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", groups);
-        code += vformat("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", groups);
+        code += ov::format("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", groups);
+        code += ov::format("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", groups);
     } else {
         code += "\n// Climate::Modulator::modulate: each modulated band's BandMod, carried from the level above.\n";
-        code += vformat("uint cascade_mods(int m, Ch pre, out BandMod mod[%d]) {\n", groups);
-        code += vformat("    for (int g = 0; g < %d; g++) {\n        mod[g].features = 0u;\n", groups);
+        code += ov::format("uint cascade_mods(int m, Ch pre, out BandMod mod[%d]) {\n", groups);
+        code += ov::format("    for (int g = 0; g < %d; g++) {\n        mod[g].features = 0u;\n", groups);
         code += "        for (int t = 0; t < 3; t++) {\n            mod[g].amp[t] = vec4(0.0);\n            mod[g].warp[t] = vec4(0.0);\n        }\n";
         code += "        for (int t = 0; t < 4; t++) {\n            mod[g].state[t] = vec4(0.0);\n        }\n    }\n";
     }
@@ -433,26 +436,26 @@ String Modulator::glsl_carried(const Cascade::Spec &p_spec) const {
         if (entries[m].empty()) {
             continue;
         }
-        code += vformat("    case %d:\n", m);
+        code += ov::format("    case %d:\n", m);
         for (const Entry &e : entries[m]) {
             if (e.group >= groups) {
                 continue; // a field band, in a view without the fields
             }
             if (!shaped_) {
                 // Plain: every entry's one part is its amplitude on n (or none: all its k are 0).
-                code += vformat("        amp[%d] = %s;\n", e.group, e.parts.empty() ? String("vec4(0.0)") : carried_glsl(p_spec, "pre", e.carry));
+                code += ov::format("        amp[%d] = %s;\n", e.group, e.parts.empty() ? ov::str("vec4(0.0)") : carried_glsl(p_spec, "pre", e.carry));
                 continue;
             }
-            const String o = vformat("mod[%d]", e.group);
-            code += vformat("        %s.features = %du;\n", o, int64_t(e.features));
+            const ov::str o = ov::format("mod[%d]", e.group);
+            code += ov::format("        %s.features = %du;\n", o, int64_t(e.features));
             if (e.constant) {
                 for (int t = 0; t < 3; t++) {
-                    code += vformat("        %s.amp[%d] = vec4(0.0, 0.0, 0.0, %s);\n", o, t, ExactNoise::glsl_float(e.k[t]));
+                    code += ov::format("        %s.amp[%d] = vec4(0.0, 0.0, 0.0, %s);\n", o, t, ExactNoise::glsl_float(e.k[t]));
                 }
                 continue;
             }
             for (size_t i = 0; i < e.parts.size(); i++) {
-                code += vformat("        %s.%s = %s;\n", o, part_glsl(e.parts[i]), carried_glsl(p_spec, "pre", e.carry + int(i)));
+                code += ov::format("        %s.%s = %s;\n", o, part_glsl(e.parts[i]), carried_glsl(p_spec, "pre", e.carry + int(i)));
             }
         }
         code += "        break;\n";
@@ -462,12 +465,12 @@ String Modulator::glsl_carried(const Cascade::Spec &p_spec) const {
 }
 
 // The amplitudes alone (no band shaped anywhere): the text the climate had before shaped bands.
-String Modulator::glsl_plain(const Cascade::Spec &p_spec) const {
+ov::str Modulator::glsl_plain(const Cascade::Spec &p_spec) const {
     using ExactNoise::glsl_float;
-    String code = splices_helpers(table, p_spec) ? String() : glsl_helpers();
+    ov::str code = splices_helpers(table, p_spec) ? ov::str() : glsl_helpers();
     code += "\n// Climate::Modulator::amplitudes: the field terms, the biome weights, then each modulated band's amplitude.\n";
-    code += vformat("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", p_spec.group_count());
-    code += vformat("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", p_spec.group_count());
+    code += ov::format("uint cascade_amplitudes(int m, Ch pre, out vec4 amp[%d]) {\n", p_spec.group_count());
+    code += ov::format("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", p_spec.group_count());
     code += mask_switch(mask);
     code += glsl_weights(table, p_spec);
     code += "    switch (m) {\n";
@@ -475,15 +478,15 @@ String Modulator::glsl_plain(const Cascade::Spec &p_spec) const {
         if (entries[m].empty()) {
             continue;
         }
-        code += vformat("    case %d: {\n", m);
+        code += ov::format("    case %d: {\n", m);
         for (const Entry &e : entries[m]) {
             code += "        { precise vec4 a = vec4(0.0);";
             for (size_t b = 0; b < e.biomes.size(); b++) {
                 if (e.biomes[b].k[0] != 0.0f) {
-                    code += vformat(" a = a + w%d * %s;", int64_t(b), glsl_float(e.biomes[b].k[0]));
+                    code += ov::format(" a = a + w%d * %s;", int64_t(b), glsl_float(e.biomes[b].k[0]));
                 }
             }
-            code += vformat(" amp[%d] = cl_flush(a); }\n", e.group);
+            code += ov::format(" amp[%d] = cl_flush(a); }\n", e.group);
         }
         code += "        break;\n    }\n";
     }
@@ -492,30 +495,30 @@ String Modulator::glsl_plain(const Cascade::Spec &p_spec) const {
 }
 
 // modulate()'s loop body for one entry, op for op.
-String Modulator::glsl_entry(const Entry &p_e) const {
+ov::str Modulator::glsl_entry(const Entry &p_e) const {
     using ExactNoise::glsl_float;
-    const String o = vformat("mod[%d]", p_e.group);
-    String code = vformat("        %s.features = %du;\n", o, int64_t(p_e.features));
+    const ov::str o = ov::format("mod[%d]", p_e.group);
+    ov::str code = ov::format("        %s.features = %du;\n", o, int64_t(p_e.features));
     if (p_e.constant) {
         for (int t = 0; t < 3; t++) {
-            code += vformat("        %s.amp[%d] = vec4(0.0, 0.0, 0.0, %s);\n", o, t, glsl_float(p_e.k[t]));
+            code += ov::format("        %s.amp[%d] = vec4(0.0, 0.0, 0.0, %s);\n", o, t, glsl_float(p_e.k[t]));
         }
         return code;
     }
-    code += glsl_biome_mod(p_e, o + String("."));
-    code += vformat("            %s.amp[0] = cl_flush(a0);\n            %s.amp[1] = cl_flush(a1);\n            %s.amp[2] = cl_flush(a2);\n        }\n", o, o, o);
+    code += glsl_biome_mod(p_e, o + ov::str("."));
+    code += ov::format("            %s.amp[0] = cl_flush(a0);\n            %s.amp[1] = cl_flush(a1);\n            %s.amp[2] = cl_flush(a2);\n        }\n", o, o, o);
     return code;
 }
 
-String Modulator::glsl_weighted(const Cascade::Spec &p_spec) const {
+ov::str Modulator::glsl_weighted(const Cascade::Spec &p_spec) const {
     if (!shaped_) {
         return glsl_plain(p_spec);
     }
     using ExactNoise::glsl_float;
-    String code = GLSL_MULTIFRACTAL; // after the shared helpers, spliced by the level shader (splices_helpers)
+    ov::str code = GLSL_MULTIFRACTAL; // after the shared helpers, spliced by the level shader (splices_helpers)
     code += "\n// Climate::Modulator::modulate: the field terms, the biome weights, then each modulated band's BandMod.\n";
-    code += vformat("uint cascade_mods(int m, Ch pre, out BandMod mod[%d]) {\n", p_spec.group_count());
-    code += vformat("    for (int g = 0; g < %d; g++) {\n        mod[g].features = 0u;\n", p_spec.group_count());
+    code += ov::format("uint cascade_mods(int m, Ch pre, out BandMod mod[%d]) {\n", p_spec.group_count());
+    code += ov::format("    for (int g = 0; g < %d; g++) {\n        mod[g].features = 0u;\n", p_spec.group_count());
     code += "        for (int t = 0; t < 3; t++) {\n            mod[g].amp[t] = vec4(0.0);\n            mod[g].warp[t] = vec4(0.0);\n        }\n";
     code += "        for (int t = 0; t < 4; t++) {\n            mod[g].state[t] = vec4(0.0);\n        }\n    }\n";
     code += mask_switch(mask);
@@ -523,14 +526,14 @@ String Modulator::glsl_weighted(const Cascade::Spec &p_spec) const {
     // The state's channels (the multifractal's complement).
     if (state >= 0) {
         const int sb = p_spec.gpu_base(state);
-        code += vformat("    vec4 state_c = vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d]);\n", sb + 1, sb + 2, sb + 3, sb);
+        code += ov::format("    vec4 state_c = vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d]);\n", sb + 1, sb + 2, sb + 3, sb);
     }
     code += "    switch (m) {\n";
     for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
         if (entries[m].empty()) {
             continue;
         }
-        code += vformat("    case %d: {\n", m);
+        code += ov::format("    case %d: {\n", m);
         for (const Entry &e : entries[m]) {
             code += glsl_entry(e);
         }
@@ -540,29 +543,29 @@ String Modulator::glsl_weighted(const Cascade::Spec &p_spec) const {
     return code;
 }
 
-String Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
-    String code = curves_glsl(table);
+ov::str Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
+    ov::str code = curves_glsl(table);
     code += "\n// Climate::Modulator::derive: the climate of this level's point p into the carry of the level below, a run's last (its\n";
     code += "// ground's BandMod parts, its samples' terms: the carry_used groups, all of them written).\n";
     code += "void cascade_derive(int m, inout Ch ch, WorldPos p) {\n    bool bands = false;\n    switch (m) {\n";
     for (int m = 1; m <= Cascade::MAX_LEVEL; m++) {
         if (used[m - 1] > sample.count) {
-            code += vformat("    case %d: bands = true; break;\n", m);
+            code += ov::format("    case %d: bands = true; break;\n", m);
         }
     }
     code += "    default: break;\n    }\n";
-    code += sample.count > 0 ? String() : "    if (!bands) {\n        return;\n    }\n";
+    code += sample.count > 0 ? ov::str() : "    if (!bands) {\n        return;\n    }\n";
     code += glsl_weights(table, p_spec, "ch");
     if (state >= 0) {
         const int sb = p_spec.gpu_base(state);
-        code += vformat("    vec4 state_c = vec4(ch.c[%d], ch.c[%d], ch.c[%d], ch.c[%d]);\n", sb + 1, sb + 2, sb + 3, sb);
+        code += ov::format("    vec4 state_c = vec4(ch.c[%d], ch.c[%d], ch.c[%d], ch.c[%d]);\n", sb + 1, sb + 2, sb + 3, sb);
     }
     code += "    switch (m) {\n";
     for (int m = 1; m <= Cascade::MAX_LEVEL; m++) {
         if (used[m - 1] == sample.count) {
             continue;
         }
-        code += vformat("    case %d:\n", m);
+        code += ov::format("    case %d:\n", m);
         for (const Entry &e : entries[m - 1]) {
             if (e.group == 0 && !e.parts.empty()) {
                 code += glsl_derive_entry(e, p_spec);
@@ -575,14 +578,14 @@ String Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
         code += "    {\n";
         if (sample.heights >= 0) {
             for (const int r : table.gated) {
-                code += glsl_edges_value(vformat("rg%d", r), table.regions[size_t(r)].edges);
+                code += glsl_edges_value(ov::format("rg%d", r), table.regions[size_t(r)].edges);
             }
             code += height_sum_glsl(table, "hs");
             code += put_carry_glsl(p_spec, sample.heights, "hs", "        ");
         }
         for (size_t b = 0; b < table.biomes.size(); b++) {
             if (sample.terrace[b] >= 0) {
-                code += put_carry_glsl(p_spec, sample.terrace[b], vformat("w%d", int64_t(b)), "        ");
+                code += put_carry_glsl(p_spec, sample.terrace[b], ov::format("w%d", int64_t(b)), "        ");
             }
         }
         if (sample.pick >= 0) {
