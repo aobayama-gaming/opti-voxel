@@ -32,6 +32,14 @@ struct ViewerOptions {
     int discoverer_mode = -1; // World::Settings::discoverer_mode
     bool walk_gpu = true; // World::Settings::walk_gpu
     DawnUpscaler::Settings upscale; // FSR or pixelate > 1: through DawnUpscaler
+    float shadow_m = 250.0f; // the sun's shadows over a square this wide around the camera; 0 none
+    // The grading cube (tools/make_lut.py's grade_lut.rgb); empty: ungraded. Native runs from the repository's root; the
+    // web build preloads it at /grade_lut.rgb.
+#ifdef __EMSCRIPTEN__
+    std::string grade = "/grade_lut.rgb";
+#else
+    std::string grade = "adapter/godot/project/grade_lut.rgb";
+#endif
 };
 
 // 0 on success, 1 on a failure (no window, no device, the shot not written).

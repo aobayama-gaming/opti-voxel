@@ -1,6 +1,7 @@
 #include "dawn_upscaler.hpp"
 
 #include "dawn_page_host.hpp"
+#include "wgpu_util.hpp"
 
 #include "ov/log.hpp"
 #include "ov/on_error.hpp"
@@ -14,16 +15,6 @@
 namespace ov::dawn {
 
 namespace {
-
-constexpr const char HEADER[] = "#version 450\n#extension GL_EXT_samplerless_texture_functions : require\n";
-
-// One triangle over the target.
-constexpr const char FULLSCREEN_VERTEX[] = R"glsl(
-void main() {
-    vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-}
-)glsl";
 
 // FSR 3's inputs from the 3D's reversed infinite depth. The vendored shaders are the display-resolution motion vector
 // variant: their passes read the motion at the output pixel (prepare_inputs maps each render pixel to it), so the
@@ -143,72 +134,10 @@ bool invert(const double p_m[16], double r_inv[16]) {
     return true;
 }
 
-wgpu::Texture make_texture(const wgpu::Device &p_device, wgpu::TextureFormat p_format, int p_width, int p_height, wgpu::TextureUsage p_usage) {
-    wgpu::TextureDescriptor desc{};
-    desc.size = { uint32_t(p_width), uint32_t(p_height), 1 };
-    desc.format = p_format;
-    desc.usage = p_usage;
-    return p_device.CreateTexture(&desc);
-}
-
-wgpu::BindGroupLayoutEntry uniform_entry(uint32_t p_binding) {
-    wgpu::BindGroupLayoutEntry e{};
-    e.binding = p_binding;
-    e.visibility = wgpu::ShaderStage::Fragment;
-    e.buffer.type = wgpu::BufferBindingType::Uniform;
-    return e;
-}
-
-wgpu::BindGroupLayoutEntry texture_entry(uint32_t p_binding, wgpu::TextureSampleType p_type) {
-    wgpu::BindGroupLayoutEntry e{};
-    e.binding = p_binding;
-    e.visibility = wgpu::ShaderStage::Fragment;
-    e.texture.sampleType = p_type;
-    e.texture.viewDimension = wgpu::TextureViewDimension::e2D;
-    return e;
-}
-
-wgpu::BindGroupEntry buffer_bind(uint32_t p_binding, const wgpu::Buffer &p_buffer, uint64_t p_size) {
-    wgpu::BindGroupEntry e{};
-    e.binding = p_binding;
-    e.buffer = p_buffer;
-    e.size = p_size;
-    return e;
-}
-
-wgpu::BindGroupEntry texture_bind(uint32_t p_binding, const wgpu::Texture &p_texture) {
-    wgpu::BindGroupEntry e{};
-    e.binding = p_binding;
-    e.textureView = p_texture.CreateView();
-    return e;
-}
-
-wgpu::BindGroup make_group(const wgpu::Device &p_device, const wgpu::BindGroupLayout &p_layout, const std::vector<wgpu::BindGroupEntry> &p_entries) {
-    wgpu::BindGroupDescriptor desc{};
-    desc.layout = p_layout;
-    desc.entryCount = p_entries.size();
-    desc.entries = p_entries.data();
-    return p_device.CreateBindGroup(&desc);
-}
-
-wgpu::BindGroupLayout make_layout(const wgpu::Device &p_device, const std::vector<wgpu::BindGroupLayoutEntry> &p_entries) {
-    wgpu::BindGroupLayoutDescriptor desc{};
-    desc.entryCount = p_entries.size();
-    desc.entries = p_entries.data();
-    return p_device.CreateBindGroupLayout(&desc);
-}
-
-wgpu::Buffer make_uniforms(const wgpu::Device &p_device, uint64_t p_size) {
-    wgpu::BufferDescriptor desc{};
-    desc.size = p_size;
-    desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-    return p_device.CreateBuffer(&desc);
-}
-
 wgpu::RenderPipeline make_pipeline(const wgpu::Device &p_device, const wgpu::BindGroupLayout &p_layout, const char *p_fragment,
         const std::vector<wgpu::TextureFormat> &p_formats, const char *p_label) {
-    const wgpu::ShaderModule vs = make_render_module(p_device, std::string(HEADER) + FULLSCREEN_VERTEX, ShaderStage::VERTEX);
-    const wgpu::ShaderModule fs = make_render_module(p_device, std::string(HEADER) + p_fragment, ShaderStage::FRAGMENT);
+    const wgpu::ShaderModule vs = make_render_module(p_device, std::string(GLSL_HEADER) + FULLSCREEN_VERTEX, ShaderStage::VERTEX);
+    const wgpu::ShaderModule fs = make_render_module(p_device, std::string(GLSL_HEADER) + p_fragment, ShaderStage::FRAGMENT);
     if (!vs || !fs) {
         return nullptr;
     }
