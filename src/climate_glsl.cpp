@@ -69,12 +69,10 @@ vec4 cl_scale(vec4 a, float k) {
 )glsl";
 }
 
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, const ov::str &p_ch) {
+ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
     using ExactNoise::glsl_float;
     ov::str code;
-    auto channels = [&p_ch](int p_base) {
-        return ov::format("vec4(%s.c[%d], %s.c[%d], %s.c[%d], %s.c[%d])", p_ch, p_base + 1, p_ch, p_base + 2, p_ch, p_base + 3, p_ch, p_base);
-    };
+    auto channels = [](int p_base) { return ov::format("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
     code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + ov::str(";\n");
     for (size_t i = 0; i < p_table.fields.size(); i++) {
         code += ov::format("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));

@@ -17,13 +17,14 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   the climate (`Climate::state`: field terms, then weights; GLSL `glsl_weights`) is evaluated once per point of each
   level above a run's last, from its channels before the level's insertions (the LOD rule: octave k on Λ_m reads the
   climate of H(V_{m+1}), low-passed at k). A run's last level, its samples (the most points of a run), evaluates none:
-  the level above derives it once per point after its insertions (`Cascade::Modulation::derive`, `Modulator`) into the
+  the level above derives it from the climate its own bands read, the same evaluation (`Cascade::Modulation::derive`,
+  `Modulator`; on the GPU one function, `cascade_mods` with the derive at its end), into the
   carry groups (`Cascade::carry_slot`, LINEAR4 like a field): the packed `BandMod` parts of the last level's octave
   (only the members some biome makes non-zero) and the samples' terms (`Climate::SampleCarry`: the height terms' sum,
   the terraced biomes' weights, the pick, copied from the floor parent instead of interpolated). H carries them down
   with the ground, and the samples interpolate. So a LOD-L chunk's samples are a pure function of (point, L), the same
-  from every chunk and point query of that LOD, but they read the last octave's climate from Λ_{L+1}: not the bits a
-  finer LOD's level L holds there (no LOD shows those; the whole octave is the step a skirt covers). The top level
+  from every chunk and point query of that LOD, but they read the last octave's climate from Λ_{L+1} before its
+  insertions (H(V_{L+2})): not the bits a finer LOD's level L holds there (no LOD shows those; the whole octave is the step a skirt covers). The top level
   reads a derive on an empty level above it (`Spec::run_top`). Measured why (CascadeSpike, world.json, LOD 0): the
   samples' level was 11.7 of the 16.2 ms of a 128-chunk batch with the weights evaluated three times per sample (the
   modulation 4.0 ms, the height terms 2.6, carrying 72 floats 3.7). Carrying the climate from every level to the next
@@ -47,12 +48,21 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   the ground's loads stay contiguous): the ground alone, the ground + fields + carry (the levels that derive) and the
   ground + carry (a run's last level). A chunk of LOD L carries its fields at level m only where
   `Cascade::FieldRange::carried` (m >= lowest(L): one above the finest level reading a derive, the modulated ground
-  levels or, with `sample`, the samples) and the carry where `carries` (one level lower); the CPU's ground queries
-  follow it too, `fields_at` carries them everywhere. A dispatch takes the fields view where `FieldRange::batch` says,
+  levels or, with `sample`, the samples) and the carry where `carries` (one level lower), and inserts the fields'
+  own octaves only above lowest(L) (`FieldRange::inserted`: that level's bands and derive read the fields before its
+  insertions, and no level below carries them; GPU `g_field_bands`, which also gates the multifractal state's write,
+  the field bands' BandMods and the fields' stores there); the CPU's ground queries follow it too, `fields_at` carries
+  and inserts them everywhere. Measured (CascadeSpike, 128-chunk batches, 25 LODs, 3 interleaved runs per side vs the
+  twice-evaluated derive): world.json -39 to -46% at every LOD (the level above the samples 5.7 -> 2.1 ms at LOD 0), the
+  example (4c) -15 to -36%, point items +1 to +4%. LOD 12, the outlier, was where world.json's 100 m - 1.6 km field
+  octaves are inserted on a run's two largest climate levels (6-8 of them on Λ_13 / Λ_14): 12.1 -> 6.5 ms, now 1.2x
+  LOD 0 (1.4x before). Next: the climate per point of the levels above (j = 1 is still 1.2x the samples' level). A dispatch takes the fields view where `FieldRange::batch` says,
   else the samples' view where `batch_carry` says (`record_level`'s `p_lods`, the batch's LOD range). A region's core is
   exact (`Climate::core_regions`, `docs/landforms.md`). With the carry (CascadeSpike, 128-chunk batches vs dev): world.json
   -42 to -55% at every LOD, the coarse example (4c) -27 to -33% at LODs 16-24 but +7 to +30% at LODs 0-8, where the
-  derive level (j = 1) evaluates the climate twice (before and after its insertions): the next bottleneck. Cost before the carry
+  derive level (j = 1) evaluated the climate twice (before and after its insertions): it now derives from the first
+  evaluation (one climate per point; the samples miss the field octave inserted on Λ_{L+1}, so the step between two LODs
+  is the field octave k = L + 5, `Climate::ground_step`). Cost before the carry
   (CascadeSpike, 128-chunk batches, example climate, before the biome materials, `docs/materials.md`): fields without multipliers 1.00x; with them 1.09x at LODs 0-4,
   1.00x at 20-24, 2.2-3.5x at LODs 8-16 (their own level is modulated: the weights run on every sample, +9-19 us per
   chunk, once per mesh). The bigger `Ch` (20 floats) is what made a single shader 1.4x everywhere (registers, not work).

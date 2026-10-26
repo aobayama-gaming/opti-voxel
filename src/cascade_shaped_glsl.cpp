@@ -124,10 +124,11 @@ ov::str shaped_band_function(const Spec &p_spec, int p_group) {
     }
     code += "        o = o + sh;\n";
     const int sg = p_spec.modulation->state_group();
-    // Without the state group (the samples' view: no field reaches below them), Cascade's insert_point writes none either.
+    // Without the state group (the samples' view: no field reaches below them), or on a level inserting no field band
+    // (g_field_bands), Cascade's insert_point writes none either.
     if (p_group == 0 && sg > 0 && sg < p_spec.group_count() && (used & MOD_STATE)) {
         const int sb = p_spec.gpu_base(sg);
-        code += "        if ((md.features & " + ov::itos(MOD_STATE) + ov::str("u) != 0u) {\n");
+        code += "        if (g_field_bands && (md.features & " + ov::itos(MOD_STATE) + ov::str("u) != 0u) {\n");
         code += "            vec4 st = md.state[0];\n            st = cl_add(st, cl_mul(md.state[1], nd));\n";
         code += "            st = cl_add(st, cl_mul(md.state[2], an));\n            st = cl_add(st, cl_mul(md.state[3], n2));\n";
         // Overwritten after this group's adds (below): the CPU writes it after every group's, the slots are disjoint.

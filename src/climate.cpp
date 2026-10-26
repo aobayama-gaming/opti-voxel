@@ -85,8 +85,8 @@ uint32_t core_regions(const Table &p_table, const Cascade::Spec &p_combined, con
             }
         }
     };
-    // Cascade::run's levels down to Λ_{lod+1} with every field: a band above the last level reads its own level's
-    // channels before its insertions, the derive Λ_{lod+1}'s after them.
+    // Cascade::run's levels down to Λ_{lod+1} with every field: a band above the last level, and the derive on Λ_{lod+1},
+    // read the level's channels before its insertions.
     const int ceiling = weighted_ceiling(p_table, p_combined);
     const int top = std::max(p_combined.top_level(true), p_lod + 1);
     const std::vector<Cascade::Box> boxes = Cascade::level_boxes(Cascade::point_box(p_p), p_lod, top);
@@ -98,14 +98,14 @@ uint32_t core_regions(const Table &p_table, const Cascade::Spec &p_combined, con
         } else {
             cur = Cascade::subdivide(cur, boxes[size_t(m - p_lod)], fields, 0);
         }
-        if (m <= ceiling) {
+        if (m <= ceiling || m == p_lod + 1) {
             check(cur);
+        }
+        if (m == p_lod + 1) {
+            break; // its insertions reach no reader of the climate
         }
         Cascade::insert_bands(p_combined, cur);
         Cascade::flush(cur);
-        if (m == p_lod + 1) {
-            check(cur);
-        }
     }
     return cores;
 }
@@ -174,13 +174,15 @@ float max_amp(const Table &p_table, int p_field, const Cascade::Band &p_band) {
 
 namespace {
 
-// Field p_field's step between LOD p_lod and p_lod + 1: its largest L+2 / L+3 octave, plus each term's |coef| times its
-// source's step (the ground's p_ground_amp, or an earlier field's).
+// Field p_field's step at a LOD-L chunk's seams: its largest octave inserted on Λ_{L+1} or Λ_{L+2}, plus each term's
+// |coef| times its source's step (the ground's p_ground_amp, or an earlier field's). A LOD-L chunk's samples read the
+// climate of Λ_{L+1} before its insertions, the fields down to the octave inserted on Λ_{L+2}: a coarser neighbour
+// lacks that one, a finer neighbour adds the one on Λ_{L+1} (octave_step's two, one level higher).
 double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_amp) {
     const Field &f = p_table.fields[size_t(p_field)];
     double amp = 0.0;
     for (const Cascade::Band &b : f.bands) {
-        if (b.k == p_lod + 2 || b.k == p_lod + 3) {
+        if (b.k - ExactNoise::BAND_SHIFT == p_lod + 1 || b.k - ExactNoise::BAND_SHIFT == p_lod + 2) { // inserted on Λ_{L+1} / Λ_{L+2}
             amp = ov::max(amp, double(max_amp(p_table, p_field, b)));
         }
     }

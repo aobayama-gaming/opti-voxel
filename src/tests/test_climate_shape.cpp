@@ -63,11 +63,12 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, CascadeGLSL::View::SAMPLES));
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
-    CHECK(h == 13546445268389072586ull);
+    CHECK(h == 435047546757689742ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
-    CHECK(chunk_text == 15628555049468586349ull);
-    // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B).
-    CHECK(point_text == 5818378642908517132ull);
+    CHECK(chunk_text == 420559920128829333ull);
+    // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B),
+    // and (all three) when the derive moved before the level's insertions (one climate per point).
+    CHECK(point_text == 5024476916576385137ull);
 }
 
 // The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its
@@ -177,7 +178,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     CHECK(CascadeGLSL::field_range(&s.sdf, true).everywhere()); // point items read the fields too
     CHECK(ov::contains(s.sdf.get_ground_glsl(s.sdf.get_spec()), "vec4 climate_ground(Ch ch)"));
     // The skirts take the height terms' step: deeper than the same ground without them where a term's field has
-    // octaves (dunes: 25 m, k = 9 at 5 cm, LODs 6-7), the cap (skirt_depth cells) lifted.
+    // octaves (dunes: 25 m, k = 9 at 5 cm, LODs 4-5), the cap (skirt_depth cells) lifted.
     ShapedSDF deep(15, 1e6f);
     ov::Value no_terms = shaped_table();
     no_terms.erase("heights");
@@ -188,7 +189,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     param.skirt_depth = 1e6f;
     bare.configure(param, 15);
     CLIMATE_REQUIRE(bare.get_climate() != nullptr);
-    CHECK(deep.sdf.skirt_depth_m(6) > bare.skirt_depth_m(6));
+    CHECK(deep.sdf.skirt_depth_m(5) > bare.skirt_depth_m(5));
 }
 
 TEST_CASE("Climate shape: curves pass through their points, shapes bound their values") {
@@ -295,7 +296,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
         biomes.at(i).erase("terrace");
     }
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_terrace", "cascade_warped",
-        "climate_ground", "climate_biome", "cascade_mods", "cascade_derive" };
+        "climate_ground", "climate_biome", "cascade_mods" };
     int64_t variants = 0, missing = 0;
     for (const ov::Value &table : { with_terms, without }) {
         SDFCascade sdf;

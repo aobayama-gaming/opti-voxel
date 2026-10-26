@@ -122,7 +122,6 @@ void main() {
     p.frac = vec3(0.0);
 
 /*INSERT_BANDS*/    ch = flush(ch);
-/*DERIVE*/
     uint slot = c * n * n * n + local;
     if (pc.j > 0) {
         store(pc.j & 1, slot, ch);
@@ -386,7 +385,8 @@ ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, 
     }
     code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
     for (int v = 0; v < nv; v++) {
-        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? ov::str("g_fields") : flag(v);
+        // The fields stored where the level below loads them (g_fields there: FieldRange::inserted here).
+        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? ov::str("g_field_bands") : flag(v);
         const ov::str guard = v < ground_vecs ? ov::str() : "    if (" + f + ov::str(")\n");
         code += guard + ov::format("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", plane(v), v, plane(v), v);
     }
@@ -463,19 +463,21 @@ ov::str band_functions(const Spec &p_spec) {
 }
 
 // The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
-// insertion, then each group's band of level m (bands[group * BAND_ENTRIES + m]).
-ov::str insert_code(const Spec &p_spec) {
+// insertion (p_derive: and the carry derived from them, into ch), then each group's band of level m
+// (bands[group * BAND_ENTRIES + m]).
+ov::str insert_code(const Spec &p_spec, bool p_derive) {
     ov::str code;
+    const char *at = p_derive ? ", p" : "";
     if (shaped(p_spec)) {
-        code += ov::format("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod);\n", p_spec.group_count());
+        code += ov::format("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod%s);\n", p_spec.group_count(), at);
     } else if (p_spec.modulation) {
-        code += ov::format("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp);\n", p_spec.group_count());
+        code += ov::format("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp%s);\n", p_spec.group_count(), at);
     }
     for (int g = 0; g < p_spec.group_count(); g++) {
         if (p_spec.group_bands(g).empty()) {
             continue;
         }
-        code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_fields) " : "",
+        code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_field_bands) " : "",
                 g * CascadeGLSL::BAND_ENTRIES);
         if (shaped(p_spec) && p_spec.group_set(g) == ChannelSet::LINEAR4) {
             const bool own = p_spec.modulation->group_features(g) != 0u;
@@ -618,8 +620,9 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
     if (fields) {
         // FieldRange::carried(lod, m): m >= lowest(lod).
         flags += "bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n";
+        flags += "bool g_field_bands = true; // and their bands inserted (FieldRange::inserted)\n";
         flags += level_switch("cascade_lowest_fields", [&](int p_lod) { return p_range.lowest(p_lod); });
-        flag_values += "    g_fields = m >= cascade_lowest_fields(lod);\n";
+        flag_values += "    g_fields = m >= cascade_lowest_fields(lod);\n    g_field_bands = m > cascade_lowest_fields(lod);\n";
     }
     if (carry) {
         // FieldRange::carries: read on the last level, derived above it (the groups Modulation::carry_used says).
@@ -627,19 +630,17 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
         flags += level_switch("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; });
         flag_values += ov::format("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
     }
-    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried) + (derive ? p_spec.modulation->derive_glsl(p_spec) : ov::str()) : ov::str();
+    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive) : ov::str();
     // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
     // every generated function that uses them.
     const ov::str helpers = (climate ? p_sdf->get_climate_helpers_glsl() : ov::str()) + (shaped(p_spec) ? shaped_helpers() : ov::str());
     const ov::str storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried);
     ov::str code = ov::replace_all(p_code, "/*CASCADE*/", (flags.empty() ? ov::str() : flags + "\n") + helpers + hermite_functions(p_spec, carried) + storage + band_functions(p_spec) + modulation + p_tail);
-    code = ov::replace_all(code, "/*INSERT_BANDS*/", insert_code(p_spec));
+    code = ov::replace_all(code, "/*INSERT_BANDS*/", insert_code(p_spec, derive));
     code = ov::replace_all(code, "/*FIELDS_FLAG*/", flag_values);
     // A chunk above the top band reading the carry starts one level higher, to derive it (Spec::run_top; an empty level,
     // the same bits for one that doesn't).
-    code = ov::replace_all(code, "/*TOP_ABOVE*/", carry ? " + 1" : "");
-    // The level's climate for the level below (the samples' terms on the level above them, j = 1).
-    return ov::replace_all(code, "/*DERIVE*/", derive ? "    if (g_carry_n > 0u) {\n        cascade_derive(m, ch, p);\n    }\n" : "");
+    return ov::replace_all(code, "/*TOP_ABOVE*/", carry ? " + 1" : "");
 }
 
 } // namespace

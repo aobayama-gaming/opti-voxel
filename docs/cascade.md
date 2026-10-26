@@ -20,10 +20,12 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
   (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per device (`ov::gpu::Device`); the direct mesher runs
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
 - **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): LINEAR4 slots after the field groups that a run's
-  level above its last writes after its insertions and flush, and H carries to the last level like a field (the
+  level above its last derives from its channels before its insertions (the climate its own bands read: one climate per
+  point) and holds after its flush, and H carries to the last level like a field (the
   `copied_carry` group takes its floor parent's channels instead of a blend: a value that can't be interpolated, the
   climate's pick). The climate uses them so that a run's last level, its samples, computes no climate at all
-  (`docs/climate.md`). `FieldRange` says where the fields (`carried`) and the carry (`carries`: Λ_{L+1} and Λ_L) are,
+  (`docs/climate.md`). `FieldRange` says where the fields (`carried`, their octaves `inserted` one level higher) and the carry
+  (`carries`: Λ_{L+1} and Λ_L) are,
   CPU and GPU alike; the GPU compiles a view per kind of level (`CascadeGLSL::View`: the ground alone, ground + fields,
   which derives at j = 1, ground + carry at j = 0) on the same planar scratch, the carry loaded and stored only up to
   the groups the last level reads without the fields (`Modulation::carry_used`: the samples' terms and the ground's
