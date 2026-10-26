@@ -50,6 +50,7 @@ core_files=(
     src/cascade.hpp
     src/cascade.cpp
     src/cascade_source.hpp
+    src/legacy_mesher_glsl.hpp
     src/cascade_glsl.hpp
     src/cascade_glsl.cpp
     src/cascade_shaped_glsl.hpp

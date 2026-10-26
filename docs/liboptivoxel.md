@@ -67,6 +67,18 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
 
 `pending_files` is empty: 51 files compile with no godot include path.
 
+## Done — the Dawn host (`feature/dawn-host`)
+
+`dawn/` is a raw C++/Dawn consumer of the same core: it links `src/ov/`, the cascade, chunk math and
+the shader text, meshes with an engine-free surface-nets mesher, and renders with Dawn. The Godot
+adapter keeps the GPU-direct mesher; the Dawn host's chunk quadtree, carve list and ray march are its
+own. Two independent consumers, one core: a core change that breaks either is caught by building both.
+
+- The legacy mesher's GLSL moved to `src/legacy_mesher_glsl.hpp` (engine-free, shared text).
+- `src/cascade_source.hpp` is the terrain interface the shader text needs; `SDFBase` implements it.
+- The Dawn host vendors AMD's FSR 3.1 SPIR-V upscaler shaders (`dawn/thirdparty/fsr3`, MIT) and ports
+  the pass order/resources/constants; the pixelate pass runs on its output.
+
 ## Next steps, in order
 
 1. **The GPU seam**: `sdf_base.hpp`'s `RenderingDevice*`/`RID` interface becomes the backend vtable

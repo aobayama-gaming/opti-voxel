@@ -28,6 +28,14 @@ Before diving into the code, the big picture:
 
 `CLAUDE.md` has the rules and `docs/` the details (page layout, threading rules, and every gotcha already hit: `docs/gotchas.md`).
 
+## Second host: raw C++/Dawn
+
+`dawn/` is the engine-free core in a plain C++ application: Dawn (WebGPU) instead of Godot, a CPU
+surface-nets mesher, WASD + mouse look, the same carve/big-capsule tools, FSR3 upscaling and a
+pixelate pass on top. It links the same `src/` cascade, chunk math, page format and GLSL text as the
+GDExtension, so the two integrations prove the core is engine-agnostic. Build and controls:
+`dawn/README.md`.
+
 ## Build
 
 ```sh
