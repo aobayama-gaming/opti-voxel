@@ -14,9 +14,11 @@
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
 #include "frame_probe.hpp"
+#include "gpu_device_check.hpp"
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 #include "page_format.hpp"
+#include "rd_device.hpp"
 
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -1535,7 +1537,11 @@ Dictionary FrameSpike::run() {
     }
     report["probe_mismatch"] = probe_report;
     report["examples"] = checks.examples;
-    report["ok"] = int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_blob_samples"]) > 0 &&
+    // The engine's GPU device check on this adapter's backend (ov_dawn --check runs it on Dawn).
+    const std::unique_ptr<ov::gpu::Device> device = RDDevice::create_local();
+    const GPUDeviceCheck::Report device_check = device != nullptr ? GPUDeviceCheck::run(*device) : GPUDeviceCheck::Report();
+    report["gpu_device_check"] = godot_str(device_check.summary());
+    report["ok"] = device_check.ok() && int64_t(report["table_samples"]) > 0 && int64_t(report["table_near_samples"]) > 0 && int64_t(report["table_blob_samples"]) > 0 &&
             int64_t(report["table_mismatch"]) == 0 &&
             int64_t(report["table_material_won"]) > 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&

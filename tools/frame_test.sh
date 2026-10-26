@@ -54,7 +54,7 @@ r = json.load(open(sys.argv[1]))
 keys = ["ok", "origins", "cases", "probe_sets", "arch_programs", "samples", "worldpos_mismatch", "anchor_mismatch", "pairs",
         "pair_cpu_mismatch", "pair_gpu_mismatch", "continuity_steps", "continuity_violations",
         "cross_origin_points", "cross_origin_mismatch", "cpu_checks_failed", "inexact_evaluations",
-        "inexact_mismatch", "relative_points", "relative_mismatch", "probe_mismatch", "error"]
+        "inexact_mismatch", "relative_points", "relative_mismatch", "probe_mismatch", "gpu_device_check", "error"]
 for k in keys:
     if k in r:
         print(f"   {k:24} {r[k]}")

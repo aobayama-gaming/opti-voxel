@@ -41,8 +41,12 @@ bool DawnContext::initialize() {
     adapter.GetInfo(&info);
     OV_LOG(LOG_INFO, "Dawn: %s (%s)", text(info.device), text(info.description));
 
+    // Everything the adapter offers: the engine's passes bind up to ten storage buffers and push 32 bytes.
+    wgpu::Limits limits{};
+    adapter.GetLimits(&limits);
     wgpu::DeviceDescriptor device_desc{};
     device_desc.label = "optivoxel";
+    device_desc.requiredLimits = &limits;
     device_desc.SetUncapturedErrorCallback([](const wgpu::Device &, wgpu::ErrorType p_type, wgpu::StringView p_message) {
         OV_ERR_PRINT(ov::format("Dawn error (%d): %s", int(p_type), text(p_message)));
     });

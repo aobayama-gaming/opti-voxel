@@ -17,6 +17,7 @@
 
 #include "godot_executor.hpp"
 #include "ov/on_error.hpp"
+#include "rd_device.hpp"
 
 #include "debug_log.hpp"
 
@@ -49,6 +50,7 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     ov::set_clock_source([]() -> uint64_t { return Time::get_singleton()->get_ticks_usec(); });
     // The core's tasks, loops and workers on Godot's pool and threads.
     ov::set_executor(&g_executor);
+    ov::gpu::set_local_device_factory(&RDDevice::create_local);
     GDREGISTER_CLASS(VoxelTerrain);
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
@@ -66,6 +68,7 @@ void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {
         return;
     }
     ov::set_executor(nullptr);
+    ov::gpu::set_local_device_factory(nullptr);
 }
 
 extern "C" {

@@ -51,3 +51,6 @@ src/chunk_memory.hpp
 src/chunk_memory.cpp
 src/instance_table.hpp
 src/instance_table.cpp
+src/gpu_device.hpp
+src/gpu_device_check.hpp
+src/gpu_device_check.cpp
