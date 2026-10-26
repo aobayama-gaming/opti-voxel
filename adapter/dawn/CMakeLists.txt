@@ -56,8 +56,9 @@ if(EMSCRIPTEN)
     # on the main thread and in a worker (the discoverer's and the field's local devices are the worker's own). Threads:
     # the workers are started with the page (a pthread only starts once the main thread yields): the pool's (one per core but
     # the main thread's, at least one) and the viewer's two long-lived workers (discoverer, field); one more starts late. Only a cross-origin isolated page (web/serve.py's headers)
-    # gets SharedArrayBuffer. FS: a --shot's PNG is read back from the page (Module.FS.readFile).
-    target_link_options(ov_dawn PRIVATE "--use-port=${OV_EMDAWNWEBGPU_PORT}" -pthread -sJSPI -Wno-experimental
+    # gets SharedArrayBuffer. FS: a --shot's PNG is read back from the page (Module.FS.readFile); the Godot project's
+    # climate worlds are preloaded at /climate (ov_dawn.data: ?climate=/climate/world_video.json&lods=25).
+    target_link_options(ov_dawn PRIVATE "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/climate@/climate" "--use-port=${OV_EMDAWNWEBGPU_PORT}" -pthread -sJSPI -Wno-experimental
             -Wno-pthreads-mem-growth "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency+2" -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB
             -sSTACK_SIZE=8MB -sENVIRONMENT=web,worker -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=FS "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
     target_link_libraries(ov_dawn PRIVATE ov_core ${OV_GLSLANG_LIBS} -Wl,--start-group ${OV_TINT_LIBS}

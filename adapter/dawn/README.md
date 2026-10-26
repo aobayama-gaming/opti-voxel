@@ -28,7 +28,7 @@ the device's `TextureFormatsTier2`), RCAS at `--sharpness=F` (FSR's 0 .. 1, defa
 output the window over N and copies each pixel over an N x N block. FSR's depth and motion vectors come from the 3D's
 depth (the terrain is static: the camera's reprojection is the motion). The LOD reads the 3D render's pixels. The look
 of the Godot video preset: `--upscale=fsr3 --pixelate=2`. The forest: `--trees=N --tree_area=M` (with `--climate=PATH`
-for a climate world), placed like Godot's `forest5cm` preset by `--trees=4000 --tree_area=316 --voxel=0.05
+for a climate world; the web build preloads the Godot project's climate folder at `/climate`, so the Godot video preset's world is `?lods=25&climate=/climate/world_video.json`), placed like Godot's `forest5cm` preset by `--trees=4000 --tree_area=316 --voxel=0.05
 --cam_pos=-52,320,-95 --above_ground=5 --pitch=-5 --yaw=-90`. Not there yet: frustum culling, GPU timestamps (no budget),
 Godot's lighting (shadows, SSAO, the sky and its clouds, the tonemapper).
 
