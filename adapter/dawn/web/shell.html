@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>opti-voxel</title>
+<!-- Cross-origin isolation where the server can't send COOP + COEP (GitHub Pages): a service worker adds them. -->
+<script src="coi-serviceworker.js"></script>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
@@ -42,13 +44,19 @@
   if (!navigator.gpu) {
     show('No WebGPU in this browser (Firefox 141+, Chrome 113+; on Linux Chrome needs --enable-unsafe-webgpu, see README.md).');
   } else if (!self.crossOriginIsolated) {
-    // The threaded wasm cannot start: keep this line in view rather than the module's errors.
-    show('This page needs cross-origin isolation (threads): serve it with web/serve.py, or send its COOP + COEP headers.');
-    Module.print = Module.printErr = (text) => console.error(text);
+    // The threaded wasm cannot start: coi-serviceworker.js reloads the page isolated unless the browser refuses service
+    // workers (a private window). The module isn't loaded until then.
+    show('This page needs cross-origin isolation (threads): reloading through its service worker. If this stays, open it in '
+        + 'a normal window, or serve it with web/serve.py.');
   } else if (typeof WebAssembly.Suspending !== 'function') {
     show('This browser has no JSPI (WebAssembly.Suspending): Chrome 137+ or Firefox 139+.');
+  } else {
+    addEventListener('DOMContentLoaded', () => {
+      document.body.append(document.importNode(document.getElementById('module').content, true));
+    });
   }
 </script>
-{{{ SCRIPT }}}
+<!-- Emscripten's module script, inert until the checks above pass. -->
+<template id="module">{{{ SCRIPT }}}</template>
 </body>
 </html>
