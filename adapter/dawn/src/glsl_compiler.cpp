@@ -145,8 +145,14 @@ CompiledShader compile_glsl(const std::string &p_source, ShaderStage p_stage, bo
     const EShLanguage stage = p_stage == ShaderStage::VERTEX ? EShLangVertex : (p_stage == ShaderStage::FRAGMENT ? EShLangFragment : EShLangCompute);
     CompiledShader out;
     glslang::TShader shader(stage);
-    // The engine's push blocks are scalars only: std140 gives them the std430 offsets.
+    // std140 gives scalar members the std430 offsets the push data is packed with, but moves arrays (16-byte strides):
+    // a push block with one is refused rather than read wrong.
     static const std::regex s_push(R"(layout\s*\(\s*push_constant\s*(,\s*std430\s*)?\))");
+    static const std::regex s_push_array(R"(layout\s*\(\s*push_constant[^{]*\{[^}]*\[)");
+    if (p_push_as_uniform && std::regex_search(p_source, s_push_array)) {
+        out.error = "compile_glsl: a push constant block with an array (its std140 uniform would move the members)";
+        return out;
+    }
     const std::string text = p_push_as_uniform ? std::regex_replace(p_source, s_push, "layout(set = 1, binding = 0, std140)") : p_source;
     const char *source = text.c_str();
     shader.setStrings(&source, 1);

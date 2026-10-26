@@ -2,7 +2,10 @@
 # SPIR-V reader needs.
 cmake_minimum_required(VERSION 3.22)
 project(tint_wasm C CXX)
-set(DAWN_SRC "/tmp/opencode/dawn" CACHE PATH "Dawn source")
+set(DAWN_SRC "" CACHE PATH "Dawn source, with its dependencies fetched (web/build.sh passes OV_DAWN_SRC)")
+if(NOT EXISTS "${DAWN_SRC}/CMakeLists.txt")
+    message(FATAL_ERROR "No Dawn checkout at DAWN_SRC=${DAWN_SRC}")
+endif()
 add_subdirectory(${DAWN_SRC}/third_party/spirv-headers/src spirv-headers)
 set(SPIRV_SKIP_TESTS ON CACHE BOOL "" FORCE)
 set(SPIRV_SKIP_EXECUTABLES ON CACHE BOOL "" FORCE)
