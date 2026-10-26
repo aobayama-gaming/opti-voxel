@@ -8,7 +8,7 @@
 //   HDR color input ................ off
 //   inverted depth ................. off
 //   jittered motion vectors ........ off
-//   display resolution motion vecs . off  (motion vectors are render-size pixels)
+//   display resolution motion vecs . on   (the passes read the motion vectors at the output pixel)
 //   reproject Lanczos .............. reference (computed in the shader, no LUT read)
 //   half precision ................. off
 //   wave64 ......................... off

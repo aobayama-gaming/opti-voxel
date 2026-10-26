@@ -113,7 +113,7 @@ struct Fsr3Constants {
 struct Fsr3Inputs {
     wgpu::TextureView color; // Rgba16Float, render size, sampled
     wgpu::TextureView depth; // Depth32Float, render size, sampled
-    wgpu::TextureView motion_vectors; // Rg16Float, render size, sampled (motion in render-size pixels)
+    wgpu::TextureView motion_vectors; // Rg16Float, upscale (output) size, sampled (motion in output pixels)
     wgpu::TextureView output; // Rgba16Float, upscale size, storage
     float jitter_x = 0.0f, jitter_y = 0.0f;
     float frame_time_ms = 16.0f;

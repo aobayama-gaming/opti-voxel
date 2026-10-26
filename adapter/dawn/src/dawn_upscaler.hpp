@@ -5,8 +5,8 @@
 // window over N per axis), and a last pass copies each output pixel over an N x N block of the window. Without FSR
 // (pixelate only) the 3D renders at the output size.
 //
-// FSR's inputs come from the 3D's color and depth: the projection is Halton-jittered (FSR's phase count), and a pass
-// turns the reversed infinite depth into FSR's standard depth and derives the motion vectors from it (the terrain is
+// FSR's inputs come from the 3D's color and depth: the projection is Halton-jittered (FSR's phase count), and two passes
+// turn the reversed infinite depth into FSR's standard depth and derive the output-sized motion vectors from it (the terrain is
 // static: the camera's motion is all the motion there is).
 
 #include "fsr3.hpp"
@@ -45,7 +45,7 @@ public:
     void resize(int p_width, int p_height);
     int render_width() const { return render_w; }
     int render_height() const { return render_h; }
-    bool ready() const { return present_pipeline != nullptr && (!settings.fsr || prepare_pipeline != nullptr); }
+    bool ready() const { return present_pipeline != nullptr && (!settings.fsr || (depth_pipeline != nullptr && motion_pipeline != nullptr)); }
 
     // This frame's projection (column-major, clip = m * world): r_jittered is what the 3D is drawn with.
     void begin_frame(const float p_view_proj[16], float r_jittered[16]);
@@ -56,10 +56,10 @@ public:
     void encode(const wgpu::CommandEncoder &p_encoder, const wgpu::TextureView &p_target, float p_frame_seconds);
 
 private:
-    // std140, the prepare shader's `Prepare` block.
+    // std140, the prepare shaders' `Prepare` block.
     struct PrepareUniforms {
         float reproject[16]; // this frame's (unjittered) clip space to the last frame's
-        float params[4]; // render w, h, jitter x, y
+        float params[4]; // output w, h, render w, h
         float depth_scale[4]; // x: far / (far - near)
     };
     // std140, the present shader's `Present` block.
@@ -80,7 +80,7 @@ private:
     wgpu::Texture color;
     wgpu::Texture depth;
     wgpu::Texture fsr_depth; // R32Float: standard depth
-    wgpu::Texture motion; // RG16Float: render pixels, this frame to the last
+    wgpu::Texture motion; // RG16Float, the output size: output pixels, this frame to the last
     wgpu::Texture fsr_output; // RGBA16Float, the output size
     std::unique_ptr<Fsr3Upscaler> fsr;
     int frame = 0; // the jitter phase
@@ -88,7 +88,8 @@ private:
     double prev_view_proj[16] = {};
     float jitter[2] = {};
 
-    wgpu::RenderPipeline prepare_pipeline;
+    wgpu::RenderPipeline depth_pipeline;
+    wgpu::RenderPipeline motion_pipeline;
     wgpu::RenderPipeline present_pipeline;
     wgpu::BindGroupLayout prepare_layout;
     wgpu::BindGroupLayout present_layout;
