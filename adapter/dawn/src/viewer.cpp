@@ -97,7 +97,7 @@ wgpu::Texture make_target(const wgpu::Device &p_device, wgpu::TextureFormat p_fo
 
 // The pages into p_color / p_depth; with an upscaler, its color and depth, then its passes into p_color.
 void draw_frame(const wgpu::Device &p_device, const wgpu::Queue &p_queue, const wgpu::TextureView &p_color, const wgpu::TextureView &p_depth,
-        DawnPageHost &r_pages, const PageView &p_view, DawnUpscaler *r_upscaler) {
+        DawnPageHost &r_pages, const PageView &p_view, DawnUpscaler *r_upscaler, float p_frame_seconds) {
     wgpu::RenderPassColorAttachment color{};
     color.view = r_upscaler ? r_upscaler->color_view() : p_color;
     color.loadOp = wgpu::LoadOp::Clear;
@@ -117,7 +117,7 @@ void draw_frame(const wgpu::Device &p_device, const wgpu::Queue &p_queue, const 
     r_pages.draw(pass, p_view);
     pass.End();
     if (r_upscaler) {
-        r_upscaler->encode(encoder, p_color);
+        r_upscaler->encode(encoder, p_color, p_frame_seconds);
     }
     const wgpu::CommandBuffer commands = encoder.Finish();
     p_queue.Submit(1, &commands);
@@ -192,8 +192,8 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     }
 
     std::unique_ptr<DawnUpscaler> upscaler;
-    if (p_options.upscale.temporal || p_options.upscale.pixelate > 1) {
-        upscaler = std::make_unique<DawnUpscaler>(p_context.device, format, p_options.upscale);
+    if (p_options.upscale.fsr || p_options.upscale.pixelate > 1) {
+        upscaler = std::make_unique<DawnUpscaler>(p_context.device, p_context.instance, format, p_options.upscale, DawnUpscaler::Camera{ NEAR_M, FOV_RAD });
         upscaler->resize(width, height);
         OV_ERR_FAIL_COND_V_MSG(!upscaler->ready(), 1, "Viewer: no upscaler shaders.");
     }
@@ -322,7 +322,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
             }
             color = frame_texture.texture.CreateView();
         }
-        draw_frame(p_context.device, p_context.queue, color, depth.CreateView(), pages, view, upscaler.get());
+        draw_frame(p_context.device, p_context.queue, color, depth.CreateView(), pages, view, upscaler.get(), dt);
         frames++;
 
         if (!shot) {
