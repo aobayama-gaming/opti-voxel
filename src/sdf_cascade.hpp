@@ -424,11 +424,13 @@ vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPo
     skirt_extra = 0.0;
     precise vec4 u = cascade_terrain_unit(c0, p, lod);
     g_sdf_chunk = input_chunk[chunk];
-    if (g_sdf_chunk.anchor_hi.w > 0) {
+    // The branch and the fold's list read input_chunk itself (chunk is the workgroup's): uniform control flow for the
+    // group fold's barriers, also under WGSL's uniformity analysis.
+    if (input_chunk[chunk].anchor_hi.w > 0) {
         precise float s = exact_pow2(lod);
         bool touched = false;
         bool moments = false;
-        precise vec4 r = arch_fold(u * s, p, FOLD_GROUP lod, touched, material, moments);
+        precise vec4 r = arch_fold(u * s, p, FOLD_GROUP lod, FOLD_LIST touched, material, moments);
         if (moments) {
             skirt_extra = cascade_moment_skirt_m(lod);
         }
@@ -439,7 +441,7 @@ vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPo
     return cascade_metres(u, lod);
 }
 )glsl";
-        return ov::replace_all(fold, "FOLD_GROUP ", p_group_size ? "group_lo, group_hi, " : "");
+        return ov::replace_all(fold, { { "FOLD_GROUP ", p_group_size ? "group_lo, group_hi, " : "" }, { "FOLD_LIST ", p_group_size ? "input_chunk[chunk].id.w, input_chunk[chunk].anchor_hi.w, " : "" } });
     }
 
 private:

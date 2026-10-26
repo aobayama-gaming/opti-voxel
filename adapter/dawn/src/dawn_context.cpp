@@ -47,6 +47,12 @@ bool DawnContext::initialize() {
     wgpu::DeviceDescriptor device_desc{};
     device_desc.label = "optivoxel";
     device_desc.requiredLimits = &limits;
+    // FSR 3's shaders read and write R8 / R16F / RGBA16F storage images (fsr3.hpp).
+    const wgpu::FeatureName tier2 = wgpu::FeatureName::TextureFormatsTier2;
+    if (adapter.HasFeature(tier2)) {
+        device_desc.requiredFeatureCount = 1;
+        device_desc.requiredFeatures = &tier2;
+    }
     device_desc.SetUncapturedErrorCallback([](const wgpu::Device &, wgpu::ErrorType p_type, wgpu::StringView p_message) {
         OV_ERR_PRINT(ov::format("Dawn error (%d): %s", int(p_type), text(p_message)));
     });

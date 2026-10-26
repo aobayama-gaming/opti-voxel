@@ -137,15 +137,16 @@ void drop_non_readable(std::vector<uint32_t> &r_spirv) {
 
 } // namespace
 
-CompiledShader compile_compute_glsl(const std::string &p_source) {
+CompiledShader compile_glsl(const std::string &p_source, ShaderStage p_stage) {
     static std::once_flag s_init;
     std::call_once(s_init, [] { glslang::InitializeProcess(); });
 
+    const EShLanguage stage = p_stage == ShaderStage::VERTEX ? EShLangVertex : (p_stage == ShaderStage::FRAGMENT ? EShLangFragment : EShLangCompute);
     CompiledShader out;
-    glslang::TShader shader(EShLangCompute);
+    glslang::TShader shader(stage);
     const char *source = p_source.c_str();
     shader.setStrings(&source, 1);
-    shader.setEnvInput(glslang::EShSourceGlsl, EShLangCompute, glslang::EShClientVulkan, 100);
+    shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
     shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_2);
     shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
     if (!shader.parse(GetDefaultResources(), 450, false, EShMsgDefault)) {
@@ -158,7 +159,7 @@ CompiledShader compile_compute_glsl(const std::string &p_source) {
         out.error = std::string(program.getInfoLog()) + program.getInfoDebugLog();
         return out;
     }
-    glslang::GlslangToSpv(*program.getIntermediate(EShLangCompute), out.spirv);
+    glslang::GlslangToSpv(*program.getIntermediate(stage), out.spirv);
     if (out.spirv.empty()) {
         out.error = "glslang: empty SPIR-V";
         return out;

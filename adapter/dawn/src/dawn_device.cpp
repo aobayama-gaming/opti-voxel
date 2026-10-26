@@ -71,10 +71,51 @@ void DawnDevice::_submit() {
 }
 
 gpu::Buffer DawnDevice::create_buffer(gpu::BufferKind p_kind, uint64_t p_size, const void *p_data) {
+    return _create_buffer(p_kind == gpu::BufferKind::UNIFORM ? wgpu::BufferUsage::Uniform : wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc, p_size,
+            p_data);
+}
+
+gpu::Buffer DawnDevice::create_indirect_buffer(uint64_t p_size, const void *p_data) {
+    return _create_buffer(wgpu::BufferUsage::Indirect | wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc, p_size, p_data);
+}
+
+wgpu::Buffer DawnDevice::get_buffer(gpu::Buffer p_buffer) {
+    const Entry *entry = _get(p_buffer);
+    return entry != nullptr ? entry->buffer : wgpu::Buffer();
+}
+
+wgpu::Texture DawnDevice::get_texture(gpu::Texture p_texture) {
+    const Entry *entry = _get(p_texture);
+    return entry != nullptr ? entry->texture : wgpu::Texture();
+}
+
+namespace {
+
+// A local device and the context it owns (constructed first, destroyed last).
+struct OwnedContext {
+    std::unique_ptr<DawnContext> owned;
+};
+
+class LocalDawnDevice : private OwnedContext, public DawnDevice {
+public:
+    explicit LocalDawnDevice(std::unique_ptr<DawnContext> p_context) :
+            OwnedContext{ std::move(p_context) }, DawnDevice(*owned) {}
+};
+
+} // namespace
+
+std::unique_ptr<gpu::Device> DawnDevice::create_local() {
+    std::unique_ptr<DawnContext> context = std::make_unique<DawnContext>();
+    if (!context->initialize()) {
+        return nullptr;
+    }
+    return std::make_unique<LocalDawnDevice>(std::move(context));
+}
+
+gpu::Buffer DawnDevice::_create_buffer(wgpu::BufferUsage p_usage, uint64_t p_size, const void *p_data) {
     wgpu::BufferDescriptor desc{};
     desc.size = std::max<uint64_t>(align4(p_size), 4);
-    desc.usage = wgpu::BufferUsage::CopyDst |
-            (p_kind == gpu::BufferKind::UNIFORM ? wgpu::BufferUsage::Uniform : wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc);
+    desc.usage = wgpu::BufferUsage::CopyDst | p_usage;
     desc.mappedAtCreation = true; // zeros, or the data
     Entry entry;
     entry.buffer = context.device.CreateBuffer(&desc);
@@ -161,8 +202,25 @@ void DawnDevice::update_texture(gpu::Texture p_texture, const void *p_data, uint
 void DawnDevice::clear_texture(gpu::Texture p_texture) {
     const Entry *entry = _get(p_texture);
     OV_ERR_FAIL_COND_MSG(entry == nullptr || !entry->texture, "DawnDevice: clear of an unknown texture.");
-    const bytes zeros(size_t(entry->width) * entry->height * 8, 0);
-    _write_texture(*entry, zeros.data());
+    // A GPU copy in the command stream (the page textures are MBs: uploading zeros from the CPU cost the viewer
+    // 20-70 ms frames).
+    const uint64_t row_stride = align256(uint64_t(entry->width) * 8);
+    const uint64_t size = row_stride * entry->height;
+    if (!zeros || zeros.GetSize() < size) {
+        wgpu::BufferDescriptor desc{};
+        desc.label = "zeros";
+        desc.size = size;
+        desc.usage = wgpu::BufferUsage::CopySrc;
+        zeros = context.device.CreateBuffer(&desc);
+    }
+    wgpu::TexelCopyBufferInfo src{};
+    src.buffer = zeros;
+    src.layout.bytesPerRow = uint32_t(row_stride);
+    src.layout.rowsPerImage = entry->height;
+    wgpu::TexelCopyTextureInfo dst{};
+    dst.texture = entry->texture;
+    const wgpu::Extent3D extent{ entry->width, entry->height, 1 };
+    _encoder().CopyBufferToTexture(&src, &dst, &extent);
 }
 
 void DawnDevice::copy_texture(gpu::Texture p_from, gpu::Texture p_to, uint32_t p_from_x, uint32_t p_from_y, uint32_t p_to_x, uint32_t p_to_y,
@@ -181,7 +239,7 @@ void DawnDevice::copy_texture(gpu::Texture p_from, gpu::Texture p_to, uint32_t p
 }
 
 gpu::Pipeline DawnDevice::create_compute_pipeline(const str &p_name, const str &p_glsl, str &r_error) {
-    CompiledShader shader = compile_compute_glsl(p_glsl);
+    CompiledShader shader = compile_glsl(p_glsl);
     if (!shader.error.empty()) {
         r_error = shader.error;
         return gpu::Pipeline();

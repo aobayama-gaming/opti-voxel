@@ -6,6 +6,10 @@
 //   ov_dawn --cascade-check[=JSON]    the GPU cascade vs its CPU oracle (CascadeCheck; JSON: its options, e.g.
 //                                     '{"lods":15,"timing":false}')
 // Each prints its report and exits 1 on a failure.
+//   ov_dawn --viewer [options]        the terrain in a window, the Godot player's controls (README.md)
+//   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
+// Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
+// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -15,6 +19,8 @@
 #include "gpu_device_check.hpp"
 #include "ov/json.hpp"
 #include "ov/log.hpp"
+#include "ov/thread_pool_executor.hpp"
+#include "viewer.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +39,14 @@ bool flag(const char *p_arg, const char *p_name, std::string &r_value) {
     return true;
 }
 
+// The core's tasks and workers on threads (Godot's equivalent: register_types installs GodotExecutor), for main's
+// whole run: the engine objects are gone before it ends.
+struct InstalledPool {
+    ov::ThreadPoolExecutor pool;
+    InstalledPool() { ov::set_executor(&pool); }
+    ~InstalledPool() { ov::set_executor(nullptr); }
+};
+
 int print_report(const ov::Value &p_report) {
     std::printf("%s\n", ov::to_json(p_report).c_str());
     return p_report["ok"].as_bool() ? 0 : 1;
@@ -42,9 +56,68 @@ int print_report(const ov::Value &p_report) {
 
 int main(int argc, char **argv) {
     ov::log_level() = ov::LOG_INFO;
+    const InstalledPool installed;
     ov::dawn::DawnContext context;
     if (!context.initialize()) {
         return 1;
+    }
+    ov::dawn::ViewerOptions viewer;
+    bool run_viewer = false;
+    for (int i = 1; i < argc; i++) {
+        std::string value;
+        if (flag(argv[i], "--viewer", value)) {
+            run_viewer = true;
+        } else if (flag(argv[i], "--shot", value)) {
+            viewer.shot = value;
+            run_viewer = true;
+        } else if (flag(argv[i], "--size", value)) {
+            std::sscanf(value.c_str(), "%dx%d", &viewer.width, &viewer.height);
+        } else if (flag(argv[i], "--voxel", value)) {
+            viewer.voxel_size = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--lod_error", value)) {
+            viewer.lod_error = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--lod_error_back", value)) {
+            viewer.lod_error_back = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--cam_pos", value)) {
+            std::sscanf(value.c_str(), "%f,%f,%f", &viewer.cam_pos[0], &viewer.cam_pos[1], &viewer.cam_pos[2]);
+        } else if (flag(argv[i], "--trees", value)) {
+            viewer.trees = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--tree_area", value)) {
+            viewer.tree_area = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--climate", value)) {
+            viewer.climate = value;
+        } else if (flag(argv[i], "--lods", value)) {
+            viewer.lods = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--terrain", value)) {
+            viewer.terrain_mode = value == "continents" ? 2 : 1;
+        } else if (flag(argv[i], "--above_ground", value)) {
+            viewer.above_ground = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--pitch", value)) {
+            viewer.pitch_deg = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--yaw", value)) {
+            viewer.yaw_deg = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--view", value)) {
+            viewer.view = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--fly", value)) {
+            viewer.fly_speed = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--max_frames", value)) {
+            viewer.max_frames = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--upscale", value)) {
+            viewer.upscale.fsr = value == "fsr3";
+            if (!viewer.upscale.fsr && value != "off") {
+                std::fprintf(stderr, "--upscale=%s: expected fsr3 or off\n", value.c_str());
+                return 1;
+            }
+        } else if (flag(argv[i], "--render_scale", value)) {
+            viewer.upscale.render_scale = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--pixelate", value)) {
+            viewer.upscale.pixelate = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--sharpness", value)) {
+            viewer.upscale.sharpness = std::strtof(value.c_str(), nullptr);
+        }
+    }
+    if (run_viewer) {
+        return ov::dawn::run_viewer(context, viewer);
     }
     for (int i = 1; i < argc; i++) {
         std::string value;

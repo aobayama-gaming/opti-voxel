@@ -363,9 +363,7 @@ static ov::str fold_loop_glsl(uint32_t p_group_size) {
         r = arch_combine(r, c, rec);
         touched = true;
 )glsl";
-    const char *const FOLD_LOCALS = R"glsl(uint off = g_sdf_chunk.id.w;
-    uint n = g_sdf_chunk.anchor_hi.w;
-    precise vec4 phi = vec4(0.0);
+    const char *const FOLD_LOCALS = R"glsl(precise vec4 phi = vec4(0.0);
     bool blobs = false;
     float best = 0.0;
     uint best_index = INHERIT_INDEXu;
@@ -373,6 +371,8 @@ static ov::str fold_loop_glsl(uint32_t p_group_size) {
     ov::str loop;
     if (p_group_size == 0) {
         loop = ov::str(R"glsl(vec4 arch_fold(vec4 r, WorldPos p, int lod, inout bool touched, inout uint material, inout bool moments) {
+    uint off = g_sdf_chunk.id.w;
+    uint n = g_sdf_chunk.anchor_hi.w;
     FOLD_LOCALS    for (uint i = 0u; i < n; i++) {
         uint word = sdf_list[off + i];
 FOLD_BODY    }
@@ -380,12 +380,14 @@ FOLD_BODY    }
     } else {
         OV_ERR_FAIL_COND_V_MSG(p_group_size % 32 != 0, ov::str(), "generate_fold_glsl: the workgroup size must be a multiple of 32.");
         // A slice of GROUP words: each invocation tests one against the group's box, the passes are a bit mask (word
-        // h of the mask, bit b: list index base + 32 h + b), walked lowest bit first, so in list order. n is the
-        // chunk's: the loop and its barriers are uniform.
+        // h of the mask, bit b: list index base + 32 h + b), walked lowest bit first, so in list order. off and n are
+        // the chunk's list, read by the caller at a workgroup-uniform index of a read-only buffer, so that WGSL's
+        // uniformity analysis sees the loop and its barriers as uniform (g_sdf_chunk, a private global, reads as
+        // non-uniform there).
         loop = ov::replace_all(ov::str(R"glsl(shared uint s_fold_word[GROUP];
 shared uint s_fold_mask[MASK_WORDS];
 
-vec4 arch_fold(vec4 r, WorldPos p, WorldPos group_lo, WorldPos group_hi, int lod, inout bool touched, inout uint material, inout bool moments) {
+vec4 arch_fold(vec4 r, WorldPos p, WorldPos group_lo, WorldPos group_hi, int lod, uint off, uint n, inout bool touched, inout uint material, inout bool moments) {
     FOLD_LOCALS    uint t = gl_LocalInvocationIndex;
     for (uint base = 0u; base < n; base += GROUPu) {
         if (t < MASK_WORDSu) {
