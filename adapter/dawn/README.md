@@ -25,9 +25,10 @@ with AMD's FSR 3.1 upscaler (`fsr3.*`: the reference passes, their SPIR-V vendor
 the device's `TextureFormatsTier2`), RCAS at `--sharpness=F` (FSR's 0 .. 1, default 0.2); `--pixelate=N` makes the
 output the window over N and copies each pixel over an N x N block. FSR's depth and motion vectors come from the 3D's
 depth (the terrain is static: the camera's reprojection is the motion). The LOD reads the 3D render's pixels. The look
-of the Godot video preset: `--upscale=fsr3 --pixelate=2`. Not there yet: instances and trees (the fold variant's barriers fail WGSL's uniformity
-analysis: Tint only lifts it for WGSL source, `chromium_disable_uniformity_analysis`), materials, frustum culling, GPU
-timestamps (no budget).
+of the Godot video preset: `--upscale=fsr3 --pixelate=2`. The forest: `--trees=N --tree_area=M` (with `--climate=PATH`
+for a climate world), placed like Godot's `forest5cm` preset by `--trees=4000 --tree_area=316 --voxel=0.05
+--cam_pos=-52,320,-95 --above_ground=5 --pitch=-5 --yaw=-90`. Not there yet: materials (the trees are slope-shaded),
+frustum culling, GPU timestamps (no budget).
 
 ```
 cmake -S adapter/dawn -B adapter/dawn/out -G Ninja -DOV_DAWN_DIR=<dawn install prefix> -DOV_GLSLANG_DIR=<glslang install prefix>

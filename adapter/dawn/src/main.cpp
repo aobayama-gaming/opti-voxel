@@ -9,7 +9,7 @@
 //   ov_dawn --viewer [options]        the terrain in a window, the Godot player's controls (README.md)
 //   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
 // Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
-// --pitch=DEG --yaw=DEG --view=0|1|2 --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
+// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -66,6 +66,16 @@ int main(int argc, char **argv) {
             viewer.voxel_size = std::strtof(value.c_str(), nullptr);
         } else if (flag(argv[i], "--lod_error", value)) {
             viewer.lod_error = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--lod_error_back", value)) {
+            viewer.lod_error_back = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--cam_pos", value)) {
+            std::sscanf(value.c_str(), "%f,%f,%f", &viewer.cam_pos[0], &viewer.cam_pos[1], &viewer.cam_pos[2]);
+        } else if (flag(argv[i], "--trees", value)) {
+            viewer.trees = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--tree_area", value)) {
+            viewer.tree_area = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--climate", value)) {
+            viewer.climate = value;
         } else if (flag(argv[i], "--lods", value)) {
             viewer.lods = std::atoi(value.c_str());
         } else if (flag(argv[i], "--terrain", value)) {

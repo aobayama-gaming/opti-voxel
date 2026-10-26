@@ -134,8 +134,9 @@ ov::str generate_library_glsl(const DefLibrary &p_library);
 // id | its palette index << SDFGpuTable::LIST_ID_BITS; touched is set when an instance passes its box test, material
 // to the palette index of a record that wins, unless it is ChunkPalette::INHERIT_INDEX) and `vec4 arch_finish(vec4 o, int lod)` (finish_table).
 // p_group_size 0: each invocation walks the whole list. Otherwise (a multiple of 32, the shader's local size) it is
-// `arch_fold(vec4 r, WorldPos p, WorldPos group_lo, WorldPos group_hi, int lod, ...)`, called by every invocation of the
-// workgroup in uniform control flow, [group_lo, group_hi] holding all their p: the workgroup tests the list p_group_size
+// `arch_fold(vec4 r, WorldPos p, WorldPos group_lo, WorldPos group_hi, int lod, uint off, uint n, ...)` (the chunk's list
+// offset and length, uniform: not g_sdf_chunk, which WGSL's uniformity analysis reads as non-uniform), called by every
+// invocation of the workgroup in uniform control flow, [group_lo, group_hi] holding all their p: the workgroup tests the list p_group_size
 // words at a time against that box (arch_meets_box) and each invocation folds the words that pass, in list order, with
 // the same loop body: the same bits.
 ov::str generate_fold_glsl(const DefLibrary &p_library, float p_out_scale, bool p_normalize, uint32_t p_group_size = 0);

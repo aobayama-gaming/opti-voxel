@@ -17,9 +17,14 @@ struct ViewerOptions {
     int max_frames = 6000; // a shot is taken by then even if the load isn't complete
     float voxel_size = 0.5f;
     float lod_error = 2.0f;
+    float lod_error_back = 0.0f; // 0: lod_error everywhere
     int lods = 15;
     int terrain_mode = 1; // World::Settings::terrain_mode
+    float cam_pos[3] = {}; // render metres; y is then moved to above_ground over the terrain
     float above_ground = 50.0f; // the camera starts this many metres above the terrain under it
+    int trees = 0; // World::Settings::archetype_trees, over a tree_area metres square
+    float tree_area = 60.0f;
+    std::string climate; // World::Settings::climate_path
     float pitch_deg = -15.0f;
     float yaw_deg = 0.0f;
     int view = 0; // 0 shaded, 1 normals, 2 LOD
