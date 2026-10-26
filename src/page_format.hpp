@@ -205,6 +205,34 @@ bool page_subcube_hidden(uvec4 h2, uvec3 s) {
     return ((word >> (bit & 31u)) & 1u) != 0u;
 }
 
+// Header texels 0 and 1: the group's chunk id (low words). LOD from its x (an empty row reads 0: LOD 0).
+ivec3 page_header_chunk(uvec4 h0, uvec4 h1) {
+    return ivec3(int(h0.x | (h0.y << 16u)), int(h0.z | (h0.w << 16u)), int(h1.x | (h1.y << 16u)));
+}
+
+int page_chunk_lod(ivec3 chunk) {
+    return chunk.x == 0 ? 0 : findLSB(chunk.x);
+}
+
+// ChunkMath::vertices_to_world in render metres. rel: the chunk id minus the world origin's, wrapping int32 (exact while
+// the chunk is within 2^31 ids of the origin; the origin is a multiple of the root chunk span, so the low word keeps the
+// LOD bit). voxel_dim: chunk_size - 2 * skirt_size. Empty / killed rows are all zero: every corner lands on one point.
+vec3 page_chunk_min(ivec3 rel, int lod, float voxel_dim, float voxel_size) {
+    float chunk_world_dim = voxel_dim * voxel_size;
+    return vec3(rel) * (chunk_world_dim * 0.5) - vec3(float(1 << lod) * chunk_world_dim * 0.5);
+}
+
+vec3 page_corner_world(vec3 chunk_min, int lod, vec3 local, int skirt_size, float voxel_dim, float voxel_size) {
+    float size = float(1 << lod) * voxel_dim * voxel_size;
+    return chunk_min + (local - float(skirt_size)) * size / voxel_dim;
+}
+
+// The coverage sub-cube (in [0, PAGE_COVERAGE_AXIS)^3) holding a chunk-local corner.
+uvec3 page_corner_subcube(vec3 local, int skirt_size, float voxel_dim) {
+    ivec3 sub = ivec3(floor((local - float(skirt_size)) * float(PAGE_COVERAGE_AXIS) / voxel_dim));
+    return uvec3(clamp(sub, ivec3(0), ivec3(int(PAGE_COVERAGE_AXIS) - 1)));
+}
+
 // Palette entry e (block offset + palette index): the palette texel holding it, and its id in that texel.
 ivec2 page_palette_texel(uint e) {
     uint t = e >> 1u;

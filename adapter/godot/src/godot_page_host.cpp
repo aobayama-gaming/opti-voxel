@@ -243,20 +243,13 @@ void vertex() {
     uvec4 h0 = texelFetch(quad_tex, ivec2(0, INSTANCE_ID), 0);
     uvec4 h1 = texelFetch(quad_tex, ivec2(1, INSTANCE_ID), 0);
     uvec4 c = texelFetch(quad_tex, ivec2(int(HEADER_TEXELS) + VERTEX_ID, INSTANCE_ID), 0);
-    ivec3 chunk = ivec3(int(h0.x | (h0.y << 16u)), int(h0.z | (h0.w << 16u)), int(h1.x | (h1.y << 16u)));
-
-    // ChunkMath::vertices_to_world. Empty / killed rows are all zero: every corner lands on the
-    // same point -> zero area.
-    int lod = chunk.x == 0 ? 0 : findLSB(chunk.x);
+    ivec3 chunk = page_header_chunk(h0, h1);
+    int lod = page_chunk_lod(chunk);
     float voxel_dim = float(chunk_size - 2 * skirt_size);
-    float chunk_world_dim = voxel_dim * voxel_size;
-    float size = float(1 << lod) * chunk_world_dim;
-    // Wrapping int32 difference: exact while the chunk is within 2^31 ids of the origin. The origin is a
-    // multiple of the root chunk span, so the low word keeps the LOD bit used above.
     ivec3 rel = chunk - origin_chunk_lo;
-    vec3 chunk_min = vec3(rel) * (chunk_world_dim * 0.5) - vec3(size * 0.5);
+    vec3 chunk_min = page_chunk_min(rel, lod, voxel_dim, voxel_size);
     vec3 local = page_decode_local(c, pos_scale);
-    vec3 world = chunk_min + (local - float(skirt_size)) * size / voxel_dim;
+    vec3 world = page_corner_world(chunk_min, lod, local, skirt_size, voxel_dim, voxel_size);
     // Wind: leaf corners sway (wind_sway, a pure function of the position: shared corners agree). Only up to LOD 2:
     // farther the amplitude is under a pixel, and the corner's material costs a palette and a material fetch.
     uint palette_index = page_decode_palette(c);
@@ -274,8 +267,7 @@ void vertex() {
         bool hidden = true;
         for (int k = 0; k < 4; k++) {
             vec3 lk = page_decode_local(texelFetch(quad_tex, ivec2(first + k, INSTANCE_ID), 0), pos_scale);
-            ivec3 sub = ivec3(floor((lk - float(skirt_size)) * float(PAGE_COVERAGE_AXIS) / voxel_dim));
-            hidden = hidden && page_subcube_hidden(h2, uvec3(clamp(sub, ivec3(0), ivec3(int(PAGE_COVERAGE_AXIS) - 1))));
+            hidden = hidden && page_subcube_hidden(h2, page_corner_subcube(lk, skirt_size, voxel_dim));
         }
         coverage = hidden ? 2 : 1;
         if (hidden && debug_view != 13) {

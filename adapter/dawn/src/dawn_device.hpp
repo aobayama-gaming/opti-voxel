@@ -10,6 +10,7 @@
 #include "gpu_device.hpp"
 
 #include <map>
+#include <memory>
 
 namespace ov::dawn {
 
@@ -45,6 +46,16 @@ public:
     // Submits the recorded work and delivers the readbacks that finished, without waiting (a host's frame loop).
     void poll();
 
+    // The host's side: a buffer an indirect draw reads (the core writes it like any storage buffer), the Dawn objects
+    // behind handles (null if unknown).
+    gpu::Buffer create_indirect_buffer(uint64_t p_size, const void *p_data);
+    wgpu::Buffer get_buffer(gpu::Buffer p_buffer);
+    wgpu::Texture get_texture(gpu::Texture p_texture);
+    DawnContext &get_context() { return context; }
+
+    // A local device (gpu::set_local_device_factory): its own instance and device, null without an adapter.
+    static std::unique_ptr<gpu::Device> create_local();
+
 private:
     struct Entry {
         wgpu::Buffer buffer;
@@ -77,6 +88,7 @@ private:
     uint32_t push_size_limit = 0;
 
     gpu::Handle _add(Entry p_entry);
+    gpu::Buffer _create_buffer(wgpu::BufferUsage p_usage, uint64_t p_size, const void *p_data);
     void _write_texture(const Entry &p_entry, const void *p_data);
     // A readback of p_staging (its copy recorded and submitted): delivered in request order once mapped.
     void _read(wgpu::Buffer p_staging, uint64_t p_size, uint64_t p_row_bytes, uint64_t p_row_stride, gpu::Readback p_done);

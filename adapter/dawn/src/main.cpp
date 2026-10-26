@@ -6,6 +6,11 @@
 //   ov_dawn --cascade-check[=JSON]    the GPU cascade vs its CPU oracle (CascadeCheck; JSON: its options, e.g.
 //                                     '{"lods":15,"timing":false}')
 // Each prints its report and exits 1 on a failure.
+//   ov_dawn --viewer [options]        the terrain in a window: WASD + Q/E to fly (shift: 5x), drag the left button to
+//                                     look, 1 shaded / 2 normals / 3 LOD, Escape quits
+//   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
+// Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
+// --pitch=DEG --yaw=DEG --view=0|1|2 --max_frames=N.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -15,6 +20,7 @@
 #include "gpu_device_check.hpp"
 #include "ov/json.hpp"
 #include "ov/log.hpp"
+#include "viewer.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -45,6 +51,40 @@ int main(int argc, char **argv) {
     ov::dawn::DawnContext context;
     if (!context.initialize()) {
         return 1;
+    }
+    ov::dawn::ViewerOptions viewer;
+    bool run_viewer = false;
+    for (int i = 1; i < argc; i++) {
+        std::string value;
+        if (flag(argv[i], "--viewer", value)) {
+            run_viewer = true;
+        } else if (flag(argv[i], "--shot", value)) {
+            viewer.shot = value;
+            run_viewer = true;
+        } else if (flag(argv[i], "--size", value)) {
+            std::sscanf(value.c_str(), "%dx%d", &viewer.width, &viewer.height);
+        } else if (flag(argv[i], "--voxel", value)) {
+            viewer.voxel_size = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--lod_error", value)) {
+            viewer.lod_error = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--lods", value)) {
+            viewer.lods = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--terrain", value)) {
+            viewer.terrain_mode = value == "continents" ? 2 : 1;
+        } else if (flag(argv[i], "--above_ground", value)) {
+            viewer.above_ground = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--pitch", value)) {
+            viewer.pitch_deg = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--yaw", value)) {
+            viewer.yaw_deg = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--view", value)) {
+            viewer.view = std::atoi(value.c_str());
+        } else if (flag(argv[i], "--max_frames", value)) {
+            viewer.max_frames = std::atoi(value.c_str());
+        }
+    }
+    if (run_viewer) {
+        return ov::dawn::run_viewer(context, viewer);
     }
     for (int i = 1; i < argc; i++) {
         std::string value;
