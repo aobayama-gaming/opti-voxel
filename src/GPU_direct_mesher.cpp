@@ -501,6 +501,15 @@ void GPUDirectMesher::_rt_compact(const std::vector<int> &p_copies, const std::v
     }
 }
 
+template <typename IdOf>
+RenderBox GPUDirectMesher::_merged_aabb(size_t p_count, IdOf p_id) const {
+    RenderBox bounds = _chunk_aabb(p_id(0));
+    for (size_t i = 1; i < p_count; i++) {
+        bounds.merge_with(_chunk_aabb(p_id(i)));
+    }
+    return bounds;
+}
+
 PageDecode GPUDirectMesher::_page_decode() const {
     // The page shader rebuilds render positions from the group header's chunk id, relative to the render origin (low
     // words, wrapping).
@@ -510,6 +519,7 @@ PageDecode GPUDirectMesher::_page_decode() const {
     decode.pos_scale = PageFormat::pos_scale(chunk_param.chunk_size);
     decode.voxel_size = chunk_param.voxel_size;
     decode.origin_chunk_lo = WorldCoord::lo32_i(chunk_param.origin_chunk);
+    decode.origin_voxel_lo = WorldCoord::lo32_i(chunk_param.origin_voxel());
     return decode;
 }
 
@@ -517,15 +527,16 @@ void GPUDirectMesher::set_render_origin(const ChunkId &p_origin) {
     chunk_param.origin_chunk = p_origin;
     host->set_decode(_page_decode());
     for (size_t page = 0; page < page_state.size(); page++) {
-        PageState &ps = page_state[page];
-        if (!ps.chunks.empty()) {
-            ps.bounds = _page_aabb(ps);
-            pool->set_page_aabb(int(page), ps.bounds);
+        if (!page_state[page].bounds_dirty) {
+            page_state[page].bounds_dirty = true;
+            dirty_bounds_pages.push_back(int(page));
         }
     }
+    _update_dirty_bounds();
     // A batch in flight: its pages hold the batch's conservative box until its directory lands.
     for (const std::pair<uint32_t, InFlightBatch> &kv : in_flight) {
-        const RenderBox box = _batch_aabb(kv.second.chunks);
+        const std::vector<ChunkId> &chunks = kv.second.chunks;
+        const RenderBox box = _merged_aabb(chunks.size(), [&](size_t i) { return chunks[i]; });
         for (const int page : kv.second.pages) {
             if (page_state[page].chunks.empty()) {
                 pool->set_page_aabb(page, box);
@@ -553,26 +564,10 @@ void GPUDirectMesher::_update_dirty_bounds() {
         if (ps.chunks.empty()) {
             continue;
         }
-        ps.bounds = _page_aabb(ps);
+        ps.bounds = _merged_aabb(ps.chunks.size(), [&](size_t i) { return ps.chunks[i].id; });
         pool->set_page_aabb(page, ps.bounds);
     }
     dirty_bounds_pages.clear();
-}
-
-RenderBox GPUDirectMesher::_page_aabb(const PageState &p_page) const {
-    RenderBox bounds = _chunk_aabb(p_page.chunks[0].id);
-    for (size_t i = 1; i < p_page.chunks.size(); i++) {
-        bounds.merge_with(_chunk_aabb(p_page.chunks[i].id));
-    }
-    return bounds;
-}
-
-RenderBox GPUDirectMesher::_batch_aabb(const std::vector<ChunkId> &p_chunks) const {
-    RenderBox bounds = _chunk_aabb(p_chunks[0]);
-    for (size_t i = 1; i < p_chunks.size(); i++) {
-        bounds.merge_with(_chunk_aabb(p_chunks[i]));
-    }
-    return bounds;
 }
 
 bool GPUDirectMesher::_pop_queue(ChunkId &r_chunk, ChunkGate::Kind &r_kind, int &r_queue) {
@@ -826,7 +821,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     const uint32_t list_words = uint32_t(list.size() / 4);
     const uint64_t list_bound = _observe_lists(chunks, ids, streamed_words, bounds);
     const ov::ivec2 lods = ChunkMath::lod_range(chunks);
-    const RenderBox box = _batch_aabb(chunks);
+    const RenderBox box = _merged_aabb(chunks.size(), [&](size_t i) { return chunks[i]; });
     for (const ChunkId &c : chunks) {
         const int lod = ChunkMath::get_lod(c);
         if (lod >= 0 && lod < lod_count) {

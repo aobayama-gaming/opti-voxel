@@ -75,7 +75,7 @@ private:
 
     //worker availability
     std::mutex mutex;
-    // Held by the worker while it creates host meshes at chunk_param.origin_chunk, and by set_render_origin while it
+    // Held by the worker while it creates a host mesh at chunk_param.origin_chunk, and by set_render_origin while it
     // moves the origin and the meshes made: a mesh is made either before the move (and shifted) or after it.
     std::mutex origin_mutex;
     bool worker_available = false; // set by the worker once its device and buffers exist (process_queue sizes lists by them)

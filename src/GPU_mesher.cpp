@@ -539,7 +539,6 @@ void GPUMesher::_execute_gpu_pipeline(const ov::bytes &p_chunk_id, uint32_t p_co
 }
 
 void GPUMesher::render_chunk() {
-    const std::lock_guard<std::mutex> lock(origin_mutex);
     // Slots past batch_count are unused but still computed (zeroed chunk id): never build meshes for them.
     for (uint32_t chunk_idx = 0; chunk_idx < batch_count; ++chunk_idx) {
         UnpackChunk &chunk = unpacked_chunks[chunk_idx];
@@ -557,6 +556,7 @@ void GPUMesher::render_chunk() {
 
         // Mesh vertices are in the chunk's vertex grid: scale by the cell size, origin at grid (0,0,0).
         const float cell_size = chunk_param.voxel_size * float(ChunkMath::get_lod_size(chunk.chunk_id));
+        const std::lock_guard<std::mutex> lock(origin_mutex);
         chunk.host_mesh = host->create_mesh(chunk.mesh, cell_size, ChunkMath::grid_to_render(chunk.chunk_id, Float3{}, chunk_param));
         DebugLog::chunk_rids_created += chunk.host_mesh != 0 ? 1 : 0;
     }

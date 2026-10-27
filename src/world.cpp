@@ -568,7 +568,7 @@ bool World::rebase(const ChunkId &p_origin, Float3 &r_shift) {
     } else {
         gpu_mesher->set_render_origin(p_origin, r_shift);
     }
-    last_camera = Float3{ last_camera.x - r_shift.x, last_camera.y - r_shift.y, last_camera.z - r_shift.z };
+    last_camera = last_camera - r_shift;
     rebases++;
     VLOG(1, "World: render origin moved to chunk ", WorldCoord::to_string(p_origin), ", render positions by -",
             ov::format("%.1f, %.1f, %.1f", r_shift.x, r_shift.y, r_shift.z), " m");

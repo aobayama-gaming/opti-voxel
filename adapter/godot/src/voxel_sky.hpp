@@ -46,7 +46,7 @@ public:
     // The terrain's render frame (VoxelTerrain, at start and whenever its render origin moves): the origin's LOD0 voxel
     // (low words: the shading frame's), the voxel size, and how far the origin rose above the world origin (metres,
     // the cloud layer stays at its height above the world origin).
-    void set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, double p_origin_rise_m);
+    void set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, float p_origin_rise_m);
 
     void _ready() override;
 
@@ -55,6 +55,8 @@ protected:
 
 private:
     void _apply();
+    void _apply_frame(); // the shading frame's uniforms, on the sky material
+    void _push(const Dictionary &p_params); // to the sky material and the terrain siblings' page shader
 
     Ref<Texture2D> cloud_texture;
     float cloud_height_m = 1500.0f; // metres above the world origin (cloud_params: above the render origin)
@@ -66,7 +68,7 @@ private:
 
     Vector3i origin_voxel_lo; // set_render_frame's
     float voxel_m = 0.5f;
-    double origin_rise_m = 0.0;
+    float origin_rise_m = 0.0f;
 
     Ref<Shader> shader;
     Ref<ShaderMaterial> material;

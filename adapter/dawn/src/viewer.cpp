@@ -364,7 +364,7 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
 
         Float3 shift;
         if (world.recenter(camera.pos, shift)) { // the render origin follows the camera: every render position moves
-            camera.pos = Float3{ camera.pos.x - shift.x, camera.pos.y - shift.y, camera.pos.z - shift.z };
+            camera.pos = camera.pos - shift;
             if (upscaler) {
                 upscaler->shift_history(shift);
             }

@@ -45,7 +45,8 @@ struct PageDecode {
     int skirt_size = 0;
     float pos_scale = 0.0f;
     float voxel_size = 0.0f;
-    ov::ivec3 origin_chunk_lo; // the world origin's chunk id, low words (render positions are relative to it)
+    ov::ivec3 origin_chunk_lo; // the render origin's chunk id, low words (render positions are relative to it)
+    ov::ivec3 origin_voxel_lo; // its LOD0 voxel, low words: the shading frame's origin (shade_frame_glsl.hpp)
 };
 
 // The host's side of the quad pages (QuadPagePool): drawing them. The core fills each page's texture (PageFormat rows,

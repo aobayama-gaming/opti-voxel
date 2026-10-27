@@ -44,8 +44,10 @@ uniform float sea_level_m = -1e30;
 // The base surface's up (BaseSurface::up_dir), which the slope colours read: +y on the flat world. A sphere base will
 // need it per vertex.
 uniform vec3 base_up = vec3(0.0, 1.0, 0.0);
-// The render origin in chunk-id units, low 32 bits: positions are drawn relative to it.
+// The render origin in chunk-id units, low 32 bits: positions are drawn relative to it; and its LOD0 voxel, low 32 bits
+// (the shading frame's origin). PageDecode's.
 uniform ivec3 origin_chunk_lo = ivec3(0);
+uniform ivec3 origin_voxel_lo = ivec3(0);
 uniform int chunk_size = 32;
 uniform int skirt_size = 2;
 uniform float pos_scale = 256.0; // PageFormat::pos_scale(chunk_size), set by the mesher
@@ -75,7 +77,7 @@ vec3 hash3(vec3 p) {
 
 // The shading frame's origin (shade_frame_glsl.hpp): the render origin's LOD0 voxel, low words.
 ivec3 shade_origin_voxel() {
-    return origin_chunk_lo * ((chunk_size - 2 * skirt_size) / 2);
+    return origin_voxel_lo;
 }
 
 float shade_voxel_m() {
@@ -173,9 +175,8 @@ void fragment() {
         contour_m = 500.0;
     }
     // Contour lines at whole multiples of contour_m (snapped to the shading frame's period) of absolute height.
-    int contour_period = shade_period_vox(contour_m);
-    float contour_period_m = shade_period_m(contour_period);
-    float h = (v_height + float(shade_origin_voxel().y & (contour_period - 1)) * voxel_size)
+    float contour_period_m;
+    float h = shade_frame(vec3(0.0, v_height, 0.0), contour_m, contour_period_m).y
             * (shade_cells(vec3(1.0 / contour_m), contour_period_m).x / contour_period_m);
     float fw = max(fwidth(h), 1e-6);
     float line = abs(fract(h + 0.5) - 0.5) / fw;
@@ -322,9 +323,6 @@ void GodotPageHost::destroy() {
 }
 
 void GodotPageHost::set_material_param(const StringName &p_name, const Variant &p_value) {
-    if (material_params.has(p_name) && material_params[p_name] == p_value) {
-        return; // unchanged: a rebase re-sends the whole decode, only its origin moved
-    }
     material_params[p_name] = p_value;
     for (const Page &page : pages) {
         if (page.material.is_valid()) {
@@ -388,11 +386,20 @@ void GodotPageHost::set_page_bounds(int p_page, const RenderBox &p_bounds) {
 }
 
 void GodotPageHost::set_decode(const PageDecode &p_decode) {
-    set_material_param("voxel_size", p_decode.voxel_size);
-    set_material_param("chunk_size", p_decode.chunk_size);
-    set_material_param("skirt_size", p_decode.skirt_size);
-    set_material_param("pos_scale", p_decode.pos_scale);
-    set_material_param("origin_chunk_lo", godot_v3i(p_decode.origin_chunk_lo));
+    // Only what changed: a rebase moves the origin alone, and every page has its own material.
+    const auto put = [this](bool p_changed, const char *p_name, const Variant &p_value) {
+        if (p_changed || !has_decode) {
+            set_material_param(p_name, p_value);
+        }
+    };
+    put(p_decode.voxel_size != decode.voxel_size, "voxel_size", p_decode.voxel_size);
+    put(p_decode.chunk_size != decode.chunk_size, "chunk_size", p_decode.chunk_size);
+    put(p_decode.skirt_size != decode.skirt_size, "skirt_size", p_decode.skirt_size);
+    put(p_decode.pos_scale != decode.pos_scale, "pos_scale", p_decode.pos_scale);
+    put(!(p_decode.origin_chunk_lo == decode.origin_chunk_lo), "origin_chunk_lo", godot_v3i(p_decode.origin_chunk_lo));
+    put(!(p_decode.origin_voxel_lo == decode.origin_voxel_lo), "origin_voxel_lo", godot_v3i(p_decode.origin_voxel_lo));
+    decode = p_decode;
+    has_decode = true;
 }
 
 void GodotPageHost::set_materials(const Material::Library::Image &p_image) {

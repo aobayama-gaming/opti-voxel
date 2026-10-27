@@ -34,10 +34,9 @@ vec2 cloud_hit(vec3 p, vec3 dir) {
 // The texture coordinate of a point of the layer: one tile per cloud_scale_m (snapped to the shading frame's period),
 // carried by the wind.
 vec2 cloud_uv(vec2 xz) {
-    int period = shade_period_vox(cloud_scale_m);
-    float period_m = shade_period_m(period);
+    float period_m;
+    vec2 s = shade_frame(vec3(xz.x, 0.0, xz.y), cloud_scale_m, period_m).xz;
     float tiles = shade_cells(vec3(1.0 / cloud_scale_m), period_m).x;
-    vec2 s = xz + vec2(shade_origin_voxel().xz & ivec2(period - 1)) * shade_voxel_m();
     return (s + cloud_wind * TIME) * (tiles / period_m);
 }
 
@@ -55,9 +54,8 @@ float cloud_density(float texel) {
 vec3 wind_sway(vec3 p) {
     float speed = max(length(cloud_wind), 1.0);
     vec2 dir = cloud_wind / speed;
-    int period = shade_period_vox(23.0);
-    float period_m = shade_period_m(period);
-    vec3 s = shade_point(p, period);
+    float period_m;
+    vec3 s = shade_frame(p, 23.0, period_m);
     vec3 along = vec3(dir.x, 0.0, dir.y);
     vec3 k6 = shade_wave(along * (6.2832 / 6.0), period_m);
     vec3 k23 = shade_wave(along * (6.2832 / 23.0) + vec3(0.0, 0.3, 0.0), period_m);
@@ -216,17 +214,23 @@ float VoxelSky::get_wind_sway_m() const {
     return wind_sway_m;
 }
 
-void VoxelSky::set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, double p_origin_rise_m) {
+void VoxelSky::set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, float p_origin_rise_m) {
     origin_voxel_lo = p_origin_voxel_lo;
     voxel_m = p_voxel_m;
     origin_rise_m = p_origin_rise_m;
-    _apply();
+    if (material.is_null()) {
+        return; // before _ready: its _apply sends everything
+    }
+    _apply_frame();
+    Dictionary height;
+    height["cloud_height_m"] = cloud_height_m - origin_rise_m;
+    _push(height);
 }
 
 Dictionary VoxelSky::cloud_params() const {
     Dictionary params;
     params["cloud_tex"] = cloud_texture.is_valid() ? cloud_texture->get_rid() : RID();
-    params["cloud_height_m"] = float(double(cloud_height_m) - origin_rise_m);
+    params["cloud_height_m"] = cloud_height_m - origin_rise_m;
     params["cloud_scale_m"] = cloud_scale_m;
     params["cloud_cover"] = cloud_cover;
     params["cloud_wind"] = cloud_wind;
@@ -260,23 +264,31 @@ void VoxelSky::_ready() {
     _apply();
 }
 
-// Pushes the cloud parameters to the sky material and to the terrain's page shader (the shadows).
+// Pushes the cloud parameters and the render frame to the sky material, the cloud parameters to the terrain's page
+// shader (the shadows).
 void VoxelSky::_apply() {
     if (material.is_null()) {
         return; // before _ready
     }
-    Dictionary params = cloud_params();
-    Array keys = params.keys();
-    for (int i = 0; i < keys.size(); i++) {
-        // The sky material takes the texture itself, the page shader (RenderingServer level) its RID.
-        material->set_shader_parameter(keys[i], keys[i] == Variant("cloud_tex") ? Variant(cloud_texture) : params[keys[i]]);
-    }
+    _apply_frame();
+    _push(cloud_params());
+}
+
+void VoxelSky::_apply_frame() {
     material->set_shader_parameter("shade_origin_lo", origin_voxel_lo);
     material->set_shader_parameter("shade_voxel_size", voxel_m);
+}
+
+void VoxelSky::_push(const Dictionary &p_params) {
+    Array keys = p_params.keys();
+    for (int i = 0; i < keys.size(); i++) {
+        // The sky material takes the texture itself, the page shader (RenderingServer level) its RID.
+        material->set_shader_parameter(keys[i], keys[i] == Variant("cloud_tex") ? Variant(cloud_texture) : p_params[keys[i]]);
+    }
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {
-            terrain->set_page_params(params);
+            terrain->set_page_params(p_params);
         }
     }
 }

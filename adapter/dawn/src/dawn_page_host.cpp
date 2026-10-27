@@ -30,6 +30,7 @@ layout(set = 0, binding = 0, std140) uniform Frame {
     mat4 view_proj;
     mat4 shadow_proj; // render metres to the shadow map's clip space
     ivec4 origin_chunk; // xyz: the render origin's chunk id, low words; w: chunk_size
+    ivec4 origin_voxel; // xyz: the render origin's LOD0 voxel, low words (the shading frame's origin)
     vec4 sun; // xyz: towards the sun; w: its disk's size (radians)
     vec4 sun_color; // rgb; w: energy
     vec4 camera; // w: fog distance (0 none)
@@ -52,7 +53,7 @@ layout(set = 2, binding = 1) uniform texture2D material_tex;
 
 // The shading frame's origin (shade_frame_glsl.hpp): the render origin's LOD0 voxel, low words.
 ivec3 shade_origin_voxel() {
-    return origin_chunk.xyz * ((origin_chunk.w - 2 * ints.x) / 2);
+    return origin_voxel.xyz;
 }
 
 float shade_voxel_m() {
@@ -360,6 +361,9 @@ DawnPageHost::FrameUniforms DawnPageHost::_frame_uniforms(const PageView &p_view
     u.origin_chunk[1] = decode.origin_chunk_lo.y;
     u.origin_chunk[2] = decode.origin_chunk_lo.z;
     u.origin_chunk[3] = decode.chunk_size;
+    u.origin_voxel[0] = decode.origin_voxel_lo.x;
+    u.origin_voxel[1] = decode.origin_voxel_lo.y;
+    u.origin_voxel[2] = decode.origin_voxel_lo.z;
     const auto put = [](float r_v[4], const Float3 &p_xyz, float p_w) {
         r_v[0] = p_xyz.x;
         r_v[1] = p_xyz.y;

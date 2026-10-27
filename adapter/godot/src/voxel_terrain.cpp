@@ -747,7 +747,7 @@ void VoxelTerrain::_push_render_frame() {
         // Continents preset: the page shader colours heights around sea level (the cascade's datum), in render metres.
         page_host->set_material_param("sea_level_m", ChunkMath::voxel_to_render(VoxelPos(0, sdf.get_datum_y(), 0), param).y);
     }
-    const double rise_m = double(world.render_origin().y - world.world_origin().y) * param.id_unit_m();
+    const float rise_m = ChunkMath::origin_shift_m(world.world_origin(), world.render_origin(), param).y;
     const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {

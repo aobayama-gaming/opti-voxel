@@ -37,6 +37,27 @@ vec3 shade_point(vec3 p, int period_vox) {
     return p + vec3(shade_origin_voxel() & ivec3(period_vox - 1)) * shade_voxel_m();
 }
 
+// p in the frame of a pattern whose largest feature is feature_m metres; period_m: the frame's period.
+vec3 shade_frame(vec3 p, float feature_m, out float period_m) {
+    int period = shade_period_vox(feature_m);
+    period_m = shade_period_m(period);
+    return shade_point(p, period);
+}
+
+// A lattice cell c modulo n cells per axis (whole numbers below 2^24), in [0, n): a float floor-mod (GLSL's integer modulo
+// is undefined below 0), corrected by one period where the division rounded across a multiple of n.
+vec3 shade_wrap(vec3 c, vec3 n) {
+    vec3 a = c - n * floor(c / n);
+    a -= n * step(n, a);
+    return a + n * step(a, vec3(-0.5));
+}
+
+// The cell after a wrapped cell a (shade_wrap), wrapped.
+vec3 shade_wrap_next(vec3 a, vec3 n) {
+    vec3 b = a + 1.0;
+    return b - n * step(n, b);
+}
+
 // The whole number of lattice cells per period nearest per_m cells per metre (at least 1): the lattice's scale is then
 // cells / period_m, and it repeats every `cells` cells.
 vec3 shade_cells(vec3 per_m, float period_m) {

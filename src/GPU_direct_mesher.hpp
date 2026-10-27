@@ -324,9 +324,9 @@ private:
     void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
     RenderBox _chunk_aabb(const ChunkId &p_chunk) const;
-    // The merged _chunk_aabb of a page's chunks (some) and of a batch's chunks (some).
-    RenderBox _page_aabb(const PageState &p_page) const;
-    RenderBox _batch_aabb(const std::vector<ChunkId> &p_chunks) const;
+    // The merged _chunk_aabb of p_count chunks (at least one), the i-th one p_id(i).
+    template <typename IdOf>
+    RenderBox _merged_aabb(size_t p_count, IdOf p_id) const;
     PageDecode _page_decode() const;
 
     struct Stats {

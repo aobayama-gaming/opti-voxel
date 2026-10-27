@@ -23,20 +23,14 @@ vec3 cell_hash(vec3 c, uint salt) {
     return vec3(pcg3d(uvec3(ivec3(c)) ^ uvec3(salt)) >> 8u) * (1.0 / 16777216.0);
 }
 
-// A lattice cell modulo a period of n cells per axis (whole numbers), in integers: a float mod can land on n itself.
-vec3 wrap_cell(vec3 c, vec3 n) {
-    ivec3 m = ivec3(n);
-    return vec3((ivec3(c) % m + m) % m);
-}
-
 // Trilinear value noise in [0, 1], one lattice cell per unit, repeating every n cells (whole numbers per axis): x and
 // x + n read the same value.
 float value_noise(vec3 x, vec3 n) {
     vec3 i = floor(x);
     vec3 f = x - i;
     f = f * f * (3.0 - 2.0 * f);
-    vec3 a = wrap_cell(i, n);
-    vec3 b = wrap_cell(i + 1.0, n);
+    vec3 a = shade_wrap(i, n);
+    vec3 b = shade_wrap_next(a, n);
     float x00 = mix(cell_hash(a, 0u).x, cell_hash(vec3(b.x, a.y, a.z), 0u).x, f.x);
     float x10 = mix(cell_hash(vec3(a.x, b.y, a.z), 0u).x, cell_hash(vec3(b.x, b.y, a.z), 0u).x, f.x);
     float x01 = mix(cell_hash(vec3(a.x, a.y, b.z), 0u).x, cell_hash(vec3(b.x, a.y, b.z), 0u).x, f.x);
@@ -47,10 +41,10 @@ float value_noise(vec3 x, vec3 n) {
 // Value noise of cells of about cell_m metres at render position p, through the shading frame (shade_frame_glsl.hpp):
 // the same at every render origin. offset: added in cells.
 float shade_noise(vec3 p, float cell_m, vec3 offset) {
-    int period = shade_period_vox(cell_m);
-    float period_m = shade_period_m(period);
+    float period_m;
+    vec3 s = shade_frame(p, cell_m, period_m);
     vec3 n = shade_cells(vec3(1.0 / cell_m), period_m);
-    return value_noise(shade_point(p, period) * (n / period_m) + offset, n);
+    return value_noise(s * (n / period_m) + offset, n);
 }
 
 // Bark (PATTERN_BARK) as a 3D noise, so it needs no surface frame: noise stretched along world up makes plates and V
@@ -67,13 +61,15 @@ float bark_grain(vec3 p, out float knot, out float ring) {
     vec3 knot_cell = period_m / knot_cells;
     // The 2 x 2 x 2 cells nearest p: a knot point lies in the middle 70% of its cell, and a knot reaches ~0.4 m.
     vec3 g = floor(p / knot_cell - 0.5);
+    vec3 g_key = shade_wrap(g, knot_cells);
     vec3 bend = vec3(0.0);
     float nearest = 1e9;
     for (int z = 0; z < 2; z++) {
         for (int y = 0; y < 2; y++) {
             for (int x = 0; x < 2; x++) {
                 vec3 c = g + vec3(float(x), float(y), float(z));
-                vec3 key = wrap_cell(c, knot_cells);
+                vec3 key = g_key + vec3(float(x), float(y), float(z));
+                key -= knot_cells * step(knot_cells, key);
                 if (cell_hash(key, 1u).x > 0.35) {
                     continue; // about a third of the cells hold a knot
                 }
@@ -110,7 +106,8 @@ const float BARK_RADIUS = 0.45;
 const float BARK_FEATURE_M = 4.0;
 vec3 bark_point(vec3 p, vec3 n) {
     vec2 u = n.xz * (BARK_RADIUS * inversesqrt(max(dot(n.xz, n.xz), 1e-8)));
-    return vec3(u.x, shade_point(p, shade_period_vox(BARK_FEATURE_M)).y, u.y);
+    float period_m;
+    return vec3(u.x, shade_frame(p, BARK_FEATURE_M, period_m).y, u.y);
 }
 
 // The ground's surface detail, a multiplier on its albedo (the procedural ground's and a biome's PATTERN_GROUND):
@@ -219,9 +216,8 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, vec3 up, float f
     } else if (m1.a == MATERIAL_PATTERN_LAVA) {
         // Lava: a warped crust, dark seams over a glow that drifts slowly. The crust is q = 0.15 xz warped by a and b;
         // each wave of q is written as a wave of the position, snapped in the shading frame (period: its 60 m wave).
-        int period = shade_period_vox(60.0);
-        float period_m = shade_period_m(period);
-        vec2 s = shade_point(p, period).xz;
+        float period_m;
+        vec2 s = shade_frame(p, 60.0, period_m).xz;
         vec3 kx = shade_wave(0.15 * vec3(1.3, 2.1, 3.3), period_m); // q.x's waves: the warp b, the seams, the cross seams
         vec3 kz = shade_wave(0.15 * vec3(1.7, 1.9, 3.3), period_m); // q.y's: the warp a, the seams, the cross seams
         vec2 kp = shade_wave(0.15 * vec3(0.7, 0.9, 0.0), period_m).xy; // the pulse's
@@ -254,9 +250,8 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, vec3 up, float f
         if (leaf_w > 0.0) {
             // The leaves flutter: their noise drifts with the wind's wobble (a shimmer over the swaying surface). One
             // frame for both (period: the wobble's 2.1 m wave).
-            int period = shade_period_vox(2.1);
-            float period_m = shade_period_m(period);
-            vec3 s = shade_point(p, period);
+            float period_m;
+            vec3 s = shade_frame(p, 2.1, period_m);
             vec3 flutter = sway_m > 0.0 ? 0.4 * sin(time * vec3(2.9, 2.3, 3.4) + s.yzx * shade_wave(vec3(3.0), period_m)) : vec3(0.0);
             vec3 cells = shade_cells(vec3(1.0 / 0.08), period_m);
             leaf = value_noise(s * (cells / period_m) + 3.0 + flutter, cells) - 0.5;

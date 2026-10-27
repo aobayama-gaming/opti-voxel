@@ -176,7 +176,7 @@ TEST_CASE("ChunkMath: a rebase moves every render position by origin_shift_m") {
         ChunkParam moved = param;
         moved.origin_chunk = to;
         // The camera lands within one LOD0 chunk of the new origin, in its first octant.
-        const Float3 cam = Float3{ camera.x - shift.x, camera.y - shift.y, camera.z - shift.z };
+        const Float3 cam = camera - shift;
         const float dim = param.chunk_world_dimension();
         for (const float c : { cam.x, cam.y, cam.z }) {
             CHECK(c >= -1e-3f);

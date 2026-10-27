@@ -142,7 +142,6 @@ public:
     const ChunkId &render_origin() const { return config.chunk_param.origin_chunk; }
     // The world origin start() snapped (the render origin it started at).
     const ChunkId &world_origin() const { return world_origin_chunk; }
-    int64_t rebase_count() const { return rebases; }
 
     void set_debug_view(int p_view);
 
