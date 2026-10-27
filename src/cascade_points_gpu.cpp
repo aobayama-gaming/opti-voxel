@@ -98,7 +98,7 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
         lods.x = ov::min(lods.x, lod);
         lods.y = ov::max(lods.y, lod);
     }
-    device->update_buffer(input, 0, uint64_t(p_count) * GPUFrame::CHUNK_INPUT_BYTES, input_bytes.data());
+    passes.upload_items(items, p_count);
     const uint64_t batch = ++batch_serial;
     const ov::str name_begin = "points_b" + ov::itos(int64_t(batch));
     const ov::str name_end = "points_e" + ov::itos(int64_t(batch));

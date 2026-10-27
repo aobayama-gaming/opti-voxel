@@ -88,6 +88,30 @@ inline bool encode_point_item(uint8_t *r_slot, const VoxelPos &p_point, int p_lo
     return true;
 }
 
+// The anchor and LOD the GPU reads from an item's bytes (GLSL chunk_frame / point_frame): a chunk's minimum voxel, its
+// low words from the id's (wrapping, like the GPU) and its high words from anchor_hi; a point item's point.
+inline void decode_item(const uint8_t *p_slot, const ChunkParam &p_param, bool p_point, VoxelPos &r_anchor, int &r_lod) {
+    uint32_t lo[3];
+    for (int a = 0; a < 3; a++) {
+        lo[a] = ov::get_u32(p_slot + 4 * a);
+    }
+    if (p_point) {
+        r_lod = int(ov::get_u32(p_slot + POINT_LOD_AT));
+    } else {
+        // get_lod on the low word: a LOD below 32 has its id's lowest set bit there.
+        r_lod = lo[0] == 0 ? 0 : WorldCoord::ctz64(lo[0]);
+        const uint32_t half_chunk = uint32_t(p_param.half_chunk_voxels());
+        for (int a = 0; a < 3; a++) {
+            lo[a] = (lo[a] - (uint32_t(1) << r_lod)) * half_chunk;
+        }
+    }
+    int64_t v[3];
+    for (int a = 0; a < 3; a++) {
+        v[a] = int64_t((uint64_t(uint32_t(ov::get_s32(p_slot + 16 + 4 * a))) << 32) | lo[a]);
+    }
+    r_anchor = VoxelPos(v[0], v[1], v[2]);
+}
+
 } // namespace GPUFrame
 
 // Before the bindings (ChunkInput is a buffer element type).

@@ -205,7 +205,8 @@ private:
             checks.chunks_per_lod[size_t(chunks[c].lod)]++;
         }
         checks.chunks += count;
-        device->update_buffer(input, 0, ids.size(), ids.data());
+        passes.upload_items(ids.data(), count);
+        debug_passes.upload_items(ids.data(), count); // the same input: its own regions
         ov::bytes final_channels;
         for (int j = passes.level_count(min_lod) - 1; j >= 0; j--) {
             passes.record_level(j, 0, count, ov::ivec2(min_lod, max_lod));
@@ -459,7 +460,7 @@ ov::Value check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p
     for (int lod = 0; lod < TABLE_LODS && passes.is_valid(); lod++) {
         ov::bytes inputs, words;
         const std::vector<ChunkId> ids = table_batch(*snap, *table, lod, param, inputs, words);
-        p_device->update_buffer(input, 0, inputs.size(), inputs.data());
+        passes.upload_items(inputs.data(), uint32_t(ids.size()));
         if (!words.empty()) {
             p_device->update_buffer(list, 0, words.size(), words.data());
         }
@@ -532,7 +533,7 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, co
             GPUFrame::encode_chunk_input(ids, int64_t(c), chunks[c].id, param);
             lods = ov::ivec2(ov::min(lods.x, chunks[c].lod), ov::max(lods.y, chunks[c].lod));
         }
-        p_device->update_buffer(input, 0, ids.size(), ids.data());
+        passes.upload_items(ids.data(), uint32_t(chunks.size()));
         passes.record_all(lods, uint32_t(chunks.size()));
         p_device->sync();
         const ov::bytes got_bytes = read_bytes(p_device, materials, 0, chunks.size() * cells * 4);
@@ -675,7 +676,9 @@ ov::Value timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets,
             for (uint32_t c = 0; c < TIMING_CHUNKS; c++) {
                 GPUFrame::encode_chunk_input(ids, c, CascadeMeasure::random_chunk(lod, 0x7133u + uint32_t(r + 2), int(c)), p_param);
             }
-            p_device->update_buffer(input, 0, ids.size(), ids.data());
+            for (const auto &ps : passes) {
+                ps->upload_items(ids.data(), TIMING_CHUNKS); // one input: each set its own regions
+            }
             p_device->sync();
             for (size_t si = 0; si < p_sets.size(); si++) {
                 const BatchTime t = time_batch(p_device, *passes[si], lod, ov::format("cs%d_%d_%d_", r + 2, lod, int(si)));

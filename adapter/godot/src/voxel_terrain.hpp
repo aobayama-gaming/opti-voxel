@@ -114,6 +114,9 @@ public:
     // SDFTable::SCENE_X / Z, 0 for none (--biomes=KM). Set before the node enters the tree.
     void set_biome_radius(double p_metres);
     double get_biome_radius() const;
+    // A planet of this radius centred on the voxel (0, 0, 0) (ov::World::Settings::planet_radius_m); 0 the flat world.
+    void set_planet_radius(double p_metres);
+    double get_planet_radius() const;
     // A climate table (JSON, src/climate.cpp's format: res:// or absolute), carried by the cascade and modulating the
     // ground's octaves per biome; empty for none (--climate=PATH). Set before the node enters the tree.
     void set_climate_path(const String &p_path);

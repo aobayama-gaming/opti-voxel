@@ -371,7 +371,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const ov::bytes &p_chunk
     _rt_upload_table(p_list, p_records);
     device->update_buffer(buffer_palette_batch, 0, p_palette_batch.size(), p_palette_batch.data());
 
-    device->update_buffer(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids.data());
+    cascade->upload_items(p_chunk_ids.data(), p_count, uint32_t(p_chunk_ids.size() / GPUFrame::CHUNK_INPUT_BYTES));
     device->clear_buffer(buffer_chunk_dir, 0, uint64_t(p_count) * 16);
     device->clear_buffer(buffer_status, 0, status_size_bytes);
     // Pages draw whole groups of quads: slots past the fill must be zero (degenerate), not stale.
@@ -424,7 +424,7 @@ void GPUDirectMesher::_rt_dispatch_count(const ov::bytes &p_chunk_ids, uint32_t 
         return;
     }
     _rt_upload_table(p_list, p_records);
-    device->update_buffer(buffer_input_chunk, 0, p_chunk_ids.size(), p_chunk_ids.data());
+    cascade->upload_items(p_chunk_ids.data(), p_count, uint32_t(p_chunk_ids.size() / GPUFrame::CHUNK_INPUT_BYTES));
     device->clear_buffer(buffer_chunk_dir, 0, uint64_t(p_count) * 16);
     device->clear_buffer(buffer_status, 0, status_size_bytes);
     // Counting only: every chunk on the ground block, no texel (only the base palette's materials are read).

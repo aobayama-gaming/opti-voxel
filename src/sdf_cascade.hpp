@@ -1,5 +1,6 @@
 #pragma once
 
+#include "base_regions.hpp"
 #include "base_surface.hpp"
 #include "cascade.hpp"
 #include "cascade_terrain.hpp"
@@ -62,6 +63,16 @@ public:
         CONTINENTS,
         FLAT };
     Preset preset = Preset::DEFAULT;
+    // > 0: the ground's base is a sphere of this radius (metres) centred on the voxel (0, 0, 0) (BaseSurface::sphere: a
+    // centre on its 2^31-voxel grid, exactly), its +y pole at y = radius; 0: the flat datum.
+    double planet_radius_m = 0.0;
+    // The base of a planet of p_radius_m at p_voxel_size, its switch LOD the lowest (from BaseSurface::SWITCH_LOD) whose
+    // cells keep the radius form's float error small: a SPHERE, or not one when BaseSurface::sphere refuses it (ERR).
+    static BaseSurface planet_base(double p_radius_m, double p_voxel_size) {
+        const double r = p_radius_m / p_voxel_size;
+        const int fit = int(std::ceil(std::log2(r / double(BaseSurface::MAX_RADIUS_CELLS))));
+        return BaseSurface::sphere(VoxelPos(0, 0, 0), r, ov::clamp(fit, BaseSurface::SWITCH_LOD, BaseSurface::MAX_SWITCH_LOD));
+    }
     // The flat preset's ground: 50 m below the datum, halfway between the page shader's 100 m contour lines. On one
     // (300 m), a flat ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
     static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
@@ -107,6 +118,10 @@ public:
             spec.bands.clear(); // no top lattice either: a chunk's run is its own level
         }
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
+        if (planet_radius_m > 0.0) {
+            const BaseSurface sphere = planet_base(planet_radius_m, vs);
+            base = sphere.kind() == BaseSurface::Kind::SPHERE ? sphere : base; // refused (ERR): the flat datum
+        }
         spec.base = base; // a climate's stretched octaves stretch along it
         voxel_size = p_param.voxel_size;
         attach_climate();
@@ -187,6 +202,7 @@ uint cascade_ground_material(Ch ch) {
     const Cascade::Spec &get_spec() const { return spec; }
     int64_t get_datum_y() const { return base.datum_y(); }
     const BaseSurface &get_base() const { return base; }
+    const BaseSurface *get_sphere_base() const override { return base.kind() == BaseSurface::Kind::SPHERE ? &base : nullptr; }
     UpAxis up_at(const VoxelPos &p_voxel) const override { return base.up_dir(p_voxel); }
 
     // Lattice points only: frac 0 and every coordinate a multiple of 2^lod (ERR otherwise, and 0).
@@ -367,13 +383,14 @@ uint cascade_ground_material(Ch ch) {
 
     // The flat world's column (x, z): ground_along from the datum. TODO: the table's scenes still place by columns
     // (SDFTable::ground_y); a sphere needs them on ground_along.
-    int64_t ground_y(int64_t p_x, int64_t p_z) const override { return ground_along(VoxelPos(p_x, base.datum_y(), p_z)).y; }
+    int64_t ground_y(int64_t p_x, int64_t p_z) const override { return ground_along(base.tangent_point(p_x, p_z)).y; }
 
     // cascade_terrain_sdf is sdf(), for the batches with no instance listed (point items write cascade_terrain_unit; their
     // metres come from to_metres on the CPU).
     ov::str get_glsl_code() const override {
         using namespace ExactNoise;
-        ov::str code = base.glsl() + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
+        const ov::str regions = base.kind() == BaseSurface::Kind::SPHERE ? BaseRegions::glsl(base) : ov::str();
+        ov::str code = base.glsl() + regions + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
 // CascadeTerrain::height_sdf over the base (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
 vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
     return height_sdf(c0, base_at(p, lod), lod);
@@ -478,6 +495,12 @@ private:
         Climate::Table table;
         climate_error = Climate::parse(climate_data, climate_ground(), table);
         OV_ERR_FAIL_COND_MSG(!climate_error.empty(), "SDFCascade: " + climate_error);
+        // TODO: a stretched band reads the base at its insertion LOD, whose regions the GPU doesn't have (BaseRegions
+        // uploads the chunk's LOD only); upload those too to lift this.
+        if (base.kind() == BaseSurface::Kind::SPHERE && table.has_stretch()) {
+            climate_error = "a stretched octave (stretch_y, ground_stretch) on a sphere base has no GPU path yet";
+            OV_ERR_FAIL_MSG("SDFCascade: " + climate_error + ": no climate.");
+        }
         spec = Climate::combined_spec(table, spec);
         climate = std::move(table);
         ground_terms = climate->has_ground_terms();

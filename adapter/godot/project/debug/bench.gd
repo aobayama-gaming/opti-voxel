@@ -270,6 +270,8 @@ func _ready() -> void:
 		terrain.biome_radius = 1000.0 * float(args["biomes"])
 	if args.has("climate"):
 		terrain.climate_path = args["climate"]
+	if args.has("planet_radius_km"):
+		terrain.planet_radius = 1000.0 * float(args["planet_radius_km"])
 	terrain.terrain_mode = terrains[terrain_arg]
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"

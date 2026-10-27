@@ -339,7 +339,8 @@ vec4 base_radius(WorldPos p, int lod) {
     precise float ss = max(vx * vx + vy * vy + vz * vz, 1.0);
     precise float r = det_rsqrt(ss);
     precise float rl = RADIUS * exact_pow2(-lod);
-    return vec4(vx * r, vy * r, vz * r, ss * r - rl);
+    precise float alt = ss * r - rl;
+    return vec4(vx * r, vy * r, vz * r, alt);
 }
 )glsl"),
             { { "REGION_SHIFT", ov::itos(REGION_SHIFT) }, { "REGION_HALF", ov::itos(REGION_HALF) }, { "CENTRE_LO", glsl_lo(anchor) }, { "CENTRE_HI", glsl_hi(anchor) }, { "RADIUS_LIMIT", ov::itos(RADIUS_LIMIT) }, { "RADIUS", glsl_float(float(radius)) } });

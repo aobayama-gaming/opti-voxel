@@ -30,6 +30,8 @@ src/gpu_frame.hpp
 src/gpu_glsl.hpp
 src/base_surface.hpp
 src/base_surface.cpp
+src/base_regions.hpp
+src/base_regions.cpp
 src/cascade.hpp
 src/cascade.cpp
 src/cascade_source.hpp

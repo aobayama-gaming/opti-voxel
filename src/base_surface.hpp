@@ -22,8 +22,8 @@
 // - from it up, the radius form |p - centre| - radius in float32 (det_rsqrt), whose error (a few float steps of
 //   the radius) is far below 1% of a cell there.
 // Any smooth base the CPU can evaluate in double with its gradient and Hessian fits the curvature form
-// (make_region); a sphere is the one built in. Not wired into a world yet: that needs the regions uploaded per chunk,
-// the discoverer's culling and the camera's altitude.
+// (make_region); a sphere is the one built in. On the GPU the regions an item touches are uploaded with its batch
+// (base_regions.hpp, whose base_at picks the form like at()).
 //
 // Every float op here is op for op the GLSL of glsl() (FrameSpike's base probes check it bit for bit).
 class BaseSurface {
@@ -44,7 +44,7 @@ public:
     static constexpr int MAX_SWITCH_LOD = 32 - REGION_SHIFT;
     // A sphere's centre is a multiple of 2^CENTRE_SHIFT voxels, the largest LOD's cell: (p - centre) >> L is then exact
     // on every lattice (an unsnapped centre floors up to a cell). sphere() snaps it down like the world origin, which
-    // moves it by up to 2^31 voxels per axis (107 km at 5 cm): place planets on that grid.
+    // moves it by up to 2^31 voxels per axis (107,000 km at 5 cm): place planets on that grid.
     static constexpr int CENTRE_SHIFT = 31;
     // The radius form's largest radius in cells of the switch LOD: its float32 |v| is then within ~2^-24 * 2^17 = 0.008
     // cells (Earth at 5 cm, switch 12: 31,000 cells).
@@ -69,6 +69,8 @@ public:
     static BaseSurface sphere(const VoxelPos &p_centre, double p_radius, int p_switch_lod = SWITCH_LOD);
     // SPHERE: the (snapped) centre.
     const VoxelPos &centre() const { return anchor; }
+    // SPHERE: the first LOD of the radius form (below it, the curvature form's regions).
+    int get_switch_lod() const { return switch_lod; }
 
     Kind kind() const { return base_kind; }
     // FLAT: the datum's height (LOD0 voxels). ERR and 0 on another base.
@@ -116,8 +118,8 @@ public:
     ov::str glsl_stretch() const;
 
     // FLAT: `vec4 base_at(WorldPos p, int lod)`. SPHERE: `struct BaseRegion`, `vec4 base_curvature(WorldPos p,
-    // int lod, BaseRegion r)` and `vec4 base_radius(WorldPos p, int lod)`. TODO: a SPHERE's base_at (the form picked
-    // by the LOD like at()) needs the chunk's regions on the GPU; it comes with the planet PR that uploads them. After the frame functions, the int64 helpers (SPHERE) and GLSL_EXACT_NOISE (det_rsqrt).
+    // int lod, BaseRegion r)` and `vec4 base_radius(WorldPos p, int lod)`; its base_at reads the batch's regions
+    // (BaseRegions::glsl). After the frame functions, the int64 helpers (SPHERE) and GLSL_EXACT_NOISE (det_rsqrt).
     ov::str glsl() const;
 
 private:

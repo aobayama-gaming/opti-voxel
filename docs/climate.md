@@ -136,7 +136,8 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `info.w`): through the base (`BaseSurface::stretched` / `stretch_gradient`), the noise is read at p − (1 − 2^-j) d n
   and its gradient's up component scaled by 2^−j. Flat: datum + (y − datum) / 2^j exactly (GLSL `base_stretched`),
   centred on the datum; sphere: the base sample's float offset (`base_stretched_at`, CPU and GLSL with FrameSpike's
-  `stretched_sphere`; its GPU path needs the planet PR's regions). A table without stretch generates the same shader
+  `stretched_sphere`; its GPU path needs the regions of the band's insertion LOD, which `BaseRegions` doesn't upload yet:
+  `SDFCascade` refuses such a climate on a sphere). A table without stretch generates the same shader
   text (the `plain.json` pin).
   - Why: the ground is 3D, so moving up a column the surface meets other noise: amplitude a heightmap doesn't have,
     needles, and folds where dh/dy passes 1. On the Mont Blanc match, unstretched: 8.7 m at the 100 m octave against

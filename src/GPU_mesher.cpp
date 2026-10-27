@@ -118,7 +118,7 @@ void GPUMesher::_initialize_gpu_compute() {
     // Pass 1 (the samples) is the cascade passes.
     cascade = new CascadePasses();
     if (!cascade->create(device.get(), sdf, chunk_param, ov::min(chunk_batch_number, CASCADE_MAX_CHUNKS), buffer_input_chunk_id, buffer_chunk_param,
-                buffer_sdf_sample, ov::gpu::Buffer(), nullptr, buffer_table_records, buffer_table_list, buffer_material)) {
+                buffer_sdf_sample, ov::gpu::Buffer(), nullptr, buffer_table_records, buffer_table_list, buffer_material, chunk_batch_number)) {
         OV_ERR_PRINT("GPUMesher: the cascade passes failed to compile: no pass runs (empty meshes).");
     }
     VLOG(1, "GPUMesher: cascade scratch ", int64_t(cascade->scratch_bytes() / 1048576), " MB (", int64_t(cascade->get_max_chunks()), " chunks per sub-batch)");
@@ -312,7 +312,7 @@ void GPUMesher::_execute_gpu_pipeline(const ov::bytes &p_chunk_id, uint32_t p_co
     device->clear_buffer(buffer_edge_intersect, 0, cells * sizeof(float) * 3 * chunk_batch_number);
 
     // 2. put the input inside
-    device->update_buffer(buffer_input_chunk_id, 0, p_chunk_id.size(), p_chunk_id.data());
+    cascade->upload_items(p_chunk_id.data(), p_count, uint32_t(p_chunk_id.size() / GPUFrame::CHUNK_INPUT_BYTES));
 
     // Pass 1 is the cascade's levels for the batch's real chunks (their own dispatches, before the passes below). Slots past the batch keep stale samples: they are computed but never used (see
     // render_chunk). A cascade that failed to build runs nothing.

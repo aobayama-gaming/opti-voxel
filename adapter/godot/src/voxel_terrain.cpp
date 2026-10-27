@@ -40,6 +40,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_tree_area"), &VoxelTerrain::get_archetype_tree_area);
     ClassDB::bind_method(D_METHOD("set_biome_radius", "metres"), &VoxelTerrain::set_biome_radius);
     ClassDB::bind_method(D_METHOD("get_biome_radius"), &VoxelTerrain::get_biome_radius);
+    ClassDB::bind_method(D_METHOD("set_planet_radius", "metres"), &VoxelTerrain::set_planet_radius);
+    ClassDB::bind_method(D_METHOD("get_planet_radius"), &VoxelTerrain::get_planet_radius);
     ClassDB::bind_method(D_METHOD("set_climate_path", "path"), &VoxelTerrain::set_climate_path);
     ClassDB::bind_method(D_METHOD("get_climate_path"), &VoxelTerrain::get_climate_path);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
@@ -163,6 +165,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000000,1"), "set_archetype_trees", "get_archetype_trees");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_radius", PROPERTY_HINT_RANGE, "0,100000000,1,suffix:m"), "set_planet_radius", "get_planet_radius");
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
@@ -434,6 +437,15 @@ void VoxelTerrain::set_biome_radius(double p_metres) {
 
 double VoxelTerrain::get_biome_radius() const {
     return cfg().biome_radius;
+}
+
+void VoxelTerrain::set_planet_radius(double p_metres) {
+    ERR_FAIL_COND_MSG(world.is_started(), "planet_radius must be set before the terrain enters the tree.");
+    cfg().planet_radius_m = p_metres;
+}
+
+double VoxelTerrain::get_planet_radius() const {
+    return cfg().planet_radius_m;
 }
 
 void VoxelTerrain::set_climate_path(const String &p_path) {
@@ -750,7 +762,9 @@ void VoxelTerrain::_push_render_frame() {
     const SDFCascade &sdf = world.terrain();
     if (page_host && sdf.preset == SDFCascade::Preset::CONTINENTS) {
         // Continents preset: the page shader colours heights around sea level (the cascade's datum), in render metres.
-        page_host->set_material_param("sea_level_m", ChunkMath::voxel_to_render(VoxelPos(0, sdf.get_datum_y(), 0), param).y);
+        // TODO: on a sphere this is the pole's height along render y, wrong away from the pole; the next planet PR
+        // colours by altitude along the vertex's up (with base_up).
+        page_host->set_material_param("sea_level_m", ChunkMath::voxel_to_render(sdf.get_base().tangent_point(0, 0), param).y);
     }
     const float rise_m = ChunkMath::origin_shift_m(world.world_origin(), world.render_origin(), param).y;
     const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
@@ -902,7 +916,7 @@ void VoxelTerrain::_ready() {
             skirt_depths.set(l, l < cfg().lod_numbers ? sdf.skirt_depth_m(l) : 0.0f);
         }
         page_host->set_material_param("skirt_depth_m", skirt_depths);
-        const UpAxis up = sdf.up_at(VoxelPos(0, sdf.get_datum_y(), 0));
+        const UpAxis up = sdf.up_at(sdf.get_base().tangent_point(0, 0)); // TODO: per vertex on a sphere (the planet's next PR)
         page_host->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     }

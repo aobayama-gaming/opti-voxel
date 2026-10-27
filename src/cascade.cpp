@@ -429,11 +429,12 @@ int level_bound(int p_size, int p_j) {
 }
 
 Box chunk_box(const ChunkId &p_chunk, const ChunkParam &p_param) {
-    const int lod = ChunkMath::get_lod(p_chunk);
-    const VoxelPos anchor = ChunkMath::chunk_min_voxel(p_chunk, p_param);
-    // The anchor is a multiple of 28 * 2^L: the division is exact.
-    const int64_t step = int64_t(1) << lod;
-    const int64_t a[3] = { anchor.x / step, anchor.y / step, anchor.z / step };
+    // The anchor is a multiple of 28 * 2^L: the shift is exact.
+    return item_box(ChunkMath::chunk_min_voxel(p_chunk, p_param), ChunkMath::get_lod(p_chunk), p_param);
+}
+
+Box item_box(const VoxelPos &p_anchor, int p_lod, const ChunkParam &p_param) {
+    const int64_t a[3] = { p_anchor.x >> p_lod, p_anchor.y >> p_lod, p_anchor.z >> p_lod };
     Box b;
     for (int i = 0; i < 3; i++) {
         b.lo[i] = a[i] - p_param.skirt_size;

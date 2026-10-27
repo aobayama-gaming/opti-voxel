@@ -278,4 +278,5 @@ sphere unchanged:
 - **Reads the base:** the ground's distance (`d_base`, `n`), the stretched octaves (squeezed along `n`, not y), the
   climate report (a tangent-plane grid traced down `n`) and the player's `--spawn` (tangent coordinates).
 - **Still assumes y:** `SDFTable::ground_y` (column traces for the instance scenes' centres), the forest's and the rock
-  scatter's xz zones, and the biome features' xz cells (lakes, islands). They move to the base with the planet PR.
+  scatter's xz zones, and the biome features' xz cells (lakes, islands). They move to the base with the planet's next
+  PR (the sphere itself meshes since `base_regions.hpp`; stretched octaves are refused on it).

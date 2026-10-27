@@ -29,8 +29,8 @@ ov::str noise_code(const Spec &p_spec, int p_group, const ov::str &p_pos) {
 }
 
 ov::str stretch_helper(const Spec &p_spec) {
-    // TODO: a sphere's stretch needs its regions on the GPU (base_stretched_at with the band's base sample): the planet
-    // PR that uploads them.
+    // TODO: a sphere's stretch needs the regions of the band's insertion LOD on the GPU (base_stretched_at with the band's
+    // base sample; BaseRegions uploads the chunk's LOD only). SDFCascade refuses such a climate on a sphere.
     OV_ERR_FAIL_COND_V_MSG(p_spec.base.kind() != BaseSurface::Kind::FLAT, ov::str(), "CascadeGLSL: a stretched band on a sphere base has no GPU path yet.");
     return p_spec.base.glsl_stretch();
 }
