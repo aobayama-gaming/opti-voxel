@@ -2,6 +2,7 @@
 
 #include "base_regions.hpp"
 #include "cascade.hpp"
+#include "climate.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
@@ -186,4 +187,71 @@ TEST_CASE("SDFCascade::planet_base: a large planet raises its switch LOD instead
     CHECK(jupiter.kind() == BaseSurface::Kind::SPHERE);
     CHECK(jupiter.get_switch_lod() > BaseSurface::SWITCH_LOD);
     CHECK(SDFCascade::planet_base(6371000.0, 0.005).kind() == BaseSurface::Kind::SPHERE); // Earth at 5 mm
+}
+
+TEST_CASE("SDFCascade::planet_base: a small planet lowers its switch LOD, down to the radius form alone") {
+    // 50 km at 5 cm: 10^6 voxels, the curvature form below LOD 5 (its regions 64 * 2^4 voxels, 51 m).
+    const BaseSurface moon = SDFCascade::planet_base(50000.0, 0.05);
+    CHECK(moon.kind() == BaseSurface::Kind::SPHERE);
+    CHECK(moon.get_switch_lod() == 5);
+    // 2 km: 40,000 voxels, the curvature form at LOD 0 only; 100 m: the radius form alone.
+    for (const auto &[radius_m, switch_lod] : { std::pair{ 2000.0, 1 }, std::pair{ 100.0, 0 } }) {
+        const BaseSurface tiny = SDFCascade::planet_base(radius_m, 0.05);
+        CHECK(tiny.kind() == BaseSurface::Kind::SPHERE);
+        CHECK(tiny.get_switch_lod() == switch_lod);
+        // The radius form at the switch next to the pole: |p| - R within a few float steps of the radius.
+        const VoxelPos p = tiny.tangent_point(0, 0) + VoxelPos(0, 8, 0);
+        const double alt = std::ldexp(tiny.altitude(p), -switch_lod);
+        CHECK(std::fabs(double(tiny.at(p, switch_lod).w) - alt) < 1e-3);
+    }
+}
+
+TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radius, Earth's and the flat world's untouched") {
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    auto max_amp = [&](double p_radius_m) {
+        SDFCascade sdf;
+        sdf.planet_radius_m = p_radius_m;
+        sdf.configure(param, 16);
+        float amp = 0.0f;
+        for (const Cascade::Band &b : sdf.get_spec().bands) {
+            amp = ov::max(amp, b.amp);
+        }
+        return double(amp);
+    };
+    const double flat = max_amp(0.0);
+    CHECK(flat == doctest::Approx(SDFCascade::MAX_AMP_M / 0.05));
+    CHECK(max_amp(6371000.0) == flat);
+    CHECK(max_amp(2000.0) == doctest::Approx(SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05));
+}
+
+TEST_CASE("SDFCascade: a climate's biome multipliers fit under a 2 km planet's relief; its height terms in metres don't") {
+    auto error = [](const char *p_path) {
+        SDFCascade sdf;
+        CHECK(Climate::load(p_path, sdf.climate_data) == ov::str());
+        sdf.planet_radius_m = 2000.0;
+        ChunkParam param;
+        param.voxel_size = 0.05f;
+        sdf.configure(param, 16);
+        CHECK((sdf.get_climate() != nullptr) == sdf.get_climate_error().empty());
+        return sdf.get_climate_error();
+    };
+    // Biome multipliers up to 2.5 (it was refused at 1: the octaves started at the relief itself).
+    CHECK(error("res://climate/plain.json") == ov::str());
+    // A 3.2 km continent term: more than the planet's 62.5 m relief.
+    CHECK(error("res://climate/example.json").find("height term") != ov::str::npos);
+}
+
+TEST_CASE("BaseSurface::on_base: the base's point along the up, on any side of a planet") {
+    const BaseSurface flat = BaseSurface::flat(1234);
+    CHECK(flat.on_base(VoxelPos(-5, 99999, 7)) == VoxelPos(-5, 1234, 7));
+    const BaseSurface planet = SDFCascade::planet_base(2000.0, 0.05);
+    for (const VoxelPos p : { VoxelPos(100000, 3, -2), VoxelPos(-7, -90000, 11), VoxelPos(5000, 6000, -39000), VoxelPos(0, 0, 0) }) {
+        const VoxelPos b = planet.on_base(p);
+        CHECK(std::fabs(planet.altitude(b)) <= 1.0);
+        const UpAxis up = planet.up_dir(p), bu = planet.up_dir(b);
+        if (!(p == VoxelPos(0, 0, 0))) {
+            CHECK(up[0] * bu[0] + up[1] * bu[1] + up[2] * bu[2] > 0.9999);
+        }
+    }
 }

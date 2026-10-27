@@ -98,6 +98,19 @@ VoxelPos BaseSurface::tangent_point(int64_t p_u, int64_t p_v) const {
     return VoxelPos(anchor.x + p_u, anchor.y + std::llround(radius), anchor.z + p_v);
 }
 
+VoxelPos BaseSurface::on_base(const VoxelPos &p_voxel) const {
+    if (base_kind == Kind::FLAT) {
+        return VoxelPos(p_voxel.x, anchor.y, p_voxel.z);
+    }
+    double v[3];
+    const double len = offset(p_voxel, anchor, v);
+    if (len == 0.0) {
+        return tangent_point(0, 0);
+    }
+    const double s = radius / len;
+    return anchor + VoxelPos(std::llround(v[0] * s), std::llround(v[1] * s), std::llround(v[2] * s));
+}
+
 Vector3i64 BaseSurface::region_cell(const VoxelPos &p_voxel, int p_lod) {
     const int s = p_lod + REGION_SHIFT;
     return Vector3i64(p_voxel.x >> s, p_voxel.y >> s, p_voxel.z >> s);

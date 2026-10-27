@@ -7,8 +7,11 @@
 #
 # Cases: default pose, the main scene's lod_error 4, underground, another area, high above, deep
 # below, a far world origin, 5 cm voxels, a fly run (audited once it settles back at the start), and
-# 25 LODs (--lods=25) from 10 km up looking down and from 100 km up looking at the horizon. Heights are
-# above the ground under the camera (--above_ground): the cascade's ground height varies by kilometres.
+# 25 LODs (--lods=25) from 10 km up looking down and from 100 km up looking at the horizon. Planets
+# (--planet_radius_km): Earth at its +y pole, at its +x equator (world y level there: the y-up detector)
+# and from 100 km up; a 2 km planet at 5 cm (the radius form from LOD 1, relief capped at 1/32 of its radius) at
+# its pole, its equator and 5 km out, the whole planet in view. Heights are above the ground under the
+# camera (--above_ground, along the local up): the cascade's ground height varies by kilometres.
 # Report: bench/results/<timestamp>-discovery.md. Exit code: 0 no miss anywhere, 1 a run failed or missed.
 # No build (run scons first), no cooldown: this is a correctness check.
 set -uo pipefail
@@ -35,6 +38,10 @@ read -r FAR <<< "$(python3 -c "
 w = 7 * 2**32
 print(round(1e15 / 0.5 / w) * w)")"
 
+# The planets' +x equator, LOD0 voxels: Earth at the default 0.5 m, the tiny planet at 5 cm.
+EARTH_EQ=$((6371000 * 2))
+TINY_EQ=$((2000 * 20))
+
 CASES=(
     "default|"
     "lod4|--lod_error=4"
@@ -47,6 +54,12 @@ CASES=(
     "fly|--scenario=fly"
     "lods25_10km|--lods=25 --above_ground=10000 --pitch=-45"
     "lods25_100km|--lods=25 --above_ground=100000 --pitch=-5"
+    "planet_pole|--planet_radius_km=6371"
+    "planet_equator|--planet_radius_km=6371 --origin=$EARTH_EQ,0,0 --camera_voxel=$EARTH_EQ,0,0"
+    "planet_high|--planet_radius_km=6371 --lods=25 --above_ground=100000 --pitch=-5"
+    "tiny_pole|--planet_radius_km=2 --voxel=0.05"
+    "tiny_equator|--planet_radius_km=2 --voxel=0.05 --origin=$TINY_EQ,0,0 --camera_voxel=$TINY_EQ,0,0"
+    "tiny_space|--planet_radius_km=2 --voxel=0.05 --above_ground=5000 --pitch=-60"
 )
 
 OUT="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-discovery.md"

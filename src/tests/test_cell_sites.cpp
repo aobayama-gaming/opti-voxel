@@ -154,7 +154,7 @@ TEST_CASE("Cell sites: on the cascade ground, the octree walk finds every cell's
     int64_t total = 0;
     for (const int64_t x : { int64_t(-1000), int64_t(250000), int64_t(-3700000) }) {
         const int64_t z = x / 3 + 40000;
-        const VoxelPos centre(x, sdf.ground_y(x, z), z);
+        const VoxelPos centre(x, sdf.ground_at(x, z).y, z);
         const VoxelPos reach(1000, 4000, 1000);
         coarse = 0;
         fine = 0;
@@ -191,7 +191,7 @@ TEST_CASE("Cell sites: on the cascade ground, the octree walk finds every cell's
     CHECK(total > 300);
     // An empty box (a node of 8 cells far above the ground): one evaluation.
     const int64_t tile = 8 * side;
-    const VoxelPos air(0, WorldCoord::floor_div(sdf.ground_y(0, 0), tile) + 20, 0);
+    const VoxelPos air(0, WorldCoord::floor_div(sdf.ground_at(0, 0).y, tile) + 20, 0);
     coarse = 0;
     fine = 0;
     std::vector<CellSite> none;
@@ -242,7 +242,7 @@ TEST_CASE("Cell sites: an air tile's walk costs one evaluation, a ground tile's 
         return sdf.ground_field(p_v, p_lod);
     };
     const int64_t x0 = 250000, z0 = 40000;
-    const int64_t ty = WorldCoord::floor_div(sdf.ground_y(x0, z0), tile) - n / 2;
+    const int64_t ty = WorldCoord::floor_div(sdf.ground_at(x0, z0).y, tile) - n / 2;
     // [0]: tiles with sites, [1]: empty tiles that descended (more than one evaluation), [2]: empty at one evaluation.
     int64_t tiles[3] = {}, cost[3] = {}, sites = 0;
     const uint64_t t0 = now_usec();
@@ -283,7 +283,7 @@ TEST_CASE("Cell sites: tiles walked from a box's level keep the box walk's sites
     int64_t sites = 0;
     for (const int64_t x0 : { int64_t(-3700000), int64_t(250000), int64_t(1200000) }) {
         const int64_t z0 = x0 / 3 + 40000;
-        const VoxelPos t0(WorldCoord::floor_div(x0, tile) - 1, WorldCoord::floor_div(sdf.ground_y(x0, z0), tile) - 1, WorldCoord::floor_div(z0, tile) - 1);
+        const VoxelPos t0(WorldCoord::floor_div(x0, tile) - 1, WorldCoord::floor_div(sdf.ground_at(x0, z0).y, tile) - 1, WorldCoord::floor_div(z0, tile) - 1);
         // A region off the tile grid (a blob tile grown by its margin), its walk, and its tiles' walks from its level.
         const VoxelBox region{ t0 * tile + VoxelPos(tile / 3, tile / 5, tile / 7), (t0 + VoxelPos(3, 3, 3)) * tile - VoxelPos(tile / 4, tile / 6, tile / 9), true };
         const int level = walk_level(region, side);
@@ -329,7 +329,7 @@ TEST_CASE("Cell sites: boxes walked in lockstep keep each box's sites, in rounds
     const int64_t side = 100, tile = 8 * side;
     const VoxelBox zone{ VoxelPos(x0 - 64 * tile, -(int64_t(1) << 20), z0 - 64 * tile), VoxelPos(x0 + 64 * tile, int64_t(1) << 20, z0 + 64 * tile), true };
     const int level = walk_level(zone, side);
-    const VoxelPos t0(WorldCoord::floor_div(x0, tile) - 2, WorldCoord::floor_div(sdf.ground_y(x0, z0), tile) - 1, WorldCoord::floor_div(z0, tile) - 2);
+    const VoxelPos t0(WorldCoord::floor_div(x0, tile) - 2, WorldCoord::floor_div(sdf.ground_at(x0, z0).y, tile) - 1, WorldCoord::floor_div(z0, tile) - 2);
     std::vector<SiteWalk> walks;
     std::vector<std::vector<CellSite>> got(64), want(64);
     for (int64_t z = 0; z < 4; z++) {

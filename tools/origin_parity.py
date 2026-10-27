@@ -58,7 +58,7 @@ def main():
               "|" + "---|" * (6 + len(SHOTS))]
     floor = {shot: image_diff(f"{runs['zero']}/{shot}", f"{runs['zero2']}/{shot}")[0] for shot in SHOTS}
     examples = []
-    for a, b in PAIRS:
+    for a, b in [p for p in PAIRS if p[0] in runs and p[1] in runs]:  # a planet runs zero, zero2, near only
         da, db = digests[a], digests[b]
         shared = set(da) & set(db)
         differing = sorted(c for c in shared if da[c] != db[c])

@@ -1,14 +1,19 @@
 #pragma once
 
 #include "archetype_table.hpp"
+#include "base_surface.hpp"
 
+#include <functional>
 #include <vector>
 
 // Biome features: lava lakes and floating islands, placed on the ground through the instance table like the trees
 // (plain records, no change to the IR, the fold or the meshers). Where they stand comes from biome cells: each feature
-// kind tiles the plane with square cells of 2^k LOD0 voxels (its cell size in metres rounded to a power of two
-// voxels), and a cell holds at most one site, kept by the cell's hash with the kind's chance. A site depends only on its
-// cell and the voxel size: the same from any square, any origin (int64 cells, ExactNoise::hash_cell).
+// kind tiles space with cubic cells of 2^k LOD0 voxels (its cell size in metres rounded to a power of two voxels), and a
+// cell holds at most one site: a hashed point of the cell projected onto the base surface (BaseSurface::on_base), kept
+// by the cell's hash with the kind's chance and when the projection stays in the cell (so each point of the base has one
+// cell; on the flat base, the cells the datum crosses: one per column). A site depends only on its cell, the base and
+// the voxel size: the same from any box, any origin (int64 cells, ExactNoise::hash_cell). A feature is built in its
+// site's tangent frame (up_rotation of the base's up): on a planet as on the flat world.
 namespace Biome {
 
 enum Feature {
@@ -30,20 +35,19 @@ const Kind &kind(Feature p_feature);
 
 struct Site {
     Feature feature = LAVA_LAKE;
-    int64_t x = 0; // LOD0 voxels
-    int64_t z = 0;
+    VoxelPos at; // on the base surface, LOD0 voxels
     double radius = 0.0; // voxels
     uint32_t seed = 0;
 };
 
 // log2 of the kind's cell side in voxels (at least 4).
 int cell_shift(Feature p_feature, double p_voxel);
-// The sites of p_feature whose centre is in the square [p_x0, p_x1] x [p_z0, p_z1] (LOD0 voxels), cell by cell (z then
-// x). A site stays in the middle half of its cell: two sites of a kind are at least half a cell apart.
-void sites(Feature p_feature, int64_t p_x0, int64_t p_z0, int64_t p_x1, int64_t p_z1, double p_voxel, std::vector<Site> &r_out);
-// Another spot for p_site in the middle half of its cell (hashed from its seed and p_attempt > 0; 0 keeps it), the
-// rest the same: place() tries LAKE_ATTEMPTS of them for a lake before giving up on a slope.
-Site moved(const Site &p_site, int p_attempt, double p_voxel);
+// The sites of p_feature in the box [p_lo, p_hi] (LOD0 voxels, inclusive), cell by cell (z, y, then x). A site's hashed
+// point stays in the middle half of its cell: on the flat base two sites of a kind are at least half a cell apart.
+void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, double p_voxel, std::vector<Site> &r_out);
+// Another spot for p_site in the middle half of its cell (hashed from its seed and p_attempt > 0; 0 keeps it) projected
+// onto the base (p_site itself where that leaves the cell: two cells' features never meet), the rest the same: place() tries LAKE_ATTEMPTS of them for a lake before giving up on a slope.
+Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base, double p_voxel);
 inline constexpr int LAKE_ATTEMPTS = 4;
 
 // The library types the features are made of.
@@ -57,19 +61,30 @@ inline constexpr uint32_t ISLAND_SEED = 0x15A1u;
 // Appends them to r_library (SDFTable::build_table, the tests); their bumps are on a 16 m lattice.
 Types add_types(Archetype::DefLibrary &r_library, double p_voxel);
 
-// A lake's lava surface, for the page shader's colour: the cylinder of the basin's radius `radius` (voxels) around
-// (x, z), the lava at and below y (LOD0 voxels, the slab's top). Trees and rocks keep LAKE_KEEP_OUT radii away.
+inline constexpr double LAKE_KEEP_OUT = 1.5;
+// A lake's lava surface: the cylinder of the basin's radius `radius` (voxels) along `up` through `top` (the slab's top
+// face's centre, LOD0 voxels), the lava at and below it.
 struct LavaPool {
     VoxelPos top;
+    UpAxis up = UP_Y;
     double radius = 0.0;
+    // Whether p_voxel is within LAKE_KEEP_OUT radii of the cylinder's axis, and as far along it (not the planet's far
+    // side): no tree or rock there.
+    bool near(const VoxelPos &p_voxel) const;
 };
-inline constexpr double LAKE_KEEP_OUT = 1.5;
 
-// A placed feature: its records, where it ended up and its top (the lava, or the island's rim plane).
+// The ground a feature stands on (SDFTable: the cascade's): its base (the up, the tangent frame) and the top solid voxel
+// on the line through a point along the base's up there (SDFTable::ground_under). Thread-safe.
+struct Ground {
+    const BaseSurface *base = nullptr;
+    std::function<VoxelPos(const VoxelPos &)> under;
+};
+
+// A placed feature: its records, where it ended up and its top (the lava's centre, or the island's rim plane's).
 struct Placed {
     std::vector<Archetype::TableRecord> records;
     Site at;
-    int64_t top_y = 0;
+    VoxelPos top;
     bool lava = false; // pool is set
     LavaPool pool;
 };
@@ -79,7 +94,7 @@ struct Placed {
 // from below the lava up to above the rim's highest ground. It tries LAKE_ATTEMPTS spots of the site's cell and is
 // false where the rim's ground spans more than half the radius at every one (a slope: the basin would cut a cliff).
 // A floating island: one record, its underside's apex a hashed 25-70 m above the highest ground under it.
-bool place(const Site &p_site, const Archetype::GroundFn &p_ground_y, const Archetype::DefLibrary &p_library, const Types &p_types, double p_voxel,
-        Placed &r_out);
+// Heights are along the site's up, the records turned by its up_rotation (the identity on the flat base).
+bool place(const Site &p_site, const Ground &p_ground, const Archetype::DefLibrary &p_library, const Types &p_types, double p_voxel, Placed &r_out);
 
 } // namespace Biome

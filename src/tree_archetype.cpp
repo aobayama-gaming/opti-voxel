@@ -497,6 +497,18 @@ void up_rotation(const UpAxis &p_up, float r_rows[9]) {
     rotation_rows(r_rows, x, up, z);
 }
 
+void up_yaw_rotation(const UpAxis &p_up, double p_yaw, float r_rows[9]) {
+    float frame[9];
+    up_rotation(p_up, frame);
+    const float c = float(std::cos(p_yaw)), s = float(std::sin(p_yaw));
+    const float turn[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            r_rows[3 * i + j] = turn[3 * i] * frame[j] + turn[3 * i + 1] * frame[3 + j] + turn[3 * i + 2] * frame[6 + j];
+        }
+    }
+}
+
 void grow_tree(const TreeSpecies &p_species, const VoxelPos &p_base, const UpAxis &p_up, uint32_t p_seed, double p_voxel, const TreeTypes &p_types,
         std::vector<TableRecord> &r_out, std::vector<TreeStem> *r_stems, bool p_hull_only) {
     Grower(p_species, p_base, p_seed, p_voxel, p_types, r_out, r_stems, Vec{ p_up[0], p_up[1], p_up[2] }, p_hull_only).grow();

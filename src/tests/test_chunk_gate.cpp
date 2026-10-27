@@ -70,7 +70,7 @@ TEST_CASE("ChunkGate: a frame's popping stops at the cap of parked chunks; next_
     sdf.configure(param, 18);
     CHECK(sdf.get_stream() != nullptr);
     const int64_t x = std::llround(SDFTable::SCENE_X / 0.05), z = std::llround(SDFTable::SCENE_Z / 0.05);
-    const VoxelPos centre(x, sdf.ground_y(x, z), z);
+    const VoxelPos centre(x, sdf.ground_at(x, z).y, z);
     ChunkGate gate;
     gate.bind(&sdf, &gate);
     Queue queue;

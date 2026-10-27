@@ -7,9 +7,11 @@ The shared environment and the page shader's surface detail.
   perspective (`fog_aerial_perspective` 0.8: the fog takes the sky's colour in that direction, `fog_density` 0.00025: a
   quarter at 1 km), SSAO / SSIL, the grading LUT. `VoxelSky` (`src/voxel_sky.*`, a sibling of the terrain and the
   WorldEnvironment) installs the sky shader at ready: Godot's PhysicalSkyMaterial (MIT) with a **cloud layer** over it, a
-  plane at `cloud_height_m` reading `cloud_texture` (`adapter/godot/project/clouds.png`, `tools/make_clouds.py`: tileable spectral
+  plane at `cloud_height_m` (on a planet a shell that high above its base, read on three planes blended by the up so
+  it has no seam) reading `cloud_texture` (`adapter/godot/project/clouds.png`, `tools/make_clouds.py`: tileable spectral
   noise, rank-normalised so `cloud_cover` is the fraction covered) once per `cloud_scale_m`, carried by `cloud_wind`. The
-  page shader splices the same GLSL (`VoxelSky::glsl_clouds`: uniforms, `cloud_hit` / `cloud_uv` / `cloud_density`) and
+  page shader splices the same GLSL (`VoxelSky::glsl_clouds`: uniforms, the planet's `planet_up` / `planet_altitude`,
+  `cloud_hit` / `cloud_texel` / `cloud_density`; the planet's functions are core, `src/planet_glsl.hpp`) and
   its `light()` (Lambert, no specular: every material has roughness 1) cuts the sun by `cloud_shadow` where the
   fragment's ray to the sun crosses a cloud, so a shadow lies under its cloud. `VoxelSky` hands the terrain the
   uniforms through `VoxelTerrain.set_page_params(Dictionary)` (kept until the pool exists); a scene without a VoxelSky
@@ -30,6 +32,15 @@ The shared environment and the page shader's surface detail.
   snapped spacing (99.3 m at 5 cm). The hosts give the frame its origin through `shade_origin_voxel()` /
   `shade_voxel_m()` (the page shaders from their decode uniforms, the sky shader from `VoxelSky::set_render_frame`,
   which VoxelTerrain calls at start and on every rebase; the cloud layer's height stays above the world origin).
+  **Planets** (`--planet_radius_km`): `World::planet_render` gives both shaders the planet in render space at start and
+  on every rebase (its centre, radius and K = |c|^2 - R^2 from double, so the altitude (|p|^2 - 2 p.c + K) / (|p - c|
+  + R) keeps ~1e-4 m in float32 at Earth's radius, where |p - c| - R keeps half a metre). The page shader reads the
+  up per fragment (`planet_up`: the slope colours, the materials) and colours and contours by altitude (sea level 0);
+  bark and lava read the up's tangent frame (`up_frame`, x / y / z on the flat world). The shading frame snaps per
+  axis, not along a tilted frame: on a planet away from the poles bark and lava shift when the render origin moves
+  (rare: `rebase_distance_m`); cloud shadows read three planes there (three fetches). The sky is drawn in the
+  camera's local frame (its up on +y), so the horizon is the ground's and the global sun sets as the camera goes
+  round.
   `tools/shot_diff.py` compares two shots of one pose (a fly far out and back with `--still=1`). Not done yet, in order: water (a sea plane with a
   depth shader), triplanar image textures per material, grass, height fog (the ground spans kilometres on the
   cascade terrains: a fixed fog height is wrong there), time of day.

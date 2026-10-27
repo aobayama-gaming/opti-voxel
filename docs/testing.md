@@ -109,9 +109,11 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   A dropped chunk with quads is a miss, i.e. a hole; `ok` needs 0 misses and a max LOD jump of 1
   between face neighbours. `bench.sh` also fails a load-complete run whose loaded set != scanned set
   (`chunks.loaded_not_scanned` / `scanned_not_loaded`).
-  `tools/discovery_audit.sh [--only=a,b] [-- bench args]` runs it over 11 poses/settings (default,
-  lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly, and with `--lods=25`
-  `lods25_10km` looking down from 10 km up, `lods25_100km` at the horizon from 100 km up) and writes
+  `tools/discovery_audit.sh [--only=a,b] [-- bench args]` runs it over 17 poses/settings (default,
+  lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly, with `--lods=25`
+  `lods25_10km` looking down from 10 km up, `lods25_100km` at the horizon from 100 km up, and planets: Earth's
+  `planet_pole`, `planet_equator` (world y level there) and `planet_high` (100 km up), a 2 km planet at 5 cm's
+  `tiny_pole`, `tiny_equator` and `tiny_space` (5 km out, the planet in view)) and writes
   `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
 - Hole hunting: run the main scene with `godot --path adapter/godot/project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window

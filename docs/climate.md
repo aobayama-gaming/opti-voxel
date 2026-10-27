@@ -93,7 +93,7 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   6-13% gradient error, visible lines). (4) **Height terms** (`"heights"`: `height_m * curve(field)`, libnoise's Curve)
   and per-biome **terraces** (libnoise's Terrace, blended by the weight) are added to the ground at each sample,
   after the cascade (`Climate::ground_value` / GLSL `climate_ground`, through `SDFCascade::ground_channels` on every
-  path: chunk samples, point items, `ground_y`, the report): the terms' sum and the terraced weights derived on the
+  path: chunk samples, point items, `ground_along`, the report): the terms' sum and the terraced weights derived on the
   level above the sample (`SampleCarry`), so the fields are carried down to it, point items too
   (`FieldRange::sample`), and the skirts take the terms' step (`Climate::ground_step`: the height fields'
   terms, twice that with terraces for their slope, plus the terrace blend's change with the weights, each terraced biome's

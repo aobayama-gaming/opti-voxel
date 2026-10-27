@@ -74,6 +74,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_half_chunk_voxels"), &VoxelTerrain::get_half_chunk_voxels);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
     ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
+    ClassDB::bind_method(D_METHOD("get_up_at", "render_pos"), &VoxelTerrain::get_up_at);
+    ClassDB::bind_method(D_METHOD("get_scene_shift"), &VoxelTerrain::get_scene_shift);
     ClassDB::bind_method(D_METHOD("set_rebase_distance_m", "metres"), &VoxelTerrain::set_rebase_distance_m);
     ClassDB::bind_method(D_METHOD("get_rebase_distance_m"), &VoxelTerrain::get_rebase_distance_m);
     ClassDB::bind_method(D_METHOD("get_render_origin_x"), &VoxelTerrain::get_render_origin_x);
@@ -710,6 +712,18 @@ Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
     return Vector3(real_t(pos[0]), real_t(pos[1]), real_t(pos[2]));
 }
 
+Vector3 VoxelTerrain::get_up_at(const Vector3 &p_render_pos) const {
+    const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
+    const UpAxis up = world.up_at(pos);
+    return Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2]));
+}
+
+Vector3 VoxelTerrain::get_scene_shift() const {
+    double shift[3];
+    world.scene_shift(shift);
+    return Vector3(real_t(shift[0]), real_t(shift[1]), real_t(shift[2]));
+}
+
 void VoxelTerrain::set_rebase_distance_m(float p_metres) {
     ERR_FAIL_COND_MSG(world.is_started(), "rebase_distance_m must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(!(p_metres >= 0.0f), "rebase_distance_m must be >= 0.");
@@ -721,15 +735,15 @@ float VoxelTerrain::get_rebase_distance_m() const {
 }
 
 int64_t VoxelTerrain::get_render_origin_x() const {
-    return cfg().chunk_param.origin_voxel().x;
+    return world.render_origin_voxel().x;
 }
 
 int64_t VoxelTerrain::get_render_origin_y() const {
-    return cfg().chunk_param.origin_voxel().y;
+    return world.render_origin_voxel().y;
 }
 
 int64_t VoxelTerrain::get_render_origin_z() const {
-    return cfg().chunk_param.origin_voxel().z;
+    return world.render_origin_voxel().z;
 }
 
 Vector3 VoxelTerrain::get_render_offset_m() const {
@@ -760,18 +774,27 @@ void VoxelTerrain::_move_render_origin(const Float3 &p_shift) {
 void VoxelTerrain::_push_render_frame() {
     const ChunkParam &param = world.chunk_param();
     const SDFCascade &sdf = world.terrain();
+    // The planet's base in render space (none: the flat world's zeros), for the pages' up, altitude and cloud shadows and
+    // the sky's frame and cloud shell.
+    Dictionary planet;
+    Float3 centre;
+    float radius_m = 0.0f, k_m2 = 0.0f;
+    const bool on_planet = world.planet_render(centre, radius_m, k_m2);
+    planet["planet_centre_m"] = godot_v3(centre);
+    planet["planet_radius_m"] = radius_m;
+    planet["planet_k_m2"] = k_m2;
+    set_page_params(planet);
     if (page_host && sdf.preset == SDFCascade::Preset::CONTINENTS) {
-        // Continents preset: the page shader colours heights around sea level (the cascade's datum), in render metres.
-        // TODO: on a sphere this is the pole's height along render y, wrong away from the pole; the next planet PR
-        // colours by altitude along the vertex's up (with base_up).
-        page_host->set_material_param("sea_level_m", ChunkMath::voxel_to_render(sdf.get_base().tangent_point(0, 0), param).y);
+        // Continents preset: the page shader colours heights around sea level, the cascade's datum in render metres on
+        // the flat world, a planet's base (its altitude 0).
+        page_host->set_material_param("sea_level_m", on_planet ? 0.0 : ChunkMath::voxel_to_render(sdf.get_base().tangent_point(0, 0), param).y);
     }
     const float rise_m = ChunkMath::origin_shift_m(world.world_origin(), world.render_origin(), param).y;
     const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         if (VoxelSky *sky = Object::cast_to<VoxelSky>(parent->get_child(i))) {
-            sky->set_render_frame(origin_lo, param.voxel_size, rise_m);
+            sky->set_render_frame(origin_lo, param.voxel_size, on_planet ? 0.0f : rise_m, planet);
         }
     }
 }
@@ -916,8 +939,6 @@ void VoxelTerrain::_ready() {
             skirt_depths.set(l, l < cfg().lod_numbers ? sdf.skirt_depth_m(l) : 0.0f);
         }
         page_host->set_material_param("skirt_depth_m", skirt_depths);
-        const UpAxis up = sdf.up_at(sdf.get_base().tangent_point(0, 0)); // TODO: per vertex on a sphere (the planet's next PR)
-        page_host->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     }
     _push_render_frame();

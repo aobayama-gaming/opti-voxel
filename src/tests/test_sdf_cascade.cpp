@@ -124,7 +124,7 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
     sdf.preset = SDFCascade::Preset::FLAT;
     sdf.configure(param, 15);
     const int64_t ground = std::llround(SDFCascade::FLAT_GROUND_M / double(param.voxel_size));
-    CHECK(sdf.ground_y(12345, -6789) == ground);
+    CHECK(sdf.ground_at(12345, -6789).y == ground);
     for (int lod = 0; lod < 15; lod++) {
         const int64_t step = int64_t(1) << lod;
         for (int i = -4; i <= 4; i++) {

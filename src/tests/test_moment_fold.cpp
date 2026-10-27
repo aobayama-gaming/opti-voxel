@@ -68,7 +68,7 @@ int64_t edit_step(SDFCascade &p_sdf, const std::vector<uint32_t> &p_parts, uint3
     } else {
         const int64_t x = cx + int64_t(h.y % 1000u) - 500, z = cz + int64_t(h.z % 1000u) - 500;
         const float params[8] = { 20.0f + float(h.x % 40u), 0, 0, 0, 0, 0, 0, 0 }; // type 0: a sphere
-        CHECK(p_sdf.add_instance(0, VoxelPos(x, p_sdf.ground_y(x, z) + 200, z), nullptr, params, int(Combine::SMOOTH_UNION), 4.0f) >= 0);
+        CHECK(p_sdf.add_instance(0, VoxelPos(x, p_sdf.ground_at(x, z).y + 200, z), nullptr, params, int(Combine::SMOOTH_UNION), 4.0f) >= 0);
     }
     return int64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
 }
@@ -214,7 +214,7 @@ TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at t
         for (int i = 0; i < 24; i++) {
             const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), uint32_t(lod), 0xCA70u });
             const int64_t x = cx + int64_t(h.x % 1200u) - 600, z = cz + int64_t(h.y % 1200u) - 600; // the middle 60 m
-            const int64_t ground = with.sdf.ground_y(x, z);
+            const int64_t ground = with.sdf.ground_at(x, z).y;
             const int64_t top = ground + 1200; // 60 m up
             canopy += with.top_solid(x, z, top, lod) > ground + 100 ? 1 : 0; // solid 5 m above the ground
             bare += without.top_solid(x, z, top, lod) > ground + 100 ? 1 : 0;
@@ -227,7 +227,7 @@ TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at t
         }
         // The chunks over the forest list blobs of their own LOD only.
         std::vector<uint32_t> list;
-        snap->chunk_list(ChunkMath::chunk_at_voxel(VoxelPos(cx, with.sdf.ground_y(cx, cz), cz), lod, with.param), list);
+        snap->chunk_list(ChunkMath::chunk_at_voxel(VoxelPos(cx, with.sdf.ground_at(cx, cz).y, cz), lod, with.param), list);
         int listed = 0;
         for (const uint32_t id : list) {
             if (snap->records[id].op == Combine::ACCUM) {
@@ -253,7 +253,7 @@ TEST_CASE("Moment fold: the forest never thins out from its parts to its blobs")
         for (int i = 0; i < columns; i++) {
             const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(i), 0xC0E5u, 0u });
             const int64_t x = cx + int64_t(h.x % 1200u) - 600, z = cz + int64_t(h.y % 1200u) - 600;
-            const int64_t ground = with.sdf.ground_y(x, z);
+            const int64_t ground = with.sdf.ground_at(x, z).y;
             const int64_t top = with.top_solid(x, z, ground + 1200, lod);
             if (top > ground + 100) {
                 canopy++;

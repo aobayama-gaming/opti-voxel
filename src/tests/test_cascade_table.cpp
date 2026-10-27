@@ -116,15 +116,15 @@ bool dropped_at(const SDFCascade &p_sdf, const std::shared_ptr<const InstanceSna
 
 } // namespace
 
-TEST_CASE("SDFCascade table: ground_y is the bare cascade's top solid voxel") {
+TEST_CASE("SDFCascade table: ground_at is the bare cascade's top solid voxel") {
     ScatteredCascade t(0);
     for (int i = 0; i < 48; i++) {
         const int64_t x = int64_t(i) * 977 - 20000;
         const int64_t z = int64_t(i) * -613 + 5000;
-        const int64_t y = t.sdf.ground_y(x, z);
+        const int64_t y = t.sdf.ground_at(x, z).y;
         CHECK(!(bare_sdf(t.sdf, VoxelPos(x, y, z), 0) > 0.0f));
         CHECK(bare_sdf(t.sdf, VoxelPos(x, y + 1, z), 0) > 0.0f);
-        CHECK(t.sdf.ground_y(x, z) == y); // deterministic
+        CHECK(t.sdf.ground_at(x, z).y == y); // deterministic
     }
 }
 
@@ -158,7 +158,7 @@ TEST_CASE("SDFCascade table: the scatter stands on the ground, folded at lattice
         for (int i = 0; i < 16; i++) {
             WorldPos p;
             const int64_t step = int64_t(1) << lod;
-            p.voxel = VoxelPos((8000 + i * 37) * step, t.sdf.ground_y(8000 * step, 0) / step * step, (i * 53 - 400) * step);
+            p.voxel = VoxelPos((8000 + i * 37) * step, t.sdf.ground_at(8000 * step, 0).y / step * step, (i * 53 - 400) * step);
             snap->point_candidates(p.voxel, lod, list);
             CHECK(list.empty());
             CHECK(float_bits(t.sdf.evaluate(p, lod)) == float_bits(bare_sdf(t.sdf, p.voxel, lod)));
@@ -234,7 +234,7 @@ TEST_CASE("SDFCascade table: the skirt covers the ground's step plus the instanc
 TEST_CASE("SDFCascade table: runtime edits on the cascade") {
     ScatteredCascade t(0);
     const int64_t x = 1000, z = -3000;
-    const VoxelPos anchor(x, t.sdf.ground_y(x, z), z);
+    const VoxelPos anchor(x, t.sdf.ground_at(x, z).y, z);
     const float params[8] = { 20.0f, 3.0f, 0, 0, 0, 0, 0, 0 };
     WorldPos p;
     p.voxel = anchor + VoxelPos(0, 10, 0);
@@ -311,7 +311,7 @@ TEST_CASE("SDFCascade table: the shapes gallery on the flat preset: cubes holed 
         return sdf.evaluate(p, 0);
     };
     // Far from the shapes: 10 m above the flat ground.
-    const VoxelPos ground(0, sdf.ground_y(0, 0), 0);
+    const VoxelPos ground(0, sdf.ground_at(0, 0).y, 0);
     CHECK(ground.y == std::llround(SDFCascade::FLAT_GROUND_M / vs));
     CHECK(std::abs(sdf_at(ground, 5000.0, 10.0, 5000.0) - 10.0f) < 1e-3f);
     // Rings around vertical lines: the yaw of an instance doesn't move them.
@@ -391,7 +391,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
         const int64_t window = std::llround(scene.area_m / double(scene.voxel));
         const VoxelPos centre(std::llround(SDFTable::SCENE_X / double(scene.voxel)), 0, std::llround(SDFTable::SCENE_Z / double(scene.voxel)));
         const int64_t above = std::llround(scene.above_m / double(scene.voxel));
-        const int64_t ground_c = sdf.ground_y(centre.x, centre.z);
+        const int64_t ground_c = sdf.ground_at(centre.x, centre.z).y;
         for (int lod = 0; lod <= 6; lod++) {
             CAPTURE(lod);
             if (scene.stream) {
@@ -417,7 +417,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
                 const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x5EA4u });
                 const VoxelPos column(WorldCoord::floor_div(centre.x + int64_t(h.x % uint32_t(window)) - window / 2, unit) * unit, 0,
                         WorldCoord::floor_div(centre.z + int64_t(h.y % uint32_t(window)) - window / 2, unit) * unit);
-                const int64_t ground = sdf.ground_y(column.x, column.z);
+                const int64_t ground = sdf.ground_at(column.x, column.z).y;
                 // The LOD-L top surface on Λ_{L+1}: scan down.
                 int64_t y = WorldCoord::floor_div(ground + above, unit) * unit;
                 while (at(column, y - unit, lod) > 0.0 && y > ground - above) {
@@ -458,7 +458,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
 TEST_CASE("SDFCascade table: an edit re-meshes only the LODs its instance is listed at") {
     ScatteredCascade t(0);
     const float params[8] = { 4.0f, 0.4f, 0, 0, 0, 0, 0, 0 }; // a 2 m rock (sphere type 0: radius 4 voxels)
-    const VoxelPos at(-104, t.sdf.ground_y(-104, -190), -190);
+    const VoxelPos at(-104, t.sdf.ground_at(-104, -190).y, -190);
     const int id = t.sdf.add_instance(0, at, nullptr, params, int(Combine::UNION), 0.0f);
     CHECK(id >= 0);
     if (id < 0) {
@@ -517,7 +517,7 @@ TEST_CASE("SDFCascade table: list lengths are flat in the number of instances at
                 const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x7111u });
                 const int64_t x = std::llround((SDFTable::SCENE_X + (double(h.x >> 8) / 16777216.0 - 0.5) * area) / 0.5);
                 const int64_t z = std::llround((SDFTable::SCENE_Z + (double(h.y >> 8) / 16777216.0 - 0.5) * area) / 0.5);
-                snap->chunk_list(chunk_at_voxel(VoxelPos(x, t.sdf.ground_y(x, z), z), lod, t.param), list);
+                snap->chunk_list(chunk_at_voxel(VoxelPos(x, t.sdf.ground_at(x, z).y, z), lod, t.param), list);
                 longest[run][lod] = MAX(longest[run][lod], int64_t(list.size()));
             }
         }
@@ -716,7 +716,7 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
         return;
     }
     const int64_t x = std::llround(SDFTable::SCENE_X / 0.05), z = std::llround(SDFTable::SCENE_Z / 0.05);
-    const VoxelPos centre(x, sdf.ground_y(x, z), z);
+    const VoxelPos centre(x, sdf.ground_at(x, z).y, z);
     // An edit over the centre: a sphere smooth-unioned into the canopy, after the streamed records in fold order.
     const uint32_t scene_end = sdf.get_snapshot()->records.size();
     const float sphere[8] = { 30.0f, 0, 0, 0, 0, 0, 0, 0 };
@@ -776,7 +776,7 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
             WorldPos p;
             p.voxel.x = WorldCoord::floor_div(lo.x + int64_t(h.x % uint32_t(hi.x - lo.x + 1)), unit) * unit;
             p.voxel.z = WorldCoord::floor_div(lo.z + int64_t(h.y % uint32_t(hi.z - lo.z + 1)), unit) * unit;
-            p.voxel.y = WorldCoord::floor_div(sdf.ground_y(p.voxel.x, p.voxel.z) + int64_t(h.z % 400u) - 40, unit) * unit;
+            p.voxel.y = WorldCoord::floor_div(sdf.ground_at(p.voxel.x, p.voxel.z).y + int64_t(h.z % 400u) - 40, unit) * unit;
             if (p.voxel.x < lo.x || p.voxel.y < lo.y || p.voxel.z < lo.z || p.voxel.x > hi.x || p.voxel.y > hi.y || p.voxel.z > hi.z) {
                 continue;
             }

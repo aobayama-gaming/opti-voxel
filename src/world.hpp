@@ -131,6 +131,19 @@ public:
     VoxelPos voxel_at(const double p_render_pos[3]) const;
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point).
     void tangent_position(double p_u_m, double p_v_m, double r_render_pos[3]) const;
+    // What the hosts add to their scenes' render positions (poses made for the flat world from its world origin, its
+    // datum BaseSurface::DATUM_M up) so they stand the same over a planet's +y pole: 0 on the flat world. Before start
+    // too (from the settings), so a host places its scene before the first scan.
+    void scene_shift(double r_shift_m[3]) const;
+    // The render origin's LOD0 voxel; before start, the world origin start() will take (start_origin).
+    VoxelPos render_origin_voxel() const;
+    // The base's up at a render-space position (BaseSurface::up_dir): +y on the flat world, the planet's radial direction.
+    UpAxis up_at(const double p_render_pos[3]) const;
+    // The planet's base in render space, for the shaders' altitude, up and cloud shell; false on the flat base. Its centre
+    // in metres from the render origin (changes with it), its radius in metres, and K = |centre|^2 - radius^2 (m^2) from
+    // double: the altitude (|p|^2 - 2 p.c + K) / (|p - c| + R) is then within ~1e-4 m in float32 at Earth's radius, where
+    // |p - c| - R would be within half a metre.
+    bool planet_render(Float3 &r_centre_m, float &r_radius_m, float &r_k_m2) const;
 
     // Render-origin rebasing. Render space (every Float3 the host passes or gets) is metres from the render origin,
     // which starts at the world origin. Called by the host before frame(): when the camera is farther than
@@ -190,6 +203,14 @@ private:
     ScanView scan_view;
     Float3 last_camera; // the camera of the last frame (and start), render space
     ChunkId world_origin_chunk;
+    // The world origin start() takes: the request snapped down to the root chunk span (2^lod_numbers chunk-id units), so
+    // the start is the same for any requested origin; on a planet a request of (0, 0, 0) stands for its pole
+    // (pole_lift: the camera starts near the render origin there), any other is absolute. It is also the first render
+    // origin; a rebase then moves that one by even ids only (ChunkMath::recentered_origin), so render-relative Morton keys
+    // are no longer root-aligned after one.
+    ChunkId start_origin() const;
+    // The settings' planet base (SDFCascade::planet_base), the default flat one without a planet: what start() configures.
+    BaseSurface settings_planet() const;
     int64_t rebases = 0;
     bool has_camera = false;
     double far_reach = 1.0; // the farthest point drawn / the far plane's depth: 1 / cos(the diagonal half-FOV)

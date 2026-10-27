@@ -139,6 +139,8 @@ func _enter_tree() -> void:
 			terrain.dual_contouring = true
 	if terrain:
 		terrain.set_dig_settings(dig_settings)
+		if terrain.terrain_mode != 4 and spawn_tangent == null:
+			position += terrain.get_scene_shift()  # on a planet: over its +y pole, before the terrain's first scan
 
 func _ready():
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
@@ -149,12 +151,13 @@ func _ready():
 		altitude_terrain = terrain
 		if spawn_tangent != null:
 			global_position = terrain.get_tangent_position(spawn_tangent)
-		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
+		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn, along
+		# the terrain's up there.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
 			if absf(d - spawn_altitude) < spawn_altitude * 0.25:
 				break
-			global_position.y += spawn_altitude - d
+			global_position += terrain.get_up_at(global_position) * (spawn_altitude - d)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if terrain:
 		if "--overlay=video" in Presets.user_args():
@@ -165,8 +168,8 @@ func _ready():
 		else:
 			_make_hud()
 			hud_visible = not "--overlay=none" in Presets.user_args()  # a clean screen; TAB shows the HUD
-	yaw = rotation.y
 	pitch = camera.rotation.x
+	_stand()
 	_make_flashlight("--flashlight=1" in Presets.user_args())
 	for a in Presets.user_args():
 		if a.begins_with("--marks="):
@@ -303,6 +306,17 @@ func _mark(kind: String, audit: bool) -> void:
 			return
 	_write_mark(m)
 
+# The body stood on the terrain's up where it is (+y on the flat world: the yaw alone), turned by the mouse's yaw about
+# it: Space and Shift move along it, and on a planet the horizon stays level as the player flies round it. The basis is
+# carried along by the turn from its last up to this one, so the heading follows the flight (no drift, no flip at the
+# far pole) instead of being rebuilt from +y.
+func _stand(p_turn: float = 0.0) -> void:
+	var up: Vector3 = altitude_terrain.get_up_at(global_position) if altitude_terrain else Vector3.UP
+	var b := Basis(Quaternion(global_basis.y.normalized(), up)) * global_basis
+	global_basis = (Basis(up, p_turn) * b).orthonormalized()
+	yaw = rotation.y  # the marks' heading
+
+
 func _write_mark(m: Dictionary) -> void:
 	var path := marks_dir + "/marks.jsonl"
 	var f := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
@@ -313,11 +327,11 @@ func _write_mark(m: Dictionary) -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		yaw -= event.relative.x * mouse_sensitivity
+		var turn: float = -event.relative.x * mouse_sensitivity
 		pitch -= event.relative.y * mouse_sensitivity
 		pitch = clamp(pitch, -PI/2, PI/2)
 		
-		rotation.y = yaw
+		_stand(turn)
 		camera.rotation.x = pitch
 		camera.rotation.y = 0
 		camera.rotation.z = 0
@@ -450,3 +464,4 @@ func _process(delta: float) -> void:
 		smoothed_altitude *= pow(altitude / smoothed_altitude, 1.0 - exp(-delta / ALTITUDE_TAU))
 		move_speed = maxf(speed, smoothed_altitude * FLY_RATE)
 	position += direction * move_speed * delta
+	_stand()

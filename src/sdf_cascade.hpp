@@ -66,12 +66,23 @@ public:
     // > 0: the ground's base is a sphere of this radius (metres) centred on the voxel (0, 0, 0) (BaseSurface::sphere: a
     // centre on its 2^31-voxel grid, exactly), its +y pole at y = radius; 0: the flat datum.
     double planet_radius_m = 0.0;
-    // The base of a planet of p_radius_m at p_voxel_size, its switch LOD the lowest (from BaseSurface::SWITCH_LOD) whose
-    // cells keep the radius form's float error small: a SPHERE, or not one when BaseSurface::sphere refuses it (ERR).
+    // A planet's switch LOD: SWITCH_MARGIN over the lowest whose cells keep the radius form's float error small
+    // (BaseSurface::MAX_RADIUS_CELLS), which is BaseSurface::SWITCH_LOD at Earth's radius and 5 cm. The curvature form
+    // below it holds ~3 LODs further (its neglected terms grow as the region over the radius), at any radius; a small
+    // planet goes down to 0, the radius form alone.
+    static constexpr int SWITCH_MARGIN = 2;
+    // A planet's relief: every octave (and a climate's height terms, amp_cap) at most this fraction of its radius, so a
+    // small planet stays a ball (Earth: 199 km, far over MAX_AMP_M).
+    static constexpr double PLANET_RELIEF = 1.0 / 32.0;
+    // A planet's octaves start at most PLANET_RELIEF / PLANET_HEADROOM of its radius, so a biome's multiplier up to this
+    // still fits under the relief (the shipped climates go to 4.5: the flat world's big octaves sit at 1/3 of its cap).
+    static constexpr double PLANET_HEADROOM = 8.0;
+    // The base of a planet of p_radius_m at p_voxel_size (SWITCH_MARGIN): a SPHERE, or not one when BaseSurface::sphere
+    // refuses it (ERR).
     static BaseSurface planet_base(double p_radius_m, double p_voxel_size) {
         const double r = p_radius_m / p_voxel_size;
         const int fit = int(std::ceil(std::log2(r / double(BaseSurface::MAX_RADIUS_CELLS))));
-        return BaseSurface::sphere(VoxelPos(0, 0, 0), r, ov::clamp(fit, BaseSurface::SWITCH_LOD, BaseSurface::MAX_SWITCH_LOD));
+        return BaseSurface::sphere(VoxelPos(0, 0, 0), r, ov::clamp(fit + SWITCH_MARGIN, 0, BaseSurface::MAX_SWITCH_LOD));
     }
     // The flat preset's ground: 50 m below the datum, halfway between the page shader's 100 m contour lines. On one
     // (300 m), a flat ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
@@ -109,18 +120,20 @@ public:
         const double vs = p_param.voxel_size;
         k_top = p_lod_count + 4;
         spec = CascadeTerrain::make_spec(SEED, k_top, STEEPNESS, channel_set, INSERT_SHIFT);
-        const double cap = MAX_AMP_M / vs;
-        amp_cap = float(cap);
-        for (Cascade::Band &b : spec.bands) {
-            b.amp = preset == Preset::CONTINENTS ? float(continent_amp_m(std::ldexp(vs, b.k)) / vs) : float(ov::min(double(b.amp), cap));
-        }
-        if (preset == Preset::FLAT) {
-            spec.bands.clear(); // no top lattice either: a chunk's run is its own level
-        }
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
         if (planet_radius_m > 0.0) {
             const BaseSurface sphere = planet_base(planet_radius_m, vs);
             base = sphere.kind() == BaseSurface::Kind::SPHERE ? sphere : base; // refused (ERR): the flat datum
+        }
+        const double cap = MAX_AMP_M / vs;
+        const double relief = base.kind() == BaseSurface::Kind::SPHERE ? PLANET_RELIEF * base.get_radius() : INFINITY;
+        amp_cap = float(ov::min(cap, relief));
+        for (Cascade::Band &b : spec.bands) {
+            const double amp = preset == Preset::CONTINENTS ? continent_amp_m(std::ldexp(vs, b.k)) / vs : ov::min(double(b.amp), cap);
+            b.amp = float(ov::min(amp, relief / PLANET_HEADROOM));
+        }
+        if (preset == Preset::FLAT) {
+            spec.bands.clear(); // no top lattice either: a chunk's run is its own level
         }
         spec.base = base; // a climate's stretched octaves stretch along it
         voxel_size = p_param.voxel_size;
@@ -201,7 +214,7 @@ uint cascade_ground_material(Ch ch) {
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Cascade::Spec &get_spec() const { return spec; }
     int64_t get_datum_y() const { return base.datum_y(); }
-    const BaseSurface &get_base() const { return base; }
+    const BaseSurface &get_base() const override { return base; }
     const BaseSurface *get_sphere_base() const override { return base.kind() == BaseSurface::Kind::SPHERE ? &base : nullptr; }
     UpAxis up_at(const VoxelPos &p_voxel) const override { return base.up_dir(p_voxel); }
 
@@ -381,9 +394,7 @@ uint cascade_ground_material(Ch ch) {
         return at(solid);
     }
 
-    // The flat world's column (x, z): ground_along from the datum. TODO: the table's scenes still place by columns
-    // (SDFTable::ground_y); a sphere needs them on ground_along.
-    int64_t ground_y(int64_t p_x, int64_t p_z) const override { return ground_along(base.tangent_point(p_x, p_z)).y; }
+    VoxelPos ground_under(const VoxelPos &p_start) const override { return ground_along(p_start); }
 
     // cascade_terrain_sdf is sdf(), for the batches with no instance listed (point items write cascade_terrain_unit; their
     // metres come from to_metres on the CPU).

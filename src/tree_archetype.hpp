@@ -84,6 +84,8 @@ TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel);
 // The rotation (rows: absolute to local) whose local y is the unit p_up: the smallest turn from +y (the identity for
 // UP_Y), the frame trees grow in.
 void up_rotation(const UpAxis &p_up, float r_rows[9]);
+// up_rotation turned by p_yaw (radians) about its local y: rows the yaw's times the up frame's (a scene record, a rock).
+void up_yaw_rotation(const UpAxis &p_up, double p_yaw, float r_rows[9]);
 
 // Appends one tree's records to r_out (op, k, anchor, rotation, params and salt set; finish_record sets the
 // boxes and the band). p_base: the absolute LOD0 voxel at the bottom of the trunk. p_up: the unit direction the
