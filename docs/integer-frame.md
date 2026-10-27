@@ -21,11 +21,11 @@ No float ever holds an absolute coordinate. Read before touching `world_coord`, 
   is farther than that from the render origin on any axis, the origin moves under it
   (`ChunkMath::recentered_origin`: the lower corner of the camera's LOD0 chunk; any even id is an origin,
   `is_render_origin`) and the host subtracts `ChunkMath::origin_shift_m` from every render position it holds, in the
-  same frame: VoxelTerrain moves its Node3D siblings and emits `origin_shifted(shift)` for the positions scripts hold
+  same frame: VoxelTerrain moves its Node3D siblings and its camera (never in the editor) and emits `origin_shifted(shift)` for the positions scripts hold
   (bench.gd's paths); the Dawn viewer moves its camera and carries FSR's last projection over
   (`DawnUpscaler::shift_history`; Godot's TAA / FSR see a one-frame camera jump). Nothing is re-meshed: page rows are
   chunk-local under absolute ids, so the direct mesher re-sends the page decode (`origin_chunk_lo`) and recomputes
-  every page's culling box (in-flight batches' pages too); the legacy meshes move (`MeshHost::shift_meshes`, under a
+  every page's culling box (in-flight batches' pages too); the legacy meshes are placed again from their chunk ids (`MeshHost::place_mesh`, under a
   lock the legacy worker holds while it creates meshes). Only render-space code reads the origin: the discoverer takes
   the camera's absolute chunk (`set_camera(ChunkId)`), digs and instances are absolute voxels. A rebase waits while the
   validator, the page auditor or the discovery audit run (they hold render positions). Render floats then stay within
