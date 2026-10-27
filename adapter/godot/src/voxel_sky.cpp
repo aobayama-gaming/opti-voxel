@@ -144,7 +144,8 @@ void sky() {
         vec3 sun_dir = to_local * sun_world;
         vec3 color;
         if (atmo_enabled) {
-            color = atmo_sky_radiance(POSITION, EYEDIR, sun_world, cos(0.5 * LIGHT0_SIZE)) * atmo_sun_light * exposure;
+            // No `exposure`: the pages' aerial perspective is the same radiance, so the sky and the haze meet at the horizon.
+            color = atmo_sky_radiance(POSITION, EYEDIR, sun_world, cos(0.5 * LIGHT0_SIZE)) * atmo_sun_light;
         } else {
             color = physical_sky(eye, sun_dir, LIGHT0_COLOR, LIGHT0_ENERGY, LIGHT0_SIZE, exposure);
         }
@@ -173,7 +174,7 @@ void sky() {
             if (atmo_enabled) {
                 // The air between the camera and the cloud.
                 vec4 a = atmo_at(POSITION, EYEDIR, distance(hit, POSITION));
-                cloud_color = cloud_color * a.a + a.rgb * atmo_sun_light * exposure;
+                cloud_color = cloud_color * a.a + a.rgb * atmo_sun_light;
             }
             color = mix(color, cloud_color, density * smoothstep(0.0, 0.08, eye.y));
         }
@@ -345,13 +346,10 @@ void VoxelSky::_process(double) {
         RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_light", light);
     }
     const Vector3 towards = sun->get_global_transform().basis.get_column(2).normalized();
-    if (towards != sun_dir_sent) {
-        sun_dir_sent = towards;
-        Node *parent = get_parent();
-        for (int i = 0; parent && i < parent->get_child_count(); i++) {
-            if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {
-                terrain->set_sun_direction(towards);
-            }
+    Node *parent = get_parent();
+    for (int i = 0; parent && i < parent->get_child_count(); i++) {
+        if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {
+            terrain->set_sun_direction(towards); // every frame: a terrain that starts later gets it at once
         }
     }
 }

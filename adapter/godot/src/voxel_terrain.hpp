@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <memory>
+
 #include "godot_cpp/classes/node3d.hpp"
 #include "godot_cpp/classes/wrapped.hpp"
 #include "godot_cpp/variant/packed_float32_array.hpp"
@@ -65,10 +68,11 @@ private:
     void _push_render_frame();
     // The atmosphere's uniforms to the pages and the VoxelSky siblings (World::start; its textures once made).
     void _push_atmosphere(const Dictionary &p_params);
-    // The atmosphere's textures (Atmosphere::TexturesFn, render thread): their RenderingServer RIDs, then
-    // _push_atmosphere on the main thread; invalid ones free them.
-    void _rt_atmosphere_textures(ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter);
-    RID atmosphere_rids[2]; // render thread
+    // The atmosphere's textures (Atmosphere::TexturesFn, render thread): their RenderingServer RIDs in p_rids, then
+    // _push_atmosphere on the main thread if the terrain p_terrain still exists; invalid ones free them. Static: the
+    // world's stop posts the last call, which runs after the node may be gone.
+    static void _rt_atmosphere_textures(RDDevice *p_device, std::shared_ptr<std::array<RID, 2>> p_rids, ObjectID p_terrain,
+            ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter);
     float atmosphere_range_sent = -1.0f; // the last global atmo_range_m
 
 public:

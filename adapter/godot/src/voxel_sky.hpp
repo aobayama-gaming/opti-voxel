@@ -87,7 +87,6 @@ private:
     Dictionary atmosphere; // set_atmosphere's
     float atmosphere_gain = 3.14159265f;
     Vector3 sun_light_sent; // the last atmo_sun_light set
-    Vector3 sun_dir_sent;
 
     DirectionalLight3D *sun = nullptr; // the sibling the sky's sun is (LIGHT0)
     Ref<Environment> environment;

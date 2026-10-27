@@ -13,6 +13,7 @@
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
+#include <godot_cpp/core/object.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <map>
 
@@ -823,27 +824,30 @@ void VoxelTerrain::_push_atmosphere(const Dictionary &p_params) {
     }
 }
 
-void VoxelTerrain::_rt_atmosphere_textures(ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) {
+void VoxelTerrain::_rt_atmosphere_textures(RDDevice *p_device, std::shared_ptr<std::array<RID, 2>> p_rids, ObjectID p_terrain,
+        ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) {
     RenderingServer *rs = RenderingServer::get_singleton();
-    for (RID &rid : atmosphere_rids) {
+    for (RID &rid : *p_rids) {
         if (rid.is_valid()) {
             rs->free_rid(rid);
             rid = RID();
         }
     }
     if (!p_volume.is_valid()) {
-        return; // the world stops: its pages and the sky's use go with it
+        return; // the world stops (_teardown turned the atmosphere off on the pages and the sky)
     }
-    atmosphere_rids[0] = rs->texture_rd_create(main_device->get_rid(p_volume));
-    atmosphere_rids[1] = rs->texture_rd_create(main_device->get_rid(p_multiscatter));
+    (*p_rids)[0] = rs->texture_rd_create(p_device->get_rid(p_volume));
+    (*p_rids)[1] = rs->texture_rd_create(p_device->get_rid(p_multiscatter));
     // The materials are set on the main thread.
-    const RID volume = atmosphere_rids[0];
-    const RID multiscatter = atmosphere_rids[1];
-    godot_callable([this, volume, multiscatter]() {
-        Dictionary params;
-        params["atmo_volume"] = volume;
-        params["atmo_multiscatter"] = multiscatter;
-        _push_atmosphere(params);
+    const RID volume = (*p_rids)[0];
+    const RID multiscatter = (*p_rids)[1];
+    godot_callable([p_terrain, volume, multiscatter]() {
+        if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(ObjectDB::get_instance(p_terrain))) {
+            Dictionary params;
+            params["atmo_volume"] = volume;
+            params["atmo_multiscatter"] = multiscatter;
+            terrain->_push_atmosphere(params);
+        }
     }).call_deferred();
 }
 
@@ -993,7 +997,8 @@ void VoxelTerrain::_ready() {
         hosts.meshes = mesh_host;
     }
     hosts.hidden_meshes = []() -> std::unique_ptr<MeshHost> { return std::make_unique<GodotMeshHost>(); };
-    hosts.atmosphere_textures = [this](ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) { _rt_atmosphere_textures(p_volume, p_multiscatter); };
+    hosts.atmosphere_textures = [device = main_device, rids = std::make_shared<std::array<RID, 2>>(), id = ObjectID(get_instance_id())](
+                                        ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) { _rt_atmosphere_textures(device, rids, id, p_volume, p_multiscatter); };
     const Float3 camera_pos = camera != nullptr ? ov_f3(camera->get_global_position()) : Float3();
     const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
     const double camera_far = _camera_far();
@@ -1159,6 +1164,14 @@ void VoxelTerrain::_teardown() {
     if (gpu_profiler) {
         RDUtils::delete_on_render_thread(gpu_profiler);
         gpu_profiler = nullptr;
+    }
+    if (world.get_atmosphere()) {
+        // Off on the pages and the sky before its textures go (the stop's last call frees them).
+        Dictionary off;
+        off["atmo_enabled"] = false;
+        off["atmo_volume"] = RID();
+        off["atmo_multiscatter"] = RID();
+        _push_atmosphere(off);
     }
     world.stop();
     if (page_host) {
