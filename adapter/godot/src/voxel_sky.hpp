@@ -1,5 +1,7 @@
 #pragma once
 
+#include <godot_cpp/classes/directional_light3d.hpp>
+#include <godot_cpp/classes/environment.hpp>
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/shader.hpp>
 #include <godot_cpp/classes/shader_material.hpp>
@@ -23,8 +25,13 @@ class VoxelSky : public Node {
 public:
     // The GLSL both shaders splice in: the cloud uniforms and `cloud_uv` / `cloud_density` / `cloud_hit`.
     static String glsl_clouds();
+    // The atmosphere's uniforms and the core's lookups (Atmosphere::glsl_lookup), after glsl_clouds in both shaders.
+    static String glsl_atmosphere();
     // The sky shader's full code.
     static String sky_shader_code();
+    // The atmosphere's per-frame uniforms, global (every page material and the sky read them): the camera volume's
+    // range (VoxelTerrain) and the sun's light (VoxelSky). Before a shader that declares them compiles (once).
+    static void add_atmosphere_globals();
 
     void set_cloud_texture(const Ref<Texture2D> &p_texture);
     Ref<Texture2D> get_cloud_texture() const;
@@ -46,8 +53,16 @@ public:
     // The terrain's render frame (VoxelTerrain, at start and whenever its render origin moves): the origin's LOD0 voxel
     // (low words: the shading frame's), the voxel size and the base's uniforms (GLSL_CLOUDS: World::base_render).
     void set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, const Dictionary &p_base);
+    // The terrain's atmosphere (VoxelTerrain, once its world starts with one): its uniforms (GLSL_ATMOSPHERE; the
+    // samplers as RenderingServer texture RIDs). atmo_enabled turns the environment's fog off: the atmosphere is the
+    // haze.
+    void set_atmosphere(const Dictionary &p_params);
+    // The sun's light in the atmosphere: its colour times its energy times this (pi: Godot's lights carry it).
+    void set_atmosphere_gain(float p_gain);
+    float get_atmosphere_gain() const;
 
     void _ready() override;
+    void _process(double p_delta) override;
 
 protected:
     static void _bind_methods();
@@ -68,6 +83,13 @@ private:
     Vector3i origin_voxel_lo; // set_render_frame's
     float voxel_m = 0.5f;
     Dictionary base;
+    Dictionary atmosphere; // set_atmosphere's
+    float atmosphere_gain = 3.14159265f;
+    Vector3 sun_light_sent; // the last atmo_sun_light set
+    Vector3 sun_dir_sent;
+
+    DirectionalLight3D *sun = nullptr; // the sibling the sky's sun is (LIGHT0)
+    Ref<Environment> environment;
 
     Ref<Shader> shader;
     Ref<ShaderMaterial> material;

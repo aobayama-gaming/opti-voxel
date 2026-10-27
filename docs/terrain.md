@@ -63,5 +63,5 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   radius < 0.4% from LOD 12; the forms' gap at the switch 0.35%. FrameSpike's `base_*` probes check the GLSL
   bit for bit. The render side reads the base only through `BaseSurface::glsl_render` (render-space
   `base_altitude`, `base_up`, `base_level_span`, from `BaseSurface::render`'s uniforms in double, `World::base_render`):
-  the pages' heights and slopes, the sky's frame and the cloud layer (`docs/look.md`). A new base kind adds its case to
-  those three functions and to `render`, and every render user follows it.
+  the pages' heights and slopes, the sky's frame, the cloud layer and the atmosphere (`docs/look.md`). A new base kind
+  adds its case to those three functions, to `render` and to `curvature_radius_m`, and every render user follows it.

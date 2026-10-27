@@ -2,12 +2,15 @@
 
 #include "voxel_terrain.hpp"
 
-#include "godot_conv.hpp"
+#include "atmosphere.hpp"
 #include "base_surface.hpp"
+#include "godot_conv.hpp"
 #include "shade_frame_glsl.hpp"
 #include "sky_glsl.hpp"
 
+#include <godot_cpp/classes/directional_light3d.hpp>
 #include <godot_cpp/classes/environment.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/sky.hpp>
 #include <godot_cpp/classes/world_environment.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -88,7 +91,20 @@ vec3 wind_sway(vec3 p) {
 }
 )glsl";
 
-// Godot's PhysicalSkyMaterial (SkyGLSL: sky_glsl.hpp, shared with the Dawn viewer), with the cloud layer blended over it.
+// The atmosphere's uniforms in both shaders (after GLSL_CLOUDS: the base), then the core's lookups (Atmosphere::glsl_lookup).
+// VoxelTerrain sets them once its world starts with an atmosphere (off until then): the camera volume and the
+// multiple-scattering table, the medium; per frame the global atmo_range_m (VoxelTerrain) and atmo_sun_light (VoxelSky:
+// the sun's colour times its energy times atmosphere_gain).
+static constexpr const char GLSL_ATMOSPHERE[] = R"glsl(
+uniform bool atmo_enabled = false;
+uniform sampler2D atmo_volume : filter_linear, repeat_enable;
+uniform sampler2D atmo_multiscatter : filter_linear;
+global uniform float atmo_range_m;
+global uniform vec3 atmo_sun_light;
+)glsl";
+
+// The sky: the atmosphere (Atmosphere: the camera volume's sky slice, marched per pixel from above it), or without one
+// Godot's PhysicalSkyMaterial (SkyGLSL: sky_glsl.hpp, shared with the Dawn viewer); the cloud layer blended over it.
 static constexpr const char SKY_SHADER[] = R"gdshader(
 shader_type sky;
 
@@ -108,7 +124,11 @@ float shade_voxel_m() {
 
 /*GLSL_SHADE_FRAME*/
 /*GLSL_CLOUDS*/
+/*GLSL_ATMOSPHERE*/
 /*GLSL_SKY*/
+
+// The sun's disk over the atmosphere: its light this many times a sky radiance of 1.
+const float SUN_DISK = 40.0;
 
 void sky() {
     if (!LIGHT0_ENABLED) { // no sun: black (a sky function has no return)
@@ -124,7 +144,17 @@ void sky() {
         vec3 eye = to_local * EYEDIR;
         vec3 sun_world = normalize(LIGHT0_DIRECTION);
         vec3 sun_dir = to_local * sun_world;
-        vec3 color = physical_sky(eye, sun_dir, LIGHT0_COLOR, LIGHT0_ENERGY, LIGHT0_SIZE, exposure);
+        vec3 color;
+        if (atmo_enabled) {
+            vec4 a = base_altitude(POSITION) > atmo_top_m ? atmo_integrate(POSITION, EYEDIR, sun_world, ATMO_SPACE_STEPS) : atmo_sky(POSITION, EYEDIR);
+            color = a.rgb * atmo_sun_light;
+            if (dot(EYEDIR, sun_world) > cos(0.5 * LIGHT0_SIZE)) {
+                color += atmo_sun_light * atmo_transmittance(POSITION, sun_world, ATMO_SUN_STEPS) * SUN_DISK;
+            }
+            color *= exposure;
+        } else {
+            color = physical_sky(eye, sun_dir, LIGHT0_COLOR, LIGHT0_ENERGY, LIGHT0_SIZE, exposure);
+        }
 
         // The cloud layer where the view ray meets it (above the camera only). Two reads: the density here, and the
         // density towards the sun (along the layer), which lights the edge of a cloud that thins that way. The sun's
@@ -137,11 +167,21 @@ void sky() {
             float sun_up = dot(sun_world, hit_up);
             vec3 towards_sun = hit + (sun_world - hit_up * sun_up) * (0.02 * cloud_scale_m / max(sun_up, 0.15));
             float lit = 1.0 - 0.75 * cloud_density(cloud_texel(towards_sun, base_up(towards_sun)));
-            vec3 rayleigh_beta;
-            vec3 mie_beta;
-            sky_betas(sun_dir, rayleigh_beta, mie_beta);
-            vec3 sun_light = LIGHT0_COLOR * sky_extinction(sun_dir.y, rayleigh_beta, mie_beta) * (sky_sun_energy(sun_dir, LIGHT0_ENERGY) / max(LIGHT0_ENERGY, 1e-3));
+            vec3 sun_light;
+            if (atmo_enabled) {
+                sun_light = LIGHT0_COLOR * atmo_transmittance(hit, sun_world, ATMO_SUN_STEPS);
+            } else {
+                vec3 rayleigh_beta;
+                vec3 mie_beta;
+                sky_betas(sun_dir, rayleigh_beta, mie_beta);
+                sun_light = LIGHT0_COLOR * sky_extinction(sun_dir.y, rayleigh_beta, mie_beta) * (sky_sun_energy(sun_dir, LIGHT0_ENERGY) / max(LIGHT0_ENERGY, 1e-3));
+            }
             vec3 cloud_color = mix(color * 1.1, sun_light * exposure, 0.85 * lit);
+            if (atmo_enabled) {
+                // The air between the camera and the cloud.
+                vec4 a = atmo_at(POSITION, EYEDIR, distance(hit, POSITION));
+                cloud_color = cloud_color * a.a + a.rgb * atmo_sun_light * exposure;
+            }
             color = mix(color, cloud_color, density * smoothstep(0.0, 0.08, eye.y));
         }
         COLOR = color;
@@ -153,10 +193,26 @@ String VoxelSky::glsl_clouds() {
     return String(GLSL_CLOUDS).replace("/*GLSL_BASE_RENDER*/", godot_str(BaseSurface::glsl_render_uniforms() + BaseSurface::glsl_render()));
 }
 
+String VoxelSky::glsl_atmosphere() {
+    return String(GLSL_ATMOSPHERE) + godot_str(Atmosphere::glsl_medium_uniforms() + Atmosphere::glsl_lookup());
+}
+
+void VoxelSky::add_atmosphere_globals() {
+    static bool added = false;
+    if (added) {
+        return;
+    }
+    added = true;
+    RenderingServer *rs = RenderingServer::get_singleton();
+    rs->global_shader_parameter_add("atmo_range_m", RenderingServer::GLOBAL_VAR_TYPE_FLOAT, 1.0);
+    rs->global_shader_parameter_add("atmo_sun_light", RenderingServer::GLOBAL_VAR_TYPE_VEC3, Vector3(1.0f, 1.0f, 1.0f));
+}
+
 String VoxelSky::sky_shader_code() {
     return String(SKY_SHADER)
             .replace("/*GLSL_SHADE_FRAME*/", godot_str(ShadeFrame::glsl()))
             .replace("/*GLSL_CLOUDS*/", glsl_clouds())
+            .replace("/*GLSL_ATMOSPHERE*/", glsl_atmosphere())
             .replace("/*GLSL_SKY*/", godot_str(SkyGLSL::glsl()));
 }
 
@@ -173,6 +229,8 @@ void VoxelSky::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_cloud_wind"), &VoxelSky::get_cloud_wind);
     ClassDB::bind_method(D_METHOD("set_cloud_shadow", "strength"), &VoxelSky::set_cloud_shadow);
     ClassDB::bind_method(D_METHOD("get_cloud_shadow"), &VoxelSky::get_cloud_shadow);
+    ClassDB::bind_method(D_METHOD("set_atmosphere_gain", "gain"), &VoxelSky::set_atmosphere_gain);
+    ClassDB::bind_method(D_METHOD("get_atmosphere_gain"), &VoxelSky::get_atmosphere_gain);
     ClassDB::bind_method(D_METHOD("set_wind_sway_m", "metres"), &VoxelSky::set_wind_sway_m);
     ClassDB::bind_method(D_METHOD("get_wind_sway_m"), &VoxelSky::get_wind_sway_m);
     ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "cloud_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_cloud_texture", "get_cloud_texture");
@@ -182,6 +240,7 @@ void VoxelSky::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "cloud_wind"), "set_cloud_wind", "get_cloud_wind");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_shadow", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_cloud_shadow", "get_cloud_shadow");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "wind_sway_m", PROPERTY_HINT_RANGE, "0,1,0.005"), "set_wind_sway_m", "get_wind_sway_m");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "atmosphere_gain", PROPERTY_HINT_RANGE, "0,100,0.01"), "set_atmosphere_gain", "get_atmosphere_gain");
 }
 
 void VoxelSky::set_cloud_texture(const Ref<Texture2D> &p_texture) {
@@ -257,6 +316,50 @@ void VoxelSky::set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel
     _apply_frame();
 }
 
+void VoxelSky::set_atmosphere(const Dictionary &p_params) {
+    Array keys = p_params.keys();
+    for (int i = 0; i < keys.size(); i++) {
+        atmosphere[keys[i]] = p_params[keys[i]];
+    }
+    if (material.is_null()) {
+        return; // before _ready: _apply_frame sends everything
+    }
+    _apply_frame();
+}
+
+void VoxelSky::set_atmosphere_gain(float p_gain) {
+    atmosphere_gain = MAX(p_gain, 0.0f);
+}
+
+float VoxelSky::get_atmosphere_gain() const {
+    return atmosphere_gain;
+}
+
+// The sun's light and direction for the atmosphere: the global atmo_sun_light (both shaders) and the terrains' sun
+// (its camera volume), when they change.
+void VoxelSky::_process(double) {
+    if (sun == nullptr) {
+        return;
+    }
+    const Color c = sun->get_color().srgb_to_linear();
+    const float e = float(sun->get_param(Light3D::PARAM_ENERGY)) * atmosphere_gain;
+    const Vector3 light(c.r * e, c.g * e, c.b * e);
+    if (light != sun_light_sent) {
+        sun_light_sent = light;
+        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_light", light);
+    }
+    const Vector3 towards = sun->get_global_transform().basis.get_column(2).normalized();
+    if (towards != sun_dir_sent) {
+        sun_dir_sent = towards;
+        Node *parent = get_parent();
+        for (int i = 0; parent && i < parent->get_child_count(); i++) {
+            if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {
+                terrain->set_sun_direction(towards);
+            }
+        }
+    }
+}
+
 Dictionary VoxelSky::cloud_params() const {
     Dictionary params;
     params["cloud_tex"] = cloud_texture.is_valid() ? cloud_texture->get_rid() : RID();
@@ -270,6 +373,7 @@ Dictionary VoxelSky::cloud_params() const {
 }
 
 void VoxelSky::_ready() {
+    add_atmosphere_globals();
     shader.instantiate();
     shader->set_code(sky_shader_code());
     material.instantiate();
@@ -283,8 +387,14 @@ void VoxelSky::_ready() {
         }
     }
     ERR_FAIL_NULL_MSG(world_env, "VoxelSky: no WorldEnvironment sibling to put the sky on.");
+    for (int i = 0; i < parent->get_child_count(); i++) {
+        if (DirectionalLight3D *light = Object::cast_to<DirectionalLight3D>(parent->get_child(i))) {
+            sun = light;
+        }
+    }
     Ref<Environment> env = world_env->get_environment();
     ERR_FAIL_COND_MSG(env.is_null(), "VoxelSky: the WorldEnvironment has no Environment.");
+    environment = env;
     Ref<Sky> sky = env->get_sky();
     if (sky.is_null()) {
         sky.instantiate();
@@ -292,6 +402,7 @@ void VoxelSky::_ready() {
     }
     sky->set_material(material);
     _apply();
+    set_process(true);
 }
 
 // Pushes the cloud parameters and the render frame to the sky material, the cloud parameters to the terrain's page
@@ -310,6 +421,24 @@ void VoxelSky::_apply_frame() {
     Array keys = base.keys();
     for (int i = 0; i < keys.size(); i++) {
         material->set_shader_parameter(keys[i], base[keys[i]]); // the terrain sets its own pages'
+    }
+    // The atmosphere's: the samplers are RenderingServer texture RIDs, set on the material's RID.
+    keys = atmosphere.keys();
+    for (int i = 0; i < keys.size(); i++) {
+        if (atmosphere[keys[i]].get_type() == Variant::RID) {
+            RenderingServer::get_singleton()->material_set_param(material->get_rid(), keys[i], atmosphere[keys[i]]);
+        } else {
+            material->set_shader_parameter(keys[i], atmosphere[keys[i]]);
+        }
+    }
+    if (environment.is_valid() && atmosphere.has("atmo_enabled") && bool(atmosphere["atmo_enabled"])) {
+        // The atmosphere is the haze: the environment's fog stays on (Godot skips a shader's own FOG without it) with
+        // nothing of its own.
+        environment->set_fog_enabled(true);
+        environment->set_fog_density(0.0f);
+        environment->set_fog_height_density(0.0f);
+        environment->set_fog_sky_affect(0.0f);
+        environment->set_fog_aerial_perspective(0.0f);
     }
 }
 

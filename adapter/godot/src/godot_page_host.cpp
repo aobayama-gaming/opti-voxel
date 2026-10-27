@@ -265,6 +265,14 @@ void fragment() {
     ROUGHNESS = roughness;
     if (debug_view == 10 || debug_view == 11) {
         SPECULAR = 0.0; // the probe's bytes are its emission only
+    } else if (atmo_enabled && debug_view == 0) {
+        // Aerial perspective: the air between the camera and the fragment (the camera volume). FOG mixes the lit colour
+        // c into its rgb by its a: c (1 - a) + rgb a = c T + S with a = 1 - T, rgb = S / (1 - T).
+        vec3 eye = p - CAMERA_POSITION_WORLD;
+        float dist = length(eye);
+        vec4 air = atmo_at(CAMERA_POSITION_WORLD, eye / max(dist, 1e-6), dist);
+        float haze = 1.0 - air.a;
+        FOG = vec4(air.rgb * atmo_sun_light / max(haze, 1e-4), haze);
     }
 }
 
@@ -272,14 +280,18 @@ void fragment() {
 // the cloud layer where the fragment's ray to the sun crosses a cloud: the shadow of the cloud the sky shader draws
 // there. The terrain's materials have a roughness of 1, so the specular lobe is left out.
 void light() {
-    float sun = 1.0;
+    vec3 sun = vec3(1.0);
+    vec3 to_sun = mat3(INV_VIEW_MATRIX) * LIGHT;
+    if (LIGHT_IS_DIRECTIONAL && atmo_enabled) {
+        // The air between the fragment and the sun (red at dusk, none past the base's terminator).
+        sun = atmo_transmittance(v_world_pos, to_sun, ATMO_SUN_STEPS);
+    }
     if (LIGHT_IS_DIRECTIONAL && cloud_shadow > 0.0) {
-        vec3 to_sun = mat3(INV_VIEW_MATRIX) * LIGHT;
         vec3 hit;
         // VERTEX is not readable in light(): the fragment's position comes through v_world_pos.
         vec3 up = base_up(v_world_pos);
         if (dot(to_sun, up) > 0.05 && cloud_hit(v_world_pos, to_sun, up, hit)) {
-            sun = 1.0 - cloud_shadow * cloud_density(cloud_texel(hit, base_up(hit)));
+            sun *= 1.0 - cloud_shadow * cloud_density(cloud_texel(hit, base_up(hit)));
         }
     }
     DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;
@@ -313,7 +325,7 @@ GodotPageHost::GodotPageHost(RID p_scenario, RDDevice *p_device) :
     rs->shader_set_code(shader,
             String(PAGE_SHADER)
                     .replace("/*GLSL_PAGE_DECODE*/", godot_str(PageFormat::glsl_decode() + Material::glsl_constants()))
-                    .replace("/*GLSL_CLOUDS*/", VoxelSky::glsl_clouds())
+                    .replace("/*GLSL_CLOUDS*/", VoxelSky::glsl_clouds() + VoxelSky::glsl_atmosphere())
                     .replace("/*GLSL_PAGE_SHADING*/", godot_str(PageShading::glsl())));
 }
 

@@ -44,5 +44,47 @@ The shared environment and the page shader's surface detail.
   camera's local frame (its up on +y), so the horizon is the ground's and the global sun sets as the camera goes
   round.
   `tools/shot_diff.py` compares two shots of one pose (a fly far out and back with `--still=1`). Not done yet, in order: water (a sea plane with a
-  depth shader), triplanar image textures per material, grass, height fog (the ground spans kilometres on the
-  cascade terrains: a fixed fog height is wrong there), time of day.
+  depth shader), triplanar image textures per material, grass, time of day.
+
+## Atmosphere
+
+A volumetric atmosphere (`src/atmosphere.*`, `ov::Atmosphere`, owned by `World`; `--atmosphere=0|1`, on by default) made
+only from the base's shape: Hillaire 2020 ("A Scalable and Production Ready Sky and Atmosphere Rendering Technique",
+UE's SkyAtmosphere; reference code `sebh/UnrealEngineSkyAtmosphere`, MIT), its sphere assumptions replaced by the base's
+render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base kind gets an atmosphere that follows it.
+- **Medium:** Rayleigh, Mie (Cornette-Shanks, g 0.8, with absorption) and an ozone tent, Hillaire's Earth values, all
+  a function of `base_altitude` alone (clamped at 0 below the base). Every ray's extent is `base_level_span` (the top,
+  the ground), at most `atmo_max_path_m` long (a ray along the flat world's plane never leaves it). **Scale**
+  (`AtmosphereMedium::for_base`): under Earth's radius every height times R / R_earth and every coefficient over it (the
+  same optical depths: a small planet keeps a blue sky and a limb), the top at least `RELIEF_TOPS` (4) times the
+  ground's relief (`SDFCascade::get_relief_m`) so the terrain stays inside the air: Earth and the flat world keep
+  Earth's 100 km, a 2 km planet gets 250 m. `--atmosphere_scale=F` sets the factor.
+- **Passes** (compute on the main device every frame, `device->post` like the mesher; a `atmosphere` GPU timestamp):
+  the multiple-scattering table ψ_ms(sun height, altitude), 32 x 32 (Hillaire's: second order with an isotropic phase
+  over 64 directions, 1 / (1 - f_ms)), built once on a sphere of the base's curvature radius (Earth's on the flat
+  world): the only local approximation, Hillaire's own. Then the **camera volume**: a camera-centred grid, 128
+  azimuths x 64 elevations round `base_up` at the camera (the elevation squared from the horizon, so the texels are
+  finest there), 32 slices, quadratic out to `range_m` (the camera's horizon plus 128 km), the last slice the whole
+  ray (the sky, the base's Lambert bounce at its end). One invocation marches a column; each sample's sun
+  transmittance is an 8-step march through `base_altitude` (no (r, mu) transmittance table). A texel holds the
+  in-scattered light for a sun of illuminance 1 (RGB) and the mean transmittance (A), like UE's aerial perspective:
+  an RGBA16F atlas 128 x 2048. Independent of the camera's rotation: turning needs no reprojection.
+- **Hosts** (`Atmosphere::glsl_lookup`): `atmo_at(camera, dir, dist)` (the slices around dist, linear between them) and
+  `atmo_sky`. The sky shader draws the sky slice, or from above the atmosphere marches per pixel (24 steps:
+  `atmo_integrate`, the volume's texels too coarse for the limb), plus the sun's disk through the air; the cloud layer
+  is lit by the sun's transmittance at the cloud and hazed by the air in front of it. The page shader writes Godot's
+  `FOG` = (S / (1 - T), 1 - T), i.e. colour T + S, and `light()` takes the sun through an 8-step march from the
+  fragment (red at dusk, none past the base's terminator). The sun's light is the `DirectionalLight3D`'s colour times
+  its energy times `VoxelSky.atmosphere_gain` (pi: Godot's lights carry it, so the sky over the ground keeps
+  Hillaire's physical ratio). Per frame two global shader uniforms (`atmo_range_m` from VoxelTerrain, `atmo_sun_light`
+  from VoxelSky, which also hands the terrain the sun's direction); the textures reach the materials through
+  `texture_rd_create` (the pages) and the sky material's RID. With the atmosphere on, the environment's fog stays
+  enabled at density 0 (Godot drops a shader's `FOG` without it): the atmosphere is the haze.
+- **Checked:** `AtmosphereCheck` (in `frame_test.sh`'s report, `atmosphere_check`): the passes against a CPU reference
+  in double, sample for sample, for a flat base, Earth at its pole and 100 km up and a 2 km planet: worst relative
+  error under 0.1% (half floats), and the running object's volume. Cost (forest5cm, steady, RTX 3070 Laptop, 2 runs
+  each): 17.65 -> 18.09 ms, +0.44 ms.
+- **Limits:** the multiple scattering is a sphere's (a strongly curved, non-spherical base would want it per region);
+  the volume is rebuilt every frame from the camera, so a fast flight shows its one-frame lag far away; terrain past
+  `range_m` takes the range's air; no light shafts through terrain, no eclipses, no spectral rendering. The Dawn viewer
+  has no atmosphere yet. Volumetric clouds are the next step (the same contract and shadow march).
