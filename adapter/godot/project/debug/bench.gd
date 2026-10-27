@@ -327,10 +327,10 @@ func _ready() -> void:
 		terrain.world_origin_x = o[0].to_int()
 		terrain.world_origin_y = o[1].to_int()
 		terrain.world_origin_z = o[2].to_int()
-	add_child(terrain)
 	# The scene (camera, lights) moves with --camera_voxel: placed relative to that absolute voxel instead of the world
-	# origin (the started one: the same world point seen from another origin, as in tools/origin_parity.sh); on a
-	# planet without it, over the +y pole.
+	# origin (the one the terrain will start at: the same world point seen from another origin, as in
+	# tools/origin_parity.sh); on a planet without it, over the +y pole. Before the terrain starts: its first scan is
+	# the camera's.
 	var shift: Vector3 = terrain.get_scene_shift()
 	if args.has("camera_voxel"):
 		var cv: PackedStringArray = args["camera_voxel"].split(",")
@@ -338,16 +338,17 @@ func _ready() -> void:
 		shift = Vector3(float(cv[0].to_int() - terrain.get_render_origin_x()) * vs,
 			float(cv[1].to_int() - terrain.get_render_origin_y()) * vs, float(cv[2].to_int() - terrain.get_render_origin_z()) * vs)
 	for child in get_children():
-		if child is Node3D and child != terrain:
+		if child is Node3D:
 			child.global_position += shift
 	start_pos = camera.global_position
+	add_child(terrain)
 	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 4 or args.has("cam_pos") else "50")
 	if above_ground != "":
 		_place_above_ground(float(above_ground))  # the fly path starts there too
 		start_pos = camera.global_position
 	if _on_planet():
 		_stand_camera(float(args.get("yaw", "0")))
-		fly_dir = _level(Vector3.RIGHT)
+		fly_dir = _up_turn() * Vector3.RIGHT
 	if args.get("scenario", "load") == "approach":
 		_place_for_approach()
 	base_near = camera.near
@@ -452,17 +453,16 @@ func _up() -> Vector3:
 	return terrain.get_up_at(camera.global_position)
 
 
-## p_dir's part across the up at the camera, normalized: level there.
-func _level(p_dir: Vector3) -> Vector3:
-	var up := _up()
-	return (p_dir - up * p_dir.dot(up)).normalized()
+## The smallest turn from +y onto the up at the camera: the flat world's axes stood on it.
+func _up_turn() -> Basis:
+	return Basis(Quaternion(Vector3.UP, _up()))
 
 
 ## On a planet: --pitch and p_yaw (degrees) turn the camera about the local up as they turn it about +y on the flat
 ## world (Godot's YXZ Euler angles, then the smallest turn from +y onto the up).
 func _stand_camera(p_yaw: float) -> void:
 	var local := Basis.from_euler(Vector3(deg_to_rad(float(args.get("pitch", "-20"))), deg_to_rad(p_yaw), 0.0))
-	camera.global_basis = Basis(Quaternion(Vector3.UP, _up())) * local
+	camera.global_basis = _up_turn() * local
 
 
 func _altitudes() -> PackedFloat64Array:
@@ -639,7 +639,7 @@ func _process(delta: float) -> void:
 			var walked := (Time.get_ticks_usec() - phase_start_usec) / (float(args.get("walk_seconds", "6")) * 1e6)
 			var ahead := Vector3.FORWARD.rotated(Vector3.UP, camera.global_rotation.y)  # level, whatever the pitch
 			if _on_planet():
-				ahead = _level(-camera.global_basis.z)
+				ahead = _up().cross(camera.global_basis.x).normalized()  # the camera has no roll: its x is level
 			camera.global_position = walk_from + ahead * float(args.get("walk", "300")) * minf(walked, 1.0)
 			if walked >= 1.0:
 				_end_phase()

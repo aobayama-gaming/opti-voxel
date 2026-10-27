@@ -102,6 +102,9 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   in the cell, so every point of the base has one cell (on the flat base the datum's layer: one per column, as the
   plane's cells were; a planet's sites cover it all round, unit-tested). A site depends only on its cell and the base:
   the same from any box or origin, unit-tested near 0, 2^32 and +-2^60. Hashing 3D cells moved every lake and island.
+  On a sphere the density per area depends on the surface's slant to the cells (where it runs diagonal, more cells
+  each keep a share: ~1.2x at 45 degrees), so features thin and thicken in bands of the grid; the 640 m cells keep that
+  invisible at Earth's scale. A lake's other spots stay in its cell, and its keep-out is bounded along its axis.
   A feature is built in its site's tangent frame (`up_rotation` of the base's up: heights along it, the records
   turned onto it; the identity on the flat base), unit-tested 90 degrees round a planet where y is level. A lake is two records: a `basin` (a cylinder plus the rock's bumps, 16 m lattice)
   smooth-subtracted from the ground, then a hard-unioned `cylinder` slab whose top face is the flat lava, 4% of the

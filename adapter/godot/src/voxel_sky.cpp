@@ -50,14 +50,15 @@ bool cloud_hit(vec3 p, vec3 dir, out vec3 hit) {
 // period), carried by the wind. A planet's shell reads three planes, blended by its up's components (sharpened), so it
 // has no seam anywhere round it.
 float cloud_texel(vec3 hit) {
-    float period_m = shade_period_m(shade_period_vox(cloud_scale_m));
+    int period = shade_period_vox(cloud_scale_m);
+    float period_m = shade_period_m(period);
     float k = shade_cells(vec3(1.0 / cloud_scale_m), period_m).x / period_m;
     vec2 wind = cloud_wind * TIME;
     if (planet_radius_m <= 0.0) {
-        vec2 s = shade_frame(vec3(hit.x, 0.0, hit.z), cloud_scale_m, period_m).xz;
+        vec2 s = shade_point(vec3(hit.x, 0.0, hit.z), period).xz;
         return texture(cloud_tex, (s + wind) * k).r;
     }
-    vec3 s = shade_frame(hit, cloud_scale_m, period_m);
+    vec3 s = shade_point(hit, period);
     vec3 w = pow(abs(planet_up(hit)), vec3(4.0));
     w /= w.x + w.y + w.z;
     return w.y * texture(cloud_tex, (s.xz + wind) * k).r + w.x * texture(cloud_tex, (s.zy + wind) * k).r

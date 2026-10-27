@@ -46,7 +46,7 @@ int cell_shift(Feature p_feature, double p_voxel);
 // point stays in the middle half of its cell: on the flat base two sites of a kind are at least half a cell apart.
 void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, double p_voxel, std::vector<Site> &r_out);
 // Another spot for p_site in the middle half of its cell (hashed from its seed and p_attempt > 0; 0 keeps it) projected
-// onto the base, the rest the same: place() tries LAKE_ATTEMPTS of them for a lake before giving up on a slope.
+// onto the base (p_site itself where that leaves the cell: two cells' features never meet), the rest the same: place() tries LAKE_ATTEMPTS of them for a lake before giving up on a slope.
 Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base, double p_voxel);
 inline constexpr int LAKE_ATTEMPTS = 4;
 
@@ -68,7 +68,8 @@ struct LavaPool {
     VoxelPos top;
     UpAxis up = UP_Y;
     double radius = 0.0;
-    // Whether p_voxel is within LAKE_KEEP_OUT radii of the cylinder's axis: no tree or rock there.
+    // Whether p_voxel is within LAKE_KEEP_OUT radii of the cylinder's axis, and as far along it (not the planet's far
+    // side): no tree or rock there.
     bool near(const VoxelPos &p_voxel) const;
 };
 

@@ -162,7 +162,7 @@ bool LavaPool::near(const VoxelPos &p_voxel) const {
     const double d[3] = { double(p_voxel.x - top.x), double(p_voxel.y - top.y), double(p_voxel.z - top.z) };
     const double along = d[0] * up[0] + d[1] * up[1] + d[2] * up[2];
     const double keep = LAKE_KEEP_OUT * radius;
-    return d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - along * along < keep * keep;
+    return std::fabs(along) < keep && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - along * along < keep * keep;
 }
 
 const Kind &kind(Feature p_feature) {
@@ -188,9 +188,10 @@ Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base, double 
     }
     const int64_t cell = int64_t(1) << cell_shift(p_site.feature, p_voxel);
     const ExactNoise::UVec3 h = hash3(p_site.seed, uint32_t(p_attempt), 0x40EEu);
+    const Vector3i64 c = WorldCoord::floor_div(p_site.at, cell);
     Site s = p_site;
-    s.at = cell_point(WorldCoord::floor_div(p_site.at, cell), cell, h.x, h.z, h.y, p_base);
-    return s;
+    s.at = cell_point(c, cell, h.x, h.z, h.y, p_base);
+    return WorldCoord::floor_div(s.at, cell) == c ? s : p_site; // another cell's point of the base: its site's place
 }
 
 void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, double p_voxel, std::vector<Site> &r_out) {

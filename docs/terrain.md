@@ -39,7 +39,7 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   `GLSL_HEIGHT_SDF`). `FLAT` (the world today) is the saturated int64 datum difference with up (-0, 1, -0), so
   the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
   `SPHERE` (`World::Settings::planet_radius_m`, `--planet_radius_km=R` in bench and player: centred on the voxel
-  (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request (a request given
+  (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request ((0, 0, 0); any other
   is absolute) and in the hosts' scenes (`World::scene_shift`); `SDFCascade::planet_base` takes the switch LOD
   `SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
   under ~0.5 km; a planet's octaves and a climate's height terms are capped at `PLANET_RELIEF` (1/32) of its radius,

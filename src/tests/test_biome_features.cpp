@@ -190,7 +190,8 @@ TEST_CASE("Biome: a lava lake on flat ground is a flat lava surface below the ri
         const VoxelPos away(x + std::llround(3.0 * site.radius), top + 2, z);
         CHECK(field(lib, records, away, top) == flat_ground(away, top).w);
         // The keep-out: the lake's axis, not its height.
-        CHECK(pool.near(VoxelPos(x + half, pool.top.y + 5000, z)));
+        CHECK(pool.near(VoxelPos(x + half, pool.top.y + 20, z)));
+        CHECK_FALSE(pool.near(VoxelPos(x + half, pool.top.y + std::llround(2.0 * site.radius), z))); // along the axis, far
         CHECK_FALSE(pool.near(VoxelPos(x + std::llround(2.0 * site.radius), pool.top.y, z)));
     }
 }
@@ -241,7 +242,8 @@ TEST_CASE("Biome: a lava lake 90 degrees round a planet stands on its up, the y 
     // Far away round the planet, the bare ground bit for bit.
     const VoxelPos away = planet.on_base(t + VoxelPos(0, 0, std::llround(3.0 * site.radius)));
     CHECK(f(away) == sphere_ground(away).w);
-    CHECK(pool.near(t + VoxelPos(400, half, 0)));
+    CHECK(pool.near(t + VoxelPos(40, half, 0)));
+    CHECK_FALSE(pool.near(VoxelPos(-t.x, t.y, t.z))); // the planet's far side, on the axis
     CHECK_FALSE(pool.near(t + VoxelPos(0, 2 * std::llround(site.radius), 0)));
 }
 

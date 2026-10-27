@@ -75,28 +75,11 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     started = true;
     start_usec = now_usec();
 
-    // The world origin, snapped down to the root chunk span (2^lod_numbers chunk-id units), so the start is the same
-    // for any requested origin. It is also the first render origin; a rebase then moves that one by even ids only
-    // (ChunkMath::recentered_origin), so render-relative Morton keys are no longer root-aligned after one.
-    {
-        const int64_t root_units = int64_t(1) << lod_numbers;
-        const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
-        // On a planet the default request's datum is its +y pole (SDFCascade::planet_base), so the camera starts near the
-        // render origin there (scene_shift places the scenes' poses on it); a request given is absolute.
-        VoxelPos request = config.world_origin_request;
-        if (planet_radius_m(config) > 0.0 && request == VoxelPos(0, 0, 0)) {
-            const BaseSurface planet = SDFCascade::planet_base(planet_radius_m(config), double(chunk_param.voxel_size));
-            if (planet.kind() == BaseSurface::Kind::SPHERE) {
-                request = pole_lift(planet, double(chunk_param.voxel_size));
-            }
-        }
-        chunk_param.origin_chunk = ChunkId(WorldCoord::floor_div(request.x, root_voxels) * root_units,
-                WorldCoord::floor_div(request.y, root_voxels) * root_units, WorldCoord::floor_div(request.z, root_voxels) * root_units);
-        if (chunk_param.origin_voxel() != request) {
-            VLOG(1, "World: world origin snapped to ", WorldCoord::to_string(chunk_param.origin_voxel()), " voxels");
-        }
-        world_origin_chunk = chunk_param.origin_chunk;
+    chunk_param.origin_chunk = start_origin();
+    if (chunk_param.origin_voxel() != config.world_origin_request) {
+        VLOG(1, "World: world origin at ", WorldCoord::to_string(chunk_param.origin_voxel()), " voxels");
     }
+    world_origin_chunk = chunk_param.origin_chunk;
 
     // One terrain, the cascade: mode 2 is its continents preset, 4 its flat preset under the shapes gallery.
     if (config.terrain_mode == 2) {
@@ -566,10 +549,34 @@ void World::tangent_position(double p_u_m, double p_v_m, double r_render_pos[3])
     render_m(sdf->get_base().tangent_point(std::llround(p_u_m / vs), std::llround(p_v_m / vs)), config.chunk_param.origin_voxel(), vs, r_render_pos);
 }
 
+ChunkId World::start_origin() const {
+    const ChunkParam &chunk_param = config.chunk_param;
+    const int64_t root_units = int64_t(1) << config.lod_numbers;
+    const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
+    VoxelPos request = config.world_origin_request;
+    if (const BaseSurface planet = settings_planet(); planet.kind() == BaseSurface::Kind::SPHERE && request == VoxelPos(0, 0, 0)) {
+        request = pole_lift(planet, double(chunk_param.voxel_size));
+    }
+    return ChunkId(WorldCoord::floor_div(request.x, root_voxels) * root_units, WorldCoord::floor_div(request.y, root_voxels) * root_units,
+            WorldCoord::floor_div(request.z, root_voxels) * root_units);
+}
+
+BaseSurface World::settings_planet() const {
+    return planet_radius_m(config) > 0.0 ? SDFCascade::planet_base(planet_radius_m(config), double(config.chunk_param.voxel_size)) : BaseSurface();
+}
+
+VoxelPos World::render_origin_voxel() const {
+    ChunkParam param = config.chunk_param;
+    if (!started) {
+        param.origin_chunk = start_origin();
+    }
+    return param.origin_voxel();
+}
+
 void World::scene_shift(double r_shift_m[3]) const {
-    const BaseSurface &base = sdf->get_base();
-    const VoxelPos origin = config.chunk_param.origin_voxel();
-    render_m(base.kind() == BaseSurface::Kind::SPHERE ? pole_lift(base, double(config.chunk_param.voxel_size)) : origin, origin,
+    const BaseSurface planet = settings_planet();
+    const VoxelPos origin = render_origin_voxel();
+    render_m(planet.kind() == BaseSurface::Kind::SPHERE ? pole_lift(planet, double(config.chunk_param.voxel_size)) : origin, origin,
             double(config.chunk_param.voxel_size), r_shift_m);
 }
 

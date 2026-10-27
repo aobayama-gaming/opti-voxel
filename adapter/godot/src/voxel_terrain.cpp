@@ -735,15 +735,15 @@ float VoxelTerrain::get_rebase_distance_m() const {
 }
 
 int64_t VoxelTerrain::get_render_origin_x() const {
-    return cfg().chunk_param.origin_voxel().x;
+    return world.render_origin_voxel().x;
 }
 
 int64_t VoxelTerrain::get_render_origin_y() const {
-    return cfg().chunk_param.origin_voxel().y;
+    return world.render_origin_voxel().y;
 }
 
 int64_t VoxelTerrain::get_render_origin_z() const {
-    return cfg().chunk_param.origin_voxel().z;
+    return world.render_origin_voxel().z;
 }
 
 Vector3 VoxelTerrain::get_render_offset_m() const {

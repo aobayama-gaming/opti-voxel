@@ -36,7 +36,9 @@ The shared environment and the page shader's surface detail.
   on every rebase (its centre, radius and K = |c|^2 - R^2 from double, so the altitude (|p|^2 - 2 p.c + K) / (|p - c|
   + R) keeps ~1e-4 m in float32 at Earth's radius, where |p - c| - R keeps half a metre). The page shader reads the
   up per fragment (`planet_up`: the slope colours, the materials) and colours and contours by altitude (sea level 0);
-  bark and lava read the up's tangent frame (`up_frame`, x / y / z on the flat world). The sky is drawn in the
+  bark and lava read the up's tangent frame (`up_frame`, x / y / z on the flat world). The shading frame snaps per
+  axis, not along a tilted frame: on a planet away from the poles bark and lava shift when the render origin moves
+  (rare: `rebase_distance_m`); cloud shadows read three planes there (three fetches). The sky is drawn in the
   camera's local frame (its up on +y), so the horizon is the ground's and the global sun sets as the camera goes
   round.
   `tools/shot_diff.py` compares two shots of one pose (a fly far out and back with `--still=1`). Not done yet, in order: water (a sea plane with a
