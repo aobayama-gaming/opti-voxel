@@ -13,7 +13,8 @@ struct ShaderBinding {
     uint32_t binding = 0;
     bool uniform = false; // else a storage buffer
     bool read_only = false; // every member NonWritable (a `readonly` block)
-    bool image = false; // a storage image (the engine's: rgba16ui, 2D)
+    bool image = false; // a storage image (the engine's: rgba16ui or rgba16f, 2D)
+    bool half_float = false; // the image is rgba16f (else rgba16ui)
     bool write_only = false; // an image declared `writeonly` (NonReadable)
 };
 
