@@ -64,9 +64,9 @@ vec3 sky_extinction(float cos_zenith, vec3 rayleigh_beta, vec3 mie_beta) {
 }
 
 // The sky's linear colour along eyedir (normalized, y up) under a sun towards sun_dir of light_color and light_energy,
-// its disk light_size radians across: the scattering, the ground under the horizon and the sun's disk, times exposure
-// (the material's energy_multiplier).
-vec3 physical_sky(vec3 eyedir, vec3 sun_dir, vec3 light_color, float light_energy, float light_size, float exposure) {
+// its disk light_size radians across: the scattering, the ground under the horizon and the sun's disk, times
+// energy_multiplier (the material's; not "exposure": the Godot sky shader has a uniform of that name).
+vec3 physical_sky(vec3 eyedir, vec3 sun_dir, vec3 light_color, float light_energy, float light_size, float energy_multiplier) {
     float zenith_angle = clamp(sun_dir.y, -1.0, 1.0);
     float sun_energy = sky_sun_energy(sun_dir, light_energy);
     float sun_fade = sky_sun_fade(sun_dir);
@@ -92,7 +92,7 @@ vec3 physical_sky(vec3 eyedir, vec3 sun_dir, vec3 light_color, float light_energ
     float sun_disk = smoothstep(sun_cos, sun_cos_half, cos_theta);
     vec3 l0 = (sun_energy * extinction) * sun_disk * light_color;
 
-    return pow(lin + l0, vec3(1.0 / (1.2 + (1.2 * sun_fade)))) * exposure;
+    return pow(lin + l0, vec3(1.0 / (1.2 + (1.2 * sun_fade)))) * energy_multiplier;
 }
 )glsl";
 
