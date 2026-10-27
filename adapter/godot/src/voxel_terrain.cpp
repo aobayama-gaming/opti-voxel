@@ -771,21 +771,28 @@ void VoxelTerrain::_move_render_origin(const Float3 &p_shift) {
     emit_signal("origin_shifted", shift);
 }
 
+namespace {
+
+// BaseSurface::Render's uniforms (Render::visit) into shader parameters.
+struct BaseParams {
+    Dictionary &out;
+    void operator()(const char *p_name, int p_v) { out[p_name] = p_v; }
+    void operator()(const char *p_name, float p_v) { out[p_name] = p_v; }
+    void operator()(const char *p_name, const Float3 &p_v) { out[p_name] = godot_v3(p_v); }
+};
+
+} // namespace
+
 void VoxelTerrain::_push_render_frame() {
     const ChunkParam &param = world.chunk_param();
     const SDFCascade &sdf = world.terrain();
     // The base in render space (World::base_render), for the pages' up, altitude and cloud shadows and the sky's frame and
     // cloud layer.
-    const BaseSurface::Render render = world.base_render();
     Dictionary base;
-    base["base_kind"] = render.kind;
-    base["base_point_m"] = godot_v3(render.point_m);
-    base["base_radius_m"] = render.radius_m;
-    base["base_k_m2"] = render.k_m2;
+    world.base_render().visit(BaseParams{ base });
     set_page_params(base);
     if (page_host && sdf.preset == SDFCascade::Preset::CONTINENTS) {
-        // Continents preset: the page shader colours heights around sea level, the base (its altitude 0).
-        page_host->set_material_param("sea_level_m", 0.0);
+        page_host->set_material_param("height_colours", true); // around sea level, the base
     }
     const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
     Node *parent = get_parent();

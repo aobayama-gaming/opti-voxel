@@ -20,11 +20,7 @@
 // origin moves.
 static constexpr const char GLSL_CLOUDS[] = R"glsl(
 // The base in render space (World::base_render, set again when the render origin moves: VoxelTerrain on its pages,
-// VoxelSky on the sky): BaseSurface::Render's fields for BaseSurface::glsl_render's functions.
-uniform int base_kind = 0;
-uniform vec3 base_point_m = vec3(0.0);
-uniform float base_radius_m = 0.0;
-uniform float base_k_m2 = 0.0;
+// VoxelSky on the sky): BaseSurface::Render's uniforms and BaseSurface::glsl_render's functions.
 /*GLSL_BASE_RENDER*/
 
 // The cloud layer (VoxelSky): no texture = black = no clouds and no shadows.
@@ -45,20 +41,24 @@ bool cloud_hit(vec3 p, vec3 dir, out vec3 hit) {
     return below && dot(dir, base_up(p)) > 0.002;
 }
 
-// The cloud texture's value at a point of the layer: one tile per cloud_scale_m (snapped to the shading frame's
-// period), carried by the wind. It reads three planes blended by the base's up (sharpened), so a curved layer has no
-// seam anywhere round it; a plane with no weight isn't read (the flat world reads one).
-float cloud_texel(vec3 hit) {
+// One plane of cloud_texel, weighted: not read where its weight is 0 (the flat world reads one plane of three).
+float cloud_plane(float w, vec2 uv) {
+    return w > 0.0 ? w * texture(cloud_tex, uv).r : 0.0;
+}
+
+// The cloud texture's value at a point of the layer, up the base's up there: one tile per cloud_scale_m (snapped to the
+// shading frame's period), carried by the wind. It reads three planes blended by the up (sharpened), so a curved layer
+// has no seam anywhere round it.
+float cloud_texel(vec3 hit, vec3 up) {
     int period = shade_period_vox(cloud_scale_m);
     float period_m = shade_period_m(period);
     float k = shade_cells(vec3(1.0 / cloud_scale_m), period_m).x / period_m;
     vec2 wind = cloud_wind * TIME;
     vec3 s = shade_point(hit, period);
-    vec3 w = pow(abs(base_up(hit)), vec3(4.0));
+    vec3 w = up * up;
+    w *= w;
     w /= w.x + w.y + w.z;
-    float texel = w.y > 0.0 ? w.y * texture(cloud_tex, (s.xz + wind) * k).r : 0.0;
-    texel += w.x > 0.0 ? w.x * texture(cloud_tex, (s.zy + wind) * k).r : 0.0;
-    return texel + (w.z > 0.0 ? w.z * texture(cloud_tex, (s.xy + wind) * k).r : 0.0);
+    return cloud_plane(w.y, (s.xz + wind) * k) + cloud_plane(w.x, (s.zy + wind) * k) + cloud_plane(w.z, (s.xy + wind) * k);
 }
 
 // Cloud density in [0, 1] of a texel: the texture's values are uniform on [0, 1] (tools/make_clouds.py), so the
@@ -131,11 +131,11 @@ void sky() {
         // colour. The layer fades into the sky near the horizon, where its texels stretch along the view.
         vec3 hit;
         if (cloud_cover > 0.0 && cloud_hit(POSITION, EYEDIR, hit)) {
-            float density = cloud_density(cloud_texel(hit));
             vec3 hit_up = base_up(hit);
+            float density = cloud_density(cloud_texel(hit, hit_up));
             float sun_up = dot(sun_world, hit_up);
             vec3 towards_sun = hit + (sun_world - hit_up * sun_up) * (0.02 * cloud_scale_m / max(sun_up, 0.15));
-            float lit = 1.0 - 0.75 * cloud_density(cloud_texel(towards_sun));
+            float lit = 1.0 - 0.75 * cloud_density(cloud_texel(towards_sun, hit_up));
             vec3 rayleigh_beta;
             vec3 mie_beta;
             sky_betas(sun_dir, rayleigh_beta, mie_beta);
@@ -149,7 +149,7 @@ void sky() {
 )gdshader";
 
 String VoxelSky::glsl_clouds() {
-    return String(GLSL_CLOUDS).replace("/*GLSL_BASE_RENDER*/", godot_str(BaseSurface::glsl_render()));
+    return String(GLSL_CLOUDS).replace("/*GLSL_BASE_RENDER*/", godot_str(BaseSurface::glsl_render_uniforms() + BaseSurface::glsl_render()));
 }
 
 String VoxelSky::sky_shader_code() {

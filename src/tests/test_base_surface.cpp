@@ -310,20 +310,13 @@ TEST_CASE("BaseSurface: the tangent plane and the altitude") {
     CHECK(s.altitude(s.tangent_point(u, 0)) == doctest::Approx(rise).epsilon(1e-6));
 }
 
-// The shaders' base_altitude (glsl_render) mirrored in float32 from render(): within 1e-3 m of the double altitude for
+// The shaders' base_altitude (glsl_render) in float32 (Render::altitude): within 1e-3 m of the double altitude for
 // points within 1 km of the render origin, on Earth at 5 cm from far centres and render origins anywhere round it.
 TEST_CASE("BaseSurface: the render-space altitude keeps a millimetre in float32 at Earth's radius") {
     const double vs = 0.05;
     auto render_altitude = [&](const BaseSurface &p_base, const VoxelPos &p_origin, const VoxelPos &p_voxel) {
-        const BaseSurface::Render r = p_base.render(p_origin, vs);
-        const float p[3] = { float(double(p_voxel.x - p_origin.x) * vs), float(double(p_voxel.y - p_origin.y) * vs), float(double(p_voxel.z - p_origin.z) * vs) };
-        const float c[3] = { r.point_m.x, r.point_m.y, r.point_m.z };
-        if (r.kind == int(BaseSurface::Kind::FLAT)) {
-            return p[1] - c[1];
-        }
-        const float q = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) - 2.0f * (p[0] * c[0] + p[1] * c[1] + p[2] * c[2]) + r.k_m2;
-        const float d[3] = { p[0] - c[0], p[1] - c[1], p[2] - c[2] };
-        return q / (std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) + r.radius_m);
+        const Float3 p{ float(double(p_voxel.x - p_origin.x) * vs), float(double(p_voxel.y - p_origin.y) * vs), float(double(p_voxel.z - p_origin.z) * vs) };
+        return p_base.render(p_origin, vs).altitude(p);
     };
     double worst = 0.0;
     for (const Vector3i64 &c : CENTRES) {

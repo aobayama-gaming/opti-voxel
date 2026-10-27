@@ -361,7 +361,7 @@ vec4 base_radius(WorldPos p, int lod) {
 
 BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel_m) const {
     Render r;
-    r.kind = int(base_kind);
+    r.kind = base_kind;
     double v[3];
     const double len = offset(anchor, p_origin, v) * p_voxel_m;
     r.point_m = Float3{ float(v[0] * p_voxel_m), float(v[1] * p_voxel_m), float(v[2] * p_voxel_m) };
@@ -371,6 +371,34 @@ BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel
         r.k_m2 = float((len - rm) * (len + rm));
     }
     return r;
+}
+
+float BaseSurface::Render::altitude(const Float3 &p_m) const {
+    const Float3 &c = point_m;
+    if (kind != Kind::SPHERE) {
+        return p_m.y - c.y;
+    }
+    const float q = (p_m.x * p_m.x + p_m.y * p_m.y + p_m.z * p_m.z) - 2.0f * (p_m.x * c.x + p_m.y * c.y + p_m.z * c.z) + k_m2;
+    const Float3 d = p_m - c;
+    return q / (std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z) + radius_m);
+}
+
+namespace {
+
+struct UniformDecl {
+    ov::str &out;
+    void decl(const char *p_type, const char *p_name) { out += ov::str("uniform ") + p_type + " " + p_name + ";\n"; }
+    void operator()(const char *p_name, int) { decl("int", p_name); }
+    void operator()(const char *p_name, float) { decl("float", p_name); }
+    void operator()(const char *p_name, const Float3 &) { decl("vec3", p_name); }
+};
+
+} // namespace
+
+ov::str BaseSurface::glsl_render_uniforms() {
+    ov::str out;
+    Render().visit(UniformDecl{ out });
+    return out;
 }
 
 ov::str BaseSurface::glsl_render() {

@@ -128,21 +128,34 @@ public:
     ov::str glsl() const;
 
     // The base in render space (metres from the render origin), what the hosts' shaders know of it: every render-space
-    // user (the pages' heights and up, the sky's frame, the cloud layer, the atmosphere) goes through glsl_render's
+    // user (the pages' heights and up, the sky's frame, the cloud layer) goes through glsl_render's
     // functions, so a new kind only adds its case there and here. From double: SPHERE's altitude
     // (|p|^2 - 2 p.c + K) / (|p - c| + R) keeps ~1e-4 m in float32 at Earth's radius, where |p - c| - R keeps half a metre.
     struct Render {
-        int kind = int(Kind::FLAT);
+        Kind kind = Kind::FLAT;
         Float3 point_m; // FLAT: a point of the datum plane; SPHERE: the centre
         float radius_m = 0.0f; // SPHERE
         float k_m2 = 0.0f; // SPHERE: |centre|^2 - radius^2 (m^2)
+
+        // Each field as the shaders' uniform (glsl_render_uniforms): p_f(name, value), value an int, a float or a Float3.
+        // The one list of the uniforms' names and order: a host fills its shader parameters from it.
+        template <class F>
+        void visit(F &&p_f) const {
+            p_f("base_kind", int(kind));
+            p_f("base_point_m", point_m);
+            p_f("base_radius_m", radius_m);
+            p_f("base_k_m2", k_m2);
+        }
+        // base_altitude (glsl_render) in float32 on the CPU (tests).
+        float altitude(const Float3 &p_m) const;
     };
     // The render-space base with the render origin at LOD0 voxel p_origin (it changes with the origin).
     Render render(const VoxelPos &p_origin, double p_voxel_m) const;
+    // Render's fields as `uniform` declarations (Render::visit), for a host whose shaders splice glsl_render.
+    static ov::str glsl_render_uniforms();
     // `float base_altitude(vec3 p)` (metres above the base, signed), `vec3 base_up(vec3 p)` (its unit gradient) and
     // `bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t)` (where a ray is below altitude h), plain GLSL that
-    // Godot's shading language takes too. The host declares Render's fields before it as uniforms `int base_kind`,
-    // `vec3 base_point_m`, `float base_radius_m`, `float base_k_m2`.
+    // Godot's shading language takes too; after glsl_render_uniforms (or the host's own declarations of Render's fields).
     static ov::str glsl_render();
 
 private:

@@ -38,10 +38,9 @@ uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // drawn magenta, those it still draws orange)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
-// Sea level (VoxelTerrain sets it for the continents preset): an altitude above the base (0, the base itself); below
-// -1e29, no height colours. The slope colours, the heights and the contour lines read the base's up and altitude
-// (base_up, base_altitude: BaseSurface::glsl_render).
-uniform float sea_level_m = -1e30;
+// Height colours around sea level, the base (VoxelTerrain sets it for the continents preset). The slope colours, the
+// heights and the contour lines read the base's up and altitude (base_up, base_altitude: BaseSurface::glsl_render).
+uniform bool height_colours = false;
 // The render origin in chunk-id units, low 32 bits: positions are drawn relative to it; and its LOD0 voxel, low 32 bits
 // (the shading frame's origin). PageDecode's.
 uniform ivec3 origin_chunk_lo = ivec3(0);
@@ -160,10 +159,10 @@ void fragment() {
     float flat_w = ground_flat_weight(v_world_normal, up_dir);
     vec3 albedo = mix(GROUND_STEEP, GROUND_FLAT, flat_w); // Material::GROUND_STEEP / GROUND_FLAT
     float contour_m = 100.0;
-    if (sea_level_m > -1e29) {
+    if (height_colours) {
         // Height colours (dark albedos: the scene's tonemapper brightens them): sea floor blue, darker with
         // depth, beach, lowland green, highland brown, snow; rock on steep land.
-        float e = v_height - sea_level_m;
+        float e = v_height;
         vec3 steep = vec3(0.20, 0.18, 0.16);
         if (e < 0.0) {
             albedo = mix(vec3(0.005, 0.02, 0.10), vec3(0.04, 0.16, 0.35), smoothstep(-4000.0, 0.0, e));
@@ -278,7 +277,7 @@ void light() {
         vec3 hit;
         // VERTEX is not readable in light(): the fragment's position comes through v_world_pos.
         if (dot(to_sun, base_up(v_world_pos)) > 0.05 && cloud_hit(v_world_pos, to_sun, hit)) {
-            sun = 1.0 - cloud_shadow * cloud_density(cloud_texel(hit));
+            sun = 1.0 - cloud_shadow * cloud_density(cloud_texel(hit, base_up(hit)));
         }
     }
     DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;
