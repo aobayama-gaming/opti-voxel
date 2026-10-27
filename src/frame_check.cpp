@@ -1462,7 +1462,7 @@ ov::Value FrameCheck::run(ov::gpu::Device &p_device, float p_voxel_size) {
     report["gpu_device_check"] = device_check.summary();
     // The atmosphere's passes against their CPU reference (reported, its own ok).
     report["atmosphere_check"] = AtmosphereCheck::run(p_device);
-    report["ok"] = device_check.ok() && report["table_samples"].as_int() > 0 && report["table_near_samples"].as_int() > 0 && report["table_blob_samples"].as_int() > 0 &&
+    report["ok"] = device_check.ok() && report["atmosphere_check"]["ok"].as_bool() && report["table_samples"].as_int() > 0 && report["table_near_samples"].as_int() > 0 && report["table_blob_samples"].as_int() > 0 &&
             report["table_mismatch"].as_int() == 0 &&
             report["table_material_won"].as_int() > 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&

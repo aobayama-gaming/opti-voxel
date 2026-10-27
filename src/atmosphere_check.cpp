@@ -352,8 +352,9 @@ namespace AtmosphereCheck {
 ov::Value run(ov::gpu::Device &p_device) {
     Value report = Value::object();
     bool ok = true;
+    double down_min_100km = -1.0; // the earth_100km case's, which the running object must give again
     const double vs = 0.05;
-    const double earth = 6371000.0 / vs;
+    const double earth = AtmosphereMedium::EARTH_RADIUS_M / vs;
     const BaseSurface earth_base = BaseSurface::sphere(VoxelPos(0, 0, 0), earth, 12);
     const BaseSurface tiny = BaseSurface::sphere(VoxelPos(0, 0, 0), 2000.0 / vs, 1);
     const Case cases[] = {
@@ -449,6 +450,9 @@ ov::Value run(ov::gpu::Device &p_device) {
         r["ok"] = case_ok;
         ok = ok && case_ok;
         report[c.name] = r;
+        if (std::string(c.name) == "earth_100km") {
+            down_min_100km = down_min_gpu;
+        }
         const ov::gpu::Handle handles[] = { set_vol, set_ms, pipe_vol, pipe_ms, block, vol, ms };
         for (const ov::gpu::Handle h : handles) {
             p_device.free(h);
@@ -464,14 +468,17 @@ ov::Value run(ov::gpu::Device &p_device) {
         p_device.sync();
         const std::vector<float> vol = texels(read(p_device, running->get_volume()));
         double down_min = 1.0;
-        for (int x = 0; x < Atmosphere::VOLUME_W && !vol.empty(); x++) {
-            for (int y = 0; y < Atmosphere::VOLUME_H / 2; y++) {
+        for (int x = 0; x < Atmosphere::VOLUME_W && !vol.empty(); x += 9) { // the cases' columns
+            for (int y = 0; y < Atmosphere::VOLUME_H / 2; y += 5) {
                 down_min = ov::min(down_min, double(vol[((size_t(Atmosphere::SLICES - 2) * Atmosphere::VOLUME_H + y) * Atmosphere::VOLUME_W + x) * 4 + 3]));
             }
         }
         Value r = Value::object();
         r["range_m"] = double(running->range_m());
         r["down_min_transmittance"] = down_min;
+        const bool running_ok = down_min_100km > 0.0 && rel_error(down_min, down_min_100km, 1e-3) < TOLERANCE;
+        r["ok"] = running_ok;
+        ok = ok && running_ok;
         report["running"] = r;
         running->destroy();
     }
