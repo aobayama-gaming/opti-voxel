@@ -10,12 +10,6 @@
 
 namespace {
 
-constexpr int SUN_STEPS = 8; // the sun's transmittance from a sample (the passes and the host's light)
-constexpr int FAR_STEPS = 8; // the sky slice past the range
-constexpr int MS_STEPS = 20; // per direction of the multiple scattering
-constexpr int MS_DIRS = 8; // MS_DIRS^2 directions
-constexpr int SPACE_STEPS = 24; // a host's sky seen from above the atmosphere, per pixel
-
 // The medium and the march: plain GLSL that Godot's shading language takes too.
 constexpr const char GLSL_MARCH[] = R"glsl(
 const float ATMO_PI = 3.14159265358979;
@@ -23,6 +17,15 @@ const int ATMO_SLICES = $SLICES;
 const int ATMO_VOLUME_W = $VOLUME_W;
 const int ATMO_VOLUME_H = $VOLUME_H;
 const int ATMO_MS_SIZE = $MS_SIZE;
+
+// Step i of n over [start, start + len], spaced quadratically from start (finest there, where a climbing ray's air is
+// densest): its midpoint t and length dt.
+void atmo_quad_step(int i, int n, float start, float len, out float t, out float dt) {
+    float a = float(i) / float(n);
+    float b = float(i + 1) / float(n);
+    t = start + 0.25 * (a + b) * (a + b) * len;
+    dt = (b * b - a * a) * len;
+}
 const int ATMO_SUN_STEPS = $SUN_STEPS;
 
 // The medium at altitude h above the base (clamped at the base: no denser below it): Rayleigh and Mie scattering and
@@ -79,12 +82,10 @@ vec3 atmo_transmittance(vec3 p, vec3 dir, int n) {
         return vec3(0.0);
     }
     vec3 depth = vec3(0.0);
-    float len = seg.y - seg.x;
     for (int i = 0; i < n; i++) {
-        float a = float(i) / float(n);
-        float b = float(i + 1) / float(n);
-        float dt = (b * b - a * a) * len;
-        float t = seg.x + 0.25 * (a + b) * (a + b) * len;
+        float t;
+        float dt;
+        atmo_quad_step(i, n, seg.x, seg.y - seg.x, t, dt);
         vec3 r;
         float m;
         vec3 e;
@@ -126,12 +127,12 @@ vec4 atmo_integrate(vec3 p, vec3 dir, vec3 sun, int n) {
     vec3 light = vec3(0.0);
     vec3 trans = vec3(1.0);
     if (atmo_segment(p, dir, seg, ground)) {
-        float len = seg.y - seg.x;
         float cos_sun = dot(dir, sun);
         for (int i = 0; i < n; i++) {
-            float a = float(i) / float(n);
-            float b = float(i + 1) / float(n);
-            atmo_step(p, dir, sun, cos_sun, seg.x + 0.25 * (a + b) * (a + b) * len, (b * b - a * a) * len, light, trans);
+            float t;
+            float dt;
+            atmo_quad_step(i, n, seg.x, seg.y - seg.x, t, dt);
+            atmo_step(p, dir, sun, cos_sun, t, dt, light, trans);
         }
         if (ground) {
             light += trans * atmo_ground(p + dir * seg.y, sun);
@@ -177,6 +178,7 @@ constexpr const char GLSL_LOOKUP[] = R"glsl(
 // The steps of a sky marched per pixel (atmo_integrate): from above the atmosphere, where the volume's texels are too
 // coarse for its limb.
 const int ATMO_SPACE_STEPS = $SPACE_STEPS;
+const float ATMO_SUN_DISK = $SUN_DISK;
 
 // Slice s of the volume at uv: linear across texels, not across slices (a slice's rows clamped to its band).
 vec4 atmo_slice(vec2 uv, int s) {
@@ -207,6 +209,17 @@ vec4 atmo_at(vec3 camera, vec3 dir, float dist) {
 // The whole ray: the sky.
 vec4 atmo_sky(vec3 camera, vec3 dir) {
     return atmo_slice(atmo_uv(camera, dir), ATMO_SLICES - 1);
+}
+
+// The sky's light towards the camera along dir for a sun of illuminance 1 towards sun: the volume's sky slice, or from
+// above the atmosphere a march per pixel (the volume's texels are too coarse for the limb); plus the sun's disk (its
+// radius' cosine sun_cos) through the air.
+vec3 atmo_sky_radiance(vec3 camera, vec3 dir, vec3 sun, float sun_cos) {
+    vec3 light = base_altitude(camera) > atmo_top_m ? atmo_integrate(camera, dir, sun, ATMO_SPACE_STEPS).rgb : atmo_sky(camera, dir).rgb;
+    if (dot(dir, sun) > sun_cos) {
+        light += atmo_transmittance(camera, sun, ATMO_SUN_STEPS) * ATMO_SUN_DISK;
+    }
+    return light;
 }
 )glsl";
 
@@ -248,13 +261,14 @@ vec3 ms_transmittance(vec3 x, vec3 sun) {
     float len = ms_far(x, sun, atmo_ms_radius_m + atmo_top_m);
     vec3 depth = vec3(0.0);
     for (int i = 0; i < ATMO_SUN_STEPS; i++) {
-        float a = float(i) / float(ATMO_SUN_STEPS);
-        float b = float(i + 1) / float(ATMO_SUN_STEPS);
+        float t;
+        float dt;
+        atmo_quad_step(i, ATMO_SUN_STEPS, 0.0, len, t, dt);
         vec3 r;
         float m;
         vec3 e;
-        atmo_medium(length(x + sun * (0.25 * (a + b) * (a + b) * len)) - atmo_ms_radius_m, r, m, e);
-        depth += e * ((b * b - a * a) * len);
+        atmo_medium(length(x + sun * t) - atmo_ms_radius_m, r, m, e);
+        depth += e * dt;
     }
     return exp(-depth);
 }
@@ -363,11 +377,11 @@ void main() {
     }
     float a = max(from, seg.x);
     if (inside && seg.y > a) {
-        float len = seg.y - a;
         for (int i = 0; i < FAR_STEPS; i++) {
-            float u = float(i) / float(FAR_STEPS);
-            float v = float(i + 1) / float(FAR_STEPS);
-            atmo_step(atmo_camera_m, dir, atmo_sun, cos_sun, a + 0.25 * (u + v) * (u + v) * len, (v * v - u * u) * len, light, trans);
+            float t;
+            float dt;
+            atmo_quad_step(i, FAR_STEPS, a, seg.y - a, t, dt);
+            atmo_step(atmo_camera_m, dir, atmo_sun, cos_sun, t, dt, light, trans);
         }
     }
     if (inside && ground) {
@@ -378,15 +392,17 @@ void main() {
 )glsl";
 
 ov::str substitute(const ov::str &p_glsl) {
+    using A = Atmosphere;
     return ov::replace_all(p_glsl,
-            { { "$SLICES", ov::itos(Atmosphere::SLICES) }, { "$VOLUME_W", ov::itos(Atmosphere::VOLUME_W) }, { "$VOLUME_H", ov::itos(Atmosphere::VOLUME_H) },
-                    { "$MS_SIZE", ov::itos(Atmosphere::MS_SIZE) }, { "$SUN_STEPS", ov::itos(SUN_STEPS) }, { "$FAR_STEPS", ov::itos(FAR_STEPS) },
-                    { "$MS_STEPS", ov::itos(MS_STEPS) }, { "$MS_DIRS", ov::itos(MS_DIRS) }, { "$SPACE_STEPS", ov::itos(SPACE_STEPS) } });
+            { { "$SLICES", ov::itos(A::SLICES) }, { "$VOLUME_W", ov::itos(A::VOLUME_W) }, { "$VOLUME_H", ov::itos(A::VOLUME_H) },
+                    { "$MS_SIZE", ov::itos(A::MS_SIZE) }, { "$SUN_STEPS", ov::itos(A::SUN_STEPS) }, { "$FAR_STEPS", ov::itos(A::FAR_STEPS) },
+                    { "$MS_STEPS", ov::itos(A::MS_STEPS) }, { "$MS_DIRS", ov::itos(A::MS_DIRS) }, { "$SPACE_STEPS", ov::itos(A::SPACE_STEPS) },
+                    { "$SUN_DISK", ov::str(ov::format("%.1f", double(A::SUN_DISK))) } });
 }
 
 ov::str block_members() {
     ov::str members;
-    GLSLUniforms::BlockMembers decl{ members };
+    GLSLUniforms::Declarations decl{ members };
     BaseSurface::Render().visit(decl);
     AtmosphereMedium().visit(decl);
     Atmosphere::Frame().visit(decl);
@@ -422,12 +438,9 @@ AtmosphereMedium AtmosphereMedium::for_base(double p_radius_m, double p_relief_m
     return m;
 }
 
-ov::str Atmosphere::glsl_medium_uniforms() {
+ov::str Atmosphere::glsl_host_uniforms() {
     ov::str out;
-    GLSLUniforms::Declarations decl{ out };
-    AtmosphereMedium().visit(decl);
-    // The frame's longest path (a host's march reads it; constant for a world).
-    decl("atmo_max_path_m", 0.0f);
+    HostConstants().visit(GLSLUniforms::Declarations{ out, "uniform " });
     return out;
 }
 
@@ -479,14 +492,17 @@ void Atmosphere::start(ov::gpu::Device *p_device, const BaseSurface &p_base, dou
     device = p_device;
     textures_fn = std::move(p_textures);
     curvature_m = ms_radius_m(p_base, p_voxel_m);
-    medium = AtmosphereMedium::for_base(p_base.curvature_radius_m(p_voxel_m), p_relief_m, p_scale);
+    constants.medium = AtmosphereMedium::for_base(p_base.curvature_radius_m(p_voxel_m), p_relief_m, p_scale);
+    // Constant for a world: no camera term.
+    constants.max_path_m = make_frame(constants.medium, curvature_m, Float3(), Float3(), BaseSurface::Render()).max_path_m;
     multiscatter_dirty = true;
     device->post([this]() { _rt_start(); });
 }
 
 void Atmosphere::frame(const Float3 &p_camera_m, const Float3 &p_sun, const BaseSurface::Render &p_base) {
-    last = make_frame(medium, curvature_m, p_camera_m, p_sun, p_base);
-    const ov::bytes data = block_bytes(p_base, medium, last);
+    const Frame f = make_frame(constants.medium, curvature_m, p_camera_m, p_sun, p_base);
+    last_range_m = f.range_m;
+    const ov::bytes data = block_bytes(p_base, constants.medium, f);
     const bool ms = multiscatter_dirty;
     multiscatter_dirty = false;
     device->post([this, data, ms]() { _rt_frame(data, ms); });
@@ -501,7 +517,7 @@ void Atmosphere::_rt_start() {
     const uint32_t usage = ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_COPY_SRC; // COPY_SRC: AtmosphereCheck reads it
     volume = device->create_texture(ov::gpu::TextureFormat::RGBA16_FLOAT, VOLUME_W, VOLUME_H * SLICES, usage);
     multiscatter = device->create_texture(ov::gpu::TextureFormat::RGBA16_FLOAT, MS_SIZE, MS_SIZE, usage);
-    block = device->create_buffer(ov::gpu::BufferKind::UNIFORM, block_bytes(BaseSurface::Render(), medium, Frame()).size());
+    block = device->create_buffer(ov::gpu::BufferKind::UNIFORM, block_bytes(BaseSurface::Render(), constants.medium, Frame()).size());
     pipe_multiscatter = ov::gpu::compile(*device, "atmosphere_multiscatter", glsl_pass_multiscatter());
     pipe_volume = ov::gpu::compile(*device, "atmosphere_volume", glsl_pass_volume());
     if (pipe_multiscatter.is_valid()) {

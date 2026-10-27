@@ -50,7 +50,7 @@ TEST_CASE("Atmosphere: every constant of the passes' and the hosts' GLSL substit
         CHECK(glsl.find('$') == ov::str::npos);
     }
     CHECK(Atmosphere::glsl_pass_volume().find("vec3 atmo_camera_m;") != ov::str::npos);
-    CHECK(Atmosphere::glsl_medium_uniforms().find("uniform float atmo_max_path_m;") != ov::str::npos);
+    CHECK(Atmosphere::glsl_host_uniforms().find("uniform float atmo_max_path_m;") != ov::str::npos);
 }
 
 TEST_CASE("Atmosphere::make_frame: the slices reach past the camera's horizon, farther from higher up") {

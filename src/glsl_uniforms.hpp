@@ -12,25 +12,18 @@
 // list, so no name or offset is typed twice.
 namespace GLSLUniforms {
 
-// `uniform T name;` per field (a host shader's loose uniforms: Godot's shading language).
+// `<prefix>T name;` per field: with "uniform " a host shader's loose uniforms (Godot's shading language), with "" the
+// members of a std140 uniform block (a compute shader's).
 struct Declarations {
     ov::str &out;
-    void decl(const char *p_type, const char *p_name) { out += ov::str("uniform ") + p_type + " " + p_name + ";\n"; }
+    const char *prefix = "";
+    void decl(const char *p_type, const char *p_name) { out += ov::str(prefix) + p_type + " " + p_name + ";\n"; }
     void operator()(const char *p_name, int) { decl("int", p_name); }
     void operator()(const char *p_name, float) { decl("float", p_name); }
     void operator()(const char *p_name, const Float3 &) { decl("vec3", p_name); }
 };
 
-// `T name;` per field: the members of a std140 uniform block (a compute shader's).
-struct BlockMembers {
-    ov::str &out;
-    void member(const char *p_type, const char *p_name) { out += ov::str(p_type) + " " + p_name + ";\n"; }
-    void operator()(const char *p_name, int) { member("int", p_name); }
-    void operator()(const char *p_name, float) { member("float", p_name); }
-    void operator()(const char *p_name, const Float3 &) { member("vec3", p_name); }
-};
-
-// The fields' bytes in std140 (an int or a float on 4 bytes, a vec3 aligned to 16), in BlockMembers' order. The block's
+// The fields' bytes in std140 (an int or a float on 4 bytes, a vec3 aligned to 16), in the declarations' order. The block's
 // size is rounded up to 16 by pad().
 struct Std140 {
     ov::bytes &out;

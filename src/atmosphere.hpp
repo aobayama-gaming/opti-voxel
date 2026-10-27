@@ -70,6 +70,14 @@ public:
     static constexpr int SLICES = 32; // the last: the whole ray
     static constexpr int MS_SIZE = 32; // the multiple-scattering table: sun height x altitude
     static constexpr double AERIAL_RANGE_M = 128000.0; // the slices' reach past the camera's horizon
+    // The marches' steps (the GLSL takes them by substitution; AtmosphereCheck's reference too).
+    static constexpr int SUN_STEPS = 8; // the sun's transmittance from a sample (the passes and the hosts' light)
+    static constexpr int FAR_STEPS = 8; // the sky slice past the range
+    static constexpr int MS_STEPS = 20; // per direction of the multiple scattering
+    static constexpr int MS_DIRS = 8; // MS_DIRS^2 directions
+    static constexpr int SPACE_STEPS = 24; // a host's sky seen from above the atmosphere, per pixel
+    // The sun's disk in the sky (atmo_sky_radiance): this many times a sky radiance of 1, through the air.
+    static constexpr float SUN_DISK = 40.0f;
 
     // What changes per frame, as the passes' uniforms: the camera (render metres), the sun (unit, towards it), the
     // slices' range, the longest path through the atmosphere (a ray along a plane is cut there) and the radius of the
@@ -91,6 +99,19 @@ public:
         }
     };
 
+    // What a host's shaders take once per world besides the textures: the medium and the longest path (glsl_lookup's
+    // march reads both).
+    struct HostConstants {
+        AtmosphereMedium medium;
+        float max_path_m = 0.0f;
+
+        template <class F>
+        void visit(F &&p_f) const {
+            medium.visit(p_f);
+            p_f("atmo_max_path_m", max_path_m);
+        }
+    };
+
     // Called on the device's thread with the camera volume and the multiple-scattering table once made, with invalid
     // textures before they are freed: the host binds them to its shaders.
     using TexturesFn = std::function<void(ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter)>;
@@ -103,29 +124,29 @@ public:
     // Frees its textures and pipelines and deletes itself on the device's thread (after the work posted before).
     void destroy();
 
-    const AtmosphereMedium &get_medium() const { return medium; }
+    const HostConstants &host_constants() const { return constants; }
     // The last frame's slice range (the hosts' lookup reads it as atmo_range_m).
-    float range_m() const { return last.range_m; }
+    float range_m() const { return last_range_m; }
     // The Frame of a camera at p_camera_m over p_base (frame() uploads it): its range and longest path from the camera's
-    // altitude and the medium's top over a sphere of p_ms_radius_m (ms_radius_m).
+    // altitude and p_medium's top over a sphere of p_ms_radius_m (ms_radius_m).
     static Frame make_frame(const AtmosphereMedium &p_medium, double p_ms_radius_m, const Float3 &p_camera_m, const Float3 &p_sun,
             const BaseSurface::Render &p_base);
     // The sphere the multiple scattering and the ranges are taken on: the base's curvature radius, Earth's on the flat world.
     static double ms_radius_m(const BaseSurface &p_base, double p_voxel_m);
-    double get_ms_radius_m() const { return curvature_m; }
     // The camera volume (device thread; AtmosphereCheck reads the running object's).
     ov::gpu::Texture get_volume() const { return volume; }
 
-    // The medium's uniforms (AtmosphereMedium::visit), for a host that declares loose uniforms (Godot).
-    static ov::str glsl_medium_uniforms();
+    // HostConstants' uniforms, for a host that declares loose uniforms (Godot).
+    static ov::str glsl_host_uniforms();
     // The medium and the march (atmo_medium, the phases, atmo_segment, atmo_transmittance, atmo_integrate), after
     // BaseSurface::glsl_render, ShadeFrame's up_frame and the medium's uniforms. atmo_integrate reads the multiple
     // scattering through `vec3 atmo_ms(float altitude, float sun_height)`, which the includer defines.
     static ov::str glsl_march();
     // The host's lookups (after glsl_march): `vec4 atmo_at(vec3 camera, vec3 dir, float dist)` (in-scattering, mean
-    // transmittance from the camera to dist along dir), `vec4 atmo_sky(vec3 camera, vec3 dir)` (the whole ray) and
-    // atmo_ms from the table. The host declares `sampler2D atmo_volume`, `sampler2D atmo_multiscatter` and
-    // `float atmo_range_m`.
+    // transmittance from the camera to dist along dir), `vec3 atmo_sky_radiance(vec3 camera, vec3 dir, vec3 sun, float
+    // sun_cos)` (the sky for a sun of illuminance 1: the volume's sky slice, marched per pixel from above the atmosphere,
+    // and the sun's disk of cosine radius sun_cos through the air) and atmo_ms from the table. The host declares
+    // glsl_host_uniforms, `sampler2D atmo_volume`, `sampler2D atmo_multiscatter` and `float atmo_range_m`.
     static ov::str glsl_lookup();
     // The two passes' compute shaders (the check compiles them too).
     static ov::str glsl_pass_multiscatter();
@@ -140,9 +161,9 @@ private:
 
     ov::gpu::Device *device = nullptr;
     TexturesFn textures_fn;
-    AtmosphereMedium medium;
+    HostConstants constants;
     double curvature_m = 0.0; // the multiple scattering's sphere (finite)
-    Frame last;
+    float last_range_m = 0.0f;
     bool multiscatter_dirty = true;
 
     // Device-thread objects.

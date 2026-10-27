@@ -393,7 +393,7 @@ float BaseSurface::Render::altitude(const Float3 &p_m) const {
 
 ov::str BaseSurface::glsl_render_uniforms() {
     ov::str out;
-    Render().visit(GLSLUniforms::Declarations{ out });
+    Render().visit(GLSLUniforms::Declarations{ out, "uniform " });
     return out;
 }
 
