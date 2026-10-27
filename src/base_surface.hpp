@@ -146,7 +146,7 @@ public:
             p_f("base_radius_m", radius_m);
             p_f("base_k_m2", k_m2);
         }
-        // base_altitude (glsl_render) in float32 on the CPU (tests).
+        // base_altitude's formula (glsl_render) in float32 on the CPU: its precision (tests), not the GPU's bits.
         float altitude(const Float3 &p_m) const;
     };
     // The render-space base with the render origin at LOD0 voxel p_origin (it changes with the origin).

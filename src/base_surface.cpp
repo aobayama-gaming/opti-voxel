@@ -364,12 +364,14 @@ BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel
     r.kind = base_kind;
     double v[3];
     const double len = offset(anchor, p_origin, v) * p_voxel_m;
-    r.point_m = Float3{ float(v[0] * p_voxel_m), float(v[1] * p_voxel_m), float(v[2] * p_voxel_m) };
-    if (base_kind == Kind::SPHERE) {
-        const double rm = radius * p_voxel_m;
-        r.radius_m = float(rm);
-        r.k_m2 = float((len - rm) * (len + rm));
+    if (base_kind == Kind::FLAT) {
+        r.point_m = Float3{ 0.0f, float(v[1] * p_voxel_m), 0.0f }; // only the datum's height counts
+        return r;
     }
+    r.point_m = Float3{ float(v[0] * p_voxel_m), float(v[1] * p_voxel_m), float(v[2] * p_voxel_m) };
+    const double rm = radius * p_voxel_m;
+    r.radius_m = float(rm);
+    r.k_m2 = float((len - rm) * (len + rm));
     return r;
 }
 

@@ -28,7 +28,7 @@ The shared environment and the page shader's surface detail.
   (`shade_point`: a power of two of voxels holding at least 64 of its largest features, `shade_period_vox`) with its
   frequencies snapped to whole cycles per period (`shade_cells`, `shade_wave`; `value_noise` wraps its lattice): two
   render origins read points a whole number of periods apart, so a rebase changes nothing on screen and the floats stay
-  small anywhere. The contour lines are at whole multiples of 100 m (500 m on the continents) of altitude above the
+  small anywhere. The contour lines are halfway between whole multiples of 100 m (500 m on the continents) of altitude above the
   base. The hosts give the frame its origin through `shade_origin_voxel()` /
   `shade_voxel_m()` (the page shaders from their decode uniforms, the sky shader from `VoxelSky::set_render_frame`,
   which VoxelTerrain calls at start and on every rebase).

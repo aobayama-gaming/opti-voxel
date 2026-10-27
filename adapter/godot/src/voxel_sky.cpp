@@ -32,13 +32,14 @@ uniform vec2 cloud_wind = vec2(0.0);
 uniform float cloud_shadow = 0.0;
 uniform float wind_sway_m = 0.0;
 
-// Where a ray from p along dir leaves the cloud layer, cloud_height_m above the base, from below: false where it doesn't
-// (p above the layer, or the ray within 0.002 of the local level).
-bool cloud_hit(vec3 p, vec3 dir, out vec3 hit) {
+// Where a ray from p (the base's up there: up) along dir leaves the cloud layer, cloud_height_m above the base, from
+// below: false where it doesn't (p above the layer, or the ray within 0.002 of the local level, where a plane's exit is
+// unbounded; the sky fades the layer out there anyway).
+bool cloud_hit(vec3 p, vec3 dir, vec3 up, out vec3 hit) {
     vec2 t;
     bool below = base_level_span(p, dir, cloud_height_m, t) && t.x <= 0.0 && t.y > 0.0;
     hit = p + dir * t.y;
-    return below && dot(dir, base_up(p)) > 0.002;
+    return below && dot(dir, up) > 0.002;
 }
 
 // One plane of cloud_texel, weighted: not read where its weight is 0 (the flat world reads one plane of three).
@@ -130,12 +131,12 @@ void sky() {
         // colour on the clouds is its extinction at its own altitude (red at dusk); the shadowed side takes the sky's
         // colour. The layer fades into the sky near the horizon, where its texels stretch along the view.
         vec3 hit;
-        if (cloud_cover > 0.0 && cloud_hit(POSITION, EYEDIR, hit)) {
+        if (cloud_cover > 0.0 && cloud_hit(POSITION, EYEDIR, up, hit)) {
             vec3 hit_up = base_up(hit);
             float density = cloud_density(cloud_texel(hit, hit_up));
             float sun_up = dot(sun_world, hit_up);
             vec3 towards_sun = hit + (sun_world - hit_up * sun_up) * (0.02 * cloud_scale_m / max(sun_up, 0.15));
-            float lit = 1.0 - 0.75 * cloud_density(cloud_texel(towards_sun, hit_up));
+            float lit = 1.0 - 0.75 * cloud_density(cloud_texel(towards_sun, base_up(towards_sun)));
             vec3 rayleigh_beta;
             vec3 mie_beta;
             sky_betas(sun_dir, rayleigh_beta, mie_beta);

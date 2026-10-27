@@ -175,8 +175,9 @@ void fragment() {
         }
         contour_m = 500.0;
     }
-    // Contour lines at whole multiples of contour_m of altitude above the base (a few km at most: no frame to snap to).
-    float h = v_height / contour_m;
+    // Contour lines halfway between whole multiples of contour_m of altitude above the base (a few km at most: no frame to
+    // snap to): never on the base itself, where a flat ground would flicker between shades.
+    float h = v_height / contour_m + 0.5;
     float fw = max(fwidth(h), 1e-6);
     float line = abs(fract(h + 0.5) - 0.5) / fw;
     // Contours fade out where they would be denser than ~10 pixels apart.
@@ -276,7 +277,8 @@ void light() {
         vec3 to_sun = mat3(INV_VIEW_MATRIX) * LIGHT;
         vec3 hit;
         // VERTEX is not readable in light(): the fragment's position comes through v_world_pos.
-        if (dot(to_sun, base_up(v_world_pos)) > 0.05 && cloud_hit(v_world_pos, to_sun, hit)) {
+        vec3 up = base_up(v_world_pos);
+        if (dot(to_sun, up) > 0.05 && cloud_hit(v_world_pos, to_sun, up, hit)) {
             sun = 1.0 - cloud_shadow * cloud_density(cloud_texel(hit, base_up(hit)));
         }
     }
