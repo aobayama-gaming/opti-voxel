@@ -140,8 +140,9 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   table bit for bit over a fixed grid plus 1,024 hash-random points per origin (hash, octave
   decomposition at k 0..62, perlin3/2, a 2D and a 3D fBm, the archetype IR's `arch_*`
   sets, at LODs 0, 1, 5, 14, 24), pairs reaching the same voxel, absolute points identical
-  at every origin, and continuity along lines across voxel and noise-cell low-word wraps. Run it after touching
-  `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp` or the SDF. A new noise or SDF
+  at every origin, and continuity along lines across voxel and noise-cell low-word wraps; then `AtmosphereCheck`
+  (`atmosphere_check` in the report: the atmosphere's passes against their CPU reference, docs/look.md). Run it after
+  touching `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp`, the SDF or `atmosphere*`. A new noise or SDF
   term adds an entry (CPU fn + GLSL fn) to `make_probes()` in `src/frame_spike.cpp`.
 - `tools/origin_parity.sh [--voxel=M] -- --mode=direct --validate=64`: the same world point seen
   from different origins (`--camera_voxel`): runs zero, zero2 (determinism), then pairs one root span

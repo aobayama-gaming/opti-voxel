@@ -159,3 +159,5 @@ src/ov/png.hpp
 src/glsl_uniforms.hpp
 src/atmosphere.cpp
 src/atmosphere.hpp
+src/atmosphere_check.cpp
+src/atmosphere_check.hpp
