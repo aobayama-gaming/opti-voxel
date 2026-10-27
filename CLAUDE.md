@@ -24,11 +24,14 @@ what you touch before changing it, and update it in the same PR.
 ## Workflow (branches, worktrees, PRs)
 - `main` only moves through merged PRs from `dev`. `dev` is the integration branch.
   Never push directly to either.
-- One branch per feature, `feature/<name>`, started from `dev`, in its own worktree next to the
-  main checkout. Open a PR into `dev`; `dev` goes into `main` through a PR as well.
+- One branch per feature, `feature/<name>`, started from `dev`, in its own worktree under
+  `.claude/worktrees/` (git-ignored; Claude Code's `EnterWorktree` creates them there). Never outside the
+  checkout: every access to a path outside it asks the user for permission, which stalls an unattended run.
+  Open a PR into `dev`; `dev` goes into `main` through a PR as well. A session keeps one worktree; a
+  stacked PR branches in place (`git checkout -b`).
   ```
-  git worktree add ../opti-voxel-worktrees/<name> -b feature/<name> dev
-  cd ../opti-voxel-worktrees/<name>
+  git worktree add .claude/worktrees/<name> -b feature/<name> origin/dev   # or EnterWorktree, then checkout -b
+  cd .claude/worktrees/<name>
   git submodule update --init                               # godot-cpp starts empty
   scons platform=linux target=template_debug -j$(nproc)     # full build, a few minutes
   ~/.local/bin/godot --headless --path adapter/godot/project --import     # once: .godot/ is gitignored
@@ -57,7 +60,8 @@ what you touch before changing it, and update it in the same PR.
 - Keep mesher and render work core-level. Order and bounds come from integer chunk ids. Sub-SDFs
   per chunk and biome-local SDF origins are upcoming features with their own design: don't
   anticipate them.
-- When done: `git worktree remove ../opti-voxel-worktrees/<name>` after the PR is merged.
+- When done: `git worktree remove .claude/worktrees/<name>` after the PR is merged. A dev checkout for
+  `bench_ab.sh` goes there too (`git worktree add --detach .claude/worktrees/<name>-dev origin/dev`).
 
 ## Code rules (keep it from turning into spaghetti)
 Most of this code is written with AI agents. These rules are what keeps it reviewable; they apply

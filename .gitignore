@@ -70,3 +70,6 @@ bench/results/
 # Dawn adapter build
 adapter/dawn/out/
 adapter/dawn/out-web/
+
+# Worktrees (CLAUDE.md, Workflow)
+/.claude/worktrees/
