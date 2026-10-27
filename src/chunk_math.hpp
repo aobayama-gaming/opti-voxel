@@ -6,7 +6,7 @@
 #include <vector>
 
 // The core's world/chunk math. The render-space helpers (chunk_render_center, grid_to_render*) work
-// in metres relative to the world origin and return Float3 (world_coord.hpp): float32 triples, the
+// in metres relative to the render origin and return Float3 (world_coord.hpp): float32 triples, the
 // engine's real_t in single-precision builds. Engine call sites convert explicitly.
 
 struct ChunkParam {
@@ -16,9 +16,10 @@ struct ChunkParam {
     // Depth of the skirt in voxels of the chunk's own LOD: the overhang past the chunk bounds is
     // pushed this far into the solid, under the neighbour's surface, to hide LOD seams.
     float skirt_depth = 1.0f;
-    // Integer world origin in chunk-id units (snapped to the root chunk span, see VoxelTerrain::_ready).
-    // Godot space is the integer frame shifted by it: render positions are metres relative to the
-    // origin, so they stay small wherever the world is.
+    // The render origin in chunk-id units: render (engine) space is the integer frame shifted by it, so render
+    // positions are metres relative to it and stay small wherever the camera is. Even on every axis (a LOD0 chunk's
+    // corner, chunk_at_render). World::start sets it to the world origin (snapped to the root chunk span), then
+    // World::recenter moves it with the camera: only render-space code reads it (absolute ids and voxels never do).
     ChunkId origin_chunk;
 
     int chunk_voxel_dimension() const noexcept {
@@ -134,6 +135,14 @@ Float3 grid_to_render(const ChunkId &chunk_coord, const Float3 &grid, const Chun
 Float3 grid_to_render_lo32(const ov::ivec3 &chunk_lo, const Float3 &grid, const ChunkParam &chunk_param);
 // LOD0 chunk holding a render-space position.
 ChunkId chunk_at_render(const Float3 &render_pos, const ChunkParam &chunk_param);
+// Whether p_chunk can be a render origin: even on every axis.
+bool is_render_origin(const ChunkId &p_chunk);
+// The render origin that puts render position p_render_pos within one LOD0 chunk of render 0 (World::recenter): the
+// lower corner of the LOD0 chunk holding it.
+ChunkId recentered_origin(const Float3 &p_render_pos, const ChunkParam &chunk_param);
+// The metres every render position moves by when the render origin goes from p_from to p_to: the host subtracts it
+// from the positions it holds (rounded to float once, like any render position).
+Float3 origin_shift_m(const ChunkId &p_from, const ChunkId &p_to, const ChunkParam &chunk_param);
 
 // Bounding sphere radius of a LOD-p_lod chunk in chunk-id units (its half extent is 2^lod).
 float chunk_bounding_radius(int p_lod);

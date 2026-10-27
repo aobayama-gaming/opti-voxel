@@ -84,7 +84,8 @@ private:
     struct FrameUniforms {
         float view_proj[16];
         float shadow_proj[16];
-        int32_t origin_chunk[4]; // xyz: the world origin's chunk id, low words; w: chunk_size
+        int32_t origin_chunk[4]; // xyz: the render origin's chunk id, low words; w: chunk_size
+        int32_t origin_voxel[4]; // xyz: the render origin's LOD0 voxel, low words
         float sun[4]; // xyz: towards the sun; w: its disk's size
         float sun_color[4]; // w: energy
         float camera[4]; // xyz: render metres; w: fog distance (0 none)

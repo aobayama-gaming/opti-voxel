@@ -10,6 +10,7 @@
 // static: the camera's motion is all the motion there is).
 
 #include "fsr3.hpp"
+#include "world_coord.hpp"
 
 #include <webgpu/webgpu_cpp.h>
 
@@ -49,6 +50,9 @@ public:
 
     // This frame's projection (column-major, clip = m * world): r_jittered is what the 3D is drawn with.
     void begin_frame(const float p_view_proj[16], float r_jittered[16]);
+    // The render origin moved: every render position went down by p_shift metres (World::recenter), so the last
+    // frame's projection is carried into the new frame and the history reprojects as if nothing moved.
+    void shift_history(const Float3 &p_shift);
     // The 3D's targets for this frame (depth stored: FSR reads it).
     wgpu::TextureView color_view() const { return color.CreateView(); }
     wgpu::TextureView depth_view() const { return depth.CreateView(); }

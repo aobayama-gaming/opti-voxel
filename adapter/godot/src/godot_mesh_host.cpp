@@ -71,7 +71,8 @@ uint64_t GodotMeshHost::create_mesh(const ChunkMesh &p_mesh, float p_cell_size, 
     rs->instance_set_base(drawn.instance, drawn.mesh);
     Basis scaled_basis;
     scaled_basis.scale(Vector3(p_cell_size, p_cell_size, p_cell_size));
-    rs->instance_set_transform(drawn.instance, Transform3D(scaled_basis, godot_v3(p_origin)));
+    drawn.transform = Transform3D(scaled_basis, godot_v3(p_origin));
+    rs->instance_set_transform(drawn.instance, drawn.transform);
 
     const std::lock_guard<std::mutex> lock(mutex);
     const uint64_t id = next_id++;
@@ -93,6 +94,16 @@ void GodotMeshHost::free_mesh(uint64_t p_mesh) {
     RenderingServer *rs = RenderingServer::get_singleton();
     rs->free_rid(drawn.instance);
     rs->free_rid(drawn.mesh);
+}
+
+void GodotMeshHost::place_mesh(uint64_t p_mesh, const Float3 &p_origin) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    const auto it = meshes.find(p_mesh);
+    if (it == meshes.end()) {
+        return;
+    }
+    it->second.transform.origin = godot_v3(p_origin);
+    RenderingServer::get_singleton()->instance_set_transform(it->second.instance, it->second.transform);
 }
 
 bool GodotMeshHost::read_mesh(uint64_t p_mesh, ChunkMesh &r_mesh) const {

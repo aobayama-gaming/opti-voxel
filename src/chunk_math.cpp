@@ -168,7 +168,7 @@ Float3 ChunkMath::grid_to_render_lo32(const ov::ivec3 &chunk_lo, const Float3 &g
             as_i32(lo32(chunk_lo.x) - lo32(chunk_param.origin_chunk.x)),
             as_i32(lo32(chunk_lo.y) - lo32(chunk_param.origin_chunk.y)),
             as_i32(lo32(chunk_lo.z) - lo32(chunk_param.origin_chunk.z)));
-    // The origin is a multiple of the root span, so the low word keeps the LOD bit.
+    // The LOD from the id's own low word (absolute, whatever the origin).
     const int64_t lod_size = chunk_lo.x == 0 ? 1 : int64_t(1) << ctz64(uint64_t(lo32(chunk_lo.x)));
     const Vector3i64 min_rel = (rel - Vector3i64(lod_size, lod_size, lod_size)) * chunk_param.half_chunk_voxels();
     return _grid_point_render(min_rel, lod_size, grid, chunk_param);
@@ -182,6 +182,20 @@ ChunkId ChunkMath::chunk_at_render(const Float3 &render_pos, const ChunkParam &c
         return int64_t(std::clamp(c, -1e15, 1e15));
     };
     return chunk_param.origin_chunk + ChunkId(cell(render_pos.x) * 2 + 1, cell(render_pos.y) * 2 + 1, cell(render_pos.z) * 2 + 1);
+}
+
+bool ChunkMath::is_render_origin(const ChunkId &p_chunk) {
+    return ((p_chunk.x | p_chunk.y | p_chunk.z) & 1) == 0;
+}
+
+ChunkId ChunkMath::recentered_origin(const Float3 &p_render_pos, const ChunkParam &chunk_param) {
+    return chunk_at_render(p_render_pos, chunk_param) - ChunkId(1, 1, 1);
+}
+
+Float3 ChunkMath::origin_shift_m(const ChunkId &p_from, const ChunkId &p_to, const ChunkParam &chunk_param) {
+    const ChunkId d = p_to - p_from;
+    const double m = chunk_param.id_unit_m();
+    return Float3{ float(double(d.x) * m), float(double(d.y) * m), float(double(d.z) * m) };
 }
 
 // The float operations below mirror gpu_frame.hpp one by one, in float32, as separate statements

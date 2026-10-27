@@ -107,6 +107,9 @@ public:
 
     void release_chunk(const ChunkOutput &p_chunk) override;
     void set_hidden(const ChunkOutput &p_chunk, uint64_t p_mask) override;
+    // The render origin moved (World::rebase): the page shader's decode and every page's culling bounds follow it. The
+    // pages' rows are chunk-local under absolute ids: nothing is re-meshed or re-uploaded.
+    void set_render_origin(const ChunkId &p_origin);
 
     // Discovery audit: quad counts of chunks that are not loaded. Passes sdf, edges and vertices only,
     // nothing is written to pages, nothing becomes loaded. Batches run only when the mesh queue is empty.
@@ -321,6 +324,10 @@ private:
     void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
     RenderBox _chunk_aabb(const ChunkId &p_chunk) const;
+    // The merged _chunk_aabb of p_count chunks (at least one), the i-th one p_id(i).
+    template <typename IdOf>
+    RenderBox _merged_aabb(size_t p_count, IdOf p_id) const;
+    PageDecode _page_decode() const;
 
     struct Stats {
         uint64_t batches = 0;

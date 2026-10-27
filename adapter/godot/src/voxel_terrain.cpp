@@ -4,6 +4,7 @@
 #include "ov/executor.hpp"
 #include "rd_utils.hpp"
 #include "trace.hpp"
+#include "voxel_sky.hpp"
 #include <cmath>
 #include <fstream>
 #include <godot_cpp/classes/engine.hpp>
@@ -71,6 +72,12 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_half_chunk_voxels"), &VoxelTerrain::get_half_chunk_voxels);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
     ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
+    ClassDB::bind_method(D_METHOD("set_rebase_distance_m", "metres"), &VoxelTerrain::set_rebase_distance_m);
+    ClassDB::bind_method(D_METHOD("get_rebase_distance_m"), &VoxelTerrain::get_rebase_distance_m);
+    ClassDB::bind_method(D_METHOD("get_render_origin_x"), &VoxelTerrain::get_render_origin_x);
+    ClassDB::bind_method(D_METHOD("get_render_origin_y"), &VoxelTerrain::get_render_origin_y);
+    ClassDB::bind_method(D_METHOD("get_render_origin_z"), &VoxelTerrain::get_render_origin_z);
+    ClassDB::bind_method(D_METHOD("get_render_offset_m"), &VoxelTerrain::get_render_offset_m);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
     ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
@@ -187,6 +194,9 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_x", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_x", "get_world_origin_x");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_y", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_y", "get_world_origin_y");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "world_origin_z", PROPERTY_HINT_NONE, "suffix:voxels"), "set_world_origin_z", "get_world_origin_z");
+    ADD_GROUP("", "");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rebase_distance_m", PROPERTY_HINT_RANGE, "0,1000000,1,suffix:m"), "set_rebase_distance_m", "get_rebase_distance_m");
+    ADD_SIGNAL(MethodInfo("origin_shifted", PropertyInfo(Variant::VECTOR3, "shift")));
     ADD_GROUP("GPU Direct", "direct_");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_batch_size", PROPERTY_HINT_RANGE, "1,1024"), "set_direct_batch_size", "get_direct_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_pages_per_batch", PROPERTY_HINT_RANGE, "1,256"), "set_direct_pages_per_batch", "get_direct_pages_per_batch");
@@ -688,6 +698,70 @@ Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
     return Vector3(real_t(pos[0]), real_t(pos[1]), real_t(pos[2]));
 }
 
+void VoxelTerrain::set_rebase_distance_m(float p_metres) {
+    ERR_FAIL_COND_MSG(world.is_started(), "rebase_distance_m must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(!(p_metres >= 0.0f), "rebase_distance_m must be >= 0.");
+    cfg().rebase_distance_m = p_metres;
+}
+
+float VoxelTerrain::get_rebase_distance_m() const {
+    return cfg().rebase_distance_m;
+}
+
+int64_t VoxelTerrain::get_render_origin_x() const {
+    return cfg().chunk_param.origin_voxel().x;
+}
+
+int64_t VoxelTerrain::get_render_origin_y() const {
+    return cfg().chunk_param.origin_voxel().y;
+}
+
+int64_t VoxelTerrain::get_render_origin_z() const {
+    return cfg().chunk_param.origin_voxel().z;
+}
+
+Vector3 VoxelTerrain::get_render_offset_m() const {
+    if (!world.is_started()) {
+        return Vector3();
+    }
+    return godot_v3(ChunkMath::origin_shift_m(world.world_origin(), world.render_origin(), world.chunk_param()));
+}
+
+void VoxelTerrain::_move_render_origin(const Float3 &p_shift) {
+    const Vector3 shift = godot_v3(p_shift);
+    const Vector3 camera_before = camera->get_global_position();
+    Node *parent = get_parent();
+    for (int i = 0; parent && i < parent->get_child_count(); i++) {
+        Node3D *node = Object::cast_to<Node3D>(parent->get_child(i));
+        if (node != nullptr && node != this) {
+            node->set_global_position(node->get_global_position() - shift);
+        }
+    }
+    // A camera outside the siblings (top_level, elsewhere in the tree) moves itself: it must, or every frame rebases.
+    if (camera->get_global_position() == camera_before) {
+        camera->set_global_position(camera_before - shift);
+    }
+    _push_render_frame();
+    emit_signal("origin_shifted", shift);
+}
+
+void VoxelTerrain::_push_render_frame() {
+    const ChunkParam &param = world.chunk_param();
+    const SDFCascade &sdf = world.terrain();
+    if (page_host && sdf.preset == SDFCascade::Preset::CONTINENTS) {
+        // Continents preset: the page shader colours heights around sea level (the cascade's datum), in render metres.
+        page_host->set_material_param("sea_level_m", ChunkMath::voxel_to_render(VoxelPos(0, sdf.get_datum_y(), 0), param).y);
+    }
+    const float rise_m = ChunkMath::origin_shift_m(world.world_origin(), world.render_origin(), param).y;
+    const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
+    Node *parent = get_parent();
+    for (int i = 0; parent && i < parent->get_child_count(); i++) {
+        if (VoxelSky *sky = Object::cast_to<VoxelSky>(parent->get_child(i))) {
+            sky->set_render_frame(origin_lo, param.voxel_size, rise_m);
+        }
+    }
+}
+
 double VoxelTerrain::get_load_radius() const {
     return world.load_radius();
 }
@@ -830,13 +904,9 @@ void VoxelTerrain::_ready() {
         page_host->set_material_param("skirt_depth_m", skirt_depths);
         const UpAxis up = sdf.up_at(VoxelPos(0, sdf.get_datum_y(), 0));
         page_host->set_material_param("base_up", Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2])));
-        if (sdf.preset == SDFCascade::Preset::CONTINENTS) {
-            // Continents preset: the page shader colours heights around sea level (the cascade's datum).
-            const double sea_m = ChunkMath::voxel_to_render(VoxelPos(0, sdf.get_datum_y(), 0), world.chunk_param()).y;
-            page_host->set_material_param("sea_level_m", sea_m);
-        }
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     }
+    _push_render_frame();
 }
 
 // The instance edit's rotation (9 floats) and params (8): null when not given (identity / zero).
@@ -905,6 +975,10 @@ void VoxelTerrain::_process(double) {
         return;
     }
     if (camera != nullptr) {
+        Float3 shift;
+        if (!Engine::get_singleton()->is_editor_hint() && world.recenter(ov_f3(camera->get_global_position()), shift)) {
+            _move_render_origin(shift);
+        }
         const Float3 pos = ov_f3(camera->get_global_position());
         const Float3 forward = ov_f3(_camera_forward());
         world.frame(&pos, &forward, _camera_far());

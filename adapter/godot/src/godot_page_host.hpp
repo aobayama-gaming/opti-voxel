@@ -56,6 +56,8 @@ private:
     godot::RID base_mesh;
     godot::RID shader;
     godot::Dictionary material_params;
+    PageDecode decode; // the last set_decode's
+    bool has_decode = false;
     godot::Ref<godot::ImageTexture> material_texture; // material_tex (a material param holds its RID only)
     std::vector<Page> pages;
     std::vector<PageRT> rt_pages;

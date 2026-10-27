@@ -273,10 +273,13 @@ func _terrain() -> Node:
 func _mark(kind: String, audit: bool) -> void:
 	mark_index += 1
 	var t: Transform3D = camera.global_transform
+	var terrain_node := _terrain()
+	# Relative to the world origin (bench.sh --cam_pos), whatever the render origin moved to.
+	var pose: Vector3 = t.origin + (terrain_node.get_render_offset_m() if terrain_node else Vector3.ZERO)
 	var m := {
 		"index": mark_index, "kind": kind, "time": Time.get_datetime_string_from_system(),
 		"frame": Engine.get_process_frames(),
-		"cam_pos": [t.origin.x, t.origin.y, t.origin.z],
+		"cam_pos": [pose.x, pose.y, pose.z],
 		"forward": [-t.basis.z.x, -t.basis.z.y, -t.basis.z.z],
 		"yaw_deg": rad_to_deg(yaw), "pitch_deg": rad_to_deg(pitch), "fov": camera.fov,
 		"window": [get_viewport().get_visible_rect().size.x, get_viewport().get_visible_rect().size.y],

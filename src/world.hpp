@@ -38,8 +38,11 @@ public:
         int terrain_mode = 1;
         int legacy_batch_size = 1024;
         int lod_numbers = 15; // LODs 0 .. lod_numbers - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
-        ChunkParam chunk_param; // voxel_size and skirt_depth set by the host; the origin by start()
+        ChunkParam chunk_param; // voxel_size and skirt_depth set by the host; the render origin by start() and recenter()
         VoxelPos world_origin_request; // LOD0 voxels, snapped down to the root chunk span by start()
+        // recenter() moves the render origin to the camera once it is farther than this from it (metres, on any axis):
+        // render positions stay small, so float precision holds anywhere in the world. 0: never (a fixed origin).
+        float rebase_distance_m = 1024.0f;
         int archetype_instances = 0;
         double archetype_instance_area = 200.0;
         int archetype_trees = 0;
@@ -127,6 +130,19 @@ public:
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point).
     void tangent_position(double p_u_m, double p_v_m, double r_render_pos[3]) const;
 
+    // Render-origin rebasing. Render space (every Float3 the host passes or gets) is metres from the render origin,
+    // which starts at the world origin. Called by the host before frame(): when the camera is farther than
+    // rebase_distance_m from the render origin, moves it under the camera (ChunkMath::recentered_origin) and returns
+    // true with r_shift, the metres the host subtracts from every render position it holds (its camera, nodes, paths)
+    // in the same frame. Deferred (false) while a validation or an audit holds render positions.
+    bool recenter(const Float3 &p_camera_pos, Float3 &r_shift);
+    // Moves the render origin to p_origin (even: ChunkMath::is_render_origin), r_shift as recenter's. The meshes
+    // follow (the pages' bounds and decode, the legacy meshes' transforms); nothing is re-meshed.
+    bool rebase(const ChunkId &p_origin, Float3 &r_shift);
+    const ChunkId &render_origin() const { return config.chunk_param.origin_chunk; }
+    // The world origin start() snapped (the render origin it started at).
+    const ChunkId &world_origin() const { return world_origin_chunk; }
+
     void set_debug_view(int p_view);
 
     // Instance edits (archetype table): the anchor in LOD0 voxels, a 9-float row-major rotation and 8 params (null:
@@ -170,7 +186,9 @@ private:
     bool destroy_dirty = false;
     // View of the scan currently in state.scanned_chunk.
     ScanView scan_view;
-    Float3 last_camera; // the camera of the last frame (and start)
+    Float3 last_camera; // the camera of the last frame (and start), render space
+    ChunkId world_origin_chunk;
+    int64_t rebases = 0;
     bool has_camera = false;
     double far_reach = 1.0; // the farthest point drawn / the far plane's depth: 1 / cos(the diagonal half-FOV)
 

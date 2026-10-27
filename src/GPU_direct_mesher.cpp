@@ -116,15 +116,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 
     pool = new QuadPagePool();
     pool->initialize(device, p_host, settings.page_capacity, settings.initial_pages);
-    // The page shader rebuilds world positions from the group header's chunk id, relative to the world origin (low
-    // words, wrapping).
-    PageDecode decode;
-    decode.chunk_size = chunk_param.chunk_size;
-    decode.skirt_size = chunk_param.skirt_size;
-    decode.pos_scale = PageFormat::pos_scale(chunk_param.chunk_size);
-    decode.voxel_size = chunk_param.voxel_size;
-    decode.origin_chunk_lo = WorldCoord::lo32_i(chunk_param.origin_chunk);
-    p_host->set_decode(decode);
+    p_host->set_decode(_page_decode());
     p_host->set_materials(sdf->get_materials().make_image());
     page_state.resize(pool->get_page_count());
     palettes.initialize(settings.palette_capacity, sdf->get_gpu_table()->base_palette());
@@ -509,6 +501,50 @@ void GPUDirectMesher::_rt_compact(const std::vector<int> &p_copies, const std::v
     }
 }
 
+template <typename IdOf>
+RenderBox GPUDirectMesher::_merged_aabb(size_t p_count, IdOf p_id) const {
+    RenderBox bounds = _chunk_aabb(p_id(0));
+    for (size_t i = 1; i < p_count; i++) {
+        bounds.merge_with(_chunk_aabb(p_id(i)));
+    }
+    return bounds;
+}
+
+PageDecode GPUDirectMesher::_page_decode() const {
+    // The page shader rebuilds render positions from the group header's chunk id, relative to the render origin (low
+    // words, wrapping).
+    PageDecode decode;
+    decode.chunk_size = chunk_param.chunk_size;
+    decode.skirt_size = chunk_param.skirt_size;
+    decode.pos_scale = PageFormat::pos_scale(chunk_param.chunk_size);
+    decode.voxel_size = chunk_param.voxel_size;
+    decode.origin_chunk_lo = WorldCoord::lo32_i(chunk_param.origin_chunk);
+    decode.origin_voxel_lo = WorldCoord::lo32_i(chunk_param.origin_voxel());
+    return decode;
+}
+
+void GPUDirectMesher::set_render_origin(const ChunkId &p_origin) {
+    chunk_param.origin_chunk = p_origin;
+    host->set_decode(_page_decode());
+    for (size_t page = 0; page < page_state.size(); page++) {
+        if (!page_state[page].bounds_dirty) {
+            page_state[page].bounds_dirty = true;
+            dirty_bounds_pages.push_back(int(page));
+        }
+    }
+    _update_dirty_bounds();
+    // A batch in flight: its pages hold the batch's conservative box until its directory lands.
+    for (const std::pair<uint32_t, InFlightBatch> &kv : in_flight) {
+        const std::vector<ChunkId> &chunks = kv.second.chunks;
+        const RenderBox box = _merged_aabb(chunks.size(), [&](size_t i) { return chunks[i]; });
+        for (const int page : kv.second.pages) {
+            if (page_state[page].chunks.empty()) {
+                pool->set_page_aabb(page, box);
+            }
+        }
+    }
+}
+
 RenderBox GPUDirectMesher::_chunk_aabb(const ChunkId &p_chunk) const {
     const Float3 center = ChunkMath::chunk_render_center(p_chunk, chunk_param);
     const float size = ChunkMath::world_chunk_size(p_chunk, chunk_param);
@@ -528,12 +564,8 @@ void GPUDirectMesher::_update_dirty_bounds() {
         if (ps.chunks.empty()) {
             continue;
         }
-        RenderBox bounds = _chunk_aabb(ps.chunks[0].id);
-        for (size_t i = 1; i < ps.chunks.size(); i++) {
-            bounds.merge_with(_chunk_aabb(ps.chunks[i].id));
-        }
-        ps.bounds = bounds;
-        pool->set_page_aabb(page, bounds);
+        ps.bounds = _merged_aabb(ps.chunks.size(), [&](size_t i) { return ps.chunks[i].id; });
+        pool->set_page_aabb(page, ps.bounds);
     }
     dirty_bounds_pages.clear();
 }
@@ -789,13 +821,12 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     const uint32_t list_words = uint32_t(list.size() / 4);
     const uint64_t list_bound = _observe_lists(chunks, ids, streamed_words, bounds);
     const ov::ivec2 lods = ChunkMath::lod_range(chunks);
-    RenderBox box = _chunk_aabb(chunks[0]);
+    const RenderBox box = _merged_aabb(chunks.size(), [&](size_t i) { return chunks[i]; });
     for (const ChunkId &c : chunks) {
         const int lod = ChunkMath::get_lod(c);
         if (lod >= 0 && lod < lod_count) {
             lod_counts[lod]++;
         }
-        box.merge_with(_chunk_aabb(c));
         working_generation.insert(c);
     }
     r_budget_us -= cost_model.estimate(lod_counts, list_words);

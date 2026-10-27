@@ -20,6 +20,16 @@ The shared environment and the page shader's surface detail.
   still): the vertex stage moves leaf corners by `wind_sway` (a gust wave riding `cloud_wind` plus a finer wobble, a
   pure function of the position and TIME: shared corners agree, the mesh stays watertight) up to LOD 2, where each
   tree corner pays a palette and a material fetch, and the leaf pattern's noise drifts (a shimmer). Bark stays still:
-  the pages carry no per-tree pivot to bend a trunk around. Cost unmeasured. Not done yet, in order: water (a sea plane with a
+  the pages carry no per-tree pivot to bend a trunk around. Cost unmeasured. **Shading frame** (`src/shade_frame_glsl.hpp`):
+  every pattern of the position (the value noises, the bark's height, the lava and wind waves, the contour lines, the
+  cloud tiles) is read at the render position plus the render origin's voxel modulo a period of the pattern
+  (`shade_point`: a power of two of voxels holding at least 64 of its largest features, `shade_period_vox`) with its
+  frequencies snapped to whole cycles per period (`shade_cells`, `shade_wave`; `value_noise` wraps its lattice): two
+  render origins read points a whole number of periods apart, so a rebase changes nothing on screen and the floats stay
+  small anywhere. The contour lines are at whole multiples of ~100 m (500 m on the continents) of absolute height, the
+  snapped spacing (99.3 m at 5 cm). The hosts give the frame its origin through `shade_origin_voxel()` /
+  `shade_voxel_m()` (the page shaders from their decode uniforms, the sky shader from `VoxelSky::set_render_frame`,
+  which VoxelTerrain calls at start and on every rebase; the cloud layer's height stays above the world origin).
+  `tools/shot_diff.py` compares two shots of one pose (a fly far out and back with `--still=1`). Not done yet, in order: water (a sea plane with a
   depth shader), triplanar image textures per material, grass, height fog (the ground spans kilometres on the
   cascade terrains: a fixed fog height is wrong there), time of day.

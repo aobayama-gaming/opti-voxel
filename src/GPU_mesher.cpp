@@ -216,6 +216,10 @@ void GPUMesher::release_chunk(const ChunkOutput &p_chunk) {
     mutex.unlock();
     OV_ERR_FAIL_NULL_MSG(found, "GPUMesher: a chunk released twice (its handle is unknown).");
     if (freed != 0) {
+        {
+            const std::lock_guard<std::mutex> lock(origin_mutex);
+            placed.erase(freed);
+        }
         host->free_mesh(freed);
         DebugLog::chunk_rids_freed++;
     }
@@ -556,8 +560,20 @@ void GPUMesher::render_chunk() {
 
         // Mesh vertices are in the chunk's vertex grid: scale by the cell size, origin at grid (0,0,0).
         const float cell_size = chunk_param.voxel_size * float(ChunkMath::get_lod_size(chunk.chunk_id));
+        const std::lock_guard<std::mutex> lock(origin_mutex);
         chunk.host_mesh = host->create_mesh(chunk.mesh, cell_size, ChunkMath::grid_to_render(chunk.chunk_id, Float3{}, chunk_param));
+        if (chunk.host_mesh != 0) {
+            placed[chunk.host_mesh] = chunk.chunk_id;
+        }
         DebugLog::chunk_rids_created += chunk.host_mesh != 0 ? 1 : 0;
+    }
+}
+
+void GPUMesher::set_render_origin(const ChunkId &p_origin) {
+    const std::lock_guard<std::mutex> lock(origin_mutex);
+    chunk_param.origin_chunk = p_origin;
+    for (const auto &kv : placed) {
+        host->place_mesh(kv.first, ChunkMath::grid_to_render(kv.second, Float3{}, chunk_param));
     }
 }
 

@@ -26,11 +26,12 @@ def load(path):
         return json.load(f)
 
 
-def image_diff(a, b):
+def image_diff(a, b, tol=3):
+    """The share of pixels whose largest channel difference passes tol, and the largest difference."""
     ia = np.asarray(Image.open(a).convert("RGB")).astype(int)
     ib = np.asarray(Image.open(b).convert("RGB")).astype(int)
     d = np.abs(ia - ib).max(axis=2)
-    return float((d > 3).mean()), int(d.max())
+    return float((d > tol).mean()), int(d.max())
 
 
 def main():

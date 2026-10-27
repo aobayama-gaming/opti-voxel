@@ -126,6 +126,7 @@ struct Float3 {
     float z = 0.0f;
 
     constexpr bool operator==(const Float3 &p_o) const { return x == p_o.x && y == p_o.y && z == p_o.z; }
+    constexpr Float3 operator-(const Float3 &p_o) const { return Float3{ x - p_o.x, y - p_o.y, z - p_o.z }; }
     constexpr bool operator!=(const Float3 &p_o) const { return !(*this == p_o); }
 
     // godot Vector3::normalized's float form: divide each component by the length, no reciprocal

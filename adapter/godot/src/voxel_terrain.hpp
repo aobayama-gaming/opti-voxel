@@ -59,6 +59,10 @@ private:
     // What the world gets as the camera's far plane: Camera3D.far, 0 (none) without a camera or the far limit.
     double _camera_far() const;
     bool _can_set_world_origin(int64_t p_voxel) const;
+    // The render origin moved by p_shift metres (World::recenter): the Node3D siblings follow, then origin_shifted.
+    void _move_render_origin(const Float3 &p_shift);
+    // What follows the render origin outside the meshers: the sea level colours, the VoxelSky siblings' frame.
+    void _push_render_frame();
 
 public:
     void _ready() override;
@@ -187,6 +191,21 @@ public:
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
     // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
     Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;
+
+    // Render-origin rebasing (World::recenter): once the camera is farther than this many metres from the render
+    // origin on any axis, the origin moves under it, every Node3D sibling of the terrain moves by the shift in the same
+    // frame and origin_shifted(shift) is emitted for the render positions scripts hold (subtract it). 0: a fixed
+    // origin. Default 1024. Set before the node enters the tree.
+    void set_rebase_distance_m(float p_metres);
+    float get_rebase_distance_m() const;
+    // The render origin in LOD0 voxels (absolute, int64): render (0, 0, 0) is this voxel. The world origin until the
+    // first rebase.
+    int64_t get_render_origin_x() const;
+    int64_t get_render_origin_y() const;
+    int64_t get_render_origin_z() const;
+    // Render metres from the world origin to the render origin: a render position plus this is the position the scene
+    // had before any rebase (a float: for reports and replayable poses, not exact far away).
+    Vector3 get_render_offset_m() const;
 
     void set_legacy_trim_indices(bool p_trim);
     bool get_legacy_trim_indices() const;

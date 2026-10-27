@@ -3,6 +3,7 @@
 #include "mesh_host.hpp"
 
 #include <godot_cpp/variant/rid.hpp>
+#include <godot_cpp/variant/transform3d.hpp>
 
 #include <map>
 #include <mutex>
@@ -17,12 +18,14 @@ public:
 
     uint64_t create_mesh(const ChunkMesh &p_mesh, float p_cell_size, const Float3 &p_origin) override;
     void free_mesh(uint64_t p_mesh) override;
+    void place_mesh(uint64_t p_mesh, const Float3 &p_origin) override;
     bool read_mesh(uint64_t p_mesh, ChunkMesh &r_mesh) const override;
 
 private:
     struct Drawn {
         godot::RID mesh;
         godot::RID instance;
+        godot::Transform3D transform;
     };
     godot::RID scenario;
     bool owns_scenario = false;

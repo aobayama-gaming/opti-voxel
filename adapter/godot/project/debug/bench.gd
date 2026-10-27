@@ -35,6 +35,11 @@ extends Node3D
 ##   --steady=N                   frames measured after load completes (default 300)
 ##   --fly_seconds=S              wall-clock duration of the outbound leg (same again for return, default 10)
 ##   --fly_dist=M                 metres travelled on the outbound leg (default 1500)
+##   --rebase_m=M                 VoxelTerrain.rebase_distance_m: the render origin follows the camera once it is
+##                                M metres away (default the terrain's, 1024; 0: a fixed origin). A fly far out and
+##                                back (--fly_dist=20000) rebases on the way: its loaded and steady_end shots match
+##   --still=1                    no cloud drift and no leaf sway (VoxelSky): two shots of one pose taken at different
+##                                times compare pixel for pixel
 ##                                Movement is time-based (like a player), so a faster pipeline is not
 ##                                penalised by flying further per second.
 ##   --max_frames=N               hard cap; run is marked timed_out (default 20000)
@@ -304,6 +309,14 @@ func _ready() -> void:
 			return
 		terrain.discoverer_mode = discoverers[args["discoverer"]]
 	terrain.discovery_compare = args.get("discovery_compare", "0") == "1"
+	if args.has("rebase_m"):
+		terrain.rebase_distance_m = float(args["rebase_m"])
+	terrain.origin_shifted.connect(_on_origin_shifted)
+	if args.get("still", "0") == "1":
+		for child in get_children():
+			if child is VoxelSky:
+				child.cloud_wind = Vector2.ZERO
+				child.wind_sway_m = 0.0
 	if args.has("origin"):
 		var o: PackedStringArray = args["origin"].split(",")
 		terrain.world_origin_x = o[0].to_int()
@@ -426,11 +439,19 @@ func _altitudes() -> PackedFloat64Array:
 	return out
 
 
-## LOD0 voxel of a render-space position: the int64 world origin plus a small rounded offset (the origin
+## LOD0 voxel of a render-space position: the int64 render origin plus a small rounded offset (the origin
 ## never goes through a float).
 func _voxel_of(pos: Vector3, vt: float) -> Array:
-	return [terrain.world_origin_x + int(round(pos.x / vt)), terrain.world_origin_y + int(round(pos.y / vt)),
-			terrain.world_origin_z + int(round(pos.z / vt))]
+	return [terrain.get_render_origin_x() + int(round(pos.x / vt)), terrain.get_render_origin_y() + int(round(pos.y / vt)),
+			terrain.get_render_origin_z() + int(round(pos.z / vt))]
+
+
+## The render origin moved (VoxelTerrain.rebase_distance_m): the terrain moved the camera and the lights, the
+## positions this script holds follow.
+func _on_origin_shifted(shift: Vector3) -> void:
+	start_pos -= shift
+	walk_from -= shift
+	approach_from_pos -= shift
 
 
 ## Edit scenario: a few instance edits per frame in front of the camera (alternating add / move /
