@@ -56,6 +56,7 @@ public:
         bool dual_contouring = false;
         float lod_pixel_error = 2.0f;
         float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
+        std::vector<float> lod_pixel_errors; // per LOD, replaces lod_pixel_error (0 or past the end: lod_pixel_error)
         float lod_view_margin_deg = 20.0f;
         float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
         GPUDirectMesher::Settings direct;

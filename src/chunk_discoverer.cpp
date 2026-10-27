@@ -425,7 +425,8 @@ void ChunkDiscoverer::setup_lod(
         float viewport_height,
         float fov_rad,
         float target_pixel_error_back,
-        float cone_half_angle_rad) {
+        float cone_half_angle_rad,
+        const std::vector<float> &target_pixel_errors) {
     cone_half_angle = cone_half_angle_rad;
     // The LOD distances scale as 1 / error: far from the cone, (1 + back_scale) times the distance meets
     // the back error's thresholds.
@@ -447,7 +448,8 @@ void ChunkDiscoverer::setup_lod(
 
         // Compute threshold in world units, then convert to chunk-coordinate units.
         // One chunk coordinate step equals CHUNK_DIMENSION / 2 in world units.
-        float dist_world = (geometric_error_world * focal_length) / target_pixel_error;
+        const float error = size_t(i) < target_pixel_errors.size() && target_pixel_errors[size_t(i)] > 0.0f ? target_pixel_errors[size_t(i)] : target_pixel_error;
+        float dist_world = (geometric_error_world * focal_length) / error;
         float dist_chunk = dist_world / (chunk_param.chunk_world_dimension() * 0.5f);
 
         // Keep thresholds strictly increasing and avoid near-zero first level.
@@ -455,6 +457,10 @@ void ChunkDiscoverer::setup_lod(
             dist_chunk = 1.0f;
         }
         if (dist_chunk <= previous_distance) {
+            if (i > 0 && !target_pixel_errors.empty()) {
+                // The voxel doubles per LOD: an error 2x or more coarser than the LOD below leaves no band.
+                OV_WARN_PRINT(ov::format("ChunkDiscoverer: lod_pixel_errors leave LOD %d no band (its error is >= 2x LOD %d's).", i, i - 1));
+            }
             dist_chunk = previous_distance + 1.0f;
         }
 

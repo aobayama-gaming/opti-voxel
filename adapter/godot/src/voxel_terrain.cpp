@@ -57,6 +57,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error"), &VoxelTerrain::get_lod_pixel_error);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error_back", "error"), &VoxelTerrain::set_lod_pixel_error_back);
     ClassDB::bind_method(D_METHOD("get_lod_pixel_error_back"), &VoxelTerrain::get_lod_pixel_error_back);
+    ClassDB::bind_method(D_METHOD("set_lod_pixel_errors", "errors"), &VoxelTerrain::set_lod_pixel_errors);
+    ClassDB::bind_method(D_METHOD("get_lod_pixel_errors"), &VoxelTerrain::get_lod_pixel_errors);
     ClassDB::bind_method(D_METHOD("set_lod_view_margin_deg", "degrees"), &VoxelTerrain::set_lod_view_margin_deg);
     ClassDB::bind_method(D_METHOD("get_lod_view_margin_deg"), &VoxelTerrain::get_lod_view_margin_deg);
     ClassDB::bind_method(D_METHOD("set_lod_view_memory_m", "metres"), &VoxelTerrain::set_lod_view_memory_m);
@@ -167,6 +169,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
+    ADD_PROPERTY(PropertyInfo(Variant::PACKED_FLOAT32_ARRAY, "lod_pixel_errors"), "set_lod_pixel_errors", "get_lod_pixel_errors");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lod_far_limit"), "set_lod_far_limit", "get_lod_far_limit");
@@ -507,6 +510,19 @@ void VoxelTerrain::set_lod_pixel_error_back(float p_error) {
 
 float VoxelTerrain::get_lod_pixel_error_back() const {
     return cfg().lod_pixel_error_back;
+}
+
+void VoxelTerrain::set_lod_pixel_errors(const PackedFloat32Array &p_errors) {
+    ERR_FAIL_COND_MSG(world.is_started(), "lod_pixel_errors must be set before the terrain enters the tree.");
+    cfg().lod_pixel_errors.assign(p_errors.ptr(), p_errors.ptr() + p_errors.size());
+}
+
+PackedFloat32Array VoxelTerrain::get_lod_pixel_errors() const {
+    PackedFloat32Array errors;
+    for (float e : cfg().lod_pixel_errors) {
+        errors.push_back(e);
+    }
+    return errors;
 }
 
 void VoxelTerrain::set_lod_view_margin_deg(float p_degrees) {

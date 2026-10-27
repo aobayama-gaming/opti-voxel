@@ -82,6 +82,8 @@ func _enter_tree() -> void:
 			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
+		if a.begins_with("--lod_errors=") and terrain:
+			terrain.lod_pixel_errors = PackedFloat32Array(Array(a.trim_prefix("--lod_errors=").split(",")).map(func(e): return e.to_float()))
 		if a.begins_with("--lod_error_back=") and terrain:
 			terrain.lod_pixel_error_back = a.trim_prefix("--lod_error_back=").to_float()
 		if a.begins_with("--lod_view_margin=") and terrain:
