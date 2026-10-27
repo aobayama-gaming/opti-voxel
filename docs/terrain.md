@@ -37,11 +37,21 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   the LOD, read by `CascadeTerrain::height_sdf` (t = n - grad h, distance (altitude - h) / |t|, GLSL
   `GLSL_HEIGHT_SDF`). `FLAT` (the world today) is the saturated int64 datum difference with up (-0, 1, -0), so
   the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
-  `SPHERE` (not wired into a world yet: regions per chunk, discoverer, camera altitude come with the planet PR):
+  `SPHERE` (`World::Settings::planet_radius_m`, `--planet_radius_km=R` in bench and player: centred on the voxel
+  (0, 0, 0), its +y pole at y = R, the world origin request taken from that pole):
   below `switch_lod` (12) the curvature form d(c) + n.δ + 1/2 δ^T H δ around the centre of the point's region
   (the cell of 2^(L+6) voxels holding it, from the point and the LOD only), d(c), n, H from the CPU in double
   (`make_region` takes any base's exact value, gradient and Hessian: the unit test runs a torus); from it the
   radius form |p - centre| - R in float32 (`det_rsqrt`), the centre snapped to 2^31 voxels so (p - c) >> L is exact.
+  On the GPU (`src/base_regions.{hpp,cpp}`) the cascade passes upload per batch the regions its items touch,
+  deduplicated, and 8 region indices per item (`CascadePasses::upload_regions`, from the batch's ChunkInput bytes,
+  both meshers, the point items, CascadeSpike), at bindings 10 / 11 of the level shader; the sphere's `base_at` picks
+  the slot from the parity of the point's region cell on each axis: a chunk's 32-point box meets at most two cells per
+  axis, whose parities differ. A point item fills its own cell's slot; the radius form needs none. CascadeSpike's set
+  `4g` (LINEAR4 on an Earth-sized sphere) checks the passes and the point items bit for bit. Not yet on a sphere: the
+  stretched octaves (a climate with them is refused: their base sample is at the band's insertion LOD), and
+  everything still placed or shaded along y (the columns, the page shader's `base_up`, the sky, the player): the
+  planet's next PR.
   Measured at Earth radius / 5 cm (`test_base_surface.cpp`): curvature 7e-6 cells at LODs 0-11, < 1% to LOD 16;
   radius < 0.4% from LOD 12; the forms' gap at the switch 0.35%. FrameSpike's `base_*` probes check the GLSL
-  bit for bit. The page shader's slope colours read `base_up` (a uniform, +y).
+  bit for bit. The page shader's slope colours read `base_up` (a uniform: the up at the tangent point (0, 0)).

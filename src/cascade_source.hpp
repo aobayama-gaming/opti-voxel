@@ -8,6 +8,7 @@
 namespace Cascade {
 struct Spec;
 }
+class BaseSurface;
 
 // What the cascade's level shader (cascade_glsl.hpp) reads of a terrain: its bands and the GLSL pieces it splices.
 // SDFBase implements it; the shader text needs nothing else of the terrain, so it is built without the engine.
@@ -48,6 +49,10 @@ public:
     // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
     // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
     virtual ov::str get_climate_helpers_glsl() const { return ov::str(); }
+
+    // The ground's base surface when it is a sphere: get_glsl_code's base_at then reads the batch's regions
+    // (base_regions.hpp), which the cascade passes upload with each batch. Null for a flat base.
+    virtual const BaseSurface *get_sphere_base() const { return nullptr; }
 
     // The instance table's DefRecord struct and buffer declarations at the given bindings (the fold variant; a terrain
     // with a table).

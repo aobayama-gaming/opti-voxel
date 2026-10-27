@@ -36,6 +36,8 @@ public:
         PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
         // 1 the Hermite cascade terrain, 2 its continents preset, 4 its flat preset under the shapes gallery.
         int terrain_mode = 1;
+        // > 0: a planet of this radius (metres) centred on the voxel (0, 0, 0), its +y pole at y = radius (SDFCascade); 0 flat.
+        double planet_radius_m = 0.0;
         int legacy_batch_size = 1024;
         int lod_numbers = 15; // LODs 0 .. lod_numbers - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
         ChunkParam chunk_param; // voxel_size and skirt_depth set by the host; the render origin by start() and recenter()

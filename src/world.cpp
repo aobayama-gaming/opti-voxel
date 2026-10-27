@@ -29,6 +29,11 @@ private:
     const uint64_t t0;
 };
 
+// The planet's radius (Settings::planet_radius_m), none under the shapes gallery (its flat preset).
+double planet_radius_m(const World::Settings &p_config) {
+    return p_config.terrain_mode == 4 ? 0.0 : p_config.planet_radius_m;
+}
+
 } // namespace
 
 World::World() :
@@ -63,7 +68,12 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     {
         const int64_t root_units = int64_t(1) << lod_numbers;
         const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
-        const VoxelPos &request = config.world_origin_request;
+        // On a planet the request is relative to its +y pole (SDFCascade::planet_radius_m), so the scenes' poses, made for
+        // the flat world's datum, start on its surface.
+        VoxelPos request = config.world_origin_request;
+        if (planet_radius_m(config) > 0.0) {
+            request.y += std::llround(planet_radius_m(config) / double(chunk_param.voxel_size));
+        }
         chunk_param.origin_chunk = ChunkId(WorldCoord::floor_div(request.x, root_voxels) * root_units,
                 WorldCoord::floor_div(request.y, root_voxels) * root_units, WorldCoord::floor_div(request.z, root_voxels) * root_units);
         if (chunk_param.origin_voxel() != request) {
@@ -84,6 +94,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     sdf->set_stream_sources(config.archetype_stream);
     sdf->set_stream_part_sides(config.archetype_stream_part_sides);
     sdf->set_biome_radius(config.biome_radius);
+    sdf->planet_radius_m = planet_radius_m(config);
     if (!config.climate_path.empty()) {
         // Parsed and checked by configure() (an ERR there: no climate).
         const str err = Climate::load(config.climate_path, sdf->climate_data);

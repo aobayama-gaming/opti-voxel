@@ -15,7 +15,8 @@
 // the shaped test table (every shaped-band operation: shapes, the multifractal state, warps, cell noise, height terms,
 // terraces), "4d" adapter/godot/project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
 // field group), "4r" adapter/godot/project/climate/region_test.json (two landforms behind regions, gated height terms, 11 groups), "4w"
-// adapter/godot/project/climate/world.json (the eight landforms behind regions of three climate axes, 17 groups; tuned for 25 LODs).
+// adapter/godot/project/climate/world.json (the eight landforms behind regions of three climate axes, 17 groups; tuned for 25 LODs), "4g"
+// LINEAR4 on an Earth-sized sphere (SPHERE_RADIUS_M: the base's regions, BaseRegions, below its switch LOD).
 namespace CascadeCheckSets {
 
 enum class SpikeSet {
@@ -28,8 +29,12 @@ enum class SpikeSet {
     L4D,
     L4R,
     L4W,
+    L4G,
 };
-inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d", "4r", "4w" };
+inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d", "4r", "4w", "4g" };
+
+// The "4g" set's planet (metres), centred on the voxel (0, 0, 0).
+inline constexpr double SPHERE_RADIUS_M = 6371000.0;
 
 // The example climate is tuned for 5 cm voxels (its modulated octaves stay under the cap there).
 inline constexpr float CLIMATE_VOXEL = 0.05f;
@@ -65,7 +70,8 @@ inline double median(std::vector<double> p_v) {
 // p_sdf configured for p_v (r_param: the variant's chunk parameters).
 inline void configure_variant(SDFCascade &p_sdf, SpikeSet p_v, int p_lods, ChunkParam &r_param) {
     p_sdf.channel_set = p_v == SpikeSet::H8 ? Cascade::ChannelSet::HERMITE8 : Cascade::ChannelSet::LINEAR4;
-    if (p_v != SpikeSet::H8 && p_v != SpikeSet::L4) {
+    p_sdf.planet_radius_m = p_v == SpikeSet::L4G ? SPHERE_RADIUS_M : 0.0;
+    if (p_v != SpikeSet::H8 && p_v != SpikeSet::L4 && p_v != SpikeSet::L4G) {
         r_param.voxel_size = CLIMATE_VOXEL;
         ov::Value data;
         const char *path = p_v == SpikeSet::L4P ? "res://climate/plain.json"

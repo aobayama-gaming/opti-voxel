@@ -133,6 +133,8 @@ func _enter_tree() -> void:
 			terrain.biome_radius = 1000.0 * a.trim_prefix("--biomes=").to_float()
 		if a.begins_with("--climate=") and terrain:
 			terrain.climate_path = a.trim_prefix("--climate=")
+		if a.begins_with("--planet_radius_km=") and terrain:
+			terrain.planet_radius = 1000.0 * a.trim_prefix("--planet_radius_km=").to_float()
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 	if terrain:

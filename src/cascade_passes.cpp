@@ -1,5 +1,6 @@
 #include "cascade_passes.hpp"
 
+#include "base_regions.hpp"
 #include "gpu_shader.hpp"
 
 #include "ov/bytes.hpp"
@@ -11,22 +12,28 @@ using namespace CascadeGLSL;
 using ov::gpu::Binding;
 using ov::gpu::BufferKind;
 
+static_assert(BaseRegions::REGION_BINDING > CascadeGLSL::MATERIAL_BINDING && BaseRegions::INDEX_BINDING > CascadeGLSL::MATERIAL_BINDING &&
+                BaseRegions::REGION_BINDING > CascadeGLSL::TABLE_LIST_BINDING && BaseRegions::INDEX_BINDING != BaseRegions::REGION_BINDING,
+        "CascadePasses: the base regions' bindings follow the level shader's own.");
+
 bool CascadePasses::create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input,
         Buffer p_param_ubo, Buffer p_sdf_sample, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
-        Buffer p_sdf_material) {
+        Buffer p_sdf_material, uint32_t p_batch_items) {
+    item_param = p_param;
     return _create(p_device, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch, p_table_records,
-            p_table_list, p_sdf_material);
+            p_table_list, p_sdf_material, p_batch_items);
 }
 
 bool CascadePasses::create_points(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points,
         Buffer p_input, Buffer p_param_ubo, Buffer p_values) {
     OV_ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0, false, "CascadePasses: point items need CascadeGLSL::point_param (skirt 0).");
-    return _create(p_device, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, Buffer(), nullptr, Buffer(), Buffer(), Buffer());
+    item_param = p_point_param;
+    return _create(p_device, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, Buffer(), nullptr, Buffer(), Buffer(), Buffer(), 0);
 }
 
 bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, Buffer p_input,
         Buffer p_param_ubo, Buffer p_output, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
-        Buffer p_material) {
+        Buffer p_material, uint32_t p_batch_items) {
     const Spec *spec = p_sdf->get_cascade();
     device = p_device;
     item_size = p_item_size;
@@ -91,6 +98,17 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     if (p_material.is_valid()) {
         bindings.push_back({ uint32_t(CascadeGLSL::MATERIAL_BINDING), BufferKind::STORAGE, p_material });
     }
+    sphere = p_sdf->get_sphere_base();
+    if (sphere != nullptr) {
+        // At most every slot of every item a distinct region (a point item fills one), plus the zero region of a batch
+        // with none.
+        batch_items = ov::max(p_batch_items, max_chunks);
+        max_regions = batch_items * (points ? 1u : uint32_t(BaseRegions::SLOTS)) + 1u;
+        base_regions = device->create_buffer(BufferKind::STORAGE, uint64_t(max_regions) * BaseRegions::REGION_BYTES);
+        base_region_index = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * BaseRegions::SLOTS * sizeof(uint32_t));
+        bindings.push_back({ uint32_t(BaseRegions::REGION_BINDING), BufferKind::STORAGE, base_regions });
+        bindings.push_back({ uint32_t(BaseRegions::INDEX_BINDING), BufferKind::STORAGE, base_region_index });
+    }
     // The fold variants also bind the table's buffers.
     std::vector<Binding> fold_bindings = bindings;
     if (table) {
@@ -116,7 +134,7 @@ void CascadePasses::free() {
             }
         }
     }
-    for (const Buffer b : { bands, debug_placeholder }) {
+    for (const Buffer b : { bands, debug_placeholder, base_regions, base_region_index }) {
         if (b.is_valid()) {
             device->free(b);
         }
@@ -136,7 +154,22 @@ void CascadePasses::free() {
     scratch_b = Buffer();
     bands = Buffer();
     debug_placeholder = Buffer();
+    base_regions = Buffer();
+    base_region_index = Buffer();
+    sphere = nullptr;
     device = nullptr;
+}
+
+void CascadePasses::upload_regions(const uint8_t *p_items, uint32_t p_count) {
+    if (sphere == nullptr || p_count == 0) {
+        return;
+    }
+    OV_ERR_FAIL_COND_MSG(p_count > batch_items, "CascadePasses: more items than the passes were created for.");
+    BaseRegions::Tables tables;
+    BaseRegions::build(*sphere, p_items, p_count, item_param, is_points(), tables);
+    OV_ERR_FAIL_COND_MSG(tables.region_count() > max_regions, "CascadePasses: more base regions than the buffer holds.");
+    device->update_buffer(base_regions, 0, tables.regions.size(), tables.regions.data());
+    device->update_buffer(base_region_index, 0, tables.index.size() * sizeof(uint32_t), tables.index.data());
 }
 
 int CascadePasses::level_count(int p_min_lod) const {
