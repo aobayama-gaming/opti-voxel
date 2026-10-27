@@ -17,12 +17,13 @@ const PRESETS := {
 	"forest5cm_41m": ["--trees=41000000", "--tree_area=32000", "--voxel=0.05", "--lod_error=2", "--altitude=20",
 		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
 	# The look for videos (player only): forest5cm_1m on the world climate, reseeded (world_video.json = world.json with
-	# every seed + 37), at error 2 front and back, FSR 2 from 50% then 2x2 pixel blocks, the flashlight, no mesher budget
+	# every seed + 37), at an error per LOD (3 at LODs 0-1, 2 at LOD 2, 1 at LODs 3-5, rising by <= 1.4x per LOD back to
+	# 3 from LOD 9, so no LOD loses its band; doubled behind), FSR 2 from 50% then 2x2 pixel blocks, the flashlight, no mesher budget
 	# and the frame-time overlay, no SSAO and the sky's ambient light x1.5 (lighter under the trees; the LUT is kept). Run
 	# with `--render-thread safe` (FSR 2).
-	"video": ["--trees=1000000", "--tree_area=5000", "--voxel=0.05", "--lod_error=2", "--altitude=20",
+	"video": ["--trees=1000000", "--tree_area=5000", "--voxel=0.05", "--lod_error=3", "--altitude=20",
 		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--lods=25",
-		"--climate=res://climate/world_video.json", "--lod_error_back=2", "--upscale=fsr2", "--render_scale=0.5",
+		"--climate=res://climate/world_video.json", "--lod_error_back=6", "--lod_errors=3,3,2,1,1,1,1.4,2,2.8", "--upscale=fsr2", "--render_scale=0.5",
 		"--pixelate=2", "--flashlight=1", "--mesher_budget=0", "--overlay=video", "--ssao=0", "--ambient=1.5"],
 	# Biome features (lava lakes, floating islands) within 2 km of the scene centre. The bench camera looks at a
 	# lava lake from 60 m up, two floating islands behind it.
