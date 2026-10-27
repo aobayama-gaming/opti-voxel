@@ -12,12 +12,11 @@ namespace {
 
 using ov::Value;
 
-constexpr double PI = 3.14159265358979323846;
-// The passes' steps (atmosphere.cpp's GLSL constants).
-constexpr int SUN_STEPS = 8;
-constexpr int FAR_STEPS = 8;
-constexpr int MS_STEPS = 20;
-constexpr int MS_DIRS = 8;
+constexpr double PI = WorldCoord::PI;
+constexpr int SUN_STEPS = Atmosphere::SUN_STEPS;
+constexpr int FAR_STEPS = Atmosphere::FAR_STEPS;
+constexpr int MS_STEPS = Atmosphere::MS_STEPS;
+constexpr int MS_DIRS = Atmosphere::MS_DIRS;
 
 struct V3 {
     double x = 0.0, y = 0.0, z = 0.0;
