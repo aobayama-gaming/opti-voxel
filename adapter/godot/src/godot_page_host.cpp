@@ -38,9 +38,9 @@ uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // drawn magenta, those it still draws orange)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
-// Sea level (VoxelTerrain sets it for the continents preset): on the flat world render metres (above the render origin,
-// set again when it moves), on a planet its altitude (0, its base); below -1e29, no height colours. The slope colours,
-// the heights and the contour lines read the base's up and altitude (planet_up, planet_altitude: PlanetGLSL).
+// Sea level (VoxelTerrain sets it for the continents preset): an altitude above the base (0, the base itself); below
+// -1e29, no height colours. The slope colours, the heights and the contour lines read the base's up and altitude
+// (base_up, base_altitude: BaseSurface::glsl_render).
 uniform float sea_level_m = -1e30;
 // The render origin in chunk-id units, low 32 bits: positions are drawn relative to it; and its LOD0 voxel, low 32 bits
 // (the shading frame's origin). PageDecode's.
@@ -145,7 +145,7 @@ void vertex() {
     float lo = float(skirt_size);
     vec3 in3 = min(local - lo, lo + voxel_dim - local);
     float push = clamp(-min(in3.x, min(in3.y, in3.z)), 0.0, 1.0) * skirt_depth_m[min(lod, 31)];
-    v_height = (planet_radius_m > 0.0 ? planet_altitude(world) : world.y) + push / max(dot(n, planet_up(world)), 0.2);
+    v_height = base_altitude(world) + push / max(dot(n, base_up(world)), 0.2);
 
     VERTEX = (VIEW_MATRIX * vec4(world, 1.0)).xyz;
     NORMAL = normalize(mat3(VIEW_MATRIX) * n);
@@ -155,9 +155,9 @@ void fragment() {
     // Shaded: grass on gentle slopes, rock on steep ones, faint contour lines every 100 m (mid tones, so
     // the tonemapper keeps the relief readable).
     vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
-    vec3 base_up = planet_up(p);
-    float up = clamp(dot(v_world_normal, base_up), 0.0, 1.0);
-    float flat_w = ground_flat_weight(v_world_normal, base_up);
+    vec3 up_dir = base_up(p);
+    float up = clamp(dot(v_world_normal, up_dir), 0.0, 1.0);
+    float flat_w = ground_flat_weight(v_world_normal, up_dir);
     vec3 albedo = mix(GROUND_STEEP, GROUND_FLAT, flat_w); // Material::GROUND_STEEP / GROUND_FLAT
     float contour_m = 100.0;
     if (sea_level_m > -1e29) {
@@ -176,13 +176,8 @@ void fragment() {
         }
         contour_m = 500.0;
     }
-    // Contour lines at whole multiples of contour_m of absolute height: on the flat world snapped to the shading frame's
-    // period, on a planet the altitude itself (a few km at most).
+    // Contour lines at whole multiples of contour_m of altitude above the base (a few km at most: no frame to snap to).
     float h = v_height / contour_m;
-    if (planet_radius_m <= 0.0) {
-        float contour_period_m;
-        h = shade_frame(vec3(0.0, v_height, 0.0), contour_m, contour_period_m).y * (shade_cells(vec3(1.0 / contour_m), contour_period_m).x / contour_period_m);
-    }
     float fw = max(fwidth(h), 1e-6);
     float line = abs(fract(h + 0.5) - 0.5) / fw;
     // Contours fade out where they would be denser than ~10 pixels apart.
@@ -195,7 +190,7 @@ void fragment() {
     uint mat_id = fragment_material(v_materials, v_quad_uv, p, voxel_size * exp2(v_lod));
     float roughness;
     vec3 emission;
-    material_shading(mat_id, ground, p, v_world_normal, base_up, footprint, flat_w, shade, TIME, wind_sway_m, albedo, roughness, emission);
+    material_shading(mat_id, ground, p, v_world_normal, up_dir, footprint, flat_w, shade, TIME, wind_sway_m, albedo, roughness, emission);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -247,7 +242,7 @@ void fragment() {
             vec3 bytes;
             if (debug_view == 10) {
                 float knot, ring;
-                float grain = bark_grain(bark_point(p, v_world_normal, base_up), knot, ring);
+                float grain = bark_grain(bark_point(p, v_world_normal, up_dir), knot, ring);
                 bytes = vec3(round(grain * 255.0), 4.0 * floor(cell_hash(v_chunk, uint(v_lod)).x * 64.0),
                         8.0 * v_lod + 4.0);
             } else {
@@ -282,7 +277,7 @@ void light() {
         vec3 to_sun = mat3(INV_VIEW_MATRIX) * LIGHT;
         vec3 hit;
         // VERTEX is not readable in light(): the fragment's position comes through v_world_pos.
-        if (dot(to_sun, planet_up(v_world_pos)) > 0.05 && cloud_hit(v_world_pos, to_sun, hit)) {
+        if (dot(to_sun, base_up(v_world_pos)) > 0.05 && cloud_hit(v_world_pos, to_sun, hit)) {
             sun = 1.0 - cloud_shadow * cloud_density(cloud_texel(hit));
         }
     }

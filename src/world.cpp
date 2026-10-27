@@ -584,20 +584,8 @@ UpAxis World::up_at(const double p_render_pos[3]) const {
     return sdf->up_at(voxel_at(p_render_pos));
 }
 
-bool World::planet_render(Float3 &r_centre_m, float &r_radius_m, float &r_k_m2) const {
-    const BaseSurface &base = sdf->get_base();
-    if (base.kind() != BaseSurface::Kind::SPHERE) {
-        return false;
-    }
-    const double vs = double(config.chunk_param.voxel_size);
-    double c[3];
-    render_m(base.centre(), config.chunk_param.origin_voxel(), vs, c);
-    const double len = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
-    const double r = base.get_radius() * vs;
-    r_centre_m = Float3{ float(c[0]), float(c[1]), float(c[2]) };
-    r_radius_m = float(r);
-    r_k_m2 = float((len - r) * (len + r));
-    return true;
+BaseSurface::Render World::base_render() const {
+    return sdf->get_base().render(config.chunk_param.origin_voxel(), double(config.chunk_param.voxel_size));
 }
 
 bool World::recenter(const Float3 &p_camera_pos, Float3 &r_shift) {

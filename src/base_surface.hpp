@@ -127,6 +127,24 @@ public:
     // (BaseRegions::glsl). After the frame functions, the int64 helpers (SPHERE) and GLSL_EXACT_NOISE (det_rsqrt).
     ov::str glsl() const;
 
+    // The base in render space (metres from the render origin), what the hosts' shaders know of it: every render-space
+    // user (the pages' heights and up, the sky's frame, the cloud layer, the atmosphere) goes through glsl_render's
+    // functions, so a new kind only adds its case there and here. From double: SPHERE's altitude
+    // (|p|^2 - 2 p.c + K) / (|p - c| + R) keeps ~1e-4 m in float32 at Earth's radius, where |p - c| - R keeps half a metre.
+    struct Render {
+        int kind = int(Kind::FLAT);
+        Float3 point_m; // FLAT: a point of the datum plane; SPHERE: the centre
+        float radius_m = 0.0f; // SPHERE
+        float k_m2 = 0.0f; // SPHERE: |centre|^2 - radius^2 (m^2)
+    };
+    // The render-space base with the render origin at LOD0 voxel p_origin (it changes with the origin).
+    Render render(const VoxelPos &p_origin, double p_voxel_m) const;
+    // `float base_altitude(vec3 p)` (metres above the base, signed), `vec3 base_up(vec3 p)` (its unit gradient) and
+    // `bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t)` (where a ray is below altitude h), plain GLSL that
+    // Godot's shading language takes too. The host declares Render's fields before it as uniforms `int base_kind`,
+    // `vec3 base_point_m`, `float base_radius_m`, `float base_k_m2`.
+    static ov::str glsl_render();
+
 private:
     // A FLAT base's at() (GLSL base_at).
     ExactNoise::Float4 flat_form(const VoxelPos &p_voxel, int p_lod) const;

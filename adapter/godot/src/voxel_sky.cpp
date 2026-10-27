@@ -3,7 +3,7 @@
 #include "voxel_terrain.hpp"
 
 #include "godot_conv.hpp"
-#include "planet_glsl.hpp"
+#include "base_surface.hpp"
 #include "shade_frame_glsl.hpp"
 #include "sky_glsl.hpp"
 
@@ -13,56 +13,52 @@
 #include <godot_cpp/core/class_db.hpp>
 
 // Shared by the sky shader and the page shader (spliced at /*GLSL_CLOUDS*/, after the shading frame:
-// shade_frame_glsl.hpp): the planet, and the cloud layer reading cloud_tex about once per cloud_scale_m, drifting with
-// the wind: on the flat world a plane at cloud_height_m, on a planet a shell cloud_height_m above its base. Positions are
+// shade_frame_glsl.hpp): the base, and the cloud layer cloud_height_m above it (a plane on the flat world, a shell on a
+// planet) reading cloud_tex about once per cloud_scale_m, drifting with the wind. Positions are
 // render space (metres from the render origin), the same in a sky shader's POSITION and in the page shader's world
 // point; the tiles and the wind's waves are read through the shading frame, so they stay where they are when the render
 // origin moves.
 static constexpr const char GLSL_CLOUDS[] = R"glsl(
-// The planet (World::planet_render, set again when the render origin moves: VoxelTerrain on its pages, VoxelSky on the
-// sky), PlanetGLSL's uniforms: its centre (render metres), radius and K = |centre|^2 - radius^2; radius 0 is the flat
-// world, up +y.
-uniform vec3 planet_centre_m = vec3(0.0);
-uniform float planet_radius_m = 0.0;
-uniform float planet_k_m2 = 0.0;
-/*GLSL_PLANET*/
+// The base in render space (World::base_render, set again when the render origin moves: VoxelTerrain on its pages,
+// VoxelSky on the sky): BaseSurface::Render's fields for BaseSurface::glsl_render's functions.
+uniform int base_kind = 0;
+uniform vec3 base_point_m = vec3(0.0);
+uniform float base_radius_m = 0.0;
+uniform float base_k_m2 = 0.0;
+/*GLSL_BASE_RENDER*/
 
 // The cloud layer (VoxelSky): no texture = black = no clouds and no shadows.
 uniform sampler2D cloud_tex : hint_default_black, filter_linear_mipmap, repeat_enable;
-uniform float cloud_height_m = 1500.0; // VoxelSky::cloud_params: render metres (flat), above the base (planet)
+uniform float cloud_height_m = 1500.0; // VoxelSky::cloud_params: above the base
 uniform float cloud_scale_m = 6000.0;
 uniform float cloud_cover = 0.0;
 uniform vec2 cloud_wind = vec2(0.0);
 uniform float cloud_shadow = 0.0;
 uniform float wind_sway_m = 0.0;
 
-// Where a ray from p along dir meets the cloud layer from below: false where it doesn't (p above the layer, or on the
-// flat world a ray within 0.002 of level).
+// Where a ray from p along dir leaves the cloud layer, cloud_height_m above the base, from below: false where it doesn't
+// (p above the layer, or the ray within 0.002 of the local level).
 bool cloud_hit(vec3 p, vec3 dir, out vec3 hit) {
-    if (planet_radius_m > 0.0) {
-        return planet_shell_hit(p, dir, cloud_height_m, hit);
-    }
-    hit = vec3(p.xz + dir.xz * ((cloud_height_m - p.y) / dir.y), cloud_height_m).xzy;
-    return dir.y > 0.002 && p.y < cloud_height_m;
+    vec2 t;
+    bool below = base_level_span(p, dir, cloud_height_m, t) && t.x <= 0.0 && t.y > 0.0;
+    hit = p + dir * t.y;
+    return below && dot(dir, base_up(p)) > 0.002;
 }
 
 // The cloud texture's value at a point of the layer: one tile per cloud_scale_m (snapped to the shading frame's
-// period), carried by the wind. A planet's shell reads three planes, blended by its up's components (sharpened), so it
-// has no seam anywhere round it.
+// period), carried by the wind. It reads three planes blended by the base's up (sharpened), so a curved layer has no
+// seam anywhere round it; a plane with no weight isn't read (the flat world reads one).
 float cloud_texel(vec3 hit) {
     int period = shade_period_vox(cloud_scale_m);
     float period_m = shade_period_m(period);
     float k = shade_cells(vec3(1.0 / cloud_scale_m), period_m).x / period_m;
     vec2 wind = cloud_wind * TIME;
-    if (planet_radius_m <= 0.0) {
-        vec2 s = shade_point(vec3(hit.x, 0.0, hit.z), period).xz;
-        return texture(cloud_tex, (s + wind) * k).r;
-    }
     vec3 s = shade_point(hit, period);
-    vec3 w = pow(abs(planet_up(hit)), vec3(4.0));
+    vec3 w = pow(abs(base_up(hit)), vec3(4.0));
     w /= w.x + w.y + w.z;
-    return w.y * texture(cloud_tex, (s.xz + wind) * k).r + w.x * texture(cloud_tex, (s.zy + wind) * k).r
-            + w.z * texture(cloud_tex, (s.xy + wind) * k).r;
+    float texel = w.y > 0.0 ? w.y * texture(cloud_tex, (s.xz + wind) * k).r : 0.0;
+    texel += w.x > 0.0 ? w.x * texture(cloud_tex, (s.zy + wind) * k).r : 0.0;
+    return texel + (w.z > 0.0 ? w.z * texture(cloud_tex, (s.xy + wind) * k).r : 0.0);
 }
 
 // Cloud density in [0, 1] of a texel: the texture's values are uniform on [0, 1] (tools/make_clouds.py), so the
@@ -121,7 +117,7 @@ void sky() {
         // and the sun's height are the ground's there, and the sun, a global direction, sets as the camera goes round.
         vec3 t1;
         vec3 t2;
-        vec3 up = planet_up(POSITION);
+        vec3 up = base_up(POSITION);
         up_frame(up, t1, t2);
         mat3 to_local = transpose(mat3(t1, up, t2));
         vec3 eye = to_local * EYEDIR;
@@ -136,7 +132,7 @@ void sky() {
         vec3 hit;
         if (cloud_cover > 0.0 && cloud_hit(POSITION, EYEDIR, hit)) {
             float density = cloud_density(cloud_texel(hit));
-            vec3 hit_up = planet_up(hit);
+            vec3 hit_up = base_up(hit);
             float sun_up = dot(sun_world, hit_up);
             vec3 towards_sun = hit + (sun_world - hit_up * sun_up) * (0.02 * cloud_scale_m / max(sun_up, 0.15));
             float lit = 1.0 - 0.75 * cloud_density(cloud_texel(towards_sun));
@@ -153,7 +149,7 @@ void sky() {
 )gdshader";
 
 String VoxelSky::glsl_clouds() {
-    return String(GLSL_CLOUDS).replace("/*GLSL_PLANET*/", godot_str(PlanetGLSL::glsl()));
+    return String(GLSL_CLOUDS).replace("/*GLSL_BASE_RENDER*/", godot_str(BaseSurface::glsl_render()));
 }
 
 String VoxelSky::sky_shader_code() {
@@ -250,24 +246,20 @@ float VoxelSky::get_wind_sway_m() const {
     return wind_sway_m;
 }
 
-void VoxelSky::set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, float p_origin_rise_m, const Dictionary &p_planet) {
+void VoxelSky::set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, const Dictionary &p_base) {
     origin_voxel_lo = p_origin_voxel_lo;
     voxel_m = p_voxel_m;
-    origin_rise_m = p_origin_rise_m;
-    planet = p_planet;
+    base = p_base;
     if (material.is_null()) {
         return; // before _ready: its _apply sends everything
     }
     _apply_frame();
-    Dictionary height;
-    height["cloud_height_m"] = cloud_height_m - origin_rise_m;
-    _push(height);
 }
 
 Dictionary VoxelSky::cloud_params() const {
     Dictionary params;
     params["cloud_tex"] = cloud_texture.is_valid() ? cloud_texture->get_rid() : RID();
-    params["cloud_height_m"] = cloud_height_m - origin_rise_m;
+    params["cloud_height_m"] = cloud_height_m;
     params["cloud_scale_m"] = cloud_scale_m;
     params["cloud_cover"] = cloud_cover;
     params["cloud_wind"] = cloud_wind;
@@ -314,9 +306,9 @@ void VoxelSky::_apply() {
 void VoxelSky::_apply_frame() {
     material->set_shader_parameter("shade_origin_lo", origin_voxel_lo);
     material->set_shader_parameter("shade_voxel_size", voxel_m);
-    Array keys = planet.keys();
+    Array keys = base.keys();
     for (int i = 0; i < keys.size(); i++) {
-        material->set_shader_parameter(keys[i], planet[keys[i]]); // the terrain sets its own pages'
+        material->set_shader_parameter(keys[i], base[keys[i]]); // the terrain sets its own pages'
     }
 }
 

@@ -1,6 +1,7 @@
 #include "test_common.hpp"
 
 #include "godot_conv.hpp"
+#include "ov/math.hpp"
 #include "ov/str.hpp"
 
 #include "base_surface.hpp"
@@ -307,6 +308,41 @@ TEST_CASE("BaseSurface: the tangent plane and the altitude") {
     const int64_t u = 200000;
     const double rise = std::sqrt(EARTH_R * EARTH_R + double(u) * double(u)) - EARTH_R;
     CHECK(s.altitude(s.tangent_point(u, 0)) == doctest::Approx(rise).epsilon(1e-6));
+}
+
+// The shaders' base_altitude (glsl_render) mirrored in float32 from render(): within 1e-3 m of the double altitude for
+// points within 1 km of the render origin, on Earth at 5 cm from far centres and render origins anywhere round it.
+TEST_CASE("BaseSurface: the render-space altitude keeps a millimetre in float32 at Earth's radius") {
+    const double vs = 0.05;
+    auto render_altitude = [&](const BaseSurface &p_base, const VoxelPos &p_origin, const VoxelPos &p_voxel) {
+        const BaseSurface::Render r = p_base.render(p_origin, vs);
+        const float p[3] = { float(double(p_voxel.x - p_origin.x) * vs), float(double(p_voxel.y - p_origin.y) * vs), float(double(p_voxel.z - p_origin.z) * vs) };
+        const float c[3] = { r.point_m.x, r.point_m.y, r.point_m.z };
+        if (r.kind == int(BaseSurface::Kind::FLAT)) {
+            return p[1] - c[1];
+        }
+        const float q = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) - 2.0f * (p[0] * c[0] + p[1] * c[1] + p[2] * c[2]) + r.k_m2;
+        const float d[3] = { p[0] - c[0], p[1] - c[1], p[2] - c[2] };
+        return q / (std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) + r.radius_m);
+    };
+    double worst = 0.0;
+    for (const Vector3i64 &c : CENTRES) {
+        const BaseSurface s = BaseSurface::sphere(c, EARTH_R);
+        for (uint32_t i = 0; i < 64; i++) {
+            double dir[3];
+            direction(i, 0xA17u, dir);
+            const VoxelPos origin = lattice_point(s.centre(), dir, EARTH_R + 1000.0 * double(i % 7), 0);
+            direction(i, 0xB0Bu, dir);
+            const VoxelPos p = origin + VoxelPos(std::llround(dir[0] * 20000.0), std::llround(dir[1] * 20000.0), std::llround(dir[2] * 20000.0));
+            worst = ov::max(worst, std::fabs(double(render_altitude(s, origin, p)) - s.altitude(p) * vs));
+        }
+    }
+    MESSAGE("sphere: worst render altitude error " << worst << " m");
+    CHECK(worst < 1e-3);
+    const BaseSurface flat = BaseSurface::flat(6000);
+    const VoxelPos origin(int64_t(1) << 50, -(int64_t(1) << 45), 77);
+    const VoxelPos p = origin + VoxelPos(-300, 4567, 12);
+    CHECK(double(render_altitude(flat, origin, p)) == doctest::Approx(flat.altitude(p) * vs).epsilon(1e-6));
 }
 
 // A stretched octave's point on the flat base: datum + (y - datum) / 2^j, exact, negative y and far points included, a
