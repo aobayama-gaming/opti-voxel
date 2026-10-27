@@ -13,12 +13,12 @@
 
 using namespace godot;
 
-// The sky and its cloud layer. A sibling of the VoxelTerrain and the WorldEnvironment: on ready it installs a sky
-// shader (Godot's PhysicalSkyMaterial, MIT, with a cloud layer over it) on the environment's Sky and hands the
-// terrain's page shader the same cloud parameters, so the clouds' shadows on the ground lie under the clouds in the
-// sky: both read `cloud_texture` through the one GLSL of `glsl_clouds()` (uv from the world point, density from the
-// cover), at the same height, drifting with the same wind. The bench scene has no VoxelSky: its page shader keeps the
-// uniforms' defaults (no texture, cloud_shadow 0), so its output does not change.
+// The sky and its cloud layer. A sibling of the VoxelTerrain, the WorldEnvironment and the DirectionalLight3D (the sun):
+// on ready it installs a sky shader on the environment's Sky: the terrain's atmosphere (Atmosphere::glsl_lookup) when it
+// has one, else Godot's PhysicalSkyMaterial (MIT), with a cloud layer over either. It hands the terrain's page shader
+// the same cloud parameters, so the clouds' shadows on the ground lie under the clouds in the sky: both read
+// `cloud_texture` through the one GLSL of `glsl_clouds()` (uv from the world point, density from the cover), at the same
+// height, drifting with the same wind; and each frame the sun's light and direction for the atmosphere.
 class VoxelSky : public Node {
     GDCLASS(VoxelSky, Node)
 
@@ -71,6 +71,7 @@ private:
     void _apply();
     void _apply_frame(); // the shading frame's and the base's uniforms, on the sky material
     void _push(const Dictionary &p_params); // to the sky material and the terrain siblings' page shader
+    void _quiet_fog();
 
     Ref<Texture2D> cloud_texture;
     float cloud_height_m = 1500.0f; // metres above the base

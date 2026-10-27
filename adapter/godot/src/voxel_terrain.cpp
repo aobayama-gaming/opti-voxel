@@ -1015,8 +1015,7 @@ void VoxelTerrain::_ready() {
     if (const Atmosphere *atmosphere = world.get_atmosphere()) {
         // The medium, the longest path (constant for a world) and the switch; the textures follow once made.
         Dictionary params;
-        atmosphere->get_medium().visit(ShaderParams{ params });
-        params["atmo_max_path_m"] = Atmosphere::make_frame(atmosphere->get_medium(), atmosphere->get_ms_radius_m(), Float3(), Float3{ 0.0f, 1.0f, 0.0f }, world.base_render()).max_path_m;
+        atmosphere->host_constants().visit(ShaderParams{ params });
         params["atmo_enabled"] = true;
         _push_atmosphere(params);
     }
@@ -1098,8 +1097,9 @@ void VoxelTerrain::_process(double) {
     } else {
         world.frame(nullptr, nullptr);
     }
-    if (const Atmosphere *atmosphere = world.get_atmosphere()) {
-        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_range_m", atmosphere->range_m());
+    if (const Atmosphere *atmosphere = world.get_atmosphere(); atmosphere && atmosphere->range_m() != atmosphere_range_sent) {
+        atmosphere_range_sent = atmosphere->range_m();
+        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_range_m", atmosphere_range_sent);
     }
     // Tracing reads every captured frame (the GPU track).
     if ((debug_gpu_profile && world.frames() % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {

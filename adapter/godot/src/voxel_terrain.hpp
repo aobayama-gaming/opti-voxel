@@ -69,6 +69,7 @@ private:
     // _push_atmosphere on the main thread; invalid ones free them.
     void _rt_atmosphere_textures(ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter);
     RID atmosphere_rids[2]; // render thread
+    float atmosphere_range_sent = -1.0f; // the last global atmo_range_m
 
 public:
     void _ready() override;

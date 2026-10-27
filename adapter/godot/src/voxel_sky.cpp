@@ -127,8 +127,6 @@ float shade_voxel_m() {
 /*GLSL_ATMOSPHERE*/
 /*GLSL_SKY*/
 
-// The sun's disk over the atmosphere: its light this many times a sky radiance of 1.
-const float SUN_DISK = 40.0;
 
 void sky() {
     if (!LIGHT0_ENABLED) { // no sun: black (a sky function has no return)
@@ -146,12 +144,7 @@ void sky() {
         vec3 sun_dir = to_local * sun_world;
         vec3 color;
         if (atmo_enabled) {
-            vec4 a = base_altitude(POSITION) > atmo_top_m ? atmo_integrate(POSITION, EYEDIR, sun_world, ATMO_SPACE_STEPS) : atmo_sky(POSITION, EYEDIR);
-            color = a.rgb * atmo_sun_light;
-            if (dot(EYEDIR, sun_world) > cos(0.5 * LIGHT0_SIZE)) {
-                color += atmo_sun_light * atmo_transmittance(POSITION, sun_world, ATMO_SUN_STEPS) * SUN_DISK;
-            }
-            color *= exposure;
+            color = atmo_sky_radiance(POSITION, EYEDIR, sun_world, cos(0.5 * LIGHT0_SIZE)) * atmo_sun_light * exposure;
         } else {
             color = physical_sky(eye, sun_dir, LIGHT0_COLOR, LIGHT0_ENERGY, LIGHT0_SIZE, exposure);
         }
@@ -194,7 +187,7 @@ String VoxelSky::glsl_clouds() {
 }
 
 String VoxelSky::glsl_atmosphere() {
-    return String(GLSL_ATMOSPHERE) + godot_str(Atmosphere::glsl_medium_uniforms() + Atmosphere::glsl_lookup());
+    return String(GLSL_ATMOSPHERE) + godot_str(Atmosphere::glsl_host_uniforms() + Atmosphere::glsl_lookup());
 }
 
 void VoxelSky::add_atmosphere_globals() {
@@ -321,6 +314,9 @@ void VoxelSky::set_atmosphere(const Dictionary &p_params) {
     for (int i = 0; i < keys.size(); i++) {
         atmosphere[keys[i]] = p_params[keys[i]];
     }
+    if (p_params.has("atmo_enabled") && bool(p_params["atmo_enabled"])) {
+        _quiet_fog();
+    }
     if (material.is_null()) {
         return; // before _ready: _apply_frame sends everything
     }
@@ -402,7 +398,23 @@ void VoxelSky::_ready() {
     }
     sky->set_material(material);
     _apply();
+    if (atmosphere.has("atmo_enabled") && bool(atmosphere["atmo_enabled"])) {
+        _quiet_fog(); // the terrain started first
+    }
     set_process(true);
+}
+
+// The atmosphere is the haze: the environment's fog stays on (Godot drops a shader's own FOG without it) with nothing of
+// its own.
+void VoxelSky::_quiet_fog() {
+    if (environment.is_null()) {
+        return;
+    }
+    environment->set_fog_enabled(true);
+    environment->set_fog_density(0.0f);
+    environment->set_fog_height_density(0.0f);
+    environment->set_fog_sky_affect(0.0f);
+    environment->set_fog_aerial_perspective(0.0f);
 }
 
 // Pushes the cloud parameters and the render frame to the sky material, the cloud parameters to the terrain's page
@@ -430,15 +442,6 @@ void VoxelSky::_apply_frame() {
         } else {
             material->set_shader_parameter(keys[i], atmosphere[keys[i]]);
         }
-    }
-    if (environment.is_valid() && atmosphere.has("atmo_enabled") && bool(atmosphere["atmo_enabled"])) {
-        // The atmosphere is the haze: the environment's fog stays on (Godot skips a shader's own FOG without it) with
-        // nothing of its own.
-        environment->set_fog_enabled(true);
-        environment->set_fog_density(0.0f);
-        environment->set_fog_height_density(0.0f);
-        environment->set_fog_sky_affect(0.0f);
-        environment->set_fog_aerial_perspective(0.0f);
     }
 }
 
