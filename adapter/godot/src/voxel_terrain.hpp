@@ -194,6 +194,11 @@ public:
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
     // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
     Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;
+    // The base's up at a render-space position (World::up_at): +y on the flat world, a planet's local vertical. The player and the
+    // bench stand the camera on it.
+    Vector3 get_up_at(const Vector3 &p_render_pos) const;
+    // World::scene_shift: the offset a scene's flat-world poses take to stand over a planet's pole (zero on the flat world).
+    Vector3 get_scene_shift() const;
 
     // Render-origin rebasing (World::recenter): once the camera is farther than this many metres from the render
     // origin on any axis, the origin moves under it, every Node3D sibling of the terrain moves by the shift in the same

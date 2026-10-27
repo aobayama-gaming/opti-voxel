@@ -53,10 +53,6 @@ float field(const BiomeLibrary &p_lib, std::vector<TableRecord> &r_records, cons
     return fold(p_lib, r_records, p_voxel, flat_ground(p_voxel, p_top));
 }
 
-Vector3i64 cell_of(const VoxelPos &p_v, int64_t p_cell) {
-    return Vector3i64(WorldCoord::floor_div(p_v.x, p_cell), WorldCoord::floor_div(p_v.y, p_cell), WorldCoord::floor_div(p_v.z, p_cell));
-}
-
 } // namespace
 
 TEST_CASE("Biome: a cell's site is the same from any box, on the flat datum in the middle half of its cell") {
@@ -98,7 +94,7 @@ TEST_CASE("Biome: a cell's site is the same from any box, on the flat datum in t
                 // The other spots a lake tries: in the middle half of the same cell, the rest unchanged.
                 for (int attempt = 0; attempt < Biome::LAKE_ATTEMPTS; attempt++) {
                     const Biome::Site m = Biome::moved(s, attempt, flat, voxel);
-                    CHECK(cell_of(m.at, cell) == cell_of(s.at, cell));
+                    CHECK(WorldCoord::floor_div(m.at, cell) == WorldCoord::floor_div(s.at, cell));
                     CHECK(m.at.x - WorldCoord::floor_div(m.at.x, cell) * cell >= cell / 4);
                     CHECK(m.at.x - WorldCoord::floor_div(m.at.x, cell) * cell < 3 * cell / 4);
                     CHECK(m.at.z - WorldCoord::floor_div(m.at.z, cell) * cell >= cell / 4);
@@ -140,7 +136,7 @@ TEST_CASE("Biome: on a planet, sites are on the base, one per cell, the same fro
         int off_base = 0, not_in_half = 0;
         for (const Biome::Site &s : all) {
             off_base += std::fabs(planet.altitude(s.at)) > 1.0;
-            cells.push_back(key(VoxelPos(cell_of(s.at, cell).x, cell_of(s.at, cell).y, cell_of(s.at, cell).z)));
+            cells.push_back(key(WorldCoord::floor_div(s.at, cell)));
             for (int a = 0; a < 3; a++) {
                 const int64_t v = a == 0 ? s.at.x : (a == 1 ? s.at.y : s.at.z);
                 sides[2 * a] += v > r / 2;

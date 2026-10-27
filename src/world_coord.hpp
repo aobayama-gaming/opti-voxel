@@ -118,6 +118,11 @@ struct Vector3i64Hasher {
 using UpAxis = std::array<double, 3>;
 inline constexpr UpAxis UP_Y{ 0.0, 1.0, 0.0 };
 
+// p_from moved p_h voxels along p_up, each axis rounded to the voxel (exactly p_h on y along UP_Y).
+inline VoxelPos along_up(const VoxelPos &p_from, const UpAxis &p_up, double p_h) {
+    return p_from + VoxelPos(std::llround(p_h * p_up[0]), std::llround(p_h * p_up[1]), std::llround(p_h * p_up[2]));
+}
+
 // Plain float32 triple: the CPU mirror of GPU float math must stay float32 even in
 // precision=double builds (where godot's Vector3 is double).
 struct Float3 {
@@ -190,6 +195,11 @@ inline int64_t floor_div(int64_t p_a, int64_t p_b) {
         q--;
     }
     return q;
+}
+
+// The cell of side p_b (> 0) holding p_a, per axis.
+inline Vector3i64 floor_div(const Vector3i64 &p_a, int64_t p_b) {
+    return Vector3i64(floor_div(p_a.x, p_b), floor_div(p_a.y, p_b), floor_div(p_a.z, p_b));
 }
 
 // p_a - p_b saturated to [-p_limit, p_limit] (p_limit < 2^31): the exact int64 difference wherever it

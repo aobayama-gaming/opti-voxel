@@ -444,19 +444,9 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
         rec.op = Combine::SMOOTH_UNION;
         rec.set_k((is_rock ? 1.0f : 0.8f) / vs);
         rec.salt = h.z;
-        float frame[9];
-        up_rotation(p_up, frame);
-        // A rock turns about the up by a hashed yaw (rows: yaw times the up frame), sunk 0.4 of its radius along it.
-        const double yaw = is_rock ? double(h.y % 628u) * 0.01 : 0.0;
-        const float c = float(std::cos(yaw)), sn = float(std::sin(yaw));
-        const float turn[9] = { c, 0, -sn, 0, 1, 0, sn, 0, c };
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-                rec.rotation[3 * i + j] = turn[3 * i] * frame[j] + turn[3 * i + 1] * frame[3 + j] + turn[3 * i + 2] * frame[6 + j];
-            }
-        }
-        const double dy = is_rock ? -0.4 * double(r) : 0.0;
-        rec.anchor = p_site.base + VoxelPos(std::llround(dy * p_up[0]), std::llround(dy * p_up[1]), std::llround(dy * p_up[2]));
+        // A rock turns about the up by a hashed yaw, sunk 0.4 of its radius along it.
+        up_yaw_rotation(p_up, is_rock ? double(h.y % 628u) * 0.01 : 0.0, rec.rotation);
+        rec.anchor = along_up(p_site.base, p_up, is_rock ? -0.4 * double(r) : 0.0);
         if (is_rock) {
             rec.params[0] = r;
             rec.params[1] = 0.1f * r;
@@ -748,19 +738,8 @@ void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_para
     std::copy(p_params, p_params + 8, rec.params);
     const VoxelPos ground = ground_at(std::llround(p_x / vs), std::llround(p_z / vs));
     const UpAxis up = up_at(ground);
-    const double dy = p_dy_m / vs;
-    rec.anchor = ground + VoxelPos(std::llround(dy * up[0]), std::llround(dy * up[1]), std::llround(dy * up[2]));
-    // Rows (absolute to local): the yaw about local y after the up's frame (Archetype::up_rotation; the identity on the
-    // flat base, whose yaw rows are then the same floats).
-    float u[9];
-    Archetype::up_rotation(up, u);
-    const float c = float(std::cos(p_yaw)), s = float(std::sin(p_yaw));
-    const float yaw[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
-    for (int r = 0; r < 3; r++) {
-        for (int k = 0; k < 3; k++) {
-            rec.rotation[3 * r + k] = yaw[3 * r] * u[k] + yaw[3 * r + 1] * u[3 + k] + yaw[3 * r + 2] * u[6 + k];
-        }
-    }
+    rec.anchor = along_up(ground, up, p_dy_m / vs);
+    Archetype::up_yaw_rotation(up, p_yaw, rec.rotation); // the flat base: the yaw's rows, the same floats
     rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
     // The same limits as a runtime edit (a gallery cube past 4 top-LOD chunk spans with few LODs).
     std::vector<TableRecord> one{ rec };

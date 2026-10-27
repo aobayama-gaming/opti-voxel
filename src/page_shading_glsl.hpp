@@ -103,11 +103,16 @@ float bark_plate(float grain) {
 // along chunk borders and the mesher's error move it by a good part of a groove, and read at the position the bark
 // jumped across LOD changes (tools/bark_seams.sh). Two trees read the same bark only at the same height; a flat face
 // reads one column of it. The height is read through the shading frame (period: BARK_FEATURE_M, the wander's 4 m).
+// Horizontal and height are the base's up's (trees grow along it, up_frame): x, y and z on the flat world. On a planet
+// the height's frame is a whole period off per axis, not along the up: the bark shifts when the render origin moves.
 const float BARK_RADIUS = 0.45;
-vec3 bark_point(vec3 p, vec3 n) {
-    vec2 u = n.xz * (BARK_RADIUS * inversesqrt(max(dot(n.xz, n.xz), 1e-8)));
+vec3 bark_point(vec3 p, vec3 n, vec3 up) {
+    vec3 t1, t2;
+    up_frame(up, t1, t2);
+    vec2 h = vec2(dot(n, t1), dot(n, t2));
+    vec2 u = h * (BARK_RADIUS * inversesqrt(max(dot(h, h), 1e-8)));
     float period_m;
-    return vec3(u.x, shade_frame(p, BARK_FEATURE_M, period_m).y, u.y);
+    return vec3(u.x, dot(shade_frame(p, BARK_FEATURE_M, period_m), up), u.y);
 }
 
 // The ground's surface detail, a multiplier on its albedo (the procedural ground's and a biome's PATTERN_GROUND):
@@ -214,10 +219,14 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, vec3 up, float f
         albedo = mix(m1.rgb, m0.rgb, flat_w) * shade; // m1.rgb: its steep albedo (no emission)
         emission = vec3(0.0);
     } else if (m1.a == MATERIAL_PATTERN_LAVA) {
-        // Lava: a warped crust, dark seams over a glow that drifts slowly. The crust is q = 0.15 xz warped by a and b;
-        // each wave of q is written as a wave of the position, snapped in the shading frame (period: its 60 m wave).
+        // Lava: a warped crust, dark seams over a glow that drifts slowly. The crust is q = 0.15 xz warped by a and b
+        // (xz: the up's tangent plane, up_frame); each wave of q is written as a wave of the position, snapped in the
+        // shading frame (period: its 60 m wave).
         float period_m;
-        vec2 s = shade_frame(p, 60.0, period_m).xz;
+        vec3 t1, t2;
+        up_frame(up, t1, t2);
+        vec3 sp = shade_frame(p, 60.0, period_m);
+        vec2 s = vec2(dot(sp, t1), dot(sp, t2));
         vec3 kx = shade_wave(0.15 * vec3(1.3, 2.1, 3.3), period_m); // q.x's waves: the warp b, the seams, the cross seams
         vec3 kz = shade_wave(0.15 * vec3(1.7, 1.9, 3.3), period_m); // q.y's: the warp a, the seams, the cross seams
         vec2 kp = shade_wave(0.15 * vec3(0.7, 0.9, 0.0), period_m).xy; // the pulse's
@@ -235,7 +244,7 @@ void material_shading(uint mat_id, vec3 ground, vec3 p, vec3 n, vec3 up, float f
         vec3 knot_albedo = vec3(0.0);
         if (detail > 0.0) { // else the plates' mean, no bark_grain
             float knot, ring;
-            plate = mix(plate, bark_plate(bark_grain(bark_point(p, n), knot, ring)), detail);
+            plate = mix(plate, bark_plate(bark_grain(bark_point(p, n, up), knot, ring)), detail);
             knot_weight = max(knot, ring * 0.6) * detail;
             knot_albedo = m0.rgb * mix(0.35, 0.7, ring);
         }

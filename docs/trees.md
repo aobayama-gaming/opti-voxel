@@ -33,8 +33,8 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes): ~9 evaluations per site, 1 per empty box;
   unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
-  before, pinned by a hash). Still column-based (flat debt): the scene's centre (`ground_y`) and the lake keep-out
-  (`in_lake(x, z)`, the sources' `accept`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
+  before, pinned by a hash). The scene's centre is the ground under (SCENE_X, SCENE_Z) of the base's tangent plane
+  (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
   every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per site.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
@@ -96,18 +96,22 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   don't eat the instance capacity). Coarse cells hold nearly every part: their member lists cost memory (~4 B per part
   per cell its tent touches) and an O(parts) insert / erase per edit (TODO: per-block member lists would bound it).
   **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
-  change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles the plane with cells of
-  640 m rounded to 2^k voxels, and a cell keeps one site in its middle half with the kind's chance, from
-  `hash_cell` of the int64 cell (a site depends only on its cell: the same from any square or origin, unit-tested
-  near 0, 2^32 and +-2^60). A lake is two records: a `basin` (a cylinder plus the rock's bumps, 16 m lattice)
+  change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles space with cubic cells of
+  640 m rounded to 2^k voxels, and a cell keeps one site with the kind's chance, from `hash_cell` of the int64 cell: a
+  point of its middle half projected onto the base surface (`BaseSurface::on_base`), kept when the projection stays
+  in the cell, so every point of the base has one cell (on the flat base the datum's layer: one per column, as the
+  plane's cells were; a planet's sites cover it all round, unit-tested). A site depends only on its cell and the base:
+  the same from any box or origin, unit-tested near 0, 2^32 and +-2^60. Hashing 3D cells moved every lake and island.
+  A feature is built in its site's tangent frame (`up_rotation` of the base's up: heights along it, the records
+  turned onto it; the identity on the flat base), unit-tested 90 degrees round a planet where y is level. A lake is two records: a `basin` (a cylinder plus the rock's bumps, 16 m lattice)
   smooth-subtracted from the ground, then a hard-unioned `cylinder` slab whose top face is the flat lava, 4% of the
   radius below the lowest of 72 ground samples on the slab's rim. `Biome::place` tries `LAKE_ATTEMPTS` spots of the
   cell and gives up where the rim's ground spans over half the radius (`lakes_too_steep`). An island is one `island`
   record (a spherical cap on a hanging cone, smooth-unioned, plus bumps), its box bottom 25-70 m above the highest
   ground under it. Both follow the band rule like any record; the slab erodes away a few LODs before the basin (it
   can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) whose scorched basin
-  material shows. `--biomes=KM` (bench and player, `VoxelTerrain.biome_radius` in metres) places the cells within KM km of
-  (SCENE_X, SCENE_Z) once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
+  material shows. `--biomes=KM` (bench and player, `VoxelTerrain.biome_radius` in metres) places the sites within KM km
+  of the base's point under (SCENE_X, SCENE_Z) once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
   out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread.
   `get_debug_stats()["table"]["biomes"]`: counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z
-  in metres, y the lava or the island's rim, radius). `--preset=biomes` looks at a lava lake with two islands behind it.
+  in metres of the lava's centre or the island's rim plane's, radius). `--preset=biomes` looks at a lava lake with two islands behind it.

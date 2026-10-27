@@ -131,6 +131,16 @@ public:
     VoxelPos voxel_at(const double p_render_pos[3]) const;
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point).
     void tangent_position(double p_u_m, double p_v_m, double r_render_pos[3]) const;
+    // What the hosts add to their scenes' render positions (poses made for the flat world from its world origin, its
+    // datum BaseSurface::DATUM_M up) so they stand the same over a planet's +y pole: 0 on the flat world.
+    void scene_shift(double r_shift_m[3]) const;
+    // The base's up at a render-space position (BaseSurface::up_dir): +y on the flat world, the planet's radial direction.
+    UpAxis up_at(const double p_render_pos[3]) const;
+    // The planet's base in render space, for the shaders' altitude, up and cloud shell; false on the flat base. Its centre
+    // in metres from the render origin (changes with it), its radius in metres, and K = |centre|^2 - radius^2 (m^2) from
+    // double: the altitude (|p|^2 - 2 p.c + K) / (|p - c| + R) is then within ~1e-4 m in float32 at Earth's radius, where
+    // |p - c| - R would be within half a metre.
+    bool planet_render(Float3 &r_centre_m, float &r_radius_m, float &r_k_m2) const;
 
     // Render-origin rebasing. Render space (every Float3 the host passes or gets) is metres from the render origin,
     // which starts at the world origin. Called by the host before frame(): when the camera is farther than

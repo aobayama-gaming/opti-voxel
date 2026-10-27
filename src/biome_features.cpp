@@ -156,10 +156,6 @@ VoxelPos cell_point(const Vector3i64 &p_cell, int64_t p_cell_side, uint32_t p_x,
     return p_base.on_base(VoxelPos(middle_half(p_cell.x, p_cell_side, p_x), middle_half(p_cell.y, p_cell_side, p_y), middle_half(p_cell.z, p_cell_side, p_z)));
 }
 
-Vector3i64 cell_of(const VoxelPos &p_voxel, int64_t p_cell_side) {
-    return Vector3i64(WorldCoord::floor_div(p_voxel.x, p_cell_side), WorldCoord::floor_div(p_voxel.y, p_cell_side), WorldCoord::floor_div(p_voxel.z, p_cell_side));
-}
-
 } // namespace
 
 bool LavaPool::near(const VoxelPos &p_voxel) const {
@@ -193,18 +189,22 @@ Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base, double 
     const int64_t cell = int64_t(1) << cell_shift(p_site.feature, p_voxel);
     const ExactNoise::UVec3 h = hash3(p_site.seed, uint32_t(p_attempt), 0x40EEu);
     Site s = p_site;
-    s.at = cell_point(cell_of(p_site.at, cell), cell, h.x, h.z, h.y, p_base);
+    s.at = cell_point(WorldCoord::floor_div(p_site.at, cell), cell, h.x, h.z, h.y, p_base);
     return s;
 }
 
 void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, double p_voxel, std::vector<Site> &r_out) {
     const Kind &k = kind(p_feature);
     const int64_t cell = int64_t(1) << cell_shift(p_feature, p_voxel);
-    const Vector3i64 lo = cell_of(p_lo, cell), hi = cell_of(p_hi, cell);
+    const Vector3i64 lo = WorldCoord::floor_div(p_lo, cell), hi = WorldCoord::floor_div(p_hi, cell);
+    const double reach = 0.87 * double(cell); // a cell's half diagonal, rounded up: farther from the base, it holds none of it
     for (int64_t cz = lo.z; cz <= hi.z; cz++) {
         for (int64_t cy = lo.y; cy <= hi.y; cy++) {
             for (int64_t cx = lo.x; cx <= hi.x; cx++) {
                 const Vector3i64 c(cx, cy, cz);
+                if (std::fabs(p_base.altitude(c * cell + VoxelPos(cell / 2, cell / 2, cell / 2))) > reach) {
+                    continue;
+                }
                 const ExactNoise::UVec3 h = hash3(ExactNoise::hash_cell(c, k.seed), 0xCE11u, 0u);
                 if (unit_of(h.x) >= k.chance) {
                     continue;
@@ -213,7 +213,7 @@ void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const 
                 Site s;
                 s.feature = p_feature;
                 s.at = cell_point(c, cell, h.y, g.z, h.z, p_base);
-                if (cell_of(s.at, cell) != c || s.at.x < p_lo.x || s.at.x > p_hi.x || s.at.y < p_lo.y || s.at.y > p_hi.y || s.at.z < p_lo.z || s.at.z > p_hi.z) {
+                if (WorldCoord::floor_div(s.at, cell) != c || s.at.x < p_lo.x || s.at.x > p_hi.x || s.at.y < p_lo.y || s.at.y > p_hi.y || s.at.z < p_lo.z || s.at.z > p_hi.z) {
                     continue; // another cell's point of the base, or outside the box
                 }
                 s.radius = (k.radius_lo_m + (k.radius_hi_m - k.radius_lo_m) * unit_of(g.x)) / p_voxel;

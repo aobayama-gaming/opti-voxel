@@ -68,6 +68,19 @@ vec3 shade_cells(vec3 per_m, float period_m) {
 vec3 shade_wave(vec3 k, float period_m) {
     return round(k * (period_m / 6.28318531)) * (6.28318531 / period_m);
 }
+
+// The tangent frame of a unit up direction (a planet's local up; +y on the flat world), Archetype::up_rotation's (C++
+// up_frame): the smallest turn from +y onto it (Rodrigues; below the horizon from -y, after half a turn about x) takes x
+// to t1 and z to t2, the identity for +y, so a pattern read on (t1, up, t2) is the flat world's read on (x, y, z).
+void up_frame(vec3 up, out vec3 t1, out vec3 t2) {
+    float s = up.y < 0.0 ? -1.0 : 1.0;
+    vec3 k = s * vec3(up.z, 0.0, -up.x); // (s y) x up
+    float a = 1.0 / (1.0 + s * up.y);
+    vec3 x = vec3(1.0, 0.0, 0.0);
+    vec3 z = vec3(0.0, 0.0, s);
+    t1 = x + cross(k, x) + cross(k, cross(k, x)) * a;
+    t2 = z + cross(k, z) + cross(k, cross(k, z)) * a;
+}
 )glsl";
 
 inline ov::str glsl() {

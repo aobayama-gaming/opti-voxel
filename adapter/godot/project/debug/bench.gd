@@ -103,11 +103,13 @@ extends Node3D
 ##   --probe=PREFIX               direct: once loaded, PREFIX_shaded.png, then the bark seam probe views 10 and 11
 ##                                as PREFIX_10.png and PREFIX_11.png, raw (tools/bark_seams.sh)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
-##   --above_ground=M             move the camera vertically to M metres above the terrain under it (SDF
-##                                distance, iterated; negative: below it). Default 50 on the cascade terrains,
+##   --above_ground=M             move the camera along the terrain's up to M metres above the terrain under it
+##                                (SDF distance, iterated; negative: below it). Default 50 on the cascade terrains,
 ##                                whose ground height varies by kilometres, unless --cam_pos gives the height
 ##   --camera_voxel=X,Y,Z         place the scene (camera, lights, --cam_pos) relative to this absolute
-##                                LOD0 voxel instead of the world origin (origin must be a root-span multiple)
+##                                LOD0 voxel instead of the world origin. On a planet (--planet_radius_km) the
+##                                scene otherwise stands over its +y pole (VoxelTerrain.get_scene_shift); --pitch /
+##                                --yaw turn the camera about the local up, the fly and walk paths stay level
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
 ##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
 ##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
@@ -142,6 +144,7 @@ var walk_from: Vector3  # turn_walk: where the walk starts
 var start_rot: Vector3  # approach: the start pose's rotation (degrees), restored on arrival
 var approach_from_pos: Vector3  # approach: where the flight starts
 var approach_shot_next := 0  # approach: the next screenshot's index
+var fly_dir := Vector3.RIGHT  # fly: the outbound leg's direction (+X, level: across the local up on a planet)
 var vp_rid: RID
 
 var frame := 0
@@ -324,23 +327,27 @@ func _ready() -> void:
 		terrain.world_origin_x = o[0].to_int()
 		terrain.world_origin_y = o[1].to_int()
 		terrain.world_origin_z = o[2].to_int()
+	add_child(terrain)
+	# The scene (camera, lights) moves with --camera_voxel: placed relative to that absolute voxel instead of the world
+	# origin (the started one: the same world point seen from another origin, as in tools/origin_parity.sh); on a
+	# planet without it, over the +y pole.
+	var shift: Vector3 = terrain.get_scene_shift()
 	if args.has("camera_voxel"):
-		# The scene (camera, lights) is placed relative to this absolute voxel instead of the world
-		# origin: the same world point seen from another origin. Origins must be multiples of the root
-		# chunk span (no snapping), as in tools/origin_parity.sh.
 		var cv: PackedStringArray = args["camera_voxel"].split(",")
 		var vs: float = terrain.voxel_size
-		var shift := Vector3(float(cv[0].to_int() - terrain.world_origin_x) * vs,
-			float(cv[1].to_int() - terrain.world_origin_y) * vs, float(cv[2].to_int() - terrain.world_origin_z) * vs)
-		for child in get_children():
-			if child is Node3D:
-				child.global_position += shift
-		start_pos = camera.global_position
-	add_child(terrain)
+		shift = Vector3(float(cv[0].to_int() - terrain.get_render_origin_x()) * vs,
+			float(cv[1].to_int() - terrain.get_render_origin_y()) * vs, float(cv[2].to_int() - terrain.get_render_origin_z()) * vs)
+	for child in get_children():
+		if child is Node3D and child != terrain:
+			child.global_position += shift
+	start_pos = camera.global_position
 	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 4 or args.has("cam_pos") else "50")
 	if above_ground != "":
 		_place_above_ground(float(above_ground))  # the fly path starts there too
 		start_pos = camera.global_position
+	if _on_planet():
+		_stand_camera(float(args.get("yaw", "0")))
+		fly_dir = _level(Vector3.RIGHT)
 	if args.get("scenario", "load") == "approach":
 		_place_for_approach()
 	base_near = camera.near
@@ -401,9 +408,10 @@ func _end_phase() -> void:
 ## any point of the straight flight to its end is the same: the orientation stays).
 func _place_for_approach() -> void:
 	start_rot = camera.rotation_degrees
-	approach_from_pos = start_pos + Vector3(-float(args.get("approach_out", "2000")), float(args.get("approach_from", "1500")), 0)
+	var up := _up()
+	approach_from_pos = start_pos - fly_dir * float(args.get("approach_out", "2000")) + up * float(args.get("approach_from", "1500"))
 	camera.global_position = approach_from_pos
-	camera.look_at(start_pos, Vector3.UP)
+	camera.look_at(start_pos, up)
 	print("BENCH: approach from %s to %s" % [approach_from_pos, start_pos])
 
 
@@ -424,14 +432,37 @@ func _run_approach() -> bool:
 	return true
 
 
-## Raise or lower the camera to p_height metres above the terrain under it (SDF distance, iterated).
+## Raise or lower the camera along the terrain's up to p_height metres above the terrain under it (SDF distance,
+## iterated).
 func _place_above_ground(p_height: float) -> void:
 	for i in 32:
 		var d: float = terrain.get_sdf_at(camera.global_position)
 		if absf(d - p_height) < maxf(1.0, p_height * 0.05):
 			break
-		camera.global_position.y += p_height - d
+		camera.global_position += _up() * (p_height - d)
 	print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, terrain.get_sdf_at(camera.global_position)])
+
+
+func _on_planet() -> bool:
+	return terrain.planet_radius > 0.0
+
+
+## The terrain's up at the camera (+y on the flat world).
+func _up() -> Vector3:
+	return terrain.get_up_at(camera.global_position)
+
+
+## p_dir's part across the up at the camera, normalized: level there.
+func _level(p_dir: Vector3) -> Vector3:
+	var up := _up()
+	return (p_dir - up * p_dir.dot(up)).normalized()
+
+
+## On a planet: --pitch and p_yaw (degrees) turn the camera about the local up as they turn it about +y on the flat
+## world (Godot's YXZ Euler angles, then the smallest turn from +y onto the up).
+func _stand_camera(p_yaw: float) -> void:
+	var local := Basis.from_euler(Vector3(deg_to_rad(float(args.get("pitch", "-20"))), deg_to_rad(p_yaw), 0.0))
+	camera.global_basis = Basis(Quaternion(Vector3.UP, _up())) * local
 
 
 func _altitudes() -> PackedFloat64Array:
@@ -594,7 +625,11 @@ func _process(delta: float) -> void:
 		"turn":
 			var turns := float(args.get("turns", "1"))
 			var turn := (Time.get_ticks_usec() - phase_start_usec) / (float(args.get("turn_seconds", "8")) * 1e6)
-			camera.rotation_degrees.y = float(args.get("yaw", "0")) + 360.0 * minf(turn, turns)
+			var turned := float(args.get("yaw", "0")) + 360.0 * minf(turn, turns)
+			if _on_planet():
+				_stand_camera(turned)
+			else:
+				camera.rotation_degrees.y = turned
 			if turn >= turns:
 				_end_phase()
 				_take_shots("turn_end")
@@ -603,6 +638,8 @@ func _process(delta: float) -> void:
 		"walk":
 			var walked := (Time.get_ticks_usec() - phase_start_usec) / (float(args.get("walk_seconds", "6")) * 1e6)
 			var ahead := Vector3.FORWARD.rotated(Vector3.UP, camera.global_rotation.y)  # level, whatever the pitch
+			if _on_planet():
+				ahead = _level(-camera.global_basis.z)
 			camera.global_position = walk_from + ahead * float(args.get("walk", "300")) * minf(walked, 1.0)
 			if walked >= 1.0:
 				_end_phase()
@@ -613,12 +650,12 @@ func _process(delta: float) -> void:
 				_end_phase()  # its shots: approach_end
 				_begin_phase("settle")
 		"fly_out":
-			camera.global_position = start_pos + Vector3(fly_dist, 0, 0) * minf(leg, 1.0)
+			camera.global_position = start_pos + fly_dir * fly_dist * minf(leg, 1.0)
 			if leg >= 1.0:
 				_end_phase()
 				_begin_phase("fly_back")
 		"fly_back":
-			camera.global_position = start_pos + Vector3(fly_dist, 0, 0) * maxf(1.0 - leg, 0.0)
+			camera.global_position = start_pos + fly_dir * fly_dist * maxf(1.0 - leg, 0.0)
 			if leg >= 1.0:
 				camera.global_position = start_pos
 				_end_phase()

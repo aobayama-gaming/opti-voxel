@@ -34,6 +34,19 @@ double planet_radius_m(const World::Settings &p_config) {
     return p_config.terrain_mode == 4 ? 0.0 : p_config.planet_radius_m;
 }
 
+// A planet's +y pole less the flat datum (LOD0 voxels): where the flat world's voxel 0 goes, so the poses made for its
+// datum stand the same over the pole (start's default origin, scene_shift).
+VoxelPos pole_lift(const BaseSurface &p_planet, double p_voxel_size) {
+    return p_planet.tangent_point(0, 0) - VoxelPos(0, std::llround(BaseSurface::DATUM_M / p_voxel_size), 0);
+}
+
+// The render position (metres) of LOD0 voxel p_voxel, the render origin at p_origin, in double.
+void render_m(const VoxelPos &p_voxel, const VoxelPos &p_origin, double p_voxel_size, double r_pos[3]) {
+    r_pos[0] = double(p_voxel.x - p_origin.x) * p_voxel_size;
+    r_pos[1] = double(p_voxel.y - p_origin.y) * p_voxel_size;
+    r_pos[2] = double(p_voxel.z - p_origin.z) * p_voxel_size;
+}
+
 } // namespace
 
 World::World() :
@@ -68,13 +81,13 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     {
         const int64_t root_units = int64_t(1) << lod_numbers;
         const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
-        // On a planet the request's datum is its +y pole (SDFCascade::planet_base): the scenes' poses, made for the flat
-        // world's datum at BaseSurface::DATUM_M, start the same height over its surface.
+        // On a planet the default request's datum is its +y pole (SDFCascade::planet_base), so the camera starts near the
+        // render origin there (scene_shift places the scenes' poses on it); a request given is absolute.
         VoxelPos request = config.world_origin_request;
-        if (planet_radius_m(config) > 0.0) {
+        if (planet_radius_m(config) > 0.0 && request == VoxelPos(0, 0, 0)) {
             const BaseSurface planet = SDFCascade::planet_base(planet_radius_m(config), double(chunk_param.voxel_size));
             if (planet.kind() == BaseSurface::Kind::SPHERE) {
-                request.y += planet.tangent_point(0, 0).y - std::llround(BaseSurface::DATUM_M / double(chunk_param.voxel_size));
+                request = pole_lift(planet, double(chunk_param.voxel_size));
             }
         }
         chunk_param.origin_chunk = ChunkId(WorldCoord::floor_div(request.x, root_voxels) * root_units,
@@ -550,11 +563,34 @@ VoxelPos World::voxel_at(const double p_render_pos[3]) const {
 
 void World::tangent_position(double p_u_m, double p_v_m, double r_render_pos[3]) const {
     const double vs = double(config.chunk_param.voxel_size);
-    const VoxelPos p = sdf->get_base().tangent_point(std::llround(p_u_m / vs), std::llround(p_v_m / vs));
+    render_m(sdf->get_base().tangent_point(std::llround(p_u_m / vs), std::llround(p_v_m / vs)), config.chunk_param.origin_voxel(), vs, r_render_pos);
+}
+
+void World::scene_shift(double r_shift_m[3]) const {
+    const BaseSurface &base = sdf->get_base();
     const VoxelPos origin = config.chunk_param.origin_voxel();
-    r_render_pos[0] = double(p.x - origin.x) * vs;
-    r_render_pos[1] = double(p.y - origin.y) * vs;
-    r_render_pos[2] = double(p.z - origin.z) * vs;
+    render_m(base.kind() == BaseSurface::Kind::SPHERE ? pole_lift(base, double(config.chunk_param.voxel_size)) : origin, origin,
+            double(config.chunk_param.voxel_size), r_shift_m);
+}
+
+UpAxis World::up_at(const double p_render_pos[3]) const {
+    return sdf->up_at(voxel_at(p_render_pos));
+}
+
+bool World::planet_render(Float3 &r_centre_m, float &r_radius_m, float &r_k_m2) const {
+    const BaseSurface &base = sdf->get_base();
+    if (base.kind() != BaseSurface::Kind::SPHERE) {
+        return false;
+    }
+    const double vs = double(config.chunk_param.voxel_size);
+    double c[3];
+    render_m(base.centre(), config.chunk_param.origin_voxel(), vs, c);
+    const double len = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+    const double r = base.get_radius() * vs;
+    r_centre_m = Float3{ float(c[0]), float(c[1]), float(c[2]) };
+    r_radius_m = float(r);
+    r_k_m2 = float((len - r) * (len + r));
+    return true;
 }
 
 bool World::recenter(const Float3 &p_camera_pos, Float3 &r_shift) {

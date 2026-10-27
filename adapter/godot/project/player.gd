@@ -149,12 +149,15 @@ func _ready():
 		altitude_terrain = terrain
 		if spawn_tangent != null:
 			global_position = terrain.get_tangent_position(spawn_tangent)
-		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn.
+		else:
+			global_position += terrain.get_scene_shift()  # on a planet: over its +y pole
+		# The cascade terrain's relief is kilometres high: start spawn_altitude above the ground under the spawn, along
+		# the terrain's up there.
 		for i in 32:
 			var d: float = terrain.get_sdf_at(global_position)
 			if absf(d - spawn_altitude) < spawn_altitude * 0.25:
 				break
-			global_position.y += spawn_altitude - d
+			global_position += terrain.get_up_at(global_position) * (spawn_altitude - d)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if terrain:
 		if "--overlay=video" in Presets.user_args():
@@ -167,6 +170,7 @@ func _ready():
 			hud_visible = not "--overlay=none" in Presets.user_args()  # a clean screen; TAB shows the HUD
 	yaw = rotation.y
 	pitch = camera.rotation.x
+	_stand()
 	_make_flashlight("--flashlight=1" in Presets.user_args())
 	for a in Presets.user_args():
 		if a.begins_with("--marks="):
@@ -303,6 +307,13 @@ func _mark(kind: String, audit: bool) -> void:
 			return
 	_write_mark(m)
 
+# The body turned by yaw about the terrain's up where it stands (+y on the flat world): Space and Shift move along it,
+# and on a planet the horizon stays level as the player flies round it.
+func _stand() -> void:
+	var up: Vector3 = altitude_terrain.get_up_at(global_position) if altitude_terrain else Vector3.UP
+	global_basis = Basis(Quaternion(Vector3.UP, up)) * Basis(Vector3.UP, yaw)
+
+
 func _write_mark(m: Dictionary) -> void:
 	var path := marks_dir + "/marks.jsonl"
 	var f := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
@@ -317,7 +328,7 @@ func _input(event: InputEvent) -> void:
 		pitch -= event.relative.y * mouse_sensitivity
 		pitch = clamp(pitch, -PI/2, PI/2)
 		
-		rotation.y = yaw
+		_stand()
 		camera.rotation.x = pitch
 		camera.rotation.y = 0
 		camera.rotation.z = 0
@@ -450,3 +461,4 @@ func _process(delta: float) -> void:
 		smoothed_altitude *= pow(altitude / smoothed_altitude, 1.0 - exp(-delta / ALTITUDE_TAU))
 		move_speed = maxf(speed, smoothed_altitude * FLY_RATE)
 	position += direction * move_speed * delta
+	_stand()
