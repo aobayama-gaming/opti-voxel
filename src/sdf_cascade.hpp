@@ -66,6 +66,13 @@ public:
     // > 0: the ground's base is a sphere of this radius (metres) centred on the voxel (0, 0, 0) (BaseSurface::sphere: a
     // centre on its 2^31-voxel grid, exactly), its +y pole at y = radius; 0: the flat datum.
     double planet_radius_m = 0.0;
+    // The base of a planet of p_radius_m at p_voxel_size, its switch LOD the lowest (from BaseSurface::SWITCH_LOD) whose
+    // cells keep the radius form's float error small: a SPHERE, or not one when BaseSurface::sphere refuses it (ERR).
+    static BaseSurface planet_base(double p_radius_m, double p_voxel_size) {
+        const double r = p_radius_m / p_voxel_size;
+        const int fit = int(std::ceil(std::log2(r / double(BaseSurface::MAX_RADIUS_CELLS))));
+        return BaseSurface::sphere(VoxelPos(0, 0, 0), r, ov::clamp(fit, BaseSurface::SWITCH_LOD, BaseSurface::MAX_SWITCH_LOD));
+    }
     // The flat preset's ground: 50 m below the datum, halfway between the page shader's 100 m contour lines. On one
     // (300 m), a flat ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
     static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
@@ -112,7 +119,7 @@ public:
         }
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
         if (planet_radius_m > 0.0) {
-            const BaseSurface sphere = BaseSurface::sphere(VoxelPos(0, 0, 0), planet_radius_m / vs);
+            const BaseSurface sphere = planet_base(planet_radius_m, vs);
             base = sphere.kind() == BaseSurface::Kind::SPHERE ? sphere : base; // refused (ERR): the flat datum
         }
         spec.base = base; // a climate's stretched octaves stretch along it

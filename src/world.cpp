@@ -68,11 +68,14 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     {
         const int64_t root_units = int64_t(1) << lod_numbers;
         const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
-        // On a planet the request is relative to its +y pole (SDFCascade::planet_radius_m), so the scenes' poses, made for
-        // the flat world's datum, start on its surface.
+        // On a planet the request's datum is its +y pole (SDFCascade::planet_base): the scenes' poses, made for the flat
+        // world's datum at BaseSurface::DATUM_M, start the same height over its surface.
         VoxelPos request = config.world_origin_request;
         if (planet_radius_m(config) > 0.0) {
-            request.y += std::llround(planet_radius_m(config) / double(chunk_param.voxel_size));
+            const BaseSurface planet = SDFCascade::planet_base(planet_radius_m(config), double(chunk_param.voxel_size));
+            if (planet.kind() == BaseSurface::Kind::SPHERE) {
+                request.y += planet.tangent_point(0, 0).y - std::llround(BaseSurface::DATUM_M / double(chunk_param.voxel_size));
+            }
         }
         chunk_param.origin_chunk = ChunkId(WorldCoord::floor_div(request.x, root_voxels) * root_units,
                 WorldCoord::floor_div(request.y, root_voxels) * root_units, WorldCoord::floor_div(request.z, root_voxels) * root_units);

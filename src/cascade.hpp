@@ -206,6 +206,9 @@ int level_bound(int p_size, int p_j);
 
 // The samples of a chunk (vertex grid, skirt included) on its own lattice Λ_L.
 Box chunk_box(const ChunkId &p_chunk, const ChunkParam &p_param);
+// The samples of an item anchored at p_anchor on Λ_lod (the level shader's item frame): lo = anchor >> lod - skirt,
+// chunk_size points per axis. A chunk's anchor is its minimum voxel; a point item's is its point (skirt 0, size 1).
+Box item_box(const VoxelPos &p_anchor, int p_lod, const ChunkParam &p_param);
 
 struct Level {
     int m = 0;

@@ -1,6 +1,6 @@
 #include "cascade_passes.hpp"
 
-#include "base_regions.hpp"
+#include "gpu_frame.hpp"
 #include "gpu_shader.hpp"
 
 #include "ov/bytes.hpp"
@@ -12,8 +12,7 @@ using namespace CascadeGLSL;
 using ov::gpu::Binding;
 using ov::gpu::BufferKind;
 
-static_assert(BaseRegions::REGION_BINDING > CascadeGLSL::MATERIAL_BINDING && BaseRegions::INDEX_BINDING > CascadeGLSL::MATERIAL_BINDING &&
-                BaseRegions::REGION_BINDING > CascadeGLSL::TABLE_LIST_BINDING && BaseRegions::INDEX_BINDING != BaseRegions::REGION_BINDING,
+static_assert(BaseRegions::REGION_BINDING > CascadeGLSL::MATERIAL_BINDING && BaseRegions::REGION_BINDING > CascadeGLSL::TABLE_LIST_BINDING,
         "CascadePasses: the base regions' bindings follow the level shader's own.");
 
 bool CascadePasses::create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input,
@@ -36,6 +35,7 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
         Buffer p_material, uint32_t p_batch_items) {
     const Spec *spec = p_sdf->get_cascade();
     device = p_device;
+    input = p_input;
     item_size = p_item_size;
     max_chunks = p_max_items;
     const bool points = item_size == 1;
@@ -100,11 +100,8 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     }
     sphere = p_sdf->get_sphere_base();
     if (sphere != nullptr) {
-        // At most every slot of every item a distinct region (a point item fills one), plus the zero region of a batch
-        // with none.
         batch_items = ov::max(p_batch_items, max_chunks);
-        max_regions = batch_items * (points ? 1u : uint32_t(BaseRegions::SLOTS)) + 1u;
-        base_regions = device->create_buffer(BufferKind::STORAGE, uint64_t(max_regions) * BaseRegions::REGION_BYTES);
+        base_regions = device->create_buffer(BufferKind::STORAGE, uint64_t(max_regions()) * BaseRegions::REGION_BYTES);
         base_region_index = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * BaseRegions::SLOTS * sizeof(uint32_t));
         bindings.push_back({ uint32_t(BaseRegions::REGION_BINDING), BufferKind::STORAGE, base_regions });
         bindings.push_back({ uint32_t(BaseRegions::INDEX_BINDING), BufferKind::STORAGE, base_region_index });
@@ -156,20 +153,25 @@ void CascadePasses::free() {
     debug_placeholder = Buffer();
     base_regions = Buffer();
     base_region_index = Buffer();
+    input = Buffer();
     sphere = nullptr;
     device = nullptr;
 }
 
-void CascadePasses::upload_regions(const uint8_t *p_items, uint32_t p_count) {
+void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots) {
+    const uint32_t slots = ov::max(p_slots, p_count);
+    if (slots == 0) {
+        return;
+    }
+    OV_ERR_FAIL_COND_MSG(sphere != nullptr && p_count > batch_items, "CascadePasses: more items than the passes were created for.");
+    device->update_buffer(input, 0, uint64_t(slots) * GPUFrame::CHUNK_INPUT_BYTES, p_items);
     if (sphere == nullptr || p_count == 0) {
         return;
     }
-    OV_ERR_FAIL_COND_MSG(p_count > batch_items, "CascadePasses: more items than the passes were created for.");
-    BaseRegions::Tables tables;
-    BaseRegions::build(*sphere, p_items, p_count, item_param, is_points(), tables);
-    OV_ERR_FAIL_COND_MSG(tables.region_count() > max_regions, "CascadePasses: more base regions than the buffer holds.");
-    device->update_buffer(base_regions, 0, tables.regions.size(), tables.regions.data());
-    device->update_buffer(base_region_index, 0, tables.index.size() * sizeof(uint32_t), tables.index.data());
+    BaseRegions::build(*sphere, p_items, p_count, item_param, is_points(), regions);
+    OV_ERR_FAIL_COND_MSG(regions.region_count() > max_regions(), "CascadePasses: more base regions than the buffer holds.");
+    device->update_buffer(base_regions, 0, regions.regions.size(), regions.regions.data());
+    device->update_buffer(base_region_index, 0, regions.index.size() * sizeof(uint32_t), regions.index.data());
 }
 
 int CascadePasses::level_count(int p_min_lod) const {

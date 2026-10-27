@@ -38,13 +38,14 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   `GLSL_HEIGHT_SDF`). `FLAT` (the world today) is the saturated int64 datum difference with up (-0, 1, -0), so
   the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
   `SPHERE` (`World::Settings::planet_radius_m`, `--planet_radius_km=R` in bench and player: centred on the voxel
-  (0, 0, 0), its +y pole at y = R, the world origin request taken from that pole):
+  (0, 0, 0), its +y pole at y = R, standing for the flat datum in the world origin request; `SDFCascade::planet_base`
+  raises the switch LOD past 12 when the radius needs it, Jupiter at 5 cm included):
   below `switch_lod` (12) the curvature form d(c) + n.δ + 1/2 δ^T H δ around the centre of the point's region
   (the cell of 2^(L+6) voxels holding it, from the point and the LOD only), d(c), n, H from the CPU in double
   (`make_region` takes any base's exact value, gradient and Hessian: the unit test runs a torus); from it the
   radius form |p - centre| - R in float32 (`det_rsqrt`), the centre snapped to 2^31 voxels so (p - c) >> L is exact.
   On the GPU (`src/base_regions.{hpp,cpp}`) the cascade passes upload per batch the regions its items touch,
-  deduplicated, and 8 region indices per item (`CascadePasses::upload_regions`, from the batch's ChunkInput bytes,
+  deduplicated, and 8 region indices per item (`CascadePasses::upload_items`, with the batch's ChunkInput bytes,
   both meshers, the point items, CascadeSpike), at bindings 10 / 11 of the level shader; the sphere's `base_at` picks
   the slot from the parity of the point's region cell on each axis: a chunk's 32-point box meets at most two cells per
   axis, whose parities differ. A point item fills its own cell's slot; the radius form needs none. CascadeSpike's set

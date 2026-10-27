@@ -312,8 +312,7 @@ void GPUMesher::_execute_gpu_pipeline(const ov::bytes &p_chunk_id, uint32_t p_co
     device->clear_buffer(buffer_edge_intersect, 0, cells * sizeof(float) * 3 * chunk_batch_number);
 
     // 2. put the input inside
-    device->update_buffer(buffer_input_chunk_id, 0, p_chunk_id.size(), p_chunk_id.data());
-    cascade->upload_regions(p_chunk_id.data(), p_count);
+    cascade->upload_items(p_chunk_id.data(), p_count, uint32_t(p_chunk_id.size() / GPUFrame::CHUNK_INPUT_BYTES));
 
     // Pass 1 is the cascade's levels for the batch's real chunks (their own dispatches, before the passes below). Slots past the batch keep stale samples: they are computed but never used (see
     // render_chunk). A cascade that failed to build runs nothing.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "base_regions.hpp"
 #include "cascade_glsl.hpp"
 #include "gpu_device.hpp"
 #include "sdf_base.hpp"
@@ -17,7 +18,7 @@ public:
     // p_table_records / p_table_list: the mesher's instance table buffers (a terrain with a table): with them, a
     // second variant whose level 0 folds the chunks' instance lists (record_level's p_fold). p_sdf_material: the
     // mesher's per-sample material buffer (uint per sample, indexed like sdf_sample), written by level 0 when given.
-    // p_batch_items: the items of a batch (upload_regions), when record_all runs it in several sub-batches; 0: p_max_chunks.
+    // p_batch_items: the items of a batch (upload_items), when record_all runs it in several sub-batches; 0: p_max_chunks.
     using Buffer = ov::gpu::Buffer;
     bool create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input, Buffer p_param_ubo,
             Buffer p_sdf_sample, Buffer p_debug = Buffer(), const CascadePasses *p_share_scratch = nullptr, Buffer p_table_records = Buffer(),
@@ -31,10 +32,10 @@ public:
 
     // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
     int level_count(int p_min_lod) const;
-    // A sphere's regions for the next records (base_regions.hpp): the batch's p_count items as uploaded to the input
-    // buffer, their ChunkInput bytes (point items for create_points' passes). Nothing on a flat base. Call it with every
-    // batch, before its record_level / record_all.
-    void upload_regions(const uint8_t *p_items, uint32_t p_count);
+    // A batch's p_count items (ChunkInput bytes; point items for create_points' passes) into the input buffer, and on a
+    // sphere the regions they read (base_regions.hpp). Before the batch's record_level / record_all. p_slots: the items
+    // written when more than p_count (a mesher's padded batch, its later passes dispatching over every slot).
+    void upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots = 0);
 
     // Records level j for chunks [p_base, p_base + p_count) of the input (p_count <= max chunks: the scratch
     // holds chunk p_base + i at slot i) as one compute list. p_fold: level 0 folds the chunks' instance lists (a
@@ -63,13 +64,16 @@ private:
     Buffer scratch_b;
     Buffer bands;
     Buffer debug_placeholder;
+    Buffer input;
     // A sphere's regions (BaseRegions::Tables), sized for batch_items items; invalid on a flat base.
     const BaseSurface *sphere = nullptr;
     ChunkParam item_param;
+    BaseRegions::Tables regions;
     Buffer base_regions;
     Buffer base_region_index;
     uint32_t batch_items = 0;
-    uint32_t max_regions = 0;
+    // At most every slot of every item a distinct region (a point item fills one), plus the zero region.
+    uint32_t max_regions() const { return batch_items * (is_points() ? 1u : uint32_t(BaseRegions::SLOTS)) + 1u; }
     int top = 0;
     bool carry = false; // some run's last level reads carry groups (Spec::gpu_carry_groups)
     int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items

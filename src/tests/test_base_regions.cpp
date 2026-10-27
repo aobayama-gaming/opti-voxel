@@ -1,7 +1,9 @@
 #include "test_common.hpp"
 
 #include "base_regions.hpp"
+#include "cascade.hpp"
 #include "gpu_frame.hpp"
+#include "sdf_cascade.hpp"
 
 #include "ov/bytes.hpp"
 
@@ -23,8 +25,9 @@ ChunkId surface_chunk(const BaseSurface &p_base, int p_lod, int p_i, const Chunk
     return ChunkMath::chunk_at_voxel(at, p_lod, p_param);
 }
 
-// The region an item's slot table gives for a point (the GLSL base_at's lookup: the slot from the point's low word).
-bool lookup(const BaseRegions::Tables &p_tables, uint32_t p_item, const VoxelPos &p_point, int p_lod, BaseSurface::Region &r_region) {
+// Whether an item's slot table gives a point the region BaseSurface::at uses for it: the slot from the point's low
+// word as the GLSL base_at reads it (not BaseRegions' own slot of a cell), the region's bytes as encode() lays them out.
+bool reads_own_region(const BaseSurface &p_base, const BaseRegions::Tables &p_tables, uint32_t p_item, const VoxelPos &p_point, int p_lod) {
     const int s = p_lod + BaseSurface::REGION_SHIFT;
     const int slot = int((WorldCoord::lo32(p_point.x) >> s) & 1u) | int((WorldCoord::lo32(p_point.y) >> s) & 1u) << 1 |
             int((WorldCoord::lo32(p_point.z) >> s) & 1u) << 2;
@@ -32,18 +35,9 @@ bool lookup(const BaseRegions::Tables &p_tables, uint32_t p_item, const VoxelPos
     if (index >= p_tables.region_count()) {
         return false;
     }
-    const uint8_t *at = p_tables.regions.data() + size_t(index) * BaseRegions::REGION_BYTES;
-    r_region.d = ov::get_f32(at);
-    for (int a = 0; a < 3; a++) {
-        r_region.n[a] = ov::get_f32(at + 16 + 4 * a);
-        r_region.h[a] = ov::get_f32(at + 32 + 4 * a);
-        r_region.h[3 + a] = ov::get_f32(at + 48 + 4 * a);
-    }
-    return true;
-}
-
-bool same(const BaseSurface::Region &p_a, const BaseSurface::Region &p_b) {
-    return std::memcmp(&p_a, &p_b, sizeof(BaseSurface::Region)) == 0;
+    uint8_t want[BaseRegions::REGION_BYTES] = {};
+    BaseRegions::encode(want, p_base.region(BaseSurface::region_cell(p_point, p_lod), p_lod));
+    return std::memcmp(want, p_tables.regions.data() + size_t(index) * BaseRegions::REGION_BYTES, BaseRegions::REGION_BYTES) == 0;
 }
 
 } // namespace
@@ -76,7 +70,6 @@ TEST_CASE("GPUFrame: decode_item reads back a chunk's anchor and LOD, and a poin
 // box's cells: at most two per axis), at every LOD below the switch, near 0 and far centres.
 TEST_CASE("BaseRegions: every chunk sample reads its own region through its slot") {
     ChunkParam param;
-    int missing = 0;
     int wrong = 0;
     int checked = 0;
     for (const Vector3i64 &c : CENTRES) {
@@ -93,8 +86,8 @@ TEST_CASE("BaseRegions: every chunk sample reads its own region through its slot
             BaseRegions::Tables tables;
             BaseRegions::build(b, items.data(), CHUNKS, param, false, tables);
             for (uint32_t i = 0; i < CHUNKS; i++) {
-                const VoxelPos anchor = ChunkMath::chunk_min_voxel(ids[i], param);
-                const Vector3i64 lo = Vector3i64(anchor.x >> lod, anchor.y >> lod, anchor.z >> lod) - Vector3i64(param.skirt_size, param.skirt_size, param.skirt_size);
+                const Cascade::Box box = Cascade::chunk_box(ids[i], param);
+                const Vector3i64 lo(box.lo[0], box.lo[1], box.lo[2]);
                 // The box's corners and a stride through it: every cell boundary is crossed.
                 for (int z = 0; z < param.chunk_size; z += 3) {
                     for (int y = 0; y < param.chunk_size; y += 3) {
@@ -102,12 +95,7 @@ TEST_CASE("BaseRegions: every chunk sample reads its own region through its slot
                             const int last = param.chunk_size - 1;
                             const Vector3i64 l = lo + Vector3i64(x + 3 > last ? last : x, y + 3 > last ? last : y, z + 3 > last ? last : z);
                             const VoxelPos p(l.x << lod, l.y << lod, l.z << lod);
-                            BaseSurface::Region r;
-                            if (!lookup(tables, i, p, lod, r)) {
-                                missing++;
-                                continue;
-                            }
-                            wrong += !same(r, b.region(BaseSurface::region_cell(p, lod), lod));
+                            wrong += !reads_own_region(b, tables, i, p, lod);
                             checked++;
                         }
                     }
@@ -116,7 +104,6 @@ TEST_CASE("BaseRegions: every chunk sample reads its own region through its slot
         }
     }
     CHECK(checked > 0);
-    CHECK(missing == 0);
     CHECK(wrong == 0);
 }
 
@@ -146,13 +133,10 @@ TEST_CASE("BaseRegions: point items, the switch LOD, deduplication") {
         BaseRegions::build(b, items.data(), POINTS, point_param, true, tables);
         int wrong = 0;
         for (uint32_t i = 0; i < POINTS; i++) {
-            if (lods[i] >= sw) {
-                continue;
-            }
-            BaseSurface::Region r;
-            wrong += !lookup(tables, i, points[i], lods[i], r) || !same(r, b.region(BaseSurface::region_cell(points[i], lods[i]), lods[i]));
+            wrong += lods[i] < sw && !reads_own_region(b, tables, i, points[i], lods[i]);
         }
         CHECK(wrong == 0);
+        CHECK(tables.region_count() <= POINTS + 1); // CascadePasses' buffer: one region per point item, plus the zero one
     }
 
     SUBCASE("items at or above the switch LOD get no region") {
@@ -192,4 +176,14 @@ TEST_CASE("BaseRegions: the sphere's base_at GLSL names the bindings and the swi
     CHECK(ov::contains(g, ov::format("binding = %d", BaseRegions::INDEX_BINDING)));
     CHECK(ov::contains(g, ov::format("lod >= %d", b.get_switch_lod())));
     CHECK(!ov::contains(g, "SLOTS"));
+}
+
+TEST_CASE("SDFCascade::planet_base: a large planet raises its switch LOD instead of being refused") {
+    const BaseSurface earth = SDFCascade::planet_base(6371000.0, 0.05);
+    CHECK(earth.kind() == BaseSurface::Kind::SPHERE);
+    CHECK(earth.get_switch_lod() == BaseSurface::SWITCH_LOD);
+    const BaseSurface jupiter = SDFCascade::planet_base(69911000.0, 0.05);
+    CHECK(jupiter.kind() == BaseSurface::Kind::SPHERE);
+    CHECK(jupiter.get_switch_lod() > BaseSurface::SWITCH_LOD);
+    CHECK(SDFCascade::planet_base(6371000.0, 0.005).kind() == BaseSurface::Kind::SPHERE); // Earth at 5 mm
 }

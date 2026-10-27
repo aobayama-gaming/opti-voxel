@@ -109,9 +109,11 @@ double octave_step_bound(int p_k, double p_g) {
 }
 
 // The base probes' sphere: radius 2^32 - 1000.5 voxels around (2^31, -2^32, 0), so the probe points near the origins'
-// y = 0 sit near its surface, the far ones saturate.
+// y = 0 sit near its surface, the far ones saturate. Its switch LOD is the lowest sphere() accepts for that radius (the
+// probes call each form at every LOD, the switch picks none of them).
 BaseSurface sphere_probe_base() {
-    return BaseSurface::sphere(VoxelPos(int64_t(1) << 31, -(int64_t(1) << 32), 0), 4294967296.0 - 1000.5);
+    constexpr int SWITCH_LOD = 15;
+    return BaseSurface::sphere(VoxelPos(int64_t(1) << 31, -(int64_t(1) << 32), 0), 4294967296.0 - 1000.5, SWITCH_LOD);
 }
 
 // The flat base probe's datum (LOD0 voxels): not a multiple of the stretches, so their remainders reach the fraction.

@@ -762,6 +762,8 @@ void VoxelTerrain::_push_render_frame() {
     const SDFCascade &sdf = world.terrain();
     if (page_host && sdf.preset == SDFCascade::Preset::CONTINENTS) {
         // Continents preset: the page shader colours heights around sea level (the cascade's datum), in render metres.
+        // TODO: on a sphere this is the pole's height along render y, wrong away from the pole; the next planet PR
+        // colours by altitude along the vertex's up (with base_up).
         page_host->set_material_param("sea_level_m", ChunkMath::voxel_to_render(sdf.get_base().tangent_point(0, 0), param).y);
     }
     const float rise_m = ChunkMath::origin_shift_m(world.world_origin(), world.render_origin(), param).y;
