@@ -1,5 +1,7 @@
 #include "base_surface.hpp"
 
+#include "glsl_uniforms.hpp"
+
 #include "ov/math.hpp"
 
 #include "ov/str.hpp"
@@ -375,6 +377,10 @@ BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel
     return r;
 }
 
+double BaseSurface::curvature_radius_m(double p_voxel_m) const {
+    return base_kind == Kind::SPHERE ? radius * p_voxel_m : INFINITY;
+}
+
 float BaseSurface::Render::altitude(const Float3 &p_m) const {
     const Float3 &c = point_m;
     if (kind != Kind::SPHERE) {
@@ -385,21 +391,9 @@ float BaseSurface::Render::altitude(const Float3 &p_m) const {
     return q / (std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z) + radius_m);
 }
 
-namespace {
-
-struct UniformDecl {
-    ov::str &out;
-    void decl(const char *p_type, const char *p_name) { out += ov::str("uniform ") + p_type + " " + p_name + ";\n"; }
-    void operator()(const char *p_name, int) { decl("int", p_name); }
-    void operator()(const char *p_name, float) { decl("float", p_name); }
-    void operator()(const char *p_name, const Float3 &) { decl("vec3", p_name); }
-};
-
-} // namespace
-
 ov::str BaseSurface::glsl_render_uniforms() {
     ov::str out;
-    Render().visit(UniformDecl{ out });
+    Render().visit(GLSLUniforms::Declarations{ out });
     return out;
 }
 

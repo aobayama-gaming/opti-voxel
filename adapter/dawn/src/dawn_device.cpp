@@ -40,6 +40,8 @@ void wait_for_events(const wgpu::Instance &p_instance) {
 
 wgpu::TextureFormat wgpu_format(gpu::TextureFormat p_format) {
     switch (p_format) {
+        case gpu::TextureFormat::RGBA16_FLOAT:
+            return wgpu::TextureFormat::RGBA16Float;
         case gpu::TextureFormat::RGBA16_UINT:
         default:
             return wgpu::TextureFormat::RGBA16Uint;

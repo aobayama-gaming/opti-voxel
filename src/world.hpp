@@ -2,6 +2,7 @@
 
 #include "GPU_direct_mesher.hpp"
 #include "GPU_mesher.hpp"
+#include "atmosphere.hpp"
 #include "chunk_discoverer.hpp"
 #include "chunk_memory.hpp"
 #include "debug_log.hpp"
@@ -38,6 +39,9 @@ public:
         int terrain_mode = 1;
         // > 0: a planet of this radius (metres) centred on the voxel (0, 0, 0), its +y pole at y = radius (SDFCascade); 0 flat.
         double planet_radius_m = 0.0;
+        // The volumetric atmosphere over the base (Atmosphere), its scale (AtmosphereMedium::for_base: 0 from the base).
+        bool atmosphere = true;
+        double atmosphere_scale = 0.0;
         int legacy_batch_size = 1024;
         int lod_numbers = 15; // LODs 0 .. lod_numbers - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
         ChunkParam chunk_param; // voxel_size and skirt_depth set by the host; the render origin by start() and recenter()
@@ -91,6 +95,8 @@ public:
         MeshHost *meshes = nullptr; // the legacy meshes
         // The validator's legacy meshes: a MeshHost that draws nothing (debug_validate).
         std::function<std::unique_ptr<MeshHost>()> hidden_meshes;
+        // The atmosphere's textures for the host's shaders, on the device's thread (Atmosphere::TexturesFn).
+        Atmosphere::TexturesFn atmosphere_textures;
     };
 
     World();
@@ -111,6 +117,10 @@ public:
     // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer.
     void stop();
     bool is_started() const { return started; }
+    // The direction towards the sun (render space, unit): the atmosphere's light from the next frame on.
+    void set_sun(const Float3 &p_towards_sun) { sun = p_towards_sun; }
+    // The atmosphere (null: off, or before start).
+    const Atmosphere *get_atmosphere() const { return atmosphere; }
 
     SDFCascade &terrain() { return *sdf; }
     const SDFCascade &terrain() const { return *sdf; }
@@ -187,6 +197,8 @@ private:
     ChunkDiscoverer *chunk_discoverer = nullptr;
     GPUMesher *gpu_mesher = nullptr;
     GPUDirectMesher *direct_mesher = nullptr;
+    Atmosphere *atmosphere = nullptr; // deletes itself on the device's thread (destroy)
+    Float3 sun{ 0.0f, 1.0f, 0.0f };
     MeshValidator *validator = nullptr;
     std::unique_ptr<MeshHost> validator_host;
     PageAuditor *auditor = nullptr;

@@ -57,6 +57,8 @@ private:
 
 RenderingDevice::DataFormat rd_format(ov::gpu::TextureFormat p_format) {
     switch (p_format) {
+        case ov::gpu::TextureFormat::RGBA16_FLOAT:
+            return RenderingDevice::DATA_FORMAT_R16G16B16A16_SFLOAT;
         case ov::gpu::TextureFormat::RGBA16_UINT:
         default:
             return RenderingDevice::DATA_FORMAT_R16G16B16A16_UINT;

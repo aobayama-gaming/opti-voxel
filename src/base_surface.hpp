@@ -151,6 +151,9 @@ public:
     };
     // The render-space base with the render origin at LOD0 voxel p_origin (it changes with the origin).
     Render render(const VoxelPos &p_origin, double p_voxel_m) const;
+    // The base's radius of curvature in metres (its smallest; FLAT: infinite): what local approximations of its shape
+    // (the atmosphere's multiple scattering, its scale) take.
+    double curvature_radius_m(double p_voxel_m) const;
     // Render's fields as `uniform` declarations (Render::visit), for a host whose shaders splice glsl_render.
     static ov::str glsl_render_uniforms();
     // `float base_altitude(vec3 p)` (metres above the base, signed), `vec3 base_up(vec3 p)` (its unit gradient) and
