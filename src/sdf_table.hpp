@@ -20,7 +20,7 @@
 // (instance_table.hpp, archetype_table.hpp fold_onto; the ground is SDFCascade's). This class owns everything about
 // the instances: the library, the records and their snapshot (read from other threads), the GPU table, the runtime
 // edits, and the scenes placed on the ground (the shapes gallery, the --instances scatter, the --trees forest),
-// which only need the subclass's ground_y.
+// which only need the subclass's base and ground_under.
 class SDFTable : public SDFBase {
 public:
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
@@ -181,9 +181,14 @@ public:
     std::shared_ptr<const Archetype::InstanceSnapshot> get_snapshot() const { return current(); }
     const Archetype::DefLibrary &get_library() const { return *library; }
 
-    // The absolute LOD0 voxel y of the ground's top solid voxel in column (p_x, p_z), instances left out: where the
-    // scenes stand.
-    virtual int64_t ground_y(int64_t p_x, int64_t p_z) const = 0;
+    // The ground's base surface (the flat datum or a planet): its up and its tangent plane place the scenes.
+    virtual const BaseSurface &get_base() const = 0;
+    // The ground's top solid voxel on the line through p_start along the base's up there, instances left out: where the
+    // scenes and the biome features stand (thread-safe).
+    virtual VoxelPos ground_under(const VoxelPos &p_start) const = 0;
+    // The ground under the point (p_u, p_v) LOD0 voxels of the base's tangent plane (BaseSurface::tangent_point): where
+    // the scenes given in metres (SCENE_X, SCENE_Z, the gallery) stand.
+    VoxelPos ground_at(int64_t p_u, int64_t p_v) const { return ground_under(get_base().tangent_point(p_u, p_v)); }
     // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite, normal
     // floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level operators, and
     // a smooth radius is >= 0.
@@ -191,7 +196,7 @@ public:
 
 protected:
     // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
-    // (metres). Call from configure(), after SDFBase's and once ground_y works.
+    // (metres). Call from configure(), after SDFBase's and once ground_under works.
     void build_table(int p_lod_count);
     // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
     void stop_streaming();
@@ -289,8 +294,8 @@ private:
     // overlay) over the edit region.
     void finish_edit(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id);
     float voxels(double p_metres) const;
-    // A record of type p_type at (p_x, p_z) metres, p_dy_m above the ground there, turned by p_yaw about y, smooth
-    // radius p_k_m metres, appended.
+    // A record of type p_type at (p_x, p_z) metres of the base's tangent plane, p_dy_m above the ground there along the
+    // base's up, its local y on that up turned by p_yaw about it, smooth radius p_k_m metres, appended.
     void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw);
     void add_shapes(const Types &p_types);
     // The sources the scene places: a box of side p_area_m around the scene's centre, over every height the ground can
@@ -323,9 +328,8 @@ private:
     // Finishes and appends r_records (one feature) if every one fits the table (record_fit_error, the limits of a
     // runtime edit), else none (ERR naming p_what).
     bool admit_records(std::vector<Archetype::TableRecord> &r_records, const char *p_what);
-    // Whether column (p_x, p_z) is in or near a lava lake (Biome::LAKE_KEEP_OUT radii): no tree or rock there (the
-    // sources' accept). Column-based: the climate stack's per-cell picks replace it.
-    bool in_lake(int64_t p_x, int64_t p_z) const;
+    // Whether p_voxel is in or near a lava lake (Biome::LavaPool::near): no tree or rock there (the sources' accept).
+    bool in_lake(const VoxelPos &p_voxel) const;
     // The biome sites listed in the table's stats (the counts cover all of them).
     static constexpr int SITES_LISTED_MAX = 256;
 };

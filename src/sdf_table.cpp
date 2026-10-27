@@ -408,9 +408,7 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
     s.salt = p_salt;
     s.side = forest_cell_side(p_count, p_area_m, vs);
     if (s.side > 0) {
-        // The scene's centre is still found down a column (ground_y).
-        const int64_t x = std::llround(SCENE_X / vs), z = std::llround(SCENE_Z / vs);
-        const VoxelPos centre(x, ground_y(x, z), z);
+        const VoxelPos centre = ground_at(std::llround(SCENE_X / vs), std::llround(SCENE_Z / vs));
         const int64_t half = std::llround(0.5 * p_area_m / vs);
         const VoxelPos reach(half, 4 * half, half);
         s.zone = VoxelBox{ centre - reach, centre + reach, true };
@@ -421,7 +419,7 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
     };
     s.up = [this](const VoxelPos &p_v) { return up_at(p_v); };
     if (!lava_pools.empty()) {
-        s.accept = [this](const VoxelPos &p_v) { return !in_lake(p_v.x, p_v.z); };
+        s.accept = [this](const VoxelPos &p_v) { return !in_lake(p_v); };
     }
     return s;
 }
@@ -575,21 +573,25 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
     }
     const uint64_t start_us = ov::now_usec();
     const double vs = param.voxel_size;
-    const int64_t cx = std::llround(SCENE_X / vs), cz = std::llround(SCENE_Z / vs);
+    // The sites on the base within biome_radius of the base's point under the scene's centre.
+    const BaseSurface &base = get_base();
+    const VoxelPos centre = base.on_base(ground_at(std::llround(SCENE_X / vs), std::llround(SCENE_Z / vs)));
     const int64_t r = std::llround(biome_radius / vs);
+    const VoxelPos reach(r, r, r);
     std::vector<Biome::Site> all, sites;
     for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
-        Biome::sites(Biome::Feature(f), cx - r, cz - r, cx + r, cz + r, vs, all);
+        Biome::sites(Biome::Feature(f), centre - reach, centre + reach, base, vs, all);
     }
     for (const Biome::Site &site : all) {
-        const double dx = double(site.x - cx), dz = double(site.z - cz);
-        if (dx * dx + dz * dz <= double(r) * double(r)) {
+        const double d[3] = { double(site.at.x - centre.x), double(site.at.y - centre.y), double(site.at.z - centre.z) };
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= double(r) * double(r)) {
             sites.push_back(site);
         }
     }
-    // Each site samples the ground at a few dozen columns (ground_y, const): on the worker pool, kept in site order.
+    // Each site samples the ground at a few dozen points (ground_under, const): on the worker pool, kept in site order.
     struct Job {
         const SDFTable *table;
+        const Biome::Ground *ground;
         const Biome::Types *types;
         const Biome::Site *sites;
         Biome::Placed *placed;
@@ -597,13 +599,13 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
         double voxel;
         static void run(void *p_job, uint32_t p_i) {
             const Job &job = *static_cast<const Job *>(p_job);
-            const SDFTable *t = job.table;
-            job.ok[p_i] = Biome::place(job.sites[p_i], [t](int64_t p_x, int64_t p_z) { return t->ground_y(p_x, p_z); }, *t->library, *job.types, job.voxel, job.placed[p_i]);
+            job.ok[p_i] = Biome::place(job.sites[p_i], *job.ground, *job.table->library, *job.types, job.voxel, job.placed[p_i]);
         }
     };
+    const Biome::Ground ground{ &base, [this](const VoxelPos &p_v) { return ground_under(p_v); } };
     std::vector<Biome::Placed> placed(sites.size());
     std::vector<uint8_t> ok(sites.size(), 0);
-    Job job{ this, &p_types.biome, sites.data(), placed.data(), ok.data(), vs };
+    Job job{ this, &ground, &p_types.biome, sites.data(), placed.data(), ok.data(), vs };
     if (!sites.empty()) {
         parallel_for(uint32_t(sites.size()), "SDFTable::add_biomes", [&job](uint32_t p_i) { Job::run(&job, p_i); });
     }
@@ -628,9 +630,10 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
         }
         ov::Value d = ov::Value::object();
         d["kind"] = Biome::kind(p.at.feature).name;
-        d["x_m"] = double(p.at.x) * vs;
-        d["z_m"] = double(p.at.z) * vs;
-        d["y_m"] = double(p.top_y) * vs; // the lava surface, the island's rim plane
+        // The lava surface's centre, the island's rim plane's.
+        d["x_m"] = double(p.top.x) * vs;
+        d["y_m"] = double(p.top.y) * vs;
+        d["z_m"] = double(p.top.z) * vs;
         d["radius_m"] = p.at.radius * vs;
         listed.push_back(d);
     }
@@ -714,14 +717,8 @@ ScatterSource::Setup SDFTable::source_setup(const Source &p_source, uint32_t p_i
     return s;
 }
 
-bool SDFTable::in_lake(int64_t p_x, int64_t p_z) const {
-    for (const Biome::LavaPool &p : lava_pools) {
-        const double dx = double(p_x - p.top.x), dz = double(p_z - p.top.z), keep = Biome::LAKE_KEEP_OUT * p.radius;
-        if (dx * dx + dz * dz < keep * keep) {
-            return true;
-        }
-    }
-    return false;
+bool SDFTable::in_lake(const VoxelPos &p_voxel) const {
+    return std::any_of(lava_pools.begin(), lava_pools.end(), [&](const Biome::LavaPool &p_pool) { return p_pool.near(p_voxel); });
 }
 
 bool SDFTable::admit_records(std::vector<TableRecord> &r_records, const char *p_what) {
@@ -749,11 +746,21 @@ void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_para
     rec.op = p_op;
     rec.set_k(voxels(p_k_m));
     std::copy(p_params, p_params + 8, rec.params);
-    const int64_t x = std::llround(p_x / vs), z = std::llround(p_z / vs);
-    rec.anchor = VoxelPos(x, ground_y(x, z) + std::llround(p_dy_m / vs), z);
+    const VoxelPos ground = ground_at(std::llround(p_x / vs), std::llround(p_z / vs));
+    const UpAxis up = up_at(ground);
+    const double dy = p_dy_m / vs;
+    rec.anchor = ground + VoxelPos(std::llround(dy * up[0]), std::llround(dy * up[1]), std::llround(dy * up[2]));
+    // Rows (absolute to local): the yaw about local y after the up's frame (Archetype::up_rotation; the identity on the
+    // flat base, whose yaw rows are then the same floats).
+    float u[9];
+    Archetype::up_rotation(up, u);
     const float c = float(std::cos(p_yaw)), s = float(std::sin(p_yaw));
-    const float rot[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
-    std::copy(rot, rot + 9, rec.rotation);
+    const float yaw[9] = { c, 0, -s, 0, 1, 0, s, 0, c };
+    for (int r = 0; r < 3; r++) {
+        for (int k = 0; k < 3; k++) {
+            rec.rotation[3 * r + k] = yaw[3 * r] * u[k] + yaw[3 * r + 1] * u[3 + k] + yaw[3 * r + 2] * u[6 + k];
+        }
+    }
     rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
     // The same limits as a runtime edit (a gallery cube past 4 top-LOD chunk spans with few LODs).
     std::vector<TableRecord> one{ rec };

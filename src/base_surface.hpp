@@ -71,6 +71,8 @@ public:
     const VoxelPos &centre() const { return anchor; }
     // SPHERE: the first LOD of the radius form (below it, the curvature form's regions).
     int get_switch_lod() const { return switch_lod; }
+    // SPHERE: the radius (LOD0 voxels).
+    double get_radius() const { return radius; }
 
     Kind kind() const { return base_kind; }
     // FLAT: the datum's height (LOD0 voxels). ERR and 0 on another base.
@@ -87,6 +89,9 @@ public:
     // the world's (0, 0) column, SPHERE the plane touching the sphere at its +y pole. Reports sample it and trace along -up
     // (SDFCascade::ground_along); the player's --spawn takes these coordinates.
     VoxelPos tangent_point(int64_t p_u, int64_t p_v) const;
+    // The base's point under (or over) a LOD0 voxel along its up, rounded to the voxel: FLAT the datum in its column,
+    // SPHERE the radial projection (of the centre itself: the +y pole). Where biome sites stand (Biome::sites).
+    VoxelPos on_base(const VoxelPos &p_voxel) const;
 
     // The region holding a point at a LOD: its cell id (p >> (L + REGION_SHIFT)).
     static Vector3i64 region_cell(const VoxelPos &p_voxel, int p_lod);

@@ -29,9 +29,6 @@
 // the same branch and seams stay exact.
 namespace Archetype {
 
-// The y of the ground's top solid voxel in column (x, z), instances left out (SDFTable::ground_y): where the scenes stand.
-using GroundFn = std::function<int64_t(int64_t, int64_t)>;
-
 // Bounds of a perlin octave (ExactNoise): |value| and |gradient| per cell. Conservative; the unit tests
 // sample them.
 inline constexpr float PERLIN3_MAX = 1.5f;

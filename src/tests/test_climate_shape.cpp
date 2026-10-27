@@ -368,7 +368,7 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
         for (int i = 0; i < 24; i++) {
             for (int j = 0; j < 24; j++) {
                 const int64_t x = int64_t(j * 37) << m, z = int64_t(i * 41) << m;
-                const int64_t y = WorldCoord::floor_div(p_sdf.ground_y(x, z), int64_t(1) << m) << m;
+                const int64_t y = WorldCoord::floor_div(p_sdf.ground_at(x, z).y, int64_t(1) << m) << m;
                 float ch[Cascade::CHANNELS];
                 p_sdf.channels_at(VoxelPos(x, y, z), m, ch);
                 dy += std::fabs(double(ch[Cascade::DY]));
@@ -448,7 +448,7 @@ TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the 
                 const VoxelPos column(WorldCoord::floor_div(int64_t(h.x % uint32_t(window)) - window / 2, unit) * unit, 0,
                         WorldCoord::floor_div(int64_t(h.y % uint32_t(window)) - window / 2, unit) * unit);
                 // The LOD-L surface on Λ_{L+1}, from the LOD-0 ground: scan down from a few cells above it.
-                const int64_t ground = c.sdf.ground_y(column.x, column.z);
+                const int64_t ground = c.sdf.ground_at(column.x, column.z).y;
                 int64_t y = WorldCoord::floor_div(ground, unit) * unit + 8 * unit;
                 for (int s = 0; s < 64 && at(column, y - unit, lod) > 0.0; s++) {
                     y -= unit;
