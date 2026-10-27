@@ -152,6 +152,34 @@ TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCas
     }
 }
 
+// lod_pixel_errors: an entry replaces the error of its LOD alone (distance ~ 1 / error); 0 and past the list keep
+// the uniform one. An error 2x the LOD below's leaves that LOD no band: its distance is the one below plus 1.
+TEST_CASE("ChunkDiscoverer: lod_pixel_errors set each LOD's distance") {
+    ChunkParam param;
+    SDFCascade sdf;
+    const int lods = 8;
+    sdf.configure(param, lods);
+    ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
+    discoverer->set_config(param, &sdf);
+    const float fov = godot::Math::deg_to_rad(75.0f);
+    discoverer->setup_lod(lods, 2.0f, 720.0f, fov);
+    const std::vector<float> uniform = discoverer->get_lod_distances();
+    std::vector<float> errors = { 0.0f, 0.0f, 1.0f, 1.5f, 2.5f };
+    discoverer->setup_lod(lods, 2.0f, 720.0f, fov, 0.0f, float(ov::PI), errors);
+    const std::vector<float> per_lod = discoverer->get_lod_distances();
+    CHECK(per_lod.size() == uniform.size());
+    CHECK(per_lod[1] == uniform[1]);
+    CHECK(per_lod[2] == doctest::Approx(uniform[2] * 2.0f));
+    CHECK(per_lod[3] == doctest::Approx(uniform[3] * 2.0f / 1.5f));
+    CHECK(per_lod[4] == doctest::Approx(uniform[4] * 2.0f / 2.5f));
+    CHECK(per_lod[5] == uniform[5]);
+
+    errors[3] = 2.0f; // 2x LOD 2's 1
+    discoverer->setup_lod(lods, 2.0f, 720.0f, fov, 0.0f, float(ov::PI), errors);
+    CHECK(discoverer->get_lod_distances()[3] == discoverer->get_lod_distances()[2] + 1.0f);
+    memdelete(discoverer);
+}
+
 // lod_pixel_error_back: the chunks in the view cone are those of the front error alone, there are fewer
 // outside it, and face neighbours stay within one LOD (the effective distance changes by at most
 // 1 + back_scale per unit, ChunkMath::lod_distance).

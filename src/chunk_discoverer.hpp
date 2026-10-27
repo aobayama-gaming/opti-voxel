@@ -241,11 +241,14 @@ public:
 
     // The LOD distances of `target_pixel_error`. Outside a view cone of half-angle `cone_half_angle_rad`
     // they shrink towards those of `target_pixel_error_back` (ignored unless coarser than the front error).
+    // `target_pixel_errors[L]` (> 0) replaces the error of LOD L, which sizes its band: a finer error widens it, more
+    // of its chunks load; the back ratio applies on top. LODs past the list keep `target_pixel_error`.
     void setup_lod(
             int lod_levels = 4,
             float target_pixel_error = 10.0f,
             float viewport_height = 1080.0f,
             float fov_rad = 75.0f * (3.14159265f / 180.0f),
             float target_pixel_error_back = 0.0f,
-            float cone_half_angle_rad = float(ov::PI));
+            float cone_half_angle_rad = float(ov::PI),
+            const std::vector<float> &target_pixel_errors = {});
 };
