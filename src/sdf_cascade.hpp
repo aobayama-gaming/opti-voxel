@@ -74,6 +74,9 @@ public:
     // A planet's relief: every octave (and a climate's height terms, amp_cap) at most this fraction of its radius, so a
     // small planet stays a ball (Earth: 199 km, far over MAX_AMP_M).
     static constexpr double PLANET_RELIEF = 1.0 / 32.0;
+    // A planet's octaves start at most PLANET_RELIEF / PLANET_HEADROOM of its radius, so a biome's multiplier up to this
+    // still fits under the relief (the shipped climates go to 4.5: the flat world's big octaves sit at 1/3 of its cap).
+    static constexpr double PLANET_HEADROOM = 8.0;
     // The base of a planet of p_radius_m at p_voxel_size (SWITCH_MARGIN): a SPHERE, or not one when BaseSurface::sphere
     // refuses it (ERR).
     static BaseSurface planet_base(double p_radius_m, double p_voxel_size) {
@@ -127,7 +130,7 @@ public:
         amp_cap = float(ov::min(cap, relief));
         for (Cascade::Band &b : spec.bands) {
             const double amp = preset == Preset::CONTINENTS ? continent_amp_m(std::ldexp(vs, b.k)) / vs : ov::min(double(b.amp), cap);
-            b.amp = float(ov::min(amp, relief));
+            b.amp = float(ov::min(amp, relief / PLANET_HEADROOM));
         }
         if (preset == Preset::FLAT) {
             spec.bands.clear(); // no top lattice either: a chunk's run is its own level

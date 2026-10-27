@@ -2,6 +2,7 @@
 
 #include "base_regions.hpp"
 #include "cascade.hpp"
+#include "climate.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
@@ -221,7 +222,24 @@ TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radiu
     const double flat = max_amp(0.0);
     CHECK(flat == doctest::Approx(SDFCascade::MAX_AMP_M / 0.05));
     CHECK(max_amp(6371000.0) == flat);
-    CHECK(max_amp(2000.0) == doctest::Approx(SDFCascade::PLANET_RELIEF * 2000.0 / 0.05));
+    CHECK(max_amp(2000.0) == doctest::Approx(SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05));
+}
+
+TEST_CASE("SDFCascade: a climate's biome multipliers fit under a 2 km planet's relief; its height terms in metres don't") {
+    auto error = [](const char *p_path) {
+        SDFCascade sdf;
+        CHECK(Climate::load(p_path, sdf.climate_data) == ov::str());
+        sdf.planet_radius_m = 2000.0;
+        ChunkParam param;
+        param.voxel_size = 0.05f;
+        sdf.configure(param, 16);
+        CHECK((sdf.get_climate() != nullptr) == sdf.get_climate_error().empty());
+        return sdf.get_climate_error();
+    };
+    // Biome multipliers up to 2.5 (it was refused at 1: the octaves started at the relief itself).
+    CHECK(error("res://climate/plain.json") == ov::str());
+    // A 3.2 km continent term: more than the planet's 62.5 m relief.
+    CHECK(error("res://climate/example.json").find("height term") != ov::str::npos);
 }
 
 TEST_CASE("BaseSurface::on_base: the base's point along the up, on any side of a planet") {
