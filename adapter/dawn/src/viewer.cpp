@@ -362,6 +362,13 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
             camera.pos.z -= std::cos(camera.yaw) * p_options.fly_speed * dt;
         }
 
+        Float3 shift;
+        if (world.recenter(camera.pos, shift)) { // the render origin follows the camera: every render position moves
+            camera.pos = Float3{ camera.pos.x - shift.x, camera.pos.y - shift.y, camera.pos.z - shift.z };
+            if (upscaler) {
+                upscaler->shift_history(shift);
+            }
+        }
         const Float3 forward = camera.forward();
         Clock::time_point section = Clock::now();
         world.frame(&camera.pos, &forward);

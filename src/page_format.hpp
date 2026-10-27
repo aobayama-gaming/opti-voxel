@@ -214,9 +214,8 @@ int page_chunk_lod(ivec3 chunk) {
     return chunk.x == 0 ? 0 : findLSB(chunk.x);
 }
 
-// ChunkMath::vertices_to_world in render metres. rel: the chunk id minus the world origin's, wrapping int32 (exact while
-// the chunk is within 2^31 ids of the origin; the origin is a multiple of the root chunk span, so the low word keeps the
-// LOD bit). voxel_dim: chunk_size - 2 * skirt_size. Empty / killed rows are all zero: every corner lands on one point.
+// ChunkMath::vertices_to_world in render metres. rel: the chunk id minus the render origin's, wrapping int32 (exact while
+// the chunk is within 2^31 ids of the origin; lod comes from the id itself, page_chunk_lod). voxel_dim: chunk_size - 2 * skirt_size. Empty / killed rows are all zero: every corner lands on one point.
 vec3 page_chunk_min(ivec3 rel, int lod, float voxel_dim, float voxel_size) {
     float chunk_world_dim = voxel_dim * voxel_size;
     return vec3(rel) * (chunk_world_dim * 0.5) - vec3(float(1 << lod) * chunk_world_dim * 0.5);

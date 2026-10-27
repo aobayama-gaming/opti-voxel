@@ -238,6 +238,14 @@ void DawnUpscaler::resize(int p_width, int p_height) {
     present_group = make_group(device, present_layout, { present_uniform, texture_bind(1, fsr_output) });
 }
 
+void DawnUpscaler::shift_history(const Float3 &p_shift) {
+    // A point p now was p + shift then: prev_view_proj * translate(shift). Column-major: only the last column changes.
+    const double t[3] = { p_shift.x, p_shift.y, p_shift.z };
+    for (int row = 0; row < 4; row++) {
+        prev_view_proj[12 + row] += prev_view_proj[row] * t[0] + prev_view_proj[4 + row] * t[1] + prev_view_proj[8 + row] * t[2];
+    }
+}
+
 void DawnUpscaler::begin_frame(const float p_view_proj[16], float r_jittered[16]) {
     std::memcpy(r_jittered, p_view_proj, sizeof(float) * 16);
     if (!settings.fsr) {

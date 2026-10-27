@@ -73,7 +73,8 @@ func write(p_dir: String, p_camera: Camera3D, p_terrain: Node) -> bool:
 		"basis_columns": [v3.call(t.basis.x), v3.call(t.basis.y), v3.call(t.basis.z)], "origin": v3.call(t.origin),
 		"near": p_camera.near, "far": p_camera.far, "voxel_size": p_terrain.voxel_size, "lods": p_terrain.lod_numbers,
 		"half_chunk_voxels": p_terrain.get_half_chunk_voxels(),
-		"world_origin_voxel": [str(p_terrain.world_origin_x), str(p_terrain.world_origin_y), str(p_terrain.world_origin_z)],
+		# The voxel of render (0, 0, 0), which the transform is relative to.
+		"world_origin_voxel": [str(p_terrain.get_render_origin_x()), str(p_terrain.get_render_origin_y()), str(p_terrain.get_render_origin_z())],
 	}
 	fd = FileAccess.open(p_dir.path_join("depth.json"), FileAccess.WRITE)
 	fd.store_string(JSON.stringify(meta, "  "))

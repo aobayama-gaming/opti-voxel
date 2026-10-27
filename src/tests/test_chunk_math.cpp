@@ -160,6 +160,45 @@ TEST_CASE("ChunkMath: chunk_at_render finds the chunk whose centre was rendered"
     }
 }
 
+TEST_CASE("ChunkMath: a rebase moves every render position by origin_shift_m") {
+    // World::recenter: the origin goes under the camera, the host subtracts the shift from what it holds. The new
+    // render positions of chunks and voxels must be the old ones minus the shift, and chunk_at_render must find the
+    // same chunk from the shifted position.
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    param.origin_chunk = snapped_origin(int64_t(1) << 40, -(int64_t(1) << 33), 977);
+    const Float3 cameras[] = { Float3{ 1500.0f, -20.0f, 3.0f }, Float3{ -1100.25f, 2048.5f, -999.0f }, Float3{ 0.7f, 0.0f, -1.4f } };
+    for (const Float3 &camera : cameras) {
+        CAPTURE(camera.x);
+        const ChunkId to = ChunkMath::recentered_origin(camera, param);
+        CHECK(ChunkMath::is_render_origin(to));
+        const Float3 shift = ChunkMath::origin_shift_m(param.origin_chunk, to, param);
+        ChunkParam moved = param;
+        moved.origin_chunk = to;
+        // The camera lands within one LOD0 chunk of the new origin, in its first octant.
+        const Float3 cam = Float3{ camera.x - shift.x, camera.y - shift.y, camera.z - shift.z };
+        const float dim = param.chunk_world_dimension();
+        for (const float c : { cam.x, cam.y, cam.z }) {
+            CHECK(c >= -1e-3f);
+            CHECK(c < dim + 1e-3f);
+        }
+        CHECK(ChunkMath::chunk_at_render(cam, moved) == ChunkMath::chunk_at_render(camera, param));
+        for (const ChunkId offset : { ChunkId(1, 1, 1), ChunkId(-7, 3, 5), ChunkId(201, -99, 55) }) {
+            const ChunkId chunk = ChunkMath::chunk_at_render(camera, param) + offset - ChunkId(1, 1, 1);
+            const Float3 before = ChunkMath::grid_to_render(chunk, Float3{ 2.0f, 2.0f, 2.0f }, param);
+            const Float3 after = ChunkMath::grid_to_render(chunk, Float3{ 2.0f, 2.0f, 2.0f }, moved);
+            // One float rounding of each side: within a few ulps of the camera's distance.
+            const float tol = 1e-6f * (std::abs(camera.x) + std::abs(camera.y) + std::abs(camera.z) + 100.0f);
+            CHECK(std::abs(after.x - (before.x - shift.x)) <= tol);
+            CHECK(std::abs(after.y - (before.y - shift.y)) <= tol);
+            CHECK(std::abs(after.z - (before.z - shift.z)) <= tol);
+            CHECK(ChunkMath::grid_to_render_lo32(WorldCoord::lo32_i(chunk), Float3{ 2.0f, 2.0f, 2.0f }, moved) == after);
+        }
+    }
+    CHECK_FALSE(ChunkMath::is_render_origin(ChunkId(2, 1, 0)));
+    CHECK(ChunkMath::is_render_origin(ChunkId(-2, 0, int64_t(1) << 50)));
+}
+
 TEST_CASE("ChunkMath: grid_to_render_lo32 matches grid_to_render across a low-word wrap") {
     // What the page shader does from a header (low words only) must land where the CPU puts it.
     ChunkParam param;

@@ -44,7 +44,11 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   validation or audit that failed. `bench/results/LAST` holds the latest run dir.
   A load is complete once the received scan is the camera's current one and the mesher is idle
   (`VoxelTerrain::is_load_complete`).
-  `--origin=X,Y,Z` sets the world origin (voxels). `--cool=1` waits for the GPU to cool first (perf
+  `--origin=X,Y,Z` sets the world origin (voxels). `--rebase_m=M` the render origin's rebase distance (default
+  1024, 0 off); `--still=1` stops the clouds' drift and the leaves' sway, so shots of one pose taken at different times
+  match. Render-origin check: `bench.sh --mode=direct --scenario=fly --fly_dist=20000 --still=1 --validate=64 --audit=1
+  --shot=loaded:a.png --shot=steady_end:b.png`, then `tools/shot_diff.py <run>/a.png <run>/b.png` (rebases on the
+  way out and back; `world_origin.rebases` in stats.json). `--cool=1` waits for the GPU to cool first (perf
   runs only; `bench_ab.sh` / `bench_compare.sh` pass it): until 65 C, a plateau, or 30 s at most.
   `BENCH_ROOT=<checkout>` benches another tree with this harness. `BENCH_RESOLUTION=1920x1080` sets the window
   (default 1280x720; the LOD follows the pixels, so 1080p draws ~25% more quads).

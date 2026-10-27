@@ -68,6 +68,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         if (chunk_param.origin_voxel() != request) {
             VLOG(1, "World: world origin snapped to ", WorldCoord::to_string(chunk_param.origin_voxel()), " voxels");
         }
+        world_origin_chunk = chunk_param.origin_chunk;
     }
 
     // One terrain, the cascade: mode 2 is its continents preset, 4 its flat preset under the shapes gallery.
@@ -139,7 +140,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(*p_camera_pos, *p_camera_forward, p_camera_far_m * far_reach);
+        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
         last_camera = *p_camera_pos;
         has_camera = true;
     }
@@ -221,7 +222,7 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
     }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(*p_camera_pos, *p_camera_forward, p_camera_far_m * far_reach);
+        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
         last_camera = *p_camera_pos;
         has_camera = true;
     }
@@ -541,6 +542,39 @@ void World::tangent_position(double p_u_m, double p_v_m, double r_render_pos[3])
     r_render_pos[2] = double(p.z - origin.z) * vs;
 }
 
+bool World::recenter(const Float3 &p_camera_pos, Float3 &r_shift) {
+    if (!started || !(config.rebase_distance_m > 0.0f)) {
+        return false;
+    }
+    const float d = ov::max(std::abs(p_camera_pos.x), ov::max(std::abs(p_camera_pos.y), std::abs(p_camera_pos.z)));
+    if (!(d > config.rebase_distance_m)) {
+        return false;
+    }
+    return rebase(ChunkMath::recentered_origin(p_camera_pos, config.chunk_param), r_shift);
+}
+
+bool World::rebase(const ChunkId &p_origin, Float3 &r_shift) {
+    OV_ERR_FAIL_COND_V_MSG(!started, false, "World: rebase before start.");
+    OV_ERR_FAIL_COND_V_MSG(!ChunkMath::is_render_origin(p_origin), false, "World: a render origin is an even chunk id.");
+    // The validator, the auditor and the discovery audit hold render positions and page ranges from their start.
+    if (validator || auditor || discovery_audit.running) {
+        return false;
+    }
+    ChunkParam &chunk_param = config.chunk_param;
+    r_shift = ChunkMath::origin_shift_m(chunk_param.origin_chunk, p_origin, chunk_param);
+    chunk_param.origin_chunk = p_origin;
+    if (direct_mesher) {
+        direct_mesher->set_render_origin(p_origin);
+    } else {
+        gpu_mesher->set_render_origin(p_origin, r_shift);
+    }
+    last_camera = Float3{ last_camera.x - r_shift.x, last_camera.y - r_shift.y, last_camera.z - r_shift.z };
+    rebases++;
+    VLOG(1, "World: render origin moved to chunk ", WorldCoord::to_string(p_origin), ", render positions by -",
+            ov::format("%.1f, %.1f, %.1f", r_shift.x, r_shift.y, r_shift.z), " m");
+    return true;
+}
+
 void World::set_debug_view(int p_view) {
     config.debug_view = p_view;
     if (direct_mesher) {
@@ -566,8 +600,11 @@ ov::Value World::debug_stats() {
     d["terrain_mode"] = config.terrain_mode;
     ov::Value origin = ov::Value::object();
     origin["requested_voxel"] = WorldCoord::to_string(config.world_origin_request);
-    origin["voxel"] = WorldCoord::to_string(chunk_param.origin_voxel());
-    origin["chunk"] = WorldCoord::to_string(chunk_param.origin_chunk);
+    origin["voxel"] = WorldCoord::to_string(world_origin_chunk * chunk_param.half_chunk_voxels());
+    origin["chunk"] = WorldCoord::to_string(world_origin_chunk);
+    origin["render_voxel"] = WorldCoord::to_string(chunk_param.origin_voxel());
+    origin["render_chunk"] = WorldCoord::to_string(chunk_param.origin_chunk);
+    origin["rebases"] = rebases;
     d["world_origin"] = origin;
     ov::Value table = sdf->get_gpu_table()->get_stats();
     const ov::Value walk = sdf->walk_gpu_stats();

@@ -3,6 +3,7 @@
 #include "voxel_terrain.hpp"
 
 #include "godot_conv.hpp"
+#include "shade_frame_glsl.hpp"
 #include "sky_glsl.hpp"
 
 #include <godot_cpp/classes/environment.hpp>
@@ -10,13 +11,15 @@
 #include <godot_cpp/classes/world_environment.hpp>
 #include <godot_cpp/core/class_db.hpp>
 
-// Shared by the sky shader and the page shader (spliced at /*GLSL_CLOUDS*/): the cloud layer is a plane at
-// cloud_height_m reading cloud_tex once per cloud_scale_m, drifting with the wind. Positions are render space
-// (metres from the world origin), the same in a sky shader's POSITION and in the page shader's world point.
+// Shared by the sky shader and the page shader (spliced at /*GLSL_CLOUDS*/, after the shading frame:
+// shade_frame_glsl.hpp): the cloud layer is a plane at cloud_height_m reading cloud_tex about once per cloud_scale_m,
+// drifting with the wind. Positions are render space (metres from the render origin), the same in a sky shader's
+// POSITION and in the page shader's world point; the tiles and the wind's waves are read through the shading frame, so
+// they stay where they are when the render origin moves.
 static constexpr const char GLSL_CLOUDS[] = R"glsl(
 // The cloud layer (VoxelSky): no texture = black = no clouds and no shadows.
 uniform sampler2D cloud_tex : hint_default_black, filter_linear_mipmap, repeat_enable;
-uniform float cloud_height_m = 1500.0;
+uniform float cloud_height_m = 1500.0; // render metres (VoxelSky::cloud_params)
 uniform float cloud_scale_m = 6000.0;
 uniform float cloud_cover = 0.0;
 uniform vec2 cloud_wind = vec2(0.0);
@@ -28,9 +31,14 @@ vec2 cloud_hit(vec3 p, vec3 dir) {
     return p.xz + dir.xz * ((cloud_height_m - p.y) / dir.y);
 }
 
-// The texture coordinate of a point of the layer: one tile per cloud_scale_m, carried by the wind.
+// The texture coordinate of a point of the layer: one tile per cloud_scale_m (snapped to the shading frame's period),
+// carried by the wind.
 vec2 cloud_uv(vec2 xz) {
-    return (xz + cloud_wind * TIME) * (1.0 / cloud_scale_m);
+    int period = shade_period_vox(cloud_scale_m);
+    float period_m = shade_period_m(period);
+    float tiles = shade_cells(vec3(1.0 / cloud_scale_m), period_m).x;
+    vec2 s = xz + vec2(shade_origin_voxel().xz & ivec2(period - 1)) * shade_voxel_m();
+    return (s + cloud_wind * TIME) * (tiles / period_m);
 }
 
 // Cloud density in [0, 1] of a texel: the texture's values are uniform on [0, 1] (tools/make_clouds.py), so the
@@ -42,14 +50,20 @@ float cloud_density(float texel) {
 // Wind sway: a world-space displacement, a pure function of the position and TIME, so every quad sharing a corner
 // moves it alike and the mesh stays watertight. A gust wave of ~6 m travelling with cloud_wind, its strength breathing
 // over ~23 m, plus a finer wobble of ~1 m; wind_sway_m is the amplitude (0: still). The page shader applies it to leaf
-// corners only: bark has no per-tree pivot to bend around (the pages don't carry one).
+// corners only: bark has no per-tree pivot to bend around (the pages don't carry one). Its waves are snapped in the
+// shading frame (period: the 23 m wave), so a corner sways alike from every render origin.
 vec3 wind_sway(vec3 p) {
     float speed = max(length(cloud_wind), 1.0);
     vec2 dir = cloud_wind / speed;
-    float phase = dot(p.xz, dir) - speed * TIME;
-    float gust = sin(phase * (6.2832 / 6.0)) * (0.6 + 0.4 * sin(phase * (6.2832 / 23.0) + p.y * 0.3));
-    vec3 wobble = vec3(sin(dot(p, vec3(7.1, 5.3, 6.7)) + TIME * 3.1), sin(dot(p, vec3(5.9, 7.7, 4.3)) + TIME * 2.3),
-            sin(dot(p, vec3(6.3, 4.9, 7.9)) + TIME * 2.7));
+    int period = shade_period_vox(23.0);
+    float period_m = shade_period_m(period);
+    vec3 s = shade_point(p, period);
+    vec3 along = vec3(dir.x, 0.0, dir.y);
+    vec3 k6 = shade_wave(along * (6.2832 / 6.0), period_m);
+    vec3 k23 = shade_wave(along * (6.2832 / 23.0) + vec3(0.0, 0.3, 0.0), period_m);
+    float gust = sin(dot(s, k6) - speed * TIME * (6.2832 / 6.0)) * (0.6 + 0.4 * sin(dot(s, k23) - speed * TIME * (6.2832 / 23.0)));
+    vec3 wobble = vec3(sin(dot(s, shade_wave(vec3(7.1, 5.3, 6.7), period_m)) + TIME * 3.1),
+            sin(dot(s, shade_wave(vec3(5.9, 7.7, 4.3), period_m)) + TIME * 2.3), sin(dot(s, shade_wave(vec3(6.3, 4.9, 7.9), period_m)) + TIME * 2.7));
     return wind_sway_m * (gust * vec3(dir.x, 0.15, dir.y) + 0.35 * wobble);
 }
 )glsl";
@@ -59,6 +73,20 @@ static constexpr const char SKY_SHADER[] = R"gdshader(
 shader_type sky;
 
 uniform float exposure : hint_range(0, 128) = 1.0;
+// The shading frame's origin (shade_frame_glsl.hpp): the render origin's LOD0 voxel, low words, and the voxel size
+// (VoxelSky::set_render_frame).
+uniform ivec3 shade_origin_lo = ivec3(0);
+uniform float shade_voxel_size = 0.5;
+
+ivec3 shade_origin_voxel() {
+    return shade_origin_lo;
+}
+
+float shade_voxel_m() {
+    return shade_voxel_size;
+}
+
+/*GLSL_SHADE_FRAME*/
 /*GLSL_CLOUDS*/
 /*GLSL_SKY*/
 
@@ -95,7 +123,10 @@ String VoxelSky::glsl_clouds() {
 }
 
 String VoxelSky::sky_shader_code() {
-    return String(SKY_SHADER).replace("/*GLSL_CLOUDS*/", glsl_clouds()).replace("/*GLSL_SKY*/", godot_str(SkyGLSL::glsl()));
+    return String(SKY_SHADER)
+            .replace("/*GLSL_SHADE_FRAME*/", godot_str(ShadeFrame::glsl()))
+            .replace("/*GLSL_CLOUDS*/", glsl_clouds())
+            .replace("/*GLSL_SKY*/", godot_str(SkyGLSL::glsl()));
 }
 
 void VoxelSky::_bind_methods() {
@@ -185,10 +216,17 @@ float VoxelSky::get_wind_sway_m() const {
     return wind_sway_m;
 }
 
+void VoxelSky::set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, double p_origin_rise_m) {
+    origin_voxel_lo = p_origin_voxel_lo;
+    voxel_m = p_voxel_m;
+    origin_rise_m = p_origin_rise_m;
+    _apply();
+}
+
 Dictionary VoxelSky::cloud_params() const {
     Dictionary params;
     params["cloud_tex"] = cloud_texture.is_valid() ? cloud_texture->get_rid() : RID();
-    params["cloud_height_m"] = cloud_height_m;
+    params["cloud_height_m"] = float(double(cloud_height_m) - origin_rise_m);
     params["cloud_scale_m"] = cloud_scale_m;
     params["cloud_cover"] = cloud_cover;
     params["cloud_wind"] = cloud_wind;
@@ -233,6 +271,8 @@ void VoxelSky::_apply() {
         // The sky material takes the texture itself, the page shader (RenderingServer level) its RID.
         material->set_shader_parameter(keys[i], keys[i] == Variant("cloud_tex") ? Variant(cloud_texture) : params[keys[i]]);
     }
+    material->set_shader_parameter("shade_origin_lo", origin_voxel_lo);
+    material->set_shader_parameter("shade_voxel_size", voxel_m);
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {

@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector2.hpp>
+#include <godot_cpp/variant/vector3i.hpp>
 
 using namespace godot;
 
@@ -42,6 +43,10 @@ public:
 
     // The cloud uniforms as the page shader takes them (VoxelTerrain::set_page_params).
     Dictionary cloud_params() const;
+    // The terrain's render frame (VoxelTerrain, at start and whenever its render origin moves): the origin's LOD0 voxel
+    // (low words: the shading frame's), the voxel size, and how far the origin rose above the world origin (metres,
+    // the cloud layer stays at its height above the world origin).
+    void set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, double p_origin_rise_m);
 
     void _ready() override;
 
@@ -52,12 +57,16 @@ private:
     void _apply();
 
     Ref<Texture2D> cloud_texture;
-    float cloud_height_m = 1500.0f; // metres above the world origin
+    float cloud_height_m = 1500.0f; // metres above the world origin (cloud_params: above the render origin)
     float cloud_scale_m = 6000.0f; // metres per texture tile
     float cloud_cover = 0.4f; // fraction of the sky covered
     Vector2 cloud_wind = Vector2(9.0f, 3.0f); // m/s
     float cloud_shadow = 0.7f; // how much of the sun a cloud takes from the ground, 0 = no shadows
     float wind_sway_m = 0.03f; // the leaves' sway amplitude (the page shader's wind_sway), 0 = still
+
+    Vector3i origin_voxel_lo; // set_render_frame's
+    float voxel_m = 0.5f;
+    double origin_rise_m = 0.0;
 
     Ref<Shader> shader;
     Ref<ShaderMaterial> material;

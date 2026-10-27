@@ -75,6 +75,9 @@ private:
 
     //worker availability
     std::mutex mutex;
+    // Held by the worker while it creates host meshes at chunk_param.origin_chunk, and by set_render_origin while it
+    // moves the origin and the meshes made: a mesh is made either before the move (and shifted) or after it.
+    std::mutex origin_mutex;
     bool worker_available = false; // set by the worker once its device and buffers exist (process_queue sizes lists by them)
     bool result_available = false;
     uint32_t batch_count = 0; // number of real chunks in the current batch (<= chunk_batch_number)
@@ -205,6 +208,9 @@ public:
     void stop();
 
     bool is_idle();
+    // The render origin moved (World::rebase): the meshes made follow it (MeshHost::shift_meshes, p_shift metres), the
+    // ones the worker makes from now on start from it.
+    void set_render_origin(const ChunkId &p_origin, const Float3 &p_shift);
 
     void set_trim_indices(bool p_trim) { trim_indices = p_trim; }
 

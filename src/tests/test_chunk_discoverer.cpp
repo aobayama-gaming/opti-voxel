@@ -198,7 +198,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     size_t front_x_size = 0;
     for (const godot::Vector3 &forward : { godot::Vector3(1, 0, 0), godot::Vector3(0.3f, -0.8f, 0.5f), godot::Vector3(-0.2f, 0.3f, -1.0f) }) {
         CAPTURE(forward);
-        const ScanView split = discoverer->make_view(ov_f3(pose), ov_f3(forward));
+        const ScanView split = discoverer->make_view(ChunkMath::chunk_at_render(ov_f3(pose), param), ov_f3(forward));
         CHECK(split.back_scale == doctest::Approx(3.0));
         ScanView front = split;
         front.back_scale = 0.0;
@@ -240,7 +240,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
     // 1-Lipschitz (each term is a distance to a cone plus a constant), so face neighbours stay within one
     // LOD, and the set lies between the current view's alone and the front error's.
     {
-        ScanView looked = discoverer->make_view(ov_f3(pose), Float3{ 1, 0, 0 });
+        ScanView looked = discoverer->make_view(ChunkMath::chunk_at_render(ov_f3(pose), param), Float3{ 1, 0, 0 });
         const double memory_distance = 30.0;
         const ChunkId spot = looked.camera_chunk - ChunkId(64, 0, 0); // 64 units back along x
         for (int i = 0; i < 9; i++) {
@@ -268,7 +268,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
 
     // Without memory, a turn rescans past RESCAN_TURN_DEG, and only when the LOD rule depends on the direction.
     auto turned = [&](const ScanView &p_from, float p_degrees, double p_back_scale) {
-        ScanView v = discoverer->make_view(ov_f3(pose), ov_f3(godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(p_degrees))));
+        ScanView v = discoverer->make_view(ChunkMath::chunk_at_render(ov_f3(pose), param), ov_f3(godot::Vector3(1, 0, 0).rotated(godot::Vector3(0, 1, 0), godot::Math::deg_to_rad(p_degrees))));
         v.back_scale = p_back_scale;
         v.copy_memories_from(p_from);
         ChunkDiscoverer::remember_view(v, 0.0);
@@ -428,14 +428,14 @@ TEST_CASE("ChunkDiscoverer: a far plane drops exactly the chunks past it") {
     discoverer->setup_lod(lods, 4.0f, 720.0f, 75.0f * (3.14159265f / 180.0f));
     const Float3 pose = ov_f3(godot::Vector3(-800.0f, 6500.0f, 400.0f)); // near the 25-LOD cascade ground
     const Float3 forward{ 1.0f, 0.0f, 0.0f };
-    const ScanView open = discoverer->make_view(pose, forward);
-    const ScanView limited = discoverer->make_view(pose, forward, 50000.0);
+    const ScanView open = discoverer->make_view(ChunkMath::chunk_at_render(pose, param), forward);
+    const ScanView limited = discoverer->make_view(ChunkMath::chunk_at_render(pose, param), forward, 50000.0);
     CHECK(open.far_ids == 0);
     CHECK(limited.far_ids == ChunkMath::far_ids(50000.0, param));
     CHECK(limited.far_ids > 0);
     CHECK(ChunkDiscoverer::view_changed(open, limited));
-    CHECK(ChunkDiscoverer::view_changed(limited, discoverer->make_view(pose, forward, 4.0 * 50000.0))); // another power of two
-    CHECK(!ChunkDiscoverer::view_changed(limited, discoverer->make_view(pose, forward, 50000.0)));
+    CHECK(ChunkDiscoverer::view_changed(limited, discoverer->make_view(ChunkMath::chunk_at_render(pose, param), forward, 4.0 * 50000.0))); // another power of two
+    CHECK(!ChunkDiscoverer::view_changed(limited, discoverer->make_view(ChunkMath::chunk_at_render(pose, param), forward, 50000.0)));
     // The kept step grows at once and shrinks only to a quarter: no flip-flop around a power of two.
     CHECK(ChunkDiscoverer::far_step(0, 256) == 256);
     CHECK(ChunkDiscoverer::far_step(1024, 2048) == 2048);

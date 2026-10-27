@@ -489,9 +489,9 @@ ScanView ChunkDiscoverer::get_view() {
     return v;
 }
 
-ScanView ChunkDiscoverer::make_view(const Float3 &p_pos, const Float3 &p_forward, double p_far_m) const {
+ScanView ChunkDiscoverer::make_view(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m) const {
     ScanView v;
-    v.camera_chunk = ChunkMath::chunk_at_render(p_pos, chunk_param);
+    v.camera_chunk = p_camera_chunk;
     v.far_ids = ChunkMath::far_ids(p_far_m, chunk_param);
     // godot's Vector3::length_squared and normalized, in float.
     const float length_squared = p_forward.x * p_forward.x + p_forward.y * p_forward.y + p_forward.z * p_forward.z;
@@ -578,8 +578,8 @@ int64_t ChunkDiscoverer::far_step(int64_t p_current, int64_t p_needed) {
     return keep ? p_current : p_needed;
 }
 
-void ChunkDiscoverer::set_camera(const Float3 &p_pos, const Float3 &p_forward, double p_far_m) {
-    ScanView new_view = make_view(p_pos, p_forward, p_far_m);
+void ChunkDiscoverer::set_camera(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m) {
+    ScanView new_view = make_view(p_camera_chunk, p_forward, p_far_m);
     mutex.lock();
     new_view.far_ids = far_step(view.far_ids, new_view.far_ids);
     new_view.copy_memories_from(view);

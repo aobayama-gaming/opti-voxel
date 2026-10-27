@@ -27,9 +27,6 @@ render_mode skip_vertex_transform, cull_back;
 
 // (RenderingServer::shader_set_code does not run the preprocessor: no #define here.)
 /*GLSL_PAGE_DECODE*/
-// The cloud layer's uniforms and functions (VoxelSky::glsl_clouds, the same text as the sky shader's): the sun's
-// light in light() is cut where a cloud lies between the fragment and the sun.
-/*GLSL_CLOUDS*/
 
 uniform usampler2D quad_tex : filter_nearest, repeat_disable;
 // The chunks' palettes (palette_pool.hpp) and the materials' parameters (Material::Library::make_image).
@@ -41,13 +38,13 @@ uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // drawn magenta, those it still draws orange)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
-// Sea level in metres above the world origin: below -1e29, no height colours (VoxelTerrain sets it for
-// the continents preset).
+// Sea level in render metres (above the render origin, set again when it moves): below -1e29, no height colours
+// (VoxelTerrain sets it for the continents preset).
 uniform float sea_level_m = -1e30;
 // The base surface's up (BaseSurface::up_dir), which the slope colours read: +y on the flat world. A sphere base will
 // need it per vertex.
 uniform vec3 base_up = vec3(0.0, 1.0, 0.0);
-// World origin in chunk-id units, low 32 bits: positions are drawn relative to it.
+// The render origin in chunk-id units, low 32 bits: positions are drawn relative to it.
 uniform ivec3 origin_chunk_lo = ivec3(0);
 uniform int chunk_size = 32;
 uniform int skirt_size = 2;
@@ -60,9 +57,9 @@ instance uniform int page_id = 0;
 varying vec3 v_world_normal;
 varying vec2 v_quad_uv;
 varying flat float v_lod;
-varying flat vec3 v_chunk;
+varying flat vec3 v_chunk; // the chunk id's low 23 bits (the chunk hash views)
 varying flat ivec2 v_ids; // INSTANCE_ID, quad index | coverage << QUAD_INDEX_BITS (0 drawn, 1 stalled, 2 hidden)
-varying float v_height; // metres above the world origin (shaded view: contour lines)
+varying float v_height; // render metres (the height colours; the contour lines read it through the shading frame)
 // The quad's two materials, from the provoking corner A: x = A's (global id), y = the other one's | its corner mask
 // << MATERIAL_ID_BITS (bit k, k = 1..3: corner k is not A's material). The fragment's weight is the mask interpolated
 // over v_quad_uv, so the blend adds no interpolant: triangles are smaller than a pixel here, every attribute the
@@ -76,8 +73,20 @@ vec3 hash3(vec3 p) {
     return fract((p.xxy + p.yxx) * p.zyx);
 }
 
+// The shading frame's origin (shade_frame_glsl.hpp): the render origin's LOD0 voxel, low words.
+ivec3 shade_origin_voxel() {
+    return origin_chunk_lo * ((chunk_size - 2 * skirt_size) / 2);
+}
+
+float shade_voxel_m() {
+    return voxel_size;
+}
+
 // The materials (page_shading_glsl.hpp: palettes, the quad's two materials, bark, leaves, ground detail).
 /*GLSL_PAGE_SHADING*/
+// The cloud layer's uniforms and functions (VoxelSky::glsl_clouds, the same text as the sky shader's): the sun's
+// light in light() is cut where a cloud lies between the fragment and the sun; the leaves' wind sway.
+/*GLSL_CLOUDS*/
 
 void vertex() {
     int corner = VERTEX_ID % 4; // base quad corners A, B, C, D
@@ -127,7 +136,7 @@ void vertex() {
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4 | coverage << int(QUAD_INDEX_BITS));
     v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
     v_lod = float(lod);
-    v_chunk = vec3(rel);
+    v_chunk = vec3(chunk & ivec3(8388607)); // absolute (not rel): the colours stay when the render origin moves
     // The cascade skirt pushed the SDF towards air by clamp(-inside) * depth past the chunk bounds, which lowers
     // the surface by push / n.y. The push is linear inside a cell, so on a planar surface the vertex lies
     // on the pushed plane and this gives back the exact height.
@@ -163,7 +172,11 @@ void fragment() {
         }
         contour_m = 500.0;
     }
-    float h = v_height / contour_m;
+    // Contour lines at whole multiples of contour_m (snapped to the shading frame's period) of absolute height.
+    int contour_period = shade_period_vox(contour_m);
+    float contour_period_m = shade_period_m(contour_period);
+    float h = (v_height + float(shade_origin_voxel().y & (contour_period - 1)) * voxel_size)
+            * (shade_cells(vec3(1.0 / contour_m), contour_period_m).x / contour_period_m);
     float fw = max(fwidth(h), 1e-6);
     float line = abs(fract(h + 0.5) - 0.5) / fw;
     // Contours fade out where they would be denser than ~10 pixels apart.
@@ -309,6 +322,9 @@ void GodotPageHost::destroy() {
 }
 
 void GodotPageHost::set_material_param(const StringName &p_name, const Variant &p_value) {
+    if (material_params.has(p_name) && material_params[p_name] == p_value) {
+        return; // unchanged: a rebase re-sends the whole decode, only its origin moved
+    }
     material_params[p_name] = p_value;
     for (const Page &page : pages) {
         if (page.material.is_valid()) {

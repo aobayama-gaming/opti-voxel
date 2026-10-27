@@ -107,6 +107,9 @@ to every change, and a reviewer may reject a PR on any of them.
   GPU gets low words plus high words (`gpu_frame.hpp`), metres only come from `ChunkMath`'s render
   helpers. Ids reach the GPU only through `GPUFrame::encode_chunk_input` / `WorldCoord::lo32_i`
   (`encode_s32`, `Vector3i` and `PackedInt32Array` truncate silently). `docs/integer-frame.md`.
+- Render space (every engine-side float position) is relative to a render origin that follows the camera
+  (`World::recenter`): store positions as absolute voxels / chunk ids, or shift them on `origin_shifted`; a shader
+  pattern of the position reads it through the shading frame (`shade_frame_glsl.hpp`). `docs/integer-frame.md`.
 - Every terrain is a function of the absolute position: the same point gives the same bits from any
   origin, any chunk, any LOD where they share samples. The cascade only exists on lattice points.
 - CPU mirrors of GPU float math are op for op identical in float32 (no `mix` / `dot` / `normalize` /
