@@ -35,3 +35,15 @@ The numbers perf PRs are measured against (`tools/bench_ab.sh`, `bench.sh --prof
   per LOD unchanged. The default bench (no instances) is unchanged within noise (SDF pass 1.04-1.09 ms both).
   **Now the bottleneck:** the render GPU (steady 17.5-21 ms in the forest: the frame is the render's), and in the
   mesher a long list still costs ~6 ms of SDF pass, now in the survivors' evaluations rather than the box tests.
+- **Where the frame goes on dev 17aff94** (2026-10-27, `bench.sh --profile=1 --scenario=fly`, 1.6 GHz, one run each;
+  the sky shader failed to compile on dev, so no sky pass):
+
+  | ms, p50 | forest5cm 1920x1080 | video terrain 960x540 (world climate, 1M trees, 25 LODs, error 1 \| 3, budget 0) |
+  |---|---|---|
+  | fly out: frame / geometry (shadows) / mesher | 37.4 / 21.5 (13.6) / 13.8 | 92.8 / 26.3 (13.0) / 66.0 |
+  | fly back: frame / geometry / mesher | 49.2 / 25.8 / 20.9 | 108.6 / 43.5 / 61.9 |
+  | steady: frame / geometry (opaque, shadows, pre-pass) | 34.3 / 33.3 (11.6, 11.8, 10.0) | 36.5 / 36.1 (12.9, 12.4, 10.8) |
+
+  The video terrain's fly is the mesher's (no budget): its climate levels (cascade levels 1, 2, >= 3) are 19-26 ms of
+  it, level 0 with the tree fold 33-37 ms. Steady geometry doubled since the 17.3 ms above (shadow draw calls 1,000-1,450
+  for 400-800 in view; suspect, untested: the look stack moved the bench sun from 61 to 28 degrees). Not investigated yet.

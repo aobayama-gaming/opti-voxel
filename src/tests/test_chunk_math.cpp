@@ -4,6 +4,8 @@
 #include "godot_conv.hpp"
 #include "subcube.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -291,6 +293,53 @@ TEST_CASE("ChunkMath: lod_distance grows away from the view cone, up to the back
     view.back_scale = 3.0; // error 1 in the cone, 4 behind
     CHECK(ChunkMath::lod_distance(ahead, 2, view) == view.camera_chunk.distance_to(ahead) - r2);
     CHECK(ChunkMath::lod_distance(behind, 2, view) == doctest::Approx(4.0 * (view.camera_chunk.distance_to(behind) - r2)));
+}
+
+TEST_CASE("ChunkMath: far_ids rounds the far plane up to a power of two of chunk-id units") {
+    ChunkParam param; // 0.5 m voxels: a chunk-id unit is 14 voxels, 7 m
+    param.voxel_size = 0.5f;
+    CHECK(ChunkMath::far_ids(0.0, param) == 0);
+    CHECK(ChunkMath::far_ids(-5.0, param) == 0);
+    CHECK(ChunkMath::far_ids(INFINITY, param) == 0);
+    CHECK(ChunkMath::far_ids(NAN, param) == 0);
+    CHECK(ChunkMath::far_ids(1.0, param) == 1);
+    CHECK(ChunkMath::far_ids(7.0, param) == 1);
+    CHECK(ChunkMath::far_ids(7.5, param) == 2);
+    CHECK(ChunkMath::far_ids(12000.0, param) == 2048); // 1715 units
+    CHECK(ChunkMath::far_ids(14336.0, param) == 2048); // exactly 2048 units
+    CHECK(ChunkMath::far_ids(1e30, param) == 0); // past 2^62 units: no limit
+}
+
+TEST_CASE("ChunkMath: beyond_far holds for nodes wholly past the far distance") {
+    ScanView view;
+    view.camera_chunk = ChunkId(-37, 101, 5);
+    const ChunkId cam = view.camera_chunk;
+    CHECK(!ChunkMath::beyond_far(ChunkId(cam.x + (int64_t(1) << 40), cam.y, cam.z), 0, view)); // no far plane
+    view.far_ids = 256;
+    // A LOD0 node d units along x: its grown box starts 2 units before its centre, the camera may be 1 unit past
+    // its own, so the gap is d - 3.
+    CHECK(!ChunkMath::beyond_far(ChunkId(cam.x + 258, cam.y, cam.z), 0, view)); // gap 255
+    CHECK(ChunkMath::beyond_far(ChunkId(cam.x + 260, cam.y, cam.z), 0, view)); // gap 257
+    CHECK(ChunkMath::beyond_far(ChunkId(cam.x + 200, cam.y + 200, cam.z), 0, view)); // diagonal: 197 * sqrt(2) = 279 units
+    CHECK(!ChunkMath::beyond_far(ChunkId(cam.x + 180, cam.y + 180, cam.z), 0, view)); // 177 * sqrt(2) = 250 units
+    Lcg lcg{ 7 };
+    for (int i = 0; i < 2000; i++) {
+        const int lod = 1 + int((lcg.next() + 1000) % 12);
+        const int64_t unit = int64_t(1) << lod;
+        auto axis = [&](int64_t p_c) { return (WorldCoord::floor_div(p_c + lcg.next() * 4, 2 * unit) * 2 + 1) * unit; };
+        const ChunkId node(axis(cam.x), axis(cam.y), axis(cam.z));
+        CAPTURE(node);
+        CAPTURE(lod);
+        // The brute force: the nearest point of the node's grown box (twice its span) to the camera's LOD0 box.
+        double sq = 0.0;
+        for (int a = 0; a < 3; a++) {
+            const double lo = double(node[a] - 2 * unit) - double(cam[a] + 1);
+            const double hi = double(cam[a] - 1) - double(node[a] + 2 * unit);
+            const double gap = std::max({ lo, hi, 0.0 });
+            sq += gap * gap;
+        }
+        CHECK(ChunkMath::beyond_far(node, lod, view) == (std::sqrt(sq) > double(view.far_ids)));
+    }
 }
 
 TEST_CASE("ChunkMath: load_queue puts the view cone first, then the finest LOD") {

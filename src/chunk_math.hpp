@@ -34,6 +34,11 @@ struct ChunkParam {
         return chunk_voxel_dimension() / 2;
     }
 
+    // Metres per chunk-id unit: a distance in ids times this is render metres.
+    double id_unit_m() const noexcept {
+        return double(half_chunk_voxels()) * double(voxel_size);
+    }
+
     VoxelPos origin_voxel() const noexcept {
         return origin_chunk * half_chunk_voxels();
     }
@@ -51,6 +56,10 @@ struct ScanView {
     // How much coarser the LOD rule gets away from the cone: lod_pixel_error_back / lod_pixel_error - 1.
     // 0: the scanned set ignores the direction.
     double back_scale = 0.0;
+    // The camera's far plane in chunk-id units, rounded up to a power of two (ChunkMath::far_ids): a node
+    // entirely farther than that is never drawn, in any direction, and is not scanned (ChunkMath::beyond_far).
+    // 0: no far plane.
+    int64_t far_ids = 0;
     // The views the camera had (ChunkDiscoverer::remember_view): a camera chunk, a unit view axis, and a
     // fade = max(0, distance from the camera chunk to that one - the memory distance), so a view fades out
     // as the camera walks away from where it was. The LOD rule coarsens away from the union of their cones,
@@ -143,6 +152,13 @@ double lod_distance(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
 // lod_distance(p_chunk, p_lod, p_view) < p_threshold, bit for bit, without the full minimum over the memories:
 // the plain distance alone may already fail, and any one memory under the threshold is enough.
 bool lod_split(const ChunkId &p_chunk, int p_lod, const ScanView &p_view, double p_threshold);
+// ScanView::far_ids of a far plane at p_far_m metres: the smallest power of two of chunk-id units at least
+// that far (up to twice: a rescan only when the far plane crosses a power of two). 0 (no limit) for p_far_m
+// <= 0 or not finite, and past 2^62.
+int64_t far_ids(double p_far_m, const ChunkParam &p_param);
+// Whether every point of p_chunk (LOD p_lod), grown by its half extent for the mesh past its bounds (skirts), is
+// farther than p_view.far_ids from the camera, anywhere in its LOD0 chunk; false without a far plane.
+bool beyond_far(const ChunkId &p_chunk, int p_lod, const ScanView &p_view);
 // The half-angle of the view cone: the frustum's diagonal half-FOV (p_fov_rad vertical, p_aspect width /
 // height) plus p_margin_rad.
 float view_cone_half_angle(float p_fov_rad, float p_aspect, float p_margin_rad);

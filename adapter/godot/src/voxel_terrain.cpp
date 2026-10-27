@@ -61,9 +61,12 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_view_margin_deg"), &VoxelTerrain::get_lod_view_margin_deg);
     ClassDB::bind_method(D_METHOD("set_lod_view_memory_m", "metres"), &VoxelTerrain::set_lod_view_memory_m);
     ClassDB::bind_method(D_METHOD("get_lod_view_memory_m"), &VoxelTerrain::get_lod_view_memory_m);
+    ClassDB::bind_method(D_METHOD("set_lod_far_limit", "enabled"), &VoxelTerrain::set_lod_far_limit);
+    ClassDB::bind_method(D_METHOD("get_lod_far_limit"), &VoxelTerrain::get_lod_far_limit);
     ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
+    ClassDB::bind_method(D_METHOD("get_half_chunk_voxels"), &VoxelTerrain::get_half_chunk_voxels);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
     ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
@@ -166,6 +169,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lod_far_limit"), "set_lod_far_limit", "get_lod_far_limit");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
@@ -528,6 +532,15 @@ float VoxelTerrain::get_lod_view_memory_m() const {
     return cfg().lod_view_memory_m;
 }
 
+void VoxelTerrain::set_lod_far_limit(bool p_enabled) {
+    ERR_FAIL_COND_MSG(world.is_started(), "lod_far_limit must be set before the terrain enters the tree.");
+    lod_far_limit = p_enabled;
+}
+
+bool VoxelTerrain::get_lod_far_limit() const {
+    return lod_far_limit;
+}
+
 void VoxelTerrain::set_lod_numbers(int p_count) {
     ERR_FAIL_COND_MSG(world.is_started(), "lod_numbers must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_count < 1 || p_count > MAX_LOD_NUMBERS, vformat("lod_numbers must be in [1, %d].", MAX_LOD_NUMBERS));
@@ -644,6 +657,10 @@ Vector3 VoxelTerrain::_camera_forward() const {
     return -camera->get_global_transform().basis.get_column(2);
 }
 
+double VoxelTerrain::_camera_far() const {
+    return camera != nullptr && lod_far_limit ? double(camera->get_far()) : 0.0;
+}
+
 double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
     return world.sdf_at(pos);
@@ -657,6 +674,10 @@ Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
 
 double VoxelTerrain::get_load_radius() const {
     return world.load_radius();
+}
+
+int64_t VoxelTerrain::get_half_chunk_voxels() const {
+    return cfg().chunk_param.half_chunk_voxels();
 }
 
 void VoxelTerrain::set_debug_gpu_profile(bool p_enable) {
@@ -778,7 +799,8 @@ void VoxelTerrain::_ready() {
     hosts.hidden_meshes = []() -> std::unique_ptr<MeshHost> { return std::make_unique<GodotMeshHost>(); };
     const Float3 camera_pos = camera != nullptr ? ov_f3(camera->get_global_position()) : Float3();
     const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
-    if (!world.start(projection, hosts, camera != nullptr ? &camera_pos : nullptr, camera != nullptr ? &camera_forward : nullptr)) {
+    const double camera_far = _camera_far();
+    if (!world.start(projection, hosts, camera != nullptr ? &camera_pos : nullptr, camera != nullptr ? &camera_forward : nullptr, camera_far)) {
         return;
     }
     if (page_host) {
@@ -869,7 +891,7 @@ void VoxelTerrain::_process(double) {
     if (camera != nullptr) {
         const Float3 pos = ov_f3(camera->get_global_position());
         const Float3 forward = ov_f3(_camera_forward());
-        world.frame(&pos, &forward);
+        world.frame(&pos, &forward, _camera_far());
     } else {
         world.frame(nullptr, nullptr);
     }

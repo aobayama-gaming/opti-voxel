@@ -88,6 +88,8 @@ func _enter_tree() -> void:
 			terrain.lod_view_margin_deg = a.trim_prefix("--lod_view_margin=").to_float()
 		if a.begins_with("--lod_view_memory=") and terrain:
 			terrain.lod_view_memory_m = a.trim_prefix("--lod_view_memory=").to_float()
+		if a.begins_with("--lod_far_limit=") and terrain:
+			terrain.lod_far_limit = a != "--lod_far_limit=0"
 		if a.begins_with("--mesher_budget=") and terrain:
 			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
 		if a.begins_with("--view=") and terrain:

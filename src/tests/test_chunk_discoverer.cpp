@@ -386,3 +386,56 @@ TEST_CASE("ChunkDiscoverer: a full memory replaces the least recently used view"
     CHECK(has(dirs[ScanView::MAX_VIEW_MEMORIES])); // the newest stays
     CHECK(!has(dirs[2]));
 }
+
+// A far plane (ScanView::far_ids): the scan is the one without it minus the chunks wholly past it, face
+// neighbours stay within one LOD (no node is split differently, nodes only go), and a step of the far plane
+// asks for a rescan.
+TEST_CASE("ChunkDiscoverer: a far plane drops exactly the chunks past it") {
+    ChunkParam param;
+    SDFCascade sdf;
+    const int lods = 25;
+    sdf.configure(param, lods);
+    ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
+    discoverer->set_config(param, &sdf);
+    discoverer->setup_lod(lods, 4.0f, 720.0f, 75.0f * (3.14159265f / 180.0f));
+    const Float3 pose = ov_f3(godot::Vector3(-800.0f, 6500.0f, 400.0f)); // near the 25-LOD cascade ground
+    const Float3 forward{ 1.0f, 0.0f, 0.0f };
+    const ScanView open = discoverer->make_view(pose, forward);
+    const ScanView limited = discoverer->make_view(pose, forward, 50000.0);
+    CHECK(open.far_ids == 0);
+    CHECK(limited.far_ids == ChunkMath::far_ids(50000.0, param));
+    CHECK(limited.far_ids > 0);
+    CHECK(ChunkDiscoverer::view_changed(open, limited));
+    CHECK(ChunkDiscoverer::view_changed(limited, discoverer->make_view(pose, forward, 4.0 * 50000.0))); // another power of two
+    CHECK(!ChunkDiscoverer::view_changed(limited, discoverer->make_view(pose, forward, 50000.0)));
+    // The kept step grows at once and shrinks only to a quarter: no flip-flop around a power of two.
+    CHECK(ChunkDiscoverer::far_step(0, 256) == 256);
+    CHECK(ChunkDiscoverer::far_step(1024, 2048) == 2048);
+    CHECK(ChunkDiscoverer::far_step(1024, 512) == 1024);
+    CHECK(ChunkDiscoverer::far_step(1024, 256) == 256);
+    CHECK(ChunkDiscoverer::far_step(1024, 0) == 0); // the far plane switched off
+
+    LODHashSet all;
+    LODHashSet near;
+    ChunkDiscoverer::ScanCounters all_counters;
+    ChunkDiscoverer::ScanCounters near_counters;
+    discoverer->scan(open, ChunkDiscoverer::CULL_LEGACY, all, all_counters);
+    discoverer->scan(limited, ChunkDiscoverer::CULL_LEGACY, near, near_counters);
+    CHECK(all_counters.beyond_far == 0);
+    CHECK(near_counters.beyond_far > 0);
+    CHECK(near.size() > 0);
+    CHECK(near.size() < all.size());
+    CHECK(set_difference(near, all) == 0);
+    int64_t dropped = 0;
+    for (const ChunkId &id : all) {
+        const bool beyond = ChunkMath::beyond_far(id, ChunkMath::get_lod(id), limited);
+        CHECK(near.has(id) == !beyond);
+        dropped += beyond ? 1 : 0;
+    }
+    MESSAGE("chunks: ", int64_t(all.size()), " without a far plane, ", int64_t(near.size()), " within ",
+            limited.far_ids, " units (", dropped, " dropped, ", near_counters.beyond_far, " nodes not visited)");
+    std::vector<int64_t> faces;
+    face_lod_jumps(near, discoverer->get_max_lod(), faces);
+    CHECK(faces.size() <= 2); // jumps of 0 and 1 only
+    memdelete(discoverer);
+}

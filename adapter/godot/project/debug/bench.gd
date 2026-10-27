@@ -87,6 +87,7 @@ extends Node3D
 ##   --lod_view_margin=DEG        view cone = the frustum's diagonal half-FOV + DEG (default 20)
 ##   --lod_view_memory=M          a view keeps the front error until the camera is M metres from where it
 ##                                had it (default -1: where LOD 2 starts, 0 = off)
+##   --lod_far_limit=0            scan past the camera's far plane too (VoxelTerrain.lod_far_limit, default 1)
 ##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
 ##   --compact=0|1                direct: page compaction (default 1)
@@ -113,8 +114,11 @@ extends Node3D
 ##   --walk_verify=1              site walks: every batch of the GPU's readings read again on the CPU, ERROR on a difference
 ##   --discovery_audit=1          direct: after steady, rebuild the scan without culling and count the
 ##                                quads of every culled chunk on the GPU (any quad = a miss = a hole)
+##   --depth_grab=1               after steady, read one frame's scene depth and its camera back to depth.f32 +
+##                                depth.json next to --out (DepthGrab); with --audit=1, tools/occlusion_census.py
+##                                <run> tells which loaded chunks that depth hides
 ##
-## Checks after steady run in this order: discovery_audit, audit, validate.
+## Checks after steady run in this order: discovery_audit, depth_grab, audit, validate.
 ##
 ## Render GPU/CPU time is only read during the "steady" phase: reading it forces a
 ## render-thread sync, which would distort the load/fly frame timings.
@@ -150,6 +154,8 @@ var timed_out := false
 var validation_report := {}
 var audit_report := {}
 var discovery_audit_report := {}
+const DepthGrabScript := preload("res://debug/depth_grab.gd")
+var depth_grab = null  # --depth_grab=1: a DepthGrab
 var checks := []  # remaining post-steady checks
 var profile_main := []  # --profile=1: one entry per frame
 var profile_gpu := []  # --profile=1: one entry per captured renderer frame
@@ -170,6 +176,13 @@ func _ready() -> void:
 		var c: PackedStringArray = args["cam_pos"].split(",")
 		camera.global_position = Vector3(float(c[0]), float(c[1]), float(c[2]))
 	start_pos = camera.global_position
+	if args.has("depth_grab"):
+		depth_grab = DepthGrabScript.new()
+		if camera.compositor == null:
+			camera.compositor = Compositor.new()
+		var effects := camera.compositor.compositor_effects
+		effects.append(depth_grab)
+		camera.compositor.compositor_effects = effects
 
 	vp_rid = get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
@@ -264,6 +277,8 @@ func _ready() -> void:
 		terrain.lod_view_margin_deg = float(args["lod_view_margin"])
 	if args.has("lod_view_memory"):
 		terrain.lod_view_memory_m = float(args["lod_view_memory"])
+	if args.has("lod_far_limit"):
+		terrain.lod_far_limit = args["lod_far_limit"] != "0"
 	if args.has("skirt"):
 		terrain.skirt_depth = float(args["skirt"])
 	if args.has("discovery_cull"):
@@ -603,7 +618,7 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				for c in ["discovery_audit", "audit", "validate"]:
+				for c in ["discovery_audit", "depth_grab", "audit", "validate"]:
 					if args.has(c):
 						checks.append(c)
 				_next_check()
@@ -613,6 +628,10 @@ func _process(delta: float) -> void:
 			if not report.is_empty():
 				discovery_audit_report = report
 				print("BENCH: discovery_audit ", JSON.stringify(report))
+				_next_check()
+				return
+		"depth_grab":
+			if depth_grab.write(args["out"].get_base_dir() if args.has("out") else "user://", camera, terrain):
 				_next_check()
 				return
 		"audit":
@@ -650,6 +669,8 @@ func _next_check() -> void:
 	match c:
 		"discovery_audit":
 			terrain.debug_audit_discovery()
+		"depth_grab":
+			depth_grab.request()
 		"audit":
 			terrain.debug_audit_pages()
 		"validate":

@@ -343,6 +343,16 @@ void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &
         }
     }
 
+    // Nothing past the far plane is drawn: those nodes are neither tested nor scanned (top grid here, children
+    // as they are pushed).
+    const bool far_limit = p_view.far_ids > 0;
+    if (far_limit) {
+        const size_t before = wave.size();
+        wave.erase(std::remove_if(wave.begin(), wave.end(), [&](const ChunkId &n) { return ChunkMath::beyond_far(n, max_lod, p_view); }),
+                wave.end());
+        r_counters.beyond_far += int64_t(before - wave.size());
+    }
+
     std::vector<ChunkId> next;
     std::vector<uint8_t> outside;
     for (int lod = max_lod; !wave.empty(); lod--) {
@@ -362,7 +372,12 @@ void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &
             }
             const int64_t child_size = int64_t(1) << (lod - 1);
             for (int c = 0; c < 8; ++c) {
-                next.push_back(node + ChunkId((c & 1) ? child_size : -child_size, (c & 2) ? child_size : -child_size, (c & 4) ? child_size : -child_size));
+                const ChunkId child = node + ChunkId((c & 1) ? child_size : -child_size, (c & 2) ? child_size : -child_size, (c & 4) ? child_size : -child_size);
+                if (far_limit && ChunkMath::beyond_far(child, lod - 1, p_view)) {
+                    r_counters.beyond_far++;
+                    continue;
+                }
+                next.push_back(child);
             }
         }
         wave.swap(next);
@@ -468,9 +483,10 @@ ScanView ChunkDiscoverer::get_view() {
     return v;
 }
 
-ScanView ChunkDiscoverer::make_view(const Float3 &p_pos, const Float3 &p_forward) const {
+ScanView ChunkDiscoverer::make_view(const Float3 &p_pos, const Float3 &p_forward, double p_far_m) const {
     ScanView v;
     v.camera_chunk = ChunkMath::chunk_at_render(p_pos, chunk_param);
+    v.far_ids = ChunkMath::far_ids(p_far_m, chunk_param);
     // godot's Vector3::length_squared and normalized, in float.
     const float length_squared = p_forward.x * p_forward.x + p_forward.y * p_forward.y + p_forward.z * p_forward.z;
     v.forward = length_squared > 0.0f ? p_forward.normalized() : Float3();
@@ -485,7 +501,8 @@ bool ChunkDiscoverer::turned_past(const Float3 &p_a, const Float3 &p_b) {
 }
 
 bool ChunkDiscoverer::view_changed(const ScanView &p_scanned, const ScanView &p_new) {
-    if (p_new.camera_chunk != p_scanned.camera_chunk || p_new.memory_count != p_scanned.memory_count) {
+    if (p_new.camera_chunk != p_scanned.camera_chunk || p_new.far_ids != p_scanned.far_ids ||
+            p_new.memory_count != p_scanned.memory_count) {
         return true;
     }
     // Memories are copied from view to view: an unchanged one is bit for bit the same.
@@ -550,9 +567,15 @@ ChunkDiscoverer::Remembered ChunkDiscoverer::remember_view(ScanView &r_view, dou
     return result;
 }
 
-void ChunkDiscoverer::set_camera(const Float3 &p_pos, const Float3 &p_forward) {
-    ScanView new_view = make_view(p_pos, p_forward);
+int64_t ChunkDiscoverer::far_step(int64_t p_current, int64_t p_needed) {
+    const bool keep = p_current > 0 && p_needed > 0 && p_needed < p_current && p_needed > p_current / 4;
+    return keep ? p_current : p_needed;
+}
+
+void ChunkDiscoverer::set_camera(const Float3 &p_pos, const Float3 &p_forward, double p_far_m) {
+    ScanView new_view = make_view(p_pos, p_forward, p_far_m);
     mutex.lock();
+    new_view.far_ids = far_step(view.far_ids, new_view.far_ids);
     new_view.copy_memories_from(view);
     const Remembered remembered = remember_view(new_view, memory_distance);
     stats.memories_added += remembered != REMEMBERED_KNOWN ? 1 : 0;
@@ -620,6 +643,7 @@ ov::Value ChunkDiscoverer::_scan_dict(const ScanCounters &p_counters, uint64_t p
     d["walk_ms"] = double(p_scan_usec) / 1000.0 - cull_ms; // everything else: the tree walk, cache lookups and eviction
     d["nodes_visited"] = p_counters.nodes_visited;
     d["culled"] = p_counters.culled;
+    d["beyond_far"] = p_counters.beyond_far;
     d["out_of_view"] = p_counters.out_of_view;
     d["cache_hits"] = p_counters.cache_hits;
     d["corners"] = p_counters.corners;
@@ -668,6 +692,8 @@ ov::Value ChunkDiscoverer::get_stats() {
     d["delta_left_total"] = stats.delta_left_total;
     d["back_scale"] = back_scale;
     d["cone_half_angle_deg"] = ov::rad_to_deg(cone_half_angle);
+    // The published scan's far limit (ScanView::far_ids) in metres, 0: none.
+    d["far_m"] = double(scanned_view.far_ids) * chunk_param.id_unit_m();
     d["last_nodes_visited"] = stats.last_nodes_visited;
     d["last_sdf_calls"] = stats.last_sdf_calls;
     d["last_culled"] = stats.last_culled;

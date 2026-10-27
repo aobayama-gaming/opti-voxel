@@ -43,6 +43,30 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   Cost with memory 0 (measured in PR 34): a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
   back already leaves +64% draw calls): after one full turn at error 1 | 4, the steady state is +26% render GPU
   vs error 1 without the split. A locality-aware compaction would close it.
+- Far limit (`VoxelTerrain.lod_far_limit`, default on; with `--lod_far_limit=0` in bench and
+  player the world gets 0, no limit): the adapter hands `World::frame` the depth of the camera's far plane (Godot:
+  `Camera3D.far`, which `Presets.clip_planes` ties to the altitude, ~2,100x it with a 105 km floor, when `--lods` is above
+  15; Dawn: 0, its projection is infinite). The farthest point drawn is a corner of that plane: `World` scales it by
+  1 / cos(the diagonal half-FOV), ~1.86x at 75 degrees and 16:9. `ScanView::far_ids` is that reach in chunk-id
+  units, rounded up to a power of two (`ChunkMath::far_ids`), and it only shrinks once the needed step falls to a
+  quarter of it (`ChunkDiscoverer::far_step`: a camera bobbing around one altitude doesn't drop and re-mesh the outer
+  ring). The walk drops every node whose box, grown by its half extent (skirts and boundary vertices reach past it),
+  is wholly past that from the camera's LOD0 chunk (`ChunkMath::beyond_far`, before its cull test:
+  `discoverer.last_scan.beyond_far`). Such a node is never drawn whichever way the camera turns, so the cut keeps
+  the same splits and only loses chunks, like culled ones; the discovery audit rebuilds with the same view. Shadows:
+  a caster past the far plane would need to rise far * tan(sun elevation) to reach the shadow map (~56 km at 105 km
+  and 28 degrees), so nothing the terrain makes is lost. Measured on the video terrain (world climate, 25 LODs, 5 cm,
+  error 1 | 3), `tools/occlusion_census.py` on the loaded set: every chunk past LOD 15-16 lies beyond the far plane's
+  corners at 2-500 m above the ground, a third of the non-empty chunks and a quarter of their quads; on forest5cm
+  (15 LODs) ~3%. With the limit (bench, 960x540, on | off): 23-29% fewer chunks loaded, 31-41% fewer non-empty ones,
+  20-27% fewer live triangles, 8-17% fewer draw calls in view; the power-of-two step still keeps ~5% of the chunks
+  past the corners (a finer step is the follow-up).
+- Occlusion census (`--depth_grab=1 --audit=1`, `tools/occlusion_census.py`, `docs/testing.md`): which loaded
+  chunks one frame's depth hides. At low altitude 15-21% of the quads in front of the camera are hidden (most of
+  LODs 6-14 at 2 m: the ground hides the far ground), but a rule that keeps hidden nodes coarse must keep face
+  neighbours within one LOD and its coarse mesh hidden, which needs the node's whole 3x3x3 neighbourhood hidden
+  (a child's grown box must lie in its parent's: g >= 1 node size): that only drops 0-5% more after the far
+  limit. Not implemented.
 - Destroy check (`VoxelState`, `src/chunk_memory.*`) is incremental: the discoverer publishes each scan
   with its delta (`ScanDelta`: entered / left, merged across the scans the main thread skipped), and
   VoxelState keeps per event the dirty chunks' nearest loaded ancestors, the stall count per loaded chunk
