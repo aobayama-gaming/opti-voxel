@@ -18,7 +18,7 @@ public:
 
     uint64_t create_mesh(const ChunkMesh &p_mesh, float p_cell_size, const Float3 &p_origin) override;
     void free_mesh(uint64_t p_mesh) override;
-    void shift_meshes(const Float3 &p_shift) override;
+    void place_mesh(uint64_t p_mesh, const Float3 &p_origin) override;
     bool read_mesh(uint64_t p_mesh, ChunkMesh &r_mesh) const override;
 
 private:

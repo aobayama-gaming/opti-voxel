@@ -25,9 +25,8 @@ public:
     // none was made.
     virtual uint64_t create_mesh(const ChunkMesh &p_mesh, float p_cell_size, const Float3 &p_origin) = 0;
     virtual void free_mesh(uint64_t p_mesh) = 0;
-    // Moves every mesh by -p_shift metres: the render origin moved (World::rebase, ChunkMath::origin_shift_m). Never
-    // while a create_mesh runs (GPUMesher::set_render_origin).
-    virtual void shift_meshes(const Float3 &p_shift) = 0;
+    // Moves p_mesh's vertex grid origin to p_origin (render metres): the render origin moved (World::rebase).
+    virtual void place_mesh(uint64_t p_mesh, const Float3 &p_origin) = 0;
     // The mesh as the host holds it, to compare with the direct mesher's (MeshValidator); false if unknown.
     virtual bool read_mesh(uint64_t p_mesh, ChunkMesh &r_mesh) const = 0;
 };

@@ -57,8 +57,9 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     started = true;
     start_usec = now_usec();
 
-    // The world origin, snapped down to the root chunk span (2^lod_numbers chunk-id units): the
-    // octree around the camera, the LOD layout and the GPU low words are then the same at any origin.
+    // The world origin, snapped down to the root chunk span (2^lod_numbers chunk-id units), so the start is the same
+    // for any requested origin. It is also the first render origin; a rebase then moves that one by even ids only
+    // (ChunkMath::recentered_origin), so render-relative Morton keys are no longer root-aligned after one.
     {
         const int64_t root_units = int64_t(1) << lod_numbers;
         const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
@@ -566,7 +567,7 @@ bool World::rebase(const ChunkId &p_origin, Float3 &r_shift) {
     if (direct_mesher) {
         direct_mesher->set_render_origin(p_origin);
     } else {
-        gpu_mesher->set_render_origin(p_origin, r_shift);
+        gpu_mesher->set_render_origin(p_origin);
     }
     last_camera = last_camera - r_shift;
     rebases++;

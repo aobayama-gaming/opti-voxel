@@ -729,12 +729,17 @@ Vector3 VoxelTerrain::get_render_offset_m() const {
 
 void VoxelTerrain::_move_render_origin(const Float3 &p_shift) {
     const Vector3 shift = godot_v3(p_shift);
+    const Vector3 camera_before = camera->get_global_position();
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         Node3D *node = Object::cast_to<Node3D>(parent->get_child(i));
         if (node != nullptr && node != this) {
             node->set_global_position(node->get_global_position() - shift);
         }
+    }
+    // A camera outside the siblings (top_level, elsewhere in the tree) moves itself: it must, or every frame rebases.
+    if (camera->get_global_position() == camera_before) {
+        camera->set_global_position(camera_before - shift);
     }
     _push_render_frame();
     emit_signal("origin_shifted", shift);
@@ -971,7 +976,7 @@ void VoxelTerrain::_process(double) {
     }
     if (camera != nullptr) {
         Float3 shift;
-        if (world.recenter(ov_f3(camera->get_global_position()), shift)) {
+        if (!Engine::get_singleton()->is_editor_hint() && world.recenter(ov_f3(camera->get_global_position()), shift)) {
             _move_render_origin(shift);
         }
         const Float3 pos = ov_f3(camera->get_global_position());

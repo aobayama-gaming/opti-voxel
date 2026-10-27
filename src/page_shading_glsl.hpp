@@ -55,6 +55,7 @@ float shade_noise(vec3 p, float cell_m, vec3 offset) {
 // lattices repeat in the shading frame's period of its longest feature (BARK_FEATURE_M, bark_point). Colour
 // only: a bump from it (and a roughness following it) cost ~1.3 ms of depth pre-pass in the forest at 1080p (the
 // pre-pass writes normals and roughness for SSAO / SSIL), for relief barely visible past a few metres.
+const float BARK_FEATURE_M = 4.0; // the bark's longest feature (the wander): its shading-frame period
 float bark_grain(vec3 p, out float knot, out float ring) {
     float period_m = shade_period_m(shade_period_vox(BARK_FEATURE_M));
     vec3 knot_cells = shade_cells(1.0 / vec3(0.7, 1.6, 0.7), period_m);
@@ -103,7 +104,6 @@ float bark_plate(float grain) {
 // jumped across LOD changes (tools/bark_seams.sh). Two trees read the same bark only at the same height; a flat face
 // reads one column of it. The height is read through the shading frame (period: BARK_FEATURE_M, the wander's 4 m).
 const float BARK_RADIUS = 0.45;
-const float BARK_FEATURE_M = 4.0;
 vec3 bark_point(vec3 p, vec3 n) {
     vec2 u = n.xz * (BARK_RADIUS * inversesqrt(max(dot(n.xz, n.xz), 1e-8)));
     float period_m;

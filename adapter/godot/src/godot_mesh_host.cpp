@@ -96,14 +96,14 @@ void GodotMeshHost::free_mesh(uint64_t p_mesh) {
     rs->free_rid(drawn.mesh);
 }
 
-void GodotMeshHost::shift_meshes(const Float3 &p_shift) {
-    RenderingServer *rs = RenderingServer::get_singleton();
-    const Vector3 shift = godot_v3(p_shift);
+void GodotMeshHost::place_mesh(uint64_t p_mesh, const Float3 &p_origin) {
     const std::lock_guard<std::mutex> lock(mutex);
-    for (std::pair<const uint64_t, Drawn> &kv : meshes) {
-        kv.second.transform.origin -= shift;
-        rs->instance_set_transform(kv.second.instance, kv.second.transform);
+    const auto it = meshes.find(p_mesh);
+    if (it == meshes.end()) {
+        return;
     }
+    it->second.transform.origin = godot_v3(p_origin);
+    RenderingServer::get_singleton()->instance_set_transform(it->second.instance, it->second.transform);
 }
 
 bool GodotMeshHost::read_mesh(uint64_t p_mesh, ChunkMesh &r_mesh) const {

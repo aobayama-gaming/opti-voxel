@@ -59,7 +59,7 @@ instance uniform int page_id = 0;
 varying vec3 v_world_normal;
 varying vec2 v_quad_uv;
 varying flat float v_lod;
-varying flat vec3 v_chunk; // the chunk id's low 23 bits (the chunk hash views)
+varying flat vec3 v_chunk; // the chunk id's low 10 bits (the chunk hash views: hash3 wants small inputs)
 varying flat ivec2 v_ids; // INSTANCE_ID, quad index | coverage << QUAD_INDEX_BITS (0 drawn, 1 stalled, 2 hidden)
 varying float v_height; // render metres (the height colours; the contour lines read it through the shading frame)
 // The quad's two materials, from the provoking corner A: x = A's (global id), y = the other one's | its corner mask
@@ -138,7 +138,7 @@ void vertex() {
     v_ids = ivec2(INSTANCE_ID, VERTEX_ID / 4 | coverage << int(QUAD_INDEX_BITS));
     v_quad_uv = vec2(float(corner & 1), float(corner >> 1));
     v_lod = float(lod);
-    v_chunk = vec3(chunk & ivec3(8388607)); // absolute (not rel): the colours stay when the render origin moves
+    v_chunk = vec3(chunk & ivec3(1023)); // absolute (not rel): the colours stay when the render origin moves
     // The cascade skirt pushed the SDF towards air by clamp(-inside) * depth past the chunk bounds, which lowers
     // the surface by push / n.y. The push is linear inside a cell, so on a planar surface the vertex lies
     // on the pushed plane and this gives back the exact height.
