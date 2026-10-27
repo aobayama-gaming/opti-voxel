@@ -51,10 +51,13 @@ private:
     bool debug_gpu_profile = false;
     bool debug_gpu_profile_frames = false; // record every captured frame (GPUProfiler::take_frames)
     Dictionary page_params; // page shader uniforms set from outside (VoxelSky's clouds), applied when the pages exist
+    bool lod_far_limit = true; // hand the world the camera's far plane (set_lod_far_limit)
 
     void _teardown();
     // The camera's view axis in render space.
     Vector3 _camera_forward() const;
+    // What the world gets as the camera's far plane: Camera3D.far, 0 (none) without a camera or the far limit.
+    double _camera_far() const;
     bool _can_set_world_origin(int64_t p_voxel) const;
 
 public:
@@ -158,6 +161,11 @@ public:
     // 0: only the current view (every turn re-meshes the cone's edges).
     void set_lod_view_memory_m(float p_metres);
     float get_lod_view_memory_m() const;
+    // Scan nothing farther from the camera than its far plane (Camera3D.far, read every frame): it is never drawn.
+    // With --lods above 15 the far plane follows the altitude (Presets.clip_planes), so a low camera drops the
+    // coarsest LODs. Default on.
+    void set_lod_far_limit(bool p_enabled);
+    bool get_lod_far_limit() const;
 
     static constexpr int MAX_LOD_NUMBERS = ChunkMath::MAX_LOD_NUMBERS;
     void set_lod_numbers(int p_count);
@@ -165,6 +173,9 @@ public:
     // Distance from the camera (metres) that bounds every chunk the discoverer can load: the corner of
     // its scan grid. 0 before the terrain is ready.
     double get_load_radius() const;
+    // LOD0 voxels per chunk-id unit (half a LOD0 chunk, ChunkParam::half_chunk_voxels): for tools that rebuild
+    // chunk boxes from their ids.
+    int64_t get_half_chunk_voxels() const;
     // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain, for the
     // clip planes above 15 LODs.
     double get_sdf_at(const Vector3 &p_render_pos) const;

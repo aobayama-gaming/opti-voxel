@@ -96,9 +96,12 @@ public:
     const Settings &settings() const { return config; }
 
     // The terrain built and the discoverer and mesher started; false (an error) without a device or with bad settings.
-    bool start(const Projection &p_projection, const Hosts &p_hosts, const Float3 *p_camera_pos, const Float3 *p_camera_forward);
+    bool start(const Projection &p_projection, const Hosts &p_hosts, const Float3 *p_camera_pos, const Float3 *p_camera_forward,
+            double p_camera_far_m = 0.0);
     // One frame: the camera (render space, null: none), the scans and meshes that landed, the next batches.
-    void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward);
+    // p_camera_far_m: the depth of the camera's far plane in metres (0: none, an infinite projection): nothing farther
+    // than its frustum's corners reach (far / cos of the diagonal half-FOV), in any direction, is scanned (ChunkMath::beyond_far).
+    void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0);
     // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer.
     void stop();
     bool is_started() const { return started; }
@@ -168,6 +171,7 @@ private:
     ScanView scan_view;
     Float3 last_camera; // the camera of the last frame (and start)
     bool has_camera = false;
+    double far_reach = 1.0; // the farthest point drawn / the far plane's depth: 1 / cos(the diagonal half-FOV)
 
     // Discovery audit (debug_audit_discovery): quad counts of every chunk the cull dropped.
     struct DiscoveryAudit {

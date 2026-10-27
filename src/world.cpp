@@ -38,7 +38,8 @@ World::~World() {
     stop();
 }
 
-bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Float3 *p_camera_pos, const Float3 *p_camera_forward) {
+bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Float3 *p_camera_pos, const Float3 *p_camera_forward,
+        double p_camera_far_m) {
     ChunkParam &chunk_param = config.chunk_param;
     const int lod_numbers = config.lod_numbers;
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: already started.");
@@ -119,6 +120,8 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     chunk_discoverer->setup_lod(lod_numbers, config.lod_pixel_error, p_projection.viewport_height, fov_rad, config.lod_pixel_error_back,
             ChunkMath::view_cone_half_angle(fov_rad, p_projection.aspect, ov::deg_to_rad(config.lod_view_margin_deg)));
     chunk_discoverer->set_view_memory(config.lod_view_memory_m);
+    // The far plane is a depth along the view axis: the farthest point drawn is at the frustum's corners.
+    far_reach = 1.0 / std::cos(double(ChunkMath::view_cone_half_angle(fov_rad, p_projection.aspect, 0.0f)));
     chunk_discoverer->start();
 
     if (config.pipeline_mode == PIPELINE_GPU_DIRECT) {
@@ -135,7 +138,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(*p_camera_pos, *p_camera_forward);
+        chunk_discoverer->set_camera(*p_camera_pos, *p_camera_forward, p_camera_far_m * far_reach);
         last_camera = *p_camera_pos;
         has_camera = true;
     }
@@ -203,7 +206,7 @@ void World::_record_dispatch_times(const DispatchTimes &p_now) {
     last_dispatch_times = p_now;
 }
 
-void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward) {
+void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m) {
     if (!started) {
         return;
     }
@@ -217,7 +220,7 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward) {
     }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(*p_camera_pos, *p_camera_forward);
+        chunk_discoverer->set_camera(*p_camera_pos, *p_camera_forward, p_camera_far_m * far_reach);
         last_camera = *p_camera_pos;
         has_camera = true;
     }
@@ -513,7 +516,7 @@ double World::load_radius() const {
     int64_t count;
     chunk_discoverer->get_scan_grid(step, count);
     const double ids = double((count + 2) * step) * std::sqrt(3.0);
-    return ids * double(config.chunk_param.half_chunk_voxels()) * double(config.chunk_param.voxel_size);
+    return ids * config.chunk_param.id_unit_m();
 }
 
 double World::sdf_at(const double p_render_pos[3]) const {

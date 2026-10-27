@@ -93,6 +93,13 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (live / dead_zero / stale / partial / broken). Anything but live/dead_zero is a bug. Also writes a
   per-chunk mesh digest (quad count + order-independent hash of the chunk-local corners) to
   `<run>/chunks.json`.
+- `--depth_grab=1`: after steady, reads one frame's scene depth and the camera that drew it back to
+  `<run>/depth.f32` + `depth.json` (`debug/depth_grab.gd`, a `CompositorEffect` after the opaque pass). With
+  `--audit=1`, `tools/occlusion_census.py <run>` sorts every non-empty loaded chunk into near / off-screen /
+  hidden (every depth pixel of its screen rect nearer than its box: the test a Hi-Z cull of that frame makes) /
+  visible, per LOD, and estimates the cut a "hidden nodes stop splitting" rule would load
+  (`docs/discovery-lod.md`, Occlusion). Its first line checks the depth convention: the share of depth pixels
+  that land inside a chunk box (100% expected).
 - `--discovery_audit=1` (direct): rebuilds the current scan without culling (`--discovery_cull=0`) and
   counts the quads of every chunk the cull dropped on the GPU (passes sdf/edges/vertices, count only).
   A dropped chunk with quads is a miss, i.e. a hole; `ok` needs 0 misses and a max LOD jump of 1

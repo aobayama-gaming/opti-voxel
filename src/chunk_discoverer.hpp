@@ -44,6 +44,7 @@ public:
         int64_t sdf_calls = 0; // corner evaluations after dedup
         int64_t corners = 0; // corners of the evaluated nodes, before dedup
         int64_t culled = 0;
+        int64_t beyond_far = 0; // nodes dropped past the far plane (ChunkMath::beyond_far), before their cull test
         int64_t out_of_view = 0; // scanned chunks outside the view cone
         uint64_t cull_nsec = 0; // time spent in the cull test (corners, dedup, SDF, verdicts), in ns
         int64_t cache_hits = 0;
@@ -175,9 +176,14 @@ public:
     // lod_view_memory_m < 0: the memory distance is where this LOD starts.
     static constexpr int VIEW_MEMORY_AUTO_LOD = 2;
 
-    // The view of a camera at render position p_pos looking along p_forward, without memories.
-    ScanView make_view(const Float3 &p_pos, const Float3 &p_forward) const;
-    // p_new needs another scan than p_scanned: another camera chunk or other memories.
+    // The view of a camera at render position p_pos looking along p_forward, with its far plane p_far_m metres
+    // away (0: none; ChunkMath::far_ids), without memories.
+    ScanView make_view(const Float3 &p_pos, const Float3 &p_forward, double p_far_m = 0.0) const;
+    // The far step a view keeps (ScanView::far_ids, powers of two): p_needed, except that it only shrinks from
+    // p_current once it falls to a quarter of it, so a camera bobbing around one altitude doesn't drop and re-mesh
+    // the coarsest ring on every crossing.
+    static int64_t far_step(int64_t p_current, int64_t p_needed);
+    // p_new needs another scan than p_scanned: another camera chunk, far plane step or other memories.
     static bool view_changed(const ScanView &p_scanned, const ScanView &p_new);
     enum Remembered {
         REMEMBERED_KNOWN, // a memory at the camera chunk is within RESCAN_TURN_DEG of forward
@@ -190,7 +196,8 @@ public:
     // or no forward: no memories. Static for the unit tests.
     static Remembered remember_view(ScanView &r_view, double p_memory_distance);
     // Remembers the camera's view (remember_view) and asks for a scan when the view changed (view_changed).
-    void set_camera(const Float3 &p_pos, const Float3 &p_forward);
+    // p_far_m: the camera's far plane in metres, 0 for none (make_view).
+    void set_camera(const Float3 &p_pos, const Float3 &p_forward, double p_far_m = 0.0);
     // The view of the latest set_camera, memories included.
     ScanView get_view();
     // How far the camera walks from where it had a view before that view starts to fade (render metres;

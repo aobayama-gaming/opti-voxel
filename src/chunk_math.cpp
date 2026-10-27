@@ -313,6 +313,35 @@ bool ChunkMath::lod_split(const ChunkId &p_chunk, int p_lod, const ScanView &p_v
     return false;
 }
 
+int64_t ChunkMath::far_ids(double p_far_m, const ChunkParam &p_param) {
+    const double unit_m = p_param.id_unit_m();
+    if (!(p_far_m > 0.0) || !std::isfinite(p_far_m) || !(unit_m > 0.0)) {
+        return 0;
+    }
+    const double ids = std::ceil(p_far_m / unit_m);
+    int k = std::ilogb(ids); // 2^k <= ids < 2^(k + 1)
+    k += std::ldexp(1.0, k) < ids ? 1 : 0;
+    return k > 62 ? 0 : int64_t(1) << k;
+}
+
+bool ChunkMath::beyond_far(const ChunkId &p_chunk, int p_lod, const ScanView &p_view) {
+    if (p_view.far_ids <= 0) {
+        return false;
+    }
+    // Per axis, the gap between the chunk's box grown by its half extent 2^lod (its mesh reaches past its bounds
+    // by skirt_size + skirt_depth cells, a few of the 2 * half_chunk_voxels across it) and the camera's LOD0 chunk
+    // (half extent 1).
+    const int64_t reach = (int64_t(2) << p_lod) + 1;
+    double sq = 0.0;
+    for (int a = 0; a < 3; a++) {
+        const int64_t d = p_chunk[a] - p_view.camera_chunk[a];
+        const double gap = double(d < 0 ? -d : d) - double(reach);
+        sq += gap > 0.0 ? gap * gap : 0.0;
+    }
+    const double far = double(p_view.far_ids);
+    return sq > far * far;
+}
+
 float ChunkMath::view_cone_half_angle(float p_fov_rad, float p_aspect, float p_margin_rad) {
     return std::atan(std::tan(p_fov_rad * 0.5f) * std::sqrt(1.0f + p_aspect * p_aspect)) + p_margin_rad;
 }
