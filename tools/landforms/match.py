@@ -35,6 +35,7 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 import compare  # noqa: E402
 import terrain_stats as ts  # noqa: E402
+from table_json import dump_table  # noqa: E402
 
 
 def generate(table: Path, site: dict, opts: dict, build: bool) -> Path:
@@ -52,20 +53,6 @@ def generate(table: Path, site: dict, opts: dict, build: bool) -> Path:
     if out.returncode != 0 or not lines or not lines[-1].startswith(">> "):
         sys.exit(f"climate_report.sh failed ({out.returncode}):\n" + "\n".join(lines[-15:]))
     return Path(lines[-1][3:])
-
-
-def dump_table(v, indent: int = 0) -> str:
-    """JSON with one line per object or list that holds no object (a band, a multiplier, a curve point)."""
-    flat = json.dumps(v)
-    if not isinstance(v, (dict, list)) or len(flat) <= 110 and "{" not in flat[1:]:
-        return flat
-    pad = " " * (indent + 1)
-    if isinstance(v, dict):
-        items = [f"{pad}{json.dumps(k)}: {dump_table(x, indent + 1)}" for k, x in v.items()]
-        return "{\n" + ",\n".join(items) + "\n" + " " * indent + "}"
-    if all(not isinstance(x, (dict, list)) for x in v) or len(flat) <= 110 and all(isinstance(x, list) for x in v):
-        return flat
-    return "[\n" + ",\n".join(pad + dump_table(x, indent + 1) for x in v) + "\n" + " " * indent + "]"
 
 
 def octave(octs: list, w: float) -> float | None:

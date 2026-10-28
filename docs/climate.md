@@ -149,3 +149,34 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `region_test.json` (CascadeSpike set `4r`, 11 field groups) equals `valley.json` bit for bit in its cold core. The
   field group cap is 24 (the GPU's arrays are sized per spec); every group is carried at every point. Details:
   `docs/landforms.md`, "Using a landform in a world".
+- **Biome lab** (`tools/biome_lab.sh`, `tools/biome_lab/`): a page at `http://127.0.0.1:8765/` to design a climate table
+  without hand-editing its JSON. `server.py` (Python's standard library, bound to localhost) owns the files; the page
+  (`web/`) holds the table being edited. The server answers its own page only (Host and Origin checked, posts in
+  JSON), so another site open in the browser can't save a table or start a viewer.
+  - **Edit:** the sidebar lists the table's biomes (their debug colours, the default last), fields, regions, heights and
+    ground stretches. Each item is a form laid out from `web/schema.js`, the format above `parse()` as data: typed
+    inputs, enums, colours, names of the table's fields and regions, a plot of a height's curve, and each distance's
+    octave at the preview's voxel size (the format rounds it to 2^k voxels). Any key the format has can be added and
+    any key removed. Lists reorder, duplicate and delete (a biome's place is its priority, a new one goes before the
+    default). An item's **JSON** button, the **Table** entry (the whole table) and an "other key" entry take anything
+    the forms don't, so whatever a text editor can write, the lab can too. Undo / redo cover every edit.
+  - **Check and preview:** `climate_report.sh --no-build --out=...` on a draft copy of the table
+    (`bench/results/biome-lab/drafts/`), so the verdict is the engine's own parse and validate: a refused table shows
+    the engine's message, and the maps of the last accepted table stay, greyed. "Check on edit" runs a 96 px slice a
+    second after each edit (world.json costs ~0.4 ms per point: ~4 s); **Preview** the size the panel sets. One report
+    runs at a time; a newer check replaces a queued one and stops a running one (its whole process tree:
+    `climate_report.sh` passes a TERM on to Godot). The maps (biomes with a legend, ground height,
+    hillshade, normals, every field) and `report.md` show in the panel. A click on a map, or on a `--spawn` of the
+    report, sets the viewer's spawn there (`heights.json`: the slice's size, spacing and centre).
+  - **Fly it:** the player (`--path adapter/godot/project`) on a copy of the table as it is (unsaved edits included,
+    `bench/results/biome-lab/launch/`, with its log) and the panel's preset, spawn, altitude, debug view (`--view=12`:
+    the biome colours) and arguments. It opens a window: the button is the user's run.
+  - **Save:** tables under `adapter/godot/project/climate/` only, written like `match.py` / `world.py` write them
+    (`tools/landforms/table_json.py`). A table whose data didn't change keeps its text (the hand-written ones have their
+    own layout; the first real edit rewrites them in this layout). Saving `world.json` asks first: `world.py`
+    regenerates it from the landform tables.
+  - **Landform tools:** `world.py` (recompose world.json) and `match.py` (fit the table to a real site of `sites.json`:
+    rounds, `--hypso`, `--texture`, `--center`) as jobs, their output in the panel; the table reloads after.
+  - Not in it yet: reloading a table into a running viewer (the climate is set before the terrain starts and each
+    table compiles its own shaders, so a launch is a new process), and biome content beyond the ground (trees and
+    scatter per biome, textures, sky and fog per biome), which the engine doesn't have.

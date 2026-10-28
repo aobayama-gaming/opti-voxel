@@ -32,6 +32,7 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 import match  # noqa: E402
 import terrain_stats as ts  # noqa: E402
+from table_json import WORLD_TABLE, dump_table  # noqa: E402
 
 LANDFORMS = ROOT / "adapter/godot/project/climate/landforms"
 
@@ -192,8 +193,8 @@ def main() -> None:
     if "axes" in opts:
         axes(Path(opts["axes"]))
         return
-    out = ROOT / opts.get("out", "adapter/godot/project/climate/world.json")
-    out.write_text(match.dump_table(compose()) + "\n")
+    out = ROOT / opts.get("out", WORLD_TABLE)
+    out.write_text(dump_table(compose()) + "\n")
     print(f">> {out}")
 
 

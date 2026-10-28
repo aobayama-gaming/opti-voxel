@@ -9,7 +9,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
 - `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
   `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
   channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
-- `tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
+- `tools/climate_report.sh [--no-build] [--out=DIR] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
   weight, the pick drift (the share of points whose pick at the coarsest modulated level differs: what the ground's
@@ -17,7 +17,9 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
   `biomes_pick.png` / `ground_height.png` / `field_*.png`, and `heights.f32` + `heights.json` for `tools/landforms`.
   Tune a table from it before any GPU run. To match a real heightmap: `uv run tools/landforms/match.py SITE TABLE --fit=3`
-  (`docs/landforms.md`).
+  (`docs/landforms.md`). `--out=DIR` writes there instead of `bench/results/<timestamp>-climate/`.
+- `tools/biome_lab.sh [--no-build] [--port=8765] [--no-open]`: the biome lab, a browser page over `climate_report.sh`
+  to edit, preview and fly climate tables (`docs/climate.md`, "Biome lab").
 - `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
   (`CascadeSpike` over the core's `CascadeCheck`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a
   window, ~3 min; on Dawn: `ov_dawn --cascade-check='{"timing":false}'`): the

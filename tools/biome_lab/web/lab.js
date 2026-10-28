@@ -1,0 +1,721 @@
+// Biome lab: edits a climate table in memory (forms from schema.js, or its JSON), previews it through the server's
+// climate report, launches the player on it. The server (server.py) owns every file.
+import { TYPES, SECTIONS, default_value } from "./schema.js";
+
+const $ = (s) => document.querySelector(s);
+const UNDO_MAX = 200;
+const CHECK_DELAY_MS = 1200;
+const CHECK_SIZE = 96; // an auto check's slice: world.json costs ~0.4 ms per point
+
+const S = {
+    path: null, data: null, saved: "", undo: [], redo: [],
+    sel: { section: "biomes", index: 0 }, raw: false, open: new Map(), titles: [],
+    params: { voxel: "0.05", lods: "25", extent_km: "60", size: "256", surface: "1", center: "", lattice: "" },
+    launch: { scene: "", engine_args: "--render-thread safe", preset: "video", spawn: "", altitude: "200", view: "0", extra: "" },
+    match: { site: "", hypso: false, flags: { fit: "2", texture: "", center: "" } },
+    auto: true, check_timer: null, job: null, result: null, good: null, tables: [], image: "biomes_pick.png", presets: [], sites: [],
+};
+
+// --- helpers ---
+
+function el(p_tag, p_attrs = {}, ...p_children) {
+    const e = document.createElement(p_tag);
+    for (const [k, v] of Object.entries(p_attrs)) {
+        if (v === undefined || v === null || v === false) continue;
+        if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+        else if (k === "class") e.className = v;
+        else e.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of p_children.flat()) {
+        if (c !== null && c !== undefined && c !== false) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    }
+    return e;
+}
+
+async function api(p_path, p_body) {
+    const r = await fetch(p_path, p_body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p_body) });
+    const v = await r.json();
+    if (!r.ok) throw new Error(v.error || r.statusText);
+    return v;
+}
+
+function store_prefs() {
+    try { localStorage.setItem("biome_lab", JSON.stringify({ params: S.params, launch: S.launch, auto: S.auto, path: S.path })); } catch { /* private window */ }
+}
+
+function load_prefs() {
+    try {
+        const p = JSON.parse(localStorage.getItem("biome_lab") || "{}");
+        Object.assign(S.params, p.params || {});
+        Object.assign(S.launch, p.launch || {});
+        if (p.auto !== undefined) S.auto = p.auto;
+        return p.path;
+    } catch { return null; }
+}
+
+function names(p_of) {
+    const out = [];
+    if (p_of === "fields+ground") out.push("ground");
+    if (p_of.startsWith("fields")) out.push(...(S.data.fields || []).map((f) => f.name));
+    if (p_of === "regions") out.push(...(S.data.regions || []).map((r) => r.name));
+    return out.filter((n) => typeof n === "string");
+}
+
+function dirty() { return S.data !== null && JSON.stringify(S.data) !== S.saved; }
+
+function confirm_discard() { return !dirty() || confirm(`Discard the unsaved changes to ${S.path}?`); }
+
+function with_json(p_path) { return p_path.endsWith(".json") ? p_path : p_path + ".json"; }
+
+// Label + text input over p_obj[p_key] (the panels' parameters), p_after called after a change.
+function text_field(p_obj, p_key, p_label, p_attrs = {}, p_after = null) {
+    return el("label", {}, p_label, el("input", { type: "text", value: p_obj[p_key], ...p_attrs, onchange: (e) => {
+        p_obj[p_key] = e.target.value.trim();
+        store_prefs();
+        p_after?.();
+    } }));
+}
+
+// Label + select over p_obj[p_key] from [value, text] pairs.
+function select_field(p_obj, p_key, p_label, p_options) {
+    return el("label", {}, p_label, el("select", { onchange: (e) => { p_obj[p_key] = e.target.value; store_prefs(); } },
+        p_options.map(([v, t]) => el("option", { value: v, selected: v === p_obj[p_key] }, t))));
+}
+
+// List items: moved, duplicated, removed (the sidebar's items and the editor's cards).
+function move_item(p_list, p_i, p_d) { p_list.splice(p_i + p_d, 0, p_list.splice(p_i, 1)[0]); }
+function dup_item(p_list, p_i) { p_list.splice(p_i + 1, 0, structuredClone(p_list[p_i])); }
+
+function toast(p_text, p_bad = false) {
+    const t = $("#toast");
+    t.textContent = p_text;
+    t.className = p_bad ? "show bad" : "show";
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => { t.className = ""; }, p_bad ? 6000 : 2500);
+}
+
+// --- mutations: every edit goes through mutate (undo, dirty, auto check) ---
+
+function mutate(p_fn, p_structural = false) {
+    const before = JSON.stringify(S.data);
+    p_fn();
+    if (JSON.stringify(S.data) === before) return;
+    S.undo.push(before);
+    if (S.undo.length > UNDO_MAX) S.undo.shift();
+    S.redo = [];
+    changed(p_structural);
+}
+
+function changed(p_structural) {
+    render_header();
+    render_sidebar();
+    if (p_structural) {
+        render_editor();
+        render_tools();
+    } else for (const [e, fn] of S.titles) e.textContent = fn();
+    schedule_check();
+}
+
+function undo(p_from, p_to) {
+    if (!p_from.length) return;
+    p_to.push(JSON.stringify(S.data));
+    S.data = JSON.parse(p_from.pop());
+    clamp_selection();
+    changed(true);
+}
+
+function clamp_selection() {
+    const list = S.data[S.sel.section];
+    if (S.sel.section !== "table" && (!Array.isArray(list) || !list.length)) S.sel = { section: "table" };
+    else if (Array.isArray(list)) S.sel.index = Math.min(S.sel.index, list.length - 1);
+}
+
+// --- header: table, save, undo ---
+
+async function load_tables(p_want) {
+    const r = await api("/api/tables");
+    S.presets = r.presets;
+    S.tables = r.tables;
+    S.sites = r.sites;
+    S.match.site ||= r.sites[0] || "";
+    $("#drift").hidden = !r.drift.length;
+    $("#drift").textContent = r.drift.length ? `web/schema.js is out of step with src/climate_parse.cpp (use the JSON views for these): ${r.drift.join("; ")}` : "";
+    const sel = $("#table");
+    sel.innerHTML = "";
+    for (const t of r.tables) sel.append(el("option", { value: t.path }, t.path + (t.generated ? "  (generated by world.py)" : "")));
+    const want = r.tables.some((t) => t.path === p_want) ? p_want : r.tables.find((t) => t.path === "world.json")?.path || r.tables[0]?.path;
+    if (want) await open_table(want, true);
+    render_launch();
+}
+
+// p_force: no question about unsaved changes (the caller asked, or the file changed under them).
+async function open_table(p_path, p_force = false) {
+    if (!p_force && !confirm_discard()) { $("#table").value = S.path; return; }
+    const r = await api(`/api/table?path=${encodeURIComponent(p_path)}`);
+    set_table(r.path, r.data, JSON.stringify(r.data));
+    $("#table").value = p_path;
+}
+
+// The table being edited, its saved text ("" for a new one): undo, selection and the preview start over.
+function set_table(p_path, p_data, p_saved) {
+    S.path = p_path;
+    S.data = p_data;
+    S.saved = p_saved;
+    S.undo = [];
+    S.redo = [];
+    S.result = null;
+    S.good = null;
+    S.sel = Array.isArray(p_data.biomes) && p_data.biomes.length ? { section: "biomes", index: 0 } : { section: "table" };
+    store_prefs();
+    changed(true);
+    render_result();
+}
+
+async function save(p_path = S.path) {
+    if (S.tables.find((t) => t.path === p_path.replace(/^(\.\/)+/, ""))?.generated && dirty()
+        && !confirm(`${p_path} is generated by tools/landforms/world.py: the next recompose overwrites it (edit the landform tables to keep a change). Save anyway?`)) return;
+    try {
+        const r = await api("/api/save", { path: p_path, data: S.data });
+        S.saved = JSON.stringify(S.data);
+        if (r.path !== S.path) { S.path = r.path; await load_tables(r.path); }
+        render_header();
+        toast(r.unchanged ? `${r.saved}: no change` : `saved ${r.saved}`);
+    } catch (e) { toast(e.message, true); }
+}
+
+function save_as() {
+    const p = prompt("Save as (a path under adapter/godot/project/climate/, .json):", S.path.replace(/\.json$/, "_copy.json"));
+    if (p) save(with_json(p));
+}
+
+function new_table() {
+    if (!confirm_discard()) return;
+    const p = prompt("New table (a path under adapter/godot/project/climate/, .json):", "my_world.json");
+    if (!p) return;
+    set_table(with_json(p), {
+        comment: "",
+        fields: [{ name: "temperature", seed: 1, bands: [{ wavelength_m: 104857.6, amp: 1 }] }],
+        biomes: [
+            { name: "hills", where: [{ field: "temperature", min: 0, fade: 0.1 }], amp: [{ field: "ground", from_m: 100, to_m: 26214.4, x: 2 }], surface: { flat: "#5c8040", steep: "#5c5040" }, debug_color: "#40a040" },
+            { name: "plain", amp: [{ field: "ground", from_m: 100, to_m: 26214.4, x: 0.3 }], surface: { flat: "#8a8a58", steep: "#6a5444" }, debug_color: "#c0b060" },
+        ],
+    }, "");
+}
+
+function render_header() {
+    const d = dirty();
+    $("#dirty").textContent = d ? "unsaved" : "saved";
+    $("#dirty").className = d ? "badge warn" : "badge";
+    $("#undo").disabled = !S.undo.length;
+    $("#redo").disabled = !S.redo.length;
+    document.title = `${d ? "* " : ""}${S.path || ""} · Biome lab`;
+}
+
+// --- sidebar: the table's sections ---
+
+function render_sidebar() {
+    const nav = $("#sections");
+    nav.innerHTML = "";
+    nav.append(el("button", { class: "item" + (S.sel.section === "table" ? " sel" : ""), onclick: () => select({ section: "table" }) }, "Table (comment, JSON)"));
+    for (const sec of SECTIONS) {
+        const list = S.data[sec.key];
+        const type = TYPES[sec.type];
+        nav.append(el("div", { class: "sechead" }, el("span", {}, sec.label, el("small", {}, Array.isArray(list) ? ` ${list.length}` : "")),
+            el("button", { class: "add", title: `Add a ${type.label.toLowerCase()}`, onclick: () => add_item(sec) }, "+")));
+        if (!Array.isArray(list)) continue;
+        list.forEach((item, i) => {
+            const isdefault = sec.key === "biomes" && i === list.length - 1;
+            const color = type.color?.(item);
+            nav.append(el("button", { class: "item" + (S.sel.section === sec.key && S.sel.index === i ? " sel" : ""), onclick: () => select({ section: sec.key, index: i }) },
+                color ? el("span", { class: "chip", style: `background:${color}` }) : null,
+                el("span", { class: "name" }, type.title?.(item) || `#${i}`),
+                isdefault ? el("small", { class: "tag" }, "default") : null));
+        });
+    }
+}
+
+function select(p_sel) {
+    S.sel = p_sel;
+    S.raw = false;
+    render_sidebar();
+    render_editor();
+}
+
+function add_item(p_sec) {
+    mutate(() => {
+        if (!Array.isArray(S.data[p_sec.key])) S.data[p_sec.key] = [];
+        const list = S.data[p_sec.key];
+        const item = TYPES[p_sec.type].template();
+        // A new biome goes before the default one (the last).
+        const at = p_sec.key === "biomes" && list.length ? list.length - 1 : list.length;
+        list.splice(at, 0, item);
+        S.sel = { section: p_sec.key, index: at };
+    }, true);
+}
+
+// --- editor ---
+
+function render_editor() {
+    const root = $("#editor");
+    const scroll = root.scrollTop;
+    root.innerHTML = "";
+    S.titles = [];
+    if (S.sel.section === "table") {
+        root.append(el("h2", {}, S.path));
+        root.append(help_line("The whole table. Sections are edited from the sidebar; anything else (or everything) here as JSON."));
+        root.append(object_editor(S.data, "table", "table", { only: ["comment"] }));
+        root.append(el("h3", {}, "Table JSON"));
+        root.append(json_editor(S.data, (v) => { S.data = v; clamp_selection(); }, 30));
+        root.scrollTop = scroll;
+        return;
+    }
+    const sec = SECTIONS.find((s) => s.key === S.sel.section);
+    const list = S.data[sec.key];
+    const i = S.sel.index;
+    const item = list[i];
+    const type = TYPES[sec.type];
+    const title = el("h2", {}, "");
+    const tf = () => `${type.label} · ${type.title?.(item) ?? "#" + i}`;
+    title.textContent = tf();
+    S.titles.push([title, tf]);
+    const move = (d) => mutate(() => { move_item(list, i, d); S.sel.index = i + d; }, true);
+    root.append(el("div", { class: "toolbar" }, title,
+        el("button", { disabled: i === 0, onclick: () => move(-1), title: "Earlier (a biome: higher priority)" }, "↑"),
+        el("button", { disabled: i === list.length - 1, onclick: () => move(1), title: "Later" }, "↓"),
+        el("button", { onclick: () => mutate(() => { dup_item(list, i); S.sel.index = i + 1; }, true), title: "Duplicate" }, "Duplicate"),
+        el("button", { class: S.raw ? "on" : "", onclick: () => { S.raw = !S.raw; render_editor(); } }, "JSON"),
+        el("button", { class: "danger", onclick: () => { if (confirm(`Delete ${tf()}?`)) mutate(() => { list.splice(i, 1); clamp_selection(); }, true); } }, "Delete")));
+    if (sec.key === "biomes") {
+        root.append(help_line(i === list.length - 1
+            ? "The default biome: it takes whatever the biomes above leave, so it has no \"where\"."
+            : "Priority layering: this biome takes its region of what the biomes above it left (w = rest x region)."));
+    }
+    if (S.raw) root.append(json_editor(item, (v) => { list[i] = v; }, 30));
+    else root.append(object_editor(item, sec.type, `${sec.key}.${i}`));
+    root.scrollTop = scroll;
+}
+
+function help_line(p_text) { return el("p", { class: "help" }, p_text); }
+
+// An object of a schema type: a row per key it has, in its own order, then the keys it could take.
+function object_editor(p_obj, p_type, p_path, p_opts = {}) {
+    const type = TYPES[p_type];
+    const box = el("div", { class: "object" });
+    for (const key of Object.keys(p_obj)) {
+        if (p_opts.only && !p_opts.only.includes(key)) continue;
+        box.append(key_row(p_obj, key, type.keys[key], type, `${p_path}.${key}`));
+    }
+    if (p_opts.only) {
+        for (const key of p_opts.only) if (!(key in p_obj)) box.append(add_key_button(p_obj, key, type.keys[key]));
+        return box;
+    }
+    const absent = Object.keys(type.keys).filter((k) => !(k in p_obj));
+    const pick = el("select", { class: "addkey", onchange: (e) => {
+        const k = e.target.value;
+        if (!k) return;
+        if (k === "\u0000custom") {
+            const name = prompt("Key name (the engine refuses keys it doesn't know):");
+            if (name) mutate(() => { p_obj[name] = null; }, true);
+        } else mutate(() => { p_obj[k] = default_value(type.keys[k]); }, true);
+    } }, el("option", { value: "" }, "+ key…"), absent.map((k) => el("option", { value: k, title: type.keys[k].help || "" }, k)), el("option", { value: "\u0000custom" }, "other key…"));
+    box.append(el("div", { class: "row addrow" }, pick));
+    return box;
+}
+
+function add_key_button(p_obj, p_key, p_spec) {
+    return el("div", { class: "row" }, el("button", { onclick: () => mutate(() => { p_obj[p_key] = default_value(p_spec); }, true) }, `+ ${p_key}`));
+}
+
+function key_row(p_obj, p_key, p_spec, p_type, p_path) {
+    const required = p_type.required?.includes(p_key);
+    const spec = p_spec || { kind: "json", help: "Not in the format: the engine will refuse it unless it's a comment." };
+    const label = el("label", { title: spec.help || "", class: p_spec ? "" : "unknown" }, p_key, required ? el("span", { class: "req" }, "*") : null);
+    const remove = el("button", { class: "x", title: `Remove ${p_key}`, onclick: () => mutate(() => { delete p_obj[p_key]; }, true) }, "×");
+    const block = spec.kind === "list" || spec.kind === "object" || spec.kind === "points" || spec.kind === "text" || spec.kind === "json";
+    const control = value_editor(p_obj, p_key, spec, p_path);
+    const row = el("div", { class: block ? "row block" : "row" }, label, control, remove);
+    if (spec.help && block) row.insertBefore(help_line(spec.help), control);
+    return row;
+}
+
+function set(p_obj, p_key, p_value) { mutate(() => { p_obj[p_key] = p_value; }); }
+
+function value_editor(p_obj, p_key, p_spec, p_path) {
+    const v = p_obj[p_key];
+    switch (p_spec.kind) {
+        case "string": case "ref":
+            if (typeof v !== "string") return json_input(p_obj, p_key);
+            return text_input(v, (x) => set(p_obj, p_key, x), p_spec.kind === "ref" ? names(p_spec.of) : null);
+        case "text":
+            if (typeof v !== "string") return json_input(p_obj, p_key);
+            return el("textarea", { rows: Math.min(8, 2 + Math.floor(v.length / 90)), onchange: (e) => set(p_obj, p_key, e.target.value) }, v);
+        case "number": case "int":
+            if (typeof v !== "number") return json_input(p_obj, p_key);
+            return number_input(v, (x) => set(p_obj, p_key, x), p_spec);
+        case "bool":
+            return el("input", { type: "checkbox", checked: !!v, onchange: (e) => set(p_obj, p_key, e.target.checked) });
+        case "enum": {
+            if (typeof v !== "string") return json_input(p_obj, p_key);
+            const values = p_spec.values.includes(v) ? p_spec.values : [v, ...p_spec.values];
+            return el("select", { onchange: (e) => set(p_obj, p_key, e.target.value) }, values.map((x) => el("option", { value: x, selected: x === v }, x)));
+        }
+        case "color": return color_input(p_obj, p_key);
+        case "refs": case "numbers": {
+            if (!Array.isArray(v)) return json_input(p_obj, p_key);
+            const span = el("span", { class: "multi" });
+            v.forEach((x, i) => {
+                const write = (y) => mutate(() => { p_obj[p_key][i] = y; });
+                span.append(p_spec.kind === "refs" ? text_input(String(x), write, names(p_spec.of)) : number_input(Number(x), write, {}));
+            });
+            return span;
+        }
+        case "points": return Array.isArray(v) ? curve_editor(v) : json_input(p_obj, p_key);
+        case "list": return Array.isArray(v) ? list_editor(v, p_spec.of, p_path) : json_input(p_obj, p_key);
+        case "object":
+            return v && typeof v === "object" && !Array.isArray(v) ? object_editor(v, p_spec.of, p_path) : json_input(p_obj, p_key);
+        default: return json_input(p_obj, p_key);
+    }
+}
+
+let datalist_id = 0;
+function text_input(p_value, p_write, p_options) {
+    const input = el("input", { type: "text", value: p_value, onchange: (e) => p_write(e.target.value) });
+    if (!p_options) return input;
+    const id = `dl${datalist_id++}`;
+    input.setAttribute("list", id);
+    if (p_value && !p_options.includes(p_value)) input.classList.add("bad");
+    return el("span", { class: "ref" }, input, el("datalist", { id }, p_options.map((o) => el("option", { value: o }))));
+}
+
+function number_input(p_value, p_write, p_spec) {
+    const hint = el("span", { class: "hint" });
+    const show = (x) => { hint.textContent = p_spec.metres ? octave_hint(x) : ""; };
+    const input = el("input", { type: "number", step: "any", value: p_value, onchange: (e) => {
+        const x = p_spec.kind === "int" ? parseInt(e.target.value, 10) : parseFloat(e.target.value);
+        if (Number.isFinite(x)) { p_write(x); show(x); } else e.target.classList.add("bad");
+    } });
+    show(p_value);
+    return el("span", { class: "num" }, input, hint);
+}
+
+// The octave a distance rounds to at the preview's voxel size (the format rounds every distance to 2^k voxels).
+function octave_hint(p_m) {
+    const voxel = parseFloat(S.params.voxel) || 0.05;
+    if (!(p_m > 0)) return "";
+    const k = Math.round(Math.log2(p_m / voxel));
+    const snapped = voxel * 2 ** k;
+    const fmt = snapped >= 1000 ? `${+(snapped / 1000).toPrecision(4)} km` : `${+snapped.toPrecision(4)} m`;
+    return Math.abs(snapped - p_m) / p_m > 0.001 ? `k=${k} → ${fmt}` : `k=${k}`;
+}
+
+function color_input(p_obj, p_key) {
+    const v = String(p_obj[p_key]);
+    const valid = /^#[0-9a-fA-F]{6}$/.test(v);
+    const text = el("input", { type: "text", value: v, class: "colortext" + (valid ? "" : " bad"), onchange: (e) => set(p_obj, p_key, e.target.value) });
+    const pick = el("input", { type: "color", value: valid ? v : "#808080", oninput: (e) => { text.value = e.target.value; }, onchange: (e) => set(p_obj, p_key, e.target.value) });
+    return el("span", { class: "color" }, pick, text);
+}
+
+function json_input(p_obj, p_key) {
+    return json_editor(p_obj[p_key], (v) => { p_obj[p_key] = v; }, 3);
+}
+
+// Any value as JSON text, applied when it parses (structural: the forms around it are rebuilt).
+function json_editor(p_value, p_apply, p_rows) {
+    const text = JSON.stringify(p_value, null, 1);
+    const area = el("textarea", { class: "json", rows: Math.min(p_rows, text.split("\n").length + 1), spellcheck: "false" }, text);
+    const status = el("span", { class: "hint" });
+    area.addEventListener("input", () => {
+        try { JSON.parse(area.value); area.classList.remove("bad"); status.textContent = ""; } catch (e) { area.classList.add("bad"); status.textContent = e.message; }
+    });
+    area.addEventListener("change", () => {
+        let v;
+        try { v = JSON.parse(area.value); } catch { return; }
+        mutate(() => p_apply(v), true);
+    });
+    return el("div", { class: "jsonbox" }, area, status);
+}
+
+function list_editor(p_list, p_type, p_path) {
+    const type = TYPES[p_type];
+    const box = el("div", { class: "list" });
+    p_list.forEach((item, i) => {
+        const path = `${p_path}.${i}`;
+        const isobj = item && typeof item === "object" && !Array.isArray(item);
+        const tf = () => (isobj && type.title ? type.title(item) : JSON.stringify(item)) ?? `#${i}`;
+        const summary = el("span", { class: "title" }, tf());
+        S.titles.push([summary, tf]);
+        const open = S.open.has(path) ? S.open.get(path) : p_list.length <= 4;
+        // A card's buttons sit in its summary: they must not toggle it.
+        const tool = (p_text, p_title, p_fn, p_attrs = {}) => el("button", { title: p_title, ...p_attrs, onclick: (e) => { e.preventDefault(); mutate(p_fn, true); } }, p_text);
+        const card = el("details", { class: "card", open, ontoggle: (e) => S.open.set(path, e.target.open) },
+            el("summary", {}, summary, el("span", { class: "cardtools" },
+                tool("↑", "Earlier", () => move_item(p_list, i, -1), { disabled: i === 0 }),
+                tool("↓", "Later", () => move_item(p_list, i, 1), { disabled: i === p_list.length - 1 }),
+                tool("⧉", "Duplicate", () => dup_item(p_list, i)),
+                tool("×", "Remove", () => p_list.splice(i, 1), { class: "x" }))),
+            isobj ? object_editor(item, p_type, path) : json_editor(item, (v) => { p_list[i] = v; }, 4));
+        box.append(card);
+    });
+    box.append(el("button", { class: "addlist", onclick: () => mutate(() => { p_list.push(type.template()); S.open.set(`${p_path}.${p_list.length - 1}`, true); }, true) }, `+ ${type.label.toLowerCase()}`));
+    return box;
+}
+
+// A height term's curve: its points and a plot of it.
+function curve_editor(p_points) {
+    const W = 260, H = 110;
+    const box = el("div", { class: "curve" });
+    const ok = p_points.every((p) => Array.isArray(p) && p.length === 2);
+    if (ok && p_points.length >= 2) {
+        const xs = p_points.map((p) => p[0]), ys = p_points.map((p) => p[1]);
+        const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys, 0), y1 = Math.max(...ys, 0);
+        const px = (x) => 6 + (W - 12) * (x - x0) / (x1 - x0 || 1), py = (y) => H - 6 - (H - 12) * (y - y0) / (y1 - y0 || 1);
+        const svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><line x1="0" x2="${W}" y1="${py(0)}" y2="${py(0)}" class="axis"/>` +
+            `<polyline points="${p_points.map((p) => `${px(p[0])},${py(p[1])}`).join(" ")}" class="line"/>` +
+            p_points.map((p) => `<circle cx="${px(p[0])}" cy="${py(p[1])}" r="2.5"/>`).join("") + "</svg>";
+        const plot = el("div", { class: "plot" });
+        plot.innerHTML = svg;
+        box.append(plot);
+    }
+    const table = el("div", { class: "points" });
+    p_points.forEach((p, i) => {
+        if (!Array.isArray(p)) return;
+        table.append(el("span", { class: "pt" },
+            number_input(p[0], (x) => mutate(() => { p_points[i][0] = x; }, true), {}),
+            number_input(p[1], (y) => mutate(() => { p_points[i][1] = y; }, true), {}),
+            el("button", { class: "x", onclick: () => mutate(() => { p_points.splice(i, 1); }, true) }, "×")));
+    });
+    const last = p_points[p_points.length - 1];
+    table.append(el("button", { class: "addlist", onclick: () => mutate(() => { p_points.push(Array.isArray(last) ? [last[0] + 0.1, last[1]] : [0, 0]); }, true) }, "+ point"));
+    box.append(table);
+    return box;
+}
+
+// --- preview: climate report jobs ---
+
+function schedule_check() {
+    clearTimeout(S.check_timer);
+    if (S.auto) S.check_timer = setTimeout(() => run_report("check"), CHECK_DELAY_MS);
+}
+
+async function run_report(p_kind) {
+    clearTimeout(S.check_timer);
+    const params = { ...S.params };
+    if (p_kind === "check") params.size = String(Math.min(CHECK_SIZE, parseInt(params.size, 10) || CHECK_SIZE));
+    await run_job(`/api/${p_kind}`, { path: S.path, data: S.data, params }, (j) => {
+        if (!j.result) return;
+        S.result = j.result;
+        if (j.result.ok && j.result.images.length) S.good = j.result;
+        render_result();
+    });
+}
+
+async function run_job(p_endpoint, p_body, p_done) {
+    try {
+        await follow(await api(p_endpoint, p_body), p_done);
+    } catch (e) { toast(e.message, true); }
+}
+
+// Polls a job until it's done, showing its state and output while it is the latest. A report a newer job superseded
+// is dropped (its table is older); a tool job still finishes (it reloads the table it rewrote).
+async function follow(p_job, p_done) {
+    S.job = p_job;
+    const latest = () => S.job.id === p_job.id;
+    let j = p_job;
+    while (j.state === "queued" || j.state === "running") {
+        if (latest()) render_job(j);
+        await new Promise((r) => setTimeout(r, 400));
+        j = await api(`/api/job?id=${j.id}`);
+    }
+    if (latest()) render_job(j);
+    if (j.state === "done" && (latest() || !(j.kind === "check" || j.kind === "preview"))) p_done?.(j);
+}
+
+function render_job(p_job) {
+    const s = $("#jobstate");
+    s.textContent = `${p_job.kind}: ${p_job.state}${p_job.code !== null ? ` (exit ${p_job.code})` : ""}`;
+    s.className = "badge" + (p_job.state === "running" || p_job.state === "queued" ? " busy" : p_job.code === 0 ? "" : " warn");
+    $("#joblog").textContent = `$ ${p_job.cmd}\n${p_job.output}`;
+    $("#cancel").hidden = p_job.state !== "running";
+}
+
+// The verdict of the last run, the maps of the last accepted one (a refused table keeps the previous maps, marked stale).
+function render_result() {
+    const r = S.result;
+    const err = $("#error");
+    const imgs = $("#images");
+    const report = $("#report");
+    imgs.innerHTML = "";
+    report.innerHTML = "";
+    err.hidden = !r?.error;
+    err.textContent = r?.error ? `${r.refused ? "Refused by the engine" : "The report failed (not the table)"}: ${r.error}` : "";
+    const g = S.good;
+    if (!g) return;
+    if (!g.images.includes(S.image)) S.image = g.images.includes("biomes_pick.png") ? "biomes_pick.png" : g.images[0];
+    const tabs = el("div", { class: "tabs" }, g.images.map((name) => el("button", { class: name === S.image ? "on" : "", onclick: () => { S.image = name; render_result(); } }, name.replace(/\.png$/, ""))));
+    const img = el("img", { src: `/api/run?run=${encodeURIComponent(g.run)}&name=${encodeURIComponent(S.image)}`, alt: S.image, title: "Click: spawn the viewer above this point", class: g === r ? "" : "stale" });
+    img.addEventListener("click", (e) => pick_spawn(e, img));
+    imgs.append(tabs, el("div", { class: "imgwrap" }, img));
+    if (S.image.startsWith("biomes_")) imgs.append(legend(g.heights?.biomes || []));
+    imgs.append(help_line(`${g === r ? "" : "stale: the last accepted table · "}run ${g.run} · click the map to set the viewer's spawn`));
+    report.append(markdown(g.report));
+}
+
+// The biome maps' colours: each biome's debug_color in the table being edited.
+function legend(p_names) {
+    const colors = new Map((S.data.biomes || []).map((b) => [b.name, b.debug_color]));
+    return el("div", { class: "legend" }, p_names.map((n) => el("span", {}, el("span", { class: "chip", style: `background:${colors.get(n) || "transparent"}` }), n)));
+}
+
+// A click on a map: the tangent metres of that pixel (heights.json: the slice's size, spacing and centre; x right, z down).
+function pick_spawn(p_event, p_img) {
+    const h = S.good?.heights;
+    if (!h) { toast("this run has no heights.json: no map coordinates", true); return; }
+    const rect = p_img.getBoundingClientRect();
+    const fx = (p_event.clientX - rect.left) / rect.width, fz = (p_event.clientY - rect.top) / rect.height;
+    const span = h.n * h.spacing_m;
+    set_spawn(Math.round(h.center_m[0] + (fx - 0.5) * span), Math.round(h.center_m[1] + (fz - 0.5) * span));
+}
+
+function set_spawn(p_u, p_v) {
+    S.launch.spawn = `${p_u},${p_v}`;
+    store_prefs();
+    render_launch();
+    toast(`spawn ${S.launch.spawn}`);
+}
+
+// The report's Markdown (headings, tables, paragraphs, code); `--spawn=U,V` becomes a button for the launcher.
+function markdown(p_text) {
+    const root = el("div", { class: "md" });
+    const inline = (s) => {
+        const span = el("span");
+        for (const part of s.split(/(`[^`]*`)/)) {
+            if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
+                const code = part.slice(1, -1);
+                const m = code.match(/^--spawn=(-?\d+),(-?\d+)$/);
+                span.append(m ? el("button", { class: "spawn", title: "Spawn the viewer here", onclick: () => set_spawn(m[1], m[2]) }, code) : el("code", {}, code));
+            } else span.append(part.replace(/\*\*/g, ""));
+        }
+        return span;
+    };
+    const lines = p_text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^#+ /.test(line)) root.append(el(`h${Math.min(6, line.match(/^#+/)[0].length + 2)}`, {}, inline(line.replace(/^#+ /, ""))));
+        else if (line.startsWith("|")) {
+            const table = el("table");
+            for (; i < lines.length && lines[i].startsWith("|"); i++) {
+                if (/^\|[\s|:-]+\|$/.test(lines[i])) continue;
+                const cells = lines[i].slice(1, -1).split("|").map((c) => c.trim());
+                table.append(el("tr", {}, cells.map((c) => el(table.childElementCount ? "td" : "th", {}, inline(c)))));
+            }
+            i--;
+            root.append(el("div", { class: "tablewrap" }, table));
+        } else if (line.trim()) root.append(el("p", {}, inline(line)));
+    }
+    return root;
+}
+
+function render_params() {
+    const box = $("#params");
+    box.innerHTML = "";
+    const fields = [["extent_km", "extent km"], ["size", "size px"], ["lods", "LODs"], ["voxel", "voxel m"], ["center", "center U,V"], ["lattice", "lattice m"], ["surface", "surface 0|1"]];
+    for (const [k, label] of fields) {
+        box.append(text_field(S.params, k, label, { placeholder: k === "lattice" ? "auto" : "" }, k === "voxel" ? render_editor : null));
+    }
+}
+
+// --- launcher and tools ---
+
+function render_launch() {
+    const L = S.launch;
+    const box = $("#launch");
+    box.innerHTML = "";
+    box.append(
+        select_field(L, "preset", "preset", [["", "(none)"], ...S.presets.map((p) => [p, p])]),
+        text_field(L, "spawn", "spawn U,V", { placeholder: "scene's" }),
+        text_field(L, "altitude", "altitude m"),
+        select_field(L, "view", "view", [["0", "shaded"], ["12", "biome colours (B)"], ["9", "material ids"]]),
+        text_field(L, "extra", "game args", { placeholder: "--lods=25 --trees=0 ..." }),
+        text_field(L, "engine_args", "engine args"),
+        text_field(L, "scene", "scene", { placeholder: "main scene" }),
+        el("button", { class: "primary", onclick: launch }, "Fly it"),
+        help_line("Opens a Godot window on a copy of the table as it is now (unsaved edits included). Arguments after the preset override it."));
+}
+
+function game_args() {
+    const L = S.launch;
+    const a = [];
+    if (L.preset) a.push(`--preset=${L.preset}`);
+    if (L.spawn) a.push(`--spawn=${L.spawn}`);
+    if (L.altitude) a.push(`--altitude=${L.altitude}`);
+    if (L.view && L.view !== "0") a.push(`--view=${L.view}`);
+    if (S.params.lods) a.push(`--lods=${S.params.lods}`);
+    if (S.params.voxel) a.push(`--voxel=${S.params.voxel}`);
+    if (L.extra) a.push(L.extra);
+    return a.join(" ");
+}
+
+async function launch() {
+    try {
+        const r = await api("/api/launch", { path: S.path, data: S.data, scene: S.launch.scene, engine_args: S.launch.engine_args, game_args: game_args() });
+        $("#launched").textContent = `pid ${r.pid} · log ${r.log}\n$ ${r.cmd}`;
+        toast("viewer launched");
+    } catch (e) { toast(e.message, true); }
+}
+
+function render_tools() {
+    const box = $("#tools");
+    box.innerHTML = "";
+    const m = S.match;
+    const biomes = (S.data?.biomes || []).map((b) => b.name);
+    box.append(
+        el("div", { class: "tool" }, el("b", {}, "Recompose world.json"),
+            help_line("tools/landforms/world.py: every landform table behind its climate region, into climate/world.json (overwritten)."),
+            el("button", { onclick: () => {
+                if (!confirm("Overwrite climate/world.json from the landform tables?")) return;
+                run_job("/api/tool", { tool: "world" }, (j) => { if (j.code === 0 && S.path === "world.json" && !dirty()) open_table("world.json", true); toast(j.code === 0 ? "world.json recomposed" : "world.py failed", j.code !== 0); });
+            } }, "Run world.py")),
+        el("div", { class: "tool" }, el("b", {}, "Fit to a real site"),
+            help_line("tools/landforms/match.py: compares this table with a real heightmap (sites.json, fetch_dem.py first) and fits its multipliers. Rewrites the saved table."),
+            select_field(m, "site", "site", S.sites.map((s) => [s, s])),
+            text_field(m.flags, "fit", "fit rounds"),
+            select_field(m.flags, "texture", "texture biome", [["", "(whole table)"], ...biomes.map((b) => [b, b])]),
+            text_field(m.flags, "center", "center U,V"),
+            el("label", { class: "check" }, el("input", { type: "checkbox", checked: m.hypso, onchange: (e) => { m.hypso = e.target.checked; } }), "refit the height remap (--hypso)"),
+            el("button", { onclick: async () => {
+                if (dirty()) { if (!confirm("match.py reads the saved table: save it first?")) return; await save(); }
+                run_job("/api/tool", { tool: "match", path: S.path, ...m }, async (j) => { toast(j.code === 0 ? "fitted: table reloaded" : "match.py failed", j.code !== 0); if (j.code === 0) await open_table(S.path, true); });
+            } }, "Run match.py")));
+}
+
+// --- wiring ---
+
+function main() {
+    const want = load_prefs();
+    $("#table").addEventListener("change", (e) => open_table(e.target.value));
+    $("#save").addEventListener("click", () => save());
+    $("#saveas").addEventListener("click", save_as);
+    $("#new").addEventListener("click", new_table);
+    $("#revert").addEventListener("click", () => { if (confirm("Reload the table from disk?")) open_table(S.path, true); });
+    $("#undo").addEventListener("click", () => undo(S.undo, S.redo));
+    $("#redo").addEventListener("click", () => undo(S.redo, S.undo));
+    $("#check").addEventListener("click", () => run_report("check"));
+    $("#preview").addEventListener("click", () => run_report("preview"));
+    $("#cancel").addEventListener("click", () => S.job && api("/api/cancel", { id: S.job.id }));
+    const auto = $("#auto");
+    auto.checked = S.auto;
+    auto.addEventListener("change", () => { S.auto = auto.checked; store_prefs(); });
+    document.addEventListener("keydown", (e) => {
+        const mod = e.ctrlKey || e.metaKey;
+        if (mod && e.key === "s") { e.preventDefault(); save(); }
+        if (mod && e.key === "Enter") { e.preventDefault(); run_report("preview"); }
+        const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+        if (mod && !typing && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? undo(S.redo, S.undo) : undo(S.undo, S.redo); }
+    });
+    window.addEventListener("beforeunload", (e) => { if (dirty()) e.preventDefault(); });
+    render_params();
+    load_tables(want).catch((e) => toast(e.message, true));
+}
+
+main();
