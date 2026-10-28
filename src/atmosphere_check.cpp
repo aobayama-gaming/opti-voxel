@@ -3,6 +3,7 @@
 #include "atmosphere.hpp"
 #include "gpu_shader.hpp"
 
+#include "ov/half.hpp"
 #include "ov/math.hpp"
 
 #include <cmath>
@@ -297,35 +298,6 @@ struct Ref {
     }
 };
 
-float half_to_float(uint16_t p_h) {
-    const uint32_t sign = uint32_t(p_h >> 15) << 31;
-    const uint32_t exp = (p_h >> 10) & 31u;
-    const uint32_t man = p_h & 1023u;
-    uint32_t bits;
-    if (exp == 0) {
-        const float v = std::ldexp(float(man), -24);
-        std::memcpy(&bits, &v, 4);
-        bits |= sign;
-    } else if (exp == 31) {
-        bits = sign | 0x7F800000u | (man << 13);
-    } else {
-        bits = sign | ((exp + 112u) << 23) | (man << 13);
-    }
-    float f;
-    std::memcpy(&f, &bits, 4);
-    return f;
-}
-
-std::vector<float> texels(const ov::bytes &p_data) {
-    std::vector<float> out(p_data.size() / 2);
-    for (size_t i = 0; i < out.size(); i++) {
-        uint16_t h;
-        std::memcpy(&h, p_data.data() + i * 2, 2);
-        out[i] = half_to_float(h);
-    }
-    return out;
-}
-
 double rel_error(double p_gpu, double p_ref, double p_floor) {
     return std::fabs(p_gpu - p_ref) / ov::max(std::fabs(p_ref), p_floor);
 }
@@ -392,8 +364,8 @@ ov::Value run(ov::gpu::Device &p_device) {
         const ov::gpu::BindSet set_vol = p_device.create_bind_set(pipe_vol, { Binding(0, ov::gpu::BufferKind::UNIFORM, block), Binding::storage_image(1, vol), Binding::storage_image(2, ms) });
         p_device.dispatch(pipe_ms, set_ms, nullptr, 0, (Atmosphere::MS_SIZE + 7) / 8, (Atmosphere::MS_SIZE + 7) / 8, 1);
         p_device.dispatch(pipe_vol, set_vol, nullptr, 0, (Atmosphere::VOLUME_W + 7) / 8, (Atmosphere::VOLUME_H + 7) / 8, 1);
-        const std::vector<float> ms_gpu = texels(read(p_device, ms));
-        const std::vector<float> vol_gpu = texels(read(p_device, vol));
+        const std::vector<float> ms_gpu = ov::half_floats(read(p_device, ms));
+        const std::vector<float> vol_gpu = ov::half_floats(read(p_device, vol));
 
         // The table, every texel.
         double ms_worst = 0.0;
@@ -466,7 +438,7 @@ ov::Value run(ov::gpu::Device &p_device) {
         const BaseSurface::Render base = earth_base.render(earth_base.tangent_point(0, 0), vs);
         running->frame(Float3{ 0.0f, 100500.0f, 0.0f }, sun, base);
         p_device.sync();
-        const std::vector<float> vol = texels(read(p_device, running->get_volume()));
+        const std::vector<float> vol = ov::half_floats(read(p_device, running->get_volume()));
         double down_min = 1.0;
         for (int x = 0; x < Atmosphere::VOLUME_W && !vol.empty(); x += 9) { // the cases' columns
             for (int y = 0; y < Atmosphere::VOLUME_H / 2; y += 5) {

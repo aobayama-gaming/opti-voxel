@@ -5,6 +5,7 @@
 #include "atmosphere.hpp"
 #include "chunk_discoverer.hpp"
 #include "chunk_memory.hpp"
+#include "clouds.hpp"
 #include "debug_log.hpp"
 #include "gpu_device.hpp"
 #include "mesh_host.hpp"
@@ -39,9 +40,12 @@ public:
         int terrain_mode = 1;
         // > 0: a planet of this radius (metres) centred on the voxel (0, 0, 0), its +y pole at y = radius (SDFCascade); 0 flat.
         double planet_radius_m = 0.0;
-        // The volumetric atmosphere over the base (Atmosphere), its scale (AtmosphereMedium::for_base: 0 from the base).
+        // The volumetric atmosphere over the base (Atmosphere), its scale (AtmosphereMedium::for_base: 0 from the base);
+        // started only for a host that binds its textures (Hosts::atmosphere_textures), the clouds' likewise.
         bool atmosphere = true;
         double atmosphere_scale = 0.0;
+        // The volumetric clouds in it (Clouds; only with the atmosphere), their layer's scale as the atmosphere's.
+        bool clouds = true;
         int legacy_batch_size = 1024;
         int lod_numbers = 15; // LODs 0 .. lod_numbers - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
         ChunkParam chunk_param; // voxel_size and skirt_depth set by the host; the render origin by start() and recenter()
@@ -97,6 +101,8 @@ public:
         std::function<std::unique_ptr<MeshHost>()> hidden_meshes;
         // The atmosphere's textures for the host's shaders, on the device's thread (Atmosphere::TexturesFn).
         Atmosphere::TexturesFn atmosphere_textures;
+        // The clouds' textures, the same way (Clouds::TexturesFn).
+        Clouds::TexturesFn cloud_textures;
     };
 
     World();
@@ -121,6 +127,10 @@ public:
     void set_sun(const Float3 &p_towards_sun) { sun = p_towards_sun; }
     // The atmosphere (null: off, or before start).
     const Atmosphere *get_atmosphere() const { return atmosphere; }
+    // The clouds (null: off, or before start), and their weather: the cover in [0, 1] and the wind (render metres per
+    // second), from the next frame on.
+    const Clouds *get_clouds() const { return clouds; }
+    void set_cloud_weather(float p_cover, const Float3 &p_wind_mps);
 
     SDFCascade &terrain() { return *sdf; }
     const SDFCascade &terrain() const { return *sdf; }
@@ -198,6 +208,9 @@ private:
     GPUMesher *gpu_mesher = nullptr;
     GPUDirectMesher *direct_mesher = nullptr;
     Atmosphere *atmosphere = nullptr; // deletes itself on the device's thread (destroy)
+    Clouds *clouds = nullptr; // the same; reads the atmosphere's textures, so goes first
+    float cloud_cover = 0.5f;
+    Float3 cloud_wind;
     Float3 sun{ 0.0f, 1.0f, 0.0f };
     MeshValidator *validator = nullptr;
     std::unique_ptr<MeshHost> validator_host;

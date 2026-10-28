@@ -87,6 +87,7 @@ extends Node3D
 ##   --atmosphere=0|1             the volumetric atmosphere over the base (VoxelTerrain.atmosphere, default 1); 0: the
 ##                                physical sky and the environment's fog
 ##   --atmosphere_scale=F         its heights times F, its coefficients over F (default 0: from the base, docs/look.md)
+##   --clouds=0|1                 the volumetric clouds in it (VoxelTerrain.clouds, default 1); 0: the cloud layer
 ##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31; the cascade's octaves reach k = N + 4).
 ##                                The clip planes follow the altitude at every LOD count, as in the player
 ##                                (Presets.clip_planes: far up to the discoverer's load range)
@@ -282,6 +283,8 @@ func _ready() -> void:
 		terrain.atmosphere = args["atmosphere"] == "1"
 	if args.has("atmosphere_scale"):
 		terrain.atmosphere_scale = float(args["atmosphere_scale"])
+	if args.has("clouds"):
+		terrain.clouds = args["clouds"] == "1"
 	terrain.terrain_mode = terrains[terrain_arg]
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"

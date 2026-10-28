@@ -139,6 +139,8 @@ func _enter_tree() -> void:
 			terrain.atmosphere = a.trim_prefix("--atmosphere=") == "1"
 		if a.begins_with("--atmosphere_scale=") and terrain:
 			terrain.atmosphere_scale = a.trim_prefix("--atmosphere_scale=").to_float()
+		if a.begins_with("--clouds=") and terrain:
+			terrain.clouds = a.trim_prefix("--clouds=") == "1"
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 	if terrain:

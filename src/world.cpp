@@ -149,10 +149,17 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         gpu_mesher->set_trim_indices(config.legacy_trim_indices);
     }
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
-    if (config.atmosphere) {
+    // Only for a host that draws them (binds their textures).
+    if (config.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
         atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
                 hosts.atmosphere_textures);
+        if (config.clouds && hosts.cloud_textures) {
+            clouds = new Clouds();
+            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
+                    hosts.cloud_textures);
+            clouds->set_weather(cloud_cover, cloud_wind);
+        }
     }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
@@ -243,7 +250,11 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
         has_camera = true;
     }
     if (atmosphere && p_camera_pos != nullptr) {
-        atmosphere->frame(*p_camera_pos, sun, base_render());
+        const BaseSurface::Render base = base_render();
+        atmosphere->frame(*p_camera_pos, sun, base);
+        if (clouds) {
+            clouds->frame(*p_camera_pos, sun, base, render_origin_voxel());
+        }
     }
 
     {
@@ -596,6 +607,14 @@ BaseSurface::Render World::base_render() const {
     return sdf->get_base().render(config.chunk_param.origin_voxel(), double(config.chunk_param.voxel_size));
 }
 
+void World::set_cloud_weather(float p_cover, const Float3 &p_wind_mps) {
+    cloud_cover = p_cover;
+    cloud_wind = p_wind_mps;
+    if (clouds) {
+        clouds->set_weather(p_cover, p_wind_mps);
+    }
+}
+
 bool World::recenter(const Float3 &p_camera_pos, Float3 &r_shift) {
     if (!started || !(config.rebase_distance_m > 0.0f)) {
         return false;
@@ -623,6 +642,9 @@ bool World::rebase(const ChunkId &p_origin, Float3 &r_shift) {
         gpu_mesher->set_render_origin(p_origin);
     }
     last_camera = last_camera - r_shift;
+    if (clouds) {
+        clouds->shift(r_shift);
+    }
     rebases++;
     VLOG(1, "World: render origin moved to chunk ", WorldCoord::to_string(p_origin), ", render positions by -",
             ov::format("%.1f, %.1f, %.1f", r_shift.x, r_shift.y, r_shift.z), " m");
@@ -774,6 +796,10 @@ void World::stop() {
     }
     state.loaded_chunk.clear();
 
+    if (clouds) {
+        clouds->destroy(); // deletes itself on the device's thread, before the atmosphere's textures go
+        clouds = nullptr;
+    }
     if (atmosphere) {
         atmosphere->destroy(); // deletes itself on the device's thread
         atmosphere = nullptr;

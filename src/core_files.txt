@@ -161,3 +161,6 @@ src/atmosphere.cpp
 src/atmosphere.hpp
 src/atmosphere_check.cpp
 src/atmosphere_check.hpp
+src/clouds.cpp
+src/clouds.hpp
+src/ov/half.hpp

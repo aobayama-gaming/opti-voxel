@@ -268,17 +268,24 @@ void fragment() {
     } else if (atmo_enabled && debug_view == 0) {
         // Aerial perspective: the air between the camera and the fragment (the camera volume). FOG mixes the lit colour
         // c into its rgb by its a: c (1 - a) + rgb a = c T + S with a = 1 - T, rgb = S / (1 - T).
+        // The clouds in front of the fragment come over it (their light already hazed by the air before them).
         vec3 eye = p - CAMERA_POSITION_WORLD;
         float dist = length(eye);
-        vec4 air = atmo_at(CAMERA_POSITION_WORLD, eye / max(dist, 1e-6), dist);
+        vec3 dir = eye / max(dist, 1e-6);
+        vec4 air = atmo_at(CAMERA_POSITION_WORLD, dir, dist);
+        if (cloud_enabled) {
+            vec4 clouds = cloud_at(CAMERA_POSITION_WORLD, dir, dist);
+            air = vec4(air.rgb * clouds.a + clouds.rgb, air.a * clouds.a);
+        }
         float haze = 1.0 - air.a;
         FOG = vec4(air.rgb * atmo_sun_light / max(haze, 1e-4), haze);
     }
 }
 
 // Lambert (Godot's default diffuse: LIGHT_COLOR carries the PI; the albedo is applied after), with the sun cut by
-// the cloud layer where the fragment's ray to the sun crosses a cloud: the shadow of the cloud the sky shader draws
-// there. The terrain's materials have a roughness of 1, so the specular lobe is left out.
+// the clouds on the fragment's ray to the sun (the volumetric ones' base shape, or the cloud layer's density where the
+// ray crosses it): the shadow of the clouds the sky shader draws. The terrain's materials have a roughness of 1, so the
+// specular lobe is left out.
 void light() {
     vec3 sun = vec3(1.0);
     vec3 to_sun = mat3(INV_VIEW_MATRIX) * LIGHT;
@@ -286,7 +293,9 @@ void light() {
         // The air between the fragment and the sun (red at dusk, none past the base's terminator).
         sun = atmo_transmittance(v_world_pos, to_sun, ATMO_SUN_STEPS);
     }
-    if (LIGHT_IS_DIRECTIONAL && cloud_shadow > 0.0) {
+    if (LIGHT_IS_DIRECTIONAL && cloud_enabled) {
+        sun *= cloud_sun_shadow(v_world_pos);
+    } else if (LIGHT_IS_DIRECTIONAL && cloud_shadow > 0.0) {
         vec3 hit;
         // VERTEX is not readable in light(): the fragment's position comes through v_world_pos.
         vec3 up = base_up(v_world_pos);

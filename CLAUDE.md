@@ -130,7 +130,7 @@ to every change, and a reviewer may reject a PR on any of them.
 | `docs/instance-stream.md` | scatter sources, keys, the stream and its wiring | `cell_scatter*`, `scatter_source*`, `instance_stream*` |
 | `docs/trees.md` | trees, moment blobs (far field), biome features (lava lakes, floating islands) | `tree_archetype*`, `moment_layers*`, `biome_features*` |
 | `docs/materials.md` | per-chunk palettes, biome ground materials | `material_library*`, page shader |
-| `docs/look.md` | sky, fog, clouds, surface detail, wind | scenes, page shader |
+| `docs/look.md` | sky, fog, the atmosphere, volumetric clouds, surface detail, wind | scenes, page shader, `atmosphere*`, `clouds*` |
 | `docs/climate.md` | climate fields and biomes, shaped bands, stretched octaves, regions | `climate*`, `cascade_shaped_glsl*` |
 | `docs/landforms.md` | landform tables and matching real heightmaps | `adapter/godot/project/climate/landforms/`, `tools/landforms/` |
 | `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `local_points_gpu*`, `chunk_memory*`, `subcube.hpp` |

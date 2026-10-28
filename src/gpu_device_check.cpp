@@ -6,6 +6,8 @@
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 
+#include "ov/half.hpp"
+
 #include <cmath>
 #include <cstring>
 
@@ -213,14 +215,6 @@ void check_textures(ov::gpu::Device &p_device, Report &r_report) {
     }
 }
 
-// An IEEE half float's value (normal numbers and zero: the check's values).
-float half_value(uint16_t p_bits) {
-    const int exponent = (p_bits >> 10) & 31;
-    const float mantissa = float(p_bits & 1023) / 1024.0f;
-    const float value = exponent == 0 ? 0.0f : std::ldexp(1.0f + mantissa, exponent - 15);
-    return (p_bits & 0x8000) ? -value : value;
-}
-
 // The 3D texture (VOLUME_WRITE_GLSL) read back, and sampled through the linear sampler (VOLUME_SAMPLE_GLSL).
 void check_volume(ov::gpu::Device &p_device, Report &r_report) {
     using namespace ov::gpu;
@@ -250,6 +244,7 @@ void check_volume(ov::gpu::Device &p_device, Report &r_report) {
     if (got_texels.size() != texels * 8 || got_samples.size() != texels * 2 * 16) {
         r_report.error = ov::format("volume readback: %d texel and %d sample bytes", int64_t(got_texels.size()), int64_t(got_samples.size()));
     } else {
+        const std::vector<float> texel_values = ov::half_floats(got_texels);
         const auto value = [](uint32_t x, uint32_t y, uint32_t z, int k) {
             const float v[4] = { float(x), float(y), float(z), float(x + 2 * y + 4 * z) };
             return v[k];
@@ -260,14 +255,12 @@ void check_volume(ov::gpu::Device &p_device, Report &r_report) {
                     const uint32_t i = (z * VOLUME_H + y) * VOLUME_W + x;
                     const uint32_t z1 = (z + 1) % VOLUME_D; // the repeat
                     for (int k = 0; k < 4; k++) {
-                        uint16_t bits;
-                        std::memcpy(&bits, got_texels.data() + (i * 4 + k) * 2, 2);
                         float centre, between;
                         std::memcpy(&centre, got_samples.data() + (i * 2 * 4 + k) * 4, 4);
                         std::memcpy(&between, got_samples.data() + ((i * 2 + 1) * 4 + k) * 4, 4);
                         const float want_between = 0.5f * (value(x, y, z, k) + value(x, y, z1, k));
                         r_report.plumbing_checked += 3;
-                        r_report.plumbing_mismatch += half_value(bits) != value(x, y, z, k) ? 1 : 0;
+                        r_report.plumbing_mismatch += texel_values[i * 4 + k] != value(x, y, z, k) ? 1 : 0;
                         r_report.plumbing_mismatch += centre != value(x, y, z, k) ? 1 : 0;
                         r_report.plumbing_mismatch += std::abs(between - want_between) > 1e-2f ? 1 : 0;
                     }
