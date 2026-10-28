@@ -169,7 +169,7 @@ float atmo_slice_end(int s, float range) {
 constexpr const char GLSL_MS_SAMPLER[] = R"glsl(
 vec3 atmo_ms(float h, float sun_height) {
     vec2 uv = vec2(0.5 + 0.5 * sun_height, clamp(h / atmo_top_m, 0.0, 1.0));
-    return textureLod(atmo_multiscatter, uv, 0.0).rgb;
+    return textureLod($MS_TABLE, uv, 0.0).rgb;
 }
 )glsl";
 
@@ -184,7 +184,7 @@ const float ATMO_SUN_DISK = $SUN_DISK;
 vec4 atmo_slice(vec2 uv, int s) {
     float h = float(ATMO_VOLUME_H);
     float y = clamp(uv.y * h, 0.5, h - 0.5);
-    return textureLod(atmo_volume, vec2(uv.x, (float(s) * h + y) / (h * float(ATMO_SLICES))), 0.0);
+    return textureLod($VOLUME, vec2(uv.x, (float(s) * h + y) / (h * float(ATMO_SLICES))), 0.0);
 }
 
 vec2 atmo_uv(vec3 camera, vec3 dir) {
@@ -413,12 +413,12 @@ ov::str pass_head() {
     return ov::replace_all(ov::str(GLSL_PASS_HEAD), { { "$MEMBERS", block_members() } }) + BaseSurface::glsl_render() + ShadeFrame::GLSL_UP_FRAME;
 }
 
-double horizon_m(double p_altitude_m, double p_radius_m) {
+} // namespace
+
+double Atmosphere::horizon_m(double p_altitude_m, double p_radius_m) {
     const double a = ov::max(p_altitude_m, 0.0);
     return std::sqrt(a * (2.0 * p_radius_m + a));
 }
-
-} // namespace
 
 AtmosphereMedium AtmosphereMedium::for_base(double p_radius_m, double p_relief_m, double p_scale) {
     const double tops = RELIEF_TOPS * p_relief_m / double(AtmosphereMedium().top_m);
@@ -448,8 +448,8 @@ ov::str Atmosphere::glsl_march() {
     return substitute(GLSL_MARCH);
 }
 
-ov::str Atmosphere::glsl_lookup() {
-    return substitute(ov::str(GLSL_MS_SAMPLER) + GLSL_MARCH + GLSL_LOOKUP);
+ov::str Atmosphere::glsl_lookup(const ov::str &p_volume, const ov::str &p_multiscatter) {
+    return ov::replace_all(substitute(ov::str(GLSL_MS_SAMPLER) + GLSL_MARCH + GLSL_LOOKUP), { { "$VOLUME", p_volume }, { "$MS_TABLE", p_multiscatter } });
 }
 
 ov::str Atmosphere::glsl_pass_multiscatter() {

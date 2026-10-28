@@ -87,4 +87,59 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
 - **Limits:** the multiple scattering is a sphere's (a strongly curved, non-spherical base would want it per region);
   the volume is rebuilt every frame from the camera, so a fast flight shows its one-frame lag far away; terrain past
   `range_m` takes the range's air; no light shafts through terrain, no eclipses, no spectral rendering. The Dawn viewer
-  has no atmosphere yet. Volumetric clouds are the next step (the same contract and shadow march).
+  has no atmosphere yet. Volumetric clouds below.
+
+## Volumetric clouds
+
+Volumetric clouds (`src/clouds.*`, `ov::Clouds`, owned by `World` with the atmosphere; `--clouds=0|1`, on by default;
+without them, or without the atmosphere, the cloud layer above) made from the base's shape like the atmosphere: a layer
+between two altitudes above the base (`base_altitude`; a ray's part in it from `base_level_span`), every noise read at
+the 3D point in the shading frame (no 2D weather map, which a curved base would tear), so another base kind gets clouds
+that follow it.
+- **Density:** Schneider's (Horizon Zero Dawn's Nubis, SIGGRAPH 2015 / 2017; ported from clayjohn's
+  godot-volumetric-cloud-demo, MIT): a 128^3 Perlin-Worley shape noise (R; G B A Worley fbms) and a 32^3 Worley detail
+  noise, 3D RGBA16F textures made once by a compute pass, read through the device's linear sampler (hardware
+  trilinear). The cover and the cloud type come from the shape noise read at a weather scale (its R past a threshold
+  set by `VoxelSky.cloud_cover`, measured on the noise so the cover is about the fraction of sky covered); the type
+  blends Schneider's stratus / stratocumulus / cumulus height gradients; the detail erodes the base (billows below,
+  wisps above). Periods (Earth): shape ~12 km, detail ~1.5 km, weather ~48 km, each a power of two of voxels (the
+  shading frame), the wind's offset wrapped at the weather's.
+- **Layer** (`CloudLayer::for_base`): Earth's 1.5 to 4 km, extinction 0.04 /m at density 1 (Hillaire 2016's cumulus
+  range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
+  s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is
+  `RELIEF_BOTTOMS` (1.25) reliefs up: the march knows nothing of the terrain, so no cloud may reach into it. Earth's
+  3.3 km relief puts it at 4.1 to 6.6 km; a 2 km planet's at 78 to 208 m.
+- **Light:** Hillaire's (Frostbite, "Physically Based Sky, Atmosphere and Cloud Rendering", SIGGRAPH 2016): the
+  energy-conserving step, a dual-lobe Henyey-Greenstein phase (0.8 forward, -0.3 back, 0.7 / 0.3), the sun through the
+  air (`atmo_transmittance` at the ray's two ends, linear between) and through the cloud (6 steps from 1% of the
+  thickness, growing 1.8 times: Frostbite's progressive shadow samples), Wrenninge's multiple-scattering octaves (3:
+  octave o scatters 0.75^o of the light through 0.12^o of the extinction, its phase 0.5^o as eccentric) and the sky's
+  light from the atmosphere's multiple-scattering table (its isotropic sky radiance at the altitude and the sun's height
+  there), times a bottom-to-top gradient (Frostbite's). The octaves are Frostbite's "exaggerated" multiple scattering
+  (a > b is not energy-conserving): with a <= b a cloud's inside, hundreds of optical depths from the sun, stays black.
+- **Passes** (compute on the main device after the atmosphere's; a `clouds` GPU timestamp): the **grid**, camera-centred
+  like the atmosphere's volume, 1536 azimuths x 768 elevations round `base_up` at the camera (linear elevation, 0.23
+  degrees). Each frame marches one texel of each 2 x 2 block (16 to 64 steps over the ray's part in the layer, out to the
+  camera's horizon plus the top's, jittered by interleaved gradient noise), blended half with the last frame's; the
+  others take the last frame's, reprojected by the cloud's mean distance (the camera moved; a jump over a thickness
+  resets). A texel holds the clouds' light for a sun of illuminance 1 with the air in front of them (RGB: the
+  atmosphere's volume at their mean distance) and their transmittance (A), and the front and mean distances in km
+  (0 where there is no cloud, so a filtered edge keeps the cloud's). The **shadow map**: 512^2 texels along the sun round
+  the camera (64 km on Earth, or 4 camera altitudes; its origin snapped to its texels), each column marched (16 steps
+  of the base shape) from where its line leaves the base towards the sun, its transmittance through the octaves.
+- **Hosts** (`Clouds::glsl_lookup`): `cloud_at(camera, dir, dist)` (the grid at dir; a cloud starting past dist left
+  out, one dist enters partly) and `cloud_sun_shadow(p)` (one fetch). The sky shader puts the whole ray's clouds over
+  the sky; the page shader puts the clouds in front of a fragment over its `FOG` (combined: T = T_air T_clouds,
+  S = S_air T_clouds + S_clouds) and its `light()` takes the sun through the shadow map. The grid's and the shadow map's
+  textures reach the materials like the atmosphere's (`VoxelTerrain::_rt_share_textures`); the shadow map's frame is
+  four global uniforms per frame (`cloud_shadow_origin_m`, `_u`, `_v`, `_extent_m`). `VoxelSky` hands the terrain the
+  cover and the wind (`cloud_wind`, metres per second along render x and z: on a planet the noise drifts through the
+  shell) every frame.
+- **Checked:** unit tests (the layer's scale and lift, the periods, the substitution, the block, the shadow map's
+  frame); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
+  inside the flat world's layer, Earth from 100 km and the 2 km planet from the ground and from 4 km out.
+- **Limits:** the grid's 0.23 degrees show as jagged edges on a small planet seen whole; a cloud in front of terrain is
+  composited by its front and mean distances, so a hill reaching into one would be cut by texels (the layer is lifted
+  over the relief instead); no shadow past the shadow map (faded over its last tenth); the clouds take the scene's sun
+  colour, warm here, through the air (no white balance); no cloud shadows on the atmosphere (light shafts), no
+  lightning, no precipitation. The Dawn viewer has no clouds yet.

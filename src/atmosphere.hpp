@@ -133,8 +133,12 @@ public:
             const BaseSurface::Render &p_base);
     // The sphere the multiple scattering and the ranges are taken on: the base's curvature radius, Earth's on the flat world.
     static double ms_radius_m(const BaseSurface &p_base, double p_voxel_m);
+    // The distance to the horizon from p_altitude_m (at least 0) over a sphere of radius p_radius_m.
+    static double horizon_m(double p_altitude_m, double p_radius_m);
     // The camera volume (device thread; AtmosphereCheck reads the running object's).
     ov::gpu::Texture get_volume() const { return volume; }
+    // The multiple-scattering table (device thread; the clouds' ambient light).
+    ov::gpu::Texture get_multiscatter() const { return multiscatter; }
 
     // HostConstants' uniforms, for a host that declares loose uniforms (Godot).
     static ov::str glsl_host_uniforms();
@@ -146,8 +150,9 @@ public:
     // transmittance from the camera to dist along dir), `vec3 atmo_sky_radiance(vec3 camera, vec3 dir, vec3 sun, float
     // sun_cos)` (the sky for a sun of illuminance 1: the volume's sky slice, marched per pixel from above the atmosphere,
     // and the sun's disk of cosine radius sun_cos through the air) and atmo_ms from the table. The host declares
-    // glsl_host_uniforms, `sampler2D atmo_volume`, `sampler2D atmo_multiscatter` and `float atmo_range_m`.
-    static ov::str glsl_lookup();
+    // glsl_host_uniforms, `sampler2D atmo_volume`, `sampler2D atmo_multiscatter` and `float atmo_range_m`; a compute pass
+    // names the two samplers' expressions instead (`sampler2D(texture, sampler)`: Clouds).
+    static ov::str glsl_lookup(const ov::str &p_volume = "atmo_volume", const ov::str &p_multiscatter = "atmo_multiscatter");
     // The two passes' compute shaders (the check compiles them too).
     static ov::str glsl_pass_multiscatter();
     static ov::str glsl_pass_volume();

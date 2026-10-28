@@ -4,6 +4,7 @@
 
 #include "atmosphere.hpp"
 #include "base_surface.hpp"
+#include "clouds.hpp"
 #include "godot_conv.hpp"
 #include "shade_frame_glsl.hpp"
 #include "sky_glsl.hpp"
@@ -91,9 +92,10 @@ vec3 wind_sway(vec3 p) {
 }
 )glsl";
 
-// The atmosphere's uniforms in both shaders (after GLSL_CLOUDS: the base), then the core's lookups (Atmosphere::glsl_lookup).
-// VoxelTerrain sets them once its world starts with an atmosphere (off until then): the camera volume and the
-// multiple-scattering table, the medium; per frame the global atmo_range_m (VoxelTerrain) and atmo_sun_light (VoxelSky:
+// The atmosphere's and the volumetric clouds' uniforms in both shaders (after GLSL_CLOUDS: the base), then the core's
+// lookups (Atmosphere::glsl_lookup, Clouds::glsl_lookup). VoxelTerrain sets them once its world starts with an
+// atmosphere (off until then): the camera volume and the multiple-scattering table, the medium, the clouds' grid, shadow map
+// and layer; per frame the globals atmo_range_m and the shadow map's frame (VoxelTerrain) and atmo_sun_light (VoxelSky:
 // the sun's colour times its energy times atmosphere_gain).
 static constexpr const char GLSL_ATMOSPHERE[] = R"glsl(
 uniform bool atmo_enabled = false;
@@ -101,6 +103,14 @@ uniform sampler2D atmo_volume : filter_linear, repeat_enable;
 uniform sampler2D atmo_multiscatter : filter_linear;
 global uniform float atmo_range_m;
 global uniform vec3 atmo_sun_light;
+uniform bool cloud_enabled = false;
+uniform sampler2D cloud_light : filter_linear, repeat_enable;
+uniform sampler2D cloud_depth : filter_linear, repeat_enable;
+uniform sampler2D cloud_shadow_map : filter_linear;
+global uniform vec3 cloud_shadow_origin_m;
+global uniform vec3 cloud_shadow_u;
+global uniform vec3 cloud_shadow_v;
+global uniform float cloud_shadow_extent_m;
 )glsl";
 
 // The sky: the atmosphere (Atmosphere: the camera volume's sky slice, marched per pixel from above it), or without one
@@ -150,12 +160,17 @@ void sky() {
             color = physical_sky(eye, sun_dir, LIGHT0_COLOR, LIGHT0_ENERGY, LIGHT0_SIZE, exposure);
         }
 
-        // The cloud layer where the view ray meets it (above the camera only). Two reads: the density here, and the
-        // density towards the sun (along the layer), which lights the edge of a cloud that thins that way. The sun's
-        // colour on the clouds is its extinction at its own altitude (red at dusk); the shadowed side takes the sky's
-        // colour. The layer fades into the sky near the horizon, where its texels stretch along the view.
+        // The volumetric clouds (Clouds: the grid's whole ray), over the sky and its sun.
+        if (cloud_enabled) {
+            vec4 clouds = cloud_at(POSITION, EYEDIR, 1e30);
+            color = color * clouds.a + clouds.rgb * atmo_sun_light;
+        }
+        // Without them, the cloud layer where the view ray meets it (above the camera only). Two reads: the density
+        // here, and the density towards the sun (along the layer), which lights the edge of a cloud that thins that way.
+        // The sun's colour on the clouds is its extinction at its own altitude (red at dusk); the shadowed side takes the
+        // sky's colour. The layer fades into the sky near the horizon, where its texels stretch along the view.
         vec3 hit;
-        if (cloud_cover > 0.0 && cloud_hit(POSITION, EYEDIR, up, hit)) {
+        if (!cloud_enabled && cloud_cover > 0.0 && cloud_hit(POSITION, EYEDIR, up, hit)) {
             vec3 hit_up = base_up(hit);
             float density = cloud_density(cloud_texel(hit, hit_up));
             float sun_up = dot(sun_world, hit_up);
@@ -188,7 +203,7 @@ String VoxelSky::glsl_clouds() {
 }
 
 String VoxelSky::glsl_atmosphere() {
-    return String(GLSL_ATMOSPHERE) + godot_str(Atmosphere::glsl_host_uniforms() + Atmosphere::glsl_lookup());
+    return String(GLSL_ATMOSPHERE) + godot_str(Atmosphere::glsl_host_uniforms() + Atmosphere::glsl_lookup() + Clouds::glsl_host_uniforms() + Clouds::glsl_lookup());
 }
 
 void VoxelSky::add_atmosphere_globals() {
@@ -200,6 +215,10 @@ void VoxelSky::add_atmosphere_globals() {
     RenderingServer *rs = RenderingServer::get_singleton();
     rs->global_shader_parameter_add("atmo_range_m", RenderingServer::GLOBAL_VAR_TYPE_FLOAT, 1.0);
     rs->global_shader_parameter_add("atmo_sun_light", RenderingServer::GLOBAL_VAR_TYPE_VEC3, Vector3(1.0f, 1.0f, 1.0f));
+    for (const char *name : { "cloud_shadow_origin_m", "cloud_shadow_u", "cloud_shadow_v" }) {
+        rs->global_shader_parameter_add(name, RenderingServer::GLOBAL_VAR_TYPE_VEC3, Vector3());
+    }
+    rs->global_shader_parameter_add("cloud_shadow_extent_m", RenderingServer::GLOBAL_VAR_TYPE_FLOAT, 1.0);
 }
 
 String VoxelSky::sky_shader_code() {
@@ -349,7 +368,9 @@ void VoxelSky::_process(double) {
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {
-            terrain->set_sun_direction(towards); // every frame: a terrain that starts later gets it at once
+            // Every frame: a terrain that starts later gets them at once.
+            terrain->set_sun_direction(towards);
+            terrain->set_cloud_weather(cloud_cover, Vector3(cloud_wind.x, 0.0f, cloud_wind.y));
         }
     }
 }
