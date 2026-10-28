@@ -39,7 +39,7 @@ enum class BufferKind : uint8_t {
 };
 
 // 2D textures: the quad pages, the batch's staging rows, the palettes (PageFormat's texels); the atmosphere's tables
-// (half floats, rgba16f).
+// (half floats, rgba16f). 3D textures (create_texture_3d): the clouds' noise.
 enum class TextureFormat : uint8_t {
     RGBA16_UINT,
     RGBA16_FLOAT,
@@ -58,12 +58,17 @@ enum TextureUsage : uint32_t {
     TEXTURE_UPDATE = 16, // update_texture
 };
 
-// One binding of set 0: a buffer, or a storage image (image valid).
+// One binding of set 0: a buffer, a storage image (image valid; GLSL `image2D` / `image3D`), a sampled texture
+// (texture: GLSL `texture2D` / `texture3D`, read as `texture(sampler2D(t, s), uv)`) or the device's linear sampler
+// (linear_sampler: GLSL `sampler`; bilinear / trilinear, repeating, no mipmaps). Separate textures and samplers, not
+// combined `sampler2D` uniforms: WebGPU has only those.
 struct Binding {
     uint32_t binding = 0;
     BufferKind kind = BufferKind::STORAGE;
     Buffer buffer;
     Texture image;
+    Texture sampled;
+    bool sampler = false;
 
     Binding() = default;
     Binding(uint32_t p_binding, BufferKind p_kind, Buffer p_buffer) :
@@ -72,6 +77,18 @@ struct Binding {
         Binding b;
         b.binding = p_binding;
         b.image = p_image;
+        return b;
+    }
+    static Binding texture(uint32_t p_binding, Texture p_texture) {
+        Binding b;
+        b.binding = p_binding;
+        b.sampled = p_texture;
+        return b;
+    }
+    static Binding linear_sampler(uint32_t p_binding) {
+        Binding b;
+        b.binding = p_binding;
+        b.sampler = true;
         return b;
     }
 };
@@ -97,6 +114,9 @@ public:
 
     // A p_width x p_height texture of p_usage (TextureUsage bits), p_data (whole rows, tightly packed) or zeros.
     virtual Texture create_texture(TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage, const void *p_data = nullptr) = 0;
+    // A p_width x p_height x p_depth texture of p_usage, zeros (a storage image written by a pass; no update or copy).
+    // read_texture_async reads its slices one after the other.
+    virtual Texture create_texture_3d(TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage) = 0;
     // The whole texture's texels (TEXTURE_UPDATE).
     virtual void update_texture(Texture p_texture, const void *p_data, uint64_t p_size) = 0;
     // Every texel to zero (TEXTURE_COPY_DST).

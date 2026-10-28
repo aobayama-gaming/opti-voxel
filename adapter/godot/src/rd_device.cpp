@@ -3,6 +3,7 @@
 #include "godot_callable.hpp"
 #include "godot_conv.hpp"
 
+#include <godot_cpp/classes/rd_sampler_state.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
@@ -70,6 +71,9 @@ RenderingDevice::DataFormat rd_format(ov::gpu::TextureFormat p_format) {
 RDDevice::~RDDevice() {
     for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
         _free_entry(it->second);
+    }
+    if (linear_sampler.is_valid()) {
+        rd->free_rid(linear_sampler);
     }
     if (owns_rd) {
         memdelete(rd);
@@ -145,6 +149,26 @@ void RDDevice::copy_buffer(ov::gpu::Buffer p_from, ov::gpu::Buffer p_to, uint64_
 }
 
 ov::gpu::Texture RDDevice::create_texture(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage, const void *p_data) {
+    const Ref<RDTextureFormat> format = texture_format(p_format, p_width, p_height, p_usage);
+    Ref<RDTextureView> view;
+    view.instantiate();
+    TypedArray<PackedByteArray> layers;
+    if (p_data != nullptr) {
+        layers.push_back(to_bytes(p_data, uint64_t(p_width) * p_height * ov::gpu::texel_bytes(p_format)));
+    }
+    return ov::gpu::Texture{ _add({ rd->texture_create(format, view, layers), RID() }) };
+}
+
+ov::gpu::Texture RDDevice::create_texture_3d(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage) {
+    const Ref<RDTextureFormat> format = texture_format(p_format, p_width, p_height, p_usage);
+    format->set_texture_type(RenderingDevice::TEXTURE_TYPE_3D);
+    format->set_depth(p_depth);
+    Ref<RDTextureView> view;
+    view.instantiate();
+    return ov::gpu::Texture{ _add({ rd->texture_create(format, view, TypedArray<PackedByteArray>()), RID() }) };
+}
+
+Ref<RDTextureFormat> RDDevice::texture_format(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage) {
     Ref<RDTextureFormat> format;
     format.instantiate();
     format->set_format(rd_format(p_format));
@@ -167,13 +191,21 @@ ov::gpu::Texture RDDevice::create_texture(ov::gpu::TextureFormat p_format, uint3
         usage.set_flag(RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT);
     }
     format->set_usage_bits(usage);
-    Ref<RDTextureView> view;
-    view.instantiate();
-    TypedArray<PackedByteArray> layers;
-    if (p_data != nullptr) {
-        layers.push_back(to_bytes(p_data, uint64_t(p_width) * p_height * ov::gpu::texel_bytes(p_format)));
+    return format;
+}
+
+RID RDDevice::_linear_sampler() {
+    if (!linear_sampler.is_valid()) {
+        Ref<RDSamplerState> state;
+        state.instantiate();
+        state->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+        state->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+        state->set_repeat_u(RenderingDevice::SAMPLER_REPEAT_MODE_REPEAT);
+        state->set_repeat_v(RenderingDevice::SAMPLER_REPEAT_MODE_REPEAT);
+        state->set_repeat_w(RenderingDevice::SAMPLER_REPEAT_MODE_REPEAT);
+        linear_sampler = rd->sampler_create(state);
     }
-    return ov::gpu::Texture{ _add({ rd->texture_create(format, view, layers), RID() }) };
+    return linear_sampler;
 }
 
 void RDDevice::update_texture(ov::gpu::Texture p_texture, const void *p_data, uint64_t p_size) {
@@ -219,11 +251,18 @@ ov::gpu::BindSet RDDevice::create_bind_set(ov::gpu::Pipeline p_pipeline, const s
         u.instantiate();
         if (b.image.is_valid()) {
             u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+            u->add_id(get_rid(b.image));
+        } else if (b.sampled.is_valid()) {
+            u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_TEXTURE);
+            u->add_id(get_rid(b.sampled));
+        } else if (b.sampler) {
+            u->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER);
+            u->add_id(_linear_sampler());
         } else {
             u->set_uniform_type(b.kind == ov::gpu::BufferKind::UNIFORM ? RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER : RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+            u->add_id(get_rid(b.buffer));
         }
         u->set_binding(int32_t(b.binding));
-        u->add_id(b.image.is_valid() ? get_rid(b.image) : get_rid(b.buffer));
         uniforms.push_back(u);
     }
     Entry set;
@@ -241,7 +280,11 @@ void RDDevice::dispatch(ov::gpu::Pipeline p_pipeline, ov::gpu::BindSet p_set, co
     rd->compute_list_bind_compute_pipeline(list, pipeline->rid);
     rd->compute_list_bind_uniform_set(list, set->rid, 0);
     if (p_push_size > 0) {
-        rd->compute_list_set_push_constant(list, to_bytes(p_push, p_push_size), p_push_size);
+        // RenderingDevice takes a push block in whole 16 bytes (its size as SPIR-V reflection rounds it): the rest zeros.
+        const uint32_t size = (p_push_size + 15) / 16 * 16;
+        PackedByteArray push = to_bytes(nullptr, size);
+        std::memcpy(push.ptrw(), p_push, p_push_size);
+        rd->compute_list_set_push_constant(list, push, size);
     }
     rd->compute_list_dispatch(list, p_x, p_y, p_z);
     rd->compute_list_end();

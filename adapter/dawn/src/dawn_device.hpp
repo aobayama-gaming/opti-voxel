@@ -26,6 +26,7 @@ public:
     void clear_buffer(gpu::Buffer p_buffer, uint64_t p_offset, uint64_t p_size) override;
     void copy_buffer(gpu::Buffer p_from, gpu::Buffer p_to, uint64_t p_from_offset, uint64_t p_to_offset, uint64_t p_size) override;
     gpu::Texture create_texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage, const void *p_data) override;
+    gpu::Texture create_texture_3d(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage) override;
     void update_texture(gpu::Texture p_texture, const void *p_data, uint64_t p_size) override;
     void clear_texture(gpu::Texture p_texture) override;
     void copy_texture(gpu::Texture p_from, gpu::Texture p_to, uint32_t p_from_x, uint32_t p_from_y, uint32_t p_to_x, uint32_t p_to_y, uint32_t p_width,
@@ -63,6 +64,7 @@ private:
         wgpu::Texture texture;
         uint32_t width = 0; // a texture's
         uint32_t height = 0;
+        uint32_t depth = 1;
         wgpu::ComputePipeline pipeline;
         wgpu::BindGroupLayout layout; // a pipeline's set 0
         std::vector<ShaderBinding> bindings; // a pipeline's set-0 buffers
@@ -95,8 +97,12 @@ private:
     wgpu::BindGroup push_group;
     bytes push_data;
     wgpu::Buffer zeros; // clear_texture's source: WebGPU zero-initialises buffers; grown to the largest clear
+    wgpu::Sampler linear_sampler; // Binding::linear_sampler's, made on first use
 
     gpu::Handle _add(Entry p_entry);
+    // A texture's entry (2D at depth 1, else 3D), zero-initialised; its texture null if creation failed.
+    Entry _texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage);
+    wgpu::Sampler _linear_sampler();
     gpu::Buffer _create_buffer(wgpu::BufferUsage p_usage, uint64_t p_size, const void *p_data);
     void _write_texture(const Entry &p_entry, const void *p_data);
     // A readback of p_staging (its copy recorded and submitted): delivered in request order once mapped.
