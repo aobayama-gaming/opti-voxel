@@ -70,10 +70,11 @@ private:
     // made).
     void _push_atmosphere(const Dictionary &p_params);
     // The atmosphere's or the clouds' textures (Atmosphere::TexturesFn, Clouds::TexturesFn; render thread): their
-    // RenderingServer RIDs in p_rids, then _push_atmosphere on the main thread as the uniforms p_names if the terrain
+    // RenderingServer RIDs in p_rids, then _push_atmosphere on the main thread as the uniforms p_names, with the switch
+    // p_enabled on, if the terrain
     // p_terrain still exists; invalid ones free them. Static: the world's stop posts the last call, which runs after the
     // node may be gone.
-    static void _rt_share_textures(RDDevice *p_device, std::shared_ptr<std::vector<RID>> p_rids, ObjectID p_terrain,
+    static void _rt_share_textures(RDDevice *p_device, std::shared_ptr<std::vector<RID>> p_rids, ObjectID p_terrain, const char *p_enabled,
             const std::vector<const char *> &p_names, const std::vector<ov::gpu::Texture> &p_textures);
     float atmosphere_range_sent = -1.0f; // the last global atmo_range_m
     Dictionary cloud_globals_sent; // the last global uniforms of the clouds' shadow map frame

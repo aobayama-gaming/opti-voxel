@@ -854,7 +854,7 @@ void VoxelTerrain::_push_atmosphere(const Dictionary &p_params) {
     }
 }
 
-void VoxelTerrain::_rt_share_textures(RDDevice *p_device, std::shared_ptr<std::vector<RID>> p_rids, ObjectID p_terrain,
+void VoxelTerrain::_rt_share_textures(RDDevice *p_device, std::shared_ptr<std::vector<RID>> p_rids, ObjectID p_terrain, const char *p_enabled,
         const std::vector<const char *> &p_names, const std::vector<ov::gpu::Texture> &p_textures) {
     RenderingServer *rs = RenderingServer::get_singleton();
     for (const RID &rid : *p_rids) {
@@ -868,6 +868,7 @@ void VoxelTerrain::_rt_share_textures(RDDevice *p_device, std::shared_ptr<std::v
     }
     // The materials are set on the main thread.
     Dictionary params;
+    params[p_enabled] = true; // with the textures: never on with unbound samplers
     for (size_t i = 0; i < p_textures.size(); i++) {
         p_rids->push_back(rs->texture_rd_create(p_device->get_rid(p_textures[i])));
         params[p_names[i]] = p_rids->back();
@@ -1027,12 +1028,12 @@ void VoxelTerrain::_ready() {
     hosts.hidden_meshes = []() -> std::unique_ptr<MeshHost> { return std::make_unique<GodotMeshHost>(); };
     hosts.atmosphere_textures = [device = main_device, rids = std::make_shared<std::vector<RID>>(), id = ObjectID(get_instance_id())](
                                         ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) {
-        _rt_share_textures(device, rids, id, { "atmo_volume", "atmo_multiscatter" }, { p_volume, p_multiscatter });
+        _rt_share_textures(device, rids, id, "atmo_enabled", { "atmo_volume", "atmo_multiscatter" }, { p_volume, p_multiscatter });
     };
     hosts.cloud_textures = [device = main_device, rids = std::make_shared<std::vector<RID>>(), id = ObjectID(get_instance_id())](ov::gpu::Texture p_light,
                                    ov::gpu::Texture p_depth, ov::gpu::Texture p_shadow) {
         const auto &names = Clouds::HOST_TEXTURES;
-        _rt_share_textures(device, rids, id, { names[0], names[1], names[2] }, { p_light, p_depth, p_shadow });
+        _rt_share_textures(device, rids, id, "cloud_enabled", { names[0], names[1], names[2] }, { p_light, p_depth, p_shadow });
     };
     const Float3 camera_pos = camera != nullptr ? ov_f3(camera->get_global_position()) : Float3();
     const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
@@ -1056,10 +1057,6 @@ void VoxelTerrain::_ready() {
         // The medium, the longest path (constant for a world) and the switch; the textures follow once made.
         Dictionary params;
         atmosphere->host_constants().visit(ShaderParams{ params });
-        params["atmo_enabled"] = true;
-        if (world.get_clouds()) {
-            params["cloud_enabled"] = true;
-        }
         _push_atmosphere(params);
     }
 }

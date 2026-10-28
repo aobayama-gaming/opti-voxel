@@ -527,7 +527,8 @@ void Atmosphere::_rt_start() {
         set_volume = device->create_bind_set(pipe_volume,
                 { Binding(0, ov::gpu::BufferKind::UNIFORM, block), Binding::storage_image(1, volume), Binding::storage_image(2, multiscatter) });
     }
-    if (textures_fn) {
+    // A pass that didn't compile (reported once by compile) leaves the tables unwritten: the host keeps its atmosphere off.
+    if (textures_fn && set_volume.is_valid() && set_multiscatter.is_valid()) {
         textures_fn(volume, multiscatter);
     }
 }

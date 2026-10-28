@@ -4,6 +4,7 @@
 #include "glsl_uniforms.hpp"
 #include "gpu_shader.hpp"
 #include "shade_frame_glsl.hpp"
+#include "trace.hpp"
 
 #include "ov/clock.hpp"
 #include "ov/math.hpp"
@@ -109,6 +110,16 @@ vec3 cloud_grid_dir(vec2 uv, vec3 up, vec3 t1, vec3 t2) {
     return (t1 * cos(phi) + t2 * sin(phi)) * cos(theta) + up * sin(theta);
 }
 
+// The depth texel's encoding: the front and mean distances (metres) in kilometres times the opacity (a half float keeps
+// 1e-3 of any of them; times the opacity, filtering and blending weigh them by it), and back with the filtered opacity.
+vec2 cloud_depth_encode(vec2 front_mean_m, float opacity) {
+    return front_mean_m * (1e-3 * opacity);
+}
+
+vec2 cloud_depth_decode(vec2 texel, float opacity) {
+    return texel * (1e3 / max(opacity, 1e-3));
+}
+
 // cloud_grid_dir's inverse, v kept half a texel inside (no wrap from pole to pole).
 vec2 cloud_grid_uv(vec3 dir, vec3 up, vec3 t1, vec3 t2) {
     float u = fract(atan(dot(dir, t2), dot(dir, t1)) / (2.0 * ATMO_PI) + 1.0);
@@ -143,9 +154,9 @@ float cloud_remap(float v, float a, float b, float c, float d) {
 }
 
 // A render point's coordinates in a noise of period_vox voxels (whole tiles per period: the texture repeats), carried by
-// the wind (its offset wraps at the weather period, a multiple of the others).
+// the wind (the pattern moves along it; its offset wraps at the weather period, a multiple of the others).
 vec3 cloud_coords(vec3 p, int period_vox) {
-    return (shade_point(p, period_vox) + cloud_wind_offset_m) / shade_period_m(period_vox);
+    return (shade_point(p, period_vox) - cloud_wind_offset_m) / shade_period_m(period_vox);
 }
 
 float cloud_height_fraction(float altitude) {
@@ -234,21 +245,21 @@ vec4 cloud_at(vec3 camera, vec3 dir, float dist) {
     up_frame(up, t1, t2);
     vec2 uv = cloud_grid_uv(dir, up, t1, t2);
     vec4 l = textureLod(cloud_light, uv, 0.0);
-    vec2 d = textureLod(cloud_depth, uv, 0.0).xy * 1000.0 / max(1.0 - l.a, 1e-3);
+    vec2 d = cloud_depth_decode(textureLod(cloud_depth, uv, 0.0).xy, 1.0 - l.a);
     float w = clamp((dist - d.x) / max(2.0 * (d.y - d.x), 1.0), 0.0, 1.0);
     return vec4(l.rgb * w, mix(1.0, l.a, w));
 }
 
-// The sun's transmittance through the layer at p, under it: the shadow map's (none outside it, faded over its last
-// tenth).
+// The sun's transmittance through the layer at p, under it: the shadow map's, its corner at cloud_shadow_origin_m (none
+// outside it, faded over its last tenth).
 float cloud_sun_shadow(vec3 p) {
     vec3 d = p - cloud_shadow_origin_m;
     vec2 uv = vec2(dot(d, cloud_shadow_u), dot(d, cloud_shadow_v)) / cloud_shadow_extent_m;
-    float edge = max(abs(uv.x), abs(uv.y));
+    float edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
     if (edge >= 0.5) {
         return 1.0;
     }
-    float t = textureLod(cloud_shadow_map, uv + 0.5, 0.0).r;
+    float t = textureLod(cloud_shadow_map, uv, 0.0).r;
     return mix(t, 1.0, smoothstep(0.45, 0.5, edge));
 }
 )glsl";
@@ -257,18 +268,18 @@ float cloud_sun_shadow(vec3 p) {
 // order), the shading frame's host functions from it, the samplers.
 constexpr const char GLSL_PASS_HEAD[] = R"glsl(#version 450
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-layout(set = 0, binding = 0, std140) uniform CloudBlock {
+layout(set = 0, binding = $B_BLOCK, std140) uniform CloudBlock {
 $MEMBERS};
-layout(set = 0, binding = 1, rgba16f) uniform restrict writeonly image2D out_light;
-layout(set = 0, binding = 2, rgba16f) uniform restrict writeonly image2D out_depth;
-layout(set = 0, binding = 3) uniform texture2D history_light;
-layout(set = 0, binding = 4) uniform texture2D history_depth;
-layout(set = 0, binding = 5) uniform texture3D shape;
-layout(set = 0, binding = 6) uniform texture3D detail;
-layout(set = 0, binding = 7) uniform texture2D atmo_volume_texture;
-layout(set = 0, binding = 8) uniform texture2D atmo_multiscatter_texture;
-layout(set = 0, binding = 9) uniform sampler linear;
-layout(set = 0, binding = 10, rgba16f) uniform restrict writeonly image2D out_shadow;
+layout(set = 0, binding = $B_LIGHT, rgba16f) uniform restrict writeonly image2D out_light;
+layout(set = 0, binding = $B_DEPTH, rgba16f) uniform restrict writeonly image2D out_depth;
+layout(set = 0, binding = $B_HISTORY_LIGHT) uniform texture2D history_light;
+layout(set = 0, binding = $B_HISTORY_DEPTH) uniform texture2D history_depth;
+layout(set = 0, binding = $B_SHAPE) uniform texture3D shape;
+layout(set = 0, binding = $B_DETAIL) uniform texture3D detail;
+layout(set = 0, binding = $B_ATMO_VOLUME) uniform texture2D atmo_volume_texture;
+layout(set = 0, binding = $B_ATMO_MULTISCATTER) uniform texture2D atmo_multiscatter_texture;
+layout(set = 0, binding = $B_SAMPLER) uniform sampler linear;
+layout(set = 0, binding = $B_SHADOW, rgba16f) uniform restrict writeonly image2D out_shadow;
 
 ivec3 shade_origin_voxel() {
     return ivec3(cloud_origin_x, cloud_origin_y, cloud_origin_z);
@@ -323,7 +334,7 @@ float cloud_ign(vec2 p) {
 }
 
 // The clouds along dir from the camera: their light (rgb, for a sun of illuminance 1, the air in front of them included)
-// and transmittance (a); their front and mean distances in front_mean (kilometres; 0 where there is none).
+// and transmittance (a); their front and mean distances in front_mean (metres; 0 where there is none).
 vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     front_mean = vec2(0.0);
     float front_t = -1.0;
@@ -337,11 +348,12 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     float dt = len / float(n);
     float t_first = cloud_segment_t(seg, 0.0, 1.0, 0.0);
     float t_last = seg.w > seg.z ? seg.w : seg.y;
-    // The sun through the air at the clouds (its ends; linear between).
-    vec3 sun_a = atmo_transmittance(cam + dir * t_first, cloud_sun, ATMO_SUN_STEPS);
-    vec3 sun_b = atmo_transmittance(cam + dir * t_last, cloud_sun, ATMO_SUN_STEPS);
-    vec3 sky_a = cloud_sky(cam + dir * t_first);
-    vec3 sky_b = cloud_sky(cam + dir * t_last);
+    // The sun through the air at the clouds and the sky's light on them: at the ray's two ends, linear between; made at
+    // the first sample with density (a ray through clear sky needs neither).
+    vec3 sun_a = vec3(0.0);
+    vec3 sun_b = vec3(0.0);
+    vec3 sky_a = vec3(0.0);
+    vec3 sky_b = vec3(0.0);
     float cos_sun = dot(dir, cloud_sun);
     float phases[OCTAVES];
     float k = 1.0;
@@ -365,7 +377,13 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
         if (density <= 0.0) {
             continue;
         }
-        front_t = front_t < 0.0 ? t : front_t;
+        if (front_t < 0.0) {
+            front_t = t;
+            sun_a = atmo_transmittance(cam + dir * t_first, cloud_sun, ATMO_SUN_STEPS);
+            sun_b = atmo_transmittance(cam + dir * t_last, cloud_sun, ATMO_SUN_STEPS);
+            sky_a = cloud_sky(cam + dir * t_first);
+            sky_b = cloud_sky(cam + dir * t_last);
+        }
         float sigma = density * cloud_extinction;
         // The sun through the octaves; the sky dimmer lower in the layer (Frostbite's gradient).
         float along = clamp((t - t_first) / max(t_last - t_first, 1.0), 0.0, 1.0);
@@ -382,9 +400,9 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     if (trans > 0.999) {
         return vec4(0.0, 0.0, 0.0, 1.0);
     }
-    front_mean = 1e-3 * vec2(front_t, weighted_t / (1.0 - trans));
+    front_mean = vec2(front_t, weighted_t / (1.0 - trans));
     // The air in front of the clouds (at their mean distance) dims them and adds its own light where they hide the sky.
-    vec4 air = atmo_at(cam, dir, 1e3 * front_mean.y);
+    vec4 air = atmo_at(cam, dir, front_mean.y);
     return vec4(light * air.a + air.rgb * (1.0 - trans), trans);
 }
 
@@ -393,7 +411,7 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
 void cloud_history(vec3 dir, vec3 old_up, vec3 o1, vec3 o2, out vec4 old_light, out vec4 old_depth) {
     vec2 old_uv = cloud_grid_uv(dir, old_up, o1, o2);
     float opacity = 1.0 - textureLod(sampler2D(history_light, linear), old_uv, 0.0).a;
-    float mean = textureLod(sampler2D(history_depth, linear), old_uv, 0.0).y * 1000.0 / max(opacity, 1e-3);
+    float mean = cloud_depth_decode(textureLod(sampler2D(history_depth, linear), old_uv, 0.0).xy, opacity).y;
     if (opacity > 1e-3) {
         old_uv = cloud_grid_uv(normalize(cloud_camera_m + dir * mean - cloud_prev_camera_m), old_up, o1, o2);
     }
@@ -432,7 +450,7 @@ void main() {
             float jitter = fract(cloud_ign(vec2(id)) + 0.618034 * float(cloud_frame & 63));
             vec2 front_mean;
             vec4 l = cloud_march(cloud_camera_m, dir, jitter, front_mean);
-            vec4 d = vec4(front_mean * (1.0 - l.a), 0.0, 0.0);
+            vec4 d = vec4(cloud_depth_encode(front_mean, 1.0 - l.a), 0.0, 0.0);
             if (!fresh) {
                 l = mix(old_light, l, BLEND);
                 d = mix(old_depth, d, BLEND);
@@ -487,6 +505,21 @@ void main() {
 }
 )glsl";
 
+// The passes' bindings (GLSL_PASS_HEAD's, by substitution; _rt_start binds them).
+enum PassBinding : uint32_t {
+    B_BLOCK,
+    B_LIGHT,
+    B_DEPTH,
+    B_HISTORY_LIGHT,
+    B_HISTORY_DEPTH,
+    B_SHAPE,
+    B_DETAIL,
+    B_ATMO_VOLUME,
+    B_ATMO_MULTISCATTER,
+    B_SAMPLER,
+    B_SHADOW,
+};
+
 // The weather's cover thresholds on the shape noise's R at the weather scale: cover 0 at COVER_HIGH, 1 at COVER_LOW
 // (about its 5% and 95% quantiles, measured on a numpy mirror of the noise pass).
 constexpr float COVER_LOW = 0.52f;
@@ -524,7 +557,12 @@ void visit_block(V &&p_v, const BaseSurface::Render &p_base, const Atmosphere::H
 ov::str pass_glsl(const char *p_main) {
     ov::str members;
     visit_block(GLSLUniforms::Declarations{ members }, BaseSurface::Render(), Atmosphere::HostConstants(), 0.0f, CloudLayer(), Clouds::Frame());
-    return ov::replace_all(ov::str(GLSL_PASS_HEAD), { { "$MEMBERS", members } }) + BaseSurface::glsl_render() + ShadeFrame::glsl() +
+    const ov::str head = ov::replace_all(ov::str(GLSL_PASS_HEAD),
+            { { "$MEMBERS", members }, { "$B_BLOCK", ov::itos(B_BLOCK) }, { "$B_LIGHT", ov::itos(B_LIGHT) }, { "$B_DEPTH", ov::itos(B_DEPTH) },
+                    { "$B_HISTORY_LIGHT", ov::itos(B_HISTORY_LIGHT) }, { "$B_HISTORY_DEPTH", ov::itos(B_HISTORY_DEPTH) }, { "$B_SHAPE", ov::itos(B_SHAPE) },
+                    { "$B_DETAIL", ov::itos(B_DETAIL) }, { "$B_ATMO_VOLUME", ov::itos(B_ATMO_VOLUME) },
+                    { "$B_ATMO_MULTISCATTER", ov::itos(B_ATMO_MULTISCATTER) }, { "$B_SAMPLER", ov::itos(B_SAMPLER) }, { "$B_SHADOW", ov::itos(B_SHADOW) } });
+    return head + BaseSurface::glsl_render() + ShadeFrame::glsl() +
             Atmosphere::glsl_lookup("sampler2D(atmo_volume_texture, linear)", "sampler2D(atmo_multiscatter_texture, linear)") + substitute(GLSL_GRID) +
             density_glsl("sampler3D(shape, linear)", "sampler3D(detail, linear)") + substitute(p_main);
 }
@@ -683,20 +721,22 @@ void Clouds::_rt_start() {
         set_detail = device->create_bind_set(pipe_noise, { Binding::storage_image(0, detail) });
     }
     // Both passes declare every binding of GLSL_PASS_HEAD.
-    const std::vector<Binding> bindings = { Binding(0, ov::gpu::BufferKind::UNIFORM, block), Binding::storage_image(1, light), Binding::storage_image(2, depth),
-        Binding::texture(3, history_light), Binding::texture(4, history_depth), Binding::texture(5, shape), Binding::texture(6, detail),
-        Binding::texture(7, atmosphere->get_volume()), Binding::texture(8, atmosphere->get_multiscatter()), Binding::linear_sampler(9),
-        Binding::storage_image(10, shadow) };
+    const std::vector<Binding> bindings = { Binding(B_BLOCK, ov::gpu::BufferKind::UNIFORM, block), Binding::storage_image(B_LIGHT, light),
+        Binding::storage_image(B_DEPTH, depth), Binding::texture(B_HISTORY_LIGHT, history_light), Binding::texture(B_HISTORY_DEPTH, history_depth),
+        Binding::texture(B_SHAPE, shape), Binding::texture(B_DETAIL, detail), Binding::texture(B_ATMO_VOLUME, atmosphere->get_volume()),
+        Binding::texture(B_ATMO_MULTISCATTER, atmosphere->get_multiscatter()), Binding::linear_sampler(B_SAMPLER), Binding::storage_image(B_SHADOW, shadow) };
     if (pipe_march.is_valid() && pipe_shadow.is_valid()) {
         set_march = device->create_bind_set(pipe_march, bindings);
         set_shadow = device->create_bind_set(pipe_shadow, bindings);
     }
-    if (textures_fn) {
+    // A pass that didn't compile (reported once by compile) leaves the textures unwritten: the host keeps its clouds off.
+    if (textures_fn && set_march.is_valid() && set_shape.is_valid()) {
         textures_fn(light, depth, shadow);
     }
 }
 
 void Clouds::_rt_frame(const ov::bytes &p_block, bool p_noise) {
+    OV_TRACE("clouds", "rt_frame");
     if (!set_march.is_valid() || !set_shadow.is_valid() || !set_shape.is_valid()) {
         return; // a pass that didn't compile (reported once by compile)
     }

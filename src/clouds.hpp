@@ -144,7 +144,8 @@ public:
     };
 
     // Called on the device's thread with the grid's two textures and the shadow map once made (the hosts' samplers
-    // HOST_TEXTURES, in that order), with invalid textures before they are freed: the host binds them to its shaders.
+    // HOST_TEXTURES, in that order; not when a pass failed to compile), with invalid textures before they are freed: the
+    // host binds them to its shaders and turns its clouds on.
     using TexturesFn = std::function<void(ov::gpu::Texture p_light, ov::gpu::Texture p_depth, ov::gpu::Texture p_shadow)>;
     static constexpr const char *HOST_TEXTURES[3] = { "cloud_light", "cloud_depth", "cloud_shadow_map" };
 
