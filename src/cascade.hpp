@@ -425,6 +425,8 @@ struct Spec {
     // The carry groups some run's last level reads without the fields (the GPU's: its runs carry no field to it).
     int gpu_carry_groups() const;
     int copied_carry() const { return modulation ? modulation->copied_carry() : -1; }
+    // The modulation's climate has region guards (Modulation::guarded_regions).
+    bool region_guards() const { return modulation && modulation->guarded_regions() != 0u; }
     // The ground alone: no field group, no modulation.
     Spec ground_only() const {
         Spec s = *this;

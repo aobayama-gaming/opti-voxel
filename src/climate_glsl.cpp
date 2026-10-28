@@ -12,6 +12,11 @@ namespace Climate {
 
 namespace {
 
+// edge_raw in GLSL, op for op: cl_edge's first lines, and cl_edge_off's (one text, so the guards stay its test).
+constexpr const char GLSL_EDGE_RAW[] = R"glsl(    precise float raw0 = (x.w - anchor) * scale;
+    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
+)glsl";
+
 // flushed, dmul, dsub and edge_weight in GLSL, op for op.
 constexpr const char GLSL_CLIMATE_HELPERS[] = R"glsl(
 vec4 cl_flush(vec4 v) {
@@ -33,8 +38,7 @@ vec4 cl_sub(vec4 a, vec4 b) {
 }
 
 vec4 cl_edge(vec4 x, float anchor, float scale) {
-    precise float raw0 = (x.w - anchor) * scale;
-    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
+EDGE_RAW
     if (!(raw > 0.0)) {
         return vec4(0.0);
     }
@@ -48,10 +52,26 @@ vec4 cl_edge(vec4 x, float anchor, float scale) {
 }
 )glsl";
 
+// edge_off in GLSL: whether cl_edge returns vec4(0.0).
+constexpr const char GLSL_EDGE_OFF[] = R"glsl(
+bool cl_edge_off(vec4 x, float anchor, float scale) {
+EDGE_RAW
+    return !(raw > 0.0);
+}
+)glsl";
+
+ov::str with_edge_raw(const char *p_text) {
+    return ov::replace_all(ov::replace_all(ov::str(p_text), "EDGE_RAW\n", GLSL_EDGE_RAW), "FLUSH", Cascade::glsl_flush());
+}
+
 } // namespace
 
 ov::str glsl_helpers() {
-    return ov::replace_all(ov::str(GLSL_CLIMATE_HELPERS), "FLUSH", Cascade::glsl_flush());
+    return with_edge_raw(GLSL_CLIMATE_HELPERS);
+}
+
+ov::str region_helpers_glsl() {
+    return with_edge_raw(GLSL_EDGE_OFF);
 }
 
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined) {
@@ -115,10 +135,6 @@ ov::str glsl_biome_weights(const Table &p_table, bool p_guards) {
     }
     code += ov::format("    vec4 w%d = rest;\n", int64_t(n - 1));
     return code;
-}
-
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
-    return glsl_fields(p_table, p_spec) + glsl_biome_weights(p_table, false);
 }
 
 namespace {
@@ -211,18 +227,6 @@ ov::str region_on_glsl(const Table &p_table) {
         }
     }
     return code.empty() ? ov::str("0u") : code;
-}
-
-ov::str region_helpers_glsl() {
-    // cl_edge's first lines, op for op: whether it returns vec4(0.0).
-    constexpr const char GLSL_EDGE_OFF[] = R"glsl(
-bool cl_edge_off(vec4 x, float anchor, float scale) {
-    precise float raw0 = (x.w - anchor) * scale;
-    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
-    return !(raw > 0.0);
-}
-)glsl";
-    return ov::replace_all(ov::str(GLSL_EDGE_OFF), "FLUSH", Cascade::glsl_flush());
 }
 
 ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges) {

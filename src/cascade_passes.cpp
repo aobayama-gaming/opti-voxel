@@ -18,28 +18,29 @@ static_assert(CascadeGLSL::CLIMATE_BINDING > BaseRegions::INDEX_BINDING, "Cascad
 
 bool CascadePasses::create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input,
         Buffer p_param_ubo, Buffer p_sdf_sample, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
-        Buffer p_sdf_material, uint32_t p_batch_items) {
+        Buffer p_sdf_material, uint32_t p_batch_items, bool p_climate_words) {
     item_param = p_param;
     return _create(p_device, p_sdf, p_param.chunk_size, p_max_chunks, p_input, p_param_ubo, p_sdf_sample, p_debug, p_share_scratch, p_table_records,
-            p_table_list, p_sdf_material, p_batch_items);
+            p_table_list, p_sdf_material, p_batch_items, p_climate_words);
 }
 
 bool CascadePasses::create_points(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points,
         Buffer p_input, Buffer p_param_ubo, Buffer p_values) {
     OV_ERR_FAIL_COND_V_MSG(p_point_param.skirt_size != 0, false, "CascadePasses: point items need CascadeGLSL::point_param (skirt 0).");
     item_param = p_point_param;
-    return _create(p_device, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, Buffer(), nullptr, Buffer(), Buffer(), Buffer(), 0);
+    return _create(p_device, p_sdf, 1, p_max_points, p_input, p_param_ubo, p_values, Buffer(), nullptr, Buffer(), Buffer(), Buffer(), 0, false);
 }
 
 bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, Buffer p_input,
         Buffer p_param_ubo, Buffer p_output, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
-        Buffer p_material, uint32_t p_batch_items) {
+        Buffer p_material, uint32_t p_batch_items, bool p_climate_words) {
     const Spec *spec = p_sdf->get_cascade();
     device = p_device;
     input = p_input;
     item_size = p_item_size;
     max_chunks = p_max_items;
     const bool points = item_size == 1;
+    const bool words = p_climate_words && !points && spec->region_guards(); // the climate words (chunk items only)
     fields = CascadeGLSL::field_range(p_sdf, points);
     top = spec->top_level(!fields.empty());
     carry = !fields.empty() && spec->gpu_carry_groups() > 0;
@@ -57,7 +58,7 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
         for (int f = 0; f < (table && CascadeGLSL::View(c) != CascadeGLSL::View::FIELDS ? 2 : 1); f++) {
             const int v = 2 * c + f;
             const ov::str code =
-                    CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), CascadeGLSL::View(c), cubes);
+                    CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), CascadeGLSL::View(c), cubes, words);
             const ov::str name =
                     ov::str(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") + VIEW_NAMES[c];
             pipeline[v] = ov::gpu::compile(*device, name, code);
@@ -100,7 +101,7 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
         bindings.push_back({ uint32_t(CascadeGLSL::MATERIAL_BINDING), BufferKind::STORAGE, p_material });
     }
     batch_items = ov::max(p_batch_items, max_chunks);
-    if (!points && spec->modulation && spec->modulation->guarded_regions() != 0u) { // chunk items only (level_shader)
+    if (words) {
         climate_items = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * CascadeGLSL::CLIMATE_ITEM_BYTES);
         bindings.push_back({ uint32_t(CascadeGLSL::CLIMATE_BINDING), BufferKind::STORAGE, climate_items });
     }

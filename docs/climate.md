@@ -14,7 +14,7 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   over any fields, an indicator = product of edge smoothsteps; priority layering (w_b = rest * r_b, the last biome takes
   the rest) is a partition of unity for any regions without a division; dual numbers, every product flushed under 2^-64.
   `pick`: argmax, ties by `hash_cell` of the absolute voxel (the same from every LOD). **One climate per point, none per sample:**
-  the climate (`Climate::state`: field terms, then weights; GLSL `glsl_weights`) is evaluated once per point of each
+  the climate (`Climate::state`: field terms, then weights; GLSL `glsl_fields` + `glsl_biome_weights`) is evaluated once per point of each
   level above a run's last, from its channels before the level's insertions (the LOD rule: octave k on Λ_m reads the
   climate of H(V_{m+1}), low-passed at k). A run's last level, its samples (the most points of a run), evaluates none:
   the level above derives it from the climate its own bands read, the same evaluation (`Cascade::Modulation::derive`,
@@ -149,9 +149,9 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `region_test.json` (CascadeSpike set `4r`, 11 field groups) equals `valley.json` bit for bit in its cold core. The
   field group cap is 24 (the GPU's arrays are sized per spec); every group is carried at every point. Details:
   `docs/landforms.md`, "Using a landform in a world".
-- **Region guards** (GPU only: `Climate::guarded_regions`, `region_off_glsl`, `glsl_biome_weights`, `height_sum_glsl`,
+- **Region guards** (GPU only: `Climate::guarded_regions`, `region_off_glsl`, `Climate::edge_off`, `glsl_biome_weights`, `height_sum_glsl`,
   `Modulator::region_code`; the CPU stays the oracle). Per point, after the fields, `rof<r>` says that one of region r's
-  edges is at 0 (`cl_edge_off`, `cl_edge`'s own first ops). There r's biomes weigh +0 and its gated height terms add +0,
+  edges is at 0 (`cl_edge_off`, `cl_edge`'s own first lines: one text). There r's biomes weigh +0 and its gated height terms add +0,
   and every reader of a weight is unchanged by them: the amplitude sums (their accumulator is never -0), the multifractal
   state, the warps and the height sum (`cl_add` / `cl_sub` / `cl_mul` flush), `rest`. So the generated code skips them
   (`if (!rof<r>)`), bit for bit: unit test (weights and height sum on world, world_video and region_test), CascadeSpike

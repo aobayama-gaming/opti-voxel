@@ -114,7 +114,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     remesh_queue.resize(p_lod_numbers);
     cost_model.resize(p_lod_numbers);
     const Cascade::Spec *spec = sdf->get_cascade();
-    climate_modes.configure(spec && spec->modulation && spec->modulation->guarded_regions() != 0u, settings.climate_reduce);
+    climate_modes.configure(spec && spec->region_guards() && settings.climate_reduce);
 
     pool = new QuadPagePool();
     pool->initialize(device, p_host, settings.page_capacity, settings.initial_pages);
@@ -198,7 +198,7 @@ void GPUDirectMesher::_rt_initialize() {
 
     cascade = new CascadePasses();
     if (!cascade->create(device, sdf, chunk_param, settings.batch_size, buffer_input_chunk, buffer_chunk_param, buffer_sdf, ov::gpu::Buffer(), nullptr,
-                buffer_table_records, buffer_table_list, buffer_material)) {
+                buffer_table_records, buffer_table_list, buffer_material, 0, climate_modes.active())) {
         device->free(uniform_set);
         uniform_set = ov::gpu::BindSet(); // nothing dispatches
         OV_ERR_FAIL_MSG("GPUDirectMesher: the cascade passes failed to compile.");
@@ -414,7 +414,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const ov::bytes &p_chunk
     // Bookkeeping only (where each chunk landed); rendering does not wait for it.
     _rt_read(buffer_chunk_dir, uint64_t(p_count) * 16, &GPUDirectMesher::_rt_on_directory, p_batch_id);
     _rt_read(buffer_status, status_size_bytes, &GPUDirectMesher::_rt_on_status, p_batch_id);
-    if (!p_modes.empty() && cascade->get_climate_items().is_valid()) {
+    if (!p_modes.empty()) {
         _rt_read(cascade->get_climate_items(), uint64_t(p_count) * CascadeGLSL::CLIMATE_ITEM_BYTES, &GPUDirectMesher::_rt_on_climate, p_batch_id);
     }
 
@@ -1431,7 +1431,6 @@ ov::Value GPUDirectMesher::get_stats() {
         // The chunks' climate modes (ClimateChunkModes) and what they reported.
         const ClimateChunkModes::Stats &cs = climate_modes.get_stats();
         ov::Value cl = ov::Value::object();
-        cl["reduce"] = settings.climate_reduce;
         cl["full"] = (int64_t)cs.full;
         cl["reduced"] = (int64_t)cs.reduced;
         cl["reports"] = (int64_t)cs.reports;

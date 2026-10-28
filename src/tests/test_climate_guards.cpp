@@ -11,10 +11,10 @@ using ClimateTest::ClimateSDF;
 
 namespace {
 
-// cl_edge_off on the CPU: whether some edge of the region returns +0.
+// region_off_glsl's rof<r> on the CPU: some edge of the region is +0.
 bool region_off(const Table &p_table, int p_region, const Float4 p_fields[MAX_FIELDS]) {
     for (const Edge &e : p_table.regions[size_t(p_region)].edges) {
-        if (!(Cascade::flush_value((p_fields[e.field].w - e.anchor) * e.scale) > 0.0f)) {
+        if (edge_off(e, p_fields[e.field])) {
             return true;
         }
     }
@@ -70,16 +70,18 @@ TEST_CASE("Climate guards: the world's regions are guarded, a single landform ke
     ClimateSDF cliff("res://climate/landforms/cliff.json", 25);
     CLIMATE_REQUIRE(cliff.sdf.get_climate() != nullptr);
     CHECK(guarded_regions(*cliff.sdf.get_climate()) == 0u);
-    const ov::str text = CascadeGLSL::level_shader(&cliff.sdf, false, false, false, true, CascadeGLSL::View::FIELDS);
+    const ov::str text = CascadeGLSL::level_shader(&cliff.sdf, false, false, false, true, CascadeGLSL::View::FIELDS, true, true);
     CHECK(!ov::contains(text, "climate_items"));
-    CHECK(!ov::contains(text, "cl_edge_off"));
-    // The world: guards in every climate shader, the climate words in the chunk items' only.
+    CHECK(!ov::contains(text, "bool rof"));
+    // The world: guards in every climate shader, the climate words in the chunk items' only, when asked (reduced chunks).
     const ov::str wtext = CascadeGLSL::level_shader(&world.sdf, false, false, false, true, CascadeGLSL::View::FIELDS);
-    CHECK(ov::contains(wtext, "climate_items"));
-    CHECK(ov::contains(wtext, "cl_edge_off"));
-    const ov::str ptext = CascadeGLSL::level_shader(&world.sdf, false, true, false, false, CascadeGLSL::View::FIELDS);
+    CHECK(!ov::contains(wtext, "climate_items"));
+    CHECK(ov::contains(wtext, "bool rof"));
+    const ov::str words = CascadeGLSL::level_shader(&world.sdf, false, false, false, true, CascadeGLSL::View::FIELDS, true, true);
+    CHECK(ov::contains(words, "climate_items"));
+    const ov::str ptext = CascadeGLSL::level_shader(&world.sdf, false, true, false, false, CascadeGLSL::View::FIELDS, true, true);
     CHECK(!ov::contains(ptext, "climate_items"));
-    CHECK(ov::contains(ptext, "cl_edge_off"));
+    CHECK(ov::contains(ptext, "bool rof"));
 }
 
 TEST_CASE("Climate guards: where a region is off, its biomes and gated terms change nothing, bit for bit") {
@@ -94,7 +96,7 @@ TEST_CASE("Climate guards: where a region is off, its biomes and gated terms cha
             const Vector3i64 p(int64_t(i % 31) * 1931 - 30000, (world.sdf.get_datum_y() >> m) + (i % 7) - 3, int64_t(i / 31) * 1873 - 30000);
             Float4 f[MAX_FIELDS];
             const uint32_t on = regions_on(t, world.sdf.get_spec(), p, m, f);
-            skipped += __builtin_popcount(guarded_regions(t) & ~on);
+            skipped += WorldCoord::popcount64(guarded_regions(t) & ~on);
             Float4 full[MAX_BIOMES], w[MAX_BIOMES];
             weights(t, f, full);
             guarded_weights(t, f, w);
@@ -134,11 +136,7 @@ TEST_CASE("Climate guards: a biome's region must start its edges") {
     ClimateSDF world("res://climate/world.json", 25);
     CLIMATE_REQUIRE(world.sdf.get_climate() != nullptr);
     Table t = *world.sdf.get_climate();
-    Ground g;
-    g.spec = &world.sdf.get_spec();
-    g.voxel_size = 0.05;
-    g.k_max = 1000;
-    g.amp_cap = 1e30f;
+    const Ground g = world.sdf.climate_ground();
     size_t b = 0;
     while (t.biomes[b].region < 0) {
         b++;
@@ -148,35 +146,31 @@ TEST_CASE("Climate guards: a biome's region must start its edges") {
 }
 
 TEST_CASE("ClimateChunkModes: a reduced chunk takes the regions its nearest reported ancestor had on") {
-    ClimateChunkModes h;
-    h.configure(true, true);
+    ClimateChunkModes cm;
+    cm.configure(true);
     const ChunkId fine(1, 1, 1); // LOD 0
     const ChunkId parent = ChunkMath::get_parent_from_child(fine);
     std::vector<uint32_t> modes;
-    h.modes({ fine }, modes);
+    cm.modes({ fine }, modes);
     CHECK(modes[0] == Cascade::CLIMATE_FULL);
 
     ov::bytes words(CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
     ov::put_u32(words.data() + 4, 0b0110u); // regions 1 and 2 on
-    h.learn({ parent }, { Cascade::CLIMATE_FULL }, words);
-    h.modes({ fine }, modes);
+    cm.learn({ parent }, { Cascade::CLIMATE_FULL }, words);
+    cm.modes({ fine }, modes);
     CHECK(modes[0] == (Cascade::CLIMATE_REDUCE | 0b0110u));
 
     // A reduced chunk with another region on is counted, and its own report then rules.
     ov::bytes failed(CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
     ov::put_u32(failed.data() + 4, 0b1110u);
     ov::put_u32(failed.data() + 8, 1u);
-    h.learn({ fine }, { Cascade::CLIMATE_REDUCE | 0b0110u }, failed);
-    CHECK(h.get_stats().failed == 1);
-    h.modes({ fine }, modes);
+    cm.learn({ fine }, { Cascade::CLIMATE_REDUCE | 0b0110u }, failed);
+    CHECK(cm.get_stats().failed == 1);
+    cm.modes({ fine }, modes);
     CHECK(modes[0] == (Cascade::CLIMATE_REDUCE | 0b1110u));
 
-    // Without reduce, every chunk is full; without guards, no words at all.
-    h.configure(true, false);
-    h.learn({ parent }, { Cascade::CLIMATE_FULL }, words);
-    h.modes({ fine }, modes);
-    CHECK(modes[0] == Cascade::CLIMATE_FULL);
-    h.configure(false, true);
-    h.modes({ fine }, modes);
+    // Inactive (no guards or no reduced chunks): no modes, no climate words.
+    cm.configure(false);
+    cm.modes({ fine }, modes);
     CHECK(modes.empty());
 }

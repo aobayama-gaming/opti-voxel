@@ -13,8 +13,12 @@ using Cascade::flush_value;
 
 namespace {
 
+float edge_raw(const Edge &p_edge, const Float4 &p_x) {
+    return flush_value((p_x.w - p_edge.anchor) * p_edge.scale);
+}
+
 Float4 edge_weight(const Edge &p_edge, const Float4 &p_x) {
-    const float raw = flush_value((p_x.w - p_edge.anchor) * p_edge.scale);
+    const float raw = edge_raw(p_edge, p_x);
     if (!(raw > 0.0f)) {
         return Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
     }
@@ -28,6 +32,10 @@ Float4 edge_weight(const Edge &p_edge, const Float4 &p_x) {
 }
 
 } // namespace
+
+bool edge_off(const Edge &p_edge, const Float4 &p_x) {
+    return !(edge_raw(p_edge, p_x) > 0.0f);
+}
 
 Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_FIELDS]) {
     Float4 r{ 0.0f, 0.0f, 0.0f, 1.0f };

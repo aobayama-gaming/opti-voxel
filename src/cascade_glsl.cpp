@@ -234,15 +234,11 @@ ov::str level_switch(const char *p_name, Value p_value) {
     return code + ov::format("    default: return %d;\n    }\n}\n", last);
 }
 
-// A chunk item's fields' view with climate words (p_words): each field group only where the chunk's mode keeps it
-// (g_live, Cascade::CLIMATE_REDUCE). Without them the text is the one before.
-bool per_group_fields(const Spec &p_spec, bool p_words) {
-    return p_words && p_spec.modulation != nullptr && p_spec.modulation->guarded_regions() != 0u && !p_spec.fields.empty();
-}
-
-// The flag field group p_g is carried (loaded, interpolated) under, and the one it is inserted and stored under.
-ov::str field_flag(const Spec &p_spec, bool p_words, int p_g, const char *p_flag) {
-    return per_group_fields(p_spec, p_words) ? ov::format("(%s && ((g_live >> %du) & 1u) != 0u)", p_flag, p_g) : ov::str(p_flag);
+// The flag field group p_g is carried (loaded, interpolated) under, and the one it is inserted and stored under. With
+// climate words (p_words, a chunk item's fields' view), each field group only where the chunk's mode keeps it (g_live,
+// Cascade::CLIMATE_REDUCE); without them the text is the one before.
+ov::str field_flag(bool p_words, int p_g, const char *p_flag) {
+    return p_words ? ov::format("(%s && ((g_live >> %du) & 1u) != 0u)", p_flag, p_g) : ov::str(p_flag);
 }
 
 // Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (from Cascade::PAIRS,
@@ -297,14 +293,13 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
             mid_code += "        }\n";
             copy_code += "        }\n";
         };
-        const bool per_group = per_group_fields(p_spec, p_words);
         for (int g = 0; g < p_spec.group_count(); g++) {
             const int base = p_spec.gpu_base(g);
-            if (g == 1 && !per_group) {
+            if (g == 1 && !p_words) {
                 open("g_fields");
             }
-            if (g >= 1 && per_group) {
-                open(field_flag(p_spec, p_words, g, "g_fields"));
+            if (g >= 1 && p_words) {
+                open(field_flag(p_words, g, "g_fields"));
             }
             if (p_spec.group_set(g) == ChannelSet::HERMITE8) {
                 for (const auto &pr : PAIRS[axis]) {
@@ -313,11 +308,11 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
             } else {
                 linear4(base);
             }
-            if (g >= 1 && per_group) {
+            if (g >= 1 && p_words) {
                 close();
             }
         }
-        if (p_spec.group_count() > 1 && !per_group) {
+        if (p_spec.group_count() > 1 && !p_words) {
             close();
         }
         const int copied = p_spec.copied_carry();
@@ -366,7 +361,7 @@ ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, 
     auto plane = [&](int p_v) { return p_v < ground_vecs + field_vecs ? p_v : p_v - field_vecs + p_whole_fields; };
     auto flag = [&](int p_v) {
         if (p_v < ground_vecs + field_vecs) {
-            return p_v < ground_vecs ? ov::str() : field_flag(p_spec, p_words, p_v - ground_vecs + 1, "g_fields");
+            return p_v < ground_vecs ? ov::str() : field_flag(p_words, p_v - ground_vecs + 1, "g_fields");
         }
         return ov::format("g_carry_n > %du", p_v - ground_vecs - field_vecs);
     };
@@ -404,7 +399,7 @@ ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, 
     code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
     for (int v = 0; v < nv; v++) {
         // The fields stored where the level below loads them (g_fields there: FieldRange::inserted here).
-        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? field_flag(p_spec, p_words, v - ground_vecs + 1, "g_field_bands") : flag(v);
+        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? field_flag(p_words, v - ground_vecs + 1, "g_field_bands") : flag(v);
         const ov::str guard = v < ground_vecs ? ov::str() : "    if (" + f + ov::str(")\n");
         code += guard + ov::format("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", plane(v), v, plane(v), v);
     }
@@ -496,7 +491,7 @@ ov::str insert_code(const Spec &p_spec, bool p_derive, bool p_words) {
             continue;
         }
         code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n",
-                g > 0 ? "if (" + field_flag(p_spec, p_words, g, "g_field_bands") + ov::str(") ") : ov::str(), g * CascadeGLSL::BAND_ENTRIES);
+                g > 0 ? "if (" + field_flag(p_words, g, "g_field_bands") + ov::str(") ") : ov::str(), g * CascadeGLSL::BAND_ENTRIES);
         if (shaped(p_spec) && p_spec.group_set(g) == ChannelSet::LINEAR4) {
             const bool own = p_spec.modulation->group_features(g) != 0u;
             const ov::str call = own ? ov::format("insert_band_shaped_%d(ch, p, band, mod[%d], m)", g, g) : ov::format("insert_band_mod_%d(ch, p, band, mod[%d].amp[0])", g, g);
@@ -654,8 +649,8 @@ void climate_mode_code(const Spec &p_spec, ov::str &r_flags, ov::str &r_values) 
 // level_shader's cascade code for p_view's Ch (p_spec, on the whole spec's scratch planes): the flags of what the level
 // carries (Cascade::FieldRange p_range: the fields, and the carry groups g_carry_n the last level reads, loaded in the
 // samples' view, derived and stored in the fields' view at j = 1), the passes, the bands, the modulation and the derive,
-// then p_tail.
-ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, bool p_points,
+// then p_tail. p_words: the chunk items' climate words (level_shader).
+ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, bool p_words,
         const ov::str &p_tail) {
     const Spec &whole = *p_sdf->get_cascade();
     const bool climate = p_spec.modulation != nullptr;
@@ -663,8 +658,8 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
     const bool carry = climate && p_spec.gpu_carry_groups() > 0;
     const bool carried = p_view == View::SAMPLES;
     const bool derive = fields && carry;
-    // The climate words in the meshers' chunk items only (the region guards are in every view's climate code).
-    const bool words = fields && !p_points && p_spec.modulation->guarded_regions() != 0u;
+    // The climate words (the region guards are in every view's climate code).
+    const bool words = fields && p_words && p_spec.region_guards();
     ov::str flags;
     ov::str flag_values;
     if (fields) {
@@ -698,7 +693,7 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
 
 } // namespace
 
-ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes) {
+ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes, bool p_words) {
     const Spec &whole = *p_sdf->get_cascade();
     // The view's Ch on the whole spec's scratch planes: the ground alone (its bands, no modulation), or without the fields.
     const Spec view = p_view == View::FIELDS ? whole : (p_view == View::SAMPLES ? whole.without_fields() : whole.ground_only());
@@ -751,7 +746,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : ov::str()) + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE) + ov::str(GLSL_PERLIN3_CROSS) + (spec->cell_groups ? glsl_cell3() : ov::str()));
     code = ov::replace_all(code, "/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? (cubes ? ov::str(LEVEL_POINT) : ov::str()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : ov::str()));
     const ov::str tail = (pick ? p_sdf->get_ground_material_glsl(*spec) : ov::str()) + ground;
-    code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, p_points, tail);
+    code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, p_words && !p_points, tail);
     const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
     code = ov::replace_all(code, "/*DEBUG_STORE*/", p_debug ? debug_store : ov::str());
     return code;

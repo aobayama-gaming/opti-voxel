@@ -4,17 +4,13 @@
 #include "cascade_glsl.hpp"
 #include "chunk_math.hpp"
 
-void ClimateChunkModes::configure(bool p_active, bool p_reduce) {
+void ClimateChunkModes::configure(bool p_active) {
     active_ = p_active;
-    reduce = p_reduce;
     on.clear();
     stats = Stats();
 }
 
 uint32_t ClimateChunkModes::mode_of(const ChunkId &p_chunk) const {
-    if (!reduce) {
-        return Cascade::CLIMATE_FULL;
-    }
     ChunkId c = p_chunk;
     for (int up = 0; up <= ANCESTORS; up++) {
         if (const uint32_t *r = on.getptr(c)) {
@@ -39,7 +35,7 @@ void ClimateChunkModes::modes(const std::vector<ChunkId> &p_chunks, std::vector<
 }
 
 void ClimateChunkModes::learn(const std::vector<ChunkId> &p_chunks, const std::vector<uint32_t> &p_modes, const ov::bytes &p_words) {
-    if (!active_ || p_modes.size() != p_chunks.size() || p_words.size() < p_chunks.size() * CascadeGLSL::CLIMATE_ITEM_BYTES) {
+    if (!active_ || p_words.size() < p_chunks.size() * CascadeGLSL::CLIMATE_ITEM_BYTES) {
         return;
     }
     if (on.size() > MAX_ENTRIES) {
@@ -49,7 +45,7 @@ void ClimateChunkModes::learn(const std::vector<ChunkId> &p_chunks, const std::v
         const uint8_t *w = p_words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES;
         const uint32_t regions = ov::get_u32(w + 4);
         stats.reports++;
-        stats.regions_on += uint64_t(__builtin_popcount(regions));
+        stats.regions_on += uint64_t(WorldCoord::popcount64(regions));
         if ((p_modes[i] & Cascade::CLIMATE_REDUCE) != 0u && ov::get_u32(w + 8) != 0u) {
             stats.failed++;
         }

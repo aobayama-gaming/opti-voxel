@@ -206,7 +206,7 @@ public:
     }
 
     ov::str glsl(const Cascade::Spec &p_spec, bool p_carried, bool p_derive, bool p_words) const override {
-        return p_carried ? glsl_carried(p_spec) : glsl_weighted(p_spec, p_derive, p_words && guarded != 0u);
+        return p_carried ? glsl_carried(p_spec) : glsl_weighted(p_spec, p_derive, p_words);
     }
 
 private:
@@ -379,7 +379,7 @@ ov::str mask_switch(const uint32_t p_mask[Cascade::MAX_LEVEL + 1], bool p_derive
 }
 
 // biome_mod's loop over the biomes, op for op: the amplitudes into a0 .. a2 (declared), the state and the warp into
-// p_target's state[] and warp[] (after glsl_weights and state_c).
+// p_target's state[] and warp[] (after glsl_fields, glsl_biome_weights and state_c).
 // With the region guards a biome of a region is skipped where the region is off: it weighs +0 there, so wt is +0 (cl_mul
 // flushes), a + 0 * k is a (a starts at +0 and is never -0), and the state's and warp's cl_add / cl_sub of a flushed +0
 // leave their flushed sums as they are.

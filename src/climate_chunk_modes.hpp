@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <vector>
 
-// The climate modes a mesher gives its chunks (Cascade::CLIMATE_*, the region guards' GLSL at a chunk's level 1): every
-// chunk reports the guarded regions on at some point of its level 1; with `reduce`, a chunk then takes CLIMATE_REDUCE
+// The climate modes a mesher gives its chunks with reduced chunks on (Cascade::CLIMATE_*, the region guards' GLSL at a
+// chunk's level 1): every chunk reports the guarded regions on at some point of its level 1; a chunk then takes CLIMATE_REDUCE
 // with the regions its nearest reported self or ancestor (up to ANCESTORS LODs up) had on, CLIMATE_FULL without one.
 // While flying, the ground ahead was meshed coarser before, so its chunks' parents have reports. A reduced chunk with
 // another region on is counted (`failed`: its samples are wrong, the experiment's cost) and forgotten.
@@ -17,8 +17,9 @@ public:
     static constexpr int ANCESTORS = 4;
     static constexpr size_t MAX_ENTRIES = size_t(1) << 20; // reports kept, then forgotten at once
 
-    // p_active: the climate has region guards (else modes() leaves r_modes empty: no climate words).
-    void configure(bool p_active, bool p_reduce);
+    // p_active: the climate has region guards and the mesher reduces chunks (else modes() leaves r_modes empty: no climate
+    // words).
+    void configure(bool p_active);
     bool active() const { return active_; }
 
     // Each chunk's mode, in order.
@@ -36,7 +37,6 @@ public:
 
 private:
     bool active_ = false;
-    bool reduce = false;
     ov::HashMap<ChunkId, uint32_t, Vector3i64Hasher> on; // per chunk: the regions on at its level 1 (bit r)
     Stats stats;
 
