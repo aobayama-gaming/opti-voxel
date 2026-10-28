@@ -1,5 +1,7 @@
 #include "frame_check.hpp"
 
+#include "atmosphere_check.hpp"
+
 #include "biome_features.hpp"
 #include "cascade.hpp"
 #include "climate.hpp"
@@ -1458,7 +1460,9 @@ ov::Value FrameCheck::run(ov::gpu::Device &p_device, float p_voxel_size) {
     // The engine's GPU device check on the same device.
     const GPUDeviceCheck::Report device_check = GPUDeviceCheck::run(p_device);
     report["gpu_device_check"] = device_check.summary();
-    report["ok"] = device_check.ok() && report["table_samples"].as_int() > 0 && report["table_near_samples"].as_int() > 0 && report["table_blob_samples"].as_int() > 0 &&
+    // The atmosphere's passes against their CPU reference (reported, its own ok).
+    report["atmosphere_check"] = AtmosphereCheck::run(p_device);
+    report["ok"] = device_check.ok() && report["atmosphere_check"]["ok"].as_bool() && report["table_samples"].as_int() > 0 && report["table_near_samples"].as_int() > 0 && report["table_blob_samples"].as_int() > 0 &&
             report["table_mismatch"].as_int() == 0 &&
             report["table_material_won"].as_int() > 0 &&
             checks.samples > 0 && checks.pairs > 0 && checks.continuity_steps > 0 && checks.cross_origin_points > 0 &&
