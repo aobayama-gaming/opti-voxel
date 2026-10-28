@@ -160,6 +160,7 @@ struct Terrace {
 
 struct Biome {
     ov::str name;
+    int region = -1; // Table::regions index whose edges start `edges` (its "region"), -1: none
     std::vector<Edge> edges; // empty for the last (default) biome only
     std::vector<Amp> amps;
     Terrace terrace;
@@ -313,9 +314,11 @@ ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c);
 // added up from 0. Dual numbers like the fields (gradient per lattice spacing, value in LOD0 voxels).
 Float4 height_sum(const Table &p_table, const Float4 p_fields[MAX_FIELDS], const Float4 p_regions[MAX_REGIONS]);
 // The same in GLSL: the curves' functions (curves_glsl, before), then statements defining `vec4 <p_var>` from the
-// f<i> of glsl_weights and the rg<r> of glsl_edges_value (height_sum_glsl).
+// f<i> of glsl_weights and the rg<r> of glsl_edges_value (height_sum_glsl), leaving out the terms gated by a region
+// not in p_regions (bit r: off on a RegionPath, so they add +0).
+inline constexpr uint32_t ALL_LIVE = ~0u;
 ov::str curves_glsl(const Table &p_table);
-ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var);
+ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var, uint32_t p_regions = ALL_LIVE);
 
 // The ground at a sample: the cascade's ground channels of p_slots (a point's slots), plus the carried height terms'
 // sum, then h + sum_b w_b (terrace_b(h) - h) over the biomes with terraces, w_b carried (SampleCarry). Without height
@@ -349,6 +352,33 @@ ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
 // of `Ch pre` (p_spec's GPU layout).
 ov::str glsl_helpers();
 ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
+// glsl_weights' two parts: the f<i> (apply_terms), then the w<b> (weights) of the biomes in p_live (bit b), the others
+// +0: what weights gives where each of them has an edge at 0 (RegionPath).
+ov::str glsl_fields(const Table &p_table, const Cascade::Spec &p_spec);
+ov::str glsl_biome_weights(const Table &p_table, uint32_t p_live);
+
+// The region path (GPU only, docs/climate.md): where every region but r has an edge at 0 (cl_edge returns +0), the
+// biomes of those regions weigh +0 and their gated height terms add +0, and every reader of a weight (the amplitude
+// sums, the multifractal state, the warps, the height sum, rest) is left as it is by them, bit for bit. So the climate
+// code computes region r's biomes, the ones without a region and r's gated terms only. The test reads the fields, per
+// point, before the weights. One path per region some biome or gated term names; none with fewer than two such regions.
+struct RegionPath {
+    int region = -1;
+    uint32_t off = 0u; // the regions that must be off (bit r)
+    uint32_t biomes = 0u; // the live biomes (glsl_biome_weights' p_live)
+    uint32_t gated = 0u; // the live gated regions (height_sum_glsl's p_regions)
+};
+std::vector<RegionPath> region_paths(const Table &p_table);
+// The cascade groups (bit g: the ground 0, field i at i + 1, the multifractal state last) path p_path's climate reads:
+// the ground, the fields of every region's edges it tests, of its live biomes' edges and warps and of its live height
+// terms, closed under the fields' terms' sources, and the state. A chunk in its reduced mode carries only those.
+uint32_t path_field_groups(const Table &p_table, const RegionPath &p_path);
+// `bool rof<r>` for each path's region, after glsl_fields: some edge of region r returns +0 (cl_edge_off).
+ov::str region_off_glsl(const Table &p_table, const std::vector<RegionPath> &p_paths);
+// The path's condition on the rof<r>: every region in its `off` is off.
+ov::str region_condition_glsl(const RegionPath &p_path);
+// `bool cl_edge_off(vec4 x, float anchor, float scale)` (after glsl_helpers): whether cl_edge returns vec4(0.0).
+ov::str region_helpers_glsl();
 // edges_value as statements defining `vec4 <p_var>` from the f<i> of glsl_weights.
 ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges);
 // Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a

@@ -214,11 +214,14 @@ ov::str curves_glsl(const Table &p_table) {
     return code;
 }
 
-ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var) {
+ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var, uint32_t p_regions) {
     using ExactNoise::glsl_float;
     ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0);\n");
     for (size_t i = 0; i < p_table.heights.size(); i++) {
         const HeightTerm &t = p_table.heights[i];
+        if (t.region >= 0 && (p_regions & (1u << t.region)) == 0u) {
+            continue; // its region is +0 here: cl_mul gives +0, and cl_add of +0 leaves the (flushed) sum as it is
+        }
         const ov::str v = ov::format("cl_scale(%s, %s)", t.has_curve ? ov::format("cl_curve%d(f%d)", int64_t(i), t.field) : ov::format("f%d", t.field), glsl_float(t.coef));
         code += ov::format("    %s = cl_add(%s, %s);\n", p_var, p_var, t.region >= 0 ? ov::format("cl_mul(rg%d, %s)", t.region, v) : v);
     }

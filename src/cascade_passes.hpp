@@ -34,8 +34,12 @@ public:
     int level_count(int p_min_lod) const;
     // A batch's p_count items (ChunkInput bytes; point items for create_points' passes) into the input buffer, and on a
     // sphere the regions they read (base_regions.hpp). Before the batch's record_level / record_all. p_slots: the items
-    // written when more than p_count (a mesher's padded batch, its later passes dispatching over every slot).
-    void upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots = 0);
+    // written when more than p_count (a mesher's padded batch, its later passes dispatching over every slot). p_modes: each
+    // item's climate mode (Cascade::CLIMATE_*, a climate with region paths; null: CLIMATE_UNKNOWN), its report reset.
+    void upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots = 0, const uint32_t *p_modes = nullptr);
+    // The items' climate words (CascadeGLSL::CLIMATE_ITEM_BYTES each, after the batch's passes: what they reported), invalid
+    // without region paths.
+    Buffer get_climate_items() const { return climate_items; }
 
     // Records level j for chunks [p_base, p_base + p_count) of the input (p_count <= max chunks: the scratch
     // holds chunk p_base + i at slot i) as one compute list. p_fold: level 0 folds the chunks' instance lists (a
@@ -71,6 +75,7 @@ private:
     BaseRegions::Tables regions;
     Buffer base_regions;
     Buffer base_region_index;
+    Buffer climate_items; // a climate with region paths: per item (mode, report, fail, 0)
     uint32_t batch_items = 0;
     // At most every slot of every item a distinct region (a point item fills one), plus the zero region.
     uint32_t max_regions() const { return batch_items * (is_points() ? 1u : uint32_t(BaseRegions::SLOTS)) + 1u; }

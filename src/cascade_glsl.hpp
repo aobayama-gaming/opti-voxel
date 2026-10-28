@@ -51,6 +51,11 @@ static constexpr int TABLE_RECORD_BINDING = 7;
 static constexpr int TABLE_LIST_BINDING = 8;
 // The per-sample material (chunk palette index) the meshers give create(): uint per sample, next to sdf_sample.
 static constexpr int MATERIAL_BINDING = 9;
+// A climate with region paths: per item a uvec4 (mode, report, fail, 0) the passes own (CascadePasses::upload_items),
+// after the base regions' bindings. mode: Cascade::CLIMATE_*; report: the paths that held at every point of the
+// item's level 1 (bit p, ANDed in mode CLIMATE_UNKNOWN, ~0 otherwise); fail: non-zero where a hinted path failed.
+static constexpr int CLIMATE_BINDING = 12;
+static constexpr uint32_t CLIMATE_ITEM_BYTES = 16;
 
 // std430 CascadeBand[group_count * BAND_ENTRIES], group g's band of insertion level m at g * BAND_ENTRIES + m:
 // factor (amp * 2^(-shift |S|) per derivative order; unused when modulated), offset low words, offset high words,

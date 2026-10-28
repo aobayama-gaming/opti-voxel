@@ -90,7 +90,7 @@ ov::str put_carry_glsl(const Cascade::Spec &p_spec, int p_c, const ov::str &p_v,
 class Modulator : public Cascade::Modulation {
 public:
     Modulator(const Table &p_table, const Cascade::Spec &p_spec) :
-            table(p_table), sample(sample_carry(p_table)) {
+            table(p_table), paths(region_paths(p_table)), sample(sample_carry(p_table)) {
         state = p_table.has_state() ? p_spec.group_count() - 1 : -1;
         for (int g = 0; g < p_spec.group_count(); g++) {
             const std::vector<Cascade::Band> &bands = p_spec.group_bands(g);
@@ -112,6 +112,9 @@ public:
             carry = std::max(carry, c);
         }
         range.sample = p_table.has_ground_terms();
+        for (const RegionPath &path : paths) {
+            path_groups.push_back(path_field_groups(table, path));
+        }
     }
 
     // A band some biome modulates, or a sample term: something reads the derive.
@@ -124,6 +127,8 @@ public:
     int state_group() const override { return state; }
     bool shaped() const override { return shaped_; }
     uint32_t group_features(int p_group) const override { return p_group >= 0 && p_group < Cascade::MAX_GROUPS ? features[p_group] : 0u; }
+    int region_path_count() const override { return int(paths.size()); }
+    uint32_t region_path_groups(int p_path) const override { return p_path >= 0 && p_path < int(paths.size()) ? path_groups[size_t(p_path)] : ~0u; }
     int carry_groups() const override { return carry; }
     int copied_carry() const override { return sample.pick; }
     int carry_used(int p_m) const override { return p_m >= 0 && p_m <= Cascade::MAX_LEVEL ? used[p_m] : sample.count; }
@@ -341,16 +346,27 @@ private:
         }
     }
 
-    ov::str glsl_biome_mod(const Entry &p_e, const ov::str &p_target) const;
-    ov::str glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const;
+    // A body's live set: every biome and gated region, or a RegionPath's.
+    struct Live {
+        uint32_t biomes = ALL_LIVE;
+        uint32_t gated = ALL_LIVE;
+        bool biome(size_t p_b) const { return (biomes & (1u << p_b)) != 0u; }
+    };
+
+    ov::str glsl_biome_mod(const Entry &p_e, const ov::str &p_target, const Live &p_live) const;
+    ov::str glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec, const Live &p_live) const;
     ov::str glsl_carried(const Cascade::Spec &p_spec) const;
     ov::str glsl_weighted(const Cascade::Spec &p_spec, bool p_derive) const;
     ov::str glsl_plain(const Cascade::Spec &p_spec, bool p_derive) const;
     ov::str glsl_signature(const Cascade::Spec &p_spec, bool p_derive) const;
-    ov::str derive_glsl(const Cascade::Spec &p_spec) const;
-    ov::str glsl_entry(const Entry &p_e) const;
+    ov::str derive_glsl(const Cascade::Spec &p_spec, const Live &p_live) const;
+    ov::str glsl_entry(const Entry &p_e, const Live &p_live) const;
+    template <typename Body>
+    ov::str region_dispatch(const Cascade::Spec &p_spec, Body p_body) const;
 
     Table table;
+    std::vector<RegionPath> paths; // region_paths(table)
+    std::vector<uint32_t> path_groups; // path_field_groups of each
     SampleCarry sample;
     int state = -1;
     int carry = 0;
@@ -375,11 +391,16 @@ ov::str mask_switch(const uint32_t p_mask[Cascade::MAX_LEVEL + 1], bool p_derive
 
 // biome_mod's loop over the biomes, op for op: the amplitudes into a0 .. a2 (declared), the state and the warp into
 // p_target's state[] and warp[] (after glsl_weights and state_c).
-ov::str Modulator::glsl_biome_mod(const Entry &p_e, const ov::str &p_target) const {
+// A biome off p_live weighs +0: wt is +0 (cl_mul flushes), a + 0 * k is a (a starts at +0 and is never -0), and the
+// state's and warp's cl_add / cl_sub of a flushed +0 leave their flushed sums as they are, so it is left out.
+ov::str Modulator::glsl_biome_mod(const Entry &p_e, const ov::str &p_target, const Live &p_live) const {
     using ExactNoise::glsl_float;
     const ov::str &o = p_target;
     ov::str code = "        {\n            precise vec4 a0 = vec4(0.0);\n            precise vec4 a1 = vec4(0.0);\n            precise vec4 a2 = vec4(0.0);\n";
     for (size_t b = 0; b < p_e.biomes.size(); b++) {
+        if (!p_live.biome(b)) {
+            continue;
+        }
         const BiomeBand &bb = p_e.biomes[b];
         const ov::str wb = ov::format("w%d", int64_t(b));
         const ov::str wt = bb.gain > 0.0f ? ov::format("cl_mul(%s, cl_multifractal(%s, state_c))", wb, glsl_float(bb.gain)) : wb;
@@ -408,10 +429,10 @@ ov::str Modulator::glsl_biome_mod(const Entry &p_e, const ov::str &p_target) con
 }
 
 // biome_mod for one entry into its carry groups (in derive_glsl).
-ov::str Modulator::glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const {
+ov::str Modulator::glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec, const Live &p_live) const {
     ov::str code = "        {\n            vec4 state[4] = vec4[4](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));\n";
     code += "            vec4 warp[3] = vec4[3](vec4(0.0), vec4(0.0), vec4(0.0));\n";
-    code += glsl_biome_mod(p_e, "");
+    code += glsl_biome_mod(p_e, "", p_live);
     code += "            vec4 amp[3] = vec4[3](cl_flush(a0), cl_flush(a1), cl_flush(a2));\n";
     for (size_t i = 0; i < p_e.parts.size(); i++) {
         code += put_carry_glsl(p_spec, p_e.carry + int(i), part_glsl(p_e.parts[i]), "            ");
@@ -472,33 +493,66 @@ ov::str Modulator::glsl_carried(const Cascade::Spec &p_spec) const {
 ov::str Modulator::glsl_plain(const Cascade::Spec &p_spec, bool p_derive) const {
     using ExactNoise::glsl_float;
     ov::str code = splices_helpers(table, p_spec) ? ov::str() : glsl_helpers();
+    code += paths.empty() ? ov::str() : region_helpers_glsl();
     code += p_derive ? curves_glsl(table) : ov::str();
     code += "\n// Climate::Modulator::amplitudes: the field terms, the biome weights, then each modulated band's amplitude.\n";
     code += glsl_signature(p_spec, p_derive);
     code += ov::format("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", p_spec.group_count());
     code += mask_switch(mask, p_derive);
-    code += glsl_weights(table, p_spec);
-    code += "    switch (m) {\n";
-    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
-        if (entries[m].empty()) {
-            continue;
-        }
-        code += ov::format("    case %d: {\n", m);
-        for (const Entry &e : entries[m]) {
-            // A field band on a level inserting none (the derive's views only: FieldRange::inserted) reads no amplitude.
-            code += p_derive && e.group > 0 ? "        if (g_field_bands) { precise vec4 a = vec4(0.0);" : "        { precise vec4 a = vec4(0.0);";
-            for (size_t b = 0; b < e.biomes.size(); b++) {
-                if (e.biomes[b].k[0] != 0.0f) {
-                    code += ov::format(" a = a + w%d * %s;", int64_t(b), glsl_float(e.biomes[b].k[0]));
-                }
+    code += region_dispatch(p_spec, [&](const Live &p_live) {
+        ov::str body = glsl_biome_weights(table, p_live.biomes);
+        body += "    switch (m) {\n";
+        for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+            if (entries[m].empty()) {
+                continue;
             }
-            code += ov::format(" amp[%d] = cl_flush(a); }\n", e.group);
+            body += ov::format("    case %d: {\n", m);
+            for (const Entry &e : entries[m]) {
+                // A field band on a level inserting none (the derive's views only: FieldRange::inserted) reads no amplitude.
+                body += p_derive && e.group > 0 ? "        if (g_field_bands) { precise vec4 a = vec4(0.0);" : "        { precise vec4 a = vec4(0.0);";
+                for (size_t b = 0; b < e.biomes.size(); b++) {
+                    if (e.biomes[b].k[0] != 0.0f && p_live.biome(b)) {
+                        body += ov::format(" a = a + w%d * %s;", int64_t(b), glsl_float(e.biomes[b].k[0]));
+                    }
+                }
+                body += ov::format(" amp[%d] = cl_flush(a); }\n", e.group);
+            }
+            body += "        break;\n    }\n";
         }
-        code += "        break;\n    }\n";
+        body += "    default: break;\n    }\n";
+        body += p_derive ? derive_glsl(p_spec, p_live) : ov::str();
+        return body + "    return mask;\n";
+    });
+    return code + "}\n";
+}
+
+// The fields, then the body (weights, the bands' modulation, the derive, `return mask;`) of each RegionPath the chunk's
+// climate mode lets it take where its test holds, then the body of the whole table. Without paths, the fields and the
+// whole body: the text before region paths. The level shader defines g_climate_mode, climate_report and climate_fail.
+template <typename Body>
+ov::str Modulator::region_dispatch(const Cascade::Spec &p_spec, Body p_body) const {
+    ov::str code = glsl_fields(table, p_spec);
+    if (paths.empty()) {
+        return code + p_body(Live());
     }
-    code += "    default: break;\n    }\n";
-    code += p_derive ? derive_glsl(p_spec) : ov::str();
-    return code + "    return mask;\n}\n";
+    code += region_off_glsl(table, paths);
+    code += ov::format("    uint cm = g_climate_mode & %du;\n", int64_t(Cascade::CLIMATE_PATH_MASK));
+    ov::str report;
+    for (size_t i = 0; i < paths.size(); i++) {
+        code += ov::format("    bool c%d = %s;\n", int64_t(i), region_condition_glsl(paths[i]));
+        report += ov::format("%s(c%d ? %du : 0u)", i ? " | " : "", int64_t(i), int64_t(1u << i));
+    }
+    code += ov::format("    if (cm == %du) {\n        climate_report(%s);\n    }\n", int64_t(Cascade::CLIMATE_UNKNOWN), report);
+    for (size_t i = 0; i < paths.size(); i++) {
+        code += ov::format("    if (cm == %du && !c%d) {\n        climate_fail();\n    }\n", int64_t(i + 1), int64_t(i));
+    }
+    for (size_t i = 0; i < paths.size(); i++) {
+        Live live;
+        live.biomes = paths[i].biomes;
+        live.gated = paths[i].gated;
+        code += ov::format("    if ((cm == %du || cm == %du) && c%d) {\n", int64_t(Cascade::CLIMATE_UNKNOWN), int64_t(i + 1), int64_t(i)) + p_body(live) + "    }\n";
+    }
+    return code + p_body(Live());
 }
 
 // cascade_amplitudes' or cascade_mods' first line (Cascade::Modulation::glsl).
@@ -509,7 +563,7 @@ ov::str Modulator::glsl_signature(const Cascade::Spec &p_spec, bool p_derive) co
 }
 
 // modulate()'s loop body for one entry, op for op.
-ov::str Modulator::glsl_entry(const Entry &p_e) const {
+ov::str Modulator::glsl_entry(const Entry &p_e, const Live &p_live) const {
     using ExactNoise::glsl_float;
     const ov::str o = ov::format("mod[%d]", p_e.group);
     ov::str code = ov::format("        %s.features = %du;\n", o, int64_t(p_e.features));
@@ -519,7 +573,7 @@ ov::str Modulator::glsl_entry(const Entry &p_e) const {
         }
         return code;
     }
-    code += glsl_biome_mod(p_e, o + ov::str("."));
+    code += glsl_biome_mod(p_e, o + ov::str("."), p_live);
     code += ov::format("            %s.amp[0] = cl_flush(a0);\n            %s.amp[1] = cl_flush(a1);\n            %s.amp[2] = cl_flush(a2);\n        }\n", o, o, o);
     return code;
 }
@@ -530,6 +584,7 @@ ov::str Modulator::glsl_weighted(const Cascade::Spec &p_spec, bool p_derive) con
     }
     using ExactNoise::glsl_float;
     ov::str code = GLSL_MULTIFRACTAL; // after the shared helpers, spliced by the level shader (splices_helpers)
+    code += paths.empty() ? ov::str() : region_helpers_glsl();
     code += p_derive ? curves_glsl(table) : ov::str();
     code += "\n// Climate::Modulator::modulate: the field terms, the biome weights, then each modulated band's BandMod.\n";
     code += glsl_signature(p_spec, p_derive);
@@ -537,33 +592,36 @@ ov::str Modulator::glsl_weighted(const Cascade::Spec &p_spec, bool p_derive) con
     code += "        for (int t = 0; t < 3; t++) {\n            mod[g].amp[t] = vec4(0.0);\n            mod[g].warp[t] = vec4(0.0);\n        }\n";
     code += "        for (int t = 0; t < 4; t++) {\n            mod[g].state[t] = vec4(0.0);\n        }\n    }\n";
     code += mask_switch(mask, p_derive);
-    code += glsl_weights(table, p_spec);
-    // The state's channels (the multifractal's complement).
-    if (state >= 0) {
-        const int sb = p_spec.gpu_base(state);
-        code += ov::format("    vec4 state_c = vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d]);\n", sb + 1, sb + 2, sb + 3, sb);
-    }
-    code += "    switch (m) {\n";
-    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
-        if (entries[m].empty()) {
-            continue;
+    code += region_dispatch(p_spec, [&](const Live &p_live) {
+        ov::str body = glsl_biome_weights(table, p_live.biomes);
+        // The state's channels (the multifractal's complement).
+        if (state >= 0) {
+            const int sb = p_spec.gpu_base(state);
+            body += ov::format("    vec4 state_c = vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d]);\n", sb + 1, sb + 2, sb + 3, sb);
         }
-        code += ov::format("    case %d: {\n", m);
-        for (const Entry &e : entries[m]) {
-            // As in glsl_plain: no BandMod for a field band on a level inserting none.
-            code += p_derive && e.group > 0 ? "        if (g_field_bands) {\n" + glsl_entry(e) + "        }\n" : glsl_entry(e);
+        body += "    switch (m) {\n";
+        for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+            if (entries[m].empty()) {
+                continue;
+            }
+            body += ov::format("    case %d: {\n", m);
+            for (const Entry &e : entries[m]) {
+                // As in glsl_plain: no BandMod for a field band on a level inserting none.
+                body += p_derive && e.group > 0 ? "        if (g_field_bands) {\n" + glsl_entry(e, p_live) + "        }\n" : glsl_entry(e, p_live);
+            }
+            body += "        break;\n    }\n";
         }
-        code += "        break;\n    }\n";
-    }
-    code += "    default: break;\n    }\n";
-    code += p_derive ? derive_glsl(p_spec) : ov::str();
-    return code + "    return mask;\n}\n";
+        body += "    default: break;\n    }\n";
+        body += p_derive ? derive_glsl(p_spec, p_live) : ov::str();
+        return body + "    return mask;\n";
+    });
+    return code + "}\n";
 }
 
 // Climate::Modulator::derive at the end of the level's modulation, from its weights (the channels before the level's
 // insertions), where g_carry_n says (j = 1): into the carry of the level below, a run's last (its ground's BandMod parts,
 // its samples' terms: the carry_used groups, all of them written).
-ov::str Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
+ov::str Modulator::derive_glsl(const Cascade::Spec &p_spec, const Live &p_live) const {
     ov::str code = "    if (g_carry_n == 0u) {\n        return mask;\n    }\n";
     code += "    switch (m) {\n";
     for (int m = 1; m <= Cascade::MAX_LEVEL; m++) {
@@ -573,7 +631,7 @@ ov::str Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
         code += ov::format("    case %d:\n", m);
         for (const Entry &e : entries[m - 1]) {
             if (e.group == 0 && !e.parts.empty()) {
-                code += glsl_derive_entry(e, p_spec);
+                code += glsl_derive_entry(e, p_spec, p_live);
             }
         }
         code += "        break;\n";
@@ -583,9 +641,11 @@ ov::str Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
         code += "    {\n";
         if (sample.heights >= 0) {
             for (const int r : table.gated) {
-                code += glsl_edges_value(ov::format("rg%d", r), table.regions[size_t(r)].edges);
+                if ((p_live.gated & (1u << r)) != 0u) {
+                    code += glsl_edges_value(ov::format("rg%d", r), table.regions[size_t(r)].edges);
+                }
             }
-            code += height_sum_glsl(table, "hs");
+            code += height_sum_glsl(table, "hs", p_live.gated);
             code += put_carry_glsl(p_spec, sample.heights, "hs", "        ");
         }
         for (size_t b = 0; b < table.biomes.size(); b++) {

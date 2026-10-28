@@ -39,6 +39,8 @@ src/cascade_glsl.hpp
 src/cascade_glsl.cpp
 src/cascade_shaped_glsl.hpp
 src/cascade_shaped_glsl.cpp
+src/climate_path_hints.hpp
+src/climate_path_hints.cpp
 src/archetype_ir.hpp
 src/archetype_ir.cpp
 src/archetype_glsl.hpp

@@ -277,6 +277,10 @@ public:
     int get_direct_batches_per_frame() const;
     void set_direct_gpu_budget_ms(float p_ms);
     float get_direct_gpu_budget_ms() const;
+    // A climate with region paths, the direct mesher's chunk modes (ClimatePathHints::Level): 0 every chunk tries every
+    // path, 1 learned modes (default), 2 learned modes with reduced chunks (an experiment: wrong where a path fails).
+    void set_climate_paths(int p_level);
+    int get_climate_paths() const;
     void set_direct_max_in_flight(int p_batches);
     int get_direct_max_in_flight() const;
     void set_direct_page_capacity(int p_capacity);

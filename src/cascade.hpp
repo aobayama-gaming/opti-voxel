@@ -327,6 +327,15 @@ struct BandMod {
     ExactNoise::Float4 warp[3] = {}; // displacement per axis, LOD0 voxels (MOD_WARP)
 };
 
+// A chunk's climate mode (CascadePasses' per-item climate words, read by the region paths' GLSL): CLIMATE_UNKNOWN tries
+// every path per point and reports which held everywhere (j = 1); path p + 1 tries path p only and flags a point where
+// it fails; CLIMATE_BORDER runs the whole table, no test. CLIMATE_REDUCE (with a path): only its groups are carried
+// (Modulation::region_path_groups), so a flagged chunk's samples are wrong.
+inline constexpr uint32_t CLIMATE_UNKNOWN = 0u;
+inline constexpr uint32_t CLIMATE_PATH_MASK = 0xFFu;
+inline constexpr uint32_t CLIMATE_BORDER = 0xFFu;
+inline constexpr uint32_t CLIMATE_REDUCE = 0x100u;
+
 struct Modulation {
     virtual ~Modulation() = default;
     // Bit g: group g's band on Λ_m is modulated (the others insert their constant amplitude).
@@ -362,6 +371,14 @@ struct Modulation {
     virtual uint32_t group_features(int p_group) const {
         (void)p_group;
         return 0u;
+    }
+    // The GPU's region paths (Climate::RegionPath, GPU only): how many, and the groups path p_path's climate reads (bit g:
+    // the ground, the regions' edges, its biomes' fields and warps, its height terms', their terms' sources, the state), the
+    // only ones a chunk in that path's reduced mode carries (CascadeGLSL::CLIMATE_REDUCE).
+    virtual int region_path_count() const { return 0; }
+    virtual uint32_t region_path_groups(int p_path) const {
+        (void)p_path;
+        return ~0u;
     }
     // The same in GLSL, bit for bit. Not shaped: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])`
     // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask

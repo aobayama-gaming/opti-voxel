@@ -14,6 +14,7 @@ using ov::gpu::BufferKind;
 
 static_assert(BaseRegions::REGION_BINDING > CascadeGLSL::MATERIAL_BINDING && BaseRegions::REGION_BINDING > CascadeGLSL::TABLE_LIST_BINDING,
         "CascadePasses: the base regions' bindings follow the level shader's own.");
+static_assert(CascadeGLSL::CLIMATE_BINDING > BaseRegions::INDEX_BINDING, "CascadePasses: the climate items' binding follows the base regions'.");
 
 bool CascadePasses::create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input,
         Buffer p_param_ubo, Buffer p_sdf_sample, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
@@ -98,9 +99,13 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     if (p_material.is_valid()) {
         bindings.push_back({ uint32_t(CascadeGLSL::MATERIAL_BINDING), BufferKind::STORAGE, p_material });
     }
+    batch_items = ov::max(p_batch_items, max_chunks);
+    if (spec->modulation && spec->modulation->region_path_count() > 0) {
+        climate_items = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * CascadeGLSL::CLIMATE_ITEM_BYTES);
+        bindings.push_back({ uint32_t(CascadeGLSL::CLIMATE_BINDING), BufferKind::STORAGE, climate_items });
+    }
     sphere = p_sdf->get_sphere_base();
     if (sphere != nullptr) {
-        batch_items = ov::max(p_batch_items, max_chunks);
         base_regions = device->create_buffer(BufferKind::STORAGE, uint64_t(max_regions()) * BaseRegions::REGION_BYTES);
         base_region_index = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * BaseRegions::SLOTS * sizeof(uint32_t));
         bindings.push_back({ uint32_t(BaseRegions::REGION_BINDING), BufferKind::STORAGE, base_regions });
@@ -131,7 +136,7 @@ void CascadePasses::free() {
             }
         }
     }
-    for (const Buffer b : { bands, debug_placeholder, base_regions, base_region_index }) {
+    for (const Buffer b : { bands, debug_placeholder, base_regions, base_region_index, climate_items }) {
         if (b.is_valid()) {
             device->free(b);
         }
@@ -153,18 +158,27 @@ void CascadePasses::free() {
     debug_placeholder = Buffer();
     base_regions = Buffer();
     base_region_index = Buffer();
+    climate_items = Buffer();
     input = Buffer();
     sphere = nullptr;
     device = nullptr;
 }
 
-void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots) {
+void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots, const uint32_t *p_modes) {
     const uint32_t slots = ov::max(p_slots, p_count);
     if (slots == 0) {
         return;
     }
-    OV_ERR_FAIL_COND_MSG(sphere != nullptr && p_count > batch_items, "CascadePasses: more items than the passes were created for.");
+    OV_ERR_FAIL_COND_MSG((sphere != nullptr || climate_items.is_valid()) && p_count > batch_items, "CascadePasses: more items than the passes were created for.");
     device->update_buffer(input, 0, uint64_t(slots) * GPUFrame::CHUNK_INPUT_BYTES, p_items);
+    if (climate_items.is_valid() && p_count > 0) {
+        ov::bytes words(size_t(p_count) * CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
+        for (uint32_t i = 0; i < p_count; i++) {
+            ov::put_u32(words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES, p_modes ? p_modes[i] : Cascade::CLIMATE_UNKNOWN);
+            ov::put_u32(words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES + 4, ~0u); // the report, ANDed
+        }
+        device->update_buffer(climate_items, 0, words.size(), words.data());
+    }
     if (sphere == nullptr || p_count == 0) {
         return;
     }

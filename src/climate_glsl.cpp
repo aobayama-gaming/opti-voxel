@@ -69,7 +69,7 @@ vec4 cl_scale(vec4 a, float k) {
 )glsl";
 }
 
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
+ov::str glsl_fields(const Table &p_table, const Cascade::Spec &p_spec) {
     using ExactNoise::glsl_float;
     ov::str code;
     auto channels = [](int p_base) { return ov::format("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
@@ -81,14 +81,131 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
             code += ov::format("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
         }
     }
-    code += "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
+    return code;
+}
+
+ov::str glsl_biome_weights(const Table &p_table, uint32_t p_live) {
+    ov::str code = "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
     const size_t n = p_table.biomes.size();
     for (size_t b = 0; b + 1 < n; b++) {
+        if ((p_live & (1u << b)) == 0u) {
+            // Its region is off here (RegionPath): r_b is +0, so w_b is +0 and rest -= w_b leaves rest as it is.
+            code += ov::format("    vec4 w%d = vec4(0.0);\n", int64_t(b));
+            continue;
+        }
         code += glsl_edges_value(ov::format("r%d", int64_t(b)), p_table.biomes[b].edges);
         code += ov::format("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
     }
     code += ov::format("    vec4 w%d = rest;\n", int64_t(n - 1));
     return code;
+}
+
+ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
+    return glsl_fields(p_table, p_spec) + glsl_biome_weights(p_table, ALL_LIVE);
+}
+
+std::vector<RegionPath> region_paths(const Table &p_table) {
+    uint32_t used = 0u;
+    for (const Biome &b : p_table.biomes) {
+        used |= b.region >= 0 ? 1u << b.region : 0u;
+    }
+    for (const int r : p_table.gated) {
+        used |= 1u << r;
+    }
+    std::vector<RegionPath> paths;
+    if (__builtin_popcount(used) < 2) {
+        return paths; // one landform or none: nothing to skip
+    }
+    for (int r = 0; r < int(p_table.regions.size()); r++) {
+        if ((used & (1u << r)) == 0u) {
+            continue;
+        }
+        RegionPath path;
+        path.region = r;
+        path.off = used & ~(1u << r);
+        for (size_t b = 0; b < p_table.biomes.size(); b++) {
+            path.biomes |= p_table.biomes[b].region < 0 || p_table.biomes[b].region == r ? 1u << b : 0u;
+        }
+        path.gated = 1u << r;
+        paths.push_back(path);
+    }
+    return paths;
+}
+
+uint32_t path_field_groups(const Table &p_table, const RegionPath &p_path) {
+    uint32_t fields = 0u; // bit i: field i
+    auto edges = [&](const std::vector<Edge> &p_edges) {
+        for (const Edge &e : p_edges) {
+            fields |= 1u << e.field;
+        }
+    };
+    for (int r = 0; r < int(p_table.regions.size()); r++) {
+        if (((p_path.off | (1u << p_path.region)) & (1u << r)) != 0u) {
+            edges(p_table.regions[size_t(r)].edges);
+        }
+    }
+    for (size_t b = 0; b < p_table.biomes.size(); b++) {
+        if ((p_path.biomes & (1u << b)) == 0u) {
+            continue;
+        }
+        edges(p_table.biomes[b].edges);
+        for (const Amp &a : p_table.biomes[b].amps) {
+            for (const int f : a.warp_fields) {
+                fields |= f >= 0 ? 1u << f : 0u;
+            }
+        }
+    }
+    for (const HeightTerm &t : p_table.heights) {
+        if (t.region < 0 || (p_path.gated & (1u << t.region)) != 0u) {
+            fields |= 1u << t.field;
+        }
+    }
+    // A field's terms read earlier fields (apply_terms): from the last field down, every source of a needed one.
+    for (int i = int(p_table.fields.size()) - 1; i >= 0; i--) {
+        if ((fields & (1u << i)) == 0u) {
+            continue;
+        }
+        for (const Term &t : p_table.fields[size_t(i)].terms) {
+            fields |= t.source == GROUND ? 0u : 1u << t.source;
+        }
+    }
+    const int n = int(p_table.fields.size());
+    return 1u | (fields << 1) | (p_table.has_state() ? 1u << (n + 1) : 0u);
+}
+
+ov::str region_off_glsl(const Table &p_table, const std::vector<RegionPath> &p_paths) {
+    using ExactNoise::glsl_float;
+    ov::str code;
+    for (const RegionPath &path : p_paths) {
+        ov::str any;
+        for (const Edge &e : p_table.regions[size_t(path.region)].edges) {
+            any += ov::format("%scl_edge_off(f%d, %s, %s)", any.empty() ? "" : " || ", e.field, glsl_float(e.anchor), glsl_float(e.scale));
+        }
+        code += ov::format("    bool rof%d = %s;\n", path.region, any);
+    }
+    return code;
+}
+
+ov::str region_condition_glsl(const RegionPath &p_path) {
+    ov::str code;
+    for (int r = 0; r < MAX_REGIONS; r++) {
+        if ((p_path.off & (1u << r)) != 0u) {
+            code += ov::format("%srof%d", code.empty() ? "" : " && ", r);
+        }
+    }
+    return code;
+}
+
+ov::str region_helpers_glsl() {
+    // cl_edge's first lines, op for op: whether it returns vec4(0.0).
+    constexpr const char GLSL_EDGE_OFF[] = R"glsl(
+bool cl_edge_off(vec4 x, float anchor, float scale) {
+    precise float raw0 = (x.w - anchor) * scale;
+    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
+    return !(raw > 0.0);
+}
+)glsl";
+    return ov::replace_all(ov::str(GLSL_EDGE_OFF), "FLUSH", Cascade::glsl_flush());
 }
 
 ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges) {

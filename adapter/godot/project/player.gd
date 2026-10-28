@@ -94,6 +94,8 @@ func _enter_tree() -> void:
 			terrain.lod_far_limit = a != "--lod_far_limit=0"
 		if a.begins_with("--mesher_budget=") and terrain:
 			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
+		if a.begins_with("--climate_paths=") and terrain:
+			terrain.climate_paths = a.trim_prefix("--climate_paths=").to_int()
 		if a.begins_with("--view=") and terrain:
 			terrain.debug_view = a.trim_prefix("--view=").to_int()
 		if a == "--grade=0":
