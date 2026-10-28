@@ -100,7 +100,7 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
         bindings.push_back({ uint32_t(CascadeGLSL::MATERIAL_BINDING), BufferKind::STORAGE, p_material });
     }
     batch_items = ov::max(p_batch_items, max_chunks);
-    if (spec->modulation && spec->modulation->region_path_count() > 0) {
+    if (!points && spec->modulation && spec->modulation->guarded_regions() != 0u) { // chunk items only (level_shader)
         climate_items = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * CascadeGLSL::CLIMATE_ITEM_BYTES);
         bindings.push_back({ uint32_t(CascadeGLSL::CLIMATE_BINDING), BufferKind::STORAGE, climate_items });
     }
@@ -174,8 +174,7 @@ void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint3
     if (climate_items.is_valid() && p_count > 0) {
         ov::bytes words(size_t(p_count) * CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
         for (uint32_t i = 0; i < p_count; i++) {
-            ov::put_u32(words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES, p_modes ? p_modes[i] : Cascade::CLIMATE_UNKNOWN);
-            ov::put_u32(words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES + 4, ~0u); // the report, ANDed
+            ov::put_u32(words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES, p_modes ? p_modes[i] : Cascade::CLIMATE_FULL);
         }
         device->update_buffer(climate_items, 0, words.size(), words.data());
     }

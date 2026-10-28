@@ -114,8 +114,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     remesh_queue.resize(p_lod_numbers);
     cost_model.resize(p_lod_numbers);
     const Cascade::Spec *spec = sdf->get_cascade();
-    climate_hints.configure(spec && spec->modulation ? spec->modulation->region_path_count() : 0,
-            ClimatePathHints::Level(ov::clamp(settings.climate_paths, int(ClimatePathHints::OFF), int(ClimatePathHints::REDUCE))));
+    climate_modes.configure(spec && spec->modulation && spec->modulation->guarded_regions() != 0u, settings.climate_reduce);
 
     pool = new QuadPagePool();
     pool->initialize(device, p_host, settings.page_capacity, settings.initial_pages);
@@ -488,7 +487,7 @@ void GPUDirectMesher::_learn_climate() {
     mutex.unlock();
     for (const auto &r : reports) {
         if (const ClimateBatch *b = climate_batches.getptr(r.first)) {
-            climate_hints.learn(b->chunks, b->modes, r.second);
+            climate_modes.learn(b->chunks, b->modes, r.second);
             climate_batches.erase(r.first);
         }
     }
@@ -879,7 +878,7 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     batch_costs[batch_id] = BatchCost{ std::move(lod_counts), list_words };
     batch.table_version = table_version;
     std::vector<uint32_t> modes;
-    climate_hints.modes(chunks, modes);
+    climate_modes.modes(chunks, modes);
     if (!modes.empty()) {
         climate_batches.insert(batch_id, ClimateBatch{ chunks, modes });
     }
@@ -1428,21 +1427,17 @@ ov::Value GPUDirectMesher::get_stats() {
     // Mesh and audit batches per frame that dispatched any.
     d["batches_per_dispatch_frame"] = stats.dispatch_frames ? double(stats.batches + stats.audit_batches) / stats.dispatch_frames : 0.0;
     d["batches"] = (int64_t)stats.batches;
-    if (climate_hints.active()) {
-        // The chunks' climate modes (ClimatePathHints) and what they reported.
-        const ClimatePathHints::Stats &cs = climate_hints.get_stats();
+    if (climate_modes.active()) {
+        // The chunks' climate modes (ClimateChunkModes) and what they reported.
+        const ClimateChunkModes::Stats &cs = climate_modes.get_stats();
         ov::Value cl = ov::Value::object();
-        cl["level"] = (int64_t)settings.climate_paths;
-        cl["unknown"] = (int64_t)cs.unknown;
-        cl["path"] = (int64_t)cs.path;
+        cl["reduce"] = settings.climate_reduce;
+        cl["full"] = (int64_t)cs.full;
         cl["reduced"] = (int64_t)cs.reduced;
-        cl["border"] = (int64_t)cs.border;
         cl["reports"] = (int64_t)cs.reports;
-        cl["clean"] = (int64_t)cs.clean;
-        cl["none"] = (int64_t)cs.none;
+        cl["regions_on_avg"] = cs.reports ? double(cs.regions_on) / double(cs.reports) : 0.0;
         cl["failed"] = (int64_t)cs.failed;
-        cl["failed_reduced"] = (int64_t)cs.failed_reduced;
-        d["climate_paths"] = cl;
+        d["climate_modes"] = cl;
     }
     d["gpu_budget_ms"] = settings.gpu_budget_ms;
     d["budget_frame_estimate"] = stats.budget_frame_estimate.to_value();

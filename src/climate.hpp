@@ -314,11 +314,10 @@ ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c);
 // added up from 0. Dual numbers like the fields (gradient per lattice spacing, value in LOD0 voxels).
 Float4 height_sum(const Table &p_table, const Float4 p_fields[MAX_FIELDS], const Float4 p_regions[MAX_REGIONS]);
 // The same in GLSL: the curves' functions (curves_glsl, before), then statements defining `vec4 <p_var>` from the
-// f<i> of glsl_weights and the rg<r> of glsl_edges_value (height_sum_glsl), leaving out the terms gated by a region
-// not in p_regions (bit r: off on a RegionPath, so they add +0).
-inline constexpr uint32_t ALL_LIVE = ~0u;
+// f<i> of glsl_weights and the rg<r> of glsl_edges_value (height_sum_glsl); p_guards: a gated term only where its
+// region's rof<r> is false (region_off_glsl: elsewhere it adds +0).
 ov::str curves_glsl(const Table &p_table);
-ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var, uint32_t p_regions = ALL_LIVE);
+ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var, bool p_guards = false);
 
 // The ground at a sample: the cascade's ground channels of p_slots (a point's slots), plus the carried height terms'
 // sum, then h + sum_b w_b (terrace_b(h) - h) over the biomes with terraces, w_b carried (SampleCarry). Without height
@@ -352,33 +351,27 @@ ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
 // of `Ch pre` (p_spec's GPU layout).
 ov::str glsl_helpers();
 ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
-// glsl_weights' two parts: the f<i> (apply_terms), then the w<b> (weights) of the biomes in p_live (bit b), the others
-// +0: what weights gives where each of them has an edge at 0 (RegionPath).
+// glsl_weights' two parts: the f<i> (apply_terms), then the w<b> (weights); p_guards: a biome with a region is computed
+// only where the region's rof<r> is false, else +0 (the region guards).
 ov::str glsl_fields(const Table &p_table, const Cascade::Spec &p_spec);
-ov::str glsl_biome_weights(const Table &p_table, uint32_t p_live);
+ov::str glsl_biome_weights(const Table &p_table, bool p_guards);
 
-// The region path (GPU only, docs/climate.md): where every region outside a set S has an edge at 0 (cl_edge returns
-// +0), the biomes of those regions weigh +0 and their gated height terms add +0, and every reader of a weight (the
-// amplitude sums, the multifractal state, the warps, the height sum, rest) is left as it is by them, bit for bit. So the
-// climate code computes S's biomes, the ones without a region and S's gated terms only. The test reads the fields, per
-// point, before the weights. The sets: each region some biome or gated term names (its core), then each pair of them
-// whose edges let both be non-zero at once (their shared fade), up to MAX_PATHS; none with fewer than two such regions.
-inline constexpr size_t MAX_PATHS = 32; // the GPU report's bits
-struct RegionPath {
-    uint32_t regions = 0u; // S (bit r)
-    uint32_t off = 0u; // the regions that must be off (bit r)
-    uint32_t biomes = 0u; // the live biomes (glsl_biome_weights' p_live)
-    uint32_t gated = 0u; // the live gated regions (height_sum_glsl's p_regions)
-};
-std::vector<RegionPath> region_paths(const Table &p_table);
-// The cascade groups (bit g: the ground 0, field i at i + 1, the multifractal state last) path p_path's climate reads:
-// the ground, the fields of every region's edges it tests, of its live biomes' edges and warps and of its live height
-// terms, closed under the fields' terms' sources, and the state. A chunk in its reduced mode carries only those.
-uint32_t path_field_groups(const Table &p_table, const RegionPath &p_path);
-// `bool rof<r>` for each region a path tests, after glsl_fields: some edge of region r returns +0 (cl_edge_off).
-ov::str region_off_glsl(const Table &p_table, const std::vector<RegionPath> &p_paths);
-// The path's condition on the rof<r>: every region in its `off` is off.
-ov::str region_condition_glsl(const RegionPath &p_path);
+// The region guards (GPU only, docs/climate.md): where one of a region's edges is at 0 (cl_edge returns +0), every biome
+// of that region weighs +0 and every height term it gates adds +0, and each reader of a weight (the amplitude sums, the
+// multifractal state, the warps, the height sum, rest) is left as it is by them, bit for bit. So the climate code skips
+// them there, per point: in a region's core the other regions' biomes, in a fade between two the others'. The regions
+// guarded (bit r): those some biome or gated height term names (0: no guards, the text before them).
+uint32_t guarded_regions(const Table &p_table);
+// `bool rof<r>` for each guarded region, after glsl_fields: some edge of region r returns +0 (cl_edge_off).
+ov::str region_off_glsl(const Table &p_table);
+// The guarded regions on at the point (bit r where rof<r> is false), as a uint expression of the rof<r>.
+ov::str region_on_glsl(const Table &p_table);
+// The cascade groups (bit g: the ground 0, field i at i + 1, the multifractal state last) the climate reads: always
+// (base: the ground, the guarded regions' edges, the biomes and height terms without a region, the state), and for
+// region p_region (its biomes' edges and warps, its gated terms), closed under the fields' terms' sources. A chunk whose
+// level 1 has only the regions R on needs base and R's (CLIMATE_REDUCE).
+uint32_t base_field_groups(const Table &p_table);
+uint32_t region_field_groups(const Table &p_table, int p_region);
 // `bool cl_edge_off(vec4 x, float anchor, float scale)` (after glsl_helpers): whether cl_edge returns vec4(0.0).
 ov::str region_helpers_glsl();
 // edges_value as statements defining `vec4 <p_var>` from the f<i> of glsl_weights.

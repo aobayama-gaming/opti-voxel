@@ -35,7 +35,7 @@ public:
     // A batch's p_count items (ChunkInput bytes; point items for create_points' passes) into the input buffer, and on a
     // sphere the regions they read (base_regions.hpp). Before the batch's record_level / record_all. p_slots: the items
     // written when more than p_count (a mesher's padded batch, its later passes dispatching over every slot). p_modes: each
-    // item's climate mode (Cascade::CLIMATE_*, a climate with region paths; null: CLIMATE_UNKNOWN), its report reset.
+    // item's climate mode (Cascade::CLIMATE_*, a climate with region guards; null: CLIMATE_FULL), its report reset.
     void upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots = 0, const uint32_t *p_modes = nullptr);
     // The items' climate words (CascadeGLSL::CLIMATE_ITEM_BYTES each, after the batch's passes: what they reported), invalid
     // without region paths.

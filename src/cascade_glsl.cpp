@@ -234,20 +234,20 @@ ov::str level_switch(const char *p_name, Value p_value) {
     return code + ov::format("    default: return %d;\n    }\n}\n", last);
 }
 
-// A climate with region paths: its fields' view carries each field group only where the chunk's mode keeps it
-// (g_live, Cascade::CLIMATE_REDUCE). Without paths the text is the one before them.
-bool per_group_fields(const Spec &p_spec) {
-    return p_spec.modulation != nullptr && p_spec.modulation->region_path_count() > 0 && !p_spec.fields.empty();
+// A chunk item's fields' view with climate words (p_words): each field group only where the chunk's mode keeps it
+// (g_live, Cascade::CLIMATE_REDUCE). Without them the text is the one before.
+bool per_group_fields(const Spec &p_spec, bool p_words) {
+    return p_words && p_spec.modulation != nullptr && p_spec.modulation->guarded_regions() != 0u && !p_spec.fields.empty();
 }
 
 // The flag field group p_g is carried (loaded, interpolated) under, and the one it is inserted and stored under.
-ov::str field_flag(const Spec &p_spec, int p_g, const char *p_flag) {
-    return per_group_fields(p_spec) ? ov::format("(%s && ((g_live >> %du) & 1u) != 0u)", p_flag, p_g) : ov::str(p_flag);
+ov::str field_flag(const Spec &p_spec, bool p_words, int p_g, const char *p_flag) {
+    return per_group_fields(p_spec, p_words) ? ov::format("(%s && ((g_live >> %du) & 1u) != 0u)", p_flag, p_g) : ov::str(p_flag);
 }
 
 // Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (from Cascade::PAIRS,
 // the CPU's axis_rules): the first g_carry_n, the ones the level reads.
-ov::str hermite_functions(const Spec &p_spec, bool p_carried) {
+ov::str hermite_functions(const Spec &p_spec, bool p_carried, bool p_words) {
     const int nch = p_spec.gpu_channels();
     ov::str code = ov::format("struct Ch { float c[%d]; };\n\n", nch);
     code += "Ch ch_zero() {\n    Ch r;\n";
@@ -297,14 +297,14 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
             mid_code += "        }\n";
             copy_code += "        }\n";
         };
-        const bool per_group = per_group_fields(p_spec);
+        const bool per_group = per_group_fields(p_spec, p_words);
         for (int g = 0; g < p_spec.group_count(); g++) {
             const int base = p_spec.gpu_base(g);
             if (g == 1 && !per_group) {
                 open("g_fields");
             }
             if (g >= 1 && per_group) {
-                open(field_flag(p_spec, g, "g_fields"));
+                open(field_flag(p_spec, p_words, g, "g_fields"));
             }
             if (p_spec.group_set(g) == ChannelSet::HERMITE8) {
                 for (const auto &pr : PAIRS[axis]) {
@@ -357,7 +357,7 @@ uint32_t vec4s_for(int p_channels) {
 // spec, p_whole_fields its field groups (the ground-only view reads and writes the ground's planes of the same buffers,
 // the samples' view the ground's and the carry's). The carry: its first g_carry_n groups, loaded where p_carried (a run's
 // last level), stored by the level above it (the fields' view, where it derives).
-ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, bool p_carried) {
+ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, bool p_carried, bool p_words) {
     const int nch = p_spec.gpu_channels();
     const int nv = int(vec4s_for(nch)); // this variant's channels (the view: fields only in the fields variant)
     // vec4s from ground_vecs on are the fields' (one per group), read only where g_fields, then the carry's (g_carry).
@@ -366,7 +366,7 @@ ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, 
     auto plane = [&](int p_v) { return p_v < ground_vecs + field_vecs ? p_v : p_v - field_vecs + p_whole_fields; };
     auto flag = [&](int p_v) {
         if (p_v < ground_vecs + field_vecs) {
-            return p_v < ground_vecs ? ov::str() : field_flag(p_spec, p_v - ground_vecs + 1, "g_fields");
+            return p_v < ground_vecs ? ov::str() : field_flag(p_spec, p_words, p_v - ground_vecs + 1, "g_fields");
         }
         return ov::format("g_carry_n > %du", p_v - ground_vecs - field_vecs);
     };
@@ -404,7 +404,7 @@ ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, 
     code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
     for (int v = 0; v < nv; v++) {
         // The fields stored where the level below loads them (g_fields there: FieldRange::inserted here).
-        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? field_flag(p_spec, v - ground_vecs + 1, "g_field_bands") : flag(v);
+        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? field_flag(p_spec, p_words, v - ground_vecs + 1, "g_field_bands") : flag(v);
         const ov::str guard = v < ground_vecs ? ov::str() : "    if (" + f + ov::str(")\n");
         code += guard + ov::format("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", plane(v), v, plane(v), v);
     }
@@ -483,7 +483,7 @@ ov::str band_functions(const Spec &p_spec) {
 // The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
 // insertion (p_derive: and the carry derived from them, into ch), then each group's band of level m
 // (bands[group * BAND_ENTRIES + m]).
-ov::str insert_code(const Spec &p_spec, bool p_derive) {
+ov::str insert_code(const Spec &p_spec, bool p_derive, bool p_words) {
     ov::str code;
     const char *at = p_derive ? ", p" : "";
     if (shaped(p_spec)) {
@@ -496,7 +496,7 @@ ov::str insert_code(const Spec &p_spec, bool p_derive) {
             continue;
         }
         code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n",
-                g > 0 ? "if (" + field_flag(p_spec, g, "g_field_bands") + ov::str(") ") : ov::str(), g * CascadeGLSL::BAND_ENTRIES);
+                g > 0 ? "if (" + field_flag(p_spec, p_words, g, "g_field_bands") + ov::str(") ") : ov::str(), g * CascadeGLSL::BAND_ENTRIES);
         if (shaped(p_spec) && p_spec.group_set(g) == ChannelSet::LINEAR4) {
             const bool own = p_spec.modulation->group_features(g) != 0u;
             const ov::str call = own ? ov::format("insert_band_shaped_%d(ch, p, band, mod[%d], m)", g, g) : ov::format("insert_band_mod_%d(ch, p, band, mod[%d].amp[0])", g, g);
@@ -622,36 +622,39 @@ FieldRange field_range(const CascadeSource *p_sdf, bool p_points) {
 
 namespace {
 
+// The fields' view's climate words (chunk items of a table with region guards, CLIMATE_BINDING): at the item's level
+// j = 1, g_live (the groups a CLIMATE_REDUCE chunk loads: base_groups and its regions' region_groups), and
+// climate_check (the region dispatch's regions on at the point: ORed into the report, and a reduced chunk's fail flag
+// where one is outside its mode).
+void climate_mode_code(const Spec &p_spec, ov::str &r_flags, ov::str &r_values) {
+    const Cascade::Modulation &mod = *p_spec.modulation;
+    r_flags += ov::format("layout(set = 0, binding = %d, std430) restrict buffer ClimateItems { uvec4 climate_items[]; };\n", CLIMATE_BINDING);
+    r_flags += "uint g_climate_item = 0u;\nuint g_climate_mode = 0u; // Cascade::CLIMATE_*\nuint g_live = 0xFFFFFFFFu; // the groups carried\n";
+    r_flags += ov::format("void climate_check(uint on) {\n    if (pc.j != 1) {\n        return;\n    }\n"
+                          "    if ((climate_items[g_climate_item].y | on) != climate_items[g_climate_item].y) {\n"
+                          "        atomicOr(climate_items[g_climate_item].y, on);\n    }\n"
+                          "    if ((g_climate_mode & %du) != 0u && (on & ~g_climate_mode & %du) != 0u) {\n"
+                          "        climate_items[g_climate_item].z = 1u;\n    }\n}\n",
+            int64_t(Cascade::CLIMATE_REDUCE), int64_t(Cascade::CLIMATE_REGION_MASK));
+    ov::str live = ov::format("%du", int64_t(mod.base_groups()));
+    for (int r = 0; r < 32; r++) {
+        if ((mod.guarded_regions() & (1u << r)) != 0u) {
+            live += ov::format(" | ((mode & %du) != 0u ? %du : 0u)", int64_t(1u << r), int64_t(mod.region_groups(r)));
+        }
+    }
+    r_flags += ov::format("uint climate_live(uint mode) {\n    if ((mode & %du) == 0u) {\n        return 0xFFFFFFFFu;\n    }\n    return %s;\n}\n",
+            int64_t(Cascade::CLIMATE_REDUCE), live);
+    // The mode is the item's at j = 1 only (what the report measures: the levels above read points kilometres apart,
+    // across region borders).
+    r_values += ov::format("    g_climate_item = pc.chunk_base + c;\n    g_climate_mode = pc.j == 1 ? climate_items[g_climate_item].x : %du;\n"
+                           "    g_live = climate_live(g_climate_mode);\n",
+            int64_t(Cascade::CLIMATE_FULL));
+}
+
 // level_shader's cascade code for p_view's Ch (p_spec, on the whole spec's scratch planes): the flags of what the level
 // carries (Cascade::FieldRange p_range: the fields, and the carry groups g_carry_n the last level reads, loaded in the
 // samples' view, derived and stored in the fields' view at j = 1), the passes, the bands, the modulation and the derive,
 // then p_tail.
-// The fields' view's climate mode (Cascade::CLIMATE_*) with region paths: the item's climate words (CLIMATE_BINDING),
-// g_live (the groups a reduced mode carries), and the region dispatch's report (ANDed and ORed at j = 1, chunk items
-// only) and fail flag.
-void climate_mode_code(const Spec &p_spec, bool p_points, ov::str &r_flags, ov::str &r_values) {
-    const Cascade::Modulation &mod = *p_spec.modulation;
-    r_flags += ov::format("layout(set = 0, binding = %d, std430) restrict buffer ClimateItems { uvec4 climate_items[]; };\n", CLIMATE_BINDING);
-    r_flags += "uint g_climate_item = 0u;\nuint g_climate_mode = 0u; // Cascade::CLIMATE_*\nuint g_live = 0xFFFFFFFFu; // the groups carried\n";
-    r_flags += p_points ? ov::str("void climate_report(uint clean) {\n}\n")
-                        : ov::str("void climate_report(uint clean) {\n    if (pc.j != 1) {\n        return;\n    }\n"
-                                  "    uvec4 seen = climate_items[g_climate_item];\n    if ((seen.y & clean) != seen.y) {\n"
-                                  "        atomicAnd(climate_items[g_climate_item].y, clean);\n    }\n    if ((seen.w | clean) != seen.w) {\n"
-                                  "        atomicOr(climate_items[g_climate_item].w, clean);\n    }\n}\n");
-    r_flags += "void climate_fail() {\n    climate_items[g_climate_item].z = 1u;\n}\n";
-    r_flags += ov::format("uint climate_live(uint mode) {\n    if ((mode & %du) == 0u) {\n        return 0xFFFFFFFFu;\n    }\n    switch (mode & %du) {\n",
-            int64_t(Cascade::CLIMATE_REDUCE), int64_t(Cascade::CLIMATE_PATH_MASK));
-    for (int p = 0; p < mod.region_path_count(); p++) {
-        r_flags += ov::format("    case %du: return %du;\n", int64_t(p + 1), int64_t(mod.region_path_groups(p)));
-    }
-    r_flags += "    default: return 0xFFFFFFFFu;\n    }\n}\n";
-    // The mode is the item's at j = 1 only (what the report measures: the levels above read points kilometres apart,
-    // across region borders); above, every path per point.
-    r_values += ov::format("    g_climate_item = pc.chunk_base + c;\n    g_climate_mode = pc.j == 1 ? climate_items[g_climate_item].x : %du;\n"
-                           "    g_live = climate_live(g_climate_mode);\n",
-            int64_t(Cascade::CLIMATE_UNKNOWN));
-}
-
 ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, bool p_points,
         const ov::str &p_tail) {
     const Spec &whole = *p_sdf->get_cascade();
@@ -660,6 +663,8 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
     const bool carry = climate && p_spec.gpu_carry_groups() > 0;
     const bool carried = p_view == View::SAMPLES;
     const bool derive = fields && carry;
+    // The climate words in the meshers' chunk items only (the region guards are in every view's climate code).
+    const bool words = fields && !p_points && p_spec.modulation->guarded_regions() != 0u;
     ov::str flags;
     ov::str flag_values;
     if (fields) {
@@ -668,8 +673,8 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
         flags += "bool g_field_bands = true; // and their bands inserted (FieldRange::inserted)\n";
         flags += level_switch("cascade_lowest_fields", [&](int p_lod) { return p_range.lowest(p_lod); });
         flag_values += "    g_fields = m >= cascade_lowest_fields(lod);\n    g_field_bands = m > cascade_lowest_fields(lod);\n";
-        if (p_spec.modulation->region_path_count() > 0) {
-            climate_mode_code(p_spec, p_points, flags, flag_values);
+        if (words) {
+            climate_mode_code(p_spec, flags, flag_values);
         }
     }
     if (carry) {
@@ -678,13 +683,13 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
         flags += level_switch("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; });
         flag_values += ov::format("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
     }
-    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive) : ov::str();
+    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive, words) : ov::str();
     // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
     // every generated function that uses them.
     const ov::str helpers = (climate ? p_sdf->get_climate_helpers_glsl() : ov::str()) + (shaped(p_spec) ? shaped_helpers() : ov::str());
-    const ov::str storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried);
-    ov::str code = ov::replace_all(p_code, "/*CASCADE*/", (flags.empty() ? ov::str() : flags + "\n") + helpers + hermite_functions(p_spec, carried) + storage + band_functions(p_spec) + modulation + p_tail);
-    code = ov::replace_all(code, "/*INSERT_BANDS*/", insert_code(p_spec, derive));
+    const ov::str storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried, words);
+    ov::str code = ov::replace_all(p_code, "/*CASCADE*/", (flags.empty() ? ov::str() : flags + "\n") + helpers + hermite_functions(p_spec, carried, words) + storage + band_functions(p_spec) + modulation + p_tail);
+    code = ov::replace_all(code, "/*INSERT_BANDS*/", insert_code(p_spec, derive, words));
     code = ov::replace_all(code, "/*FIELDS_FLAG*/", flag_values);
     // A chunk above the top band reading the carry starts one level higher, to derive it (Spec::run_top; an empty level,
     // the same bits for one that doesn't).

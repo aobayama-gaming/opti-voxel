@@ -212,7 +212,7 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
     if (!err.empty()) {
         return where + err;
     }
-    // The region path (Climate::region_paths) reads a biome's weight as 0 wherever its region's edges are: they must be
+    // The region guards (Climate::guarded_regions) read a biome's weight as 0 wherever its region's edges are: they must be
     // its first edges.
     if (b.region >= 0) {
         const std::vector<Edge> *re = b.region < int(p_table.regions.size()) ? &p_table.regions[size_t(b.region)].edges : nullptr;

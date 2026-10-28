@@ -327,15 +327,13 @@ struct BandMod {
     ExactNoise::Float4 warp[3] = {}; // displacement per axis, LOD0 voxels (MOD_WARP)
 };
 
-// A chunk's climate mode at its level j = 1 (CascadePasses' per-item climate words, read by the region paths' GLSL; the
-// levels above try every path per point): CLIMATE_UNKNOWN tries every path per point and reports which held at every
-// and at some point; path p + 1 tries path p only and flags a point where it fails; CLIMATE_BORDER runs the whole table,
-// no test. CLIMATE_REDUCE (with a path): only its groups are loaded at j = 1 (Modulation::region_path_groups), so a
-// flagged chunk's samples are wrong.
-inline constexpr uint32_t CLIMATE_UNKNOWN = 0u;
-inline constexpr uint32_t CLIMATE_PATH_MASK = 0xFFu;
-inline constexpr uint32_t CLIMATE_BORDER = 0xFFu;
-inline constexpr uint32_t CLIMATE_REDUCE = 0x100u;
+// A chunk's climate mode (CascadePasses' per-item climate words, read at the chunk's level j = 1 by the region guards'
+// GLSL): CLIMATE_FULL carries every field group; CLIMATE_REDUCE | R (R: the guarded regions expected on, bit r in
+// CLIMATE_REGION_MASK) loads only Modulation::base_groups and R's region_groups at j = 1, and flags the chunk where a
+// point has another region on (its samples are then wrong). Every chunk reports the regions on at some point of j = 1.
+inline constexpr uint32_t CLIMATE_FULL = 0u;
+inline constexpr uint32_t CLIMATE_REGION_MASK = 0xFFFFu;
+inline constexpr uint32_t CLIMATE_REDUCE = 0x80000000u;
 
 struct Modulation {
     virtual ~Modulation() = default;
@@ -373,20 +371,23 @@ struct Modulation {
         (void)p_group;
         return 0u;
     }
-    // The GPU's region paths (Climate::RegionPath, GPU only): how many, and the groups path p_path's climate reads (bit g:
-    // the ground, the regions' edges, its biomes' fields and warps, its height terms', their terms' sources, the state), the
-    // only ones a chunk in that path's reduced mode carries (CascadeGLSL::CLIMATE_REDUCE).
-    virtual int region_path_count() const { return 0; }
-    virtual uint32_t region_path_groups(int p_path) const {
-        (void)p_path;
+    // The GPU's region guards (Climate::guarded_regions, GPU only): the regions guarded (bit r, 0: none), and the groups
+    // the climate reads always and for region p_region (Climate::base_field_groups / region_field_groups, bit g), what a
+    // chunk in CLIMATE_REDUCE loads.
+    virtual uint32_t guarded_regions() const { return 0u; }
+    virtual uint32_t base_groups() const { return ~0u; }
+    virtual uint32_t region_groups(int p_region) const {
+        (void)p_region;
         return ~0u;
     }
     // The same in GLSL, bit for bit. Not shaped: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])`
     // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
     // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
     // samples' view (p_spec without the fields). p_derive (the fields' view, p_spec with the carry): `inout Ch pre` and a
-    // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups.
-    virtual ov::str glsl(const Spec &p_spec, bool p_carried, bool p_derive) const = 0;
+    // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups. p_words:
+    // a chunk item's shader with climate words, where the region guards also call `climate_check(uint on)` (the level
+    // shader's, CLIMATE_REDUCE).
+    virtual ov::str glsl(const Spec &p_spec, bool p_carried, bool p_derive, bool p_words) const = 0;
 };
 
 struct Spec {

@@ -3,7 +3,7 @@
 #include "chunk_gate.hpp"
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
-#include "climate_path_hints.hpp"
+#include "climate_chunk_modes.hpp"
 #include "debug_log.hpp"
 #include "gpu_cost_model.hpp"
 #include "gpu_device.hpp"
@@ -83,9 +83,9 @@ public:
         uint32_t palette_capacity = 1u << 21;
         // Chunks asked of the SDF's gating per frame at most (every answer counts; 0 = 4 * batch_size, ChunkGate::begin_frame).
         uint32_t max_admits_per_frame = 0;
-        // A climate with region paths: the chunks' climate modes (ClimatePathHints::Level; 2 = reduced chunks, which
-        // are wrong where their path fails: an experiment, never the default).
-        int climate_paths = ClimatePathHints::HINTS;
+        // A climate with region guards: reduced chunks (ClimateChunkModes, CLIMATE_REDUCE), wrong where a region
+        // their mode left out is on: an experiment, never the default.
+        bool climate_reduce = false;
     };
 
     // p_device: the main device (its thread runs the rt_ work, Device::post); p_host draws the pages.
@@ -232,13 +232,13 @@ private:
     std::vector<MeasuredBatch> measured_batches;
     void _update_cost_model();
 
-    // The climate modes (Settings::climate_paths): each batch's chunks and modes until its climate words come back
+    // The climate modes (Settings::climate_reduce): each batch's chunks and modes until its climate words come back
     // (`climate_reports`, under mutex, after the directory), then learned by the main thread.
     struct ClimateBatch {
         std::vector<ChunkId> chunks;
         std::vector<uint32_t> modes;
     };
-    ClimatePathHints climate_hints;
+    ClimateChunkModes climate_modes;
     ov::HashMap<uint32_t, ClimateBatch, ov::DefaultHash> climate_batches;
     std::vector<std::pair<uint32_t, ov::bytes>> climate_reports;
     void _rt_on_climate(const ov::bytes &p_data, uint32_t p_batch_id);
