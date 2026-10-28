@@ -158,12 +158,21 @@ struct Terrace {
     bool invert = false;
 };
 
+// The clouds over a biome ("clouds"; CloudClimate): the sky's cover there and the cloud type (Schneider's: stratus 0,
+// stratocumulus 0.5, cumulus 1), both in [0, 1]. Unset: the sky's cover and the weather noise's type.
+struct BiomeClouds {
+    bool set = false;
+    float cover = 0.0f;
+    float type = 0.0f;
+};
+
 struct Biome {
     ov::str name;
     std::vector<Edge> edges; // empty for the last (default) biome only
     std::vector<Amp> amps;
     Terrace terrace;
     Surface surface;
+    BiomeClouds clouds;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };
 

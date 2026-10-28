@@ -215,7 +215,7 @@ void DawnDevice::copy_buffer(gpu::Buffer p_from, gpu::Buffer p_to, uint64_t p_fr
 }
 
 gpu::Texture DawnDevice::create_texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage, const void *p_data) {
-    Entry entry = _texture(p_format, p_width, p_height, 1, p_usage);
+    Entry entry = _texture(p_format, p_width, p_height, 1, p_usage, false);
     OV_ERR_FAIL_COND_V_MSG(!entry.texture, gpu::Texture(), ov::format("DawnDevice: no %dx%d texture.", p_width, p_height));
     if (p_data != nullptr) {
         _write_texture(entry, p_data);
@@ -224,7 +224,7 @@ gpu::Texture DawnDevice::create_texture(gpu::TextureFormat p_format, uint32_t p_
 }
 
 gpu::Texture DawnDevice::create_texture_3d(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage) {
-    Entry entry = _texture(p_format, p_width, p_height, p_depth, p_usage);
+    Entry entry = _texture(p_format, p_width, p_height, p_depth, p_usage, true);
     OV_ERR_FAIL_COND_V_MSG(!entry.texture, gpu::Texture(), ov::format("DawnDevice: no %dx%dx%d texture.", p_width, p_height, p_depth));
     return gpu::Texture{ _add(std::move(entry)) };
 }
@@ -242,10 +242,10 @@ wgpu::Sampler DawnDevice::_linear_sampler() {
     return linear_sampler;
 }
 
-DawnDevice::Entry DawnDevice::_texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage) {
+DawnDevice::Entry DawnDevice::_texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage, bool p_3d) {
     wgpu::TextureDescriptor desc{};
     desc.size = { p_width, p_height, p_depth };
-    desc.dimension = p_depth > 1 ? wgpu::TextureDimension::e3D : wgpu::TextureDimension::e2D;
+    desc.dimension = p_3d ? wgpu::TextureDimension::e3D : wgpu::TextureDimension::e2D;
     desc.format = wgpu_format(p_format);
     desc.usage = wgpu::TextureUsage::CopyDst; // zeroed (and cleared) by writes
     if (p_usage & gpu::TEXTURE_SAMPLED) {
@@ -273,13 +273,13 @@ void DawnDevice::_write_texture(const Entry &p_entry, const void *p_data) {
     wgpu::TexelCopyBufferLayout layout{};
     layout.bytesPerRow = p_entry.width * 8;
     layout.rowsPerImage = p_entry.height;
-    const wgpu::Extent3D size{ p_entry.width, p_entry.height, 1 };
-    context.queue.WriteTexture(&dst, p_data, size_t(layout.bytesPerRow) * p_entry.height, &layout, &size);
+    const wgpu::Extent3D size{ p_entry.width, p_entry.height, p_entry.depth };
+    context.queue.WriteTexture(&dst, p_data, size_t(layout.bytesPerRow) * p_entry.height * p_entry.depth, &layout, &size);
 }
 
 void DawnDevice::update_texture(gpu::Texture p_texture, const void *p_data, uint64_t p_size) {
     const Entry *entry = _get(p_texture);
-    OV_ERR_FAIL_COND_MSG(entry == nullptr || !entry->texture || p_size != uint64_t(entry->width) * entry->height * 8,
+    OV_ERR_FAIL_COND_MSG(entry == nullptr || !entry->texture || p_size != uint64_t(entry->width) * entry->height * entry->depth * 8,
             "DawnDevice: update of an unknown texture, or not its whole size.");
     _write_texture(*entry, p_data);
 }

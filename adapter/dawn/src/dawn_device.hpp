@@ -100,8 +100,8 @@ private:
     wgpu::Sampler linear_sampler; // Binding::linear_sampler's, made on first use
 
     gpu::Handle _add(Entry p_entry);
-    // A texture's entry (2D at depth 1, else 3D), zero-initialised; its texture null if creation failed.
-    Entry _texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage);
+    // A texture's entry (3D with p_3d, at any depth; else 2D), zero-initialised; its texture null if creation failed.
+    Entry _texture(gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage, bool p_3d);
     wgpu::Sampler _linear_sampler();
     gpu::Buffer _create_buffer(wgpu::BufferUsage p_usage, uint64_t p_size, const void *p_data);
     void _write_texture(const Entry &p_entry, const void *p_data);

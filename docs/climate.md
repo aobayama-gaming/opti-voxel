@@ -119,6 +119,9 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   rougher ground), fly p50 out -1%, back -10%. `climate_report.sh` gained `ground_shaded.png` / `ground_normals.png`
   (hillshade from the heights and from the gradient channels), the per-biome gradient error, sea colours and
   `--center=U,V`.
+- **Clouds** (a biome's `"clouds": {"cover": 0..1, "type": 0..1}`, `Climate::BiomeClouds`): the volumetric clouds' cover
+  and type over the biome, blended by the weights on a coarse map round the camera (`CloudClimate`, `docs/look.md`).
+  The landforms set theirs and `world.py` carries them into `world.json`. They touch no cascade pass or shader.
 - **Landforms** (`adapter/godot/project/climate/landforms/*.json`, `docs/landforms.md`, `tools/landforms/`): mountain, flat desert,
   dunes, mangrove, island, cliff, valley and caldera tables, each matched against a real Copernicus GLO-30 heightmap.
   - `fetch_dem.py` downloads the public AWS tiles; the sites are in `sites.json`.

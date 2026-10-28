@@ -52,6 +52,7 @@ namespace Climate {
 //                        "warp_m": 80, "warp_fields": ["wx", "wy", "wz"] (ground only) } ],
 //             "terrace": { "step_m": 40, "invert": false } (optional),
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
+//             "clouds": { "cover": 0.6, "type": 0.5 } (optional),
 //             "debug_color": "#c04020" }
 //     "multifractal": the octave is weighted by clamp(gain (1 - c), 0, 1), c the multifractal state's complement (the
 //     previous multifractal octave's weighted signal: Musgrave's ridged multifractal with gain 2 and the ridged shape,
@@ -62,7 +63,9 @@ namespace Climate {
 //     from the fields' octaves coarser than k only (Cascade::Modulation): a region shapes the ground's octaves up to
 //     about the size of its fields' octaves, so flattening the continental octaves takes continental regions. The
 //     last biome is the default: no "where". "surface": the biome's ground colours
-//     (sRGB) on gentle and steep slopes; without it, the procedural ground's.
+//     (sRGB) on gentle and steep slopes; without it, the procedural ground's. "clouds": the sky over the biome, its
+//     cover and cloud type in [0, 1] (stratus 0, stratocumulus 0.5, cumulus 1; Climate::BiomeClouds); without it, the
+//     sky's cover and the weather noise's type.
 namespace {
 
 class Parser {
@@ -552,8 +555,22 @@ private:
         r_s.roughness = float(roughness);
     }
 
+    void clouds(const ov::Value &p_d, const ov::str &p_where, Climate::BiomeClouds &r_c) {
+        if (!keys(p_d, p_where, { "cover", "type" })) {
+            return;
+        }
+        const double cover = number(p_d, "cover", p_where);
+        const double type = number(p_d, "type", p_where);
+        if (error.empty() && !(cover >= 0.0 && cover <= 1.0 && type >= 0.0 && type <= 1.0)) {
+            fail(p_where, "cover and type are in [0, 1].");
+        }
+        r_c.set = true;
+        r_c.cover = float(cover);
+        r_c.type = float(type);
+    }
+
     void biome(const ov::Value &p_d, int64_t p_i) {
-        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "region", "where", "amp", "terrace", "surface", "debug_color" })) {
+        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "region", "where", "amp", "terrace", "surface", "clouds", "debug_color" })) {
             return;
         }
         Climate::Biome b;
@@ -593,6 +610,9 @@ private:
         }
         if (p_d.has("surface")) {
             surface(dict(p_d["surface"], where + ov::str(" surface")), where + ov::str(" surface"), b.surface);
+        }
+        if (p_d.has("clouds")) {
+            clouds(dict(p_d["clouds"], where + ov::str(" clouds")), where + ov::str(" clouds"), b.clouds);
         }
         b.debug_color = p_d.has("debug_color") ? hex_color(p_d, "debug_color", where) : name_hash(b.name) & 0xFFFFFFu;
         table.biomes.push_back(b);

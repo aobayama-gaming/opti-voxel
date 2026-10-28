@@ -84,6 +84,7 @@
     {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#4a5038", "steep": "#4a4030", "roughness": 0.3},
+   "clouds": {"cover": 0.75, "type": 1.0},
    "debug_color": "#30506a"
   },
   {
@@ -102,6 +103,7 @@
     {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#4a5038", "steep": "#4a4030", "roughness": 0.3},
+   "clouds": {"cover": 0.75, "type": 1.0},
    "debug_color": "#40607a"
   },
   {
@@ -117,6 +119,7 @@
     {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#4a5a2c", "steep": "#4a3c2c", "roughness": 1},
+   "clouds": {"cover": 0.8, "type": 1.0},
    "debug_color": "#3c6a3c"
   }
  ]
