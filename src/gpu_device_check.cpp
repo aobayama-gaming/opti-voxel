@@ -6,6 +6,7 @@
 #include "gpu_frame.hpp"
 #include "gpu_glsl.hpp"
 
+#include <cmath>
 #include <cstring>
 
 namespace GPUDeviceCheck {
@@ -59,9 +60,39 @@ void main() {
 }
 )glsl";
 
+// A 3D half-float image written texel by texel (its values small whole numbers, exact in half floats), then sampled
+// through a texture and the linear sampler at each texel's centre and half a texel along z, where the filter gives the
+// mean of two slices (past the last slice, the repeat brings back the first).
+constexpr const char VOLUME_WRITE_GLSL[] = R"glsl(#version 450
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(set = 0, binding = 0, rgba16f) uniform restrict writeonly image3D volume;
+void main() {
+    uvec3 p = gl_GlobalInvocationID;
+    imageStore(volume, ivec3(p), vec4(p, float(p.x + 2u * p.y + 4u * p.z)));
+}
+)glsl";
+
+constexpr const char VOLUME_SAMPLE_GLSL[] = R"glsl(#version 450
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(set = 0, binding = 0) uniform texture3D volume;
+layout(set = 0, binding = 1) uniform sampler linear;
+layout(set = 0, binding = 2, std430) restrict writeonly buffer Out { vec4 values[]; };
+void main() {
+    uvec3 p = gl_GlobalInvocationID;
+    vec3 size = vec3(textureSize(sampler3D(volume, linear), 0));
+    uint i = ((p.z * uint(size.y) + p.y) * uint(size.x) + p.x) * 2u;
+    vec3 centre = (vec3(p) + 0.5) / size;
+    values[i] = textureLod(sampler3D(volume, linear), centre, 0.0);
+    values[i + 1u] = textureLod(sampler3D(volume, linear), centre + vec3(0.0, 0.0, 0.5 / size.z), 0.0);
+}
+)glsl";
+
 constexpr uint32_t PLUMBING_WORDS = 1000;
 constexpr uint32_t TEXTURE_W = 16;
 constexpr uint32_t TEXTURE_H = 8;
+constexpr uint32_t VOLUME_W = 8;
+constexpr uint32_t VOLUME_H = 4;
+constexpr uint32_t VOLUME_D = 4;
 constexpr uint32_t PLUMBING_MUL = 7;
 constexpr uint32_t PLUMBING_ADD = 11;
 constexpr uint32_t POINTS_PER_ORIGIN = 1024;
@@ -182,6 +213,73 @@ void check_textures(ov::gpu::Device &p_device, Report &r_report) {
     }
 }
 
+// An IEEE half float's value (normal numbers and zero: the check's values).
+float half_value(uint16_t p_bits) {
+    const int exponent = (p_bits >> 10) & 31;
+    const float mantissa = float(p_bits & 1023) / 1024.0f;
+    const float value = exponent == 0 ? 0.0f : std::ldexp(1.0f + mantissa, exponent - 15);
+    return (p_bits & 0x8000) ? -value : value;
+}
+
+// The 3D texture (VOLUME_WRITE_GLSL) read back, and sampled through the linear sampler (VOLUME_SAMPLE_GLSL).
+void check_volume(ov::gpu::Device &p_device, Report &r_report) {
+    using namespace ov::gpu;
+    ov::str error;
+    const Pipeline write = p_device.create_compute_pipeline("gpu_check_volume_write", VOLUME_WRITE_GLSL, error);
+    if (!write.is_valid()) {
+        r_report.error = "volume write shader: " + error;
+        return;
+    }
+    const Pipeline sample = p_device.create_compute_pipeline("gpu_check_volume_sample", VOLUME_SAMPLE_GLSL, error);
+    if (!sample.is_valid()) {
+        p_device.free(write);
+        r_report.error = "volume sample shader: " + error;
+        return;
+    }
+    const uint32_t texels = VOLUME_W * VOLUME_H * VOLUME_D;
+    const Texture volume = p_device.create_texture_3d(TextureFormat::RGBA16_FLOAT, VOLUME_W, VOLUME_H, VOLUME_D, TEXTURE_STORAGE | TEXTURE_SAMPLED | TEXTURE_COPY_SRC);
+    const Buffer out = p_device.create_buffer(BufferKind::STORAGE, texels * 2 * 16);
+    const BindSet write_set = p_device.create_bind_set(write, { Binding::storage_image(0, volume) });
+    const BindSet sample_set = p_device.create_bind_set(sample, { Binding::texture(0, volume), Binding::linear_sampler(1), { 2, BufferKind::STORAGE, out } });
+    p_device.dispatch(write, write_set, nullptr, 0, VOLUME_W / 4, VOLUME_H / 4, VOLUME_D / 4);
+    p_device.dispatch(sample, sample_set, nullptr, 0, VOLUME_W / 4, VOLUME_H / 4, VOLUME_D / 4);
+    ov::bytes got_texels;
+    p_device.read_texture_async(volume, [&](const ov::bytes &p_data) { got_texels = p_data; });
+    p_device.sync();
+    const ov::bytes got_samples = p_device.read_buffer(out, 0, texels * 2 * 16);
+    if (got_texels.size() != texels * 8 || got_samples.size() != texels * 2 * 16) {
+        r_report.error = ov::format("volume readback: %d texel and %d sample bytes", int64_t(got_texels.size()), int64_t(got_samples.size()));
+    } else {
+        const auto value = [](uint32_t x, uint32_t y, uint32_t z, int k) {
+            const float v[4] = { float(x), float(y), float(z), float(x + 2 * y + 4 * z) };
+            return v[k];
+        };
+        for (uint32_t z = 0; z < VOLUME_D; z++) {
+            for (uint32_t y = 0; y < VOLUME_H; y++) {
+                for (uint32_t x = 0; x < VOLUME_W; x++) {
+                    const uint32_t i = (z * VOLUME_H + y) * VOLUME_W + x;
+                    const uint32_t z1 = (z + 1) % VOLUME_D; // the repeat
+                    for (int k = 0; k < 4; k++) {
+                        uint16_t bits;
+                        std::memcpy(&bits, got_texels.data() + (i * 4 + k) * 2, 2);
+                        float centre, between;
+                        std::memcpy(&centre, got_samples.data() + (i * 2 * 4 + k) * 4, 4);
+                        std::memcpy(&between, got_samples.data() + ((i * 2 + 1) * 4 + k) * 4, 4);
+                        const float want_between = 0.5f * (value(x, y, z, k) + value(x, y, z1, k));
+                        r_report.plumbing_checked += 3;
+                        r_report.plumbing_mismatch += half_value(bits) != value(x, y, z, k) ? 1 : 0;
+                        r_report.plumbing_mismatch += centre != value(x, y, z, k) ? 1 : 0;
+                        r_report.plumbing_mismatch += std::abs(between - want_between) > 1e-2f ? 1 : 0;
+                    }
+                }
+            }
+        }
+    }
+    for (Handle h : { Handle(write_set), Handle(sample_set), Handle(volume), Handle(out), Handle(write), Handle(sample) }) {
+        p_device.free(h);
+    }
+}
+
 void check_noise(ov::gpu::Device &p_device, Report &r_report) {
     using namespace ov::gpu;
     const ExactNoise::OctaveSet set = ExactNoise::reference_fbm3d(CHECK_VOXEL_M);
@@ -284,6 +382,9 @@ Report run(ov::gpu::Device &p_device) {
     check_plumbing(p_device, report);
     if (report.error.empty()) {
         check_textures(p_device, report);
+    }
+    if (report.error.empty()) {
+        check_volume(p_device, report);
     }
     if (report.error.empty()) {
         check_noise(p_device, report);

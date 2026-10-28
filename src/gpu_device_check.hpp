@@ -4,7 +4,8 @@
 
 // A backend's self-check, the same code on every adapter (Dawn: ov_dawn --check; Godot: FrameSpike, frame_test.sh):
 // the device's plumbing (uploads, clear, copy, uniform, push constants, an unused binding, sync and async readbacks;
-// textures: a storage image written, a region copied, an update and a clear read back),
+// textures: a storage image written, a region copied, an update and a clear read back; a 3D half-float image written,
+// read back and sampled through a texture and the linear sampler),
 // then the engine's exact noise on the GPU against the CPU, bit for bit, at hash-random points of far origins and
 // every LOD of PROBE_LODS.
 namespace GPUDeviceCheck {

@@ -2,6 +2,7 @@
 
 #include "gpu_device.hpp"
 
+#include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
 
 #include <map>
@@ -28,6 +29,7 @@ public:
     void clear_buffer(ov::gpu::Buffer p_buffer, uint64_t p_offset, uint64_t p_size) override;
     void copy_buffer(ov::gpu::Buffer p_from, ov::gpu::Buffer p_to, uint64_t p_from_offset, uint64_t p_to_offset, uint64_t p_size) override;
     ov::gpu::Texture create_texture(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage, const void *p_data) override;
+    ov::gpu::Texture create_texture_3d(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage) override;
     void update_texture(ov::gpu::Texture p_texture, const void *p_data, uint64_t p_size) override;
     void clear_texture(ov::gpu::Texture p_texture) override;
     void copy_texture(ov::gpu::Texture p_from, ov::gpu::Texture p_to, uint32_t p_from_x, uint32_t p_from_y, uint32_t p_to_x, uint32_t p_to_y,
@@ -59,6 +61,10 @@ private:
     bool owns_rd = false;
     uint64_t next_id = 1;
     std::map<uint64_t, Entry> entries; // by id: freed newest first, dependents before what they use
+    godot::RID linear_sampler; // Binding::linear_sampler's, made on first use
+
+    static godot::Ref<godot::RDTextureFormat> texture_format(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage);
+    godot::RID _linear_sampler();
 
     ov::gpu::Handle _add(const Entry &p_entry);
     const Entry *_get(ov::gpu::Handle p_handle) const;

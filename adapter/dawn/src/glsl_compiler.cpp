@@ -15,7 +15,9 @@ namespace {
 
 // SPIR-V opcodes, decorations and storage classes read by reflect().
 constexpr uint32_t OP_TYPE_IMAGE = 25;
+constexpr uint32_t OP_TYPE_SAMPLER = 26;
 constexpr uint32_t IMAGE_FORMAT_RGBA16F = 2; // SPIR-V's ImageFormat Rgba16f
+constexpr uint32_t DIM_3D = 2; // SPIR-V's Dim 3D
 constexpr uint32_t OP_TYPE_POINTER = 32;
 constexpr uint32_t OP_VARIABLE = 59;
 constexpr uint32_t OP_DECORATE = 71;
@@ -29,10 +31,16 @@ constexpr uint32_t STORAGE_UNIFORM_CONSTANT = 0;
 constexpr uint32_t STORAGE_UNIFORM = 2;
 constexpr uint32_t STORAGE_STORAGE_BUFFER = 12;
 
-// The variables that are storage images (an image type with Sampled = 2, behind a UniformConstant pointer), with their
-// image format.
-std::map<uint32_t, uint32_t> storage_images(const std::vector<uint32_t> &p_spirv) {
-    std::map<uint32_t, uint32_t> image_types, pointer_to_image, out;
+// An image or sampler variable (behind a UniformConstant pointer): an image's Sampled operand (1: a sampled texture,
+// 2: a storage image), Dim and format; a sampler (OpTypeSampler) has sampled = 0.
+struct ImageInfo {
+    uint32_t sampled = 0;
+    uint32_t dim = 0;
+    uint32_t format = 0;
+};
+
+std::map<uint32_t, ImageInfo> image_variables(const std::vector<uint32_t> &p_spirv) {
+    std::map<uint32_t, ImageInfo> types, pointers, out;
     for (size_t i = 5; i < p_spirv.size();) {
         const uint32_t count = p_spirv[i] >> 16;
         const uint32_t op = p_spirv[i] & 0xFFFFu;
@@ -40,14 +48,27 @@ std::map<uint32_t, uint32_t> storage_images(const std::vector<uint32_t> &p_spirv
             break;
         }
         const uint32_t *w = &p_spirv[i];
-        if (op == OP_TYPE_IMAGE && count >= 9 && w[7] == 2) {
-            image_types[w[1]] = w[8];
-        } else if (op == OP_TYPE_POINTER && count >= 4 && w[2] == STORAGE_UNIFORM_CONSTANT && image_types.count(w[3])) {
-            pointer_to_image[w[1]] = image_types[w[3]];
-        } else if (op == OP_VARIABLE && count >= 4 && pointer_to_image.count(w[1])) {
-            out[w[2]] = pointer_to_image[w[1]];
+        if (op == OP_TYPE_IMAGE && count >= 9) {
+            types[w[1]] = ImageInfo{ w[7], w[3], w[8] };
+        } else if (op == OP_TYPE_SAMPLER && count >= 2) {
+            types[w[1]] = ImageInfo{};
+        } else if (op == OP_TYPE_POINTER && count >= 4 && w[2] == STORAGE_UNIFORM_CONSTANT && types.count(w[3])) {
+            pointers[w[1]] = types[w[3]];
+        } else if (op == OP_VARIABLE && count >= 4 && pointers.count(w[1])) {
+            out[w[2]] = pointers[w[1]];
         }
         i += count;
+    }
+    return out;
+}
+
+// The storage images (Sampled = 2) of image_variables.
+std::map<uint32_t, ImageInfo> storage_images(const std::vector<uint32_t> &p_spirv) {
+    std::map<uint32_t, ImageInfo> out;
+    for (const auto &[var, info] : image_variables(p_spirv)) {
+        if (info.sampled == 2) {
+            out[var] = info;
+        }
     }
     return out;
 }
@@ -55,7 +76,7 @@ std::map<uint32_t, uint32_t> storage_images(const std::vector<uint32_t> &p_spirv
 // The set-0 buffers (variable -> pointer -> struct, the struct's members all NonWritable for a readonly block) and storage
 // images.
 std::vector<ShaderBinding> reflect(const std::vector<uint32_t> &p_spirv) {
-    const std::map<uint32_t, uint32_t> images = storage_images(p_spirv);
+    const std::map<uint32_t, ImageInfo> images = image_variables(p_spirv);
     std::map<uint32_t, uint32_t> binding, set, var_type, var_class, pointee, struct_members, non_writable_members;
     std::map<uint32_t, bool> var_non_writable, var_non_readable;
     for (size_t i = 5; i < p_spirv.size();) {
@@ -93,10 +114,14 @@ std::vector<ShaderBinding> reflect(const std::vector<uint32_t> &p_spirv) {
             continue;
         }
         if (images.count(var)) {
+            const ImageInfo &info = images.at(var);
             ShaderBinding sb;
             sb.binding = b;
-            sb.image = true;
-            sb.half_float = images.at(var) == IMAGE_FORMAT_RGBA16F;
+            sb.image = info.sampled == 2;
+            sb.texture = info.sampled == 1;
+            sb.sampler = info.sampled == 0;
+            sb.volume = info.dim == DIM_3D;
+            sb.half_float = info.format == IMAGE_FORMAT_RGBA16F;
             sb.write_only = var_non_readable[var];
             sb.read_only = var_non_writable[var];
             out.push_back(sb);
@@ -120,7 +145,7 @@ std::vector<ShaderBinding> reflect(const std::vector<uint32_t> &p_spirv) {
 // WebGPU has no write-only storage buffers: a `writeonly` block (NonReadable) becomes read-write. The bits a shader
 // computes don't change, only what the validator allows. A storage image keeps it (a write-only storage texture).
 void drop_non_readable(std::vector<uint32_t> &r_spirv) {
-    const std::map<uint32_t, uint32_t> images = storage_images(r_spirv);
+    const std::map<uint32_t, ImageInfo> images = storage_images(r_spirv);
     std::vector<uint32_t> out(r_spirv.begin(), r_spirv.begin() + std::min<size_t>(5, r_spirv.size()));
     for (size_t i = 5; i < r_spirv.size();) {
         const uint32_t count = r_spirv[i] >> 16;
