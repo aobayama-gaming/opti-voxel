@@ -3,6 +3,9 @@
 #include "ov/math.hpp"
 #include "ov/str.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 // The climate's GLSL, generated from a table op for op with its CPU code in climate.cpp: the dual-number helpers, the
 // field terms and biome weights, and the pick.
 namespace Climate {
@@ -104,6 +107,44 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
     return glsl_fields(p_table, p_spec) + glsl_biome_weights(p_table, ALL_LIVE);
 }
 
+namespace {
+
+// Where region p_r can be non-zero: per field, the open interval (lo, hi) its edges leave (a rising edge's raw > 0 above
+// its anchor, a falling one's below).
+struct Support {
+    float lo[MAX_FIELDS];
+    float hi[MAX_FIELDS];
+};
+
+Support region_support(const Table &p_table, int p_r) {
+    Support s;
+    std::fill(std::begin(s.lo), std::end(s.lo), -INFINITY);
+    std::fill(std::begin(s.hi), std::end(s.hi), INFINITY);
+    for (const Edge &e : p_table.regions[size_t(p_r)].edges) {
+        if (e.scale > 0.0f) {
+            s.lo[e.field] = ov::max(s.lo[e.field], e.anchor);
+        } else {
+            s.hi[e.field] = ov::min(s.hi[e.field], e.anchor);
+        }
+    }
+    return s;
+}
+
+// Whether two regions can be non-zero at one point: their supports meet on every field (a margin of a fade's
+// thousandth keeps the boundary cases: a missed pair only costs speed).
+bool can_meet(const Support &p_a, const Support &p_b) {
+    for (int f = 0; f < MAX_FIELDS; f++) {
+        const float lo = ov::max(p_a.lo[f], p_b.lo[f]);
+        const float hi = ov::min(p_a.hi[f], p_b.hi[f]);
+        if (!(lo < hi + 1e-4f)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 std::vector<RegionPath> region_paths(const Table &p_table) {
     uint32_t used = 0u;
     for (const Biome &b : p_table.biomes) {
@@ -116,18 +157,38 @@ std::vector<RegionPath> region_paths(const Table &p_table) {
     if (__builtin_popcount(used) < 2) {
         return paths; // one landform or none: nothing to skip
     }
-    for (int r = 0; r < int(p_table.regions.size()); r++) {
-        if ((used & (1u << r)) == 0u) {
-            continue;
-        }
+    auto add = [&](uint32_t p_regions) {
         RegionPath path;
-        path.region = r;
-        path.off = used & ~(1u << r);
+        path.regions = p_regions;
+        path.off = used & ~p_regions;
         for (size_t b = 0; b < p_table.biomes.size(); b++) {
-            path.biomes |= p_table.biomes[b].region < 0 || p_table.biomes[b].region == r ? 1u << b : 0u;
+            const int r = p_table.biomes[b].region;
+            path.biomes |= r < 0 || (p_regions & (1u << r)) != 0u ? 1u << b : 0u;
         }
-        path.gated = 1u << r;
+        path.gated = p_regions;
         paths.push_back(path);
+    };
+    // Each region alone (its core), then each pair that can meet (their shared fade), while the report's bits last.
+    std::vector<int> regions;
+    for (int r = 0; r < int(p_table.regions.size()); r++) {
+        if ((used & (1u << r)) != 0u) {
+            regions.push_back(r);
+            add(1u << r);
+        }
+    }
+    if (regions.size() < 3) {
+        return paths; // a pair of two is the whole table
+    }
+    std::vector<Support> supports;
+    for (const int r : regions) {
+        supports.push_back(region_support(p_table, r));
+    }
+    for (size_t a = 0; a < regions.size(); a++) {
+        for (size_t b = a + 1; b < regions.size() && paths.size() < MAX_PATHS; b++) {
+            if (can_meet(supports[a], supports[b])) {
+                add((1u << regions[a]) | (1u << regions[b]));
+            }
+        }
     }
     return paths;
 }
@@ -140,7 +201,7 @@ uint32_t path_field_groups(const Table &p_table, const RegionPath &p_path) {
         }
     };
     for (int r = 0; r < int(p_table.regions.size()); r++) {
-        if (((p_path.off | (1u << p_path.region)) & (1u << r)) != 0u) {
+        if (((p_path.off | p_path.regions) & (1u << r)) != 0u) {
             edges(p_table.regions[size_t(r)].edges);
         }
     }
@@ -175,13 +236,20 @@ uint32_t path_field_groups(const Table &p_table, const RegionPath &p_path) {
 
 ov::str region_off_glsl(const Table &p_table, const std::vector<RegionPath> &p_paths) {
     using ExactNoise::glsl_float;
-    ov::str code;
+    uint32_t tested = 0u;
     for (const RegionPath &path : p_paths) {
+        tested |= path.off;
+    }
+    ov::str code;
+    for (int r = 0; r < int(p_table.regions.size()); r++) {
+        if ((tested & (1u << r)) == 0u) {
+            continue;
+        }
         ov::str any;
-        for (const Edge &e : p_table.regions[size_t(path.region)].edges) {
+        for (const Edge &e : p_table.regions[size_t(r)].edges) {
             any += ov::format("%scl_edge_off(f%d, %s, %s)", any.empty() ? "" : " || ", e.field, glsl_float(e.anchor), glsl_float(e.scale));
         }
-        code += ov::format("    bool rof%d = %s;\n", path.region, any);
+        code += ov::format("    bool rof%d = %s;\n", r, any);
     }
     return code;
 }

@@ -627,15 +627,17 @@ namespace {
 // samples' view, derived and stored in the fields' view at j = 1), the passes, the bands, the modulation and the derive,
 // then p_tail.
 // The fields' view's climate mode (Cascade::CLIMATE_*) with region paths: the item's climate words (CLIMATE_BINDING),
-// g_live (the groups a reduced mode carries), and the region dispatch's report (ANDed at j = 1, chunk items only) and
-// fail flag.
+// g_live (the groups a reduced mode carries), and the region dispatch's report (ANDed and ORed at j = 1, chunk items
+// only) and fail flag.
 void climate_mode_code(const Spec &p_spec, bool p_points, ov::str &r_flags, ov::str &r_values) {
     const Cascade::Modulation &mod = *p_spec.modulation;
     r_flags += ov::format("layout(set = 0, binding = %d, std430) restrict buffer ClimateItems { uvec4 climate_items[]; };\n", CLIMATE_BINDING);
     r_flags += "uint g_climate_item = 0u;\nuint g_climate_mode = 0u; // Cascade::CLIMATE_*\nuint g_live = 0xFFFFFFFFu; // the groups carried\n";
     r_flags += p_points ? ov::str("void climate_report(uint clean) {\n}\n")
-                        : ov::str("void climate_report(uint clean) {\n    uint seen = climate_items[g_climate_item].y;\n"
-                                  "    if (pc.j == 1 && (seen & clean) != seen) {\n        atomicAnd(climate_items[g_climate_item].y, clean);\n    }\n}\n");
+                        : ov::str("void climate_report(uint clean) {\n    if (pc.j != 1) {\n        return;\n    }\n"
+                                  "    uvec4 seen = climate_items[g_climate_item];\n    if ((seen.y & clean) != seen.y) {\n"
+                                  "        atomicAnd(climate_items[g_climate_item].y, clean);\n    }\n    if ((seen.w | clean) != seen.w) {\n"
+                                  "        atomicOr(climate_items[g_climate_item].w, clean);\n    }\n}\n");
     r_flags += "void climate_fail() {\n    climate_items[g_climate_item].z = 1u;\n}\n";
     r_flags += ov::format("uint climate_live(uint mode) {\n    if ((mode & %du) == 0u) {\n        return 0xFFFFFFFFu;\n    }\n    switch (mode & %du) {\n",
             int64_t(Cascade::CLIMATE_REDUCE), int64_t(Cascade::CLIMATE_PATH_MASK));
@@ -643,7 +645,11 @@ void climate_mode_code(const Spec &p_spec, bool p_points, ov::str &r_flags, ov::
         r_flags += ov::format("    case %du: return %du;\n", int64_t(p + 1), int64_t(mod.region_path_groups(p)));
     }
     r_flags += "    default: return 0xFFFFFFFFu;\n    }\n}\n";
-    r_values += "    g_climate_item = pc.chunk_base + c;\n    g_climate_mode = climate_items[g_climate_item].x;\n    g_live = climate_live(g_climate_mode);\n";
+    // The mode is the item's at j = 1 only (what the report measures: the levels above read points kilometres apart,
+    // across region borders); above, every path per point.
+    r_values += ov::format("    g_climate_item = pc.chunk_base + c;\n    g_climate_mode = pc.j == 1 ? climate_items[g_climate_item].x : %du;\n"
+                           "    g_live = climate_live(g_climate_mode);\n",
+            int64_t(Cascade::CLIMATE_UNKNOWN));
 }
 
 ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, bool p_points,

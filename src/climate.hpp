@@ -357,13 +357,15 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
 ov::str glsl_fields(const Table &p_table, const Cascade::Spec &p_spec);
 ov::str glsl_biome_weights(const Table &p_table, uint32_t p_live);
 
-// The region path (GPU only, docs/climate.md): where every region but r has an edge at 0 (cl_edge returns +0), the
-// biomes of those regions weigh +0 and their gated height terms add +0, and every reader of a weight (the amplitude
-// sums, the multifractal state, the warps, the height sum, rest) is left as it is by them, bit for bit. So the climate
-// code computes region r's biomes, the ones without a region and r's gated terms only. The test reads the fields, per
-// point, before the weights. One path per region some biome or gated term names; none with fewer than two such regions.
+// The region path (GPU only, docs/climate.md): where every region outside a set S has an edge at 0 (cl_edge returns
+// +0), the biomes of those regions weigh +0 and their gated height terms add +0, and every reader of a weight (the
+// amplitude sums, the multifractal state, the warps, the height sum, rest) is left as it is by them, bit for bit. So the
+// climate code computes S's biomes, the ones without a region and S's gated terms only. The test reads the fields, per
+// point, before the weights. The sets: each region some biome or gated term names (its core), then each pair of them
+// whose edges let both be non-zero at once (their shared fade), up to MAX_PATHS; none with fewer than two such regions.
+inline constexpr size_t MAX_PATHS = 32; // the GPU report's bits
 struct RegionPath {
-    int region = -1;
+    uint32_t regions = 0u; // S (bit r)
     uint32_t off = 0u; // the regions that must be off (bit r)
     uint32_t biomes = 0u; // the live biomes (glsl_biome_weights' p_live)
     uint32_t gated = 0u; // the live gated regions (height_sum_glsl's p_regions)
@@ -373,7 +375,7 @@ std::vector<RegionPath> region_paths(const Table &p_table);
 // the ground, the fields of every region's edges it tests, of its live biomes' edges and warps and of its live height
 // terms, closed under the fields' terms' sources, and the state. A chunk in its reduced mode carries only those.
 uint32_t path_field_groups(const Table &p_table, const RegionPath &p_path);
-// `bool rof<r>` for each path's region, after glsl_fields: some edge of region r returns +0 (cl_edge_off).
+// `bool rof<r>` for each region a path tests, after glsl_fields: some edge of region r returns +0 (cl_edge_off).
 ov::str region_off_glsl(const Table &p_table, const std::vector<RegionPath> &p_paths);
 // The path's condition on the rof<r>: every region in its `off` is off.
 ov::str region_condition_glsl(const RegionPath &p_path);

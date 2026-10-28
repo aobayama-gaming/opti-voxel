@@ -1439,6 +1439,7 @@ ov::Value GPUDirectMesher::get_stats() {
         cl["border"] = (int64_t)cs.border;
         cl["reports"] = (int64_t)cs.reports;
         cl["clean"] = (int64_t)cs.clean;
+        cl["none"] = (int64_t)cs.none;
         cl["failed"] = (int64_t)cs.failed;
         cl["failed_reduced"] = (int64_t)cs.failed_reduced;
         d["climate_paths"] = cl;

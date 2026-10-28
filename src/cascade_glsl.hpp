@@ -51,9 +51,10 @@ static constexpr int TABLE_RECORD_BINDING = 7;
 static constexpr int TABLE_LIST_BINDING = 8;
 // The per-sample material (chunk palette index) the meshers give create(): uint per sample, next to sdf_sample.
 static constexpr int MATERIAL_BINDING = 9;
-// A climate with region paths: per item a uvec4 (mode, report, fail, 0) the passes own (CascadePasses::upload_items),
-// after the base regions' bindings. mode: Cascade::CLIMATE_*; report: the paths that held at every point of the
-// item's level 1 (bit p, ANDed in mode CLIMATE_UNKNOWN, ~0 otherwise); fail: non-zero where a hinted path failed.
+// A climate with region paths: per item a uvec4 (mode, every, fail, some) the passes own (CascadePasses::upload_items),
+// after the base regions' bindings. mode: Cascade::CLIMATE_*; every / some: the paths that held at every / some point of
+// the item's level 1 (bit p, ANDed from ~0 / ORed from 0, in mode CLIMATE_UNKNOWN); fail: non-zero where a hinted path
+// failed.
 static constexpr int CLIMATE_BINDING = 12;
 static constexpr uint32_t CLIMATE_ITEM_BYTES = 16;
 

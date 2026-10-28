@@ -327,10 +327,11 @@ struct BandMod {
     ExactNoise::Float4 warp[3] = {}; // displacement per axis, LOD0 voxels (MOD_WARP)
 };
 
-// A chunk's climate mode (CascadePasses' per-item climate words, read by the region paths' GLSL): CLIMATE_UNKNOWN tries
-// every path per point and reports which held everywhere (j = 1); path p + 1 tries path p only and flags a point where
-// it fails; CLIMATE_BORDER runs the whole table, no test. CLIMATE_REDUCE (with a path): only its groups are carried
-// (Modulation::region_path_groups), so a flagged chunk's samples are wrong.
+// A chunk's climate mode at its level j = 1 (CascadePasses' per-item climate words, read by the region paths' GLSL; the
+// levels above try every path per point): CLIMATE_UNKNOWN tries every path per point and reports which held at every
+// and at some point; path p + 1 tries path p only and flags a point where it fails; CLIMATE_BORDER runs the whole table,
+// no test. CLIMATE_REDUCE (with a path): only its groups are loaded at j = 1 (Modulation::region_path_groups), so a
+// flagged chunk's samples are wrong.
 inline constexpr uint32_t CLIMATE_UNKNOWN = 0u;
 inline constexpr uint32_t CLIMATE_PATH_MASK = 0xFFu;
 inline constexpr uint32_t CLIMATE_BORDER = 0xFFu;
