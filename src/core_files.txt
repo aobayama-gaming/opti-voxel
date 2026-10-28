@@ -124,7 +124,6 @@ src/page_auditor.cpp
 src/page_auditor.hpp
 src/page_host.hpp
 src/page_shading_glsl.hpp
-src/planet_glsl.hpp
 src/shade_frame_glsl.hpp
 src/palette_pool.cpp
 src/palette_pool.hpp

@@ -139,11 +139,9 @@ public:
     VoxelPos render_origin_voxel() const;
     // The base's up at a render-space position (BaseSurface::up_dir): +y on the flat world, the planet's radial direction.
     UpAxis up_at(const double p_render_pos[3]) const;
-    // The planet's base in render space, for the shaders' altitude, up and cloud shell; false on the flat base. Its centre
-    // in metres from the render origin (changes with it), its radius in metres, and K = |centre|^2 - radius^2 (m^2) from
-    // double: the altitude (|p|^2 - 2 p.c + K) / (|p - c| + R) is then within ~1e-4 m in float32 at Earth's radius, where
-    // |p - c| - R would be within half a metre.
-    bool planet_render(Float3 &r_centre_m, float &r_radius_m, float &r_k_m2) const;
+    // The base in render space (BaseSurface::render), for the shaders' altitude, up and level spans (glsl_render): it
+    // changes with the render origin.
+    BaseSurface::Render base_render() const;
 
     // Render-origin rebasing. Render space (every Float3 the host passes or gets) is metres from the render origin,
     // which starts at the world origin. Called by the host before frame(): when the camera is farther than

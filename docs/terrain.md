@@ -61,4 +61,7 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   leaves' wind sway (world xz).
   Measured at Earth radius / 5 cm (`test_base_surface.cpp`): curvature 7e-6 cells at LODs 0-11, < 1% to LOD 16;
   radius < 0.4% from LOD 12; the forms' gap at the switch 0.35%. FrameSpike's `base_*` probes check the GLSL
-  bit for bit. The page shader's slope colours read the up per fragment (`planet_up`, `docs/look.md`).
+  bit for bit. The render side reads the base only through `BaseSurface::glsl_render` (render-space
+  `base_altitude`, `base_up`, `base_level_span`, from `BaseSurface::render`'s uniforms in double, `World::base_render`):
+  the pages' heights and slopes, the sky's frame and the cloud layer (`docs/look.md`). A new base kind adds its case to
+  those three functions and to `render`, and every render user follows it.

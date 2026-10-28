@@ -44,10 +44,8 @@ public:
     // The cloud uniforms as the page shader takes them (VoxelTerrain::set_page_params).
     Dictionary cloud_params() const;
     // The terrain's render frame (VoxelTerrain, at start and whenever its render origin moves): the origin's LOD0 voxel
-    // (low words: the shading frame's), the voxel size, how far the origin rose above the world origin (metres: the flat
-    // world's cloud layer stays at its height above the world origin; 0 on a planet, whose shell is above its base) and
-    // the planet's uniforms (GLSL_CLOUDS: planet_centre_m, planet_radius_m, planet_k_m2).
-    void set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, float p_origin_rise_m, const Dictionary &p_planet);
+    // (low words: the shading frame's), the voxel size and the base's uniforms (GLSL_CLOUDS: World::base_render).
+    void set_render_frame(const Vector3i &p_origin_voxel_lo, float p_voxel_m, const Dictionary &p_base);
 
     void _ready() override;
 
@@ -56,11 +54,11 @@ protected:
 
 private:
     void _apply();
-    void _apply_frame(); // the shading frame's and the planet's uniforms, on the sky material
+    void _apply_frame(); // the shading frame's and the base's uniforms, on the sky material
     void _push(const Dictionary &p_params); // to the sky material and the terrain siblings' page shader
 
     Ref<Texture2D> cloud_texture;
-    float cloud_height_m = 1500.0f; // metres above the world origin (cloud_params: above the render origin), a planet's base
+    float cloud_height_m = 1500.0f; // metres above the base
     float cloud_scale_m = 6000.0f; // metres per texture tile
     float cloud_cover = 0.4f; // fraction of the sky covered
     Vector2 cloud_wind = Vector2(9.0f, 3.0f); // m/s
@@ -69,8 +67,7 @@ private:
 
     Vector3i origin_voxel_lo; // set_render_frame's
     float voxel_m = 0.5f;
-    float origin_rise_m = 0.0f;
-    Dictionary planet;
+    Dictionary base;
 
     Ref<Shader> shader;
     Ref<ShaderMaterial> material;

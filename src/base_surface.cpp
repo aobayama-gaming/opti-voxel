@@ -358,3 +358,92 @@ vec4 base_radius(WorldPos p, int lod) {
 )glsl"),
             { { "REGION_SHIFT", ov::itos(REGION_SHIFT) }, { "REGION_HALF", ov::itos(REGION_HALF) }, { "CENTRE_LO", glsl_lo(anchor) }, { "CENTRE_HI", glsl_hi(anchor) }, { "RADIUS_LIMIT", ov::itos(RADIUS_LIMIT) }, { "RADIUS", glsl_float(float(radius)) } });
 }
+
+BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel_m) const {
+    Render r;
+    r.kind = base_kind;
+    double v[3];
+    const double len = offset(anchor, p_origin, v) * p_voxel_m;
+    if (base_kind == Kind::FLAT) {
+        r.point_m = Float3{ 0.0f, float(v[1] * p_voxel_m), 0.0f }; // only the datum's height counts
+        return r;
+    }
+    r.point_m = Float3{ float(v[0] * p_voxel_m), float(v[1] * p_voxel_m), float(v[2] * p_voxel_m) };
+    const double rm = radius * p_voxel_m;
+    r.radius_m = float(rm);
+    r.k_m2 = float((len - rm) * (len + rm));
+    return r;
+}
+
+float BaseSurface::Render::altitude(const Float3 &p_m) const {
+    const Float3 &c = point_m;
+    if (kind != Kind::SPHERE) {
+        return p_m.y - c.y;
+    }
+    const float q = (p_m.x * p_m.x + p_m.y * p_m.y + p_m.z * p_m.z) - 2.0f * (p_m.x * c.x + p_m.y * c.y + p_m.z * c.z) + k_m2;
+    const Float3 d = p_m - c;
+    return q / (std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z) + radius_m);
+}
+
+namespace {
+
+struct UniformDecl {
+    ov::str &out;
+    void decl(const char *p_type, const char *p_name) { out += ov::str("uniform ") + p_type + " " + p_name + ";\n"; }
+    void operator()(const char *p_name, int) { decl("int", p_name); }
+    void operator()(const char *p_name, float) { decl("float", p_name); }
+    void operator()(const char *p_name, const Float3 &) { decl("vec3", p_name); }
+};
+
+} // namespace
+
+ov::str BaseSurface::glsl_render_uniforms() {
+    ov::str out;
+    Render().visit(UniformDecl{ out });
+    return out;
+}
+
+ov::str BaseSurface::glsl_render() {
+    return ov::replace_all(ov::str(R"glsl(
+const int BASE_SPHERE = SPHERE_KIND;
+
+// SPHERE: |p - centre|^2 - (radius + h)^2 (m^2) from K, so its low bits survive (p - centre alone loses them on a large
+// planet).
+float base_q(vec3 p, float h) {
+    return dot(p, p) - 2.0 * dot(p, base_point_m) + (base_k_m2 - h * (2.0 * base_radius_m + h));
+}
+
+// The altitude of render position p above the base (metres, negative below).
+float base_altitude(vec3 p) {
+    if (base_kind == BASE_SPHERE) {
+        return base_q(p, 0.0) / (length(p - base_point_m) + base_radius_m);
+    }
+    return p.y - base_point_m.y;
+}
+
+// The base's up at p: base_altitude's unit gradient.
+vec3 base_up(vec3 p) {
+    return base_kind == BASE_SPHERE ? normalize(p - base_point_m) : vec3(0.0, 1.0, 0.0);
+}
+
+// Where the ray p + t dir (dir unit) is below altitude h: t in [t.x, t.y] (either may be behind p; +-1e30 unbounded);
+// false where it never is. SPHERE: the roots of |p + t dir - c| = R + h, the far one from b and the near one as q / far,
+// so both keep their bits.
+bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t) {
+    if (base_kind == BASE_SPHERE) {
+        float q = base_q(p, h);
+        float b = dot(p - base_point_m, dir);
+        float disc = b * b - q;
+        float s = sqrt(max(disc, 0.0));
+        float far = b > 0.0 ? -q / (b + s) : s - b;
+        t = vec2(far != 0.0 ? q / far : -s - b, far);
+        return disc >= 0.0;
+    }
+    float below = h - (p.y - base_point_m.y);
+    float level = below / dir.y;
+    t = dir.y > 0.0 ? vec2(-1e30, level) : (dir.y < 0.0 ? vec2(level, 1e30) : vec2(-1e30, 1e30));
+    return dir.y != 0.0 || below > 0.0;
+}
+)glsl"),
+            { { "SPHERE_KIND", ov::itos(int(Kind::SPHERE)) } });
+}

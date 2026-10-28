@@ -84,8 +84,8 @@ public:
         const int fit = int(std::ceil(std::log2(r / double(BaseSurface::MAX_RADIUS_CELLS))));
         return BaseSurface::sphere(VoxelPos(0, 0, 0), r, ov::clamp(fit + SWITCH_MARGIN, 0, BaseSurface::MAX_SWITCH_LOD));
     }
-    // The flat preset's ground: 50 m below the datum, halfway between the page shader's 100 m contour lines. On one
-    // (300 m), a flat ground has fwidth ~ 0 and float noise picks the contour shade per triangle: it flickers.
+    // The flat preset's ground, its base: 50 m below the datum. The page shader's contour lines lie halfway between whole
+    // 100 m of altitude, never at 0: on one, a flat ground has fwidth ~ 0 and float noise picks the shade per triangle.
     static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
 
     // Amplitude (metres) of the octave of wavelength p_wavelength_m in the continents preset.
