@@ -52,6 +52,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_sun_direction", "towards_sun"), &VoxelTerrain::set_sun_direction);
     ClassDB::bind_method(D_METHOD("set_planet_radius", "metres"), &VoxelTerrain::set_planet_radius);
     ClassDB::bind_method(D_METHOD("get_planet_radius"), &VoxelTerrain::get_planet_radius);
+    ClassDB::bind_method(D_METHOD("set_planet_ring", "metres"), &VoxelTerrain::set_planet_ring);
+    ClassDB::bind_method(D_METHOD("get_planet_ring"), &VoxelTerrain::get_planet_ring);
     ClassDB::bind_method(D_METHOD("set_climate_path", "path"), &VoxelTerrain::set_climate_path);
     ClassDB::bind_method(D_METHOD("get_climate_path"), &VoxelTerrain::get_climate_path);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
@@ -178,6 +180,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_radius", PROPERTY_HINT_RANGE, "0,100000000,1,suffix:m"), "set_planet_radius", "get_planet_radius");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_ring", PROPERTY_HINT_RANGE, "0,100000000,1,suffix:m"), "set_planet_ring", "get_planet_ring");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "atmosphere"), "set_atmosphere", "get_atmosphere");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "atmosphere_scale", PROPERTY_HINT_RANGE, "0,10,0.0001"), "set_atmosphere_scale", "get_atmosphere_scale");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "clouds"), "set_clouds", "get_clouds");
@@ -461,6 +464,15 @@ void VoxelTerrain::set_planet_radius(double p_metres) {
 
 double VoxelTerrain::get_planet_radius() const {
     return cfg().planet_radius_m;
+}
+
+void VoxelTerrain::set_planet_ring(double p_metres) {
+    ERR_FAIL_COND_MSG(world.is_started(), "planet_ring must be set before the terrain enters the tree.");
+    cfg().planet_ring_m = p_metres;
+}
+
+double VoxelTerrain::get_planet_ring() const {
+    return cfg().planet_ring_m;
 }
 
 void VoxelTerrain::set_atmosphere(bool p_enabled) {

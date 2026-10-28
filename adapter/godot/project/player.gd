@@ -135,6 +135,8 @@ func _enter_tree() -> void:
 			terrain.climate_path = a.trim_prefix("--climate=")
 		if a.begins_with("--planet_radius_km=") and terrain:
 			terrain.planet_radius = 1000.0 * a.trim_prefix("--planet_radius_km=").to_float()
+		if a.begins_with("--planet_ring_km=") and terrain:
+			terrain.planet_ring = 1000.0 * a.trim_prefix("--planet_ring_km=").to_float()
 		if a.begins_with("--atmosphere=") and terrain:
 			terrain.atmosphere = a.trim_prefix("--atmosphere=") == "1"
 		if a.begins_with("--atmosphere_scale=") and terrain:

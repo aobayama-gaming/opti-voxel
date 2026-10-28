@@ -9,7 +9,7 @@
 
 #include <vector>
 
-// A sphere's curvature-form regions on the GPU (BaseSurface: below its switch LOD a point's base reads the Region of its
+// A curved base's (sphere, torus) curvature-form regions on the GPU (BaseSurface: below its switch LOD a point's base reads the Region of its
 // cell, computed on the CPU in double). The cascade passes upload, per batch, the regions its items touch and SLOTS
 // region indices per item; the level shader's base_at picks the slot from the point's cell.
 //
@@ -46,7 +46,7 @@ struct Tables {
 // item's box is its point). r_tables keeps its capacity from one batch to the next.
 void build(const BaseSurface &p_base, const uint8_t *p_items, uint32_t p_count, const ChunkParam &p_param, bool p_points, Tables &r_tables);
 
-// GLSL after BaseSurface::glsl() of a SPHERE: the region buffers, the item global g_base_item (the shader sets it to
+// GLSL after BaseSurface::glsl() of a curved base: the region buffers, the item global g_base_item (the shader sets it to
 // the item being sampled) and `vec4 base_at(WorldPos p, int lod)`, BaseSurface::at bit for bit.
 ov::str glsl(const BaseSurface &p_base);
 

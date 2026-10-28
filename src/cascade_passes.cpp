@@ -98,8 +98,8 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     if (p_material.is_valid()) {
         bindings.push_back({ uint32_t(CascadeGLSL::MATERIAL_BINDING), BufferKind::STORAGE, p_material });
     }
-    sphere = p_sdf->get_sphere_base();
-    if (sphere != nullptr) {
+    curved = p_sdf->get_curved_base();
+    if (curved != nullptr) {
         batch_items = ov::max(p_batch_items, max_chunks);
         base_regions = device->create_buffer(BufferKind::STORAGE, uint64_t(max_regions()) * BaseRegions::REGION_BYTES);
         base_region_index = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * BaseRegions::SLOTS * sizeof(uint32_t));
@@ -154,7 +154,7 @@ void CascadePasses::free() {
     base_regions = Buffer();
     base_region_index = Buffer();
     input = Buffer();
-    sphere = nullptr;
+    curved = nullptr;
     device = nullptr;
 }
 
@@ -163,12 +163,12 @@ void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint3
     if (slots == 0) {
         return;
     }
-    OV_ERR_FAIL_COND_MSG(sphere != nullptr && p_count > batch_items, "CascadePasses: more items than the passes were created for.");
+    OV_ERR_FAIL_COND_MSG(curved != nullptr && p_count > batch_items, "CascadePasses: more items than the passes were created for.");
     device->update_buffer(input, 0, uint64_t(slots) * GPUFrame::CHUNK_INPUT_BYTES, p_items);
-    if (sphere == nullptr || p_count == 0) {
+    if (curved == nullptr || p_count == 0) {
         return;
     }
-    BaseRegions::build(*sphere, p_items, p_count, item_param, is_points(), regions);
+    BaseRegions::build(*curved, p_items, p_count, item_param, is_points(), regions);
     OV_ERR_FAIL_COND_MSG(regions.region_count() > max_regions(), "CascadePasses: more base regions than the buffer holds.");
     device->update_buffer(base_regions, 0, regions.regions.size(), regions.regions.data());
     device->update_buffer(base_region_index, 0, regions.index.size() * sizeof(uint32_t), regions.index.data());

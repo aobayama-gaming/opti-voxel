@@ -22,8 +22,11 @@
 // - from it up, the radius form |p - centre| - radius in float32 (det_rsqrt), whose error (a few float steps of
 //   the radius) is far below 1% of a cell there.
 // Any smooth base the CPU can evaluate in double with its gradient and Hessian fits the curvature form
-// (make_region); a sphere is the one built in. On the GPU the regions an item touches are uploaded with its batch
-// (base_regions.hpp, whose base_at picks the form like at()).
+// (make_region, from shape()). On the GPU the regions an item touches are uploaded with its batch (base_regions.hpp,
+// whose base_at picks the form like at()).
+//
+// TORUS: a ring round the y axis through the centre, |(|v.xz| - ring, v.y)| - tube with v = p - centre: the sphere's
+// two forms with the torus's own shape (the radius form's lengths through det_rsqrt too).
 //
 // Every float op here is op for op the GLSL of glsl() (FrameSpike's base probes check it bit for bit).
 class BaseSurface {
@@ -52,7 +55,8 @@ public:
 
     enum class Kind {
         FLAT,
-        SPHERE
+        SPHERE,
+        TORUS
     };
 
     // The curvature form's data of one region at one LOD, in voxels of that LOD: d at its centre, n the gradient
@@ -67,14 +71,23 @@ public:
     // p_centre is snapped down to a multiple of 2^CENTRE_SHIFT voxels. Refused (ERR, the default flat base): a switch
     // LOD outside [0, MAX_SWITCH_LOD], a radius outside (0, 2^60], or over MAX_RADIUS_CELLS cells of the switch LOD.
     static BaseSurface sphere(const VoxelPos &p_centre, double p_radius, int p_switch_lod = SWITCH_LOD);
-    // SPHERE: the (snapped) centre.
+    // A torus's smallest ring in tubes: a hole of half a tube, far wider than the relief and the air over it.
+    static constexpr double MIN_RING_TUBES = 1.5;
+    // A ring of p_ring voxels round the y axis, its tube p_tube: sphere()'s limits on the outer radius p_ring + p_tube, and
+    // p_ring >= MIN_RING_TUBES * p_tube (ERR, the default flat base).
+    static BaseSurface torus(const VoxelPos &p_centre, double p_ring, double p_tube, int p_switch_lod = SWITCH_LOD);
+    // SPHERE, TORUS: the (snapped) centre.
     const VoxelPos &centre() const { return anchor; }
-    // SPHERE: the first LOD of the radius form (below it, the curvature form's regions).
+    // SPHERE, TORUS: the first LOD of the radius form (below it, the curvature form's regions).
     int get_switch_lod() const { return switch_lod; }
-    // SPHERE: the radius (LOD0 voxels).
+    // SPHERE: the radius; TORUS: the tube's (LOD0 voxels).
     double get_radius() const { return radius; }
+    // TORUS: the ring's radius (LOD0 voxels).
+    double get_ring() const { return ring; }
 
     Kind kind() const { return base_kind; }
+    // Not FLAT: a centre, regions below the switch LOD, a relief from the radius (SDFCascade).
+    bool curved() const { return base_kind != Kind::FLAT; }
     // FLAT: the datum's height (LOD0 voxels). ERR and 0 on another base.
     int64_t datum_y() const;
 
@@ -131,11 +144,19 @@ public:
     // user (the pages' heights and up, the sky's frame, the cloud layer) goes through glsl_render's
     // functions, so a new kind only adds its case there and here. From double: SPHERE's altitude
     // (|p|^2 - 2 p.c + K) / (|p - c| + R) keeps ~1e-4 m in float32 at Earth's radius, where |p - c| - R keeps half a metre.
+    // base_level_span on a TORUS (sphere-traced, base_trace_cross): the smallest step as a fraction of the bounding
+    // radius, the steps per crossing, the over-relaxation (a grazing ray's distance shrinks slowly; the level's solid
+    // is thick, so a 1.5x step only skips a grazing chord) and the halvings refining each crossing.
+    static constexpr float BASE_TRACE_EPS = 1e-5f;
+    static constexpr int BASE_TRACE_STEPS = 128;
+    static constexpr float BASE_TRACE_RELAX = 1.5f;
+    static constexpr int BASE_TRACE_BISECT = 10;
     struct Render {
         Kind kind = Kind::FLAT;
-        Float3 point_m; // FLAT: a point of the datum plane; SPHERE: the centre
-        float radius_m = 0.0f; // SPHERE
+        Float3 point_m; // FLAT: a point of the datum plane; SPHERE, TORUS: the centre
+        float radius_m = 0.0f; // SPHERE; TORUS: the tube's
         float k_m2 = 0.0f; // SPHERE: |centre|^2 - radius^2 (m^2)
+        float ring_m = 0.0f; // TORUS
 
         // Each field as the shaders' uniform (glsl_render_uniforms): p_f(name, value), value an int, a float or a Float3.
         // The one list of the uniforms' names and order: a host fills its shader parameters from it.
@@ -145,6 +166,7 @@ public:
             p_f("base_point_m", point_m);
             p_f("base_radius_m", radius_m);
             p_f("base_k_m2", k_m2);
+            p_f("base_ring_m", ring_m);
         }
         // base_altitude's formula (glsl_render) in float32 on the CPU: its precision (tests), not the GPU's bits.
         float altitude(const Float3 &p_m) const;
@@ -162,11 +184,17 @@ public:
     static ov::str glsl_render();
 
 private:
+    // A curved base's altitude at v = p - centre (LOD0 voxels, double), its gradient r_n and, unless null, its Hessian r_h
+    // (Region::h's order): what region() and the double helpers read (never on FLAT).
+    double shape(const double p_v[3], double r_n[3], double r_h[6] = nullptr) const;
+    // shape() at a LOD0 voxel.
+    double shape_at(const VoxelPos &p_voxel, double r_n[3], double r_h[6] = nullptr) const;
     // A FLAT base's at() (GLSL base_at).
     ExactNoise::Float4 flat_form(const VoxelPos &p_voxel, int p_lod) const;
 
     Kind base_kind = Kind::FLAT;
-    VoxelPos anchor; // FLAT: the datum (only y counts); SPHERE: the centre
-    double radius = 0.0; // SPHERE, LOD0 voxels
+    VoxelPos anchor; // FLAT: the datum (only y counts); SPHERE, TORUS: the centre
+    double radius = 0.0; // SPHERE; TORUS: the tube's (LOD0 voxels)
+    double ring = 0.0; // TORUS, LOD0 voxels
     int switch_lod = SWITCH_LOD;
 };

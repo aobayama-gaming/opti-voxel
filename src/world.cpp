@@ -94,6 +94,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     sdf->set_stream_part_sides(config.archetype_stream_part_sides);
     sdf->set_biome_radius(config.biome_radius);
     sdf->planet_radius_m = planet_radius_m(config);
+    sdf->planet_ring_m = config.planet_ring_m;
+    if (config.planet_ring_m > 0.0 && !(config.planet_radius_m > 0.0)) {
+        OV_ERR_PRINT("World: planet_ring_m needs planet_radius_m (the tube): the flat world.");
+    }
     if (!config.climate_path.empty()) {
         // Parsed and checked by configure() (an ERR there: no climate).
         const str err = Climate::load(config.climate_path, sdf->climate_data);
@@ -573,7 +577,7 @@ ChunkId World::start_origin() const {
     const int64_t root_units = int64_t(1) << config.lod_numbers;
     const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
     VoxelPos request = config.world_origin_request;
-    if (const BaseSurface planet = settings_planet(); planet.kind() == BaseSurface::Kind::SPHERE && request == VoxelPos(0, 0, 0)) {
+    if (const BaseSurface planet = settings_planet(); planet.curved() && request == VoxelPos(0, 0, 0)) {
         request = pole_lift(planet, double(chunk_param.voxel_size));
     }
     return ChunkId(WorldCoord::floor_div(request.x, root_voxels) * root_units, WorldCoord::floor_div(request.y, root_voxels) * root_units,
@@ -581,7 +585,8 @@ ChunkId World::start_origin() const {
 }
 
 BaseSurface World::settings_planet() const {
-    return planet_radius_m(config) > 0.0 ? SDFCascade::planet_base(planet_radius_m(config), double(config.chunk_param.voxel_size)) : BaseSurface();
+    return planet_radius_m(config) > 0.0 ? SDFCascade::planet_base(planet_radius_m(config), double(config.chunk_param.voxel_size), config.planet_ring_m)
+                                         : BaseSurface();
 }
 
 VoxelPos World::render_origin_voxel() const {
@@ -595,7 +600,7 @@ VoxelPos World::render_origin_voxel() const {
 void World::scene_shift(double r_shift_m[3]) const {
     const BaseSurface planet = settings_planet();
     const VoxelPos origin = render_origin_voxel();
-    render_m(planet.kind() == BaseSurface::Kind::SPHERE ? pole_lift(planet, double(config.chunk_param.voxel_size)) : origin, origin,
+    render_m(planet.curved() ? pole_lift(planet, double(config.chunk_param.voxel_size)) : origin, origin,
             double(config.chunk_param.voxel_size), r_shift_m);
 }
 

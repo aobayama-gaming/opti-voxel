@@ -65,3 +65,14 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   `base_altitude`, `base_up`, `base_level_span`, from `BaseSurface::render`'s uniforms in double, `World::base_render`):
   the pages' heights and slopes, the sky's frame, the cloud layer and the atmosphere (`docs/look.md`). A new base kind
   adds its case to those three functions, to `render` and to `curvature_radius_m`, and every render user follows it.
+  `TORUS` (`World::Settings::planet_ring_m`, `--planet_ring_km=K` with `--planet_radius_km=R`: a ring of K round the y
+  axis through the voxel (0, 0, 0), a tube of R, its start over the tube's top at +x) is such a kind: one `shape()` in
+  double gives every curved base's altitude, gradient and analytic Hessian (the regions, `up_dir`, `altitude`), its
+  radius form is |(|v.xz| - ring, v.y)| - tube with both lengths through `det_rsqrt`, the switch LOD from the outer
+  radius, the relief and the atmosphere's scale from the tube. Its `base_level_span` is sphere-traced
+  (`base_traced_span`, any base whose altitude is a distance) and gives a ray's first stretch below the level only:
+  across the hole the far tube's air and clouds are missing in the sky; each crossing is a relaxed trace (1.5x steps, up
+  to 128) refined by 10 halvings, so a torus's atmosphere and clouds cost more than a sphere's (unmeasured). The render
+  altitude is float32 from the centre (no K form), about a metre at a planet-sized ring. The ring is at least 1.5 tubes
+  (`MIN_RING_TUBES`), and FrameSpike's `base_torus` probes check its radius form bit for bit. Measured (`test_base_surface.cpp`, a 2^26 ring
+  and 2^24 tube): both forms under 1% of a cell to LOD 21, up within 1e-9.

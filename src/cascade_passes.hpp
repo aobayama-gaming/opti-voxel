@@ -33,7 +33,7 @@ public:
     // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
     int level_count(int p_min_lod) const;
     // A batch's p_count items (ChunkInput bytes; point items for create_points' passes) into the input buffer, and on a
-    // sphere the regions they read (base_regions.hpp). Before the batch's record_level / record_all. p_slots: the items
+    // curved base the regions they read (base_regions.hpp). Before the batch's record_level / record_all. p_slots: the items
     // written when more than p_count (a mesher's padded batch, its later passes dispatching over every slot).
     void upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots = 0);
 
@@ -65,8 +65,8 @@ private:
     Buffer bands;
     Buffer debug_placeholder;
     Buffer input;
-    // A sphere's regions (BaseRegions::Tables), sized for batch_items items; invalid on a flat base.
-    const BaseSurface *sphere = nullptr;
+    // A curved base's regions (BaseRegions::Tables), sized for batch_items items; invalid on a flat base.
+    const BaseSurface *curved = nullptr;
     ChunkParam item_param;
     BaseRegions::Tables regions;
     Buffer base_regions;

@@ -662,7 +662,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*ITEM_INDEX*/", cubes ? ov::replace_all(ov::str(FOLD_ITEM_INDEX), "CUBE", ov::itos(FOLD_CUBE)) : ov::str(fills.item_index));
     code = ov::replace_all(code, "/*SKIP*/", cubes ? "sample_live = false;" : "return;");
     // A sphere's base_at reads the item's regions (BaseRegions): g_base_item names it. Flat: the text as before.
-    const ov::str base_item = p_sdf->get_sphere_base() != nullptr ? "    g_base_item = pc.chunk_base + c;\n" : "";
+    const ov::str base_item = p_sdf->get_curved_base() != nullptr ? "    g_base_item = pc.chunk_base + c;\n" : "";
     code = ov::replace_all(code, "/*ITEM_FRAME*/", fills.item_frame + base_item);
     code = ov::replace_all(code, "/*ITEM_EXTENT*/", fills.item_extent);
     code = ov::replace_all(code, "/*LEVEL0_OUTPUT*/", fills.level0_output);

@@ -118,6 +118,18 @@ BaseSurface sphere_probe_base() {
     return BaseSurface::sphere(VoxelPos(int64_t(1) << 31, -(int64_t(1) << 32), 0), 4294967296.0 - 1000.5, SWITCH_LOD);
 }
 
+// The base probes' torus: a ring of 3 * 2^30 voxels round the y axis through (0, -2^31, 0), a tube of 2^31 - 1000.5, so
+// the probe points near the origins' y = 0 sit by the tube's top and in its hole (the axis included). Its GLSL is
+// renamed (torus_probe_glsl) beside the sphere's.
+BaseSurface torus_probe_base() {
+    constexpr int SWITCH_LOD = 16;
+    return BaseSurface::torus(VoxelPos(0, -(int64_t(1) << 31), 0), 3.0 * double(int64_t(1) << 30), 2147483648.0 - 1000.5, SWITCH_LOD);
+}
+
+ov::str torus_probe_glsl() {
+    return ov::replace_all(torus_probe_base().glsl(), { { "BaseRegion", "TorusProbeRegion" }, { "base_curvature", "torus_probe_curvature" }, { "base_radius", "torus_probe_radius" } });
+}
+
 // The flat base probe's datum (LOD0 voxels): not a multiple of the stretches, so their remainders reach the fraction.
 constexpr int64_t PROBE_FLAT_DATUM = 600;
 // The LOD of the sphere stretch probe's base sample.
@@ -180,13 +192,16 @@ vec4 probe_base_curvature_fn(WorldPos p, int lod) {
 vec4 probe_base_radius_fn(WorldPos p, int lod) {
     return base_radius(p, lod);
 }
+vec4 probe_base_torus_fn(WorldPos p, int lod) {
+    return torus_probe_radius(p, lod);
+}
 )glsl";
 
 // The bases, height_sdf and PROBE_BASE_GLSL with its constants (ProbeNoise::glsl, in every probe set's shader).
 ov::str probe_base_glsl() {
     using ExactNoise::glsl_float;
     using ExactNoise::glsl_uint;
-    return BaseSurface::flat(PROBE_FLAT_DATUM).glsl() + sphere_probe_base().glsl() + CascadeTerrain::GLSL_HEIGHT_SDF +
+    return BaseSurface::flat(PROBE_FLAT_DATUM).glsl() + sphere_probe_base().glsl() + torus_probe_glsl() + CascadeTerrain::GLSL_HEIGHT_SDF +
             ov::replace_all(ov::str(PROBE_BASE_GLSL), { { "REGION_SHIFT", ov::itos(BaseSurface::REGION_SHIFT) }, { "REGION_SEED", glsl_uint(PROBE_REGION_SEED) }, { "REGION_SALT", glsl_uint(PROBE_REGION_SALT) }, { "F_SHIFT", ov::itos(PROBE_REGION_F_SHIFT) }, { "F_BIAS", ov::itos(PROBE_REGION_F_BIAS) }, { "F_EXP", ov::itos(PROBE_REGION_F_EXP) }, { "D_SCALE", glsl_float(PROBE_REGION_D_SCALE) }, { "H_EXP", ov::itos(PROBE_REGION_H_EXP) } });
 }
 
@@ -494,7 +509,7 @@ void probe_octave_cell(WorldPos p, uint b) {
         probes.push_back(p);
     }
     // The base surface (base_surface.hpp): the flat base under a height (CascadeTerrain::height_sdf, a zero slope
-    // included: the sign of t's zeros), a sphere's curvature form on hashed regions and its radius form, at every LOD.
+    // included: the sign of t's zeros), a sphere's curvature form on hashed regions and its radius form, a torus's radius form, at every LOD.
     {
         const BaseSurface flat = BaseSurface::flat(PROBE_FLAT_DATUM);
         const BaseSurface sphere = sphere_probe_base();
@@ -510,6 +525,8 @@ void probe_octave_cell(WorldPos p, uint b) {
         probes.push_back(lod_probe("base_curvature", "probe_base_curvature_fn",
                 [](const WorldPos &q, int p_lod) { return BaseSurface::curvature_form(q.voxel, p_lod, probe_region(q.voxel, p_lod)); }));
         probes.push_back(lod_probe("base_radius", "probe_base_radius_fn", [sphere](const WorldPos &q, int p_lod) { return sphere.radius_form(q.voxel, p_lod); }));
+        const BaseSurface torus = torus_probe_base();
+        probes.push_back(lod_probe("base_torus", "probe_base_torus_fn", [torus](const WorldPos &q, int p_lod) { return torus.radius_form(q.voxel, p_lod); }));
     }
     return probes;
 }

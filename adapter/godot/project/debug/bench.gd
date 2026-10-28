@@ -114,6 +114,7 @@ extends Node3D
 ##                                LOD0 voxel instead of the world origin. On a planet (--planet_radius_km) the
 ##                                scene otherwise stands over its +y pole (VoxelTerrain.get_scene_shift); --pitch /
 ##                                --yaw turn the camera about the local up, the fly and walk paths stay level
+##   --planet_ring_km=KM          with --planet_radius_km: a torus round y, a ring of KM, the radius its tube's
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
 ##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
 ##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
@@ -279,6 +280,8 @@ func _ready() -> void:
 		terrain.climate_path = args["climate"]
 	if args.has("planet_radius_km"):
 		terrain.planet_radius = 1000.0 * float(args["planet_radius_km"])
+	if args.has("planet_ring_km"):
+		terrain.planet_ring = 1000.0 * float(args["planet_ring_km"])
 	if args.has("atmosphere"):
 		terrain.atmosphere = args["atmosphere"] == "1"
 	if args.has("atmosphere_scale"):

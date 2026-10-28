@@ -40,6 +40,8 @@ public:
         int terrain_mode = 1;
         // > 0: a planet of this radius (metres) centred on the voxel (0, 0, 0), its +y pole at y = radius (SDFCascade); 0 flat.
         double planet_radius_m = 0.0;
+        // > 0 with a planet: a torus round y, this ring's radius (metres), planet_radius_m its tube's (SDFCascade).
+        double planet_ring_m = 0.0;
         // The volumetric atmosphere over the base (Atmosphere), its scale (AtmosphereMedium::for_base: 0 from the base);
         // started only for a host that binds its textures (Hosts::atmosphere_textures), the clouds' likewise.
         bool atmosphere = true;

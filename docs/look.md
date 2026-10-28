@@ -141,7 +141,8 @@ that follow it.
 - **Checked:** unit tests (the layer's scale and lift, the periods, the substitution, the block, the shadow map's
   frame); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
   inside the flat world's layer, Earth from 100 km and the 2 km planet from the ground and from 4 km out.
-- **Limits:** the grid's 0.23 degrees show as jagged edges on a small planet seen whole; a cloud in front of terrain is
+- **Limits:** the grid's 0.23 degrees show as jagged edges on a small planet seen whole; the reach is a horizon on the
+  base's curvature sphere, so a torus seen from space has clouds on its near side only; a cloud in front of terrain is
   composited by its front and mean distances, so a hill reaching into one would be cut by texels (the layer is lifted
   over the world's largest relief instead, so no cloud wraps a peak); the wind is a render-space vector, so on a planet
   the noise drifts through the shell away from the pole; the grid's history is copied every frame (a ping-pong would

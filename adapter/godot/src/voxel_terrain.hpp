@@ -132,6 +132,9 @@ public:
     // A planet of this radius centred on the voxel (0, 0, 0) (ov::World::Settings::planet_radius_m); 0 the flat world.
     void set_planet_radius(double p_metres);
     double get_planet_radius() const;
+    // > 0: the planet is a torus round y, a ring of this radius, planet_radius its tube (Settings::planet_ring_m).
+    void set_planet_ring(double p_metres);
+    double get_planet_ring() const;
     // The volumetric atmosphere over the base (ov::Atmosphere, World::Settings::atmosphere) and its scale (0: from the
     // base's curvature). Set before the node enters the tree.
     void set_atmosphere(bool p_enabled);
