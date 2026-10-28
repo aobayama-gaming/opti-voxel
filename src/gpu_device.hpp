@@ -38,13 +38,15 @@ enum class BufferKind : uint8_t {
     UNIFORM, // std140 uniform buffer
 };
 
-// 2D textures: the quad pages, the batch's staging rows, the palettes (PageFormat's texels).
+// 2D textures: the quad pages, the batch's staging rows, the palettes (PageFormat's texels); the atmosphere's tables
+// (half floats, rgba16f).
 enum class TextureFormat : uint8_t {
     RGBA16_UINT,
+    RGBA16_FLOAT,
 };
 
 inline uint32_t texel_bytes(TextureFormat p_format) {
-    return p_format == TextureFormat::RGBA16_UINT ? 8 : 0;
+    return p_format == TextureFormat::RGBA16_UINT || p_format == TextureFormat::RGBA16_FLOAT ? 8 : 0;
 }
 
 // What a texture is used for (bits): a backend may lay it out for exactly these.

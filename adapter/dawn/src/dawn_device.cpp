@@ -40,6 +40,8 @@ void wait_for_events(const wgpu::Instance &p_instance) {
 
 wgpu::TextureFormat wgpu_format(gpu::TextureFormat p_format) {
     switch (p_format) {
+        case gpu::TextureFormat::RGBA16_FLOAT:
+            return wgpu::TextureFormat::RGBA16Float;
         case gpu::TextureFormat::RGBA16_UINT:
         default:
             return wgpu::TextureFormat::RGBA16Uint;
@@ -320,7 +322,7 @@ gpu::Pipeline DawnDevice::create_compute_pipeline(const str &p_name, const str &
         if (b.image) {
             e.storageTexture.access = b.write_only ? wgpu::StorageTextureAccess::WriteOnly
                                                    : (b.read_only ? wgpu::StorageTextureAccess::ReadOnly : wgpu::StorageTextureAccess::ReadWrite);
-            e.storageTexture.format = wgpu::TextureFormat::RGBA16Uint;
+            e.storageTexture.format = b.half_float ? wgpu::TextureFormat::RGBA16Float : wgpu::TextureFormat::RGBA16Uint;
             e.storageTexture.viewDimension = wgpu::TextureViewDimension::e2D;
         } else {
             e.buffer.type = b.uniform ? wgpu::BufferBindingType::Uniform

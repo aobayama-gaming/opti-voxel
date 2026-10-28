@@ -179,6 +179,8 @@ public:
     const Cascade::Spec *get_cascade() const override { return &spec; }
     // The parsed climate (configure), null without one; why climate_data was refused, empty if it wasn't.
     const Climate::Table *get_climate() const { return climate ? &*climate : nullptr; }
+    // The ground's largest relief over the base (amp_cap: MAX_AMP_M, a planet's PLANET_RELIEF of its radius), metres.
+    double get_relief_m() const { return double(amp_cap) * double(voxel_size); }
     const ov::str &get_climate_error() const { return climate_error; }
 
     // Whether ground samples take their biome's material: a climate with fields (the pick reads them; a table without

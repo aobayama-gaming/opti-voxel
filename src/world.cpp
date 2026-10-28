@@ -149,6 +149,11 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         gpu_mesher->set_trim_indices(config.legacy_trim_indices);
     }
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
+    if (config.atmosphere) {
+        atmosphere = new Atmosphere();
+        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
+                hosts.atmosphere_textures);
+    }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
         chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
@@ -236,6 +241,9 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
         chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
         last_camera = *p_camera_pos;
         has_camera = true;
+    }
+    if (atmosphere && p_camera_pos != nullptr) {
+        atmosphere->frame(*p_camera_pos, sun, base_render());
     }
 
     {
@@ -766,6 +774,10 @@ void World::stop() {
     }
     state.loaded_chunk.clear();
 
+    if (atmosphere) {
+        atmosphere->destroy(); // deletes itself on the device's thread
+        atmosphere = nullptr;
+    }
     if (direct_mesher) {
         direct_mesher->destroy(); // deletes itself on the device's thread
         direct_mesher = nullptr;

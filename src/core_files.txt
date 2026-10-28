@@ -156,3 +156,6 @@ src/cascade_report.cpp
 src/climate_report.hpp
 src/climate_report.cpp
 src/ov/png.hpp
+src/glsl_uniforms.hpp
+src/atmosphere.cpp
+src/atmosphere.hpp
