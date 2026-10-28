@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <memory>
+
 #include "godot_cpp/classes/node3d.hpp"
 #include "godot_cpp/classes/wrapped.hpp"
 #include "godot_cpp/variant/packed_float32_array.hpp"
@@ -63,6 +66,14 @@ private:
     void _move_render_origin(const Float3 &p_shift);
     // What follows the render origin outside the meshers: the sea level colours, the VoxelSky siblings' frame.
     void _push_render_frame();
+    // The atmosphere's uniforms to the pages and the VoxelSky siblings (World::start; its textures once made).
+    void _push_atmosphere(const Dictionary &p_params);
+    // The atmosphere's textures (Atmosphere::TexturesFn, render thread): their RenderingServer RIDs in p_rids, then
+    // _push_atmosphere on the main thread if the terrain p_terrain still exists; invalid ones free them. Static: the
+    // world's stop posts the last call, which runs after the node may be gone.
+    static void _rt_atmosphere_textures(RDDevice *p_device, std::shared_ptr<std::array<RID, 2>> p_rids, ObjectID p_terrain,
+            ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter);
+    float atmosphere_range_sent = -1.0f; // the last global atmo_range_m
 
 public:
     void _ready() override;
@@ -117,6 +128,14 @@ public:
     // A planet of this radius centred on the voxel (0, 0, 0) (ov::World::Settings::planet_radius_m); 0 the flat world.
     void set_planet_radius(double p_metres);
     double get_planet_radius() const;
+    // The volumetric atmosphere over the base (ov::Atmosphere, World::Settings::atmosphere) and its scale (0: from the
+    // base's curvature). Set before the node enters the tree.
+    void set_atmosphere(bool p_enabled);
+    bool get_atmosphere() const;
+    void set_atmosphere_scale(double p_scale);
+    double get_atmosphere_scale() const;
+    // The direction towards the sun (render space; VoxelSky, from its light): the atmosphere's camera volume.
+    void set_sun_direction(const Vector3 &p_towards_sun);
     // A climate table (JSON, src/climate.cpp's format: res:// or absolute), carried by the cascade and modulating the
     // ground's octaves per biome; empty for none (--climate=PATH). Set before the node enters the tree.
     void set_climate_path(const String &p_path);

@@ -1,6 +1,7 @@
 #include "quad_pool_spike.hpp"
 
 #include "godot_conv.hpp"
+#include "voxel_sky.hpp"
 
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
@@ -26,6 +27,7 @@ void QuadPoolSpike::_ready() {
     RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
     ERR_FAIL_NULL_MSG(rd, "QuadPoolSpike: no RenderingDevice (Compatibility renderer?)");
     device = new RDDevice(rd);
+    VoxelSky::add_atmosphere_globals(); // the page shader declares them
     host = new GodotPageHost(get_world_3d()->get_scenario(), device);
     host->set_material_param("voxel_size", ChunkParam().voxel_size); // the page shader's other defaults: chunk 32, skirt 2
     check = new QuadPoolCheck();

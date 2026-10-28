@@ -1,5 +1,6 @@
 #include "voxel_terrain.hpp"
 
+#include "godot_callable.hpp"
 #include "godot_conv.hpp"
 #include "ov/executor.hpp"
 #include "rd_utils.hpp"
@@ -12,6 +13,7 @@
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
+#include <godot_cpp/core/object.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <map>
 
@@ -40,6 +42,11 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_archetype_tree_area"), &VoxelTerrain::get_archetype_tree_area);
     ClassDB::bind_method(D_METHOD("set_biome_radius", "metres"), &VoxelTerrain::set_biome_radius);
     ClassDB::bind_method(D_METHOD("get_biome_radius"), &VoxelTerrain::get_biome_radius);
+    ClassDB::bind_method(D_METHOD("set_atmosphere", "enabled"), &VoxelTerrain::set_atmosphere);
+    ClassDB::bind_method(D_METHOD("get_atmosphere"), &VoxelTerrain::get_atmosphere);
+    ClassDB::bind_method(D_METHOD("set_atmosphere_scale", "scale"), &VoxelTerrain::set_atmosphere_scale);
+    ClassDB::bind_method(D_METHOD("get_atmosphere_scale"), &VoxelTerrain::get_atmosphere_scale);
+    ClassDB::bind_method(D_METHOD("set_sun_direction", "towards_sun"), &VoxelTerrain::set_sun_direction);
     ClassDB::bind_method(D_METHOD("set_planet_radius", "metres"), &VoxelTerrain::set_planet_radius);
     ClassDB::bind_method(D_METHOD("get_planet_radius"), &VoxelTerrain::get_planet_radius);
     ClassDB::bind_method(D_METHOD("set_climate_path", "path"), &VoxelTerrain::set_climate_path);
@@ -168,6 +175,8 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_radius", PROPERTY_HINT_RANGE, "0,100000000,1,suffix:m"), "set_planet_radius", "get_planet_radius");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "atmosphere"), "set_atmosphere", "get_atmosphere");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "atmosphere_scale", PROPERTY_HINT_RANGE, "0,10,0.0001"), "set_atmosphere_scale", "get_atmosphere_scale");
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
@@ -448,6 +457,28 @@ void VoxelTerrain::set_planet_radius(double p_metres) {
 
 double VoxelTerrain::get_planet_radius() const {
     return cfg().planet_radius_m;
+}
+
+void VoxelTerrain::set_atmosphere(bool p_enabled) {
+    ERR_FAIL_COND_MSG(world.is_started(), "atmosphere must be set before the terrain enters the tree.");
+    cfg().atmosphere = p_enabled;
+}
+
+bool VoxelTerrain::get_atmosphere() const {
+    return cfg().atmosphere;
+}
+
+void VoxelTerrain::set_atmosphere_scale(double p_scale) {
+    ERR_FAIL_COND_MSG(world.is_started(), "atmosphere_scale must be set before the terrain enters the tree.");
+    cfg().atmosphere_scale = p_scale;
+}
+
+double VoxelTerrain::get_atmosphere_scale() const {
+    return cfg().atmosphere_scale;
+}
+
+void VoxelTerrain::set_sun_direction(const Vector3 &p_towards_sun) {
+    world.set_sun(ov_f3(p_towards_sun.normalized()));
 }
 
 void VoxelTerrain::set_climate_path(const String &p_path) {
@@ -773,8 +804,8 @@ void VoxelTerrain::_move_render_origin(const Float3 &p_shift) {
 
 namespace {
 
-// BaseSurface::Render's uniforms (Render::visit) into shader parameters.
-struct BaseParams {
+// A struct's uniforms (its visit: BaseSurface::Render, AtmosphereMedium) into shader parameters.
+struct ShaderParams {
     Dictionary &out;
     void operator()(const char *p_name, int p_v) { out[p_name] = p_v; }
     void operator()(const char *p_name, float p_v) { out[p_name] = p_v; }
@@ -783,13 +814,50 @@ struct BaseParams {
 
 } // namespace
 
+void VoxelTerrain::_push_atmosphere(const Dictionary &p_params) {
+    set_page_params(p_params);
+    Node *parent = get_parent();
+    for (int i = 0; parent && i < parent->get_child_count(); i++) {
+        if (VoxelSky *sky = Object::cast_to<VoxelSky>(parent->get_child(i))) {
+            sky->set_atmosphere(p_params);
+        }
+    }
+}
+
+void VoxelTerrain::_rt_atmosphere_textures(RDDevice *p_device, std::shared_ptr<std::array<RID, 2>> p_rids, ObjectID p_terrain,
+        ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) {
+    RenderingServer *rs = RenderingServer::get_singleton();
+    for (RID &rid : *p_rids) {
+        if (rid.is_valid()) {
+            rs->free_rid(rid);
+            rid = RID();
+        }
+    }
+    if (!p_volume.is_valid()) {
+        return; // the world stops (_teardown turned the atmosphere off on the pages and the sky)
+    }
+    (*p_rids)[0] = rs->texture_rd_create(p_device->get_rid(p_volume));
+    (*p_rids)[1] = rs->texture_rd_create(p_device->get_rid(p_multiscatter));
+    // The materials are set on the main thread.
+    const RID volume = (*p_rids)[0];
+    const RID multiscatter = (*p_rids)[1];
+    godot_callable([p_terrain, volume, multiscatter]() {
+        if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(ObjectDB::get_instance(p_terrain))) {
+            Dictionary params;
+            params["atmo_volume"] = volume;
+            params["atmo_multiscatter"] = multiscatter;
+            terrain->_push_atmosphere(params);
+        }
+    }).call_deferred();
+}
+
 void VoxelTerrain::_push_render_frame() {
     const ChunkParam &param = world.chunk_param();
     const SDFCascade &sdf = world.terrain();
     // The base in render space (World::base_render), for the pages' up, altitude and cloud shadows and the sky's frame and
     // cloud layer.
     Dictionary base;
-    world.base_render().visit(BaseParams{ base });
+    world.base_render().visit(ShaderParams{ base });
     set_page_params(base);
     if (page_host && sdf.preset == SDFCascade::Preset::CONTINENTS) {
         page_host->set_material_param("height_colours", true); // around sea level, the base
@@ -918,6 +986,7 @@ void VoxelTerrain::_ready() {
     }
 
     main_device = new RDDevice(rd);
+    VoxelSky::add_atmosphere_globals(); // before the page shader compiles
     ov::World::Hosts hosts;
     hosts.device = main_device;
     if (cfg().pipeline_mode == ov::World::PIPELINE_GPU_DIRECT) {
@@ -928,6 +997,8 @@ void VoxelTerrain::_ready() {
         hosts.meshes = mesh_host;
     }
     hosts.hidden_meshes = []() -> std::unique_ptr<MeshHost> { return std::make_unique<GodotMeshHost>(); };
+    hosts.atmosphere_textures = [device = main_device, rids = std::make_shared<std::array<RID, 2>>(), id = ObjectID(get_instance_id())](
+                                        ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) { _rt_atmosphere_textures(device, rids, id, p_volume, p_multiscatter); };
     const Float3 camera_pos = camera != nullptr ? ov_f3(camera->get_global_position()) : Float3();
     const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
     const double camera_far = _camera_far();
@@ -946,6 +1017,13 @@ void VoxelTerrain::_ready() {
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     }
     _push_render_frame();
+    if (const Atmosphere *atmosphere = world.get_atmosphere()) {
+        // The medium, the longest path (constant for a world) and the switch; the textures follow once made.
+        Dictionary params;
+        atmosphere->host_constants().visit(ShaderParams{ params });
+        params["atmo_enabled"] = true;
+        _push_atmosphere(params);
+    }
 }
 
 // The instance edit's rotation (9 floats) and params (8): null when not given (identity / zero).
@@ -1024,6 +1102,10 @@ void VoxelTerrain::_process(double) {
     } else {
         world.frame(nullptr, nullptr);
     }
+    if (const Atmosphere *atmosphere = world.get_atmosphere(); atmosphere && atmosphere->range_m() != atmosphere_range_sent) {
+        atmosphere_range_sent = atmosphere->range_m();
+        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_range_m", atmosphere_range_sent);
+    }
     // Tracing reads every captured frame (the GPU track).
     if ((debug_gpu_profile && world.frames() % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {
         if (!gpu_profiler) {
@@ -1082,6 +1164,14 @@ void VoxelTerrain::_teardown() {
     if (gpu_profiler) {
         RDUtils::delete_on_render_thread(gpu_profiler);
         gpu_profiler = nullptr;
+    }
+    if (world.get_atmosphere()) {
+        // Off on the pages and the sky before its textures go (the stop's last call frees them).
+        Dictionary off;
+        off["atmo_enabled"] = false;
+        off["atmo_volume"] = RID();
+        off["atmo_multiscatter"] = RID();
+        _push_atmosphere(off);
     }
     world.stop();
     if (page_host) {
