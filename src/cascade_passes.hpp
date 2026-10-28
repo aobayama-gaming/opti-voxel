@@ -19,12 +19,10 @@ public:
     // second variant whose level 0 folds the chunks' instance lists (record_level's p_fold). p_sdf_material: the
     // mesher's per-sample material buffer (uint per sample, indexed like sdf_sample), written by level 0 when given.
     // p_batch_items: the items of a batch (upload_items), when record_all runs it in several sub-batches; 0: p_max_chunks.
-    // p_climate_words: a climate with region guards gets the chunks' climate words (get_climate_items, CLIMATE_BINDING:
-    // the mesher's reduced chunks, ClimateChunkModes).
     using Buffer = ov::gpu::Buffer;
     bool create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input, Buffer p_param_ubo,
             Buffer p_sdf_sample, Buffer p_debug = Buffer(), const CascadePasses *p_share_scratch = nullptr, Buffer p_table_records = Buffer(),
-            Buffer p_table_list = Buffer(), Buffer p_sdf_material = Buffer(), uint32_t p_batch_items = 0, bool p_climate_words = false);
+            Buffer p_table_list = Buffer(), Buffer p_sdf_material = Buffer(), uint32_t p_batch_items = 0);
     // Point items (CascadePointsGPU): p_input holds GPUFrame::encode_point_item items (any LODs), p_param_ubo the std140
     // point_param, p_values one vec4 per item (SDFCascade::ground_unit's bits).
     bool create_points(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, Buffer p_input,
@@ -36,12 +34,8 @@ public:
     int level_count(int p_min_lod) const;
     // A batch's p_count items (ChunkInput bytes; point items for create_points' passes) into the input buffer, and on a
     // sphere the regions they read (base_regions.hpp). Before the batch's record_level / record_all. p_slots: the items
-    // written when more than p_count (a mesher's padded batch, its later passes dispatching over every slot). p_modes: each
-    // item's climate mode (Cascade::CLIMATE_*, with climate words; null: CLIMATE_FULL), its report reset.
-    void upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots = 0, const uint32_t *p_modes = nullptr);
-    // The items' climate words (CascadeGLSL::CLIMATE_ITEM_BYTES each, after the batch's passes: what they reported), invalid
-    // without them (create's p_climate_words).
-    Buffer get_climate_items() const { return climate_items; }
+    // written when more than p_count (a mesher's padded batch, its later passes dispatching over every slot).
+    void upload_items(const uint8_t *p_items, uint32_t p_count, uint32_t p_slots = 0);
 
     // Records level j for chunks [p_base, p_base + p_count) of the input (p_count <= max chunks: the scratch
     // holds chunk p_base + i at slot i) as one compute list. p_fold: level 0 folds the chunks' instance lists (a
@@ -77,7 +71,6 @@ private:
     BaseRegions::Tables regions;
     Buffer base_regions;
     Buffer base_region_index;
-    Buffer climate_items; // the climate words: per item (mode, regions on, fail, 0)
     uint32_t batch_items = 0;
     // At most every slot of every item a distinct region (a point item fills one), plus the zero region.
     uint32_t max_regions() const { return batch_items * (is_points() ? 1u : uint32_t(BaseRegions::SLOTS)) + 1u; }
@@ -90,5 +83,5 @@ private:
 
     bool _create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, Buffer p_input, Buffer p_param_ubo,
             Buffer p_output, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list, Buffer p_material,
-            uint32_t p_batch_items, bool p_climate_words);
+            uint32_t p_batch_items);
 };

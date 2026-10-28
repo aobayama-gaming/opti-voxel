@@ -113,8 +113,6 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     chunk_queue.resize(ChunkMath::load_queue_count(p_lod_numbers));
     remesh_queue.resize(p_lod_numbers);
     cost_model.resize(p_lod_numbers);
-    const Cascade::Spec *spec = sdf->get_cascade();
-    climate_modes.configure(spec && spec->region_guards() && settings.climate_reduce);
 
     pool = new QuadPagePool();
     pool->initialize(device, p_host, settings.page_capacity, settings.initial_pages);
@@ -198,7 +196,7 @@ void GPUDirectMesher::_rt_initialize() {
 
     cascade = new CascadePasses();
     if (!cascade->create(device, sdf, chunk_param, settings.batch_size, buffer_input_chunk, buffer_chunk_param, buffer_sdf, ov::gpu::Buffer(), nullptr,
-                buffer_table_records, buffer_table_list, buffer_material, 0, climate_modes.active())) {
+                buffer_table_records, buffer_table_list, buffer_material)) {
         device->free(uniform_set);
         uniform_set = ov::gpu::BindSet(); // nothing dispatches
         OV_ERR_FAIL_MSG("GPUDirectMesher: the cascade passes failed to compile.");
@@ -360,11 +358,8 @@ static void mesher_push(uint8_t r_push[16], uint32_t p_count, uint32_t p_pages, 
 }
 
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const ov::bytes &p_chunk_ids, uint32_t p_count, const std::vector<int> &p_pages,
-        const ov::ivec2 &p_lods, const ov::bytes &p_list, const ov::bytes &p_records, const ov::bytes &p_palette_batch, const std::vector<uint32_t> &p_modes) {
+        const ov::ivec2 &p_lods, const ov::bytes &p_list, const ov::bytes &p_records, const ov::bytes &p_palette_batch) {
     if (!uniform_set.is_valid()) {
-        if (!p_modes.empty()) {
-            _rt_on_climate(ov::bytes(), p_batch_id); // no words: the batch's modes are forgotten
-        }
         return; // initialization failed (already reported)
     }
     Trace::name_thread("render");
@@ -376,7 +371,7 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const ov::bytes &p_chunk
     _rt_upload_table(p_list, p_records);
     device->update_buffer(buffer_palette_batch, 0, p_palette_batch.size(), p_palette_batch.data());
 
-    cascade->upload_items(p_chunk_ids.data(), p_count, uint32_t(p_chunk_ids.size() / GPUFrame::CHUNK_INPUT_BYTES), p_modes.empty() ? nullptr : p_modes.data());
+    cascade->upload_items(p_chunk_ids.data(), p_count, uint32_t(p_chunk_ids.size() / GPUFrame::CHUNK_INPUT_BYTES));
     device->clear_buffer(buffer_chunk_dir, 0, uint64_t(p_count) * 16);
     device->clear_buffer(buffer_status, 0, status_size_bytes);
     // Pages draw whole groups of quads: slots past the fill must be zero (degenerate), not stale.
@@ -417,9 +412,6 @@ void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const ov::bytes &p_chunk
     // Bookkeeping only (where each chunk landed); rendering does not wait for it.
     _rt_read(buffer_chunk_dir, uint64_t(p_count) * 16, &GPUDirectMesher::_rt_on_directory, p_batch_id);
     _rt_read(buffer_status, status_size_bytes, &GPUDirectMesher::_rt_on_status, p_batch_id);
-    if (!p_modes.empty()) {
-        _rt_read(cascade->get_climate_items(), uint64_t(p_count) * CascadeGLSL::CLIMATE_ITEM_BYTES, &GPUDirectMesher::_rt_on_climate, p_batch_id);
-    }
 
     mutex.lock();
     stats.rt_record_cpu.add(now_usec() - t0);
@@ -475,25 +467,6 @@ void GPUDirectMesher::_rt_on_directory(const ov::bytes &p_data, uint32_t p_batch
         partial.erase(p_batch_id);
     }
     mutex.unlock();
-}
-
-void GPUDirectMesher::_rt_on_climate(const ov::bytes &p_data, uint32_t p_batch_id) {
-    mutex.lock();
-    climate_reports.emplace_back(p_batch_id, p_data);
-    mutex.unlock();
-}
-
-void GPUDirectMesher::_learn_climate() {
-    std::vector<std::pair<uint32_t, ov::bytes>> reports;
-    mutex.lock();
-    reports.swap(climate_reports);
-    mutex.unlock();
-    for (const auto &r : reports) {
-        if (const ClimateBatch *b = climate_batches.getptr(r.first)) {
-            climate_modes.learn(b->chunks, b->modes, r.second);
-            climate_batches.erase(r.first);
-        }
-    }
 }
 
 void GPUDirectMesher::_rt_on_status(const ov::bytes &p_data, uint32_t p_batch_id) {
@@ -683,7 +656,6 @@ void GPUDirectMesher::_flush_kills() {
 
 void GPUDirectMesher::process_queue() {
     frame++;
-    _learn_climate(); // before this frame's batches take their modes
     // The parked chunks whose records came, back in their queues: they pop first.
     gate.take_ready([this](const ChunkId &p_chunk, ChunkGate::Kind p_kind) {
         if (p_kind == ChunkGate::AUDIT) {
@@ -880,17 +852,11 @@ bool GPUDirectMesher::_dispatch_mesh_batch(double &r_budget_us) {
     stats.list_words_max = ov::max(stats.list_words_max, uint64_t(list_words));
     batch_costs[batch_id] = BatchCost{ std::move(lod_counts), list_words };
     batch.table_version = table_version;
-    std::vector<uint32_t> modes;
-    climate_modes.modes(chunks, modes);
-    if (!modes.empty()) {
-        climate_batches.insert(batch_id, ClimateBatch{ chunks, modes });
-    }
     batch.chunks = std::move(chunks);
     in_flight[batch_id] = std::move(batch);
     Trace::flow(Trace::Kind::FLOW_START, "batch", batch_id);
     device->post([this, batch_id, ids = std::move(ids), count, pages = std::move(pages), lods, list = std::move(list), records = std::move(records),
-                         palette_batch = std::move(palette_batch),
-                         modes = std::move(modes)]() { _rt_dispatch(batch_id, ids, count, pages, lods, list, records, palette_batch, modes); });
+                         palette_batch = std::move(palette_batch)]() { _rt_dispatch(batch_id, ids, count, pages, lods, list, records, palette_batch); });
 
     stats.batches++;
     stats.dispatch_cpu.add(now_usec() - t0);
@@ -1430,17 +1396,6 @@ ov::Value GPUDirectMesher::get_stats() {
     // Mesh and audit batches per frame that dispatched any.
     d["batches_per_dispatch_frame"] = stats.dispatch_frames ? double(stats.batches + stats.audit_batches) / stats.dispatch_frames : 0.0;
     d["batches"] = (int64_t)stats.batches;
-    if (climate_modes.active()) {
-        // The chunks' climate modes (ClimateChunkModes) and what they reported.
-        const ClimateChunkModes::Stats &cs = climate_modes.get_stats();
-        ov::Value cl = ov::Value::object();
-        cl["full"] = (int64_t)cs.full;
-        cl["reduced"] = (int64_t)cs.reduced;
-        cl["reports"] = (int64_t)cs.reports;
-        cl["regions_on_avg"] = cs.reports ? double(cs.regions_on) / double(cs.reports) : 0.0;
-        cl["failed"] = (int64_t)cs.failed;
-        d["climate_modes"] = cl;
-    }
     d["gpu_budget_ms"] = settings.gpu_budget_ms;
     d["budget_frame_estimate"] = stats.budget_frame_estimate.to_value();
     // How well the cost model predicts a batch (1 = exactly), and its cost per chunk per LOD (us, -1 unmeasured).

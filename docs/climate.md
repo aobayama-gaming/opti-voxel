@@ -149,26 +149,23 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `region_test.json` (CascadeSpike set `4r`, 11 field groups) equals `valley.json` bit for bit in its cold core. The
   field group cap is 24 (the GPU's arrays are sized per spec); every group is carried at every point. Details:
   `docs/landforms.md`, "Using a landform in a world".
-- **Region guards** (GPU only: `Climate::guarded_regions`, `region_off_glsl`, `Climate::edge_off`, `glsl_biome_weights`, `height_sum_glsl`,
-  `Modulator::region_code`; the CPU stays the oracle). Per point, after the fields, `rof<r>` says that one of region r's
-  edges is at 0 (`cl_edge_off`, `cl_edge`'s own first lines: one text). There r's biomes weigh +0 and its gated height terms add +0,
-  and every reader of a weight is unchanged by them: the amplitude sums (their accumulator is never -0), the multifractal
-  state, the warps and the height sum (`cl_add` / `cl_sub` / `cl_mul` flush), `rest`. So the generated code skips them
-  (`if (!rof<r>)`), bit for bit: unit test (weights and height sum on world, world_video and region_test), CascadeSpike
-  G1 / D1 / G10 0 differing on `4w` and `4r`. Any mix of regions: a core skips the other seven landforms, a fade
-  between two the other six (the video spawn, `world_video.json`, is in the mangrove | desert fade for kilometres:
-  `climate_report`). The plain amplitude sums keep every biome (a + 0 * k is a, cheaper than a branch). A table with no
-  region keeps its text.
+- **Region guards** (GPU only: `Climate::guarded_regions`, `region_off_glsl`, `glsl_biome_weights`, `height_sum_glsl`,
+  `Modulator::region_code`; the CPU stays the oracle, `Climate::edge_off`). Per point, after the fields, `rof<r>` says
+  that one of region r's edges is at 0 (`cl_edge_off`: `cl_edge`'s own first lines, one text). There r's biomes weigh
+  +0 and its gated height terms add +0, and every reader of a weight is unchanged by them: the amplitude sums (their
+  accumulator is never -0), the multifractal state, the warps and the height sum (`cl_add` / `cl_sub` / `cl_mul`
+  flush), `rest`. So the generated code skips them (`if (!rof<r>)`), bit for bit: unit test (weights and height sum on
+  world, world_video and region_test), CascadeSpike G1 / D1 / G10 0 differing on `4w` and `4r`. Any mix of regions: a
+  core skips the other seven landforms, a fade between two the other six (the video spawn, `world_video.json`, is in the
+  mangrove | desert fade for kilometres: `climate_report`). The plain amplitude sums keep every biome (a + 0 * k is a,
+  cheaper than a branch). A table with no region keeps its text. Measured on the 1M forest fly at the video spawn: fly
+  out frame p50 -13%, p95 -56%, mesher batch -20% (`docs/perf.md`).
   - Tried and dropped: one generated body per region set ("paths": each region, then each pair that can meet). The same
     identity, but ~30 copies of the modulation code: the level shaders took ~3.5 min to compile at every start (a bench
     run 68 -> 285 s), and a single region's path never held at the video spawn.
-  - **Reduced chunks** (A2, an experiment, `VoxelTerrain.climate_reduce` / `--climate_reduce=1`, the direct mesher only,
-    off by default): only then each chunk item has climate words (CascadePasses' `p_climate_words`,
-    `CascadeGLSL::CLIMATE_BINDING`, `CLIMATE_WORD_*`: mode, the regions on at some point of its level 1, fail,
-    measured), read back with the batch (`ClimateChunkModes`); without it the shaders, the buffers and the readbacks are
-    the guards' alone. A chunk takes `CLIMATE_REDUCE` with the regions its nearest reported self or ancestor had on (a
-    chunk whose level 1 ran no climate reports nothing), and at its level 1 loads only `base_field_groups` and those
-    regions' `region_field_groups` (`g_live`). The mode is for level 1 only: the levels above read points kilometres
-    apart, across borders (a chunk-wide mode failed every time). A reduced chunk with another region on is counted
-    (`mesher.climate_modes.failed`) but not remeshed: its samples are wrong, and a chunk's bits then depend on what was
-    meshed before it (not the absolute position alone), so it stays off by default.
+  - Tried and dropped: reduced chunks (branch `experiment/climate-reduce`). Each chunk reported the regions on at its
+    level 1 (per-item climate words, read back with the batch); its children then loaded only the field groups the
+    base and those regions read, at their level 1 only (the levels above read points kilometres apart, across
+    borders: a chunk-wide mode failed every time). 0 failed chunks and 64 / 64 exact on the video fly, but no gain on
+    top of the guards (fly out p50 -9% vs the guards' -13%, p95 worse), and a chunk's bits would depend on what was
+    meshed before it, not on the absolute position alone.

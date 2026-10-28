@@ -116,8 +116,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_direct_batches_per_frame"), &VoxelTerrain::get_direct_batches_per_frame);
     ClassDB::bind_method(D_METHOD("set_direct_gpu_budget_ms", "ms"), &VoxelTerrain::set_direct_gpu_budget_ms);
     ClassDB::bind_method(D_METHOD("get_direct_gpu_budget_ms"), &VoxelTerrain::get_direct_gpu_budget_ms);
-    ClassDB::bind_method(D_METHOD("set_climate_reduce", "enable"), &VoxelTerrain::set_climate_reduce);
-    ClassDB::bind_method(D_METHOD("get_climate_reduce"), &VoxelTerrain::get_climate_reduce);
     ClassDB::bind_method(D_METHOD("set_direct_max_in_flight", "batches"), &VoxelTerrain::set_direct_max_in_flight);
     ClassDB::bind_method(D_METHOD("get_direct_max_in_flight"), &VoxelTerrain::get_direct_max_in_flight);
     ClassDB::bind_method(D_METHOD("set_direct_page_capacity", "capacity"), &VoxelTerrain::set_direct_page_capacity);
@@ -222,7 +220,6 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_pages_per_batch", PROPERTY_HINT_RANGE, "1,256"), "set_direct_pages_per_batch", "get_direct_pages_per_batch");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_batches_per_frame", PROPERTY_HINT_RANGE, vformat("1,%d", GPUDirectMesher::MAX_BATCHES_PER_FRAME)), "set_direct_batches_per_frame", "get_direct_batches_per_frame");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direct_gpu_budget_ms", PROPERTY_HINT_RANGE, "0,100,0.1,suffix:ms"), "set_direct_gpu_budget_ms", "get_direct_gpu_budget_ms");
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "climate_reduce"), "set_climate_reduce", "get_climate_reduce");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_max_in_flight", PROPERTY_HINT_RANGE, "0,256"), "set_direct_max_in_flight", "get_direct_max_in_flight");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_page_capacity", PROPERTY_HINT_RANGE, "1024,1048576"), "set_direct_page_capacity", "get_direct_page_capacity");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "direct_initial_pages", PROPERTY_HINT_RANGE, "0,4096"), "set_direct_initial_pages", "get_direct_initial_pages");
@@ -696,15 +693,6 @@ void VoxelTerrain::set_direct_gpu_budget_ms(float p_ms) {
 
 float VoxelTerrain::get_direct_gpu_budget_ms() const {
     return cfg().direct.gpu_budget_ms;
-}
-
-void VoxelTerrain::set_climate_reduce(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "climate_reduce must be set before the terrain enters the tree.");
-    cfg().direct.climate_reduce = p_enable;
-}
-
-bool VoxelTerrain::get_climate_reduce() const {
-    return cfg().direct.climate_reduce;
 }
 
 void VoxelTerrain::set_direct_max_in_flight(int p_batches) {

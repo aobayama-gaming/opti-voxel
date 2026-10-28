@@ -137,70 +137,6 @@ ov::str glsl_biome_weights(const Table &p_table, bool p_guards) {
     return code;
 }
 
-namespace {
-
-// Groups (bit g: the ground 0, field i at i + 1) of the fields p_fields (bit i), closed under the fields' terms' sources
-// (apply_terms reads earlier fields: from the last field down, every source of a needed one).
-uint32_t field_groups(const Table &p_table, uint32_t p_fields) {
-    for (int i = int(p_table.fields.size()) - 1; i >= 0; i--) {
-        if ((p_fields & (1u << i)) == 0u) {
-            continue;
-        }
-        for (const Term &t : p_table.fields[size_t(i)].terms) {
-            p_fields |= t.source == GROUND ? 0u : 1u << t.source;
-        }
-    }
-    return p_fields << 1;
-}
-
-uint32_t edge_fields(const std::vector<Edge> &p_edges) {
-    uint32_t f = 0u;
-    for (const Edge &e : p_edges) {
-        f |= 1u << e.field;
-    }
-    return f;
-}
-
-// The fields biome p_b reads: its edges and its warps'.
-uint32_t biome_fields(const Biome &p_b) {
-    uint32_t f = edge_fields(p_b.edges);
-    for (const Amp &a : p_b.amps) {
-        for (const int w : a.warp_fields) {
-            f |= w >= 0 ? 1u << w : 0u;
-        }
-    }
-    return f;
-}
-
-} // namespace
-
-uint32_t region_field_groups(const Table &p_table, int p_region) {
-    uint32_t f = 0u;
-    for (const Biome &b : p_table.biomes) {
-        f |= b.region == p_region ? biome_fields(b) : 0u;
-    }
-    for (const HeightTerm &t : p_table.heights) {
-        f |= t.region == p_region ? 1u << t.field : 0u;
-    }
-    return field_groups(p_table, f);
-}
-
-uint32_t base_field_groups(const Table &p_table) {
-    const uint32_t guarded = guarded_regions(p_table);
-    uint32_t f = 0u;
-    for (int r = 0; r < int(p_table.regions.size()); r++) {
-        f |= (guarded & (1u << r)) != 0u ? edge_fields(p_table.regions[size_t(r)].edges) : 0u;
-    }
-    for (const Biome &b : p_table.biomes) {
-        f |= b.region < 0 ? biome_fields(b) : 0u;
-    }
-    for (const HeightTerm &t : p_table.heights) {
-        f |= t.region < 0 ? 1u << t.field : 0u;
-    }
-    const int n = int(p_table.fields.size());
-    return 1u | field_groups(p_table, f) | (p_table.has_state() ? 1u << (n + 1) : 0u);
-}
-
 ov::str region_off_glsl(const Table &p_table) {
     using ExactNoise::glsl_float;
     const uint32_t guarded = guarded_regions(p_table);
@@ -216,17 +152,6 @@ ov::str region_off_glsl(const Table &p_table) {
         code += ov::format("    bool rof%d = %s;\n", r, any);
     }
     return code;
-}
-
-ov::str region_on_glsl(const Table &p_table) {
-    const uint32_t guarded = guarded_regions(p_table);
-    ov::str code;
-    for (int r = 0; r < int(p_table.regions.size()); r++) {
-        if ((guarded & (1u << r)) != 0u) {
-            code += ov::format("%s(rof%d ? 0u : %du)", code.empty() ? "" : " | ", r, int64_t(1u << r));
-        }
-    }
-    return code.empty() ? ov::str("0u") : code;
 }
 
 ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges) {

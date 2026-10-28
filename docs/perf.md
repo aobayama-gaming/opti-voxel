@@ -47,3 +47,8 @@ The numbers perf PRs are measured against (`tools/bench_ab.sh`, `bench.sh --prof
   The video terrain's fly is the mesher's (no budget): its climate levels (cascade levels 1, 2, >= 3) are 19-26 ms of
   it, level 0 with the tree fold 33-37 ms. Steady geometry doubled since the 17.3 ms above (shadow draw calls 1,000-1,450
   for 400-800 in view; suspect, untested: the look stack moved the bench sun from 61 to 28 degrees). Not investigated yet.
+- **Climate region guards** (2026-10-28, `docs/climate.md`; the video terrain's fly above, `--cool=1`, interleaved, 2 runs
+  per side): fly out frame p50 80.9 -> 70.8 ms (-13%), p95 239 -> 105 ms (-56%), mesher GPU 67.2 -> 54.6 ms (-19%),
+  mesher batch 18.6 -> 14.8 ms (-20%: cascade level 1 -19%, level 0 + fold -17%), fly back p50 -3%, a whole run's time
+  unchanged (68-77 s: one shader body, no compile cost). Next there: the levels >= 2 (11.6 ms, the guards don't
+  shorten them), the level 0 fold, and the steady geometry (35 ms, the frame while not meshing).

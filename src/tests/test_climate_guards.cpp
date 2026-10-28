@@ -1,10 +1,9 @@
 #include "test_climate_common.hpp"
 
 #include "cascade_glsl.hpp"
-#include "climate_chunk_modes.hpp"
 
-// The region guards (Climate::guarded_regions: the GPU's climate code skips a region's biomes and gated terms where the
-// region is off) and the chunk modes the direct mesher learns for them (ClimateChunkModes).
+// The region guards (Climate::guarded_regions): the GPU's climate code skips a region's biomes and gated terms where the
+// region is off.
 
 using namespace Climate;
 using ClimateTest::ClimateSDF;
@@ -37,7 +36,7 @@ void guarded_weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Fl
     r_w[n - 1] = rest;
 }
 
-// The guarded regions on at lattice point p_p of Λ_m (region_on_glsl's mask).
+// The guarded regions on at lattice point p_p of Λ_m (bit r where rof<r> is false).
 uint32_t regions_on(const Table &p_table, const Cascade::Spec &p_spec, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {
     fields_at(p_table, p_spec, p_p, p_m, r_fields);
     uint32_t on = 0u;
@@ -52,36 +51,14 @@ uint32_t regions_on(const Table &p_table, const Cascade::Spec &p_spec, const Vec
 TEST_CASE("Climate guards: the world's regions are guarded, a single landform keeps its text") {
     ClimateSDF world("res://climate/world.json", 25);
     CLIMATE_REQUIRE(world.sdf.get_climate() != nullptr);
-    const Table &t = *world.sdf.get_climate();
-    CHECK(guarded_regions(t) == (1u << t.regions.size()) - 1u);
-    const uint32_t base = base_field_groups(t);
-    CHECK((base & 1u) != 0u); // the ground
-    for (int r = 0; r < int(t.regions.size()); r++) {
-        for (const Edge &e : t.regions[size_t(r)].edges) {
-            CHECK((base & (2u << e.field)) != 0u); // every region's axes: the guards read them
-        }
-    }
-    uint32_t any = base;
-    for (int r = 0; r < int(t.regions.size()); r++) {
-        any |= region_field_groups(t, r);
-    }
-    CHECK(base != any); // some fields only a region reads
-
+    CHECK(guarded_regions(*world.sdf.get_climate()) == (1u << world.sdf.get_climate()->regions.size()) - 1u);
     ClimateSDF cliff("res://climate/landforms/cliff.json", 25);
     CLIMATE_REQUIRE(cliff.sdf.get_climate() != nullptr);
     CHECK(guarded_regions(*cliff.sdf.get_climate()) == 0u);
-    const ov::str text = CascadeGLSL::level_shader(&cliff.sdf, false, false, false, true, CascadeGLSL::View::FIELDS, true, true);
-    CHECK(!ov::contains(text, "climate_items"));
-    CHECK(!ov::contains(text, "bool rof"));
-    // The world: guards in every climate shader, the climate words in the chunk items' only, when asked (reduced chunks).
-    const ov::str wtext = CascadeGLSL::level_shader(&world.sdf, false, false, false, true, CascadeGLSL::View::FIELDS);
-    CHECK(!ov::contains(wtext, "climate_items"));
-    CHECK(ov::contains(wtext, "bool rof"));
-    const ov::str words = CascadeGLSL::level_shader(&world.sdf, false, false, false, true, CascadeGLSL::View::FIELDS, true, true);
-    CHECK(ov::contains(words, "climate_items"));
-    const ov::str ptext = CascadeGLSL::level_shader(&world.sdf, false, true, false, false, CascadeGLSL::View::FIELDS, true, true);
-    CHECK(!ov::contains(ptext, "climate_items"));
-    CHECK(ov::contains(ptext, "bool rof"));
+    CHECK(!ov::contains(CascadeGLSL::level_shader(&cliff.sdf, false, false, false, true, CascadeGLSL::View::FIELDS), "bool rof"));
+    // The world: the guards in every climate shader, the chunk items' and the point items'.
+    CHECK(ov::contains(CascadeGLSL::level_shader(&world.sdf, false, false, false, true, CascadeGLSL::View::FIELDS), "bool rof"));
+    CHECK(ov::contains(CascadeGLSL::level_shader(&world.sdf, false, true, false, false, CascadeGLSL::View::FIELDS), "bool rof"));
 }
 
 TEST_CASE("Climate guards: where a region is off, its biomes and gated terms change nothing, bit for bit") {
@@ -143,42 +120,4 @@ TEST_CASE("Climate guards: a biome's region must start its edges") {
     }
     t.biomes[b].edges.erase(t.biomes[b].edges.begin()); // its region's first edge gone
     CHECK(ov::contains(validate(t, g), "start with its region"));
-}
-
-TEST_CASE("ClimateChunkModes: a reduced chunk takes the regions its nearest reported ancestor had on") {
-    ClimateChunkModes cm;
-    cm.configure(true);
-    const ChunkId fine(1, 1, 1); // LOD 0
-    const ChunkId parent = ChunkMath::get_parent_from_child(fine);
-    std::vector<uint32_t> modes;
-    cm.modes({ fine }, modes);
-    CHECK(modes[0] == Cascade::CLIMATE_FULL);
-
-    // A chunk whose level 1 ran no climate reports nothing, whatever its words say.
-    auto item = [](uint32_t p_on, uint32_t p_fail, uint32_t p_measured) {
-        ov::bytes w(CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
-        ov::put_u32(w.data() + CascadeGLSL::CLIMATE_WORD_ON * sizeof(uint32_t), p_on);
-        ov::put_u32(w.data() + CascadeGLSL::CLIMATE_WORD_FAIL * sizeof(uint32_t), p_fail);
-        ov::put_u32(w.data() + CascadeGLSL::CLIMATE_WORD_MEASURED * sizeof(uint32_t), p_measured);
-        return w;
-    };
-    cm.learn({ parent }, { Cascade::CLIMATE_FULL }, item(0u, 0u, 0u));
-    cm.modes({ fine }, modes);
-    CHECK(modes[0] == Cascade::CLIMATE_FULL);
-    CHECK(cm.get_stats().reports == 0);
-
-    cm.learn({ parent }, { Cascade::CLIMATE_FULL }, item(0b0110u, 0u, 1u)); // regions 1 and 2 on
-    cm.modes({ fine }, modes);
-    CHECK(modes[0] == (Cascade::CLIMATE_REDUCE | 0b0110u));
-
-    // A reduced chunk with another region on is counted, and its own report then rules.
-    cm.learn({ fine }, { Cascade::CLIMATE_REDUCE | 0b0110u }, item(0b1110u, 1u, 1u));
-    CHECK(cm.get_stats().failed == 1);
-    cm.modes({ fine }, modes);
-    CHECK(modes[0] == (Cascade::CLIMATE_REDUCE | 0b1110u));
-
-    // Inactive (no guards or no reduced chunks): no modes, no climate words.
-    cm.configure(false);
-    cm.modes({ fine }, modes);
-    CHECK(modes.empty());
 }

@@ -12,10 +12,6 @@
 // where the last level's bands read their parts back (modulate).
 namespace Climate {
 
-// A chunk mode holds every guarded region (Cascade::CLIMATE_REGION_MASK), clear of CLIMATE_REDUCE.
-static_assert(Cascade::CLIMATE_REGION_MASK == (1u << MAX_REGIONS) - 1u && (Cascade::CLIMATE_REGION_MASK & Cascade::CLIMATE_REDUCE) == 0u,
-        "Climate: the chunk modes' region bits are the regions'.");
-
 using Cascade::BandMod;
 using Cascade::dadd;
 using Cascade::dflush;
@@ -128,9 +124,6 @@ public:
     int state_group() const override { return state; }
     bool shaped() const override { return shaped_; }
     uint32_t group_features(int p_group) const override { return p_group >= 0 && p_group < Cascade::MAX_GROUPS ? features[p_group] : 0u; }
-    uint32_t guarded_regions() const override { return guarded; }
-    uint32_t base_groups() const override { return base_field_groups(table); }
-    uint32_t region_groups(int p_region) const override { return region_field_groups(table, p_region); }
     int carry_groups() const override { return carry; }
     int copied_carry() const override { return sample.pick; }
     int carry_used(int p_m) const override { return p_m >= 0 && p_m <= Cascade::MAX_LEVEL ? used[p_m] : sample.count; }
@@ -209,8 +202,8 @@ public:
         }
     }
 
-    ov::str glsl(const Cascade::Spec &p_spec, bool p_carried, bool p_derive, bool p_words) const override {
-        return p_carried ? glsl_carried(p_spec) : glsl_weighted(p_spec, p_derive, p_words);
+    ov::str glsl(const Cascade::Spec &p_spec, bool p_carried, bool p_derive) const override {
+        return p_carried ? glsl_carried(p_spec) : glsl_weighted(p_spec, p_derive);
     }
 
 private:
@@ -351,12 +344,12 @@ private:
     ov::str glsl_biome_mod(const Entry &p_e, const ov::str &p_target) const;
     ov::str glsl_derive_entry(const Entry &p_e, const Cascade::Spec &p_spec) const;
     ov::str glsl_carried(const Cascade::Spec &p_spec) const;
-    ov::str glsl_weighted(const Cascade::Spec &p_spec, bool p_derive, bool p_words) const;
-    ov::str glsl_plain(const Cascade::Spec &p_spec, bool p_derive, bool p_words) const;
+    ov::str glsl_weighted(const Cascade::Spec &p_spec, bool p_derive) const;
+    ov::str glsl_plain(const Cascade::Spec &p_spec, bool p_derive) const;
     ov::str glsl_signature(const Cascade::Spec &p_spec, bool p_derive) const;
     ov::str derive_glsl(const Cascade::Spec &p_spec) const;
     ov::str glsl_entry(const Entry &p_e) const;
-    ov::str region_code(const Cascade::Spec &p_spec, bool p_words) const;
+    ov::str region_code(const Cascade::Spec &p_spec) const;
 
     Table table;
     uint32_t guarded = 0u; // guarded_regions(table): the region guards' regions
@@ -484,7 +477,7 @@ ov::str Modulator::glsl_carried(const Cascade::Spec &p_spec) const {
 
 // The amplitudes alone (no band shaped anywhere): the text the climate had before shaped bands. The sums keep every
 // biome (a + 0 * k is a, cheaper than a branch).
-ov::str Modulator::glsl_plain(const Cascade::Spec &p_spec, bool p_derive, bool p_words) const {
+ov::str Modulator::glsl_plain(const Cascade::Spec &p_spec, bool p_derive) const {
     using ExactNoise::glsl_float;
     ov::str code = splices_helpers(table, p_spec) ? ov::str() : glsl_helpers();
     code += guarded != 0u ? region_helpers_glsl() : ov::str();
@@ -493,7 +486,7 @@ ov::str Modulator::glsl_plain(const Cascade::Spec &p_spec, bool p_derive, bool p
     code += glsl_signature(p_spec, p_derive);
     code += ov::format("    for (int g = 0; g < %d; g++) {\n        amp[g] = vec4(0.0);\n    }\n", p_spec.group_count());
     code += mask_switch(mask, p_derive);
-    code += region_code(p_spec, p_words);
+    code += region_code(p_spec);
     code += glsl_biome_weights(table, guarded != 0u);
     code += "    switch (m) {\n";
     for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
@@ -518,15 +511,13 @@ ov::str Modulator::glsl_plain(const Cascade::Spec &p_spec, bool p_derive, bool p
     return code + "    return mask;\n}\n";
 }
 
-// The fields, then with the region guards each region's rof<r> and, in the chunk items' shaders (p_words, the level
-// shader's climate words), the regions on at the point for the chunk's climate mode (climate_check, j = 1).
-ov::str Modulator::region_code(const Cascade::Spec &p_spec, bool p_words) const {
+// The fields, then with the region guards each region's rof<r>.
+ov::str Modulator::region_code(const Cascade::Spec &p_spec) const {
     ov::str code = glsl_fields(table, p_spec);
     if (guarded == 0u) {
         return code;
     }
-    code += region_off_glsl(table);
-    return code + (p_words ? "    climate_check(" + region_on_glsl(table) + ov::str(");\n") : ov::str());
+    return code + region_off_glsl(table);
 }
 
 // cascade_amplitudes' or cascade_mods' first line (Cascade::Modulation::glsl).
@@ -552,9 +543,9 @@ ov::str Modulator::glsl_entry(const Entry &p_e) const {
     return code;
 }
 
-ov::str Modulator::glsl_weighted(const Cascade::Spec &p_spec, bool p_derive, bool p_words) const {
+ov::str Modulator::glsl_weighted(const Cascade::Spec &p_spec, bool p_derive) const {
     if (!shaped_) {
-        return glsl_plain(p_spec, p_derive, p_words);
+        return glsl_plain(p_spec, p_derive);
     }
     using ExactNoise::glsl_float;
     ov::str code = GLSL_MULTIFRACTAL; // after the shared helpers, spliced by the level shader (splices_helpers)
@@ -566,7 +557,7 @@ ov::str Modulator::glsl_weighted(const Cascade::Spec &p_spec, bool p_derive, boo
     code += "        for (int t = 0; t < 3; t++) {\n            mod[g].amp[t] = vec4(0.0);\n            mod[g].warp[t] = vec4(0.0);\n        }\n";
     code += "        for (int t = 0; t < 4; t++) {\n            mod[g].state[t] = vec4(0.0);\n        }\n    }\n";
     code += mask_switch(mask, p_derive);
-    code += region_code(p_spec, p_words);
+    code += region_code(p_spec);
     code += glsl_biome_weights(table, guarded != 0u);
     // The state's channels (the multifractal's complement).
     if (state >= 0) {

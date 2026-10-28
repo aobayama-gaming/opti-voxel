@@ -364,14 +364,6 @@ ov::str glsl_biome_weights(const Table &p_table, bool p_guards);
 uint32_t guarded_regions(const Table &p_table);
 // `bool rof<r>` for each guarded region, after glsl_fields: some edge of region r returns +0 (cl_edge_off).
 ov::str region_off_glsl(const Table &p_table);
-// The guarded regions on at the point (bit r where rof<r> is false), as a uint expression of the rof<r>.
-ov::str region_on_glsl(const Table &p_table);
-// The cascade groups (bit g: the ground 0, field i at i + 1, the multifractal state last) the climate reads: always
-// (base: the ground, the guarded regions' edges, the biomes and height terms without a region, the state), and for
-// region p_region (its biomes' edges and warps, its gated terms), closed under the fields' terms' sources. A chunk whose
-// level 1 has only the regions R on needs base and R's (CLIMATE_REDUCE).
-uint32_t base_field_groups(const Table &p_table);
-uint32_t region_field_groups(const Table &p_table, int p_region);
 // `bool cl_edge_off(vec4 x, float anchor, float scale)` (edge_off, after glsl_helpers; cl_edge's own first lines).
 ov::str region_helpers_glsl();
 // edges_value as statements defining `vec4 <p_var>` from the f<i> of glsl_fields.

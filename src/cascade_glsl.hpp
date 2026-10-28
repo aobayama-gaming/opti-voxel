@@ -51,17 +51,6 @@ static constexpr int TABLE_RECORD_BINDING = 7;
 static constexpr int TABLE_LIST_BINDING = 8;
 // The per-sample material (chunk palette index) the meshers give create(): uint per sample, next to sdf_sample.
 static constexpr int MATERIAL_BINDING = 9;
-// A climate with region guards, chunk items with climate words: per item a uvec4 the passes own
-// (CascadePasses::upload_items), after the base regions' bindings, word CLIMATE_WORD_*: the mode (Cascade::CLIMATE_*);
-// the guarded regions on at some point of the item's level 1 (bit r, ORed from 0); fail: non-zero where a CLIMATE_REDUCE
-// item had a region on outside its mode; measured: non-zero where its level 1 ran the climate (else `on` says nothing).
-static constexpr int CLIMATE_BINDING = 12;
-static constexpr int CLIMATE_WORD_MODE = 0;
-static constexpr int CLIMATE_WORD_ON = 1;
-static constexpr int CLIMATE_WORD_FAIL = 2;
-static constexpr int CLIMATE_WORD_MEASURED = 3;
-static constexpr uint32_t CLIMATE_ITEM_BYTES = 16;
-static_assert(CLIMATE_ITEM_BYTES == 4 * sizeof(uint32_t), "CascadeGLSL: a climate item is one uvec4.");
 
 // std430 CascadeBand[group_count * BAND_ENTRIES], group g's band of insertion level m at g * BAND_ENTRIES + m:
 // factor (amp * 2^(-shift |S|) per derivative order; unused when modulated), offset low words, offset high words,
@@ -100,11 +89,9 @@ enum class View {
 // is the bare cascade_terrain_sdf: the same bits as the fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
 // (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING; with ground materials
 // (ground_materials), for every chunk, a ground sample's being cascade_ground_material's (its biome's).
-// p_view: the channels it carries (View; a spec without a climate has only GROUND, which FIELDS equals). p_words: a
-// climate with region guards reads and reports the chunks' climate words at CLIMATE_BINDING (chunk items only,
-// CascadePasses' p_climate_words).
+// p_view: the channels it carries (View; a spec without a climate has only GROUND, which FIELDS equals).
 ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, View p_view = View::FIELDS,
-        bool p_cubes = true, bool p_words = false);
+        bool p_cubes = true);
 
 // The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
 ChunkParam point_param(const ChunkParam &p_param);

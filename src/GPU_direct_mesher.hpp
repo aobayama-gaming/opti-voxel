@@ -3,7 +3,6 @@
 #include "chunk_gate.hpp"
 #include "chunk_math.hpp"
 #include "chunk_memory.hpp"
-#include "climate_chunk_modes.hpp"
 #include "debug_log.hpp"
 #include "gpu_cost_model.hpp"
 #include "gpu_device.hpp"
@@ -83,9 +82,6 @@ public:
         uint32_t palette_capacity = 1u << 21;
         // Chunks asked of the SDF's gating per frame at most (every answer counts; 0 = 4 * batch_size, ChunkGate::begin_frame).
         uint32_t max_admits_per_frame = 0;
-        // A climate with region guards: reduced chunks (ClimateChunkModes, CLIMATE_REDUCE), wrong where a region
-        // their mode left out is on: an experiment, never the default.
-        bool climate_reduce = false;
     };
 
     // p_device: the main device (its thread runs the rt_ work, Device::post); p_host draws the pages.
@@ -231,18 +227,6 @@ private:
     ov::HashMap<uint32_t, BatchCost, ov::DefaultHash> batch_costs;
     std::vector<MeasuredBatch> measured_batches;
     void _update_cost_model();
-
-    // The climate modes (Settings::climate_reduce): each batch's chunks and modes until its climate words come back
-    // (`climate_reports`, under mutex, after the directory), then learned by the main thread.
-    struct ClimateBatch {
-        std::vector<ChunkId> chunks;
-        std::vector<uint32_t> modes;
-    };
-    ClimateChunkModes climate_modes;
-    ov::HashMap<uint32_t, ClimateBatch, ov::DefaultHash> climate_batches;
-    std::vector<std::pair<uint32_t, ov::bytes>> climate_reports;
-    void _rt_on_climate(const ov::bytes &p_data, uint32_t p_batch_id);
-    void _learn_climate();
     // GPU time per batch by its list words: bin b holds the batches of [2^(b-1), 2^b) words (bin 0: none).
     struct ListWordsBin {
         uint64_t batches = 0;
@@ -294,7 +278,7 @@ private:
     void _requeue(const ChunkId &p_chunk, bool p_remesh);
     // p_lods: the batch's smallest and largest LOD (the cascade's level count, its fields' variant).
     void _rt_dispatch(uint32_t p_batch_id, const ov::bytes &p_chunk_ids, uint32_t p_count, const std::vector<int> &p_pages, const ov::ivec2 &p_lods,
-            const ov::bytes &p_list, const ov::bytes &p_records, const ov::bytes &p_palette_batch, const std::vector<uint32_t> &p_modes);
+            const ov::bytes &p_list, const ov::bytes &p_records, const ov::bytes &p_palette_batch);
     void _rt_dispatch_count(const ov::bytes &p_chunk_ids, uint32_t p_count, uint32_t p_batch_id, const ov::ivec2 &p_lods, const ov::bytes &p_list,
             const ov::bytes &p_records);
     // Pass 0: the cascade's levels (timestamps "<prefix>_c<group>" after each level group
