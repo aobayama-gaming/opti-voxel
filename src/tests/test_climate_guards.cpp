@@ -154,17 +154,25 @@ TEST_CASE("ClimateChunkModes: a reduced chunk takes the regions its nearest repo
     cm.modes({ fine }, modes);
     CHECK(modes[0] == Cascade::CLIMATE_FULL);
 
-    ov::bytes words(CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
-    ov::put_u32(words.data() + 4, 0b0110u); // regions 1 and 2 on
-    cm.learn({ parent }, { Cascade::CLIMATE_FULL }, words);
+    // A chunk whose level 1 ran no climate reports nothing, whatever its words say.
+    auto item = [](uint32_t p_on, uint32_t p_fail, uint32_t p_measured) {
+        ov::bytes w(CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
+        ov::put_u32(w.data() + CascadeGLSL::CLIMATE_WORD_ON * sizeof(uint32_t), p_on);
+        ov::put_u32(w.data() + CascadeGLSL::CLIMATE_WORD_FAIL * sizeof(uint32_t), p_fail);
+        ov::put_u32(w.data() + CascadeGLSL::CLIMATE_WORD_MEASURED * sizeof(uint32_t), p_measured);
+        return w;
+    };
+    cm.learn({ parent }, { Cascade::CLIMATE_FULL }, item(0u, 0u, 0u));
+    cm.modes({ fine }, modes);
+    CHECK(modes[0] == Cascade::CLIMATE_FULL);
+    CHECK(cm.get_stats().reports == 0);
+
+    cm.learn({ parent }, { Cascade::CLIMATE_FULL }, item(0b0110u, 0u, 1u)); // regions 1 and 2 on
     cm.modes({ fine }, modes);
     CHECK(modes[0] == (Cascade::CLIMATE_REDUCE | 0b0110u));
 
     // A reduced chunk with another region on is counted, and its own report then rules.
-    ov::bytes failed(CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
-    ov::put_u32(failed.data() + 4, 0b1110u);
-    ov::put_u32(failed.data() + 8, 1u);
-    cm.learn({ fine }, { Cascade::CLIMATE_REDUCE | 0b0110u }, failed);
+    cm.learn({ fine }, { Cascade::CLIMATE_REDUCE | 0b0110u }, item(0b1110u, 1u, 1u));
     CHECK(cm.get_stats().failed == 1);
     cm.modes({ fine }, modes);
     CHECK(modes[0] == (Cascade::CLIMATE_REDUCE | 0b1110u));

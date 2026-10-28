@@ -175,7 +175,8 @@ void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint3
     if (climate_items.is_valid() && p_count > 0) {
         ov::bytes words(size_t(p_count) * CascadeGLSL::CLIMATE_ITEM_BYTES, 0);
         for (uint32_t i = 0; i < p_count; i++) {
-            ov::put_u32(words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES, p_modes ? p_modes[i] : Cascade::CLIMATE_FULL);
+            ov::put_u32(words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES + CascadeGLSL::CLIMATE_WORD_MODE * sizeof(uint32_t),
+                    p_modes ? p_modes[i] : Cascade::CLIMATE_FULL);
         }
         device->update_buffer(climate_items, 0, words.size(), words.data());
     }

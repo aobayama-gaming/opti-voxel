@@ -51,12 +51,17 @@ static constexpr int TABLE_RECORD_BINDING = 7;
 static constexpr int TABLE_LIST_BINDING = 8;
 // The per-sample material (chunk palette index) the meshers give create(): uint per sample, next to sdf_sample.
 static constexpr int MATERIAL_BINDING = 9;
-// A climate with region guards, chunk items: per item a uvec4 (mode, on, fail, 0) the passes own
-// (CascadePasses::upload_items), after the base regions' bindings. mode: Cascade::CLIMATE_*; on: the guarded regions on
-// at some point of the item's level 1 (bit r, ORed from 0); fail: non-zero where a CLIMATE_REDUCE item had a region on
-// outside its mode.
+// A climate with region guards, chunk items with climate words: per item a uvec4 the passes own
+// (CascadePasses::upload_items), after the base regions' bindings, word CLIMATE_WORD_*: the mode (Cascade::CLIMATE_*);
+// the guarded regions on at some point of the item's level 1 (bit r, ORed from 0); fail: non-zero where a CLIMATE_REDUCE
+// item had a region on outside its mode; measured: non-zero where its level 1 ran the climate (else `on` says nothing).
 static constexpr int CLIMATE_BINDING = 12;
+static constexpr int CLIMATE_WORD_MODE = 0;
+static constexpr int CLIMATE_WORD_ON = 1;
+static constexpr int CLIMATE_WORD_FAIL = 2;
+static constexpr int CLIMATE_WORD_MEASURED = 3;
 static constexpr uint32_t CLIMATE_ITEM_BYTES = 16;
+static_assert(CLIMATE_ITEM_BYTES == 4 * sizeof(uint32_t), "CascadeGLSL: a climate item is one uvec4.");
 
 // std430 CascadeBand[group_count * BAND_ENTRIES], group g's band of insertion level m at g * BAND_ENTRIES + m:
 // factor (amp * 2^(-shift |S|) per derivative order; unused when modulated), offset low words, offset high words,

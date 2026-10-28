@@ -163,9 +163,12 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
     identity, but ~30 copies of the modulation code: the level shaders took ~3.5 min to compile at every start (a bench
     run 68 -> 285 s), and a single region's path never held at the video spawn.
   - **Reduced chunks** (A2, an experiment, `VoxelTerrain.climate_reduce` / `--climate_reduce=1`, the direct mesher only,
-    off by default): each chunk item has climate words (CascadePasses, `CascadeGLSL::CLIMATE_BINDING`: mode, the regions
-    on at some point of its level 1, fail), read back with the batch (`ClimateChunkModes`). A chunk takes
-    `CLIMATE_REDUCE` with the regions its nearest reported self or ancestor had on, and at its level 1 loads only
-    `base_field_groups` and those regions' `region_field_groups` (`g_live`). The mode is for level 1 only: the levels
-    above read points kilometres apart, across borders (a chunk-wide mode failed every time). A reduced chunk with
-    another region on is counted (`mesher.climate_modes.failed`): its samples are wrong, so it stays off by default.
+    off by default): only then each chunk item has climate words (CascadePasses' `p_climate_words`,
+    `CascadeGLSL::CLIMATE_BINDING`, `CLIMATE_WORD_*`: mode, the regions on at some point of its level 1, fail,
+    measured), read back with the batch (`ClimateChunkModes`); without it the shaders, the buffers and the readbacks are
+    the guards' alone. A chunk takes `CLIMATE_REDUCE` with the regions its nearest reported self or ancestor had on (a
+    chunk whose level 1 ran no climate reports nothing), and at its level 1 loads only `base_field_groups` and those
+    regions' `region_field_groups` (`g_live`). The mode is for level 1 only: the levels above read points kilometres
+    apart, across borders (a chunk-wide mode failed every time). A reduced chunk with another region on is counted
+    (`mesher.climate_modes.failed`) but not remeshed: its samples are wrong, and a chunk's bits then depend on what was
+    meshed before it (not the absolute position alone), so it stays off by default.

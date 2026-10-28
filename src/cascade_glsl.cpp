@@ -625,12 +625,16 @@ void climate_mode_code(const Spec &p_spec, ov::str &r_flags, ov::str &r_values) 
     const Cascade::Modulation &mod = *p_spec.modulation;
     r_flags += ov::format("layout(set = 0, binding = %d, std430) restrict buffer ClimateItems { uvec4 climate_items[]; };\n", CLIMATE_BINDING);
     r_flags += "uint g_climate_item = 0u;\nuint g_climate_mode = 0u; // Cascade::CLIMATE_*\nuint g_live = 0xFFFFFFFFu; // the groups carried\n";
-    r_flags += ov::format("void climate_check(uint on) {\n    if (pc.j != 1) {\n        return;\n    }\n"
-                          "    if ((climate_items[g_climate_item].y | on) != climate_items[g_climate_item].y) {\n"
-                          "        atomicOr(climate_items[g_climate_item].y, on);\n    }\n"
-                          "    if ((g_climate_mode & %du) != 0u && (on & ~g_climate_mode & %du) != 0u) {\n"
-                          "        climate_items[g_climate_item].z = 1u;\n    }\n}\n",
-            int64_t(Cascade::CLIMATE_REDUCE), int64_t(Cascade::CLIMATE_REGION_MASK));
+    r_flags += ov::replace_all(ov::format("void climate_check(uint on) {\n    if (pc.j != 1) {\n        return;\n    }\n"
+                                          "    if (climate_items[g_climate_item][MEASURED] == 0u) {\n"
+                                          "        climate_items[g_climate_item][MEASURED] = 1u;\n    }\n"
+                                          "    if ((climate_items[g_climate_item][ON] | on) != climate_items[g_climate_item][ON]) {\n"
+                                          "        atomicOr(climate_items[g_climate_item][ON], on);\n    }\n"
+                                          "    if ((g_climate_mode & %du) != 0u && (on & ~g_climate_mode & %du) != 0u) {\n"
+                                          "        climate_items[g_climate_item][FAIL] = 1u;\n    }\n}\n",
+                                       int64_t(Cascade::CLIMATE_REDUCE), int64_t(Cascade::CLIMATE_REGION_MASK)),
+            { { "[MEASURED]", "[" + ov::itos(CLIMATE_WORD_MEASURED) + "]" }, { "[ON]", "[" + ov::itos(CLIMATE_WORD_ON) + "]" },
+                    { "[FAIL]", "[" + ov::itos(CLIMATE_WORD_FAIL) + "]" } });
     ov::str live = ov::format("%du", int64_t(mod.base_groups()));
     for (int r = 0; r < 32; r++) {
         if ((mod.guarded_regions() & (1u << r)) != 0u) {
@@ -641,9 +645,9 @@ void climate_mode_code(const Spec &p_spec, ov::str &r_flags, ov::str &r_values) 
             int64_t(Cascade::CLIMATE_REDUCE), live);
     // The mode is the item's at j = 1 only (what the report measures: the levels above read points kilometres apart,
     // across region borders).
-    r_values += ov::format("    g_climate_item = pc.chunk_base + c;\n    g_climate_mode = pc.j == 1 ? climate_items[g_climate_item].x : %du;\n"
+    r_values += ov::format("    g_climate_item = pc.chunk_base + c;\n    g_climate_mode = pc.j == 1 ? climate_items[g_climate_item][%d] : %du;\n"
                            "    g_live = climate_live(g_climate_mode);\n",
-            int64_t(Cascade::CLIMATE_FULL));
+            CLIMATE_WORD_MODE, int64_t(Cascade::CLIMATE_FULL));
 }
 
 // level_shader's cascade code for p_view's Ch (p_spec, on the whole spec's scratch planes): the flags of what the level

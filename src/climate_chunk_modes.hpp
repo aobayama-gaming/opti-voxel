@@ -24,7 +24,8 @@ public:
 
     // Each chunk's mode, in order.
     void modes(const std::vector<ChunkId> &p_chunks, std::vector<uint32_t> &r_modes);
-    // The batch's climate words (CascadeGLSL::CLIMATE_ITEM_BYTES per chunk, in p_chunks' order) and the modes it ran with.
+    // The batch's climate words (CascadeGLSL::CLIMATE_ITEM_BYTES per chunk, in p_chunks' order; empty: lost) and the
+    // modes it ran with. A chunk whose level 1 ran no climate teaches nothing.
     void learn(const std::vector<ChunkId> &p_chunks, const std::vector<uint32_t> &p_modes, const ov::bytes &p_words);
 
     struct Stats {

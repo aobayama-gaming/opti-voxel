@@ -362,6 +362,9 @@ static void mesher_push(uint8_t r_push[16], uint32_t p_count, uint32_t p_pages, 
 void GPUDirectMesher::_rt_dispatch(uint32_t p_batch_id, const ov::bytes &p_chunk_ids, uint32_t p_count, const std::vector<int> &p_pages,
         const ov::ivec2 &p_lods, const ov::bytes &p_list, const ov::bytes &p_records, const ov::bytes &p_palette_batch, const std::vector<uint32_t> &p_modes) {
     if (!uniform_set.is_valid()) {
+        if (!p_modes.empty()) {
+            _rt_on_climate(ov::bytes(), p_batch_id); // no words: the batch's modes are forgotten
+        }
         return; // initialization failed (already reported)
     }
     Trace::name_thread("render");

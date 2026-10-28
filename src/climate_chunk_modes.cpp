@@ -4,6 +4,14 @@
 #include "cascade_glsl.hpp"
 #include "chunk_math.hpp"
 
+namespace {
+
+uint32_t word(const uint8_t *p_item, int p_word) {
+    return ov::get_u32(p_item + size_t(p_word) * sizeof(uint32_t));
+}
+
+} // namespace
+
 void ClimateChunkModes::configure(bool p_active) {
     active_ = p_active;
     on.clear();
@@ -43,10 +51,13 @@ void ClimateChunkModes::learn(const std::vector<ChunkId> &p_chunks, const std::v
     }
     for (size_t i = 0; i < p_chunks.size(); i++) {
         const uint8_t *w = p_words.data() + i * CascadeGLSL::CLIMATE_ITEM_BYTES;
-        const uint32_t regions = ov::get_u32(w + 4);
+        if (word(w, CascadeGLSL::CLIMATE_WORD_MEASURED) == 0u) {
+            continue; // its level 1 ran no climate (above the modulated bands, or a batch without fields there)
+        }
+        const uint32_t regions = word(w, CascadeGLSL::CLIMATE_WORD_ON);
         stats.reports++;
         stats.regions_on += uint64_t(WorldCoord::popcount64(regions));
-        if ((p_modes[i] & Cascade::CLIMATE_REDUCE) != 0u && ov::get_u32(w + 8) != 0u) {
+        if ((p_modes[i] & Cascade::CLIMATE_REDUCE) != 0u && word(w, CascadeGLSL::CLIMATE_WORD_FAIL) != 0u) {
             stats.failed++;
         }
         on.insert(p_chunks[i], regions); // what it really had on: the next mode of it and its children

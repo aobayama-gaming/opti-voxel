@@ -12,6 +12,10 @@
 // where the last level's bands read their parts back (modulate).
 namespace Climate {
 
+// A chunk mode holds every guarded region (Cascade::CLIMATE_REGION_MASK), clear of CLIMATE_REDUCE.
+static_assert(Cascade::CLIMATE_REGION_MASK == (1u << MAX_REGIONS) - 1u && (Cascade::CLIMATE_REGION_MASK & Cascade::CLIMATE_REDUCE) == 0u,
+        "Climate: the chunk modes' region bits are the regions'.");
+
 using Cascade::BandMod;
 using Cascade::dadd;
 using Cascade::dflush;
