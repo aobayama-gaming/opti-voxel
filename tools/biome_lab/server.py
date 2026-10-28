@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Biome lab: a local web page to edit climate tables, preview them and fly them (tools/biome_lab.sh starts it).
+"""Biome lab: local web pages to shape biomes in 3D, edit climate tables and fly them (tools/biome_lab.sh starts it).
 
     python3 tools/biome_lab/server.py [--port=8765] [--no-open]
 

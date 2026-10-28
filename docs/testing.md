@@ -19,7 +19,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   Tune a table from it before any GPU run. To match a real heightmap: `uv run tools/landforms/match.py SITE TABLE --fit=3`
   (`docs/landforms.md`). `--out=DIR` writes there instead of `bench/results/<timestamp>-climate/`.
 - `tools/biome_lab.sh [--no-build] [--port=8765] [--no-open]`: the biome lab, a browser page over `climate_report.sh`
-  to edit, preview and fly climate tables (`docs/climate.md`, "Biome lab").
+  to shape each biome in 3D, edit, preview and fly climate tables (`docs/climate.md`, "Biome lab").
 - `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
   (`CascadeSpike` over the core's `CascadeCheck`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a
   window, ~3 min; on Dawn: `ov_dawn --cascade-check='{"timing":false}'`): the

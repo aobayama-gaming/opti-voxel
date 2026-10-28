@@ -1,0 +1,48 @@
+/* The studio page (index.html), on lab.css's tokens and controls. */
+header .spacer { flex: 1; }
+main.studio { flex: 1; display: grid; grid-template-columns: 200px minmax(420px, 1fr) 360px; min-height: 0; }
+#biomes, #controls { overflow: auto; min-height: 0; }
+#biomes { border-right: 1px solid var(--line); padding: 8px 6px; }
+#biomes .group { margin: 12px 4px 3px; font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+#biomes .item { display: flex; gap: 6px; align-items: center; width: 100%; text-align: left; border: none; background: none; padding: 3px 6px; border-radius: 4px; }
+#biomes .item.sel { background: var(--sel); }
+#biomes .item .tag { margin-left: auto; }
+
+#stage { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.modes, .viewbar { display: flex; gap: 6px; align-items: center; padding: 6px 10px; flex-wrap: wrap; }
+.modes { border-bottom: 1px solid var(--line); }
+.modes .help { margin: 0 0 0 6px; }
+.viewbar { border-top: 1px solid var(--line); }
+.viewbar label { display: flex; gap: 4px; align-items: center; color: var(--muted); }
+.viewbar input[type="text"] { width: 110px; }
+.viewbar input[type="range"] { width: 90px; }
+.canvasbox { flex: 1; position: relative; min-height: 300px; }
+.canvasbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+.overlay { position: absolute; background: color-mix(in srgb, var(--panel) 88%, transparent); border-radius: 5px; padding: 4px 8px; font-size: 12px; }
+.status { left: 8px; top: 8px; }
+.status.busy { color: var(--accent); }
+.probe { right: 8px; top: 8px; }
+.refused { left: 8px; right: 8px; bottom: 8px; color: var(--bad); white-space: pre-wrap; }
+
+#controls { border-left: 1px solid var(--line); padding: 8px 12px 40px; }
+#controls h2 { font-size: 15px; margin: 4px 0 2px; display: flex; gap: 6px; align-items: center; }
+#controls h3 { font-size: 12px; margin: 16px 0 4px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.knob { display: grid; grid-template-columns: 104px 1fr 58px; gap: 6px; align-items: center; margin: 2px 0; }
+.knob > label { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knob input[type="range"] { width: 100%; }
+.knob input[type="number"] { width: 58px; padding: 1px 4px; }
+.knob .extra { grid-column: 2 / -1; display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 11px; }
+.knob select { padding: 0 2px; font-size: 11px; }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.swatches label { display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
+.swatches input[type="color"] { width: 30px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; }
+.edge { display: grid; grid-template-columns: 1fr 64px 64px 54px; gap: 4px; align-items: center; margin: 2px 0; font-size: 12px; }
+.edge input { width: 100%; padding: 1px 4px; }
+.edge.head { color: var(--muted); font-size: 11px; }
+
+@media (max-width: 1100px) {
+    body { height: auto; }
+    main.studio { grid-template-columns: 1fr; }
+    .canvasbox { min-height: 60vh; }
+    #biomes, #controls { border: none; }
+}

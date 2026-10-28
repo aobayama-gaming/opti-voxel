@@ -152,7 +152,20 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
 - **Biome lab** (`tools/biome_lab.sh`, `tools/biome_lab/`): a page at `http://127.0.0.1:8765/` to design a climate table
   without hand-editing its JSON. `server.py` (Python's standard library, bound to localhost) owns the files; the page
   (`web/`) holds the table being edited. The server answers its own page only (Host and Origin checked, posts in
-  JSON), so another site open in the browser can't save a table or start a viewer.
+  JSON), so another site open in the browser can't save a table or start a viewer. It has two pages, which hand the
+  table to each other with its unsaved edits.
+  - **Studio** (`web/index.html`, `studio.js`, `view3d.js`): one biome's landscape in 3D, then how it blends. The view
+    is a `climate_report.sh` run (128 px after each edit, ~6 s on world.json; **Sharpen**: 256 px, ~25 s) of a table
+    derived from the edited one, drawn from its `heights.f32` and `picks.u8` with three.js (from jsDelivr) in the
+    biomes' surface colours (the engine's slope blend, `ground_flat_weight`) or their debug colours. **Alone**: the
+    biome without its edges and region, so it covers the slice, on the heights of its region (made global; a biome
+    without a region stands on the region of its name, or one picked); **With its neighbours**: the biomes of its
+    region, the region everywhere; **Whole world**: the table as it is. Its controls are the biome's octave multipliers
+    (`amp`: a slider each, coarse to fine, and its shape), terrace, colours, its region's height terms and, among
+    neighbours, its edges. A click on the ground names the biome and height there (and sets where **Fly it** starts);
+    a double click moves the slice there. The mesh's points are the report's (tens of metres apart at a few km), so
+    slopes finer than that don't show: sharpen, or narrow the slice.
+  - **Full editor** (`web/editor.html`, `lab.js`): every key of the table.
   - **Edit:** the sidebar lists the table's biomes (their debug colours, the default last), fields, regions, heights and
     ground stretches. Each item is a form laid out from `web/schema.js`, the format above `parse()` as data: typed
     inputs, enums, colours, names of the table's fields and regions, a plot of a height's curve, and each distance's

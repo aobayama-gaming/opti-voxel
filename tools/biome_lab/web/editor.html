@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biome lab editor</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<header>
+  <button id="studio" title="Back to the 3D studio, with this table as it is">← Studio</button>
+  <b class="brand">Full editor</b>
+  <select id="table" title="Tables under adapter/godot/project/climate/"></select>
+  <span id="dirty" class="badge">saved</span>
+  <button id="undo" title="Undo (Ctrl+Z outside a field)">Undo</button>
+  <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+  <button id="save" class="primary" title="Ctrl+S">Save</button>
+  <button id="saveas">Save as…</button>
+  <button id="revert">Revert</button>
+  <button id="new">New…</button>
+</header>
+<div id="drift" class="error banner" hidden></div>
+<main>
+  <nav id="sections"></nav>
+  <section id="editor"></section>
+  <aside id="side">
+    <div class="panel">
+      <div class="toolbar">
+        <b>Preview</b>
+        <button id="check" title="A small slice: the engine's verdict and a quick map">Check</button>
+        <button id="preview" class="primary" title="Ctrl+Enter">Preview</button>
+        <label class="check"><input type="checkbox" id="auto"> check on edit</label>
+      </div>
+      <div id="params" class="grid"></div>
+      <div class="toolbar"><span id="jobstate" class="badge">idle</span><button id="cancel" hidden>Cancel</button></div>
+      <div id="error" class="error" hidden></div>
+      <div id="images"></div>
+      <details><summary>Job output</summary><pre id="joblog"></pre></details>
+      <details><summary>Report</summary><div id="report"></div></details>
+    </div>
+    <details class="panel" open>
+      <summary><b>Fly it</b></summary>
+      <div id="launch" class="grid"></div>
+      <pre id="launched"></pre>
+    </details>
+    <details class="panel">
+      <summary><b>Landform tools</b></summary>
+      <div id="tools"></div>
+    </details>
+  </aside>
+</main>
+<div id="toast"></div>
+<script type="module" src="lab.js"></script>
+</body>
+</html>
