@@ -831,6 +831,19 @@ struct ShaderParams {
 
 } // namespace
 
+// Sets a global shader uniform whose value changed since the last frame (sent: the last values by name).
+struct SetChangedGlobal {
+    Dictionary &sent;
+    void set(const char *p_name, const Variant &p_value) {
+        if (sent.get(p_name, Variant()) != p_value) {
+            sent[p_name] = p_value;
+            RenderingServer::get_singleton()->global_shader_parameter_set(p_name, p_value);
+        }
+    }
+    void operator()(const char *p_name, const Float3 &p_v) { set(p_name, godot_v3(p_v)); }
+    void operator()(const char *p_name, float p_v) { set(p_name, p_v); }
+};
+
 void VoxelTerrain::_push_atmosphere(const Dictionary &p_params) {
     set_page_params(p_params);
     Node *parent = get_parent();
@@ -1017,8 +1030,9 @@ void VoxelTerrain::_ready() {
         _rt_share_textures(device, rids, id, { "atmo_volume", "atmo_multiscatter" }, { p_volume, p_multiscatter });
     };
     hosts.cloud_textures = [device = main_device, rids = std::make_shared<std::vector<RID>>(), id = ObjectID(get_instance_id())](ov::gpu::Texture p_light,
-                                   ov::gpu::Texture p_depth, ov::gpu::Texture, ov::gpu::Texture, ov::gpu::Texture p_shadow) {
-        _rt_share_textures(device, rids, id, { "cloud_light", "cloud_depth", "cloud_shadow_map" }, { p_light, p_depth, p_shadow });
+                                   ov::gpu::Texture p_depth, ov::gpu::Texture p_shadow) {
+        const auto &names = Clouds::HOST_TEXTURES;
+        _rt_share_textures(device, rids, id, { names[0], names[1], names[2] }, { p_light, p_depth, p_shadow });
     };
     const Float3 camera_pos = camera != nullptr ? ov_f3(camera->get_global_position()) : Float3();
     const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
@@ -1043,8 +1057,7 @@ void VoxelTerrain::_ready() {
         Dictionary params;
         atmosphere->host_constants().visit(ShaderParams{ params });
         params["atmo_enabled"] = true;
-        if (const Clouds *clouds = world.get_clouds()) {
-            clouds->layer().visit(ShaderParams{ params });
+        if (world.get_clouds()) {
             params["cloud_enabled"] = true;
         }
         _push_atmosphere(params);
@@ -1132,13 +1145,8 @@ void VoxelTerrain::_process(double) {
         RenderingServer::get_singleton()->global_shader_parameter_set("atmo_range_m", atmosphere_range_sent);
     }
     if (const Clouds *clouds = world.get_clouds()) {
-        // The shadow map's frame, as the pass of this frame takes it.
-        const Clouds::Frame &f = clouds->last_frame();
-        RenderingServer *rs = RenderingServer::get_singleton();
-        rs->global_shader_parameter_set("cloud_shadow_origin_m", godot_v3(f.shadow_origin_m));
-        rs->global_shader_parameter_set("cloud_shadow_u", godot_v3(f.shadow_u));
-        rs->global_shader_parameter_set("cloud_shadow_v", godot_v3(f.shadow_v));
-        rs->global_shader_parameter_set("cloud_shadow_extent_m", f.shadow_extent_m);
+        // The shadow map's frame, as the pass of this frame takes it (the globals that changed).
+        Clouds::visit_host_frame(clouds->last_frame(), SetChangedGlobal{ cloud_globals_sent });
     }
     // Tracing reads every captured frame (the GPU track).
     if ((debug_gpu_profile && world.frames() % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {
@@ -1206,7 +1214,7 @@ void VoxelTerrain::_teardown() {
         off["atmo_volume"] = RID();
         off["atmo_multiscatter"] = RID();
         off["cloud_enabled"] = false;
-        for (const char *name : { "cloud_light", "cloud_depth", "cloud_shadow_map" }) {
+        for (const char *name : Clouds::HOST_TEXTURES) {
             off[name] = RID();
         }
         _push_atmosphere(off);

@@ -246,7 +246,6 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     s.debug_view = p_options.view;
     s.discoverer_mode = p_options.discoverer_mode;
     s.walk_gpu = p_options.walk_gpu;
-    s.clouds = false; // DawnPageHost draws no volumetric clouds yet: no march for nothing
     World::Projection projection;
     projection.viewport_height = float(upscaler ? upscaler->render_height() : height); // the LOD's pixels are the 3D's
     projection.fov_rad = FOV_RAD;

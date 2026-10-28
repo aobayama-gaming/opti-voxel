@@ -76,6 +76,7 @@ private:
     static void _rt_share_textures(RDDevice *p_device, std::shared_ptr<std::vector<RID>> p_rids, ObjectID p_terrain,
             const std::vector<const char *> &p_names, const std::vector<ov::gpu::Texture> &p_textures);
     float atmosphere_range_sent = -1.0f; // the last global atmo_range_m
+    Dictionary cloud_globals_sent; // the last global uniforms of the clouds' shadow map frame
 
 public:
     void _ready() override;

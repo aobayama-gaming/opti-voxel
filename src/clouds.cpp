@@ -1,5 +1,6 @@
 #include "clouds.hpp"
 
+#include "exact_noise_glsl.hpp"
 #include "glsl_uniforms.hpp"
 #include "gpu_shader.hpp"
 #include "shade_frame_glsl.hpp"
@@ -18,23 +19,11 @@ constexpr const char GLSL_PASS_NOISE[] = R"glsl(#version 450
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 layout(set = 0, binding = 0, rgba16f) uniform restrict writeonly image3D noise;
 layout(push_constant, std430) uniform Push { int size; int detail; } push;
-
-uvec3 noise_hash(uvec3 v) {
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.z;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    v ^= v >> 16u;
-    v.x += v.y * v.z;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    return v;
-}
-
+$PCG3D
 // A lattice cell's random point in [0, 1)^3, the cell wrapped to n per axis; seed separates the noises.
 vec3 noise_point(ivec3 c, int n, uint seed) {
     uvec3 w = uvec3((c % n + n) % n);
-    return vec3(noise_hash(w + uvec3(seed * 1013u, seed * 7919u, seed * 104729u)) >> 8u) * (1.0 / 16777216.0);
+    return vec3(pcg3d(w + uvec3(seed * 1013u, seed * 7919u, seed * 104729u)) >> 8u) * (1.0 / 16777216.0);
 }
 
 // Worley at n cells per tile, inverted: 1 at a cell's point, 0 a cell away.
@@ -107,51 +96,46 @@ void main() {
 }
 )glsl";
 
-// The grid's directions: plain GLSL that Godot's shading language takes too.
+// The grid's directions (after the atmosphere's GLSL: ATMO_PI): plain GLSL that Godot's shading language takes too.
 constexpr const char GLSL_GRID[] = R"glsl(
-const float CLOUD_PI = 3.14159265358979;
 const int CLOUD_GRID_W = $GRID_W;
 const int CLOUD_GRID_H = $GRID_H;
 
 // The camera-centred grid's direction at uv in [0, 1]^2, round the up (t1, up, t2): the azimuth along u, the elevation
 // along v (linear, straight down at 0).
 vec3 cloud_grid_dir(vec2 uv, vec3 up, vec3 t1, vec3 t2) {
-    float phi = 2.0 * CLOUD_PI * uv.x;
-    float theta = (uv.y - 0.5) * CLOUD_PI;
+    float phi = 2.0 * ATMO_PI * uv.x;
+    float theta = (uv.y - 0.5) * ATMO_PI;
     return (t1 * cos(phi) + t2 * sin(phi)) * cos(theta) + up * sin(theta);
 }
 
 // cloud_grid_dir's inverse, v kept half a texel inside (no wrap from pole to pole).
 vec2 cloud_grid_uv(vec3 dir, vec3 up, vec3 t1, vec3 t2) {
-    float u = fract(atan(dot(dir, t2), dot(dir, t1)) / (2.0 * CLOUD_PI) + 1.0);
-    float v = asin(clamp(dot(dir, up), -1.0, 1.0)) / CLOUD_PI + 0.5;
+    float u = fract(atan(dot(dir, t2), dot(dir, t1)) / (2.0 * ATMO_PI) + 1.0);
+    float v = asin(clamp(dot(dir, up), -1.0, 1.0)) / ATMO_PI + 0.5;
     return vec2(u, clamp(v, 0.5 / float(CLOUD_GRID_H), 1.0 - 0.5 / float(CLOUD_GRID_H)));
 }
 )glsl";
 
 // The density and the layer's spans (the passes'). $SHAPE and $DETAIL are the noises' sampler expressions.
 constexpr const char GLSL_DENSITY[] = R"glsl(
-
 const int OCTAVES = $OCTAVES;
 const float MS_SCATTERING = $MS_SCATTERING;
 const float MS_EXTINCTION = $MS_EXTINCTION;
 const float MS_ECCENTRICITY = $MS_ECCENTRICITY;
 
-// The sun through an optical depth tau of cloud, with Wrenninge's octaves (Clouds::MS_*: octave o scatters
-// MS_SCATTERING^o of the light through MS_EXTINCTION^o of the extinction), over the octaves' sum: the ground under a
-// thick cloud keeps the light its octaves let through.
-float cloud_octave_transmittance(float tau) {
+// The sun through an optical depth tau of cloud, Wrenninge's octaves (Clouds::MS_*): octave o scatters MS_SCATTERING^o
+// of the light, reached through MS_EXTINCTION^o of the extinction, with its phase phases[o].
+float cloud_octaves(float tau, float phases[OCTAVES]) {
     float sum = 0.0;
-    float norm = 0.0;
     float a = 1.0;
     float b = 1.0;
     for (int o = 0; o < OCTAVES; o++) {
-        sum += a * exp(-b * tau);
-        norm += a;
+        sum += a * phases[o] * exp(-b * tau);
         a *= MS_SCATTERING;
         b *= MS_EXTINCTION;
     }
-    return sum / norm;
+    return sum;
 }
 
 float cloud_remap(float v, float a, float b, float c, float d) {
@@ -237,8 +221,6 @@ float cloud_segment_t(vec4 seg, float i, float count, float jitter) {
     float s = (i + jitter) / count * (a + seg.w - seg.z);
     return s < a ? seg.x + s : seg.z + (s - a);
 }
-
-
 )glsl";
 
 // The host's lookups in the grid and the shadow map (after GLSL_GRID).
@@ -252,7 +234,7 @@ vec4 cloud_at(vec3 camera, vec3 dir, float dist) {
     up_frame(up, t1, t2);
     vec2 uv = cloud_grid_uv(dir, up, t1, t2);
     vec4 l = textureLod(cloud_light, uv, 0.0);
-    vec2 d = textureLod(cloud_depth, uv, 0.0).xy * 1000.0;
+    vec2 d = textureLod(cloud_depth, uv, 0.0).xy * 1000.0 / max(1.0 - l.a, 1e-3);
     float w = clamp((dist - d.x) / max(2.0 * (d.y - d.x), 1.0), 0.0, 1.0);
     return vec4(l.rgb * w, mix(1.0, l.a, w));
 }
@@ -297,7 +279,7 @@ float shade_voxel_m() {
 }
 )glsl";
 
-// The march: one invocation per grid texel.
+// The march over the grid.
 constexpr const char GLSL_PASS_MARCH[] = R"glsl(
 const int MAX_STEPS = $MAX_STEPS;
 const int MIN_STEPS = $MIN_STEPS;
@@ -307,7 +289,7 @@ const float BLEND = $BLEND;
 
 float cloud_hg(float c, float g) {
     float g2 = g * g;
-    return (1.0 - g2) / (4.0 * CLOUD_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
+    return (1.0 - g2) / (4.0 * ATMO_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
 }
 
 // A dual-lobe Henyey-Greenstein phase (forward 0.8, back -0.3), its eccentricities times k (Wrenninge's octaves).
@@ -330,14 +312,18 @@ float cloud_light_depth(vec3 p, vec3 sun, vec2 w) {
     return depth * cloud_extinction;
 }
 
+// The sky's light on a cloud at x: the atmosphere's isotropic light there (its multiple-scattering table).
+vec3 cloud_sky(vec3 x) {
+    return atmo_ms(max(base_altitude(x), 0.0), dot(base_up(x), cloud_sun));
+}
+
 // Interleaved gradient noise (Jimenez): a texel's jitter, decorrelated between neighbours.
 float cloud_ign(vec2 p) {
     return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
 
 // The clouds along dir from the camera: their light (rgb, for a sun of illuminance 1, the air in front of them included)
-// and transmittance (a); their front and mean distances in front_mean (kilometres; 0 where there is none: no light to
-// hide, and a filtered texel at a cloud's edge keeps the cloud's distances, halved).
+// and transmittance (a); their front and mean distances in front_mean (kilometres; 0 where there is none).
 vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     front_mean = vec2(0.0);
     float front_t = -1.0;
@@ -354,6 +340,8 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     // The sun through the air at the clouds (its ends; linear between).
     vec3 sun_a = atmo_transmittance(cam + dir * t_first, cloud_sun, ATMO_SUN_STEPS);
     vec3 sun_b = atmo_transmittance(cam + dir * t_last, cloud_sun, ATMO_SUN_STEPS);
+    vec3 sky_a = cloud_sky(cam + dir * t_first);
+    vec3 sky_b = cloud_sky(cam + dir * t_last);
     float cos_sun = dot(dir, cloud_sun);
     float phases[OCTAVES];
     float k = 1.0;
@@ -367,8 +355,7 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     for (int i = 0; i < n; i++) {
         float t = cloud_segment_t(seg, float(i), float(n), jitter);
         vec3 x = cam + dir * t;
-        float h = base_altitude(x);
-        float hf = cloud_height_fraction(h);
+        float hf = cloud_height_fraction(base_altitude(x));
         vec2 w = cloud_weather(x);
         float base = cloud_base(x, hf, w);
         if (base <= 0.0) {
@@ -380,20 +367,10 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
         }
         front_t = front_t < 0.0 ? t : front_t;
         float sigma = density * cloud_extinction;
-        // The sun: Wrenninge's octaves (octave o: the scattering times MS_SCATTERING^o, the light's extinction times
-        // MS_EXTINCTION^o, the phase's eccentricity times MS_ECCENTRICITY^o). The sky: the atmosphere's isotropic light
-        // there, dimmer lower in the layer (Frostbite's gradient).
-        float tau = cloud_light_depth(x, cloud_sun, w);
-        float sun_term = 0.0;
-        float a = 1.0;
-        float b = 1.0;
-        for (int o = 0; o < OCTAVES; o++) {
-            sun_term += a * phases[o] * exp(-b * tau);
-            a *= MS_SCATTERING;
-            b *= MS_EXTINCTION;
-        }
-        vec3 sun = mix(sun_a, sun_b, clamp((t - t_first) / max(t_last - t_first, 1.0), 0.0, 1.0)) * sun_term;
-        vec3 sky = atmo_ms(max(h, 0.0), dot(base_up(x), cloud_sun)) * mix(0.4, 1.0, hf);
+        // The sun through the octaves; the sky dimmer lower in the layer (Frostbite's gradient).
+        float along = clamp((t - t_first) / max(t_last - t_first, 1.0), 0.0, 1.0);
+        vec3 sun = mix(sun_a, sun_b, along) * cloud_octaves(cloud_light_depth(x, cloud_sun, w), phases);
+        vec3 sky = mix(sky_a, sky_b, along) * mix(0.4, 1.0, hf);
         float step_trans = exp(-sigma * dt);
         light += trans * cloud_albedo * (sun + sky) * (1.0 - step_trans);
         weighted_t += t * trans * (1.0 - step_trans);
@@ -411,50 +388,58 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     return vec4(light * air.a + air.rgb * (1.0 - trans), trans);
 }
 
+// The last frame's value at direction dir (the last camera's up and its frame: old_up, o1, o2): the
+// point at its cloud's mean distance, seen from the last camera.
+void cloud_history(vec3 dir, vec3 old_up, vec3 o1, vec3 o2, out vec4 old_light, out vec4 old_depth) {
+    vec2 old_uv = cloud_grid_uv(dir, old_up, o1, o2);
+    float opacity = 1.0 - textureLod(sampler2D(history_light, linear), old_uv, 0.0).a;
+    float mean = textureLod(sampler2D(history_depth, linear), old_uv, 0.0).y * 1000.0 / max(opacity, 1e-3);
+    if (opacity > 1e-3) {
+        old_uv = cloud_grid_uv(normalize(cloud_camera_m + dir * mean - cloud_prev_camera_m), old_up, o1, o2);
+    }
+    old_light = textureLod(sampler2D(history_light, linear), old_uv, 0.0);
+    old_depth = textureLod(sampler2D(history_depth, linear), old_uv, 0.0);
+}
+
+// One invocation per 2 x 2 block of the grid (every lane marches: no idle lanes in a warp): it marches one texel of the
+// block, in the order 0, 3, 1, 2 over four frames, blended with its history, and reprojects the other three (all four
+// marched on a reset). The distances are stored times the opacity, so filtering and blending weigh them by it.
 void main() {
-    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
-    if (id.x >= CLOUD_GRID_W || id.y >= CLOUD_GRID_H) {
+    ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+    if (block.x >= CLOUD_GRID_W / 2 || block.y >= CLOUD_GRID_H / 2) {
         return;
     }
-    vec2 uv = (vec2(id) + 0.5) / vec2(CLOUD_GRID_W, CLOUD_GRID_H);
     vec3 up = base_up(cloud_camera_m);
     vec3 t1;
     vec3 t2;
     up_frame(up, t1, t2);
-    vec3 dir = cloud_grid_dir(uv, up, t1, t2);
-
-    // The last frame's value at this direction: the point at its cloud's mean distance, seen from the last camera.
-    vec4 old_light = vec4(0.0, 0.0, 0.0, 1.0);
-    vec4 old_depth = vec4(1.0);
+    vec3 old_up = base_up(cloud_prev_camera_m);
+    vec3 o1;
+    vec3 o2;
+    up_frame(old_up, o1, o2);
     bool fresh = cloud_reset != 0;
-    if (!fresh) {
-        vec3 old_up = base_up(cloud_prev_camera_m);
-        vec3 o1;
-        vec3 o2;
-        up_frame(old_up, o1, o2);
-        vec2 old_uv = cloud_grid_uv(dir, old_up, o1, o2);
-        float mean = textureLod(sampler2D(history_depth, linear), old_uv, 0.0).y * 1000.0;
-        if (mean > 0.0) {
-            old_uv = cloud_grid_uv(normalize(cloud_camera_m + dir * mean - cloud_prev_camera_m), old_up, o1, o2);
-        }
-        old_light = textureLod(sampler2D(history_light, linear), old_uv, 0.0);
-        old_depth = textureLod(sampler2D(history_depth, linear), old_uv, 0.0);
-    }
-
-    // One texel of each 2 x 2 block per frame, in the order 0, 3, 1, 2.
     int order[4] = int[4](0, 3, 1, 2);
-    if (fresh || (id.x & 1) + 2 * (id.y & 1) == order[cloud_frame & 3]) {
-        float jitter = fract(cloud_ign(vec2(id)) + 0.618034 * float(cloud_frame & 63));
-        vec2 front_mean;
-        vec4 l = cloud_march(cloud_camera_m, dir, jitter, front_mean);
-        vec4 d = vec4(front_mean, 0.0, 0.0);
+    int marched = order[cloud_frame & 3];
+    for (int k = 0; k < 4; k++) {
+        ivec2 id = block * 2 + ivec2(k & 1, k >> 1);
+        vec3 dir = cloud_grid_dir((vec2(id) + 0.5) / vec2(CLOUD_GRID_W, CLOUD_GRID_H), up, t1, t2);
+        vec4 old_light = vec4(0.0, 0.0, 0.0, 1.0);
+        vec4 old_depth = vec4(0.0);
         if (!fresh) {
-            l = mix(old_light, l, BLEND);
-            d = mix(old_depth, d, BLEND);
+            cloud_history(dir, old_up, o1, o2, old_light, old_depth);
         }
-        imageStore(out_light, id, l);
-        imageStore(out_depth, id, d);
-    } else {
+        if (fresh || k == marched) {
+            float jitter = fract(cloud_ign(vec2(id)) + 0.618034 * float(cloud_frame & 63));
+            vec2 front_mean;
+            vec4 l = cloud_march(cloud_camera_m, dir, jitter, front_mean);
+            vec4 d = vec4(front_mean * (1.0 - l.a), 0.0, 0.0);
+            if (!fresh) {
+                l = mix(old_light, l, BLEND);
+                d = mix(old_depth, d, BLEND);
+            }
+            old_light = l;
+            old_depth = d;
+        }
         imageStore(out_light, id, old_light);
         imageStore(out_depth, id, old_depth);
     }
@@ -487,7 +472,16 @@ void main() {
             vec3 x = p + cloud_sun * cloud_segment_t(seg, float(i), float(SHADOW_STEPS), 0.5);
             depth += cloud_base(x, cloud_height_fraction(base_altitude(x)), cloud_weather(x));
         }
-        trans = cloud_octave_transmittance(depth * cloud_extinction * len / float(SHADOW_STEPS));
+        // The octaves with an isotropic phase, over their sum: under a thick cloud the light its octaves let through.
+        float ones[OCTAVES];
+        float norm = 0.0;
+        float a = 1.0;
+        for (int o = 0; o < OCTAVES; o++) {
+            ones[o] = 1.0;
+            norm += a;
+            a *= MS_SCATTERING;
+        }
+        trans = cloud_octaves(depth * cloud_extinction * len / float(SHADOW_STEPS), ones) / norm;
     }
     imageStore(out_shadow, id, vec4(trans, 0.0, 0.0, 1.0));
 }
@@ -553,17 +547,11 @@ CloudLayer CloudLayer::for_base(double p_radius_m, double p_relief_m, double p_v
     l.bottom_m = float(bottom);
     l.extinction = float(l.extinction / s);
     l.shadow_reach_m = float(l.shadow_reach_m * s);
-    l.shadow_extent_m = float(l.shadow_extent_m * s);
+    l.shadow_min_extent_m = float(l.shadow_min_extent_m * s);
     l.shape_period_vox = period_vox(EARTH_SHAPE_PERIOD_M * s, p_voxel_m);
     l.detail_period_vox = period_vox(EARTH_DETAIL_PERIOD_M * s, p_voxel_m);
     l.weather_period_vox = period_vox(EARTH_WEATHER_PERIOD_M * s, p_voxel_m);
     return l;
-}
-
-ov::str Clouds::glsl_host_uniforms() {
-    ov::str out;
-    CloudLayer().visit(GLSLUniforms::Declarations{ out, "uniform " });
-    return out;
 }
 
 ov::str Clouds::glsl_lookup() {
@@ -571,7 +559,7 @@ ov::str Clouds::glsl_lookup() {
 }
 
 ov::str Clouds::glsl_pass_noise() {
-    return GLSL_PASS_NOISE;
+    return ov::replace_all(ov::str(GLSL_PASS_NOISE), { { "$PCG3D", ov::str(GLSL_PCG3D) } });
 }
 
 ov::str Clouds::glsl_pass_march() {
@@ -622,7 +610,7 @@ Clouds::Frame Clouds::make_frame(const CloudLayer &p_layer, double p_curvature_m
     const Float3 v = cross(p_sun, u);
     f.shadow_u = u;
     f.shadow_v = v;
-    f.shadow_extent_m = float(ov::max(double(p_layer.shadow_extent_m), 4.0 * altitude));
+    f.shadow_extent_m = float(ov::max(double(p_layer.shadow_min_extent_m), 4.0 * altitude));
     const double texel = double(f.shadow_extent_m) / SHADOW_SIZE;
     const double half = 0.5 * double(f.shadow_extent_m);
     const double cu = std::floor(double(dot(p_camera_m, u)) / texel) * texel - half;
@@ -704,7 +692,7 @@ void Clouds::_rt_start() {
         set_shadow = device->create_bind_set(pipe_shadow, bindings);
     }
     if (textures_fn) {
-        textures_fn(light, depth, shape, detail, shadow);
+        textures_fn(light, depth, shadow);
     }
 }
 
@@ -721,7 +709,7 @@ void Clouds::_rt_frame(const ov::bytes &p_block, bool p_noise) {
     }
     device->update_buffer(block, 0, p_block.size(), p_block.data());
     device->dispatch(pipe_shadow, set_shadow, nullptr, 0, (SHADOW_SIZE + 7) / 8, (SHADOW_SIZE + 7) / 8, 1);
-    device->dispatch(pipe_march, set_march, nullptr, 0, (GRID_W + 7) / 8, (GRID_H + 7) / 8, 1);
+    device->dispatch(pipe_march, set_march, nullptr, 0, (GRID_W / 2 + 7) / 8, (GRID_H / 2 + 7) / 8, 1);
     device->copy_texture(light, history_light, 0, 0, 0, 0, GRID_W, GRID_H);
     device->copy_texture(depth, history_depth, 0, 0, 0, 0, GRID_W, GRID_H);
     device->timestamp("clouds");
@@ -729,7 +717,7 @@ void Clouds::_rt_frame(const ov::bytes &p_block, bool p_noise) {
 
 void Clouds::_rt_destroy() {
     if (textures_fn) {
-        textures_fn(ov::gpu::Texture(), ov::gpu::Texture(), ov::gpu::Texture(), ov::gpu::Texture(), ov::gpu::Texture());
+        textures_fn(ov::gpu::Texture(), ov::gpu::Texture(), ov::gpu::Texture());
     }
     const ov::gpu::Handle handles[] = { set_march, set_shadow, set_shape, set_detail, pipe_march, pipe_shadow, pipe_noise, block, light, depth, history_light,
         history_depth, shadow, shape, detail };

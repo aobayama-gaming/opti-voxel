@@ -24,15 +24,15 @@
 // multiple-scattering table (Hillaire 2020's isotropic sky radiance at an altitude and sun height).
 //
 // Each frame a compute pass marches a camera-centred grid of directions round the base's up at the camera (GRID_W
-// azimuths x GRID_H elevations, the elevation linear), one texel of each 2 x 2 block in turn; the others are reprojected
-// from the last frame by the cloud's distance. A texel holds the clouds' light towards the camera (RGB, for a sun of
-// illuminance 1, the air in front of them included) and their transmittance (A), and in a second texture the cloud's
-// front and mean distances (kilometres: a half float keeps 1e-3 of any of them). Hosts read it by direction and distance (glsl_lookup's cloud_at), like the atmosphere's camera
-// volume. A second pass marches a shadow map: the sun's transmittance through the layer along lines parallel to the sun
-// round the camera (SHADOW_SIZE^2 texels, its side the layer's shadow_extent_m or 4 camera altitudes, its origin snapped to
-// them), each from where
-// its line leaves the base towards the sun, so it holds for any receiver under the layer; the hosts' terrain reads it
-// once per fragment (cloud_sun_shadow).
+// azimuths x GRID_H elevations, the elevation linear), one invocation per 2 x 2 block marching one of its texels in turn
+// and reprojecting the others from the last frame by the cloud's distance. A texel holds the clouds' light towards the
+// camera (RGB, for a sun of illuminance 1, the air in front of them included) and their transmittance (A), and in a
+// second texture the cloud's front and mean distances times its opacity (kilometres: a half float keeps 1e-3 of any of
+// them; times the opacity, filtering weighs them by it). Hosts read it by direction and distance (glsl_lookup's
+// cloud_at), like the atmosphere's camera volume. A second pass marches a shadow map: the sun's transmittance through the
+// layer along lines parallel to the sun round the camera (SHADOW_SIZE^2 texels, its side the layer's shadow_min_extent_m
+// or 4 camera altitudes, its origin snapped to them), each from where its line leaves the base towards the sun, so it
+// holds for any receiver under the layer; the hosts' terrain reads it once per fragment (cloud_sun_shadow).
 struct CloudLayer {
     // Earth's: a cumulus layer from 1.5 to 4 km, the shape noise repeating every ~12 km, the detail every ~1.5 km, the
     // weather (cover and type) every ~48 km.
@@ -41,7 +41,7 @@ struct CloudLayer {
     float extinction = 0.04f; // 1/m at density 1
     float albedo = 0.99f;
     float shadow_reach_m = 80000.0f; // the longest path of a shadow ray through the layer (a low sun over a plane)
-    float shadow_extent_m = 64000.0f; // the shadow map's side round the camera, at least (Frame::shadow_extent_m)
+    float shadow_min_extent_m = 64000.0f; // the shadow map's side round the camera, at least (Frame::shadow_extent_m; no uniform)
     // The noises' periods in LOD0 voxels (powers of two: the shading frame), set by for_base.
     int shape_period_vox = 0;
     int detail_period_vox = 0;
@@ -69,7 +69,6 @@ struct CloudLayer {
         p_f("cloud_extinction", extinction);
         p_f("cloud_albedo", albedo);
         p_f("cloud_shadow_reach_m", shadow_reach_m);
-        p_f("cloud_shadow_min_extent_m", shadow_extent_m);
         p_f("cloud_shape_period_vox", shape_period_vox);
         p_f("cloud_detail_period_vox", detail_period_vox);
         p_f("cloud_weather_period_vox", weather_period_vox);
@@ -144,10 +143,19 @@ public:
         }
     };
 
-    // Called on the device's thread with the grid's two textures, the two noises and the shadow map once made, with
-    // invalid textures before they are freed: the host binds them to its shaders.
-    using TexturesFn = std::function<void(ov::gpu::Texture p_light, ov::gpu::Texture p_depth, ov::gpu::Texture p_shape, ov::gpu::Texture p_detail,
-            ov::gpu::Texture p_shadow)>;
+    // Called on the device's thread with the grid's two textures and the shadow map once made (the hosts' samplers
+    // HOST_TEXTURES, in that order), with invalid textures before they are freed: the host binds them to its shaders.
+    using TexturesFn = std::function<void(ov::gpu::Texture p_light, ov::gpu::Texture p_depth, ov::gpu::Texture p_shadow)>;
+    static constexpr const char *HOST_TEXTURES[3] = { "cloud_light", "cloud_depth", "cloud_shadow_map" };
+
+    // What the hosts take per frame, as global uniforms: the shadow map's frame (Frame's fields of the same names).
+    template <class F>
+    static void visit_host_frame(const Frame &p_frame, F &&p_f) {
+        p_f("cloud_shadow_origin_m", p_frame.shadow_origin_m);
+        p_f("cloud_shadow_u", p_frame.shadow_u);
+        p_f("cloud_shadow_v", p_frame.shadow_v);
+        p_f("cloud_shadow_extent_m", p_frame.shadow_extent_m);
+    }
 
     // p_atmosphere (started, outliving this) lights the clouds and hazes them; the base's curvature radius, the ground's
     // relief and p_scale set the layer (CloudLayer::for_base).
@@ -165,16 +173,13 @@ public:
     void destroy();
 
     const CloudLayer &layer() const { return layer_params; }
-    // The last frame's (the hosts' globals cloud_shadow_origin_m, cloud_shadow_u, cloud_shadow_v, cloud_shadow_extent_m).
+    // The last frame's (the hosts' globals: visit_host_frame).
     const Frame &last_frame() const { return frame_params; }
 
-    // CloudLayer's uniforms, for a host that declares loose uniforms (Godot).
-    static ov::str glsl_host_uniforms();
-    // The host's lookups, after the shading frame's up_frame, BaseSurface::glsl_render and CloudLayer's uniforms:
-    // `vec4 cloud_at(vec3 camera, vec3 dir, float dist)` (the clouds' light, for a sun of illuminance 1, and
-    // transmittance from the camera to dist along dir) and `float cloud_sun_shadow(vec3 p)` (the sun through the layer at p,
-    // under it). The host declares `sampler2D cloud_light`, `sampler2D cloud_depth`, `sampler2D cloud_shadow_map` and
-    // the Frame's cloud_shadow_origin_m, cloud_shadow_u, cloud_shadow_v (vec3) and cloud_shadow_extent_m (float).
+    // The host's lookups, after the atmosphere's (Atmosphere::glsl_lookup: ATMO_PI), the shading frame's up_frame and
+    // BaseSurface::glsl_render: `vec4 cloud_at(vec3 camera, vec3 dir, float dist)` (the clouds' light, for a sun of
+    // illuminance 1, and transmittance from the camera to dist along dir) and `float cloud_sun_shadow(vec3 p)` (the sun
+    // through the layer at p, under it). The host declares the samplers HOST_TEXTURES and visit_host_frame's uniforms.
     static ov::str glsl_lookup();
     // The passes' compute shaders.
     static ov::str glsl_pass_noise();

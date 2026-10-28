@@ -92,7 +92,9 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
 ## Volumetric clouds
 
 Volumetric clouds (`src/clouds.*`, `ov::Clouds`, owned by `World` with the atmosphere; `--clouds=0|1`, on by default;
-without them, or without the atmosphere, the cloud layer above) made from the base's shape like the atmosphere: a layer
+without them, or without the atmosphere, the cloud layer above). `World` starts the atmosphere and the clouds only for a
+host that binds their textures (`Hosts::atmosphere_textures`, `Hosts::cloud_textures`): the Dawn viewer runs neither yet.
+They are made from the base's shape like the atmosphere: a layer
 between two altitudes above the base (`base_altitude`; a ray's part in it from `base_level_span`), every noise read at
 the 3D point in the shading frame (no 2D weather map, which a curved base would tear), so another base kind gets clouds
 that follow it.
@@ -119,12 +121,13 @@ that follow it.
   (a > b is not energy-conserving): with a <= b a cloud's inside, hundreds of optical depths from the sun, stays black.
 - **Passes** (compute on the main device after the atmosphere's; a `clouds` GPU timestamp): the **grid**, camera-centred
   like the atmosphere's volume, 1536 azimuths x 768 elevations round `base_up` at the camera (linear elevation, 0.23
-  degrees). Each frame marches one texel of each 2 x 2 block (16 to 64 steps over the ray's part in the layer, out to the
+  degrees). One invocation per 2 x 2 block (every lane of a warp marches) marches one of its texels in turn (16 to 64 steps over the ray's part in the layer, out to the
   camera's horizon plus the top's, jittered by interleaved gradient noise), blended half with the last frame's; the
   others take the last frame's, reprojected by the cloud's mean distance (the camera moved; a jump over a thickness
   resets). A texel holds the clouds' light for a sun of illuminance 1 with the air in front of them (RGB: the
   atmosphere's volume at their mean distance) and their transmittance (A), and the front and mean distances in km
-  (0 where there is no cloud, so a filtered edge keeps the cloud's). The **shadow map**: 512^2 texels along the sun round
+  times the opacity (0 where there is no cloud; divided back by the filtered opacity, so filtering and blending weigh
+  them by it). The **shadow map**: 512^2 texels along the sun round
   the camera (64 km on Earth, or 4 camera altitudes; its origin snapped to its texels), each column marched (16 steps
   of the base shape) from where its line leaves the base towards the sun, its transmittance through the octaves.
 - **Hosts** (`Clouds::glsl_lookup`): `cloud_at(camera, dir, dist)` (the grid at dir; a cloud starting past dist left
@@ -140,6 +143,9 @@ that follow it.
   inside the flat world's layer, Earth from 100 km and the 2 km planet from the ground and from 4 km out.
 - **Limits:** the grid's 0.23 degrees show as jagged edges on a small planet seen whole; a cloud in front of terrain is
   composited by its front and mean distances, so a hill reaching into one would be cut by texels (the layer is lifted
-  over the relief instead); no shadow past the shadow map (faded over its last tenth); the clouds take the scene's sun
+  over the world's largest relief instead, so no cloud wraps a peak); the wind is a render-space vector, so on a planet
+  the noise drifts through the shell away from the pole; the grid's history is copied every frame (a ping-pong would
+  save the copies), the noises have no mipmaps (distant rays sample them minified) and the shadow map is marched every
+  frame; no shadow past the shadow map (faded over its last tenth); the clouds take the scene's sun
   colour, warm here, through the air (no white balance); no cloud shadows on the atmosphere (light shafts), no
   lightning, no precipitation. The Dawn viewer has no clouds yet.

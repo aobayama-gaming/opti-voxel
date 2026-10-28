@@ -149,11 +149,12 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         gpu_mesher->set_trim_indices(config.legacy_trim_indices);
     }
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
-    if (config.atmosphere) {
+    // Only for a host that draws them (binds their textures).
+    if (config.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
         atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
                 hosts.atmosphere_textures);
-        if (config.clouds) {
+        if (config.clouds && hosts.cloud_textures) {
             clouds = new Clouds();
             clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
                     hosts.cloud_textures);

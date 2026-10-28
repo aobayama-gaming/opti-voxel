@@ -5,6 +5,7 @@
 #include "atmosphere.hpp"
 #include "base_surface.hpp"
 #include "clouds.hpp"
+#include "glsl_uniforms.hpp"
 #include "godot_conv.hpp"
 #include "shade_frame_glsl.hpp"
 #include "sky_glsl.hpp"
@@ -107,10 +108,6 @@ uniform bool cloud_enabled = false;
 uniform sampler2D cloud_light : filter_linear, repeat_enable;
 uniform sampler2D cloud_depth : filter_linear, repeat_enable;
 uniform sampler2D cloud_shadow_map : filter_linear;
-global uniform vec3 cloud_shadow_origin_m;
-global uniform vec3 cloud_shadow_u;
-global uniform vec3 cloud_shadow_v;
-global uniform float cloud_shadow_extent_m;
 )glsl";
 
 // The sky: the atmosphere (Atmosphere: the camera volume's sky slice, marched per pixel from above it), or without one
@@ -203,7 +200,9 @@ String VoxelSky::glsl_clouds() {
 }
 
 String VoxelSky::glsl_atmosphere() {
-    return String(GLSL_ATMOSPHERE) + godot_str(Atmosphere::glsl_host_uniforms() + Atmosphere::glsl_lookup() + Clouds::glsl_host_uniforms() + Clouds::glsl_lookup());
+    ov::str globals;
+    Clouds::visit_host_frame(Clouds::Frame(), GLSLUniforms::Declarations{ globals, "global uniform " });
+    return String(GLSL_ATMOSPHERE) + godot_str(Atmosphere::glsl_host_uniforms() + Atmosphere::glsl_lookup() + globals + Clouds::glsl_lookup());
 }
 
 void VoxelSky::add_atmosphere_globals() {
@@ -215,10 +214,13 @@ void VoxelSky::add_atmosphere_globals() {
     RenderingServer *rs = RenderingServer::get_singleton();
     rs->global_shader_parameter_add("atmo_range_m", RenderingServer::GLOBAL_VAR_TYPE_FLOAT, 1.0);
     rs->global_shader_parameter_add("atmo_sun_light", RenderingServer::GLOBAL_VAR_TYPE_VEC3, Vector3(1.0f, 1.0f, 1.0f));
-    for (const char *name : { "cloud_shadow_origin_m", "cloud_shadow_u", "cloud_shadow_v" }) {
-        rs->global_shader_parameter_add(name, RenderingServer::GLOBAL_VAR_TYPE_VEC3, Vector3());
-    }
-    rs->global_shader_parameter_add("cloud_shadow_extent_m", RenderingServer::GLOBAL_VAR_TYPE_FLOAT, 1.0);
+    // The clouds' shadow map frame (Clouds::visit_host_frame: vec3s and a float).
+    struct AddGlobal {
+        RenderingServer *rs;
+        void operator()(const char *p_name, const Float3 &) { rs->global_shader_parameter_add(p_name, RenderingServer::GLOBAL_VAR_TYPE_VEC3, Vector3()); }
+        void operator()(const char *p_name, float) { rs->global_shader_parameter_add(p_name, RenderingServer::GLOBAL_VAR_TYPE_FLOAT, 1.0); }
+    };
+    Clouds::visit_host_frame(Clouds::Frame(), AddGlobal{ rs });
 }
 
 String VoxelSky::sky_shader_code() {

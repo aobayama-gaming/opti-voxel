@@ -51,7 +51,6 @@ TEST_CASE("Clouds: every constant of the passes' and the hosts' GLSL substituted
     }
     CHECK(Clouds::glsl_pass_march().find("vec3 cloud_camera_m;") != ov::str::npos);
     CHECK(Clouds::glsl_pass_shadow().find("float cloud_shadow_extent_m;") != ov::str::npos);
-    CHECK(Clouds::glsl_host_uniforms().find("uniform float cloud_bottom_m;") != ov::str::npos);
 }
 
 TEST_CASE("Clouds::block_bytes: std140, the base first, padded to 16") {
@@ -81,7 +80,7 @@ TEST_CASE("Clouds::make_frame: the shadow map's axes perpendicular to the sun, i
     CHECK(std::abs(dot(f.shadow_u, f.shadow_v)) < 1e-6f);
     CHECK(double(dot(f.shadow_u, f.shadow_u)) == doctest::Approx(1.0).epsilon(1e-6));
     CHECK(double(dot(f.shadow_v, f.shadow_v)) == doctest::Approx(1.0).epsilon(1e-6));
-    CHECK(f.shadow_extent_m == layer.shadow_extent_m);
+    CHECK(f.shadow_extent_m == layer.shadow_min_extent_m);
     const double texel = double(f.shadow_extent_m) / Clouds::SHADOW_SIZE;
     const Float3 d = camera - f.shadow_origin_m;
     for (const Float3 &axis : { f.shadow_u, f.shadow_v }) {
