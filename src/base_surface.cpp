@@ -34,6 +34,22 @@ float region_delta(int64_t p_v, int p_lod) {
     return float(int32_t((uint64_t(p_v) & mask) >> p_lod) - REGION_HALF);
 }
 
+// The radius form's body after v (BaseSurface::radius_form, per kind).
+constexpr const char *GLSL_SPHERE_SHAPE = R"glsl(precise float ss = max(vx * vx + vy * vy + vz * vz, 1.0);
+    precise float r = det_rsqrt(ss);
+    precise float rl = RADIUS * exact_pow2(-lod);
+    precise float alt = ss * r - rl;
+    return vec4(vx * r, vy * r, vz * r, alt);)glsl";
+constexpr const char *GLSL_TORUS_SHAPE = R"glsl(precise float qq = max(vx * vx + vz * vz, 1.0);
+    precise float rq = det_rsqrt(qq);
+    precise float a = qq * rq - RING * exact_pow2(-lod);
+    precise float ss = max(a * a + vy * vy, 1.0);
+    precise float r = det_rsqrt(ss);
+    precise float ar = a * r * rq;
+    precise float rl = RADIUS * exact_pow2(-lod);
+    precise float alt = ss * r - rl;
+    return vec4(vx * ar, vy * r, vz * ar, alt);)glsl";
+
 } // namespace
 
 BaseSurface BaseSurface::flat(int64_t p_datum_y) {
@@ -58,6 +74,68 @@ BaseSurface BaseSurface::sphere(const VoxelPos &p_centre, double p_radius, int p
     return b;
 }
 
+BaseSurface BaseSurface::torus(const VoxelPos &p_centre, double p_ring, double p_tube, int p_switch_lod) {
+    OV_ERR_FAIL_COND_V_MSG(!(p_tube > 0.0) || !(p_ring >= MIN_RING_TUBES * p_tube), BaseSurface(),
+            ov::format("BaseSurface: a torus's ring must be at least %f times its tube.", MIN_RING_TUBES));
+    BaseSurface b = sphere(p_centre, p_ring + p_tube, p_switch_lod); // the radius form's limits hold on the outer radius
+    if (b.base_kind == Kind::SPHERE) {
+        b.base_kind = Kind::TORUS;
+        b.radius = p_tube;
+        b.ring = p_ring;
+    }
+    return b;
+}
+
+double BaseSurface::shape(const double p_v[3], double r_n[3], double r_h[6]) const {
+    if (base_kind == Kind::SPHERE) {
+        // The level surface through p: d = |v| - R, n = v / |v|, H = (I - n n^T) / |v|.
+        const double len = ov::max(std::sqrt(p_v[0] * p_v[0] + p_v[1] * p_v[1] + p_v[2] * p_v[2]), 1.0);
+        for (int a = 0; a < 3; a++) {
+            r_n[a] = p_v[a] / len;
+        }
+        if (r_h != nullptr) {
+            const double k = 1.0 / len;
+            r_h[0] = k * (1.0 - r_n[0] * r_n[0]);
+            r_h[1] = k * (1.0 - r_n[1] * r_n[1]);
+            r_h[2] = k * (1.0 - r_n[2] * r_n[2]);
+            r_h[3] = -k * r_n[0] * r_n[1];
+            r_h[4] = -k * r_n[0] * r_n[2];
+            r_h[5] = -k * r_n[1] * r_n[2];
+        }
+        return len - radius;
+    }
+    // TORUS: f(rho, y) = |(rho - ring, y)|, rho = |v.xz|; d = f - tube, its derivatives through rho by the chain rule.
+    // On the y axis (within a voxel) the ring's nearest point is taken over +x, so the normal stays unit.
+    const double rho_v = std::sqrt(p_v[0] * p_v[0] + p_v[2] * p_v[2]);
+    const double rho = ov::max(rho_v, 1.0);
+    const double a = rho - ring;
+    const double s = ov::max(std::sqrt(a * a + p_v[1] * p_v[1]), 1.0);
+    const double fr = a / s;
+    const double cx = rho_v < 1.0 ? 1.0 : p_v[0] / rho;
+    const double cz = rho_v < 1.0 ? 0.0 : p_v[2] / rho;
+    r_n[0] = fr * cx;
+    r_n[1] = p_v[1] / s;
+    r_n[2] = fr * cz;
+    if (r_h != nullptr) {
+        const double s3 = s * s * s;
+        const double frr = p_v[1] * p_v[1] / s3;
+        const double fry = -a * p_v[1] / s3;
+        r_h[0] = frr * cx * cx + fr * (1.0 - cx * cx) / rho;
+        r_h[1] = a * a / s3;
+        r_h[2] = frr * cz * cz + fr * (1.0 - cz * cz) / rho;
+        r_h[3] = fry * cx;
+        r_h[4] = (frr - fr / rho) * cx * cz;
+        r_h[5] = fry * cz;
+    }
+    return s - radius;
+}
+
+double BaseSurface::shape_at(const VoxelPos &p_voxel, double r_n[3], double r_h[6]) const {
+    double v[3];
+    offset(p_voxel, anchor, v);
+    return shape(v, r_n, r_h);
+}
+
 Float4 BaseSurface::at(const VoxelPos &p_voxel, int p_lod) const {
     if (base_kind == Kind::FLAT) {
         return flat_form(p_voxel, p_lod);
@@ -77,40 +155,41 @@ UpAxis BaseSurface::up_dir(const VoxelPos &p_voxel) const {
     if (base_kind == Kind::FLAT) {
         return UP_Y;
     }
-    double v[3];
-    const double len = offset(p_voxel, anchor, v);
-    if (len == 0.0) {
-        return UP_Y;
+    double n[3];
+    shape_at(p_voxel, n);
+    if (n[0] == 0.0 && n[1] == 0.0 && n[2] == 0.0) {
+        return UP_Y; // the centre (the torus's core circle)
     }
-    return { v[0] / len, v[1] / len, v[2] / len };
+    return { n[0], n[1], n[2] };
 }
 
 double BaseSurface::altitude(const VoxelPos &p_voxel) const {
     if (base_kind == Kind::FLAT) {
         return double(p_voxel.y - anchor.y);
     }
-    double v[3];
-    return offset(p_voxel, anchor, v) - radius;
+    double n[3];
+    return shape_at(p_voxel, n);
 }
 
 VoxelPos BaseSurface::tangent_point(int64_t p_u, int64_t p_v) const {
     if (base_kind == Kind::FLAT) {
         return VoxelPos(p_u, anchor.y, p_v);
     }
-    return VoxelPos(anchor.x + p_u, anchor.y + std::llround(radius), anchor.z + p_v);
+    // TORUS: the top of the tube over +x.
+    return VoxelPos(anchor.x + std::llround(ring) + p_u, anchor.y + std::llround(radius), anchor.z + p_v);
 }
 
 VoxelPos BaseSurface::on_base(const VoxelPos &p_voxel) const {
     if (base_kind == Kind::FLAT) {
         return VoxelPos(p_voxel.x, anchor.y, p_voxel.z);
     }
-    double v[3];
-    const double len = offset(p_voxel, anchor, v);
-    if (len == 0.0) {
-        return tangent_point(0, 0);
+    // Down the up by the altitude (both bases' altitudes are distances).
+    double n[3];
+    const double d = shape_at(p_voxel, n);
+    if (n[0] == 0.0 && n[1] == 0.0 && n[2] == 0.0) {
+        return tangent_point(0, 0); // the centre (the torus's core circle)
     }
-    const double s = radius / len;
-    return anchor + VoxelPos(std::llround(v[0] * s), std::llround(v[1] * s), std::llround(v[2] * s));
+    return p_voxel - VoxelPos(std::llround(d * n[0]), std::llround(d * n[1]), std::llround(d * n[2]));
 }
 
 Vector3i64 BaseSurface::region_cell(const VoxelPos &p_voxel, int p_lod) {
@@ -125,14 +204,11 @@ VoxelPos BaseSurface::region_centre(const Vector3i64 &p_cell, int p_lod) {
 }
 
 BaseSurface::Region BaseSurface::region(const Vector3i64 &p_cell, int p_lod) const {
-    // The level surface through c: d = |v| - R, n = v / |v|, H = (I - n n^T) / |v|. v is an exact int64 difference.
-    const VoxelPos c = region_centre(p_cell, p_lod);
-    double v[3];
-    const double len = ov::max(offset(c, anchor, v), 1.0);
-    const double n[3] = { v[0] / len, v[1] / len, v[2] / len };
-    const double k = 1.0 / len;
-    const double h[6] = { k * (1.0 - n[0] * n[0]), k * (1.0 - n[1] * n[1]), k * (1.0 - n[2] * n[2]), -k * n[0] * n[1], -k * n[0] * n[2], -k * n[1] * n[2] };
-    return make_region(len - radius, n, h, p_lod);
+    // The base's shape at the region's centre c (v = c - centre, an exact int64 difference).
+    double n[3];
+    double h[6];
+    const double d = shape_at(region_centre(p_cell, p_lod), n, h);
+    return make_region(d, n, h, p_lod);
 }
 
 BaseSurface::Region BaseSurface::make_region(double p_d, const double p_g[3], const double p_h[6], int p_lod) {
@@ -167,6 +243,17 @@ Float4 BaseSurface::radius_form(const VoxelPos &p_voxel, int p_lod) const {
     const float vx = radius_axis(p_voxel.x, anchor.x, p_lod);
     const float vy = radius_axis(p_voxel.y, anchor.y, p_lod);
     const float vz = radius_axis(p_voxel.z, anchor.z, p_lod);
+    if (base_kind == Kind::TORUS) {
+        // |(|v.xz| - ring, v.y)| - tube, each length as ss * det_rsqrt(ss) like the sphere's.
+        const float qq = ov::max(vx * vx + vz * vz, 1.0f);
+        const float rq = ExactNoise::det_rsqrt(qq);
+        const float a = qq * rq - float(ring) * exact_pow2(-p_lod);
+        const float ss = ov::max(a * a + vy * vy, 1.0f);
+        const float r = ExactNoise::det_rsqrt(ss);
+        const float ar = a * r * rq;
+        const float rl = float(radius) * exact_pow2(-p_lod);
+        return Float4{ vx * ar, vy * r, vz * ar, ss * r - rl };
+    }
     const float ss = ov::max(vx * vx + vy * vy + vz * vz, 1.0f);
     const float r = ExactNoise::det_rsqrt(ss);
     const float rl = float(radius) * exact_pow2(-p_lod);
@@ -351,14 +438,11 @@ vec4 base_radius(WorldPos p, int lod) {
     precise float vx = float(v.x);
     precise float vy = float(v.y);
     precise float vz = float(v.z);
-    precise float ss = max(vx * vx + vy * vy + vz * vz, 1.0);
-    precise float r = det_rsqrt(ss);
-    precise float rl = RADIUS * exact_pow2(-lod);
-    precise float alt = ss * r - rl;
-    return vec4(vx * r, vy * r, vz * r, alt);
+    BASE_SHAPE
 }
 )glsl"),
-            { { "REGION_SHIFT", ov::itos(REGION_SHIFT) }, { "REGION_HALF", ov::itos(REGION_HALF) }, { "CENTRE_LO", glsl_lo(anchor) }, { "CENTRE_HI", glsl_hi(anchor) }, { "RADIUS_LIMIT", ov::itos(RADIUS_LIMIT) }, { "RADIUS", glsl_float(float(radius)) } });
+            { { "BASE_SHAPE", base_kind == Kind::TORUS ? GLSL_TORUS_SHAPE : GLSL_SPHERE_SHAPE }, { "REGION_SHIFT", ov::itos(REGION_SHIFT) }, { "REGION_HALF", ov::itos(REGION_HALF) }, { "CENTRE_LO", glsl_lo(anchor) }, { "CENTRE_HI", glsl_hi(anchor) }, { "RADIUS_LIMIT", ov::itos(RADIUS_LIMIT) }, { "RADIUS", glsl_float(float(radius)) },
+                    { "RING", glsl_float(float(ring)) } });
 }
 
 BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel_m) const {
@@ -373,18 +457,24 @@ BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel
     r.point_m = Float3{ float(v[0] * p_voxel_m), float(v[1] * p_voxel_m), float(v[2] * p_voxel_m) };
     const double rm = radius * p_voxel_m;
     r.radius_m = float(rm);
-    r.k_m2 = float((len - rm) * (len + rm));
+    r.k_m2 = base_kind == Kind::SPHERE ? float((len - rm) * (len + rm)) : 0.0f;
+    r.ring_m = float(ring * p_voxel_m);
     return r;
 }
 
 double BaseSurface::curvature_radius_m(double p_voxel_m) const {
-    return base_kind == Kind::SPHERE ? radius * p_voxel_m : INFINITY;
+    return base_kind == Kind::FLAT ? INFINITY : radius * p_voxel_m; // TORUS: the tube's
 }
 
 float BaseSurface::Render::altitude(const Float3 &p_m) const {
     const Float3 &c = point_m;
-    if (kind != Kind::SPHERE) {
+    if (kind == Kind::FLAT) {
         return p_m.y - c.y;
+    }
+    if (kind == Kind::TORUS) {
+        const Float3 d = p_m - c;
+        const float a = std::sqrt(d.x * d.x + d.z * d.z) - ring_m;
+        return std::sqrt(a * a + d.y * d.y) - radius_m;
     }
     const float q = (p_m.x * p_m.x + p_m.y * p_m.y + p_m.z * p_m.z) - 2.0f * (p_m.x * c.x + p_m.y * c.y + p_m.z * c.z) + k_m2;
     const Float3 d = p_m - c;
@@ -400,6 +490,7 @@ ov::str BaseSurface::glsl_render_uniforms() {
 ov::str BaseSurface::glsl_render() {
     return ov::replace_all(ov::str(R"glsl(
 const int BASE_SPHERE = SPHERE_KIND;
+const int BASE_TORUS = TORUS_KIND;
 
 // SPHERE: |p - centre|^2 - (radius + h)^2 (m^2) from K, so its low bits survive (p - centre alone loses them on a large
 // planet).
@@ -412,18 +503,83 @@ float base_altitude(vec3 p) {
     if (base_kind == BASE_SPHERE) {
         return base_q(p, 0.0) / (length(p - base_point_m) + base_radius_m);
     }
+    if (base_kind == BASE_TORUS) {
+        vec3 d = p - base_point_m;
+        return length(vec2(length(d.xz) - base_ring_m, d.y)) - base_radius_m;
+    }
     return p.y - base_point_m.y;
 }
 
 // The base's up at p: base_altitude's unit gradient.
 vec3 base_up(vec3 p) {
-    return base_kind == BASE_SPHERE ? normalize(p - base_point_m) : vec3(0.0, 1.0, 0.0);
+    vec3 d = p - base_point_m;
+    if (base_kind == BASE_TORUS) {
+        float l = length(d.xz);
+        vec2 rim = (l > 0.0 ? d.xz / l : vec2(1.0, 0.0)) * base_ring_m;
+        return normalize(d - vec3(rim.x, 0.0, rim.y));
+    }
+    return base_kind == BASE_SPHERE ? normalize(d) : vec3(0.0, 1.0, 0.0);
+}
+
+// Along p + s dir from s, the first s where sgn * (base_altitude - h) <= 0 (sgn 1: entering below h, -1: leaving it),
+// before far: relaxed sphere-tracing steps of BASE_TRACE_RELAX times that distance (at least BASE_TRACE_EPS of the
+// bound), then BASE_TRACE_BISECT halvings of the last step. False when it doesn't cross in BASE_TRACE_STEPS steps.
+bool base_trace_cross(vec3 p, vec3 dir, float h, float sgn, float far, float eps, inout float s) {
+    float y = sgn * (base_altitude(p + dir * s) - h);
+    float prev = s;
+    for (int i = 0; i < BASE_TRACE_STEPS && y > 0.0 && s < far; i++) {
+        prev = s;
+        s += max(y * BASE_TRACE_RELAX, eps);
+        y = sgn * (base_altitude(p + dir * s) - h);
+    }
+    if (y > 0.0) {
+        return false;
+    }
+    for (int i = 0; i < BASE_TRACE_BISECT; i++) {
+        float mid = 0.5 * (prev + s);
+        if (sgn * (base_altitude(p + dir * mid) - h) > 0.0) {
+            prev = mid;
+        } else {
+            s = mid;
+        }
+    }
+    return true;
+}
+
+// TORUS's base_level_span, for any base whose altitude is a distance (Lipschitz 1): traced inside the sphere bounding
+// altitude h (base_trace_cross), to the first stretch below h only (a ray across the hole meets the tube twice); t.x is
+// -1e30 when p is already below h.
+bool base_traced_span(vec3 p, vec3 dir, float h, out vec2 t) {
+    t = vec2(-1e30, 1e30);
+    vec3 d = p - base_point_m;
+    float bound = base_ring_m + base_radius_m + max(h, 0.0);
+    float b = dot(d, dir);
+    float disc = b * b - (dot(d, d) - bound * bound);
+    if (disc < 0.0) {
+        return false;
+    }
+    float root = sqrt(disc);
+    float far = root - b;
+    float eps = BASE_TRACE_EPS * bound;
+    float s = max(-root - b, 0.0);
+    if (base_altitude(p + dir * s) > h) {
+        if (!base_trace_cross(p, dir, h, 1.0, far, eps, s)) {
+            return false;
+        }
+        t.x = s;
+    }
+    base_trace_cross(p, dir, h, -1.0, 1e30, eps, s);
+    t.y = s;
+    return true;
 }
 
 // Where the ray p + t dir (dir unit) is below altitude h: t in [t.x, t.y] (either may be behind p; +-1e30 unbounded);
 // false where it never is. SPHERE: the roots of |p + t dir - c| = R + h, the far one from b and the near one as q / far,
 // so both keep their bits.
 bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t) {
+    if (base_kind == BASE_TORUS) {
+        return base_traced_span(p, dir, h, t);
+    }
     if (base_kind == BASE_SPHERE) {
         float q = base_q(p, h);
         float b = dot(p - base_point_m, dir);
@@ -439,5 +595,7 @@ bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t) {
     return dir.y != 0.0 || below > 0.0;
 }
 )glsl"),
-            { { "SPHERE_KIND", ov::itos(int(Kind::SPHERE)) } });
+            { { "SPHERE_KIND", ov::itos(int(Kind::SPHERE)) }, { "TORUS_KIND", ov::itos(int(Kind::TORUS)) },
+                    { "BASE_TRACE_EPS", ExactNoise::glsl_float(BASE_TRACE_EPS) }, { "BASE_TRACE_STEPS", ov::itos(BASE_TRACE_STEPS) },
+                    { "BASE_TRACE_RELAX", ExactNoise::glsl_float(BASE_TRACE_RELAX) }, { "BASE_TRACE_BISECT", ov::itos(BASE_TRACE_BISECT) } });
 }

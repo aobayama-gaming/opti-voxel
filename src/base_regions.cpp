@@ -28,7 +28,7 @@ void encode(uint8_t *r_at, const BaseSurface::Region &p_region) {
 void build(const BaseSurface &p_base, const uint8_t *p_items, uint32_t p_count, const ChunkParam &p_param, bool p_points, Tables &r_tables) {
     r_tables.index.assign(size_t(p_count) * SLOTS, 0);
     r_tables.regions.assign(REGION_BYTES, 0);
-    OV_ERR_FAIL_COND_MSG(p_base.kind() != BaseSurface::Kind::SPHERE, "BaseRegions: only a sphere has regions.");
+    OV_ERR_FAIL_COND_MSG(!p_base.curved(), "BaseRegions: a flat base has no regions.");
     OV_ERR_FAIL_COND_MSG(p_param.chunk_size > (1 << BaseSurface::REGION_SHIFT), "BaseRegions: a chunk wider than a region.");
     // A point item's box is its point alone (point_param keeps the chunk size: its scratch strides).
     ChunkParam param = p_param;
@@ -74,13 +74,13 @@ void build(const BaseSurface &p_base, const uint8_t *p_items, uint32_t p_count, 
 }
 
 ov::str glsl(const BaseSurface &p_base) {
-    OV_ERR_FAIL_COND_V_MSG(p_base.kind() != BaseSurface::Kind::SPHERE, ov::str(), "BaseRegions: only a sphere has regions.");
+    OV_ERR_FAIL_COND_V_MSG(!p_base.curved(), ov::str(), "BaseRegions: a flat base has no regions.");
     return ov::replace_all(ov::str(R"glsl(
 layout(set = 0, binding = REGION_BINDING, std430) restrict readonly buffer BaseRegions { BaseRegion base_regions[]; };
 layout(set = 0, binding = INDEX_BINDING, std430) restrict readonly buffer BaseRegionIndex { uint base_region_index[]; };
 uint g_base_item; // the item being sampled: its SLOTS region indices (BaseRegions::build)
 
-// BaseSurface::at on a sphere: the radius form from the switch LOD, below it the curvature form of the point's region,
+// BaseSurface::at on a curved base: the radius form from the switch LOD, below it the curvature form of the point's region,
 // the item's slot of its cell (BaseRegions::slot, the cell's parity per axis).
 vec4 base_at(WorldPos p, int lod) {
     if (lod >= SWITCH_LOD) {

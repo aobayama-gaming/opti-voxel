@@ -50,9 +50,9 @@ public:
     // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
     virtual ov::str get_climate_helpers_glsl() const { return ov::str(); }
 
-    // The ground's base surface when it is a sphere: get_glsl_code's base_at then reads the batch's regions
+    // The ground's base surface when it is curved (BaseSurface::curved): get_glsl_code's base_at then reads the batch's regions
     // (base_regions.hpp), which the cascade passes upload with each batch. Null for a flat base.
-    virtual const BaseSurface *get_sphere_base() const { return nullptr; }
+    virtual const BaseSurface *get_curved_base() const { return nullptr; }
 
     // The instance table's DefRecord struct and buffer declarations at the given bindings (the fold variant; a terrain
     // with a table).

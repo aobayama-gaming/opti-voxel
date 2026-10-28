@@ -237,6 +237,56 @@ TEST_CASE("BaseSurface: a torus through make_region, the curvature form within 1
     }
 }
 
+// The TORUS kind: at() within 1% of a cell of the exact distance on every LOD (its regions from shape()'s analytic
+// Hessian below the switch, its radius form from it), its up the exact gradient, its tangent point on the tube's top
+// and its render altitude within a millimetre.
+TEST_CASE("BaseSurface: the torus kind, both forms within 1% of a cell of the exact distance") {
+    for (const Vector3i64 &raw : CENTRES) {
+        const BaseSurface b = BaseSurface::torus(raw, std::ldexp(1.0, 26), std::ldexp(1.0, 24));
+        CHECK_OR_RETURN(b.kind() == BaseSurface::Kind::TORUS);
+        const Torus t{ b.centre(), std::ldexp(1.0L, 26), std::ldexp(1.0L, 24) };
+        for (int lod = 0; lod < 22; lod++) { // from LOD 22 the +-4 cells reach the tube's core circle
+            double worst = 0.0;
+            double worst_up = 0.0;
+            for (uint32_t i = 0; i < 200; i++) {
+                const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x7086u });
+                const long double a = (long double)h.x / 4294967296.0L * 2.0L * Math_PI;
+                const long double bb = (long double)h.y / 4294967296.0L * 2.0L * Math_PI;
+                const long double r = t.small + (long double)(int(i % 9) - 4) * std::ldexp(1.0L, lod);
+                const long double rho = t.big + r * std::cos(bb);
+                const long double off[3] = { rho * std::cos(a), r * std::sin(bb), rho * std::sin(a) };
+                VoxelPos p;
+                for (int ax = 0; ax < 3; ax++) {
+                    p[ax] = WorldCoord::floor_div(t.c[ax] + int64_t(std::llround(double(off[ax]))), int64_t(1) << lod) * (int64_t(1) << lod);
+                }
+                const long double q[3] = { (long double)(p.x - t.c.x), (long double)(p.y - t.c.y), (long double)(p.z - t.c.z) };
+                worst = MAX(worst, double(std::fabs((long double)b.at(p, lod).w - std::ldexp(t.distance(q), -lod))));
+                long double g[3];
+                t.gradient(q, g);
+                const UpAxis up = b.up_dir(p);
+                worst_up = MAX(worst_up, double(std::fabs(up[0] - g[0]) + std::fabs(up[1] - g[1]) + std::fabs(up[2] - g[2])));
+            }
+            CAPTURE(lod);
+            CHECK(worst < 0.01);
+            CHECK(worst_up < 1e-9);
+        }
+    }
+    const BaseSurface b = BaseSurface::torus(VoxelPos(), 120000.0, 40000.0, 1); // a 6 km ring, 2 km tube at 5 cm
+    CHECK(b.tangent_point(0, 0) == VoxelPos(120000, 40000, 0));
+    CHECK(b.altitude(b.tangent_point(0, 0)) == doctest::Approx(0.0));
+    CHECK(b.on_base(VoxelPos(0, 0, 170000)) == VoxelPos(0, 0, 160000));
+    const BaseSurface::Render render = b.render(b.tangent_point(0, 0), 0.05);
+    CHECK(std::fabs(render.altitude(Float3{ 0.0f, 10.0f, 0.0f }) - 10.0f) < 1e-3f);
+    CHECK(std::fabs(render.altitude(Float3{ -9990.0f, -2000.0f, 0.0f }) - 10.0f) < 1e-3f); // 10 m into the hole from its rim
+    // Refused: a tube as wide as its ring.
+    CHECK(BaseSurface::torus(VoxelPos(), 1000.0, 1000.0).kind() == BaseSurface::Kind::FLAT);
+    CHECK(BaseSurface::torus(VoxelPos(), 1400.0, 1000.0).kind() == BaseSurface::Kind::FLAT); // under MIN_RING_TUBES
+    // On the axis, in the hole: a unit up, towards the ring over +x.
+    const UpAxis axis_up = b.up_dir(VoxelPos(0, 30000, 0));
+    CHECK(axis_up[0] * axis_up[0] + axis_up[1] * axis_up[1] + axis_up[2] * axis_up[2] == doctest::Approx(1.0));
+    CHECK(axis_up[0] < 0.0);
+}
+
 // Check 2 of the design note: a sample shared by two chunks of one LOD gets the same bits from each, because its
 // region comes from the point and the LOD. Each chunk uploads the regions its box touches (1 to 8); the shared face
 // points are evaluated through each chunk's own table.
