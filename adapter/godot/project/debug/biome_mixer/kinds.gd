@@ -204,6 +204,53 @@ static func add(p_model: Dictionary, p_kind: String, p_pos: Vector2, p_params: D
 	return id
 
 
+# Nodes out of a biome model, with their links; a Mix row a deleted node played goes too (no empty row left behind).
+static func cut_nodes(p_model: Dictionary, p_ids: Array) -> void:
+	for id in p_ids:
+		if not p_model.nodes.has(id):
+			continue
+		while true:
+			var into_mix: Array = p_model.links.filter(func(l): return l.from == id and p_model.nodes[l.to].kind == "mix" and not l.to in p_ids)
+			if into_mix.is_empty():
+				break
+			_drop_row(p_model, into_mix[0].to, int(into_mix[0].to_port))
+		p_model.nodes.erase(id)
+		p_model.links = p_model.links.filter(func(l): return l.from != id and l.to != id)
+
+
+# A Mix row out (its x), with what played it if nothing else uses it: its shape, its note, a warp field only it read
+# (walking up from the row, every node left with no output link goes).
+static func cut_row(p_model: Dictionary, p_mix: String, p_row: int) -> void:
+	var up := []
+	for l in p_model.links:
+		if l.to == p_mix and int(l.to_port) == p_row:
+			up.append(l.from)
+	_drop_row(p_model, p_mix, p_row)
+	while not up.is_empty():
+		var id: String = up.pop_back()
+		if not p_model.nodes.has(id) or p_model.nodes[id].kind == "output":
+			continue
+		if p_model.links.any(func(l): return l.from == id):
+			continue
+		for l in p_model.links:
+			if l.to == id:
+				up.append(l.from)
+		p_model.nodes.erase(id)
+		p_model.links = p_model.links.filter(func(l): return l.to != id)
+
+
+# Row p_row out of Mix p_mix: its link goes, the rows under it move up a port.
+static func _drop_row(p_model: Dictionary, p_mix: String, p_row: int) -> void:
+	var r: Array = rows(p_model.nodes[p_mix]).duplicate(true)
+	if p_row < r.size():
+		r.remove_at(p_row)
+	p_model.nodes[p_mix].params.rows = r
+	p_model.links = p_model.links.filter(func(l): return not (l.to == p_mix and int(l.to_port) == p_row))
+	for l in p_model.links:
+		if l.to == p_mix and int(l.to_port) > p_row:
+			l.to_port = int(l.to_port) - 1
+
+
 # The id of the model's first node of a kind, or "".
 static func first_of(p_model: Dictionary, p_kind: String) -> String:
 	for id in p_model.nodes:

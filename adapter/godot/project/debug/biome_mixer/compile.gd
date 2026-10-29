@@ -35,7 +35,7 @@ var body := PackedStringArray()
 var uniforms := {}
 var errors := PackedStringArray()
 var warnings := PackedStringArray()
-var mix_units := {}  # Mix id -> its rows' metres at volume 1
+var mix_rows := {}  # Mix id -> its rows: {unit (metres at volume 1), lam (its note's wavelength), peak (metres), on}
 var warp_rows := []  # the octave table's rows: {octave, k, slot, axis, amp, wm}
 var note_rows := []
 var warps := 0
@@ -83,7 +83,25 @@ func run(p_model: Dictionary, p_exaggeration: float = 1.0) -> Dictionary:
 		"warnings": warnings,
 		"hmax": hmax,
 		"lip": lip,
-		"mix_units": mix_units,
+		"mix_rows": mix_rows,
+		"budget": _budget(),
+	}
+
+
+# What the graph spends per point: the noise it reads (each note once, each warp field's octaves once per axis) and
+# the work on top of them.
+func _budget() -> Dictionary:
+	var kinds := {}
+	for id in done:
+		var kind: String = model.nodes[id].kind
+		kinds[kind] = kinds.get(kind, 0) + 1
+	return {
+		"reads": note_rows.size() + warp_rows.size(),
+		"notes": note_rows.size(),
+		"warped": note_rows.filter(func(r): return r.slot >= 0).size(),
+		"warp_octaves": warp_rows.size(),
+		"shapes": kinds.get("shape", 0),
+		"multifractals": kinds.get("multifractal", 0),
 	}
 
 
@@ -271,14 +289,16 @@ func _emit_mix(p_id: String, p_node: Dictionary) -> Array:
 		var r: Dictionary = rows[i]
 		var rec = _input(p_id, i)
 		if rec == null:
-			units.append(0.0)
+			units.append({"unit": 0.0, "lam": 0.0, "peak": 0.0, "on": false})
 			continue
 		# A row's metres at volume 1: the ground's amplitude of its note (a note-less row: 1 m).
 		var unit: float = Octaves.ground_amp_m(rec.lam) if rec.lam > 0.0 else 1.0
-		units.append(unit)
 		var on: bool = not r.get("mute", false) and (not solo or r.get("solo", false))
 		var a: float = float(r.get("vol", 1.0)) * unit if on else 0.0
 		var centre := 1.0 if r.get("centre", true) else 0.0
+		# Its swing when it plays: volume x unit x the shaped note's bound (about its mean when centred).
+		var peak: float = absf(float(r.get("vol", 1.0)) * unit) * (rec.dev if centre > 0.0 else rec.amp)
+		units.append({"unit": unit, "lam": rec.lam, "peak": peak, "on": on})
 		var au := _uniform("float", "u_%s_a%d" % [p_id, i], a)
 		var cu := _uniform("float", "u_%s_c%d" % [p_id, i], centre)
 		terms.append("%s * (%s - %s * %s)" % [au, rec.e, cu, rec.m])
@@ -287,7 +307,7 @@ func _emit_mix(p_id: String, p_node: Dictionary) -> Array:
 		slope += pow(a * rec.slope, 2.0)
 		mb += absf(a) * (1.0 - centre) * rec.mb
 		lam = maxf(lam, rec.lam)
-	mix_units[p_id] = units
+	mix_rows[p_id] = units
 	var v := _var("float", "v_%s" % p_id, " + ".join(terms) if not terms.is_empty() else "0.0")
 	var m := " + ".join(means) if not means.is_empty() else "0.0"
 	return [_rec(v, "(%s)" % m, mb, amp, amp + mb, sqrt(slope), lam)]

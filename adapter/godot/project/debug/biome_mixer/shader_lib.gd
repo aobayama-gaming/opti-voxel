@@ -92,7 +92,6 @@ float terrace(float h, float step, bool inv) {
 const HEAD := """shader_type canvas_item;
 render_mode unshaded;
 
-uniform vec2 u_view_px = vec2(640.0, 360.0);
 uniform vec3 u_cam_pos = vec3(0.0, 500.0, 1000.0);
 uniform vec3 u_cam_fwd = vec3(0.0, 0.0, -1.0);
 uniform vec3 u_cam_right = vec3(1.0, 0.0, 0.0);
@@ -176,11 +175,13 @@ vec3 tap(int k) {
 // (2), the soft shadow towards the sun (3), done (4). Each call site would inline the whole graph: the driver took
 // half a minute to compile seven.
 void fragment() {
-	vec2 ndc = vec2(UV.x * 2.0 - 1.0, 1.0 - UV.y * 2.0);
-	float aspect = u_view_px.x / u_view_px.y;
+	// The pixel in its viewport, not UV: the view draws in strips (preview.gd), each a rect of its own.
+	vec2 uv = FRAGCOORD.xy * SCREEN_PIXEL_SIZE;
+	vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+	float aspect = SCREEN_PIXEL_SIZE.y / SCREEN_PIXEL_SIZE.x;
 	vec3 rd = normalize(u_cam_fwd + ndc.x * u_tan_half_fov * aspect * u_cam_right + ndc.y * u_tan_half_fov * u_cam_up);
 	vec3 ro = u_cam_pos;
-	float pix = 2.0 * u_tan_half_fov / u_view_px.y;
+	float pix = 2.0 * u_tan_half_fov * SCREEN_PIXEL_SIZE.y;
 	vec3 sun = normalize(u_sun);
 	float t = 0.0;
 	bool hit = false;

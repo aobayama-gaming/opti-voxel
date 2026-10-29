@@ -6,7 +6,8 @@ extends Control
 ## Flags:
 ##   --open=PATH        a biome file (res://climate/biomes/*.biome.json); default: the autosave, else world.json's mountain
 ##   --import=NAME      a biome of res://climate/world.json
-##   --set=ID.PARAM=V   set a node's parameter after loading (V as JSON: 1.5, true, "plain"); repeatable
+##   --set=ID.PARAM=V   set a node's parameter after loading (V as JSON: 1.5, true, "plain"), or view.KEY=V a view
+##                      setting (view.shadows=false); repeatable
 ##   --shot=PATH        draw once, save the window to PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test: the noise pins, every template and world.json biome compiled, files
 ##                      round-tripped; prints MIXER: {json} and quits 0 if ok
@@ -30,11 +31,12 @@ const VIEW_DEFAULTS := {
 var model := {}
 var result := {}
 var thumb_shader := Shader.new()
-var unit_labels := {}  # Mix id -> its rows' unit labels (nodes.gd fills it)
+var mix_ui := {}  # Mix id -> {rows: [{name, peak, bar}], total}: what its rows add (nodes.gd fills it)
 
 var graph := GraphEdit.new()
 var preview := Preview.new()
 var status := Label.new()
+var budget := Label.new()
 var name_edit := LineEdit.new()
 var add_menu := PopupMenu.new()
 var add_at := Vector2.ZERO
@@ -116,8 +118,10 @@ func set_model(p_model: Dictionary, p_frame: bool) -> void:
 		_fit_graph()
 
 
-# The graph's top-left corner in view, zoomed so its columns (warp, note, shape, multifractal, mix) fit the width.
+# The graph's top-left corner in view, zoomed so its columns (warp, note, shape, multifractal, mix) fit the width. A
+# frame later: the GraphEdit sizes its scroll range from its nodes then, and clamps any offset set before.
 func _fit_graph() -> void:
+	await get_tree().process_frame
 	if model.nodes.is_empty():
 		return
 	var lo := Vector2(INF, INF)
@@ -158,12 +162,9 @@ func recompile(p_moving: bool) -> void:
 	pushed = result.uniforms
 	preview.set_uniforms(changed)
 	_apply_view()
-	for id in unit_labels:
-		var units: Array = result.mix_units.get(id, [])
-		var labels: Array = unit_labels[id]
-		for i in labels.size():
-			if is_instance_valid(labels[i]):
-				labels[i].text = "x1 = " + Nodes.fmt_m(units[i]) if i < units.size() and units[i] > 0.0 else ""
+	for id in mix_ui:
+		Nodes.show_mix(mix_ui[id], result.mix_rows.get(id, []))
+	_show_budget()
 	var lines := PackedStringArray()
 	for e in result.errors:
 		lines.append("Error: " + e)
@@ -172,11 +173,31 @@ func recompile(p_moving: bool) -> void:
 		if not warned.has(w):
 			warned[w] = true
 			lines.append(w)
-	lines.append("Ground within +-%s, slope bound %.2f, %d nodes." % [Nodes.fmt_m(result.hmax), result.lip, model.nodes.size()])
+	lines.append("%d nodes. Right-click the graph: add a node; x or Delete removes one; a Mix row's x removes its note." % model.nodes.size())
 	status.text = "  ".join(lines)
 	status.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45) if not result.ok else Color(0.8, 0.82, 0.86))
 	preview.redraw(p_moving)
 	autosave.start()
+
+
+# The budget line over the view: what the biome reads per point, its relief and the row that moves the most, and
+# how long the view took to sharpen (preview.sharp_ms, after its last pass).
+func _show_budget() -> void:
+	var b: Dictionary = result.budget
+	var top := {}
+	for id in result.mix_rows:
+		for r in result.mix_rows[id]:
+			if r.on and r.peak > top.get("peak", 0.0):
+				top = r
+	var parts := PackedStringArray([
+		"Per point: %d noise reads = %d notes (%d shaped, %d multifractal, %d warped) + %d warp octaves; plain ground reads %d." % [
+			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.warp_octaves, Octaves.k_top(model.lods) - Octaves.K_MIN + 1],
+		"Relief within +-%s%s." % [Nodes.fmt_m(result.hmax / float(model.view.exag)),
+			", most from the %s note (+-%s)" % [Nodes.fmt_m(top.lam), Nodes.fmt_m(top.peak)] if top.get("lam", 0.0) > 0.0 else ""],
+	])
+	if preview.sharp_ms > 0.0:
+		parts.append("View sharp in %d ms." % int(preview.sharp_ms))
+	budget.text = "  ".join(parts)
 
 
 # The span a Height curve's editor shows: the ground's bound.
@@ -190,7 +211,7 @@ func rebuild_ui() -> void:
 		if c is GraphNode:
 			graph.remove_child(c)
 			c.queue_free()
-	unit_labels.clear()
+	mix_ui.clear()
 	for id in model.nodes:
 		_add_graph_node(id)
 	for l in model.links:
@@ -206,7 +227,7 @@ func _rebuild_node(p_id: String) -> void:
 				graph.disconnect_node(l.from, int(l.from_port), l.to, int(l.to_port))
 		graph.remove_child(old)
 		old.queue_free()
-	unit_labels.erase(p_id)
+	mix_ui.erase(p_id)
 	_add_graph_node(p_id)
 	for l in model.links:
 		if l.from == p_id or l.to == p_id:
@@ -274,10 +295,17 @@ func _on_disconnection_request(p_from: StringName, p_from_port: int, p_to: Strin
 
 
 func _on_delete_nodes_request(p_names: Array) -> void:
-	for n in p_names:
-		var id := String(n)
-		model.nodes.erase(id)
-		model.links = model.links.filter(func(l): return l.from != id and l.to != id)
+	delete_nodes(p_names.map(func(n): return String(n)))
+
+
+func delete_nodes(p_ids: Array) -> void:
+	Kinds.cut_nodes(model, p_ids)
+	rebuild_ui()
+	recompile(false)
+
+
+func remove_mix_row(p_mix: String, p_row: int) -> void:
+	Kinds.cut_row(model, p_mix, p_row)
 	rebuild_ui()
 	recompile(false)
 
@@ -285,14 +313,19 @@ func _on_delete_nodes_request(p_names: Array) -> void:
 func _apply_set(p_spec: String) -> void:
 	var eq := p_spec.find("=")
 	var dot := p_spec.find(".")
-	if eq < 0 or dot < 0 or dot > eq or not model.nodes.has(p_spec.substr(0, dot)):
-		push_error("--set=%s: expected ID.PARAM=VALUE with a node of the graph" % p_spec)
+	var id := p_spec.substr(0, dot)
+	if eq < 0 or dot < 0 or dot > eq or not (model.nodes.has(id) or id == "view"):
+		push_error("--set=%s: expected ID.PARAM=VALUE with a node of the graph (or view.KEY=VALUE)" % p_spec)
 		return
 	var raw := p_spec.substr(eq + 1)
 	var json := JSON.new()
 	var v = json.data if json.parse(raw) == OK else null
-	var id := p_spec.substr(0, dot)
-	set_params(id, {p_spec.substr(dot + 1, eq - dot - 1): v if v != null else raw}, true)
+	var key := p_spec.substr(dot + 1, eq - dot - 1)
+	if id == "view":
+		model.view[key] = v if v != null else raw
+		recompile(false)
+	else:
+		set_params(id, {key: v if v != null else raw}, true)
 
 
 # --- files -------------------------------------------------------------------------------------------------------
@@ -397,8 +430,12 @@ func _build_ui() -> void:
 	graph.delete_nodes_request.connect(_on_delete_nodes_request)
 	graph.popup_request.connect(func(at: Vector2) -> void:
 		add_at = (graph.scroll_offset + at) / graph.zoom
-		add_menu.position = Vector2i(get_global_mouse_position()) + get_window().position
-		add_menu.popup())
+		# The menu is a subwindow: embedded (the default), its position is the window's own; a native one's is the
+		# screen's.
+		var pos := Vector2i(get_global_mouse_position())
+		if not get_viewport().gui_embed_subwindows:
+			pos += get_window().position
+		add_menu.popup(Rect2i(pos, Vector2i.ZERO)))
 	split.add_child(graph)
 	for k in Kinds.MENU:
 		add_menu.add_item(Kinds.KINDS[k]["title"])
@@ -408,6 +445,10 @@ func _build_ui() -> void:
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.custom_minimum_size.x = 420
 	split.add_child(right)
+	budget.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	budget.add_theme_color_override("font_color", Color(0.85, 0.88, 0.7))
+	right.add_child(budget)
+	preview.sharpened.connect(_show_budget)
 	right.add_child(preview)
 	right.add_child(view_box)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -434,7 +475,10 @@ func _fill_open(p_menu: MenuButton) -> void:
 	popup.clear()
 	for c in popup.id_pressed.get_connections():
 		popup.id_pressed.disconnect(c.callable)
-	var files := Array(DirAccess.get_files_at(BIOMES_DIR)).filter(func(f): return f.ends_with(".biome.json"))
+	# The folder only exists after the first save.
+	var files: Array = []
+	if DirAccess.dir_exists_absolute(BIOMES_DIR):
+		files = Array(DirAccess.get_files_at(BIOMES_DIR)).filter(func(f): return f.ends_with(".biome.json"))
 	for f in files:
 		popup.add_item(f)
 	if files.is_empty():
@@ -555,7 +599,9 @@ func _apply_view() -> void:
 	var el := deg_to_rad(float(v.sun_el))
 	preview.set_uniforms({
 		"u_max_steps": int(v.steps),
-		"u_step": float(v.step),
+		# The slope bound is a worst case (every note at its steepest at once): twice its step still holds on
+		# the imported biomes, at half the frame.
+		"u_step": float(v.step) * 2.0,
 		"u_shadows": bool(v.shadows),
 		"u_sun": Vector3(cos(el) * sin(az), sin(el), cos(el) * cos(az)),
 		"u_water_on": bool(v.water_on),
@@ -566,18 +612,27 @@ func _apply_view() -> void:
 
 func _shot(p_path: String) -> void:
 	preview.quality = 1
-	# Frames drawn with the view redrawn each one: their times are the view's cost (the first compiles the shader).
+	# Frames drawn with the whole view redrawn each one: their times are the view's cost (the first compiles the shader).
 	var ms := []
 	var t := Time.get_ticks_usec()
 	for i in 6:
-		preview.redraw()
+		preview.draw_full()
 		await RenderingServer.frame_post_draw
 		var now := Time.get_ticks_usec()
 		ms.append(snappedf((now - t) / 1000.0, 0.1))
 		t = now
 	get_viewport().get_texture().get_image().save_png(p_path)
 	preview.image().save_png(p_path.get_basename() + "_view.png")
-	print("MIXER_SHOT: ", JSON.stringify({"path": p_path, "view_px": preview.viewport.size, "frame_ms": ms, "hmax": result.hmax, "lip": result.lip, "errors": result.errors}))
+	# Then one pass as the window draws it, the coarse layer and the strips: no frame should wait on the whole view.
+	var pass_ms := []
+	preview.redraw()
+	t = Time.get_ticks_usec()
+	while preview.strip_y >= 0 and pass_ms.size() < 200:
+		await RenderingServer.frame_post_draw
+		var now := Time.get_ticks_usec()
+		pass_ms.append(snappedf((now - t) / 1000.0, 0.1))
+		t = now
+	print("MIXER_SHOT: ", JSON.stringify({"path": p_path, "view_px": preview.sharp.size, "frame_ms": ms, "pass_ms": pass_ms, "hmax": result.hmax, "lip": result.lip, "errors": result.errors}))
 	get_tree().quit(0)
 
 
@@ -622,13 +677,41 @@ func _check() -> void:
 			ok = ok and missing.is_empty() and r.uniforms.u_n_warp > 0
 		ok = ok and r.ok and entry.same_after_file
 		report.graphs[g] = entry
+	report["cuts"] = _check_cuts(table)
+	ok = ok and report.cuts.ok
 	report["ok"] = ok
 	print("MIXER: ", JSON.stringify(report))
 	# The window's parts, never added to the tree in a check.
-	for c in [graph, preview, status, name_edit, add_menu, autosave, view_box]:
+	for c in [graph, preview, status, budget, name_edit, add_menu, autosave, view_box]:
 		c.free()
 	await get_tree().process_frame
 	get_tree().quit(0 if ok else 1)
+
+
+# Removing a Mix row (the mountain's first: its shape and note go, its multifractal stays for the chain) and a note
+# that plays a row (plain ground's first: its row goes): one row less, the other rows' links one port up, no gaps.
+func _check_cuts(p_table: Dictionary) -> Dictionary:
+	var out := {}
+	var cases := {
+		"row": [ImportTable.new("mountain").import_biome(p_table).model, func(m: Dictionary, mix: String) -> void: Kinds.cut_row(m, mix, 0)],
+		"note": [ImportTable.new("plain ground").plain_ground(), func(m: Dictionary, _mix: String) -> void: Kinds.cut_nodes(m, [Kinds.first_of(m, "note")])],
+	}
+	var ok := true
+	for c in cases:
+		var m: Dictionary = cases[c][0]
+		var mix := Kinds.first_of(m, "mix")
+		var rows := Kinds.rows(m.nodes[mix]).size()
+		var nodes: int = m.nodes.size()
+		cases[c][1].call(m, mix)
+		var ports: Array = m.links.filter(func(l): return l.to == mix).map(func(l): return int(l.to_port))
+		ports.sort()
+		var r := Compile.new().run(m)
+		var entry := {"rows": [rows, Kinds.rows(m.nodes[mix]).size()], "nodes": [nodes, m.nodes.size()], "compiles": r.ok}
+		entry.ok = r.ok and entry.rows[1] == rows - 1 and entry.nodes[1] < nodes and ports == range(ports.size())
+		ok = ok and entry.ok
+		out[c] = entry
+	out.ok = ok
+	return out
 
 
 # A graph with every kind of node, wired: two warped notes, shaped, chained, mixed, combined, curved, terraced, carved.

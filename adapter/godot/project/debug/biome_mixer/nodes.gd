@@ -67,6 +67,8 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 		var out_label: String = outs[i][0] if i < outs.size() else ""
 		if p_node.kind == "mix" and i < Kinds.rows(p_node).size():
 			gn.add_child(_mix_row(p_id, p_node, i, p_ctx, out_label))
+		elif p_node.kind == "mix":
+			gn.add_child(_port_row("+ link a note here for a new row", out_label))
 		else:
 			gn.add_child(_port_row(ins[i][0] if i < ins.size() else "", out_label))
 		var tl: int = ins[i][1] if i < ins.size() else 0
@@ -91,6 +93,17 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 		var phi := PhiGraph.new()
 		gn.add_child(phi)
 		gn.set_meta("phi", phi)
+	elif p_node.kind == "mix":
+		var total := Label.new()
+		total.modulate = Color(1, 1, 1, 0.7)
+		gn.add_child(total)
+		p_ctx.mix_ui.get_or_add(p_id, {"rows": [], "total": null}).total = total
+	var x := Button.new()
+	x.text = "x"
+	x.flat = true
+	x.tooltip_text = "Delete this node (or select it and press Delete)"
+	x.pressed.connect(func() -> void: p_ctx.delete_nodes([p_id]))
+	gn.get_titlebar_hbox().add_child(x)
 	refresh(gn, p_node, p_ctx)
 	return gn
 
@@ -174,6 +187,8 @@ static func _toggle(p_text: String, p_on: bool, p_tip: String, p_set: Callable) 
 	return b
 
 
+# A Mix row: its note, volume, mute / solo / centre, then what it adds (its swing in metres and its share of the
+# Mix's, filled by the mixer after each compile: show_mix) and a button that takes the row and its note out.
 static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, p_out: String) -> Control:
 	var row := HBoxContainer.new()
 	var r: Dictionary = Kinds.rows(p_node)[p_i]
@@ -181,22 +196,53 @@ static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, 
 		var rows: Array = Kinds.rows(p_ctx.model.nodes[p_id]).duplicate(true)
 		rows[p_i][p_key] = p_value
 		p_ctx.set_params(p_id, {"rows": rows})
-	row.add_child(_label("row %d" % (p_i + 1), 46))
+	var name := _label("", 58)
+	name.tooltip_text = "The wavelength of the note this row plays"
+	row.add_child(name)
 	row.add_child(_slider(float(r.get("vol", 1.0)), 0.0, 4.0, 0.01, func(v: float) -> void: set_row.call("vol", v)))
 	row.add_child(_toggle("M", r.get("mute", false), "Mute this row", func(on: bool) -> void: set_row.call("mute", on)))
 	row.add_child(_toggle("S", r.get("solo", false), "Solo: only the soloed rows sound", func(on: bool) -> void: set_row.call("solo", on)))
 	row.add_child(_toggle("C", r.get("centre", true), "Centre: take the shape's mean out (the engine does; a shape then moves no average height)", func(on: bool) -> void: set_row.call("centre", on)))
-	var unit := _label("", 74)
-	unit.tooltip_text = "Metres at volume 1: the ground's amplitude of this row's note"
-	row.add_child(unit)
+	var peak := _label("", 70)
+	peak.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(peak)
+	var bar := ProgressBar.new()
+	bar.custom_minimum_size = Vector2(80, 18)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bar.tooltip_text = "This row's share of the Mix's relief"
+	row.add_child(bar)
+	var x := Button.new()
+	x.text = "x"
+	x.flat = true
+	x.tooltip_text = "Remove this row, and its note and shape if nothing else uses them"
+	x.pressed.connect(func() -> void: p_ctx.remove_mix_row(p_id, p_i))
+	row.add_child(x)
 	if p_out != "":
 		var o := Label.new()
 		o.text = p_out
 		row.add_child(o)
-	var labels: Array = p_ctx.unit_labels.get(p_id, [])
-	labels.append(unit)
-	p_ctx.unit_labels[p_id] = labels
+	var ui: Dictionary = p_ctx.mix_ui.get_or_add(p_id, {"rows": [], "total": null})
+	ui.rows.append({"name": name, "peak": peak, "bar": bar})
 	return row
+
+
+# What a Mix's rows add, after a compile (p_rows: compile.gd's mix_rows for it).
+static func show_mix(p_ui: Dictionary, p_rows: Array) -> void:
+	var total := 0.0
+	for r in p_rows:
+		total += r.peak if r.on else 0.0
+	for i in mini(p_ui.rows.size(), p_rows.size()):
+		var r: Dictionary = p_rows[i]
+		var ui: Dictionary = p_ui.rows[i]
+		if not is_instance_valid(ui.peak):
+			continue
+		ui.name.text = fmt_m(r.lam) if r.lam > 0.0 else ("-" if r.unit == 0.0 else "no note")
+		ui.peak.text = ("+-%s" % fmt_m(r.peak)) if r.unit > 0.0 else ""
+		ui.peak.modulate.a = 1.0 if r.on else 0.4
+		ui.peak.tooltip_text = "Its swing: volume x %s (lambda / 8) x the shaped note's bound%s" % [fmt_m(r.unit), "" if r.on else " (muted)"]
+		ui.bar.value = 100.0 * r.peak / total if r.on and total > 0.0 else 0.0
+	if p_ui.total != null and is_instance_valid(p_ui.total):
+		p_ui.total.text = "height = the rows' sum, within +-%s\na row: volume x lambda/8 x its shaped note" % fmt_m(total)
 
 
 # A wavelength picker over the ground's notes (K_MIN .. k_top), its items' ids their k.

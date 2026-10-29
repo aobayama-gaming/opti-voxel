@@ -168,10 +168,19 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
     march, bisection, normal and shadow share one `density()` call: inlined per note and per call, the driver took
     31.8 s to compile the mountain, 0.3 s since. Notes fade out under two pixels (a Shape fades around its mean, so a
     faded note moves no height); the march starts under the ground's
-    bound and steps by the density over a slope estimate (independent notes in quadrature; overshoots are bisected).
-    The preview draws only on a change (low-processor mode, `UPDATE_ONCE`), at 1/3 resolution while dragging.
-    Measured on the RTX 3070 laptop: world.json's mountain (18 notes, 1 warp field, 6 multifractals) at 810 x 751,
-    ~200 ms a frame with shadows, so ~20 ms while dragging.
+    bound and steps by the density over a slope estimate (independent notes in quadrature; overshoots are bisected),
+    twice the estimate's safe step: the estimate is a worst case, and the imported biomes show no holes at twice it.
+    The preview draws only on a change (low-processor mode, `UPDATE_ONCE`), in two layers (`preview.gd`): 1/3 of the
+    resolution on every change, then the chosen one over it in strips fitted to ~25 ms a frame, which any edit
+    cancels, so no frame waits on the whole view. Measured on the RTX 3070 laptop, world.json's mountain at 810 x 751
+    with shadows: the whole view 200 ms a frame at step 1, 150 ms at step 2 (shadows ~60 of it; skipping notes much
+    finer than the ray's distance to the ground saved 5%, left out); in strips, no frame over 38 ms and the view
+    sharp in ~0.3 s.
+  - **Budget**: over the view, what the biome reads per point (its notes, each warp field's octaves per axis, against
+    plain ground's), its relief bound, the row that moves the most and how long the view took to sharpen; each Mix
+    row shows its swing (volume x lambda / 8 x the shaped note's bound) and its share of the Mix's. A row's x takes it
+    out with the nodes only it used (`Kinds.cut_row`); a node's x or Delete removes it and the Mix row it played
+    (`Kinds.cut_nodes`); `--check` checks both on the mountain and plain ground.
   - **Import** (`import_table.gd`): a biome of `world.json` as a graph (its ground multipliers, shapes,
     multifractal chain, warp fields, `ground_stretch`, its region's curves on the ground itself (several summed into
     one curve), terrace, colours); climate-field height terms (valley, ring, coast) are left out with a warning. Biomes save to `climate/biomes/*.biome.json`.

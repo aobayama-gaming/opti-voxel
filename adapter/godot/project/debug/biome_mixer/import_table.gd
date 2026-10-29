@@ -9,6 +9,8 @@ const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 const Compile := preload("res://debug/biome_mixer/compile.gd")
 
 const COL := {"warp": -360.0, "note": 0.0, "shape": 300.0, "multifractal": 580.0, "mix": 880.0}
+# How wide a Mix is (its rows carry their swing, share and x): the column after it starts past it.
+const MIX_W := 640.0
 const ROW_H := 240.0
 
 var model := {}
@@ -60,11 +62,11 @@ static func add_notes(p_model: Dictionary, p_mix: String, p_k_top: int, p_k_bott
 # The ground as it is: notes 6.4 m .. 6.5 km, plain, every one at volume 1 (ImportTable.new("plain ground").plain_ground()).
 func plain_ground() -> Dictionary:
 	var mix := add("mix", Vector2(COL.mix, 0.0))
-	var out := add("output", Vector2(COL.mix + 320.0, 0.0))
+	var out := add("output", Vector2(COL.mix + MIX_W, 0.0))
 	link(mix, 0, out, 0)
 	add_notes(model, mix, k_of(6553.6), k_of(6.4), 0.0)
 	model.nodes[mix].pos = [COL.mix, model.nodes[mix].params.rows.size() * ROW_H * 0.5 - ROW_H]
-	model.nodes[out].pos = [COL.mix + 320.0, model.nodes[mix].pos[1]]
+	model.nodes[out].pos = [COL.mix + MIX_W, model.nodes[mix].pos[1]]
 	return model
 
 
@@ -139,7 +141,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 		row += 1
 	model.nodes[mix].pos = [COL.mix, row * ROW_H * 0.5 - ROW_H]
 	var last_id := mix
-	var x_next: float = COL.mix + 340.0
+	var x_next: float = COL.mix + MIX_W
 	# The region's height terms on the ground itself, each a remap R(h) = h + height_m * curve(h * per_m). The engine adds
 	# them all to the ground (not one into the next), so several become one curve through all their points.
 	var region: String = biome.get("region", p_name)
