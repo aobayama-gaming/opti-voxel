@@ -149,3 +149,29 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   `region_test.json` (CascadeSpike set `4r`, 11 field groups) equals `valley.json` bit for bit in its cold core. The
   field group cap is 24 (the GPU's arrays are sized per spec); every group is carried at every point. Details:
   `docs/landforms.md`, "Using a landform in a world".
+- **Biome mixer** (`adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`): one biome built from the
+  ground's octaves in a node graph (GraphEdit), raymarched live beside it; a design tool, not the engine's path (the
+  table is still the engine's input; turning a graph into a table's biome is the next step).
+  - **Nodes** (`kinds.gd`): *Note* (the ground's octave k, `make_octave(SEED, k_top - k, k)` ported in `octaves.gd`,
+    pinned against `test_exact_noise.cpp`; a variant is another seed; an optional warp input moves where it is read;
+    `stretch_y` reads it at y / stretch from the datum, as `ground_stretch`),
+    *Shape* (`c0 + c1 n + c2 |n| + c3 n^2` with `|n|` smoothed as `Cascade::smooth_abs`; presets, scale and offset as
+    `climate_parse.cpp`), *Multifractal* (`w = clamp(gain * chain in)`, the signal times w, chain out `w * phi` to the
+    next finer note: the engine's state, wired), *Warp field* (three seeded fBms like a table's warp fields), *Mix*
+    (rows of volume x the ground's amplitude lambda / 8 capped at 3.3 km, mute, solo, centre = the shape's mean out
+    as the engine inserts bands), *Add* / *Multiply* / *Constant*, *Height curve* (a remap R(h) through points, the
+    engine's `height + height_m * curve(ground)` with libnoise's cubic, R - h constant past the ends), *Terrace*
+    (`Climate::Terrace`), *Carve* (preview only: air where a field passes a threshold inside a depth band), *Output*
+    (height, holes, flat and steep colours with the engine's slope blend).
+  - **Shader** (`compile.gd`, `shader_lib.gd`): the graph's structure becomes code, every parameter a uniform (a slider
+    redraws without a recompile). Every note and warp octave is a row of one uniform table read in one loop, and the
+    march, bisection, normal and shadow share one `density()` call: inlined per note and per call, the driver took
+    31.8 s to compile the mountain, 0.3 s since. Notes fade out under two pixels (a Shape fades around its mean, so a
+    faded note moves no height); the march starts under the ground's
+    bound and steps by the density over a slope estimate (independent notes in quadrature; overshoots are bisected).
+    The preview draws only on a change (low-processor mode, `UPDATE_ONCE`), at 1/3 resolution while dragging.
+    Measured on the RTX 3070 laptop: world.json's mountain (18 notes, 1 warp field, 6 multifractals) at 810 x 751,
+    ~200 ms a frame with shadows, so ~20 ms while dragging.
+  - **Import** (`import_table.gd`): a biome of `world.json` as a graph (its ground multipliers, shapes,
+    multifractal chain, warp fields, `ground_stretch`, its region's curves on the ground itself (several summed into
+    one curve), terrace, colours); climate-field height terms (valley, ring, coast) are left out with a warning. Biomes save to `climate/biomes/*.biome.json`.
