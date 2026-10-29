@@ -184,8 +184,10 @@ float cloud_gradient(float hf, float type) {
     return smoothstep(g.x, g.y, hf) - smoothstep(g.z, g.w, hf);
 }
 
-// The weather at a point, from the shape noise read at the weather scale: the coverage in [0, 1] (cloud_cover of the
-// sky past its threshold), the cloud type and the warp of the noises there (cloud_warp).
+// The weather at a point, from the shape noise read at the weather scale: the coverage in [0, 1] (the cover past its
+// threshold), the cloud type and the warp of the noises there (cloud_warp). The cover and the type are the climate map's
+// where its biomes set them (its B: their weight; the type moved by the noise's towards 0 or 1, within [0, 1]), else the
+// sky's cover and the noise's type (a 0 texel: no map).
 struct CloudWeather {
     float coverage;
     float type;
@@ -195,9 +197,17 @@ struct CloudWeather {
 CloudWeather cloud_weather(vec3 p) {
     vec3 warp = cloud_warp(p);
     vec4 w = textureLod($SHAPE, cloud_coords(p, cloud_weather_period_vox, warp), 0.0);
-    float edge = $COVER_LOW + ($COVER_HIGH - $COVER_LOW) * (1.0 - clamp(cloud_cover, 0.0, 1.0));
-    float coverage = smoothstep(edge - 0.2, edge + 0.2, w.r) * clamp(cloud_cover * 4.0, 0.0, 1.0);
-    return CloudWeather(coverage, smoothstep(0.25, 0.75, w.g), warp);
+    float noise_type = smoothstep(0.25, 0.75, w.g);
+    const float half_texel = 0.5 / float($MAP_SIZE);
+    vec3 m = textureLod($MAP, clamp((p - cloud_map_corner_m) * cloud_map_inv_extent_m, vec3(half_texel), vec3(1.0 - half_texel)), 0.0).rgb;
+    float cover = m.r + (1.0 - m.b) * cloud_cover;
+    float biome = m.b > 0.0 ? m.g / m.b : 0.0;
+    float s = (noise_type - 0.5) * (2.0 * $TYPE_SPREAD);
+    biome += s * (s > 0.0 ? 1.0 - biome : biome);
+    float type = m.b * biome + (1.0 - m.b) * noise_type;
+    float edge = $COVER_LOW + ($COVER_HIGH - $COVER_LOW) * (1.0 - clamp(cover, 0.0, 1.0));
+    float coverage = smoothstep(edge - 0.2, edge + 0.2, w.r) * clamp(cover * 4.0, 0.0, 1.0);
+    return CloudWeather(coverage, type, warp);
 }
 
 // The base shape at p (height fraction hf, weather w), without the detail: Schneider's coverage remap.
@@ -299,6 +309,7 @@ layout(set = 0, binding = $B_ATMO_VOLUME) uniform texture2D atmo_volume_texture;
 layout(set = 0, binding = $B_ATMO_MULTISCATTER) uniform texture2D atmo_multiscatter_texture;
 layout(set = 0, binding = $B_SAMPLER) uniform sampler linear;
 layout(set = 0, binding = $B_SHADOW, rgba16f) uniform restrict writeonly image2D out_shadow;
+layout(set = 0, binding = $B_MAP) uniform texture3D cloud_map;
 
 ivec3 shade_origin_voxel() {
     return ivec3(cloud_origin_x, cloud_origin_y, cloud_origin_z);
@@ -358,7 +369,7 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     front_mean = vec2(0.0);
     float front_t = -1.0;
     vec4 seg;
-    if (cloud_cover <= 0.0 || !cloud_segments(cam, dir, cloud_reach_m, seg)) {
+    if (cloud_cover_max <= 0.0 || !cloud_segments(cam, dir, cloud_reach_m, seg)) {
         return vec4(0.0, 0.0, 0.0, 1.0);
     }
     float len = (seg.y - seg.x) + (seg.w - seg.z);
@@ -505,7 +516,7 @@ void main() {
     }
     float trans = 1.0;
     vec4 seg;
-    if (cloud_cover > 0.0 && cloud_segments(p, cloud_sun, cloud_shadow_reach_m, seg)) {
+    if (cloud_cover_max > 0.0 && cloud_segments(p, cloud_sun, cloud_shadow_reach_m, seg)) {
         float len = (seg.y - seg.x) + (seg.w - seg.z);
         float depth = 0.0;
         for (int i = 0; i < SHADOW_STEPS; i++) {
@@ -543,6 +554,7 @@ enum PassBinding : uint32_t {
     B_ATMO_MULTISCATTER,
     B_SAMPLER,
     B_SHADOW,
+    B_MAP,
 };
 
 // The weather's cover thresholds on the shape noise's R at the weather scale: cover 0 at COVER_HIGH, 1 at COVER_LOW
@@ -551,6 +563,9 @@ constexpr float COVER_LOW = 0.52f;
 constexpr float COVER_HIGH = 0.94f;
 // Each of the warp's waves' amplitude, in warp periods (docs/look.md: what it breaks, how much it stretches).
 constexpr float WARP_AMPLITUDE = 0.015f;
+// How far the noise's type moves a biome's towards 0 or 1 (times the noise's offset from 0.5, doubled): the clouds of a
+// biome vary round its type.
+constexpr float TYPE_SPREAD = 0.4f;
 
 ov::str substitute(const ov::str &p_glsl) {
     using C = Clouds;
@@ -562,11 +577,12 @@ ov::str substitute(const ov::str &p_glsl) {
                     { "$BLEND", ov::format("%.3f", double(C::BLEND)) }, { "$MS_SCATTERING", ov::format("%.3f", double(C::MS_SCATTERING)) },
                     { "$MS_EXTINCTION", ov::format("%.3f", double(C::MS_EXTINCTION)) }, { "$MS_ECCENTRICITY", ov::format("%.3f", double(C::MS_ECCENTRICITY)) }, { "$COVER_LOW", ov::format("%.3f", double(COVER_LOW)) },
                     { "$COVER_HIGH", ov::format("%.3f", double(COVER_HIGH)) },
-                    { "$WARP_AMPLITUDE", ov::format("%.9g", double(WARP_AMPLITUDE)) } });
+                    { "$WARP_AMPLITUDE", ov::format("%.9g", double(WARP_AMPLITUDE)) },
+                    { "$TYPE_SPREAD", ov::format("%.9g", double(TYPE_SPREAD)) }, { "$MAP_SIZE", ov::itos(CloudClimate::Map::SIZE) } });
 }
 
 ov::str density_glsl(const ov::str &p_shape, const ov::str &p_detail) {
-    return ov::replace_all(substitute(GLSL_DENSITY), { { "$SHAPE", p_shape }, { "$DETAIL", p_detail } });
+    return ov::replace_all(substitute(GLSL_DENSITY), { { "$SHAPE", p_shape }, { "$DETAIL", p_detail }, { "$MAP", "sampler3D(cloud_map, linear)" } });
 }
 
 // The block's fields: the base's, the atmosphere's (the lookup's uniforms), the layer's and the frame's.
@@ -589,7 +605,7 @@ ov::str pass_glsl(const char *p_main) {
             { { "$MEMBERS", members }, { "$B_BLOCK", ov::itos(B_BLOCK) }, { "$B_LIGHT", ov::itos(B_LIGHT) }, { "$B_DEPTH", ov::itos(B_DEPTH) },
                     { "$B_HISTORY_LIGHT", ov::itos(B_HISTORY_LIGHT) }, { "$B_HISTORY_DEPTH", ov::itos(B_HISTORY_DEPTH) }, { "$B_SHAPE", ov::itos(B_SHAPE) },
                     { "$B_DETAIL", ov::itos(B_DETAIL) }, { "$B_ATMO_VOLUME", ov::itos(B_ATMO_VOLUME) },
-                    { "$B_ATMO_MULTISCATTER", ov::itos(B_ATMO_MULTISCATTER) }, { "$B_SAMPLER", ov::itos(B_SAMPLER) }, { "$B_SHADOW", ov::itos(B_SHADOW) } });
+                    { "$B_ATMO_MULTISCATTER", ov::itos(B_ATMO_MULTISCATTER) }, { "$B_SAMPLER", ov::itos(B_SAMPLER) }, { "$B_SHADOW", ov::itos(B_SHADOW) }, { "$B_MAP", ov::itos(B_MAP) } });
     return head + BaseSurface::glsl_render() + ShadeFrame::glsl() +
             Atmosphere::glsl_lookup("sampler2D(atmo_volume_texture, linear)", "sampler2D(atmo_multiscatter_texture, linear)") + substitute(GLSL_GRID) +
             density_glsl("sampler3D(shape, linear)", "sampler3D(detail, linear)") + substitute(p_main);
@@ -620,6 +636,7 @@ CloudLayer CloudLayer::for_base(double p_radius_m, double p_relief_m, double p_v
     l.weather_period_vox = ov::min(period_vox(EARTH_WEATHER_PERIOD_M * s, p_voxel_m), l.warp_period_vox / 4);
     l.shape_period_vox = ov::min(period_vox(EARTH_SHAPE_PERIOD_M * s, p_voxel_m), l.weather_period_vox);
     l.detail_period_vox = ov::min(period_vox(EARTH_DETAIL_PERIOD_M * s, p_voxel_m), l.shape_period_vox);
+    l.climate_cell_shift = WorldCoord::ctz64(uint64_t(period_vox(EARTH_CLIMATE_CELL_M * s, p_voxel_m)));
     return l;
 }
 
@@ -657,7 +674,14 @@ void Clouds::start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, co
     curvature_m = Atmosphere::ms_radius_m(p_base, p_voxel_m);
     frame_params.voxel_m = float(p_voxel_m);
     noise_dirty = true;
-    device->post([this]() { _rt_start(); });
+    if (climate_fn) {
+        climate = std::make_unique<CloudClimate::Stream>(
+                CloudClimate::Map(p_base, layer_params.climate_cell_shift, double(layer_params.bottom_m), double(layer_params.top_m), p_voxel_m),
+                climate_fn);
+    }
+    // Zeros (the sky's cover and the noise's type) until a map lands; one texel without a climate.
+    const uint32_t map_size = climate ? uint32_t(CloudClimate::Map::SIZE) : 1u;
+    device->post([this, map_size]() { _rt_start(map_size); });
 }
 
 void Clouds::set_weather(float p_cover, const Float3 &p_wind_mps) {
@@ -714,6 +738,9 @@ void Clouds::frame(const Float3 &p_camera_m, const Float3 &p_sun, const BaseSurf
     f.origin_x = lo.x;
     f.origin_y = lo.y;
     f.origin_z = lo.z;
+    const double vm = double(f.voxel_m);
+    const double camera_vox[3] = { double(p_camera_m.x) / vm, double(p_camera_m.y) / vm, double(p_camera_m.z) / vm };
+    _frame_map(WorldCoord::offset_pos(p_origin_voxel, camera_vox).voxel, p_origin_voxel, f);
     has_camera = true;
     frame_params = f;
     const ov::bytes data = block_bytes(p_base, atmosphere->host_constants(), atmosphere->range_m(), layer_params, f);
@@ -727,10 +754,34 @@ void Clouds::shift(const Float3 &p_shift_m) {
 }
 
 void Clouds::destroy() {
+    climate.reset(); // waits for its build (it reads the climate)
     device->post([this]() { _rt_destroy(); });
 }
 
-void Clouds::_rt_start() {
+void Clouds::_frame_map(const VoxelPos &p_camera, const VoxelPos &p_origin_voxel, Frame &r_frame) {
+    r_frame.cover_max = r_frame.cover;
+    if (!climate) {
+        return;
+    }
+    std::vector<uint16_t> texels;
+    if (climate->update(p_camera, texels)) {
+        // Posted before this frame's pass, which reads it.
+        device->post([this, t = std::move(texels), id = climate->live_id()]() {
+            OV_TRACE("clouds", "climate_upload");
+            Trace::flow(Trace::Kind::FLOW_END, "climate_map", id);
+            device->update_texture(climate_map, t.data(), t.size() * sizeof(uint16_t));
+        });
+    }
+    if (climate->live()) {
+        const VoxelPos corner = climate->corner() - p_origin_voxel;
+        const double vm = double(r_frame.voxel_m);
+        r_frame.map_corner_m = Float3{ float(double(corner.x) * vm), float(double(corner.y) * vm), float(double(corner.z) * vm) };
+        r_frame.map_inv_extent_m = float(1.0 / (climate->extent_vox() * vm));
+        r_frame.cover_max = ov::min(1.0f, r_frame.cover + climate->max_cover());
+    }
+}
+
+void Clouds::_rt_start(uint32_t p_map_size) {
     using ov::gpu::Binding;
     using ov::gpu::TextureFormat;
     const uint32_t noise_usage = ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_SAMPLED;
@@ -742,6 +793,9 @@ void Clouds::_rt_start() {
     history_light = device->create_texture(TextureFormat::RGBA16_FLOAT, GRID_W, GRID_H, ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_COPY_DST);
     history_depth = device->create_texture(TextureFormat::RGBA16_FLOAT, GRID_W, GRID_H, ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_COPY_DST);
     shadow = device->create_texture(TextureFormat::RGBA16_FLOAT, SHADOW_SIZE, SHADOW_SIZE, ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_SAMPLED);
+    climate_map = device->create_texture_3d(TextureFormat::RGBA16_FLOAT, p_map_size, p_map_size, p_map_size, ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_UPDATE);
+    const std::vector<uint16_t> zeros(size_t(p_map_size) * p_map_size * p_map_size * 4, 0);
+    device->update_texture(climate_map, zeros.data(), zeros.size() * sizeof(uint16_t));
     block = device->create_buffer(ov::gpu::BufferKind::UNIFORM,
             block_bytes(BaseSurface::Render(), Atmosphere::HostConstants(), 0.0f, CloudLayer(), Frame()).size());
     pipe_noise = ov::gpu::compile(*device, "clouds_noise", glsl_pass_noise());
@@ -755,7 +809,8 @@ void Clouds::_rt_start() {
     const std::vector<Binding> bindings = { Binding(B_BLOCK, ov::gpu::BufferKind::UNIFORM, block), Binding::storage_image(B_LIGHT, light),
         Binding::storage_image(B_DEPTH, depth), Binding::texture(B_HISTORY_LIGHT, history_light), Binding::texture(B_HISTORY_DEPTH, history_depth),
         Binding::texture(B_SHAPE, shape), Binding::texture(B_DETAIL, detail), Binding::texture(B_ATMO_VOLUME, atmosphere->get_volume()),
-        Binding::texture(B_ATMO_MULTISCATTER, atmosphere->get_multiscatter()), Binding::linear_sampler(B_SAMPLER), Binding::storage_image(B_SHADOW, shadow) };
+        Binding::texture(B_ATMO_MULTISCATTER, atmosphere->get_multiscatter()), Binding::linear_sampler(B_SAMPLER), Binding::storage_image(B_SHADOW, shadow),
+        Binding::texture(B_MAP, climate_map) };
     if (pipe_march.is_valid() && pipe_shadow.is_valid()) {
         set_march = device->create_bind_set(pipe_march, bindings);
         set_shadow = device->create_bind_set(pipe_shadow, bindings);
@@ -791,7 +846,7 @@ void Clouds::_rt_destroy() {
         textures_fn(ov::gpu::Texture(), ov::gpu::Texture(), ov::gpu::Texture());
     }
     const ov::gpu::Handle handles[] = { set_march, set_shadow, set_shape, set_detail, pipe_march, pipe_shadow, pipe_noise, block, light, depth, history_light,
-        history_depth, shadow, shape, detail };
+        history_depth, shadow, shape, detail, climate_map };
     for (const ov::gpu::Handle h : handles) {
         if (h.is_valid()) {
             device->free(h);

@@ -29,6 +29,24 @@ inline float half_to_float(uint16_t p_h) {
     return f;
 }
 
+// The IEEE half nearest p_v (ties up), under the half's normals 0, over its range infinity (no NaNs): uploads of
+// values in range (the clouds' climate map).
+inline uint16_t float_to_half(float p_v) {
+    uint32_t b;
+    std::memcpy(&b, &p_v, 4);
+    const uint32_t sign = (b >> 16) & 0x8000u;
+    const int exp = int((b >> 23) & 0xFFu) - 127 + 15;
+    const uint32_t man = b & 0x7FFFFFu;
+    if (exp <= 0) {
+        return uint16_t(sign);
+    }
+    if (exp >= 31) {
+        return uint16_t(sign | 0x7C00u);
+    }
+    // A carry out of the mantissa raises the exponent, as it should (to infinity past the largest half).
+    return uint16_t((sign | (uint32_t(exp) << 10) | (man >> 13)) + ((man >> 12) & 1u));
+}
+
 // Every half float of a readback, in order.
 inline std::vector<float> half_floats(const bytes &p_data) {
     std::vector<float> out(p_data.size() / 2);

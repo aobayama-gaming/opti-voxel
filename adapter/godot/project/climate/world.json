@@ -439,6 +439,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#6a8a3c", "steep": "#7a7468"},
+   "clouds": {"cover": 0.65, "type": 0.5},
    "debug_color": "#70a040"
   },
   {
@@ -500,6 +501,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#8c8a80", "steep": "#a8a49a"},
+   "clouds": {"cover": 0.7, "type": 0.45},
    "debug_color": "#9a9488"
   },
   {
@@ -513,6 +515,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#1c4a78", "steep": "#1c4a78", "roughness": 0.2},
+   "clouds": {"cover": 0.3, "type": 0.65},
    "debug_color": "#1c4a78"
   },
   {
@@ -572,6 +575,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#6a6a50", "steep": "#5a4c44"},
+   "clouds": {"cover": 0.35, "type": 0.7},
    "debug_color": "#7a6a50"
   },
   {
@@ -641,6 +645,7 @@
     {"field": "ground", "from_m": 26214.4, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#4c7a34", "steep": "#5c5044"},
+   "clouds": {"cover": 0.45, "type": 0.85},
    "debug_color": "#4c8a3c"
   },
   {
@@ -651,6 +656,7 @@
     {"field": "ground", "from_m": 51.2, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#2a5878", "steep": "#2a5878", "roughness": 0.2},
+   "clouds": {"cover": 0.4, "type": 0.8},
    "debug_color": "#3060a0"
   },
   {
@@ -671,6 +677,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#8a8a58", "steep": "#6a5444"},
+   "clouds": {"cover": 0.55, "type": 0.3},
    "debug_color": "#a09060"
   },
   {
@@ -737,6 +744,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#5c8040", "steep": "#5c5040"},
+   "clouds": {"cover": 0.65, "type": 0.2},
    "debug_color": "#508040"
   },
   {
@@ -756,6 +764,7 @@
     {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#4a5038", "steep": "#4a4030", "roughness": 0.3},
+   "clouds": {"cover": 0.75, "type": 1.0},
    "debug_color": "#30506a"
   },
   {
@@ -775,6 +784,7 @@
     {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#4a5038", "steep": "#4a4030", "roughness": 0.3},
+   "clouds": {"cover": 0.75, "type": 1.0},
    "debug_color": "#40607a"
   },
   {
@@ -791,6 +801,7 @@
     {"field": "ground", "from_m": 6553.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#4a5a2c", "steep": "#4a3c2c", "roughness": 1},
+   "clouds": {"cover": 0.8, "type": 1.0},
    "debug_color": "#3c6a3c"
   },
   {
@@ -850,6 +861,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#e0a060", "steep": "#c88848", "roughness": 1},
+   "clouds": {"cover": 0.05, "type": 1.0},
    "debug_color": "#e8a050"
   },
   {
@@ -869,6 +881,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#9c8468", "steep": "#7c6450", "roughness": 1},
+   "clouds": {"cover": 0.08, "type": 1.0},
    "debug_color": "#9c8468",
    "where": [
     {"field": "patch", "min": 0.08, "fade": 0.04}
@@ -891,6 +904,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#d8b98a", "steep": "#b08860"},
+   "clouds": {"cover": 0.04, "type": 1.0},
    "debug_color": "#e0c080"
   },
   {
@@ -948,6 +962,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#8c867c", "steep": "#5c564e"},
+   "clouds": {"cover": 0.6, "type": 0.4},
    "debug_color": "#7a6a5a"
   }
  ]

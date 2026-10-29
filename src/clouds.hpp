@@ -2,12 +2,14 @@
 
 #include "atmosphere.hpp"
 #include "base_surface.hpp"
+#include "cloud_climate.hpp"
 #include "gpu_device.hpp"
 
 #include "ov/bytes.hpp"
 #include "ov/str.hpp"
 
 #include <functional>
+#include <memory>
 
 // Volumetric clouds (docs/look.md), made from the base's shape like the atmosphere: a layer between two altitudes above
 // the base (BaseSurface::glsl_render's base_altitude; its extent along a ray from base_level_span), so a base of any
@@ -33,6 +35,10 @@
 // layer along lines parallel to the sun round the camera (SHADOW_SIZE^2 texels, its side the layer's shadow_min_extent_m
 // or 4 camera altitudes, its origin snapped to them), each from where its line leaves the base towards the sun, so it
 // holds for any receiver under the layer; the hosts' terrain reads it once per fragment (cloud_sun_shadow).
+//
+// With a climate whose biomes set their clouds (set_climate), the cover and the type come from them: a coarse 3D map of
+// them round the camera (CloudClimate::Stream: built on a worker when the camera gets far from its centre, then
+// uploaded), read trilinearly by every weather read; the sky's cover and the noise's type fill where no biome sets them.
 struct CloudLayer {
     // Earth's: a cumulus layer from 1.5 to 4 km, the shape noise repeating every ~12 km, the detail every ~1.5 km, the
     // weather (cover and type) every ~48 km, every read of them warped by an offset repeating every ~800 km (so the
@@ -48,11 +54,13 @@ struct CloudLayer {
     int detail_period_vox = 0;
     int weather_period_vox = 0;
     int warp_period_vox = 0;
+    int climate_cell_shift = 0; // the climate map's cells: 2^shift LOD0 voxels (no uniform)
 
     static constexpr double EARTH_SHAPE_PERIOD_M = 12000.0;
     static constexpr double EARTH_DETAIL_PERIOD_M = 1500.0;
     static constexpr double EARTH_WEATHER_PERIOD_M = 48000.0;
     static constexpr double EARTH_WARP_PERIOD_M = 800000.0; // 2^23 voxels at 5 cm: the frame's longest period
+    static constexpr double EARTH_CLIMATE_CELL_M = 8000.0; // the climate map's cell, at most (6.55 km at 5 cm)
     // The bottom stays at least this many times the ground's relief above the base: the grid's march knows nothing of the
     // terrain, so a cloud must not reach into it (a mountain would be hidden behind the cloud inside it).
     static constexpr double RELIEF_BOTTOMS = 1.25;
@@ -119,6 +127,11 @@ public:
         float shadow_extent_m = 0.0f;
         float reach_m = 0.0f;
         float cover = 0.5f;
+        float cover_max = 0.5f; // the largest cover anywhere, the climate's included (no cloud under it: the passes skip)
+        // The climate map: its corner (render metres) and one over its side (0 without one: the passes read its texel 0,
+        // which is 0, so the sky's cover and the noise's type).
+        Float3 map_corner_m;
+        float map_inv_extent_m = 0.0f;
         int frame = 0;
         int reset = 1;
         int origin_x = 0;
@@ -138,6 +151,9 @@ public:
             p_f("cloud_shadow_extent_m", shadow_extent_m);
             p_f("cloud_reach_m", reach_m);
             p_f("cloud_cover", cover);
+            p_f("cloud_cover_max", cover_max);
+            p_f("cloud_map_corner_m", map_corner_m);
+            p_f("cloud_map_inv_extent_m", map_inv_extent_m);
             p_f("cloud_frame", frame);
             p_f("cloud_reset", reset);
             p_f("cloud_origin_x", origin_x);
@@ -166,7 +182,11 @@ public:
     // relief and p_scale set the layer (CloudLayer::for_base).
     void start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, const BaseSurface &p_base, double p_voxel_m, double p_relief_m,
             double p_scale, TexturesFn p_textures);
-    // The weather: the cover in [0, 1] and the wind (render metres per second), from the next frame on.
+    // Before start: the climate's clouds at a base point (CloudClimate::at; called on a worker thread, so thread-safe),
+    // for a climate some biome of which sets them (CloudClimate::any).
+    void set_climate(CloudClimate::Map::SampleFn p_sample) { climate_fn = std::move(p_sample); }
+    // The weather: the cover in [0, 1] and the wind (render metres per second), from the next frame on. A biome's
+    // clouds override the cover over it.
     void set_weather(float p_cover, const Float3 &p_wind_mps);
     // This frame's pass, the camera at p_camera_m with the sun towards p_sun over p_base (World::base_render), the render
     // origin at LOD0 voxel p_origin_voxel (after the atmosphere's frame: the pass reads its volume).
@@ -199,7 +219,10 @@ public:
             const CloudLayer &p_layer, const Frame &p_frame);
 
 private:
-    void _rt_start();
+    // The climate map with the camera at LOD0 voxel p_camera: uploads a build that landed (CloudClimate::Stream), then the
+    // frame's map fields.
+    void _frame_map(const VoxelPos &p_camera, const VoxelPos &p_origin_voxel, Frame &r_frame);
+    void _rt_start(uint32_t p_map_size);
     void _rt_frame(const ov::bytes &p_block, bool p_noise);
     void _rt_destroy();
 
@@ -214,6 +237,8 @@ private:
     uint64_t last_usec = 0;
     bool has_camera = false;
     bool noise_dirty = true;
+    CloudClimate::Map::SampleFn climate_fn;
+    std::unique_ptr<CloudClimate::Stream> climate; // with a climate_fn
 
     // Device-thread objects.
     ov::gpu::Pipeline pipe_noise;
@@ -227,6 +252,7 @@ private:
     ov::gpu::Texture history_light;
     ov::gpu::Texture history_depth;
     ov::gpu::Texture shadow;
+    ov::gpu::Texture climate_map;
     ov::gpu::BindSet set_shape;
     ov::gpu::BindSet set_detail;
     ov::gpu::BindSet set_march;
