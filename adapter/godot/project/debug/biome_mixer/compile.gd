@@ -19,6 +19,9 @@ const ShaderLib := preload("res://debug/biome_mixer/shader_lib.gd")
 const NOISE_SLOPE := 1.6
 const CURVE_POINTS := 64
 const CARVE_WARNING := "Carve is preview-only: the engine has no holes yet."
+const NOTE_WARP_WARNING := "Note warp is preview-only: the engine's warps are climate fields."
+# A row's warp notes (x, y, z), none.
+const NO_SRC := [-1, -1, -1]
 
 var model: Dictionary
 var voxel_m: float
@@ -36,9 +39,11 @@ var uniforms := {}
 var errors := PackedStringArray()
 var warnings := PackedStringArray()
 var mix_rows := {}  # Mix id -> its rows: {unit (metres at volume 1), lam (its note's wavelength), peak (metres), on}
-var warp_rows := []  # the octave table's rows: {octave, k, slot, axis, amp, wm}
+var warp_rows := []  # the octave table's rows: {octave, k, slot, src, axis, amp, wm, st}
 var note_rows := []
 var warps := 0
+var climate_rec := {}  # the Climate warp's record, once emitted
+var curve_in := {}  # Height curve id -> the bound of its input (metres): what its editor shows
 
 
 # Compile.new().run(model): one build per instance.
@@ -84,6 +89,7 @@ func run(p_model: Dictionary, p_exaggeration: float = 1.0) -> Dictionary:
 		"hmax": hmax,
 		"lip": lip,
 		"mix_rows": mix_rows,
+		"curve_in": curve_in,
 		"budget": _budget(),
 	}
 
@@ -99,6 +105,7 @@ func _budget() -> Dictionary:
 		"reads": note_rows.size() + warp_rows.size(),
 		"notes": note_rows.size(),
 		"warped": note_rows.filter(func(r): return r.slot >= 0).size(),
+		"note_warped": note_rows.filter(func(r): return r.src != NO_SRC).size(),
 		"warp_octaves": warp_rows.size(),
 		"shapes": kinds.get("shape", 0),
 		"multifractals": kinds.get("multifractal", 0),
@@ -172,36 +179,62 @@ func _emit_note(p_id: String, p_node: Dictionary) -> Array:
 	var warp = _input(p_id, 0)
 	var slope := NOISE_SLOPE / lam
 	var stretch := maxf(float(Kinds.param(p_node, "stretch_y")), 1.0)
-	var row := {"octave": Octaves.ground_octave(k, lods, int(Kinds.param(p_node, "variant"))), "k": k, "slot": -1, "axis": 0, "amp": 1.0, "wm": 0.0, "st": 1.0 / stretch}
+	var row := {"octave": Octaves.ground_octave(k, lods), "k": k, "slot": -1, "src": NO_SRC, "axis": 0, "amp": 1.0, "wm": 0.0, "st": 1.0 / stretch}
 	if warp != null:
 		var wm := float(Kinds.param(p_node, "warp_m"))
-		row.slot = warp.slot
+		row.slot = warp.get("slot", -1)
+		row.src = warp.get("src", NO_SRC)
 		row.wm = wm / voxel_m
 		slope *= 1.0 + wm * warp.slope
+		if warp.has("src") and warp.lam <= lam:
+			warnings.append("A Note warp moves the %.0f m note by a note as fine or finer: the engine reads notes coarse to fine, so a warp's notes are coarser." % lam)
 	note_rows.append(row)
 	var i := note_rows.size() - 1
 	var rec := _rec("(F[%d] * N[%d])" % [i, i], "0.0", 0.0, 1.0, 1.0, slope, lam)
 	rec.raw = "N[%d]" % i
 	rec.fade = "F[%d]" % i
+	rec.row = i
 	return [rec]
 
 
-# A warp field's three fBms are rows of the octave table summed into W[slot] (x, y, z).
-func _emit_warp(_id: String, p_node: Dictionary) -> Array:
-	var k := _k(p_node)
-	var seed := int(Kinds.param(p_node, "seed"))
-	var a: float = Kinds.param(p_node, "amp")
-	var pers: float = Kinds.param(p_node, "persistence")
-	var slot := warps
-	warps += 1
+# The climate's warp fields: three fBms (CLIMATE_WARP's octaves), rows of the octave table summed into W[slot] (x, y,
+# z). One slot however many Climate warp nodes: the engine reads its climate once per point.
+func _emit_warp(_id: String, _node: Dictionary) -> Array:
+	if climate_rec.is_empty():
+		var cw := Kinds.climate_warp(model)
+		var k := clampi(int(cw.k), Octaves.K_MIN, Octaves.k_top(lods))
+		var slot := warps
+		warps += 1
+		var slope := 0.0
+		for i in mini(int(cw.octaves), k - Octaves.K_MIN + 1):
+			var ki := k - i
+			var ai: float = cw.amp * pow(cw.persistence, i)
+			for axis in 3:
+				warp_rows.append({"octave": Octaves.field_octave(int(cw.seed) + axis, ki), "k": ki, "slot": slot, "src": NO_SRC, "axis": axis, "amp": ai, "wm": 0.0, "st": 1.0})
+			slope += ai * NOISE_SLOPE / Octaves.wavelength_m(ki, voxel_m)
+		climate_rec = {"slot": slot, "slope": slope}
+	return [climate_rec]
+
+
+# The cheap warp: x, y, z are notes read earlier in the table (their row, F * N), no noise of its own. Its record: the
+# rows (NO_SRC's -1 for an axis left open), its slope and its finest note's wavelength.
+func _emit_note_warp(p_id: String, _node: Dictionary) -> Array:
+	if not NOTE_WARP_WARNING in warnings:
+		warnings.append(NOTE_WARP_WARNING)
+	var src := NO_SRC.duplicate()
 	var slope := 0.0
-	for i in mini(int(Kinds.param(p_node, "octaves")), k - Octaves.K_MIN + 1):
-		var ki := k - i
-		var ai := a * pow(pers, i)
-		for axis in 3:
-			warp_rows.append({"octave": Octaves.field_octave(seed + axis, ki), "k": ki, "slot": slot, "axis": axis, "amp": ai, "wm": 0.0, "st": 1.0})
-		slope += ai * NOISE_SLOPE / Octaves.wavelength_m(ki, voxel_m)
-	return [{"slot": slot, "slope": slope}]
+	var lam := INF
+	for axis in 3:
+		var r = _input(p_id, axis)
+		if r == null:
+			continue
+		if not r.has("row"):
+			errors.append("A Note warp's %s takes a Note's n directly (not a shaped or mixed signal)." % "xyz"[axis])
+			continue
+		src[axis] = r.row
+		slope += r.slope * r.slope
+		lam = minf(lam, r.lam)
+	return [{"src": src, "slope": sqrt(slope), "lam": lam}]
 
 
 # The octave table's uniforms (ShaderLib.OCTAVE_TABLE's columns): the warps' rows first (their W is complete before a
@@ -229,7 +262,7 @@ func _table() -> void:
 		var row := {
 			"u_bx": w.base.x, "u_by": w.base.y, "u_bz": w.base.z, "u_sx": w.salt.x, "u_sy": w.salt.y, "u_sz": w.salt.z,
 			"u_fr": w.frac, "u_inv": pow(2.0, -r.k), "u_lam": Octaves.wavelength_m(r.k, voxel_m), "u_amp": r.amp,
-			"u_wm": r.wm, "u_st": r.st, "u_slot": r.slot, "u_axis": r.axis,
+			"u_wm": r.wm, "u_st": r.st, "u_slot": r.slot, "u_axis": r.axis, "u_jx": r.src[0], "u_jy": r.src[1], "u_jz": r.src[2],
 		}
 		for key in cols:
 			cols[key][i] = row[key]
@@ -352,11 +385,8 @@ static func curve_segments(p_points: Array) -> Dictionary:
 	var y := func(i: int) -> float:
 		var pt: Array = pts[clampi(i, 0, n - 1)]
 		return pt[1] - pt[0]
-	var bound := 0.0
-	var slope := 0.0
 	for i in n:
 		x[i] = pts[i][0]
-		bound = maxf(bound, absf(y.call(i)))
 	for i in n - 1:
 		var n0: float = y.call(i - 1)
 		var n1: float = y.call(i)
@@ -370,11 +400,7 @@ static func curve_segments(p_points: Array) -> Dictionary:
 		segs.r[i] = n2 - n0
 		segs.s[i] = n1
 		segs.inv[i] = inv
-		for j in 17:
-			var a := j / 16.0
-			bound = maxf(bound, absf(_cubic(p, q, n2 - n0, n1, a)))
-			slope = maxf(slope, absf(_cubic(0.0, 3.0 * p, 2.0 * q, n2 - n0, a) * inv))
-	return {"n": n, "x": x, "segs": segs, "first": y.call(0) if n > 0 else 0.0, "last": y.call(n - 1) if n > 0 else 0.0, "bound": bound, "slope": slope}
+	return {"n": n, "x": x, "segs": segs, "first": y.call(0) if n > 0 else 0.0, "last": y.call(n - 1) if n > 0 else 0.0}
 
 
 # R(h) of curve_segments' result, as the shader's curve_<id> (the editor draws it).
@@ -416,7 +442,21 @@ func _emit_curve(p_id: String, p_node: Dictionary) -> Array:
 		+ "\t\t}\n\t}\n"
 		+ "\treturn h + {u}_last;\n}\n").format({"id": p_id, "u": pre}))
 	var v := _var("float", "v_%s" % p_id, "curve_%s(%s)" % [p_id, h.e])
-	return [_rec(v, h.m, h.mb + c.bound, h.amp + c.bound, h.dev + 2.0 * c.bound, h.slope * (1.0 + c.slope), h.lam)]
+	# R only meets the heights its input reaches (within +-h.amp): its bound and slope there, not past (an imported
+	# curve's points span the table's whole field range, kilometres beyond the biome's relief).
+	var hi := maxf(h.amp, 1.0)
+	curve_in[p_id] = hi
+	var bound := 0.0
+	var slope := 0.0
+	var prev := 0.0
+	for j in 257:
+		var x := lerpf(-hi, hi, j / 256.0)
+		var dr := curve_eval(c, x) - x
+		bound = maxf(bound, absf(dr))
+		if j > 0:
+			slope = maxf(slope, absf(dr - prev) / (2.0 * hi / 256.0))
+		prev = dr
+	return [_rec(v, h.m, h.mb + bound, h.amp + bound, h.dev + 2.0 * bound, h.slope * (1.0 + slope), h.lam)]
 
 
 func _emit_terrace(p_id: String, p_node: Dictionary) -> Array:

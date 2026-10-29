@@ -47,10 +47,6 @@ static func title(p_node: Dictionary, p_voxel_m: float) -> String:
 	match p_node.kind:
 		"note":
 			t += " %s" % fmt_m(Octaves.wavelength_m(int(Kinds.param(p_node, "k")), p_voxel_m))
-			if int(Kinds.param(p_node, "variant")) != 0:
-				t += " (variant %d)" % int(Kinds.param(p_node, "variant"))
-		"warp":
-			t += " %s, %d octaves" % [fmt_m(Octaves.wavelength_m(int(Kinds.param(p_node, "k")), p_voxel_m)), int(Kinds.param(p_node, "octaves"))]
 		"shape":
 			t += " %s" % Kinds.param(p_node, "preset")
 	return t
@@ -93,6 +89,11 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 		var phi := PhiGraph.new()
 		gn.add_child(phi)
 		gn.set_meta("phi", phi)
+	elif p_node.kind in ["warp", "note_warp"]:
+		var info := Label.new()
+		info.modulate = Color(1, 1, 1, 0.7)
+		info.text = _warp_info(p_node.kind, p_ctx.model)
+		gn.add_child(info)
 	elif p_node.kind == "mix":
 		var total := Label.new()
 		total.modulate = Color(1, 1, 1, 0.7)
@@ -108,13 +109,24 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 	return gn
 
 
+# What a warp costs, under its ports: the climate's octaves and their reads, or none.
+static func _warp_info(p_kind: String, p_model: Dictionary) -> String:
+	if p_kind == "note_warp":
+		return "No noise of its own: x, y, z read\nnotes (coarser than the one it moves).\nPlayed notes cost nothing more."
+	var cw := Kinds.climate_warp(p_model)
+	var k := int(cw.k)
+	var n := int(cw.octaves)
+	return "The climate's, every biome's:\n%s .. %s, %d octaves x 3 axes\n= %d reads per point, once." % [
+		fmt_m(Octaves.wavelength_m(k - n + 1, p_model.voxel_m)), fmt_m(Octaves.wavelength_m(k, p_model.voxel_m)), n, 3 * n]
+
+
 # What a node shows from its parameters (title, thumbnail, phi graph), after an edit.
 static func refresh(p_gn: GraphNode, p_node: Dictionary, p_ctx: Object) -> void:
 	var voxel_m: float = p_ctx.model.voxel_m
 	p_gn.title = title(p_node, voxel_m)
 	if p_gn.has_meta("thumb"):
 		var k := int(Kinds.param(p_node, "k"))
-		var w := Octaves.shader_words(Octaves.ground_octave(k, int(p_ctx.model.lods), int(Kinds.param(p_node, "variant"))), k, [0, 0, 0])
+		var w := Octaves.shader_words(Octaves.ground_octave(k, int(p_ctx.model.lods)), k, [0, 0, 0])
 		var m: ShaderMaterial = p_gn.get_meta("thumb").material
 		m.set_shader_parameter("u_base", w.base)
 		m.set_shader_parameter("u_frac", w.frac)
@@ -306,11 +318,12 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 		"points":
 			var box := VBoxContainer.new()
 			var ce := CurveEdit.new()
-			ce.set_points(v, p_ctx.curve_span())
+			ce.set_points(v, p_ctx.curve_span(p_id))
 			ce.points_changed.connect(func(p: Array) -> void: p_ctx.set_params(p_id, {name: p}))
+			p_ctx.curve_ui[p_id] = ce
 			var reset := Button.new()
 			reset.text = "Reset to no remap"
-			reset.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: Kinds.identity_curve(p_ctx.curve_span())}, true))
+			reset.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: Kinds.identity_curve(p_ctx.curve_span(p_id))}, true))
 			box.add_child(ce)
 			box.add_child(reset)
 			row.add_child(box)

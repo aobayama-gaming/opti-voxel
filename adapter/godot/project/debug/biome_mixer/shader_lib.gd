@@ -118,7 +118,7 @@ uniform float u_voxel = 0.05;
 // call (the driver compiled one per note, inlined at each density call, in 30 s). Rows below u_n_warp add to their
 // warp W[u_slot] (axis u_axis, times u_amp); the others are the notes N[i - u_n_warp], read at pv + u_wm W[u_slot].
 // Columns: OCTAVE_TABLE (cell base and salt words, frac, 2^-k, wavelength, warp amplitude, warp distance,
-// 1 / stretch_y, slot, axis). A note's fade goes to F, apart from its noise N (a Shape fades around its mean).
+// 1 / stretch_y, slot, axis, the note warp's notes x, y, z: earlier rows, -1 for none). A note's fade goes to F, apart from its noise N (a Shape fades around its mean).
 uniform int u_n_oct = 0;
 uniform int u_n_warp = 0;
 """
@@ -126,7 +126,7 @@ uniform int u_n_warp = 0;
 const OCTAVE_TABLE := [
 	["u_bx", "int"], ["u_by", "int"], ["u_bz", "int"], ["u_sx", "int"], ["u_sy", "int"], ["u_sz", "int"],
 	["u_fr", "vec3"], ["u_inv", "float"], ["u_lam", "float"], ["u_amp", "float"], ["u_wm", "float"], ["u_st", "float"],
-	["u_slot", "int"], ["u_axis", "int"],
+	["u_slot", "int"], ["u_axis", "int"], ["u_jx", "int"], ["u_jy", "int"], ["u_jz", "int"],
 ]
 
 # W and N are sized to the graph's warps and notes (structural: a new note recompiles anyway), not to the table's
@@ -146,6 +146,10 @@ float density(vec3 p, float fp) {
 		vec3 q = vec3(pv.x, pv.y * u_st[i], pv.z);
 		if (!warp_row && s >= 0) {
 			q += u_wm[i] * W[s];
+		}
+		ivec3 j = ivec3(u_jx[i], u_jy[i], u_jz[i]);
+		if (!warp_row && j != ivec3(-1)) {
+			q += u_wm[i] * vec3(j.x >= 0 ? F[j.x] * N[j.x] : 0.0, j.y >= 0 ? F[j.y] * N[j.y] : 0.0, j.z >= 0 ? F[j.z] * N[j.z] : 0.0);
 		}
 		float f = lod_fade(u_lam[i], fp);
 		float n = f > 0.0 ? perlin(q, ivec3(u_bx[i], u_by[i], u_bz[i]), u_fr[i], ivec3(u_sx[i], u_sy[i], u_sz[i]), u_inv[i]) : 0.0;
@@ -260,7 +264,9 @@ void fragment() {
 			}
 			k++;
 			if (k == 8) {
-				t = b;
+				// The end outside the ground: from the inside one (its depth grows with the step) the shadow ray would
+				// start underground (rings of acne on smooth slopes).
+				t = a;
 				hit = true;
 			}
 		} else if (phase == 2) {

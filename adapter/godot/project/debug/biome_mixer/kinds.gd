@@ -21,33 +21,37 @@ const SMOOTH_ABS_E := 0.1
 const NOISE_ABS_MEAN := 0.1527
 const NOISE_SQ_MEAN := 0.0728
 
+# The climate's warp fields when a biome has none of its own (a model's "climate_warp"): world.json's wx, wy, wz, an
+# fBm from note k down (seeds seed, seed + 1, seed + 2 for x, y, z).
+const CLIMATE_WARP := {"k": 17, "octaves": 4, "amp": 0.5, "persistence": 0.6, "seed": 905}
+
 # A parameter: name, type (float, int, bool, enum, color, k: a wavelength, points: the curve's, rows: the mix's),
 # default and, for numbers, the slider's range (the number box takes any value) and a tooltip.
 const KINDS := {
 	"note": {
 		"title": "Note",
-		"hint": "One octave of the ground: a 3D noise in [-1, 1] at one wavelength (variant 0 is the ground's own).",
+		"hint": "One octave of the ground: a 3D noise in [-1, 1] at one wavelength. Every biome of the climate plays the same notes, the ground's: a biome only shapes and mixes them.",
 		"in": [["warp", WARP]],
 		"out": [["n", FIELD]],
 		"params": [
 			{"name": "k", "type": "k", "default": 12},
-			{"name": "variant", "type": "int", "default": 0, "min": 0, "max": 99, "hint": "0: the ground's note; another number: another noise at this wavelength"},
-			{"name": "warp_m", "type": "float", "default": 0.0, "min": 0.0, "max": 2000.0, "step": 0.1, "hint": "How far the warp moves the point the note is read at, metres per unit of the warp field"},
+			{"name": "warp_m", "type": "float", "default": 0.0, "min": 0.0, "max": 2000.0, "step": 0.1, "hint": "How far the warp moves the point the note is read at: metres per unit of the warp (a warp's value is within about +-1)"},
 			{"name": "stretch_y", "type": "int", "default": 1, "min": 1, "max": 64, "hint": "The engine's stretched octave (ground_stretch, a power of two): the noise read at y / stretch from the datum, a height field where it dominates"},
 		],
 	},
 	"warp": {
-		"title": "Warp field",
-		"hint": "Three noises (x, y, z) that move where a note is read: fBm from wavelength k down, like the engine's warp fields.",
+		"title": "Climate warp",
+		"hint": "The climate's warp fields (wx, wy, wz): three fBms every biome shares, read once per point however many notes they move. Their octaves are the climate's, not the biome's (CLIMATE_WARP; an import takes its table's).",
 		"in": [],
 		"out": [["xyz", WARP]],
-		"params": [
-			{"name": "k", "type": "k", "default": 17},
-			{"name": "octaves", "type": "int", "default": 4, "min": 1, "max": 8},
-			{"name": "amp", "type": "float", "default": 0.5, "min": 0.0, "max": 2.0, "step": 0.01},
-			{"name": "persistence", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.01},
-			{"name": "seed", "type": "int", "default": 905, "min": 0, "max": 100000, "hint": "x uses seed, y seed + 1, z seed + 2 (a climate field's seeds)"},
-		],
+		"params": [],
+	},
+	"note_warp": {
+		"title": "Note warp",
+		"hint": "The cheap warp: moves a note by the values of coarser notes (x, y, z: link Notes' n). Notes the biome already plays cost no read. Preview only: the engine's warps are climate fields.",
+		"in": [["x", FIELD], ["y", FIELD], ["z", FIELD]],
+		"out": [["xyz", WARP]],
+		"params": [],
 	},
 	"shape": {
 		"title": "Shape",
@@ -148,7 +152,7 @@ const KINDS := {
 }
 
 # The kinds the Add menu lists, in order.
-const MENU := ["note", "shape", "multifractal", "warp", "mix", "add", "multiply", "constant", "curve", "terrace", "carve", "output"]
+const MENU := ["note", "shape", "multifractal", "warp", "note_warp", "mix", "add", "multiply", "constant", "curve", "terrace", "carve", "output"]
 
 
 static func inputs(p_node: Dictionary) -> Array:
@@ -177,6 +181,22 @@ static func param(p_node: Dictionary, p_name: String) -> Variant:
 	if params.has(p_name):
 		return params[p_name]
 	return param_def(p_node.kind, p_name).get("default")
+
+
+# The climate's warp fields a model's Climate warp reads: its "climate_warp", else (a file from before it) the
+# settings its first warp node carried, else CLIMATE_WARP.
+static func climate_warp(p_model: Dictionary) -> Dictionary:
+	var w: Dictionary = CLIMATE_WARP.duplicate()
+	if p_model.has("climate_warp"):
+		w.merge(p_model.climate_warp, true)
+		return w
+	for id in p_model.get("nodes", {}):
+		var node: Dictionary = p_model.nodes[id]
+		if node.kind == "warp" and node.get("params", {}).has("k"):
+			for key in w:
+				w[key] = node.params.get(key, w[key])
+			break
+	return w
 
 
 static func rows(p_node: Dictionary) -> Array:

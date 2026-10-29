@@ -153,14 +153,22 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
   ground's octaves in a node graph (GraphEdit), raymarched live beside it; a design tool, not the engine's path (the
   table is still the engine's input; turning a graph into a table's biome is the next step).
   - **Nodes** (`kinds.gd`): *Note* (the ground's octave k, `make_octave(SEED, k_top - k, k)` ported in `octaves.gd`,
-    pinned against `test_exact_noise.cpp`; a variant is another seed; an optional warp input moves where it is read;
+    pinned against `test_exact_noise.cpp`: every biome plays the same notes, so a note has no seed of its own; an
+    optional warp input moves where it is read, `warp_m` metres per unit;
     `stretch_y` reads it at y / stretch from the datum, as `ground_stretch`),
     *Shape* (`c0 + c1 n + c2 |n| + c3 n^2` with `|n|` smoothed as `Cascade::smooth_abs`; presets, scale and offset as
     `climate_parse.cpp`), *Multifractal* (`w = clamp(gain * chain in)`, the signal times w, chain out `w * phi` to the
-    next finer note: the engine's state, wired), *Warp field* (three seeded fBms like a table's warp fields), *Mix*
+    next finer note: the engine's state, wired), *Climate warp* (the climate's three warp fields, a model's
+    `climate_warp`, world.json's wx, wy, wz by default (`Kinds.CLIMATE_WARP`), an import its table's: no per-biome
+    settings, one table slot however many nodes, as the engine reads its climate once per point; 12 reads at 4
+    octaves), *Note warp* (preview only, the cheap warp: x, y, z are Notes read earlier in the table, `F * N` of their
+    rows, so notes the biome plays cost no read; a note warped by a finer one is warned of, as the engine reads notes
+    coarse to fine; the engine would need warp notes in a table's band, the chain rule from their gradients), *Mix*
     (rows of volume x the ground's amplitude lambda / 8 capped at 3.3 km, mute, solo, centre = the shape's mean out
     as the engine inserts bands), *Add* / *Multiply* / *Constant*, *Height curve* (a remap R(h) through points, the
-    engine's `height + height_m * curve(ground)` with libnoise's cubic, R - h constant past the ends), *Terrace*
+    engine's `height + height_m * curve(ground)` with libnoise's cubic, R - h constant past the ends; its bound and
+    slope, and its editor's in axis, span its input's bound (`curve_in`): the mountain's ±7.2 km, its points ±3.8 km,
+    where the old editor showed the output's ±8.4 km on both axes), *Terrace*
     (`Climate::Terrace`), *Carve* (preview only: air where a field passes a threshold inside a depth band), *Output*
     (height, holes, flat and steep colours with the engine's slope blend).
   - **Shader** (`compile.gd`, `shader_lib.gd`): the graph's structure becomes code, every parameter a uniform (a slider
@@ -170,13 +178,16 @@ Climate fields, biomes, shaped bands, stretched octaves and regions. Landform ta
     faded note moves no height); the march starts under the ground's
     bound and steps by the density over a slope estimate (independent notes in quadrature; overshoots are bisected),
     twice the estimate's safe step: the estimate is a worst case, and the imported biomes show no holes at twice it.
+    The bisection ends on its outside end: the inside one's depth grows with the step, and a shadow ray started from
+    it underground drew rings of acne on smooth slopes.
     The preview draws only on a change (low-processor mode, `UPDATE_ONCE`), in two layers (`preview.gd`): 1/3 of the
     resolution on every change, then the chosen one over it in strips fitted to ~25 ms a frame, which any edit
     cancels, so no frame waits on the whole view. Measured on the RTX 3070 laptop, world.json's mountain at 810 x 751
     with shadows: the whole view 200 ms a frame at step 1, 150 ms at step 2 (shadows ~60 of it; skipping notes much
     finer than the ray's distance to the ground saved 5%, left out); in strips, no frame over 38 ms and the view
     sharp in ~0.3 s.
-  - **Budget**: over the view, what the biome reads per point (its notes, each warp field's octaves per axis, against
+  - **Budget**: over the view, what the biome reads per point (its notes, the climate warp's octaves per axis, the
+    notes moved by a Note warp for free, against
     plain ground's), its relief bound, the row that moves the most and how long the view took to sharpen; each Mix
     row shows its swing (volume x lambda / 8 x the shaped note's bound) and its share of the Mix's. A row's x takes it
     out with the nodes only it used (`Kinds.cut_row`); a node's x or Delete removes it and the Mix row it played

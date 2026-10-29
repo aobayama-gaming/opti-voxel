@@ -32,6 +32,7 @@ var model := {}
 var result := {}
 var thumb_shader := Shader.new()
 var mix_ui := {}  # Mix id -> {rows: [{name, peak, bar}], total}: what its rows add (nodes.gd fills it)
+var curve_ui := {}  # Height curve id -> its editor, told its input's range after each compile
 
 var graph := GraphEdit.new()
 var preview := Preview.new()
@@ -106,6 +107,8 @@ func set_model(p_model: Dictionary, p_frame: bool) -> void:
 		model.nodes = {}
 	if not model.has("links"):
 		model.links = []
+	# The climate's warp is the model's (a file from before kept it on its warp node).
+	model.climate_warp = Kinds.climate_warp(model)
 	var view: Dictionary = VIEW_DEFAULTS.duplicate()
 	view.merge(model.get("view", {}), true)
 	model.view = view
@@ -164,6 +167,8 @@ func recompile(p_moving: bool) -> void:
 	_apply_view()
 	for id in mix_ui:
 		Nodes.show_mix(mix_ui[id], result.mix_rows.get(id, []))
+	for id in curve_ui:
+		curve_ui[id].set_span(curve_span(id))
 	_show_budget()
 	var lines := PackedStringArray()
 	for e in result.errors:
@@ -190,8 +195,8 @@ func _show_budget() -> void:
 			if r.on and r.peak > top.get("peak", 0.0):
 				top = r
 	var parts := PackedStringArray([
-		"Per point: %d noise reads = %d notes (%d shaped, %d multifractal, %d warped) + %d warp octaves; plain ground reads %d." % [
-			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.warp_octaves, Octaves.k_top(model.lods) - Octaves.K_MIN + 1],
+		"Per point: %d noise reads = %d notes (%d shaped, %d multifractal, %d moved by the climate warp, %d by notes for free) + %d climate warp octaves; plain ground reads %d." % [
+			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.note_warped, b.warp_octaves, Octaves.k_top(model.lods) - Octaves.K_MIN + 1],
 		"Relief within +-%s%s." % [Nodes.fmt_m(result.hmax / float(model.view.exag)),
 			", most from the %s note (+-%s)" % [Nodes.fmt_m(top.lam), Nodes.fmt_m(top.peak)] if top.get("lam", 0.0) > 0.0 else ""],
 	])
@@ -200,8 +205,12 @@ func _show_budget() -> void:
 	budget.text = "  ".join(parts)
 
 
-# The span a Height curve's editor shows: the ground's bound.
-func curve_span() -> float:
+# The input a Height curve's editor shows (metres either side of 0): its input's bound, else (a new curve, not linked
+# yet) the ground's.
+func curve_span(p_id: String = "") -> float:
+	var curve_in: Dictionary = result.get("curve_in", {})
+	if curve_in.has(p_id):
+		return curve_in[p_id]
 	return maxf(float(result.get("hmax", 1000.0)) / float(model.view.exag), 10.0)
 
 
@@ -212,6 +221,7 @@ func rebuild_ui() -> void:
 			graph.remove_child(c)
 			c.queue_free()
 	mix_ui.clear()
+	curve_ui.clear()
 	for id in model.nodes:
 		_add_graph_node(id)
 	for l in model.links:
@@ -228,6 +238,7 @@ func _rebuild_node(p_id: String) -> void:
 		graph.remove_child(old)
 		old.queue_free()
 	mix_ui.erase(p_id)
+	curve_ui.erase(p_id)
 	_add_graph_node(p_id)
 	for l in model.links:
 		if l.from == p_id or l.to == p_id:
@@ -665,6 +676,11 @@ func _check() -> void:
 			return a == b
 		var differ: Array = r.uniforms.keys().filter(func(key): return not r2.uniforms.has(key) or not same.call(r.uniforms[key], r2.uniforms[key]))
 		var entry := {"ok": r.ok, "errors": r.errors, "nodes": graphs[g].nodes.size(), "hmax": r.hmax, "same_after_file": r2.code == r.code and differ.is_empty()}
+		# A Height curve's editor spans its input's bound; its points may reach past it (an import's span the table's
+		# field range): [input bound, the points' widest |h|].
+		for id in r.curve_in:
+			var pts: Array = Kinds.param(graphs[g].nodes[id], "points")
+			entry["curve_" + id] = [snappedf(r.curve_in[id], 0.1), pts.reduce(func(m, p): return maxf(m, absf(p[0])), 0.0)]
 		if not differ.is_empty():
 			entry["uniforms_differ"] = differ.slice(0, 5).map(func(key): return [key, r.uniforms[key], r2.uniforms.get(key)])
 		if g == "every kind":
@@ -674,7 +690,9 @@ func _check() -> void:
 					missing.append(needle)
 			entry["missing"] = missing
 			entry["warp_rows"] = r.uniforms.u_n_warp
-			ok = ok and missing.is_empty() and r.uniforms.u_n_warp > 0
+			# The note warp's notes: earlier rows of the table than the note they move.
+			entry["note_warped"] = r.budget.note_warped
+			ok = ok and missing.is_empty() and r.uniforms.u_n_warp > 0 and r.budget.note_warped == 1 and Array(r.uniforms.u_jx).max() >= 0
 		ok = ok and r.ok and entry.same_after_file
 		report.graphs[g] = entry
 	report["cuts"] = _check_cuts(table)
@@ -719,7 +737,9 @@ func _every_kind() -> Dictionary:
 	var b := ImportTable.new("every kind")
 	var warp := b.add("warp", Vector2.ZERO)
 	var a := b.add("note", Vector2.ZERO, {"k": 15, "warp_m": 200.0})
-	var c := b.add("note", Vector2.ZERO, {"k": 14, "variant": 3})
+	var c := b.add("note", Vector2.ZERO, {"k": 14})
+	var d := b.add("note", Vector2.ZERO, {"k": 12, "warp_m": 30.0})
+	var nw := b.add("note_warp", Vector2.ZERO)
 	var sa := b.add("shape", Vector2.ZERO, {"preset": "ridged"})
 	var sc := b.add("shape", Vector2.ZERO, {"preset": "coeffs", "c2": 1.0})
 	var ma := b.add("multifractal", Vector2.ZERO)
@@ -733,6 +753,10 @@ func _every_kind() -> Dictionary:
 	var carve := b.add("carve", Vector2.ZERO)
 	var out := b.add("output", Vector2.ZERO)
 	b.link(warp, 0, a, 0)
+	b.link(a, 0, nw, 0)
+	b.link(c, 0, nw, 2)
+	b.link(nw, 0, d, 0)
+	b.link(d, 0, add, 1)
 	b.link(a, 0, sa, 0)
 	b.link(c, 0, sc, 0)
 	b.link(sa, 0, ma, 0)
@@ -743,7 +767,6 @@ func _every_kind() -> Dictionary:
 	b.link(mix, 0, mul, 0)
 	b.link(k, 0, mul, 1)
 	b.link(mul, 0, add, 0)
-	b.link(c, 0, add, 1)
 	b.link(add, 0, cv, 0)
 	b.link(cv, 0, tr, 0)
 	b.link(tr, 0, out, 0)

@@ -73,10 +73,9 @@ static func _make_octave(p_seed: int, p_salt: int, p_k: int) -> Dictionary:
 	return {"seed": h[0], "offset": offset}
 
 
-# The ground's note k (variant 0) or another noise at the same wavelength (variant > 0: the ground's seed hashed).
-static func ground_octave(p_k: int, p_lods: int, p_variant: int = 0) -> Dictionary:
-	var seed: int = GROUND_SEED if p_variant == 0 else pcg3d([GROUND_SEED, p_variant, SALT_Y])[0]
-	return make_octave(seed, k_top(p_lods) - p_k, p_k)
+# The ground's note k: every biome of a climate plays the same notes.
+static func ground_octave(p_k: int, p_lods: int) -> Dictionary:
+	return make_octave(GROUND_SEED, k_top(p_lods) - p_k, p_k)
 
 
 static func field_octave(p_seed: int, p_k: int) -> Dictionary:

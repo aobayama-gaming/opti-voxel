@@ -188,8 +188,12 @@ func _shape(p_a: Dictionary) -> Dictionary:
 	return {"preset": preset, "scale": float(p_a.get("scale", 1.0)), "offset": float(p_a.get("offset", Kinds.preset_offset(preset)))}
 
 
-# A Warp field node from the table's three warp fields (x, y, z: seeds s, s + 1, s + 2 and one band range), or "".
+# A Climate warp node from the table's three warp fields (x, y, z: seeds s, s + 1, s + 2 and one band range), which
+# become the model's climate_warp, or "". The mixer has one climate warp: a second set of fields is left out.
 func _warp(p_names: Array, p_fields: Dictionary, p_y: float) -> String:
+	if model.has("climate_warp"):
+		warnings.append("Warp fields %s left out: the mixer has one climate warp (the first set's)." % [p_names])
+		return ""
 	if p_names.size() != 3 or not p_fields.has(p_names[0]):
 		warnings.append("Warp fields %s not found: those notes are unwarped." % [p_names])
 		return ""
@@ -204,7 +208,8 @@ func _warp(p_names: Array, p_fields: Dictionary, p_y: float) -> String:
 	if ks.is_empty():
 		warnings.append("Warp fields %s have no octave in range: those notes are unwarped." % [p_names])
 		return ""
-	return add("warp", Vector2(COL.warp, p_y), {"k": ks.max(), "octaves": ks.max() - ks.min() + 1, "amp": float(band.get("amp", 0.5)), "persistence": float(band.get("persistence", 0.5)), "seed": seed})
+	model.climate_warp = {"k": ks.max(), "octaves": ks.max() - ks.min() + 1, "amp": float(band.get("amp", 0.5)), "persistence": float(band.get("persistence", 0.5)), "seed": seed}
+	return add("warp", Vector2(COL.warp, p_y))
 
 
 # The octaves a table entry covers: its wavelength_m's, or every one in from_m .. to_m (the engine's band ranges).
