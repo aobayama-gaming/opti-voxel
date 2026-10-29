@@ -153,10 +153,22 @@ float cloud_remap(float v, float a, float b, float c, float d) {
     return c + (v - a) / max(b - a, 1e-5) * (d - c);
 }
 
-// A render point's coordinates in a noise of period_vox voxels (whole tiles per period: the texture repeats), carried by
-// the wind (the pattern moves along it; its offset wraps at the weather period, a multiple of the others).
-vec3 cloud_coords(vec3 p, int period_vox) {
-    return (shade_point(p, period_vox) - cloud_wind_offset_m) / shade_period_m(period_vox);
+// A render point's coordinates in a noise of period_vox voxels (whole tiles per period: the texture repeats), moved by
+// warp (metres) and carried by the wind (the pattern moves along it; its offset wraps at the warp period, a multiple of
+// the others).
+vec3 cloud_coords(vec3 p, int period_vox, vec3 warp) {
+    return (shade_point(p, period_vox) + warp - cloud_wind_offset_m) / shade_period_m(period_vox);
+}
+
+// The warp at p: a smooth offset (metres) of every noise read, two waves per axis of whole cycles per warp period,
+// carried by the wind with the noises; the field repeats every warp period, not every weather period (docs/look.md).
+vec3 cloud_warp(vec3 p) {
+    float period_m = shade_period_m(cloud_warp_period_vox);
+    vec3 q = (shade_point(p, cloud_warp_period_vox) - cloud_wind_offset_m) * (2.0 * ATMO_PI / period_m);
+    vec3 w = vec3(sin(dot(q, vec3(1.0, 0.0, 2.0))) + sin(dot(q, vec3(-2.0, 1.0, 0.0)) + 2.1),
+            sin(dot(q, vec3(0.0, 2.0, -1.0)) + 4.2) + sin(dot(q, vec3(2.0, 0.0, 1.0)) + 1.3),
+            sin(dot(q, vec3(-1.0, 0.0, 2.0)) + 5.0) + sin(dot(q, vec3(0.0, -1.0, -2.0)) + 3.4));
+    return w * ($WARP_AMPLITUDE * period_m);
 }
 
 float cloud_height_fraction(float altitude) {
@@ -172,29 +184,36 @@ float cloud_gradient(float hf, float type) {
     return smoothstep(g.x, g.y, hf) - smoothstep(g.z, g.w, hf);
 }
 
-// The weather at p: the coverage in [0, 1] (cloud_cover of the sky past its threshold) and the cloud type, from the
-// shape noise read at the weather scale.
-vec2 cloud_weather(vec3 p) {
-    vec4 w = textureLod($SHAPE, cloud_coords(p, cloud_weather_period_vox), 0.0);
+// The weather at a point, from the shape noise read at the weather scale: the coverage in [0, 1] (cloud_cover of the
+// sky past its threshold), the cloud type and the warp of the noises there (cloud_warp).
+struct CloudWeather {
+    float coverage;
+    float type;
+    vec3 warp;
+};
+
+CloudWeather cloud_weather(vec3 p) {
+    vec3 warp = cloud_warp(p);
+    vec4 w = textureLod($SHAPE, cloud_coords(p, cloud_weather_period_vox, warp), 0.0);
     float edge = $COVER_LOW + ($COVER_HIGH - $COVER_LOW) * (1.0 - clamp(cloud_cover, 0.0, 1.0));
     float coverage = smoothstep(edge - 0.2, edge + 0.2, w.r) * clamp(cloud_cover * 4.0, 0.0, 1.0);
-    return vec2(coverage, smoothstep(0.25, 0.75, w.g));
+    return CloudWeather(coverage, smoothstep(0.25, 0.75, w.g), warp);
 }
 
 // The base shape at p (height fraction hf, weather w), without the detail: Schneider's coverage remap.
-float cloud_base(vec3 p, float hf, vec2 w) {
-    if (hf <= 0.0 || hf >= 1.0 || w.x <= 0.0) {
+float cloud_base(vec3 p, float hf, CloudWeather w) {
+    if (hf <= 0.0 || hf >= 1.0 || w.coverage <= 0.0) {
         return 0.0;
     }
-    vec4 n = textureLod($SHAPE, cloud_coords(p, cloud_shape_period_vox), 0.0);
+    vec4 n = textureLod($SHAPE, cloud_coords(p, cloud_shape_period_vox, w.warp), 0.0);
     float fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;
-    float base = cloud_remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * cloud_gradient(hf, w.y);
-    return clamp(cloud_remap(base, 1.0 - w.x, 1.0, 0.0, 1.0) * w.x, 0.0, 1.0);
+    float base = cloud_remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * cloud_gradient(hf, w.type);
+    return clamp(cloud_remap(base, 1.0 - w.coverage, 1.0, 0.0, 1.0) * w.coverage, 0.0, 1.0);
 }
 
 // The base eroded by the detail noise (billows at the bottom, wisps at the top).
-float cloud_erode(vec3 p, float hf, float base) {
-    vec3 d = textureLod($DETAIL, cloud_coords(p, cloud_detail_period_vox), 0.0).rgb;
+float cloud_erode(vec3 p, float hf, float base, CloudWeather w) {
+    vec3 d = textureLod($DETAIL, cloud_coords(p, cloud_detail_period_vox, w.warp), 0.0).rgb;
     float fbm = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
     float m = mix(fbm, 1.0 - fbm, clamp(hf * 10.0, 0.0, 1.0));
     return clamp(cloud_remap(base, m * 0.35, 1.0, 0.0, 1.0), 0.0, 1.0);
@@ -310,7 +329,7 @@ float cloud_phase(float c, float k) {
 
 // The optical depth towards the sun from p, in the base shape (no detail): LIGHT_STEPS steps from 1% of the layer's
 // thickness, growing 1.8 times each (Frostbite's progressive shadow samples), 0.4 thicknesses in all; the weather of p.
-float cloud_light_depth(vec3 p, vec3 sun, vec2 w) {
+float cloud_light_depth(vec3 p, vec3 sun, CloudWeather w) {
     float ds = (cloud_top_m - cloud_bottom_m) * 0.01;
     float t = 0.0;
     float depth = 0.0;
@@ -368,12 +387,15 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
         float t = cloud_segment_t(seg, float(i), float(n), jitter);
         vec3 x = cam + dir * t;
         float hf = cloud_height_fraction(base_altitude(x));
-        vec2 w = cloud_weather(x);
+        if (hf <= 0.0 || hf >= 1.0) {
+            continue;
+        }
+        CloudWeather w = cloud_weather(x);
         float base = cloud_base(x, hf, w);
         if (base <= 0.0) {
             continue;
         }
-        float density = cloud_erode(x, hf, base);
+        float density = cloud_erode(x, hf, base, w);
         if (density <= 0.0) {
             continue;
         }
@@ -488,7 +510,10 @@ void main() {
         float depth = 0.0;
         for (int i = 0; i < SHADOW_STEPS; i++) {
             vec3 x = p + cloud_sun * cloud_segment_t(seg, float(i), float(SHADOW_STEPS), 0.5);
-            depth += cloud_base(x, cloud_height_fraction(base_altitude(x)), cloud_weather(x));
+            float hf = cloud_height_fraction(base_altitude(x));
+            if (hf > 0.0 && hf < 1.0) {
+                depth += cloud_base(x, hf, cloud_weather(x));
+            }
         }
         // The octaves with an isotropic phase, over their sum: under a thick cloud the light its octaves let through.
         float ones[OCTAVES];
@@ -524,6 +549,8 @@ enum PassBinding : uint32_t {
 // (about its 5% and 95% quantiles, measured on a numpy mirror of the noise pass).
 constexpr float COVER_LOW = 0.52f;
 constexpr float COVER_HIGH = 0.94f;
+// Each of the warp's waves' amplitude, in warp periods (docs/look.md: what it breaks, how much it stretches).
+constexpr float WARP_AMPLITUDE = 0.015f;
 
 ov::str substitute(const ov::str &p_glsl) {
     using C = Clouds;
@@ -534,7 +561,8 @@ ov::str substitute(const ov::str &p_glsl) {
                     { "$SHADOW_SIZE", ov::itos(C::SHADOW_SIZE) }, { "$OCTAVES", ov::itos(C::OCTAVES) },
                     { "$BLEND", ov::format("%.3f", double(C::BLEND)) }, { "$MS_SCATTERING", ov::format("%.3f", double(C::MS_SCATTERING)) },
                     { "$MS_EXTINCTION", ov::format("%.3f", double(C::MS_EXTINCTION)) }, { "$MS_ECCENTRICITY", ov::format("%.3f", double(C::MS_ECCENTRICITY)) }, { "$COVER_LOW", ov::format("%.3f", double(COVER_LOW)) },
-                    { "$COVER_HIGH", ov::format("%.3f", double(COVER_HIGH)) } });
+                    { "$COVER_HIGH", ov::format("%.3f", double(COVER_HIGH)) },
+                    { "$WARP_AMPLITUDE", ov::format("%.9g", double(WARP_AMPLITUDE)) } });
 }
 
 ov::str density_glsl(const ov::str &p_shape, const ov::str &p_detail) {
@@ -586,9 +614,12 @@ CloudLayer CloudLayer::for_base(double p_radius_m, double p_relief_m, double p_v
     l.extinction = float(l.extinction / s);
     l.shadow_reach_m = float(l.shadow_reach_m * s);
     l.shadow_min_extent_m = float(l.shadow_min_extent_m * s);
-    l.shape_period_vox = period_vox(EARTH_SHAPE_PERIOD_M * s, p_voxel_m);
-    l.detail_period_vox = period_vox(EARTH_DETAIL_PERIOD_M * s, p_voxel_m);
-    l.weather_period_vox = period_vox(EARTH_WEATHER_PERIOD_M * s, p_voxel_m);
+    // Each period within the next longer one (at tiny voxels the frame's longest period would clamp them together): the
+    // weather at most a quarter of the warp, so the warp still moves weather tiles apart.
+    l.warp_period_vox = period_vox(EARTH_WARP_PERIOD_M * s, p_voxel_m);
+    l.weather_period_vox = ov::min(period_vox(EARTH_WEATHER_PERIOD_M * s, p_voxel_m), l.warp_period_vox / 4);
+    l.shape_period_vox = ov::min(period_vox(EARTH_SHAPE_PERIOD_M * s, p_voxel_m), l.weather_period_vox);
+    l.detail_period_vox = ov::min(period_vox(EARTH_DETAIL_PERIOD_M * s, p_voxel_m), l.shape_period_vox);
     return l;
 }
 
@@ -663,7 +694,7 @@ void Clouds::frame(const Float3 &p_camera_m, const Float3 &p_sun, const BaseSurf
     const uint64_t now = ov::now_usec();
     const double dt = last_usec != 0 ? double(now - last_usec) * 1e-6 : 0.0;
     last_usec = now;
-    const double period = double(layer_params.weather_period_vox) * double(frame_params.voxel_m);
+    const double period = double(layer_params.warp_period_vox) * double(frame_params.voxel_m);
     const double wind[3] = { wind_mps.x, wind_mps.y, wind_mps.z };
     for (int a = 0; a < 3; a++) {
         wind_offset[a] = std::fmod(wind_offset[a] + wind[a] * ov::min(dt, 0.25), period);

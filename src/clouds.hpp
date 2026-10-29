@@ -35,7 +35,8 @@
 // holds for any receiver under the layer; the hosts' terrain reads it once per fragment (cloud_sun_shadow).
 struct CloudLayer {
     // Earth's: a cumulus layer from 1.5 to 4 km, the shape noise repeating every ~12 km, the detail every ~1.5 km, the
-    // weather (cover and type) every ~48 km.
+    // weather (cover and type) every ~48 km, every read of them warped by an offset repeating every ~800 km (so the
+    // field does too, not every weather period).
     float bottom_m = 1500.0f;
     float top_m = 4000.0f;
     float extinction = 0.04f; // 1/m at density 1
@@ -46,10 +47,12 @@ struct CloudLayer {
     int shape_period_vox = 0;
     int detail_period_vox = 0;
     int weather_period_vox = 0;
+    int warp_period_vox = 0;
 
     static constexpr double EARTH_SHAPE_PERIOD_M = 12000.0;
     static constexpr double EARTH_DETAIL_PERIOD_M = 1500.0;
     static constexpr double EARTH_WEATHER_PERIOD_M = 48000.0;
+    static constexpr double EARTH_WARP_PERIOD_M = 800000.0; // 2^23 voxels at 5 cm: the frame's longest period
     // The bottom stays at least this many times the ground's relief above the base: the grid's march knows nothing of the
     // terrain, so a cloud must not reach into it (a mountain would be hidden behind the cloud inside it).
     static constexpr double RELIEF_BOTTOMS = 1.25;
@@ -72,6 +75,7 @@ struct CloudLayer {
         p_f("cloud_shape_period_vox", shape_period_vox);
         p_f("cloud_detail_period_vox", detail_period_vox);
         p_f("cloud_weather_period_vox", weather_period_vox);
+        p_f("cloud_warp_period_vox", warp_period_vox);
     }
 };
 
@@ -99,7 +103,7 @@ public:
     static constexpr float BLEND = 0.5f;
 
     // What changes per frame, as the pass's uniforms: the camera and the last frame's (render metres, the last moved
-    // with the render origin), the sun (unit, towards it), the wind's offset of the noise (metres, wrapped to the weather
+    // with the render origin), the sun (unit, towards it), the wind's offset of the noise (metres, wrapped to the warp
     // period), the march's reach (the horizon from the camera plus the layer top's, on the curvature sphere), the cover
     // in [0, 1], the frame's number (which texel of each block it marches), reset (no history: every texel marched),
     // the render origin's LOD0 voxel (low words: the shading frame) and the voxel size.
@@ -206,7 +210,7 @@ private:
     Frame frame_params;
     double curvature_m = 0.0; // the reach's sphere (Atmosphere::ms_radius_m)
     Float3 wind_mps;
-    double wind_offset[3] = { 0.0, 0.0, 0.0 }; // metres, wrapped to the weather period
+    double wind_offset[3] = { 0.0, 0.0, 0.0 }; // metres, wrapped to the warp period
     uint64_t last_usec = 0;
     bool has_camera = false;
     bool noise_dirty = true;

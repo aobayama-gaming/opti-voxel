@@ -105,7 +105,17 @@ that follow it.
   set by `VoxelSky.cloud_cover`, measured on the noise so the cover is about the fraction of sky covered); the type
   blends Schneider's stratus / stratocumulus / cumulus height gradients; the detail erodes the base (billows below,
   wisps above). Periods (Earth): shape ~12 km, detail ~1.5 km, weather ~48 km, each a power of two of voxels (the
-  shading frame), the wind's offset wrapped at the weather's.
+  shading frame). On their own the whole field repeated every weather period (on the flat world at 5 cm: the same clouds
+  every 26.2 km, the same shapes every 6.55 km, `--cam_pos` shifted top-down shots: 4% of cloud pixels differed a
+  weather period over). So every read is **warped** (`cloud_warp`): a smooth offset of two sine waves per axis, whole
+  cycles per a ~800 km period (`warp_period_vox`; at most 2^23 voxels, at least 4 weather periods), |k| = sqrt(5) cycles
+  and 0.015 periods each (`WARP_AMPLITUDE`: 6 km at 5 cm), carried by the wind with the noises (the clouds drift whole):
+  points a shape period apart read noises ~1.5 to 2 km apart (its features ~1.6 km), a weather period apart 5 to 9 km
+  (~6.5 km), the clouds stretched by 2 x 2 pi sqrt(5) x 0.015 = 0.42 at most (~0.2 typical). The field now repeats every
+  warp period (419 km at 5 cm; 34% of cloud pixels differ a weather period over, 42% a shape period over, ~42% for
+  unrelated fields at that cover), for +0.17 ms of cloud passes (1280x720, the video preset; measured before the passes
+  skipped the weather outside the layer). A warp read from the shape noise itself sheared the clouds into streaks (its
+  fine octaves: gradients ~1.5). The wind's offset wraps at the warp's period.
 - **Layer** (`CloudLayer::for_base`): Earth's 1.5 to 4 km, extinction 0.04 /m at density 1 (Hillaire 2016's cumulus
   range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
   s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is
@@ -141,7 +151,10 @@ that follow it.
 - **Checked:** unit tests (the layer's scale and lift, the periods, the substitution, the block, the shadow map's
   frame); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
   inside the flat world's layer, Earth from 100 km and the 2 km planet from the ground and from 4 km out.
-- **Limits:** the grid's 0.23 degrees show as jagged edges on a small planet seen whole; the reach is a horizon on the
+- **Limits:** the field still repeats every warp period, at most 2^23 voxels (`ShadeFrame::MAX_SHIFT`: 419 km at
+  5 cm; a tile index from the origin's high bits could hash each tile instead); the light march reuses its start
+  point's warp (as it does the weather); the plain cloud layer (`VoxelSky`'s `clouds.png`, without the volumetric
+  clouds) still tiles every `cloud_scale_m`; the grid's 0.23 degrees show as jagged edges on a small planet seen whole; the reach is a horizon on the
   base's curvature sphere, so a torus seen from space has clouds on its near side only; a cloud in front of terrain is
   composited by its front and mean distances, so a hill reaching into one would be cut by texels (the layer is lifted
   over the world's largest relief instead, so no cloud wraps a peak); the wind is a render-space vector, so on a planet
