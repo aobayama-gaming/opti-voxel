@@ -3,11 +3,19 @@
 #include "ov/math.hpp"
 #include "ov/str.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 // The climate's GLSL, generated from a table op for op with its CPU code in climate.cpp: the dual-number helpers, the
 // field terms and biome weights, and the pick.
 namespace Climate {
 
 namespace {
+
+// edge_raw in GLSL, op for op: cl_edge's first lines, and cl_edge_off's (one text, so the guards stay its test).
+constexpr const char GLSL_EDGE_RAW[] = R"glsl(    precise float raw0 = (x.w - anchor) * scale;
+    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
+)glsl";
 
 // flushed, dmul, dsub and edge_weight in GLSL, op for op.
 constexpr const char GLSL_CLIMATE_HELPERS[] = R"glsl(
@@ -30,8 +38,7 @@ vec4 cl_sub(vec4 a, vec4 b) {
 }
 
 vec4 cl_edge(vec4 x, float anchor, float scale) {
-    precise float raw0 = (x.w - anchor) * scale;
-    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
+EDGE_RAW
     if (!(raw > 0.0)) {
         return vec4(0.0);
     }
@@ -45,10 +52,26 @@ vec4 cl_edge(vec4 x, float anchor, float scale) {
 }
 )glsl";
 
+// edge_off in GLSL: whether cl_edge returns vec4(0.0).
+constexpr const char GLSL_EDGE_OFF[] = R"glsl(
+bool cl_edge_off(vec4 x, float anchor, float scale) {
+EDGE_RAW
+    return !(raw > 0.0);
+}
+)glsl";
+
+ov::str with_edge_raw(const char *p_text) {
+    return ov::replace_all(ov::replace_all(ov::str(p_text), "EDGE_RAW\n", GLSL_EDGE_RAW), "FLUSH", Cascade::glsl_flush());
+}
+
 } // namespace
 
 ov::str glsl_helpers() {
-    return ov::replace_all(ov::str(GLSL_CLIMATE_HELPERS), "FLUSH", Cascade::glsl_flush());
+    return with_edge_raw(GLSL_CLIMATE_HELPERS);
+}
+
+ov::str region_helpers_glsl() {
+    return with_edge_raw(GLSL_EDGE_OFF);
 }
 
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined) {
@@ -69,7 +92,7 @@ vec4 cl_scale(vec4 a, float k) {
 )glsl";
 }
 
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
+ov::str glsl_fields(const Table &p_table, const Cascade::Spec &p_spec) {
     using ExactNoise::glsl_float;
     ov::str code;
     auto channels = [](int p_base) { return ov::format("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
@@ -81,13 +104,53 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
             code += ov::format("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
         }
     }
-    code += "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
+    return code;
+}
+
+uint32_t guarded_regions(const Table &p_table) {
+    uint32_t used = 0u;
+    for (const Biome &b : p_table.biomes) {
+        used |= b.region >= 0 ? 1u << b.region : 0u;
+    }
+    for (const int r : p_table.gated) {
+        used |= 1u << r;
+    }
+    return used;
+}
+
+ov::str glsl_biome_weights(const Table &p_table, bool p_guards) {
+    ov::str code = "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
     const size_t n = p_table.biomes.size();
     for (size_t b = 0; b + 1 < n; b++) {
+        const int r = p_table.biomes[b].region;
+        if (p_guards && r >= 0) {
+            // Where its region is off, r_b is +0, so w_b is +0 and rest -= w_b leaves rest as it is.
+            code += ov::format("    vec4 w%d = vec4(0.0);\n    if (!rof%d) {\n", int64_t(b), int64_t(r));
+            code += glsl_edges_value(ov::format("r%d", int64_t(b)), p_table.biomes[b].edges);
+            code += ov::format("    w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n    }\n", int64_t(b), int64_t(b), int64_t(b));
+            continue;
+        }
         code += glsl_edges_value(ov::format("r%d", int64_t(b)), p_table.biomes[b].edges);
         code += ov::format("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
     }
     code += ov::format("    vec4 w%d = rest;\n", int64_t(n - 1));
+    return code;
+}
+
+ov::str region_off_glsl(const Table &p_table) {
+    using ExactNoise::glsl_float;
+    const uint32_t guarded = guarded_regions(p_table);
+    ov::str code;
+    for (int r = 0; r < int(p_table.regions.size()); r++) {
+        if ((guarded & (1u << r)) == 0u) {
+            continue;
+        }
+        ov::str any;
+        for (const Edge &e : p_table.regions[size_t(r)].edges) {
+            any += ov::format("%scl_edge_off(f%d, %s, %s)", any.empty() ? "" : " || ", e.field, glsl_float(e.anchor), glsl_float(e.scale));
+        }
+        code += ov::format("    bool rof%d = %s;\n", r, any);
+    }
     return code;
 }
 

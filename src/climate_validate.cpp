@@ -212,6 +212,15 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
     if (!err.empty()) {
         return where + err;
     }
+    // The region guards (Climate::guarded_regions) read a biome's weight as 0 wherever its region's edges are: they must be
+    // its first edges.
+    if (b.region >= 0) {
+        const std::vector<Edge> *re = b.region < int(p_table.regions.size()) ? &p_table.regions[size_t(b.region)].edges : nullptr;
+        auto same = [](const Edge &p_a, const Edge &p_b) { return p_a.field == p_b.field && p_a.anchor == p_b.anchor && p_a.scale == p_b.scale; };
+        if (!re || re->size() > b.edges.size() || !std::equal(re->begin(), re->end(), b.edges.begin(), same)) {
+            return where + ov::str("its edges must start with its region's.");
+        }
+    }
     if (b.terrace.step != 0.0f && !(moderate(b.terrace.step) && b.terrace.step > 0.0f)) {
         return where + ov::str("the terrace step must be > 0.");
     }

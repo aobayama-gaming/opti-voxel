@@ -562,6 +562,7 @@ private:
         if (p_d.has("region")) {
             const int r = region_ref(text(p_d, "region", where), where);
             if (r >= 0) {
+                b.region = r;
                 b.edges = table.regions[size_t(r)].edges;
             }
         }
