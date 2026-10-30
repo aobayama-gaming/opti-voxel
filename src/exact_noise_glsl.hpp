@@ -261,42 +261,6 @@ void perlin3_cross(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi, out vec4 
 }
 )glsl";
 
-// GLSL twin of ExactNoise::cell3 (after GLSL_EXACT_NOISE: octave_cell, cell_salt, det_rsqrt; and the int64 helpers:
-// i64_add, the neighbour cells' carry or borrow).
-inline ov::str glsl_cell3() {
-    return ov::replace_all(ov::str(R"glsl(
-vec4 cell3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
-    OctaveCell c = octave_cell(p, k, olo, ohi);
-    precise vec3 f = vec3(c.q) * uintBitsToFloat(FADE_FLUSH_BITS);
-    precise float best = 16.0;
-    precise vec3 eb = vec3(0.0);
-    for (int dx = -1; dx <= 1; dx++) {
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                ivec3 d = ivec3(dx, dy, dz);
-                uvec3 lo = c.lo;
-                ivec3 hi = c.hi;
-                i64_add(lo, hi, d);
-                uvec3 h = pcg3d(lo ^ cell_salt(hi, seed));
-                precise vec3 e = (vec3(d) + vec3(h >> 8u) * uintBitsToFloat(FADE_FLUSH_BITS)) - f;
-                precise float d2 = e.x * e.x + e.y * e.y + e.z * e.z;
-                if (d2 < best) {
-                    best = d2;
-                    eb = e;
-                }
-            }
-        }
-    }
-    precise float min_d2 = uintBitsToFloat(CELL_MIN_D2_BITS);
-    precise float rs = det_rsqrt(best > min_d2 ? best : min_d2);
-    precise vec3 g = -(eb * rs);
-    precise float value = best * rs - CELL_MEAN;
-    return vec4(g, value);
-}
-)glsl"),
-            { { "CELL_MEAN", ExactNoise::glsl_float(ExactNoise::CELL_MEAN) }, { "CELL_MIN_D2_BITS", ExactNoise::glsl_uint(ExactNoise::CELL_MIN_D2_BITS) }, { "FADE_FLUSH_BITS", ExactNoise::glsl_uint(ExactNoise::FADE_FLUSH_BITS) } });
-}
-
 #undef OV_GLSL_PCG3D
 #undef OV_GLSL_NOISE_HEAD
 #undef OV_GLSL_PERLIN3_SETUP

@@ -12,10 +12,10 @@
 // The terrains CascadeSpike (cascade_spike.cpp) checks and times: "8" / "4" channels, "4c" LINEAR4 with the example
 // climate carried and modulating the ground, "4f" its fields without multipliers (carried only for the biome pick: the
 // cost of the ground materials alone), "4p" the plain climate (the example before shaped bands: amplitudes only), "4s"
-// the shaped test table (every shaped-band operation: shapes, the multifractal state, warps, cell noise, height terms,
-// terraces), "4d" adapter/godot/project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation with no
-// field group), "4r" adapter/godot/project/climate/region_test.json (two landforms behind regions, gated height terms, 11 groups), "4w"
-// adapter/godot/project/climate/world.json (the eight landforms behind regions of three climate axes, 17 groups; tuned for 25 LODs), "4g"
+// the shaped test table (every operation: shapes, the multifractal state, warps, the biomes' curves, stretched octaves),
+// "4d" adapter/godot/project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation
+// with no field group), "4w" adapter/godot/project/climate/world.json (eight biomes on three climate axes, 8 groups;
+// needs 25 LODs), "4g"
 // LINEAR4 on an Earth-sized sphere (SPHERE_RADIUS_M: the base's regions, BaseRegions, below its switch LOD).
 namespace CascadeCheckSets {
 
@@ -27,11 +27,10 @@ enum class SpikeSet {
     L4P,
     L4S,
     L4D,
-    L4R,
     L4W,
     L4G,
 };
-inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d", "4r", "4w", "4g" };
+inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g" };
 
 // The "4g" set's planet (metres), centred on the voxel (0, 0, 0).
 inline constexpr double SPHERE_RADIUS_M = 6371000.0;
@@ -77,7 +76,6 @@ inline void configure_variant(SDFCascade &p_sdf, SpikeSet p_v, int p_lods, Chunk
         const char *path = p_v == SpikeSet::L4P ? "res://climate/plain.json"
                 : p_v == SpikeSet::L4S          ? "res://climate/shaped_test.json"
                 : p_v == SpikeSet::L4D          ? "res://climate/fieldless_test.json"
-                : p_v == SpikeSet::L4R          ? "res://climate/region_test.json"
                 : p_v == SpikeSet::L4W          ? "res://climate/world.json"
                                                 : "res://climate/example.json";
         const ov::str err = Climate::load(path, data);

@@ -45,6 +45,16 @@ vec4 cl_edge(vec4 x, float anchor, float scale) {
 }
 )glsl";
 
+// A biome's indicator (the product of its edge smoothsteps, in list order) as statements defining `vec4 <p_var>` from the f<i> of glsl_weights.
+ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges) {
+    using ExactNoise::glsl_float;
+    ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
+    for (const Edge &e : p_edges) {
+        code += ov::format("    %s = cl_mul(%s, cl_edge(f%d, %s, %s));\n", p_var, p_var, e.field, glsl_float(e.anchor), glsl_float(e.scale));
+    }
+    return code;
+}
+
 } // namespace
 
 ov::str glsl_helpers() {
@@ -52,7 +62,7 @@ ov::str glsl_helpers() {
 }
 
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined) {
-    return (p_combined.modulation && p_combined.modulation->shaped()) || p_table.has_ground_terms();
+    return (p_combined.modulation && p_combined.modulation->shaped()) || p_table.has_curves();
 }
 
 ov::str shared_helpers_glsl() {
@@ -88,15 +98,6 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
         code += ov::format("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
     }
     code += ov::format("    vec4 w%d = rest;\n", int64_t(n - 1));
-    return code;
-}
-
-ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges) {
-    using ExactNoise::glsl_float;
-    ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
-    for (const Edge &e : p_edges) {
-        code += ov::format("    %s = cl_mul(%s, cl_edge(f%d, %s, %s));\n", p_var, p_var, e.field, glsl_float(e.anchor), glsl_float(e.scale));
-    }
     return code;
 }
 

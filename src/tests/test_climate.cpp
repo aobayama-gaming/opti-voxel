@@ -170,7 +170,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a"}, {"name": "b"}]})", "only the last biome" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 1}]}]})", "the last biome is the default" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "u", "min": 0, "fade": 1}]}, {"name": "b"}]})", "not a field" },
-        { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 1, "x": 2}]}]})", "doesn't have it" },
+        { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 1, "x": 2}]}]})", "the ground doesn't have" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 4000, "to_m": 9000, "x": 50}]}]})", "out of range" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4000, "x": -1}]}]})", ">= 0" },
         { R"({"biomes": [{"name": "a", "height_m": 100}]})", "unknown key 'height_m'" },
@@ -181,21 +181,15 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"fields": [{"name": "t", "seed": 1e20}], "biomes": [{"name": "a"}]})", "whole number" },
         { R"({"fields": [{"name": "t", "seed": 7.9}], "biomes": [{"name": "a"}]})", "whole number" },
         { R"({"fields": [{"name": "temp/2"}], "biomes": [{"name": "a"}]})", "identifier" },
-        { R"({"fields": [{"name": "t"}], "heights": [{"field": "t", "height_m": 1, "region": "r"}], "biomes": [{"name": "a"}]})", "'r' is not a region" },
-        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}],
-              "heights": [{"field": "t", "height_m": 1, "region": "r"}], "biomes": [{"name": "a"}]})",
-                "a gated term takes a curve" },
-        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]},
-              {"name": "r", "where": [{"field": "t", "max": 0, "fade": 1}]}], "biomes": [{"name": "a"}]})",
-                "used twice" },
-        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": []}], "biomes": [{"name": "a"}]})", "at least one edge" },
-        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r/2", "where": [{"field": "t", "min": 0, "fade": 1}]}], "biomes": [{"name": "a"}]})",
-                "identifier" },
-        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "region": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}, {"name": "b"}]})",
-                "'r' is not a region" },
-        { R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}],
-              "biomes": [{"name": "a", "region": "r"}]})",
-                "the last biome is the default" },
+        { R"({"fields": [{"name": "t"}], "regions": [], "biomes": [{"name": "a"}]})", "unknown key 'regions'" },
+        { R"({"fields": [{"name": "t"}], "heights": [], "biomes": [{"name": "a"}]})", "unknown key 'heights'" },
+        { R"({"fields": [{"name": "t", "noise": "cell"}], "biomes": [{"name": "a"}]})", "unknown key 'noise'" },
+        { R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 100, "amp": 1, "shape": "ridged"}]}], "biomes": [{"name": "a"}]})", "unknown key 'shape'" },
+        { R"({"biomes": [{"name": "a", "terrace": {"step_m": 40}}]})", "unknown key 'terrace'" },
+        { R"({"biomes": [{"name": "a", "curve": [[0, 0]]}]})", "at least 2 points" },
+        { R"({"biomes": [{"name": "a", "curve": [[0, 0], [0, 10]]}]})", "must increase" },
+        { R"({"biomes": [{"name": "a", "curve": [[0, 0], [10]]}]})", "[h, R(h)]" },
+        { R"({"biomes": [{"name": "a", "curve": [[0, 0], [100, 9000]]}]})", "over the ground's cap" },
     };
     for (const Case &c : cases) {
         CAPTURE(c.json);
@@ -212,15 +206,9 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         many += ov::format("%s{\"name\": \"f%d\"}", i ? ", " : "", i);
     }
     CHECK(ov::contains(parse_json(many + R"(], "biomes": [{"name": "a"}]})", g.ground, t), ov::format("at most %d", MAX_FIELDS)));
-    // A table whose gated list no longer matches its height terms (edited after parse) is refused, not read stale.
-    CHECK(parse_json(R"({"fields": [{"name": "t"}], "regions": [{"name": "r", "where": [{"field": "t", "min": 0, "fade": 1}]}],
-              "biomes": [{"name": "a"}]})",
-                  g.ground, t) == ov::str());
-    t.heights.push_back(HeightTerm{ 0, 1.0f, true, make_curve({ -1.0, 1.0 }, { -1.0, 1.0 }), 0 });
-    CHECK(ov::contains(validate(t, g.ground), "Table::gated"));
 }
 
-// max_ground_mult is validate's cap (climate_report exports it for tools/landforms/match.py): just under it parses,
+// max_ground_mult is validate's cap: just under it parses,
 // just over it is refused, for a plain and a shaped band.
 TEST_CASE("Climate: max_ground_mult is the largest multiplier validate accepts") {
     GroundFixture g(0.5, 15);
@@ -232,7 +220,7 @@ TEST_CASE("Climate: max_ground_mult is the largest multiplier validate accepts")
         };
         Table t;
         CLIMATE_REQUIRE(parse_json(table(1.0), g.ground, t) == ov::str());
-        const double cap = max_ground_mult(t, g.ground, t.biomes[0], t.biomes[0].amps[0].k);
+        const double cap = max_ground_mult(g.ground, t.biomes[0], t.biomes[0].amps[0].k);
         CHECK(cap > 1.0);
         CHECK(parse_json(table(0.99 * cap), g.ground, t) == ov::str());
         CHECK(ov::contains(parse_json(table(1.01 * cap), g.ground, t), "out of range"));
@@ -483,15 +471,14 @@ TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slo
 
 TEST_CASE("Climate: carried only where the ground needs it, refused where it can't apply") {
     GroundFixture g(0.05, 15);
-    // Multipliers on a field's octaves only would never reach the mesh (the fields are carried where the ground is
-    // modulated): refused.
+    // A biome plays the ground's octaves only: a climate field's are refused.
     Table t;
     const ov::str fields = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
             {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}], )";
     CHECK(ov::contains(parse_json(fields + R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
                        {"name": "b"}]})",
                                g.ground, t),
-            "needs a ground multiplier too"));
+            "the ground's octaves only"));
     // Fields without any multiplier (a pick only): carried nowhere in the ground's runs (no field scratch, no fields
     // variant), and its top lattice is the ground's.
     CLIMATE_REQUIRE(parse_json(fields + ov::str(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})"), g.ground, t) ==
@@ -667,7 +654,7 @@ TEST_CASE("Climate: a run's samples read the climate derived on the level above"
     const SampleCarry sc = sample_carry(*c.sdf.get_climate());
     CLIMATE_REQUIRE(sc.pick >= 0);
     CHECK(spec.carry_groups() > sc.count); // the bands' parts after the samples' terms
-    CHECK(spec.field_range().sample); // the example's terraces
+    CHECK(spec.field_range().sample); // the example's curves
     int64_t points = 0, bad = 0;
     for (const int lod : { 0, 4, 9 }) {
         Cascade::Box box;

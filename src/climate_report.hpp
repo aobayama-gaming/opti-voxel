@@ -10,8 +10,8 @@
 // lattice). Writes <out_dir>/report.md (per-biome share of the picks and mean weight, the pick drift, where each pair of
 // biomes meets nearest the centre with the player's --spawn, the ground under each biome, per-field range, CPU time per
 // point),
-// biomes_blend.png (debug colours weighted), biomes_pick.png (the picked biome) and field_<name>.png (each field,
-// grey, -max|v| .. +max|v|) and heights.f32 / heights.json (the surface heights, for tools/landforms/compare.py).
+// biomes_blend.png (debug colours weighted), biomes_pick.png (the picked biome), the ground's height and shading maps,
+// and field_<name>.png (each field, grey, -max|v| .. +max|v|).
 // p_lattice >= 0 sets m (the extent is then p_size * 2^m voxels). Godot: ClimateReportNode (tools/climate_report.sh).
 namespace ClimateReport {
 

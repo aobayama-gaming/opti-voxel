@@ -131,8 +131,7 @@ to every change, and a reviewer may reject a PR on any of them.
 | `docs/trees.md` | trees, moment blobs (far field), biome features (lava lakes, floating islands) | `tree_archetype*`, `moment_layers*`, `biome_features*` |
 | `docs/materials.md` | per-chunk palettes, biome ground materials | `material_library*`, page shader |
 | `docs/look.md` | sky, fog, the atmosphere, volumetric clouds, surface detail, wind | scenes, page shader, `atmosphere*`, `clouds*` |
-| `docs/climate.md` | climate fields and biomes, shaped bands, stretched octaves, regions, the biome mixer | `climate*`, `cascade_shaped_glsl*`, `debug/biome_mixer/` |
-| `docs/landforms.md` | landform tables and matching real heightmaps | `adapter/godot/project/climate/landforms/`, `tools/landforms/` |
+| `docs/climate.md` | the climate's model (fields, biomes playing the ground's octaves, curves), its implementation, the biome mixer | `climate*`, `cascade_shaped_glsl*`, `debug/biome_mixer/` |
 | `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `local_points_gpu*`, `chunk_memory*`, `subcube.hpp` |
 | `docs/testing.md` | every check tool and bench flag in detail, debug views, hole hunting | `tools/`, `adapter/godot/project/debug/` |
 | `docs/perf.md` | perf target, baselines, where the frame goes | |

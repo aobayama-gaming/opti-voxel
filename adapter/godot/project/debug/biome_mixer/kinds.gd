@@ -109,22 +109,11 @@ const KINDS := {
 	},
 	"curve": {
 		"title": "Height curve",
-		"hint": "A remap of the height (metres in, metres out) through its points: the engine's height + height_m * curve(ground). Past the ends it follows the height again. Drag points, double-click to add, right-click to remove.",
+		"hint": "A remap of the height (metres in, metres out) through its points: a biome's curve in the engine. Past the ends it follows the height again. Drag points, double-click to add, right-click to remove.",
 		"in": [["h", FIELD]],
 		"out": [["R(h)", FIELD]],
 		"params": [
 			{"name": "points", "type": "points", "default": []},
-		],
-	},
-	"terrace": {
-		"title": "Terrace",
-		"hint": "libnoise's Terrace every step_m, the engine's biome terraces; amount blends it in.",
-		"in": [["h", FIELD]],
-		"out": [["h", FIELD]],
-		"params": [
-			{"name": "step_m", "type": "float", "default": 40.0, "min": 0.5, "max": 500.0, "step": 0.5},
-			{"name": "invert", "type": "bool", "default": false},
-			{"name": "amount", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01},
 		],
 	},
 	"carve": {
@@ -152,7 +141,7 @@ const KINDS := {
 }
 
 # The kinds the Add menu lists, in order.
-const MENU := ["note", "shape", "multifractal", "warp", "note_warp", "mix", "add", "multiply", "constant", "curve", "terrace", "carve", "output"]
+const MENU := ["note", "shape", "multifractal", "warp", "note_warp", "mix", "add", "multiply", "constant", "curve", "carve", "output"]
 
 
 static func inputs(p_node: Dictionary) -> Array:

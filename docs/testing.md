@@ -19,15 +19,13 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   weight, the pick drift (the share of points whose pick at the coarsest modulated level differs: what the ground's
   coarsest modulated octave reads vs the material), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
-  `biomes_pick.png` / `ground_height.png` / `field_*.png`, and `heights.f32` + `heights.json` for `tools/landforms`.
-  Tune a table from it before any GPU run. To match a real heightmap: `uv run tools/landforms/match.py SITE TABLE --fit=3`
-  (`docs/landforms.md`).
+  `biomes_pick.png` / `ground_height.png` / `field_*.png`. Tune a table from it before any GPU run.
 - `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
   (`CascadeSpike` over the core's `CascadeCheck`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a
   window, ~3 min; on Dawn: `ov_dawn --cascade-check='{"timing":false}'`): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
-  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers; `4r` the two-landform region table) (G1); the LOD relation on the GPU outputs (G3, at the levels no climate modulates: a modulated level reads the carry its parent level derives from fields the parent chunk's samples don't carry); the discoverer's point items vs
+  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers) (G1); the LOD relation on the GPU outputs (G3, at the levels no climate modulates: a modulated level reads the carry its parent level derives from fields the parent chunk's samples don't carry); the discoverer's point items vs
   `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade
   with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample_sdf` + skirt (`--table`, G9); the
   example climate's per-sample biome material vs `SDFCascade::ground_material`, every LOD (`--biomes`, G10); GPU timestamps of the passes for

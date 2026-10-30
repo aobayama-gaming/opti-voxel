@@ -5,7 +5,7 @@
 #   tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--center=U,V] [--lattice=M]
 #
 # Outputs land in bench/results/<timestamp>-climate/: report.md, biomes_*.png, ground_height.png, ground_shaded.png,
-# ground_normals.png, field_*.png, heights.f32 + heights.json (tools/landforms/compare.py), godot.log.
+# ground_normals.png, field_*.png, godot.log.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 the table was refused.
 set -uo pipefail
 

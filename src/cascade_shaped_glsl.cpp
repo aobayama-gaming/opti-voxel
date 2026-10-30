@@ -10,21 +10,12 @@ bool shaped(const Spec &p_spec) {
     return p_spec.modulation && p_spec.modulation->shaped();
 }
 
-namespace {
-
-// Group p_group's noise function: perlin3, or cell3 (Spec::cell_groups, ExactNoise::glsl_cell3).
-const char *noise_function(const Spec &p_spec, int p_group) {
-    return ((p_spec.cell_groups >> p_group) & 1u) ? "cell3" : "perlin3";
-}
-
-} // namespace
-
 ov::str noise_code(const Spec &p_spec, int p_group, const ov::str &p_pos) {
     const ov::str args = ", int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n";
     if (!p_spec.stretched(p_group)) {
-        return ov::format("    vec4 g = %s(", noise_function(p_spec, p_group)) + p_pos + args;
+        return "    vec4 g = perlin3(" + p_pos + args;
     }
-    return ov::format("    vec4 g = %s(base_stretched(", noise_function(p_spec, p_group)) + p_pos + ov::str(", int(band.info.w))") + args +
+    return "    vec4 g = perlin3(base_stretched(" + p_pos + ov::str(", int(band.info.w))") + args +
             "    g = base_stretch_gradient(g, int(band.info.w));\n";
 }
 

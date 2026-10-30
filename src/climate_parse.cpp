@@ -15,54 +15,41 @@ namespace Climate {
 
 // The format (JSON; distances in metres, rounded to whole octaves 2^k voxels; "comment" keys are ignored, any
 // other unknown key is an error):
-//   { "fields": [ field... ], "regions": [ region... ] (optional), "heights": [ height... ] (optional),
-//     "ground_stretch": [ stretch... ] (optional), "biomes": [ biome..., default biome ] }
-//   field:  { "name": "temperature", "seed": 7 (optional, else a hash of the name), "noise": "perlin" | "cell" (optional),
-//             "bands": [ { "wavelength_m": 5000, "amp": 1, shape (optional), "stretch_y": 1 (optional) }
-//                      | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional), shape (optional) } ],
+//   { "fields": [ field... ], "ground_stretch": [ stretch... ] (optional), "biomes": [ biome..., default biome ] }
+//   field:  { "name": "temperature", "seed": 7 (optional, else a hash of the name),
+//             "bands": [ { "wavelength_m": 5000, "amp": 1 } | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional) } ],
 //             "terms": [ { "source": "ground", "per_m": -0.002 } | { "source": "<earlier field>", "x": 0.5 } ] }
-//   stretch: { "from_m": 100, "to_m": 30000000 (or "wavelength_m"), "stretch_y": 4 }: the ground's octaves in range
-//           read their noise squeezed 4 times along the base's up (y on the flat world: their wavelength along it 4
-//           times the tangent ones); a field band takes
-//           "stretch_y" too. A power of two; octave k takes at most 2^(k - 3) of it (BaseSurface::stretched: a range's finest
-//           octaves are stretched less), and no octave is stretched twice. The ground is a 3D noise
-//           whose vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs (steep
-//           landforms: mountains, cliff faces, valley walls, tools/landforms); stretched octaves keep it a height field
-//           where they dominate.
-//   shape:  "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
-//           2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A band
-//           inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
-//   region: { "name": "cold", "where": [ edge... ] (a biome's "where") }: a part of the fields' space, for several
-//           landforms in one table (macro climate fields as its edges). A biome's or a height's "region" names one.
-//   height: { "field": "continent", "height_m": 2048, "curve": [[x, y], ...] (optional, x increasing),
-//             "region": "cold" (optional, with a curve) }: the ground adds height_m * curve(field) at each sample
-//           (libnoise's Curve), height_m * field without a curve, times the region's value with one (1 in its core,
-//           0 outside its fades: a landform's cliff, trough or coast only in its region).
-//     A cell noise field ("noise": "cell") is Worley F1 (ExactNoise::cell3), plain bands only: read through a height
-//     term (dunes, cells).
 //     A range is every octave from from_m to to_m that the ground has (its octaves depend on the LOD count: the
 //     table covers the whole spectrum at any count), amp at to_m (the coarsest) times persistence per finer octave.
 //     Octave k's seed and lattice are make_octave(field seed, k): editing one band leaves the others' unchanged.
-//     A ground term reads the ground's height above the datum (per metre); a field term that field's value.
-//   biome:  { "name": "volcanic", "region": "warm" (optional: its edges come before the biome's own),
+//     A ground term reads the ground's height above the datum (per metre: colder higher up); a field term that
+//     field's value.
+//   stretch: { "from_m": 100, "to_m": 30000000 (or "wavelength_m"), "stretch_y": 4 }: the ground's octaves in range
+//           read their noise squeezed 4 times along the base's up (y on the flat world: their wavelength along it 4
+//           times the tangent ones). A power of two; octave k takes at most 2^(k - 3) of it (BaseSurface::stretched: a
+//           range's finest octaves are stretched less), and no octave is stretched twice. The ground is a 3D noise
+//           whose vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs; stretched
+//           octaves keep it a height field where they dominate.
+//   biome:  { "name": "volcanic",
 //             "where": [ { "field": "temperature", "min": 0.5, "max": 2 (either or both), "fade": 0.1
 //                          (or "fade_min" / "fade_max") } ],
-//             "amp": [ { "field": "ground" | "<field>", "wavelength_m": 4000 | "from_m": 1000, "to_m": 20000, "x": 3 (default 1),
-//                        shape (optional, else the band's own), "multifractal": 2 (gain, ground only),
-//                        "warp_m": 80, "warp_fields": ["wx", "wy", "wz"] (ground only) } ],
-//             "terrace": { "step_m": 40, "invert": false } (optional),
+//             "amp": [ { "field": "ground" (optional), "wavelength_m": 4000 | "from_m": 1000, "to_m": 20000, "x": 3 (default 1),
+//                        shape (optional, else plain), "multifractal": 2 (gain), "warp_m": 80, "warp_fields": ["wx", "wy", "wz"] } ],
+//             "curve": [[h, R], ...] (optional, h increasing, metres),
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
 //             "debug_color": "#c04020" }
+//   shape:  "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
+//           2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A band
+//           inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
 //     "multifractal": the octave is weighted by clamp(gain (1 - c), 0, 1), c the multifractal state's complement (the
 //     previous multifractal octave's weighted signal: Musgrave's ridged multifractal with gain 2 and the ridged shape,
 //     hybrid with 1 and plain + offset). "warp_m": its noise is read displaced by warp_m times the three fields' values
-//     (libnoise's turbulence). "terrace": libnoise's Terrace of the ground height every step_m, blended by the weight.
-//     The region is 1 between min and max, fading to 0 over the fade outside. A range of "amp" covers the
-//     octaves the field has in it (none, past the ground's octaves at this LOD count). Octave k reads the weights
-//     from the fields' octaves coarser than k only (Cascade::Modulation): a region shapes the ground's octaves up to
-//     about the size of its fields' octaves, so flattening the continental octaves takes continental regions. The
-//     last biome is the default: no "where". "surface": the biome's ground colours
-//     (sRGB) on gentle and steep slopes; without it, the procedural ground's.
+//     (libnoise's turbulence). "curve": the ground height h becomes R(h) where the biome's weight is 1 (R - h through
+//     libnoise's cubic, constant past the ends; Biome). The biome is 1 between min and max, fading to 0 over the fade
+//     outside. An "amp" entry plays the ground's octaves (a biome's notes: climate fields are never multiplied); a range
+//     covers the ones the ground has in it (none, past them at this LOD count). Octave k reads the weights from the fields' octaves coarser than k only (Cascade::Modulation). The last
+//     biome is the default: no "where". "surface": the biome's ground colours (sRGB) on gentle and steep slopes;
+//     without it, the procedural ground's.
 namespace {
 
 class Parser {
@@ -73,7 +60,7 @@ public:
     ov::str error;
 
     void run(const ov::Value &p_data) {
-        if (!keys(p_data, "climate", { "fields", "regions", "biomes", "heights", "ground_stretch" })) {
+        if (!keys(p_data, "climate", { "fields", "biomes", "ground_stretch" })) {
             return;
         }
         const ov::Value stretch = array(p_data, "ground_stretch", "climate");
@@ -84,19 +71,10 @@ public:
         for (int64_t i = 0; i < int64_t(fields.size()) && error.empty(); i++) {
             field(dict(fields[i], ov::format("field %d", i)), i);
         }
-        const ov::Value regions = array(p_data, "regions", "climate");
-        for (int64_t i = 0; i < int64_t(regions.size()) && error.empty(); i++) {
-            region(dict(regions[i], ov::format("region %d", i)), i);
-        }
-        const ov::Value heights = array(p_data, "heights", "climate");
-        for (int64_t i = 0; i < int64_t(heights.size()) && error.empty(); i++) {
-            height(dict(heights[i], ov::format("height %d", i)), ov::format("height %d", i));
-        }
         const ov::Value biomes = array(p_data, "biomes", "climate");
         for (int64_t i = 0; i < int64_t(biomes.size()) && error.empty(); i++) {
             biome(dict(biomes[i], ov::format("biome %d", i)), i);
         }
-        table.gated = gated_regions(table);
     }
 
 private:
@@ -215,9 +193,10 @@ private:
         return h;
     }
 
-    // A shape (shape, scale, offset or coeffs) of an entry: the plain one without any. p_state: the entry weights its
-    // octave by the multifractal state, the only reader of a shape's constant term.
-    bool shape(const ov::Value &p_d, const ov::str &p_where, bool p_state, Shape &r_s) {
+    // A shape (shape, scale, offset or coeffs) of an entry: the plain one without any. Only a multifractal entry's state
+    // reads a shape's constant term.
+    bool shape(const ov::Value &p_d, const ov::str &p_where, Shape &r_s) {
+        const bool state = p_d.has("multifractal");
         if (p_d.has("coeffs")) {
             const ov::Value c = array(p_d, "coeffs", p_where);
             if (c.size() != 4 || p_d.has("shape")) {
@@ -231,7 +210,7 @@ private:
                     fail(p_where, "'coeffs' is 4 numbers.");
                 }
             }
-            if (r_s.c[0] != 0.0f && !p_state) {
+            if (r_s.c[0] != 0.0f && !state) {
                 fail(p_where, "the constant coefficient only counts in a multifractal (a band is inserted without its mean).");
             }
             return true;
@@ -245,7 +224,7 @@ private:
         const double o = number(p_d, "offset", p_where, ridged ? 1.0 : 0.0);
         // Plain, billow and square: the offset is the constant term, inserted without its mean (Cascade::NOISE_*_MEAN):
         // only a multifractal's state reads it. Ridged's (o - |a n|)^2 also scales |n| by it.
-        if (p_d.has("offset") && !ridged && !p_state) {
+        if (p_d.has("offset") && !ridged && !state) {
             fail(p_where, "'offset' only counts in a multifractal (a plain, billow or square band is inserted without its mean).");
             return true;
         }
@@ -264,53 +243,41 @@ private:
         return true;
     }
 
-    // "stretch_y": a power of two >= 1 (1: none), as log2; octave k's at most k - the insertion shift (its insertion
-    // lattice divides exactly, BaseSurface::stretched).
-    int stretch(const ov::Value &p_d, const ov::str &p_where) {
-        const double s = number(p_d, "stretch_y", p_where, 1.0);
-        const int j = int(std::lround(std::log2(std::max(s, 1.0))));
-        if (!(s >= 1.0 && s <= std::ldexp(1.0, MAX_STRETCH) && std::ldexp(1.0, j) == s)) {
-            fail(p_where, ov::format("'stretch_y' is a power of two in [1, 2^%d].", MAX_STRETCH));
-            return 0;
-        }
-        return j;
-    }
-
-    static int octave_stretch(int p_j, int p_k) { return std::max(0, std::min(p_j, p_k - ExactNoise::BAND_SHIFT)); }
-
     // { "from_m": 100, "to_m": 30000000 | "wavelength_m": 400, "stretch_y": 4 }: the ground's octaves in range read
-    // their noise at y / stretch.
+    // their noise at y / stretch. "stretch_y": a power of two >= 1 (1: none), as log2; octave k's at most k - the
+    // insertion shift (its insertion lattice divides exactly, BaseSurface::stretched).
     void ground_stretch(const ov::Value &p_d, const ov::str &p_where) {
         int lo = 0, hi = 0;
         if (!keys(p_d, p_where, { "wavelength_m", "from_m", "to_m", "stretch_y" }) || !octave_range(p_d, p_where, lo, hi)) {
             return;
         }
-        const int j = stretch(p_d, p_where);
+        const double s = number(p_d, "stretch_y", p_where, 1.0);
+        const int j = int(std::lround(std::log2(std::max(s, 1.0))));
+        if (!(s >= 1.0 && s <= std::ldexp(1.0, MAX_STRETCH) && std::ldexp(1.0, j) == s)) {
+            fail(p_where, ov::format("'stretch_y' is a power of two in [1, 2^%d].", MAX_STRETCH));
+            return;
+        }
         for (int k = lo; k <= hi; k++) {
-            for (const std::pair<int, int> &s : table.ground_stretch) {
-                if (s.first == k) {
+            for (const std::pair<int, int> &st : table.ground_stretch) {
+                if (st.first == k) {
                     fail(p_where, ov::format("octave k = %d is stretched twice.", k));
                     return;
                 }
             }
-            const int s = octave_stretch(j, k);
-            if (s > 0) {
-                table.ground_stretch.emplace_back(k, s);
+            const int sk = std::max(0, std::min(j, k - ExactNoise::BAND_SHIFT));
+            if (sk > 0) {
+                table.ground_stretch.emplace_back(k, sk);
             }
         }
     }
 
     void bands(const ov::Value &p_d, const ov::str &p_where, Field &r_f) {
         int lo = 0, hi = 0;
-        if (!keys(p_d, p_where, { "wavelength_m", "from_m", "to_m", "amp", "persistence", "shape", "scale", "offset", "coeffs", "stretch_y" }) ||
-                !octave_range(p_d, p_where, lo, hi)) {
+        if (!keys(p_d, p_where, { "wavelength_m", "from_m", "to_m", "amp", "persistence" }) || !octave_range(p_d, p_where, lo, hi)) {
             return;
         }
-        const int j = stretch(p_d, p_where);
         const double amp = number(p_d, "amp", p_where);
         const double persistence = number(p_d, "persistence", p_where, 1.0);
-        Shape sh;
-        shape(p_d, p_where, false, sh);
         // A range keeps the ground's octaves (another LOD count keeps another part of it, each octave at the same
         // amplitude); a single wavelength outside them is refused by validate().
         const bool range = lo != hi;
@@ -319,8 +286,6 @@ private:
                 continue;
             }
             r_f.bands.push_back(ExactNoise::make_octave(r_f.seed, uint32_t(k), k, float(amp * std::pow(persistence, hi - k))));
-            r_f.bands.back().stretch = octave_stretch(j, k);
-            r_f.shapes.push_back(sh);
         }
     }
 
@@ -336,19 +301,12 @@ private:
     }
 
     void field(const ov::Value &p_d, int64_t p_i) {
-        if (!keys(p_d, ov::format("field %d", p_i), { "name", "seed", "noise", "bands", "terms" })) {
+        if (!keys(p_d, ov::format("field %d", p_i), { "name", "seed", "bands", "terms" })) {
             return;
         }
         Field f;
         f.name = text(p_d, "name", ov::format("field %d", p_i));
         const ov::str where = "field '" + f.name + ov::str("'");
-        if (p_d.has("noise")) {
-            const ov::str noise = text(p_d, "noise", where);
-            f.cell = noise == "cell";
-            if (!f.cell && noise != "perlin") {
-                fail(where, "'noise' is perlin or cell.");
-            }
-        }
         f.seed = name_hash(f.name);
         if (p_d.has("seed")) {
             const double seed = number(p_d, "seed", where);
@@ -363,16 +321,7 @@ private:
         for (int64_t i = 0; i < int64_t(band_list.size()) && error.empty(); i++) {
             bands(dict(band_list[i], band_where), band_where, f);
         }
-        // Coarsest first, each band with its shape.
-        std::vector<std::pair<Cascade::Band, Shape>> sorted;
-        for (size_t i = 0; i < f.bands.size(); i++) {
-            sorted.emplace_back(f.bands[i], f.shapes[i]);
-        }
-        std::stable_sort(sorted.begin(), sorted.end(), [](const auto &p_a, const auto &p_b) { return p_a.first.k > p_b.first.k; });
-        for (size_t i = 0; i < sorted.size(); i++) {
-            f.bands[i] = sorted[i].first;
-            f.shapes[i] = sorted[i].second;
-        }
+        std::stable_sort(f.bands.begin(), f.bands.end(), [](const Cascade::Band &p_a, const Cascade::Band &p_b) { return p_a.k > p_b.k; }); // coarsest first
         const ov::Value terms = array(p_d, "terms", where);
         const ov::str term_where = where + ov::str(" term");
         for (int64_t i = 0; i < int64_t(terms.size()) && error.empty(); i++) {
@@ -381,45 +330,33 @@ private:
         table.fields.push_back(f);
     }
 
-    // { "field": f, "height_m": H, "curve": [[x, y], ...] (optional), "region": r (optional) }: the ground adds
-    // H * curve(f) (H * f), times region r.
-    void height(const ov::Value &p_d, const ov::str &p_where) {
-        if (!keys(p_d, p_where, { "field", "height_m", "curve", "region" })) {
-            return;
-        }
-        HeightTerm h;
-        h.field = source(text(p_d, "field", p_where), p_where, false, int(table.fields.size()), "a field");
-        h.region = p_d.has("region") ? region_ref(text(p_d, "region", p_where), p_where) : -1;
-        h.coef = float(number(p_d, "height_m", p_where) / ground.voxel_size);
-        if (p_d.has("curve")) {
-            const ov::Value pts = array(p_d, "curve", p_where);
-            std::vector<double> x, y;
-            for (int64_t i = 0; i < int64_t(pts.size()); i++) {
-                const ov::Value pt = pts[i].get_type() == ov::Value::ARRAY ? pts[i] : ov::Value();
-                const bool ok = pt.size() == 2 && is_number(pt[0]) && is_number(pt[1]);
-                if (!ok) {
-                    fail(p_where, "a curve point is [x, y].");
-                    return;
-                }
-                x.push_back(pt[0].as_double());
-                y.push_back(pt[1].as_double());
-                if (x.size() > 1 && !(x.back() > x[x.size() - 2])) {
-                    fail(p_where, "the curve's x must increase.");
-                    return;
-                }
-                if (!std::isfinite(x.back()) || !std::isfinite(y.back()) || std::fabs(y.back()) > 1e6) {
-                    fail(p_where, "curve points must be finite (|y| <= 1e6).");
-                    return;
-                }
-            }
-            if (x.size() < 2) {
-                fail(p_where, "a curve has at least 2 points.");
+    // A biome's "curve": [[h, R], ...] (metres, h increasing): C = R - h through the points, in LOD0 voxels.
+    void curve(const ov::Value &p_d, const ov::str &p_where, Biome &r_b) {
+        const ov::Value pts = array(p_d, "curve", p_where);
+        std::vector<double> x, y;
+        for (int64_t i = 0; i < int64_t(pts.size()); i++) {
+            const ov::Value pt = pts[i].get_type() == ov::Value::ARRAY ? pts[i] : ov::Value();
+            if (!(pt.size() == 2 && is_number(pt[0]) && is_number(pt[1]))) {
+                fail(p_where, "a curve point is [h, R(h)] in metres.");
                 return;
             }
-            h.has_curve = true;
-            h.curve = make_curve(x, y);
+            const double h = pt[0].as_double(), r = pt[1].as_double();
+            if (!std::isfinite(h) || !std::isfinite(r)) {
+                fail(p_where, "curve points must be finite.");
+                return;
+            }
+            x.push_back(h / ground.voxel_size);
+            y.push_back((r - h) / ground.voxel_size);
+            if (x.size() > 1 && !(x.back() > x[x.size() - 2])) {
+                fail(p_where, "the curve's h must increase.");
+                return;
+            }
         }
-        table.heights.push_back(h);
+        if (x.size() < 2) {
+            fail(p_where, "a curve has at least 2 points.");
+            return;
+        }
+        r_b.curve = make_curve(x, y);
     }
 
     void edges(const ov::Value &p_d, const ov::str &p_where, std::vector<Edge> &r_edges) {
@@ -447,30 +384,6 @@ private:
         side("max", "fade_max", -1.0);
     }
 
-    void region(const ov::Value &p_d, int64_t p_i) {
-        const ov::str at = ov::format("region %d", p_i);
-        if (!keys(p_d, at, { "name", "where" })) {
-            return;
-        }
-        Region r;
-        r.name = text(p_d, "name", at);
-        const ov::str where = "region '" + r.name + ov::str("' where");
-        const ov::Value sides = array(p_d, "where", where);
-        for (int64_t i = 0; i < int64_t(sides.size()) && error.empty(); i++) {
-            edges(dict(sides[i], where), where, r.edges);
-        }
-        table.regions.push_back(r);
-    }
-
-    // The region a name refers to (declared under "regions"), -1 and an error otherwise.
-    int region_ref(const ov::str &p_name, const ov::str &p_where) {
-        const int r = table.region_index(p_name);
-        if (r < 0) {
-            fail(p_where, "'" + p_name + ov::str("' is not a region."));
-        }
-        return r;
-    }
-
     void amps(const ov::Value &p_d, const ov::str &p_where, Climate::Biome &r_b) {
         int lo = 0, hi = 0;
         if (!keys(p_d, p_where,
@@ -478,10 +391,13 @@ private:
                 !octave_range(p_d, p_where, lo, hi)) {
             return;
         }
+        if (p_d.has("field") && text(p_d, "field", p_where) != "ground") {
+            fail(p_where, "a biome plays the ground's octaves only ('field': 'ground').");
+            return;
+        }
         Amp proto;
-        proto.field = source(text(p_d, "field", p_where), p_where, true, int(table.fields.size()), "the ground or a field");
         proto.mult = float(number(p_d, "x", p_where, 1.0));
-        proto.has_shape = shape(p_d, p_where, p_d.has("multifractal"), proto.shape);
+        proto.has_shape = shape(p_d, p_where, proto.shape);
         proto.gain = float(number(p_d, "multifractal", p_where, 0.0));
         proto.warp = float(number(p_d, "warp_m", p_where, 0.0) / ground.voxel_size);
         const ov::Value wf = array(p_d, "warp_fields", p_where);
@@ -491,9 +407,9 @@ private:
         for (int64_t i = 0; i < int64_t(wf.size()) && i < 3 && error.empty(); i++) {
             proto.warp_fields[i] = source(wf[i].get_type() == ov::Value::STRING ? wf[i].as_str() : ov::str(), p_where, false, int(table.fields.size()), "a field");
         }
-        const std::vector<Cascade::Band> *bands = bands_of(table, ground, proto.field);
+        const std::vector<Cascade::Band> *bands = bands_of(table, ground, GROUND);
         if (!error.empty() || bands == nullptr) {
-            fail(p_where, "no such field.");
+            fail(p_where, "there is no ground.");
             return;
         }
         auto add = [&](int p_k) {
@@ -513,7 +429,7 @@ private:
         }
         // A range wholly past the ground's octaves names none at this LOD count (like a field's band range).
         if (r_b.amps.size() == before && lo <= ground.k_max && hi >= ExactNoise::BAND_SHIFT) {
-            fail(p_where, "the field has no octave in that range.");
+            fail(p_where, "the ground has no octave in that range.");
         }
     }
 
@@ -553,18 +469,12 @@ private:
     }
 
     void biome(const ov::Value &p_d, int64_t p_i) {
-        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "region", "where", "amp", "terrace", "surface", "debug_color" })) {
+        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "where", "amp", "curve", "surface", "debug_color" })) {
             return;
         }
         Climate::Biome b;
         b.name = text(p_d, "name", ov::format("biome %d", p_i));
         const ov::str where = "biome '" + b.name + ov::str("'");
-        if (p_d.has("region")) {
-            const int r = region_ref(text(p_d, "region", where), where);
-            if (r >= 0) {
-                b.edges = table.regions[size_t(r)].edges;
-            }
-        }
         const ov::Value sides = array(p_d, "where", where);
         const ov::str edge_where = where + ov::str(" where");
         for (int64_t i = 0; i < int64_t(sides.size()) && error.empty(); i++) {
@@ -575,21 +485,8 @@ private:
         for (int64_t i = 0; i < int64_t(amp.size()) && error.empty(); i++) {
             amps(dict(amp[i], amp_where), amp_where, b);
         }
-        if (p_d.has("terrace")) {
-            const ov::str tw = where + ov::str(" terrace");
-            const ov::Value t = dict(p_d["terrace"], tw);
-            if (keys(t, tw, { "step_m", "invert" })) {
-                const double step = number(t, "step_m", tw) / ground.voxel_size;
-                if (error.empty() && !(float(step) > 0.0f)) {
-                    fail(tw, "the terrace step must be > 0.");
-                }
-                if (t.has("invert") && t["invert"].get_type() != ov::Value::BOOL) {
-                    fail_key(tw, "invert", "must be true or false.");
-                }
-                b.terrace.step = float(step);
-                b.terrace.inv_step = float(1.0 / step);
-                b.terrace.invert = t.has("invert") && t["invert"].as_bool();
-            }
+        if (p_d.has("curve") && error.empty()) {
+            curve(p_d, where + ov::str(" curve"), b);
         }
         if (p_d.has("surface")) {
             surface(dict(p_d["surface"], where + ov::str(" surface")), where + ov::str(" surface"), b.surface);
