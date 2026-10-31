@@ -132,14 +132,15 @@ graph (GraphEdit), raymarched live beside it; a design tool, not the engine's pa
 turning a graph into a table's biome is the next step).
 
 - **Nodes** (`kinds.gd`): *Note* (the ground's octave k, `make_octave(SEED, ground_top - k, k)` ported in `octaves.gd`,
-  pinned against `test_exact_noise.cpp`: every biome plays the same notes, so a note has no seed of its own; an
-  optional warp input moves where it is read, `warp_m` metres per unit; `stretch_y` reads it at y / stretch from the
-  datum, as `ground_stretch`), *Shape* (`c0 + c1 n + c2 |n| + c3 n^2` with `|n|` smoothed as `Cascade::smooth_abs`;
+  pinned against `test_exact_noise.cpp`: every biome plays the same notes, so a note has no seed of its own. The notes
+  are fixed: a model always has one per k, K_MIN .. `ground_top` (`Kinds.fix_notes` on every load: a missing one comes
+  back as a silent row at volume 0, an extra or out-of-range one goes), none can be added, deleted or moved to another
+  k, and a Mix row's x leaves its note silent. Its `warp` switch, as a biome's `warp_m` on that octave in the engine,
+  reads it at the point moved by the climate's warp, `warp_m` metres per unit, or by the Note warp linked into its
+  port; `stretch_y` reads it at y / stretch from the datum, as `ground_stretch`), *Shape* (`c0 + c1 n + c2 |n| + c3 n^2` with `|n|` smoothed as `Cascade::smooth_abs`;
   presets, scale and offset as `climate_parse.cpp`), *Multifractal* (`w = clamp(gain * chain in)`, the signal times w,
-  chain out `w * phi` to the next finer note: the engine's state, wired), *Climate warp* (the climate's three warp
-  fields, a model's `climate_warp`, world.json's wx, wy, wz by default (`Kinds.CLIMATE_WARP`): no per-biome settings,
-  one table slot however many nodes; the preview reads its 12 octaves per pixel, the engine interpolates them from
-  their coarse lattices), *Note warp* (preview only, the cheap warp: x, y, z are Notes read earlier in the table,
+  chain out `w * phi` to the next finer note: the engine's state, wired), *Note warp* (preview only, the cheap warp
+  instead of the climate's for the warped notes linked to it: x, y, z are Notes read earlier in the table,
   `F * N` of their rows, so notes the biome plays cost no read; a note warped by a finer one is warned of; the engine
   would need warp notes in a table's band, the chain rule from their gradients), *Mix* (rows of volume x the ground's
   amplitude lambda / 8 capped at 3.3 km, mute, solo, centre = the shape's mean out as the engine inserts bands), *Add*
@@ -163,7 +164,13 @@ turning a graph into a table's biome is the next step).
 - **Budget**: over the view, what the biome reads per point (its notes, the climate warp's octaves per axis, the notes
   moved by a Note warp for free, against plain ground's), its relief bound, the row that moves the most and how long
   the view took to sharpen; each Mix row shows its swing (volume x lambda / 8 x the shaped note's bound) and its share
-  of the Mix's. A row's x takes it out with the nodes only it used (`Kinds.cut_row`); a node's x or Delete removes it
-  and the Mix row it played (`Kinds.cut_nodes`); `--check` checks both on the mountain and plain ground.
-- **Import** (`import_table.gd`): a biome of `world.json` as a graph (its ground multipliers, shapes, multifractal
-  chain, warp fields, `ground_stretch`, its curve, colours). Biomes save to `climate/biomes/*.biome.json`.
+  of the Mix's. A row's x takes it out with the nodes only it used but its note (`Kinds.cut_row`); a node's x or Delete
+  removes it and the Mix row it played, never a note (`Kinds.cut_nodes`); `--check` checks both on the mountain and
+  plain ground, every graph's fixed notes, and an old file's Climate warp node loading as its notes' warp switches.
+- **The climate's warp** (wx, wy, wz): a model's `climate_warp`, world.json's three warp fields by default
+  (`Kinds.CLIMATE_WARP`), shared by every biome: one table slot however many notes it moves; the preview reads its 12
+  octaves per pixel, the engine interpolates them from their coarse lattices. It was a node (*Climate warp*) wired
+  into each note before the notes' warp switch.
+- **Import** (`import_table.gd`): a biome of `world.json` as a graph (every note, its ground multipliers as volumes, 0
+  for a silenced octave, shapes, multifractal chain, warped octaves as warp switches with their `warp_m`, the warp
+  fields as the climate warp, `ground_stretch`, its curve, colours); *Plain ground* is every note at volume 1. Biomes save to `climate/biomes/*.biome.json`.

@@ -42,7 +42,7 @@ var mix_rows := {}  # Mix id -> its rows: {unit (metres at volume 1), lam (its n
 var warp_rows := []  # the octave table's rows: {octave, k, slot, src, axis, amp, wm, st}
 var note_rows := []
 var warps := 0
-var climate_rec := {}  # the Climate warp's record, once emitted
+var climate_rec := {}  # the climate warp's record, once a note reads it
 var curve_in := {}  # Height curve id -> the bound of its input (metres): what its editor shows
 
 
@@ -171,12 +171,17 @@ func _k(p_node: Dictionary) -> int:
 	return clampi(int(Kinds.param(p_node, "k")), Octaves.K_MIN, Octaves.ground_top(lods, voxel_m))
 
 
-# A note reads N[index] of the octave table (shader_lib's density loop) times its fade F[index]; its warp, W[slot].
-# The record also carries the unfaded noise and the fade, so a Shape fades around its mean (a faded note moves nothing).
+# A note reads N[index] of the octave table (shader_lib's density loop) times its fade F[index]; with its warp on, at
+# the point moved by W[slot] (the climate's) or by the notes of the Note warp linked into its port. The record also
+# carries the unfaded noise and the fade, so a Shape fades around its mean (a faded note moves nothing).
 func _emit_note(p_id: String, p_node: Dictionary) -> Array:
 	var k := _k(p_node)
 	var lam := Octaves.wavelength_m(k, voxel_m)
-	var warp = _input(p_id, 0)
+	var warp = null
+	if Kinds.param(p_node, "warp"):
+		warp = _input(p_id, 0)
+		if warp == null:
+			warp = _climate_warp()
 	var slope := NOISE_SLOPE / lam
 	var stretch := maxf(float(Kinds.param(p_node, "stretch_y")), 1.0)
 	var row := {"octave": Octaves.ground_octave(k, lods, voxel_m), "k": k, "slot": -1, "src": NO_SRC, "axis": 0, "amp": 1.0, "wm": 0.0, "st": 1.0 / stretch}
@@ -197,9 +202,9 @@ func _emit_note(p_id: String, p_node: Dictionary) -> Array:
 	return [rec]
 
 
-# The climate's warp fields: three fBms (CLIMATE_WARP's octaves), rows of the octave table summed into W[slot] (x, y,
-# z). One slot however many Climate warp nodes: the engine reads its climate once per point.
-func _emit_warp(_id: String, _node: Dictionary) -> Array:
+# The climate's warp fields: three fBms (the model's climate_warp), rows of the octave table summed into W[slot] (x, y,
+# z). One slot however many notes it moves: the engine reads its climate once per point.
+func _climate_warp() -> Dictionary:
 	if climate_rec.is_empty():
 		var cw := Kinds.climate_warp(model)
 		var k := clampi(int(cw.k), Octaves.K_MIN, Octaves.k_top(lods))
@@ -213,7 +218,7 @@ func _emit_warp(_id: String, _node: Dictionary) -> Array:
 				warp_rows.append({"octave": Octaves.field_octave(int(cw.seed) + axis, ki), "k": ki, "slot": slot, "src": NO_SRC, "axis": axis, "amp": ai, "wm": 0.0, "st": 1.0})
 			slope += ai * NOISE_SLOPE / Octaves.wavelength_m(ki, voxel_m)
 		climate_rec = {"slot": slot, "slope": slope}
-	return [climate_rec]
+	return climate_rec
 
 
 # The cheap warp: x, y, z are notes read earlier in the table (their row, F * N), no noise of its own. Its record: the

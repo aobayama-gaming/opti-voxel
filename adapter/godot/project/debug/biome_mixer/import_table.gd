@@ -1,16 +1,16 @@
 extends RefCounted
-## Biome graphs to start from: the plain ground, or one biome of a climate table (read only). Each of the biome's
-## ground octaves becomes a Note (warped by a Warp field built from the table's warp fields), its shape a Shape, its
-## multifractal a Multifractal chained to the next finer one, its multiplier a Mix row's volume; its curve a Height
-## curve (the same points), its surface the Output's colours.
+## Biome graphs to start from: the plain ground, or one biome of a climate table (read only). Each of the ground's
+## octaves is a Note (its warp on where the biome warps it: the table's warp fields become the model's climate warp),
+## its shape a Shape, its multifractal a Multifractal chained to the next finer one, its multiplier a Mix row's volume
+## (0: a silent row, the note stays); its curve a Height curve (the same points), its surface the Output's colours.
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 
-const COL := {"warp": -360.0, "note": 0.0, "shape": 300.0, "multifractal": 580.0, "mix": 880.0}
+const COL := {"note": 0.0, "shape": 300.0, "multifractal": 580.0, "mix": 880.0}
 # How wide a Mix is (its rows carry their swing, share and x): the column after it starts past it.
 const MIX_W := 640.0
-const ROW_H := 240.0
+const ROW_H := Kinds.NOTE_ROW_H
 
 var model := {}
 var warnings := PackedStringArray()
@@ -40,31 +40,17 @@ func k_of(p_m: float) -> int:
 	return int(round(log(p_m / voxel_m) / log(2.0)))
 
 
-# Notes k_top down to k_bottom in p_model, each through a shape (none: plain) into a new row of mix p_mix, laid out from
-# p_y down; returns their Note ids.
-static func add_notes(p_model: Dictionary, p_mix: String, p_k_top: int, p_k_bottom: int, p_y: float, p_preset: String = "plain") -> Array:
-	var ids := []
-	var rows: Array = p_model.nodes[p_mix].params.rows
-	for k in range(p_k_top, p_k_bottom - 1, -1):
-		var y := p_y + (p_k_top - k) * ROW_H
-		var note := Kinds.add(p_model, "note", Vector2(COL.note, y), {"k": k})
-		var last := note
-		if p_preset != "plain":
-			last = Kinds.add(p_model, "shape", Vector2(COL.shape, y), {"preset": p_preset, "offset": Kinds.preset_offset(p_preset)})
-			link_in(p_model, note, 0, last, 0)
-		link_in(p_model, last, 0, p_mix, rows.size())
-		rows.append(Kinds.new_row())
-		ids.append(note)
-	return ids
-
-
-# The ground as it is: notes 6.4 m .. 6.5 km, plain, every one at volume 1 (ImportTable.new("plain ground").plain_ground()).
+# The ground as it is: every note, plain, at volume 1 (ImportTable.new("plain ground").plain_ground()).
 func plain_ground() -> Dictionary:
 	var mix := add("mix", Vector2(COL.mix, 0.0))
 	var out := add("output", Vector2(COL.mix + MIX_W, 0.0))
 	link(mix, 0, out, 0)
-	add_notes(model, mix, k_of(6553.6), k_of(6.4), 0.0)
-	model.nodes[mix].pos = [COL.mix, model.nodes[mix].params.rows.size() * ROW_H * 0.5 - ROW_H]
+	var rows: Array = model.nodes[mix].params.rows
+	var top := Octaves.ground_top(lods, voxel_m)
+	for k in range(top, Octaves.K_MIN - 1, -1):
+		link(add("note", Vector2(COL.note, (top - k) * ROW_H), {"k": k}), 0, mix, rows.size())
+		rows.append(Kinds.new_row())
+	model.nodes[mix].pos = [COL.mix, rows.size() * ROW_H * 0.5 - ROW_H]
 	model.nodes[out].pos = [COL.mix + MIX_W, model.nodes[mix].pos[1]]
 	return model
 
@@ -113,18 +99,15 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	var row := 0
 	for k in range(k_top, Octaves.K_MIN - 1, -1):
 		var a: Dictionary = per_k.get(k, {})
-		var x: float = a.get("x", 1.0)
-		if x == 0.0:
-			continue
 		var y := row * ROW_H
-		var note := add("note", Vector2(COL.note, y), {"k": k, "warp_m": float(a.get("warp_m", 0.0)), "stretch_y": stretch.get(k, 1)})
-		var last := note
+		var warped := false
 		if a.has("warp_m"):
 			var key := ",".join(a.get("warp_fields", []))
 			if not warps.has(key):
-				warps[key] = _warp(a.get("warp_fields", []), fields, y)
-			if warps[key] != "":
-				link(warps[key], 0, note, 0)
+				warps[key] = _warp(a.get("warp_fields", []), fields)
+			warped = warps[key]
+		var note := add("note", Vector2(COL.note, y), {"k": k, "warp": warped, "warp_m": float(a.get("warp_m", 0.0)), "stretch_y": stretch.get(k, 1)})
+		var last := note
 		if a.has("shape") or a.has("scale") or a.has("offset") or a.has("coeffs"):
 			last = add("shape", Vector2(COL.shape, y), _shape(a))
 			link(note, 0, last, 0)
@@ -136,7 +119,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 			chain = mf
 			last = mf
 		link(last, 0, mix, rows.size())
-		rows.append(Kinds.new_row(x))
+		rows.append(Kinds.new_row(a.get("x", 1.0)))
 		row += 1
 	model.nodes[mix].pos = [COL.mix, row * ROW_H * 0.5 - ROW_H]
 	var last_id := mix
@@ -163,15 +146,15 @@ func _shape(p_a: Dictionary) -> Dictionary:
 	return {"preset": preset, "scale": float(p_a.get("scale", 1.0)), "offset": float(p_a.get("offset", Kinds.preset_offset(preset)))}
 
 
-# A Climate warp node from the table's three warp fields (x, y, z: seeds s, s + 1, s + 2 and one band range), which
-# become the model's climate_warp, or "". The mixer has one climate warp: a second set of fields is left out.
-func _warp(p_names: Array, p_fields: Dictionary, p_y: float) -> String:
+# The table's three warp fields (x, y, z: seeds s, s + 1, s + 2 and one band range) as the model's climate_warp, and
+# whether the notes they move can be warped. The mixer has one climate warp: a second set of fields is left out.
+func _warp(p_names: Array, p_fields: Dictionary) -> bool:
 	if model.has("climate_warp"):
 		warnings.append("Warp fields %s left out: the mixer has one climate warp (the first set's)." % [p_names])
-		return ""
+		return false
 	if p_names.size() != 3 or not p_fields.has(p_names[0]):
 		warnings.append("Warp fields %s not found: those notes are unwarped." % [p_names])
-		return ""
+		return false
 	var f: Dictionary = p_fields[p_names[0]]
 	var seed: int = f.get("seed", 0)
 	for i in 3:
@@ -182,9 +165,9 @@ func _warp(p_names: Array, p_fields: Dictionary, p_y: float) -> String:
 	var ks := _ks(band)
 	if ks.is_empty():
 		warnings.append("Warp fields %s have no octave in range: those notes are unwarped." % [p_names])
-		return ""
+		return false
 	model.climate_warp = {"k": ks.max(), "octaves": ks.max() - ks.min() + 1, "amp": float(band.get("amp", 0.5)), "persistence": float(band.get("persistence", 0.5)), "seed": seed}
-	return add("warp", Vector2(COL.warp, p_y))
+	return true
 
 
 # The octaves a table entry covers: its wavelength_m's, or every one in from_m .. to_m (the engine's band ranges).
