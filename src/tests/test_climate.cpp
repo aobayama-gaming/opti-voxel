@@ -48,8 +48,8 @@ bool subnormal(const Float4 &p_v) {
 
 // A random table over p_fields fields (no bands needed: weights read field values only), 2 to MAX_BIOMES biomes.
 Table random_table(std::mt19937 &p_rng, int p_fields) {
-    std::uniform_real_distribution<float> bound(-1.0f, 1.0f);
-    std::uniform_real_distribution<float> fade(0.02f, 0.5f);
+    std::uniform_real_distribution<float> centre(-1.0f, 1.0f);
+    std::uniform_real_distribution<float> span(0.05f, 1.5f);
     Table t;
     for (int f = 0; f < p_fields; f++) {
         Field field;
@@ -60,31 +60,41 @@ Table random_table(std::mt19937 &p_rng, int p_fields) {
     for (int b = 0; b < biomes; b++) {
         Climate::Biome biome;
         biome.name = ov::format("b%d", b);
-        const int edges = b + 1 == biomes ? 0 : 1 + int(p_rng() % 4u);
-        for (int e = 0; e < edges; e++) {
-            const float w = fade(p_rng);
-            const bool rising = (p_rng() & 1u) != 0;
-            biome.edges.push_back(Edge{ int(p_rng() % uint32_t(p_fields)), bound(p_rng) + (rising ? -w : w), rising ? 1.0f / w : -1.0f / w });
+        // Each field at most once, in field order (validate's rule), at least one for every biome but the default.
+        if (b + 1 < biomes) {
+            const int first = int(p_rng() % uint32_t(p_fields));
+            for (int f = 0; f < p_fields; f++) {
+                if (f == first || (p_rng() & 1u) != 0) {
+                    biome.at.push_back(Axis{ f, centre(p_rng), 1.0f / span(p_rng) });
+                }
+            }
         }
         t.biomes.push_back(biome);
     }
     return t;
 }
 
-// The weights in double precision, values only (the reference of the gradients by finite differences).
+// The weights in double precision, values only (the reference of the gradients by finite differences): the model of
+// Climate::weights, k = the product over the axes of smoothstep(clamp((1 - u^2) 2)), the default's (1 - sum k)^2,
+// each over their sum.
 void reference_weights(const Table &p_t, const double *p_x, double *r_w) {
-    double rest = 1.0;
     const size_t n = p_t.biomes.size();
+    double sum = 0.0;
     for (size_t b = 0; b + 1 < n; b++) {
-        double r = 1.0;
-        for (const Edge &e : p_t.biomes[b].edges) {
-            const double s = std::clamp((p_x[e.field] - double(e.anchor)) * double(e.scale), 0.0, 1.0);
-            r *= s * s * (3.0 - 2.0 * s);
+        double k = 1.0;
+        for (const Axis &a : p_t.biomes[b].at) {
+            const double u = (p_x[a.field] - double(a.centre)) * double(a.inv_span);
+            const double s = std::clamp((1.0 - u * u) * double(KERNEL_FADE), 0.0, 1.0);
+            k *= s * s * (3.0 - 2.0 * s);
         }
-        r_w[b] = rest * r;
-        rest -= r_w[b];
+        r_w[b] = k;
+        sum += r_w[b];
     }
-    r_w[n - 1] = rest;
+    r_w[n - 1] = sum < 1.0 ? (1.0 - sum) * (1.0 - sum) : 0.0;
+    const double total = sum + r_w[n - 1];
+    for (size_t b = 0; b < n; b++) {
+        r_w[b] /= total;
+    }
 }
 
 } // namespace
@@ -120,7 +130,7 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     // Seeds are keyed by k: the same octave of the same field always gets the same lattice.
     CHECK(temp.bands[0].seed == ExactNoise::make_octave(temp.seed, 19u, 19, 1.0f).seed);
     CHECK(t.biomes.back().name == "plain");
-    CHECK(t.biomes.back().edges.empty());
+    CHECK(t.biomes.back().at.empty());
     CHECK(t.biomes[0].debug_color == 0xC03818u);
     // Ground multipliers name ground octaves: 0.4 m .. 25 m = k 3 .. 9 and 50 m .. 13 km = k 10 .. 18; the plain's
     // 0.4 m .. 12 m and 25 m .. 30,000 km keep k 3 .. 8 and 9 .. 19 here.
@@ -166,11 +176,14 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 100, "amp": 1}, {"wavelength_m": 110, "amp": 1}]}], "biomes": [{"name": "a"}]})",
                 "listed twice" },
         { R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 100, "amp": 1e13}]}], "biomes": [{"name": "a"}]})", "amplitude" },
-        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "t", "min": 0}]}, {"name": "b"}]})", "fade must be > 0" },
-        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "t", "fade": 1}]}, {"name": "b"}]})", "'min', 'max' or both" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": [0, 0]}}, {"name": "b"}]})", "span must be > 0" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": {"min": 1, "max": 0}}}, {"name": "b"}]})", "span must be > 0" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": 1}}, {"name": "b"}]})", "[centre, span]" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": {"min": 0}}}, {"name": "b"}]})", "[centre, span]" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 1}]}, {"name": "b"}]})", "became 'at'" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a"}, {"name": "b"}]})", "only the last biome" },
-        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 1}]}]})", "the last biome is the default" },
-        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "u", "min": 0, "fade": 1}]}, {"name": "b"}]})", "not a field" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": [0, 1]}}]})", "the last biome is the default" },
+        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"u": [0, 1]}}, {"name": "b"}]})", "not a field" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 1, "x": 2}]}]})", "the ground doesn't have" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 4000, "to_m": 9000, "x": 50}]}]})", "out of range" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4000, "x": -1}]}]})", ">= 0" },
@@ -297,20 +310,19 @@ TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denorma
     CHECK(worst_grad < 2e-3);
 }
 
-TEST_CASE("Climate: priority layering, exact 0 / 1 weights, and the pick's ties") {
+TEST_CASE("Climate: a biome is whole at its centre and gone a span away, overlaps blend, the default fills the gaps, the pick's ties") {
     Table t;
     Field f;
     f.name = "t";
     t.fields.push_back(f);
-    // inner [0.4, 0.6] first, outer [0, 1] second, then the default: fades 0.05.
-    auto region = [](const char *p_name, float p_lo, float p_hi) {
+    // "hot" at 0.5 and "cold" at -0.5, both span 0.75 (they overlap around 0), then the default.
+    auto biome = [](const char *p_name, float p_centre) {
         Climate::Biome b;
         b.name = p_name;
-        b.edges.push_back(Edge{ 0, p_lo - 0.05f, 1.0f / 0.05f });
-        b.edges.push_back(Edge{ 0, p_hi + 0.05f, -1.0f / 0.05f });
+        b.at.push_back(Axis{ 0, p_centre, 1.0f / 0.75f });
         return b;
     };
-    t.biomes = { region("inner", 0.4f, 0.6f), region("outer", 0.0f, 1.0f), Climate::Biome() };
+    t.biomes = { biome("hot", 0.5f), biome("cold", -0.5f), Climate::Biome() };
     t.biomes[2].name = "default";
     CLIMATE_REQUIRE(validate(t, Ground()) == ov::str());
     auto at = [&](float p_x, Float4 r_w[MAX_BIOMES]) {
@@ -319,8 +331,9 @@ TEST_CASE("Climate: priority layering, exact 0 / 1 weights, and the pick's ties"
         weights(t, x, r_w);
     };
     Float4 w[MAX_BIOMES];
-    const float expect[][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 0, 1, 0 } };
-    const float xs[] = { 0.5f, 0.2f, -0.5f, 0.9f };
+    // At a centre the biome is whole, exactly, its gradient 0 (the kernel is flat there); far from both, the default.
+    const float expect[][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 0, 0, 1 } };
+    const float xs[] = { 0.5f, -0.5f, 1.5f, -1.25f };
     for (int i = 0; i < 4; i++) {
         at(xs[i], w);
         for (int b = 0; b < 3; b++) {
@@ -331,20 +344,32 @@ TEST_CASE("Climate: priority layering, exact 0 / 1 weights, and the pick's ties"
         }
         CHECK(pick(t, w, Vector3i64(1, 2, 3), 0) == int(std::max_element(expect[i], expect[i] + 3) - expect[i]));
     }
-    // Halfway up the outer edge, s = 0.5 gives exactly 0.5: outer and default tie, the hash chooses.
-    at(-0.025f, w);
-    CHECK(w[1].w == 0.5f);
-    CHECK(w[2].w == 0.5f);
+    // Between them both kernels are partial and blend, the hot side leaning hot; their sum is over 1, the default out.
+    at(0.2f, w);
+    CHECK(w[0].w > w[1].w);
+    CHECK(w[1].w > 0.0f);
+    CHECK(w[2].w == 0.0f);
+    CHECK(std::fabs(double(w[0].w) + double(w[1].w) - 1.0) < 1e-6);
+    // Past hot's centre only hot is partial: the default takes what it leaves.
+    at(1.1f, w);
+    CHECK(w[0].w > w[2].w);
+    CHECK(w[2].w > 0.0f);
+    CHECK(w[1].w == 0.0f);
+    CHECK(std::fabs(double(w[0].w) + double(w[2].w) - 1.0) < 1e-6);
+    // At 0 the two kernels are the same bits: hot and cold tie, the hash chooses.
+    at(0.0f, w);
+    CHECK(float_bits(w[0].w) == float_bits(w[1].w));
+    CHECK(w[0].w > w[2].w);
     // The tie goes by ExactNoise::hash_cell of the point's LOD0 voxel, high words included: the same point gives the
     // same pick from every lattice that has it.
     int seen[2] = { 0, 0 };
     for (int64_t i = 0; i < 16; i++) {
         const Vector3i64 p(i, -i, i * (int64_t(1) << 33) + 1);
         const int got = pick(t, w, p, 5);
-        CHECK(got == 1 + int(ExactNoise::hash_cell(Vector3i64(p.x * 32, p.y * 32, p.z * 32), PICK_SEED) % 2u));
+        CHECK(got == int(ExactNoise::hash_cell(Vector3i64(p.x * 32, p.y * 32, p.z * 32), PICK_SEED) % 2u));
         CHECK(pick(t, w, Vector3i64(p.x * 2, p.y * 2, p.z * 2), 4) == got);
         CHECK(pick(t, w, Vector3i64(p.x * 32, p.y * 32, p.z * 32), 0) == got);
-        seen[got - 1]++;
+        seen[got]++;
     }
     CHECK(seen[0] > 0);
     CHECK(seen[1] > 0);
@@ -413,7 +438,7 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
     // Fields without multipliers: carried, the ground untouched.
     Table carried;
     CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}],
-            "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})",
+            "biomes": [{"name": "a", "at": {"t": [1, 1.2]}}, {"name": "b"}]})",
                             g.ground, carried) == ov::str());
     // Only the default biome, x1 on every ground octave: modulated, A = 1 * amp exactly and dA = 0, so n A and
     // n.s (A 2^-3) + n.w dA give the constant band's bits (adding a zero product changes nothing).
@@ -492,13 +517,13 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     Table t;
     const ov::str fields = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
             {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}], )";
-    CHECK(ov::contains(parse_json(fields + R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}], "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
+    CHECK(ov::contains(parse_json(fields + R"("biomes": [{"name": "a", "at": {"t": [1, 1.2]}, "amp": [{"field": "h", "from_m": 400, "to_m": 6500, "x": 2}]},
                        {"name": "b"}]})",
                                g.ground, t),
             "the ground's octaves only"));
     // Fields without any multiplier (a pick only): carried nowhere in the ground's runs (no field scratch, no fields
     // variant), and its top lattice is the ground's.
-    CLIMATE_REQUIRE(parse_json(fields + ov::str(R"("biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 0.2}]}, {"name": "b"}]})"), g.ground, t) ==
+    CLIMATE_REQUIRE(parse_json(fields + ov::str(R"("biomes": [{"name": "a", "at": {"t": [1, 1.2]}}, {"name": "b"}]})"), g.ground, t) ==
             ov::str());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
     CHECK(spec.modulation != nullptr); // the pick's derive, for the chunks' samples (CascadeGLSL::field_range)

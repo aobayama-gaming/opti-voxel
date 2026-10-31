@@ -31,8 +31,7 @@ namespace Climate {
 //           whose vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs; stretched
 //           octaves keep it a height field where they dominate.
 //   biome:  { "name": "volcanic",
-//             "where": [ { "field": "temperature", "min": 0.5, "max": 2 (either or both), "fade": 0.1
-//                          (or "fade_min" / "fade_max") } ],
+//             "at": { "temperature": [0.5, 0.3] (centre, span), "humidity": { "min": 0.1, "max": 0.5 } },
 //             "amp": [ { "field": "ground" (optional), "wavelength_m": 4000 | "from_m": 1000, "to_m": 20000, "x": 3 (default 1),
 //                        shape (optional, else plain), "multifractal": 2 (gain), "warp_m": 80, "warp_fields": ["wx", "wy", "wz"] } ],
 //             "curve": [[h, R], ...] (optional, h increasing, metres),
@@ -46,10 +45,12 @@ namespace Climate {
 //     previous multifractal octave's weighted signal: Musgrave's ridged multifractal with gain 2 and the ridged shape,
 //     hybrid with 1 and plain + offset). "warp_m": its noise is read displaced by warp_m times the three fields' values
 //     (libnoise's turbulence). "curve": the ground height h becomes R(h) where the biome's weight is 1 (R - h through
-//     libnoise's cubic, constant past the ends; Biome). The biome is 1 between min and max, fading to 0 over the fade
-//     outside. An "amp" entry plays the ground's octaves (a biome's notes: climate fields are never multiplied); a range
+//     libnoise's cubic, constant past the ends; Biome). "at": the biome's place in the fields' space, a centre and a
+//     span on each field it names ({min, max}: their middle and half their gap); on each it is whole within 0.71 of
+//     the span and gone a span away, overlapping biomes blend by their kernels (Climate::weights), a field it doesn't name doesn't matter
+//     to it. An "amp" entry plays the ground's octaves (a biome's notes: climate fields are never multiplied); a range
 //     covers the ones the ground has in it (none, past them at this LOD count). Octave k reads the weights from the fields' octaves coarser than k only (Cascade::Modulation). The last
-//     biome is the default: no "where". "surface": the biome's ground colours (sRGB) on gentle and steep slopes;
+//     biome is the default: no "at", it fills what the others leave. "surface": the biome's ground colours (sRGB) on gentle and steep slopes;
 //     without it, the procedural ground's. "clouds": the sky over the biome, its cover and cloud type in [0, 1]
 //     (stratus 0, stratocumulus 0.5, cumulus 1; Climate::BiomeClouds); without it, the sky's cover and the weather
 //     noise's type.
@@ -362,29 +363,35 @@ private:
         r_b.curve = make_curve(x, y);
     }
 
-    void edges(const ov::Value &p_d, const ov::str &p_where, std::vector<Edge> &r_edges) {
-        if (!keys(p_d, p_where, { "field", "min", "max", "fade", "fade_min", "fade_max" })) {
-            return;
-        }
-        const int f = source(text(p_d, "field", p_where), p_where, false, int(table.fields.size()), "a field");
-        const double fade = number(p_d, "fade", p_where, 0.0);
-        if (!p_d.has("min") && !p_d.has("max")) {
-            fail(p_where, "'min', 'max' or both.");
-        }
-        // A side rises from bound - fade (sign 1, min) or falls to bound + fade (sign -1, max).
-        auto side = [&](const char *p_bound, const char *p_fade, double p_sign) {
-            if (!p_d.has(p_bound)) {
+    // A biome's "at": per field, [centre, span] or { "min", "max" }; the axes sorted by field (the weights' op order).
+    void axes(const ov::Value &p_d, const ov::str &p_where, std::vector<Axis> &r_at) {
+        for (const std::pair<ov::str, ov::Value> &entry : p_d.entries()) {
+            if (entry.first == "comment") {
+                continue;
+            }
+            const ov::str where = p_where + ov::str(" ") + entry.first;
+            const int f = source(entry.first, where, false, int(table.fields.size()), "a field");
+            const ov::Value &v = entry.second;
+            double centre = 0.0, span = 0.0;
+            if (v.get_type() == ov::Value::ARRAY && v.size() == 2 && is_number(v[0]) && is_number(v[1])) {
+                centre = v[0].as_double();
+                span = v[1].as_double();
+            } else if (v.get_type() == ov::Value::OBJECT && keys(v, where, { "min", "max" }) && v.has("min") && v.has("max")) {
+                const double lo = number(v, "min", where), hi = number(v, "max", where);
+                centre = 0.5 * (lo + hi);
+                span = 0.5 * (hi - lo);
+            } else {
+                fail(where, "[centre, span] or { \"min\": a, \"max\": b }.");
+            }
+            if (!(span > 0.0)) {
+                fail(where, "the span must be > 0 (max above min).");
+            }
+            if (!error.empty()) {
                 return;
             }
-            const double w = number(p_d, p_fade, p_where, fade);
-            if (!(w > 0.0)) {
-                fail(p_where, "the fade must be > 0.");
-                return;
-            }
-            r_edges.push_back(Edge{ f, float(number(p_d, p_bound, p_where) - p_sign * w), float(p_sign / w) });
-        };
-        side("min", "fade_min", 1.0);
-        side("max", "fade_max", -1.0);
+            r_at.push_back(Axis{ f, float(centre), float(1.0 / span) });
+        }
+        std::stable_sort(r_at.begin(), r_at.end(), [](const Axis &p_a, const Axis &p_b) { return p_a.field < p_b.field; });
     }
 
     void amps(const ov::Value &p_d, const ov::str &p_where, Climate::Biome &r_b) {
@@ -486,16 +493,18 @@ private:
     }
 
     void biome(const ov::Value &p_d, int64_t p_i) {
-        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "where", "amp", "curve", "surface", "clouds", "debug_color" })) {
+        if (p_d.has("where")) {
+            fail(ov::format("biome %d", p_i), "'where' (edges) became 'at': a centre and span per field, e.g. \"at\": { \"temperature\": [0.3, 0.2] }.");
+            return;
+        }
+        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "amp", "curve", "surface", "clouds", "debug_color" })) {
             return;
         }
         Climate::Biome b;
         b.name = text(p_d, "name", ov::format("biome %d", p_i));
         const ov::str where = "biome '" + b.name + ov::str("'");
-        const ov::Value sides = array(p_d, "where", where);
-        const ov::str edge_where = where + ov::str(" where");
-        for (int64_t i = 0; i < int64_t(sides.size()) && error.empty(); i++) {
-            edges(dict(sides[i], edge_where), edge_where, b.edges);
+        if (p_d.has("at")) {
+            axes(dict(p_d["at"], where + ov::str(" at")), where + ov::str(" at"), b.at);
         }
         const ov::Value amp = array(p_d, "amp", where);
         const ov::str amp_where = where + ov::str(" amp");

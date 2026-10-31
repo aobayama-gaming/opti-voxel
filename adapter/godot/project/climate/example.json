@@ -83,13 +83,7 @@
  "biomes": [
   {
    "name": "mountains",
-   "where": [
-    {
-     "field": "terrain",
-     "min": 0.12,
-     "fade": 0.05
-    }
-   ],
+   "at": {"terrain": [0.485, 0.4565]},
    "amp": [
     {
      "field": "ground",
@@ -159,18 +153,7 @@
   },
   {
    "name": "badlands",
-   "where": [
-    {
-     "field": "badland",
-     "min": 0.3,
-     "fade": 0.05
-    },
-    {
-     "field": "continent",
-     "min": -0.04,
-     "fade": 0.03
-    }
-   ],
+   "at": {"badland": [0.575, 0.3575], "continent": [0.405, 0.5225]},
    "amp": [
     {
      "field": "ground",
@@ -234,13 +217,7 @@
   },
   {
    "name": "hills",
-   "where": [
-    {
-     "field": "terrain",
-     "min": 0.0,
-     "fade": 0.04
-    }
-   ],
+   "at": {"terrain": [0.425, 0.5115]},
    "amp": [
     {
      "field": "ground",

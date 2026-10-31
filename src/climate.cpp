@@ -6,6 +6,7 @@
 
 namespace Climate {
 
+using Cascade::dadd;
 using Cascade::dflush;
 using Cascade::dmul;
 using Cascade::dsub;
@@ -13,18 +14,39 @@ using Cascade::flush_value;
 
 namespace {
 
-Float4 edge_weight(const Edge &p_edge, const Float4 &p_x) {
-    const float raw = flush_value((p_x.w - p_edge.anchor) * p_edge.scale);
+// The default's (1 - p_x)^2 for p_x < 1, else 0 (p_x: the kernels' sum).
+Float4 fill(const Float4 &p_x) {
+    if (!(p_x.w < 1.0f)) {
+        return Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
+    }
+    const Float4 t{ -p_x.x, -p_x.y, -p_x.z, 1.0f - p_x.w };
+    return dmul(t, t);
+}
+
+// One axis's factor: the smoothstep of clamp((1 - u^2) KERNEL_FADE, 0, 1), u = (x - centre) / span.
+Float4 axis_factor(const Axis &p_axis, const Float4 &p_x) {
+    const Float4 u = dflush(Float4{ p_x.x * p_axis.inv_span, p_x.y * p_axis.inv_span, p_x.z * p_axis.inv_span, (p_x.w - p_axis.centre) * p_axis.inv_span });
+    const Float4 uu = dmul(u, u);
+    const float raw = flush_value((1.0f - uu.w) * KERNEL_FADE);
     if (!(raw > 0.0f)) {
         return Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
     }
     if (raw >= 1.0f) {
         return Float4{ 0.0f, 0.0f, 0.0f, 1.0f };
     }
-    const Float4 s = dflush(Float4{ p_x.x * p_edge.scale, p_x.y * p_edge.scale, p_x.z * p_edge.scale, raw });
+    const Float4 s = dflush(Float4{ -uu.x * KERNEL_FADE, -uu.y * KERNEL_FADE, -uu.z * KERNEL_FADE, raw });
     // s^2 (3 - 2 s); the x2 scalings are exact.
-    const Float4 q{ s.x * -2.0f, s.y * -2.0f, s.z * -2.0f, 3.0f - s.w * 2.0f };
-    return dmul(dmul(s, s), q);
+    const Float4 t{ s.x * -2.0f, s.y * -2.0f, s.z * -2.0f, 3.0f - s.w * 2.0f };
+    return dmul(dmul(s, s), t);
+}
+
+// Biome p_biome's kernel at the field channels p_fields: its axes' factors multiplied in order.
+Float4 kernel(const Biome &p_biome, const Float4 p_fields[MAX_FIELDS]) {
+    Float4 k{ 0.0f, 0.0f, 0.0f, 1.0f };
+    for (const Axis &a : p_biome.at) {
+        k = dmul(k, axis_factor(a, p_fields[a.field]));
+    }
+    return k;
 }
 
 } // namespace
@@ -101,20 +123,21 @@ double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_
 
 double ground_step(const Table &p_table, int p_lod, double p_ground_amp) {
     // ground = h + sum_b w_b C_b(h). The weights sum to 1, so the h part moves by at most (1 + max |C_b'|) times h's
-    // step. The weights' own change moves it by |dw_b| |C_b|: w_b = rest_b r_b, each a product of edge smoothsteps in
-    // [0, 1] (slope 1.5 per unit of scale (field - anchor)), so |dw_b| <= the sum over the edges of biomes 0..b (the
-    // last biome: every other one's) of 1.5 |scale| field_step.
-    double slope = 0.0, edges = 0.0, blend = 0.0;
+    // step. The weights' own change moves it by |dw_b| |C_b|. A kernel's |dk/dq| <= 1.54 (4 q (1 - q^2) at q^2 = 1/3)
+    // and |dq| <= 2 sum |du| (|u| <= 1 where k > 0), so |dk_b| <= KERNEL_SLOPE sum |1 / span| field_step = K_b; the
+    // default's |dk_d| <= 2 sum K; w = k / S with S >= 3/4, w <= 1, |dS| <= 3 sum K: |dw| <= (4/3)(|dk| + |dS|) <=
+    // BLEND_SLOPE sum K for every biome, the default too.
+    double slope = 0.0, kernels = 0.0, curves = 0.0;
     for (const Biome &b : p_table.biomes) {
-        for (const Edge &e : b.edges) {
-            edges += 1.5 * std::fabs(double(e.scale)) * field_step(p_table, e.field, p_lod, p_ground_amp);
+        for (const Axis &a : b.at) {
+            kernels += KERNEL_SLOPE * std::fabs(double(a.inv_span)) * field_step(p_table, a.field, p_lod, p_ground_amp);
         }
         if (!b.curve.empty()) {
             slope = std::max(slope, double(curve_slope_bound(b.curve)));
-            blend += edges * double(curve_bound(b.curve));
+            curves += double(curve_bound(b.curve));
         }
     }
-    return (1.0 + slope) * p_ground_amp + blend;
+    return (1.0 + slope) * p_ground_amp + BLEND_SLOPE * kernels * curves;
 }
 
 void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {
@@ -127,18 +150,28 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
     for (int b = 0; b < MAX_BIOMES; b++) {
         r_w[b] = Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
     }
-    Float4 rest{ 0.0f, 0.0f, 0.0f, 1.0f };
     const size_t n = p_table.biomes.size();
+    if (n == 1) {
+        r_w[0] = Float4{ 0.0f, 0.0f, 0.0f, 1.0f };
+        return;
+    }
+    Float4 sum{ 0.0f, 0.0f, 0.0f, 0.0f };
     for (size_t b = 0; b + 1 < n; b++) {
-        Float4 r{ 0.0f, 0.0f, 0.0f, 1.0f }; // the product of the biome's edge smoothsteps, in list order
-        for (const Edge &e : p_table.biomes[b].edges) {
-            r = dmul(r, edge_weight(e, p_fields[e.field]));
-        }
-        r_w[b] = dmul(rest, r);
-        rest = dsub(rest, r_w[b]);
+        r_w[b] = kernel(p_table.biomes[b], p_fields);
+        sum = dadd(sum, r_w[b]);
     }
     if (n > 0) {
-        r_w[n - 1] = rest;
+        r_w[n - 1] = fill(sum);
+        const Float4 s = dadd(sum, r_w[n - 1]);
+        // 1 / s: det_rsqrt(s)^2 and one Newton step (1 / 1 comes out exactly 1: a biome alone at its centre is whole).
+        const float r = ExactNoise::det_rsqrt(s.w);
+        const float inv0 = r * r;
+        const float inv = inv0 * (2.0f - s.w * inv0);
+        const Float4 rcp = dflush(Float4{ -(s.x * inv) * inv, -(s.y * inv) * inv, -(s.z * inv) * inv, inv });
+        for (size_t b = 0; b < n; b++) {
+            r_w[b] = dmul(r_w[b], rcp);
+            r_w[b].w = ov::min(r_w[b].w, 1.0f); // rounding's last bit, never over 1
+        }
     }
 }
 
