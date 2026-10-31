@@ -281,11 +281,11 @@ private:
         }
         const double amp = number(p_d, "amp", p_where);
         const double persistence = number(p_d, "persistence", p_where, 1.0);
-        // A range keeps the ground's octaves (another LOD count keeps another part of it, each octave at the same
-        // amplitude); a single wavelength outside them is refused by validate().
+        // A range keeps the octaves the LOD count has (another LOD count keeps another part of it, each octave at the
+        // same amplitude); a single wavelength outside them is refused by validate().
         const bool range = lo != hi;
         for (int k = hi; k >= lo; k--) {
-            if (range && (k < ExactNoise::BAND_SHIFT || k > ground.k_max)) {
+            if (range && (k < ExactNoise::BAND_SHIFT || k > ground.field_k_max)) {
                 continue;
             }
             r_f.bands.push_back(ExactNoise::make_octave(r_f.seed, uint32_t(k), k, float(amp * std::pow(persistence, hi - k))));

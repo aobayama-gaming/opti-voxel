@@ -168,7 +168,7 @@ func _var(p_type: String, p_name: String, p_expr: String) -> String:
 
 
 func _k(p_node: Dictionary) -> int:
-	return clampi(int(Kinds.param(p_node, "k")), Octaves.K_MIN, Octaves.k_top(lods))
+	return clampi(int(Kinds.param(p_node, "k")), Octaves.K_MIN, Octaves.ground_top(lods, voxel_m))
 
 
 # A note reads N[index] of the octave table (shader_lib's density loop) times its fade F[index]; its warp, W[slot].
@@ -179,7 +179,7 @@ func _emit_note(p_id: String, p_node: Dictionary) -> Array:
 	var warp = _input(p_id, 0)
 	var slope := NOISE_SLOPE / lam
 	var stretch := maxf(float(Kinds.param(p_node, "stretch_y")), 1.0)
-	var row := {"octave": Octaves.ground_octave(k, lods), "k": k, "slot": -1, "src": NO_SRC, "axis": 0, "amp": 1.0, "wm": 0.0, "st": 1.0 / stretch}
+	var row := {"octave": Octaves.ground_octave(k, lods, voxel_m), "k": k, "slot": -1, "src": NO_SRC, "axis": 0, "amp": 1.0, "wm": 0.0, "st": 1.0 / stretch}
 	if warp != null:
 		var wm := float(Kinds.param(p_node, "warp_m"))
 		row.slot = warp.get("slot", -1)

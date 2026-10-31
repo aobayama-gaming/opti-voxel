@@ -173,8 +173,11 @@ struct Table {
 struct Ground {
     const Cascade::Spec *spec = nullptr;
     double voxel_size = 0.0; // metres: converts the format's metres to voxels and octaves
-    int k_max = -1; // the coarsest octave a band may have (the ground's)
+    int k_max = -1; // the coarsest octave a biome may play (the ground's: the micro engine's top, SDFCascade)
     float amp_cap = 0.0f; // ground band amplitude cap, LOD0 voxels
+    // The coarsest octave a field may have (the LOD count's: lod_count + 4). The fields placing the biomes (temperature,
+    // humidity, wind) are macro inputs above the ground's top until a macro engine computes them.
+    int field_k_max = -1;
 };
 
 // Empty if p_table is well formed, else the first error: field and biome counts, unique names, bands (k in

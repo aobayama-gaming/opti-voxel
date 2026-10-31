@@ -80,8 +80,11 @@ TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bi
         SDFCascade sdf;
         sdf.configure(param, lods);
         const Spec &spec = sdf.get_spec();
-        CHECK(spec.top_level() == lods + 1);
-        CHECK(spec.bands.size() == size_t(lods + 2));
+        // The micro engine's top: k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
+        const int k_top = std::min(lods + 4, SDFCascade::micro_top_k(param.voxel_size));
+        CHECK(k_top == 16);
+        CHECK(spec.top_level() == k_top - 3);
+        CHECK(spec.bands.size() == size_t(k_top - 2));
         CHECK(spec.bands.back().k == 3);
         // Capped at 3.3 km: 6553.6 voxels at 0.5 m.
         CHECK(spec.bands.front().amp == float(SDFCascade::MAX_AMP_M / 0.5));
@@ -132,6 +135,43 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
             p.voxel = VoxelPos(step * (1000 + 37 * i), WorldCoord::floor_div(ground, step) * step + step * i, step * (-300 + 11 * i));
             const double want = double(p.voxel.y - ground) * double(param.voxel_size);
             CHECK(double(sdf.evaluate(p, lod)) == doctest::Approx(want).epsilon(1e-6));
+        }
+    }
+}
+
+// The micro engine stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
+// same octaves, so the same bits; the continents preset keeps its macro octaves (lod_count + 4).
+TEST_CASE("SDFCascade: the ground stops at the micro engine's top, the same at any LOD count past it") {
+    CHECK(SDFCascade::micro_top_k(0.05) == 19);
+    CHECK(SDFCascade::micro_top_k(0.5) == 16);
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    auto top = [&](const SDFCascade &p_sdf) {
+        int k = 0;
+        for (const Cascade::Band &b : p_sdf.get_spec().bands) {
+            k = std::max(k, b.k);
+        }
+        return k;
+    };
+    SDFCascade s15, s25, continents;
+    s15.configure(param, 15);
+    s25.configure(param, 25);
+    continents.preset = SDFCascade::Preset::CONTINENTS;
+    continents.configure(param, 25);
+    CHECK(top(s15) == 19);
+    CHECK(top(s25) == 19);
+    CHECK(top(continents) == 29);
+    CHECK(s25.climate_ground().field_k_max == 29);
+    for (int lod = 0; lod < 15; lod += 2) {
+        const int64_t step = int64_t(1) << lod;
+        for (int i = -3; i <= 3; i++) {
+            const VoxelPos v = VoxelPos(int64_t(123457) + 9001 * i, WorldCoord::floor_div(s15.get_datum_y(), step) + 3 * i, -77 * i) * step;
+            float a[CHANNELS], b[CHANNELS];
+            s15.channels_at(v, lod, a);
+            s25.channels_at(v, lod, b);
+            for (int c = 0; c < CHANNELS; c++) {
+                CHECK(float_bits(a[c]) == float_bits(b[c]));
+            }
         }
     }
 }
@@ -291,5 +331,5 @@ TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
         }
     }
     CHECK(samples == 3 * 2 * 4 * 13 * 7);
-    CHECK(hash == 8152475153248233737ull);
+    CHECK(hash == 8515753277977725678ull); // the ground stops at the micro engine's top: 25 LODs reseeded from k = 19
 }

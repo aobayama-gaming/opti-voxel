@@ -93,7 +93,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	for f in p_table.get("fields", []):
 		fields[f.name] = f
 	# The biome's entry per ground octave (none: the ground's own, volume 1).
-	var k_top := Octaves.k_top(lods)
+	var k_top := Octaves.ground_top(lods, voxel_m)
 	var per_k := {}
 	for a in biome.get("amp", []):
 		if a.get("field", "ground") != "ground":
