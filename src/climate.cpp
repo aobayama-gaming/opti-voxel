@@ -70,7 +70,7 @@ Shape band_shape(const Biome &p_biome, int p_k) {
 }
 
 float max_amp(const Table &p_table, const Cascade::Band &p_band) {
-    float m = 0.0f;
+    float m = p_table.biomes.empty() ? p_band.amp : 0.0f;
     for (const Climate::Biome &b : p_table.biomes) {
         m = ov::max(m, biome_amp(b, p_band) * shape_bound(band_shape(b, p_band.k)));
     }

@@ -86,9 +86,11 @@ ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Biome &
             return ov::format("octave k = %d: a warp reads 3 fields that exist (warp_fields).", p_amp.k);
         }
     }
-    for (const float c : p_amp.shape.c) {
-        if (p_amp.has_shape && c != 0.0f && !moderate(c)) {
-            return ov::format("shape coefficient %s outside [2^-40, 2^40].", c);
+    if (p_amp.has_shape) {
+        for (const float c : p_amp.shape.c) {
+            if (c != 0.0f && !moderate(c)) {
+                return ov::format("shape coefficient %s outside [2^-40, 2^40].", c);
+            }
         }
     }
     // The inserted amplitude: the multiplier's, each shape term's in the exact range, the shaped band under the ground's cap.
@@ -99,6 +101,33 @@ ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Biome &
         ok = shape.c[t] == 0.0f || ExactNoise::in_exact_range(float(amp * std::fabs(double(shape.c[t]))));
     }
     return p_amp.mult == 0.0f || ok ? ov::str() : ov::format("octave k = %d: the modulated amplitude %s (shaped) is out of range.", p_amp.k, amp);
+}
+
+// A biome's multipliers: one per octave, each validate_amp's.
+ov::str validate_amps(const Table &p_table, const Ground &p_ground, const Biome &p_biome, const ov::str &p_where) {
+    for (size_t j = 0; j < p_biome.amps.size(); j++) {
+        for (size_t i = 0; i < j; i++) {
+            if (p_biome.amps[i].k == p_biome.amps[j].k) {
+                return p_where + ov::format("octave k = %d has two multipliers.", p_biome.amps[j].k);
+            }
+        }
+        const ov::str err = validate_amp(p_table, p_ground, p_biome, p_biome.amps[j]);
+        if (!err.empty()) {
+            return p_where + err;
+        }
+    }
+    return ov::str();
+}
+
+// The ground's largest |h|: each band's largest amplitude in any biome, shaped (max_amp).
+double ground_reach(const Table &p_table, const Ground &p_ground) {
+    double h = 0.0;
+    if (p_ground.spec != nullptr) {
+        for (const Cascade::Band &band : p_ground.spec->bands) {
+            h += double(max_amp(p_table, band));
+        }
+    }
+    return h;
 }
 
 ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground) {
@@ -122,24 +151,27 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
             return where + ov::format("edge on '%s': bound or fade out of range.", p_table.fields[size_t(e.field)].name);
         }
     }
+    if (b.curve.empty()) {
+        return validate_amps(p_table, p_ground, b, where);
+    }
     // The curve's offset R - h: under the ground's amplitude cap (what the skirts and the cascade's own bands are held
     // to), in the exact range.
-    const double bound = b.curve.empty() ? 0.0 : double(curve_bound(b.curve));
+    const double bound = double(curve_bound(b.curve));
     if (bound > p_ground.amp_cap || (bound > 0.0 && !ExactNoise::in_exact_range(float(bound)))) {
         return where + ov::format("its curve moves the ground by up to %s voxels, over the ground's cap of %s.", bound, p_ground.amp_cap);
     }
-    for (size_t j = 0; j < b.amps.size(); j++) {
-        for (size_t i = 0; i < j; i++) {
-            if (b.amps[i].k == b.amps[j].k) {
-                return where + ov::format("octave k = %d has two multipliers.", b.amps[j].k);
-            }
-        }
-        const ov::str err = validate_amp(p_table, p_ground, b, b.amps[j]);
-        if (!err.empty()) {
-            return where + err;
-        }
+    // Its slope scales the ground's gradient (1 + w C') and its step at the seams (ground_step): a cliff in the curve
+    // would outgrow the skirts and the distance estimate.
+    const double slope = double(curve_slope_bound(b.curve));
+    if (slope > MAX_CURVE_SLOPE) {
+        return where + ov::format("its curve's offset R - h has a slope up to %s, over %s: spread its points.", slope, MAX_CURVE_SLOPE);
     }
-    return ov::str();
+    // Points all past the heights the ground reaches make the curve a constant offset (a wrong unit or sign).
+    const double reach = ground_reach(p_table, p_ground);
+    if (reach > 0.0 && (double(b.curve.x.front()) > reach || double(b.curve.x.back()) < -reach)) {
+        return where + ov::format("its curve's points are outside the ground's heights (|h| <= %s voxels): it would be a constant.", reach);
+    }
+    return validate_amps(p_table, p_ground, b, where);
 }
 
 } // namespace
