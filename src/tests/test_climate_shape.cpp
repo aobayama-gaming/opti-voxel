@@ -335,9 +335,8 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
     param.voxel_size = 0.05f;
     iso.configure(param, 15);
     CLIMATE_REQUIRE(iso.get_climate() != nullptr);
-    // Mean |dh/dy| / mean |dh/dx| at the ground surface of 24 x 24 columns of Λ_8.
-    auto ratio = [](const SDFCascade &p_sdf) {
-        const int m = 8;
+    // Mean |dh/dy| / mean |dh/dx| at the ground surface of 24 x 24 columns of Λ_m.
+    auto ratio = [](const SDFCascade &p_sdf, int m) {
         double dy = 0.0, dx = 0.0;
         for (int i = 0; i < 24; i++) {
             for (int j = 0; j < 24; j++) {
@@ -351,9 +350,10 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
         }
         return dy / MAX(dx, 1e-30);
     };
-    const double r_iso = ratio(iso), r_stretched = ratio(s.sdf);
-    MESSAGE("mean |dh/dy| / |dh/dx|: isotropic ", r_iso, ", stretched by 4 ", r_stretched);
-    CHECK(r_stretched < 0.8 * r_iso); // measured 0.87 / 1.23: the octaves under 100 m, unstretched, keep their slope
+    // On Λ_9 the octaves under 100 m (unstretched, their slope kept: 0.87 / 1.23 on Λ_8) are not inserted yet.
+    const double r_iso = ratio(iso, 9), r_stretched = ratio(s.sdf, 9);
+    MESSAGE("mean |dh/dy| / |dh/dx| on Λ_9: isotropic ", r_iso, ", stretched by 4 ", r_stretched);
+    CHECK(r_stretched < 0.6 * r_iso); // measured 0.46 / 1.09
 
     Table t;
     for (const double bad : { 3.0, 0.5, 1024.0 }) {

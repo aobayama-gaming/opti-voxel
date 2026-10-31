@@ -190,6 +190,8 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "curve": [[0, 0], [0, 10]]}]})", "must increase" },
         { R"({"biomes": [{"name": "a", "curve": [[0, 0], [10]]}]})", "[h, R(h)]" },
         { R"({"biomes": [{"name": "a", "curve": [[0, 0], [100, 9000]]}]})", "over the ground's cap" },
+        { R"({"biomes": [{"name": "a", "curve": [[0, 0], [0.5, 5], [1, 0]]}]})", "has a slope up to" },
+        { R"({"biomes": [{"name": "a", "curve": [[1e7, 1e7], [2e7, 2e7]]}]})", "it would be a constant" },
     };
     for (const Case &c : cases) {
         CAPTURE(c.json);
@@ -225,6 +227,20 @@ TEST_CASE("Climate: max_ground_mult is the largest multiplier validate accepts")
         CHECK(parse_json(table(0.99 * cap), g.ground, t) == ov::str());
         CHECK(ov::contains(parse_json(table(1.01 * cap), g.ground, t), "out of range"));
     }
+}
+
+// The skirts' bound (SDFCascade::octave_step): a band's own amplitude without biomes, the largest biome's with them.
+TEST_CASE("Climate: max_amp is the band's amplitude in a table without biomes") {
+    Cascade::Band band;
+    band.k = 10;
+    band.amp = 3.5f;
+    Table t;
+    CHECK(max_amp(t, band) == 3.5f);
+    t.biomes.resize(2);
+    t.biomes[1].amps.push_back(Amp{});
+    t.biomes[1].amps[0].k = 10;
+    t.biomes[1].amps[0].mult = 2.0f;
+    CHECK(max_amp(t, band) == 7.0f);
 }
 
 TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denormals, gradients by the chain rule") {

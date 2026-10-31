@@ -46,7 +46,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 - **Parse and validate** (`climate_parse.cpp`, `climate_validate.cpp`): metres to octaves (`from_m` .. `to_m` ranges
   keep the octaves the LOD count has, so one table covers 15 and 25 LODs; a single wavelength outside is refused),
   against `SDFCascade::climate_ground()`. Refused: more than `MAX_FIELDS` (24) fields or `MAX_BIOMES` (16) biomes, a
-  multiplier past the ground's amplitude cap (`max_ground_mult`), a curve moving the ground past it, an `"offset"`
+  multiplier past the ground's amplitude cap (`max_ground_mult`), a curve moving the ground past it, a curve whose
+  offset is steeper than `MAX_CURVE_SLOPE` (4: the skirts and the gradient scale with it), a curve whose points all
+  lie past the heights the ground reaches (a constant offset: a wrong unit or sign), an `"offset"`
   without a multifractal (bands are inserted without their mean, so only the state reads it), a field's multiplier
   without a ground one, multipliers on a non-LINEAR4 ground, a carry past `Cascade::MAX_CARRY`.
 - **In the cascade** (`Climate::combined_spec`): the fields are `Spec::fields`, LINEAR4 groups carried down with the

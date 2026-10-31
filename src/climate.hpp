@@ -115,6 +115,10 @@ struct Curve {
 Curve make_curve(const std::vector<double> &p_x, const std::vector<double> &p_y);
 // max |curve'| (skirts).
 float curve_slope_bound(const Curve &p_curve);
+// The steepest offset a biome curve may have (validate): R' within [-3, 5], so the ground's gradient grows at most 5x
+// where the biome is whole. libnoise's cubic overshoots its points' secants: shaped_test's hills, secants under 1,
+// reach 3.
+constexpr double MAX_CURVE_SLOPE = 4.0;
 // max |curve| (its cubic segments overshoot their points; validate's bound).
 float curve_bound(const Curve &p_curve);
 
@@ -177,7 +181,8 @@ struct Ground {
 // [BAND_SHIFT, k_max], no duplicate, amplitude in ExactNoise's exact range), terms (GROUND or an earlier field,
 // coefficient within [2^-40, 2^40]), edges (an existing field, bound 0 or within [2^-40, 2^40], scale within it), the
 // last biome alone without edges, amplitudes (an existing ground octave, multiplier >= 0, a modulated amplitude in the
-// exact range or 0, within the cap), curves (their offset under the ground's cap). No per-LOD gradient check
+// exact range or 0, within the cap), curves (their offset under the ground's cap, their slope within MAX_CURVE_SLOPE, their
+// points within the heights the ground reaches). No per-LOD gradient check
 // (ExactNoise::gradient_range_error): the cascade flushes what falls under 2^-64.
 ov::str validate(const Table &p_table, const Ground &p_ground);
 

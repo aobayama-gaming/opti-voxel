@@ -9,7 +9,7 @@ local (`bench/results/` is gitignored); the numbers below are copied from their 
 | 1M fly, perf attached | `tools/cpu_profile.sh --sampler=perf -- --preset=forest5cm_1m --scenario=fly --profile=1` | `20261023-012834-direct` |
 | 1M approach, perf attached | same with `--scenario=approach --approach_shots=approach` | `20261023-013158-direct` |
 | forest5cm fly (control) | `tools/bench.sh --preset=forest5cm --scenario=fly --profile=1` | `20261023-013555-direct` |
-| 1M fly, the viewer's settings | `--preset=forest5cm_1m --climate=res://climate/landforms/desert.json (removed by the climate declutter) --lod_error=2 --lod_error_back=4 --scenario=fly --profile=1` | `20261023-013654-direct` |
+| 1M fly, the viewer's settings | `--preset=forest5cm_1m --climate=res://climate/landforms/desert.json --lod_error=2 --lod_error_back=4 --scenario=fly --profile=1` (the table is gone since #152: `git show 1261af3:adapter/godot/project/climate/landforms/desert.json`) | `20261023-013654-direct` |
 
 `perf record -F 499 -g` on the 20 threads slows the 1M load by ~40% (106 s against 73 s measured on 2026-10-22 without
 it, 63 s here with the desert climate): the sampled runs give shares and ratios, the unsampled ones the times.

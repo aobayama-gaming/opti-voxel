@@ -188,6 +188,22 @@ static func climate_warp(p_model: Dictionary) -> Dictionary:
 	return w
 
 
+# Nodes of a kind gone since the file was saved (Terrace, with the engine's terraces) out of a biome model: what fed
+# one's input plays where its output went, so a pass-through drops out of the chain.
+static func drop_unknown(p_model: Dictionary) -> void:
+	for id in p_model.nodes.keys():
+		if KINDS.has(p_model.nodes[id].kind):
+			continue
+		var feed: Array = p_model.links.filter(func(l): return l.to == id and int(l.to_port) == 0)
+		if not feed.is_empty():
+			for l in p_model.links:
+				if l.from == id:
+					l.from = feed[0].from
+					l.from_port = feed[0].from_port
+		p_model.nodes.erase(id)
+		p_model.links = p_model.links.filter(func(l): return l.from != id and l.to != id)
+
+
 static func rows(p_node: Dictionary) -> Array:
 	return p_node.get("params", {}).get("rows", [])
 

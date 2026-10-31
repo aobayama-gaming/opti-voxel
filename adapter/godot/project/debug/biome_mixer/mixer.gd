@@ -107,6 +107,7 @@ func set_model(p_model: Dictionary, p_frame: bool) -> void:
 		model.nodes = {}
 	if not model.has("links"):
 		model.links = []
+	Kinds.drop_unknown(model)
 	# The climate's warp is the model's (a file from before kept it on its warp node).
 	model.climate_warp = Kinds.climate_warp(model)
 	var view: Dictionary = VIEW_DEFAULTS.duplicate()
@@ -696,7 +697,8 @@ func _check() -> void:
 		ok = ok and r.ok and entry.same_after_file
 		report.graphs[g] = entry
 	report["cuts"] = _check_cuts(table)
-	ok = ok and report.cuts.ok
+	report["old_kinds"] = _check_old_kinds()
+	ok = ok and report.cuts.ok and report.old_kinds.ok
 	report["ok"] = ok
 	print("MIXER: ", JSON.stringify(report))
 	# The window's parts, never added to the tree in a check.
@@ -704,6 +706,21 @@ func _check() -> void:
 		c.free()
 	await get_tree().process_frame
 	get_tree().quit(0 if ok else 1)
+
+
+# A file saved with a kind since removed (a Terrace before the output) loads as the graph without it: the same nodes,
+# the same code.
+func _check_old_kinds() -> Dictionary:
+	var want := ImportTable.new("plain ground").plain_ground()
+	var m = JSON.parse_string(JSON.stringify(want))
+	var into_out: Dictionary = m.links.filter(func(l): return l.to == Kinds.first_of(m, "output"))[0]
+	m.nodes["old"] = {"kind": "terrace", "pos": [0, 0], "params": {"step_m": 40.0}}
+	m.links.append({"from": into_out.from, "from_port": into_out.from_port, "to": "old", "to_port": 0})
+	into_out.from = "old"
+	into_out.from_port = 0
+	Kinds.drop_unknown(m)
+	var same: bool = Compile.new().run(m).code == Compile.new().run(want).code
+	return {"ok": same and m.nodes.size() == want.nodes.size(), "nodes": [want.nodes.size(), m.nodes.size()], "same_code": same}
 
 
 # Removing a Mix row (the mountain's first: its shape and note go, its multifractal stays for the chain) and a note
