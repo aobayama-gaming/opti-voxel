@@ -130,12 +130,21 @@ struct Surface {
 // look. The curve remaps the ground height h at each sample: h + C(h), C the curve through the points (h_i, R_i - h_i)
 // of the format's [h, R(h)] (LOD0 voxels, constant past the ends: R - h holds), blended by the biome's weight
 // (ground_value). Without points, C = 0.
+// The clouds over a biome ("clouds"; CloudClimate): the sky's cover there and the cloud type (Schneider's: stratus 0,
+// stratocumulus 0.5, cumulus 1), both in [0, 1]. Unset: the sky's cover and the weather noise's type.
+struct BiomeClouds {
+    bool set = false;
+    float cover = 0.0f;
+    float type = 0.0f;
+};
+
 struct Biome {
     ov::str name;
     std::vector<Edge> edges; // empty for the last (default) biome only
     std::vector<Amp> amps;
     Curve curve; // empty: none
     Surface surface;
+    BiomeClouds clouds;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };
 

@@ -207,6 +207,7 @@
      "x": 0
     }
    ],
+   "clouds": {"cover": 0.7, "type": 0.45},
    "surface": {
     "flat": "#8c8a80",
     "steep": "#a8a49a"
@@ -325,6 +326,7 @@
      "x": 0
     }
    ],
+   "clouds": {"cover": 0.35, "type": 0.7},
    "surface": {
     "flat": "#6a6a50",
     "steep": "#5a4c44"
@@ -453,6 +455,7 @@
      "x": 0
     }
    ],
+   "clouds": {"cover": 0.45, "type": 0.85},
    "surface": {
     "flat": "#4c7a34",
     "steep": "#5c5044"
@@ -582,6 +585,7 @@
      "x": 0
     }
    ],
+   "clouds": {"cover": 0.65, "type": 0.2},
    "surface": {
     "flat": "#5c8040",
     "steep": "#5c5040"
@@ -653,6 +657,7 @@
      "x": 0
     }
    ],
+   "clouds": {"cover": 0.8, "type": 1.0},
    "surface": {
     "flat": "#4a5a2c",
     "steep": "#4a3c2c",
@@ -831,6 +836,7 @@
      219.187
     ]
    ],
+   "clouds": {"cover": 0.05, "type": 1.0},
    "surface": {
     "flat": "#e0a060",
     "steep": "#c88848",
@@ -919,6 +925,7 @@
      "x": 0
     }
    ],
+   "clouds": {"cover": 0.04, "type": 1.0},
    "surface": {
     "flat": "#d8b98a",
     "steep": "#b08860"
@@ -1085,6 +1092,7 @@
      2129.56
     ]
    ],
+   "clouds": {"cover": 0.6, "type": 0.4},
    "surface": {
     "flat": "#8c867c",
     "steep": "#5c564e"
