@@ -47,6 +47,8 @@ static func title(p_node: Dictionary, p_voxel_m: float) -> String:
 	match p_node.kind:
 		"note":
 			t += " %s" % fmt_m(Octaves.wavelength_m(int(Kinds.param(p_node, "k")), p_voxel_m))
+			if Kinds.param(p_node, "warp"):
+				t += ", warped"
 		"shape":
 			t += " %s" % Kinds.param(p_node, "preset")
 	return t
@@ -89,34 +91,34 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 		var phi := PhiGraph.new()
 		gn.add_child(phi)
 		gn.set_meta("phi", phi)
-	elif p_node.kind in ["warp", "note_warp"]:
+	elif p_node.kind == "note_warp":
 		var info := Label.new()
 		info.modulate = Color(1, 1, 1, 0.7)
-		info.text = _warp_info(p_node.kind, p_ctx.model)
+		info.text = "No noise of its own: x, y, z read\nnotes (coarser than the one it moves).\nPlayed notes cost nothing more."
 		gn.add_child(info)
 	elif p_node.kind == "mix":
 		var total := Label.new()
 		total.modulate = Color(1, 1, 1, 0.7)
 		gn.add_child(total)
 		p_ctx.mix_ui.get_or_add(p_id, {"rows": [], "total": null}).total = total
-	var x := Button.new()
-	x.text = "x"
-	x.flat = true
-	x.tooltip_text = "Delete this node (or select it and press Delete)"
-	x.pressed.connect(func() -> void: p_ctx.delete_nodes([p_id]))
-	gn.get_titlebar_hbox().add_child(x)
+	# The notes are the ground's: no x.
+	if p_node.kind != "note":
+		var x := Button.new()
+		x.text = "x"
+		x.flat = true
+		x.tooltip_text = "Delete this node (or select it and press Delete)"
+		x.pressed.connect(func() -> void: p_ctx.delete_nodes([p_id]))
+		gn.get_titlebar_hbox().add_child(x)
 	refresh(gn, p_node, p_ctx)
 	return gn
 
 
-# What a warp costs, under its ports: the climate's octaves and their reads, or none.
-static func _warp_info(p_kind: String, p_model: Dictionary) -> String:
-	if p_kind == "note_warp":
-		return "No noise of its own: x, y, z read\nnotes (coarser than the one it moves).\nPlayed notes cost nothing more."
+# What the climate's warp is, in a note's warp tooltip: its octaves and their reads.
+static func climate_warp_info(p_model: Dictionary) -> String:
 	var cw := Kinds.climate_warp(p_model)
 	var k := int(cw.k)
 	var n := int(cw.octaves)
-	return "The climate's, every biome's:\n%s .. %s, %d octaves x 3 axes\n= %d reads per point, once." % [
+	return "The climate's warp, every biome's: %s .. %s, %d octaves x 3 axes = %d reads per point, once however many notes it moves." % [
 		fmt_m(Octaves.wavelength_m(k - n + 1, p_model.voxel_m)), fmt_m(Octaves.wavelength_m(k, p_model.voxel_m)), n, 3 * n]
 
 
@@ -200,7 +202,7 @@ static func _toggle(p_text: String, p_on: bool, p_tip: String, p_set: Callable) 
 
 
 # A Mix row: its note, volume, mute / solo / centre, then what it adds (its swing in metres and its share of the
-# Mix's, filled by the mixer after each compile: show_mix) and a button that takes the row and its note out.
+# Mix's, filled by the mixer after each compile: show_mix) and a button that takes the row out (its note stays).
 static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, p_out: String) -> Control:
 	var row := HBoxContainer.new()
 	var r: Dictionary = Kinds.rows(p_node)[p_i]
@@ -226,7 +228,7 @@ static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, 
 	var x := Button.new()
 	x.text = "x"
 	x.flat = true
-	x.tooltip_text = "Remove this row, and its note and shape if nothing else uses them"
+	x.tooltip_text = "Remove this row, and its shape if nothing else uses it (the note stays, silent)"
 	x.pressed.connect(func() -> void: p_ctx.remove_mix_row(p_id, p_i))
 	row.add_child(x)
 	if p_out != "":
@@ -257,22 +259,12 @@ static func show_mix(p_ui: Dictionary, p_rows: Array) -> void:
 		p_ui.total.text = "height = the rows' sum, within +-%s\na row: volume x lambda/8 x its shaped note" % fmt_m(total)
 
 
-# A wavelength picker over the ground's notes (K_MIN .. k_top), its items' ids their k.
-static func k_picker(p_k: int, p_model: Dictionary, p_show_k: bool, p_pick: Callable) -> OptionButton:
-	var ob := OptionButton.new()
-	var top := Octaves.ground_top(int(p_model.lods), float(p_model.voxel_m))
-	for k in range(Octaves.K_MIN, top + 1):
-		var m := fmt_m(Octaves.wavelength_m(k, p_model.voxel_m))
-		ob.add_item("%s (k %d)" % [m, k] if p_show_k else m, k)
-	ob.select(clampi(p_k, Octaves.K_MIN, top) - Octaves.K_MIN)
-	ob.item_selected.connect(func(i: int) -> void: p_pick.call(ob.get_item_id(i)))
-	return ob
-
-
 static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx: Object) -> Control:
 	var row := HBoxContainer.new()
 	row.add_child(_label(p_d.name))
 	row.tooltip_text = p_d.get("hint", "")
+	if p_node.kind == "note" and p_d.name == "warp":
+		row.tooltip_text += "\n" + climate_warp_info(p_ctx.model)
 	var v: Variant = Kinds.param(p_node, p_d.name)
 	var name: String = p_d.name
 	var set1 := func(p_value: Variant) -> void: p_ctx.set_params(p_id, {name: p_value})
@@ -314,7 +306,8 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 			cp.color_changed.connect(func(c: Color) -> void: p_ctx.set_params(p_id, {name: "#" + c.to_html(false)}))
 			row.add_child(cp)
 		"k":
-			row.add_child(k_picker(int(v), p_ctx.model, true, func(k: int) -> void: p_ctx.set_params(p_id, {name: k})))
+			# Fixed: the note is the ground's octave k.
+			row.add_child(_label("k %d (%s)" % [int(v), fmt_m(Octaves.wavelength_m(int(v), p_ctx.model.voxel_m))], 0.0))
 		"points":
 			var box := VBoxContainer.new()
 			var ce := CurveEdit.new()

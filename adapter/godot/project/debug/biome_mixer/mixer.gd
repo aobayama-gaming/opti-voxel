@@ -107,9 +107,11 @@ func set_model(p_model: Dictionary, p_frame: bool) -> void:
 		model.nodes = {}
 	if not model.has("links"):
 		model.links = []
-	Kinds.drop_unknown(model)
-	# The climate's warp is the model's (a file from before kept it on its warp node).
+	# The climate's warp is the model's (a file from before kept it on its warp node, which fix_notes and drop_unknown
+	# turn into its notes' warp switches).
 	model.climate_warp = Kinds.climate_warp(model)
+	Kinds.fix_notes(model)
+	Kinds.drop_unknown(model)
 	var view: Dictionary = VIEW_DEFAULTS.duplicate()
 	view.merge(model.get("view", {}), true)
 	model.view = view
@@ -179,7 +181,7 @@ func recompile(p_moving: bool) -> void:
 		if not warned.has(w):
 			warned[w] = true
 			lines.append(w)
-	lines.append("%d nodes. Right-click the graph: add a node; x or Delete removes one; a Mix row's x removes its note." % model.nodes.size())
+	lines.append("%d nodes. Right-click the graph: add a node; x or Delete removes one (not a note: the ground's notes are fixed); a note's warp switch moves it by the climate's warp." % model.nodes.size())
 	status.text = "  ".join(lines)
 	status.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45) if not result.ok else Color(0.8, 0.82, 0.86))
 	preview.redraw(p_moving)
@@ -314,6 +316,8 @@ func delete_nodes(p_ids: Array) -> void:
 	Kinds.cut_nodes(model, p_ids)
 	rebuild_ui()
 	recompile(false)
+	if p_ids.any(func(id): return model.nodes.has(id) and model.nodes[id].kind == "note"):
+		status.text = "The notes are the ground's: they stay (a Mix row's volume 0 or M silences one).  " + status.text
 
 
 func remove_mix_row(p_mix: String, p_row: int) -> void:
@@ -419,11 +423,6 @@ func _build_ui() -> void:
 	var titles := Kinds.MENU.map(func(k): return Kinds.KINDS[k]["title"])
 	bar.add_child(_menu("Add node", titles, func(i: int) -> void:
 		add_node(Kinds.MENU[i], (graph.scroll_offset + graph.size * 0.4) / graph.zoom)))
-	var notes := Button.new()
-	notes.text = "Add notes..."
-	notes.tooltip_text = "A run of notes, each through a shape into a new row of the first Mix"
-	notes.pressed.connect(_notes_dialog)
-	bar.add_child(notes)
 	var frame := Button.new()
 	frame.text = "Frame"
 	frame.pressed.connect(func() -> void: preview.frame(result.get("hmax", 1000.0)))
@@ -497,42 +496,6 @@ func _fill_open(p_menu: MenuButton) -> void:
 		popup.add_item("(nothing saved in %s yet)" % BIOMES_DIR)
 		popup.set_item_disabled(0, true)
 	popup.id_pressed.connect(func(i: int) -> void: set_model(_read("%s/%s" % [BIOMES_DIR, files[i]]), true))
-
-
-func _notes_dialog() -> void:
-	var d := ConfirmationDialog.new()
-	d.title = "Add notes"
-	var box := VBoxContainer.new()
-	var pick := func(p_label: String, p_k: int) -> OptionButton:
-		var row := HBoxContainer.new()
-		row.add_child(Nodes._label(p_label, 120))
-		var ob := Nodes.k_picker(p_k, model, false, func(_k: int) -> void: pass)
-		row.add_child(ob)
-		box.add_child(row)
-		return ob
-	var top: OptionButton = pick.call("from (coarsest)", 17)
-	var bottom: OptionButton = pick.call("to (finest)", 7)
-	var shape := OptionButton.new()
-	for s in Kinds.SHAPES.slice(0, 4):
-		shape.add_item(s)
-	box.add_child(shape)
-	d.add_child(box)
-	d.confirmed.connect(func() -> void:
-		var mix := Kinds.first_of(model, "mix")
-		if mix == "":
-			mix = Kinds.add(model, "mix", Vector2(ImportTable.COL.mix, 0.0))
-		var y := 0.0
-		for id in model.nodes:
-			y = maxf(y, float(model.nodes[id].pos[1]) + ImportTable.ROW_H)
-		var k_top := top.get_selected_id()
-		var k_bottom := bottom.get_selected_id()
-		ImportTable.add_notes(model, mix, maxi(k_top, k_bottom), mini(k_top, k_bottom), y, Kinds.SHAPES[shape.selected])
-		rebuild_ui()
-		recompile(false)
-		d.queue_free())
-	d.canceled.connect(d.queue_free)
-	add_child(d)
-	d.popup_centered()
 
 
 # The view's options under the preview (saved in the biome file: its "view").
@@ -694,7 +657,9 @@ func _check() -> void:
 			# The note warp's notes: earlier rows of the table than the note they move.
 			entry["note_warped"] = r.budget.note_warped
 			ok = ok and missing.is_empty() and r.uniforms.u_n_warp > 0 and r.budget.note_warped == 1 and Array(r.uniforms.u_jx).max() >= 0
-		ok = ok and r.ok and entry.same_after_file
+		# The ground's notes, fixed: one per k, K_MIN .. ground_top.
+		entry["notes_fixed"] = _note_ks(graphs[g]) == range(Octaves.K_MIN, Octaves.ground_top(25, 0.05) + 1)
+		ok = ok and r.ok and entry.same_after_file and entry.notes_fixed
 		report.graphs[g] = entry
 	report["cuts"] = _check_cuts(table)
 	report["old_kinds"] = _check_old_kinds()
@@ -710,23 +675,40 @@ func _check() -> void:
 	get_tree().quit(0 if ok else 1)
 
 
-# A file saved with a kind since removed (a Terrace before the output) loads as the graph without it: the same nodes,
-# the same code.
+# A file saved with kinds since removed (a Terrace before the output, a Climate warp node linked into a note) loads as
+# the graph without them, the note's warp on: the same nodes, the same code. A file missing a note gets it back.
 func _check_old_kinds() -> Dictionary:
 	var want := ImportTable.new("plain ground").plain_ground()
+	var note := Kinds.first_of(want, "note")
 	var m = JSON.parse_string(JSON.stringify(want))
+	want.nodes[note].params.warp = true
 	var into_out: Dictionary = m.links.filter(func(l): return l.to == Kinds.first_of(m, "output"))[0]
 	m.nodes["old"] = {"kind": "terrace", "pos": [0, 0], "params": {"step_m": 40.0}}
 	m.links.append({"from": into_out.from, "from_port": into_out.from_port, "to": "old", "to_port": 0})
 	into_out.from = "old"
 	into_out.from_port = 0
+	m.nodes["old_warp"] = {"kind": "warp", "pos": [0, 0], "params": {}}
+	m.links.append({"from": "old_warp", "from_port": 0, "to": note, "to_port": 0})
+	Kinds.fix_notes(m)
 	Kinds.drop_unknown(m)
 	var same: bool = Compile.new().run(m).code == Compile.new().run(want).code
-	return {"ok": same and m.nodes.size() == want.nodes.size(), "nodes": [want.nodes.size(), m.nodes.size()], "same_code": same}
+	var gone = JSON.parse_string(JSON.stringify(want))
+	gone.nodes.erase(note)
+	gone.links = gone.links.filter(func(l): return l.from != note)
+	Kinds.fix_notes(gone)
+	var back: bool = _note_ks(gone) == _note_ks(want)
+	return {"ok": same and back and m.nodes.size() == want.nodes.size(), "nodes": [want.nodes.size(), m.nodes.size()], "same_code": same, "note_back": back}
 
 
-# Removing a Mix row (the mountain's first: its shape and note go, its multifractal stays for the chain) and a note
-# that plays a row (plain ground's first: its row goes): one row less, the other rows' links one port up, no gaps.
+# A model's notes' k, sorted.
+static func _note_ks(p_model: Dictionary) -> Array:
+	var ks: Array = p_model.nodes.values().filter(func(n): return n.kind == "note").map(func(n): return int(Kinds.param(n, "k")))
+	ks.sort()
+	return ks
+
+
+# Removing a Mix row (the mountain's first: one row less, the other rows' links one port up, no gaps, its note stays)
+# and deleting a note (plain ground's first: nothing changes, the notes are fixed).
 func _check_cuts(p_table: Dictionary) -> Dictionary:
 	var out := {}
 	var cases := {
@@ -744,20 +726,22 @@ func _check_cuts(p_table: Dictionary) -> Dictionary:
 		ports.sort()
 		var r := Compile.new().run(m)
 		var entry := {"rows": [rows, Kinds.rows(m.nodes[mix]).size()], "nodes": [nodes, m.nodes.size()], "compiles": r.ok}
-		entry.ok = r.ok and entry.rows[1] == rows - 1 and entry.nodes[1] < nodes and ports == range(ports.size())
+		var want_rows: int = rows - 1 if c == "row" else rows
+		entry.ok = r.ok and entry.rows[1] == want_rows and (c == "row" or entry.nodes[1] == nodes) and ports == range(ports.size())
+		entry.ok = entry.ok and _note_ks(m) == range(Octaves.K_MIN, Octaves.ground_top(25, 0.05) + 1)
 		ok = ok and entry.ok
 		out[c] = entry
 	out.ok = ok
 	return out
 
 
-# A graph with every kind of node, wired: two warped notes, shaped, chained, mixed, combined, curved, carved.
+# A graph with every kind of node, wired: two warped notes (the climate's warp, a Note warp), shaped, chained, mixed,
+# combined, curved, carved; the other notes silent rows.
 func _every_kind() -> Dictionary:
 	var b := ImportTable.new("every kind")
-	var warp := b.add("warp", Vector2.ZERO)
-	var a := b.add("note", Vector2.ZERO, {"k": 15, "warp_m": 200.0})
+	var a := b.add("note", Vector2.ZERO, {"k": 15, "warp": true, "warp_m": 200.0})
 	var c := b.add("note", Vector2.ZERO, {"k": 14})
-	var d := b.add("note", Vector2.ZERO, {"k": 12, "warp_m": 30.0})
+	var d := b.add("note", Vector2.ZERO, {"k": 12, "warp": true, "warp_m": 30.0})
 	var nw := b.add("note_warp", Vector2.ZERO)
 	var sa := b.add("shape", Vector2.ZERO, {"preset": "ridged"})
 	var sc := b.add("shape", Vector2.ZERO, {"preset": "coeffs", "c2": 1.0})
@@ -770,7 +754,6 @@ func _every_kind() -> Dictionary:
 	var cv := b.add("curve", Vector2.ZERO, {"points": [[-500.0, -300.0], [0.0, 50.0], [500.0, 900.0]]})
 	var carve := b.add("carve", Vector2.ZERO)
 	var out := b.add("output", Vector2.ZERO)
-	b.link(warp, 0, a, 0)
 	b.link(a, 0, nw, 0)
 	b.link(c, 0, nw, 2)
 	b.link(nw, 0, d, 0)
@@ -789,4 +772,5 @@ func _every_kind() -> Dictionary:
 	b.link(cv, 0, out, 0)
 	b.link(c, 0, carve, 0)
 	b.link(carve, 0, out, 1)
+	Kinds.fix_notes(b.model)
 	return b.model

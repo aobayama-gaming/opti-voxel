@@ -2,6 +2,8 @@ extends RefCounted
 ## The mixer's node kinds: their ports and parameters (data only; nodes.gd builds their UI, compile.gd their shader).
 ## A port is [label, type]; a node connects an output to an input of the same type, one link per input.
 
+const Octaves := preload("res://debug/biome_mixer/octaves.gd")
+
 enum { FIELD, WARP, CHAIN, CARVE }
 
 const PORT_COLORS := {
@@ -13,6 +15,8 @@ const PORT_COLORS := {
 
 # The plots' background (the phi graph, the curve editor).
 const PLOT_BG := Color(0.1, 0.11, 0.13)
+# A note's row in the graph (import_table's ROW_H): where fix_notes puts a missing one.
+const NOTE_ROW_H := 240.0
 
 const SHAPES := ["plain", "billow", "ridged", "square", "coeffs"]
 # The engine's shape constants: |n| smoothed as sqrt(n^2 + E^2) - E (Cascade::SMOOTH_ABS_E), and E[sabs(n)], E[n^2]
@@ -30,25 +34,19 @@ const CLIMATE_WARP := {"k": 17, "octaves": 4, "amp": 0.5, "persistence": 0.6, "s
 const KINDS := {
 	"note": {
 		"title": "Note",
-		"hint": "One octave of the ground: a 3D noise in [-1, 1] at one wavelength. Every biome of the climate plays the same notes, the ground's: a biome only shapes and mixes them.",
+		"hint": "One octave of the ground: a 3D noise in [-1, 1] at one wavelength. Every biome of the climate plays the same notes, the ground's, one per wavelength: a biome only shapes, warps and mixes them (a note can't be added or removed).",
 		"in": [["warp", WARP]],
 		"out": [["n", FIELD]],
 		"params": [
 			{"name": "k", "type": "k", "default": 12},
+			{"name": "warp", "type": "bool", "default": false, "hint": "Read this note through the climate's warp (wx, wy, wz, shared by every biome), or through the Note warp linked into its port"},
 			{"name": "warp_m", "type": "float", "default": 0.0, "min": 0.0, "max": 2000.0, "step": 0.1, "hint": "How far the warp moves the point the note is read at: metres per unit of the warp (a warp's value is within about +-1)"},
 			{"name": "stretch_y", "type": "int", "default": 1, "min": 1, "max": 64, "hint": "The engine's stretched octave (ground_stretch, a power of two): the noise read at y / stretch from the datum, a height field where it dominates"},
 		],
 	},
-	"warp": {
-		"title": "Climate warp",
-		"hint": "The climate's warp fields (wx, wy, wz): three fBms every biome shares, read once per point however many notes they move. Their octaves are the climate's, not the biome's (CLIMATE_WARP; an import takes its table's).",
-		"in": [],
-		"out": [["xyz", WARP]],
-		"params": [],
-	},
 	"note_warp": {
 		"title": "Note warp",
-		"hint": "The cheap warp: moves a note by the values of coarser notes (x, y, z: link Notes' n). Notes the biome already plays cost no read. Preview only: the engine's warps are climate fields.",
+		"hint": "The cheap warp: moves a note with its warp on by the values of coarser notes (x, y, z: link Notes' n) instead of the climate's. Notes the biome already plays cost no read. Preview only: the engine's warps are climate fields.",
 		"in": [["x", FIELD], ["y", FIELD], ["z", FIELD]],
 		"out": [["xyz", WARP]],
 		"params": [],
@@ -140,8 +138,8 @@ const KINDS := {
 	},
 }
 
-# The kinds the Add menu lists, in order.
-const MENU := ["note", "shape", "multifractal", "warp", "note_warp", "mix", "add", "multiply", "constant", "curve", "carve", "output"]
+# The kinds the Add menu lists, in order (no Note: a model has the ground's, fix_notes).
+const MENU := ["shape", "multifractal", "note_warp", "mix", "add", "multiply", "constant", "curve", "carve", "output"]
 
 
 static func inputs(p_node: Dictionary) -> Array:
@@ -172,8 +170,8 @@ static func param(p_node: Dictionary, p_name: String) -> Variant:
 	return param_def(p_node.kind, p_name).get("default")
 
 
-# The climate's warp fields a model's Climate warp reads: its "climate_warp", else (a file from before it) the
-# settings its first warp node carried, else CLIMATE_WARP.
+# The climate's warp fields a warped note reads: the model's "climate_warp", else (a file from before it) the settings
+# its first Climate warp node carried, else CLIMATE_WARP.
 static func climate_warp(p_model: Dictionary) -> Dictionary:
 	var w: Dictionary = CLIMATE_WARP.duplicate()
 	if p_model.has("climate_warp"):
@@ -188,7 +186,45 @@ static func climate_warp(p_model: Dictionary) -> Dictionary:
 	return w
 
 
-# Nodes of a kind gone since the file was saved (Terrace, with the engine's terraces) out of a biome model: what fed
+# The ground's notes in a biome model, fixed: one Note per k, K_MIN .. ground_top. A file from before the warp switch
+# had Climate warp nodes linked into notes: those notes get their warp on, the links go (drop_unknown drops the node).
+# A note out of range or a second one at a k goes with its Mix row; a missing one comes back silent, at volume 0 in
+# the first Mix (unlinked when there is none).
+static func fix_notes(p_model: Dictionary) -> void:
+	for l in p_model.links.duplicate():
+		if p_model.nodes.has(l.from) and p_model.nodes[l.from].kind == "warp" and p_model.nodes.get(l.to, {}).get("kind") == "note":
+			p_model.nodes[l.to].params.warp = true
+			p_model.links.erase(l)
+	var top := Octaves.ground_top(int(p_model.lods), float(p_model.voxel_m))
+	var by_k := {}
+	var extra := []
+	for id in p_model.nodes:
+		var node: Dictionary = p_model.nodes[id]
+		if node.kind != "note":
+			continue
+		var k := int(param(node, "k"))
+		if k < Octaves.K_MIN or k > top or by_k.has(k):
+			extra.append(id)
+		else:
+			by_k[k] = id
+	_cut(p_model, extra)
+	var mix := first_of(p_model, "mix")
+	var y := 0.0
+	for id in p_model.nodes:
+		y = maxf(y, float(p_model.nodes[id].pos[1]) + NOTE_ROW_H)
+	for k in range(top, Octaves.K_MIN - 1, -1):
+		if by_k.has(k):
+			continue
+		var note := add(p_model, "note", Vector2(0.0, y), {"k": k})
+		y += NOTE_ROW_H
+		if mix != "":
+			var rows: Array = p_model.nodes[mix].params.rows
+			p_model.links.append({"from": note, "from_port": 0, "to": mix, "to_port": rows.size()})
+			rows.append(new_row(0.0))
+
+
+# Nodes of a kind gone since the file was saved (Terrace, with the engine's terraces; Climate warp, with the notes'
+# warp switch) out of a biome model: what fed
 # one's input plays where its output went, so a pass-through drops out of the chain.
 static func drop_unknown(p_model: Dictionary) -> void:
 	for id in p_model.nodes.keys():
@@ -230,7 +266,12 @@ static func add(p_model: Dictionary, p_kind: String, p_pos: Vector2, p_params: D
 
 
 # Nodes out of a biome model, with their links; a Mix row a deleted node played goes too (no empty row left behind).
+# Notes stay: they are the ground's (fix_notes).
 static func cut_nodes(p_model: Dictionary, p_ids: Array) -> void:
+	_cut(p_model, p_ids.filter(func(id): return p_model.nodes.has(id) and p_model.nodes[id].kind != "note"))
+
+
+static func _cut(p_model: Dictionary, p_ids: Array) -> void:
 	for id in p_ids:
 		if not p_model.nodes.has(id):
 			continue
@@ -243,8 +284,8 @@ static func cut_nodes(p_model: Dictionary, p_ids: Array) -> void:
 		p_model.links = p_model.links.filter(func(l): return l.from != id and l.to != id)
 
 
-# A Mix row out (its x), with what played it if nothing else uses it: its shape, its note, a warp field only it read
-# (walking up from the row, every node left with no output link goes).
+# A Mix row out (its x), with what played it if nothing else uses it: its shape, a Note warp only it read (walking up
+# from the row, every node left with no output link goes, but the notes and the Output: its note stays, silent).
 static func cut_row(p_model: Dictionary, p_mix: String, p_row: int) -> void:
 	var up := []
 	for l in p_model.links:
@@ -253,7 +294,7 @@ static func cut_row(p_model: Dictionary, p_mix: String, p_row: int) -> void:
 	_drop_row(p_model, p_mix, p_row)
 	while not up.is_empty():
 		var id: String = up.pop_back()
-		if not p_model.nodes.has(id) or p_model.nodes[id].kind == "output":
+		if not p_model.nodes.has(id) or p_model.nodes[id].kind in ["output", "note"]:
 			continue
 		if p_model.links.any(func(l): return l.from == id):
 			continue
