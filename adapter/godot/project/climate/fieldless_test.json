@@ -1,5 +1,5 @@
 {
- "comment": "A modulation with no field (one biome multiplying the ground's octaves), for the tests (test_climate.cpp, CascadeSpike set 4d): the flat desert landform before its gravel patches, plain bands.",
+ "comment": "A modulation with no field (one biome multiplying the ground's octaves), for the tests (test_climate.cpp, CascadeSpike set 4d), plain bands.",
  "fields": [],
  "biomes": [
   {

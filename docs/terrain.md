@@ -42,7 +42,7 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request ((0, 0, 0); any other
   is absolute) and in the hosts' scenes (`World::scene_shift`); `SDFCascade::planet_base` takes the switch LOD
   `SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
-  under ~0.5 km; a planet's climate (its biomes' multiplied octaves, its height terms) is capped at `PLANET_RELIEF`
+  under ~0.5 km; a planet's climate (its biomes' multiplied octaves, their curves) is capped at `PLANET_RELIEF`
   (1/32) of its radius, so a small planet stays a ball, and its octaves start at an eighth of that (`PLANET_HEADROOM`:
   a biome may multiply them by up to 8, the shipped climates go to 4.5)):
   below `switch_lod` the curvature form d(c) + n.δ + 1/2 δ^T H δ around the centre of the point's region

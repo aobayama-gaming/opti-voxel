@@ -5,7 +5,6 @@
 #include "sdf_cascade.hpp"
 
 #include "ov/files.hpp"
-#include "ov/json.hpp"
 #include "ov/math.hpp"
 #include "ov/on_error.hpp"
 #include "ov/png.hpp"
@@ -31,12 +30,10 @@ struct Sampled {
     // the slice's lattice is that coarse): the climate the ground's coarsest modulated octave reads (the LOD rule).
     std::vector<int> coarse_picks;
     int coarse_m = -1;
-    std::vector<uint32_t> cores; // Climate::core_regions of the point (0 where no region is 1 at it)
     std::vector<double> altitude; // LOD0 voxels above the base: the column's surface, or 0 (the tangent plane)
     // The ground channels (SDFCascade::ground_channels) at the column's lattice point: height (LOD0 voxels) and its x / z
     // slopes per lattice spacing; fdx / fdz the central differences of the heights of its 4 neighbours at the same y.
     std::vector<float> h, gx, gz, fdx, fdz;
-    std::vector<float> dhdy; // dh along the base's up at the lattice point (per voxel: past 1, the surface folds over)
 };
 
 // Pixel p_i of the slice (row-major, p_n per row) as its point on the tangent plane, in lattice spacings: (column, row)
@@ -60,7 +57,6 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.fields.resize(points * s.nf);
     s.weights.resize(points * s.nb);
     s.picks.resize(points);
-    s.cores.assign(points, 0u);
     s.coarse_picks.assign(points, -1);
     const Cascade::FieldRange range = p_sdf.get_spec().field_range();
     if (!range.empty() && range.ceiling > p_m) {
@@ -72,7 +68,6 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.gz.resize(points);
     s.fdx.resize(points);
     s.fdz.resize(points);
-    s.dhdy.resize(points);
     const int64_t step = int64_t(1) << p_m;
     const BaseSurface &base = p_sdf.get_base();
     parallel_for(uint32_t(p_n), "climate_report", [&](uint32_t p_row) {
@@ -85,7 +80,6 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             const VoxelPos g = p_surface ? p_sdf.ground_along(top) : top;
             s.altitude[i] = base.altitude(g);
             const Vector3i64 p(WorldCoord::floor_div(g.x, step), WorldCoord::floor_div(g.y, step), WorldCoord::floor_div(g.z, step));
-            const UpAxis up = base.up_dir(g);
             State st;
             float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
             Cascade::point_slots(p_sdf.get_spec(), p, p_m, slots, true);
@@ -96,8 +90,6 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             s.h[i] = ch[Cascade::VALUE];
             s.gx[i] = ch[Cascade::DX];
             s.gz[i] = ch[Cascade::DZ];
-            const double dhdn = double(ch[Cascade::DX]) * up[0] + double(ch[Cascade::DY]) * up[1] + double(ch[Cascade::DZ]) * up[2];
-            s.dhdy[i] = float(dhdn * std::ldexp(1.0, -p_m));
             auto height = [&](int64_t p_dx, int64_t p_dz) {
                 float c[Cascade::CHANNELS];
                 p_sdf.channels_at(VoxelPos((p.x + p_dx) * step, p.y * step, (p.z + p_dz) * step), p_m, c);
@@ -117,10 +109,6 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             }
             for (int b = 0; b < s.nb; b++) {
                 s.weights[i * s.nb + b] = w[b].w;
-            }
-            // A region exactly 1 at the point first (the cheap test), then its core.
-            if (std::any_of(p_table.regions.begin(), p_table.regions.end(), [&](const Region &p_r) { return edges_value(p_r.edges, f).w == 1.0f; })) {
-                s.cores[i] = core_regions(p_table, p_sdf.get_spec(), p, p_m);
             }
         }
     });
@@ -235,42 +223,6 @@ ov::str border_section(const Table &p_table, const Sampled &p_s, int p_n, double
             md += ov::format("| %s / %s |", p_table.biomes[size_t(a)].name, p_table.biomes[size_t(b)].name) +
                     spot_cells(p_s, spot.i, p_n, p_spacing_m, p_voxel_m, p_c) + ov::str("\n");
         }
-    }
-    return md;
-}
-
-// Each region (a landform's part of a world table): its mean value over the slice, the share of its core (core_regions:
-// there the landform is its own table's, bit for bit), and the core point nearest the slice's centre with the player flag
-// that spawns above it. Empty without regions.
-ov::str region_section(const Table &p_table, const Sampled &p_s, int p_n, double p_spacing_m, double p_voxel_m, const Vector2i64 &p_c) {
-    if (p_table.regions.empty()) {
-        return ov::str();
-    }
-    ov::str md = "| region | mean | core | core nearest the centre: x m | altitude m | z m | player |\n|---|---|---|---|---|---|---|\n";
-    for (int r = 0; r < int(p_table.regions.size()); r++) {
-        double sum = 0.0;
-        int64_t core = 0, best_d2 = INT64_MAX;
-        size_t best = 0;
-        for (size_t i = 0; i < size_t(p_n) * p_n; i++) {
-            Float4 f[MAX_FIELDS];
-            for (int k = 0; k < p_s.nf; k++) {
-                f[k].w = p_s.fields[i * size_t(p_s.nf) + size_t(k)];
-            }
-            sum += double(edges_value(p_table.regions[size_t(r)].edges, f).w);
-            if (((p_s.cores[i] >> r) & 1u) == 0u) {
-                continue;
-            }
-            core++;
-            const int64_t d2 = centre_d2(i, p_n);
-            if (d2 < best_d2) {
-                best_d2 = d2;
-                best = i;
-            }
-        }
-        const double points = double(p_n) * p_n;
-        md += ov::format("| %s | %.3f | %.1f%% |", p_table.regions[size_t(r)].name, sum / points, 100.0 * double(core) / points);
-        md += core == 0 ? ov::str(" - | - | - | - |") : spot_cells(p_s, best, p_n, p_spacing_m, p_voxel_m, p_c);
-        md += "\n";
     }
     return md;
 }
@@ -414,60 +366,6 @@ ov::str relief_section(const Table &p_table, const Sampled &p_s, int p_n, double
     return md;
 }
 
-void store(const ov::str &p_path, const ov::str &p_bytes) {
-    OV_ERR_FAIL_COND_MSG(!ov::write_file(p_path, p_bytes), "ClimateReport: cannot write " + p_path);
-}
-
-// A vector's bytes (little endian on every target this builds for).
-template <typename T>
-void store(const ov::str &p_path, const std::vector<T> &p_v) {
-    store(p_path, ov::str(reinterpret_cast<const char *>(p_v.data()), p_v.size() * sizeof(T)));
-}
-
-// The heightmap for tools/landforms (compare.py, match.py): heights.f32 (float32 little endian, row-major, row = z, metres
-// above the base), fields.f32 (the fields' values, point-major like Sampled::fields), dhdy.f32 (the ground's dh along the
-// base's up: the 3D noise's vertical slope, past 1 an overhang), picks.u8 (the picked biome) and
-// heights.json (n, spacing, the table, the centre in metres, the field and biome names, the cascade constants match.py's
-// amplitude cap reads).
-void write_heights(const ov::str &p_dir, const Table &p_table, const Ground &p_ground, const Sampled &p_s, int p_n, double p_spacing_m, const ov::str &p_climate,
-        const Vector2i64 &p_c) {
-    const double voxel_m = p_ground.voxel_size;
-    std::vector<float> h(p_s.altitude.size());
-    for (size_t i = 0; i < h.size(); i++) {
-        h[i] = float(p_s.altitude[i] * voxel_m);
-    }
-    store(ov::path_join(p_dir, "heights.f32"), h);
-    store(ov::path_join(p_dir, "fields.f32"), p_s.fields);
-    store(ov::path_join(p_dir, "dhdy.f32"), p_s.dhdy);
-    store(ov::path_join(p_dir, "picks.u8"), std::vector<uint8_t>(p_s.picks.begin(), p_s.picks.end()));
-    ov::Value field_names = ov::Value::array(), biome_names = ov::Value::array();
-    for (const Field &f : p_table.fields) {
-        field_names.push_back(f.name);
-    }
-    // match.py's multiplier cap: per biome, [wavelength m, the largest x] of each ground octave it multiplies.
-    ov::Value max_x = ov::Value::object();
-    for (const Climate::Biome &b : p_table.biomes) {
-        biome_names.push_back(b.name);
-        ov::Value caps = ov::Value::array();
-        for (const Amp &a : b.amps) {
-            const double cap = a.field == GROUND ? max_ground_mult(p_table, p_ground, b, a.k) : INFINITY;
-            if (std::isfinite(cap)) {
-                caps.push_back(ov::Value::array_of(std::vector<double>{ std::ldexp(voxel_m, a.k), cap }));
-            }
-        }
-        max_x[b.name] = caps;
-    }
-    ov::Value meta = ov::Value::object();
-    meta["fields"] = field_names;
-    meta["biomes"] = biome_names;
-    meta["n"] = p_n;
-    meta["spacing_m"] = p_spacing_m;
-    meta["climate"] = p_climate;
-    meta["center_m"] = ov::Value::array_of(std::vector<double>{ double(p_c.x) * p_spacing_m, double(p_c.y) * p_spacing_m });
-    meta["max_x"] = max_x;
-    store(ov::path_join(p_dir, "heights.json"), ov::to_json(meta));
-}
-
 } // namespace
 
 ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size,
@@ -511,14 +409,9 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_climate_
     ov::Value images = ov::Value::array();
     md += biome_section(table, s, n, p_out_dir, images) + ov::str("\n");
     md += border_section(table, s, n, spacing_m, ground.voxel_size, c) + ov::str("\n");
-    const ov::str regions = region_section(table, s, n, spacing_m, ground.voxel_size, c);
-    md += regions.empty() ? ov::str() : regions + ov::str("\n");
     md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + ov::str("\n");
     md += shading_section(table, s, n, m, p_out_dir, images) + ov::str("\n");
     md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
-    if (p_surface) { // a tangent-plane slice has no surface heights
-        write_heights(p_out_dir, table, ground, s, n, spacing_m, p_climate_path, c);
-    }
     md += "\nImages (x right, z down): ";
     for (size_t i = 0; i < images.size(); i++) {
         md += ov::str(i ? ", " : "") + "`" + images[i].as_str() + "`";

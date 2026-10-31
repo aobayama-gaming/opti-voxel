@@ -50,5 +50,5 @@ The numbers perf PRs are measured against (`tools/bench_ab.sh`, `bench.sh --prof
 - **Climate region guards** (2026-10-28, `docs/climate.md`; the video terrain's fly above, `--cool=1`, interleaved, 2 runs
   per side): fly out frame p50 80.9 -> 70.8 ms (-13%), p95 239 -> 105 ms (-56%), mesher GPU 67.2 -> 54.6 ms (-19%),
   mesher batch 18.6 -> 14.8 ms (-20%: cascade level 1 -19%, level 0 + fold -17%), fly back p50 -3%, a whole run's time
-  unchanged (68-77 s: one shader body, no compile cost). Next there: the levels >= 2 (11.6 ms, the guards don't
+  unchanged (68-77 s: one shader body, no compile cost); removed with the regions by the climate declutter. Next there: the levels >= 2 (11.6 ms, the guards don't
   shorten them), the level 0 fold, and the steady geometry (35 ms, the frame while not meshing).

@@ -1,30 +1,24 @@
 {
-    "comment": "Every shaped-band operation at once, for the tests (test_climate_shape.cpp, CascadeSpike set 4s): shaped ground and field bands, a ridged multifractal (its state group), warps from fields, a cell noise field, height terms (one with a curve), a terrace, and stretched bands (ground_stretch, stretch_y on a field and the cell noise). Not a world to look at: project/climate/example.json is.",
+    "comment": "Every operation at once, for the tests (test_climate_shape.cpp, CascadeSpike set 4s): shaped ground bands, a ridged multifractal (its state group), warps from fields, the biomes' height curves, a field term on the ground, and stretched ground octaves. Not a world to look at: project/climate/world.json is.",
     "fields": [
-        { "name": "t", "bands": [{ "from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7 }] },
-        { "name": "v", "bands": [{ "from_m": 400, "to_m": 13000, "amp": 0.4, "stretch_y": 2 }] },
+        { "name": "t", "bands": [{ "from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7 }], "terms": [{ "source": "ground", "per_m": -0.0004 }] },
+        { "name": "v", "bands": [{ "from_m": 400, "to_m": 13000, "amp": 0.4 }] },
         { "name": "wx", "bands": [{ "from_m": 200, "to_m": 1600, "amp": 0.5 }] },
-        { "name": "wz", "bands": [{ "from_m": 200, "to_m": 1600, "amp": 0.5 }] },
-        { "name": "rivers", "bands": [{ "from_m": 1600, "to_m": 6500, "amp": 1, "shape": "ridged", "scale": 2 }] },
-        { "name": "dunes", "noise": "cell", "bands": [{ "wavelength_m": 25, "amp": 1, "stretch_y": 4 }] }
+        { "name": "wz", "bands": [{ "from_m": 200, "to_m": 1600, "amp": 0.5 }] }
     ],
     "ground_stretch": [{ "from_m": 100, "to_m": 30000000, "stretch_y": 4 }],
-    "heights": [
-        { "field": "t", "height_m": 400, "curve": [[-1, -1], [-0.2, -0.3], [0, 0.2], [0.3, 0.4], [1, 1]] },
-        { "field": "rivers", "height_m": -6 },
-        { "field": "dunes", "height_m": 1.5 }
-    ],
     "biomes": [
         {
             "name": "alps",
             "where": [{ "field": "v", "min": 0.15, "fade": 0.1 }],
-            "amp": [{ "field": "ground", "from_m": 0.4, "to_m": 6500, "x": 1.5, "shape": "ridged", "multifractal": 2, "warp_m": 3, "warp_fields": ["wz", "wx", "v"] }]
+            "amp": [{ "field": "ground", "from_m": 0.4, "to_m": 6500, "x": 1.5, "shape": "ridged", "multifractal": 2, "warp_m": 3, "warp_fields": ["wz", "wx", "v"] }],
+            "curve": [[-400, -300], [0, 0], [300, 500], [800, 1400]]
         },
         {
             "name": "hills",
             "where": [{ "field": "t", "min": 0.1, "fade": 0.1 }],
             "amp": [{ "field": "ground", "from_m": 0.4, "to_m": 400, "shape": "billow", "warp_m": 2, "warp_fields": ["wx", "v", "wz"] }],
-            "terrace": { "step_m": 8 }
+            "curve": [[-100, -40], [-20, -16], [0, 0], [20, 24], [100, 140]]
         },
         { "name": "plain", "amp": [{ "field": "ground", "from_m": 0.4, "to_m": 3200, "x": 0.5, "shape": "square", "scale": 3 }] }
     ]

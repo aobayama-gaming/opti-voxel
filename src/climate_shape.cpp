@@ -6,15 +6,13 @@
 #include <algorithm>
 #include <cmath>
 
-// Band shapes' bounds, curves, terraces and the ground at a sample (ground_value), on the CPU and in generated GLSL, op
-// for op: every product flushed under 2^-64 like the climate's dual numbers (climate.hpp's exactness note).
+// Band shapes' bounds, the biomes' curves and the ground at a sample (ground_value), on the CPU and in generated GLSL,
+// op for op: every product flushed under 2^-64 like the climate's dual numbers (climate.hpp's exactness note).
 namespace Climate {
 
 using Cascade::dadd;
 using Cascade::dflush;
 using Cascade::dmul;
-using Cascade::dscale;
-using Cascade::dsub;
 using Cascade::flush_value;
 
 float shape_bound(const Shape &p_shape) {
@@ -80,18 +78,8 @@ bool Table::has_state() const {
             [](const Biome &p_b) { return std::any_of(p_b.amps.begin(), p_b.amps.end(), [](const Amp &p_a) { return p_a.gain > 0.0f; }); });
 }
 
-bool Table::has_stretch() const {
-    return !ground_stretch.empty() || std::any_of(fields.begin(), fields.end(), [](const Field &p_f) {
-        return std::any_of(p_f.bands.begin(), p_f.bands.end(), [](const Cascade::Band &p_b) { return p_b.stretch != 0; });
-    });
-}
-
-bool Table::has_terraces() const {
-    return std::any_of(biomes.begin(), biomes.end(), [](const Biome &p_b) { return p_b.terrace.step > 0.0f; });
-}
-
-bool Table::has_ground_terms() const {
-    return !heights.empty() || has_terraces();
+bool Table::has_curves() const {
+    return std::any_of(biomes.begin(), biomes.end(), [](const Biome &p_b) { return !p_b.curve.empty(); });
 }
 
 namespace {
@@ -118,55 +106,6 @@ Float4 eval_curve(const Curve &p_c, const Float4 &p_x) {
     d = flush_value(d * p_c.inv[i]);
     return dflush(Float4{ p_x.x * d, p_x.y * d, p_x.z * d, v });
 }
-
-// libnoise's Terrace with points every p_t.step: v0 + step t^2 (inverted: v1 - step (1 - t)^2), slope 2 t (2 (1 - t)).
-Float4 eval_terrace(const Terrace &p_t, const Float4 &p_h) {
-    const float u = p_h.w * p_t.inv_step;
-    float fl = std::floor(u);
-    float a = u - fl;
-    if (a >= 1.0f) {
-        fl = fl + 1.0f;
-        a = 0.0f;
-    }
-    const float v0 = fl * p_t.step;
-    float g, d;
-    if (p_t.invert) {
-        const float b = 1.0f - a;
-        g = (v0 + p_t.step) - p_t.step * flush_value(b * b);
-        d = b * 2.0f;
-    } else {
-        g = v0 + p_t.step * flush_value(a * a);
-        d = a * 2.0f;
-    }
-    return dflush(Float4{ p_h.x * d, p_h.y * d, p_h.z * d, g });
-}
-
-constexpr const char GLSL_TERRACE[] = R"glsl(
-vec4 cl_terrace(vec4 h, float step, float inv_step, bool invert) {
-    precise float u = h.w * inv_step;
-    precise float fl = floor(u);
-    precise float a = u - fl;
-    if (a >= 1.0) {
-        fl = fl + 1.0;
-        a = 0.0;
-    }
-    precise float v0 = fl * step;
-    precise float g;
-    precise float d;
-    if (invert) {
-        precise float b = 1.0 - a;
-        precise float b2 = b * b;
-        g = (v0 + step) - step * (abs(b2) < FLUSH ? 0.0 : b2);
-        d = b * 2.0;
-    } else {
-        precise float a2 = a * a;
-        g = v0 + step * (abs(a2) < FLUSH ? 0.0 : a2);
-        d = a * 2.0;
-    }
-    precise vec4 r = vec4(h.x * d, h.y * d, h.z * d, g);
-    return cl_flush(r);
-}
-)glsl";
 
 // eval_curve as `vec4 cl_curve<p_i>(vec4 x)`, the segment chosen by the same compares.
 ov::str curve_glsl(const Curve &p_c, int p_i) {
@@ -195,75 +134,33 @@ ov::str curve_glsl(const Curve &p_c, int p_i) {
 
 } // namespace
 
-Float4 height_sum(const Table &p_table, const Float4 p_fields[MAX_FIELDS], const Float4 p_regions[MAX_REGIONS]) {
-    Float4 s{ 0.0f, 0.0f, 0.0f, 0.0f };
-    for (const HeightTerm &t : p_table.heights) {
-        const Float4 v = dscale(t.has_curve ? eval_curve(t.curve, p_fields[t.field]) : p_fields[t.field], t.coef);
-        s = dadd(s, t.region >= 0 ? dmul(p_regions[t.region], v) : v);
-    }
-    return s;
-}
-
-ov::str curves_glsl(const Table &p_table) {
-    ov::str code;
-    for (size_t i = 0; i < p_table.heights.size(); i++) {
-        if (p_table.heights[i].has_curve) {
-            code += ov::replace_all(curve_glsl(p_table.heights[i].curve, int(i)), "FLUSH", Cascade::glsl_flush());
-        }
-    }
-    return code;
-}
-
-ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var, bool p_guards) {
-    using ExactNoise::glsl_float;
-    ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0);\n");
-    for (size_t i = 0; i < p_table.heights.size(); i++) {
-        const HeightTerm &t = p_table.heights[i];
-        const ov::str v = ov::format("cl_scale(%s, %s)", t.has_curve ? ov::format("cl_curve%d(f%d)", int64_t(i), t.field) : ov::format("f%d", t.field), glsl_float(t.coef));
-        // Guarded: where its region is off, cl_mul gives +0 and cl_add of +0 leaves the (flushed) sum as it is.
-        const ov::str guard = p_guards && t.region >= 0 ? ov::format("if (!rof%d) ", int64_t(t.region)) : ov::str();
-        code += ov::format("    %s%s = cl_add(%s, %s);\n", guard, p_var, p_var, t.region >= 0 ? ov::format("cl_mul(rg%d, %s)", t.region, v) : v);
-    }
-    return code;
-}
-
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
-    Float4 h = to_float4(p_slots);
+    const Float4 base = to_float4(p_slots);
     const SampleCarry carry = sample_carry(p_table);
-    if (carry.heights >= 0) {
-        h = dadd(h, to_float4(p_slots + Cascade::carry_slot(carry.heights)));
-    }
-    if (!p_table.has_terraces()) {
-        return h;
-    }
-    const Float4 base = h;
+    Float4 h = base;
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        const Terrace &t = p_table.biomes[b].terrace;
-        if (t.step > 0.0f) {
-            const Float4 w = to_float4(p_slots + Cascade::carry_slot(carry.terrace[b]));
-            h = dadd(h, dmul(w, dsub(eval_terrace(t, base), base)));
+        if (carry.curve[b] >= 0) {
+            const Float4 w = to_float4(p_slots + Cascade::carry_slot(carry.curve[b]));
+            h = dadd(h, dmul(w, eval_curve(p_table.biomes[b].curve, base)));
         }
     }
     return h;
 }
 
 ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
-    using ExactNoise::glsl_float;
     const SampleCarry carry = sample_carry(p_table);
-    auto carried = [&](int p_c) { return carried_glsl(p_combined, "ch", p_c); };
-    ov::str code = ov::replace_all(ov::str(GLSL_TERRACE), "FLUSH", Cascade::glsl_flush());
-    code += "\n// Climate::ground_value: the cascade's ground, the carried height terms, then the biomes' terraces; (value, gradient).\n";
-    code += "vec4 climate_ground(Ch ch) {\n";
-    code += "    vec4 h = vec4(ch.c[1], ch.c[2], ch.c[3], ch.c[0]);\n";
-    if (carry.heights >= 0) {
-        code += "    h = cl_add(h, " + carried(carry.heights) + ov::str(");\n");
-    }
-    code += "    vec4 base = h;\n";
+    ov::str code;
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        const Terrace &t = p_table.biomes[b].terrace;
-        if (t.step > 0.0f) {
-            code += ov::format("    h = cl_add(h, cl_mul(%s, cl_sub(cl_terrace(base, %s, %s, %s), base)));\n", carried(carry.terrace[b]), glsl_float(t.step),
-                    glsl_float(t.inv_step), t.invert ? "true" : "false");
+        if (carry.curve[b] >= 0) {
+            code += ov::replace_all(curve_glsl(p_table.biomes[b].curve, int(b)), "FLUSH", Cascade::glsl_flush());
+        }
+    }
+    code += "\n// Climate::ground_value: the cascade's ground h, plus each curved biome's weight times its curve of h; (value, gradient).\n";
+    code += "vec4 climate_ground(Ch ch) {\n";
+    code += "    vec4 base = vec4(ch.c[1], ch.c[2], ch.c[3], ch.c[0]);\n    vec4 h = base;\n";
+    for (size_t b = 0; b < p_table.biomes.size(); b++) {
+        if (carry.curve[b] >= 0) {
+            code += ov::format("    h = cl_add(h, cl_mul(%s, cl_curve%d(base)));\n", carried_glsl(p_combined, "ch", carry.curve[b]), int64_t(b));
         }
     }
     code += "    return vec4(h.w, h.x, h.y, h.z);\n}\n";

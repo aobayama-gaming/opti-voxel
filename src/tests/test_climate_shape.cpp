@@ -71,10 +71,10 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     CHECK(point_text == 5024476916576385137ull);
 }
 
-// The shapes' centring constants are the noises' own means: E[sabs(n)] and E[n^2] of perlin3, E[F1] of cell3 (its
-// value plus CELL_MEAN), over random points of random cells.
-TEST_CASE("Climate shape: NOISE_ABS_MEAN, NOISE_SQ_MEAN and CELL_MEAN are the noises' means") {
-    double abs_sum = 0.0, sq_sum = 0.0, cell_sum = 0.0;
+// The shapes' centring constants are the noise's own means: E[sabs(n)] and E[n^2] of perlin3, over random points of
+// random cells.
+TEST_CASE("Climate shape: NOISE_ABS_MEAN and NOISE_SQ_MEAN are the noise's means") {
+    double abs_sum = 0.0, sq_sum = 0.0;
     const int n = 1 << 20;
     for (int i = 0; i < n; i++) {
         const ExactNoise::UVec3 h = ExactNoise::hash3(uint32_t(i), 0x51EDu, 0xC0FFEEu);
@@ -83,12 +83,10 @@ TEST_CASE("Climate shape: NOISE_ABS_MEAN, NOISE_SQ_MEAN and CELL_MEAN are the no
         const float v = ExactNoise::perlin3(p, 6, 0x1234u + uint32_t(i & 7), Vector3i64()).w;
         abs_sum += std::sqrt(double(v) * v + double(Cascade::SMOOTH_ABS_E) * Cascade::SMOOTH_ABS_E) - Cascade::SMOOTH_ABS_E;
         sq_sum += double(v) * v;
-        cell_sum += ExactNoise::cell3(p, 6, 0x1234u + uint32_t(i & 7), Vector3i64()).w + ExactNoise::CELL_MEAN;
     }
-    MESSAGE("E[sabs(n)] ", abs_sum / n, ", E[n^2] ", sq_sum / n, ", E[F1] ", cell_sum / n);
+    MESSAGE("E[sabs(n)] ", abs_sum / n, ", E[n^2] ", sq_sum / n);
     CHECK(std::fabs(abs_sum / n - Cascade::NOISE_ABS_MEAN) < 0.01 * Cascade::NOISE_ABS_MEAN);
     CHECK(std::fabs(sq_sum / n - Cascade::NOISE_SQ_MEAN) < 0.01 * Cascade::NOISE_SQ_MEAN);
-    CHECK(std::fabs(cell_sum / n - ExactNoise::CELL_MEAN) < 0.01 * ExactNoise::CELL_MEAN);
 }
 
 namespace {
@@ -120,14 +118,12 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
     const Table &t = *s.sdf.get_climate();
     const Cascade::Spec &spec = s.sdf.get_spec();
     CHECK(t.has_state());
-    CHECK(t.has_ground_terms());
+    CHECK(t.has_curves());
     CHECK(spec.fields.size() == t.fields.size() + 1); // the state group, band-less
     CHECK(spec.fields.back().empty());
-    CHECK(spec.cell_groups == 1u << 6); // dunes: field 5, group 6
     CLIMATE_REQUIRE(spec.modulation != nullptr);
     CHECK(spec.modulation->shaped());
-    CHECK(spec.modulation->state_group() == 7);
-    CHECK(t.fields[4].shapes[0].c[3] == 4.0f); // ridged, scale 2: (1 - 2|n|)^2
+    CHECK(spec.modulation->state_group() == 5); // the ground, 4 fields, then the state
     int64_t bad = 0;
     for (const int lod : { 0, 3, 8 }) {
         for (const int64_t base : { int64_t(5), (int64_t(1) << 32) - 2, -(int64_t(1) << 44) }) {
@@ -140,7 +136,7 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
     for (int i = 0; i < 64; i++) {
         float slots[Cascade::SLOTS];
         Cascade::point_slots(spec, Vector3i64(int64_t(i) * 7919, 3, int64_t(i) * -1301), 2, slots, true);
-        const float c = slots[Cascade::field_slot(6)];
+        const float c = slots[Cascade::field_slot(4)];
         written += c != 0.0f;
         CHECK(std::isfinite(c));
         CHECK(c >= -0.05f);
@@ -177,11 +173,13 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     CHECK(lifted == points);
     CHECK(CascadeGLSL::field_range(&s.sdf, true).everywhere()); // point items read the fields too
     CHECK(ov::contains(s.sdf.get_ground_glsl(s.sdf.get_spec()), "vec4 climate_ground(Ch ch)"));
-    // The skirts take the height terms' step: deeper than the same ground without them where a term's field has
-    // octaves (dunes: 25 m, k = 9 at 5 cm, LODs 4-5), the cap (skirt_depth cells) lifted.
+    // The skirts take the curves' step: deeper than the same ground without them (their slope scales the ground's
+    // step), the cap (skirt_depth cells) lifted.
     ShapedSDF deep(15, 1e6f);
     ov::Value no_terms = shaped_table();
-    no_terms.erase("heights");
+    for (size_t i = 0; i < no_terms["biomes"].size(); i++) {
+        no_terms["biomes"].at(i).erase("curve");
+    }
     SDFCascade bare;
     bare.climate_data = no_terms;
     ChunkParam param;
@@ -225,37 +223,25 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     };
     const ov::str f1 = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], )";
     CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "spiky"}]}]})")), "plain, billow"));
-    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "t", "from_m": 400, "to_m": 800, "multifractal": 2}]}]})")), "ground bands only"));
+    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "t", "from_m": 400, "to_m": 800, "multifractal": 2}]}]})")), "the ground's octaves only"));
     CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "warp_m": 1, "warp_fields": ["t"]}]}]})")),
             "3 fields"));
     // A warp reads fields: the ground's slope (the swiss turbulence's) is not offered, nor its damping (climate.hpp).
     CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "warp_m": 1}]}]})")), "warp reads 3 fields"));
     CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "damp": 4}]}]})")), "unknown key 'damp'"));
-    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0], [0, 1]]}], "biomes": [{"name": "a"}]})")), "increase"));
-    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 10, "curve": [[0, 0]]}], "biomes": [{"name": "a"}]})")), "2 points"));
-    // A curve the field never reaches is a constant; a term over the ground's amplitude cap would outgrow the skirts' model.
-    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 10, "curve": [[100, 0], [200, 1]]}], "biomes": [{"name": "a"}]})")),
-            "a constant"));
-    CHECK(ov::contains(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 5000, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})")),
-            "over the ground's cap"));
-    CHECK(err(f1 + ov::str(R"("heights": [{"field": "t", "height_m": 100, "curve": [[-1, 0], [1, 1]]}], "biomes": [{"name": "a"}]})")) == ov::str());
     // An offset is a constant term: inserted without its mean, it only counts in a multifractal's state (ridged's scales
     // its |n| too).
     CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "billow", "offset": 0.5}]}]})")),
             "only counts in a multifractal"));
     CHECK(ov::contains(err(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1, "offset": 0.5}]}], "biomes": [{"name": "a"}]})"),
-            "only counts in a multifractal"));
+            "unknown key 'offset'"));
     CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "coeffs": [0.5, 1, 0, 0]}]}]})")),
             "only counts in a multifractal"));
     CHECK(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "multifractal": 1, "offset": 0.5}]}]})")) ==
             ov::str());
     CHECK(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "shape": "ridged", "offset": 0.8}]}]})")) ==
             ov::str());
-    CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "terrace": {"step_m": -1}}]})")), "terrace"));
     CHECK(ov::contains(err(f1 + ov::str(R"("biomes": [{"name": "a", "amp": [{"field": "ground", "from_m": 1, "to_m": 100, "coeffs": [1, 2]}]}]})")), "4 numbers"));
-    CHECK(ov::contains(err(R"({"fields": [{"name": "d", "noise": "cell", "bands": [{"wavelength_m": 25, "amp": 1, "shape": "ridged"}]}], "biomes": [{"name": "a"}]})"),
-            "cell noise"));
-    CHECK(ov::contains(err(R"({"fields": [{"name": "d", "noise": "simplex", "bands": []}], "biomes": [{"name": "a"}]})"), "perlin or cell"));
     // A multifractal's state takes a field group: MAX_FIELDS fields leave it none.
     ov::str full = "{\"fields\": [";
     for (int i = 0; i < MAX_FIELDS; i++) {
@@ -272,7 +258,7 @@ TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
         const Table &t = *c.sdf.get_climate();
         CHECK(t.has_state());
-        CHECK(t.has_ground_terms());
+        CHECK(t.has_curves());
         CHECK(c.sdf.has_ground_materials());
         const Cascade::Spec &spec = c.sdf.get_spec();
         CLIMATE_REQUIRE(spec.modulation != nullptr);
@@ -286,17 +272,16 @@ TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and
 }
 
 // Every level shader variant (chunks / points, with / without the fields) defines each climate helper it calls: a shaped
-// table with and without ground terms (the shared helpers are spliced once, up front; splices_helpers).
+// table with and without curves (the shared helpers are spliced once, up front; splices_helpers).
 TEST_CASE("Climate shape: every level shader variant defines the climate helpers it calls") {
     ov::Value with_terms = shaped_table();
     ov::Value without = shaped_table();
-    without.erase("heights");
     ov::Value &biomes = without["biomes"];
     for (size_t i = 0; i < biomes.size(); i++) {
-        biomes.at(i).erase("terrace");
+        biomes.at(i).erase("curve");
     }
-    const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_terrace", "cascade_warped",
-        "climate_ground", "climate_biome", "cascade_mods" };
+    const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_curve0", "cl_curve1",
+        "cascade_warped", "climate_ground", "climate_biome", "cascade_mods" };
     int64_t variants = 0, missing = 0;
     for (const ov::Value &table : { with_terms, without }) {
         SDFCascade sdf;
@@ -324,19 +309,9 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
     }
     CHECK(variants == 8);
     CHECK(missing == 0);
-    Table t;
-    ov::Value bad = shaped_table();
-    bad["biomes"].at(1)["terrace"] = ClimateTest::json(R"({"step_m": 8, "invert": "no"})");
-    SDFCascade g;
-    ChunkParam param;
-    param.voxel_size = 0.05f;
-    g.configure(param, 15);
-    CHECK(ov::contains(parse(bad, g.climate_ground(), t), "true or false"));
-    bad["biomes"].at(1)["terrace"] = ClimateTest::json(R"({"step_m": 0})");
-    CHECK(ov::contains(parse(bad, g.climate_ground(), t), "terrace step"));
 }
 
-// Stretched bands (ground_stretch, stretch_y): the octaves in range carry their stretch (at most k - 3), the ground's
+// Stretched bands (ground_stretch): the octaves in range carry their stretch (at most k - 3), the ground's
 // vertical slope drops against its horizontal one (the noise read at y / 4), and bad factors are refused. Box runs and
 // point queries agree on the stretched table: the first test of this file runs on it.
 TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
@@ -351,7 +326,6 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
         stretched += b.stretch != 0;
     }
     CHECK(stretched > 0);
-    CHECK(spec.fields[size_t(s.sdf.get_climate()->field_index("dunes"))].front().stretch == 2);
 
     ov::Value flat = shaped_table();
     flat.erase("ground_stretch");
@@ -379,7 +353,7 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
     };
     const double r_iso = ratio(iso), r_stretched = ratio(s.sdf);
     MESSAGE("mean |dh/dy| / |dh/dx|: isotropic ", r_iso, ", stretched by 4 ", r_stretched);
-    CHECK(r_stretched < 0.6 * r_iso);
+    CHECK(r_stretched < 0.8 * r_iso); // measured 0.87 / 1.23: the octaves under 100 m, unstretched, keep their slope
 
     Table t;
     for (const double bad : { 3.0, 0.5, 1024.0 }) {
@@ -392,12 +366,12 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
 // A table with no field (one biome multiplying the ground's octaves, adapter/godot/project/climate/fieldless_test.json) modulates
 // the ground: the GPU passes take the variant with the modulation at its levels (CascadeGLSL::field_range not empty).
 // It was empty with no field group, and the GPU drew the bare ground under the CPU's flat desert (CascadeSpike 4d).
-// The same without fields, with a terrace (a ground term): climate_ground runs at every sample, so every level takes the
-// climate variant (the early return for a table without fields skipped that rule: the GPU drew the terrace-less ground).
+// The same without fields, with a curve (a ground term): climate_ground runs at every sample, so every level takes the
+// climate variant (the early return for a table without fields skipped that rule: the GPU drew the bare ground).
 TEST_CASE("Climate shape: ground terms without fields take the climate variant at every level") {
     SDFCascade sdf;
     CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == ov::str());
-    sdf.climate_data["biomes"].at(0)["terrace"] = ClimateTest::json(R"({"step_m": 4})");
+    sdf.climate_data["biomes"].at(0)["curve"] = ClimateTest::json(R"([[-10, -10], [10, 14]])");
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);
@@ -409,30 +383,17 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
     }
 }
 
-// The landform tables (docs/landforms.md) load at 5 cm at 15 and 25 LODs: a tightened check that refuses one shows here,
-// not at the next tools/landforms/match.py run (Mont Blanc's remap went over the height-term cap that way).
-TEST_CASE("Climate shape: every landform table loads") {
-    for (const char *name : { "bare", "caldera", "cliff", "desert", "dunes", "island", "mangrove", "mountain", "valley" }) {
-        for (const int lods : { 15, 25 }) {
-            CAPTURE(name);
-            CAPTURE(lods);
-            ClimateSDF c(("res://climate/landforms/" + std::string(name) + ".json").c_str(), lods);
-            CHECK(c.sdf.get_climate_error() == ov::str());
-            CHECK(c.sdf.get_climate() != nullptr);
-        }
-    }
-}
-
-// The skirt bound (Climate::ground_step) on tables with ground terms (terraces: the example and shaped_test; the cliff's
-// 700 m height term): at the samples a LOD L and a LOD L+1 chunk share (Λ_{L+1}) near the LOD-L surface, the field step
-// is within the outer chunk's skirt depth, the cap lifted (the bound itself; the cap is a cost choice). Height terms and
-// terraces read the fields at each chunk's own level 0, so their steps come from the fields' L+2 / L+3 octaves.
+// The skirt bound (Climate::ground_step) on tables with curves (the example and shaped_test): at the samples a LOD L and a
+// LOD L+1 chunk share (Λ_{L+1}) near the LOD-L surface, the field step is within the outer chunk's skirt depth, the cap
+// lifted (the bound itself; the cap is a cost choice). The curves read the weights carried to each chunk's own level 0,
+// so their steps come from the fields' L+2 / L+3 octaves.
 TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the skirt depth with ground terms") {
-    for (const char *path : { "res://climate/shaped_test.json", "res://climate/example.json", "res://climate/landforms/cliff.json", "res://climate/region_test.json" }) {
+    // world.json's climate axes (105-419 km) need 25 LODs.
+    for (const auto &[path, lods] : { std::pair{ "res://climate/shaped_test.json", 15 }, std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/world.json", 25 } }) {
         CAPTURE(path);
-        ClimateSDF c(path, 15, 1e6f);
+        ClimateSDF c(path, lods, 1e6f);
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
-        CHECK(c.sdf.get_climate()->has_ground_terms());
+        CHECK(c.sdf.get_climate()->has_curves());
         const double vs = 0.05;
         for (const int lod : { 0, 3, 6, 9, 12 }) {
             CAPTURE(lod);

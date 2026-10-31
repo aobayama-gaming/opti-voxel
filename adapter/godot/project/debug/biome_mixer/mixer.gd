@@ -685,7 +685,7 @@ func _check() -> void:
 			entry["uniforms_differ"] = differ.slice(0, 5).map(func(key): return [key, r.uniforms[key], r2.uniforms.get(key)])
 		if g == "every kind":
 			var missing := []
-			for needle in ["(F[1] * N[1])", "shape(u_", "w_n", "curve_n", "terrace(v_", "band", "F[0] * (shape("]:
+			for needle in ["(F[1] * N[1])", "shape(u_", "w_n", "curve_n", "band", "F[0] * (shape("]:
 				if not r.code.contains(needle):
 					missing.append(needle)
 			entry["missing"] = missing
@@ -732,7 +732,7 @@ func _check_cuts(p_table: Dictionary) -> Dictionary:
 	return out
 
 
-# A graph with every kind of node, wired: two warped notes, shaped, chained, mixed, combined, curved, terraced, carved.
+# A graph with every kind of node, wired: two warped notes, shaped, chained, mixed, combined, curved, carved.
 func _every_kind() -> Dictionary:
 	var b := ImportTable.new("every kind")
 	var warp := b.add("warp", Vector2.ZERO)
@@ -749,7 +749,6 @@ func _every_kind() -> Dictionary:
 	var mul := b.add("multiply", Vector2.ZERO)
 	var add := b.add("add", Vector2.ZERO)
 	var cv := b.add("curve", Vector2.ZERO, {"points": [[-500.0, -300.0], [0.0, 50.0], [500.0, 900.0]]})
-	var tr := b.add("terrace", Vector2.ZERO)
 	var carve := b.add("carve", Vector2.ZERO)
 	var out := b.add("output", Vector2.ZERO)
 	b.link(warp, 0, a, 0)
@@ -768,8 +767,7 @@ func _every_kind() -> Dictionary:
 	b.link(k, 0, mul, 1)
 	b.link(mul, 0, add, 0)
 	b.link(add, 0, cv, 0)
-	b.link(cv, 0, tr, 0)
-	b.link(tr, 0, out, 0)
+	b.link(cv, 0, out, 0)
 	b.link(c, 0, carve, 0)
 	b.link(carve, 0, out, 1)
 	return b.model

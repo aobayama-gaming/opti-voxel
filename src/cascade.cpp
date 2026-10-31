@@ -118,15 +118,14 @@ WorldPos band_pos(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p)
     return pos;
 }
 
-// Group p_group's noise at p_pos: perlin3, or cell3 for a cell group (Spec::cell_groups). A stretched band reads it
+// A band's noise at p_pos (perlin3). A stretched band reads it
 // stretched along the base's up (BaseSurface::stretched, the base sample at the band's insertion lattice), its gradient
 // back through the stretch (per cell of 2^k voxels).
-ExactNoise::Float4 band_noise(const Spec &p_spec, int p_group, const Band &p_band, const WorldPos &p_pos) {
+ExactNoise::Float4 band_noise(const Spec &p_spec, const Band &p_band, const WorldPos &p_pos) {
     const bool stretch = p_band.stretch > 0;
     const ExactNoise::Float4 b = stretch ? p_spec.base.stretch_base(p_pos.voxel, p_spec.insert_level(p_band)) : ExactNoise::Float4{};
     const WorldPos pos = stretch ? p_spec.base.stretched(p_pos, p_band.stretch, b, p_spec.insert_level(p_band)) : p_pos;
-    const ExactNoise::Float4 n = ((p_spec.cell_groups >> p_group) & 1u) ? ExactNoise::cell3(pos, p_band.k, p_band.seed, p_band.offset)
-                                                                        : ExactNoise::perlin3(pos, p_band.k, p_band.seed, p_band.offset);
+    const ExactNoise::Float4 n = ExactNoise::perlin3(pos, p_band.k, p_band.seed, p_band.offset);
     return stretch ? p_spec.base.stretch_gradient(n, p_band.stretch, b) : n;
 }
 
@@ -145,7 +144,7 @@ void band_channels(const Spec &p_spec, int p_group, const Band &p_band, const Ba
         return;
     }
     // The same bits as perlin3_cross's first four channels, without the cross derivatives.
-    const ExactNoise::Float4 n = band_noise(p_spec, p_group, p_band, pos);
+    const ExactNoise::Float4 n = band_noise(p_spec, p_band, pos);
     r_ch[VALUE] = n.w * factor[0];
     r_ch[DX] = n.x * factor[1];
     r_ch[DY] = n.y * factor[1];
@@ -174,7 +173,7 @@ WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
 // A modulated band's 4 channels (BandMod p_mod, Modulation), p_slope = 2^-shift. The plain term in the order of the
 // GPU's insert_band_mod: value n.w A, slope n.s (A p_slope) + n.w dA; the shaped terms (insert_band_shaped) added to it
 // as flushed dual products, and r_state (MOD_STATE) the state's new channels.
-void modulated_channels(const Spec &p_spec, int p_group, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4],
+void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4],
         ExactNoise::Float4 *r_state) {
     using ExactNoise::Float4;
     WorldPos pos = band_pos(p_spec, p_band, p_p);
@@ -182,7 +181,7 @@ void modulated_channels(const Spec &p_spec, int p_group, const Band &p_band, con
     if (warp) {
         pos = warped(pos, p_mod.warp);
     }
-    Float4 n = band_noise(p_spec, p_group, p_band, pos);
+    Float4 n = band_noise(p_spec, p_band, pos);
     if (warp) {
         // The chain rule through the displacement: dn' = (I + J)^T dn, J_ab = dW_a / dx_b per voxel (the warp's gradient
         // per lattice spacing of Λ_m times 2^-m), each product flushed.
@@ -297,7 +296,7 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
             continue;
         }
         if ((p_lb.modulated >> g) & 1u) {
-            modulated_channels(p_spec, g, *p_lb.band[g], mod[g], p_lb.slope, p_p, o[g], g == 0 ? &state : nullptr);
+            modulated_channels(p_spec, *p_lb.band[g], mod[g], p_lb.slope, p_p, o[g], g == 0 ? &state : nullptr);
         } else {
             band_channels(p_spec, g, *p_lb.band[g], p_lb.factors[g], p_p, o[g]);
         }

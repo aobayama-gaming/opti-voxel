@@ -73,7 +73,7 @@ public:
     // below it holds ~3 LODs further (its neglected terms grow as the region over the radius), at any radius; a small
     // planet goes down to 0, the radius form alone.
     static constexpr int SWITCH_MARGIN = 2;
-    // A planet's relief: every octave (and a climate's height terms, amp_cap) at most this fraction of its radius, so a
+    // A planet's relief: every octave (and a biome's curve, amp_cap) at most this fraction of its radius, so a
     // small planet stays a ball (Earth: 199 km, far over MAX_AMP_M).
     static constexpr double PLANET_RELIEF = 1.0 / 32.0;
     // A planet's octaves start at most PLANET_RELIEF / PLANET_HEADROOM of its radius, so a biome's multiplier up to this
@@ -174,7 +174,7 @@ public:
         double amp = 0.0;
         for (const Cascade::Band &b : spec.bands) {
             if (b.k == p_lod + 2 || b.k == p_lod + 3) {
-                amp = ov::max(amp, double(climate ? Climate::max_amp(*climate, Climate::GROUND, b) : b.amp));
+                amp = ov::max(amp, double(climate ? Climate::max_amp(*climate, b) : b.amp));
             }
         }
         return amp;
@@ -251,7 +251,7 @@ uint cascade_ground_material(Ch ch) {
         ground_channels(slots, r_ch);
     }
 
-    // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_ground_terms): the
+    // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_curves): the
     // samples then read terms derived on the level above them (FieldRange::sample, CPU and GPU, point items too).
     bool has_ground_terms() const override { return ground_terms; }
     // The ground channels of a point's slots p_slots (a run's last level, the samples' terms carried):
@@ -515,12 +515,12 @@ private:
         // TODO: a stretched band reads the base at its insertion LOD, whose regions the GPU doesn't have (BaseRegions
         // uploads the chunk's LOD only); upload those too to lift this.
         if (base.curved() && table.has_stretch()) {
-            climate_error = "a stretched octave (stretch_y, ground_stretch) on a curved base has no GPU path yet";
+            climate_error = "a stretched octave (ground_stretch) on a curved base has no GPU path yet";
             OV_ERR_FAIL_MSG("SDFCascade: " + climate_error + ": no climate.");
         }
         spec = Climate::combined_spec(table, spec);
         climate = std::move(table);
-        ground_terms = climate->has_ground_terms();
+        ground_terms = climate->has_curves();
         std::vector<std::pair<ov::str, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < climate->biomes.size(); b++) {
             grounds.emplace_back("biome:" + climate->biomes[b].name, Climate::biome_material(climate->biomes[b]));
@@ -537,7 +537,7 @@ private:
     float voxel_size = 0.5f;
     int k_top = 0; // the coarsest octave (lod_count + 4)
     std::optional<Climate::Table> climate;
-    bool ground_terms = false; // climate->has_ground_terms(), read per sample
+    bool ground_terms = false; // climate->has_curves(), read per sample
     ov::str climate_error;
     float amp_cap = 0.0f; // MAX_AMP_M in LOD0 voxels
 };

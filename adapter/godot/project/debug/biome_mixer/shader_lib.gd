@@ -74,19 +74,6 @@ float shape(vec4 c, float n) {
 float lod_fade(float lam, float fp) {
 	return smoothstep(2.0, 4.0, lam / max(fp, 1e-6));
 }
-
-// libnoise's Terrace every step (Climate::Terrace): v0 + step t^2, inverted v1 - step (1 - t)^2.
-float terrace(float h, float step, bool inv) {
-	float u = h / step;
-	float fl = floor(u);
-	float a = u - fl;
-	float v0 = fl * step;
-	if (inv) {
-		float b = 1.0 - a;
-		return v0 + step - step * b * b;
-	}
-	return v0 + step * a * a;
-}
 """
 
 const HEAD := """shader_type canvas_item;

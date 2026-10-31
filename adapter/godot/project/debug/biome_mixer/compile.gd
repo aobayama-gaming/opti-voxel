@@ -459,17 +459,6 @@ func _emit_curve(p_id: String, p_node: Dictionary) -> Array:
 	return [_rec(v, h.m, h.mb + bound, h.amp + bound, h.dev + 2.0 * bound, h.slope * (1.0 + slope), h.lam)]
 
 
-func _emit_terrace(p_id: String, p_node: Dictionary) -> Array:
-	var h := _input_or_zero(p_id, 0)
-	var step: float = maxf(float(Kinds.param(p_node, "step_m")), 0.01)
-	var amount: float = Kinds.param(p_node, "amount")
-	var su := _uniform("float", "u_%s_step" % p_id, step)
-	var iu := _uniform("bool", "u_%s_invert" % p_id, bool(Kinds.param(p_node, "invert")))
-	var au := _uniform("float", "u_%s_amount" % p_id, amount)
-	var v := _var("float", "v_%s" % p_id, "mix(%s, terrace(%s, %s, %s), %s)" % [h.e, h.e, su, iu, au])
-	return [_rec(v, h.m, h.mb + step, h.amp + step, h.dev + 2.0 * step, h.slope * (1.0 + absf(amount)), h.lam)]
-
-
 # Holes: air where the field is above the threshold, inside the depth band below the surface. The field is scaled to
 # metres (its wavelength / NOISE_SLOPE, so its slope is about 1) and pushed below the surface outside the band.
 func _emit_carve(p_id: String, p_node: Dictionary) -> Array:

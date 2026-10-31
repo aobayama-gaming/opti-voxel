@@ -89,11 +89,10 @@ inline constexpr int MAX_LEVEL = ExactNoise::MAX_K;
 
 // Field groups (Spec::fields, the climate): LINEAR4 channel sets carried down with the ground, each after the
 // ground's CHANNELS slots: field f's channel c is Level slot field_slot(f, c). Group 0 is the ground, 1 + f field f.
-// The GPU code is generated per spec (Spec::group_count), so the cap only sizes the CPU's slot arrays: a world of several
-// landforms (adapter/godot/project/climate/region_test.json) carries more than 8 groups.
+// The GPU code is generated per spec (Spec::group_count), so the cap only sizes the CPU's slot arrays.
 inline constexpr int MAX_FIELD_GROUPS = 24;
 inline constexpr int MAX_GROUPS = 1 + MAX_FIELD_GROUPS;
-static_assert(MAX_GROUPS < 32, "group masks (Modulation::modulated, cell_groups, (1 << groups) - 1) are 32-bit");
+static_assert(MAX_GROUPS < 32, "group masks (Modulation::modulated, (1 << groups) - 1) are 32-bit");
 // A field group's channels (LINEAR4: value and gradient).
 inline constexpr int FIELD_CHANNELS = 4;
 // Carry groups (Modulation::derive): LINEAR4 channel sets after the field groups, what a level computes from its
@@ -238,7 +237,7 @@ using Band = ExactNoise::Octave;
 
 // Where the field groups and the carry are carried in a run down to LOD L. A modulated band above the run's last level
 // reads the fields at its own level (floor <= m <= ceiling, the finest / coarsest modulated ground level); the last
-// level reads none: its band and its samples' terms (sample: the climate's height terms, terraces, pick) read the carry
+// level reads none: its band and its samples' terms (sample: the biomes' curve weights, the pick) read the carry
 // that level L + 1 derives (Modulation::derive). So the fields at m >= lowest(L) (monotone in m: a level carrying them
 // always finds them in its parent level), the carry at L + 1 (written) and L (read) where the last level reads it.
 // The ground is the same bits whatever else is carried. Empty (no modulation): nothing anywhere. The CPU's ground
@@ -384,8 +383,6 @@ struct Spec {
     std::vector<std::vector<Band>> fields;
     // Null: every band at its constant amplitude. A modulated ground needs LINEAR4.
     std::shared_ptr<const Modulation> modulation;
-    // Bit g: group g's bands are cell noise (ExactNoise::cell3, field groups only) instead of perlin3.
-    uint32_t cell_groups = 0;
     // The base a stretched band stretches along (BaseSurface::stretched): the ground's (SDFCascade), flat at datum 0
     // otherwise.
     BaseSurface base = BaseSurface::flat(0);

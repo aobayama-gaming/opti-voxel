@@ -1,12 +1,11 @@
 extends RefCounted
 ## Biome graphs to start from: the plain ground, or one biome of a climate table (read only). Each of the biome's
 ## ground octaves becomes a Note (warped by a Warp field built from the table's warp fields), its shape a Shape, its
-## multifractal a Multifractal chained to the next finer one, its multiplier a Mix row's volume; the height terms of
-## its region on the ground itself become Height curves, its terrace a Terrace, its surface the Output's colours.
+## multifractal a Multifractal chained to the next finer one, its multiplier a Mix row's volume; its curve a Height
+## curve (the same points), its surface the Output's colours.
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
-const Compile := preload("res://debug/biome_mixer/compile.gd")
 
 const COL := {"warp": -360.0, "note": 0.0, "shape": 300.0, "multifractal": 580.0, "mix": 880.0}
 # How wide a Mix is (its rows carry their swing, share and x): the column after it starts past it.
@@ -142,35 +141,11 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	model.nodes[mix].pos = [COL.mix, row * ROW_H * 0.5 - ROW_H]
 	var last_id := mix
 	var x_next: float = COL.mix + MIX_W
-	# The region's height terms on the ground itself, each a remap R(h) = h + height_m * curve(h * per_m). The engine adds
-	# them all to the ground (not one into the next), so several become one curve through all their points.
-	var region: String = biome.get("region", p_name)
-	var curves := []
-	for h in p_table.get("heights", []):
-		var hr: String = h.get("region", "")
-		if hr != "" and hr != region:
-			continue
-		var per_m := _ground_per_m(fields.get(h.field, {}))
-		if per_m == 0.0 or not h.has("curve"):
-			warnings.append("The height term on %s left out: the mixer only has curves of the ground itself (a climate field or no curve)." % h.field)
-			continue
-		var pts := []
-		for c in h.curve:
-			var hx: float = c[0] / per_m
-			pts.append([hx, hx + h.height_m * c[1]])
-		curves.append(pts)
-	if not curves.is_empty():
-		var pts: Array = curves[0] if curves.size() == 1 else _sum_curves(curves)
-		var cv := add("curve", Vector2(x_next, model.nodes[mix].pos[1]), {"points": pts})
+	if biome.has("curve"):
+		var cv := add("curve", Vector2(x_next, model.nodes[mix].pos[1]), {"points": biome.curve})
 		link(last_id, 0, cv, 0)
 		last_id = cv
 		x_next += 340.0
-	if biome.has("terrace"):
-		var t: Dictionary = biome.terrace
-		var tr := add("terrace", Vector2(x_next, model.nodes[mix].pos[1]), {"step_m": float(t.get("step_m", 40.0)), "invert": t.get("invert", false)})
-		link(last_id, 0, tr, 0)
-		last_id = tr
-		x_next += 300.0
 	var surface: Dictionary = biome.get("surface", {})
 	var colours := {}
 	for key in ["flat", "steep"]:
@@ -222,31 +197,3 @@ func _ks(p_entry: Dictionary) -> Array:
 		if lam >= p_entry.get("from_m", INF) * 0.999 and lam <= p_entry.get("to_m", -INF) * 1.001:
 			ks.append(k)
 	return ks
-
-
-# Several remaps summed as the engine sums height terms, R(h) = h + sum (R_i(h) - h), through all their points (the
-# cubic between them is the merged curve's own: close to, not exactly, the sum).
-func _sum_curves(p_curves: Array) -> Array:
-	warnings.append("%d height terms on the ground merged into one Height curve (the same at their points)." % p_curves.size())
-	var segs := p_curves.map(func(c): return Compile.curve_segments(c))
-	var xs := {}
-	for c in p_curves:
-		for pt in c:
-			xs[pt[0]] = true
-	var keys := xs.keys()
-	keys.sort()
-	var pts := []
-	for x in keys:
-		var y: float = x
-		for s in segs:
-			y += Compile.curve_eval(s, x) - x
-		pts.append([x, y])
-	return pts
-
-
-# per_m of a field that is the ground scaled (terms [{source: ground, per_m}], no bands), else 0.
-func _ground_per_m(p_field: Dictionary) -> float:
-	var terms: Array = p_field.get("terms", [])
-	if p_field.has("bands") or terms.size() != 1 or terms[0].get("source", "") != "ground":
-		return 0.0
-	return float(terms[0].get("per_m", 0.0))

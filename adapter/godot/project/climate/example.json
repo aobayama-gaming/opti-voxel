@@ -1,5 +1,5 @@
 {
- "comment": "A world composed like libnoise's complex planet (complexplanet.cpp), with the cascade's shaped bands: a continent field lifted by libnoise's continent curve, a terrain-type field (the continents, twisted) choosing mountains (ridged multifractal, lifted inland), hills (billow), badlands (terraced) and plains (low billow), ridged river channels, turbulence from three warp fields. Tuned for 5 cm voxels; ranges keep the octaves the ground has at any LOD count.",
+ "comment": "A world with the cascade's shaped bands: a continent field and a terrain-type field (the continents, twisted) choose mountains (ridged multifractal, lifted by their curve), hills (billow), badlands (stepped by their curve) and plains (low billow), with turbulence from three warp fields. Tuned for 5 cm voxels; ranges keep the octaves the ground has at any LOD count.",
  "fields": [
   {
    "name": "continent",
@@ -44,20 +44,6 @@
    ]
   },
   {
-   "name": "rivers",
-   "seed": 104,
-   "bands": [
-    {
-     "from_m": 26000.0,
-     "to_m": 200000.0,
-     "amp": 0.6,
-     "persistence": 0.6,
-     "shape": "ridged",
-     "scale": 2
-    }
-   ]
-  },
-  {
    "name": "wx",
    "seed": 105,
    "bands": [
@@ -91,102 +77,6 @@
      "amp": 0.5,
      "persistence": 0.6
     }
-   ]
-  }
- ],
- "heights": [
-  {
-   "field": "continent",
-   "height_m": 2000,
-   "curve": [
-    [
-     -2.1,
-     -1.625
-    ],
-    [
-     -1.1,
-     -1.375
-    ],
-    [
-     -0.1,
-     -0.375
-    ],
-    [
-     -0.0375,
-     0.125
-    ],
-    [
-     0.025,
-     0.25
-    ],
-    [
-     0.15,
-     1
-    ],
-    [
-     0.4,
-     0.25
-    ],
-    [
-     0.65,
-     0.25
-    ],
-    [
-     0.9,
-     0.5
-    ],
-    [
-     1.9,
-     0.5
-    ]
-   ]
-  },
-  {
-   "field": "terrain",
-   "height_m": 1500,
-   "curve": [
-    [
-     0.0,
-     0
-    ],
-    [
-     0.07,
-     0
-    ],
-    [
-     0.2,
-     1
-    ],
-    [
-     0.5,
-     1.5
-    ]
-   ]
-  },
-  {
-   "field": "rivers",
-   "height_m": -60.0,
-   "curve": [
-    [
-     -1,
-     0
-    ],
-    [
-     0.15,
-     0
-    ],
-    [
-     0.3,
-     0.6
-    ],
-    [
-     0.45,
-     1
-    ],
-    [
-     1,
-     1
-    ]
    ]
   }
  ],
@@ -247,7 +137,25 @@
     "flat": "#8c867c",
     "steep": "#5c564e"
    },
-   "debug_color": "#7a6a5a"
+   "debug_color": "#7a6a5a",
+   "curve": [
+    [
+     -1500,
+     -1200
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     600,
+     1100
+    ],
+    [
+     1500,
+     2600
+    ]
+   ]
   },
   {
    "name": "badlands",
@@ -284,14 +192,45 @@
      "x": 0.1
     }
    ],
-   "terrace": {
-    "step_m": 40
-   },
    "surface": {
     "flat": "#b8643a",
     "steep": "#7c3c24"
    },
-   "debug_color": "#c06030"
+   "debug_color": "#c06030",
+   "curve": [
+    [
+     -200,
+     -200
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     30,
+     40
+    ],
+    [
+     40,
+     40
+    ],
+    [
+     70,
+     80
+    ],
+    [
+     80,
+     80
+    ],
+    [
+     110,
+     120
+    ],
+    [
+     300,
+     320
+    ]
+   ]
   },
   {
    "name": "hills",

@@ -134,8 +134,8 @@ that follow it (the climate's map below is 3D for the same reason).
   base point under the camera (the layer stays in it from any height) and re-centres when that is 8 cells from its
   centre; a camera outside the live map (a teleport, before its build lands) reads none; the hand-off is a
   `Trace::flow` ("climate_map": asked in `climate_update`, built in `climate_build`, uploaded in `climate_upload`); the texture starts at 0 (one texel without a climate), which reads as the sky's
-  cover and the noise's type, so the passes have no climate-less branch. `world.json` (and the video's
-  reseeded copy) set every landform's: the deserts and dunes 0.04-0.08 cumulus, the mangrove 0.75-0.8 towering cumulus,
+  cover and the noise's type, so the passes have no climate-less branch. `world.json` sets
+  every biome's: the deserts and dunes 0.04-0.08 cumulus, the mangrove 0.75-0.8 towering cumulus,
   the warm dry cliffs 0.55-0.65 stratus decks, the islands 0.4-0.45 trade cumulus, the valley 0.65-0.7 stratocumulus,
   the caldera 0.3-0.35, the mountains 0.6. Measured (1280x720, steady atmosphere + clouds p50, 2 interleaved runs, the
   video's spawn on the mangrove / desert border vs the same table without clouds): from 12 km 3.18 -> 2.71 ms, on the

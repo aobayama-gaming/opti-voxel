@@ -38,7 +38,7 @@ public:
         (void)p_view;
         return ov::str();
     }
-    // Whether a sample's ground is more than the cascade's ground channels (a climate's height terms or terraces): then
+    // Whether a sample's ground is more than the cascade's ground channels (a biome's curve): then
     // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
     // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample.
     virtual bool has_ground_terms() const { return false; }

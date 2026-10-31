@@ -63,7 +63,7 @@ if(EMSCRIPTEN)
     # the workers are started with the page (a pthread only starts once the main thread yields): the pool's (one per core but
     # the main thread's, at least one) and the viewer's two long-lived workers (discoverer, field); one more starts late. Only a cross-origin isolated page (web/serve.py's headers)
     # gets SharedArrayBuffer. FS: a --shot's PNG is read back from the page (Module.FS.readFile); the Godot project's
-    # climate worlds are preloaded at /climate (ov_dawn.data: ?climate=/climate/world_video.json&lods=25), its grade at /grade_lut.rgb.
+    # climate worlds are preloaded at /climate (ov_dawn.data: ?climate=/climate/world.json&lods=25), its grade at /grade_lut.rgb.
     target_link_options(ov_dawn PRIVATE "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/climate@/climate"
             "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/grade_lut.rgb@/grade_lut.rgb" "--use-port=${OV_EMDAWNWEBGPU_PORT}" -pthread -sJSPI -Wno-experimental
             -Wno-pthreads-mem-growth "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency+2" -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB
