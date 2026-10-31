@@ -7,6 +7,8 @@ extends RefCounted
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 
+# The grid a graph is laid out on: its columns' order and its rows (the mixer spreads it to the nodes' sizes, the
+# model's "layout": "grid").
 const COL := {"note": 0.0, "shape": 300.0, "multifractal": 580.0, "mix": 880.0}
 # How wide a Mix is (its rows carry their swing, share and x): the column after it starts past it.
 const MIX_W := 640.0
@@ -21,7 +23,7 @@ var lods := Octaves.DEFAULT_LODS
 func _init(p_name: String, p_voxel_m: float = Octaves.DEFAULT_VOXEL_M, p_lods: int = Octaves.DEFAULT_LODS) -> void:
 	voxel_m = p_voxel_m
 	lods = p_lods
-	model = {"version": 1, "name": p_name, "voxel_m": voxel_m, "lods": lods, "origin_m": [0.0, 0.0], "next_id": 1, "nodes": {}, "links": []}
+	model = {"version": 1, "name": p_name, "voxel_m": voxel_m, "lods": lods, "origin_m": [0.0, 0.0], "next_id": 1, "nodes": {}, "links": [], "layout": "grid"}
 
 
 func add(p_kind: String, p_pos: Vector2, p_params: Dictionary = {}) -> String:

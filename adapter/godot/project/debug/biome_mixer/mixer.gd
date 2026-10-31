@@ -23,6 +23,8 @@ const Preview := preload("res://debug/biome_mixer/preview.gd")
 const WORLD := "res://climate/world.json"
 const BIOMES_DIR := "res://climate/biomes"
 const AUTOSAVE := "user://biome_mixer_autosave.biome.json"
+# Pixels between an imported graph's columns and rows.
+const LAYOUT_GAP := 60.0
 const VIEW_DEFAULTS := {
 	"quality": 1, "steps": 256, "step": 1.0, "shadows": true, "sun_az": 135.0, "sun_el": 35.0, "exag": 1.0,
 	"water_on": false, "water": 0.0, "contour": 0.0,
@@ -118,10 +120,39 @@ func set_model(p_model: Dictionary, p_frame: bool) -> void:
 	name_edit.text = model.get("name", "biome")
 	_build_view_bar()
 	rebuild_ui()
+	if model.get("layout", "") == "grid":
+		model.erase("layout")
+		_spread_layout()
 	recompile(false)
 	if p_frame:
 		preview.frame(result.hmax)
 		_fit_graph()
+
+
+# An importer's grid (ImportTable's columns, ROW_H rows) spread to the built nodes' sizes: each column as wide as its
+# widest node, the rows as tall as the tallest note, shape or multifractal, LAYOUT_GAP between them.
+func _spread_layout() -> void:
+	var widths := {}
+	var row_h := 0.0
+	for id in model.nodes:
+		var size := (graph.get_node(NodePath(id)) as GraphNode).get_combined_minimum_size()
+		var x := float(model.nodes[id].pos[0])
+		widths[x] = maxf(widths.get(x, 0.0), size.x)
+		if model.nodes[id].kind in ["note", "shape", "multifractal"]:
+			row_h = maxf(row_h, size.y)
+	var xs := widths.keys()
+	xs.sort()
+	var at := {}
+	var left := 0.0
+	for x in xs:
+		at[x] = left
+		left += widths[x] + LAYOUT_GAP
+	var scale := (row_h + LAYOUT_GAP) / ImportTable.ROW_H
+	for id in model.nodes:
+		var p: Array = model.nodes[id].pos
+		var to := Vector2(at[float(p[0])], float(p[1]) * scale)
+		model.nodes[id].pos = [to.x, to.y]
+		(graph.get_node(NodePath(id)) as GraphNode).position_offset = to
 
 
 # The graph's top-left corner in view, zoomed so its columns (warp, note, shape, multifractal, mix) fit the width. A
