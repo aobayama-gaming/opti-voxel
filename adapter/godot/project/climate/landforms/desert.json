@@ -29,6 +29,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#9c8468", "steep": "#7c6450", "roughness": 1},
+   "clouds": {"cover": 0.08, "type": 1.0},
    "debug_color": "#9c8468",
    "where": [
     {"field": "patch", "min": 0.08, "fade": 0.04}
@@ -50,6 +51,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#d8b98a", "steep": "#b08860"},
+   "clouds": {"cover": 0.04, "type": 1.0},
    "debug_color": "#e0c080"
   }
  ]

@@ -30,12 +30,16 @@ TEST_CASE("CloudLayer::for_base: Earth's layer over low ground; lifted over a hi
     CHECK(double(tiny.top_m - tiny.bottom_m) == doctest::Approx(s * double(earth.top_m - earth.bottom_m)).epsilon(1e-5));
     CHECK(double(tiny.extinction) * double(tiny.top_m - tiny.bottom_m) ==
             doctest::Approx(double(earth.extinction) * double(earth.top_m - earth.bottom_m)).epsilon(1e-5));
-    // The noises' periods: powers of two of voxels, within a factor of two under the scaled period, weather a multiple
-    // of the others (the wind's offset wraps at it).
-    for (const CloudLayer &l : { low, tiny }) {
+    // The noises' periods: powers of two of voxels, within a factor of two under the scaled period, the warp a multiple
+    // of the others (the wind's offset wraps at it) and longer than the weather (the field repeats at the warp's).
+    const CloudLayer flat = CloudLayer::for_base(INFINITY, 3300.0, 0.05);
+    const CloudLayer fine = CloudLayer::for_base(INFINITY, 3300.0, 0.001); // the frame's longest period clamps them all
+    for (const CloudLayer &l : { low, tiny, flat, fine }) {
         CHECK(power_of_two(l.shape_period_vox));
         CHECK(power_of_two(l.detail_period_vox));
         CHECK(power_of_two(l.weather_period_vox));
+        CHECK(power_of_two(l.warp_period_vox));
+        CHECK(l.warp_period_vox >= 4 * l.weather_period_vox);
         CHECK(l.weather_period_vox % l.shape_period_vox == 0);
         CHECK(l.shape_period_vox % l.detail_period_vox == 0);
     }

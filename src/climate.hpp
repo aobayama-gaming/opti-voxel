@@ -158,12 +158,22 @@ struct Terrace {
     bool invert = false;
 };
 
+// The clouds over a biome ("clouds"; CloudClimate): the sky's cover there and the cloud type (Schneider's: stratus 0,
+// stratocumulus 0.5, cumulus 1), both in [0, 1]. Unset: the sky's cover and the weather noise's type.
+struct BiomeClouds {
+    bool set = false;
+    float cover = 0.0f;
+    float type = 0.0f;
+};
+
 struct Biome {
     ov::str name;
+    int region = -1; // Table::regions index whose edges start `edges` (its "region"), -1: none
     std::vector<Edge> edges; // empty for the last (default) biome only
     std::vector<Amp> amps;
     Terrace terrace;
     Surface surface;
+    BiomeClouds clouds;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };
 
@@ -270,6 +280,8 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
 // The product of the edges' smoothsteps on the field channels p_fields (dual numbers, in list order): a biome's indicator
 // r_b, a region's value. 1 without edges.
 Float4 edges_value(const std::vector<Edge> &p_edges, const Float4 p_fields[MAX_FIELDS]);
+// The edge's smoothstep is +0 on the field's channels p_x (GLSL twin: cl_edge_off, the region guards).
+bool edge_off(const Edge &p_edge, const Float4 &p_x);
 // The insertion level of the highest band (any group) the biomes give different amplitudes, shapes or warps (the
 // continental octaves a world turns off in every biome don't count): above it, no band's climate matters.
 int weighted_ceiling(const Table &p_table, const Cascade::Spec &p_combined);
@@ -284,7 +296,7 @@ std::vector<int> gated_regions(const Table &p_table);
 // The climate at a point, evaluated once per point of each level above a run's last (Modulator: a band's amplitude from
 // the channels before the level's insertions; the level above the last derives the last level's amplitudes and its
 // samples' terms from the same climate) and by the report: the field values of a point's slots
-// p_slots (apply_terms), then the biome weights (weights); GLSL twin: glsl_weights. What reaches a reader is one rule,
+// p_slots (apply_terms), then the biome weights (weights); GLSL twin: glsl_fields + glsl_biome_weights. What reaches a reader is one rule,
 // the LOD rule: octave k of a modulated group, inserted on Λ_m, reads H of the climate of Λ_{m+1} after its insertions
 // (the climate low-passed at k, Cascade::Modulation); a run's samples read H of the climate the level above them reads
 // for its own bands.
@@ -313,9 +325,10 @@ ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c);
 // added up from 0. Dual numbers like the fields (gradient per lattice spacing, value in LOD0 voxels).
 Float4 height_sum(const Table &p_table, const Float4 p_fields[MAX_FIELDS], const Float4 p_regions[MAX_REGIONS]);
 // The same in GLSL: the curves' functions (curves_glsl, before), then statements defining `vec4 <p_var>` from the
-// f<i> of glsl_weights and the rg<r> of glsl_edges_value (height_sum_glsl).
+// f<i> of glsl_fields and the rg<r> of glsl_edges_value (height_sum_glsl); p_guards: a gated term only where its
+// region's rof<r> is false (region_off_glsl: elsewhere it adds +0).
 ov::str curves_glsl(const Table &p_table);
-ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var);
+ov::str height_sum_glsl(const Table &p_table, const ov::str &p_var, bool p_guards = false);
 
 // The ground at a sample: the cascade's ground channels of p_slots (a point's slots), plus the carried height terms'
 // sum, then h + sum_b w_b (terrace_b(h) - h) over the biomes with terraces, w_b carried (SampleCarry). Without height
@@ -345,11 +358,24 @@ Material::Params biome_material(const Biome &p_biome);
 ov::str pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
 ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
 // The pieces both generated functions share (climate_glsl.cpp): the dual-number helpers (cl_flush, cl_mul, cl_sub,
-// cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
-// of `Ch pre` (p_spec's GPU layout).
+// cl_edge), then apply_terms and weights as statements: glsl_fields defines the f<i> (the fields) from the channels of
+// `Ch pre` (p_spec's GPU layout), glsl_biome_weights the w<b> (the weights); p_guards: a biome with a region is computed
+// only where the region's rof<r> is false, else +0 (the region guards).
 ov::str glsl_helpers();
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
-// edges_value as statements defining `vec4 <p_var>` from the f<i> of glsl_weights.
+ov::str glsl_fields(const Table &p_table, const Cascade::Spec &p_spec);
+ov::str glsl_biome_weights(const Table &p_table, bool p_guards);
+
+// The region guards (GPU only, docs/climate.md): where one of a region's edges is at 0 (cl_edge returns +0), every biome
+// of that region weighs +0 and every height term it gates adds +0, and each reader of a weight (the amplitude sums, the
+// multifractal state, the warps, the height sum, rest) is left as it is by them, bit for bit. So the climate code skips
+// them there, per point: in a region's core the other regions' biomes, in a fade between two the others'. The regions
+// guarded (bit r): those some biome or gated height term names (0: no guards, the text before them).
+uint32_t guarded_regions(const Table &p_table);
+// `bool rof<r>` for each guarded region, after glsl_fields: some edge of region r returns +0 (cl_edge_off).
+ov::str region_off_glsl(const Table &p_table);
+// `bool cl_edge_off(vec4 x, float anchor, float scale)` (edge_off, after glsl_helpers; cl_edge's own first lines).
+ov::str region_helpers_glsl();
+// edges_value as statements defining `vec4 <p_var>` from the f<i> of glsl_fields.
 ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges);
 // Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a
 // shaped modulation or ground terms. Else each generator brings glsl_helpers as before them (the plain text).

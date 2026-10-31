@@ -160,6 +160,14 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
                 hosts.atmosphere_textures);
         if (config.clouds && hosts.cloud_textures) {
             clouds = new Clouds();
+            const Climate::Table *climate = sdf->get_climate();
+            if (climate && CloudClimate::any(*climate)) {
+                // The table and the spec stay as they are while the world runs (configure is before start).
+                const SDFCascade *cascade = sdf.get();
+                clouds->set_climate([climate, cascade](const VoxelPos &p_voxel, int p_m) {
+                    return CloudClimate::at(*climate, cascade->get_spec(), p_voxel, p_m);
+                });
+            }
             clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
                     hosts.cloud_textures);
             clouds->set_weather(cloud_cover, cloud_wind);

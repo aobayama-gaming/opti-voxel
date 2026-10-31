@@ -114,6 +114,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#1c4a78", "steep": "#1c4a78", "roughness": 0.2},
+   "clouds": {"cover": 0.3, "type": 0.65},
    "debug_color": "#1c4a78"
   },
   {
@@ -172,6 +173,7 @@
     {"field": "ground", "from_m": 104857.6, "to_m": 30000000, "x": 0}
    ],
    "surface": {"flat": "#6a6a50", "steep": "#5a4c44"},
+   "clouds": {"cover": 0.35, "type": 0.7},
    "debug_color": "#7a6a50"
   }
  ]

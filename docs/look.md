@@ -97,7 +97,7 @@ host that binds their textures (`Hosts::atmosphere_textures`, `Hosts::cloud_text
 They are made from the base's shape like the atmosphere: a layer
 between two altitudes above the base (`base_altitude`; a ray's part in it from `base_level_span`), every noise read at
 the 3D point in the shading frame (no 2D weather map, which a curved base would tear), so another base kind gets clouds
-that follow it.
+that follow it (the climate's map below is 3D for the same reason).
 - **Density:** Schneider's (Horizon Zero Dawn's Nubis, SIGGRAPH 2015 / 2017; ported from clayjohn's
   godot-volumetric-cloud-demo, MIT): a 128^3 Perlin-Worley shape noise (R; G B A Worley fbms) and a 32^3 Worley detail
   noise, 3D RGBA16F textures made once by a compute pass, read through the device's linear sampler (hardware
@@ -105,7 +105,41 @@ that follow it.
   set by `VoxelSky.cloud_cover`, measured on the noise so the cover is about the fraction of sky covered); the type
   blends Schneider's stratus / stratocumulus / cumulus height gradients; the detail erodes the base (billows below,
   wisps above). Periods (Earth): shape ~12 km, detail ~1.5 km, weather ~48 km, each a power of two of voxels (the
-  shading frame), the wind's offset wrapped at the weather's.
+  shading frame). On their own the whole field repeated every weather period (on the flat world at 5 cm: the same clouds
+  every 26.2 km, the same shapes every 6.55 km, `--cam_pos` shifted top-down shots: 4% of cloud pixels differed a
+  weather period over). So every read is **warped** (`cloud_warp`): a smooth offset of two sine waves per axis, whole
+  cycles per a ~800 km period (`warp_period_vox`; at most 2^23 voxels, at least 4 weather periods), |k| = sqrt(5) cycles
+  and 0.015 periods each (`WARP_AMPLITUDE`: 6 km at 5 cm), carried by the wind with the noises (the clouds drift whole):
+  points a shape period apart read noises ~1.5 to 2 km apart (its features ~1.6 km), a weather period apart 5 to 9 km
+  (~6.5 km), the clouds stretched by 2 x 2 pi sqrt(5) x 0.015 = 0.42 at most (~0.2 typical). The field now repeats every
+  warp period (419 km at 5 cm; 34% of cloud pixels differ a weather period over, 42% a shape period over, ~42% for
+  unrelated fields at that cover), for +0.17 ms of cloud passes (1280x720, the video preset; measured before the passes
+  skipped the weather outside the layer). A warp read from the shape noise itself sheared the clouds into streaks (its
+  fine octaves: gradients ~1.5). The wind's offset wraps at the warp's period.
+- **Climate** (`src/cloud_climate.*`, a biome's `"clouds": {"cover", "type"}` in the climate table, `docs/climate.md`):
+  the weather follows the biomes, as Nubis' weather map does (coverage and type; ISCCP's climatology for the values:
+  little cloud over deserts, most in the convective tropics and storm tracks). `World` hands the clouds the climate
+  (`Clouds::set_climate`) when some biome sets its clouds; a worker of its own (`CloudClimate::Stream`,
+  `ov::executor().start_worker`, one build at a time: as a LOW pool task the first map waited 29 s behind the million
+  trees' load, on the worker it lands in the first frames) evaluates it on a 64^3 lattice of cells round the camera (`CloudClimate::Map`, cells of
+  2^`climate_cell_shift` voxels, ~8 km on Earth: 6.55 km at 5 cm, the map 419 km), only the cells within 2 cells of the
+  layer, each from the biome weights at the corner of the base cell under its centre (`CloudClimate::at`:
+  `Cascade::point_slots` with every field on the cell's lattice, then `Climate::state`; one sample per base cell, which
+  a column's cells share; ~140 us a sample, ~0.6 s for the first flat map, ~80 ms a re-centre, the base cells it already
+  had reused), uploaded as a 3D RGBA16F texture once built (Dawn's `update_texture` now writes 3D textures whole, and its
+  `create_texture_3d` makes a 3D texture at any depth). A texel is linear in the weights (sum w cover, sum w type, sum w
+  over the biomes with clouds), so the trilinear read blends biomes over a cell or two; `cloud_weather` takes the cover
+  from it (the sky's `cloud_cover` for the weight no biome sets) and the type round the biomes' (the noise's offset from
+  0.5 moves it towards 0 or 1 by up to 0.4 of the way, `TYPE_SPREAD`, so it stays in [0, 1]). The map is centred on the
+  base point under the camera (the layer stays in it from any height) and re-centres when that is 8 cells from its
+  centre; a camera outside the live map (a teleport, before its build lands) reads none; the hand-off is a
+  `Trace::flow` ("climate_map": asked in `climate_update`, built in `climate_build`, uploaded in `climate_upload`); the texture starts at 0 (one texel without a climate), which reads as the sky's
+  cover and the noise's type, so the passes have no climate-less branch. `world.json` (and the video's
+  reseeded copy) set every landform's: the deserts and dunes 0.04-0.08 cumulus, the mangrove 0.75-0.8 towering cumulus,
+  the warm dry cliffs 0.55-0.65 stratus decks, the islands 0.4-0.45 trade cumulus, the valley 0.65-0.7 stratocumulus,
+  the caldera 0.3-0.35, the mountains 0.6. Measured (1280x720, steady atmosphere + clouds p50, 2 interleaved runs, the
+  video's spawn on the mangrove / desert border vs the same table without clouds): from 12 km 3.18 -> 2.71 ms, on the
+  ground ~2.8 -> ~2.6 ms (less cloud over the desert; the map's fetch doesn't show).
 - **Layer** (`CloudLayer::for_base`): Earth's 1.5 to 4 km, extinction 0.04 /m at density 1 (Hillaire 2016's cumulus
   range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
   s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is
@@ -139,9 +173,20 @@ that follow it.
   cover and the wind (`cloud_wind`, metres per second along render x and z: on a planet the noise drifts through the
   shell) every frame.
 - **Checked:** unit tests (the layer's scale and lift, the periods, the substitution, the block, the shadow map's
-  frame); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
+  frame; the biomes' clouds parsed and refused, the texel's blend, the map's cells, samples and re-centring, the world
+  climate's cover 0.04 to 0.8 along 2000 km); origin parity with the climate's clouds in view (34 rebases, 0.02% of
+  pixels differ); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
   inside the flat world's layer, Earth from 100 km and the 2 km planet from the ground and from 4 km out.
-- **Limits:** the grid's 0.23 degrees show as jagged edges on a small planet seen whole; the reach is a horizon on the
+- **Limits:** the climate map covers 419 km round its centre (5 cm): clouds past ~160 km read its edge cells, which
+  depend on where it was last centred (a camera that came back from elsewhere can see a different far horizon); a
+  biome's cover replaces the sky's `cloud_cover` over it (the slider moves only the biomes without clouds); the climate
+  is the base point's at the cell's lattice, low-passed at ~6.5 km (a biome smaller than that blends into its
+  neighbours); the layer's altitudes are the same everywhere (a cumulonimbus is a cumulus, not a taller layer); each
+  sample replays the cascade from its top alone (one `Cascade::run` over the base cells would share the coarse levels);
+  on an inline executor (threads=no) a build runs in `pump()`, a 0.6 s frame (the Dawn viewer runs no clouds yet). The field still repeats every warp period, at most 2^23 voxels (`ShadeFrame::MAX_SHIFT`: 419 km at
+  5 cm; a tile index from the origin's high bits could hash each tile instead); the light march reuses its start
+  point's warp (as it does the weather); the plain cloud layer (`VoxelSky`'s `clouds.png`, without the volumetric
+  clouds) still tiles every `cloud_scale_m`; the grid's 0.23 degrees show as jagged edges on a small planet seen whole; the reach is a horizon on the
   base's curvature sphere, so a torus seen from space has clouds on its near side only; a cloud in front of terrain is
   composited by its front and mean distances, so a hill reaching into one would be cut by texels (the layer is lifted
   over the world's largest relief instead, so no cloud wraps a peak); the wind is a render-space vector, so on a planet
