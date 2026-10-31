@@ -1,11 +1,15 @@
 extends Control
-## The biome mixer: build one biome from the ground's octaves (notes) in a node graph, seen raymarched beside it.
+## The biome mixer: build a world's biomes from the ground's octaves (notes) in a node graph, seen raymarched beside
+## it. Two modes: Biome (one biome's notes in the graph, the view that biome alone) and World (the climate chart: every
+## biome's place in the fields' space, and the view of the whole world blended, in 3D or as a map).
 ## The graph (the model: nodes, links) is the truth; compile.gd turns it into the preview's shader, the structure into
 ## code (recompiled when it changes), every parameter into a uniform (a slider redraws, no recompile).
 ## Run: tools/biome_mixer.sh [-- flags]  (godot --path adapter/godot/project res://debug/biome_mixer/biome_mixer.tscn)
 ## Flags:
-##   --open=PATH        a biome file (res://climate/biomes/*.biome.json); default: the autosave, else world.json's mountain
-##   --import=NAME      a biome of res://climate/world.json
+##   --open=PATH        a biome file (res://climate/biomes/*.biome.json) into the world's biome of its name (else the
+##                      current one); the world: the autosave, else res://climate/world.json
+##   --import=NAME      res://climate/world.json, its biome NAME in the graph
+##   --world            start in the World mode
 ##   --set=ID.PARAM=V   set a node's parameter after loading (V as JSON: 1.5, true, "plain"), or view.KEY=V a view
 ##                      setting (view.shadows=false); repeatable
 ##   --shot=PATH        draw once, save the window to PATH (and the view alone to PATH_view.png), quit
@@ -19,10 +23,17 @@ const Nodes := preload("res://debug/biome_mixer/nodes.gd")
 const ShaderLib := preload("res://debug/biome_mixer/shader_lib.gd")
 const ImportTable := preload("res://debug/biome_mixer/import_table.gd")
 const Preview := preload("res://debug/biome_mixer/preview.gd")
+const World := preload("res://debug/biome_mixer/world.gd")
+const WorldPanel := preload("res://debug/biome_mixer/world_panel.gd")
+const Checks := preload("res://debug/biome_mixer/checks.gd")
+const ViewBar := preload("res://debug/biome_mixer/view_bar.gd")
 
 const WORLD := "res://climate/world.json"
 const BIOMES_DIR := "res://climate/biomes"
-const AUTOSAVE := "user://biome_mixer_autosave.biome.json"
+const WORLDS_DIR := "res://climate/worlds"
+const AUTOSAVE := "user://biome_mixer_autosave.world.json"
+# The autosave of one biome, before the World mode: read once when there is no world autosave yet.
+const OLD_AUTOSAVE := "user://biome_mixer_autosave.biome.json"
 # Pixels between an imported graph's columns and rows.
 const LAYOUT_GAP := 60.0
 const VIEW_DEFAULTS := {
@@ -45,10 +56,15 @@ var add_menu := PopupMenu.new()
 var add_at := Vector2.ZERO
 var autosave := Timer.new()
 var view_box := HFlowContainer.new()
+var refit := false  # the next World mode resample fits the chart's axes to the samples
 var compile_queued := false
 var pushed := {}  # the uniforms the preview has
 var pushed_code := ""
-var world := {}  # res://climate/world.json, parsed once
+var table := {}  # res://climate/world.json, parsed once
+var world := {}  # the world (world.gd): every biome, its place and its graph; model is its current biome's graph
+var world_panel := WorldPanel.new()
+var biome_pick := OptionButton.new()
+var mode_pick := OptionButton.new()
 
 
 func _ready() -> void:
@@ -73,25 +89,42 @@ func _ready() -> void:
 	if shot != "":
 		autosave.timeout.disconnect(_autosave)
 	var asked := ""
+	var pick := ""
+	var mode := ""
 	for a in args:
 		if a.begins_with("--open="):
 			asked = a
 			start = _read(a.trim_prefix("--open="))
 		elif a.begins_with("--import="):
 			asked = a
-			start = _import(a.trim_prefix("--import="))
+			pick = a.trim_prefix("--import=")
+		elif a == "--world":
+			mode = "world"
 		elif a.begins_with("--set="):
 			sets.append(a.trim_prefix("--set="))
-	if asked != "" and start.is_empty():
+	var w := _read(AUTOSAVE, true) if shot == "" and pick == "" else {}
+	if w.is_empty() and shot == "" and pick == "" and start.is_empty():
+		start = _read(OLD_AUTOSAVE)
+	if w.is_empty():
+		w = _fresh_world()
+	var names: Array = w.biomes.map(func(b): return b.name)
+	if pick != "":
+		w.current = names.find(pick)
+	if not start.is_empty():
+		var found := names.find(String(start.get("name", "")))
+		w.current = found if found >= 0 else int(w.get("current", 0))
+		w.biomes[w.current].model = start
+	if asked != "" and (int(w.current) < 0 or (asked.begins_with("--open=") and start.is_empty())):
 		push_error("%s: no such biome file or world.json biome" % asked)
 		if shot != "":
 			get_tree().quit(1)
 			return
-	if start.is_empty() and shot == "":
-		start = _read(AUTOSAVE)
-	if start.is_empty():
-		start = _import("mountain")
-	set_model(start, true)
+		w.current = 0
+	if mode != "":
+		w.mode = mode
+	elif pick != "" or not start.is_empty():
+		w.mode = "biome"
+	set_world(w, true)
 	for s in sets:
 		_apply_set(s)
 	if shot != "":
@@ -100,31 +133,79 @@ func _ready() -> void:
 
 # --- the model ---------------------------------------------------------------------------------------------------
 
-func set_model(p_model: Dictionary, p_frame: bool) -> void:
+# The world (world.gd) and its mode: every biome's place on the chart, the current one's graph.
+func set_world(p_world: Dictionary, p_frame: bool) -> void:
+	world = p_world
+	model = {}
+	world.erase("warnings")
+	world.current = clampi(int(world.get("current", 0)), 0, world.biomes.size() - 1)
+	# One view for the World mode: the Biome mode's settings and the World mode's own (the map, the chart).
+	var view: Dictionary = VIEW_DEFAULTS.duplicate()
+	view.merge(World.WORLD_VIEW)
+	view.merge(world.get("view", {}), true)
+	world.view = view
+	# Every biome as its graph would load it alone: run_world compiles them all, not only the one in the graph.
+	for b in world.biomes:
+		Kinds.normalise(b.model)
+	world_panel.set_world(world)
+	biome_pick.clear()
+	for b in world.biomes:
+		biome_pick.add_item(b.name)
+	biome_pick.select(world.current)
+	_enter(String(world.get("mode", "biome")), p_frame)
+
+
+# The Biome mode (the graph of the current biome, the view of it alone) or the World mode (the chart, the world view).
+func _enter(p_mode: String, p_frame: bool) -> void:
+	world.mode = p_mode
+	mode_pick.select(0 if p_mode == "biome" else 1)
+	graph.visible = p_mode == "biome"
+	world_panel.visible = p_mode == "world"
+	biome_pick.disabled = p_mode == "world"
+	if p_mode == "biome" or model.is_empty():
+		# The graph (hidden in the World mode) always holds the current biome: the budget line and --set read it.
+		set_model(world.biomes[world.current].model, p_frame and p_mode == "biome", p_mode == "biome")
+	if p_mode == "biome":
+		return
+	preview.map = bool(world.view.map)
+	ViewBar.build(self)
+	refit = true
+	recompile(false)
+	if p_frame:
+		preview.frame_world(float(world.view.extent_m))
+	if refit:
+		# The same shader as before (no recompile's resample): the chart still samples the new view.
+		refit = false
+		resample(true)
+
+
+func world_mode() -> bool:
+	return world.get("mode", "biome") == "world"
+
+
+# The view settings of what the preview shows: the world's in the World mode, the biome's in the Biome mode.
+func view_settings() -> Dictionary:
+	return world.view if world_mode() else model.view
+
+
+# p_compile false: the World mode's entry, which compiles the world itself.
+func set_model(p_model: Dictionary, p_frame: bool, p_compile: bool = true) -> void:
 	model = p_model
-	model.next_id = int(model.get("next_id", 1))
-	model.voxel_m = float(model.get("voxel_m", Octaves.DEFAULT_VOXEL_M))
-	model.lods = int(model.get("lods", Octaves.DEFAULT_LODS))
-	if not model.has("nodes"):
-		model.nodes = {}
-	if not model.has("links"):
-		model.links = []
-	# The climate's warp is the model's (a file from before kept it on its warp node, which fix_notes and drop_unknown
-	# turn into its notes' warp switches).
-	model.climate_warp = Kinds.climate_warp(model)
-	Kinds.fix_notes(model)
-	Kinds.drop_unknown(model)
+	if not world.is_empty():
+		world.biomes[world.current].model = model
+	Kinds.normalise(model)
 	var view: Dictionary = VIEW_DEFAULTS.duplicate()
 	view.merge(model.get("view", {}), true)
 	model.view = view
 	name_edit.text = model.get("name", "biome")
-	_build_view_bar()
+	ViewBar.build(self)
 	rebuild_ui()
 	if model.get("layout", "") == "grid":
 		model.erase("layout")
 		_spread_layout()
-	recompile(false)
-	if p_frame:
+	if p_compile:
+		recompile(false)
+	if p_frame and p_compile:
 		preview.frame(result.hmax)
 		_fit_graph()
 
@@ -187,8 +268,9 @@ func set_params(p_id: String, p_params: Dictionary, p_rebuild: bool = false) -> 
 
 func recompile(p_moving: bool) -> void:
 	compile_queued = false
-	result = Compile.new().run(model, float(model.view.exag))
-	preview.set_code(result.code)
+	result = Compile.new().run_world(world, float(view_settings().exag)) if world_mode() else Compile.new().run(model, float(view_settings().exag))
+	if result.drawable:
+		preview.set_code(result.code)
 	# Only the uniforms that changed (a slider moves one or two of a few hundred); all of them after a recompile.
 	var fresh := preview.code != pushed_code
 	pushed_code = preview.code
@@ -198,7 +280,10 @@ func recompile(p_moving: bool) -> void:
 			changed[key] = result.uniforms[key]
 	pushed = result.uniforms
 	preview.set_uniforms(changed)
-	_apply_view()
+	if fresh and world_mode():
+		resample.call_deferred(refit)
+		refit = false
+	ViewBar.apply(self)
 	for id in mix_ui:
 		Nodes.show_mix(mix_ui[id], result.mix_rows.get(id, []))
 	for id in curve_ui:
@@ -212,7 +297,10 @@ func recompile(p_moving: bool) -> void:
 		if not warned.has(w):
 			warned[w] = true
 			lines.append(w)
-	lines.append("%d nodes. Right-click the graph: add a node; x or Delete removes one (not a note: the ground's notes are fixed); a note's warp switch moves it by the climate's warp." % model.nodes.size())
+	if world_mode():
+		lines.append("%d biomes over %d fields. The chart: drag a biome's box to move it, its edge to resize; double-click a biome in the list to edit its notes." % [world.biomes.size(), world.fields.size()])
+	else:
+		lines.append("%d nodes. Right-click the graph: add a node; x or Delete removes one (not a note: the ground's notes are fixed); a note's warp switch moves it by the climate's warp." % model.nodes.size())
 	status.text = "  ".join(lines)
 	status.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45) if not result.ok else Color(0.8, 0.82, 0.86))
 	preview.redraw(p_moving)
@@ -231,7 +319,7 @@ func _show_budget() -> void:
 	var parts := PackedStringArray([
 		"Per point: %d noise reads = %d notes (%d shaped, %d multifractal, %d moved by the climate warp, %d by notes for free) + %d climate warp octaves; plain ground reads %d." % [
 			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.note_warped, b.warp_octaves, Octaves.ground_top(model.lods, model.voxel_m) - Octaves.K_MIN + 1],
-		"Relief within +-%s%s." % [Nodes.fmt_m(result.hmax / float(model.view.exag)),
+		"Relief within +-%s%s." % [Nodes.fmt_m(result.hmax / float(view_settings().exag)),
 			", most from the %s note (+-%s)" % [Nodes.fmt_m(top.lam), Nodes.fmt_m(top.peak)] if top.get("lam", 0.0) > 0.0 else ""],
 	])
 	if preview.sharp_ms > 0.0:
@@ -245,7 +333,7 @@ func curve_span(p_id: String = "") -> float:
 	var curve_in: Dictionary = result.get("curve_in", {})
 	if curve_in.has(p_id):
 		return curve_in[p_id]
-	return maxf(float(result.get("hmax", 1000.0)) / float(model.view.exag), 10.0)
+	return maxf(float(result.get("hmax", 1000.0)) / float(view_settings().exag), 10.0)
 
 
 func rebuild_ui() -> void:
@@ -369,54 +457,85 @@ func _apply_set(p_spec: String) -> void:
 	var v = json.data if json.parse(raw) == OK else null
 	var key := p_spec.substr(dot + 1, eq - dot - 1)
 	if id == "view":
-		model.view[key] = v if v != null else raw
-		recompile(false)
+		view_settings()[key] = v if v != null else raw
+		# The World mode applies the map and the chart's extent on entering it.
+		if world_mode():
+			_enter("world", true)
+		else:
+			recompile(false)
 	else:
 		set_params(id, {key: v if v != null else raw}, true)
 
 
 # --- files -------------------------------------------------------------------------------------------------------
 
-func _read(p_path: String) -> Dictionary:
+# A biome file (p_world false) or a world file, {} if it isn't one.
+func _read(p_path: String, p_world: bool = false) -> Dictionary:
 	if not FileAccess.file_exists(p_path):
 		return {}
 	var d = JSON.parse_string(FileAccess.get_file_as_string(p_path))
-	return d if d is Dictionary and d.has("nodes") else {}
+	if not d is Dictionary:
+		return {}
+	var ok: bool = (d.get("kind", "") == "world" and not d.get("biomes", []).is_empty()) if p_world else d.has("nodes")
+	return d if ok else {}
 
 
 func _world_table() -> Dictionary:
-	if world.is_empty():
-		var table = JSON.parse_string(FileAccess.get_file_as_string(WORLD))
-		world = table if table is Dictionary else {}
-	return world
+	if table.is_empty():
+		var t = JSON.parse_string(FileAccess.get_file_as_string(WORLD))
+		table = t if t is Dictionary else {}
+	return table
+
+
+# res://climate/world.json as a world (each biome imported).
+func _fresh_world() -> Dictionary:
+	var w := World.from_table(_world_table())
+	for m in w.warnings:
+		print("import: ", m)
+	return w
 
 
 func _import(p_name: String) -> Dictionary:
 	if not p_name in ImportTable.biome_names(_world_table()):
 		return {}
-	var r: Dictionary = ImportTable.new(p_name).import_biome(world)
+	var r: Dictionary = ImportTable.new(p_name).import_biome(table)
 	for w in r.warnings:
 		print("import %s: %s" % [p_name, w])
 	return r.model
 
 
-func _write(p_path: String) -> bool:
+func _write(p_path: String, p_data: Dictionary) -> bool:
 	var f := FileAccess.open(p_path, FileAccess.WRITE)
 	if f == null:
 		return false
-	f.store_string(JSON.stringify(model, "\t", false, true))
+	f.store_string(JSON.stringify(p_data, "\t", false, true))
 	return true
 
 
 func _autosave() -> void:
-	_write(AUTOSAVE)
+	_write(AUTOSAVE, world)
 
 
 func _save() -> void:
 	var file := String(model.get("name", "biome")).validate_filename().replace(" ", "_")
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(BIOMES_DIR))
 	var path := "%s/%s.biome.json" % [BIOMES_DIR, file]
-	status.text = ("Saved " + path) if _write(path) else ("Could not write " + path)
+	status.text = ("Saved " + path) if _write(path, model) else ("Could not write " + path)
+
+
+func _save_world() -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORLDS_DIR))
+	var path := "%s/%s.world.json" % [WORLDS_DIR, String(world.get("name", "world")).validate_filename()]
+	status.text = ("Saved " + path) if _write(path, world) else ("Could not write " + path)
+
+
+# The chart's cloud: the world's fields on its two axes at the preview's samples (a frame later: the shader draws them).
+func resample(p_fit: bool) -> void:
+	if not world_mode() or preview.code == "":
+		return
+	var c := world_panel.chart
+	var vals: PackedVector2Array = await preview.sample(c.fx, c.fy, Vector2(preview.target.x, preview.target.z), float(world.view.extent_m))
+	c.set_samples(vals, p_fit)
 
 
 # --- the window --------------------------------------------------------------------------------------------------
@@ -431,6 +550,17 @@ func _build_ui() -> void:
 	var title := Label.new()
 	title.text = "  Biome mixer  "
 	bar.add_child(title)
+	mode_pick.add_item("Biome")
+	mode_pick.add_item("World")
+	mode_pick.tooltip_text = "Biome: the current biome's notes and it alone in the view. World: every biome's place on the climate chart, the whole world in the view."
+	mode_pick.item_selected.connect(func(i: int) -> void: _enter("biome" if i == 0 else "world", true))
+	bar.add_child(mode_pick)
+	biome_pick.tooltip_text = "The biome the graph edits"
+	biome_pick.item_selected.connect(func(i: int) -> void:
+		world.current = i
+		world_panel.select(i)
+		set_model(world.biomes[i].model, true))
+	bar.add_child(biome_pick)
 	name_edit.custom_minimum_size.x = 160
 	name_edit.text_changed.connect(func(t: String) -> void: model.name = t)
 	bar.add_child(name_edit)
@@ -445,7 +575,10 @@ func _build_ui() -> void:
 	open.about_to_popup.connect(_fill_open.bind(open))
 	bar.add_child(open)
 	var names: Array = ImportTable.biome_names(_world_table())
-	bar.add_child(_menu("Import from world.json", names, func(i: int) -> void: set_model(_import(names[i]), true)))
+	bar.add_child(_menu("Import from world.json", names, func(i: int) -> void: _load_biome(_import(names[i]), names[i])))
+	var worlds := _menu("World", [], func(_i: int) -> void: pass)
+	worlds.about_to_popup.connect(_fill_worlds.bind(worlds))
+	bar.add_child(worlds)
 	var save := Button.new()
 	save.text = "Save"
 	save.tooltip_text = "Writes %s/<name>.biome.json" % BIOMES_DIR
@@ -478,7 +611,25 @@ func _build_ui() -> void:
 		if not get_viewport().gui_embed_subwindows:
 			pos += get_window().position
 		add_menu.popup(Rect2i(pos, Vector2i.ZERO)))
-	split.add_child(graph)
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	graph.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left.add_child(graph)
+	left.add_child(world_panel)
+	world_panel.visible = false
+	world_panel.placed.connect(func(p_structural: bool) -> void:
+		if p_structural:
+			recompile(false)
+		else:
+			preview.set_uniforms(Compile.places(world))
+			preview.redraw(true)
+		autosave.start())
+	world_panel.edit_notes.connect(func(b: int) -> void:
+		world.current = b
+		biome_pick.select(b)
+		_enter("biome", true))
+	world_panel.axes_changed.connect(func() -> void: resample(true))
+	split.add_child(left)
 	for k in Kinds.MENU:
 		add_menu.add_item(Kinds.KINDS[k]["title"])
 	add_menu.id_pressed.connect(func(i: int) -> void: add_node(Kinds.MENU[i], add_at))
@@ -512,6 +663,30 @@ func _menu(p_text: String, p_items: Array, p_pressed: Callable) -> MenuButton:
 	return m
 
 
+# The World menu: world.json again, or a saved world; save this one.
+func _fill_worlds(p_menu: MenuButton) -> void:
+	var popup := p_menu.get_popup()
+	popup.clear()
+	for c in popup.id_pressed.get_connections():
+		popup.id_pressed.disconnect(c.callable)
+	popup.add_item("Reload res://climate/world.json")
+	popup.add_item("Save this world to %s" % WORLDS_DIR)
+	var files: Array = []
+	if DirAccess.dir_exists_absolute(WORLDS_DIR):
+		files = Array(DirAccess.get_files_at(WORLDS_DIR)).filter(func(f): return f.ends_with(".world.json"))
+	for f in files:
+		popup.add_item("Open " + f)
+	popup.id_pressed.connect(func(i: int) -> void:
+		if i == 0:
+			set_world(_fresh_world(), true)
+		elif i == 1:
+			_save_world()
+		else:
+			var w := _read("%s/%s" % [WORLDS_DIR, files[i - 2]], true)
+			if not w.is_empty():
+				set_world(w, true))
+
+
 func _fill_open(p_menu: MenuButton) -> void:
 	var popup := p_menu.get_popup()
 	popup.clear()
@@ -526,118 +701,49 @@ func _fill_open(p_menu: MenuButton) -> void:
 	if files.is_empty():
 		popup.add_item("(nothing saved in %s yet)" % BIOMES_DIR)
 		popup.set_item_disabled(0, true)
-	popup.id_pressed.connect(func(i: int) -> void: set_model(_read("%s/%s" % [BIOMES_DIR, files[i]]), true))
+	popup.id_pressed.connect(func(i: int) -> void: _load_biome(_read("%s/%s" % [BIOMES_DIR, files[i]]), files[i]))
 
 
-# The view's options under the preview (saved in the biome file: its "view").
-func _build_view_bar() -> void:
-	for c in view_box.get_children():
-		view_box.remove_child(c)
-		c.queue_free()
-	var view: Dictionary = model.view
-	var set_view := func(p_key: String, p_value: Variant, p_recompile: bool = false) -> void:
-		view[p_key] = p_value
-		if p_recompile:
-			recompile(true)
-		else:
-			_apply_view()
-			preview.redraw(true)
-		autosave.start()
-	var q := OptionButton.new()
-	for t in ["Full", "1/2", "1/3", "1/4"]:
-		q.add_item(t)
-	q.select(int(view.quality) - 1)
-	q.tooltip_text = "Resolution once still (dragging draws at 1/3 at most)"
-	q.item_selected.connect(func(i: int) -> void:
-		preview.quality = i + 1
-		set_view.call("quality", i + 1))
-	preview.quality = int(view.quality)
-	_view_item("Quality", q)
-	_view_item("Steps", _spin(view.steps, 32, 2048, 1, func(v: float) -> void: set_view.call("steps", int(v))), "The most march steps per pixel")
-	_view_item("Step", _spin(view.step, 0.1, 2.0, 0.05, func(v: float) -> void: set_view.call("step", v)), "The march step over its safe bound: lower if thin ridges show holes")
-	var sh := CheckBox.new()
-	sh.button_pressed = view.shadows
-	sh.toggled.connect(func(on: bool) -> void: set_view.call("shadows", on))
-	_view_item("Shadows", sh)
-	_view_item("Sun", _spin(view.sun_az, 0.0, 360.0, 5.0, func(v: float) -> void: set_view.call("sun_az", v)), "Azimuth, degrees")
-	_view_item("high", _spin(view.sun_el, 2.0, 90.0, 1.0, func(v: float) -> void: set_view.call("sun_el", v)), "Elevation, degrees")
-	_view_item("Exaggerate", _spin(view.exag, 0.1, 10.0, 0.1, func(v: float) -> void: set_view.call("exag", v, true)), "Heights times this (the view only)")
-	var w := CheckBox.new()
-	w.button_pressed = view.water_on
-	w.toggled.connect(func(on: bool) -> void: set_view.call("water_on", on))
-	_view_item("Water", w)
-	_view_item("at m", _spin(view.water, -5000.0, 5000.0, 1.0, func(v: float) -> void: set_view.call("water", v)))
-	_view_item("Contours m", _spin(view.contour, 0.0, 1000.0, 1.0, func(v: float) -> void: set_view.call("contour", v)), "A line every this many metres (0: none)")
-	var origin: Array = model.get("origin_m", [0.0, 0.0])
-	model.origin_m = origin
-	_view_item("Centre x m", _spin(origin[0], -1e7, 1e7, 100.0, func(v: float) -> void:
-		model.origin_m[0] = v
-		recompile(false)), "Where in the world the preview sits (the notes move under it)")
-	_view_item("z m", _spin(origin[1], -1e7, 1e7, 100.0, func(v: float) -> void:
-		model.origin_m[1] = v
-		recompile(false)))
-
-
-func _view_item(p_label: String, p_control: Control, p_tip: String = "") -> void:
-	var row := HBoxContainer.new()
-	var l := Label.new()
-	l.text = p_label
-	row.add_child(l)
-	row.add_child(p_control)
-	row.tooltip_text = p_tip
-	view_box.add_child(row)
-
-
-func _spin(p_value: float, p_min: float, p_max: float, p_step: float, p_set: Callable) -> SpinBox:
-	var s := SpinBox.new()
-	s.min_value = p_min
-	s.max_value = p_max
-	s.step = p_step
-	s.value = p_value
-	s.custom_minimum_size.x = 80
-	s.value_changed.connect(p_set)
-	return s
-
-
-func _apply_view() -> void:
-	var v: Dictionary = model.view
-	var az := deg_to_rad(float(v.sun_az))
-	var el := deg_to_rad(float(v.sun_el))
-	preview.set_uniforms({
-		"u_max_steps": int(v.steps),
-		# The slope bound is a worst case (every note at its steepest at once): twice its step still holds on
-		# the imported biomes, at half the frame.
-		"u_step": float(v.step) * 2.0,
-		"u_shadows": bool(v.shadows),
-		"u_sun": Vector3(cos(el) * sin(az), sin(el), cos(el) * cos(az)),
-		"u_water_on": bool(v.water_on),
-		"u_water": float(v.water),
-		"u_contour": float(v.contour),
-	})
+# A biome's graph from a file or world.json into the world: into the world biome of its name (else the current one),
+# shown in the Biome mode.
+func _load_biome(p_model: Dictionary, p_what: String) -> void:
+	if p_model.is_empty():
+		status.text = "%s: not a biome file." % p_what
+		return
+	var found: int = world.biomes.map(func(b): return b.name).find(String(p_model.get("name", "")))
+	if found >= 0:
+		world.current = found
+		biome_pick.select(found)
+		world_panel.select(found)
+	world.biomes[world.current].model = p_model
+	model = {}
+	_enter("biome", true)
 
 
 func _shot(p_path: String) -> void:
 	preview.quality = 1
 	# Frames drawn with the whole view redrawn each one: their times are the view's cost (the first compiles the shader).
+	# Not a world's view: one frame of it outlasted the GPU's timeout (an Xid 109); its shot is the strips' pass.
 	var ms := []
 	var t := Time.get_ticks_usec()
-	for i in 6:
+	for i in 0 if world_mode() else 6:
 		preview.draw_full()
 		await RenderingServer.frame_post_draw
 		var now := Time.get_ticks_usec()
 		ms.append(snappedf((now - t) / 1000.0, 0.1))
 		t = now
-	get_viewport().get_texture().get_image().save_png(p_path)
-	preview.image().save_png(p_path.get_basename() + "_view.png")
 	# Then one pass as the window draws it, the coarse layer and the strips: no frame should wait on the whole view.
 	var pass_ms := []
 	preview.redraw()
 	t = Time.get_ticks_usec()
-	while preview.strip_y >= 0 and pass_ms.size() < 200:
+	while preview.strip_y >= 0 and pass_ms.size() < 400:
 		await RenderingServer.frame_post_draw
 		var now := Time.get_ticks_usec()
 		pass_ms.append(snappedf((now - t) / 1000.0, 0.1))
 		t = now
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(p_path)
+	preview.image().save_png(p_path.get_basename() + "_view.png")
 	print("MIXER_SHOT: ", JSON.stringify({"path": p_path, "view_px": preview.sharp.size, "frame_ms": ms, "pass_ms": pass_ms, "hmax": result.hmax, "lip": result.lip, "errors": result.errors}))
 	get_tree().quit(0)
 
@@ -645,163 +751,10 @@ func _shot(p_path: String) -> void:
 # --- the headless check ------------------------------------------------------------------------------------------
 
 func _check() -> void:
-	var report := {"pins": Octaves.check_pins(), "graphs": {}}
-	var ok: bool = report.pins.is_empty()
-	var graphs := {"plain ground": ImportTable.new("plain ground").plain_ground(), "every kind": _every_kind()}
-	var table := _world_table()
-	for name in ImportTable.biome_names(table):
-		graphs["world.json " + name] = ImportTable.new(name).import_biome(table).model
-	for g in graphs:
-		var r := Compile.new().run(graphs[g])
-		var again = JSON.parse_string(JSON.stringify(graphs[g], "", true, true))
-		var r2 := Compile.new().run(again)
-		# The shader gets float32: a double's last digits through the file don't count (a curve coefficient's 0 may come
-		# back as 3e-14).
-		var same := func(a, b) -> bool:
-			if a is float and b is float:
-				return absf(a - b) <= 1e-6 * maxf(1.0, absf(a))
-			if a is PackedFloat32Array and b is PackedFloat32Array and a.size() == b.size():
-				var scale := 1.0
-				for x in a:
-					scale = maxf(scale, absf(x))
-				for i in a.size():
-					if absf(a[i] - b[i]) > 1e-6 * scale:
-						return false
-				return true
-			return a == b
-		var differ: Array = r.uniforms.keys().filter(func(key): return not r2.uniforms.has(key) or not same.call(r.uniforms[key], r2.uniforms[key]))
-		var entry := {"ok": r.ok, "errors": r.errors, "nodes": graphs[g].nodes.size(), "hmax": r.hmax, "same_after_file": r2.code == r.code and differ.is_empty()}
-		# A Height curve's editor spans its input's bound; its points may reach past it (an import's span the table's
-		# field range): [input bound, the points' widest |h|].
-		for id in r.curve_in:
-			var pts: Array = Kinds.param(graphs[g].nodes[id], "points")
-			entry["curve_" + id] = [snappedf(r.curve_in[id], 0.1), pts.reduce(func(m, p): return maxf(m, absf(p[0])), 0.0)]
-		if not differ.is_empty():
-			entry["uniforms_differ"] = differ.slice(0, 5).map(func(key): return [key, r.uniforms[key], r2.uniforms.get(key)])
-		if g == "every kind":
-			var missing := []
-			for needle in ["(F[1] * N[1])", "shape(u_", "w_n", "curve_n", "band", "F[0] * (shape("]:
-				if not r.code.contains(needle):
-					missing.append(needle)
-			entry["missing"] = missing
-			entry["warp_rows"] = r.uniforms.u_n_warp
-			# The note warp's notes: earlier rows of the table than the note they move.
-			entry["note_warped"] = r.budget.note_warped
-			ok = ok and missing.is_empty() and r.uniforms.u_n_warp > 0 and r.budget.note_warped == 1 and Array(r.uniforms.u_jx).max() >= 0
-		# The ground's notes, fixed: one per k, K_MIN .. ground_top.
-		entry["notes_fixed"] = _note_ks(graphs[g]) == range(Octaves.K_MIN, Octaves.ground_top(25, 0.05) + 1)
-		ok = ok and r.ok and entry.same_after_file and entry.notes_fixed
-		report.graphs[g] = entry
-	report["cuts"] = _check_cuts(table)
-	report["old_kinds"] = _check_old_kinds()
-	# SDFCascade::micro_top_k's pins (test_sdf_cascade.cpp): the notes stop where the engine's ground does.
-	report["ground_top"] = [Octaves.ground_top(25, 0.05), Octaves.ground_top(25, 0.5)]
-	ok = ok and report.cuts.ok and report.old_kinds.ok and report.ground_top == [19, 16]
-	report["ok"] = ok
+	var report := Checks.run(_world_table())
 	print("MIXER: ", JSON.stringify(report))
 	# The window's parts, never added to the tree in a check.
-	for c in [graph, preview, status, budget, name_edit, add_menu, autosave, view_box]:
+	for c in [graph, preview, status, budget, name_edit, add_menu, autosave, view_box, world_panel, biome_pick, mode_pick]:
 		c.free()
 	await get_tree().process_frame
-	get_tree().quit(0 if ok else 1)
-
-
-# A file saved with kinds since removed (a Terrace before the output, a Climate warp node linked into a note) loads as
-# the graph without them, the note's warp on: the same nodes, the same code. A file missing a note gets it back.
-func _check_old_kinds() -> Dictionary:
-	var want := ImportTable.new("plain ground").plain_ground()
-	var note := Kinds.first_of(want, "note")
-	var m = JSON.parse_string(JSON.stringify(want))
-	want.nodes[note].params.warp = true
-	var into_out: Dictionary = m.links.filter(func(l): return l.to == Kinds.first_of(m, "output"))[0]
-	m.nodes["old"] = {"kind": "terrace", "pos": [0, 0], "params": {"step_m": 40.0}}
-	m.links.append({"from": into_out.from, "from_port": into_out.from_port, "to": "old", "to_port": 0})
-	into_out.from = "old"
-	into_out.from_port = 0
-	m.nodes["old_warp"] = {"kind": "warp", "pos": [0, 0], "params": {}}
-	m.links.append({"from": "old_warp", "from_port": 0, "to": note, "to_port": 0})
-	Kinds.fix_notes(m)
-	Kinds.drop_unknown(m)
-	var same: bool = Compile.new().run(m).code == Compile.new().run(want).code
-	var gone = JSON.parse_string(JSON.stringify(want))
-	gone.nodes.erase(note)
-	gone.links = gone.links.filter(func(l): return l.from != note)
-	Kinds.fix_notes(gone)
-	var back: bool = _note_ks(gone) == _note_ks(want)
-	return {"ok": same and back and m.nodes.size() == want.nodes.size(), "nodes": [want.nodes.size(), m.nodes.size()], "same_code": same, "note_back": back}
-
-
-# A model's notes' k, sorted.
-static func _note_ks(p_model: Dictionary) -> Array:
-	var ks: Array = p_model.nodes.values().filter(func(n): return n.kind == "note").map(func(n): return int(Kinds.param(n, "k")))
-	ks.sort()
-	return ks
-
-
-# Removing a Mix row (the mountain's first: one row less, the other rows' links one port up, no gaps, its note stays)
-# and deleting a note (plain ground's first: nothing changes, the notes are fixed).
-func _check_cuts(p_table: Dictionary) -> Dictionary:
-	var out := {}
-	var cases := {
-		"row": [ImportTable.new("mountain").import_biome(p_table).model, func(m: Dictionary, mix: String) -> void: Kinds.cut_row(m, mix, 0)],
-		"note": [ImportTable.new("plain ground").plain_ground(), func(m: Dictionary, _mix: String) -> void: Kinds.cut_nodes(m, [Kinds.first_of(m, "note")])],
-	}
-	var ok := true
-	for c in cases:
-		var m: Dictionary = cases[c][0]
-		var mix := Kinds.first_of(m, "mix")
-		var rows := Kinds.rows(m.nodes[mix]).size()
-		var nodes: int = m.nodes.size()
-		cases[c][1].call(m, mix)
-		var ports: Array = m.links.filter(func(l): return l.to == mix).map(func(l): return int(l.to_port))
-		ports.sort()
-		var r := Compile.new().run(m)
-		var entry := {"rows": [rows, Kinds.rows(m.nodes[mix]).size()], "nodes": [nodes, m.nodes.size()], "compiles": r.ok}
-		var want_rows: int = rows - 1 if c == "row" else rows
-		entry.ok = r.ok and entry.rows[1] == want_rows and (c == "row" or entry.nodes[1] == nodes) and ports == range(ports.size())
-		entry.ok = entry.ok and _note_ks(m) == range(Octaves.K_MIN, Octaves.ground_top(25, 0.05) + 1)
-		ok = ok and entry.ok
-		out[c] = entry
-	out.ok = ok
-	return out
-
-
-# A graph with every kind of node, wired: two warped notes (the climate's warp, a Note warp), shaped, chained, mixed,
-# combined, curved, carved; the other notes silent rows.
-func _every_kind() -> Dictionary:
-	var b := ImportTable.new("every kind")
-	var a := b.add("note", Vector2.ZERO, {"k": 15, "warp": true, "warp_m": 200.0})
-	var c := b.add("note", Vector2.ZERO, {"k": 14})
-	var d := b.add("note", Vector2.ZERO, {"k": 12, "warp": true, "warp_m": 30.0})
-	var nw := b.add("note_warp", Vector2.ZERO)
-	var sa := b.add("shape", Vector2.ZERO, {"preset": "ridged"})
-	var sc := b.add("shape", Vector2.ZERO, {"preset": "coeffs", "c2": 1.0})
-	var ma := b.add("multifractal", Vector2.ZERO)
-	var mc := b.add("multifractal", Vector2.ZERO)
-	var mix := b.add("mix", Vector2.ZERO, {"rows": [Kinds.new_row(), Kinds.new_row(0.5)]})
-	var k := b.add("constant", Vector2.ZERO, {"value": 2.0})
-	var mul := b.add("multiply", Vector2.ZERO)
-	var add := b.add("add", Vector2.ZERO)
-	var cv := b.add("curve", Vector2.ZERO, {"points": [[-500.0, -300.0], [0.0, 50.0], [500.0, 900.0]]})
-	var carve := b.add("carve", Vector2.ZERO)
-	var out := b.add("output", Vector2.ZERO)
-	b.link(a, 0, nw, 0)
-	b.link(c, 0, nw, 2)
-	b.link(nw, 0, d, 0)
-	b.link(d, 0, add, 1)
-	b.link(a, 0, sa, 0)
-	b.link(c, 0, sc, 0)
-	b.link(sa, 0, ma, 0)
-	b.link(sc, 0, mc, 0)
-	b.link(ma, 1, mc, 1)
-	b.link(ma, 0, mix, 0)
-	b.link(mc, 0, mix, 1)
-	b.link(mix, 0, mul, 0)
-	b.link(k, 0, mul, 1)
-	b.link(mul, 0, add, 0)
-	b.link(add, 0, cv, 0)
-	b.link(cv, 0, out, 0)
-	b.link(c, 0, carve, 0)
-	b.link(carve, 0, out, 1)
-	Kinds.fix_notes(b.model)
-	return b.model
+	get_tree().quit(0 if report.ok else 1)

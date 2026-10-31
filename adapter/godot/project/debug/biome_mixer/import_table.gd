@@ -39,7 +39,7 @@ static func link_in(p_model: Dictionary, p_from: String, p_from_port: int, p_to:
 
 
 func k_of(p_m: float) -> int:
-	return int(round(log(p_m / voxel_m) / log(2.0)))
+	return Octaves.lattice_k(p_m, voxel_m)
 
 
 # The ground as it is: every note, plain, at volume 1 (ImportTable.new("plain ground").plain_ground()).
@@ -172,13 +172,16 @@ func _warp(p_names: Array, p_fields: Dictionary) -> bool:
 	return true
 
 
-# The octaves a table entry covers: its wavelength_m's, or every one in from_m .. to_m (the engine's band ranges).
+# The octaves a table entry covers: its wavelength_m's, or every one in from_m .. to_m that the ground has (the
+# engine's octave_range: both ends rounded to their octave).
 func _ks(p_entry: Dictionary) -> Array:
+	return band_ks(p_entry, voxel_m, lods)
+
+
+# _ks for any voxel and LOD count (World.field_octaves reads the fields' bands with it), finest first.
+static func band_ks(p_entry: Dictionary, p_voxel_m: float, p_lods: int) -> Array:
 	if p_entry.has("wavelength_m"):
-		return [k_of(p_entry.wavelength_m)]
-	var ks := []
-	for k in range(Octaves.K_MIN, Octaves.k_top(lods) + 1):
-		var lam := Octaves.wavelength_m(k, voxel_m)
-		if lam >= p_entry.get("from_m", INF) * 0.999 and lam <= p_entry.get("to_m", -INF) * 1.001:
-			ks.append(k)
-	return ks
+		return [Octaves.lattice_k(float(p_entry.wavelength_m), p_voxel_m)]
+	var lo := maxi(Octaves.lattice_k(float(p_entry.from_m), p_voxel_m), Octaves.K_MIN)
+	var hi := mini(Octaves.lattice_k(float(p_entry.to_m), p_voxel_m), Octaves.k_top(p_lods))
+	return range(lo, hi + 1)

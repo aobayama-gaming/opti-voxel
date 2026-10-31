@@ -170,7 +170,7 @@ Laptop GPU power cap and thermals; locked screen stops readbacks; "primitives dr
 render-thread abort at exit and leaked RIDs with `--render-thread safe`; profiler timestamps need a
 debugger; killed quads still draw; MultiMesh CPU caches; `texture_update` + `texture_copy` in one frame;
 readback staging overflow; 0-byte `.os` files after an interrupted scons; zero gradients (NaN normals);
-SDF samples of exactly 0 (side rule); no `#define` in `shader_set_code`; `texture_rd_create` formats;
+SDF samples of exactly 0 (side rule); no `#define` in `shader_set_code`; material uniforms over 64 KB hang the GPU; `texture_rd_create` formats;
 compaction vs page ranges; shared `Array`s; int64 truncation; JSON doubles; float32 bit-exactness;
 distance estimates under `max()`; GPU shader costs; local RenderingDevice windows and timestamps;
 render-thread ownership; readbacks after free.

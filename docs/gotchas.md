@@ -55,6 +55,10 @@ Engine, GPU and float traps that already cost a debugging session each.
   because `t > 0` is what marks a crossing downstream. Mixing `< 0` and `> 0`, or letting t reach 0,
   drops or flips quads: small diamond/hexagon holes, in both pipelines (the validator can't see it).
 - `RenderingServer::shader_set_code` does not run the shader preprocessor: no `#define`.
+- A Godot material's uniforms live in one uniform buffer, 16 bytes per element of a uniform array: past 64 KB the
+  draw hangs the NVIDIA GPU (Xid 109, CTX SWITCH TIMEOUT, the device lost), with no error before. The biome mixer's
+  world shader hit it (an octave table of 17 arrays x 192 and 384 biome places): size the arrays to what is used.
+  A `return` in a canvas shader's `fragment()` is a compile error: put the early-out branches in a function.
 - A RenderingDevice push block is set in whole 16 bytes (SPIR-V reflection rounds its size up): `RDDevice::dispatch`
   pads a smaller one with zeros, else the dispatch is dropped ("requires (16) bytes of push constant data").
 - Dawn (Tint) does not keep the exact noise bit for bit: `ov_dawn --check` and `--frame-check` miss a few low bits

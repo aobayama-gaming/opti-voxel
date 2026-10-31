@@ -3,15 +3,21 @@ extends Control
 ## idles otherwise. Two layers of the same shader: a coarse one (1/3 of the resolution), drawn on every change, and,
 ## once the changes pause, the chosen resolution over it in strips of about STRIP_MS each, so no frame waits on the
 ## whole view and an edit or a drag cancels the strips at once. Orbit: left drag; pan: right or middle drag; zoom:
-## the wheel.
+## the wheel. The map (map = true) is the same shader from above (u_mode 1): any drag pans, the wheel zooms. sample()
+## draws the chart's samples (u_mode 2) into a small float viewport and reads them back.
 
 const SETTLE_S := 0.2
 const COARSE := 3  # the coarse layer's shrink
 const STRIP_MS := 25.0
+const SAMPLES := 96  # the chart's samples per side
+const ShaderLib := preload("res://debug/biome_mixer/shader_lib.gd")
 
 signal sharpened  # a sharp pass ended (sharp_ms: how long it took)
 
 var mat := ShaderMaterial.new()
+var sample_mat := ShaderMaterial.new()
+var sampler := SubViewport.new()
+var map := false
 var code := ""
 var quality := 1  # the sharp layer's shrink: 1 full resolution, 2 half, ...
 var settle := Timer.new()
@@ -59,6 +65,15 @@ func _init() -> void:
 		add_child(t)
 	coarse_tex.texture = coarse.get_texture()
 	sharp_tex.texture = sharp.get_texture()
+	sampler.use_hdr_2d = true
+	sampler.size = Vector2i(SAMPLES, SAMPLES)
+	sampler.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	var sample_rect := ColorRect.new()
+	sample_rect.material = sample_mat
+	sample_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sample_rect.size = Vector2(SAMPLES, SAMPLES)
+	sampler.add_child(sample_rect)
+	add_child(sampler)
 	settle.one_shot = true
 	settle.wait_time = SETTLE_S
 	settle.timeout.connect(_start_sharp)
@@ -71,14 +86,39 @@ func set_code(p_code: String) -> void:
 	if p_code == code:
 		return
 	code = p_code
+	# A new shader's cost is unknown (a world's is many biomes'): its first strips start thin and grow.
+	strip_rows = 8.0
 	var s := Shader.new()
 	s.code = p_code
 	mat.shader = s
+	sample_mat.shader = s
 
 
 func set_uniforms(p_uniforms: Dictionary) -> void:
 	for name in p_uniforms:
 		mat.set_shader_parameter(name, p_uniforms[name])
+		sample_mat.set_shader_parameter(name, p_uniforms[name])
+
+
+# The fields p_cx, p_cy at SAMPLES^2 points over p_extent metres around p_centre (x, z), from the shader's own
+# fields: the chart's cloud of where the ground goes.
+func sample(p_cx: int, p_cy: int, p_centre: Vector2, p_extent: float) -> PackedVector2Array:
+	sample_mat.set_shader_parameter("u_mode", 2)
+	sample_mat.set_shader_parameter("u_cx", p_cx)
+	sample_mat.set_shader_parameter("u_cy", p_cy)
+	sample_mat.set_shader_parameter("u_map_centre", p_centre)
+	sample_mat.set_shader_parameter("u_map_extent", p_extent)
+	sampler.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await RenderingServer.frame_post_draw
+	var img := sampler.get_texture().get_image()
+	var out := PackedVector2Array()
+	if img == null:
+		return out
+	for y in img.get_height():
+		for x in img.get_width():
+			var c := img.get_pixel(x, y)
+			out.append(Vector2(c.r - ShaderLib.SAMPLE_BIAS, c.g - ShaderLib.SAMPLE_BIAS))
+	return out
 
 
 # Draw again: the coarse layer now, the sharp one once the edits pause (p_moving: a drag goes on).
@@ -152,6 +192,9 @@ func _next_strip() -> void:
 
 
 func _camera() -> void:
+	mat.set_shader_parameter("u_mode", 1 if map else 0)
+	mat.set_shader_parameter("u_map_centre", Vector2(target.x, target.z))
+	mat.set_shader_parameter("u_map_extent", dist * 2.0)
 	var dir := Vector3(cos(pitch) * sin(yaw), sin(pitch), cos(pitch) * cos(yaw))
 	var pos := target + dir * dist
 	var fwd := -dir
@@ -163,6 +206,15 @@ func _camera() -> void:
 	mat.set_shader_parameter("u_cam_up", up)
 	mat.set_shader_parameter("u_tan_half_fov", tan(deg_to_rad(fov_deg) * 0.5))
 	mat.set_shader_parameter("u_far", maxf(dist * 8.0, 20000.0))
+
+
+# Over a world: p_extent metres across in view, from higher up.
+func frame_world(p_extent: float) -> void:
+	target = Vector3.ZERO
+	dist = p_extent * 0.5
+	pitch = 0.75
+	yaw = 0.7
+	redraw()
 
 
 # Over the whole biome: the target at its middle, the ground's bound in view.
@@ -178,7 +230,12 @@ func frame(p_hmax: float) -> void:
 func _gui_input(p_event: InputEvent) -> void:
 	if p_event is InputEventMouseMotion:
 		var mm := p_event as InputEventMouseMotion
-		if mm.button_mask & MOUSE_BUTTON_MASK_LEFT:
+		if map and mm.button_mask != 0:
+			# The map is dist * 2 metres across the view's width.
+			var k := dist * 2.0 / maxf(size.x, 1.0)
+			target += Vector3(-mm.relative.x, 0.0, -mm.relative.y) * k
+			_moved()
+		elif mm.button_mask & MOUSE_BUTTON_MASK_LEFT:
 			yaw -= mm.relative.x * 0.006
 			pitch = clampf(pitch + mm.relative.y * 0.006, -0.2, 1.5)
 			_moved()
@@ -194,7 +251,7 @@ func _gui_input(p_event: InputEvent) -> void:
 			dist = maxf(dist / 1.15, 5.0)
 			_moved()
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			dist = minf(dist * 1.15, 200000.0)
+			dist = minf(dist * 1.15, 4000000.0)
 			_moved()
 
 

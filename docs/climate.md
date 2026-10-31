@@ -2,7 +2,7 @@
 
 The climate in three parts: the **model** (what the ground is at a point, as math), the **implementation** (how the
 cascade computes it, CPU and GPU, and what is there only for speed), and the **measurements**. Then the biome mixer,
-the tool that designs a biome.
+the tool that designs a world's biomes.
 
 ## Model
 
@@ -17,9 +17,16 @@ fields placing the biomes (temperature, humidity, wind: 105-419 km) are macro an
 1. **Fields** (`Field`): a few slow scalars, each a sum of plain perlin octaves of its own seed, plus linear terms
    (`coef * the ground` or `coef * an earlier field`, in list order): temperature, humidity, wind, the warp fields
    wx / wy / wz. A term on the ground makes a field follow the height (colder higher up).
-2. **Weights** (`Climate::weights`): biome b's indicator `r_b` is the product of its edges' smoothsteps on the fields
-   (`where`: min / max with a fade). Priority layering, `w_b = rest * r_b`, `rest -= w_b`, the last biome taking the
-   rest, is a partition of unity without a division.
+2. **Weights** (`Climate::weights`): a biome is a place in the fields' space, `"at"`: a centre and a span on each field
+   it names (`[centre, span]`, or `{min, max}`: their middle and half their gap). Its kernel `k_b` is the product over
+   those fields of `smoothstep(clamp((1 - u^2) * 2, 0, 1))`, `u = (f - centre) / span`: on each field whole within
+   0.71 of its span, gone at its span, each field's span its own (naming one more field doesn't shrink the others).
+   The last biome, the default, has no place: `k_d = (1 - sum k)^2` where the kernels sum under 1. The weights are
+   `w_b = k_b / S`, `S = sum k + k_d >= 3/4`: overlapping biomes blend by themselves, no borders to match and no
+   priority. `1 / S` is `det_rsqrt(S)^2` and one Newton step (exact 1 at S = 1: a biome alone at its centre is whole),
+   each weight capped at 1. It replaced edges (min / max with a fade) under priority layering, `w_b = rest * r_b`:
+   world.json's edges became places with open sides closed at 0.85 and spans x1.1, its biome shares over 1678 km
+   within a point of the edges' (desert 5.7% both, mountain 18.2% for 19.4%).
 3. **The ground** at a point: each note k some biome names is inserted as
    `A_k * phi_b(n_k(p + warp))` blended over the biomes,
    - `A_k = sum_b w_b * x_{b,k} * amp_k` (the biome's multiplier times the note's own amplitude, lambda / 8 capped at
@@ -127,9 +134,24 @@ terms; the declutter's own before / after is in its PR):
 
 ## Biome mixer
 
-`adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: one biome built from the ground's octaves in a node
-graph (GraphEdit), raymarched live beside it; a design tool, not the engine's path (the table is the engine's input;
-turning a graph into a table's biome is the next step).
+`adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: a world's biomes built from the ground's octaves in
+node graphs (GraphEdit), raymarched live beside them; a design tool, not the engine's path (the table is the engine's
+input; turning the world back into a table is the next step). It holds a **world** (`world.gd`: world.json's fields,
+climate warp and every biome, its place and its graph) and has two modes:
+- **Biome**: the current biome's notes in the graph (the picker in the bar), the view of that biome alone.
+- **World**: the climate chart and the view of the whole world, every biome blended as the engine blends them
+  (`Compile.run_world`): the fields' octaves (rows of the warp table, three fields to a W slot), the weights in float
+  (`World.weights`, the engine's formula; the places uniforms, so a drag doesn't recompile), each biome's graph as its
+  height before its curve (node ids prefixed per biome; a note two biomes read the same way is one row: world.json's 8
+  biomes read 30 rows for 136 notes), `H = sum w_b H_b`, then `h = H + sum w_b (R_b(H) - H)`, the colours blended by
+  weight. A biome's graph is skipped where its weight is 0; with a ground term in the fields the weights are read twice
+  (without, then with it on H: the engine reads them from the coarser octaves). The view is 3D or a map (from above, the
+  biomes' debug colours over the ground's shading). The chart (`chart.gd`, `world_panel.gd`): two fields as axes, each
+  biome a box (its span outlined, its whole core filled, the full axis on a field it doesn't name), over a cloud of the
+  world's points (the shader's own fields at 96 x 96 points of the chart's extent, read back from a float viewport):
+  drag a box to move a biome, its edge to change its span; the list beside it edits each field's centre and span and
+  whether the biome names it. A double-click opens a biome's notes. The world autosaves, and saves to
+  `climate/worlds/*.world.json` (the World menu).
 
 - **Nodes** (`kinds.gd`): *Note* (the ground's octave k, `make_octave(SEED, ground_top - k, k)` ported in `octaves.gd`,
   pinned against `test_exact_noise.cpp`: every biome plays the same notes, so a note has no seed of its own. The notes
@@ -166,11 +188,13 @@ turning a graph into a table's biome is the next step).
   the view took to sharpen; each Mix row shows its swing (volume x lambda / 8 x the shaped note's bound) and its share
   of the Mix's. A row's x takes it out with the nodes only it used but its note (`Kinds.cut_row`); a node's x or Delete
   removes it and the Mix row it played, never a note (`Kinds.cut_nodes`); `--check` checks both on the mountain and
-  plain ground, every graph's fixed notes, and an old file's Climate warp node loading as its notes' warp switches.
+  plain ground, every graph's fixed notes, an old file's Climate warp node loading as its notes' warp switches, and the
+  world (`checks.gd` `world`: world.json in one shader, its shared notes and places, a file round trip, the weights'
+  properties).
 - **The climate's warp** (wx, wy, wz): a model's `climate_warp`, world.json's three warp fields by default
   (`Kinds.CLIMATE_WARP`), shared by every biome: one table slot however many notes it moves; the preview reads its 12
   octaves per pixel, the engine interpolates them from their coarse lattices. It was a node (*Climate warp*) wired
   into each note before the notes' warp switch.
 - **Import** (`import_table.gd`): a biome of `world.json` as a graph (every note, its ground multipliers as volumes, 0
   for a silenced octave, shapes, multifractal chain, warped octaves as warp switches with their `warp_m`, the warp
-  fields as the climate warp, `ground_stretch`, its curve, colours); *Plain ground* is every note at volume 1. Biomes save to `climate/biomes/*.biome.json`.
+  fields as the climate warp, `ground_stretch`, its curve, colours); *Plain ground* is every note at volume 1. Biomes save to `climate/biomes/*.biome.json`; `World.from_table` imports every biome of a table, with its place.

@@ -9,7 +9,7 @@ namespace Climate {
 
 namespace {
 
-// flushed, dmul, dsub and edge_weight in GLSL, op for op.
+// flushed, dmul, dsub, fill, axis_factor and the Newton reciprocal in GLSL, op for op.
 constexpr const char GLSL_CLIMATE_HELPERS[] = R"glsl(
 vec4 cl_flush(vec4 v) {
     return vec4(abs(v.x) < FLUSH ? 0.0 : v.x, abs(v.y) < FLUSH ? 0.0 : v.y, abs(v.z) < FLUSH ? 0.0 : v.z, abs(v.w) < FLUSH ? 0.0 : v.w);

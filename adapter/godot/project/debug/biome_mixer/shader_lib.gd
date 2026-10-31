@@ -4,10 +4,23 @@ extends RefCounted
 ## gradients and quintic fade) in float math relative to the preview's origin: the same notes, not the same bits.
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
+const World := preload("res://debug/biome_mixer/world.gd")
 
-# The octave table's rows (notes, and three per warp octave) and the warp fields the preview takes.
-const MAX_OCTAVES := 64
-const MAX_WARPS := 8
+# The octave table's rows (notes, three per warp octave, a world's field octaves) and the W slots the preview takes
+# (the climate warp, a world's fields three to a slot); a world's biomes and fields (the engine's Climate::MAX_BIOMES,
+# MAX_FIELDS).
+const MAX_OCTAVES := 192
+const MAX_WARPS := 10
+const MAX_BIOMES := 16
+const MAX_FIELDS := 24
+# The table's arrays are sized to its rows in steps of TABLE_STEP (a step more recompiles), not to MAX_OCTAVES: every
+# element of a uniform array takes 16 bytes, and the material's uniforms past 64 KB (192 rows of 17 columns and the
+# places of 16 biomes x 24 fields were 64.5 KB alone) hung the GPU (an Xid 109).
+const TABLE_STEP := 32
+# What a material's uniforms may take: the driver's uniform buffer range is 64 KB, Godot's own uniforms go first.
+const UNIFORM_BYTES := 60000
+# The chart's samples are offset by this so the float viewport stores them positive (preview.gd sample()).
+const SAMPLE_BIAS := 4.0
 
 const NOISE := """
 uvec3 pcg3d(uvec3 v) {
@@ -69,6 +82,13 @@ float shape(vec4 c, float n) {
 	return c.x + c.y * n + c.z * sabs(n) + c.w * n * n;
 }
 
+// One field's factor of a biome's kernel (World.axis_factor, the engine's Climate::axis_factor in float).
+float kfac(float f, float c, float inv) {
+	float u = (f - c) * inv;
+	float s = clamp((1.0 - u * u) * {F}, 0.0, 1.0);
+	return s * s * (3.0 - 2.0 * s);
+}
+
 // A note fades out as its wavelength nears two pixels (its footprint fp): no aliasing, and the fine notes cost
 // nothing far away. Every note is centred, so dropping one moves no height.
 float lod_fade(float lam, float fp) {
@@ -100,6 +120,17 @@ uniform float u_contour = 0.0;
 uniform vec3 u_flat = vec3(0.24, 0.36, 0.16);
 uniform vec3 u_steep = vec3(0.36, 0.32, 0.28);
 uniform float u_voxel = 0.05;
+// 0: the 3D view; 1: the map (from above, the biomes' colours over the ground's shading, u_map_extent metres across
+// around u_map_centre); 2: the chart's samples (the fields u_cx, u_cy and the height, offset by SAMPLE_BIAS).
+uniform int u_mode = 0;
+uniform vec2 u_map_centre = vec2(0.0);
+uniform float u_map_extent = 100000.0;
+uniform int u_cx = 0;
+uniform int u_cy = 1;
+const float SAMPLE_BIAS = {bias};
+// A world's biome places (compile.gd places: index biome * fields + field): centre and 1 / span.
+uniform float u_atc[{places}];
+uniform float u_ati[{places}];
 
 // The octave table (compile.gd _table): every note and warp octave, read in one loop so the shader holds one perlin
 // call (the driver compiled one per note, inlined at each density call, in 30 s). Rows below u_n_warp add to their
@@ -119,7 +150,7 @@ const OCTAVE_TABLE := [
 # W and N are sized to the graph's warps and notes (structural: a new note recompiles anyway), not to the table's
 # maximum: dynamically indexed, they live in per-pixel memory.
 const DENSITY_HEAD := """
-float density(vec3 p, float fp) {
+float density(vec3 p, float fp, out vec3 c_flat, out vec3 c_steep, out vec3 c_map, out vec4 c_fields) {
 	vec3 pv = p / u_voxel;
 	vec3 W[{warps}];
 	for (int j = 0; j < {warps}; j++) {
@@ -162,17 +193,27 @@ vec3 tap(int k) {
 	return k == 0 ? vec3(1.0, -1.0, -1.0) : (k == 1 ? vec3(-1.0, -1.0, 1.0) : (k == 2 ? vec3(-1.0, 1.0, -1.0) : vec3(1.0)));
 }
 
-// One loop, one density() call: the march (phase 0), its bisection once inside the ground (1), the normal's four taps
-// (2), the soft shadow towards the sun (3), done (4). Each call site would inline the whole graph: the driver took
-// half a minute to compile seven.
-void fragment() {
-	// The pixel in its viewport, not UV: the view draws in strips (preview.gd), each a rect of its own.
-	vec2 uv = FRAGCOORD.xy * SCREEN_PIXEL_SIZE;
+// The map's colour from the ground's height h (metres) and biome colour c_map at a pixel of fp metres: the shading from
+// the height's screen derivatives, the sun from u_sun.
+vec4 map_colour(float h, vec3 c_map, float fp) {
+	vec3 nm = normalize(vec3(-dFdx(h) / fp, 1.0, -dFdy(h) / fp));
+	vec3 col = c_map * (0.35 + 0.65 * max(dot(nm, normalize(u_sun)), 0.0));
+	if (u_water_on && h < u_water) {
+		col = mix(col, vec3(0.04, 0.16, 0.24), 0.6);
+	}
+	return vec4(pow(1.0 - exp(-col * 1.6), vec3(1.0 / 2.2)), 1.0);
+}
+
+// The pixel at uv. One loop, one density() call: the march (phase 0), its bisection once inside the ground (1), the
+// normal's four taps (2), the soft shadow towards the sun (3), done (4); in the map and the samples (u_mode 1, 2) one
+// pass from above at the pixel's (x, z) instead (-1). Each call site would inline the whole graph: the driver took half
+// a minute to compile seven.
+vec4 pixel(vec2 uv, vec2 px) {
 	vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-	float aspect = SCREEN_PIXEL_SIZE.y / SCREEN_PIXEL_SIZE.x;
+	float aspect = px.y / px.x;
 	vec3 rd = normalize(u_cam_fwd + ndc.x * u_tan_half_fov * aspect * u_cam_right + ndc.y * u_tan_half_fov * u_cam_up);
 	vec3 ro = u_cam_pos;
-	float pix = 2.0 * u_tan_half_fov * SCREEN_PIXEL_SIZE.y;
+	float pix = 2.0 * u_tan_half_fov * px.y;
 	vec3 sun = normalize(u_sun);
 	float t = 0.0;
 	bool hit = false;
@@ -194,10 +235,23 @@ void fragment() {
 	vec3 sp = vec3(0.0);
 	float st = 0.5;
 	float sh = 1.0;
+	vec3 flat_col = u_flat;
+	vec3 steep_col = u_steep;
+	vec2 xz = u_map_centre + (uv - 0.5) * u_map_extent * vec2(1.0, px.x / px.y);
+	float map_fp = u_map_extent * px.x;
+	float map_h = 0.0;
+	vec3 map_c = vec3(0.0);
+	vec4 map_fields = vec4(0.0);
+	if (u_mode != 0) {
+		phase = -1;
+	}
 	for (int i = 0; i < u_max_steps + 80 && phase < 4; i++) {
 		vec3 q = vec3(0.0);
 		float fq = 0.0;
-		if (phase == 0) {
+		if (phase == -1) {
+			q = vec3(xz.x, 0.0, xz.y);
+			fq = map_fp;
+		} else if (phase == 0) {
 			q = ro + rd * t;
 			fq = t * pix;
 			if (q.y > u_hmax && rd.y >= 0.0) {
@@ -219,7 +273,22 @@ void fragment() {
 				continue;
 			}
 		}
-		float d = density(q, fq);
+		vec3 c_flat;
+		vec3 c_steep;
+		vec3 c_map;
+		vec4 c_fields;
+		float d = density(q, fq, c_flat, c_steep, c_map, c_fields);
+		if (phase == -1) {
+			map_h = -d;
+			map_c = c_map;
+			map_fields = c_fields;
+			phase = 4;
+			continue;
+		}
+		if (phase == 2 && k == 0) {
+			flat_col = c_flat;
+			steep_col = c_steep;
+		}
 		if (phase == 0) {
 			last_d = d;
 			steps++;
@@ -281,13 +350,19 @@ void fragment() {
 			phase = 2;
 		}
 	}
+	if (u_mode == 2) {
+		return vec4(map_fields.x + SAMPLE_BIAS, map_fields.y + SAMPLE_BIAS, map_h * 0.001 + SAMPLE_BIAS, 1.0);
+	}
+	if (u_mode == 1) {
+		return map_colour(map_h, map_c, map_fp);
+	}
 	sh = clamp(sh, 0.0, 1.0);
 	vec3 col = sky(rd);
 	float t_water = u_water_on && rd.y < 0.0 && ro.y > u_water ? (ro.y - u_water) / -rd.y : -1.0;
 	if (hit) {
 		vec3 p = hp;
 		// The engine's slope blend of a ground's colours (page_shading_glsl.hpp ground_flat_weight).
-		vec3 base = mix(u_steep, u_flat, smoothstep(0.8, 0.95, n.y));
+		vec3 base = mix(steep_col, flat_col, smoothstep(0.8, 0.95, n.y));
 		float diff = max(dot(n, sun), 0.0);
 		vec3 lit = base * (vec3(1.0, 0.95, 0.85) * 1.5 * diff * sh + vec3(0.22, 0.27, 0.36) * (0.5 + 0.5 * n.y));
 		if (u_contour > 0.0) {
@@ -306,7 +381,13 @@ void fragment() {
 		col = mix(water, sky(rd), 1.0 - exp(-t_water / (u_far * 0.8)));
 	}
 	col = 1.0 - exp(-col * 1.1);
-	COLOR = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+	return vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+
+void fragment() {
+	// The pixel in its viewport, not UV: the view draws in strips (preview.gd), each a rect of its own.
+	vec2 uv = FRAGCOORD.xy * SCREEN_PIXEL_SIZE;
+	COLOR = pixel(uv, SCREEN_PIXEL_SIZE);
 }
 """
 
@@ -327,17 +408,32 @@ void fragment() {
 
 
 static func _noise() -> String:
-	return NOISE.replace("{E}", String.num(Kinds.SMOOTH_ABS_E))
+	return NOISE.replace("{E}", String.num(Kinds.SMOOTH_ABS_E)).replace("{F}", "%.6f" % World.KERNEL_FADE)
 
 
 # The preview shader: the fixed head and the table's columns, the graph's uniforms and functions, density() (its octave
-# loop, then the graph's body p_body, sized to its p_notes notes and p_warps warp fields), the march.
-static func preview(p_uniforms: String, p_functions: String, p_body: String, p_notes: int, p_warps: int) -> String:
+# loop, then the graph's body p_body, sized to its p_notes notes and p_warps warp fields), the march. The table holds
+# p_rows rows, the places p_places (a world's biomes x fields; 0 for one biome).
+static func preview(p_uniforms: String, p_functions: String, p_body: String, p_notes: int, p_warps: int, p_rows: int, p_places: int) -> String:
 	var table := PackedStringArray()
 	for c in OCTAVE_TABLE:
-		table.append("uniform %s %s[%d];" % [c[1], c[0], MAX_OCTAVES])
+		table.append("uniform %s %s[%d];" % [c[1], c[0], table_size(p_rows)])
 	var density := DENSITY_HEAD.format({"warps": maxi(p_warps, 1), "notes": maxi(p_notes, 1)})
-	return HEAD + "\n".join(table) + "\n" + p_uniforms + _noise() + p_functions + density + p_body + "}\n" + MAIN
+	return HEAD.replace("{places}", str(maxi(p_places, 1))).replace("{bias}", "%.1f" % SAMPLE_BIAS) + "\n".join(table) + "\n" + p_uniforms + _noise() + p_functions + density + p_body + "}\n" + MAIN
+
+
+# The uniform buffer a shader's uniforms take (16 bytes a scalar, a vector or an array's element: an upper bound).
+static func uniform_bytes(p_code: String) -> int:
+	var total := 0
+	for line in p_code.split("\n"):
+		if line.begins_with("uniform "):
+			var open := line.find("[")
+			total += 16 * (int(line.substr(open + 1, line.find("]") - open - 1)) if open >= 0 else 1)
+	return total
+
+
+static func table_size(p_rows: int) -> int:
+	return maxi(ceili(p_rows / float(TABLE_STEP)), 1) * TABLE_STEP
 
 
 static func thumb() -> String:

@@ -170,6 +170,21 @@ static func param(p_node: Dictionary, p_name: String) -> Variant:
 	return param_def(p_node.kind, p_name).get("default")
 
 
+# A model as the mixer edits it: its defaults filled, its climate warp its own (a file from before kept it on its warp
+# node, which fix_notes and drop_unknown turn into its notes' warp switches), its notes fixed, old kinds dropped.
+static func normalise(p_model: Dictionary) -> void:
+	p_model.next_id = int(p_model.get("next_id", 1))
+	p_model.voxel_m = float(p_model.get("voxel_m", Octaves.DEFAULT_VOXEL_M))
+	p_model.lods = int(p_model.get("lods", Octaves.DEFAULT_LODS))
+	if not p_model.has("nodes"):
+		p_model.nodes = {}
+	if not p_model.has("links"):
+		p_model.links = []
+	p_model.climate_warp = climate_warp(p_model)
+	fix_notes(p_model)
+	drop_unknown(p_model)
+
+
 # The climate's warp fields a warped note reads: the model's "climate_warp", else (a file from before it) the settings
 # its first Climate warp node carried, else CLIMATE_WARP.
 static func climate_warp(p_model: Dictionary) -> Dictionary:
