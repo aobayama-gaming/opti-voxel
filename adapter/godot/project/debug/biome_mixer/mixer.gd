@@ -162,12 +162,13 @@ func _enter(p_mode: String, p_frame: bool) -> void:
 	graph.visible = p_mode == "biome"
 	world_panel.visible = p_mode == "world"
 	biome_pick.disabled = p_mode == "world"
+	# The map is the World mode's: the Biome mode's view is always 3D (it has no Map box).
+	preview.map = p_mode == "world" and bool(world.view.map)
 	if p_mode == "biome" or model.is_empty():
 		# The graph (hidden in the World mode) always holds the current biome: the budget line and --set read it.
 		set_model(world.biomes[world.current].model, p_frame and p_mode == "biome", p_mode == "biome")
 	if p_mode == "biome":
 		return
-	preview.map = bool(world.view.map)
 	ViewBar.build(self)
 	refit = true
 	recompile(false)
