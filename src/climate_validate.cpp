@@ -45,8 +45,8 @@ ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
         return where + ov::str("the name is used twice.");
     }
     for (const Cascade::Band &b : f.bands) {
-        if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.k_max) {
-            return where + ov::format("octave k = %d is outside the ground's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.k_max);
+        if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.field_k_max) {
+            return where + ov::format("octave k = %d is outside the cascade's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.field_k_max);
         }
         if (find_band(f.bands, b.k) != &b) {
             return where + ov::format("octave k = %d is listed twice.", b.k);

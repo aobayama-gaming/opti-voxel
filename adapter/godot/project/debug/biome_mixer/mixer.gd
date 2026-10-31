@@ -197,7 +197,7 @@ func _show_budget() -> void:
 				top = r
 	var parts := PackedStringArray([
 		"Per point: %d noise reads = %d notes (%d shaped, %d multifractal, %d moved by the climate warp, %d by notes for free) + %d climate warp octaves; plain ground reads %d." % [
-			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.note_warped, b.warp_octaves, Octaves.k_top(model.lods) - Octaves.K_MIN + 1],
+			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.note_warped, b.warp_octaves, Octaves.ground_top(model.lods, model.voxel_m) - Octaves.K_MIN + 1],
 		"Relief within +-%s%s." % [Nodes.fmt_m(result.hmax / float(model.view.exag)),
 			", most from the %s note (+-%s)" % [Nodes.fmt_m(top.lam), Nodes.fmt_m(top.peak)] if top.get("lam", 0.0) > 0.0 else ""],
 	])
@@ -698,7 +698,9 @@ func _check() -> void:
 		report.graphs[g] = entry
 	report["cuts"] = _check_cuts(table)
 	report["old_kinds"] = _check_old_kinds()
-	ok = ok and report.cuts.ok and report.old_kinds.ok
+	# SDFCascade::micro_top_k's pins (test_sdf_cascade.cpp): the notes stop where the engine's ground does.
+	report["ground_top"] = [Octaves.ground_top(25, 0.05), Octaves.ground_top(25, 0.5)]
+	ok = ok and report.cuts.ok and report.old_kinds.ok and report.ground_top == [19, 16]
 	report["ok"] = ok
 	print("MIXER: ", JSON.stringify(report))
 	# The window's parts, never added to the tree in a check.

@@ -3,7 +3,10 @@
 One terrain (the cascade), one instance path (its table). Read before touching `sdf_cascade`, `sdf_table`, `base_surface` or adding a terrain.
 
 - **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
-  height field, octaves k = 3 .. lod_numbers + 4, steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m,
+  height field, octaves k = 3 up to the micro engine's top (`SDFCascade::micro_top_k`: the first octave whose
+  amplitude reaches the 3.3 km cap, k = 19 at 5 cm, at most lod_numbers + 4; the same octaves and bits at any LOD count
+  past it, the relief above being the planned macro engine's; the continents preset keeps lod_numbers + 4),
+  steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m,
   absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
   make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`
   picks a preset: 1 the default, 2 continents, 4 flat (`SDFCascade::Preset::FLAT`: no band, the ground at `FLAT_GROUND_M` = 250 m, off

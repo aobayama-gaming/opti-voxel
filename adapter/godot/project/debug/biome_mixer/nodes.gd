@@ -126,7 +126,7 @@ static func refresh(p_gn: GraphNode, p_node: Dictionary, p_ctx: Object) -> void:
 	p_gn.title = title(p_node, voxel_m)
 	if p_gn.has_meta("thumb"):
 		var k := int(Kinds.param(p_node, "k"))
-		var w := Octaves.shader_words(Octaves.ground_octave(k, int(p_ctx.model.lods)), k, [0, 0, 0])
+		var w := Octaves.shader_words(Octaves.ground_octave(k, int(p_ctx.model.lods), float(p_ctx.model.voxel_m)), k, [0, 0, 0])
 		var m: ShaderMaterial = p_gn.get_meta("thumb").material
 		m.set_shader_parameter("u_base", w.base)
 		m.set_shader_parameter("u_frac", w.frac)
@@ -260,7 +260,7 @@ static func show_mix(p_ui: Dictionary, p_rows: Array) -> void:
 # A wavelength picker over the ground's notes (K_MIN .. k_top), its items' ids their k.
 static func k_picker(p_k: int, p_model: Dictionary, p_show_k: bool, p_pick: Callable) -> OptionButton:
 	var ob := OptionButton.new()
-	var top := Octaves.k_top(int(p_model.lods))
+	var top := Octaves.ground_top(int(p_model.lods), float(p_model.voxel_m))
 	for k in range(Octaves.K_MIN, top + 1):
 		var m := fmt_m(Octaves.wavelength_m(k, p_model.voxel_m))
 		ob.add_item("%s (k %d)" % [m, k] if p_show_k else m, k)

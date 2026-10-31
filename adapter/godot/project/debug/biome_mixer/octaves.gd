@@ -1,6 +1,6 @@
 extends RefCounted
 ## The engine's octaves in GDScript, so the mixer's notes are the ground's: make_octave (src/exact_noise.hpp), the
-## ground's seeds (src/cascade_terrain.hpp make_spec: salt = k_top - k, k_top = lods + 4) and a field's (salt = k,
+## ground's seeds (src/cascade_terrain.hpp make_spec: salt = ground_top - k) and a field's (salt = k,
 ## src/climate_parse.cpp), and each note's lattice words for the preview shader. Pinned by the mixer's --check and
 ## test_exact_noise.cpp ("as the biome mixer pins them").
 
@@ -25,9 +25,18 @@ static var _octaves := {}
 static var _words := {}
 
 
-# The ground's top octave (SDFCascade: lods + 4); the notes span K_MIN .. k_top.
+# The cascade's top octave (SDFCascade: lods + 4): a climate field's.
 static func k_top(p_lods: int) -> int:
 	return p_lods + 4
+
+
+# The ground's top octave (SDFCascade::micro_top_k: the first whose amplitude reaches MAX_AMP_M, k = 19 at 5 cm, at most
+# k_top); the notes span K_MIN .. ground_top. Past it the relief is the macro engine's.
+static func ground_top(p_lods: int, p_voxel_m: float) -> int:
+	var k := K_MIN
+	while STEEPNESS * p_voxel_m * pow(2.0, k) < MAX_AMP_M * (1.0 - 1e-9):
+		k += 1
+	return mini(k, k_top(p_lods))
 
 
 # a * b mod 2^32 without leaving int64 (a, b < 2^32).
@@ -74,8 +83,8 @@ static func _make_octave(p_seed: int, p_salt: int, p_k: int) -> Dictionary:
 
 
 # The ground's note k: every biome of a climate plays the same notes.
-static func ground_octave(p_k: int, p_lods: int) -> Dictionary:
-	return make_octave(GROUND_SEED, k_top(p_lods) - p_k, p_k)
+static func ground_octave(p_k: int, p_lods: int, p_voxel_m: float) -> Dictionary:
+	return make_octave(GROUND_SEED, ground_top(p_lods, p_voxel_m) - p_k, p_k)
 
 
 static func field_octave(p_seed: int, p_k: int) -> Dictionary:

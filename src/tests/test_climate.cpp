@@ -127,7 +127,8 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     CHECK(t.biomes[0].amps.size() == 16);
     CHECK(t.biomes.back().amps.size() == 6 + 11);
 
-    // 25 LODs: the continental octaves k = 20 .. 29 join, each at the amplitude it has at any LOD count.
+    // 25 LODs: the fields' continental octaves k = 20 .. 29 join, each at the amplitude it has at any LOD count; the
+    // ground stops at the micro engine's top (k = 19), so the biomes play the same octaves as at 15.
     GroundFixture g25(0.05, 25);
     Table t25;
     CHECK(parse(data, g25.ground, t25) == ov::str());
@@ -136,7 +137,7 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     CHECK(t25.fields[0].bands[9].k == 20);
     CHECK(t25.fields[0].bands[9].amp == 0.35f);
     CHECK(t25.fields[0].bands[10].amp == temp.bands[0].amp);
-    CHECK(t25.biomes.back().amps.size() == 6 + 21);
+    CHECK(t25.biomes.back().amps.size() == 6 + 11);
 
     // 14 LODs: the ranges lose k = 19; a single wavelength past the top is refused.
     GroundFixture g14(0.05, 14);
@@ -145,7 +146,7 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     CHECK(t14.fields[0].bands.size() == 3);
     Table single;
     const char *past_top = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26000, "amp": 1}]}], "biomes": [{"name": "a"}]})";
-    CHECK(ov::contains(parse_json(past_top, g14.ground, single), "outside the ground's range"));
+    CHECK(ov::contains(parse_json(past_top, g14.ground, single), "outside the cascade's range"));
 }
 
 TEST_CASE("Climate: malformed tables are refused with the reason") {

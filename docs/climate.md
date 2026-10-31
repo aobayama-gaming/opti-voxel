@@ -9,6 +9,10 @@ the tool that designs a biome.
 A climate (`src/climate.hpp`, a JSON table: format above `Climate::parse` in `src/climate_parse.cpp`;
 `VoxelTerrain.climate_path` / `--climate=PATH`, off by default) shapes **one ground**: the cascade's octaves, the
 notes, `n_k` for k = 3 (0.4 m at 5 cm) up to the ground's top octave. A biome doesn't add noise: it plays those notes.
+The ground stops at the micro engine's top (`SDFCascade::micro_top_k`, k = 19 at 5 cm: 26.2 km, the first note at the
+3.3 km cap), so the climate is micro: a biome plays notes up to 26.2 km, and a range past it is clipped there. The
+fields placing the biomes (temperature, humidity, wind: 105-419 km) are macro and may reach lod_count + 4
+(`Ground::field_k_max`), above the ground's top, until the planned macro engine computes them.
 
 1. **Fields** (`Field`): a few slow scalars, each a sum of plain perlin octaves of its own seed, plus linear terms
    (`coef * the ground` or `coef * an earlier field`, in list order): temperature, humidity, wind, the warp fields
@@ -127,7 +131,7 @@ terms; the declutter's own before / after is in its PR):
 graph (GraphEdit), raymarched live beside it; a design tool, not the engine's path (the table is the engine's input;
 turning a graph into a table's biome is the next step).
 
-- **Nodes** (`kinds.gd`): *Note* (the ground's octave k, `make_octave(SEED, k_top - k, k)` ported in `octaves.gd`,
+- **Nodes** (`kinds.gd`): *Note* (the ground's octave k, `make_octave(SEED, ground_top - k, k)` ported in `octaves.gd`,
   pinned against `test_exact_noise.cpp`: every biome plays the same notes, so a note has no seed of its own; an
   optional warp input moves where it is read, `warp_m` metres per unit; `stretch_y` reads it at y / stretch from the
   datum, as `ground_stretch`), *Shape* (`c0 + c1 n + c2 |n| + c3 n^2` with `|n|` smoothed as `Cascade::smooth_abs`;

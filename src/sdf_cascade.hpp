@@ -18,7 +18,8 @@
 
 // The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain (VoxelTerrain.terrain_mode 1,
 // --terrain=cascade): a 3D height field of perlin3 octaves carried down the Hermite cascade, octaves from
-// k = 3 (8 voxels, inserted on Λ_0) up to k = lod_count + 4, steepness 1/8, amplitudes capped at 3.3 km,
+// k = 3 (8 voxels, inserted on Λ_0) up to the micro engine's top (micro_top_k: the first octave at the 3.3 km cap,
+// k = 19 at 5 cm; the continents preset: lod_count + 4), steepness 1/8, amplitudes capped at 3.3 km,
 // 4 channels (value + gradient, see channel_set),
 // surface at altitude h over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function of the
 // absolute position only.
@@ -39,6 +40,17 @@ public:
     static constexpr int INSERT_SHIFT = 3;
     // CascadeTerrain::EARTH_MAX_AMP (2^16 voxels) at 5 cm voxels.
     static constexpr double MAX_AMP_M = CascadeTerrain::EARTH_MAX_AMP * 0.05;
+
+    // The micro engine's top octave at p_voxel_size: the first whose amplitude STEEPNESS * wavelength reaches
+    // MAX_AMP_M (k = 19 at 5 cm: 26.2 km, 3.3 km). Every finer octave adds slope, every coarser one only the same
+    // 3.3 km at a wider wavelength: the macro relief, the macro engine's (planned), not the cascade's.
+    static int micro_top_k(double p_voxel_size) {
+        int k = INSERT_SHIFT;
+        while (std::ldexp(STEEPNESS * p_voxel_size, k) < MAX_AMP_M * (1.0 - 1e-9) && k < ExactNoise::MAX_K) { // the biome mixer's ground_top
+            k++;
+        }
+        return k;
+    }
 
     // The stream's tasks read ground_field: stopped before this class's members go.
     ~SDFCascade() override { stop_streaming(); }
@@ -122,7 +134,8 @@ public:
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
-        k_top = p_lod_count + 4;
+        field_k_top = p_lod_count + 4;
+        k_top = preset == Preset::CONTINENTS ? field_k_top : ov::min(field_k_top, micro_top_k(vs));
         spec = CascadeTerrain::make_spec(SEED, k_top, STEEPNESS, channel_set, INSERT_SHIFT);
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
         if (planet_radius_m > 0.0) {
@@ -216,7 +229,7 @@ uint cascade_ground_material(Ch ch) {
 )glsl";
     }
     // The ground a climate table is checked against and reads (Climate::parse / validate / fields_at), after configure().
-    Climate::Ground climate_ground() const { return Climate::Ground{ &spec, double(voxel_size), k_top, amp_cap }; }
+    Climate::Ground climate_ground() const { return Climate::Ground{ &spec, double(voxel_size), k_top, amp_cap, field_k_top }; }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Cascade::Spec &get_spec() const { return spec; }
     int64_t get_datum_y() const { return base.datum_y(); }
@@ -535,7 +548,8 @@ private:
     std::vector<float> moment_skirt_table; // the moment skirt per LOD (metres, 0 without moment blobs), see configure()
     BaseSurface base; // the ground's reference: flat at the datum (configure)
     float voxel_size = 0.5f;
-    int k_top = 0; // the coarsest octave (lod_count + 4)
+    int k_top = 0; // the ground's coarsest octave (micro_top_k, the continents preset's lod_count + 4)
+    int field_k_top = 0; // a climate field's coarsest octave (lod_count + 4)
     std::optional<Climate::Table> climate;
     bool ground_terms = false; // climate->has_curves(), read per sample
     ov::str climate_error;
