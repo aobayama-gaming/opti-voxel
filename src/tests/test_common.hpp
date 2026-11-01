@@ -7,6 +7,7 @@
 #include "exact_noise.hpp"
 #include "godot_conv.hpp"
 #include "world_coord.hpp"
+#include "world_file.hpp"
 
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector3.hpp>
@@ -15,6 +16,16 @@
 #include <array>
 #include <cmath>
 #include <ostream> // doctest prints shared_ptrs through it
+
+// A world file's climate table alone: empty, or why the file was refused.
+inline ov::str load_table(const ov::str &p_path, ov::Value &r_table) {
+    WorldFile world;
+    const ov::str err = WorldFile::load(p_path, world);
+    if (err.empty()) {
+        r_table = world.climate_table;
+    }
+    return err;
+}
 #include <vector>
 
 // doctest's REQUIRE needs exceptions: a failed check ends the test case.

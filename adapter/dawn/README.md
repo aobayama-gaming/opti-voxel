@@ -23,15 +23,14 @@ adapter/dawn/out/ov_dawn --viewer                          # an X11 window (XWay
 adapter/dawn/out/ov_dawn --shot=out.png --view=2 --pitch=-35   # offscreen: a PNG once the load is complete, JSON report
 ```
 
-Options: `--size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M --pitch=DEG --yaw=DEG
+Options: `--size=WxH --world=PATH --lod_error=F --above_ground=M --pitch=DEG --yaw=DEG
 --view=0|1|2 --max_frames=N`, and upscaling after Godot's `--upscale=fsr2 --render_scale=F --pixelate=N`
 (`DawnUpscaler`): `--upscale=fsr3` renders the 3D at `--render_scale` (default 0.5 per axis) and brings it to the output
 with AMD's FSR 3.1 upscaler (`fsr3.*`: the reference passes, their SPIR-V vendored in `thirdparty/fsr3`, MIT; needs
 the device's `TextureFormatsTier2`), RCAS at `--sharpness=F` (FSR's 0 .. 1, default 0.2); `--pixelate=N` makes the
 output the window over N and copies each pixel over an N x N block. FSR's depth and motion vectors come from the 3D's
 depth (the terrain is static: the camera's reprojection is the motion). The LOD reads the 3D render's pixels. The look
-of the Godot video preset: `--upscale=fsr3 --pixelate=2`. The forest: `--trees=N --tree_area=M` (with `--climate=PATH`
-for a climate world; the web build preloads the Godot project's climate folder at `/climate`, so the Godot video preset's world is `?lods=25&climate=/climate/world.json`), placed like Godot's `forest5cm` preset by `--trees=4000 --tree_area=316 --voxel=0.05
+of the Godot video preset: `--upscale=fsr3 --pixelate=2`. A world file gives everything else (`docs/terrain.md`): `res://` is the Godot project, on the web its preloaded `climate` and `worlds` folders, so the Godot video preset's world is `?world=res://climate/world.json`. The forest is placed like Godot's `forest5cm` preset by `--world=res://worlds/forest5cm.world.json
 --cam_pos=-52,320,-95 --above_ground=5 --pitch=-5 --yaw=-90`. Not there yet: frustum culling, GPU timestamps (no budget),
 SSAO, the clouds, the sky's light from the sky itself (a constant haze colour stands in).
 
@@ -74,9 +73,8 @@ google-chrome --ozone-platform=x11 --enable-unsafe-webgpu \
 Under Wayland its WebGPU canvas loses the device on the first frame (`vkAllocateMemory failed with
 VK_ERROR_OUT_OF_DEVICE_MEMORY`); so does headless Chrome's, whose offscreen `?shot=` still works.
 
-The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&trees=1000000&tree_area=5000&voxel=0.05` is
-`--viewer --upscale=fsr3 --pixelate=2 --trees=1000000 --tree_area=5000 --voxel=0.05` (the 1M forest at 5 cm; the
-default voxel is 0.5 m); `?check` (or `frame-check`, `cascade-check`) runs that
+The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&world=res://worlds/forest5cm_1m.world.json` is
+`--viewer --upscale=fsr3 --pixelate=2 --world=res://worlds/forest5cm_1m.world.json` (the 1M forest at 5 cm); `?check` (or `frame-check`, `cascade-check`) runs that
 check and `?shot=/x.png` renders offscreen into the page's file system (`Module.FS.readFile('/x.png')`). A click locks
 the mouse, Escape frees it. `build.sh` needs emsdk (`EMSDK`, at the version of `web/emsdk_version.txt`) and fetches the
 Dawn of `web/dawn_revision.txt` with its dependencies into `OV_DAWN_SRC` when there is no checkout there (it warns on

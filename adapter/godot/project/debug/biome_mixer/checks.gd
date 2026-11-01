@@ -221,9 +221,9 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 	var wr := ExportTable.write(w, p_table, EXPORT_PATH)
 	var entry := {"written": wr.written, "message": wr.message, "warnings": wr.warnings}
 	var text := FileAccess.get_file_as_string(EXPORT_PATH) if wr.written else ""
-	var back = JSON.parse_string(text)
+	var back := World.read_table(EXPORT_PATH) if wr.written else {}
 	entry.lines = text.count("\n")
-	if not back is Dictionary:
+	if back.is_empty():
 		entry.ok = false
 		return entry
 	var differ := []
@@ -244,7 +244,7 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 	entry.differ = differ
 	# The export is the table's notes in their plainest form (a plain shape is no Shape): exporting its world again
 	# gives the same file (so the same shader).
-	entry.stable = ExportTable.text(ExportTable.table(World.from_table(back), back).table) == text
+	entry.stable = ExportTable.text(ExportTable.split(ExportTable.table(World.from_table(back), back).table, back).world) == text
 	entry.refused = not ExportTable._biome(every_kind(), w, [], {}).errors.is_empty()
 	var placed: Array = w.biomes.filter(func(b): return not b.at.is_empty())
 	if ClassDB.class_exists("ClimateReportNode") and not placed.is_empty():
@@ -264,7 +264,7 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 # multifractal (elsewhere the band goes in without its mean).
 static func notes_of(p_table: Dictionary, p_world: Dictionary) -> Dictionary:
 	var out := {}
-	var top := Octaves.ground_top(int(p_world.lods), float(p_world.voxel_m))
+	var top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
 	for b in p_table.get("biomes", []):
 		var per := {}
 		for k in range(Octaves.K_MIN, top + 1):
@@ -275,7 +275,7 @@ static func notes_of(p_table: Dictionary, p_world: Dictionary) -> Dictionary:
 			if mf == 0.0:
 				c[0] = 0.0
 			var warp := float(a.get("warp_m", 0.0))
-			for k in ImportTable.band_ks(a, p_world.voxel_m, p_world.lods):
+			for k in ImportTable.band_ks(a):
 				if k <= top:
 					per[k] = [float(a.get("x", 1.0)), c, mf, warp, a.get("warp_fields", []) if warp > 0.0 else []]
 		out[b.name] = per

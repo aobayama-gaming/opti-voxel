@@ -16,11 +16,10 @@
 #include <cmath>
 #include <optional>
 
-// The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain (VoxelTerrain.terrain_mode 1,
-// --terrain=cascade): a 3D height field of perlin3 octaves carried down the Hermite cascade, octaves from
+// The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain: a 3D height field of perlin3 octaves carried down the Hermite cascade, octaves from
 // k = 3 (8 voxels, inserted on Λ_0) up to the micro engine's top (micro_top_k: the first octave at the 3.3 km cap,
-// k = 19 at 5 cm; the continents preset: lod_count + 4), steepness 1/8, amplitudes capped at 3.3 km,
-// 4 channels (value + gradient, see channel_set),
+// k = 19 at 5 cm), steepness 1/8, amplitudes capped at 3.3 km,
+// 4 channels (value + gradient),
 // surface at altitude h over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function of the
 // absolute position only.
 //
@@ -29,7 +28,7 @@
 // same points only (frac 0, voxel a multiple of 2^lod), through Cascade::point. There is no off-lattice
 // evaluation: the vertex normals between samples come from the samples' gradients (cascade_glsl.hpp).
 //
-// The instance table (SDFTable: --instances, --trees, runtime edits) is folded onto each sample: the cascade's
+// The instance table (SDFTable: the world's instances and trees, runtime edits) is folded onto each sample: the cascade's
 // register (unit gradient times 2^L, distance in LOD0 voxels: exact rescales) through Archetype::fold_onto, then
 // finish_table, at the lattice points only. A sample no instance's box test passes is the bare cascade's, bit for
 // bit (sample_sdf).
@@ -55,24 +54,14 @@ public:
     // The stream's tasks read ground_field: stopped before this class's members go.
     ~SDFCascade() override { stop_streaming(); }
 
-    // Set before configure(). LINEAR4 (value + gradient) is the meshed set: by the design's criterion G7
-    // (keep 8 channels unless they cost > 15% more GPU time than 4), measured with CascadeSpike: the
-    // 8-channel passes cost 1.30x the 4-channel ones (1.29 vs 1.00 ms per batch of 128 LOD-0 chunks).
-    // HERMITE8 stays implemented and proven (tools/cascade_test.sh checks both).
-    Cascade::ChannelSet channel_set = Cascade::ChannelSet::LINEAR4;
-
     // Set before configure(): a climate table (Climate::parse's format), empty for none. configure() parses it against
     // this ground and carries its fields in the cascade (Climate::combined_spec), the ground's octaves modulated by the
     // biomes' multipliers; a table it refuses is an ERR and no climate.
     ov::Value climate_data = ov::Value::object();
 
-    // Set before configure(). DEFAULT: every octave at STEEPNESS (capped at MAX_AMP_M). CONTINENTS:
-    // the same octaves with an amplitude per wavelength (continent_amp_m), so continents, ocean basins and
-    // mountain ranges show at their own scales. Only the amplitudes differ: lattices, seeds and the
-    // cascade are the same, so both presets are the same proven code path. FLAT (the shapes gallery): no
+    // Set before configure(). DEFAULT: every octave at STEEPNESS (capped at MAX_AMP_M). FLAT (the shapes gallery): no
     // band and the ground at FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
     enum class Preset { DEFAULT,
-        CONTINENTS,
         FLAT };
     Preset preset = Preset::DEFAULT;
     // > 0: the ground's base is a sphere of this radius (metres) centred on the voxel (0, 0, 0) (BaseSurface::sphere: a
@@ -104,39 +93,12 @@ public:
     // 100 m of altitude, never at 0: on one, a flat ground has fwidth ~ 0 and float noise picks the shade per triangle.
     static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
 
-    // Amplitude (metres) of the octave of wavelength p_wavelength_m in the continents preset.
-    static double continent_amp_m(double p_wavelength_m) {
-        const double km = p_wavelength_m / 1000.0;
-        if (km >= 20000.0) {
-            return 500.0;
-        }
-        if (km >= 2000.0) {
-            return 2500.0;
-        }
-        if (km >= 400.0) {
-            return 1200.0;
-        }
-        if (km >= 100.0) {
-            return 600.0;
-        }
-        if (km >= 16.0) {
-            return 2200.0; // mountain ranges
-        }
-        if (km >= 4.0) {
-            return 1100.0;
-        }
-        if (km >= 1.0) {
-            return p_wavelength_m / 5.0;
-        }
-        return p_wavelength_m / 8.0;
-    }
-
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
         field_k_top = p_lod_count + 4;
-        k_top = preset == Preset::CONTINENTS ? field_k_top : ov::min(field_k_top, micro_top_k(vs));
-        spec = CascadeTerrain::make_spec(SEED, k_top, STEEPNESS, channel_set, INSERT_SHIFT);
+        k_top = ov::min(field_k_top, micro_top_k(vs));
+        spec = CascadeTerrain::make_spec(SEED, k_top, STEEPNESS, INSERT_SHIFT);
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
         if (planet_radius_m > 0.0) {
             const BaseSurface planet = planet_base(planet_radius_m, vs, planet_ring_m);
@@ -146,7 +108,7 @@ public:
         const double relief = base.curved() ? PLANET_RELIEF * base.get_radius() : INFINITY;
         amp_cap = float(ov::min(cap, relief));
         for (Cascade::Band &b : spec.bands) {
-            const double amp = preset == Preset::CONTINENTS ? continent_amp_m(std::ldexp(vs, b.k)) / vs : ov::min(double(b.amp), cap);
+            const double amp = ov::min(double(b.amp), cap);
             b.amp = float(ov::min(amp, relief / PLANET_HEADROOM));
         }
         if (preset == Preset::FLAT) {
@@ -271,7 +233,7 @@ uint cascade_ground_material(Ch ch) {
     // Climate::ground_value, or the cascade's ground channels as they are (GLSL: climate_ground, get_ground_glsl).
     void ground_channels(const float p_slots[Cascade::SLOTS], float r_ch[Cascade::CHANNELS]) const {
         for (int c = 0; c < Cascade::CHANNELS; c++) {
-            r_ch[c] = c < Cascade::channel_count(spec.set) ? p_slots[c] : 0.0f;
+            r_ch[c] = p_slots[c];
         }
         if (has_ground_terms()) {
             const ExactNoise::Float4 g = Climate::ground_value(*climate, p_slots);
@@ -548,7 +510,7 @@ private:
     std::vector<float> moment_skirt_table; // the moment skirt per LOD (metres, 0 without moment blobs), see configure()
     BaseSurface base; // the ground's reference: flat at the datum (configure)
     float voxel_size = 0.5f;
-    int k_top = 0; // the ground's coarsest octave (micro_top_k, the continents preset's lod_count + 4)
+    int k_top = 0; // the ground's coarsest octave (micro_top_k)
     int field_k_top = 0; // a climate field's coarsest octave (lod_count + 4)
     std::optional<Climate::Table> climate;
     bool ground_terms = false; // climate->has_curves(), read per sample

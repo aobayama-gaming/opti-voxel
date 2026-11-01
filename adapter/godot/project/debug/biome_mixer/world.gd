@@ -2,8 +2,8 @@ extends RefCounted
 ## The mixer's world: the whole climate as one document, so a biome is edited inside its world (its notes in the
 ## graph, its place among the others on the climate chart, its neighbours in the world view). A world is
 ## {fields (the table's, as JSON), ground_stretch, climate_warp, biomes: [{name, at: {field: [centre, span]}, model:
-## the biome's graph, debug_color, clouds}] (the last the default: no "at", it fills what the others leave), voxel_m,
-## lods, origin_m, view, current (the biome the graph edits), mode ("biome" or "world")}.
+## the biome's graph, debug_color, clouds}] (the last the default: no "at", it fills what the others leave),
+## origin_m, view, current (the biome the graph edits), mode ("biome" or "world")}.
 ## The weights are the engine's (Climate::weights, src/climate.cpp) in float: a biome's kernel is the product over the
 ## fields it names of the smoothstep of clamp((1 - u^2) KERNEL_FADE, 0, 1), u = (f - centre) / span; the default's
 ## (1 - sum)^2; each over their sum.
@@ -19,16 +19,25 @@ const CORE := sqrt(1.0 - 1.0 / KERNEL_FADE)
 const WORLD_VIEW := {"extent_m": 400000.0, "map": true, "chart_x": 0, "chart_y": 1}
 
 
-# A world from a climate table (the parsed JSON of world.json): each biome imported as a graph (ImportTable), its
+# The world file p_path as one table: its keys and its climate's fields (the climate a path next to it, or inline).
+static func read_table(p_path: String) -> Dictionary:
+	var t = JSON.parse_string(FileAccess.get_file_as_string(p_path))
+	if not t is Dictionary:
+		return {}
+	t.fields = Octaves.section(t, "climate", p_path).get("fields", [])
+	return t
+
+
+# A world from a climate table (read_table): each biome imported as a graph (ImportTable), its
 # place as [centre, span] per field.
-static func from_table(p_table: Dictionary, p_voxel_m: float = Octaves.DEFAULT_VOXEL_M, p_lods: int = Octaves.DEFAULT_LODS) -> Dictionary:
+static func from_table(p_table: Dictionary) -> Dictionary:
 	var w := {
-		"version": 1, "kind": "world", "name": "world", "voxel_m": p_voxel_m, "lods": p_lods, "origin_m": [0.0, 0.0],
+		"version": 1, "kind": "world", "name": "world", "origin_m": [0.0, 0.0],
 		"fields": p_table.get("fields", []).duplicate(true), "ground_stretch": p_table.get("ground_stretch", []).duplicate(true),
 		"biomes": [], "current": 0, "mode": "biome", "warnings": [],
 	}
 	for b in p_table.get("biomes", []):
-		var r: Dictionary = ImportTable.new(b.get("name", "?"), p_voxel_m, p_lods).import_biome(p_table)
+		var r: Dictionary = ImportTable.new(b.get("name", "?")).import_biome(p_table)
 		if r.model.has("climate_warp") and not w.has("climate_warp"):
 			w.climate_warp = r.model.climate_warp
 		w.warnings.append_array(r.warnings)
@@ -77,10 +86,10 @@ static func field_octaves(p_world: Dictionary, p_field: Dictionary) -> Array:
 	for band in p_field.get("bands", []):
 		var amp := float(band.get("amp", 0.0))
 		if band.has("wavelength_m"):
-			out.append({"k": ImportTable.band_ks(band, p_world.voxel_m, p_world.lods)[0], "amp": amp})
+			out.append({"k": ImportTable.band_ks(band)[0], "amp": amp})
 			continue
-		var hi := Octaves.lattice_k(float(band.to_m), p_world.voxel_m)
-		for k in ImportTable.band_ks(band, p_world.voxel_m, p_world.lods):
+		var hi := Octaves.lattice_k(float(band.to_m), Octaves.voxel_m)
+		for k in ImportTable.band_ks(band):
 			out.append({"k": k, "amp": amp * pow(float(band.get("persistence", 1.0)), hi - k)})
 	out.sort_custom(func(a, b): return a.k > b.k)
 	return out

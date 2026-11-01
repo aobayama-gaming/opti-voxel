@@ -3,10 +3,10 @@
 # same meshes. The terrain is a function of the absolute position (exact noise), so every chunk meshed
 # in two runs that look at the same place must have bit-identical page contents.
 #
-#   tools/origin_parity.sh [--voxel=M] [--planet_radius_km=R] [-- bench args...]
+#   tools/origin_parity.sh [--world=PATH] [-- bench args...]
 #   e.g. tools/origin_parity.sh -- --mode=direct --validate=64 --audit=1
-#        tools/origin_parity.sh --voxel=0.05 -- --mode=direct
-#        tools/origin_parity.sh --voxel=0.05 --planet_radius_km=2 -- --mode=direct
+#        tools/origin_parity.sh --world=res://worlds/cm.world.json -- --mode=direct
+#        tools/origin_parity.sh --world=res://worlds/tiny.world.json -- --mode=direct
 #
 # Runs (no build, load scenario, 60 steady frames unless overridden, page audit always on):
 #   zero, zero2   origin 0 twice: determinism (identical digests and counts) and the screenshot noise floor
@@ -14,7 +14,7 @@
 #   far_a, far_b  camera at ~1e15 m, origins on it and one root span away
 #   wrap_a, wrap_b camera at 2^48 voxels on x and z (voxel and noise-cell low words wrap there for every
 #                 octave up to 2^16 voxels), origins on each side of it
-# On a planet (--planet_radius_km) the cameras stand over its +y pole and the origins move up by the pole (a root-span
+# On a planet (a planet world) the cameras stand over its +y pole and the origins move up by the pole (a root-span
 # multiple below it): zero, zero2 and near only (the far and wrap cameras would look at empty space).
 # Pairs are compared on the per-chunk mesh digests of the page audit (bench chunks.json): the same
 # non-empty chunks, each with an identical digest. A camera one root span
@@ -24,8 +24,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VOXEL="0.5"
-PLANET=""
+WORLD="res://worlds/default.world.json"
 BENCH_ARGS=()
 SEEN_DASH=0
 for a in "$@"; do
@@ -33,19 +32,30 @@ for a in "$@"; do
         BENCH_ARGS+=("$a")
     else
         case "$a" in
-            --voxel=*) VOXEL="${a#--voxel=}" ;;
-            --planet_radius_km=*) PLANET="${a#--planet_radius_km=}" ;;
+            --world=*) WORLD="${a#--world=}" ;;
             --) SEEN_DASH=1 ;;
             *) BENCH_ARGS+=("$a") ;;
         esac
     fi
 done
 
-# Origins and cameras in voxels. R = the root chunk span (2^15 ids of 14 voxels, chunk_size 32,
-# skirt 2, 15 LODs); every origin is a multiple of it, so nothing is snapped. "far" is about 1e15 m
+# The world's voxel size, planet radius (0: flat) and LODs, what this script's voxels depend on.
+read -r VOXEL PLANET_M LODS <<< "$(python3 - "$ROOT/adapter/godot/project" "$WORLD" <<'PY'
+import json, os, sys
+root, path = sys.argv[1], sys.argv[2]
+file = os.path.join(root, path[len("res://"):]) if path.startswith("res://") else path
+world = json.load(open(file))
+engine = world.get("engine", {})
+if isinstance(engine, str):
+    engine = json.load(open(os.path.join(os.path.dirname(file), engine)))
+print(engine.get("voxel_m", 0.5), world.get("planet", {}).get("radius_m", 0), engine.get("lods", 15))
+PY
+)"
+# Origins and cameras in voxels. R = the root chunk span (2^LODS ids of 14 voxels, chunk_size 32,
+# skirt 2); every origin is a multiple of it, so nothing is snapped. "far" is about 1e15 m
 # whatever the voxel size. y stays 0: the terrain's datum is at absolute y ~ 300 m.
 read -r R FAR WRAPX WRAPZ <<< "$(python3 -c "
-r = 2**15 * 14
+r = 2**$LODS * 14
 k = round(1e15 / float('$VOXEL') / r)
 w = 2**48
 print(r, k * r, (w // r) * r, (-w // r) * r)")"
@@ -54,13 +64,12 @@ LABELS=(zero zero2 near far_a far_b wrap_a wrap_b)
 # A planet: the scene's datum (BaseSurface::DATUM_M) on its pole, the origins' y a root-span multiple under it.
 CY=0
 OY=0
-if [[ -n "$PLANET" ]]; then
+if [[ "$PLANET_M" != 0 ]]; then
     read -r CY OY <<< "$(python3 -c "
-r = 2**15 * 14
-pole = round($PLANET * 1000 / float('$VOXEL'))
+r = 2**$LODS * 14
+pole = round($PLANET_M / float('$VOXEL'))
 print(pole - round(300 / float('$VOXEL')), pole // r * r)")"
     LABELS=(zero zero2 near)
-    BENCH_ARGS+=("--planet_radius_km=$PLANET")
 fi
 declare -A ORIGIN CAMERA
 ORIGIN[zero]="0,$OY,0";                            CAMERA[zero]="0,$CY,0"
@@ -73,7 +82,7 @@ ORIGIN[wrap_b]="$((WRAPX + R)),0,$((WRAPZ + R))";  CAMERA[wrap_b]="$W,0,-$W"
 LIST=()
 for label in "${LABELS[@]}"; do
     echo ">> $label: origin ${ORIGIN[$label]} camera ${CAMERA[$label]}"
-    "$ROOT/tools/bench.sh" --no-build --tag="parity-$label" --scenario=load --steady=60 --voxel="$VOXEL" "${BENCH_ARGS[@]}" \
+    "$ROOT/tools/bench.sh" --no-build --tag="parity-$label" --scenario=load --steady=60 --world="$WORLD" "${BENCH_ARGS[@]}" \
         --audit=1 --origin="${ORIGIN[$label]}" --camera_voxel="${CAMERA[$label]}" \
         --shot=loaded:loaded.png --shot=steady_end:steady.png > /dev/null 2>&1
     CODE=$?

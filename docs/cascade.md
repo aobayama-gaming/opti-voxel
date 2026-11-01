@@ -5,21 +5,21 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
 - Hermite cascade (`src/cascade.hpp`: CPU reference, the oracle; `src/cascade_glsl.{hpp,cpp}`: the GPU
   passes, bit-identical to it): each noise band (octave k) is inserted once on the lattice Λ_{k-3}
   (multiples of 2^(k-3) voxels: 8 samples per wavelength), then carried down by tricubic Hermite
-  subdivision. Channels in units of the lattice spacing: `HERMITE8` (value, 3 slopes, 3 cross slopes,
-  d3/dxdydz from `perlin3_cross`) or `LINEAR4` (value + gradient, transverse slopes linear). A LOD-L chunk
+  subdivision. Channels in units of the lattice spacing: value + gradient, the slope along the axis by the
+  Hermite rule, the transverse slopes linear. A LOD-L chunk
   stops at Λ_L, so `V_m(p)` is a pure function of the point: every LOD gets the same bits where they share
   points (a climate's last level reads its octave's amplitude from the level above: Carry groups, below). Fixed order x, y, z; only + - * by 0.5, 0.125, 0.75; after each level |c| < 2^-64 is flushed to 0
   (without it a band carried far down makes denormals). `Cascade::point` = the same run on a one-point box.
-  4 samples per wavelength (worst case 2.2% value error) was rejected (`tools/cascade_report.sh`); the
-  meshed set is `LINEAR4` (G7 of the design: 8 channels cost 1.30x the GPU time of 4, threshold 1.15).
+  4 samples per wavelength (worst case 2.2% value error) was rejected. An 8-channel set (cross slopes from a
+  `perlin3_cross`) cost 1.30x the GPU time of 4 against a 1.15 threshold; it and its report tool are in git history.
 - GPU cascade: one dispatch per level for the whole batch (level L + j of every chunk, j from T minus the
   batch's smallest LOD down to 0), boxes in closed form from the chunk's anchor on (lo, hi) words
   (`GLSL_FRAME_INT64`, `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2
-  parents (code generated from `Cascade::PAIRS`), ping-pong scratch A (odd j, 17^3 points per chunk) / B
+  parents (code generated from the same axis rule), ping-pong scratch A (odd j, 17^3 points per chunk) / B
   (even j >= 2, 10^3), j = 0 straight to `sdf_sample`. Bands come from a table indexed by level
   (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per device (`ov::gpu::Device`); the direct mesher runs
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
-- **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): LINEAR4 slots after the field groups that a run's
+- **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): 4 slots each after the field groups that a run's
   level above its last derives from its channels before its insertions (the climate its own bands read: one climate per
   point) and holds after its flush, and H carries to the last level like a field (the
   `copied_carry` group takes its floor parent's channels instead of a blend: a value that can't be interpolated, the

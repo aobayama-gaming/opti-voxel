@@ -1,11 +1,12 @@
 {
     "comment": "Every operation at once, for the tests (test_climate_shape.cpp, CascadeSpike set 4s): shaped ground bands, a ridged multifractal (its state group), warps from fields, the biomes' height curves, a field term on the ground, and stretched ground octaves. Not a world to look at: project/climate/world.json is.",
-    "fields": [
+    "engine": {"voxel_m": 0.05, "lods": 25},
+ "climate": {"fields": [
         { "name": "t", "bands": [{ "from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7 }], "terms": [{ "source": "ground", "per_m": -0.0004 }] },
         { "name": "v", "bands": [{ "from_m": 400, "to_m": 13000, "amp": 0.4 }] },
         { "name": "wx", "bands": [{ "from_m": 200, "to_m": 1600, "amp": 0.5 }] },
         { "name": "wz", "bands": [{ "from_m": 200, "to_m": 1600, "amp": 0.5 }] }
-    ],
+    ]},
     "ground_stretch": [{ "from_m": 100, "to_m": 30000000, "stretch_y": 4 }],
     "biomes": [
         {

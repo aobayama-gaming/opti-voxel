@@ -38,9 +38,8 @@ uniform sampler2D material_tex : filter_nearest, repeat_disable;
 // drawn magenta, those it still draws orange)
 uniform int debug_view = 0;
 uniform float voxel_size = 0.5;
-// Height colours around sea level, the base (VoxelTerrain sets it for the continents preset). The slope colours, the
-// heights and the contour lines read the base's up and altitude (base_up, base_altitude: BaseSurface::glsl_render).
-uniform bool height_colours = false;
+// The slope colours, the heights and the contour lines read the base's up and altitude (base_up, base_altitude:
+// BaseSurface::glsl_render).
 // The render origin in chunk-id units, low 32 bits: positions are drawn relative to it; and its LOD0 voxel, low 32 bits
 // (the shading frame's origin). PageDecode's.
 uniform ivec3 origin_chunk_lo = ivec3(0);
@@ -155,26 +154,9 @@ void fragment() {
     // the tonemapper keeps the relief readable).
     vec3 p = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
     vec3 up_dir = base_up(p);
-    float up = clamp(dot(v_world_normal, up_dir), 0.0, 1.0);
     float flat_w = ground_flat_weight(v_world_normal, up_dir);
     vec3 albedo = mix(GROUND_STEEP, GROUND_FLAT, flat_w); // Material::GROUND_STEEP / GROUND_FLAT
     float contour_m = 100.0;
-    if (height_colours) {
-        // Height colours (dark albedos: the scene's tonemapper brightens them): sea floor blue, darker with
-        // depth, beach, lowland green, highland brown, snow; rock on steep land.
-        float e = v_height;
-        vec3 steep = vec3(0.20, 0.18, 0.16);
-        if (e < 0.0) {
-            albedo = mix(vec3(0.005, 0.02, 0.10), vec3(0.04, 0.16, 0.35), smoothstep(-4000.0, 0.0, e));
-        } else if (e < 30.0) {
-            albedo = vec3(0.45, 0.40, 0.26);
-        } else {
-            vec3 land = mix(vec3(0.08, 0.20, 0.05), vec3(0.24, 0.18, 0.10), smoothstep(200.0, 1800.0, e));
-            land = mix(land, vec3(0.80), smoothstep(2800.0, 3600.0, e));
-            albedo = mix(steep, land, smoothstep(0.7, 0.9, up));
-        }
-        contour_m = 500.0;
-    }
     // Contour lines halfway between whole multiples of contour_m of altitude above the base (a few km at most: no frame to
     // snap to): never on the base itself, where a flat ground would flicker between shades.
     float h = v_height / contour_m + 0.5;

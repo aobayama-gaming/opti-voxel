@@ -1,0 +1,10 @@
+{
+ "comment": "A 2 km planet at 5 cm.",
+ "engine": {
+  "voxel_m": 0.05,
+  "lods": 15
+ },
+ "planet": {
+  "radius_m": 2000
+ }
+}

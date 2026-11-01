@@ -6,7 +6,7 @@ page audit: every non-empty loaded chunk and its quad count). Each chunk's box (
 --grow cells of its LOD, for skirts and vertex placement) is tested against the camera that drew the depth:
 - beyond_far: the box's nearest point is farther from the camera than the far plane's corners (its depth over
   the cosine of the diagonal half-FOV), in any direction: never drawn whichever way the camera turns (the far
-  plane follows the altitude with --lods above 15, docs/integer-frame.md);
+  plane follows the altitude above 15 LODs, docs/integer-frame.md);
 - offscreen: outside the view frustum's side planes or behind the camera;
 - near: crosses the camera plane (counted as seen);
 - hidden: every depth pixel of its screen rect (grown by a pixel) is nearer than the box's nearest corner,
@@ -173,7 +173,7 @@ def census(run, grow, cut_grow):
     cut_grow = 2.0 * fr.half if cut_grow is None else cut_grow  # default: the node's own size
     digests = json.load(open(os.path.join(run, "chunks.json")))
     stats = json.load(open(os.path.join(run, "stats.json")))
-    max_lod = int(stats["args"].get("lods", 15))
+    max_lod = int(stats["final_terrain"]["lods"])
     cost = stats["final_terrain"]["mesher"].get("cost_us_per_chunk", [])
     ids, quads = [], []
     for k, v in digests.items():

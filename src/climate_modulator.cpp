@@ -557,7 +557,7 @@ Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground)
     }
     std::shared_ptr<Modulator> mod = std::make_shared<Modulator>(p_table, spec);
     if (mod->needed()) {
-        spec.modulation = mod; // a LINEAR4 ground where a band is modulated: validate refuses multipliers on another
+        spec.modulation = mod;
     }
     return spec;
 }

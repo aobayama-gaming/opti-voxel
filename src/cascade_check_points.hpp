@@ -15,8 +15,8 @@
 //     its coarse readings at 5 cm): the batch size a GPU site walk is sized from.
 namespace CascadeCheckPoints {
 
-ov::Value check_points(ov::gpu::Device *p_device, CascadeCheckSets::SpikeSet p_set, int p_lods, const ChunkParam &p_param);
-ov::Value point_timing(ov::gpu::Device *p_device, const std::vector<CascadeCheckSets::SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param,
+ov::Value check_points(ov::gpu::Device *p_device, CascadeCheckSets::SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param);
+ov::Value point_timing(ov::gpu::Device *p_device, const std::vector<CascadeCheckSets::SpikeSet> &p_sets, const ov::str &p_world, const ChunkParam &p_param,
         int p_runs);
 
 } // namespace CascadeCheckPoints

@@ -115,6 +115,6 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   `instance_capacity()` records up front: the table's `table_capacity()` (default 16384 or the scene + 4096, removed ones
   count; an add past it is refused), then the streamed slots. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
-  discovery_audit should stay `ok`. `--instances=N --instance_area=M` scatter about N rocks and pillars
+  discovery_audit should stay `ok`. The world file's `instances` (`count`, `area_m`) scatter about N rocks and pillars
   in a square of side M metres around (-50, -150) m (`SDFTable::SCENE_X / Z`, set before the node enters the tree),
   default 0: one per cell site (`SCATTER_SITE_SALT`), a rock or a pillar by the site's variant, turned to `up_at`.

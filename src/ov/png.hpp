@@ -1,6 +1,6 @@
 #pragma once
 
-// A PNG of 8-bit pixels for the core's reports (CascadeReport, ClimateReport slices and maps): no compression (stored
+// A PNG of 8-bit pixels for the core's reports (ClimateReport slices and maps): no compression (stored
 // deflate blocks), so no library; any PNG reader takes it.
 
 #include "ov/bytes.hpp"

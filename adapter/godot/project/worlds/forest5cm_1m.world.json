@@ -1,0 +1,11 @@
+{
+ "comment": "The streamed forest at forest5cm's density on 5 x 5 km.",
+ "engine": {
+  "voxel_m": 0.05,
+  "lods": 15
+ },
+ "trees": {
+  "count": 1000000,
+  "area_m": 5000
+ }
+}

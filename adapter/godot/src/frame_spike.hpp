@@ -1,5 +1,7 @@
 #pragma once
 
+#include "world_file.hpp"
+
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 
@@ -16,9 +18,9 @@ protected:
 public:
     Dictionary run();
 
-    void set_voxel_size(float p_size) { voxel_size = p_size; }
-    float get_voxel_size() const { return voxel_size; }
+    void set_world_path(const String &p_path) { world_path = p_path; }
+    String get_world_path() const { return world_path; }
 
 private:
-    float voxel_size = 0.5f;
+    String world_path = WorldFile::DEFAULT_PATH;
 };

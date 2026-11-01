@@ -8,9 +8,9 @@ iterate past a warning, never to commit one.
 Layout: one engine, two adapters. `src/` is the engine, engine-free as a whole (`src/core_files.txt` lists every file,
 never shrunk): the GPU work goes through `ov::gpu::Device` (`gpu_device.hpp`: buffers, 2D textures, compute pipelines
 from GLSL, readbacks, `post` onto the device's thread) and the drawing through the hosts the adapter implements
-(`PageHost`: the quad pages; `MeshHost`: the legacy meshes). The frame loop is `ov::World` (`world.hpp`: the settings,
+(`PageHost`: the quad pages; `MeshHost`: the legacy meshes). The frame loop is `ov::World` (`world.hpp`: the settings, the world file (`world_file.hpp`: every terrain setting is data, `--world=`),
 `start` / `frame(camera)` / `stop`, edits, stats, the debug audits); the checks and reports are core too (`FrameCheck`,
-`CascadeCheck`, `QuadPoolCheck` on any device, `CascadeReport`, `ClimateReport`). `adapter/godot/` is the GDExtension's
+`CascadeCheck`, `QuadPoolCheck` on any device, `ClimateReport`). `adapter/godot/` is the GDExtension's
 Godot-only sources (`src/`: `VoxelTerrain`, a node that maps its properties onto `ov::World::Settings` and its camera
 onto `frame`; registration; `RDDevice` on a RenderingDevice; `GodotPageHost` with the page shader; `GodotMeshHost`;
 thin spike and report nodes over the core checks) and the Godot project (`project/`: player.gd, scenes, bench);
@@ -124,7 +124,7 @@ to every change, and a reviewer may reject a PR on any of them.
 |---|---|---|
 | `docs/pipelines.md` | GPU Legacy (oracle) and GPU Direct meshers, page layout, GPU budget and cost model, compaction, dual contouring | `GPU_*mesher*`, `quad_page_pool*`, `page_format.hpp`, `gpu_cost_model.hpp`, `gpu_glsl.hpp` |
 | `docs/integer-frame.md` | int64 ids, `WorldPos`, GPU words, origin, LOD range and clip planes, exact noise, Morton keys | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math*`, `exact_noise*` |
-| `docs/terrain.md` | presets and `--terrain`, the table folded into the cascade samples, the base surface (flat / sphere) | `sdf_cascade*`, `sdf_table*`, `base_surface*` |
+| `docs/terrain.md` | world files, presets and `--terrain`, the table folded into the cascade samples, the base surface (flat / sphere) | `world_file*`, `sdf_cascade*`, `sdf_table*`, `base_surface*` |
 | `docs/cascade.md` | Hermite cascade, CPU and GPU passes, lattice-only evaluation | `cascade*` |
 | `docs/archetypes.md` | archetype IR (adding an op), library types, locality and band rules, the index, runtime edits | `archetype_*`, `instance_table*` |
 | `docs/instance-stream.md` | scatter sources, keys, the stream and its wiring | `cell_scatter*`, `scatter_source*`, `instance_stream*` |
@@ -159,7 +159,7 @@ Details and flags: `docs/testing.md`.
 | `cascade*`, `exact_noise*`, `gpu_frame.hpp`, `sdf_cascade*`, `cascade_points_gpu*`, `local_points_gpu*` | `tools/cascade_test.sh` (needs a window) |
 | `cell_sites*`, `field_gpu*`, `scatter_source*` walks | a 1M load with `--walk_verify=1` (`--preset=forest5cm_1m`), forest5cm `--walk_gpu=0` vs `1` chunk digests |
 | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise*`, the SDF, a new noise or SDF term | `tools/frame_test.sh` (+ an entry in `make_probes()`) |
-| the discoverer, the SDF, the cascade passes | `tools/discovery_audit.sh -- --terrain=cascade --discovery_compare=1` (and `--lods=25`) |
+| the discoverer, the SDF, the cascade passes | `tools/discovery_audit.sh -- --terrain=cascade --discovery_compare=1` (and `--world=res://worlds/lods25.world.json`) |
 | `chunk_memory`, the discoverer's publish, the meshers' result path | a fly with `--destroy_verify=1` |
 | `QuadPagePool` | `res://debug/spike.tscn` (`check.sh --spike`) |
 | the bark, `value_noise`, the page shader's normals | `tools/bark_seams.sh` |

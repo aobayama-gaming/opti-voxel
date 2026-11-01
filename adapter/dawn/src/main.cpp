@@ -3,14 +3,14 @@
 //
 //   ov_dawn            brings the device up
 //   ov_dawn --check                   runs the engine's GPU device check (GPUDeviceCheck)
-//   ov_dawn --frame-check[=VOXEL_M]   the integer frame and exact noise, GPU vs CPU (FrameCheck)
+//   ov_dawn --frame-check[=WORLD]     the integer frame and exact noise at a world's voxel size, GPU vs CPU (FrameCheck)
 //   ov_dawn --cascade-check[=JSON]    the GPU cascade vs its CPU oracle (CascadeCheck; JSON: its options, e.g.
-//                                     '{"lods":15,"timing":false}')
+//                                     '{"sets":"4","timing":false}')
 // Each prints its report and exits 1 on a failure.
 //   ov_dawn --viewer [options]        the terrain in a window, the Godot player's controls (README.md)
 //   ov_dawn --shot=PATH [options]     the same offscreen: a PNG once the load is complete, its report as JSON
-// Viewer options: --size=WxH --voxel=M --lod_error=F --lods=N --terrain=cascade|continents --above_ground=M
-// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --trees=N --tree_area=M --climate=PATH --lod_error_back=F --view=0|1|2 --discoverer=cpu|gpu --walk_gpu=0|1 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS --shadow_m=M --grade=PATH|off.
+// Viewer options: --size=WxH --world=PATH --lod_error=F --above_ground=M
+// --pitch=DEG --yaw=DEG --cam_pos=X,Y,Z --lod_error_back=F --view=0|1|2 --discoverer=cpu|gpu --walk_gpu=0|1 --fly=M_PER_S --max_frames=N --upscale=fsr3|off --render_scale=F --pixelate=N --sharpness=STOPS --shadow_m=M --grade=PATH|off.
 
 #include "dawn_context.hpp"
 #include "dawn_device.hpp"
@@ -18,10 +18,12 @@
 #include "cascade_check.hpp"
 #include "frame_check.hpp"
 #include "gpu_device_check.hpp"
+#include "ov/files.hpp"
 #include "ov/json.hpp"
 #include "ov/log.hpp"
 #include "ov/thread_pool_executor.hpp"
 #include "viewer.hpp"
+#include "world_file.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -48,6 +50,13 @@ struct InstalledPool {
     ~InstalledPool() { ov::set_executor(nullptr); }
 };
 
+// A path as the host reads it: res:// is the Godot project (OV_RES_DIR, the browser's preloaded folders under /), so the
+// checks and the world files name one tree on both adapters.
+bool read_res_file(const ov::str &p_path, ov::str &r_text) {
+    const bool res = p_path.rfind("res://", 0) == 0;
+    return ov::local_file_reader(res ? ov::str(OV_RES_DIR) + p_path.substr(6) : p_path, r_text);
+}
+
 int print_report(const ov::Value &p_report) {
     std::printf("%s\n", ov::to_json(p_report).c_str());
     return p_report["ok"].as_bool() ? 0 : 1;
@@ -57,6 +66,7 @@ int print_report(const ov::Value &p_report) {
 
 int main(int argc, char **argv) {
     ov::log_level() = ov::LOG_INFO;
+    ov::set_file_reader(read_res_file);
     const InstalledPool installed;
     ov::dawn::DawnContext context;
     if (!context.initialize()) {
@@ -66,6 +76,12 @@ int main(int argc, char **argv) {
     bool run_viewer = false;
     for (int i = 1; i < argc; i++) {
         std::string value;
+        for (const char *removed : { "--voxel", "--lods", "--trees", "--tree_area", "--climate", "--terrain" }) {
+            if (flag(argv[i], removed, value)) {
+                std::fprintf(stderr, "%s is gone: use --world=PATH (src/world_file.hpp)\n", removed);
+                return 1;
+            }
+        }
         if (flag(argv[i], "--viewer", value)) {
             run_viewer = true;
         } else if (flag(argv[i], "--shot", value)) {
@@ -73,24 +89,14 @@ int main(int argc, char **argv) {
             run_viewer = true;
         } else if (flag(argv[i], "--size", value)) {
             std::sscanf(value.c_str(), "%dx%d", &viewer.width, &viewer.height);
-        } else if (flag(argv[i], "--voxel", value)) {
-            viewer.voxel_size = std::strtof(value.c_str(), nullptr);
+        } else if (flag(argv[i], "--world", value)) {
+            viewer.world = value;
         } else if (flag(argv[i], "--lod_error", value)) {
             viewer.lod_error = std::strtof(value.c_str(), nullptr);
         } else if (flag(argv[i], "--lod_error_back", value)) {
             viewer.lod_error_back = std::strtof(value.c_str(), nullptr);
         } else if (flag(argv[i], "--cam_pos", value)) {
             std::sscanf(value.c_str(), "%f,%f,%f", &viewer.cam_pos[0], &viewer.cam_pos[1], &viewer.cam_pos[2]);
-        } else if (flag(argv[i], "--trees", value)) {
-            viewer.trees = std::atoi(value.c_str());
-        } else if (flag(argv[i], "--tree_area", value)) {
-            viewer.tree_area = std::strtof(value.c_str(), nullptr);
-        } else if (flag(argv[i], "--climate", value)) {
-            viewer.climate = value;
-        } else if (flag(argv[i], "--lods", value)) {
-            viewer.lods = std::atoi(value.c_str());
-        } else if (flag(argv[i], "--terrain", value)) {
-            viewer.terrain_mode = value == "continents" ? 2 : 1;
         } else if (flag(argv[i], "--above_ground", value)) {
             viewer.above_ground = std::strtof(value.c_str(), nullptr);
         } else if (flag(argv[i], "--pitch", value)) {
@@ -149,7 +155,7 @@ int main(int argc, char **argv) {
         }
         if (flag(argv[i], "--frame-check", value)) {
             ov::dawn::DawnDevice device(context);
-            return print_report(FrameCheck::run(device, value.empty() ? 0.5f : std::strtof(value.c_str(), nullptr)));
+            return print_report(FrameCheck::run(device, value.empty() ? ov::str(WorldFile::DEFAULT_PATH) : value));
         }
         if (flag(argv[i], "--cascade-check", value)) {
             ov::str error;

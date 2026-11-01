@@ -541,18 +541,4 @@ ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table) {
     return err;
 }
 
-ov::str load(const ov::str &p_path, ov::Value &r_data) {
-    ov::str text;
-    if (!ov::read_file(p_path, text)) {
-        return "climate: cannot read " + p_path + ov::str(".");
-    }
-    ov::str json_error;
-    const ov::Value data = ov::parse_json(text, json_error);
-    if (data.get_type() != ov::Value::OBJECT || data.is_empty()) {
-        return "climate: " + p_path + ov::str(" is not a JSON object with a table.");
-    }
-    r_data = data;
-    return ov::str();
-}
-
 } // namespace Climate

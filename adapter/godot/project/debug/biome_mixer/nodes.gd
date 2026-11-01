@@ -119,16 +119,16 @@ static func climate_warp_info(p_model: Dictionary) -> String:
 	var k := int(cw.k)
 	var n := int(cw.octaves)
 	return "The climate's warp, every biome's: %s .. %s, %d octaves x 3 axes = %d reads per point, once however many notes it moves." % [
-		fmt_m(Octaves.wavelength_m(k - n + 1, p_model.voxel_m)), fmt_m(Octaves.wavelength_m(k, p_model.voxel_m)), n, 3 * n]
+		fmt_m(Octaves.wavelength_m(k - n + 1, Octaves.voxel_m)), fmt_m(Octaves.wavelength_m(k, Octaves.voxel_m)), n, 3 * n]
 
 
 # What a node shows from its parameters (title, thumbnail, phi graph), after an edit.
 static func refresh(p_gn: GraphNode, p_node: Dictionary, p_ctx: Object) -> void:
-	var voxel_m: float = p_ctx.model.voxel_m
+	var voxel_m: float = Octaves.voxel_m
 	p_gn.title = title(p_node, voxel_m)
 	if p_gn.has_meta("thumb"):
 		var k := int(Kinds.param(p_node, "k"))
-		var w := Octaves.shader_words(Octaves.ground_octave(k, int(p_ctx.model.lods), float(p_ctx.model.voxel_m)), k, [0, 0, 0])
+		var w := Octaves.shader_words(Octaves.ground_octave(k, Octaves.lods, Octaves.voxel_m), k, [0, 0, 0])
 		var m: ShaderMaterial = p_gn.get_meta("thumb").material
 		m.set_shader_parameter("u_base", w.base)
 		m.set_shader_parameter("u_frac", w.frac)
@@ -307,7 +307,7 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 			row.add_child(cp)
 		"k":
 			# Fixed: the note is the ground's octave k.
-			row.add_child(_label("k %d (%s)" % [int(v), fmt_m(Octaves.wavelength_m(int(v), p_ctx.model.voxel_m))], 0.0))
+			row.add_child(_label("k %d (%s)" % [int(v), fmt_m(Octaves.wavelength_m(int(v), Octaves.voxel_m))], 0.0))
 		"points":
 			var box := VBoxContainer.new()
 			var ce := CurveEdit.new()

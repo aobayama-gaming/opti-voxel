@@ -6,8 +6,9 @@ the tool that designs a world's biomes.
 
 ## Model
 
-A climate (`src/climate.hpp`, a JSON table: format above `Climate::parse` in `src/climate_parse.cpp`;
-`VoxelTerrain.climate_path` / `--climate=PATH`, off by default) shapes **one ground**: the cascade's octaves, the
+A climate (`src/climate.hpp`, a table: format above `Climate::parse` in `src/climate_parse.cpp`; three files give it, off
+without them: `engine.json` the voxel and LODs, `climate.json` the fields that place biomes, `world.json` the biomes and
+`ground_stretch`, merged by `WorldFile` into the table `parse` reads, `docs/terrain.md`) shapes **one ground**: the cascade's octaves, the
 notes, `n_k` for k = 3 (0.4 m at 5 cm) up to the ground's top octave. A biome doesn't add noise: it plays those notes.
 The ground stops at the micro engine's top (`SDFCascade::micro_top_k`, k = 19 at 5 cm: 26.2 km, the first note at the
 3.3 km cap), so the climate is micro: a biome plays notes up to 26.2 km, and a range past it is clipped there. The
@@ -61,8 +62,8 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   offset is steeper than `MAX_CURVE_SLOPE` (4: the skirts and the gradient scale with it), a curve whose points all
   lie past the heights the ground reaches (a constant offset: a wrong unit or sign), an `"offset"`
   without a multifractal (bands are inserted without their mean, so only the state reads it), a field's multiplier
-  without a ground one, multipliers on a non-LINEAR4 ground, a carry past `Cascade::MAX_CARRY`.
-- **In the cascade** (`Climate::combined_spec`): the fields are `Spec::fields`, LINEAR4 groups carried down with the
+  without a ground one, a carry past `Cascade::MAX_CARRY`.
+- **In the cascade** (`Climate::combined_spec`): the fields are `Spec::fields`, groups carried down with the
   ground (`Cascade::field_slot`; on the GPU after the ground's 4 channels, `Spec::gpu_base`). A note some biome names
   is modulated (`Cascade::Modulation`, `Climate::Modulator` in `climate_modulator.cpp`): at each point of its level
   the climate (`Climate::state`: field terms, then weights) gives a `Cascade::BandMod` (three amplitudes on n, |n|, n^2;
@@ -74,7 +75,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   fraction (`WARP_LIMIT`), its gradient by the chain rule through the fields' gradients; in the engine a warped note
   costs no extra noise read (the warp fields' own octaves are inserted on their coarse lattices and interpolated
   down). Slope damping and the swiss turbulence (warps read from the ground's slope) were built and dropped: their
-  own gradient needs the ground's second derivatives, which LINEAR4 doesn't carry.
+  own gradient needs the ground's second derivatives, which the cascade doesn't carry.
 - **One climate per point, none per sample** (the carry): a run's last level, its samples, evaluates no climate. The
   level above derives it from the climate its own bands read (`Cascade::Modulation::derive`; on the GPU at the end of
   `cascade_mods`) into the carry groups (`Cascade::carry_slot`): the last level's `BandMod` parts and the samples'
@@ -102,17 +103,16 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 - **Clouds** (a biome's `"clouds": {"cover": 0..1, "type": 0..1}`, `Climate::BiomeClouds`): the volumetric clouds' cover
   and type over the biome, blended by the weights on a coarse map round the camera (`CloudClimate`, `docs/look.md`).
   They touch no cascade pass or shader.
-- **Tables** (`adapter/godot/project/climate/`): `world.json` (eight biomes on temperature x humidity x wind,
+- **Worlds** (`adapter/godot/project/climate/`): `world.json` with `engine.json` and `climate.json` (eight biomes on temperature x humidity x wind,
   105-419 km octaves, needs 25 LODs; each biome's notes once fitted to a real Copernicus heightmap, see git history of
   `tools/landforms/`; dunes and mountain carry their height curve), `example.json` (continent and terrain-type fields
   choosing mountains, hills, badlands and plains, two curves), `shaped_test.json` (every operation, CascadeSpike `4s`),
   `plain.json` (amplitudes only; pins every slot, the SDF, the skirts and both level shaders' text: a table without
-  shapes generates the old text bit for bit), `fieldless_test.json` (one biome, no field: CascadeSpike `4d`).
+  shapes generates the old text bit for bit), `fieldless_test.json` (one biome, no field: CascadeSpike `4d`). The test tables are world files with an inline engine and climate.
 - **Checks**: `tools/unit_test.sh "Climate*"`; `tools/climate_report.sh` (pure CPU: biome maps, the pick drift, where
   biomes meet with a `--spawn`, relief per biome, gradient error, field maps) before any GPU run;
-  `cascade_test.sh --sets=4,4c,4f,4p,4s,4d` and `--sets=4w --lods=25` (G1 on the carried channels, G3, points, G10 the
-  pick); `discovery_audit.sh -- --voxel=0.05 --climate=... --discovery_compare=1`; `origin_parity.sh --voxel=0.05 --
-  ... --climate=...`.
+  `cascade_test.sh --sets=4,4c,4f,4p,4s,4d,4w` (G1 on the carried channels, G3, points, G10 the
+  pick); `discovery_audit.sh -- --world=... --discovery_compare=1`; `origin_parity.sh --world=...`.
 
 ## Measurements
 

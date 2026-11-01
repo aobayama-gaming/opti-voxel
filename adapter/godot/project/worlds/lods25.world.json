@@ -1,0 +1,7 @@
+{
+ "comment": "The bare ground at 0.5 m on 25 LODs.",
+ "engine": {
+  "voxel_m": 0.5,
+  "lods": 25
+ }
+}

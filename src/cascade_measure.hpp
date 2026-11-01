@@ -5,7 +5,7 @@
 #include <vector>
 
 // Measurements of the cascade against analytic perlin3 and of its cost, shared by the unit tests (small
-// samples, thresholds) and CascadeReport (large samples, tables).
+// samples, thresholds) and the cascade tests (large samples, tables).
 namespace CascadeMeasure {
 
 // Steepnesses r = amplitude / wavelength at which normal errors are measured; the pass criterion uses

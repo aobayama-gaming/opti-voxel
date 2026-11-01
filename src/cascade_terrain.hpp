@@ -9,9 +9,8 @@ namespace CascadeTerrain {
 
 // Octaves from the finest one LOD 0 inserts (k = insert_shift, on Λ_0) up to p_k_top; seeds and offsets
 // from ExactNoise::make_fbm.
-inline Cascade::Spec make_spec(uint32_t p_seed, int p_k_top, double p_steepness, Cascade::ChannelSet p_set, int p_insert_shift) {
+inline Cascade::Spec make_spec(uint32_t p_seed, int p_k_top, double p_steepness, int p_insert_shift) {
     Cascade::Spec spec;
-    spec.set = p_set;
     spec.insert_shift = p_insert_shift;
     spec.bands = ExactNoise::make_fbm(false, p_seed, p_k_top, p_k_top - p_insert_shift + 1, p_steepness * std::ldexp(1.0, p_k_top), 0.5).octaves;
     return spec;
@@ -23,8 +22,8 @@ inline Cascade::Spec make_spec(uint32_t p_seed, int p_k_top, double p_steepness,
 // bias in the integer frame, see the design) and continent bands keep km-scale amplitudes.
 inline constexpr double EARTH_MAX_AMP = 65536.0; // 2^16 voxels: 3.3 km at 5 cm
 
-inline Cascade::Spec earth(Cascade::ChannelSet p_set) {
-    Cascade::Spec spec = make_spec(0xEA27u, 29, 0.125, p_set, 3);
+inline Cascade::Spec earth() {
+    Cascade::Spec spec = make_spec(0xEA27u, 29, 0.125, 3);
     for (Cascade::Band &b : spec.bands) {
         b.amp = float(std::min(double(b.amp), EARTH_MAX_AMP));
     }

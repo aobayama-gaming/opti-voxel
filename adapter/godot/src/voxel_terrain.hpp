@@ -87,9 +87,13 @@ public:
     void set_pipeline_mode(int p_mode);
     int get_pipeline_mode() const;
 
-    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 2 its continents preset, 4 its flat preset under
+    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 4 its flat preset under
     // the shapes gallery (SDFTable::Scene::SHAPES, --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy and 3
     // the archetype demo on an fBm ground (SDFArchetype), both removed: saved scenes keep their numbers.
+    // The world file (WorldFile: res:// or absolute): the voxel size, the LODs and every content setting. Set before
+    // the node enters the tree; the scene's camera may read voxel_size from then on.
+    void set_world_path(const String &p_path);
+    String get_world_path() const;
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 
@@ -97,7 +101,6 @@ public:
     int get_legacy_batch_size() const;
 
     // Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
-    void set_voxel_size(float p_size);
     float get_voxel_size() const;
     // Depth of the LOD-seam skirt, in voxels of each chunk's LOD (0 disables it).
     void set_skirt_depth(float p_depth);
@@ -113,45 +116,14 @@ public:
     void set_world_origin_z(int64_t p_voxel);
     int64_t get_world_origin_z() const;
 
-    // A deterministic scatter of --instances rocks and pillars on the ground, in a square of side
-    // --instance_area metres around SDFTable::SCENE_X / Z. Must be set before the node enters the tree.
-    void set_archetype_instances(int p_count);
-    int get_archetype_instances() const;
-    void set_archetype_instance_area(double p_area);
-    double get_archetype_instance_area() const;
-    // A forest of about --trees grown trees (tree_archetype.hpp) in a square of side
-    // --tree_area metres around SDFTable::SCENE_X / Z. Set before the node enters the tree.
-    void set_archetype_trees(int p_count);
-    int get_archetype_trees() const;
-    void set_archetype_tree_area(double p_area);
-    double get_archetype_tree_area() const;
-    // The biome features (biome_features.hpp: lava lakes, floating islands) within this many metres of
-    // SDFTable::SCENE_X / Z, 0 for none (--biomes=KM). Set before the node enters the tree.
-    void set_biome_radius(double p_metres);
-    double get_biome_radius() const;
-    // A planet of this radius centred on the voxel (0, 0, 0) (ov::World::Settings::planet_radius_m); 0 the flat world.
-    void set_planet_radius(double p_metres);
+    // The world's planet radius in metres; 0 the flat world.
     double get_planet_radius() const;
-    // > 0: the planet is a torus round y, a ring of this radius, planet_radius its tube (Settings::planet_ring_m).
-    void set_planet_ring(double p_metres);
-    double get_planet_ring() const;
-    // The volumetric atmosphere over the base (ov::Atmosphere, World::Settings::atmosphere) and its scale (0: from the
-    // base's curvature). Set before the node enters the tree.
-    void set_atmosphere(bool p_enabled);
-    bool get_atmosphere() const;
-    void set_atmosphere_scale(double p_scale);
-    double get_atmosphere_scale() const;
-    // The volumetric clouds in it (ov::Clouds, World::Settings::clouds). Set before the node enters the tree.
-    void set_clouds(bool p_enabled);
-    bool get_clouds() const;
+    // The world's tree count.
+    int get_world_trees() const;
     // Their weather (VoxelSky, every frame): the cover in [0, 1] and the wind (render metres per second).
     void set_cloud_weather(float p_cover, const Vector3 &p_wind_mps);
     // The direction towards the sun (render space; VoxelSky, from its light): the atmosphere's camera volume.
     void set_sun_direction(const Vector3 &p_towards_sun);
-    // A climate table (JSON, src/climate.cpp's format: res:// or absolute), carried by the cascade and modulating the
-    // ground's octaves per biome; empty for none (--climate=PATH). Set before the node enters the tree.
-    void set_climate_path(const String &p_path);
-    String get_climate_path() const;
     // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
     // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
     void set_archetype_band(bool p_enabled);
@@ -211,7 +183,6 @@ public:
     bool get_lod_far_limit() const;
 
     static constexpr int MAX_LOD_NUMBERS = ChunkMath::MAX_LOD_NUMBERS;
-    void set_lod_numbers(int p_count);
     int get_lod_numbers() const;
     // Distance from the camera (metres) that bounds every chunk the discoverer can load: the corner of
     // its scan grid. 0 before the terrain is ready.

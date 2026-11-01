@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sdf_cascade.hpp"
+#include "world_file.hpp"
 
 #include "ov/on_error.hpp"
 #include "ov/value.hpp"
@@ -9,18 +10,16 @@
 #include <iterator>
 #include <vector>
 
-// The terrains CascadeSpike (cascade_spike.cpp) checks and times: "8" / "4" channels, "4c" LINEAR4 with the example
-// climate carried and modulating the ground, "4f" its fields without multipliers (carried only for the biome pick: the
-// cost of the ground materials alone), "4p" the plain climate (the example before shaped bands: amplitudes only), "4s"
-// the shaped test table (every operation: shapes, the multifractal state, warps, the biomes' curves, stretched octaves),
-// "4d" adapter/godot/project/climate/fieldless_test.json (one biome multiplying the ground's octaves, no field: a modulation
-// with no field group), "4w" adapter/godot/project/climate/world.json (eight biomes on three climate axes, 8 groups;
-// needs 25 LODs), "4g"
-// LINEAR4 on an Earth-sized sphere (SPHERE_RADIUS_M: the base's regions, BaseRegions, below its switch LOD).
+// The terrains CascadeSpike (cascade_spike.cpp) checks and times, each a world file (voxel and LODs from its engine): "4" the
+// bare ground of the check's own world, "4c" the example climate carried and modulating the ground, "4f" its fields
+// without multipliers (carried only for the biome pick: the cost of the ground materials alone), "4p" the plain climate
+// (the example before shaped bands: amplitudes only), "4s" the shaped test table (every operation: shapes, the multifractal
+// state, warps, the biomes' curves, stretched octaves), "4d" fieldless_test.json (one biome multiplying the ground's
+// octaves, no field: a modulation with no field group), "4w" the game's world.json (eight biomes on three climate axes, 8
+// groups), "4g" an Earth-sized sphere (the base's regions, BaseRegions, below its switch LOD).
 namespace CascadeCheckSets {
 
 enum class SpikeSet {
-    H8,
     L4,
     L4C,
     L4F,
@@ -30,13 +29,7 @@ enum class SpikeSet {
     L4W,
     L4G,
 };
-inline constexpr const char *SET_LABELS[] = { "8", "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g" };
-
-// The "4g" set's planet (metres), centred on the voxel (0, 0, 0).
-inline constexpr double SPHERE_RADIUS_M = 6371000.0;
-
-// The example climate is tuned for 5 cm voxels (its modulated octaves stay under the cap there).
-inline constexpr float CLIMATE_VOXEL = 0.05f;
+inline constexpr const char *SET_LABELS[] = { "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g" };
 
 inline ov::str set_label(SpikeSet p_v) {
     return SET_LABELS[int(p_v)];
@@ -66,31 +59,45 @@ inline double median(std::vector<double> p_v) {
     return p_v[p_v.size() / 2];
 }
 
-// p_sdf configured for p_v (r_param: the variant's chunk parameters).
-inline void configure_variant(SDFCascade &p_sdf, SpikeSet p_v, int p_lods, ChunkParam &r_param) {
-    p_sdf.channel_set = p_v == SpikeSet::H8 ? Cascade::ChannelSet::HERMITE8 : Cascade::ChannelSet::LINEAR4;
-    p_sdf.planet_radius_m = p_v == SpikeSet::L4G ? SPHERE_RADIUS_M : 0.0;
-    if (p_v != SpikeSet::H8 && p_v != SpikeSet::L4 && p_v != SpikeSet::L4G) {
-        r_param.voxel_size = CLIMATE_VOXEL;
-        ov::Value data;
-        const char *path = p_v == SpikeSet::L4P ? "res://climate/plain.json"
-                : p_v == SpikeSet::L4S          ? "res://climate/shaped_test.json"
-                : p_v == SpikeSet::L4D          ? "res://climate/fieldless_test.json"
-                : p_v == SpikeSet::L4W          ? "res://climate/world.json"
-                                                : "res://climate/example.json";
-        const ov::str err = Climate::load(path, data);
-        if (!err.empty()) {
-            OV_ERR_PRINT("CascadeSpike: " + err + " (the set runs without its climate)");
-        }
-        if (p_v == SpikeSet::L4F) {
-            ov::Value &biomes = data["biomes"];
-            for (size_t i = 0; i < biomes.size(); i++) {
-                biomes.at(i).erase("amp");
-            }
-        }
-        p_sdf.climate_data = data;
+// The world file of set p_v; p_world for the bare set.
+inline ov::str set_world(SpikeSet p_v, const ov::str &p_world) {
+    switch (p_v) {
+        case SpikeSet::L4:
+            return p_world;
+        case SpikeSet::L4G:
+            return "res://worlds/earth25.world.json";
+        case SpikeSet::L4P:
+            return "res://climate/plain.json";
+        case SpikeSet::L4S:
+            return "res://climate/shaped_test.json";
+        case SpikeSet::L4D:
+            return "res://climate/fieldless_test.json";
+        case SpikeSet::L4W:
+            return "res://climate/world.json";
+        default:
+            return "res://climate/example.json";
     }
-    p_sdf.configure(r_param, p_lods);
+}
+
+// p_sdf configured for p_v (r_param: the variant's chunk parameters); returns its LOD count.
+inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_world, ChunkParam &r_param) {
+    WorldFile world;
+    const ov::str err = WorldFile::load(set_world(p_v, p_world), world);
+    if (!err.empty()) {
+        OV_ERR_PRINT("CascadeSpike: " + err + " (the set runs on the default world)");
+    }
+    r_param.voxel_size = float(world.voxel_m);
+    p_sdf.planet_radius_m = world.planet_radius_m;
+    p_sdf.planet_ring_m = world.planet_ring_m;
+    if (p_v == SpikeSet::L4F && err.empty()) {
+        ov::Value &biomes = world.climate_table["biomes"];
+        for (size_t i = 0; i < biomes.size(); i++) {
+            biomes.at(i).erase("amp");
+        }
+    }
+    p_sdf.climate_data = world.climate_table;
+    p_sdf.configure(r_param, world.lods);
+    return world.lods;
 }
 
 } // namespace CascadeCheckSets

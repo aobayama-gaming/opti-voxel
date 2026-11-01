@@ -234,8 +234,7 @@ ov::str level_switch(const char *p_name, Value p_value) {
     return code + ov::format("    default: return %d;\n    }\n}\n", last);
 }
 
-// Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (from Cascade::PAIRS,
-// the CPU's axis_rules): the first g_carry_n, the ones the level reads.
+// Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (the CPU's axis_rules): the first g_carry_n, the ones the level reads.
 ov::str hermite_functions(const Spec &p_spec, bool p_carried) {
     const int nch = p_spec.gpu_channels();
     ov::str code = ov::format("struct Ch { float c[%d]; };\n\n", nch);
@@ -267,7 +266,7 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
             mid_code += ov::format("        hmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_v, p_s, p_s, p_v, p_s);
             copy_code += ov::format("        hcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_s, p_v, p_s);
         };
-        // LINEAR4 at GPU channel p_base: value + the axis slope by the Hermite rule, the transverse slopes linear.
+        // The group at GPU channel p_base: value + the axis slope by the Hermite rule, the transverse slopes linear.
         auto linear4 = [&](int p_base) {
             pair(p_base + VALUE, p_base + DX + axis);
             for (int s = p_base + DX; s <= p_base + DZ; s++) {
@@ -290,12 +289,6 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
             const int base = p_spec.gpu_base(g);
             if (g == 1) {
                 open("g_fields");
-            }
-            if (p_spec.group_set(g) == ChannelSet::HERMITE8) {
-                for (const auto &pr : PAIRS[axis]) {
-                    pair(base + pr[0], base + pr[1]);
-                }
-                continue;
             }
             linear4(base);
         }
@@ -423,24 +416,18 @@ ov::str band_functions(const Spec &p_spec) {
     ov::str code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper(p_spec) : ov::str();
     for (int g = 0; g < p_spec.group_count(); g++) {
         const int base = p_spec.gpu_base(g);
-        const ChannelSet set = p_spec.group_set(g);
         code += ov::format("Ch insert_band_%d(Ch ch, WorldPos p, CascadeBand band) {\n", g);
-        if (set == ChannelSet::HERMITE8) {
-            code += "    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz, c0, c1);\n";
-            code += "    float n[8] = float[8](c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w);\n";
-        } else {
-            // perlin3 returns (d/dx, d/dy, d/dz, value): the same bits as perlin3_cross's first four channels.
-            code += noise_code(p_spec, g, "p");
-            code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
-        }
-        for (int c = 0; c < channel_count(set); c++) {
+        // perlin3 returns (d/dx, d/dy, d/dz, value).
+        code += noise_code(p_spec, g, "p");
+        code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
+        for (int c = 0; c < CHANNELS; c++) {
             code += ov::format("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), base + c,
                     base + c);
         }
         code += "    return ch;\n}\n\n";
-        if (shaped(p_spec) && set == ChannelSet::LINEAR4 && p_spec.modulation->group_features(g) != 0u) {
+        if (shaped(p_spec) && p_spec.modulation->group_features(g) != 0u) {
             code += shaped_band_function(p_spec, g);
-        } else if (p_spec.modulation && set == ChannelSet::LINEAR4) {
+        } else if (p_spec.modulation) {
             code += ov::format("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g);
             code += noise_code(p_spec, g, "p");
             code += ov::format("    precise float aws = amp.w * %s;\n", flt(ExactNoise::exact_pow2(-p_spec.insert_shift)));
@@ -479,11 +466,11 @@ ov::str insert_code(const Spec &p_spec, bool p_derive) {
         }
         code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_field_bands) " : "",
                 g * CascadeGLSL::BAND_ENTRIES);
-        if (shaped(p_spec) && p_spec.group_set(g) == ChannelSet::LINEAR4) {
+        if (shaped(p_spec)) {
             const bool own = p_spec.modulation->group_features(g) != 0u;
             const ov::str call = own ? ov::format("insert_band_shaped_%d(ch, p, band, mod[%d], m)", g, g) : ov::format("insert_band_mod_%d(ch, p, band, mod[%d].amp[0])", g, g);
             code += ov::format("            ch = ((modulated >> %du) & 1u) != 0u ? %s : insert_band_%d(ch, p, band);\n", g, call, g);
-        } else if (p_spec.modulation && p_spec.group_set(g) == ChannelSet::LINEAR4) {
+        } else if (p_spec.modulation) {
             code += ov::format("            ch = ((modulated >> %du) & 1u) != 0u ? insert_band_mod_%d(ch, p, band, amp[%d]) : insert_band_%d(ch, p, band);\n", g, g, g, g);
         } else {
             code += ov::format("            ch = insert_band_%d(ch, p, band);\n", g);
@@ -581,7 +568,7 @@ uint32_t scratch_points_b(int p_item_size) {
 
 uint32_t vec4s_per_point(const Spec &p_spec, const FieldRange &p_range) {
     // Fields carried nowhere (an empty FieldRange) take no scratch.
-    const int channels = p_range.empty() ? channel_count(p_spec.set) : p_spec.gpu_channels();
+    const int channels = p_range.empty() ? CHANNELS : p_spec.gpu_channels();
     return vec4s_for(channels);
 }
 
@@ -695,7 +682,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*MATERIAL_STORE*/", material_store);
     code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + ov::str(GLSL_FRAME_STRUCTS));
     code = ov::replace_all(code, "/*TABLE_BUFFERS*/", p_fold ? p_sdf->get_table_glsl(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : ov::str());
-    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : ov::str()) + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE) + ov::str(GLSL_PERLIN3_CROSS));
+    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : ov::str()) + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE));
     code = ov::replace_all(code, "/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? (cubes ? ov::str(LEVEL_POINT) : ov::str()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : ov::str()));
     const ov::str tail = (pick ? p_sdf->get_ground_material_glsl(*spec) : ov::str()) + ground;
     code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, tail);

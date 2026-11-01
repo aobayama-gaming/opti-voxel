@@ -72,7 +72,7 @@ struct Shape {
 // max |phi(n) - its mean| over n in [-1, 1] (perlin3's range): 1 for the plain shape. Skirts follow it (max_amp).
 float shape_bound(const Shape &p_shape);
 
-// A field: its plain perlin3 bands (a LINEAR4 cascade group, inserted like the ground's, octave k on
+// A field: its plain perlin3 bands (a cascade group, inserted like the ground's, octave k on
 // Λ_{k - BAND_SHIFT}) and terms.
 struct Field {
     ov::str name;
@@ -95,7 +95,7 @@ struct Axis {
 // its noise displaced by warp LOD0 voxels times the values of the fields warp_fields (libnoise's turbulence), the
 // displacement's gradient applied by the chain rule.
 // Left out: weights or warps read from the ground's slope (Quilez's and de Carpentier's slope damping, the swiss
-// turbulence's warp). Their own gradient needs the ground's second derivatives, which LINEAR4 doesn't carry, and the
+// turbulence's warp). Their own gradient needs the ground's second derivatives, which the cascade doesn't carry, and the
 // Hermite subdivision needs a band's gradient to be its value's: without that term the finer levels' values streak along
 // the lattice axes (measured, the climate report's gradient error: 6% and visible streaks, 2.5% for the plain ground).
 struct Amp {
@@ -209,11 +209,7 @@ const std::vector<Cascade::Band> *bands_of(const Table &p_table, const Ground &p
 // validated; on error r_table is left empty and the error returned.
 ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table);
 
-// The JSON object of a table file (a host path: res:// or absolute, ov::read_file) in r_data; empty if it is readable,
-// else the error.
-ov::str load(const ov::str &p_path, ov::Value &r_data);
-
-// The ground spec p_ground (LINEAR4) with the table's fields as its field groups and, if any biome names an amplitude
+// The ground spec p_ground with the table's fields as its field groups and, if any biome names an amplitude
 // multiplier, a Modulation: every band some biome multiplies gets A = sum_b w_b amp_b at each point (amp_b = the
 // biome's multiplier times the band's amplitude, the band's amplitude for a biome without one), from the weights of
 // the climate before that level's insertions.

@@ -20,11 +20,11 @@
 // same inputs in the same order: the x pass at the (up to) 4 (y, z) parent positions, the y pass at the
 // 2 z positions, the z pass once (copy at even indices, midpoint at odd ones). Same ops on the same values,
 // so the same bits as the CPU's box-wide passes, with no intermediate box stored. Then the level's band is
-// inserted (perlin3_cross times the band factors, ch = ch + o) and every channel flushed below 2^-64, like
+// inserted (perlin3 times the band factors, ch = ch + o) and every channel flushed below 2^-64, like
 // Cascade::run.
 //
-// Ping-pong scratch: odd j in buffer A (17^3 points per chunk), even j >= 2 in buffer B (10^3), 8 channels =
-// 2 vec4 per point (4 channels: 1). j = 0 (Λ_L) stores no channel: it converts straight to the mesher's
+// Ping-pong scratch: odd j in buffer A (17^3 points per chunk), even j >= 2 in buffer B (10^3), 1 vec4 per
+// point. j = 0 (Λ_L) stores no channel: it converts straight to the mesher's
 // sdf_sample (SDF cascade_terrain_sdf -> metres -> skirt), the same 16 B per sample as the sdf pass it
 // replaces. The bands reach the GPU as a table indexed by level (band_table), so the shader does not change
 // with the spec. Debug variant (CascadeSpike): the last level also stores its channels; the meshers' variant

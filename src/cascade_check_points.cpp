@@ -36,15 +36,15 @@ VoxelPos test_voxel(int p_lod, int p_place, int p_index) {
 
 } // namespace
 
-ov::Value check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, const ChunkParam &p_param) {
+ov::Value check_points(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param) {
     SDFCascade sdf;
     ChunkParam param = p_param;
-    configure_variant(sdf, p_set, p_lods, param);
+    const int lod_count = configure_variant(sdf, p_set, p_world, param);
     std::vector<VoxelPos> voxels;
     std::vector<VoxelPos> lattice;
     std::vector<int> lods;
     for (const int lod : POINT_LODS) {
-        if (lod >= p_lods) {
+        if (lod >= lod_count) {
             continue;
         }
         for (int place = 0; place < PLACES; place++) {
@@ -107,13 +107,13 @@ ov::Value check_points(ov::gpu::Device *p_device, SpikeSet p_set, int p_lods, co
     return d;
 }
 
-ov::Value point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets, int p_lods, const ChunkParam &p_param, int p_runs) {
+ov::Value point_timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets, const ov::str &p_world, const ChunkParam &p_param, int p_runs) {
     ov::Value out = ov::Value::object();
     ov::Value rows = ov::Value::array();
     for (const SpikeSet set : p_sets) {
         SDFCascade sdf;
         ChunkParam param = p_param;
-        configure_variant(sdf, set, p_lods, param);
+        configure_variant(sdf, set, p_world, param);
         CascadePointsGPU gpu;
         const uint32_t most = TIMING_SIZES[std::size(TIMING_SIZES) - 1];
         if (!gpu.create(p_device, &sdf, param, most)) {

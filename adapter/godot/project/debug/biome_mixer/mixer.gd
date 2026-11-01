@@ -15,7 +15,7 @@ extends Control
 ##   --shot=PATH        draw once, save the window to PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test: the noise pins, every template and world.json biome compiled, files
 ##                      round-tripped, world.json exported back; prints MIXER: {json} and quits 0 if ok
-## The World menu exports the world over res://climate/world.json, the game's climate (export_table.gd).
+## The World menu exports the world over res://climate/world.json (and climate.json), the game's climate (export_table.gd).
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
@@ -30,7 +30,7 @@ const Checks := preload("res://debug/biome_mixer/checks.gd")
 const ViewBar := preload("res://debug/biome_mixer/view_bar.gd")
 const ExportTable := preload("res://debug/biome_mixer/export_table.gd")
 
-const WORLD := "res://climate/world.json"
+const WORLD := Octaves.WORLD
 const BIOMES_DIR := "res://climate/biomes"
 const WORLDS_DIR := "res://climate/worlds"
 const AUTOSAVE := "user://biome_mixer_autosave.world.json"
@@ -321,7 +321,7 @@ func _show_budget() -> void:
 				top = r
 	var parts := PackedStringArray([
 		"Per point: %d noise reads = %d notes (%d shaped, %d multifractal, %d moved by the climate warp, %d by notes for free) + %d climate warp octaves; plain ground reads %d." % [
-			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.note_warped, b.warp_octaves, Octaves.ground_top(model.lods, model.voxel_m) - Octaves.K_MIN + 1],
+			b.reads, b.notes, b.shapes, b.multifractals, b.warped, b.note_warped, b.warp_octaves, Octaves.ground_top(Octaves.lods, Octaves.voxel_m) - Octaves.K_MIN + 1],
 		"Relief within +-%s%s." % [Nodes.fmt_m(result.hmax / float(view_settings().exag)),
 			", most from the %s note (+-%s)" % [Nodes.fmt_m(top.lam), Nodes.fmt_m(top.peak)] if top.get("lam", 0.0) > 0.0 else ""],
 	])
@@ -485,8 +485,7 @@ func _read(p_path: String, p_world: bool = false) -> Dictionary:
 
 func _world_table() -> Dictionary:
 	if table.is_empty():
-		var t = JSON.parse_string(FileAccess.get_file_as_string(WORLD))
-		table = t if t is Dictionary else {}
+		table = World.read_table(WORLD)
 	return table
 
 

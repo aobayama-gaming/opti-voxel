@@ -25,8 +25,6 @@ const NOTE_WARP_WARNING := "Note warp is preview-only: the engine's warps are cl
 const NO_SRC := [-1, -1, -1]
 
 var model: Dictionary
-var voxel_m: float
-var lods: int
 var origin: Array  # the preview's centre, absolute voxels (the datum's height)
 var exaggeration := 1.0
 
@@ -54,15 +52,13 @@ var place_count := 0  # a world's biomes x fields: the length of u_atc / u_ati
 # The preview's centre (a model's or a world's origin_m) in absolute voxels, at the datum's height.
 func _set_origin(p_doc: Dictionary) -> void:
 	var o: Array = p_doc.get("origin_m", [0.0, 0.0])
-	origin = [int(round(o[0] / voxel_m)), int(round(Octaves.DATUM_M / voxel_m)), int(round(o[1] / voxel_m))]
+	origin = [int(round(o[0] / Octaves.voxel_m)), int(round(Octaves.DATUM_M / Octaves.voxel_m)), int(round(o[1] / Octaves.voxel_m))]
 
 
 # Compile.new().run(model): one build per instance.
 func run(p_model: Dictionary, p_exaggeration: float = 1.0) -> Dictionary:
 	model = p_model
 	exaggeration = p_exaggeration
-	voxel_m = model.get("voxel_m", Octaves.DEFAULT_VOXEL_M)
-	lods = model.get("lods", Octaves.DEFAULT_LODS)
 	_set_origin(model)
 	for l in model.get("links", []):
 		incoming["%s:%d" % [l.to, int(l.to_port)]] = [l.from, int(l.from_port)]
@@ -91,7 +87,7 @@ func run(p_model: Dictionary, p_exaggeration: float = 1.0) -> Dictionary:
 func _result(p_hmax: float, p_lip: float) -> Dictionary:
 	uniforms["u_hmax"] = p_hmax
 	uniforms["u_lip"] = p_lip
-	uniforms["u_voxel"] = voxel_m
+	uniforms["u_voxel"] = Octaves.voxel_m
 	uniforms["u_exag"] = exaggeration
 	var code := ShaderLib.preview("\n".join(decls) + "\n", "\n".join(functions) + "\n", "\n".join(body) + "\n", note_rows.size(), warps, int(uniforms.u_n_oct), place_count)
 	var bytes := ShaderLib.uniform_bytes(code)
@@ -188,7 +184,7 @@ func _var(p_type: String, p_name: String, p_expr: String) -> String:
 
 
 func _k(p_node: Dictionary) -> int:
-	return clampi(int(Kinds.param(p_node, "k")), Octaves.K_MIN, Octaves.ground_top(lods, voxel_m))
+	return clampi(int(Kinds.param(p_node, "k")), Octaves.K_MIN, Octaves.ground_top(Octaves.lods, Octaves.voxel_m))
 
 
 # A note reads N[index] of the octave table (shader_lib's density loop) times its fade F[index]; with its warp on, at
@@ -196,7 +192,7 @@ func _k(p_node: Dictionary) -> int:
 # carries the unfaded noise and the fade, so a Shape fades around its mean (a faded note moves nothing).
 func _emit_note(p_id: String, p_node: Dictionary) -> Array:
 	var k := _k(p_node)
-	var lam := Octaves.wavelength_m(k, voxel_m)
+	var lam := Octaves.wavelength_m(k, Octaves.voxel_m)
 	var warp = null
 	if Kinds.param(p_node, "warp"):
 		warp = _input(p_id, 0)
@@ -204,12 +200,12 @@ func _emit_note(p_id: String, p_node: Dictionary) -> Array:
 			warp = _climate_warp()
 	var slope := NOISE_SLOPE / lam
 	var stretch := maxf(float(Kinds.param(p_node, "stretch_y")), 1.0)
-	var row := {"octave": Octaves.ground_octave(k, lods, voxel_m), "k": k, "slot": -1, "src": NO_SRC, "axis": 0, "amp": 1.0, "wm": 0.0, "st": 1.0 / stretch}
+	var row := {"octave": Octaves.ground_octave(k, Octaves.lods, Octaves.voxel_m), "k": k, "slot": -1, "src": NO_SRC, "axis": 0, "amp": 1.0, "wm": 0.0, "st": 1.0 / stretch}
 	if warp != null:
 		var wm := float(Kinds.param(p_node, "warp_m"))
 		row.slot = warp.get("slot", -1)
 		row.src = warp.get("src", NO_SRC)
-		row.wm = wm / voxel_m
+		row.wm = wm / Octaves.voxel_m
 		slope *= 1.0 + wm * warp.slope
 		if warp.has("src") and warp.lam <= lam:
 			warnings.append("A Note warp moves the %.0f m note by a note as fine or finer: the engine reads notes coarse to fine, so a warp's notes are coarser." % lam)
@@ -230,7 +226,7 @@ func _emit_note(p_id: String, p_node: Dictionary) -> Array:
 func _climate_warp() -> Dictionary:
 	if climate_rec.is_empty():
 		var cw := climate_cfg if not climate_cfg.is_empty() else Kinds.climate_warp(model)
-		var k := clampi(int(cw.k), Octaves.K_MIN, Octaves.k_top(lods))
+		var k := clampi(int(cw.k), Octaves.K_MIN, Octaves.k_top(Octaves.lods))
 		var slot := warps
 		warps += 1
 		var slope := 0.0
@@ -239,7 +235,7 @@ func _climate_warp() -> Dictionary:
 			var ai: float = cw.amp * pow(cw.persistence, i)
 			for axis in 3:
 				warp_rows.append({"octave": Octaves.field_octave(int(cw.seed) + axis, ki), "k": ki, "slot": slot, "src": NO_SRC, "axis": axis, "amp": ai, "wm": 0.0, "st": 1.0})
-			slope += ai * NOISE_SLOPE / Octaves.wavelength_m(ki, voxel_m)
+			slope += ai * NOISE_SLOPE / Octaves.wavelength_m(ki, Octaves.voxel_m)
 		climate_rec = {"slot": slot, "slope": slope}
 	return climate_rec
 
@@ -289,7 +285,7 @@ func _table() -> void:
 		var w := Octaves.shader_words(r.octave, r.k, origin)
 		var row := {
 			"u_bx": w.base.x, "u_by": w.base.y, "u_bz": w.base.z, "u_sx": w.salt.x, "u_sy": w.salt.y, "u_sz": w.salt.z,
-			"u_fr": w.frac, "u_inv": pow(2.0, -r.k), "u_lam": Octaves.wavelength_m(r.k, voxel_m), "u_amp": r.amp,
+			"u_fr": w.frac, "u_inv": pow(2.0, -r.k), "u_lam": Octaves.wavelength_m(r.k, Octaves.voxel_m), "u_amp": r.amp,
 			"u_wm": r.wm, "u_st": r.st, "u_slot": r.slot, "u_axis": r.axis, "u_jx": r.src[0], "u_jy": r.src[1], "u_jz": r.src[2],
 		}
 		for key in cols:
@@ -534,8 +530,6 @@ static func _linear(p_color: Variant) -> Vector3:
 # biome's graph is skipped where its weight is 0 (without ground terms). The colours blend by weight.
 func run_world(p_world: Dictionary, p_exaggeration: float = 1.0) -> Dictionary:
 	exaggeration = p_exaggeration
-	voxel_m = p_world.voxel_m
-	lods = p_world.lods
 	climate_cfg = Kinds.climate_warp(p_world)
 	_set_origin(p_world)
 	var nf: int = p_world.fields.size()

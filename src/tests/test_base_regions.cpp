@@ -228,7 +228,7 @@ TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radiu
 TEST_CASE("SDFCascade: a climate's biome multipliers fit under a 2 km planet's relief; its curves in metres don't") {
     auto error = [](const char *p_path) {
         SDFCascade sdf;
-        CHECK(Climate::load(p_path, sdf.climate_data) == ov::str());
+        CHECK(load_table(p_path, sdf.climate_data) == ov::str());
         sdf.planet_radius_m = 2000.0;
         ChunkParam param;
         param.voxel_size = 0.05f;

@@ -8,9 +8,9 @@
 
 void FrameSpike::_bind_methods() {
     ClassDB::bind_method(D_METHOD("run"), &FrameSpike::run);
-    ClassDB::bind_method(D_METHOD("set_voxel_size", "size"), &FrameSpike::set_voxel_size);
-    ClassDB::bind_method(D_METHOD("get_voxel_size"), &FrameSpike::get_voxel_size);
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size"), "set_voxel_size", "get_voxel_size");
+    ClassDB::bind_method(D_METHOD("set_world_path", "path"), &FrameSpike::set_world_path);
+    ClassDB::bind_method(D_METHOD("get_world_path"), &FrameSpike::get_world_path);
+    ADD_PROPERTY(PropertyInfo(Variant::STRING, "world_path"), "set_world_path", "get_world_path");
 }
 
 Dictionary FrameSpike::run() {
@@ -21,5 +21,5 @@ Dictionary FrameSpike::run() {
         report["error"] = "no local RenderingDevice (headless or Compatibility renderer)";
         return report;
     }
-    return godot_dict(FrameCheck::run(*device, voxel_size));
+    return godot_dict(FrameCheck::run(*device, ov_str(world_path)));
 }

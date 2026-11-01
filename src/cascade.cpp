@@ -5,8 +5,6 @@
 
 namespace Cascade {
 
-static_assert(sizeof(ExactNoise::Channels8::c) / sizeof(float) == CHANNELS, "perlin3_cross returns the cascade's channels");
-
 namespace {
 
 // floor(p_v / 2), for negative indices too (inner loop: a shift, not WorldCoord::floor_div).
@@ -14,23 +12,10 @@ int64_t half_floor(int64_t p_v) {
     return p_v >= 0 ? (p_v >> 1) : ~((~p_v) >> 1);
 }
 
-constexpr bool pairs_match_axes() {
-    for (int a = 0; a < 3; a++) {
-        for (int i = 0; i < 4; i++) {
-            const int v = CHANNEL_AXES[PAIRS[a][i][0]];
-            if ((v & (1 << a)) != 0 || CHANNEL_AXES[PAIRS[a][i][1]] != (v | (1 << a))) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-static_assert(pairs_match_axes(), "PAIRS follows CHANNEL_AXES");
-
-// The axis rule of H at one child point for one group (channel set p_set at slot p_base): p_get(slot, b) reads the
+// The axis rule of H at one child point for one group (at slot p_base): p_get(slot, b) reads the
 // parent a (b false) or b (b true), p_put(slot, v) writes the child. A copy reads parent a only.
 template <typename Get, typename Put>
-void axis_rule(ChannelSet p_set, int p_base, int p_axis, bool p_copy, Get p_get, Put p_put) {
+void axis_rule(int p_base, int p_axis, bool p_copy, Get p_get, Put p_put) {
     auto pair = [&](int p_v, int p_s) {
         float v, s;
         if (p_copy) {
@@ -41,13 +26,7 @@ void axis_rule(ChannelSet p_set, int p_base, int p_axis, bool p_copy, Get p_get,
         p_put(p_v, v);
         p_put(p_s, s);
     };
-    if (p_set == ChannelSet::HERMITE8) {
-        for (const auto &pr : PAIRS[p_axis]) {
-            pair(p_base + pr[0], p_base + pr[1]);
-        }
-        return;
-    }
-    // LINEAR4: the transverse slopes are interpolated linearly.
+    // The transverse slopes are interpolated linearly.
     const int axis_slope = p_base + DX + p_axis;
     pair(p_base + VALUE, axis_slope);
     for (int s = p_base + DX; s <= p_base + DZ; s++) {
@@ -57,16 +36,16 @@ void axis_rule(ChannelSet p_set, int p_base, int p_axis, bool p_copy, Get p_get,
     }
 }
 
-// The axis rule for every group a level carries: the ground (set p_set), p_fields field groups and p_carry carry
+// The axis rule for every group a level carries: the ground, p_fields field groups and p_carry carry
 // groups, the copied one (p_copied) from parent a whether the child is a copy or a midpoint.
 template <typename Get, typename Put>
-void axis_rules(ChannelSet p_set, int p_fields, int p_carry, int p_copied, int p_axis, bool p_copy, Get p_get, Put p_put) {
+void axis_rules(int p_fields, int p_carry, int p_copied, int p_axis, bool p_copy, Get p_get, Put p_put) {
     for (int g = 0; g < 1 + p_fields; g++) {
-        axis_rule(group_set(p_set, g), group_slot(g), p_axis, p_copy, p_get, p_put);
+        axis_rule(group_slot(g), p_axis, p_copy, p_get, p_put);
     }
     for (int c = 0; c < p_carry; c++) {
         if (c != p_copied) {
-            axis_rule(ChannelSet::LINEAR4, carry_slot(c), p_axis, p_copy, p_get, p_put);
+            axis_rule(carry_slot(c), p_axis, p_copy, p_get, p_put);
             continue;
         }
         for (int s = carry_slot(c); s < carry_slot(c + 1); s++) {
@@ -82,7 +61,7 @@ Level subdivide_axis(const Level &p_in, int p_fields, int p_carry, int p_axis, i
     box.lo[p_axis] = p_lo;
     box.hi[p_axis] = p_hi;
     Level out;
-    out.allocate(p_in.m, box, p_in.set, p_fields, p_carry);
+    out.allocate(p_in.m, box, p_fields, p_carry);
     out.copied = p_in.copied;
     const int64_t in_stride[3] = { p_in.box.size(1) * p_in.box.size(2), p_in.box.size(2), 1 };
     for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_o) {
@@ -94,7 +73,7 @@ Level subdivide_axis(const Level &p_in, int p_fields, int p_carry, int p_axis, i
         }
         const int64_t ib = ia + in_stride[p_axis];
         axis_rules(
-                p_in.set, p_fields, p_carry, p_in.copied, p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
+                p_fields, p_carry, p_in.copied, p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
                 [&](int p_s, float p_v) { out.ch[p_s][p_o] = p_v; });
     });
     return out;
@@ -102,10 +81,10 @@ Level subdivide_axis(const Level &p_in, int p_fields, int p_carry, int p_axis, i
 
 // Channel scale of a band per derivative order: amp * 2^(-shift |S|), exact.
 struct BandFactors {
-    float f[4] = {};
+    float f[2] = {}; // by channel_order
     BandFactors() = default;
     BandFactors(const Spec &p_spec, const Band &p_band) {
-        for (int o = 0; o < 4; o++) {
+        for (int o = 0; o < 2; o++) {
             f[o] = p_band.amp * ExactNoise::exact_pow2(-p_spec.insert_shift * o);
         }
     }
@@ -129,21 +108,9 @@ ExactNoise::Float4 band_noise(const Spec &p_spec, const Band &p_band, const Worl
     return stretch ? p_spec.base.stretch_gradient(n, p_band.stretch, b) : n;
 }
 
-void band_channels(const Spec &p_spec, int p_group, const Band &p_band, const BandFactors &p_factors, const Vector3i64 &p_p, float r_ch[CHANNELS]) {
+void band_channels(const Spec &p_spec, const Band &p_band, const BandFactors &p_factors, const Vector3i64 &p_p, float r_ch[CHANNELS]) {
     const WorldPos pos = band_pos(p_spec, p_band, p_p);
     const float *factor = p_factors.f;
-    if (p_spec.group_set(p_group) == ChannelSet::HERMITE8) {
-        if (p_band.stretch != 0) {
-            std::fill(r_ch, r_ch + CHANNELS, 0.0f);
-            OV_ERR_FAIL_MSG("Cascade: a stretched band needs LINEAR4 (perlin3_cross has no stretch).");
-        }
-        const ExactNoise::Channels8 n = ExactNoise::perlin3_cross(pos, p_band.k, p_band.seed, p_band.offset);
-        for (int c = 0; c < CHANNELS; c++) {
-            r_ch[c] = n.c[c] * factor[channel_order(c)];
-        }
-        return;
-    }
-    // The same bits as perlin3_cross's first four channels, without the cross derivatives.
     const ExactNoise::Float4 n = band_noise(p_spec, p_band, pos);
     r_ch[VALUE] = n.w * factor[0];
     r_ch[DX] = n.x * factor[1];
@@ -269,12 +236,11 @@ void insert_constant_bands(const Spec &p_spec, const LevelBands &p_lb, const Box
         if (p_lb.band[g] == nullptr) {
             continue;
         }
-        const ChannelSet set = p_spec.group_set(g);
         const int base = group_slot(g);
         for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
             float o[CHANNELS];
-            band_channels(p_spec, g, *p_lb.band[g], p_lb.factors[g], p_p, o);
-            for (int c = 0; c < channel_count(set); c++) {
+            band_channels(p_spec, *p_lb.band[g], p_lb.factors[g], p_p, o);
+            for (int c = 0; c < CHANNELS; c++) {
                 float &v = p_at(base + c, p_i);
                 v = v + o[c];
             }
@@ -298,7 +264,7 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
         if ((p_lb.modulated >> g) & 1u) {
             modulated_channels(p_spec, *p_lb.band[g], mod[g], p_lb.slope, p_p, o[g], g == 0 ? &state : nullptr);
         } else {
-            band_channels(p_spec, g, *p_lb.band[g], p_lb.factors[g], p_p, o[g]);
+            band_channels(p_spec, *p_lb.band[g], p_lb.factors[g], p_p, o[g]);
         }
     }
     for (int g = 0; g < p_lb.groups; g++) {
@@ -306,7 +272,7 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
             continue;
         }
         const int base = group_slot(g);
-        for (int c = 0; c < channel_count(p_spec.group_set(g)); c++) {
+        for (int c = 0; c < CHANNELS; c++) {
             r_ch[base + c] = r_ch[base + c] + o[g][c];
         }
     }
@@ -321,13 +287,10 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
     }
 }
 
-// Calls p_f(slot) for the slots a level of ground set p_set, p_fields field groups and p_carry carry groups carries.
+// Calls p_f(slot) for the slots a level of the ground, p_fields field groups and p_carry carry groups carries.
 template <typename F>
-void for_each_slot(ChannelSet p_set, int p_fields, int p_carry, F p_f) {
-    for (int s = 0; s < channel_count(p_set); s++) {
-        p_f(s);
-    }
-    for (int s = CHANNELS; s < field_slot(p_fields); s++) {
+void for_each_slot(int p_fields, int p_carry, F p_f) {
+    for (int s = 0; s < field_slot(p_fields); s++) {
         p_f(s);
     }
     for (int s = carry_slot(0); s < carry_slot(p_carry); s++) {
@@ -335,11 +298,11 @@ void for_each_slot(ChannelSet p_set, int p_fields, int p_carry, F p_f) {
     }
 }
 
-// Λ_m's insertions on the points of p_box carrying ground set p_set, p_fields field groups and p_carry carry groups (a
+// Λ_m's insertions on the points of p_box carrying the ground, p_fields field groups and p_carry carry groups (a
 // Level of run() or a point's SmallLevel): the constant bands band by band, or, with a modulated group, point by point
 // (insert_point reads the point's slots before the insertions). p_at(slot, i) is the channel at point i.
 template <typename At>
-void insert_level(const Spec &p_spec, const LevelBands &p_lb, ChannelSet p_set, int p_fields, int p_carry, int p_m, const Box &p_box, At p_at) {
+void insert_level(const Spec &p_spec, const LevelBands &p_lb, int p_fields, int p_carry, int p_m, const Box &p_box, At p_at) {
     if (!p_lb.any) {
         return;
     }
@@ -349,9 +312,9 @@ void insert_level(const Spec &p_spec, const LevelBands &p_lb, ChannelSet p_set, 
     }
     for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
         float ch[SLOTS] = {};
-        for_each_slot(p_set, p_fields, p_carry, [&](int p_s) { ch[p_s] = p_at(p_s, p_i); });
+        for_each_slot(p_fields, p_carry, [&](int p_s) { ch[p_s] = p_at(p_s, p_i); });
         insert_point(p_spec, p_lb, p_m, p_p, ch);
-        for_each_slot(p_set, p_fields, p_carry, [&](int p_s) { p_at(p_s, p_i) = ch[p_s]; });
+        for_each_slot(p_fields, p_carry, [&](int p_s) { p_at(p_s, p_i) = ch[p_s]; });
     });
 }
 
@@ -359,10 +322,10 @@ void insert_level(const Spec &p_spec, const LevelBands &p_lb, ChannelSet p_set, 
 // climate its own bands read): Modulation::derive's carry slots, flushed (the GPU writes them before the level's
 // flush), given to p_put(slot, i, value).
 template <typename At, typename Put>
-void derive_level(const Spec &p_spec, int p_m, ChannelSet p_set, int p_fields, int p_carry, const Box &p_box, At p_at, Put p_put) {
+void derive_level(const Spec &p_spec, int p_m, int p_fields, int p_carry, const Box &p_box, At p_at, Put p_put) {
     for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
         float ch[SLOTS] = {};
-        for_each_slot(p_set, p_fields, 0, [&](int p_s) { ch[p_s] = p_at(p_s, p_i); });
+        for_each_slot(p_fields, 0, [&](int p_s) { ch[p_s] = p_at(p_s, p_i); });
         p_spec.modulation->derive(p_m, p_p, ch);
         for (int s = carry_slot(0); s < carry_slot(p_carry); s++) {
             p_put(s, p_i, flush_value(ch[s]));
@@ -449,22 +412,21 @@ void Level::add_carry(int p_carry) {
     carry = ov::max(carry, p_carry);
 }
 
-void Level::allocate(int p_m, const Box &p_box, ChannelSet p_set, int p_fields, int p_carry) {
+void Level::allocate(int p_m, const Box &p_box, int p_fields, int p_carry) {
     m = p_m;
     box = p_box;
-    set = p_set;
     fields = p_fields;
     carry = p_carry;
     for (std::vector<float> &c : ch) {
         c.clear();
     }
-    for_each_slot(p_set, p_fields, p_carry, [&](int p_s) { ch[p_s].assign(size_t(p_box.count()), 0.0f); });
+    for_each_slot(p_fields, p_carry, [&](int p_s) { ch[p_s].assign(size_t(p_box.count()), 0.0f); });
 }
 
 void Level::channels_at(const Vector3i64 &p_p, float r_ch[CHANNELS]) const {
     const int64_t i = box.index(p_p);
     for (int c = 0; c < CHANNELS; c++) {
-        r_ch[c] = c < channel_count(set) ? ch[c][i] : 0.0f;
+        r_ch[c] = ch[c][i];
     }
 }
 
@@ -527,7 +489,6 @@ int checked_top(const Spec &p_spec, int p_lod, bool p_all_fields = false) {
     const int top = p_spec.run_top(p_lod, p_all_fields);
     OV_ERR_FAIL_COND_V_MSG(p_lod < 0 || top > MAX_LEVEL, -1, "Cascade: lattice level out of range.");
     OV_ERR_FAIL_COND_V_MSG(int(p_spec.fields.size()) > MAX_FIELD_GROUPS, -1, "Cascade: too many field groups.");
-    OV_ERR_FAIL_COND_V_MSG(range.floor <= range.ceiling && p_spec.set != ChannelSet::LINEAR4, -1, "Cascade: modulation needs a LINEAR4 ground.");
     OV_ERR_FAIL_COND_V_MSG(p_spec.carry_groups() > MAX_CARRY, -1, "Cascade: too many carry groups.");
     const bool fields = p_all_fields || !range.empty();
     for (int g = 0; g < (fields ? p_spec.group_count() : 1); g++) {
@@ -552,12 +513,12 @@ void count_points(const Spec &p_spec, const Box &p_box, int p_lod, Stats &r_stat
 }
 
 void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p, float r_ch[CHANNELS]) {
-    band_channels(p_spec, 0, p_band, BandFactors(p_spec, p_band), p_p, r_ch);
+    band_channels(p_spec, p_band, BandFactors(p_spec, p_band), p_p, r_ch);
 }
 
 void insert_bands(const Spec &p_spec, Level &r_level, int p_fields) {
     const LevelBands lb(p_spec, r_level.m, 1 + (p_fields < 0 ? r_level.fields : p_fields), r_level.carry > 0);
-    insert_level(p_spec, lb, r_level.set, r_level.fields, r_level.carry, r_level.m, r_level.box,
+    insert_level(p_spec, lb, r_level.fields, r_level.carry, r_level.m, r_level.box,
             [&](int p_s, int64_t p_i) -> float & { return r_level.ch[p_s][p_i]; });
 }
 
@@ -584,7 +545,7 @@ void flush(Level &r_level) {
     }
 }
 
-Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r_levels, const Source &p_source, bool p_all_fields) {
+Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r_levels, bool p_all_fields) {
     const int top = checked_top(p_spec, p_lod, p_all_fields);
     if (top < 0) {
         return Level();
@@ -598,7 +559,7 @@ Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r
         // Monotone in m (FieldRange): a level carries at most its parent's fields; the carry only from Λ_{lod+1} down.
         const int fields = carried_fields(p_spec, range, p_lod, m, p_all_fields);
         if (m == top) {
-            cur.allocate(m, box, p_spec.set, fields, m == p_lod ? carry : 0);
+            cur.allocate(m, box, fields, m == p_lod ? carry : 0);
             cur.copied = p_spec.copied_carry();
         } else {
             // With r_levels the previous level was moved there.
@@ -611,15 +572,11 @@ Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r
                 derived[s].resize(size_t(box.count()));
             }
             derive_level(
-                    p_spec, m, cur.set, cur.fields, carry, cur.box, [&](int p_s, int64_t p_i) { return cur.ch[p_s][p_i]; },
+                    p_spec, m, cur.fields, carry, cur.box, [&](int p_s, int64_t p_i) { return cur.ch[p_s][p_i]; },
                     [&](int p_s, int64_t p_i, float p_v) { derived[p_s][p_i] = p_v; });
         }
-        if (p_source) {
-            p_source(cur);
-        } else {
-            // The carry: only the last level holds it yet.
-            insert_bands(p_spec, cur, inserted_fields(p_spec, range, p_lod, m, p_all_fields));
-        }
+        // The carry: only the last level holds it yet.
+        insert_bands(p_spec, cur, inserted_fields(p_spec, range, p_lod, m, p_all_fields));
         flush(cur);
         if (derives) {
             cur.add_carry(carry);
@@ -654,8 +611,8 @@ struct SmallLevel {
 };
 
 // subdivide_axis on SmallLevels: the same index arithmetic and the same per-point ops (axis_rules), the ground of set
-// p_set, p_fields field groups and p_carry carry groups (p_copied copied).
-void subdivide_axis_small(const SmallLevel &p_in, ChannelSet p_set, int p_fields, int p_carry, int p_copied, int p_axis, int64_t p_lo, int64_t p_hi,
+// p_fields field groups and p_carry carry groups (p_copied copied).
+void subdivide_axis_small(const SmallLevel &p_in, int p_fields, int p_carry, int p_copied, int p_axis, int64_t p_lo, int64_t p_hi,
         SmallLevel &r_out) {
     r_out.box = p_in.box;
     r_out.box.lo[p_axis] = p_lo;
@@ -670,7 +627,7 @@ void subdivide_axis_small(const SmallLevel &p_in, ChannelSet p_set, int p_fields
         }
         const int64_t ib = ia + in_stride[p_axis];
         axis_rules(
-                p_set, p_fields, p_carry, p_copied, p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
+                p_fields, p_carry, p_copied, p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
                 [&](int p_s, float p_v) { r_out.ch[p_s][p_o] = p_v; });
     });
 }
@@ -704,16 +661,16 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
         carry = l == p_m ? run : 0;
         if (l == top) {
             cur->box = box;
-            for_each_slot(p_spec.set, fields, carry, [&](int p_s) {
+            for_each_slot(fields, carry, [&](int p_s) {
                 for (float &v : cur->ch[p_s]) {
                     v = 0.0f;
                 }
             });
         } else {
             // subdivide(): x, then y, then z.
-            subdivide_axis_small(*cur, p_spec.set, fields, carry, copied, 0, box.lo[0], box.hi[0], *tmp);
-            subdivide_axis_small(*tmp, p_spec.set, fields, carry, copied, 1, box.lo[1], box.hi[1], *cur);
-            subdivide_axis_small(*cur, p_spec.set, fields, carry, copied, 2, box.lo[2], box.hi[2], *tmp);
+            subdivide_axis_small(*cur, fields, carry, copied, 0, box.lo[0], box.hi[0], *tmp);
+            subdivide_axis_small(*tmp, fields, carry, copied, 1, box.lo[1], box.hi[1], *cur);
+            subdivide_axis_small(*cur, fields, carry, copied, 2, box.lo[2], box.hi[2], *tmp);
             std::swap(cur, tmp);
         }
         // The derive (above the last level, into the carry slots: the level's insertions and flush leave them), then
@@ -722,11 +679,11 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
         const int64_t count = cur->box.count();
         const auto at = [&](int p_s, int64_t p_i) -> float & { return cur->ch[p_s][p_i]; };
         if (derives) {
-            derive_level(p_spec, l, p_spec.set, fields, run, cur->box, at, [&](int p_s, int64_t p_i, float p_v) { cur->ch[p_s][p_i] = p_v; });
+            derive_level(p_spec, l, fields, run, cur->box, at, [&](int p_s, int64_t p_i, float p_v) { cur->ch[p_s][p_i] = p_v; });
         }
         const LevelBands lb(p_spec, l, 1 + inserted_fields(p_spec, range, p_m, l, p_all_fields), carry > 0);
-        insert_level(p_spec, lb, p_spec.set, fields, carry, l, cur->box, at);
-        for_each_slot(p_spec.set, fields, carry, [&](int p_s) {
+        insert_level(p_spec, lb, fields, carry, l, cur->box, at);
+        for_each_slot(fields, carry, [&](int p_s) {
             for (int64_t i = 0; i < count; i++) {
                 cur->ch[p_s][i] = flush_value(cur->ch[p_s][i]);
             }
@@ -735,15 +692,14 @@ void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slo
             carry = run;
         }
     }
-    for_each_slot(p_spec.set, fields, carry, [&](int p_s) { r_slots[p_s] = cur->ch[p_s][0]; });
+    for_each_slot(fields, carry, [&](int p_s) { r_slots[p_s] = cur->ch[p_s][0]; });
 }
 
 void point_into(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_ch[CHANNELS]) {
     float slots[SLOTS];
     point_slots(p_spec, p_p, p_m, slots);
-    const int n = channel_count(p_spec.set);
     for (int c = 0; c < CHANNELS; c++) {
-        r_ch[c] = c < n ? slots[c] : 0.0f;
+        r_ch[c] = slots[c];
     }
 }
 

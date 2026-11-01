@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Integer-frame harness: build (unless --no-build), run res://debug/frame_spike.tscn, check the result.
 #
-#   tools/frame_test.sh [--no-build] [--voxel=<metres>]
+#   tools/frame_test.sh [--no-build] [--world=PATH]
 #
 # Outputs land in bench/results/<timestamp>-frame/ : frame.json, godot.log.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.

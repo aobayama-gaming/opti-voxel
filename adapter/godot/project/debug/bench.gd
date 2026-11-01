@@ -66,14 +66,13 @@ extends Node3D
 ##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
 ##   --mesher_budget=MS           direct: estimated GPU ms of mesh batches per frame (default 0 = whole batches)
 ##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
-##   --voxel=M                    LOD 0 voxel size in metres (default 0.5)
-##   --terrain=cascade|continents|shapes
+##   --world=PATH                 the world file (VoxelTerrain.world_path, src/world_file.hpp): voxel size, LODs, trees,
+##                                planet, climate, look (default: the scene's, res://worlds/default.world.json)
+##   --terrain=cascade|shapes
 ##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
-##                                SDFCascade; continents: its continents preset; shapes: its flat preset under the
+##                                SDFCascade; shapes: its flat preset under the
 ##                                hard-CSG shapes gallery, SDFTable::Scene::SHAPES)
 ##   Instances (around x -50 z -150 m, on the ground):
-##   --instances=N                scatter N rocks/pillars (default 0)
-##   --instance_area=M            side of the scatter square, metres (default 200)
 ##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
 ##   --stream=0                   place the scatter and the forest whole at configure instead of streaming them
 ##   --stream_part_sides=N        streamed moment layers read the records while their cell is under N source cells,
@@ -81,16 +80,6 @@ extends Node3D
 ##   --moments=0                  leave out the far field of the dropped instances (their moments' blobs)
 ##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1): the skirt, the fastest a part shrinks
 ##   --instance_resolve=F         a part is kept while its half thickness holds F cells (default 1); it erodes just before its drop
-##   --trees=N                    a forest of about N grown trees (default 0)
-##   --tree_area=M                side of the forest square, metres (default 60)
-##   --biomes=KM                  lava lakes and floating islands of the biome cells within KM km (default 0)
-##   --atmosphere=0|1             the volumetric atmosphere over the base (VoxelTerrain.atmosphere, default 1); 0: the
-##                                physical sky and the environment's fog
-##   --atmosphere_scale=F         its heights times F, its coefficients over F (default 0: from the base, docs/look.md)
-##   --clouds=0|1                 the volumetric clouds in it (VoxelTerrain.clouds, default 1); 0: the cloud layer
-##   --lods=N                     VoxelTerrain.lod_numbers (default 15, max 31; the cascade's octaves reach k = N + 4).
-##                                The clip planes follow the altitude at every LOD count, as in the player
-##                                (Presets.clip_planes: far up to the discoverer's load range)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --lod_error_back=F           error outside the view cone, reached behind the camera (default 0 = lod_error)
 ##   --lod_errors=F,F,...         error per LOD from LOD 0 (0 or past the list: lod_error); sets each LOD's chunk count
@@ -111,10 +100,9 @@ extends Node3D
 ##                                (SDF distance, iterated; negative: below it). Default 50 on the cascade terrains,
 ##                                whose ground height varies by kilometres, unless --cam_pos gives the height
 ##   --camera_voxel=X,Y,Z         place the scene (camera, lights, --cam_pos) relative to this absolute
-##                                LOD0 voxel instead of the world origin. On a planet (--planet_radius_km) the
+##                                LOD0 voxel instead of the world origin. On a planet the
 ##                                scene otherwise stands over its +y pole (VoxelTerrain.get_scene_shift); --pitch /
 ##                                --yaw turn the camera about the local up, the fly and walk paths stay level
-##   --planet_ring_km=KM          with --planet_radius_km: a torus round y, a ring of KM, the radius its tube's
 ##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
 ##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
 ##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
@@ -243,21 +231,19 @@ func _ready() -> void:
 		Presets.ungrade(self)
 	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
 	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
-	if args.has("voxel"):
-		terrain.voxel_size = float(args["voxel"])
-	if args.has("lods"):
-		terrain.lod_numbers = int(args["lods"])
-	var terrains := {"cascade": 1, "continents": 2, "shapes": 4}
-	var terrain_arg: String = args.get("terrain", "cascade")
-	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected cascade, continents or shapes)" % terrain_arg)
+	if not Presets.removed_args().is_empty():
 		set_process(false)
 		get_tree().quit(1)
 		return
-	if args.has("instances"):
-		terrain.archetype_instances = int(args["instances"])
-	if args.has("instance_area"):
-		terrain.archetype_instance_area = float(args["instance_area"])
+	if args.has("world"):
+		terrain.world_path = args["world"]
+	var terrains := {"cascade": 1, "shapes": 4}
+	var terrain_arg: String = args.get("terrain", "cascade")
+	if not terrains.has(terrain_arg):
+		push_error("BENCH: unknown --terrain=%s (expected cascade or shapes)" % terrain_arg)
+		set_process(false)
+		get_tree().quit(1)
+		return
 	if args.has("moments"):
 		terrain.archetype_moments = args["moments"] != "0"
 	if args.has("instance_band"):
@@ -270,24 +256,6 @@ func _ready() -> void:
 		terrain.archetype_erode = float(args["instance_erode"])
 	if args.has("instance_resolve"):
 		terrain.archetype_resolve = float(args["instance_resolve"])
-	if args.has("trees"):
-		terrain.archetype_trees = int(args["trees"])
-	if args.has("tree_area"):
-		terrain.archetype_tree_area = float(args["tree_area"])
-	if args.has("biomes"):
-		terrain.biome_radius = 1000.0 * float(args["biomes"])
-	if args.has("climate"):
-		terrain.climate_path = args["climate"]
-	if args.has("planet_radius_km"):
-		terrain.planet_radius = 1000.0 * float(args["planet_radius_km"])
-	if args.has("planet_ring_km"):
-		terrain.planet_ring = 1000.0 * float(args["planet_ring_km"])
-	if args.has("atmosphere"):
-		terrain.atmosphere = args["atmosphere"] == "1"
-	if args.has("atmosphere_scale"):
-		terrain.atmosphere_scale = float(args["atmosphere_scale"])
-	if args.has("clouds"):
-		terrain.clouds = args["clouds"] == "1"
 	terrain.terrain_mode = terrains[terrain_arg]
 	if args.has("compact"):
 		terrain.direct_compaction = args["compact"] == "1"

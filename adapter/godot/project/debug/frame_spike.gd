@@ -2,7 +2,7 @@ extends Node
 ## Integer-frame harness (FrameSpike, src/frame_spike.cpp): GPU WorldPos / SDF / probes vs the CPU
 ## mirrors, around far world origins and 2^32-voxel boundaries. Needs a GPU (not --headless). Run:
 ##   tools/frame_test.sh            (or: godot --path project res://debug/frame_spike.tscn -- --out=x.json)
-## Args: --voxel=<metres> (default 0.5), --out=<json>
+## Args: --world=<world file> (default res://worlds/default.world.json: its voxel size), --out=<json>
 
 var args := {}
 
@@ -15,7 +15,8 @@ func _ready() -> void:
 	# One frame first, so the engine has finished starting up.
 	await get_tree().process_frame
 	var spike = ClassDB.instantiate("FrameSpike")
-	spike.voxel_size = float(args.get("voxel", "0.5"))
+	if args.has("world"):
+		spike.world_path = args["world"]
 	add_child(spike)
 	var report: Dictionary = spike.run()
 	print("FRAME: ", JSON.stringify(report))

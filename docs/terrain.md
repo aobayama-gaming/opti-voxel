@@ -1,27 +1,34 @@
 # Terrain: presets, the table fold, the base surface
 
-One terrain (the cascade), one instance path (its table). Read before touching `sdf_cascade`, `sdf_table`, `base_surface` or adding a terrain.
+One terrain (the cascade), one instance path (its table), one world file. Read before touching `sdf_cascade`, `sdf_table`, `base_surface` or adding a terrain.
 
+- **A run loads a world.** Every terrain setting is data: `World::Settings::world_path` (`VoxelTerrain.world_path`, `--world=PATH`
+  on bench, player, Dawn and the tools; the web's `?world=`) names a world file (`WorldFile`, format in `src/world_file.hpp`). Its
+  `engine` (a path or inline: `voxel_m`, `lods`, the master variables) and `climate` (a path or inline: the fields, none for no
+  biomes) sit beside `planet`, `look`, `trees`, `instances`, `features`, `ground_stretch` and `biomes`; every key is optional. A
+  variant is another file: `adapter/godot/project/worlds/` holds the presets' and the tools' (`default`, `cm`, `lods25`, `biomes`,
+  `forest5cm*`, `earth`, `earth25`, `tiny`), `climate/world.json` the game's (`--preset=video`). `--preset=` names keep working. The
+  ground's note rule (`SDFCascade::SEED`, `STEEPNESS`, `MAX_AMP_M`, `micro_top_k`) is still code. Engine tuning and debug flags stay flags.
 - **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
   height field, octaves k = 3 up to the micro engine's top (`SDFCascade::micro_top_k`: the first octave whose
-  amplitude reaches the 3.3 km cap, k = 19 at 5 cm, at most lod_numbers + 4; the same octaves and bits at any LOD count
-  past it, the relief above being the planned macro engine's; the continents preset keeps lod_numbers + 4),
+  amplitude reaches the 3.3 km cap, k = 19 at 5 cm, at most lods + 4; the same octaves and bits at any LOD count
+  past it, the relief above being the planned macro engine's),
   steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m,
   absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
   make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`
-  picks a preset: 1 the default, 2 continents, 4 flat (`SDFCascade::Preset::FLAT`: no band, the ground at `FLAT_GROUND_M` = 250 m, off
+  picks a preset: 1 the default, 4 flat (`SDFCascade::Preset::FLAT`: no band, the ground at `FLAT_GROUND_M` = 250 m, off
   the page shader's 100 m contours) under the shapes gallery (`SDFTable::Scene::SHAPES`, `--terrain=shapes`,
   `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG cubes holed through every face, each twice the size and
   distance of the last, i.e. one per LOD, plus a die, stairs and a tunnelled cube, for dual contouring's creases; the
   composites are library types: `swiss_cube`, `die`, `stairs`, `tunnel_cube`; nothing in that scene is banded, its thin frames would tear). 0 was `SDFDummy` (it evaluated every
   octave at every LOD: detail finer than the cell, aliased far away) and 3 `SDFArchetype` (a plain fBm ground, and
-  instances compiled into its program), both removed. `--terrain=cascade|continents|shapes` in `bench.gd` and the
-  main scene (`godot --path adapter/godot/project -- --lods=25`). Outside the shapes gallery the player spawns 200 m above the
+  instances compiled into its program), both removed. `--terrain=cascade|shapes` in `bench.gd` and the
+  main scene. Outside the shapes gallery the player spawns 200 m above the
   ground (`--altitude=M`) and flies at its altitude per second (read every frame, the reading smoothed over 0.2 s in log space: no speed steps), and the bench camera starts 50 m above it unless
   `--cam_pos` or `--above_ground=M` (M metres above the terrain under the camera, negative below) says otherwise: the
   cascade's ground is kilometres from the datum.
   **The table** (`SDFTable`, `src/sdf_table.*`, `SDFCascade`'s base: the library, records, snapshot, GPU table,
-  runtime edits and the scenes placed on the ground, i.e. the gallery, `--instances` and `--trees`, which only need
+  runtime edits and the scenes placed on the ground, i.e. the gallery, `instances` and `trees`, which only need
   the base and `ground_under`) is folded into each lattice sample
   (`SDFCascade::sample_sdf`, GLSL `cascade_sample_sdf` at the level-0 store of the cascade passes): the register
   is the cascade's unit gradient and LOD-L distance times 2^L (exact), then `Archetype::fold_onto` and
@@ -41,7 +48,7 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   the LOD, read by `CascadeTerrain::height_sdf` (t = n - grad h, distance (altitude - h) / |t|, GLSL
   `GLSL_HEIGHT_SDF`). `FLAT` (the world today) is the saturated int64 datum difference with up (-0, 1, -0), so
   the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
-  `SPHERE` (`World::Settings::planet_radius_m`, `--planet_radius_km=R` in bench and player: centred on the voxel
+  `SPHERE` (the world file's `planet.radius_m`: centred on the voxel
   (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request ((0, 0, 0); any other
   is absolute) and in the hosts' scenes (`World::scene_shift`); `SDFCascade::planet_base` takes the switch LOD
   `SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
@@ -57,7 +64,7 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   both meshers, the point items, CascadeSpike), at bindings 10 / 11 of the level shader; the sphere's `base_at` picks
   the slot from the parity of the point's region cell on each axis: a chunk's 32-point box meets at most two cells per
   axis, whose parities differ. A point item fills its own cell's slot; the radius form needs none. CascadeSpike's set
-  `4g` (LINEAR4 on an Earth-sized sphere) checks the passes and the point items bit for bit. Everything placed,
+  `4g` (an Earth-sized sphere) checks the passes and the point items bit for bit. Everything placed,
   shaded or flown follows the base's up: the scenes and biome features (`docs/trees.md`), the page shader and the sky
   (`docs/look.md`), the bench and the player (`VoxelTerrain.get_up_at`). Not yet on a sphere: the stretched octaves (a
   climate with them is refused: their base sample is at the band's insertion LOD), the Dawn viewer (flat only), the
@@ -68,7 +75,7 @@ One terrain (the cascade), one instance path (its table). Read before touching `
   `base_altitude`, `base_up`, `base_level_span`, from `BaseSurface::render`'s uniforms in double, `World::base_render`):
   the pages' heights and slopes, the sky's frame, the cloud layer and the atmosphere (`docs/look.md`). A new base kind
   adds its case to those three functions, to `render` and to `curvature_radius_m`, and every render user follows it.
-  `TORUS` (`World::Settings::planet_ring_m`, `--planet_ring_km=K` with `--planet_radius_km=R`: a ring of K round the y
+  `TORUS` (`planet.ring_m` with `planet.radius_m` R: a ring of that radius round the y
   axis through the voxel (0, 0, 0), a tube of R, its start over the tube's top at +x) is such a kind: one `shape()` in
   double gives every curved base's altitude, gradient and analytic Hessian (the regions, `up_dir`, `altitude`), its
   radius form is |(|v.xz| - ring, v.y)| - tube with both lengths through `det_rsqrt`, the switch LOD from the outer

@@ -235,14 +235,9 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
     World world;
     World::Settings &s = world.settings();
     s.pipeline_mode = World::PIPELINE_GPU_DIRECT;
-    s.terrain_mode = p_options.terrain_mode;
-    s.lod_numbers = p_options.lods;
+    s.world_path = p_options.world;
     s.lod_pixel_error = p_options.lod_error;
     s.lod_pixel_error_back = p_options.lod_error_back;
-    s.archetype_trees = p_options.trees;
-    s.archetype_tree_area = p_options.tree_area;
-    s.climate_path = p_options.climate;
-    s.chunk_param.voxel_size = p_options.voxel_size;
     s.debug_view = p_options.view;
     s.discoverer_mode = p_options.discoverer_mode;
     s.walk_gpu = p_options.walk_gpu;

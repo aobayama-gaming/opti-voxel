@@ -1,0 +1,11 @@
+{
+ "comment": "forest5cm ten times wider in area at the same density (one tree per 25 m^2).",
+ "engine": {
+  "voxel_m": 0.05,
+  "lods": 15
+ },
+ "trees": {
+  "count": 40000,
+  "area_m": 1000
+ }
+}

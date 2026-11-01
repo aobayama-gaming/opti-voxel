@@ -7,8 +7,8 @@
 #
 # Cases: default pose, the main scene's lod_error 4, underground, another area, high above, deep
 # below, a far world origin, 5 cm voxels, a fly run (audited once it settles back at the start), and
-# 25 LODs (--lods=25) from 10 km up looking down and from 100 km up looking at the horizon. Planets
-# (--planet_radius_km): Earth at its +y pole, at its +x equator (world y level there: the y-up detector)
+# 25 LODs (lods25.world.json) from 10 km up looking down and from 100 km up looking at the horizon. Planets
+# (worlds/earth, earth25, tiny): Earth at its +y pole, at its +x equator (world y level there: the y-up detector)
 # and from 100 km up; a 2 km planet at 5 cm (the radius form from LOD 1, relief capped at 1/32 of its radius) at
 # its pole, its equator and 5 km out, the whole planet in view. Heights are above the ground under the
 # camera (--above_ground, along the local up): the cascade's ground height varies by kilometres.
@@ -50,16 +50,16 @@ CASES=(
     "high|--above_ground=1200"
     "deep|--above_ground=-1200"
     "far_origin|--origin=$FAR,0,-$FAR"
-    "cm|--voxel=0.05 --lod_error=4"
+    "cm|--world=res://worlds/cm.world.json --lod_error=4"
     "fly|--scenario=fly"
-    "lods25_10km|--lods=25 --above_ground=10000 --pitch=-45"
-    "lods25_100km|--lods=25 --above_ground=100000 --pitch=-5"
-    "planet_pole|--planet_radius_km=6371"
-    "planet_equator|--planet_radius_km=6371 --origin=$EARTH_EQ,0,0 --camera_voxel=$EARTH_EQ,0,0"
-    "planet_high|--planet_radius_km=6371 --lods=25 --above_ground=100000 --pitch=-5"
-    "tiny_pole|--planet_radius_km=2 --voxel=0.05"
-    "tiny_equator|--planet_radius_km=2 --voxel=0.05 --origin=$TINY_EQ,0,0 --camera_voxel=$TINY_EQ,0,0"
-    "tiny_space|--planet_radius_km=2 --voxel=0.05 --above_ground=5000 --pitch=-60"
+    "lods25_10km|--world=res://worlds/lods25.world.json --above_ground=10000 --pitch=-45"
+    "lods25_100km|--world=res://worlds/lods25.world.json --above_ground=100000 --pitch=-5"
+    "planet_pole|--world=res://worlds/earth.world.json"
+    "planet_equator|--world=res://worlds/earth.world.json --origin=$EARTH_EQ,0,0 --camera_voxel=$EARTH_EQ,0,0"
+    "planet_high|--world=res://worlds/earth25.world.json --above_ground=100000 --pitch=-5"
+    "tiny_pole|--world=res://worlds/tiny.world.json"
+    "tiny_equator|--world=res://worlds/tiny.world.json --origin=$TINY_EQ,0,0 --camera_voxel=$TINY_EQ,0,0"
+    "tiny_space|--world=res://worlds/tiny.world.json --above_ground=5000 --pitch=-60"
 )
 
 OUT="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-discovery.md"

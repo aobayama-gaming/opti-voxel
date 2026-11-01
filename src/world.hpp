@@ -13,6 +13,7 @@
 #include "page_auditor.hpp"
 #include "page_host.hpp"
 #include "sdf_cascade.hpp"
+#include "world_file.hpp"
 
 #include "ov/value.hpp"
 
@@ -33,34 +34,19 @@ public:
         PIPELINE_GPU_DIRECT = 2,
     };
 
-    // What the terrain is, set before start().
+    // How the engine runs, set before start(); what the terrain is lives in the world file.
     struct Settings {
         PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
-        // 1 the Hermite cascade terrain, 2 its continents preset, 4 its flat preset under the shapes gallery.
+        // The world file (WorldFile, a host path), empty for WorldFile's defaults.
+        str world_path;
+        // 1 the world's Hermite cascade terrain, 4 the flat preset under the shapes gallery.
         int terrain_mode = 1;
-        // > 0: a planet of this radius (metres) centred on the voxel (0, 0, 0), its +y pole at y = radius (SDFCascade); 0 flat.
-        double planet_radius_m = 0.0;
-        // > 0 with a planet: a torus round y, this ring's radius (metres), planet_radius_m its tube's (SDFCascade).
-        double planet_ring_m = 0.0;
-        // The volumetric atmosphere over the base (Atmosphere), its scale (AtmosphereMedium::for_base: 0 from the base);
-        // started only for a host that binds its textures (Hosts::atmosphere_textures), the clouds' likewise.
-        bool atmosphere = true;
-        double atmosphere_scale = 0.0;
-        // The volumetric clouds in it (Clouds; only with the atmosphere), their layer's scale as the atmosphere's.
-        bool clouds = true;
         int legacy_batch_size = 1024;
-        int lod_numbers = 15; // LODs 0 .. lod_numbers - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
-        ChunkParam chunk_param; // voxel_size and skirt_depth set by the host; the render origin by start() and recenter()
+        ChunkParam chunk_param; // skirt_depth set by the host, voxel_size by load_world; the render origin by start() and recenter()
         VoxelPos world_origin_request; // LOD0 voxels, snapped down to the root chunk span by start()
         // recenter() moves the render origin to the camera once it is farther than this from it (metres, on any axis):
         // render positions stay small, so float precision holds anywhere in the world. 0: never (a fixed origin).
         float rebase_distance_m = 1024.0f;
-        int archetype_instances = 0;
-        double archetype_instance_area = 200.0;
-        int archetype_trees = 0;
-        double archetype_tree_area = 60.0;
-        double biome_radius = 0.0;
-        str climate_path; // a host path (ov::read_file), empty for none
         bool archetype_band = true;
         bool archetype_stream = true;
         int archetype_stream_part_sides = int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES);
@@ -114,6 +100,11 @@ public:
 
     Settings &settings() { return config; }
     const Settings &settings() const { return config; }
+
+    // Reads Settings::world_path (again only if it changed): the voxel size, the LOD count and the content from then on, so
+    // a host can place its scene before start(), which calls it. False (an error) if the file was refused.
+    bool load_world();
+    const WorldFile &world_file() const { return content; }
 
     // The terrain built and the discoverer and mesher started; false (an error) without a device or with bad settings.
     bool start(const Projection &p_projection, const Hosts &p_hosts, const Float3 *p_camera_pos, const Float3 *p_camera_forward,
@@ -204,6 +195,8 @@ public:
 
 private:
     Settings config;
+    WorldFile content; // what load_world read
+    str content_path; // the world_path it read
     Hosts hosts;
     std::unique_ptr<SDFCascade> sdf;
     ChunkDiscoverer *chunk_discoverer = nullptr;
@@ -228,7 +221,7 @@ private:
     ScanView scan_view;
     Float3 last_camera; // the camera of the last frame (and start), render space
     ChunkId world_origin_chunk;
-    // The world origin start() takes: the request snapped down to the root chunk span (2^lod_numbers chunk-id units), so
+    // The world origin start() takes: the request snapped down to the root chunk span (2^lods chunk-id units), so
     // the start is the same for any requested origin; on a planet a request of (0, 0, 0) stands for its pole
     // (pole_lift: the camera starts near the render origin there), any other is absolute. It is also the first render
     // origin; a rebase then moves that one by even ids only (ChunkMath::recentered_origin), so render-relative Morton keys

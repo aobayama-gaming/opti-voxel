@@ -20,11 +20,12 @@
 void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_pipeline_mode", "mode"), &VoxelTerrain::set_pipeline_mode);
     ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
+    ClassDB::bind_method(D_METHOD("set_world_path", "path"), &VoxelTerrain::set_world_path);
+    ClassDB::bind_method(D_METHOD("get_world_path"), &VoxelTerrain::get_world_path);
     ClassDB::bind_method(D_METHOD("set_terrain_mode", "mode"), &VoxelTerrain::set_terrain_mode);
     ClassDB::bind_method(D_METHOD("get_terrain_mode"), &VoxelTerrain::get_terrain_mode);
     ClassDB::bind_method(D_METHOD("set_legacy_batch_size", "size"), &VoxelTerrain::set_legacy_batch_size);
     ClassDB::bind_method(D_METHOD("get_legacy_batch_size"), &VoxelTerrain::get_legacy_batch_size);
-    ClassDB::bind_method(D_METHOD("set_voxel_size", "size"), &VoxelTerrain::set_voxel_size);
     ClassDB::bind_method(D_METHOD("get_voxel_size"), &VoxelTerrain::get_voxel_size);
     ClassDB::bind_method(D_METHOD("set_world_origin_x", "voxel"), &VoxelTerrain::set_world_origin_x);
     ClassDB::bind_method(D_METHOD("get_world_origin_x"), &VoxelTerrain::get_world_origin_x);
@@ -32,30 +33,10 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world_origin_y"), &VoxelTerrain::get_world_origin_y);
     ClassDB::bind_method(D_METHOD("set_world_origin_z", "voxel"), &VoxelTerrain::set_world_origin_z);
     ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
-    ClassDB::bind_method(D_METHOD("set_archetype_instances", "count"), &VoxelTerrain::set_archetype_instances);
-    ClassDB::bind_method(D_METHOD("get_archetype_instances"), &VoxelTerrain::get_archetype_instances);
-    ClassDB::bind_method(D_METHOD("set_archetype_instance_area", "area"), &VoxelTerrain::set_archetype_instance_area);
-    ClassDB::bind_method(D_METHOD("get_archetype_instance_area"), &VoxelTerrain::get_archetype_instance_area);
-    ClassDB::bind_method(D_METHOD("set_archetype_trees", "count"), &VoxelTerrain::set_archetype_trees);
-    ClassDB::bind_method(D_METHOD("get_archetype_trees"), &VoxelTerrain::get_archetype_trees);
-    ClassDB::bind_method(D_METHOD("set_archetype_tree_area", "area"), &VoxelTerrain::set_archetype_tree_area);
-    ClassDB::bind_method(D_METHOD("get_archetype_tree_area"), &VoxelTerrain::get_archetype_tree_area);
-    ClassDB::bind_method(D_METHOD("set_biome_radius", "metres"), &VoxelTerrain::set_biome_radius);
-    ClassDB::bind_method(D_METHOD("get_biome_radius"), &VoxelTerrain::get_biome_radius);
-    ClassDB::bind_method(D_METHOD("set_atmosphere", "enabled"), &VoxelTerrain::set_atmosphere);
-    ClassDB::bind_method(D_METHOD("get_atmosphere"), &VoxelTerrain::get_atmosphere);
-    ClassDB::bind_method(D_METHOD("set_atmosphere_scale", "scale"), &VoxelTerrain::set_atmosphere_scale);
-    ClassDB::bind_method(D_METHOD("get_atmosphere_scale"), &VoxelTerrain::get_atmosphere_scale);
-    ClassDB::bind_method(D_METHOD("set_clouds", "enabled"), &VoxelTerrain::set_clouds);
-    ClassDB::bind_method(D_METHOD("get_clouds"), &VoxelTerrain::get_clouds);
     ClassDB::bind_method(D_METHOD("set_cloud_weather", "cover", "wind_mps"), &VoxelTerrain::set_cloud_weather);
     ClassDB::bind_method(D_METHOD("set_sun_direction", "towards_sun"), &VoxelTerrain::set_sun_direction);
-    ClassDB::bind_method(D_METHOD("set_planet_radius", "metres"), &VoxelTerrain::set_planet_radius);
     ClassDB::bind_method(D_METHOD("get_planet_radius"), &VoxelTerrain::get_planet_radius);
-    ClassDB::bind_method(D_METHOD("set_planet_ring", "metres"), &VoxelTerrain::set_planet_ring);
-    ClassDB::bind_method(D_METHOD("get_planet_ring"), &VoxelTerrain::get_planet_ring);
-    ClassDB::bind_method(D_METHOD("set_climate_path", "path"), &VoxelTerrain::set_climate_path);
-    ClassDB::bind_method(D_METHOD("get_climate_path"), &VoxelTerrain::get_climate_path);
+    ClassDB::bind_method(D_METHOD("get_world_trees"), &VoxelTerrain::get_world_trees);
     ClassDB::bind_method(D_METHOD("set_archetype_band", "enabled"), &VoxelTerrain::set_archetype_band);
     ClassDB::bind_method(D_METHOD("get_archetype_band"), &VoxelTerrain::get_archetype_band);
     ClassDB::bind_method(D_METHOD("set_archetype_stream", "enabled"), &VoxelTerrain::set_archetype_stream);
@@ -80,7 +61,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_view_memory_m"), &VoxelTerrain::get_lod_view_memory_m);
     ClassDB::bind_method(D_METHOD("set_lod_far_limit", "enabled"), &VoxelTerrain::set_lod_far_limit);
     ClassDB::bind_method(D_METHOD("get_lod_far_limit"), &VoxelTerrain::get_lod_far_limit);
-    ClassDB::bind_method(D_METHOD("set_lod_numbers", "count"), &VoxelTerrain::set_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("get_half_chunk_voxels"), &VoxelTerrain::get_half_chunk_voxels);
@@ -172,19 +152,13 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("move_instance", "id", "x", "y", "z", "rotation"), &VoxelTerrain::move_instance, DEFVAL(PackedFloat32Array()));
 
     ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Continents:2,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
+    ADD_PROPERTY(PropertyInfo(Variant::STRING, "world_path", PROPERTY_HINT_FILE, "*.json"), "set_world_path", "get_world_path");
+    // Read-only, from the world file.
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_voxel_size");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_lod_numbers");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_radius", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_planet_radius");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_instances", PROPERTY_HINT_RANGE, "0,1000000,1"), "set_archetype_instances", "get_archetype_instances");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_instance_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_instance_area", "get_archetype_instance_area");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_trees", PROPERTY_HINT_RANGE, "0,100000000,1"), "set_archetype_trees", "get_archetype_trees");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_tree_area", PROPERTY_HINT_RANGE, "1,1000000,1,suffix:m"), "set_archetype_tree_area", "get_archetype_tree_area");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "biome_radius", PROPERTY_HINT_RANGE, "0,100000,1,suffix:m"), "set_biome_radius", "get_biome_radius");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_radius", PROPERTY_HINT_RANGE, "0,100000000,1,suffix:m"), "set_planet_radius", "get_planet_radius");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_ring", PROPERTY_HINT_RANGE, "0,100000000,1,suffix:m"), "set_planet_ring", "get_planet_ring");
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "atmosphere"), "set_atmosphere", "get_atmosphere");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "atmosphere_scale", PROPERTY_HINT_RANGE, "0,10,0.0001"), "set_atmosphere_scale", "get_atmosphere_scale");
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "clouds"), "set_clouds", "get_clouds");
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "climate_path", PROPERTY_HINT_FILE, "*.json"), "set_climate_path", "get_climate_path");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_stream_part_sides", PROPERTY_HINT_RANGE,
@@ -194,14 +168,12 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_moments"), "set_archetype_moments", "get_archetype_moments");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_erode", PROPERTY_HINT_RANGE, "0.05,4,0.05"), "set_archetype_erode", "get_archetype_erode");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "archetype_resolve", PROPERTY_HINT_RANGE, "0,8,0.25"), "set_archetype_resolve", "get_archetype_resolve");
-    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_RANGE, "0.01,8,0.01,suffix:m"), "set_voxel_size", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
     ADD_PROPERTY(PropertyInfo(Variant::PACKED_FLOAT32_ARRAY, "lod_pixel_errors"), "set_lod_pixel_errors", "get_lod_pixel_errors");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lod_far_limit"), "set_lod_far_limit", "get_lod_far_limit");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_RANGE, "1,31"), "set_lod_numbers", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "dual_contouring"), "set_dual_contouring", "get_dual_contouring");
@@ -252,9 +224,19 @@ int VoxelTerrain::get_pipeline_mode() const {
     return cfg().pipeline_mode;
 }
 
+void VoxelTerrain::set_world_path(const String &p_path) {
+    ERR_FAIL_COND_MSG(world.is_started(), "world_path must be set before the terrain enters the tree.");
+    cfg().world_path = ov_str(p_path);
+    world.load_world(); // the voxel size and the scene shift are read before the terrain starts
+}
+
+String VoxelTerrain::get_world_path() const {
+    return godot_str(cfg().world_path);
+}
+
 void VoxelTerrain::set_terrain_mode(int p_mode) {
     ERR_FAIL_COND_MSG(world.is_started(), "terrain_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode != 1 && p_mode != 2 && p_mode != 4, "terrain_mode must be 1 (cascade), 2 (continents preset) or 4 (shapes gallery).");
+    ERR_FAIL_COND_MSG(p_mode != 1 && p_mode != 4, "terrain_mode must be 1 (cascade) or 4 (shapes gallery).");
     cfg().terrain_mode = p_mode;
 }
 
@@ -269,12 +251,6 @@ void VoxelTerrain::set_legacy_batch_size(int p_size) {
 
 int VoxelTerrain::get_legacy_batch_size() const {
     return cfg().legacy_batch_size;
-}
-
-void VoxelTerrain::set_voxel_size(float p_size) {
-    ERR_FAIL_COND_MSG(world.is_started(), "voxel_size must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_size <= 0.0f, "voxel_size must be positive.");
-    cfg().chunk_param.voxel_size = p_size;
 }
 
 float VoxelTerrain::get_voxel_size() const {
@@ -412,94 +388,12 @@ int64_t VoxelTerrain::get_world_origin_z() const {
     return cfg().world_origin_request.z;
 }
 
-void VoxelTerrain::set_archetype_instances(int p_count) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_instances must be set before the terrain enters the tree.");
-    cfg().archetype_instances = p_count;
-}
-
-int VoxelTerrain::get_archetype_instances() const {
-    return cfg().archetype_instances;
-}
-
-void VoxelTerrain::set_archetype_instance_area(double p_area) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_instance_area must be set before the terrain enters the tree.");
-    cfg().archetype_instance_area = p_area;
-}
-
-double VoxelTerrain::get_archetype_instance_area() const {
-    return cfg().archetype_instance_area;
-}
-
-void VoxelTerrain::set_archetype_trees(int p_count) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_trees must be set before the terrain enters the tree.");
-    cfg().archetype_trees = p_count;
-}
-
-int VoxelTerrain::get_archetype_trees() const {
-    return cfg().archetype_trees;
-}
-
-void VoxelTerrain::set_archetype_tree_area(double p_area) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_tree_area must be set before the terrain enters the tree.");
-    cfg().archetype_tree_area = p_area;
-}
-
-double VoxelTerrain::get_archetype_tree_area() const {
-    return cfg().archetype_tree_area;
-}
-
-void VoxelTerrain::set_biome_radius(double p_metres) {
-    ERR_FAIL_COND_MSG(world.is_started(), "biome_radius must be set before the terrain enters the tree.");
-    cfg().biome_radius = p_metres;
-}
-
-double VoxelTerrain::get_biome_radius() const {
-    return cfg().biome_radius;
-}
-
-void VoxelTerrain::set_planet_radius(double p_metres) {
-    ERR_FAIL_COND_MSG(world.is_started(), "planet_radius must be set before the terrain enters the tree.");
-    cfg().planet_radius_m = p_metres;
+int VoxelTerrain::get_world_trees() const {
+    return world.world_file().trees;
 }
 
 double VoxelTerrain::get_planet_radius() const {
-    return cfg().planet_radius_m;
-}
-
-void VoxelTerrain::set_planet_ring(double p_metres) {
-    ERR_FAIL_COND_MSG(world.is_started(), "planet_ring must be set before the terrain enters the tree.");
-    cfg().planet_ring_m = p_metres;
-}
-
-double VoxelTerrain::get_planet_ring() const {
-    return cfg().planet_ring_m;
-}
-
-void VoxelTerrain::set_atmosphere(bool p_enabled) {
-    ERR_FAIL_COND_MSG(world.is_started(), "atmosphere must be set before the terrain enters the tree.");
-    cfg().atmosphere = p_enabled;
-}
-
-bool VoxelTerrain::get_atmosphere() const {
-    return cfg().atmosphere;
-}
-
-void VoxelTerrain::set_atmosphere_scale(double p_scale) {
-    ERR_FAIL_COND_MSG(world.is_started(), "atmosphere_scale must be set before the terrain enters the tree.");
-    cfg().atmosphere_scale = p_scale;
-}
-
-double VoxelTerrain::get_atmosphere_scale() const {
-    return cfg().atmosphere_scale;
-}
-
-void VoxelTerrain::set_clouds(bool p_enabled) {
-    ERR_FAIL_COND_MSG(world.is_started(), "clouds must be set before the terrain enters the tree.");
-    cfg().clouds = p_enabled;
-}
-
-bool VoxelTerrain::get_clouds() const {
-    return cfg().clouds;
+    return world.world_file().planet_radius_m;
 }
 
 void VoxelTerrain::set_cloud_weather(float p_cover, const Vector3 &p_wind_mps) {
@@ -508,15 +402,6 @@ void VoxelTerrain::set_cloud_weather(float p_cover, const Vector3 &p_wind_mps) {
 
 void VoxelTerrain::set_sun_direction(const Vector3 &p_towards_sun) {
     world.set_sun(ov_f3(p_towards_sun.normalized()));
-}
-
-void VoxelTerrain::set_climate_path(const String &p_path) {
-    ERR_FAIL_COND_MSG(world.is_started(), "climate_path must be set before the terrain enters the tree.");
-    cfg().climate_path = ov_str(p_path);
-}
-
-String VoxelTerrain::get_climate_path() const {
-    return godot_str(cfg().climate_path);
 }
 
 void VoxelTerrain::set_archetype_band(bool p_enabled) {
@@ -641,14 +526,8 @@ bool VoxelTerrain::get_lod_far_limit() const {
     return lod_far_limit;
 }
 
-void VoxelTerrain::set_lod_numbers(int p_count) {
-    ERR_FAIL_COND_MSG(world.is_started(), "lod_numbers must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_count < 1 || p_count > MAX_LOD_NUMBERS, vformat("lod_numbers must be in [1, %d].", MAX_LOD_NUMBERS));
-    cfg().lod_numbers = p_count;
-}
-
 int VoxelTerrain::get_lod_numbers() const {
-    return cfg().lod_numbers;
+    return world.world_file().lods;
 }
 
 void VoxelTerrain::set_legacy_trim_indices(bool p_trim) {
@@ -894,15 +773,11 @@ void VoxelTerrain::_rt_share_textures(RDDevice *p_device, std::shared_ptr<std::v
 
 void VoxelTerrain::_push_render_frame() {
     const ChunkParam &param = world.chunk_param();
-    const SDFCascade &sdf = world.terrain();
     // The base in render space (World::base_render), for the pages' up, altitude and cloud shadows and the sky's frame and
     // cloud layer.
     Dictionary base;
     world.base_render().visit(ShaderParams{ base });
     set_page_params(base);
-    if (page_host && sdf.preset == SDFCascade::Preset::CONTINENTS) {
-        page_host->set_material_param("height_colours", true); // around sea level, the base
-    }
     const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
@@ -1059,7 +934,7 @@ void VoxelTerrain::_ready() {
         PackedFloat32Array skirt_depths;
         skirt_depths.resize(32);
         for (int l = 0; l < 32; l++) {
-            skirt_depths.set(l, l < cfg().lod_numbers ? sdf.skirt_depth_m(l) : 0.0f);
+            skirt_depths.set(l, l < get_lod_numbers() ? sdf.skirt_depth_m(l) : 0.0f);
         }
         page_host->set_material_param("skirt_depth_m", skirt_depths);
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)

@@ -19,8 +19,6 @@ using ExactNoise::float_bits;
 
 namespace {
 
-constexpr ChannelSet SETS[] = { ChannelSet::HERMITE8, ChannelSet::LINEAR4 };
-
 bool same_bits(const float *p_a, const float *p_b, int p_n) {
     for (int c = 0; c < p_n; c++) {
         if (float_bits(p_a[c]) != float_bits(p_b[c])) {
@@ -63,36 +61,6 @@ int64_t differing_bits(const std::vector<Level> &p_a, const std::vector<Level> &
     return n;
 }
 
-// P(X, Y, Z), a cubic with integer coefficients over LOD0 voxels, and its channels on Λ_m (exact
-// integers, small enough for float32).
-struct Cubic {
-    struct Term {
-        int c, i, j, l; // c * x^i y^j z^l
-    };
-    std::vector<Term> terms = { { 1, 3, 0, 0 }, { -2, 0, 3, 0 }, { 1, 0, 0, 3 }, { 3, 1, 1, 1 }, { -1, 2, 1, 0 }, { 2, 0, 1, 2 }, { 1, 1, 0, 2 },
-        { 5, 2, 0, 0 }, { -3, 0, 2, 0 }, { 2, 1, 1, 0 }, { 7, 1, 0, 0 }, { -4, 0, 0, 1 }, { 11, 0, 0, 0 } };
-
-    // d^p_d/dx^p_d of x^e (p_d in {0, 1}).
-    static int64_t dpow(int64_t p_x, int p_e, int p_d) {
-        int64_t r = p_d == 0 ? 1 : p_e;
-        for (int i = 0; i < p_e - p_d; i++) {
-            r *= p_x;
-        }
-        return p_d == 1 && p_e == 0 ? 0 : r;
-    }
-    void channels(int p_m, const Vector3i64 &p_p, float r_ch[CHANNELS]) const {
-        const int64_t s = int64_t(1) << p_m;
-        for (int c = 0; c < CHANNELS; c++) {
-            const int axes = CHANNEL_AXES[c];
-            int64_t sum = 0;
-            for (const Term &t : terms) {
-                sum += t.c * dpow(p_p.x * s, t.i, axes & 1) * dpow(p_p.y * s, t.j, (axes >> 1) & 1) * dpow(p_p.z * s, t.l, (axes >> 2) & 1);
-            }
-            r_ch[c] = float(sum * (int64_t(1) << (p_m * channel_order(c))));
-        }
-    }
-};
-
 } // namespace
 
 TEST_CASE("Cascade: parent boxes cover the Hermite stencil, chunk boxes are the vertex grid") {
@@ -120,165 +88,121 @@ TEST_CASE("Cascade: the same lattice point gives the same bits from chunks of ev
     const int64_t bases[] = { 0, (int64_t(1) << 32) - 40, -(int64_t(1) << 32) + 3, (int64_t(1) << 52) - 1000, (int64_t(1) << 60) - 4096,
         -(int64_t(1) << 60) + 4096 };
     const int ms[] = { 0, 1, 3, 7, 16 };
-    for (const ChannelSet set : SETS) {
-        const Spec spec = earth(set);
-        int compared = 0;
-        int differing = 0;
-        for (const int64_t base : bases) {
-            for (const int m : ms) {
-                const int64_t step = int64_t(1) << m;
-                const int64_t b = WorldCoord::floor_div(base, step);
-                const Vector3i64 lattice(b, b + 3, -b - 5);
-                float expect[CHANNELS];
-                point(spec, lattice, m, expect);
-                int previous = -1;
-                for (const int lod : { 0, m / 2, std::max(m - 1, 0), m }) {
-                    if (lod == previous) {
-                        continue;
-                    }
-                    previous = lod;
-                    std::vector<Level> levels;
-                    run(spec, chunk_box(ChunkMath::chunk_at_voxel(lattice * step, lod, param), param), lod, &levels);
-                    const Level *l = find_level(levels, m);
-                    const bool found = l != nullptr && l->box.contains(lattice);
-                    CHECK(found);
-                    if (!found) {
-                        continue;
-                    }
-                    float got[CHANNELS];
-                    l->channels_at(lattice, got);
-                    compared++;
-                    differing += !same_bits(got, expect, CHANNELS);
+    const Spec spec = earth();
+    int compared = 0;
+    int differing = 0;
+    for (const int64_t base : bases) {
+        for (const int m : ms) {
+            const int64_t step = int64_t(1) << m;
+            const int64_t b = WorldCoord::floor_div(base, step);
+            const Vector3i64 lattice(b, b + 3, -b - 5);
+            float expect[CHANNELS];
+            point(spec, lattice, m, expect);
+            int previous = -1;
+            for (const int lod : { 0, m / 2, std::max(m - 1, 0), m }) {
+                if (lod == previous) {
+                    continue;
                 }
+                previous = lod;
+                std::vector<Level> levels;
+                run(spec, chunk_box(ChunkMath::chunk_at_voxel(lattice * step, lod, param), param), lod, &levels);
+                const Level *l = find_level(levels, m);
+                const bool found = l != nullptr && l->box.contains(lattice);
+                CHECK(found);
+                if (!found) {
+                    continue;
+                }
+                float got[CHANNELS];
+                l->channels_at(lattice, got);
+                compared++;
+                differing += !same_bits(got, expect, CHANNELS);
             }
         }
-        CAPTURE(int(set));
-        CHECK(compared == 6 * (1 + 2 + 4 + 4 + 4)); // distinct LODs for m = 0, 1, 3, 7, 16
-        CHECK(differing == 0);
     }
+    CHECK(compared == 6 * (1 + 2 + 4 + 4 + 4)); // distinct LODs for m = 0, 1, 3, 7, 16
+    CHECK(differing == 0);
 }
 
 // Criterion 2: V_L = flush(V_{L+1} with slopes x 2^-order + O_L) at the points L and L+1 share.
 TEST_CASE("Cascade: a LOD differs from the next only by the bands it inserts, bit for bit") {
     const ChunkParam param;
-    for (const ChannelSet set : SETS) {
-        const Spec spec = earth(set);
-        const int n = channel_count(set);
-        for (const int lod : { 0, 4, 20 }) {
-            std::vector<Level> levels;
-            run(spec, chunk_box(CascadeMeasure::random_chunk(lod, 77, lod), param), lod, &levels);
-            const Level *fine = find_level(levels, lod);
-            const Level *coarse = find_level(levels, lod + 1);
-            CHECK((fine != nullptr && coarse != nullptr));
-            if (fine == nullptr || coarse == nullptr) {
-                continue;
+    const Spec spec = earth();
+    for (const int lod : { 0, 4, 20 }) {
+        std::vector<Level> levels;
+        run(spec, chunk_box(CascadeMeasure::random_chunk(lod, 77, lod), param), lod, &levels);
+        const Level *fine = find_level(levels, lod);
+        const Level *coarse = find_level(levels, lod + 1);
+        CHECK((fine != nullptr && coarse != nullptr));
+        if (fine == nullptr || coarse == nullptr) {
+            continue;
+        }
+        int checked = 0;
+        int differing = 0;
+        for_each_point(fine->box, [&](const Vector3i64 &p_p, int64_t) {
+            if (((p_p.x | p_p.y | p_p.z) & 1) != 0) {
+                return;
             }
-            int checked = 0;
-            int differing = 0;
-            for_each_point(fine->box, [&](const Vector3i64 &p_p, int64_t) {
-                if (((p_p.x | p_p.y | p_p.z) & 1) != 0) {
-                    return;
-                }
-                float expect[CHANNELS] = {};
-                coarse->channels_at(Vector3i64(p_p.x / 2, p_p.y / 2, p_p.z / 2), expect);
-                for (int c = 0; c < n; c++) {
-                    expect[c] = expect[c] * exact_pow2(-channel_order(c));
-                }
-                for (const Band &band : spec.bands) {
-                    if (spec.insert_level(band) == lod) {
-                        float o[CHANNELS];
-                        band_channels(spec, band, p_p, o);
-                        for (int c = 0; c < n; c++) {
-                            expect[c] = expect[c] + o[c];
-                        }
+            float expect[CHANNELS] = {};
+            coarse->channels_at(Vector3i64(p_p.x / 2, p_p.y / 2, p_p.z / 2), expect);
+            for (int c = 0; c < CHANNELS; c++) {
+                expect[c] = expect[c] * exact_pow2(-channel_order(c));
+            }
+            for (const Band &band : spec.bands) {
+                if (spec.insert_level(band) == lod) {
+                    float o[CHANNELS];
+                    band_channels(spec, band, p_p, o);
+                    for (int c = 0; c < CHANNELS; c++) {
+                        expect[c] = expect[c] + o[c];
                     }
                 }
-                for (int c = 0; c < n; c++) {
-                    expect[c] = flush_value(expect[c]);
-                }
-                float got[CHANNELS];
-                fine->channels_at(p_p, got);
-                checked++;
-                differing += !same_bits(got, expect, CHANNELS);
-            });
-            CAPTURE(lod);
-            CHECK(checked == 16 * 16 * 16);
-            CHECK(differing == 0);
-        }
+            }
+            for (int c = 0; c < CHANNELS; c++) {
+                expect[c] = flush_value(expect[c]);
+            }
+            float got[CHANNELS];
+            fine->channels_at(p_p, got);
+            checked++;
+            differing += !same_bits(got, expect, CHANNELS);
+        });
+        CAPTURE(lod);
+        CHECK(checked == 16 * 16 * 16);
+        CHECK(differing == 0);
     }
 }
 
 // Criterion 3.
-TEST_CASE("Cascade: a cubic polynomial inserted at the top is reproduced exactly at every level") {
-    const Cubic cubic;
-    Spec spec;
-    spec.top = 4;
-    const Source source = [&](Level &r_level) {
-        if (r_level.m != spec.top) {
-            return;
-        }
-        for_each_point(r_level.box, [&](const Vector3i64 &p_p, int64_t p_i) {
-            float ch[CHANNELS];
-            cubic.channels(r_level.m, p_p, ch);
-            for (int c = 0; c < CHANNELS; c++) {
-                r_level.ch[c][p_i] = ch[c];
-            }
-        });
-    };
-    std::vector<Level> levels;
-    run(spec, Box{ { -40, 18, -30 }, { 30, 46, 30 } }, 0, &levels, source);
-    CHECK(levels.size() == 5);
-    int64_t checked = 0;
-    int64_t differing = 0;
-    for (const Level &l : levels) {
-        for_each_point(l.box, [&](const Vector3i64 &p_p, int64_t) {
-            float expect[CHANNELS];
-            float got[CHANNELS];
-            cubic.channels(l.m, p_p, expect);
-            l.channels_at(p_p, got);
-            checked++;
-            differing += !same_bits(got, expect, CHANNELS);
-        });
-    }
-    MESSAGE("cubic: ", checked, " lattice points over 5 levels");
-    CHECK(differing == 0);
-}
-
 // Criterion 4: below the finest inserted band the cascade is the Hermite interpolant; its carried slopes
 // are the derivatives of its values.
 TEST_CASE("Cascade: carried slopes agree with finite differences of the carried values") {
-    for (const ChannelSet set : SETS) {
-        Spec spec = CascadeTerrain::make_spec(0x51D3u, 12, 0.125, set, 3);
-        // Keep the bands of wavelength >= 256 voxels: Λ_0 to Λ_4 only carry.
-        std::vector<Band> coarse;
-        for (const Band &b : spec.bands) {
-            if (b.k >= 8) {
-                coarse.push_back(b);
-            }
+    Spec spec = CascadeTerrain::make_spec(0x51D3u, 12, 0.125, 3);
+    // Keep the bands of wavelength >= 256 voxels: Λ_0 to Λ_4 only carry.
+    std::vector<Band> coarse;
+    for (const Band &b : spec.bands) {
+        if (b.k >= 8) {
+            coarse.push_back(b);
         }
-        spec.bands = coarse;
-        const Box box{ { 1000, -300, 5000 }, { 1039, -261, 5039 } };
-        const Box inner{ { 1001, -299, 5001 }, { 1038, -262, 5038 } };
-        const Level v = run(spec, box, 0);
-        double worst = 0.0;
-        double scale = 0.0;
-        const Vector3i64 e[3] = { Vector3i64(1, 0, 0), Vector3i64(0, 1, 0), Vector3i64(0, 0, 1) };
-        for_each_point(inner, [&](const Vector3i64 &p_p, int64_t) {
-            for (int a = 0; a < 3; a++) {
-                const double fd = (double(v.at(VALUE, p_p + e[a])) - double(v.at(VALUE, p_p - e[a]))) * 0.5;
-                worst = std::max(worst, std::fabs(fd - v.at(DX + a, p_p)));
-                scale = std::max(scale, std::fabs(double(v.at(DX + a, p_p))));
-            }
-        });
-        CAPTURE(int(set));
-        MESSAGE("channel set ", int(set), ": max |FD - slope| = ", worst, " (max |slope| ", scale, ")");
-        // Tolerance: 1% of the largest slope (Hermite FD error over 1/32 of a cell plus float rounding).
-        CHECK(worst <= 0.01 * scale);
     }
+    spec.bands = coarse;
+    const Box box{ { 1000, -300, 5000 }, { 1039, -261, 5039 } };
+    const Box inner{ { 1001, -299, 5001 }, { 1038, -262, 5038 } };
+    const Level v = run(spec, box, 0);
+    double worst = 0.0;
+    double scale = 0.0;
+    const Vector3i64 e[3] = { Vector3i64(1, 0, 0), Vector3i64(0, 1, 0), Vector3i64(0, 0, 1) };
+    for_each_point(inner, [&](const Vector3i64 &p_p, int64_t) {
+        for (int a = 0; a < 3; a++) {
+            const double fd = (double(v.at(VALUE, p_p + e[a])) - double(v.at(VALUE, p_p - e[a]))) * 0.5;
+            worst = std::max(worst, std::fabs(fd - v.at(DX + a, p_p)));
+            scale = std::max(scale, std::fabs(double(v.at(DX + a, p_p))));
+        }
+    });
+    MESSAGE("max |FD - slope| = ", worst, " (max |slope| ", scale, ")");
+    // Tolerance: 1% of the largest slope (Hermite FD error over 1/32 of a cell plus float rounding).
+    CHECK(worst <= 0.01 * scale);
 }
 
-// Criterion 5 (the report tool measures the same on 64x more points).
-TEST_CASE("Cascade: fidelity of a cascaded octave, 8 samples per wavelength, 8 channels") {
+// Criterion 5.
+TEST_CASE("Cascade: fidelity of a cascaded octave, 8 samples per wavelength") {
     Spec spec;
     spec.insert_shift = 3;
     const CascadeMeasure::Fidelity f = CascadeMeasure::measure_fidelity(spec, 7, 4, 48, 0xF1u);
@@ -289,7 +213,7 @@ TEST_CASE("Cascade: fidelity of a cascaded octave, 8 samples per wavelength, 8 c
 
 // Criterion 6.
 TEST_CASE("Cascade: points per chunk confirm the cost table (~+1.3% at LOD 0 vs LOD 24)") {
-    const Spec spec = earth(ChannelSet::HERMITE8);
+    const Spec spec = earth();
     CHECK(spec.top_level() == 26);
     const CascadeMeasure::Cost top = CascadeMeasure::measure_cost(spec, 24, 50, 1, false);
     const CascadeMeasure::Cost bottom = CascadeMeasure::measure_cost(spec, 0, 50, 1, false);
@@ -321,21 +245,7 @@ TEST_CASE("Cascade: no denormal at any level, and flushing denormals (FTZ/DAZ) c
     deep.insert_shift = 2;
     deep.bands = { Band{ 62, 0xDEEBu, Vector3i64(int64_t(3) << 59, int64_t(1) << 60, int64_t(5) << 58), 1.0f } };
     const Box box = chunk_box(CascadeMeasure::random_chunk(0, 5, 0), param);
-    {
-        // run() without the per-level flush: this case does produce denormals, the flush is what prevents them.
-        const std::vector<Box> boxes = level_boxes(box, 0, deep.top_level());
-        std::vector<Level> unflushed(1);
-        unflushed[0].allocate(deep.top_level(), boxes.back(), deep.set);
-        insert_bands(deep, unflushed[0]);
-        for (int m = deep.top_level() - 1; m >= 0; m--) {
-            unflushed.push_back(subdivide(unflushed.back(), boxes[size_t(m)]));
-            insert_bands(deep, unflushed.back());
-        }
-        const int64_t count = subnormals(unflushed);
-        MESSAGE("denormal channels without the flush: ", count);
-        CHECK(count > 0);
-    }
-    const Spec specs[] = { deep, earth(ChannelSet::HERMITE8), earth(ChannelSet::LINEAR4) };
+    const Spec specs[] = { deep, earth() };
     for (const Spec &spec : specs) {
         std::vector<Level> ieee;
         run(spec, box, 0, &ieee);
@@ -364,30 +274,28 @@ TEST_CASE("Cascade: point_into equals point, bit for bit (10,240 points per LOD 
     const int64_t P32 = int64_t(1) << 32;
     const int64_t bases[] = { 0, P32, -P32, 3 * P32, (int64_t(1) << 52) - 1000, (int64_t(1) << 60) - 4096, -(int64_t(1) << 60) + 4096, -5 * P32 };
     constexpr int PER_BASE = 1280;
-    for (const ChannelSet set : SETS) {
-        const Spec spec = earth(set);
-        int64_t compared = 0;
-        int64_t differing = 0;
-        for (int m = 0; m <= 24; m++) {
-            const int64_t step = int64_t(1) << m;
-            uint32_t n = 0;
-            for (const int64_t base : bases) {
-                const int64_t b = WorldCoord::floor_div(base, step);
-                for (int i = 0; i < PER_BASE; i++, n++) {
-                    const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(m), n, 0x9017u });
-                    const Vector3i64 p(b + int64_t(h.x % 129u) - 64, b + int64_t(h.y % 129u) - 64, -b + int64_t(h.z % 129u) - 64);
-                    float want[CHANNELS];
-                    float got[CHANNELS];
-                    point(spec, p, m, want);
-                    point_into(spec, p, m, got);
-                    compared++;
-                    differing += same_bits(want, got, CHANNELS) ? 0 : 1;
-                }
+    const Spec spec = earth();
+    int64_t compared = 0;
+    int64_t differing = 0;
+    for (int m = 0; m <= 24; m++) {
+        const int64_t step = int64_t(1) << m;
+        uint32_t n = 0;
+        for (const int64_t base : bases) {
+            const int64_t b = WorldCoord::floor_div(base, step);
+            for (int i = 0; i < PER_BASE; i++, n++) {
+                const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(m), n, 0x9017u });
+                const Vector3i64 p(b + int64_t(h.x % 129u) - 64, b + int64_t(h.y % 129u) - 64, -b + int64_t(h.z % 129u) - 64);
+                float want[CHANNELS];
+                float got[CHANNELS];
+                point(spec, p, m, want);
+                point_into(spec, p, m, got);
+                compared++;
+                differing += same_bits(want, got, CHANNELS) ? 0 : 1;
             }
         }
-        CHECK(compared == 25 * 8 * PER_BASE);
-        CHECK(differing == 0);
     }
+    CHECK(compared == 25 * 8 * PER_BASE);
+    CHECK(differing == 0);
 }
 
 // Where the climate is read: a modulated band above a run's last level reads the fields at its own level, the last
