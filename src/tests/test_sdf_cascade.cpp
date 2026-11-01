@@ -328,5 +328,5 @@ TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
         }
     }
     CHECK(samples == 2 * 2 * 4 * 13 * 7);
-    CHECK(hash == 7569340743310854193ull); // the ground stops at the micro engine's top: 25 LODs reseeded from k = 19
+    CHECK(hash == 15955514549431576711ull); // re-pinned when octave k's seed became make_octave(seed, k): the same at any top
 }

@@ -63,7 +63,7 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, CascadeGLSL::View::SAMPLES));
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
-    CHECK(h == 12049722387348785874ull);
+    CHECK(h == 13659167188471627091ull); // re-pinned when the ground's octave k got the seed make_octave(seed, k)
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
     CHECK(chunk_text == 4121896477676355197ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B),

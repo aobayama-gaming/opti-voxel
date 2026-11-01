@@ -1,7 +1,6 @@
 extends RefCounted
 ## The engine's octaves in GDScript, so the mixer's notes are the ground's: make_octave (src/exact_noise.hpp), the
-## ground's seeds (src/cascade_terrain.hpp make_spec: salt = ground_top - k) and a field's (salt = k,
-## src/climate_parse.cpp), and each note's lattice words for the preview shader. Pinned by the mixer's --check and
+## ground's and a field's seeds (salt = k: src/cascade_terrain.hpp make_spec, src/climate_parse.cpp), and each note's lattice words for the preview shader. Pinned by the mixer's --check and
 ## test_exact_noise.cpp ("as the biome mixer pins them").
 
 const GROUND_SEED := 0xEA27
@@ -106,7 +105,7 @@ static func _make_octave(p_seed: int, p_salt: int, p_k: int) -> Dictionary:
 
 # The ground's note k: every biome of a climate plays the same notes.
 static func ground_octave(p_k: int, p_lods: int, p_voxel_m: float) -> Dictionary:
-	return make_octave(GROUND_SEED, ground_top(p_lods, p_voxel_m) - p_k, p_k)
+	return make_octave(GROUND_SEED, p_k, p_k)
 
 
 static func field_octave(p_seed: int, p_k: int) -> Dictionary:
