@@ -90,23 +90,7 @@
  "biomes": [
   {
    "name": "valley",
-   "where": [
-    {
-     "field": "temperature",
-     "min": -0.2,
-     "fade": 0.04
-    },
-    {
-     "field": "temperature",
-     "max": 0.02,
-     "fade": 0.04
-    },
-    {
-     "field": "humidity",
-     "min": 0.0,
-     "fade": 0.04
-    }
-   ],
+   "at": {"temperature": [-0.09, 0.165], "humidity": [0.425, 0.5115]},
    "amp": [
     {
      "field": "ground",
@@ -210,23 +194,7 @@
   },
   {
    "name": "caldera",
-   "where": [
-    {
-     "field": "temperature",
-     "min": -0.2,
-     "fade": 0.04
-    },
-    {
-     "field": "temperature",
-     "max": 0.02,
-     "fade": 0.04
-    },
-    {
-     "field": "humidity",
-     "max": -0.04,
-     "fade": 0.04
-    }
-   ],
+   "at": {"temperature": [-0.09, 0.165], "humidity": [-0.445, 0.4895]},
    "amp": [
     {
      "field": "ground",
@@ -323,23 +291,7 @@
   },
   {
    "name": "island",
-   "where": [
-    {
-     "field": "temperature",
-     "min": 0.06,
-     "fade": 0.04
-    },
-    {
-     "field": "temperature",
-     "max": 0.25,
-     "fade": 0.04
-    },
-    {
-     "field": "humidity",
-     "min": 0.0,
-     "fade": 0.04
-    }
-   ],
+   "at": {"temperature": [0.155, 0.1485], "humidity": [0.425, 0.5115]},
    "amp": [
     {
      "field": "ground",
@@ -452,23 +404,7 @@
   },
   {
    "name": "cliff",
-   "where": [
-    {
-     "field": "temperature",
-     "min": 0.06,
-     "fade": 0.04
-    },
-    {
-     "field": "temperature",
-     "max": 0.25,
-     "fade": 0.04
-    },
-    {
-     "field": "humidity",
-     "max": -0.04,
-     "fade": 0.04
-    }
-   ],
+   "at": {"temperature": [0.155, 0.1485], "humidity": [-0.445, 0.4895]},
    "amp": [
     {
      "field": "ground",
@@ -576,18 +512,7 @@
   },
   {
    "name": "mangrove",
-   "where": [
-    {
-     "field": "temperature",
-     "min": 0.29,
-     "fade": 0.04
-    },
-    {
-     "field": "humidity",
-     "min": 0.0,
-     "fade": 0.04
-    }
-   ],
+   "at": {"temperature": [0.57, 0.352], "humidity": [0.425, 0.5115]},
    "amp": [
     {
      "field": "ground",
@@ -649,23 +574,7 @@
   },
   {
    "name": "dunes",
-   "where": [
-    {
-     "field": "temperature",
-     "min": 0.29,
-     "fade": 0.04
-    },
-    {
-     "field": "humidity",
-     "max": -0.04,
-     "fade": 0.04
-    },
-    {
-     "field": "wind",
-     "min": 0.0,
-     "fade": 0.04
-    }
-   ],
+   "at": {"temperature": [0.57, 0.352], "humidity": [-0.445, 0.4895], "wind": [0.425, 0.5115]},
    "amp": [
     {
      "field": "ground",
@@ -822,23 +731,7 @@
   },
   {
    "name": "desert",
-   "where": [
-    {
-     "field": "temperature",
-     "min": 0.29,
-     "fade": 0.04
-    },
-    {
-     "field": "humidity",
-     "max": -0.04,
-     "fade": 0.04
-    },
-    {
-     "field": "wind",
-     "max": -0.04,
-     "fade": 0.04
-    }
-   ],
+   "at": {"temperature": [0.57, 0.352], "humidity": [-0.445, 0.4895], "wind": [-0.445, 0.4895]},
    "amp": [
     {
      "field": "ground",

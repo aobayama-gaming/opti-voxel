@@ -25,11 +25,17 @@
 // shares a point. Channels as Float4 (x, y, z: gradient in units of the lattice spacing of Λ_m, w: value), like the
 // cascade's.
 //
-// Weights (weights): biome b's indicator r_b is the product of its edges' smoothsteps, s = clamp((x - anchor) *
-// scale, 0, 1), t = s^2 (3 - 2 s) (a rising edge has scale > 0, a falling one < 0). Priority layering makes any
-// indicators, overlapping or not, a partition of unity without a division: w_b = rest * r_b, rest -= w_b, the last
-// biome (the default, no edge) takes the rest. Dual numbers (forward-mode gradient), one fixed op order: the GPU
-// mirror (Modulator::glsl) walks the same order. Exactness: + - * and compares only; after every product each component under
+// Weights (weights): biome b is a place in the space of the fields, a centre and a span on each field it names (its
+// axes). Its kernel k_b is the product over its axes of the smoothstep of s = clamp((1 - u^2) * KERNEL_FADE, 0, 1),
+// u = (f - centre) / span: on each field whole within 0.71 of its span (u^2 <= 1/2), fading to 0 at the span with a zero
+// slope at both ends, each field's span its own (a field more doesn't shrink the others), so a biome costs nothing
+// where it is absent. The last biome (the default, no axis) fills what the others
+// leave, k_d = (1 - sum k)^2 for sum k < 1, else 0. The weights are
+// the kernels over their sum S = sum k + k_d >= 3/4 (min of x + (1 - x)^2): any overlap blends by itself, no border to
+// match and no priority. 1 / S is det_rsqrt(S)^2 and one Newton step (S >= 3/4, a normal float; 1 / 1 is exactly
+// 1), its gradient -S' (1/S)^2; a weight's value is capped at 1 (rounding). Dual numbers
+// (forward-mode gradient), one fixed op order: the GPU mirror (Modulator::glsl) walks the same order, the axes sorted
+// by field. Exactness: + - * , compares and det_rsqrt only; after every product each component under
 // 2^-64 is flushed to 0 (Cascade::flush_value). Inputs are then 0 or >= 2^-64, so a product's denormal part (below
 // 2^-126) either vanishes in a sum with a term >= 2^-64 (under half its ulp) or ends below 2^-64 and is flushed: the
 // GPU flushing denormals or not gives the same bits.
@@ -75,12 +81,12 @@ struct Field {
     std::vector<Term> terms;
 };
 
-// One side of a biome: s = clamp((x - anchor) * scale, 0, 1) on field `field`, smoothstepped. min m with fade f is
-// anchor m - f, scale 1 / f; max M with fade f is anchor M + f, scale -1 / f (1 on [m, M], 0 beyond the fades).
-struct Edge {
+// Where a biome sits on one field: u = (x - centre) * inv_span, its kernel's coordinate (the format's [centre, span],
+// or min / max: centre (min + max) / 2, span (max - min) / 2).
+struct Axis {
     int field = 0;
-    float anchor = 0.0f;
-    float scale = 1.0f;
+    float centre = 0.0f;
+    float inv_span = 1.0f;
 };
 
 // How a biome plays the ground's octave k (a note): its multiplier, the modulated cascade's (combined_spec), and how
@@ -119,6 +125,13 @@ float curve_slope_bound(const Curve &p_curve);
 // where the biome is whole. libnoise's cubic overshoots its points' secants: shaped_test's hills, secants under 1,
 // reach 3.
 constexpr double MAX_CURVE_SLOPE = 4.0;
+// A kernel's fade: 1 / (1 - 1/2), over the outer 0.29 of a span (u^2 from 1/2 to 1; exact).
+constexpr float KERNEL_FADE = 2.0f;
+// ground_step's weight bounds: a kernel moves by at most KERNEL_SLOPE times the sum of its |du| (a product of factors
+// in [0, 1]: the sum of theirs, each |d(u^2)| <= 2 |du| times |dk/d(u^2)| <= 1.5 KERNEL_FADE), a normalised weight by at most BLEND_SLOPE times the kernels' moves summed (k / S with
+// S >= 3/4: (4/3) (|dk| + |dS|), |dS| <= 3 sum, the default's |dk_d| <= 2 sum: 20/3).
+constexpr double KERNEL_SLOPE = 6.0;
+constexpr double BLEND_SLOPE = 6.7;
 // max |curve| (its cubic segments overshoot their points; validate's bound).
 float curve_bound(const Curve &p_curve);
 
@@ -130,7 +143,7 @@ struct Surface {
     float roughness = 1.0f;
 };
 
-// A biome: where it is (its edges on the fields), how it plays the ground's octaves (amps), its height curve and its
+// A biome: where it is (its axes in the fields' space), how it plays the ground's octaves (amps), its height curve and its
 // look. The curve remaps the ground height h at each sample: h + C(h), C the curve through the points (h_i, R_i - h_i)
 // of the format's [h, R(h)] (LOD0 voxels, constant past the ends: R - h holds), blended by the biome's weight
 // (ground_value). Without points, C = 0.
@@ -144,7 +157,7 @@ struct BiomeClouds {
 
 struct Biome {
     ov::str name;
-    std::vector<Edge> edges; // empty for the last (default) biome only
+    std::vector<Axis> at; // sorted by field; empty for the last (default) biome only
     std::vector<Amp> amps;
     Curve curve; // empty: none
     Surface surface;
@@ -182,8 +195,8 @@ struct Ground {
 
 // Empty if p_table is well formed, else the first error: field and biome counts, unique names, bands (k in
 // [BAND_SHIFT, k_max], no duplicate, amplitude in ExactNoise's exact range), terms (GROUND or an earlier field,
-// coefficient within [2^-40, 2^40]), edges (an existing field, bound 0 or within [2^-40, 2^40], scale within it), the
-// last biome alone without edges, amplitudes (an existing ground octave, multiplier >= 0, a modulated amplitude in the
+// coefficient within [2^-40, 2^40]), axes (an existing field once, centre 0 or within [2^-40, 2^40], 1 / span within
+// it), the last biome alone without axes, amplitudes (an existing ground octave, multiplier >= 0, a modulated amplitude in the
 // exact range or 0, within the cap), curves (their offset under the ground's cap, their slope within MAX_CURVE_SLOPE, their
 // points within the heights the ground reaches). No per-LOD gradient check
 // (ExactNoise::gradient_range_error): the cascade flushes what falls under 2^-64.
@@ -220,8 +233,8 @@ Shape band_shape(const Biome &p_biome, int p_k);
 // (validate refuses more). 0 without such a band, infinite for a shape bounded by 0.
 double max_ground_mult(const Ground &p_ground, const Biome &p_biome, int p_k);
 // The skirt's band step at LOD p_lod (LOD0 voxels) with the biomes' curves, from the cascade's p_ground_amp: the ground
-// h + sum_b w_b C_b(h) moves by (1 + max |C_b'|) times h's step, plus each weight's change (its edges' smoothstep
-// slopes, 1.5 |scale|, times their fields' steps) times |C_b|'s bound.
+// h + sum_b w_b C_b(h) moves by (1 + max |C_b'|) times h's step, plus each weight's change times |C_b|'s bound: a
+// weight moves by at most BLEND_SLOPE times the kernels' sum of KERNEL_SLOPE |1 / span| times their fields' steps.
 double ground_step(const Table &p_table, int p_lod, double p_ground_amp);
 
 // The field values of the channels p_slots (a point's Cascade slots, combined_spec's layout): each field's own

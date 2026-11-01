@@ -95,6 +95,12 @@ static func wavelength_m(p_k: int, p_voxel_m: float) -> float:
 	return p_voxel_m * pow(2.0, p_k)
 
 
+# The octave of a wavelength (ExactNoise::lattice_k: log2 of it in voxels, rounded): a table's wavelength_m, and a
+# range's from_m and to_m ends.
+static func lattice_k(p_m: float, p_voxel_m: float) -> int:
+	return int(round(log(p_m / p_voxel_m) / log(2.0)))
+
+
 # The ground's amplitude of the octave of wavelength p_lam_m, metres (lambda / 8, capped at MAX_AMP_M whatever the voxel).
 static func ground_amp_m(p_lam_m: float) -> float:
 	return minf(STEEPNESS * p_lam_m, MAX_AMP_M)

@@ -9,7 +9,7 @@ namespace Climate {
 
 namespace {
 
-// flushed, dmul, dsub and edge_weight in GLSL, op for op.
+// flushed, dmul, dsub, fill, axis_factor and the Newton reciprocal in GLSL, op for op.
 constexpr const char GLSL_CLIMATE_HELPERS[] = R"glsl(
 vec4 cl_flush(vec4 v) {
     return vec4(abs(v.x) < FLUSH ? 0.0 : v.x, abs(v.y) < FLUSH ? 0.0 : v.y, abs(v.z) < FLUSH ? 0.0 : v.z, abs(v.w) < FLUSH ? 0.0 : v.w);
@@ -29,8 +29,21 @@ vec4 cl_sub(vec4 a, vec4 b) {
     return cl_flush(r);
 }
 
-vec4 cl_edge(vec4 x, float anchor, float scale) {
-    precise float raw0 = (x.w - anchor) * scale;
+// Climate::fill: the default's (1 - x)^2 for x < 1, else 0.
+vec4 cl_fill(vec4 x) {
+    if (!(x.w < 1.0)) {
+        return vec4(0.0);
+    }
+    precise vec4 t = vec4(-x.x, -x.y, -x.z, 1.0 - x.w);
+    return cl_mul(t, t);
+}
+
+// Climate::axis_factor: the smoothstep of clamp((1 - u^2) fade, 0, 1), u = (x - centre) * inv_span.
+vec4 cl_axis(vec4 x, float centre, float inv_span, float fade) {
+    precise vec4 u0 = vec4(x.x * inv_span, x.y * inv_span, x.z * inv_span, (x.w - centre) * inv_span);
+    vec4 u = cl_flush(u0);
+    vec4 uu = cl_mul(u, u);
+    precise float raw0 = (1.0 - uu.w) * fade;
     float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
     if (!(raw > 0.0)) {
         return vec4(0.0);
@@ -38,19 +51,30 @@ vec4 cl_edge(vec4 x, float anchor, float scale) {
     if (raw >= 1.0) {
         return vec4(0.0, 0.0, 0.0, 1.0);
     }
-    precise vec4 s0 = vec4(x.x * scale, x.y * scale, x.z * scale, raw);
+    precise vec4 s0 = vec4(-uu.x * fade, -uu.y * fade, -uu.z * fade, raw);
     vec4 s = cl_flush(s0);
-    precise vec4 q = vec4(s.x * -2.0, s.y * -2.0, s.z * -2.0, 3.0 - s.w * 2.0);
-    return cl_mul(cl_mul(s, s), q);
+    precise vec4 t = vec4(s.x * -2.0, s.y * -2.0, s.z * -2.0, 3.0 - s.w * 2.0);
+    return cl_mul(cl_mul(s, s), t);
+}
+
+// Climate::weights' normalisation: (-s' / s^2, 1 / s), 1 / s = det_rsqrt(s)^2 and one Newton step.
+vec4 cl_rcp(vec4 s) {
+    precise float r = det_rsqrt(s.w);
+    precise float inv0 = r * r;
+    precise float inv = inv0 * (2.0 - s.w * inv0);
+    precise vec4 v = vec4(-(s.x * inv) * inv, -(s.y * inv) * inv, -(s.z * inv) * inv, inv);
+    return cl_flush(v);
 }
 )glsl";
 
-// A biome's indicator (the product of its edge smoothsteps, in list order) as statements defining `vec4 <p_var>` from the f<i> of glsl_weights.
-ov::str glsl_edges_value(const ov::str &p_var, const std::vector<Edge> &p_edges) {
+// A biome's kernel (Climate::kernel: its axes' factors multiplied in order) as statements defining `vec4 <p_var>` from
+// the f<i> of glsl_weights.
+ov::str glsl_kernel(const ov::str &p_var, const std::vector<Axis> &p_at) {
     using ExactNoise::glsl_float;
     ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
-    for (const Edge &e : p_edges) {
-        code += ov::format("    %s = cl_mul(%s, cl_edge(f%d, %s, %s));\n", p_var, p_var, e.field, glsl_float(e.anchor), glsl_float(e.scale));
+    for (const Axis &a : p_at) {
+        code += ov::format("    %s = cl_mul(%s, cl_axis(f%d, %s, %s, %s));\n", p_var, p_var, a.field, glsl_float(a.centre), glsl_float(a.inv_span),
+                glsl_float(KERNEL_FADE));
     }
     return code;
 }
@@ -91,13 +115,21 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
             code += ov::format("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
         }
     }
-    code += "    vec4 rest = vec4(0.0, 0.0, 0.0, 1.0);\n";
-    const size_t n = p_table.biomes.size();
-    for (size_t b = 0; b + 1 < n; b++) {
-        code += glsl_edges_value(ov::format("r%d", int64_t(b)), p_table.biomes[b].edges);
-        code += ov::format("    vec4 w%d = cl_mul(rest, r%d);\n    rest = cl_sub(rest, w%d);\n", int64_t(b), int64_t(b), int64_t(b));
+    const int64_t n = int64_t(p_table.biomes.size());
+    if (n == 1) {
+        return code + ov::str("    vec4 w0 = vec4(0.0, 0.0, 0.0, 1.0);\n");
     }
-    code += ov::format("    vec4 w%d = rest;\n", int64_t(n - 1));
+    // Climate::weights: the kernels, their sum, the default's (1 - sum)^2, then each over the total.
+    code += "    vec4 ksum = vec4(0.0);\n";
+    for (int64_t b = 0; b + 1 < n; b++) {
+        code += glsl_kernel(ov::format("w%d", b), p_table.biomes[size_t(b)].at);
+        code += ov::format("    { precise vec4 t = ksum + w%d; ksum = cl_flush(t); }\n", b);
+    }
+    code += ov::format("    vec4 w%d = cl_fill(ksum);\n", n - 1);
+    code += ov::format("    vec4 krcp;\n    { precise vec4 t = ksum + w%d; krcp = cl_rcp(cl_flush(t)); }\n", n - 1);
+    for (int64_t b = 0; b < n; b++) {
+        code += ov::format("    w%d = cl_mul(w%d, krcp);\n    w%d.w = min(w%d.w, 1.0);\n", b, b, b, b);
+    }
     return code;
 }
 

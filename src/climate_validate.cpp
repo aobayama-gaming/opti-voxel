@@ -140,15 +140,19 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
         return where + ov::str("the name is used twice.");
     }
     const bool last = p_i + 1 == p_table.biomes.size();
-    if (last != b.edges.empty()) {
-        return where + ov::str(last ? "the last biome is the default: no edges." : "only the last biome (the default) has no edges.");
+    if (last != b.at.empty()) {
+        return where + ov::str(last ? "the last biome is the default: no 'at'." : "only the last biome (the default) has no 'at'.");
     }
-    for (const Edge &e : b.edges) {
-        if (e.field < 0 || e.field >= int(p_table.fields.size())) {
-            return where + ov::str("an edge reads a field that doesn't exist.");
+    for (size_t i = 0; i < b.at.size(); i++) {
+        const Axis &a = b.at[i];
+        if (a.field < 0 || a.field >= int(p_table.fields.size())) {
+            return where + ov::str("'at' names a field that doesn't exist.");
         }
-        if ((e.anchor != 0.0f && !moderate(e.anchor)) || !moderate(e.scale)) {
-            return where + ov::format("edge on '%s': bound or fade out of range.", p_table.fields[size_t(e.field)].name);
+        if (i > 0 && b.at[i - 1].field >= a.field) {
+            return where + ov::format("'at' names '%s' twice, or out of field order.", p_table.fields[size_t(a.field)].name);
+        }
+        if ((a.centre != 0.0f && !moderate(a.centre)) || !moderate(a.inv_span) || !(a.inv_span > 0.0f)) {
+            return where + ov::format("'at' on '%s': centre or span out of range.", p_table.fields[size_t(a.field)].name);
         }
     }
     if (b.curve.empty()) {

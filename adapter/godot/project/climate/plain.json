@@ -27,7 +27,7 @@
     "biomes": [
         {
             "name": "volcanic",
-            "where": [{ "field": "temperature", "min": 0.3, "fade": 0.08 }, { "field": "variant", "min": 0.25, "fade": 0.1 }],
+            "at": {"temperature": [0.575, 0.3905], "variant": [0.55, 0.44]},
             "amp": [
                 { "field": "ground", "from_m": 0.4, "to_m": 25, "x": 1.5 },
                 { "field": "ground", "from_m": 50, "to_m": 13000, "x": 2 }
@@ -37,7 +37,7 @@
         },
         {
             "name": "tundra",
-            "where": [{ "field": "temperature", "max": -0.25, "fade": 0.08 }],
+            "at": {"temperature": [-0.55, 0.418]},
             "amp": [
                 { "field": "ground", "from_m": 0.4, "to_m": 400, "x": 0.4 },
                 { "field": "ground", "from_m": 800, "to_m": 30000000, "x": 0.6 }
@@ -47,7 +47,7 @@
         },
         {
             "name": "desert",
-            "where": [{ "field": "temperature", "min": 0.1, "fade": 0.08 }, { "field": "humidity", "max": -0.15, "fade": 0.08 }],
+            "at": {"temperature": [0.475, 0.5005], "humidity": [-0.5, 0.473]},
             "amp": [
                 { "field": "ground", "from_m": 0.4, "to_m": 25, "x": 0.15 },
                 { "field": "ground", "from_m": 50, "to_m": 200, "x": 0.8 },
@@ -58,7 +58,7 @@
         },
         {
             "name": "mountains",
-            "where": [{ "field": "variant", "min": 0.45, "fade": 0.1 }],
+            "at": {"variant": [0.65, 0.33]},
             "amp": [
                 { "field": "ground", "from_m": 3, "to_m": 25, "x": 1.5 },
                 { "field": "ground", "from_m": 50, "to_m": 6500, "x": 2.5 },
@@ -69,7 +69,7 @@
         },
         {
             "name": "swamp",
-            "where": [{ "field": "humidity", "min": 0.25, "fade": 0.08 }],
+            "at": {"humidity": [0.55, 0.418]},
             "amp": [
                 { "field": "ground", "from_m": 0.4, "to_m": 3, "x": 0.4 },
                 { "field": "ground", "from_m": 6, "to_m": 30000000, "x": 0.04 }
@@ -79,7 +79,7 @@
         },
         {
             "name": "forest",
-            "where": [{ "field": "humidity", "min": 0.05, "fade": 0.15 }],
+            "at": {"humidity": [0.45, 0.605]},
             "amp": [{ "field": "ground", "from_m": 1600, "to_m": 30000000, "x": 0.6 }],
             "surface": { "flat": "#2c5a1c", "steep": "#4c4234" },
             "debug_color": "#2f7a30"

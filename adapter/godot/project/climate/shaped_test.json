@@ -10,13 +10,13 @@
     "biomes": [
         {
             "name": "alps",
-            "where": [{ "field": "v", "min": 0.15, "fade": 0.1 }],
+            "at": {"v": [0.5, 0.495]},
             "amp": [{ "field": "ground", "from_m": 0.4, "to_m": 6500, "x": 1.5, "shape": "ridged", "multifractal": 2, "warp_m": 3, "warp_fields": ["wz", "wx", "v"] }],
             "curve": [[-400, -300], [0, 0], [300, 500], [800, 1400]]
         },
         {
             "name": "hills",
-            "where": [{ "field": "t", "min": 0.1, "fade": 0.1 }],
+            "at": {"t": [0.475, 0.5225]},
             "amp": [{ "field": "ground", "from_m": 0.4, "to_m": 400, "shape": "billow", "warp_m": 2, "warp_fields": ["wx", "v", "wz"] }],
             "curve": [[-100, -40], [-20, -16], [0, 0], [20, 24], [100, 140]]
         },
