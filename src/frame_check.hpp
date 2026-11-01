@@ -18,6 +18,6 @@
 namespace FrameCheck {
 
 // p_device: a local device (synced). The report: counters, examples, "ok".
-ov::Value run(ov::gpu::Device &p_device, float p_voxel_size);
+ov::Value run(ov::gpu::Device &p_device, const ov::str &p_world_path);
 
 } // namespace FrameCheck

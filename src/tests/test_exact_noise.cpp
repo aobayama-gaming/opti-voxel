@@ -244,37 +244,6 @@ TEST_CASE("ExactNoise: GLSL_EXACT_NOISE text is unchanged by the perlin3_cross s
     }
     CHECK(n == 8240);
     CHECK(h == 1257729531u);
-    CHECK(String(GLSL_PERLIN3_CROSS).contains("precise float k7 = -va + vb + vc - vd + ve - vf - vg + vh;"));
-}
-
-TEST_CASE("ExactNoise: perlin3_cross extends perlin3 with cross derivatives matching finite differences") {
-    const int k = 6;
-    const Vector3i64 offset(21, 37, 45);
-    const float n = float(1 << k);
-    double worst = 0.0;
-    // Fractions included, near 0, the 2^32 wrap and far out.
-    for (const WorldPos &p : random_points(64, -5000, 10000)) {
-        const Channels8 c = perlin3_cross(p, k, 99, offset);
-        const Float4 g = perlin3(p, k, 99, offset);
-        CHECK(same_bits(Float4{ c.c[1], c.c[2], c.c[3], c.c[0] }, g));
-        auto at = [&](int p_dy, int p_dz) {
-            WorldPos q = p;
-            q.voxel += Vector3i64(0, p_dy, p_dz);
-            return perlin3_cross(q, k, 99, offset);
-        };
-        const Channels8 yp = at(1, 0);
-        const Channels8 ym = at(-1, 0);
-        const Channels8 zp = at(0, 1);
-        const Channels8 zm = at(0, -1);
-        // Per cell: a centred difference over one voxel (1/64 cell) times 64. Channels: 1 x, 2 y, 4 xy, 5 xz, 6 yz, 7 xyz.
-        const double errors[] = { std::fabs((yp.c[1] - ym.c[1]) * 0.5f * n - c.c[4]), std::fabs((zp.c[1] - zm.c[1]) * 0.5f * n - c.c[5]),
-            std::fabs((zp.c[2] - zm.c[2]) * 0.5f * n - c.c[6]), std::fabs((zp.c[4] - zm.c[4]) * 0.5f * n - c.c[7]) };
-        for (const double e : errors) {
-            worst = std::max(worst, e);
-        }
-    }
-    MESSAGE("perlin3_cross vs finite differences (per cell, h = 1/64 cell): max error ", worst);
-    CHECK(worst < 0.05); // |cross| up to ~8, |dxyz| up to ~18 per cell; FD error O(h^2)
 }
 
 // The biome mixer (adapter/godot/project/debug/biome_mixer/octaves.gd) ports make_octave to GDScript and pins the same

@@ -1,0 +1,7 @@
+{
+ "comment": "The main scene's world: the bare ground at 0.5 m.",
+ "engine": {
+  "voxel_m": 0.5,
+  "lods": 15
+ }
+}

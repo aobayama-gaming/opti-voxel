@@ -199,12 +199,6 @@ ov::str validate(const Table &p_table, const Ground &p_ground) {
             return err;
         }
     }
-    // The one check of the ground's channel set (Cascade's checked_top only guards a malformed spec): a modulated band
-    // inserts value and gradient (LINEAR4), and perlin3_cross has no stretch.
-    const bool multiplied = std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [](const Biome &p_b) { return !p_b.amps.empty(); });
-    if ((multiplied || p_table.has_stretch()) && p_ground.spec != nullptr && p_ground.spec->set != Cascade::ChannelSet::LINEAR4) {
-        return "climate: amplitude multipliers and stretched octaves need the LINEAR4 ground (channel_set).";
-    }
     if (p_table.has_state() && p_table.fields.size() + 1 > size_t(Cascade::MAX_FIELD_GROUPS)) {
         return ov::format("climate: a multifractal carries its state as a field group: at most %d fields.", Cascade::MAX_FIELD_GROUPS - 1);
     }

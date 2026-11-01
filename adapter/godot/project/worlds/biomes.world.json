@@ -1,0 +1,10 @@
+{
+ "comment": "Biome features (lava lakes, floating islands) within 2 km of the scene centre.",
+ "engine": {
+  "voxel_m": 0.5,
+  "lods": 15
+ },
+ "features": {
+  "radius_km": 2
+ }
+}

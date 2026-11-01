@@ -29,8 +29,8 @@ adjustment_color_correction = ExtResource("2_lut")
 [node name="Node3D" type="Node3D" unique_id=1494446098]
 
 [node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=969557005]
+world_path = "res://worlds/cm.world.json"
 pipeline_mode = 2
-voxel_size = 0.05
 lod_pixel_error = 4.0
 direct_gpu_budget_ms = 4.0
 

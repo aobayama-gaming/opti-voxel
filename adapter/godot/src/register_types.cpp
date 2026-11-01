@@ -11,7 +11,6 @@
 #include <godot_cpp/godot.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-#include "cascade_report_node.hpp"
 #include "cascade_spike.hpp"
 #include "climate_report_node.hpp"
 #include "frame_spike.hpp"
@@ -82,7 +81,6 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     GDREGISTER_CLASS(VoxelSky);
     GDREGISTER_CLASS(QuadPoolSpike);
     GDREGISTER_CLASS(FrameSpike);
-    GDREGISTER_CLASS(CascadeReportNode);
     GDREGISTER_CLASS(CascadeSpike);
     GDREGISTER_CLASS(ClimateReportNode);
 #ifdef OPTI_VOXEL_TESTS

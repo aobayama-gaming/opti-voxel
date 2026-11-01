@@ -15,14 +15,36 @@ const STEEPNESS := 0.125
 const MAX_AMP_M := 3276.8
 # The first octave LOD 0 inserts (8 voxels, 0.4 m at 5 cm).
 const K_MIN := 3
-# The ground's datum (BaseSurface::DATUM_M): the preview's y = 0. A biome file's defaults: world.json's 5 cm, 25 LODs.
+# The ground's datum (BaseSurface::DATUM_M): the preview's y = 0.
 const DATUM_M := 300.0
-const DEFAULT_VOXEL_M := 0.05
-const DEFAULT_LODS := 25
+# The game's world, and the master variables every note and field is read at: its engine.
+const WORLD := "res://climate/world.json"
+static var voxel_m: float
+static var lods: int
 
 # make_octave's words per (seed, salt, k) and shader_words' per origin too: every edit rebuilds the octave table.
 static var _octaves := {}
 static var _words := {}
+
+
+static func _static_init() -> void:
+	var world = JSON.parse_string(FileAccess.get_file_as_string(WORLD))
+	var engine := section(world if world is Dictionary else {}, "engine", WORLD)
+	# WorldFile's defaults.
+	voxel_m = float(engine.get("voxel_m", 0.5))
+	lods = int(engine.get("lods", 15))
+
+
+# p_world[p_key]: inline, or the file its string names (relative to the world file p_path), as WorldFile reads it.
+static func section(p_world: Dictionary, p_key: String, p_path: String) -> Dictionary:
+	var v = p_world.get(p_key, {})
+	if v is String:
+		v = JSON.parse_string(FileAccess.get_file_as_string(section_path(v, p_path)))
+	return v if v is Dictionary else {}
+
+
+static func section_path(p_name: String, p_path: String) -> String:
+	return p_name if p_name.is_absolute_path() else p_path.get_base_dir().path_join(p_name)
 
 
 # The cascade's top octave (SDFCascade: lods + 4): a climate field's.

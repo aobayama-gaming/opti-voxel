@@ -63,13 +63,13 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, CascadeGLSL::View::SAMPLES));
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
     MESSAGE("plain climate: bits ", h, ", chunk shader ", chunk_text, ", point shader ", point_text);
-    CHECK(h == 9034715956932463378ull);
+    CHECK(h == 12049722387348785874ull);
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface).
-    CHECK(chunk_text == 420559920128829333ull);
+    CHECK(chunk_text == 4121896477676355197ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B),
     // and (all three) when the derive moved before the level's insertions (one climate per point).
     // The bits and the point shader re-pinned when the biomes became a centre and span per field (Climate::weights).
-    CHECK(point_text == 17843189341628466826ull);
+    CHECK(point_text == 1355778816083427610ull);
 }
 
 // The shapes' centring constants are the noise's own means: E[sabs(n)] and E[n^2] of perlin3, over random points of
@@ -95,7 +95,7 @@ namespace {
 // Every operation at once (adapter/godot/project/climate/shaped_test.json, CascadeSpike's set 4s too).
 ov::Value shaped_table() {
     ov::Value d;
-    CHECK(load("res://climate/shaped_test.json", d) == ov::str());
+    CHECK(load_table("res://climate/shaped_test.json", d) == ov::str());
     return d;
 }
 
@@ -157,7 +157,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
             box.lo[a] = (a == 1 ? (s.sdf.get_datum_y() >> lod) : (int64_t(123457) >> lod)) - 2;
             box.hi[a] = box.lo[a] + 3;
         }
-        const Cascade::Level level = Cascade::run(spec, box, lod, nullptr, Cascade::Source(), true);
+        const Cascade::Level level = Cascade::run(spec, box, lod, nullptr, true);
         Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
             float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
             level.slots_at(p_i, slots);
@@ -371,7 +371,7 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
 // climate variant (the early return for a table without fields skipped that rule: the GPU drew the bare ground).
 TEST_CASE("Climate shape: ground terms without fields take the climate variant at every level") {
     SDFCascade sdf;
-    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == ov::str());
+    CHECK(load_table("res://climate/fieldless_test.json", sdf.climate_data) == ov::str());
     sdf.climate_data["biomes"].at(0)["curve"] = ClimateTest::json(R"([[-10, -10], [10, 14]])");
     ChunkParam param;
     param.voxel_size = 0.05f;

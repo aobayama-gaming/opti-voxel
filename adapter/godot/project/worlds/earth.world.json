@@ -1,0 +1,10 @@
+{
+ "comment": "An Earth at 0.5 m.",
+ "engine": {
+  "voxel_m": 0.5,
+  "lods": 15
+ },
+ "planet": {
+  "radius_m": 6371000
+ }
+}

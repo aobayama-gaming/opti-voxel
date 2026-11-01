@@ -6,31 +6,28 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   headless Godot, a few seconds, no GPU. `filter` is a doctest wildcard on test names
   (`'ChunkMath*'`). Tests are compiled into non-release builds only (`OPTI_VOXEL_TESTS`).
 - `tools/format.sh [--check] [files]`: clang-format 23.1.3 through `uvx` on `src/`.
-- `tools/cascade_report.sh [--no-build] [--scale=N]` (`CascadeReport`, headless, CPU only, ~40 s at
-  `--scale=8`): fidelity of a cascaded octave vs analytic perlin3 (4 / 8 samples per wavelength, 8 / 4
-  channels), points and CPU ms per chunk per LOD on an Earth, PNG slices (analytic | cascaded | error).
 - `tools/biome_mixer.sh [--open=PATH] [--import=BIOME] [--set=ID.PARAM=V] [--shot=PATH]` opens the biome mixer (a
   window; `docs/climate.md`); `--check` is its headless self-test (the octave seeds against the C++'s, every template
   and world.json biome compiled and round-tripped through its file, world.json exported back and parsed by the engine
   when the extension is built: `MIXER: {json}`, exit 0 ok, 4 not ok). `--shot`
   draws once, saves the window and the view, prints the frame times (`MIXER_SHOT:`) and quits.
-- `tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
+- `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
   weight, the pick drift (the share of points whose pick at the coarsest modulated level differs: what the ground's
   coarsest modulated octave reads vs the material), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
   `biomes_pick.png` / `ground_height.png` / `field_*.png`. Tune a table from it before any GPU run.
-- `tools/cascade_test.sh [--no-build] [--lods=25] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=8,4,4c]`
+- `tools/cascade_test.sh [--no-build] [--world=PATH] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=4,4c]`
   (`CascadeSpike` over the core's `CascadeCheck`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a
   window, ~3 min; on Dawn: `ov_dawn --cascade-check='{"timing":false}'`): the
   GPU cascade passes vs `Cascade::run`, every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
-  both channel sets and `4c` (LINEAR4 + the example climate at 5 cm; `4f` its fields without multipliers) (G1); the LOD relation on the GPU outputs (G3, at the levels no climate modulates: a modulated level reads the carry its parent level derives from fields the parent chunk's samples don't carry); the discoverer's point items vs
+  the bare ground `4` and `4c` (the example climate at 5 cm; `4f` its fields without multipliers), each set a world file, voxel and LODs from its engine (G1); the LOD relation on the GPU outputs (G3, at the levels no climate modulates: a modulated level reads the carry its parent level derives from fields the parent chunk's samples don't carry); the discoverer's point items vs
   `Cascade::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade
   with 600 scattered instances and the chunks' real lists vs `SDFCascade::sample_sdf` + skirt (`--table`, G9); the
   example climate's per-sample biome material vs `SDFCascade::ground_material`, every LOD (`--biomes`, G10); GPU timestamps of the passes for
-  single-LOD batches of 128 at LOD 0, 4, ... 24 (G6, G7). Report: `<run>/cascade.md`. Run it after touching
+  single-LOD batches of 128 at LOD 0, 4, ... 24 (G6). Report: `<run>/cascade.md`. Run it after touching
   `cascade*`, `exact_noise.hpp`, `gpu_frame.hpp`, `sdf_cascade.hpp` or `cascade_points_gpu*` / `local_points_gpu*`.
 - CI (`.github/workflows/ci.yml`) runs format, the `-Werror` build and the unit tests on every PR.
   Everything that needs a GPU stays local.
@@ -113,7 +110,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   between face neighbours. `bench.sh` also fails a load-complete run whose loaded set != scanned set
   (`chunks.loaded_not_scanned` / `scanned_not_loaded`).
   `tools/discovery_audit.sh [--only=a,b] [-- bench args]` runs it over 17 poses/settings (default,
-  lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly, with `--lods=25`
+  lod_error 4, underground, east, high, deep, far origin, 5 cm voxels, fly, on 25 LODs (`worlds/lods25`)
   `lods25_10km` looking down from 10 km up, `lods25_100km` at the horizon from 100 km up, and planets: Earth's
   `planet_pole`, `planet_equator` (world y level there) and `planet_high` (100 km up), a 2 km planet at 5 cm's
   `tiny_pole`, `tiny_equator` and `tiny_space` (5 km out, the planet in view)) and writes
@@ -137,7 +134,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (> 100 pairs) or > 5% of same-LOD border pairs jumping. Writes `report.md` and `<pose>_seams.png` / `_shaded.png`.
   Run it after touching the bark, `value_noise` or the page shader's normals. The float hash failed it (270 pairs on
   lines on one pose); the current bark: 0.02% of pairs jump inside chunks, 3% across borders.
-- `tools/frame_test.sh [--no-build] [--voxel=M]` (`FrameSpike` over the core's `FrameCheck`;
+- `tools/frame_test.sh [--no-build] [--world=PATH]` (`FrameSpike` over the core's `FrameCheck`;
   on Dawn: `ov_dawn --frame-check[=VOXEL_M]`): GPU vs CPU check of the integer
   frame and the exact noise at 5 far origins: WorldPos and anchors, then every probe of the probe
   table bit for bit over a fixed grid plus 1,024 hash-random points per origin (hash, octave
@@ -147,7 +144,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (`atmosphere_check` in the report: the atmosphere's passes against their CPU reference, docs/look.md). Run it after
   touching `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp`, the SDF or `atmosphere*`. A new noise or SDF
   term adds an entry (CPU fn + GLSL fn) to `make_probes()` in `src/frame_spike.cpp`.
-- `tools/origin_parity.sh [--voxel=M] -- --mode=direct --validate=64`: the same world point seen
+- `tools/origin_parity.sh [--world=PATH] -- --mode=direct --validate=64`: the same world point seen
   from different origins (`--camera_voxel`): runs zero, zero2 (determinism), then pairs one root span
   apart near 0, at ~1e15 m and at 2^48 (voxel and noise-cell low-word wraps). Each pair must load the
   same non-empty chunks with identical mesh digests (`chunks.json`); pair screenshots are informational

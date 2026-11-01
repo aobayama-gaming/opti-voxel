@@ -28,17 +28,13 @@
 // of LOD L are a pure function of (p, L), its band L amplitude not the one a finer run's Λ_L reads.
 //
 // Channels per lattice point, in units of the lattice's spacing (channel S times 2^(m |S|) per voxel):
-// value, d/dx, d/dy, d/dz, d2/dxdy, d2/dxdz, d2/dydz, d3/dxdydz.
+// value, d/dx, d/dy, d/dz.
 //
 // H, one axis at a time (x, then y, then z: fixed order), parent spacing = 2 child spacings, endpoint
 // values a, b and slopes A, B along the axis in parent units:
 //     child on the parent lattice (even index):  a,                                slope A * 0.5
 //     midpoint (odd index):                      (a + b) * 0.5 + (A - B) * 0.125,  slope (b - a) * 0.75 - (A + B) * 0.125
-// HERMITE8 applies it to the 4 (value-like, slope-like) channel pairs of the axis: the tensor-product
-// cubic Hermite, C1, reproduces any tricubic polynomial; without new bands the cascade is exactly the
-// piecewise tricubic Hermite interpolant of the coarse data. LINEAR4 keeps value + gradient only: the pair
-// (value, slope along the axis) by the same rule, the two transverse slopes by linear interpolation (the
-// 8-channel rule with each cross derivative replaced by the slope difference along the edge).
+// to the pair (value, slope along the axis), the two transverse slopes by linear interpolation.
 //
 // Exactness: only + - * by the constants above and compares (correctly rounded, `precise` on the GPU);
 // copies and the x0.5 slope scalings are exact, so a chunk and a point query give the same bits. Denormals:
@@ -47,55 +43,31 @@
 // denormal, whether the GPU flushes them or not.
 namespace Cascade {
 
-// Channel order of ExactNoise::Channels8 (perlin3_cross) too.
 enum Channel {
     VALUE,
     DX,
     DY,
     DZ,
-    DXY,
-    DXZ,
-    DYZ,
-    DXYZ,
     CHANNELS,
 };
 
-// Derivative axes of each channel (bit 0 x, bit 1 y, bit 2 z): the one table the channel layout comes from.
-inline constexpr int CHANNEL_AXES[CHANNELS] = { 0, 1, 2, 4, 3, 5, 6, 7 };
-
+// The derivatives a channel holds: 0 the value, 1 a slope.
 constexpr int channel_order(int p_channel) {
-    return (CHANNEL_AXES[p_channel] & 1) + ((CHANNEL_AXES[p_channel] >> 1) & 1) + ((CHANNEL_AXES[p_channel] >> 2) & 1);
-}
-
-// Per axis pass of HERMITE8: the (value-like, slope-like) channel pairs, slope = value + the axis, in the
-// order the passes apply them (the GPU's code is generated from this table).
-inline constexpr int PAIRS[3][4][2] = {
-    { { VALUE, DX }, { DY, DXY }, { DZ, DXZ }, { DYZ, DXYZ } },
-    { { VALUE, DY }, { DX, DXY }, { DZ, DYZ }, { DXZ, DXYZ } },
-    { { VALUE, DZ }, { DX, DXZ }, { DY, DYZ }, { DXY, DXYZ } },
-};
-
-enum class ChannelSet {
-    HERMITE8,
-    LINEAR4, // value + gradient (VALUE..DZ)
-};
-
-inline int channel_count(ChannelSet p_set) {
-    return p_set == ChannelSet::HERMITE8 ? 8 : 4;
+    return p_channel == VALUE ? 0 : 1;
 }
 
 inline constexpr uint32_t FLUSH_BITS = 0x1F800000u; // 2^-64
 inline constexpr int MAX_LEVEL = ExactNoise::MAX_K;
 
-// Field groups (Spec::fields, the climate): LINEAR4 channel sets carried down with the ground, each after the
+// Field groups (Spec::fields, the climate): the same 4 channels carried down with the ground, each after the
 // ground's CHANNELS slots: field f's channel c is Level slot field_slot(f, c). Group 0 is the ground, 1 + f field f.
 // The GPU code is generated per spec (Spec::group_count), so the cap only sizes the CPU's slot arrays.
 inline constexpr int MAX_FIELD_GROUPS = 24;
 inline constexpr int MAX_GROUPS = 1 + MAX_FIELD_GROUPS;
 static_assert(MAX_GROUPS < 32, "group masks (Modulation::modulated, (1 << groups) - 1) are 32-bit");
-// A field group's channels (LINEAR4: value and gradient).
+// A field group's channels.
 inline constexpr int FIELD_CHANNELS = 4;
-// Carry groups (Modulation::derive): LINEAR4 channel sets after the field groups, what a level computes from its
+// Carry groups (Modulation::derive): 4 channels each after the field groups, what a level computes from its
 // channels for the level below it (carry_slot(c, channel)).
 inline constexpr int MAX_CARRY = 24;
 inline constexpr int SLOTS = CHANNELS + FIELD_CHANNELS * (MAX_FIELD_GROUPS + MAX_CARRY);
@@ -105,12 +77,9 @@ constexpr int field_slot(int p_field, int p_channel = VALUE) {
 constexpr int carry_slot(int p_carry, int p_channel = VALUE) {
     return field_slot(MAX_FIELD_GROUPS + p_carry, p_channel);
 }
-// Group g's channel set (the ground's p_ground, a field's LINEAR4) and first Level slot.
-inline ChannelSet group_set(ChannelSet p_ground, int p_group) {
-    return p_group == 0 ? p_ground : ChannelSet::LINEAR4;
-}
+// Group g's first Level slot.
 constexpr int group_slot(int p_group) {
-    return p_group == 0 ? 0 : field_slot(p_group - 1);
+    return p_group * CHANNELS;
 }
 
 // The per-axis rule of H (see above), in the order the GPU mirror must keep.
@@ -212,17 +181,16 @@ Box item_box(const VoxelPos &p_anchor, int p_lod, const ChunkParam &p_param);
 struct Level {
     int m = 0;
     Box box;
-    ChannelSet set = ChannelSet::HERMITE8;
     int fields = 0; // field groups carried (slots field_slot(0 .. fields - 1))
     int carry = 0; // carry groups carried (slots carry_slot(0 .. carry - 1))
     int copied = -1; // the carry group H copies (Modulation::copied_carry)
     std::vector<float> ch[SLOTS];
 
-    void allocate(int p_m, const Box &p_box, ChannelSet p_set, int p_fields = 0, int p_carry = 0);
+    void allocate(int p_m, const Box &p_box, int p_fields = 0, int p_carry = 0);
     // Carries p_carry carry groups, the new ones 0 (a derive writes them).
     void add_carry(int p_carry);
     float at(int p_channel, const Vector3i64 &p_p) const { return ch[p_channel][box.index(p_p)]; }
-    // All channels at a point, 0 for the ones the set doesn't carry.
+    // All channels at a point.
     void channels_at(const Vector3i64 &p_p, float r_ch[CHANNELS]) const;
     // Every slot of the point at box index p_i (the fields' too), 0 for the slots not carried: point_slots' layout.
     void slots_at(int64_t p_i, float r_slots[SLOTS]) const {
@@ -285,7 +253,7 @@ struct FieldRange {
 // samples read into the carry slots, and H carries them to Λ_L (A = H(derive(H(V_{L+2})))): the samples, the most points
 // of a run, only interpolate. The top level derives from a
 // level above it that holds nothing (Spec::top_level). A modulated band inserts value A n and slopes A dn + n dA
-// (LINEAR4 groups only): n = the noise, A = (dA, A) per lattice spacing of Λ_m.
+// n = the noise, A = (dA, A) per lattice spacing of Λ_m.
 //
 // Shaped bands (BandMod::features): the band also inserts A_abs (|n| - NOISE_ABS_MEAN) and A_sq (n^2 - NOISE_SQ_MEAN),
 // the means taken out so a coarser LOD dropping the band (mean 0) makes no step; its noise may be read at the point
@@ -374,14 +342,13 @@ struct Spec {
     std::vector<Band> bands;
     // Band k is inserted on Λ_{k - insert_shift}: 2 = 4 samples per wavelength, 3 = 8 (the chosen one).
     int insert_shift = ExactNoise::BAND_SHIFT;
-    ChannelSet set = ChannelSet::HERMITE8;
     // Coarsest lattice T; -1: the highest insertion lattice of the ground's bands and, where they are carried
     // (FieldRange not empty, or p_all_fields), the fields'.
     int top = -1;
-    // Field groups (at most MAX_FIELD_GROUPS, LINEAR4, the same insert shift; at most one band per level each),
+    // Field groups (at most MAX_FIELD_GROUPS, the same insert shift; at most one band per level each),
     // carried at slots field_slot(f): the climate. They never reach the ground's channels except through modulation.
     std::vector<std::vector<Band>> fields;
-    // Null: every band at its constant amplitude. A modulated ground needs LINEAR4.
+    // Null: every band at its constant amplitude.
     std::shared_ptr<const Modulation> modulation;
     // The base a stretched band stretches along (BaseSurface::stretched): the ground's (SDFCascade), flat at datum 0
     // otherwise.
@@ -397,7 +364,6 @@ struct Spec {
     int run_top(int p_lod, bool p_all_fields = false) const;
     int group_count() const { return 1 + int(fields.size()); }
     const std::vector<Band> &group_bands(int p_group) const { return p_group == 0 ? bands : fields[size_t(p_group - 1)]; }
-    ChannelSet group_set(int p_group) const { return Cascade::group_set(set, p_group); }
     FieldRange field_range() const { return modulation ? modulation->field_range() : FieldRange(); }
     int carry_groups() const { return modulation ? modulation->carry_groups() : 0; }
     // The carry groups some run's last level reads without the fields (the GPU's: its runs carry no field to it).
@@ -416,25 +382,20 @@ struct Spec {
         s.fields.clear();
         return s;
     }
-    // The GPU's layout (CascadeGLSL's Ch, scratch and debug channels): the ground's channel_count(set), then 4 per
+    // The GPU's layout (CascadeGLSL's Ch, scratch and debug channels): the ground's CHANNELS, then 4 per
     // field group, then 4 per carry group; slot_of_gpu maps a GPU channel to its Level slot.
     int gpu_channels() const { return gpu_carry(gpu_carry_groups()); }
-    int gpu_base(int p_group) const { return p_group == 0 ? 0 : channel_count(set) + FIELD_CHANNELS * (p_group - 1); }
+    int gpu_base(int p_group) const { return group_slot(p_group); }
     int gpu_carry(int p_carry) const { return gpu_base(group_count()) + FIELD_CHANNELS * p_carry; }
     int slot_of_gpu(int p_channel) const {
-        const int n0 = channel_count(set);
-        if (p_channel < n0) {
+        if (p_channel < CHANNELS) {
             return p_channel;
         }
-        const int f = (p_channel - n0) / FIELD_CHANNELS;
-        const int c = (p_channel - n0) % FIELD_CHANNELS;
+        const int f = (p_channel - CHANNELS) / FIELD_CHANNELS;
+        const int c = (p_channel - CHANNELS) % FIELD_CHANNELS;
         return f < int(fields.size()) ? field_slot(f, c) : carry_slot(f - int(fields.size()), c);
     }
 };
-
-// Adds the inserted channels to a level. The default source inserts the spec's bands; tests insert
-// other fields (polynomials).
-using Source = std::function<void(Level &)>;
 
 // Points per lattice level (cost per chunk), from the boxes alone.
 struct Stats {
@@ -443,7 +404,7 @@ struct Stats {
 };
 void count_points(const Spec &p_spec, const Box &p_box, int p_lod, Stats &r_stats);
 
-// Band channels on its insertion lattice at lattice point p: perlin3_cross per cell times
+// Band channels on its insertion lattice at lattice point p: perlin3 per cell times
 // amp * 2^(-insert_shift |S|).
 void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p, float r_ch[CHANNELS]);
 // Adds the bands of the ground and of p_fields field groups (-1: every one r_level carries) on r_level.m (modulated where
@@ -464,7 +425,7 @@ void flush(Level &r_level);
 // Runs the cascade from the top lattice down to Λ_{p_lod} over the points of p_box (on Λ_{p_lod}).
 // r_levels (optional) receives every level, top first.
 // The fields are carried where the spec's FieldRange says, everywhere with p_all_fields.
-Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r_levels = nullptr, const Source &p_source = Source(),
+Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r_levels = nullptr,
         bool p_all_fields = false);
 
 // V_m at one lattice point of Λ_m (the ground's channels).

@@ -174,8 +174,6 @@ static func param(p_node: Dictionary, p_name: String) -> Variant:
 # node, which fix_notes and drop_unknown turn into its notes' warp switches), its notes fixed, old kinds dropped.
 static func normalise(p_model: Dictionary) -> void:
 	p_model.next_id = int(p_model.get("next_id", 1))
-	p_model.voxel_m = float(p_model.get("voxel_m", Octaves.DEFAULT_VOXEL_M))
-	p_model.lods = int(p_model.get("lods", Octaves.DEFAULT_LODS))
 	if not p_model.has("nodes"):
 		p_model.nodes = {}
 	if not p_model.has("links"):
@@ -210,7 +208,7 @@ static func fix_notes(p_model: Dictionary) -> void:
 		if p_model.nodes.has(l.from) and p_model.nodes[l.from].kind == "warp" and p_model.nodes.get(l.to, {}).get("kind") == "note":
 			p_model.nodes[l.to].params.warp = true
 			p_model.links.erase(l)
-	var top := Octaves.ground_top(int(p_model.lods), float(p_model.voxel_m))
+	var top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
 	var by_k := {}
 	var extra := []
 	for id in p_model.nodes:

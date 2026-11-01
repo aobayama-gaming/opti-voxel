@@ -16,14 +16,10 @@ const ROW_H := Kinds.NOTE_ROW_H
 
 var model := {}
 var warnings := PackedStringArray()
-var voxel_m := Octaves.DEFAULT_VOXEL_M
-var lods := Octaves.DEFAULT_LODS
 
 
-func _init(p_name: String, p_voxel_m: float = Octaves.DEFAULT_VOXEL_M, p_lods: int = Octaves.DEFAULT_LODS) -> void:
-	voxel_m = p_voxel_m
-	lods = p_lods
-	model = {"version": 1, "name": p_name, "voxel_m": voxel_m, "lods": lods, "origin_m": [0.0, 0.0], "next_id": 1, "nodes": {}, "links": [], "layout": "grid"}
+func _init(p_name: String) -> void:
+	model = {"version": 1, "name": p_name, "origin_m": [0.0, 0.0], "next_id": 1, "nodes": {}, "links": [], "layout": "grid"}
 
 
 func add(p_kind: String, p_pos: Vector2, p_params: Dictionary = {}) -> String:
@@ -39,7 +35,7 @@ static func link_in(p_model: Dictionary, p_from: String, p_from_port: int, p_to:
 
 
 func k_of(p_m: float) -> int:
-	return Octaves.lattice_k(p_m, voxel_m)
+	return Octaves.lattice_k(p_m, Octaves.voxel_m)
 
 
 # The ground as it is: every note, plain, at volume 1 (ImportTable.new("plain ground").plain_ground()).
@@ -48,7 +44,7 @@ func plain_ground() -> Dictionary:
 	var out := add("output", Vector2(COL.mix + MIX_W, 0.0))
 	link(mix, 0, out, 0)
 	var rows: Array = model.nodes[mix].params.rows
-	var top := Octaves.ground_top(lods, voxel_m)
+	var top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
 	for k in range(top, Octaves.K_MIN - 1, -1):
 		link(add("note", Vector2(COL.note, (top - k) * ROW_H), {"k": k}), 0, mix, rows.size())
 		rows.append(Kinds.new_row())
@@ -81,7 +77,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	for f in p_table.get("fields", []):
 		fields[f.name] = f
 	# The biome's entry per ground octave (none: the ground's own, volume 1).
-	var k_top := Octaves.ground_top(lods, voxel_m)
+	var k_top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
 	var per_k := {}
 	for a in biome.get("amp", []):
 		if a.get("field", "ground") != "ground":
@@ -89,7 +85,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 			continue
 		for k in _ks(a):
 			per_k[k] = a
-	var stretch := stretch_by_k(p_table, voxel_m, lods)
+	var stretch := stretch_by_k(p_table)
 	var mix := add("mix", Vector2(COL.mix, 0.0))
 	var rows: Array = model.nodes[mix].params.rows
 	var warps := {}
@@ -171,10 +167,10 @@ func _warp(p_names: Array, p_fields: Dictionary) -> bool:
 
 # The ground's stretched octaves of a table or a world (its "ground_stretch": a stretch_y per wavelength range), as
 # {k: stretch_y}.
-static func stretch_by_k(p_table: Dictionary, p_voxel_m: float, p_lods: int) -> Dictionary:
+static func stretch_by_k(p_table: Dictionary) -> Dictionary:
 	var stretch := {}
 	for s in p_table.get("ground_stretch", []):
-		for k in band_ks(s, p_voxel_m, p_lods):
+		for k in band_ks(s):
 			stretch[k] = int(s.get("stretch_y", 1))
 	return stretch
 
@@ -182,13 +178,13 @@ static func stretch_by_k(p_table: Dictionary, p_voxel_m: float, p_lods: int) -> 
 # The octaves a table entry covers: its wavelength_m's, or every one in from_m .. to_m that the ground has (the
 # engine's octave_range: both ends rounded to their octave).
 func _ks(p_entry: Dictionary) -> Array:
-	return band_ks(p_entry, voxel_m, lods)
+	return band_ks(p_entry)
 
 
 # _ks for any voxel and LOD count (World.field_octaves reads the fields' bands with it), finest first.
-static func band_ks(p_entry: Dictionary, p_voxel_m: float, p_lods: int) -> Array:
+static func band_ks(p_entry: Dictionary) -> Array:
 	if p_entry.has("wavelength_m"):
-		return [Octaves.lattice_k(float(p_entry.wavelength_m), p_voxel_m)]
-	var lo := maxi(Octaves.lattice_k(float(p_entry.from_m), p_voxel_m), Octaves.K_MIN)
-	var hi := mini(Octaves.lattice_k(float(p_entry.to_m), p_voxel_m), Octaves.k_top(p_lods))
+		return [Octaves.lattice_k(float(p_entry.wavelength_m), Octaves.voxel_m)]
+	var lo := maxi(Octaves.lattice_k(float(p_entry.from_m), Octaves.voxel_m), Octaves.K_MIN)
+	var hi := mini(Octaves.lattice_k(float(p_entry.to_m), Octaves.voxel_m), Octaves.k_top(Octaves.lods))
 	return range(lo, hi + 1)

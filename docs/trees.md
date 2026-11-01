@@ -35,7 +35,7 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). The scene's centre is the ground under (SCENE_X, SCENE_Z) of the base's tangent plane
   (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
-  every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. `--trees=N --tree_area=M` (default 0, 60 m) in bench and player; meant for 5 cm voxels
+  every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. The world file's `trees` (`count`, `area_m`; default 0, 60 m) in bench and player; meant for 5 cm voxels
   (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per site.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
@@ -113,7 +113,7 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   record (a spherical cap on a hanging cone, smooth-unioned, plus bumps), its box bottom 25-70 m above the highest
   ground under it. Both follow the band rule like any record; the slab erodes away a few LODs before the basin (it
   can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) whose scorched basin
-  material shows. `--biomes=KM` (bench and player, `VoxelTerrain.biome_radius` in metres) places the sites within KM km
+  material shows. The world file's `features.radius_km` places the sites within KM km
   of the base's point under (SCENE_X, SCENE_Z) once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
   out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread.
   `get_debug_stats()["table"]["biomes"]`: counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z

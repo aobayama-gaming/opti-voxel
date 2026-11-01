@@ -3,6 +3,7 @@
 #include "climate.hpp"
 #include "parallel_for.hpp"
 #include "sdf_cascade.hpp"
+#include "world_file.hpp"
 
 #include "ov/files.hpp"
 #include "ov/json.hpp"
@@ -388,16 +389,17 @@ ov::str ClimateReport::check(const ov::str &p_json, double p_voxel_size, int p_l
     return configure(sdf, data, p_voxel_size, p_lods);
 }
 
-ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size,
+ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_path, double p_extent_km, int p_size,
         bool p_surface, double p_center_x, double p_center_z, int p_lattice) {
     ov::Value report = ov::Value::object();
     report["ok"] = false;
     ov::make_dirs(p_out_dir);
     SDFCascade sdf;
-    ov::Value data;
-    ov::str err = load(p_climate_path, data);
+    WorldFile world;
+    ov::str err = WorldFile::load(p_world_path, world);
+    const int lods = world.lods;
     if (err.empty()) {
-        err = configure(sdf, data, p_voxel_size, p_lods);
+        err = configure(sdf, world.climate_table, world.voxel_m, lods);
     }
     if (!err.empty()) {
         report["error"] = err;
@@ -422,7 +424,7 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_climate_
     ov::str md = "# Climate report\n\n";
     md += ov::format("`%s` at %s m voxels, %d LODs: %d fields, %d biomes. Slice %s, %d x %d points of lattice %d (%s m apart, "
                      "%s km across). CPU: %s us per point (ground trace + fields + weights + pick, over the worker pool).\n\n",
-            p_climate_path, ov::num(ground.voxel_size, 6), p_lods, s.nf, s.nb, p_surface ? "on the ground surface" : "on the base's tangent plane", n, n, m, ov::num(spacing_m, 2), ov::num(n * spacing_m / 1000.0, 1),
+            p_world_path, ov::num(ground.voxel_size, 6), lods, s.nf, s.nb, p_surface ? "on the ground surface" : "on the base's tangent plane", n, n, m, ov::num(spacing_m, 2), ov::num(n * spacing_m / 1000.0, 1),
             ov::num(us_per_point, 2));
     ov::Value images = ov::Value::array();
     md += biome_section(table, s, n, p_out_dir, images) + ov::str("\n");

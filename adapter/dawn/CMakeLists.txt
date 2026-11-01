@@ -63,8 +63,10 @@ if(EMSCRIPTEN)
     # the workers are started with the page (a pthread only starts once the main thread yields): the pool's (one per core but
     # the main thread's, at least one) and the viewer's two long-lived workers (discoverer, field); one more starts late. Only a cross-origin isolated page (web/serve.py's headers)
     # gets SharedArrayBuffer. FS: a --shot's PNG is read back from the page (Module.FS.readFile); the Godot project's
-    # climate worlds are preloaded at /climate (ov_dawn.data: ?climate=/climate/world.json&lods=25), its grade at /grade_lut.rgb.
+    # climate and worlds folders are preloaded at /climate and /worlds (ov_dawn.data: ?world=res://climate/world.json), its grade at /grade_lut.rgb.
+    target_compile_definitions(ov_dawn PRIVATE OV_RES_DIR="/")
     target_link_options(ov_dawn PRIVATE "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/climate@/climate"
+            "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/worlds@/worlds"
             "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/grade_lut.rgb@/grade_lut.rgb" "--use-port=${OV_EMDAWNWEBGPU_PORT}" -pthread -sJSPI -Wno-experimental
             -Wno-pthreads-mem-growth "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency+2" -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB
             -sSTACK_SIZE=8MB -sENVIRONMENT=web,worker -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=FS "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
@@ -85,6 +87,7 @@ endif()
 add_executable(ov_dawn ${OV_DAWN_SOURCES} src/x11_window.cpp)
 set_target_properties(ov_dawn PROPERTIES CXX_STANDARD 20) # webgpu_cpp.h needs C++20; the core stays C++17 like the Godot build
 target_compile_options(ov_dawn PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(ov_dawn PRIVATE OV_RES_DIR="${OV_ROOT}/adapter/godot/project/")
 # The viewer includes the World's headers, whose std::atomic_load / atomic_store of a shared_ptr (the instance snapshot)
 # C++20 deprecates; the core is C++17, where they are the way.
 set_source_files_properties(src/viewer.cpp PROPERTIES COMPILE_OPTIONS -Wno-deprecated-declarations)

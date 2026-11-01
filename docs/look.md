@@ -28,7 +28,7 @@ The shared environment and the page shader's surface detail.
   (`shade_point`: a power of two of voxels holding at least 64 of its largest features, `shade_period_vox`) with its
   frequencies snapped to whole cycles per period (`shade_cells`, `shade_wave`; `value_noise` wraps its lattice): two
   render origins read points a whole number of periods apart, so a rebase changes nothing on screen and the floats stay
-  small anywhere. The contour lines are halfway between whole multiples of 100 m (500 m on the continents) of altitude above the
+  small anywhere. The contour lines are halfway between whole multiples of 100 m of altitude above the
   base. The hosts give the frame its origin through `shade_origin_voxel()` /
   `shade_voxel_m()` (the page shaders from their decode uniforms, the sky shader from `VoxelSky::set_render_frame`,
   which VoxelTerrain calls at start and on every rebase).
@@ -48,7 +48,7 @@ The shared environment and the page shader's surface detail.
 
 ## Atmosphere
 
-A volumetric atmosphere (`src/atmosphere.*`, `ov::Atmosphere`, owned by `World`; `--atmosphere=0|1`, on by default) made
+A volumetric atmosphere (`src/atmosphere.*`, `ov::Atmosphere`, owned by `World`; the world file's `look.atmosphere`, on by default) made
 only from the base's shape: Hillaire 2020 ("A Scalable and Production Ready Sky and Atmosphere Rendering Technique",
 UE's SkyAtmosphere; reference code `sebh/UnrealEngineSkyAtmosphere`, MIT), its sphere assumptions replaced by the base's
 render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base kind gets an atmosphere that follows it.
@@ -58,7 +58,7 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
   (`AtmosphereMedium::for_base`): under Earth's radius every height times R / R_earth and every coefficient over it (the
   same optical depths: a small planet keeps a blue sky and a limb), the top at least `RELIEF_TOPS` (4) times the
   ground's relief (`SDFCascade::get_relief_m`) so the terrain stays inside the air: Earth and the flat world keep
-  Earth's 100 km, a 2 km planet gets 250 m. `--atmosphere_scale=F` sets the factor.
+  Earth's 100 km, a 2 km planet gets 250 m. `look.atmosphere_scale` sets the factor.
 - **Passes** (compute on the main device every frame, `device->post` like the mesher; a `atmosphere` GPU timestamp):
   the multiple-scattering table ψ_ms(sun height, altitude), 32 x 32 (Hillaire's: second order with an isotropic phase
   over 64 directions, 1 / (1 - f_ms)), built once on a sphere of the base's curvature radius (Earth's on the flat
@@ -91,7 +91,7 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
 
 ## Volumetric clouds
 
-Volumetric clouds (`src/clouds.*`, `ov::Clouds`, owned by `World` with the atmosphere; `--clouds=0|1`, on by default;
+Volumetric clouds (`src/clouds.*`, `ov::Clouds`, owned by `World` with the atmosphere; `look.clouds`, on by default;
 without them, or without the atmosphere, the cloud layer above). `World` starts the atmosphere and the clouds only for a
 host that binds their textures (`Hosts::atmosphere_textures`, `Hosts::cloud_textures`): the Dawn viewer runs neither yet.
 They are made from the base's shape like the atmosphere: a layer

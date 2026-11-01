@@ -16,7 +16,7 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   and it does nothing on the main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
   scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
-  (and `--lods=25`) after touching the discoverer, the cascade passes or `CascadePointsGPU`.
+  (and `--world=res://worlds/lods25.world.json`) after touching the discoverer, the cascade passes or `CascadePointsGPU`.
   `stats.json["discoverer"]`: mode, scratch MB, `gpu_init_ms` (device + shader, before the first scan),
   compare counts, first and last scan (scan / cull / walk
   ms, corners, unique corners, dedup ratio, per wave GPU ms, batches, readback bytes). `--cam_pos=X,Y,Z --pitch=DEG --yaw=DEG` place the bench camera;
@@ -51,7 +51,7 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   vs error 1 without the split. A locality-aware compaction would close it.
 - Far limit (`VoxelTerrain.lod_far_limit`, default on; with `--lod_far_limit=0` in bench and
   player the world gets 0, no limit): the adapter hands `World::frame` the depth of the camera's far plane (Godot:
-  `Camera3D.far`, which `Presets.clip_planes` ties to the altitude, ~2,100x it with a 105 km floor, when `--lods` is above
+  `Camera3D.far`, which `Presets.clip_planes` ties to the altitude, ~2,100x it with a 105 km floor, when the world's LODs are above
   15; Dawn: 0, its projection is infinite). The farthest point drawn is a corner of that plane: `World` scales it by
   1 / cos(the diagonal half-FOV), ~1.86x at 75 degrees and 16:9. `ScanView::far_ids` is that reach in chunk-id
   units, rounded up to a power of two (`ChunkMath::far_ids`), and it only shrinks once the needed step falls to a

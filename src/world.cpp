@@ -29,9 +29,9 @@ private:
     const uint64_t t0;
 };
 
-// The planet's radius (Settings::planet_radius_m), none under the shapes gallery (its flat preset).
-double planet_radius_m(const World::Settings &p_config) {
-    return p_config.terrain_mode == 4 ? 0.0 : p_config.planet_radius_m;
+// The world's planet radius, none under the shapes gallery (its flat preset).
+double planet_radius_m(const World::Settings &p_config, const WorldFile &p_world) {
+    return p_config.terrain_mode == 4 ? 0.0 : p_world.planet_radius_m;
 }
 
 // A planet's +y pole less the flat datum (LOD0 voxels): where the flat world's voxel 0 goes, so the poses made for its
@@ -56,11 +56,28 @@ World::~World() {
     stop();
 }
 
+bool World::load_world() {
+    OV_ERR_FAIL_COND_V_MSG(started, false, "World: the world is set before start.");
+    if (config.world_path == content_path) {
+        return true;
+    }
+    WorldFile loaded;
+    const str err = config.world_path.empty() ? str() : WorldFile::load(config.world_path, loaded);
+    OV_ERR_FAIL_COND_V_MSG(!err.empty(), false, "World: " + err);
+    content = loaded;
+    content_path = config.world_path;
+    config.chunk_param.voxel_size = float(content.voxel_m);
+    return true;
+}
+
 bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Float3 *p_camera_pos, const Float3 *p_camera_forward,
         double p_camera_far_m) {
     ChunkParam &chunk_param = config.chunk_param;
-    const int lod_numbers = config.lod_numbers;
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: already started.");
+    if (!load_world()) {
+        return false;
+    }
+    const int lod_numbers = content.lods;
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     OV_ERR_FAIL_COND_V_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, false, "World: chunk_size - 2 * skirt_size must be even.");
     OV_ERR_FAIL_COND_V_MSG(lod_numbers < 1 || lod_numbers > ChunkMath::MAX_LOD_NUMBERS, false, "World: lod_numbers out of range.");
@@ -81,30 +98,22 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     world_origin_chunk = chunk_param.origin_chunk;
 
-    // One terrain, the cascade: mode 2 is its continents preset, 4 its flat preset under the shapes gallery.
-    if (config.terrain_mode == 2) {
-        sdf->preset = SDFCascade::Preset::CONTINENTS;
-    } else if (config.terrain_mode == 4) {
+    // One terrain, the cascade: mode 4 is its flat preset under the shapes gallery.
+    if (config.terrain_mode == 4) {
         sdf->preset = SDFCascade::Preset::FLAT;
         sdf->set_scene(SDFTable::Scene::SHAPES);
     }
-    sdf->set_scatter(config.archetype_instances, config.archetype_instance_area);
-    sdf->set_forest(config.archetype_trees, config.archetype_tree_area);
+    sdf->set_scatter(content.instances, content.instance_area_m);
+    sdf->set_forest(content.trees, content.tree_area_m);
     sdf->set_stream_sources(config.archetype_stream);
     sdf->set_stream_part_sides(config.archetype_stream_part_sides);
-    sdf->set_biome_radius(config.biome_radius);
-    sdf->planet_radius_m = planet_radius_m(config);
-    sdf->planet_ring_m = config.planet_ring_m;
-    if (config.planet_ring_m > 0.0 && !(config.planet_radius_m > 0.0)) {
-        OV_ERR_PRINT("World: planet_ring_m needs planet_radius_m (the tube): the flat world.");
+    sdf->set_biome_radius(content.features_radius_m);
+    sdf->planet_radius_m = planet_radius_m(config, content);
+    sdf->planet_ring_m = content.planet_ring_m;
+    if (content.planet_ring_m > 0.0 && !(content.planet_radius_m > 0.0)) {
+        OV_ERR_PRINT("World: ring_m needs radius_m (the tube): the flat world.");
     }
-    if (!config.climate_path.empty()) {
-        // Parsed and checked by configure() (an ERR there: no climate).
-        const str err = Climate::load(config.climate_path, sdf->climate_data);
-        if (!err.empty()) {
-            OV_ERR_PRINT("World: " + err + " No climate.");
-        }
-    }
+    sdf->climate_data = content.climate_table; // parsed and checked by configure() (an ERR there: no climate)
     sdf->set_instance_band(config.archetype_band && config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_moment_blobs(config.archetype_moments);
     sdf->set_instance_erode(config.archetype_erode);
@@ -154,11 +163,11 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
     // Only for a host that draws them (binds their textures).
-    if (config.atmosphere && hosts.atmosphere_textures) {
+    if (content.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
-        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
+        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), content.atmosphere_scale,
                 hosts.atmosphere_textures);
-        if (config.clouds && hosts.cloud_textures) {
+        if (content.clouds && hosts.cloud_textures) {
             clouds = new Clouds();
             const Climate::Table *climate = sdf->get_climate();
             if (climate && CloudClimate::any(*climate)) {
@@ -168,7 +177,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
                     return CloudClimate::at(*climate, cascade->get_spec(), p_voxel, p_m);
                 });
             }
-            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), config.atmosphere_scale,
+            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), content.atmosphere_scale,
                     hosts.cloud_textures);
             clouds->set_weather(cloud_cover, cloud_wind);
         }
@@ -398,7 +407,7 @@ bool World::debug_validate(int p_count, const str &p_dump_dir) {
     validation = ov::Value::object();
     validator_host = hosts.hidden_meshes();
     validator = new MeshValidator();
-    validator->start(targets, sdf.get(), config.chunk_param, config.lod_numbers, direct_mesher->get_pool(), validator_host.get(), p_dump_dir,
+    validator->start(targets, sdf.get(), config.chunk_param, content.lods, direct_mesher->get_pool(), validator_host.get(), p_dump_dir,
             config.dual_contouring);
     return true;
 }
@@ -582,7 +591,7 @@ void World::tangent_position(double p_u_m, double p_v_m, double r_render_pos[3])
 
 ChunkId World::start_origin() const {
     const ChunkParam &chunk_param = config.chunk_param;
-    const int64_t root_units = int64_t(1) << config.lod_numbers;
+    const int64_t root_units = int64_t(1) << content.lods;
     const int64_t root_voxels = root_units * chunk_param.half_chunk_voxels();
     VoxelPos request = config.world_origin_request;
     if (const BaseSurface planet = settings_planet(); planet.curved() && request == VoxelPos(0, 0, 0)) {
@@ -593,8 +602,9 @@ ChunkId World::start_origin() const {
 }
 
 BaseSurface World::settings_planet() const {
-    return planet_radius_m(config) > 0.0 ? SDFCascade::planet_base(planet_radius_m(config), double(config.chunk_param.voxel_size), config.planet_ring_m)
-                                         : BaseSurface();
+    const double radius = planet_radius_m(config, content);
+    return radius > 0.0 ? SDFCascade::planet_base(radius, double(config.chunk_param.voxel_size), content.planet_ring_m)
+                        : BaseSurface();
 }
 
 VoxelPos World::render_origin_voxel() const {
@@ -687,6 +697,7 @@ ov::Value World::debug_stats() {
     const ChunkParam &chunk_param = config.chunk_param;
     d["pipeline_mode"] = int(config.pipeline_mode);
     d["terrain_mode"] = config.terrain_mode;
+    d["lods"] = content.lods;
     ov::Value origin = ov::Value::object();
     origin["requested_voxel"] = WorldCoord::to_string(config.world_origin_request);
     origin["voxel"] = WorldCoord::to_string(world_origin_chunk * chunk_param.half_chunk_voxels());
@@ -703,7 +714,7 @@ ov::Value World::debug_stats() {
     d["table"] = table;
     if (const Climate::Table *climate = sdf->get_climate()) {
         ov::Value c = ov::Value::object();
-        c["path"] = config.climate_path;
+        c["path"] = config.world_path;
         c["fields"] = int64_t(climate->fields.size());
         c["biomes"] = int64_t(climate->biomes.size());
         c["modulated"] = sdf->get_cascade()->modulation != nullptr;

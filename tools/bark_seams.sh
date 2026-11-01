@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-FOREST=(--mode=direct --trees=4000 --tree_area=316 --voxel=0.05 --lod_error=2 --steady=20)
+FOREST=(--mode=direct --world=res://worlds/forest5cm.world.json --lod_error=2 --steady=20)
 # name: camera args (Godot metres, degrees)
 POSES=(
     "trunk_seam:--cam_pos=-65.77,1246.92,-96.75 --pitch=-11.5 --yaw=55.6"

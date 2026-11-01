@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # GPU cascade harness: build (unless --no-build), run res://debug/cascade_spike.tscn, check the result.
 #
-#   tools/cascade_test.sh [--no-build] [--lods=25] [--voxel=0.5] [--check=0|1] [--points=0|1] [--table=0|1] [--biomes=0|1] [--timing=0|1] [--runs=10]
-#                         [--sets=8,4,4c]
+#   tools/cascade_test.sh [--no-build] [--world=PATH] [--check=0|1] [--points=0|1] [--table=0|1] [--biomes=0|1] [--timing=0|1] [--runs=10]
+#                         [--sets=4,4c]
+#
+# Each set loads its world file (voxel and LODs from its engine); --world is the bare set's and the table's.
 #
 # check: the cascade passes (cascade_glsl.hpp) vs Cascade::run, every channel of every level and the
 # sdf_sample, chunks of every LOD near 0, +-2^60 and across 2^32 boundaries (G1), and the LOD relation on
@@ -12,11 +14,11 @@
 # per batch of 1k-64k points at LOD 0 and 5 (D2). table: a cascade terrain with 600 scattered instances, the meshers' samples with the
 # chunks' instance lists vs SDFCascade::sample_sdf + skirt (G9: the fold onto the cascade, bit for bit). biomes: the example climate's per-sample ground material (the biome pick at
 # level 0) vs SDFCascade::ground_material, every LOD (G10, on 4c and every other climate set asked). timing: GPU ms of the passes for single-LOD batches of 128 chunks at LOD 0, 4, ...
-# (G6), both channel sets (G7: 8 vs 4), each set against the plain 4 channels. Sets: 8, 4, 4c (LINEAR4 + the example
+# (G6), each set against the plain 4 channels. Sets: 4, 4c (the example
 # climate at 5 cm, its fields carried and modulating the ground), 4f (its fields without multipliers), 4p (the plain climate: the
 # example before shaped bands), 4s (the shaped test table: every operation), 4d (fieldless_test.json: a
-# modulation with no field), 4g (LINEAR4 on an Earth-sized sphere: the base regions below its switch LOD), 4w (world.json:
-# eight biomes on three climate axes, 8 groups; run it with --lods=25); default 8,4,4c.
+# modulation with no field), 4g (an Earth-sized sphere: the base regions below its switch LOD), 4w (world.json:
+# eight biomes on three climate axes, 8 groups); default 4,4c.
 # GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.
@@ -159,10 +161,8 @@ if rows:
         lines.append(f"G6 ({s} ch): LOD {lods[0]} / LOD {lods[-1]} = {a / b:.3f} (pass <= 1.15)")
     def total(s):
         return sum((by[(s, l)]["gpu_ms_median"] if by[(s, l)]["gpu_runs"] else by[(s, l)]["wall_ms_median"]) for l in lods)
-    if "8" in sets and "4" in sets:
-        lines.append(f"G7: 8 ch / 4 ch over all LODs = {total('8') / total('4'):.3f} (keep 8 unless > 1.15)")
     for s in ratios:
-        if s not in ("8", "4") and "4" in sets:
+        if s != "4" and "4" in sets:
             lines.append(f"{s} ch / 4 ch over all LODs = {total(s) / total('4'):.3f} (the climate's cost)")
     lines.append("")
     lines.append("Per level (last run, ms, j = top ... 0):")

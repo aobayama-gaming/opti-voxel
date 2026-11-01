@@ -1,0 +1,11 @@
+{
+ "comment": "The perf target: a 5 cm forest.",
+ "engine": {
+  "voxel_m": 0.05,
+  "lods": 15
+ },
+ "trees": {
+  "count": 4000,
+  "area_m": 316
+ }
+}

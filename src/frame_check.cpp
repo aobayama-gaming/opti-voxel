@@ -1,5 +1,7 @@
 #include "frame_check.hpp"
 
+#include "world_file.hpp"
+
 #include "atmosphere_check.hpp"
 
 #include "biome_features.hpp"
@@ -72,11 +74,9 @@ uint32_t fold_cell(uint32_t p_lx, uint32_t p_ly, uint32_t p_lz, int32_t p_hx, in
 }
 
 constexpr int CELL_KS[] = { 0, 3, 13, 24, 25, 31, 32, 33, 47, 62 };
-constexpr int PERLIN3_KS[] = { 2, 9, 20, 33 };
+// Spread over the range, and the band each LOD of PROBE_LODS inserts on its own lattice (k = L + 3).
+constexpr int PERLIN3_KS[] = { 2, 3, 4, 8, 9, 17, 20, 27, 33 };
 constexpr int PERLIN2_KS[] = { 2, 9, 33 };
-// perlin3_cross (the cascade's bands): perlin3's ks, and the band each LOD of PROBE_LODS inserts on its own
-// lattice (k = L + 3).
-constexpr int CROSS_KS[] = { 2, 3, 4, 8, 9, 17, 20, 27, 33 };
 // The int64 helpers of GLSL_FRAME_INT64: shifts and small addends.
 constexpr int I64_SHIFTS[] = { 0, 1, 5, 31, 32, 33, 47, 63 };
 constexpr int I64_SHIFT_COUNT = int(sizeof(I64_SHIFTS) / sizeof(I64_SHIFTS[0]));
@@ -371,27 +371,6 @@ void probe_octave_cell(WorldPos p, uint b) {
         };
         p.continuity_bound = octave_step_bound(k, 6.0);
         p.continuity_word = 3;
-        probes.push_back(p);
-    }
-    for (int k : CROSS_KS) {
-        Probe p;
-        p.name = ov::format("perlin3_cross_k%d", k);
-        p.words = 8;
-        p.is_float = true;
-        const Vector3i64 o = test_offset(k);
-        const uint32_t seed = 0x3000u + uint32_t(k);
-        p.glsl = ov::format("void probe_%s(WorldPos p, uint b) {\n    vec4 c0;\n    vec4 c1;\n    perlin3_cross(p, %d, %s, %s, %s, c0, c1);\n", p.name,
-                k, glsl_uint(seed), glsl_lo(o), glsl_hi(o));
-        p.glsl += "    for (uint i = 0u; i < 4u; i++) { results[b + i] = floatBitsToUint(c0[i]); results[b + 4u + i] = floatBitsToUint(c1[i]); }\n}\n";
-        p.cpu = [k, o, seed](const WorldPos &q, uint32_t *r) {
-            const Channels8 c = perlin3_cross(q, k, seed, o);
-            for (int i = 0; i < 8; i++) {
-                r[i] = float_bits(c.c[i]);
-            }
-            return true;
-        };
-        p.continuity_bound = octave_step_bound(k, 4.0);
-        p.continuity_word = 0;
         probes.push_back(p);
     }
     {
@@ -920,7 +899,7 @@ ov::str probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_prob
     }
     ov::str code = ov::str(SHADER_TEMPLATE);
     code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS);
-    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + GLSL_EXACT_NOISE + GLSL_PERLIN3_CROSS);
+    code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + GLSL_EXACT_NOISE);
     code = ov::replace_all(code, "/*NOISE*/", p_noise.glsl());
     code = ov::replace_all(code, "/*PROBES*/", probes_glsl);
     return ov::replace_all(code, "/*PROBE_CALLS*/", probe_calls);
@@ -1341,8 +1320,16 @@ vec4 terrain_sdf(WorldPos p, int lod) {
 
 } // namespace
 
-ov::Value FrameCheck::run(ov::gpu::Device &p_device, float p_voxel_size) {
-    const float voxel_size = p_voxel_size;
+ov::Value FrameCheck::run(ov::gpu::Device &p_device, const ov::str &p_world_path) {
+    WorldFile world;
+    const ov::str world_error = WorldFile::load(p_world_path, world);
+    if (!world_error.empty()) {
+        ov::Value failed = ov::Value::object();
+        failed["ok"] = false;
+        failed["error"] = world_error;
+        return failed;
+    }
+    const float voxel_size = float(world.voxel_m);
     ov::Value report = ov::Value::object();
     report["ok"] = false;
     Checks checks;

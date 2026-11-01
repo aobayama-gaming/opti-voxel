@@ -19,7 +19,7 @@ namespace {
 // The example climate with "clouds" p_clouds (JSON text) on its first biome.
 ov::Value example_with_clouds(const char *p_clouds) {
     ov::Value data;
-    CHECK(Climate::load("res://climate/example.json", data) == ov::str());
+    CHECK(load_table("res://climate/example.json", data) == ov::str());
     data["biomes"].at(0)["clouds"] = json(p_clouds);
     return data;
 }

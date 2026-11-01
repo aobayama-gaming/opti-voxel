@@ -20,8 +20,8 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var clip_terrain: Node = null  # the clip planes follow the altitude (Presets.clip_planes)
 var base_near := 0.05
 
-# `-- --lods=N` sets the sibling VoxelTerrain's lod_numbers (default 15), `-- --terrain=cascade|continents|shapes`
-# its terrain_mode (the Hermite cascade terrain, the default, its continents preset, or its flat preset under the
+# `-- --world=PATH` sets the sibling VoxelTerrain's world file, `-- --terrain=cascade|shapes`
+# its terrain_mode (the Hermite cascade terrain, the default, or its flat preset under the
 # hard-CSG shapes gallery) and
 # `-- --discoverer=cpu|gpu` its discoverer_mode, `-- --walk_gpu=0|1` its walk_gpu: they must be set before the terrain's _ready, and every
 # node enters the tree before any is ready.
@@ -50,9 +50,10 @@ var pixelate := 1           # --pixelate=N: the 3D drawn in N x N blocks, under 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
+	Presets.removed_args()
 	for a in Presets.user_args():
-		if a.begins_with("--lods=") and terrain:
-			terrain.lod_numbers = a.trim_prefix("--lods=").to_int()
+		if a.begins_with("--world=") and terrain:
+			terrain.world_path = a.trim_prefix("--world=")
 		if a == "--terrain=cascade" and terrain:
 			terrain.terrain_mode = 1
 		if a.begins_with("--discoverer=") and terrain:
@@ -64,8 +65,6 @@ func _enter_tree() -> void:
 				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
 		if a.begins_with("--walk_gpu=") and terrain:
 			terrain.walk_gpu = a.trim_prefix("--walk_gpu=") == "1"
-		if a == "--terrain=continents" and terrain:
-			terrain.terrain_mode = 2
 		if a == "--terrain=shapes" and terrain:
 			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
@@ -78,8 +77,6 @@ func _enter_tree() -> void:
 				spawn_tangent = Vector2(uv[0].to_float(), uv[1].to_float())
 			else:
 				push_error("player: --spawn=%s (expected U,V in metres)" % a.trim_prefix("--spawn="))
-		if a.begins_with("--voxel=") and terrain:
-			terrain.voxel_size = a.trim_prefix("--voxel=").to_float()
 		if a.begins_with("--lod_error=") and terrain:
 			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
 		if a.begins_with("--lod_errors=") and terrain:
@@ -109,10 +106,6 @@ func _enter_tree() -> void:
 			dig_settings["drag_union"] = a == "--drag_op=union"
 		if a == "--left_click=tube":
 			left_tube = true
-		if a.begins_with("--instances=") and terrain:
-			terrain.archetype_instances = a.trim_prefix("--instances=").to_int()
-		if a.begins_with("--instance_area=") and terrain:
-			terrain.archetype_instance_area = a.trim_prefix("--instance_area=").to_float()
 		if a == "--moments=0" and terrain:
 			terrain.archetype_moments = false
 		if a == "--instance_band=0" and terrain:
@@ -125,24 +118,6 @@ func _enter_tree() -> void:
 			terrain.archetype_erode = a.trim_prefix("--instance_erode=").to_float()
 		if a.begins_with("--instance_resolve=") and terrain:
 			terrain.archetype_resolve = a.trim_prefix("--instance_resolve=").to_float()
-		if a.begins_with("--trees=") and terrain:
-			terrain.archetype_trees = a.trim_prefix("--trees=").to_int()
-		if a.begins_with("--tree_area=") and terrain:
-			terrain.archetype_tree_area = a.trim_prefix("--tree_area=").to_float()
-		if a.begins_with("--biomes=") and terrain:
-			terrain.biome_radius = 1000.0 * a.trim_prefix("--biomes=").to_float()
-		if a.begins_with("--climate=") and terrain:
-			terrain.climate_path = a.trim_prefix("--climate=")
-		if a.begins_with("--planet_radius_km=") and terrain:
-			terrain.planet_radius = 1000.0 * a.trim_prefix("--planet_radius_km=").to_float()
-		if a.begins_with("--planet_ring_km=") and terrain:
-			terrain.planet_ring = 1000.0 * a.trim_prefix("--planet_ring_km=").to_float()
-		if a.begins_with("--atmosphere=") and terrain:
-			terrain.atmosphere = a.trim_prefix("--atmosphere=") == "1"
-		if a.begins_with("--atmosphere_scale=") and terrain:
-			terrain.atmosphere_scale = a.trim_prefix("--atmosphere_scale=").to_float()
-		if a.begins_with("--clouds=") and terrain:
-			terrain.clouds = a.trim_prefix("--clouds=") == "1"
 		if a == "--dual_contouring=1" and terrain:
 			terrain.dual_contouring = true
 	if terrain:

@@ -45,16 +45,16 @@
 </main>
 <script>
   // The forest scenes take the camera of the Godot presets (adapter/godot/project/debug/presets.gd: forest5cm, video) and
-  // the review settings (FSR 3 x2, pixelate 2, lod error 1 | 3). The climate world runs 10 LODs, not the video preset's
-  // 25: a lighter load in a browser.
-  const forest = 'voxel=0.05&cam_pos=-52,320,-95&above_ground=5&pitch=-5&yaw=-90';
+  // the review settings (FSR 3 x2, pixelate 2, lod error 1 | 3). The worlds are the Godot project's, preloaded.
+  const forest = 'cam_pos=-52,320,-95&above_ground=5&pitch=-5&yaw=-90';
   const review = 'upscale=fsr3&render_scale=0.5&pixelate=2&lod_error=1&lod_error_back=3';
-  const million = `${review}&trees=1000000&tree_area=5000&${forest}`;
+  const worlds = 'world=res://worlds/forest5cm';
+  const million = `${review}&${worlds}_1m.world.json&${forest}`;
   const scenes = [
     ['Forest', 'A million trees on 5 cm voxels, FSR 3 upscaling.', million],
-    ['Climate world', 'The same forest in a world of biomes.', `lods=25&climate=/climate/world.json&${million}`],
-    ['Small forest', '4,000 trees, no upscaler: for Firefox and smaller GPUs.', `pixelate=2&trees=4000&tree_area=316&${forest}`],
-    ['Continents', 'The bare terrain at 0.5 m voxels, from the ground to the horizon.', 'terrain=continents'],
+    ['Climate world', 'The same forest in a world of biomes.', `${review}&world=res://climate/world.json&${forest}`],
+    ['Small forest', '4,000 trees, no upscaler: for Firefox and smaller GPUs.', `pixelate=2&${worlds}.world.json&${forest}`],
+    ['Bare terrain', 'The bare terrain at 0.5 m voxels, from the ground to the horizon.', 'world=res://worlds/default.world.json'],
   ];
   for (const [name, text, query] of scenes) {
     const a = Object.assign(document.createElement('a'), { className: 'scene', href: `ov_dawn.html?${query}` });

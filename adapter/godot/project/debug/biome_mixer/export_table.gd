@@ -1,5 +1,6 @@
 extends RefCounted
-## A world back to a climate table, the engine's (res://climate/world.json; climate_parse.cpp describes the format):
+## A world back to a world file, the engine's (res://climate/world.json and its climate.json; src/world_file.hpp and
+## climate_parse.cpp describe the format):
 ## ImportTable read backwards. A biome's height is its Mix, through an optional Height curve, into the Output; each Mix
 ## row plays a Note through an optional Shape then an optional Multifractal. Each note becomes an "amp" entry (a run
 ## of equal ones one range, a plain note at volume 1 none: the engine's default), the curve its "curve", the Output's
@@ -38,7 +39,7 @@ static func table(p_world: Dictionary, p_base: Dictionary = {}) -> Dictionary:
 	var seen := {}
 	var n: int = p_world.biomes.size()
 	var warped := false
-	var stretch := ImportTable.stretch_by_k(p_world, p_world.voxel_m, p_world.lods)
+	var stretch := ImportTable.stretch_by_k(p_world)
 	for i in n:
 		var wb: Dictionary = p_world.biomes[i]
 		var bname := String(wb.name)
@@ -90,7 +91,7 @@ static func table(p_world: Dictionary, p_base: Dictionary = {}) -> Dictionary:
 # new ones (missing: added only if a note is warped). {names, missing, fields}.
 static func _warp_fields(p_world: Dictionary, p_fields: Array) -> Dictionary:
 	var cw := Kinds.climate_warp(p_world)
-	var vox: float = p_world.voxel_m
+	var vox: float = Octaves.voxel_m
 	var lo := int(cw.k) - int(cw.octaves) + 1
 	var band := {
 		"from_m": Octaves.wavelength_m(lo, vox), "to_m": Octaves.wavelength_m(int(cw.k), vox),
@@ -107,7 +108,7 @@ static func _warp_fields(p_world: Dictionary, p_fields: Array) -> Dictionary:
 	if not -1 in found:
 		for j in found:
 			var bands: Array = p_fields[j].get("bands", [])
-			var same: bool = bands.size() == 1 and ImportTable.band_ks(bands[0], vox, int(p_world.lods)) == ks \
+			var same: bool = bands.size() == 1 and ImportTable.band_ks(bands[0]) == ks \
 				and is_equal_approx(float(bands[0].get("amp", 0.0)), band.amp) \
 				and is_equal_approx(float(bands[0].get("persistence", 1.0)), band.persistence)
 			if not same:
@@ -148,9 +149,9 @@ static func _biome(p_model: Dictionary, p_world: Dictionary, p_warp: Array, p_st
 	if not r.errors.is_empty():
 		return r
 	var entries := []
-	for k in range(Octaves.ground_top(int(p_world.lods), float(p_world.voxel_m)), Octaves.K_MIN - 1, -1):
+	for k in range(Octaves.ground_top(Octaves.lods, Octaves.voxel_m), Octaves.K_MIN - 1, -1):
 		entries.append({"k": k, "e": per_k.get(k, {"x": 0.0})})
-	r.amp = _ranges(entries, p_world.voxel_m)
+	r.amp = _ranges(entries, Octaves.voxel_m)
 	return r
 
 
@@ -263,12 +264,32 @@ static func _ranges(p_entries: Array, p_voxel_m: float) -> Array:
 
 # A note's wavelength as the graph's titles show it.
 static func _m(p_k: int, p_world: Dictionary) -> String:
-	return Nodes.fmt_m(Octaves.wavelength_m(p_k, p_world.voxel_m))
+	return Nodes.fmt_m(Octaves.wavelength_m(p_k, Octaves.voxel_m))
 
 
-# The world over p_path (res://climate/world.json), once the engine accepts its text (ClimateReportNode.check: the
-# table parsed against the cascade of the world's voxel and LOD count; unchecked without the extension). {written,
-# message (for the status line), table, warnings}.
+# r_table split back into its files: {world (the world file's keys: p_base's own, the fields left to the climate), fields}.
+static func split(p_table: Dictionary, p_base: Dictionary) -> Dictionary:
+	var world := {}
+	for key in p_base:
+		if not key in ["fields", "ground_stretch", "biomes"]:
+			world[key] = p_base[key]
+	for key in ["ground_stretch", "biomes"]:
+		if p_table.has(key):
+			world[key] = p_table[key]
+	if p_base.get("climate") is Dictionary:
+		world.climate = {"fields": p_table.fields}
+	return {"world": world, "fields": p_table.fields}
+
+
+# The climate file p_world's "climate" names next to p_path, "" when it's inline.
+static func climate_path(p_world: Dictionary, p_path: String) -> String:
+	var climate = p_world.get("climate", "")
+	return Octaves.section_path(climate, p_path) if climate is String and climate != "" else ""
+
+
+# The world over p_path (res://climate/world.json) and, when the warp changed its fields, its climate file, once the
+# engine accepts the merged table (ClimateReportNode.check: parsed against the cascade of the mixer's engine; unchecked
+# without the extension). {written, message (for the status line), table (read_table's form), warnings}.
 static func write(p_world: Dictionary, p_base: Dictionary, p_path: String) -> Dictionary:
 	var r := table(p_world, p_base)
 	var out := {"written": false, "table": r.table, "warnings": r.warnings}
@@ -278,14 +299,23 @@ static func write(p_world: Dictionary, p_base: Dictionary, p_path: String) -> Di
 	var body := text(r.table)
 	var checked := ClassDB.class_exists("ClimateReportNode")
 	if checked:
-		var err: String = ClassDB.class_call_static("ClimateReportNode", "check", body, p_world.voxel_m, p_world.lods)
+		var err: String = ClassDB.class_call_static("ClimateReportNode", "check", body, Octaves.voxel_m, Octaves.lods)
 		if err != "":
 			out.message = "Not exported, the engine refuses it: " + err
 			return out
-	if not store(p_path, body):
+	var files := split(r.table, p_base)
+	var climate := climate_path(files.world, p_path)
+	if climate != "":
+		var had = JSON.parse_string(FileAccess.get_file_as_string(climate)) if FileAccess.file_exists(climate) else null
+		if (not had is Dictionary or had.get("fields") != files.fields) and not store(climate, text({"fields": files.fields})):
+			out.message = "Could not write " + climate
+			return out
+	if not store(p_path, text(files.world)):
 		out.message = "Could not write " + p_path
 		return out
 	out.written = true
+	out.table = files.world.duplicate()
+	out.table.fields = files.fields
 	out.message = "Exported %d biomes to %s%s%s" % [r.table.biomes.size(), p_path, "" if checked else " (unchecked: no extension)",
 		"; %d things left out (the log lists them)" % r.warnings.size() if not r.warnings.is_empty() else ""]
 	return out

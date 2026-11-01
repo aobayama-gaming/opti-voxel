@@ -31,7 +31,6 @@ struct GroundFixture {
 // A field's bands alone as a cascade spec (the reference of its group in the combined spec).
 Cascade::Spec own_spec(const Field &p_field) {
     Cascade::Spec spec;
-    spec.set = Cascade::ChannelSet::LINEAR4;
     spec.bands = p_field.bands;
     return spec;
 }
@@ -112,7 +111,7 @@ TEST_CASE("Climate: make_fbm's octaves are make_octave keyed by their index") {
 
 TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at 5 cm at any LOD count, its ranges keeping the ground's octaves") {
     ov::Value data;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == ov::str());
+    CLIMATE_REQUIRE(load_table("res://climate/plain.json", data) == ov::str());
     GroundFixture g(0.05, 15);
     Table t;
     CHECK(parse(data, g.ground, t) == ov::str());
@@ -481,7 +480,7 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
 TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slot, and the amplitude follows the biomes") {
     GroundFixture g(0.05, 15);
     ov::Value data;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", data) == ov::str());
+    CLIMATE_REQUIRE(load_table("res://climate/plain.json", data) == ov::str());
     Table t;
     CLIMATE_REQUIRE(parse(data, g.ground, t) == ov::str());
     const Cascade::Spec spec = combined_spec(t, *g.ground.spec);
@@ -547,23 +546,14 @@ TEST_CASE("Climate: carried only where the ground needs it, refused where it can
     flat.bands.clear();
     CHECK(flat.top_level() == -1);
     CHECK(flat.top_level(true) >= 0);
-    // A table that can't modulate: an empty one, and multipliers on an 8-channel ground.
+    // A table that can't load.
     ov::Value empty;
-    CHECK(ov::contains(load("res://climate/does_not_exist.json", empty), "cannot read"));
-    SDFCascade h8;
-    h8.channel_set = Cascade::ChannelSet::HERMITE8;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", h8.climate_data) == ov::str());
-    ChunkParam param;
-    param.voxel_size = 0.05f;
-    h8.configure(param, 15);
-    CHECK(h8.get_climate() == nullptr);
-    CHECK(ov::contains(h8.get_climate_error(), "LINEAR4"));
-    CHECK(h8.get_spec().fields.empty());
+    CHECK(ov::contains(load_table("res://climate/does_not_exist.json", empty), "cannot read"));
 }
 
 TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample pick (box runs equal point queries)") {
     SDFCascade sdf;
-    CLIMATE_REQUIRE(load("res://climate/plain.json", sdf.climate_data) == ov::str());
+    CLIMATE_REQUIRE(load_table("res://climate/plain.json", sdf.climate_data) == ov::str());
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);
@@ -601,7 +591,7 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
                 box.lo[a] = (a == 1 ? (sdf.get_datum_y() >> lod) : (origin >> lod)) - 3;
                 box.hi[a] = box.lo[a] + 5;
             }
-            const Cascade::Level level = Cascade::run(spec, box, lod, nullptr, Cascade::Source(), true);
+            const Cascade::Level level = Cascade::run(spec, box, lod, nullptr, true);
             Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
                 float slots[Cascade::SLOTS];
                 level.slots_at(p_i, slots);
@@ -664,7 +654,6 @@ TEST_CASE("Cascade: one band per group and lattice") {
                                g.ground, t),
             "twice"));
     Cascade::Spec one;
-    one.set = Cascade::ChannelSet::LINEAR4;
     one.bands = { ExactNoise::make_octave(11u, 0u, 9, 40.0f) };
     Cascade::Spec two = one;
     two.bands.push_back(ExactNoise::make_octave(12u, 0u, 9, 25.0f)); // the same lattice Λ_6
@@ -684,7 +673,7 @@ TEST_CASE("Cascade: one band per group and lattice") {
 // modulation, not on the fields), or the GPU draws the bare ground.
 TEST_CASE("Climate: a modulation without fields takes the modulated GPU variant") {
     SDFCascade sdf;
-    CHECK(load("res://climate/fieldless_test.json", sdf.climate_data) == ov::str());
+    CHECK(load_table("res://climate/fieldless_test.json", sdf.climate_data) == ov::str());
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);

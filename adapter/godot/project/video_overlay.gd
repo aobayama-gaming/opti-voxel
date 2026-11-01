@@ -119,7 +119,7 @@ func _setting_lines() -> String:
 		error_text,
 		"mesher budget %s" % ("%s ms per frame" % _num(budget) if budget > 0.0 else "off"),
 	]
-	var trees: int = terrain.archetype_trees
+	var trees: int = terrain.get_world_trees()
 	if trees > 0:
 		lines.append("%s trees" % _thousands(trees))
 	return "\n".join(lines)

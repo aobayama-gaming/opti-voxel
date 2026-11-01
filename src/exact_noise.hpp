@@ -317,45 +317,6 @@ inline Float4 perlin3(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vec
     return perlin3_value_gradient(perlin3_cell(p_pos, p_k, p_seed, p_offset));
 }
 
-// The 8 channels of one 3D octave, per cell: value, d/dx, d/dy, d/dz, d2/dxdy, d2/dxdz, d2/dydz,
-// d3/dxdydz (the order of Cascade::Channel). The first four are perlin3's, bit for bit. A mixed
-// derivative differentiates each axis once, through its fade (du) or through a coefficient k_j (g):
-// no second derivative of the fade appears. Products of at most four factors from {u, du, k_j,
-// integer g}, each 0 or >= 2^-24: the denormal rule holds as for perlin3.
-// GLSL twin: GLSL_PERLIN3_CROSS, built from the same cell setup and value / gradient code as GLSL perlin3
-// (FrameSpike probes perlin3_cross_k*).
-struct Channels8 {
-    float c[8];
-};
-
-inline Channels8 perlin3_cross(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
-    const Perlin3Cell p = perlin3_cell(p_pos, p_k, p_seed, p_offset);
-    const Float4 vg = perlin3_value_gradient(p);
-    const float ux = p.u[0];
-    const float uy = p.u[1];
-    const float uz = p.u[2];
-    const float dux = p.du[0];
-    const float duy = p.du[1];
-    const float duz = p.du[2];
-    const float *k = p.k;
-    const float *gx = p.g[0];
-    const float *gy = p.g[1];
-    const float *gz = p.g[2];
-    Channels8 r;
-    r.c[0] = vg.w;
-    r.c[1] = vg.x;
-    r.c[2] = vg.y;
-    r.c[3] = vg.z;
-    r.c[4] = duy * (gx[2] + gx[4] * ux + gx[5] * uz + gx[7] * ux * uz) + dux * (gy[1] + gy[4] * uy + gy[6] * uz + gy[7] * uy * uz) +
-            dux * duy * (k[4] + k[7] * uz);
-    r.c[5] = duz * (gx[3] + gx[6] * ux + gx[5] * uy + gx[7] * ux * uy) + dux * (gz[1] + gz[4] * uy + gz[6] * uz + gz[7] * uy * uz) +
-            dux * duz * (k[6] + k[7] * uy);
-    r.c[6] = duz * (gy[3] + gy[5] * uy + gy[6] * ux + gy[7] * ux * uy) + duy * (gz[2] + gz[4] * ux + gz[5] * uz + gz[7] * ux * uz) +
-            duy * duz * (k[5] + k[7] * ux);
-    r.c[7] = duy * duz * (gx[5] + gx[7] * ux) + dux * duz * (gy[6] + gy[7] * uy) + dux * duy * (gz[4] + gz[7] * uz) + dux * duy * duz * k[7];
-    return r;
-}
-
 // One 2D octave over (x, z): (d/dx, 0, d/dz per cell, value), value in about [-1.5, 1.5] (std 0.48).
 inline Float4 perlin2(const WorldPos &p_pos, int p_k, uint32_t p_seed, const Vector3i64 &p_offset) {
     int64_t cx, cz;

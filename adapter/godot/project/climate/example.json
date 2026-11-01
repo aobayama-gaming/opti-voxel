@@ -1,6 +1,7 @@
 {
  "comment": "A world with the cascade's shaped bands: a continent field and a terrain-type field (the continents, twisted) choose mountains (ridged multifractal, lifted by their curve), hills (billow), badlands (stepped by their curve) and plains (low billow), with turbulence from three warp fields. Tuned for 5 cm voxels; ranges keep the octaves the ground has at any LOD count.",
- "fields": [
+ "engine": {"voxel_m": 0.05, "lods": 25},
+ "climate": {"fields": [
   {
    "name": "continent",
    "seed": 209,
@@ -79,7 +80,7 @@
     }
    ]
   }
- ],
+ ]},
  "biomes": [
   {
    "name": "mountains",

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Climate report (ClimateReport): biome and field maps of a climate table (src/climate.cpp describes the format).
+# Climate report (ClimateReport): biome and field maps of a world file's climate (src/world_file.hpp describes the format).
 # Pure CPU, headless (no GPU, no window).
 #
-#   tools/climate_report.sh [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--center=U,V] [--lattice=M]
+#   tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--center=U,V] [--lattice=M]
 #
 # Outputs land in bench/results/<timestamp>-climate/: report.md, biomes_*.png, ground_height.png, ground_shaded.png,
 # ground_normals.png, field_*.png, godot.log.
@@ -16,8 +16,8 @@ ARGS=()
 for a in "$@"; do
     case "$a" in
         --no-build) BUILD=0 ;;
-        --climate=*|--voxel=*|--lods=*|--extent_km=*|--size=*|--surface=*|--center=*|--lattice=*) ARGS+=("$a") ;;
-        *) echo "usage: $0 [--no-build] [--climate=PATH] [--voxel=M] [--lods=N] [--extent_km=KM] [--size=N] [--surface=0|1] [--center=U,V] [--lattice=M]"; exit 1 ;;
+        --world=*|--extent_km=*|--size=*|--surface=*|--center=*|--lattice=*) ARGS+=("$a") ;;
+        *) echo "usage: $0 [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--center=U,V] [--lattice=M]"; exit 1 ;;
     esac
 done
 

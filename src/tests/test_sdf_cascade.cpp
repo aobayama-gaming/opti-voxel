@@ -140,7 +140,7 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
 }
 
 // The micro engine stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
-// same octaves, so the same bits; the continents preset keeps its macro octaves (lod_count + 4).
+// same octaves, so the same bits.
 TEST_CASE("SDFCascade: the ground stops at the micro engine's top, the same at any LOD count past it") {
     CHECK(SDFCascade::micro_top_k(0.05) == 19);
     CHECK(SDFCascade::micro_top_k(0.5) == 16);
@@ -153,14 +153,11 @@ TEST_CASE("SDFCascade: the ground stops at the micro engine's top, the same at a
         }
         return k;
     };
-    SDFCascade s15, s25, continents;
+    SDFCascade s15, s25;
     s15.configure(param, 15);
     s25.configure(param, 25);
-    continents.preset = SDFCascade::Preset::CONTINENTS;
-    continents.configure(param, 25);
     CHECK(top(s15) == 19);
     CHECK(top(s25) == 19);
-    CHECK(top(continents) == 29);
     CHECK(s25.climate_ground().field_k_max == 29);
     for (int lod = 0; lod < 15; lod += 2) {
         const int64_t step = int64_t(1) << lod;
@@ -302,7 +299,7 @@ TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
         hash = (hash ^ float_bits(p_v)) * 0x100000001B3ull;
     };
     int samples = 0;
-    for (const SDFCascade::Preset preset : { SDFCascade::Preset::DEFAULT, SDFCascade::Preset::CONTINENTS, SDFCascade::Preset::FLAT }) {
+    for (const SDFCascade::Preset preset : { SDFCascade::Preset::DEFAULT, SDFCascade::Preset::FLAT }) {
         for (const float voxel : { 0.5f, 0.05f }) {
             ChunkParam param;
             param.voxel_size = voxel;
@@ -330,6 +327,6 @@ TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
             }
         }
     }
-    CHECK(samples == 3 * 2 * 4 * 13 * 7);
-    CHECK(hash == 8515753277977725678ull); // the ground stops at the micro engine's top: 25 LODs reseeded from k = 19
+    CHECK(samples == 2 * 2 * 4 * 13 * 7);
+    CHECK(hash == 7569340743310854193ull); // the ground stops at the micro engine's top: 25 LODs reseeded from k = 19
 }

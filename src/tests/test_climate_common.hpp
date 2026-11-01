@@ -27,7 +27,7 @@ inline ov::Value json(const ov::str &p_text) {
 struct ClimateSDF {
     SDFCascade sdf;
     ClimateSDF(const char *p_path, int p_lods, float p_skirt_cells = -1.0f) {
-        CHECK(Climate::load(p_path, sdf.climate_data) == ov::str());
+        CHECK(load_table(p_path, sdf.climate_data) == ov::str());
         configure(p_lods, p_skirt_cells);
     }
     ClimateSDF(const ov::Value &p_data, int p_lods) {
@@ -69,7 +69,7 @@ inline int64_t box_point_mismatches(const Cascade::Spec &p_spec, const Vector3i6
     for (int a = 0; a < 3; a++) {
         box.hi[a] = box.lo[a] + p_n - 1;
     }
-    const Cascade::Level l = Cascade::run(p_spec, box, p_lod, nullptr, Cascade::Source(), p_all_fields);
+    const Cascade::Level l = Cascade::run(p_spec, box, p_lod, nullptr, p_all_fields);
     int64_t bad = 0;
     Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
         float slots[Cascade::SLOTS];
