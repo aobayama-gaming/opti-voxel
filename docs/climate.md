@@ -136,7 +136,7 @@ terms; the declutter's own before / after is in its PR):
 
 `adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: a world's biomes built from the ground's octaves in
 node graphs (GraphEdit), raymarched live beside them; a design tool, not the engine's path (the table is the engine's
-input; turning the world back into a table is the next step). It holds a **world** (`world.gd`: world.json's fields,
+input: the World menu's export writes the world back into it). It holds a **world** (`world.gd`: world.json's fields,
 climate warp and every biome, its place and its graph) and has two modes:
 - **Biome**: the current biome's notes in the graph (the picker in the bar), the view of that biome alone.
 - **World**: the climate chart and the view of the whole world, every biome blended as the engine blends them
@@ -190,7 +190,27 @@ climate warp and every biome, its place and its graph) and has two modes:
   removes it and the Mix row it played, never a note (`Kinds.cut_nodes`); `--check` checks both on the mountain and
   plain ground, every graph's fixed notes, an old file's Climate warp node loading as its notes' warp switches, and the
   world (`checks.gd` `world`: world.json in one shader, its shared notes and places, a file round trip, the weights'
-  properties).
+  properties) and the export (`checks.gd` `export_world`, below).
+- **Export** (`export_table.gd`, World menu: *Export this world to res://climate/world.json*): `ImportTable` read
+  backwards. Each biome's height must be its Mix, through a Height curve or not, into the Output, each row a Note
+  through a Shape then a Multifractal (each optional); anything else (Add, Multiply, a Constant, a note in two rows)
+  stops the export, as does a table the engine refuses: its text is parsed by `ClimateReportNode.check` (static,
+  `ClimateReport::check`: the cascade of the world's voxel and LOD count configured on it) before it is written over
+  world.json. Each note is an
+  `amp` entry (a run of equal notes one range, a plain note at volume 1 none, the engine's default), the places `at`
+  (the last biome the default, without one), the curve, the Output's colours over the table's surface (its other keys,
+  roughness, kept), clouds and debug colour; the climate warp sets the three fields of its seeds (or adds `wx`, `wy`,
+  `wz` when a note is warped and the world has none). Left out with a line in the log: Carve, a Note warp (exported
+  reading the climate warp), an uncentred row, a note's own stretch (`ground_stretch` is the world's), a multifractal
+  linked to another than the next coarser one. Mute and solo export as heard (a silent row at volume 0). An identity
+  Shape (`"shape": "plain"`) goes. A note's entry is always a range (`from_m` .. `to_m`, one octave or more): the
+  engine trims a range to a LOD count's octaves but refuses a single `wavelength_m` past them. Numbers keep 7
+  significant digits; a value fits on one line up to 120 characters.
+  `--check` exports world.json's own world: every biome's notes, as the engine reads them per octave, places, curves,
+  surfaces and clouds equal the table's; exporting that export again gives the same file; the engine
+  accepts it, refuses a span of 0 (nothing written), and the every-kind graph is refused. world.json is that export:
+  its climate report (biome maps, fields, ground height, shading, normals) is byte-identical to the hand-written
+  file's.
 - **The climate's warp** (wx, wy, wz): a model's `climate_warp`, world.json's three warp fields by default
   (`Kinds.CLIMATE_WARP`), shared by every biome: one table slot however many notes it moves; the preview reads its 12
   octaves per pixel, the engine interpolates them from their coarse lattices. It was a node (*Climate warp*) wired

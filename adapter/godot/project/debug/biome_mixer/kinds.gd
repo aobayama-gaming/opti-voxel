@@ -332,6 +332,14 @@ static func _drop_row(p_model: Dictionary, p_mix: String, p_row: int) -> void:
 			l.to_port = int(l.to_port) - 1
 
 
+# What feeds input p_port of node p_id (one link per input): {id, port}, the node and output linked into it, or null.
+static func input_of(p_model: Dictionary, p_id: String, p_port: int) -> Variant:
+	for l in p_model.links:
+		if l.to == p_id and int(l.to_port) == p_port and p_model.nodes.has(l.from):
+			return {"id": l.from, "port": int(l.from_port)}
+	return null
+
+
 # The id of the model's first node of a kind, or "".
 static func first_of(p_model: Dictionary, p_kind: String) -> String:
 	for id in p_model.nodes:

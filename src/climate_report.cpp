@@ -5,6 +5,7 @@
 #include "sdf_cascade.hpp"
 
 #include "ov/files.hpp"
+#include "ov/json.hpp"
 #include "ov/math.hpp"
 #include "ov/on_error.hpp"
 #include "ov/png.hpp"
@@ -368,18 +369,35 @@ ov::str relief_section(const Table &p_table, const Sampled &p_s, int p_n, double
 
 } // namespace
 
+// The cascade of a voxel size and LOD count on a climate table (parsed JSON): empty, or why the table was refused.
+static ov::str configure(SDFCascade &r_sdf, const ov::Value &p_data, double p_voxel_size, int p_lods) {
+    ChunkParam param;
+    param.voxel_size = float(p_voxel_size);
+    r_sdf.climate_data = p_data;
+    r_sdf.configure(param, p_lods);
+    return r_sdf.get_climate_error();
+}
+
+ov::str ClimateReport::check(const ov::str &p_json, double p_voxel_size, int p_lods) {
+    ov::str json_error;
+    const ov::Value data = ov::parse_json(p_json, json_error);
+    if (data.get_type() != ov::Value::OBJECT || data.is_empty()) {
+        return "climate: not a JSON object with a table." + (json_error.empty() ? ov::str() : " " + json_error);
+    }
+    SDFCascade sdf;
+    return configure(sdf, data, p_voxel_size, p_lods);
+}
+
 ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size,
         bool p_surface, double p_center_x, double p_center_z, int p_lattice) {
     ov::Value report = ov::Value::object();
     report["ok"] = false;
     ov::make_dirs(p_out_dir);
-    ChunkParam param;
-    param.voxel_size = float(p_voxel_size);
     SDFCascade sdf;
-    ov::str err = load(p_climate_path, sdf.climate_data);
+    ov::Value data;
+    ov::str err = load(p_climate_path, data);
     if (err.empty()) {
-        sdf.configure(param, p_lods);
-        err = sdf.get_climate_error();
+        err = configure(sdf, data, p_voxel_size, p_lods);
     }
     if (!err.empty()) {
         report["error"] = err;

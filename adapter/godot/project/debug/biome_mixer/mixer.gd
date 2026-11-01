@@ -14,7 +14,8 @@ extends Control
 ##                      setting (view.shadows=false); repeatable
 ##   --shot=PATH        draw once, save the window to PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test: the noise pins, every template and world.json biome compiled, files
-##                      round-tripped; prints MIXER: {json} and quits 0 if ok
+##                      round-tripped, world.json exported back; prints MIXER: {json} and quits 0 if ok
+## The World menu exports the world over res://climate/world.json, the game's climate (export_table.gd).
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
@@ -27,6 +28,7 @@ const World := preload("res://debug/biome_mixer/world.gd")
 const WorldPanel := preload("res://debug/biome_mixer/world_panel.gd")
 const Checks := preload("res://debug/biome_mixer/checks.gd")
 const ViewBar := preload("res://debug/biome_mixer/view_bar.gd")
+const ExportTable := preload("res://debug/biome_mixer/export_table.gd")
 
 const WORLD := "res://climate/world.json"
 const BIOMES_DIR := "res://climate/biomes"
@@ -506,11 +508,7 @@ func _import(p_name: String) -> Dictionary:
 
 
 func _write(p_path: String, p_data: Dictionary) -> bool:
-	var f := FileAccess.open(p_path, FileAccess.WRITE)
-	if f == null:
-		return false
-	f.store_string(JSON.stringify(p_data, "\t", false, true))
-	return true
+	return ExportTable.store(p_path, JSON.stringify(p_data, "\t", false, true))
 
 
 func _autosave() -> void:
@@ -528,6 +526,16 @@ func _save_world() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORLDS_DIR))
 	var path := "%s/%s.world.json" % [WORLDS_DIR, String(world.get("name", "world")).validate_filename()]
 	status.text = ("Saved " + path) if _write(path, world) else ("Could not write " + path)
+
+
+# The world over WORLD, the game's climate table (ExportTable.write: the engine checks it first).
+func _export_world() -> void:
+	var r := ExportTable.write(world, _world_table(), WORLD)
+	for m in r.warnings:
+		print("export: ", m)
+	if r.written:
+		table = r.table
+	status.text = r.message
 
 
 # The chart's cloud: the world's fields on its two axes at the preview's samples (a frame later: the shader draws them).
@@ -670,20 +678,23 @@ func _fill_worlds(p_menu: MenuButton) -> void:
 	popup.clear()
 	for c in popup.id_pressed.get_connections():
 		popup.id_pressed.disconnect(c.callable)
-	popup.add_item("Reload res://climate/world.json")
-	popup.add_item("Save this world to %s" % WORLDS_DIR)
+	var actions := [
+		["Reload %s" % WORLD, func() -> void: set_world(_fresh_world(), true)],
+		["Save this world to %s" % WORLDS_DIR, _save_world],
+		["Export this world to %s (the game's)" % WORLD, _export_world],
+	]
+	for a in actions:
+		popup.add_item(a[0])
 	var files: Array = []
 	if DirAccess.dir_exists_absolute(WORLDS_DIR):
 		files = Array(DirAccess.get_files_at(WORLDS_DIR)).filter(func(f): return f.ends_with(".world.json"))
 	for f in files:
 		popup.add_item("Open " + f)
 	popup.id_pressed.connect(func(i: int) -> void:
-		if i == 0:
-			set_world(_fresh_world(), true)
-		elif i == 1:
-			_save_world()
+		if i < actions.size():
+			actions[i][1].call()
 		else:
-			var w := _read("%s/%s" % [WORLDS_DIR, files[i - 2]], true)
+			var w := _read("%s/%s" % [WORLDS_DIR, files[i - actions.size()]], true)
 			if not w.is_empty():
 				set_world(w, true))
 

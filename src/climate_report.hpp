@@ -18,4 +18,8 @@ namespace ClimateReport {
 ov::Value run(const ov::str &p_out_dir, const ov::str &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size, bool p_surface,
         double p_center_x, double p_center_z, int p_lattice = -1);
 
+// Empty if p_json (a climate table's text) parses and the cascade of a voxel size and LOD count accepts it, else why
+// not (the biome mixer checks an export with it before it overwrites world.json).
+ov::str check(const ov::str &p_json, double p_voxel_size, int p_lods);
+
 } // namespace ClimateReport

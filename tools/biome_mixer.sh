@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Biome mixer (adapter/godot/project/debug/biome_mixer/): build one biome from the ground's octaves in a node graph,
-# raymarched live beside it. GDScript and one shader: no build needed, the extension isn't used.
+# raymarched live beside it. GDScript and one shader: no build needed; the extension, when built, only checks an export
+# to world.json (ClimateReportNode.check) before it is written.
 #
 #   tools/biome_mixer.sh [--open=PATH] [--import=BIOME] [--set=ID.PARAM=V] [--shot=PATH]   a window
 #   tools/biome_mixer.sh --check                                                          headless self-test

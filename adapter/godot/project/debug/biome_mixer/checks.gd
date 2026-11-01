@@ -1,6 +1,7 @@
 extends RefCounted
 ## The biome mixer's headless self-test (mixer.gd --check): the noise pins, every template and world.json biome
-## compiled and round-tripped through a file, the fixed notes, the cuts, old files, the world shader. run() returns the
+## compiled and round-tripped through a file, the fixed notes, the cuts, old files, the world shader, the export back to
+## a table. run() returns the
 ## report (its "ok" the verdict).
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
@@ -8,6 +9,10 @@ const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 const Compile := preload("res://debug/biome_mixer/compile.gd")
 const ImportTable := preload("res://debug/biome_mixer/import_table.gd")
 const World := preload("res://debug/biome_mixer/world.gd")
+const ExportTable := preload("res://debug/biome_mixer/export_table.gd")
+
+# Where the check writes world.json's export for the engine to parse.
+const EXPORT_PATH := "user://biome_mixer_export_check.json"
 
 
 static func run(p_table: Dictionary) -> Dictionary:
@@ -64,6 +69,8 @@ static func run(p_table: Dictionary) -> Dictionary:
 	ok = ok and report.cuts.ok and report.old_kinds.ok and report.ground_top == [19, 16]
 	report["world"] = world(p_table)
 	ok = ok and report.world.ok
+	report["export"] = export_world(p_table)
+	ok = ok and report.export.ok
 	report["ok"] = ok
 	return report
 
@@ -202,3 +209,95 @@ static func world(p_table: Dictionary) -> Dictionary:
 	}
 	entry.ok = r.ok and r.drawable and r.budget.notes < notes and places_ok and needles.is_empty() and entry.same_after_file and props
 	return entry
+
+
+# world.json as a world exported back (ExportTable): every biome plays the same notes as the table's (each octave's
+# volume, shape, multifractal and warp as the engine reads them), the same places, curve, surface and clouds; the world
+# exported again is the same file. The mixer's export path writes it, the engine accepting it (ClimateReportNode.check,
+# when the extension is loaded), and refuses a graph the table can't hold (every kind's) and a span of 0 (nothing
+# written).
+static func export_world(p_table: Dictionary) -> Dictionary:
+	var w := World.from_table(p_table)
+	var wr := ExportTable.write(w, p_table, EXPORT_PATH)
+	var entry := {"written": wr.written, "message": wr.message, "warnings": wr.warnings}
+	var text := FileAccess.get_file_as_string(EXPORT_PATH) if wr.written else ""
+	var back = JSON.parse_string(text)
+	entry.lines = text.count("\n")
+	if not back is Dictionary:
+		entry.ok = false
+		return entry
+	var differ := []
+	var want := notes_of(p_table, w)
+	var got := notes_of(back, w)
+	for b in want:
+		if not got.has(b) or not _close(want[b], got[b]):
+			differ.append(b)
+	for i in w.biomes.size():
+		var a: Dictionary = p_table.biomes[i]
+		var e: Dictionary = back.biomes[i]
+		for key in ["at", "curve", "surface", "clouds", "debug_color"]:
+			if not _close(a.get(key), e.get(key)):
+				differ.append("%s.%s" % [a.name, key])
+	for key in ["comment", "fields", "ground_stretch"]:
+		if not _close(p_table.get(key), back.get(key)):
+			differ.append(key)
+	entry.differ = differ
+	# The export is the table's notes in their plainest form (a plain shape is no Shape): exporting its world again
+	# gives the same file (so the same shader).
+	entry.stable = ExportTable.text(ExportTable.table(World.from_table(back), back).table) == text
+	entry.refused = not ExportTable._biome(every_kind(), w, [], {}).errors.is_empty()
+	var placed: Array = w.biomes.filter(func(b): return not b.at.is_empty())
+	if ClassDB.class_exists("ClimateReportNode") and not placed.is_empty():
+		var zero_path := EXPORT_PATH + ".zero"
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(zero_path))
+		var at: Dictionary = placed[0].at
+		at[at.keys()[0]][1] = 0.0
+		var wz := ExportTable.write(w, p_table, zero_path)
+		entry.engine_refusal = wz.message
+		entry.refused = entry.refused and not wz.written and not FileAccess.file_exists(zero_path)
+	entry.ok = wr.written and differ.is_empty() and entry.stable and entry.refused
+	return entry
+
+
+# Each biome's notes as the engine reads its "amp" entries: {biome: {k: [x, coeffs, multifractal, warp_m, warp_fields]}}
+# over the ground's octaves (a note no entry names: volume 1, plain). The constant coefficient only counts in a
+# multifractal (elsewhere the band goes in without its mean).
+static func notes_of(p_table: Dictionary, p_world: Dictionary) -> Dictionary:
+	var out := {}
+	var top := Octaves.ground_top(int(p_world.lods), float(p_world.voxel_m))
+	for b in p_table.get("biomes", []):
+		var per := {}
+		for k in range(Octaves.K_MIN, top + 1):
+			per[k] = [1.0, [0.0, 1.0, 0.0, 0.0], 0.0, 0.0, []]
+		for a in b.get("amp", []):
+			var mf := float(a.get("multifractal", 0.0))
+			var c := Kinds.shape_coeffs({"kind": "shape", "params": ImportTable.shape_params(a)}).map(func(v): return float(v))
+			if mf == 0.0:
+				c[0] = 0.0
+			var warp := float(a.get("warp_m", 0.0))
+			for k in ImportTable.band_ks(a, p_world.voxel_m, p_world.lods):
+				if k <= top:
+					per[k] = [float(a.get("x", 1.0)), c, mf, warp, a.get("warp_fields", []) if warp > 0.0 else []]
+		out[b.name] = per
+	return out
+
+
+# Equal, numbers within 1e-6 (the file keeps ExportTable.DECIMALS decimals).
+static func _close(p_a: Variant, p_b: Variant) -> bool:
+	if (p_a is float or p_a is int) and (p_b is float or p_b is int):
+		return absf(float(p_a) - float(p_b)) <= 1e-6 * maxf(1.0, absf(float(p_a)))
+	if p_a is Array and p_b is Array:
+		if p_a.size() != p_b.size():
+			return false
+		for i in p_a.size():
+			if not _close(p_a[i], p_b[i]):
+				return false
+		return true
+	if p_a is Dictionary and p_b is Dictionary:
+		if p_a.size() != p_b.size():
+			return false
+		for key in p_a:
+			if not p_b.has(key) or not _close(p_a[key], p_b[key]):
+				return false
+		return true
+	return p_a == p_b

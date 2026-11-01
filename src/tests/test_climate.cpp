@@ -2,6 +2,7 @@
 
 #include "cascade_glsl.hpp"
 #include "climate.hpp"
+#include "climate_report.hpp"
 #include "sdf_cascade.hpp"
 
 #include <cmath>
@@ -157,6 +158,17 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     Table single;
     const char *past_top = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26000, "amp": 1}]}], "biomes": [{"name": "a"}]})";
     CHECK(ov::contains(parse_json(past_top, g14.ground, single), "outside the cascade's range"));
+}
+
+TEST_CASE("ClimateReport: check takes a table's text, accepts a good one, refuses bad JSON and a refused table with the reason") {
+    const char *good = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 5000, "amp": 1}]}],
+        "biomes": [{"name": "a", "at": {"t": [0, 0.5]}}, {"name": "b"}]})";
+    CHECK(ClimateReport::check(good, 0.05, 25) == ov::str());
+    CHECK(ov::contains(ClimateReport::check("{\"fields\": [", 0.05, 25), "not a JSON object"));
+    CHECK(ov::contains(ClimateReport::check("[1, 2]", 0.05, 25), "not a JSON object"));
+    const char *zero_span = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 5000, "amp": 1}]}],
+        "biomes": [{"name": "a", "at": {"t": [0, 0]}}, {"name": "b"}]})";
+    CHECK(ov::contains(ClimateReport::check(zero_span, 0.05, 25), "span must be > 0"));
 }
 
 TEST_CASE("Climate: malformed tables are refused with the reason") {
