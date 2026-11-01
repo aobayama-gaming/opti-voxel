@@ -89,11 +89,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 			continue
 		for k in _ks(a):
 			per_k[k] = a
-	# The ground's stretched octaves (the table's "ground_stretch": a stretch_y per wavelength range).
-	var stretch := {}
-	for s in p_table.get("ground_stretch", []):
-		for k in _ks(s):
-			stretch[k] = int(s.get("stretch_y", 1))
+	var stretch := stretch_by_k(p_table, voxel_m, lods)
 	var mix := add("mix", Vector2(COL.mix, 0.0))
 	var rows: Array = model.nodes[mix].params.rows
 	var warps := {}
@@ -111,7 +107,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 		var note := add("note", Vector2(COL.note, y), {"k": k, "warp": warped, "warp_m": float(a.get("warp_m", 0.0)), "stretch_y": stretch.get(k, 1)})
 		var last := note
 		if a.has("shape") or a.has("scale") or a.has("offset") or a.has("coeffs"):
-			last = add("shape", Vector2(COL.shape, y), _shape(a))
+			last = add("shape", Vector2(COL.shape, y), shape_params(a))
 			link(note, 0, last, 0)
 		if a.get("multifractal", 0.0) > 0.0:
 			var mf := add("multifractal", Vector2(COL.multifractal, y), {"gain": float(a.multifractal)})
@@ -140,7 +136,8 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	link(last_id, 0, out, 0)
 
 
-func _shape(p_a: Dictionary) -> Dictionary:
+# An amp entry's shape (coeffs, or shape, scale and offset, defaulted as the engine's parser does) as a Shape's params.
+static func shape_params(p_a: Dictionary) -> Dictionary:
 	if p_a.has("coeffs"):
 		var c: Array = p_a.coeffs
 		return {"preset": "coeffs", "c0": float(c[0]), "c1": float(c[1]), "c2": float(c[2]), "c3": float(c[3])}
@@ -170,6 +167,16 @@ func _warp(p_names: Array, p_fields: Dictionary) -> bool:
 		return false
 	model.climate_warp = {"k": ks.max(), "octaves": ks.max() - ks.min() + 1, "amp": float(band.get("amp", 0.5)), "persistence": float(band.get("persistence", 0.5)), "seed": seed}
 	return true
+
+
+# The ground's stretched octaves of a table or a world (its "ground_stretch": a stretch_y per wavelength range), as
+# {k: stretch_y}.
+static func stretch_by_k(p_table: Dictionary, p_voxel_m: float, p_lods: int) -> Dictionary:
+	var stretch := {}
+	for s in p_table.get("ground_stretch", []):
+		for k in band_ks(s, p_voxel_m, p_lods):
+			stretch[k] = int(s.get("stretch_y", 1))
+	return stretch
 
 
 # The octaves a table entry covers: its wavelength_m's, or every one in from_m .. to_m that the ground has (the

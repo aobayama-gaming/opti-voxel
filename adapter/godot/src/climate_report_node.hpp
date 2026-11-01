@@ -16,4 +16,6 @@ protected:
 public:
     Dictionary run(const String &p_out_dir, const String &p_climate_path, double p_voxel_size, int p_lods, double p_extent_km, int p_size, bool p_surface,
             const Vector2 &p_center, int p_lattice = -1);
+    // ClimateReport::check: "" if the table's text is accepted, else why not (static: ClassDB.class_call_static).
+    static String check(const String &p_json, double p_voxel_size, int p_lods);
 };
