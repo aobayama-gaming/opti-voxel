@@ -14,6 +14,8 @@ static var STEEPNESS: float
 static var MAX_AMP_M: float
 static var K_MIN: int
 static var _ground_top: int
+# Where a biome is whole on a field (within core of its span: the chart's filled box), the engine's kernel.
+static var core := 0.7
 static var _octave_top: int
 
 
@@ -33,6 +35,7 @@ static func _static_init() -> void:
 	K_MIN = int(t.k_min)
 	_ground_top = int(t.k_top)
 	_octave_top = int(t.octave_top)
+	core = float(t.core)
 
 
 # p_world[p_key]: inline, or the file its string names (relative to the world file p_path), as WorldFile reads it.
@@ -48,11 +51,11 @@ static func section_path(p_name: String, p_path: String) -> String:
 
 
 # The engine's coarsest octave of a note or a field (SDFCascade::top_octave), and the ground's (the template's).
-static func k_top(_p_lods: int = lods) -> int:
+static func k_top() -> int:
 	return _octave_top
 
 
-static func ground_top(_p_lods: int = lods, _p_voxel_m: float = voxel_m) -> int:
+static func ground_top() -> int:
 	return _ground_top
 
 

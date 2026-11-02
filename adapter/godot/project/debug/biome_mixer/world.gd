@@ -11,12 +11,10 @@ const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 const ImportTable := preload("res://debug/biome_mixer/import_table.gd")
 
-# Where a biome is whole on a field (Climate::KERNEL_FADE 2: within 1 / sqrt(2) of its span): the chart draws it.
-const CORE := sqrt(0.5)
-# The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".
 # A table biome's keys the mixer edits (the rest ride along: "keep").
 const EDITED := ["name", "at", "graph", "surface", "clouds", "debug_color"]
-const WORLD_VIEW := {"extent_m": 400000.0, "map": true, "chart_x": 0, "chart_y": 1}
+# The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".
+const WORLD_VIEW := {"extent_m": 400000.0, "chart_x": 0, "chart_y": 1}
 
 
 # The world file p_path as one table: its keys and its climate's fields (the climate a path next to it, or inline).

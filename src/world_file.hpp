@@ -47,9 +47,7 @@ struct WorldFile {
     // The relief the sky stays above (metres; AtmosphereMedium::for_base, CloudLayer::for_base), a planet's
     // SDFCascade::PLANET_RELIEF of its radius at most (SDFCascade::relief_m): the template ground's 3.3 km cap.
     double relief_m = Climate::TEMPLATE_MAX_AMP_M;
-    double zone_x_m = SDFTable::Zone().x_m; // SDFTable::set_zone
-    double zone_z_m = SDFTable::Zone().z_m;
-    double zone_side_m = 0.0;
+    SDFTable::Zone zone; // SDFTable::set_zone
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     std::vector<Climate::FeatureShare> features; // SDFTable::set_features
     std::vector<Archetype::Species> species = Archetype::default_species(); // SDFTable::set_species

@@ -1,12 +1,13 @@
 extends Control
 ## The climate chart: two of a world's fields as axes, each biome a box, its centre +- span on the fields it names
-## (the full axis on one it doesn't: it doesn't care), its whole core (World.CORE of the span) filled. Under them the
+## (the full axis on one it doesn't: it doesn't care), its whole core (Octaves.core of the span) filled. Under them the
 ## world's points: where the ground actually goes in the fields' space (the preview's samples, a density image).
 ## Drag a box to move its centre, its edge to change its span (both sides); a click selects a biome. The default
 ## biome has no box: it fills what the others leave.
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const World := preload("res://debug/biome_mixer/world.gd")
+const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 
 signal placed(p_biome: int)  # a biome's centre or span moved (the world's "at" holds it)
 signal selected(p_biome: int)
@@ -81,7 +82,7 @@ func _draw() -> void:
 	for b in world.biomes.size() - 1:
 		var col := World.debug_color(world.biomes[b])
 		var outer := _px_rect(box(b, 1.0))
-		var core := _px_rect(box(b, World.CORE))
+		var core := _px_rect(box(b, Octaves.core))
 		var sel: bool = b == current
 		draw_rect(core, Color(col, 0.28 if sel else 0.16))
 		draw_rect(core, Color(col, 0.9), false, 2.0 if sel else 1.0)

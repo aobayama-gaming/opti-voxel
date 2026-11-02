@@ -207,14 +207,14 @@ struct LevelBands {
     const Band *band[MAX_MODS] = {}; // band[g] for g < MAX_GROUPS: group g's (null: it inserts nothing on Λ_m)
     BandFactors factors[MAX_MODS];
     int extra = 0; // the ground's other notes: band[MAX_GROUPS + i], BandMod slot note_mod(1 + i)
-    int mod_base = 0; // the field groups' BandMod offset (Spec::group_mod)
+    int mod[MAX_MODS] = {}; // band i's BandMod slot (Spec::group_mod, note_mod)
     uint32_t modulated = 0;
     float slope = 1.0f; // 2^-shift, a modulated band's slope factor
     bool any = false;
     bool carried = false; // the run's last level, its carry carried: the modulation reads it (Modulation::modulate)
 
     LevelBands(const Spec &p_spec, int p_m, int p_groups, bool p_carried = false) :
-            groups(p_groups), mod_base(p_spec.group_mod(1) - 1), slope(ExactNoise::exact_pow2(-p_spec.insert_shift)), carried(p_carried) {
+            groups(p_groups), slope(ExactNoise::exact_pow2(-p_spec.insert_shift)), carried(p_carried) {
         for (int g = 0; g < groups; g++) {
             for (const Band &b : p_spec.group_bands(g)) {
                 if (p_spec.insert_level(b) != p_m) {
@@ -230,13 +230,17 @@ struct LevelBands {
                 any = true;
             }
         }
+        const int notes = p_spec.max_level_notes();
+        for (int i = 0; i < MAX_MODS; i++) {
+            mod[i] = i < MAX_GROUPS ? Spec::group_mod(i, notes) : p_spec.note_mod(1 + i - MAX_GROUPS);
+        }
         // A level inserting fewer groups than the spec has no modulated band among the others (FieldRange::carried and
         // inserted cover them).
         modulated = p_spec.modulation ? p_spec.modulation->modulated(p_m) & ((1u << groups) - 1u) : 0u;
     }
 
     int group_of(int p_slot) const { return p_slot < MAX_GROUPS ? p_slot : 0; }
-    int mod_of(int p_slot) const { return p_slot == 0 ? 0 : (p_slot < MAX_GROUPS ? mod_base + p_slot : 1 + (p_slot - MAX_GROUPS)); }
+    int mod_of(int p_slot) const { return mod[p_slot]; }
     // Calls p_f(slot) for every band of the level: the ground's first, its other notes, then the fields' (each group's
     // adds in order; groups' slots are disjoint).
     template <typename F>
@@ -494,9 +498,13 @@ int Spec::note_rank(const Band &p_band) const {
 }
 
 int Spec::max_level_notes() const {
+    int count[MAX_LEVEL + 1] = {};
     int n = 0;
-    for (int m = 0; m <= MAX_LEVEL; m++) {
-        n = std::max(n, level_notes(m));
+    for (const Band &b : bands) {
+        const int m = insert_level(b);
+        if (m >= 0 && m <= MAX_LEVEL) {
+            n = std::max(n, ++count[m]);
+        }
     }
     return n;
 }

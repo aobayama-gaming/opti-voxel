@@ -21,7 +21,7 @@
 // The instance half of the terrain: every point folds the instances near it onto the ground's register
 // (instance_table.hpp, archetype_table.hpp fold_onto; the ground is SDFCascade's). This class owns everything about
 // the instances: the library, the records and their snapshot (read from other threads), the GPU table, the runtime
-// edits, and the scenes placed on the ground (the shapes gallery, the --instances scatter, the --trees forest),
+// edits, and the scenes placed on the ground (the shapes gallery, the sources the instance lists make: Zone),
 // which only need the subclass's base and ground_under.
 class SDFTable : public SDFBase {
 public:
@@ -48,7 +48,7 @@ public:
 
     // Where the instances stand (a world file's "zone"): a square of side side_m metres around (x_m, z_m) of the base's
     // tangent plane (in front of the main_scene spawn by default), over every height the ground can reach in it; side 0:
-    // none. The biome features stand within their radius of its centre. Set before configure().
+    // none. The biome features stand in it too (zone_box). Set before configure().
     struct Zone {
         double side_m = 0.0;
         double x_m = -50.0;
@@ -323,6 +323,8 @@ private:
     };
     // The instances' sources (the world's list and the biomes'), the rocks' then the trees', each kind's by cell.
     std::vector<Group> groups() const;
+    // An entry's cell of p_cell_m metres in LOD0 voxels (forest_cell_side's rounding): its group's side.
+    int64_t cell_side(double p_cell_m) const;
     // A source of the zone: one site per cell of p_side voxels, over every height the ground can reach in it (4 times
     // its half side up and down from the ground at the centre; the walk only tries the cells along the surface, so the
     // empty air costs nothing), out of the lakes.
@@ -343,8 +345,6 @@ private:
     void add_stream(uint32_t p_slot_base, ov::Value &r_stats);
     // The zone's box (Zone): its square round the ground under its centre, 4 half sides up and down.
     VoxelBox zone_box() const;
-    // The lists of features the biomes stand on (the world's where a biome lists none, every biome's own), naming who.
-    std::vector<std::pair<ov::str, const std::vector<Climate::FeatureShare> *>> feature_lists() const;
     // The biome features in the zone, appended to the records, and their stats.
     void add_biomes(const Types &p_types, ov::Value &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.

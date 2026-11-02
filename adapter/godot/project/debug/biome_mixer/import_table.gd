@@ -44,7 +44,7 @@ func plain_ground() -> Dictionary:
 	var out := add("output", Vector2(COL.mix + MIX_W, 0.0))
 	link(mix, 0, out, 0)
 	var rows: Array = model.nodes[mix].params.rows
-	var top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
+	var top := Octaves.ground_top()
 	for k in range(top, Octaves.K_MIN - 1, -1):
 		link(add("note", Vector2(COL.note, (top - k) * ROW_H), {"k": k}), 0, mix, rows.size())
 		rows.append(Kinds.new_row())
@@ -77,7 +77,7 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	for f in p_table.get("fields", []):
 		fields[f.name] = f
 	# The biome's entry per ground octave (none: silent).
-	var k_top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
+	var k_top := Octaves.ground_top()
 	var g := graph_rows(biome)
 	warnings.append_array(g.warnings)
 	var per_k: Dictionary = g.per_k
@@ -215,5 +215,5 @@ static func band_ks(p_entry: Dictionary) -> Array:
 	if p_entry.has("wavelength_m"):
 		return [Octaves.lattice_k(float(p_entry.wavelength_m), Octaves.voxel_m)]
 	var lo := maxi(Octaves.lattice_k(float(p_entry.from_m), Octaves.voxel_m), Octaves.K_MIN)
-	var hi := mini(Octaves.lattice_k(float(p_entry.to_m), Octaves.voxel_m), Octaves.k_top(Octaves.lods))
+	var hi := mini(Octaves.lattice_k(float(p_entry.to_m), Octaves.voxel_m), Octaves.k_top())
 	return range(lo, hi + 1)

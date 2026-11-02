@@ -12,7 +12,7 @@ extends Control
 ##   --import=NAME      res://climate/world.json, its biome NAME in the graph
 ##   --world            start in the World mode
 ##   --set=ID.PARAM=V   set a node's parameter after loading (V as JSON: 1.5, true, "plain"), or view.KEY=V a view
-##                      setting (view.shadows=false); repeatable
+##                      setting (view.extent_km=40); repeatable
 ##   --shot=PATH        draw once (the sharp map), save the window to PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test: the templates and every world.json biome exported and drawn by the engine,
 ##                      files round-tripped, world.json exported back; prints MIXER: {json} and quits 0 if ok
@@ -42,7 +42,7 @@ const VIEW_DEFAULTS := {"extent_km": 20.0}
 const GAME_WORLD := "user://biome_mixer_game.world.json"
 
 var model := {}
-var curve_ui := {}  # Height curve id -> its editor, told its input's range after each compile
+var curve_ui := {}  # Height curve id -> its editor, told the relief's range after each map
 
 var graph := GraphEdit.new()
 var preview := EngineView.new()
@@ -161,7 +161,7 @@ func _enter(p_mode: String, p_frame: bool) -> void:
 		return
 	preview.set_extent(float(world.view.extent_m) / 1000.0)
 	refit = true
-	recompile(false)
+	recompile()
 
 
 func world_mode() -> bool:
@@ -190,7 +190,7 @@ func set_model(p_model: Dictionary, p_frame: bool, p_compile: bool = true) -> vo
 		model.erase("layout")
 		_spread_layout()
 	if p_compile:
-		recompile(false)
+		recompile()
 	if p_frame and p_compile:
 		_fit_graph()
 
@@ -245,13 +245,13 @@ func set_params(p_id: String, p_params: Dictionary, p_rebuild: bool = false) -> 
 	if p_rebuild:
 		_rebuild_node(p_id)
 	elif graph.has_node(NodePath(p_id)):
-		Nodes.refresh(graph.get_node(NodePath(p_id)), node, self)
+		Nodes.refresh(graph.get_node(NodePath(p_id)), node)
 	if not compile_queued:
 		compile_queued = true
-		recompile.call_deferred(true)
+		recompile.call_deferred()
 
 
-func recompile(_p_moving: bool = false) -> void:
+func recompile() -> void:
 	compile_queued = false
 	var r := _preview_world()
 	var lines := PackedStringArray()
@@ -269,8 +269,9 @@ func recompile(_p_moving: bool = false) -> void:
 	if world_mode():
 		resample(refit)
 		refit = false
+	var span := curve_span()
 	for id in curve_ui:
-		curve_ui[id].set_span(curve_span(id))
+		curve_ui[id].set_span(span)
 	var ok := lines.is_empty() or not lines[0].begins_with("Error")
 	if world_mode():
 		lines.append("%d biomes over %d fields. The chart: drag a biome's box to move it, its edge to resize; double-click a biome in the list to edit its notes." % [world.biomes.size(), world.fields.size()])
@@ -287,8 +288,8 @@ func _preview_world() -> Dictionary:
 
 
 # The input a Height curve's editor shows (metres either side of 0): the relief the view last saw.
-func curve_span(_p_id: String = "") -> float:
-	return maxf(preview.relief_m(), 10.0)
+func curve_span() -> float:
+	return maxf(float(preview.last.get("relief_m", 0.0)), 10.0)
 
 
 func rebuild_ui() -> void:
@@ -332,7 +333,7 @@ func add_node(p_kind: String, p_pos: Vector2) -> String:
 	# A new Height curve starts as no remap over the ground's span (its kind's default has no span to know).
 	var id := Kinds.add(model, p_kind, p_pos, {"points": Kinds.identity_curve(curve_span())} if p_kind == "curve" else {})
 	_add_graph_node(id)
-	recompile(false)
+	recompile()
 	return id
 
 
@@ -369,7 +370,7 @@ func _on_connection_request(p_from: StringName, p_from_port: int, p_to: StringNa
 		_rebuild_node(String(p_to))
 	else:
 		graph.connect_node(p_from, p_from_port, p_to, p_to_port)
-	recompile(false)
+	recompile()
 
 
 func _on_disconnection_request(p_from: StringName, p_from_port: int, p_to: StringName, p_to_port: int) -> void:
@@ -377,7 +378,7 @@ func _on_disconnection_request(p_from: StringName, p_from_port: int, p_to: Strin
 		if l.from == String(p_from) and int(l.from_port) == p_from_port and l.to == String(p_to) and int(l.to_port) == p_to_port:
 			model.links.erase(l)
 	graph.disconnect_node(p_from, p_from_port, p_to, p_to_port)
-	recompile(false)
+	recompile()
 
 
 func _on_delete_nodes_request(p_names: Array) -> void:
@@ -387,7 +388,7 @@ func _on_delete_nodes_request(p_names: Array) -> void:
 func delete_nodes(p_ids: Array) -> void:
 	Kinds.cut_nodes(model, p_ids)
 	rebuild_ui()
-	recompile(false)
+	recompile()
 	if p_ids.any(func(id): return model.nodes.has(id) and model.nodes[id].kind == "note"):
 		status.text = "The notes are the ground's: they stay (a Mix row's volume 0 or M silences one).  " + status.text
 
@@ -395,7 +396,7 @@ func delete_nodes(p_ids: Array) -> void:
 func remove_mix_row(p_mix: String, p_row: int) -> void:
 	Kinds.cut_row(model, p_mix, p_row)
 	rebuild_ui()
-	recompile(false)
+	recompile()
 
 
 func _apply_set(p_spec: String) -> void:
@@ -415,7 +416,7 @@ func _apply_set(p_spec: String) -> void:
 		if world_mode():
 			_enter("world", true)
 		else:
-			recompile(false)
+			recompile()
 	else:
 		set_params(id, {key: v if v != null else raw}, true)
 
@@ -585,7 +586,7 @@ func _build_ui() -> void:
 	left.add_child(graph)
 	left.add_child(world_panel)
 	world_panel.visible = false
-	world_panel.placed.connect(func(_p_structural: bool) -> void: recompile(true))
+	world_panel.placed.connect(recompile)
 	world_panel.edit_notes.connect(func(b: int) -> void:
 		world.current = b
 		biome_pick.select(b)
@@ -603,7 +604,10 @@ func _build_ui() -> void:
 	preview.view_changed.connect(func() -> void:
 		view_settings()["extent_m" if world_mode() else "extent_km"] = preview.extent_km * 1000.0 if world_mode() else preview.extent_km
 		refit = world_mode()
-		recompile(false))
+		preview.redraw()
+		if world_mode():
+			resample(refit)
+			refit = false)
 	preview.open_game.connect(_open_game)
 	right.add_child(preview)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

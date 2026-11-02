@@ -18,8 +18,8 @@ TEST_CASE("WorldFile: every key is optional and defaults to the engine's default
     CHECK(w.climate_table.is_empty());
     CHECK(w.atmosphere);
     CHECK(w.clouds);
-    CHECK(w.zone_side_m == 0.0);
-    CHECK(w.zone_x_m == SDFTable::Zone().x_m);
+    CHECK(w.zone.side_m == 0.0);
+    CHECK(w.zone.x_m == SDFTable::Zone().x_m);
     CHECK(w.instances.empty());
 }
 
@@ -36,9 +36,9 @@ TEST_CASE("WorldFile: inline sections reach their fields") {
     CHECK(!w.atmosphere);
     CHECK(w.atmosphere_scale == 2.0);
     CHECK(!w.clouds);
-    CHECK(w.zone_side_m == 8.0);
-    CHECK(w.zone_x_m == 3.0);
-    CHECK(w.zone_z_m == -4.0);
+    CHECK(w.zone.side_m == 8.0);
+    CHECK(w.zone.x_m == 3.0);
+    CHECK(w.zone.z_m == -4.0);
     CLIMATE_REQUIRE(w.instances.size() == 2);
     CHECK(w.instances[0].species == "conifer");
     CHECK(w.instances[0].cell_m == 5.0);
@@ -87,7 +87,7 @@ TEST_CASE("WorldFile: world.json finds its engine and climate next to it") {
     CHECK(WorldFile::load("res://climate/world.json", w) == ov::str());
     CHECK(w.voxel_m == 0.05);
     CHECK(w.lods == 25);
-    CHECK(w.zone_side_m == 5000.0);
+    CHECK(w.zone.side_m == 5000.0);
     CHECK(w.instances.empty()); // every biome lists its own
     const ov::Value &biomes = w.climate_table["biomes"];
     CHECK(biomes[size_t(0)].has("instances"));

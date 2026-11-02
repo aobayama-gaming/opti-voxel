@@ -101,7 +101,7 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 		x.tooltip_text = "Delete this node (or select it and press Delete)"
 		x.pressed.connect(func() -> void: p_ctx.delete_nodes([p_id]))
 		gn.get_titlebar_hbox().add_child(x)
-	refresh(gn, p_node, p_ctx)
+	refresh(gn, p_node)
 	return gn
 
 
@@ -115,7 +115,7 @@ static func climate_warp_info(p_model: Dictionary) -> String:
 
 
 # What a node shows from its parameters (title, phi graph), after an edit.
-static func refresh(p_gn: GraphNode, p_node: Dictionary, _p_ctx: Object) -> void:
+static func refresh(p_gn: GraphNode, p_node: Dictionary) -> void:
 	p_gn.title = title(p_node, Octaves.voxel_m)
 	if p_gn.has_meta("phi"):
 		var phi: PhiGraph = p_gn.get_meta("phi")

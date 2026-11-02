@@ -145,7 +145,7 @@ static func _biome(p_model: Dictionary, p_world: Dictionary, p_warp: Array) -> D
 	if not r.errors.is_empty():
 		return r
 	var entries := []
-	for k in range(Octaves.ground_top(Octaves.lods, Octaves.voxel_m), Octaves.K_MIN - 1, -1):
+	for k in range(Octaves.ground_top(), Octaves.K_MIN - 1, -1):
 		entries.append({"k": k, "e": per_k.get(k, {"x": 0.0})})
 	r.graph = _graph(entries, curve, Octaves.voxel_m)
 	return r

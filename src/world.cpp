@@ -103,7 +103,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         sdf->preset = SDFCascade::Preset::FLAT;
         sdf->set_scene(SDFTable::Scene::SHAPES);
     }
-    sdf->set_zone(SDFTable::Zone{ content.zone_side_m, content.zone_x_m, content.zone_z_m });
+    sdf->set_zone(content.zone);
     sdf->set_instances(content.instances);
     sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);

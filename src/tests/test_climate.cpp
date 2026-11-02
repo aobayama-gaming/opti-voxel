@@ -188,7 +188,7 @@ TEST_CASE("ClimateReport: preview gives a world's maps from its text, the same t
     const ClimateReport::Preview a = ClimateReport::preview(world, "res://climate/", 20.0, 48, true, 0.0, 0.0);
     CHECK(a.error == ov::str());
     CLIMATE_REQUIRE(a.size == 48);
-    CHECK(a.blend.size() == size_t(48 * 48 * 3));
+    CHECK(a.biomes.size() == size_t(48 * 48 * 3));
     CHECK(a.shaded.size() == size_t(48 * 48 * 3));
     CHECK(a.altitude_m.size() == size_t(48 * 48));
     CHECK(a.fields.size() == size_t(48 * 48) * a.field_names.size());
@@ -196,7 +196,8 @@ TEST_CASE("ClimateReport: preview gives a world's maps from its text, the same t
     CHECK(a.spacing_m * 48.0 > 10000.0);
     CHECK(a.spacing_m * 48.0 < 40000.0);
     const ClimateReport::Preview b = ClimateReport::preview(world, "res://climate/", 20.0, 48, true, 0.0, 0.0);
-    CHECK(a.blend == b.blend);
+    CHECK(a.biomes == b.biomes);
+    CHECK(a.relief_m == double(std::abs(*std::max_element(a.altitude_m.begin(), a.altitude_m.end(), [](float p_x, float p_y) { return std::abs(p_x) < std::abs(p_y); }))));
     CHECK(a.shaded == b.shaded);
     CHECK(a.altitude_m == b.altitude_m);
     MESSAGE("preview: ", a.us_per_point, " us per point, lattice ", a.lattice);
@@ -794,7 +795,16 @@ TEST_CASE("Cascade: several ground notes on one lattice, one band per field") {
     two.bands = { one.bands[0], other.bands[0] }; // the same lattice Λ_6
     CHECK(two.level_notes(6) == 2);
     CHECK(two.max_level_notes() == 2);
-    CHECK(two.note_mod(1) == two.group_count());
+    // The notes keep their BandMod slots in every view; the field groups follow them.
+    Cascade::Spec whole = two;
+    whole.fields = { { ExactNoise::make_octave(13u, 9u, 9, 1.0f) } };
+    for (const Cascade::Spec &view : { whole, whole.without_fields(), whole.ground_only() }) {
+        CHECK(view.max_level_notes() == 2);
+        CHECK(view.note_mod(1) == 1);
+        CHECK(view.group_mod(0) == 0);
+    }
+    CHECK(whole.group_mod(1) == 2);
+    CHECK(whole.mod_count() == 3);
     int64_t mismatches = 0;
     double worst = 0.0;
     for (int i = 0; i < 32; i++) {

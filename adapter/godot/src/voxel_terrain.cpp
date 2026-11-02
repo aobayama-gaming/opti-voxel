@@ -389,7 +389,7 @@ int64_t VoxelTerrain::get_world_origin_z() const {
 }
 
 double VoxelTerrain::get_world_zone_m() const {
-    return world.world_file().zone_side_m;
+    return world.world_file().zone.side_m;
 }
 
 double VoxelTerrain::get_planet_radius() const {

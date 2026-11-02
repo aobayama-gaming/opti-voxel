@@ -9,6 +9,7 @@ const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 const ImportTable := preload("res://debug/biome_mixer/import_table.gd")
 const World := preload("res://debug/biome_mixer/world.gd")
 const ExportTable := preload("res://debug/biome_mixer/export_table.gd")
+const EngineView := preload("res://debug/biome_mixer/engine_view.gd")
 
 # Where the check writes world.json's export for the engine to parse.
 const EXPORT_PATH := "user://biome_mixer_export_check.json"
@@ -57,8 +58,8 @@ static func drawn(p_model: Dictionary, p_table: Dictionary) -> Dictionary:
 	var r := ExportTable.preview_world(w, p_table)
 	if not r.errors.is_empty():
 		return {"errors": r.errors, "error": "", "map": {}}
-	var map: Dictionary = ClassDB.class_call_static("ClimateReportNode", "preview", JSON.stringify(r.world), "res://climate/", 20.0, SIZE, true, Vector2.ZERO)
-	return {"errors": r.errors, "error": String(map.get("error", "")), "map": map}
+	var map := EngineView.draw(JSON.stringify(r.world), 20.0, SIZE)
+	return {"errors": r.errors, "error": map.error, "map": map}
 
 
 # p_model's graph as the table holds it (ExportTable): what the engine reads of it.
@@ -175,7 +176,7 @@ static func world(p_table: Dictionary) -> Dictionary:
 	var r := ExportTable.preview_world(w, p_table)
 	var again = JSON.parse_string(JSON.stringify(w, "", true, true))
 	var r2 := ExportTable.preview_world(again, p_table)
-	var map: Dictionary = ClassDB.class_call_static("ClimateReportNode", "preview", JSON.stringify(r.world), "res://climate/", 200.0, SIZE, true, Vector2.ZERO) if r.errors.is_empty() else {}
+	var map: Dictionary = EngineView.draw(JSON.stringify(r.world), 200.0, SIZE) if r.errors.is_empty() else {}
 	var names: PackedStringArray = map.get("biome_names", PackedStringArray())
 	var fields: PackedStringArray = map.get("field_names", PackedStringArray())
 	var samples: int = map.get("fields", PackedFloat32Array()).size() / maxi(fields.size(), 1)
@@ -221,7 +222,7 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 			differ.append(key)
 	entry.differ = differ
 	# The export is the table's notes in their plainest form (a plain shape is no Shape): exporting its world again
-	# gives the same file (so the same shader).
+	# gives the same file (so the same terrain).
 	entry.stable = ExportTable.text(ExportTable.split(ExportTable.table(World.from_table(back), back).table, back).world) == text
 	entry.refused = not ExportTable._biome(every_kind(), w, []).errors.is_empty()
 	var placed: Array = w.biomes.filter(func(b): return not b.at.is_empty())
@@ -242,7 +243,7 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 # only counts in a multifractal (elsewhere the band goes in without its mean).
 static func notes_of(p_table: Dictionary, p_world: Dictionary) -> Dictionary:
 	var out := {}
-	var top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
+	var top := Octaves.ground_top()
 	for b in p_table.get("biomes", []):
 		var g := ImportTable.graph_rows(b)
 		var per := {}

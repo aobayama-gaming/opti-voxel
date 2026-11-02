@@ -94,25 +94,25 @@ func set_extent(p_km: float) -> void:
 func _draw_map(p_size: int) -> void:
 	if _json == "":
 		return
-	last = ClassDB.class_call_static("ClimateReportNode", "preview", _json, DIR, extent_km, p_size, true, centre_m)
-	if String(last.get("error", "")) != "":
+	last = draw(_json, extent_km, p_size, centre_m)
+	if String(last.error) != "":
 		_info.text = "The engine refuses the world: " + String(last.error)
 		return
-	var img: Image = _composite(last) if _world_mode else last.shaded
-	_rect.texture = ImageTexture.create_from_image(img)
+	_rect.texture = ImageTexture.create_from_image(last.biomes if _world_mode else last.shaded)
 	_info.text = "%d x %d points, %s m apart, %d us a point (the engine, CPU)" % [last.size, last.size, snappedf(last.spacing_m, 0.1), int(last.us_per_point)]
 
 
-# The biomes' blend shaded by the relief (each pixel's colour times the shaded map's brightness).
-func _composite(p_map: Dictionary) -> Image:
-	var blend: Image = p_map.blend
-	var shaded: Image = p_map.shaded
-	var out := Image.create(blend.get_width(), blend.get_height(), false, Image.FORMAT_RGB8)
-	for y in blend.get_height():
-		for x in blend.get_width():
-			var s := shaded.get_pixel(x, y).get_luminance()
-			out.set_pixel(x, y, blend.get_pixel(x, y) * (0.3 + 0.9 * s))
-	return out
+# The last world drawn again (the extent or the centre moved): small now, sharp after SETTLE.
+func redraw() -> void:
+	show_world(_json, _world_mode)
+
+
+# The engine's maps of p_json (a world file's text, its paths from DIR), p_size points a side across p_extent_km round
+# p_centre_m: ClimateReportNode.preview's dictionary (error "" when drawn).
+static func draw(p_json: String, p_extent_km: float, p_size: int, p_centre_m: Vector2 = Vector2.ZERO) -> Dictionary:
+	var map: Dictionary = ClassDB.class_call_static("ClimateReportNode", "preview", p_json, DIR, p_extent_km, p_size, true, p_centre_m)
+	map["error"] = String(map.get("error", ""))
+	return map
 
 
 # The last map's fields p_fx and p_fy (indices in its field_names) at every point: the chart's cloud.
@@ -124,18 +124,10 @@ func samples(p_fx: int, p_fy: int) -> PackedVector2Array:
 	var fields: PackedFloat32Array = last.fields
 	if p_fx < 0 or p_fy < 0 or p_fx >= nf or p_fy >= nf:
 		return out
-	for i in fields.size() / nf:
-		out.append(Vector2(fields[i * nf + p_fx], fields[i * nf + p_fy]))
+	out.resize(fields.size() / nf)
+	for i in out.size():
+		out[i] = Vector2(fields[i * nf + p_fx], fields[i * nf + p_fy])
 	return out
-
-
-# The relief's half range in metres (the curve editor's input span).
-func relief_m() -> float:
-	var alt: PackedFloat32Array = last.get("altitude_m", PackedFloat32Array())
-	var r := 0.0
-	for a in alt:
-		r = maxf(r, absf(a))
-	return r
 
 
 func image() -> Image:

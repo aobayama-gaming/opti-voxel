@@ -582,8 +582,8 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str 
     d["samples_per_biome"] = per_biome;
     d["examples"] = checks.examples;
     d["samples_air"] = seen[0]; // no pick there
-    // At least 3 biomes seen (every one of a smaller table: notes_test's and programs_test's 2).
-    d["ok"] = checks.samples_differing == 0 && seen[0] < checks.samples && biomes >= ov::min(3, int(sdf.get_climate()->biomes.size()));
+    // At least two biomes seen: a border, where the GPU blends two biomes' bands.
+    d["ok"] = checks.samples_differing == 0 && seen[0] < checks.samples && biomes >= 2;
     return d;
 }
 

@@ -18,6 +18,30 @@
 
 using namespace Archetype;
 
+namespace {
+
+// A biome's list of instances or features (p_own), the world's (p_world) where it lists none.
+template <class T>
+const std::vector<T> &list_of(const Climate::Biome &p_b, const std::vector<T> &p_world, std::vector<T> Climate::Biome::*p_own, bool Climate::Biome::*p_listed) {
+    return p_b.*p_listed ? p_b.*p_own : p_world;
+}
+
+// Every list the biomes grow, naming who: the world's where a biome lists none (every biome without a climate), then
+// each biome's own.
+template <class T>
+std::vector<std::pair<ov::str, const std::vector<T> *>> lists_of(const Climate::Table *p_climate, const std::vector<T> &p_world, std::vector<T> Climate::Biome::*p_own, bool Climate::Biome::*p_listed) {
+    std::vector<std::pair<ov::str, const std::vector<T> *>> lists;
+    if (p_climate == nullptr || std::any_of(p_climate->biomes.begin(), p_climate->biomes.end(), [&](const Climate::Biome &p_b) { return !(p_b.*p_listed); })) {
+        lists.push_back({ "the world", &p_world });
+    }
+    for (size_t b = 0; p_climate != nullptr && b < p_climate->biomes.size(); b++) {
+        lists.push_back({ "biome '" + p_climate->biomes[b].name + "'", &(p_climate->biomes[b].*p_own) });
+    }
+    return lists;
+}
+
+} // namespace
+
 int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) {
     if (!library || p_type < 0 || p_type >= library->size()) {
         return -1;
@@ -404,34 +428,31 @@ RecordFinish SDFTable::record_finish() const {
 
 std::vector<Climate::InstanceShare> SDFTable::counted(Species::Kind p_kind, int p_count, double p_side_m) {
     std::vector<Climate::InstanceShare> out;
+    if (p_count <= 0 || !(p_side_m > 0.0)) {
+        return out;
+    }
     for (const Species &s : default_species()) {
-        if (p_count > 0 && p_side_m > 0.0 && s.kind == p_kind) { // groups() rounds the cell as forest_cell_side
+        if (s.kind == p_kind) { // cell_side rounds the cell as forest_cell_side
             out.push_back(Climate::InstanceShare{ s.name, p_side_m / std::sqrt(double(p_count)), 1u });
         }
     }
     return out;
 }
 
+int64_t SDFTable::cell_side(double p_cell_m) const {
+    return forest_cell_side(1, p_cell_m, param.voxel_size);
+}
+
 std::vector<SDFTable::Group> SDFTable::groups() const {
-    const double vs = param.voxel_size;
-    // The world's list where a biome grows it (every biome without a climate), and each biome's own.
-    std::vector<std::pair<ov::str, const std::vector<Climate::InstanceShare> *>> lists;
-    const Climate::Table *climate = placing_climate();
-    if (climate == nullptr || std::any_of(climate->biomes.begin(), climate->biomes.end(), [](const Climate::Biome &p_b) { return !p_b.instances_listed; })) {
-        lists.push_back({ "the world", &instances });
-    }
-    for (size_t b = 0; climate != nullptr && b < climate->biomes.size(); b++) {
-        lists.push_back({ "biome '" + climate->biomes[b].name + "'", &climate->biomes[b].instances });
-    }
     std::vector<Group> out;
-    for (const auto &[who, list] : lists) {
+    for (const auto &[who, list] : lists_of(placing_climate(), instances, &Climate::Biome::instances, &Climate::Biome::instances_listed)) {
         for (const Climate::InstanceShare &e : *list) {
             const auto named = std::find_if(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; });
             if (named == species.end()) {
                 OV_ERR_PRINT("SDFTable: " + who + " grows '" + e.species + "', which the world's species don't have.");
                 continue;
             }
-            const int64_t side = std::max<int64_t>(1, std::llround(e.cell_m / vs));
+            const int64_t side = cell_side(e.cell_m);
             auto g = std::find_if(out.begin(), out.end(), [&](const Group &p_g) { return p_g.kind == named->kind && p_g.side == side; });
             if (g == out.end()) {
                 out.push_back(Group{ named->kind, side, {} });
@@ -459,18 +480,6 @@ VoxelBox SDFTable::zone_box() const {
     return VoxelBox{ centre - reach, centre + reach, true };
 }
 
-std::vector<std::pair<ov::str, const std::vector<Climate::FeatureShare> *>> SDFTable::feature_lists() const {
-    std::vector<std::pair<ov::str, const std::vector<Climate::FeatureShare> *>> lists;
-    const Climate::Table *climate = placing_climate();
-    if (climate == nullptr || std::any_of(climate->biomes.begin(), climate->biomes.end(), [](const Climate::Biome &p_b) { return !p_b.features_listed; })) {
-        lists.push_back({ "the world", &features });
-    }
-    for (size_t b = 0; climate != nullptr && b < climate->biomes.size(); b++) {
-        lists.push_back({ "biome '" + climate->biomes[b].name + "'", &climate->biomes[b].features });
-    }
-    return lists;
-}
-
 CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
     CellScatter s;
     s.salt = p_salt;
@@ -490,13 +499,12 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
 }
 
 std::function<int(const Site &)> SDFTable::site_class(const Group &p_group) const {
-    const double vs = param.voxel_size;
     // A list's shares of the group's species (its entries of the group's kind and cell).
     auto shares_of = [&](const std::vector<Climate::InstanceShare> &p_list) {
         std::vector<uint32_t> s(p_group.species.size(), 0u);
         for (const Climate::InstanceShare &e : p_list) {
             for (size_t i = 0; i < s.size(); i++) {
-                const bool here = p_group.species[i]->name == e.species && std::max<int64_t>(1, std::llround(e.cell_m / vs)) == p_group.side;
+                const bool here = p_group.species[i]->name == e.species && cell_side(e.cell_m) == p_group.side;
                 s[i] += here ? e.share : 0u;
             }
         }
@@ -505,8 +513,7 @@ std::function<int(const Site &)> SDFTable::site_class(const Group &p_group) cons
     const Climate::Table *climate = placing_climate();
     std::vector<std::vector<uint32_t>> shares;
     for (size_t b = 0; climate != nullptr && b < climate->biomes.size(); b++) {
-        const Climate::Biome &bi = climate->biomes[b];
-        shares.push_back(shares_of(bi.instances_listed ? bi.instances : instances));
+        shares.push_back(shares_of(list_of(climate->biomes[b], instances, &Climate::Biome::instances, &Climate::Biome::instances_listed)));
     }
     const std::vector<uint32_t> world = shares_of(instances);
     if (std::all_of(shares.begin(), shares.end(), [&](const std::vector<uint32_t> &p_s) { return p_s == world; })) {
@@ -685,41 +692,51 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
     }
     const uint64_t start_us = ov::now_usec();
     const double vs = param.voxel_size;
-    // Every kind and cell the lists name: its cells' candidates in the zone.
-    const VoxelBox box = zone_box();
-    std::vector<std::pair<Biome::Feature, int>> cells;
-    for (const auto &[who, list] : feature_lists()) {
+    // Every list's entries, their kind and cell resolved, and every kind and cell they name with the best chance there.
+    struct Entry {
+        std::pair<Biome::Feature, int> cell;
+        const Climate::FeatureShare *share;
+    };
+    const Climate::Table *climate = placing_climate();
+    const auto lists = lists_of(climate, features, &Climate::Biome::features, &Climate::Biome::features_listed);
+    std::vector<std::vector<Entry>> entries;
+    std::map<std::pair<Biome::Feature, int>, double> cells;
+    for (const auto &[who, list] : lists) {
+        entries.emplace_back();
         for (const Climate::FeatureShare &e : *list) {
             const Biome::Feature f = Biome::feature_named(e.kind);
             if (f == Biome::FEATURE_COUNT) {
                 OV_ERR_PRINT("SDFTable: " + who + " has the feature '" + e.kind + "', which isn't a kind (lava_lake, floating_island).");
                 continue;
             }
-            const std::pair<Biome::Feature, int> c{ f, Biome::cell_shift(e.cell_m, vs) };
-            if (std::find(cells.begin(), cells.end(), c) == cells.end()) {
-                cells.push_back(c);
-            }
+            const Entry entry{ { f, Biome::cell_shift(e.cell_m, vs) }, &e };
+            entries.back().push_back(entry);
+            cells[entry.cell] = ov::max(cells[entry.cell], e.chance);
         }
     }
-    std::sort(cells.begin(), cells.end());
+    // Each kind and cell's candidates in the zone.
+    const VoxelBox box = zone_box();
     const BaseSurface &base = get_base();
     std::vector<Biome::Site> all, sites;
-    for (const std::pair<Biome::Feature, int> &c : cells) {
-        Biome::sites(c.first, c.second, box.lo, box.hi, base, all);
+    for (const auto &[cell, chance] : cells) {
+        Biome::sites(cell.first, cell.second, box.lo, box.hi, base, all);
     }
     // A candidate stands where its biome's entry of its kind and cell keeps it (BiomePick; the world's for a biome that
-    // lists none), its radius that entry's.
-    const Climate::Table *climate = placing_climate();
+    // lists none), its radius that entry's. No pick for one no entry keeps.
     const BiomePick pick(climate, placing_spec());
+    const size_t own = lists.size() - (climate != nullptr ? climate->biomes.size() : 0); // the biomes' own lists
     for (Biome::Site site : all) {
-        const std::vector<Climate::FeatureShare> *list = &features;
-        if (climate != nullptr) {
-            const Climate::Biome &b = climate->biomes[size_t(pick.at(site.at, site.seed))];
-            list = b.features_listed ? &b.features : list;
+        if (site.chance_draw >= cells.at({ site.feature, site.shift })) {
+            continue;
         }
-        for (const Climate::FeatureShare &e : *list) {
-            if (Biome::feature_named(e.kind) == site.feature && Biome::cell_shift(e.cell_m, vs) == site.shift && site.chance_draw < e.chance) {
-                site.radius = Biome::radius_of(site, e.radius_lo_m, e.radius_hi_m, vs);
+        size_t l = 0;
+        if (climate != nullptr) {
+            const size_t b = size_t(pick.at(site.at, site.seed));
+            l = climate->biomes[b].features_listed ? own + b : 0;
+        }
+        for (const Entry &e : entries[l]) {
+            if (e.cell == std::make_pair(site.feature, site.shift) && site.chance_draw < e.share->chance) {
+                site.radius = Biome::radius_of(site, e.share->radius_lo_m, e.share->radius_hi_m, vs);
                 sites.push_back(site);
                 break;
             }
@@ -932,10 +949,8 @@ void SDFTable::build_table(int p_lod_count) {
         types.tunnel_cube = lib.add(make_tunnel_cube_type());
     }
     // The feature types only where the zone has some (the library's indices, the blob's, stay as without them).
-    has_features = false;
-    for (const auto &[who, list] : feature_lists()) {
-        has_features = has_features || (zone.side_m > 0.0 && !list->empty());
-    }
+    const auto feature_lists = lists_of(placing_climate(), features, &Climate::Biome::features, &Climate::Biome::features_listed);
+    has_features = zone.side_m > 0.0 && std::any_of(feature_lists.begin(), feature_lists.end(), [](const auto &p_l) { return !p_l.second->empty(); });
     if (has_features) {
         types.biome = Biome::add_types(lib, vs);
     }

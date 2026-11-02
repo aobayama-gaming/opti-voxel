@@ -19,7 +19,7 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// A configured cascade terrain with the --instances scatter (rocks and pillars around SDFTable::Zone().x_m / Z), placed
+// A configured cascade terrain with a scatter (rocks and pillars in the default zone: SDFTable::counted), placed
 // whole in the table: these tests are the index's, they count its records and lists and edit them by id.
 // The scatter's records alone (p_moments false): the tests count records and lists; the moment blobs have their own.
 struct ScatteredCascade {

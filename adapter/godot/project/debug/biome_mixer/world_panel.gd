@@ -5,8 +5,9 @@ extends VBoxContainer
 
 const World := preload("res://debug/biome_mixer/world.gd")
 const Chart := preload("res://debug/biome_mixer/chart.gd")
+const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 
-signal placed(p_structural: bool)  # a place changed (structural: a field named or dropped: the shader changes)
+signal placed  # a place changed (a biome's, or a field named or dropped)
 signal edit_notes(p_biome: int)  # open the biome's notes (the biome mode)
 signal axes_changed  # the chart's fields changed: new samples
 
@@ -49,12 +50,12 @@ func _init() -> void:
 	below.add_child(scroll)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.modulate = Color(1, 1, 1, 0.7)
-	hint.text = ("A biome is whole within %.2f of its span on each field it names (the filled box), gone at its span (the outline); overlaps blend by themselves, the last biome fills the rest. Drag a box to move it, its edge to resize.") % World.CORE
+	hint.text = ("A biome is whole within %.2f of its span on each field it names (the filled box), gone at its span (the outline); overlaps blend by themselves, the last biome fills the rest. Drag a box to move it, its edge to resize.") % Octaves.core
 	add_child(hint)
 	chart.placed.connect(func(b: int) -> void:
 		if b == int(world.get("current", -1)):
 			_sync_spins(b)
-		placed.emit(false))
+		placed.emit())
 	chart.selected.connect(func(b: int) -> void: select(b))
 
 
@@ -145,12 +146,12 @@ func _show_place(p_b: int) -> void:
 			c.editable = p_on
 			s.editable = p_on
 			chart.queue_redraw()
-			placed.emit(true))
+			placed.emit())
 		var set_at := func(_v: float) -> void:
 			if at.has(f):
 				at[f] = [c.value, s.value]
 				chart.queue_redraw()
-				placed.emit(false)
+				placed.emit()
 		c.value_changed.connect(set_at)
 		s.value_changed.connect(set_at)
 		place_box.add_child(row)

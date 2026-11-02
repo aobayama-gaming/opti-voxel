@@ -99,10 +99,9 @@ public:
         }
     }
 
-    // A list of instances alone (parse_instances).
-    void run_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) { instances(p_list, p_where, r_out); }
-    // A list of features alone (parse_features).
-    void run_features(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) { features(p_list, p_where, r_out); }
+    // A list of instances or features alone (parse_list).
+    void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) { instances(p_list, p_where, r_out); }
+    void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) { features(p_list, p_where, r_out); }
 
 private:
     const Ground &ground;
@@ -359,7 +358,7 @@ private:
     // A curve node's "points": [[h, R], ...] (metres, h increasing): C = R - h through the points, in LOD0 voxels.
     void curve(const ov::Value &p_d, const ov::str &p_where, Curve &r_c) {
         const ov::Value pts = array(p_d, "points", p_where);
-        std::vector<double> x, y;
+        std::vector<double> hs, rs;
         for (int64_t i = 0; i < int64_t(pts.size()); i++) {
             const ov::Value pt = pts[i].get_type() == ov::Value::ARRAY ? pts[i] : ov::Value();
             if (!(pt.size() == 2 && is_number(pt[0]) && is_number(pt[1]))) {
@@ -371,18 +370,13 @@ private:
                 fail(p_where, "curve points must be finite.");
                 return;
             }
-            x.push_back(h / ground.voxel_size);
-            y.push_back((r - h) / ground.voxel_size);
-            if (x.size() > 1 && !(x.back() > x[x.size() - 2])) {
-                fail(p_where, "the curve's h must increase.");
-                return;
-            }
+            hs.push_back(h);
+            rs.push_back(r);
         }
-        if (x.size() < 2) {
-            fail(p_where, "a curve has at least 2 points.");
-            return;
+        const ov::str err = height_curve(hs, rs, ground.voxel_size, r_c);
+        if (!err.empty()) {
+            fail(p_where, err);
         }
-        r_c = make_curve(x, y);
     }
 
     // A biome's "at": per field, [centre, span] or { "min", "max" }; the axes sorted by field (the weights' op order).
@@ -756,36 +750,47 @@ private:
     }
 };
 
-} // namespace
-
-ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) {
+// A list of instances or features alone (it reads no octave), r_out unchanged on an error.
+template <class T>
+ov::str parse_list(const ov::Value &p_list, const ov::str &p_where, const char *p_what, std::vector<T> &r_out) {
     if (!p_list.is_array()) {
-        return p_where + ": a list of instances.";
+        return p_where + ": a list of " + p_what + ".";
     }
-    const Ground ground; // an instance reads no octave
+    const Ground ground;
     Table table;
     Parser parser(ground, table);
-    std::vector<InstanceShare> out;
-    parser.run_instances(p_list, p_where, out);
+    std::vector<T> out;
+    parser.run_list(p_list, p_where, out);
     if (parser.error.empty()) {
         r_out = out;
     }
     return parser.error;
 }
 
+} // namespace
+
+ov::str height_curve(const std::vector<double> &p_h_m, const std::vector<double> &p_r_m, double p_voxel, Curve &r_c) {
+    std::vector<double> x, y;
+    for (size_t i = 0; i < p_h_m.size(); i++) {
+        x.push_back(p_h_m[i] / p_voxel);
+        y.push_back((p_r_m[i] - p_h_m[i]) / p_voxel);
+        if (x.size() > 1 && !(x.back() > x[x.size() - 2])) {
+            return "the curve's h must increase.";
+        }
+    }
+    if (x.size() < 2) {
+        return "a curve has at least 2 points.";
+    }
+    r_c = make_curve(x, y);
+    return ov::str();
+}
+
+ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) {
+    return parse_list(p_list, p_where, "instances", r_out);
+}
+
 ov::str parse_features(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) {
-    if (!p_list.is_array()) {
-        return p_where + ": a list of features.";
-    }
-    const Ground ground; // a feature reads no octave
-    Table table;
-    Parser parser(ground, table);
-    std::vector<FeatureShare> out;
-    parser.run_features(p_list, p_where, out);
-    if (parser.error.empty()) {
-        r_out = out;
-    }
-    return parser.error;
+    return parse_list(p_list, p_where, "features", r_out);
 }
 
 ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table) {

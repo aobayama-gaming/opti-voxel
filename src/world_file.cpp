@@ -138,12 +138,12 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     if (!(w.relief_m > 0.0)) {
         return "world: look: relief_m must be positive.";
     }
-    w.zone_side_m = zone.get("side_m", w.zone_side_m).as_double();
+    w.zone.side_m = zone.get("side_m", w.zone.side_m).as_double();
     if (centre.size() == 2) {
-        w.zone_x_m = centre[size_t(0)].as_double();
-        w.zone_z_m = centre[size_t(1)].as_double();
+        w.zone.x_m = centre[size_t(0)].as_double();
+        w.zone.z_m = centre[size_t(1)].as_double();
     }
-    if (!(w.zone_side_m >= 0.0 && std::isfinite(w.zone_side_m))) {
+    if (!(w.zone.side_m >= 0.0 && std::isfinite(w.zone.side_m))) {
         return "world: zone: side_m must be >= 0.";
     }
     if (p_data.has("instances")) {

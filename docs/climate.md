@@ -176,9 +176,10 @@ world file is the engine's input: the World menu's export writes the world back 
 - **The view is the engine's** (`engine_view.gd`): every edit exports the graph as a world file's text
   (`ExportTable.preview_world`: the game's engine, the fields inline, the biomes as the export writes them; the Biome
   mode's biome alone as the default) and `ClimateReportNode.preview` (static, `ClimateReport::preview`) draws it: the
-  report's own sampler (`sample`) on the CPU, each column traced to its ground, the shaded relief and the weights' blend
-  (`shaded_rgb`, `blend_rgb`, the same functions as the report's PNGs) plus every field's value at every point (the
-  chart's cloud) and the altitudes (the curve editor's input span). 48 points a side at once, 192 once the edits pause
+  report's own sampler (`sample`, without the picks) on the CPU, each column traced to its ground, the shaded relief and
+  the weights' blend in the relief's light (`shaded_rgb`, `biomes_rgb`: the report's PNGs' colours and light) plus every
+  field's value at every point (the chart's cloud) and the largest altitude (`relief_m`: the curve editor's input span).
+  A pan or a zoom draws the same text again. 48 points a side at once, 192 once the edits pause
   (`SETTLE` 0.35 s): world.json's biome alone ~140 us a point, the 8-biome world ~50 us at 16 (the check), so the small
   map ~0.3 s and the sharp one a few seconds. The 3D view is the game: *Open in game* writes the world
   (`user://biome_mixer_game.world.json`, the game world's zone, instances, species and features kept) and runs the main
@@ -194,7 +195,7 @@ world file is the engine's input: the World menu's export writes the world back 
   engine, `stretch_y` the note's `stretch_y`), *Shape* (`c0 + c1 n + c2 |n| + c3 n^2`; presets, scale and offset as
   `climate_parse.cpp`; its node draws phi), *Multifractal* (the engine's state, wired to the next finer note), *Mix*
   (rows of volume, mute, solo, centre), *Height curve* (a remap R(h) through points: a biome's curve node in the engine;
-  its editor draws the engine's cubic, `ClimateReportNode.curve`: `make_curve`, `eval_curve`), *Output* (flat and steep
+  its editor draws the engine's curve, `ClimateReportNode.curve`: `Climate::height_curve`, the parser's, and `eval_curve`), *Output* (flat and steep
   colours), and the kinds only the old preview drew (Note warp, Add, Multiply, Constant, Carve), kept so old files load.
   A row's x takes it out with the nodes only it used but its note (`Kinds.cut_row`); a node's x or Delete removes it and
   the Mix row it played, never a note (`Kinds.cut_nodes`).

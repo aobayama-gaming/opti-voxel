@@ -381,7 +381,8 @@ struct Spec {
     // p_g > 0 past the most notes a level has), so a view without the fields (without_fields) keeps the notes' slots;
     // and how many slots the GPU's arrays hold.
     int note_mod(int p_i) const { return p_i; }
-    int group_mod(int p_g) const { return p_g == 0 ? 0 : p_g + ov::max(0, max_level_notes() - 1); }
+    int group_mod(int p_g) const { return group_mod(p_g, max_level_notes()); }
+    static int group_mod(int p_g, int p_max_level_notes) { return p_g == 0 ? 0 : p_g + ov::max(0, p_max_level_notes - 1); }
     int mod_count() const { return group_count() + ov::max(0, max_level_notes() - 1); }
     FieldRange field_range() const { return modulation ? modulation->field_range() : FieldRange(); }
     int carry_groups() const { return modulation ? modulation->carry_groups() : 0; }

@@ -16,7 +16,7 @@ void ClimateReportNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("run", "out_dir", "world_path", "extent_km", "size", "surface", "center", "lattice"),
             &ClimateReportNode::run);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("check", "json", "voxel_size", "lods"), &ClimateReportNode::check);
-    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("curve", "points", "xs"), &ClimateReportNode::curve);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("curve", "points", "xs", "voxel_m"), &ClimateReportNode::curve);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("template_notes", "voxel_m", "lods"), &ClimateReportNode::template_notes);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("preview", "json", "dir", "extent_km", "size", "surface", "center"), &ClimateReportNode::preview);
 }
@@ -48,45 +48,32 @@ Dictionary ClimateReportNode::preview(const String &p_json, const String &p_dir,
     d["lattice"] = p.lattice;
     d["spacing_m"] = p.spacing_m;
     d["us_per_point"] = p.us_per_point;
-    d["blend"] = Image::create_from_data(p.size, p.size, false, Image::FORMAT_RGB8, godot_bytes(p.blend));
+    d["relief_m"] = p.relief_m;
+    d["biomes"] = Image::create_from_data(p.size, p.size, false, Image::FORMAT_RGB8, godot_bytes(p.biomes));
     d["shaded"] = Image::create_from_data(p.size, p.size, false, Image::FORMAT_RGB8, godot_bytes(p.shaded));
-    PackedFloat32Array altitude, fields;
-    altitude.resize(int64_t(p.altitude_m.size()));
-    std::copy(p.altitude_m.begin(), p.altitude_m.end(), altitude.ptrw());
-    fields.resize(int64_t(p.fields.size()));
-    std::copy(p.fields.begin(), p.fields.end(), fields.ptrw());
-    d["altitude_m"] = altitude;
-    d["fields"] = fields;
-    PackedStringArray field_names, biome_names;
-    for (const ov::str &n : p.field_names) {
-        field_names.push_back(godot_str(n));
-    }
-    for (const ov::str &n : p.biome_names) {
-        biome_names.push_back(godot_str(n));
-    }
-    d["field_names"] = field_names;
-    d["biome_names"] = biome_names;
+    d["altitude_m"] = godot_floats(p.altitude_m);
+    d["fields"] = godot_floats(p.fields);
+    d["field_names"] = godot_strings(p.field_names);
+    d["biome_names"] = godot_strings(p.biome_names);
     return d;
 }
 
-PackedFloat32Array ClimateReportNode::curve(const Array &p_points, const PackedFloat32Array &p_xs) {
-    std::vector<double> x, y;
+PackedFloat32Array ClimateReportNode::curve(const Array &p_points, const PackedFloat32Array &p_xs, double p_voxel_m) {
+    std::vector<double> h, r;
     for (int64_t i = 0; i < p_points.size(); i++) {
         const Array p = p_points[i];
-        x.push_back(double(p[0]));
-        y.push_back(double(p[1]));
-        if (x.size() > 1 && !(x.back() > x[x.size() - 2])) {
-            return p_xs;
-        }
+        h.push_back(double(p[0]));
+        r.push_back(double(p[1]));
     }
-    if (x.size() < 2) {
+    Climate::Curve c;
+    if (!Climate::height_curve(h, r, p_voxel_m, c).empty()) {
         return p_xs;
     }
-    const Climate::Curve c = Climate::make_curve(x, y);
     PackedFloat32Array out;
     out.resize(p_xs.size());
     for (int64_t i = 0; i < p_xs.size(); i++) {
-        out[i] = Climate::eval_curve(c, ExactNoise::Float4{ 0.0f, 0.0f, 0.0f, p_xs[i] }).w;
+        const float x = float(double(p_xs[i]) / p_voxel_m);
+        out[i] = float(double(p_xs[i]) + double(Climate::eval_curve(c, ExactNoise::Float4{ 0.0f, 0.0f, 0.0f, x }).w) * p_voxel_m);
     }
     return out;
 }
@@ -99,5 +86,6 @@ Dictionary ClimateReportNode::template_notes(double p_voxel_m, int p_lods) {
     d["k_min"] = ExactNoise::BAND_SHIFT;
     d["k_top"] = ov::min(Climate::template_top(p_voxel_m), SDFCascade::top_octave(p_lods));
     d["octave_top"] = SDFCascade::top_octave(p_lods);
+    d["core"] = 1.0 / std::sqrt(double(Climate::KERNEL_FADE));
     return d;
 }

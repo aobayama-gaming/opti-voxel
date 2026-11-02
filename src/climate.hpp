@@ -125,6 +125,9 @@ struct Curve {
 Curve make_curve(const std::vector<double> &p_x, const std::vector<double> &p_y);
 // The curve at p_x (its value and gradient, the samples' bits).
 Float4 eval_curve(const Curve &p_c, const Float4 &p_x);
+// A height curve node's curve through its points (h metres increasing, at least 2; R(h) metres): C = R - h over h, both
+// in voxels of p_voxel (what a sample adds to the height). Empty, or why not.
+ov::str height_curve(const std::vector<double> &p_h_m, const std::vector<double> &p_r_m, double p_voxel, Curve &r_c);
 // max |curve'| (skirts).
 float curve_slope_bound(const Curve &p_curve);
 // The steepest offset a biome curve may have (validate): R' within [-3, 5], so the ground's gradient grows at most 5x
@@ -229,8 +232,8 @@ struct Biome {
     std::vector<Axis> at; // sorted by field; empty for the last (default) biome only
     std::vector<Amp> amps;
     SampleProgram program; // empty: none
-    // What grows on it and what features stand on it ("instances", "features": kind names). Not listed: the world's
-    // instances (SDFTable::set_instances), every feature kind.
+    // What grows on it and what features stand on it ("instances", "features"). Not listed: the world's lists
+    // (SDFTable::set_instances, set_features).
     std::vector<InstanceShare> instances;
     bool instances_listed = false;
     std::vector<FeatureShare> features;

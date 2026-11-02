@@ -205,7 +205,7 @@ static func fix_notes(p_model: Dictionary) -> void:
 		if p_model.nodes.has(l.from) and p_model.nodes[l.from].kind == "warp" and p_model.nodes.get(l.to, {}).get("kind") == "note":
 			p_model.nodes[l.to].params.warp = true
 			p_model.links.erase(l)
-	var top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
+	var top := Octaves.ground_top()
 	var by_k := {}
 	var extra := []
 	for id in p_model.nodes:

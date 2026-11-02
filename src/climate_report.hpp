@@ -22,18 +22,19 @@ ov::Value run(const ov::str &p_out_dir, const ov::str &p_world_path, double p_ex
         double p_center_x, double p_center_z, int p_lattice = -1);
 
 // A world's maps without files, for the biome mixer (its previews are the engine's): p_world a world file's JSON (its
-// relative paths from p_dir), sampled as run() on p_size x p_size points (row-major, x right, z down). blend: the debug
-// colours weighted (biomes_blend.png), shaded: the relief (ground_shaded.png), both RGB; altitude_m: the column's
-// surface above the base; fields: each field's value, point-major in field_names' order. error: why the world was
-// refused (nothing else set).
+// relative paths from p_dir), sampled as run() on p_size x p_size points (row-major, x right, z down), no picks. biomes:
+// the debug colours weighted (biomes_blend.png) in the relief's light, shaded: the relief (ground_shaded.png), both RGB;
+// altitude_m: the column's surface above the base, relief_m its largest magnitude; fields: each field's value,
+// point-major in field_names' order. error: why the world was refused (nothing else set).
 struct Preview {
     ov::str error;
     int size = 0;
     int lattice = 0;
     double spacing_m = 0.0; // between points
-    ov::bytes blend;
+    ov::bytes biomes;
     ov::bytes shaded;
     std::vector<float> altitude_m;
+    double relief_m = 0.0;
     std::vector<float> fields;
     std::vector<ov::str> field_names;
     std::vector<ov::str> biome_names;
