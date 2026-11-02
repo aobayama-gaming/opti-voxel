@@ -200,9 +200,14 @@ computes no terrain and has no node kind the engine hasn't.
   crossing; the report and the game's sites trace at LOD 0), the shaded relief
   and the weights' blend plus every field's value at every point (the chart's cloud) and the largest altitude
   (`relief_m`: the curve editor's input span), or the engine's refusal. A mix row's M and S (mute, solo) are the view's
-  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once (30-60 ms), 192 on a
-  thread once the edits pause (`SETTLE` 0.35 s; 1.1-1.8 s on 16 cores: ~0.5 ms of CPU a point, each point walking the
-  cascade on its own, 6 reads). *3D* (on by default, `terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
+  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side (30-60 ms), then 192 once the edits pause
+  (`SETTLE` 0.35 s; ~1 s on 16 cores: ~0.5 ms of CPU a point, each point walking the cascade on its own, 6 reads), both
+  on a thread: the window never draws a map (at 48 on the main thread a drag ran at 17 fps, the map 30 ms of every
+  frame). A drag's edits draw as often as the thread keeps up (the newest world each time), and the status, the chart's
+  cloud and the 3D view follow each map shown (`EngineView.drawn`). With 3D shown the map's loop runs at
+  `ov::Priority::LOW` (`preview(..., background)`: Godot's low-priority group, on the pool's low-priority share of the
+  threads), behind the terrain's: at HIGH the main thread's `GpuTable::build_lists` waited behind the map's rows, up
+  to 40 ms a frame. *3D* (on by default, `terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
   Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file). An edit restarts its world in
   place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it, or once
   the last restart's chunks in view are loaded (at most 1 s later): a slider drag shows each load. The climate's

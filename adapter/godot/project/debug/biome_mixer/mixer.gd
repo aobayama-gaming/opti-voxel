@@ -12,7 +12,8 @@ extends Control
 ##   --world            start in the World mode
 ##   --set=ID.KEY=V     set a node's key in the current biome's graph after loading (V as JSON: 1.5, "ridged"), or
 ##                      view.KEY=V a view setting (view.extent_km=40); repeatable
-##   --drag=ID.KEY=A:B:S  drag a node's value A to B and back each second for S seconds (one edit a frame), then quit
+##   --drag=ID.KEY=A:B:S  drag a node's value A to B and back each second for S seconds (one edit a frame), print
+##                      MIXER_DRAG: the frame, recompile, restart and load times (with --shot: a shot a second, the trace)
 ##   --shot=PATH        draw once (the sharp map; in 3D, the terrain's load then two restarts, timed), save the window to
 ##                      PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test (checks.gd); prints MIXER: {json} and quits 0 if ok
@@ -50,6 +51,7 @@ var add_at := Vector2.ZERO
 var autosave := Timer.new()
 var refit := false  # the next World mode resample fits the chart's axes to the samples
 var compile_queued := false
+var recompile_usec := 0  # the last recompile (the map and the terrain hand-off), --drag reports it
 var world_panel := WorldPanel.new()
 var biome_pick := OptionButton.new()
 var mode_pick := OptionButton.new()
@@ -238,10 +240,17 @@ func queue_recompile() -> void:
 
 func recompile() -> void:
 	compile_queued = false
+	var t0 := Time.get_ticks_usec()
+	preview.show_world(JSON.stringify(_heard(World.preview_file(world, -1 if world_mode() else int(world.current)))), world_mode())
+	autosave.start()
+	recompile_usec = Time.get_ticks_usec() - t0
+
+
+# The view drew a map (preview.drawn): the status, the chart's cloud and the curves' span from it.
+func _map_drawn() -> void:
 	var lines := PackedStringArray()
-	var map := preview.show_world(JSON.stringify(_heard(World.preview_file(world, -1 if world_mode() else int(world.current)))), world_mode())
-	if String(map.get("error", "")) != "":
-		lines.append("Error: the engine refuses it: " + String(map.error))
+	if String(preview.last.get("error", "")) != "":
+		lines.append("Error: the engine refuses it: " + String(preview.last.error))
 	if world_mode():
 		resample(refit)
 		refit = false
@@ -255,7 +264,6 @@ func recompile() -> void:
 		lines.append("%d nodes. Right-click the graph: add a node; x or Delete removes one; drag from an output to an input to link, from an input away to unlink." % Graph.nodes(model.graph).size())
 	status.text = "  ".join(lines)
 	status.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45) if not ok else Color(0.8, 0.82, 0.86))
-	autosave.start()
 
 
 # p_file with its mix rows as heard (row_flags: a muted row, or one not soloed where its mix has a solo, at volume 0).
@@ -499,6 +507,7 @@ func _build_ui() -> void:
 			resample(refit)
 			refit = false)
 	preview.open_game.connect(_open_game)
+	preview.drawn.connect(_map_drawn)
 	right.add_child(preview)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.custom_minimum_size.y = 22
@@ -575,19 +584,46 @@ func _drag(p_spec: String, p_path: String) -> void:
 	await preview.wait_terrain(120.0)
 	var t0 := Time.get_ticks_usec()
 	var counts := {"frames": 0, "shots": 0}
+	var frame_ms := PackedFloat32Array()
+	var recompile_ms := PackedFloat32Array()
+	var view := preview.terrain_view()
+	view.profile = {"restart_ms": PackedFloat32Array(), "hold_ms": PackedFloat32Array(), "loaded_ms": PackedFloat32Array()}
+	if p_path != "":
+		view.terrain().debug_trace_start()
+	var last := t0
 	while true:
 		var s := (Time.get_ticks_usec() - t0) / 1e6
 		if s > float(r[2]):
 			break
 		set_params(id, {key: lerpf(float(r[0]), float(r[1]), 1.0 - absf(fmod(s, 1.0) * 2.0 - 1.0))})
 		await get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		frame_ms.append((now - last) / 1000.0)
+		recompile_ms.append(recompile_usec / 1000.0)
 		counts.frames += 1
 		if p_path != "" and int(s) >= counts.shots:
 			get_viewport().get_texture().get_image().save_png("%s_%d.png" % [p_path.get_basename(), counts.shots])
 			counts.shots += 1
+			now = Time.get_ticks_usec()  # the shot (~200 ms: a readback and a PNG) is not the mixer's frame
+		last = now
 	var secs := (Time.get_ticks_usec() - t0) / 1e6
-	print("MIXER_DRAG: ", JSON.stringify({"frames": counts.frames, "fps": snappedf(counts.frames / secs, 0.1)}))
+	if p_path != "":
+		view.terrain().debug_trace_write(p_path.get_basename() + "_trace.json")  # the engine's spans (src/trace.hpp)
+	print("MIXER_DRAG: ", JSON.stringify({"frames": counts.frames, "fps": snappedf(counts.frames / secs, 0.1),
+		"frame_ms": _spread(frame_ms), "recompile_ms": _spread(recompile_ms),
+		"restart_ms": _spread(view.profile.restart_ms), "hold_ms": _spread(view.profile.hold_ms), "loaded_ms": _spread(view.profile.loaded_ms),
+		"restarts": view.profile.restart_ms.size()}))
 	get_tree().quit(0)
+
+
+# p_ms's p50, p95 and max (milliseconds).
+static func _spread(p_ms: PackedFloat32Array) -> Dictionary:
+	if p_ms.is_empty():
+		return {}
+	var s := p_ms.duplicate()
+	s.sort()
+	return {"p50": snappedf(s[s.size() / 2], 0.1), "p95": snappedf(s[mini(int(s.size() * 0.95), s.size() - 1)], 0.1),
+		"max": snappedf(s[-1], 0.1)}
 
 
 # --- the headless check ------------------------------------------------------------------------------------------

@@ -59,7 +59,8 @@ public:
     // Returns once the task has run, and releases it.
     virtual void wait(TaskId p_task) = 0;
     // p_fn(p_ctx, i) for every i in [0, p_count), the caller waiting (and helping). Each i writes only what is its own.
-    virtual void parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx) = 0;
+    // p_priority LOW: a loop nothing's frame waits on (a map drawn behind the window), behind every HIGH one.
+    virtual void parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx, Priority p_priority) = 0;
     // Starts p_loop (it must outlive the worker): enter() now or on the worker's thread.
     virtual std::unique_ptr<Worker> start_worker(const char *p_name, WorkerLoop &p_loop) = 0;
     // Main thread, once per frame: an inline backend runs its queued tasks and steps its woken workers.
@@ -125,7 +126,7 @@ public:
             fn();
         }
     }
-    void parallel_for(uint32_t p_count, const char *, void (*p_fn)(void *, uint32_t), void *p_ctx) override {
+    void parallel_for(uint32_t p_count, const char *, void (*p_fn)(void *, uint32_t), void *p_ctx, Priority) override {
         for (uint32_t i = 0; i < p_count; i++) {
             p_fn(p_ctx, i);
         }

@@ -44,6 +44,7 @@ var _pitch := 0.45
 var _dist := 8000.0
 var status := ""  # the last restart's line
 var loaded_ms := -1  # the last restart until its chunks in view were loaded, -1 while loading
+var profile := {}  # --drag: "restart_ms" and "loaded_ms" appended to, when set
 
 
 func _init() -> void:
@@ -123,6 +124,8 @@ func _restart_terrain() -> void:
 	_restart_usec = Time.get_ticks_usec()
 	if _terrain != null:
 		_hold(true)  # the last frame on screen while the new world loads
+		if profile.has("hold_ms"):
+			profile.hold_ms.append((Time.get_ticks_usec() - _restart_usec) / 1000.0)
 		_unshift_camera()  # the world starts again at its first render origin
 		_terrain.restart_world(_without_clouds(_json), _dir)
 	else:
@@ -144,6 +147,8 @@ func _restart_terrain() -> void:
 	_place_camera()  # the new terrain's LOD centre
 	_started = _json
 	loaded_ms = -1
+	if profile.has("restart_ms"):
+		profile.restart_ms.append((Time.get_ticks_usec() - _restart_usec) / 1000.0)
 	status = "terrain restarted in %d ms, loading" % ((Time.get_ticks_usec() - _restart_usec) / 1000)
 	status_changed.emit()
 
@@ -193,6 +198,8 @@ func _process(_delta: float) -> void:
 	if _terrain.is_load_complete() or Time.get_ticks_usec() - _restart_usec > int(LOAD_WAIT * 1e6):
 		_hold(false)
 		loaded_ms = (Time.get_ticks_usec() - _restart_usec) / 1000
+		if profile.has("loaded_ms"):
+			profile.loaded_ms.append(loaded_ms)
 		status = "terrain loaded in %d ms (restart and chunks in view)" % loaded_ms
 		_restart_usec = 0
 		status_changed.emit()
@@ -265,6 +272,10 @@ func _gui_input(p_event: InputEvent) -> void:
 			return
 		_place_camera()
 		accept_event()
+
+
+func terrain() -> Node3D:
+	return _terrain
 
 
 func image() -> Image:

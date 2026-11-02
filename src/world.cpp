@@ -132,7 +132,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         VLOG(1, "World: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
         chunk_param.skirt_depth = min_skirt;
     }
-    sdf->configure(chunk_param, lod_numbers);
+    {
+        OV_TRACE("world", "start_configure");
+        sdf->configure(chunk_param, lod_numbers);
+    }
     sdf->set_walk_verify(config.walk_verify);
     if (config.walk_gpu) {
         sdf->start_field_gpu(chunk_param); // attached by sdf->poll() once its device is ready
@@ -141,6 +144,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     state.set_max_lod(lod_numbers);
     state.verify = config.destroy_verify;
 
+    OV_TRACE("world", "start_discoverer");
     chunk_discoverer = new ChunkDiscoverer();
     chunk_discoverer->set_config(chunk_param, sdf.get());
     chunk_discoverer->set_cull_mode(ChunkDiscoverer::CullMode(config.discovery_cull_mode));
@@ -161,6 +165,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     chunk_discoverer->start();
 
     if (config.pipeline_mode == PIPELINE_GPU_DIRECT) {
+        OV_TRACE("world", "start_mesher");
         direct_mesher = new GPUDirectMesher();
         direct_mesher->set_dual_contouring(config.dual_contouring);
         direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct);

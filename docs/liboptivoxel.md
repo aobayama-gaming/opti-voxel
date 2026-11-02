@@ -60,7 +60,8 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
 - **The chains cut.** `ChunkOutput` holds no engine resource (the legacy mesher keeps its mesh and instance under the
   output's handle, as a `ChunkReleaser`); the table's records are `archetype_record.hpp` and the index places a record
   by its finished box, without the library.
-- **One executor** (`ov/executor.hpp`): tasks (submit / done / wait, never on the caller), `parallel_for`, and
+- **One executor** (`ov/executor.hpp`): tasks (submit / done / wait, never on the caller), `parallel_for` (HIGH, or
+  LOW behind every HIGH one: Godot's low-priority group), and
   `WorkerLoop` workers (enter, a step per wake, exit, on one thread). `GodotExecutor` (WorkerThreadPool + threads) is
   installed by register_types; the default is inline (`pump()` once per frame), the threads=no web build's.
 - **Host services**: `ov/log.hpp` (`OV_LOG`, the level `DebugLog::level` aliases) and `ov/clock.hpp` (`now_usec`,

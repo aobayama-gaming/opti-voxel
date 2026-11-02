@@ -1005,8 +1005,12 @@ bool VoxelTerrain::_start_world() {
 
 void VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
     ERR_FAIL_NULL_MSG(main_device, "restart_world: the terrain is not in the tree (set_world_json before it enters).");
+    OV_TRACE("terrain", "restart_world");
     main_device->post([device = main_device]() { device->park_pipelines(); });
-    _stop_world();
+    {
+        OV_TRACE("terrain", "restart_stop");
+        _stop_world();
+    }
     ov::World::Settings settings = cfg();
     settings.chunk_param = start_chunk_param;
     const ov::DigTool::Settings dig = dig_tool->settings;
@@ -1018,7 +1022,13 @@ void VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
     cfg().world_path.clear();
     cfg().world_json = ov_str(p_json);
     cfg().world_dir = ov_str(p_dir);
-    if (world->load_world()) {
+    bool loaded = false;
+    {
+        OV_TRACE("terrain", "restart_load");
+        loaded = world->load_world();
+    }
+    if (loaded) {
+        OV_TRACE("terrain", "restart_start");
         _start_world();
     }
     // After the new world's pipelines were made (posted in order): the old ones it didn't take.

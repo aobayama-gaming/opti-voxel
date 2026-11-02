@@ -23,7 +23,7 @@ public:
     TaskId submit(std::function<void()> p_task, Priority p_priority, const char *p_name) override;
     bool done(TaskId p_task) override;
     void wait(TaskId p_task) override;
-    void parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx) override;
+    void parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx, Priority p_priority) override;
     std::unique_ptr<Worker> start_worker(const char *p_name, WorkerLoop &p_loop) override;
 
 private:

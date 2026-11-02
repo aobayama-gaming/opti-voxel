@@ -72,7 +72,7 @@ void ThreadPoolExecutor::wait(TaskId p_task) {
     fn();
 }
 
-void ThreadPoolExecutor::parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx) {
+void ThreadPoolExecutor::parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx, Priority p_priority) {
     if (p_count == 0) {
         return;
     }
@@ -87,7 +87,7 @@ void ThreadPoolExecutor::parallel_for(uint32_t p_count, const char *p_name, void
     std::vector<TaskId> ids;
     ids.reserve(helpers);
     for (uint32_t h = 0; h < helpers; h++) {
-        ids.push_back(submit(drain, Priority::HIGH, p_name));
+        ids.push_back(submit(drain, p_priority, p_name));
     }
     drain();
     for (TaskId id : ids) {

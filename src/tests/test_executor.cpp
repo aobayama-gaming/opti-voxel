@@ -67,7 +67,7 @@ TEST_CASE("ov::InlineExecutor: tasks run at pump or wait, never on submit") {
         std::vector<uint32_t> *seen;
         static void run(void *p_ctx, uint32_t p_i) { (*static_cast<Ctx *>(p_ctx)->seen)[p_i]++; }
     } ctx{ &seen };
-    e.parallel_for(37, "loop", &Ctx::run, &ctx);
+    e.parallel_for(37, "loop", &Ctx::run, &ctx, ov::Priority::HIGH);
     CHECK(std::count(seen.begin(), seen.end(), 1u) == 37);
 }
 
@@ -133,12 +133,13 @@ TEST_CASE("GodotExecutor: tasks and loops on the worker pool") {
         std::vector<std::atomic<int>> *seen;
         static void run(void *p_ctx, uint32_t p_i) { (*static_cast<Ctx *>(p_ctx)->seen)[p_i]++; }
     } ctx{ &seen };
-    e.parallel_for(1000, "test", &Ctx::run, &ctx);
-    int once = 0;
+    e.parallel_for(1000, "test", &Ctx::run, &ctx, ov::Priority::HIGH);
+    e.parallel_for(1000, "test", &Ctx::run, &ctx, ov::Priority::LOW); // on the LOW share of the threads: each i once too
+    int twice = 0;
     for (const std::atomic<int> &s : seen) {
-        once += s.load() == 1;
+        twice += s.load() == 2;
     }
-    CHECK(once == 1000);
+    CHECK(twice == 1000);
 }
 
 TEST_CASE("ov::ThreadPoolExecutor: tasks, loops, LOW under its cap, waits from inside the pool") {
@@ -184,7 +185,7 @@ TEST_CASE("ov::ThreadPoolExecutor: tasks, loops, LOW under its cap, waits from i
     const ov::TaskId outer = one.submit(
             [&] {
                 one.wait(one.submit([&inner] { inner++; }, ov::Priority::HIGH, "inner"));
-                one.parallel_for(1000, "test", &Ctx::run, &ctx);
+                one.parallel_for(1000, "test", &Ctx::run, &ctx, ov::Priority::HIGH);
             },
             ov::Priority::HIGH, "outer");
     one.wait(outer);

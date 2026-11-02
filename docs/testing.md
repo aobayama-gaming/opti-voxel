@@ -11,7 +11,11 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   graph of every engine kind drawn by the engine, `ClimateReportNode.preview`, and every node's UI built, edits, the
   export and its refusal: `MIXER: {json}`, exit 0 ok, 4 not ok or a script error). `--shot` draws the sharp
   map once, waits for the 3D view's terrain, restarts it twice on the same world (an edit's path), saves the window and
-  the view, prints the map's time and the three loads (`MIXER_SHOT: terrain_loads_ms`) and quits.
+  the view, prints the map's time and the three loads (`MIXER_SHOT: terrain_loads_ms`) and quits. `--drag=ID.KEY=A:B:S` drags a
+  node's value A to B and back each second for S seconds, one edit a frame (a slider held), and prints `MIXER_DRAG:`
+  fps and the p50 / p95 / max of the frame, the recompile, the restart (its frame copy alone: `hold_ms`) and the load
+  after each restart; with `--shot=PATH` it saves a window shot a second (left out of the frame times) and the engine
+  trace (`PATH_trace.json`, `src/trace.hpp`: `restart_world`, `restart_stop` / `_load` / `_start`, `start_mesher` ...).
 - `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
