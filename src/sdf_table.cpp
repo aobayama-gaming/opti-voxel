@@ -468,18 +468,16 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
     CellScatter s = scene_source(SCATTER_SITE_SALT, scatter_count, scatter_area);
     const float vs = param.voxel_size;
     const int rock = p_types.rock, capsule = p_types.capsule;
+    const std::vector<const Species *> kind = species_of(species, Species::ROCK);
     std::vector<RockSpecies> rocks;
-    for (const Species *r : species_of(species, Species::ROCK)) {
+    for (const Species *r : kind) {
         rocks.push_back(r->rock);
     }
     if (rocks.empty()) {
         s.side = 0; // no rock to place: not a source
         return s;
     }
-    // One profile class unless the biomes choose the rocks (the far field of every rock together, as before species).
-    s.classify = site_class(Species::ROCK);
-    s.classes = s.classify ? uint32_t(rocks.size()) : 1u;
-    s.generate_class = [rock, capsule, vs, rocks](const Site &p_site, int p_class, const UpAxis &p_up, int, std::vector<TableRecord> &r_out) { // one record: the same at every LOD
+    const auto grow = [rock, capsule, vs, rocks](const Site &p_site, int p_class, const UpAxis &p_up, int, std::vector<TableRecord> &r_out) { // one record: the same at every LOD
         if (p_class < 0 || p_class >= int(rocks.size())) {
             return;
         }
@@ -504,11 +502,9 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
         }
         r_out.push_back(rec);
     };
-    const uint32_t count = uint32_t(rocks.size());
-    s.generate = [classify = s.classify, grow = s.generate_class, count](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
-        grow(p_site, classify ? classify(p_site) : int(p_site.variant % count), p_up, p_lod, r_out);
-    };
-    s.profile_key = "rocks:" + species_key(species_of(species, Species::ROCK));
+    // The far field of every rock together whatever the biomes list (one class, as before species).
+    s.set_growth(uint32_t(rocks.size()), site_class(Species::ROCK), grow, false);
+    s.profile_key = "rocks:" + species_key(kind);
     return s;
 }
 
@@ -522,6 +518,7 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, ov::V
     // records wait for their turn), then admitted in site order (the record ids don't change).
     constexpr size_t BATCH = 4096;
     std::vector<std::vector<TableRecord>> grown(ov::min(BATCH, sites.size()));
+    std::vector<int> site_species(grown.size(), 0); // each site's (its biome's read once, with its records)
     int64_t placed = 0, total = 0, most = 0;
     // Per material: the sites' summed volume and equal-covariance semi-axes (span_moments), for the means.
     std::map<uint32_t, std::pair<double, std::array<double, 3>>> per_material;
@@ -529,7 +526,13 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, ov::V
         if (i % BATCH == 0) {
             parallel_for(uint32_t(ov::min(BATCH, sites.size() - i)), "SDFTable::add_source", [&](uint32_t p_j) {
                 grown[p_j].clear();
-                p_source.grow(sites[i + p_j].site, -1, grown[p_j]);
+                const Site &site = sites[i + p_j].site;
+                if (p_source.generate_class) {
+                    site_species[p_j] = p_source.species_of(site);
+                    p_source.generate_class(site, site_species[p_j], p_source.up(site.base), -1, grown[p_j]);
+                } else {
+                    p_source.grow(site, -1, grown[p_j]);
+                }
             });
         }
         const Site &site = sites[i].site;
@@ -539,7 +542,7 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, ov::V
             continue;
         }
         if (r_spans) {
-            r_spans->push_back(TreeSpan{ first, uint32_t(parts.size()), p_source.class_of(site), site.seed });
+            r_spans->push_back(TreeSpan{ first, uint32_t(parts.size()), site_species[i % BATCH], site.seed });
         }
         placed++;
         total += int64_t(parts.size());

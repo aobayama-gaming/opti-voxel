@@ -155,17 +155,22 @@ std::vector<const Species *> species_of(const std::vector<Species> &p_all, Speci
     return out;
 }
 
-ov::str species_key(const std::vector<const Species *> &p_species) {
-    ov::str key;
+std::string species_key(const std::vector<const Species *> &p_species) {
+    // Each species' own kind's parameters, as bits (key_bits: two that differ in the last bit don't share a profile).
+    std::string key;
     for (const Species *s : p_species) {
-        key += s->name + ":";
-        for (const auto &[name, member] : TREE_DOUBLES) {
-            key += ov::format("%s,", s->tree.*member);
+        key += std::string(s->name.c_str()) + ":";
+        if (s->kind == Species::TREE) {
+            for (const auto &[name, member] : TREE_DOUBLES) {
+                key += key_bits(s->tree.*member);
+            }
+            for (const auto &[name, member] : TREE_INTS) {
+                key += key_bits(s->tree.*member);
+            }
+        } else {
+            key += key_bits(s->rock.pillar) + key_bits(s->rock.radius_lo_m) + key_bits(s->rock.radius_hi_m);
         }
-        for (const auto &[name, member] : TREE_INTS) {
-            key += ov::format("%d,", int64_t(s->tree.*member));
-        }
-        key += ov::format("%d,%s,%s;", int64_t(s->rock.pillar), s->rock.radius_lo_m, s->rock.radius_hi_m);
+        key += ";";
     }
     return key;
 }

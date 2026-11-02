@@ -73,7 +73,7 @@ void apply_terms(const Table &p_table, const float p_slots[Cascade::SLOTS], Floa
 }
 
 bool plays(const Amp &p_amp, const Cascade::Band &p_band) {
-    return p_amp.k == p_band.k && p_amp.seed == p_band.seed && p_amp.stretch == p_band.stretch;
+    return note_id(p_amp) == note_id(p_band);
 }
 
 const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band) {
@@ -88,6 +88,14 @@ const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band) {
 float biome_amp(const Biome &p_biome, const Cascade::Band &p_band) {
     const Amp *a = find_amp(p_biome, p_band);
     return a ? a->amp : p_band.amp;
+}
+
+double ground_reach(const Table &p_table) {
+    double h = 0.0;
+    for (const Cascade::Band &band : p_table.notes) {
+        h += double(max_amp(p_table, band));
+    }
+    return h;
 }
 
 bool Table::has_stretch() const {
@@ -233,7 +241,11 @@ SampleCarry sample_carry(const Table &p_table) {
 }
 
 int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
-    const int c = sample_carry(p_table).pick;
+    return pick_slots(p_table, sample_carry(p_table), p_slots);
+}
+
+int pick_slots(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS]) {
+    const int c = p_carry.pick;
     return c >= 0 ? int(p_slots[Cascade::carry_slot(c)]) : int(p_table.biomes.size()) - 1;
 }
 

@@ -39,6 +39,6 @@ ov::str parse_species(const ov::Value &p_list, std::vector<Species> &r_out);
 // The species of kind p_kind, in list order (a source's classes).
 std::vector<const Species *> species_of(const std::vector<Species> &p_all, Species::Kind p_kind);
 // A key of p_species' parameters (SourceProfile's registry: sources with the same key share one profile).
-ov::str species_key(const std::vector<const Species *> &p_species);
+std::string species_key(const std::vector<const Species *> &p_species);
 
 } // namespace Archetype

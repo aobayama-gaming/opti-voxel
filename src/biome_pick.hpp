@@ -26,7 +26,9 @@ struct BiomePick {
 
 private:
     const Climate::Table *table = nullptr;
-    const Cascade::Spec *spec = nullptr;
+    // The fields' cascade: the combined one without the ground's notes and their modulation when no field term reads
+    // the ground (the fields' bits are the same; a site's read skips the ground's levels).
+    Cascade::Spec spec;
     int lattice = 0;
 };
 

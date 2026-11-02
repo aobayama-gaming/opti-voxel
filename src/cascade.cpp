@@ -482,6 +482,17 @@ int Spec::level_notes(int p_m) const {
     return int(std::count_if(bands.begin(), bands.end(), [&](const Band &p_b) { return insert_level(p_b) == p_m; }));
 }
 
+int Spec::note_rank(const Band &p_band) const {
+    int rank = 0;
+    for (const Band &b : bands) {
+        if (&b == &p_band) {
+            return rank;
+        }
+        rank += insert_level(b) == insert_level(p_band) ? 1 : 0;
+    }
+    return rank;
+}
+
 int Spec::max_level_notes() const {
     int n = 0;
     for (int m = 0; m <= MAX_LEVEL; m++) {

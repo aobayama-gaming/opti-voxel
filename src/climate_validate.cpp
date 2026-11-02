@@ -16,10 +16,10 @@ bool moderate(double p_v) {
     return std::isfinite(p_v) && a >= std::ldexp(1.0, -40) && a <= std::ldexp(1.0, 40);
 }
 
-// The first band of p_bands like p_like: its octave (p_identity: and its seed and stretch, a note's identity).
+// The first band of p_bands like p_like: its octave (p_identity: its note's identity, note_id).
 const Cascade::Band *find_band(const std::vector<Cascade::Band> &p_bands, const Cascade::Band &p_like, bool p_identity) {
     for (const Cascade::Band &b : p_bands) {
-        if (b.k == p_like.k && (!p_identity || (b.seed == p_like.seed && b.stretch == p_like.stretch))) {
+        if (p_identity ? note_id(b) == note_id(p_like) : b.k == p_like.k) {
             return &b;
         }
     }
@@ -81,11 +81,7 @@ ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
 }
 
 ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_amp) {
-    Cascade::Band like;
-    like.k = p_amp.k;
-    like.seed = p_amp.seed;
-    like.stretch = p_amp.stretch;
-    if (find_band(p_table.notes, like, true) == nullptr) {
+    if (std::none_of(p_table.notes.begin(), p_table.notes.end(), [&](const Cascade::Band &p_b) { return plays(p_amp, p_b); })) {
         return ov::format("an amplitude names octave k = %d, which no note has.", p_amp.k);
     }
     if (!std::isfinite(p_amp.amp) || p_amp.amp < 0.0f) {
@@ -122,7 +118,7 @@ ov::str validate_amps(const Table &p_table, const Ground &p_ground, const Biome 
     for (size_t j = 0; j < p_biome.amps.size(); j++) {
         for (size_t i = 0; i < j; i++) {
             const Amp &a = p_biome.amps[i], &b = p_biome.amps[j];
-            if (a.k == b.k && a.seed == b.seed && a.stretch == b.stretch) {
+            if (note_id(a) == note_id(b)) {
                 return p_where + ov::format("the note of octave k = %d has two amplitudes.", b.k);
             }
         }
@@ -132,15 +128,6 @@ ov::str validate_amps(const Table &p_table, const Ground &p_ground, const Biome 
         }
     }
     return ov::str();
-}
-
-// The ground's largest |h|: each note's largest amplitude in any biome, shaped (max_amp).
-double ground_reach(const Table &p_table) {
-    double h = 0.0;
-    for (const Cascade::Band &band : p_table.notes) {
-        h += double(max_amp(p_table, band));
-    }
-    return h;
 }
 
 ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground) {
@@ -174,6 +161,9 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
     // The program's term D = f(H) - H (a curve's offset R - h): under the ground's amplitude cap (what the skirts and the
     // cascade's own bands are held to), in the exact range.
     const SampleProgram &pr = b.program;
+    if (pr.code.size() > size_t(MAX_SAMPLE_INSTRS)) {
+        return where + ov::format("its graph past its notes is %d nodes, at most %d.", int64_t(pr.code.size()), MAX_SAMPLE_INSTRS);
+    }
     const char *what = pr.curve_of_ground() ? "its curve" : "its graph past its notes";
     if (pr.bound > p_ground.amp_cap || (pr.bound > 0.0 && !ExactNoise::in_exact_range(float(pr.bound)))) {
         return where + ov::format("%s moves the ground by up to %s voxels, over the ground's cap of %s.", what, pr.bound, p_ground.amp_cap);

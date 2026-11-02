@@ -91,11 +91,8 @@ public:
     Modulator(const Table &p_table, const Cascade::Spec &p_spec) :
             table(p_table), sample(sample_carry(p_table)) {
         state = p_table.has_state() ? p_spec.group_count() - 1 : -1;
-        int notes[Cascade::MAX_LEVEL + 1] = {}; // each level's ground notes so far: a note's BandMod slot
         for (const Cascade::Band &band : p_spec.bands) {
-            const int m = p_spec.insert_level(band);
-            const int i = m >= 0 && m <= Cascade::MAX_LEVEL ? notes[m]++ : 0;
-            add_entry(p_spec, band, p_spec.note_mod(i)); // biomes play the ground's notes only
+            add_entry(p_spec, band, p_spec.note_mod(p_spec.note_rank(band))); // biomes play the ground's notes only
         }
         // The carry: the samples' terms first, then each level's parts (used, the GPU's carry).
         carry = sample.count;

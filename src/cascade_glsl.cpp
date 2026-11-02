@@ -571,15 +571,13 @@ ov::bytes band_table(const Spec &p_spec) {
     using namespace WorldCoord;
     const ExtraNotes extra(p_spec);
     ov::bytes bytes((size_t(p_spec.group_count()) * BAND_ENTRIES + size_t(extra.total)) * BAND_BYTES, 0);
-    int placed[BAND_ENTRIES] = {}; // the ground's other notes of each level so far
     for (int g = 0; g < p_spec.group_count(); g++) {
         for (const Band &b : p_spec.group_bands(g)) {
             const int m = p_spec.insert_level(b);
             OV_ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, ov::format("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
-            size_t base = (size_t(g) * BAND_ENTRIES + m) * BAND_BYTES;
-            if (g == 0 && ov::get_u32(bytes.data() + base + 48) != 0) {
-                base = size_t(extra.first[m] + placed[m]++) * BAND_BYTES; // the ground's next note of level m (ExtraNotes)
-            }
+            const int rank = g == 0 ? p_spec.note_rank(b) : 0;
+            // A level's first band at its group's entry, the ground's other notes after the groups' (ExtraNotes).
+            const size_t base = (rank == 0 ? size_t(g) * BAND_ENTRIES + size_t(m) : size_t(extra.first[m] + rank - 1)) * BAND_BYTES;
             uint8_t *slot = bytes.data() + base;
             OV_ERR_CONTINUE_MSG(ov::get_u32(slot + 48) != 0, ov::format("CascadeGLSL: two bands of a field on lattice %d (the GPU table holds one per level).", m));
             for (int o = 0; o < 4; o++) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "biome_compiler.hpp"
 #include "species.hpp"
 
 #include "ov/str.hpp"
@@ -42,7 +43,7 @@ struct WorldFile {
     bool clouds = true; // the volumetric clouds in it (Clouds), their layer's scale as the atmosphere's
     // The relief the sky stays above (metres; AtmosphereMedium::for_base, CloudLayer::for_base), a planet's
     // SDFCascade::PLANET_RELIEF of its radius at most (SDFCascade::relief_m): the template ground's 3.3 km cap.
-    double relief_m = 65536.0 * 0.05;
+    double relief_m = Climate::TEMPLATE_MAX_AMP_M;
     int trees = 0; // about this many grown trees (SDFTable::set_forest) in a square of side tree_area_m
     double tree_area_m = 60.0;
     int instances = 0; // this many scattered rocks and pillars (SDFTable::set_scatter) in a square of side instance_area_m

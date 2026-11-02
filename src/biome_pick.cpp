@@ -6,9 +6,16 @@
 #include <algorithm>
 
 BiomePick::BiomePick(const Climate::Table *p_table, const Cascade::Spec *p_spec) :
-        table(p_table && p_spec && p_table->biomes.size() > 1 ? p_table : nullptr), spec(p_spec) {
+        table(p_table && p_spec && p_table->biomes.size() > 1 ? p_table : nullptr) {
     if (table == nullptr) {
         return;
+    }
+    spec = *p_spec;
+    const bool ground = std::any_of(table->fields.begin(), table->fields.end(),
+            [](const Climate::Field &p_f) { return std::any_of(p_f.terms.begin(), p_f.terms.end(), [](const Climate::Term &p_t) { return p_t.source == Climate::GROUND; }); });
+    if (!ground) {
+        spec.bands.clear();
+        spec.modulation.reset();
     }
     // The finest band of a field some biome's place names: coarser lattices read the same weights (no finer octave of
     // theirs), finer ones would cost levels for nothing.
@@ -16,7 +23,7 @@ BiomePick::BiomePick(const Climate::Table *p_table, const Cascade::Spec *p_spec)
     for (const Climate::Biome &b : table->biomes) {
         for (const Climate::Axis &a : b.at) {
             for (const Cascade::Band &band : table->fields[size_t(a.field)].bands) {
-                lattice = ov::min(lattice, spec->insert_level(band));
+                lattice = ov::min(lattice, spec.insert_level(band));
             }
         }
     }
@@ -31,7 +38,7 @@ void BiomePick::weights(const VoxelPos &p_voxel, float r_w[Climate::MAX_BIOMES])
     }
     const Vector3i64 p = WorldCoord::floor_div(p_voxel, int64_t(1) << lattice);
     ExactNoise::Float4 fields[Climate::MAX_FIELDS], w[Climate::MAX_BIOMES];
-    Climate::fields_at(*table, *spec, p, lattice, fields);
+    Climate::fields_at(*table, spec, p, lattice, fields);
     Climate::weights(*table, fields, w);
     for (int b = 0; b < Climate::MAX_BIOMES; b++) {
         r_w[b] = w[b].w;

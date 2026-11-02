@@ -569,17 +569,12 @@ void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary
         hull_lod.push_back(fits ? tree_hull_only_lod(species, p_voxel, p_library, p_finish, p_types) : int(TableRecord::NEVER_DROPPED));
     }
     r_scatter.salt = TREE_SITE_SALT;
-    r_scatter.classes = uint32_t(p_species.size());
-    r_scatter.classify = std::move(p_classify);
-    r_scatter.generate_class = [p_species, p_types, p_voxel, hull_lod](const Site &p_site, int p_class, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+    const auto grow = [p_species, p_types, p_voxel, hull_lod](const Site &p_site, int p_class, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
         if (p_class >= 0 && p_class < int(p_species.size())) {
             grow_tree(p_species[size_t(p_class)], p_site.base, p_up, p_site.seed, p_voxel, p_types, r_out, nullptr, p_lod >= hull_lod[size_t(p_class)]);
         }
     };
-    r_scatter.generate = [classify = r_scatter.classify, grow = r_scatter.generate_class, classes = r_scatter.classes](const Site &p_site, const UpAxis &p_up, int p_lod,
-                                 std::vector<TableRecord> &r_out) {
-        grow(p_site, classify ? classify(p_site) : int(p_site.variant % classes), p_up, p_lod, r_out);
-    };
+    r_scatter.set_growth(uint32_t(p_species.size()), std::move(p_classify), grow, true);
     r_scatter.profile_key = "trees:" + key_bits(p_voxel) + p_key + key_bits(p_types.branch) + key_bits(p_types.crown) + key_bits(p_types.cone) + key_bits(p_types.crown_amp) +
             key_bits(p_types.crown_dent);
 }

@@ -266,10 +266,7 @@ ov::str compile(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground,
         }
     }
     std::stable_sort(r_table.notes.begin(), r_table.notes.end(), [](const Cascade::Band &p_a, const Cascade::Band &p_b) { return p_a.k > p_b.k; });
-    double reach = 0.0;
-    for (const Cascade::Band &b : r_table.notes) {
-        reach += double(max_amp(r_table, b));
-    }
+    const double reach = ground_reach(r_table);
     const std::vector<double> fields = field_bounds(r_table, reach);
     for (Biome &bi : r_table.biomes) {
         if (!bi.program.empty()) {

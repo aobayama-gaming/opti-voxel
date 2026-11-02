@@ -168,6 +168,8 @@ struct SampleInstr {
     float value = 0.0f;
     int index = 0;
 };
+// A sample program's registers at most (validate: run_program's stack).
+inline constexpr int MAX_SAMPLE_INSTRS = 64;
 struct SampleProgram {
     std::vector<SampleInstr> code; // empty: no term (D = 0); the last register is f
     std::vector<Curve> curves;
@@ -280,6 +282,21 @@ Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground)
 float biome_amp(const Biome &p_biome, const Cascade::Band &p_band);
 // The largest biome_amp of any biome, times its shape's bound: bounds that follow amplitudes (skirts) take it.
 float max_amp(const Table &p_table, const Cascade::Band &p_band);
+// The ground's largest |H| (LOD0 voxels): each note's max_amp summed (validate's curves, the compiler's program bounds).
+double ground_reach(const Table &p_table);
+// A note's identity (several notes may share an octave): its octave, its band's seed and its stretch.
+struct NoteId {
+    int k = 0;
+    uint32_t seed = 0;
+    int stretch = 0;
+    bool operator==(const NoteId &p_o) const { return k == p_o.k && seed == p_o.seed && stretch == p_o.stretch; }
+};
+inline NoteId note_id(const Cascade::Band &p_band) {
+    return NoteId{ p_band.k, p_band.seed, p_band.stretch };
+}
+inline NoteId note_id(const Amp &p_amp) {
+    return NoteId{ p_amp.k, p_amp.seed, p_amp.stretch };
+}
 // Biome p_biome's entry of the note p_band (its octave, seed and stretch), or null.
 const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band);
 // Whether p_amp is the entry of the note p_band.
@@ -333,6 +350,8 @@ ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c);
 // The ground at a sample: the cascade's ground channels H of p_slots (a point's slots), then H + sum_b w_b D_b(H) over
 // the biomes with a sample program, w_b carried (SampleCarry). Without programs, the cascade's channels, bit for bit.
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
+// The same with the table's sample_carry given (per sample: computed once at configure).
+Float4 ground_value(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS]);
 // The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
 // shared helpers (splices_helpers is true with ground terms), ch in p_combined's GPU layout.
 ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined);
@@ -344,6 +363,7 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
 // The carried pick of a point's Cascade slots p_slots (combined_spec's layout, the last level of a run: Cascade::point_slots
 // with p_all_fields, or Level::slots_at of a run's last level carrying the sample terms).
 int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]);
+int pick_slots(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS]);
 
 // 0xRRGGBB (sRGB) as a linear colour, alpha 1.
 ov::Color srgb_to_linear(uint32_t p_rgb);

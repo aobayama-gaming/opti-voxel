@@ -215,7 +215,6 @@ private:
     // A shape (shape, scale, offset or coeffs) of a node: the plain one without any. Only a multifractal's state
     // (p_state: the row has one) reads a shape's constant term.
     bool shape(const ov::Value &p_d, const ov::str &p_where, bool p_state, Shape &r_s) {
-        const bool state = p_state;
         if (p_d.has("coeffs")) {
             const ov::Value c = array(p_d, "coeffs", p_where);
             if (c.size() != 4 || p_d.has("shape")) {
@@ -229,7 +228,7 @@ private:
                     fail(p_where, "'coeffs' is 4 numbers.");
                 }
             }
-            if (r_s.c[0] != 0.0f && !state) {
+            if (r_s.c[0] != 0.0f && !p_state) {
                 fail(p_where, "the constant coefficient only counts in a multifractal (a band is inserted without its mean).");
             }
             return true;
@@ -243,7 +242,7 @@ private:
         const double o = number(p_d, "offset", p_where, ridged ? 1.0 : 0.0);
         // Plain, billow and square: the offset is the constant term, inserted without its mean (Cascade::NOISE_*_MEAN):
         // only a multifractal's state reads it. Ridged's (o - |a n|)^2 also scales |n| by it.
-        if (p_d.has("offset") && !ridged && !state) {
+        if (p_d.has("offset") && !ridged && !p_state) {
             fail(p_where, "'offset' only counts in a multifractal (a plain, billow or square band is inserted without its mean).");
             return true;
         }

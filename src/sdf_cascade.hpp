@@ -146,7 +146,7 @@ public:
     // palette holds biome b's material, Climate::biome_material, at 1 + b), Climate::pick_slots of p_slots, the slots of a
     // run's last level (the pick the level above derived). The GPU's cascade_ground_material, bit for bit.
     uint32_t ground_material(const float p_slots[Cascade::SLOTS]) const {
-        return has_ground_materials() ? uint32_t(1 + Climate::pick_slots(table, p_slots)) : 0u;
+        return has_ground_materials() ? uint32_t(1 + Climate::pick_slots(table, carry, p_slots)) : 0u;
     }
     // The same at LOD0 voxel p_voxel, a multiple of 2^lod.
     uint32_t ground_material_at(const VoxelPos &p_voxel, int p_lod) const {
@@ -217,7 +217,7 @@ uint cascade_ground_material(Ch ch) {
             r_ch[c] = p_slots[c];
         }
         if (has_ground_terms()) {
-            const ExactNoise::Float4 g = Climate::ground_value(table, p_slots);
+            const ExactNoise::Float4 g = Climate::ground_value(table, carry, p_slots);
             r_ch[Cascade::VALUE] = g.w;
             r_ch[Cascade::DX] = g.x;
             r_ch[Cascade::DY] = g.y;
@@ -486,6 +486,7 @@ private:
         }
         spec = Climate::combined_spec(table, spec);
         ground_terms = table.has_programs();
+        carry = Climate::sample_carry(table);
         std::vector<std::pair<ov::str, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < table.biomes.size(); b++) {
             grounds.emplace_back("biome:" + table.biomes[b].name, Climate::biome_material(table.biomes[b]));
@@ -504,5 +505,6 @@ private:
     Climate::Table table; // the compiled ground: climate_data's, or the template's
     bool given = false; // table is climate_data's (get_climate)
     bool ground_terms = false; // table.has_programs(), read per sample
+    Climate::SampleCarry carry; // Climate::sample_carry(table), read per sample
     ov::str climate_error;
 };

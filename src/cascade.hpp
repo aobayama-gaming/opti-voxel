@@ -374,6 +374,9 @@ struct Spec {
     // The ground bands of Λ_p_m (in spec order: the level's first, then its other notes) and the most any level has.
     int level_notes(int p_m) const;
     int max_level_notes() const;
+    // The index of the ground band p_band (one of `bands`) among its level's notes, in spec order: the order every
+    // consumer inserts them in (LevelBands, the GPU table, the modulation's BandMod slots).
+    int note_rank(const Band &p_band) const;
     // The BandMod slot of the ground's note p_i of a level (MAX_MODS), and how many slots the GPU's arrays hold.
     int note_mod(int p_i) const { return p_i == 0 ? 0 : group_count() + p_i - 1; }
     int mod_count() const { return group_count() + ov::max(0, max_level_notes() - 1); }

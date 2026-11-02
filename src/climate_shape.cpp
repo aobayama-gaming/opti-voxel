@@ -115,7 +115,8 @@ Float4 eval_curve(const Curve &p_c, const Float4 &p_x) {
 }
 
 // Quilez's polynomial smooth min of p_a and p_b over p_k voxels (p_inv = 0.5 / p_k): h = clamp(1/2 + (b - a) / (2k), 0,
-// 1), b + h (a - b) - k h (1 - h); outside the blend the smaller register itself.
+// 1), b + h (a - b) - k h (1 - h); outside the blend the smaller register itself. Not the archetype IR's smooth_min4: the
+// climate's products flush under 2^-64 (its exactness note). Its dip, k / 4 at a = b, is biome_compiler.cpp's bound.
 Float4 smooth_min(const Float4 &p_a, const Float4 &p_b, float p_k, float p_inv) {
     const Float4 t = dscale(dsub(p_b, p_a), p_inv);
     const float hw = 0.5f + t.w;
@@ -165,7 +166,7 @@ Float4 run_program(const SampleProgram &p_p, const Float4 &p_ground, const float
     if (p_p.curve_of_ground()) {
         return eval_curve(p_p.curves[0], p_ground);
     }
-    std::vector<Float4> r(p_p.code.size());
+    Float4 r[MAX_SAMPLE_INSTRS];
     for (size_t i = 0; i < p_p.code.size(); i++) {
         const SampleInstr &in = p_p.code[i];
         const Float4 a = in.a >= 0 ? r[size_t(in.a)] : Float4{};
@@ -206,7 +207,7 @@ Float4 run_program(const SampleProgram &p_p, const Float4 &p_ground, const float
                 break;
         }
     }
-    return dsub(r.back(), p_ground);
+    return dsub(r[p_p.code.size() - 1], p_ground);
 }
 
 // eval_curve as `vec4 <p_name>(vec4 x)`, the segment chosen by the same compares.
@@ -293,8 +294,11 @@ ov::str program_glsl(const SampleProgram &p_p, int p_b, const Cascade::Spec &p_s
 } // namespace
 
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
+    return ground_value(p_table, sample_carry(p_table), p_slots);
+}
+
+Float4 ground_value(const Table &p_table, const SampleCarry &carry, const float p_slots[Cascade::SLOTS]) {
     const Float4 base = to_float4(p_slots);
-    const SampleCarry carry = sample_carry(p_table);
     Float4 h = base;
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
         if (carry.weight[b] >= 0) {
