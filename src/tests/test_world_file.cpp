@@ -45,10 +45,10 @@ TEST_CASE("WorldFile: inline sections reach their fields") {
 
 TEST_CASE("WorldFile: the climate's fields merge with the world's biomes into one table") {
     WorldFile w;
-    CHECK(parse(R"({"climate": {"fields": [{"name": "t"}]}, "ground_stretch": [{"wavelength_m": 8}], "biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(parse(R"({"climate": {"fields": [{"name": "t"}]}, "biomes": [{"name": "a"}]})", w) == ov::str());
     CHECK(w.climate_table["fields"].size() == 1);
-    CHECK(w.climate_table["ground_stretch"].size() == 1);
     CHECK(w.climate_table["biomes"].size() == 1);
+    CHECK(ov::contains(parse(R"({"ground_stretch": [{"wavelength_m": 8}]})", w), "unknown key 'ground_stretch'"));
 }
 
 TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {

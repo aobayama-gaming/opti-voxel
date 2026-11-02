@@ -35,6 +35,22 @@ bool name_taken_before(const std::vector<T> &p_list, size_t p_i) {
     return false;
 }
 
+// A field's bands or the ground's notes: each octave in the cascade's range, once, its amplitude in the exact range.
+ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &p_ground, const ov::str &p_where) {
+    for (const Cascade::Band &b : p_bands) {
+        if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.k_max) {
+            return p_where + ov::format("octave k = %d is outside the cascade's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.k_max);
+        }
+        if (find_band(p_bands, b.k) != &b) {
+            return p_where + ov::format("octave k = %d is listed twice.", b.k);
+        }
+        if (!ExactNoise::in_exact_range(b.amp)) {
+            return p_where + ov::format("octave k = %d: amplitude %s outside [2^-16, 2^40].", b.k, b.amp);
+        }
+    }
+    return ov::str();
+}
+
 ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
     const Field &f = p_table.fields[size_t(p_i)];
     if (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground") {
@@ -44,22 +60,15 @@ ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
     if (name_taken_before(p_table.fields, size_t(p_i))) {
         return where + ov::str("the name is used twice.");
     }
-    for (const Cascade::Band &b : f.bands) {
-        if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.field_k_max) {
-            return where + ov::format("octave k = %d is outside the cascade's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.field_k_max);
-        }
-        if (find_band(f.bands, b.k) != &b) {
-            return where + ov::format("octave k = %d is listed twice.", b.k);
-        }
-        if (!ExactNoise::in_exact_range(b.amp)) {
-            return where + ov::format("octave k = %d: amplitude %s outside [2^-16, 2^40].", b.k, b.amp);
-        }
+    const ov::str err = validate_bands(f.bands, p_ground, where);
+    if (!err.empty()) {
+        return err;
     }
     for (const Term &t : f.terms) {
         if (t.source != GROUND && (t.source < 0 || t.source >= p_i)) {
             return where + ov::str("a term reads the ground or an earlier field only.");
         }
-        if (bands_of(p_table, p_ground, t.source) == nullptr) {
+        if (bands_of(p_table, t.source) == nullptr) {
             return where + ov::str("a term reads the ground, and there is none.");
         }
         if (!moderate(t.coef)) {
@@ -69,13 +78,12 @@ ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
     return ov::str();
 }
 
-ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Biome &p_biome, const Amp &p_amp) {
-    const Cascade::Band *band = p_ground.spec ? find_band(p_ground.spec->bands, p_amp.k) : nullptr;
-    if (band == nullptr) {
-        return ov::format("an amplitude multiplier names octave k = %d, which the ground doesn't have.", p_amp.k);
+ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_amp) {
+    if (find_band(p_table.notes, p_amp.k) == nullptr) {
+        return ov::format("an amplitude names octave k = %d, which no note has.", p_amp.k);
     }
-    if (!std::isfinite(p_amp.mult) || p_amp.mult < 0.0f) {
-        return ov::format("octave k = %d: the multiplier must be >= 0.", p_amp.k);
+    if (!std::isfinite(p_amp.amp) || p_amp.amp < 0.0f) {
+        return ov::format("octave k = %d: the amplitude must be >= 0.", p_amp.k);
     }
     if ((p_amp.gain != 0.0f && !(moderate(p_amp.gain) && p_amp.gain > 0.0f)) ||
             (p_amp.warp != 0.0f && !(moderate(p_amp.warp) && std::fabs(p_amp.warp) <= Cascade::WARP_LIMIT))) {
@@ -93,17 +101,17 @@ ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Biome &
             }
         }
     }
-    // The inserted amplitude: the multiplier's, each shape term's in the exact range, the shaped band under the ground's cap.
-    const double amp = double(p_amp.mult) * double(band->amp);
-    const Shape shape = band_shape(p_biome, p_amp.k);
-    bool ok = ExactNoise::in_exact_range(float(amp)) && double(p_amp.mult) <= max_ground_mult(p_ground, p_biome, p_amp.k);
+    // The inserted amplitude, each shape term's in the exact range, the shaped band under the cap.
+    const double amp = double(p_amp.amp);
+    const Shape shape = p_amp.has_shape ? p_amp.shape : Shape();
+    bool ok = ExactNoise::in_exact_range(p_amp.amp) && amp * double(shape_bound(shape)) <= double(p_ground.amp_cap);
     for (int t = 1; t < 4 && ok; t++) {
         ok = shape.c[t] == 0.0f || ExactNoise::in_exact_range(float(amp * std::fabs(double(shape.c[t]))));
     }
-    return p_amp.mult == 0.0f || ok ? ov::str() : ov::format("octave k = %d: the modulated amplitude %s (shaped) is out of range.", p_amp.k, amp);
+    return p_amp.amp == 0.0f || ok ? ov::str() : ov::format("octave k = %d: the modulated amplitude %s (shaped) is out of range, or over the cap %s.", p_amp.k, amp, p_ground.amp_cap);
 }
 
-// A biome's multipliers: one per octave, each validate_amp's.
+// A biome's amplitudes: one per note, each validate_amp's.
 ov::str validate_amps(const Table &p_table, const Ground &p_ground, const Biome &p_biome, const ov::str &p_where) {
     for (size_t j = 0; j < p_biome.amps.size(); j++) {
         for (size_t i = 0; i < j; i++) {
@@ -111,7 +119,7 @@ ov::str validate_amps(const Table &p_table, const Ground &p_ground, const Biome 
                 return p_where + ov::format("octave k = %d has two multipliers.", p_biome.amps[j].k);
             }
         }
-        const ov::str err = validate_amp(p_table, p_ground, p_biome, p_biome.amps[j]);
+        const ov::str err = validate_amp(p_table, p_ground, p_biome.amps[j]);
         if (!err.empty()) {
             return p_where + err;
         }
@@ -119,13 +127,11 @@ ov::str validate_amps(const Table &p_table, const Ground &p_ground, const Biome 
     return ov::str();
 }
 
-// The ground's largest |h|: each band's largest amplitude in any biome, shaped (max_amp).
-double ground_reach(const Table &p_table, const Ground &p_ground) {
+// The ground's largest |h|: each note's largest amplitude in any biome, shaped (max_amp).
+double ground_reach(const Table &p_table) {
     double h = 0.0;
-    if (p_ground.spec != nullptr) {
-        for (const Cascade::Band &band : p_ground.spec->bands) {
-            h += double(max_amp(p_table, band));
-        }
+    for (const Cascade::Band &band : p_table.notes) {
+        h += double(max_amp(p_table, band));
     }
     return h;
 }
@@ -171,7 +177,7 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
         return where + ov::format("its curve's offset R - h has a slope up to %s, over %s: spread its points.", slope, MAX_CURVE_SLOPE);
     }
     // Points all past the heights the ground reaches make the curve a constant offset (a wrong unit or sign).
-    const double reach = ground_reach(p_table, p_ground);
+    const double reach = ground_reach(p_table);
     if (reach > 0.0 && (double(b.curve.x.front()) > reach || double(b.curve.x.back()) < -reach)) {
         return where + ov::format("its curve's points are outside the ground's heights (|h| <= %s voxels): it would be a constant.", reach);
     }
@@ -193,6 +199,10 @@ ov::str validate(const Table &p_table, const Ground &p_ground) {
             return err;
         }
     }
+    const ov::str notes = validate_bands(p_table.notes, p_ground, "climate: the ground's notes: ");
+    if (!notes.empty()) {
+        return notes;
+    }
     for (size_t i = 0; i < p_table.biomes.size(); i++) {
         const ov::str err = validate_biome(p_table, i, p_ground);
         if (!err.empty()) {
@@ -203,31 +213,20 @@ ov::str validate(const Table &p_table, const Ground &p_ground) {
         return ov::format("climate: a multifractal carries its state as a field group: at most %d fields.", Cascade::MAX_FIELD_GROUPS - 1);
     }
     // What a level derives for the one below (the samples' terms, then one level's band parts) fits the carry.
-    if (p_ground.spec != nullptr) {
-        const int carry = combined_spec(p_table, *p_ground.spec).carry_groups();
-        if (carry > Cascade::MAX_CARRY) {
-            return ov::format("climate: a level derives %d carry groups for the one below, more than the %d the cascade carries (fewer modulated bands "
-                              "per level, curved biomes, or shaped / warped multipliers).",
-                    carry, Cascade::MAX_CARRY);
-        }
+    const int carry = combined_spec(p_table, Cascade::Spec()).carry_groups();
+    if (carry > Cascade::MAX_CARRY) {
+        return ov::format("climate: a level derives %d carry groups for the one below, more than the %d the cascade carries (fewer modulated notes "
+                          "per level, curved biomes, or shaped / warped notes).",
+                carry, Cascade::MAX_CARRY);
     }
     return ov::str();
 }
 
-const std::vector<Cascade::Band> *bands_of(const Table &p_table, const Ground &p_ground, int p_source) {
+const std::vector<Cascade::Band> *bands_of(const Table &p_table, int p_source) {
     if (p_source == GROUND) {
-        return p_ground.spec ? &p_ground.spec->bands : nullptr;
+        return &p_table.notes;
     }
     return p_source >= 0 && p_source < int(p_table.fields.size()) ? &p_table.fields[size_t(p_source)].bands : nullptr;
-}
-
-double max_ground_mult(const Ground &p_ground, const Biome &p_biome, int p_k) {
-    const Cascade::Band *band = p_ground.spec ? find_band(p_ground.spec->bands, p_k) : nullptr;
-    if (band == nullptr) {
-        return 0.0;
-    }
-    const double unit = double(band->amp) * double(shape_bound(band_shape(p_biome, p_k)));
-    return unit > 0.0 ? double(p_ground.amp_cap) / unit : INFINITY;
 }
 
 } // namespace Climate

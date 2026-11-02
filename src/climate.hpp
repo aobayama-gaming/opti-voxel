@@ -89,8 +89,9 @@ struct Axis {
     float inv_span = 1.0f;
 };
 
-// How a biome plays the ground's octave k (a note): its multiplier, the modulated cascade's (combined_spec), and how
-// the biome shapes it. gain > 0 weights it by the multifractal state, clamp(gain (1 - c), 0, 1), c the
+// How a biome plays the ground's note of octave k: its amplitude (LOD0 voxels: its graph's mix row volume times the
+// note's amplitude, biome_compiler.cpp), the modulated cascade's (combined_spec), and how the biome shapes it. gain > 0
+// weights it by the multifractal state, clamp(gain (1 - c), 0, 1), c the
 // complement of the previous multifractal octave's weighted signal (Musgrave: ridged gain 2, hybrid 1); warp != 0 reads
 // its noise displaced by warp LOD0 voxels times the values of the fields warp_fields (libnoise's turbulence), the
 // displacement's gradient applied by the chain rule.
@@ -100,7 +101,7 @@ struct Axis {
 // the lattice axes (measured, the climate report's gradient error: 6% and visible streaks, 2.5% for the plain ground).
 struct Amp {
     int k = 0;
-    float mult = 1.0f;
+    float amp = 0.0f;
     bool has_shape = false; // else plain
     Shape shape;
     float gain = 0.0f;
@@ -143,8 +144,8 @@ struct Surface {
     float roughness = 1.0f;
 };
 
-// A biome: where it is (its axes in the fields' space), how it plays the ground's octaves (amps), its height curve and its
-// look. The curve remaps the ground height h at each sample: h + C(h), C the curve through the points (h_i, R_i - h_i)
+// A biome: where it is (its axes in the fields' space), how it plays the ground's notes (amps: what its graph mixes,
+// biome_compiler.cpp), its height curve and its look. The curve remaps the ground height h at each sample: h + C(h), C the curve through the points (h_i, R_i - h_i)
 // of the format's [h, R(h)] (LOD0 voxels, constant past the ends: R - h holds), blended by the biome's weight
 // (ground_value). Without points, C = 0.
 // The clouds over a biome ("clouds"; CloudClimate): the sky's cover there and the cloud type (Schneider's: stratus 0,
@@ -168,8 +169,10 @@ struct Biome {
 struct Table {
     std::vector<Field> fields;
     std::vector<Biome> biomes;
-    // (k, stretch) of the ground's octaves stretched along the base's up ("ground_stretch": Band::stretch, combined_spec).
-    std::vector<std::pair<int, int>> ground_stretch;
+    // The ground: every note some biome's graph mixes, once (biome_compiler.cpp), coarsest first. A note every biome
+    // plays plain at one amplitude is a constant band at it, which no biome lists; the others are modulated, every biome
+    // listing them (amplitude 0 where its graph doesn't mix it).
+    std::vector<Cascade::Band> notes;
 
     // The field named p_name, -1 if none.
     int field_index(const ov::str &p_name) const;
@@ -177,46 +180,46 @@ struct Table {
     bool has_state() const;
     // Whether a biome has a curve: the ground at a sample is then more than the cascade's (ground_value).
     bool has_curves() const;
-    // Whether a ground octave is stretched along the base's up.
-    bool has_stretch() const { return !ground_stretch.empty(); }
+    // Whether a ground note is stretched along the base's up.
+    bool has_stretch() const;
 };
 
-// What a table is checked against and reads: the ground cascade (SDFCascade::climate_ground). Ground() is no ground:
-// no term or multiplier may read it, and fields have no octave.
+// What a table is compiled for (SDFCascade::climate_ground): the voxel, the LOD count's octaves and the base's caps.
 struct Ground {
-    const Cascade::Spec *spec = nullptr;
     double voxel_size = 0.0; // metres: converts the format's metres to voxels and octaves
-    int k_max = -1; // the coarsest octave a biome may play (the ground's: the micro engine's top, SDFCascade)
-    float amp_cap = 0.0f; // ground band amplitude cap, LOD0 voxels
-    // The coarsest octave a field may have (the LOD count's: lod_count + 4). The fields placing the biomes (temperature,
-    // humidity, wind) are macro inputs above the ground's top until a macro engine computes them.
-    int field_k_max = -1;
+    // The coarsest octave a note or a field may have (the LOD count's: lod_count + 4, the cascade's top).
+    int k_max = -1;
+    // A biome's shaped amplitude on a note and its curve's offset at most this (LOD0 voxels): a planet's relief
+    // (SDFCascade::PLANET_RELIEF of its radius), the exact range's top on the flat world.
+    float amp_cap = 0.0f;
+    // A note's own amplitude at most this (LOD0 voxels): a planet's relief over SDFCascade::PLANET_HEADROOM, so a biome's
+    // volume up to it still fits under amp_cap; infinite on the flat world.
+    double note_cap = INFINITY;
 };
 
 // Empty if p_table is well formed, else the first error: field and biome counts, unique names, bands (k in
 // [BAND_SHIFT, k_max], no duplicate, amplitude in ExactNoise's exact range), terms (GROUND or an earlier field,
 // coefficient within [2^-40, 2^40]), axes (an existing field once, centre 0 or within [2^-40, 2^40], 1 / span within
-// it), the last biome alone without axes, amplitudes (an existing ground octave, multiplier >= 0, a modulated amplitude in the
-// exact range or 0, within the cap), curves (their offset under the ground's cap, their slope within MAX_CURVE_SLOPE, their
-// points within the heights the ground reaches). No per-LOD gradient check
-// (ExactNoise::gradient_range_error): the cascade flushes what falls under 2^-64.
+// it), the last biome alone without axes, amplitudes (an existing note, >= 0, each shaped term in the exact range or 0,
+// within the cap), curves (their offset under the cap, their slope within MAX_CURVE_SLOPE, their points within the
+// heights the ground reaches). No per-LOD gradient check (ExactNoise::gradient_range_error): the cascade flushes what
+// falls under 2^-64.
 ov::str validate(const Table &p_table, const Ground &p_ground);
 
-// The bands a term's source names: the ground's (GROUND), a field's, or null.
-const std::vector<Cascade::Band> *bands_of(const Table &p_table, const Ground &p_ground, int p_source);
+// The bands a term's source names: the ground's notes (GROUND), a field's, or null.
+const std::vector<Cascade::Band> *bands_of(const Table &p_table, int p_source);
 
 // The table of a JSON object (units in metres; the format is described above parse() in climate_parse.cpp),
 // validated; on error r_table is left empty and the error returned.
 ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table);
 
-// The ground spec p_ground with the table's fields as its field groups and, if any biome names an amplitude
-// multiplier, a Modulation: every band some biome multiplies gets A = sum_b w_b amp_b at each point (amp_b = the
-// biome's multiplier times the band's amplitude, the band's amplitude for a biome without one), from the weights of
-// the climate before that level's insertions.
+// The cascade p_ground (its base and insert shift) with the table's notes as its bands, its fields as its field groups
+// and, if a biome lists a note, a Modulation: every listed note gets A = sum_b w_b amp_b at each point, from the weights
+// of the climate before that level's insertions.
 Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground);
 
-// The amplitude biome p_biome gives the ground's band p_band: its multiplier times the band's amplitude (validate's
-// product), or the band's own without one. The modulation's per-biome amplitudes.
+// The amplitude biome p_biome gives the note p_band: its entry's, or the note's own (a constant note) without one. The
+// modulation's per-biome amplitudes.
 float biome_amp(const Biome &p_biome, const Cascade::Band &p_band);
 // The largest biome_amp of any biome, times its shape's bound: bounds that follow amplitudes (skirts) take it.
 float max_amp(const Table &p_table, const Cascade::Band &p_band);
@@ -225,9 +228,6 @@ const Amp *find_amp(const Biome &p_biome, int p_k);
 // The shape biome p_biome gives the ground's octave p_k: its entry's, else plain. What the modulation inserts and
 // max_amp bounds.
 Shape band_shape(const Biome &p_biome, int p_k);
-// The largest multiplier biome p_biome may give the ground's octave p_k: its shaped amplitude under the ground's cap
-// (validate refuses more). 0 without such a band, infinite for a shape bounded by 0.
-double max_ground_mult(const Ground &p_ground, const Biome &p_biome, int p_k);
 // The skirt's band step at LOD p_lod (LOD0 voxels) with the biomes' curves, from the cascade's p_ground_amp: the ground
 // h + sum_b w_b C_b(h) moves by (1 + max |C_b'|) times h's step, plus each weight's change times |C_b|'s bound: a
 // weight moves by at most BLEND_SLOPE times the kernels' sum of KERNEL_SLOPE |1 / span| times their fields' steps.

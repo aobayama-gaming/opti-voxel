@@ -83,7 +83,11 @@ const Amp *find_amp(const Biome &p_biome, int p_k) {
 
 float biome_amp(const Biome &p_biome, const Cascade::Band &p_band) {
     const Amp *a = find_amp(p_biome, p_band.k);
-    return a ? float(double(a->mult) * double(p_band.amp)) : p_band.amp;
+    return a ? a->amp : p_band.amp;
+}
+
+bool Table::has_stretch() const {
+    return std::any_of(notes.begin(), notes.end(), [](const Cascade::Band &p_b) { return p_b.stretch > 0; });
 }
 
 Shape band_shape(const Biome &p_biome, int p_k) {

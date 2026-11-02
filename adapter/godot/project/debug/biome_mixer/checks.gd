@@ -64,7 +64,7 @@ static func run(p_table: Dictionary) -> Dictionary:
 		report.graphs[g] = entry
 	report["cuts"] = cuts(p_table)
 	report["old_kinds"] = old_kinds()
-	# SDFCascade::micro_top_k's pins (test_sdf_cascade.cpp): the notes stop where the engine's ground does.
+	# The template ground's top (test_sdf_cascade.cpp's template_top): the notes stop where the engine's template does.
 	report["ground_top"] = [Octaves.ground_top(25, 0.05), Octaves.ground_top(25, 0.5)]
 	ok = ok and report.cuts.ok and report.old_kinds.ok and report.ground_top == [19, 16]
 	report["world"] = world(p_table)
@@ -235,17 +235,19 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 	for i in w.biomes.size():
 		var a: Dictionary = p_table.biomes[i]
 		var e: Dictionary = back.biomes[i]
-		for key in ["at", "curve", "surface", "clouds", "debug_color"]:
+		for key in ["at", "surface", "clouds", "debug_color"]:
 			if not _close(a.get(key), e.get(key)):
 				differ.append("%s.%s" % [a.name, key])
-	for key in ["comment", "fields", "ground_stretch"]:
+		if not _close(ImportTable.graph_rows(a).curve, ImportTable.graph_rows(e).curve):
+			differ.append("%s.curve" % a.name)
+	for key in ["comment", "fields"]:
 		if not _close(p_table.get(key), back.get(key)):
 			differ.append(key)
 	entry.differ = differ
 	# The export is the table's notes in their plainest form (a plain shape is no Shape): exporting its world again
 	# gives the same file (so the same shader).
 	entry.stable = ExportTable.text(ExportTable.split(ExportTable.table(World.from_table(back), back).table, back).world) == text
-	entry.refused = not ExportTable._biome(every_kind(), w, [], {}).errors.is_empty()
+	entry.refused = not ExportTable._biome(every_kind(), w, []).errors.is_empty()
 	var placed: Array = w.biomes.filter(func(b): return not b.at.is_empty())
 	if ClassDB.class_exists("ClimateReportNode") and not placed.is_empty():
 		var zero_path := EXPORT_PATH + ".zero"
@@ -259,25 +261,23 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 	return entry
 
 
-# Each biome's notes as the engine reads its "amp" entries: {biome: {k: [x, coeffs, multifractal, warp_m, warp_fields]}}
-# over the ground's octaves (a note no entry names: volume 1, plain). The constant coefficient only counts in a
-# multifractal (elsewhere the band goes in without its mean).
+# Each biome's notes as the engine reads its graph (ImportTable.graph_rows): {biome: {k: [x, coeffs, multifractal,
+# warp_m, warp_fields, stretch_y]}} over the ground's octaves (a note no row mixes: volume 0). The constant coefficient
+# only counts in a multifractal (elsewhere the band goes in without its mean).
 static func notes_of(p_table: Dictionary, p_world: Dictionary) -> Dictionary:
 	var out := {}
 	var top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
 	for b in p_table.get("biomes", []):
+		var g := ImportTable.graph_rows(b)
 		var per := {}
 		for k in range(Octaves.K_MIN, top + 1):
-			per[k] = [1.0, [0.0, 1.0, 0.0, 0.0], 0.0, 0.0, []]
-		for a in b.get("amp", []):
+			var a: Dictionary = g.per_k.get(k, {"x": 0.0})
 			var mf := float(a.get("multifractal", 0.0))
 			var c := Kinds.shape_coeffs({"kind": "shape", "params": ImportTable.shape_params(a)}).map(func(v): return float(v))
 			if mf == 0.0:
 				c[0] = 0.0
 			var warp := float(a.get("warp_m", 0.0))
-			for k in ImportTable.band_ks(a):
-				if k <= top:
-					per[k] = [float(a.get("x", 1.0)), c, mf, warp, a.get("warp_fields", []) if warp > 0.0 else []]
+			per[k] = [float(a.get("x", 1.0)), c, mf, warp, a.get("warp_fields", []) if warp > 0.0 else [], g.stretch.get(k, 1)]
 		out[b.name] = per
 	return out
 

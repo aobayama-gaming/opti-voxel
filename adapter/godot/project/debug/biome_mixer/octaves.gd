@@ -8,7 +8,7 @@ const OCTAVE_SALT := 0x51ED270B
 const SALT_Y := 0x9E3779B9
 const SALT_Z := 0x85EBCA6B
 const MASK := 0xFFFFFFFF
-# The ground's amplitude: steepness 1/8 of the wavelength, capped at 3.3 km (SDFCascade's MAX_AMP_M, 2^16 voxels of
+# The ground's amplitude: steepness 1/8 of the wavelength, capped at 3.3 km (the template biome's, Climate::TEMPLATE_*: 2^16 voxels of
 # 5 cm, the same metres at any voxel size).
 const STEEPNESS := 0.125
 const MAX_AMP_M := 3276.8
@@ -51,7 +51,7 @@ static func k_top(p_lods: int) -> int:
 	return p_lods + 4
 
 
-# The ground's top octave (SDFCascade::micro_top_k: the first whose amplitude reaches MAX_AMP_M, k = 19 at 5 cm, at most
+# The ground's top octave (Climate::template_graph's: the first whose amplitude reaches MAX_AMP_M, k = 19 at 5 cm, at most
 # k_top); the notes span K_MIN .. ground_top. Past it the relief is the macro engine's.
 static func ground_top(p_lods: int, p_voxel_m: float) -> int:
 	var k := K_MIN

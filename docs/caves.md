@@ -19,7 +19,7 @@ depth = h(p) - up(p) = -g(p)
 
 - `n_k` are the ground's own exact 3D octaves (`make_octave`, another seed): the same lattices, so the cascade carries
   them like any band, and every point gives the same bits from any origin, chunk or LOD.
-- `q(p)` squashes the read along the base's up by `s` (the `ground_stretch` code, `BaseSurface::stretched`): `s = 2..4`
+- `q(p)` squashes the read along the base's up by `s` (a note's `stretch_y` code, `BaseSurface::stretched`): `s = 2..4`
   turns round blobs into flat, horizontal galleries.
 - `L` is the noise's slope bound, `sum_k a_k * slope(perlin3) / lambda_k`, so `N` is 1-Lipschitz: a lower bound on the
   distance to the cave walls, never more. That keeps the discoverer's |d| > 2 chunk cull exact. Never `c / |grad c|`:

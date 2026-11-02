@@ -544,11 +544,7 @@ ov::str Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
 
 Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground) {
     Cascade::Spec spec = p_ground.ground_only();
-    for (Cascade::Band &b : spec.bands) {
-        for (const std::pair<int, int> &s : p_table.ground_stretch) {
-            b.stretch = s.first == b.k ? s.second : b.stretch;
-        }
-    }
+    spec.bands = p_table.notes;
     for (const Field &f : p_table.fields) {
         spec.fields.push_back(f.bands);
     }

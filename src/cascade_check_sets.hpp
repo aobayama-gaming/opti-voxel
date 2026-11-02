@@ -90,9 +90,20 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
     p_sdf.planet_radius_m = world.planet_radius_m;
     p_sdf.planet_ring_m = world.planet_ring_m;
     if (p_v == SpikeSet::L4F && err.empty()) {
+        // Every biome on the template's notes (constant: no modulation), its curve kept (the fields carried).
         ov::Value &biomes = world.climate_table["biomes"];
         for (size_t i = 0; i < biomes.size(); i++) {
-            biomes.at(i).erase("amp");
+            ov::Value graph = Climate::template_graph(world.voxel_m);
+            const ov::Value &nodes = biomes[i]["graph"]["nodes"];
+            for (size_t n = 0; n < nodes.size(); n++) {
+                if (nodes[n]["kind"].as_str() == "curve") {
+                    ov::Value curve = nodes[n];
+                    curve["in"] = "ground";
+                    graph["nodes"].at(1)["height"] = curve["id"];
+                    graph["nodes"].push_back(curve);
+                }
+            }
+            biomes.at(i)["graph"] = graph;
         }
     }
     p_sdf.climate_data = world.climate_table;

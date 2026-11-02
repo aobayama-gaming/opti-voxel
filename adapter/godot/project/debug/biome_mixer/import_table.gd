@@ -76,23 +76,19 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	var fields := {}
 	for f in p_table.get("fields", []):
 		fields[f.name] = f
-	# The biome's entry per ground octave (none: the ground's own, volume 1).
+	# The biome's entry per ground octave (none: silent).
 	var k_top := Octaves.ground_top(Octaves.lods, Octaves.voxel_m)
-	var per_k := {}
-	for a in biome.get("amp", []):
-		if a.get("field", "ground") != "ground":
-			warnings.append("Multipliers of the climate field %s left out: the mixer has the ground's notes only." % a.field)
-			continue
-		for k in _ks(a):
-			per_k[k] = a
-	var stretch := stretch_by_k(p_table)
+	var g := graph_rows(biome)
+	warnings.append_array(g.warnings)
+	var per_k: Dictionary = g.per_k
+	var stretch: Dictionary = g.stretch
 	var mix := add("mix", Vector2(COL.mix, 0.0))
 	var rows: Array = model.nodes[mix].params.rows
 	var warps := {}
 	var chain := ""
 	var row := 0
 	for k in range(k_top, Octaves.K_MIN - 1, -1):
-		var a: Dictionary = per_k.get(k, {})
+		var a: Dictionary = per_k.get(k, {"x": 0.0})
 		var y := row * ROW_H
 		var warped := false
 		if a.has("warp_m"):
@@ -118,8 +114,8 @@ func _import(p_table: Dictionary, p_name: String) -> void:
 	model.nodes[mix].pos = [COL.mix, row * ROW_H * 0.5 - ROW_H]
 	var last_id := mix
 	var x_next: float = COL.mix + MIX_W
-	if biome.has("curve"):
-		var cv := add("curve", Vector2(x_next, model.nodes[mix].pos[1]), {"points": biome.curve})
+	if g.curve != null:
+		var cv := add("curve", Vector2(x_next, model.nodes[mix].pos[1]), {"points": g.curve})
 		link(last_id, 0, cv, 0)
 		last_id = cv
 		x_next += 340.0
@@ -165,14 +161,47 @@ func _warp(p_names: Array, p_fields: Dictionary) -> bool:
 	return true
 
 
-# The ground's stretched octaves of a table or a world (its "ground_stretch": a stretch_y per wavelength range), as
-# {k: stretch_y}.
-static func stretch_by_k(p_table: Dictionary) -> Dictionary:
-	var stretch := {}
-	for s in p_table.get("ground_stretch", []):
-		for k in band_ks(s):
-			stretch[k] = int(s.get("stretch_y", 1))
-	return stretch
+# A biome's graph (climate_parse.cpp's format) read as the mixer's notes: {per_k: {k: entry} (x, the shape's keys,
+# multifractal, warp_m, warp_fields; an octave no row mixes is absent), stretch: {k: stretch_y}, curve: its points or
+# null, warnings}. Its height is a mix (through a curve or not) of rows, each a note through a warp, a shape and a
+# multifractal (each optional), as the engine reads it.
+static func graph_rows(p_biome: Dictionary) -> Dictionary:
+	var r := {"per_k": {}, "stretch": {}, "curve": null, "warnings": PackedStringArray()}
+	var nodes := {}
+	var out := {}
+	for n in p_biome.get("graph", {}).get("nodes", []):
+		nodes[String(n.get("id", ""))] = n
+		if n.get("kind", "") == "output":
+			out = n
+	var h: Dictionary = nodes.get(String(out.get("height", "")), {})
+	if h.get("kind", "") == "curve":
+		r.curve = h.get("points", []).duplicate(true)
+		h = nodes.get(String(h.get("in", "")), {})
+	var rows: Array = h.get("rows", []) if h.get("kind", "") == "mix" else [{"in": h.get("id", ""), "x": 1.0}]
+	for row in rows:
+		var e := {"x": float(row.get("x", 1.0))}
+		var n: Dictionary = nodes.get(String(row.get("in", "")), {})
+		if n.get("kind", "") == "multifractal":
+			e.multifractal = float(n.get("gain", 0.0))
+			n = nodes.get(String(n.get("in", "")), {})
+		if n.get("kind", "") == "shape":
+			for key in ["shape", "scale", "offset", "coeffs"]:
+				if n.has(key):
+					e[key] = n[key]
+			n = nodes.get(String(n.get("in", "")), {})
+		if n.get("kind", "") == "warp":
+			e.warp_m = float(n.get("amount_m", 0.0))
+			e.warp_fields = n.get("fields", []).duplicate()
+			n = nodes.get(String(n.get("in", "")), {})
+		if n.get("kind", "") != "note":
+			r.warnings.append("%s: a row that isn't a note through a warp, a shape and a multifractal is left out." % p_biome.get("name", "?"))
+			continue
+		if int(n.get("seed", Octaves.GROUND_SEED)) != Octaves.GROUND_SEED or not n.has("steepness"):
+			r.warnings.append("%s: the note %s isn't the ground's (seed %d, steepness): the mixer plays the ground's." % [p_biome.get("name", "?"), n.get("id", "?"), Octaves.GROUND_SEED])
+		for k in band_ks(n):
+			r.per_k[k] = e
+			r.stretch[k] = int(n.get("stretch_y", 1))
+	return r
 
 
 # The octaves a table entry covers: its wavelength_m's, or every one in from_m .. to_m that the ground has (the

@@ -2,11 +2,11 @@ extends RefCounted
 ## A world back to a world file, the engine's (res://climate/world.json and its climate.json; src/world_file.hpp and
 ## climate_parse.cpp describe the format):
 ## ImportTable read backwards. A biome's height is its Mix, through an optional Height curve, into the Output; each Mix
-## row plays a Note through an optional Shape then an optional Multifractal. Each note becomes an "amp" entry (a run
-## of equal ones one range, a plain note at volume 1 none: the engine's default), the curve its "curve", the Output's
-## colours its surface. What the table can't hold stops the export (errors); what only the preview has (Carve, Note
-## warp, an uncentred row, a note's own stretch) is left out with a warning. Mute and solo export as heard: a silent
-## row is volume 0.
+## row plays a Note through an optional Shape then an optional Multifractal. The biome becomes its "graph": each run of
+## equal notes one range note (the ground's seed and steepness) through its warp, shape and multifractal, a mix row at
+## its volume, the curve a curve node; the Output's colours its surface. What the graph can't hold stops the export
+## (errors); what only the preview has (Carve, Note warp, an uncentred row) is left out with a warning. Mute and solo
+## export as heard: a silent row is volume 0.
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
@@ -16,8 +16,6 @@ const Nodes := preload("res://debug/biome_mixer/nodes.gd")
 
 # Significant digits a number keeps in the file (a float32's).
 const DIGITS := 7
-# A plain note at volume 1 as written: the engine's default, no entry.
-const PLAIN := "{\"x\": 1}"
 # A value fits on one line of the file up to this width, else it opens one line per item.
 const LINE := 120
 # The climate warp's fields when the world has none yet (the engine's wx, wy, wz: seeds s, s + 1, s + 2).
@@ -39,14 +37,13 @@ static func table(p_world: Dictionary, p_base: Dictionary = {}) -> Dictionary:
 	var seen := {}
 	var n: int = p_world.biomes.size()
 	var warped := false
-	var stretch := ImportTable.stretch_by_k(p_world)
 	for i in n:
 		var wb: Dictionary = p_world.biomes[i]
 		var bname := String(wb.name)
 		if seen.has(bname):
 			errors.append("Two biomes are named %s." % bname)
 		seen[bname] = true
-		var r := _biome(wb.model, p_world, warp.names, stretch)
+		var r := _biome(wb.model, p_world, warp.names)
 		for e in r.errors:
 			errors.append("%s: %s" % [bname, e])
 		for e in r.warnings:
@@ -63,9 +60,7 @@ static func table(p_world: Dictionary, p_base: Dictionary = {}) -> Dictionary:
 					warnings.append("%s: its place on %s, a field the world doesn't have, is left out." % [bname, f])
 		elif not wb.get("at", {}).is_empty():
 			warnings.append("%s is the default (the last biome): it fills what the others leave, its place is left out." % bname)
-		b.amp = r.amp
-		if r.has("curve"):
-			b.curve = r.curve
+		b.graph = r.graph
 		var surface: Dictionary = base.get(bname, {}).get("surface", {}).duplicate(true)
 		surface.merge(r.surface, true)
 		b.surface = surface
@@ -80,8 +75,6 @@ static func table(p_world: Dictionary, p_base: Dictionary = {}) -> Dictionary:
 	if p_base.has("comment"):
 		t.comment = p_base.comment
 	t.fields = fields
-	if not p_world.get("ground_stretch", []).is_empty():
-		t.ground_stretch = p_world.ground_stretch.duplicate(true)
 	t.biomes = biomes
 	return {"table": t, "errors": errors, "warnings": warnings}
 
@@ -126,10 +119,10 @@ static func _warp_fields(p_world: Dictionary, p_fields: Array) -> Dictionary:
 	return {"names": names, "missing": true, "fields": made}
 
 
-# One biome's graph as its table entries: {amp, curve (if any), surface, warped (a note reads the climate warp),
-# errors, warnings}. p_stretch: the world's stretched octaves (ImportTable.stretch_by_k).
-static func _biome(p_model: Dictionary, p_world: Dictionary, p_warp: Array, p_stretch: Dictionary) -> Dictionary:
-	var r := {"amp": [], "surface": {}, "warped": false, "errors": PackedStringArray(), "warnings": PackedStringArray()}
+# One biome's mixer graph as its engine graph: {graph, surface, warped (a note reads the climate warp), errors,
+# warnings}.
+static func _biome(p_model: Dictionary, p_world: Dictionary, p_warp: Array) -> Dictionary:
+	var r := {"graph": {}, "surface": {}, "warped": false, "errors": PackedStringArray(), "warnings": PackedStringArray()}
 	var out := Kinds.first_of(p_model, "output")
 	if out == "":
 		r.errors.append("no Output.")
@@ -139,24 +132,25 @@ static func _biome(p_model: Dictionary, p_world: Dictionary, p_warp: Array, p_st
 	if Kinds.input_of(p_model, out, 1) != null:
 		r.warnings.append("its Carve is left out: the engine has no holes yet.")
 	var src = Kinds.input_of(p_model, out, 0)
+	var curve = null
 	if src != null and p_model.nodes[src.id].kind == "curve":
-		r.curve = Kinds.param(p_model.nodes[src.id], "points").map(func(p): return [float(p[0]), float(p[1])])
+		curve = Kinds.param(p_model.nodes[src.id], "points").map(func(p): return [float(p[0]), float(p[1])])
 		src = Kinds.input_of(p_model, src.id, 0)
 	if src == null or p_model.nodes[src.id].kind != "mix":
 		r.errors.append("its height isn't a Mix (through a Height curve or not) into the Output: the table has no other.")
 		return r
-	var per_k := _rows(p_model, src.id, p_world, p_warp, p_stretch, r)
+	var per_k := _rows(p_model, src.id, p_world, p_warp, r)
 	if not r.errors.is_empty():
 		return r
 	var entries := []
 	for k in range(Octaves.ground_top(Octaves.lods, Octaves.voxel_m), Octaves.K_MIN - 1, -1):
 		entries.append({"k": k, "e": per_k.get(k, {"x": 0.0})})
-	r.amp = _ranges(entries, Octaves.voxel_m)
+	r.graph = _graph(entries, curve, Octaves.voxel_m)
 	return r
 
 
 # The Mix's rows as {k: entry} (a note in no row is silent); into p_r its errors and warnings.
-static func _rows(p_model: Dictionary, p_mix: String, p_world: Dictionary, p_warp: Array, p_stretch: Dictionary, p_r: Dictionary) -> Dictionary:
+static func _rows(p_model: Dictionary, p_mix: String, p_world: Dictionary, p_warp: Array, p_r: Dictionary) -> Dictionary:
 	var rows := Kinds.rows(p_model.nodes[p_mix])
 	var solo := rows.any(func(row): return row.get("solo", false))
 	var per_k := {}
@@ -186,14 +180,15 @@ static func _rows(p_model: Dictionary, p_mix: String, p_world: Dictionary, p_war
 		if per_k.has(k):
 			p_r.errors.append("the %s note plays in two rows." % _m(k, p_world))
 			continue
-		if int(Kinds.param(note, "stretch_y")) != p_stretch.get(k, 1):
-			p_r.warnings.append("the %s note's stretch is the world's (ground_stretch, %d), not its own." % [_m(k, p_world), p_stretch.get(k, 1)])
 		var heard: bool = not row.get("mute", false) and (not solo or row.get("solo", false))
 		if not heard:
 			p_r.warnings.append("row %d is silent (muted or not soloed): exported at volume 0." % (i + 1))
 		if not row.get("centre", true):
 			p_r.warnings.append("row %d isn't centred: the engine always takes a note's mean out." % (i + 1))
 		var e := {"x": float(row.get("vol", 1.0)) if heard else 0.0}
+		var stretch := int(Kinds.param(note, "stretch_y"))
+		if stretch > 1:
+			e.stretch_y = stretch
 		if shape != "":
 			e.merge(_shape_keys(p_model.nodes[shape], mf != ""))
 		if mf != "":
@@ -242,9 +237,13 @@ static func _shape_keys(p_node: Dictionary, p_mf: bool) -> Dictionary:
 	return e
 
 
-# The note entries (coarsest first, {k, e}) as "amp": a run of equal entries one range, a plain note at volume 1 none.
-static func _ranges(p_entries: Array, p_voxel_m: float) -> Array:
-	var out := []
+# The note entries (coarsest first, {k, e}) and the curve's points (or null) as the biome's graph: a run of equal
+# entries one range note (the ground's seed, steepness and cap; a range even for one octave: the engine trims a range
+# to its LOD count's octaves, it refuses a single wavelength past them) through its warp, shape and multifractal, a
+# mix row at its volume.
+static func _graph(p_entries: Array, p_curve: Variant, p_voxel_m: float) -> Dictionary:
+	var nodes := []
+	var rows := []
 	var i := 0
 	while i < p_entries.size():
 		# Equal as written (_inline keeps DIGITS digits).
@@ -252,14 +251,36 @@ static func _ranges(p_entries: Array, p_voxel_m: float) -> Array:
 		var written := _inline(p_entries[i].e)
 		while j + 1 < p_entries.size() and _inline(p_entries[j + 1].e) == written:
 			j += 1
-		if written != PLAIN:
-			# A range even for one octave: the engine trims a range to its LOD count's octaves, it refuses a single
-			# wavelength past them.
-			var entry := {"from_m": Octaves.wavelength_m(p_entries[j].k, p_voxel_m), "to_m": Octaves.wavelength_m(p_entries[i].k, p_voxel_m)}
-			entry.merge(p_entries[i].e)
-			out.append(entry)
+		var e: Dictionary = p_entries[i].e
+		var id := "n%d" % (rows.size() + 1)
+		var note := {"id": id, "kind": "note", "from_m": Octaves.wavelength_m(p_entries[j].k, p_voxel_m), "to_m": Octaves.wavelength_m(p_entries[i].k, p_voxel_m),
+			"seed": Octaves.GROUND_SEED, "steepness": Octaves.STEEPNESS, "max_amp_m": Octaves.MAX_AMP_M}
+		if e.has("stretch_y"):
+			note.stretch_y = e.stretch_y
+		nodes.append(note)
+		var last := id
+		if e.has("warp_m"):
+			nodes.append({"id": id + "w", "kind": "warp", "in": last, "fields": e.warp_fields, "amount_m": e.warp_m})
+			last = id + "w"
+		var shape := {"id": id + "s", "kind": "shape", "in": last}
+		for key in ["shape", "scale", "offset", "coeffs"]:
+			if e.has(key):
+				shape[key] = e[key]
+		if shape.size() > 3:
+			nodes.append(shape)
+			last = id + "s"
+		if e.has("multifractal"):
+			nodes.append({"id": id + "m", "kind": "multifractal", "in": last, "gain": e.multifractal})
+			last = id + "m"
+		rows.append({"in": last, "x": e.x})
 		i = j + 1
-	return out
+	nodes.append({"id": "mix", "kind": "mix", "rows": rows})
+	var height := "mix"
+	if p_curve != null:
+		nodes.append({"id": "curve", "kind": "curve", "in": "mix", "points": p_curve})
+		height = "curve"
+	nodes.append({"id": "out", "kind": "output", "height": height})
+	return {"nodes": nodes}
 
 
 # A note's wavelength as the graph's titles show it.
@@ -271,11 +292,9 @@ static func _m(p_k: int, p_world: Dictionary) -> String:
 static func split(p_table: Dictionary, p_base: Dictionary) -> Dictionary:
 	var world := {}
 	for key in p_base:
-		if not key in ["fields", "ground_stretch", "biomes"]:
+		if not key in ["fields", "biomes"]:
 			world[key] = p_base[key]
-	for key in ["ground_stretch", "biomes"]:
-		if p_table.has(key):
-			world[key] = p_table[key]
+	world.biomes = p_table.biomes
 	if p_base.get("climate") is Dictionary:
 		world.climate = {"fields": p_table.fields}
 	return {"world": world, "fields": p_table.fields}

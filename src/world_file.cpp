@@ -87,7 +87,7 @@ ov::Value section(const ov::Value &p_data, const char *p_key, std::initializer_l
 } // namespace
 
 ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
-    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "trees", "instances", "features", "ground_stretch", "biomes" });
+    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "trees", "instances", "features", "biomes" });
     if (!err.empty()) {
         return err;
     }
@@ -107,7 +107,7 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     }
     WorldFile w;
     const ov::Value planet = section(p_data, "planet", { "radius_m", "ring_m" }, err);
-    const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds" }, err);
+    const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds", "relief_m" }, err);
     const ov::Value trees = section(p_data, "trees", { "count", "area_m" }, err);
     const ov::Value instances = section(p_data, "instances", { "count", "area_m" }, err);
     const ov::Value features = section(p_data, "features", { "radius_km" }, err);
@@ -130,6 +130,10 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     w.atmosphere = look.get("atmosphere", w.atmosphere).as_bool();
     w.atmosphere_scale = look.get("atmosphere_scale", w.atmosphere_scale).as_double();
     w.clouds = look.get("clouds", w.clouds).as_bool();
+    w.relief_m = look.get("relief_m", w.relief_m).as_double();
+    if (!(w.relief_m > 0.0)) {
+        return "world: look: relief_m must be positive.";
+    }
     w.trees = int(trees.get("count", w.trees).as_int());
     w.tree_area_m = trees.get("area_m", w.tree_area_m).as_double();
     w.instances = int(instances.get("count", w.instances).as_int());
@@ -138,10 +142,7 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     if (p_data.has("climate")) {
         w.climate_table["fields"] = climate.get("fields", ov::Value::array());
         w.climate_table["biomes"] = p_data.get("biomes", ov::Value::array());
-        if (p_data.has("ground_stretch")) {
-            w.climate_table["ground_stretch"] = p_data["ground_stretch"];
-        }
-    } else if (p_data.has("biomes") || p_data.has("ground_stretch")) {
+    } else if (p_data.has("biomes")) {
         return "world: biomes need a climate.";
     }
     r_world = w;

@@ -1,22 +1,29 @@
 {
- "comment": "A modulation with no field (one biome multiplying the ground's octaves), for the tests (test_climate.cpp, CascadeSpike set 4d), plain bands.",
+ "comment": "A modulation with no field (one biome playing the ground's notes, the finest through a plain shape so the compiler keeps them modulated), for the tests (test_climate.cpp, CascadeSpike set 4d), plain bands.",
  "engine": {"voxel_m": 0.05, "lods": 25},
- "climate": {"fields": []},
+ "climate": {
+  "fields": []
+ },
  "biomes": [
   {
    "name": "desert",
-   "amp": [
-    {"field": "ground", "from_m": 0.4, "to_m": 1.6, "x": 0.04},
-    {"field": "ground", "from_m": 3.2, "to_m": 51.2, "x": 0.02},
-    {"field": "ground", "wavelength_m": 102.4, "x": 0.0539},
-    {"field": "ground", "wavelength_m": 204.8, "x": 0.018},
-    {"field": "ground", "wavelength_m": 409.6, "x": 0.0234},
-    {"field": "ground", "wavelength_m": 819.2, "x": 0.0258},
-    {"field": "ground", "wavelength_m": 1638.4, "x": 0.0137},
-    {"field": "ground", "wavelength_m": 3276.8, "x": 0.0144},
-    {"field": "ground", "wavelength_m": 6553.6, "x": 0.0207},
-    {"field": "ground", "from_m": 13107.2, "to_m": 30000000, "x": 0.004}
-   ],
+   "graph": {
+    "nodes": [
+     {"id": "n1", "kind": "note", "from_m": 13107.2, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2", "kind": "note", "from_m": 6553.6, "to_m": 6553.6, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n3", "kind": "note", "from_m": 3276.8, "to_m": 3276.8, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n4", "kind": "note", "from_m": 1638.4, "to_m": 1638.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n5", "kind": "note", "from_m": 819.2, "to_m": 819.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n6", "kind": "note", "from_m": 409.6, "to_m": 409.6, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n7", "kind": "note", "from_m": 204.8, "to_m": 204.8, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n8", "kind": "note", "from_m": 102.4, "to_m": 102.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n9", "kind": "note", "from_m": 3.2, "to_m": 51.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n10", "kind": "note", "from_m": 0.4, "to_m": 1.6, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n10s", "kind": "shape", "in": "n10", "shape": "plain", "comment": "A shaped note stays modulated: one biome alike everywhere is otherwise a constant band (the compiler's)."},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.004}, {"in": "n2", "x": 0.0207}, {"in": "n3", "x": 0.0144}, {"in": "n4", "x": 0.0137}, {"in": "n5", "x": 0.0258}, {"in": "n6", "x": 0.0234}, {"in": "n7", "x": 0.018}, {"in": "n8", "x": 0.0539}, {"in": "n9", "x": 0.02}, {"in": "n10s", "x": 0.04}]},
+     {"id": "out", "kind": "output", "height": "mix"}
+    ]
+   },
    "debug_color": "#e0c080"
   }
  ]

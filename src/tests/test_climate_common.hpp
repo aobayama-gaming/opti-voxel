@@ -22,6 +22,75 @@ inline ov::Value json(const ov::str &p_text) {
     return v;
 }
 
+// A biome's "graph" member playing the template ground (Climate::template_graph) at p_voxel metres, to splice into a
+// table's text: a biome without a graph mixes no note (a flat ground).
+inline ov::str ground_graph(double p_voxel) {
+    return "\"graph\": " + ov::to_json(Climate::template_graph(p_voxel));
+}
+
+// Biome p_biome's graph nodes.
+inline ov::Value &graph_nodes(ov::Value &r_table, size_t p_biome) {
+    return r_table["biomes"].at(p_biome)["graph"]["nodes"];
+}
+
+// p_table with every biome's curve node taken out (its output reads the curve's input).
+inline ov::Value without_curves(ov::Value p_table) {
+    for (size_t b = 0; b < p_table["biomes"].size(); b++) {
+        ov::Value &nodes = graph_nodes(p_table, b);
+        for (size_t c = 0; c < nodes.size(); c++) {
+            if (nodes[c]["kind"].as_str() != "curve") {
+                continue;
+            }
+            for (size_t o = 0; o < nodes.size(); o++) {
+                if (nodes[o]["kind"].as_str() == "output" && nodes[o]["height"].as_str() == nodes[c]["id"].as_str()) {
+                    nodes.at(o)["height"] = nodes[c]["in"];
+                }
+            }
+            nodes.remove_at(c);
+            break;
+        }
+    }
+    return p_table;
+}
+
+// Biome p_biome of r_table with a curve node of points p_points (JSON) between its height and its output.
+inline void add_curve(ov::Value &r_table, size_t p_biome, const ov::str &p_points) {
+    ov::Value &nodes = graph_nodes(r_table, p_biome);
+    for (size_t o = 0; o < nodes.size(); o++) {
+        if (nodes[o]["kind"].as_str() == "output") {
+            ov::Value curve = json(R"({"id": "added_curve", "kind": "curve", "points": )" + p_points + "}");
+            curve["in"] = nodes[o]["height"];
+            nodes.at(o)["height"] = "added_curve";
+            nodes.push_back(curve);
+            return;
+        }
+    }
+}
+
+// Every note of r_table with its stretch_y set to p_stretch (1: none, the key removed).
+inline void set_stretch(ov::Value &r_table, double p_stretch) {
+    for (size_t b = 0; b < r_table["biomes"].size(); b++) {
+        ov::Value &nodes = graph_nodes(r_table, b);
+        for (size_t n = 0; n < nodes.size(); n++) {
+            if (nodes[n]["kind"].as_str() == "note") {
+                if (p_stretch == 1.0) {
+                    nodes.at(n).erase("stretch_y");
+                } else {
+                    nodes.at(n)["stretch_y"] = p_stretch;
+                }
+            }
+        }
+    }
+}
+
+// A graph of one note (p_note: its JSON members after "kind") into the output, through a shape of p_shape's members if
+// any: {"graph": ...}'s value.
+inline ov::str note_graph(const ov::str &p_note, const ov::str &p_shape = ov::str()) {
+    const ov::str shape = p_shape.empty() ? ov::str() : R"({"id": "s", "kind": "shape", "in": "n", )" + p_shape + "}, ";
+    return R"("graph": {"nodes": [{"id": "n", "kind": "note", )" + p_note + "}, " + shape + R"({"id": "o", "kind": "output", "height": ")" +
+            ov::str(p_shape.empty() ? "n" : "s") + "\"}]}";
+}
+
 // An SDFCascade with a climate table (a file, res:// or absolute, or its data) at 5 cm and p_lods LODs; p_skirt_cells
 // caps the skirts (ChunkParam::skirt_depth), the default's when negative.
 struct ClimateSDF {

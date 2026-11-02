@@ -10,16 +10,16 @@
 //     "engine": "engine.json" or { "voxel_m": 0.05, "lods": 25 },   the master variables
 //     "climate": "climate.json" or { "fields": [ field... ] },       the fields that place the biomes; none: no biomes
 //     "planet": { "radius_m": 0, "ring_m": 0 },
-//     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
+//     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true, "relief_m": 3276.8 },
 //     "trees": { "count": 0, "area_m": 60 },
 //     "instances": { "count": 0, "area_m": 200 },
 //     "features": { "radius_km": 0 },
-//     "ground_stretch": [ stretch... ],
 //     "biomes": [ biome..., default biome ]
 //   }
 //
-// A path is relative to the file naming it, or absolute (res://, /...). "fields", "ground_stretch" and "biomes" are
-// the climate table of climate_parse.cpp, merged here and parsed there (against the ground of the engine's values).
+// A path is relative to the file naming it, or absolute (res://, /...). "fields" and "biomes" are the climate table of
+// climate_parse.cpp (each biome a graph of notes), merged here and compiled there (at the engine's values). Without
+// biomes, the ground is the template biome's (Climate::template_biome).
 struct WorldFile {
     // The world of a host or check given none.
     static constexpr const char *DEFAULT_PATH = "res://worlds/default.world.json";
@@ -33,6 +33,9 @@ struct WorldFile {
     bool atmosphere = true;
     double atmosphere_scale = 0.0;
     bool clouds = true; // the volumetric clouds in it (Clouds), their layer's scale as the atmosphere's
+    // The relief the sky stays above (metres; AtmosphereMedium::for_base, CloudLayer::for_base), a planet's
+    // SDFCascade::PLANET_RELIEF of its radius at most (SDFCascade::relief_m): the template ground's 3.3 km cap.
+    double relief_m = 65536.0 * 0.05;
     int trees = 0; // about this many grown trees (SDFTable::set_forest) in a square of side tree_area_m
     double tree_area_m = 60.0;
     int instances = 0; // this many scattered rocks and pillars (SDFTable::set_scatter) in a square of side instance_area_m

@@ -72,6 +72,8 @@ src/archetype_table.cpp
 src/archetype_table.hpp
 src/biome_features.cpp
 src/biome_features.hpp
+src/biome_compiler.cpp
+src/biome_compiler.hpp
 src/cascade_measure.cpp
 src/cascade_measure.hpp
 src/cascade_passes.cpp

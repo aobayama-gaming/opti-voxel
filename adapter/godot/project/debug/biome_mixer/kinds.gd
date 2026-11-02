@@ -41,7 +41,7 @@ const KINDS := {
 			{"name": "k", "type": "k", "default": 12},
 			{"name": "warp", "type": "bool", "default": false, "hint": "Read this note through the climate's warp (wx, wy, wz, shared by every biome), or through the Note warp linked into its port"},
 			{"name": "warp_m", "type": "float", "default": 0.0, "min": 0.0, "max": 2000.0, "step": 0.1, "hint": "How far the warp moves the point the note is read at: metres per unit of the warp (a warp's value is within about +-1)"},
-			{"name": "stretch_y", "type": "int", "default": 1, "min": 1, "max": 64, "hint": "The engine's stretched octave (ground_stretch, a power of two): the noise read at y / stretch from the datum, a height field where it dominates"},
+			{"name": "stretch_y", "type": "int", "default": 1, "min": 1, "max": 64, "hint": "The note's stretch_y (a power of two): the noise read at y / stretch from the datum, a height field where it dominates"},
 		],
 	},
 	"note_warp": {

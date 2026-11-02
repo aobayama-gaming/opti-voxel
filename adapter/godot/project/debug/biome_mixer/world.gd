@@ -1,7 +1,7 @@
 extends RefCounted
 ## The mixer's world: the whole climate as one document, so a biome is edited inside its world (its notes in the
 ## graph, its place among the others on the climate chart, its neighbours in the world view). A world is
-## {fields (the table's, as JSON), ground_stretch, climate_warp, biomes: [{name, at: {field: [centre, span]}, model:
+## {fields (the table's, as JSON), climate_warp, biomes: [{name, at: {field: [centre, span]}, model:
 ## the biome's graph, debug_color, clouds}] (the last the default: no "at", it fills what the others leave),
 ## origin_m, view, current (the biome the graph edits), mode ("biome" or "world")}.
 ## The weights are the engine's (Climate::weights, src/climate.cpp) in float: a biome's kernel is the product over the
@@ -33,7 +33,7 @@ static func read_table(p_path: String) -> Dictionary:
 static func from_table(p_table: Dictionary) -> Dictionary:
 	var w := {
 		"version": 1, "kind": "world", "name": "world", "origin_m": [0.0, 0.0],
-		"fields": p_table.get("fields", []).duplicate(true), "ground_stretch": p_table.get("ground_stretch", []).duplicate(true),
+		"fields": p_table.get("fields", []).duplicate(true),
 		"biomes": [], "current": 0, "mode": "biome", "warnings": [],
 	}
 	for b in p_table.get("biomes", []):
