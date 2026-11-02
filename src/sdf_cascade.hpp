@@ -319,15 +319,17 @@ uint cascade_ground_material(Ch ch) {
     }
 
     // The bare cascade's top solid voxel on the line from p_start down the base's up there (the voxel t steps along it,
-    // each axis rounded: on the flat base the column): sphere tracing on the LOD0 distance (whole steps, at least one)
-    // until the side flips, then the boundary between the last two points by bisection.
-    VoxelPos ground_along(const VoxelPos &p_start) const {
+    // each axis rounded: on the flat base the column): sphere tracing on the distance as LOD p_lod sees it (ground_field;
+    // whole steps, at least one) until the side flips, then the boundary between the last two points by bisection: to
+    // the voxel at LOD 0; above, to within 2^p_lod voxels, then their distances' linear crossing (a map of Λ_m, the
+    // biome mixer's, needs no finer ground than Λ_m's).
+    VoxelPos ground_along(const VoxelPos &p_start, int p_lod = 0) const {
         const UpAxis up = base.up_dir(p_start);
         auto at = [&](int64_t p_t) {
             return VoxelPos(p_start.x - std::llround(double(p_t) * up[0]), p_start.y - std::llround(double(p_t) * up[1]),
                     p_start.z - std::llround(double(p_t) * up[2]));
         };
-        auto distance = [&](int64_t p_t) { return ground_field(at(p_t), 0).w; };
+        auto distance = [&](int64_t p_t) { return ground_field(at(p_t), p_lod).w; };
         int64_t t = 0;
         float d = distance(t);
         const bool start_air = d > 0.0f;
@@ -346,13 +348,17 @@ uint cascade_ground_material(Ch ch) {
         // solid = !(d > 0), the meshers' side rule; solid deeper (larger t) than air.
         int64_t solid = start_air ? other : t;
         int64_t air = start_air ? t : other;
-        while (solid - air > 1) {
+        while (solid - air > (int64_t(1) << p_lod)) {
             const int64_t mid = solid - (solid - air) / 2;
             if (distance(mid) > 0.0f) {
                 air = mid;
             } else {
                 solid = mid;
             }
+        }
+        if (p_lod > 0 && solid - air > 1) { // the crossing between the last two, linear in their distances
+            const double d_air = distance(air), d_solid = distance(solid);
+            return at(air + std::llround(double(solid - air) * d_air / ov::max(d_air - d_solid, 1e-6)));
         }
         return at(solid);
     }

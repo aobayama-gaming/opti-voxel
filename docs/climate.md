@@ -194,13 +194,18 @@ computes no terrain and has no node kind the engine hasn't.
   each field's centre and span and whether the biome names it. A double-click opens a biome's graph.
 - **The view is the engine's** (`engine_view.gd`): every edit sends the world's text (`World.preview_file`: the game's
   engine, the fields inline; the Biome mode's biome alone as the default) to `ClimateReportNode.preview`
-  (`ClimateReport::preview`): the report's own sampler on the CPU, each column traced to its ground, the shaded relief
+  (`ClimateReport::preview`): the report's own sampler on the CPU, each column traced to its ground as the map's
+  lattice Λ_m sees it (`SDFCascade::ground_along(start, m)`: to within 2^m voxels, then the last two distances' linear
+  crossing; the report and the game's sites trace at LOD 0), the shaded relief
   and the weights' blend plus every field's value at every point (the chart's cloud) and the largest altitude
   (`relief_m`: the curve editor's input span), or the engine's refusal. A mix row's M and S (mute, solo) are the view's
-  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once, 192 once the edits
-  pause (`SETTLE` 0.35 s): the mountain alone ~85 us a point (the sharp map ~3 s), the 8-biome world ~50 us. The 3D view
-  is the game: *Open in game* writes the world (`user://biome_mixer_game.world.json`) and runs the main scene on it
-  (`--world=`) in a second Godot.
+  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once (30-60 ms), 192 on a
+  thread once the edits pause (`SETTLE` 0.35 s; 1.1-1.8 s on 16 cores: ~0.5 ms of CPU a point, each point walking the
+  cascade on its own, 6 reads). *3D* (on by default, `terrain_3d.gd`) shows the same map as a surface: each point at
+  its traced altitude (*Height x* scales it), coloured by the 2D map, unlit; orbit, pan and zoom move a mesh, so they
+  are instant. The game itself: *Open in game* writes the world (`user://biome_mixer_game.world.json`) and runs the
+  main scene on it (`--world=`) in a second Godot. A live sharp view needs the GPU (`CascadePointsGPU`: whole batches
+  of points level by level), not done yet.
 - **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
   back is the same file (positions aside); every world.json biome and a graph of every engine kind drawn by the engine
   and every node's GraphNode built (the launcher fails on any script error); edits on the mountain (a row out, a shape

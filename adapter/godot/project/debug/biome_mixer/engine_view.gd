@@ -3,7 +3,8 @@ extends VBoxContainer
 ## engine's own cascade on the CPU, each column traced down to its ground), never a copy of the terrain. Biome mode: the
 ## biome alone, its shaded relief. World mode: the biomes' debug colours blended by their weights, shaded by the relief;
 ## the chart reads the same samples' fields. An edit draws a small map at once (FAST points a side), then a sharp one
-## (SHARP) once the edits pause. "Open in game" runs the game on the world (the real terrain, trees and all).
+## (SHARP, on a thread: the window never waits on it) once the edits pause. "3D" shows the same map as a surface
+## (terrain_3d.gd). "Open in game" runs the game on the world (the real terrain, trees and all).
 
 signal view_changed  # the extent or the centre moved: draw again
 signal open_game
@@ -14,6 +15,7 @@ const SHARP := 192
 const SETTLE := 0.35
 # The world files' directory: a preview's relative paths (its engine) resolve from it.
 const DIR := "res://climate/"
+const Terrain3D := preload("res://debug/biome_mixer/terrain_3d.gd")
 
 var extent_km := 20.0
 var centre_m := Vector2.ZERO
@@ -26,6 +28,12 @@ var _extent := SpinBox.new()
 var _x := SpinBox.new()
 var _z := SpinBox.new()
 var _info := Label.new()
+var _three := CheckButton.new()
+var _view3d := Terrain3D.new()
+var _framed := Vector3(-1, 0, 0)  # the extent and centre the 3D camera was fitted to
+var _serial := 0  # one per map asked: a sharp map from an older one is dropped
+var _thread: Thread
+var _sharp_again := false  # a sharp map was asked while one ran
 
 
 func _ready() -> void:
@@ -35,6 +43,8 @@ func _ready() -> void:
 	_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	add_child(_rect)
+	_view3d.visible = false
+	add_child(_view3d)
 	var bar := HFlowContainer.new()
 	add_child(bar)
 	_spin(bar, _extent, "Across km", 0.5, 20000.0, extent_km)
@@ -49,6 +59,13 @@ func _ready() -> void:
 	_z.value_changed.connect(func(v: float) -> void:
 		centre_m.y = v * 1000.0
 		view_changed.emit())
+	_three.text = "3D"
+	_three.button_pressed = true
+	_three.toggled.connect(func(_on: bool) -> void: _show(last))
+	bar.add_child(_three)
+	var height := SpinBox.new()
+	_spin(bar, height, "Height x", 0.1, 20.0, 1.0)
+	height.value_changed.connect(_view3d.set_exaggeration)
 	var game := Button.new()
 	game.text = "Open in game"
 	game.tooltip_text = "Runs the game on this world (the engine's terrain in 3D, with its trees, rocks and features)."
@@ -58,7 +75,7 @@ func _ready() -> void:
 	bar.add_child(_info)
 	_settle.one_shot = true
 	_settle.wait_time = SETTLE
-	_settle.timeout.connect(func() -> void: _draw_map(SHARP))
+	_settle.timeout.connect(_sharp_async)
 	add_child(_settle)
 
 
@@ -79,6 +96,7 @@ func _spin(p_bar: Container, p_box: SpinBox, p_label: String, p_lo: float, p_hi:
 func show_world(p_json: String, p_world_mode: bool, p_sharp: bool = false) -> Dictionary:
 	_json = p_json
 	_world_mode = p_world_mode
+	_serial += 1
 	_settle.stop()
 	_draw_map(SHARP if p_sharp else FAST)
 	if not p_sharp and last.get("error", "") == "" and is_inside_tree():
@@ -92,14 +110,54 @@ func set_extent(p_km: float) -> void:
 
 
 func _draw_map(p_size: int) -> void:
-	if _json == "":
+	if _json != "":
+		_show(draw(_json, extent_km, p_size, centre_m))
+
+
+# The sharp map on a thread; its result is shown if nothing was asked since.
+func _sharp_async() -> void:
+	if _thread != null:
+		_sharp_again = true
 		return
-	last = draw(_json, extent_km, p_size, centre_m)
+	var serial := _serial
+	var args := [_json, extent_km, centre_m]
+	_thread = Thread.new()
+	_thread.start(func() -> void:
+		var map := draw(args[0], args[1], SHARP, args[2])
+		_sharp_done.call_deferred(map, serial))
+
+
+func _sharp_done(p_map: Dictionary, p_serial: int) -> void:
+	_thread.wait_to_finish()
+	_thread = null
+	if p_serial == _serial:
+		_show(p_map)
+	if _sharp_again:
+		_sharp_again = false
+		_sharp_async()
+
+
+func _show(p_map: Dictionary) -> void:
+	if p_map.is_empty():
+		return
+	last = p_map
 	if String(last.error) != "":
 		_info.text = "The engine refuses the world: " + String(last.error)
 		return
-	_rect.texture = ImageTexture.create_from_image(last.biomes if _world_mode else last.shaded)
+	var img: Image = last.biomes if _world_mode else last.shaded
+	_rect.texture = ImageTexture.create_from_image(img)
+	_rect.visible = not _three.button_pressed
+	_view3d.visible = _three.button_pressed
+	if _three.button_pressed:
+		var view := Vector3(extent_km, centre_m.x, centre_m.y)
+		_view3d.show_map(last, img, view != _framed)
+		_framed = view
 	_info.text = "%d x %d points, %s m apart, %d us a point (the engine, CPU)" % [last.size, last.size, snappedf(last.spacing_m, 0.1), int(last.us_per_point)]
+
+
+func _exit_tree() -> void:
+	if _thread != null:
+		_thread.wait_to_finish()
 
 
 # The last world drawn again (the extent or the centre moved): small now, sharp after SETTLE.
