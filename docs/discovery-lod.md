@@ -52,6 +52,12 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
 - View reach in LODs (`VoxelTerrain.lod_view_max`, `World::Settings::lod_view_max`, default -1: the engine's top):
   the discoverer loads LODs 0 to this one only, the cascade keeps the engine's levels (the same terrain). The biome
   mixer's 3D view uses 10.
+- Load centre (`VoxelTerrain.set_lod_centre` / `clear_lod_centre`, `World::frame`'s `p_load_centre`, default the camera):
+  where the LOD rings centre, e.g. an orbit view's pivot; the camera's forward still steers back_scale and the memories.
+- View floor in LODs (`VoxelTerrain.lod_view_min`, `World::Settings::lod_view_min`, `ScanView::min_lod`, read every
+  frame): a node at it is never split, so the finer chunks are replaced by their ancestors at it.
+  `ChunkDiscoverer::lod_at_distance` (`VoxelTerrain.get_lod_at_distance`) gives the split rule's LOD at a distance; the
+  mixer floors its view at its orbit distance's LOD round the pivot (a restart loads in ~250 ms instead of timing out).
 - Far limit (`VoxelTerrain.lod_far_limit`, default on; with `--lod_far_limit=0` in bench and
   player the world gets 0, no limit): the adapter hands `World::frame` the depth of the camera's far plane (Godot:
   `Camera3D.far`, which `Presets.clip_planes` ties to the altitude, ~2,100x it with a 105 km floor, when the world's LODs are above

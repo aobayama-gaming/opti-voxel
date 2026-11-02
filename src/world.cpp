@@ -194,7 +194,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
+        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach, config.lod_view_min);
         last_load_centre = *p_camera_pos;
         has_camera = true;
     }
@@ -277,7 +277,7 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
         const Float3 &centre = p_load_centre != nullptr ? *p_load_centre : *p_camera_pos;
-        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(centre, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
+        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(centre, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach, config.lod_view_min);
         last_load_centre = centre;
         has_camera = true;
     }
@@ -541,6 +541,10 @@ void World::_poll_discovery_audit() {
     discovery_audit_result = r;
     discovery_audit.running = false;
     VLOG(1, "World: discovery audit: ", to_json(r));
+}
+
+int World::lod_at_distance(double p_distance_m) const {
+    return started ? chunk_discoverer->lod_at_distance(p_distance_m) : 0;
 }
 
 bool World::is_load_complete(const Float3 *p_load_centre) {

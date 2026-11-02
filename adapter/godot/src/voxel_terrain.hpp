@@ -197,8 +197,13 @@ public:
     void set_lod_view_max(int p_lod);
     int get_lod_view_max() const;
     // Where the LOD rings centre (render space, moved with the render origin like the camera's siblings) instead of
-    // the camera: an orbit view's pivot lifted by its distance loads round the pivot. clear_lod_centre: the camera again.
+    // the camera: an orbit view's pivot. clear_lod_centre: the camera again.
     void set_lod_centre(const Vector3 &p_position);
+    // The finest LOD the view loads (default 0), any time: an orbit view far from its pivot needs no finer chunks than
+    // get_lod_at_distance(its distance).
+    void set_lod_view_min(int p_lod);
+    int get_lod_view_min() const;
+    int get_lod_at_distance(double p_metres) const;
     void clear_lod_centre();
     // Scan nothing farther from the camera than its far plane (Camera3D.far, read every frame): it is never drawn.
     // With --lods above 15 the far plane follows the altitude (Presets.clip_planes), so a low camera drops the

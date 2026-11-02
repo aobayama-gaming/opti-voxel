@@ -3,9 +3,11 @@ extends SubViewportContainer
 ## viewport of its own with the game's sky, fog and sun. An edit restarts the terrain's world on the new one in place
 ## (VoxelTerrain.restart_world: its device, pages and pipelines kept): the climate's numbers are shader params
 ## (Cascade::ShaderParams), so a world whose structure didn't change builds no pipeline, and the time is the reload of
-## the chunks in view. A drag restarts it as often as the loads keep up. The view holds the last terrain's frame until
-## the new one's chunks are loaded (no blank ground between them). Without the world's clouds (their shadows).
-## The chunks load round the orbit's pivot (VoxelTerrain.set_lod_centre), at the LOD of the camera's distance.
+## the chunks in view. A drag restarts it as often as the loads keep up. The view holds the last terrain's frame (a
+## copy over it: a SubViewport stopped with UPDATE_DISABLED showed black, noise and stripes, not its last frame) until the
+## new one's chunks are loaded (no blank ground between them). Without the world's clouds (their shadows).
+## The chunks load round the orbit's pivot (VoxelTerrain.set_lod_centre), from the LOD the camera's distance needs there
+## (lod_view_min) to LOD_VIEW_MAX, which at the pixel error reaches ~6.7 km from it.
 ## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
@@ -24,6 +26,7 @@ const GAME_SCENE := "res://main_scene_5cm.tscn"
 const FOG_DENSITY := 0.00004
 
 var _viewport := SubViewport.new()
+var _held := TextureRect.new()  # the last terrain's frame while the new one loads
 var _camera := Camera3D.new()
 var _terrain: Node3D  # VoxelTerrain
 var _restart := Timer.new()
@@ -51,6 +54,12 @@ func _init() -> void:
 	_viewport.own_world_3d = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
 	add_child(_viewport)
+	_held.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_held.stretch_mode = TextureRect.STRETCH_SCALE
+	_held.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_held.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_held.visible = false
+	add_child(_held)
 	_add_game_look()
 	_viewport.add_child(_camera)
 	_restart.one_shot = true
@@ -189,9 +198,14 @@ func _process(_delta: float) -> void:
 		status_changed.emit()
 
 
-# p_on: the viewport keeps its last frame (renders nothing), else renders while shown.
+# p_on: a copy of the viewport's frame over it (the viewport renders on below), else the viewport itself. A hold that
+# is on keeps its frame (the last loaded one, not a half-loaded one).
 func _hold(p_on: bool) -> void:
-	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED if p_on else SubViewport.UPDATE_WHEN_VISIBLE
+	if p_on and not _held.visible:
+		_held.texture = ImageTexture.create_from_image(_viewport.get_texture().get_image())
+	_held.visible = p_on
+	if not p_on:
+		_held.texture = null
 
 
 # The camera's target on the asked point: the terrain's base there (its render position, VoxelTerrain's tangent frame)
@@ -219,8 +233,8 @@ func _place_camera() -> void:
 	_camera.position = _target + dir * _dist
 	_camera.look_at(_target, _up)
 	if _terrain != null:
-		# The LOD rings round the pivot, not the camera: lifted by the orbit's distance, the pivot loads at its LOD.
-		_terrain.set_lod_centre(_target + _up * _dist)
+		_terrain.set_lod_centre(_target)  # the LOD rings round the pivot, not the camera
+		_terrain.lod_view_min = _terrain.get_lod_at_distance(_dist)  # nothing finer than the pivot needs from here
 	# The planes follow the orbit: a world's view is hundreds of km (the terrain loads to the far plane, lod_far_limit).
 	_camera.far = maxf(_dist * 4.0, 2000.0)
 	_camera.near = clampf(_dist * 0.0002, 0.05, 50.0)

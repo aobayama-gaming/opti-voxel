@@ -65,6 +65,7 @@ public:
         float lod_view_margin_deg = 20.0f;
         float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
         int lod_view_max = -1; // the coarsest LOD the view loads (< 0: the engine's top): its reach
+        int lod_view_min = 0; // the finest LOD the view loads (ScanView::min_lod), read every frame
         GPUDirectMesher::Settings direct;
         int debug_view = 0;
         int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
@@ -117,12 +118,13 @@ public:
     // One frame: the camera (render space, null: none), the scans and meshes that landed, the next batches.
     // p_camera_far_m: the depth of the camera's far plane in metres (0: none, an infinite projection): nothing farther
     // than its frustum's corners reach (far / cos of the diagonal half-FOV), in any direction, is scanned (ChunkMath::beyond_far).
-    // p_load_centre: where the LOD rings centre (render space, null: the camera), e.g. an orbit's pivot lifted by the
-    // orbit's distance: the pivot gets the LOD of a camera that far.
+    // p_load_centre: where the LOD rings centre (render space, null: the camera), e.g. an orbit view's pivot.
     void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0, const Float3 *p_load_centre = nullptr);
     // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer.
     void stop();
     bool is_started() const { return started; }
+    // The LOD the view's rule gives at p_distance_m from the camera (ChunkDiscoverer::lod_at_distance); 0 before start.
+    int lod_at_distance(double p_distance_m) const;
     // The direction towards the sun (render space, unit): the atmosphere's light from the next frame on.
     void set_sun(const Float3 &p_towards_sun) { sun = p_towards_sun; }
     // The atmosphere (null: off, or before start).

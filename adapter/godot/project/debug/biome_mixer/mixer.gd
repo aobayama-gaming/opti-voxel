@@ -12,6 +12,7 @@ extends Control
 ##   --world            start in the World mode
 ##   --set=ID.KEY=V     set a node's key in the current biome's graph after loading (V as JSON: 1.5, "ridged"), or
 ##                      view.KEY=V a view setting (view.extent_km=40); repeatable
+##   --drag=ID.KEY=A:B:S  drag a node's value A to B and back each second for S seconds (one edit a frame), then quit
 ##   --shot=PATH        draw once (the sharp map; in 3D, the terrain's load then two restarts, timed), save the window to
 ##                      PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test (checks.gd); prints MIXER: {json} and quits 0 if ok
@@ -63,6 +64,7 @@ func _ready() -> void:
 	var shot := ""
 	var pick := ""
 	var mode := ""
+	var drag := ""
 	for a in args:
 		if a.begins_with("--shot="):
 			shot = a.trim_prefix("--shot=")
@@ -72,16 +74,18 @@ func _ready() -> void:
 			mode = "world"
 		elif a.begins_with("--set="):
 			sets.append(a.trim_prefix("--set="))
+		elif a.begins_with("--drag="):
+			drag = a.trim_prefix("--drag=")
 	# The window redraws only on input or a change (an idle GPU); a shot needs every frame drawn.
-	OS.low_processor_usage_mode = shot == ""
+	OS.low_processor_usage_mode = shot == "" and drag == ""
 	var screen := DisplayServer.screen_get_usable_rect(get_window().current_screen)
 	get_window().size = Vector2i(Vector2(screen.size) * 0.85)
 	get_window().position = screen.position + (screen.size - get_window().size) / 2
 	_build_ui()
 	# A shot leaves the session's autosave alone (it may edit the graph with --set).
-	if shot != "":
+	if shot != "" or drag != "":
 		autosave.timeout.disconnect(_autosave)
-	var w := World.read(AUTOSAVE) if shot == "" else {}
+	var w := World.read(AUTOSAVE) if shot == "" and drag == "" else {}
 	if w.is_empty():
 		w = World.read(WORLD)
 	if pick != "":
@@ -99,7 +103,9 @@ func _ready() -> void:
 	set_world(w, true)
 	for s in sets:
 		_apply_set(s)
-	if shot != "":
+	if drag != "":
+		await _drag(drag, shot)
+	elif shot != "":
 		await _shot(shot)
 
 
@@ -551,6 +557,36 @@ func _shot(p_path: String) -> void:
 	get_viewport().get_texture().get_image().save_png(p_path)
 	preview.image().save_png(p_path.get_basename() + "_view.png")
 	print("MIXER_SHOT: ", JSON.stringify({"path": p_path, "map_ms": ms, "us_per_point": map.get("us_per_point", 0.0), "terrain_loads_ms": loads, "error": map.get("error", "")}))
+	get_tree().quit(0)
+
+
+# p_spec ID.KEY=FROM:TO:SECONDS: after the first load, a slider's drag (one edit a frame, FROM to TO and back each
+# second) for SECONDS, a window shot each second (p_path_<s>.png), then MIXER_DRAG (frames, fps, status lines) and quit.
+func _drag(p_spec: String, p_path: String) -> void:
+	var eq := p_spec.find("=")
+	var dot := p_spec.find(".")
+	var r := p_spec.substr(eq + 1).split(":")
+	var id := p_spec.substr(0, dot)
+	var key := p_spec.substr(dot + 1, eq - dot - 1)
+	if model_node(id).is_empty() or r.size() != 3:
+		push_error("--drag=%s: expected ID.KEY=FROM:TO:SECONDS with a node of the graph" % p_spec)
+		get_tree().quit(1)
+		return
+	await preview.wait_terrain(120.0)
+	var t0 := Time.get_ticks_usec()
+	var counts := {"frames": 0, "shots": 0}
+	while true:
+		var s := (Time.get_ticks_usec() - t0) / 1e6
+		if s > float(r[2]):
+			break
+		set_params(id, {key: lerpf(float(r[0]), float(r[1]), 1.0 - absf(fmod(s, 1.0) * 2.0 - 1.0))})
+		await get_tree().process_frame
+		counts.frames += 1
+		if p_path != "" and int(s) >= counts.shots:
+			get_viewport().get_texture().get_image().save_png("%s_%d.png" % [p_path.get_basename(), counts.shots])
+			counts.shots += 1
+	var secs := (Time.get_ticks_usec() - t0) / 1e6
+	print("MIXER_DRAG: ", JSON.stringify({"frames": counts.frames, "fps": snappedf(counts.frames / secs, 0.1)}))
 	get_tree().quit(0)
 
 

@@ -468,3 +468,55 @@ TEST_CASE("ChunkDiscoverer: a far plane drops exactly the chunks past it") {
     CHECK(faces.size() <= 2); // jumps of 0 and 1 only
     memdelete(discoverer);
 }
+
+// A floor (ScanView::min_lod): no chunk finer than it, the nodes the full scan kept at it or coarser are the same, each
+// finer chunk is replaced by its ancestor at the floor, the faces stay within one LOD, and a new floor asks for a rescan.
+TEST_CASE("ChunkDiscoverer: a LOD floor replaces the finer chunks by their ancestors") {
+    ChunkParam param;
+    SDFCascade sdf;
+    const int lods = 15;
+    sdf.configure(param, lods);
+    ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
+    discoverer->set_config(param, &sdf);
+    discoverer->setup_lod(lods, 4.0f, 720.0f, 75.0f * (3.14159265f / 180.0f));
+    const Float3 pose = ov_f3(godot::Vector3(-800.0f, 300.0f, 400.0f));
+    const Float3 forward{ 1.0f, 0.0f, 0.0f };
+    const int floor = 5;
+    const ScanView open = discoverer->make_view(ChunkMath::chunk_at_render(pose, param), forward);
+    const ScanView floored = discoverer->make_view(ChunkMath::chunk_at_render(pose, param), forward, 0.0, floor);
+    CHECK(floored.min_lod == floor);
+    CHECK(discoverer->make_view(open.camera_chunk, forward, 0.0, 99).min_lod == discoverer->get_max_lod());
+    CHECK(ChunkDiscoverer::view_changed(open, floored));
+    CHECK(!ChunkDiscoverer::view_changed(floored, discoverer->make_view(open.camera_chunk, forward, 0.0, floor)));
+
+    LODHashSet all;
+    LODHashSet coarse;
+    ChunkDiscoverer::ScanCounters all_counters;
+    ChunkDiscoverer::ScanCounters coarse_counters;
+    discoverer->scan(open, ChunkDiscoverer::CULL_LEGACY, all, all_counters);
+    discoverer->scan(floored, ChunkDiscoverer::CULL_LEGACY, coarse, coarse_counters);
+    int64_t finer = 0;
+    for (const ChunkId &id : all) {
+        const int lod = ChunkMath::get_lod(id);
+        if (lod > floor) {
+            CHECK(coarse.has(id));
+            continue;
+        }
+        finer += lod < floor ? 1 : 0;
+        CHECK(coarse.has(lod == floor ? id : ChunkMath::get_parent_from_child_until(id, floor)));
+    }
+    for (const ChunkId &id : coarse) {
+        CHECK(ChunkMath::get_lod(id) >= floor);
+    }
+    CHECK(finer > 0); // the pose has chunks under the floor to replace
+    CHECK(coarse.size() < all.size());
+    MESSAGE("chunks: ", int64_t(all.size()), " from LOD 0, ", int64_t(coarse.size()), " from LOD ", floor);
+    std::vector<int64_t> faces;
+    face_lod_jumps(coarse, discoverer->get_max_lod(), faces);
+    CHECK(faces.size() <= 2);
+    // The rule's LOD by distance: 0 at the camera, coarser farther, the top past every band.
+    CHECK(discoverer->lod_at_distance(0.0) == 0);
+    CHECK(discoverer->lod_at_distance(1000.0) > discoverer->lod_at_distance(100.0));
+    CHECK(discoverer->lod_at_distance(1e9) == discoverer->get_max_lod());
+    memdelete(discoverer);
+}

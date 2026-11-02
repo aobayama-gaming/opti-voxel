@@ -177,8 +177,9 @@ public:
     static constexpr int VIEW_MEMORY_AUTO_LOD = 2;
 
     // The view of a camera in LOD0 chunk p_camera_chunk (absolute: the discoverer never reads the render origin)
-    // looking along p_forward, with its far plane p_far_m metres away (0: none; ChunkMath::far_ids), without memories.
-    ScanView make_view(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m = 0.0) const;
+    // looking along p_forward, with its far plane p_far_m metres away (0: none; ChunkMath::far_ids), nothing finer than
+    // p_min_lod (ScanView::min_lod, clamped to the LODs), without memories.
+    ScanView make_view(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m = 0.0, int p_min_lod = 0) const;
     // The far step a view keeps (ScanView::far_ids, powers of two): p_needed, except that it only shrinks from
     // p_current once it falls to a quarter of it, so a camera bobbing around one altitude doesn't drop and re-mesh
     // the coarsest ring on every crossing.
@@ -197,7 +198,9 @@ public:
     static Remembered remember_view(ScanView &r_view, double p_memory_distance);
     // Remembers the camera's view (remember_view) and asks for a scan when the view changed (view_changed).
     // p_far_m: the camera's far plane in metres, 0 for none (make_view).
-    void set_camera(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m = 0.0);
+    void set_camera(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m = 0.0, int p_min_lod = 0);
+    // The LOD the rule gives at p_distance_m from the camera (the coarsest whose distance is within it), in [0, max LOD].
+    int lod_at_distance(double p_distance_m) const;
     // The view of the latest set_camera, memories included.
     ScanView get_view();
     // How far the camera walks from where it had a view before that view starts to fade (render metres;

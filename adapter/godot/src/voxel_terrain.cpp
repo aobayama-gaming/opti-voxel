@@ -65,6 +65,9 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_view_max"), &VoxelTerrain::get_lod_view_max);
     ClassDB::bind_method(D_METHOD("set_lod_centre", "position"), &VoxelTerrain::set_lod_centre);
     ClassDB::bind_method(D_METHOD("clear_lod_centre"), &VoxelTerrain::clear_lod_centre);
+    ClassDB::bind_method(D_METHOD("set_lod_view_min", "lod"), &VoxelTerrain::set_lod_view_min);
+    ClassDB::bind_method(D_METHOD("get_lod_view_min"), &VoxelTerrain::get_lod_view_min);
+    ClassDB::bind_method(D_METHOD("get_lod_at_distance", "metres"), &VoxelTerrain::get_lod_at_distance);
     ClassDB::bind_method(D_METHOD("set_lod_far_limit", "enabled"), &VoxelTerrain::set_lod_far_limit);
     ClassDB::bind_method(D_METHOD("get_lod_far_limit"), &VoxelTerrain::get_lod_far_limit);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
@@ -180,6 +183,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_view_max", PROPERTY_HINT_RANGE, "-1,63,1"), "set_lod_view_max", "get_lod_view_max");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_view_min", PROPERTY_HINT_RANGE, "0,63,1"), "set_lod_view_min", "get_lod_view_min");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lod_far_limit"), "set_lod_far_limit", "get_lod_far_limit");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
@@ -549,6 +553,18 @@ void VoxelTerrain::set_lod_centre(const Vector3 &p_position) {
 
 void VoxelTerrain::clear_lod_centre() {
     has_lod_centre = false;
+}
+
+void VoxelTerrain::set_lod_view_min(int p_lod) {
+    cfg().lod_view_min = p_lod;
+}
+
+int VoxelTerrain::get_lod_view_min() const {
+    return cfg().lod_view_min;
+}
+
+int VoxelTerrain::get_lod_at_distance(double p_metres) const {
+    return world->lod_at_distance(p_metres);
 }
 
 void VoxelTerrain::set_lod_far_limit(bool p_enabled) {

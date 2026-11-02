@@ -209,8 +209,10 @@ computes no terrain and has no node kind the engine hasn't.
   numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a value builds no pipeline: the
   device parks the pipelines the old world frees, by text, and the new world takes those of the same text
   (`RDDevice::park_pipelines`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
-  every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (its SubViewport stops
-  rendering until the chunks in view are loaded, at most 1 s): no blank ground between two loads. It loads LODs 0-10 only
+  every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (a copy of it shown over the viewport, which renders
+  on below, until the chunks in view are loaded, at most 1 s: a SubViewport stopped with `UPDATE_DISABLED` showed
+  black, noise and stripes): no blank ground between two loads. It loads round the orbit's pivot
+  (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-10 only
   (`lod_view_max`: 1.6 km chunks, the orbit's tens of km). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
   ~10% shorter), its world's clouds are off (their shadows hid the relief over kilometres), and its discoverer and
   site walk run on the CPU (their GPU variants build their pipelines on a local device of their own: ~9 s per
