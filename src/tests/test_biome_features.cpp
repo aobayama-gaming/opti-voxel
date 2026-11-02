@@ -10,6 +10,28 @@ using namespace Archetype;
 
 namespace {
 
+// The kinds' data as the worlds list them (biomes.world.json): cell, chance, radius range.
+const Climate::FeatureShare DATA[Biome::FEATURE_COUNT] = {
+    { "lava_lake", 640.0, 0.6, 18.0, 45.0 },
+    { "floating_island", 640.0, 0.5, 15.0, 40.0 },
+};
+
+int shift_of(Biome::Feature p_feature, double p_voxel) {
+    return Biome::cell_shift(DATA[p_feature].cell_m, p_voxel);
+}
+
+// The candidates its entry keeps (SDFTable::add_biomes' rule), their radius its.
+void kept_sites(Biome::Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, double p_voxel, std::vector<Biome::Site> &r_out) {
+    std::vector<Biome::Site> all;
+    Biome::sites(p_feature, shift_of(p_feature, p_voxel), p_lo, p_hi, p_base, all);
+    for (Biome::Site s : all) {
+        if (s.chance_draw < DATA[p_feature].chance) {
+            s.radius = Biome::radius_of(s, DATA[p_feature].radius_lo_m, DATA[p_feature].radius_hi_m, p_voxel);
+            r_out.push_back(s);
+        }
+    }
+}
+
 // The biome types (Biome::add_types, as SDFTable::build_table).
 struct BiomeLibrary {
     DefLibrary lib;
@@ -59,15 +81,15 @@ TEST_CASE("Biome: a cell's site is the same from any box, on the flat datum in t
     const double voxel = 0.5;
     for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
         const Biome::Feature feature = Biome::Feature(f);
-        const int64_t cell = int64_t(1) << Biome::cell_shift(feature, voxel);
+        const int64_t cell = int64_t(1) << shift_of(feature, voxel);
         const int64_t far = (int64_t(1) << 60) - 40 * cell;
         for (const int64_t base : { int64_t(0), -far, far - 64 * cell, (int64_t(1) << 32) - 3 * cell }) {
             const BaseSurface flat = BaseSurface::flat(base / 3);
             const int64_t d = flat.datum_y();
             std::vector<Biome::Site> wide, narrow, again;
-            Biome::sites(feature, VoxelPos(base - 32 * cell, d - 3 * cell, base - 32 * cell), VoxelPos(base + 32 * cell, d + 2 * cell, base + 32 * cell), flat, voxel, wide);
-            Biome::sites(feature, VoxelPos(base - 5 * cell + 7, d - 1, base - 9 * cell - 3), VoxelPos(base + 6 * cell, d, base + 2 * cell + 11), flat, voxel, narrow);
-            Biome::sites(feature, VoxelPos(base - 32 * cell, d - 3 * cell, base - 32 * cell), VoxelPos(base + 32 * cell, d + 2 * cell, base + 32 * cell), flat, voxel, again);
+            kept_sites(feature, VoxelPos(base - 32 * cell, d - 3 * cell, base - 32 * cell), VoxelPos(base + 32 * cell, d + 2 * cell, base + 32 * cell), flat, voxel, wide);
+            kept_sites(feature, VoxelPos(base - 5 * cell + 7, d - 1, base - 9 * cell - 3), VoxelPos(base + 6 * cell, d, base + 2 * cell + 11), flat, voxel, narrow);
+            kept_sites(feature, VoxelPos(base - 32 * cell, d - 3 * cell, base - 32 * cell), VoxelPos(base + 32 * cell, d + 2 * cell, base + 32 * cell), flat, voxel, again);
             CHECK(wide.size() == again.size());
             if (wide.size() != again.size()) {
                 continue;
@@ -80,7 +102,7 @@ TEST_CASE("Biome: a cell's site is the same from any box, on the flat datum in t
             }
             // The chance: 65^2 columns (one cell of each on the datum), about 0.5-0.6 of them kept.
             const double kept = double(wide.size()) / (65.0 * 65.0);
-            CHECK(std::fabs(kept - Biome::kind(feature).chance) < 0.05);
+            CHECK(std::fabs(kept - DATA[feature].chance) < 0.05);
             for (const Biome::Site &s : wide) {
                 CHECK(s.at.y == d);
                 const int64_t ix = s.at.x - WorldCoord::floor_div(s.at.x, cell) * cell;
@@ -89,11 +111,11 @@ TEST_CASE("Biome: a cell's site is the same from any box, on the flat datum in t
                 CHECK(ix < 3 * cell / 4);
                 CHECK(iz >= cell / 4);
                 CHECK(iz < 3 * cell / 4);
-                CHECK(s.radius * voxel >= Biome::kind(feature).radius_lo_m);
-                CHECK(s.radius * voxel < Biome::kind(feature).radius_hi_m);
+                CHECK(s.radius * voxel >= DATA[feature].radius_lo_m);
+                CHECK(s.radius * voxel < DATA[feature].radius_hi_m);
                 // The other spots a lake tries: in the middle half of the same cell, the rest unchanged.
                 for (int attempt = 0; attempt < Biome::LAKE_ATTEMPTS; attempt++) {
-                    const Biome::Site m = Biome::moved(s, attempt, flat, voxel);
+                    const Biome::Site m = Biome::moved(s, attempt, flat);
                     CHECK(WorldCoord::floor_div(m.at, cell) == WorldCoord::floor_div(s.at, cell));
                     CHECK(m.at.x - WorldCoord::floor_div(m.at.x, cell) * cell >= cell / 4);
                     CHECK(m.at.x - WorldCoord::floor_div(m.at.x, cell) * cell < 3 * cell / 4);
@@ -117,12 +139,12 @@ TEST_CASE("Biome: on a planet, sites are on the base, one per cell, the same fro
     const int64_t r = std::llround(planet.get_radius());
     for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
         const Biome::Feature feature = Biome::Feature(f);
-        const int64_t cell = int64_t(1) << Biome::cell_shift(feature, voxel);
+        const int64_t cell = int64_t(1) << shift_of(feature, voxel);
         std::vector<Biome::Site> all, half;
-        Biome::sites(feature, VoxelPos(-r - cell, -r - cell, -r - cell), VoxelPos(r + cell, r + cell, r + cell), planet, voxel, all);
-        Biome::sites(feature, VoxelPos(0, -r - cell, -r - cell), VoxelPos(r + cell, r + cell, r + cell), planet, voxel, half);
+        kept_sites(feature, VoxelPos(-r - cell, -r - cell, -r - cell), VoxelPos(r + cell, r + cell, r + cell), planet, voxel, all);
+        kept_sites(feature, VoxelPos(0, -r - cell, -r - cell), VoxelPos(r + cell, r + cell, r + cell), planet, voxel, half);
         // The sphere's area over a cell's face, times the chance: within 30 % (cells cut by the sphere count once).
-        const double expected = 4.0 * M_PI * double(r) * double(r) / double(cell * cell) * Biome::kind(feature).chance;
+        const double expected = 4.0 * M_PI * double(r) * double(r) / double(cell * cell) * DATA[feature].chance;
         CAPTURE(all.size());
         CHECK(double(all.size()) > 0.7 * expected);
         CHECK(double(all.size()) < 1.3 * expected);
@@ -159,6 +181,7 @@ TEST_CASE("Biome: a lava lake on flat ground is a flat lava surface below the ri
         const BiomeLibrary lib(voxel);
         const int64_t top = 1000;
         Biome::Site site;
+        site.shift = shift_of(Biome::LAVA_LAKE, voxel);
         site.at = VoxelPos(40000, 0, -7000);
         site.radius = 30.0 / voxel;
         site.seed = 77;
@@ -211,6 +234,7 @@ TEST_CASE("Biome: a lava lake 90 degrees round a planet stands on its up, the y 
         return Float4{ float(n[0]), float(n[1]), float(n[2]), float(planet.altitude(p_v) - 0.5) };
     };
     Biome::Site site;
+    site.shift = shift_of(Biome::LAVA_LAKE, voxel);
     site.at = planet.on_base(VoxelPos(int64_t(1) << 20, 0, 0)); // the +x equator: up = +x
     site.radius = 20.0 / voxel;
     site.seed = 5;
@@ -250,6 +274,7 @@ TEST_CASE("Biome: a lava lake 90 degrees round a planet stands on its up, the y 
 TEST_CASE("Biome: no lava lake on a slope") {
     const BiomeLibrary lib(0.5);
     Biome::Site site;
+    site.shift = shift_of(Biome::LAVA_LAKE, 0.5);
     site.radius = 60.0;
     Biome::Placed out;
     CHECK_FALSE(Biome::place(site, column_ground([](int64_t p_x) { return p_x; }), lib.lib, lib.types, 0.5, out));
@@ -263,6 +288,7 @@ TEST_CASE("Biome: a floating island floats, its underside 25-70 m above the high
         auto top_y = [](int64_t p_x) { return 500 + p_x / 8; };
         for (uint32_t seed = 0; seed < 8; seed++) {
             Biome::Site site;
+            site.shift = shift_of(Biome::LAVA_LAKE, voxel);
             site.feature = Biome::FLOATING_ISLAND;
             site.at = VoxelPos(1000 + 37 * int64_t(seed), 0, 0);
             site.radius = (15.0 + 3.0 * seed) / voxel;

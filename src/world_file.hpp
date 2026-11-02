@@ -19,7 +19,7 @@
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true, "relief_m": 3276.8 },
 //     "zone": { "side_m": 0, "centre_m": [-50, -150] },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
-//     "features": { "radius_km": 0 },
+//     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
 //     "species": [ species... ],
 //     "biomes": [ biome..., default biome ]
 //   }
@@ -29,8 +29,8 @@
 // engine's values). Without biomes, the ground is the template biome's (Climate::template_biome). "species" are what the
 // instances name (species.hpp; Archetype::default_species without the key); "instances" what grows where no biome lists
 // its own (and on a world without biomes), each entry a species, its cell and its share (Climate::parse_instances), over
-// the "zone" (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: no instance); the features
-// stand within radius_km of its centre, each where its biome lists its kind.
+// the "zone" (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: none); "features" likewise what
+// stands on a biome that lists none, each entry a kind, its cell, its chance and its radius (Climate::parse_features).
 struct WorldFile {
     // The world of a host or check given none.
     static constexpr const char *DEFAULT_PATH = "res://worlds/default.world.json";
@@ -51,7 +51,7 @@ struct WorldFile {
     double zone_z_m = SDFTable::Zone().z_m;
     double zone_side_m = 0.0;
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
-    double features_radius_m = 0.0; // biome features (lava lakes, floating islands) within this distance (SDFTable::set_biome_radius)
+    std::vector<Climate::FeatureShare> features; // SDFTable::set_features
     std::vector<Archetype::Species> species = Archetype::default_species(); // SDFTable::set_species
 
     // The file at p_path (a host path, ov::read_file) in r_world: empty, or why it was refused (r_world untouched).

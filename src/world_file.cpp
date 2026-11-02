@@ -110,13 +110,12 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     const ov::Value planet = section(p_data, "planet", { "radius_m", "ring_m" }, err);
     const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds", "relief_m" }, err);
     ov::Value zone = section(p_data, "zone", { "side_m", "centre_m" }, err);
-    const ov::Value features = section(p_data, "features", { "radius_km" }, err);
     const ov::Value centre = zone.get("centre_m", ov::Value::array());
     if (err.empty() && zone.has("centre_m") && !(centre.is_array() && centre.size() == 2 && centre[size_t(0)].is_number() && centre[size_t(1)].is_number())) {
         err = "world: zone: centre_m is [x, z] in metres.";
     }
     zone.erase("centre_m");
-    for (const auto &part : { std::pair<const char *, ov::Value>{ "engine", engine }, { "planet", planet }, { "zone", zone }, { "features", features } }) {
+    for (const auto &part : { std::pair<const char *, ov::Value>{ "engine", engine }, { "planet", planet }, { "zone", zone } }) {
         err = err.empty() ? not_a_number(part.second, part.first) : err;
     }
     if (!err.empty()) {
@@ -153,7 +152,12 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
             return "world: " + err;
         }
     }
-    w.features_radius_m = 1000.0 * features.get("radius_km", w.features_radius_m / 1000.0).as_double();
+    if (p_data.has("features")) {
+        err = Climate::parse_features(p_data["features"], "features", w.features);
+        if (!err.empty()) {
+            return "world: " + err;
+        }
+    }
     if (p_data.has("species")) {
         err = Archetype::parse_species(p_data["species"], w.species);
         if (!err.empty()) {

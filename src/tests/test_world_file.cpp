@@ -27,7 +27,7 @@ TEST_CASE("WorldFile: inline sections reach their fields") {
     WorldFile w;
     CHECK(parse(R"({"engine": {"voxel_m": 0.05, "lods": 25}, "planet": {"radius_m": 2000, "ring_m": 9000},
         "look": {"atmosphere": false, "atmosphere_scale": 2, "clouds": false}, "zone": {"side_m": 8, "centre_m": [3, -4]},
-        "instances": [{"species": "conifer", "cell_m": 5}, {"species": "boulder", "cell_m": 40, "share": 3}], "features": {"radius_km": 2}})",
+        "instances": [{"species": "conifer", "cell_m": 5}, {"species": "boulder", "cell_m": 40, "share": 3}], "features": [{"kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45]}]})",
                   w) == ov::str());
     CHECK(w.voxel_m == 0.05);
     CHECK(w.lods == 25);
@@ -44,7 +44,10 @@ TEST_CASE("WorldFile: inline sections reach their fields") {
     CHECK(w.instances[0].cell_m == 5.0);
     CHECK(w.instances[0].share == 1u);
     CHECK(w.instances[1].share == 3u);
-    CHECK(w.features_radius_m == 2000.0);
+    CLIMATE_REQUIRE(w.features.size() == 1);
+    CHECK(w.features[0].kind == "lava_lake");
+    CHECK(w.features[0].chance == 0.6);
+    CHECK(w.features[0].radius_hi_m == 45.0);
 }
 
 TEST_CASE("WorldFile: the climate's fields merge with the world's biomes into one table") {
@@ -65,6 +68,9 @@ TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
     CHECK(ov::contains(parse(R"({"zone": {"side_m": -1}})", w), "side_m must be >= 0"));
     CHECK(ov::contains(parse(R"({"instances": [{"species": "conifer"}]})", w), "'cell_m' is required"));
     CHECK(ov::contains(parse(R"({"instances": {"species": "conifer"}})", w), "a list of instances"));
+    CHECK(ov::contains(parse(R"({"features": [{"kind": "lava_lake", "cell_m": 640, "radius_m": [5, 2]}]})", w), "0 < lo <= hi"));
+    CHECK(ov::contains(parse(R"({"features": [{"kind": "lava_lake", "cell_m": 640, "chance": 2, "radius_m": [1, 2]}]})", w), "in [0, 1]"));
+    CHECK(ov::contains(parse(R"({"features": {"radius_km": 2}})", w), "a list of features"));
     CHECK(ov::contains(parse(R"({"planet": 5})", w), "not an object"));
     CHECK(ov::contains(parse(R"({"engine": 5})", w), "not a path or an object"));
     CHECK(ov::contains(parse(R"({"engine": {"voxel_m": 0}})", w), "positive"));

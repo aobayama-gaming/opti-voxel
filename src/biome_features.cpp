@@ -15,8 +15,8 @@ using ExactNoise::unit_of;
 namespace {
 
 const Kind KINDS[FEATURE_COUNT] = {
-    { "lava_lake", 640.0, 0.6, 18.0, 45.0, 0x1A7Au },
-    { "floating_island", 640.0, 0.5, 15.0, 40.0, 0x15E7u },
+    { "lava_lake", 0x1A7Au },
+    { "floating_island", 0x15E7u },
 };
 
 // The shapes, in units of the feature's radius unless named in metres.
@@ -169,8 +169,21 @@ const Kind &kind(Feature p_feature) {
     return KINDS[p_feature];
 }
 
-int cell_shift(Feature p_feature, double p_voxel) {
-    return ov::max(4, ExactNoise::lattice_k(kind(p_feature).cell_m, p_voxel));
+Feature feature_named(const ov::str &p_name) {
+    for (int f = 0; f < FEATURE_COUNT; f++) {
+        if (p_name == KINDS[f].name) {
+            return Feature(f);
+        }
+    }
+    return FEATURE_COUNT;
+}
+
+int cell_shift(double p_cell_m, double p_voxel) {
+    return ov::max(4, ExactNoise::lattice_k(p_cell_m, p_voxel));
+}
+
+double radius_of(const Site &p_site, double p_lo_m, double p_hi_m, double p_voxel) {
+    return (p_lo_m + (p_hi_m - p_lo_m) * p_site.radius_draw) / p_voxel;
 }
 
 Types add_types(DefLibrary &r_library, double p_voxel) {
@@ -182,11 +195,11 @@ Types add_types(DefLibrary &r_library, double p_voxel) {
     return t;
 }
 
-Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base, double p_voxel) {
+Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base) {
     if (p_attempt == 0) {
         return p_site;
     }
-    const int64_t cell = int64_t(1) << cell_shift(p_site.feature, p_voxel);
+    const int64_t cell = int64_t(1) << p_site.shift;
     const ExactNoise::UVec3 h = hash3(p_site.seed, uint32_t(p_attempt), 0x40EEu);
     const Vector3i64 c = WorldCoord::floor_div(p_site.at, cell);
     Site s = p_site;
@@ -194,9 +207,9 @@ Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base, double 
     return WorldCoord::floor_div(s.at, cell) == c ? s : p_site; // another cell's point of the base: its site's place
 }
 
-void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, double p_voxel, std::vector<Site> &r_out) {
+void sites(Feature p_feature, int p_shift, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, std::vector<Site> &r_out) {
     const Kind &k = kind(p_feature);
-    const int64_t cell = int64_t(1) << cell_shift(p_feature, p_voxel);
+    const int64_t cell = int64_t(1) << p_shift;
     const Vector3i64 lo = WorldCoord::floor_div(p_lo, cell), hi = WorldCoord::floor_div(p_hi, cell);
     const double reach = 0.87 * double(cell); // a cell's half diagonal, rounded up: farther from the base, it holds none of it
     for (int64_t cz = lo.z; cz <= hi.z; cz++) {
@@ -207,17 +220,16 @@ void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const 
                     continue;
                 }
                 const ExactNoise::UVec3 h = hash3(ExactNoise::hash_cell(c, k.seed), 0xCE11u, 0u);
-                if (unit_of(h.x) >= k.chance) {
-                    continue;
-                }
                 const ExactNoise::UVec3 g = hash3(h.x, h.y, h.z);
                 Site s;
                 s.feature = p_feature;
+                s.shift = p_shift;
+                s.chance_draw = unit_of(h.x);
+                s.radius_draw = unit_of(g.x);
                 s.at = cell_point(c, cell, h.y, g.z, h.z, p_base);
                 if (WorldCoord::floor_div(s.at, cell) != c || s.at.x < p_lo.x || s.at.x > p_hi.x || s.at.y < p_lo.y || s.at.y > p_hi.y || s.at.z < p_lo.z || s.at.z > p_hi.z) {
                     continue; // another cell's point of the base, or outside the box
                 }
-                s.radius = (k.radius_lo_m + (k.radius_hi_m - k.radius_lo_m) * unit_of(g.x)) / p_voxel;
                 s.seed = g.y;
                 r_out.push_back(s);
             }
@@ -233,7 +245,7 @@ bool place(const Site &p_site, const Ground &p_ground, const DefLibrary &p_libra
         return true;
     }
     for (int attempt = 0; attempt < LAKE_ATTEMPTS; attempt++) {
-        r_out.at = moved(p_site, attempt, *p_ground.base, p_voxel);
+        r_out.at = moved(p_site, attempt, *p_ground.base);
         if (lava_lake(r_out.at, p_ground, p_library, p_types, p_voxel, r_out)) {
             return true;
         }

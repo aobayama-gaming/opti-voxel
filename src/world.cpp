@@ -108,7 +108,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);
     sdf->set_stream_part_sides(config.archetype_stream_part_sides);
-    sdf->set_biome_radius(content.features_radius_m);
+    sdf->set_features(content.features);
     sdf->planet_radius_m = planet_radius_m(config, content);
     sdf->planet_ring_m = content.planet_ring_m;
     if (content.planet_ring_m > 0.0 && !(content.planet_radius_m > 0.0)) {

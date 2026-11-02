@@ -451,16 +451,32 @@ std::vector<SDFTable::Group> SDFTable::groups() const {
     return out;
 }
 
-CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
+VoxelBox SDFTable::zone_box() const {
     const double vs = param.voxel_size;
+    const VoxelPos centre = ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs));
+    const int64_t half = std::llround(0.5 * zone.side_m / vs);
+    const VoxelPos reach(half, 4 * half, half);
+    return VoxelBox{ centre - reach, centre + reach, true };
+}
+
+std::vector<std::pair<ov::str, const std::vector<Climate::FeatureShare> *>> SDFTable::feature_lists() const {
+    std::vector<std::pair<ov::str, const std::vector<Climate::FeatureShare> *>> lists;
+    const Climate::Table *climate = placing_climate();
+    if (climate == nullptr || std::any_of(climate->biomes.begin(), climate->biomes.end(), [](const Climate::Biome &p_b) { return !p_b.features_listed; })) {
+        lists.push_back({ "the world", &features });
+    }
+    for (size_t b = 0; climate != nullptr && b < climate->biomes.size(); b++) {
+        lists.push_back({ "biome '" + climate->biomes[b].name + "'", &climate->biomes[b].features });
+    }
+    return lists;
+}
+
+CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
     CellScatter s;
     s.salt = p_salt;
     s.side = zone.side_m > 0.0 ? p_side : 0;
     if (s.side > 0) {
-        const VoxelPos centre = ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs));
-        const int64_t half = std::llround(0.5 * zone.side_m / vs);
-        const VoxelPos reach(half, 4 * half, half);
-        s.zone = VoxelBox{ centre - reach, centre + reach, true };
+        s.zone = zone_box();
     }
     s.ground = [this](const VoxelPos &p_v, int p_lod) { return ground_field(p_v, p_lod); };
     s.ground_batch = [this](const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) {
@@ -664,35 +680,49 @@ void SDFTable::add_stream(uint32_t p_slot_base, ov::Value &r_stats) {
 }
 
 void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
-    if (!(biome_radius > 0.0)) {
+    if (!has_features) {
         return;
     }
     const uint64_t start_us = ov::now_usec();
     const double vs = param.voxel_size;
-    // The sites on the base within biome_radius of the base's point under the scene's centre.
-    const BaseSurface &base = get_base();
-    const VoxelPos centre = base.on_base(ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs)));
-    const int64_t r = std::llround(biome_radius / vs);
-    const VoxelPos reach(r, r, r);
-    std::vector<Biome::Site> all, sites;
-    for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
-        Biome::sites(Biome::Feature(f), centre - reach, centre + reach, base, vs, all);
+    // Every kind and cell the lists name: its cells' candidates in the zone.
+    const VoxelBox box = zone_box();
+    std::vector<std::pair<Biome::Feature, int>> cells;
+    for (const auto &[who, list] : feature_lists()) {
+        for (const Climate::FeatureShare &e : *list) {
+            const Biome::Feature f = Biome::feature_named(e.kind);
+            if (f == Biome::FEATURE_COUNT) {
+                OV_ERR_PRINT("SDFTable: " + who + " has the feature '" + e.kind + "', which isn't a kind (lava_lake, floating_island).");
+                continue;
+            }
+            const std::pair<Biome::Feature, int> c{ f, Biome::cell_shift(e.cell_m, vs) };
+            if (std::find(cells.begin(), cells.end(), c) == cells.end()) {
+                cells.push_back(c);
+            }
+        }
     }
-    // Each where its biome lists its kind (BiomePick; every kind for a biome that lists none).
+    std::sort(cells.begin(), cells.end());
+    const BaseSurface &base = get_base();
+    std::vector<Biome::Site> all, sites;
+    for (const std::pair<Biome::Feature, int> &c : cells) {
+        Biome::sites(c.first, c.second, box.lo, box.hi, base, all);
+    }
+    // A candidate stands where its biome's entry of its kind and cell keeps it (BiomePick; the world's for a biome that
+    // lists none), its radius that entry's.
     const Climate::Table *climate = placing_climate();
     const BiomePick pick(climate, placing_spec());
-    auto stands = [&](const Biome::Site &p_site) {
-        if (climate == nullptr) {
-            return true;
+    for (Biome::Site site : all) {
+        const std::vector<Climate::FeatureShare> *list = &features;
+        if (climate != nullptr) {
+            const Climate::Biome &b = climate->biomes[size_t(pick.at(site.at, site.seed))];
+            list = b.features_listed ? &b.features : list;
         }
-        const Climate::Biome &b = climate->biomes[size_t(pick.at(p_site.at, p_site.seed))];
-        const ov::str name = Biome::kind(p_site.feature).name;
-        return !b.features_listed || std::find(b.features.begin(), b.features.end(), name) != b.features.end();
-    };
-    for (const Biome::Site &site : all) {
-        const double d[3] = { double(site.at.x - centre.x), double(site.at.y - centre.y), double(site.at.z - centre.z) };
-        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= double(r) * double(r) && stands(site)) {
-            sites.push_back(site);
+        for (const Climate::FeatureShare &e : *list) {
+            if (Biome::feature_named(e.kind) == site.feature && Biome::cell_shift(e.cell_m, vs) == site.shift && site.chance_draw < e.chance) {
+                site.radius = Biome::radius_of(site, e.radius_lo_m, e.radius_hi_m, vs);
+                sites.push_back(site);
+                break;
+            }
         }
     }
     // Each site samples the ground at a few dozen points (ground_under, const): on the worker pool, kept in site order.
@@ -901,7 +931,12 @@ void SDFTable::build_table(int p_lod_count) {
         types.stairs = lib.add(make_stairs_type());
         types.tunnel_cube = lib.add(make_tunnel_cube_type());
     }
-    if (biome_radius > 0.0) {
+    // The feature types only where the zone has some (the library's indices, the blob's, stay as without them).
+    has_features = false;
+    for (const auto &[who, list] : feature_lists()) {
+        has_features = has_features || (zone.side_m > 0.0 && !list->empty());
+    }
+    if (has_features) {
         types.biome = Biome::add_types(lib, vs);
     }
     const int blob = lib.add(make_moment_blob_type());

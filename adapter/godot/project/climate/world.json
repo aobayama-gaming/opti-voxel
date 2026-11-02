@@ -79,6 +79,7 @@
    "surface": {"flat": "#6a6a50", "steep": "#5a4c44"},
    "clouds": {"cover": 0.35, "type": 0.7},
    "instances": [{"species": "conifer", "cell_m": 10}, {"species": "boulder", "cell_m": 30}],
+   "features": [{"kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45]}],
    "debug_color": "#7a6a50"
   },
   {
@@ -125,6 +126,7 @@
    "surface": {"flat": "#4c7a34", "steep": "#5c5044"},
    "clouds": {"cover": 0.45, "type": 0.85},
    "instances": [{"species": "broadleaf", "cell_m": 5}, {"species": "slender", "cell_m": 5}],
+   "features": [{"kind": "floating_island", "cell_m": 640, "chance": 0.5, "radius_m": [15, 40]}],
    "debug_color": "#4c8a3c"
   },
   {

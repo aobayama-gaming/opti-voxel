@@ -211,6 +211,17 @@ struct InstanceShare {
     uint32_t share = 1;
 };
 
+// A feature a biome has (its "features", or the world's for a biome that lists none): a kind's name (biome_features.hpp:
+// lava_lake, floating_island; SDFTable checks it), its cells (cell_m, rounded to a power of two voxels), the chance a
+// cell holds one and its radius range in metres. A kind's entries of one cell size share their cells (SDFTable).
+struct FeatureShare {
+    ov::str kind;
+    double cell_m = 0.0;
+    double chance = 1.0;
+    double radius_lo_m = 0.0;
+    double radius_hi_m = 0.0;
+};
+
 struct Biome {
     ov::str name;
     std::vector<Axis> at; // sorted by field; empty for the last (default) biome only
@@ -220,7 +231,7 @@ struct Biome {
     // instances (SDFTable::set_instances), every feature kind.
     std::vector<InstanceShare> instances;
     bool instances_listed = false;
-    std::vector<ov::str> features;
+    std::vector<FeatureShare> features;
     bool features_listed = false;
     Surface surface;
     BiomeClouds clouds;
@@ -276,6 +287,9 @@ ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table);
 // A list of instances ([{ "species": name, "cell_m": 5, "share": 1 }]: a biome's, the world's) in r_out: empty, or the
 // first error, p_where naming the list (r_out untouched).
 ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out);
+// A list of features ([{ "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }]: a biome's, the
+// world's) in r_out, as parse_instances.
+ov::str parse_features(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out);
 
 // The cascade p_ground (its base and insert shift) with the table's notes as its bands, its fields as its field groups
 // and, if a biome lists a note, a Modulation: every listed note gets A = sum_b w_b amp_b at each point, from the weights

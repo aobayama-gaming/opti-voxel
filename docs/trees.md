@@ -114,7 +114,10 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   per cell its tent touches) and an O(parts) insert / erase per edit (TODO: per-block member lists would bound it).
   **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
   change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles space with cubic cells of
-  640 m rounded to 2^k voxels, and a cell keeps one site with the kind's chance, from `hash_cell` of the int64 cell: a
+  its entry's `cell_m` rounded to 2^k voxels, and a cell keeps one site with its entry's chance (a biome's `features`,
+  the world's for a biome that lists none: `{kind, cell_m, chance, radius_m}`, `Climate::FeatureShare`; the kinds'
+  names and seeds alone are code, `Biome::kind`; the candidate's draws are hashed once, so a world listing today's
+  640 m / 0.6 / 18-45 m lakes and 640 m / 0.5 / 15-40 m islands keeps every site), from `hash_cell` of the int64 cell: a
   point of its middle half projected onto the base surface (`BaseSurface::on_base`), kept when the projection stays
   in the cell, so every point of the base has one cell (on the flat base the datum's layer: one per column, as the
   plane's cells were; a planet's sites cover it all round, unit-tested). A site depends only on its cell and the base:
@@ -130,8 +133,8 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   record (a spherical cap on a hanging cone, smooth-unioned, plus bumps), its box bottom 25-70 m above the highest
   ground under it. Both follow the band rule like any record; the slab erodes away a few LODs before the basin (it
   can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) whose scorched basin
-  material shows. The world file's `features.radius_km` places the sites within KM km
-  of the base's point under (SCENE_X, SCENE_Z) once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
+  material shows. The sites stand in the world file's `zone` (the instances' square),
+  placed once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
   out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread.
   `get_debug_stats()["table"]["biomes"]`: counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z
   in metres of the lava's centre or the island's rim plane's, radius). `--preset=biomes` looks at a lava lake with two islands behind it.

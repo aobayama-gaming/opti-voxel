@@ -91,10 +91,11 @@ public:
     // The moment blobs a whole rebuild of the current records would make, with the joins the table was built with: what
     // the edits' incremental updates must match (tests).
     void moment_blobs_reference(std::vector<Archetype::MomentBlob> &r_out) const;
-    // The biome features (biome_features.hpp: lava lakes, floating islands) of the biome cells within p_radius metres
-    // of the zone's centre (a world file's features.radius_km; 0: none), each where its site's biome lists its kind (all kinds
-    // for a biome that lists none). Set before configure().
-    void set_biome_radius(double p_radius) { biome_radius = p_radius; }
+    // The features (biome_features.hpp: lava lakes, floating islands) where no biome lists its own (a world file's
+    // "features"; the world without biomes): each entry a kind, its cell, the chance a cell holds one and its radius range
+    // (Climate::FeatureShare). They stand in the zone, a cell's candidate where its biome's entry of its kind and cell
+    // keeps it (BiomePick). Set before configure().
+    void set_features(const std::vector<Climate::FeatureShare> &p_features) { features = p_features; }
     // The materials the records name (TableRecord::material): the page shader's material_tex.
     const Material::Library &get_materials() const override { return materials; }
 
@@ -118,7 +119,7 @@ public:
     // The locality margins (skirt_depth) take it whole; the skirt walls only where a blob touches the sample
     // (SDFCascade's moment skirt), so the rest of the terrain keeps the band rule's.
     float min_skirt_depth(const ChunkParam &, int) const override {
-        const bool blobs = instance_band && moment_blobs && (zone.side_m > 0.0 || biome_radius > 0.0);
+        const bool blobs = instance_band && moment_blobs && zone.side_m > 0.0;
         return instance_erode_cells() + (blobs ? MOMENT_SKIRT_CELLS : 0.0f);
     }
     // The moment skirt in cells: MOMENT_SKIRT_CELLS when the table has moment layers (edits may add blobs where the build
@@ -272,7 +273,8 @@ private:
     size_t walk_batch_gpu = WALK_BATCH_GPU;
     mutable std::atomic<int64_t> verified_points{ 0 };
     mutable std::atomic<int64_t> verify_differences{ 0 };
-    double biome_radius = 0.0; // --biomes (metres)
+    std::vector<Climate::FeatureShare> features;
+    bool has_features = false; // build_table: the zone has some, their library types added
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
     bool instance_band = true; // --instance_band
@@ -339,7 +341,11 @@ private:
     void add_source(const Archetype::CellScatter &p_source, const ov::str &p_name, ov::Value &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
     // The sources as keys of a stream whose slots start at p_slot_base, and their stats.
     void add_stream(uint32_t p_slot_base, ov::Value &r_stats);
-    // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
+    // The zone's box (Zone): its square round the ground under its centre, 4 half sides up and down.
+    VoxelBox zone_box() const;
+    // The lists of features the biomes stand on (the world's where a biome lists none, every biome's own), naming who.
+    std::vector<std::pair<ov::str, const std::vector<Climate::FeatureShare> *>> feature_lists() const;
+    // The biome features in the zone, appended to the records, and their stats.
     void add_biomes(const Types &p_types, ov::Value &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
     void add_moment_blobs(int p_blob_type, ov::Value &r_stats);
