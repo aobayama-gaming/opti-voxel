@@ -276,11 +276,16 @@ ov::str compile(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground,
     return ov::str();
 }
 
-ov::Value template_graph(double p_voxel_m) {
+int template_top(double p_voxel_m) {
     int top = ExactNoise::BAND_SHIFT;
     while (std::ldexp(TEMPLATE_STEEPNESS * p_voxel_m, top) < TEMPLATE_MAX_AMP_M * (1.0 - 1e-9) && top < ExactNoise::MAX_K) {
         top++;
     }
+    return top;
+}
+
+ov::Value template_graph(double p_voxel_m) {
+    const int top = template_top(p_voxel_m);
     ov::Value note = ov::Value::object();
     note["id"] = "ground";
     note["kind"] = "note";

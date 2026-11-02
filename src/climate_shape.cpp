@@ -89,8 +89,6 @@ bool SampleProgram::reads_field(int p_field) const {
     return std::any_of(code.begin(), code.end(), [&](const SampleInstr &p_i) { return p_i.op == SampleOp::FIELD && p_i.index == p_field; });
 }
 
-namespace {
-
 // The curve's value and slope at x (constant past the ends), the slope applied to x's gradient.
 Float4 eval_curve(const Curve &p_c, const Float4 &p_x) {
     const size_t n = p_c.x.size();
@@ -113,6 +111,8 @@ Float4 eval_curve(const Curve &p_c, const Float4 &p_x) {
     d = flush_value(d * p_c.inv[i]);
     return dflush(Float4{ p_x.x * d, p_x.y * d, p_x.z * d, v });
 }
+
+namespace {
 
 // Quilez's polynomial smooth min of p_a and p_b over p_k voxels (p_inv = 0.5 / p_k): h = clamp(1/2 + (b - a) / (2k), 0,
 // 1), b + h (a - b) - k h (1 - h); outside the blend the smaller register itself. Not the archetype IR's smooth_min4: the

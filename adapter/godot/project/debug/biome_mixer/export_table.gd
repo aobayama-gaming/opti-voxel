@@ -68,6 +68,8 @@ static func table(p_world: Dictionary, p_base: Dictionary = {}) -> Dictionary:
 			b.clouds = wb.clouds.duplicate(true)
 		if String(wb.get("debug_color", "")) != "":
 			b.debug_color = wb.debug_color
+		# What the mixer doesn't edit (instances, features): as imported.
+		b.merge(wb.get("keep", {}).duplicate(true), false)
 		biomes.append(b)
 	if warped and warp.missing:
 		fields.append_array(warp.fields)
@@ -286,6 +288,26 @@ static func _graph(p_entries: Array, p_curve: Variant, p_voxel_m: float) -> Dict
 # A note's wavelength as the graph's titles show it.
 static func _m(p_k: int, p_world: Dictionary) -> String:
 	return Nodes.fmt_m(Octaves.wavelength_m(p_k, Octaves.voxel_m))
+
+
+# What the engine draws for p_world (ClimateReportNode.preview, the mixer's view and "Open in game"): {world (a world
+# file: p_base's keys, its engine an absolute path, the fields inline, the biomes exported; p_alone >= 0: that biome
+# alone, the default), errors, warnings}.
+static func preview_world(p_world: Dictionary, p_base: Dictionary, p_alone: int = -1) -> Dictionary:
+	var w := p_world
+	if p_alone >= 0:
+		w = p_world.duplicate()
+		var alone: Dictionary = p_world.biomes[p_alone].duplicate()
+		alone.at = {}
+		w.biomes = [alone]
+	var r := table(w, p_base)
+	var file := p_base.duplicate(true)
+	file.erase("fields")
+	var e = p_base.get("engine", {})
+	file.engine = Octaves.section_path(e, Octaves.WORLD) if e is String else e
+	file.climate = {"fields": r.table.get("fields", [])}
+	file.biomes = r.table.get("biomes", [])
+	return {"world": file, "errors": r.errors, "warnings": r.warnings}
 
 
 # r_table split back into its files: {world (the world file's keys: p_base's own, the fields left to the climate), fields}.

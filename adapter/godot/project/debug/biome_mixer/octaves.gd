@@ -1,29 +1,20 @@
 extends RefCounted
-## The engine's octaves in GDScript, so the mixer's notes are the ground's: make_octave (src/exact_noise.hpp), the
-## ground's and a field's seeds (salt = k: src/cascade_terrain.hpp make_spec, src/climate_parse.cpp), and each note's lattice words for the preview shader. Pinned by the mixer's --check and
-## test_exact_noise.cpp ("as the biome mixer pins them").
+## The game's world and the octaves its notes are on, as the engine says (ClimateReportNode.template_notes: the template
+## biome's notes, Climate::template_graph): the mixer edits one note per octave from K_MIN to ground_top, each of the
+## template's seed and amplitude rule. Nothing here computes the terrain: the previews are the engine's.
 
-const GROUND_SEED := 0xEA27
-const OCTAVE_SALT := 0x51ED270B
-const SALT_Y := 0x9E3779B9
-const SALT_Z := 0x85EBCA6B
-const MASK := 0xFFFFFFFF
-# The ground's amplitude: steepness 1/8 of the wavelength, capped at 3.3 km (the template biome's, Climate::TEMPLATE_*: 2^16 voxels of
-# 5 cm, the same metres at any voxel size).
-const STEEPNESS := 0.125
-const MAX_AMP_M := 3276.8
-# The first octave LOD 0 inserts (8 voxels, 0.4 m at 5 cm).
-const K_MIN := 3
-# The ground's datum (BaseSurface::DATUM_M): the preview's y = 0.
-const DATUM_M := 300.0
 # The game's world, and the master variables every note and field is read at: its engine.
 const WORLD := "res://climate/world.json"
 static var voxel_m: float
 static var lods: int
-
-# make_octave's words per (seed, salt, k) and shader_words' per origin too: every edit rebuilds the octave table.
-static var _octaves := {}
-static var _words := {}
+# The template's notes (Climate::TEMPLATE_*): its seed, its amplitude (steepness times the wavelength, capped), its
+# finest octave (8 voxels: LOD 0's first) and its coarsest at this engine.
+static var GROUND_SEED: int
+static var STEEPNESS: float
+static var MAX_AMP_M: float
+static var K_MIN: int
+static var _ground_top: int
+static var _octave_top: int
 
 
 static func _static_init() -> void:
@@ -32,6 +23,16 @@ static func _static_init() -> void:
 	# WorldFile's defaults.
 	voxel_m = float(engine.get("voxel_m", 0.5))
 	lods = int(engine.get("lods", 15))
+	var t: Dictionary = ClassDB.class_call_static("ClimateReportNode", "template_notes", voxel_m, lods) if ClassDB.class_exists("ClimateReportNode") else {}
+	if t.is_empty():
+		push_error("biome mixer: the engine's extension isn't loaded (ClimateReportNode): run the import, then the mixer.")
+		return
+	GROUND_SEED = int(t.seed)
+	STEEPNESS = float(t.steepness)
+	MAX_AMP_M = float(t.max_amp_m)
+	K_MIN = int(t.k_min)
+	_ground_top = int(t.k_top)
+	_octave_top = int(t.octave_top)
 
 
 # p_world[p_key]: inline, or the file its string names (relative to the world file p_path), as WorldFile reads it.
@@ -46,133 +47,21 @@ static func section_path(p_name: String, p_path: String) -> String:
 	return p_name if p_name.is_absolute_path() else p_path.get_base_dir().path_join(p_name)
 
 
-# The cascade's top octave (SDFCascade: lods + 4): a climate field's.
-static func k_top(p_lods: int) -> int:
-	return p_lods + 4
+# The engine's coarsest octave of a note or a field (SDFCascade::top_octave), and the ground's (the template's).
+static func k_top(_p_lods: int = lods) -> int:
+	return _octave_top
 
 
-# The ground's top octave (Climate::template_graph's: the first whose amplitude reaches MAX_AMP_M, k = 19 at 5 cm, at most
-# k_top); the notes span K_MIN .. ground_top. Past it the relief is the macro engine's.
-static func ground_top(p_lods: int, p_voxel_m: float) -> int:
-	var k := K_MIN
-	while STEEPNESS * p_voxel_m * pow(2.0, k) < MAX_AMP_M * (1.0 - 1e-9):
-		k += 1
-	return mini(k, k_top(p_lods))
+static func ground_top(_p_lods: int = lods, _p_voxel_m: float = voxel_m) -> int:
+	return _ground_top
 
 
-# a * b mod 2^32 without leaving int64 (a, b < 2^32).
-static func mul32(p_a: int, p_b: int) -> int:
-	var lo := p_a * (p_b & 0xFFFF)
-	var hi := (p_a * (p_b >> 16)) & 0xFFFF
-	return (lo + (hi << 16)) & MASK
-
-
-static func pcg3d(p_v: Array) -> Array:
-	var x: int = (mul32(p_v[0], 1664525) + 1013904223) & MASK
-	var y: int = (mul32(p_v[1], 1664525) + 1013904223) & MASK
-	var z: int = (mul32(p_v[2], 1664525) + 1013904223) & MASK
-	x = (x + mul32(y, z)) & MASK
-	y = (y + mul32(z, x)) & MASK
-	z = (z + mul32(x, y)) & MASK
-	x ^= x >> 16
-	y ^= y >> 16
-	z ^= z >> 16
-	x = (x + mul32(y, z)) & MASK
-	y = (y + mul32(z, x)) & MASK
-	z = (z + mul32(x, y)) & MASK
-	return [x, y, z]
-
-
-# {seed, offset: [x, y, z]} of the octave of wavelength 2^k voxels hashed from (seed, salt), as make_octave.
-static func make_octave(p_seed: int, p_salt: int, p_k: int) -> Dictionary:
-	var key := [p_seed, p_salt, p_k]
-	if not _octaves.has(key):
-		_octaves[key] = _make_octave(p_seed, p_salt, p_k)
-	return _octaves[key]
-
-
-static func _make_octave(p_seed: int, p_salt: int, p_k: int) -> Dictionary:
-	var h := pcg3d([p_seed & MASK, p_salt & MASK, OCTAVE_SALT])
-	var h2 := pcg3d(h)
-	var offset := [0, 0, 0]
-	if p_k >= 2:
-		var pairs := [[h[1], h2[0]], [h[2], h2[1]], [h2[2], h[0]]]
-		for i in 3:
-			var r: int = (pairs[i][0] << 32) | pairs[i][1]
-			offset[i] = (1 << (p_k - 2)) + (r & ((1 << (p_k - 1)) - 1))
-	return {"seed": h[0], "offset": offset}
-
-
-# The ground's note k: every biome of a climate plays the same notes.
-static func ground_octave(p_k: int, p_lods: int, p_voxel_m: float) -> Dictionary:
-	return make_octave(GROUND_SEED, p_k, p_k)
-
-
-static func field_octave(p_seed: int, p_k: int) -> Dictionary:
-	return make_octave(p_seed, p_k, p_k)
-
-
+# Octave k's wavelength: 2^k voxels.
 static func wavelength_m(p_k: int, p_voxel_m: float) -> float:
 	return p_voxel_m * pow(2.0, p_k)
 
 
-# The octave of a wavelength (ExactNoise::lattice_k: log2 of it in voxels, rounded): a table's wavelength_m, and a
+# The octave of a wavelength (log2 of it in voxels, rounded: ExactNoise::lattice_k): a table's wavelength_m, and a
 # range's from_m and to_m ends.
 static func lattice_k(p_m: float, p_voxel_m: float) -> int:
 	return int(round(log(p_m / p_voxel_m) / log(2.0)))
-
-
-# The ground's amplitude of the octave of wavelength p_lam_m, metres (lambda / 8, capped at MAX_AMP_M whatever the voxel).
-static func ground_amp_m(p_lam_m: float) -> float:
-	return minf(STEEPNESS * p_lam_m, MAX_AMP_M)
-
-
-static func to_s32(p_v: int) -> int:
-	p_v &= MASK
-	return p_v - 0x100000000 if p_v >= 0x80000000 else p_v
-
-
-# The shader's words for an octave seen from a preview origin (absolute voxel, int64 per axis): base (the origin's
-# cell, low words), frac (its position in the cell, 0 .. 1) and salt (cell_salt of the high words and the seed). The
-# preview reads cell = base + floor(frac + p / 2^k), so no float ever holds an absolute coordinate; a preview crossing
-# a 2^32-cell block keeps the origin's high words (a seam there, far beyond any preview at k >= 3).
-static func shader_words(p_octave: Dictionary, p_k: int, p_origin: Array) -> Dictionary:
-	var key := [p_octave.seed, p_octave.offset, p_k, p_origin]
-	if not _words.has(key):
-		_words[key] = _shader_words(p_octave, p_k, p_origin)
-	return _words[key]
-
-
-static func _shader_words(p_octave: Dictionary, p_k: int, p_origin: Array) -> Dictionary:
-	var base := Vector3i()
-	var frac := Vector3()
-	var hi := [0, 0, 0]
-	for i in 3:
-		var v: int = p_origin[i] + p_octave.offset[i]
-		var cell := v >> p_k
-		frac[i] = float(v & ((1 << p_k) - 1)) / pow(2.0, p_k)
-		base[i] = to_s32(cell)
-		hi[i] = (cell >> 32) & MASK
-	var s: int = p_octave.seed
-	var salt := pcg3d([hi[0] ^ s, hi[1] ^ (s ^ SALT_Y), hi[2] ^ (s ^ SALT_Z)])
-	return {"base": base, "frac": frac, "salt": Vector3i(to_s32(salt[0]), to_s32(salt[1]), to_s32(salt[2]))}
-
-
-# The values test_exact_noise.cpp pins: [seed, salt, k, octave seed, offset].
-const PINS := [
-	[GROUND_SEED, 26, 3, 3435443487, [2, 2, 5]],
-	[GROUND_SEED, 17, 12, 3158081444, [2901, 1439, 2980]],
-	[GROUND_SEED, 12, 17, 2370181367, [88676, 52952, 39159]],
-	[GROUND_SEED, 0, 29, 3616334499, [141560218, 304881832, 260891299]],
-	[905, 14, 14, 1949008538, [10651, 9326, 4762]],
-]
-
-
-# The pins that differ (empty: the port is the engine's).
-static func check_pins() -> Array:
-	var bad := []
-	for p in PINS:
-		var o := make_octave(p[0], p[1], p[2])
-		if o.seed != p[3] or o.offset != p[4]:
-			bad.append({"pin": p, "got": o})
-	return bad

@@ -1,72 +1,46 @@
 extends RefCounted
-## The biome mixer's headless self-test (mixer.gd --check): the noise pins, every template and world.json biome
-## compiled and round-tripped through a file, the fixed notes, the cuts, old files, the world shader, the export back to
-## a table. run() returns the
-## report (its "ok" the verdict).
+## The biome mixer's headless self-test (mixer.gd --check): every template and world.json biome exported and drawn by
+## the engine (ClimateReportNode.preview) and round-tripped through a file, the fixed notes, the cuts, old files, the
+## whole world drawn with its chart's samples, the export back to a table (instances and features kept). run() returns
+## the report (its "ok" the verdict).
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
-const Compile := preload("res://debug/biome_mixer/compile.gd")
 const ImportTable := preload("res://debug/biome_mixer/import_table.gd")
 const World := preload("res://debug/biome_mixer/world.gd")
 const ExportTable := preload("res://debug/biome_mixer/export_table.gd")
 
 # Where the check writes world.json's export for the engine to parse.
 const EXPORT_PATH := "user://biome_mixer_export_check.json"
+# The engine's maps the check asks for (points a side): small, the check is about the bits reaching the engine.
+const SIZE := 16
 
 
 static func run(p_table: Dictionary) -> Dictionary:
-	var report := {"pins": Octaves.check_pins(), "graphs": {}}
-	var ok: bool = report.pins.is_empty()
+	var report := {"graphs": {}}
+	var ok := true
 	var graphs := {"plain ground": ImportTable.new("plain ground").plain_ground(), "every kind": every_kind()}
 	for name in ImportTable.biome_names(p_table):
 		graphs["world.json " + name] = ImportTable.new(name).import_biome(p_table).model
 	for g in graphs:
-		var r := Compile.new().run(graphs[g])
+		var r := drawn(graphs[g], p_table)
 		var again = JSON.parse_string(JSON.stringify(graphs[g], "", true, true))
-		var r2 := Compile.new().run(again)
-		# The shader gets float32: a double's last digits through the file don't count (a curve coefficient's 0 may come
-		# back as 3e-14).
-		var same := func(a, b) -> bool:
-			if a is float and b is float:
-				return absf(a - b) <= 1e-6 * maxf(1.0, absf(a))
-			if a is PackedFloat32Array and b is PackedFloat32Array and a.size() == b.size():
-				var scale := 1.0
-				for x in a:
-					scale = maxf(scale, absf(x))
-				for i in a.size():
-					if absf(a[i] - b[i]) > 1e-6 * scale:
-						return false
-				return true
-			return a == b
-		var differ: Array = r.uniforms.keys().filter(func(key): return not r2.uniforms.has(key) or not same.call(r.uniforms[key], r2.uniforms[key]))
-		var entry := {"ok": r.ok, "errors": r.errors, "nodes": graphs[g].nodes.size(), "hmax": r.hmax, "same_after_file": r2.code == r.code and differ.is_empty()}
-		# A Height curve's editor spans its input's bound; its points may reach past it (an import's span the table's
-		# field range): [input bound, the points' widest |h|].
-		for id in r.curve_in:
-			var pts: Array = Kinds.param(graphs[g].nodes[id], "points")
-			entry["curve_" + id] = [snappedf(r.curve_in[id], 0.1), pts.reduce(func(m, p): return maxf(m, absf(p[0])), 0.0)]
-		if not differ.is_empty():
-			entry["uniforms_differ"] = differ.slice(0, 5).map(func(key): return [key, r.uniforms[key], r2.uniforms.get(key)])
-		if g == "every kind":
-			var missing := []
-			for needle in ["(F[1] * N[1])", "shape(u_", "w_n", "curve_n", "band", "F[0] * (shape("]:
-				if not r.code.contains(needle):
-					missing.append(needle)
-			entry["missing"] = missing
-			entry["warp_rows"] = r.uniforms.u_n_warp
-			# The note warp's notes: earlier rows of the table than the note they move.
-			entry["note_warped"] = r.budget.note_warped
-			ok = ok and missing.is_empty() and r.uniforms.u_n_warp > 0 and r.budget.note_warped == 1 and Array(r.uniforms.u_jx).max() >= 0
+		var entry := {"exported": r.errors.is_empty(), "errors": r.errors, "nodes": graphs[g].nodes.size(), "engine": r.error,
+			"same_after_file": graph_text(again, p_table) == graph_text(graphs[g], p_table)}
 		# The ground's notes, fixed: one per k, K_MIN .. ground_top.
-		entry["notes_fixed"] = note_ks(graphs[g]) == range(Octaves.K_MIN, Octaves.ground_top(25, 0.05) + 1)
-		ok = ok and r.ok and entry.same_after_file and entry.notes_fixed
+		entry["notes_fixed"] = note_ks(graphs[g]) == range(Octaves.K_MIN, Octaves.ground_top() + 1)
+		if g == "every kind":
+			# What only the preview had (Carve, Note warp, Add / Multiply / Constant) the table can't hold: refused.
+			entry.ok = not entry.exported and entry.notes_fixed
+		else:
+			entry.ok = entry.exported and r.error == "" and entry.same_after_file and entry.notes_fixed
+		ok = ok and entry.ok
 		report.graphs[g] = entry
 	report["cuts"] = cuts(p_table)
-	report["old_kinds"] = old_kinds()
-	# The template ground's top (test_sdf_cascade.cpp's template_top): the notes stop where the engine's template does.
-	report["ground_top"] = [Octaves.ground_top(25, 0.05), Octaves.ground_top(25, 0.5)]
-	ok = ok and report.cuts.ok and report.old_kinds.ok and report.ground_top == [19, 16]
+	report["old_kinds"] = old_kinds(p_table)
+	# The template ground's notes (the engine's at world.json's engine, 5 cm and 25 LODs): 0.4 m .. 26 km.
+	report["notes"] = [Octaves.K_MIN, Octaves.ground_top()]
+	ok = ok and report.cuts.ok and report.old_kinds.ok and report.notes == [3, 19]
 	report["world"] = world(p_table)
 	ok = ok and report.world.ok
 	report["export"] = export_world(p_table)
@@ -75,9 +49,26 @@ static func run(p_table: Dictionary) -> Dictionary:
 	return report
 
 
+# p_model as a world of its own (the biome alone, world.json's fields), drawn by the engine: {errors (the export's),
+# error (the engine's), map}.
+static func drawn(p_model: Dictionary, p_table: Dictionary) -> Dictionary:
+	var w := World.from_table(p_table)
+	w.biomes = [{"name": String(p_model.get("name", "biome")), "at": {}, "model": p_model}]
+	var r := ExportTable.preview_world(w, p_table)
+	if not r.errors.is_empty():
+		return {"errors": r.errors, "error": "", "map": {}}
+	var map: Dictionary = ClassDB.class_call_static("ClimateReportNode", "preview", JSON.stringify(r.world), "res://climate/", 20.0, SIZE, true, Vector2.ZERO)
+	return {"errors": r.errors, "error": String(map.get("error", "")), "map": map}
+
+
+# p_model's graph as the table holds it (ExportTable): what the engine reads of it.
+static func graph_text(p_model: Dictionary, p_table: Dictionary) -> String:
+	return JSON.stringify(ExportTable._biome(p_model, World.from_table(p_table), []).graph)
+
+
 # A file saved with kinds since removed (a Terrace before the output, a Climate warp node linked into a note) loads as
-# the graph without them, the note's warp on: the same nodes, the same code. A file missing a note gets it back.
-static func old_kinds() -> Dictionary:
+# the graph without them, the note's warp on: the same nodes, the same table graph. A file missing a note gets it back.
+static func old_kinds(p_table: Dictionary) -> Dictionary:
 	var want := ImportTable.new("plain ground").plain_ground()
 	var note := Kinds.first_of(want, "note")
 	var m = JSON.parse_string(JSON.stringify(want))
@@ -91,13 +82,13 @@ static func old_kinds() -> Dictionary:
 	m.links.append({"from": "old_warp", "from_port": 0, "to": note, "to_port": 0})
 	Kinds.fix_notes(m)
 	Kinds.drop_unknown(m)
-	var same: bool = Compile.new().run(m).code == Compile.new().run(want).code
+	var same: bool = graph_text(m, p_table) == graph_text(want, p_table)
 	var gone = JSON.parse_string(JSON.stringify(want))
 	gone.nodes.erase(note)
 	gone.links = gone.links.filter(func(l): return l.from != note)
 	Kinds.fix_notes(gone)
 	var back: bool = note_ks(gone) == note_ks(want)
-	return {"ok": same and back and m.nodes.size() == want.nodes.size(), "nodes": [want.nodes.size(), m.nodes.size()], "same_code": same, "note_back": back}
+	return {"ok": same and back and m.nodes.size() == want.nodes.size(), "nodes": [want.nodes.size(), m.nodes.size()], "same_graph": same, "note_back": back}
 
 
 # A model's notes' k, sorted.
@@ -124,11 +115,12 @@ static func cuts(p_table: Dictionary) -> Dictionary:
 		cases[c][1].call(m, mix)
 		var ports: Array = m.links.filter(func(l): return l.to == mix).map(func(l): return int(l.to_port))
 		ports.sort()
-		var r := Compile.new().run(m)
-		var entry := {"rows": [rows, Kinds.rows(m.nodes[mix]).size()], "nodes": [nodes, m.nodes.size()], "compiles": r.ok}
+		var r := drawn(m, p_table)
+		var drew: bool = r.errors.is_empty() and r.error == ""
+		var entry := {"rows": [rows, Kinds.rows(m.nodes[mix]).size()], "nodes": [nodes, m.nodes.size()], "drawn": drew}
 		var want_rows: int = rows - 1 if c == "row" else rows
-		entry.ok = r.ok and entry.rows[1] == want_rows and (c == "row" or entry.nodes[1] == nodes) and ports == range(ports.size())
-		entry.ok = entry.ok and note_ks(m) == range(Octaves.K_MIN, Octaves.ground_top(25, 0.05) + 1)
+		entry.ok = drew and entry.rows[1] == want_rows and (c == "row" or entry.nodes[1] == nodes) and ports == range(ports.size())
+		entry.ok = entry.ok and note_ks(m) == range(Octaves.K_MIN, Octaves.ground_top() + 1)
 		ok = ok and entry.ok
 		out[c] = entry
 	out.ok = ok
@@ -176,38 +168,22 @@ static func every_kind() -> Dictionary:
 	return b.model
 
 
-# A world (world.json's biomes in one shader): it compiles, its notes are shared (fewer rows than the biomes' notes
-# summed), its places are the uniforms u_atc / u_ati, it comes back the same from a file; and the weights' port
-# (World.weights) has the engine's properties on a two-biome world: whole at a centre, the default far from both, a
-# blend between them summing to 1.
+# The whole world (world.json's biomes) drawn by the engine: every biome named, the chart's samples one per point (two
+# fields each), the same file after a round trip.
 static func world(p_table: Dictionary) -> Dictionary:
 	var w := World.from_table(p_table)
-	var r := Compile.new().run_world(w)
-	var notes := 0
-	for b in w.biomes:
-		notes += note_ks(b.model).size()
+	var r := ExportTable.preview_world(w, p_table)
 	var again = JSON.parse_string(JSON.stringify(w, "", true, true))
-	var r2 := Compile.new().run_world(again)
-	var names := World.field_names(w)
-	var b0: Dictionary = w.biomes[0]
-	var f0: String = b0.at.keys()[0]
-	var i0 := names.find(f0)
-	var places_ok: bool = absf(r.uniforms.u_atc[i0] - b0.at[f0][0]) < 1e-6 and absf(r.uniforms.u_ati[i0] - 1.0 / b0.at[f0][1]) < 1e-4
-	var needles := []
-	for needle in ["kfac(FL[", "wk1_%d" % (w.biomes.size() - 1), "if (wk1_0 > 0.0)", "c_map = "]:
-		if not r.code.contains(needle):
-			needles.append(needle)
-	var two := {"fields": [{"name": "t"}], "biomes": [{"name": "hot", "at": {"t": [0.5, 0.75]}}, {"name": "cold", "at": {"t": [-0.5, 0.75]}}, {"name": "rest", "at": {}}]}
-	var w0 := World.weights(two, [0.5])
-	var wfar := World.weights(two, [1.5])
-	var wmid := World.weights(two, [0.2])
-	var props: bool = absf(w0[0] - 1.0) < 1e-9 and absf(wfar[2] - 1.0) < 1e-9 and wmid[0] > wmid[1] and wmid[1] > 0.0 and absf(wmid[0] + wmid[1] + wmid[2] - 1.0) < 1e-9
+	var r2 := ExportTable.preview_world(again, p_table)
+	var map: Dictionary = ClassDB.class_call_static("ClimateReportNode", "preview", JSON.stringify(r.world), "res://climate/", 200.0, SIZE, true, Vector2.ZERO) if r.errors.is_empty() else {}
+	var names: PackedStringArray = map.get("biome_names", PackedStringArray())
+	var fields: PackedStringArray = map.get("field_names", PackedStringArray())
+	var samples: int = map.get("fields", PackedFloat32Array()).size() / maxi(fields.size(), 1)
 	var entry := {
-		"compiles": r.ok, "errors": r.errors, "biomes": w.biomes.size(), "fields": names.size(),
-		"note_rows": [r.budget.notes, notes], "field_rows": r.uniforms.u_n_warp, "places": places_ok, "missing": needles,
-		"same_after_file": r2.code == r.code, "weights": props, "uniform_kb": r.uniform_bytes / 1024,
+		"exported": r.errors.is_empty(), "errors": r.errors, "engine": map.get("error", "not drawn"), "biomes": names.size(), "fields": fields.size(),
+		"samples": samples, "us_per_point": map.get("us_per_point", 0.0), "same_after_file": JSON.stringify(r2.world) == JSON.stringify(r.world),
 	}
-	entry.ok = r.ok and r.drawable and r.budget.notes < notes and places_ok and needles.is_empty() and entry.same_after_file and props
+	entry.ok = entry.exported and String(entry.engine) == "" and names.size() == w.biomes.size() and fields.size() == w.fields.size() and samples == SIZE * SIZE and entry.same_after_file
 	return entry
 
 
@@ -235,7 +211,7 @@ static func export_world(p_table: Dictionary) -> Dictionary:
 	for i in w.biomes.size():
 		var a: Dictionary = p_table.biomes[i]
 		var e: Dictionary = back.biomes[i]
-		for key in ["at", "surface", "clouds", "debug_color"]:
+		for key in ["at", "surface", "clouds", "debug_color", "instances", "features"]:
 			if not _close(a.get(key), e.get(key)):
 				differ.append("%s.%s" % [a.name, key])
 		if not _close(ImportTable.graph_rows(a).curve, ImportTable.graph_rows(e).curve):

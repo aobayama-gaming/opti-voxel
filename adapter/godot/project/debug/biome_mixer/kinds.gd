@@ -1,5 +1,5 @@
 extends RefCounted
-## The mixer's node kinds: their ports and parameters (data only; nodes.gd builds their UI, compile.gd their shader).
+## The mixer's node kinds: their ports and parameters (data only; nodes.gd builds their UI, export_table.gd their table graph).
 ## A port is [label, type]; a node connects an output to an input of the same type, one link per input.
 
 const Octaves := preload("res://debug/biome_mixer/octaves.gd")
@@ -19,11 +19,8 @@ const PLOT_BG := Color(0.1, 0.11, 0.13)
 const NOTE_ROW_H := 240.0
 
 const SHAPES := ["plain", "billow", "ridged", "square", "coeffs"]
-# The engine's shape constants: |n| smoothed as sqrt(n^2 + E^2) - E (Cascade::SMOOTH_ABS_E), and E[sabs(n)], E[n^2]
-# of its noise (Cascade::NOISE_ABS_MEAN, NOISE_SQ_MEAN).
+# |n| smoothed as sqrt(n^2 + E^2) - E (Cascade::SMOOTH_ABS_E): the Shape node's phi graph draws it.
 const SMOOTH_ABS_E := 0.1
-const NOISE_ABS_MEAN := 0.1527
-const NOISE_SQ_MEAN := 0.0728
 
 # The climate's warp fields when a biome has none of its own (a model's "climate_warp"): world.json's wx, wy, wz, an
 # fBm from note k down (seeds seed, seed + 1, seed + 2 for x, y, z).
@@ -364,19 +361,9 @@ static func preset_offset(p_preset: String) -> float:
 	return option_params("shape", "preset", p_preset).offset
 
 
-# phi(n) of a shape's coefficients with the engine's smoothed |n| (shader_lib's GLSL shape(), from the same E), and
-# its derivative.
+# phi(n) of a shape's coefficients with the engine's smoothed |n|: what the Shape node's graph draws.
 static func phi(p_c: Array, p_n: float) -> float:
 	return p_c[0] + p_c[1] * p_n + p_c[2] * (sqrt(p_n * p_n + SMOOTH_ABS_E * SMOOTH_ABS_E) - SMOOTH_ABS_E) + p_c[3] * p_n * p_n
-
-
-static func dphi(p_c: Array, p_n: float) -> float:
-	return p_c[1] + p_c[2] * p_n / sqrt(p_n * p_n + SMOOTH_ABS_E * SMOOTH_ABS_E) + 2.0 * p_c[3] * p_n
-
-
-# E[phi(n)] over the noise (the engine inserts a band without it).
-static func phi_mean(p_c: Array) -> float:
-	return p_c[0] + p_c[2] * NOISE_ABS_MEAN + p_c[3] * NOISE_SQ_MEAN
 
 
 # A Shape node's [c0, c1, c2, c3] on (1, n, |n|, n^2), as Climate's parser turns shape, scale and offset into them.

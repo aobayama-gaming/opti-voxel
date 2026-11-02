@@ -7,10 +7,10 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (`'ChunkMath*'`). Tests are compiled into non-release builds only (`OPTI_VOXEL_TESTS`).
 - `tools/format.sh [--check] [files]`: clang-format 23.1.3 through `uvx` on `src/`.
 - `tools/biome_mixer.sh [--open=PATH] [--import=BIOME] [--set=ID.PARAM=V] [--shot=PATH]` opens the biome mixer (a
-  window; `docs/climate.md`); `--check` is its headless self-test (the octave seeds against the C++'s, every template
-  and world.json biome compiled and round-tripped through its file, world.json exported back and parsed by the engine
-  when the extension is built: `MIXER: {json}`, exit 0 ok, 4 not ok). `--shot`
-  draws once, saves the window and the view, prints the frame times (`MIXER_SHOT:`) and quits.
+  window; `docs/climate.md`); `--check` is its headless self-test (every template and world.json biome exported and
+  drawn by the engine, `ClimateReportNode.preview`, round-tripped through its file, world.json exported back and parsed
+  by the engine, its instances and features kept: `MIXER: {json}`, exit 0 ok, 4 not ok). `--shot` draws the sharp
+  map once, saves the window and the view, prints its time (`MIXER_SHOT:`) and quits.
 - `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean

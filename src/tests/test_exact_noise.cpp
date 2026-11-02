@@ -245,26 +245,3 @@ TEST_CASE("ExactNoise: GLSL_EXACT_NOISE text is unchanged by the perlin3_cross s
     CHECK(n == 8240);
     CHECK(h == 1257729531u);
 }
-
-// The biome mixer (adapter/godot/project/debug/biome_mixer/octaves.gd) ports make_octave to GDScript and pins the same
-// values in its --check: a change here breaks the mixer's notes, which would no longer be the ground's.
-TEST_CASE("ExactNoise: make_octave's seeds and offsets, as the biome mixer pins them") {
-    struct Pin {
-        uint32_t seed, salt;
-        int k;
-        uint32_t octave_seed;
-        int64_t ox, oy, oz;
-    };
-    const Pin pins[] = {
-        { 0xEA27u, 26, 3, 3435443487u, 2, 2, 5 },
-        { 0xEA27u, 17, 12, 3158081444u, 2901, 1439, 2980 },
-        { 0xEA27u, 12, 17, 2370181367u, 88676, 52952, 39159 },
-        { 0xEA27u, 0, 29, 3616334499u, 141560218, 304881832, 260891299 },
-        { 905u, 14, 14, 1949008538u, 10651, 9326, 4762 },
-    };
-    for (const Pin &p : pins) {
-        const Octave o = make_octave(p.seed, p.salt, p.k, 1.0f);
-        CHECK(o.seed == p.octave_seed);
-        CHECK(o.offset == Vector3i64(p.ox, p.oy, p.oz));
-    }
-}

@@ -76,10 +76,13 @@ public:
     // 100 m of altitude, never at 0: on one, a flat ground has fwidth ~ 0 and float noise picks the shade per triangle.
     static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
 
+    // A note's or a field's coarsest octave at p_lod_count LODs (the cascade's top lattice's).
+    static int top_octave(int p_lod_count) { return p_lod_count + 4; }
+
     void configure(const ChunkParam &p_param, int p_lod_count) override {
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
-        k_max = p_lod_count + 4;
+        k_max = top_octave(p_lod_count);
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
         if (planet_radius_m > 0.0) {
             const BaseSurface planet = planet_base(planet_radius_m, vs, planet_ring_m);

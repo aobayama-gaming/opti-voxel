@@ -1,9 +1,8 @@
 extends Control
 ## The Height curve node's editor: R(h), metres in (x) and out (y), through its points. Drag a point, double-click to
-## add one, right-click a point to remove it. Drawn through compile.gd's curve_eval, the shader's curve. In spans the
-## heights the curve's input reaches (compile.gd's curve_in), out what R makes of them: points beyond don't count.
+## add one, right-click a point to remove it. Drawn through the engine's curve (ClimateReportNode.curve: make_curve,
+## eval_curve). In spans the heights the preview's relief reaches, out what R makes of them: points beyond don't count.
 
-const Compile := preload("res://debug/biome_mixer/compile.gd")
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
 
 signal points_changed(p_points: Array)
@@ -37,11 +36,12 @@ func set_span(p_span: float) -> void:
 
 # The metres shown: in (x) the input's span, out (y) R over it (and the points in it), both a little wider.
 func _range() -> Rect2:
-	var c := Compile.curve_segments(points)
+	var xs := PackedFloat32Array()
+	for i in 65:
+		xs.append(lerpf(-span, span, i / 64.0))
 	var lo := INF
 	var hi := -INF
-	for i in 65:
-		var y := Compile.curve_eval(c, lerpf(-span, span, i / 64.0))
+	for y in curve(xs):
 		lo = minf(lo, y)
 		hi = maxf(hi, y)
 	for p in points:
@@ -83,11 +83,13 @@ func _draw() -> void:
 	draw_line(_to_px(Vector2(x0, x0)), _to_px(Vector2(x1, x1)), Color(1, 1, 1, 0.25))
 	for e in [-span, span]:
 		draw_line(_to_px(Vector2(e, r.position.y)), _to_px(Vector2(e, r.end.y)), Color(1, 1, 1, 0.15))
-	var c := Compile.curve_segments(points)
-	var line := PackedVector2Array()
+	var xs := PackedFloat32Array()
 	for i in 129:
-		var h := lerpf(x0, x1, i / 128.0)
-		line.append(_to_px(Vector2(h, Compile.curve_eval(c, h))))
+		xs.append(lerpf(x0, x1, i / 128.0))
+	var ys := curve(xs)
+	var line := PackedVector2Array()
+	for i in xs.size():
+		line.append(_to_px(Vector2(xs[i], ys[i])))
 	draw_polyline(line, Kinds.PORT_COLORS[Kinds.FIELD], 2.0, true)
 	var outside := 0
 	for i in points.size():
@@ -145,3 +147,10 @@ func _gui_input(p_event: InputEvent) -> void:
 func _changed() -> void:
 	set_span(span)
 	points_changed.emit(points.duplicate(true))
+
+
+# R at p_xs: the engine's curve through the points (sorted by x; the identity until there are two).
+func curve(p_xs: PackedFloat32Array) -> PackedFloat32Array:
+	var sorted := points.duplicate(true)
+	sorted.sort_custom(func(a, b): return a[0] < b[0])
+	return ClassDB.class_call_static("ClimateReportNode", "curve", sorted, p_xs)

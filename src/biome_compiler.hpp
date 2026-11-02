@@ -64,6 +64,8 @@ inline constexpr uint32_t TEMPLATE_SEED = 0xEA27u;
 inline constexpr double TEMPLATE_STEEPNESS = 0.125;
 inline constexpr double TEMPLATE_MAX_AMP_M = 65536.0 * 0.05;
 ov::Value template_graph(double p_voxel_m);
+// The template's coarsest octave: the first whose amplitude TEMPLATE_STEEPNESS * wavelength reaches TEMPLATE_MAX_AMP_M.
+int template_top(double p_voxel_m);
 ov::Value template_biome(double p_voxel_m, const ov::str &p_name = "ground");
 
 } // namespace Climate

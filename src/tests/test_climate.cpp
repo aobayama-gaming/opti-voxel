@@ -5,6 +5,9 @@
 #include "climate_report.hpp"
 #include "sdf_cascade.hpp"
 
+#include "ov/files.hpp"
+
+#include <algorithm>
 #include <cmath>
 #include <random>
 
@@ -172,6 +175,36 @@ TEST_CASE("ClimateReport: check takes a table's text, accepts a good one, refuse
     const char *zero_span = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 5000, "amp": 1}]}],
         "biomes": [{"name": "a", "at": {"t": [0, 0]}}, {"name": "b"}]})";
     CHECK(ov::contains(ClimateReport::check(zero_span, 0.05, 25), "span must be > 0"));
+}
+
+// The biome mixer's maps are the engine's: a world in memory sampled by the report's own code, the same bits twice, a
+// field per field, a refused world with the reason.
+TEST_CASE("ClimateReport: preview gives a world's maps from its text, the same twice, or why not") {
+    ov::str text;
+    CLIMATE_REQUIRE(ov::read_file("res://climate/example.json", text));
+    ov::str json_error;
+    const ov::Value world = ov::parse_json(text, json_error);
+    CLIMATE_REQUIRE(world.is_object());
+    const ClimateReport::Preview a = ClimateReport::preview(world, "res://climate/", 20.0, 48, true, 0.0, 0.0);
+    CHECK(a.error == ov::str());
+    CLIMATE_REQUIRE(a.size == 48);
+    CHECK(a.blend.size() == size_t(48 * 48 * 3));
+    CHECK(a.shaded.size() == size_t(48 * 48 * 3));
+    CHECK(a.altitude_m.size() == size_t(48 * 48));
+    CHECK(a.fields.size() == size_t(48 * 48) * a.field_names.size());
+    CHECK(!a.biome_names.empty());
+    CHECK(a.spacing_m * 48.0 > 10000.0);
+    CHECK(a.spacing_m * 48.0 < 40000.0);
+    const ClimateReport::Preview b = ClimateReport::preview(world, "res://climate/", 20.0, 48, true, 0.0, 0.0);
+    CHECK(a.blend == b.blend);
+    CHECK(a.shaded == b.shaded);
+    CHECK(a.altitude_m == b.altitude_m);
+    MESSAGE("preview: ", a.us_per_point, " us per point, lattice ", a.lattice);
+    // Off the surface (the tangent plane): no trace, every altitude 0.
+    const ClimateReport::Preview plane = ClimateReport::preview(world, "res://climate/", 20.0, 16, false, 0.0, 0.0);
+    CHECK(std::all_of(plane.altitude_m.begin(), plane.altitude_m.end(), [](float p_a) { return p_a == 0.0f; }));
+    CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"engine": {"voxel_m": 0.05}})"), "", 20.0, 16, true, 0.0, 0.0).error, "no fields"));
+    CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"trees": 1})"), "", 20.0, 16, true, 0.0, 0.0).error, "unknown key"));
 }
 
 TEST_CASE("Climate: malformed tables are refused with the reason") {

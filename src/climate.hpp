@@ -123,6 +123,8 @@ struct Curve {
 };
 // The curve through points (p_x strictly increasing, at least 2) and their p_y.
 Curve make_curve(const std::vector<double> &p_x, const std::vector<double> &p_y);
+// The curve at p_x (its value and gradient, the samples' bits).
+Float4 eval_curve(const Curve &p_c, const Float4 &p_x);
 // max |curve'| (skirts).
 float curve_slope_bound(const Curve &p_curve);
 // The steepest offset a biome curve may have (validate): R' within [-3, 5], so the ground's gradient grows at most 5x

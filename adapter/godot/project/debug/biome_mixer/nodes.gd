@@ -79,15 +79,7 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 		if p_node.kind == "shape" and (d.name in ["c0", "c1", "c2", "c3"]) != coeffs and d.name != "preset":
 			continue
 		gn.add_child(_param_row(p_id, p_node, d, p_ctx))
-	if p_node.kind == "note":
-		var thumb := ColorRect.new()
-		thumb.custom_minimum_size = Vector2(150, 64)
-		thumb.material = ShaderMaterial.new()
-		thumb.material.shader = p_ctx.thumb_shader
-		thumb.tooltip_text = "The note alone, from above, over four wavelengths"
-		gn.add_child(thumb)
-		gn.set_meta("thumb", thumb)
-	elif p_node.kind == "shape":
+	if p_node.kind == "shape":
 		var phi := PhiGraph.new()
 		gn.add_child(phi)
 		gn.set_meta("phi", phi)
@@ -99,8 +91,8 @@ static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
 	elif p_node.kind == "mix":
 		var total := Label.new()
 		total.modulate = Color(1, 1, 1, 0.7)
+		total.text = "height = the rows' sum\na row: volume x lambda/8 x its shaped note"
 		gn.add_child(total)
-		p_ctx.mix_ui.get_or_add(p_id, {"rows": [], "total": null}).total = total
 	# The notes are the ground's: no x.
 	if p_node.kind != "note":
 		var x := Button.new()
@@ -122,19 +114,9 @@ static func climate_warp_info(p_model: Dictionary) -> String:
 		fmt_m(Octaves.wavelength_m(k - n + 1, Octaves.voxel_m)), fmt_m(Octaves.wavelength_m(k, Octaves.voxel_m)), n, 3 * n]
 
 
-# What a node shows from its parameters (title, thumbnail, phi graph), after an edit.
-static func refresh(p_gn: GraphNode, p_node: Dictionary, p_ctx: Object) -> void:
-	var voxel_m: float = Octaves.voxel_m
-	p_gn.title = title(p_node, voxel_m)
-	if p_gn.has_meta("thumb"):
-		var k := int(Kinds.param(p_node, "k"))
-		var w := Octaves.shader_words(Octaves.ground_octave(k, Octaves.lods, Octaves.voxel_m), k, [0, 0, 0])
-		var m: ShaderMaterial = p_gn.get_meta("thumb").material
-		m.set_shader_parameter("u_base", w.base)
-		m.set_shader_parameter("u_frac", w.frac)
-		m.set_shader_parameter("u_salt", w.salt)
-		m.set_shader_parameter("u_inv", pow(2.0, -k))
-		m.set_shader_parameter("u_span", 4.0 * pow(2.0, k))
+# What a node shows from its parameters (title, phi graph), after an edit.
+static func refresh(p_gn: GraphNode, p_node: Dictionary, _p_ctx: Object) -> void:
+	p_gn.title = title(p_node, Octaves.voxel_m)
 	if p_gn.has_meta("phi"):
 		var phi: PhiGraph = p_gn.get_meta("phi")
 		phi.coeffs = Kinds.shape_coeffs(p_node)
@@ -201,8 +183,7 @@ static func _toggle(p_text: String, p_on: bool, p_tip: String, p_set: Callable) 
 	return b
 
 
-# A Mix row: its note, volume, mute / solo / centre, then what it adds (its swing in metres and its share of the
-# Mix's, filled by the mixer after each compile: show_mix) and a button that takes the row out (its note stays).
+# A Mix row: its note's wavelength, volume, mute / solo / centre, and a button that takes the row out (its note stays).
 static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, p_out: String) -> Control:
 	var row := HBoxContainer.new()
 	var r: Dictionary = Kinds.rows(p_node)[p_i]
@@ -210,21 +191,14 @@ static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, 
 		var rows: Array = Kinds.rows(p_ctx.model.nodes[p_id]).duplicate(true)
 		rows[p_i][p_key] = p_value
 		p_ctx.set_params(p_id, {"rows": rows})
-	var name := _label("", 58)
+	var k := _row_note(p_ctx.model, p_id, p_i)
+	var name := _label(fmt_m(Octaves.wavelength_m(k, Octaves.voxel_m)) if k >= 0 else "no note", 58)
 	name.tooltip_text = "The wavelength of the note this row plays"
 	row.add_child(name)
 	row.add_child(_slider(float(r.get("vol", 1.0)), 0.0, 4.0, 0.01, func(v: float) -> void: set_row.call("vol", v)))
 	row.add_child(_toggle("M", r.get("mute", false), "Mute this row", func(on: bool) -> void: set_row.call("mute", on)))
 	row.add_child(_toggle("S", r.get("solo", false), "Solo: only the soloed rows sound", func(on: bool) -> void: set_row.call("solo", on)))
 	row.add_child(_toggle("C", r.get("centre", true), "Centre: take the shape's mean out (the engine does; a shape then moves no average height)", func(on: bool) -> void: set_row.call("centre", on)))
-	var peak := _label("", 70)
-	peak.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	row.add_child(peak)
-	var bar := ProgressBar.new()
-	bar.custom_minimum_size = Vector2(80, 18)
-	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	bar.tooltip_text = "This row's share of the Mix's relief"
-	row.add_child(bar)
 	var x := Button.new()
 	x.text = "x"
 	x.flat = true
@@ -235,28 +209,18 @@ static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, 
 		var o := Label.new()
 		o.text = p_out
 		row.add_child(o)
-	var ui: Dictionary = p_ctx.mix_ui.get_or_add(p_id, {"rows": [], "total": null})
-	ui.rows.append({"name": name, "peak": peak, "bar": bar})
 	return row
 
 
-# What a Mix's rows add, after a compile (p_rows: compile.gd's mix_rows for it).
-static func show_mix(p_ui: Dictionary, p_rows: Array) -> void:
-	var total := 0.0
-	for r in p_rows:
-		total += r.peak if r.on else 0.0
-	for i in mini(p_ui.rows.size(), p_rows.size()):
-		var r: Dictionary = p_rows[i]
-		var ui: Dictionary = p_ui.rows[i]
-		if not is_instance_valid(ui.peak):
-			continue
-		ui.name.text = fmt_m(r.lam) if r.lam > 0.0 else ("-" if r.unit == 0.0 else "no note")
-		ui.peak.text = ("+-%s" % fmt_m(r.peak)) if r.unit > 0.0 else ""
-		ui.peak.modulate.a = 1.0 if r.on else 0.4
-		ui.peak.tooltip_text = "Its swing: volume x %s (lambda / 8) x the shaped note's bound%s" % [fmt_m(r.unit), "" if r.on else " (muted)"]
-		ui.bar.value = 100.0 * r.peak / total if r.on and total > 0.0 else 0.0
-	if p_ui.total != null and is_instance_valid(p_ui.total):
-		p_ui.total.text = "height = the rows' sum, within +-%s\na row: volume x lambda/8 x its shaped note" % fmt_m(total)
+# The octave of the note a Mix row plays (through its shape and multifractal), -1 for none.
+static func _row_note(p_model: Dictionary, p_mix: String, p_row: int) -> int:
+	var src = Kinds.input_of(p_model, p_mix, p_row)
+	while src != null:
+		var n: Dictionary = p_model.nodes[src.id]
+		if n.kind == "note":
+			return int(Kinds.param(n, "k"))
+		src = Kinds.input_of(p_model, src.id, 0)
+	return -1
 
 
 static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx: Object) -> Control:
