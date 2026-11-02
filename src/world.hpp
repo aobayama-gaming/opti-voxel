@@ -39,6 +39,10 @@ public:
         PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
         // The world file (WorldFile, a host path), empty for WorldFile's defaults.
         str world_path;
+        // Or the world itself, a world file's text whose relative paths start from world_dir (an editor's world, never
+        // written to a file). The host sets one of the two (VoxelTerrain's setters clear the other).
+        str world_json;
+        str world_dir;
         // 1 the world's Hermite cascade terrain, 4 the flat preset under the shapes gallery.
         int terrain_mode = 1;
         int legacy_batch_size = 1024;
@@ -101,7 +105,7 @@ public:
     Settings &settings() { return config; }
     const Settings &settings() const { return config; }
 
-    // Reads Settings::world_path (again only if it changed): the voxel size, the LOD count and the content from then on, so
+    // Reads Settings::world_json or world_path (again only if it changed): the voxel size, the LOD count and the content from then on, so
     // a host can place its scene before start(), which calls it. False (an error) if the file was refused.
     bool load_world();
     const WorldFile &world_file() const { return content; }
@@ -196,7 +200,9 @@ public:
 private:
     Settings config;
     WorldFile content; // what load_world read
-    str content_path; // the world_path it read
+    str content_path; // the world it read: world_path, or world_json from world_dir
+    str content_json;
+    str content_dir;
     Hosts hosts;
     std::unique_ptr<SDFCascade> sdf;
     ChunkDiscoverer *chunk_discoverer = nullptr;

@@ -12,7 +12,8 @@ extends Control
 ##   --world            start in the World mode
 ##   --set=ID.KEY=V     set a node's key in the current biome's graph after loading (V as JSON: 1.5, "ridged"), or
 ##                      view.KEY=V a view setting (view.extent_km=40); repeatable
-##   --shot=PATH        draw once (the sharp map), save the window to PATH (and the view alone to PATH_view.png), quit
+##   --shot=PATH        draw once (the sharp map; in 3D, the terrain's load then two restarts, timed), save the window to
+##                      PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test (checks.gd); prints MIXER: {json} and quits 0 if ok
 ## The World menu exports the world over res://climate/world.json, the game's (the engine checks it first).
 
@@ -543,11 +544,13 @@ func _shot(p_path: String) -> void:
 	var t := Time.get_ticks_usec()
 	var map := preview.show_world(JSON.stringify(_heard(World.preview_file(world, -1 if world_mode() else int(world.current)))), world_mode(), true)
 	var ms := snappedf((Time.get_ticks_usec() - t) / 1000.0, 0.1)
+	# The 3D view: the first load (its shaders compiled), then two restarts on the same world (an edit's path).
+	var loads: Array = await preview.wait_terrain(120.0, 2) if preview.is_3d() else []
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(p_path)
 	preview.image().save_png(p_path.get_basename() + "_view.png")
-	print("MIXER_SHOT: ", JSON.stringify({"path": p_path, "map_ms": ms, "us_per_point": map.get("us_per_point", 0.0), "error": map.get("error", "")}))
+	print("MIXER_SHOT: ", JSON.stringify({"path": p_path, "map_ms": ms, "us_per_point": map.get("us_per_point", 0.0), "terrain_loads_ms": loads, "error": map.get("error", "")}))
 	get_tree().quit(0)
 
 

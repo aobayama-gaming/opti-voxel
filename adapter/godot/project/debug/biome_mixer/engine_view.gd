@@ -3,8 +3,8 @@ extends VBoxContainer
 ## engine's own cascade on the CPU, each column traced down to its ground), never a copy of the terrain. Biome mode: the
 ## biome alone, its shaded relief. World mode: the biomes' debug colours blended by their weights, shaded by the relief;
 ## the chart reads the same samples' fields. An edit draws a small map at once (FAST points a side), then a sharp one
-## (SHARP, on a thread: the window never waits on it) once the edits pause. "3D" shows the same map as a surface
-## (terrain_3d.gd). "Open in game" runs the game on the world (the real terrain, trees and all).
+## (SHARP, on a thread: the window never waits on it) once the edits pause. "3D" shows the game's own terrain on the
+## same world (terrain_view.gd: a VoxelTerrain, restarted on each edit). "Open in game" runs the game on the world.
 
 signal view_changed  # the extent or the centre moved: draw again
 signal open_game
@@ -15,7 +15,7 @@ const SHARP := 192
 const SETTLE := 0.35
 # The world files' directory: a preview's relative paths (its engine) resolve from it.
 const DIR := "res://climate/"
-const Terrain3D := preload("res://debug/biome_mixer/terrain_3d.gd")
+const TerrainView := preload("res://debug/biome_mixer/terrain_view.gd")
 
 var extent_km := 20.0
 var centre_m := Vector2.ZERO
@@ -29,7 +29,7 @@ var _x := SpinBox.new()
 var _z := SpinBox.new()
 var _info := Label.new()
 var _three := CheckButton.new()
-var _view3d := Terrain3D.new()
+var _view3d := TerrainView.new()
 var _framed := Vector3(-1, 0, 0)  # the extent and centre the 3D camera was fitted to
 var _serial := 0  # one per map asked: a sharp map from an older one is dropped
 var _thread: Thread
@@ -44,6 +44,7 @@ func _ready() -> void:
 	_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	add_child(_rect)
 	_view3d.visible = false
+	_view3d.status_changed.connect(_show_info)
 	add_child(_view3d)
 	var bar := HFlowContainer.new()
 	add_child(bar)
@@ -61,11 +62,12 @@ func _ready() -> void:
 		view_changed.emit())
 	_three.text = "3D"
 	_three.button_pressed = true
-	_three.toggled.connect(func(_on: bool) -> void: _show(last))
+	_three.toggled.connect(func(p_on: bool) -> void:
+		_show(last)
+		_show_terrain()
+		if not p_on:
+			_settle.start())
 	bar.add_child(_three)
-	var height := SpinBox.new()
-	_spin(bar, height, "Height x", 0.1, 20.0, 1.0)
-	height.value_changed.connect(_view3d.set_exaggeration)
 	var game := Button.new()
 	game.text = "Open in game"
 	game.tooltip_text = "Runs the game on this world (the engine's terrain in 3D, with its trees, rocks and features)."
@@ -99,9 +101,14 @@ func show_world(p_json: String, p_world_mode: bool, p_sharp: bool = false) -> Di
 	_serial += 1
 	_settle.stop()
 	_draw_map(SHARP if p_sharp else FAST)
-	if not p_sharp and last.get("error", "") == "" and is_inside_tree():
-		_settle.start()
+	_show_terrain()
+	if not p_sharp and not _three.button_pressed and last.get("error", "") == "" and is_inside_tree():
+		_settle.start()  # the sharp map, for the 2D view only (in 3D the small one gives the info and the centre)
 	return last
+
+
+func is_3d() -> bool:
+	return _three.button_pressed
 
 
 func set_extent(p_km: float) -> void:
@@ -148,11 +155,26 @@ func _show(p_map: Dictionary) -> void:
 	_rect.texture = ImageTexture.create_from_image(img)
 	_rect.visible = not _three.button_pressed
 	_view3d.visible = _three.button_pressed
-	if _three.button_pressed:
-		var view := Vector3(extent_km, centre_m.x, centre_m.y)
-		_view3d.show_map(last, img, view != _framed)
-		_framed = view
+	_show_info()
+
+
+func _show_info() -> void:
+	if last.get("error", "x") != "":
+		return
 	_info.text = "%d x %d points, %s m apart, %d us a point (the engine, CPU)" % [last.size, last.size, snappedf(last.spacing_m, 0.1), int(last.us_per_point)]
+	if _three.button_pressed and _view3d.status != "":
+		_info.text += "; " + _view3d.status
+
+
+# The game's terrain on the last world, its camera fitted to a new extent or centre (its target on the map's centre).
+func _show_terrain() -> void:
+	if last.get("error", "x") != "":
+		return
+	var view := Vector3(extent_km, centre_m.x, centre_m.y)
+	var alt: PackedFloat32Array = last.altitude_m
+	var ground := alt[alt.size() / 2 + int(last.size) / 2] if alt.size() > 0 else 0.0
+	_view3d.show_world(_json, DIR, view != _framed, extent_km, centre_m, ground)
+	_framed = view
 
 
 func _exit_tree() -> void:
@@ -189,4 +211,20 @@ func samples(p_fx: int, p_fy: int) -> PackedVector2Array:
 
 
 func image() -> Image:
+	if _three.button_pressed:
+		return _view3d.image()
 	return _rect.texture.get_image() if _rect.texture != null else Image.create(1, 1, false, Image.FORMAT_RGB8)
+
+
+# Until the 3D view's terrain has loaded the chunks in view (at most p_timeout_s): its load in ms, -1 if it didn't. Then
+# p_restarts more restarts on the same world, timed the same (an edit's path): their loads appended.
+func wait_terrain(p_timeout_s: float, p_restarts: int = 0) -> Array:
+	var out := []
+	for r in p_restarts + 1:
+		if r > 0:
+			_view3d.restart()
+		var end := Time.get_ticks_msec() + int(p_timeout_s * 1000.0)
+		while _view3d.loaded_ms < 0 and Time.get_ticks_msec() < end:
+			await get_tree().process_frame
+		out.append(_view3d.loaded_ms)
+	return out

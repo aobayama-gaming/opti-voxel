@@ -4,6 +4,7 @@
 #include "climate.hpp"
 #include "climate_report.hpp"
 #include "godot_conv.hpp"
+#include "world_file.hpp"
 
 #include "ov/json.hpp"
 
@@ -39,10 +40,10 @@ String ClimateReportNode::check(const String &p_json, double p_voxel_size, int p
 
 Dictionary ClimateReportNode::preview(const String &p_json, const String &p_dir, double p_extent_km, int p_size, bool p_surface, const Vector2 &p_center) {
     Dictionary d;
-    ov::str json_error;
-    const ov::Value world = ov::parse_json(ov_str(p_json), json_error);
-    if (!world.is_object()) {
-        d["error"] = godot_str("world: not a JSON object. " + json_error);
+    ov::Value world;
+    const ov::str err = WorldFile::parse_object(ov_str(p_json), "the world's text", world);
+    if (!err.empty()) {
+        d["error"] = godot_str(err);
         return d;
     }
     const ClimateReport::Preview p = ClimateReport::preview(world, ov_str(p_dir), p_extent_km, p_size, p_surface, p_center.x, p_center.y);

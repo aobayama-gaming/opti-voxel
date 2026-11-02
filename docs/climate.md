@@ -201,11 +201,17 @@ computes no terrain and has no node kind the engine hasn't.
   (`relief_m`: the curve editor's input span), or the engine's refusal. A mix row's M and S (mute, solo) are the view's
   only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once (30-60 ms), 192 on a
   thread once the edits pause (`SETTLE` 0.35 s; 1.1-1.8 s on 16 cores: ~0.5 ms of CPU a point, each point walking the
-  cascade on its own, 6 reads). *3D* (on by default, `terrain_3d.gd`) shows the same map as a surface: each point at
-  its traced altitude (*Height x* scales it), coloured by the 2D map, unlit; orbit, pan and zoom move a mesh, so they
-  are instant. The game itself: *Open in game* writes the world (`user://biome_mixer_game.world.json`) and runs the
-  main scene on it (`--world=`) in a second Godot. A live sharp view needs the GPU (`CascadePointsGPU`: whole batches
-  of points level by level), not done yet.
+  cascade on its own, 6 reads). *3D* (on by default, `terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
+  Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file), restarted 0.3 s after the
+  edits pause. The climate's numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a
+  value compiles nothing; a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps every
+  text's SPIR-V. Its LODs are coarse (pixel error 12, the game's 4) and its discoverer and site walk run on the CPU
+  (their GPU variants build their pipelines on a local device of their own: ~9 s per restart, the driver). Measured
+  (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX 3070 laptop): World mode
+  (~400 km, 706 chunks) 1.76 s, then 1.29 and 1.30 s; the mountain alone (709 chunks) 5.95 s (its shaders compiled),
+  then 1.28 and 1.31 s. About half a restart is the instance stream's parts (`table.stream.compute_ms_total`
+  687 ms). Orbit, pan and zoom move the camera. *Open in game* writes the world
+  (`user://biome_mixer_game.world.json`) and runs the main scene on it (`--world=`) in a second Godot.
 - **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
   back is the same file (positions aside); every world.json biome and a graph of every engine kind drawn by the engine
   and every node's GraphNode built (the launcher fails on any script error); edits on the mountain (a row out, a shape

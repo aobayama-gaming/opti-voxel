@@ -22,6 +22,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
     ClassDB::bind_method(D_METHOD("set_world_path", "path"), &VoxelTerrain::set_world_path);
     ClassDB::bind_method(D_METHOD("get_world_path"), &VoxelTerrain::get_world_path);
+    ClassDB::bind_method(D_METHOD("set_world_json", "json", "dir"), &VoxelTerrain::set_world_json);
     ClassDB::bind_method(D_METHOD("set_terrain_mode", "mode"), &VoxelTerrain::set_terrain_mode);
     ClassDB::bind_method(D_METHOD("get_terrain_mode"), &VoxelTerrain::get_terrain_mode);
     ClassDB::bind_method(D_METHOD("set_legacy_batch_size", "size"), &VoxelTerrain::set_legacy_batch_size);
@@ -227,7 +228,16 @@ int VoxelTerrain::get_pipeline_mode() const {
 void VoxelTerrain::set_world_path(const String &p_path) {
     ERR_FAIL_COND_MSG(world.is_started(), "world_path must be set before the terrain enters the tree.");
     cfg().world_path = ov_str(p_path);
+    cfg().world_json.clear();
     world.load_world(); // the voxel size and the scene shift are read before the terrain starts
+}
+
+void VoxelTerrain::set_world_json(const String &p_json, const String &p_dir) {
+    ERR_FAIL_COND_MSG(world.is_started(), "the world must be set before the terrain enters the tree.");
+    cfg().world_path.clear();
+    cfg().world_json = ov_str(p_json);
+    cfg().world_dir = ov_str(p_dir);
+    world.load_world(); // as set_world_path
 }
 
 String VoxelTerrain::get_world_path() const {

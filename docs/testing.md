@@ -10,7 +10,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   `docs/climate.md`); `--check` is its headless self-test (world.json read and written back the same, every biome and a
   graph of every engine kind drawn by the engine, `ClimateReportNode.preview`, and every node's UI built, edits, the
   export and its refusal: `MIXER: {json}`, exit 0 ok, 4 not ok or a script error). `--shot` draws the sharp
-  map once, saves the window and the view, prints its time (`MIXER_SHOT:`) and quits.
+  map once, waits for the 3D view's terrain, restarts it twice on the same world (an edit's path), saves the window and
+  the view, prints the map's time and the three loads (`MIXER_SHOT: terrain_loads_ms`) and quits.
 - `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean

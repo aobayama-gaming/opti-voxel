@@ -7,7 +7,8 @@
 
 namespace Cascade {
 struct Spec;
-}
+struct ShaderParams;
+} //namespace Cascade
 class BaseSurface;
 
 // What the cascade's level shader (cascade_glsl.hpp) reads of a terrain: its bands and the GLSL pieces it splices.
@@ -40,10 +41,12 @@ public:
     }
     // Whether a sample's ground is more than the cascade's ground channels (a biome's curve): then
     // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
-    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample.
+    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample. Its
+    // numbers go to r_params (Cascade::ShaderParams).
     virtual bool has_ground_terms() const { return false; }
-    virtual ov::str get_ground_glsl(const Cascade::Spec &p_view) const {
+    virtual ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const {
         (void)p_view;
+        (void)r_params;
         return ov::str();
     }
     // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's

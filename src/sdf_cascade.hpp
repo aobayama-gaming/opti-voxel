@@ -228,7 +228,9 @@ uint cascade_ground_material(Ch ch) {
         }
     }
 
-    ov::str get_ground_glsl(const Cascade::Spec &p_view) const override { return has_ground_terms() ? Climate::ground_glsl(table, p_view) : ov::str(); }
+    ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const override {
+        return has_ground_terms() ? Climate::ground_glsl(table, p_view, r_params) : ov::str();
+    }
     ov::str get_climate_helpers_glsl() const override { return Climate::splices_helpers(table, spec) ? Climate::shared_helpers_glsl() : ov::str(); }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod over the base at LOD0 voxel p_voxel: the unit gradient

@@ -58,14 +58,21 @@ World::~World() {
 
 bool World::load_world() {
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: the world is set before start.");
-    if (config.world_path == content_path) {
+    if (config.world_path == content_path && config.world_json == content_json && config.world_dir == content_dir) {
         return true;
     }
     WorldFile loaded;
-    const str err = config.world_path.empty() ? str() : WorldFile::load(config.world_path, loaded);
+    str err;
+    if (!config.world_json.empty()) {
+        err = WorldFile::parse_text(config.world_json, config.world_dir, loaded);
+    } else if (!config.world_path.empty()) {
+        err = WorldFile::load(config.world_path, loaded);
+    }
     OV_ERR_FAIL_COND_V_MSG(!err.empty(), false, "World: " + err);
     content = loaded;
     content_path = config.world_path;
+    content_json = config.world_json;
+    content_dir = config.world_dir;
     config.chunk_param.voxel_size = float(content.voxel_m);
     return true;
 }
@@ -715,7 +722,7 @@ ov::Value World::debug_stats() {
     d["table"] = table;
     if (const Climate::Table *climate = sdf->get_climate()) {
         ov::Value c = ov::Value::object();
-        c["path"] = config.world_path;
+        c["path"] = config.world_json.empty() ? config.world_path : "(text from " + config.world_dir + ")"; // set_world_json: no file
         c["fields"] = int64_t(climate->fields.size());
         c["biomes"] = int64_t(climate->biomes.size());
         c["modulated"] = sdf->get_cascade()->modulation != nullptr;

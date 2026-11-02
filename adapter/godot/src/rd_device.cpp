@@ -13,10 +13,50 @@
 #include <godot_cpp/variant/callable_custom.hpp>
 
 #include <cstring>
+#include <deque>
+#include <mutex>
+#include <unordered_map>
 
 using namespace godot;
 
 namespace {
+
+// The SPIR-V of the compute shader texts this process compiled, by text: glslang is most of a pipeline's cost, and a
+// world restarted on the same structure (an edit of its values: Cascade::ShaderParams) compiles the same texts again.
+// Bytes, not Ref<RDShaderSPIRV>s, so that nothing of Godot's outlives it at exit. Any RDDevice, any thread.
+class SpirvCache {
+public:
+    static SpirvCache &get() {
+        static SpirvCache cache;
+        return cache;
+    }
+    // p_glsl's SPIR-V in r_spirv, if compiled before.
+    bool find(const ov::str &p_glsl, PackedByteArray &r_spirv) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto found = spirv.find(p_glsl);
+        if (found == spirv.end()) {
+            return false;
+        }
+        r_spirv = godot_bytes(found->second);
+        return true;
+    }
+    void add(const ov::str &p_glsl, const PackedByteArray &p_spirv) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (spirv.size() >= MAX_TEXTS) {
+            spirv.erase(order.front()); // the oldest: bounded over a long session of structural edits
+            order.pop_front();
+        }
+        if (spirv.emplace(p_glsl, ov::bytes(p_spirv.ptr(), p_spirv.ptr() + p_spirv.size())).second) {
+            order.push_back(p_glsl);
+        }
+    }
+
+private:
+    static constexpr size_t MAX_TEXTS = 64;
+    std::mutex mutex;
+    std::unordered_map<ov::str, ov::bytes> spirv;
+    std::deque<ov::str> order; // spirv's texts, oldest first
+};
 
 PackedByteArray to_bytes(const void *p_data, uint64_t p_size) {
     PackedByteArray out;
@@ -223,14 +263,21 @@ void RDDevice::copy_texture(ov::gpu::Texture p_from, ov::gpu::Texture p_to, uint
 }
 
 ov::gpu::Pipeline RDDevice::create_compute_pipeline(const ov::str &p_name, const ov::str &p_glsl, ov::str &r_error) {
-    const String code = godot_str(p_glsl);
-    Ref<RDShaderSource> source;
-    source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
-    const Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-    r_error = ov_str(spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE));
-    if (!r_error.empty()) {
-        return ov::gpu::Pipeline();
+    Ref<RDShaderSPIRV> spirv;
+    PackedByteArray cached;
+    if (SpirvCache::get().find(p_glsl, cached)) {
+        spirv.instantiate();
+        spirv->set_stage_bytecode(RenderingDevice::SHADER_STAGE_COMPUTE, cached);
+    } else {
+        Ref<RDShaderSource> source;
+        source.instantiate();
+        source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, godot_str(p_glsl));
+        spirv = rd->shader_compile_spirv_from_source(source);
+        r_error = ov_str(spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE));
+        if (!r_error.empty()) {
+            return ov::gpu::Pipeline();
+        }
+        SpirvCache::get().add(p_glsl, spirv->get_stage_bytecode(RenderingDevice::SHADER_STAGE_COMPUTE));
     }
     const RID shader = rd->shader_create_from_spirv(spirv, godot_str(p_name));
     const RID pipeline = rd->compute_pipeline_create(shader);

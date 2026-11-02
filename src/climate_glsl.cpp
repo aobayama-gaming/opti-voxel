@@ -69,12 +69,11 @@ vec4 cl_rcp(vec4 s) {
 
 // A biome's kernel (Climate::kernel: its axes' factors multiplied in order) as statements defining `vec4 <p_var>` from
 // the f<i> of glsl_weights.
-ov::str glsl_kernel(const ov::str &p_var, const std::vector<Axis> &p_at) {
-    using ExactNoise::glsl_float;
+ov::str glsl_kernel(const ov::str &p_var, const std::vector<Axis> &p_at, Cascade::ShaderParams &r_params) {
     ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
     for (const Axis &a : p_at) {
-        code += ov::format("    %s = cl_mul(%s, cl_axis(f%d, %s, %s, %s));\n", p_var, p_var, a.field, glsl_float(a.centre), glsl_float(a.inv_span),
-                glsl_float(KERNEL_FADE));
+        code += ov::format("    %s = cl_mul(%s, cl_axis(f%d, %s, %s, %s));\n", p_var, p_var, a.field, r_params(a.centre), r_params(a.inv_span),
+                ExactNoise::glsl_float(KERNEL_FADE));
     }
     return code;
 }
@@ -103,8 +102,7 @@ vec4 cl_scale(vec4 a, float k) {
 )glsl";
 }
 
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
-    using ExactNoise::glsl_float;
+ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, Cascade::ShaderParams &r_params) {
     ov::str code;
     auto channels = [](int p_base) { return ov::format("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
     code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + ov::str(";\n");
@@ -112,7 +110,7 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
         code += ov::format("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));
         for (const Term &t : p_table.fields[i].terms) {
             const ov::str src = t.source == GROUND ? ov::str("g0") : ov::format("f%d", t.source);
-            code += ov::format("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, glsl_float(t.coef), int64_t(i));
+            code += ov::format("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, r_params(t.coef), int64_t(i));
         }
     }
     const int64_t n = int64_t(p_table.biomes.size());
@@ -122,7 +120,7 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec) {
     // Climate::weights: the kernels, their sum, the default's (1 - sum)^2, then each over the total.
     code += "    vec4 ksum = vec4(0.0);\n";
     for (int64_t b = 0; b + 1 < n; b++) {
-        code += glsl_kernel(ov::format("w%d", b), p_table.biomes[size_t(b)].at);
+        code += glsl_kernel(ov::format("w%d", b), p_table.biomes[size_t(b)].at, r_params);
         code += ov::format("    { precise vec4 t = ksum + w%d; ksum = cl_flush(t); }\n", b);
     }
     code += ov::format("    vec4 w%d = cl_fill(ksum);\n", n - 1);

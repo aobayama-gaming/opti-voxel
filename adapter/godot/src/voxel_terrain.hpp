@@ -94,6 +94,9 @@ public:
     // the node enters the tree; the scene's camera may read voxel_size from then on.
     void set_world_path(const String &p_path);
     String get_world_path() const;
+    // The world as a world file's text (its relative paths from p_dir), read instead of world_path: an editor's world (the
+    // biome mixer), never written to a file. Before the terrain enters the tree.
+    void set_world_json(const String &p_json, const String &p_dir);
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 
