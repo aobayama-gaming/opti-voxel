@@ -68,7 +68,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   (octave, seed, stretch), turns each row into its biome's `Amp` on each octave (volume times the note's amplitude,
   under a planet's `note_cap`), folds the notes every biome plays alike into constant bands and lists the others in
   every biome (0 where it doesn't mix them). Refused: more than `MAX_FIELDS` (24) fields or `MAX_BIOMES` (16) biomes,
-  two notes on one octave (the cascade holds one per level), a note mixed twice by one biome, a negative amplitude, a
+  more than `Cascade::MAX_LEVEL_NOTES` (8) notes on one octave or two multifractal ones (the state holds one octave's
+  signal; an octave with a modulated note modulates all of its notes), a note mixed twice by one biome, a negative
+  amplitude, a
   shaped amplitude past the cap (`Ground::amp_cap`: a planet's relief, the exact range's top on the flat world), a
   curve moving the ground past it, a curve whose
   offset is steeper than `MAX_CURVE_SLOPE` (4: the skirts and the gradient scale with it), a curve whose points all

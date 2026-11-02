@@ -17,7 +17,11 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
   (`GLSL_FRAME_INT64`, `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2
   parents (code generated from the same axis rule), ping-pong scratch A (odd j, 17^3 points per chunk) / B
   (even j >= 2, 10^3), j = 0 straight to `sdf_sample`. Bands come from a table indexed by level
-  (`CascadeGLSL::band_table`). `CascadePasses` owns the passes per device (`ov::gpu::Device`); the direct mesher runs
+  (`CascadeGLSL::band_table`): one band per group and level, then the ground's other notes of each level (several
+  notes may share an octave, `Cascade::MAX_LEVEL_NOTES` = 8: the biome compiler's other seeds and stretches), inserted
+  after the level's first in spec order on the CPU (`LevelBands`) and the GPU (a generated per-level range), each with
+  its own `BandMod` (`Spec::note_mod`); a level's ground notes are modulated or constant together. A spec with one note
+  per level generates the text it had before. `CascadePasses` owns the passes per device (`ov::gpu::Device`); the direct mesher runs
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
 - **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): 4 slots each after the field groups that a run's
   level above its last derives from its channels before its insertions (the climate its own bands read: one climate per

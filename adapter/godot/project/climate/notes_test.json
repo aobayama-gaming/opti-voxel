@@ -1,0 +1,54 @@
+{
+ "comment": "Several notes per octave, for the tests (test_climate.cpp, CascadeSpike set 4n): every biome plays the template ground (seed 59943); ridges adds its own ridged, warped multifractal notes (seed 7) on octaves 10 .. 14, plateau its own stretched ones (seed 8) on 11 .. 13 and a curve. Octaves 11 .. 13 carry three notes, all modulated. Not a world to look at: project/climate/world.json is.",
+ "engine": {"voxel_m": 0.05, "lods": 25},
+ "climate": {
+  "fields": [
+   {"name": "t", "bands": [{"from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7}]},
+   {"name": "wx", "bands": [{"from_m": 200, "to_m": 1600, "amp": 0.5}]},
+   {"name": "wy", "bands": [{"from_m": 200, "to_m": 1600, "amp": 0.5}]},
+   {"name": "wz", "bands": [{"from_m": 200, "to_m": 1600, "amp": 0.5}]}
+  ]
+ },
+ "biomes": [
+  {
+   "name": "ridges",
+   "at": {"t": [0.5, 0.6]},
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "r", "kind": "note", "from_m": 51.2, "to_m": 819.2, "seed": 7, "steepness": 0.125},
+     {"id": "rw", "kind": "warp", "in": "r", "fields": ["wx", "wy", "wz"], "amount_m": 40},
+     {"id": "rs", "kind": "shape", "in": "rw", "shape": "ridged"},
+     {"id": "rm", "kind": "multifractal", "in": "rs", "gain": 1.5},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "ground", "x": 0.6}, {"in": "rm", "x": 0.8}]},
+     {"id": "out", "kind": "output", "height": "mix"}
+    ]
+   },
+   "debug_color": "#a05030"
+  },
+  {
+   "name": "plateau",
+   "at": {"t": [-0.5, 0.6]},
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "p", "kind": "note", "from_m": 102.4, "to_m": 409.6, "seed": 8, "amp_m": 30, "persistence": 0.5, "stretch_y": 4},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "ground", "x": 0.5}, {"in": "p", "x": 1.2}]},
+     {"id": "curve", "kind": "curve", "in": "mix", "points": [[-300, -200], [0, 40], [300, 380]]},
+     {"id": "out", "kind": "output", "height": "curve"}
+    ]
+   },
+   "debug_color": "#80a060"
+  },
+  {
+   "name": "plain",
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "out", "kind": "output", "height": "ground"}
+    ]
+   },
+   "debug_color": "#6080a0"
+  }
+ ]
+}

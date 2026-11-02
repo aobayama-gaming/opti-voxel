@@ -208,8 +208,6 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
                 ">= 0" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "mix", "rows": [{"in": "n"}, {"in": "n"}]}, {"id": "o", "kind": "output", "height": "m"}]}}]})",
                 "mixed twice" },
-        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "n2", "kind": "note", "wavelength_m": 4000, "seed": 2, "amp_m": 1}, {"id": "m", "kind": "mix", "rows": [{"in": "n"}, {"in": "n2"}]}, {"id": "o", "kind": "output", "height": "m"}]}}]})",
-                "one per octave" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "'seed' is required" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
@@ -328,16 +326,39 @@ TEST_CASE("Climate: the compiler shares notes between biomes, constant where eve
     CHECK(two.notes.size() == 17);
     CLIMATE_REQUIRE(two.biomes[0].amps.size() == 17);
     CLIMATE_REQUIRE(two.biomes[1].amps.size() == 17);
-    const Amp *a12 = find_amp(two.biomes[0], 12);
-    const Amp *b12 = find_amp(two.biomes[1], 12);
+    auto note_of = [](const Table &p_t, int p_k, int p_nth = 0) {
+        for (const Cascade::Band &b : p_t.notes) {
+            if (b.k == p_k && p_nth-- == 0) {
+                return &b;
+            }
+        }
+        return static_cast<const Cascade::Band *>(nullptr);
+    };
+    const Amp *a12 = find_amp(two.biomes[0], *note_of(two, 12));
+    const Amp *b12 = find_amp(two.biomes[1], *note_of(two, 12));
     CLIMATE_REQUIRE((a12 && b12));
     CHECK(b12->amp == 2.0f * a12->amp);
-    CHECK(find_amp(two.biomes[1], 13)->amp == 0.0f);
-    // Another seed on octave 12: a second note there, refused (the cascade holds one per octave).
+    CHECK(find_amp(two.biomes[1], *note_of(two, 13))->amp == 0.0f);
+    // Another seed on octave 12: a second note there (Cascade::MAX_LEVEL_NOTES), its own; a plays only the first, b
+    // only the second, both listed in both biomes (a level is modulated as a whole).
     Table other;
     const ov::str reseeded = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 7, "steepness": 0.125},
             {"id": "o", "kind": "output", "height": "n"}]}})";
-    CHECK(ov::contains(parse_json(fields + R"({"name": "a", "at": {"t": [0, 1]}, )" + ground + "}, " + reseeded + "]}", g.ground, other), "one per octave"));
+    CLIMATE_REQUIRE(parse_json(fields + R"({"name": "a", "at": {"t": [0, 1]}, )" + ground + "}, " + reseeded + "]}", g.ground, other) == ov::str());
+    CHECK(other.notes.size() == 18);
+    const Cascade::Band *first = note_of(other, 12), *second = note_of(other, 12, 1);
+    CLIMATE_REQUIRE((first && second));
+    CHECK(first->seed != second->seed);
+    CHECK(find_amp(other.biomes[0], *second)->amp == 0.0f);
+    CHECK(find_amp(other.biomes[1], *first)->amp == 0.0f);
+    CHECK(find_amp(other.biomes[1], *second)->amp == float(0.125 * 4096.0));
+    // Two multifractal notes on one octave: refused (the state holds one octave's signal).
+    Table two_states;
+    const ov::str mf = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 7, "steepness": 0.125},
+            {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "o", "kind": "output", "height": "m"}]}})";
+    const ov::str mf_a = R"({"name": "a", "at": {"t": [0, 1]}, "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 8, "steepness": 0.125},
+            {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "o", "kind": "output", "height": "m"}]}})";
+    CHECK(ov::contains(parse_json(fields + mf_a + ", " + mf + "]}", g.ground, two_states), "one multifractal"));
 }
 
 TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denormals, gradients by the chain rule") {
@@ -724,28 +745,54 @@ TEST_CASE("Climate: biome ground materials, the base palette, and the per-sample
     CHECK(ov::contains(Climate::pick_glsl(t, spec), "uint climate_biome(Ch ch)"));
 }
 
-// One octave per group and lattice: a second band of one group on one lattice is refused by validate, and the cascade
-// ignores it (ERR) in a spec built by hand, box and point alike.
-TEST_CASE("Cascade: one band per group and lattice") {
+// Several ground notes on one lattice (the compiler's notes of one octave: Cascade::MAX_LEVEL_NOTES) are each inserted,
+// the level's first then the others in spec order: box runs equal point queries bit for bit, and the ground is the two
+// notes' sum (within the rounding of the adds). A field holds one band per lattice: validate refuses a second, and the
+// cascade ignores it (ERR) in a spec built by hand.
+TEST_CASE("Cascade: several ground notes on one lattice, one band per field") {
     GroundFixture g(0.05, 15);
     Table t;
     CHECK(ov::contains(parse_json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1}, {"wavelength_m": 400, "amp": 2}]}], "biomes": [{"name": "a"}]})",
                                g.ground, t),
             "twice"));
-    Cascade::Spec one;
-    one.bands = { ExactNoise::make_octave(11u, 0u, 9, 40.0f) };
-    Cascade::Spec two = one;
-    two.bands.push_back(ExactNoise::make_octave(12u, 0u, 9, 25.0f)); // the same lattice Λ_6
+    Cascade::Spec one, other, two;
+    one.bands = { ExactNoise::make_octave(11u, 9u, 9, 40.0f) };
+    other.bands = { ExactNoise::make_octave(12u, 9u, 9, 25.0f) };
+    two.bands = { one.bands[0], other.bands[0] }; // the same lattice Λ_6
+    CHECK(two.level_notes(6) == 2);
+    CHECK(two.max_level_notes() == 2);
+    CHECK(two.note_mod(1) == two.group_count());
     int64_t mismatches = 0;
+    double worst = 0.0;
     for (int i = 0; i < 32; i++) {
         const Vector3i64 p(i * 37 - 500, i * 11, 900 - i * 23);
-        float a[Cascade::CHANNELS], b[Cascade::CHANNELS], c[Cascade::CHANNELS];
+        float a[Cascade::CHANNELS], b[Cascade::CHANNELS], ab[Cascade::CHANNELS], c[Cascade::CHANNELS];
         Cascade::point_into(one, p, 2, a);
-        Cascade::point_into(two, p, 2, b);
+        Cascade::point_into(other, p, 2, b);
+        Cascade::point_into(two, p, 2, ab);
         Cascade::point(two, p, 2, c);
-        mismatches += differing_floats(a, b, 4) + differing_floats(a, c, 4);
+        mismatches += differing_floats(ab, c, 4);
+        for (int ch = 0; ch < Cascade::CHANNELS; ch++) {
+            worst = std::max(worst, std::fabs(double(ab[ch]) - double(a[ch]) - double(b[ch])) / (1.0 + std::fabs(double(ab[ch]))));
+        }
     }
     CHECK(mismatches == 0);
+    CHECK(worst < 1e-5);
+    for (const int64_t base : { int64_t(-40), (int64_t(1) << 32) - 3 }) {
+        CHECK(box_point_mismatches(two, Vector3i64(base, 7, -base), 4, 1) == 0);
+    }
+    // A field's second band on a lattice: ignored, its group the first's alone.
+    Cascade::Spec field = one, fields = one;
+    field.fields = { one.bands };
+    fields.fields = { two.bands };
+    int64_t field_mismatches = 0;
+    for (int i = 0; i < 16; i++) {
+        float a[Cascade::SLOTS], b[Cascade::SLOTS];
+        Cascade::point_slots(field, Vector3i64(i * 13, -i, 5), 2, a, true);
+        Cascade::point_slots(fields, Vector3i64(i * 13, -i, 5), 2, b, true);
+        field_mismatches += differing_floats(a + Cascade::field_slot(0), b + Cascade::field_slot(0), 4);
+    }
+    CHECK(field_mismatches == 0);
 }
 
 // A biome multiplying the ground with no field: the modulated variant on the GPU too (field_range keyed on the

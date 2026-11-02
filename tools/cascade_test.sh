@@ -18,7 +18,7 @@
 # climate at 5 cm, its fields carried and modulating the ground), 4f (its fields without multipliers), 4p (the plain climate: the
 # example before shaped bands), 4s (the shaped test table: every operation), 4d (fieldless_test.json: a
 # modulation with no field), 4g (an Earth-sized sphere: the base regions below its switch LOD), 4w (world.json:
-# eight biomes on three climate axes, 8 groups); default 4,4c.
+# eight biomes on three climate axes, 8 groups), 4n (notes_test.json: several notes per octave, modulated); default 4,4c.
 # GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors in log, 4 a check failed.

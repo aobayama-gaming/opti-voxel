@@ -72,9 +72,13 @@ void apply_terms(const Table &p_table, const float p_slots[Cascade::SLOTS], Floa
     }
 }
 
-const Amp *find_amp(const Biome &p_biome, int p_k) {
+bool plays(const Amp &p_amp, const Cascade::Band &p_band) {
+    return p_amp.k == p_band.k && p_amp.seed == p_band.seed && p_amp.stretch == p_band.stretch;
+}
+
+const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band) {
     for (const Amp &a : p_biome.amps) {
-        if (a.k == p_k) {
+        if (plays(a, p_band)) {
             return &a;
         }
     }
@@ -82,7 +86,7 @@ const Amp *find_amp(const Biome &p_biome, int p_k) {
 }
 
 float biome_amp(const Biome &p_biome, const Cascade::Band &p_band) {
-    const Amp *a = find_amp(p_biome, p_band.k);
+    const Amp *a = find_amp(p_biome, p_band);
     return a ? a->amp : p_band.amp;
 }
 
@@ -90,15 +94,15 @@ bool Table::has_stretch() const {
     return std::any_of(notes.begin(), notes.end(), [](const Cascade::Band &p_b) { return p_b.stretch > 0; });
 }
 
-Shape band_shape(const Biome &p_biome, int p_k) {
-    const Amp *a = find_amp(p_biome, p_k);
+Shape band_shape(const Biome &p_biome, const Cascade::Band &p_band) {
+    const Amp *a = find_amp(p_biome, p_band);
     return a && a->has_shape ? a->shape : Shape();
 }
 
 float max_amp(const Table &p_table, const Cascade::Band &p_band) {
     float m = p_table.biomes.empty() ? p_band.amp : 0.0f;
     for (const Climate::Biome &b : p_table.biomes) {
-        m = ov::max(m, biome_amp(b, p_band) * shape_bound(band_shape(b, p_band.k)));
+        m = ov::max(m, biome_amp(b, p_band) * shape_bound(band_shape(b, p_band)));
     }
     return m;
 }

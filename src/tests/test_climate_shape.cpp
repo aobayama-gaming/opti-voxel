@@ -270,15 +270,46 @@ TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and
     }
 }
 
+// Several notes per octave (notes_test.json): octaves 11 .. 13 hold three notes (the template's and two biomes' own), all
+// modulated; the band table holds the others after the groups' entries, the level shader inserts them after each level's
+// first, and box runs equal point queries in every slot.
+TEST_CASE("Climate shape: several notes per octave, modulated, box runs equal point queries") {
+    ClimateSDF c("res://climate/notes_test.json", 15);
+    CHECK(c.sdf.get_climate_error() == ov::str());
+    CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
+    const Cascade::Spec &spec = c.sdf.get_spec();
+    CHECK(spec.level_notes(11 - 3) == 3);
+    CHECK(spec.level_notes(10 - 3) == 2);
+    CHECK(spec.level_notes(9 - 3) == 1);
+    CHECK(spec.max_level_notes() == 3);
+    CLIMATE_REQUIRE(spec.modulation != nullptr);
+    CHECK((spec.modulation->modulated(11 - 3) & 1u) != 0u);
+    const int extra = 2 * 3 + 1 * 2; // two more notes on octaves 11 .. 13, one more on 10 and 14
+    CHECK(CascadeGLSL::band_table(spec).size() == (size_t(spec.group_count()) * CascadeGLSL::BAND_ENTRIES + extra) * CascadeGLSL::BAND_BYTES);
+    const ov::str code = CascadeGLSL::level_shader(&c.sdf, false, false, false, true, CascadeGLSL::View::FIELDS);
+    CHECK(ov::contains(code, "for (int e = 0; e < count; e++)"));
+    CHECK(ov::contains(code, ov::format("BandMod mod[%d]", spec.group_count() + 2)));
+    int64_t bad = 0;
+    for (const int lod : { 0, 4, 8 }) {
+        for (const int64_t base : { int64_t(5), (int64_t(1) << 32) - 2, -(int64_t(1) << 44) }) {
+            bad += ClimateTest::box_point_mismatches(spec, Vector3i64(base, (c.sdf.get_datum_y() >> lod) - 1, base / 3), 3, lod, true);
+        }
+    }
+    CHECK(bad == 0);
+}
+
 // Every level shader variant (chunks / points, with / without the fields) defines each climate helper it calls: a shaped
-// table with and without curves (the shared helpers are spliced once, up front; splices_helpers).
+// table with and without curves (the shared helpers are spliced once, up front; splices_helpers), and several notes per
+// octave.
 TEST_CASE("Climate shape: every level shader variant defines the climate helpers it calls") {
     const ov::Value with_terms = shaped_table();
     const ov::Value without = ClimateTest::without_curves(shaped_table());
+    ov::Value notes;
+    CHECK(load_table("res://climate/notes_test.json", notes) == ov::str());
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_curve0", "cl_curve1",
         "cascade_warped", "climate_ground", "climate_biome", "cascade_mods" };
     int64_t variants = 0, missing = 0;
-    for (const ov::Value &table : { with_terms, without }) {
+    for (const ov::Value &table : { with_terms, without, notes }) {
         SDFCascade sdf;
         sdf.climate_data = table;
         ChunkParam param;
@@ -302,7 +333,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
             }
         }
     }
-    CHECK(variants == 8);
+    CHECK(variants == 12);
     CHECK(missing == 0);
 }
 

@@ -16,9 +16,10 @@ bool moderate(double p_v) {
     return std::isfinite(p_v) && a >= std::ldexp(1.0, -40) && a <= std::ldexp(1.0, 40);
 }
 
-const Cascade::Band *find_band(const std::vector<Cascade::Band> &p_bands, int p_k) {
+// The first band of p_bands like p_like: its octave (p_identity: and its seed and stretch, a note's identity).
+const Cascade::Band *find_band(const std::vector<Cascade::Band> &p_bands, const Cascade::Band &p_like, bool p_identity) {
     for (const Cascade::Band &b : p_bands) {
-        if (b.k == p_k) {
+        if (b.k == p_like.k && (!p_identity || (b.seed == p_like.seed && b.stretch == p_like.stretch))) {
             return &b;
         }
     }
@@ -35,13 +36,14 @@ bool name_taken_before(const std::vector<T> &p_list, size_t p_i) {
     return false;
 }
 
-// A field's bands or the ground's notes: each octave in the cascade's range, once, its amplitude in the exact range.
-ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &p_ground, const ov::str &p_where) {
+// A field's bands or the ground's notes: each octave in the cascade's range, once (p_notes: each note, several may share
+// an octave), its amplitude in the exact range.
+ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &p_ground, const ov::str &p_where, bool p_notes = false) {
     for (const Cascade::Band &b : p_bands) {
         if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.k_max) {
             return p_where + ov::format("octave k = %d is outside the cascade's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.k_max);
         }
-        if (find_band(p_bands, b.k) != &b) {
+        if (find_band(p_bands, b, p_notes) != &b) {
             return p_where + ov::format("octave k = %d is listed twice.", b.k);
         }
         if (!ExactNoise::in_exact_range(b.amp)) {
@@ -79,7 +81,11 @@ ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
 }
 
 ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_amp) {
-    if (find_band(p_table.notes, p_amp.k) == nullptr) {
+    Cascade::Band like;
+    like.k = p_amp.k;
+    like.seed = p_amp.seed;
+    like.stretch = p_amp.stretch;
+    if (find_band(p_table.notes, like, true) == nullptr) {
         return ov::format("an amplitude names octave k = %d, which no note has.", p_amp.k);
     }
     if (!std::isfinite(p_amp.amp) || p_amp.amp < 0.0f) {
@@ -115,8 +121,9 @@ ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_
 ov::str validate_amps(const Table &p_table, const Ground &p_ground, const Biome &p_biome, const ov::str &p_where) {
     for (size_t j = 0; j < p_biome.amps.size(); j++) {
         for (size_t i = 0; i < j; i++) {
-            if (p_biome.amps[i].k == p_biome.amps[j].k) {
-                return p_where + ov::format("octave k = %d has two multipliers.", p_biome.amps[j].k);
+            const Amp &a = p_biome.amps[i], &b = p_biome.amps[j];
+            if (a.k == b.k && a.seed == b.seed && a.stretch == b.stretch) {
+                return p_where + ov::format("the note of octave k = %d has two amplitudes.", b.k);
             }
         }
         const ov::str err = validate_amp(p_table, p_ground, p_biome.amps[j]);
@@ -199,7 +206,7 @@ ov::str validate(const Table &p_table, const Ground &p_ground) {
             return err;
         }
     }
-    const ov::str notes = validate_bands(p_table.notes, p_ground, "climate: the ground's notes: ");
+    const ov::str notes = validate_bands(p_table.notes, p_ground, "climate: the ground's notes: ", true);
     if (!notes.empty()) {
         return notes;
     }

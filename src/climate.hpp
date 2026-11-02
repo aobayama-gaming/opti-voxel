@@ -100,7 +100,10 @@ struct Axis {
 // Hermite subdivision needs a band's gradient to be its value's: without that term the finer levels' values streak along
 // the lattice axes (measured, the climate report's gradient error: 6% and visible streaks, 2.5% for the plain ground).
 struct Amp {
+    // The note's identity (its band's octave, seed and stretch: several notes may share an octave).
     int k = 0;
+    uint32_t seed = 0;
+    int stretch = 0;
     float amp = 0.0f;
     bool has_shape = false; // else plain
     Shape shape;
@@ -223,11 +226,13 @@ Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground)
 float biome_amp(const Biome &p_biome, const Cascade::Band &p_band);
 // The largest biome_amp of any biome, times its shape's bound: bounds that follow amplitudes (skirts) take it.
 float max_amp(const Table &p_table, const Cascade::Band &p_band);
-// Biome p_biome's entry of the ground's octave p_k, or null.
-const Amp *find_amp(const Biome &p_biome, int p_k);
-// The shape biome p_biome gives the ground's octave p_k: its entry's, else plain. What the modulation inserts and
-// max_amp bounds.
-Shape band_shape(const Biome &p_biome, int p_k);
+// Biome p_biome's entry of the note p_band (its octave, seed and stretch), or null.
+const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band);
+// Whether p_amp is the entry of the note p_band.
+bool plays(const Amp &p_amp, const Cascade::Band &p_band);
+// The shape biome p_biome gives the note p_band: its entry's, else plain. What the modulation inserts and max_amp
+// bounds.
+Shape band_shape(const Biome &p_biome, const Cascade::Band &p_band);
 // The skirt's band step at LOD p_lod (LOD0 voxels) with the biomes' curves, from the cascade's p_ground_amp: the ground
 // h + sum_b w_b C_b(h) moves by (1 + max |C_b'|) times h's step, plus each weight's change times |C_b|'s bound: a
 // weight moves by at most BLEND_SLOPE times the kernels' sum of KERNEL_SLOPE |1 / span| times their fields' steps.
