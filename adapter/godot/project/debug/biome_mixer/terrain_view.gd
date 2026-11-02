@@ -141,6 +141,7 @@ func _restart_terrain() -> void:
 		# device is made per world (~2 s a restart), and the view draws no instances.
 		_terrain.discoverer_mode = 1
 		_terrain.walk_gpu = false
+		_terrain.direct_batches_per_frame = 8  # 4 (the game's): a reload 116 ms p50, 8: 100, 16: 108 (heavier frames)
 		_terrain.set_world_json(_view_world(_json), _dir)
 		_terrain.origin_shifted.connect(func(p_shift: Vector3) -> void:
 			_target -= p_shift
