@@ -5,6 +5,7 @@ extends SubViewportContainer
 ## (Cascade::ShaderParams), so a world whose structure didn't change builds no pipeline, and the time is the reload of
 ## the chunks in view. A drag restarts it as often as the loads keep up. The view holds the last terrain's frame until
 ## the new one's chunks are loaded (no blank ground between them). Without the world's clouds (their shadows).
+## The chunks load round the orbit's pivot (VoxelTerrain.set_lod_centre), at the LOD of the camera's distance.
 ## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
@@ -131,6 +132,7 @@ func _restart_terrain() -> void:
 			_shifted += p_shift)
 		_viewport.add_child(_terrain)  # starts the world: its pipelines, then the chunks
 	_aim_camera()
+	_place_camera()  # the new terrain's LOD centre
 	_started = _json
 	loaded_ms = -1
 	status = "terrain restarted in %d ms, loading" % ((Time.get_ticks_usec() - _restart_usec) / 1000)
@@ -216,6 +218,9 @@ func _place_camera() -> void:
 	var dir := (axes[0] * sin(_yaw) + axes[1] * cos(_yaw)) * cos(_pitch) + _up * sin(_pitch)
 	_camera.position = _target + dir * _dist
 	_camera.look_at(_target, _up)
+	if _terrain != null:
+		# The LOD rings round the pivot, not the camera: lifted by the orbit's distance, the pivot loads at its LOD.
+		_terrain.set_lod_centre(_target + _up * _dist)
 	# The planes follow the orbit: a world's view is hundreds of km (the terrain loads to the far plane, lod_far_limit).
 	_camera.far = maxf(_dist * 4.0, 2000.0)
 	_camera.near = clampf(_dist * 0.0002, 0.05, 50.0)

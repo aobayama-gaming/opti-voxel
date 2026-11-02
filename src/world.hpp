@@ -117,7 +117,9 @@ public:
     // One frame: the camera (render space, null: none), the scans and meshes that landed, the next batches.
     // p_camera_far_m: the depth of the camera's far plane in metres (0: none, an infinite projection): nothing farther
     // than its frustum's corners reach (far / cos of the diagonal half-FOV), in any direction, is scanned (ChunkMath::beyond_far).
-    void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0);
+    // p_load_centre: where the LOD rings centre (render space, null: the camera), e.g. an orbit's pivot lifted by the
+    // orbit's distance: the pivot gets the LOD of a camera that far.
+    void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0, const Float3 *p_load_centre = nullptr);
     // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer.
     void stop();
     bool is_started() const { return started; }
@@ -135,9 +137,9 @@ public:
     const ChunkParam &chunk_param() const { return config.chunk_param; }
     uint32_t frames() const { return exec_time; }
 
-    // True once every scanned chunk is meshed and the mesher has nothing in flight; p_camera_pos (the camera now, null:
-    // none) must still be in the scanned camera chunk.
-    bool is_load_complete(const Float3 *p_camera_pos);
+    // True once every scanned chunk is meshed and the mesher has nothing in flight; p_load_centre (the camera now, or
+    // frame's p_load_centre; null: none) must still be in the scanned centre chunk.
+    bool is_load_complete(const Float3 *p_load_centre);
     // The instance edits made so far are meshed (the legacy mesher: idle).
     bool is_edit_settled();
     int64_t pending_chunk_count() const { return int64_t(state.dirty_chunk.size()); }
@@ -226,7 +228,7 @@ private:
     bool destroy_dirty = false;
     // View of the scan currently in state.scanned_chunk.
     ScanView scan_view;
-    Float3 last_camera; // the camera of the last frame (and start), render space
+    Float3 last_load_centre; // the LOD rings' centre of the last frame (and start: the camera), render space
     ChunkId world_origin_chunk;
     // The world origin start() takes: the request snapped down to the root chunk span (2^lods chunk-id units), so
     // the start is the same for any requested origin; on a planet a request of (0, 0, 0) stands for its pole

@@ -63,6 +63,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_view_memory_m"), &VoxelTerrain::get_lod_view_memory_m);
     ClassDB::bind_method(D_METHOD("set_lod_view_max", "lod"), &VoxelTerrain::set_lod_view_max);
     ClassDB::bind_method(D_METHOD("get_lod_view_max"), &VoxelTerrain::get_lod_view_max);
+    ClassDB::bind_method(D_METHOD("set_lod_centre", "position"), &VoxelTerrain::set_lod_centre);
+    ClassDB::bind_method(D_METHOD("clear_lod_centre"), &VoxelTerrain::clear_lod_centre);
     ClassDB::bind_method(D_METHOD("set_lod_far_limit", "enabled"), &VoxelTerrain::set_lod_far_limit);
     ClassDB::bind_method(D_METHOD("get_lod_far_limit"), &VoxelTerrain::get_lod_far_limit);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
@@ -540,6 +542,15 @@ int VoxelTerrain::get_lod_view_max() const {
     return cfg().lod_view_max;
 }
 
+void VoxelTerrain::set_lod_centre(const Vector3 &p_position) {
+    lod_centre = p_position;
+    has_lod_centre = true;
+}
+
+void VoxelTerrain::clear_lod_centre() {
+    has_lod_centre = false;
+}
+
 void VoxelTerrain::set_lod_far_limit(bool p_enabled) {
     ERR_FAIL_COND_MSG(world->is_started(), "lod_far_limit must be set before the terrain enters the tree.");
     lod_far_limit = p_enabled;
@@ -718,6 +729,7 @@ Vector3 VoxelTerrain::get_render_offset_m() const {
 void VoxelTerrain::_move_render_origin(const Float3 &p_shift) {
     const Vector3 shift = godot_v3(p_shift);
     const Vector3 camera_before = camera->get_global_position();
+    lod_centre -= shift;
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         Node3D *node = Object::cast_to<Node3D>(parent->get_child(i));
@@ -1069,7 +1081,8 @@ void VoxelTerrain::_process(double) {
         }
         const Float3 pos = ov_f3(camera->get_global_position());
         const Float3 forward = ov_f3(_camera_forward());
-        world->frame(&pos, &forward, _camera_far());
+        const Float3 centre = ov_f3(lod_centre);
+        world->frame(&pos, &forward, _camera_far(), has_lod_centre ? &centre : nullptr);
     } else {
         world->frame(nullptr, nullptr);
     }
@@ -1119,7 +1132,7 @@ bool VoxelTerrain::is_load_complete() {
     if (camera == nullptr) {
         return world->is_load_complete(nullptr);
     }
-    const Float3 pos = ov_f3(camera->get_global_position());
+    const Float3 pos = ov_f3(has_lod_centre ? lod_centre : camera->get_global_position());
     return world->is_load_complete(&pos);
 }
 

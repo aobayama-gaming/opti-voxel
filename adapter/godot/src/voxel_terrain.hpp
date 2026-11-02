@@ -40,6 +40,8 @@ protected:
 
 private:
     Camera3D *camera = nullptr;
+    Vector3 lod_centre;
+    bool has_lod_centre = false;
     // A restart (restart_world) is a new World on the same device and hosts, with the settings, its chunk_param as before
     // the first start (start() places the origin and raises the skirt in it).
     std::unique_ptr<ov::World> world = std::make_unique<ov::World>();
@@ -194,6 +196,10 @@ public:
     // The coarsest LOD the view loads (< 0, default: the engine's top): a view's reach. The terrain stays the engine's.
     void set_lod_view_max(int p_lod);
     int get_lod_view_max() const;
+    // Where the LOD rings centre (render space, moved with the render origin like the camera's siblings) instead of
+    // the camera: an orbit view's pivot lifted by its distance loads round the pivot. clear_lod_centre: the camera again.
+    void set_lod_centre(const Vector3 &p_position);
+    void clear_lod_centre();
     // Scan nothing farther from the camera than its far plane (Camera3D.far, read every frame): it is never drawn.
     // With --lods above 15 the far plane follows the altitude (Presets.clip_planes), so a low camera drops the
     // coarsest LODs. Default on.

@@ -195,7 +195,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
         chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
-        last_camera = *p_camera_pos;
+        last_load_centre = *p_camera_pos;
         has_camera = true;
     }
     VLOG(1, "World: started, pipeline_mode=", int(config.pipeline_mode));
@@ -262,7 +262,7 @@ void World::_record_dispatch_times(const DispatchTimes &p_now) {
     last_dispatch_times = p_now;
 }
 
-void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m) {
+void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m, const Float3 *p_load_centre) {
     if (!started) {
         return;
     }
@@ -276,8 +276,9 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
     }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
-        last_camera = *p_camera_pos;
+        const Float3 &centre = p_load_centre != nullptr ? *p_load_centre : *p_camera_pos;
+        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(centre, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
+        last_load_centre = centre;
         has_camera = true;
     }
     if (atmosphere && p_camera_pos != nullptr) {
@@ -382,7 +383,7 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
 
     exec_time++;
 
-    if (frames_until_loaded < 0 && is_load_complete(has_camera ? &last_camera : nullptr)) {
+    if (frames_until_loaded < 0 && is_load_complete(has_camera ? &last_load_centre : nullptr)) {
         frames_until_loaded = exec_time;
         usec_until_loaded = int64_t(now_usec() - start_usec);
         VLOG(1, "World: load complete after ", exec_time, " frames, ", double(usec_until_loaded) / 1000.0, " ms");
@@ -542,7 +543,7 @@ void World::_poll_discovery_audit() {
     VLOG(1, "World: discovery audit: ", to_json(r));
 }
 
-bool World::is_load_complete(const Float3 *p_camera_pos) {
+bool World::is_load_complete(const Float3 *p_load_centre) {
     if (!started || !scan_received || !state.dirty_chunk.is_empty()) {
         return false;
     }
@@ -550,7 +551,7 @@ bool World::is_load_complete(const Float3 *p_camera_pos) {
     // after start is otherwise "loaded" with the first scan while the next one is still running.
     // The view of the last set_camera (frame) carries the remembered views; a camera moved since is
     // caught by its chunk, a turn since by the next frame.
-    if (p_camera_pos != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param) != scan_view.camera_chunk)) {
+    if (p_load_centre != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(*p_load_centre, config.chunk_param) != scan_view.camera_chunk)) {
         return false;
     }
     if (direct_mesher) {
@@ -674,7 +675,7 @@ bool World::rebase(const ChunkId &p_origin, Float3 &r_shift) {
     } else {
         gpu_mesher->set_render_origin(p_origin);
     }
-    last_camera = last_camera - r_shift;
+    last_load_centre = last_load_centre - r_shift;
     if (clouds) {
         clouds->shift(r_shift);
     }
@@ -731,7 +732,7 @@ ov::Value World::debug_stats() {
         d["climate"] = c;
     }
     d["frames"] = int64_t(exec_time);
-    d["load_complete"] = is_load_complete(has_camera ? &last_camera : nullptr);
+    d["load_complete"] = is_load_complete(has_camera ? &last_load_centre : nullptr);
     d["frames_until_loaded"] = frames_until_loaded;
     d["ms_until_loaded"] = usec_until_loaded < 0 ? -1.0 : double(usec_until_loaded) / 1000.0;
 
