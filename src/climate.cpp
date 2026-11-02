@@ -130,22 +130,25 @@ double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_
 } // namespace
 
 double ground_step(const Table &p_table, int p_lod, double p_ground_amp) {
-    // ground = h + sum_b w_b C_b(h). The weights sum to 1, so the h part moves by at most (1 + max |C_b'|) times h's
-    // step. The weights' own change moves it by |dw_b| |C_b|. A kernel's |dk/dq| <= 1.54 (4 q (1 - q^2) at q^2 = 1/3)
-    // and |dq| <= 2 sum |du| (|u| <= 1 where k > 0), so |dk_b| <= KERNEL_SLOPE sum |1 / span| field_step = K_b; the
-    // default's |dk_d| <= 2 sum K; w = k / S with S >= 3/4, w <= 1, |dS| <= 3 sum K: |dw| <= (4/3)(|dk| + |dS|) <=
-    // BLEND_SLOPE sum K for every biome, the default too.
-    double slope = 0.0, kernels = 0.0, curves = 0.0;
+    // ground = h + sum_b w_b D_b(h, f). The weights sum to 1, so the h part moves by at most (1 + max |dD_b/dh|) times
+    // h's step, plus each field a program reads, |dD_b/df| times its step. The weights' own change moves it by |dw_b|
+    // |D_b|. A kernel's |dk/dq| <= 1.54 (4 q (1 - q^2) at q^2 = 1/3) and |dq| <= 2 sum |du| (|u| <= 1 where k > 0), so
+    // |dk_b| <= KERNEL_SLOPE sum |1 / span| field_step = K_b; the default's |dk_d| <= 2 sum K; w = k / S with S >= 3/4,
+    // w <= 1, |dS| <= 3 sum K: |dw| <= (4/3)(|dk| + |dS|) <= BLEND_SLOPE sum K for every biome, the default too.
+    double slope = 0.0, kernels = 0.0, terms = 0.0, fields = 0.0;
     for (const Biome &b : p_table.biomes) {
         for (const Axis &a : b.at) {
             kernels += KERNEL_SLOPE * std::fabs(double(a.inv_span)) * field_step(p_table, a.field, p_lod, p_ground_amp);
         }
-        if (!b.curve.empty()) {
-            slope = std::max(slope, double(curve_slope_bound(b.curve)));
-            curves += double(curve_bound(b.curve));
+        if (!b.program.empty()) {
+            slope = std::max(slope, b.program.slope);
+            terms += b.program.bound;
+            for (int f = 0; f < int(p_table.fields.size()); f++) {
+                fields += b.program.field_slope[f] > 0.0 ? b.program.field_slope[f] * field_step(p_table, f, p_lod, p_ground_amp) : 0.0;
+            }
         }
     }
-    return (1.0 + slope) * p_ground_amp + BLEND_SLOPE * kernels * curves;
+    return (1.0 + slope) * p_ground_amp + BLEND_SLOPE * kernels * terms + fields;
 }
 
 void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {
@@ -210,15 +213,21 @@ int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p
 
 SampleCarry sample_carry(const Table &p_table) {
     SampleCarry s;
-    std::fill(std::begin(s.curve), std::end(s.curve), -1);
+    std::fill(std::begin(s.weight), std::end(s.weight), -1);
+    std::fill(std::begin(s.field), std::end(s.field), -1);
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        if (!p_table.biomes[b].curve.empty()) {
-            s.curve[b] = s.count++;
+        if (!p_table.biomes[b].program.empty()) {
+            s.weight[b] = s.count++;
         }
     }
     // Without fields the weights are constant: the last biome takes everything.
     if (!p_table.fields.empty() && !p_table.biomes.empty()) {
         s.pick = s.count++;
+    }
+    for (int f = 0; f < int(p_table.fields.size()); f++) {
+        if (std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [&](const Biome &p_b) { return p_b.program.reads_field(f); })) {
+            s.field[f] = s.count++;
+        }
     }
     return s;
 }

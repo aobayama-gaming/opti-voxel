@@ -204,7 +204,7 @@ uint cascade_ground_material(Ch ch) {
         ground_channels(slots, r_ch);
     }
 
-    // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_curves): the
+    // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_programs): the
     // samples then read terms derived on the level above them (FieldRange::sample, CPU and GPU, point items too).
     bool has_ground_terms() const override { return ground_terms; }
     // The ground channels of a point's slots p_slots (a run's last level, the samples' terms carried):
@@ -482,7 +482,7 @@ private:
             }
         }
         spec = Climate::combined_spec(table, spec);
-        ground_terms = table.has_curves();
+        ground_terms = table.has_programs();
         std::vector<std::pair<ov::str, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < table.biomes.size(); b++) {
             grounds.emplace_back("biome:" + table.biomes[b].name, Climate::biome_material(table.biomes[b]));
@@ -500,6 +500,6 @@ private:
     int k_max = 0; // a note's or a field's coarsest octave (lod_count + 4)
     Climate::Table table; // the compiled ground: climate_data's, or the template's
     bool given = false; // table is climate_data's (get_climate)
-    bool ground_terms = false; // table.has_curves(), read per sample
+    bool ground_terms = false; // table.has_programs(), read per sample
     ov::str climate_error;
 };

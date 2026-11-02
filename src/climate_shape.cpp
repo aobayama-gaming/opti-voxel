@@ -6,13 +6,16 @@
 #include <algorithm>
 #include <cmath>
 
-// Band shapes' bounds, the biomes' curves and the ground at a sample (ground_value), on the CPU and in generated GLSL,
-// op for op: every product flushed under 2^-64 like the climate's dual numbers (climate.hpp's exactness note).
+// Band shapes' bounds, the biomes' curves, their sample programs and the ground at a sample (ground_value), on the CPU
+// and in generated GLSL, op for op: every product flushed under 2^-64 like the climate's dual numbers (climate.hpp's
+// exactness note).
 namespace Climate {
 
 using Cascade::dadd;
 using Cascade::dflush;
 using Cascade::dmul;
+using Cascade::dscale;
+using Cascade::dsub;
 using Cascade::flush_value;
 
 float shape_bound(const Shape &p_shape) {
@@ -78,8 +81,12 @@ bool Table::has_state() const {
             [](const Biome &p_b) { return std::any_of(p_b.amps.begin(), p_b.amps.end(), [](const Amp &p_a) { return p_a.gain > 0.0f; }); });
 }
 
-bool Table::has_curves() const {
-    return std::any_of(biomes.begin(), biomes.end(), [](const Biome &p_b) { return !p_b.curve.empty(); });
+bool Table::has_programs() const {
+    return std::any_of(biomes.begin(), biomes.end(), [](const Biome &p_b) { return !p_b.program.empty(); });
+}
+
+bool SampleProgram::reads_field(int p_field) const {
+    return std::any_of(code.begin(), code.end(), [&](const SampleInstr &p_i) { return p_i.op == SampleOp::FIELD && p_i.index == p_field; });
 }
 
 namespace {
@@ -107,11 +114,106 @@ Float4 eval_curve(const Curve &p_c, const Float4 &p_x) {
     return dflush(Float4{ p_x.x * d, p_x.y * d, p_x.z * d, v });
 }
 
-// eval_curve as `vec4 cl_curve<p_i>(vec4 x)`, the segment chosen by the same compares.
-ov::str curve_glsl(const Curve &p_c, int p_i) {
+// Quilez's polynomial smooth min of p_a and p_b over p_k voxels (p_inv = 0.5 / p_k): h = clamp(1/2 + (b - a) / (2k), 0,
+// 1), b + h (a - b) - k h (1 - h); outside the blend the smaller register itself.
+Float4 smooth_min(const Float4 &p_a, const Float4 &p_b, float p_k, float p_inv) {
+    const Float4 t = dscale(dsub(p_b, p_a), p_inv);
+    const float hw = 0.5f + t.w;
+    if (!(hw > 0.0f)) {
+        return p_b;
+    }
+    if (hw >= 1.0f) {
+        return p_a;
+    }
+    const Float4 h{ t.x, t.y, t.z, hw };
+    const Float4 one_h{ -t.x, -t.y, -t.z, 1.0f - hw };
+    const Float4 m = dadd(p_b, dmul(h, dsub(p_a, p_b)));
+    return dsub(m, dscale(dmul(h, one_h), p_k));
+}
+
+// smooth_min in GLSL (after the shared helpers).
+constexpr const char GLSL_SMOOTH_MIN[] = R"glsl(
+vec4 cl_smin(vec4 a, vec4 b, float k, float inv) {
+    vec4 t = cl_scale(cl_sub(b, a), inv);
+    precise float hw = 0.5 + t.w;
+    if (!(hw > 0.0)) {
+        return b;
+    }
+    if (hw >= 1.0) {
+        return a;
+    }
+    vec4 h = vec4(t.x, t.y, t.z, hw);
+    precise float omh = 1.0 - hw;
+    vec4 one_h = vec4(-t.x, -t.y, -t.z, omh);
+    vec4 m = cl_add(b, cl_mul(h, cl_sub(a, b)));
+    return cl_sub(m, cl_scale(cl_mul(h, one_h), k));
+}
+)glsl";
+
+// The negation of a dual (exact).
+Float4 neg(const Float4 &p_a) {
+    return Float4{ -p_a.x, -p_a.y, -p_a.z, -p_a.w };
+}
+
+// A smooth op's 0.5 / k.
+float half_inv(float p_k) {
+    return float(0.5 / double(p_k));
+}
+
+// Biome program p_p's term D at the ground p_ground (H) and the point's slots p_slots (its carried fields, p_carry).
+Float4 run_program(const SampleProgram &p_p, const Float4 &p_ground, const float p_slots[Cascade::SLOTS], const SampleCarry &p_carry) {
+    if (p_p.curve_of_ground()) {
+        return eval_curve(p_p.curves[0], p_ground);
+    }
+    std::vector<Float4> r(p_p.code.size());
+    for (size_t i = 0; i < p_p.code.size(); i++) {
+        const SampleInstr &in = p_p.code[i];
+        const Float4 a = in.a >= 0 ? r[size_t(in.a)] : Float4{};
+        const Float4 b = in.b >= 0 ? r[size_t(in.b)] : Float4{};
+        switch (in.op) {
+            case SampleOp::GROUND:
+                r[i] = p_ground;
+                break;
+            case SampleOp::CONST:
+                r[i] = Float4{ 0.0f, 0.0f, 0.0f, in.value };
+                break;
+            case SampleOp::FIELD:
+                r[i] = to_float4(p_slots + Cascade::carry_slot(p_carry.field[in.index]));
+                break;
+            case SampleOp::ADD:
+                r[i] = dadd(a, b);
+                break;
+            case SampleOp::SUB:
+                r[i] = dsub(a, b);
+                break;
+            case SampleOp::MUL:
+                r[i] = dmul(a, b);
+                break;
+            case SampleOp::MIN:
+                r[i] = b.w < a.w ? b : a;
+                break;
+            case SampleOp::MAX:
+                r[i] = b.w > a.w ? b : a;
+                break;
+            case SampleOp::SMIN:
+                r[i] = smooth_min(a, b, in.value, half_inv(in.value));
+                break;
+            case SampleOp::SMAX:
+                r[i] = neg(smooth_min(neg(a), neg(b), in.value, half_inv(in.value)));
+                break;
+            case SampleOp::CURVE:
+                r[i] = dadd(a, eval_curve(p_p.curves[size_t(in.index)], a));
+                break;
+        }
+    }
+    return dsub(r.back(), p_ground);
+}
+
+// eval_curve as `vec4 <p_name>(vec4 x)`, the segment chosen by the same compares.
+ov::str curve_glsl(const Curve &p_c, const ov::str &p_name) {
     using ExactNoise::glsl_float;
     const size_t n = p_c.x.size();
-    ov::str code = ov::format("vec4 cl_curve%d(vec4 x) {\n", p_i);
+    ov::str code = "vec4 " + p_name + "(vec4 x) {\n";
     code += ov::format("    if (!(x.w > %s)) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[0]), glsl_float(p_c.s[0]));
     code += ov::format("    if (x.w >= %s) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[n - 1]), glsl_float(p_c.y_last));
     code += "    float x0, inv, p, q, r, s;\n";
@@ -132,6 +234,62 @@ ov::str curve_glsl(const Curve &p_c, int p_i) {
     return code;
 }
 
+// Biome p_b's program as `vec4 cl_sample<p_b>(vec4 base, Ch ch)`, D: run_program's ops (its curves cl_curve<b>_<i>
+// before it); a curve of H alone is cl_curve<b> itself (its text before programs).
+ov::str program_glsl(const SampleProgram &p_p, int p_b, const Cascade::Spec &p_spec, const SampleCarry &p_carry) {
+    using ExactNoise::glsl_float;
+    if (p_p.curve_of_ground()) {
+        return curve_glsl(p_p.curves[0], ov::format("cl_curve%d", int64_t(p_b)));
+    }
+    ov::str code;
+    for (size_t c = 0; c < p_p.curves.size(); c++) {
+        code += curve_glsl(p_p.curves[c], ov::format("cl_curve%d_%d", int64_t(p_b), int64_t(c)));
+    }
+    code += ov::format("vec4 cl_sample%d(vec4 base, Ch ch) {\n", int64_t(p_b));
+    for (size_t i = 0; i < p_p.code.size(); i++) {
+        const SampleInstr &in = p_p.code[i];
+        const ov::str a = ov::format("r%d", int64_t(in.a)), b = ov::format("r%d", int64_t(in.b));
+        ov::str e;
+        switch (in.op) {
+            case SampleOp::GROUND:
+                e = "base";
+                break;
+            case SampleOp::CONST:
+                e = "vec4(0.0, 0.0, 0.0, " + glsl_float(in.value) + ")";
+                break;
+            case SampleOp::FIELD:
+                e = carried_glsl(p_spec, "ch", p_carry.field[in.index]);
+                break;
+            case SampleOp::ADD:
+                e = "cl_add(" + a + ", " + b + ")";
+                break;
+            case SampleOp::SUB:
+                e = "cl_sub(" + a + ", " + b + ")";
+                break;
+            case SampleOp::MUL:
+                e = "cl_mul(" + a + ", " + b + ")";
+                break;
+            case SampleOp::MIN:
+                e = b + ".w < " + a + ".w ? " + b + " : " + a;
+                break;
+            case SampleOp::MAX:
+                e = b + ".w > " + a + ".w ? " + b + " : " + a;
+                break;
+            case SampleOp::SMIN:
+                e = "cl_smin(" + a + ", " + b + ", " + glsl_float(in.value) + ", " + glsl_float(half_inv(in.value)) + ")";
+                break;
+            case SampleOp::SMAX:
+                e = "-cl_smin(-" + a + ", -" + b + ", " + glsl_float(in.value) + ", " + glsl_float(half_inv(in.value)) + ")";
+                break;
+            case SampleOp::CURVE:
+                e = "cl_add(" + a + ", cl_curve" + ov::format("%d_%d", int64_t(p_b), int64_t(in.index)) + "(" + a + "))";
+                break;
+        }
+        code += ov::format("    vec4 r%d = ", int64_t(i)) + e + ";\n";
+    }
+    return code + ov::format("    return cl_sub(r%d, base);\n}\n", int64_t(p_p.code.size() - 1));
+}
+
 } // namespace
 
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
@@ -139,9 +297,9 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
     const SampleCarry carry = sample_carry(p_table);
     Float4 h = base;
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        if (carry.curve[b] >= 0) {
-            const Float4 w = to_float4(p_slots + Cascade::carry_slot(carry.curve[b]));
-            h = dadd(h, dmul(w, eval_curve(p_table.biomes[b].curve, base)));
+        if (carry.weight[b] >= 0) {
+            const Float4 w = to_float4(p_slots + Cascade::carry_slot(carry.weight[b]));
+            h = dadd(h, dmul(w, run_program(p_table.biomes[b].program, base, p_slots, carry)));
         }
     }
     return h;
@@ -150,17 +308,25 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
 ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
     const SampleCarry carry = sample_carry(p_table);
     ov::str code;
+    bool smooth = false;
+    for (const Biome &b : p_table.biomes) {
+        for (const SampleInstr &in : b.program.code) {
+            smooth = smooth || in.op == SampleOp::SMIN || in.op == SampleOp::SMAX;
+        }
+    }
+    code += smooth ? ov::str(GLSL_SMOOTH_MIN) : ov::str();
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        if (carry.curve[b] >= 0) {
-            code += ov::replace_all(curve_glsl(p_table.biomes[b].curve, int(b)), "FLUSH", Cascade::glsl_flush());
+        if (carry.weight[b] >= 0) {
+            code += ov::replace_all(program_glsl(p_table.biomes[b].program, int(b), p_combined, carry), "FLUSH", Cascade::glsl_flush());
         }
     }
     code += "\n// Climate::ground_value: the cascade's ground h, plus each curved biome's weight times its curve of h; (value, gradient).\n";
     code += "vec4 climate_ground(Ch ch) {\n";
     code += "    vec4 base = vec4(ch.c[1], ch.c[2], ch.c[3], ch.c[0]);\n    vec4 h = base;\n";
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        if (carry.curve[b] >= 0) {
-            code += ov::format("    h = cl_add(h, cl_mul(%s, cl_curve%d(base)));\n", carried_glsl(p_combined, "ch", carry.curve[b]), int64_t(b));
+        if (carry.weight[b] >= 0) {
+            const ov::str term = p_table.biomes[b].program.curve_of_ground() ? ov::format("cl_curve%d(base)", int64_t(b)) : ov::format("cl_sample%d(base, ch)", int64_t(b));
+            code += ov::format("    h = cl_add(h, cl_mul(%s, %s));\n", carried_glsl(p_combined, "ch", carry.weight[b]), term);
         }
     }
     code += "    return vec4(h.w, h.x, h.y, h.z);\n}\n";

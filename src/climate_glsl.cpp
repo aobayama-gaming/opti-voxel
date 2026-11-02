@@ -86,7 +86,7 @@ ov::str glsl_helpers() {
 }
 
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined) {
-    return (p_combined.modulation && p_combined.modulation->shaped()) || p_table.has_curves();
+    return (p_combined.modulation && p_combined.modulation->shaped()) || p_table.has_programs();
 }
 
 ov::str shared_helpers_glsl() {

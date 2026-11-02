@@ -43,8 +43,12 @@ them.
    - read at the point moved by `warp_m * (wx, wy, wz)` with a warp.
    A note every biome plays plain at one amplitude is a constant band (no modulation, the same bits: `A = a` exactly).
    A note's `"stretch_y"` reads it squeezed along the base's up.
-4. **The biome's curve** (`Biome::curve`): at each sample, `h + sum_b w_b * C_b(h)`, `C_b = R_b - h` through the
-   biome's points `[h, R(h)]` (libnoise's cubic, constant past the ends): the biome's height remap, its "LUT".
+4. **The biome's program** (`Biome::program`, `Climate::SampleProgram`): what its graph does past its notes' mix, at
+   each sample, on the blended ground H (the cascade's: every biome's notes) and the fields: constants, fields, add,
+   subtract, multiply, min, max, smooth min / max (Quilez's polynomial, over `k_m`), curves (`R(h)` through the biome's
+   points `[h, R(h)]`: libnoise's cubic of `C = R - h`, constant past the ends). The ground is
+   `h = H + sum_b w_b * D_b`, `D_b = f_b(H) - H`; a curve of H alone is `D = C(H)` itself (its bits from before
+   programs). Inside a biome's core `H` is its own mix; in a blend each program reads the blend, as a curve did.
 5. **The pick**: the biome with the largest weight (ties by a hash of the absolute voxel) gives the sample its material
    (`biome_material`: the procedural ground in the biome's colours).
 
@@ -96,11 +100,19 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   terms (`Climate::SampleCarry`: each curved biome's weight, the pick, copied from the floor parent instead of
   interpolated). H carries them down with the ground. So a LOD-L chunk's samples read the last octave's climate from
   Λ_{L+1}: the model's rule above, not an approximation of another one.
-- **The curve** (`Climate::ground_value`, GLSL `climate_ground`, through `SDFCascade::ground_channels` on every path:
-  chunk samples, point items, `ground_along`, the report): `h + sum_b w_b * C_b(h)` with the carried weights. The
-  skirts take its step (`Climate::ground_step`: the ground's step times 1 + the curves' largest slope, plus each
-  weight's change times its curve's bound; unit test: the L | L+1 step stays within the skirt on `example.json`,
-  `shaped_test.json` and `world.json`).
+- **The programs** (`Climate::ground_value`, GLSL `climate_ground` and one `cl_sample<b>` per biome, through
+  `SDFCascade::ground_channels` on every path: chunk samples, point items, `ground_along`, the report):
+  `H + sum_b w_b * D_b` with the carried weights, each program's registers in order with the climate's flushed dual
+  ops (`dadd`, `dmul`, ...; GLSL `cl_*`), op for op. A field a program reads is carried to the samples like the weights
+  (`SampleCarry::field`, derived on the level above). The compiler bounds each term (`SampleProgram::bound`, `slope`,
+  `field_slope`: interval arithmetic on the value and on its deviation from H, so a curve of H keeps its own bound);
+  validate holds the bound under the cap and the slope under `MAX_CURVE_SLOPE`, and the skirts take the step
+  (`Climate::ground_step`: the ground's step times 1 + the largest slope, plus each weight's change times its term's
+  bound, plus each field's step times its slope; unit test: the L | L+1 step stays within the skirt on
+  `example.json`, `shaped_test.json`, `world.json` and `programs_test.json`). The programs are the climate's own SSA,
+  not the archetype IR: a curve through the archetype IR wouldn't be the curves' bits (it doesn't flush under 2^-64,
+  and its dual product orders a slope otherwise); one program format for both is later work. Not yet: a carve (caves,
+  `docs/caves.md`: the discoverer's carve band first), and a single note read at the samples (its own carry).
 - **GPU only, for speed** (the CPU mirrors them today; the plain-oracle stage moves them GPU-side): which levels carry
   the fields and the carry (`Cascade::FieldRange`: `carried`, `inserted`, `carries`, `batch`, `batch_carry`), how many
   carry groups a last level loads (`Modulation::carry_used`), the three generated views (`CascadeGLSL::View`: ground
@@ -180,7 +192,7 @@ climate warp and every biome, its place and its graph) and has two modes:
   `F * N` of their rows, so notes the biome plays cost no read; a note warped by a finer one is warned of; the engine
   would need warp notes in a table's band, the chain rule from their gradients), *Mix* (rows of volume x the ground's
   amplitude lambda / 8 capped at 3.3 km, mute, solo, centre = the shape's mean out as the engine inserts bands), *Add*
-  / *Multiply* / *Constant*, *Height curve* (a remap R(h) through points: a biome's `"curve"` in the engine, the same
+  / *Multiply* / *Constant*, *Height curve* (a remap R(h) through points: a biome's curve node in the engine, the same
   points, libnoise's cubic of R - h, constant past the ends; its bound and slope, and its editor's in axis, span its
   input's bound (`curve_in`): the mountain's ±7.2 km, its points ±3.8 km), *Carve* (preview only: air where a field
   passes a threshold inside a depth band), *Output* (height, holes, flat and steep colours with the engine's slope

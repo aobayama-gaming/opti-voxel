@@ -623,12 +623,12 @@ TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slo
 
 TEST_CASE("Climate: carried only where the ground needs it, refused where it can't apply") {
     GroundFixture g(0.05, 15);
-    // A mix row is a note (a climate field isn't one: the biomes' graphs read the fields in their weights and warps).
+    // A mix row is a note (a climate field isn't one: a graph reads a field past its notes, in its program).
     Table t;
     const ov::str fields = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
             {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}], )";
     CHECK(ov::contains(parse_json(fields + R"("biomes": [{"name": "a", "at": {"t": [1, 1.2]}, "graph": {"nodes": [{"id": "h", "kind": "field", "field": "h"},
-                       {"id": "o", "kind": "output", "height": "h"}]}}, {"name": "b"}]})",
+                       {"id": "m", "kind": "mix", "rows": [{"in": "h"}]}, {"id": "o", "kind": "output", "height": "m"}]}}, {"name": "b"}]})",
                                g.ground, t),
             "a mix row is a note"));
     // Fields with the template's notes (a pick only): carried nowhere in the ground's runs (no field scratch, no fields

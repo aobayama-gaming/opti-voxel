@@ -1,0 +1,55 @@
+{
+ "comment": "Sample programs, for the tests (test_climate_shape.cpp, CascadeSpike set 4e): every biome plays the template ground; terraces floors it smoothly at -20 m (smax) then curves that, fielded adds a climate field times 150 m, the default caps it smoothly at 40 m (smin) over a hard floor at -60 m (max). Not a world to look at: project/climate/world.json is.",
+ "engine": {"voxel_m": 0.05, "lods": 25},
+ "climate": {
+  "fields": [
+   {"name": "t", "bands": [{"from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7}]},
+   {"name": "r", "bands": [{"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}]}
+  ]
+ },
+ "biomes": [
+  {
+   "name": "terraces",
+   "at": {"t": [0.5, 0.6]},
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "floor", "kind": "constant", "value_m": -20},
+     {"id": "s", "kind": "smax", "a": "ground", "b": "floor", "k_m": 30},
+     {"id": "c", "kind": "curve", "in": "s", "points": [[-300, -250], [0, 0], [300, 350]]},
+     {"id": "out", "kind": "output", "height": "c"}
+    ]
+   },
+   "debug_color": "#a05030"
+  },
+  {
+   "name": "fielded",
+   "at": {"t": [-0.5, 0.6]},
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "r", "kind": "field", "field": "r"},
+     {"id": "m", "kind": "constant", "value_m": 150},
+     {"id": "rm", "kind": "multiply", "a": "r", "b": "m"},
+     {"id": "sum", "kind": "add", "a": "ground", "b": "rm"},
+     {"id": "out", "kind": "output", "height": "sum"}
+    ]
+   },
+   "debug_color": "#80a060"
+  },
+  {
+   "name": "capped",
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "cap", "kind": "constant", "value_m": 40},
+     {"id": "low", "kind": "constant", "value_m": -60},
+     {"id": "s", "kind": "smin", "a": "ground", "b": "cap", "k_m": 25},
+     {"id": "f", "kind": "max", "a": "s", "b": "low"},
+     {"id": "out", "kind": "output", "height": "f"}
+    ]
+   },
+   "debug_color": "#6080a0"
+  }
+ ]
+}

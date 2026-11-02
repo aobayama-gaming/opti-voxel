@@ -109,7 +109,7 @@ public:
             }
             carry = std::max(carry, c);
         }
-        range.sample = p_table.has_curves();
+        range.sample = p_table.has_programs();
     }
 
     // A band some biome modulates, or a sample term: something reads the derive.
@@ -178,12 +178,17 @@ public:
             return;
         }
         for (size_t b = 0; b < table.biomes.size(); b++) {
-            if (sample.curve[b] >= 0) {
-                put_carry(r_slots, sample.curve[b], st.w[b]);
+            if (sample.weight[b] >= 0) {
+                put_carry(r_slots, sample.weight[b], st.w[b]);
             }
         }
         if (sample.pick >= 0) {
             put_carry(r_slots, sample.pick, Float4{ 0.0f, 0.0f, 0.0f, float(pick(table, st.w, p_p, p_m)) });
+        }
+        for (size_t f = 0; f < table.fields.size(); f++) {
+            if (sample.field[f] >= 0) {
+                put_carry(r_slots, sample.field[f], st.fields[f]);
+            }
         }
     }
 
@@ -532,13 +537,18 @@ ov::str Modulator::derive_glsl(const Cascade::Spec &p_spec) const {
     if (sample.count > 0) {
         code += "    {\n";
         for (size_t b = 0; b < table.biomes.size(); b++) {
-            if (sample.curve[b] >= 0) {
-                code += put_carry_glsl(p_spec, sample.curve[b], ov::format("w%d", int64_t(b)), "        ");
+            if (sample.weight[b] >= 0) {
+                code += put_carry_glsl(p_spec, sample.weight[b], ov::format("w%d", int64_t(b)), "        ");
             }
         }
         if (sample.pick >= 0) {
             code += pick_statements_glsl(table, "pk");
             code += put_carry_glsl(p_spec, sample.pick, "vec4(0.0, 0.0, 0.0, pk)", "        ");
+        }
+        for (size_t f = 0; f < table.fields.size(); f++) {
+            if (sample.field[f] >= 0) {
+                code += put_carry_glsl(p_spec, sample.field[f], ov::format("f%d", int64_t(f)), "        ");
+            }
         }
         code += "    }\n";
     }

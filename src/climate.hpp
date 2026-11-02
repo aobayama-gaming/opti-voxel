@@ -139,6 +139,48 @@ constexpr double BLEND_SLOPE = 6.7;
 // max |curve| (its cubic segments overshoot their points; validate's bound).
 float curve_bound(const Curve &p_curve);
 
+// A biome's sample program (the biome compiler's, biome_compiler.cpp): what its graph does past its notes' mix, at each
+// sample, on the blended ground H (the cascade's ground channels: every biome's notes, sum_b w_b of their terms) and the
+// fields. Registers in order, dual numbers (gradient, value) with the climate's flushed ops (Cascade::dadd, dmul, ...;
+// GLSL cl_*), op for op on the GPU (ground_glsl). Its term at a sample is D = f(H) - H, the ground
+// h = H + sum_b w_b D_b (ground_value); a curve of H alone is D = C(H) itself (eval_curve: the curves' bits).
+//   GROUND: H. CONST: value (LOD0 voxels). FIELD: field `index`'s value (carried to the samples, SampleCarry::field).
+//   ADD, SUB, MUL: a op b. MIN, MAX: the whole register with the smaller / larger value (b < a ? b : a).
+//   SMIN, SMAX: Quilez's polynomial smooth min / max of a and b over `value` voxels (k > 0).
+//   CURVE: a + curves[index](a), the curve's R(a).
+enum class SampleOp : uint8_t {
+    GROUND,
+    CONST,
+    FIELD,
+    ADD,
+    SUB,
+    MUL,
+    MIN,
+    MAX,
+    SMIN,
+    SMAX,
+    CURVE,
+};
+struct SampleInstr {
+    SampleOp op = SampleOp::GROUND;
+    int a = -1;
+    int b = -1;
+    float value = 0.0f;
+    int index = 0;
+};
+struct SampleProgram {
+    std::vector<SampleInstr> code; // empty: no term (D = 0); the last register is f
+    std::vector<Curve> curves;
+    // Bounds of its term (validate, skirts; biome_compiler.cpp): max |D| (LOD0 voxels), max |dD/dH|, max |dD/df| per field.
+    double bound = 0.0;
+    double slope = 0.0;
+    double field_slope[MAX_FIELDS] = {};
+    bool empty() const { return code.empty(); }
+    // A curve of H alone: D is eval_curve(curves[0], H) itself.
+    bool curve_of_ground() const { return code.size() == 2 && code[0].op == SampleOp::GROUND && code[1].op == SampleOp::CURVE && code[1].a == 0; }
+    bool reads_field(int p_field) const;
+};
+
 // A biome's ground look (its material, biome_material): albedo on gentle slopes and on steep ones (linear colours),
 // roughness. The default is the page shader's procedural ground.
 struct Surface {
@@ -148,9 +190,8 @@ struct Surface {
 };
 
 // A biome: where it is (its axes in the fields' space), how it plays the ground's notes (amps: what its graph mixes,
-// biome_compiler.cpp), its height curve and its look. The curve remaps the ground height h at each sample: h + C(h), C the curve through the points (h_i, R_i - h_i)
-// of the format's [h, R(h)] (LOD0 voxels, constant past the ends: R - h holds), blended by the biome's weight
-// (ground_value). Without points, C = 0.
+// biome_compiler.cpp), what it does past them at each sample (its program: curves through the format's [h, R(h)] as
+// C = R - h, LOD0 voxels, constant past the ends; min / max, products, fields) and its look.
 // The clouds over a biome ("clouds"; CloudClimate): the sky's cover there and the cloud type (Schneider's: stratus 0,
 // stratocumulus 0.5, cumulus 1), both in [0, 1]. Unset: the sky's cover and the weather noise's type.
 struct BiomeClouds {
@@ -163,7 +204,7 @@ struct Biome {
     ov::str name;
     std::vector<Axis> at; // sorted by field; empty for the last (default) biome only
     std::vector<Amp> amps;
-    Curve curve; // empty: none
+    SampleProgram program; // empty: none
     Surface surface;
     BiomeClouds clouds;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
@@ -181,8 +222,8 @@ struct Table {
     int field_index(const ov::str &p_name) const;
     // Whether a biome weights a band by the multifractal state: the combined spec carries one more field group for it.
     bool has_state() const;
-    // Whether a biome has a curve: the ground at a sample is then more than the cascade's (ground_value).
-    bool has_curves() const;
+    // Whether a biome has a sample program: the ground at a sample is then more than the cascade's (ground_value).
+    bool has_programs() const;
     // Whether a ground note is stretched along the base's up.
     bool has_stretch() const;
 };
@@ -263,19 +304,21 @@ struct State {
 void state(const Table &p_table, const float p_slots[Cascade::SLOTS], State &r_state);
 
 // The carry groups of a table's sample terms, the first of Modulation's carry (the bands' amplitudes follow): derived on
-// a run's level above its last (Cascade::Modulation::derive) and read by its samples. curve[b]: biome b's weight if it
-// has a curve; pick: the biome (its index in the value, copied from the floor parent, not interpolated). -1: none.
+// a run's level above its last (Cascade::Modulation::derive) and read by its samples. weight[b]: biome b's weight if it
+// has a sample program; pick: the biome (its index in the value, copied from the floor parent, not interpolated);
+// field[f]: field f's value if a program reads it. -1: none.
 struct SampleCarry {
-    int curve[MAX_BIOMES];
+    int weight[MAX_BIOMES];
     int pick = -1;
+    int field[MAX_FIELDS];
     int count = 0;
 };
 SampleCarry sample_carry(const Table &p_table);
 // Carry group p_c of `Ch <p_ch>` in p_spec's GPU layout (Spec::gpu_carry) as a (gradient, value) vec4: to_float4's twin.
 ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c);
 
-// The ground at a sample: the cascade's ground channels h of p_slots (a point's slots), then h + sum_b w_b C_b(h) over
-// the biomes with a curve, w_b carried (SampleCarry). Without curves, the cascade's channels, bit for bit.
+// The ground at a sample: the cascade's ground channels H of p_slots (a point's slots), then H + sum_b w_b D_b(H) over
+// the biomes with a sample program, w_b carried (SampleCarry). Without programs, the cascade's channels, bit for bit.
 Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
 // The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
 // shared helpers (splices_helpers is true with ground terms), ch in p_combined's GPU layout.

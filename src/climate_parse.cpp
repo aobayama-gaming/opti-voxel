@@ -347,7 +347,7 @@ private:
     }
 
     // A curve node's "points": [[h, R], ...] (metres, h increasing): C = R - h through the points, in LOD0 voxels.
-    void curve(const ov::Value &p_d, const ov::str &p_where, Biome &r_b) {
+    void curve(const ov::Value &p_d, const ov::str &p_where, Curve &r_c) {
         const ov::Value pts = array(p_d, "points", p_where);
         std::vector<double> x, y;
         for (int64_t i = 0; i < int64_t(pts.size()); i++) {
@@ -372,7 +372,7 @@ private:
             fail(p_where, "a curve has at least 2 points.");
             return;
         }
-        r_b.curve = make_curve(x, y);
+        r_c = make_curve(x, y);
     }
 
     // A biome's "at": per field, [centre, span] or { "min", "max" }; the axes sorted by field (the weights' op order).
@@ -458,8 +458,107 @@ private:
         note(*n, p_where + ov::str(" note '") + (*n)["id"].as_str() + ov::str("'"), r_row.note);
     }
 
-    // A biome's "graph": its nodes by id, the output's height read back through a curve (optional) to a mix of rows,
-    // or one row.
+    static bool is_spine(const ov::Value *p_n) {
+        return is_kind(p_n, "mix") || is_kind(p_n, "note") || is_kind(p_n, "warp") || is_kind(p_n, "shape") || is_kind(p_n, "multifractal");
+    }
+
+    // The notes' spine p_n (a mix of rows, or one row) into r_g's rows.
+    void spine(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, BiomeGraph &r_g) {
+        if (!is_kind(p_n, "mix")) {
+            r_g.rows.emplace_back();
+            row(p_nodes, p_n, p_where, r_g.rows.back());
+            return;
+        }
+        const ov::str mix_where = p_where + ov::str(" mix '") + (*p_n)["id"].as_str() + ov::str("'");
+        if (!keys(*p_n, mix_where, { "id", "kind", "pos", "rows" })) {
+            return;
+        }
+        const ov::Value rows = array(*p_n, "rows", mix_where);
+        for (int64_t i = 0; i < int64_t(rows.size()) && error.empty(); i++) {
+            const ov::str where = mix_where + ov::format(" row %d", i);
+            const ov::Value r = dict(rows[i], where);
+            if (!keys(r, where, { "in", "x" })) {
+                return;
+            }
+            r_g.rows.emplace_back();
+            r_g.rows.back().x = float(number(r, "x", where, 1.0));
+            row(p_nodes, input(p_nodes, r, "in", where), where, r_g.rows.back());
+        }
+    }
+
+    // How a graph is read back from its output: the notes' spine (one per biome), the program's GROUND register.
+    struct Reading {
+        ov::str spine;
+        int ground = -1;
+        int depth = 0;
+    };
+
+    // Node p_n's register in r_b's program (SampleProgram): the notes' spine is GROUND (its rows into r_g), the other
+    // kinds their ops on what they read: "constant" value_m, "field" (a climate field's value), "add" / "subtract" /
+    // "multiply" / "min" / "max" (a, b), "smin" / "smax" (a, b, k_m), "curve" (in, points).
+    int expr(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, BiomeGraph &r_g, Reading &r_read) {
+        if (!error.empty() || p_n == nullptr) {
+            return -1;
+        }
+        SampleProgram &pr = r_b.program;
+        const ov::str id = (*p_n)["id"].as_str();
+        const ov::str kind = (*p_n)["kind"].as_str();
+        const ov::str where = p_where + ov::str(" node '") + id + ov::str("'");
+        auto emit = [&](SampleOp p_op, int p_a = -1, int p_b = -1, float p_value = 0.0f, int p_index = 0) {
+            pr.code.push_back(SampleInstr{ p_op, p_a, p_b, p_value, p_index });
+            return int(pr.code.size()) - 1;
+        };
+        if (++r_read.depth > 4096) {
+            fail(where, "the graph loops.");
+            return -1;
+        }
+        if (is_spine(p_n)) {
+            if (r_read.spine.empty()) {
+                r_read.spine = id;
+                spine(p_nodes, p_n, p_where, r_g);
+                r_read.ground = emit(SampleOp::GROUND);
+            } else if (r_read.spine != id) {
+                fail(where, "a biome mixes its notes once: one mix (or one row) that its other nodes read.");
+            }
+            return r_read.ground;
+        }
+        if (kind == "constant") {
+            return keys(*p_n, where, { "id", "kind", "pos", "value_m" }) ? emit(SampleOp::CONST, -1, -1, float(number(*p_n, "value_m", where) / ground.voxel_size)) : -1;
+        }
+        if (kind == "field") {
+            return keys(*p_n, where, { "id", "kind", "pos", "field" }) ? emit(SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, int(table.fields.size()), "a field")) : -1;
+        }
+        static const std::pair<const char *, SampleOp> BINARY[] = { { "add", SampleOp::ADD }, { "subtract", SampleOp::SUB }, { "multiply", SampleOp::MUL }, { "min", SampleOp::MIN },
+            { "max", SampleOp::MAX }, { "smin", SampleOp::SMIN }, { "smax", SampleOp::SMAX } };
+        for (const auto &[name, op] : BINARY) {
+            if (kind != name) {
+                continue;
+            }
+            const bool smooth = op == SampleOp::SMIN || op == SampleOp::SMAX;
+            if (!(smooth ? keys(*p_n, where, { "id", "kind", "pos", "a", "b", "k_m" }) : keys(*p_n, where, { "id", "kind", "pos", "a", "b" }))) {
+                return -1;
+            }
+            const float k = smooth ? float(number(*p_n, "k_m", where) / ground.voxel_size) : 0.0f;
+            const int a = expr(p_nodes, input(p_nodes, *p_n, "a", where), p_where, r_b, r_g, r_read);
+            const int b = expr(p_nodes, input(p_nodes, *p_n, "b", where), p_where, r_b, r_g, r_read);
+            return error.empty() ? emit(op, a, b, k) : -1;
+        }
+        if (kind == "curve") {
+            if (!keys(*p_n, where, { "id", "kind", "pos", "in", "points" })) {
+                return -1;
+            }
+            const int a = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_g, r_read);
+            Curve c;
+            curve(*p_n, where, c);
+            pr.curves.push_back(c);
+            return error.empty() ? emit(SampleOp::CURVE, a, -1, 0.0f, int(pr.curves.size()) - 1) : -1;
+        }
+        fail(where, "'" + kind + ov::str("' is not a node kind (note, warp, shape, multifractal, mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, output)."));
+        return -1;
+    }
+
+    // A biome's "graph": its nodes by id, read back from the output's height (expr): the notes' spine into r_g, the rest
+    // into the biome's sample program (none when the height is the spine itself).
     void graph(const ov::Value &p_d, const ov::str &p_where, Biome &r_b, BiomeGraph &r_g) {
         if (!keys(p_d, p_where, { "nodes" })) {
             return;
@@ -490,33 +589,13 @@ private:
             return;
         }
         if (out == nullptr || !keys(*out, p_where + ov::str(" output"), { "id", "kind", "pos", "height" })) {
-            fail(p_where, "a graph has an output node, its 'height' a mix, a curve of one, or one row.");
+            fail(p_where, "a graph has an output node, its 'height' what the biome's ground is.");
             return;
         }
-        const ov::Value *n = input(nodes, *out, "height", p_where);
-        if (is_kind(n, "curve") && keys(*n, p_where + ov::str(" curve"), { "id", "kind", "pos", "in", "points" })) {
-            curve(*n, p_where + ov::str(" curve"), r_b);
-            n = error.empty() ? input(nodes, *n, "in", p_where) : nullptr;
-        }
-        if (!is_kind(n, "mix")) {
-            r_g.rows.emplace_back();
-            row(nodes, n, p_where, r_g.rows.back());
-            return;
-        }
-        const ov::str mix_where = p_where + ov::str(" mix '") + (*n)["id"].as_str() + ov::str("'");
-        if (!keys(*n, mix_where, { "id", "kind", "pos", "rows" })) {
-            return;
-        }
-        const ov::Value rows = array(*n, "rows", mix_where);
-        for (int64_t i = 0; i < int64_t(rows.size()) && error.empty(); i++) {
-            const ov::str where = mix_where + ov::format(" row %d", i);
-            const ov::Value r = dict(rows[i], where);
-            if (!keys(r, where, { "in", "x" })) {
-                return;
-            }
-            r_g.rows.emplace_back();
-            r_g.rows.back().x = float(number(r, "x", where, 1.0));
-            row(nodes, input(nodes, r, "in", where), where, r_g.rows.back());
+        Reading read;
+        expr(nodes, input(nodes, *out, "height", p_where), p_where, r_b, r_g, read);
+        if (r_b.program.code.size() == 1 && r_b.program.code[0].op == SampleOp::GROUND) {
+            r_b.program = SampleProgram(); // the notes alone: no term at the samples
         }
     }
 

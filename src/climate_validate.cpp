@@ -168,25 +168,35 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
             return where + ov::format("'at' on '%s': centre or span out of range.", p_table.fields[size_t(a.field)].name);
         }
     }
-    if (b.curve.empty()) {
+    if (b.program.empty()) {
         return validate_amps(p_table, p_ground, b, where);
     }
-    // The curve's offset R - h: under the ground's amplitude cap (what the skirts and the cascade's own bands are held
-    // to), in the exact range.
-    const double bound = double(curve_bound(b.curve));
-    if (bound > p_ground.amp_cap || (bound > 0.0 && !ExactNoise::in_exact_range(float(bound)))) {
-        return where + ov::format("its curve moves the ground by up to %s voxels, over the ground's cap of %s.", bound, p_ground.amp_cap);
+    // The program's term D = f(H) - H (a curve's offset R - h): under the ground's amplitude cap (what the skirts and the
+    // cascade's own bands are held to), in the exact range.
+    const SampleProgram &pr = b.program;
+    const char *what = pr.curve_of_ground() ? "its curve" : "its graph past its notes";
+    if (pr.bound > p_ground.amp_cap || (pr.bound > 0.0 && !ExactNoise::in_exact_range(float(pr.bound)))) {
+        return where + ov::format("%s moves the ground by up to %s voxels, over the ground's cap of %s.", what, pr.bound, p_ground.amp_cap);
     }
-    // Its slope scales the ground's gradient (1 + w C') and its step at the seams (ground_step): a cliff in the curve
+    // Its slope scales the ground's gradient (1 + w dD/dH) and its step at the seams (ground_step): a cliff in a curve
     // would outgrow the skirts and the distance estimate.
-    const double slope = double(curve_slope_bound(b.curve));
-    if (slope > MAX_CURVE_SLOPE) {
-        return where + ov::format("its curve's offset R - h has a slope up to %s, over %s: spread its points.", slope, MAX_CURVE_SLOPE);
+    if (pr.slope > MAX_CURVE_SLOPE) {
+        return where + ov::format("%s has a slope up to %s on the ground (a curve's offset R - h), over %s: spread its points.", what, pr.slope, MAX_CURVE_SLOPE);
     }
-    // Points all past the heights the ground reaches make the curve a constant offset (a wrong unit or sign).
+    // Points all past the heights the ground reaches make a curve a constant offset (a wrong unit or sign).
     const double reach = ground_reach(p_table);
-    if (reach > 0.0 && (double(b.curve.x.front()) > reach || double(b.curve.x.back()) < -reach)) {
-        return where + ov::format("its curve's points are outside the ground's heights (|h| <= %s voxels): it would be a constant.", reach);
+    for (const Curve &c : pr.curves) {
+        if (reach > 0.0 && (double(c.x.front()) > reach || double(c.x.back()) < -reach)) {
+            return where + ov::format("its curve's points are outside the ground's heights (|h| <= %s voxels): it would be a constant.", reach);
+        }
+    }
+    for (const SampleInstr &in : pr.code) {
+        if ((in.op == SampleOp::SMIN || in.op == SampleOp::SMAX) && !(moderate(in.value) && in.value > 0.0f)) {
+            return where + ov::str("a smooth min / max's k is > 0.");
+        }
+        if ((in.op == SampleOp::CONST && in.value != 0.0f && !moderate(in.value)) || (in.op == SampleOp::FIELD && (in.index < 0 || in.index >= int(p_table.fields.size())))) {
+            return where + ov::str("a constant out of range, or a field that doesn't exist.");
+        }
     }
     return validate_amps(p_table, p_ground, b, where);
 }
