@@ -5,7 +5,8 @@ extends SubViewportContainer
 ## (Cascade::ShaderParams), so a world whose structure didn't change builds no pipeline, and the time is the reload of
 ## the chunks in view. A drag restarts it as often as the loads keep up. The view holds the last terrain's frame (a
 ## copy over it: a SubViewport stopped with UPDATE_DISABLED showed black, noise and stripes, not its last frame) until the
-## new one's chunks are loaded (no blank ground between them). Without the world's clouds (their shadows).
+## new one's chunks are loaded (no blank ground between them). Without the world's clouds (their shadows),
+## trees, rocks and features (half the workers' time and the 10-33 ms instance lists of a drag's frames).
 ## The chunks load round the orbit's pivot (VoxelTerrain.set_lod_centre), from the LOD the camera's distance needs there
 ## (lod_view_min) to LOD_VIEW_MAX, which at the pixel error reaches ~6.7 km from it.
 ## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
@@ -127,7 +128,7 @@ func _restart_terrain() -> void:
 		if profile.has("hold_ms"):
 			profile.hold_ms.append((Time.get_ticks_usec() - _restart_usec) / 1000.0)
 		_unshift_camera()  # the world starts again at its first render origin
-		_terrain.restart_world(_without_clouds(_json), _dir)
+		_terrain.restart_world(_view_world(_json), _dir)
 	else:
 		_terrain = ClassDB.instantiate("VoxelTerrain")
 		_terrain.pipeline_mode = 2
@@ -138,7 +139,7 @@ func _restart_terrain() -> void:
 		# of their own, ~9 s per restart (the driver, not glslang), for a view of a few hundred chunks.
 		_terrain.discoverer_mode = 0
 		_terrain.walk_gpu = false
-		_terrain.set_world_json(_without_clouds(_json), _dir)
+		_terrain.set_world_json(_view_world(_json), _dir)
 		_terrain.origin_shifted.connect(func(p_shift: Vector3) -> void:
 			_target -= p_shift
 			_shifted += p_shift)
@@ -153,12 +154,18 @@ func _restart_terrain() -> void:
 	status_changed.emit()
 
 
-# p_json with its look's clouds off: over a view of kilometres their shadows hide the ground's relief.
-static func _without_clouds(p_json: String) -> String:
+# p_json as the view draws it: its look's clouds off (over a view of kilometres their shadows hide the ground's relief)
+# and no instances or features, the world's nor a biome's ([] is none; the view shows the ground being edited).
+static func _view_world(p_json: String) -> String:
 	var world: Dictionary = JSON.parse_string(p_json)
 	var look: Dictionary = world.get("look", {})
 	look["clouds"] = false
 	world["look"] = look
+	world["instances"] = []
+	world["features"] = []
+	for biome: Dictionary in world.get("biomes", []):
+		biome["instances"] = []
+		biome["features"] = []
 	return JSON.stringify(world)
 
 
