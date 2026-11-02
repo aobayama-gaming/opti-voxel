@@ -343,8 +343,12 @@ private:
     void add_source(const Archetype::CellScatter &p_source, const ov::str &p_name, ov::Value &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
     // The sources as keys of a stream whose slots start at p_slot_base, and their stats.
     void add_stream(uint32_t p_slot_base, ov::Value &r_stats);
-    // The zone's box (Zone): its square round the ground under its centre, 4 half sides up and down.
-    VoxelBox zone_box() const;
+    // The zone's box (Zone): its square round the ground under its centre (p_on_base: the base's point there), 4 half
+    // sides up and down.
+    VoxelBox zone_box(bool p_on_base = false) const;
+    // The biome features' sites in the zone: each kind and cell the lists name, its candidates (Biome::sites) where
+    // their biome's entry keeps them (BiomePick; the world's list for a biome that lists none), at its radius.
+    std::vector<Biome::Site> feature_sites() const;
     // The biome features in the zone, appended to the records, and their stats.
     void add_biomes(const Types &p_types, ov::Value &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.

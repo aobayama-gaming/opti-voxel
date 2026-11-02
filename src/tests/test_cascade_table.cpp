@@ -5,6 +5,8 @@
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
 
+#include "ov/json.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -874,4 +876,34 @@ TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants 
     }
     CHECK(glsl_reserved_words_used("float active; /* sample */ int x; // patch\nuint flat;") == std::vector<std::string>{ "active", "flat" });
     CHECK(glsl_reserved_words_used("uint ok; /* unterminated sample") == std::vector<std::string>());
+}
+
+// The features' candidates are the base's points: a zone over high ground still holds them (its box centred on the base;
+// centred on the ground, it ended above the base), and a cell too large is refused.
+TEST_CASE("SDFCascade table: a zone over ground far above the base keeps its features") {
+    ChunkParam param;
+    param.voxel_size = 0.5f;
+    SDFCascade probe;
+    probe.configure(param, 15);
+    const double side_m = 60.0; // its box reaches 2 sides up and down from its centre
+    double x_m = 0.0, z_m = 0.0;
+    bool found = false;
+    for (int i = 0; i < 400 && !found; i++) {
+        x_m = -100000.0 + 500.0 * i;
+        z_m = 3000.0 - 250.0 * (i % 7);
+        const VoxelPos g = probe.ground_at(std::llround(x_m / param.voxel_size), std::llround(z_m / param.voxel_size));
+        found = double(probe.get_base().altitude(g)) * param.voxel_size > 2.5 * side_m;
+    }
+    CHECK_OR_RETURN(found);
+    SDFCascade sdf;
+    sdf.set_zone(SDFTable::Zone{ side_m, x_m, z_m });
+    sdf.set_features({ Climate::FeatureShare{ "floating_island", 8.0, 1.0, 2.0, 3.0 } });
+    sdf.configure(param, 15);
+    const ov::Value stats = sdf.get_gpu_table()->get_stats();
+    CHECK_OR_RETURN(stats.has("biomes"));
+    CHECK(stats["biomes"]["floating_island"].as_int() > 0);
+    ov::str json_error;
+    std::vector<Climate::FeatureShare> parsed;
+    CHECK(!Climate::parse_features(ov::parse_json(R"([{"kind": "lava_lake", "cell_m": 1e18, "radius_m": [18, 45]}])", json_error), "features", parsed).empty());
+    CHECK(Climate::parse_features(ov::parse_json(R"([{"kind": "lava_lake", "cell_m": 640, "radius_m": [18, 45]}])", json_error), "features", parsed).empty());
 }

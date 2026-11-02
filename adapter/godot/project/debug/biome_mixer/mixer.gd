@@ -246,6 +246,11 @@ func set_params(p_id: String, p_params: Dictionary, p_rebuild: bool = false) -> 
 		_rebuild_node(p_id)
 	elif graph.has_node(NodePath(p_id)):
 		Nodes.refresh(graph.get_node(NodePath(p_id)), node)
+	queue_recompile()
+
+
+# Several edits in a frame (a slider, a chart drag's motion) compile once, at the frame's end.
+func queue_recompile() -> void:
 	if not compile_queued:
 		compile_queued = true
 		recompile.call_deferred()
@@ -586,7 +591,7 @@ func _build_ui() -> void:
 	left.add_child(graph)
 	left.add_child(world_panel)
 	world_panel.visible = false
-	world_panel.placed.connect(recompile)
+	world_panel.placed.connect(queue_recompile)
 	world_panel.edit_notes.connect(func(b: int) -> void:
 		world.current = b
 		biome_pick.select(b)

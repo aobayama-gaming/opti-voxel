@@ -219,6 +219,10 @@ struct InstanceShare {
 // A feature a biome has (its "features", or the world's for a biome that lists none): a kind's name (biome_features.hpp:
 // lava_lake, floating_island; SDFTable checks it), its cells (cell_m, rounded to a power of two voxels), the chance a
 // cell holds one and its radius range in metres. A kind's entries of one cell size share their cells (SDFTable).
+// The largest cell an instance or a feature entry may have (metres): its cell in LOD0 voxels stays far inside int64 and
+// a shift of one (Biome::cell_shift) at any voxel size the engine takes.
+inline constexpr double MAX_CELL_M = 1e9;
+
 struct FeatureShare {
     ov::str kind;
     double cell_m = 0.0;

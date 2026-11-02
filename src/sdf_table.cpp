@@ -472,9 +472,10 @@ std::vector<SDFTable::Group> SDFTable::groups() const {
     return out;
 }
 
-VoxelBox SDFTable::zone_box() const {
+VoxelBox SDFTable::zone_box(bool p_on_base) const {
     const double vs = param.voxel_size;
-    const VoxelPos centre = ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs));
+    const VoxelPos ground = ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs));
+    const VoxelPos centre = p_on_base ? get_base().on_base(ground) : ground;
     const int64_t half = std::llround(0.5 * zone.side_m / vs);
     const VoxelPos reach(half, 4 * half, half);
     return VoxelBox{ centre - reach, centre + reach, true };
@@ -686,11 +687,7 @@ void SDFTable::add_stream(uint32_t p_slot_base, ov::Value &r_stats) {
     r_stats["stream_setup"] = d;
 }
 
-void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
-    if (!has_features) {
-        return;
-    }
-    const uint64_t start_us = ov::now_usec();
+std::vector<Biome::Site> SDFTable::feature_sites() const {
     const double vs = param.voxel_size;
     // Every list's entries, their kind and cell resolved, and every kind and cell they name with the best chance there.
     struct Entry {
@@ -714,8 +711,8 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
             cells[entry.cell] = ov::max(cells[entry.cell], e.chance);
         }
     }
-    // Each kind and cell's candidates in the zone.
-    const VoxelBox box = zone_box();
+    // Each kind and cell's candidates in the zone (on the base: the sites are its points).
+    const VoxelBox box = zone_box(true);
     const BaseSurface &base = get_base();
     std::vector<Biome::Site> all, sites;
     for (const auto &[cell, chance] : cells) {
@@ -742,6 +739,17 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
             }
         }
     }
+    return sites;
+}
+
+void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
+    if (!has_features) {
+        return;
+    }
+    const uint64_t start_us = ov::now_usec();
+    const double vs = param.voxel_size;
+    const BaseSurface &base = get_base();
+    const std::vector<Biome::Site> sites = feature_sites();
     // Each site samples the ground at a few dozen points (ground_under, const): on the worker pool, kept in site order.
     struct Job {
         const SDFTable *table;

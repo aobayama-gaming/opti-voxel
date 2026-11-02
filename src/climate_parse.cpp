@@ -697,8 +697,8 @@ private:
             s.species = text(e, "species", where);
             s.cell_m = number(e, "cell_m", where);
             const double share = number(e, "share", where, 1.0);
-            if (error.empty() && !(s.cell_m > 0.0 && std::isfinite(s.cell_m))) {
-                fail_key(where, "cell_m", "is a size in metres > 0.");
+            if (error.empty() && !(s.cell_m > 0.0 && s.cell_m <= MAX_CELL_M)) {
+                fail(where, ov::format("'cell_m' is a size in metres > 0, at most %s.", ov::num(MAX_CELL_M)));
             }
             if (error.empty() && !(share >= 1.0 && share < 65536.0 && share == std::floor(share))) {
                 fail(where, "a share is a whole number in [1, 65535].");
@@ -728,8 +728,8 @@ private:
             }
             f.radius_lo_m = r[size_t(0)].as_double();
             f.radius_hi_m = r[size_t(1)].as_double();
-            if (error.empty() && !(f.cell_m > 0.0 && std::isfinite(f.cell_m))) {
-                fail_key(where, "cell_m", "is a size in metres > 0.");
+            if (error.empty() && !(f.cell_m > 0.0 && f.cell_m <= MAX_CELL_M)) {
+                fail(where, ov::format("'cell_m' is a size in metres > 0, at most %s.", ov::num(MAX_CELL_M)));
             }
             if (error.empty() && !(f.chance >= 0.0 && f.chance <= 1.0)) {
                 fail_key(where, "chance", "is in [0, 1].");

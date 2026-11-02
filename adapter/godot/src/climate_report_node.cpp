@@ -61,6 +61,9 @@ Dictionary ClimateReportNode::preview(const String &p_json, const String &p_dir,
 PackedFloat32Array ClimateReportNode::curve(const Array &p_points, const PackedFloat32Array &p_xs, double p_voxel_m) {
     std::vector<double> h, r;
     for (int64_t i = 0; i < p_points.size(); i++) {
+        if (p_points[i].get_type() != Variant::ARRAY || Array(p_points[i]).size() != 2) {
+            return p_xs;
+        }
         const Array p = p_points[i];
         h.push_back(double(p[0]));
         r.push_back(double(p[1]));
@@ -86,6 +89,6 @@ Dictionary ClimateReportNode::template_notes(double p_voxel_m, int p_lods) {
     d["k_min"] = ExactNoise::BAND_SHIFT;
     d["k_top"] = ov::min(Climate::template_top(p_voxel_m), SDFCascade::top_octave(p_lods));
     d["octave_top"] = SDFCascade::top_octave(p_lods);
-    d["core"] = 1.0 / std::sqrt(double(Climate::KERNEL_FADE));
+    d["core"] = std::sqrt(1.0 - 1.0 / double(Climate::KERNEL_FADE)); // smoothstep(clamp((1 - u^2) KERNEL_FADE)) is 1 up to there
     return d;
 }
