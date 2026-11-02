@@ -85,7 +85,7 @@ private:
     CullMode cull_mode = CULL_LEGACY;
     bool use_cache = true;
     CullCache cache;
-    bool want_gpu = false; // discoverer_mode 1: corners on LocalPointsGPU
+    LocalGpuThread *gpu_thread = nullptr; // discoverer_mode 1: corners on LocalPointsGPU, on this thread's device
     static constexpr uint32_t GPU_POINTS = 65536; // corners per GPU batch (a wave above it is split)
     bool compare = false; // --discovery_compare: diff every scan against a fresh CPU scan
     // Owned by the worker: created in enter(), freed in exit(), on its thread.
@@ -239,9 +239,9 @@ public:
         use_cache = p_enable;
         cache.verify = p_verify;
     }
-    // Corners on the GPU (LocalPointsGPU; CPU with one warning if it can't be created) and the debug diff
-    // against a fresh CPU scan.
-    void set_gpu(bool p_enable) { want_gpu = p_enable; }
+    // Corners on the GPU, on p_thread's device (LocalPointsGPU; null or no device: the CPU, with one warning if it
+    // can't be created; it must outlive stop), and the debug diff against a fresh CPU scan.
+    void set_gpu(LocalGpuThread *p_thread) { gpu_thread = p_thread; }
     void set_compare(bool p_enable) { compare = p_enable; }
 
     // ov::WorkerLoop: the GPU discoverer's device (enter, exit) and one scan per wake (step).

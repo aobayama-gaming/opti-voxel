@@ -150,7 +150,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     chunk_discoverer->set_config(chunk_param, sdf.get());
     chunk_discoverer->set_cull_mode(ChunkDiscoverer::CullMode(config.discovery_cull_mode));
     chunk_discoverer->set_cache(config.discovery_cache, config.discovery_verify);
-    chunk_discoverer->set_gpu(config.discoverer_mode != 0);
+    if (config.discoverer_mode != 0 && points_gpu == nullptr) {
+        points_gpu = LocalGpuThread::create();
+    }
+    chunk_discoverer->set_gpu(config.discoverer_mode != 0 ? points_gpu.get() : nullptr);
     chunk_discoverer->set_compare(config.discovery_compare);
     // The pixel error is measured against the camera's vertical FOV and the 3D render's height. The view cone holds the
     // frustum: its half-angle is the half-FOV along the screen diagonal.
@@ -814,14 +817,16 @@ ov::Value World::debug_stats() {
     return d;
 }
 
-void World::stop(QuadPagePool **r_pages) {
+void World::stop(Kept *r_kept) {
     QuadPagePool *pages = std::exchange(reused_pages, nullptr); // no mesher took them: start failed or never ran
     if (!started) {
-        if (r_pages != nullptr) {
-            *r_pages = pages;
+        if (r_kept != nullptr) {
+            r_kept->pages = pages;
+            r_kept->points_gpu = std::move(points_gpu);
         } else if (pages != nullptr) {
             pages->destroy();
         }
+        points_gpu.reset();
         return;
     }
     if (pages != nullptr) {
@@ -841,9 +846,13 @@ void World::stop(QuadPagePool **r_pages) {
 
     {
         OV_TRACE("world", "stop_discoverer");
-        chunk_discoverer->stop();
+        chunk_discoverer->stop(); // its passes freed on the GPU thread's device, parked there
         delete chunk_discoverer;
         chunk_discoverer = nullptr;
+        if (r_kept != nullptr) {
+            r_kept->points_gpu = std::move(points_gpu);
+        }
+        points_gpu.reset(); // its thread frees the device
     }
     sdf->stop_field_gpu(); // its thread frees its device; a walk still computing falls back to the CPU's field
 
@@ -865,13 +874,13 @@ void World::stop(QuadPagePool **r_pages) {
         atmosphere = nullptr;
     }
     if (direct_mesher) {
-        QuadPagePool *kept = direct_mesher->destroy(r_pages != nullptr); // deletes itself on the device's thread
-        if (r_pages != nullptr) {
-            *r_pages = kept;
+        QuadPagePool *kept = direct_mesher->destroy(r_kept != nullptr); // deletes itself on the device's thread
+        if (r_kept != nullptr) {
+            r_kept->pages = kept;
         }
         direct_mesher = nullptr;
-    } else if (r_pages != nullptr) {
-        *r_pages = nullptr;
+    } else if (r_kept != nullptr) {
+        r_kept->pages = nullptr;
     }
     if (gpu_mesher) {
         gpu_mesher->stop();

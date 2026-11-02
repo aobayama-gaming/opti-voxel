@@ -209,25 +209,31 @@ computes no terrain and has no node kind the engine hasn't.
   threads), behind the terrain's: at HIGH the main thread's `GpuTable::build_lists` waited behind the map's rows, up
   to 40 ms a frame. *3D* (on by default, `terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
   Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file). An edit restarts its world in
-  place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it, or once
-  the last restart's chunks in view are loaded (at most 1 s later): a slider drag shows each load. The climate's
+  place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it (not
+  pushed back by the next edits: maps every ~40 ms kept it from firing), or once the last restart's chunks in view are
+  loaded (at most 1 s later): a slider drag shows each load. The climate's
   numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a value builds no pipeline: the
   device parks the pipelines the old world frees, by text, and its buffers and textures by shape, and the new world
   takes those of the same text or shape (`RDDevice::park`); the page pool goes from the old world to the new
-  (`World::reuse_pages`, `docs/pipelines.md`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
+  (`World::reuse`, `docs/pipelines.md`), and so does the GPU discoverer's local device on its thread
+  (`docs/discovery-lod.md`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
   every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (a copy of it shown over the viewport, which renders
   on below, until the chunks in view are loaded, at most 1 s: a SubViewport stopped with `UPDATE_DISABLED` showed
   black, noise and stripes): no blank ground between two loads. It loads round the orbit's pivot
   (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-10 only
   (`lod_view_max`: 1.6 km chunks, the orbit's tens of km). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
-  ~10% shorter), its world's clouds are off (their shadows hid the relief over kilometres), and its discoverer and
-  site walk run on the CPU (their GPU variants build their pipelines on a local device of their own: ~9 s per
-  restart, the driver). Measured at 25 LODs, before the LOD cap (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX
+  ~10% shorter), its world's clouds, instances and features are off (the clouds' shadows hid the relief over kilometres;
+  the instance stream took half the workers' time of a drag and 10-33 ms of some frames' `GpuTable::build_lists`), its
+  discoverer runs on the GPU (its device kept across restarts: a scan ~1.5 ms, 46 on the CPU behind the map's rows; the
+  first world pays the device and its pipelines, ~2 s, and an edit in those seconds waits for them) and its site walk
+  on the CPU (its device is still made per world). Measured at 25 LODs, before the LOD cap (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX
   3070 laptop): World mode (~400 km) 0.89 s, then 0.18 and 0.18 s; the mountain alone 0.76 s, then 0.22 and 0.18 s
   (were 1.2-1.3 s: a new node each, its start 1.05 s in one frame, 0.4 s the mesher's pipelines, 0.4 s the cascade's,
   0.2 s zeroing its buffers on the CPU). Now the restart is ~12 ms of one frame (`restart_world` p50 over a 20 s drag;
   was 46 ms: 11 freeing ~150 pages, 4 making 64, 9 the palette texture's 8 MB of zeros from the CPU, ~20 allocating the
-  mesher's buffers and textures), then ~3,000 chunks over 25 LODs load in ~170 ms at 16-26 ms a frame; the view after a restart is the first
+  mesher's buffers and textures). A 20 s slider drag (no instances): the CPU discoverer, 49 restarts, the chunks in view
+  loaded 129 ms (p50) after an edit, 345 ms p95; the GPU one kept, 114 restarts, 100 ms, 371 ms p95 (the scan 46 ->
+  1.5 ms; 43 fps, the restarts' frames, 50 with the CPU one). Before the LOD cap, ~3,000 chunks over 25 LODs load in ~170 ms at 16-26 ms a frame; the view after a restart is the first
   load's, pixel for pixel. Orbit, pan and zoom move the camera. *Open in game* writes the world
   (`user://biome_mixer_game.world.json`) and runs the main scene on it (`--world=`) in a second Godot.
 - **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written

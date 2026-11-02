@@ -107,7 +107,8 @@ func show_world(p_json: String, p_dir: String, p_frame: bool, p_extent_km: float
 func _schedule_restart() -> void:
 	if _json != _started and is_visible_in_tree() and RenderingServer.get_rendering_device() != null:
 		loaded_ms = -1
-		_restart.start()
+		if _restart.is_stopped():  # not pushed back: maps faster than RESTART_AFTER (a drag's) would never let it fire
+			_restart.start()
 
 
 # The terrain restarted on the world it shows (an edit's path, the same structure: every pipeline kept), now.
@@ -135,9 +136,10 @@ func _restart_terrain() -> void:
 		_terrain.lod_pixel_error = LOD_PIXEL_ERROR
 		_terrain.lod_far_limit = true
 		_terrain.lod_view_max = LOD_VIEW_MAX
-		# The discoverer and the site walk on the CPU: their GPU variants build their point pipelines on a local device
-		# of their own, ~9 s per restart (the driver, not glslang), for a view of a few hundred chunks.
-		_terrain.discoverer_mode = 0
+		# The discoverer on the GPU: its local device is kept across restarts (World::Kept), a scan ~1.5 ms (46 on the
+		# CPU); only the first world pays the device and its point pipelines (~2 s). The site walk on the CPU: its
+		# device is made per world (~2 s a restart), and the view draws no instances.
+		_terrain.discoverer_mode = 1
 		_terrain.walk_gpu = false
 		_terrain.set_world_json(_view_world(_json), _dir)
 		_terrain.origin_shifted.connect(func(p_shift: Vector3) -> void:

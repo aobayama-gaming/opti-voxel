@@ -50,13 +50,12 @@ public:
     void post(std::function<void()> p_fn) override;
     void free(ov::gpu::Handle p_handle) override;
 
-    // A world restarting on this device (on the device's thread): from park on, a pipeline freed is kept by its text, a
-    // buffer or a texture made without data by its shape, and one of the same text or shape created takes it instead of
-    // being built again (the driver's compile; the mesher's hundreds of MB of scratch: a start's allocations). A buffer
-    // taken is cleared or written as a new one would be, a texture keeps its texels (a new one's are undefined).
-    // drop_parked frees those not taken.
-    void park() { parking = true; }
-    void drop_parked();
+    // Device::park: from park on, a pipeline freed is kept by its text, a buffer or a texture made without data by its
+    // shape, and one of the same text or shape created takes it instead of being built again (the driver's compile; the
+    // mesher's hundreds of MB of scratch: a start's allocations). A buffer taken is cleared or written as a new one would
+    // be, a texture keeps its texels (a new one's are undefined). drop_parked frees those not taken.
+    void park() override { parking = true; }
+    void drop_parked() override;
 
 private:
     // What a parked buffer or texture is taken for: its kind (1: buffer, 2: 2D, 3: 3D texture) with the buffer kind or the

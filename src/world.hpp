@@ -8,6 +8,7 @@
 #include "clouds.hpp"
 #include "debug_log.hpp"
 #include "gpu_device.hpp"
+#include "local_gpu_thread.hpp"
 #include "mesh_host.hpp"
 #include "mesh_validator.hpp"
 #include "page_auditor.hpp"
@@ -120,12 +121,21 @@ public:
     // than its frustum's corners reach (far / cos of the diagonal half-FOV), in any direction, is scanned (ChunkMath::beyond_far).
     // p_load_centre: where the LOD rings centre (render space, null: the camera), e.g. an orbit view's pivot.
     void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0, const Float3 *p_load_centre = nullptr);
-    // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer. r_pages: GPU
-    // Direct's page pool is kept and returned there instead (a pool handed to reuse_pages, or null).
-    void stop(QuadPagePool **r_pages = nullptr);
-    // The page pool of a world stopped before (stop(&pages)) for the next start's mesher: a restart on the same device
-    // and host then neither frees nor makes a page. Freed by stop if no start took it.
-    void reuse_pages(QuadPagePool *p_pages) { reused_pages = p_pages; }
+    // What a stopped world hands to the next one's start (stop(&kept), reuse(kept)), so that a restart on the same
+    // device and host neither frees nor makes them: GPU Direct's page pool (a pool handed to reuse, or null) and the GPU
+    // discoverer's device on its thread (or null).
+    struct Kept {
+        QuadPagePool *pages = nullptr;
+        std::unique_ptr<LocalGpuThread> points_gpu;
+    };
+    // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer. r_kept: what it
+    // keeps for the next world goes there instead (Kept).
+    void stop(Kept *r_kept = nullptr);
+    // What a world stopped before kept (stop(&kept)), for the next start. Freed by stop if no start took it.
+    void reuse(Kept &&p_kept) {
+        reused_pages = p_kept.pages;
+        points_gpu = std::move(p_kept.points_gpu);
+    }
     bool is_started() const { return started; }
     // The LOD the view's rule gives at p_distance_m from the camera (ChunkDiscoverer::lod_at_distance); 0 before start.
     int lod_at_distance(double p_distance_m) const;
@@ -217,7 +227,8 @@ private:
     ChunkDiscoverer *chunk_discoverer = nullptr;
     GPUMesher *gpu_mesher = nullptr;
     GPUDirectMesher *direct_mesher = nullptr;
-    QuadPagePool *reused_pages = nullptr; // reuse_pages', until start's mesher takes it
+    QuadPagePool *reused_pages = nullptr; // reuse's, until start's mesher takes it
+    std::unique_ptr<LocalGpuThread> points_gpu; // the GPU discoverer's device (reuse's or start's), outlives the discoverer
     Atmosphere *atmosphere = nullptr; // deletes itself on the device's thread (destroy)
     Clouds *clouds = nullptr; // the same; reads the atmosphere's textures, so goes first
     float cloud_cover = 0.5f;

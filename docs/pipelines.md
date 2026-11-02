@@ -32,7 +32,7 @@ Both are core code on `ov::gpu::Device` (`gpu_device.hpp`); what draws their out
   draw calls (`load_queue` keeps in-cone, finest LOD first).
   `GPUDirectMesher::compact()` re-packs pages under half full GPU to GPU and rewrites the moved
   `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`). A world restarted on the same
-  device and host hands its pool to the next (`World::stop(&pages)`, `World::reuse_pages`: every page released, the
+  device and host hands its pool to the next (`World::stop(&kept)`, `World::reuse`: every page released, the
   in-flight batches' copies landing first): the next mesher draws on the same pages, none freed or made.
 - Dual contouring (`VoxelTerrain.dual_contouring`, `--dual_contouring=1` in `bench.gd` and the main scene;
   off by default): both meshers' vertex pass places its vertex at a regularised QEF of the cell's Hermite

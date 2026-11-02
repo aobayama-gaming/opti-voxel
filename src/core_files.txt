@@ -110,6 +110,8 @@ src/instance_stream.hpp
 src/instance_stream_stats.cpp
 src/instance_stream_walks.cpp
 src/legacy_mesher_glsl.hpp
+src/local_gpu_thread.cpp
+src/local_gpu_thread.hpp
 src/local_points_gpu.cpp
 src/local_points_gpu.hpp
 src/material_library.cpp

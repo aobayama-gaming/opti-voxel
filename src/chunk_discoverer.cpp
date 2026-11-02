@@ -36,7 +36,7 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     std::vector<float> values(points.size());
     const uint64_t t_eval = now_usec();
     CascadePointsGPU::BatchStats gpu_stats;
-    r_wave.gpu = p_gpu && p_gpu->points().cull_values(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
+    r_wave.gpu = p_gpu && p_gpu->cull_values(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
     if (r_wave.gpu) {
         r_wave.batches = gpu_stats.batches;
         r_wave.gpu_ms = gpu_stats.gpu_ms;
@@ -140,12 +140,13 @@ void ChunkDiscoverer::enter() {
     has_scanned = false;
     previous_scan = LODHashSet();
 
-    // The GPU discoverer's local device lives on this thread only. Creating it (device + the point
-    // shader's compile) delays the first scan: gpu_init_ms.
+    // The point passes on the GPU thread's device (made when the thread started, kept across a world's restart, the
+    // passes taken from the last world's when built alike) delay the first scan: gpu_init_ms.
     const uint64_t t_init = now_usec();
-    if (want_gpu) {
+    if (gpu_thread != nullptr) {
+        OV_TRACE("discoverer", "gpu_init");
         gpu = new LocalPointsGPU();
-        if (!gpu->create(sdf, chunk_param, GPU_POINTS)) {
+        if (!gpu->create(sdf, chunk_param, GPU_POINTS, gpu_thread)) {
             OV_WARN_PRINT("ChunkDiscoverer: the GPU discoverer needs a cascade terrain and a local GPU device: the corners are evaluated on the CPU.");
             delete gpu;
             gpu = nullptr;
@@ -154,7 +155,7 @@ void ChunkDiscoverer::enter() {
     mutex.lock();
     stats.gpu_active = gpu != nullptr;
     stats.gpu_scratch_mb = gpu ? double(gpu->scratch_bytes()) / 1048576.0 : 0.0;
-    stats.gpu_init_usec = want_gpu ? now_usec() - t_init : 0;
+    stats.gpu_init_usec = gpu_thread != nullptr ? now_usec() - t_init : 0;
     mutex.unlock();
 }
 

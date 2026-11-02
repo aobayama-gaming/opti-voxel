@@ -11,9 +11,13 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
   `LocalPointsGPU` (`src/local_points_gpu.*`, shared with the site walks' `FieldGPU`), runs the cascade passes on point
   items (`CascadePasses::create_points`, `CascadePointsGPU::cull_values`: the unit register read back, metres on the CPU
-  with `SDFCascade::to_metres`) on a **local device (`ov::gpu::create_local_device`) owned by the discoverer thread**: created
-  at the top of `discovery_loop` and freed there before the thread exits; no other thread may touch it,
-  and it does nothing on the main RD or the render thread. No local device (headless): one
+  with `SDFCascade::to_metres`) on a **local device (`ov::gpu::create_local_device`) on a thread of its own**
+  (`LocalGpuThread`, `src/local_gpu_thread.*`, which a local RenderingDevice needs: one thread makes it, uses it and
+  frees it): the discoverer runs its passes' create, each wave's `cull_values` and their free there, waiting. The
+  World owns the thread and a restart hands it to the next world (`World::Kept`, `VoxelTerrain.restart_world`): the
+  passes freed park on the device (`Device::park`) and the next world's create takes those built alike, so a restart
+  makes no device and no pipeline (`gpu_init` 2.1 s per world -> ~2.3 ms, the mixer's 3D view). It does nothing on the
+  main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
   scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
   (and `--world=res://worlds/lods25.world.json`) after touching the discoverer, the cascade passes or `CascadePointsGPU`.
