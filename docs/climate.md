@@ -220,8 +220,8 @@ computes no terrain and has no node kind the engine hasn't.
   every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (a copy of it shown over the viewport, which renders
   on below, until the chunks in view are loaded, at most 1 s: a SubViewport stopped with `UPDATE_DISABLED` showed
   black, noise and stripes): no blank ground between two loads. It loads round the orbit's pivot
-  (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-10 only
-  (`lod_view_max`: 1.6 km chunks, the orbit's tens of km). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
+  (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-13 only
+  (`lod_view_max`: 12.8 km chunks, ~54 km round the pivot; a reload 116 ms p50 at 13, 100 at 10). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
   ~10% shorter), its world's clouds, instances and features are off (the clouds' shadows hid the relief over kilometres;
   the instance stream took half the workers' time of a drag and 10-33 ms of some frames' `GpuTable::build_lists`), its
   discoverer runs on the GPU (its device kept across restarts: a scan ~1.5 ms, 46 on the CPU behind the map's rows; the

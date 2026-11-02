@@ -8,15 +8,15 @@ extends SubViewportContainer
 ## new one's chunks are loaded (no blank ground between them). Without the world's clouds (their shadows),
 ## trees, rocks and features (half the workers' time and the 10-33 ms instance lists of a drag's frames).
 ## The chunks load round the orbit's pivot (VoxelTerrain.set_lod_centre), from the LOD the camera's distance needs there
-## (lod_view_min) to LOD_VIEW_MAX, which at the pixel error reaches ~6.7 km from it.
+## (lod_view_min) to LOD_VIEW_MAX, which at the pixel error reaches ~54 km from it.
 ## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
 
 ## The pixel error of the view's LODs, the game's: at 12 the LOD seams showed as ledges, for a reload only ~10% shorter.
 const LOD_PIXEL_ERROR := 4.0
-## The coarsest LOD the view loads (1.6 km chunks): its reach, the orbit's tens of km.
-const LOD_VIEW_MAX := 10
+## The coarsest LOD the view loads (12.8 km chunks): its reach, ~54 km round the pivot.
+const LOD_VIEW_MAX := 13
 ## The pause after an edit before the terrain restarts (seconds): a slider's edits of a few frames restart it once.
 const RESTART_AFTER := 0.05
 ## A restart waits for the last one's chunks in view at most this long (seconds): a drag shows each load finished.
