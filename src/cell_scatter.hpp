@@ -33,9 +33,14 @@ struct CellScatter {
     // hull-only trees) reads it; one that doesn't ignores it. Thread-safe.
     std::function<void(const Site &, const UpAxis &, int p_lod, std::vector<TableRecord> &)> generate;
 
-    // The site classes the far moments are kept per: a site's class is its variant modulo classes (the forest: a tree's
-    // species, tree_species_of).
+    // The site classes the far moments are kept per (the forest: its species). A site's class (classify: the forest's
+    // species of the site's biome, -1 where nothing grows; null: its variant modulo classes, class_of), and its records as
+    // class p_class (generate_class: generate is classify, then it; SourceProfile grows each class's samples with it;
+    // null: generate).
     uint32_t classes = 1;
+    std::function<int(const Site &)> classify;
+    std::function<void(const Site &, int p_class, const UpAxis &, int p_lod, std::vector<TableRecord> &)> generate_class;
+    int class_of(const Site &p_site) const { return classify ? classify(p_site) : int(class_index(p_site.variant)); }
     // Sources with the same key share one SourceProfile (ScatterSource's registry): their generate gives the same records
     // for the same site whatever their zone, ground or density (the profile samples sites at the origin, upright). Empty: a
     // profile of its own.

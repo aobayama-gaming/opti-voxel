@@ -200,11 +200,24 @@ struct BiomeClouds {
     float type = 0.0f;
 };
 
+// A species a biome grows (its "instances": a name of the world's species, an integer share among the biome's species
+// of a source's kind; BiomePick, SDFTable's sources).
+struct InstanceShare {
+    ov::str species;
+    uint32_t share = 1;
+};
+
 struct Biome {
     ov::str name;
     std::vector<Axis> at; // sorted by field; empty for the last (default) biome only
     std::vector<Amp> amps;
     SampleProgram program; // empty: none
+    // What grows on it and what features stand on it ("instances", "features": kind names). Not listed: the world's
+    // defaults (every species of a source's kind at share 1, every feature kind).
+    std::vector<InstanceShare> instances;
+    bool instances_listed = false;
+    std::vector<ov::str> features;
+    bool features_listed = false;
     Surface surface;
     BiomeClouds clouds;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views

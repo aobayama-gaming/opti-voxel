@@ -424,10 +424,43 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
     return s;
 }
 
+std::function<int(const Site &)> SDFTable::site_class(Species::Kind p_kind) const {
+    const Climate::Table *climate = placing_climate();
+    if (climate == nullptr || std::none_of(climate->biomes.begin(), climate->biomes.end(), [](const Climate::Biome &p_b) { return p_b.instances_listed; })) {
+        return nullptr; // every biome grows every species: the variant modulo their count
+    }
+    const std::vector<const Species *> kind = species_of(species, p_kind);
+    const BiomePick pick(climate, placing_spec());
+    std::vector<std::vector<uint32_t>> shares;
+    for (int b = 0; b < pick.biomes(); b++) {
+        const Climate::Biome &bi = climate->biomes[size_t(b)];
+        std::vector<uint32_t> s(kind.size(), bi.instances_listed ? 0u : 1u);
+        for (const Climate::InstanceShare &e : bi.instances) {
+            for (size_t i = 0; i < kind.size(); i++) {
+                s[i] += kind[i]->name == e.species ? e.share : 0u;
+            }
+            if (std::none_of(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; })) {
+                OV_ERR_PRINT("SDFTable: biome '" + bi.name + "' grows '" + e.species + "', which the world's species don't have.");
+            }
+        }
+        shares.push_back(s);
+    }
+    return [pick, shares](const Site &p_site) { return pick_share(shares[size_t(pick.at(p_site.base, p_site.seed))], p_site.variant); };
+}
+
 CellScatter SDFTable::forest_source(const TreeTypes &p_types) const {
     CellScatter s = scene_source(TREE_SITE_SALT, forest_count, forest_area);
     const double vs = param.voxel_size;
-    set_forest_scatter(s, vs, *library, record_finish(), p_types, max_instance_extent());
+    const std::vector<const Species *> trees = species_of(species, Species::TREE);
+    if (trees.empty()) {
+        s.side = 0; // no tree to grow: not a source
+        return s;
+    }
+    std::vector<TreeSpecies> list;
+    for (const Species *t : trees) {
+        list.push_back(t->tree);
+    }
+    set_forest_scatter(s, vs, *library, record_finish(), p_types, max_instance_extent(), list, species_key(trees), site_class(Species::TREE));
     return s;
 }
 
@@ -435,10 +468,25 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
     CellScatter s = scene_source(SCATTER_SITE_SALT, scatter_count, scatter_area);
     const float vs = param.voxel_size;
     const int rock = p_types.rock, capsule = p_types.capsule;
-    s.generate = [rock, capsule, vs](const Site &p_site, const UpAxis &p_up, int, std::vector<TableRecord> &r_out) { // one record: the same at every LOD
+    std::vector<RockSpecies> rocks;
+    for (const Species *r : species_of(species, Species::ROCK)) {
+        rocks.push_back(r->rock);
+    }
+    if (rocks.empty()) {
+        s.side = 0; // no rock to place: not a source
+        return s;
+    }
+    // One profile class unless the biomes choose the rocks (the far field of every rock together, as before species).
+    s.classify = site_class(Species::ROCK);
+    s.classes = s.classify ? uint32_t(rocks.size()) : 1u;
+    s.generate_class = [rock, capsule, vs, rocks](const Site &p_site, int p_class, const UpAxis &p_up, int, std::vector<TableRecord> &r_out) { // one record: the same at every LOD
+        if (p_class < 0 || p_class >= int(rocks.size())) {
+            return;
+        }
+        const RockSpecies &sp = rocks[size_t(p_class)];
         const ExactNoise::UVec3 h = ExactNoise::hash3(p_site.seed, 0x5CA7u, 0x7E12u);
-        const float r = (1.0f + float(h.x % 300u) * 0.01f) / vs; // voxels
-        const bool is_rock = (p_site.variant & 1u) == 0u;
+        const float r = (float(sp.radius_lo_m) + float(h.x % 300u) * float((sp.radius_hi_m - sp.radius_lo_m) / 300.0)) / vs; // voxels
+        const bool is_rock = !sp.pillar;
         TableRecord rec;
         rec.def = uint8_t(is_rock ? rock : capsule);
         rec.op = Combine::SMOOTH_UNION;
@@ -456,6 +504,11 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
         }
         r_out.push_back(rec);
     };
+    const uint32_t count = uint32_t(rocks.size());
+    s.generate = [classify = s.classify, grow = s.generate_class, count](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+        grow(p_site, classify ? classify(p_site) : int(p_site.variant % count), p_up, p_lod, r_out);
+    };
+    s.profile_key = "rocks:" + species_key(species_of(species, Species::ROCK));
     return s;
 }
 
@@ -486,7 +539,7 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, ov::V
             continue;
         }
         if (r_spans) {
-            r_spans->push_back(TreeSpan{ first, uint32_t(parts.size()), tree_species_of(site.variant), site.seed });
+            r_spans->push_back(TreeSpan{ first, uint32_t(parts.size()), p_source.class_of(site), site.seed });
         }
         placed++;
         total += int64_t(parts.size());
@@ -572,9 +625,20 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
     for (int f = 0; f < Biome::FEATURE_COUNT; f++) {
         Biome::sites(Biome::Feature(f), centre - reach, centre + reach, base, vs, all);
     }
+    // Each where its biome lists its kind (BiomePick; every kind for a biome that lists none).
+    const Climate::Table *climate = placing_climate();
+    const BiomePick pick(climate, placing_spec());
+    auto stands = [&](const Biome::Site &p_site) {
+        if (climate == nullptr) {
+            return true;
+        }
+        const Climate::Biome &b = climate->biomes[size_t(pick.at(p_site.at, p_site.seed))];
+        const ov::str name = Biome::kind(p_site.feature).name;
+        return !b.features_listed || std::find(b.features.begin(), b.features.end(), name) != b.features.end();
+    };
     for (const Biome::Site &site : all) {
         const double d[3] = { double(site.at.x - centre.x), double(site.at.y - centre.y), double(site.at.z - centre.z) };
-        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= double(r) * double(r)) {
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= double(r) * double(r) && stands(site)) {
             sites.push_back(site);
         }
     }

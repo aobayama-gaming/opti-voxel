@@ -131,6 +131,9 @@ public:
     // The world's parsed climate (configure), null without one (the template ground); why climate_data was refused,
     // empty if it wasn't.
     const Climate::Table *get_climate() const { return given ? &table : nullptr; }
+    // The scenes' sites read their biome from the world's climate (SDFTable's sources, BiomePick).
+    const Climate::Table *placing_climate() const override { return get_climate(); }
+    const Cascade::Spec *placing_spec() const override { return &spec; }
     const ov::str &get_climate_error() const { return climate_error; }
     // The relief the sky stays above (metres: AtmosphereMedium, CloudLayer), p_look_m (the world's look.relief_m), at
     // most a planet's PLANET_RELIEF of its radius.

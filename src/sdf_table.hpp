@@ -3,6 +3,7 @@
 #include "archetype_gpu_table.hpp"
 #include "archetype_table.hpp"
 #include "biome_features.hpp"
+#include "biome_pick.hpp"
 #include "cell_scatter.hpp"
 #include "field_gpu.hpp"
 #include "instance_table.hpp"
@@ -11,6 +12,7 @@
 #include "ov/value.hpp"
 #include "scatter_source.hpp"
 #include "sdf_base.hpp"
+#include "species.hpp"
 #include "tree_archetype.hpp"
 
 #include <atomic>
@@ -59,6 +61,10 @@ public:
         forest_count = p_count;
         forest_area = p_area;
     }
+    // The species the biomes grow (a world file's "species", Archetype::default_species without one): the forest's
+    // trees and the scatter's rocks, each site's from its biome's "instances" (BiomePick; all of a kind at share 1 for a
+    // biome that lists none). Set before configure().
+    void set_species(const std::vector<Archetype::Species> &p_species) { species = p_species; }
     // Whether the scatter and the forest stream (instance_stream.hpp: their keys computed as the chunks ask for them, their
     // records in GPU slots past the table's), else placed whole in the table at configure (the reference; the tests that
     // edit their records). Set before configure().
@@ -82,7 +88,8 @@ public:
     // the edits' incremental updates must match (tests).
     void moment_blobs_reference(std::vector<Archetype::MomentBlob> &r_out) const;
     // The biome features (biome_features.hpp: lava lakes, floating islands) of the biome cells within p_radius metres
-    // of (SCENE_X, SCENE_Z) (--biomes, kilometres there; 0: none). Set before configure().
+    // of (SCENE_X, SCENE_Z) (--biomes, kilometres there; 0: none), each where its site's biome lists its kind (all kinds
+    // for a biome that lists none). Set before configure().
     void set_biome_radius(double p_radius) { biome_radius = p_radius; }
     // The materials the records name (TableRecord::material): the page shader's material_tex.
     const Material::Library &get_materials() const override { return materials; }
@@ -201,6 +208,11 @@ protected:
     // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
     void stop_streaming();
 
+    // The climate the scenes' sites read their biome from (BiomePick), and its combined cascade: none here, the
+    // subclass's (SDFCascade: its world's climate). Valid from configure() on.
+    virtual const Climate::Table *placing_climate() const { return nullptr; }
+    virtual const Cascade::Spec *placing_spec() const { return nullptr; }
+
     // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
     // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.
     void set_ground_materials(const std::vector<std::pair<ov::str, Material::Params>> &p_ground) {
@@ -246,6 +258,7 @@ private:
     int forest_count = 0; // --trees
     double forest_area = 60.0; // --tree_area (metres)
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
+    std::vector<Archetype::Species> species = Archetype::default_species();
     std::vector<Source> sources;
     bool stream_sources = true; // --stream
     int64_t stream_part_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES; // --stream_part_sides
@@ -302,11 +315,15 @@ private:
     // reach in it (4 times its half side up and down from the ground at the centre; the walk only tries the cells along
     // the surface, so the empty air costs nothing), out of the lakes.
     Archetype::CellScatter scene_source(uint32_t p_salt, int p_count, double p_area_m) const;
-    // The forest's (--trees): grown trees, the species from the site's variant.
+    // The forest's (--trees): grown trees, a site's species its biome's (site_class).
     Archetype::CellScatter forest_source(const Archetype::TreeTypes &p_types) const;
-    // The scatter's (--instances): a rock (even variant: a bumpy ball sunk 0.4 of its radius) or a pillar (a capsule)
-    // per site, turned to the up there, 1 to 4 m across.
+    // The scatter's (--instances): a rock (a bumpy ball sunk 0.4 of its radius) or a pillar (a capsule) per site, turned
+    // to the up there, its species' radius across, the species its biome's (site_class).
     Archetype::CellScatter scatter_source(const Types &p_types) const;
+    // A site's class among the species of p_kind (species_of order): its biome's (BiomePick) shares picked by the site's
+    // variant (pick_share), -1 where its biome grows none; every one at share 1 without a climate (the variant modulo
+    // their count). Thread-safe (sources call it).
+    std::function<int(const Archetype::Site &)> site_class(Archetype::Species::Kind p_kind) const;
     // Every site of p_source in its zone, appended to the records (each a contiguous run, kept whole or left out), and
     // its stats under r_stats[p_name]; the sites' runs to r_spans if given.
     void add_source(const Archetype::CellScatter &p_source, const char *p_name, ov::Value &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);

@@ -105,6 +105,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     sdf->set_scatter(content.instances, content.instance_area_m);
     sdf->set_forest(content.trees, content.tree_area_m);
+    sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);
     sdf->set_stream_part_sides(config.archetype_stream_part_sides);
     sdf->set_biome_radius(content.features_radius_m);

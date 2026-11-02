@@ -126,16 +126,17 @@ struct TreeSpan {
     uint32_t seed = 0;
 };
 
-// The salt of the forest's cell sites (cell_sites.hpp); a site's species is its variant modulo the species count.
+// The salt of the forest's cell sites (cell_sites.hpp).
 inline constexpr uint32_t TREE_SITE_SALT = 0xF0E57u;
-int tree_species_of(uint32_t p_variant);
 
-// Makes r_scatter a forest's (the rest of it, zone, ground, up, accept, is the caller's): the salt, generate (a tree of the
-// site's species, hull-only from the species' tree_hull_only_lod under p_finish), one class per species (the far moments
-// per species) and the profile key of the tree set ("trees:" + voxel + species count + type ids: every forest of that
-// voxel size shares one profile). A site is refused whole when a record of it doesn't fit the table (p_max_extent): a
-// species whose bounds don't fit never grows hull-only (ERR), so a refusal never depends on the LOD.
+// Makes r_scatter a forest of p_species (the rest of it, zone, ground, up, accept, is the caller's): the salt, a site's
+// species (p_classify: -1 where none grows; null: its variant modulo the species count), generate_class (a tree of that
+// species, hull-only from its tree_hull_only_lod under p_finish) and generate (the two), one class per species (the far
+// moments per species) and the profile key of the tree set ("trees:" + voxel + p_key, the species' parameters + type
+// ids: every forest of that voxel size and those species shares one profile). A site is refused whole when a record of
+// it doesn't fit the table (p_max_extent): a species whose bounds don't fit never grows hull-only (ERR), so a refusal
+// never depends on the LOD.
 void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types,
-        int64_t p_max_extent);
+        int64_t p_max_extent, const std::vector<TreeSpecies> &p_species, const std::string &p_key, std::function<int(const Site &)> p_classify);
 
 } // namespace Archetype

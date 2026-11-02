@@ -1,7 +1,11 @@
 #pragma once
 
+#include "species.hpp"
+
 #include "ov/str.hpp"
 #include "ov/value.hpp"
+
+#include <vector>
 
 // A world on disk: what a run loads (World::Settings::world_path), every terrain setting in data. The format (JSON;
 // "comment" keys are ignored, any other unknown key is refused, every key is optional and defaults to the field below):
@@ -14,12 +18,15 @@
 //     "trees": { "count": 0, "area_m": 60 },
 //     "instances": { "count": 0, "area_m": 200 },
 //     "features": { "radius_km": 0 },
+//     "species": [ species... ],
 //     "biomes": [ biome..., default biome ]
 //   }
 //
 // A path is relative to the file naming it, or absolute (res://, /...). "fields" and "biomes" are the climate table of
-// climate_parse.cpp (each biome a graph of notes), merged here and compiled there (at the engine's values). Without
-// biomes, the ground is the template biome's (Climate::template_biome).
+// climate_parse.cpp (each biome a graph of notes, what it grows, its features), merged here and compiled there (at the
+// engine's values). Without biomes, the ground is the template biome's (Climate::template_biome). "species" are what the
+// biomes grow (species.hpp; Archetype::default_species without the key); trees, instances and features keep their
+// extents (count and area, radius): where the scenes stand, each site's species and features its biome's.
 struct WorldFile {
     // The world of a host or check given none.
     static constexpr const char *DEFAULT_PATH = "res://worlds/default.world.json";
@@ -41,6 +48,7 @@ struct WorldFile {
     int instances = 0; // this many scattered rocks and pillars (SDFTable::set_scatter) in a square of side instance_area_m
     double instance_area_m = 200.0;
     double features_radius_m = 0.0; // biome features (lava lakes, floating islands) within this distance (SDFTable::set_biome_radius)
+    std::vector<Archetype::Species> species = Archetype::default_species(); // SDFTable::set_species
 
     // The file at p_path (a host path, ov::read_file) in r_world: empty, or why it was refused (r_world untouched).
     static ov::str load(const ov::str &p_path, WorldFile &r_world);

@@ -552,14 +552,10 @@ int tree_hull_only_lod(const TreeSpecies &p_species, double p_voxel, const DefLi
     return lod; // the hull is what stays
 }
 
-int tree_species_of(uint32_t p_variant) {
-    return int(p_variant % uint32_t(tree_species().size()));
-}
-
 void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary &p_library, const RecordFinish &p_finish, const TreeTypes &p_types,
-        int64_t p_max_extent) {
+        int64_t p_max_extent, const std::vector<TreeSpecies> &p_species, const std::string &p_key, std::function<int(const Site &)> p_classify) {
     std::vector<int> hull_lod;
-    for (const TreeSpecies &species : tree_species()) {
+    for (const TreeSpecies &species : p_species) {
         const TreeBounds b = tree_bounds(species, p_voxel, p_types);
         bool fits = true;
         for (const TableRecord *rec : { &b.trunk, &b.clump, &b.hull }) {
@@ -573,13 +569,19 @@ void set_forest_scatter(CellScatter &r_scatter, double p_voxel, const DefLibrary
         hull_lod.push_back(fits ? tree_hull_only_lod(species, p_voxel, p_library, p_finish, p_types) : int(TableRecord::NEVER_DROPPED));
     }
     r_scatter.salt = TREE_SITE_SALT;
-    r_scatter.generate = [p_types, p_voxel, hull_lod](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
-        const int species = tree_species_of(p_site.variant);
-        grow_tree(tree_species()[species], p_site.base, p_up, p_site.seed, p_voxel, p_types, r_out, nullptr, p_lod >= hull_lod[species]);
+    r_scatter.classes = uint32_t(p_species.size());
+    r_scatter.classify = std::move(p_classify);
+    r_scatter.generate_class = [p_species, p_types, p_voxel, hull_lod](const Site &p_site, int p_class, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+        if (p_class >= 0 && p_class < int(p_species.size())) {
+            grow_tree(p_species[size_t(p_class)], p_site.base, p_up, p_site.seed, p_voxel, p_types, r_out, nullptr, p_lod >= hull_lod[size_t(p_class)]);
+        }
     };
-    r_scatter.classes = uint32_t(tree_species().size()); // class_index = tree_species_of
-    r_scatter.profile_key = "trees:" + key_bits(p_voxel) + key_bits(tree_species().size()) + key_bits(p_types.branch) + key_bits(p_types.crown) + key_bits(p_types.cone) +
-            key_bits(p_types.crown_amp) + key_bits(p_types.crown_dent);
+    r_scatter.generate = [classify = r_scatter.classify, grow = r_scatter.generate_class, classes = r_scatter.classes](const Site &p_site, const UpAxis &p_up, int p_lod,
+                                 std::vector<TableRecord> &r_out) {
+        grow(p_site, classify ? classify(p_site) : int(p_site.variant % classes), p_up, p_lod, r_out);
+    };
+    r_scatter.profile_key = "trees:" + key_bits(p_voxel) + p_key + key_bits(p_types.branch) + key_bits(p_types.crown) + key_bits(p_types.cone) + key_bits(p_types.crown_amp) +
+            key_bits(p_types.crown_dent);
 }
 
 } // namespace Archetype

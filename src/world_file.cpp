@@ -87,7 +87,7 @@ ov::Value section(const ov::Value &p_data, const char *p_key, std::initializer_l
 } // namespace
 
 ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
-    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "trees", "instances", "features", "biomes" });
+    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "trees", "instances", "features", "species", "biomes" });
     if (!err.empty()) {
         return err;
     }
@@ -139,6 +139,12 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     w.instances = int(instances.get("count", w.instances).as_int());
     w.instance_area_m = instances.get("area_m", w.instance_area_m).as_double();
     w.features_radius_m = 1000.0 * features.get("radius_km", w.features_radius_m / 1000.0).as_double();
+    if (p_data.has("species")) {
+        err = Archetype::parse_species(p_data["species"], w.species);
+        if (!err.empty()) {
+            return "world: " + err;
+        }
+    }
     if (p_data.has("climate")) {
         w.climate_table["fields"] = climate.get("fields", ov::Value::array());
         w.climate_table["biomes"] = p_data.get("biomes", ov::Value::array());

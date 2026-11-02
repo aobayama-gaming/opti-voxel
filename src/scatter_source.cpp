@@ -454,8 +454,12 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
             continue;
         }
         const double weight = (double(g) / side) * (double(g) / side) * inside;
-        // The proxy stands for sites of its own class (a tree's species: its proxy site's variant, hashed like a site's).
-        const SourceProfile::Lost &lost = prof->lost_of(s.class_index(cs.site.variant), p_key.lod);
+        // The proxy stands for sites of its own class (a tree's species: its proxy site's, hashed like a site's).
+        const int c = s.class_of(cs.site);
+        if (c < 0) {
+            continue;
+        }
+        const SourceProfile::Lost &lost = prof->lost_of(uint32_t(c), p_key.lod);
         float rows[9];
         up_rotation(s.up(base), rows);
         for (const std::pair<uint32_t, Moments> &m : lost.moments.parts) {

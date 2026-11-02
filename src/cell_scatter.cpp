@@ -64,7 +64,13 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
         const uint32_t c = p_j / uint32_t(SAMPLES);
         const ExactNoise::UVec3 h = ExactNoise::hash3(p_j % uint32_t(SAMPLES), p_scatter.salt, 0x9E0F11Eu ^ c);
         const uint32_t variant = c + classes * (h.y >> 16);
-        p_scatter.generate(Site{ VoxelPos(), h.x, variant }, UP_Y, -1, parts[p_j]); // the full growth: reach, lod_end and the joins need every record
+        // The full growth: reach, lod_end and the joins need every record.
+        const Site site{ VoxelPos(), h.x, variant };
+        if (p_scatter.generate_class && (p_scatter.classify || classes > 1)) {
+            p_scatter.generate_class(site, int(c), UP_Y, -1, parts[p_j]);
+        } else {
+            p_scatter.generate(site, UP_Y, -1, parts[p_j]);
+        }
         for (TableRecord &rec : parts[p_j]) {
             finish_table_record(p_library, p_finish, rec);
             MomentItem item = record_item(p_library, rec);

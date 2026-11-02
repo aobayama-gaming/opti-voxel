@@ -30,6 +30,7 @@ namespace Climate {
 //             "graph": { "nodes": [ node... ] },
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
 //             "clouds": { "cover": 0.6, "type": 0.5 } (optional),
+//             "instances": [ { "species": "conifer", "share": 2 } ] (optional), "features": [ "lava_lake" ] (optional),
 //             "debug_color": "#c04020" }
 //     "at": the biome's place in the fields' space, a centre and a span on each field it names ({min, max}: their
 //     middle and half their gap); on each it is whole within 0.71 of the span and gone a span away, overlapping biomes
@@ -37,7 +38,9 @@ namespace Climate {
 //     default: no "at", it fills what the others leave. "surface": the biome's ground colours (sRGB) on gentle and
 //     steep slopes; without it, the procedural ground's. "clouds": the sky over the biome, its cover and cloud type in
 //     [0, 1] (stratus 0, stratocumulus 0.5, cumulus 1; Climate::BiomeClouds); without it, the sky's cover and the
-//     weather noise's type.
+//     weather noise's type. "instances": the world's species (species.hpp) its sites grow, each by its integer share
+//     (BiomePick); without the key every species at share 1, [] none. "features": the feature kinds standing on it
+//     (biome_features.hpp); without the key every kind.
 //   node:   { "id": "n1", "kind": ..., inputs by id, parameters; "pos": [x, y] (the mixer's, ignored) }, the kinds:
 //     "note":  "wavelength_m": 400 | "from_m": 0.4, "to_m": 26214.4 (every octave in range the LOD count has: the
 //              table covers the whole spectrum at any count), "seed": 59943 (required), the amplitude
@@ -657,7 +660,7 @@ private:
             fail(ov::format("biome %d", p_i), "'amp' and 'curve' became the biome's 'graph': its notes, a mix of them, a curve (climate_parse.cpp).");
             return;
         }
-        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "clouds", "debug_color" })) {
+        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "clouds", "debug_color", "instances", "features" })) {
             return;
         }
         Climate::Biome b;
@@ -675,8 +678,40 @@ private:
         if (p_d.has("clouds")) {
             clouds(dict(p_d["clouds"], where + ov::str(" clouds")), where + ov::str(" clouds"), b.clouds);
         }
+        content(p_d, where, b);
         b.debug_color = p_d.has("debug_color") ? hex_color(p_d, "debug_color", where) : name_hash(b.name) & 0xFFFFFFu;
         table.biomes.push_back(b);
+    }
+
+    // A biome's "instances": [{ "species": name, "share": 1 (a whole number > 0) }] and "features": [kind name] (the
+    // world's species and the feature kinds: SDFTable checks the names).
+    void content(const ov::Value &p_d, const ov::str &p_where, Climate::Biome &r_b) {
+        r_b.instances_listed = p_d.has("instances");
+        const ov::Value instances = array(p_d, "instances", p_where);
+        for (int64_t i = 0; i < int64_t(instances.size()) && error.empty(); i++) {
+            const ov::str where = p_where + ov::format(" instance %d", i);
+            const ov::Value e = dict(instances[i], where);
+            if (!keys(e, where, { "species", "share" })) {
+                return;
+            }
+            InstanceShare s;
+            s.species = text(e, "species", where);
+            const double share = number(e, "share", where, 1.0);
+            if (error.empty() && !(share >= 1.0 && share < 65536.0 && share == std::floor(share))) {
+                fail(where, "a share is a whole number in [1, 65535].");
+            }
+            s.share = uint32_t(share);
+            r_b.instances.push_back(s);
+        }
+        r_b.features_listed = p_d.has("features");
+        const ov::Value features = array(p_d, "features", p_where);
+        for (int64_t i = 0; i < int64_t(features.size()) && error.empty(); i++) {
+            if (!features[i].is_string()) {
+                fail(p_where, "'features' names feature kinds (lava_lake, floating_island).");
+                return;
+            }
+            r_b.features.push_back(features[i].as_str());
+        }
     }
 };
 

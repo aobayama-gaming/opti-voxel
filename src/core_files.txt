@@ -74,6 +74,8 @@ src/biome_features.cpp
 src/biome_features.hpp
 src/biome_compiler.cpp
 src/biome_compiler.hpp
+src/biome_pick.cpp
+src/biome_pick.hpp
 src/cascade_measure.cpp
 src/cascade_measure.hpp
 src/cascade_passes.cpp
@@ -132,6 +134,8 @@ src/palette_pool.hpp
 src/quad_page_pool.cpp
 src/quad_page_pool.hpp
 src/scatter_source.cpp
+src/species.cpp
+src/species.hpp
 src/scatter_source.hpp
 src/sdf_base.hpp
 src/sdf_cascade.hpp

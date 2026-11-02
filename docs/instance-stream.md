@@ -8,12 +8,13 @@
   the profile, and `["stream"]`), or with `--stream=0` (`VoxelTerrain.archetype_stream`, bench and player) placed whole in
   the table at configure by `add_source` (count, records per site, moments per material; the reference, and the tests that
   edit their records by id). Biome features and the shapes gallery stay table records (whole-build blobs). `SourceProfile`
-  reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes`: a site's class is its variant
-  modulo it, the forest's species; class c sampled with hashed variants of class c, one class bit for bit as before): reach, `lod_end`, k / margin max (times
+  reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes`: a site's class is `classify`'s,
+  the forest's species of its biome, -1 where none grows, or its variant modulo the class count; class c grown by
+  `generate_class`, one class bit for bit as before): reach, `lod_end`, k / margin max (times
   `REACH_SAFETY` 1.25), joins and records per site over every sample, the mass lost per LOD per class (`lost_of(class,
   lod)`: what a far proxy of a site of that class stands for; `blob_reach` takes the widest class's); unit-tested to bound
-  every record of the forest and the scatter (`covers`). A source with a `profile_key` (the forest's: voxel size, species
-  count, type ids) takes its profile from a process-wide registry keyed by it plus the salt, finish, layer params and LOD
+  every record of the forest and the scatter (`covers`). A source with a `profile_key` (the forest's: voxel size, its
+  species' parameters, type ids; the scatter's: its rocks') takes its profile from a process-wide registry keyed by it plus the salt, finish, layer params and LOD
   count: every forest of a voxel size shares one, whatever its zone or density (stats `profile_classes`,
   `profile_shared`).
   **Keys (`src/scatter_source.*`):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS | SITES | PROXIES,

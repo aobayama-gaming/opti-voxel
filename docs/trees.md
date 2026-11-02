@@ -8,8 +8,16 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   CPU, L = 1 + slope^2 / 2), 4 `crown` (`make_rock_type(crown_k(voxel), CROWN_SEED)`, bumps of 0.8-3.2 m whose
   amplitude adds `CROWN_BUMP` = 1.5 to L: lumpy foliage up close, smooth once the band rule drops the octaves) and
   5 `cone` (`make_cone_type`, the same bumps on a cone {radius, height, cos, sin, amp}, its rim a smooth max: a
-  conifer's tier). Three species: a broadleaf, a slender one and a conifer (`cone_tiers` = 4 stacked cones,
-  no limbs, ~12 records). `grow_tree` is one recursion for topology and bends: a stem's axis split
+  conifer's tier). The species are data (`src/species.{hpp,cpp}`: a world file's `"species"`, each tree a
+  `TreeSpecies` by its keys, a rock or a pillar by its radius range; `default_species` without the key): today's three
+  trees, a broadleaf, a slender one and a conifer (`cone_tiers` = 4 stacked cones, no limbs, ~12 records), a boulder and
+  a pillar. A site grows its biome's species (`BiomePick`, `src/biome_pick.*`: the climate's weights read once on the
+  CPU at the site, on the coarsest lattice its placement fields resolve, ~20 us, and a hash of the site against them;
+  then `pick_share`, the biome's integer shares of the kind by the site's variant: n equal shares are the variant modulo
+  n, the forest without biome lists bit for bit). A biome's `"instances": [{"species": "conifer", "share": 2}]` lists
+  what it grows (none listed: every species at share 1, no climate read at all; `[]`: nothing); its `"features"`
+  (`["lava_lake"]`) the feature kinds that stand on it. The scenes keep their extents (`trees`, `instances`: a count in
+  a square; `features`: a radius), where they stand. `grow_tree` is one recursion for topology and bends: a stem's axis split
   at midpoints moved by a hash of their path (joints on whole voxels: a segment's end is the next one's
   anchor), children at hashed forks with pipe-model radii (r0^2 >= tip^2 + sum of the children's), stems
   grown thickest first so the per-tree budget cuts the thinnest; then a hull of 1-3 crown spheres on the
@@ -24,7 +32,7 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   listed records (unit test: 1,000 trees, every LOD from there; tight at 5 cm: 8 / 7 / 5 for the three species, a LOD
   late at 0.5 m). `set_forest_scatter` is the forest's generate, classes and profile key, for the table and the tests; a
   species whose `tree_bounds` don't fit the table never grows hull-only (a site's refusal never depends on the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
-  source, salted: `TREE_SITE_SALT` for the forest, the species is the site's variant): `cell_site` reads the coarse field
+  source, salted: `TREE_SITE_SALT` for the forest, the species its biome's, above): `cell_site` reads the coarse field
   (`SDFBase::ground_field(voxel, lod)`, `evaluate_cull`'s field with its gradient; at `site_lod` a lattice sample extended
   along its gradient) at the cell's centre, projects the cell's hashed voxel on that plane, keeps it if it lands in the
   cell's middle part (`SITE_INNER` 0.15 off each side across the normal: neighbours stay 0.3 cells apart with no
