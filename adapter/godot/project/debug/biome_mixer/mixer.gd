@@ -13,7 +13,10 @@ extends Control
 ##   --set=ID.KEY=V     set a node's key in the current biome's graph after loading (V as JSON: 1.5, "ridged"), or
 ##                      view.KEY=V a view setting (view.extent_km=40); repeatable
 ##   --drag=ID.KEY=A:B:S  drag a node's value A to B and back each second for S seconds (one edit a frame), print
-##                      MIXER_DRAG: the frame, recompile, restart and load times (with --shot: a shot a second, the trace)
+##                      MIXER_DRAG: the frame, recompile, restart and load times, the frames over 100 ms (with --shot: a
+##                      shot a second, the trace)
+##   --steps=ID.KEY=V1;V2;...  set a node's key to each value in turn (as JSON: 0, "ridged"), held STEP_S each, twice
+##                      over: one edit a step (a click, a typed 0), measured and printed as --drag's
 ##   --shot=PATH        draw once (the sharp map; in 3D, the terrain's load then two restarts, timed), save the window to
 ##                      PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test (checks.gd); prints MIXER: {json} and quits 0 if ok
@@ -30,6 +33,7 @@ const Checks := preload("res://debug/biome_mixer/checks.gd")
 
 const WORLD := EngineInfo.WORLD
 const WORLDS_DIR := "res://climate/worlds"
+const STEP_S := 1.5  # --steps: each value held this long (a restart and its load, with room)
 const AUTOSAVE := "user://biome_mixer_autosave.world.json"
 # The Biome mode's view (the World mode's is WorldView's).
 const VIEW_DEFAULTS := {"extent_km": 20.0}
@@ -67,6 +71,7 @@ func _ready() -> void:
 	var pick := ""
 	var mode := ""
 	var drag := ""
+	var steps := ""
 	for a in args:
 		if a.begins_with("--shot="):
 			shot = a.trim_prefix("--shot=")
@@ -78,16 +83,19 @@ func _ready() -> void:
 			sets.append(a.trim_prefix("--set="))
 		elif a.begins_with("--drag="):
 			drag = a.trim_prefix("--drag=")
+		elif a.begins_with("--steps="):
+			steps = a.trim_prefix("--steps=")
 	# The window redraws only on input or a change (an idle GPU); a shot needs every frame drawn.
-	OS.low_processor_usage_mode = shot == "" and drag == ""
+	var probe := drag != "" or steps != ""
+	OS.low_processor_usage_mode = shot == "" and not probe
 	var screen := DisplayServer.screen_get_usable_rect(get_window().current_screen)
 	get_window().size = Vector2i(Vector2(screen.size) * 0.85)
 	get_window().position = screen.position + (screen.size - get_window().size) / 2
 	_build_ui()
 	# A shot leaves the session's autosave alone (it may edit the graph with --set).
-	if shot != "" or drag != "":
+	if shot != "" or probe:
 		autosave.timeout.disconnect(_autosave)
-	var w := World.read(AUTOSAVE) if shot == "" and drag == "" else {}
+	var w := World.read(AUTOSAVE) if shot == "" and not probe else {}
 	if w.is_empty():
 		w = World.read(WORLD)
 	if pick != "":
@@ -107,6 +115,8 @@ func _ready() -> void:
 		_apply_set(s)
 	if drag != "":
 		await _drag(drag, shot)
+	elif steps != "":
+		await _steps(steps, shot)
 	elif shot != "":
 		await _shot(shot)
 
@@ -570,35 +580,68 @@ func _shot(p_path: String) -> void:
 
 
 # p_spec ID.KEY=FROM:TO:SECONDS: after the first load, a slider's drag (one edit a frame, FROM to TO and back each
-# second) for SECONDS, a window shot each second (p_path_<s>.png), then MIXER_DRAG (frames, fps, status lines) and quit.
+# second) for SECONDS (_probe).
 func _drag(p_spec: String, p_path: String) -> void:
 	var eq := p_spec.find("=")
 	var dot := p_spec.find(".")
 	var r := p_spec.substr(eq + 1).split(":")
 	var id := p_spec.substr(0, dot)
-	var key := p_spec.substr(dot + 1, eq - dot - 1)
 	if model_node(id).is_empty() or r.size() != 3:
 		push_error("--drag=%s: expected ID.KEY=FROM:TO:SECONDS with a node of the graph" % p_spec)
 		get_tree().quit(1)
 		return
+	var value_at := func(p_s: float) -> Variant:
+		return lerpf(float(r[0]), float(r[1]), 1.0 - absf(fmod(p_s, 1.0) * 2.0 - 1.0))
+	await _probe(id, p_spec.substr(dot + 1, eq - dot - 1), value_at, float(r[2]), p_path)
+
+
+# p_spec ID.KEY=V1;V2;...: after the first load, each value (JSON) in turn, held STEP_S, twice over (_probe).
+func _steps(p_spec: String, p_path: String) -> void:
+	var eq := p_spec.find("=")
+	var dot := p_spec.find(".")
+	var id := p_spec.substr(0, dot)
+	var values := []
+	for v in p_spec.substr(eq + 1).split(";"):
+		values.append(JSON.parse_string(v))
+	if model_node(id).is_empty() or values.size() < 2 or values.has(null):
+		push_error("--steps=%s: expected ID.KEY=V1;V2;... (JSON values) with a node of the graph" % p_spec)
+		get_tree().quit(1)
+		return
+	var value_at := func(p_s: float) -> Variant:
+		return values[int(p_s / STEP_S) % values.size()]
+	await _probe(id, p_spec.substr(dot + 1, eq - dot - 1), value_at, STEP_S * values.size() * 2.0, p_path)
+
+
+# p_value_at(seconds): node p_id's p_key each frame for p_seconds (set when it changes), a window shot each second
+# (p_path_<s>.png, with the engine's trace), then MIXER_DRAG (frames, fps, the frames over 100 ms with their second and
+# the value set, the recompile, restart, hold and load times) and quit.
+func _probe(p_id: String, p_key: String, p_value_at: Callable, p_seconds: float, p_path: String) -> void:
 	await preview.wait_terrain(120.0)
 	var t0 := Time.get_ticks_usec()
 	var counts := {"frames": 0, "shots": 0}
 	var frame_ms := PackedFloat32Array()
 	var recompile_ms := PackedFloat32Array()
+	var slow := []
 	var view := preview.terrain_view()
 	view.profile = {"restart_ms": PackedFloat32Array(), "hold_ms": PackedFloat32Array(), "loaded_ms": PackedFloat32Array()}
 	if p_path != "":
 		view.terrain().debug_trace_start()
 	var last := t0
+	var value: Variant = null
 	while true:
 		var s := (Time.get_ticks_usec() - t0) / 1e6
-		if s > float(r[2]):
+		if s > p_seconds:
 			break
-		set_params(id, {key: lerpf(float(r[0]), float(r[1]), 1.0 - absf(fmod(s, 1.0) * 2.0 - 1.0))})
+		var v: Variant = p_value_at.call(s)
+		if v != value:
+			value = v
+			set_params(p_id, {p_key: v})
 		await get_tree().process_frame
 		var now := Time.get_ticks_usec()
-		frame_ms.append((now - last) / 1000.0)
+		var ms := (now - last) / 1000.0
+		frame_ms.append(ms)
+		if ms > 100.0:
+			slow.append([snappedf(s, 0.01), snappedf(ms, 0.1), value])
 		recompile_ms.append(recompile_usec / 1000.0)
 		counts.frames += 1
 		if p_path != "" and int(s) >= counts.shots:
@@ -610,7 +653,7 @@ func _drag(p_spec: String, p_path: String) -> void:
 	if p_path != "":
 		view.terrain().debug_trace_write(p_path.get_basename() + "_trace.json")  # the engine's spans (src/trace.hpp)
 	print("MIXER_DRAG: ", JSON.stringify({"frames": counts.frames, "fps": snappedf(counts.frames / secs, 0.1),
-		"frame_ms": _spread(frame_ms), "recompile_ms": _spread(recompile_ms),
+		"frame_ms": _spread(frame_ms), "slow_frames": slow, "recompile_ms": _spread(recompile_ms),
 		"restart_ms": _spread(view.profile.restart_ms), "hold_ms": _spread(view.profile.hold_ms), "loaded_ms": _spread(view.profile.loaded_ms),
 		"restarts": view.profile.restart_ms.size()}))
 	get_tree().quit(0)
