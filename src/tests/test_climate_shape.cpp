@@ -535,8 +535,7 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
 // lifted (the bound itself; the cap is a cost choice). The curves read the weights carried to each chunk's own level 0,
 // so their steps come from the fields' L+2 / L+3 octaves.
 TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the skirt depth with ground terms") {
-    // world.json's climate axes (105-419 km) need 25 LODs.
-    for (const auto &[path, lods] : { std::pair{ "res://climate/shaped_test.json", 15 }, std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/world.json", 25 }, std::pair{ "res://climate/programs_test.json", 15 } }) {
+    for (const auto &[path, lods] : { std::pair{ "res://climate/shaped_test.json", 15 }, std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/world.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 } }) {
         CAPTURE(path);
         ClimateSDF c(path, lods, 1e6f);
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);

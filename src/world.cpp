@@ -150,7 +150,9 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     // The pixel error is measured against the camera's vertical FOV and the 3D render's height. The view cone holds the
     // frustum: its half-angle is the half-FOV along the screen diagonal.
     const float fov_rad = p_projection.fov_rad > 0.0f ? p_projection.fov_rad : ov::deg_to_rad(75.0f);
-    chunk_discoverer->setup_lod(lod_numbers, config.lod_pixel_error, p_projection.viewport_height, fov_rad, config.lod_pixel_error_back,
+    // The view loads LODs [0, lod_view_max]: the cascade keeps the engine's levels, the coarsest chunks are this LOD's.
+    const int view_lods = config.lod_view_max >= 0 ? ov::min(lod_numbers, config.lod_view_max + 1) : lod_numbers;
+    chunk_discoverer->setup_lod(view_lods, config.lod_pixel_error, p_projection.viewport_height, fov_rad, config.lod_pixel_error_back,
             ChunkMath::view_cone_half_angle(fov_rad, p_projection.aspect, ov::deg_to_rad(config.lod_view_margin_deg)),
             config.lod_pixel_errors);
     chunk_discoverer->set_view_memory(config.lod_view_memory_m);

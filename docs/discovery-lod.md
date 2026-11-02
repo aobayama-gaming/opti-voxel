@@ -49,6 +49,9 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   Cost with memory 0 (measured in PR 34): a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
   back already leaves +64% draw calls): after one full turn at error 1 | 4, the steady state is +26% render GPU
   vs error 1 without the split. A locality-aware compaction would close it.
+- View reach in LODs (`VoxelTerrain.lod_view_max`, `World::Settings::lod_view_max`, default -1: the engine's top):
+  the discoverer loads LODs 0 to this one only, the cascade keeps the engine's levels (the same terrain). The biome
+  mixer's 3D view uses 10.
 - Far limit (`VoxelTerrain.lod_far_limit`, default on; with `--lod_far_limit=0` in bench and
   player the world gets 0, no limit): the adapter hands `World::frame` the depth of the camera's far plane (Godot:
   `Camera3D.far`, which `Presets.clip_planes` ties to the altitude, ~2,100x it with a 105 km floor, when the world's LODs are above

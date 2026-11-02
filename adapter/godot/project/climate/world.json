@@ -1,5 +1,5 @@
 {
- "comment": "Eight biomes on three climate axes (temperature, humidity, wind: 105-419 km octaves), each playing the ground's own octaves (multipliers, shapes, multifractal, warps by wx / wy / wz) with the notes once fitted to real heightmaps (git history: tools/landforms); dunes and mountain remap the ground's height by their curve. Mountain is the default. 25 LODs at 5 cm.",
+ "comment": "Eight biomes on three climate axes (temperature, humidity, wind: 6.5-26 km octaves, the top LOD), each playing the ground's own octaves (multipliers, shapes, multifractal, warps by wx / wy / wz) with the notes once fitted to real heightmaps (git history: tools/landforms); dunes and mountain remap the ground's height by their curve. Mountain is the default. 15 LODs at 5 cm (the top LOD 14: 26 km, the ground's largest note).",
  "engine": "engine.json",
  "climate": "climate.json",
  "zone": {"side_m": 5000},

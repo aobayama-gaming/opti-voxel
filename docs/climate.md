@@ -16,7 +16,8 @@ once whatever biome mixes it (identity: octave, seed, stretch), so a biome more 
 biomes the ground is the **template biome** (`Climate::template_biome`, the mixer's start for a new biome too): seed
 0xEA27, every octave from k = 3 (0.4 m at 5 cm) to the first at the 3.3 km cap (k = 19 at 5 cm: 26.2 km), amplitude
 1/8 of the wavelength. Notes and fields reach lod_count + 4 at most (`Ground::k_max`, the cascade's top); the fields
-placing the biomes (temperature, humidity, wind: 105-419 km) are macro inputs until the planned macro engine computes
+placing the biomes (temperature, humidity, wind: 6.5-26 km, under the top LOD like the ground: a world to walk, not
+continents) are macro inputs until the planned macro engine computes
 them.
 
 1. **Fields** (`Field`): a few slow scalars, each a sum of plain perlin octaves of its own seed, plus linear terms
@@ -130,7 +131,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   and type over the biome, blended by the weights on a coarse map round the camera (`CloudClimate`, `docs/look.md`).
   They touch no cascade pass or shader.
 - **Worlds** (`adapter/godot/project/climate/`): `world.json` with `engine.json` and `climate.json` (eight biomes on temperature x humidity x wind,
-  105-419 km octaves, needs 25 LODs; each biome's notes once fitted to a real Copernicus heightmap, see git history of
+  6.5-26 km octaves, 15 LODs: the top, LOD 14, is the ground's largest note; each biome's notes once fitted to a real Copernicus heightmap, see git history of
   `tools/landforms/`; dunes and mountain carry their height curve), `example.json` (continent and terrain-type fields
   choosing mountains, hills, badlands and plains, two curves), `shaped_test.json` (every operation, CascadeSpike `4s`),
   `plain.json` (amplitudes only; pins every slot, the SDF, the skirts and both level shaders' text: a table without
@@ -208,10 +209,12 @@ computes no terrain and has no node kind the engine hasn't.
   numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a value builds no pipeline: the
   device parks the pipelines the old world frees, by text, and the new world takes those of the same text
   (`RDDevice::park_pipelines`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
-  every text's SPIR-V. Its LODs are the game's (pixel error 4: at 12 each LOD seam showed as a ledge, for a restart only
+  every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (its SubViewport stops
+  rendering until the chunks in view are loaded, at most 1 s): no blank ground between two loads. It loads LODs 0-10 only
+  (`lod_view_max`: 1.6 km chunks, the orbit's tens of km). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
   ~10% shorter), its world's clouds are off (their shadows hid the relief over kilometres), and its discoverer and
   site walk run on the CPU (their GPU variants build their pipelines on a local device of their own: ~9 s per
-  restart, the driver). Measured (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX
+  restart, the driver). Measured at 25 LODs, before the LOD cap (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX
   3070 laptop): World mode (~400 km) 0.89 s, then 0.18 and 0.18 s; the mountain alone 0.76 s, then 0.22 and 0.18 s
   (were 1.2-1.3 s: a new node each, its start 1.05 s in one frame, 0.4 s the mesher's pipelines, 0.4 s the cascade's,
   0.2 s zeroing its buffers on the CPU). Now the restart is one 35 ms frame (with the 2D map's ~20 ms, the edit's frame

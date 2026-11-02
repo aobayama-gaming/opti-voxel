@@ -61,6 +61,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lod_view_margin_deg"), &VoxelTerrain::get_lod_view_margin_deg);
     ClassDB::bind_method(D_METHOD("set_lod_view_memory_m", "metres"), &VoxelTerrain::set_lod_view_memory_m);
     ClassDB::bind_method(D_METHOD("get_lod_view_memory_m"), &VoxelTerrain::get_lod_view_memory_m);
+    ClassDB::bind_method(D_METHOD("set_lod_view_max", "lod"), &VoxelTerrain::set_lod_view_max);
+    ClassDB::bind_method(D_METHOD("get_lod_view_max"), &VoxelTerrain::get_lod_view_max);
     ClassDB::bind_method(D_METHOD("set_lod_far_limit", "enabled"), &VoxelTerrain::set_lod_far_limit);
     ClassDB::bind_method(D_METHOD("get_lod_far_limit"), &VoxelTerrain::get_lod_far_limit);
     ClassDB::bind_method(D_METHOD("get_lod_numbers"), &VoxelTerrain::get_lod_numbers);
@@ -175,6 +177,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::PACKED_FLOAT32_ARRAY, "lod_pixel_errors"), "set_lod_pixel_errors", "get_lod_pixel_errors");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_margin_deg", PROPERTY_HINT_RANGE, vformat("%d,180,1,suffix:deg", int(ChunkDiscoverer::RESCAN_TURN_DEG))), "set_lod_view_margin_deg", "get_lod_view_margin_deg");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_view_memory_m", PROPERTY_HINT_RANGE, "-1,100000,1,or_greater,suffix:m"), "set_lod_view_memory_m", "get_lod_view_memory_m");
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_view_max", PROPERTY_HINT_RANGE, "-1,63,1"), "set_lod_view_max", "get_lod_view_max");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lod_far_limit"), "set_lod_far_limit", "get_lod_far_limit");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
@@ -526,6 +529,15 @@ void VoxelTerrain::set_lod_view_memory_m(float p_metres) {
 
 float VoxelTerrain::get_lod_view_memory_m() const {
     return cfg().lod_view_memory_m;
+}
+
+void VoxelTerrain::set_lod_view_max(int p_lod) {
+    ERR_FAIL_COND_MSG(world->is_started(), "lod_view_max must be set before the terrain enters the tree.");
+    cfg().lod_view_max = p_lod;
+}
+
+int VoxelTerrain::get_lod_view_max() const {
+    return cfg().lod_view_max;
 }
 
 void VoxelTerrain::set_lod_far_limit(bool p_enabled) {

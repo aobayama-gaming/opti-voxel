@@ -3,13 +3,16 @@ extends SubViewportContainer
 ## viewport of its own with the game's sky, fog and sun. An edit restarts the terrain's world on the new one in place
 ## (VoxelTerrain.restart_world: its device, pages and pipelines kept): the climate's numbers are shader params
 ## (Cascade::ShaderParams), so a world whose structure didn't change builds no pipeline, and the time is the reload of
-## the chunks in view. A drag restarts it as often as the loads keep up. Without the world's clouds (their shadows).
+## the chunks in view. A drag restarts it as often as the loads keep up. The view holds the last terrain's frame until
+## the new one's chunks are loaded (no blank ground between them). Without the world's clouds (their shadows).
 ## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
 
 ## The pixel error of the view's LODs, the game's: at 12 the LOD seams showed as ledges, for a reload only ~10% shorter.
 const LOD_PIXEL_ERROR := 4.0
+## The coarsest LOD the view loads (1.6 km chunks): its reach, the orbit's tens of km.
+const LOD_VIEW_MAX := 10
 ## The pause after an edit before the terrain restarts (seconds): a slider's edits of a few frames restart it once.
 const RESTART_AFTER := 0.05
 ## A restart waits for the last one's chunks in view at most this long (seconds): a drag shows each load finished.
@@ -109,6 +112,7 @@ func _restart_terrain() -> void:
 		return
 	_restart_usec = Time.get_ticks_usec()
 	if _terrain != null:
+		_hold(true)  # the last frame on screen while the new world loads
 		_unshift_camera()  # the world starts again at its first render origin
 		_terrain.restart_world(_without_clouds(_json), _dir)
 	else:
@@ -116,6 +120,7 @@ func _restart_terrain() -> void:
 		_terrain.pipeline_mode = 2
 		_terrain.lod_pixel_error = LOD_PIXEL_ERROR
 		_terrain.lod_far_limit = true
+		_terrain.lod_view_max = LOD_VIEW_MAX
 		# The discoverer and the site walk on the CPU: their GPU variants build their point pipelines on a local device
 		# of their own, ~9 s per restart (the driver, not glslang), for a view of a few hundred chunks.
 		_terrain.discoverer_mode = 0
@@ -151,6 +156,7 @@ func _stop_terrain() -> void:
 	_terrain = null
 	_started = ""
 	_restart_usec = 0
+	_hold(false)
 	_unshift_camera()
 
 
@@ -173,11 +179,17 @@ func _notification(p_what: int) -> void:
 func _process(_delta: float) -> void:
 	if _terrain == null or _restart_usec == 0:
 		return
-	if _terrain.is_load_complete():
+	if _terrain.is_load_complete() or Time.get_ticks_usec() - _restart_usec > int(LOAD_WAIT * 1e6):
+		_hold(false)
 		loaded_ms = (Time.get_ticks_usec() - _restart_usec) / 1000
 		status = "terrain loaded in %d ms (restart and chunks in view)" % loaded_ms
 		_restart_usec = 0
 		status_changed.emit()
+
+
+# p_on: the viewport keeps its last frame (renders nothing), else renders while shown.
+func _hold(p_on: bool) -> void:
+	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED if p_on else SubViewport.UPDATE_WHEN_VISIBLE
 
 
 # The camera's target on the asked point: the terrain's base there (its render position, VoxelTerrain's tangent frame)

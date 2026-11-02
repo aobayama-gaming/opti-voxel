@@ -11,7 +11,7 @@ const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 const MIXER_KEYS := ["fields", "current", "mode", "view", "mixer_version", "name"]
 const VERSION := 2
 # The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".
-const WORLD_VIEW := {"extent_m": 400000.0, "chart_x": 0, "chart_y": 1}
+const WORLD_VIEW := {"extent_m": 100000.0, "chart_x": 0, "chart_y": 1}
 # Significant digits a number keeps in the file (a float32's).
 const DIGITS := 7
 # A value fits on one line of the file up to this width, else it opens one line per item.

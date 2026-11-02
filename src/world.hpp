@@ -64,6 +64,7 @@ public:
         std::vector<float> lod_pixel_errors; // per LOD, replaces lod_pixel_error (0 or past the end: lod_pixel_error)
         float lod_view_margin_deg = 20.0f;
         float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
+        int lod_view_max = -1; // the coarsest LOD the view loads (< 0: the engine's top): its reach
         GPUDirectMesher::Settings direct;
         int debug_view = 0;
         int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
