@@ -1,272 +1,133 @@
 {
  "comment": "A world with the cascade's shaped bands: a continent field and a terrain-type field (the continents, twisted) choose mountains (ridged multifractal, lifted by their curve), hills (billow), badlands (stepped by their curve) and plains (low billow), with turbulence from three warp fields. Tuned for 5 cm voxels; ranges keep the octaves the ground has at any LOD count.",
  "engine": {"voxel_m": 0.05, "lods": 25},
- "climate": {"fields": [
-  {
-   "name": "continent",
-   "seed": 209,
-   "bands": [
-    {
-     "from_m": 13000,
-     "to_m": 30000000,
-     "amp": 1.0,
-     "persistence": 0.75
-    }
-   ]
-  },
-  {
-   "name": "terrain",
-   "seed": 102,
-   "bands": [
-    {
-     "from_m": 3200,
-     "to_m": 30000000,
-     "amp": 0.12,
-     "persistence": 0.75
-    }
-   ],
-   "terms": [
-    {
-     "source": "continent",
-     "x": 1.0
-    }
-   ]
-  },
-  {
-   "name": "badland",
-   "seed": 103,
-   "bands": [
-    {
-     "from_m": 6500,
-     "to_m": 30000000,
-     "amp": 1.0,
-     "persistence": 0.7
-    }
-   ]
-  },
-  {
-   "name": "wx",
-   "seed": 105,
-   "bands": [
-    {
-     "from_m": 200,
-     "to_m": 3200,
-     "amp": 0.5,
-     "persistence": 0.6
-    }
-   ]
-  },
-  {
-   "name": "wy",
-   "seed": 106,
-   "bands": [
-    {
-     "from_m": 200,
-     "to_m": 3200,
-     "amp": 0.5,
-     "persistence": 0.6
-    }
-   ]
-  },
-  {
-   "name": "wz",
-   "seed": 107,
-   "bands": [
-    {
-     "from_m": 200,
-     "to_m": 3200,
-     "amp": 0.5,
-     "persistence": 0.6
-    }
-   ]
-  }
- ]},
+ "climate": {
+  "fields": [
+   {
+    "name": "continent",
+    "seed": 209,
+    "bands": [
+     {"from_m": 13000, "to_m": 30000000, "amp": 1.0, "persistence": 0.75}
+    ]
+   },
+   {
+    "name": "terrain",
+    "seed": 102,
+    "bands": [
+     {"from_m": 3200, "to_m": 30000000, "amp": 0.12, "persistence": 0.75}
+    ],
+    "terms": [
+     {"source": "continent", "x": 1.0}
+    ]
+   },
+   {
+    "name": "badland",
+    "seed": 103,
+    "bands": [
+     {"from_m": 6500, "to_m": 30000000, "amp": 1.0, "persistence": 0.7}
+    ]
+   },
+   {
+    "name": "wx",
+    "seed": 105,
+    "bands": [
+     {"from_m": 200, "to_m": 3200, "amp": 0.5, "persistence": 0.6}
+    ]
+   },
+   {
+    "name": "wy",
+    "seed": 106,
+    "bands": [
+     {"from_m": 200, "to_m": 3200, "amp": 0.5, "persistence": 0.6}
+    ]
+   },
+   {
+    "name": "wz",
+    "seed": 107,
+    "bands": [
+     {"from_m": 200, "to_m": 3200, "amp": 0.5, "persistence": 0.6}
+    ]
+   }
+  ]
+ },
  "biomes": [
   {
    "name": "mountains",
-   "at": {"terrain": [0.485, 0.4565]},
-   "amp": [
-    {
-     "field": "ground",
-     "from_m": 0.4,
-     "to_m": 800,
-     "x": 1.2,
-     "shape": "ridged",
-     "multifractal": 2,
-     "warp_m": 80,
-     "warp_fields": [
-      "wx",
-      "wy",
-      "wz"
-     ]
-    },
-    {
-     "field": "ground",
-     "from_m": 1600,
-     "to_m": 6500,
-     "x": 2.5,
-     "shape": "ridged",
-     "multifractal": 2,
-     "warp_m": 80,
-     "warp_fields": [
-      "wx",
-      "wy",
-      "wz"
-     ]
-    },
-    {
-     "field": "ground",
-     "wavelength_m": 13000,
-     "x": 1.5,
-     "shape": "ridged",
-     "multifractal": 2
-    },
-    {
-     "field": "ground",
-     "from_m": 26000,
-     "to_m": 30000000,
-     "x": 0.15
-    }
-   ],
-   "surface": {
-    "flat": "#8c867c",
-    "steep": "#5c564e"
+   "at": {
+    "terrain": [0.485, 0.4565]
    },
-   "debug_color": "#7a6a5a",
-   "curve": [
-    [
-     -1500,
-     -1200
-    ],
-    [
-     0,
-     0
-    ],
-    [
-     600,
-     1100
-    ],
-    [
-     1500,
-     2600
+   "graph": {
+    "nodes": [
+     {"id": "n1", "kind": "note", "from_m": 26214.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2", "kind": "note", "from_m": 13107.2, "to_m": 13107.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2s", "kind": "shape", "in": "n2", "shape": "ridged"},
+     {"id": "n2m", "kind": "multifractal", "in": "n2s", "gain": 2},
+     {"id": "n3", "kind": "note", "from_m": 1638.4, "to_m": 6553.6, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n3w", "kind": "warp", "in": "n3", "fields": ["wx", "wy", "wz"], "amount_m": 80},
+     {"id": "n3s", "kind": "shape", "in": "n3w", "shape": "ridged"},
+     {"id": "n3m", "kind": "multifractal", "in": "n3s", "gain": 2},
+     {"id": "n4", "kind": "note", "from_m": 0.4, "to_m": 819.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n4w", "kind": "warp", "in": "n4", "fields": ["wx", "wy", "wz"], "amount_m": 80},
+     {"id": "n4s", "kind": "shape", "in": "n4w", "shape": "ridged"},
+     {"id": "n4m", "kind": "multifractal", "in": "n4s", "gain": 2},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.15}, {"in": "n2m", "x": 1.5}, {"in": "n3m", "x": 2.5}, {"in": "n4m", "x": 1.2}]},
+     {"id": "curve", "kind": "curve", "in": "mix", "points": [[-1500, -1200], [0, 0], [600, 1100], [1500, 2600]]},
+     {"id": "out", "kind": "output", "height": "curve"}
     ]
-   ]
+   },
+   "surface": {"flat": "#8c867c", "steep": "#5c564e"},
+   "debug_color": "#7a6a5a"
   },
   {
    "name": "badlands",
-   "at": {"badland": [0.575, 0.3575], "continent": [0.405, 0.5225]},
-   "amp": [
-    {
-     "field": "ground",
-     "from_m": 0.4,
-     "to_m": 1600,
-     "x": 0.7,
-     "shape": "billow",
-     "warp_m": 40,
-     "warp_fields": [
-      "wx",
-      "wy",
-      "wz"
-     ]
-    },
-    {
-     "field": "ground",
-     "from_m": 3200,
-     "to_m": 30000000,
-     "x": 0.1
-    }
-   ],
-   "surface": {
-    "flat": "#b8643a",
-    "steep": "#7c3c24"
+   "at": {
+    "badland": [0.575, 0.3575],
+    "continent": [0.405, 0.5225]
    },
-   "debug_color": "#c06030",
-   "curve": [
-    [
-     -200,
-     -200
-    ],
-    [
-     0,
-     0
-    ],
-    [
-     30,
-     40
-    ],
-    [
-     40,
-     40
-    ],
-    [
-     70,
-     80
-    ],
-    [
-     80,
-     80
-    ],
-    [
-     110,
-     120
-    ],
-    [
-     300,
-     320
+   "graph": {
+    "nodes": [
+     {"id": "n1", "kind": "note", "from_m": 3276.8, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2", "kind": "note", "from_m": 0.4, "to_m": 1638.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2w", "kind": "warp", "in": "n2", "fields": ["wx", "wy", "wz"], "amount_m": 40},
+     {"id": "n2s", "kind": "shape", "in": "n2w", "shape": "billow"},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.1}, {"in": "n2s", "x": 0.7}]},
+     {"id": "curve", "kind": "curve", "in": "mix", "points": [[-200, -200], [0, 0], [30, 40], [40, 40], [70, 80], [80, 80], [110, 120], [300, 320]]},
+     {"id": "out", "kind": "output", "height": "curve"}
     ]
-   ]
+   },
+   "surface": {"flat": "#b8643a", "steep": "#7c3c24"},
+   "debug_color": "#c06030"
   },
   {
    "name": "hills",
-   "at": {"terrain": [0.425, 0.5115]},
-   "amp": [
-    {
-     "field": "ground",
-     "from_m": 0.4,
-     "to_m": 3200,
-     "x": 0.8,
-     "shape": "billow",
-     "warp_m": 60,
-     "warp_fields": [
-      "wx",
-      "wy",
-      "wz"
-     ]
-    },
-    {
-     "field": "ground",
-     "from_m": 6500,
-     "to_m": 30000000,
-     "x": 0.1
-    }
-   ],
-   "surface": {
-    "flat": "#6c8a3c",
-    "steep": "#5c5040"
+   "at": {
+    "terrain": [0.425, 0.5115]
    },
+   "graph": {
+    "nodes": [
+     {"id": "n1", "kind": "note", "from_m": 6553.6, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2", "kind": "note", "from_m": 0.4, "to_m": 3276.8, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2w", "kind": "warp", "in": "n2", "fields": ["wx", "wy", "wz"], "amount_m": 60},
+     {"id": "n2s", "kind": "shape", "in": "n2w", "shape": "billow"},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.1}, {"in": "n2s", "x": 0.8}]},
+     {"id": "out", "kind": "output", "height": "mix"}
+    ]
+   },
+   "surface": {"flat": "#6c8a3c", "steep": "#5c5040"},
    "debug_color": "#80a050"
   },
   {
    "name": "plains",
-   "amp": [
-    {
-     "field": "ground",
-     "from_m": 0.4,
-     "to_m": 800,
-     "x": 0.3,
-     "shape": "billow"
-    },
-    {
-     "field": "ground",
-     "from_m": 1600,
-     "to_m": 30000000,
-     "x": 0.04
-    }
-   ],
-   "surface": {
-    "flat": "#82a440",
-    "steep": "#6c5c44"
+   "graph": {
+    "nodes": [
+     {"id": "n1", "kind": "note", "from_m": 1638.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2", "kind": "note", "from_m": 0.4, "to_m": 819.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "n2s", "kind": "shape", "in": "n2", "shape": "billow"},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.04}, {"in": "n2s", "x": 0.3}]},
+     {"id": "out", "kind": "output", "height": "mix"}
+    ]
    },
+   "surface": {"flat": "#82a440", "steep": "#6c5c44"},
    "debug_color": "#9cc060"
   }
  ]

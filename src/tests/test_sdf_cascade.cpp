@@ -15,6 +15,12 @@ using ExactNoise::float_bits;
 
 namespace {
 
+// The template ground's coarsest octave at p_voxel metres (Climate::template_graph's range).
+int template_top(double p_voxel) {
+    const ov::Value graph = Climate::template_graph(p_voxel);
+    return ExactNoise::lattice_k(graph["nodes"][size_t(0)]["to_m"].as_double(), p_voxel);
+}
+
 // Lattice boxes around 0, the 2^32 wrap and +-2^60, both parities, sizes 1 to 32.
 std::vector<Box> test_boxes() {
     const int64_t bases[] = { 0, -1, 7, (int64_t(1) << 32) - 9, -(int64_t(1) << 32) + 3, (int64_t(1) << 60) - 77, -(int64_t(1) << 60) + 5 };
@@ -80,14 +86,14 @@ TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bi
         SDFCascade sdf;
         sdf.configure(param, lods);
         const Spec &spec = sdf.get_spec();
-        // The micro engine's top: k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
-        const int k_top = std::min(lods + 4, SDFCascade::micro_top_k(param.voxel_size));
+        // The template's top: k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
+        const int k_top = std::min(lods + 4, template_top(param.voxel_size));
         CHECK(k_top == 16);
         CHECK(spec.top_level() == k_top - 3);
         CHECK(spec.bands.size() == size_t(k_top - 2));
         CHECK(spec.bands.back().k == 3);
         // Capped at 3.3 km: 6553.6 voxels at 0.5 m.
-        CHECK(spec.bands.front().amp == float(SDFCascade::MAX_AMP_M / 0.5));
+        CHECK(spec.bands.front().amp == float(Climate::TEMPLATE_MAX_AMP_M / 0.5));
         int compared = 0;
         int differing = 0;
         const int64_t bases[] = { 0, 600, (int64_t(1) << 32) - 3, -(int64_t(1) << 60) + 1000, (int64_t(1) << 60) - 4000 };
@@ -139,11 +145,11 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
     }
 }
 
-// The micro engine stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
+// The template ground stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
 // same octaves, so the same bits.
-TEST_CASE("SDFCascade: the ground stops at the micro engine's top, the same at any LOD count past it") {
-    CHECK(SDFCascade::micro_top_k(0.05) == 19);
-    CHECK(SDFCascade::micro_top_k(0.5) == 16);
+TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD count past it") {
+    CHECK(template_top(0.05) == 19);
+    CHECK(template_top(0.5) == 16);
     ChunkParam param;
     param.voxel_size = 0.05f;
     auto top = [&](const SDFCascade &p_sdf) {
@@ -158,7 +164,7 @@ TEST_CASE("SDFCascade: the ground stops at the micro engine's top, the same at a
     s25.configure(param, 25);
     CHECK(top(s15) == 19);
     CHECK(top(s25) == 19);
-    CHECK(s25.climate_ground().field_k_max == 29);
+    CHECK(s25.climate_ground().k_max == 29);
     for (int lod = 0; lod < 15; lod += 2) {
         const int64_t step = int64_t(1) << lod;
         for (int i = -3; i <= 3; i++) {
@@ -328,5 +334,5 @@ TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
         }
     }
     CHECK(samples == 2 * 2 * 4 * 13 * 7);
-    CHECK(hash == 7569340743310854193ull); // the ground stops at the micro engine's top: 25 LODs reseeded from k = 19
+    CHECK(hash == 15955514549431576711ull); // re-pinned when octave k's seed became make_octave(seed, k): the same at any top
 }

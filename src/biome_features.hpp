@@ -22,32 +22,39 @@ enum Feature {
     FEATURE_COUNT,
 };
 
-// A kind's cells and sizes (metres).
+// A kind: its name (a world file's "features" entries name it) and its cells' seed. How large its cells are, how often
+// one holds a feature and how wide it is are the world's data (Climate::FeatureShare: a biome's, or the world's).
 struct Kind {
     const char *name;
-    double cell_m;
-    double chance; // a cell holds a site with this probability
-    double radius_lo_m; // the feature's radius, uniform in [lo, hi)
-    double radius_hi_m;
     uint32_t seed;
 };
 const Kind &kind(Feature p_feature);
+// The kind named p_name, FEATURE_COUNT for none.
+Feature feature_named(const ov::str &p_name);
 
+// A cell's candidate: where it stands and its draws, the chance's and the radius's (each uniform in [0, 1)), which its
+// biome's entry turns into a feature or none (kept: chance_draw < its chance; radius_of).
 struct Site {
     Feature feature = LAVA_LAKE;
+    int shift = 4; // its cells' (cell_shift)
     VoxelPos at; // on the base surface, LOD0 voxels
-    double radius = 0.0; // voxels
+    double radius = 0.0; // voxels (radius_of)
     uint32_t seed = 0;
+    double chance_draw = 0.0;
+    double radius_draw = 0.0;
 };
 
-// log2 of the kind's cell side in voxels (at least 4).
-int cell_shift(Feature p_feature, double p_voxel);
-// The sites of p_feature in the box [p_lo, p_hi] (LOD0 voxels, inclusive), cell by cell (z, y, then x). A site's hashed
-// point stays in the middle half of its cell: on the flat base two sites of a kind are at least half a cell apart.
-void sites(Feature p_feature, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, double p_voxel, std::vector<Site> &r_out);
+// log2 of a cell side of p_cell_m metres in voxels (at least 4).
+int cell_shift(double p_cell_m, double p_voxel);
+// The candidates of p_feature on its cells of 2^p_shift voxels in the box [p_lo, p_hi] (LOD0 voxels, inclusive), cell by
+// cell (z, y, then x). A site's hashed point stays in the middle half of its cell: on the flat base two sites of a kind
+// are at least half a cell apart.
+void sites(Feature p_feature, int p_shift, const VoxelPos &p_lo, const VoxelPos &p_hi, const BaseSurface &p_base, std::vector<Site> &r_out);
+// A candidate's radius (voxels) in [p_lo_m, p_hi_m) metres from its draw.
+double radius_of(const Site &p_site, double p_lo_m, double p_hi_m, double p_voxel);
 // Another spot for p_site in the middle half of its cell (hashed from its seed and p_attempt > 0; 0 keeps it) projected
 // onto the base (p_site itself where that leaves the cell: two cells' features never meet), the rest the same: place() tries LAKE_ATTEMPTS of them for a lake before giving up on a slope.
-Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base, double p_voxel);
+Site moved(const Site &p_site, int p_attempt, const BaseSurface &p_base);
 inline constexpr int LAKE_ATTEMPTS = 4;
 
 // The library types the features are made of.

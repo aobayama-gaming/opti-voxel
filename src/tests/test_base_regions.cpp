@@ -220,7 +220,7 @@ TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radiu
         return double(amp);
     };
     const double flat = max_amp(0.0);
-    CHECK(flat == doctest::Approx(SDFCascade::MAX_AMP_M / 0.05));
+    CHECK(flat == doctest::Approx(Climate::TEMPLATE_MAX_AMP_M / 0.05));
     CHECK(max_amp(6371000.0) == flat);
     CHECK(max_amp(2000.0) == doctest::Approx(SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05));
 }

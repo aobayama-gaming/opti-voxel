@@ -1,39 +1,51 @@
 extends RefCounted
-## A biome graph node's GraphNode: its port rows (a Mix's rows carry their volume, mute, solo and centre), then one
-## row per parameter. Edits go through the mixer (p_ctx.set_params): the model is the truth, the UI only shows it.
+## A graph node's GraphNode, built from the engine's kind (EngineInfo.kind): a port per input (a mix's rows carry their
+## volume, mute and solo), one output, then a row per parameter the node has (an optional one can be taken out) and a
+## menu adding the optional ones it hasn't. Edits go through the mixer (p_ctx.set_params): the node, as world.json holds
+## it, is the truth; the UI only shows it.
 
+const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
+const Graph := preload("res://debug/biome_mixer/graph.gd")
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
-const Octaves := preload("res://debug/biome_mixer/octaves.gd")
 const CurveEdit := preload("res://debug/biome_mixer/curve_edit.gd")
 
 const LABEL_W := 84.0
+# A surface colour the biome doesn't set yet starts the picker at these (the engine's procedural ground otherwise).
+const SURFACE := {"flat": "#5c7a3a", "steep": "#6b625a"}
 
 
-# A Shape's phi(n) over n in [-1, 1].
+# A shape node's phi(n) over n in [-1, 1], the engine's (EngineInfo.shape_phi), or why the engine refuses the shape.
 class PhiGraph:
 	extends Control
-	var coeffs := [0.0, 1.0, 0.0, 0.0]
+	var node := {}
+	var multifractal := false
 
 	func _init() -> void:
 		custom_minimum_size = Vector2(200, 70)
 
 	func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, size), Kinds.PLOT_BG)
-		var ys := []
+		var ns := PackedFloat32Array()
+		for i in 65:
+			ns.append(lerpf(-1.0, 1.0, i / 64.0))
+		var r := EngineInfo.shape_phi(node, multifractal, ns)
+		var font := get_theme_default_font()
+		if String(r.error) != "":
+			draw_string(font, Vector2(4, 14), String(r.error), HORIZONTAL_ALIGNMENT_LEFT, size.x - 8, 10, Color(1.0, 0.5, 0.45))
+			return
+		var ys: PackedFloat32Array = r.phi
 		var lo := -1.0
 		var hi := 1.0
-		for i in 65:
-			var y := Kinds.phi(coeffs, lerpf(-1.0, 1.0, i / 64.0))
-			ys.append(y)
+		for y in ys:
 			lo = minf(lo, y)
 			hi = maxf(hi, y)
 		var line := PackedVector2Array()
-		for i in 65:
+		for i in ys.size():
 			line.append(Vector2(i / 64.0 * size.x, size.y - (ys[i] - lo) / (hi - lo) * size.y))
 		var zero := size.y - (0.0 - lo) / (hi - lo) * size.y
 		draw_line(Vector2(0, zero), Vector2(size.x, zero), Color(1, 1, 1, 0.15))
-		draw_polyline(line, Kinds.PORT_COLORS[Kinds.FIELD], 2.0, true)
-		draw_string(get_theme_default_font(), Vector2(4, 12), "phi(n), n in [-1, 1]", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.45))
+		draw_polyline(line, Kinds.LINK, 2.0, true)
+		draw_string(font, Vector2(4, 12), "phi(n), n in [-1, 1]", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.45))
 
 
 static func fmt_m(p_m: float) -> String:
@@ -42,102 +54,80 @@ static func fmt_m(p_m: float) -> String:
 	return "%s m" % String.num(p_m, 2 if p_m < 1.0 else 1)
 
 
-static func title(p_node: Dictionary, p_voxel_m: float) -> String:
-	var t: String = Kinds.KINDS[p_node.kind]["title"]
-	match p_node.kind:
+static func title(p_node: Dictionary) -> String:
+	var t := Kinds.title(p_node.kind)
+	match String(p_node.kind):
 		"note":
-			t += " %s" % fmt_m(Octaves.wavelength_m(int(Kinds.param(p_node, "k")), p_voxel_m))
-			if Kinds.param(p_node, "warp"):
-				t += ", warped"
+			if p_node.has("wavelength_m"):
+				t += " %s" % fmt_m(float(p_node.wavelength_m))
+			elif p_node.has("from_m") and p_node.has("to_m"):
+				t += " %s .. %s" % [fmt_m(float(p_node.from_m)), fmt_m(float(p_node.to_m))]
 		"shape":
-			t += " %s" % Kinds.param(p_node, "preset")
-	return t
+			t += " %s" % ("coeffs" if p_node.has("coeffs") else String(p_node.get("shape", "plain")))
+		"warp":
+			t += " %s" % fmt_m(float(p_node.get("amount_m", 0.0)))
+	return "%s  (%s)" % [t, p_node.id]
 
 
-static func build(p_id: String, p_node: Dictionary, p_ctx: Object) -> GraphNode:
+static func build(p_node: Dictionary, p_ctx: Object) -> GraphNode:
 	var gn := GraphNode.new()
-	gn.name = p_id
-	gn.position_offset = Vector2(p_node.pos[0], p_node.pos[1])
-	gn.tooltip_text = Kinds.KINDS[p_node.kind].get("hint", "")
-	var ins := Kinds.inputs(p_node)
-	var outs := Kinds.outputs(p_node)
-	for i in maxi(ins.size(), outs.size()):
-		var out_label: String = outs[i][0] if i < outs.size() else ""
-		if p_node.kind == "mix" and i < Kinds.rows(p_node).size():
-			gn.add_child(_mix_row(p_id, p_node, i, p_ctx, out_label))
-		elif p_node.kind == "mix":
-			gn.add_child(_port_row("+ link a note here for a new row", out_label))
+	var id := String(p_node.id)
+	gn.name = id
+	var pos: Array = p_node.get("pos", [0.0, 0.0])
+	gn.position_offset = Vector2(float(pos[0]), float(pos[1]))
+	gn.tooltip_text = Kinds.hint(p_node.kind)
+	var ins := Graph.input_count(p_node)
+	var out := Graph.has_output(p_node)
+	for i in maxi(ins, 1 if out else 0):
+		var out_label := "out" if i == 0 and out else ""
+		if p_node.kind == "mix" and i < Graph.rows(p_node).size():
+			gn.add_child(_mix_row(id, p_node, i, p_ctx, out_label))
 		else:
-			gn.add_child(_port_row(ins[i][0] if i < ins.size() else "", out_label))
-		var tl: int = ins[i][1] if i < ins.size() else 0
-		var tr: int = outs[i][1] if i < outs.size() else 0
-		gn.set_slot(i, i < ins.size(), tl, Kinds.PORT_COLORS[tl], i < outs.size(), tr, Kinds.PORT_COLORS[tr])
-	var coeffs: bool = Kinds.param(p_node, "preset") == "coeffs"
-	for d in Kinds.KINDS[p_node.kind]["params"]:
-		if d.type == "rows":
+			gn.add_child(_port_row(Graph.input_name(p_node, i) if i < ins else "", out_label))
+		gn.set_slot(i, i < ins, 0, Kinds.LINK, i == 0 and out, 0, Kinds.LINK)
+	var absent := []
+	for p in EngineInfo.kind(p_node.kind).get("params", []):
+		if p.type == "rows":
 			continue
-		if p_node.kind == "shape" and (d.name in ["c0", "c1", "c2", "c3"]) != coeffs and d.name != "preset":
-			continue
-		gn.add_child(_param_row(p_id, p_node, d, p_ctx))
-	if p_node.kind == "note":
-		var thumb := ColorRect.new()
-		thumb.custom_minimum_size = Vector2(150, 64)
-		thumb.material = ShaderMaterial.new()
-		thumb.material.shader = p_ctx.thumb_shader
-		thumb.tooltip_text = "The note alone, from above, over four wavelengths"
-		gn.add_child(thumb)
-		gn.set_meta("thumb", thumb)
-	elif p_node.kind == "shape":
+		if p_node.has(p.name):
+			gn.add_child(_param_row(id, p_node, p, p_ctx))
+		else:
+			absent.append(p.name)
+	if p_node.kind == "shape":
 		var phi := PhiGraph.new()
 		gn.add_child(phi)
 		gn.set_meta("phi", phi)
-	elif p_node.kind == "note_warp":
-		var info := Label.new()
-		info.modulate = Color(1, 1, 1, 0.7)
-		info.text = "No noise of its own: x, y, z read\nnotes (coarser than the one it moves).\nPlayed notes cost nothing more."
-		gn.add_child(info)
-	elif p_node.kind == "mix":
-		var total := Label.new()
-		total.modulate = Color(1, 1, 1, 0.7)
-		gn.add_child(total)
-		p_ctx.mix_ui.get_or_add(p_id, {"rows": [], "total": null}).total = total
-	# The notes are the ground's: no x.
-	if p_node.kind != "note":
-		var x := Button.new()
-		x.text = "x"
-		x.flat = true
-		x.tooltip_text = "Delete this node (or select it and press Delete)"
-		x.pressed.connect(func() -> void: p_ctx.delete_nodes([p_id]))
-		gn.get_titlebar_hbox().add_child(x)
+	elif p_node.kind == "output":
+		for key in ["flat", "steep"]:
+			gn.add_child(_surface_row(key, p_ctx))
+	if not absent.is_empty():
+		var add := MenuButton.new()
+		add.text = "+ parameter"
+		add.flat = false
+		add.tooltip_text = "Add one of the kind's optional parameters (the engine's default until it is set)"
+		for a in absent:
+			add.get_popup().add_item(a)
+		add.get_popup().id_pressed.connect(func(i: int) -> void:
+			var name: String = absent[i]
+			p_ctx.set_params(id, {name: Graph.default_value(EngineInfo.param(p_node.kind, name), p_ctx.world.fields)}, true))
+		gn.add_child(add)
+	var x := Button.new()
+	x.text = "x"
+	x.flat = true
+	x.tooltip_text = "Delete this node (or select it and press Delete): what read it reads its input"
+	x.pressed.connect(func() -> void: p_ctx.delete_nodes([id]))
+	gn.get_titlebar_hbox().add_child(x)
 	refresh(gn, p_node, p_ctx)
 	return gn
 
 
-# What the climate's warp is, in a note's warp tooltip: its octaves and their reads.
-static func climate_warp_info(p_model: Dictionary) -> String:
-	var cw := Kinds.climate_warp(p_model)
-	var k := int(cw.k)
-	var n := int(cw.octaves)
-	return "The climate's warp, every biome's: %s .. %s, %d octaves x 3 axes = %d reads per point, once however many notes it moves." % [
-		fmt_m(Octaves.wavelength_m(k - n + 1, Octaves.voxel_m)), fmt_m(Octaves.wavelength_m(k, Octaves.voxel_m)), n, 3 * n]
-
-
-# What a node shows from its parameters (title, thumbnail, phi graph), after an edit.
+# What a node shows from its parameters (title, phi graph), after an edit.
 static func refresh(p_gn: GraphNode, p_node: Dictionary, p_ctx: Object) -> void:
-	var voxel_m: float = Octaves.voxel_m
-	p_gn.title = title(p_node, voxel_m)
-	if p_gn.has_meta("thumb"):
-		var k := int(Kinds.param(p_node, "k"))
-		var w := Octaves.shader_words(Octaves.ground_octave(k, Octaves.lods, Octaves.voxel_m), k, [0, 0, 0])
-		var m: ShaderMaterial = p_gn.get_meta("thumb").material
-		m.set_shader_parameter("u_base", w.base)
-		m.set_shader_parameter("u_frac", w.frac)
-		m.set_shader_parameter("u_salt", w.salt)
-		m.set_shader_parameter("u_inv", pow(2.0, -k))
-		m.set_shader_parameter("u_span", 4.0 * pow(2.0, k))
+	p_gn.title = title(p_node)
 	if p_gn.has_meta("phi"):
 		var phi: PhiGraph = p_gn.get_meta("phi")
-		phi.coeffs = Kinds.shape_coeffs(p_node)
+		phi.node = p_node
+		phi.multifractal = Graph.nodes(p_ctx.model.graph).any(func(n): return n.kind == "multifractal" and String(n.get("in", "")) == String(p_node.id))
 		phi.queue_redraw()
 
 
@@ -162,20 +152,20 @@ static func _label(p_text: String, p_w: float = LABEL_W) -> Label:
 
 
 # A slider and a number box on one value (the box takes any value, the slider shows its range).
-static func _slider(p_value: float, p_min: float, p_max: float, p_step: float, p_set: Callable) -> Control:
+static func _slider(p_value: float, p_range: Array, p_set: Callable) -> Control:
 	var row := HBoxContainer.new()
 	var s := HSlider.new()
-	s.min_value = p_min
-	s.max_value = p_max
-	s.step = p_step
+	s.min_value = p_range[0]
+	s.max_value = p_range[1]
+	s.step = p_range[2]
 	s.value = p_value
 	s.custom_minimum_size.x = 110
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var sp := SpinBox.new()
-	sp.min_value = p_min
-	sp.max_value = p_max
-	sp.step = p_step / 10.0
+	sp.min_value = p_range[0]
+	sp.max_value = p_range[1]
+	sp.step = p_range[2] / 10.0
 	sp.allow_greater = true
 	sp.allow_lesser = true
 	sp.value = p_value
@@ -201,123 +191,130 @@ static func _toggle(p_text: String, p_on: bool, p_tip: String, p_set: Callable) 
 	return b
 
 
-# A Mix row: its note, volume, mute / solo / centre, then what it adds (its swing in metres and its share of the
-# Mix's, filled by the mixer after each compile: show_mix) and a button that takes the row out (its note stays).
+static func _options(p_items: Array, p_value: String, p_set: Callable) -> OptionButton:
+	var ob := OptionButton.new()
+	for it in p_items:
+		ob.add_item(String(it))
+	ob.select(p_items.find(p_value))
+	ob.item_selected.connect(func(i: int) -> void: p_set.call(String(p_items[i])))
+	return ob
+
+
+# A mix row: what it plays, its volume x, mute and solo (the view's only), and a button that takes it out.
 static func _mix_row(p_id: String, p_node: Dictionary, p_i: int, p_ctx: Object, p_out: String) -> Control:
 	var row := HBoxContainer.new()
-	var r: Dictionary = Kinds.rows(p_node)[p_i]
-	var set_row := func(p_key: String, p_value: Variant) -> void:
-		var rows: Array = Kinds.rows(p_ctx.model.nodes[p_id]).duplicate(true)
-		rows[p_i][p_key] = p_value
-		p_ctx.set_params(p_id, {"rows": rows})
-	var name := _label("", 58)
-	name.tooltip_text = "The wavelength of the note this row plays"
-	row.add_child(name)
-	row.add_child(_slider(float(r.get("vol", 1.0)), 0.0, 4.0, 0.01, func(v: float) -> void: set_row.call("vol", v)))
-	row.add_child(_toggle("M", r.get("mute", false), "Mute this row", func(on: bool) -> void: set_row.call("mute", on)))
-	row.add_child(_toggle("S", r.get("solo", false), "Solo: only the soloed rows sound", func(on: bool) -> void: set_row.call("solo", on)))
-	row.add_child(_toggle("C", r.get("centre", true), "Centre: take the shape's mean out (the engine does; a shape then moves no average height)", func(on: bool) -> void: set_row.call("centre", on)))
-	var peak := _label("", 70)
-	peak.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	row.add_child(peak)
-	var bar := ProgressBar.new()
-	bar.custom_minimum_size = Vector2(80, 18)
-	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	bar.tooltip_text = "This row's share of the Mix's relief"
-	row.add_child(bar)
+	var r: Dictionary = Graph.rows(p_node)[p_i]
+	row.add_child(_label(String(r.get("in", "")), 64))
+	row.add_child(_slider(float(r.get("x", 1.0)), Kinds.range_of("mix", "x"), func(v: float) -> void:
+		var rows: Array = Graph.rows(p_ctx.model_node(p_id)).duplicate(true)
+		rows[p_i].x = v
+		p_ctx.set_params(p_id, {"rows": rows})))
+	row.add_child(_toggle("M", p_ctx.row_flag(p_id, p_i, "mute"), "Mute this row in the view (the file keeps its volume)", func(on: bool) -> void: p_ctx.set_row_flag(p_id, p_i, "mute", on)))
+	row.add_child(_toggle("S", p_ctx.row_flag(p_id, p_i, "solo"), "Solo: only the soloed rows sound in the view", func(on: bool) -> void: p_ctx.set_row_flag(p_id, p_i, "solo", on)))
 	var x := Button.new()
 	x.text = "x"
 	x.flat = true
-	x.tooltip_text = "Remove this row, and its shape if nothing else uses it (the note stays, silent)"
+	x.tooltip_text = "Remove this row (what it played stays)"
 	x.pressed.connect(func() -> void: p_ctx.remove_mix_row(p_id, p_i))
 	row.add_child(x)
 	if p_out != "":
 		var o := Label.new()
 		o.text = p_out
 		row.add_child(o)
-	var ui: Dictionary = p_ctx.mix_ui.get_or_add(p_id, {"rows": [], "total": null})
-	ui.rows.append({"name": name, "peak": peak, "bar": bar})
 	return row
 
 
-# What a Mix's rows add, after a compile (p_rows: compile.gd's mix_rows for it).
-static func show_mix(p_ui: Dictionary, p_rows: Array) -> void:
-	var total := 0.0
-	for r in p_rows:
-		total += r.peak if r.on else 0.0
-	for i in mini(p_ui.rows.size(), p_rows.size()):
-		var r: Dictionary = p_rows[i]
-		var ui: Dictionary = p_ui.rows[i]
-		if not is_instance_valid(ui.peak):
-			continue
-		ui.name.text = fmt_m(r.lam) if r.lam > 0.0 else ("-" if r.unit == 0.0 else "no note")
-		ui.peak.text = ("+-%s" % fmt_m(r.peak)) if r.unit > 0.0 else ""
-		ui.peak.modulate.a = 1.0 if r.on else 0.4
-		ui.peak.tooltip_text = "Its swing: volume x %s (lambda / 8) x the shaped note's bound%s" % [fmt_m(r.unit), "" if r.on else " (muted)"]
-		ui.bar.value = 100.0 * r.peak / total if r.on and total > 0.0 else 0.0
-	if p_ui.total != null and is_instance_valid(p_ui.total):
-		p_ui.total.text = "height = the rows' sum, within +-%s\na row: volume x lambda/8 x its shaped note" % fmt_m(total)
+# The output's surface colour p_key (the biome's "surface", not the graph's).
+static func _surface_row(p_key: String, p_ctx: Object) -> Control:
+	var row := HBoxContainer.new()
+	row.add_child(_label(p_key))
+	var cp := ColorPickerButton.new()
+	cp.color = Color(String(p_ctx.model.get("surface", {}).get(p_key, SURFACE[p_key])))
+	cp.custom_minimum_size = Vector2(70, 24)
+	cp.color_changed.connect(func(c: Color) -> void: p_ctx.set_surface(p_key, "#" + c.to_html(false)))
+	row.add_child(cp)
+	return row
 
 
 static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx: Object) -> Control:
 	var row := HBoxContainer.new()
 	row.add_child(_label(p_d.name))
-	row.tooltip_text = p_d.get("hint", "")
-	if p_node.kind == "note" and p_d.name == "warp":
-		row.tooltip_text += "\n" + climate_warp_info(p_ctx.model)
-	var v: Variant = Kinds.param(p_node, p_d.name)
+	var v: Variant = p_node[p_d.name]
 	var name: String = p_d.name
 	var set1 := func(p_value: Variant) -> void: p_ctx.set_params(p_id, {name: p_value})
-	match p_d.type:
-		"float":
-			var c := _slider(float(v), p_d.min, p_d.max, p_d.get("step", 0.01), set1)
+	var fields: Array = p_ctx.world.fields.map(func(f): return String(f.get("name", "")))
+	match String(p_d.type):
+		"number":
+			var c := _slider(float(v), Kinds.range_of(p_node.kind, name), set1)
 			c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(c)
-		"int":
+		"seed":
 			var sp := SpinBox.new()
-			sp.min_value = p_d.get("min", 0)
-			sp.max_value = p_d.get("max", 100)
-			sp.allow_greater = true
+			sp.max_value = 4294967295.0
 			sp.rounded = true
 			sp.value = int(v)
 			sp.value_changed.connect(func(x: float) -> void: p_ctx.set_params(p_id, {name: int(x)}))
 			row.add_child(sp)
-		"bool":
-			var cb := CheckBox.new()
-			cb.button_pressed = bool(v)
-			cb.toggled.connect(set1)
-			row.add_child(cb)
-		"enum":
-			var ob := OptionButton.new()
-			for o in p_d.options:
-				ob.add_item(o)
-			ob.select(p_d.options.find(v))
-			# An option sets its option_params with it (a Shape preset its offset), and may show other rows.
-			ob.item_selected.connect(func(i: int) -> void:
-				var option: String = p_d.options[i]
-				var sets := Kinds.option_params(p_node.kind, name, option)
-				sets[name] = option
-				p_ctx.set_params(p_id, sets, true))
-			row.add_child(ob)
-		"color":
-			var cp := ColorPickerButton.new()
-			cp.color = Color(v)
-			cp.custom_minimum_size = Vector2(70, 24)
-			cp.color_changed.connect(func(c: Color) -> void: p_ctx.set_params(p_id, {name: "#" + c.to_html(false)}))
-			row.add_child(cp)
-		"k":
-			# Fixed: the note is the ground's octave k.
-			row.add_child(_label("k %d (%s)" % [int(v), fmt_m(Octaves.wavelength_m(int(v), Octaves.voxel_m))], 0.0))
+		"pow2":
+			# A power of two: a step up doubles, a step down halves.
+			var sp := SpinBox.new()
+			sp.min_value = 1
+			sp.max_value = 256
+			sp.rounded = true
+			sp.value = int(v)
+			var cur := [int(v)]
+			sp.value_changed.connect(func(x: float) -> void:
+				var i := int(x)
+				if i & (i - 1) != 0:
+					i = cur[0] * 2 if i > cur[0] else maxi(cur[0] / 2, 1)
+					sp.set_value_no_signal(i)
+				cur[0] = i
+				p_ctx.set_params(p_id, {name: i}))
+			row.add_child(sp)
+		"field":
+			row.add_child(_options(fields, String(v), set1))
+		"fields":
+			for axis in 3:
+				var a := axis
+				row.add_child(_options(fields, String(v[a]) if v is Array and a < v.size() else "", func(f: String) -> void:
+					var three: Array = (p_node[name] as Array).duplicate()
+					three[a] = f
+					p_ctx.set_params(p_id, {name: three})))
+		"shape":
+			row.add_child(_options(Array(p_d.options), String(v), func(s: String) -> void: p_ctx.set_params(p_id, {name: s}, true)))
+		"coeffs":
+			for i in 4:
+				var k := i
+				var sp := SpinBox.new()
+				sp.min_value = -4.0
+				sp.max_value = 4.0
+				sp.step = 0.001
+				sp.allow_greater = true
+				sp.allow_lesser = true
+				sp.value = float(v[k]) if v is Array and k < v.size() else 0.0
+				sp.tooltip_text = ["c on 1", "c on n", "c on |n|", "c on n^2"][k]
+				sp.value_changed.connect(func(x: float) -> void:
+					var c: Array = (p_node[name] as Array).duplicate()
+					c[k] = x
+					p_ctx.set_params(p_id, {name: c}))
+				row.add_child(sp)
 		"points":
 			var box := VBoxContainer.new()
 			var ce := CurveEdit.new()
-			ce.set_points(v, p_ctx.curve_span(p_id))
+			ce.set_points(v, p_ctx.curve_span())
 			ce.points_changed.connect(func(p: Array) -> void: p_ctx.set_params(p_id, {name: p}))
 			p_ctx.curve_ui[p_id] = ce
 			var reset := Button.new()
 			reset.text = "Reset to no remap"
-			reset.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: Kinds.identity_curve(p_ctx.curve_span(p_id))}, true))
+			reset.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: Kinds.identity_curve(p_ctx.curve_span())}, true))
 			box.add_child(ce)
 			box.add_child(reset)
 			row.add_child(box)
+	if not p_d.required:
+		var x := Button.new()
+		x.text = "-"
+		x.flat = true
+		x.tooltip_text = "Take %s out (the engine's default, or the node's other way: wavelength_m or from_m and to_m, steepness or amp_m)" % name
+		x.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: null}, true))
+		row.add_child(x)
 	return row

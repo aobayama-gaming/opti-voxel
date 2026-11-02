@@ -118,8 +118,8 @@ public:
 
     // The world's planet radius in metres; 0 the flat world.
     double get_planet_radius() const;
-    // The world's tree count.
-    int get_world_trees() const;
+    // The side of the world's instance zone in metres (SDFTable::Zone; 0: no instance).
+    double get_world_zone_m() const;
     // Their weather (VoxelSky, every frame): the cover in [0, 1] and the wind (render metres per second).
     void set_cloud_weather(float p_cover, const Vector3 &p_wind_mps);
     // The direction towards the sun (render space; VoxelSky, from its light): the atmosphere's camera volume.

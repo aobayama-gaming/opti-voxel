@@ -6,14 +6,18 @@ the tool that designs a world's biomes.
 
 ## Model
 
-A climate (`src/climate.hpp`, a table: format above `Climate::parse` in `src/climate_parse.cpp`; three files give it, off
-without them: `engine.json` the voxel and LODs, `climate.json` the fields that place biomes, `world.json` the biomes and
-`ground_stretch`, merged by `WorldFile` into the table `parse` reads, `docs/terrain.md`) shapes **one ground**: the cascade's octaves, the
-notes, `n_k` for k = 3 (0.4 m at 5 cm) up to the ground's top octave. A biome doesn't add noise: it plays those notes.
-The ground stops at the micro engine's top (`SDFCascade::micro_top_k`, k = 19 at 5 cm: 26.2 km, the first note at the
-3.3 km cap), so the climate is micro: a biome plays notes up to 26.2 km, and a range past it is clipped there. The
-fields placing the biomes (temperature, humidity, wind: 105-419 km) are macro and may reach lod_count + 4
-(`Ground::field_k_max`), above the ground's top, until the planned macro engine computes them.
+A climate (`src/climate.hpp`, a table: format above `Climate::parse` in `src/climate_parse.cpp`; three files give it:
+`engine.json` the voxel and LODs, `climate.json` the fields that place biomes, `world.json` the biomes, merged by
+`WorldFile` into the table `parse` reads, `docs/terrain.md`) shapes **one ground**. Each biome is a **graph**: the
+notes it mixes (`n_k`, each with its own octave k, seed, amplitude and stretch), each read through a warp, a shape and
+a multifractal, mixed at a volume, then a height curve. A biome lists exactly what it uses: no engine default notes.
+The **biome compiler** (`src/biome_compiler.{hpp,cpp}`) turns every biome's graph into that one ground: a note is kept
+once whatever biome mixes it (identity: octave, seed, stretch), so a biome more costs only the notes it adds. Without
+biomes the ground is the **template biome** (`Climate::template_biome`, the mixer's start for a new biome too): seed
+0xEA27, every octave from k = 3 (0.4 m at 5 cm) to the first at the 3.3 km cap (k = 19 at 5 cm: 26.2 km), amplitude
+1/8 of the wavelength. Notes and fields reach lod_count + 4 at most (`Ground::k_max`, the cascade's top); the fields
+placing the biomes (temperature, humidity, wind: 105-419 km) are macro inputs until the planned macro engine computes
+them.
 
 1. **Fields** (`Field`): a few slow scalars, each a sum of plain perlin octaves of its own seed, plus linear terms
    (`coef * the ground` or `coef * an earlier field`, in list order): temperature, humidity, wind, the warp fields
@@ -28,17 +32,23 @@ fields placing the biomes (temperature, humidity, wind: 105-419 km) are macro an
    each weight capped at 1. It replaced edges (min / max with a fade) under priority layering, `w_b = rest * r_b`:
    world.json's edges became places with open sides closed at 0.85 and spans x1.1, its biome shares over 1678 km
    within a point of the edges' (desert 5.7% both, mountain 18.2% for 19.4%).
-3. **The ground** at a point: each note k some biome names is inserted as
+3. **The ground** at a point: each note k of the compiled ground is inserted as
    `A_k * phi_b(n_k(p + warp))` blended over the biomes,
-   - `A_k = sum_b w_b * x_{b,k} * amp_k` (the biome's multiplier times the note's own amplitude, lambda / 8 capped at
-     3.3 km),
+   - `A_k = sum_b w_b * x_{b,k} * amp_k` (the biome's mix row volume times the note's amplitude: `"steepness"` times
+     its wavelength, or `"amp_m"` times `"persistence"` per finer octave, under `"max_amp_m"`; 0 for a biome that
+     doesn't mix it),
    - `phi_b(n) = c0 + c1 n + c2 |n| + c3 n^2` (the biome's shape: plain, billow, ridged, square), inserted without its
      mean,
    - times `clamp(gain (1 - c), 0, 1)` with a multifractal (c: the coarser notes' weighted signal, Musgrave's chain),
    - read at the point moved by `warp_m * (wx, wy, wz)` with a warp.
-   Notes no biome names keep their amplitude, plain. `ground_stretch` reads chosen notes squeezed along the base's up.
-4. **The biome's curve** (`Biome::curve`): at each sample, `h + sum_b w_b * C_b(h)`, `C_b = R_b - h` through the
-   biome's points `[h, R(h)]` (libnoise's cubic, constant past the ends): the biome's height remap, its "LUT".
+   A note every biome plays plain at one amplitude is a constant band (no modulation, the same bits: `A = a` exactly).
+   A note's `"stretch_y"` reads it squeezed along the base's up.
+4. **The biome's program** (`Biome::program`, `Climate::SampleProgram`): what its graph does past its notes' mix, at
+   each sample, on the blended ground H (the cascade's: every biome's notes) and the fields: constants, fields, add,
+   subtract, multiply, min, max, smooth min / max (Quilez's polynomial, over `k_m`), curves (`R(h)` through the biome's
+   points `[h, R(h)]`: libnoise's cubic of `C = R - h`, constant past the ends). The ground is
+   `h = H + sum_b w_b * D_b`, `D_b = f_b(H) - H`; a curve of H alone is `D = C(H)` itself (its bits from before
+   programs). Inside a biome's core `H` is its own mix; in a blend each program reads the blend, as a curve did.
 5. **The pick**: the biome with the largest weight (ties by a hash of the absolute voxel) gives the sample its material
    (`biome_material`: the procedural ground in the biome's colours).
 
@@ -55,10 +65,18 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 
 ## Implementation
 
-- **Parse and validate** (`climate_parse.cpp`, `climate_validate.cpp`): metres to octaves (`from_m` .. `to_m` ranges
-  keep the octaves the LOD count has, so one table covers 15 and 25 LODs; a single wavelength outside is refused),
-  against `SDFCascade::climate_ground()`. Refused: more than `MAX_FIELDS` (24) fields or `MAX_BIOMES` (16) biomes, a
-  multiplier past the ground's amplitude cap (`max_ground_mult`), a curve moving the ground past it, a curve whose
+- **Parse, compile and validate** (`climate_parse.cpp`, `biome_compiler.cpp`, `climate_validate.cpp`): metres to
+  octaves (`from_m` .. `to_m` ranges keep the octaves the LOD count has, so one table covers 15 and 25 LODs; a single
+  wavelength outside is refused), each biome's graph read back from its output (a curve, a mix, each row a note through
+  a warp, a shape and a multifractal, in that order), at `SDFCascade::climate_ground()`. The compiler keeps a note per
+  (octave, seed, stretch), turns each row into its biome's `Amp` on each octave (volume times the note's amplitude,
+  under a planet's `note_cap`), folds the notes every biome plays alike into constant bands and lists the others in
+  every biome (0 where it doesn't mix them). Refused: more than `MAX_FIELDS` (24) fields or `MAX_BIOMES` (16) biomes,
+  more than `Cascade::MAX_LEVEL_NOTES` (8) notes on one octave or two multifractal ones (the state holds one octave's
+  signal; an octave with a modulated note modulates all of its notes), a note mixed twice by one biome, a negative
+  amplitude, a
+  shaped amplitude past the cap (`Ground::amp_cap`: a planet's relief, the exact range's top on the flat world), a
+  curve moving the ground past it, a curve whose
   offset is steeper than `MAX_CURVE_SLOPE` (4: the skirts and the gradient scale with it), a curve whose points all
   lie past the heights the ground reaches (a constant offset: a wrong unit or sign), an `"offset"`
   without a multifractal (bands are inserted without their mean, so only the state reads it), a field's multiplier
@@ -82,18 +100,26 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   terms (`Climate::SampleCarry`: each curved biome's weight, the pick, copied from the floor parent instead of
   interpolated). H carries them down with the ground. So a LOD-L chunk's samples read the last octave's climate from
   Λ_{L+1}: the model's rule above, not an approximation of another one.
-- **The curve** (`Climate::ground_value`, GLSL `climate_ground`, through `SDFCascade::ground_channels` on every path:
-  chunk samples, point items, `ground_along`, the report): `h + sum_b w_b * C_b(h)` with the carried weights. The
-  skirts take its step (`Climate::ground_step`: the ground's step times 1 + the curves' largest slope, plus each
-  weight's change times its curve's bound; unit test: the L | L+1 step stays within the skirt on `example.json`,
-  `shaped_test.json` and `world.json`).
+- **The programs** (`Climate::ground_value`, GLSL `climate_ground` and one `cl_sample<b>` per biome, through
+  `SDFCascade::ground_channels` on every path: chunk samples, point items, `ground_along`, the report):
+  `H + sum_b w_b * D_b` with the carried weights, each program's registers in order with the climate's flushed dual
+  ops (`dadd`, `dmul`, ...; GLSL `cl_*`), op for op. A field a program reads is carried to the samples like the weights
+  (`SampleCarry::field`, derived on the level above). The compiler bounds each term (`SampleProgram::bound`, `slope`,
+  `field_slope`: interval arithmetic on the value and on its deviation from H, so a curve of H keeps its own bound);
+  validate holds the bound under the cap and the slope under `MAX_CURVE_SLOPE`, and the skirts take the step
+  (`Climate::ground_step`: the ground's step times 1 + the largest slope, plus each weight's change times its term's
+  bound, plus each field's step times its slope; unit test: the L | L+1 step stays within the skirt on
+  `example.json`, `shaped_test.json`, `world.json` and `programs_test.json`). The programs are the climate's own SSA,
+  not the archetype IR: a curve through the archetype IR wouldn't be the curves' bits (it doesn't flush under 2^-64,
+  and its dual product orders a slope otherwise); one program format for both is later work. Not yet: a carve (caves,
+  `docs/caves.md`: the discoverer's carve band first), and a single note read at the samples (its own carry).
 - **GPU only, for speed** (the CPU mirrors them today; the plain-oracle stage moves them GPU-side): which levels carry
   the fields and the carry (`Cascade::FieldRange`: `carried`, `inserted`, `carries`, `batch`, `batch_carry`), how many
   carry groups a last level loads (`Modulation::carry_used`), the three generated views (`CascadeGLSL::View`: ground
   alone, ground + fields + carry for the levels that derive, ground + carry for a run's last level) on planar scratch,
   and skipping the empty top (`Spec::run_top`). None changes a value: the CPU's all-fields run gives the same ground
   bits (`test_climate.cpp`).
-- **Stretched octaves** (`"ground_stretch"`; `Band::stretch`, at most k − 3): through the base
+- **Stretched notes** (a note's `"stretch_y"`; `Band::stretch`, at most k − 3): through the base
   (`BaseSurface::stretched` / `stretch_gradient`), the noise is read at p − (1 − 2^-j) d n and its gradient's up
   component scaled by 2^−j. Flat: datum + (y − datum) / 2^j exactly (GLSL `base_stretched`); sphere: CPU and GLSL with
   FrameSpike's `stretched_sphere`, but its GPU path needs the regions of the band's insertion LOD, which `BaseRegions`
@@ -134,87 +160,55 @@ terms; the declutter's own before / after is in its PR):
 
 ## Biome mixer
 
-`adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: a world's biomes built from the ground's octaves in
-node graphs (GraphEdit), raymarched live beside them; a design tool, not the engine's path (the table is the engine's
-input: the World menu's export writes the world back into it). It holds a **world** (`world.gd`: world.json's fields,
-climate warp and every biome, its place and its graph) and has two modes:
-- **Biome**: the current biome's notes in the graph (the picker in the bar), the view of that biome alone.
-- **World**: the climate chart and the view of the whole world, every biome blended as the engine blends them
-  (`Compile.run_world`): the fields' octaves (rows of the warp table, three fields to a W slot), the weights in float
-  (`World.weights`, the engine's formula; the places uniforms, so a drag doesn't recompile), each biome's graph as its
-  height before its curve (node ids prefixed per biome; a note two biomes read the same way is one row: world.json's 8
-  biomes read 30 rows for 136 notes), `H = sum w_b H_b`, then `h = H + sum w_b (R_b(H) - H)`, the colours blended by
-  weight. A biome's graph is skipped where its weight is 0; with a ground term in the fields the weights are read twice
-  (without, then with it on H: the engine reads them from the coarser octaves). The view is 3D or a map (from above, the
-  biomes' debug colours over the ground's shading). The chart (`chart.gd`, `world_panel.gd`): two fields as axes, each
-  biome a box (its span outlined, its whole core filled, the full axis on a field it doesn't name), over a cloud of the
-  world's points (the shader's own fields at 96 x 96 points of the chart's extent, read back from a float viewport):
-  drag a box to move a biome, its edge to change its span; the list beside it edits each field's centre and span and
-  whether the biome names it. A double-click opens a biome's notes. The world autosaves, and saves to
-  `climate/worlds/*.world.json` (the World menu).
-
-- **Nodes** (`kinds.gd`): *Note* (the ground's octave k, `make_octave(SEED, ground_top - k, k)` ported in `octaves.gd`,
-  pinned against `test_exact_noise.cpp`: every biome plays the same notes, so a note has no seed of its own. The notes
-  are fixed: a model always has one per k, K_MIN .. `ground_top` (`Kinds.fix_notes` on every load: a missing one comes
-  back as a silent row at volume 0, an extra or out-of-range one goes), none can be added, deleted or moved to another
-  k, and a Mix row's x leaves its note silent. Its `warp` switch, as a biome's `warp_m` on that octave in the engine,
-  reads it at the point moved by the climate's warp, `warp_m` metres per unit, or by the Note warp linked into its
-  port; `stretch_y` reads it at y / stretch from the datum, as `ground_stretch`), *Shape* (`c0 + c1 n + c2 |n| + c3 n^2` with `|n|` smoothed as `Cascade::smooth_abs`;
-  presets, scale and offset as `climate_parse.cpp`), *Multifractal* (`w = clamp(gain * chain in)`, the signal times w,
-  chain out `w * phi` to the next finer note: the engine's state, wired), *Note warp* (preview only, the cheap warp
-  instead of the climate's for the warped notes linked to it: x, y, z are Notes read earlier in the table,
-  `F * N` of their rows, so notes the biome plays cost no read; a note warped by a finer one is warned of; the engine
-  would need warp notes in a table's band, the chain rule from their gradients), *Mix* (rows of volume x the ground's
-  amplitude lambda / 8 capped at 3.3 km, mute, solo, centre = the shape's mean out as the engine inserts bands), *Add*
-  / *Multiply* / *Constant*, *Height curve* (a remap R(h) through points: a biome's `"curve"` in the engine, the same
-  points, libnoise's cubic of R - h, constant past the ends; its bound and slope, and its editor's in axis, span its
-  input's bound (`curve_in`): the mountain's ±7.2 km, its points ±3.8 km), *Carve* (preview only: air where a field
-  passes a threshold inside a depth band), *Output* (height, holes, flat and steep colours with the engine's slope
-  blend).
-- **Shader** (`compile.gd`, `shader_lib.gd`): the graph's structure becomes code, every parameter a uniform (a slider
-  redraws without a recompile). Every note and warp octave is a row of one uniform table read in one loop, and the
-  march, bisection, normal and shadow share one `density()` call: inlined per note and per call, the driver took
-  31.8 s to compile the mountain, 0.3 s since. Notes fade out under two pixels (a Shape fades around its mean, so a
-  faded note moves no height); the march starts under the ground's bound and steps by the density over a slope
-  estimate (independent notes in quadrature; overshoots are bisected), twice the estimate's safe step: the estimate is
-  a worst case, and the imported biomes show no holes at twice it. The bisection ends on its outside end: the inside
-  one's depth grows with the step, and a shadow ray started from it underground drew rings of acne on smooth slopes.
-  The preview draws only on a change (low-processor mode, `UPDATE_ONCE`), in two layers (`preview.gd`): 1/3 of the
-  resolution on every change, then the chosen one over it in strips fitted to ~25 ms a frame, which any edit cancels.
-  Measured on the RTX 3070 laptop, world.json's mountain at 810 x 751 with shadows: the whole view 200 ms a frame at
-  step 1, 150 ms at step 2; in strips, no frame over 38 ms and the view sharp in ~0.3 s.
-- **Budget**: over the view, what the biome reads per point (its notes, the climate warp's octaves per axis, the notes
-  moved by a Note warp for free, against plain ground's), its relief bound, the row that moves the most and how long
-  the view took to sharpen; each Mix row shows its swing (volume x lambda / 8 x the shaped note's bound) and its share
-  of the Mix's. A row's x takes it out with the nodes only it used but its note (`Kinds.cut_row`); a node's x or Delete
-  removes it and the Mix row it played, never a note (`Kinds.cut_nodes`); `--check` checks both on the mountain and
-  plain ground, every graph's fixed notes, an old file's Climate warp node loading as its notes' warp switches, and the
-  world (`checks.gd` `world`: world.json in one shader, its shared notes and places, a file round trip, the weights'
-  properties) and the export (`checks.gd` `export_world`, below).
-- **Export** (`export_table.gd`, World menu: *Export this world to res://climate/world.json*): `ImportTable` read
-  backwards. Each biome's height must be its Mix, through a Height curve or not, into the Output, each row a Note
-  through a Shape then a Multifractal (each optional); anything else (Add, Multiply, a Constant, a note in two rows)
-  stops the export, as does a table the engine refuses: its text is parsed by `ClimateReportNode.check` (static,
-  `ClimateReport::check`: the cascade of the world's voxel and LOD count configured on it) before it is written over
-  world.json. Each note is an
-  `amp` entry (a run of equal notes one range, a plain note at volume 1 none, the engine's default), the places `at`
-  (the last biome the default, without one), the curve, the Output's colours over the table's surface (its other keys,
-  roughness, kept), clouds and debug colour; the climate warp sets the three fields of its seeds (or adds `wx`, `wy`,
-  `wz` when a note is warped and the world has none). Left out with a line in the log: Carve, a Note warp (exported
-  reading the climate warp), an uncentred row, a note's own stretch (`ground_stretch` is the world's), a multifractal
-  linked to another than the next coarser one. Mute and solo export as heard (a silent row at volume 0). An identity
-  Shape (`"shape": "plain"`) goes. A note's entry is always a range (`from_m` .. `to_m`, one octave or more): the
-  engine trims a range to a LOD count's octaves but refuses a single `wavelength_m` past them. Numbers keep 7
-  significant digits; a value fits on one line up to 120 characters.
-  `--check` exports world.json's own world: every biome's notes, as the engine reads them per octave, places, curves,
-  surfaces and clouds equal the table's; exporting that export again gives the same file; the engine
-  accepts it, refuses a span of 0 (nothing written), and the every-kind graph is refused. world.json is that export:
-  its climate report (biome maps, fields, ground height, shading, normals) is byte-identical to the hand-written
-  file's.
-- **The climate's warp** (wx, wy, wz): a model's `climate_warp`, world.json's three warp fields by default
-  (`Kinds.CLIMATE_WARP`), shared by every biome: one table slot however many notes it moves; the preview reads its 12
-  octaves per pixel, the engine interpolates them from their coarse lattices. It was a node (*Climate warp*) wired
-  into each note before the notes' warp switch.
-- **Import** (`import_table.gd`): a biome of `world.json` as a graph (every note, its ground multipliers as volumes, 0
-  for a silenced octave, shapes, multifractal chain, warped octaves as warp switches with their `warp_m`, the warp
-  fields as the climate warp, `ground_stretch`, its curve, colours); *Plain ground* is every note at volume 1. Biomes save to `climate/biomes/*.biome.json`; `World.from_table` imports every biome of a table, with its place.
+`adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: a world's biomes edited as the engine reads them,
+the engine's view of them beside it. It is an editor over the engine, never a copy of it: it keeps no model of its own,
+computes no terrain and has no node kind the engine hasn't.
+- **The world is the world file** (`world.gd`): `res://climate/world.json` as it is (every biome's `graph`, place,
+  surface, clouds, instances, features, every other key), with the mixer's keys beside it (`fields`, its climate's,
+  read only; `current`, `mode`, `view`, `mixer_version`). A biome's `at` is kept as `[centre, span]`. The world
+  autosaves (user://), saves to `climate/worlds/*.world.json`, and *Export* (World menu) writes it over world.json once
+  `ClimateReportNode.check` (`ClimateReport::check`) accepts its biomes over its fields: the file is the world minus the
+  mixer's keys (its climate file untouched). Numbers keep 7 significant digits; a value fits on one line up to 120
+  characters.
+- **The graph is the biome's `graph`** (`graph.gd`), node for node: a link is an input key naming another node's id
+  (input port i is the kind's input i, a mix's port i its row i's `in`, one port more a new row), each node one output.
+  Linking, unlinking, a row's x, a node's x or Delete (what read it reads its `in`, else nothing) edit the nodes in place;
+  a link that would close a loop is refused. `pos` is the mixer's (the parser allows and ignores it); a graph read
+  without positions is laid out in columns by its distance from the output, spaced by its built nodes' sizes.
+- **The kinds are the engine's** (`engine_info.gd`, `ClimateReportNode.graph_kinds`: `Climate::graph_kinds`, the
+  catalogue the parser itself checks each node's keys against): every kind it reads (note, warp, shape, multifractal,
+  mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, output), its inputs and its parameters with
+  their type and default. `nodes.gd` builds each node from it: a port per input, a row per parameter the node has (a
+  slider and number box, a seed, a power of two, a field or three, a shape, coefficients, a curve), a `-` taking an
+  optional one out and `+ parameter` adding one (so a note is one octave or a range, its amplitude steepness or `amp_m`:
+  the engine says which combination it refuses). `kinds.gd` only holds titles, tooltips and sliders' ranges. A shape
+  node plots the engine's phi (`ClimateReportNode.shape`: `Climate::parse_shape`, `shape_phi`) or its refusal; the
+  Height curve's editor draws the engine's curve (`ClimateReportNode.curve`). The output edits the biome's `surface`
+  colours. *New graph* is the engine's template biome (`ClimateReportNode.template_biome`) or an output alone; a biome
+  without its own debug colour gets the parser's name hash (`ClimateReportNode.debug_color`).
+- **Two modes**: *Biome*, the current biome's graph (the picker in the bar) and the view of it alone; *World*, the
+  climate chart and the view of the whole world, its biomes' debug colours blended by their weights over the relief.
+  The chart (`chart.gd`, `world_panel.gd`): two fields as axes, each biome a box (its span outlined, its whole core,
+  `ClimateReportNode.kernel_core` of it, filled, the full axis on a field it doesn't name), over a cloud of the view's
+  points (the engine's fields there): drag a box to move a biome, its edge to change its span; the list beside it edits
+  each field's centre and span and whether the biome names it. A double-click opens a biome's graph.
+- **The view is the engine's** (`engine_view.gd`): every edit sends the world's text (`World.preview_file`: the game's
+  engine, the fields inline; the Biome mode's biome alone as the default) to `ClimateReportNode.preview`
+  (`ClimateReport::preview`): the report's own sampler on the CPU, each column traced to its ground as the map's
+  lattice Λ_m sees it (`SDFCascade::ground_along(start, m)`: to within 2^m voxels, then the last two distances' linear
+  crossing; the report and the game's sites trace at LOD 0), the shaded relief
+  and the weights' blend plus every field's value at every point (the chart's cloud) and the largest altitude
+  (`relief_m`: the curve editor's input span), or the engine's refusal. A mix row's M and S (mute, solo) are the view's
+  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once (30-60 ms), 192 on a
+  thread once the edits pause (`SETTLE` 0.35 s; 1.1-1.8 s on 16 cores: ~0.5 ms of CPU a point, each point walking the
+  cascade on its own, 6 reads). *3D* (on by default, `terrain_3d.gd`) shows the same map as a surface: each point at
+  its traced altitude (*Height x* scales it), coloured by the 2D map, unlit; orbit, pan and zoom move a mesh, so they
+  are instant. The game itself: *Open in game* writes the world (`user://biome_mixer_game.world.json`) and runs the
+  main scene on it (`--world=`) in a second Godot. A live sharp view needs the GPU (`CascadePointsGPU`: whole batches
+  of points level by level), not done yet.
+- **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
+  back is the same file (positions aside); every world.json biome and a graph of every engine kind drawn by the engine
+  and every node's GraphNode built (the launcher fails on any script error); edits on the mountain (a row out, a shape
+  out, a loop refused, a muted row heard at 0) still drawn; the whole world drawn (every biome named, one chart sample
+  per point); the export written, read back the same, written again the same text, and a span of 0 refused (nothing
+  written).

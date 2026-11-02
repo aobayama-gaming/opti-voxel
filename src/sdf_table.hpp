@@ -3,6 +3,7 @@
 #include "archetype_gpu_table.hpp"
 #include "archetype_table.hpp"
 #include "biome_features.hpp"
+#include "biome_pick.hpp"
 #include "cell_scatter.hpp"
 #include "field_gpu.hpp"
 #include "instance_table.hpp"
@@ -11,6 +12,7 @@
 #include "ov/value.hpp"
 #include "scatter_source.hpp"
 #include "sdf_base.hpp"
+#include "species.hpp"
 #include "tree_archetype.hpp"
 
 #include <atomic>
@@ -19,16 +21,13 @@
 // The instance half of the terrain: every point folds the instances near it onto the ground's register
 // (instance_table.hpp, archetype_table.hpp fold_onto; the ground is SDFCascade's). This class owns everything about
 // the instances: the library, the records and their snapshot (read from other threads), the GPU table, the runtime
-// edits, and the scenes placed on the ground (the shapes gallery, the --instances scatter, the --trees forest),
+// edits, and the scenes placed on the ground (the shapes gallery, the sources the instance lists make: Zone),
 // which only need the subclass's base and ground_under.
 class SDFTable : public SDFBase {
 public:
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
     // The scatter's cell sites (cell_sites.hpp; the forest's is Archetype::TREE_SITE_SALT).
     static constexpr uint32_t SCATTER_SITE_SALT = 0x5CA77u;
-    // The scatter's and the forest's centre (metres, x and z), in front of the main_scene spawn.
-    static constexpr double SCENE_X = -50.0;
-    static constexpr double SCENE_Z = -150.0;
     // The shapes gallery's centre (metres, x and z): the shapes_scene spawn.
     static constexpr double SHAPES_X = -52.0;
     static constexpr double SHAPES_Z = -95.0;
@@ -47,18 +46,27 @@ public:
     // Set before configure().
     void set_scene(Scene p_scene) { scene = p_scene; }
 
-    // A scatter of about p_count rocks and pillars in a square of side p_area (metres) around (SCENE_X, SCENE_Z), one
-    // per cell of the ground (--instances / --instance_area). Set before configure().
-    void set_scatter(int p_count, double p_area) {
-        scatter_count = p_count;
-        scatter_area = p_area;
-    }
-    // A forest of about p_count grown trees (tree_archetype.hpp) in a square of side p_area (metres) around
-    // (SCENE_X, SCENE_Z) (--trees / --tree_area). Set before configure().
-    void set_forest(int p_count, double p_area) {
-        forest_count = p_count;
-        forest_area = p_area;
-    }
+    // Where the instances stand (a world file's "zone"): a square of side side_m metres around (x_m, z_m) of the base's
+    // tangent plane (in front of the main_scene spawn by default), over every height the ground can reach in it; side 0:
+    // none. The biome features stand in it too (zone_box). Set before configure().
+    struct Zone {
+        double side_m = 0.0;
+        double x_m = -50.0;
+        double z_m = -150.0;
+    };
+    void set_zone(const Zone &p_zone) { zone = p_zone; }
+    const Zone &get_zone() const { return zone; }
+    // What grows where no biome lists its own "instances" (a world file's "instances"; the world without biomes): each
+    // entry a species, its cell and its share (Climate::InstanceShare). Every entry of a kind (trees, rocks) and a cell,
+    // over these and the biomes' lists, is one source (cell_scatter.hpp) over the zone, each of its sites growing what
+    // its biome lists there (BiomePick, pick_share). Set before configure().
+    void set_instances(const std::vector<Climate::InstanceShare> &p_instances) { instances = p_instances; }
+    // Every species of p_kind (default_species) at share 1, about p_count sites in a zone of side p_side_m metres (the
+    // cell forest_cell_side gives): a scene given as a count (the tests, the checks).
+    static std::vector<Climate::InstanceShare> counted(Archetype::Species::Kind p_kind, int p_count, double p_side_m);
+    // The species the instances name (a world file's "species", Archetype::default_species without one): the trees the
+    // tree sources grow, the rocks the rock sources place. Set before configure().
+    void set_species(const std::vector<Archetype::Species> &p_species) { species = p_species; }
     // Whether the scatter and the forest stream (instance_stream.hpp: their keys computed as the chunks ask for them, their
     // records in GPU slots past the table's), else placed whole in the table at configure (the reference; the tests that
     // edit their records). Set before configure().
@@ -68,9 +76,11 @@ public:
     void set_stream_part_sides(int64_t p_sides) { stream_part_sides = p_sides; }
     // The forest's trees, in id order (placed whole only).
     const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
-    // The procedural sources of the scene (cell_scatter.hpp), by name: "scatter", "trees" (empty without them).
+    // The procedural sources of the scene (cell_scatter.hpp), by name: the rocks' ("scatter"), then the trees' ("trees"),
+    // a kind's cells past its finest named "<kind>_<cell in voxels>".
     struct Source {
-        const char *name = "";
+        ov::str name;
+        Archetype::Species::Kind kind = Archetype::Species::TREE;
         Archetype::CellScatter scatter;
     };
     const std::vector<Source> &get_sources() const { return sources; }
@@ -81,9 +91,11 @@ public:
     // The moment blobs a whole rebuild of the current records would make, with the joins the table was built with: what
     // the edits' incremental updates must match (tests).
     void moment_blobs_reference(std::vector<Archetype::MomentBlob> &r_out) const;
-    // The biome features (biome_features.hpp: lava lakes, floating islands) of the biome cells within p_radius metres
-    // of (SCENE_X, SCENE_Z) (--biomes, kilometres there; 0: none). Set before configure().
-    void set_biome_radius(double p_radius) { biome_radius = p_radius; }
+    // The features (biome_features.hpp: lava lakes, floating islands) where no biome lists its own (a world file's
+    // "features"; the world without biomes): each entry a kind, its cell, the chance a cell holds one and its radius range
+    // (Climate::FeatureShare). They stand in the zone, a cell's candidate where its biome's entry of its kind and cell
+    // keeps it (BiomePick). Set before configure().
+    void set_features(const std::vector<Climate::FeatureShare> &p_features) { features = p_features; }
     // The materials the records name (TableRecord::material): the page shader's material_tex.
     const Material::Library &get_materials() const override { return materials; }
 
@@ -107,7 +119,7 @@ public:
     // The locality margins (skirt_depth) take it whole; the skirt walls only where a blob touches the sample
     // (SDFCascade's moment skirt), so the rest of the terrain keeps the band rule's.
     float min_skirt_depth(const ChunkParam &, int) const override {
-        const bool blobs = instance_band && moment_blobs && (scatter_count > 0 || forest_count > 0 || biome_radius > 0.0);
+        const bool blobs = instance_band && moment_blobs && zone.side_m > 0.0;
         return instance_erode_cells() + (blobs ? MOMENT_SKIRT_CELLS : 0.0f);
     }
     // The moment skirt in cells: MOMENT_SKIRT_CELLS when the table has moment layers (edits may add blobs where the build
@@ -187,7 +199,7 @@ public:
     // scenes and the biome features stand (thread-safe).
     virtual VoxelPos ground_under(const VoxelPos &p_start) const = 0;
     // The ground under the point (p_u, p_v) LOD0 voxels of the base's tangent plane (BaseSurface::tangent_point): where
-    // the scenes given in metres (SCENE_X, SCENE_Z, the gallery) stand.
+    // the scenes given in metres (the zone, the gallery) stand.
     VoxelPos ground_at(int64_t p_u, int64_t p_v) const { return ground_under(get_base().tangent_point(p_u, p_v)); }
     // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite, normal
     // floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level operators, and
@@ -200,6 +212,11 @@ protected:
     void build_table(int p_lod_count);
     // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
     void stop_streaming();
+
+    // The climate the scenes' sites read their biome from (BiomePick), and its combined cascade: none here, the
+    // subclass's (SDFCascade: its world's climate). Valid from configure() on.
+    virtual const Climate::Table *placing_climate() const { return nullptr; }
+    virtual const Cascade::Spec *placing_spec() const { return nullptr; }
 
     // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
     // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.
@@ -241,11 +258,10 @@ private:
         int lod_max = 0;
     };
     std::vector<EditRegion> edit_regions;
-    int scatter_count = 0; // --instances
-    double scatter_area = 200.0; // --instance_area (metres)
-    int forest_count = 0; // --trees
-    double forest_area = 60.0; // --tree_area (metres)
+    Zone zone;
+    std::vector<Climate::InstanceShare> instances;
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
+    std::vector<Archetype::Species> species = Archetype::default_species();
     std::vector<Source> sources;
     bool stream_sources = true; // --stream
     int64_t stream_part_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES; // --stream_part_sides
@@ -257,7 +273,8 @@ private:
     size_t walk_batch_gpu = WALK_BATCH_GPU;
     mutable std::atomic<int64_t> verified_points{ 0 };
     mutable std::atomic<int64_t> verify_differences{ 0 };
-    double biome_radius = 0.0; // --biomes (metres)
+    std::vector<Climate::FeatureShare> features;
+    bool has_features = false; // build_table: the zone has some, their library types added
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
     bool instance_band = true; // --instance_band
@@ -298,21 +315,41 @@ private:
     // base's up, its local y on that up turned by p_yaw about it, smooth radius p_k_m metres, appended.
     void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw);
     void add_shapes(const Types &p_types);
-    // The sources the scene places: a box of side p_area_m around the scene's centre, over every height the ground can
-    // reach in it (4 times its half side up and down from the ground at the centre; the walk only tries the cells along
-    // the surface, so the empty air costs nothing), out of the lakes.
-    Archetype::CellScatter scene_source(uint32_t p_salt, int p_count, double p_area_m) const;
-    // The forest's (--trees): grown trees, the species from the site's variant.
-    Archetype::CellScatter forest_source(const Archetype::TreeTypes &p_types) const;
-    // The scatter's (--instances): a rock (even variant: a bumpy ball sunk 0.4 of its radius) or a pillar (a capsule)
-    // per site, turned to the up there, 1 to 4 m across.
-    Archetype::CellScatter scatter_source(const Types &p_types) const;
+    // A source's entries: a kind, a cell (LOD0 voxels) and the species named there in the world's order (its classes).
+    struct Group {
+        Archetype::Species::Kind kind = Archetype::Species::TREE;
+        int64_t side = 0;
+        std::vector<const Archetype::Species *> species;
+    };
+    // The instances' sources (the world's list and the biomes'), the rocks' then the trees', each kind's by cell.
+    std::vector<Group> groups() const;
+    // An entry's cell of p_cell_m metres in LOD0 voxels (forest_cell_side's rounding): its group's side.
+    int64_t cell_side(double p_cell_m) const;
+    // A source of the zone: one site per cell of p_side voxels, over every height the ground can reach in it (4 times
+    // its half side up and down from the ground at the centre; the walk only tries the cells along the surface, so the
+    // empty air costs nothing), out of the lakes.
+    Archetype::CellScatter scene_source(uint32_t p_salt, int64_t p_side) const;
+    // A tree source: grown trees, a site's species its biome's (site_class).
+    Archetype::CellScatter forest_source(const Archetype::TreeTypes &p_types, const Group &p_group, uint32_t p_salt) const;
+    // A rock source: a rock (a bumpy ball sunk 0.4 of its radius) or a pillar (a capsule) per site, turned to the up
+    // there, its species' radius across, the species its biome's (site_class).
+    Archetype::CellScatter scatter_source(const Types &p_types, const Group &p_group, uint32_t p_salt) const;
+    // A site's class among p_group's species: its biome's (BiomePick) shares of the group picked by the site's variant
+    // (pick_share), -1 where its biome grows none of them; the variant modulo their count when every biome grows each
+    // at share 1. Thread-safe (sources call it).
+    std::function<int(const Archetype::Site &)> site_class(const Group &p_group) const;
     // Every site of p_source in its zone, appended to the records (each a contiguous run, kept whole or left out), and
     // its stats under r_stats[p_name]; the sites' runs to r_spans if given.
-    void add_source(const Archetype::CellScatter &p_source, const char *p_name, ov::Value &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
+    void add_source(const Archetype::CellScatter &p_source, const ov::str &p_name, ov::Value &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
     // The sources as keys of a stream whose slots start at p_slot_base, and their stats.
     void add_stream(uint32_t p_slot_base, ov::Value &r_stats);
-    // The biome features within biome_radius of the scene's centre, appended to the records, and their stats.
+    // The zone's box (Zone): its square round the ground under its centre (p_on_base: the base's point there), 4 half
+    // sides up and down.
+    VoxelBox zone_box(bool p_on_base = false) const;
+    // The biome features' sites in the zone: each kind and cell the lists name, its candidates (Biome::sites) where
+    // their biome's entry keeps them (BiomePick; the world's list for a biome that lists none), at its radius.
+    std::vector<Biome::Site> feature_sites() const;
+    // The biome features in the zone, appended to the records, and their stats.
     void add_biomes(const Types &p_types, ov::Value &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
     void add_moment_blobs(int p_blob_type, ov::Value &r_stats);

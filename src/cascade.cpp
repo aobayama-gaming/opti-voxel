@@ -198,12 +198,16 @@ void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p
     }
 }
 
-// The band of Λ_m of each of the first p_groups groups (at most one: one octave per group and lattice, Climate::validate
-// refuses a second), its constant factors and the modulated groups: set up once per level.
+// The bands of Λ_m of each of the first p_groups groups (a field's at most one: one octave per field and lattice,
+// Climate::validate refuses a second; the ground's up to MAX_LEVEL_NOTES), their constant factors and the modulated
+// groups: set up once per level. A level's band i (band_at) is group group_of(i)'s, its BandMod slot mod_of(i): each
+// group's first band, then the ground's other notes (Spec::level_notes).
 struct LevelBands {
     int groups = 0;
-    const Band *band[MAX_GROUPS] = {}; // null: the group inserts nothing on Λ_m
-    BandFactors factors[MAX_GROUPS];
+    const Band *band[MAX_MODS] = {}; // band[g] for g < MAX_GROUPS: group g's (null: it inserts nothing on Λ_m)
+    BandFactors factors[MAX_MODS];
+    int extra = 0; // the ground's other notes: band[MAX_GROUPS + i], BandMod slot note_mod(1 + i)
+    int mod[MAX_MODS] = {}; // band i's BandMod slot (Spec::group_mod, note_mod)
     uint32_t modulated = 0;
     float slope = 1.0f; // 2^-shift, a modulated band's slope factor
     bool any = false;
@@ -216,15 +220,39 @@ struct LevelBands {
                 if (p_spec.insert_level(b) != p_m) {
                     continue;
                 }
-                OV_ERR_CONTINUE_MSG(band[g] != nullptr, ov::format("Cascade: two bands of one group on lattice %d.", p_m));
-                band[g] = &b;
-                factors[g] = BandFactors(p_spec, b);
+                int i = g;
+                if (band[g] != nullptr) {
+                    OV_ERR_CONTINUE_MSG(g != 0 || extra + 1 >= MAX_LEVEL_NOTES, ov::format("Cascade: two bands of one field group, or over %d notes, on lattice %d.", MAX_LEVEL_NOTES, p_m));
+                    i = MAX_GROUPS + extra++;
+                }
+                band[i] = &b;
+                factors[i] = BandFactors(p_spec, b);
                 any = true;
             }
+        }
+        const int notes = p_spec.max_level_notes();
+        for (int i = 0; i < MAX_MODS; i++) {
+            mod[i] = i < MAX_GROUPS ? Spec::group_mod(i, notes) : p_spec.note_mod(1 + i - MAX_GROUPS);
         }
         // A level inserting fewer groups than the spec has no modulated band among the others (FieldRange::carried and
         // inserted cover them).
         modulated = p_spec.modulation ? p_spec.modulation->modulated(p_m) & ((1u << groups) - 1u) : 0u;
+    }
+
+    int group_of(int p_slot) const { return p_slot < MAX_GROUPS ? p_slot : 0; }
+    int mod_of(int p_slot) const { return mod[p_slot]; }
+    // Calls p_f(slot) for every band of the level: the ground's first, its other notes, then the fields' (each group's
+    // adds in order; groups' slots are disjoint).
+    template <typename F>
+    void each(F p_f) const {
+        for (int g = 0; g < groups; g++) {
+            if (band[g] != nullptr) {
+                p_f(g);
+            }
+            for (int e = 0; g == 0 && e < extra; e++) {
+                p_f(MAX_GROUPS + e);
+            }
+        }
     }
 };
 
@@ -232,53 +260,49 @@ struct LevelBands {
 // ops as point by point). p_at(slot, i) is the channel at point i.
 template <typename At>
 void insert_constant_bands(const Spec &p_spec, const LevelBands &p_lb, const Box &p_box, At p_at) {
-    for (int g = 0; g < p_lb.groups; g++) {
-        if (p_lb.band[g] == nullptr) {
-            continue;
-        }
-        const int base = group_slot(g);
+    p_lb.each([&](int p_b) {
+        const int base = group_slot(p_lb.group_of(p_b));
         for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
             float o[CHANNELS];
-            band_channels(p_spec, *p_lb.band[g], p_lb.factors[g], p_p, o);
+            band_channels(p_spec, *p_lb.band[p_b], p_lb.factors[p_b], p_p, o);
             for (int c = 0; c < CHANNELS; c++) {
                 float &v = p_at(base + c, p_i);
                 v = v + o[c];
             }
         });
-    }
+    });
 }
 
 // Adds Λ_m's bands at lattice point p_p to its slots r_ch (before: H(V_{m+1}), what the modulation reads).
 void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vector3i64 &p_p, float r_ch[SLOTS]) {
-    BandMod mod[MAX_GROUPS];
+    BandMod mod[MAX_MODS];
     if (p_lb.modulated != 0u) {
         p_spec.modulation->modulate(p_m, p_lb.carried, r_ch, mod);
     }
     // Every band's channels from the channels before the level's insertions, then the adds.
-    float o[MAX_GROUPS][CHANNELS];
+    float o[MAX_MODS][CHANNELS];
     ExactNoise::Float4 state{ 0.0f, 0.0f, 0.0f, 0.0f };
-    for (int g = 0; g < p_lb.groups; g++) {
-        if (p_lb.band[g] == nullptr) {
-            continue;
-        }
+    bool writes_state = false;
+    p_lb.each([&](int p_b) {
+        const int g = p_lb.group_of(p_b);
         if ((p_lb.modulated >> g) & 1u) {
-            modulated_channels(p_spec, *p_lb.band[g], mod[g], p_lb.slope, p_p, o[g], g == 0 ? &state : nullptr);
+            const BandMod &md = mod[p_lb.mod_of(p_b)];
+            modulated_channels(p_spec, *p_lb.band[p_b], md, p_lb.slope, p_p, o[p_b], g == 0 ? &state : nullptr);
+            writes_state = writes_state || (g == 0 && (md.features & MOD_STATE));
         } else {
-            band_channels(p_spec, *p_lb.band[g], p_lb.factors[g], p_p, o[g]);
+            band_channels(p_spec, *p_lb.band[p_b], p_lb.factors[p_b], p_p, o[p_b]);
         }
-    }
-    for (int g = 0; g < p_lb.groups; g++) {
-        if (p_lb.band[g] == nullptr) {
-            continue;
-        }
-        const int base = group_slot(g);
+    });
+    p_lb.each([&](int p_b) {
+        const int base = group_slot(p_lb.group_of(p_b));
         for (int c = 0; c < CHANNELS; c++) {
-            r_ch[base + c] = r_ch[base + c] + o[g][c];
+            r_ch[base + c] = r_ch[base + c] + o[p_b][c];
         }
-    }
-    // The state group is overwritten, not added to (a band-less group: nothing else writes it).
+    });
+    // The state group is overwritten, not added to (a band-less group: nothing else writes it). At most one note of a
+    // level writes it (Climate::validate).
     const int sg = p_spec.modulation ? p_spec.modulation->state_group() : -1;
-    if ((p_lb.modulated & 1u) && (mod[0].features & MOD_STATE) && sg > 0 && sg < p_lb.groups) {
+    if (writes_state && sg > 0 && sg < p_lb.groups) {
         const int base = group_slot(sg);
         r_ch[base + VALUE] = state.w;
         r_ch[base + DX] = state.x;
@@ -456,6 +480,33 @@ int Spec::top_level(bool p_all_fields) const {
         }
     }
     return t;
+}
+
+int Spec::level_notes(int p_m) const {
+    return int(std::count_if(bands.begin(), bands.end(), [&](const Band &p_b) { return insert_level(p_b) == p_m; }));
+}
+
+int Spec::note_rank(const Band &p_band) const {
+    int rank = 0;
+    for (const Band &b : bands) {
+        if (&b == &p_band) {
+            return rank;
+        }
+        rank += insert_level(b) == insert_level(p_band) ? 1 : 0;
+    }
+    return rank;
+}
+
+int Spec::max_level_notes() const {
+    int count[MAX_LEVEL + 1] = {};
+    int n = 0;
+    for (const Band &b : bands) {
+        const int m = insert_level(b);
+        if (m >= 0 && m <= MAX_LEVEL) {
+            n = std::max(n, ++count[m]);
+        }
+    }
+    return n;
 }
 
 int Spec::run_top(int p_lod, bool p_all_fields) const {

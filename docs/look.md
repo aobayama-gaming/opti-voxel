@@ -57,7 +57,7 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
   the ground), at most `atmo_max_path_m` long (a ray along the flat world's plane never leaves it). **Scale**
   (`AtmosphereMedium::for_base`): under Earth's radius every height times R / R_earth and every coefficient over it (the
   same optical depths: a small planet keeps a blue sky and a limb), the top at least `RELIEF_TOPS` (4) times the
-  ground's relief (`SDFCascade::get_relief_m`) so the terrain stays inside the air: Earth and the flat world keep
+  ground's relief (the world's `look.relief_m`, 3.3 km by default, at most a planet's: `SDFCascade::relief_m`) so the terrain stays inside the air: Earth and the flat world keep
   Earth's 100 km, a 2 km planet gets 250 m. `look.atmosphere_scale` sets the factor.
 - **Passes** (compute on the main device every frame, `device->post` like the mesher; a `atmosphere` GPU timestamp):
   the multiple-scattering table ψ_ms(sun height, altitude), 32 x 32 (Hillaire's: second order with an isotropic phase

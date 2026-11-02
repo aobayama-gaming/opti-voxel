@@ -18,16 +18,16 @@ TEST_CASE("WorldFile: every key is optional and defaults to the engine's default
     CHECK(w.climate_table.is_empty());
     CHECK(w.atmosphere);
     CHECK(w.clouds);
-    CHECK(w.trees == 0);
-    CHECK(w.tree_area_m == 60.0);
-    CHECK(w.instance_area_m == 200.0);
+    CHECK(w.zone.side_m == 0.0);
+    CHECK(w.zone.x_m == SDFTable::Zone().x_m);
+    CHECK(w.instances.empty());
 }
 
 TEST_CASE("WorldFile: inline sections reach their fields") {
     WorldFile w;
     CHECK(parse(R"({"engine": {"voxel_m": 0.05, "lods": 25}, "planet": {"radius_m": 2000, "ring_m": 9000},
-        "look": {"atmosphere": false, "atmosphere_scale": 2, "clouds": false}, "trees": {"count": 7, "area_m": 8},
-        "instances": {"count": 9, "area_m": 10}, "features": {"radius_km": 2}})",
+        "look": {"atmosphere": false, "atmosphere_scale": 2, "clouds": false}, "zone": {"side_m": 8, "centre_m": [3, -4]},
+        "instances": [{"species": "conifer", "cell_m": 5}, {"species": "boulder", "cell_m": 40, "share": 3}], "features": [{"kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45]}]})",
                   w) == ov::str());
     CHECK(w.voxel_m == 0.05);
     CHECK(w.lods == 25);
@@ -36,19 +36,26 @@ TEST_CASE("WorldFile: inline sections reach their fields") {
     CHECK(!w.atmosphere);
     CHECK(w.atmosphere_scale == 2.0);
     CHECK(!w.clouds);
-    CHECK(w.trees == 7);
-    CHECK(w.tree_area_m == 8.0);
-    CHECK(w.instances == 9);
-    CHECK(w.instance_area_m == 10.0);
-    CHECK(w.features_radius_m == 2000.0);
+    CHECK(w.zone.side_m == 8.0);
+    CHECK(w.zone.x_m == 3.0);
+    CHECK(w.zone.z_m == -4.0);
+    CLIMATE_REQUIRE(w.instances.size() == 2);
+    CHECK(w.instances[0].species == "conifer");
+    CHECK(w.instances[0].cell_m == 5.0);
+    CHECK(w.instances[0].share == 1u);
+    CHECK(w.instances[1].share == 3u);
+    CLIMATE_REQUIRE(w.features.size() == 1);
+    CHECK(w.features[0].kind == "lava_lake");
+    CHECK(w.features[0].chance == 0.6);
+    CHECK(w.features[0].radius_hi_m == 45.0);
 }
 
 TEST_CASE("WorldFile: the climate's fields merge with the world's biomes into one table") {
     WorldFile w;
-    CHECK(parse(R"({"climate": {"fields": [{"name": "t"}]}, "ground_stretch": [{"wavelength_m": 8}], "biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(parse(R"({"climate": {"fields": [{"name": "t"}]}, "biomes": [{"name": "a"}]})", w) == ov::str());
     CHECK(w.climate_table["fields"].size() == 1);
-    CHECK(w.climate_table["ground_stretch"].size() == 1);
     CHECK(w.climate_table["biomes"].size() == 1);
+    CHECK(ov::contains(parse(R"({"ground_stretch": [{"wavelength_m": 8}]})", w), "unknown key 'ground_stretch'"));
 }
 
 TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
@@ -56,7 +63,14 @@ TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
     w.lods = 3;
     CHECK(ov::contains(parse(R"({"trees_count": 1})", w), "unknown key 'trees_count'"));
     CHECK(ov::contains(parse(R"({"engine": {"voxels": 1}})", w), "unknown key 'voxels'"));
-    CHECK(ov::contains(parse(R"({"trees": {"cuont": 1}})", w), "unknown key 'cuont'"));
+    CHECK(ov::contains(parse(R"({"zone": {"cuont": 1}})", w), "unknown key 'cuont'"));
+    CHECK(ov::contains(parse(R"({"zone": {"centre_m": [1]}})", w), "centre_m is [x, z]"));
+    CHECK(ov::contains(parse(R"({"zone": {"side_m": -1}})", w), "side_m must be >= 0"));
+    CHECK(ov::contains(parse(R"({"instances": [{"species": "conifer"}]})", w), "'cell_m' is required"));
+    CHECK(ov::contains(parse(R"({"instances": {"species": "conifer"}})", w), "a list of instances"));
+    CHECK(ov::contains(parse(R"({"features": [{"kind": "lava_lake", "cell_m": 640, "radius_m": [5, 2]}]})", w), "0 < lo <= hi"));
+    CHECK(ov::contains(parse(R"({"features": [{"kind": "lava_lake", "cell_m": 640, "chance": 2, "radius_m": [1, 2]}]})", w), "in [0, 1]"));
+    CHECK(ov::contains(parse(R"({"features": {"radius_km": 2}})", w), "a list of features"));
     CHECK(ov::contains(parse(R"({"planet": 5})", w), "not an object"));
     CHECK(ov::contains(parse(R"({"engine": 5})", w), "not a path or an object"));
     CHECK(ov::contains(parse(R"({"engine": {"voxel_m": 0}})", w), "positive"));
@@ -73,7 +87,10 @@ TEST_CASE("WorldFile: world.json finds its engine and climate next to it") {
     CHECK(WorldFile::load("res://climate/world.json", w) == ov::str());
     CHECK(w.voxel_m == 0.05);
     CHECK(w.lods == 25);
-    CHECK(w.trees == 1000000);
+    CHECK(w.zone.side_m == 5000.0);
+    CHECK(w.instances.empty()); // every biome lists its own
+    const ov::Value &biomes = w.climate_table["biomes"];
+    CHECK(biomes[size_t(0)].has("instances"));
     CHECK(w.climate_table["fields"].size() == 6);
     CHECK(w.climate_table["biomes"].size() == 8);
     SDFCascade sdf;

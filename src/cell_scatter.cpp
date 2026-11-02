@@ -51,6 +51,16 @@ double largest_variance(const Moments &p_m) {
 
 } // namespace
 
+void CellScatter::set_growth(uint32_t p_species, std::function<int(const Site &)> p_classify, GrowFn p_grow, bool p_far_per_species) {
+    species = p_species;
+    classes = p_far_per_species ? p_species : 1u;
+    classify = std::move(p_classify);
+    generate_class = std::move(p_grow);
+    generate = [classify = classify, grow = generate_class, n = p_species](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
+        grow(p_site, classify ? classify(p_site) : int(p_site.variant % n), p_up, p_lod, r_out);
+    };
+}
+
 SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_scatter, const RecordFinish &p_finish, const MomentLayerParams &p_layers,
         int p_lod_count) {
     OV_ERR_FAIL_COND_MSG(!p_scatter.generate || p_scatter.classes == 0, "SourceProfile: no generate or no class.");
@@ -64,7 +74,13 @@ SourceProfile::SourceProfile(const DefLibrary &p_library, const CellScatter &p_s
         const uint32_t c = p_j / uint32_t(SAMPLES);
         const ExactNoise::UVec3 h = ExactNoise::hash3(p_j % uint32_t(SAMPLES), p_scatter.salt, 0x9E0F11Eu ^ c);
         const uint32_t variant = c + classes * (h.y >> 16);
-        p_scatter.generate(Site{ VoxelPos(), h.x, variant }, UP_Y, -1, parts[p_j]); // the full growth: reach, lod_end and the joins need every record
+        // The full growth: reach, lod_end and the joins need every record.
+        const Site site{ VoxelPos(), h.x, variant };
+        if (p_scatter.generate_class && classes > 1) {
+            p_scatter.generate_class(site, int(c), UP_Y, -1, parts[p_j]);
+        } else {
+            p_scatter.generate(site, UP_Y, -1, parts[p_j]);
+        }
         for (TableRecord &rec : parts[p_j]) {
             finish_table_record(p_library, p_finish, rec);
             MomentItem item = record_item(p_library, rec);

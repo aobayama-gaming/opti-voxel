@@ -7,12 +7,14 @@
 // in LOD0 voxels), surface at altitude h over the base surface (BaseSurface).
 namespace CascadeTerrain {
 
-// Octaves from the finest one LOD 0 inserts (k = insert_shift, on Λ_0) up to p_k_top; seeds and offsets
-// from ExactNoise::make_fbm.
+// Octaves from p_k_top down to the finest one LOD 0 inserts (k = insert_shift, on Λ_0), octave k's seed and offset
+// ExactNoise::make_octave(p_seed, k): the same octave whatever the top (a climate field's rule).
 inline Cascade::Spec make_spec(uint32_t p_seed, int p_k_top, double p_steepness, int p_insert_shift) {
     Cascade::Spec spec;
     spec.insert_shift = p_insert_shift;
-    spec.bands = ExactNoise::make_fbm(false, p_seed, p_k_top, p_k_top - p_insert_shift + 1, p_steepness * std::ldexp(1.0, p_k_top), 0.5).octaves;
+    for (int k = p_k_top; k >= p_insert_shift; k--) {
+        spec.bands.push_back(ExactNoise::make_octave(p_seed, uint32_t(k), k, float(p_steepness * std::ldexp(1.0, k))));
+    }
     return spec;
 }
 

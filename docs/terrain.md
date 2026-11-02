@@ -5,15 +5,15 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
 - **A run loads a world.** Every terrain setting is data: `World::Settings::world_path` (`VoxelTerrain.world_path`, `--world=PATH`
   on bench, player, Dawn and the tools; the web's `?world=`) names a world file (`WorldFile`, format in `src/world_file.hpp`). Its
   `engine` (a path or inline: `voxel_m`, `lods`, the master variables) and `climate` (a path or inline: the fields, none for no
-  biomes) sit beside `planet`, `look`, `trees`, `instances`, `features`, `ground_stretch` and `biomes`; every key is optional. A
+  biomes) sit beside `planet`, `look`, `zone`, `instances`, `species`, `features` and `biomes`; every key is optional. A
   variant is another file: `adapter/godot/project/worlds/` holds the presets' and the tools' (`default`, `cm`, `lods25`, `biomes`,
   `forest5cm*`, `earth`, `earth25`, `tiny`), `climate/world.json` the game's (`--preset=video`). `--preset=` names keep working. The
-  ground's note rule (`SDFCascade::SEED`, `STEEPNESS`, `MAX_AMP_M`, `micro_top_k`) is still code. Engine tuning and debug flags stay flags.
+  ground is the biomes' graphs, compiled (`docs/climate.md`); a world without biomes has the template biome's. Engine
+  tuning and debug flags stay flags.
 - **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
-  height field, octaves k = 3 up to the micro engine's top (`SDFCascade::micro_top_k`: the first octave whose
-  amplitude reaches the 3.3 km cap, k = 19 at 5 cm, at most lods + 4; the same octaves and bits at any LOD count
-  past it, the relief above being the planned macro engine's),
-  steepness 1/8, amplitudes capped at 3.3 km, datum at 300 m,
+  height field, the notes the biome compiler keeps; without biomes the template biome's, octaves k = 3 up to the first
+  whose amplitude reaches the 3.3 km cap, k = 19 at 5 cm, at most lods + 4, octave k seeded make_octave(seed, k) so the
+  same octaves and bits at any LOD count past it, steepness 1/8; datum at 300 m,
   absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
   make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`
   picks a preset: 1 the default, 4 flat (`SDFCascade::Preset::FLAT`: no band, the ground at `FLAT_GROUND_M` = 250 m, off
@@ -28,7 +28,7 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   `--cam_pos` or `--above_ground=M` (M metres above the terrain under the camera, negative below) says otherwise: the
   cascade's ground is kilometres from the datum.
   **The table** (`SDFTable`, `src/sdf_table.*`, `SDFCascade`'s base: the library, records, snapshot, GPU table,
-  runtime edits and the scenes placed on the ground, i.e. the gallery, `instances` and `trees`, which only need
+  runtime edits and the scenes placed on the ground, i.e. the gallery and the instances' sources, which only need
   the base and `ground_under`) is folded into each lattice sample
   (`SDFCascade::sample_sdf`, GLSL `cascade_sample_sdf` at the level-0 store of the cascade passes): the register
   is the cascade's unit gradient and LOD-L distance times 2^L (exact), then `Archetype::fold_onto` and

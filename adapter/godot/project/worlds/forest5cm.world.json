@@ -4,8 +4,21 @@
   "voxel_m": 0.05,
   "lods": 15
  },
- "trees": {
-  "count": 4000,
-  "area_m": 316
- }
+ "zone": {
+  "side_m": 316
+ },
+ "instances": [
+  {
+   "species": "broadleaf",
+   "cell_m": 5
+  },
+  {
+   "species": "slender",
+   "cell_m": 5
+  },
+  {
+   "species": "conifer",
+   "cell_m": 5
+  }
+ ]
 }

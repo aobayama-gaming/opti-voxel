@@ -1,6 +1,9 @@
 #pragma once
 
+#include "ov/bytes.hpp"
 #include "ov/value.hpp"
+
+#include <vector>
 
 // Report of a world file's climate table (climate.hpp), pure CPU (works with --headless): the table parsed against the
 // cascade ground of the world's engine, then sampled on p_size x p_size points of one lattice Λ_m over the base's tangent
@@ -17,6 +20,27 @@ namespace ClimateReport {
 
 ov::Value run(const ov::str &p_out_dir, const ov::str &p_world_path, double p_extent_km, int p_size, bool p_surface,
         double p_center_x, double p_center_z, int p_lattice = -1);
+
+// A world's maps without files, for the biome mixer (its previews are the engine's): p_world a world file's JSON (its
+// relative paths from p_dir), sampled as run() on p_size x p_size points (row-major, x right, z down), no picks. biomes:
+// the debug colours weighted (biomes_blend.png) in the relief's light, shaded: the relief (ground_shaded.png), both RGB;
+// altitude_m: the column's surface above the base, relief_m its largest magnitude; fields: each field's value,
+// point-major in field_names' order. error: why the world was refused (nothing else set).
+struct Preview {
+    ov::str error;
+    int size = 0;
+    int lattice = 0;
+    double spacing_m = 0.0; // between points
+    ov::bytes biomes;
+    ov::bytes shaded;
+    std::vector<float> altitude_m;
+    double relief_m = 0.0;
+    std::vector<float> fields;
+    std::vector<ov::str> field_names;
+    std::vector<ov::str> biome_names;
+    double us_per_point = 0.0;
+};
+Preview preview(const ov::Value &p_world, const ov::str &p_dir, double p_extent_km, int p_size, bool p_surface, double p_center_x, double p_center_z);
 
 // Empty if p_json (a climate table's text) parses and the cascade of a voxel size and LOD count accepts it, else why
 // not (the biome mixer checks an export with it before it overwrites world.json).

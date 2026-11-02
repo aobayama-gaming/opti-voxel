@@ -8,8 +8,16 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   CPU, L = 1 + slope^2 / 2), 4 `crown` (`make_rock_type(crown_k(voxel), CROWN_SEED)`, bumps of 0.8-3.2 m whose
   amplitude adds `CROWN_BUMP` = 1.5 to L: lumpy foliage up close, smooth once the band rule drops the octaves) and
   5 `cone` (`make_cone_type`, the same bumps on a cone {radius, height, cos, sin, amp}, its rim a smooth max: a
-  conifer's tier). Three species: a broadleaf, a slender one and a conifer (`cone_tiers` = 4 stacked cones,
-  no limbs, ~12 records). `grow_tree` is one recursion for topology and bends: a stem's axis split
+  conifer's tier). The species are data (`src/species.{hpp,cpp}`: a world file's `"species"`, each tree a
+  `TreeSpecies` by its keys, a rock or a pillar by its radius range; `default_species` without the key): today's three
+  trees, a broadleaf, a slender one and a conifer (`cone_tiers` = 4 stacked cones, no limbs, ~12 records), a boulder and
+  a pillar. A site grows its biome's species (`BiomePick`, `src/biome_pick.*`: the climate's weights read once on the
+  CPU at the site, on the coarsest lattice its placement fields resolve, ~20 us, and a hash of the site against them;
+  then `pick_share`, the biome's integer shares of the kind by the site's variant: n equal shares are the variant modulo
+  n, the forest without biome lists bit for bit). A biome's `"instances": [{"species": "conifer", "share": 2}]` lists
+  what it grows (none listed: every species at share 1, no climate read at all; `[]`: nothing); its `"features"`
+  (`["lava_lake"]`) the feature kinds that stand on it. The scenes keep their extents (`trees`, `instances`: a count in
+  a square; `features`: a radius), where they stand. `grow_tree` is one recursion for topology and bends: a stem's axis split
   at midpoints moved by a hash of their path (joints on whole voxels: a segment's end is the next one's
   anchor), children at hashed forks with pipe-model radii (r0^2 >= tip^2 + sum of the children's), stems
   grown thickest first so the per-tree budget cuts the thinnest; then a hull of 1-3 crown spheres on the
@@ -24,7 +32,7 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   listed records (unit test: 1,000 trees, every LOD from there; tight at 5 cm: 8 / 7 / 5 for the three species, a LOD
   late at 0.5 m). `set_forest_scatter` is the forest's generate, classes and profile key, for the table and the tests; a
   species whose `tree_bounds` don't fit the table never grows hull-only (a site's refusal never depends on the LOD). Sites are 3D cells (planets come; `src/cell_sites.*`, any
-  source, salted: `TREE_SITE_SALT` for the forest, the species is the site's variant): `cell_site` reads the coarse field
+  source, salted: `TREE_SITE_SALT` for the forest, the species its biome's, above): `cell_site` reads the coarse field
   (`SDFBase::ground_field(voxel, lod)`, `evaluate_cull`'s field with its gradient; at `site_lod` a lattice sample extended
   along its gradient) at the cell's centre, projects the cell's hashed voxel on that plane, keeps it if it lands in the
   cell's middle part (`SITE_INNER` 0.15 off each side across the normal: neighbours stay 0.3 cells apart with no
@@ -33,10 +41,19 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes): ~9 evaluations per site, 1 per empty box;
   unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
-  before, pinned by a hash). The scene's centre is the ground under (SCENE_X, SCENE_Z) of the base's tangent plane
-  (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
-  every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. The world file's `trees` (`count`, `area_m`; default 0, 60 m) in bench and player; meant for 5 cm voxels
-  (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per site.
+  before, pinned by a hash). The zone's centre is the ground under its `centre_m` of the base's tangent plane
+  (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is
+  the world file's `zone` square (`side_m`) over 4 half sides of height up and down. Hashing 3D cells moved every tree,
+  the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. **What grows where
+  is data:** the world file's `instances` (a biome's, or the world's for a biome that lists none and a world without
+  biomes) are entries `{species, cell_m, share}`; every entry of a kind (trees, rocks) and a cell, over all the lists,
+  is one source (`SDFTable::groups`: the rocks' then the trees', each kind's finest cell keeping its salt, a coarser one
+  `trees_<cell>`), and a site of it grows its biome's entries of that source by their shares (`site_class`: BiomePick,
+  `pick_share`; -1, nothing, where its biome names none of them; no pick at all when every biome grows the same). A
+  biome sets its own density by its cell (the world's 1M forest: `world.json`'s valleys and mangroves 5 m broadleaf,
+  the caldera and the cliffs 10 m conifers and 30 m boulders, the dunes none). The presets are counts of old:
+  `SDFTable::counted` gives the cell of N trees in a square (`forest_cell_side`'s). Meant for 5 cm voxels (at 0.5 m only
+  the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per site.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum
@@ -97,7 +114,10 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   per cell its tent touches) and an O(parts) insert / erase per edit (TODO: per-block member lists would bound it).
   **Biome features (`src/biome_features.*`):** lava lakes and floating islands, plain records like the trees (no
   change to the IR, the fold or the meshers). Placement is by biome cells: each kind tiles space with cubic cells of
-  640 m rounded to 2^k voxels, and a cell keeps one site with the kind's chance, from `hash_cell` of the int64 cell: a
+  its entry's `cell_m` rounded to 2^k voxels, and a cell keeps one site with its entry's chance (a biome's `features`,
+  the world's for a biome that lists none: `{kind, cell_m, chance, radius_m}`, `Climate::FeatureShare`; the kinds'
+  names and seeds alone are code, `Biome::kind`; the candidate's draws are hashed once, so a world listing today's
+  640 m / 0.6 / 18-45 m lakes and 640 m / 0.5 / 15-40 m islands keeps every site), from `hash_cell` of the int64 cell: a
   point of its middle half projected onto the base surface (`BaseSurface::on_base`), kept when the projection stays
   in the cell, so every point of the base has one cell (on the flat base the datum's layer: one per column, as the
   plane's cells were; a planet's sites cover it all round, unit-tested). A site depends only on its cell and the base:
@@ -113,8 +133,8 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   record (a spherical cap on a hanging cone, smooth-unioned, plus bumps), its box bottom 25-70 m above the highest
   ground under it. Both follow the band rule like any record; the slab erodes away a few LODs before the basin (it
   can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) whose scorched basin
-  material shows. The world file's `features.radius_km` places the sites within KM km
-  of the base's point under (SCENE_X, SCENE_Z) once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
+  material shows. The sites stand in the world file's `zone` (the instances' square),
+  placed once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
   out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread.
   `get_debug_stats()["table"]["biomes"]`: counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z
   in metres of the lava's centre or the island's rim plane's, radius). `--preset=biomes` looks at a lava lake with two islands behind it.

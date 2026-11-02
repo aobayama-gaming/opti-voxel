@@ -19,7 +19,7 @@ depth = h(p) - up(p) = -g(p)
 
 - `n_k` are the ground's own exact 3D octaves (`make_octave`, another seed): the same lattices, so the cascade carries
   them like any band, and every point gives the same bits from any origin, chunk or LOD.
-- `q(p)` squashes the read along the base's up by `s` (the `ground_stretch` code, `BaseSurface::stretched`): `s = 2..4`
+- `q(p)` squashes the read along the base's up by `s` (a note's `stretch_y` code, `BaseSurface::stretched`): `s = 2..4`
   turns round blobs into flat, horizontal galleries.
 - `L` is the noise's slope bound, `sum_k a_k * slope(perlin3) / lambda_k`, so `N` is 1-Lipschitz: a lower bound on the
   distance to the cave walls, never more. That keeps the discoverer's |d| > 2 chunk cull exact. Never `c / |grad c|`:
@@ -89,7 +89,7 @@ worm-like tubes, which is the reason to allow two notes sets per layer later.
    - Measured, before / after on the video preset fly (`bench_ab.sh`): the chunk count with caves, the GPU cost of the
      channels, the skip's gain. This number decides stage 4.
 2. **Layers and biomes.** The table's `caves` list and each biome's strengths, the climate report's per-layer map, the
-   mixer's Carve node made real (one per layer, exported by `export_table.gd`), and a **slice view** in the mixer: a
+   a carve node in the engine's graph format (one per layer, so the mixer shows it: its kinds are the engine's), and a **slice view** in the mixer: a
    vertical cut through the ground, so a layer is designed as easily as the surface.
 3. **Living with caves.** Placement on the bare ground with the cave-mouth reject, the rock material by depth, no sun
    or clouds underground, the skirt fix on ceilings.

@@ -33,7 +33,7 @@ done
 OUT="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-forest-lod"
 mkdir -p "$OUT"
 FAILED=0
-# The forest square is centred on (SCENE_X, SCENE_Z) = (-50, -150) m.
+# The forest zone is centred on its world file's zone centre_m, (-50, -150) m by default.
 COMMON=(--mode=direct --preset=forest5cm --scenario=rise --cam_pos=-50,320,-150 --pitch="$PITCH" --yaw=0
     --altitudes="$ALTITUDES" --steady=1 --max_frames=60000)
 for view in 0 2; do

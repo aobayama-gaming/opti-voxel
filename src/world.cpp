@@ -103,11 +103,12 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         sdf->preset = SDFCascade::Preset::FLAT;
         sdf->set_scene(SDFTable::Scene::SHAPES);
     }
-    sdf->set_scatter(content.instances, content.instance_area_m);
-    sdf->set_forest(content.trees, content.tree_area_m);
+    sdf->set_zone(content.zone);
+    sdf->set_instances(content.instances);
+    sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);
     sdf->set_stream_part_sides(config.archetype_stream_part_sides);
-    sdf->set_biome_radius(content.features_radius_m);
+    sdf->set_features(content.features);
     sdf->planet_radius_m = planet_radius_m(config, content);
     sdf->planet_ring_m = content.planet_ring_m;
     if (content.planet_ring_m > 0.0 && !(content.planet_radius_m > 0.0)) {
@@ -165,7 +166,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     // Only for a host that draws them (binds their textures).
     if (content.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
-        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), content.atmosphere_scale,
+        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->relief_m(content.relief_m), content.atmosphere_scale,
                 hosts.atmosphere_textures);
         if (content.clouds && hosts.cloud_textures) {
             clouds = new Clouds();
@@ -177,7 +178,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
                     return CloudClimate::at(*climate, cascade->get_spec(), p_voxel, p_m);
                 });
             }
-            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->get_relief_m(), content.atmosphere_scale,
+            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->relief_m(content.relief_m), content.atmosphere_scale,
                     hosts.cloud_textures);
             clouds->set_weather(cloud_cover, cloud_wind);
         }

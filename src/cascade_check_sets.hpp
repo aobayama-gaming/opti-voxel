@@ -16,7 +16,9 @@
 // (the example before shaped bands: amplitudes only), "4s" the shaped test table (every operation: shapes, the multifractal
 // state, warps, the biomes' curves, stretched octaves), "4d" fieldless_test.json (one biome multiplying the ground's
 // octaves, no field: a modulation with no field group), "4w" the game's world.json (eight biomes on three climate axes, 8
-// groups), "4g" an Earth-sized sphere (the base's regions, BaseRegions, below its switch LOD).
+// groups), "4g" an Earth-sized sphere (the base's regions, BaseRegions, below its switch LOD), "4n" notes_test.json (several
+// notes per octave, modulated: the band table's other notes, their BandMod slots), "4e" programs_test.json (sample
+// programs: smooth and hard min / max, a field read at the samples, a curve of a program).
 namespace CascadeCheckSets {
 
 enum class SpikeSet {
@@ -28,8 +30,10 @@ enum class SpikeSet {
     L4D,
     L4W,
     L4G,
+    L4N,
+    L4E,
 };
-inline constexpr const char *SET_LABELS[] = { "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g" };
+inline constexpr const char *SET_LABELS[] = { "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g", "4n", "4e" };
 
 inline ov::str set_label(SpikeSet p_v) {
     return SET_LABELS[int(p_v)];
@@ -74,6 +78,10 @@ inline ov::str set_world(SpikeSet p_v, const ov::str &p_world) {
             return "res://climate/fieldless_test.json";
         case SpikeSet::L4W:
             return "res://climate/world.json";
+        case SpikeSet::L4N:
+            return "res://climate/notes_test.json";
+        case SpikeSet::L4E:
+            return "res://climate/programs_test.json";
         default:
             return "res://climate/example.json";
     }
@@ -90,9 +98,20 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
     p_sdf.planet_radius_m = world.planet_radius_m;
     p_sdf.planet_ring_m = world.planet_ring_m;
     if (p_v == SpikeSet::L4F && err.empty()) {
+        // Every biome on the template's notes (constant: no modulation), its curve kept (the fields carried).
         ov::Value &biomes = world.climate_table["biomes"];
         for (size_t i = 0; i < biomes.size(); i++) {
-            biomes.at(i).erase("amp");
+            ov::Value graph = Climate::template_graph(world.voxel_m);
+            const ov::Value &nodes = biomes[i]["graph"]["nodes"];
+            for (size_t n = 0; n < nodes.size(); n++) {
+                if (nodes[n]["kind"].as_str() == "curve") {
+                    ov::Value curve = nodes[n];
+                    curve["in"] = "ground";
+                    graph["nodes"].at(1)["height"] = curve["id"];
+                    graph["nodes"].push_back(curve);
+                }
+            }
+            biomes.at(i)["graph"] = graph;
         }
     }
     p_sdf.climate_data = world.climate_table;

@@ -15,13 +15,17 @@
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/variant.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
+#include <algorithm>
 #include <cstring>
+#include <vector>
 
 inline godot::String godot_str(const ov::str &p_s) {
     return godot::String::utf8(p_s.c_str(), int64_t(p_s.size()));
@@ -126,6 +130,21 @@ inline ov::Value ov_value(const godot::Variant &p_v) {
         default:
             return ov::Value();
     }
+}
+
+inline godot::PackedFloat32Array godot_floats(const std::vector<float> &p_values) {
+    godot::PackedFloat32Array packed;
+    packed.resize(int64_t(p_values.size()));
+    std::copy(p_values.begin(), p_values.end(), packed.ptrw());
+    return packed;
+}
+
+inline godot::PackedStringArray godot_strings(const std::vector<ov::str> &p_values) {
+    godot::PackedStringArray packed;
+    for (const ov::str &s : p_values) {
+        packed.push_back(godot_str(s));
+    }
+    return packed;
 }
 
 inline godot::PackedByteArray godot_bytes(const ov::bytes &p_bytes) {

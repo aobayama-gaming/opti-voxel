@@ -67,7 +67,7 @@ struct SourceFixture {
         s.max_extent = int64_t(1) << 29; // SDFTable::max_instance_extent() at 15 LODs and up
         s.part_cell_sides = p_part_cell_sides;
         CellScatter &c = s.scatter;
-        set_forest_scatter(c, VOXEL, *lib, s.finish, types, s.max_extent); // SDFTable::forest_source's
+        set_forest_scatter(c, VOXEL, *lib, s.finish, types, s.max_extent, tree_species(), "species", nullptr); // SDFTable::forest_source's
         if (p_species >= 0) {
             const std::function<void(const Site &, const UpAxis &, int, std::vector<TableRecord> &)> mixed = c.generate;
             c.generate = [mixed, p_species](const Site &p_site, const UpAxis &p_up, int p_lod, std::vector<TableRecord> &r_out) {
@@ -427,7 +427,7 @@ TEST_CASE("Scatter source: one profile per tree set, per-species far moments") {
     ScatterSource::Setup coarse = other;
     coarse.blob_type = lib->add(make_moment_blob_type()); // the fixture's library order
     coarse.library = lib;
-    set_forest_scatter(coarse.scatter, 0.1, *lib, coarse.finish, types, coarse.max_extent);
+    set_forest_scatter(coarse.scatter, 0.1, *lib, coarse.finish, types, coarse.max_extent, tree_species(), "species", nullptr);
     const ScatterSource c(coarse);
     CHECK(&c.profile() != &f.profile());
 

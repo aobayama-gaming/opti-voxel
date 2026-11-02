@@ -286,6 +286,13 @@ inline constexpr float NOISE_SQ_MEAN = 0.0728f;
 // |W| bound of a warp (LOD0 voxels): its floor stays an exact float.
 inline constexpr float WARP_LIMIT = 4194304.0f; // 2^22
 
+// Several ground bands may share a level (the biome compiler's notes of one octave, other seeds or stretches): at most
+// MAX_LEVEL_NOTES, the first is the level's group-0 band, the others follow it in spec order (Spec::level_notes). A
+// level's ground bands are all modulated or all constant (modulated bit 0). A modulation fills r_mod[Spec::note_mod(i)]
+// for the ground's note i of the level and r_mod[Spec::group_mod(g)] for each other modulated group g's band.
+inline constexpr int MAX_LEVEL_NOTES = 8;
+inline constexpr int MAX_MODS = MAX_GROUPS + MAX_LEVEL_NOTES - 1;
+
 // One modulated group's band on Λ_m at a point. Float4 = (gradient per lattice spacing of Λ_m, value).
 struct BandMod {
     uint32_t features = 0;
@@ -303,7 +310,7 @@ struct Modulation {
     virtual FieldRange field_range() const = 0;
     // r_mod[g] for every modulated group g of Λ_m, from p_pre: the point's Level slots after subdivision, before Λ_m's
     // insertions; p_carried (Λ_m is the run's last level): from its carry slots, H of what Λ_{m+1} derived.
-    virtual void modulate(int p_m, bool p_carried, const float p_pre[SLOTS], BandMod r_mod[MAX_GROUPS]) const = 0;
+    virtual void modulate(int p_m, bool p_carried, const float p_pre[SLOTS], BandMod r_mod[MAX_MODS]) const = 0;
     // The carry groups the derive writes (at most MAX_CARRY), and the one H copies from the floor parent instead of
     // interpolating (a value that can't be blended, the climate's pick; -1: none).
     virtual int carry_groups() const { return 0; }
@@ -364,6 +371,19 @@ struct Spec {
     int run_top(int p_lod, bool p_all_fields = false) const;
     int group_count() const { return 1 + int(fields.size()); }
     const std::vector<Band> &group_bands(int p_group) const { return p_group == 0 ? bands : fields[size_t(p_group - 1)]; }
+    // The ground bands of Λ_p_m (in spec order: the level's first, then its other notes) and the most any level has.
+    int level_notes(int p_m) const;
+    int max_level_notes() const;
+    // The index of the ground band p_band (one of `bands`) among its level's notes, in spec order: the order every
+    // consumer inserts them in (LevelBands, the GPU table, the modulation's BandMod slots).
+    int note_rank(const Band &p_band) const;
+    // The BandMod slots (MAX_MODS): the ground's notes of a level first (note p_i at p_i), then the field groups (group
+    // p_g > 0 past the most notes a level has), so a view without the fields (without_fields) keeps the notes' slots;
+    // and how many slots the GPU's arrays hold.
+    int note_mod(int p_i) const { return p_i; }
+    int group_mod(int p_g) const { return group_mod(p_g, max_level_notes()); }
+    static int group_mod(int p_g, int p_max_level_notes) { return p_g == 0 ? 0 : p_g + ov::max(0, p_max_level_notes - 1); }
+    int mod_count() const { return group_count() + ov::max(0, max_level_notes() - 1); }
     FieldRange field_range() const { return modulation ? modulation->field_range() : FieldRange(); }
     int carry_groups() const { return modulation ? modulation->carry_groups() : 0; }
     // The carry groups some run's last level reads without the fields (the GPU's: its runs carry no field to it).

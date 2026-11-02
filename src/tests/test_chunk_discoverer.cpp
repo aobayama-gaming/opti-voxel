@@ -139,7 +139,8 @@ TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCas
     for (const int lods : { 15, 25 }) {
         CAPTURE(lods);
         SDFCascade sdf;
-        sdf.set_scatter(400, 200.0);
+        sdf.set_zone(SDFTable::Zone{ 200.0 });
+        sdf.set_instances(SDFTable::counted(Archetype::Species::ROCK, 400, 200.0));
         compare_walks(sdf, lods);
     }
 }
