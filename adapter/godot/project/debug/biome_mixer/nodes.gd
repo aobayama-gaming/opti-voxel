@@ -241,10 +241,21 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 			var sp := SpinBox.new()
 			sp.min_value = p_d.get("min", 0)
 			sp.max_value = p_d.get("max", 100)
-			sp.allow_greater = true
+			sp.allow_greater = not p_d.get("pow2", false)
 			sp.rounded = true
 			sp.value = int(v)
-			sp.value_changed.connect(func(x: float) -> void: p_ctx.set_params(p_id, {name: int(x)}))
+			if p_d.get("pow2", false):
+				# A power of two: a step up doubles, a step down halves.
+				var cur := [int(v)]
+				sp.value_changed.connect(func(x: float) -> void:
+					var i := int(x)
+					if i & (i - 1) != 0:
+						i = cur[0] * 2 if i > cur[0] else maxi(cur[0] / 2, 1)
+						sp.set_value_no_signal(i)
+					cur[0] = i
+					p_ctx.set_params(p_id, {name: i}))
+			else:
+				sp.value_changed.connect(func(x: float) -> void: p_ctx.set_params(p_id, {name: int(x)}))
 			row.add_child(sp)
 		"bool":
 			var cb := CheckBox.new()
@@ -275,12 +286,12 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 		"points":
 			var box := VBoxContainer.new()
 			var ce := CurveEdit.new()
-			ce.set_points(v, p_ctx.curve_span(p_id))
+			ce.set_points(v, p_ctx.curve_span())
 			ce.points_changed.connect(func(p: Array) -> void: p_ctx.set_params(p_id, {name: p}))
 			p_ctx.curve_ui[p_id] = ce
 			var reset := Button.new()
 			reset.text = "Reset to no remap"
-			reset.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: Kinds.identity_curve(p_ctx.curve_span(p_id))}, true))
+			reset.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: Kinds.identity_curve(p_ctx.curve_span())}, true))
 			box.add_child(ce)
 			box.add_child(reset)
 			row.add_child(box)

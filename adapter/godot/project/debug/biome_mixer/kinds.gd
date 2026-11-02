@@ -38,7 +38,7 @@ const KINDS := {
 			{"name": "k", "type": "k", "default": 12},
 			{"name": "warp", "type": "bool", "default": false, "hint": "Read this note through the climate's warp (wx, wy, wz, shared by every biome), or through the Note warp linked into its port"},
 			{"name": "warp_m", "type": "float", "default": 0.0, "min": 0.0, "max": 2000.0, "step": 0.1, "hint": "How far the warp moves the point the note is read at: metres per unit of the warp (a warp's value is within about +-1)"},
-			{"name": "stretch_y", "type": "int", "default": 1, "min": 1, "max": 64, "hint": "The note's stretch_y (a power of two): the noise read at y / stretch from the datum, a height field where it dominates"},
+			{"name": "stretch_y", "type": "int", "pow2": true, "default": 1, "min": 1, "max": 64, "hint": "The note's stretch_y (a power of two): the noise read at y / stretch from the datum, a height field where it dominates"},
 		],
 	},
 	"note_warp": {
@@ -178,6 +178,11 @@ static func normalise(p_model: Dictionary) -> void:
 	p_model.climate_warp = climate_warp(p_model)
 	fix_notes(p_model)
 	drop_unknown(p_model)
+	# A note's stretch is a power of two (the engine refuses others; files from before the mixer kept to it).
+	for id in p_model.nodes:
+		var n: Dictionary = p_model.nodes[id]
+		if n.kind == "note" and n.has("params") and n.params.has("stretch_y"):
+			n.params.stretch_y = nearest_po2(maxi(int(n.params.stretch_y), 1))
 
 
 # The climate's warp fields a warped note reads: the model's "climate_warp", else (a file from before it) the settings
