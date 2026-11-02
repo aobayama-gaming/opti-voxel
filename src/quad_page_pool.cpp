@@ -1,6 +1,7 @@
 #include "quad_page_pool.hpp"
 
 #include "debug_log.hpp"
+#include "trace.hpp"
 
 #include "ov/math.hpp"
 #include "ov/on_error.hpp"
@@ -40,6 +41,7 @@ int QuadPagePool::_create_page(int p_index) {
 }
 
 void QuadPagePool::_rt_create_page(int p_page) {
+    OV_TRACE("pages", "rt_create_page");
     if (!rt_zero_texture.is_valid()) {
         rt_zero_texture = device->create_texture(TEX_FORMAT, TEX_WIDTH, get_page_rows(), PAGE_USAGE);
         device->clear_texture(rt_zero_texture);
@@ -83,6 +85,14 @@ void QuadPagePool::release_page(int p_page) {
     host->set_page_visible(p_page, false);
     device->post([this, p_page]() { rt_set_group_count(p_page, 0); });
     free_pages.push_back(p_page);
+}
+
+void QuadPagePool::release_all() {
+    for (int i = 0; i < int(pages.size()); i++) {
+        if (pages[i].in_use) {
+            release_page(i);
+        }
+    }
 }
 
 int QuadPagePool::trim(int p_keep_free, int p_max) {
@@ -228,6 +238,7 @@ void QuadPagePool::destroy() {
 }
 
 void QuadPagePool::_rt_destroy() {
+    OV_TRACE("pages", "rt_destroy");
     for (int i = 0; i < int(rt_pages.size()); i++) {
         if (rt_pages[i].texture.is_valid()) {
             host->rt_detach_page(i);

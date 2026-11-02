@@ -5,6 +5,7 @@
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
 
+#include <array>
 #include <map>
 #include <unordered_map>
 
@@ -49,19 +50,25 @@ public:
     void post(std::function<void()> p_fn) override;
     void free(ov::gpu::Handle p_handle) override;
 
-    // A world restarting on this device (on the device's thread): from park_pipelines on, a pipeline freed is kept by
-    // its text, and a pipeline of the same text created takes it instead of being built again (the driver's compile, most
-    // of a start); drop_parked frees those not taken.
-    void park_pipelines() { parking = true; }
+    // A world restarting on this device (on the device's thread): from park on, a pipeline freed is kept by its text, a
+    // buffer or a texture made without data by its shape, and one of the same text or shape created takes it instead of
+    // being built again (the driver's compile; the mesher's hundreds of MB of scratch: a start's allocations). A buffer
+    // taken is cleared or written as a new one would be, a texture keeps its texels (a new one's are undefined).
+    // drop_parked frees those not taken.
+    void park() { parking = true; }
     void drop_parked();
 
 private:
+    // What a parked buffer or texture is taken for: its kind (1: buffer, 2: 2D, 3: 3D texture) with the buffer kind or the
+    // format and usage, the sizes.
+    using Shape = std::array<uint64_t, 3>;
     // A handle's RIDs: a buffer or bind set in `rid`, a pipeline's shader in `shader`.
     struct Entry {
         godot::RID rid;
         godot::RID shader;
         bool is_set = false; // a uniform set
         bool owned = true; // false: imported (import_buffer), never freed here
+        Shape shape{}; // a buffer's or a texture's without data (park's key), zero for the rest
     };
 
     godot::RenderingDevice *rd = nullptr;
@@ -70,8 +77,12 @@ private:
     std::map<uint64_t, Entry> entries; // by id: freed newest first, dependents before what they use
     std::unordered_map<uint64_t, ov::str> pipeline_text; // each live pipeline's GLSL, by id (park_pipelines' key)
     std::unordered_multimap<ov::str, Entry> parked; // the pipelines freed while parking, by text
+    std::multimap<Shape, Entry> parked_shapes; // the buffers and textures freed while parking, by shape
     bool parking = false;
     godot::RID linear_sampler; // Binding::linear_sampler's, made on first use
+
+    // An entry of p_shape: a parked one taken (its RID valid), or a new one without RID.
+    Entry _take_parked(const Shape &p_shape);
 
     static godot::Ref<godot::RDTextureFormat> texture_format(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage);
     godot::RID _linear_sampler();

@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <map>
+#include <utility>
 
 namespace ov {
 
@@ -168,7 +169,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         OV_TRACE("world", "start_mesher");
         direct_mesher = new GPUDirectMesher();
         direct_mesher->set_dual_contouring(config.dual_contouring);
-        direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct);
+        direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct, std::exchange(reused_pages, nullptr));
         direct_mesher->set_debug_view(config.debug_view);
     } else {
         gpu_mesher = new GPUMesher();
@@ -813,9 +814,18 @@ ov::Value World::debug_stats() {
     return d;
 }
 
-void World::stop() {
+void World::stop(QuadPagePool **r_pages) {
+    QuadPagePool *pages = std::exchange(reused_pages, nullptr); // no mesher took them: start failed or never ran
     if (!started) {
+        if (r_pages != nullptr) {
+            *r_pages = pages;
+        } else if (pages != nullptr) {
+            pages->destroy();
+        }
         return;
+    }
+    if (pages != nullptr) {
+        pages->destroy(); // the legacy mesher's world: none taken
     }
     started = false;
 
@@ -829,16 +839,22 @@ void World::stop() {
         auditor = nullptr;
     }
 
-    chunk_discoverer->stop();
-    delete chunk_discoverer;
-    chunk_discoverer = nullptr;
+    {
+        OV_TRACE("world", "stop_discoverer");
+        chunk_discoverer->stop();
+        delete chunk_discoverer;
+        chunk_discoverer = nullptr;
+    }
     sdf->stop_field_gpu(); // its thread frees its device; a walk still computing falls back to the CPU's field
 
-    // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
-    for (auto &kv : state.loaded_chunk) {
-        kv.second.free();
+    {
+        OV_TRACE("world", "stop_chunks");
+        // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
+        for (auto &kv : state.loaded_chunk) {
+            kv.second.free();
+        }
+        state.loaded_chunk.clear();
     }
-    state.loaded_chunk.clear();
 
     if (clouds) {
         clouds->destroy(); // deletes itself on the device's thread, before the atmosphere's textures go
@@ -849,8 +865,13 @@ void World::stop() {
         atmosphere = nullptr;
     }
     if (direct_mesher) {
-        direct_mesher->destroy(); // deletes itself on the device's thread
+        QuadPagePool *kept = direct_mesher->destroy(r_pages != nullptr); // deletes itself on the device's thread
+        if (r_pages != nullptr) {
+            *r_pages = kept;
+        }
         direct_mesher = nullptr;
+    } else if (r_pages != nullptr) {
+        *r_pages = nullptr;
     }
     if (gpu_mesher) {
         gpu_mesher->stop();

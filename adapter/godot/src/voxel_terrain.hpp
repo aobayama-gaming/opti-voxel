@@ -66,7 +66,7 @@ private:
     // The world started on the hosts (false: it refused, an ERR said why), then its pages' and sky's parameters; the
     // atmosphere turned off on the pages and the sky, then the world stopped.
     bool _start_world();
-    void _stop_world();
+    void _stop_world(QuadPagePool **r_pages = nullptr); // r_pages: World::stop's
     // The camera's view axis in render space.
     Vector3 _camera_forward() const;
     // What the world gets as the camera's far plane: Camera3D.far, 0 (none) without a camera or the far limit.

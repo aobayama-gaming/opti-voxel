@@ -91,7 +91,7 @@ static uint64_t morton_key(const ChunkId &p_chunk, const ChunkId &p_origin) {
 }
 
 void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, ov::gpu::Device *p_device, PageHost *p_host,
-        const Settings &p_settings) {
+        const Settings &p_settings, QuadPagePool *p_pool) {
     sdf = p_sdf;
     gate.bind(p_sdf, this);
     chunk_param = p_chunk_param;
@@ -114,10 +114,21 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     remesh_queue.resize(p_lod_numbers);
     cost_model.resize(p_lod_numbers);
 
-    pool = new QuadPagePool();
-    pool->initialize(device, p_host, settings.page_capacity, settings.initial_pages);
+    if (p_pool != nullptr && p_pool->get_device() == device && p_pool->get_host() == p_host && p_pool->get_page_capacity() == settings.page_capacity) {
+        pool = p_pool;
+    } else {
+        OV_TRACE("mesher", "pool_initialize");
+        if (p_pool != nullptr) {
+            p_pool->destroy();
+        }
+        pool = new QuadPagePool();
+        pool->initialize(device, p_host, settings.page_capacity, settings.initial_pages);
+    }
     p_host->set_decode(_page_decode());
-    p_host->set_materials(sdf->get_materials().make_image());
+    {
+        OV_TRACE("mesher", "set_materials");
+        p_host->set_materials(sdf->get_materials().make_image());
+    }
     page_state.resize(pool->get_page_count());
     palettes.initialize(settings.palette_capacity, sdf->get_gpu_table()->base_palette());
 
@@ -152,6 +163,7 @@ ov::gpu::Pipeline GPUDirectMesher::_rt_compile(const char *p_pass, const char *p
 }
 
 void GPUDirectMesher::_rt_initialize() {
+    OV_TRACE("mesher", "rt_initialize");
     using ov::gpu::Binding;
     using ov::gpu::BufferKind;
     const uint64_t cs = chunk_param.chunk_size;
@@ -1489,16 +1501,25 @@ ov::Value GPUDirectMesher::_gpu_by_list_words_stats() const {
     return out;
 }
 
-void GPUDirectMesher::destroy() {
+QuadPagePool *GPUDirectMesher::destroy(bool p_keep_pool) {
     chunk_queue.clear();
     lod_count = 0;
-    // Posts its own cleanup. `pool` is not cleared: the device-thread work posted before (dispatch, kills) still uses it
-    // and runs first (FIFO).
-    pool->destroy();
+    // The device-thread work posted before (dispatch, kills) still uses the pool and runs first (FIFO), before the next
+    // mesher's or the pool's own cleanup. The batches in flight hold pages: released, their copies land first.
+    QuadPagePool *kept = nullptr;
+    if (p_keep_pool) {
+        pool->release_all();
+        kept = pool;
+    } else {
+        OV_TRACE("mesher", "pool_destroy");
+        pool->destroy();
+    }
     device->post([this]() { _rt_destroy(); });
+    return kept;
 }
 
 void GPUDirectMesher::_rt_destroy() {
+    OV_TRACE("mesher", "rt_destroy");
     if (cascade != nullptr) {
         // Its bind sets use the input, param and sdf buffers freed below.
         cascade->free();

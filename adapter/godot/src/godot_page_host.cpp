@@ -431,10 +431,17 @@ ov::gpu::Buffer GodotPageHost::rt_attach_page(int p_page, ov::gpu::Texture p_tex
 
 void GodotPageHost::rt_detach_page(int p_page) {
     PageRT &page = rt_pages[p_page];
+    RenderingServer *rs = RenderingServer::get_singleton();
     if (page.rs_texture.is_valid()) {
-        RenderingServer::get_singleton()->free_rid(page.rs_texture);
+        rs->free_rid(page.rs_texture);
     }
-    device->free(page.command); // the multimesh's (already freed)
+    // The multimesh's (freed before this, free_page): Godot 4.6 never frees an indirect multimesh's command buffer
+    // (MeshStorage::_multimesh_allocate_data, run by its free, drops the RID), one StorageBuffer leaked per page.
+    const RID command = device->get_rid(page.command);
+    if (command.is_valid()) {
+        rs->get_rendering_device()->free_rid(command);
+    }
+    device->free(page.command);
     page = PageRT();
 }
 

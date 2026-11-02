@@ -1006,16 +1006,18 @@ bool VoxelTerrain::_start_world() {
 void VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
     ERR_FAIL_NULL_MSG(main_device, "restart_world: the terrain is not in the tree (set_world_json before it enters).");
     OV_TRACE("terrain", "restart_world");
-    main_device->post([device = main_device]() { device->park_pipelines(); });
+    main_device->post([device = main_device]() { device->park(); });
+    QuadPagePool *pages = nullptr; // the next world's mesher draws on the same pages
     {
         OV_TRACE("terrain", "restart_stop");
-        _stop_world();
+        _stop_world(&pages);
     }
     ov::World::Settings settings = cfg();
     settings.chunk_param = start_chunk_param;
     const ov::DigTool::Settings dig = dig_tool->settings;
     dig_tool.reset();
     world = std::make_unique<ov::World>();
+    world->reuse_pages(pages);
     dig_tool = std::make_unique<ov::DigTool>(*world);
     dig_tool->settings = dig;
     cfg() = settings;
@@ -1174,7 +1176,7 @@ Dictionary VoxelTerrain::get_debug_stats() {
     return d;
 }
 
-void VoxelTerrain::_stop_world() {
+void VoxelTerrain::_stop_world(QuadPagePool **r_pages) {
     if (world->get_atmosphere()) {
         // Off on the pages and the sky before its textures go (the stop's last call frees them).
         Dictionary off;
@@ -1187,7 +1189,7 @@ void VoxelTerrain::_stop_world() {
         }
         _push_atmosphere(off);
     }
-    world->stop();
+    world->stop(r_pages);
 }
 
 void VoxelTerrain::_teardown() {

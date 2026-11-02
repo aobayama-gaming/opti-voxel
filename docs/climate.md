@@ -212,8 +212,9 @@ computes no terrain and has no node kind the engine hasn't.
   place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it, or once
   the last restart's chunks in view are loaded (at most 1 s later): a slider drag shows each load. The climate's
   numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a value builds no pipeline: the
-  device parks the pipelines the old world frees, by text, and the new world takes those of the same text
-  (`RDDevice::park_pipelines`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
+  device parks the pipelines the old world frees, by text, and its buffers and textures by shape, and the new world
+  takes those of the same text or shape (`RDDevice::park`); the page pool goes from the old world to the new
+  (`World::reuse_pages`, `docs/pipelines.md`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
   every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (a copy of it shown over the viewport, which renders
   on below, until the chunks in view are loaded, at most 1 s: a SubViewport stopped with `UPDATE_DISABLED` showed
   black, noise and stripes): no blank ground between two loads. It loads round the orbit's pivot
@@ -224,8 +225,9 @@ computes no terrain and has no node kind the engine hasn't.
   restart, the driver). Measured at 25 LODs, before the LOD cap (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX
   3070 laptop): World mode (~400 km) 0.89 s, then 0.18 and 0.18 s; the mountain alone 0.76 s, then 0.22 and 0.18 s
   (were 1.2-1.3 s: a new node each, its start 1.05 s in one frame, 0.4 s the mesher's pipelines, 0.4 s the cascade's,
-  0.2 s zeroing its buffers on the CPU). Now the restart is one 35 ms frame (with the 2D map's ~20 ms, the edit's frame
-  ~60 ms), then ~3,000 chunks over 25 LODs load in ~170 ms at 16-26 ms a frame; the view after a restart is the first
+  0.2 s zeroing its buffers on the CPU). Now the restart is ~12 ms of one frame (`restart_world` p50 over a 20 s drag;
+  was 46 ms: 11 freeing ~150 pages, 4 making 64, 9 the palette texture's 8 MB of zeros from the CPU, ~20 allocating the
+  mesher's buffers and textures), then ~3,000 chunks over 25 LODs load in ~170 ms at 16-26 ms a frame; the view after a restart is the first
   load's, pixel for pixel. Orbit, pan and zoom move the camera. *Open in game* writes the world
   (`user://biome_mixer_game.world.json`) and runs the main scene on it (`--world=`) in a second Godot.
 - **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
