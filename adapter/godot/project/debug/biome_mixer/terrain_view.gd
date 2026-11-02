@@ -2,13 +2,13 @@ extends SubViewportContainer
 ## The mixer's 3D view: the game's own terrain (a VoxelTerrain, the GPU Direct mesher) on the world being edited, in a
 ## viewport of its own with the game's sky, fog and sun. An edit restarts the terrain on the new world: the climate's
 ## numbers are shader params (Cascade::ShaderParams), so a world whose structure didn't change compiles nothing (the
-## device's SPIR-V cache), and the time is the reload of the chunks in view. Coarse LODs (LOD_PIXEL_ERROR) keep it short.
+## device's SPIR-V cache), and the time is the reload of the chunks in view. Without the world's clouds (their shadows).
 ## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
 
-## The pixel error of the view's LODs: the game's is 4; 3x coarser chunks reload ~10x fewer.
-const LOD_PIXEL_ERROR := 12.0
+## The pixel error of the view's LODs, the game's: at 12 the LOD seams showed as ledges, for a reload only ~10% shorter.
+const LOD_PIXEL_ERROR := 4.0
 ## The pause after an edit before the terrain restarts (seconds): a slider drag restarts it once.
 const RESTART_AFTER := 0.3
 ## The game's look: its sky, fog and sun are this scene's.
@@ -110,7 +110,7 @@ func _restart_terrain() -> void:
 	# their own, ~9 s per restart (the driver, not glslang), for a view of a few hundred chunks.
 	_terrain.discoverer_mode = 0
 	_terrain.walk_gpu = false
-	_terrain.set_world_json(_json, _dir)
+	_terrain.set_world_json(_without_clouds(_json), _dir)
 	_terrain.origin_shifted.connect(func(p_shift: Vector3) -> void:
 		_target -= p_shift
 		_shifted += p_shift)
@@ -121,6 +121,15 @@ func _restart_terrain() -> void:
 	loaded_ms = -1
 	status = "terrain restarted in %d ms, loading" % ((Time.get_ticks_usec() - _restart_usec) / 1000)
 	status_changed.emit()
+
+
+# p_json with its look's clouds off: over a view of kilometres their shadows hide the ground's relief.
+static func _without_clouds(p_json: String) -> String:
+	var world: Dictionary = JSON.parse_string(p_json)
+	var look: Dictionary = world.get("look", {})
+	look["clouds"] = false
+	world["look"] = look
+	return JSON.stringify(world)
 
 
 # The terrain stopped (its world, its GPU pages): the camera back in the first render origin's frame, where the next

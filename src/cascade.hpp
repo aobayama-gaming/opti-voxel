@@ -313,6 +313,12 @@ struct ShaderParams {
         values.push_back(p_value);
         return ov::format("cascade_param[%d].%c", i / 4, "xyzw"[i % 4]);
     }
+    // p_values in consecutive slots, read at the GLSL index p_index (an int expression, 0 <= p_index < p_values.size()).
+    ov::str table(const std::vector<float> &p_values, const ov::str &p_index) {
+        const int64_t i = int64_t(values.size());
+        values.insert(values.end(), p_values.begin(), p_values.end());
+        return ov::format("cascade_param[(%d + (%s)) >> 2][(%d + (%s)) & 3]", i, p_index.c_str(), i, p_index.c_str());
+    }
     // The block's vec4s (at least one): its size in the text, a function of the structure as the rest of it.
     int64_t vec4s() const { return ov::max(int64_t(1), (int64_t(values.size()) + 3) / 4); }
 };

@@ -23,8 +23,9 @@ public:
 
     // GPU code spliced into the cascade passes (SDFCascade: the cascade's register, metres and skirt
     // functions). The shader provides the chunk_param
-    // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
-    virtual ov::str get_glsl_code() const = 0;
+    // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp. Its numbers that follow the
+    // world's values (the skirt depths: the ground's amplitudes) go to r_params (Cascade::ShaderParams).
+    virtual ov::str get_glsl_code(Cascade::ShaderParams &r_params) const = 0;
     // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
     // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPos group_hi, uint chunk, out uint
     // material, out float skirt_extra)` (material: the winning record's palette index, 0 = ground; skirt_extra: metres

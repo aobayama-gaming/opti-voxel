@@ -369,7 +369,7 @@ uint cascade_ground_material(Ch ch) {
 
     // cascade_terrain_sdf is sdf(), for the batches with no instance listed (point items write cascade_terrain_unit; their
     // metres come from to_metres on the CPU).
-    ov::str get_glsl_code() const override {
+    ov::str get_glsl_code(Cascade::ShaderParams &r_params) const override {
         using namespace ExactNoise;
         const ov::str regions = base.curved() ? BaseRegions::glsl(base) : ov::str();
         ov::str code = base.glsl() + regions + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
@@ -391,10 +391,9 @@ vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod) {
     return cascade_metres(cascade_terrain_unit(c0, p, lod), lod);
 }
 
-// SDFCascade::skirt_depth_m: the skirt depth (metres) of a LOD-lod chunk.
+// SDFCascade::skirt_depth_m: the skirt depth (metres) of a LOD-lod chunk (shader params: it follows the amplitudes).
 float cascade_skirt_depth_m(int lod) {
-    const uint t[SKIRT_N] = uint[SKIRT_N](SKIRT_TABLE);
-    return uintBitsToFloat(t[lod]);
+    return SKIRT_PARAM;
 }
 
 // The moment skirt (metres) of a LOD-lod chunk, at the samples a moment blob touches (sample_sdf).
@@ -410,7 +409,7 @@ float cascade_moment_skirt_m(int lod) {
             }
             return table;
         };
-        return ov::replace_all(code, { { "SKIRT_N", ov::itos(int64_t(skirt_depth_table.size())) }, { "MOMENT_SKIRT_TABLE", table_text(moment_skirt_table) }, { "SKIRT_TABLE", table_text(skirt_depth_table) } });
+        return ov::replace_all(code, { { "SKIRT_N", ov::itos(int64_t(skirt_depth_table.size())) }, { "MOMENT_SKIRT_TABLE", table_text(moment_skirt_table) }, { "SKIRT_PARAM", r_params.table(skirt_depth_table, "lod") } });
     }
 
     // The level passes' fold variant (after the table buffers): sample_sdf on the GPU, the instances of input chunk

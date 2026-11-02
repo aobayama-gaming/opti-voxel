@@ -67,12 +67,12 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     CHECK(h == 13659167188471627091ull); // re-pinned when the ground's octave k got the seed make_octave(seed, k)
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface). Both
     // re-pinned when the climate's numbers moved to the shader params (Cascade::ShaderParams, a uniform block: each value put
-    // back as its literal gave the old texts' hashes).
-    CHECK(chunk_text == 10877806101924431314ull);
+    // back as its literal gave the old texts' hashes), and when the skirt depths joined them (they follow the amplitudes).
+    CHECK(chunk_text == 8829140549294215735ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B),
     // and (all three) when the derive moved before the level's insertions (one climate per point).
     // The bits and the point shader re-pinned when the biomes became a centre and span per field (Climate::weights).
-    CHECK(point_text == 8838567388141883880ull);
+    CHECK(point_text == 8001590302712550601ull);
 }
 
 // The shapes' centring constants are the noise's own means: E[sabs(n)] and E[n^2] of perlin3, over random points of
@@ -591,13 +591,21 @@ static ov::Value retuned(ov::Value p_table) {
         for (size_t n = 0; n < nodes.size(); n++) {
             ov::Value &node = nodes.at(n);
             const ov::str kind = node["kind"].as_str();
-            auto scale = [&](const char *p_key, double p_by) { node[p_key] = node[p_key].as_double() * p_by; };
+            auto scale = [&](const char *p_key, double p_by) {
+                if (std::as_const(node).has(p_key)) {
+                    node[p_key] = node[p_key].as_double() * p_by;
+                }
+            };
             if (kind == "constant") {
                 node["value_m"] = node["value_m"].as_double() + 7.0;
             } else if (kind == "smin" || kind == "smax") {
                 scale("k_m", 1.5);
             } else if (kind == "note") {
                 scale("max_amp_m", 0.8);
+                scale("steepness", 0.25);
+                scale("amp_m", 0.25);
+                scale("persistence", 0.9);
+                node["seed"] = node["seed"].as_double() + 1.0;
             } else if (kind == "multifractal") {
                 scale("gain", 0.9);
             } else if (kind == "warp") {

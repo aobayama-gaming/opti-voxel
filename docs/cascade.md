@@ -23,9 +23,10 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
   its own `BandMod` (`Spec::note_mod`); a level's ground notes are modulated or constant together. A spec with one note
   per level generates the text it had before. The climate's numbers are data too (`Cascade::ShaderParams`): every
   value its generated code reads (the biomes' centres and spans, the field terms, the bands' amplitudes, shape
-  coefficients, gains and warp amounts, the curves' segments, the programs' constants and smooth k) is a slot of a
-  per-variant uniform block of vec4s at `CascadeGLSL::PARAM_BINDING` (the value's bits; constant indices, as cheap as
-  literals; not a storage buffer, which WebGPU caps per stage; at most 16 KB, world.json's largest 994 values), never a
+  coefficients, gains and warp amounts, the curves' segments, the programs' constants and smooth k, and the skirt depth
+  per LOD, which follows the amplitudes) is a slot of a per-variant uniform block of vec4s at
+  `CascadeGLSL::PARAM_BINDING` (the value's bits; constant indices, as cheap as literals, the skirt table read at the
+  LOD's; not a storage buffer, which WebGPU caps per stage; at most 16 KB, world.json's largest 1,019 values), never a
   literal. So the
   text depends on the world's structure only (its notes' octaves, which nodes, which coefficients are zero: the CPU
   skips the same zero terms); an edit of a value compiles nothing (the Godot device keeps the SPIR-V of every text by
