@@ -23,6 +23,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_world_path", "path"), &VoxelTerrain::set_world_path);
     ClassDB::bind_method(D_METHOD("get_world_path"), &VoxelTerrain::get_world_path);
     ClassDB::bind_method(D_METHOD("set_world_json", "json", "dir"), &VoxelTerrain::set_world_json);
+    ClassDB::bind_method(D_METHOD("restart_world", "json", "dir"), &VoxelTerrain::restart_world);
     ClassDB::bind_method(D_METHOD("set_terrain_mode", "mode"), &VoxelTerrain::set_terrain_mode);
     ClassDB::bind_method(D_METHOD("get_terrain_mode"), &VoxelTerrain::get_terrain_mode);
     ClassDB::bind_method(D_METHOD("set_legacy_batch_size", "size"), &VoxelTerrain::set_legacy_batch_size);
@@ -215,7 +216,7 @@ void VoxelTerrain::_bind_methods() {
 }
 
 void VoxelTerrain::set_pipeline_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(world.is_started(), "pipeline_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "pipeline_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode != PIPELINE_GPU_LEGACY && p_mode != PIPELINE_GPU_DIRECT,
             "pipeline_mode must be 1 (GPU Legacy) or 2 (GPU Direct).");
     cfg().pipeline_mode = ov::World::PipelineMode(p_mode);
@@ -226,18 +227,18 @@ int VoxelTerrain::get_pipeline_mode() const {
 }
 
 void VoxelTerrain::set_world_path(const String &p_path) {
-    ERR_FAIL_COND_MSG(world.is_started(), "world_path must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "world_path must be set before the terrain enters the tree.");
     cfg().world_path = ov_str(p_path);
     cfg().world_json.clear();
-    world.load_world(); // the voxel size and the scene shift are read before the terrain starts
+    world->load_world(); // the voxel size and the scene shift are read before the terrain starts
 }
 
 void VoxelTerrain::set_world_json(const String &p_json, const String &p_dir) {
-    ERR_FAIL_COND_MSG(world.is_started(), "the world must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "the world must be set before the terrain enters the tree.");
     cfg().world_path.clear();
     cfg().world_json = ov_str(p_json);
     cfg().world_dir = ov_str(p_dir);
-    world.load_world(); // as set_world_path
+    world->load_world(); // as set_world_path
 }
 
 String VoxelTerrain::get_world_path() const {
@@ -245,7 +246,7 @@ String VoxelTerrain::get_world_path() const {
 }
 
 void VoxelTerrain::set_terrain_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(world.is_started(), "terrain_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "terrain_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode != 1 && p_mode != 4, "terrain_mode must be 1 (cascade) or 4 (shapes gallery).");
     cfg().terrain_mode = p_mode;
 }
@@ -255,7 +256,7 @@ int VoxelTerrain::get_terrain_mode() const {
 }
 
 void VoxelTerrain::set_legacy_batch_size(int p_size) {
-    ERR_FAIL_COND_MSG(world.is_started(), "legacy_batch_size must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "legacy_batch_size must be set before the terrain enters the tree.");
     cfg().legacy_batch_size = p_size;
 }
 
@@ -268,7 +269,7 @@ float VoxelTerrain::get_voxel_size() const {
 }
 
 void VoxelTerrain::set_discovery_cull_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(world.is_started(), "discovery_cull_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "discovery_cull_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode < ChunkDiscoverer::CULL_NONE || p_mode > ChunkDiscoverer::CULL_LEGACY, "Unknown discovery_cull_mode.");
     cfg().discovery_cull_mode = p_mode;
 }
@@ -278,7 +279,7 @@ int VoxelTerrain::get_discovery_cull_mode() const {
 }
 
 void VoxelTerrain::set_discovery_cache(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "discovery_cache must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "discovery_cache must be set before the terrain enters the tree.");
     cfg().discovery_cache = p_enable;
 }
 
@@ -287,7 +288,7 @@ bool VoxelTerrain::get_discovery_cache() const {
 }
 
 void VoxelTerrain::set_discovery_verify(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "discovery_verify must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "discovery_verify must be set before the terrain enters the tree.");
     cfg().discovery_verify = p_enable;
 }
 
@@ -296,7 +297,7 @@ bool VoxelTerrain::get_discovery_verify() const {
 }
 
 void VoxelTerrain::set_destroy_verify(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "destroy_verify must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "destroy_verify must be set before the terrain enters the tree.");
     cfg().destroy_verify = p_enable;
 }
 
@@ -305,7 +306,7 @@ bool VoxelTerrain::get_destroy_verify() const {
 }
 
 void VoxelTerrain::set_discoverer_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(world.is_started(), "discoverer_mode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "discoverer_mode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_mode < -1 || p_mode > 1, "Unknown discoverer_mode (-1 auto, 0 CPU, 1 GPU).");
     cfg().discoverer_mode = p_mode;
 }
@@ -315,7 +316,7 @@ int VoxelTerrain::get_discoverer_mode() const {
 }
 
 void VoxelTerrain::set_walk_gpu(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "walk_gpu must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "walk_gpu must be set before the terrain enters the tree.");
     cfg().walk_gpu = p_enable;
 }
 
@@ -324,7 +325,7 @@ bool VoxelTerrain::get_walk_gpu() const {
 }
 
 void VoxelTerrain::set_walk_verify(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "walk_verify must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "walk_verify must be set before the terrain enters the tree.");
     cfg().walk_verify = p_enable;
 }
 
@@ -333,7 +334,7 @@ bool VoxelTerrain::get_walk_verify() const {
 }
 
 void VoxelTerrain::set_walk_batch(int p_keys) {
-    ERR_FAIL_COND_MSG(world.is_started(), "walk_batch must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "walk_batch must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_keys < 1, "walk_batch must be at least 1.");
     cfg().walk_batch = p_keys;
 }
@@ -343,7 +344,7 @@ int VoxelTerrain::get_walk_batch() const {
 }
 
 void VoxelTerrain::set_discovery_compare(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "discovery_compare must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "discovery_compare must be set before the terrain enters the tree.");
     cfg().discovery_compare = p_enable;
 }
 
@@ -352,7 +353,7 @@ bool VoxelTerrain::get_discovery_compare() const {
 }
 
 void VoxelTerrain::set_skirt_depth(float p_depth) {
-    ERR_FAIL_COND_MSG(world.is_started(), "skirt_depth must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "skirt_depth must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(p_depth < 0.0f, "skirt_depth must not be negative.");
     cfg().chunk_param.skirt_depth = p_depth;
 }
@@ -362,7 +363,7 @@ float VoxelTerrain::get_skirt_depth() const {
 }
 
 bool VoxelTerrain::_can_set_world_origin(int64_t p_voxel) const {
-    ERR_FAIL_COND_V_MSG(world.is_started(), false, "world_origin must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_V_MSG(world->is_started(), false, "world_origin must be set before the terrain enters the tree.");
     ERR_FAIL_COND_V_MSG(p_voxel > WorldCoord::MAX_ABS_ORIGIN_VOXEL || p_voxel < -WorldCoord::MAX_ABS_ORIGIN_VOXEL, false,
             "world_origin must be within +-2^60 voxels.");
     return true;
@@ -399,23 +400,23 @@ int64_t VoxelTerrain::get_world_origin_z() const {
 }
 
 double VoxelTerrain::get_world_zone_m() const {
-    return world.world_file().zone.side_m;
+    return world->world_file().zone.side_m;
 }
 
 double VoxelTerrain::get_planet_radius() const {
-    return world.world_file().planet_radius_m;
+    return world->world_file().planet_radius_m;
 }
 
 void VoxelTerrain::set_cloud_weather(float p_cover, const Vector3 &p_wind_mps) {
-    world.set_cloud_weather(p_cover, ov_f3(p_wind_mps));
+    world->set_cloud_weather(p_cover, ov_f3(p_wind_mps));
 }
 
 void VoxelTerrain::set_sun_direction(const Vector3 &p_towards_sun) {
-    world.set_sun(ov_f3(p_towards_sun.normalized()));
+    world->set_sun(ov_f3(p_towards_sun.normalized()));
 }
 
 void VoxelTerrain::set_archetype_band(bool p_enabled) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_band must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "archetype_band must be set before the terrain enters the tree.");
     cfg().archetype_band = p_enabled;
 }
 
@@ -424,7 +425,7 @@ bool VoxelTerrain::get_archetype_band() const {
 }
 
 void VoxelTerrain::set_archetype_stream(bool p_enabled) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_stream must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "archetype_stream must be set before the terrain enters the tree.");
     cfg().archetype_stream = p_enabled;
 }
 
@@ -433,7 +434,7 @@ bool VoxelTerrain::get_archetype_stream() const {
 }
 
 void VoxelTerrain::set_archetype_stream_part_sides(int p_sides) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_stream_part_sides must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "archetype_stream_part_sides must be set before the terrain enters the tree.");
     // Past it, far layers become part layers whose blob tiles read cubically many LOD-0 part tiles.
     ERR_FAIL_COND_MSG(p_sides < 1 || p_sides > int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES_MAX),
             vformat("archetype_stream_part_sides must be within [1, %d] source cells.", Archetype::ScatterSource::STREAM_PART_CELL_SIDES_MAX));
@@ -445,7 +446,7 @@ int VoxelTerrain::get_archetype_stream_part_sides() const {
 }
 
 void VoxelTerrain::set_archetype_moments(bool p_enabled) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_moments must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "archetype_moments must be set before the terrain enters the tree.");
     cfg().archetype_moments = p_enabled;
 }
 
@@ -454,7 +455,7 @@ bool VoxelTerrain::get_archetype_moments() const {
 }
 
 void VoxelTerrain::set_archetype_erode(float p_cells) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_erode must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "archetype_erode must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(!(p_cells > 0.0f && p_cells <= 4.0f), "archetype_erode must be in (0, 4] cells per LOD.");
     cfg().archetype_erode = p_cells;
 }
@@ -464,7 +465,7 @@ float VoxelTerrain::get_archetype_erode() const {
 }
 
 void VoxelTerrain::set_archetype_resolve(float p_cells) {
-    ERR_FAIL_COND_MSG(world.is_started(), "archetype_resolve must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "archetype_resolve must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(!(p_cells >= 0.0f && p_cells <= 8.0f), "archetype_resolve must be in [0, 8] cells.");
     cfg().archetype_resolve = p_cells;
 }
@@ -474,7 +475,7 @@ float VoxelTerrain::get_archetype_resolve() const {
 }
 
 void VoxelTerrain::set_lod_pixel_error(float p_error) {
-    ERR_FAIL_COND_MSG(world.is_started(), "lod_pixel_error must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "lod_pixel_error must be set before the terrain enters the tree.");
     cfg().lod_pixel_error = p_error;
 }
 
@@ -483,7 +484,7 @@ float VoxelTerrain::get_lod_pixel_error() const {
 }
 
 void VoxelTerrain::set_lod_pixel_error_back(float p_error) {
-    ERR_FAIL_COND_MSG(world.is_started(), "lod_pixel_error_back must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "lod_pixel_error_back must be set before the terrain enters the tree.");
     cfg().lod_pixel_error_back = p_error;
 }
 
@@ -492,7 +493,7 @@ float VoxelTerrain::get_lod_pixel_error_back() const {
 }
 
 void VoxelTerrain::set_lod_pixel_errors(const PackedFloat32Array &p_errors) {
-    ERR_FAIL_COND_MSG(world.is_started(), "lod_pixel_errors must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "lod_pixel_errors must be set before the terrain enters the tree.");
     cfg().lod_pixel_errors.assign(p_errors.ptr(), p_errors.ptr() + p_errors.size());
 }
 
@@ -505,7 +506,7 @@ PackedFloat32Array VoxelTerrain::get_lod_pixel_errors() const {
 }
 
 void VoxelTerrain::set_lod_view_margin_deg(float p_degrees) {
-    ERR_FAIL_COND_MSG(world.is_started(), "lod_view_margin_deg must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "lod_view_margin_deg must be set before the terrain enters the tree.");
     // The remembered view axis lags the camera's by up to RESCAN_TURN_DEG: a smaller margin would leave the
     // frustum's edge outside the cone.
     ERR_FAIL_COND_MSG(!(p_degrees >= ChunkDiscoverer::RESCAN_TURN_DEG && p_degrees <= 180.0f),
@@ -518,7 +519,7 @@ float VoxelTerrain::get_lod_view_margin_deg() const {
 }
 
 void VoxelTerrain::set_lod_view_memory_m(float p_metres) {
-    ERR_FAIL_COND_MSG(world.is_started(), "lod_view_memory_m must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "lod_view_memory_m must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(std::isnan(p_metres), "lod_view_memory_m must be a number.");
     cfg().lod_view_memory_m = p_metres;
 }
@@ -528,7 +529,7 @@ float VoxelTerrain::get_lod_view_memory_m() const {
 }
 
 void VoxelTerrain::set_lod_far_limit(bool p_enabled) {
-    ERR_FAIL_COND_MSG(world.is_started(), "lod_far_limit must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "lod_far_limit must be set before the terrain enters the tree.");
     lod_far_limit = p_enabled;
 }
 
@@ -537,11 +538,11 @@ bool VoxelTerrain::get_lod_far_limit() const {
 }
 
 int VoxelTerrain::get_lod_numbers() const {
-    return world.world_file().lods;
+    return world->world_file().lods;
 }
 
 void VoxelTerrain::set_legacy_trim_indices(bool p_trim) {
-    ERR_FAIL_COND_MSG(world.is_started(), "legacy_trim_indices must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "legacy_trim_indices must be set before the terrain enters the tree.");
     cfg().legacy_trim_indices = p_trim;
 }
 
@@ -550,7 +551,7 @@ bool VoxelTerrain::get_legacy_trim_indices() const {
 }
 
 void VoxelTerrain::set_dual_contouring(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "dual_contouring must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "dual_contouring must be set before the terrain enters the tree.");
     cfg().dual_contouring = p_enable;
 }
 
@@ -559,7 +560,7 @@ bool VoxelTerrain::get_dual_contouring() const {
 }
 
 void VoxelTerrain::set_direct_batch_size(int p_size) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_batch_size must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_batch_size must be set before the terrain enters the tree.");
     cfg().direct.batch_size = p_size;
 }
 
@@ -568,7 +569,7 @@ int VoxelTerrain::get_direct_batch_size() const {
 }
 
 void VoxelTerrain::set_direct_pages_per_batch(int p_pages) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_pages_per_batch must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_pages_per_batch must be set before the terrain enters the tree.");
     cfg().direct.pages_per_batch = p_pages;
 }
 
@@ -577,7 +578,7 @@ int VoxelTerrain::get_direct_pages_per_batch() const {
 }
 
 void VoxelTerrain::set_direct_batches_per_frame(int p_batches) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_batches_per_frame must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_batches_per_frame must be set before the terrain enters the tree.");
     ERR_FAIL_COND(p_batches < 1 || p_batches > (int)GPUDirectMesher::MAX_BATCHES_PER_FRAME);
     cfg().direct.max_batches_per_frame = p_batches;
 }
@@ -587,7 +588,7 @@ int VoxelTerrain::get_direct_batches_per_frame() const {
 }
 
 void VoxelTerrain::set_direct_gpu_budget_ms(float p_ms) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_gpu_budget_ms must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_gpu_budget_ms must be set before the terrain enters the tree.");
     ERR_FAIL_COND(!(p_ms >= 0.0f)); // 0: no budget
     cfg().direct.gpu_budget_ms = p_ms;
 }
@@ -597,7 +598,7 @@ float VoxelTerrain::get_direct_gpu_budget_ms() const {
 }
 
 void VoxelTerrain::set_direct_max_in_flight(int p_batches) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_max_in_flight must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_max_in_flight must be set before the terrain enters the tree.");
     ERR_FAIL_COND(p_batches < 0); // 0: 3 * direct_batches_per_frame
     cfg().direct.max_in_flight = p_batches;
 }
@@ -607,7 +608,7 @@ int VoxelTerrain::get_direct_max_in_flight() const {
 }
 
 void VoxelTerrain::set_direct_page_capacity(int p_capacity) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_page_capacity must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_page_capacity must be set before the terrain enters the tree.");
     cfg().direct.page_capacity = p_capacity;
 }
 
@@ -616,7 +617,7 @@ int VoxelTerrain::get_direct_page_capacity() const {
 }
 
 void VoxelTerrain::set_direct_initial_pages(int p_pages) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_initial_pages must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_initial_pages must be set before the terrain enters the tree.");
     cfg().direct.initial_pages = p_pages;
 }
 
@@ -625,7 +626,7 @@ int VoxelTerrain::get_direct_initial_pages() const {
 }
 
 void VoxelTerrain::set_direct_compaction(bool p_enable) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_compaction must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_compaction must be set before the terrain enters the tree.");
     cfg().direct.compaction = p_enable;
 }
 
@@ -634,7 +635,7 @@ bool VoxelTerrain::get_direct_compaction() const {
 }
 
 void VoxelTerrain::set_direct_compact_max_extent(float p_chunks) {
-    ERR_FAIL_COND_MSG(world.is_started(), "direct_compact_max_extent must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "direct_compact_max_extent must be set before the terrain enters the tree.");
     cfg().direct.compact_max_extent = p_chunks;
 }
 
@@ -652,29 +653,29 @@ double VoxelTerrain::_camera_far() const {
 
 double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
-    return world.sdf_at(pos);
+    return world->sdf_at(pos);
 }
 
 Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
     double pos[3];
-    world.tangent_position(double(p_tangent_m.x), double(p_tangent_m.y), pos);
+    world->tangent_position(double(p_tangent_m.x), double(p_tangent_m.y), pos);
     return Vector3(real_t(pos[0]), real_t(pos[1]), real_t(pos[2]));
 }
 
 Vector3 VoxelTerrain::get_up_at(const Vector3 &p_render_pos) const {
     const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
-    const UpAxis up = world.up_at(pos);
+    const UpAxis up = world->up_at(pos);
     return Vector3(real_t(up[0]), real_t(up[1]), real_t(up[2]));
 }
 
 Vector3 VoxelTerrain::get_scene_shift() const {
     double shift[3];
-    world.scene_shift(shift);
+    world->scene_shift(shift);
     return Vector3(real_t(shift[0]), real_t(shift[1]), real_t(shift[2]));
 }
 
 void VoxelTerrain::set_rebase_distance_m(float p_metres) {
-    ERR_FAIL_COND_MSG(world.is_started(), "rebase_distance_m must be set before the terrain enters the tree.");
+    ERR_FAIL_COND_MSG(world->is_started(), "rebase_distance_m must be set before the terrain enters the tree.");
     ERR_FAIL_COND_MSG(!(p_metres >= 0.0f), "rebase_distance_m must be >= 0.");
     cfg().rebase_distance_m = p_metres;
 }
@@ -684,22 +685,22 @@ float VoxelTerrain::get_rebase_distance_m() const {
 }
 
 int64_t VoxelTerrain::get_render_origin_x() const {
-    return world.render_origin_voxel().x;
+    return world->render_origin_voxel().x;
 }
 
 int64_t VoxelTerrain::get_render_origin_y() const {
-    return world.render_origin_voxel().y;
+    return world->render_origin_voxel().y;
 }
 
 int64_t VoxelTerrain::get_render_origin_z() const {
-    return world.render_origin_voxel().z;
+    return world->render_origin_voxel().z;
 }
 
 Vector3 VoxelTerrain::get_render_offset_m() const {
-    if (!world.is_started()) {
+    if (!world->is_started()) {
         return Vector3();
     }
-    return godot_v3(ChunkMath::origin_shift_m(world.world_origin(), world.render_origin(), world.chunk_param()));
+    return godot_v3(ChunkMath::origin_shift_m(world->world_origin(), world->render_origin(), world->chunk_param()));
 }
 
 void VoxelTerrain::_move_render_origin(const Float3 &p_shift) {
@@ -782,11 +783,11 @@ void VoxelTerrain::_rt_share_textures(RDDevice *p_device, std::shared_ptr<std::v
 }
 
 void VoxelTerrain::_push_render_frame() {
-    const ChunkParam &param = world.chunk_param();
+    const ChunkParam &param = world->chunk_param();
     // The base in render space (World::base_render), for the pages' up, altitude and cloud shadows and the sky's frame and
     // cloud layer.
     Dictionary base;
-    world.base_render().visit(ShaderParams{ base });
+    world->base_render().visit(ShaderParams{ base });
     set_page_params(base);
     const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
     Node *parent = get_parent();
@@ -798,7 +799,7 @@ void VoxelTerrain::_push_render_frame() {
 }
 
 double VoxelTerrain::get_load_radius() const {
-    return world.load_radius();
+    return world->load_radius();
 }
 
 int64_t VoxelTerrain::get_half_chunk_voxels() const {
@@ -852,15 +853,15 @@ Dictionary VoxelTerrain::debug_trace_write(const String &p_path) {
 }
 
 Dictionary VoxelTerrain::get_process_times_ms() const {
-    return godot_dict(world.process_times_ms());
+    return godot_dict(world->process_times_ms());
 }
 
 int VoxelTerrain::get_pending_chunk_count() const {
-    return int(world.pending_chunk_count());
+    return int(world->pending_chunk_count());
 }
 
 void VoxelTerrain::set_debug_view(int p_view) {
-    world.set_debug_view(p_view);
+    world->set_debug_view(p_view);
 }
 
 int VoxelTerrain::get_debug_view() const {
@@ -896,24 +897,8 @@ void VoxelTerrain::_ready() {
     } else {
         camera = get_viewport()->get_camera_3d();
     }
-    // The pixel error is measured against the camera's real vertical FOV and the 3D render's height: an upscaler's
-    // render scale (scaling_3d_scale) makes its pixels larger, and the LOD coarser with them.
-    ov::World::Projection projection;
-    if (camera != nullptr) {
-        Viewport *viewport = camera->get_viewport();
-        const Vector2 viewport_size = viewport->get_visible_rect().size * float(viewport->get_scaling_3d_scale());
-        projection.viewport_height = MAX(viewport_size.y, 1.0f);
-        projection.aspect = viewport_size.x > 0.0f ? viewport_size.x / projection.viewport_height : projection.aspect;
-        projection.fov_rad = Math::deg_to_rad(float(camera->get_fov()));
-        if (camera->get_keep_aspect_mode() == Camera3D::KEEP_WIDTH && viewport_size.x > 0.0f) {
-            // fov is horizontal: convert it to vertical.
-            projection.fov_rad = 2.0f * std::atan(std::tan(projection.fov_rad * 0.5f) * viewport_size.y / viewport_size.x);
-        }
-    }
-
     main_device = new RDDevice(rd);
     VoxelSky::add_atmosphere_globals(); // before the page shader compiles
-    ov::World::Hosts hosts;
     hosts.device = main_device;
     if (cfg().pipeline_mode == ov::World::PIPELINE_GPU_DIRECT) {
         page_host = new GodotPageHost(get_world_3d()->get_scenario(), main_device);
@@ -932,15 +917,34 @@ void VoxelTerrain::_ready() {
         const auto &names = Clouds::HOST_TEXTURES;
         _rt_share_textures(device, rids, id, "cloud_enabled", { names[0], names[1], names[2] }, { p_light, p_depth, p_shadow });
     };
+    start_chunk_param = cfg().chunk_param;
+    _start_world();
+}
+
+bool VoxelTerrain::_start_world() {
+    // The pixel error is measured against the camera's real vertical FOV and the 3D render's height: an upscaler's
+    // render scale (scaling_3d_scale) makes its pixels larger, and the LOD coarser with them.
+    ov::World::Projection projection;
+    if (camera != nullptr) {
+        Viewport *viewport = camera->get_viewport();
+        const Vector2 viewport_size = viewport->get_visible_rect().size * float(viewport->get_scaling_3d_scale());
+        projection.viewport_height = MAX(viewport_size.y, 1.0f);
+        projection.aspect = viewport_size.x > 0.0f ? viewport_size.x / projection.viewport_height : projection.aspect;
+        projection.fov_rad = Math::deg_to_rad(float(camera->get_fov()));
+        if (camera->get_keep_aspect_mode() == Camera3D::KEEP_WIDTH && viewport_size.x > 0.0f) {
+            // fov is horizontal: convert it to vertical.
+            projection.fov_rad = 2.0f * std::atan(std::tan(projection.fov_rad * 0.5f) * viewport_size.y / viewport_size.x);
+        }
+    }
     const Float3 camera_pos = camera != nullptr ? ov_f3(camera->get_global_position()) : Float3();
     const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
     const double camera_far = _camera_far();
-    if (!world.start(projection, hosts, camera != nullptr ? &camera_pos : nullptr, camera != nullptr ? &camera_forward : nullptr, camera_far)) {
-        return;
+    if (!world->start(projection, hosts, camera != nullptr ? &camera_pos : nullptr, camera != nullptr ? &camera_forward : nullptr, camera_far)) {
+        return false;
     }
     if (page_host) {
         // Skirt depth per LOD: the page shader's height colours undo the skirt push.
-        const SDFCascade &sdf = world.terrain();
+        const SDFCascade &sdf = world->terrain();
         PackedFloat32Array skirt_depths;
         skirt_depths.resize(32);
         for (int l = 0; l < 32; l++) {
@@ -950,12 +954,35 @@ void VoxelTerrain::_ready() {
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     }
     _push_render_frame();
-    if (const Atmosphere *atmosphere = world.get_atmosphere()) {
+    if (const Atmosphere *atmosphere = world->get_atmosphere()) {
         // The medium, the longest path (constant for a world) and the switch; the textures follow once made.
         Dictionary params;
         atmosphere->host_constants().visit(ShaderParams{ params });
         _push_atmosphere(params);
     }
+    return true;
+}
+
+void VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
+    ERR_FAIL_NULL_MSG(main_device, "restart_world: the terrain is not in the tree (set_world_json before it enters).");
+    main_device->post([device = main_device]() { device->park_pipelines(); });
+    _stop_world();
+    ov::World::Settings settings = cfg();
+    settings.chunk_param = start_chunk_param;
+    const ov::DigTool::Settings dig = dig_tool->settings;
+    dig_tool.reset();
+    world = std::make_unique<ov::World>();
+    dig_tool = std::make_unique<ov::DigTool>(*world);
+    dig_tool->settings = dig;
+    cfg() = settings;
+    cfg().world_path.clear();
+    cfg().world_json = ov_str(p_json);
+    cfg().world_dir = ov_str(p_dir);
+    if (world->load_world()) {
+        _start_world();
+    }
+    // After the new world's pipelines were made (posted in order): the old ones it didn't take.
+    main_device->post([device = main_device]() { device->drop_parked(); });
 }
 
 // The instance edit's rotation (9 floats) and params (8): null when not given (identity / zero).
@@ -973,40 +1000,40 @@ int VoxelTerrain::add_instance(int p_type, int64_t p_x, int64_t p_y, int64_t p_z
         const PackedFloat32Array &p_params, int p_op, float p_k) {
     float rot[9];
     float params[8] = {};
-    return world.add_instance(p_type, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false), edit_floats(p_params, 8, params, true), p_op, p_k);
+    return world->add_instance(p_type, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false), edit_floats(p_params, 8, params, true), p_op, p_k);
 }
 
 bool VoxelTerrain::remove_instance(int p_id) {
-    return world.remove_instance(p_id);
+    return world->remove_instance(p_id);
 }
 
 bool VoxelTerrain::move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation) {
     float rot[9];
-    return world.move_instance(p_id, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false));
+    return world->move_instance(p_id, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false));
 }
 
 bool VoxelTerrain::dig_hole(const Vector3 &p_origin, const Vector3 &p_dir) {
-    return dig_tool.dig(ov_f3(p_origin), ov_f3(p_dir));
+    return dig_tool->dig(ov_f3(p_origin), ov_f3(p_dir));
 }
 
 void VoxelTerrain::dig_spray(const Vector3 &p_origin, const Vector3 &p_dir, double p_delta) {
-    dig_tool.spray(ov_f3(p_origin), ov_f3(p_dir), p_delta);
+    dig_tool->spray(ov_f3(p_origin), ov_f3(p_dir), p_delta);
 }
 
 void VoxelTerrain::dig_tube(const Vector3 &p_origin, const Vector3 &p_dir) {
-    dig_tool.tube(ov_f3(p_origin), ov_f3(p_dir));
+    dig_tool->tube(ov_f3(p_origin), ov_f3(p_dir));
 }
 
 void VoxelTerrain::dig_release() {
-    dig_tool.release();
+    dig_tool->release();
 }
 
 int VoxelTerrain::get_dig_edits() const {
-    return dig_tool.edit_count();
+    return dig_tool->edit_count();
 }
 
 void VoxelTerrain::set_dig_settings(const Dictionary &p_settings) {
-    ov::DigTool::Settings &s = dig_tool.settings;
+    ov::DigTool::Settings &s = dig_tool->settings;
     const std::pair<const char *, double *> metres[] = { { "dig_radius", &s.dig_radius_m }, { "dig_length", &s.dig_length_m }, { "dig_k", &s.dig_k_m },
         { "spray_radius", &s.spray_radius_m }, { "drag_radius", &s.drag_radius_m }, { "drag_length", &s.drag_length_m } };
     for (const auto &m : metres) {
@@ -1020,30 +1047,30 @@ void VoxelTerrain::set_dig_settings(const Dictionary &p_settings) {
 }
 
 void VoxelTerrain::_process(double) {
-    if (!world.is_started()) {
+    if (!world->is_started()) {
         return;
     }
     if (camera != nullptr) {
         Float3 shift;
-        if (!Engine::get_singleton()->is_editor_hint() && world.recenter(ov_f3(camera->get_global_position()), shift)) {
+        if (!Engine::get_singleton()->is_editor_hint() && world->recenter(ov_f3(camera->get_global_position()), shift)) {
             _move_render_origin(shift);
         }
         const Float3 pos = ov_f3(camera->get_global_position());
         const Float3 forward = ov_f3(_camera_forward());
-        world.frame(&pos, &forward, _camera_far());
+        world->frame(&pos, &forward, _camera_far());
     } else {
-        world.frame(nullptr, nullptr);
+        world->frame(nullptr, nullptr);
     }
-    if (const Atmosphere *atmosphere = world.get_atmosphere(); atmosphere && atmosphere->range_m() != atmosphere_range_sent) {
+    if (const Atmosphere *atmosphere = world->get_atmosphere(); atmosphere && atmosphere->range_m() != atmosphere_range_sent) {
         atmosphere_range_sent = atmosphere->range_m();
         RenderingServer::get_singleton()->global_shader_parameter_set("atmo_range_m", atmosphere_range_sent);
     }
-    if (const Clouds *clouds = world.get_clouds()) {
+    if (const Clouds *clouds = world->get_clouds()) {
         // The shadow map's frame, as the pass of this frame takes it (the globals that changed).
         Clouds::visit_host_frame(clouds->last_frame(), SetChangedGlobal{ cloud_globals_sent });
     }
     // Tracing reads every captured frame (the GPU track).
-    if ((debug_gpu_profile && world.frames() % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {
+    if ((debug_gpu_profile && world->frames() % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {
         if (!gpu_profiler) {
             gpu_profiler = memnew(GPUProfiler);
             gpu_profiler->set_recording(debug_gpu_profile_frames);
@@ -1053,55 +1080,51 @@ void VoxelTerrain::_process(double) {
 }
 
 bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
-    return world.debug_validate(p_count, ov_str(p_dump_dir));
+    return world->debug_validate(p_count, ov_str(p_dump_dir));
 }
 
 Dictionary VoxelTerrain::get_validation_report() const {
-    return godot_dict(world.validation_report());
+    return godot_dict(world->validation_report());
 }
 
 bool VoxelTerrain::debug_audit_pages() {
-    return world.debug_audit_pages();
+    return world->debug_audit_pages();
 }
 
 Dictionary VoxelTerrain::get_audit_report() const {
-    return godot_dict(world.audit_report());
+    return godot_dict(world->audit_report());
 }
 
 bool VoxelTerrain::debug_audit_discovery() {
-    return world.debug_audit_discovery();
+    return world->debug_audit_discovery();
 }
 
 Dictionary VoxelTerrain::get_discovery_audit_report() const {
-    return godot_dict(world.discovery_audit_report());
+    return godot_dict(world->discovery_audit_report());
 }
 
 bool VoxelTerrain::is_load_complete() {
     if (camera == nullptr) {
-        return world.is_load_complete(nullptr);
+        return world->is_load_complete(nullptr);
     }
     const Float3 pos = ov_f3(camera->get_global_position());
-    return world.is_load_complete(&pos);
+    return world->is_load_complete(&pos);
 }
 
 bool VoxelTerrain::is_edit_settled() {
-    return world.is_edit_settled();
+    return world->is_edit_settled();
 }
 
 Dictionary VoxelTerrain::get_debug_stats() {
-    Dictionary d = godot_dict(world.debug_stats());
-    if (gpu_profiler && world.is_started()) {
+    Dictionary d = godot_dict(world->debug_stats());
+    if (gpu_profiler && world->is_started()) {
         d["gpu_breakdown"] = gpu_profiler->get_breakdown();
     }
     return d;
 }
 
-void VoxelTerrain::_teardown() {
-    if (gpu_profiler) {
-        RDUtils::delete_on_render_thread(gpu_profiler);
-        gpu_profiler = nullptr;
-    }
-    if (world.get_atmosphere()) {
+void VoxelTerrain::_stop_world() {
+    if (world->get_atmosphere()) {
         // Off on the pages and the sky before its textures go (the stop's last call frees them).
         Dictionary off;
         off["atmo_enabled"] = false;
@@ -1113,7 +1136,15 @@ void VoxelTerrain::_teardown() {
         }
         _push_atmosphere(off);
     }
-    world.stop();
+    world->stop();
+}
+
+void VoxelTerrain::_teardown() {
+    if (gpu_profiler) {
+        RDUtils::delete_on_render_thread(gpu_profiler);
+        gpu_profiler = nullptr;
+    }
+    _stop_world();
     if (page_host) {
         page_host->destroy(); // after the mesher's teardown, on the render thread too
         page_host = nullptr;

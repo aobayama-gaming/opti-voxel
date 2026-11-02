@@ -202,15 +202,21 @@ computes no terrain and has no node kind the engine hasn't.
   only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once (30-60 ms), 192 on a
   thread once the edits pause (`SETTLE` 0.35 s; 1.1-1.8 s on 16 cores: ~0.5 ms of CPU a point, each point walking the
   cascade on its own, 6 reads). *3D* (on by default, `terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
-  Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file), restarted 0.3 s after the
-  edits pause. The climate's numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a
-  value compiles nothing; a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps every
-  text's SPIR-V. Its LODs are the game's (pixel error 4: at 12 each LOD seam showed as a ledge, for a restart only
+  Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file). An edit restarts its world in
+  place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it, or once
+  the last restart's chunks in view are loaded (at most 1 s later): a slider drag shows each load. The climate's
+  numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a value builds no pipeline: the
+  device parks the pipelines the old world frees, by text, and the new world takes those of the same text
+  (`RDDevice::park_pipelines`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
+  every text's SPIR-V. Its LODs are the game's (pixel error 4: at 12 each LOD seam showed as a ledge, for a restart only
   ~10% shorter), its world's clouds are off (their shadows hid the relief over kilometres), and its discoverer and
   site walk run on the CPU (their GPU variants build their pipelines on a local device of their own: ~9 s per
   restart, the driver). Measured (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX
-  3070 laptop): World mode (~400 km) 1.79 s, then 1.33 and 1.34 s; the mountain alone 4.9 s (its shaders compiled),
-  then 1.20 and 1.19 s. About half a restart is the instance stream's parts (`table.stream.compute_ms_total`). Orbit, pan and zoom move the camera. *Open in game* writes the world
+  3070 laptop): World mode (~400 km) 0.89 s, then 0.18 and 0.18 s; the mountain alone 0.76 s, then 0.22 and 0.18 s
+  (were 1.2-1.3 s: a new node each, its start 1.05 s in one frame, 0.4 s the mesher's pipelines, 0.4 s the cascade's,
+  0.2 s zeroing its buffers on the CPU). Now the restart is one 35 ms frame (with the 2D map's ~20 ms, the edit's frame
+  ~60 ms), then ~3,000 chunks over 25 LODs load in ~170 ms at 16-26 ms a frame; the view after a restart is the first
+  load's, pixel for pixel. Orbit, pan and zoom move the camera. *Open in game* writes the world
   (`user://biome_mixer_game.world.json`) and runs the main scene on it (`--world=`) in a second Godot.
 - **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
   back is the same file (positions aside); every world.json biome and a graph of every engine kind drawn by the engine

@@ -112,6 +112,7 @@ RDDevice::~RDDevice() {
     for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
         _free_entry(it->second);
     }
+    drop_parked();
     if (linear_sampler.is_valid()) {
         rd->free_rid(linear_sampler);
     }
@@ -170,6 +171,12 @@ const RDDevice::Entry *RDDevice::_get(ov::gpu::Handle p_handle) const {
 }
 
 ov::gpu::Buffer RDDevice::create_buffer(ov::gpu::BufferKind p_kind, uint64_t p_size, const void *p_data) {
+    if (p_data == nullptr && p_kind == ov::gpu::BufferKind::STORAGE && p_size > 0 && p_size % 4 == 0) {
+        // Zeroed on the GPU: a mesher's scratch is hundreds of MB, a CPU array of zeros a copy through staging.
+        const RID rid = rd->storage_buffer_create(uint32_t(p_size));
+        rd->buffer_clear(rid, 0, uint32_t(p_size));
+        return ov::gpu::Buffer{ _add({ rid, RID() }) };
+    }
     const PackedByteArray data = to_bytes(p_data, p_size);
     const RID rid = p_kind == ov::gpu::BufferKind::UNIFORM ? rd->uniform_buffer_create(uint32_t(p_size), data)
                                                            : rd->storage_buffer_create(uint32_t(p_size), data);
@@ -263,6 +270,13 @@ void RDDevice::copy_texture(ov::gpu::Texture p_from, ov::gpu::Texture p_to, uint
 }
 
 ov::gpu::Pipeline RDDevice::create_compute_pipeline(const ov::str &p_name, const ov::str &p_glsl, ov::str &r_error) {
+    const auto park = parked.find(p_glsl);
+    if (park != parked.end()) {
+        const ov::gpu::Pipeline taken{ _add(park->second) };
+        parked.erase(park);
+        pipeline_text.emplace(taken.id, p_glsl);
+        return taken;
+    }
     Ref<RDShaderSPIRV> spirv;
     PackedByteArray cached;
     if (SpirvCache::get().find(p_glsl, cached)) {
@@ -286,7 +300,9 @@ ov::gpu::Pipeline RDDevice::create_compute_pipeline(const ov::str &p_name, const
         rd->free_rid(shader);
         return ov::gpu::Pipeline();
     }
-    return ov::gpu::Pipeline{ _add({ pipeline, shader }) };
+    const ov::gpu::Pipeline made{ _add({ pipeline, shader }) };
+    pipeline_text.emplace(made.id, p_glsl);
+    return made;
 }
 
 ov::gpu::BindSet RDDevice::create_bind_set(ov::gpu::Pipeline p_pipeline, const std::vector<ov::gpu::Binding> &p_bindings) {
@@ -390,6 +406,24 @@ void RDDevice::free(ov::gpu::Handle p_handle) {
     if (it == entries.end()) {
         return;
     }
-    _free_entry(it->second);
+    const auto text = pipeline_text.find(p_handle.id);
+    if (text != pipeline_text.end()) {
+        if (parking) {
+            parked.emplace(std::move(text->second), it->second);
+        } else {
+            _free_entry(it->second);
+        }
+        pipeline_text.erase(text);
+    } else {
+        _free_entry(it->second);
+    }
     entries.erase(it);
+}
+
+void RDDevice::drop_parked() {
+    for (const auto &[text, entry] : parked) {
+        _free_entry(entry);
+    }
+    parked.clear();
+    parking = false;
 }

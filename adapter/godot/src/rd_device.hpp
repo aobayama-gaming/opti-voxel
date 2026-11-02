@@ -6,6 +6,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 
 #include <map>
+#include <unordered_map>
 
 // ov::gpu::Device on a Godot RenderingDevice: the main one (used on the render thread, its readbacks delivered
 // frames later) or a local one it owns (create_local: the thread that creates it uses it and frees it).
@@ -48,6 +49,12 @@ public:
     void post(std::function<void()> p_fn) override;
     void free(ov::gpu::Handle p_handle) override;
 
+    // A world restarting on this device (on the device's thread): from park_pipelines on, a pipeline freed is kept by
+    // its text, and a pipeline of the same text created takes it instead of being built again (the driver's compile, most
+    // of a start); drop_parked frees those not taken.
+    void park_pipelines() { parking = true; }
+    void drop_parked();
+
 private:
     // A handle's RIDs: a buffer or bind set in `rid`, a pipeline's shader in `shader`.
     struct Entry {
@@ -61,6 +68,9 @@ private:
     bool owns_rd = false;
     uint64_t next_id = 1;
     std::map<uint64_t, Entry> entries; // by id: freed newest first, dependents before what they use
+    std::unordered_map<uint64_t, ov::str> pipeline_text; // each live pipeline's GLSL, by id (park_pipelines' key)
+    std::unordered_multimap<ov::str, Entry> parked; // the pipelines freed while parking, by text
+    bool parking = false;
     godot::RID linear_sampler; // Binding::linear_sampler's, made on first use
 
     static godot::Ref<godot::RDTextureFormat> texture_format(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage);

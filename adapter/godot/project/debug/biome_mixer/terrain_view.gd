@@ -1,16 +1,19 @@
 extends SubViewportContainer
 ## The mixer's 3D view: the game's own terrain (a VoxelTerrain, the GPU Direct mesher) on the world being edited, in a
-## viewport of its own with the game's sky, fog and sun. An edit restarts the terrain on the new world: the climate's
-## numbers are shader params (Cascade::ShaderParams), so a world whose structure didn't change compiles nothing (the
-## device's SPIR-V cache), and the time is the reload of the chunks in view. Without the world's clouds (their shadows).
+## viewport of its own with the game's sky, fog and sun. An edit restarts the terrain's world on the new one in place
+## (VoxelTerrain.restart_world: its device, pages and pipelines kept): the climate's numbers are shader params
+## (Cascade::ShaderParams), so a world whose structure didn't change builds no pipeline, and the time is the reload of
+## the chunks in view. A drag restarts it as often as the loads keep up. Without the world's clouds (their shadows).
 ## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
 
 ## The pixel error of the view's LODs, the game's: at 12 the LOD seams showed as ledges, for a reload only ~10% shorter.
 const LOD_PIXEL_ERROR := 4.0
-## The pause after an edit before the terrain restarts (seconds): a slider drag restarts it once.
-const RESTART_AFTER := 0.3
+## The pause after an edit before the terrain restarts (seconds): a slider's edits of a few frames restart it once.
+const RESTART_AFTER := 0.05
+## A restart waits for the last one's chunks in view at most this long (seconds): a drag shows each load finished.
+const LOAD_WAIT := 1.0
 ## The game's look: its sky, fog and sun are this scene's.
 const GAME_SCENE := "res://main_scene_5cm.tscn"
 ## The game's fog over views of kilometres instead of metres.
@@ -92,7 +95,7 @@ func _schedule_restart() -> void:
 		_restart.start()
 
 
-# The terrain restarted on the world it shows (an edit's path, the same structure: every shader cached), now.
+# The terrain restarted on the world it shows (an edit's path, the same structure: every pipeline kept), now.
 func restart() -> void:
 	_restart.stop()
 	_restart_terrain()
@@ -101,21 +104,27 @@ func restart() -> void:
 func _restart_terrain() -> void:
 	if not is_inside_tree() or not is_visible_in_tree():
 		return  # once shown (visibility_changed)
-	_stop_terrain()
-	_terrain = ClassDB.instantiate("VoxelTerrain")
-	_terrain.pipeline_mode = 2
-	_terrain.lod_pixel_error = LOD_PIXEL_ERROR
-	_terrain.lod_far_limit = true
-	# The discoverer and the site walk on the CPU: their GPU variants build their point pipelines on a local device of
-	# their own, ~9 s per restart (the driver, not glslang), for a view of a few hundred chunks.
-	_terrain.discoverer_mode = 0
-	_terrain.walk_gpu = false
-	_terrain.set_world_json(_without_clouds(_json), _dir)
-	_terrain.origin_shifted.connect(func(p_shift: Vector3) -> void:
-		_target -= p_shift
-		_shifted += p_shift)
+	if _restart_usec != 0 and Time.get_ticks_usec() - _restart_usec < int(LOAD_WAIT * 1e6):
+		_restart.start()  # the last edit's chunks still loading
+		return
 	_restart_usec = Time.get_ticks_usec()
-	_viewport.add_child(_terrain)  # starts the world: the pipelines (cached by text), then the chunks
+	if _terrain != null:
+		_unshift_camera()  # the world starts again at its first render origin
+		_terrain.restart_world(_without_clouds(_json), _dir)
+	else:
+		_terrain = ClassDB.instantiate("VoxelTerrain")
+		_terrain.pipeline_mode = 2
+		_terrain.lod_pixel_error = LOD_PIXEL_ERROR
+		_terrain.lod_far_limit = true
+		# The discoverer and the site walk on the CPU: their GPU variants build their point pipelines on a local device
+		# of their own, ~9 s per restart (the driver, not glslang), for a view of a few hundred chunks.
+		_terrain.discoverer_mode = 0
+		_terrain.walk_gpu = false
+		_terrain.set_world_json(_without_clouds(_json), _dir)
+		_terrain.origin_shifted.connect(func(p_shift: Vector3) -> void:
+			_target -= p_shift
+			_shifted += p_shift)
+		_viewport.add_child(_terrain)  # starts the world: its pipelines, then the chunks
 	_aim_camera()
 	_started = _json
 	loaded_ms = -1
@@ -141,6 +150,11 @@ func _stop_terrain() -> void:
 	_terrain.free()
 	_terrain = null
 	_started = ""
+	_restart_usec = 0
+	_unshift_camera()
+
+
+func _unshift_camera() -> void:
 	_target += _shifted
 	_shifted = Vector3.ZERO
 	_place_camera()
