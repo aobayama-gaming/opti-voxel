@@ -6,10 +6,10 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   headless Godot, a few seconds, no GPU. `filter` is a doctest wildcard on test names
   (`'ChunkMath*'`). Tests are compiled into non-release builds only (`OPTI_VOXEL_TESTS`).
 - `tools/format.sh [--check] [files]`: clang-format 23.1.3 through `uvx` on `src/`.
-- `tools/biome_mixer.sh [--open=PATH] [--import=BIOME] [--set=ID.PARAM=V] [--shot=PATH]` opens the biome mixer (a
-  window; `docs/climate.md`); `--check` is its headless self-test (every template and world.json biome exported and
-  drawn by the engine, `ClimateReportNode.preview`, round-tripped through its file, world.json exported back and parsed
-  by the engine, its instances and features kept: `MIXER: {json}`, exit 0 ok, 4 not ok). `--shot` draws the sharp
+- `tools/biome_mixer.sh [--biome=NAME] [--world] [--set=ID.KEY=V] [--shot=PATH]` opens the biome mixer (a window;
+  `docs/climate.md`); `--check` is its headless self-test (world.json read and written back the same, every biome and a
+  graph of every engine kind drawn by the engine, `ClimateReportNode.preview`, and every node's UI built, edits, the
+  export and its refusal: `MIXER: {json}`, exit 0 ok, 4 not ok or a script error). `--shot` draws the sharp
   map once, saves the window and the view, prints its time (`MIXER_SHOT:`) and quits.
 - `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground

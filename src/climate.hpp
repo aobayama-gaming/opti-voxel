@@ -71,6 +71,8 @@ struct Shape {
 };
 // max |phi(n) - its mean| over n in [-1, 1] (perlin3's range): 1 for the plain shape. Skirts follow it (max_amp).
 float shape_bound(const Shape &p_shape);
+// phi(n), |n| smoothed as the bands insert it (Cascade::smooth_abs's value): what the biome mixer plots of a shape node.
+double shape_phi(const Shape &p_shape, double p_n);
 
 // A field: its plain perlin3 bands (a cascade group, inserted like the ground's, octave k on
 // Λ_{k - BAND_SHIFT}) and terms.
@@ -299,6 +301,33 @@ ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::ve
 // A list of features ([{ "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }]: a biome's, the
 // world's) in r_out, as parse_instances.
 ov::str parse_features(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out);
+// A shape node ({ "shape", "scale", "offset" } or { "coeffs" }, the format's) as r_shape, p_multifractal whether a
+// multifractal reads it (its constant term counts): empty, or why not.
+ov::str parse_shape(const ov::Value &p_node, bool p_multifractal, Shape &r_shape);
+// FNV-1a of a name: a field's seed without one, a biome's debug colour without one (& 0xFFFFFF).
+uint32_t name_hash(const ov::str &p_name);
+
+// A biome graph's node kind as the parser reads it (graph_kinds, in the format's order): the keys naming its inputs
+// (another node's id; a mix's rows name theirs, "rows") and its parameters. A parameter's type: "number", "seed" (a whole
+// number), "pow2" (a power of two), "field" (a field's name), "fields" (3 of them), "shape" (one of options), "coeffs" (4
+// numbers), "points" ([h, R] pairs), "rows" ([{ "in", "x" }]); required, else its default (NAN: none, the node's rule
+// decides: a note's wavelength_m or from_m and to_m, its steepness or amp_m). Every node also has "id", "kind" and "pos"
+// (the mixer's, ignored). The biome mixer builds its nodes from it.
+struct GraphParam {
+    const char *name;
+    const char *type;
+    bool required;
+    double fallback;
+    const char *options;
+};
+struct GraphKind {
+    const char *kind;
+    std::vector<const char *> inputs;
+    std::vector<GraphParam> params;
+};
+const std::vector<GraphKind> &graph_kinds();
+// The kind named p_kind, null if there is none.
+const GraphKind *graph_kind(const ov::str &p_kind);
 
 // The cascade p_ground (its base and insert shift) with the table's notes as its bands, its fields as its field groups
 // and, if a biome lists a note, a Modulation: every listed note gets A = sum_b w_b amp_b at each point, from the weights

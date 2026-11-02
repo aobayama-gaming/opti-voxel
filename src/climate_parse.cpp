@@ -44,7 +44,8 @@ namespace Climate {
 //     the world's "instances", [] none. "features": the features standing on it
 //     (biome_features.hpp: a kind, its cell, the chance a cell holds one, its radius range); without the key the
 //     world's "features".
-//   node:   { "id": "n1", "kind": ..., inputs by id, parameters; "pos": [x, y] (the mixer's, ignored) }, the kinds:
+//   node:   { "id": "n1", "kind": ..., inputs by id, parameters; "pos": [x, y] (the mixer's, ignored) }; a key its
+//            kind doesn't list in graph_kinds (the catalogue the biome mixer builds its nodes from) is refused. The kinds:
 //     "note":  "wavelength_m": 400 | "from_m": 0.4, "to_m": 26214.4 (every octave in range the LOD count has: the
 //              table covers the whole spectrum at any count), "seed": 59943 (required), the amplitude
 //              "steepness": 0.125 (octave k's amplitude that times its wavelength) | "amp_m": 300 (the coarsest's),
@@ -70,7 +71,56 @@ namespace Climate {
 //     "output": "height": a mix, a curve of one, or one row.
 //     The biome compiler (biome_compiler.hpp) keeps each note once whatever biome mixes it. Octave k reads the weights
 //     from the fields' octaves coarser than k only (Cascade::Modulation).
+const std::vector<GraphKind> &graph_kinds() {
+    static const std::vector<GraphKind> KINDS = {
+        { "note", {}, { { "wavelength_m", "number", false, NAN, "" }, { "from_m", "number", false, NAN, "" }, { "to_m", "number", false, NAN, "" }, { "seed", "seed", true, NAN, "" }, { "steepness", "number", false, NAN, "" }, { "amp_m", "number", false, NAN, "" }, { "persistence", "number", false, 1.0, "" }, { "max_amp_m", "number", false, NAN, "" }, { "stretch_y", "pow2", false, 1.0, "" } } },
+        { "warp", { "in" }, { { "fields", "fields", true, NAN, "" }, { "amount_m", "number", true, NAN, "" } } },
+        { "shape", { "in" }, { { "shape", "shape", false, NAN, "plain|billow|ridged|square" }, { "scale", "number", false, 1.0, "" }, { "offset", "number", false, NAN, "" }, { "coeffs", "coeffs", false, NAN, "" } } },
+        { "multifractal", { "in" }, { { "gain", "number", true, NAN, "" } } },
+        { "mix", {}, { { "rows", "rows", true, NAN, "" } } },
+        { "constant", {}, { { "value_m", "number", true, NAN, "" } } },
+        { "field", {}, { { "field", "field", true, NAN, "" } } },
+        { "add", { "a", "b" }, {} },
+        { "subtract", { "a", "b" }, {} },
+        { "multiply", { "a", "b" }, {} },
+        { "min", { "a", "b" }, {} },
+        { "max", { "a", "b" }, {} },
+        { "smin", { "a", "b" }, { { "k_m", "number", true, NAN, "" } } },
+        { "smax", { "a", "b" }, { { "k_m", "number", true, NAN, "" } } },
+        { "curve", { "in" }, { { "points", "points", true, NAN, "" } } },
+        { "output", { "height" }, {} },
+    };
+    return KINDS;
+}
+
+const GraphKind *graph_kind(const ov::str &p_kind) {
+    for (const GraphKind &k : graph_kinds()) {
+        if (p_kind == k.kind) {
+            return &k;
+        }
+    }
+    return nullptr;
+}
+
+uint32_t name_hash(const ov::str &p_name) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < p_name.size(); i++) {
+        h = (h ^ uint8_t(p_name[i])) * 16777619u;
+    }
+    return h;
+}
+
 namespace {
+
+// Parameter p_name's default in kind p_kind (graph_kinds).
+double fallback(const char *p_kind, const char *p_name) {
+    for (const GraphParam &p : graph_kind(p_kind)->params) {
+        if (ov::str(p_name) == p.name) {
+            return p.fallback;
+        }
+    }
+    return NAN;
+}
 
 class Parser {
 public:
@@ -102,6 +152,7 @@ public:
     // A list of instances or features alone (parse_list).
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) { instances(p_list, p_where, r_out); }
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) { features(p_list, p_where, r_out); }
+    void shape_of(const ov::Value &p_node, bool p_multifractal, Shape &r_shape) { shape(p_node, "shape", p_multifractal, r_shape); }
 
 private:
     const Ground &ground;
@@ -119,6 +170,22 @@ private:
     }
 
     bool keys(const ov::Value &p_d, const ov::str &p_where, std::initializer_list<const char *> p_allowed) {
+        return keys_in(p_d, p_where, p_allowed);
+    }
+
+    // A graph node's keys: its kind's (graph_kinds), its id, kind and pos.
+    bool node_keys(const ov::Value &p_d, const ov::str &p_where, const char *p_kind) {
+        std::vector<const char *> allowed = { "id", "kind", "pos" };
+        const GraphKind *k = graph_kind(p_kind);
+        allowed.insert(allowed.end(), k->inputs.begin(), k->inputs.end());
+        for (const GraphParam &p : k->params) {
+            allowed.push_back(p.name);
+        }
+        return keys_in(p_d, p_where, allowed);
+    }
+
+    template <class C>
+    bool keys_in(const ov::Value &p_d, const ov::str &p_where, const C &p_allowed) {
         for (const std::pair<ov::str, ov::Value> &entry : p_d.entries()) {
             const ov::str &key = entry.first;
             if (key != "comment" && std::none_of(p_allowed.begin(), p_allowed.end(), [&](const char *p_a) { return key == p_a; })) {
@@ -210,15 +277,6 @@ private:
         return i;
     }
 
-    static uint32_t name_hash(const ov::str &p_name) {
-        const ov::str &s = p_name;
-        uint32_t h = 2166136261u;
-        for (size_t i = 0; i < s.size(); i++) {
-            h = (h ^ uint8_t(s[i])) * 16777619u;
-        }
-        return h;
-    }
-
     // A shape (shape, scale, offset or coeffs) of a node: the plain one without any. Only a multifractal's state
     // (p_state: the row has one) reads a shape's constant term.
     bool shape(const ov::Value &p_d, const ov::str &p_where, bool p_state, Shape &r_s) {
@@ -244,7 +302,7 @@ private:
             return false;
         }
         const ov::str name = p_d.has("shape") ? text(p_d, "shape", p_where) : ov::str("plain");
-        const double a = number(p_d, "scale", p_where, 1.0);
+        const double a = number(p_d, "scale", p_where, fallback("shape", "scale"));
         const bool ridged = name == "ridged";
         const double o = number(p_d, "offset", p_where, ridged ? 1.0 : 0.0);
         // Plain, billow and square: the offset is the constant term, inserted without its mean (Cascade::NOISE_*_MEAN):
@@ -279,7 +337,7 @@ private:
 
     // A note node: its octaves, seed, amplitude rule and stretch (NoteNode, in LOD0 voxels).
     void note(const ov::Value &p_d, const ov::str &p_where, NoteNode &r_n) {
-        if (!keys(p_d, p_where, { "id", "kind", "pos", "wavelength_m", "from_m", "to_m", "seed", "steepness", "amp_m", "persistence", "max_amp_m", "stretch_y" }) ||
+        if (!node_keys(p_d, p_where, "note") ||
                 !octave_range(p_d, p_where, r_n.lo, r_n.hi)) {
             return;
         }
@@ -291,13 +349,13 @@ private:
         }
         r_n.steepness = number(p_d, "steepness", p_where, 0.0);
         r_n.amp = number(p_d, "amp_m", p_where, 0.0) / ground.voxel_size;
-        r_n.persistence = number(p_d, "persistence", p_where, 1.0);
+        r_n.persistence = number(p_d, "persistence", p_where, fallback("note", "persistence"));
         r_n.max_amp = number(p_d, "max_amp_m", p_where, INFINITY) / ground.voxel_size;
         if (error.empty() && !(r_n.steepness >= 0.0 && r_n.amp >= 0.0 && r_n.persistence > 0.0 && r_n.max_amp > 0.0)) {
             fail(p_where, "a note's amplitude, persistence and max are > 0.");
         }
         // "stretch_y": a power of two >= 1 (1: none), as log2.
-        const double s = number(p_d, "stretch_y", p_where, 1.0);
+        const double s = number(p_d, "stretch_y", p_where, fallback("note", "stretch_y"));
         r_n.stretch = int(std::lround(std::log2(std::max(s, 1.0))));
         if (!(s >= 1.0 && s <= std::ldexp(1.0, MAX_STRETCH) && std::ldexp(1.0, r_n.stretch) == s)) {
             fail(p_where, ov::format("'stretch_y' is a power of two in [1, 2^%d].", MAX_STRETCH));
@@ -433,15 +491,15 @@ private:
     // order), then the note.
     void row(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, GraphRow &r_row) {
         const ov::Value *n = p_n;
-        if (is_kind(n, "multifractal") && keys(*n, p_where, { "id", "kind", "pos", "in", "gain" })) {
+        if (is_kind(n, "multifractal") && node_keys(*n, p_where, "multifractal")) {
             r_row.gain = float(number(*n, "gain", p_where));
             n = input(p_nodes, *n, "in", p_where);
         }
-        if (is_kind(n, "shape") && keys(*n, p_where, { "id", "kind", "pos", "in", "shape", "scale", "offset", "coeffs" })) {
+        if (is_kind(n, "shape") && node_keys(*n, p_where, "shape")) {
             r_row.has_shape = shape(*n, p_where, r_row.gain > 0.0f, r_row.shape);
             n = input(p_nodes, *n, "in", p_where);
         }
-        if (is_kind(n, "warp") && keys(*n, p_where, { "id", "kind", "pos", "in", "fields", "amount_m" })) {
+        if (is_kind(n, "warp") && node_keys(*n, p_where, "warp")) {
             r_row.warp = float(number(*n, "amount_m", p_where) / ground.voxel_size);
             const ov::Value wf = array(*n, "fields", p_where);
             if (wf.size() != 3) {
@@ -474,7 +532,7 @@ private:
             return;
         }
         const ov::str mix_where = p_where + ov::str(" mix '") + (*p_n)["id"].as_str() + ov::str("'");
-        if (!keys(*p_n, mix_where, { "id", "kind", "pos", "rows" })) {
+        if (!node_keys(*p_n, mix_where, "mix")) {
             return;
         }
         const ov::Value rows = array(*p_n, "rows", mix_where);
@@ -527,10 +585,10 @@ private:
             return r_read.ground;
         }
         if (kind == "constant") {
-            return keys(*p_n, where, { "id", "kind", "pos", "value_m" }) ? emit(SampleOp::CONST, -1, -1, float(number(*p_n, "value_m", where) / ground.voxel_size)) : -1;
+            return node_keys(*p_n, where, "constant") ? emit(SampleOp::CONST, -1, -1, float(number(*p_n, "value_m", where) / ground.voxel_size)) : -1;
         }
         if (kind == "field") {
-            return keys(*p_n, where, { "id", "kind", "pos", "field" }) ? emit(SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, int(table.fields.size()), "a field")) : -1;
+            return node_keys(*p_n, where, "field") ? emit(SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, int(table.fields.size()), "a field")) : -1;
         }
         static const std::pair<const char *, SampleOp> BINARY[] = { { "add", SampleOp::ADD }, { "subtract", SampleOp::SUB }, { "multiply", SampleOp::MUL }, { "min", SampleOp::MIN },
             { "max", SampleOp::MAX }, { "smin", SampleOp::SMIN }, { "smax", SampleOp::SMAX } };
@@ -539,7 +597,7 @@ private:
                 continue;
             }
             const bool smooth = op == SampleOp::SMIN || op == SampleOp::SMAX;
-            if (!(smooth ? keys(*p_n, where, { "id", "kind", "pos", "a", "b", "k_m" }) : keys(*p_n, where, { "id", "kind", "pos", "a", "b" }))) {
+            if (!node_keys(*p_n, where, name)) {
                 return -1;
             }
             const float k = smooth ? float(number(*p_n, "k_m", where) / ground.voxel_size) : 0.0f;
@@ -548,7 +606,7 @@ private:
             return error.empty() ? emit(op, a, b, k) : -1;
         }
         if (kind == "curve") {
-            if (!keys(*p_n, where, { "id", "kind", "pos", "in", "points" })) {
+            if (!node_keys(*p_n, where, "curve")) {
                 return -1;
             }
             const int a = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_g, r_read);
@@ -592,7 +650,7 @@ private:
         if (!error.empty()) {
             return;
         }
-        if (out == nullptr || !keys(*out, p_where + ov::str(" output"), { "id", "kind", "pos", "height" })) {
+        if (out == nullptr || !node_keys(*out, p_where + ov::str(" output"), "output")) {
             fail(p_where, "a graph has an output node, its 'height' what the biome's ground is.");
             return;
         }
@@ -783,6 +841,18 @@ ov::str height_curve(const std::vector<double> &p_h_m, const std::vector<double>
     }
     r_c = make_curve(x, y);
     return ov::str();
+}
+
+ov::str parse_shape(const ov::Value &p_node, bool p_multifractal, Shape &r_shape) {
+    const Ground ground;
+    Table table;
+    Parser parser(ground, table);
+    Shape s;
+    parser.shape_of(p_node, p_multifractal, s);
+    if (parser.error.empty()) {
+        r_shape = s;
+    }
+    return parser.error;
 }
 
 ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) {

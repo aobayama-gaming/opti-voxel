@@ -160,70 +160,50 @@ terms; the declutter's own before / after is in its PR):
 
 ## Biome mixer
 
-`adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: a world's biomes built from the ground's octaves in
-node graphs (GraphEdit), the engine's view of them beside it; a design tool over the engine, never a copy of it (the
-world file is the engine's input: the World menu's export writes the world back into it). It holds a **world**
-(`world.gd`: world.json's fields, climate warp and every biome, its place, its graph, and the keys it doesn't edit,
-`instances` and `features` among them, carried in `keep` from import to export) and has two modes:
-- **Biome**: the current biome's notes in the graph (the picker in the bar), the view of that biome alone.
-- **World**: the climate chart and the view of the whole world, its biomes' debug colours blended by their weights
-  over the relief. The chart (`chart.gd`, `world_panel.gd`): two fields as axes, each biome a box (its span outlined,
-  its whole core filled, the full axis on a field it doesn't name), over a cloud of the view's points (the engine's
-  fields there): drag a box to move a biome, its edge to change its span; the list beside it edits each field's centre
-  and span and whether the biome names it. A double-click opens a biome's notes. The world autosaves, and saves to
-  `climate/worlds/*.world.json` (the World menu).
-
-- **The view is the engine's** (`engine_view.gd`): every edit exports the graph as a world file's text
-  (`ExportTable.preview_world`: the game's engine, the fields inline, the biomes as the export writes them; the Biome
-  mode's biome alone as the default) and `ClimateReportNode.preview` (static, `ClimateReport::preview`) draws it: the
-  report's own sampler (`sample`, without the picks) on the CPU, each column traced to its ground, the shaded relief and
-  the weights' blend in the relief's light (`shaded_rgb`, `biomes_rgb`: the report's PNGs' colours and light) plus every
-  field's value at every point (the chart's cloud) and the largest altitude (`relief_m`: the curve editor's input span).
-  A pan or a zoom draws the same text again. 48 points a side at once, 192 once the edits pause
-  (`SETTLE` 0.35 s): world.json's biome alone ~140 us a point, the 8-biome world ~50 us at 16 (the check), so the small
-  map ~0.3 s and the sharp one a few seconds. The 3D view is the game: *Open in game* writes the world
-  (`user://biome_mixer_game.world.json`, the game world's zone, instances, species and features kept) and runs the main
-  scene on it (`--world=`) in a second Godot. What the mixer's own copy did and the engine doesn't is gone with it: its
-  multifractal was `clamp(gain * chain)` (the engine's `clamp(gain (1 - c))`), its `stretch_y` uncapped, its World mode
-  read the fields at full resolution (the engine from coarser octaves), and Note warp, Carve, Add, Multiply and
-  Constant only ever existed in the preview (the export refuses or drops them, below).
-- **Nodes** (`kinds.gd`): *Note* (the ground's octave k on the template's seed, the engine's
-  `ClimateReportNode.template_notes`: the mixer's biomes play the template's notes, so a note has no seed of its own. The
-  notes are fixed: a model always has one per k, K_MIN .. `ground_top` (`Kinds.fix_notes` on every load: a missing one
-  comes back as a silent row at volume 0, an extra or out-of-range one goes), none can be added, deleted or moved to
-  another k, and a Mix row's x leaves its note silent. Its `warp` switch is a biome's `warp_m` on that octave in the
-  engine, `stretch_y` the note's `stretch_y`), *Shape* (`c0 + c1 n + c2 |n| + c3 n^2`; presets, scale and offset as
-  `climate_parse.cpp`; its node draws phi), *Multifractal* (the engine's state, wired to the next finer note), *Mix*
-  (rows of volume, mute, solo, centre), *Height curve* (a remap R(h) through points: a biome's curve node in the engine;
-  its editor draws the engine's curve, `ClimateReportNode.curve`: `Climate::height_curve`, the parser's, and `eval_curve`), *Output* (flat and steep
-  colours), and the kinds only the old preview drew (Note warp, Add, Multiply, Constant, Carve), kept so old files load.
-  A row's x takes it out with the nodes only it used but its note (`Kinds.cut_row`); a node's x or Delete removes it and
-  the Mix row it played, never a note (`Kinds.cut_nodes`).
-- **Export** (`export_table.gd`, World menu: *Export this world to res://climate/world.json*): `ImportTable` read
-  backwards. Each biome's height must be its Mix, through a Height curve or not, into the Output, each row a Note
-  through a Shape then a Multifractal (each optional); anything else (Add, Multiply, a Constant, a note in two rows)
-  stops the export, as does a table the engine refuses: its text is parsed by `ClimateReportNode.check` (static,
-  `ClimateReport::check`: the cascade of the world's voxel and LOD count configured on it) before it is written over
-  world.json. Each biome is its `graph`: a run of equal notes one range note node (the template's seed, steepness
-  and cap, its `stretch_y`) through its warp, shape and multifractal nodes, a mix row at its volume (0 for a silent
-  one), a curve node; the places `at` (the last biome the default, without one), the Output's colours over the table's
-  surface (its other keys, roughness, kept), clouds, debug colour and the biome's other keys as imported (`instances`,
-  `features`: the mixer edits neither yet); the climate warp sets the three fields of its seeds (or adds `wx`, `wy`, `wz`
-  when a note is warped and the world has none). Left out with a line in the log: Carve, a Note warp (exported reading
-  the climate warp), an uncentred row, a multifractal linked to another than the next coarser one. Mute and solo
-  export as heard (a silent row at volume 0). An identity Shape (`"shape": "plain"`) goes. A note node is always a
-  range (`from_m` .. `to_m`, one octave or more): the engine trims a range to a LOD count's octaves but refuses a single
-  `wavelength_m` past them. Numbers keep 7 significant digits; a value fits on one line up to 120 characters.
-- **The climate's warp** (wx, wy, wz): a model's `climate_warp`, world.json's three warp fields by default
-  (`Kinds.CLIMATE_WARP`), shared by every biome.
-- **Import** (`import_table.gd`, `graph_rows`): a biome of `world.json` as a graph (every note, its graph's rows as
-  volumes, 0 for an octave it doesn't mix, shapes, multifractal chain, warped octaves as warp switches with their
-  `warp_m`, the warp fields as the climate warp, its notes' `stretch_y`, its curve, colours; a note off the template's
-  seed or steepness is warned of: the mixer plays the template's notes); *Plain ground* is every note at volume 1.
-  Biomes save to `climate/biomes/*.biome.json`; `World.from_table` imports every biome of a table, with its place.
-- **`--check`** (`checks.gd`): every template and world.json biome exported and drawn by the engine (no refusal), the
-  same table graph after a file round trip, the fixed notes (K_MIN .. ground_top: 3 .. 19 at 5 cm), the cuts on the
-  mountain and plain ground, an old file's Climate warp node and Terrace loading as the same graph, the every-kind graph
-  refused, the whole world drawn (every biome named, one chart sample per point); and world.json exported back: every
-  biome's notes as the engine reads them per octave, places, curves, surfaces, clouds, instances and features equal the
-  table's, the export of that export the same file, the engine refusing a span of 0 (nothing written).
+`adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: a world's biomes edited as the engine reads them,
+the engine's view of them beside it. It is an editor over the engine, never a copy of it: it keeps no model of its own,
+computes no terrain and has no node kind the engine hasn't.
+- **The world is the world file** (`world.gd`): `res://climate/world.json` as it is (every biome's `graph`, place,
+  surface, clouds, instances, features, every other key), with the mixer's keys beside it (`fields`, its climate's,
+  read only; `current`, `mode`, `view`, `mixer_version`). A biome's `at` is kept as `[centre, span]`. The world
+  autosaves (user://), saves to `climate/worlds/*.world.json`, and *Export* (World menu) writes it over world.json once
+  `ClimateReportNode.check` (`ClimateReport::check`) accepts its biomes over its fields: the file is the world minus the
+  mixer's keys (its climate file untouched). Numbers keep 7 significant digits; a value fits on one line up to 120
+  characters.
+- **The graph is the biome's `graph`** (`graph.gd`), node for node: a link is an input key naming another node's id
+  (input port i is the kind's input i, a mix's port i its row i's `in`, one port more a new row), each node one output.
+  Linking, unlinking, a row's x, a node's x or Delete (what read it reads its `in`, else nothing) edit the nodes in place;
+  a link that would close a loop is refused. `pos` is the mixer's (the parser allows and ignores it); a graph read
+  without positions is laid out in columns by its distance from the output, spaced by its built nodes' sizes.
+- **The kinds are the engine's** (`engine_info.gd`, `ClimateReportNode.graph_kinds`: `Climate::graph_kinds`, the
+  catalogue the parser itself checks each node's keys against): every kind it reads (note, warp, shape, multifractal,
+  mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, output), its inputs and its parameters with
+  their type and default. `nodes.gd` builds each node from it: a port per input, a row per parameter the node has (a
+  slider and number box, a seed, a power of two, a field or three, a shape, coefficients, a curve), a `-` taking an
+  optional one out and `+ parameter` adding one (so a note is one octave or a range, its amplitude steepness or `amp_m`:
+  the engine says which combination it refuses). `kinds.gd` only holds titles, tooltips and sliders' ranges. A shape
+  node plots the engine's phi (`ClimateReportNode.shape`: `Climate::parse_shape`, `shape_phi`) or its refusal; the
+  Height curve's editor draws the engine's curve (`ClimateReportNode.curve`). The output edits the biome's `surface`
+  colours. *New graph* is the engine's template biome (`ClimateReportNode.template_biome`) or an output alone; a biome
+  without its own debug colour gets the parser's name hash (`ClimateReportNode.debug_color`).
+- **Two modes**: *Biome*, the current biome's graph (the picker in the bar) and the view of it alone; *World*, the
+  climate chart and the view of the whole world, its biomes' debug colours blended by their weights over the relief.
+  The chart (`chart.gd`, `world_panel.gd`): two fields as axes, each biome a box (its span outlined, its whole core,
+  `ClimateReportNode.kernel_core` of it, filled, the full axis on a field it doesn't name), over a cloud of the view's
+  points (the engine's fields there): drag a box to move a biome, its edge to change its span; the list beside it edits
+  each field's centre and span and whether the biome names it. A double-click opens a biome's graph.
+- **The view is the engine's** (`engine_view.gd`): every edit sends the world's text (`World.preview_file`: the game's
+  engine, the fields inline; the Biome mode's biome alone as the default) to `ClimateReportNode.preview`
+  (`ClimateReport::preview`): the report's own sampler on the CPU, each column traced to its ground, the shaded relief
+  and the weights' blend plus every field's value at every point (the chart's cloud) and the largest altitude
+  (`relief_m`: the curve editor's input span), or the engine's refusal. A mix row's M and S (mute, solo) are the view's
+  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once, 192 once the edits
+  pause (`SETTLE` 0.35 s): the mountain alone ~85 us a point (the sharp map ~3 s), the 8-biome world ~50 us. The 3D view
+  is the game: *Open in game* writes the world (`user://biome_mixer_game.world.json`) and runs the main scene on it
+  (`--world=`) in a second Godot.
+- **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
+  back is the same file (positions aside); every world.json biome and a graph of every engine kind drawn by the engine
+  and every node's GraphNode built (the launcher fails on any script error); edits on the mountain (a row out, a shape
+  out, a loop refused, a muted row heard at 0) still drawn; the whole world drawn (every biome named, one chart sample
+  per point); the export written, read back the same, written again the same text, and a span of 0 refused (nothing
+  written).

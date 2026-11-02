@@ -1,9 +1,9 @@
 #include "climate_report_node.hpp"
 
+#include "biome_compiler.hpp"
 #include "climate.hpp"
 #include "climate_report.hpp"
 #include "godot_conv.hpp"
-#include "sdf_cascade.hpp"
 
 #include "ov/json.hpp"
 
@@ -12,12 +12,18 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 
+#include <cmath>
+
 void ClimateReportNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("run", "out_dir", "world_path", "extent_km", "size", "surface", "center", "lattice"),
             &ClimateReportNode::run);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("check", "json", "voxel_size", "lods"), &ClimateReportNode::check);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("curve", "points", "xs", "voxel_m"), &ClimateReportNode::curve);
-    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("template_notes", "voxel_m", "lods"), &ClimateReportNode::template_notes);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("graph_kinds"), &ClimateReportNode::graph_kinds);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("shape", "node", "multifractal", "ns"), &ClimateReportNode::shape);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("template_biome", "voxel_m", "name"), &ClimateReportNode::template_biome);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("debug_color", "name"), &ClimateReportNode::debug_color);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("kernel_core"), &ClimateReportNode::kernel_core);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("preview", "json", "dir", "extent_km", "size", "surface", "center"), &ClimateReportNode::preview);
 }
 
@@ -81,14 +87,53 @@ PackedFloat32Array ClimateReportNode::curve(const Array &p_points, const PackedF
     return out;
 }
 
-Dictionary ClimateReportNode::template_notes(double p_voxel_m, int p_lods) {
+Array ClimateReportNode::graph_kinds() {
+    Array out;
+    for (const Climate::GraphKind &k : Climate::graph_kinds()) {
+        Dictionary d;
+        d["kind"] = String(k.kind);
+        PackedStringArray inputs;
+        for (const char *in : k.inputs) {
+            inputs.push_back(String(in));
+        }
+        d["inputs"] = inputs;
+        Array params;
+        for (const Climate::GraphParam &p : k.params) {
+            Dictionary pd;
+            pd["name"] = String(p.name);
+            pd["type"] = String(p.type);
+            pd["required"] = p.required;
+            pd["default"] = std::isnan(p.fallback) ? Variant() : Variant(p.fallback);
+            pd["options"] = String(p.options).split("|", false);
+            params.push_back(pd);
+        }
+        d["params"] = params;
+        out.push_back(d);
+    }
+    return out;
+}
+
+Dictionary ClimateReportNode::shape(const Dictionary &p_node, bool p_multifractal, const PackedFloat32Array &p_ns) {
     Dictionary d;
-    d["seed"] = int64_t(Climate::TEMPLATE_SEED);
-    d["steepness"] = Climate::TEMPLATE_STEEPNESS;
-    d["max_amp_m"] = Climate::TEMPLATE_MAX_AMP_M;
-    d["k_min"] = ExactNoise::BAND_SHIFT;
-    d["k_top"] = ov::min(Climate::template_top(p_voxel_m), SDFCascade::top_octave(p_lods));
-    d["octave_top"] = SDFCascade::top_octave(p_lods);
-    d["core"] = std::sqrt(1.0 - 1.0 / double(Climate::KERNEL_FADE)); // smoothstep(clamp((1 - u^2) KERNEL_FADE)) is 1 up to there
+    Climate::Shape s;
+    d["error"] = godot_str(Climate::parse_shape(ov_value(p_node), p_multifractal, s));
+    PackedFloat32Array phi;
+    phi.resize(p_ns.size());
+    for (int64_t i = 0; i < p_ns.size(); i++) {
+        phi[i] = float(Climate::shape_phi(s, double(p_ns[i])));
+    }
+    d["phi"] = phi;
     return d;
+}
+
+Dictionary ClimateReportNode::template_biome(double p_voxel_m, const String &p_name) {
+    return godot_dict(Climate::template_biome(p_voxel_m, ov_str(p_name)));
+}
+
+Color ClimateReportNode::debug_color(const String &p_name) {
+    return Color::hex((Climate::name_hash(ov_str(p_name)) & 0xFFFFFFu) << 8 | 0xFFu);
+}
+
+double ClimateReportNode::kernel_core() {
+    return std::sqrt(1.0 - 1.0 / double(Climate::KERNEL_FADE)); // smoothstep(clamp((1 - u^2) KERNEL_FADE)) is 1 up to there
 }

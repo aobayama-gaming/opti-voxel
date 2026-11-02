@@ -18,6 +18,11 @@ using Cascade::dscale;
 using Cascade::dsub;
 using Cascade::flush_value;
 
+double shape_phi(const Shape &p_shape, double p_n) {
+    const double sabs = std::sqrt(p_n * p_n + double(Cascade::SMOOTH_ABS_E) * Cascade::SMOOTH_ABS_E) - Cascade::SMOOTH_ABS_E;
+    return double(p_shape.c[0]) + double(p_shape.c[1]) * p_n + double(p_shape.c[2]) * sabs + double(p_shape.c[3]) * p_n * p_n;
+}
+
 float shape_bound(const Shape &p_shape) {
     double m = 0.0;
     const int steps = 2000;

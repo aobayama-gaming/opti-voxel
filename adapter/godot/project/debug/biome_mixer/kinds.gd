@@ -1,388 +1,72 @@
 extends RefCounted
-## The mixer's node kinds: their ports and parameters (data only; nodes.gd builds their UI, export_table.gd their table graph).
-## A port is [label, type]; a node connects an output to an input of the same type, one link per input.
+## How the mixer shows the engine's node kinds (EngineInfo.kinds: what a kind reads and takes is the engine's, here only
+## its title, its tooltip and its sliders' ranges). checks.gd checks every engine kind has an entry.
 
-const Octaves := preload("res://debug/biome_mixer/octaves.gd")
-
-enum { FIELD, WARP, CHAIN, CARVE }
-
-const PORT_COLORS := {
-	FIELD: Color(0.55, 0.8, 1.0),
-	WARP: Color(0.95, 0.6, 0.95),
-	CHAIN: Color(1.0, 0.8, 0.35),
-	CARVE: Color(0.95, 0.45, 0.4),
-}
-
-# The plots' background (the phi graph, the curve editor).
+# The plots' background (the phi graph, the curve editor, the chart) and the links' colour.
 const PLOT_BG := Color(0.1, 0.11, 0.13)
-# A note's row in the graph (import_table's ROW_H): where fix_notes puts a missing one.
-const NOTE_ROW_H := 240.0
+const LINK := Color(0.55, 0.8, 1.0)
 
-const SHAPES := ["plain", "billow", "ridged", "square", "coeffs"]
-# |n| smoothed as sqrt(n^2 + E^2) - E (Cascade::SMOOTH_ABS_E): the Shape node's phi graph draws it.
-const SMOOTH_ABS_E := 0.1
+# A slider's range when a parameter has none below: [min, max, step] (the number box takes any value).
+const RANGE := [0.0, 10.0, 0.01]
 
-# The climate's warp fields when a biome has none of its own (a model's "climate_warp"): world.json's wx, wy, wz, an
-# fBm from note k down (seeds seed, seed + 1, seed + 2 for x, y, z).
-const CLIMATE_WARP := {"k": 17, "octaves": 4, "amp": 0.5, "persistence": 0.6, "seed": 905}
-
-# A parameter: name, type (float, int, bool, enum, color, k: a wavelength, points: the curve's, rows: the mix's),
-# default and, for numbers, the slider's range (the number box takes any value) and a tooltip.
+# kind -> {title, hint, ranges: {param: [min, max, step]}}.
 const KINDS := {
 	"note": {
 		"title": "Note",
-		"hint": "One octave of the ground: a 3D noise in [-1, 1] at one wavelength. Every biome of the climate plays the same notes, the ground's, one per wavelength: a biome only shapes, warps and mixes them (a note can't be added or removed).",
-		"in": [["warp", WARP]],
-		"out": [["n", FIELD]],
-		"params": [
-			{"name": "k", "type": "k", "default": 12},
-			{"name": "warp", "type": "bool", "default": false, "hint": "Read this note through the climate's warp (wx, wy, wz, shared by every biome), or through the Note warp linked into its port"},
-			{"name": "warp_m", "type": "float", "default": 0.0, "min": 0.0, "max": 2000.0, "step": 0.1, "hint": "How far the warp moves the point the note is read at: metres per unit of the warp (a warp's value is within about +-1)"},
-			{"name": "stretch_y", "type": "int", "pow2": true, "default": 1, "min": 1, "max": 64, "hint": "The note's stretch_y (a power of two): the noise read at y / stretch from the datum, a height field where it dominates"},
-		],
+		"hint": "A 3D noise, one octave (wavelength_m) or every octave from from_m to to_m that the LOD count has. Its amplitude: steepness times each octave's wavelength, or amp_m (the coarsest) times persistence per finer octave, capped at max_amp_m. stretch_y squeezes it along the vertical. Notes with the same seed and stretch are read once, whichever biomes play them.",
+		"ranges": {"wavelength_m": [1.0, 30000.0, 0.1], "from_m": [0.4, 30000.0, 0.1], "to_m": [0.4, 30000.0, 0.1], "steepness": [0.0, 0.5, 0.001],
+			"amp_m": [0.0, 5000.0, 0.1], "persistence": [0.0, 2.0, 0.01], "max_amp_m": [0.0, 10000.0, 1.0]},
 	},
-	"note_warp": {
-		"title": "Note warp",
-		"hint": "The cheap warp: moves a note with its warp on by the values of coarser notes (x, y, z: link Notes' n) instead of the climate's. Notes the biome already plays cost no read. Preview only: the engine's warps are climate fields.",
-		"in": [["x", FIELD], ["y", FIELD], ["z", FIELD]],
-		"out": [["xyz", WARP]],
-		"params": [],
+	"warp": {
+		"title": "Warp",
+		"hint": "Reads its note displaced by amount_m metres times three climate fields (x, y, z). One read per note whatever the biomes: where biomes blend, the note is read at their weights' mix of displacements.",
+		"ranges": {"amount_m": [0.0, 2000.0, 0.1]},
 	},
 	"shape": {
 		"title": "Shape",
-		"hint": "phi(n) = c0 + c1 n + c2 |n| + c3 n^2, the engine's band shapes (|n| smoothed below 0.1).",
-		"in": [["n", FIELD]],
-		"out": [["phi", FIELD]],
-		"params": [
-			{"name": "preset", "type": "enum", "options": SHAPES, "default": "ridged",
-				"option_params": {"offset": {"plain": 0.0, "billow": 0.0, "ridged": 1.0, "square": 0.0, "coeffs": 0.0}}},
-			{"name": "scale", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.01, "hint": "a: the shape reads a n"},
-			{"name": "offset", "type": "float", "default": 1.0, "min": -2.0, "max": 2.0, "step": 0.01, "hint": "o: plain a n + o, billow 2|a n| - 1 + o, ridged (o - |a n|)^2, square (a n)^2 + o"},
-			{"name": "c0", "type": "float", "default": 0.0, "min": -2.0, "max": 2.0, "step": 0.01},
-			{"name": "c1", "type": "float", "default": 1.0, "min": -2.0, "max": 2.0, "step": 0.01},
-			{"name": "c2", "type": "float", "default": 0.0, "min": -2.0, "max": 2.0, "step": 0.01},
-			{"name": "c3", "type": "float", "default": 0.0, "min": -2.0, "max": 2.0, "step": 0.01},
-		],
+		"hint": "phi(n) on a note: plain a n + o, billow 2|a n| - 1 + o, ridged (o - |a n|)^2, square (a n)^2 + o, or coeffs on (1, n, |n|, n^2). A band goes in without its mean: an offset only counts in a multifractal (or ridged).",
+		"ranges": {"scale": [0.0, 4.0, 0.01], "offset": [-2.0, 2.0, 0.01]},
 	},
 	"multifractal": {
 		"title": "Multifractal",
-		"hint": "w = clamp(gain * chain in): the signal times w. Chain out (w * signal) feeds the next finer note: detail only where the coarser one was high (Musgrave).",
-		"in": [["signal", FIELD], ["chain in", CHAIN]],
-		"out": [["signal", FIELD], ["chain out", CHAIN]],
-		"params": [
-			{"name": "gain", "type": "float", "default": 2.0, "min": 0.0, "max": 4.0, "step": 0.01},
-		],
+		"hint": "Weights its note by clamp(gain (1 - c)), c from the next coarser multifractal note's signal: detail where the coarser one was high (Musgrave).",
+		"ranges": {"gain": [0.0, 4.0, 0.01]},
 	},
 	"mix": {
 		"title": "Mix",
-		"hint": "The notes to metres: each row's volume x the ground's amplitude of its note (lambda / 8). M mutes, S solos, C centres (takes the shape's mean out, as the engine).",
-		"in": [],
-		"out": [["height m", FIELD]],
-		"params": [
-			{"name": "rows", "type": "rows", "default": []},
-		],
+		"hint": "The notes' sum: each row a note (through a warp, a shape and a multifractal, each optional) at volume x. A biome mixes its notes once. M mutes, S solos a row in the view only (the file keeps x).",
+		"ranges": {"x": [0.0, 4.0, 0.01]},
 	},
-	"add": {
-		"title": "Add",
-		"in": [["a", FIELD], ["b", FIELD]],
-		"out": [["a + b", FIELD]],
-		"params": [],
-	},
-	"multiply": {
-		"title": "Multiply",
-		"in": [["a", FIELD], ["b", FIELD]],
-		"out": [["a x b", FIELD]],
-		"params": [],
-	},
-	"constant": {
-		"title": "Constant",
-		"in": [],
-		"out": [["c", FIELD]],
-		"params": [
-			{"name": "value", "type": "float", "default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01},
-		],
-	},
+	"constant": {"title": "Constant", "hint": "A height in metres.", "ranges": {"value_m": [-2000.0, 2000.0, 0.1]}},
+	"field": {"title": "Field", "hint": "A climate field's value at the sample (temperature, humidity, ...).", "ranges": {}},
+	"add": {"title": "Add", "hint": "a + b, at the samples.", "ranges": {}},
+	"subtract": {"title": "Subtract", "hint": "a - b, at the samples.", "ranges": {}},
+	"multiply": {"title": "Multiply", "hint": "a x b, at the samples.", "ranges": {}},
+	"min": {"title": "Min", "hint": "min(a, b), at the samples.", "ranges": {}},
+	"max": {"title": "Max", "hint": "max(a, b), at the samples.", "ranges": {}},
+	"smin": {"title": "Smooth min", "hint": "min(a, b) rounded over k_m metres.", "ranges": {"k_m": [0.0, 500.0, 0.1]}},
+	"smax": {"title": "Smooth max", "hint": "max(a, b) rounded over k_m metres.", "ranges": {"k_m": [0.0, 500.0, 0.1]}},
 	"curve": {
 		"title": "Height curve",
-		"hint": "A remap of the height (metres in, metres out) through its points: a biome's curve in the engine. Past the ends it follows the height again. Drag points, double-click to add, right-click to remove.",
-		"in": [["h", FIELD]],
-		"out": [["R(h)", FIELD]],
-		"params": [
-			{"name": "points", "type": "points", "default": []},
-		],
+		"hint": "Remaps a height (metres in, metres out) through its points, flat past the ends. Drag points, double-click to add, right-click to remove.",
+		"ranges": {},
 	},
-	"carve": {
-		"title": "Carve (preview only)",
-		"hint": "Air where the field is above the threshold, between top_m and bottom_m below the surface: caves. The engine has no carve yet.",
-		"in": [["field", FIELD]],
-		"out": [["holes", CARVE]],
-		"params": [
-			{"name": "threshold", "type": "float", "default": 0.35, "min": -1.0, "max": 1.0, "step": 0.01},
-			{"name": "top_m", "type": "float", "default": 2.0, "min": -50.0, "max": 200.0, "step": 0.5},
-			{"name": "bottom_m", "type": "float", "default": 200.0, "min": 0.0, "max": 2000.0, "step": 1.0},
-			{"name": "fade_m", "type": "float", "default": 10.0, "min": 0.1, "max": 200.0, "step": 0.1},
-		],
-	},
-	"output": {
-		"title": "Output",
-		"hint": "The biome: the ground's height (metres above the datum) and its holes; its ground colours, flat and steep (the engine's slope blend).",
-		"in": [["height m", FIELD], ["holes", CARVE]],
-		"out": [],
-		"params": [
-			{"name": "flat", "type": "color", "default": "#5c7a3a"},
-			{"name": "steep", "type": "color", "default": "#6b625a"},
-		],
-	},
+	"output": {"title": "Output", "hint": "The biome's ground: its height, and its surface colours on gentle and steep slopes.", "ranges": {}},
 }
 
-# The kinds the Add menu lists, in order (no Note: a model has the ground's, fix_notes).
-const MENU := ["shape", "multifractal", "note_warp", "mix", "add", "multiply", "constant", "curve", "carve", "output"]
+
+static func title(p_kind: String) -> String:
+	return KINDS.get(p_kind, {}).get("title", p_kind)
 
 
-static func inputs(p_node: Dictionary) -> Array:
-	if p_node.kind == "mix":
-		var ins := []
-		for i in rows(p_node).size() + 1:
-			ins.append(["row %d" % (i + 1), FIELD])
-		return ins
-	return KINDS[p_node.kind]["in"]
+static func hint(p_kind: String) -> String:
+	return KINDS.get(p_kind, {}).get("hint", "")
 
 
-static func outputs(p_node: Dictionary) -> Array:
-	return KINDS[p_node.kind]["out"]
-
-
-static func param_def(p_kind: String, p_name: String) -> Dictionary:
-	for d in KINDS[p_kind]["params"]:
-		if d.name == p_name:
-			return d
-	return {}
-
-
-# A node's parameter, its kind's default when the file has none.
-static func param(p_node: Dictionary, p_name: String) -> Variant:
-	var params: Dictionary = p_node.get("params", {})
-	if params.has(p_name):
-		return params[p_name]
-	return param_def(p_node.kind, p_name).get("default")
-
-
-# A model as the mixer edits it: its defaults filled, its climate warp its own (a file from before kept it on its warp
-# node, which fix_notes and drop_unknown turn into its notes' warp switches), its notes fixed, old kinds dropped.
-static func normalise(p_model: Dictionary) -> void:
-	p_model.next_id = int(p_model.get("next_id", 1))
-	if not p_model.has("nodes"):
-		p_model.nodes = {}
-	if not p_model.has("links"):
-		p_model.links = []
-	p_model.climate_warp = climate_warp(p_model)
-	fix_notes(p_model)
-	drop_unknown(p_model)
-	# A note's stretch is a power of two (the engine refuses others; files from before the mixer kept to it).
-	for id in p_model.nodes:
-		var n: Dictionary = p_model.nodes[id]
-		if n.kind == "note" and n.has("params") and n.params.has("stretch_y"):
-			n.params.stretch_y = nearest_po2(maxi(int(n.params.stretch_y), 1))
-
-
-# The climate's warp fields a warped note reads: the model's "climate_warp", else (a file from before it) the settings
-# its first Climate warp node carried, else CLIMATE_WARP.
-static func climate_warp(p_model: Dictionary) -> Dictionary:
-	var w: Dictionary = CLIMATE_WARP.duplicate()
-	if p_model.has("climate_warp"):
-		w.merge(p_model.climate_warp, true)
-		return w
-	for id in p_model.get("nodes", {}):
-		var node: Dictionary = p_model.nodes[id]
-		if node.kind == "warp" and node.get("params", {}).has("k"):
-			for key in w:
-				w[key] = node.params.get(key, w[key])
-			break
-	return w
-
-
-# The ground's notes in a biome model, fixed: one Note per k, K_MIN .. ground_top. A file from before the warp switch
-# had Climate warp nodes linked into notes: those notes get their warp on, the links go (drop_unknown drops the node).
-# A note out of range or a second one at a k goes with its Mix row; a missing one comes back silent, at volume 0 in
-# the first Mix (unlinked when there is none).
-static func fix_notes(p_model: Dictionary) -> void:
-	for l in p_model.links.duplicate():
-		if p_model.nodes.has(l.from) and p_model.nodes[l.from].kind == "warp" and p_model.nodes.get(l.to, {}).get("kind") == "note":
-			p_model.nodes[l.to].params.warp = true
-			p_model.links.erase(l)
-	var top := Octaves.ground_top()
-	var by_k := {}
-	var extra := []
-	for id in p_model.nodes:
-		var node: Dictionary = p_model.nodes[id]
-		if node.kind != "note":
-			continue
-		var k := int(param(node, "k"))
-		if k < Octaves.K_MIN or k > top or by_k.has(k):
-			extra.append(id)
-		else:
-			by_k[k] = id
-	_cut(p_model, extra)
-	var mix := first_of(p_model, "mix")
-	var y := 0.0
-	for id in p_model.nodes:
-		y = maxf(y, float(p_model.nodes[id].pos[1]) + NOTE_ROW_H)
-	for k in range(top, Octaves.K_MIN - 1, -1):
-		if by_k.has(k):
-			continue
-		var note := add(p_model, "note", Vector2(0.0, y), {"k": k})
-		y += NOTE_ROW_H
-		if mix != "":
-			var rows: Array = p_model.nodes[mix].params.rows
-			p_model.links.append({"from": note, "from_port": 0, "to": mix, "to_port": rows.size()})
-			rows.append(new_row(0.0))
-
-
-# Nodes of a kind gone since the file was saved (Terrace, with the engine's terraces; Climate warp, with the notes'
-# warp switch) out of a biome model: what fed
-# one's input plays where its output went, so a pass-through drops out of the chain.
-static func drop_unknown(p_model: Dictionary) -> void:
-	for id in p_model.nodes.keys():
-		if KINDS.has(p_model.nodes[id].kind):
-			continue
-		var feed: Array = p_model.links.filter(func(l): return l.to == id and int(l.to_port) == 0)
-		if not feed.is_empty():
-			for l in p_model.links:
-				if l.from == id:
-					l.from = feed[0].from
-					l.from_port = feed[0].from_port
-		p_model.nodes.erase(id)
-		p_model.links = p_model.links.filter(func(l): return l.from != id and l.to != id)
-
-
-static func rows(p_node: Dictionary) -> Array:
-	return p_node.get("params", {}).get("rows", [])
-
-
-static func new_row(p_vol: float = 1.0) -> Dictionary:
-	return {"vol": p_vol, "mute": false, "solo": false, "centre": true}
-
-
-static func new_node(p_kind: String, p_pos: Vector2) -> Dictionary:
-	var params := {}
-	for d in KINDS[p_kind]["params"]:
-		params[d.name] = d.default.duplicate(true) if d.default is Array else d.default
-	return {"kind": p_kind, "pos": [p_pos.x, p_pos.y], "params": params}
-
-
-# A new node in a biome model (its id: "n" + the model's next_id), its kind's defaults merged with p_params.
-static func add(p_model: Dictionary, p_kind: String, p_pos: Vector2, p_params: Dictionary = {}) -> String:
-	var id := "n%d" % int(p_model.next_id)
-	p_model.next_id = int(p_model.next_id) + 1
-	var node := new_node(p_kind, p_pos)
-	node.params.merge(p_params, true)
-	p_model.nodes[id] = node
-	return id
-
-
-# Nodes out of a biome model, with their links; a Mix row a deleted node played goes too (no empty row left behind).
-# Notes stay: they are the ground's (fix_notes).
-static func cut_nodes(p_model: Dictionary, p_ids: Array) -> void:
-	_cut(p_model, p_ids.filter(func(id): return p_model.nodes.has(id) and p_model.nodes[id].kind != "note"))
-
-
-static func _cut(p_model: Dictionary, p_ids: Array) -> void:
-	for id in p_ids:
-		if not p_model.nodes.has(id):
-			continue
-		while true:
-			var into_mix: Array = p_model.links.filter(func(l): return l.from == id and p_model.nodes[l.to].kind == "mix" and not l.to in p_ids)
-			if into_mix.is_empty():
-				break
-			_drop_row(p_model, into_mix[0].to, int(into_mix[0].to_port))
-		p_model.nodes.erase(id)
-		p_model.links = p_model.links.filter(func(l): return l.from != id and l.to != id)
-
-
-# A Mix row out (its x), with what played it if nothing else uses it: its shape, a Note warp only it read (walking up
-# from the row, every node left with no output link goes, but the notes and the Output: its note stays, silent).
-static func cut_row(p_model: Dictionary, p_mix: String, p_row: int) -> void:
-	var up := []
-	for l in p_model.links:
-		if l.to == p_mix and int(l.to_port) == p_row:
-			up.append(l.from)
-	_drop_row(p_model, p_mix, p_row)
-	while not up.is_empty():
-		var id: String = up.pop_back()
-		if not p_model.nodes.has(id) or p_model.nodes[id].kind in ["output", "note"]:
-			continue
-		if p_model.links.any(func(l): return l.from == id):
-			continue
-		for l in p_model.links:
-			if l.to == id:
-				up.append(l.from)
-		p_model.nodes.erase(id)
-		p_model.links = p_model.links.filter(func(l): return l.to != id)
-
-
-# Row p_row out of Mix p_mix: its link goes, the rows under it move up a port.
-static func _drop_row(p_model: Dictionary, p_mix: String, p_row: int) -> void:
-	var r: Array = rows(p_model.nodes[p_mix]).duplicate(true)
-	if p_row < r.size():
-		r.remove_at(p_row)
-	p_model.nodes[p_mix].params.rows = r
-	p_model.links = p_model.links.filter(func(l): return not (l.to == p_mix and int(l.to_port) == p_row))
-	for l in p_model.links:
-		if l.to == p_mix and int(l.to_port) > p_row:
-			l.to_port = int(l.to_port) - 1
-
-
-# What feeds input p_port of node p_id (one link per input): {id, port}, the node and output linked into it, or null.
-static func input_of(p_model: Dictionary, p_id: String, p_port: int) -> Variant:
-	for l in p_model.links:
-		if l.to == p_id and int(l.to_port) == p_port and p_model.nodes.has(l.from):
-			return {"id": l.from, "port": int(l.from_port)}
-	return null
-
-
-# The id of the model's first node of a kind, or "".
-static func first_of(p_model: Dictionary, p_kind: String) -> String:
-	for id in p_model.nodes:
-		if p_model.nodes[id].kind == p_kind:
-			return id
-	return ""
+static func range_of(p_kind: String, p_name: String) -> Array:
+	return KINDS.get(p_kind, {}).get("ranges", {}).get(p_name, RANGE)
 
 
 # A Height curve that remaps nothing over [-span, span].
 static func identity_curve(p_span: float) -> Array:
 	return [[-p_span, -p_span], [0.0, 0.0], [p_span, p_span]]
-
-
-# The parameters an enum's option sets with it (its definition's "option_params"): a Shape preset's offset.
-static func option_params(p_kind: String, p_name: String, p_option: String) -> Dictionary:
-	var sets := {}
-	var per: Dictionary = param_def(p_kind, p_name).get("option_params", {})
-	for key in per:
-		sets[key] = per[key][p_option]
-	return sets
-
-
-static func preset_offset(p_preset: String) -> float:
-	return option_params("shape", "preset", p_preset).offset
-
-
-# phi(n) of a shape's coefficients with the engine's smoothed |n|: what the Shape node's graph draws.
-static func phi(p_c: Array, p_n: float) -> float:
-	return p_c[0] + p_c[1] * p_n + p_c[2] * (sqrt(p_n * p_n + SMOOTH_ABS_E * SMOOTH_ABS_E) - SMOOTH_ABS_E) + p_c[3] * p_n * p_n
-
-
-# A Shape node's [c0, c1, c2, c3] on (1, n, |n|, n^2), as Climate's parser turns shape, scale and offset into them.
-static func shape_coeffs(p_node: Dictionary) -> Array:
-	var preset: String = param(p_node, "preset")
-	if preset == "coeffs":
-		return [param(p_node, "c0"), param(p_node, "c1"), param(p_node, "c2"), param(p_node, "c3")]
-	var a: float = param(p_node, "scale")
-	var o: float = param(p_node, "offset")
-	match preset:
-		"billow":
-			return [o - 1.0, 0.0, 2.0 * absf(a), 0.0]
-		"ridged":
-			return [o * o, 0.0, -2.0 * o * absf(a), a * a]
-		"square":
-			return [o, 0.0, 0.0, a * a]
-	return [o, a, 0.0, 0.0]

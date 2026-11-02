@@ -1,54 +1,47 @@
 extends RefCounted
-## The mixer's world: the whole climate as one document, so a biome is edited inside its world (its notes in the
-## graph, its place among the others on the climate chart, its neighbours in the world view). A world is
-## {fields (the table's, as JSON), climate_warp, biomes: [{name, at: {field: [centre, span]}, model:
-## the biome's graph, debug_color, clouds}] (the last the default: no "at", it fills what the others leave),
-## origin_m, view, current (the biome the graph edits), mode ("biome" or "world")}. Its biomes' keys the mixer doesn't
-## edit (instances, features, ...) ride along in "keep" from import to export. The weights and the maps are the
-## engine's (ClimateReportNode.preview).
+## The mixer's world: the world file itself (res://climate/world.json: its biomes, their graphs, places, surfaces,
+## instances and features, every other key as it is), with the mixer's keys beside them: "fields" (its climate's, read
+## only), "current" (the biome the graph edits), "mode" ("biome" or "world"), "view" and "mixer_version". A biome's "at"
+## is kept as {field: [centre, span]} (the default, the last, has none). The weights and the maps are the engine's
+## (ClimateReportNode.preview); the file it writes is the world minus the mixer's keys, checked by the engine first.
 
-const Kinds := preload("res://debug/biome_mixer/kinds.gd")
-const Octaves := preload("res://debug/biome_mixer/octaves.gd")
-const ImportTable := preload("res://debug/biome_mixer/import_table.gd")
+const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 
-# A table biome's keys the mixer edits (the rest ride along: "keep").
-const EDITED := ["name", "at", "graph", "surface", "clouds", "debug_color"]
+# The world's keys that are the mixer's, not the file's.
+const MIXER_KEYS := ["fields", "current", "mode", "view", "mixer_version", "name"]
+const VERSION := 2
 # The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".
 const WORLD_VIEW := {"extent_m": 400000.0, "chart_x": 0, "chart_y": 1}
+# Significant digits a number keeps in the file (a float32's).
+const DIGITS := 7
+# A value fits on one line of the file up to this width, else it opens one line per item.
+const LINE := 120
 
 
-# The world file p_path as one table: its keys and its climate's fields (the climate a path next to it, or inline).
-static func read_table(p_path: String) -> Dictionary:
-	var t = JSON.parse_string(FileAccess.get_file_as_string(p_path))
-	if not t is Dictionary:
+# The world file p_path as the mixer's world ({} if it isn't one): its climate's fields beside it, every biome's place as
+# [centre, span] (a biome without a graph gets the template's).
+static func read(p_path: String) -> Dictionary:
+	var w = JSON.parse_string(FileAccess.get_file_as_string(p_path)) if FileAccess.file_exists(p_path) else null
+	if not w is Dictionary or w.get("biomes", []).is_empty():
 		return {}
-	t.fields = Octaves.section(t, "climate", p_path).get("fields", [])
-	return t
-
-
-# A world from a climate table (read_table): each biome imported as a graph (ImportTable), its
-# place as [centre, span] per field.
-static func from_table(p_table: Dictionary) -> Dictionary:
-	var w := {
-		"version": 1, "kind": "world", "name": "world", "origin_m": [0.0, 0.0],
-		"fields": p_table.get("fields", []).duplicate(true),
-		"biomes": [], "current": 0, "mode": "biome", "warnings": [],
-	}
-	for b in p_table.get("biomes", []):
-		var r: Dictionary = ImportTable.new(b.get("name", "?")).import_biome(p_table)
-		if r.model.has("climate_warp") and not w.has("climate_warp"):
-			w.climate_warp = r.model.climate_warp
-		w.warnings.append_array(r.warnings)
-		var keep := {}
-		for key in b:
-			if not key in EDITED:
-				keep[key] = b[key]
-		w.biomes.append({"name": b.get("name", "?"), "at": at_of(b.get("at", {})), "model": r.model, "debug_color": b.get("debug_color", ""), "clouds": b.get("clouds", {}), "keep": keep})
-	w.climate_warp = Kinds.climate_warp(w)
+	# The mixer's own world model before version 2 (its biomes' "model" graphs): not a world file.
+	if w.get("kind", "") == "world" or int(w.get("mixer_version", VERSION)) != VERSION:
+		return {}
+	if not w.has("fields"):
+		w.fields = EngineInfo.section(w, "climate", p_path).get("fields", [])
+	var n: int = w.biomes.size()
+	for i in n:
+		var b: Dictionary = w.biomes[i]
+		b.at = at_of(b.get("at", {})) if i < n - 1 else {}
+		if not b.has("graph"):
+			b.graph = EngineInfo.template_biome(String(b.get("name", "biome"))).graph
+	w.mixer_version = VERSION
+	w.current = clampi(int(w.get("current", 0)), 0, n - 1)
+	w.mode = String(w.get("mode", "biome"))
 	return w
 
 
-# A table biome's "at" as {field: [centre, span]} ({min, max}: their middle and half their gap).
+# A biome's "at" as {field: [centre, span]} ({min, max}: their middle and half their gap).
 static func at_of(p_at: Dictionary) -> Dictionary:
 	var at := {}
 	for f in p_at:
@@ -64,23 +57,106 @@ static func field_names(p_world: Dictionary) -> Array:
 	return p_world.fields.map(func(f): return String(f.get("name", "?")))
 
 
-static func field_index(p_world: Dictionary, p_name: String) -> int:
-	return field_names(p_world).find(p_name)
-
-
-# FNV-1a of a field's name: its seed without one (Climate's parser, name_hash).
-static func name_hash(p_name: String) -> int:
-	var h := 2166136261
-	for byte in p_name.to_utf8_buffer():
-		h = ((h ^ byte) * 16777619) & 0xFFFFFFFF
-	return h
-
-
-static func field_seed(p_field: Dictionary) -> int:
-	return int(p_field.seed) if p_field.has("seed") else name_hash(String(p_field.get("name", "")))
-
-
-# A biome's debug colour (#rrggbb), else one from its name's hash (Climate's parser: name_hash & 0xFFFFFF).
 static func debug_color(p_biome: Dictionary) -> Color:
-	var hex := String(p_biome.get("debug_color", ""))
-	return Color(hex) if hex.begins_with("#") else Color.hex((name_hash(String(p_biome.name)) & 0xFFFFFF) << 8 | 0xFF)
+	return EngineInfo.debug_color(p_biome)
+
+
+# The world as its file: a copy without the mixer's keys, the default biome without a place.
+static func file_of(p_world: Dictionary) -> Dictionary:
+	var f: Dictionary = p_world.duplicate(true)
+	for key in MIXER_KEYS:
+		f.erase(key)
+	for b in f.biomes:
+		if b.get("at", {}).is_empty():
+			b.erase("at")
+	return f
+
+
+# What the engine draws for p_world (ClimateReportNode.preview, the mixer's view and "Open in game"): its file with
+# its engine an absolute path and its fields inline; p_alone >= 0: that biome alone (the default).
+static func preview_file(p_world: Dictionary, p_alone: int = -1) -> Dictionary:
+	var f := file_of(p_world)
+	var e = f.get("engine", {})
+	f.engine = EngineInfo.section_path(e, EngineInfo.WORLD) if e is String else e
+	f.climate = {"fields": p_world.fields.duplicate(true)}
+	if p_alone >= 0:
+		var b: Dictionary = f.biomes[p_alone]
+		b.erase("at")
+		f.biomes = [b]
+	return f
+
+
+# The engine's verdict on p_world's biomes over its fields (ClimateReportNode.check, at its engine): "" when it accepts.
+static func check(p_world: Dictionary) -> String:
+	var body := JSON.stringify({"fields": p_world.fields, "biomes": file_of(p_world).biomes})
+	return ClassDB.class_call_static("ClimateReportNode", "check", body, EngineInfo.voxel_m, EngineInfo.lods)
+
+
+# The world over p_path (its climate file untouched: the mixer doesn't edit the fields) once the engine accepts it:
+# {written, message (for the status line)}.
+static func write(p_world: Dictionary, p_path: String) -> Dictionary:
+	var err := check(p_world)
+	if err != "":
+		return {"written": false, "message": "Not exported, the engine refuses it: " + err}
+	if not store(p_path, text(file_of(p_world))):
+		return {"written": false, "message": "Could not write " + p_path}
+	return {"written": true, "message": "Exported %d biomes to %s" % [p_world.biomes.size(), p_path]}
+
+
+# p_text into the file p_path (the mixer's saves too): false if it can't be opened.
+static func store(p_path: String, p_text: String) -> bool:
+	var f := FileAccess.open(p_path, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_string(p_text)
+	f.close()
+	return true
+
+
+# --- the file's text ---------------------------------------------------------------------------------------------
+
+# A value as world.json's text: on one line when it fits LINE, else one line per item (one-space indent).
+static func text(p_value: Dictionary) -> String:
+	return _text(p_value, "") + "\n"
+
+
+# p_v at p_indent, after p_lead characters on its line (a dictionary item's key).
+static func _text(p_v: Variant, p_indent: String, p_lead: int = 0) -> String:
+	var one := _inline(p_v)
+	# One character for the comma after an item.
+	if p_indent.length() + p_lead + one.length() + 1 <= LINE or not (p_v is Dictionary or p_v is Array) or p_v.is_empty():
+		return one
+	var inner := p_indent + " "
+	var items := PackedStringArray()
+	if p_v is Dictionary:
+		for key in p_v:
+			var lead := JSON.stringify(String(key)) + ": "
+			items.append(inner + lead + _text(p_v[key], inner, lead.length()))
+		return "{\n" + ",\n".join(items) + "\n" + p_indent + "}"
+	for x in p_v:
+		items.append(inner + _text(x, inner))
+	return "[\n" + ",\n".join(items) + "\n" + p_indent + "]"
+
+
+static func _inline(p_v: Variant) -> String:
+	if p_v is Dictionary:
+		var items := PackedStringArray()
+		for key in p_v:
+			items.append(JSON.stringify(String(key)) + ": " + _inline(p_v[key]))
+		return "{" + ", ".join(items) + "}"
+	if p_v is Array:
+		return "[" + ", ".join(PackedStringArray(p_v.map(_inline))) + "]"
+	if p_v is float or p_v is int:
+		return _num(float(p_v))
+	return JSON.stringify(p_v)
+
+
+# A number to DIGITS significant digits, no trailing zeros (seeds stay integers; a small term keeps its digits).
+static func _num(p_v: float) -> String:
+	if p_v == roundf(p_v) and absf(p_v) < 1e15:
+		return str(int(p_v))
+	var decimals := DIGITS - 1 - int(floor(log(absf(p_v)) / log(10.0)))
+	if decimals > 15:
+		return String.num_scientific(p_v)
+	var v := snappedf(p_v, pow(10.0, -maxi(decimals, 0)))
+	return str(int(v)) if v == roundf(v) else String.num(v, maxi(decimals, 0))

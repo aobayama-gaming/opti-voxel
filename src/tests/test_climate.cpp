@@ -308,6 +308,73 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
 
 // validate's cap (a planet's relief, Ground::amp_cap): a biome's shaped amplitude on a note just under it parses, just
 // over it is refused, for a plain and a shaped note.
+TEST_CASE("Climate: the graph kind catalogue is the parser's keys, every kind parses, a shape's phi") {
+    GroundFixture g(0.5, 15);
+    // Each kind in a graph the parser reads (its node marked @, the note N), accepted, and refused with a key outside its
+    // catalogue.
+    const std::string note = R"({"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1})";
+    struct Case {
+        const char *kind;
+        const char *nodes;
+        const char *height;
+    };
+    const Case cases[] = {
+        { "note", R"({"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1 @})", "n" },
+        { "warp", R"(N, {"id": "x", "kind": "warp", "in": "n", "fields": ["t", "t", "t"], "amount_m": 10 @})", "x" },
+        { "shape", R"(N, {"id": "x", "kind": "shape", "in": "n", "shape": "ridged" @})", "x" },
+        { "multifractal", R"(N, {"id": "x", "kind": "multifractal", "in": "n", "gain": 2 @})", "x" },
+        { "mix", R"(N, {"id": "x", "kind": "mix", "rows": [{"in": "n", "x": 1}] @})", "x" },
+        { "constant", R"(N, {"id": "c", "kind": "constant", "value_m": 5 @}, {"id": "x", "kind": "add", "a": "n", "b": "c"})", "x" },
+        { "field", R"(N, {"id": "c", "kind": "field", "field": "t" @}, {"id": "x", "kind": "multiply", "a": "n", "b": "c"})", "x" },
+        { "subtract", R"(N, {"id": "x", "kind": "subtract", "a": "n", "b": "n" @})", "x" },
+        { "smax", R"(N, {"id": "x", "kind": "smax", "a": "n", "b": "n", "k_m": 3 @})", "x" },
+        { "curve", R"(N, {"id": "x", "kind": "curve", "in": "n", "points": [[-100, -100], [100, 120]] @})", "x" },
+        { "output", "N", "n" },
+    };
+    for (const Case &c : cases) {
+        CAPTURE(c.kind);
+        CHECK(graph_kind(c.kind) != nullptr);
+        for (const bool extra : { false, true }) {
+            std::string nodes = c.nodes;
+            const size_t n_at = nodes.find('N');
+            if (n_at != std::string::npos) {
+                nodes.replace(n_at, 1, note);
+            }
+            const size_t at = nodes.find('@');
+            if (at != std::string::npos) {
+                nodes.replace(at, 1, extra ? ", \"zz\": 1" : "");
+            }
+            const bool on_out = std::string(c.kind) == "output" && extra;
+            const std::string out = std::string(R"({"id": "o", "kind": "output", "height": ")") + c.height + "\"" + (on_out ? ", \"zz\": 1" : "") + "}";
+            const std::string json = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 5000, "amp": 1}]}], "biomes": [{"name": "a", "graph": {"nodes": [)" +
+                    nodes + ", " + out + "]}}]}";
+            CAPTURE(json);
+            ov::str json_error;
+            Table t;
+            const ov::str err = parse(ov::parse_json(json.c_str(), json_error), g.ground, t);
+            if (extra) {
+                CHECK(err.find("unknown key 'zz'") != ov::str::npos);
+            } else {
+                CHECK(err == "");
+            }
+        }
+    }
+    CHECK(graph_kind("carve") == nullptr);
+    // Ridged at its default offset: (1 - |n|)^2, |n| smoothed (0 at n = 0); an offset outside a multifractal refused.
+    ov::str json_error;
+    Shape s;
+    CHECK(parse_shape(ov::parse_json(R"({"shape": "ridged"})", json_error), false, s) == "");
+    CHECK(s.c[0] == 1.0f);
+    CHECK(s.c[2] == -2.0f);
+    CHECK(s.c[3] == 1.0f);
+    CHECK(shape_phi(s, 0.0) == 1.0);
+    const double sabs = std::sqrt(1.0 + double(Cascade::SMOOTH_ABS_E) * Cascade::SMOOTH_ABS_E) - Cascade::SMOOTH_ABS_E;
+    CHECK(shape_phi(s, -1.0) == doctest::Approx(2.0 - 2.0 * sabs));
+    CHECK(parse_shape(ov::parse_json(R"({"shape": "plain", "offset": 1})", json_error), false, s).find("multifractal") != ov::str::npos);
+    CHECK(parse_shape(ov::parse_json(R"({"shape": "plain", "offset": 1})", json_error), true, s) == "");
+    CHECK(name_hash("") == 2166136261u);
+}
+
 TEST_CASE("Climate: a biome's shaped amplitude is held to the cap") {
     const Ground ground{ 0.5, 19, 1000.0f, INFINITY };
     for (const char *shape : { "\"plain\"", "\"ridged\"" }) {

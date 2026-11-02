@@ -4,7 +4,7 @@ extends Control
 ## eval_curve). In spans the heights the preview's relief reaches, out what R makes of them: points beyond don't count.
 
 const Kinds := preload("res://debug/biome_mixer/kinds.gd")
-const Octaves := preload("res://debug/biome_mixer/octaves.gd")
+const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 
 signal points_changed(p_points: Array)
 
@@ -91,7 +91,7 @@ func _draw() -> void:
 	var line := PackedVector2Array()
 	for i in xs.size():
 		line.append(_to_px(Vector2(xs[i], ys[i])))
-	draw_polyline(line, Kinds.PORT_COLORS[Kinds.FIELD], 2.0, true)
+	draw_polyline(line, Kinds.LINK, 2.0, true)
 	var outside := 0
 	for i in points.size():
 		if absf(points[i][0]) > span and i != drag:
@@ -154,4 +154,4 @@ func _changed() -> void:
 func curve(p_xs: PackedFloat32Array) -> PackedFloat32Array:
 	var sorted := points.duplicate(true)
 	sorted.sort_custom(func(a, b): return a[0] < b[0])
-	return ClassDB.class_call_static("ClimateReportNode", "curve", sorted, p_xs, Octaves.voxel_m)
+	return ClassDB.class_call_static("ClimateReportNode", "curve", sorted, p_xs, EngineInfo.voxel_m)

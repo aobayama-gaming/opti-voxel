@@ -2,6 +2,7 @@
 
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/variant/array.hpp>
+#include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/vector2.hpp>
@@ -27,7 +28,16 @@ public:
     // A height curve node's R(h) at p_xs (metres) through p_points ([h, R] pairs, metres) at a voxel size: the engine's
     // curve (Climate::height_curve, eval_curve), drawn by the biome mixer's curve editor. Points it refuses: p_xs.
     static PackedFloat32Array curve(const Array &p_points, const PackedFloat32Array &p_xs, double p_voxel_m);
-    // The template ground's notes at a voxel size and LOD count (Climate::template_graph; the biome mixer's notes are
-    // its octaves): { seed, steepness, max_amp_m, k_min (the finest, BAND_SHIFT), k_top (its coarsest the LODs keep), octave_top (a note's or a field's coarsest at that LOD count), core (where a biome is whole on a field: within core of its span, Climate::KERNEL_FADE) }.
-    static Dictionary template_notes(double p_voxel_m, int p_lods);
+    // A biome graph's node kinds (Climate::graph_kinds): [{ kind, inputs, params: [{ name, type, required, default (null:
+    // none), options }] }], what the biome mixer builds its nodes from.
+    static Array graph_kinds();
+    // A shape node's phi at p_ns (Climate::parse_shape, shape_phi; p_multifractal: a multifractal reads it): { error,
+    // phi }, the biome mixer's plot.
+    static Dictionary shape(const Dictionary &p_node, bool p_multifractal, const PackedFloat32Array &p_ns);
+    // The template biome named p_name at a voxel size (Climate::template_biome): a new biome's graph.
+    static Dictionary template_biome(double p_voxel_m, const String &p_name);
+    // A biome's debug colour without its own: its name's hash (the parser's).
+    static Color debug_color(const String &p_name);
+    // Where a biome is whole on a field: within core of its span (smoothstep(clamp((1 - u^2) KERNEL_FADE)) is 1).
+    static double kernel_core();
 };
