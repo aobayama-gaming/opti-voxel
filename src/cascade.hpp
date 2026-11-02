@@ -288,8 +288,8 @@ inline constexpr float WARP_LIMIT = 4194304.0f; // 2^22
 
 // Several ground bands may share a level (the biome compiler's notes of one octave, other seeds or stretches): at most
 // MAX_LEVEL_NOTES, the first is the level's group-0 band, the others follow it in spec order (Spec::level_notes). A
-// level's ground bands are all modulated or all constant (modulated bit 0). A modulation fills r_mod[g] for each
-// modulated group g's first band and r_mod[Spec::note_mod(i)] for the ground's note i > 0 of the level.
+// level's ground bands are all modulated or all constant (modulated bit 0). A modulation fills r_mod[Spec::note_mod(i)]
+// for the ground's note i of the level and r_mod[Spec::group_mod(g)] for each other modulated group g's band.
 inline constexpr int MAX_LEVEL_NOTES = 8;
 inline constexpr int MAX_MODS = MAX_GROUPS + MAX_LEVEL_NOTES - 1;
 
@@ -377,8 +377,11 @@ struct Spec {
     // The index of the ground band p_band (one of `bands`) among its level's notes, in spec order: the order every
     // consumer inserts them in (LevelBands, the GPU table, the modulation's BandMod slots).
     int note_rank(const Band &p_band) const;
-    // The BandMod slot of the ground's note p_i of a level (MAX_MODS), and how many slots the GPU's arrays hold.
-    int note_mod(int p_i) const { return p_i == 0 ? 0 : group_count() + p_i - 1; }
+    // The BandMod slots (MAX_MODS): the ground's notes of a level first (note p_i at p_i), then the field groups (group
+    // p_g > 0 past the most notes a level has), so a view without the fields (without_fields) keeps the notes' slots;
+    // and how many slots the GPU's arrays hold.
+    int note_mod(int p_i) const { return p_i; }
+    int group_mod(int p_g) const { return p_g == 0 ? 0 : p_g + ov::max(0, max_level_notes() - 1); }
     int mod_count() const { return group_count() + ov::max(0, max_level_notes() - 1); }
     FieldRange field_range() const { return modulation ? modulation->field_range() : FieldRange(); }
     int carry_groups() const { return modulation ? modulation->carry_groups() : 0; }

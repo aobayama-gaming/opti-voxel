@@ -207,14 +207,14 @@ struct LevelBands {
     const Band *band[MAX_MODS] = {}; // band[g] for g < MAX_GROUPS: group g's (null: it inserts nothing on Λ_m)
     BandFactors factors[MAX_MODS];
     int extra = 0; // the ground's other notes: band[MAX_GROUPS + i], BandMod slot note_mod(1 + i)
-    int mod_base = 0; // the spec's group count (Spec::note_mod)
+    int mod_base = 0; // the field groups' BandMod offset (Spec::group_mod)
     uint32_t modulated = 0;
     float slope = 1.0f; // 2^-shift, a modulated band's slope factor
     bool any = false;
     bool carried = false; // the run's last level, its carry carried: the modulation reads it (Modulation::modulate)
 
     LevelBands(const Spec &p_spec, int p_m, int p_groups, bool p_carried = false) :
-            groups(p_groups), mod_base(p_spec.group_count()), slope(ExactNoise::exact_pow2(-p_spec.insert_shift)), carried(p_carried) {
+            groups(p_groups), mod_base(p_spec.group_mod(1) - 1), slope(ExactNoise::exact_pow2(-p_spec.insert_shift)), carried(p_carried) {
         for (int g = 0; g < groups; g++) {
             for (const Band &b : p_spec.group_bands(g)) {
                 if (p_spec.insert_level(b) != p_m) {
@@ -236,7 +236,7 @@ struct LevelBands {
     }
 
     int group_of(int p_slot) const { return p_slot < MAX_GROUPS ? p_slot : 0; }
-    int mod_of(int p_slot) const { return p_slot < MAX_GROUPS ? p_slot : mod_base + (p_slot - MAX_GROUPS); }
+    int mod_of(int p_slot) const { return p_slot == 0 ? 0 : (p_slot < MAX_GROUPS ? mod_base + p_slot : 1 + (p_slot - MAX_GROUPS)); }
     // Calls p_f(slot) for every band of the level: the ground's first, its other notes, then the fields' (each group's
     // adds in order; groups' slots are disjoint).
     template <typename F>

@@ -388,18 +388,34 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
     CHECK(load_table("res://climate/programs_test.json", programs) == ov::str());
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_curve0", "cl_curve1",
         "cascade_warped", "climate_ground", "climate_biome", "cascade_mods", "cl_smin", "cl_sample0", "cl_curve0_0" };
-    int64_t variants = 0, missing = 0;
-    for (const ov::Value &table : { with_terms, without, notes, programs }) {
+    ov::Value world;
+    CHECK(load_table("res://climate/world.json", world) == ov::str());
+    int64_t variants = 0, missing = 0, past_mods = 0;
+    for (const ov::Value &table : { with_terms, without, notes, programs, world }) {
         SDFCascade sdf;
         sdf.climate_data = table;
         ChunkParam param;
         param.voxel_size = 0.05f;
-        sdf.configure(param, 15);
+        sdf.configure(param, 25);
         CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
         for (const bool points : { false, true }) {
             for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
                 const ov::str code = CascadeGLSL::level_shader(&sdf, false, points, false, !points, view);
                 variants++;
+                // Every BandMod slot written is within the smallest array the shader declares.
+                int slots = INT_MAX;
+                for (size_t at = code.find("BandMod mod["); at != ov::str::npos; at = code.find("BandMod mod[", at + 12)) {
+                    slots = std::min(slots, std::atoi(code.c_str() + at + 12));
+                }
+                for (size_t at = code.find(" mod["); at != ov::str::npos; at = code.find(" mod[", at + 5)) {
+                    const int slot = std::atoi(code.c_str() + at + 5);
+                    const bool declared = at >= 7 && code.compare(at - 7, 7, "BandMod") == 0;
+                    if (!declared && std::isdigit(static_cast<unsigned char>(code[at + 5])) && slot >= slots) {
+                        past_mods++;
+                        MESSAGE("variant points=", points, " view=", int(view), ": mod[", slot, "] past ", slots, " slots");
+                        break;
+                    }
+                }
                 for (const char *name : NAMES) {
                     const ov::str call = ov::str(name) + "(";
                     const bool called = ov::contains(code, call);
@@ -413,8 +429,28 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
             }
         }
     }
-    CHECK(variants == 16);
+    CHECK(variants == 20);
     CHECK(missing == 0);
+    CHECK(past_mods == 0);
+    // A run's last level (the SAMPLES view: no field groups) reads a level's other notes where the band table holds
+    // them, as the FIELDS view does: the same `first = N` in both (the GPU caught 4n's last levels reading field bands).
+    SDFCascade sdf;
+    sdf.climate_data = notes;
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    sdf.configure(param, 25);
+    CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
+    auto firsts = [](const ov::str &p_code) {
+        std::vector<ov::str> out;
+        for (size_t at = p_code.find("first = "); at != ov::str::npos; at = p_code.find("first = ", at + 8)) {
+            out.push_back(p_code.substr(at, p_code.find(';', at) - at));
+        }
+        return out;
+    };
+    const std::vector<ov::str> fields = firsts(CascadeGLSL::level_shader(&sdf, false, false, false, true, CascadeGLSL::View::FIELDS));
+    const std::vector<ov::str> samples = firsts(CascadeGLSL::level_shader(&sdf, false, false, false, true, CascadeGLSL::View::SAMPLES));
+    CHECK(!fields.empty());
+    CHECK(fields == samples);
 }
 
 // Stretched notes (stretch_y): the octaves in range carry their stretch (at most k - 3), the ground's

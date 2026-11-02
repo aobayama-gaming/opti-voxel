@@ -52,9 +52,10 @@ static constexpr int TABLE_LIST_BINDING = 8;
 // The per-sample material (chunk palette index) the meshers give create(): uint per sample, next to sdf_sample.
 static constexpr int MATERIAL_BINDING = 9;
 
-// std430 CascadeBand[group_count * BAND_ENTRIES + the ground's other notes], group g's (first) band of insertion level m
-// at g * BAND_ENTRIES + m, then the ground's other notes of each level (Spec::level_notes, Cascade::MAX_LEVEL_NOTES),
-// levels in order: factor (amp * 2^(-shift |S|) per derivative order; unused when modulated), offset low words, offset
+// std430 CascadeBand[group_count * BAND_ENTRIES + the ground's other notes]: the ground's (first) band of insertion
+// level m at m, then the ground's other notes of each level (Spec::level_notes, Cascade::MAX_LEVEL_NOTES), levels in
+// order, then field group g's at (g * BAND_ENTRIES + those notes) + m: a view without the fields reads the ground's
+// at the same offsets. Each entry: factor (amp * 2^(-shift |S|) per derivative order; unused when modulated), offset low words, offset
 // high words, info (present, seed, k, stretch). A field has at most one band per level.
 ov::bytes band_table(const Cascade::Spec &p_spec);
 

@@ -450,21 +450,24 @@ ov::str band_functions(const Spec &p_spec) {
 }
 
 // The ground's other notes of each level (Spec::level_notes past the first) in the band table: level m's at
-// bands[first[m] .. first[m] + count[m]), after the groups' BAND_ENTRIES each, levels in order.
+// bands[first[m] .. first[m] + count[m]), right after the ground's BAND_ENTRIES, levels in order; then the field
+// groups' (group_base). The ground's bands are every view's (Spec::without_fields keeps them): the offsets too.
 struct ExtraNotes {
     int first[MAX_LEVEL + 1] = {};
     int count[MAX_LEVEL + 1] = {};
     int total = 0;
 
     explicit ExtraNotes(const Spec &p_spec) {
-        int at = p_spec.group_count() * CascadeGLSL::BAND_ENTRIES;
+        int at = CascadeGLSL::BAND_ENTRIES;
         for (int m = 0; m <= MAX_LEVEL; m++) {
             first[m] = at;
             count[m] = ov::max(0, p_spec.level_notes(m) - 1);
             at += count[m];
         }
-        total = at - p_spec.group_count() * CascadeGLSL::BAND_ENTRIES;
+        total = at - CascadeGLSL::BAND_ENTRIES;
     }
+    // Group p_g's first entry: the ground's at 0, a field group's past the ground's and its other notes.
+    int group_base(int p_g) const { return p_g == 0 ? 0 : total + p_g * CascadeGLSL::BAND_ENTRIES; }
 };
 
 // Group g's band insertion: the constant one, or the modulated one from mod / amp[p_mod] where the modulated mask has g.
@@ -494,13 +497,14 @@ ov::str extra_notes_code(const Spec &p_spec) {
         }
     }
     code += "        default: break;\n        }\n        for (int e = 0; e < count; e++) {\n            CascadeBand band = bands[first + e];\n            ";
-    return code + band_call(p_spec, 0, ov::format("%d + e", p_spec.group_count())) + "        }\n    }\n";
+    return code + band_call(p_spec, 0, ov::format("%d + e", p_spec.note_mod(1))) + "        }\n    }\n";
 }
 
 // The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
 // insertion (p_derive: and the carry derived from them, into ch), then each group's band of level m
-// (bands[group * BAND_ENTRIES + m]), the ground's other notes after its first.
+// (bands[ExtraNotes::group_base(group) + m]), the ground's other notes after its first.
 ov::str insert_code(const Spec &p_spec, bool p_derive) {
+    const ExtraNotes extra(p_spec);
     ov::str code;
     const char *at = p_derive ? ", p" : "";
     if (shaped(p_spec)) {
@@ -513,8 +517,8 @@ ov::str insert_code(const Spec &p_spec, bool p_derive) {
             continue;
         }
         code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_field_bands) " : "",
-                g * CascadeGLSL::BAND_ENTRIES);
-        code += "            " + band_call(p_spec, g, ov::itos(g)) + "        }\n    }\n";
+                extra.group_base(g));
+        code += "            " + band_call(p_spec, g, ov::itos(p_spec.group_mod(g))) + "        }\n    }\n";
         code += g == 0 ? extra_notes_code(p_spec) : ov::str();
     }
     return code;
@@ -577,7 +581,7 @@ ov::bytes band_table(const Spec &p_spec) {
             OV_ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, ov::format("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
             const int rank = g == 0 ? p_spec.note_rank(b) : 0;
             // A level's first band at its group's entry, the ground's other notes after the groups' (ExtraNotes).
-            const size_t base = (rank == 0 ? size_t(g) * BAND_ENTRIES + size_t(m) : size_t(extra.first[m] + rank - 1)) * BAND_BYTES;
+            const size_t base = (rank == 0 ? size_t(extra.group_base(g) + m) : size_t(extra.first[m] + rank - 1)) * BAND_BYTES;
             uint8_t *slot = bytes.data() + base;
             OV_ERR_CONTINUE_MSG(ov::get_u32(slot + 48) != 0, ov::format("CascadeGLSL: two bands of a field on lattice %d (the GPU table holds one per level).", m));
             for (int o = 0; o < 4; o++) {
